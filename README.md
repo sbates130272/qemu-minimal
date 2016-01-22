@@ -45,7 +45,8 @@ users home directory on the host.
 
 QEmu's gdb feature is turned on so you may debug the kernel using
 gdb. Note that you run the first command below from a shell prompt and
-the second from within gdb.
+the second from within gdb. Note you should run these two command
+before invoking QEMU.
 
 ```
 (shell) gdb vmlinux
@@ -55,7 +56,31 @@ the second from within gdb.
 
 There are a few scripts in the scripts sub-folder that can be used to
 re-generate the jessie-clean.qcow2 image. To regenerate this file or
-create a new base image use the following:
-```
-Logan to add here.
-```
+create a new base image use the following steps:
+
+   1. sudo modprobe nbd max_part=8 - this makes sure that Network
+   Block Device kernel module is loaded. We need this for step 2, 3
+   and 4.
+
+   2. ./create <image name> - this creates the bare qcow2 image,
+   partitions the image and then uses deboostrap to setup the image as
+   a chroot with a basic Debian Jessie install.
+
+   3. ./setup <image name> - this configures the Debian Jessie
+   install. Setups up networking, machine name and some other key
+   attributes. Note you can change the machine name and root password
+   by editing this script.
+
+   4. ./shrink <image name> - This script shrinks the image file as
+   much as possible by doing zerofree and then running qemu-img
+   convert.
+
+We are happy to consider PRs for other -clean images as long as they
+utilize the Large File Storage (LFS) feature or are pulled in via curl
+or wget.
+
+## Large File Storage
+
+This repo utilizes git Large File Storage (lfs) in order to avoid
+having to host the large jessie-clean.qcow2 image inside the repo. See
+[here](https://git-lfs.github.com/) for more information.
