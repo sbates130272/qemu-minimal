@@ -1,0 +1,10 @@
+#!/bin/bash
+
+set -e
+
+qemu-nbd -c /dev/nbd0 $1
+zerofree /dev/nbd0 #p2
+qemu-nbd -d /dev/nbd0
+
+mv $1 $1.bak
+qemu-img convert -O qcow2 -c $1.bak $1

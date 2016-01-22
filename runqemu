@@ -1,0 +1,62 @@
+#!/bin/bash
+
+USAGE="Usage: `basename $0` [-i IMAGE_FILE] [-s SSH_PORT] [-q QEMU_EXE] BZIMAGE [QEMU_ARG, ...]"
+
+DIR=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
+IMGDIR=${DIR}/images
+QEMU=qemu-system-x86_64
+IMAGE=jessie.qcow2
+SSH_PORT=3234
+QUIET=quiet
+
+while getopts hq:i:s:v OPT; do
+    case "$OPT" in
+        h)
+            echo $USAGE
+            exit 0
+            ;;
+        q)
+            QEMU=$OPTARG
+            ;;
+        i)
+            IMAGE=$OPTARG
+            ;;
+        s)
+            SSH_PORT=$OPTARG
+            ;;
+        v)
+            QUIET=
+            ;;
+       \?)
+           # getopts issues an error message
+           echo $USAGE >&2
+           exit 1
+           ;;
+    esac
+done
+
+shift $((OPTIND-1))
+
+KERNEL=$1
+shift
+
+  # If the desired image goes not exist then create it from the
+  # jessie-clean.qcow2 image.
+
+if [ ! -f $IMAGE ] && [[ $IMAGE != */* ]]; then
+    IMAGE=$IMGDIR/$IMAGE
+    if [ ! -f $IMAGE ]; then
+        qemu-img create -f qcow2 -b $IMGDIR/jessie-clean.qcow2 $IMAGE
+    fi
+fi
+
+${QEMU} -enable-kvm -s -m 2048 $IMAGE \
+   -drive file=${IMGDIR}/nvme.qcow2,if=none,id=nvme1,snapshot=on \
+   -device nvme,drive=nvme1,serial=nvme1,namespaces=1,cmbsz=8388608,cmbloc=2 \
+   -virtfs local,id=home,path=/home/,security_model=mapped,mount_tag=home \
+   -redir tcp:$SSH_PORT::22 \
+   -nographic \
+   -serial mon:stdio \
+   -kernel $KERNEL \
+   -append "root=/dev/sda2 rootfstype=ext4 console=ttyS0,38400n8 $QUIET" \
+   $*

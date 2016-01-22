@@ -1,0 +1,31 @@
+#!/bin/bash
+
+set -e
+
+qemu-img create -f qcow2 $1 8G
+qemu-nbd -c /dev/nbd0 $1
+
+sfdisk /dev/nbd0 -D -uM << EOF > /dev/null
+,512,82
+;
+EOF
+
+mkswap -L swap /dev/nbd0p1
+mkfs.ext4 -L rootfs /dev/nbd0p2
+
+mkdir -p mnt
+mount /dev/nbd0p2 mnt
+
+
+function cleanup {
+    set +e
+    umount mnt
+    qemu-nbd -d /dev/nbd0
+}
+
+trap cleanup EXIT
+
+
+debootstrap \
+   --include=less,locales-all,vim,sudo,openssh-server,jed,pciutils,bash-completion,psmisc,htop,pydf\
+    stable mnt
