@@ -8,8 +8,10 @@ QEMU=qemu-system-x86_64
 IMAGE=jessie.qcow2
 SSH_PORT=3234
 QUIET=quiet
+KVM=-enable-kvm
+MEM=2048
 
-while getopts hq:i:s:v OPT; do
+while getopts hq:i:m:s:kv OPT; do
     case "$OPT" in
         h)
             echo $USAGE
@@ -21,8 +23,14 @@ while getopts hq:i:s:v OPT; do
         i)
             IMAGE=$OPTARG
             ;;
+        m)
+            MEM=$OPTARG
+            ;;
         s)
             SSH_PORT=$OPTARG
+            ;;
+        k)
+            KVM=
             ;;
         v)
             QUIET=
@@ -50,7 +58,7 @@ if [ ! -f $IMAGE ] && [[ $IMAGE != */* ]]; then
     fi
 fi
 
-${QEMU} -enable-kvm -s -m 2048 $IMAGE \
+${QEMU} ${KVM} -s -m ${MEM} $IMAGE \
    -drive file=${IMGDIR}/nvme.qcow2,if=none,id=nvme1,snapshot=on \
    -device nvme,drive=nvme1,serial=nvme1,namespaces=1,cmbsz=8388608,cmbloc=2 \
    -virtfs local,id=home,path=/home/,security_model=mapped,mount_tag=home \
