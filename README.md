@@ -26,6 +26,24 @@ to get the command line arguments supported.
 This script will automatically create a snapshot image so you can revert
 to the original image by deleting images/jessie.qcow2.
 
+## QEMU Executable
+
+This repo does not include the QEMU executable. You can specific a
+path to the exe you want to run using the -q option. This is useful if
+you are using a fork (or your own branch) of QEMU that has support for
+specific hardware (e.g. LightNVM SSDs). Some useful links include the
+[upstream](http://git.qemu-project.org/qemu.git) QEMU repo, Keith
+Busch's [NVMe](git://git.infradead.org/users/kbusch/qemu-nvme.git)
+repo and Matias Bjorling's
+[LightNVM](https://github.com/OpenChannelSSD/qemu-nvme) fork.
+
+Note you might want to track all three of these and install them all
+since certain things are only supported in certain forks. With luck,
+over time, support for all things will end up upstream ;-).
+
+Note that by default KVM support is turned off. Use the -k switch to
+turn this off (and suffer the wrath of slowness).
+
 ## Image Features
 
 The runqemu script will automatically boot queitly and login as root
