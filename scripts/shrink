@@ -3,7 +3,7 @@
 set -e
 
 qemu-nbd -c /dev/nbd0 $1
-zerofree /dev/nbd0 #p2
+zerofree /dev/nbd0p2
 qemu-nbd -d /dev/nbd0
 
 mv $1 $1.bak
