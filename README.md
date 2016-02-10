@@ -41,7 +41,7 @@ Note you might want to track all three of these and install them all
 since certain things are only supported in certain forks. With luck,
 over time, support for all things will end up upstream ;-).
 
-Note that by default KVM support is turned off. Use the -k switch to
+Note that by default KVM support is turned on. Use the -k switch to
 turn this off (and suffer the wrath of slowness).
 
 ## Image Features
