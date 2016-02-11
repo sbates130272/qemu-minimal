@@ -52,7 +52,7 @@ shift $((OPTIND-1))
 KERNEL=$1
 shift
 
-  # If the desired image goes not exist then create it from the
+  # If the desired image does not exist then create it from the
   # jessie-clean.qcow2 image.
 
 if [ ! -f $IMAGE ] && [[ $IMAGE != */* ]]; then
