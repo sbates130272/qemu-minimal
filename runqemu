@@ -11,8 +11,9 @@ QUIET=quiet
 KVM=-enable-kvm
 MEM=2048
 CORES=1
+PMEM=""
 
-while getopts hq:i:m:s:c:kv OPT; do
+while getopts hq:i:m:s:c:pkv OPT; do
     case "$OPT" in
         h)
             echo $USAGE
@@ -33,6 +34,9 @@ while getopts hq:i:m:s:c:kv OPT; do
         c)
             CORES=$OPTARG
             ;;
+        p)
+            PMEM=512M!1536M
+            ;;
         k)
             KVM=
             ;;
@@ -51,6 +55,9 @@ shift $((OPTIND-1))
 
 KERNEL=$1
 shift
+if [ ! -z $PMEM ] ; then
+   PMEM="memmap=${PMEM}"
+fi
 
   # If the desired image does not exist then create it from the
   # jessie-clean.qcow2 image.
@@ -64,11 +71,13 @@ fi
 
 ${QEMU} ${KVM} -s -m ${MEM} $IMAGE -smp ${CORES},cores=${CORES} \
    -drive file=${IMGDIR}/nvme.qcow2,if=none,id=nvme1,snapshot=on \
-   -device nvme,drive=nvme1,serial=nvme1,namespaces=1,cmbsz=8388608,cmbloc=2 \
+   -device nvme,drive=nvme1,serial=nvme1,namespaces=1,cmbsz=0,cmbloc=0 \
+   -drive file=${IMGDIR}/nvme2.qcow2,if=none,id=nvme2,snapshot=on \
+   -device nvme,drive=nvme2,serial=nvme2,namespaces=1,cmbsz=8388608,cmbloc=2 \
    -virtfs local,id=home,path=/home/,security_model=mapped,mount_tag=home \
    -redir tcp:$SSH_PORT::22 \
    -nographic \
    -serial mon:stdio \
    -kernel $KERNEL \
-   -append "root=/dev/sda2 rootfstype=ext4 console=ttyS0,38400n8 $QUIET" \
+   -append "root=/dev/sda2 rootfstype=ext4 console=ttyS0,38400n8 $QUIET $PMEM" \
    $*
