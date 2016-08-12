@@ -102,3 +102,9 @@ or wget.
 This repo utilizes git Large File Storage (lfs) in order to avoid
 having to host the large jessie-clean.qcow2 image inside the repo. See
 [here](https://git-lfs.github.com/) for more information.
+
+## Simple Initramfs
+
+The simple script in the scripts folder generates a really simple
+initramfs with a statically linked rootfs. Useful for really simple
+sanity testing.

@@ -1,0 +1,7 @@
+#!/bin/bash
+# Create a busybox based initramfs. You must provide the path to a
+# statically build busybox exe. 
+
+set -e
+
+BUSYBOX=$1
