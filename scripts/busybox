@@ -5,3 +5,45 @@
 set -e
 
 BUSYBOX=$1
+INITRAMFS_DIR=initramfs
+
+# Create a directoy tree for the initramfs. Make sure we start from a
+# fresh state.
+
+rm -rf $INITRAMFS_DIR
+mkdir -p ${INITRAMFS_DIR}/{bin,sbin,etc,proc,sys}
+touch ${INITRAMFS_DIR}/etc/mdev.conf
+
+# Copy busybox into the right place.
+
+cp -a ${BUSYBOX} ${INITRAMFS_DIR}/bin/busybox
+
+# Create the init script
+
+cat > ${INITRAMFS_DIR}/init << EOF
+#!/bin/busybox
+
+echo "Running busybox initramfs..."
+
+# Mount the /proc and /sys filesystems.
+mount -t proc none /proc
+mount -t sysfs none /sys
+
+#Install busybox links
+busybox --install -s
+
+# Drop into the shell
+echo "Entering busybox shell..."
+exec sh
+EOF
+
+# Make the init file executable
+
+chmod +x ${INITRAMFS_DIR}/init
+
+# Create the cpio archive and cleanup
+
+cd ${INITRAMFS_DIR}
+find . | cpio -o -H newc | gzip > ../initramfs.cpio.gz
+cd -
+#rm -rf ${INITRAMFS_DIR}
