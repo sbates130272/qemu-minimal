@@ -30,6 +30,9 @@ echo "Running busybox initramfs..."
 /bin/busybox mount -t sysfs none /sys
 /bin/busybox mount -t devtmpfs none /dev
 
+/bin/busybox ls /
+/bin/busybox ls /dev
+
 # Drop into the shell
 echo "Entering busybox shell..."
 exec /bin/busybox sh
