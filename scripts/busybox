@@ -11,7 +11,7 @@ INITRAMFS_DIR=initramfs
 # fresh state.
 
 rm -rf $INITRAMFS_DIR
-mkdir -p ${INITRAMFS_DIR}/{bin,sbin,etc,proc,sys}
+mkdir -p ${INITRAMFS_DIR}/{bin,sbin,etc,proc,sys,dev}
 touch ${INITRAMFS_DIR}/etc/mdev.conf
 
 # Copy busybox into the right place.
@@ -21,20 +21,18 @@ cp -a ${BUSYBOX} ${INITRAMFS_DIR}/bin/busybox
 # Create the init script
 
 cat > ${INITRAMFS_DIR}/init << EOF
-#!/bin/busybox
+#!/bin/busybox sh
 
 echo "Running busybox initramfs..."
 
 # Mount the /proc and /sys filesystems.
-mount -t proc none /proc
-mount -t sysfs none /sys
-
-#Install busybox links
-busybox --install -s
+/bin/busybox mount -t proc none /proc
+/bin/busybox mount -t sysfs none /sys
+/bin/busybox mount -t devtmpfs none /dev
 
 # Drop into the shell
 echo "Entering busybox shell..."
-exec sh
+exec /bin/busybox sh
 EOF
 
 # Make the init file executable
