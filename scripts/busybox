@@ -47,4 +47,4 @@ chmod +x ${INITRAMFS_DIR}/init
 cd ${INITRAMFS_DIR}
 find . | cpio -o -H newc | gzip > ../initramfs.cpio.gz
 cd -
-#rm -rf ${INITRAMFS_DIR}
+rm -rf ${INITRAMFS_DIR}
