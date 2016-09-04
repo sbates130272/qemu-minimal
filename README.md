@@ -107,4 +107,31 @@ having to host the large jessie-clean.qcow2 image inside the repo. See
 
 The simple script in the scripts folder generates a really simple
 initramfs with a statically linked rootfs. Useful for really simple
-sanity testing.
+sanity testing. To build and run this simple initramfs do the
+following:
+
+  1. cd scripts
+  2. ./simple
+  3. cd ..
+  4. qemu-system-x86_64 -m 512 -kernel kernels/bzImage-4.8 -initrd
+  scripts/simple.cpio.gz -append "console=ttyS0" -serial mon:stdio
+  -nographic
+
+## Busybox Initramfs
+
+For a more intresting initramfs example you can run busybox. To do
+this perform the following steps.
+
+  1. Download the busyboz source and build it to include all the tools
+  that you want. Make sure this is a statically linked executable.
+  2. cd scripts
+  3. ./busybox <path to busybox exe>
+  4. cd ..
+  5. emu-system-x86_64 -m 512 -kernel kernels/bzImage-4.8 -initrd
+  scripts/initramfs.cpio.gz -append "console=ttyS0" -serial mon:stdio
+  -nographic
+
+This should boot into busybox shell and you can execute your installed
+command from there. Enjoy! Note this will not then pass on to a
+subsequent root filesystem (yet).
+
