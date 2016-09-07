@@ -13,13 +13,13 @@ MEM=2048
 CORES=1
 PMEM=""
 DEBUG=
-NVME=" -drive file=${IMGDIR}/nvme.qcow2,if=none,id=nvme1,snapshot=on \
+NVME="-drive file=${IMGDIR}/nvme.qcow2,if=none,id=nvme1,snapshot=on \
   -device nvme,drive=nvme1,serial=nvme1,namespaces=1,cmbsz=0,cmbloc=0 \
   -drive file=${IMGDIR}/nvme2.qcow2,if=none,id=nvme2,snapshot=on \
   -device nvme,drive=nvme2,serial=nvme2,namespaces=1,cmbsz=8388608,cmbloc=2"
+VIRTFS="-virtfs local,id=home,path=/home/,security_model=mapped,mount_tag=home"
 
-
-while getopts hq:i:m:s:c:npkdv OPT; do
+while getopts hq:i:m:s:c:npkdfv OPT; do
     case "$OPT" in
         h)
             echo $USAGE
@@ -50,7 +50,10 @@ while getopts hq:i:m:s:c:npkdv OPT; do
             KVM=
             ;;
         d)
-            DEBUG=-s -S
+            DEBUG="-s -S"
+            ;;
+        f)
+            VIRTFS=
             ;;
         v)
             QUIET=
@@ -81,8 +84,7 @@ if [ ! -f $IMAGE ] && [[ $IMAGE != */* ]]; then
     fi
 fi
 
- ${QEMU} $DEBUG $KVM -m $MEM -smp ${CORES},cores=${CORES} $NVME \
-   -virtfs local,id=home,path=/home/,security_model=mapped,mount_tag=home \
+${QEMU} $DEBUG $KVM -m $MEM -smp ${CORES},cores=${CORES} $NVME $VIRTFS \
    -redir tcp:$SSH_PORT::22 \
    -nographic \
    -serial mon:stdio \

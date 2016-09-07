@@ -135,3 +135,24 @@ This should boot into busybox shell and you can execute your installed
 command from there. Enjoy! Note this will not then pass on to a
 subsequent root filesystem (yet).
 
+## Virtfs
+
+By default we map the /home folder on the host to the /home folder on
+the guest using Plan 9 folder sharing over VirtFS. However this
+assumes the host has the kernel support to do this. To disable this
+option use the -f switch (if you do this you might want to attach a
+image to replace the /home folder).
+
+## Kernel Debugging
+
+There are some good websites on how to do OS debug via QEMU. See for
+example:
+
+http://stackoverflow.com/questions/11408041/how-to-debug-the-linux-kernel-with-gdb-and-qemu
+
+A good command to start gdb would be:
+
+gdb -ex 'target remote localhost:1234' -ex 'break <function>' -ex c ./vmlinux
+
+Make sure you have CONFIG_DEBUG_INFO set in the .config when you build
+the quest kernel.
