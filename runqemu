@@ -12,8 +12,14 @@ KVM=-enable-kvm
 MEM=2048
 CORES=1
 PMEM=""
+DEBUG=
+NVME=" -drive file=${IMGDIR}/nvme.qcow2,if=none,id=nvme1,snapshot=on \
+  -device nvme,drive=nvme1,serial=nvme1,namespaces=1,cmbsz=0,cmbloc=0 \
+  -drive file=${IMGDIR}/nvme2.qcow2,if=none,id=nvme2,snapshot=on \
+  -device nvme,drive=nvme2,serial=nvme2,namespaces=1,cmbsz=8388608,cmbloc=2"
 
-while getopts hq:i:m:s:c:pkv OPT; do
+
+while getopts hq:i:m:s:c:npkdv OPT; do
     case "$OPT" in
         h)
             echo $USAGE
@@ -34,11 +40,17 @@ while getopts hq:i:m:s:c:pkv OPT; do
         c)
             CORES=$OPTARG
             ;;
+        n)
+            NVME=
+            ;;
         p)
             PMEM=512M!1536M
             ;;
         k)
             KVM=
+            ;;
+        d)
+            DEBUG=-s -S
             ;;
         v)
             QUIET=
@@ -69,15 +81,12 @@ if [ ! -f $IMAGE ] && [[ $IMAGE != */* ]]; then
     fi
 fi
 
-${QEMU} ${KVM} -s -m ${MEM} $IMAGE -smp ${CORES},cores=${CORES} \
-   -drive file=${IMGDIR}/nvme.qcow2,if=none,id=nvme1,snapshot=on \
-   -device nvme,drive=nvme1,serial=nvme1,namespaces=1,cmbsz=0,cmbloc=0 \
-   -drive file=${IMGDIR}/nvme2.qcow2,if=none,id=nvme2,snapshot=on \
-   -device nvme,drive=nvme2,serial=nvme2,namespaces=1,cmbsz=8388608,cmbloc=2 \
+ ${QEMU} $DEBUG $KVM -m $MEM -smp ${CORES},cores=${CORES} $NVME \
    -virtfs local,id=home,path=/home/,security_model=mapped,mount_tag=home \
    -redir tcp:$SSH_PORT::22 \
    -nographic \
    -serial mon:stdio \
    -kernel $KERNEL \
    -append "root=/dev/sda2 rootfstype=ext4 console=ttyS0,38400n8 $QUIET $PMEM" \
+   $IMAGE \
    $*
