@@ -13,6 +13,7 @@ MEM=2048
 CORES=1
 PMEM=""
 DEBUG=
+#MAC_ADDRESS="DE:AD:BE:EF:00:01"
 NVME="-drive file=${IMGDIR}/nvme.qcow2,if=none,id=nvme1,snapshot=on \
   -device nvme,drive=nvme1,serial=nvme1,namespaces=1,cmbsz=0,cmbloc=0 \
   -drive file=${IMGDIR}/nvme2.qcow2,if=none,id=nvme2,snapshot=on \
@@ -85,6 +86,7 @@ if [ ! -f $IMAGE ] && [[ $IMAGE != */* ]]; then
 fi
 
 ${QEMU} $DEBUG $KVM -m $MEM -smp ${CORES},cores=${CORES} $NVME $VIRTFS \
+#   -device e1000,netdev=socket0,mac=${MAC_ADDRESS} -netdev socket,id=socket0,connect=localhost:1234 \
    -redir tcp:$SSH_PORT::22 \
    -nographic \
    -serial mon:stdio \
