@@ -1,0 +1,13 @@
+#!/bin/bash
+
+SUBSYSTEM=nvmf-test
+IP_PORT=1023
+
+# Start the RXE driver
+rxe_cfg start
+
+# Attempt to discover the target. The IP address should be provided
+# and the port is as set above.
+
+nvme discover -t rdma -a $1 -s $IP_PORT
+nvme connect –t rdma –n $ -a $1 -s ${IP_PORT}
