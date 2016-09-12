@@ -152,7 +152,8 @@ http://stackoverflow.com/questions/11408041/how-to-debug-the-linux-kernel-with-g
 
 A good command to start gdb would be:
 
-gdb -ex 'target remote localhost:1234' -ex 'break <function>' -ex c ./vmlinux
+gdb -ex 'target remote localhost:1234' -ex 'set architecture i386:x86-64:intel' \
+  -ex 'break <function>' -ex c ./vmlinux
 
 Make sure you have CONFIG_DEBUG_INFO set in the .config when you build
 the quest kernel.
