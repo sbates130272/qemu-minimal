@@ -1,0 +1,33 @@
+#!/bin/bash
+
+SUBSYSTEM=nvmf-test
+NAMESPACE=13
+BLK_DEVICE=/dev/nvme0n1
+NVMET_PORT=1
+IP_PORT=1023
+
+# Setup the soft-roce link by loading the RXE module via the rxe_cfg
+# function.
+rxe_cfg start
+
+# Now setup the nvmf target. Based off directions in
+# https://community.mellanox.com/docs/DOC-2504
+
+mkdir /sys/kernel/config/nvmet/subsystems/${SUBSYSTEM}
+cd /sys/kernel/config/nvmet/subsystems/${SUBSYSTEM}
+echo 1 > attr_allow_any_host
+mkdir namespaces/${NAMESPACE}
+cd namespaces/${NAMESPACE}
+
+echo -n $BLK_DEVICE > device_path
+echo 1 > enable
+
+mkdir /sys/kernel/config/nvmet/ports/${NVMET_PORT}
+cd /sys/kernel/config/nvmet/ports/${NVMET_PORT}
+
+echo $1 > addr_traddr
+echo rdma > addr_trtype
+echo $IP_PORT > addr_trsvcid
+echo ipv4 > addr_adrfam
+
+ln -s /sys/kernel/config/nvmet/subsystems/${SUBSYSTEM} subsystems/${SUBSYSTEM}

@@ -157,3 +157,23 @@ gdb -ex 'target remote localhost:1234' -ex 'set architecture i386:x86-64:intel' 
 
 Make sure you have CONFIG_DEBUG_INFO set in the .config when you build
 the quest kernel.
+
+## NVMf with Soft RoCE
+
+Phew. After quite a bit of fun and games I can get a NVMf setup
+running using two QEMU guests. The kernel config files are checked in
+(v4.8-rc5 for now). There are two helper scripts in the scripts
+folders and the jessie image needs updating with some of the libs
+(including the librxe).
+
+For a few reasons it is easier to keep the rdma_rxe.ko module seperate
+to the kernel. Also you need the linux headers inside the VM root
+filesystem to compile librxe. You currenly need to copy (or symlink)
+/usr/lib64/* to /usr/lib. You also have to setup VM to VM networking
+for which I (for now) used -netdev socket. QEMU perfers ntap but
+that's alot more work.
+
+nvme discover worked.
+nvme connect worked.
+
+IO on the system caused some panics so need to investigate that.
