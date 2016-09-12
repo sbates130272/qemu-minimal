@@ -173,6 +173,21 @@ filesystem to compile librxe. You currenly need to copy (or symlink)
 for which I (for now) used -netdev socket. QEMU perfers ntap but
 that's alot more work.
 
+I started the nvmef target VM using the following command:
+
+./runqemu -v -m 512 -k -t -q /opt/qemu/nvme/bin/qemu-system-x86_64 \
+  ./kernels/bzImage-4.8-nvmf-soft-roce
+
+and the nvmef host VM using the following command:
+
+./runqemu -v -m 512 -k -s 3235 -q /opt/qemu/nvme/bin/qemu-system-x86_64 \
+  ./kernels/bzImage-4.8-nvmf-soft-roce
+
+I then logged into the target system and executed the nvmf-target
+script in the scripts folder using the target VMs assigned IP address
+as the input argument. On the host side I executed the nvmf-host
+script with the IP address of the target as the first argument.
+
 nvme discover worked.
 nvme connect worked.
 
