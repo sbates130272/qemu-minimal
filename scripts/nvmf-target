@@ -9,6 +9,7 @@ IP_PORT=1023
 # Setup the soft-roce link by loading the RXE module via the rxe_cfg
 # function.
 rxe_cfg start
+rxe_cfg add eth1
 
 # Now setup the nvmf target. Based off directions in
 # https://community.mellanox.com/docs/DOC-2504

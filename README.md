@@ -177,12 +177,12 @@ http://csortu.blogspot.ca/2009/12/building-virtual-network-with-qemu.html.
 
 I started the nvmef target VM using the following command:
 
-./runqemu -v -m 512 -k -t 00 -i images/nvmf-target.qcow2 \
+./runqemu -v -m 2048 -t -i images/nvmf-target.qcow2 \
   ./kernels/bzImage-4.8-nvmf-soft-roce
 
 and the nvmef host VM using the following command:
 
-./runqemu -v -m 512 -k -s 3235 -n -i images/nvmf-host.qcow2 \
+./runqemu -v -m 2048 -s 3235 -n -i images/nvmf-host.qcow2 \
   ./kernels/bzImage-4.8-nvmf-soft-roce
 
 I then logged into the target system and executed the nvmf-target
@@ -193,4 +193,10 @@ script with the IP address of the target as the first argument.
 nvme discover worked.
 nvme connect worked.
 
-IO on the system caused some panics so need to investigate that.
+IO on the system caused some panics so need to investigate that. Note
+that the NVMf connection should be established between the eth1
+interfaces and not the eth0 interfaces.
+
+Note you need the rdma_rxe module installed on both target and host
+right now as there is an issue with monolithic kernels and rxe we need
+to root-cause.

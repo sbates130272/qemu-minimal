@@ -5,6 +5,7 @@ IP_PORT=1023
 
 # Start the RXE driver
 rxe_cfg start
+rxe_cfg add eth1
 
 #Sleep for a bit to let network wake up
 sleep 5
