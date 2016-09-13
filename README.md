@@ -171,16 +171,18 @@ to the kernel. Also you need the linux headers inside the VM root
 filesystem to compile librxe. You currenly need to copy (or symlink)
 /usr/lib64/* to /usr/lib. You also have to setup VM to VM networking
 for which I (for now) used -netdev socket. QEMU perfers ntap but
-that's alot more work.
+that's alot more work. The IPv4 addresses on the eth0 interfaces of
+the two VMs are statically configured using techniques discussed in
+http://csortu.blogspot.ca/2009/12/building-virtual-network-with-qemu.html.
 
 I started the nvmef target VM using the following command:
 
-./runqemu -v -m 512 -k -t -q /opt/qemu/nvme/bin/qemu-system-x86_64 \
+./runqemu -v -m 512 -k -t 00 -i images/nvmf-target.qcow2 \
   ./kernels/bzImage-4.8-nvmf-soft-roce
 
 and the nvmef host VM using the following command:
 
-./runqemu -v -m 512 -k -s 3235 -q /opt/qemu/nvme/bin/qemu-system-x86_64 \
+./runqemu -v -m 512 -k -s 3235 -n -i images/nvmf-host.qcow2 \
   ./kernels/bzImage-4.8-nvmf-soft-roce
 
 I then logged into the target system and executed the nvmf-target

@@ -13,7 +13,7 @@ MEM=2048
 CORES=1
 PMEM=""
 DEBUG=
-MAC_ADDRESS="00"
+MAC_ADDRESS="FF"
 CONNECT=connect
 NVME="-drive file=${IMGDIR}/nvme.qcow2,if=none,id=nvme1,snapshot=on \
   -device nvme,drive=nvme1,serial=nvme1,namespaces=1,cmbsz=0,cmbloc=0 \
@@ -58,8 +58,8 @@ while getopts hq:i:m:s:c:npkdft:v OPT; do
             VIRTFS=
             ;;
         t)
-            MAC_ADDRESS=$OPTARG
-	    CONNECT=listen
+            MAC_ADDRESS=$OPTARG;
+            CONNECT=listen
             ;;
         v)
             QUIET=
@@ -91,7 +91,7 @@ if [ ! -f $IMAGE ] && [[ $IMAGE != */* ]]; then
 fi
 
 ${QEMU} $DEBUG $KVM -m $MEM -smp ${CORES},cores=${CORES} $NVME $VIRTFS \
-   -device e1000,netdev=socket0,mac=DE:AD:BE:EF:00:${MAC_ADDRESS} \
+   -device e1000,netdev=socket0,mac="DE:AD:BE:EF:00:"${MAC_ADDRESS} \
    -netdev socket,id=socket0,${CONNECT}=localhost:1234 \
    -redir tcp:$SSH_PORT::22 \
    -nographic \
