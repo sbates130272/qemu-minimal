@@ -20,7 +20,7 @@ NVME="-drive file=${IMGDIR}/nvme.qcow2,if=none,id=nvme1,snapshot=on \
   -device nvme,drive=nvme2,serial=nvme2,namespaces=1,cmbsz=8388608,cmbloc=2"
 VIRTFS="-virtfs local,id=home,path=/home/,security_model=mapped,mount_tag=home"
 
-while getopts hq:i:m:s:c:npkdft:v OPT; do
+while getopts hq:i:m:s:c:npkdftv OPT; do
     case "$OPT" in
         h)
             echo $USAGE
@@ -91,7 +91,7 @@ fi
 ${QEMU} $DEBUG $KVM -m $MEM -smp ${CORES},cores=${CORES} $NVME $VIRTFS \
    -device e1000,netdev=user0 -netdev user,id=user0 \
    -device e1000,netdev=socket0 \
-   -netdev socket,id=socket0,${CONNECT}=localhost:1234 \
+   -netdev socket,id=socket0,${CONNECT}=localhost:1235 \
    -redir tcp:$SSH_PORT::22 \
    -nographic \
    -serial mon:stdio \
