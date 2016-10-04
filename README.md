@@ -64,12 +64,25 @@ users home directory on the host.
 QEmu's gdb feature is turned on so you may debug the kernel using
 gdb. Note that you run the first command below from a shell prompt and
 the second from within gdb. Note you should run these two command
-before invoking QEMU.
+before or after invoking QEMU.
 
 ```
 (shell) gdb vmlinux
 (gdb)   target remote :1234
 ```
+If you are trying to debug a kernel module you need to use the gdb
+add-symbol-file command. This command needs to point to the .ko and
+provide memory offsets for .bbs, .data and .text sections. For example
+something like this:
+```
+(gdb) add-symbol-file <path to module> <text_addr> -s .data
+<data_addr> -s .bss <bss_addr>
+
+```
+Note you can get the addresses from the running kernel in
+/sys/modules/<module name>/sections directory and that the kernel has
+to be running before these addresses can be determined.
+
 ## Scripts Folder
 
 There are a few scripts in the scripts sub-folder that can be used to
