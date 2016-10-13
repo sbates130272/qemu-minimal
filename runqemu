@@ -12,6 +12,7 @@ KVM=-enable-kvm
 MEM=2048
 CORES=1
 PMEM=""
+IOPMEM=""
 DEBUG=
 CONNECT=connect
 NVME="-drive file=${IMGDIR}/nvme.qcow2,if=none,id=nvme1,snapshot=on \
@@ -45,7 +46,8 @@ while getopts hq:i:m:s:c:npkdftv OPT; do
             NVME=
             ;;
         p)
-            PMEM=512M!1536M
+            PMEM=128M!1024M
+            IOPMEM="-device ivshmem,shm=ivshmem,size=128"
             ;;
         k)
             KVM=
@@ -88,7 +90,8 @@ if [ ! -f $IMAGE ] && [[ $IMAGE != */* ]]; then
     fi
 fi
 
-${QEMU} $DEBUG $KVM -m $MEM -smp ${CORES},cores=${CORES} $NVME $VIRTFS \
+${QEMU} $DEBUG $KVM -m $MEM -smp ${CORES},cores=${CORES} \
+   $NVME $VIRTFS $IOPMEM \
    -device e1000,netdev=user0 -netdev user,id=user0 \
    -device e1000,netdev=socket0 \
    -netdev socket,id=socket0,${CONNECT}=localhost:1235 \
