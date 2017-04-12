@@ -2,14 +2,14 @@
 
 ## Summary
 
-This repository contains an (almost) stand-aloneenvironment for
+This repository contains an (almost) stand-alone environment for
 running qemu as well as some scripts for creating and managing the
 image and a script to run qemu. This environemnt is targetted at
-emulated NVM Express (NVMe) and LightNVM (aka OpenChannel) SSD testing
-but can be used for many other things.
+emulated NVM Express (NVMe), Persistent Memory (PMEM) and LightNVM
+(aka OpenChannel) SSD testing but can be used for many other things.
 
-There is a minimalist kernel config in this repo as well that can be used as
-a starting point for building a suitable kernel.
+There are some minimalist kernel config in this repo as well that can
+be used as a starting point for building a suitable kernel.
 
 To run qemu using this image from the command should be:
 
@@ -42,7 +42,8 @@ since certain things are only supported in certain forks. With luck,
 over time, support for all things will end up upstream ;-).
 
 Note that by default KVM support is turned on. Use the -k switch to
-turn this off (and suffer the wrath of slowness).
+turn this off (and suffer the wrath of slowness or if you are already
+running inside some form of a VM).
 
 ## Image Features
 
@@ -52,14 +53,19 @@ edges). When the user logs out it will automatically powerdown the
 machin and exit qemu. An SSH login is also available, while running,
 forwarded to localhost port 3324. The root password is 'awhisten'.
 
-There's an nvme drive mounted on /mnt/nvme with the corresponding
-image in images/nvme.qcow2. This image just contains an ext4 partition
-with a single 4MB random test file. It is snapshotted so changes do not
-get saved run to run.
+When the NVMe option is chosen there is an nvme drive mounted on
+/mnt/nvme with the corresponding image in images/nvme.qcow2. This
+image just contains an ext4 partition with a single 4MB random test
+file. It is snapshotted so changes do not get saved run to run.
+
+A second NVMe drive exists at /dev/nvme1 but this is not mounted. This
+second drive has a Controller Memory Buffer (CMB) advertised on it.
 
 The host's /home file is also passthrough mounted to the guests /home
 directory so test scripts, etc can be stored and run directly from the
-users home directory on the host.
+users home directory on the host. In order for this to work you will
+use to make sure that QEMU is configured with VirtFS enabled and that
+the kernel you are running has the relevant Plan9 support.
 
 QEmu's gdb feature is turned on so you may debug the kernel using
 gdb. Note that you run the first command below from a shell prompt and
@@ -154,7 +160,9 @@ By default we map the /home folder on the host to the /home folder on
 the guest using Plan 9 folder sharing over VirtFS. However this
 assumes the host has the kernel support to do this. To disable this
 option use the -f switch (if you do this you might want to attach a
-image to replace the /home folder).
+image to replace the /home folder). Note you also need to make sure
+the QEMU executable you are using was compiled with VirtFS support
+enabled.
 
 ## Kernel Debugging
 
