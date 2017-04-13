@@ -20,8 +20,11 @@ NVME="-drive file=${IMGDIR}/nvme.qcow2,if=none,id=nvme1,snapshot=on \
   -drive file=${IMGDIR}/nvme2.qcow2,if=none,id=nvme2,snapshot=on \
   -device nvme,drive=nvme2,serial=nvme2,namespaces=1,cmbsz=8388608,cmbloc=2"
 VIRTFS="-virtfs local,id=home,path=/home/,security_model=mapped,mount_tag=home"
+ETH="-device e1000,netdev=user0 -netdev user,id=user0 \
+   -device e1000,netdev=socket0 \
+   -netdev socket,id=socket0,${CONNECT}=localhost:1235"
 
-while getopts hq:i:m:s:c:npkdftv OPT; do
+while getopts hq:i:m:s:c:enpkdftv OPT; do
     case "$OPT" in
         h)
             echo $USAGE
@@ -41,6 +44,9 @@ while getopts hq:i:m:s:c:npkdftv OPT; do
             ;;
         c)
             CORES=$OPTARG
+            ;;
+        e)
+            ETH=
             ;;
         n)
             NVME=
@@ -91,10 +97,7 @@ if [ ! -f $IMAGE ] && [[ $IMAGE != */* ]]; then
 fi
 
 ${QEMU} $DEBUG $KVM -m $MEM -smp ${CORES},cores=${CORES} \
-   $NVME $VIRTFS $IOPMEM \
-   -device e1000,netdev=user0 -netdev user,id=user0 \
-   -device e1000,netdev=socket0 \
-   -netdev socket,id=socket0,${CONNECT}=localhost:1235 \
+   $NVME $VIRTFS $IOPMEM $ETH \
    -redir tcp:$SSH_PORT::22 \
    -nographic \
    -serial mon:stdio \
