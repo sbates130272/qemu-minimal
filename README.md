@@ -39,7 +39,9 @@ repo and Matias Bjorling's
 
 Note you might want to track all three of these and install them all
 since certain things are only supported in certain forks. With luck,
-over time, support for all things will end up upstream ;-).
+over time, support for all things will end up upstream ;-). A useful
+tool for multiple installs is the --prefix= option in the ./configure
+step of the QEMU install.
 
 Note that by default KVM support is turned on. Use the -k switch to
 turn this off (and suffer the wrath of slowness or if you are already
@@ -50,8 +52,11 @@ running inside some form of a VM).
 The runqemu script will automatically boot queitly and login as root
 giving a shell over stdio (which is managable but can have some rough
 edges). When the user logs out it will automatically powerdown the
-machin and exit qemu. An SSH login is also available, while running,
+machine and exit qemu. An SSH login is also available, while running,
 forwarded to localhost port 3324. The root password is 'awhisten'.
+
+[Top Tip: When on the login console use "^c a" to switch to the qemu
+command line (and vice-versa).]
 
 When the NVMe option is chosen there is an nvme drive mounted on
 /mnt/nvme with the corresponding image in images/nvme.qcow2. This
@@ -61,13 +66,17 @@ file. It is snapshotted so changes do not get saved run to run.
 A second NVMe drive exists at /dev/nvme1 but this is not mounted. This
 second drive has a Controller Memory Buffer (CMB) advertised on it.
 
+Note that since upstream has a different level of support for NVMe
+drive options than the other forks we use a -u option to handle that
+differntly.
+
 The host's /home file is also passthrough mounted to the guests /home
 directory so test scripts, etc can be stored and run directly from the
 users home directory on the host. In order for this to work you will
 use to make sure that QEMU is configured with VirtFS enabled and that
 the kernel you are running has the relevant Plan9 support.
 
-QEmu's gdb feature is turned on so you may debug the kernel using
+QEMU's gdb feature is turned on so you may debug the kernel using
 gdb. Note that you run the first command below from a shell prompt and
 the second from within gdb. Note you should run these two command
 before or after invoking QEMU.
