@@ -1,0 +1,60 @@
+#!/bin/bash
+# (c) Stephen Bates, Raithlin Consulting 2017
+#
+# A simple script to generate a (cross) rootfs using multi-strap. Note
+# that you will need the following packages:
+# multistrap, qemu, qemu-user-static, binfmt-support and dpkg-cross
+#
+# This script is based on instructions at [1]-[3]. But are updated for the
+# latest version of Debian.
+#
+# [1] https://www.acmesystems.it/debian_jessie
+# [2] http://free-electrons.com/blog/embdebian-with-multistrap/
+#
+# NB This script must be run as root!
+
+set +e
+
+if [ "$EUID" -ne 0 ]; then
+  echo "This script must be run as root"
+  exit 1
+fi
+
+  # Input arguments
+
+ROOTFS=${ROOTFS:-rootfs}
+ARCH=${ARCH:-arm64}
+MULTISTRAP=${MULTISTRAP:-multistrap.conf}
+
+  # Create directory for rootfs and start to put useful things in
+  # it. These include the qemu-$ARCH user-space tool, 
+
+if [ -e $ROOTFS ]; then
+    echo "${ROOTFS} already exists, delete it!"
+    exit -1
+fi
+if [ ! -e $MULTISTRAP ]; then
+    echo "${MULTISTRAP} does not exist, create it!"
+    exit -1
+fi
+
+mkdir $ROOTFS
+multistrap -a $ARCH -d $ROOTFS -f multistrap.conf
+if [[ "${ARCH}" = "arm64" ]]; then
+    cp /usr/bin/qemu-aarch64-static ${ROOTFS}/usr/bin
+else
+    cp /usr/bin/qemu-$ARCH-static ${ROOTFS}/usr/bin
+fi
+#mount -o bind /dev/ ${ROOTFS}/dev/
+
+export LC_ALL=C
+export LANGUAGE=C
+export LANG=C
+
+chroot $ROOTFS /var/lib/dpkg/info/dash.preinst install
+chroot $ROOTFS dpkg --configure -a
+
+
+
+
+
