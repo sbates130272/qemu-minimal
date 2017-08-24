@@ -15,13 +15,26 @@ PMEM=""
 IOPMEM=""
 DEBUG=
 CONNECT=connect
-NVME="-drive file=${IMGDIR}/nvme.qcow2,if=none,id=nvme1,snapshot=on \
+NVME=1
+NVME_NOTUPSTREAM="-drive file=${IMGDIR}/nvme.qcow2,if=none,id=nvme1,snapshot=on \
   -device nvme,drive=nvme1,serial=nvme1,namespaces=1,cmbsz=0,cmbloc=0 \
   -drive file=${IMGDIR}/nvme2.qcow2,if=none,id=nvme2,snapshot=on \
   -device nvme,drive=nvme2,serial=nvme2,namespaces=1,cmbsz=8388608,cmbloc=2"
+NVME_UPSTREAM="-drive file=${IMGDIR}/nvme.qcow2,if=none,id=nvme1,snapshot=on \
+  -device nvme,drive=nvme1,serial=nvme \
+  -drive file=${IMGDIR}/nvme2.qcow2,if=none,id=nvme2,snapshot=on \
+  -device nvme,drive=nvme2,serial=nvme2"
 VIRTFS="-virtfs local,id=home,path=/home/,security_model=mapped,mount_tag=home"
+ETH=1
+ETH_NOTUPSREAM="-device e1000,netdev=user0 -netdev user,id=user0 \
+   -device e1000,netdev=socket0 \
+   -netdev socket,id=socket0,${CONNECT}=localhost:1235"
+ETH_UPSREAM="-device e1000,netdev=user0 -netdev user,id=user0 \
+   -device e1000,netdev=socket0 \
+   -netdev socket,id=socket0,${CONNECT}=localhost:1235"
+UPSTREAM=0
 
-while getopts hq:i:m:s:c:npkdftv OPT; do
+while getopts hq:i:m:s:c:enpkdftuv OPT; do
     case "$OPT" in
         h)
             echo $USAGE
@@ -42,8 +55,11 @@ while getopts hq:i:m:s:c:npkdftv OPT; do
         c)
             CORES=$OPTARG
             ;;
+        e)
+            ETH=0
+            ;;
         n)
-            NVME=
+            NVME=0
             ;;
         p)
             PMEM=128M!1024M
@@ -61,6 +77,9 @@ while getopts hq:i:m:s:c:npkdftv OPT; do
             ;;
         t)
             CONNECT=listen
+            ;;
+        u)
+            UPSTREAM=1
             ;;
         v)
             QUIET=
@@ -81,6 +100,32 @@ if [ ! -z $PMEM ] ; then
    PMEM="memmap=${PMEM}"
 fi
 
+  # Accomodate the fact that upstream NVMe has a differnet set of
+  # options than the NVMe and LightNVM forks.
+
+if [[ $NVME -ne 0 ]]; then
+    if [[ $UPSTREAM -ne 0 ]]; then
+	NVME=$NVME_UPSTREAM
+    else
+	NVME=$NVME_NOTUPSTREAM
+    fi
+else
+    NVME=
+fi
+
+  # Accomodate the fact that upstream QEMU has depreciated the -redir
+  # option (not yet done as it is just a warning for now). 
+
+if [[ $ETH -ne 0 ]]; then
+    if [[ $UPSTREAM -ne 0 ]]; then
+	ETH=$ETH_UPSTREAM
+    else
+	ETH=$ETH_NOTUPSTREAM
+    fi
+else
+    ETH=
+fi
+
   # If the desired image does not exist then create it from the
   # jessie-clean.qcow2 image.
 
@@ -92,10 +137,7 @@ if [ ! -f $IMAGE ] && [[ $IMAGE != */* ]]; then
 fi
 
 ${QEMU} $DEBUG $KVM -m $MEM -smp ${CORES},cores=${CORES} \
-   $NVME $VIRTFS $IOPMEM \
-   -device e1000,netdev=user0 -netdev user,id=user0 \
-   -device e1000,netdev=socket0 \
-   -netdev socket,id=socket0,${CONNECT}=localhost:1235 \
+   $NVME $VIRTFS $IOPMEM $ETH \
    -redir tcp:$SSH_PORT::22 \
    -nographic \
    -serial mon:stdio \
