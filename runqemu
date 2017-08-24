@@ -47,8 +47,9 @@ while getopts hq:i:m:s:c:npkdftv OPT; do
             ;;
         p)
             PMEM=128M!1024M
-            IOPMEM="-device ivshmem,shm=ivshmem,size=128"
-            ;;
+            IOPMEM="-drive file=${IMGDIR}/iopmem.img,if=none,format=raw,id=iopmem \
+                    -device iopmem,drive=iopmem"
+	    ;;
         k)
             KVM=
             ;;
