@@ -66,15 +66,18 @@ export LC_ALL=C
 export LANGUAGE=C
 export LANG=C
 
-chroot $ROOT /var/lib/dpkg/info/dash.preinst install
-chroot ${ROOTFS} dpkg --configure -a
+chroot $ROOTFS /var/lib/dpkg/info/dash.preinst install
+chroot $ROOTFS dpkg --configure -a
+
+#mkdir -p ${ROOTFS}/misc/pcimem
+#cp ~/pcimem/* ${ROOTFS}/misc/pcimem/
 
 dd if=/dev/zero of=$IMAGE bs=1M count=1024
 mkfs.ext4 $IMAGE
 mkdir -p $MOUNT
 mount -t ext4 $IMAGE $MOUNT -o loop
 cp -r ${ROOTFS}/* ${MOUNT}
-umount tmpfs
+umount ${MOUNT}
 
 
 
