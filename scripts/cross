@@ -24,6 +24,9 @@
 #   -device virtio-blk-device,drive=hd0 \
 #   -drive file=../images/nvme2.qcow2,if=none,id=nvme2,snapshot=on \
 #   -device nvme,drive=nvme2,serial=nvme2,cmb_size_mb=64
+#
+# cc1 issue (if gcc is installed):
+#   ln -s /usr/lib/gcc/aarch64-linux-gnu/6/cc1 /usr/bin/cc1
 
 set +e
 
@@ -68,9 +71,16 @@ export LANG=C
 
 chroot $ROOTFS /var/lib/dpkg/info/dash.preinst install
 chroot $ROOTFS dpkg --configure -a
+mount proc -t proc $ROOTFS/proc
 
-#mkdir -p ${ROOTFS}/misc/pcimem
-#cp ~/pcimem/* ${ROOTFS}/misc/pcimem/
+function cleanup {
+    set +e
+    umount $ROOTFS/proc 2> /dev/null#
+}
+trap cleanup EXIT
+
+chroot $ROOTFS dpkg --configure -a
+umount $ROOTFS/proc
 
 dd if=/dev/zero of=$IMAGE bs=1M count=1024
 mkfs.ext4 $IMAGE
