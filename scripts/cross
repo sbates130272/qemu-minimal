@@ -12,6 +12,18 @@
 # [2] http://free-electrons.com/blog/embdebian-with-multistrap/
 #
 # NB This script must be run as root!
+#
+# Once the rootfs is created you can run it inside QEMU using
+# something like:
+#
+# /opt/qemu/qemu-upstream/bin/qemu-system-aarch64 -machine virt \ 
+#   -cpu cortex-a57 -machine type=virt -nographic -smp 1 -m 2048 \
+#   -kernel ~/Image-aarch64-def-p2pmem  --append "nvme.use_cmb=24 \
+#   root=/dev/vda console=ttyAMA0 rootwait rw" \
+#   -drive file=image.img,if=none,format=raw,id=hd0 \
+#   -device virtio-blk-device,drive=hd0 \
+#   -drive file=../images/nvme2.qcow2,if=none,id=nvme2,snapshot=on \
+#   -device nvme,drive=nvme2,serial=nvme2,cmb_size_mb=64
 
 set +e
 
@@ -25,7 +37,9 @@ fi
 ROOTFS=${ROOTFS:-rootfs}
 ARCH=${ARCH:-arm64}
 MULTISTRAP=${MULTISTRAP:-multistrap.conf}
-
+IMAGE=${IMAGE:-image.img}
+MOUNT=${MOUNT:-/mnt/cross}
+	
   # Create directory for rootfs and start to put useful things in
   # it. These include the qemu-$ARCH user-space tool, 
 
@@ -45,15 +59,22 @@ if [[ "${ARCH}" = "arm64" ]]; then
 else
     cp /usr/bin/qemu-$ARCH-static ${ROOTFS}/usr/bin
 fi
-#mount -o bind /dev/ ${ROOTFS}/dev/
 
+export DEBIAN_FRONTEND=noninteractive
+export DEBCONF_NONINTERACTIVE_SEEN=true
 export LC_ALL=C
 export LANGUAGE=C
 export LANG=C
 
-chroot $ROOTFS /var/lib/dpkg/info/dash.preinst install
-chroot $ROOTFS dpkg --configure -a
+chroot $ROOT /var/lib/dpkg/info/dash.preinst install
+chroot ${ROOTFS} dpkg --configure -a
 
+dd if=/dev/zero of=$IMAGE bs=1M count=1024
+mkfs.ext4 $IMAGE
+mkdir -p $MOUNT
+mount -t ext4 $IMAGE $MOUNT -o loop
+cp -r ${ROOTFS}/* ${MOUNT}
+umount tmpfs
 
 
 
