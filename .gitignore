@@ -2,4 +2,6 @@ images/mnt
 images/jessie.qcow2
 scripts/simple.cpio.gz
 scripts/initramfs.cpio.gz
+scripts/image.img
+scripts/rootfs
 *~
