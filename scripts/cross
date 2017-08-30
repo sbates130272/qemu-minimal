@@ -80,6 +80,14 @@ function cleanup {
 trap cleanup EXIT
 
 chroot $ROOTFS dpkg --configure -a
+cat > $ROOTFS/etc/fstab << EOF
+proc               /proc             proc    defaults          0       0
+sysfs              /sys              sysfs   defaults          0       0
+debugfs            /sys/kernel/debug debugfs defaults          0       0
+tmpfs              /tmp              tmpfs   defaults          0       0
+EOF
+
+ln -fs /proc/mounts $ROOTFS/etc/mtab
 umount $ROOTFS/proc
 
 dd if=/dev/zero of=$IMAGE bs=1M count=1024
