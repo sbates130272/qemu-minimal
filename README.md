@@ -121,6 +121,13 @@ create a new base image use the following steps:
    much as possible by doing zerofree and then running qemu-img
    convert.
 
+   5. ./cross [NEW] - This script uses multistrap to build a rootfs
+   image for an ARCH that is different to the host machine
+   (e.g. building an ARM64 rootfs on x86_64). Refer to the header of
+   the script for more information. You will need some packages
+   installed in order to run this script and it has to be run as root
+   for the chroot command to work.
+
 We are happy to consider PRs for other -clean images as long as they
 utilize the Large File Storage (LFS) feature or are pulled in via curl
 or wget.
