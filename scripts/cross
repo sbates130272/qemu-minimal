@@ -40,7 +40,7 @@ fi
 ROOTFS=${ROOTFS:-rootfs}
 ARCH=${ARCH:-arm64}
 MULTISTRAP=${MULTISTRAP:-multistrap.conf}
-IMAGE=${IMAGE:-image.img}
+IMAGE=${IMAGE:-image-${ARCH}.img}
 MOUNT=${MOUNT:-/mnt/cross}
 	
   # Create directory for rootfs and start to put useful things in
@@ -59,6 +59,9 @@ mkdir $ROOTFS
 multistrap -a $ARCH -d $ROOTFS -f multistrap.conf
 if [[ "${ARCH}" = "arm64" ]]; then
     cp /usr/bin/qemu-aarch64-static ${ROOTFS}/usr/bin
+elif [[ "${ARCH}" = "ppc64el" ]]; then
+    cp /usr/bin/qemu-ppc64le-static ${ROOTFS}/usr/bin
+    export QEMU_CPU=POWER8 # Fixes https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=813698
 else
     cp /usr/bin/qemu-$ARCH-static ${ROOTFS}/usr/bin
 fi
@@ -80,6 +83,7 @@ function cleanup {
 trap cleanup EXIT
 
 chroot $ROOTFS dpkg --configure -a
+
 cat > $ROOTFS/etc/fstab << EOF
 proc               /proc             proc    defaults          0       0
 sysfs              /sys              sysfs   defaults          0       0
@@ -96,7 +100,3 @@ mkdir -p $MOUNT
 mount -t ext4 $IMAGE $MOUNT -o loop
 cp -r ${ROOTFS}/* ${MOUNT}
 umount ${MOUNT}
-
-
-
-
