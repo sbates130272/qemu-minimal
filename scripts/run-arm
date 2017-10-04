@@ -1,0 +1,3 @@
+#!/bin/bash
+
+/opt/qemu/qemu-upstream/bin/qemu-system-aarch64 -s -S -machine virt -cpu cortex-a57 -machine type=virt -nographic -smp 1 -m 2048 -kernel ~/Image-aarch64-def-p2pmem -append "nvme.use_cmb=24 root=/dev/vda console=ttyAMA0 rootwait rw" -drive file=image.img,if=none,format=raw,id=hd0 -device virtio-blk-device,drive=hd0 -drive file=../images/nvme2.qcow2,if=none,id=nvme2,snapshot=on -device nvme,drive=nvme2,serial=nvme2,cmb_size_mb=64
