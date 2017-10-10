@@ -70,6 +70,8 @@ export LANG=C
 
 chroot $ROOTFS /var/lib/dpkg/info/dash.preinst install
 chroot $ROOTFS dpkg --configure -a
+chroot $ROOTFS chpasswd <<< root:awhisten
+
 mount proc -t proc $ROOTFS/proc
 
 function cleanup {
