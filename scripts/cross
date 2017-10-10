@@ -46,10 +46,6 @@ MOUNT=${MOUNT:-/mnt/cross}
   # Create directory for rootfs and start to put useful things in
   # it. These include the qemu-$ARCH user-space tool, 
 
-if [ -e $ROOTFS ]; then
-    echo "${ROOTFS} already exists, delete it!"
-    exit -1
-fi
 if [ ! -e $MULTISTRAP ]; then
     echo "${MULTISTRAP} does not exist, create it!"
     exit -1
