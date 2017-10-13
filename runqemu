@@ -23,7 +23,7 @@ NVME_NOTUPSTREAM="-drive file=${IMGDIR}/nvme.qcow2,if=none,id=nvme1,snapshot=on 
 NVME_UPSTREAM="-drive file=${IMGDIR}/nvme.qcow2,if=none,id=nvme1,snapshot=on \
   -device nvme,drive=nvme1,serial=nvme \
   -drive file=${IMGDIR}/nvme2.qcow2,if=none,id=nvme2,snapshot=on \
-  -device nvme,drive=nvme2,serial=nvme2"
+  -device nvme,drive=nvme2,serial=nvme2,cmb_size_mb=64"
 VIRTFS="-virtfs local,id=home,path=/home/,security_model=mapped,mount_tag=home"
 ETH=1
 ETH_NOTUPSREAM="-device e1000,netdev=user0 -netdev user,id=user0 \
@@ -142,6 +142,6 @@ ${QEMU} $DEBUG $KVM -m $MEM -smp ${CORES},cores=${CORES} \
    -nographic \
    -serial mon:stdio \
    -kernel $KERNEL \
-   -append "root=/dev/sda2 rootfstype=ext4 console=ttyS0,38400n8 $QUIET $PMEM" \
+   -append "nvme.use_cmb=24 root=/dev/sda2 rootfstype=ext4 console=ttyS0,38400n8 $QUIET $PMEM" \
    $IMAGE \
    $*
