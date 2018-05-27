@@ -1,0 +1,43 @@
+#!/bin/bash
+#
+# create-name
+#
+# (C) Stephen Bates <sbates@raithlin>
+#
+# A simple script to generate a ton of fake NVMe SSDS inside a QEMU
+# VM. This script generates the files used to back the SSDs as well as
+# a section of XML that should be added to the libvirt XML description
+# of the VM. You also need to add the QEMU schema [1] and you might
+# need to play with apparmor to make this all work.
+#
+# [1] http://blog.vmsplice.net/2011/04/how-to-pass-qemu-command-line-options.html
+# [2] https://bugs.launchpad.net/ubuntu/+source/libvirt/+bug/1772936
+
+NUM=${NUM:-24}
+DIR=${DIR:-/var/lib/libvirt/images}
+SIZE=${SIZE:-128M}
+CMB=${CMB:-0}
+
+  # Create the qcow2 image files for the NVMe SSDs.
+
+i=0
+while [ $i -lt $NUM ]; do
+    qemu-img create -f qcow2 ${DIR}/nvme${i}.qcow2 ${SIZE} > /dev/null
+    ((i++))
+done
+chown libvirt-qemu:kvm ${DIR}/nvme*.*
+chmod 644 ${DIR}/nvme*.*
+ls -lrth ${DIR}
+
+  # Echo the XML output for virsh edit
+
+i=0
+echo "  <qemu:commandline>"
+while [ $i -lt $NUM ]; do
+    echo "    <qemu:arg value='-drive'/>"
+    echo "    <qemu:arg value='file=${DIR}/nvme${i}.qcow2,if=none,id=nvme${i},format=qcow2'/>"
+    echo "    <qemu:arg value='-device'/>"
+    echo "    <qemu:arg value='nvme,drive=nvme${i},serial=nvme${i},cmb_size_mb=${CMB}'/>"
+    ((i++))
+done
+echo "  </qemu:commandline>"
