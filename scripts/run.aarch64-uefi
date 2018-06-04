@@ -1,0 +1,31 @@
+#!/bin/bash
+#
+# Script to setup a disk image with an OS and UEFI capable bootloader
+# on it. Note you need to build UEFI FW for your ARCH [1].
+#
+# [1] https://wiki.linaro.org/LEG/UEFIforQEMU
+
+# Add these lines in for an install ISO of Bionic Beaver. You will
+# need this the first time to get started.
+#  -drive if=none,id=installer,file=/home/users/sbates/bluewhale/ubuntu-18.04-server-arm64.iso,format=raw \
+#  -device usb-storage,bus=xhci.0,drive=installer\
+
+# Note you will need to remove the --enable-kvm line below to run on
+# x86 or on a non-kvm enabled ARM64 machine. However this will cause
+# things to run very, very slowely.
+
+# Once install is complete (make sure to use grub-efi) you can dd the
+# ubuntu-arm64-istalled.img file onto your block device of choice and
+# reboot. Good hunting!
+
+qemu-system-aarch64 \
+  --enable-kvm \
+  -m 1024 \
+  -M virt,gic_version=3 \
+  -cpu host \
+  -bios /home/users/sbates/edk2/Build/ArmVirtQemu-AARCH64/DEBUG_GCC49/FV/QEMU_EFI.fd \
+  -drive if=none,id=disk,file=/home/users/sbates/bluewhale/ubuntu-arm64-installed.img,format=raw \
+  -device nec-usb-xhci,id=xhci \
+  -device usb-storage,bus=xhci.0,drive=disk \
+  -net nic,vlan=0 -net user,vlan=0 \
+  -nographic
