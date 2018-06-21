@@ -10,6 +10,10 @@
 # of the VM. You also need to add the QEMU schema [1] and you might
 # need to play with apparmor to make this all work.
 #
+# Note that if you set DIR=null we don't create backing files for the
+# NVMe SSDs and instead use the null block driver inside QEMU. This
+# leads to improved performance but obviously no actual storage.
+#
 # [1] http://blog.vmsplice.net/2011/04/how-to-pass-qemu-command-line-options.html
 # [2] https://bugs.launchpad.net/ubuntu/+source/libvirt/+bug/1772936
 
@@ -17,17 +21,21 @@ NUM=${NUM:-24}
 DIR=${DIR:-/var/lib/libvirt/images}
 SIZE=${SIZE:-128M}
 CMB=${CMB:-0}
+CREATE=${CREATE:-yes}
 
   # Create the qcow2 image files for the NVMe SSDs.
 
-i=0
-while [ $i -lt $NUM ]; do
-    qemu-img create -f qcow2 ${DIR}/nvme${i}.qcow2 ${SIZE} > /dev/null
-    ((i++))
-done
-chown libvirt-qemu:kvm ${DIR}/nvme*.*
-chmod 644 ${DIR}/nvme*.*
-ls -lrth ${DIR}
+if [ $DIR -ne "null" ] && [$CREATE == "yes"]; then
+    echo "Creating qcow2 image files for NVMe..."
+    i=0
+    while [ $i -lt $NUM ]; do
+	qemu-img create -f qcow2 ${DIR}/nvme${i}.qcow2 ${SIZE} > /dev/null
+	((i++))
+    done
+    chown libvirt-qemu:kvm ${DIR}/nvme*.*
+    chmod 644 ${DIR}/nvme*.*
+    ls -lrth ${DIR}
+fi
 
   # Echo the XML output for virsh edit
 
@@ -35,7 +43,11 @@ i=0
 echo "  <qemu:commandline>"
 while [ $i -lt $NUM ]; do
     echo "    <qemu:arg value='-drive'/>"
-    echo "    <qemu:arg value='file=${DIR}/nvme${i}.qcow2,if=none,id=nvme${i},format=qcow2'/>"
+    if [ $DIR == "null" ]; then
+	echo "    <qemu:arg value='file=null-aio://,if=none,size=${SIZE},id=nvme${i},format=null-aio'/>"
+    else
+	echo "    <qemu:arg value='file=${DIR}/nvme${i}.qcow2,if=none,id=nvme${i},format=qcow2'/>"
+    fi
     echo "    <qemu:arg value='-device'/>"
     echo "    <qemu:arg value='nvme,drive=nvme${i},serial=nvme${i},cmb_size_mb=${CMB}'/>"
     ((i++))
