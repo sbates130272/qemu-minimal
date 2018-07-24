@@ -6,9 +6,20 @@
 #
 # A simple script generate a Ubuntu Bionic Bison based VM. Note that
 # in order to get the console to work yo need to add console=ttyS0 to
-# the kernel command line params inside the guest.
+# the kernel command line params inside the guest. Provide the name
+# and a kickstart file (which can be used to completely automate the
+# install process.
 
-NAME= ${NAME:-stephen}
+NAME=${NAME:-stephen}
+KS=${KS:-none}
+
+if [ $KS == "none" ]; then
+    KS=
+else
+    KS="ks=file:/${KS}"
+fi
+
+echo $KS
 
 virt-install \
 --connect qemu:///system \
@@ -21,4 +32,4 @@ virt-install \
 --network bridge=virbr0 \
 --console pty,target_type=serial \
 --location 'http://archive.ubuntu.com/ubuntu/dists/bionic/main/installer-amd64/' \
---extra-args 'console=ttyS0,115200n8 serial'
+--extra-args '${KS} console=ttyS0,115200n8 serial'
