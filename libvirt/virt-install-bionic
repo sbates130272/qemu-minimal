@@ -12,14 +12,15 @@
 
 NAME=${NAME:-stephen}
 KS=${KS:-none}
+INITRD_INJECT=${INITRD_INJECT:-}
 
-if [ $KS == "none" ]; then
-    KS=
+if [ $KS != "none" ]; then
+    INITRD_INJECT+=" --initrd-inject ./${KS} "
+    KSF="ks=file:/${KS}"
 else
-    KS="ks=file:/${KS}"
+    KS=
+    KSF=
 fi
-
-echo $KS
 
 virt-install \
 --connect qemu:///system \
@@ -32,4 +33,5 @@ virt-install \
 --network bridge=virbr0 \
 --console pty,target_type=serial \
 --location 'http://archive.ubuntu.com/ubuntu/dists/bionic/main/installer-amd64/' \
---extra-args '${KS} console=ttyS0,115200n8 serial'
+${INITRD_INJECT} \
+--extra-args ''${KSF}' console=ttyS0,115200n8 serial'
