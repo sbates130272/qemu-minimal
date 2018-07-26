@@ -109,14 +109,11 @@ nfs-common
 (
 cp /ldap.conf /target/etc/
 cp /ldap.secret /target/etc/
-
+cp /hostname.tmp /target/root/
 ) 1> /target/root/post_install.log 2>&1
 
 %post
 (
-ls /media/cdrom/
-cp /media/cdrom/ldap.conf /etc/
-cp /media/cdrom/ldap.secret /etc/
 
 sed -i "s;quiet;quiet console=ttyS0;" /etc/default/grub
 update-grub
@@ -138,6 +135,8 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y libnss-ldap nscd
 #dpkg-reconfigure ldap-auth-config
 auth-client-config -t nss -p lac_ldap
 pam-auth-update
+
+cp /root/hostname.tmp /etc/hostname
 
 mkdir -p /home/users
 echo "hades:/users        /home/users     nfs auto,x-systemd.automount,x-systemd.device-timeout=10,timeo=14,x-systemd.idle-timeout=1min 0  0" >> /etc/fstab
