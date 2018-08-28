@@ -16,29 +16,51 @@
 #
 # [1] http://blog.vmsplice.net/2011/04/how-to-pass-qemu-command-line-options.html
 # [2] https://bugs.launchpad.net/ubuntu/+source/libvirt/+bug/1772936
+#
+# Add this to your domain at the top:
+# xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'
 
 NUM=${NUM:-24}
 DIR=${DIR:-/var/lib/libvirt/images}
 SIZE=${SIZE:-128M}
 CMB=${CMB:-0}
-CREATE=${CREATE:-yes}
+CREATE=${CREATE:-no}
+PREFIX=${PREFIX:-none}
+
+if [ $PREFIX != "none" ]; then
+    PREFIX="${PREFIX}-"
+else
+    PREFIX=""
+fi
 
   # Create the qcow2 image files for the NVMe SSDs.
 
-if [ $DIR -ne "null" ] && [$CREATE == "yes"]; then
+if [ $CREATE == "yes" ]; then
+    if [ ! -d $DIR ]; then
+	echo "$DIR does not exist!"
+	exit -1
+    fi
     echo "Creating qcow2 image files for NVMe..."
     i=0
     while [ $i -lt $NUM ]; do
-	qemu-img create -f qcow2 ${DIR}/nvme${i}.qcow2 ${SIZE} > /dev/null
+	if [ -f ${DIR}/${PREFIX}nvme${i}.qcow2 ]; then
+	    echo "${DIR}/${PREFIX}nvme${i}.qcow2 already exists!"
+	    exit -1
+	fi
+	qemu-img create -f qcow2 ${DIR}/${PREFIX}nvme${i}.qcow2 ${SIZE} > /dev/null
 	((i++))
     done
-    chown libvirt-qemu:kvm ${DIR}/nvme*.*
-    chmod 644 ${DIR}/nvme*.*
+    chown libvirt-qemu:kvm ${DIR}/${PREFIX}nvme*.*
+    chmod 644 ${DIR}/${PREFIX}nvme*.*
     ls -lrth ${DIR}
 fi
 
   # Echo the XML output for virsh edit
 
+echo
+echo "# Add this to your domain entry at the top of the xml:"
+echo "# xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'"
+echo
 i=0
 echo "  <qemu:commandline>"
 while [ $i -lt $NUM ]; do
@@ -46,7 +68,7 @@ while [ $i -lt $NUM ]; do
     if [ $DIR == "null" ]; then
 	echo "    <qemu:arg value='file=null-aio://,if=none,size=${SIZE},id=nvme${i},format=null-aio'/>"
     else
-	echo "    <qemu:arg value='file=${DIR}/nvme${i}.qcow2,if=none,id=nvme${i},format=qcow2'/>"
+	echo "    <qemu:arg value='file=${DIR}/${PREFIX}nvme${i}.qcow2,if=none,id=nvme${i},format=qcow2'/>"
     fi
     echo "    <qemu:arg value='-device'/>"
     echo "    <qemu:arg value='nvme,drive=nvme${i},serial=nvme${i},cmb_size_mb=${CMB}'/>"
