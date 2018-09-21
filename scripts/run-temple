@@ -1,0 +1,15 @@
+#!/bin/bash
+# (c) Stephen Bates <sbates@raithlin.com>
+#
+# A really simple script to setup and run TempleOS on a QEMU instance.
+
+ISO_IMAGE=${ISO_IMAGE:-images/TempleOS.ISO}
+HDD_IMAGE=${HDD_IMAGE:-images/temple.img}
+
+qemu-img create -f qcow2 ${HDD_IMAGE} 128M
+
+/opt/qemu/qemu-upstream/bin/qemu-system-x86_64 \
+  -smp 1 \
+  -m 512 \
+  -hda ${HDD_IMAGE} \
+  -cdrom ${ISO_IMAGE}

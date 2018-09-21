@@ -51,15 +51,24 @@ if [ ! -e $MULTISTRAP ]; then
     exit -1
 fi
 
-mkdir $ROOTFS
-multistrap -a $ARCH -d $ROOTFS -f multistrap.conf
+  # Copy the qemu-user-static for the chosen ARCH to the rootfs. Note
+  # you also need to setup binfmt-misc [1] for this cross execution
+  # tool so the chroot also picks it up.
+  # [1] https://en.wikipedia.org/wiki/Binfmt_misc
+
+mkdir  $ROOTFS
+multistrap -a $ARCH -d $ROOTFS -f ${MULTISTRAP}
 if [[ "${ARCH}" = "arm64" ]]; then
     cp /usr/bin/qemu-aarch64-static ${ROOTFS}/usr/bin
 elif [[ "${ARCH}" = "ppc64el" ]]; then
     cp /usr/bin/qemu-ppc64le-static ${ROOTFS}/usr/bin
     export QEMU_CPU=POWER8 # Fixes https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=813698
+elif [[ "${ARCH}" = "riscv64" ]]; then
+    # For now we have to use a odd version of QEMU for RISCV, alter
+    # this to match your requirements.
+    cp /opt/qemu/qemu-upstream/bin/qemu-$ARCH ${ROOTFS}/usr/bin/qemu-$ARCH-static
 else
-    cp /usr/bin/qemu-$ARCH-static ${ROOTFS}/usr/bin
+    cp /usr/bin/qemu-$ARCH-static ${ROOTFS}/usr/bin/qemu-$ARCH-static
 fi
 
 export DEBIAN_FRONTEND=noninteractive

@@ -1,0 +1,20 @@
+#!/bin/bash
+# Based on information in [1]. Note that for now a kernel image can't
+# be passed in direct. It must be wrapped in a BBL first using
+# riscv-pk or something similar.
+#
+# 1. https://wiki.debian.org/RISC-V
+
+/opt/qemu/qemu-upstream/bin/qemu-system-riscv64 \
+    -nographic \
+    -machine virt -m 2G \
+    -kernel /home/batesste/bbl.bin \
+    -append "console=ttyS0 ro root=/dev/vda" \
+    -object rng-random,filename=/dev/urandom,id=rng0 \
+    -device virtio-rng-device,rng=rng0 \
+    -device virtio-blk-device,drive=hd0 -drive file=./images/image-riscv64.img,format=raw,id=hd0 \
+    -device virtio-net-device,netdev=usernet -netdev user,id=usernet,hostfwd=tcp::22222-:22 \
+    -drive file=./images/nvme.qcow2,if=none,id=nvme0,snapshot=on \
+    -device nvme,drive=nvme0,serial=nvme0,cmb_size_mb=0 \
+    -drive file=./images/nvme2.qcow2,if=none,id=nvme1,snapshot=on \
+    -device nvme,drive=nvme1,serial=nvme1,cmb_size_mb=64
