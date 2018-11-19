@@ -9,6 +9,9 @@
 # the kernel command line params inside the guest. Provide the name
 # and a kickstart file (which can be used to completely automate the
 # install process.
+#
+# Note that for Eideticom installs you also want to pass in the LDAP
+# files via the INITD_INJECT argument.
 
 NAME=${NAME:-stephen}
 KS=${KS:-none}
