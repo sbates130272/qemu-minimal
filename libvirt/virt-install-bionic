@@ -11,7 +11,14 @@
 # install process.
 #
 # Note that for Eideticom installs you also want to pass in the LDAP
-# files via the INITD_INJECT argument.
+# files via the INITD_INJECT argument. An example call that works well
+# on Eideticom systems is:
+#
+# KS=eideticom-vm.ks NAME=stephen INITRD_INJECT=" --initrd-inject \
+#    /home/users/sbates/ldap/ldap.secret \
+#    --initrd-inject /home/users/sbates/ldap/ldap.conf "\
+#    ./virt-install-bionic
+#
 
 NAME=${NAME:-stephen}
 KS=${KS:-none}

@@ -21,9 +21,17 @@ NVME_NOTUPSTREAM="-drive file=${IMGDIR}/nvme.qcow2,if=none,id=nvme1,snapshot=on 
   -drive file=${IMGDIR}/nvme2.qcow2,if=none,id=nvme2,snapshot=on \
   -device nvme,drive=nvme2,serial=nvme2,namespaces=1,cmbsz=8388608,cmbloc=2"
 NVME_UPSTREAM="-drive file=${IMGDIR}/nvme.qcow2,if=none,id=nvme1,snapshot=on \
-  -device nvme,drive=nvme1,serial=nvme \
+  -device nvme,drive=nvme1,serial=nvme1 \
   -drive file=${IMGDIR}/nvme2.qcow2,if=none,id=nvme2,snapshot=on \
-  -device nvme,drive=nvme2,serial=nvme2,cmb_size_mb=64"
+  -device nvme,drive=nvme2,serial=nvme2 \
+  -drive file=${IMGDIR}/nvme3.qcow2,if=none,id=nvme3,snapshot=on \
+  -device nvme,drive=nvme3,serial=nvme3 \
+  -drive file=${IMGDIR}/nvme4.qcow2,if=none,id=nvme4,snapshot=on \
+  -device nvme,drive=nvme4,serial=nvme4 \
+  -drive file=${IMGDIR}/nvme5.qcow2,if=none,id=nvme5,snapshot=on \
+  -device nvme,drive=nvme5,serial=nvme5 \
+  -drive file=${IMGDIR}/nvme6.qcow2,if=none,id=nvme6,snapshot=on \
+  -device nvme,drive=nvme6,serial=nvme6"
 VIRTFS="-virtfs local,id=home,path=/home/,security_model=mapped,mount_tag=home"
 ETH=1
 ETH_NOTUPSREAM="-device e1000,netdev=user0 -netdev user,id=user0 \
