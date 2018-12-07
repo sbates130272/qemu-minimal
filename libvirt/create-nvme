@@ -12,13 +12,27 @@
 #
 # Note that if you set DIR=null we don't create backing files for the
 # NVMe SSDs and instead use the null block driver inside QEMU. This
-# leads to improved performance but obviously no actual storage.
+# leads to improved performance but obviously no actual storage. Note
+# that by default the created NVMe backing files are placed in the
+# libvirt folder and permissions are set as per libvirt requirements.
 #
 # [1] http://blog.vmsplice.net/2011/04/how-to-pass-qemu-command-line-options.html
 # [2] https://bugs.launchpad.net/ubuntu/+source/libvirt/+bug/1772936
 #
 # Add this to your domain at the top:
 # xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'
+#
+# Note that for apparmor to work you may need to put something like
+#   /var/lib/libvirt/images/* rwk,
+# into /etc/apparmor.d/abstractions/libvirt-qemu and restart the
+# libvirtd service.
+#
+# Note that in more recent versions of QEMU a locking mechanism was
+# added to the image files. If you get errors of the form
+#   Failed to unlock byte 100
+# then use the ADD_LOCKING=yes option. Note this may cause issues
+# migrating (but should not as migrating to older libvirtd machines
+# should normally fail anyway).
 
 NUM=${NUM:-24}
 DIR=${DIR:-/var/lib/libvirt/images}
@@ -26,6 +40,7 @@ SIZE=${SIZE:-128M}
 CMB=${CMB:-0}
 CREATE=${CREATE:-no}
 PREFIX=${PREFIX:-none}
+ADD_LOCKING=${ADD_LOCKING:-no}
 
 if [ $PREFIX != "none" ]; then
     PREFIX="${PREFIX}-"
@@ -55,6 +70,12 @@ if [ $CREATE == "yes" ]; then
     ls -lrth ${DIR}
 fi
 
+if [ $DIR != "null" ] && [ $ADD_LOCKING == "yes" ]; then
+    ADD_LOCKING="file.locking=off,"
+else
+    ADD_LOCKING=""
+fi
+
   # Echo the XML output for virsh edit
 
 echo
@@ -68,7 +89,7 @@ while [ $i -lt $NUM ]; do
     if [ $DIR == "null" ]; then
 	echo "    <qemu:arg value='file=null-aio://,if=none,size=${SIZE},id=nvme${i},format=null-aio'/>"
     else
-	echo "    <qemu:arg value='file=${DIR}/${PREFIX}nvme${i}.qcow2,if=none,id=nvme${i},format=qcow2'/>"
+	echo "    <qemu:arg value='file=${DIR}/${PREFIX}nvme${i}.qcow2,if=none,id=nvme${i},${ADD_LOCKING}format=qcow2'/>"
     fi
     echo "    <qemu:arg value='-device'/>"
     echo "    <qemu:arg value='nvme,drive=nvme${i},serial=nvme${i},cmb_size_mb=${CMB}'/>"
