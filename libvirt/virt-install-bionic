@@ -19,6 +19,10 @@
 #    --initrd-inject /home/users/sbates/ldap/ldap.conf "\
 #    ./virt-install-bionic
 #
+# and a good generic call might be
+#
+# KS=generic-vm.ks NAME=stephen ./virt-install-bionic
+#
 
 NAME=${NAME:-stephen}
 KS=${KS:-none}
