@@ -27,6 +27,7 @@
 NAME=${NAME:-stephen}
 KS=${KS:-none}
 INITRD_INJECT=${INITRD_INJECT:-}
+SIZE=${SIZE:-8}
 
 echo ${NAME} > hostname.tmp
 INITRD_INJECT+=" --initrd-inject ./hostname.tmp "
@@ -45,7 +46,7 @@ virt-install \
 --memory 1024 \
 --vcpus 1 \
 --virt-type kvm \
---disk size=8 \
+--disk size=${SIZE} \
 --graphics none \
 --network bridge=virbr0 \
 --console pty,target_type=serial \
