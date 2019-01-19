@@ -63,3 +63,18 @@ for ((i=2;i<=NUM+1;i++)); do
 done
 
 ls -la ${LIBVIRT_DIR}
+
+
+#!/bin/bash
+# A code-snippet for editing the XML in each clone for PM Summit
+
+NUM=${NUM:-1}
+PREFIX=${PREFIX:-pmsummit}
+
+set +e
+
+for ((i=2;i<=NUM+1;i++)); do
+    virsh dumpxml ${PREFIX}-${i} > temp.xml
+    sed -ie "s/${PREFIX}-1-/${PREFIX}-${i}-/" temp.xml
+    virsh define temp.xml
+done
