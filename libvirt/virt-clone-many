@@ -78,3 +78,23 @@ for ((i=2;i<=NUM+1;i++)); do
     sed -ie "s/${PREFIX}-1-/${PREFIX}-${i}-/" temp.xml
     virsh define temp.xml
 done
+
+#!/bin/bash
+# A code-snippet to start or destroy a range of VMs
+
+START=${START:-yes}
+FIRST=${FIRST:-1}
+LAST=${LAST:-1}
+PREFIX=${PREFIX:-pmsummit}
+
+set +e
+
+if [ $START == "yes" ]; then
+    COMMAND=start
+else
+    COMMAND=destroy
+fi
+
+for ((i=FIRST;i<=LAST;i++)); do
+    virsh ${COMMAND} ${PREFIX}-${i}
+done
