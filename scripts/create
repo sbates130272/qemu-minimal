@@ -5,8 +5,8 @@ set -e
 qemu-img create -f qcow2 $1 8G
 qemu-nbd -c /dev/nbd0 $1
 
-sfdisk /dev/nbd0 -D -uM << EOF > /dev/null
-,512,82
+sfdisk /dev/nbd0 -uS << EOF > /dev/null
+,1048576,167936
 ;
 EOF
 
