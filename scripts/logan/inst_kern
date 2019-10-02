@@ -1,0 +1,46 @@
+#!/bin/bash
+
+set -e
+
+HOST=${HOST:-$1}
+
+if [ -z "$HOST" ]; then
+	echo "USAGE: $0 HOST"
+	exit 1
+fi
+
+if [ "$HOST" != "local" ]; then
+	make_kern tar-pkg
+
+	TARFILE=linux-*localyes*.tar
+
+	tar --delete -f $TARFILE --wildcards boot/vmlinux-*localyes*
+
+	wait_for_host "$HOST"
+
+	REMTARFILE=/tmp/linux.tar
+	scp $TARFILE "$HOST":"$REMTARFILE"
+
+	ssh "$HOST" sudo -s <<-EOF
+		set -e
+		rm -rf /lib/modules/*localyes*
+		rm -f /boot/config-*localyes*
+		tar -Oxf $REMTARFILE --wildcards boot/vmlinuz-*localyes* > \
+			/boot/vmlinuz-9-localyes
+		tar -Oxf $REMTARFILE --wildcards boot/config-*localyes* > \
+			/boot/config-9-localyes
+		tar -C / -xf $REMTARFILE --wildcards boot/config-*localyes*
+		tar -C / -kxf $REMTARFILE lib
+		rm -f $REMTARFILE
+	EOF
+
+	rm -f $TARFILE
+else
+	make_kern
+
+	rm -rf /lib/modules/*localyes*
+	rm -f /boot/config-*localyes*
+	sudo cp arch/x86/boot/bzImage /boot/vmlinuz-9-localyes
+	sudo cp .config /boot/config-9-localyes
+	sudo make modules_install
+fi

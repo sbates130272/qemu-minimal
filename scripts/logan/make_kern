@@ -1,0 +1,9 @@
+#!/bin/bash
+
+set -eu -o pipefail
+
+make oldconfig
+
+export PATH="/usr/lib/icecc/bin:$PATH"
+
+time make -j100 $@ 2>&1 | tee make.log
