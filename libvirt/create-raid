@@ -1,0 +1,31 @@
+#!/bin/bash
+#
+# create-raid
+#
+# (C) Stephen Bates <sbates@raithlin>
+#
+# A simple script to create a RAIDed filesystem over a whole bunch of
+# NVMe SSDs (which could be real or could be fake). It takes the
+# following steps.
+#
+# 1. Creates a partition table on each drive.
+# 2. Creates a 100% (optimal aligned) parition on each drive.
+# 3. Creates a RAID6 MD device across all drives (unless 2 omitted for
+#    journal).
+# 4. (Optionally) creates a RAID1 MD device for filesystem
+#    meta-data/journal. 
+# 5. Creates the filesystem over all the devices above.
+#
+# We assume all NVMe devices are to be used and we use the first
+# namespace on each device. Note some of this script is based on the
+# excellent tutorial by tecmint [1].
+#
+# [1] https://www.tecmint.com/create-raid-6-in-linux/
+
+parted /dev/nvme${DEV}n1 -s -a optimal -- \
+       mklabel gpt \
+       mkpart primary 0% 100%
+
+mdadm --create /dev/md0 --level=6 --raid-devices=4 /dev/sdb1 /dev/sdc1 /dev/sdd1 /dev/sde1
+
+mkfs.ext4 
