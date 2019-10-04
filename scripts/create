@@ -1,9 +1,29 @@
 #!/bin/bash
+#
+# create - a script to create a debian or ubuntu rootfs.
+#
+# Note you must have nbd kernel module probed and deboostrap
+# installed. Also needs qemu tools.
+#
+# For example, to setup and run a Ubuntu Bionic Beaver based rootfs:
+#
+# 1. sudo NAME=images/bionic.qcow2 SIZE=16G DISTRO=bionic ./scripts/create
+# 2. sudo ./scripts/setup images/bionic.qcow2
+# 3. sudo ./scripts/shrink images/bionic.qcow2
+# 4. sudo chown <user>:<group> images/bionic.qcow2
+# 5. ./runqemu <options> -i images/bionic.qcow2 <kernel bzImage>
+#
+# NB For some reason networking does not always work out of the
+# box. Try dhclient <iface> inside the VM to resolve that.
+
+IMAGE=${IMAGE:-$1}
+DISTRO=${DISTRO:-$1}
+SIZE=${SIZE:-8G}
 
 set -e
 
-qemu-img create -f qcow2 $1 8G
-qemu-nbd -c /dev/nbd0 $1
+qemu-img create -f qcow2 ${NAME} ${SIZE}
+qemu-nbd -c /dev/nbd0 ${NAME}
 
 sfdisk /dev/nbd0 -uS << EOF > /dev/null
 ,1048576,167936
@@ -25,7 +45,15 @@ function cleanup {
 
 trap cleanup EXIT
 
-
-debootstrap \
-   --include=less,locales-all,vim,sudo,openssh-server,jed,pciutils,bash-completion,psmisc,htop,pydf\
-    stable mnt
+if [ $DISTRO == "debian" ]; then
+    debootstrap \
+	--include=less,locales-all,vim,sudo,openssh-server,jed,pciutils,bash-completion,psmisc,htop,pydf\
+	stable mnt
+elif [ $DISTRO == "ubuntu" ]; then
+    debootstrap \
+	--include=less,vim,sudo,openssh-server,pciutils,bash-completion,psmisc,htop,tmux,curl,wget,emacs25-nox,htop,dnsutils \
+	bionic mnt
+else
+    echo "${DISTRO} distro not supported by deboostrap"
+    cleanup
+fi
