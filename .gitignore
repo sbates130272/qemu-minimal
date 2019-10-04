@@ -1,5 +1,8 @@
+images/*.ISO
+images/*.iso
+images/*.img
+images/*.qcow2
 images/mnt
-images/jessie.qcow2
 scripts/simple.cpio.gz
 scripts/initramfs.cpio.gz
 scripts/image.img
