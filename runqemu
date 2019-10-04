@@ -21,7 +21,7 @@ NVME_NOTUPSTREAM="-drive file=${IMGDIR}/nvme.qcow2,if=none,id=nvme1,snapshot=on 
   -drive file=${IMGDIR}/nvme2.qcow2,if=none,id=nvme2,snapshot=on \
   -device nvme,drive=nvme2,serial=nvme2,namespaces=1,cmbsz=8388608,cmbloc=2"
 NVME_UPSTREAM="-drive file=${IMGDIR}/nvme.qcow2,if=none,id=nvme1,snapshot=on \
-  -device nvme,drive=nvme1,serial=nvme1 \
+  -device nvme,drive=nvme1,serial=nvme1,cmb_size_mb=64 \
   -drive file=${IMGDIR}/nvme2.qcow2,if=none,id=nvme2,snapshot=on \
   -device nvme,drive=nvme2,serial=nvme2 \
   -drive file=${IMGDIR}/nvme3.qcow2,if=none,id=nvme3,snapshot=on \
@@ -34,12 +34,12 @@ NVME_UPSTREAM="-drive file=${IMGDIR}/nvme.qcow2,if=none,id=nvme1,snapshot=on \
   -device nvme,drive=nvme6,serial=nvme6"
 VIRTFS="-virtfs local,id=home,path=/home/,security_model=mapped,mount_tag=home"
 ETH=1
-ETH_NOTUPSREAM="-device e1000,netdev=user0 -netdev user,id=user0 \
+ETH_NOTUPSTREAM="-device e1000,netdev=user0 -netdev user,id=user0 \
    -device e1000,netdev=socket0 \
-   -netdev socket,id=socket0,${CONNECT}=localhost:1235"
-ETH_UPSREAM="-device e1000,netdev=user0 -netdev user,id=user0 \
-   -device e1000,netdev=socket0 \
-   -netdev socket,id=socket0,${CONNECT}=localhost:1235"
+   -netdev socket,id=socket0,${CONNECT}=localhost:1235 \
+   -redir tcp:$SSH_PORT::22"
+ETH_UPSTREAM="-device e1000,netdev=user0 -netdev user,id=user0,hostfwd=tcp::${SSH_PORT}-:22"
+
 UPSTREAM=0
 
 while getopts hq:i:m:s:c:enpkdftuv OPT; do
@@ -146,7 +146,6 @@ fi
 
 ${QEMU} $DEBUG $KVM -m $MEM -smp ${CORES},cores=${CORES} \
    $NVME $VIRTFS $IOPMEM $ETH \
-   -redir tcp:$SSH_PORT::22 \
    -nographic \
    -serial mon:stdio \
    -kernel $KERNEL \
