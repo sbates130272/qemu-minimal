@@ -3,6 +3,7 @@ images/*.iso
 images/*.img
 images/*.qcow2
 images/mnt
+bzImages/
 scripts/simple.cpio.gz
 scripts/initramfs.cpio.gz
 scripts/image.img
