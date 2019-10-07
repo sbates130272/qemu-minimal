@@ -16,7 +16,7 @@
 # NB For some reason networking does not always work out of the
 # box. Try dhclient <iface> inside the VM to resolve that.
 
-IMAGE=${IMAGE:-$1}
+NAME=${NAME:-$1}
 DISTRO=${DISTRO:-$1}
 SIZE=${SIZE:-8G}
 
@@ -57,3 +57,5 @@ else
     echo "${DISTRO} distro not supported by deboostrap"
     cleanup
 fi
+
+echo "setup of ${NAME} complete!"

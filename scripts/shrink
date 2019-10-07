@@ -8,3 +8,5 @@ qemu-nbd -d /dev/nbd0
 
 mv $1 $1.bak
 qemu-img convert -O qcow2 -c $1.bak $1
+
+echo "shrink of $1 complete!"
