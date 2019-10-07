@@ -75,3 +75,4 @@ ExecStart=-/sbin/agetty --autologin root -s %I 38400 vt102
 EOF
 
 echo "setup of $1 complete!"
+sleep 2

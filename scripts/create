@@ -17,7 +17,7 @@
 # box. Try dhclient <iface> inside the VM to resolve that.
 
 NAME=${NAME:-$1}
-DISTRO=${DISTRO:-$1}
+DISTRO=${DISTRO:-debian}
 SIZE=${SIZE:-8G}
 
 set -e
@@ -58,4 +58,4 @@ else
     cleanup
 fi
 
-echo "setup of ${NAME} complete!"
+echo "create of ${NAME} complete!"
