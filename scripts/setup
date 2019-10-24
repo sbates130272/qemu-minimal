@@ -55,7 +55,7 @@ EOF
 cat > mnt/etc/fstab << EOF
 LABEL=swap none  swap   sw   0   0
 LABEL=rootfs /     ext4   errors=remount-ro,noatime   0   0
-home  /home 9p     trans=virtio,version=9p2000.L,nofail   0   0
+shared  /shared 9p     trans=virtio,version=9p2000.L,nofail   0   0
 EOF
 
 if [ $MOUNT_NVME == "yes" ]; then
