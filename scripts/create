@@ -51,6 +51,7 @@ if [ $DISTRO == "debian" ]; then
 	stable mnt
 elif [ $DISTRO == "ubuntu" ]; then
     debootstrap \
+	--components=main,universe \
 	--include=less,vim,sudo,openssh-server,pciutils,bash-completion,psmisc,htop,tmux,curl,wget,emacs25-nox,htop,dnsutils \
 	bionic mnt
 else
