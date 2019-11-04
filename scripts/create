@@ -19,6 +19,7 @@
 NAME=${NAME:-$1}
 DISTRO=${DISTRO:-debian}
 SIZE=${SIZE:-8G}
+PKGS=${PKGS:-$2}
 
 set -e
 
@@ -47,12 +48,12 @@ trap cleanup EXIT
 
 if [ $DISTRO == "debian" ]; then
     debootstrap \
-	--include=less,locales-all,vim,sudo,openssh-server,jed,pciutils,bash-completion,psmisc,htop,pydf\
+	--include=less,locales-all,vim,sudo,openssh-server,jed,pciutils,bash-completion,psmisc,htop,pydf,${PKGS}\
 	stable mnt
 elif [ $DISTRO == "ubuntu" ]; then
     debootstrap \
 	--components=main,universe \
-	--include=less,vim,sudo,openssh-server,pciutils,bash-completion,psmisc,htop,tmux,curl,wget,emacs25-nox,htop,dnsutils \
+	--include=less,vim,sudo,openssh-server,pciutils,bash-completion,psmisc,htop,tmux,curl,wget,emacs25-nox,htop,dnsutils,${PKGS} \
 	bionic mnt
 else
     echo "${DISTRO} distro not supported by deboostrap"
