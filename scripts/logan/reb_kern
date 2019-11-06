@@ -2,4 +2,10 @@
 
 source ~/.bin/inst_kern
 
-ssh $HOST sudo reboot
+if [ "$HOST" != "local" ]; then
+	ssh "$HOST" sudo reboot
+elif [ -f /lib/molly-guard/reboot ]; then
+	sudo /lib/molly-guard/reboot
+else
+	sudo reboot
+fi

@@ -1,0 +1,8 @@
+#!/bin/bash
+
+#ping -c 1 -w 1 $1
+while ! nc -zv $1 22 -w 1 2> /dev/null; do
+echo -n .
+sleep 0.5
+done
+echo

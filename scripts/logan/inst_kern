@@ -2,24 +2,38 @@
 
 set -e
 
-HOST=${HOST:-$1}
+export HOST=${HOST:-$1}
 
 if [ -z "$HOST" ]; then
 	echo "USAGE: $0 HOST"
 	exit 1
 fi
 
+shift 1
+
+function change_to_build_dir {
+	if [ ! -f ".config" ]; then
+		cd ".build/$HOST"
+	fi
+}
+
 if [ "$HOST" != "local" ]; then
-	make_kern tar-pkg
+	make_kern "$@" tar-pkg
+	change_to_build_dir
 
-	TARFILE=linux-*localyes*.tar
+	TARFILES=(linux-*localyes*.tar)
+	if [ "${#TARFILES[@]}" != "1" ]; then
+		>&2 echo "Too many tar files in your linux directory, clean them up!"
+		exit 1
+	fi
+	TARFILE="${TARFILES[0]}"
 
-	tar --delete -f $TARFILE --wildcards boot/vmlinux-*localyes*
+	tar --delete -f "$TARFILE" --wildcards boot/vmlinux-*localyes*
 
 	wait_for_host "$HOST"
 
 	REMTARFILE=/tmp/linux.tar
-	scp $TARFILE "$HOST":"$REMTARFILE"
+	scp "$TARFILE" "$HOST":"$REMTARFILE"
 
 	ssh "$HOST" sudo -s <<-EOF
 		set -e
@@ -34,12 +48,14 @@ if [ "$HOST" != "local" ]; then
 		rm -f $REMTARFILE
 	EOF
 
-	rm -f $TARFILE
+	rm -f "$TARFILE"
 else
-	make_kern
+	sudo -v
+	make_kern "$@"
+	change_to_build_dir
 
-	rm -rf /lib/modules/*localyes*
-	rm -f /boot/config-*localyes*
+	sudo rm -rf /lib/modules/*localyes*
+	sudo rm -f /boot/config-*localyes*
 	sudo cp arch/x86/boot/bzImage /boot/vmlinuz-9-localyes
 	sudo cp .config /boot/config-9-localyes
 	sudo make modules_install
