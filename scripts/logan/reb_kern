@@ -1,6 +1,7 @@
 #!/bin/bash
 
-source ~/.bin/inst_kern
+# shellcheck source=./inst_kern
+source "${BASH_SOURCE[0]%/*}/inst_kern"
 
 if [ "$HOST" != "local" ]; then
 	ssh "$HOST" sudo reboot
