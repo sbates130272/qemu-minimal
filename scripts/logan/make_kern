@@ -1,40 +1,8 @@
 #!/bin/bash
 
-set -eu -o pipefail
-
-MAKE_PARAMS=("-j100")
-ODIR=.
-
-if [ ! -f "Kbuild" ]; then
-	>&2 echo "ERROR: Must be run in a linux repository"
-	exit 1
-fi
-
-if [ ! -f ".config" ]; then
-	if [ -z "${HOST+x}" ]; then
-		if [ $# -lt 1 ] || [ -z "$1" ]; then
-			>&2 echo "USAGE: $0 HOST [MAKE ARGS]"
-			>&2 echo
-			>&2 echo "When no .config is present in the current directory, you must"
-			>&2 echo "specify a host on the command line or in the HOST environment"
-			>&2 echo "variable"
-			exit 1
-		else
-			HOST=$1
-			shift 1
-		fi
-	fi
-
-	ODIR=".build/$HOST"
-	CFG="$ODIR/.config"
-	MAKE_PARAMS+=("O=$ODIR")
-
-	if [ ! -f "$CFG" ]; then
-		>&2 echo "ERROR: No config present in $CFG"
-		>&2 echo "Please create one."
-		exit 1
-	fi
-fi
+# shellcheck source=setup_kern
+source "${BASH_SOURCE[0]%/*}/setup_kern"
+MAKE_PARAMS+=("-j100")
 
 make "${MAKE_PARAMS[@]}" oldconfig
 
