@@ -1,0 +1,34 @@
+#!/bin/bash
+
+if [ -z ${COMPLETE+x} ] && [ -z ${INST_COMPLETE+x} ]; then
+	# shellcheck source=setup_kern
+	source "${BASH_SOURCE[0]%/*}/setup_kern"
+	scripts/config --file "$CFG" "$@"
+elif [ -z ${INST_COMPLETE+x} ]; then
+	if [ ! -f ".config" ]; then
+		if [ "$#" -eq 0 ]; then
+			ls -1 .build 2>/dev/null
+			exit 0
+		fi
+		HOST=$1
+		shift
+	fi
+
+	if [ "$#" -eq 0 ]; then
+		echo -e "-e\\n-d\\n-m\\n-s"
+        elif [ ! -z ${CUR+x} ]; then
+		sed -n "s/^.*CONFIG_\\(${CUR}[A-Z0-9_]*\\).*\$/\\1/p" \
+			.build/gaia/.config ".build/$HOST/.config"
+	fi
+else
+	__conf_kern_complete()
+	{
+		local cur words cword
+		_init_completion || return
+
+		opts=$(COMPLETE=y CUR="$cur" ${words[*]:0:$cword})
+		mapfile -t COMPREPLY < <(compgen -W "$opts" -- "$cur")
+	}
+
+	complete -F __conf_kern_complete conf_kern
+fi
