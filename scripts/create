@@ -7,7 +7,7 @@
 #
 # For example, to setup and run a Ubuntu Bionic Beaver based rootfs:
 #
-# 1. sudo NAME=images/bionic.qcow2 SIZE=16G DISTRO=bionic ./scripts/create
+# 1. sudo NAME=images/bionic.qcow2 SIZE=16G DISTRO=ubuntu ./scripts/create
 # 2. sudo ./scripts/setup images/bionic.qcow2
 # 3. sudo ./scripts/shrink images/bionic.qcow2
 # 4. sudo chown <user>:<group> images/bionic.qcow2
