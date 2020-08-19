@@ -1,0 +1,161 @@
+#!/bin/bash
+#
+# virt-install-ubuntu
+#
+# (C) Stephen Bates <sbates@raithlin>
+#
+# A simple script generate a Ubuntu Bionic Bison or Focal Fossa based
+# VM.
+# Bionic
+# ------
+#
+# Note that for Bionic in order to get the console to work you need
+# to add console=ttyS0 to the kernel command line params inside the
+# guest. Provide the name and a kickstart file (which can be used to
+# completely automate the install process.
+#
+# Note that for Eideticom installs you also want to pass in the LDAP
+# files via the INITD_INJECT argument. An example call that works well
+# on Eideticom systems is (note this is obsolete as Eideticom has
+# moved to AD):
+#
+# KS=eideticom-vm.ks NAME=stephen INITRD_INJECT=" --initrd-inject \
+#    /home/users/sbates/ldap/ldap.secret \
+#    --initrd-inject /home/users/sbates/ldap/ldap.conf "\
+#    ./virt-install-bionic
+#
+# and a good generic call for Bionic might be
+#
+# RELEASE=bionic KS=generic-vm.ks NAME=stephen ./virt-install-ubuntu
+#
+# Focal
+# -----
+#
+# Note that for Focal you need the cloud-init as well as
+# cloud-image-utils  and for focal a good generic call would be:
+#
+# RELEASE=focal NAME=stephen ./virt-install-ubuntu
+#
+# This creates a system with an user called ubuntu and the password
+# change who has full sudo access to the system. This also sets up the
+# networking as NAT to the host and you can then ssh into the machine
+# using the ubuntu user.
+#
+# See [1] for a good HOWTO for cloud-init.
+#
+# [1] https://fabianlee.org/2020/02/23/kvm-testing-cloud-init-locally-using-kvm-for-an-ubuntu-cloud-image/
+#
+# Note that after running this script you might want to remove the
+# cloud-init disk from the VM. See [1] for info on how to do that.
+
+NAME=${NAME:-stephen}
+KS=${KS:-none}
+INITRD_INJECT=${INITRD_INJECT:-}
+SIZE=${SIZE:-8}
+RELEASE=${RELEASE:-focal}
+
+if [ $RELEASE == "bionic" ]; then
+
+    echo ${NAME} > hostname.tmp
+    INITRD_INJECT+=" --initrd-inject ./hostname.tmp "
+
+    if [ $KS != "none" ]; then
+	INITRD_INJECT+=" --initrd-inject ./${KS} "
+	KSF="ks=file:/${KS}"
+    else
+	KS=
+	KSF=
+    fi
+
+    virt-install \
+	--connect qemu:///system \
+	--name ${NAME} \
+	--memory 1024 \
+	--vcpus 1 \
+	--virt-type kvm \
+	--disk size=${SIZE} \
+	--graphics none \
+	--network bridge=virbr0 \
+	--console pty,target_type=serial \
+	--location http://archive.ubuntu.com/ubuntu/dists/bionic/main/installer-amd64/ \
+	${INITRD_INJECT} \
+	--extra-args ''${KSF}' console=ttyS0,115200n8 serial'
+
+    exit 0
+
+elif [ $RELEASE != "focal" ]; then
+    echo "RELEASE ${RELEASE} is not recognized!"
+    exit -1
+fi
+
+  # Focal prefers us to use cloud images and cloud-init. Download the
+  # focal cloud image and set it up using a cloud-config file. Create
+  # am ubuntu user with password-less root access.
+  #
+  # We use vol-create and vol-upload to add the disk images to the
+  # libvirt images folder.
+  #
+  # Default password for root and ubuntu user is 'change'. Use hash in
+  # these cloud-init scripts.
+
+set -e
+
+wget https://cloud-images.ubuntu.com/focal/current/focal-server-cloudimg-amd64.img
+cp focal-server-cloudimg-amd64.img ${NAME}.qcow2
+qemu-img resize ${NAME}.qcow2 ${SIZE}G
+
+PASSWORD_HASH='$6$rounds=4096$WX0n3N1zAa$HxqfjcIUzPIY0sX4N16wB9F6JB/7dV2eo78x3s.PqOdzZeb4EOVQK/m2BIYccjvlPTUN/afn4CqtdqnWXUCVh/'
+
+cat << EOF > cloud-config-${NAME}
+#cloud-config
+hostname: ${NAME}
+disable_root: true
+ssh_pwauth: true
+users:
+  - name: ubuntu
+    lock_passwd: false
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    groups: users, admin
+    home: /home/ubuntu
+    shell: /bin/bash
+    passwd: ${PASSWORD_HASH}
+EOF
+
+cat << EOF > network-config-${NAME}.cfg
+version: 2
+ethernets:
+  ens2:
+     dhcp4: true
+     # default libvirt network
+     gateway4: 192.168.122.1
+     nameservers:
+       addresses: [ 192.168.122.1,8.8.8.8 ]
+EOF
+
+cloud-localds -v --network-config=network-config-${NAME}.cfg \
+	      ${NAME}-seed.qcow2 cloud-config-${NAME}
+
+ # FIXME: This set +e is a hack to avoid needing to detect if a volume
+ # already exists.
+ # FIXME: Detect size of seed disk image so we don't fix it at 512M.
+
+set +e
+virsh vol-delete --pool default ${NAME}.qcow2
+virsh vol-create-as default ${NAME}.qcow2 ${SIZE}G --format qcow2
+virsh vol-upload --pool default ${NAME}.qcow2 ${NAME}.qcow2
+
+virsh vol-delete --pool default ${NAME}-seed.qcow2
+virsh vol-create-as default ${NAME}-seed.qcow2 512M --format qcow2
+virsh vol-upload --pool default ${NAME}-seed.qcow2 ${NAME}-seed.qcow2
+set -e
+
+virt-install \
+    --name ${NAME}\
+    --memory 1024 \
+    --disk vol=default/${NAME}.qcow2,device=disk \
+    --disk vol=default/${NAME}-seed.qcow2,device=cdrom \
+    --os-variant auto \
+    --virt-type kvm \
+    --graphics none \
+    --network network:default \
+    --console pty,target_type=serial
