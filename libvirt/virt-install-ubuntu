@@ -135,19 +135,21 @@ EOF
 cloud-localds -v --network-config=network-config-${NAME}.cfg \
 	      ${NAME}-seed.qcow2 cloud-config-${NAME}
 
- # FIXME: This set +e is a hack to avoid needing to detect if a volume
- # already exists.
- # FIXME: Detect size of seed disk image so we don't fix it at 512M.
+remove_vol() {
+    rc=0
+    `virsh vol-info --pool default $1 > /dev/null 2>&1` || rc=$?
+    if [[ $rc -eq 0 ]]; then
+	virsh vol-delete --pool default $1
+    fi
+}
 
-set +e
-virsh vol-delete --pool default ${NAME}.qcow2
+remove_vol ${NAME}.qcow2
 virsh vol-create-as default ${NAME}.qcow2 ${SIZE}G --format qcow2
 virsh vol-upload --pool default ${NAME}.qcow2 ${NAME}.qcow2
 
-virsh vol-delete --pool default ${NAME}-seed.qcow2
+remove_vol ${NAME}-seed.qcow2
 virsh vol-create-as default ${NAME}-seed.qcow2 512M --format qcow2
 virsh vol-upload --pool default ${NAME}-seed.qcow2 ${NAME}-seed.qcow2
-set -e
 
 virt-install \
     --name ${NAME}\
