@@ -4,8 +4,9 @@
 #
 # (C) Stephen Bates <sbates@raithlin>
 #
-# A simple script generate a Ubuntu Bionic Bison or Focal Fossa based
-# VM.
+# A simple script generate a Ubuntu Bionic Bison or Focal Fossa or
+# later based VM.
+#
 # Bionic
 # ------
 #
@@ -28,8 +29,8 @@
 #
 # RELEASE=bionic KS=generic-vm.ks NAME=stephen ./virt-install-ubuntu
 #
-# Focal
-# -----
+# Focal (or Later)
+# ----------------
 #
 # Note that for Focal you need the cloud-init as well as
 # cloud-image-utils  and for focal a good generic call would be:
@@ -52,7 +53,7 @@ NAME=${NAME:-stephen}
 KS=${KS:-none}
 INITRD_INJECT=${INITRD_INJECT:-}
 SIZE=${SIZE:-8}
-RELEASE=${RELEASE:-focal}
+RELEASE=${RELEASE:-jammy}
 
 if [ $RELEASE == "bionic" ]; then
 
@@ -83,14 +84,22 @@ if [ $RELEASE == "bionic" ]; then
 
     exit 0
 
-elif [ $RELEASE != "focal" ]; then
-    echo "RELEASE ${RELEASE} is not recognized!"
-    exit -1
+else
+
+    if [ ${RELEASE} == "focal" ]; then
+	OSINFO="ubuntufocal"
+    elif [ ${RELEASE} == "jammy" ]; then
+	OSINFO="ubuntujammy"
+    else
+	echo "RELEASE ${RELEASE} is not supported yet!"
+	exit -1
+    fi
 fi
 
-  # Focal prefers us to use cloud images and cloud-init. Download the
-  # focal cloud image and set it up using a cloud-config file. Create
-  # am ubuntu user with password-less root access.
+  # Focal and above prefers us to use cloud images and
+  # cloud-init. Download the focal cloud image and set it up using a
+  # cloud-config file. Create am ubuntu user with password-less root
+  # access.
   #
   # We use vol-create and vol-upload to add the disk images to the
   # libvirt images folder.
@@ -100,8 +109,10 @@ fi
 
 set -e
 
-wget https://cloud-images.ubuntu.com/focal/current/focal-server-cloudimg-amd64.img
-cp focal-server-cloudimg-amd64.img ${NAME}.qcow2
+if [ ! -f  ${RELEASE}-server-cloudimg-amd64.img ]; then
+    wget https://cloud-images.ubuntu.com/${RELEASE}/current/${RELEASE}-server-cloudimg-amd64.img
+fi
+cp ${RELEASE}-server-cloudimg-amd64.img ${NAME}.qcow2
 qemu-img resize ${NAME}.qcow2 ${SIZE}G
 
 PASSWORD_HASH='$6$rounds=4096$WX0n3N1zAa$HxqfjcIUzPIY0sX4N16wB9F6JB/7dV2eo78x3s.PqOdzZeb4EOVQK/m2BIYccjvlPTUN/afn4CqtdqnWXUCVh/'
@@ -156,8 +167,9 @@ virt-install \
     --memory 1024 \
     --disk vol=default/${NAME}.qcow2,device=disk \
     --disk vol=default/${NAME}-seed.qcow2,device=cdrom \
-    --os-variant auto \
+    --osinfo ${OSINFO} \
     --virt-type kvm \
     --graphics none \
     --network network:default \
-    --console pty,target_type=serial
+    --console pty,target_type=serial \
+    --boot hd
