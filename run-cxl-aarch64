@@ -1,0 +1,53 @@
+#!/bin/bash
+# Copyright (c) Stephen Bates, 2022
+#
+# run-cxl-aarch64
+# ---------------
+#
+# A shell script to boot up a VM that has CXL enabled end-points on my
+# M1-based Macbook Pro. As of this point the versioning is:
+#
+# QEMU: 7.1.0.
+# Kernel:
+# Distro: Ubuntu 22.04
+#
+# Based on somewhat outdated instruction from [1].
+#
+# [1]: https://people.kernel.org/jic23/howto-test-cxl-enablement-on-arm64-using-qemu
+
+
+../qemu/build/qemu-system-aarch64 \
+    -M virt,accel=hvf,cxl=on \
+    -m 4g,maxmem=8G,slots=8 \
+    -cpu max \
+    -smp 4 \
+    -nographic \
+    -bios ./images/QEMU_EFI.fd \
+    -drive if=none,file=./images/qemu-cxl.qcow2,format=qcow2,id=hd \
+    -device virtio-blk-pci,drive=hd \
+    -object memory-backend-file,id=cxl-mem1,share=on,mem-path=/tmp/cxltest.raw,size=256M \
+    -object memory-backend-file,id=cxl-lsa1,share=on,mem-path=/tmp/lsa.raw,size=256M \
+    -device pxb-cxl,bus_nr=12,bus=pcie.0,id=cxl.1 \
+    -device cxl-rp,port=0,bus=cxl.1,id=root_port13,chassis=0,slot=2 \
+    -device cxl-type3,bus=root_port13,memdev=cxl-mem1,lsa=cxl-lsa1,id=cxl-pmem0 \
+    -M cxl-fmw.0.targets.0=cxl.1,cxl-fmw.0.size=4G
+
+#    -drive if=none,file=./images/ubuntu-22.04-live-server-arm64.iso,media=cdrom,id=cdromid \
+#    -device virtio-blk-pci,drive=cdromid \
+
+    #    -drive if=none,file=./images/ubuntu-22.04-live-server-arm64.iso,format=raw,id=hd2 \
+#    -device virtio-blk-pci,drive=hd2 \
+
+    #-device pxb,id=bridge1,bus=pcie.0,bus_nr=3 \
+    #-device pxb-pcie,id=pcie.0,bus_nr=127,id=foo \
+    #-device ioh3420,port=1,bus=pcie.0,id=root_port113,chassis=1,slot=2 \
+
+    #-drive if=virtio,file=./images/qemu-cxl.qcow2,format=qcow2,bus=bridge1  \
+    #-drive if=virtio,file=./images/jammy-server-cloudimg-arm64.img,format=raw,bus=bridge1 \
+
+#    -object memory-backend-ram,size=4G,id=mem0 \
+#    -numa node,nodeid=0,cpus=0-3,memdev=mem0 \
+#    -object memory-backend-file,id=cxl-mem1,share=on,mem-path=/tmp/cxltest.raw,size=2G,align=2G \
+#    -device pxb-cxl,busnr=128,id=cxlbus1,uid=1,len-window-base=1,window-base[0]=0x4c0000000,memdev[0]=cxl-mem1 \
+#    -device cxl-rp,bus=cxlbus1,id=cxlrp,chassis=0,slot=1 \
+#    -device cxl-type3,bus=cxlrp,memdev=cxl-mem1,lsa=cxl-mem1,id=cxl-mem0,size=2G
