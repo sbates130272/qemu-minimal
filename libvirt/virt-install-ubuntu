@@ -146,6 +146,16 @@ EOF
 cloud-localds -v --network-config=network-config-${NAME}.cfg \
 	      ${NAME}-seed.qcow2 cloud-config-${NAME}
 
+create_pool() {
+    rc=0
+    `virsh pool-info $1 > /dev/null 2>&1` || rc=$?
+    if [[ $rc -ne 0 ]]; then
+	virsh pool-define-as $1 dir --target /var/lib/libvirt/images/
+	virsh pool-autostart $1
+	virsh pool-start $1
+    fi
+}
+
 remove_vol() {
     rc=0
     `virsh vol-info --pool default $1 > /dev/null 2>&1` || rc=$?
@@ -153,6 +163,8 @@ remove_vol() {
 	virsh vol-delete --pool default $1
     fi
 }
+
+create_pool default
 
 remove_vol ${NAME}.qcow2
 virsh vol-create-as default ${NAME}.qcow2 ${SIZE}G --format qcow2
