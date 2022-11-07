@@ -49,11 +49,19 @@
 # Note that after running this script you might want to remove the
 # cloud-init disk from the VM. See [1] for info on how to do that.
 
-NAME=${NAME:-stephen}
+# Note that the variables ARCH, SSH_KEY_FILE, USERNAME, PASS  and
+# NOAUTOCONSOLE only apply to focal or later.
+
+NAME=${NAME:-qemu-minimal}
 KS=${KS:-none}
 INITRD_INJECT=${INITRD_INJECT:-}
-SIZE=${SIZE:-8}
+SIZE=${SIZE:-32}
 RELEASE=${RELEASE:-jammy}
+ARCH=${ARCH:-amd64}
+SSH_KEY_FILE=${SSH_KEY_FILE:-~/.ssh/id_rsa.pub}
+NOAUTOCONSOLE=${NOAUTOCONSOLE:-false}
+USERNAME=${USERNAME:-ubuntu}
+PASS=${PASS:-password}
 
 if [ $RELEASE == "bionic" ]; then
 
@@ -109,13 +117,22 @@ fi
 
 set -e
 
-if [ ! -f  ${RELEASE}-server-cloudimg-amd64.img ]; then
-    wget https://cloud-images.ubuntu.com/${RELEASE}/current/${RELEASE}-server-cloudimg-amd64.img
+cleanup() {
+    rm -f cloud-config-${NAME} network-config-${NAME} ${NAME}.qcow2 \
+   ${NAME}-seed.qcow2
+}
+trap cleanup ERR EXIT
+
+if [ ! -f  ${RELEASE}-server-cloudimg-${ARCH}.img ]; then
+    wget https://cloud-images.ubuntu.com/${RELEASE}/current/${RELEASE}-server-cloudimg-${ARCH}.img
 fi
 cp ${RELEASE}-server-cloudimg-amd64.img ${NAME}.qcow2
 qemu-img resize ${NAME}.qcow2 ${SIZE}G
 
-PASSWORD_HASH='$6$rounds=4096$WX0n3N1zAa$HxqfjcIUzPIY0sX4N16wB9F6JB/7dV2eo78x3s.PqOdzZeb4EOVQK/m2BIYccjvlPTUN/afn4CqtdqnWXUCVh/'
+if [ ! -f $SSH_KEY_FILE ]; then
+     echo "SSH_KEY_FILE ${SSH_KEY_FILE} does not exist!"
+     exit 1
+fi
 
 cat << EOF > cloud-config-${NAME}
 #cloud-config
@@ -123,28 +140,34 @@ hostname: ${NAME}
 disable_root: true
 ssh_pwauth: true
 users:
-  - name: ubuntu
+  - name: ${USERNAME}
+    plain_text_passwd: '${PASS}'
     lock_passwd: false
     sudo: ALL=(ALL) NOPASSWD:ALL
     groups: users, admin
-    home: /home/ubuntu
     shell: /bin/bash
-    passwd: ${PASSWORD_HASH}
+    ssh_authorized_keys: |
+      $(sed -z 's|\n|\n      |g' ${SSH_KEY_FILE})
+power_state:
+  delay: now
+  mode: poweroff
+  message: Shutting down
+  timeout: 2
+  condition: true
 EOF
 
-cat << EOF > network-config-${NAME}.cfg
+cat << EOF > network-config-${NAME}
 version: 2
 ethernets:
-  ens2:
-     dhcp4: true
-     # default libvirt network
-     gateway4: 192.168.122.1
-     nameservers:
-       addresses: [ 192.168.122.1,8.8.8.8 ]
+  eth0:
+    match:
+      name: en*
+    dhcp4: true
+    # default libvirt network
+    gateway4: 192.168.122.1
+    nameservers:
+      addresses: [ 192.168.122.1,8.8.8.8 ]
 EOF
-
-cloud-localds -v --network-config=network-config-${NAME}.cfg \
-	      ${NAME}-seed.qcow2 cloud-config-${NAME}
 
 create_pool() {
     rc=0
@@ -170,18 +193,21 @@ remove_vol ${NAME}.qcow2
 virsh vol-create-as default ${NAME}.qcow2 ${SIZE}G --format qcow2
 virsh vol-upload --pool default ${NAME}.qcow2 ${NAME}.qcow2
 
-remove_vol ${NAME}-seed.qcow2
-virsh vol-create-as default ${NAME}-seed.qcow2 512M --format qcow2
-virsh vol-upload --pool default ${NAME}-seed.qcow2 ${NAME}-seed.qcow2
+if [ "${NOAUTOCONSOLE}" = true ]; then
+    NOAUTOCONSOLE="--noautoconsole"
+else
+    NOAUTOCONSOLE=
+fi
 
 virt-install \
-    --name ${NAME}\
+    --name ${NAME} \
+    --osinfo ${OSINFO} \
+    --cloud-init user-data=cloud-config-${NAME},network-config=network-config-${NAME} \
     --memory 1024 \
     --disk vol=default/${NAME}.qcow2,device=disk \
-    --disk vol=default/${NAME}-seed.qcow2,device=cdrom \
-    --osinfo ${OSINFO} \
     --virt-type kvm \
     --graphics none \
     --network network:default \
     --console pty,target_type=serial \
+    ${NOAUTOCONSOLE} \
     --boot hd
