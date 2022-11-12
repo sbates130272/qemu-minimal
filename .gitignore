@@ -9,4 +9,6 @@ scripts/initramfs.cpio.gz
 scripts/image.img
 scripts/rootfs
 libvirt/hostname.tmp
+libvirt/focal-*.img
+libvirt/jammy-*.img
 *~

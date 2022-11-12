@@ -1,0 +1,6 @@
+# packages-default: My minimal list of initial packages
+# Note indent by 2 spaces and use a hyphen!
+  - emacs-nox
+  - fio
+  - sysstat
+  - tree

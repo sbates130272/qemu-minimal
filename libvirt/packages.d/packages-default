@@ -1,0 +1,16 @@
+# packages-default: My default list of initial packages.
+# Note indent by 2 spaces and use a hyphen!
+  - bmon
+  - build-essential
+  - emacs-nox
+  - fio
+  - git
+  - gnuplot
+  - gpg-agent
+  - libaio-dev
+  - liburing-dev
+  - python2
+  - python3-pip
+  - mutt
+  - sysstat
+  - tree
