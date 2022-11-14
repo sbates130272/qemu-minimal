@@ -55,6 +55,16 @@
 # PACKAGES is a file of packages to be installed via cloud-init. A
 # couple of my favourite collections can be found in the packages.d
 # folder.
+#
+# FILESYSTEM can be a directory on the host that is then shared into
+# the guest via the tag "hostfs" and the virtiofs driver. To access
+# this folder ensure virtiofs is enabled in your guest kernel (it is
+# in default Ubuntu 22.04) and run:
+#
+# sudo mount -t virtiofs hostfs <mount location on guest>
+#
+# Add something like this to the guest /etc/fstab to make this happen
+# every reboot.
 
 NAME=${NAME:-qemu-minimal}
 KS=${KS:-none}
@@ -67,6 +77,7 @@ NOAUTOCONSOLE=${NOAUTOCONSOLE:-false}
 USERNAME=${USERNAME:-ubuntu}
 PASS=${PASS:-password}
 PACKAGES=${PACKAGES:-none}
+FILESYSTEM=${FILESYSTEM:-none}
 
 if [ $RELEASE == "bionic" ]; then
 
@@ -217,12 +228,24 @@ else
     NOAUTOCONSOLE=
 fi
 
+if [ ${FILESYSTEM} != "none" ]; then
+    if [ -d ${FILESYSTEM} ]; then
+	FILESYSTEM="--memorybacking source.type=memfd,access.mode=shared --filesystem source.dir=${FILESYSTEM},target.dir=hostfs,driver.type=virtiofs"
+    else
+	echo "The specified FILESYSTEM (${FILESYSTEM}) is not a directory!"
+	exit 1
+    fi
+else
+    FILESYSTEM=
+fi
+
 virt-install \
     --name ${NAME} \
     --osinfo ${OSINFO} \
     --cloud-init user-data=cloud-config-${NAME},network-config=network-config-${NAME} \
     --memory 1024 \
     --disk vol=default/${NAME}.qcow2,device=disk \
+    ${FILESYSTEM} \
     --virt-type kvm \
     --graphics none \
     --network network:default \
