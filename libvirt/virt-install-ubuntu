@@ -65,6 +65,10 @@
 #
 # Add something like this to the guest /etc/fstab to make this happen
 # every reboot.
+#
+# BRIDGE can be set to specify a network bridge on the host to attach
+# the VM too. This replaces the NAT-based default. The user needs to
+# ensure that the bridge is correctly setup for network access.
 
 NAME=${NAME:-qemu-minimal}
 KS=${KS:-none}
@@ -78,6 +82,7 @@ USERNAME=${USERNAME:-ubuntu}
 PASS=${PASS:-password}
 PACKAGES=${PACKAGES:-none}
 FILESYSTEM=${FILESYSTEM:-none}
+BRIDGE=${BRIDGE:-none}
 
 if [ $RELEASE == "bionic" ]; then
 
@@ -239,6 +244,12 @@ else
     FILESYSTEM=
 fi
 
+if [ ${BRIDGE} != "none" ]; then
+    NETWORK="--network bridge=${BRIDGE}"
+else
+    NETWORK="--network network:default"
+fi
+
 virt-install \
     --name ${NAME} \
     --osinfo ${OSINFO} \
@@ -248,7 +259,7 @@ virt-install \
     ${FILESYSTEM} \
     --virt-type kvm \
     --graphics none \
-    --network network:default \
     --console pty,target_type=serial \
     ${NOAUTOCONSOLE} \
+    ${NETWORK} \
     --boot hd
