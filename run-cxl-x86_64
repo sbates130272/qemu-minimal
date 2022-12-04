@@ -1,0 +1,58 @@
+#!/bin/bash
+# Copyright (c) Stephen Bates, Shai Bergman 2022
+#
+# run-cxl-x86_64
+# ---------------
+#
+# A shell script to boot up a VM that has CXL enabled end-points on
+# an x86_64 machine. As of this point the versioning is:
+#
+# QEMU: 7.2.0-rc3
+# Kernel: cxl-pending branch of:
+#   https://git.kernel.org/pub/scm/linux/kernel/git/cxl/cxl.git/
+# Distro: Ubuntu 22.04
+# Tested on Intel Xeon silver 4216 and AMD EPYC 7282
+#
+# Note: Can create pmem region with cxl-cli - but cannot online it
+
+USAGE="Usage: `basename $0` -i IMAGE_FILE BZIMAGE"
+QEMU_BIN=${QEMU_BIN:-qemu-system-x86_64}
+IMAGE=
+
+while getopts i: OPT; do
+     case "$OPT" in
+        i)
+            IMAGE=$OPTARG
+            ;;
+        \?)
+            echo $USAGE >&2
+            exit 1
+            ;;
+    esac
+done
+
+shift $((OPTIND-1))
+
+KERNEL=$1
+
+$QEMU_BIN \
+    -machine type=q35,hmat=on,nvdimm=on,cxl=on \
+    -enable-kvm -cpu host,migratable=no \
+    -nographic \
+    -serial mon:stdio \
+    -m 4G,maxmem=10G \
+    -smp 4,sockets=1,maxcpus=4 \
+    -numa node,nodeid=0,cpus=0-3,memdev=m0 \
+    -drive if=none,file=./images/cxl.qcow2,format=qcow2,id=hd \
+    -device virtio-blk-pci,drive=hd \
+    -device e1000,netdev=user0 -netdev user,id=user0,hostfwd=tcp::2222-:22 \
+    -rtc clock=host \
+    -kernel $KERNEL -append "nokaslr norandmaps root=/dev/vda1 console=ttyS0 \
+        earlyprintk=serial,ttyS0 ignore_loglevel printk_delay=0" \
+    -object memory-backend-ram,id=m0,size=4G \
+    -object memory-backend-file,id=cxl-mem1,share=on,mem-path=/tmp/cxltest.raw,size=256M \
+    -object memory-backend-file,id=cxl-lsa1,share=on,mem-path=/tmp/lsa.raw,size=256M \
+    -device pxb-cxl,bus_nr=52,bus=pcie.0,id=cxl.1 \
+    -device cxl-rp,port=0,bus=cxl.1,id=root_port13,chassis=0,slot=2 \
+    -device cxl-type3,bus=root_port13,volatile-memdev=cxl-mem1,lsa=cxl-lsa1,id=cxl-pmem0 \
+    -M cxl-fmw.0.targets.0=cxl.1,cxl-fmw.0.size=256M
