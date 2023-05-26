@@ -14,19 +14,18 @@ IMAGES=${IMAGES:-../images}
 SSH_PORT=${SSH_PORT:-2222}
 KVM=${KVM:-enable}
 
-if [ ${ARCH} == "amd64" ]; then
-    QARCH="x86_64"
-elif [ ${ARCH} == "arm64" ]; then
-    QARCH="aarch64"
-else
-    echo "Error: No ARCH mapping exists for ${ARCH}! Exiting."; exit -1
-fi
-
 if [ ${KVM} == "enable" ]; then
     KVM=",accel=kvm"
 else
     KVM=""
 fi
+
+if [ ${FILESYSTEM} == "none" ]; then
+    FILESYSTEM_ARGS=""
+else
+    FILESYSTEM_ARGS="-virtfs local,id=hostfs,path=${FILESYSTEM},security_model=mapped,mount_tag=hostfs"
+fi
+
 
 if [ ${ARCH} == "amd64" ]; then
     QARCH="x86_64"
@@ -42,8 +41,7 @@ qemu-system-${QARCH} \
    ${QARCH_ARGS} \
    -smp cpus=${VCPUS} \
    -m ${VMEM} \
+   ${FILESYSTEM_ARGS} \
    -nographic \
-   -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}-backing.qcow2 \
+   -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}.qcow2 \
    -nic user,id=user0,model=virtio-net-pci,hostfwd=tcp::${SSH_PORT}-:22
-
-
