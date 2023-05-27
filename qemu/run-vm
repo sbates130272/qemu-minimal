@@ -10,7 +10,8 @@ ARCH=${ARCH:-amd64}
 VCPUS=${VCPUS:-2}
 VMEM=${VMEM:-4096}
 FILESYSTEM=${FILESYSTEM:-none}
-SSH_PORT=${SSH_PoRT:-2222}
+IMAGES=${IMAGES:-../images}
+SSH_PORT=${SSH_PORT:-2222}
 
 if [ "${ARCH}"=="amd64" ]; then
     QARCH="x86_64"
@@ -24,7 +25,7 @@ qemu-system-${QARCH} \
    -smp cpus=${VCPUS} \
    -m ${VMEM} \
    -nographic \
-   -drive if=virtio,format=qcow2,file=/home/batesste/images/${VM_NAME}.qcow2 \
+   -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}.qcow2 \
    -nic user,id=user0,model=virtio-net-pci,hostfwd=tcp::${SSH_PORT}-:22
 
 #   -virtfs local,id=hostfs,path=${FILESYSTEM},security_model=mapped,mount_tag=hostfs \

@@ -11,4 +11,5 @@ scripts/rootfs
 libvirt/hostname.tmp
 libvirt/focal-*.img
 libvirt/jammy-*.img
+qemu/*-config-*
 *~

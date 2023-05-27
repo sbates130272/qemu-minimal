@@ -34,6 +34,7 @@
 
 VM_NAME=${VM_NAME:-qemu-minimal}
 SIZE=${SIZE:-64}
+IMAGES=${IMAGES:-../images}
 RELEASE=${RELEASE:-jammy}
 ARCH=${ARCH:-amd64}
 VCPUS=${VCPUS:-2}
@@ -52,15 +53,14 @@ SSH_PASS=${SSH_PASS:-2222}
 set -e
 
 cleanup() {
-    rm -f cloud-config-${VM_NAME} network-config-${VM_NAME} \
-   ${VM_NAME}-seed.qcow2
+    rm -f cloud-config-${VM_NAME} network-config-${VM_NAME}
 }
 trap cleanup SIGINT ERR EXIT
 
-if [ ! -f  ~/images/${RELEASE}-server-cloudimg-${ARCH}.img ]; then
-    wget -P ~/images/ https://cloud-images.ubuntu.com/${RELEASE}/current/${RELEASE}-server-cloudimg-${ARCH}.img
+if [ ! -f  ${IMAGES}/${RELEASE}-server-cloudimg-${ARCH}.img ]; then
+    wget -P ${IMAGES} https://cloud-images.ubuntu.com/${RELEASE}/current/${RELEASE}-server-cloudimg-${ARCH}.img
 fi
-cp ~/images/${RELEASE}-server-cloudimg-${ARCH}.img ~/images/${VM_NAME}-backing.qcow2
+cp ${IMAGES}/${RELEASE}-server-cloudimg-${ARCH}.img ~/images/${VM_NAME}-backing.qcow2
 qemu-img resize ~/images/${VM_NAME}-backing.qcow2 ${SIZE}G
 
 if [ ! -f $SSH_KEY_FILE ]; then
@@ -93,6 +93,9 @@ users:
     shell: /bin/bash
     ssh_authorized_keys: |
       $(sed -z 's|\n|\n      |g' ${SSH_KEY_FILE})
+timezone: America/Edmonton
+ntp:
+  enabled: true
 packages:
 ${PACKAGES}
 power_state:
@@ -116,12 +119,12 @@ ethernets:
       addresses: [ 192.168.122.1,8.8.8.8 ]
 EOF
 
-cloud-localds -d qcow2 ${VM_NAME}-seed.qcow2 cloud-config-${VM_NAME} \
+cloud-localds -d qcow2 ${IMAGES}/${VM_NAME}-seed.qcow2 cloud-config-${VM_NAME} \
 	      network-config-${VM_NAME}
 
-if [ "${ARCH}"=="amd64" ]; then
+if [ "${ARCH}" = "amd64" ]; then
     QARCH="x86_64"
-elif [ "${ARCH}"=="arm64" ]; then
+elif [ "${ARCH}" = "arm64" ]; then
     QARCH="aarch64"
 else
     echo "Error: No ARCH mapping exists for ${ARCH}! Exiting."; exit -1
@@ -130,9 +133,16 @@ fi
 qemu-system-${QARCH} \
    -smp cpus=${VCPUS} \
    -m ${VMEM} \
+   -machine virt \
+   -cpu cortex-a72 \
    -nographic \
-   -drive if=virtio,format=qcow2,file=/home/batesste/images/${VM_NAME}-backing.qcow2 \
-   -drive if=virtio,format=qcow2,file=${VM_NAME}-seed.qcow2
+   -bios /usr/share/qemu-efi-aarch64/QEMU_EFI.fd \
+   -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}-backing.qcow2 \
+   -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}-seed.qcow2 \
+   -nic user,id=user0,model=virtio-net-pci
 
-qemu-img create -F qcow2 -b ~/images/${VM_NAME}-backing.qcow2 -f qcow2 \
-	~/images/${VM_NAME}.qcow2    
+qemu-img create -F qcow2 -b ${IMAGES}/${VM_NAME}-backing.qcow2 -f qcow2 \
+	${IMAGES}/${VM_NAME}.qcow2    
+
+#  -drive if=pflash,unit=1,file=/Users/batesste/Library/Containers/com.utmapp.UTM/Data/Documents/Linux.utm/Data/efi_vars.fd \
+
