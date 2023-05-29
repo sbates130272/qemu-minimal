@@ -237,3 +237,12 @@ interfaces and not the eth0 interfaces.
 Note you need the rdma_rxe module installed on both target and host
 right now as there is an issue with monolithic kernels and rxe we need
 to root-cause.
+
+## Ansible
+
+Once you get a VM up and running you can use [Ansible][ref-ansible] to
+install a bunch more things into it. I have a rather nice project
+called [batesste-ansible][ref-bates] that you can use for this.
+
+[ref-ansible]: https://www.ansible.com/
+[ref-bates]: https://github.com/sbates130272/batesste-ansible
