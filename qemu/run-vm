@@ -13,9 +13,9 @@ FILESYSTEM=${FILESYSTEM:-none}
 IMAGES=${IMAGES:-../images}
 SSH_PORT=${SSH_PORT:-2222}
 
-if [ "${ARCH}"=="amd64" ]; then
+if [ "${ARCH}" = "amd64" ]; then
     QARCH="x86_64"
-elif [ "${ARCH}"=="arm64" ]; then
+elif [ "${ARCH}" = "arm64" ]; then
     QARCH="aarch64"
 else
     echo "Error: No ARCH mapping exists for ${ARCH}! Exiting."; exit -1
@@ -24,7 +24,10 @@ fi
 qemu-system-${QARCH} \
    -smp cpus=${VCPUS} \
    -m ${VMEM} \
+   -machine virt \
+   -cpu cortex-a72 \
    -nographic \
+   -bios /usr/share/qemu-efi-aarch64/QEMU_EFI.fd \
    -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}.qcow2 \
    -nic user,id=user0,model=virtio-net-pci,hostfwd=tcp::${SSH_PORT}-:22
 
