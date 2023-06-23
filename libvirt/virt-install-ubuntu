@@ -53,8 +53,8 @@
 # NOAUTOCONSOLE and PACKAGES only apply to focal or later.
 #
 # PACKAGES is a file of packages to be installed via cloud-init. A
-# couple of my favourite collections can be found in the packages.d
-# folder.
+# couple of my favourite collections can be found in the top-level
+# packages.d folder.
 #
 # FILESYSTEM can be a directory on the host that is then shared into
 # the guest via the tag "hostfs" and the virtiofs driver. To access
@@ -80,7 +80,7 @@ SSH_KEY_FILE=${SSH_KEY_FILE:-~/.ssh/id_rsa.pub}
 NOAUTOCONSOLE=${NOAUTOCONSOLE:-false}
 USERNAME=${USERNAME:-ubuntu}
 PASS=${PASS:-password}
-PACKAGES=${PACKAGES:-none}
+PACKAGES=${PACKAGES:-../packages.d/packages-default}
 FILESYSTEM=${FILESYSTEM:-none}
 BRIDGE=${BRIDGE:-none}
 
@@ -132,9 +132,6 @@ fi
   #
   # We use vol-create and vol-upload to add the disk images to the
   # libvirt images folder.
-  #
-  # Default password for root and ubuntu user is 'change'. Use hash in
-  # these cloud-init scripts.
 
 set -e
 
@@ -142,7 +139,7 @@ cleanup() {
     rm -f cloud-config-${NAME} network-config-${NAME} ${NAME}.qcow2 \
    ${NAME}-seed.qcow2
 }
-trap cleanup ERR EXIT
+trap cleanup SIGINT ERR EXIT
 
 if [ ! -f  ${RELEASE}-server-cloudimg-${ARCH}.img ]; then
     wget https://cloud-images.ubuntu.com/${RELEASE}/current/${RELEASE}-server-cloudimg-${ARCH}.img

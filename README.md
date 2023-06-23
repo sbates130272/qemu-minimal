@@ -26,6 +26,30 @@ to get the command line arguments supported.
 This script will automatically create a snapshot image so you can revert
 to the original image by deleting images/jessie.qcow2.
 
+## New VM Creation
+
+There are a few methods for VM creation in this repo. They are all in
+various stages of repair.
+
+### ./qemu/gen-vm
+
+A QEMU-only (no libvirt) way to generate new VMs. Uses the Ubuntu
+cloud image ISO and a cloud-init script. Note there is an issue that
+the files for this cannot reside on a guest's virtfs (i.e. running
+this script inside a VM to generate a nested VM won't work due to file
+permission issues). This may be better with virtio-fs.
+
+### ./libvirt/virt-install-ubuntu
+
+A libvirt-based script that uses cloud images and cloud-init and
+virt-install. Thie seems to work quite well on bare-metal.
+
+### ./scripts/create
+
+The original and somewhat outdated method from Logan that starts with
+a base backing issue (based on Debian) and then uses deboostrap to
+setup the user and install some packages.
+
 ## QEMU Executable
 
 This repo does not include the QEMU executable. You can specific a

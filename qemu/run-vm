@@ -1,0 +1,49 @@
+#!/bin/bash
+#
+# run-vm
+#
+# (C) Stephen Bates <sbates@raithlin>
+#
+
+VM_NAME=${VM_NAME:-qemu-minimal}
+ARCH=${ARCH:-amd64}
+VCPUS=${VCPUS:-2}
+VMEM=${VMEM:-4096}
+FILESYSTEM=${FILESYSTEM:-none}
+IMAGES=${IMAGES:-../images}
+SSH_PORT=${SSH_PORT:-2222}
+KVM=${KVM:-enable}
+
+if [ ${ARCH} == "amd64" ]; then
+    QARCH="x86_64"
+elif [ ${ARCH} == "arm64" ]; then
+    QARCH="aarch64"
+else
+    echo "Error: No ARCH mapping exists for ${ARCH}! Exiting."; exit -1
+fi
+
+if [ ${KVM} == "enable" ]; then
+    KVM=",accel=kvm"
+else
+    KVM=""
+fi
+
+if [ ${ARCH} == "amd64" ]; then
+    QARCH="x86_64"
+    QARCH_ARGS="-machine q35${KVM}"
+elif [ ${ARCH} == "arm64" ]; then
+    QARCH="aarch64"
+    QARCH_ARGS="-machine virt,gic-version=max${KVM} -cpu max -bios /usr/share/qemu-efi-aarch64/QEMU_EFI.fd"
+else
+    echo "Error: No ARCH mapping exists for ${ARCH}! Exiting."; exit -1
+fi
+
+qemu-system-${QARCH} \
+   ${QARCH_ARGS} \
+   -smp cpus=${VCPUS} \
+   -m ${VMEM} \
+   -nographic \
+   -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}-backing.qcow2 \
+   -nic user,id=user0,model=virtio-net-pci,hostfwd=tcp::${SSH_PORT}-:22
+
+
