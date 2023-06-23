@@ -1,0 +1,152 @@
+#!/bin/bash
+#
+# gen-vm
+#
+# (C) Stephen Bates <sbates@raithlin>
+#
+# A simple script generate a Ubuntu Jammy VM using bare QEMU (i.e. not
+# libvirt) and cloud-init.
+#
+# Jammy (or Later)
+# ----------------
+#
+# Note that for Jammy you need the cloud-init as well as
+# cloud-image-utils  and for focal a good generic call would be:
+#
+# RELEASE=jammy VM_NAME=stephen ./gen-vm
+#
+# This creates a system with an user called ubuntu and the password
+# change who has full sudo access to the system. This also sets up the
+# networking as NAT to the host and you can then ssh into the machine
+# using the ubuntu user.
+#
+# See [1] for a good HOWTO for cloud-init.
+#
+# [1] https://fabianlee.org/2020/02/23/kvm-testing-cloud-init-locally-using-kvm-for-an-ubuntu-cloud-image/
+#
+# Note that after running this script you might want to remove the
+# cloud-init disk from the VM. See [1] for info on how to do that.
+
+# PACKAGES is a file of packages to be installed via cloud-init. A
+# couple of my favourite collections can be found in the top-level
+# packages.d folder.
+#
+
+VM_NAME=${VM_NAME:-qemu-minimal}
+SIZE=${SIZE:-64}
+IMAGES=${IMAGES:-../images}
+RELEASE=${RELEASE:-jammy}
+ARCH=${ARCH:-amd64}
+VCPUS=${VCPUS:-2}
+VMEM=${VMEM:-4096}
+SSH_KEY_FILE=${SSH_KEY_FILE:-~/.ssh/id_rsa.pub}
+USERNAME=${USERNAME:-ubuntu}
+PASS=${PASS:-password}
+PACKAGES=${PACKAGES:-../packages.d/packages-default}
+SSH_PORT=${SSH_PORT:-2222}
+KVM=${KVM:-enable}
+
+  # Focal and above prefers us to use cloud images and
+  # cloud-init. Download the focal cloud image and set it up using a
+  # cloud-config file. Create am ubuntu user with password-less root
+  # access.
+
+set -e
+
+cleanup() {
+    rm -f cloud-config-${VM_NAME} network-config-${VM_NAME}
+}
+trap cleanup SIGINT ERR EXIT
+
+if [ ! -f  ${IMAGES}/${RELEASE}-server-cloudimg-${ARCH}.img ]; then
+    wget -P ${IMAGES} https://cloud-images.ubuntu.com/${RELEASE}/current/${RELEASE}-server-cloudimg-${ARCH}.img
+fi
+cp ${IMAGES}/${RELEASE}-server-cloudimg-${ARCH}.img ${IMAGES}/${VM_NAME}-backing.qcow2
+qemu-img resize ~/images/${VM_NAME}-backing.qcow2 ${SIZE}G
+
+if [ ! -f $SSH_KEY_FILE ]; then
+     echo "SSH_KEY_FILE ${SSH_KEY_FILE} does not exist!"
+     exit 1
+fi
+
+if [ ${PACKAGES} != "none" ]; then
+    if [ -f ${PACKAGES} ]; then
+	PACKAGES=$(<${PACKAGES})
+    else
+	echo "Package manifest file ${PACKAGES} does not exist!"
+	exit 1
+    fi
+else
+    PACKAGES=
+fi
+
+cat << EOF > cloud-config-${VM_NAME}
+#cloud-config
+hostname: ${VM_NAME}
+disable_root: true
+ssh_pwauth: true
+users:
+  - name: ${USERNAME}
+    plain_text_passwd: '${PASS}'
+    lock_passwd: false
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    groups: users, admin
+    shell: /bin/bash
+    ssh_authorized_keys: |
+      $(sed -z 's|\n|\n      |g' ${SSH_KEY_FILE})
+timezone: America/Edmonton
+ntp:
+  enabled: true
+packages:
+${PACKAGES}
+power_state:
+  delay: now
+  mode: poweroff
+  message: Shutting down
+  timeout: 2
+  condition: true
+EOF
+
+cat << EOF > network-config-${VM_NAME}
+version: 2
+ethernets:
+  eth0:
+    match:
+      name: en*
+    dhcp4: true
+    # default libvirt network
+    gateway4: 192.168.122.1
+    nameservers:
+      addresses: [ 192.168.122.1,8.8.8.8 ]
+EOF
+
+cloud-localds -d qcow2 ${IMAGES}/${VM_NAME}-seed.qcow2 cloud-config-${VM_NAME} \
+	      network-config-${VM_NAME}
+
+if [ ${KVM} == "enable" ]; then
+    KVM=",accel=kvm"
+else
+    KVM=""
+fi
+
+if [ ${ARCH} == "amd64" ]; then
+    QARCH="x86_64"
+    QARCH_ARGS="-machine q35${KVM}"
+elif [ ${ARCH} == "arm64" ]; then
+    QARCH="aarch64"
+    QARCH_ARGS="-machine virt,gic-version=max${KVM} -cpu max -bios /usr/share/qemu-efi-aarch64/QEMU_EFI.fd"
+else
+    echo "Error: No ARCH mapping exists for ${ARCH}! Exiting."; exit -1
+fi
+
+qemu-system-${QARCH} \
+   ${QARCH_ARGS} \
+   -smp cpus=${VCPUS} \
+   -m ${VMEM} \
+   -nographic \
+   -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}-backing.qcow2 \
+   -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}-seed.qcow2 \
+   -nic user,id=user0,model=virtio-net-pci
+
+qemu-img create -F qcow2 -b ${IMAGES}/${VM_NAME}-backing.qcow2 -f qcow2 \
+	 ${IMAGES}/${VM_NAME}.qcow2
