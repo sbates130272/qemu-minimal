@@ -14,7 +14,7 @@ be used as a starting point for building a suitable kernel.
 To run qemu using this image from the command should be:
 
 ```
-./runqemu <path_to_bzimage>
+./runqemu <path_to_bzImage>
 ```
 
 You can run
@@ -35,14 +35,14 @@ various stages of repair.
 
 A QEMU-only (no libvirt) way to generate new VMs. Uses the Ubuntu
 cloud image ISO and a cloud-init script. Note there is an issue that
-the files for this cannot reside on a guest's virtfs (i.e. running
+the files for this cannot reside on a guest's VirtFS (i.e. running
 this script inside a VM to generate a nested VM won't work due to file
 permission issues). This may be better with virtio-fs.
 
 ### ./libvirt/virt-install-ubuntu
 
 A libvirt-based script that uses cloud images and cloud-init and
-virt-install. Thie seems to work quite well on bare-metal.
+virt-install. This seems to work quite well on bare-metal.
 
 ### ./scripts/create
 
@@ -92,7 +92,7 @@ second drive has a Controller Memory Buffer (CMB) advertised on it.
 
 Note that since upstream has a different level of support for NVMe
 drive options than the other forks we use a -u option to handle that
-differntly.
+differently.
 
 The host's /home file is also passthrough mounted to the guests /home
 directory so test scripts, etc can be stored and run directly from the
@@ -181,7 +181,7 @@ following:
 For a more intresting initramfs example you can run busybox. To do
 this perform the following steps.
 
-  1. Download the busyboz source and build it to include all the tools
+  1. Download the busybox source and build it to include all the tools
   that you want. Make sure this is a statically linked executable.
   2. cd scripts
   3. ./busybox <path to busybox exe>
@@ -194,7 +194,7 @@ This should boot into busybox shell and you can execute your installed
 command from there. Enjoy! Note this will not then pass on to a
 subsequent root filesystem (yet).
 
-## Virtfs
+## VirtFS
 
 By default we map the /home folder on the host to the /home folder on
 the guest using Plan 9 folder sharing over VirtFS. However this
@@ -229,7 +229,7 @@ folders and the jessie image needs updating with some of the libs
 
 For a few reasons it is easier to keep the rdma_rxe.ko module seperate
 to the kernel. Also you need the linux headers inside the VM root
-filesystem to compile librxe. You currenly need to copy (or symlink)
+filesystem to compile librxe. You currently need to copy (or symlink)
 /usr/lib64/* to /usr/lib. You also have to setup VM to VM networking
 for which I (for now) used -netdev socket. QEMU perfers ntap but
 that's alot more work. The IPv4 addresses on the eth0 interfaces of
