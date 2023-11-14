@@ -62,7 +62,7 @@ if [ ! -f  ${IMAGES}/${RELEASE}-server-cloudimg-${ARCH}.img ]; then
     wget -P ${IMAGES} https://cloud-images.ubuntu.com/${RELEASE}/current/${RELEASE}-server-cloudimg-${ARCH}.img
 fi
 cp ${IMAGES}/${RELEASE}-server-cloudimg-${ARCH}.img ${IMAGES}/${VM_NAME}-backing.qcow2
-qemu-img resize ~/images/${VM_NAME}-backing.qcow2 ${SIZE}G
+qemu-img resize ${IMAGES}/${VM_NAME}-backing.qcow2 ${SIZE}G
 
 if [ ! -f $SSH_KEY_FILE ]; then
      echo "SSH_KEY_FILE ${SSH_KEY_FILE} does not exist!"
