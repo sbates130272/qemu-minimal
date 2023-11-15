@@ -1,0 +1,25 @@
+name: qemu-minimal-smoke-test
+
+on:
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  ubuntu-smoke-test:
+    name: ubuntu-smoke-test
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check out code using action/checkout
+      uses: actions/checkout@v4.1.1
+    - name: Install a couple of packages via the apt package manager
+      run: sudo apt update && sudo apt install -y qemu-system-x86 cloud-image-utils
+    - name: Generate an ssh key-pair for this test
+      run: ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
+    - name: Run a qemu-based ./gen-vm smoke-test
+      run: ./gen-vm
+      working-directory: qemu
+      env:
+        VM_NAME: qemu-minimal-smoke-test
+        KVM: none
+        USERNAME: ubuntu
+        PASS: password
