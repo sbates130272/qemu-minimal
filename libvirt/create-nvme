@@ -4,7 +4,7 @@
 #
 # (C) Stephen Bates <sbates@raithlin>
 #
-# A simple script to generate a ton of fake NVMe SSDS inside a QEMU
+# A simple script to generate a ton of fake NVMe SSDS inside a libvirt
 # VM. This script generates the files used to back the SSDs as well as
 # a section of XML that should be added to the libvirt XML description
 # of the VM. You also need to add the QEMU schema [1] and you might
@@ -33,6 +33,18 @@
 # then use the ADD_LOCKING=yes option. Note this may cause issues
 # migrating (but should not as migrating to older libvirtd machines
 # should normally fail anyway).
+#
+# Also note that since Ubuntu 24.04 the versions of QEMU and libvirt
+# require a specifc PCIe bus address. I am not quite sure why that is
+# yet but we add that now. If you get errors along the lines of
+#   error: Failed to start domain 'batesste-test-vm'
+#   error: internal error: QEMU unexpectedly closed the monitor \
+#     (vm='batesste-test-vm'): 2024-11-09T20:58:02.900957Z \
+#     qemu-system-x86_64: -device nvme,drive=nvme1,serial=nvme1,\
+#     cmb_size_mb=0,bus=pcie.0,addr=6: PCI: slot 6 function 0 \
+#     not available for nvme, in use by nvme,id=(null)
+# you may need to play with the bus and address offsets.
+
 
 NUM=${NUM:-24}
 DIR=${DIR:-/var/lib/libvirt/images}
@@ -41,6 +53,7 @@ CMB=${CMB:-0}
 CREATE=${CREATE:-no}
 PREFIX=${PREFIX:-none}
 ADD_LOCKING=${ADD_LOCKING:-no}
+START_ADDR=${START_ADDR:-6}
 
 if [ $PREFIX != "none" ]; then
     PREFIX="${PREFIX}-"
@@ -83,6 +96,7 @@ echo "# Add this to your domain entry at the top of the xml:"
 echo "# xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'"
 echo
 i=0
+j=${START_ADDR}
 echo "  <qemu:commandline>"
 while [ $i -lt $NUM ]; do
     echo "    <qemu:arg value='-drive'/>"
@@ -92,7 +106,8 @@ while [ $i -lt $NUM ]; do
 	echo "    <qemu:arg value='file=${DIR}/${PREFIX}nvme${i}.qcow2,if=none,id=nvme${i},${ADD_LOCKING}format=qcow2'/>"
     fi
     echo "    <qemu:arg value='-device'/>"
-    echo "    <qemu:arg value='nvme,drive=nvme${i},serial=nvme${i},cmb_size_mb=${CMB}'/>"
+    echo "    <qemu:arg value='nvme,drive=nvme${i},serial=nvme${i},cmb_size_mb=${CMB},bus=pcie.0,addr=${j}'/>"
     ((i++))
+    ((j++))
 done
 echo "  </qemu:commandline>"
