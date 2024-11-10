@@ -1,4 +1,4 @@
-name: qemu-minimal-spell-check
+name: spell-check
 
 on:
   pull_request:
@@ -9,8 +9,8 @@ on:
     - '.spellcheck.yaml'
 
 jobs:
-  ubuntu-spell-check:
-    name: ubuntu-spell-check
+  ubuntu-latest:
+    name: ubuntu-latest
     runs-on: ubuntu-latest
     steps:
     - name: Check out code.

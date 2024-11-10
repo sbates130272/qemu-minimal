@@ -11,7 +11,7 @@
 # ----------------
 #
 # Note that for Jammy you need the cloud-init as well as
-# cloud-image-utils  and for focal a good generic call would be:
+# cloud-image-utils  and for jammy a good generic call would be:
 #
 # RELEASE=jammy VM_NAME=stephen ./gen-vm
 #
