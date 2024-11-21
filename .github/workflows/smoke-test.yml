@@ -3,6 +3,8 @@ name: smoke-tests
 on:
   pull_request:
     branches: [ main ]
+    paths:
+    - './qemu/gen-vm'
 
 jobs:
 
