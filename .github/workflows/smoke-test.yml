@@ -3,8 +3,6 @@ name: smoke-tests
 on:
   pull_request:
     branches: [ main ]
-    paths:
-    - './qemu/gen-vm'
 
 jobs:
 
@@ -46,3 +44,23 @@ jobs:
         USERNAME: ubuntu
         PASS: password
         ARCH: arm64
+
+  ubuntu-latest-riscv64:
+    name: ubuntu-latest-riscv64
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check out code using action/checkout
+      uses: actions/checkout@v4.1.1
+    - name: Install a couple of packages via the apt package manager
+      run: sudo apt update && sudo apt install -y qemu-system-misc u-boot-qemu cloud-image-utils
+    - name: Generate an ssh key-pair for this test
+      run: ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
+    - name: Run a riscv64 qemu-based ./gen-vm smoke-test
+      run: ./gen-vm
+      working-directory: qemu
+      env:
+        VM_NAME: qemu-minimal-smoke-test-riscv64
+        KVM: none
+        USERNAME: ubuntu
+        PASS: password
+        ARCH: riscv64

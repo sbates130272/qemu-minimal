@@ -40,6 +40,9 @@ if [ ${ARCH} == "amd64" ]; then
 elif [ ${ARCH} == "arm64" ]; then
     QARCH="aarch64"
     QARCH_ARGS="-machine virt,gic-version=max${KVM} -cpu max -bios /usr/share/qemu-efi-aarch64/QEMU_EFI.fd"
+elif [ ${ARCH} == "riscv64" ]; then
+    QARCH="riscv64"
+    QARCH_ARGS="-machine virt,${KVM} -kernel /usr/lib/u-boot/qemu-riscv64_smode/uboot.elf"
 else
     echo "Error: No ARCH mapping exists for ${ARCH}! Exiting."; exit -1
 fi
@@ -51,4 +54,5 @@ qemu-system-${QARCH} \
    ${FILESYSTEM_ARGS} \
    -nographic \
    -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}.qcow2 \
-   -nic user,id=user0,model=virtio-net-pci,hostfwd=tcp::${SSH_PORT}-:22
+   -netdev user,id=net0,hostfwd=tcp::${SSH_PORT}-:22 \
+   -device virtio-net-pci,netdev=net0

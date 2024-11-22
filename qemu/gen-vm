@@ -5,7 +5,7 @@
 # (C) Stephen Bates <sbates@raithlin>
 #
 # A simple script generate a Ubuntu Noble VM using bare QEMU (i.e. not
-# libvirt) and cloud-init.
+# libvirt) and cloud-init..
 #
 # Jammy (or Later)
 # ----------------
@@ -135,6 +135,9 @@ if [ ${ARCH} == "amd64" ]; then
 elif [ ${ARCH} == "arm64" ]; then
     QARCH="aarch64"
     QARCH_ARGS="-machine virt,gic-version=max${KVM} -cpu max -bios /usr/share/qemu-efi-aarch64/QEMU_EFI.fd"
+elif [ ${ARCH} == "riscv64" ]; then
+    QARCH="riscv64"
+    QARCH_ARGS="-machine virt,${KVM} -kernel /usr/lib/u-boot/qemu-riscv64_smode/uboot.elf"
 else
     echo "Error: No ARCH mapping exists for ${ARCH}! Exiting."; exit -1
 fi
@@ -146,7 +149,8 @@ qemu-system-${QARCH} \
    -nographic \
    -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}-backing.qcow2 \
    -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}-seed.qcow2 \
-   -nic user,id=user0,model=virtio-net-pci
+   -netdev user,id=net0 \
+   -device virtio-net-pci,netdev=net0
 
 qemu-img create -F qcow2 -b ${IMAGES}/${VM_NAME}-backing.qcow2 -f qcow2 \
 	 ${IMAGES}/${VM_NAME}.qcow2
