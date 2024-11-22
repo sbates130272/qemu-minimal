@@ -83,6 +83,8 @@ PASS=${PASS:-password}
 PACKAGES=${PACKAGES:-../packages.d/packages-default}
 FILESYSTEM=${FILESYSTEM:-none}
 BRIDGE=${BRIDGE:-none}
+MEMORY=${MEMORY:-8192}
+VCPUS=${VCPUS:-4}
 
 if [ $RELEASE == "bionic" ]; then
 
@@ -100,8 +102,8 @@ if [ $RELEASE == "bionic" ]; then
     virt-install \
 	--connect qemu:///system \
 	--name ${NAME} \
-	--memory 1024 \
-	--vcpus 1 \
+	--memory ${MEMORY} \
+	--vcpus ${VCPUS} \
 	--virt-type kvm \
 	--disk size=${SIZE} \
 	--graphics none \
@@ -256,7 +258,8 @@ virt-install \
     --name ${NAME} \
     --osinfo ${OSINFO} \
     --cloud-init user-data=cloud-config-${NAME},network-config=network-config-${NAME} \
-    --memory 1024 \
+    --vcpus ${VCPUS} \
+    --memory ${MEMORY} \
     --disk vol=default/${NAME}.qcow2,device=disk \
     ${FILESYSTEM} \
     --virt-type kvm \
