@@ -4,6 +4,14 @@
 #
 # (C) Stephen Bates <sbates@raithlin>
 #
+# A simple script to run a VM that was (probably) generated using the
+# gen-vm script. Note that to pass in a host filesystem you need to
+# run something like:
+#
+# sudo mount -t 9p -o trans=virtio hostfs /home/batesste/Projects -oversion=9p2000.L
+#
+# In the guest. For some reason -t virtfs does not work when running
+# qemu directly but it does work when running via libvirt. Go figure!
 
 VM_NAME=${VM_NAME:-qemu-minimal}
 ARCH=${ARCH:-amd64}
@@ -23,9 +31,8 @@ fi
 if [ ${FILESYSTEM} == "none" ]; then
     FILESYSTEM_ARGS=""
 else
-    FILESYSTEM_ARGS="-virtfs local,id=hostfs,path=${FILESYSTEM},security_model=mapped,mount_tag=hostfs"
+    FILESYSTEM_ARGS="-object memory-backend-memfd,id=mem,size=2G -virtfs local,path=${FILESYSTEM},security_model=passthrough,mount_tag=hostfs "
 fi
-
 
 if [ ${ARCH} == "amd64" ]; then
     QARCH="x86_64"
