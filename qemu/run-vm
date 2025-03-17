@@ -12,6 +12,15 @@
 #
 # In the guest. For some reason -t virtfs does not work when running
 # qemu directly but it does work when running via libvirt. Go figure!
+#
+# Change NVME in order to add an emulated NVMe SSD to the VM. The
+# arguments used for this NVMe SSD is the argument given at the
+# command line or if "true" is given we do a simple null backed
+# drive. You can insert a null_blk device into the kernel using a
+# command like:
+#
+# sudo modprobe null_blk queue_mode=2 gb=1024
+#
 
 VM_NAME=${VM_NAME:-qemu-minimal}
 ARCH=${ARCH:-amd64}
@@ -21,6 +30,7 @@ FILESYSTEM=${FILESYSTEM:-none}
 IMAGES=${IMAGES:-../images}
 SSH_PORT=${SSH_PORT:-2222}
 KVM=${KVM:-enable}
+NVME=${NVME:-none}
 
 if [ ${KVM} == "enable" ]; then
     KVM=",accel=kvm"
@@ -47,12 +57,21 @@ else
     echo "Error: No ARCH mapping exists for ${ARCH}! Exiting."; exit -1
 fi
 
+if [ ${NVME} == "none" ]; then
+    NVME_ARGS=""
+elif [ ${NVME} == "true" ]; then
+    NVME_ARGS="-drive file=/dev/nullb0,format=raw,if=none,id=nvm-1 -device nvme,serial=amd-rocks,drive=nvm-1 "
+else
+    NVME_ARGS=${NVME}
+fi
+
 qemu-system-${QARCH} \
    ${QARCH_ARGS} \
    -smp cpus=${VCPUS} \
    -m ${VMEM} \
    ${FILESYSTEM_ARGS} \
    -nographic \
+   ${NVME_ARGS} \
    -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}.qcow2 \
    -netdev user,id=net0,hostfwd=tcp::${SSH_PORT}-:22 \
    -device virtio-net-pci,netdev=net0
