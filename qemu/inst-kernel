@@ -1,0 +1,26 @@
+#!/bin/bash
+#
+# inst-kernel
+#
+# (C) Stephen Bates <sbates@raithlin>
+#
+# A simple script to take a built kernel and install it on a running
+# VM via ssh. This is only tested on Ubuntu VMs and may not work as
+# expected on other distributions.
+#
+# Prior to running this script you should have the kernel built and
+# ready to be installed. The head of the kernel tree for this install
+# can be passed in as KERNEL_DIR.
+
+VM_NAME=${VM_NAME:-none}
+KERNEL_DIR=${KERNEL_DIR:-none}
+
+if [ ${VM_NAME} == "none" ]; then
+    echo "Error. You must specify a VM_NAME to ssh into."; exit -1
+fi
+
+if [ ${KERNEL_DIR} == "none" ]; then
+    echo "Error. You must specify a VM_NAME to ssh into."; exit -1
+elif [[ ! -d ${KERNEL_DIR} ]]; then
+    echo "Error. ${KERNEL_DIR} is not a directory."; exit -1
+fi
