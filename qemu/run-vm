@@ -12,6 +12,10 @@
 #
 # In the guest. For some reason -t virtfs does not work when running
 # qemu directly but it does work when running via libvirt. Go figure!
+# And you can also add this to /etc/fstab in the guest for a permenant
+# solution.
+#
+# hostfs /home/batesste/Projects 9p trans=virtio,-oversion=9p2000.L 0 1
 #
 # Change NVME in order to add an emulated NVMe SSD to the VM. The
 # arguments used for this NVMe SSD is the argument given at the

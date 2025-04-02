@@ -26,11 +26,14 @@
 #
 # Note that after running this script you might want to remove the
 # cloud-init disk from the VM. See [1] for info on how to do that.
-
+#
 # PACKAGES is a file of packages to be installed via cloud-init. A
 # couple of my favourite collections can be found in the top-level
 # packages.d folder.
 #
+# FORCE is a boolean we use to force a refetch of the cloud image file
+# for the chosen distro. This can be useful to get the latest and
+# greatest version of this.
 
 VM_NAME=${VM_NAME:-qemu-minimal}
 SIZE=${SIZE:-64}
@@ -45,6 +48,7 @@ PASS=${PASS:-password}
 PACKAGES=${PACKAGES:-../packages.d/packages-default}
 SSH_PORT=${SSH_PORT:-2222}
 KVM=${KVM:-enable}
+FORCE=${FORCE:-false}
 
   # Focal and above prefers us to use cloud images and
   # cloud-init. Download the focal cloud image and set it up using a
@@ -54,11 +58,12 @@ KVM=${KVM:-enable}
 set -e
 
 cleanup() {
-    rm -f cloud-config-${VM_NAME} network-config-${VM_NAME}
+    rm -rf cloud-config-${VM_NAME} network-config-${VM_NAME} \
+       ${IMAGES}/${VM_NAME}-seed.qcow2
 }
 trap cleanup SIGINT ERR EXIT
 
-if [ ! -f  ${IMAGES}/${RELEASE}-server-cloudimg-${ARCH}.img ]; then
+if [ ${FORCE} == "true" ] || [ ! -f  ${IMAGES}/${RELEASE}-server-cloudimg-${ARCH}.img ]; then
     wget -P ${IMAGES} https://cloud-images.ubuntu.com/${RELEASE}/current/${RELEASE}-server-cloudimg-${ARCH}.img
 fi
 cp ${IMAGES}/${RELEASE}-server-cloudimg-${ARCH}.img ${IMAGES}/${VM_NAME}-backing.qcow2

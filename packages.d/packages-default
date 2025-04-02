@@ -9,6 +9,7 @@
   - gpg-agent
   - libaio-dev
   - liburing-dev
+  - nvme-cli
   - python2
   - python3-pip
   - mutt
