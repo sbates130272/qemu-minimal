@@ -10,6 +10,8 @@
   - libaio-dev
   - liburing-dev
   - nvme-cli
+  - moreutils
+  - python-is-python3
   - python2
   - python3-pip
   - mutt
