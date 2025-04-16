@@ -100,7 +100,6 @@ users:
     shell: /bin/bash
     ssh_authorized_keys: |
       $(sed -z 's|\n|\n      |g' ${SSH_KEY_FILE})
-timezone: America/Edmonton
 ntp:
   enabled: true
 packages:
@@ -111,6 +110,8 @@ power_state:
   message: Shutting down
   timeout: 2
   condition: true
+timezone:
+  America/Edmonton
 EOF
 
 cat << EOF > network-config-${VM_NAME}
