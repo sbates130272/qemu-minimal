@@ -64,6 +64,7 @@ cleanup() {
 trap cleanup SIGINT ERR EXIT
 
 if [ ${FORCE} == "true" ] || [ ! -f  ${IMAGES}/${RELEASE}-server-cloudimg-${ARCH}.img ]; then
+    rm -rf ${IMAGES}/${RELEASE}-server-cloudimg-${ARCH}.img
     wget -P ${IMAGES} https://cloud-images.ubuntu.com/${RELEASE}/current/${RELEASE}-server-cloudimg-${ARCH}.img
 fi
 cp ${IMAGES}/${RELEASE}-server-cloudimg-${ARCH}.img ${IMAGES}/${VM_NAME}-backing.qcow2
