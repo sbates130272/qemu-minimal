@@ -30,6 +30,7 @@
 #        sudo modprobe null_blk queue_mode=2 gb=1024
 #
 
+QEMU_PATH=${QEMU_PATH:-}
 VM_NAME=${VM_NAME:-qemu-minimal}
 ARCH=${ARCH:-amd64}
 VCPUS=${VCPUS:-2}
@@ -90,7 +91,7 @@ else
     NVME_ARGS=${NVME}
 fi
 
-qemu-system-${QARCH} \
+${QEMU_PATH}qemu-system-${QARCH} \
    ${QARCH_ARGS} \
    -smp cpus=${VCPUS} \
    -m ${VMEM} \
