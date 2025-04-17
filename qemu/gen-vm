@@ -35,6 +35,7 @@
 # for the chosen distro. This can be useful to get the latest and
 # greatest version of this.
 
+QEMU_PATH=${QEMU_PATH:-}
 VM_NAME=${VM_NAME:-qemu-minimal}
 SIZE=${SIZE:-64}
 IMAGES=${IMAGES:-../images}
@@ -149,7 +150,7 @@ else
     echo "Error: No ARCH mapping exists for ${ARCH}! Exiting."; exit -1
 fi
 
-qemu-system-${QARCH} \
+${QEMU_PATH}qemu-system-${QARCH} \
    ${QARCH_ARGS} \
    -smp cpus=${VCPUS} \
    -m ${VMEM} \
