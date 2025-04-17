@@ -6,24 +6,28 @@
 #
 # A simple script to run a VM that was (probably) generated using the
 # gen-vm script. Note that to pass in a host filesystem you need to
-# run something like:
+# run something like the following (in the guest):
 #
-# sudo mount -t 9p -o trans=virtio hostfs /home/batesste/Projects -oversion=9p2000.L
+# sudo mount -t 9p -o trans=virtio,version=9p2000.L hostfs \
+#   /home/batesste/Projects
 #
-# In the guest. For some reason -t virtfs does not work when running
-# qemu directly but it does work when running via libvirt. Go figure!
-# And you can also add this to /etc/fstab in the guest for a permenant
-# solution.
+# For some reason -t virtfs does not work when running qemu directly
+# but it does work when running via libvirt. Go figure! You can also
+# add this to /etc/fstab in the guest for a permenant solution.
 #
-# hostfs /home/batesste/Projects 9p trans=virtio,-oversion=9p2000.L 0 1
+# hostfs /home/batesste/Projects 9p trans=virtio,version=9p2000.L 0 1
 #
-# Change NVME in order to add an emulated NVMe SSD to the VM. The
-# arguments used for this NVMe SSD is the argument given at the
-# command line or if "true" is given we do a simple null backed
-# drive. You can insert a null_blk device into the kernel using a
-# command like:
-#
-# sudo modprobe null_blk queue_mode=2 gb=1024
+# Change NVME in order to add emulated NVMe SSD(s) to the VM. There
+# are three modes for this:
+#   1. If you specify an unsigned number the script checks to see if
+#      image file(s) exist and then creates that many emulated NVMe
+#      SSDs with pretty reasonable arguments.
+#   2. If you specify a string then we use this literally as the
+#      argument  string given at the command line or I
+#   3. If you specify "true" we implement a simple null_blk backed
+#      NVMe drive. You can insert a null_blk device into the kernel of
+#      the host using a command like:
+#        sudo modprobe null_blk queue_mode=2 gb=1024
 #
 
 VM_NAME=${VM_NAME:-qemu-minimal}
@@ -35,6 +39,8 @@ IMAGES=${IMAGES:-../images}
 SSH_PORT=${SSH_PORT:-2222}
 KVM=${KVM:-enable}
 NVME=${NVME:-none}
+
+NVME_SIZE=1024G
 
 if [ ${KVM} == "enable" ]; then
     KVM=",accel=kvm"
@@ -61,10 +67,25 @@ else
     echo "Error: No ARCH mapping exists for ${ARCH}! Exiting."; exit -1
 fi
 
+function nvme_create {
+    if [ ! -f ${IMAGES}/${1}.qcow2 ]; then
+        qemu-img create -f qcow2 ${IMAGES}/${1}.qcow2 $2 >> /dev/null
+    fi
+    echo "-drive file=${IMAGES}/${1}.qcow2,format=qcow2,if=none,id=nvme-${3}"\
+         "-device nvme,serial=${1},drive=nvme-${3} "
+}
+
 if [ ${NVME} == "none" ]; then
     NVME_ARGS=""
 elif [ ${NVME} == "true" ]; then
-    NVME_ARGS="-drive file=/dev/nullb0,format=raw,if=none,id=nvm-1 -device nvme,serial=amd-rocks,drive=nvm-1 "
+    NVME_ARGS=$(echo "-drive file=/dev/nullb0,format=raw,if=none,id=nvme-1"\
+                     "-device nvme,serial=${VM_NAME}-nvme1,drive=nvme-1 ")
+elif [[ ${NVME} =~ ^[0-9]+$ ]]; then
+    NVME_ARGS=""
+    for i in $(seq 1 ${NVME}); do
+        NVME_NAME=${VM_NAME}-nvme${i}
+        NVME_ARGS+=$(nvme_create ${NVME_NAME} ${NVME_SIZE} ${i})
+    done
 else
     NVME_ARGS=${NVME}
 fi
