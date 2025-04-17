@@ -64,6 +64,7 @@ cleanup() {
 trap cleanup SIGINT ERR EXIT
 
 if [ ${FORCE} == "true" ] || [ ! -f  ${IMAGES}/${RELEASE}-server-cloudimg-${ARCH}.img ]; then
+    rm -rf ${IMAGES}/${RELEASE}-server-cloudimg-${ARCH}.img
     wget -P ${IMAGES} https://cloud-images.ubuntu.com/${RELEASE}/current/${RELEASE}-server-cloudimg-${ARCH}.img
 fi
 cp ${IMAGES}/${RELEASE}-server-cloudimg-${ARCH}.img ${IMAGES}/${VM_NAME}-backing.qcow2
@@ -99,7 +100,6 @@ users:
     shell: /bin/bash
     ssh_authorized_keys: |
       $(sed -z 's|\n|\n      |g' ${SSH_KEY_FILE})
-timezone: America/Edmonton
 ntp:
   enabled: true
 packages:
@@ -110,6 +110,8 @@ power_state:
   message: Shutting down
   timeout: 2
   condition: true
+timezone:
+  America/Edmonton
 EOF
 
 cat << EOF > network-config-${VM_NAME}
