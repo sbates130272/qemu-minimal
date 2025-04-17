@@ -40,6 +40,7 @@ IMAGES=${IMAGES:-../images}
 SSH_PORT=${SSH_PORT:-2222}
 KVM=${KVM:-enable}
 NVME=${NVME:-none}
+PCI_TESTDEV=${PCI_TESTDEV:-none}
 
 NVME_SIZE=1024G
 
@@ -91,6 +92,12 @@ else
     NVME_ARGS=${NVME}
 fi
 
+if [ ${PCI_TESTDEV} == "none" ]; then
+    PCI_TESTDEV_ARGS=""
+else
+    PCI_TESTDEV_ARGS="-device pci-testdev,membar=16G,membar-backed=true"
+fi
+
 ${QEMU_PATH}qemu-system-${QARCH} \
    ${QARCH_ARGS} \
    -smp cpus=${VCPUS} \
@@ -98,6 +105,7 @@ ${QEMU_PATH}qemu-system-${QARCH} \
    ${FILESYSTEM_ARGS} \
    -nographic \
    ${NVME_ARGS} \
+   ${PCI_TESTDEV_ARGS} \
    -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}.qcow2 \
    -netdev user,id=net0,hostfwd=tcp::${SSH_PORT}-:22 \
    -device virtio-net-pci,netdev=net0
