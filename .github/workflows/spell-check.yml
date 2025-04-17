@@ -1,15 +1,15 @@
-name: spell-check
-
+name: qemu-minimal
 on:
   pull_request:
-    branches: [ main ]
+    branches:
+      - main
     paths:
-    - '**.md'
-    - '.wordlist.txt'
-    - '.spellcheck.yaml'
+      - '**.md'
+      - '.wordlist.txt'
+      - '.spellcheck.yaml'
 
 jobs:
-  ubuntu-latest:
+  spell-check:
     name: ubuntu-latest
     runs-on: ubuntu-latest
     steps:

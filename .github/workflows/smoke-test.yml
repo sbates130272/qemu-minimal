@@ -1,12 +1,12 @@
-name: smoke-tests
-
+name: qemu-minimal
 on:
   pull_request:
-    branches: [ main ]
+    branches:
+      - main
 
 jobs:
+  smoke-test:
 
-  ubuntu-latest-x86:
     name: ubuntu-latest-x86
     runs-on: ubuntu-latest
     steps:
@@ -24,6 +24,13 @@ jobs:
         KVM: none
         USERNAME: ubuntu
         PASS: password
+    - name: Run a x86_64 qemu-based ./gen-vm smoke-test
+      run: ./run-vm
+      working-directory: qemu
+      env:
+        VM_NAME: qemu-minimal-smoke-test
+        KVM: none
+        NVME: 4
 
   ubuntu-latest-arm64:
     name: ubuntu-latest-arm64
