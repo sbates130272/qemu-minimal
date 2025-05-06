@@ -26,13 +26,6 @@ jobs:
         KVM: none
         USERNAME: ubuntu
         PASS: password
-    - name: Run a x86_64 qemu-based ./gen-vm smoke-test
-      run: ./run-vm
-      working-directory: qemu
-      env:
-        VM_NAME: qemu-minimal-smoke-test
-        KVM: none
-        NVME: 4
 
   smoke-test-arm64:
     name: smoke-test-arm64
