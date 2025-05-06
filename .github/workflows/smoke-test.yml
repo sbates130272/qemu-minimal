@@ -1,17 +1,19 @@
-name: smoke-tests
+name: qemu-minimal-smoke-test
 
 on:
+  workflow_dispatch:
   pull_request:
-    branches: [ main ]
+    branches:
+      - main
 
 jobs:
 
-  ubuntu-latest-x86:
-    name: ubuntu-latest-x86
+  smoke-test-x86:
+    name: smoke-test-x86
     runs-on: ubuntu-latest
     steps:
     - name: Check out code using action/checkout
-      uses: actions/checkout@v4.1.1
+      uses: actions/checkout@v4.2.2
     - name: Install a couple of packages via the apt package manager
       run: sudo apt update && sudo apt install -y qemu-system-x86 cloud-image-utils
     - name: Generate an ssh key-pair for this test
@@ -25,12 +27,12 @@ jobs:
         USERNAME: ubuntu
         PASS: password
 
-  ubuntu-latest-arm64:
-    name: ubuntu-latest-arm64
+  smoke-test-arm64:
+    name: smoke-test-arm64
     runs-on: ubuntu-latest
     steps:
     - name: Check out code using action/checkout
-      uses: actions/checkout@v4.1.1
+      uses: actions/checkout@v4.2.2
     - name: Install a couple of packages via the apt package manager
       run: sudo apt update && sudo apt install -y qemu-system-arm cloud-image-utils
     - name: Generate an ssh key-pair for this test
@@ -45,12 +47,12 @@ jobs:
         PASS: password
         ARCH: arm64
 
-  ubuntu-latest-riscv64:
-    name: ubuntu-latest-riscv64
+  smoke-test-riscv64:
+    name: smoke-test-riscv64
     runs-on: ubuntu-latest
     steps:
     - name: Check out code using action/checkout
-      uses: actions/checkout@v4.1.1
+      uses: actions/checkout@v4.2.2
     - name: Install a couple of packages via the apt package manager
       run: sudo apt update && sudo apt install -y qemu-system-misc u-boot-qemu cloud-image-utils
     - name: Generate an ssh key-pair for this test

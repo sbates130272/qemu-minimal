@@ -1,19 +1,21 @@
-name: spell-check
+name: qemu-minimal-spell-check
 
 on:
+  workflow_dispatch:
   pull_request:
-    branches: [ main ]
+    branches:
+      - main
     paths:
-    - '**.md'
-    - '.wordlist.txt'
-    - '.spellcheck.yaml'
+      - '**.md'
+      - '.wordlist.txt'
+      - '.spellcheck.yaml'
 
 jobs:
-  ubuntu-latest:
-    name: ubuntu-latest
+  spell-check:
+    name: spell-check
     runs-on: ubuntu-latest
     steps:
     - name: Check out code.
-      uses: actions/checkout@v4.1.1
+      uses: actions/checkout@v4.2.2
     - name: GitHub Spellcheck Action
-      uses: rojopolis/spellcheck-github-actions@v0
+      uses: rojopolis/spellcheck-github-actions@0.48.0
