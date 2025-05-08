@@ -11,6 +11,7 @@
   - liburing-dev
   - nvme-cli
   - moreutils
+  - pahole
   - python-is-python3
   - python2
   - python3-pip
