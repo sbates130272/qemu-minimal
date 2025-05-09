@@ -5,6 +5,8 @@ on:
   pull_request:
     branches:
       - main
+    paths:
+    - 'qemu/*-vm'
 
 jobs:
 
@@ -26,6 +28,17 @@ jobs:
         KVM: none
         USERNAME: ubuntu
         PASS: password
+    - name: Run the generated x86_64 VM as a background task
+      run: ./run-vm &
+      working-directory: qemu
+      env:
+        VM_NAME: qemu-minimal-smoke-test
+        KVM: none
+        NVME: 4
+    - name: Sleep for 60 seconds to allow VM to boot
+      run: sleep 60
+    - name: Make sure we can ssh into running VM
+      run: ssh -p 2222 ubuntu@localhost
 
   smoke-test-arm64:
     name: smoke-test-arm64
