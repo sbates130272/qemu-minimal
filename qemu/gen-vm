@@ -113,6 +113,33 @@ power_state:
   condition: true
 timezone:
   America/Edmonton
+write_files:
+  - path: /etc/sysctl.d/10-kernel-hardening.conf
+    content: 'kernel.dmesg_restrict = 0'
+    owner: root:root
+    permissions: 0o644
+    append: true
+    defer: true
+  - path: /home/${USERNAME}/.emacs
+    content: |
+      ;; enable syntax highlighting
+      (global-font-lock-mode 1)
+      ;; show line and column numbers in mode line
+      (line-number-mode 1)
+      (column-number-mode 1)
+      ;; force emacs to always use spaces instead of tab characters
+      (setq-default indent-tabs-mode nil)
+      ;; set default tab width to 4 spaces
+      (setq default-tab-width 4)
+      (setq tab-width 4)
+      ;; default to showing trailing whitespace
+      (setq-default show-trailing-whitespace t)
+      ;; default to auto-fill-mode on in all major modes
+      (setq-default auto-fill-function 'do-auto-fill)
+    owner: ${USERNAME}:${USERNAME}
+    permissions: 0o644
+    append: false
+    defer: true
 EOF
 
 cat << EOF > network-config-${VM_NAME}
