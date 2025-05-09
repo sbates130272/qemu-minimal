@@ -26,6 +26,14 @@ jobs:
         KVM: none
         USERNAME: ubuntu
         PASS: password
+    - name: Run the generated x86_64 VM as a background task
+      uses: JarvusInnovations/background-action@v1.0.7
+      with:
+        run: VM_NAME=qemu-minimal-smoke-test KVM=none ./run-vm
+        working-directory: qemu
+        wait-on: tcp:localhost:2222
+        wait-for: 1m
+        tail: true
 
   smoke-test-arm64:
     name: smoke-test-arm64
