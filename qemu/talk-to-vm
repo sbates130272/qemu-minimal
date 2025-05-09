@@ -1,0 +1,42 @@
+#!/bin/bash
+
+# Check if socat is installed
+if ! command -v socat &> /dev/null; then
+  echo "socat is not installed. Please install it first."
+  exit 1
+fi
+
+# Check if a socket path is provided
+if [ -z "$1" ]; then
+  echo "Usage: $0 <qemu_monitor_socket_path> [command]"
+  exit 1
+fi
+
+socket_path="$1"
+command="${2:-'help'}" # Default to 'help' command if none is provided
+
+# Function to send command and receive response
+send_qemu_command() {
+  local cmd="$1"
+  socat - unix-connect:"$socket_path" <<< "$cmd"
+}
+
+# Check if the socket exists
+if [ ! -S "$socket_path" ]; then
+  echo "Error: Socket file '$socket_path' does not exist."
+  exit 1
+fi
+
+# Send the command and print the response
+response=$(send_qemu_command "$command")
+echo "$response"
+
+# Example usage:
+# 1. Start QEMU with a monitor socket:
+# qemu-system-x86_64 -monitor unix:/tmp/qemu.sock,server,nowait ...
+#
+# 2. Run the script:
+# ./qemu_monitor_cli.sh /tmp/qemu.sock info status
+#
+# 3. Or to send the default 'help' command
+# ./qemu_monitor_cli.sh /tmp/qemu.sock
