@@ -113,6 +113,13 @@ power_state:
   condition: true
 timezone:
   America/Edmonton
+write_files:
+  - path: /etc/sysctl.d/10-kernel-hardening.conf
+    content: 'kernel.dmesg_restrict = 0'
+    owner: root:root
+    permissions: 0o644
+    append: true
+    defer: true
 EOF
 
 cat << EOF > network-config-${VM_NAME}
