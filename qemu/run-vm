@@ -29,6 +29,10 @@
 #      the host using a command like:
 #        sudo modprobe null_blk queue_mode=2 gb=1024
 #
+# Note you can pass in a PCIe device from the host using PCI_HOSTDEV
+# where it is equal to the host PCI bus address and that the device
+# has been unbound from its native host driver and assigned to
+# vfio-pci.
 
 QEMU_PATH=${QEMU_PATH:-}
 VM_NAME=${VM_NAME:-qemu-minimal}
@@ -41,6 +45,7 @@ SSH_PORT=${SSH_PORT:-2222}
 KVM=${KVM:-enable}
 NVME=${NVME:-none}
 PCI_TESTDEV=${PCI_TESTDEV:-none}
+PCI_HOSTDEV=${PCI_HOSTDEV:-none}
 
 NVME_SIZE=1024G
 
@@ -98,6 +103,12 @@ else
     PCI_TESTDEV_ARGS="-device pci-testdev,membar=16G,membar-backed=true"
 fi
 
+if [ ${PCI_HOSTDEV} == "none" ]; then
+    PCI_HOSTDEV_ARGS=""
+else
+    PCI_HOSTDEV_ARGS="-device vfio-pci,host=${PCI_HOSTDEV}"
+fi
+
 ${QEMU_PATH}qemu-system-${QARCH} \
    ${QARCH_ARGS} \
    -smp cpus=${VCPUS} \
@@ -106,6 +117,7 @@ ${QEMU_PATH}qemu-system-${QARCH} \
    -nographic \
    ${NVME_ARGS} \
    ${PCI_TESTDEV_ARGS} \
+   ${PCI_HOSTDEV_ARGS} \
    -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}.qcow2 \
    -netdev user,id=net0,hostfwd=tcp::${SSH_PORT}-:22 \
    -device virtio-net-pci,netdev=net0
