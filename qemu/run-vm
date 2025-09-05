@@ -58,7 +58,7 @@ fi
 
 if [ ${ARCH} == "amd64" ]; then
     QARCH="x86_64"
-    QARCH_ARGS="-machine q35${KVM}"
+    QARCH_ARGS="-machine q35${KVM} -cpu EPYC"
 elif [ ${ARCH} == "arm64" ]; then
     QARCH="aarch64"
     QARCH_ARGS="-machine virt,gic-version=max${KVM} -cpu max -bios /usr/share/qemu-efi-aarch64/QEMU_EFI.fd"
