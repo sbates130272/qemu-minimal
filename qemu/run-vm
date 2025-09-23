@@ -29,10 +29,10 @@
 #      the host using a command like:
 #        sudo modprobe null_blk queue_mode=2 gb=1024
 #
-# Note you can pass in a PCIe device from the host using PCI_HOSTDEV
-# where it is equal to the host PCI bus address and that the device
-# has been unbound from its native host driver and assigned to
-# vfio-pci.
+# Note you can pass in multiple PCIe devices from the host using
+# PCI_HOSTDEV where it is equal to the host PCI bus addresses separated
+# by commas. The devices must be unbound from their native host driver
+# and assigned to vfio-pci.
 
 QEMU_PATH=${QEMU_PATH:-}
 VM_NAME=${VM_NAME:-qemu-minimal}
@@ -82,6 +82,21 @@ function nvme_create {
          "-device nvme,serial=${1},drive=nvme-${3} "
 }
 
+  # Check that the user has provided valid PCIe bus addresses and also check
+  # that the devices associated with these addresses are bound to vfio-pci
+function pci_check () {
+    if [[ ! ${1} =~ ^([0-9a-fA-F]{4}:)?[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9]$ ]]; then
+        echo "ERROR: PCIe bus address is invalid (${1})."
+        exit 1
+    fi
+
+    lspci -k -s ${1} | grep " vfio-pci"
+    if [ $? -eq 1 ]; then
+        echo "ERROR: Device ${1} is not bound to vfio-pci driver."
+        exit 1
+    fi
+}
+
 if [ ${NVME} == "none" ]; then
     NVME_ARGS=""
 elif [ ${NVME} == "true" ]; then
@@ -106,7 +121,10 @@ fi
 if [ ${PCI_HOSTDEV} == "none" ]; then
     PCI_HOSTDEV_ARGS=""
 else
-    PCI_HOSTDEV_ARGS="-device vfio-pci,host=${PCI_HOSTDEV}"
+    for THIS_PCI_HOSTDEV in ${PCI_HOSTDEV//,/ }; do
+        pci_check ${THIS_PCI_HOSTDEV}
+        PCI_HOSTDEV_ARGS+="-device vfio-pci,host=${THIS_PCI_HOSTDEV} "
+    done
 fi
 
 ${QEMU_PATH}qemu-system-${QARCH} \
