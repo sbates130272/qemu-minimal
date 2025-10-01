@@ -2,6 +2,7 @@
 # Note indent by 2 spaces and use a hyphen!
   - bmon
   - build-essential
+  - cmake
   - emacs-nox
   - fio
   - git
