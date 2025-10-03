@@ -34,6 +34,10 @@
 # FORCE is a boolean we use to force a refetch of the cloud image file
 # for the chosen distro. This can be useful to get the latest and
 # greatest version of this.
+#
+# NO_BACKING is a boolean we use to request the image file be a
+# backing file or not. This is useful in some cases for exporting the
+# image files to other people. The default is to use a backing file.
 
 QEMU_PATH=${QEMU_PATH:-}
 VM_NAME=${VM_NAME:-qemu-minimal}
@@ -50,6 +54,7 @@ PACKAGES=${PACKAGES:-../packages.d/packages-default}
 SSH_PORT=${SSH_PORT:-2222}
 KVM=${KVM:-enable}
 FORCE=${FORCE:-false}
+NO_BACKING:${NO_BACKING:-false}
 
   # Focal and above prefers us to use cloud images and
   # cloud-init. Download the focal cloud image and set it up using a
@@ -187,5 +192,9 @@ ${QEMU_PATH}qemu-system-${QARCH} \
    -netdev user,id=net0 \
    -device virtio-net-pci,netdev=net0
 
-qemu-img create -F qcow2 -b ${IMAGES}/${VM_NAME}-backing.qcow2 -f qcow2 \
-	 ${IMAGES}/${VM_NAME}.qcow2
+if [ ${NO_BACKING} == "true" ]; then
+    mv ${IMAGES}/${VM_NAME}-backing.qcow2 ${IMAGES}/${VM_NAME}.qcow2
+else
+    qemu-img create -F qcow2 -b ${IMAGES}/${VM_NAME}-backing.qcow2 \
+             -f qcow2 ${IMAGES}/${VM_NAME}.qcow2
+fi
