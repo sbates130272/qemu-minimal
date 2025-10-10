@@ -90,7 +90,7 @@ function pci_check () {
         exit 1
     fi
 
-    lspci -k -s ${1} | grep " vfio-pci"
+    lspci -k -s ${1} | grep "vfio-pci" > /dev/null 2>&1
     if [ $? -eq 1 ]; then
         echo "ERROR: Device ${1} is not bound to vfio-pci driver."
         exit 1
