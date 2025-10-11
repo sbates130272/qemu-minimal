@@ -54,7 +54,7 @@ PACKAGES=${PACKAGES:-../packages.d/packages-default}
 SSH_PORT=${SSH_PORT:-2222}
 KVM=${KVM:-enable}
 FORCE=${FORCE:-false}
-NO_BACKING:${NO_BACKING:-false}
+NO_BACKING=${NO_BACKING:-false}
 
   # Focal and above prefers us to use cloud images and
   # cloud-init. Download the focal cloud image and set it up using a
