@@ -15,7 +15,7 @@
 # but it does work when running via libvirt. Go figure! You can also
 # add this to /etc/fstab in the guest for a permenant solution.
 #
-# hostfs /home/batesste/Projects 9p trans=virtio,version=9p2000.L 0 1
+# hostfs /home/batesste/Projects 9p trans=virtio,version=9p2000.L,nofail 0 1
 #
 # Change NVME in order to add emulated NVMe SSD(s) to the VM. There
 # are three modes for this:
