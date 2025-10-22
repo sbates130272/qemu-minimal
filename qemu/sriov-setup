@@ -1,0 +1,42 @@
+#!/bin/bash
+#
+# sriov-setup
+#
+# (C) Stephen Bates <sbates@raithlin>
+#
+
+IBV_DEVICE=${IBV_DEVICE:-none}
+NUM_VFS=${NUM_VFS:-0}
+
+IB_PATH=/sys/class/infiniband
+
+if [[ ${EUID} -ne 0 ]]; then
+   echo "This script must be run as root. Please use 'sudo'."
+   exit 1
+fi
+
+if [ ${IBV_DEVICE} == "none" ]; then
+    echo "ERROR: No Infiniband device selected."
+    ls -l ${IB_PATH}/
+    exit 1
+fi
+
+CURRENT_VFS=$(cat ${IB_PATH}/${IBV_DEVICE}/device/sriov_numvfs)
+TOTAL_VFS=$(cat ${IB_PATH}/${IBV_DEVICE}/device/sriov_totalvfs)
+echo "INFO: Current (total) VFs assigned on ${IBV_DEVICE} is ${CURRENT_VFS} (${TOTAL_VFS})."
+
+if [[ ${CURRENT_VFS} -ne 0 ]]; then
+    echo "INFO: VFs already assigned on ${IBV_DEVICE} (${CURRENT_VFS})."
+fi
+
+if [[ ${NUM_VFS} -gt ${TOTAL_VFS} ]]; then
+    echo "ERROR: Requested VFs exceeds maximum ($TOTAL_VFS)"
+    exit 1
+fi
+echo ${NUM_VFS} > ${IB_PATH}/${IBV_DEVICE}/device/sriov_numvfs
+CURRENT_VFS=$(cat ${IB_PATH}/${IBV_DEVICE}/device/sriov_numvfs)
+if [[ ${CURRENT_VFS} -ne ${NUM_VFS} ]]; then
+    echo "ERROR: Requested VFs (${NUM_VFS}) not accepted by ${IBV_DEVICE}."
+    exit 1
+fi
+echo "INFO: Current VFs assigned on ${IBV_DEVICE} is ${CURRENT_VFS}."
