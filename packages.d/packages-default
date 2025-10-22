@@ -3,6 +3,8 @@
   - bmon
   - build-essential
   - cmake
+  - elpa-cmake-mode
+  - elpa-rust-mode
   - emacs-nox
   - fio
   - git
