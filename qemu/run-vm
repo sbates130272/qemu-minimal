@@ -33,6 +33,12 @@
 # PCI_HOSTDEV where it is equal to the host PCI bus addresses separated
 # by commas. The devices must be unbound from their native host driver
 # and assigned to vfio-pci.
+#
+# Post 10.1.0 versions of QEMU have libvfio-user support which allows 
+# us to create emulated PCIe devices via a socket and the API provided 
+# by that library. You can specify these device(s) via a comma-sperated list 
+# of sockets in VFIO_USERDEV. We check the QEMU version is new enough and that
+# the sockets exist.
 
 QEMU_PATH=${QEMU_PATH:-}
 VM_NAME=${VM_NAME:-qemu-minimal}
@@ -46,6 +52,7 @@ KVM=${KVM:-enable}
 NVME=${NVME:-none}
 PCI_TESTDEV=${PCI_TESTDEV:-none}
 PCI_HOSTDEV=${PCI_HOSTDEV:-none}
+VFIO_USERDEV=${VFIO_USERDEV:-none}
 
 NVME_SIZE=1024G
 
@@ -127,6 +134,25 @@ else
     done
 fi
 
+if [ ${VFIO_USERDEV} == "none" ]; then
+    VFIO_USERDEV_ARGS=""
+else
+    QEMU_VFIO_USER_VERSION="10.1.1"
+    QEMU_VERSION=$(${QEMU_PATH}qemu-system-${QARCH} --version | grep -oP '\d+\.\d+\.\d+' | head -n 1)
+    if [ $(echo "${QEMU_VERSION}\n${QEMU_VFIO_USER_VERSION}"|sort|head -1) != "${QEMU_VERSION}" ]; then
+        echo "ERROR: QEMU version ${QEMU_VERSION} is too old for libvfio-user support (${QEMU_VFIO_USER_VERSION})."
+        exit 1
+    fi
+
+    for THIS_VFIO_USERDEV in ${VFIO_USERDEV//,/ }; do
+        if [ ! -S ${VFIO_USERDEV} ]; then
+            echo "ERROR: Socket ${THIS_VFIO_USERDEV} does not exist."
+            exit 1
+        fi
+    done
+    VFIO_USERDEV_ARGS+="-device vfio-user-pci,socket=${VFIO_USERDEV_ARGS} "
+fi
+
 ${QEMU_PATH}qemu-system-${QARCH} \
    ${QARCH_ARGS} \
    -smp cpus=${VCPUS} \
@@ -136,6 +162,7 @@ ${QEMU_PATH}qemu-system-${QARCH} \
    ${NVME_ARGS} \
    ${PCI_TESTDEV_ARGS} \
    ${PCI_HOSTDEV_ARGS} \
+   ${VFIO_USERDEV_ARGS} \
    -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}.qcow2 \
    -netdev user,id=net0,hostfwd=tcp::${SSH_PORT}-:22 \
    -device virtio-net-pci,netdev=net0
