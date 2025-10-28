@@ -49,6 +49,7 @@ VCPUS=${VCPUS:-2}
 VMEM=${VMEM:-4096}
 SSH_KEY_FILE=${SSH_KEY_FILE:-~/.ssh/id_rsa.pub}
 USERNAME=${USERNAME:-ubuntu}
+USER_ID=${USER_ID:-1000}
 PASS=${PASS:-password}
 PACKAGES=${PACKAGES:-../packages.d/packages-default}
 SSH_PORT=${SSH_PORT:-2222}
@@ -102,6 +103,7 @@ users:
     plain_text_passwd: '${PASS}'
     lock_passwd: false
     sudo: ALL=(ALL) NOPASSWD:ALL
+    uid: ${USER_ID}
     groups: users, admin
     shell: /bin/bash
     ssh_authorized_keys: |
