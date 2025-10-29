@@ -6,6 +6,7 @@
   - elpa-cmake-mode
   - elpa-rust-mode
   - emacs-nox
+  - expect
   - fio
   - git
   - gnuplot
