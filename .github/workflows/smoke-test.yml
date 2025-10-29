@@ -29,7 +29,7 @@ jobs:
         USERNAME: ubuntu
         PASS: password
     - name: Run the generated x86_64 VM as a background task
-      run: ./run-vm &
+      run: ./run-vm > run-vm-output.log 2>&1 &
       working-directory: qemu
       env:
         VM_NAME: qemu-minimal-smoke-test
@@ -37,8 +37,13 @@ jobs:
         NVME: 4
     - name: Sleep for 60 seconds to allow VM to boot
       run: sleep 60
+    - name: Output run-vm command output
+      run: |
+        cat qemu/run-vm-output.log
     - name: Make sure we can ssh into running VM
-      run: ssh -p 2222 ubuntu@localhost
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes \
+          -v -p 2222 ubuntu@localhost ls -ltrh
 
   smoke-test-arm64:
     name: smoke-test-arm64
