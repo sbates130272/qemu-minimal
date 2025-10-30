@@ -104,6 +104,22 @@ function pci_check () {
     fi
 }
 
+  # Get the QEMU version from the installed binary
+function get_qemu_version () {
+    ${QEMU_PATH}qemu-system-${QARCH} --version | grep -oP '\d+\.\d+\.\d+' | head -n 1
+}
+
+  # Check if installed version meets the minimum required version
+function version_at_least () {
+    local installed_version="$1"
+    local required_version="$2"
+    
+    if [ "$(printf '%s\n' "${installed_version}" "${required_version}" | sort -V | tail -1)" != "${installed_version}" ]; then
+        return 1
+    fi
+    return 0
+}
+
 if [ ${NVME} == "none" ]; then
     NVME_ARGS=""
 elif [ ${NVME} == "true" ]; then
@@ -138,19 +154,21 @@ if [ ${VFIO_USERDEV} == "none" ]; then
     VFIO_USERDEV_ARGS=""
 else
     QEMU_VFIO_USER_VERSION="10.1.1"
-    QEMU_VERSION=$(${QEMU_PATH}qemu-system-${QARCH} --version | grep -oP '\d+\.\d+\.\d+' | head -n 1)
-    if [ $(echo "${QEMU_VERSION}\n${QEMU_VFIO_USER_VERSION}"|sort|head -1) != "${QEMU_VERSION}" ]; then
+    QEMU_VERSION=$(get_qemu_version)
+    if ! version_at_least "${QEMU_VERSION}" "${QEMU_VFIO_USER_VERSION}"; then
         echo "ERROR: QEMU version ${QEMU_VERSION} is too old for libvfio-user support (${QEMU_VFIO_USER_VERSION})."
         exit 1
     fi
 
     for THIS_VFIO_USERDEV in ${VFIO_USERDEV//,/ }; do
-        if [ ! -S ${VFIO_USERDEV} ]; then
+        if [ ! -S ${THIS_VFIO_USERDEV} ]; then
             echo "ERROR: Socket ${THIS_VFIO_USERDEV} does not exist."
             exit 1
         fi
+        DEV_JSON=$(printf '{"driver":"vfio-user-pci","socket":{"path":"%s","type":"unix"}}' "${THIS_VFIO_USERDEV}")
+        VFIO_USERDEV_ARGS+=( -device "${DEV_JSON}" )
+
     done
-    VFIO_USERDEV_ARGS+="-device vfio-user-pci,socket=${VFIO_USERDEV_ARGS} "
 fi
 
 ${QEMU_PATH}qemu-system-${QARCH} \
@@ -162,7 +180,7 @@ ${QEMU_PATH}qemu-system-${QARCH} \
    ${NVME_ARGS} \
    ${PCI_TESTDEV_ARGS} \
    ${PCI_HOSTDEV_ARGS} \
-   ${VFIO_USERDEV_ARGS} \
+   "${VFIO_USERDEV_ARGS[@]}" \
    -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}.qcow2 \
    -netdev user,id=net0,hostfwd=tcp::${SSH_PORT}-:22 \
    -device virtio-net-pci,netdev=net0
