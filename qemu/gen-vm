@@ -38,6 +38,10 @@
 # NO_BACKING is a boolean we use to request the image file be a
 # backing file or not. This is useful in some cases for exporting the
 # image files to other people. The default is to use a backing file.
+#
+# RESTORE_FROM_BACKING is a boolean that only performs the final qemu-img
+# create step. Before running, it checks that qemu is not using the
+# image file and that the backing file exists.
 
 QEMU_PATH=${QEMU_PATH:-}
 VM_NAME=${VM_NAME:-qemu-minimal}
@@ -56,6 +60,7 @@ SSH_PORT=${SSH_PORT:-2222}
 KVM=${KVM:-enable}
 FORCE=${FORCE:-false}
 NO_BACKING=${NO_BACKING:-false}
+RESTORE_FROM_BACKING=${RESTORE_FROM_BACKING:-false}
 
   # Focal and above prefers us to use cloud images and
   # cloud-init. Download the focal cloud image and set it up using a
@@ -69,6 +74,59 @@ cleanup() {
        ${IMAGES}/${VM_NAME}-seed.qcow2
 }
 trap cleanup SIGINT ERR EXIT
+
+# Function to create a qcow2 image with a backing file
+create_image_with_backing() {
+    qemu-img create -F qcow2 -b ${2} -f qcow2 ${1}
+}
+
+# Handle RESTORE_FROM_BACKING option - only perform the final
+# qemu-img create step. This mode takes precedence over all other
+# modes and exits after completion.
+if [ ${RESTORE_FROM_BACKING} == "true" ]; then
+    # Check for conflicting options
+    if [ ${NO_BACKING} == "true" ]; then
+        echo "Error: RESTORE_FROM_BACKING and NO_BACKING cannot both" \
+             "be true!"
+        exit 1
+    fi
+
+    # Check that the backing file exists
+    if [ ! -f "${IMAGES}/${VM_NAME}-backing.qcow2" ]; then
+        echo "Error: Backing file" \
+             "${IMAGES}/${VM_NAME}-backing.qcow2 does not exist!"
+        exit 1
+    fi
+
+    # Check if qemu is currently using the image file
+    IMAGE_FILE="${IMAGES}/${VM_NAME}.qcow2"
+    if [ -f "${IMAGE_FILE}" ]; then
+        if command -v fuser >/dev/null 2>&1; then
+            if fuser "${IMAGE_FILE}" >/dev/null 2>&1; then
+                echo "Error: Image file ${IMAGE_FILE} is currently" \
+                     "in use by qemu or another process!"
+                exit 1
+            fi
+        elif command -v lsof >/dev/null 2>&1; then
+            if lsof "${IMAGE_FILE}" >/dev/null 2>&1; then
+                echo "Error: Image file ${IMAGE_FILE} is currently" \
+                     "in use by qemu or another process!"
+                exit 1
+            fi
+        else
+            echo "Warning: Neither fuser nor lsof available to check" \
+                 "if file is in use. Proceeding anyway..."
+        fi
+    fi
+
+    # Create the new image with backing file
+    echo "Creating new image with backing file: ${IMAGE_FILE}"
+    create_image_with_backing "${IMAGE_FILE}" \
+        "${IMAGES}/${VM_NAME}-backing.qcow2"
+    echo "Successfully created ${IMAGE_FILE} with backing file" \
+         "${IMAGES}/${VM_NAME}-backing.qcow2"
+    exit 0
+fi
 
 if [ ${FORCE} == "true" ] || [ ! -f  ${IMAGES}/${RELEASE}-server-cloudimg-${ARCH}.img ]; then
     rm -rf ${IMAGES}/${RELEASE}-server-cloudimg-${ARCH}.img
@@ -197,6 +255,6 @@ ${QEMU_PATH}qemu-system-${QARCH} \
 if [ ${NO_BACKING} == "true" ]; then
     mv ${IMAGES}/${VM_NAME}-backing.qcow2 ${IMAGES}/${VM_NAME}.qcow2
 else
-    qemu-img create -F qcow2 -b ${IMAGES}/${VM_NAME}-backing.qcow2 \
-             -f qcow2 ${IMAGES}/${VM_NAME}.qcow2
+    create_image_with_backing "${IMAGES}/${VM_NAME}.qcow2" \
+        "${IMAGES}/${VM_NAME}-backing.qcow2"
 fi
