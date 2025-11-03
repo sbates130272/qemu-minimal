@@ -17,7 +17,9 @@ jobs:
     - name: Check out code using action/checkout
       uses: actions/checkout@v4.2.2
     - name: Install a couple of packages via the apt package manager
-      run: sudo apt update && sudo apt install -y qemu-system-x86 cloud-image-utils
+      run: |
+        sudo apt update
+        sudo apt install -y qemu-system-x86 qemu-utils cloud-image-utils
     - name: Generate an ssh key-pair for this test
       run: ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
     - name: Generate a x86_64 qemu-based ./gen-vm smoke-test
@@ -28,6 +30,31 @@ jobs:
         KVM: none
         USERNAME: ubuntu
         PASS: password
+    - name: Test RESTORE_FROM_BACKING mode
+      run: |
+        # Remove the main image to simulate corruption/deletion
+        rm -f ../images/qemu-minimal-smoke-test.qcow2
+        # Verify it was removed
+        if [ -f ../images/qemu-minimal-smoke-test.qcow2 ]; then
+          echo "Failed to remove image for test"
+          exit 1
+        fi
+        # Restore from backing file using RESTORE_FROM_BACKING mode
+        VM_NAME=qemu-minimal-smoke-test \
+          RESTORE_FROM_BACKING=true \
+          ./gen-vm
+        # Verify the image was recreated with backing file
+        if [ ! -f ../images/qemu-minimal-smoke-test.qcow2 ]; then
+          echo "Image not restored from backing"
+          exit 1
+        fi
+        if ! qemu-img info ../images/qemu-minimal-smoke-test.qcow2 \
+             | grep -q "backing file:"; then
+          echo "Restored image does not have backing file"
+          exit 1
+        fi
+        echo "✓ RESTORE_FROM_BACKING mode test passed"
+      working-directory: qemu
     - name: Run the generated x86_64 VM as a background task
       run: ./run-vm > run-vm-output.log 2>&1 &
       working-directory: qemu
@@ -52,7 +79,9 @@ jobs:
     - name: Check out code using action/checkout
       uses: actions/checkout@v4.2.2
     - name: Install a couple of packages via the apt package manager
-      run: sudo apt update && sudo apt install -y qemu-system-arm cloud-image-utils
+      run: |
+        sudo apt update
+        sudo apt install -y qemu-system-arm cloud-image-utils
     - name: Generate an ssh key-pair for this test
       run: ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
     - name: Run a aarch64 qemu-based ./gen-vm smoke-test
