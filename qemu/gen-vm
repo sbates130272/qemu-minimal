@@ -181,6 +181,9 @@ ntp:
   enabled: true
 packages:
 ${PACKAGES}
+runcmd:
+  - systemctl disable openipmi.service
+  - systemctl mask openipmi.service
 power_state:
   delay: now
   mode: poweroff
