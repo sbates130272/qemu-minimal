@@ -30,7 +30,7 @@ jobs:
         KVM: none
         USERNAME: ubuntu
         PASS: password
-    - name: Test RESTORE_FROM_BACKING mode
+    - name: Test RESTORE_IMAGE mode
       run: |
         # Remove the main image to simulate corruption/deletion
         rm -f ../images/qemu-minimal-smoke-test.qcow2
@@ -39,9 +39,9 @@ jobs:
           echo "Failed to remove image for test"
           exit 1
         fi
-        # Restore from backing file using RESTORE_FROM_BACKING mode
+        # Restore from backing file using RESTORE_IMAGE mode
         VM_NAME=qemu-minimal-smoke-test \
-          RESTORE_FROM_BACKING=true \
+          RESTORE_IMAGE=true \
           ./gen-vm
         # Verify the image was recreated with backing file
         if [ ! -f ../images/qemu-minimal-smoke-test.qcow2 ]; then
@@ -53,7 +53,7 @@ jobs:
           echo "Restored image does not have backing file"
           exit 1
         fi
-        echo "✓ RESTORE_FROM_BACKING mode test passed"
+        echo "✓ RESTORE_IMAGE mode test passed"
       working-directory: qemu
     - name: Run the generated x86_64 VM as a background task
       run: ./run-vm > run-vm-output.log 2>&1 &
