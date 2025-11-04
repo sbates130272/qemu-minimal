@@ -33,6 +33,13 @@
 # PCI_HOSTDEV where it is equal to the host PCI bus addresses separated
 # by commas. The devices must be unbound from their native host driver
 # and assigned to vfio-pci.
+#
+# NVME_TRACE enables tracing of NVMe device operations. Options are:
+#   - "doorbell": Trace submission/completion queue doorbell writes
+#   - "all": Trace all NVMe events
+#   - Custom trace event name (e.g., "pci_nvme_read")
+# Use NVME_TRACE_FILE to redirect trace output to a file instead of
+# stderr.
 
 QEMU_PATH=${QEMU_PATH:-}
 VM_NAME=${VM_NAME:-qemu-minimal}
@@ -44,6 +51,8 @@ IMAGES=${IMAGES:-../images}
 SSH_PORT=${SSH_PORT:-2222}
 KVM=${KVM:-enable}
 NVME=${NVME:-none}
+NVME_TRACE=${NVME_TRACE:-none}
+NVME_TRACE_FILE=${NVME_TRACE_FILE:-}
 PCI_TESTDEV=${PCI_TESTDEV:-none}
 PCI_HOSTDEV=${PCI_HOSTDEV:-none}
 
@@ -97,6 +106,25 @@ function pci_check () {
         exit 1
     fi
 }
+
+# Setup NVMe tracing if requested
+TRACE_ARGS=""
+if [ ${NVME_TRACE} != "none" ]; then
+    if [ ${NVME_TRACE} == "doorbell" ]; then
+        TRACE_ARGS="-trace enable=pci_nvme_mmio_doorbell_sq "
+        TRACE_ARGS+="-trace enable=pci_nvme_mmio_doorbell_cq "
+    elif [ ${NVME_TRACE} == "all" ]; then
+        TRACE_ARGS="-trace enable=pci_nvme* "
+    else
+        # User specified custom trace events
+        TRACE_ARGS="-trace enable=${NVME_TRACE} "
+    fi
+
+    # Optionally write to a file instead of stderr
+    if [ ! -z "${NVME_TRACE_FILE}" ]; then
+        TRACE_ARGS+="-trace file=${NVME_TRACE_FILE} "
+    fi
+fi
 
 # Create PCIe root ports for NVMe devices to enable proper PCIe topology
 # and atomic operation support
@@ -155,6 +183,7 @@ fi
 
 ${QEMU_PATH}qemu-system-${QARCH} \
    ${QARCH_ARGS} \
+   ${TRACE_ARGS} \
    -smp cpus=${VCPUS} \
    -m ${VMEM} \
    ${FILESYSTEM_ARGS} \
