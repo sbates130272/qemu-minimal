@@ -39,7 +39,7 @@
 # backing file or not. This is useful in some cases for exporting the
 # image files to other people. The default is to use a backing file.
 #
-# RESTORE_FROM_BACKING is a boolean that only performs the final qemu-img
+# RESTORE_IMAGE is a boolean that only performs the final qemu-img
 # create step. Before running, it checks that qemu is not using the
 # image file and that the backing file exists.
 
@@ -60,7 +60,7 @@ SSH_PORT=${SSH_PORT:-2222}
 KVM=${KVM:-enable}
 FORCE=${FORCE:-false}
 NO_BACKING=${NO_BACKING:-false}
-RESTORE_FROM_BACKING=${RESTORE_FROM_BACKING:-false}
+RESTORE_IMAGE=${RESTORE_IMAGE:-false}
 
   # Focal and above prefers us to use cloud images and
   # cloud-init. Download the focal cloud image and set it up using a
@@ -77,16 +77,27 @@ trap cleanup SIGINT ERR EXIT
 
 # Function to create a qcow2 image with a backing file
 create_image_with_backing() {
+    # Save backing file timestamp before qemu-img accesses it
+    local backing_timestamp=$(stat -c %y ${2} 2>/dev/null || \
+                              stat -f %Sm -t "%Y-%m-%d %H:%M:%S" ${2})
+    
     qemu-img create -F qcow2 -b ${2} -f qcow2 ${1}
+    
+    # Restore backing file timestamp after qemu-img accessed it
+    if [ -n "${backing_timestamp}" ]; then
+        touch -d "${backing_timestamp}" ${2} 2>/dev/null || \
+            touch -t $(date -j -f "%Y-%m-%d %H:%M:%S" \
+                "${backing_timestamp}" +%Y%m%d%H%M.%S 2>/dev/null) ${2}
+    fi
 }
 
-# Handle RESTORE_FROM_BACKING option - only perform the final
+# Handle RESTORE_IMAGE option - only perform the final
 # qemu-img create step. This mode takes precedence over all other
 # modes and exits after completion.
-if [ ${RESTORE_FROM_BACKING} == "true" ]; then
+if [ ${RESTORE_IMAGE} == "true" ]; then
     # Check for conflicting options
     if [ ${NO_BACKING} == "true" ]; then
-        echo "Error: RESTORE_FROM_BACKING and NO_BACKING cannot both" \
+        echo "Error: RESTORE_IMAGE and NO_BACKING cannot both" \
              "be true!"
         exit 1
     fi
