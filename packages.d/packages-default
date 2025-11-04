@@ -1,5 +1,6 @@
 # packages-default: My default list of initial packages.
 # Note indent by 2 spaces and use a hyphen!
+  - aspell
   - bmon
   - build-essential
   - cmake
@@ -19,6 +20,7 @@
   - python-is-python3
   - python2
   - python3-pip
+  - pyspelling
   - mutt
   - sysstat
   - tree
