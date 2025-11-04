@@ -55,6 +55,30 @@ jobs:
         fi
         echo "✓ RESTORE_IMAGE mode test passed"
       working-directory: qemu
+    - name: Test NVME_TRACE mode
+      run: |
+        # Start VM with NVMe trace enabled, run for 10 seconds
+        timeout 10 ./run-vm > /dev/null 2>&1 || true
+        # Check if trace file was created and contains doorbell traces
+        if [ ! -f /tmp/nvme-trace.log ]; then
+          echo "Trace file not created"
+          exit 1
+        fi
+        if ! grep -q "pci_nvme_mmio_doorbell" /tmp/nvme-trace.log; then
+          echo "No doorbell traces found in output"
+          cat /tmp/nvme-trace.log
+          exit 1
+        fi
+        echo "✓ NVME_TRACE mode test passed"
+        # Clean up trace file
+        rm -f /tmp/nvme-trace.log
+      working-directory: qemu
+      env:
+        VM_NAME: qemu-minimal-smoke-test
+        KVM: none
+        NVME: 1
+        NVME_TRACE: doorbell
+        NVME_TRACE_FILE: /tmp/nvme-trace.log
     - name: Run the generated x86_64 VM as a background task
       run: ./run-vm > run-vm-output.log 2>&1 &
       working-directory: qemu
