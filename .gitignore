@@ -11,4 +11,52 @@ scripts/rootfs
 libvirt/hostname.tmp
 libvirt/focal-*.img
 libvirt/jammy-*.img
+libvirt/noble-*.img
 *~
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+*.egg-info/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+*.bak
+
+# Build artifacts
+*.o
+*.a
+*.so
+*.ko.cmd
+.tmp_versions/
+Module.symvers
+modules.order
+
+# QEMU runtime
+*.pid
+*.log
+
+# Cloud-init generated files
+cloud-config-*
+network-config-*
+*-seed.qcow2
+
+# Personal test VMs (pattern-based)
+*-test-vm*.qcow2
+
+# Temporary files
+/tmp/
+*.tmp
+
+# Helper scripts (not for repo)
+review-and-push.sh
+wrap-markdown.py
+check-ci-status.sh
+PROJECT_COMPLETION_SUMMARY.md

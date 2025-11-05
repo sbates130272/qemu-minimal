@@ -9,13 +9,20 @@ on:
       - '**.md'
       - '.wordlist.txt'
       - '.spellcheck.yaml'
+  push:
+    branches:
+      - main
+    paths:
+      - '**.md'
+      - '.wordlist.txt'
+      - '.spellcheck.yaml'
 
 jobs:
   spell-check:
     name: spell-check
     runs-on: ubuntu-latest
     steps:
-    - name: Check out code.
+    - name: Check out code
       uses: actions/checkout@v4.2.2
     - name: GitHub Spellcheck Action
       uses: rojopolis/spellcheck-github-actions@0.48.0

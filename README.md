@@ -2,271 +2,436 @@
 
 ## Summary
 
-This repository contains an (almost) stand-alone environment for
-running qemu as well as some scripts for creating and managing the
-image and a script to run qemu. This environemnt is targetted at
-emulated NVM Express (NVMe), Persistent Memory (PMEM) and LightNVM
-(aka OpenChannel) SSD testing but can be used for many other things.
+This repository provides a modern, cloud-init based environment for running and
+testing QEMU VMs. It's particularly well-suited for NVMe, PCIe device
+passthrough, and CXL emulation testing, but can be used for general-purpose VM
+management.
 
-There are some minimalist kernel config in this repo as well that can
-be used as a starting point for building a suitable kernel.
+**Key Features:**
+- 🚀 Fast VM creation using Ubuntu cloud images and cloud-init
+- 💾 NVMe device emulation with tracing support
+- 🔌 PCIe device passthrough (VFIO)
+- 🔧 CXL (Compute Express Link) device emulation
+- 🏗️ Multi-architecture support (x86_64, ARM64, RISC-V)
+- 📦 Declarative package management via manifests
+- ⚡ KVM acceleration support
 
-To run qemu using this image from the command should be:
+## Quick Start
 
+### Creating Your First VM
+
+```bash
+cd qemu
+./gen-vm
 ```
-./runqemu <path_to_bzImage>
+
+This creates an Ubuntu Noble VM named `qemu-minimal` with default settings.
+
+### Running the VM
+
+```bash
+./run-vm
 ```
 
-You can run
+### SSH into the VM
+
+```bash
+ssh -p 2222 ubuntu@localhost
+# Password: password (or use SSH key)
 ```
-./runqemu -h
+
+That's it! 🎉
+
+## Documentation
+
+- **[qemu/README.md](qemu/README.md)** - Comprehensive guide to gen-vm, run-vm,
+  and related scripts
+- **[MIGRATION.md](MIGRATION.md)** - Migration guide from legacy scripts
+- **[CLEANUP_PROPOSAL.md](CLEANUP_PROPOSAL.md)** - Repository cleanup details
+  and rationale
+
+## Modern Workflow
+
+### VM Generation with gen-vm
+
+The `qemu/gen-vm` script creates VMs using Ubuntu cloud images and cloud-init:
+
+```bash
+cd qemu
+
+# Basic VM
+./gen-vm
+
+# Custom configuration
+VM_NAME=dev VCPUS=4 VMEM=8192 SIZE=128 \
+  PACKAGES=../packages.d/packages-default ./gen-vm
+
+# Different architecture
+ARCH=arm64 ./gen-vm
+ARCH=riscv64 ./gen-vm
+
+# Different Ubuntu release
+RELEASE=jammy ./gen-vm
 ```
-to get the command line arguments supported.
 
-This script will automatically create a snapshot image so you can revert
-to the original image by deleting images/jessie.qcow2.
+### VM Execution with run-vm
 
-## New VM Creation
+The `qemu/run-vm` script runs VMs with flexible hardware configuration:
 
-There are a few methods for VM creation in this repo. They are all in
-various stages of repair.
+```bash
+# Basic execution
+./run-vm
 
-### ./qemu/gen-vm
+# With NVMe devices
+NVME=4 ./run-vm
 
-A QEMU-only (no libvirt) way to generate new VMs. Uses the Ubuntu
-cloud image ISO and a cloud-init script. Note there is an issue that
-the files for this cannot reside on a guest's VirtFS (i.e. running
-this script inside a VM to generate a nested VM won't work due to file
-permission issues). This may be better with virtio-fs.
+# With NVMe tracing
+NVME=4 NVME_TRACE=doorbell NVME_TRACE_FILE=/tmp/trace.log ./run-vm
 
-### ./libvirt/virt-install-ubuntu
+# With shared filesystem
+FILESYSTEM=/home/$USER/Projects ./run-vm
 
-A libvirt-based script that uses cloud images and cloud-init and
-virt-install. This seems to work quite well on bare-metal.
-
-### ./scripts/create
-
-The original and somewhat outdated method from Logan that starts with
-a base backing issue (based on Debian) and then uses deboostrap to
-setup the user and install some packages.
-
-## QEMU Executable
-
-This repo does not include the QEMU executable. You can specific a
-path to the exe you want to run using the -q option. This is useful if
-you are using a fork (or your own branch) of QEMU that has support for
-specific hardware (e.g. LightNVM SSDs). Some useful links include the
-[upstream](http://git.qemu-project.org/qemu.git) QEMU repo, Keith
-Busch's [NVMe](git://git.infradead.org/users/kbusch/qemu-nvme.git)
-repo and Matias Bjorling's
-[LightNVM](https://github.com/OpenChannelSSD/qemu-nvme) fork.
-
-Note you might want to track all three of these and install them all
-since certain things are only supported in certain forks. With luck,
-over time, support for all things will end up upstream ;-). A useful
-tool for multiple installs is the --prefix= option in the ./configure
-step of the QEMU install.
-
-Note that by default KVM support is turned on. Use the -k switch to
-turn this off (and suffer the wrath of slowness or if you are already
-running inside some form of a VM).
-
-## Image Features
-
-The runqemu script will automatically boot queitly and login as root
-giving a shell over stdio (which is managable but can have some rough
-edges). When the user logs out it will automatically powerdown the
-machine and exit qemu. An SSH login is also available, while running,
-forwarded to localhost port 3324. The root password is 'awhisten'.
-
-[Top Tip: When on the login console use "^c a" to switch to the qemu
-command line (and vice-versa).]
-
-When the NVMe option is chosen there is an nvme drive mounted on
-/mnt/nvme with the corresponding image in images/nvme.qcow2. This
-image just contains an ext4 partition with a single 4MB random test
-file. It is snapshotted so changes do not get saved run to run.
-
-A second NVMe drive exists at /dev/nvme1 but this is not mounted. This
-second drive has a Controller Memory Buffer (CMB) advertised on it.
-
-Note that since upstream has a different level of support for NVMe
-drive options than the other forks we use a -u option to handle that
-differently.
-
-The host's /home file is also passthrough mounted to the guests /home
-directory so test scripts, etc can be stored and run directly from the
-users home directory on the host. In order for this to work you will
-use to make sure that QEMU is configured with VirtFS enabled and that
-the kernel you are running has the relevant Plan9 support.
-
-QEMU's gdb feature is turned on so you may debug the kernel using
-gdb. Note that you run the first command below from a shell prompt and
-the second from within gdb. Note you should run these two command
-before or after invoking QEMU.
-
+# With PCIe device passthrough
+PCI_HOSTDEV=0000:03:00.0 ./run-vm
 ```
-(shell) gdb vmlinux
-(gdb)   target remote :1234
+
+See [qemu/README.md](qemu/README.md) for complete documentation.
+
+## NVMe Testing
+
+### Emulated NVMe Devices
+
+Create multiple NVMe SSDs for testing:
+
+```bash
+cd qemu
+VM_NAME=nvme-test ./gen-vm
+NVME=4 VM_NAME=nvme-test ./run-vm
 ```
-If you are trying to debug a kernel module you need to use the gdb
-add-symbol-file command. This command needs to point to the .ko and
-provide memory offsets for .bbs, .data and .text sections. For example
-something like this:
+
+In the VM:
+```bash
+sudo nvme list
+# Shows 4 NVMe devices
 ```
-(gdb) add-symbol-file <path to module> <text_addr> -s .data
-<data_addr> -s .bss <bss_addr>
 
+### NVMe Tracing
+
+Enable detailed tracing for debugging:
+
+```bash
+# Trace doorbell operations
+NVME=4 NVME_TRACE=doorbell ./run-vm
+
+# Trace to file for analysis
+NVME=4 NVME_TRACE=doorbell NVME_TRACE_FILE=/tmp/nvme.log ./run-vm
+
+# Trace all NVMe events
+NVME=4 NVME_TRACE=all ./run-vm
 ```
-Note you can get the addresses from the running kernel in
-/sys/modules/<module name>/sections directory and that the kernel has
-to be running before these addresses can be determined.
 
-## Scripts Folder
+### Hardware NVMe Passthrough
 
-There are a few scripts in the scripts sub-folder that can be used to
-re-generate the jessie-clean.qcow2 image. To regenerate this file or
-create a new base image use the following steps:
+Pass through real NVMe devices to the VM:
 
-   1. sudo modprobe nbd max_part=8 - this makes sure that Network
-   Block Device kernel module is loaded. We need this for step 2, 3
-   and 4.
+```bash
+# Find device
+lspci | grep NVMe
+# Example: 03:00.0 Non-Volatile memory controller
 
-   2. ./create <image name> - this creates the bare qcow2 image,
-   partitions the image and then uses deboostrap to setup the image as
-   a chroot with a basic Debian Jessie install.
+# Bind to vfio-pci
+cd qemu
+sudo HOST_ADDR=0000:03:00.0 ./vfio-setup
 
-   3. ./setup <image name> - this configures the Debian Jessie
-   install. Setups up networking, machine name and some other key
-   attributes. Note you can change the machine name and root password
-   by editing this script.
+# Pass to VM
+PCI_HOSTDEV=0000:03:00.0 ./run-vm
+```
 
-   4. ./shrink <image name> - This script shrinks the image file as
-   much as possible by doing zerofree and then running qemu-img
-   convert.
+## CXL Device Emulation
 
-   5. ./cross [NEW] - This script uses multistrap to build a rootfs
-   image for an ARCH that is different to the host machine
-   (e.g. building an ARM64 rootfs on x86_64). Refer to the header of
-   the script for more information. You will need some packages
-   installed in order to run this script and it has to be run as root
-   for the chroot command to work.
+Test CXL (Compute Express Link) devices:
 
-We are happy to consider PRs for other -clean images as long as they
-utilize the Large File Storage (LFS) feature or are pulled in via curl
-or wget.
+```bash
+cd qemu
+VM_NAME=cxl-test ./gen-vm
+VM_NAME=cxl-test ./run-vm-cxl-nvme
+```
 
-## Large File Storage
+This creates a VM with:
+- CXL bus topology
+- CXL-attached memory device
+- NVMe device on CXL fabric
 
-This repo utilizes git Large File Storage (lfs) in order to avoid
-having to host the large jessie-clean.qcow2 image inside the repo. See
-[here](https://git-lfs.github.com/) for more information.
+## Architecture Support
 
-## Simple Initramfs
+Create VMs for different architectures:
 
-The simple script in the scripts folder generates a really simple
-initramfs with a statically linked rootfs. Useful for really simple
-sanity testing. To build and run this simple initramfs do the
-following:
+```bash
+cd qemu
 
-  1. cd scripts
-  2. ./simple
-  3. cd ..
-  4. qemu-system-x86_64 -m 512 -kernel kernels/bzImage-4.8 -initrd
-  scripts/simple.cpio.gz -append "console=ttyS0" -serial mon:stdio
-  -nographic
+# ARM64 / AArch64
+ARCH=arm64 VM_NAME=arm-test ./gen-vm
+ARCH=arm64 VM_NAME=arm-test ./run-vm
 
-## Busybox Initramfs
+# RISC-V 64-bit
+ARCH=riscv64 VM_NAME=riscv-test ./gen-vm
+ARCH=riscv64 VM_NAME=riscv-test ./run-vm
 
-For a more intresting initramfs example you can run busybox. To do
-this perform the following steps.
+# x86_64 (default)
+ARCH=amd64 ./gen-vm
+```
 
-  1. Download the busybox source and build it to include all the tools
-  that you want. Make sure this is a statically linked executable.
-  2. cd scripts
-  3. ./busybox <path to busybox exe>
-  4. cd ..
-  5. emu-system-x86_64 -m 512 -kernel kernels/bzImage-4.8 -initrd
-  scripts/initramfs.cpio.gz -append "console=ttyS0" -serial mon:stdio
-  -nographic
+Architecture-specific notes:
+- **x86_64**: Full KVM support
+- **ARM64**: Requires UEFI firmware (qemu-efi-aarch64)
+- **RISC-V**: Requires U-Boot (u-boot-qemu)
 
-This should boot into busybox shell and you can execute your installed
-command from there. Enjoy! Note this will not then pass on to a
-subsequent root filesystem (yet).
+## Package Management
 
-## VirtFS
+Customize installed packages using manifest files:
 
-By default we map the /home folder on the host to the /home folder on
-the guest using Plan 9 folder sharing over VirtFS. However this
-assumes the host has the kernel support to do this. To disable this
-option use the -f switch (if you do this you might want to attach a
-image to replace the /home folder). Note you also need to make sure
-the QEMU executable you are using was compiled with VirtFS support
-enabled.
+```bash
+# Use default packages (development tools, fio, nvme-cli, etc.)
+PACKAGES=../packages.d/packages-default ./gen-vm
+
+# Use minimal packages
+PACKAGES=../packages.d/packages-minimal ./gen-vm
+
+# Create custom manifest
+cat > my-packages << EOF
+  - build-essential
+  - git
+  - fio
+  - nvme-cli
+EOF
+PACKAGES=my-packages ./gen-vm
+```
+
+Available manifests:
+- `packages.d/packages-default` - Full development environment
+- `packages.d/packages-minimal` - Minimal set of tools
+
+## VM Management
+
+### Resetting a VM
+
+VMs use a backing file approach for easy resets:
+
+```bash
+# Delete the overlay
+rm ../images/myvm.qcow2
+
+# Restore from backing file
+VM_NAME=myvm RESTORE_IMAGE=true ./gen-vm
+```
+
+The backing file preserves the clean, post-cloud-init state.
+
+### Multiple VMs
+
+Run multiple VMs simultaneously with different SSH ports:
+
+```bash
+# VM 1
+VM_NAME=vm1 SSH_PORT=2222 ./run-vm &
+
+# VM 2
+VM_NAME=vm2 SSH_PORT=2223 ./run-vm &
+
+# VM 3
+VM_NAME=vm3 SSH_PORT=2224 ./run-vm &
+```
+
+## Shared Filesystems
+
+Share host directories with guests using VirtFS:
+
+```bash
+# Run VM with shared filesystem
+FILESYSTEM=/home/$USER/Projects ./run-vm
+```
+
+In the guest, mount it:
+
+```bash
+# One-time mount
+sudo mkdir -p /mnt/hostfs
+sudo mount -t 9p -o trans=virtio,version=9p2000.L hostfs /mnt/hostfs
+
+# Persistent mount (add to /etc/fstab)
+echo "hostfs /mnt/hostfs 9p trans=virtio,version=9p2000.L,nofail 0 1" | sudo tee -a /etc/fstab
+```
 
 ## Kernel Debugging
 
-There are some good websites on how to do OS debug via QEMU. See for
-example:
+QEMU's GDB support is available for kernel debugging:
 
-http://stackoverflow.com/questions/11408041/how-to-debug-the-linux-kernel-with-gdb-and-qemu
+```bash
+# Add -s -S to QEMU args by modifying run-vm temporarily
+# Or use qemu-system-x86_64 directly with -s -S
 
-A good command to start gdb would be:
+# In another terminal
+gdb vmlinux
+(gdb) target remote :1234
+(gdb) break start_kernel
+(gdb) continue
+```
 
-gdb -ex 'target remote localhost:1234' -ex 'set architecture i386:x86-64:intel' \
-  -ex 'break <function>' -ex c ./vmlinux
+For kernel modules:
 
-Make sure you have CONFIG_DEBUG_INFO set in the .config when you build
-the quest kernel.
+```bash
+(gdb) add-symbol-file /path/to/module.ko <text_addr> \
+      -s .data <data_addr> -s .bss <bss_addr>
+```
 
-## NVMf with Soft RoCE
+Get addresses from `/sys/module/<module>/sections/` in the running kernel.
 
-Phew. After quite a bit of fun and games I can get a NVMf setup
-running using two QEMU guests. The kernel config files are checked in
-(v4.8-rc5 for now). There are two helper scripts in the scripts
-folders and the jessie image needs updating with some of the libs
-(including the librxe).
+## Continuous Integration
 
-For a few reasons it is easier to keep the rdma_rxe.ko module seperate
-to the kernel. Also you need the linux headers inside the VM root
-filesystem to compile librxe. You currently need to copy (or symlink)
-/usr/lib64/* to /usr/lib. You also have to setup VM to VM networking
-for which I (for now) used -netdev socket. QEMU perfers ntap but
-that's alot more work. The IPv4 addresses on the eth0 interfaces of
-the two VMs are statically configured using techniques discussed in
-http://csortu.blogspot.ca/2009/12/building-virtual-network-with-qemu.html.
+The repository includes GitHub Actions workflows:
 
-I started the nvmef target VM using the following command:
+- **smoke-test.yml** - Tests VM generation and execution for x86_64, ARM64, and
+  RISC-V
+- **spell-check.yml** - Validates documentation spelling
 
-./runqemu -v -m 2048 -t -i images/nvmf-target.qcow2 \
-  ./kernels/bzImage-4.8-nvmf-soft-roce
+The smoke tests verify:
+- VM generation with gen-vm
+- RESTORE_IMAGE mode
+- NVME_TRACE functionality
+- Multi-architecture support
 
-and the nvmef host VM using the following command:
+## libvirt Scripts
 
-./runqemu -v -m 2048 -s 3235 -n -i images/nvmf-host.qcow2 \
-  ./kernels/bzImage-4.8-nvmf-soft-roce
+The `libvirt/` directory contains scripts for libvirt-based VM management:
 
-I then logged into the target system and executed the nvmf-target
-script in the scripts folder using the target VMs assigned IP address
-as the input argument. On the host side I executed the nvmf-host
-script with the IP address of the target as the first argument.
+- `virt-install-ubuntu` - Create VMs using virt-install and cloud-init
+- `create-gcp-nested` - GCP nested virtualization setup
+- `create-nvme` - NVMe-specific libvirt configuration
+- `create-raid` - RAID configuration helpers
+- `virt-clone-many` - Batch VM cloning
 
-nvme discover worked.
-nvme connect worked.
+These are alternative approaches when libvirt management is preferred over
+direct QEMU.
 
-IO on the system caused some panics so need to investigate that. Note
-that the NVMf connection should be established between the eth1
-interfaces and not the eth0 interfaces.
+## Migrating from Legacy Scripts
 
-Note you need the rdma_rxe module installed on both target and host
-right now as there is an issue with monolithic kernels and rxe we need
-to root-cause.
+If you previously used the `runqemu` script or other legacy tools, see
+[MIGRATION.md](MIGRATION.md) for a comprehensive migration guide.
 
-## Ansible
+**Quick comparison:**
 
-Once you get a VM up and running you can use [Ansible][ref-ansible] to
-install a bunch more things into it. I have a rather nice project
-called [batesste-ansible][ref-bates] that you can use for this.
+| Task | Old Approach | New Approach |
+|------|-------------|--------------|
+| Create VM | `sudo scripts/create ...` | `./gen-vm` |
+| Configure VM | `sudo scripts/setup ...` | Automatic via cloud-init |
+| Run VM | `./runqemu -i ... -m ...` | `./run-vm` |
+| NVMe devices | Limited options | `NVME=4 ./run-vm` |
+| Architecture | Different scripts | `ARCH=arm64 ./gen-vm` |
 
-[ref-ansible]: https://www.ansible.com/
-[ref-bates]: https://github.com/sbates130272/batesste-ansible
+## Repository Structure
+
+```
+qemu-minimal/
+├── qemu/                   # Main scripts
+│   ├── gen-vm             # VM generation
+│   ├── run-vm             # VM execution
+│   ├── run-vm-cxl-nvme    # CXL emulation
+│   ├── vfio-setup         # PCIe passthrough setup
+│   └── README.md          # Detailed documentation
+├── libvirt/               # libvirt-based tools
+├── packages.d/            # Package manifests
+├── kernels/               # Kernel configs
+├── images/                # VM images (gitignored)
+├── .github/workflows/     # CI configuration
+├── README.md              # This file
+├── MIGRATION.md           # Migration guide
+└── CLEANUP_PROPOSAL.md    # Cleanup documentation
+```
+
+## Requirements
+
+### Host System
+
+**Minimum:**
+- Linux system (Ubuntu, Debian, Fedora, etc.)
+- QEMU installed (`qemu-system-x86`, `qemu-system-arm`, `qemu-system-misc`)
+- `cloud-image-utils` (for cloud-localds)
+- SSH client
+
+**For optimal experience:**
+- KVM support (bare metal or nested virtualization)
+- 16GB+ RAM
+- 50GB+ disk space for VM images
+
+**For specific features:**
+- **ARM64 VMs**: `qemu-efi-aarch64` package
+- **RISC-V VMs**: `u-boot-qemu` package
+- **PCIe passthrough**: IOMMU enabled, `driverctl` installed
+- **Shared filesystems**: VirtFS support in QEMU and guest kernel
+
+### Installation
+
+On Ubuntu/Debian:
+
+```bash
+# Basic requirements
+sudo apt update
+sudo apt install qemu-system-x86 qemu-system-arm qemu-system-misc \
+                 qemu-utils cloud-image-utils
+
+# For ARM64 VMs
+sudo apt install qemu-efi-aarch64
+
+# For RISC-V VMs
+sudo apt install u-boot-qemu
+
+# For PCIe passthrough
+sudo apt install driverctl
+```
+
+## Contributing
+
+Contributions welcome! Areas of interest:
+
+- Additional architecture support
+- More package manifests
+- CI enhancements
+- Documentation improvements
+- Bug fixes
+
+Please ensure:
+- Scripts pass shellcheck
+- Documentation is updated
+- CI tests pass
+
+## License
+
+This repository is for educational and testing purposes. Please check individual
+component licenses (QEMU, Ubuntu, etc.) for your use case.
+
+## History
+
+This repository evolved from a Debian Jessie-based manual VM creation
+environment to the current Ubuntu cloud-init based approach. The legacy scripts
+have been archived but remain in git history for reference.
+
+## Related Projects
+
+- [QEMU](https://www.qemu.org/) - The emulator this project wraps
+- [cloud-init](https://cloud-init.io/) - Cloud instance initialization
+- [Ubuntu Cloud Images](https://cloud-images.ubuntu.com/) - Base images used by
+  gen-vm
+
+## Acknowledgments
+
+- Original creation by Logan and contributors
+- Continued development by Stephen Bates and community
+- Built on top of QEMU, cloud-init, and Ubuntu projects
+
+---
+
+**Getting Started:** Read [qemu/README.md](qemu/README.md) for detailed usage
+instructions.
+
+**Need Help?** Check [MIGRATION.md](MIGRATION.md) if migrating from old scripts,
+or file an issue on GitHub.

@@ -253,7 +253,7 @@ elif [ ${ARCH} == "riscv64" ]; then
     QARCH="riscv64"
     QARCH_ARGS="-machine virt,${KVM} -kernel /usr/lib/u-boot/qemu-riscv64_smode/uboot.elf"
 else
-    echo "Error: No ARCH mapping exists for ${ARCH}! Exiting."; exit -1
+    echo "Error: No ARCH mapping exists for ${ARCH}! Exiting."; exit 1
 fi
 
 ${QEMU_PATH}qemu-system-${QARCH} \
