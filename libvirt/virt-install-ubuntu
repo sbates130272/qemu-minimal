@@ -125,7 +125,7 @@ else
        OSINFO="ubuntunoble"
     else
 	echo "RELEASE ${RELEASE} is not supported yet!"
-	exit -1
+	exit 1
     fi
 fi
 

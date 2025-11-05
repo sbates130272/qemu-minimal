@@ -66,14 +66,14 @@ fi
 if [ $CREATE == "yes" ]; then
     if [ ! -d $DIR ]; then
 	echo "$DIR does not exist!"
-	exit -1
+	exit 1
     fi
     echo "Creating qcow2 image files for NVMe..."
     i=0
     while [ $i -lt $NUM ]; do
 	if [ -f ${DIR}/${PREFIX}nvme${i}.qcow2 ]; then
 	    echo "${DIR}/${PREFIX}nvme${i}.qcow2 already exists!"
-	    exit -1
+	    exit 1
 	fi
 	qemu-img create -f qcow2 ${DIR}/${PREFIX}nvme${i}.qcow2 ${SIZE} > /dev/null
 	((i++))
