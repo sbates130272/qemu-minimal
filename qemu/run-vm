@@ -206,13 +206,24 @@ else
 fi
 
 if [ ${VFIO_USERDEV} == "none" ]; then
-    VFIO_USERDEV_ARGS=""
+    VFIO_USERDEV_ARGS=()
 else
     QEMU_VFIO_USER_VERSION="10.1.1"
     QEMU_VERSION=$(get_qemu_version)
     if ! version_at_least "${QEMU_VERSION}" "${QEMU_VFIO_USER_VERSION}"; then
         echo "ERROR: QEMU version ${QEMU_VERSION} is too old for libvfio-user support (${QEMU_VFIO_USER_VERSION})."
         exit 1
+    fi
+    
+    # When using vfio-user, we need ALL guest RAM to be shareable via memfd
+    # Override FILESYSTEM_ARGS to use the full VMEM size
+    if [ ${FILESYSTEM} != "none" ]; then
+        FILESYSTEM_ARGS="-object memory-backend-memfd,id=mem,size=${VMEM}M,share=on -numa node,memdev=mem -virtfs local,path=${FILESYSTEM},security_model=passthrough,mount_tag=hostfs "
+        echo "VFIO_USERDEV active: Using memory-backend-memfd with size=${VMEM}M (share=on)"
+    else
+        # Even without filesystem, vfio-user needs shareable memory
+        FILESYSTEM_ARGS="-object memory-backend-memfd,id=mem,size=${VMEM}M,share=on -numa node,memdev=mem "
+        echo "VFIO_USERDEV active: Using memory-backend-memfd with size=${VMEM}M (share=on, no filesystem)"
     fi
 
     for THIS_VFIO_USERDEV in ${VFIO_USERDEV//,/ }; do
