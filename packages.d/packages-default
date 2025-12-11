@@ -14,6 +14,7 @@
   - gpg-agent
   - libaio-dev
   - liburing-dev
+  - linux-generic
   - nvme-cli
   - moreutils
   - pahole
