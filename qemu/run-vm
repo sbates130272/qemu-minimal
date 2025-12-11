@@ -40,6 +40,12 @@
 #   - Custom trace event name (e.g., "pci_nvme_read")
 # Use NVME_TRACE_FILE to redirect trace output to a file instead of
 # stderr.
+#
+# Post 10.1.0 versions of QEMU have libvfio-user support which allows
+# us to create emulated PCIe devices via a socket and the API provided
+# by that library. You can specify these device(s) via a
+# comma-sperated list of sockets in VFIO_USERDEV. We check the QEMU
+# version is new enough and that the sockets exist.
 
 QEMU_PATH=${QEMU_PATH:-}
 VM_NAME=${VM_NAME:-qemu-minimal}
@@ -55,6 +61,7 @@ NVME_TRACE=${NVME_TRACE:-none}
 NVME_TRACE_FILE=${NVME_TRACE_FILE:-}
 PCI_TESTDEV=${PCI_TESTDEV:-none}
 PCI_HOSTDEV=${PCI_HOSTDEV:-none}
+VFIO_USERDEV=${VFIO_USERDEV:-none}
 
 NVME_SIZE=1024G
 
@@ -129,6 +136,23 @@ fi
 # Create PCIe root ports for NVMe devices to enable proper PCIe topology
 # and atomic operation support
 PCIE_ROOT_PORTS=""
+
+  # Get the QEMU version from the installed binary
+function get_qemu_version () {
+    ${QEMU_PATH}qemu-system-${QARCH} --version | grep -oP '\d+\.\d+\.\d+' | head -n 1
+}
+
+  # Check if installed version meets the minimum required version
+function version_at_least () {
+    local installed_version="$1"
+    local required_version="$2"
+
+    if [ "$(printf '%s\n' "${installed_version}" "${required_version}" | sort -V | tail -1)" != "${installed_version}" ]; then
+        return 1
+    fi
+    return 0
+}
+
 if [ ${NVME} == "none" ]; then
     NVME_ARGS=""
 elif [ ${NVME} == "true" ]; then
@@ -167,7 +191,7 @@ else
     else
         HOST_PORT_START=1
     fi
-    
+
     HOST_PORT_NUM=${HOST_PORT_START}
     for THIS_PCI_HOSTDEV in ${PCI_HOSTDEV//,/ }; do
         pci_check ${THIS_PCI_HOSTDEV}
@@ -178,6 +202,38 @@ else
         PCI_HOSTDEV_ARGS+="-device vfio-pci,host=${THIS_PCI_HOSTDEV},"
         PCI_HOSTDEV_ARGS+="bus=rp_host${HOST_PORT_NUM} "
         HOST_PORT_NUM=$((HOST_PORT_NUM + 1))
+    done
+fi
+
+if [ ${VFIO_USERDEV} == "none" ]; then
+    VFIO_USERDEV_ARGS=()
+else
+    QEMU_VFIO_USER_VERSION="10.1.1"
+    QEMU_VERSION=$(get_qemu_version)
+    if ! version_at_least "${QEMU_VERSION}" "${QEMU_VFIO_USER_VERSION}"; then
+        echo "ERROR: QEMU version ${QEMU_VERSION} is too old for libvfio-user support (${QEMU_VFIO_USER_VERSION})."
+        exit 1
+    fi
+    
+    # When using vfio-user, we need ALL guest RAM to be shareable via memfd
+    # Override FILESYSTEM_ARGS to use the full VMEM size
+    if [ ${FILESYSTEM} != "none" ]; then
+        FILESYSTEM_ARGS="-object memory-backend-memfd,id=mem,size=${VMEM}M,share=on -numa node,memdev=mem -virtfs local,path=${FILESYSTEM},security_model=passthrough,mount_tag=hostfs "
+        echo "VFIO_USERDEV active: Using memory-backend-memfd with size=${VMEM}M (share=on)"
+    else
+        # Even without filesystem, vfio-user needs shareable memory
+        FILESYSTEM_ARGS="-object memory-backend-memfd,id=mem,size=${VMEM}M,share=on -numa node,memdev=mem "
+        echo "VFIO_USERDEV active: Using memory-backend-memfd with size=${VMEM}M (share=on, no filesystem)"
+    fi
+
+    for THIS_VFIO_USERDEV in ${VFIO_USERDEV//,/ }; do
+        if [ ! -S ${THIS_VFIO_USERDEV} ]; then
+            echo "ERROR: Socket ${THIS_VFIO_USERDEV} does not exist."
+            exit 1
+        fi
+        DEV_JSON=$(printf '{"driver":"vfio-user-pci","socket":{"path":"%s","type":"unix"}}' "${THIS_VFIO_USERDEV}")
+        VFIO_USERDEV_ARGS+=( -device "${DEV_JSON}" )
+
     done
 fi
 
@@ -192,6 +248,7 @@ ${QEMU_PATH}qemu-system-${QARCH} \
    ${NVME_ARGS} \
    ${PCI_TESTDEV_ARGS} \
    ${PCI_HOSTDEV_ARGS} \
+   "${VFIO_USERDEV_ARGS[@]}" \
    -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}.qcow2 \
    -netdev user,id=net0,hostfwd=tcp::${SSH_PORT}-:22 \
    -device virtio-net-pci,netdev=net0
