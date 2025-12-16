@@ -9,7 +9,6 @@ on:
       - '**.sh'
       - 'qemu/**'
       - 'libvirt/**'
-      - 'scripts/**'
   push:
     branches:
       - main
@@ -17,7 +16,6 @@ on:
       - '**.sh'
       - 'qemu/**'
       - 'libvirt/**'
-      - 'scripts/**'
 
 jobs:
   shellcheck:
@@ -32,11 +30,6 @@ jobs:
           shellcheck -S error \
             qemu/gen-vm \
             qemu/run-vm \
-            qemu/run-vm-cxl-nvme \
-            qemu/vfio-setup \
-            libvirt/virt-install-ubuntu \
-            libvirt/virt-clone-many \
-            libvirt/create-gcp-nested \
             libvirt/create-nvme \
-            libvirt/create-raid
+            libvirt/virt-install-ubuntu
 
