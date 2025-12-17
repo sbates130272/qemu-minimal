@@ -67,7 +67,9 @@ fi
 if [ ${FILESYSTEM} == "none" ]; then
     FILESYSTEM_ARGS=""
 else
-    FILESYSTEM_ARGS="-object memory-backend-memfd,id=mem,size=2G -virtfs local,path=${FILESYSTEM},security_model=passthrough,mount_tag=hostfs "
+    FILESYSTEM_ARGS="-object memory-backend-memfd,id=mem,size=2G -virtfs "
+    FILESYSTEM_ARGS+="local,path=${FILESYSTEM},security_model=passthrough,"
+    FILESYSTEM_ARGS+="mount_tag=hostfs "
 fi
 
 if [ ${ARCH} == "amd64" ]; then
@@ -75,10 +77,12 @@ if [ ${ARCH} == "amd64" ]; then
     QARCH_ARGS="-machine q35${KVM} -cpu EPYC"
 elif [ ${ARCH} == "arm64" ]; then
     QARCH="aarch64"
-    QARCH_ARGS="-machine virt,gic-version=max${KVM} -cpu max -bios /usr/share/qemu-efi-aarch64/QEMU_EFI.fd"
+    QARCH_ARGS="-machine virt,gic-version=max${KVM} -cpu max -bios "
+    QARCH_ARGS+="/usr/share/qemu-efi-aarch64/QEMU_EFI.fd"
 elif [ ${ARCH} == "riscv64" ]; then
     QARCH="riscv64"
-    QARCH_ARGS="-machine virt,${KVM} -kernel /usr/lib/u-boot/qemu-riscv64_smode/uboot.elf"
+    QARCH_ARGS="-machine virt,${KVM} -kernel "
+    QARCH_ARGS+="/usr/lib/u-boot/qemu-riscv64_smode/uboot.elf"
 else
     echo "Error: No ARCH mapping exists for ${ARCH}! Exiting."; exit 1
 fi
@@ -87,9 +91,8 @@ function nvme_create {
     if [ ! -f ${IMAGES}/${1}.qcow2 ]; then
         qemu-img create -f qcow2 ${IMAGES}/${1}.qcow2 $2 >> /dev/null
     fi
-    local port_id="rp_nvme${3}"
     echo "-drive file=${IMAGES}/${1}.qcow2,format=qcow2,if=none,id=nvme-${3} "\
-         "-device nvme,serial=${1},drive=nvme-${3},bus=${port_id} "
+         "-device nvme,serial=${1},drive=nvme-${3} "
 }
 
   # Check that the user has provided valid PCIe bus addresses and also check
@@ -126,23 +129,14 @@ if [ ${NVME_TRACE} != "none" ]; then
     fi
 fi
 
-# Create PCIe root ports for NVMe devices to enable proper PCIe topology
-# and atomic operation support
-PCIE_ROOT_PORTS=""
 if [ ${NVME} == "none" ]; then
     NVME_ARGS=""
 elif [ ${NVME} == "true" ]; then
-    PCIE_ROOT_PORTS+="-device pcie-root-port,id=rp_nvme1,"
-    PCIE_ROOT_PORTS+="chassis=1,slot=1 "
     NVME_ARGS=$(echo "-drive file=/dev/nullb0,format=raw,if=none,id=nvme-1 "\
-                     "-device nvme,serial=${VM_NAME}-nvme1,drive=nvme-1,"\
-                     "bus=rp_nvme1 ")
+                     "-device nvme,serial=${VM_NAME}-nvme1,drive=nvme-1,")
 elif [[ ${NVME} =~ ^[0-9]+$ ]]; then
     NVME_ARGS=""
     for i in $(seq 1 ${NVME}); do
-        # Create a PCIe root port for each NVMe device
-        PCIE_ROOT_PORTS+="-device pcie-root-port,id=rp_nvme${i},"
-        PCIE_ROOT_PORTS+="chassis=${i},slot=${i} "
         NVME_NAME=${VM_NAME}-nvme${i}
         NVME_ARGS+=$(nvme_create ${NVME_NAME} ${NVME_SIZE} ${i})
     done
@@ -159,25 +153,9 @@ fi
 if [ ${PCI_HOSTDEV} == "none" ]; then
     PCI_HOSTDEV_ARGS=""
 else
-    # Calculate starting chassis/slot for host devices (after NVMe devices)
-    if [[ ${NVME} =~ ^[0-9]+$ ]]; then
-        HOST_PORT_START=$((${NVME} + 1))
-    elif [ ${NVME} == "true" ]; then
-        HOST_PORT_START=2
-    else
-        HOST_PORT_START=1
-    fi
-    
-    HOST_PORT_NUM=${HOST_PORT_START}
     for THIS_PCI_HOSTDEV in ${PCI_HOSTDEV//,/ }; do
         pci_check ${THIS_PCI_HOSTDEV}
-        # Create PCIe root port for host device
-        PCIE_ROOT_PORTS+="-device pcie-root-port,id=rp_host${HOST_PORT_NUM},"
-        PCIE_ROOT_PORTS+="chassis=${HOST_PORT_NUM},slot=${HOST_PORT_NUM} "
-        # Attach vfio-pci device to the root port
-        PCI_HOSTDEV_ARGS+="-device vfio-pci,host=${THIS_PCI_HOSTDEV},"
-        PCI_HOSTDEV_ARGS+="bus=rp_host${HOST_PORT_NUM} "
-        HOST_PORT_NUM=$((HOST_PORT_NUM + 1))
+         PCI_HOSTDEV_ARGS+="-device vfio-pci,host=${THIS_PCI_HOSTDEV} "
     done
 fi
 
