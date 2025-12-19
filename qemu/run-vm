@@ -43,9 +43,8 @@
 #
 # Post 10.1.0 versions of QEMU have libvfio-user support which allows
 # us to create emulated PCIe devices via a socket and the API provided
-# by that library. You can specify these device(s) via a comma-sperated 
-# list of sockets in VFIO_USERDEV. We check the QEMU version is new 
-# enough and that the sockets exist.
+# by that library. You can specify these device(s) via a comma-sperated
+# list of sockets in VFIO_USERDEV.
 
 QEMU_PATH=${QEMU_PATH:-}
 VM_NAME=${VM_NAME:-qemu-minimal}
@@ -100,7 +99,7 @@ function nvme_create {
         qemu-img create -f qcow2 ${IMAGES}/${1}.qcow2 $2 >> /dev/null
     fi
     echo "-drive file=${IMAGES}/${1}.qcow2,format=qcow2,if=none,id=nvme-${3} "\
-         "-device nvme,serial=${1},drive=nvme-${3} "
+         "-device nvme,serial=${1},drive=nvme-${3},ioeventfd=off,dbcs=off "
 }
 
   # Check that the user has provided valid PCIe bus addresses and also check
@@ -170,13 +169,6 @@ fi
 if [ ${VFIO_USERDEV} == "none" ]; then
     VFIO_USERDEV_ARGS=()
 else
-    QEMU_VERSION=$(get_qemu_version)
-    if ! version_at_least "${QEMU_VERSION}" "${QEMU_VFIO_USER_VERSION}"; then
-        echo "ERROR: QEMU version ${QEMU_VERSION} is too old for libvfio-user "\
-        "support (${QEMU_VFIO_USER_VERSION})."
-        exit 1
-    fi
-    
     # When using vfio-user, we need ALL guest RAM to be shareable via a memfd
     VFIO_USERDEV_ARGS+=( -object memory-backend-memfd,id=mem-vfio-user,size=${VMEM},share=on  )
     VFIO_USERDEV_ARGS+=( -numa node,memdev=mem-vfio-user )
@@ -191,6 +183,16 @@ else
     done
 fi
 
+if [ ${PCI_MMIO_BRIDGE} == "none" ]; then
+    PCI_MMIO_BRIDGE_ARGS=""
+else
+    echo "WARNING: PCI_MMIO_BRIDGE: Make sure emulated NVMe devices have ioeventfd=off,dbcs=off!"
+    PCI_MMIO_BRIDGE_ARGS="-device pci-mmio-bridge,id=mmio-bridge,"
+    PCI_MMIO_BRIDGE_ARGS+="shadow-gpa=0x80000000,shadow-size=8192,"
+    PCI_MMIO_BRIDGE_ARGS+="poll-interval-ns=1000000,addr=8.0"
+    PCI_MMIO_BRIDGE_ARGS+=" -trace pci_mmio_*"
+fi
+
 ${QEMU_PATH}qemu-system-${QARCH} \
    ${QARCH_ARGS} \
    ${TRACE_ARGS} \
@@ -202,6 +204,7 @@ ${QEMU_PATH}qemu-system-${QARCH} \
    ${NVME_ARGS} \
    ${PCI_TESTDEV_ARGS} \
    ${PCI_HOSTDEV_ARGS} \
+   ${PCI_MMIO_BRIDGE_ARGS} \
    "${VFIO_USERDEV_ARGS[@]}" \
    -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}.qcow2 \
    -netdev user,id=net0,hostfwd=tcp::${SSH_PORT}-:22 \
