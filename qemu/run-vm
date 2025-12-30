@@ -45,12 +45,16 @@
 # us to create emulated PCIe devices via a socket and the API provided
 # by that library. You can specify these device(s) via a comma-sperated
 # list of sockets in VFIO_USERDEV.
+#
+# Set PCI_MMIO_BRIDGE to true to enable the out-of-tree
+# PCI_MMIO_BRIDGE. Note this needs NVMe shadow doorbells to be
+# disabled in the emulated NVMe devices.
 
 QEMU_PATH=${QEMU_PATH:-}
 VM_NAME=${VM_NAME:-qemu-minimal}
 ARCH=${ARCH:-amd64}
 VCPUS=${VCPUS:-2}
-VMEM=${VMEM:-4096}
+VMEM=${VMEM:-4096M}
 FILESYSTEM=${FILESYSTEM:-none}
 IMAGES=${IMAGES:-../images}
 SSH_PORT=${SSH_PORT:-2222}
@@ -61,9 +65,9 @@ NVME_TRACE_FILE=${NVME_TRACE_FILE:-}
 PCI_TESTDEV=${PCI_TESTDEV:-none}
 PCI_HOSTDEV=${PCI_HOSTDEV:-none}
 VFIO_USERDEV=${VFIO_USERDEV:-none}
+PCI_MMIO_BRIDGE=${PCI_MMIO_BRIDGE:-none}
 
 NVME_SIZE=1024G
-QEMU_VFIO_USER_VERSION="10.1.1"
 
 if [ ${KVM} == "enable" ]; then
     KVM=",accel=kvm"
