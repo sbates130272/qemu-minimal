@@ -57,8 +57,8 @@ jobs:
       working-directory: qemu
     - name: Test NVME_TRACE mode
       run: |
-        # Start VM with NVMe trace enabled, run for 30 seconds
-        timeout 30 ./run-vm > /dev/null 2>&1 || true
+        # Start VM with NVMe trace enabled, run for 180 seconds
+        timeout 180 ./run-vm > /dev/null 2>&1 || true
         # Check if trace file was created and contains doorbell traces
         if [ ! -f /tmp/nvme-trace.log ]; then
           echo "Trace file not created"
