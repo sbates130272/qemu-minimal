@@ -1,0 +1,14 @@
+#!/bin/bash
+
+BRIDGE=${BRIDGE:-vibr0}
+IFACE=${IFACE:-eth0}
+
+ip link add name ${BRIDGE} type bridge
+ip link set dev ${BRIDGE} up
+
+ip addr flush dev ${IFACE}
+ip link set dev ${IFACE} master ${BRIDGE}
+
+ip address add 10.0.0.77/24 dev ${BRIDGE}
+ip route replace default via 10.0.0.1 dev ${BRIDGE} proto kernel metric 30
+ip route replace 10.0.0.0/24 dev ${BRIDGE} proto kernel metric 286
