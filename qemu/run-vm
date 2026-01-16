@@ -32,7 +32,9 @@
 # Note you can pass in multiple PCIe devices from the host using
 # PCI_HOSTDEV where it is equal to the host PCI bus addresses separated
 # by commas. The devices must be unbound from their native host driver
-# and assigned to vfio-pci.
+# and assigned to vfio-pci. Note that in order to ensure PCIe atomics are 
+# supported inside the VM we put each HOST_DEV device below a pci-root-port
+# device.
 #
 # NVME_TRACE enables tracing of NVMe device operations. Options are:
 #   - "doorbell": Trace submission/completion queue doorbell writes
@@ -160,9 +162,12 @@ fi
 if [ ${PCI_HOSTDEV} == "none" ]; then
     PCI_HOSTDEV_ARGS=""
 else
+    i=0
     for THIS_PCI_HOSTDEV in ${PCI_HOSTDEV//,/ }; do
+        ((i++))
         pci_check ${THIS_PCI_HOSTDEV}
-         PCI_HOSTDEV_ARGS+="-device vfio-pci,host=${THIS_PCI_HOSTDEV} "
+        PCI_HOSTDEV_ARGS+="-device pcie-root-port,id=pcie.${i} "
+        PCI_HOSTDEV_ARGS+="-device vfio-pci,bus=pcie.${i},host=${THIS_PCI_HOSTDEV} "
     done
 fi
 
