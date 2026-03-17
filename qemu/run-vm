@@ -17,17 +17,24 @@
 #
 # hostfs /home/batesste/Projects 9p trans=virtio,version=9p2000.L,nofail 0 1
 #
-# Change NVME in order to add emulated NVMe SSD(s) to the VM. There
-# are three modes for this:
-#   1. If you specify an unsigned number the script checks to see if
-#      image file(s) exist and then creates that many emulated NVMe
-#      SSDs with pretty reasonable arguments.
-#   2. If you specify a string then we use this literally as the
-#      argument  string given at the command line or I
-#   3. If you specify "true" we implement a simple null_blk backed
-#      NVMe drive. You can insert a null_blk device into the kernel of
-#      the host using a command like:
-#        sudo modprobe null_blk queue_mode=2 gb=1024
+# Change NVME in order to add emulated NVMe SSD(s) to the VM.
+# There are three modes for this:
+#   1. If you specify an unsigned number the script checks to
+#      see if image file(s) exist and then creates that many
+#      emulated NVMe SSDs. The drives use io_uring AIO with
+#      direct I/O (cache.direct=on) to bypass the host page
+#      cache, discard=unmap to propagate TRIM, and
+#      detect-zeroes=unmap to sparsify zero writes. ioeventfd
+#      is enabled unless PCI_MMIO_BRIDGE is active (ioeventfd
+#      must be off for the MMIO bridge to intercept doorbells).
+#   2. If you specify a string then we use this literally as
+#      the argument string given at the command line.
+#   3. If you specify a negative number we implement a simple
+#      null_blk backed NVMe drive. You can insert N null_blk
+#      devices into the kernel of the host using a command
+#      like:
+#        sudo modprobe null_blk nr_devices=8 \
+#          queue_mode=2 gb=1024
 #
 # Note you can pass in multiple PCIe devices from the host using
 # PCI_HOSTDEV where it is equal to the host PCI bus addresses separated
@@ -47,6 +54,13 @@
 # us to create emulated PCIe devices via a socket and the API provided
 # by that library. You can specify these device(s) via a comma-sperated
 # list of sockets in VFIO_USERDEV.
+#
+# DATA_NIC_QUEUES adds a second multi-queue virtio-net NIC backed
+# by a TAP device (named dt<SSH_PORT>, e.g. dt2231).  This is
+# useful when a guest application (e.g. Weka DPDK) needs to take
+# over a NIC without disrupting the management/SSH NIC.  Set to
+# the number of queues required (e.g. 6 for six Weka containers).
+# Requires sudo for TAP creation; the device is torn down on exit.
 
 QEMU_PATH=${QEMU_PATH:-}
 VM_NAME=${VM_NAME:-qemu-minimal}
@@ -66,6 +80,7 @@ VFIO_USERDEV=${VFIO_USERDEV:-none}
 NVME_SIZE=1024G
 QEMU_VFIO_USER_VERSION="10.1.1"
 PCI_MMIO_BRIDGE=${PCI_MMIO_BRIDGE:-none}
+DATA_NIC_QUEUES=${DATA_NIC_QUEUES:-0}
 
 if [ ${KVM} == "enable" ]; then
     KVM=",accel=kvm"
@@ -98,10 +113,21 @@ fi
 
 function nvme_create {
     if [ ! -f ${IMAGES}/${1}.qcow2 ]; then
-        qemu-img create -f qcow2 ${IMAGES}/${1}.qcow2 $2 >> /dev/null
+        qemu-img create -f qcow2 \
+            ${IMAGES}/${1}.qcow2 $2 >> /dev/null
     fi
-    echo "-drive file=${IMAGES}/${1}.qcow2,format=qcow2,if=none,id=nvme-${3} "\
-         "-device nvme,serial=${1},drive=nvme-${3},ioeventfd=off,dbcs=off "
+    local ioeventfd="on"
+    if [ "${PCI_MMIO_BRIDGE}" != "none" ]; then
+        ioeventfd="off"
+    fi
+    local drv="-drive file=${IMAGES}/${1}.qcow2"
+    drv+=",format=qcow2,if=none,id=nvme-${3}"
+    drv+=",aio=io_uring,cache.direct=on"
+    drv+=",discard=unmap,detect-zeroes=unmap"
+    local dev="-device nvme,serial=${1}"
+    dev+=",drive=nvme-${3}"
+    dev+=",ioeventfd=${ioeventfd},dbcs=off"
+    echo "${drv} ${dev} "
 }
 
   # Check that the user has provided valid PCIe bus addresses and also check
@@ -140,14 +166,21 @@ fi
 
 if [ ${NVME} == "none" ]; then
     NVME_ARGS=""
-elif [ ${NVME} == "true" ]; then
-    NVME_ARGS=$(echo "-drive file=/dev/nullb0,format=raw,if=none,id=nvme-1 "\
-                     "-device nvme,serial=${VM_NAME}-nvme1,drive=nvme-1,")
 elif [[ ${NVME} =~ ^[0-9]+$ ]]; then
     NVME_ARGS=""
     for i in $(seq 1 ${NVME}); do
         NVME_NAME=${VM_NAME}-nvme${i}
         NVME_ARGS+=$(nvme_create ${NVME_NAME} ${NVME_SIZE} ${i})
+    done
+elif [[ ${NVME} =~ ^-[0-9]+$ ]]; then
+    NVME_ARGS=""
+    for i in $(seq 0 $(( -(${NVME}) - 1 ))); do
+        NVME_NAME=${VM_NAME}-nvme${i}
+        NVME_ARGS+=$(echo \
+            "-drive file=/dev/nullb${i},format=raw"\
+",if=none,id=nvme-${i} "\
+            "-device nvme,serial=${NVME_NAME}"\
+",drive=nvme-${i}")
     done
 else
     NVME_ARGS=${NVME}
@@ -191,11 +224,33 @@ fi
 if [ ${PCI_MMIO_BRIDGE} == "none" ]; then
     PCI_MMIO_BRIDGE_ARGS=""
 else
-    echo "WARNING: PCI_MMIO_BRIDGE: Make sure emulated NVMe devices have ioeventfd=off,dbcs=off!"
+    echo "NOTE: PCI_MMIO_BRIDGE active; nvme_create forces ioeventfd=off,dbcs=off."
     PCI_MMIO_BRIDGE_ARGS="-device pci-mmio-bridge,id=mmio-bridge,"
     PCI_MMIO_BRIDGE_ARGS+="shadow-gpa=0x80000000,shadow-size=8192,"
     PCI_MMIO_BRIDGE_ARGS+="poll-interval-ns=1000000,addr=8.0"
     PCI_MMIO_BRIDGE_ARGS+=" -trace pci_mmio_*"
+fi
+
+DATA_NIC_ARGS=""
+if [ "${DATA_NIC_QUEUES}" -gt 0 ] 2>/dev/null; then
+    DATA_TAP="dt${SSH_PORT}"
+    if ! ip link show "${DATA_TAP}" &>/dev/null; then
+        sudo ip tuntap add dev "${DATA_TAP}" \
+            mode tap multi_queue \
+            user "$(whoami)"
+        sudo ip link set "${DATA_TAP}" up
+    fi
+    trap "sudo ip tuntap del dev ${DATA_TAP} mode tap 2>/dev/null" EXIT
+    VECTORS=$(( 2 * DATA_NIC_QUEUES + 2 ))
+    DATA_NIC_ARGS="-netdev tap,id=data0"
+    DATA_NIC_ARGS+=",ifname=${DATA_TAP}"
+    DATA_NIC_ARGS+=",queues=${DATA_NIC_QUEUES}"
+    DATA_NIC_ARGS+=",vhost=on"
+    DATA_NIC_ARGS+=",script=no,downscript=no"
+    DATA_NIC_ARGS+=" -device virtio-net-pci"
+    DATA_NIC_ARGS+=",netdev=data0"
+    DATA_NIC_ARGS+=",mq=on"
+    DATA_NIC_ARGS+=",vectors=${VECTORS}"
 fi
 
 ${QEMU_PATH}qemu-system-${QARCH} \
@@ -213,4 +268,5 @@ ${QEMU_PATH}qemu-system-${QARCH} \
    "${VFIO_USERDEV_ARGS[@]}" \
    -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}.qcow2 \
    -netdev user,id=net0,hostfwd=tcp::${SSH_PORT}-:22 \
-   -device virtio-net-pci,netdev=net0
+   -device virtio-net-pci,netdev=net0 \
+   ${DATA_NIC_ARGS}
