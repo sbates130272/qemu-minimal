@@ -7,6 +7,7 @@ on:
       - main
     paths:
     - 'qemu/*-vm'
+    - '.github/workflows/smoke-test.yml'
 
 jobs:
 
@@ -99,6 +100,98 @@ jobs:
         ssh -o NoHostAuthenticationForLocalhost=yes \
           -v -p 2222 ubuntu@localhost ls -ltrh
 
+  smoke-test-x86-nullblk:
+    name: smoke-test-x86-nullblk
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4.2.2
+    - name: Install packages (cached)
+      uses: awalsh128/cache-apt-pkgs-action@v1
+      with:
+        packages: >-
+          qemu-system-x86 qemu-utils cloud-image-utils
+    - name: Generate SSH key-pair
+      run: >-
+        ssh-keygen -t rsa -q
+        -f "$HOME/.ssh/id_rsa" -N ""
+    - name: Cache cloud image
+      uses: actions/cache@v4
+      with:
+        path: images/*-server-cloudimg-*.img
+        key: cloud-img-amd64-noble
+    - name: Ensure images directory exists
+      run: mkdir -p images
+    - name: Generate x86_64 VM image
+      run: ./gen-vm
+      working-directory: qemu
+      env:
+        VM_NAME: nullblk-smoke-test
+        KVM: none
+        USERNAME: ubuntu
+        PASS: password
+        PACKAGES: none
+        SIZE: 8
+    - name: Try to load null_blk kernel module
+      id: nullblk
+      run: |
+        # Azure kernels may not ship null_blk even in
+        # linux-modules-extra; install it and try modprobe.
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq \
+          linux-modules-extra-$(uname -r) || true
+        if sudo modprobe null_blk nr_devices=2 \
+             queue_mode=2 gb=1024 2>/dev/null; then
+          ls -la /dev/nullb*
+          echo "has_nullblk=true" >> "$GITHUB_OUTPUT"
+          echo "✓ null_blk loaded with 2 devices"
+        else
+          echo "has_nullblk=false" >> "$GITHUB_OUTPUT"
+          echo "⚠ null_blk not available on this" \
+            "kernel ($(uname -r)); skipping live test"
+        fi
+    - name: Boot VM with NVME=-2
+      if: steps.nullblk.outputs.has_nullblk == 'true'
+      run: ./run-vm > run-vm-output.log 2>&1 &
+      working-directory: qemu
+      env:
+        VM_NAME: nullblk-smoke-test
+        KVM: none
+        NVME: -2
+    - name: Wait for VM to boot (180s timeout)
+      if: steps.nullblk.outputs.has_nullblk == 'true'
+      run: |
+        echo "Waiting for VM to boot..."
+        timeout=180
+        elapsed=0
+        while [ $elapsed -lt $timeout ]; do
+          if ssh -o ConnectTimeout=1 \
+                 -o NoHostAuthenticationForLocalhost=yes \
+                 -o StrictHostKeyChecking=no \
+                 -p 2222 ubuntu@localhost \
+                 true 2>/dev/null; then
+            echo "✓ VM ready after $elapsed seconds"
+            exit 0
+          fi
+          sleep 2
+          elapsed=$((elapsed + 2))
+        done
+        echo "✗ VM failed to boot within ${timeout}s"
+        exit 1
+    - name: Output run-vm log
+      if: >-
+        always() &&
+        steps.nullblk.outputs.has_nullblk == 'true'
+      run: cat qemu/run-vm-output.log
+    - name: Verify NVMe devices visible in guest
+      if: steps.nullblk.outputs.has_nullblk == 'true'
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes \
+          -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@localhost \
+          "lsblk | grep nvme && \
+           echo '✓ NVMe devices visible in guest'"
+
   dry-run-tests:
     name: dry-run-tests
     runs-on: ubuntu-latest
@@ -142,6 +235,20 @@ jobs:
         echo "$out"
         echo "$out" | grep -q "serial=custom-test"
         echo "✓ x86 NVME=custom passed"
+      working-directory: qemu
+
+    - name: "Dry-run: x86 with NVME=-2 (null_blk)"
+      run: |
+        out=$(VM_NAME=dry-test KVM=none NVME=-2 \
+              DRY_RUN=1 ./run-vm)
+        echo "$out"
+        echo "$out" | grep -q "/dev/nullb0"
+        echo "$out" | grep -q "/dev/nullb1"
+        echo "$out" | grep -q \
+          "nvme,serial=dry-test-nvme0"
+        echo "$out" | grep -q \
+          "nvme,serial=dry-test-nvme1"
+        echo "✓ x86 NVME=-2 passed"
       working-directory: qemu
 
     - name: "Dry-run: arm64 defaults"
