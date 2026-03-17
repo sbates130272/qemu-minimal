@@ -135,9 +135,9 @@ jobs:
       run: |
         sudo modprobe null_blk nr_devices=2 \
           queue_mode=2 gb=1024
-        # Ensure /dev/nullb* devices are accessible to the current user
-        sudo chgrp "$(id -gn)" /dev/nullb*
-        sudo chmod g+rw /dev/nullb*
+        # Ensure /dev/nullb* devices are owned by (and thus accessible to)
+        # the current user; by default they are root:disk 0660
+        sudo chown "$(id -un)" /dev/nullb*
         # Fail fast if the current user cannot write to the null_blk devices
         if [ ! -w /dev/nullb0 ] || [ ! -w /dev/nullb1 ]; then
           echo "✗ /dev/nullb* devices are not writable by user $(id -un)"
