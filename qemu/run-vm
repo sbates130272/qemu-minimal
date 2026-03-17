@@ -21,12 +21,10 @@
 # There are three modes for this:
 #   1. If you specify an unsigned number the script checks to
 #      see if image file(s) exist and then creates that many
-#      emulated NVMe SSDs. The drives use io_uring AIO with
-#      direct I/O (cache.direct=on) to bypass the host page
-#      cache, discard=unmap to propagate TRIM, and
-#      detect-zeroes=unmap to sparsify zero writes. ioeventfd
-#      is enabled unless PCI_MMIO_BRIDGE is active (ioeventfd
-#      must be off for the MMIO bridge to intercept doorbells).
+#      emulated NVMe SSDs. Performance-related options (such as
+#      io_uring AIO and NVMe device properties like ioeventfd/dbcs)
+#      are auto-probed from the QEMU binary at startup so
+#      the script works across different QEMU versions.
 #   2. If you specify a string then we use this literally as
 #      the argument string given at the command line.
 #   3. If you specify a negative number we implement a simple
@@ -40,7 +38,7 @@
 # PCI_HOSTDEV where it is equal to the host PCI bus addresses separated
 # by commas. The devices must be unbound from their native host driver
 # and assigned to vfio-pci. Note that in order to ensure PCIe atomics are 
-# supported inside the VM we put each HOST_DEV device below a pci-root-port
+# supported inside the VM we put each PCI_HOSTDEV device below a pcie-root-port
 # device.
 #
 # NVME_TRACE enables tracing of NVMe device operations. Options are:
@@ -116,22 +114,49 @@ else
     echo "Error: No ARCH mapping exists for ${ARCH}! Exiting."; exit 1
 fi
 
+function qemu_probe_caps {
+    local qemu="${QEMU_PATH}qemu-system-${QARCH}"
+    QEMU_HAS_IOEVENTFD=0
+    QEMU_HAS_DBCS=0
+    QEMU_AIO="native"
+    if ! command -v "${qemu}" &>/dev/null; then
+        QEMU_AIO="threads"
+        return
+    fi
+    local nvme_help
+    nvme_help=$("${qemu}" -device nvme,help 2>&1)
+    echo "${nvme_help}" | grep -q "ioeventfd=" \
+        && QEMU_HAS_IOEVENTFD=1
+    echo "${nvme_help}" | grep -q "dbcs=" \
+        && QEMU_HAS_DBCS=1
+    if echo quit | timeout 2 "${qemu}" \
+           -machine none -monitor stdio \
+           -drive driver=null-co,if=none,id=t \
+           -drive driver=null-co,if=none,id=u,aio=io_uring \
+           >/dev/null 2>&1; then
+        QEMU_AIO="io_uring"
+    fi
+}
+
+qemu_probe_caps
+
 function nvme_create {
     if [ ! -f ${IMAGES}/${1}.qcow2 ]; then
         qemu-img create -f qcow2 \
             ${IMAGES}/${1}.qcow2 $2 >> /dev/null
     fi
-    local ioeventfd="on"
-    if [ "${PCI_MMIO_BRIDGE}" != "none" ]; then
-        ioeventfd="off"
-    fi
     local drv="-drive file=${IMAGES}/${1}.qcow2"
     drv+=",format=qcow2,if=none,id=nvme-${3}"
-    drv+=",aio=io_uring,cache.direct=on"
+    drv+=",aio=${QEMU_AIO},cache.direct=on"
     drv+=",discard=unmap,detect-zeroes=unmap"
     local dev="-device nvme,serial=${1}"
     dev+=",drive=nvme-${3}"
-    dev+=",ioeventfd=${ioeventfd},dbcs=off"
+    if [ "${PCI_MMIO_BRIDGE}" != "none" ]; then
+        [ ${QEMU_HAS_IOEVENTFD} -eq 1 ] \
+            && dev+=",ioeventfd=off"
+        [ ${QEMU_HAS_DBCS} -eq 1 ] \
+            && dev+=",dbcs=off"
+    fi
     echo "${drv} ${dev} "
 }
 
@@ -181,11 +206,7 @@ elif [[ ${NVME} =~ ^-[0-9]+$ ]]; then
     NVME_ARGS=""
     for i in $(seq 0 $(( -(${NVME}) - 1 ))); do
         NVME_NAME=${VM_NAME}-nvme${i}
-        NVME_ARGS+=$(echo \
-            "-drive file=/dev/nullb${i},format=raw"\
-",if=none,id=nvme-${i} "\
-            "-device nvme,serial=${NVME_NAME}"\
-",drive=nvme-${i}")
+        NVME_ARGS+=" -drive file=/dev/nullb${i},format=raw,if=none,id=nvme-${i} -device nvme,serial=${NVME_NAME},drive=nvme-${i}"
     done
 else
     NVME_ARGS=${NVME}
@@ -227,25 +248,29 @@ else
 fi
 
 if [ ${PCI_MMIO_BRIDGE} == "none" ]; then
-    PCI_MMIO_BRIDGE_ARGS=""
+    PCI_MMIO_BRIDGE_ARGS=()
 else
     echo "NOTE: PCI_MMIO_BRIDGE active; nvme_create forces ioeventfd=off,dbcs=off."
-    PCI_MMIO_BRIDGE_ARGS="-device pci-mmio-bridge,id=mmio-bridge,"
-    PCI_MMIO_BRIDGE_ARGS+="shadow-gpa=0x80000000,shadow-size=8192,"
-    PCI_MMIO_BRIDGE_ARGS+="poll-interval-ns=1000000,addr=8.0"
-    PCI_MMIO_BRIDGE_ARGS+=" -trace pci_mmio_*"
+    PCI_MMIO_BRIDGE_ARGS=( -device pci-mmio-bridge,id=mmio-bridge,shadow-gpa=0x80000000,shadow-size=8192,poll-interval-ns=1000000,addr=8.0 )
+    PCI_MMIO_BRIDGE_ARGS+=( -trace enable=pci_mmio_* )
 fi
 
 DATA_NIC_ARGS=""
+DATA_TAP_CREATED=0
 if [ "${DATA_NIC_QUEUES}" -gt 0 ] 2>/dev/null; then
     DATA_TAP="dt${SSH_PORT}"
-    if ! ip link show "${DATA_TAP}" &>/dev/null; then
-        sudo ip tuntap add dev "${DATA_TAP}" \
-            mode tap multi_queue \
-            user "$(whoami)"
-        sudo ip link set "${DATA_TAP}" up
+    if [ "${DRY_RUN}" = "none" ]; then
+        if ! ip link show "${DATA_TAP}" &>/dev/null; then
+            sudo ip tuntap add dev "${DATA_TAP}" \
+                mode tap multi_queue \
+                user "$(whoami)"
+            sudo ip link set "${DATA_TAP}" up
+            DATA_TAP_CREATED=1
+        fi
+        if [ "${DATA_TAP_CREATED}" -eq 1 ]; then
+            trap "sudo ip tuntap del dev ${DATA_TAP} mode tap 2>/dev/null" EXIT
+        fi
     fi
-    trap "sudo ip tuntap del dev ${DATA_TAP} mode tap 2>/dev/null" EXIT
     VECTORS=$(( 2 * DATA_NIC_QUEUES + 2 ))
     DATA_NIC_ARGS="-netdev tap,id=data0"
     DATA_NIC_ARGS+=",ifname=${DATA_TAP}"
@@ -269,7 +294,7 @@ QEMU_CMD=(${QEMU_PATH}qemu-system-${QARCH}
    ${NVME_ARGS}
    ${PCI_TESTDEV_ARGS}
    ${PCI_HOSTDEV_ARGS}
-   ${PCI_MMIO_BRIDGE_ARGS}
+   "${PCI_MMIO_BRIDGE_ARGS[@]}"
    "${VFIO_USERDEV_ARGS[@]}"
    -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}.qcow2
    -netdev user,id=net0,hostfwd=tcp::${SSH_PORT}-:22

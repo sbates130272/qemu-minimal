@@ -26,7 +26,7 @@ jobs:
     - name: Cache cloud image
       uses: actions/cache@v4
       with:
-        path: images
+        path: images/*-server-cloudimg-*.img
         key: cloud-img-amd64-noble
     - name: Ensure images directory exists
       run: mkdir -p images
