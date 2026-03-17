@@ -88,6 +88,81 @@ jobs:
         ssh -o NoHostAuthenticationForLocalhost=yes \
           -v -p 2222 ubuntu@localhost ls -ltrh
 
+  dry-run-tests:
+    name: dry-run-tests
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4.2.2
+    - name: Install qemu-utils (needed by nvme_create)
+      run: |
+        sudo apt update
+        sudo apt install -y qemu-utils
+    - name: Create images directory
+      run: mkdir -p images
+
+    - name: "Dry-run: x86 defaults (NVME=none)"
+      run: |
+        out=$(VM_NAME=dry-test KVM=none NVME=none \
+              DRY_RUN=1 ./run-vm)
+        echo "$out"
+        echo "$out" | grep -q "qemu-system-x86_64"
+        echo "$out" | grep -q "\-machine q35"
+        echo "$out" | grep -q "\-cpu EPYC"
+        echo "$out" | grep -q "\-nographic"
+        echo "✓ x86 defaults passed"
+      working-directory: qemu
+
+    - name: "Dry-run: x86 with NVME=2"
+      run: |
+        out=$(VM_NAME=dry-test KVM=none NVME=2 \
+              DRY_RUN=1 ./run-vm)
+        echo "$out"
+        echo "$out" | grep -q "nvme,serial=dry-test-nvme1"
+        echo "$out" | grep -q "nvme,serial=dry-test-nvme2"
+        echo "✓ x86 NVME=2 passed"
+      working-directory: qemu
+
+    - name: "Dry-run: x86 with NVME=custom string"
+      run: |
+        custom="-device nvme,serial=custom-test"
+        out=$(VM_NAME=dry-test KVM=none \
+              NVME="${custom}" DRY_RUN=1 ./run-vm)
+        echo "$out"
+        echo "$out" | grep -q "serial=custom-test"
+        echo "✓ x86 NVME=custom passed"
+      working-directory: qemu
+
+    - name: "Dry-run: arm64 defaults"
+      run: |
+        out=$(VM_NAME=dry-test KVM=none ARCH=arm64 \
+              DRY_RUN=1 ./run-vm)
+        echo "$out"
+        echo "$out" | grep -q "qemu-system-aarch64"
+        echo "$out" | grep -q "\-machine virt"
+        echo "✓ arm64 defaults passed"
+      working-directory: qemu
+
+    - name: "Dry-run: riscv64 defaults"
+      run: |
+        out=$(VM_NAME=dry-test KVM=none ARCH=riscv64 \
+              DRY_RUN=1 ./run-vm)
+        echo "$out"
+        echo "$out" | grep -q "qemu-system-riscv64"
+        echo "$out" | grep -q "\-machine virt"
+        echo "✓ riscv64 defaults passed"
+      working-directory: qemu
+
+    - name: "Dry-run: custom VCPUS and VMEM"
+      run: |
+        out=$(VM_NAME=dry-test KVM=none VCPUS=8 \
+              VMEM=16384 DRY_RUN=1 ./run-vm)
+        echo "$out"
+        echo "$out" | grep -q "\-smp cpus=8"
+        echo "$out" | grep -q "\-m 16384"
+        echo "✓ custom VCPUS/VMEM passed"
+      working-directory: qemu
+
   smoke-test-arm64:
     name: smoke-test-arm64
     runs-on: ubuntu-latest
