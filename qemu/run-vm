@@ -61,6 +61,10 @@
 # over a NIC without disrupting the management/SSH NIC.  Set to
 # the number of queues required (e.g. 6 for six Weka containers).
 # Requires sudo for TAP creation; the device is torn down on exit.
+#
+# DRY_RUN when set to anything other than "none" causes the
+# script to print the full QEMU command line to stdout instead
+# of executing it.  Useful for debugging invocation arguments.
 
 QEMU_PATH=${QEMU_PATH:-}
 VM_NAME=${VM_NAME:-qemu-minimal}
@@ -81,6 +85,7 @@ NVME_SIZE=1024G
 QEMU_VFIO_USER_VERSION="10.1.1"
 PCI_MMIO_BRIDGE=${PCI_MMIO_BRIDGE:-none}
 DATA_NIC_QUEUES=${DATA_NIC_QUEUES:-0}
+DRY_RUN=${DRY_RUN:-none}
 
 if [ ${KVM} == "enable" ]; then
     KVM=",accel=kvm"
@@ -253,20 +258,26 @@ if [ "${DATA_NIC_QUEUES}" -gt 0 ] 2>/dev/null; then
     DATA_NIC_ARGS+=",vectors=${VECTORS}"
 fi
 
-${QEMU_PATH}qemu-system-${QARCH} \
-   ${QARCH_ARGS} \
-   ${TRACE_ARGS} \
-   -smp cpus=${VCPUS} \
-   -m ${VMEM} \
-   ${FILESYSTEM_ARGS} \
-   -nographic \
-   ${PCIE_ROOT_PORTS} \
-   ${NVME_ARGS} \
-   ${PCI_TESTDEV_ARGS} \
-   ${PCI_HOSTDEV_ARGS} \
-   ${PCI_MMIO_BRIDGE_ARGS} \
-   "${VFIO_USERDEV_ARGS[@]}" \
-   -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}.qcow2 \
-   -netdev user,id=net0,hostfwd=tcp::${SSH_PORT}-:22 \
-   -device virtio-net-pci,netdev=net0 \
-   ${DATA_NIC_ARGS}
+QEMU_CMD=(${QEMU_PATH}qemu-system-${QARCH}
+   ${QARCH_ARGS}
+   ${TRACE_ARGS}
+   -smp cpus=${VCPUS}
+   -m ${VMEM}
+   ${FILESYSTEM_ARGS}
+   -nographic
+   ${PCIE_ROOT_PORTS}
+   ${NVME_ARGS}
+   ${PCI_TESTDEV_ARGS}
+   ${PCI_HOSTDEV_ARGS}
+   ${PCI_MMIO_BRIDGE_ARGS}
+   "${VFIO_USERDEV_ARGS[@]}"
+   -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}.qcow2
+   -netdev user,id=net0,hostfwd=tcp::${SSH_PORT}-:22
+   -device virtio-net-pci,netdev=net0
+   ${DATA_NIC_ARGS})
+
+if [ "${DRY_RUN}" != "none" ]; then
+    echo "${QEMU_CMD[@]}"
+else
+    "${QEMU_CMD[@]}"
+fi
