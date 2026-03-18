@@ -48,6 +48,15 @@
 # Use NVME_TRACE_FILE to redirect trace output to a file instead of
 # stderr.
 #
+# NVME_LBAF_MASK controls which LBA formats the emulated NVMe namespaces
+# report as supported. When set to a non-"none" value, it is passed to
+# QEMU's nvme-ns LBA format mask property so that only the selected LBA
+# formats appear in the namespace Identify data. The value must be a 16-bit 
+# hexadecimal bitmask (e.g. 0x1–0xFFFF) where bit N enables LBA format N. This
+#is not supported in all QEMU versions, so we detect support at runtime and 
+# only apply the mask if the QEMU binary accepts the corresponding nvme-ns
+# property.
+#
 # Post 10.1.0 versions of QEMU have libvfio-user support which allows
 # us to create emulated PCIe devices via a socket and the API provided
 # by that library. You can specify these device(s) via a comma-separated
@@ -78,6 +87,7 @@ KVM=${KVM:-enable}
 NVME=${NVME:-none}
 NVME_TRACE=${NVME_TRACE:-none}
 NVME_TRACE_FILE=${NVME_TRACE_FILE:-}
+NVME_LBAF_MASK=${NVME_LBAF_MASK:-none}
 PCI_TESTDEV=${PCI_TESTDEV:-none}
 PCI_HOSTDEV=${PCI_HOSTDEV:-none}
 VFIO_USERDEV=${VFIO_USERDEV:-none}
@@ -121,12 +131,21 @@ function qemu_probe_caps {
     QEMU_HAS_IOEVENTFD=0
     QEMU_HAS_DBCS=0
     QEMU_AIO="native"
+    QEMU_HAS_LBAF_MASK=0
     if ! command -v "${qemu}" &>/dev/null; then
+        if [ "${DRY_RUN}" = "none" ]; then
+            echo "Error: QEMU binary '${qemu}'" \
+                "not found." >&2
+            echo "Set QEMU_PATH to the directory" \
+                "containing the qemu-system" \
+                "binary." >&2
+            exit 1
+        fi
         QEMU_AIO="threads"
-        return
+        return 0
     fi
     local nvme_help
-    nvme_help=$("${qemu}" -device nvme,help 2>&1)
+    nvme_help=$("${qemu}" -device nvme,help 2>&1) || true
     echo "${nvme_help}" | grep -q "ioeventfd=" \
         && QEMU_HAS_IOEVENTFD=1
     echo "${nvme_help}" | grep -q "dbcs=" \
@@ -138,6 +157,11 @@ function qemu_probe_caps {
            >/dev/null 2>&1; then
         QEMU_AIO="io_uring"
     fi
+    local nvme_ns_help
+    nvme_ns_help=$("${qemu}" -device nvme-ns,help 2>&1) || true
+    echo "${nvme_ns_help}" | grep -q "lbaf-mask=" \
+        && QEMU_HAS_LBAF_MASK=1
+    return 0
 }
 
 qemu_probe_caps
@@ -151,15 +175,25 @@ function nvme_create {
     drv+=",format=qcow2,if=none,id=nvme-${3}"
     drv+=",aio=${QEMU_AIO},cache.direct=on"
     drv+=",discard=unmap,detect-zeroes=unmap"
-    local dev="-device nvme,serial=${1}"
-    dev+=",drive=nvme-${3}"
+    local dev="-device nvme,serial=${1},id=nvme-${3}-dev"
     if [ "${PCI_MMIO_BRIDGE}" != "none" ]; then
         [ ${QEMU_HAS_IOEVENTFD} -eq 1 ] \
             && dev+=",ioeventfd=off"
         [ ${QEMU_HAS_DBCS} -eq 1 ] \
             && dev+=",dbcs=off"
     fi
-    echo "${drv} ${dev} "
+    local ns="-device nvme-ns,drive=nvme-${3},bus=nvme-${3}-dev,nsid=1"
+    if [ "${NVME_LBAF_MASK}" != "none" ]; then
+        if [[ ! ${NVME_LBAF_MASK} =~ ^0x[0-9a-fA-F]{1,4}$ ]]; then
+            echo "Error: NVME_LBAF_MASK ('${NVME_LBAF_MASK}') must be a 16-bit hex mask" >&2
+            exit 1
+        fi
+        NVME_LBAF_MASK=$(echo "${NVME_LBAF_MASK}" | tr 'A-F' 'a-f')
+        if [ ${QEMU_HAS_LBAF_MASK} -eq 1 ]; then
+            ns+=",lbaf-mask=${NVME_LBAF_MASK}"
+        fi
+    fi
+    echo "${drv} ${dev} ${ns} "
 }
 
   # Check that the user has provided valid PCIe bus addresses and also check
