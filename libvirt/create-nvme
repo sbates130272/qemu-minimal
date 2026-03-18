@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# create-name
+# create-nvme
 #
 # (C) Stephen Bates <sbates@raithlin>
 #
@@ -35,7 +35,7 @@
 # should normally fail anyway).
 #
 # Also note that since Ubuntu 24.04 the versions of QEMU and libvirt
-# require a specifc PCIe bus address. I am not quite sure why that is
+# require a specific PCIe bus address. I am not quite sure why that is
 # yet but we add that now. If you get errors along the lines of
 #   error: Failed to start domain 'batesste-test-vm'
 #   error: internal error: QEMU unexpectedly closed the monitor \
@@ -46,6 +46,8 @@
 # you may need to play with the bus and address offsets.
 
 
+set -e
+
 NUM=${NUM:-24}
 DIR=${DIR:-/var/lib/libvirt/images}
 SIZE=${SIZE:-128M}
@@ -55,41 +57,40 @@ PREFIX=${PREFIX:-none}
 ADD_LOCKING=${ADD_LOCKING:-no}
 START_ADDR=${START_ADDR:-6}
 
-if [ $PREFIX != "none" ]; then
+if [ "${PREFIX}" != "none" ]; then
     PREFIX="${PREFIX}-"
 else
     PREFIX=""
 fi
 
-  # Create the qcow2 image files for the NVMe SSDs.
-
-if [ $CREATE == "yes" ]; then
-    if [ ! -d $DIR ]; then
-	echo "$DIR does not exist!"
+if [ "${CREATE}" = "yes" ]; then
+    if [ ! -d "${DIR}" ]; then
+	echo "${DIR} does not exist!"
 	exit 1
     fi
     echo "Creating qcow2 image files for NVMe..."
     i=0
-    while [ $i -lt $NUM ]; do
-	if [ -f ${DIR}/${PREFIX}nvme${i}.qcow2 ]; then
+    while [ "$i" -lt "$NUM" ]; do
+	if [ -f "${DIR}/${PREFIX}nvme${i}.qcow2" ]; then
 	    echo "${DIR}/${PREFIX}nvme${i}.qcow2 already exists!"
 	    exit 1
 	fi
-	qemu-img create -f qcow2 ${DIR}/${PREFIX}nvme${i}.qcow2 ${SIZE} > /dev/null
-	((i++))
+	qemu-img create -f qcow2 \
+	    "${DIR}/${PREFIX}nvme${i}.qcow2" "${SIZE}" > /dev/null
+	i=$((i + 1))
     done
-    chown libvirt-qemu:kvm ${DIR}/${PREFIX}nvme*.*
-    chmod 644 ${DIR}/${PREFIX}nvme*.*
-    ls -lrth ${DIR}
+    if compgen -G "${DIR}/${PREFIX}nvme*.*" > /dev/null; then
+	chown libvirt-qemu:kvm "${DIR}/${PREFIX}"nvme*.*
+	chmod 644 "${DIR}/${PREFIX}"nvme*.*
+    fi
+    ls -lrth "${DIR}"
 fi
 
-if [ $DIR != "null" ] && [ $ADD_LOCKING == "yes" ]; then
+if [ "${DIR}" != "null" ] && [ "${ADD_LOCKING}" = "yes" ]; then
     ADD_LOCKING="file.locking=off,"
 else
     ADD_LOCKING=""
 fi
-
-  # Echo the XML output for virsh edit
 
 echo
 echo "# Add this to your domain entry at the top of the xml:"
@@ -98,16 +99,16 @@ echo
 i=0
 j=${START_ADDR}
 echo "  <qemu:commandline>"
-while [ $i -lt $NUM ]; do
+while [ "$i" -lt "$NUM" ]; do
     echo "    <qemu:arg value='-drive'/>"
-    if [ $DIR == "null" ]; then
+    if [ "${DIR}" = "null" ]; then
 	echo "    <qemu:arg value='file=null-aio://,if=none,size=${SIZE},id=nvme${i},format=null-aio'/>"
     else
 	echo "    <qemu:arg value='file=${DIR}/${PREFIX}nvme${i}.qcow2,if=none,id=nvme${i},${ADD_LOCKING}format=qcow2'/>"
     fi
     echo "    <qemu:arg value='-device'/>"
     echo "    <qemu:arg value='nvme,drive=nvme${i},serial=nvme${i},cmb_size_mb=${CMB},bus=pcie.0,addr=${j}'/>"
-    ((i++))
-    ((j++))
+    i=$((i + 1))
+    j=$((j + 1))
 done
 echo "  </qemu:commandline>"

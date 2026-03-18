@@ -13,7 +13,7 @@
 #
 # For some reason -t virtfs does not work when running qemu directly
 # but it does work when running via libvirt. Go figure! You can also
-# add this to /etc/fstab in the guest for a permenant solution.
+# add this to /etc/fstab in the guest for a permanent solution.
 #
 # hostfs /home/batesste/Projects 9p trans=virtio,version=9p2000.L,nofail 0 1
 #
@@ -50,7 +50,7 @@
 #
 # Post 10.1.0 versions of QEMU have libvfio-user support which allows
 # us to create emulated PCIe devices via a socket and the API provided
-# by that library. You can specify these device(s) via a comma-sperated
+# by that library. You can specify these device(s) via a comma-separated
 # list of sockets in VFIO_USERDEV.
 #
 # DATA_NIC_QUEUES adds a second multi-queue virtio-net NIC backed
@@ -63,6 +63,8 @@
 # DRY_RUN when set to anything other than "none" causes the
 # script to print the full QEMU command line to stdout instead
 # of executing it.  Useful for debugging invocation arguments.
+
+set -e
 
 QEMU_PATH=${QEMU_PATH:-}
 VM_NAME=${VM_NAME:-qemu-minimal}
@@ -80,18 +82,17 @@ PCI_TESTDEV=${PCI_TESTDEV:-none}
 PCI_HOSTDEV=${PCI_HOSTDEV:-none}
 VFIO_USERDEV=${VFIO_USERDEV:-none}
 NVME_SIZE=1024G
-QEMU_VFIO_USER_VERSION="10.1.1"
 PCI_MMIO_BRIDGE=${PCI_MMIO_BRIDGE:-none}
 DATA_NIC_QUEUES=${DATA_NIC_QUEUES:-0}
 DRY_RUN=${DRY_RUN:-none}
 
-if [ ${KVM} == "enable" ]; then
+if [ "${KVM}" = "enable" ]; then
     KVM=",accel=kvm"
 else
     KVM=""
 fi
 
-if [ ${FILESYSTEM} == "none" ]; then
+if [ "${FILESYSTEM}" = "none" ]; then
     FILESYSTEM_ARGS=""
 else
     FILESYSTEM_ARGS="-object memory-backend-memfd,id=mem0,size=2G -virtfs "
@@ -99,19 +100,20 @@ else
     FILESYSTEM_ARGS+="mount_tag=hostfs "
 fi
 
-if [ ${ARCH} == "amd64" ]; then
+if [ "${ARCH}" = "amd64" ]; then
     QARCH="x86_64"
     QARCH_ARGS="-machine q35${KVM} -cpu EPYC"
-elif [ ${ARCH} == "arm64" ]; then
+elif [ "${ARCH}" = "arm64" ]; then
     QARCH="aarch64"
     QARCH_ARGS="-machine virt,gic-version=max${KVM} -cpu max -bios "
     QARCH_ARGS+="/usr/share/qemu-efi-aarch64/QEMU_EFI.fd"
-elif [ ${ARCH} == "riscv64" ]; then
+elif [ "${ARCH}" = "riscv64" ]; then
     QARCH="riscv64"
     QARCH_ARGS="-machine virt,${KVM} -kernel "
     QARCH_ARGS+="/usr/lib/u-boot/qemu-riscv64_smode/uboot.elf"
 else
-    echo "Error: No ARCH mapping exists for ${ARCH}! Exiting."; exit 1
+    echo "Error: No ARCH mapping exists for ${ARCH}! Exiting."
+    exit 1
 fi
 
 function qemu_probe_caps {
@@ -168,8 +170,7 @@ function pci_check () {
         exit 1
     fi
 
-    lspci -k -s ${1} | grep "vfio-pci" > /dev/null 2>&1
-    if [ $? -eq 1 ]; then
+    if ! lspci -k -s "${1}" | grep -q "vfio-pci"; then
         echo "ERROR: Device ${1} is not bound to vfio-pci driver."
         exit 1
     fi
@@ -177,24 +178,22 @@ function pci_check () {
 
 # Setup NVMe tracing if requested
 TRACE_ARGS=""
-if [ ${NVME_TRACE} != "none" ]; then
-    if [ ${NVME_TRACE} == "doorbell" ]; then
+if [ "${NVME_TRACE}" != "none" ]; then
+    if [ "${NVME_TRACE}" = "doorbell" ]; then
         TRACE_ARGS="-trace enable=pci_nvme_mmio_doorbell_sq "
         TRACE_ARGS+="-trace enable=pci_nvme_mmio_doorbell_cq "
-    elif [ ${NVME_TRACE} == "all" ]; then
+    elif [ "${NVME_TRACE}" = "all" ]; then
         TRACE_ARGS="-trace enable=pci_nvme* "
     else
-        # User specified custom trace events
         TRACE_ARGS="-trace enable=${NVME_TRACE} "
     fi
 
-    # Optionally write to a file instead of stderr
-    if [ ! -z "${NVME_TRACE_FILE}" ]; then
+    if [ -n "${NVME_TRACE_FILE}" ]; then
         TRACE_ARGS+="-trace file=${NVME_TRACE_FILE} "
     fi
 fi
 
-if [ ${NVME} == "none" ]; then
+if [ "${NVME}" = "none" ]; then
     NVME_ARGS=""
 elif [[ ${NVME} =~ ^[0-9]+$ ]]; then
     NVME_ARGS=""
@@ -212,42 +211,41 @@ else
     NVME_ARGS=${NVME}
 fi
 
-if [ ${PCI_TESTDEV} == "none" ]; then
+if [ "${PCI_TESTDEV}" = "none" ]; then
     PCI_TESTDEV_ARGS=""
 else
     PCI_TESTDEV_ARGS="-device pci-testdev,membar=16G,membar-backed=true"
 fi
 
-if [ ${PCI_HOSTDEV} == "none" ]; then
+if [ "${PCI_HOSTDEV}" = "none" ]; then
     PCI_HOSTDEV_ARGS=""
 else
     i=0
     for THIS_PCI_HOSTDEV in ${PCI_HOSTDEV//,/ }; do
-        ((i++))
-        pci_check ${THIS_PCI_HOSTDEV}
+        i=$((i + 1))
+        pci_check "${THIS_PCI_HOSTDEV}"
         PCI_HOSTDEV_ARGS+="-device pcie-root-port,id=pcie.${i} "
         PCI_HOSTDEV_ARGS+="-device vfio-pci,bus=pcie.${i},host=${THIS_PCI_HOSTDEV} "
     done
 fi
 
-if [ ${VFIO_USERDEV} == "none" ]; then
+if [ "${VFIO_USERDEV}" = "none" ]; then
     VFIO_USERDEV_ARGS=()
 else
-    # When using vfio-user, we need ALL guest RAM to be shareable via a memfd
     VFIO_USERDEV_ARGS+=( -object memory-backend-memfd,id=mem-vfio-user,size=${VMEM},share=on  )
     VFIO_USERDEV_ARGS+=( -numa node,memdev=mem-vfio-user )
     for THIS_VFIO_USERDEV in ${VFIO_USERDEV//,/ }; do
-        if [ ! -S ${THIS_VFIO_USERDEV} ]; then
+        if [ ! -S "${THIS_VFIO_USERDEV}" ]; then
             echo "ERROR: Socket ${THIS_VFIO_USERDEV} does not exist."
             exit 1
         fi
         DEV_JSON=$(printf '{"driver":"vfio-user-pci","socket":{"path":"%s","type":"unix"}}' \
-            ${THIS_VFIO_USERDEV})
+            "${THIS_VFIO_USERDEV}")
         VFIO_USERDEV_ARGS+=( -device "${DEV_JSON}" )
     done
 fi
 
-if [ ${PCI_MMIO_BRIDGE} == "none" ]; then
+if [ "${PCI_MMIO_BRIDGE}" = "none" ]; then
     PCI_MMIO_BRIDGE_ARGS=()
 else
     echo "NOTE: PCI_MMIO_BRIDGE active; nvme_create forces ioeventfd=off,dbcs=off."
@@ -290,7 +288,6 @@ QEMU_CMD=(${QEMU_PATH}qemu-system-${QARCH}
    -m ${VMEM}
    ${FILESYSTEM_ARGS}
    -nographic
-   ${PCIE_ROOT_PORTS}
    ${NVME_ARGS}
    ${PCI_TESTDEV_ARGS}
    ${PCI_HOSTDEV_ARGS}

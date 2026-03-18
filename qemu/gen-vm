@@ -5,7 +5,7 @@
 # (C) Stephen Bates <sbates@raithlin>
 #
 # A simple script generate a Ubuntu Noble VM using bare QEMU (i.e. not
-# libvirt) and cloud-init..
+# libvirt) and cloud-init.
 #
 # Jammy (or Later)
 # ----------------
@@ -51,7 +51,7 @@ RELEASE=${RELEASE:-noble}
 ARCH=${ARCH:-amd64}
 VCPUS=${VCPUS:-2}
 VMEM=${VMEM:-4096}
-SSH_KEY_FILE=${SSH_KEY_FILE:-~/.ssh/id_rsa.pub}
+SSH_KEY_FILE=${SSH_KEY_FILE:-$HOME/.ssh/id_rsa.pub}
 USERNAME=${USERNAME:-ubuntu}
 USER_ID=${USER_ID:-1000}
 PASS=${PASS:-password}
@@ -94,9 +94,8 @@ create_image_with_backing() {
 # Handle RESTORE_IMAGE option - only perform the final
 # qemu-img create step. This mode takes precedence over all other
 # modes and exits after completion.
-if [ ${RESTORE_IMAGE} == "true" ]; then
-    # Check for conflicting options
-    if [ ${NO_BACKING} == "true" ]; then
+if [ "${RESTORE_IMAGE}" = "true" ]; then
+    if [ "${NO_BACKING}" = "true" ]; then
         echo "Error: RESTORE_IMAGE and NO_BACKING cannot both" \
              "be true!"
         exit 1
@@ -139,21 +138,22 @@ if [ ${RESTORE_IMAGE} == "true" ]; then
     exit 0
 fi
 
-if [ ${FORCE} == "true" ] || [ ! -f  ${IMAGES}/${RELEASE}-server-cloudimg-${ARCH}.img ]; then
-    rm -rf ${IMAGES}/${RELEASE}-server-cloudimg-${ARCH}.img
-    wget -P ${IMAGES} https://cloud-images.ubuntu.com/${RELEASE}/current/${RELEASE}-server-cloudimg-${ARCH}.img
+if [ "${FORCE}" = "true" ] || [ ! -f "${IMAGES}/${RELEASE}-server-cloudimg-${ARCH}.img" ]; then
+    rm -rf "${IMAGES}/${RELEASE}-server-cloudimg-${ARCH}.img"
+    wget -P "${IMAGES}" "https://cloud-images.ubuntu.com/${RELEASE}/current/${RELEASE}-server-cloudimg-${ARCH}.img"
 fi
-cp ${IMAGES}/${RELEASE}-server-cloudimg-${ARCH}.img ${IMAGES}/${VM_NAME}-backing.qcow2
-qemu-img resize ${IMAGES}/${VM_NAME}-backing.qcow2 ${SIZE}G
+cp "${IMAGES}/${RELEASE}-server-cloudimg-${ARCH}.img" \
+    "${IMAGES}/${VM_NAME}-backing.qcow2"
+qemu-img resize "${IMAGES}/${VM_NAME}-backing.qcow2" "${SIZE}G"
 
-if [ ! -f $SSH_KEY_FILE ]; then
+if [ ! -f "${SSH_KEY_FILE}" ]; then
      echo "SSH_KEY_FILE ${SSH_KEY_FILE} does not exist!"
      exit 1
 fi
 
-if [ ${PACKAGES} != "none" ]; then
-    if [ -f ${PACKAGES} ]; then
-	PACKAGES=$(<${PACKAGES})
+if [ "${PACKAGES}" != "none" ]; then
+    if [ -f "${PACKAGES}" ]; then
+	PACKAGES=$(<"${PACKAGES}")
     else
 	echo "Package manifest file ${PACKAGES} does not exist!"
 	exit 1
@@ -237,23 +237,24 @@ EOF
 cloud-localds -d qcow2 ${IMAGES}/${VM_NAME}-seed.qcow2 cloud-config-${VM_NAME} \
 	      network-config-${VM_NAME}
 
-if [ ${KVM} == "enable" ]; then
+if [ "${KVM}" = "enable" ]; then
     KVM=",accel=kvm"
 else
     KVM=""
 fi
 
-if [ ${ARCH} == "amd64" ]; then
+if [ "${ARCH}" = "amd64" ]; then
     QARCH="x86_64"
     QARCH_ARGS="-machine q35${KVM}"
-elif [ ${ARCH} == "arm64" ]; then
+elif [ "${ARCH}" = "arm64" ]; then
     QARCH="aarch64"
     QARCH_ARGS="-machine virt,gic-version=max${KVM} -cpu max -bios /usr/share/qemu-efi-aarch64/QEMU_EFI.fd"
-elif [ ${ARCH} == "riscv64" ]; then
+elif [ "${ARCH}" = "riscv64" ]; then
     QARCH="riscv64"
     QARCH_ARGS="-machine virt,${KVM} -kernel /usr/lib/u-boot/qemu-riscv64_smode/uboot.elf"
 else
-    echo "Error: No ARCH mapping exists for ${ARCH}! Exiting."; exit 1
+    echo "Error: No ARCH mapping exists for ${ARCH}! Exiting."
+    exit 1
 fi
 
 ${QEMU_PATH}qemu-system-${QARCH} \
@@ -266,8 +267,8 @@ ${QEMU_PATH}qemu-system-${QARCH} \
    -netdev user,id=net0 \
    -device virtio-net-pci,netdev=net0
 
-if [ ${NO_BACKING} == "true" ]; then
-    mv ${IMAGES}/${VM_NAME}-backing.qcow2 ${IMAGES}/${VM_NAME}.qcow2
+if [ "${NO_BACKING}" = "true" ]; then
+    mv "${IMAGES}/${VM_NAME}-backing.qcow2" "${IMAGES}/${VM_NAME}.qcow2"
 else
     create_image_with_backing "${IMAGES}/${VM_NAME}.qcow2" \
         "${IMAGES}/${VM_NAME}-backing.qcow2"

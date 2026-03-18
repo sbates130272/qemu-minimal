@@ -76,7 +76,7 @@ INITRD_INJECT=${INITRD_INJECT:-}
 SIZE=${SIZE:-32}
 RELEASE=${RELEASE:-noble}
 ARCH=${ARCH:-amd64}
-SSH_KEY_FILE=${SSH_KEY_FILE:-~/.ssh/id_rsa.pub}
+SSH_KEY_FILE=${SSH_KEY_FILE:-$HOME/.ssh/id_rsa.pub}
 NOAUTOCONSOLE=${NOAUTOCONSOLE:-false}
 USERNAME=${USERNAME:-ubuntu}
 PASS=${PASS:-password}
@@ -86,12 +86,12 @@ BRIDGE=${BRIDGE:-none}
 MEMORY=${MEMORY:-8192}
 VCPUS=${VCPUS:-4}
 
-if [ $RELEASE == "bionic" ]; then
+if [ "${RELEASE}" = "bionic" ]; then
 
-    echo ${NAME} > hostname.tmp
+    echo "${NAME}" > hostname.tmp
     INITRD_INJECT+=" --initrd-inject ./hostname.tmp "
 
-    if [ $KS != "none" ]; then
+    if [ "${KS}" != "none" ]; then
 	INITRD_INJECT+=" --initrd-inject ./${KS} "
 	KSF="ks=file:/${KS}"
     else
@@ -117,12 +117,12 @@ if [ $RELEASE == "bionic" ]; then
 
 else
 
-    if [ ${RELEASE} == "focal" ]; then
+    if [ "${RELEASE}" = "focal" ]; then
 	OSINFO="ubuntufocal"
-    elif [ ${RELEASE} == "jammy" ]; then
+    elif [ "${RELEASE}" = "jammy" ]; then
 	OSINFO="ubuntujammy"
-    elif [ ${RELEASE} == "noble" ]; then
-       OSINFO="ubuntunoble"
+    elif [ "${RELEASE}" = "noble" ]; then
+	OSINFO="ubuntunoble"
     else
 	echo "RELEASE ${RELEASE} is not supported yet!"
 	exit 1
@@ -145,20 +145,20 @@ cleanup() {
 }
 trap cleanup SIGINT ERR EXIT
 
-if [ ! -f  ${RELEASE}-server-cloudimg-${ARCH}.img ]; then
+if [ ! -f "${RELEASE}-server-cloudimg-${ARCH}.img" ]; then
     wget https://cloud-images.ubuntu.com/${RELEASE}/current/${RELEASE}-server-cloudimg-${ARCH}.img
 fi
-cp ${RELEASE}-server-cloudimg-amd64.img ${NAME}.qcow2
-qemu-img resize ${NAME}.qcow2 ${SIZE}G
+cp "${RELEASE}-server-cloudimg-${ARCH}.img" "${NAME}.qcow2"
+qemu-img resize "${NAME}.qcow2" "${SIZE}G"
 
-if [ ! -f $SSH_KEY_FILE ]; then
+if [ ! -f "${SSH_KEY_FILE}" ]; then
      echo "SSH_KEY_FILE ${SSH_KEY_FILE} does not exist!"
      exit 1
 fi
 
-if [ ${PACKAGES} != "none" ]; then
-    if [ -f ${PACKAGES} ]; then
-	PACKAGES=$(<${PACKAGES})
+if [ "${PACKAGES}" != "none" ]; then
+    if [ -f "${PACKAGES}" ]; then
+	PACKAGES=$(<"${PACKAGES}")
     else
 	echo "Package manifest file ${PACKAGES} does not exist!"
 	exit 1
@@ -180,10 +180,10 @@ users:
     groups: users, admin
     shell: /bin/bash
     ssh_authorized_keys: |
-      $(sed -z 's|\n|\n      |g' ${SSH_KEY_FILE})
+      $(sed -z 's|\n|\n      |g' "${SSH_KEY_FILE}")
 timezone: America/Edmonton
 ntp:
-  enabled: true"
+  enabled: true
 packages:
 ${PACKAGES}
 power_state:
@@ -209,19 +209,20 @@ EOF
 
 create_pool() {
     rc=0
-    `virsh pool-info $1 > /dev/null 2>&1` || rc=$?
+    virsh pool-info "$1" > /dev/null 2>&1 || rc=$?
     if [[ $rc -ne 0 ]]; then
-	virsh pool-define-as $1 dir --target /var/lib/libvirt/images/
-	virsh pool-autostart $1
-	virsh pool-start $1
+	virsh pool-define-as "$1" dir \
+	    --target /var/lib/libvirt/images/
+	virsh pool-autostart "$1"
+	virsh pool-start "$1"
     fi
 }
 
 remove_vol() {
     rc=0
-    `virsh vol-info --pool default $1 > /dev/null 2>&1` || rc=$?
+    virsh vol-info --pool default "$1" > /dev/null 2>&1 || rc=$?
     if [[ $rc -eq 0 ]]; then
-	virsh vol-delete --pool default $1
+	virsh vol-delete --pool default "$1"
     fi
 }
 
@@ -237,8 +238,8 @@ else
     NOAUTOCONSOLE=
 fi
 
-if [ ${FILESYSTEM} != "none" ]; then
-    if [ -d ${FILESYSTEM} ]; then
+if [ "${FILESYSTEM}" != "none" ]; then
+    if [ -d "${FILESYSTEM}" ]; then
 	FILESYSTEM="--memorybacking source.type=memfd,access.mode=shared --filesystem source.dir=${FILESYSTEM},target.dir=hostfs,driver.type=virtiofs"
     else
 	echo "The specified FILESYSTEM (${FILESYSTEM}) is not a directory!"
@@ -248,7 +249,7 @@ else
     FILESYSTEM=
 fi
 
-if [ ${BRIDGE} != "none" ]; then
+if [ "${BRIDGE}" != "none" ]; then
     NETWORK="--network bridge=${BRIDGE}"
 else
     NETWORK="--network network:default"

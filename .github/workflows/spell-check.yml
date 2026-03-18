@@ -23,7 +23,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Check out code
-      uses: actions/checkout@v4.2.2
+      uses: actions/checkout@v4.3.1
     - name: GitHub Spellcheck Action
-      uses: rojopolis/spellcheck-github-actions@0.48.0
-      continue-on-error: true
+      uses: rojopolis/spellcheck-github-actions@0.60.0

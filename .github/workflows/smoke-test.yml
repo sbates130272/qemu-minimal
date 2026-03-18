@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Check out code using action/checkout
-      uses: actions/checkout@v4.2.2
+      uses: actions/checkout@v4.3.1
     - name: Install packages (cached)
       uses: awalsh128/cache-apt-pkgs-action@v1
       with:
@@ -105,7 +105,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Check out code
-      uses: actions/checkout@v4.2.2
+      uses: actions/checkout@v4.3.1
     - name: Install packages (cached)
       uses: awalsh128/cache-apt-pkgs-action@v1
       with:
@@ -197,7 +197,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Check out code
-      uses: actions/checkout@v4.2.2
+      uses: actions/checkout@v4.3.1
     - name: Install qemu-utils (cached)
       uses: awalsh128/cache-apt-pkgs-action@v1
       with:
@@ -286,7 +286,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Check out code using action/checkout
-      uses: actions/checkout@v4.2.2
+      uses: actions/checkout@v4.3.1
     - name: Install packages (cached)
       uses: awalsh128/cache-apt-pkgs-action@v1
       with:
@@ -317,7 +317,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Check out code using action/checkout
-      uses: actions/checkout@v4.2.2
+      uses: actions/checkout@v4.3.1
     - name: Install packages (cached)
       uses: awalsh128/cache-apt-pkgs-action@v1
       with:

@@ -6,14 +6,12 @@ on:
     branches:
       - main
     paths:
-      - '**.sh'
       - 'qemu/**'
       - 'libvirt/**'
   push:
     branches:
       - main
     paths:
-      - '**.sh'
       - 'qemu/**'
       - 'libvirt/**'
 
@@ -23,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out code
-        uses: actions/checkout@v4.2.2
+        uses: actions/checkout@v4.3.1
       
       - name: Run ShellCheck
         run: |
