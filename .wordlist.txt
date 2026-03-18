@@ -20,8 +20,10 @@ Initramfs
 KVM
 LFS
 LightNVM
+MMIO
 Matias
 Multistrap
+NIC
 NVM
 NVME
 NVMe
@@ -43,10 +45,13 @@ Shellcheck
 TCG
 Thie
 UEFI
+USERDEV
 VFIO
 VM
+VMEM
 VMs
 VirtFS
+YAML
 Virtfs
 aarch
 addr
@@ -66,6 +71,7 @@ bzimage
 cd
 centos
 chroot
+codename
 cli
 conf
 config
@@ -80,15 +86,18 @@ dev
 differntly
 efi
 eideticom
+emacs
 el
 env
 environemnt
 eth
 exe
+fio
 filesystem
 filesystems
 fs
 gdb
+gitignored
 github
 gitignore
 gz
@@ -112,6 +121,7 @@ lfs
 li
 librxe
 libs
+libvfio
 libvirt
 linux
 localds
@@ -120,6 +130,7 @@ logan
 lt
 managable
 md
+mmio
 mnt
 modprobe
 mon
@@ -127,6 +138,7 @@ multistrap
 nbd
 netdev
 nographic
+nox
 ntap
 nvme
 nvmef
@@ -147,6 +159,7 @@ rc
 rdma
 repo
 riscv
+rsa
 roce
 rootfs
 runqemu
@@ -159,6 +172,7 @@ stackoverflow
 sudo
 symlink
 sys
+sysstat
 targetted
 testdev
 ttyS
@@ -166,7 +180,9 @@ txt
 ubuntu
 udev
 uefi
+ul
 usr
+vCPUs
 vfio
 virt
 virtfs
