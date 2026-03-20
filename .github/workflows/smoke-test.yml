@@ -227,6 +227,30 @@ jobs:
         echo "✓ x86 NVME=2 passed"
       working-directory: qemu
 
+    - name: "Dry-run: x86 with NVME=2 and NVME_RECREATE=true"
+      run: |
+        VM_NAME=dry-test KVM=none NVME=2 DRY_RUN=1 ./run-vm > /dev/null
+        [ -f ../images/dry-test-nvme1.qcow2 ] || \
+          (echo "Missing nvme1 backing before recreate" && exit 1)
+        mtime1=$(stat -c %Y ../images/dry-test-nvme1.qcow2)
+        mtime2=$(stat -c %Y ../images/dry-test-nvme2.qcow2)
+        sleep 2
+        out=$(VM_NAME=dry-test KVM=none NVME=2 NVME_RECREATE=true \
+              DRY_RUN=1 ./run-vm)
+        echo "$out"
+        echo "$out" | grep -q "nvme,serial=dry-test-nvme1"
+        echo "$out" | grep -q "nvme,serial=dry-test-nvme2"
+        [ -f ../images/dry-test-nvme1.qcow2 ] || \
+          (echo "Missing nvme1 after NVME_RECREATE" && exit 1)
+        [ -f ../images/dry-test-nvme2.qcow2 ] || \
+          (echo "Missing nvme2 after NVME_RECREATE" && exit 1)
+        [ "$(stat -c %Y ../images/dry-test-nvme1.qcow2)" -gt "$mtime1" ] || \
+          (echo "nvme1 mtime unchanged; file not recreated" && exit 1)
+        [ "$(stat -c %Y ../images/dry-test-nvme2.qcow2)" -gt "$mtime2" ] || \
+          (echo "nvme2 mtime unchanged; file not recreated" && exit 1)
+        echo "✓ NVME_RECREATE passed"
+      working-directory: qemu
+
     - name: "Dry-run: x86 with NVME=custom string"
       run: |
         custom="-device nvme,serial=custom-test"

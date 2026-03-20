@@ -57,6 +57,11 @@
 # only apply the mask if the QEMU binary accepts the corresponding nvme-ns
 # property.
 #
+# NVME_RECREATE when set to "true" deletes and recreates the qcow2 backing
+# files for emulated NVMe SSDs before starting the VM. Default is "false".
+# Only applies when NVME is a positive number (mode 1); no effect for string
+# or null_blk modes.
+#
 # Post 10.1.0 versions of QEMU have libvfio-user support which allows
 # us to create emulated PCIe devices via a socket and the API provided
 # by that library. You can specify these device(s) via a comma-separated
@@ -72,6 +77,13 @@
 # DRY_RUN when set to anything other than "none" causes the
 # script to print the full QEMU command line to stdout instead
 # of executing it.  Useful for debugging invocation arguments.
+#
+# MCAST_GROUP adds a second virtio-net NIC connected to a QEMU
+# UDP multicast socket (e.g. MCAST_GROUP=230.0.0.1:1234).
+# This lets multiple VMs on the same host (or across hosts on
+# the same LAN) communicate over a shared multicast segment
+# without any TAP/bridge setup.  A deterministic MAC address
+# is derived from SSH_PORT so each VM gets a unique address.
 
 set -e
 
@@ -88,6 +100,7 @@ NVME=${NVME:-none}
 NVME_TRACE=${NVME_TRACE:-none}
 NVME_TRACE_FILE=${NVME_TRACE_FILE:-}
 NVME_LBAF_MASK=${NVME_LBAF_MASK:-none}
+NVME_RECREATE=${NVME_RECREATE:-false}
 PCI_TESTDEV=${PCI_TESTDEV:-none}
 PCI_HOSTDEV=${PCI_HOSTDEV:-none}
 VFIO_USERDEV=${VFIO_USERDEV:-none}
@@ -95,6 +108,7 @@ NVME_SIZE=1024G
 PCI_MMIO_BRIDGE=${PCI_MMIO_BRIDGE:-none}
 DATA_NIC_QUEUES=${DATA_NIC_QUEUES:-0}
 DRY_RUN=${DRY_RUN:-none}
+MCAST_GROUP=${MCAST_GROUP:-none}
 
 if [ "${KVM}" = "enable" ]; then
     KVM=",accel=kvm"
@@ -167,9 +181,12 @@ function qemu_probe_caps {
 qemu_probe_caps
 
 function nvme_create {
-    if [ ! -f ${IMAGES}/${1}.qcow2 ]; then
+    if [ "${NVME_RECREATE}" = "true" ] && [ -f "${IMAGES}/${1}.qcow2" ]; then
+        rm -f "${IMAGES}/${1}.qcow2"
+    fi
+    if [ ! -f "${IMAGES}/${1}.qcow2" ]; then
         qemu-img create -f qcow2 \
-            ${IMAGES}/${1}.qcow2 $2 >> /dev/null
+            "${IMAGES}/${1}.qcow2" $2 >> /dev/null
     fi
     local drv="-drive file=${IMAGES}/${1}.qcow2"
     drv+=",format=qcow2,if=none,id=nvme-${3}"
@@ -315,6 +332,15 @@ if [ "${DATA_NIC_QUEUES}" -gt 0 ] 2>/dev/null; then
     DATA_NIC_ARGS+=",vectors=${VECTORS}"
 fi
 
+MCAST_ARGS=""
+if [ "${MCAST_GROUP}" != "none" ]; then
+    MCAST_MAC=$(printf "52:54:00:00:%02x:%02x" \
+        $(( SSH_PORT / 256 )) $(( SSH_PORT % 256 )))
+    MCAST_ARGS="-netdev socket,id=net1,mcast=${MCAST_GROUP}"
+    MCAST_ARGS+=" -device virtio-net-pci,netdev=net1"
+    MCAST_ARGS+=",mac=${MCAST_MAC}"
+fi
+
 QEMU_CMD=(${QEMU_PATH}qemu-system-${QARCH}
    ${QARCH_ARGS}
    ${TRACE_ARGS}
@@ -330,7 +356,8 @@ QEMU_CMD=(${QEMU_PATH}qemu-system-${QARCH}
    -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}.qcow2
    -netdev user,id=net0,hostfwd=tcp::${SSH_PORT}-:22
    -device virtio-net-pci,netdev=net0
-   ${DATA_NIC_ARGS})
+   ${DATA_NIC_ARGS}
+   ${MCAST_ARGS})
 
 if [ "${DRY_RUN}" != "none" ]; then
     echo "${QEMU_CMD[@]}"
