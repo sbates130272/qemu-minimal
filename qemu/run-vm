@@ -57,6 +57,11 @@
 # only apply the mask if the QEMU binary accepts the corresponding nvme-ns
 # property.
 #
+# NVME_RECREATE when set to "true" deletes and recreates the qcow2 backing
+# files for emulated NVMe SSDs before starting the VM. Default is "false".
+# Only applies when NVME is a positive number (mode 1); no effect for string
+# or null_blk modes.
+#
 # Post 10.1.0 versions of QEMU have libvfio-user support which allows
 # us to create emulated PCIe devices via a socket and the API provided
 # by that library. You can specify these device(s) via a comma-separated
@@ -95,6 +100,7 @@ NVME=${NVME:-none}
 NVME_TRACE=${NVME_TRACE:-none}
 NVME_TRACE_FILE=${NVME_TRACE_FILE:-}
 NVME_LBAF_MASK=${NVME_LBAF_MASK:-none}
+NVME_RECREATE=${NVME_RECREATE:-false}
 PCI_TESTDEV=${PCI_TESTDEV:-none}
 PCI_HOSTDEV=${PCI_HOSTDEV:-none}
 VFIO_USERDEV=${VFIO_USERDEV:-none}
@@ -175,9 +181,12 @@ function qemu_probe_caps {
 qemu_probe_caps
 
 function nvme_create {
-    if [ ! -f ${IMAGES}/${1}.qcow2 ]; then
+    if [ "${NVME_RECREATE}" = "true" ] && [ -f "${IMAGES}/${1}.qcow2" ]; then
+        rm -f "${IMAGES}/${1}.qcow2"
+    fi
+    if [ ! -f "${IMAGES}/${1}.qcow2" ]; then
         qemu-img create -f qcow2 \
-            ${IMAGES}/${1}.qcow2 $2 >> /dev/null
+            "${IMAGES}/${1}.qcow2" $2 >> /dev/null
     fi
     local drv="-drive file=${IMAGES}/${1}.qcow2"
     drv+=",format=qcow2,if=none,id=nvme-${3}"
