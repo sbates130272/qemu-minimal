@@ -227,6 +227,81 @@ jobs:
         echo "✓ x86 NVME=2 passed"
       working-directory: qemu
 
+    - name: "Dry-run: PCI_MMIO_BRIDGE missing QEMU fails clearly"
+      run: |
+        set +e
+        out=$(VM_NAME=dry-test KVM=none NVME=none PCI_MMIO_BRIDGE=on \
+              QEMU_PATH=../does-not-exist/ DRY_RUN=1 ./run-vm 2>&1)
+        rc=$?
+        set -e
+        echo "$out"
+        [ $rc -ne 0 ] || \
+          (echo "Expected run-vm to fail when QEMU is missing" && exit 1)
+        echo "$out" | grep -q "was not found in DRY_RUN mode"
+        echo "✓ missing QEMU dry-run bridge check passed"
+      working-directory: qemu
+
+    - name: "Dry-run: PCI_MMIO_BRIDGE unsupported QEMU fails"
+      run: |
+        mkdir -p ../fake-qemu-no-bridge
+        cat > ../fake-qemu-no-bridge/qemu-system-x86_64 << 'EOF'
+        #!/bin/sh
+        if [ "$1" = "-device" ] && [ "$2" = "help" ]; then
+          echo 'name "virtio-net-pci", bus PCI'
+          exit 0
+        fi
+        if [ "$1" = "-device" ] && [ "$2" = "nvme,help" ]; then
+          echo "ioeventfd=<bool>"
+          echo "dbcs=<bool>"
+          exit 0
+        fi
+        if [ "$1" = "-device" ] && [ "$2" = "nvme-ns,help" ]; then
+          echo "lbaf-mask=<uint16>"
+          exit 0
+        fi
+        exit 0
+        EOF
+        chmod +x ../fake-qemu-no-bridge/qemu-system-x86_64
+        set +e
+        out=$(VM_NAME=dry-test KVM=none NVME=none PCI_MMIO_BRIDGE=on \
+              QEMU_PATH=../fake-qemu-no-bridge/ DRY_RUN=1 ./run-vm 2>&1)
+        rc=$?
+        set -e
+        echo "$out"
+        [ $rc -ne 0 ] || \
+          (echo "Expected run-vm to fail without pci-mmio-bridge" && exit 1)
+        echo "$out" | grep -q "does not support 'pci-mmio-bridge'"
+        echo "✓ unsupported pci-mmio-bridge check passed"
+      working-directory: qemu
+
+    - name: "Dry-run: PCI_MMIO_BRIDGE supported QEMU succeeds"
+      run: |
+        mkdir -p ../fake-qemu-with-bridge
+        cat > ../fake-qemu-with-bridge/qemu-system-x86_64 << 'EOF'
+        #!/bin/sh
+        if [ "$1" = "-device" ] && [ "$2" = "help" ]; then
+          echo 'name "pci-mmio-bridge", bus PCI'
+          exit 0
+        fi
+        if [ "$1" = "-device" ] && [ "$2" = "nvme,help" ]; then
+          echo "ioeventfd=<bool>"
+          echo "dbcs=<bool>"
+          exit 0
+        fi
+        if [ "$1" = "-device" ] && [ "$2" = "nvme-ns,help" ]; then
+          echo "lbaf-mask=<uint16>"
+          exit 0
+        fi
+        exit 0
+        EOF
+        chmod +x ../fake-qemu-with-bridge/qemu-system-x86_64
+        out=$(VM_NAME=dry-test KVM=none NVME=none PCI_MMIO_BRIDGE=on \
+              QEMU_PATH=../fake-qemu-with-bridge/ DRY_RUN=1 ./run-vm)
+        echo "$out"
+        echo "$out" | grep -q "pci-mmio-bridge,id=mmio-bridge"
+        echo "✓ supported pci-mmio-bridge check passed"
+      working-directory: qemu
+
     - name: "Dry-run: x86 with NVME=2 and NVME_RECREATE=true"
       run: |
         VM_NAME=dry-test KVM=none NVME=2 DRY_RUN=1 ./run-vm > /dev/null
