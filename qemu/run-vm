@@ -147,6 +147,7 @@ function qemu_probe_caps {
     QEMU_AIO="native"
     QEMU_HAS_LBAF_MASK=0
     QEMU_HAS_PCI_MMIO_BRIDGE=0
+    QEMU_CAPS_PROBED=1
     if ! command -v "${qemu}" &>/dev/null; then
         if [ "${DRY_RUN}" = "none" ]; then
             echo "Error: QEMU binary '${qemu}'" \
@@ -157,11 +158,11 @@ function qemu_probe_caps {
             exit 1
         fi
         QEMU_AIO="threads"
+        QEMU_CAPS_PROBED=0
         return 0
     fi
-    local device_help
-    device_help=$("${qemu}" -device help 2>&1) || true
-    echo "${device_help}" | grep -q 'name "pci-mmio-bridge"' \
+    "${qemu}" -device help 2>&1 \
+        | grep -q 'name "pci-mmio-bridge"' \
         && QEMU_HAS_PCI_MMIO_BRIDGE=1
     local nvme_help
     nvme_help=$("${qemu}" -device nvme,help 2>&1) || true
@@ -306,10 +307,18 @@ if [ "${PCI_MMIO_BRIDGE}" = "none" ]; then
 else
     if [ ${QEMU_HAS_PCI_MMIO_BRIDGE} -eq 0 ]; then
         QEMU_BIN="${QEMU_PATH}qemu-system-${QARCH}"
-        echo "Error: PCI_MMIO_BRIDGE requested, but '${QEMU_BIN}'" \
-            "does not support 'pci-mmio-bridge'." >&2
-        echo "Run '${QEMU_BIN} -device help' to list devices and set" \
-            "QEMU_PATH to a compatible QEMU build." >&2
+        if [ ${QEMU_CAPS_PROBED} -eq 0 ]; then
+            echo "Error: PCI_MMIO_BRIDGE requested, but '${QEMU_BIN}'" \
+                "was not found in DRY_RUN mode, so bridge support" \
+                "could not be probed." >&2
+            echo "Set QEMU_PATH to a compatible QEMU build, or run" \
+                "without DRY_RUN so missing binaries fail earlier." >&2
+        else
+            echo "Error: PCI_MMIO_BRIDGE requested, but '${QEMU_BIN}'" \
+                "does not support 'pci-mmio-bridge'." >&2
+            echo "Run '${QEMU_BIN} -device help' to list devices and" \
+                "set QEMU_PATH to a compatible QEMU build." >&2
+        fi
         exit 1
     fi
     echo "NOTE: PCI_MMIO_BRIDGE active; nvme_create forces ioeventfd=off,dbcs=off."

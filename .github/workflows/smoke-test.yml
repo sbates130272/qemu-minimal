@@ -227,6 +227,20 @@ jobs:
         echo "✓ x86 NVME=2 passed"
       working-directory: qemu
 
+    - name: "Dry-run: PCI_MMIO_BRIDGE missing QEMU fails clearly"
+      run: |
+        set +e
+        out=$(VM_NAME=dry-test KVM=none NVME=none PCI_MMIO_BRIDGE=on \
+              QEMU_PATH=../does-not-exist/ DRY_RUN=1 ./run-vm 2>&1)
+        rc=$?
+        set -e
+        echo "$out"
+        [ $rc -ne 0 ] || \
+          (echo "Expected run-vm to fail when QEMU is missing" && exit 1)
+        echo "$out" | grep -q "was not found in DRY_RUN mode"
+        echo "✓ missing QEMU dry-run bridge check passed"
+      working-directory: qemu
+
     - name: "Dry-run: PCI_MMIO_BRIDGE unsupported QEMU fails"
       run: |
         mkdir -p ../fake-qemu-no-bridge
