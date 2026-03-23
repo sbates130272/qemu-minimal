@@ -380,6 +380,41 @@ jobs:
         echo "✓ custom VCPUS/VMEM passed"
       working-directory: qemu
 
+    - name: "Dry-run: VFIO_USERDEV with pcie-root-port"
+      run: |
+        out=$(VM_NAME=dry-test KVM=none \
+              VFIO_USERDEV=/tmp/a.sock,/tmp/b.sock \
+              DRY_RUN=1 ./run-vm)
+        echo "$out"
+        echo "$out" | grep -q \
+          "pcie-root-port,id=pcie-vfu.1"
+        echo "$out" | grep -q \
+          "pcie-root-port,id=pcie-vfu.2"
+        echo "$out" | grep -q "vfio-user-pci"
+        echo "✓ VFIO_USERDEV root-port passed"
+      working-directory: qemu
+
+    - name: "Dry-run: QMP_SOCKET=true"
+      run: |
+        out=$(VM_NAME=dry-test KVM=none \
+              QMP_SOCKET=true DRY_RUN=1 ./run-vm)
+        echo "$out"
+        echo "$out" | grep -q \
+          "unix:/tmp/qmp-dry-test-2222.sock"
+        echo "✓ QMP_SOCKET=true passed"
+      working-directory: qemu
+
+    - name: "Dry-run: QMP_SOCKET=custom path"
+      run: |
+        out=$(VM_NAME=dry-test KVM=none \
+              QMP_SOCKET=/tmp/my-qmp.sock \
+              DRY_RUN=1 ./run-vm)
+        echo "$out"
+        echo "$out" | grep -q \
+          "unix:/tmp/my-qmp.sock"
+        echo "✓ QMP_SOCKET custom path passed"
+      working-directory: qemu
+
   smoke-test-arm64:
     name: smoke-test-arm64
     runs-on: ubuntu-latest

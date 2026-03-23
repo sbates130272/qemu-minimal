@@ -65,7 +65,14 @@
 # Post 10.1.0 versions of QEMU have libvfio-user support which allows
 # us to create emulated PCIe devices via a socket and the API provided
 # by that library. You can specify these device(s) via a comma-separated
-# list of sockets in VFIO_USERDEV.
+# list of sockets in VFIO_USERDEV. Each device is placed below its own
+# pcie-root-port to enable hot-plug and PCIe topology isolation.
+#
+# QMP_SOCKET enables the QEMU Machine Protocol monitor socket:
+#   - "false" (default): no QMP socket
+#   - "true": adds a QMP unix socket at
+#     /tmp/qmp-${VM_NAME}-${SSH_PORT}.sock
+#   - Any other value is treated as a custom socket path
 #
 # DATA_NIC_QUEUES adds a second multi-queue virtio-net NIC backed
 # by a TAP device (named dt<SSH_PORT>, e.g. dt2231).  This is
@@ -109,6 +116,7 @@ PCI_MMIO_BRIDGE=${PCI_MMIO_BRIDGE:-none}
 DATA_NIC_QUEUES=${DATA_NIC_QUEUES:-0}
 DRY_RUN=${DRY_RUN:-none}
 MCAST_GROUP=${MCAST_GROUP:-none}
+QMP_SOCKET=${QMP_SOCKET:-false}
 
 if [ "${KVM}" = "enable" ]; then
     KVM=",accel=kvm"
@@ -289,15 +297,23 @@ fi
 if [ "${VFIO_USERDEV}" = "none" ]; then
     VFIO_USERDEV_ARGS=()
 else
-    VFIO_USERDEV_ARGS+=( -object memory-backend-memfd,id=mem-vfio-user,size=${VMEM},share=on  )
+    VFIO_USERDEV_ARGS+=( -object \
+        memory-backend-memfd,id=mem-vfio-user,size=${VMEM},share=on )
     VFIO_USERDEV_ARGS+=( -numa node,memdev=mem-vfio-user )
+    j=0
     for THIS_VFIO_USERDEV in ${VFIO_USERDEV//,/ }; do
-        if [ ! -S "${THIS_VFIO_USERDEV}" ]; then
-            echo "ERROR: Socket ${THIS_VFIO_USERDEV} does not exist."
+        if [ "${DRY_RUN}" = "none" ] \
+                && [ ! -S "${THIS_VFIO_USERDEV}" ]; then
+            echo "ERROR: Socket ${THIS_VFIO_USERDEV}" \
+                "does not exist."
             exit 1
         fi
-        DEV_JSON=$(printf '{"driver":"vfio-user-pci","socket":{"path":"%s","type":"unix"}}' \
-            "${THIS_VFIO_USERDEV}")
+        j=$((j + 1))
+        VFIO_USERDEV_ARGS+=( \
+            -device "pcie-root-port,id=pcie-vfu.${j}" )
+        DEV_JSON=$(printf \
+            '{"driver":"vfio-user-pci","bus":"pcie-vfu.%d","socket":{"path":"%s","type":"unix"}}' \
+            "${j}" "${THIS_VFIO_USERDEV}")
         VFIO_USERDEV_ARGS+=( -device "${DEV_JSON}" )
     done
 fi
@@ -363,6 +379,16 @@ if [ "${MCAST_GROUP}" != "none" ]; then
     MCAST_ARGS+=",mac=${MCAST_MAC}"
 fi
 
+QMP_ARGS=""
+if [ "${QMP_SOCKET}" != "false" ]; then
+    if [ "${QMP_SOCKET}" = "true" ]; then
+        QMP_SOCKET_PATH="/tmp/qmp-${VM_NAME}-${SSH_PORT}.sock"
+    else
+        QMP_SOCKET_PATH="${QMP_SOCKET}"
+    fi
+    QMP_ARGS="-qmp unix:${QMP_SOCKET_PATH},server,nowait"
+fi
+
 QEMU_CMD=(${QEMU_PATH}qemu-system-${QARCH}
    ${QARCH_ARGS}
    ${TRACE_ARGS}
@@ -379,7 +405,8 @@ QEMU_CMD=(${QEMU_PATH}qemu-system-${QARCH}
    -netdev user,id=net0,hostfwd=tcp::${SSH_PORT}-:22
    -device virtio-net-pci,netdev=net0
    ${DATA_NIC_ARGS}
-   ${MCAST_ARGS})
+   ${MCAST_ARGS}
+   ${QMP_ARGS})
 
 if [ "${DRY_RUN}" != "none" ]; then
     echo "${QEMU_CMD[@]}"
