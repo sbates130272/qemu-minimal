@@ -135,8 +135,10 @@ using it before restoring.
 | `NVME_TRACE` | `none` | NVMe tracing (`doorbell`, `all`, or event name) |
 | `NVME_TRACE_FILE` | (empty) | Redirect trace output to a file |
 | `PCI_HOSTDEV` | `none` | Comma-separated PCI addresses for VFIO passthrough |
-| `VFIO_USERDEV` | `none` | Comma-separated libvfio-user socket paths |
+| `VFIO_USERDEV` | `none` | libvfio-user sockets (each under a root-port) |
 | `PCI_MMIO_BRIDGE` | `none` | pci-mmio-bridge for CXL-style testing |
 | `PCI_TESTDEV` | `none` | Enable pci-testdev |
 | `DATA_NIC_QUEUES` | `0` | Multi-queue virtio-net TAP NIC (queue count) |
+| `MCAST_GROUP` | `none` | Multicast socket NIC (`230.0.0.1:1234`) |
+| `QMP_SOCKET` | `false` | QMP socket (`true` for default, or path) |
 | `DRY_RUN` | `none` | Print QEMU command instead of executing |

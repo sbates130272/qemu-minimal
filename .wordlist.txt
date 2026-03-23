@@ -20,8 +20,10 @@ Initramfs
 KVM
 LFS
 LightNVM
+MCAST
 MMIO
 Matias
+Multicast
 Multistrap
 NIC
 NVM
@@ -35,6 +37,7 @@ PCIe
 PMEM
 PRs
 Passthrough
+QMP
 QEMU
 QEMU's
 README
