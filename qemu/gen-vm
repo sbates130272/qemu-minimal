@@ -219,6 +219,7 @@ ${PACKAGES}
 runcmd:
   - systemctl disable openipmi.service
   - systemctl mask openipmi.service
+  - loginctl enable-linger ${USERNAME}
 power_state:
   delay: now
   mode: poweroff
@@ -233,6 +234,20 @@ write_files:
     owner: root:root
     permissions: 0o644
     append: true
+    defer: true
+  - path: /etc/systemd/logind.conf.d/99-kill-user-processes.conf
+    content: |
+      [Login]
+      KillUserProcesses=yes
+    owner: root:root
+    permissions: 0o644
+    defer: true
+  - path: /etc/systemd/system.conf.d/99-timeout.conf
+    content: |
+      [Manager]
+      DefaultTimeoutStopSec=15s
+    owner: root:root
+    permissions: 0o644
     defer: true
   - path: /home/${USERNAME}/.emacs
     content: |
