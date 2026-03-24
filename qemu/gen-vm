@@ -42,6 +42,14 @@
 # RESTORE_IMAGE is a boolean that only performs the final qemu-img
 # create step. Before running, it checks that qemu is not using the
 # image file and that the backing file exists.
+#
+# BACKING_FILE is a path to an existing, already-provisioned
+# backing qcow2 image. When set, gen-vm skips the cloud image
+# download, cloud-init provisioning, and first boot, and
+# instead creates ${VM_NAME}.qcow2 as a thin overlay on top
+# of the specified backing file. This allows multiple VMs to
+# share a single read-only backing image with per-VM diffs
+# written to their own overlays.
 
 QEMU_PATH=${QEMU_PATH:-}
 VM_NAME=${VM_NAME:-qemu-minimal}
@@ -61,6 +69,7 @@ KVM=${KVM:-enable}
 FORCE=${FORCE:-false}
 NO_BACKING=${NO_BACKING:-false}
 RESTORE_IMAGE=${RESTORE_IMAGE:-false}
+BACKING_FILE=${BACKING_FILE:-}
 
   # Focal and above prefers us to use cloud images and
   # cloud-init. Download the focal cloud image and set it up using a
@@ -135,6 +144,32 @@ if [ "${RESTORE_IMAGE}" = "true" ]; then
         "${IMAGES}/${VM_NAME}-backing.qcow2"
     echo "Successfully created ${IMAGE_FILE} with backing file" \
          "${IMAGES}/${VM_NAME}-backing.qcow2"
+    exit 0
+fi
+
+# Handle BACKING_FILE option - create an overlay on top of an
+# existing, already-provisioned backing image. This skips
+# cloud-init and first boot entirely.
+if [ -n "${BACKING_FILE}" ]; then
+    if [ "${NO_BACKING}" = "true" ]; then
+        echo "Error: BACKING_FILE and NO_BACKING cannot" \
+             "both be set!"
+        exit 1
+    fi
+    if [ ! -f "${BACKING_FILE}" ]; then
+        echo "Error: BACKING_FILE ${BACKING_FILE} does" \
+             "not exist!"
+        exit 1
+    fi
+
+    mkdir -p "${IMAGES}"
+    IMAGE_FILE="${IMAGES}/${VM_NAME}.qcow2"
+    echo "Creating overlay ${IMAGE_FILE} backed by" \
+         "${BACKING_FILE}"
+    create_image_with_backing "${IMAGE_FILE}" \
+        "${BACKING_FILE}"
+    echo "Successfully created ${IMAGE_FILE} with" \
+         "backing file ${BACKING_FILE}"
     exit 0
 fi
 

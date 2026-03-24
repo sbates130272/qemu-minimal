@@ -91,6 +91,17 @@
 # the same LAN) communicate over a shared multicast segment
 # without any TAP/bridge setup.  A deterministic MAC address
 # is derived from SSH_PORT so each VM gets a unique address.
+#
+# BACKING_SHARED when set to "true" adds file.locking=off
+# and backing.file.locking=off to the root disk -drive
+# option. The first disables QEMU's OFD image locking on
+# the overlay; the second disables it on the backing file
+# that QEMU opens internally. Both are needed so that
+# multiple VMs can open overlays that share the same
+# read-only backing file without lock conflicts. Each VM
+# must still have its own overlay (different VM_NAME).
+# Use gen-vm with BACKING_FILE to create per-VM overlays
+# from a shared backing image.
 
 set -e
 
@@ -117,6 +128,7 @@ DATA_NIC_QUEUES=${DATA_NIC_QUEUES:-0}
 DRY_RUN=${DRY_RUN:-none}
 MCAST_GROUP=${MCAST_GROUP:-none}
 QMP_SOCKET=${QMP_SOCKET:-false}
+BACKING_SHARED=${BACKING_SHARED:-false}
 
 if [ "${KVM}" = "enable" ]; then
     KVM=",accel=kvm"
@@ -298,7 +310,7 @@ if [ "${VFIO_USERDEV}" = "none" ]; then
     VFIO_USERDEV_ARGS=()
 else
     VFIO_USERDEV_ARGS+=( -object \
-        memory-backend-memfd,id=mem-vfio-user,size=${VMEM},share=on )
+        memory-backend-memfd,id=mem-vfio-user,size=${VMEM}M,share=on )
     VFIO_USERDEV_ARGS+=( -numa node,memdev=mem-vfio-user )
     j=0
     for THIS_VFIO_USERDEV in ${VFIO_USERDEV//,/ }; do
@@ -389,6 +401,12 @@ if [ "${QMP_SOCKET}" != "false" ]; then
     QMP_ARGS="-qmp unix:${QMP_SOCKET_PATH},server,nowait"
 fi
 
+ROOT_DRIVE="-drive if=virtio,format=qcow2"
+ROOT_DRIVE+=",file=${IMAGES}/${VM_NAME}.qcow2"
+if [ "${BACKING_SHARED}" = "true" ]; then
+    ROOT_DRIVE+=",file.locking=off,backing.file.locking=off"
+fi
+
 QEMU_CMD=(${QEMU_PATH}qemu-system-${QARCH}
    ${QARCH_ARGS}
    ${TRACE_ARGS}
@@ -401,7 +419,7 @@ QEMU_CMD=(${QEMU_PATH}qemu-system-${QARCH}
    ${PCI_HOSTDEV_ARGS}
    "${PCI_MMIO_BRIDGE_ARGS[@]}"
    "${VFIO_USERDEV_ARGS[@]}"
-   -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}.qcow2
+   ${ROOT_DRIVE}
    -netdev user,id=net0,hostfwd=tcp::${SSH_PORT}-:22
    -device virtio-net-pci,netdev=net0
    ${DATA_NIC_ARGS}
