@@ -66,6 +66,29 @@ jobs:
         fi
         echo "✓ RESTORE_IMAGE mode test passed"
       working-directory: qemu
+    - name: Test BACKING_FILE mode
+      run: |
+        BACKING_FILE=../images/qemu-minimal-smoke-test-backing.qcow2 \
+          VM_NAME=shared-overlay-test \
+          ./gen-vm
+        if [ ! -f ../images/shared-overlay-test.qcow2 ]; then
+          echo "Overlay not created by BACKING_FILE mode"
+          exit 1
+        fi
+        if ! qemu-img info \
+             ../images/shared-overlay-test.qcow2 \
+             | grep -q "backing file:"; then
+          echo "Overlay does not reference a backing file"
+          exit 1
+        fi
+        if ! qemu-img info \
+             ../images/shared-overlay-test.qcow2 \
+             | grep -q "smoke-test-backing"; then
+          echo "Overlay does not point to expected backing"
+          exit 1
+        fi
+        echo "✓ BACKING_FILE mode test passed"
+      working-directory: qemu
     - name: Run the generated x86_64 VM as a background task
       run: ./run-vm > run-vm-output.log 2>&1 &
       working-directory: qemu
@@ -413,6 +436,33 @@ jobs:
         echo "$out" | grep -q \
           "unix:/tmp/my-qmp.sock"
         echo "✓ QMP_SOCKET custom path passed"
+      working-directory: qemu
+
+    - name: "Dry-run: BACKING_SHARED=true adds file.locking=off"
+      run: |
+        out=$(VM_NAME=dry-test KVM=none \
+              BACKING_SHARED=true \
+              DRY_RUN=1 ./run-vm)
+        echo "$out"
+        echo "$out" | grep -q "file.locking=off"
+        echo "$out" | grep -q "backing.file.locking=off"
+        echo "✓ BACKING_SHARED dry-run passed"
+      working-directory: qemu
+
+    - name: "Dry-run: BACKING_SHARED default has no file.locking"
+      run: |
+        out=$(VM_NAME=dry-test KVM=none \
+              DRY_RUN=1 ./run-vm)
+        echo "$out"
+        if echo "$out" | grep -q "file.locking=off"; then
+          echo "file.locking=off should not appear by default"
+          exit 1
+        fi
+        if echo "$out" | grep -q "backing.file.locking=off"; then
+          echo "backing.file.locking=off should not appear by default"
+          exit 1
+        fi
+        echo "✓ BACKING_SHARED default dry-run passed"
       working-directory: qemu
 
   smoke-test-arm64:

@@ -28,6 +28,7 @@ Multistrap
 NIC
 NVM
 NVME
+OFD
 NVMe
 NVMf
 OpenChannel

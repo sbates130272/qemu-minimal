@@ -108,6 +108,7 @@ Set `PACKAGES=none` to skip package installation entirely.
 | `FORCE` | `false` | Force re-download of cloud image |
 | `NO_BACKING` | `false` | Create image without backing file |
 | `RESTORE_IMAGE` | `false` | Recreate image from existing backing file |
+| `BACKING_FILE` | (empty) | Path to existing backing qcow2 for overlay creation |
 
 ### RESTORE_IMAGE
 
@@ -117,6 +118,17 @@ file. This is useful when the VM image is corrupted or
 deleted but the backing file remains. The script verifies
 that the backing file exists and that QEMU is not currently
 using it before restoring.
+
+### BACKING_FILE
+
+When `BACKING_FILE` is set to a path, `gen-vm` skips the
+cloud image download, cloud-init provisioning, and first
+boot entirely. Instead it creates `${VM_NAME}.qcow2` as a
+thin qcow2 overlay on top of the specified backing file.
+This allows multiple VMs to share a single read-only
+backing image, with per-VM diffs written to their own
+overlays. See [Shared Backing Files](#shared-backing-files)
+for a full workflow example.
 
 ## Environment Variables (run-vm)
 
@@ -142,3 +154,47 @@ using it before restoring.
 | `MCAST_GROUP` | `none` | Multicast socket NIC (`230.0.0.1:1234`) |
 | `QMP_SOCKET` | `false` | QMP socket (`true` for default, or path) |
 | `DRY_RUN` | `none` | Print QEMU command instead of executing |
+| `BACKING_SHARED` | `false` | Disable image locking for shared backing files |
+
+## Shared Backing Files
+
+Multiple VMs can share a single read-only backing file.
+Each VM gets its own thin overlay where all writes land,
+so the backing file is never modified after provisioning.
+
+1. Create the base VM (runs cloud-init and provisions the
+   backing file):
+
+```bash
+cd qemu
+VM_NAME=base ./gen-vm
+```
+
+2. Create per-VM overlays from the shared backing file:
+
+```bash
+BACKING_FILE=../images/base-backing.qcow2 \
+  VM_NAME=vm1 ./gen-vm
+BACKING_FILE=../images/base-backing.qcow2 \
+  VM_NAME=vm2 ./gen-vm
+```
+
+3. Run each VM with `BACKING_SHARED=true` and a unique
+   `SSH_PORT` so QEMU disables file locking on the
+   backing chain:
+
+```bash
+BACKING_SHARED=true VM_NAME=vm1 \
+  SSH_PORT=2222 ./run-vm &
+BACKING_SHARED=true VM_NAME=vm2 \
+  SSH_PORT=2223 ./run-vm &
+```
+
+`BACKING_SHARED=true` adds `file.locking=off` and
+`backing.file.locking=off` to the root disk `-drive`.
+The first disables QEMU's OFD locking on the overlay;
+the second disables it on the backing file that QEMU
+opens internally. Both are needed to prevent lock
+conflicts across instances sharing the same backing
+file. Each VM must still use a distinct `VM_NAME` (and
+therefore a distinct overlay) to avoid data corruption.
