@@ -162,6 +162,7 @@ queitly
 rc
 rdma
 repo
+resolute
 riscv
 rsa
 roce

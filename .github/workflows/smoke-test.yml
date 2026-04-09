@@ -28,7 +28,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: images/*-server-cloudimg-*.img
-        key: cloud-img-amd64-noble
+        key: cloud-img-amd64-resolute
     - name: Ensure images directory exists
       run: mkdir -p images
     - name: Generate a x86_64 qemu-based ./gen-vm smoke-test
@@ -142,7 +142,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: images/*-server-cloudimg-*.img
-        key: cloud-img-amd64-noble
+        key: cloud-img-amd64-resolute
     - name: Ensure images directory exists
       run: mkdir -p images
     - name: Generate x86_64 VM image
@@ -481,7 +481,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: images
-        key: cloud-img-arm64-noble
+        key: cloud-img-arm64-resolute
     - name: Ensure images directory exists
       run: mkdir -p images
     - name: Run a aarch64 qemu-based ./gen-vm smoke-test
@@ -513,7 +513,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: images
-        key: cloud-img-riscv64-noble
+        key: cloud-img-riscv64-resolute
     - name: Ensure images directory exists
       run: mkdir -p images
     - name: Run a riscv64 qemu-based ./gen-vm smoke-test
