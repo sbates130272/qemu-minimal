@@ -4,16 +4,17 @@
 #
 # (C) Stephen Bates <sbates@raithlin>
 #
-# A simple script generate a Ubuntu Noble VM using bare QEMU (i.e. not
-# libvirt) and cloud-init.
+# A simple script to generate an Ubuntu cloud-image VM using bare QEMU
+# (i.e. not libvirt) and cloud-init.
 #
 # Jammy (or Later)
 # ----------------
 #
-# Note that for Jammy you need the cloud-init as well as
-# cloud-image-utils  and for jammy a good generic call would be:
+# Note that for Jammy you need cloud-init and cloud-image-utils. Examples:
 #
 # RELEASE=jammy VM_NAME=stephen ./gen-vm
+# RELEASE=resolute VM_NAME=stephen ./gen-vm
+# RELEASE=26.04 VM_NAME=stephen ./gen-vm   # same as resolute (Ubuntu 26.04 LTS)
 #
 # This creates a system with an user called ubuntu and the password
 # change who has full sudo access to the system. This also sets up the
@@ -56,6 +57,12 @@ VM_NAME=${VM_NAME:-qemu-minimal}
 SIZE=${SIZE:-64}
 IMAGES=${IMAGES:-../images}
 RELEASE=${RELEASE:-noble}
+# cloud-images.ubuntu.com uses release codenames; allow 26.04 as an alias
+# for Ubuntu 26.04 LTS (resolute).
+case "${RELEASE}" in
+    26.04|26_04) RELEASE_CODENAME=resolute ;;
+    *) RELEASE_CODENAME="${RELEASE}" ;;
+esac
 ARCH=${ARCH:-amd64}
 VCPUS=${VCPUS:-2}
 VMEM=${VMEM:-4096}
@@ -173,11 +180,11 @@ if [ -n "${BACKING_FILE}" ]; then
     exit 0
 fi
 
-if [ "${FORCE}" = "true" ] || [ ! -f "${IMAGES}/${RELEASE}-server-cloudimg-${ARCH}.img" ]; then
-    rm -rf "${IMAGES}/${RELEASE}-server-cloudimg-${ARCH}.img"
-    wget -P "${IMAGES}" "https://cloud-images.ubuntu.com/${RELEASE}/current/${RELEASE}-server-cloudimg-${ARCH}.img"
+if [ "${FORCE}" = "true" ] || [ ! -f "${IMAGES}/${RELEASE_CODENAME}-server-cloudimg-${ARCH}.img" ]; then
+    rm -rf "${IMAGES}/${RELEASE_CODENAME}-server-cloudimg-${ARCH}.img"
+    wget -P "${IMAGES}" "https://cloud-images.ubuntu.com/${RELEASE_CODENAME}/current/${RELEASE_CODENAME}-server-cloudimg-${ARCH}.img"
 fi
-cp "${IMAGES}/${RELEASE}-server-cloudimg-${ARCH}.img" \
+cp "${IMAGES}/${RELEASE_CODENAME}-server-cloudimg-${ARCH}.img" \
     "${IMAGES}/${VM_NAME}-backing.qcow2"
 qemu-img resize "${IMAGES}/${VM_NAME}-backing.qcow2" "${SIZE}G"
 
