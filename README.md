@@ -94,7 +94,7 @@ Set `PACKAGES=none` to skip package installation entirely.
 |----------|---------|-------------|
 | `VM_NAME` | `qemu-minimal` | Name for the VM |
 | `ARCH` | `amd64` | Architecture (`amd64`, `arm64`, `riscv64`) |
-| `RELEASE` | `noble` | Ubuntu release codename |
+| `RELEASE` | `noble` | Ubuntu release codename (`noble`, `resolute`, …) or `26.04` / `ubuntu-26.04` for Ubuntu 26.04 LTS |
 | `SIZE` | `64` | Disk size in GB |
 | `VCPUS` | `2` | Number of vCPUs |
 | `VMEM` | `4096` | Memory in MB |

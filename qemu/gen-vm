@@ -15,6 +15,9 @@
 #
 # RELEASE=jammy VM_NAME=stephen ./gen-vm
 #
+# Ubuntu 26.04 LTS uses codename resolute on cloud-images; you can set
+# RELEASE=26.04 (or ubuntu-26.04) as an alias for resolute.
+#
 # This creates a system with an user called ubuntu and the password
 # change who has full sudo access to the system. This also sets up the
 # networking as NAT to the host and you can then ssh into the machine
@@ -71,10 +74,15 @@ NO_BACKING=${NO_BACKING:-false}
 RESTORE_IMAGE=${RESTORE_IMAGE:-false}
 BACKING_FILE=${BACKING_FILE:-}
 
-  # Focal and above prefers us to use cloud images and
-  # cloud-init. Download the focal cloud image and set it up using a
-  # cloud-config file. Create am ubuntu user with password-less root
-  # access.
+# Map RELEASE version aliases to Ubuntu cloud image codenames.
+case "${RELEASE}" in
+    26.04|ubuntu-26.04) RELEASE=resolute ;;
+esac
+
+# Focal and above prefers us to use cloud images and
+# cloud-init. Download the focal cloud image and set it up using a
+# cloud-config file. Create am ubuntu user with password-less root
+# access.
 
 set -e
 
