@@ -4,7 +4,7 @@
 #
 # (C) Stephen Bates <sbates@raithlin>
 #
-# A simple script generate a Ubuntu Noble VM using bare QEMU (i.e. not
+# A simple script generate a Ubuntu VM using bare QEMU (i.e. not
 # libvirt) and cloud-init.
 #
 # Jammy (or Later)
@@ -55,7 +55,7 @@ QEMU_PATH=${QEMU_PATH:-}
 VM_NAME=${VM_NAME:-qemu-minimal}
 SIZE=${SIZE:-64}
 IMAGES=${IMAGES:-../images}
-RELEASE=${RELEASE:-noble}
+RELEASE=${RELEASE:-resolute}
 ARCH=${ARCH:-amd64}
 VCPUS=${VCPUS:-2}
 VMEM=${VMEM:-4096}
@@ -77,6 +77,23 @@ BACKING_FILE=${BACKING_FILE:-}
   # access.
 
 set -e
+
+# Normalize common Ubuntu release aliases to cloud-image codenames.
+RELEASE=$(printf '%s' "${RELEASE}" | tr '[:upper:]' '[:lower:]')
+case "${RELEASE}" in
+    26.04|resolute)
+        RELEASE="resolute"
+        ;;
+    24.04|noble)
+        RELEASE="noble"
+        ;;
+    22.04|jammy)
+        RELEASE="jammy"
+        ;;
+    20.04|focal)
+        RELEASE="focal"
+        ;;
+esac
 
 cleanup() {
     rm -rf cloud-config-${VM_NAME} network-config-${VM_NAME} \
