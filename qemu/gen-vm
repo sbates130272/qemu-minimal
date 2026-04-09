@@ -4,16 +4,22 @@
 #
 # (C) Stephen Bates <sbates@raithlin>
 #
-# A simple script generate a Ubuntu Noble VM using bare QEMU (i.e. not
-# libvirt) and cloud-init.
+# A simple script to generate an Ubuntu cloud VM using bare QEMU (i.e.
+# not libvirt) and cloud-init. The default is Noble (24.04 LTS); set
+# RELEASE to any supported Ubuntu cloud-images codename (for example
+# jammy, noble, or resolute for 26.04 LTS).
 #
-# Jammy (or Later)
+# Jammy (or later)
 # ----------------
 #
-# Note that for Jammy you need the cloud-init as well as
-# cloud-image-utils  and for jammy a good generic call would be:
+# Note that for Jammy you need cloud-init and cloud-image-utils. A
+# typical Jammy invocation:
 #
 # RELEASE=jammy VM_NAME=stephen ./gen-vm
+#
+# Ubuntu 26.04 LTS (Resolute Raccoon) uses codename resolute:
+#
+# RELEASE=resolute VM_NAME=stephen ./gen-vm
 #
 # This creates a system with an user called ubuntu and the password
 # change who has full sudo access to the system. This also sets up the
