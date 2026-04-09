@@ -71,6 +71,18 @@ NO_BACKING=${NO_BACKING:-false}
 RESTORE_IMAGE=${RESTORE_IMAGE:-false}
 BACKING_FILE=${BACKING_FILE:-}
 
+normalize_release() {
+    case "${1}" in
+        20.04) echo "focal" ;;
+        22.04) echo "jammy" ;;
+        24.04) echo "noble" ;;
+        26.04) echo "resolute" ;;
+        *) echo "${1}" ;;
+    esac
+}
+
+RELEASE_CODENAME=$(normalize_release "${RELEASE}")
+
   # Focal and above prefers us to use cloud images and
   # cloud-init. Download the focal cloud image and set it up using a
   # cloud-config file. Create am ubuntu user with password-less root
@@ -173,11 +185,11 @@ if [ -n "${BACKING_FILE}" ]; then
     exit 0
 fi
 
-if [ "${FORCE}" = "true" ] || [ ! -f "${IMAGES}/${RELEASE}-server-cloudimg-${ARCH}.img" ]; then
-    rm -rf "${IMAGES}/${RELEASE}-server-cloudimg-${ARCH}.img"
-    wget -P "${IMAGES}" "https://cloud-images.ubuntu.com/${RELEASE}/current/${RELEASE}-server-cloudimg-${ARCH}.img"
+if [ "${FORCE}" = "true" ] || [ ! -f "${IMAGES}/${RELEASE_CODENAME}-server-cloudimg-${ARCH}.img" ]; then
+    rm -rf "${IMAGES}/${RELEASE_CODENAME}-server-cloudimg-${ARCH}.img"
+    wget -P "${IMAGES}" "https://cloud-images.ubuntu.com/${RELEASE_CODENAME}/current/${RELEASE_CODENAME}-server-cloudimg-${ARCH}.img"
 fi
-cp "${IMAGES}/${RELEASE}-server-cloudimg-${ARCH}.img" \
+cp "${IMAGES}/${RELEASE_CODENAME}-server-cloudimg-${ARCH}.img" \
     "${IMAGES}/${VM_NAME}-backing.qcow2"
 qemu-img resize "${IMAGES}/${VM_NAME}-backing.qcow2" "${SIZE}G"
 
