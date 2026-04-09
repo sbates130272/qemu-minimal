@@ -74,7 +74,7 @@ NAME=${NAME:-qemu-minimal}
 KS=${KS:-none}
 INITRD_INJECT=${INITRD_INJECT:-}
 SIZE=${SIZE:-32}
-RELEASE=${RELEASE:-noble}
+RELEASE=${RELEASE:-resolute}
 ARCH=${ARCH:-amd64}
 SSH_KEY_FILE=${SSH_KEY_FILE:-$HOME/.ssh/id_rsa.pub}
 NOAUTOCONSOLE=${NOAUTOCONSOLE:-false}
@@ -123,6 +123,8 @@ else
 	OSINFO="ubuntujammy"
     elif [ "${RELEASE}" = "noble" ]; then
 	OSINFO="ubuntunoble"
+    elif [ "${RELEASE}" = "resolute" ]; then
+	OSINFO="ubunturesolute"
     else
 	echo "RELEASE ${RELEASE} is not supported yet!"
 	exit 1

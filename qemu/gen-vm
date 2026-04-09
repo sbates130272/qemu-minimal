@@ -4,8 +4,8 @@
 #
 # (C) Stephen Bates <sbates@raithlin>
 #
-# A simple script generate a Ubuntu Noble VM using bare QEMU (i.e. not
-# libvirt) and cloud-init.
+# A simple script generate a Ubuntu Resolute VM using bare QEMU
+# (i.e. not libvirt) and cloud-init.
 #
 # Jammy (or Later)
 # ----------------
@@ -55,7 +55,7 @@ QEMU_PATH=${QEMU_PATH:-}
 VM_NAME=${VM_NAME:-qemu-minimal}
 SIZE=${SIZE:-64}
 IMAGES=${IMAGES:-../images}
-RELEASE=${RELEASE:-noble}
+RELEASE=${RELEASE:-resolute}
 ARCH=${ARCH:-amd64}
 VCPUS=${VCPUS:-2}
 VMEM=${VMEM:-4096}
