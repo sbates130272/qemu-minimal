@@ -78,6 +78,20 @@ BACKING_FILE=${BACKING_FILE:-}
 
 set -e
 
+# Accept both codenames (e.g. noble) and versions (e.g. 26.04).
+resolve_cloud_image_info() {
+    local release="$1"
+    local arch="$2"
+
+    if [[ "${release}" =~ ^[0-9]+\.[0-9]+$ ]]; then
+        CLOUD_IMAGE_FILE="ubuntu-${release}-server-cloudimg-${arch}.img"
+        CLOUD_IMAGE_URL="https://cloud-images.ubuntu.com/releases/${release}/release/${CLOUD_IMAGE_FILE}"
+    else
+        CLOUD_IMAGE_FILE="${release}-server-cloudimg-${arch}.img"
+        CLOUD_IMAGE_URL="https://cloud-images.ubuntu.com/${release}/current/${CLOUD_IMAGE_FILE}"
+    fi
+}
+
 cleanup() {
     rm -rf cloud-config-${VM_NAME} network-config-${VM_NAME} \
        ${IMAGES}/${VM_NAME}-seed.qcow2
@@ -173,11 +187,13 @@ if [ -n "${BACKING_FILE}" ]; then
     exit 0
 fi
 
-if [ "${FORCE}" = "true" ] || [ ! -f "${IMAGES}/${RELEASE}-server-cloudimg-${ARCH}.img" ]; then
-    rm -rf "${IMAGES}/${RELEASE}-server-cloudimg-${ARCH}.img"
-    wget -P "${IMAGES}" "https://cloud-images.ubuntu.com/${RELEASE}/current/${RELEASE}-server-cloudimg-${ARCH}.img"
+resolve_cloud_image_info "${RELEASE}" "${ARCH}"
+
+if [ "${FORCE}" = "true" ] || [ ! -f "${IMAGES}/${CLOUD_IMAGE_FILE}" ]; then
+    rm -rf "${IMAGES}/${CLOUD_IMAGE_FILE}"
+    wget -P "${IMAGES}" "${CLOUD_IMAGE_URL}"
 fi
-cp "${IMAGES}/${RELEASE}-server-cloudimg-${ARCH}.img" \
+cp "${IMAGES}/${CLOUD_IMAGE_FILE}" \
     "${IMAGES}/${VM_NAME}-backing.qcow2"
 qemu-img resize "${IMAGES}/${VM_NAME}-backing.qcow2" "${SIZE}G"
 

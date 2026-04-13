@@ -12,8 +12,13 @@ on:
 jobs:
 
   smoke-test-x86:
-    name: smoke-test-x86
+    name: smoke-test-x86-${{ matrix.release }}
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        release:
+          - noble
+          - resolute
     steps:
     - name: Check out code using action/checkout
       uses: actions/checkout@v4.3.1
@@ -28,7 +33,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: images/*-server-cloudimg-*.img
-        key: cloud-img-amd64-noble
+        key: cloud-img-amd64-${{ matrix.release }}
     - name: Ensure images directory exists
       run: mkdir -p images
     - name: Generate a x86_64 qemu-based ./gen-vm smoke-test
@@ -36,6 +41,7 @@ jobs:
       working-directory: qemu
       env:
         VM_NAME: qemu-minimal-smoke-test
+        RELEASE: ${{ matrix.release }}
         KVM: none
         USERNAME: ubuntu
         PASS: password
