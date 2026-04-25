@@ -68,6 +68,13 @@
 # list of sockets in VFIO_USERDEV. Each device is placed below its own
 # pcie-root-port to enable hot-plug and PCIe topology isolation.
 #
+# QGA_SOCKET exposes the QEMU guest agent over a host Unix socket
+# (same layout as gen-vm first-boot):
+#   - "false": no guest-agent chardev or virtio-serial port
+#   - "true" (default): chardev at /tmp/qga-${VM_NAME}.sock plus
+#     virtio-serial and virtserialport named org.qemu.guest_agent.0
+#   - Any other value is treated as a custom socket path
+#
 # QMP_SOCKET enables the QEMU Machine Protocol monitor socket:
 #   - "false" (default): no QMP socket
 #   - "true": adds a QMP unix socket at
@@ -128,6 +135,7 @@ DATA_NIC_QUEUES=${DATA_NIC_QUEUES:-0}
 DRY_RUN=${DRY_RUN:-none}
 MCAST_GROUP=${MCAST_GROUP:-none}
 QMP_SOCKET=${QMP_SOCKET:-false}
+QGA_SOCKET=${QGA_SOCKET:-true}
 BACKING_SHARED=${BACKING_SHARED:-false}
 
 if [ "${KVM}" = "enable" ]; then
@@ -401,6 +409,22 @@ if [ "${QMP_SOCKET}" != "false" ]; then
     QMP_ARGS="-qmp unix:${QMP_SOCKET_PATH},server,nowait"
 fi
 
+QGA_ARGS=""
+if [ "${QGA_SOCKET}" != "false" ]; then
+    if [ "${QGA_SOCKET}" = "true" ]; then
+        QGA_SOCK_PATH="/tmp/qga-${VM_NAME}.sock"
+    else
+        QGA_SOCK_PATH="${QGA_SOCKET}"
+    fi
+    QGA_ARGS="-chardev socket,path=${QGA_SOCK_PATH},server=on,wait=off,id=qga0 "
+    if [ "${ARCH}" = "amd64" ]; then
+        QGA_ARGS+="-device virtio-serial "
+    else
+        QGA_ARGS+="-device virtio-serial-device "
+    fi
+    QGA_ARGS+="-device virtserialport,chardev=qga0,name=org.qemu.guest_agent.0"
+fi
+
 ROOT_DRIVE="-drive if=virtio,format=qcow2"
 ROOT_DRIVE+=",file=${IMAGES}/${VM_NAME}.qcow2"
 if [ "${BACKING_SHARED}" = "true" ]; then
@@ -420,6 +444,7 @@ QEMU_CMD=(${QEMU_PATH}qemu-system-${QARCH}
    "${PCI_MMIO_BRIDGE_ARGS[@]}"
    "${VFIO_USERDEV_ARGS[@]}"
    ${ROOT_DRIVE}
+   ${QGA_ARGS}
    -netdev user,id=net0,hostfwd=tcp::${SSH_PORT}-:22
    -device virtio-net-pci,netdev=net0
    ${DATA_NIC_ARGS}

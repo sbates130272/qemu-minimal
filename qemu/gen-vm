@@ -213,6 +213,10 @@ else
     PACKAGES=
 fi
 
+# Always install qemu-guest-agent so first-boot and run-vm can use a
+# virtio-serial channel named org.qemu.guest_agent.0.
+GEN_VM_EXTRA_PACKAGES=$'  - qemu-guest-agent\n'
+
 cat << EOF > cloud-config-${VM_NAME}
 #cloud-config
 hostname: ${VM_NAME}
@@ -231,7 +235,7 @@ users:
 ntp:
   enabled: true
 packages:
-${PACKAGES}
+${GEN_VM_EXTRA_PACKAGES}${PACKAGES}
 runcmd:
   - systemctl disable openipmi.service
   - systemctl mask openipmi.service
@@ -323,6 +327,16 @@ else
     exit 1
 fi
 
+# Host-side socket for QEMU guest agent (unique per VM_NAME).
+QGA_SOCK="/tmp/qga-${VM_NAME}.sock"
+QGA_CHARDEV="-chardev socket,path=${QGA_SOCK},server=on,wait=off,id=qga0"
+if [ "${ARCH}" = "amd64" ]; then
+    QGA_DEVICES="-device virtio-serial -device virtserialport,chardev=qga0,name=org.qemu.guest_agent.0"
+else
+    # mach-virt (arm64, riscv64): use MMIO virtio-serial, not PCI.
+    QGA_DEVICES="-device virtio-serial-device -device virtserialport,chardev=qga0,name=org.qemu.guest_agent.0"
+fi
+
 ${QEMU_PATH}qemu-system-${QARCH} \
    ${QARCH_ARGS} \
    -smp cpus=${VCPUS} \
@@ -330,6 +344,8 @@ ${QEMU_PATH}qemu-system-${QARCH} \
    -nographic \
    -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}-backing.qcow2 \
    -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}-seed.qcow2 \
+   ${QGA_CHARDEV} \
+   ${QGA_DEVICES} \
    -netdev user,id=net0 \
    -device virtio-net-pci,netdev=net0
 

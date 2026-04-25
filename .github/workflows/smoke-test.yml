@@ -102,6 +102,7 @@ jobs:
         VM_NAME: qemu-minimal-smoke-test
         KVM: none
         NVME: 1
+        QMP_SOCKET: "true"
     - name: Wait for VM to boot (smart polling with 180s timeout)
       run: |
         echo "Waiting for VM to boot and accept SSH connections..."
@@ -128,6 +129,43 @@ jobs:
       run: |
         ssh -o NoHostAuthenticationForLocalhost=yes \
           -v -p 2222 ubuntu@localhost ls -ltrh
+    - name: QEMU guest agent answers guest-ping over QMP
+      run: |
+        QMP_SOCK=/tmp/qmp-qemu-minimal-smoke-test-2222.sock
+        python3 - "$QMP_SOCK" << 'PY'
+        import json
+        import socket
+        import sys
+
+        path = sys.argv[1]
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(60)
+        s.connect(path)
+        f = s.makefile("rwb", buffering=0)
+
+        def read_json():
+            while True:
+                line = f.readline()
+                if not line:
+                    raise SystemExit("EOF from QMP before JSON line")
+                line = line.strip()
+                if not line:
+                    continue
+                return json.loads(line)
+
+        read_json()
+        f.write(b'{"execute":"qmp_capabilities"}\n')
+        read_json()
+        f.write(b'{"execute":"guest-ping"}\n')
+        resp = read_json()
+        if "error" in resp:
+            print(resp, file=sys.stderr)
+            sys.exit(1)
+        if resp.get("return") != {}:
+            print("unexpected guest-ping response:", resp, file=sys.stderr)
+            sys.exit(1)
+        print("guest-ping OK")
+        PY
 
   smoke-test-x86-nullblk:
     name: smoke-test-x86-nullblk
@@ -243,6 +281,8 @@ jobs:
         echo "$out" | grep -q "\-machine q35"
         echo "$out" | grep -q "\-cpu EPYC"
         echo "$out" | grep -q "\-nographic"
+        echo "$out" | grep -q "path=/tmp/qga-dry-test.sock"
+        echo "$out" | grep -q "org.qemu.guest_agent.0"
         echo "✓ x86 defaults passed"
       working-directory: qemu
 
@@ -386,6 +426,8 @@ jobs:
         echo "$out"
         echo "$out" | grep -q "qemu-system-aarch64"
         echo "$out" | grep -q "\-machine virt"
+        echo "$out" | grep -q "virtio-serial-device"
+        echo "$out" | grep -q "org.qemu.guest_agent.0"
         echo "✓ arm64 defaults passed"
       working-directory: qemu
 
@@ -396,6 +438,8 @@ jobs:
         echo "$out"
         echo "$out" | grep -q "qemu-system-riscv64"
         echo "$out" | grep -q "\-machine virt"
+        echo "$out" | grep -q "virtio-serial-device"
+        echo "$out" | grep -q "org.qemu.guest_agent.0"
         echo "✓ riscv64 defaults passed"
       working-directory: qemu
 
@@ -422,6 +466,17 @@ jobs:
         echo "$out" | grep -q "vfio-user-pci"
         echo "✓ VFIO_USERDEV root-port passed"
       working-directory: qemu
+
+    - name: "Dry-run: QGA_SOCKET=false omits guest agent"
+      run: |
+        out=$(VM_NAME=dry-test KVM=none QGA_SOCKET=false \
+              DRY_RUN=1 ./run-vm)
+        echo "$out"
+        if echo "$out" | grep -q "org.qemu.guest_agent.0"; then
+          echo "guest agent should be omitted when QGA_SOCKET=false"
+          exit 1
+        fi
+        echo "✓ QGA_SOCKET=false passed"
 
     - name: "Dry-run: QMP_SOCKET=true"
       run: |
