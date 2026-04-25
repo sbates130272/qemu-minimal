@@ -1,0 +1,3 @@
+# CI / smoke: guest agent only (keeps image build small).
+# Note indent by 2 spaces and use a hyphen!
+  - qemu-guest-agent

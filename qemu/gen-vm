@@ -70,6 +70,10 @@ FORCE=${FORCE:-false}
 NO_BACKING=${NO_BACKING:-false}
 RESTORE_IMAGE=${RESTORE_IMAGE:-false}
 BACKING_FILE=${BACKING_FILE:-}
+# Unix socket for the QEMU guest agent (host listens; guest connects).
+# Default path includes VM_NAME so multiple gen-vm / run-vm instances
+# do not collide.
+QGA_SOCKET=${QGA_SOCKET:-/tmp/qga-${VM_NAME}.sock}
 
   # Focal and above prefers us to use cloud images and
   # cloud-init. Download the focal cloud image and set it up using a
@@ -323,6 +327,15 @@ else
     exit 1
 fi
 
+if [ "${ARCH}" = "amd64" ]; then
+    VIRTIO_SERIAL_BUS="virtio-serial-pci"
+elif [ "${ARCH}" = "arm64" ] || [ "${ARCH}" = "riscv64" ]; then
+    VIRTIO_SERIAL_BUS="virtio-serial-device"
+else
+    echo "Error: No virtio-serial mapping for ${ARCH}! Exiting."
+    exit 1
+fi
+
 ${QEMU_PATH}qemu-system-${QARCH} \
    ${QARCH_ARGS} \
    -smp cpus=${VCPUS} \
@@ -331,7 +344,10 @@ ${QEMU_PATH}qemu-system-${QARCH} \
    -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}-backing.qcow2 \
    -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}-seed.qcow2 \
    -netdev user,id=net0 \
-   -device virtio-net-pci,netdev=net0
+   -device virtio-net-pci,netdev=net0 \
+   -chardev socket,path=${QGA_SOCKET},server=on,wait=off,id=qga0 \
+   -device "${VIRTIO_SERIAL_BUS}" \
+   -device virtserialport,chardev=qga0,name=org.qemu.guest_agent.0
 
 if [ "${NO_BACKING}" = "true" ]; then
     mv "${IMAGES}/${VM_NAME}-backing.qcow2" "${IMAGES}/${VM_NAME}.qcow2"

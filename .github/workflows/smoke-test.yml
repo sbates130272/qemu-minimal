@@ -7,6 +7,7 @@ on:
       - main
     paths:
     - 'qemu/*-vm'
+    - 'packages.d/**'
     - '.github/workflows/smoke-test.yml'
 
 jobs:
@@ -45,7 +46,7 @@ jobs:
         KVM: none
         USERNAME: ubuntu
         PASS: password
-        PACKAGES: none
+        PACKAGES: ../packages.d/packages-qemu-guest-agent
         SIZE: 8
     - name: Test RESTORE_IMAGE mode
       run: |
@@ -102,6 +103,7 @@ jobs:
         VM_NAME: qemu-minimal-smoke-test
         KVM: none
         NVME: 1
+        QGA_SOCKET: "true"
     - name: Wait for VM to boot (smart polling with 180s timeout)
       run: |
         echo "Waiting for VM to boot and accept SSH connections..."
@@ -128,6 +130,29 @@ jobs:
       run: |
         ssh -o NoHostAuthenticationForLocalhost=yes \
           -v -p 2222 ubuntu@localhost ls -ltrh
+    - name: Verify QEMU guest-agent channel and guest service
+      run: |
+        sock=/tmp/qga-qemu-minimal-smoke-test.sock
+        echo "Waiting for QGA socket at ${sock}..."
+        timeout=120
+        elapsed=0
+        while [ "${elapsed}" -lt "${timeout}" ]; do
+          if [ -S "${sock}" ]; then
+            echo "✓ QGA socket present"
+            break
+          fi
+          sleep 2
+          elapsed=$((elapsed + 2))
+        done
+        if [ ! -S "${sock}" ]; then
+          echo "✗ QGA socket did not appear within ${timeout}s"
+          exit 1
+        fi
+        ssh -o NoHostAuthenticationForLocalhost=yes \
+          -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@localhost \
+          "systemctl is-active --quiet qemu-guest-agent && \
+           echo '✓ qemu-guest-agent active in guest'"
 
   smoke-test-x86-nullblk:
     name: smoke-test-x86-nullblk
@@ -244,6 +269,19 @@ jobs:
         echo "$out" | grep -q "\-cpu EPYC"
         echo "$out" | grep -q "\-nographic"
         echo "✓ x86 defaults passed"
+      working-directory: qemu
+
+    - name: "Dry-run: x86 with QGA_SOCKET=true"
+      run: |
+        out=$(VM_NAME=dry-test KVM=none NVME=none QGA_SOCKET=true \
+              DRY_RUN=1 ./run-vm)
+        echo "$out"
+        echo "$out" | grep -q \
+          "chardev socket,path=/tmp/qga-dry-test.sock,server=on,wait=off,id=qga0"
+        echo "$out" | grep -q "device virtio-serial-pci"
+        echo "$out" | grep -q \
+          "virtserialport,chardev=qga0,name=org.qemu.guest_agent.0"
+        echo "✓ x86 QGA_SOCKET passed"
       working-directory: qemu
 
     - name: "Dry-run: x86 with NVME=2"
