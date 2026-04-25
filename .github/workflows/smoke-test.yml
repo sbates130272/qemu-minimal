@@ -120,6 +120,14 @@ jobs:
         done
         echo "✗ VM failed to boot within $timeout seconds"
         exit 1
+    - name: Verify QGA socket exists
+      run: |
+        qga_socket=/tmp/qga-qemu-minimal-smoke-test-2222.sock
+        if [ ! -S "${qga_socket}" ]; then
+          echo "QGA socket not found: ${qga_socket}"
+          exit 1
+        fi
+        echo "✓ QGA socket exists: ${qga_socket}"
     - name: Output run-vm command output
       if: always()
       run: |
@@ -431,6 +439,29 @@ jobs:
         echo "$out" | grep -q \
           "unix:/tmp/qmp-dry-test-2222.sock"
         echo "✓ QMP_SOCKET=true passed"
+      working-directory: qemu
+
+    - name: "Dry-run: QGA_SOCKET=true"
+      run: |
+        out=$(VM_NAME=dry-test KVM=none DRY_RUN=1 ./run-vm)
+        echo "$out"
+        echo "$out" | grep -q \
+          "path=/tmp/qga-dry-test-2222.sock"
+        echo "$out" | grep -q \
+          "name=org.qemu.guest_agent.0"
+        echo "✓ QGA_SOCKET=true passed"
+      working-directory: qemu
+
+    - name: "Dry-run: QGA_SOCKET=false disables QGA args"
+      run: |
+        out=$(VM_NAME=dry-test KVM=none \
+              QGA_SOCKET=false DRY_RUN=1 ./run-vm)
+        echo "$out"
+        if echo "$out" | grep -q "org.qemu.guest_agent.0"; then
+          echo "QGA args should not be present"
+          exit 1
+        fi
+        echo "✓ QGA_SOCKET=false passed"
       working-directory: qemu
 
     - name: "Dry-run: QMP_SOCKET=custom path"
