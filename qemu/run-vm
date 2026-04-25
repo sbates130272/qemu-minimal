@@ -74,6 +74,12 @@
 #     /tmp/qmp-${VM_NAME}-${SSH_PORT}.sock
 #   - Any other value is treated as a custom socket path
 #
+# QGA_SOCKET enables the guest agent virtio-serial channel:
+#   - "false" (default): no guest-agent socket
+#   - "true": chardev at /tmp/qga-${VM_NAME}-${SSH_PORT}.sock
+#   - Any other value is a custom unix socket path
+# Requires qemu-guest-agent in the guest (see gen-vm / packages-default).
+#
 # DATA_NIC_QUEUES adds a second multi-queue virtio-net NIC backed
 # by a TAP device (named dt<SSH_PORT>, e.g. dt2231).  This is
 # useful when a guest application (e.g. Weka DPDK) needs to take
@@ -128,6 +134,7 @@ DATA_NIC_QUEUES=${DATA_NIC_QUEUES:-0}
 DRY_RUN=${DRY_RUN:-none}
 MCAST_GROUP=${MCAST_GROUP:-none}
 QMP_SOCKET=${QMP_SOCKET:-false}
+QGA_SOCKET=${QGA_SOCKET:-false}
 BACKING_SHARED=${BACKING_SHARED:-false}
 
 if [ "${KVM}" = "enable" ]; then
@@ -401,6 +408,23 @@ if [ "${QMP_SOCKET}" != "false" ]; then
     QMP_ARGS="-qmp unix:${QMP_SOCKET_PATH},server,nowait"
 fi
 
+QGA_ARGS=()
+if [ "${QGA_SOCKET}" != "false" ]; then
+    if [ "${QGA_SOCKET}" = "true" ]; then
+        QGA_SOCKET_PATH="/tmp/qga-${VM_NAME}-${SSH_PORT}.sock"
+    else
+        QGA_SOCKET_PATH="${QGA_SOCKET}"
+    fi
+    if [ "${DRY_RUN}" = "none" ]; then
+        rm -f "${QGA_SOCKET_PATH}"
+    fi
+    QGA_ARGS+=( -chardev \
+        "socket,path=${QGA_SOCKET_PATH},server=on,wait=off,id=qga0" )
+    QGA_ARGS+=( -device virtio-serial-pci )
+    QGA_ARGS+=( -device \
+        virtserialport,chardev=qga0,name=org.qemu.guest_agent.0 )
+fi
+
 ROOT_DRIVE="-drive if=virtio,format=qcow2"
 ROOT_DRIVE+=",file=${IMAGES}/${VM_NAME}.qcow2"
 if [ "${BACKING_SHARED}" = "true" ]; then
@@ -424,7 +448,8 @@ QEMU_CMD=(${QEMU_PATH}qemu-system-${QARCH}
    -device virtio-net-pci,netdev=net0
    ${DATA_NIC_ARGS}
    ${MCAST_ARGS}
-   ${QMP_ARGS})
+   ${QMP_ARGS}
+   "${QGA_ARGS[@]}")
 
 if [ "${DRY_RUN}" != "none" ]; then
     echo "${QEMU_CMD[@]}"

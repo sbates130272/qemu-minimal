@@ -7,6 +7,7 @@ on:
       - main
     paths:
     - 'qemu/*-vm'
+    - 'packages.d/**'
     - '.github/workflows/smoke-test.yml'
 
 jobs:
@@ -45,7 +46,7 @@ jobs:
         KVM: none
         USERNAME: ubuntu
         PASS: password
-        PACKAGES: none
+        PACKAGES: ../packages.d/packages-qga-ci
         SIZE: 8
     - name: Test RESTORE_IMAGE mode
       run: |
@@ -102,6 +103,7 @@ jobs:
         VM_NAME: qemu-minimal-smoke-test
         KVM: none
         NVME: 1
+        QGA_SOCKET: "true"
     - name: Wait for VM to boot (smart polling with 180s timeout)
       run: |
         echo "Waiting for VM to boot and accept SSH connections..."
@@ -128,6 +130,46 @@ jobs:
       run: |
         ssh -o NoHostAuthenticationForLocalhost=yes \
           -v -p 2222 ubuntu@localhost ls -ltrh
+    - name: Verify QEMU guest agent (guest-ping)
+      run: |
+        sock="/tmp/qga-qemu-minimal-smoke-test-2222.sock"
+        echo "Waiting for guest-agent socket ${sock}..."
+        timeout=120
+        elapsed=0
+        while [ "${elapsed}" -lt "${timeout}" ]; do
+          if [ -S "${sock}" ]; then
+            break
+          fi
+          sleep 1
+          elapsed=$((elapsed + 1))
+        done
+        if [ ! -S "${sock}" ]; then
+          echo "Guest-agent socket did not appear within ${timeout}s"
+          exit 1
+        fi
+        python3 << 'PY'
+        import json
+        import socket
+        import sys
+
+        sock_path = "/tmp/qga-qemu-minimal-smoke-test-2222.sock"
+        req = json.dumps({"execute": "guest-ping"}) + "\n"
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(30)
+            s.connect(sock_path)
+            s.sendall(req.encode())
+            data = s.recv(4096)
+        try:
+            msg = json.loads(data.decode().split("\n", 1)[0])
+        except json.JSONDecodeError:
+            print("Invalid JSON from guest agent:", data, file=sys.stderr)
+            raise
+        if "return" not in msg:
+            print("Unexpected guest agent reply:", msg, file=sys.stderr)
+            sys.exit(1)
+        print("guest-ping OK:", msg)
+        PY
+        echo "✓ guest-ping over QGA_SOCKET passed"
 
   smoke-test-x86-nullblk:
     name: smoke-test-x86-nullblk
@@ -442,6 +484,19 @@ jobs:
         echo "$out" | grep -q \
           "unix:/tmp/my-qmp.sock"
         echo "✓ QMP_SOCKET custom path passed"
+      working-directory: qemu
+
+    - name: "Dry-run: QGA_SOCKET=true"
+      run: |
+        out=$(VM_NAME=dry-test KVM=none SSH_PORT=2233 \
+              QGA_SOCKET=true DRY_RUN=1 ./run-vm)
+        echo "$out"
+        echo "$out" | grep -q \
+          "chardev socket,path=/tmp/qga-dry-test-2233.sock"
+        echo "$out" | grep -q "virtio-serial-pci"
+        echo "$out" | grep -q \
+          "virtserialport,chardev=qga0,name=org.qemu.guest_agent.0"
+        echo "✓ QGA_SOCKET=true passed"
       working-directory: qemu
 
     - name: "Dry-run: BACKING_SHARED=true adds file.locking=off"

@@ -1,0 +1,2 @@
+# packages-qga-ci: tiny list for CI guest-agent smoke (cloud image has ssh).
+  - qemu-guest-agent

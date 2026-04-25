@@ -70,6 +70,11 @@ FORCE=${FORCE:-false}
 NO_BACKING=${NO_BACKING:-false}
 RESTORE_IMAGE=${RESTORE_IMAGE:-false}
 BACKING_FILE=${BACKING_FILE:-}
+# QGA_SOCKET: unix socket for the QEMU guest agent channel during the
+# gen-vm first-boot QEMU run. "false" disables the chardev and serial
+# devices. Any other value is the socket path (default ties the path
+# to VM_NAME so concurrent builds do not collide).
+QGA_SOCKET=${QGA_SOCKET:-/tmp/qga-gen-vm-${VM_NAME}.sock}
 
   # Focal and above prefers us to use cloud images and
   # cloud-init. Download the focal cloud image and set it up using a
@@ -323,6 +328,15 @@ else
     exit 1
 fi
 
+QGA_ARGS=()
+if [ "${QGA_SOCKET}" != "false" ]; then
+    rm -f "${QGA_SOCKET}"
+    QGA_ARGS+=( -chardev "socket,path=${QGA_SOCKET},server=on,wait=off,id=qga0" )
+    QGA_ARGS+=( -device virtio-serial-pci )
+    QGA_ARGS+=( -device \
+        virtserialport,chardev=qga0,name=org.qemu.guest_agent.0 )
+fi
+
 ${QEMU_PATH}qemu-system-${QARCH} \
    ${QARCH_ARGS} \
    -smp cpus=${VCPUS} \
@@ -331,7 +345,8 @@ ${QEMU_PATH}qemu-system-${QARCH} \
    -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}-backing.qcow2 \
    -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}-seed.qcow2 \
    -netdev user,id=net0 \
-   -device virtio-net-pci,netdev=net0
+   -device virtio-net-pci,netdev=net0 \
+   "${QGA_ARGS[@]}"
 
 if [ "${NO_BACKING}" = "true" ]; then
     mv "${IMAGES}/${VM_NAME}-backing.qcow2" "${IMAGES}/${VM_NAME}.qcow2"
