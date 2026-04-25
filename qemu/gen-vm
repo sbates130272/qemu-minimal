@@ -202,15 +202,20 @@ if [ ! -f "${SSH_KEY_FILE}" ]; then
      exit 1
 fi
 
+QGA_PACKAGE_ENTRY="  - qemu-guest-agent"
 if [ "${PACKAGES}" != "none" ]; then
     if [ -f "${PACKAGES}" ]; then
 	PACKAGES=$(<"${PACKAGES}")
+        if ! printf "%s\n" "${PACKAGES}" \
+                | grep -q "^${QGA_PACKAGE_ENTRY}$"; then
+            PACKAGES="${PACKAGES}"$'\n'"${QGA_PACKAGE_ENTRY}"
+        fi
     else
 	echo "Package manifest file ${PACKAGES} does not exist!"
 	exit 1
     fi
 else
-    PACKAGES=
+    PACKAGES="${QGA_PACKAGE_ENTRY}"
 fi
 
 cat << EOF > cloud-config-${VM_NAME}

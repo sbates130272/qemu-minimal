@@ -153,6 +153,7 @@ for a full workflow example.
 | `DATA_NIC_QUEUES` | `0` | Multi-queue virtio-net TAP NIC (queue count) |
 | `MCAST_GROUP` | `none` | Multicast socket NIC (`230.0.0.1:1234`) |
 | `QMP_SOCKET` | `false` | QMP socket (`true` for default, or path) |
+| `QGA_SOCKET` | `true` | QEMU guest agent socket (`true`, `false`, or path) |
 | `DRY_RUN` | `none` | Print QEMU command instead of executing |
 | `BACKING_SHARED` | `false` | Disable image locking for shared backing files |
 

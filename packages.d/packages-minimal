@@ -2,5 +2,6 @@
 # Note indent by 2 spaces and use a hyphen!
   - emacs-nox
   - fio
+  - qemu-guest-agent
   - sysstat
   - tree

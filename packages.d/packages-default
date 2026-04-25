@@ -21,6 +21,7 @@
   - python-is-python3
   - python2
   - python3-pip
+  - qemu-guest-agent
   - pyspelling
   - mutt
   - sysstat

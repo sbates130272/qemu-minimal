@@ -7,6 +7,7 @@ on:
       - main
     paths:
     - 'qemu/*-vm'
+    - 'packages.d/*'
     - '.github/workflows/smoke-test.yml'
 
 jobs:
@@ -120,6 +121,22 @@ jobs:
         done
         echo "✗ VM failed to boot within $timeout seconds"
         exit 1
+    - name: Validate QGA socket path naming
+      run: |
+        sock=/tmp/qga-qemu-minimal-smoke-test-2222.sock
+        if [ ! -S "${sock}" ]; then
+          echo "Expected QGA socket not found: ${sock}"
+          exit 1
+        fi
+        echo "✓ QGA socket present: ${sock}"
+    - name: Verify qemu-guest-agent installed in guest
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes \
+          -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@localhost \
+          "dpkg-query -W -f='\${Status}\n' qemu-guest-agent" \
+          | grep -q "install ok installed"
+        echo "✓ qemu-guest-agent package installed in guest"
     - name: Output run-vm command output
       if: always()
       run: |
@@ -443,6 +460,53 @@ jobs:
           "unix:/tmp/my-qmp.sock"
         echo "✓ QMP_SOCKET custom path passed"
       working-directory: qemu
+
+    - name: "Dry-run: QGA_SOCKET default path includes VM name"
+      run: |
+        out=$(VM_NAME=dry-test KVM=none \
+              DRY_RUN=1 ./run-vm)
+        echo "$out"
+        echo "$out" | grep -q \
+          "socket,path=/tmp/qga-dry-test-2222.sock,server=on,wait=off,id=qga0"
+        echo "$out" | grep -q \
+          "virtserialport,chardev=qga0,name=org.qemu.guest_agent.0"
+        echo "✓ QGA_SOCKET default path passed"
+      working-directory: qemu
+
+    - name: "Dry-run: QGA_SOCKET=custom path"
+      run: |
+        out=$(VM_NAME=dry-test KVM=none \
+              QGA_SOCKET=/tmp/custom-qga.sock \
+              DRY_RUN=1 ./run-vm)
+        echo "$out"
+        echo "$out" | grep -q \
+          "socket,path=/tmp/custom-qga.sock,server=on,wait=off,id=qga0"
+        echo "✓ QGA_SOCKET custom path passed"
+      working-directory: qemu
+
+    - name: "Dry-run: QGA_SOCKET=false disables guest agent args"
+      run: |
+        out=$(VM_NAME=dry-test KVM=none \
+              QGA_SOCKET=false DRY_RUN=1 ./run-vm)
+        echo "$out"
+        if echo "$out" | grep -q "org.qemu.guest_agent.0"; then
+          echo "Guest agent args should be disabled"
+          exit 1
+        fi
+        if echo "$out" | grep -q "id=qga0"; then
+          echo "QGA chardev should be disabled"
+          exit 1
+        fi
+        echo "✓ QGA_SOCKET=false passed"
+      working-directory: qemu
+
+    - name: Validate package manifests include qemu-guest-agent
+      run: |
+        grep -q --fixed-strings "  - qemu-guest-agent" \
+          packages.d/packages-default
+        grep -q --fixed-strings "  - qemu-guest-agent" \
+          packages.d/packages-minimal
+        echo "✓ package manifests include qemu-guest-agent"
 
     - name: "Dry-run: BACKING_SHARED=true adds file.locking=off"
       run: |
