@@ -96,7 +96,9 @@ jobs:
         echo "✓ BACKING_FILE mode test passed"
       working-directory: qemu
     - name: Run the generated x86_64 VM as a background task
-      run: ./run-vm > run-vm-output.log 2>&1 &
+      run: |
+        rm -f /tmp/qga-qemu-minimal-smoke-test-2222.sock
+        ./run-vm > run-vm-output.log 2>&1 &
       working-directory: qemu
       env:
         VM_NAME: qemu-minimal-smoke-test
@@ -120,6 +122,21 @@ jobs:
         done
         echo "✗ VM failed to boot within $timeout seconds"
         exit 1
+    - name: Validate QGA socket created for VM
+      run: |
+        socket=/tmp/qga-qemu-minimal-smoke-test-2222.sock
+        timeout=30
+        elapsed=0
+        while [ $elapsed -lt $timeout ]; do
+          if [ -S "$socket" ]; then
+            echo "✓ QGA socket is present at $socket"
+            exit 0
+          fi
+          sleep 1
+          elapsed=$((elapsed + 1))
+        done
+        echo "✗ QGA socket not created within ${timeout}s"
+        exit 1
     - name: Output run-vm command output
       if: always()
       run: |
@@ -128,6 +145,13 @@ jobs:
       run: |
         ssh -o NoHostAuthenticationForLocalhost=yes \
           -v -p 2222 ubuntu@localhost ls -ltrh
+    - name: Verify qemu-guest-agent package installed in guest
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes \
+          -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@localhost \
+          "dpkg-query -W -f='${Status}\n' qemu-guest-agent \
+           | grep -q 'install ok installed'"
 
   smoke-test-x86-nullblk:
     name: smoke-test-x86-nullblk
@@ -442,6 +466,46 @@ jobs:
         echo "$out" | grep -q \
           "unix:/tmp/my-qmp.sock"
         echo "✓ QMP_SOCKET custom path passed"
+      working-directory: qemu
+
+    - name: "Dry-run: default QGA socket derives from VM name"
+      run: |
+        out=$(VM_NAME=dry-test KVM=none DRY_RUN=1 ./run-vm)
+        echo "$out"
+        echo "$out" | grep -q \
+          "path=/tmp/qga-dry-test-2222.sock,server=on,wait=off,id=qga0"
+        echo "$out" | grep -q "virtio-serial"
+        echo "$out" | grep -q "org.qemu.guest_agent.0"
+        echo "✓ default QGA socket path passed"
+      working-directory: qemu
+
+    - name: "Dry-run: QGA_SOCKET custom path"
+      run: |
+        out=$(VM_NAME=dry-test KVM=none \
+              QGA_SOCKET=/tmp/my-qga.sock \
+              DRY_RUN=1 ./run-vm)
+        echo "$out"
+        echo "$out" | grep -q \
+          "path=/tmp/my-qga.sock,server=on,wait=off,id=qga0"
+        echo "$out" | grep -q "org.qemu.guest_agent.0"
+        echo "✓ custom QGA socket path passed"
+      working-directory: qemu
+
+    - name: "Dry-run: QGA_SOCKET=false disables guest-agent channel"
+      run: |
+        out=$(VM_NAME=dry-test KVM=none \
+              QGA_SOCKET=false \
+              DRY_RUN=1 ./run-vm)
+        echo "$out"
+        if echo "$out" | grep -q "org.qemu.guest_agent.0"; then
+          echo "QGA channel should be absent when QGA_SOCKET=false"
+          exit 1
+        fi
+        if echo "$out" | grep -q "id=qga0"; then
+          echo "QGA chardev should be absent when QGA_SOCKET=false"
+          exit 1
+        fi
+        echo "✓ QGA_SOCKET=false passed"
       working-directory: qemu
 
     - name: "Dry-run: BACKING_SHARED=true adds file.locking=off"

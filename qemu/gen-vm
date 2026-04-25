@@ -70,6 +70,7 @@ FORCE=${FORCE:-false}
 NO_BACKING=${NO_BACKING:-false}
 RESTORE_IMAGE=${RESTORE_IMAGE:-false}
 BACKING_FILE=${BACKING_FILE:-}
+QGA_SOCKET=${QGA_SOCKET:-/tmp/qga-${VM_NAME}-${SSH_PORT}.sock}
 
   # Focal and above prefers us to use cloud images and
   # cloud-init. Download the focal cloud image and set it up using a
@@ -212,6 +213,8 @@ if [ "${PACKAGES}" != "none" ]; then
 else
     PACKAGES=
 fi
+PACKAGES="${PACKAGES}
+  - qemu-guest-agent"
 
 cat << EOF > cloud-config-${VM_NAME}
 #cloud-config
@@ -323,11 +326,16 @@ else
     exit 1
 fi
 
+rm -f "${QGA_SOCKET}"
+
 ${QEMU_PATH}qemu-system-${QARCH} \
    ${QARCH_ARGS} \
    -smp cpus=${VCPUS} \
    -m ${VMEM} \
    -nographic \
+   -chardev socket,path=${QGA_SOCKET},server=on,wait=off,id=qga0 \
+   -device virtio-serial \
+   -device virtserialport,chardev=qga0,name=org.qemu.guest_agent.0 \
    -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}-backing.qcow2 \
    -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}-seed.qcow2 \
    -netdev user,id=net0 \
