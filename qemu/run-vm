@@ -129,6 +129,10 @@ DRY_RUN=${DRY_RUN:-none}
 MCAST_GROUP=${MCAST_GROUP:-none}
 QMP_SOCKET=${QMP_SOCKET:-false}
 BACKING_SHARED=${BACKING_SHARED:-false}
+# Guest agent: "false" (default) omits the chardev. "true" uses
+# /tmp/qga-${VM_NAME}.sock (same default basename as gen-vm). Any other
+# value is a custom socket path (QEMU listens; guest connects).
+QGA_SOCKET=${QGA_SOCKET:-false}
 
 if [ "${KVM}" = "enable" ]; then
     KVM=",accel=kvm"
@@ -147,14 +151,17 @@ fi
 if [ "${ARCH}" = "amd64" ]; then
     QARCH="x86_64"
     QARCH_ARGS="-machine q35${KVM} -cpu EPYC"
+    QGA_VIRTIO_SERIAL_DEV="-device virtio-serial"
 elif [ "${ARCH}" = "arm64" ]; then
     QARCH="aarch64"
     QARCH_ARGS="-machine virt,gic-version=max${KVM} -cpu max -bios "
     QARCH_ARGS+="/usr/share/qemu-efi-aarch64/QEMU_EFI.fd"
+    QGA_VIRTIO_SERIAL_DEV="-device virtio-serial-device"
 elif [ "${ARCH}" = "riscv64" ]; then
     QARCH="riscv64"
     QARCH_ARGS="-machine virt,${KVM} -kernel "
     QARCH_ARGS+="/usr/lib/u-boot/qemu-riscv64_smode/uboot.elf"
+    QGA_VIRTIO_SERIAL_DEV="-device virtio-serial-device"
 else
     echo "Error: No ARCH mapping exists for ${ARCH}! Exiting."
     exit 1
@@ -401,6 +408,21 @@ if [ "${QMP_SOCKET}" != "false" ]; then
     QMP_ARGS="-qmp unix:${QMP_SOCKET_PATH},server,nowait"
 fi
 
+QGA_ARGS=""
+if [ "${QGA_SOCKET}" != "false" ]; then
+    if [ "${QGA_SOCKET}" = "true" ]; then
+        QGA_SOCKET_PATH="/tmp/qga-${VM_NAME}.sock"
+    else
+        QGA_SOCKET_PATH="${QGA_SOCKET}"
+    fi
+    if [ "${DRY_RUN}" = "none" ]; then
+        rm -f "${QGA_SOCKET_PATH}"
+    fi
+    QGA_ARGS="-chardev socket,path=${QGA_SOCKET_PATH},server=on,wait=off,id=qga0 "
+    QGA_ARGS+="${QGA_VIRTIO_SERIAL_DEV} "
+    QGA_ARGS+="-device virtserialport,chardev=qga0,name=org.qemu.guest_agent.0"
+fi
+
 ROOT_DRIVE="-drive if=virtio,format=qcow2"
 ROOT_DRIVE+=",file=${IMAGES}/${VM_NAME}.qcow2"
 if [ "${BACKING_SHARED}" = "true" ]; then
@@ -424,7 +446,8 @@ QEMU_CMD=(${QEMU_PATH}qemu-system-${QARCH}
    -device virtio-net-pci,netdev=net0
    ${DATA_NIC_ARGS}
    ${MCAST_ARGS}
-   ${QMP_ARGS})
+   ${QMP_ARGS}
+   ${QGA_ARGS})
 
 if [ "${DRY_RUN}" != "none" ]; then
     echo "${QEMU_CMD[@]}"

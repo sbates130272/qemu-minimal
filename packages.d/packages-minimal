@@ -1,5 +1,6 @@
 # packages-minimal: My minimal list of initial packages
 # Note indent by 2 spaces and use a hyphen!
+  - qemu-guest-agent
   - emacs-nox
   - fio
   - sysstat

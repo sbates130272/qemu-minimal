@@ -70,6 +70,10 @@ FORCE=${FORCE:-false}
 NO_BACKING=${NO_BACKING:-false}
 RESTORE_IMAGE=${RESTORE_IMAGE:-false}
 BACKING_FILE=${BACKING_FILE:-}
+# Unix socket for the QEMU guest agent during the gen-vm first-boot
+# (server=on means QEMU listens; the guest connects). Path includes
+# VM_NAME so parallel builds with distinct names do not collide.
+QGA_SOCKET_PATH=${QGA_SOCKET_PATH:-/tmp/qga-${VM_NAME}.sock}
 
   # Focal and above prefers us to use cloud images and
   # cloud-init. Download the focal cloud image and set it up using a
@@ -312,16 +316,21 @@ fi
 if [ "${ARCH}" = "amd64" ]; then
     QARCH="x86_64"
     QARCH_ARGS="-machine q35${KVM}"
+    QGA_VIRTIO_SERIAL_DEV="-device virtio-serial"
 elif [ "${ARCH}" = "arm64" ]; then
     QARCH="aarch64"
     QARCH_ARGS="-machine virt,gic-version=max${KVM} -cpu max -bios /usr/share/qemu-efi-aarch64/QEMU_EFI.fd"
+    QGA_VIRTIO_SERIAL_DEV="-device virtio-serial-device"
 elif [ "${ARCH}" = "riscv64" ]; then
     QARCH="riscv64"
     QARCH_ARGS="-machine virt,${KVM} -kernel /usr/lib/u-boot/qemu-riscv64_smode/uboot.elf"
+    QGA_VIRTIO_SERIAL_DEV="-device virtio-serial-device"
 else
     echo "Error: No ARCH mapping exists for ${ARCH}! Exiting."
     exit 1
 fi
+
+rm -f "${QGA_SOCKET_PATH}"
 
 ${QEMU_PATH}qemu-system-${QARCH} \
    ${QARCH_ARGS} \
@@ -331,7 +340,10 @@ ${QEMU_PATH}qemu-system-${QARCH} \
    -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}-backing.qcow2 \
    -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}-seed.qcow2 \
    -netdev user,id=net0 \
-   -device virtio-net-pci,netdev=net0
+   -device virtio-net-pci,netdev=net0 \
+   -chardev socket,path=${QGA_SOCKET_PATH},server=on,wait=off,id=qga0 \
+   ${QGA_VIRTIO_SERIAL_DEV} \
+   -device virtserialport,chardev=qga0,name=org.qemu.guest_agent.0
 
 if [ "${NO_BACKING}" = "true" ]; then
     mv "${IMAGES}/${VM_NAME}-backing.qcow2" "${IMAGES}/${VM_NAME}.qcow2"

@@ -22,6 +22,7 @@
   - python2
   - python3-pip
   - pyspelling
+  - qemu-guest-agent
   - mutt
   - sysstat
   - tree
