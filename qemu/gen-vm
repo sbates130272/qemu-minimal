@@ -213,6 +213,14 @@ else
     PACKAGES=
 fi
 
+if ! printf "%s\n" "${PACKAGES}" \
+     | grep -Eq '^[[:space:]]*-[[:space:]]*qemu-guest-agent([[:space:]]|$)'; then
+    if [ -n "${PACKAGES}" ]; then
+        PACKAGES+=$'\n'
+    fi
+    PACKAGES+="  - qemu-guest-agent"
+fi
+
 cat << EOF > cloud-config-${VM_NAME}
 #cloud-config
 hostname: ${VM_NAME}

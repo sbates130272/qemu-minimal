@@ -128,6 +128,14 @@ jobs:
       run: |
         ssh -o NoHostAuthenticationForLocalhost=yes \
           -v -p 2222 ubuntu@localhost ls -ltrh
+    - name: Verify qemu-guest-agent package in guest
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes \
+          -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@localhost \
+          "dpkg-query -W -f='\${Status}' qemu-guest-agent" \
+          | grep -q "install ok installed"
+        echo "✓ qemu-guest-agent package installed in guest"
 
   smoke-test-x86-nullblk:
     name: smoke-test-x86-nullblk
@@ -243,6 +251,9 @@ jobs:
         echo "$out" | grep -q "\-machine q35"
         echo "$out" | grep -q "\-cpu EPYC"
         echo "$out" | grep -q "\-nographic"
+        echo "$out" | grep -q "/tmp/qga-dry-test-2222.sock"
+        echo "$out" | grep -q "virtserialport,chardev=qga0"
+        echo "$out" | grep -q "org.qemu.guest_agent.0"
         echo "✓ x86 defaults passed"
       working-directory: qemu
 
