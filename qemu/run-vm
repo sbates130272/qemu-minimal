@@ -74,9 +74,11 @@
 #     /tmp/qmp-${VM_NAME}-${SSH_PORT}.sock
 #   - Any other value is treated as a custom socket path
 #
-# QGA_SOCKET_PATH controls the host-side UNIX socket path for the
-# QEMU Guest Agent channel. By default, this is:
-#   /tmp/qga-${VM_NAME}-${SSH_PORT}.sock
+# QEMU_GUEST_AGENT (amd64 only) exposes the virtio-serial port
+# org.qemu.guest_agent.0 so qemu-guest-agent can run in the guest.
+#   - "enable" (default): virtio-serial-pci plus chardev socket at
+#     /tmp/qga-${VM_NAME}-${SSH_PORT}.sock (server=on,wait=off)
+#   - "none": omit guest-agent devices (legacy run-vm behavior)
 #
 # DATA_NIC_QUEUES adds a second multi-queue virtio-net NIC backed
 # by a TAP device (named dt<SSH_PORT>, e.g. dt2231).  This is
@@ -132,8 +134,8 @@ DATA_NIC_QUEUES=${DATA_NIC_QUEUES:-0}
 DRY_RUN=${DRY_RUN:-none}
 MCAST_GROUP=${MCAST_GROUP:-none}
 QMP_SOCKET=${QMP_SOCKET:-false}
+QEMU_GUEST_AGENT=${QEMU_GUEST_AGENT:-enable}
 BACKING_SHARED=${BACKING_SHARED:-false}
-QGA_SOCKET_PATH=${QGA_SOCKET_PATH:-/tmp/qga-${VM_NAME}-${SSH_PORT}.sock}
 
 if [ "${KVM}" = "enable" ]; then
     KVM=",accel=kvm"
@@ -413,11 +415,15 @@ if [ "${QMP_SOCKET}" != "false" ]; then
     QMP_ARGS="-qmp unix:${QMP_SOCKET_PATH},server,nowait"
 fi
 
-QGA_ARGS=(
-    -chardev "socket,path=${QGA_SOCKET_PATH},server=on,wait=off,id=qga0"
-    -device virtio-serial
-    -device virtserialport,chardev=qga0,name=org.qemu.guest_agent.0
-)
+GUEST_AGENT_ARGS=()
+if [ "${ARCH}" = "amd64" ] && [ "${QEMU_GUEST_AGENT}" != "none" ]; then
+    QGA_SOCK="/tmp/qga-${VM_NAME}-${SSH_PORT}.sock"
+    GUEST_AGENT_ARGS=(
+        -chardev socket,id=qga0,path="${QGA_SOCK}",server=on,wait=off
+        -device virtio-serial-pci,id=virtio-serial0
+        -device virtserialport,chardev=qga0,bus=virtio-serial0.0,name=org.qemu.guest_agent.0
+    )
+fi
 
 ROOT_DRIVE="-drive if=virtio,format=qcow2"
 ROOT_DRIVE+=",file=${IMAGES}/${VM_NAME}.qcow2"
@@ -442,11 +448,14 @@ QEMU_CMD=(${QEMU_PATH}qemu-system-${QARCH}
    -device virtio-net-pci,netdev=net0
    ${DATA_NIC_ARGS}
    ${MCAST_ARGS}
-   ${QMP_ARGS}
-   "${QGA_ARGS[@]}")
+   "${GUEST_AGENT_ARGS[@]}"
+   ${QMP_ARGS})
 
 if [ "${DRY_RUN}" != "none" ]; then
     echo "${QEMU_CMD[@]}"
 else
+    if [ "${ARCH}" = "amd64" ] && [ "${QEMU_GUEST_AGENT}" != "none" ]; then
+        rm -f "/tmp/qga-${VM_NAME}-${SSH_PORT}.sock"
+    fi
     "${QEMU_CMD[@]}"
 fi
