@@ -146,6 +146,18 @@ QEMU_GUEST_AGENT=${QEMU_GUEST_AGENT:-enable}
 BACKING_SHARED=${BACKING_SHARED:-false}
 EXTRA_HOSTFWD=${EXTRA_HOSTFWD:-}
 
+if [ -n "${EXTRA_HOSTFWD}" ]; then
+    if [[ ${EXTRA_HOSTFWD} != ,* ]]; then
+        echo "Error: EXTRA_HOSTFWD must start with a comma" >&2
+        echo "       Example: EXTRA_HOSTFWD=\",hostfwd=tcp::9150-:9100\"" >&2
+        exit 1
+    fi
+    if [[ ${EXTRA_HOSTFWD} =~ [[:space:]] ]]; then
+        echo "Error: EXTRA_HOSTFWD must not contain whitespace." >&2
+        exit 1
+    fi
+fi
+
 if [ "${KVM}" = "enable" ]; then
     KVM=",accel=kvm"
 else

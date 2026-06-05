@@ -479,6 +479,36 @@ jobs:
         echo "✓ EXTRA_HOSTFWD passed"
       working-directory: qemu
 
+    - name: "Dry-run: EXTRA_HOSTFWD rejects missing leading comma"
+      run: |
+        set +e
+        out=$(VM_NAME=dry-test KVM=none \
+              EXTRA_HOSTFWD="hostfwd=tcp::9150-:9100" \
+              DRY_RUN=1 ./run-vm 2>&1)
+        rc=$?
+        set -e
+        echo "$out"
+        [ $rc -ne 0 ] || \
+          (echo "Expected run-vm to reject EXTRA_HOSTFWD without comma" && exit 1)
+        echo "$out" | grep -q "must start with a comma"
+        echo "✓ EXTRA_HOSTFWD comma check passed"
+      working-directory: qemu
+
+    - name: "Dry-run: EXTRA_HOSTFWD rejects whitespace"
+      run: |
+        set +e
+        out=$(VM_NAME=dry-test KVM=none \
+              EXTRA_HOSTFWD=",hostfwd=tcp::9150-:9100 " \
+              DRY_RUN=1 ./run-vm 2>&1)
+        rc=$?
+        set -e
+        echo "$out"
+        [ $rc -ne 0 ] || \
+          (echo "Expected run-vm to reject EXTRA_HOSTFWD with whitespace" && exit 1)
+        echo "$out" | grep -q "must not contain whitespace"
+        echo "✓ EXTRA_HOSTFWD whitespace check passed"
+      working-directory: qemu
+
     - name: "Dry-run: BACKING_SHARED=true adds file.locking=off"
       run: |
         out=$(VM_NAME=dry-test KVM=none \
