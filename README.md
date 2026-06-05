@@ -153,6 +153,8 @@ for a full workflow example.
 | `DATA_NIC_QUEUES` | `0` | Multi-queue virtio-net TAP NIC (queue count) |
 | `MCAST_GROUP` | `none` | Multicast socket NIC (`230.0.0.1:1234`) |
 | `QMP_SOCKET` | `false` | QMP socket (`true` for default, or path) |
+| `QEMU_GUEST_AGENT` | `enable` | Guest agent channel on amd64 (`none` to omit) |
+| `EXTRA_HOSTFWD` | (empty) | Extra user-mode hostfwd rules (comma-prefixed) |
 | `DRY_RUN` | `none` | Print QEMU command instead of executing |
 | `BACKING_SHARED` | `false` | Disable image locking for shared backing files |
 

@@ -252,6 +252,7 @@ jobs:
         echo "$out" | grep -q "\-cpu EPYC"
         echo "$out" | grep -q "\-nographic"
         echo "$out" | grep -q "/tmp/qga-dry-test-2222.sock"
+        echo "$out" | grep -q "virtio-serial-pci,id=virtio-serial0"
         echo "$out" | grep -q "virtserialport,chardev=qga0"
         echo "$out" | grep -q "org.qemu.guest_agent.0"
         echo "✓ x86 defaults passed"
@@ -453,6 +454,29 @@ jobs:
         echo "$out" | grep -q \
           "unix:/tmp/my-qmp.sock"
         echo "✓ QMP_SOCKET custom path passed"
+      working-directory: qemu
+
+    - name: "Dry-run: QEMU_GUEST_AGENT=none omits guest agent"
+      run: |
+        out=$(VM_NAME=dry-test KVM=none \
+              QEMU_GUEST_AGENT=none DRY_RUN=1 ./run-vm)
+        echo "$out"
+        if echo "$out" | grep -q "org.qemu.guest_agent.0"; then
+          echo "guest agent should be omitted when QEMU_GUEST_AGENT=none"
+          exit 1
+        fi
+        echo "✓ QEMU_GUEST_AGENT=none passed"
+      working-directory: qemu
+
+    - name: "Dry-run: EXTRA_HOSTFWD appends hostfwd rules"
+      run: |
+        out=$(VM_NAME=dry-test KVM=none \
+              EXTRA_HOSTFWD=",hostfwd=tcp::9150-:9100" \
+              DRY_RUN=1 ./run-vm)
+        echo "$out"
+        echo "$out" | grep -q \
+          "hostfwd=tcp::9150-:9100"
+        echo "✓ EXTRA_HOSTFWD passed"
       working-directory: qemu
 
     - name: "Dry-run: BACKING_SHARED=true adds file.locking=off"
