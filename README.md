@@ -58,8 +58,28 @@ qemu-minimal/
   packages.d/
     packages-default     Default cloud-init package set
     packages-minimal     Minimal cloud-init package set
+  udev/
+    99-qemu-minimal-vfio.rules  VFIO device permissions
+    install-vfio-rules            Install the udev rules
   images/                VM images (created at runtime)
 ```
+
+## VFIO PCI Passthrough
+
+Bind the host device to `vfio-pci`, then pass its PCI address
+to `run-vm` via `PCI_HOSTDEV`. QEMU must be able to open the
+IOMMU group device under `/dev/vfio/N`; by default those
+nodes are root-only.
+
+Install the udev rules once (requires sudo). Your user must
+be in the `kvm` group:
+
+```bash
+./udev/install-vfio-rules
+```
+
+Re-login after group changes. `run-vm` checks VFIO access and
+prints this path if permissions are still wrong.
 
 ## Images Directory
 

@@ -1,0 +1,14 @@
+# Copyright (c) Advanced Micro Devices, Inc. All rights reserved.
+#
+# SPDX-License-Identifier: MIT
+#
+# Grant members of the kvm group read/write access to VFIO character
+# devices so unprivileged QEMU can open IOMMU groups for PCI passthrough.
+#
+# Install: udev/install-vfio-rules
+
+# IOMMU group nodes (/dev/vfio/N) opened by qemu -device vfio-pci
+SUBSYSTEM=="vfio", KERNEL=="[0-9]*", GROUP="kvm", MODE="0660"
+
+# Per-device nodes (/dev/vfio/devices/vfioN) on kernels with vfio-dev
+SUBSYSTEM=="vfio-dev", KERNEL=="vfio[0-9]*", GROUP="kvm", MODE="0660"

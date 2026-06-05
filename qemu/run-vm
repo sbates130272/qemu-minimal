@@ -181,7 +181,7 @@ function qemu_probe_caps {
     QEMU_HAS_IOEVENTFD=0
     QEMU_HAS_DBCS=0
     local aio_override="${QEMU_AIO:-}"
-    QEMU_AIO="native"
+    QEMU_AIO="threads"
     QEMU_HAS_LBAF_MASK=0
     QEMU_HAS_PCI_MMIO_BRIDGE=0
     QEMU_CAPS_PROBED=1
@@ -194,7 +194,6 @@ function qemu_probe_caps {
                 "binary." >&2
             exit 1
         fi
-        QEMU_AIO="threads"
         QEMU_CAPS_PROBED=0
         return 0
     fi
@@ -207,13 +206,20 @@ function qemu_probe_caps {
         && QEMU_HAS_IOEVENTFD=1
     echo "${nvme_help}" | grep -q "dbcs=" \
         && QEMU_HAS_DBCS=1
-    if echo quit | timeout 2 "${qemu}" \
-           -machine none -monitor stdio \
-           -drive driver=null-co,if=none,id=t \
-           -drive driver=null-co,if=none,id=u,aio=io_uring \
-           >/dev/null 2>&1; then
-        QEMU_AIO="io_uring"
+    local probe_img probe_aio
+    probe_img=$(mktemp /tmp/qemu-aio-probe.XXXXXX.qcow2)
+    if qemu-img create -f qcow2 "${probe_img}" 1M >/dev/null 2>&1; then
+        for probe_aio in io_uring native threads; do
+            if echo quit | timeout 2 "${qemu}" \
+                   -machine none -monitor stdio \
+                   -drive file="${probe_img}",format=qcow2,if=none,id=t,aio=${probe_aio} \
+                   >/dev/null 2>&1; then
+                QEMU_AIO="${probe_aio}"
+                break
+            fi
+        done
     fi
+    rm -f "${probe_img}"
     local nvme_ns_help
     nvme_ns_help=$("${qemu}" -device nvme-ns,help 2>&1) || true
     echo "${nvme_ns_help}" | grep -q "lbaf-mask=" \
@@ -259,9 +265,19 @@ function nvme_create {
     echo "${drv} ${dev} ${ns} "
 }
 
+function pci_sys_bdf () {
+    if [[ ${1} =~ ^[0-9a-fA-F]{4}: ]]; then
+        echo "${1}"
+    else
+        echo "0000:${1}"
+    fi
+}
+
   # Check that the user has provided valid PCIe bus addresses and also check
   # that the devices associated with these addresses are bound to vfio-pci
 function pci_check () {
+    local sysbdf vfio_group vfio_dev
+
     if [[ ! ${1} =~ ^([0-9a-fA-F]{4}:)?[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9]$ ]]; then
         echo "ERROR: PCIe bus address is invalid (${1})."
         exit 1
@@ -270,6 +286,21 @@ function pci_check () {
     if ! lspci -k -s "${1}" | grep -q "vfio-pci"; then
         echo "ERROR: Device ${1} is not bound to vfio-pci driver."
         exit 1
+    fi
+
+    sysbdf=$(pci_sys_bdf "${1}")
+    if [ -e "/sys/bus/pci/devices/${sysbdf}/iommu_group" ]; then
+        vfio_group=$(basename "$(readlink -f \
+            "/sys/bus/pci/devices/${sysbdf}/iommu_group")")
+        vfio_dev="/dev/vfio/${vfio_group}"
+        if [ ! -r "${vfio_dev}" ] || [ ! -w "${vfio_dev}" ]; then
+            echo "ERROR: Cannot access ${vfio_dev} (IOMMU group for ${1})."
+            ls -l "${vfio_dev}" 2>/dev/null \
+                || echo "       ${vfio_dev} does not exist."
+            echo "       Fix: sudo chmod 660 ${vfio_dev}"
+            echo "       Persistent: ../udev/install-vfio-rules"
+            exit 1
+        fi
     fi
 }
 
