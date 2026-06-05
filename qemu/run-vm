@@ -108,6 +108,14 @@
 # must still have its own overlay (different VM_NAME).
 # Use gen-vm with BACKING_FILE to create per-VM overlays
 # from a shared backing image.
+#
+# EXTRA_HOSTFWD appends additional host-forward rules to
+# the user-mode netdev.  The value is spliced directly
+# after the SSH forward, so it must start with a comma.
+# Example: EXTRA_HOSTFWD=",hostfwd=tcp::9150-:9100"
+# forwards host port 9150 to guest port 9100.  Multiple
+# forwards can be chained:
+#   EXTRA_HOSTFWD=",hostfwd=tcp::9150-:9100,hostfwd=tcp::8080-:80"
 
 set -e
 
@@ -136,6 +144,7 @@ MCAST_GROUP=${MCAST_GROUP:-none}
 QMP_SOCKET=${QMP_SOCKET:-false}
 QEMU_GUEST_AGENT=${QEMU_GUEST_AGENT:-enable}
 BACKING_SHARED=${BACKING_SHARED:-false}
+EXTRA_HOSTFWD=${EXTRA_HOSTFWD:-}
 
 if [ "${KVM}" = "enable" ]; then
     KVM=",accel=kvm"
@@ -444,7 +453,7 @@ QEMU_CMD=(${QEMU_PATH}qemu-system-${QARCH}
    "${PCI_MMIO_BRIDGE_ARGS[@]}"
    "${VFIO_USERDEV_ARGS[@]}"
    ${ROOT_DRIVE}
-   -netdev user,id=net0,hostfwd=tcp::${SSH_PORT}-:22
+   -netdev user,id=net0,hostfwd=tcp::${SSH_PORT}-:22${EXTRA_HOSTFWD}
    -device virtio-net-pci,netdev=net0
    ${DATA_NIC_ARGS}
    ${MCAST_ARGS}
