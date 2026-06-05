@@ -169,6 +169,7 @@ function qemu_probe_caps {
     local qemu="${QEMU_PATH}qemu-system-${QARCH}"
     QEMU_HAS_IOEVENTFD=0
     QEMU_HAS_DBCS=0
+    local aio_override="${QEMU_AIO:-}"
     QEMU_AIO="native"
     QEMU_HAS_LBAF_MASK=0
     QEMU_HAS_PCI_MMIO_BRIDGE=0
@@ -206,6 +207,9 @@ function qemu_probe_caps {
     nvme_ns_help=$("${qemu}" -device nvme-ns,help 2>&1) || true
     echo "${nvme_ns_help}" | grep -q "lbaf-mask=" \
         && QEMU_HAS_LBAF_MASK=1
+    if [ -n "${aio_override}" ]; then
+        QEMU_AIO="${aio_override}"
+    fi
     return 0
 }
 
