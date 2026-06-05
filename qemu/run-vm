@@ -303,14 +303,16 @@ else
     PCI_TESTDEV_ARGS="-device pci-testdev,membar=16G,membar-backed=true"
 fi
 
+PCIE_ROOT_PORT_CHASSIS=0
 if [ "${PCI_HOSTDEV}" = "none" ]; then
     PCI_HOSTDEV_ARGS=""
 else
     i=0
     for THIS_PCI_HOSTDEV in ${PCI_HOSTDEV//,/ }; do
         i=$((i + 1))
+        PCIE_ROOT_PORT_CHASSIS=$((PCIE_ROOT_PORT_CHASSIS + 1))
         pci_check "${THIS_PCI_HOSTDEV}"
-        PCI_HOSTDEV_ARGS+="-device pcie-root-port,id=pcie.${i} "
+        PCI_HOSTDEV_ARGS+="-device pcie-root-port,id=pcie.${i},chassis=${PCIE_ROOT_PORT_CHASSIS} "
         PCI_HOSTDEV_ARGS+="-device vfio-pci,bus=pcie.${i},host=${THIS_PCI_HOSTDEV} "
     done
 fi
@@ -330,8 +332,9 @@ else
             exit 1
         fi
         j=$((j + 1))
+        PCIE_ROOT_PORT_CHASSIS=$((PCIE_ROOT_PORT_CHASSIS + 1))
         VFIO_USERDEV_ARGS+=( \
-            -device "pcie-root-port,id=pcie-vfu.${j}" )
+            -device "pcie-root-port,id=pcie-vfu.${j},chassis=${PCIE_ROOT_PORT_CHASSIS}" )
         DEV_JSON=$(printf \
             '{"driver":"vfio-user-pci","bus":"pcie-vfu.%d","socket":{"path":"%s","type":"unix"}}' \
             "${j}" "${THIS_VFIO_USERDEV}")
