@@ -13,6 +13,7 @@ Filesystems
 GCP
 GDB
 HOSTDEV
+HOSTFWD
 Hardcoded
 IOMMU
 IPv
@@ -106,6 +107,7 @@ github
 gitignore
 gz
 hardcoded
+hostfwd
 href
 html
 http
@@ -121,6 +123,7 @@ jessie
 kbusch
 kickstart
 ko
+kvm
 lfs
 li
 librxe

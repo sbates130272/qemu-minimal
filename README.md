@@ -58,8 +58,28 @@ qemu-minimal/
   packages.d/
     packages-default     Default cloud-init package set
     packages-minimal     Minimal cloud-init package set
+  udev/
+    99-qemu-minimal-vfio.rules  VFIO device permissions
+    install-vfio-rules            Install the udev rules
   images/                VM images (created at runtime)
 ```
+
+## VFIO PCI Passthrough
+
+Bind the host device to `vfio-pci`, then pass its PCI address
+to `run-vm` via `PCI_HOSTDEV`. QEMU must be able to open the
+IOMMU group device under `/dev/vfio/N`; by default those
+nodes are root-only.
+
+Install the udev rules once (requires sudo). Your user must
+be in the `kvm` group:
+
+```bash
+./udev/install-vfio-rules
+```
+
+Re-login after group changes. `run-vm` checks VFIO access and
+prints this path if permissions are still wrong.
 
 ## Images Directory
 
@@ -153,6 +173,8 @@ for a full workflow example.
 | `DATA_NIC_QUEUES` | `0` | Multi-queue virtio-net TAP NIC (queue count) |
 | `MCAST_GROUP` | `none` | Multicast socket NIC (`230.0.0.1:1234`) |
 | `QMP_SOCKET` | `false` | QMP socket (`true` for default, or path) |
+| `QEMU_GUEST_AGENT` | `enable` | Guest agent channel on amd64 (`none` to omit) |
+| `EXTRA_HOSTFWD` | (empty) | Extra user-mode hostfwd rules (comma-prefixed) |
 | `DRY_RUN` | `none` | Print QEMU command instead of executing |
 | `BACKING_SHARED` | `false` | Disable image locking for shared backing files |
 

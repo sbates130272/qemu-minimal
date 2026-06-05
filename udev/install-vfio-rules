@@ -1,0 +1,28 @@
+#!/bin/bash
+#
+# install-vfio-rules
+#
+# (C) Stephen Bates <sbates@raithlin>
+#
+# Install udev rules that grant the kvm group access to VFIO
+# character devices (/dev/vfio/N and /dev/vfio/devices/vfioN).
+# Required for PCI_HOSTDEV passthrough via run-vm without root.
+
+set -e
+
+SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
+RULE_SRC="${SCRIPT_DIR}/99-qemu-minimal-vfio.rules"
+RULE_DST="/etc/udev/rules.d/99-qemu-minimal-vfio.rules"
+
+if [ ! -f "${RULE_SRC}" ]; then
+    echo "ERROR: Missing ${RULE_SRC}" >&2
+    exit 1
+fi
+
+sudo install -m 0644 "${RULE_SRC}" "${RULE_DST}"
+sudo udevadm control --reload-rules
+sudo udevadm trigger --subsystem-match=vfio
+sudo udevadm trigger --subsystem-match=vfio-dev
+
+echo "Installed ${RULE_DST}"
+echo "Users must be in the kvm group (and re-login) for access."
