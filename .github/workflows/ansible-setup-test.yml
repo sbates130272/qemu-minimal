@@ -1,0 +1,145 @@
+name: ansible-setup-test
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'ansible/**'
+      - 'qemu/gen-vm'
+      - '.github/workflows/ansible-setup-test.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'ansible/**'
+      - 'qemu/gen-vm'
+      - '.github/workflows/ansible-setup-test.yml'
+
+jobs:
+
+  syntax-check:
+    name: ansible-syntax-check
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4.3.1
+    - name: Install ansible (cached)
+      uses: awalsh128/cache-apt-pkgs-action@v1
+      with:
+        packages: ansible python3-pip
+    - name: Install sbates130272.batesste collection
+      run: ansible-galaxy collection install -r ansible/requirements.yml
+    - name: Ensure jmespath for Ansible json_query filter
+      run: |
+        py=$(sed -n '1s/^#! *//p' "$(command -v ansible-playbook)")
+        echo "Ansible controller Python: ${py} ($(${py} --version))"
+        if ! "${py}" -c 'import jmespath'; then
+          sudo apt-get update -qq
+          sudo apt-get install -y python3-pip
+          sudo "${py}" -m pip install --break-system-packages jmespath
+        fi
+        "${py}" -c 'import jmespath; print(jmespath.__file__)'
+    - name: Syntax-check vm-setup playbook
+      run: ansible-playbook --syntax-check playbooks/vm-setup.yml
+      working-directory: ansible
+
+  gen-vm-ansible-setup:
+    name: gen-vm-ansible-setup
+    needs: syntax-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4.3.1
+    - name: Install packages (cached)
+      uses: awalsh128/cache-apt-pkgs-action@v1
+      with:
+        packages: >-
+          qemu-system-x86 qemu-utils cloud-image-utils ansible
+          openssh-client python3-pip
+    - name: Generate SSH key-pair
+      run: ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
+    - name: Prepare GnuPG directory for git_setup
+      run: mkdir -p "$HOME/.gnupg"
+    - name: Cache cloud image
+      uses: actions/cache@v4
+      with:
+        path: images/*-server-cloudimg-*.img
+        key: cloud-img-amd64-noble-ansible
+    - name: Ensure images directory exists
+      run: mkdir -p images
+    - name: Ensure jmespath for Ansible json_query filter
+      run: |
+        py=$(sed -n '1s/^#! *//p' "$(command -v ansible-playbook)")
+        echo "Ansible controller Python: ${py} ($(${py} --version))"
+        if ! "${py}" -c 'import jmespath'; then
+          sudo apt-get update -qq
+          sudo apt-get install -y python3-pip
+          sudo "${py}" -m pip install --break-system-packages jmespath
+        fi
+        "${py}" -c 'import jmespath; print(jmespath.__file__)'
+    - name: Generate VM with Ansible post-setup
+      run: ./gen-vm
+      working-directory: qemu
+      env:
+        VM_NAME: ansible-setup-test
+        RELEASE: noble
+        KVM: none
+        USERNAME: ubuntu
+        PASS: password
+        PACKAGES: none
+        SIZE: 8
+        ANSIBLE_SETUP: true
+        ANSIBLE_USERNAME: ubuntu
+        ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false}'
+    - name: Boot VM as background task
+      run: ./run-vm > run-vm-output.log 2>&1 &
+      working-directory: qemu
+      env:
+        VM_NAME: ansible-setup-test
+        KVM: none
+    - name: Wait for VM to boot (180s timeout)
+      run: |
+        echo "Waiting for VM to accept SSH..."
+        timeout=180
+        elapsed=0
+        while [ $elapsed -lt $timeout ]; do
+          if ssh -o ConnectTimeout=1 \
+                 -o NoHostAuthenticationForLocalhost=yes \
+                 -o StrictHostKeyChecking=no \
+                 -p 2222 ubuntu@localhost true 2>/dev/null; then
+            echo "✓ VM ready after $elapsed seconds"
+            exit 0
+          fi
+          sleep 2
+          elapsed=$((elapsed + 2))
+        done
+        echo "✗ VM failed to boot within $timeout seconds"
+        exit 1
+    - name: Output run-vm log on failure
+      if: failure()
+      run: cat qemu/run-vm-output.log
+    - name: Verify user_setup copied SSH key
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes \
+          -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@localhost test -f .ssh/id_rsa
+        echo "✓ user_setup SSH key present in guest"
+    - name: Verify fave_packages installed fio
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes \
+          -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@localhost \
+          "dpkg-query -W -f='\${Status}' fio" \
+          | grep -q 'install ok installed'
+        echo "✓ fave_packages installed fio in guest"
+    - name: Verify git_setup configured git identity
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes \
+          -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@localhost \
+          git config --global user.name \
+          | grep -q 'Stephen Bates'
+        echo "✓ git_setup configured git user.name in guest"

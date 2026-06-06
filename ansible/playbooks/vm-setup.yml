@@ -1,0 +1,19 @@
+---
+- name: Post cloud-init VM setup
+  hosts: qemuvm
+  gather_facts: true
+  # Tasks that need root in the upstream sbates130272.batesste roles set
+  # `become: true` explicitly, so leave the default off here. Otherwise the
+  # git_setup role's `community.general.git_config` (scope: global) tasks
+  # would write to /root/.gitconfig instead of the target user's home.
+  become: false
+  vars:
+    username: "{{ vm_username | default('ubuntu') }}"
+    root_user: "{{ vm_root_user | default('ubuntu') }}"
+    user_setup_create: false
+    user_setup_vm_fstab: false
+    user_setup_motd: true
+  roles:
+    - role: sbates130272.batesste.user_setup
+    - role: sbates130272.batesste.fave_packages
+    - role: sbates130272.batesste.git_setup

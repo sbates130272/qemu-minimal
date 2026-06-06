@@ -58,6 +58,9 @@ qemu-minimal/
   packages.d/
     packages-default     Default cloud-init package set
     packages-minimal     Minimal cloud-init package set
+  ansible/
+    playbooks/vm-setup.yml  Post cloud-init Ansible playbook
+    requirements.yml        Galaxy collection requirements
   udev/
     99-qemu-minimal-vfio.rules  VFIO device permissions
     install-vfio-rules            Install the udev rules
@@ -108,6 +111,34 @@ PACKAGES=../packages.d/packages-minimal ./gen-vm
 
 Set `PACKAGES=none` to skip package installation entirely.
 
+## Ansible Post-Setup
+
+After cloud-init first boot, `gen-vm` can optionally run an
+Ansible playbook from the top-level `ansible/` directory against
+the backing image. This installs roles from the
+[sbates130272.batesste][batesste-galaxy] Galaxy collection
+(user setup, favourite packages, git configuration, and more).
+
+The host must have `ansible`, `ansible-galaxy`, and the Python
+`jmespath` module for the same interpreter as `ansible-playbook`
+(install with `python3 -m pip install --break-system-packages jmespath`
+when needed). When the collection is not already installed, `gen-vm` runs
+`ansible-galaxy collection install -r ansible/requirements.yml`.
+
+Customize the default role list in
+[`ansible/playbooks/vm-setup.yml`](ansible/playbooks/vm-setup.yml).
+
+```bash
+cd qemu
+ANSIBLE_SETUP=true \
+  ANSIBLE_USERNAME=stebates \
+  VM_NAME=base ./gen-vm
+```
+
+Ansible changes are written into the backing qcow2, so overlays
+created with `BACKING_FILE` inherit them. Ansible is skipped when
+`RESTORE_IMAGE=true` or `BACKING_FILE` is set.
+
 ## Environment Variables (gen-vm)
 
 | Variable | Default | Description |
@@ -129,6 +160,14 @@ Set `PACKAGES=none` to skip package installation entirely.
 | `NO_BACKING` | `false` | Create image without backing file |
 | `RESTORE_IMAGE` | `false` | Recreate image from existing backing file |
 | `BACKING_FILE` | (empty) | Path to existing backing qcow2 for overlay creation |
+| `ANSIBLE_SETUP` | `false` | Run Ansible post-setup after cloud-init first boot |
+| `ANSIBLE_DIR` | `../ansible` | Path to repo ansible/ directory |
+| `ANSIBLE_PLAYBOOK` | `playbooks/vm-setup.yml` | Playbook path under ANSIBLE_DIR |
+| `ANSIBLE_INVENTORY` | `inventory/qemu-vm.yml` | Inventory path under ANSIBLE_DIR |
+| `ANSIBLE_TAGS` | (empty) | Optional `--tags` filter for the playbook |
+| `ANSIBLE_EXTRA_ARGS` | (empty) | Extra arguments passed to ansible-playbook |
+| `ANSIBLE_USERNAME` | `$USERNAME` | Target account name for collection roles |
+| `ANSIBLE_TIMEOUT` | `600` | SSH wait timeout (seconds) for Ansible boot |
 
 ### RESTORE_IMAGE
 
@@ -220,3 +259,7 @@ opens internally. Both are needed to prevent lock
 conflicts across instances sharing the same backing
 file. Each VM must still use a distinct `VM_NAME` (and
 therefore a distinct overlay) to avoid data corruption.
+
+<!-- References -->
+
+[batesste-galaxy]: https://galaxy.ansible.com/ui/repo/published/sbates130272/batesste/

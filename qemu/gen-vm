@@ -50,6 +50,11 @@
 # of the specified backing file. This allows multiple VMs to
 # share a single read-only backing image with per-VM diffs
 # written to their own overlays.
+#
+# ANSIBLE_SETUP when true runs a host-side Ansible playbook
+# (from ../ansible by default) against the backing image after
+# cloud-init first boot. The sbates130272.batesste collection
+# is installed from Galaxy when not already present on the host.
 
 QEMU_PATH=${QEMU_PATH:-}
 VM_NAME=${VM_NAME:-qemu-minimal}
@@ -70,6 +75,14 @@ FORCE=${FORCE:-false}
 NO_BACKING=${NO_BACKING:-false}
 RESTORE_IMAGE=${RESTORE_IMAGE:-false}
 BACKING_FILE=${BACKING_FILE:-}
+ANSIBLE_SETUP=${ANSIBLE_SETUP:-false}
+ANSIBLE_DIR=${ANSIBLE_DIR:-../ansible}
+ANSIBLE_PLAYBOOK=${ANSIBLE_PLAYBOOK:-playbooks/vm-setup.yml}
+ANSIBLE_INVENTORY=${ANSIBLE_INVENTORY:-inventory/qemu-vm.yml}
+ANSIBLE_TAGS=${ANSIBLE_TAGS:-}
+ANSIBLE_EXTRA_ARGS=${ANSIBLE_EXTRA_ARGS:-}
+ANSIBLE_USERNAME=${ANSIBLE_USERNAME:-${USERNAME}}
+ANSIBLE_TIMEOUT=${ANSIBLE_TIMEOUT:-600}
 
   # Focal and above prefers us to use cloud images and
   # cloud-init. Download the focal cloud image and set it up using a
@@ -77,6 +90,11 @@ BACKING_FILE=${BACKING_FILE:-}
   # access.
 
 set -e
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+if [[ "${ANSIBLE_DIR}" != /* ]]; then
+    ANSIBLE_DIR="${SCRIPT_DIR}/${ANSIBLE_DIR}"
+fi
 
 # Accept both codenames (e.g. noble) and versions (e.g. 26.04).
 resolve_cloud_image_info() {
@@ -112,6 +130,198 @@ create_image_with_backing() {
             touch -t $(date -j -f "%Y-%m-%d %H:%M:%S" \
                 "${backing_timestamp}" +%Y%m%d%H%M.%S 2>/dev/null) ${2}
     fi
+}
+
+# QEMU nographic can leave stdio non-blocking; Ansible 7+ requires blocking IO.
+restore_blocking_stdio() {
+    python3 -c 'import os, sys
+for handle in (sys.stdin, sys.stdout, sys.stderr):
+    try:
+        os.set_blocking(handle.fileno(), True)
+    except Exception:
+        pass' 2>/dev/null || true
+}
+
+ensure_ansible_collection() {
+    restore_blocking_stdio
+    if ansible-galaxy collection list 2>/dev/null \
+        | grep -qE '^sbates130272\.batesste[[:space:]]'; then
+        return 0
+    fi
+    echo "Installing sbates130272.batesste collection from Galaxy..."
+    restore_blocking_stdio
+    ansible-galaxy collection install \
+        -r "${ANSIBLE_DIR}/requirements.yml"
+}
+
+ansible_controller_python() {
+    local ap py
+
+    ap=$(command -v ansible-playbook 2>/dev/null) || true
+    if [ -n "${ap}" ] && [ -r "${ap}" ]; then
+        py=$(sed -n '1s/^#! *//p' "${ap}")
+        if [ -n "${py}" ] && [ -x "${py}" ]; then
+            echo "${py}"
+            return 0
+        fi
+    fi
+    command -v python3
+}
+
+ensure_jmespath() {
+    local py pip_flag
+
+    py=$(ansible_controller_python)
+    if [ -z "${py}" ]; then
+        echo "Error: cannot determine Ansible controller Python!"
+        exit 1
+    fi
+    if "${py}" -c 'import jmespath' 2>/dev/null; then
+        return 0
+    fi
+    for pip_flag in --break-system-packages --user; do
+        if "${py}" -m pip install "${pip_flag}" jmespath >/dev/null 2>&1 \
+            && "${py}" -c 'import jmespath' 2>/dev/null; then
+            echo "Installed jmespath via pip (${pip_flag})."
+            return 0
+        fi
+    done
+    echo "Error: ${py} cannot import jmespath, which is required on" \
+         "the Ansible controller for sbates130272.batesste roles."
+    echo "Install with: ${py} -m pip install --break-system-packages jmespath"
+    echo "           or: sudo apt install python3-pip &&" \
+         "${py} -m pip install --break-system-packages jmespath"
+    exit 1
+}
+
+prepare_ansible_setup() {
+    if [ "${ANSIBLE_SETUP}" != "true" ]; then
+        return 0
+    fi
+
+    if ! command -v ansible-playbook >/dev/null 2>&1; then
+        echo "Error: ansible-playbook not found" \
+             "(required for ANSIBLE_SETUP=true)!"
+        exit 1
+    fi
+    if ! command -v ansible-galaxy >/dev/null 2>&1; then
+        echo "Error: ansible-galaxy not found" \
+             "(required for ANSIBLE_SETUP=true)!"
+        exit 1
+    fi
+
+    local playbook="${ANSIBLE_PLAYBOOK}"
+    local inventory="${ANSIBLE_INVENTORY}"
+    if [ ! -f "${ANSIBLE_DIR}/${playbook}" ]; then
+        echo "Error: Ansible playbook ${ANSIBLE_DIR}/${playbook} does not exist!"
+        exit 1
+    fi
+    if [ ! -f "${ANSIBLE_DIR}/${inventory}" ]; then
+        echo "Error: Ansible inventory ${ANSIBLE_DIR}/${inventory} does not exist!"
+        exit 1
+    fi
+    if [ ! -f "${ANSIBLE_DIR}/requirements.yml" ]; then
+        echo "Error: ${ANSIBLE_DIR}/requirements.yml does not exist!"
+        exit 1
+    fi
+
+    ensure_jmespath
+    ensure_ansible_collection
+}
+
+wait_for_ssh() {
+    local timeout=${ANSIBLE_TIMEOUT}
+    local elapsed=0
+
+    echo "Waiting for VM to accept SSH on port ${SSH_PORT}..."
+    while [ "${elapsed}" -lt "${timeout}" ]; do
+        if ssh -o ConnectTimeout=1 \
+               -o StrictHostKeyChecking=no \
+               -o UserKnownHostsFile=/dev/null \
+               -p "${SSH_PORT}" "${USERNAME}@localhost" \
+               true 2>/dev/null; then
+            echo "VM ready for Ansible after ${elapsed} seconds"
+            return 0
+        fi
+        sleep 2
+        elapsed=$((elapsed + 2))
+    done
+    echo "Error: VM did not accept SSH within ${timeout} seconds!"
+    return 1
+}
+
+stop_ansible_qemu() {
+    local pid="$1"
+    if [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null; then
+        kill "${pid}" 2>/dev/null || true
+        wait "${pid}" 2>/dev/null || true
+    fi
+}
+
+run_ansible_setup() {
+    if [ "${ANSIBLE_SETUP}" != "true" ]; then
+        return 0
+    fi
+
+    restore_blocking_stdio
+
+    echo "Booting ${IMAGES}/${VM_NAME}-backing.qcow2 for Ansible setup..."
+    ${QEMU_PATH}qemu-system-${QARCH} \
+       ${QARCH_ARGS} \
+       -smp cpus=${VCPUS} \
+       -m ${VMEM} \
+       -nographic \
+       -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}-backing.qcow2 \
+       -netdev user,id=net0,hostfwd=tcp::${SSH_PORT}-:22 \
+       -device virtio-net-pci,netdev=net0 &
+    local ansible_qemu_pid=$!
+
+    if ! wait_for_ssh; then
+        stop_ansible_qemu "${ansible_qemu_pid}"
+        exit 1
+    fi
+
+    echo "Running Ansible playbook ${ANSIBLE_PLAYBOOK}..."
+    local ap_extra=()
+    if [ -n "${ANSIBLE_TAGS}" ]; then
+        ap_extra+=(--tags "${ANSIBLE_TAGS}")
+    fi
+    if [ -n "${ANSIBLE_EXTRA_ARGS}" ]; then
+        # shellcheck disable=SC2206
+        ap_extra+=(${ANSIBLE_EXTRA_ARGS})
+    fi
+
+    local playbook="${ANSIBLE_PLAYBOOK}"
+    local inventory="${ANSIBLE_INVENTORY}"
+    restore_blocking_stdio
+    ensure_jmespath
+    if ! (
+        cd "${ANSIBLE_DIR}"
+        ANSIBLE_CONFIG="${ANSIBLE_DIR}/ansible.cfg" \
+        ansible-playbook \
+            -i "${inventory}" \
+            "${playbook}" \
+            -e "ansible_port=${SSH_PORT}" \
+            -e "ansible_user=${USERNAME}" \
+            -e "vm_username=${ANSIBLE_USERNAME}" \
+            -e "vm_root_user=${USERNAME}" \
+            "${ap_extra[@]}"
+    ); then
+        stop_ansible_qemu "${ansible_qemu_pid}"
+        exit 1
+    fi
+
+    echo "Powering off VM after Ansible setup..."
+    ssh -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null \
+        -p "${SSH_PORT}" "${USERNAME}@localhost" \
+        sudo poweroff || true
+
+    if ! wait "${ansible_qemu_pid}"; then
+        stop_ansible_qemu "${ansible_qemu_pid}"
+        exit 1
+    fi
+    echo "Ansible post-setup complete."
 }
 
 # Handle RESTORE_IMAGE option - only perform the final
@@ -201,6 +411,8 @@ if [ ! -f "${SSH_KEY_FILE}" ]; then
      echo "SSH_KEY_FILE ${SSH_KEY_FILE} does not exist!"
      exit 1
 fi
+
+prepare_ansible_setup
 
 if [ "${PACKAGES}" != "none" ]; then
     if [ -f "${PACKAGES}" ]; then
@@ -340,6 +552,8 @@ ${QEMU_PATH}qemu-system-${QARCH} \
    -drive if=virtio,format=qcow2,file=${IMAGES}/${VM_NAME}-seed.qcow2 \
    -netdev user,id=net0 \
    -device virtio-net-pci,netdev=net0
+
+run_ansible_setup
 
 if [ "${NO_BACKING}" = "true" ]; then
     mv "${IMAGES}/${VM_NAME}-backing.qcow2" "${IMAGES}/${VM_NAME}.qcow2"

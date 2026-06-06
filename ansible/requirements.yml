@@ -1,0 +1,4 @@
+---
+collections:
+  - name: sbates130272.batesste
+    version: ">=1.4.0"
