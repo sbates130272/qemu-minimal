@@ -11,7 +11,7 @@
     username: "{{ vm_username | default('ubuntu') }}"
     root_user: "{{ vm_root_user | default('ubuntu') }}"
     user_setup_create: false
-    user_setup_vm_fstab: true
+    user_setup_vm_fstab: false
     user_setup_motd: true
   roles:
     - role: sbates130272.batesste.user_setup
