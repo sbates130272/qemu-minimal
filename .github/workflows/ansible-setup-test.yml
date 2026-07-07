@@ -33,7 +33,7 @@ jobs:
       run: ansible-galaxy collection install -r ansible/requirements.yml
     - name: Ensure jmespath for Ansible json_query filter
       run: |
-        py=$(sed -n '1s/^#! *//p' "$(command -v ansible-playbook)")
+        py=$(sed -n '1s/^#! *//p' "$(command -v ansible-playbook)" | awk '{print $1}')
         echo "Ansible controller Python: ${py} ($(${py} --version))"
         if ! "${py}" -c 'import jmespath'; then
           sudo apt-get update -qq
@@ -75,7 +75,7 @@ jobs:
       run: mkdir -p images
     - name: Ensure jmespath for Ansible json_query filter
       run: |
-        py=$(sed -n '1s/^#! *//p' "$(command -v ansible-playbook)")
+        py=$(sed -n '1s/^#! *//p' "$(command -v ansible-playbook)" | awk '{print $1}')
         echo "Ansible controller Python: ${py} ($(${py} --version))"
         if ! "${py}" -c 'import jmespath'; then
           sudo apt-get update -qq
