@@ -116,6 +116,13 @@
 # forwards host port 9150 to guest port 9100.  Multiple
 # forwards can be chained:
 #   EXTRA_HOSTFWD=",hostfwd=tcp::9150-:9100,hostfwd=tcp::8080-:80"
+#
+# VRAM_DEV_INDEX selects which PCI_HOSTDEV entry (1-based) the emulated
+# NVMe controller(s) should treat as the source/sink for peer-to-peer DMA
+# via the "vram-dev" / "vram-bar" properties on -device nvme. Default
+# "none" disables the feature
+# VRAM_BAR picks the BAR index on that device (0 = BAR0, typically the
+# VRAM aperture on AMD GPUs).
 
 set -e
 
@@ -135,6 +142,8 @@ NVME_LBAF_MASK=${NVME_LBAF_MASK:-none}
 NVME_RECREATE=${NVME_RECREATE:-false}
 PCI_TESTDEV=${PCI_TESTDEV:-none}
 PCI_HOSTDEV=${PCI_HOSTDEV:-none}
+VRAM_DEV_INDEX=${VRAM_DEV_INDEX:-none}
+VRAM_BAR=${VRAM_BAR:-0}
 VFIO_USERDEV=${VFIO_USERDEV:-none}
 NVME_SIZE=1024G
 PCI_MMIO_BRIDGE=${PCI_MMIO_BRIDGE:-none}
@@ -196,6 +205,7 @@ function qemu_probe_caps {
     QEMU_AIO="threads"
     QEMU_HAS_LBAF_MASK=0
     QEMU_HAS_PCI_MMIO_BRIDGE=0
+    QEMU_HAS_VRAM_DEV=0
     QEMU_CAPS_PROBED=1
     if ! command -v "${qemu}" &>/dev/null; then
         if [ "${DRY_RUN}" = "none" ]; then
@@ -218,6 +228,8 @@ function qemu_probe_caps {
         && QEMU_HAS_IOEVENTFD=1
     echo "${nvme_help}" | grep -q "dbcs=" \
         && QEMU_HAS_DBCS=1
+    echo "${nvme_help}" | grep -q "vram-dev=" \
+        && QEMU_HAS_VRAM_DEV=1
     local probe_img probe_aio
     probe_img=$(mktemp /tmp/qemu-aio-probe.XXXXXX.qcow2)
     if qemu-img create -f qcow2 "${probe_img}" 1M >/dev/null 2>&1; then
@@ -262,6 +274,11 @@ function nvme_create {
             && dev+=",ioeventfd=off"
         [ ${QEMU_HAS_DBCS} -eq 1 ] \
             && dev+=",dbcs=off"
+    fi
+    # Wire the emulated NVMe to a VFIO passthrough device's BAR so peer-to-peer
+    # DMA (e.g. NVMe <-> GPU VRAM) resolves to the right MemoryRegion.
+    if [ "${VRAM_DEV_INDEX}" != "none" ] && [ ${QEMU_HAS_VRAM_DEV} -eq 1 ]; then
+        dev+=",vram-dev=vfio-host${VRAM_DEV_INDEX},vram-bar=${VRAM_BAR}"
     fi
     local ns="-device nvme-ns,drive=nvme-${3},bus=nvme-${3}-dev,nsid=1"
     if [ "${NVME_LBAF_MASK}" != "none" ]; then
@@ -367,7 +384,7 @@ else
         PCIE_ROOT_PORT_CHASSIS=$((PCIE_ROOT_PORT_CHASSIS + 1))
         pci_check "${THIS_PCI_HOSTDEV}"
         PCI_HOSTDEV_ARGS+="-device pcie-root-port,id=pcie.${i},chassis=${PCIE_ROOT_PORT_CHASSIS} "
-        PCI_HOSTDEV_ARGS+="-device vfio-pci,bus=pcie.${i},host=${THIS_PCI_HOSTDEV} "
+        PCI_HOSTDEV_ARGS+="-device vfio-pci,id=vfio-host${i},bus=pcie.${i},host=${THIS_PCI_HOSTDEV} "
     done
 fi
 
@@ -490,9 +507,9 @@ QEMU_CMD=(${QEMU_PATH}qemu-system-${QARCH}
    -m ${VMEM}
    ${FILESYSTEM_ARGS}
    -nographic
-   ${NVME_ARGS}
    ${PCI_TESTDEV_ARGS}
    ${PCI_HOSTDEV_ARGS}
+   ${NVME_ARGS}
    "${PCI_MMIO_BRIDGE_ARGS[@]}"
    "${VFIO_USERDEV_ARGS[@]}"
    ${ROOT_DRIVE}
