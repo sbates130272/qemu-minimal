@@ -1,0 +1,26 @@
+---
+- name: Post cloud-init VM setup with ROCm and hipFile
+  hosts: qemuvm
+  gather_facts: true
+  become: false
+  vars:
+    username: "{{ vm_username | default('ubuntu') }}"
+    root_user: "{{ vm_root_user | default('ubuntu') }}"
+    user_setup_create: false
+    user_setup_vm_fstab: true
+    user_setup_motd: true
+    rocm_setup_user: "{{ vm_username | default('ubuntu') }}"
+    rocm_setup_skip_reboot: false
+    rocm_setup_run_checks: false
+    rocm_setup_install_metrics_exporter: false
+    rocm_xio_setup_run_basic_checks: false
+    rocm_xio_setup_check_rocminfo: false
+    rocm_xio_setup_run_unit_tests: false
+    rocm_xio_setup_run_test_endpoint: false
+  roles:
+    - role: sbates130272.batesste.user_setup
+    - role: sbates130272.batesste.fave_packages
+    - role: sbates130272.batesste.git_setup
+    - role: sbates130272.batesste.rocm_setup
+    - role: sbates130272.batesste.rocm_hipfile_setup
+    - role: sbates130272.batesste.rocm_xio_setup
