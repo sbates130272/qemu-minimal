@@ -278,6 +278,26 @@ function nvme_create {
     # Wire the emulated NVMe to a VFIO passthrough device's BAR so peer-to-peer
     # DMA (e.g. NVMe <-> GPU VRAM) resolves to the right MemoryRegion.
     if [ "${VRAM_DEV_INDEX}" != "none" ] && [ ${QEMU_HAS_VRAM_DEV} -eq 1 ]; then
+        if [[ ! ${VRAM_DEV_INDEX} =~ ^[0-9]+$ ]] || [ "${VRAM_DEV_INDEX}" -lt 1 ]; then
+            echo "Error: VRAM_DEV_INDEX ('${VRAM_DEV_INDEX}') must be a 1-based integer index into PCI_HOSTDEV." >&2
+            exit 1
+        fi
+        if [[ ! ${VRAM_BAR} =~ ^[0-9]+$ ]]; then
+            echo "Error: VRAM_BAR ('${VRAM_BAR}') must be a non-negative integer BAR index." >&2
+            exit 1
+        fi
+        if [ "${PCI_HOSTDEV}" = "none" ]; then
+            echo "Error: VRAM_DEV_INDEX set, but PCI_HOSTDEV is 'none'." >&2
+            exit 1
+        fi
+        local hostdev_count=0 _bdf
+        for _bdf in ${PCI_HOSTDEV//,/ }; do
+            hostdev_count=$((hostdev_count + 1))
+        done
+        if [ "${VRAM_DEV_INDEX}" -gt "${hostdev_count}" ]; then
+            echo "Error: VRAM_DEV_INDEX (${VRAM_DEV_INDEX}) exceeds number of PCI_HOSTDEV entries (${hostdev_count})." >&2
+            exit 1
+        fi
         dev+=",vram-dev=vfio-host${VRAM_DEV_INDEX},vram-bar=${VRAM_BAR}"
     fi
     local ns="-device nvme-ns,drive=nvme-${3},bus=nvme-${3}-dev,nsid=1"
