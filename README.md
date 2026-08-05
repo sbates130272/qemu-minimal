@@ -1,5 +1,11 @@
 # QEMU and Libvirt Tooling
 
+[![GitHub Stars](https://img.shields.io/github/stars/sbates130272/qemu-minimal?style=flat-square)](https://github.com/sbates130272/qemu-minimal/stargazers)
+[![GitHub Issues](https://img.shields.io/github/issues/sbates130272/qemu-minimal?style=flat-square)](https://github.com/sbates130272/qemu-minimal/issues)
+[![Last Commit](https://img.shields.io/github/last-commit/sbates130272/qemu-minimal?style=flat-square)](https://github.com/sbates130272/qemu-minimal/commits/main)
+[![Platform](https://img.shields.io/badge/platform-x86__64%20%7C%20ARM64%20%7C%20RISC--V-blue?style=flat-square)](https://github.com/sbates130272/qemu-minimal)
+[![Ubuntu](https://img.shields.io/badge/Ubuntu-Noble-orange?style=flat-square&logo=ubuntu)](https://releases.ubuntu.com/noble/)
+
 ## Summary
 
 This repository provides a modern, cloud-init based
