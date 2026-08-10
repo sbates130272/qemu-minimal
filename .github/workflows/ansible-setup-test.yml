@@ -29,6 +29,7 @@ jobs:
       uses: awalsh128/cache-apt-pkgs-action@v1
       with:
         packages: ansible python3-pip
+        version: "1"
     - name: Install sbates130272.batesste collection
       run: ansible-galaxy collection install -r ansible/requirements.yml
     - name: Ensure jmespath for Ansible json_query filter
@@ -62,6 +63,7 @@ jobs:
         packages: >-
           qemu-system-x86 qemu-utils cloud-image-utils ansible
           openssh-client python3-pip
+        version: "1"
     - name: Generate SSH key-pair
       run: ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
     - name: Prepare GnuPG directory for git_setup
@@ -94,7 +96,7 @@ jobs:
         PASS: password
         PACKAGES: none
         SIZE: 8
-        ANSIBLE_SETUP: true
+        ANSIBLE_PROFILE: ../ansible/profiles/vm-setup
         ANSIBLE_USERNAME: ubuntu
         ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false}'
     - name: Boot VM as background task

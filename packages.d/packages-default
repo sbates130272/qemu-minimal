@@ -9,6 +9,8 @@
   - emacs-nox
   - expect
   - fio
+  - ccache
+  - gh
   - git
   - gnuplot
   - gpg-agent

@@ -27,6 +27,7 @@ jobs:
       with:
         packages: >-
           qemu-system-x86 qemu-utils cloud-image-utils
+        version: "1"
     - name: Generate an ssh key-pair for this test
       run: ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
     - name: Cache cloud image
@@ -148,6 +149,7 @@ jobs:
       with:
         packages: >-
           qemu-system-x86 qemu-utils cloud-image-utils
+        version: "1"
     - name: Generate SSH key-pair
       run: >-
         ssh-keygen -t rsa -q
@@ -239,6 +241,7 @@ jobs:
       uses: awalsh128/cache-apt-pkgs-action@v1
       with:
         packages: qemu-utils
+        version: "1"
     - name: Create images directory
       run: mkdir -p images
 
@@ -545,7 +548,8 @@ jobs:
     - name: Install packages (cached)
       uses: awalsh128/cache-apt-pkgs-action@v1
       with:
-        packages: qemu-system-arm cloud-image-utils
+        packages: qemu-system-arm qemu-utils cloud-image-utils
+        version: "1"
     - name: Generate an ssh key-pair for this test
       run: ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
     - name: Cache cloud image
@@ -577,7 +581,8 @@ jobs:
       uses: awalsh128/cache-apt-pkgs-action@v1
       with:
         packages: >-
-          qemu-system-misc u-boot-qemu cloud-image-utils
+          qemu-system-misc qemu-utils u-boot-qemu cloud-image-utils
+        version: "1"
     - name: Generate an ssh key-pair for this test
       run: ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
     - name: Cache cloud image
