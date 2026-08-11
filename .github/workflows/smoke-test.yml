@@ -14,6 +14,7 @@ jobs:
   smoke-test-x86:
     name: smoke-test-x86-${{ matrix.release }}
     runs-on: ubuntu-latest
+    container: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:august-11-2026
     strategy:
       matrix:
         release:
@@ -22,12 +23,6 @@ jobs:
     steps:
     - name: Check out code using action/checkout
       uses: actions/checkout@v4.3.1
-    - name: Install packages (cached)
-      uses: awalsh128/cache-apt-pkgs-action@v1
-      with:
-        packages: >-
-          qemu-system-x86 qemu-utils cloud-image-utils
-        version: "1"
     - name: Generate an ssh key-pair for this test
       run: ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
     - name: Cache cloud image
@@ -141,15 +136,10 @@ jobs:
   smoke-test-x86-nullblk:
     name: smoke-test-x86-nullblk
     runs-on: ubuntu-latest
+    container: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:august-11-2026
     steps:
     - name: Check out code
       uses: actions/checkout@v4.3.1
-    - name: Install packages (cached)
-      uses: awalsh128/cache-apt-pkgs-action@v1
-      with:
-        packages: >-
-          qemu-system-x86 qemu-utils cloud-image-utils
-        version: "1"
     - name: Generate SSH key-pair
       run: >-
         ssh-keygen -t rsa -q
@@ -538,14 +528,10 @@ jobs:
   smoke-test-arm64:
     name: smoke-test-arm64
     runs-on: ubuntu-latest
+    container: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:august-11-2026
     steps:
     - name: Check out code using action/checkout
       uses: actions/checkout@v4.3.1
-    - name: Install packages (cached)
-      uses: awalsh128/cache-apt-pkgs-action@v1
-      with:
-        packages: qemu-system-arm qemu-utils cloud-image-utils
-        version: "1"
     - name: Generate an ssh key-pair for this test
       run: ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
     - name: Cache cloud image
@@ -570,15 +556,10 @@ jobs:
   smoke-test-riscv64:
     name: smoke-test-riscv64
     runs-on: ubuntu-latest
+    container: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:august-11-2026
     steps:
     - name: Check out code using action/checkout
       uses: actions/checkout@v4.3.1
-    - name: Install packages (cached)
-      uses: awalsh128/cache-apt-pkgs-action@v1
-      with:
-        packages: >-
-          qemu-system-misc qemu-utils u-boot-qemu cloud-image-utils
-        version: "1"
     - name: Generate an ssh key-pair for this test
       run: ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
     - name: Cache cloud image

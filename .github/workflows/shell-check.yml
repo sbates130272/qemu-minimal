@@ -19,7 +19,6 @@ jobs:
   shellcheck:
     name: shellcheck
     runs-on: ubuntu-latest
-    container: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:august-11-2026
     steps:
       - name: Check out code
         uses: actions/checkout@v4.3.1
