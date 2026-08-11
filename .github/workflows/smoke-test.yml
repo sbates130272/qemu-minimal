@@ -24,7 +24,7 @@ jobs:
     - name: Check out code using action/checkout
       uses: actions/checkout@v4.3.1
     - name: Generate an ssh key-pair for this test
-      run: ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
+      run: mkdir -p "$HOME/.ssh" && ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
     - name: Cache cloud image
       uses: actions/cache@v4
       with:
@@ -141,9 +141,7 @@ jobs:
     - name: Check out code
       uses: actions/checkout@v4.3.1
     - name: Generate SSH key-pair
-      run: >-
-        ssh-keygen -t rsa -q
-        -f "$HOME/.ssh/id_rsa" -N ""
+      run: mkdir -p "$HOME/.ssh" && ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
     - name: Cache cloud image
       uses: actions/cache@v4
       with:
@@ -533,7 +531,7 @@ jobs:
     - name: Check out code using action/checkout
       uses: actions/checkout@v4.3.1
     - name: Generate an ssh key-pair for this test
-      run: ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
+      run: mkdir -p "$HOME/.ssh" && ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
     - name: Cache cloud image
       uses: actions/cache@v4
       with:
@@ -561,7 +559,7 @@ jobs:
     - name: Check out code using action/checkout
       uses: actions/checkout@v4.3.1
     - name: Generate an ssh key-pair for this test
-      run: ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
+      run: mkdir -p "$HOME/.ssh" && ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
     - name: Cache cloud image
       uses: actions/cache@v4
       with:

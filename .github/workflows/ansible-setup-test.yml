@@ -26,6 +26,8 @@ jobs:
     steps:
     - name: Check out code
       uses: actions/checkout@v4.3.1
+    - name: Install ansible
+      run: apt-get update -qq && apt-get install -y -qq ansible python3-pip
     - name: Install sbates130272.batesste collection
       run: ansible-galaxy collection install -r ansible/requirements.yml
     - name: Syntax-check vm-setup playbook
@@ -44,8 +46,10 @@ jobs:
     steps:
     - name: Check out code
       uses: actions/checkout@v4.3.1
+    - name: Install ansible
+      run: apt-get update -qq && apt-get install -y -qq ansible python3-pip
     - name: Generate SSH key-pair
-      run: ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
+      run: mkdir -p "$HOME/.ssh" && ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
     - name: Prepare GnuPG directory for git_setup
       run: mkdir -p "$HOME/.gnupg"
     - name: Cache cloud image
