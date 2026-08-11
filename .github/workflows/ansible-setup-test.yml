@@ -41,13 +41,16 @@ jobs:
     name: gen-vm-ansible-setup
     needs: syntax-check
     runs-on: ubuntu-latest
-    container: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:august-11-2026
     timeout-minutes: 90
     steps:
     - name: Check out code
       uses: actions/checkout@v4.3.1
-    - name: Install ansible
-      run: apt-get update -qq && apt-get install -y -qq ansible python3-pip
+    - name: Install packages
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq \
+          qemu-system-x86 qemu-utils cloud-image-utils ansible \
+          openssh-client python3-pip
     - name: Generate SSH key-pair
       run: mkdir -p "$HOME/.ssh" && ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
     - name: Prepare GnuPG directory for git_setup
