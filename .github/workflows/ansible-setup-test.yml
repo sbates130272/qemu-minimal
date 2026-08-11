@@ -51,6 +51,10 @@ jobs:
         sudo apt-get install -y -qq \
           qemu-system-x86 qemu-utils cloud-image-utils ansible \
           openssh-client python3-pip
+    - name: Install jmespath for Ansible json_query filter
+      run: |
+        py=$(sed -n '1s/^#! *//p' "$(command -v ansible-playbook)" | awk '{print $1}')
+        "${py}" -m pip install --break-system-packages jmespath
     - name: Generate SSH key-pair
       run: mkdir -p "$HOME/.ssh" && ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
     - name: Prepare GnuPG directory for git_setup
