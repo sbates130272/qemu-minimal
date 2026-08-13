@@ -22,13 +22,12 @@ jobs:
     steps:
     - name: Check out code using action/checkout
       uses: actions/checkout@v4.3.1
-    - name: Install packages (cached)
-      uses: awalsh128/cache-apt-pkgs-action@v1
-      with:
-        packages: >-
-          qemu-system-x86 qemu-utils cloud-image-utils
+    - name: Install packages
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq qemu-system-x86 qemu-utils cloud-image-utils
     - name: Generate an ssh key-pair for this test
-      run: ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
+      run: mkdir -p "$HOME/.ssh" && ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
     - name: Cache cloud image
       uses: actions/cache@v4
       with:
@@ -143,15 +142,12 @@ jobs:
     steps:
     - name: Check out code
       uses: actions/checkout@v4.3.1
-    - name: Install packages (cached)
-      uses: awalsh128/cache-apt-pkgs-action@v1
-      with:
-        packages: >-
-          qemu-system-x86 qemu-utils cloud-image-utils
+    - name: Install packages
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq qemu-system-x86 qemu-utils cloud-image-utils
     - name: Generate SSH key-pair
-      run: >-
-        ssh-keygen -t rsa -q
-        -f "$HOME/.ssh/id_rsa" -N ""
+      run: mkdir -p "$HOME/.ssh" && ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
     - name: Cache cloud image
       uses: actions/cache@v4
       with:
@@ -232,13 +228,10 @@ jobs:
   dry-run-tests:
     name: dry-run-tests
     runs-on: ubuntu-latest
+    container: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:august-11-2026
     steps:
     - name: Check out code
       uses: actions/checkout@v4.3.1
-    - name: Install qemu-utils (cached)
-      uses: awalsh128/cache-apt-pkgs-action@v1
-      with:
-        packages: qemu-utils
     - name: Create images directory
       run: mkdir -p images
 
@@ -542,12 +535,12 @@ jobs:
     steps:
     - name: Check out code using action/checkout
       uses: actions/checkout@v4.3.1
-    - name: Install packages (cached)
-      uses: awalsh128/cache-apt-pkgs-action@v1
-      with:
-        packages: qemu-system-arm cloud-image-utils
+    - name: Install packages
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq qemu-system-arm qemu-utils cloud-image-utils
     - name: Generate an ssh key-pair for this test
-      run: ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
+      run: mkdir -p "$HOME/.ssh" && ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
     - name: Cache cloud image
       uses: actions/cache@v4
       with:
@@ -573,13 +566,12 @@ jobs:
     steps:
     - name: Check out code using action/checkout
       uses: actions/checkout@v4.3.1
-    - name: Install packages (cached)
-      uses: awalsh128/cache-apt-pkgs-action@v1
-      with:
-        packages: >-
-          qemu-system-misc u-boot-qemu cloud-image-utils
+    - name: Install packages
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq qemu-system-misc qemu-utils u-boot-qemu cloud-image-utils
     - name: Generate an ssh key-pair for this test
-      run: ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
+      run: mkdir -p "$HOME/.ssh" && ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
     - name: Cache cloud image
       uses: actions/cache@v4
       with:

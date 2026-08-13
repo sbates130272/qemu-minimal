@@ -22,25 +22,14 @@ jobs:
   syntax-check:
     name: ansible-syntax-check
     runs-on: ubuntu-latest
+    container: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:august-11-2026
     steps:
     - name: Check out code
       uses: actions/checkout@v4.3.1
-    - name: Install ansible (cached)
-      uses: awalsh128/cache-apt-pkgs-action@v1
-      with:
-        packages: ansible python3-pip
+    - name: Install ansible
+      run: apt-get update -qq && apt-get install -y -qq ansible python3-pip
     - name: Install sbates130272.batesste collection
       run: ansible-galaxy collection install -r ansible/requirements.yml
-    - name: Ensure jmespath for Ansible json_query filter
-      run: |
-        py=$(sed -n '1s/^#! *//p' "$(command -v ansible-playbook)" | awk '{print $1}')
-        echo "Ansible controller Python: ${py} ($(${py} --version))"
-        if ! "${py}" -c 'import jmespath'; then
-          sudo apt-get update -qq
-          sudo apt-get install -y python3-pip
-          sudo "${py}" -m pip install --break-system-packages jmespath
-        fi
-        "${py}" -c 'import jmespath; print(jmespath.__file__)'
     - name: Syntax-check vm-setup playbook
       run: ansible-playbook --syntax-check playbooks/vm-setup.yml
       working-directory: ansible
@@ -56,14 +45,18 @@ jobs:
     steps:
     - name: Check out code
       uses: actions/checkout@v4.3.1
-    - name: Install packages (cached)
-      uses: awalsh128/cache-apt-pkgs-action@v1
-      with:
-        packages: >-
-          qemu-system-x86 qemu-utils cloud-image-utils ansible
+    - name: Install packages
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq \
+          qemu-system-x86 qemu-utils cloud-image-utils ansible \
           openssh-client python3-pip
+    - name: Install jmespath for Ansible json_query filter
+      run: |
+        py=$(sed -n '1s/^#! *//p' "$(command -v ansible-playbook)" | awk '{print $1}')
+        "${py}" -m pip install --break-system-packages jmespath
     - name: Generate SSH key-pair
-      run: ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
+      run: mkdir -p "$HOME/.ssh" && ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
     - name: Prepare GnuPG directory for git_setup
       run: mkdir -p "$HOME/.gnupg"
     - name: Cache cloud image
@@ -73,16 +66,6 @@ jobs:
         key: cloud-img-amd64-noble-ansible
     - name: Ensure images directory exists
       run: mkdir -p images
-    - name: Ensure jmespath for Ansible json_query filter
-      run: |
-        py=$(sed -n '1s/^#! *//p' "$(command -v ansible-playbook)" | awk '{print $1}')
-        echo "Ansible controller Python: ${py} ($(${py} --version))"
-        if ! "${py}" -c 'import jmespath'; then
-          sudo apt-get update -qq
-          sudo apt-get install -y python3-pip
-          sudo "${py}" -m pip install --break-system-packages jmespath
-        fi
-        "${py}" -c 'import jmespath; print(jmespath.__file__)'
     - name: Generate VM with Ansible post-setup
       run: ./gen-vm
       working-directory: qemu
@@ -94,7 +77,7 @@ jobs:
         PASS: password
         PACKAGES: none
         SIZE: 8
-        ANSIBLE_SETUP: true
+        ANSIBLE_PROFILE: ../ansible/profiles/vm-setup
         ANSIBLE_USERNAME: ubuntu
         ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false}'
     - name: Boot VM as background task

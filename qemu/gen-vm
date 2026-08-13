@@ -51,10 +51,10 @@
 # share a single read-only backing image with per-VM diffs
 # written to their own overlays.
 #
-# ANSIBLE_SETUP when true runs a host-side Ansible playbook
-# (from ../ansible by default) against the backing image after
-# cloud-init first boot. The sbates130272.batesste collection
-# is installed from Galaxy when not already present on the host.
+# ANSIBLE_PROFILE when set points to a profile file (e.g.
+# ../ansible/profiles/vm-setup) that is sourced to configure the
+# Ansible playbook run after cloud-init first boot. When unset, no
+# Ansible setup is performed.
 
 QEMU_PATH=${QEMU_PATH:-}
 VM_NAME=${VM_NAME:-qemu-minimal}
@@ -75,14 +75,7 @@ FORCE=${FORCE:-false}
 NO_BACKING=${NO_BACKING:-false}
 RESTORE_IMAGE=${RESTORE_IMAGE:-false}
 BACKING_FILE=${BACKING_FILE:-}
-ANSIBLE_SETUP=${ANSIBLE_SETUP:-false}
-ANSIBLE_DIR=${ANSIBLE_DIR:-../ansible}
-ANSIBLE_PLAYBOOK=${ANSIBLE_PLAYBOOK:-playbooks/vm-setup.yml}
-ANSIBLE_INVENTORY=${ANSIBLE_INVENTORY:-inventory/qemu-vm.yml}
-ANSIBLE_TAGS=${ANSIBLE_TAGS:-}
-ANSIBLE_EXTRA_ARGS=${ANSIBLE_EXTRA_ARGS:-}
-ANSIBLE_USERNAME=${ANSIBLE_USERNAME:-${USERNAME}}
-ANSIBLE_TIMEOUT=${ANSIBLE_TIMEOUT:-600}
+ANSIBLE_PROFILE=${ANSIBLE_PROFILE:-}
 
   # Focal and above prefers us to use cloud images and
   # cloud-init. Download the focal cloud image and set it up using a
@@ -92,7 +85,17 @@ ANSIBLE_TIMEOUT=${ANSIBLE_TIMEOUT:-600}
 set -e
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-if [[ "${ANSIBLE_DIR}" != /* ]]; then
+
+if [ -n "${ANSIBLE_PROFILE}" ]; then
+    if [ ! -f "${ANSIBLE_PROFILE}" ]; then
+        echo "Error: ANSIBLE_PROFILE ${ANSIBLE_PROFILE} does not exist!"
+        exit 1
+    fi
+    # shellcheck source=/dev/null
+    . "${ANSIBLE_PROFILE}"
+fi
+
+if [ -n "${ANSIBLE_PROFILE}" ] && [[ "${ANSIBLE_DIR}" != /* ]]; then
     ANSIBLE_DIR="${SCRIPT_DIR}/${ANSIBLE_DIR}"
 fi
 
@@ -195,18 +198,18 @@ ensure_jmespath() {
 }
 
 prepare_ansible_setup() {
-    if [ "${ANSIBLE_SETUP}" != "true" ]; then
+    if [ -z "${ANSIBLE_PROFILE}" ]; then
         return 0
     fi
 
     if ! command -v ansible-playbook >/dev/null 2>&1; then
         echo "Error: ansible-playbook not found" \
-             "(required for ANSIBLE_SETUP=true)!"
+             "(required for ANSIBLE_PROFILE)!"
         exit 1
     fi
     if ! command -v ansible-galaxy >/dev/null 2>&1; then
         echo "Error: ansible-galaxy not found" \
-             "(required for ANSIBLE_SETUP=true)!"
+             "(required for ANSIBLE_PROFILE)!"
         exit 1
     fi
 
@@ -259,7 +262,7 @@ stop_ansible_qemu() {
 }
 
 run_ansible_setup() {
-    if [ "${ANSIBLE_SETUP}" != "true" ]; then
+    if [ -z "${ANSIBLE_PROFILE}" ]; then
         return 0
     fi
 
