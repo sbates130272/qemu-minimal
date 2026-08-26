@@ -88,10 +88,10 @@ jobs:
           --no-kvm \
           --nvme 1 \
           > run-vm-output.log 2>&1 &
-    - name: Wait for VM to boot (240s timeout)
+    - name: Wait for VM to boot (180s timeout)
       run: |
         echo "Waiting for VM to boot and accept SSH..."
-        timeout=240
+        timeout=180
         elapsed=0
         while [ $elapsed -lt $timeout ]; do
           if ssh -o ConnectTimeout=1 \

@@ -53,7 +53,8 @@ def run(cfg: VMConfig, caps: QemuCaps) -> None:
     if cfg.arch == "amd64" and cfg.qemu_guest_agent:
         qga_sock = Path(f"/tmp/qga-{cfg.vm_name}-{cfg.ssh_port}.sock")
         qga_sock.unlink(missing_ok=True)
-    _setup_data_tap(cfg)
+    if cfg.data_nic_queues > 0:
+        _ensure_tap(f"dt{cfg.ssh_port}", cfg.data_nic_queues)
     os.execvp(cmd[0], cmd)
 
 
