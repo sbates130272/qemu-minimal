@@ -16,9 +16,20 @@ jobs:
       - name: Check out code
         uses: actions/checkout@v4.3.1
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build wheel
+        run: |
+          pip install build
+          python -m build qemu/ --wheel --outdir dist/
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2.3.2
         with:
           generate_release_notes: true
           draft: false
           prerelease: false
+          files: dist/*.whl
