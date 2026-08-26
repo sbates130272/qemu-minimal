@@ -69,12 +69,13 @@ jobs:
       run: |
         qemu-tool gen-vm \
           --vm-name shared-overlay-test \
-          --backing-file images/qemu-tool-smoke-test-backing.qcow2
-        if [ ! -f images/shared-overlay-test.qcow2 ]; then
+          --backing-file "$GITHUB_WORKSPACE/images/qemu-tool-smoke-test-backing.qcow2"
+        if [ ! -f "$GITHUB_WORKSPACE/images/shared-overlay-test.qcow2" ]; then
           echo "Overlay not created by --backing-file mode"
           exit 1
         fi
-        if ! qemu-img info images/shared-overlay-test.qcow2 \
+        if ! qemu-img info \
+             "$GITHUB_WORKSPACE/images/shared-overlay-test.qcow2" \
              | grep -q "backing file:"; then
           echo "Overlay does not reference a backing file"
           exit 1
