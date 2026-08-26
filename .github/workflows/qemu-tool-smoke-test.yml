@@ -1,0 +1,189 @@
+name: qemu-tool-smoke-test
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'qemu/qemu-tool/**'
+      - 'qemu/pyproject.toml'
+      - '.github/workflows/qemu-tool-smoke-test.yml'
+
+jobs:
+
+  smoke-test-x86:
+    name: smoke-test-x86-${{ matrix.release }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        release:
+          - noble
+          - resolute
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4.3.1
+    - name: Install packages
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq \
+          qemu-system-x86 qemu-utils cloud-image-utils python3-pip
+    - name: Install qemu-tool
+      run: pip install --break-system-packages -e ./qemu
+    - name: Generate SSH key-pair
+      run: mkdir -p "$HOME/.ssh" && ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
+    - name: Cache cloud image
+      uses: actions/cache@v4
+      with:
+        path: images/*-server-cloudimg-*.img
+        key: cloud-img-amd64-${{ matrix.release }}-qemu-tool
+    - name: Ensure images directory exists
+      run: mkdir -p images
+    - name: Generate VM with qemu-tool gen-vm
+      run: |
+        qemu-tool gen-vm \
+          --vm-name qemu-tool-smoke-test \
+          --release ${{ matrix.release }} \
+          --no-kvm \
+          --username ubuntu \
+          --password password \
+          --packages none \
+          --size 8
+    - name: Test --restore-image mode
+      run: |
+        rm -f images/qemu-tool-smoke-test.qcow2
+        qemu-tool gen-vm \
+          --vm-name qemu-tool-smoke-test \
+          --restore-image
+        if [ ! -f images/qemu-tool-smoke-test.qcow2 ]; then
+          echo "Image not restored from backing"
+          exit 1
+        fi
+        if ! qemu-img info images/qemu-tool-smoke-test.qcow2 \
+             | grep -q "backing file:"; then
+          echo "Restored image does not have backing file"
+          exit 1
+        fi
+        echo "✓ --restore-image test passed"
+    - name: Test --backing-file mode
+      run: |
+        qemu-tool gen-vm \
+          --vm-name shared-overlay-test \
+          --backing-file images/qemu-tool-smoke-test-backing.qcow2
+        if [ ! -f images/shared-overlay-test.qcow2 ]; then
+          echo "Overlay not created by --backing-file mode"
+          exit 1
+        fi
+        if ! qemu-img info images/shared-overlay-test.qcow2 \
+             | grep -q "backing file:"; then
+          echo "Overlay does not reference a backing file"
+          exit 1
+        fi
+        echo "✓ --backing-file test passed"
+    - name: Boot VM with qemu-tool run-vm
+      run: |
+        qemu-tool run-vm \
+          --vm-name qemu-tool-smoke-test \
+          --no-kvm \
+          --nvme 1 \
+          > run-vm-output.log 2>&1 &
+    - name: Wait for VM to boot (180s timeout)
+      run: |
+        echo "Waiting for VM to boot and accept SSH..."
+        timeout=180
+        elapsed=0
+        while [ $elapsed -lt $timeout ]; do
+          if ssh -o ConnectTimeout=1 \
+                 -o NoHostAuthenticationForLocalhost=yes \
+                 -o StrictHostKeyChecking=no \
+                 -p 2222 ubuntu@localhost true 2>/dev/null; then
+            echo "✓ VM ready after $elapsed seconds"
+            exit 0
+          fi
+          sleep 2
+          elapsed=$((elapsed + 2))
+        done
+        echo "✗ VM failed to boot within $timeout seconds"
+        exit 1
+    - name: Output run-vm log
+      if: always()
+      run: cat run-vm-output.log
+    - name: Verify SSH access to VM
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes \
+          -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@localhost ls -ltrh
+    - name: Verify qemu-guest-agent in guest
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes \
+          -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@localhost \
+          "dpkg-query -W -f='\${Status}' qemu-guest-agent" \
+          | grep -q "install ok installed"
+        echo "✓ qemu-guest-agent installed in guest"
+
+  smoke-test-arm64:
+    name: smoke-test-arm64
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4.3.1
+    - name: Install packages
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq \
+          qemu-system-arm qemu-utils cloud-image-utils python3-pip
+    - name: Install qemu-tool
+      run: pip install --break-system-packages -e ./qemu
+    - name: Generate SSH key-pair
+      run: mkdir -p "$HOME/.ssh" && ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
+    - name: Cache cloud image
+      uses: actions/cache@v4
+      with:
+        path: images
+        key: cloud-img-arm64-noble-qemu-tool
+    - name: Ensure images directory exists
+      run: mkdir -p images
+    - name: Generate arm64 VM with qemu-tool gen-vm
+      run: |
+        qemu-tool gen-vm \
+          --vm-name qemu-tool-smoke-test-arm64 \
+          --arch arm64 \
+          --no-kvm \
+          --username ubuntu \
+          --password password \
+          --packages none \
+          --size 8
+
+  smoke-test-riscv64:
+    name: smoke-test-riscv64
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4.3.1
+    - name: Install packages
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq \
+          qemu-system-misc qemu-utils u-boot-qemu cloud-image-utils python3-pip
+    - name: Install qemu-tool
+      run: pip install --break-system-packages -e ./qemu
+    - name: Generate SSH key-pair
+      run: mkdir -p "$HOME/.ssh" && ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
+    - name: Cache cloud image
+      uses: actions/cache@v4
+      with:
+        path: images
+        key: cloud-img-riscv64-noble-qemu-tool
+    - name: Ensure images directory exists
+      run: mkdir -p images
+    - name: Generate riscv64 VM with qemu-tool gen-vm
+      run: |
+        qemu-tool gen-vm \
+          --vm-name qemu-tool-smoke-test-riscv64 \
+          --arch riscv64 \
+          --no-kvm \
+          --username ubuntu \
+          --password password \
+          --packages none \
+          --size 8

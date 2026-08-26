@@ -126,6 +126,8 @@
 
 set -e
 
+echo "WARNING: run-vm is deprecated. Use 'qemu-tool run-vm' instead." >&2
+
 QEMU_PATH=${QEMU_PATH:-}
 VM_NAME=${VM_NAME:-qemu-minimal}
 ARCH=${ARCH:-amd64}

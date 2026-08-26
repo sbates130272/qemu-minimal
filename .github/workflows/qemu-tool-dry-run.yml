@@ -1,0 +1,268 @@
+name: qemu-tool-dry-run-tests
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'qemu/qemu-tool/**'
+      - 'qemu/pyproject.toml'
+      - '.github/workflows/qemu-tool-dry-run.yml'
+
+jobs:
+
+  dry-run-tests:
+    name: dry-run-tests
+    runs-on: ubuntu-latest
+    container: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:august-11-2026
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4.3.1
+    - name: Install pip and qemu-tool
+      run: |
+        apt-get update -qq
+        apt-get install -y -qq python3-pip
+        python3 -m pip install --break-system-packages -e ./qemu
+    - name: Create images directory
+      run: mkdir -p images
+
+    - name: "Dry-run: x86 defaults"
+      run: |
+        out=$(qemu-tool run-vm --vm-name dry-test --no-kvm --dry-run)
+        echo "$out"
+        echo "$out" | grep -q "qemu-system-x86_64"
+        echo "$out" | grep -q "\-machine q35"
+        echo "$out" | grep -q "\-cpu EPYC"
+        echo "$out" | grep -q "\-nographic"
+        echo "$out" | grep -q "/tmp/qga-dry-test-2222.sock"
+        echo "$out" | grep -q "virtio-serial-pci,id=virtio-serial0"
+        echo "$out" | grep -q "virtserialport,chardev=qga0"
+        echo "$out" | grep -q "org.qemu.guest_agent.0"
+        echo "✓ x86 defaults passed"
+
+    - name: "Dry-run: x86 with --nvme 2"
+      run: |
+        out=$(qemu-tool run-vm --vm-name dry-test --no-kvm --nvme 2 --dry-run)
+        echo "$out"
+        echo "$out" | grep -q "nvme,serial=dry-test-nvme1"
+        echo "$out" | grep -q "nvme,serial=dry-test-nvme2"
+        echo "✓ --nvme 2 passed"
+
+    - name: "Dry-run: x86 with --nvme -2 (null_blk)"
+      run: |
+        out=$(qemu-tool run-vm --vm-name dry-test --no-kvm --nvme -2 --dry-run)
+        echo "$out"
+        echo "$out" | grep -q "/dev/nullb0"
+        echo "$out" | grep -q "/dev/nullb1"
+        echo "$out" | grep -q "nvme,serial=dry-test-nvme0"
+        echo "$out" | grep -q "nvme,serial=dry-test-nvme1"
+        echo "✓ --nvme -2 passed"
+
+    - name: "Dry-run: x86 with --nvme custom string"
+      run: |
+        out=$(qemu-tool run-vm --vm-name dry-test --no-kvm \
+              --nvme "-device nvme,serial=custom-test" --dry-run)
+        echo "$out"
+        echo "$out" | grep -q "serial=custom-test"
+        echo "✓ --nvme custom string passed"
+
+    - name: "Dry-run: arm64 defaults"
+      run: |
+        out=$(qemu-tool run-vm --vm-name dry-test --arch arm64 --no-kvm --dry-run)
+        echo "$out"
+        echo "$out" | grep -q "qemu-system-aarch64"
+        echo "$out" | grep -q "\-machine virt"
+        echo "✓ arm64 passed"
+
+    - name: "Dry-run: riscv64 defaults"
+      run: |
+        out=$(qemu-tool run-vm --vm-name dry-test --arch riscv64 --no-kvm --dry-run)
+        echo "$out"
+        echo "$out" | grep -q "qemu-system-riscv64"
+        echo "$out" | grep -q "\-machine virt"
+        echo "✓ riscv64 passed"
+
+    - name: "Dry-run: custom --vcpus and --vmem"
+      run: |
+        out=$(qemu-tool run-vm --vm-name dry-test --no-kvm \
+              --vcpus 8 --vmem 16384 --dry-run)
+        echo "$out"
+        echo "$out" | grep -q "\-smp cpus=8"
+        echo "$out" | grep -q "\-m 16384"
+        echo "✓ --vcpus/--vmem passed"
+
+    - name: "Dry-run: --vfio-userdev with pcie-root-port"
+      run: |
+        out=$(qemu-tool run-vm --vm-name dry-test --no-kvm \
+              --vfio-userdev /tmp/a.sock,/tmp/b.sock --dry-run)
+        echo "$out"
+        echo "$out" | grep -q "pcie-root-port,id=pcie-vfu.1"
+        echo "$out" | grep -q "pcie-root-port,id=pcie-vfu.2"
+        echo "$out" | grep -q "vfio-user-pci"
+        echo "✓ --vfio-userdev passed"
+
+    - name: "Dry-run: --qmp-socket (auto path)"
+      run: |
+        out=$(qemu-tool run-vm --vm-name dry-test --no-kvm \
+              --qmp-socket --dry-run)
+        echo "$out"
+        echo "$out" | grep -q "unix:/tmp/qmp-dry-test-2222.sock"
+        echo "✓ --qmp-socket auto path passed"
+
+    - name: "Dry-run: --qmp-socket with custom path"
+      run: |
+        out=$(qemu-tool run-vm --vm-name dry-test --no-kvm \
+              --qmp-socket /tmp/my-qmp.sock --dry-run)
+        echo "$out"
+        echo "$out" | grep -q "unix:/tmp/my-qmp.sock"
+        echo "✓ --qmp-socket custom path passed"
+
+    - name: "Dry-run: --no-qemu-guest-agent omits guest agent"
+      run: |
+        out=$(qemu-tool run-vm --vm-name dry-test --no-kvm \
+              --no-qemu-guest-agent --dry-run)
+        echo "$out"
+        if echo "$out" | grep -q "org.qemu.guest_agent.0"; then
+          echo "guest agent should be omitted with --no-qemu-guest-agent"
+          exit 1
+        fi
+        echo "✓ --no-qemu-guest-agent passed"
+
+    - name: "Dry-run: --extra-hostfwd appends hostfwd rules"
+      run: |
+        out=$(qemu-tool run-vm --vm-name dry-test --no-kvm \
+              --extra-hostfwd tcp::9150-:9100 --dry-run)
+        echo "$out"
+        echo "$out" | grep -q "hostfwd=tcp::9150-:9100"
+        echo "✓ --extra-hostfwd passed"
+
+    - name: "Dry-run: --backing-shared adds file.locking=off"
+      run: |
+        out=$(qemu-tool run-vm --vm-name dry-test --no-kvm \
+              --backing-shared --dry-run)
+        echo "$out"
+        echo "$out" | grep -q "file.locking=off"
+        echo "$out" | grep -q "backing.file.locking=off"
+        echo "✓ --backing-shared passed"
+
+    - name: "Dry-run: --backing-shared absent by default"
+      run: |
+        out=$(qemu-tool run-vm --vm-name dry-test --no-kvm --dry-run)
+        echo "$out"
+        if echo "$out" | grep -q "file.locking=off"; then
+          echo "file.locking=off should not appear by default"
+          exit 1
+        fi
+        echo "✓ --backing-shared default passed"
+
+    - name: "Dry-run: --pci-mmio-bridge missing QEMU fails clearly"
+      run: |
+        set +e
+        out=$(qemu-tool run-vm --vm-name dry-test --no-kvm \
+              --pci-mmio-bridge \
+              --qemu-path /does-not-exist/ --dry-run 2>&1)
+        rc=$?
+        set -e
+        echo "$out"
+        [ $rc -ne 0 ] || \
+          (echo "Expected failure when QEMU is missing" && exit 1)
+        echo "✓ missing QEMU bridge check passed"
+
+    - name: "Dry-run: --pci-mmio-bridge unsupported QEMU fails"
+      run: |
+        mkdir -p /tmp/fake-qemu-no-bridge
+        cat > /tmp/fake-qemu-no-bridge/qemu-system-x86_64 << 'EOF'
+        #!/bin/sh
+        if [ "$1" = "-device" ] && [ "$2" = "help" ]; then
+          echo 'name "virtio-net-pci", bus PCI'
+          exit 0
+        fi
+        if [ "$1" = "-device" ] && [ "$2" = "nvme,help" ]; then
+          echo "ioeventfd=<bool>"
+          exit 0
+        fi
+        if [ "$1" = "-device" ] && [ "$2" = "nvme-ns,help" ]; then exit 0; fi
+        exit 0
+        EOF
+        chmod +x /tmp/fake-qemu-no-bridge/qemu-system-x86_64
+        set +e
+        out=$(qemu-tool run-vm --vm-name dry-test --no-kvm \
+              --pci-mmio-bridge \
+              --qemu-path /tmp/fake-qemu-no-bridge --dry-run 2>&1)
+        rc=$?
+        set -e
+        echo "$out"
+        [ $rc -ne 0 ] || \
+          (echo "Expected failure without pci-mmio-bridge support" && exit 1)
+        echo "$out" | grep -q "pci-mmio-bridge"
+        echo "✓ unsupported pci-mmio-bridge check passed"
+
+    - name: "Dry-run: --pci-mmio-bridge supported QEMU succeeds"
+      run: |
+        mkdir -p /tmp/fake-qemu-with-bridge
+        cat > /tmp/fake-qemu-with-bridge/qemu-system-x86_64 << 'EOF'
+        #!/bin/sh
+        if [ "$1" = "-device" ] && [ "$2" = "help" ]; then
+          echo 'name "pci-mmio-bridge", bus PCI'
+          exit 0
+        fi
+        if [ "$1" = "-device" ] && [ "$2" = "nvme,help" ]; then
+          echo "ioeventfd=<bool>"
+          echo "dbcs=<bool>"
+          exit 0
+        fi
+        if [ "$1" = "-device" ] && [ "$2" = "nvme-ns,help" ]; then
+          echo "lbaf-mask=<uint16>"
+          exit 0
+        fi
+        exit 0
+        EOF
+        chmod +x /tmp/fake-qemu-with-bridge/qemu-system-x86_64
+        out=$(qemu-tool run-vm --vm-name dry-test --no-kvm \
+              --pci-mmio-bridge \
+              --qemu-path /tmp/fake-qemu-with-bridge --dry-run 2>&1)
+        echo "$out"
+        echo "$out" | grep -q "pci-mmio-bridge,id=mmio-bridge"
+        echo "✓ supported pci-mmio-bridge passed"
+
+    - name: "Dry-run: --nvme 2 with --nvme-recreate"
+      run: |
+        # First pass creates the files
+        qemu-tool run-vm --vm-name dry-test --no-kvm --nvme 2 --dry-run \
+          > /dev/null
+        [ -f images/dry-test-nvme1.qcow2 ] || \
+          (echo "Missing nvme1 before recreate" && exit 1)
+        mtime1=$(stat -c %Y images/dry-test-nvme1.qcow2)
+        mtime2=$(stat -c %Y images/dry-test-nvme2.qcow2)
+        sleep 2
+        out=$(qemu-tool run-vm --vm-name dry-test --no-kvm \
+              --nvme 2 --nvme-recreate --dry-run)
+        echo "$out"
+        echo "$out" | grep -q "nvme,serial=dry-test-nvme1"
+        echo "$out" | grep -q "nvme,serial=dry-test-nvme2"
+        [ "$(stat -c %Y images/dry-test-nvme1.qcow2)" -gt "$mtime1" ] || \
+          (echo "nvme1 mtime unchanged; not recreated" && exit 1)
+        [ "$(stat -c %Y images/dry-test-nvme2.qcow2)" -gt "$mtime2" ] || \
+          (echo "nvme2 mtime unchanged; not recreated" && exit 1)
+        echo "✓ --nvme-recreate passed"
+
+    - name: "Dry-run: --convert-to-libvirt emits valid XML"
+      run: |
+        qemu-tool run-vm --vm-name dry-test --no-kvm --nvme 2 \
+          --convert-to-libvirt /tmp/dry-test.xml
+        grep -q "<domain" /tmp/dry-test.xml
+        grep -q "qemu:commandline" /tmp/dry-test.xml
+        grep -q "nvme_count=2" /tmp/dry-test.xml
+        echo "✓ --convert-to-libvirt XML output passed"
+
+    - name: "Dry-run: XML round-trip fidelity"
+      run: |
+        qemu-tool run-vm --vm-name dry-test --no-kvm --nvme 2 \
+          --dry-run > /tmp/original.txt
+        qemu-tool run-vm --vm-name dry-test --no-kvm --nvme 2 \
+          --convert-to-libvirt /tmp/dry-test-rt.xml > /dev/null
+        qemu-tool run-vm --domain /tmp/dry-test-rt.xml --dry-run \
+          > /tmp/roundtrip.txt
+        diff /tmp/original.txt /tmp/roundtrip.txt
+        echo "✓ XML round-trip passed"

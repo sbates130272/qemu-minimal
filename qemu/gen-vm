@@ -84,6 +84,8 @@ ANSIBLE_PROFILE=${ANSIBLE_PROFILE:-}
 
 set -e
 
+echo "WARNING: gen-vm is deprecated. Use 'qemu-tool gen-vm' instead." >&2
+
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
 if [ -n "${ANSIBLE_PROFILE}" ]; then
