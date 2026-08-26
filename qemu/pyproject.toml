@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qemu-tool"
+version = "0.1.0"
+description = "CLI tool for running and generating QEMU VMs"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "Stephen Bates"}]
+dependencies = []
+
+[project.scripts]
+qemu-tool = "qemu_tool.__main__:main"
+
+[tool.setuptools]
+packages = ["qemu_tool"]
+
+[tool.setuptools.package-dir]
+"qemu_tool" = "qemu-tool"

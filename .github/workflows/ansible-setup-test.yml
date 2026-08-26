@@ -79,7 +79,7 @@ jobs:
         SIZE: 8
         ANSIBLE_PROFILE: ../ansible/profiles/vm-setup
         ANSIBLE_USERNAME: ubuntu
-        ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false}'
+        ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false}'
     - name: Boot VM as background task
       run: ./run-vm > run-vm-output.log 2>&1 &
       working-directory: qemu

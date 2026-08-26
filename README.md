@@ -4,7 +4,7 @@
 [![GitHub Issues](https://img.shields.io/github/issues/sbates130272/qemu-minimal?style=flat-square)](https://github.com/sbates130272/qemu-minimal/issues)
 [![Last Commit](https://img.shields.io/github/last-commit/sbates130272/qemu-minimal?style=flat-square)](https://github.com/sbates130272/qemu-minimal/commits/main)
 [![Platform](https://img.shields.io/badge/platform-x86__64%20%7C%20ARM64%20%7C%20RISC--V-blue?style=flat-square)](https://github.com/sbates130272/qemu-minimal)
-[![Ubuntu](https://img.shields.io/badge/Ubuntu-Noble-orange?style=flat-square&logo=ubuntu)](https://releases.ubuntu.com/noble/)
+[![Ubuntu](https://img.shields.io/badge/Ubuntu-Noble%20%7C%20Resolute-orange?style=flat-square&logo=ubuntu)](https://releases.ubuntu.com/noble/)
 
 ## Summary
 
@@ -16,7 +16,9 @@ be used for general-purpose VM creation for development and
 testing.
 
 **Key Features:**
-- Fast VM creation using Ubuntu cloud images and cloud-init
+- Fast VM creation using Ubuntu cloud images and cloud-init (Noble and Resolute)
+- `qemu-tool` Python CLI with `run-vm` and `gen-vm` subcommands
+- Bidirectional libvirt domain XML support (`--domain` input, `--convert-to-libvirt` output)
 - NVMe device emulation with tracing support
 - PCIe device passthrough (VFIO)
 - CXL (Compute Express Link) device emulation
@@ -24,23 +26,47 @@ testing.
 - Declarative package management via manifests
 - KVM acceleration support
 
-## Quick Start (QEMU)
+## Quick Start (qemu-tool)
+
+Install the tool (from the repo root):
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ./qemu
+```
+
+Generate and run a Noble VM:
+
+```bash
+qemu-tool gen-vm --vm-name myvm --release noble
+qemu-tool run-vm --vm-name myvm
+ssh -p 2222 ubuntu@localhost
+```
+
+Generate and run a Resolute VM:
+
+```bash
+qemu-tool gen-vm --vm-name myvm --release resolute
+qemu-tool run-vm --vm-name myvm
+```
+
+Convert options to a libvirt domain XML:
+
+```bash
+qemu-tool run-vm --vm-name myvm --nvme 2 --convert-to-libvirt myvm.xml
+virsh define myvm.xml && virsh start myvm
+```
+
+## Quick Start (Legacy bash scripts)
+
+> **Deprecated:** `gen-vm` and `run-vm` bash scripts emit a deprecation
+> warning and will be removed in a future release. Use `qemu-tool` instead.
 
 ```bash
 cd qemu
 ./gen-vm
-```
-
-This creates an Ubuntu Noble VM named `qemu-minimal` with
-default settings. To run the VM:
-
-```bash
 ./run-vm
-```
-
-SSH into the VM:
-
-```bash
 ssh -p 2222 ubuntu@localhost
 # Password: password (or use SSH key)
 ```
@@ -56,8 +82,10 @@ ssh -p 2222 ubuntu@localhost
 ```
 qemu-minimal/
   qemu/
-    gen-vm          Create VM disk images via cloud-init
-    run-vm          Run a VM created by gen-vm
+    pyproject.toml  Python package manifest for qemu-tool
+    qemu_tool/      Python package (qemu-tool CLI)
+    gen-vm          Legacy bash script (deprecated)
+    run-vm          Legacy bash script (deprecated)
   libvirt/
     virt-install-ubuntu  Create VMs via libvirt
     create-nvme          Generate NVMe XML for libvirt
@@ -109,13 +137,13 @@ manifests are provided:
 - **packages-minimal** -- a smaller set with just `emacs-nox`,
   `fio`, `sysstat`, and `tree`.
 
-Select a manifest via the `PACKAGES` environment variable:
+Select a manifest via the `--packages` flag:
 
 ```bash
-PACKAGES=../packages.d/packages-minimal ./gen-vm
+qemu-tool gen-vm --packages ../packages.d/packages-minimal
 ```
 
-Set `PACKAGES=none` to skip package installation entirely.
+Set `--packages none` to skip package installation entirely.
 
 ## Ansible Post-Setup
 
@@ -127,101 +155,117 @@ the backing image. This installs roles from the
 
 The host must have `ansible`, `ansible-galaxy`, and the Python
 `jmespath` module for the same interpreter as `ansible-playbook`
-(install with `python3 -m pip install --break-system-packages jmespath`
-when needed). When the collection is not already installed, `gen-vm` runs
+(install with `pip install jmespath` inside the venv when needed). When the collection is not already installed, `gen-vm` runs
 `ansible-galaxy collection install -r ansible/requirements.yml`.
 
 Customize the default role list in
 [`ansible/playbooks/vm-setup.yml`](ansible/playbooks/vm-setup.yml).
 
 ```bash
-cd qemu
-ANSIBLE_SETUP=true \
-  ANSIBLE_USERNAME=stebates \
-  VM_NAME=base ./gen-vm
+qemu-tool gen-vm \
+  --vm-name base \
+  --ansible-profile ../ansible/profiles/vm-setup
 ```
 
 Ansible changes are written into the backing qcow2, so overlays
-created with `BACKING_FILE` inherit them. Ansible is skipped when
-`RESTORE_IMAGE=true` or `BACKING_FILE` is set.
+created with `--backing-file` inherit them. Ansible is skipped when
+`--restore-image` or `--backing-file` is set.
 
-## Environment Variables (gen-vm)
+## qemu-tool CLI Reference
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `VM_NAME` | `qemu-minimal` | Name for the VM |
-| `ARCH` | `amd64` | Architecture (`amd64`, `arm64`, `riscv64`) |
-| `RELEASE` | `noble` | Ubuntu release codename |
-| `SIZE` | `64` | Disk size in GB |
-| `VCPUS` | `2` | Number of vCPUs |
-| `VMEM` | `4096` | Memory in MB |
-| `PACKAGES` | `../packages.d/packages-default` | Package manifest file or `none` |
-| `KVM` | `enable` | Set to anything else to disable KVM |
-| `QEMU_PATH` | (empty) | Prefix path to QEMU binaries |
-| `SSH_PORT` | `2222` | Host port forwarded to guest SSH |
-| `USERNAME` | `ubuntu` | Guest username |
-| `PASS` | `password` | Guest password |
-| `SSH_KEY_FILE` | `$HOME/.ssh/id_rsa.pub` | SSH public key to inject |
-| `FORCE` | `false` | Force re-download of cloud image |
-| `NO_BACKING` | `false` | Create image without backing file |
-| `RESTORE_IMAGE` | `false` | Recreate image from existing backing file |
-| `BACKING_FILE` | (empty) | Path to existing backing qcow2 for overlay creation |
-| `ANSIBLE_SETUP` | `false` | Run Ansible post-setup after cloud-init first boot |
-| `ANSIBLE_DIR` | `../ansible` | Path to repo ansible/ directory |
-| `ANSIBLE_PLAYBOOK` | `playbooks/vm-setup.yml` | Playbook path under ANSIBLE_DIR |
-| `ANSIBLE_INVENTORY` | `inventory/qemu-vm.yml` | Inventory path under ANSIBLE_DIR |
-| `ANSIBLE_TAGS` | (empty) | Optional `--tags` filter for the playbook |
-| `ANSIBLE_EXTRA_ARGS` | (empty) | Extra arguments passed to ansible-playbook |
-| `ANSIBLE_USERNAME` | `$USERNAME` | Target account name for collection roles |
-| `ANSIBLE_TIMEOUT` | `600` | SSH wait timeout (seconds) for Ansible boot |
+`qemu-tool` is the primary interface. Both subcommands accept `--domain
+<file.xml>` to load a libvirt domain XML as base configuration (CLI
+flags take precedence over XML values).
 
-### RESTORE_IMAGE
+### Shared flags (run-vm and gen-vm)
 
-When `RESTORE_IMAGE=true`, `gen-vm` skips cloud-init and
-only recreates the final qcow2 from the existing backing
-file. This is useful when the VM image is corrupted or
-deleted but the backing file remains. The script verifies
-that the backing file exists and that QEMU is not currently
-using it before restoring.
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--vm-name NAME` | `qemu-minimal` | VM name |
+| `--arch {amd64,arm64,riscv64}` | `amd64` | Target architecture |
+| `--vcpus N` | `2` | vCPU count |
+| `--vmem MiB` | `4096` | Memory in MiB |
+| `--images DIR` | `../images` | Image directory |
+| `--ssh-port PORT` | `2222` | Host port forwarded to guest SSH |
+| `--kvm / --no-kvm` | kvm | KVM acceleration |
+| `--qemu-path PATH` | (system) | Directory containing QEMU binaries |
+| `--domain FILE` | — | Libvirt XML base config (`-` for stdin) |
 
-### BACKING_FILE
+### gen-vm flags
 
-When `BACKING_FILE` is set to a path, `gen-vm` skips the
-cloud image download, cloud-init provisioning, and first
-boot entirely. Instead it creates `${VM_NAME}.qcow2` as a
-thin qcow2 overlay on top of the specified backing file.
-This allows multiple VMs to share a single read-only
-backing image, with per-VM diffs written to their own
-overlays. See [Shared Backing Files](#shared-backing-files)
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--release NAME` | `noble` | Ubuntu codename (`noble`, `resolute`) or `XX.YY` |
+| `--size GB` | `64` | Disk size in GB |
+| `--username USER` | `ubuntu` | Guest username |
+| `--password PASS` | `password` | Guest password |
+| `--user-id UID` | `1000` | Guest UID |
+| `--ssh-key-file FILE` | `~/.ssh/id_rsa.pub` | SSH public key to inject |
+| `--packages FILE` | `../packages.d/packages-default` | Package manifest or `none` |
+| `--force` | off | Force re-download of cloud image |
+| `--no-backing` | off | Create flat image without a backing file |
+| `--restore-image` | off | Recreate overlay from existing backing file |
+| `--backing-file FILE` | — | Create overlay on top of this existing qcow2 |
+| `--ansible-profile FILE` | — | Path to Ansible profile file for post-setup |
+
+### run-vm flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--nvme VALUE` | — | NVMe: positive int=count, negative=null_blk, string=literal |
+| `--nvme-trace EVENT` | — | NVMe tracing: `doorbell`, `all`, or event name |
+| `--nvme-trace-file FILE` | — | Redirect trace output to file |
+| `--nvme-lbaf-mask HEX` | — | 16-bit hex LBA format mask (e.g. `0x1f`) |
+| `--nvme-recreate` | off | Delete and recreate NVMe qcow2 files on start |
+| `--filesystem DIR` | — | Host directory to share via 9p/VirtFS |
+| `--pci-testdev` | off | Enable `pci-testdev` |
+| `--pci-hostdev BDF[,BDF]` | — | VFIO PCI passthrough (repeatable or comma-sep) |
+| `--vram-dev-index N` | — | 1-based index into `--pci-hostdev` for VRAM DMA |
+| `--vram-bar N` | `0` | BAR index on the VRAM device |
+| `--vfio-userdev SOCK[,SOCK]` | — | libvfio-user socket paths |
+| `--pci-mmio-bridge` | off | Enable `pci-mmio-bridge` for CXL-style testing |
+| `--data-nic-queues N` | `0` | Multi-queue TAP NIC (queue count) |
+| `--mcast-group IP:PORT` | — | Multicast socket NIC |
+| `--qmp-socket [PATH]` | — | QMP socket (bare flag = auto path) |
+| `--no-qemu-guest-agent` | off | Omit guest agent channel |
+| `--backing-shared` | off | Disable image locking for shared backing files |
+| `--extra-hostfwd RULE` | — | Extra hostfwd rule e.g. `tcp::9150-:9100` (repeatable) |
+| `--dry-run` | off | Print QEMU command instead of running |
+| `--convert-to-libvirt [FILE]` | — | Emit libvirt domain XML to FILE (default `<vm>.xml`) |
+
+### Libvirt XML round-trip
+
+`--convert-to-libvirt` emits a domain XML that can be fed back as
+`--domain` input to reproduce the identical QEMU command. QEMU-specific
+features not natively representable in libvirt (NVMe emulation, tracing,
+libvfio-user, pci-mmio-bridge) are stored as `<qemu:commandline>` entries
+and round-trip hint attributes.
+
+```bash
+# Emit XML
+qemu-tool run-vm --vm-name myvm --nvme 2 \
+  --convert-to-libvirt myvm.xml
+
+# Parse XML back and run
+qemu-tool run-vm --domain myvm.xml
+
+# Define and start in libvirt instead
+virsh define myvm.xml && virsh start myvm
+```
+
+### --restore-image
+
+When `--restore-image` is set, `qemu-tool gen-vm` skips cloud-init and
+only recreates the final qcow2 from the existing backing file. Useful when
+the VM image is corrupted or deleted but the backing file remains.
+
+### --backing-file
+
+When `--backing-file FILE` is set, `qemu-tool gen-vm` creates
+`<vm-name>.qcow2` as a thin overlay on top of the specified file. Cloud-init
+provisioning is skipped — the backing file must already be provisioned (e.g.
+by a prior `gen-vm` run). See [Shared Backing Files](#shared-backing-files)
 for a full workflow example.
-
-## Environment Variables (run-vm)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `VM_NAME` | `qemu-minimal` | Name of the VM to run |
-| `ARCH` | `amd64` | Architecture |
-| `VCPUS` | `2` | Number of vCPUs |
-| `VMEM` | `4096` | Memory in MB |
-| `KVM` | `enable` | KVM acceleration |
-| `QEMU_PATH` | (empty) | Prefix path to QEMU binaries |
-| `IMAGES` | `../images` | Directory containing VM images |
-| `SSH_PORT` | `2222` | Host port forwarded to guest SSH |
-| `FILESYSTEM` | `none` | Host directory to share via 9p/VirtFS |
-| `NVME` | `none` | NVMe config (count, string, or negative for null_blk) |
-| `NVME_TRACE` | `none` | NVMe tracing (`doorbell`, `all`, or event name) |
-| `NVME_TRACE_FILE` | (empty) | Redirect trace output to a file |
-| `PCI_HOSTDEV` | `none` | Comma-separated PCI addresses for VFIO passthrough |
-| `VFIO_USERDEV` | `none` | libvfio-user sockets (each under a root-port) |
-| `PCI_MMIO_BRIDGE` | `none` | pci-mmio-bridge for CXL-style testing |
-| `PCI_TESTDEV` | `none` | Enable pci-testdev |
-| `DATA_NIC_QUEUES` | `0` | Multi-queue virtio-net TAP NIC (queue count) |
-| `MCAST_GROUP` | `none` | Multicast socket NIC (`230.0.0.1:1234`) |
-| `QMP_SOCKET` | `false` | QMP socket (`true` for default, or path) |
-| `QEMU_GUEST_AGENT` | `enable` | Guest agent channel on amd64 (`none` to omit) |
-| `EXTRA_HOSTFWD` | (empty) | Extra user-mode hostfwd rules (comma-prefixed) |
-| `DRY_RUN` | `none` | Print QEMU command instead of executing |
-| `BACKING_SHARED` | `false` | Disable image locking for shared backing files |
 
 ## Shared Backing Files
 
@@ -233,37 +277,36 @@ so the backing file is never modified after provisioning.
    backing file):
 
 ```bash
-cd qemu
-VM_NAME=base ./gen-vm
+qemu-tool gen-vm --vm-name base
 ```
 
 2. Create per-VM overlays from the shared backing file:
 
 ```bash
-BACKING_FILE=../images/base-backing.qcow2 \
-  VM_NAME=vm1 ./gen-vm
-BACKING_FILE=../images/base-backing.qcow2 \
-  VM_NAME=vm2 ./gen-vm
+qemu-tool gen-vm --vm-name vm1 \
+  --backing-file images/base-backing.qcow2
+qemu-tool gen-vm --vm-name vm2 \
+  --backing-file images/base-backing.qcow2
 ```
 
-3. Run each VM with `BACKING_SHARED=true` and a unique
-   `SSH_PORT` so QEMU disables file locking on the
+3. Run each VM with `--backing-shared` and a unique
+   `--ssh-port` so QEMU disables file locking on the
    backing chain:
 
 ```bash
-BACKING_SHARED=true VM_NAME=vm1 \
-  SSH_PORT=2222 ./run-vm &
-BACKING_SHARED=true VM_NAME=vm2 \
-  SSH_PORT=2223 ./run-vm &
+qemu-tool run-vm --vm-name vm1 \
+  --ssh-port 2222 --backing-shared &
+qemu-tool run-vm --vm-name vm2 \
+  --ssh-port 2223 --backing-shared &
 ```
 
-`BACKING_SHARED=true` adds `file.locking=off` and
+`--backing-shared` adds `file.locking=off` and
 `backing.file.locking=off` to the root disk `-drive`.
 The first disables QEMU's OFD locking on the overlay;
 the second disables it on the backing file that QEMU
 opens internally. Both are needed to prevent lock
 conflicts across instances sharing the same backing
-file. Each VM must still use a distinct `VM_NAME` (and
+file. Each VM must still use a distinct `--vm-name` (and
 therefore a distinct overlay) to avoid data corruption.
 
 <!-- References -->
