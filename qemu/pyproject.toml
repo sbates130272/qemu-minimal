@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "qemu-tool"
-version = "0.1.0"
+version = "1.0.0"
 description = "CLI tool for running and generating QEMU VMs"
 requires-python = ">=3.10"
 license = {text = "MIT"}
