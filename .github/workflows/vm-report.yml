@@ -93,7 +93,7 @@ jobs:
           sleep 2; elapsed=$((elapsed + 2))
         done
         echo "VM failed to boot in time"
-        cat run-vm-output.log
+        cat run-vm-output.log || true
         exit 1
 
     - name: Generate report
