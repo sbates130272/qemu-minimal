@@ -11,8 +11,8 @@
     rocm_setup_user: "{{ vm_username | default('ubuntu') }}"
     rocm_setup_repo_stream: therock
     rocm_setup_skip_reboot: false
-    rocm_setup_run_checks: false
-    rocm_setup_install_metrics_exporter: false
+    rocm_setup_run_checks: true
+    rocm_setup_install_metrics_exporter: true
     rocm_setup_extra_kernel_packages:
       - linux-generic-hwe-24.04
   roles:

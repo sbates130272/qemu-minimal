@@ -1,0 +1,116 @@
+name: vm-report
+
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  generate-report:
+    name: generate-vm-report
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4.3.1
+
+    - name: Enable KVM
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | \
+          sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
+
+    - name: Install packages
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq \
+          qemu-system-x86 qemu-utils cloud-image-utils python3-pip
+
+    - name: Cache pip
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: pip-qemu-tool-${{ hashFiles('qemu/pyproject.toml') }}
+
+    - name: Install qemu-tool
+      run: pip install --break-system-packages -e ./qemu
+
+    - name: Generate SSH key-pair
+      run: mkdir -p "$HOME/.ssh" && ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
+
+    - name: Cache cloud image
+      uses: actions/cache@v4
+      with:
+        path: images/*-server-cloudimg-*.img
+        key: cloud-img-amd64-noble-vm-report
+
+    - name: Ensure images directory exists
+      run: mkdir -p images
+
+    - name: Generate VM
+      run: |
+        qemu-tool gen-vm \
+          --vm-name vm-report \
+          --release noble \
+          --username ubuntu \
+          --password password \
+          --packages none \
+          --size 8
+
+    - name: Boot VM
+      run: |
+        qemu-tool run-vm \
+          --vm-name vm-report \
+          --nvme 1 \
+          > run-vm-output.log 2>&1 &
+
+    - name: Wait for VM SSH (180s timeout)
+      run: |
+        elapsed=0
+        while [ $elapsed -lt 180 ]; do
+          if ssh -o ConnectTimeout=1 \
+                 -o NoHostAuthenticationForLocalhost=yes \
+                 -o StrictHostKeyChecking=no \
+                 -p 2222 ubuntu@localhost true 2>/dev/null; then
+            echo "VM ready after ${elapsed}s"
+            exit 0
+          fi
+          sleep 2; elapsed=$((elapsed + 2))
+        done
+        echo "VM failed to boot in time"
+        cat run-vm-output.log
+        exit 1
+
+    - name: Generate report
+      run: bash scripts/generate-vm-report.sh site 2222 ubuntu
+
+    - name: Show run-vm log on failure
+      if: failure()
+      run: cat run-vm-output.log
+
+    - name: Setup Pages
+      uses: actions/configure-pages@v5
+
+    - name: Upload Pages artifact
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: site/
+
+    - name: Deploy to GitHub Pages
+      id: deployment
+      uses: actions/deploy-pages@v4
