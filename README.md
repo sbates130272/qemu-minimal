@@ -6,6 +6,7 @@
 [![Platform](https://img.shields.io/badge/platform-x86__64%20%7C%20ARM64%20%7C%20RISC--V-blue?style=flat-square)](https://github.com/sbates130272/qemu-minimal)
 [![Ubuntu](https://img.shields.io/badge/Ubuntu-Noble%20%7C%20Resolute-orange?style=flat-square&logo=ubuntu)](https://releases.ubuntu.com/noble/)
 [![GitHub Release](https://img.shields.io/github/v/release/sbates130272/qemu-minimal?style=flat-square)](https://github.com/sbates130272/qemu-minimal/releases/latest)
+[![VM Report](https://img.shields.io/badge/VM%20Report-live-blue?style=flat-square)](https://sbates130272.github.io/qemu-minimal/)
 
 ## Summary
 
