@@ -148,6 +148,10 @@ def _add_gen_vm(
     p.add_argument("--restore-image", action="store_true", default=_UNSET)
     p.add_argument("--backing-file", type=Path, default=_UNSET, metavar="FILE")
     p.add_argument("--ansible-profile", type=Path, default=_UNSET, metavar="FILE")
+    p.add_argument("--ca-cert", type=Path, default=_UNSET, metavar="FILE",
+                   help="CA certificate to inject into the guest trust store.")
+    p.add_argument("--ansible-only", action="store_true", default=_UNSET,
+                   help="Skip cloud-init; re-run Ansible against an existing backing image.")
     p.set_defaults(func=_gen_vm_cmd)
 
 
@@ -273,6 +277,8 @@ def _extract_cli_overrides(
         _take("restore_image", "restore_image")
         _take("backing_file", "backing_file")
         _take("ansible_profile", "ansible_profile")
+        _take("ca_cert_file", "ca_cert")
+        _take("ansible_only", "ansible_only")
 
         raw_pkg = ns.get("packages", _UNSET)
         if raw_pkg is not _UNSET:

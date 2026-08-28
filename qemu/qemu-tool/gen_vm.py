@@ -9,6 +9,7 @@ cloud-init.
 
 from __future__ import annotations
 
+import base64
 import os
 import re
 import subprocess
@@ -43,6 +44,21 @@ def run(cfg: VMConfig) -> None:
 
     if cfg.restore_image:
         _restore_image(cfg, images)
+        return
+
+    if cfg.ansible_only:
+        if cfg.ansible_profile is None:
+            sys.exit("Error: --ansible-only requires --ansible-profile")
+        backing = images / f"{cfg.vm_name}-backing.qcow2"
+        if not backing.exists():
+            sys.exit(f"Error: --ansible-only requires an existing backing image at {backing}")
+        _prepare_ansible(cfg)
+        _run_ansible(cfg, images, backing)
+        overlay = images / f"{cfg.vm_name}.qcow2"
+        if cfg.no_backing:
+            backing.rename(overlay)
+        else:
+            _create_overlay(overlay, backing)
         return
 
     if cfg.backing_file is not None:
@@ -190,11 +206,31 @@ def _load_packages(cfg: VMConfig) -> str:
     return pkgs
 
 
+def _ca_cert_fragment(cfg: VMConfig) -> tuple[str, str]:
+    """Return (write_files_entry, runcmd_entry) for an extra CA cert, or ('', '')."""
+    if cfg.ca_cert_file is None:
+        return "", ""
+    cert_path = Path(cfg.ca_cert_file).expanduser()
+    if not cert_path.exists():
+        sys.exit(f"Error: --ca-cert file {cert_path} does not exist!")
+    cert_b64 = base64.b64encode(cert_path.read_bytes()).decode()
+    cert_name = cert_path.name
+    write_entry = f"""\
+  - path: /usr/local/share/ca-certificates/{cert_name}
+    encoding: b64
+    content: {cert_b64}
+    owner: root:root
+    permissions: '0644'"""
+    runcmd_entry = "  - update-ca-certificates"
+    return write_entry, runcmd_entry
+
+
 def _write_cloud_config(
     cfg: VMConfig, packages: str, ssh_key: Path, out: Path
 ) -> None:
     key_content = ssh_key.read_text().rstrip()
     indented_key = key_content.replace("\n", "\n      ")
+    ca_write, ca_runcmd = _ca_cert_fragment(cfg)
     out.write_text(f"""\
 #cloud-config
 hostname: {cfg.vm_name}
@@ -218,6 +254,7 @@ runcmd:
   - systemctl disable openipmi.service
   - systemctl mask openipmi.service
   - loginctl enable-linger {cfg.username}
+{ca_runcmd}
 power_state:
   delay: now
   mode: poweroff
@@ -227,6 +264,7 @@ power_state:
 timezone:
   America/Edmonton
 write_files:
+{ca_write}
   - path: /etc/sysctl.d/10-kernel-hardening.conf
     content: 'kernel.dmesg_restrict = 0'
     owner: root:root
@@ -348,7 +386,9 @@ def _parse_ansible_profile(profile: Path) -> dict[str, str]:
         line = line.strip()
         m = re.match(r'^([A-Z_]+)=\$\{[A-Z_]+:-(.+?)\}$', line)
         if m:
-            result[m.group(1)] = m.group(2).strip('"').strip("'")
+            val = m.group(2).strip('"').strip("'")
+            if not val.startswith("$"):
+                result[m.group(1)] = val
             continue
         m = re.match(r'^([A-Z_]+)=(.+)$', line)
         if m:
@@ -426,6 +466,7 @@ def _run_ansible(cfg: VMConfig, images: Path, backing: Path) -> None:
         ap_cmd = ["ansible-playbook", "-i", inventory, playbook,
                   "-e", f"ansible_port={cfg.ssh_port}",
                   "-e", f"ansible_user={cfg.username}",
+                  "-e", f"username={ansible_username}",
                   "-e", f"vm_username={ansible_username}",
                   "-e", f"vm_root_user={cfg.username}"]
         if tags:
@@ -481,16 +522,9 @@ def _wait_for_ssh(cfg: VMConfig, timeout: int) -> bool:
 
 def _ensure_ansible_collection(ansible_dir: Path) -> None:
     _restore_blocking_stdio()
-    r = subprocess.run(
-        ["ansible-galaxy", "collection", "list"],
-        capture_output=True, text=True,
-    )
-    if re.search(r"^sbates130272\.batesste\s", r.stdout, re.MULTILINE):
-        return
-    print("Installing sbates130272.batesste collection from Galaxy...")
-    _restore_blocking_stdio()
+    print("Installing/upgrading Ansible collections from requirements.yml...")
     subprocess.run(
-        ["ansible-galaxy", "collection", "install",
+        ["ansible-galaxy", "collection", "install", "--upgrade", "--pre",
          "-r", str(ansible_dir / "requirements.yml")],
         check=True,
     )

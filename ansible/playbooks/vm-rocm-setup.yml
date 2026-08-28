@@ -6,22 +6,17 @@
   vars:
     username: "{{ vm_username | default('ubuntu') }}"
     root_user: "{{ vm_root_user | default('ubuntu') }}"
-    user_setup_vm_fstab: false
     user_setup_motd: true
-    user_setup_dotfiles_enable: true
+    user_setup_install_amd_ca: true
     rocm_setup_user: "{{ vm_username | default('ubuntu') }}"
     rocm_setup_repo_stream: therock
     rocm_setup_skip_reboot: false
     rocm_setup_run_checks: false
     rocm_setup_install_metrics_exporter: false
-    rocm_xio_setup_run_basic_checks: false
-    rocm_xio_setup_check_rocminfo: false
-    rocm_xio_setup_run_unit_tests: false
-    rocm_xio_setup_run_test_endpoint: false
+    rocm_setup_extra_kernel_packages:
+      - linux-generic-hwe-24.04
   roles:
     - role: sbates130272.batesste.user_setup
     - role: sbates130272.batesste.fave_packages
     - role: sbates130272.batesste.git_setup
     - role: sbates130272.batesste.rocm_setup
-    - role: sbates130272.batesste.rocm_hipfile_setup
-    - role: sbates130272.batesste.rocm_xio_setup

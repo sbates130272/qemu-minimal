@@ -11,7 +11,9 @@
   - fio
   - ccache
   - gh
+  - gettext-base
   - git
+  - git-crypt
   - gnuplot
   - gpg-agent
   - libaio-dev
@@ -25,5 +27,6 @@
   - python3-pip
   - pyspelling
   - mutt
+  - stow
   - sysstat
   - tree
