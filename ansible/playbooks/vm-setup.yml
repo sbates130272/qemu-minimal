@@ -1,6 +1,6 @@
 ---
 - name: Post cloud-init VM setup
-  hosts: qemuvm
+  hosts: all
   gather_facts: true
   # Tasks that need root in the upstream sbates130272.batesste roles set
   # `become: true` explicitly, so leave the default off here. Otherwise the

@@ -246,6 +246,10 @@ users:
     shell: /bin/bash
     ssh_authorized_keys: |
       {indented_key}
+apt:
+  conf: |
+    APT::Install-Recommends "false";
+    APT::Install-Suggests "false";
 ntp:
   enabled: true
 packages:
@@ -422,9 +426,9 @@ def _run_ansible(cfg: VMConfig, images: Path, backing: Path) -> None:
         ansible_dir = (script_dir / ansible_dir).resolve()
 
     playbook = env.get("ANSIBLE_PLAYBOOK", "playbooks/vm-setup.yml")
-    inventory = env.get("ANSIBLE_INVENTORY", "inventory/qemu-vm.yml")
+    inventory = env.get("ANSIBLE_INVENTORY", "inventory/qemu-minimal-vms.yml")
     tags = env.get("ANSIBLE_TAGS", "")
-    extra_args = env.get("ANSIBLE_EXTRA_ARGS", "")
+    extra_args = env.get("ANSIBLE_EXTRA_ARGS") or os.environ.get("ANSIBLE_EXTRA_ARGS", "")
     ansible_username = env.get("ANSIBLE_USERNAME", cfg.username)
     timeout = int(env.get("ANSIBLE_TIMEOUT", "600"))
 

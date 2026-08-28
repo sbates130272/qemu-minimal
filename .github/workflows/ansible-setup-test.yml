@@ -66,6 +66,13 @@ jobs:
       run: |
         py=$(sed -n '1s/^#! *//p' "$(command -v ansible-playbook)" | awk '{print $1}')
         "${py}" -m pip install --break-system-packages jmespath
+    - name: Cache pip
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: pip-qemu-tool-${{ hashFiles('qemu/pyproject.toml') }}
+    - name: Install qemu-tool
+      run: pip install --break-system-packages -e ./qemu
     - name: Generate SSH key-pair
       run: mkdir -p "$HOME/.ssh" && ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
     - name: Prepare GnuPG directory for git_setup
@@ -83,23 +90,20 @@ jobs:
     - name: Ensure images directory exists
       run: mkdir -p images
     - name: Generate VM with Ansible post-setup
-      run: ./gen-vm
-      working-directory: qemu
+      run: |
+        qemu-tool gen-vm \
+          --vm-name ansible-setup-test \
+          --release noble \
+          --username ubuntu \
+          --password password \
+          --packages none \
+          --size 8 \
+          --ansible-profile ansible/profiles/vm-setup
       env:
-        VM_NAME: ansible-setup-test
-        RELEASE: noble
-        USERNAME: ubuntu
-        PASS: password
-        PACKAGES: none
-        SIZE: 8
-        ANSIBLE_PROFILE: ../ansible/profiles/vm-setup
-        ANSIBLE_USERNAME: ubuntu
         ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false}'
     - name: Boot VM as background task
-      run: ./run-vm > run-vm-output.log 2>&1 &
-      working-directory: qemu
-      env:
-        VM_NAME: ansible-setup-test
+      run: |
+        qemu-tool run-vm --vm-name ansible-setup-test > run-vm-output.log 2>&1 &
     - name: Wait for VM to boot (180s timeout)
       run: |
         echo "Waiting for VM to accept SSH..."
