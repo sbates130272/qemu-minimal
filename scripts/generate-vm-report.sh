@@ -17,6 +17,9 @@ collect() { $SSH "$1" 2>/dev/null || echo "(not available)"; }
 KERNEL=$(collect "uname -r")
 PROC_VER=$(collect "cat /proc/version")
 CPU_INFO=$(collect "lscpu | grep -E '^CPU\(s\)|^Model name|^Thread|^Core|^Socket'")
+CPU_MODEL=$(echo "$CPU_INFO" | grep 'Model name' | sed 's/.*: *//' || echo "(not available)")
+CPU_COUNT=$(echo "$CPU_INFO" | awk '/^CPU\(s\)/{print $2}')
+CPU_THREADS=$(echo "$CPU_INFO" | awk '/Thread/{print $NF}')
 MEM=$(collect "free -h")
 MEM_TOTAL=$(echo "$MEM" | awk '/^Mem/{print $2}')
 MEM_FREE=$(echo "$MEM"  | awk '/^Mem/{print $4}')
@@ -54,9 +57,9 @@ Generated: **${TIMESTAMP}** &middot; Commit: [\`${COMMIT}\`](https://github.com/
 
 | Resource | Value |
 |---|---|
-| CPU | $(echo "$CPU_INFO" | grep 'Model name' | sed 's/.*: *//') |
-| vCPUs | $(echo "$CPU_INFO" | grep '^CPU(s)' | awk '{print \$2}') |
-| Threads/core | $(echo "$CPU_INFO" | grep 'Thread' | awk '{print \$NF}') |
+| CPU | ${CPU_MODEL} |
+| vCPUs | ${CPU_COUNT} |
+| Threads/core | ${CPU_THREADS} |
 | RAM | ${MEM_TOTAL} total, ${MEM_FREE} free |
 | Swap | ${SWAP} |
 
