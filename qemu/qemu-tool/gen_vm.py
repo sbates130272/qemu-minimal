@@ -422,7 +422,7 @@ def _run_ansible(cfg: VMConfig, images: Path, backing: Path) -> None:
         ansible_dir = (script_dir / ansible_dir).resolve()
 
     playbook = env.get("ANSIBLE_PLAYBOOK", "playbooks/vm-setup.yml")
-    inventory = env.get("ANSIBLE_INVENTORY", "inventory/qemu-vm.yml")
+    inventory = env.get("ANSIBLE_INVENTORY", "inventory/qemu-minimal-vms.yml")
     tags = env.get("ANSIBLE_TAGS", "")
     extra_args = env.get("ANSIBLE_EXTRA_ARGS", "")
     ansible_username = env.get("ANSIBLE_USERNAME", cfg.username)

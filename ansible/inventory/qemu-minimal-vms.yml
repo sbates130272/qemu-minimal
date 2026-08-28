@@ -9,6 +9,6 @@ all:
       -o UserKnownHostsFile=/dev/null
 
   children:
-    qemuvm:
+    qemu-minimal-vm:
       hosts:
         guest:
