@@ -55,8 +55,8 @@ Generated: **${TIMESTAMP}** &middot; Commit: [\`${COMMIT}\`](https://github.com/
 | Resource | Value |
 |---|---|
 | CPU | $(echo "$CPU_INFO" | grep 'Model name' | sed 's/.*: *//') |
-| vCPUs | $(echo "$CPU_INFO" | grep '^CPU(s)' | awk '{print $2}') |
-| Threads/core | $(echo "$CPU_INFO" | grep 'Thread' | awk '{print $NF}') |
+| vCPUs | $(echo "$CPU_INFO" | grep '^CPU(s)' | awk '{print \$2}') |
+| Threads/core | $(echo "$CPU_INFO" | grep 'Thread' | awk '{print \$NF}') |
 | RAM | ${MEM_TOTAL} total, ${MEM_FREE} free |
 | Swap | ${SWAP} |
 
