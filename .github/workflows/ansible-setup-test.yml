@@ -28,6 +28,11 @@ jobs:
       uses: actions/checkout@v4.3.1
     - name: Install ansible
       run: apt-get update -qq && apt-get install -y -qq ansible python3-pip
+    - name: Cache Ansible collections
+      uses: actions/cache@v4
+      with:
+        path: ~/.ansible/collections
+        key: ansible-collections-${{ hashFiles('ansible/requirements.yml') }}
     - name: Install sbates130272.batesste collection
       run: ansible-galaxy collection install --pre -r ansible/requirements.yml
     - name: Syntax-check vm-setup playbook
@@ -45,6 +50,12 @@ jobs:
     steps:
     - name: Check out code
       uses: actions/checkout@v4.3.1
+    - name: Enable KVM
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | \
+          sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
     - name: Install packages
       run: |
         sudo apt-get update -qq
@@ -64,6 +75,11 @@ jobs:
       with:
         path: images/*-server-cloudimg-*.img
         key: cloud-img-amd64-noble-ansible
+    - name: Cache Ansible collections
+      uses: actions/cache@v4
+      with:
+        path: ~/.ansible/collections
+        key: ansible-collections-${{ hashFiles('ansible/requirements.yml') }}
     - name: Ensure images directory exists
       run: mkdir -p images
     - name: Generate VM with Ansible post-setup
@@ -72,20 +88,18 @@ jobs:
       env:
         VM_NAME: ansible-setup-test
         RELEASE: noble
-        KVM: none
         USERNAME: ubuntu
         PASS: password
         PACKAGES: none
         SIZE: 8
         ANSIBLE_PROFILE: ../ansible/profiles/vm-setup
         ANSIBLE_USERNAME: ubuntu
-        ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false}'
+        ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false}'
     - name: Boot VM as background task
       run: ./run-vm > run-vm-output.log 2>&1 &
       working-directory: qemu
       env:
         VM_NAME: ansible-setup-test
-        KVM: none
     - name: Wait for VM to boot (180s timeout)
       run: |
         echo "Waiting for VM to accept SSH..."

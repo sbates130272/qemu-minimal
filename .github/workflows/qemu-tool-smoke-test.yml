@@ -23,11 +23,22 @@ jobs:
     steps:
     - name: Check out code
       uses: actions/checkout@v4.3.1
+    - name: Enable KVM
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | \
+          sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
     - name: Install packages
       run: |
         sudo apt-get update -qq
         sudo apt-get install -y -qq \
           qemu-system-x86 qemu-utils cloud-image-utils python3-pip
+    - name: Cache pip
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: pip-qemu-tool-${{ hashFiles('qemu/pyproject.toml') }}
     - name: Install qemu-tool
       run: pip install --break-system-packages -e ./qemu
     - name: Generate SSH key-pair
@@ -44,7 +55,6 @@ jobs:
         qemu-tool gen-vm \
           --vm-name qemu-tool-smoke-test \
           --release ${{ matrix.release }} \
-          --no-kvm \
           --username ubuntu \
           --password password \
           --packages none \
@@ -85,7 +95,6 @@ jobs:
       run: |
         qemu-tool run-vm \
           --vm-name qemu-tool-smoke-test \
-          --no-kvm \
           --nvme 1 \
           > run-vm-output.log 2>&1 &
     - name: Wait for VM to boot (180s timeout)
