@@ -14,7 +14,7 @@
   - gettext-base
   - git
   - git-crypt
-  - gnuplot
+  - gnuplot-nox
   - gpg-agent
   - libaio-dev
   - liburing-dev
@@ -23,7 +23,6 @@
   - moreutils
   - pahole
   - python-is-python3
-  - python2
   - python3-pip
   - pyspelling
   - mutt

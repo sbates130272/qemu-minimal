@@ -246,6 +246,10 @@ users:
     shell: /bin/bash
     ssh_authorized_keys: |
       {indented_key}
+apt:
+  conf: |
+    APT::Install-Recommends "false";
+    APT::Install-Suggests "false";
 ntp:
   enabled: true
 packages:
