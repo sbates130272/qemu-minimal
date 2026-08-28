@@ -428,7 +428,7 @@ def _run_ansible(cfg: VMConfig, images: Path, backing: Path) -> None:
     playbook = env.get("ANSIBLE_PLAYBOOK", "playbooks/vm-setup.yml")
     inventory = env.get("ANSIBLE_INVENTORY", "inventory/qemu-minimal-vms.yml")
     tags = env.get("ANSIBLE_TAGS", "")
-    extra_args = env.get("ANSIBLE_EXTRA_ARGS", "")
+    extra_args = env.get("ANSIBLE_EXTRA_ARGS") or os.environ.get("ANSIBLE_EXTRA_ARGS", "")
     ansible_username = env.get("ANSIBLE_USERNAME", cfg.username)
     timeout = int(env.get("ANSIBLE_TIMEOUT", "600"))
 
