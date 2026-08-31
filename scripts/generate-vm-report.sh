@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Generate a markdown VM inspection report from a running QEMU VM.
 # Usage: generate-vm-report.sh <output-dir> [ssh-port] [ssh-user]
-set -euxo pipefail
+set -euo pipefail
 
 OUTDIR=${1:-site}
 PORT=${2:-2222}
@@ -31,7 +31,7 @@ AMDGPU=$(collect "dpkg -l | grep '^ii' | grep -i amdgpu")
 ROCM_PKGS=$(collect "dpkg -l | grep '^ii' | grep '^ii  amdrocm' | awk '{print \$2, \$3}' | head -8")
 ROCM_BINS=$(collect "ls /opt/rocm/bin/ 2>/dev/null | sort")
 HIPFILE=$(collect "dpkg -l | grep '^ii' | grep -i hipfile")
-GROUPS=$(collect "groups ${USER}")
+USER_GROUPS=$(collect "groups ${USER}")
 SERVICES=$(collect "systemctl list-units --type=service --state=running --no-pager --no-legend")
 SOURCES=$(collect "ls /etc/apt/sources.list.d/")
 JOURNAL=$(collect "journalctl -p err -b --no-pager 2>/dev/null | tail -5")
@@ -130,7 +130,7 @@ ${SOURCES}
 ## User Groups
 
 \`\`\`
-${GROUPS}
+${USER_GROUPS}
 \`\`\`
 
 ## Running Services
