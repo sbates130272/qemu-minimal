@@ -107,7 +107,7 @@ jobs:
       uses: actions/configure-pages@v5
 
     - name: Build Jekyll site
-      uses: github/jekyll-build-pages@v1
+      uses: actions/jekyll-build-pages@v1
       with:
         source: site/
         destination: _site/
