@@ -3,10 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# config.py lives at qemu/qemu-tool/config.py; repo root is two levels up.
-_REPO_ROOT = Path(__file__).parent.parent.parent
-_DEFAULT_IMAGES = _REPO_ROOT / "images"
-_DEFAULT_PACKAGES = str(_REPO_ROOT / "packages.d" / "packages-default")
+_DEFAULT_IMAGES = Path("/var/lib/qemu-tool/images")
+_DEFAULT_PACKAGES = "/usr/share/qemu-tool/packages-default"
 
 
 @dataclass

@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.2.0] - 2026-08-31
+
+### Added
+
+- `python3-qemu-tool` Debian package for system-wide installation via `dpkg`/`apt`
+- Man page `qemu-tool(1)` installed to `/usr/share/man/man1/`
+- `qemu/packages.d/packages-default`: package manifest moved into `qemu/` so it
+  is self-contained within the deb build tree; installed to
+  `/usr/share/qemu-tool/packages-default`
+- CI: parallel `build-deb` job in `release.yml` uploads the `.deb` to GitHub Releases
+
+### Changed
+
+- Default image directory changed from `../images` (repo-relative) to
+  `/var/lib/qemu-tool/images`; the installer creates the directory owned
+  `root:kvm` with mode `2775` (setgid for kvm group inheritance)
+- Default package manifest path changed from the repo-relative path to
+  `/usr/share/qemu-tool/packages-default`
+
 ## [v1.0.0] - 2026-08-05
 
 ### Added

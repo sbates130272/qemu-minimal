@@ -1,0 +1,8 @@
+python3-qemu-tool (1.2.0) unstable; urgency=low
+
+  * Add Debian package (python3-qemu-tool) for system-wide installation
+  * Change default image directory to /var/lib/qemu-tool/images (kvm group writable)
+  * Change default packages manifest to /usr/share/qemu-tool/packages-default
+  * Add man page for qemu-tool(1)
+
+ -- Stephen Bates <sbates130272@users.noreply.github.com>  Sun, 31 Aug 2026 00:00:00 +0000

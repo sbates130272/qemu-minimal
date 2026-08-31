@@ -34,6 +34,23 @@ venv/
 Module.symvers
 modules.order
 
+# Debian package build outputs (dpkg-buildpackage drops these at repo root)
+*.deb
+*.buildinfo
+*.changes
+*.dsc
+
+# pybuild / setuptools working directories under qemu/
+qemu/.pybuild/
+qemu/build/
+qemu/qemu_tool.egg-info/
+
+# debhelper working files generated inside qemu/debian/ during dpkg-buildpackage
+qemu/debian/python3-qemu-tool/
+qemu/debian/*.debhelper
+qemu/debian/debhelper-build-stamp
+qemu/debian/files
+
 # QEMU runtime
 *.pid
 *.log

@@ -1,0 +1,278 @@
+.TH QEMU\-TOOL 1 "August 2026" "qemu-tool 1.2.0" "User Commands"
+.SH NAME
+qemu\-tool \- run and generate QEMU virtual machines
+.SH SYNOPSIS
+.B qemu\-tool
+.RB [ \-\-version ]
+.I {run\-vm,gen\-vm}
+.RI [ options ]
+.SH DESCRIPTION
+.B qemu\-tool
+provides two subcommands for managing QEMU-based virtual machines:
+.TP
+.B run\-vm
+Launch an existing VM image created by
+.BR gen\-vm .
+.TP
+.B gen\-vm
+Create a new Ubuntu VM image using cloud-init seeding.
+.PP
+VM images are stored in
+.I /var/lib/qemu-tool/images
+by default.
+The directory is owned by root and group\-writable by the
+.B kvm
+group.
+Users must be a member of the
+.B kvm
+group to read or write images without
+.BR sudo .
+.SH SHARED OPTIONS
+These options are accepted by both
+.B run\-vm
+and
+.BR gen\-vm .
+.TP
+.BI \-\-vm\-name " NAME"
+Name of the VM (default:
+.IR qemu-minimal ).
+Used to derive image file paths such as
+.IR <images>/<NAME>.qcow2 .
+.TP
+.BI \-\-arch " ARCH"
+Target architecture:
+.BR amd64 ,
+.BR arm64 ,
+or
+.BR riscv64
+(default:
+.IR amd64 ).
+.TP
+.BI \-\-vcpus " N"
+Number of virtual CPUs (default: 2).
+.TP
+.BI \-\-vmem " MiB"
+Amount of guest RAM in MiB (default: 4096).
+.TP
+.BI \-\-images " DIR"
+Directory where VM image files are stored (default:
+.IR /var/lib/qemu-tool/images ).
+.TP
+.BI \-\-ssh\-port " PORT"
+Host port forwarded to guest SSH (default: 2222).
+.TP
+.BR \-\-kvm " | " \-\-no\-kvm
+Enable or disable KVM hardware acceleration (default: enabled).
+.TP
+.BI \-\-qemu\-path " PATH"
+Override the QEMU binary path.
+By default the appropriate
+.B qemu-system-*
+binary is located via
+.BR PATH .
+.TP
+.BI \-\-domain " FILE"
+Load a libvirt domain XML file as the base configuration.
+Use
+.B \-
+to read from stdin.
+CLI flags override values from the XML.
+.SH RUN-VM OPTIONS
+.TP
+.BI \-\-filesystem " DIR"
+Expose a host directory to the guest via virtio-9p.
+.TP
+.BI \-\-nvme " VALUE"
+Attach NVMe storage.
+A positive integer creates that many QCOW2-backed NVMe drives.
+A negative integer creates
+.B null_blk
+devices.
+Any other string is passed as literal NVMe device arguments.
+.TP
+.BI \-\-nvme\-trace " {doorbell,all,EVENT}"
+Enable QEMU NVMe trace for the specified event category.
+.TP
+.BI \-\-nvme\-trace\-file " FILE"
+Write NVMe trace output to
+.I FILE
+instead of stderr.
+.TP
+.BI \-\-nvme\-lbaf\-mask " HEX"
+Restrict the advertised LBA format mask (hex bitmask).
+.TP
+.B \-\-nvme\-recreate
+Recreate NVMe image files even if they already exist.
+.TP
+.B \-\-pci\-testdev
+Attach the QEMU
+.B pci-testdev
+device.
+.TP
+.BI \-\-pci\-hostdev " BDF[,BDF]"
+Pass through a host PCI device via VFIO.
+Accepts a PCI BDF address (e.g.\&
+.IR 0000:03:00.0 ).
+May be repeated or comma-separated for multiple devices.
+.TP
+.BI \-\-vram\-dev\-index " N"
+1-based index into the
+.B \-\-pci\-hostdev
+list identifying the GPU device for VRAM BAR mapping.
+.TP
+.BI \-\-vram\-bar " N"
+BAR index for VRAM mapping (default: 0).
+.TP
+.BI \-\-vfio\-userdev " SOCK[,SOCK]"
+Attach a vfio-user device via its Unix socket path.
+May be repeated or comma-separated.
+.TP
+.B \-\-pci\-mmio\-bridge
+Add a PCI-to-PCI bridge for extended MMIO window.
+.TP
+.BI \-\-data\-nic\-queues " N"
+Number of virtio-net queues for the data NIC (default: 0, single-queue).
+.TP
+.BI \-\-mcast\-group " IP:PORT"
+Attach a second NIC to the specified UDP multicast group.
+.TP
+.BI \-\-qmp\-socket " [PATH]"
+Enable the QMP monitor socket.
+Without an argument an automatic path under
+.I /tmp
+is used.
+.TP
+.B \-\-no\-qemu\-guest\-agent
+Disable the QEMU guest agent channel.
+.TP
+.B \-\-backing\-shared
+Mark the backing image as shared so multiple VMs can run from the same base.
+.TP
+.BI \-\-extra\-hostfwd " RULE"
+Append an additional SLIRP host-forward rule, e.g.\&
+.IR tcp::9150\-:9100 .
+May be repeated.
+.TP
+.B \-\-dry\-run
+Print the QEMU command that would be executed and exit without running it.
+.TP
+.BI \-\-convert\-to\-libvirt " [FILE]"
+Emit a libvirt domain XML description instead of running the VM.
+Write to
+.I FILE
+(default:
+.IR <vm-name>.xml ),
+or to stdout when
+.B \-
+is given.
+.SH GEN-VM OPTIONS
+.TP
+.BI \-\-size " GB"
+Overlay image size in GB (default: 64).
+.TP
+.BI \-\-release " NAME"
+Ubuntu release codename (e.g.\&
+.IR noble )
+or version (e.g.\&
+.IR 24.04 )
+(default:
+.IR noble ).
+.TP
+.BI \-\-ssh\-key\-file " FILE"
+Public SSH key to inject into the guest (default:
+.IR ~/.ssh/id_rsa.pub ).
+.TP
+.BI \-\-username " NAME"
+Guest user account name (default:
+.IR ubuntu ).
+.TP
+.BI \-\-user\-id " UID"
+UID for the guest user account (default: 1000).
+.TP
+.BI \-\-password " PASS"
+Guest user password (default:
+.IR password ).
+.TP
+.BI \-\-packages " FILE"
+Path to a cloud-init package manifest.
+Pass
+.B none
+to skip package installation.
+Default:
+.IR /usr/share/qemu-tool/packages-default .
+.TP
+.B \-\-force
+Overwrite an existing VM image.
+.TP
+.B \-\-no\-backing
+Create a single flat image rather than a backing/overlay pair.
+.TP
+.B \-\-restore\-image
+Re-create the overlay from the backing image, discarding current VM state.
+.TP
+.BI \-\-backing\-file " FILE"
+Use an existing image as the backing file instead of downloading a cloud image.
+.TP
+.BI \-\-ansible\-profile " FILE"
+Run Ansible against the VM after first boot using the specified profile directory.
+.TP
+.BI \-\-ca\-cert " FILE"
+Inject a CA certificate into the guest trust store.
+.TP
+.B \-\-ansible\-only
+Skip cloud-init provisioning; only re-run Ansible against an existing backing image.
+.SH FILES
+.TP
+.I /var/lib/qemu-tool/images
+Default directory for VM image files.
+Owned by
+.B root:kvm
+with permissions
+.B 2775
+(setgid so new files inherit the
+.B kvm
+group).
+.TP
+.I /usr/share/qemu-tool/packages-default
+Default package manifest installed into new VMs by
+.BR gen\-vm .
+.SH EXAMPLES
+Create a VM named
+.I myvm
+using the Noble release:
+.PP
+.RS
+.EX
+qemu\-tool gen\-vm \-\-vm\-name myvm \-\-release noble
+.EE
+.RE
+.PP
+Launch the VM:
+.PP
+.RS
+.EX
+qemu\-tool run\-vm \-\-vm\-name myvm
+.EE
+.RE
+.PP
+Dry-run with two NVMe drives and KVM disabled:
+.PP
+.RS
+.EX
+qemu\-tool run\-vm \-\-vm\-name myvm \-\-nvme 2 \-\-no\-kvm \-\-dry\-run
+.EE
+.RE
+.PP
+Emit a libvirt domain XML:
+.PP
+.RS
+.EX
+qemu\-tool run\-vm \-\-vm\-name myvm \-\-convert\-to\-libvirt myvm.xml
+.EE
+.RE
+.SH AUTHOR
+Stephen Bates
+.SH SEE ALSO
+.BR qemu\-system\-x86_64 (1),
+.BR qemu\-img (1),
+.BR virsh (1)

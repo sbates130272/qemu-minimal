@@ -1,0 +1,8 @@
+#!/bin/bash
+set -e
+
+if [ "$1" = "configure" ]; then
+    chown root:kvm /var/lib/qemu-tool/images
+    # setgid bit so new files inherit the kvm group
+    chmod 2775 /var/lib/qemu-tool/images
+fi
