@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Generate a markdown VM inspection report from a running QEMU VM.
 # Usage: generate-vm-report.sh <output-dir> [ssh-port] [ssh-user]
-set -euo pipefail
+set -euxo pipefail
 
 OUTDIR=${1:-site}
 PORT=${2:-2222}
