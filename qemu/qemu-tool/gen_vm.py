@@ -128,7 +128,7 @@ def _restore_image(cfg: VMConfig, images: Path) -> None:
 def _create_overlay(overlay: Path, backing: Path) -> None:
     ts = _save_timestamp(backing)
     subprocess.run(
-        ["qemu-img", "create", "-F", "qcow2", "-b", str(backing), "-f", "qcow2",
+        ["qemu-img", "create", "-F", "qcow2", "-b", str(backing.resolve()), "-f", "qcow2",
          str(overlay)],
         check=True,
     )
