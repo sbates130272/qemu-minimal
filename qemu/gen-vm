@@ -28,8 +28,8 @@
 # cloud-init disk from the VM. See [1] for info on how to do that.
 #
 # PACKAGES is a file of packages to be installed via cloud-init. A
-# couple of my favourite collections can be found in the top-level
-# packages.d folder.
+# couple of my favourite collections can be found in the qemu/packages.d
+# folder.
 #
 # FORCE is a boolean we use to force a refetch of the cloud image file
 # for the chosen distro. This can be useful to get the latest and
@@ -68,7 +68,7 @@ SSH_KEY_FILE=${SSH_KEY_FILE:-$HOME/.ssh/id_rsa.pub}
 USERNAME=${USERNAME:-ubuntu}
 USER_ID=${USER_ID:-1000}
 PASS=${PASS:-password}
-PACKAGES=${PACKAGES:-../packages.d/packages-default}
+PACKAGES=${PACKAGES:-packages.d/packages-default}
 SSH_PORT=${SSH_PORT:-2222}
 KVM=${KVM:-enable}
 FORCE=${FORCE:-false}

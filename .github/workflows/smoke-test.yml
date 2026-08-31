@@ -532,6 +532,7 @@ jobs:
   smoke-test-arm64:
     name: smoke-test-arm64
     runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     steps:
     - name: Check out code using action/checkout
       uses: actions/checkout@v4.3.1
@@ -563,6 +564,7 @@ jobs:
   smoke-test-riscv64:
     name: smoke-test-riscv64
     runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     steps:
     - name: Check out code using action/checkout
       uses: actions/checkout@v4.3.1

@@ -28,9 +28,26 @@ testing.
 - Declarative package management via manifests
 - KVM acceleration support
 
+## System-wide Install (Debian/Ubuntu)
+
+Download the `.deb` from the [GitHub Releases](../../releases) page and install:
+
+```bash
+sudo dpkg -i python3-qemu-tool_*.deb
+```
+
+This installs `qemu-tool` to `/usr/bin/qemu-tool` and creates
+`/var/lib/qemu-tool/images` (owned `root:kvm`, mode `2775`).
+Add yourself to the `kvm` group if you have not already:
+
+```bash
+sudo usermod -aG kvm $USER
+# re-login for the group to take effect
+```
+
 ## Quick Start (qemu-tool)
 
-Install the tool (from the repo root):
+Install the tool from source (from the repo root):
 
 ```bash
 python3 -m venv .venv
@@ -86,14 +103,12 @@ qemu-minimal/
   qemu/
     pyproject.toml  Python package manifest for qemu-tool
     qemu_tool/      Python package (qemu-tool CLI)
+    packages.d/     Cloud-init package manifests
     gen-vm          Legacy bash script (deprecated)
     run-vm          Legacy bash script (deprecated)
   libvirt/
     virt-install-ubuntu  Create VMs via libvirt
     create-nvme          Generate NVMe XML for libvirt
-  packages.d/
-    packages-default     Default cloud-init package set
-    packages-minimal     Minimal cloud-init package set
   ansible/
     playbooks/vm-setup.yml  Post cloud-init Ansible playbook
     requirements.yml        Galaxy collection requirements
@@ -122,11 +137,21 @@ prints this path if permissions are still wrong.
 
 ## Images Directory
 
-Both `gen-vm` and `run-vm` default to `../images` (relative
-to `qemu/`) for storing and locating VM disk images. This
-directory is created automatically by `gen-vm` and is
-gitignored. Cloud images are downloaded here, and the
-generated qcow2 files (backing and final) are stored here.
+When installed system-wide via the `.deb` package, `gen-vm` and `run-vm`
+default to `/var/lib/qemu-tool/images` for storing VM disk images.
+The directory is created by the package installer with `root:kvm` ownership
+and mode `2775` (setgid) so any member of the `kvm` group can read and write
+images without `sudo`.
+
+When using a source checkout with `pip install -e ./qemu`, override the
+default with `--images`:
+
+```bash
+qemu-tool gen-vm --vm-name myvm --images ./images
+```
+
+Cloud images are downloaded into the images directory, and the generated
+qcow2 files (backing and final) are stored there.
 
 ## Package Manifests
 
@@ -135,14 +160,20 @@ lists consumed by cloud-init during VM creation. Two
 manifests are provided:
 
 - **packages-default** -- a broad set of development and
-  debugging packages.
+  debugging packages. Installed to `/usr/share/qemu-tool/packages-default`
+  by the `.deb` package and used as the default.
 - **packages-minimal** -- a smaller set with just `emacs-nox`,
-  `fio`, `sysstat`, and `tree`.
+  `fio`, `sysstat`, and `tree`. Installed to
+  `/usr/share/qemu-tool/packages-minimal` by the `.deb` package.
 
 Select a manifest via the `--packages` flag:
 
 ```bash
-qemu-tool gen-vm --packages ../packages.d/packages-minimal
+# system install — use the installed minimal manifest or a custom path
+qemu-tool gen-vm --packages /usr/share/qemu-tool/packages-minimal
+
+# source checkout
+qemu-tool gen-vm --packages qemu/packages.d/packages-minimal
 ```
 
 Set `--packages none` to skip package installation entirely.
@@ -187,7 +218,7 @@ flags take precedence over XML values).
 | `--arch {amd64,arm64,riscv64}` | `amd64` | Target architecture |
 | `--vcpus N` | `2` | vCPU count |
 | `--vmem MiB` | `4096` | Memory in MiB |
-| `--images DIR` | `../images` | Image directory |
+| `--images DIR` | `/var/lib/qemu-tool/images` | Image directory |
 | `--ssh-port PORT` | `2222` | Host port forwarded to guest SSH |
 | `--kvm / --no-kvm` | kvm | KVM acceleration |
 | `--qemu-path PATH` | (system) | Directory containing QEMU binaries |
@@ -203,7 +234,7 @@ flags take precedence over XML values).
 | `--password PASS` | `password` | Guest password |
 | `--user-id UID` | `1000` | Guest UID |
 | `--ssh-key-file FILE` | `~/.ssh/id_rsa.pub` | SSH public key to inject |
-| `--packages FILE` | `../packages.d/packages-default` | Package manifest or `none` |
+| `--packages FILE` | `packages.d/packages-default` | Package manifest or `none` |
 | `--force` | off | Force re-download of cloud image |
 | `--no-backing` | off | Create flat image without a backing file |
 | `--restore-image` | off | Recreate overlay from existing backing file |

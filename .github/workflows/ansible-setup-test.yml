@@ -80,7 +80,7 @@ jobs:
     - name: Cache cloud image
       uses: actions/cache@v4
       with:
-        path: images/*-server-cloudimg-*.img
+        path: /var/lib/qemu-tool/images/*-server-cloudimg-*.img
         key: cloud-img-amd64-noble-ansible
     - name: Cache Ansible collections
       uses: actions/cache@v4
@@ -88,7 +88,7 @@ jobs:
         path: ~/.ansible/collections
         key: ansible-collections-${{ hashFiles('ansible/requirements.yml') }}
     - name: Ensure images directory exists
-      run: mkdir -p images
+      run: sudo mkdir -p /var/lib/qemu-tool/images && sudo chmod 777 /var/lib/qemu-tool/images
     - name: Generate VM with Ansible post-setup
       run: |
         qemu-tool gen-vm \

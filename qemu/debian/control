@@ -1,0 +1,18 @@
+Source: python3-qemu-tool
+Section: python
+Priority: optional
+Maintainer: Stephen Bates <sbates130272@users.noreply.github.com>
+Build-Depends: debhelper-compat (= 13), dh-python, pybuild-plugin-pyproject, python3-all, python3-setuptools, python3-build
+Standards-Version: 4.6.2
+Rules-Requires-Root: no
+
+Package: python3-qemu-tool
+Architecture: all
+Depends: ${python3:Depends}, ${misc:Depends}
+Description: CLI tool for running and generating QEMU VMs
+ qemu-tool provides two subcommands: run-vm launches a QEMU virtual machine
+ with a flexible set of options for networking, storage, PCI passthrough, and
+ architecture (amd64, arm64, riscv64); gen-vm creates a new cloud-init-seeded
+ VM image using debootstrap or a cloud image download.
+ .
+ VM images are stored in /var/lib/qemu-tool/images (kvm group writable).

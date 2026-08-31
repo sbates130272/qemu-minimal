@@ -33,3 +33,27 @@ jobs:
           draft: false
           prerelease: false
           files: dist/*.whl
+
+  build-deb:
+    name: build-deb-package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4.3.1
+
+      - name: Install Debian build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y debhelper dh-python pybuild-plugin-pyproject python3-all python3-setuptools python3-build
+
+      - name: Build deb
+        working-directory: qemu
+        run: dpkg-buildpackage -us -uc -b
+
+      - name: Upload deb to release
+        uses: softprops/action-gh-release@v2.3.2
+        with:
+          generate_release_notes: false
+          draft: false
+          prerelease: false
+          files: "*.deb"

@@ -242,3 +242,7 @@ virsh
 vmem
 vram
 xml
+aG
+dpkg
+setgid
+usermod
