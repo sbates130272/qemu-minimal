@@ -1,0 +1,94 @@
+---
+# vfio-user GPU VM stack
+#
+# Spins up rocm-ernic and rocjitsu vfio-user servers alongside a qemu-system VM
+# that attaches them as emulated PCIe devices via the vfio-user-pci driver.
+#
+# Usage:
+#   cp env.example .env && $EDITOR .env   # set image tags and VM_IMAGE path
+#   qemu-tool gen-vm                      # build VM image if not already done
+#   docker compose up
+#   ssh -p ${VM_SSH_PORT:-2222} ubuntu@localhost
+
+x-gpu-common: &gpu-common
+  volumes:
+    - vfu-sockets:/run/vfu
+  # Restart on failure so that after a QEMU client disconnects (and the server
+  # exits), compose brings up a fresh server with clean state. The qemu service
+  # depends_on service_healthy, so it will not start until the new socket exists.
+  restart: on-failure
+
+services:
+  ernic:
+    <<: *gpu-common
+    image: "${ERNIC_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:latest}"
+    deploy:
+      replicas: "${ERNIC_COUNT:-1}"
+    command: ["rocm-ernic", "-s", "/run/vfu/ernic-1.sock"]
+    healthcheck:
+      test: ["CMD", "sh", "-c", "test -S /run/vfu/ernic-1.sock"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
+  rocjitsu:
+    <<: *gpu-common
+    image: "${ROCJITSU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:latest}"
+    deploy:
+      replicas: "${ROCJITSU_COUNT:-1}"
+    command:
+      - rocjitsu
+      - --config
+      - "/usr/local/share/rocjitsu/configs/${ROCJITSU_CONFIG:-gfx1250_mi455x.json}"
+      - --vfio-socket
+      - /run/vfu/rocjitsu-1.sock
+    healthcheck:
+      test: ["CMD", "sh", "-c", "test -S /run/vfu/rocjitsu-1.sock"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
+  qemu:
+    image: "${QEMU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:august-11-2026}"
+    depends_on:
+      ernic:
+        condition: service_healthy
+      rocjitsu:
+        condition: service_healthy
+    volumes:
+      - vfu-sockets:/run/vfu:ro
+      - "${VM_IMAGES_DIR:-/var/lib/qemu-tool/images}:${VM_IMAGES_DIR:-/var/lib/qemu-tool/images}"
+      - "${QEMU_TOOL_SRC:-../../..}:/qemu-tool-src:ro"
+    devices:
+      - /dev/kvm
+    shm_size: "${VM_SHM_SIZE:-8g}"
+    ports:
+      - "${VM_SSH_PORT:-2222}:2222"
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        apt-get update -qq && apt-get install -y -qq python3-pip
+        cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
+        pip3 install --quiet --break-system-packages /tmp/qemu-tool-build
+        socks=$(ls /run/vfu/*.sock 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+        if [ -z "$$socks" ]; then
+          echo "ERROR: no vfio-user sockets found in /run/vfu" >&2
+          exit 1
+        fi
+        exec qemu-tool run-vm \
+          --images "${VM_IMAGES_DIR:-/var/lib/qemu-tool/images}" \
+          --vm-name "${VM_NAME:-qemu-minimal}" \
+          --vcpus "${VM_VCPUS:-4}" \
+          --vmem "${VM_VMEM:-8192}" \
+          --ssh-port 2222 \
+          --vfio-userdev "$$socks"
+
+volumes:
+  vfu-sockets:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs

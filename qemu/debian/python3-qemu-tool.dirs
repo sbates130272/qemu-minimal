@@ -1,2 +1,3 @@
 var/lib/qemu-tool/images
 usr/share/qemu-tool
+usr/share/qemu-tool/compose/vfio-user-vm

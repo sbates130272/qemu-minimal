@@ -135,6 +135,36 @@ be in the `kvm` group:
 Re-login after group changes. `run-vm` checks VFIO access and
 prints this path if permissions are still wrong.
 
+## Docker Compose: vfio-user GPU VM
+
+For testing with emulated AMD GPUs over libvfio-user — specifically
+[rocm-ernic][rocm-ernic] and [rocjitsu][rocjitsu] — a Docker Compose
+stack in [`qemu/compose/vfio-user-vm/`](qemu/compose/vfio-user-vm/)
+starts the GPU server containers and the `qemu-system` VM in one command.
+This is the recommended path when you do not have a physical GPU to pass
+through but need a guest that sees PCIe GPU devices.
+
+```bash
+cd qemu/compose/vfio-user-vm
+cp env.example .env
+$EDITOR .env   # set image tags and VM_IMAGE path
+
+# build a VM image first if you do not already have one
+qemu-tool gen-vm --vm-name qemu-minimal
+
+docker compose up
+ssh -p 2222 ubuntu@localhost
+```
+
+The stack spins up one rocm-ernic and one rocjitsu vfio-user server by
+default; `ERNIC_COUNT` and `ROCJITSU_COUNT` in `.env` scale the replica
+count. See [`qemu/compose/vfio-user-vm/README.md`](qemu/compose/vfio-user-vm/README.md)
+for the full variable reference and the socket contract that the GPU
+server images must satisfy.
+
+When installed from the `.deb` package the compose files land at
+`/usr/share/qemu-tool/compose/vfio-user-vm/`.
+
 ## Images Directory
 
 When installed system-wide via the `.deb` package, `gen-vm` and `run-vm`
@@ -345,3 +375,5 @@ therefore a distinct overlay) to avoid data corruption.
 <!-- References -->
 
 [batesste-galaxy]: https://galaxy.ansible.com/ui/repo/published/sbates130272/batesste/
+[rocm-ernic]: https://github.com/sbates130272/batesste-ci-images
+[rocjitsu]: https://github.com/sbates130272/batesste-ci-images

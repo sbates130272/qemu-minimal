@@ -1,2 +1,5 @@
 packages.d/packages-default usr/share/qemu-tool/
 packages.d/packages-minimal usr/share/qemu-tool/
+compose/vfio-user-vm/docker-compose.yml usr/share/qemu-tool/compose/vfio-user-vm/
+compose/vfio-user-vm/env.example usr/share/qemu-tool/compose/vfio-user-vm/
+compose/vfio-user-vm/README.md usr/share/qemu-tool/compose/vfio-user-vm/
