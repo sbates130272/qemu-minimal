@@ -243,6 +243,8 @@ vmem
 vram
 xml
 aG
+ci
+cp
 dpkg
 setgid
 usermod
