@@ -38,6 +38,7 @@ _ARCH_MAP = {
 
 def run(cfg: VMConfig) -> None:
     _validate(cfg)
+    _prepare_ansible(cfg)
 
     images = Path(cfg.images)
     images.mkdir(parents=True, exist_ok=True)
@@ -52,7 +53,6 @@ def run(cfg: VMConfig) -> None:
         backing = images / f"{cfg.vm_name}-backing.qcow2"
         if not backing.exists():
             sys.exit(f"Error: --ansible-only requires an existing backing image at {backing}")
-        _prepare_ansible(cfg)
         _run_ansible(cfg, images, backing)
         overlay = images / f"{cfg.vm_name}.qcow2"
         if cfg.no_backing:
@@ -84,7 +84,6 @@ def run(cfg: VMConfig) -> None:
     if not ssh_key.exists():
         sys.exit(f"Error: SSH key file {ssh_key} does not exist!")
 
-    _prepare_ansible(cfg)
     packages = _load_packages(cfg)
 
     with ExitStack() as stack:
