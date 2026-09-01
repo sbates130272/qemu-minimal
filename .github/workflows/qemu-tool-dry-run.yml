@@ -268,6 +268,13 @@ jobs:
         diff /tmp/original.txt /tmp/roundtrip.txt
         echo "✓ XML round-trip passed"
 
+  compose-tests:
+    name: compose-tests
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4.3.1
+
     - name: "Validate: vfio-user-vm compose config"
       run: |
         cd qemu/compose/vfio-user-vm
@@ -276,11 +283,8 @@ jobs:
 
     - name: "Smoke: ernic and rocjitsu GPU servers create vfio-user sockets"
       run: |
-        # Start the GPU server containers and wait for their sockets to appear.
-        # The qemu service is excluded — this node has no VM image.
         cd qemu/compose/vfio-user-vm
         docker compose up --detach --no-deps ernic rocjitsu
-        # Compose healthchecks poll for the sockets; wait up to 60s.
         for i in $(seq 1 30); do
           ernic_ok=$(docker compose ps --format json ernic \
             | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('Health',''))" \
