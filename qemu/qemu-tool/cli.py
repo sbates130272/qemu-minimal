@@ -9,6 +9,8 @@ from typing import Any
 from . import __version__
 from .caps import probe_caps
 from .config import VMConfig
+from .compose import run as compose_run
+from .config import _DEFAULT_IMAGES
 from .gen_vm import run as gen_vm_run
 from .libvirt_xml import LibvirtXml
 from .run_vm import build_command, run as run_vm_run
@@ -41,10 +43,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
 
     shared = _shared_parent()
-    sub = parser.add_subparsers(metavar="{run-vm,gen-vm}")
+    sub = parser.add_subparsers(metavar="{run-vm,gen-vm,compose}")
 
     _add_run_vm(sub, shared)
     _add_gen_vm(sub, shared)
+    _add_compose(sub)
 
     return parser
 
@@ -123,6 +126,31 @@ def _add_run_vm(
     p.set_defaults(func=_run_vm_cmd)
 
 
+def _add_compose(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser(
+        "compose",
+        help="Run docker compose for the vfio-user GPU VM stack.",
+        description=(
+            "Wrapper around 'docker compose' for the vfio-user-vm stack. "
+            "Sets VM_NAME and VM_IMAGES_DIR, then passes remaining arguments "
+            "directly to docker compose."
+        ),
+    )
+    p.add_argument(
+        "--vm-name", default="qemu-minimal", metavar="NAME",
+        help="VM name (basename of the qcow2 without extension). Default: qemu-minimal.",
+    )
+    p.add_argument(
+        "--images", type=Path, default=_DEFAULT_IMAGES, metavar="DIR",
+        help=f"Directory containing VM images. Default: {_DEFAULT_IMAGES}.",
+    )
+    p.add_argument(
+        "compose_args", nargs=argparse.REMAINDER,
+        help="Arguments forwarded to docker compose (e.g. up, down, ps, logs).",
+    )
+    p.set_defaults(func=_compose_cmd)
+
+
 def _add_gen_vm(
     sub: argparse._SubParsersAction, shared: argparse.ArgumentParser
 ) -> None:
@@ -188,6 +216,10 @@ def _run_vm_cmd(args: argparse.Namespace) -> None:
 
     caps = probe_caps(cfg)
     run_vm_run(cfg, caps)
+
+
+def _compose_cmd(args: argparse.Namespace) -> None:
+    compose_run(args.vm_name, args.images, args.compose_args)
 
 
 def _gen_vm_cmd(args: argparse.Namespace) -> None:

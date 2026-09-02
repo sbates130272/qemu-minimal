@@ -4,11 +4,11 @@ qemu\-tool \- run and generate QEMU virtual machines
 .SH SYNOPSIS
 .B qemu\-tool
 .RB [ \-\-version ]
-.I {run\-vm,gen\-vm}
+.I {run\-vm,gen\-vm,compose}
 .RI [ options ]
 .SH DESCRIPTION
 .B qemu\-tool
-provides two subcommands for managing QEMU-based virtual machines:
+provides three subcommands for managing QEMU-based virtual machines:
 .TP
 .B run\-vm
 Launch an existing VM image created by
@@ -16,6 +16,12 @@ Launch an existing VM image created by
 .TP
 .B gen\-vm
 Create a new Ubuntu VM image using cloud-init seeding.
+.TP
+.B compose
+Start the vfio-user GPU VM Docker Compose stack (rocm-ernic + rocjitsu),
+wrapping
+.B docker compose
+with VM_NAME and VM_IMAGES_DIR pre-configured.
 .PP
 VM images are stored in
 .I /var/lib/qemu-tool/images
@@ -221,6 +227,21 @@ Inject a CA certificate into the guest trust store.
 .TP
 .B \-\-ansible\-only
 Skip cloud-init provisioning; only re-run Ansible against an existing backing image.
+.SH COMPOSE OPTIONS
+.TP
+.BI \-\-vm\-name " NAME"
+VM name passed to the compose stack as VM_NAME (basename of the qcow2 without
+extension).
+Default:
+.IR qemu-minimal .
+.TP
+.BI \-\-images " DIR"
+Directory containing VM image files, passed as VM_IMAGES_DIR.
+Default:
+.IR /var/lib/qemu-tool/images .
+.PP
+All remaining arguments are forwarded verbatim to
+.BR "docker compose" .
 .SH FILES
 .TP
 .I /var/lib/qemu-tool/images
@@ -268,6 +289,30 @@ Emit a libvirt domain XML:
 .RS
 .EX
 qemu\-tool run\-vm \-\-vm\-name myvm \-\-convert\-to\-libvirt myvm.xml
+.EE
+.RE
+.PP
+Start the vfio-user GPU VM stack:
+.PP
+.RS
+.EX
+qemu\-tool compose \-\-vm\-name myvm up
+.EE
+.RE
+.PP
+Check stack status:
+.PP
+.RS
+.EX
+qemu\-tool compose \-\-vm\-name myvm ps
+.EE
+.RE
+.PP
+Tear down the stack:
+.PP
+.RS
+.EX
+qemu\-tool compose \-\-vm\-name myvm down
 .EE
 .RE
 .SH AUTHOR

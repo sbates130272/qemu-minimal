@@ -19,7 +19,7 @@ testing.
 
 **Key Features:**
 - Fast VM creation using Ubuntu cloud images and cloud-init (Noble and Resolute)
-- `qemu-tool` Python CLI with `run-vm` and `gen-vm` subcommands
+- `qemu-tool` Python CLI with `run-vm`, `gen-vm`, and `compose` subcommands
 - Bidirectional libvirt domain XML support (`--domain` input, `--convert-to-libvirt` output)
 - NVMe device emulation with tracing support
 - PCIe device passthrough (VFIO)
@@ -145,25 +145,27 @@ This is the recommended path when you do not have a physical GPU to pass
 through but need a guest that sees PCIe GPU devices.
 
 ```bash
-cd qemu/compose/vfio-user-vm
-cp env.example .env
-$EDITOR .env   # set image tags and VM_IMAGE path
-
 # build a VM image first if you do not already have one
 qemu-tool gen-vm --vm-name qemu-minimal
 
-docker compose up
+qemu-tool compose --vm-name qemu-minimal up
 ssh -p 2222 ubuntu@localhost
+
+qemu-tool compose --vm-name qemu-minimal down
 ```
 
+`qemu-tool compose` is a wrapper around `docker compose` that sets
+`VM_NAME` and `VM_IMAGES_DIR` automatically and locates the compose
+stack whether running from source or an installed `.deb` package.
+Pass any `docker compose` subcommand after the `qemu-tool` flags
+(`up`, `down`, `ps`, `logs ernic`, etc.).
+
 The stack spins up one rocm-ernic and one rocjitsu vfio-user server by
-default; `ERNIC_COUNT` and `ROCJITSU_COUNT` in `.env` scale the replica
-count. See [`qemu/compose/vfio-user-vm/README.md`](qemu/compose/vfio-user-vm/README.md)
+default; set `ERNIC_COUNT` and `ROCJITSU_COUNT` in the environment or a
+`.env` file to scale the replica count. See
+[`qemu/compose/vfio-user-vm/README.md`](qemu/compose/vfio-user-vm/README.md)
 for the full variable reference and the socket contract that the GPU
 server images must satisfy.
-
-When installed from the `.deb` package the compose files land at
-`/usr/share/qemu-tool/compose/vfio-user-vm/`.
 
 ## Images Directory
 
