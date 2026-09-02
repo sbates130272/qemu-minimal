@@ -19,7 +19,7 @@ testing.
 
 **Key Features:**
 - Fast VM creation using Ubuntu cloud images and cloud-init (Noble and Resolute)
-- `qemu-tool` Python CLI with `run-vm` and `gen-vm` subcommands
+- `qemu-tool` Python CLI with `run-vm`, `gen-vm`, and `compose` subcommands
 - Bidirectional libvirt domain XML support (`--domain` input, `--convert-to-libvirt` output)
 - NVMe device emulation with tracing support
 - PCIe device passthrough (VFIO)
@@ -134,6 +134,38 @@ be in the `kvm` group:
 
 Re-login after group changes. `run-vm` checks VFIO access and
 prints this path if permissions are still wrong.
+
+## Docker Compose: vfio-user GPU VM
+
+For testing with emulated AMD GPUs over libvfio-user — specifically
+[rocm-ernic][rocm-ernic] and [rocjitsu][rocjitsu] — a Docker Compose
+stack in [`qemu/compose/vfio-user-vm/`](qemu/compose/vfio-user-vm/)
+starts the GPU server containers and the `qemu-system` VM in one command.
+This is the recommended path when you do not have a physical GPU to pass
+through but need a guest that sees PCIe GPU devices.
+
+```bash
+# build a VM image first if you do not already have one
+qemu-tool gen-vm --vm-name qemu-minimal
+
+qemu-tool compose --vm-name qemu-minimal up
+ssh -p 2222 ubuntu@localhost
+
+qemu-tool compose --vm-name qemu-minimal down
+```
+
+`qemu-tool compose` is a wrapper around `docker compose` that sets
+`VM_NAME` and `VM_IMAGES_DIR` automatically and locates the compose
+stack whether running from source or an installed `.deb` package.
+Pass any `docker compose` subcommand after the `qemu-tool` flags
+(`up`, `down`, `ps`, `logs ernic`, etc.).
+
+The stack spins up one rocm-ernic and one rocjitsu vfio-user server by
+default; set `ERNIC_COUNT` and `ROCJITSU_COUNT` in the environment or a
+`.env` file to scale the replica count. See
+[`qemu/compose/vfio-user-vm/README.md`](qemu/compose/vfio-user-vm/README.md)
+for the full variable reference and the socket contract that the GPU
+server images must satisfy.
 
 ## Images Directory
 
@@ -345,3 +377,5 @@ therefore a distinct overlay) to avoid data corruption.
 <!-- References -->
 
 [batesste-galaxy]: https://galaxy.ansible.com/ui/repo/published/sbates130272/batesste/
+[rocm-ernic]: https://github.com/sbates130272/batesste-ci-images
+[rocjitsu]: https://github.com/sbates130272/batesste-ci-images

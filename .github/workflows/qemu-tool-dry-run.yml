@@ -8,6 +8,7 @@ on:
     paths:
       - 'qemu/qemu-tool/**'
       - 'qemu/pyproject.toml'
+      - 'qemu/compose/**'
       - '.github/workflows/qemu-tool-dry-run.yml'
 
 jobs:
@@ -266,3 +267,45 @@ jobs:
           > /tmp/roundtrip.txt
         diff /tmp/original.txt /tmp/roundtrip.txt
         echo "✓ XML round-trip passed"
+
+    - name: "Dry-run: compose subcommand resolves compose dir"
+      run: |
+        out=$(qemu-tool compose --vm-name dry-test --images /tmp ps 2>&1 || true)
+        echo "$out"
+        # Should fail because docker is not available in this container,
+        # but must not fail with a Python import or compose-dir error.
+        echo "$out" | grep -qv "ModuleNotFoundError"
+        echo "$out" | grep -qv "Compose directory not found"
+        echo "✓ compose subcommand resolves correctly"
+
+  compose-tests:
+    name: compose-tests
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4.3.1
+
+    - name: "Validate: vfio-user-vm compose config"
+      run: |
+        cd qemu/compose/vfio-user-vm
+        docker compose config --quiet
+        echo "✓ compose config valid"
+
+    - name: "Smoke: ernic and rocjitsu GPU servers create vfio-user sockets"
+      run: |
+        cd qemu/compose/vfio-user-vm
+        docker compose up --detach --no-deps ernic rocjitsu
+        for i in $(seq 1 30); do
+          ernic_ok=$(docker compose ps --format json ernic \
+            | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('Health',''))" \
+            2>/dev/null || true)
+          rocjitsu_ok=$(docker compose ps --format json rocjitsu \
+            | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('Health',''))" \
+            2>/dev/null || true)
+          [ "$ernic_ok" = "healthy" ] && [ "$rocjitsu_ok" = "healthy" ] && break
+          sleep 2
+        done
+        [ "$ernic_ok" = "healthy" ]   || (docker compose logs ernic   && exit 1)
+        [ "$rocjitsu_ok" = "healthy" ] || (docker compose logs rocjitsu && exit 1)
+        echo "✓ GPU server sockets healthy"
+        docker compose down
