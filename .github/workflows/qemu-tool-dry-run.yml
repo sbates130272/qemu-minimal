@@ -309,3 +309,28 @@ jobs:
         [ "$rocjitsu_ok" = "healthy" ] || (docker compose logs rocjitsu && exit 1)
         echo "✓ GPU server sockets healthy"
         docker compose down
+
+    - name: "Validate: vfio-user-2vm compose config"
+      run: |
+        cd qemu/compose/vfio-user-2vm
+        docker compose config --quiet
+        echo "✓ 2vm compose config valid"
+
+    - name: "Smoke: 2vm ernic hub and worker create vfio-user sockets"
+      run: |
+        cd qemu/compose/vfio-user-2vm
+        docker compose up --detach --no-deps ernic-hub ernic-worker rocjitsu-1 rocjitsu-2
+        for i in $(seq 1 30); do
+          hub_ok=$(docker compose ps --format json ernic-hub \
+            | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('Health',''))" \
+            2>/dev/null || true)
+          worker_ok=$(docker compose ps --format json ernic-worker \
+            | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('Health',''))" \
+            2>/dev/null || true)
+          [ "$hub_ok" = "healthy" ] && [ "$worker_ok" = "healthy" ] && break
+          sleep 2
+        done
+        [ "$hub_ok" = "healthy" ]    || (docker compose logs ernic-hub    && exit 1)
+        [ "$worker_ok" = "healthy" ] || (docker compose logs ernic-worker && exit 1)
+        echo "✓ 2vm ernic hub and worker healthy"
+        docker compose down

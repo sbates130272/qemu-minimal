@@ -9,7 +9,7 @@ from typing import Any
 from . import __version__
 from .caps import probe_caps
 from .config import VMConfig
-from .compose import run as compose_run
+from .compose import _DEFAULT_STACK, _STACKS, run as compose_run
 from .config import _DEFAULT_IMAGES
 from .gen_vm import run as gen_vm_run
 from .libvirt_xml import LibvirtXml
@@ -145,6 +145,10 @@ def _add_compose(sub: argparse._SubParsersAction) -> None:
         help=f"Directory containing VM images. Default: {_DEFAULT_IMAGES}.",
     )
     p.add_argument(
+        "--stack", choices=_STACKS, default=_DEFAULT_STACK,
+        help=f"Compose stack to use. Default: {_DEFAULT_STACK}.",
+    )
+    p.add_argument(
         "compose_args", nargs=argparse.REMAINDER,
         help="Arguments forwarded to docker compose (e.g. up, down, ps, logs).",
     )
@@ -219,7 +223,7 @@ def _run_vm_cmd(args: argparse.Namespace) -> None:
 
 
 def _compose_cmd(args: argparse.Namespace) -> None:
-    compose_run(args.vm_name, args.images, args.compose_args)
+    compose_run(args.vm_name, args.images, args.compose_args, stack=args.stack)
 
 
 def _gen_vm_cmd(args: argparse.Namespace) -> None:
