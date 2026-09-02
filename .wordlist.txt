@@ -246,6 +246,8 @@ aG
 ci
 cp
 dpkg
+ps
+subcommand
 setgid
 usermod
 ERNIC
