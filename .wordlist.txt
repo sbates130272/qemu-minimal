@@ -289,3 +289,5 @@ setuptools
 systemd
 umem
 uname
+userspace
+uverbs
