@@ -1,0 +1,169 @@
+---
+# 2-VM vfio-user mesh stack
+#
+# Spins up two VMs connected via a rocm-ernic TCP manager/worker mesh,
+# each with its own rocjitsu GPU. The ernic-hub relays L2 Ethernet
+# frames between VMs and handles RDMA peer-to-peer operations.
+#
+# Usage:
+#   cp env.example .env && $EDITOR .env
+#   qemu-tool compose --stack vfio-user-2vm --vm-name vm1-name up
+#   ssh -p ${VM1_SSH_PORT:-2222} ubuntu@localhost   # VM 1
+#   ssh -p ${VM2_SSH_PORT:-2223} ubuntu@localhost   # VM 2
+
+x-gpu-common: &gpu-common
+  restart: on-failure
+
+x-qemu-common: &qemu-common
+  image: "${QEMU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:latest}"
+  volumes:
+    - vfu-sockets:/run/vfu:ro
+    - "${VM_IMAGES_DIR:-/var/lib/qemu-tool/images}:${VM_IMAGES_DIR:-/var/lib/qemu-tool/images}"
+    - "${QEMU_TOOL_SRC:-../../..}:/qemu-tool-src:ro"
+  devices:
+    - /dev/kvm
+  shm_size: "${VM_SHM_SIZE:-8g}"
+  restart: "no"
+
+services:
+  # ---- rocm-ernic NIC for VM 1: TCP manager (hub) ----
+  ernic-hub:
+    <<: *gpu-common
+    image: "${ERNIC_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:latest}"
+    command:
+      - rocm-ernic
+      - -s
+      - /run/vfu/ernic-1.sock
+      - -b
+      - "tcp:manager:listen:${ERNIC_TCP_PORT:-6320}"
+      - -m
+      - "${ERNIC1_MAC:-72:6f:63:6d:00:01}"
+    volumes:
+      - vfu-sockets:/run/vfu
+    healthcheck:
+      test: ["CMD", "sh", "-c", "test -S /run/vfu/ernic-1.sock"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
+  # ---- rocm-ernic NIC for VM 2: TCP worker (spoke) ----
+  ernic-worker:
+    <<: *gpu-common
+    image: "${ERNIC_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:latest}"
+    command:
+      - rocm-ernic
+      - -s
+      - /run/vfu/ernic-2.sock
+      - -b
+      - "tcp:worker:ernic-hub:${ERNIC_TCP_PORT:-6320}"
+      - -m
+      - "${ERNIC2_MAC:-72:6f:63:6d:00:02}"
+    volumes:
+      - vfu-sockets:/run/vfu
+    depends_on:
+      ernic-hub:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "sh", "-c", "test -S /run/vfu/ernic-2.sock"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
+  # ---- rocjitsu GPU for VM 1 ----
+  rocjitsu-1:
+    <<: *gpu-common
+    image: "${ROCJITSU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:latest}"
+    command:
+      - rocjitsu
+      - --config
+      - "/usr/local/share/rocjitsu/configs/${ROCJITSU_CONFIG:-gfx1250_mi455x.json}"
+      - --vfio-socket
+      - /run/vfu/rocjitsu-1.sock
+    volumes:
+      - vfu-sockets:/run/vfu
+    healthcheck:
+      test: ["CMD", "sh", "-c", "test -S /run/vfu/rocjitsu-1.sock"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
+  # ---- rocjitsu GPU for VM 2 ----
+  rocjitsu-2:
+    <<: *gpu-common
+    image: "${ROCJITSU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:latest}"
+    command:
+      - rocjitsu
+      - --config
+      - "/usr/local/share/rocjitsu/configs/${ROCJITSU_CONFIG:-gfx1250_mi455x.json}"
+      - --vfio-socket
+      - /run/vfu/rocjitsu-2.sock
+    volumes:
+      - vfu-sockets:/run/vfu
+    healthcheck:
+      test: ["CMD", "sh", "-c", "test -S /run/vfu/rocjitsu-2.sock"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
+  # ---- VM 1: connected to ernic-hub + rocjitsu-1 ----
+  qemu-1:
+    <<: *qemu-common
+    depends_on:
+      ernic-hub:
+        condition: service_healthy
+      rocjitsu-1:
+        condition: service_healthy
+    ports:
+      - "${VM1_SSH_PORT:-2222}:2222"
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        if ! command -v qemu-tool > /dev/null 2>&1; then
+          cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
+          PIPX_BIN_DIR=/usr/local/bin pipx install --pip-args="--no-build-isolation" /tmp/qemu-tool-build
+        fi
+        exec qemu-tool run-vm \
+          --images "${VM_IMAGES_DIR:-/var/lib/qemu-tool/images}" \
+          --vm-name "${VM1_NAME:-qemu-minimal}" \
+          --vcpus "${VM_VCPUS:-4}" \
+          --vmem "${VM_VMEM:-8192}" \
+          --ssh-port 2222 \
+          --vfio-userdev /run/vfu/ernic-1.sock,/run/vfu/rocjitsu-1.sock
+
+  # ---- VM 2: connected to ernic-worker + rocjitsu-2 ----
+  qemu-2:
+    <<: *qemu-common
+    depends_on:
+      ernic-worker:
+        condition: service_healthy
+      rocjitsu-2:
+        condition: service_healthy
+    ports:
+      - "${VM2_SSH_PORT:-2223}:2222"
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        if ! command -v qemu-tool > /dev/null 2>&1; then
+          cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
+          PIPX_BIN_DIR=/usr/local/bin pipx install --pip-args="--no-build-isolation" /tmp/qemu-tool-build
+        fi
+        exec qemu-tool run-vm \
+          --images "${VM_IMAGES_DIR:-/var/lib/qemu-tool/images}" \
+          --vm-name "${VM2_NAME:-qemu-minimal-2}" \
+          --vcpus "${VM_VCPUS:-4}" \
+          --vmem "${VM_VMEM:-8192}" \
+          --ssh-port 2222 \
+          --vfio-userdev /run/vfu/ernic-2.sock,/run/vfu/rocjitsu-2.sock
+
+volumes:
+  vfu-sockets:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs

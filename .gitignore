@@ -72,3 +72,6 @@ review-and-push.sh
 wrap-markdown.py
 check-ci-status.sh
 PROJECT_COMPLETION_SUMMARY.md
+
+# Compose environment overrides
+.env
