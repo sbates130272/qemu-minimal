@@ -51,7 +51,7 @@ services:
       start_period: 5s
 
   qemu:
-    image: "${QEMU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:august-11-2026}"
+    image: "${QEMU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:latest}"
     depends_on:
       ernic:
         condition: service_healthy
@@ -70,9 +70,10 @@ services:
       - /bin/sh
       - -c
       - |
-        apt-get update -qq && apt-get install -y -qq python3-pip
-        cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
-        pip3 install --quiet --break-system-packages /tmp/qemu-tool-build
+        if ! command -v qemu-tool > /dev/null 2>&1; then
+          cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
+          PIPX_BIN_DIR=/usr/local/bin pipx install --pip-args="--no-build-isolation" /tmp/qemu-tool-build
+        fi
         socks=$(ls /run/vfu/*.sock 2>/dev/null | tr '\n' ',' | sed 's/,$//')
         if [ -z "$$socks" ]; then
           echo "ERROR: no vfio-user sockets found in /run/vfu" >&2

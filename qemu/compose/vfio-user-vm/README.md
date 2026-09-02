@@ -59,12 +59,6 @@ the compose file. Without KVM the VM will run in software emulation and be
 significantly slower. Verify your user is in the `kvm` group (`groups | grep kvm`)
 and that `/dev/kvm` exists on the host for best performance.
 
-**rocjitsu appears as `Device 0000` in lspci**: The `--vfio-socket` mode
-serves a scratch PCI function for transport bring-up rather than the full
-emulated GPU. The config's vendor/device IDs (e.g. 0x1002:0x75C1 for MI455X)
-are not advertised in this mode. Full GPU PCI identity requires a rocjitsu
-build with `ROCJITSU_ENABLE_VFIO` and a corresponding CLI change.
-
 **amdgpu driver panic at boot**: The guest amdgpu kernel driver will probe the
 rocjitsu vfio-user PCIe device and panic. Until rocjitsu gains full driver
 compatibility, blacklist the driver in the VM image before booting with this
