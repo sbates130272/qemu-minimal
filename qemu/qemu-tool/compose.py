@@ -30,16 +30,18 @@ def _compose_dir(stack: str) -> Path:
 
 
 def run(
-    vm_name: str,
-    images_dir: Path,
+    vm_name: str | None,
+    images_dir: Path | None,
     compose_args: list[str],
     stack: str = _DEFAULT_STACK,
 ) -> None:
     cdir = _compose_dir(stack)
     env = os.environ.copy()
-    env["VM_NAME"] = vm_name
-    env["VM1_NAME"] = vm_name
-    env["VM_IMAGES_DIR"] = str(images_dir.resolve())
+    if vm_name is not None:
+        env["VM_NAME"] = vm_name
+        env["VM1_NAME"] = vm_name
+    if images_dir is not None:
+        env["VM_IMAGES_DIR"] = str(images_dir.resolve())
     cmd = ["docker", "compose", *compose_args]
     result = subprocess.run(cmd, cwd=cdir, env=env)
     sys.exit(result.returncode)
