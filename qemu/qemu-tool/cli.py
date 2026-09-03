@@ -137,12 +137,12 @@ def _add_compose(sub: argparse._SubParsersAction) -> None:
         ),
     )
     p.add_argument(
-        "--vm-name", default="qemu-minimal", metavar="NAME",
-        help="VM name (basename of the qcow2 without extension). Default: qemu-minimal.",
+        "--vm-name", default=None, metavar="NAME",
+        help="VM name (sets VM_NAME/VM1_NAME). Omit to use the value in .env.",
     )
     p.add_argument(
-        "--images", type=Path, default=_DEFAULT_IMAGES, metavar="DIR",
-        help=f"Directory containing VM images. Default: {_DEFAULT_IMAGES}.",
+        "--images", type=Path, default=None, metavar="DIR",
+        help="Directory containing VM images (sets VM_IMAGES_DIR). Omit to use the value in .env.",
     )
     p.add_argument(
         "--stack", choices=_STACKS, default=_DEFAULT_STACK,

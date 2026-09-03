@@ -30,6 +30,8 @@ services:
   ernic-hub:
     <<: *gpu-common
     image: "${ERNIC_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:latest}"
+    environment:
+      - ERNIC_DEBUG_MESH
     command:
       - rocm-ernic
       - -s
@@ -51,6 +53,8 @@ services:
   ernic-worker:
     <<: *gpu-common
     image: "${ERNIC_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:latest}"
+    environment:
+      - ERNIC_DEBUG_MESH
     command:
       - rocm-ernic
       - -s
