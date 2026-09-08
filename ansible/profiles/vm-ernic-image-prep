@@ -1,0 +1,1 @@
+ANSIBLE_PLAYBOOK=playbooks/vm-ernic-image-prep.yml

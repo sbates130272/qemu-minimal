@@ -223,8 +223,13 @@ The host must have `ansible`, `ansible-galaxy`, and the Python
 (install with `pip install jmespath` inside the venv when needed). When the collection is not already installed, `gen-vm` runs
 `ansible-galaxy collection install -r ansible/requirements.yml`.
 
-Customize the default role list in
-[`ansible/playbooks/vm-setup.yml`](ansible/playbooks/vm-setup.yml).
+### Available profiles
+
+| Profile | Playbook | Description |
+|---------|----------|-------------|
+| `vm-setup` | `vm-setup.yml` | User setup, favourite packages, git config |
+| `vm-rocm-setup` | `vm-rocm-setup.yml` | As above, plus ROCm stack |
+| `vm-ernic-image-prep` | `vm-ernic-image-prep.yml` | As above, plus RDMA userspace and [rocm-ernic][rocm-ernic-galaxy] prerequisites baked in |
 
 ```bash
 qemu-tool gen-vm \
@@ -377,5 +382,6 @@ therefore a distinct overlay) to avoid data corruption.
 <!-- References -->
 
 [batesste-galaxy]: https://galaxy.ansible.com/ui/repo/published/sbates130272/batesste/
-[rocm-ernic]: https://github.com/sbates130272/batesste-ci-images
+[rocm-ernic]: https://github.com/ROCm/rocm-ernic
+[rocm-ernic-galaxy]: https://galaxy.ansible.com/ui/repo/published/sbates130272/rocm_ernic/
 [rocjitsu]: https://github.com/sbates130272/batesste-ci-images

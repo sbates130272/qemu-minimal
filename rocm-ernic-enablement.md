@@ -65,6 +65,15 @@ split by where the fix belongs.
   shows `ROCm Emulated RDMA NIC` for device `1022:8000`. Note:
   `update-pciids` will overwrite — re-apply after each run.
 
+- [x] **rdma-ndd masked** — `rdma-ndd.service` (RDMA Node Description Daemon)
+  starts automatically with `ib_core` and hangs for 90 s trying to discover
+  IB subnet nodes that don't exist in the vfio-user setup. Mask it:
+  ```bash
+  sudo systemctl mask rdma-ndd
+  sudo systemctl stop rdma-ndd
+  ```
+  This should be baked into the VM base image.
+
 - [x] **Unique MAC per VM — driver pick-up confirmed**. The compose file
   passes `-m` to each ernic instance; the driver correctly reads the MAC from
   BAR1. IP assignment persisted via `/etc/netplan/60-ernic.yaml` (`.11`/`.12`).
@@ -171,9 +180,35 @@ split by where the fix belongs.
 
   These numbers reflect emulated vfio-user + TCP relay overhead, not wire speed.
 
+<<<<<<< Updated upstream
 - [x] **TCP throughput testing** — iperf3 installed on both VMs. Tested
   with 4 parallel streams: ~16 Mbit/s aggregate, zero retransmits. Use
   `systemd-run` to keep the server alive past SSH session teardown
+=======
+  **Intermittent failure:** `ib_send_bw` sometimes causes ernic-hub to crash
+  mid-test (compose `restart: on-failure` restores it). When this happens the
+  client hangs at 99.9% CPU waiting for CQ completions that never arrive.
+  Kill with `pkill ib_send_bw` on both VMs. Root cause not yet isolated —
+  same pinned image passes on some runs and crashes on others.
+
+  **Stability note:** Repeated RDMA QP bring-up (running multiple perftest
+  rounds back-to-back) sometimes triggers a vfio-user BAR1 read timeout in
+  QEMU (`vfio_user_device_io_region_read: timed out waiting for reply`), which
+  stalls the guest indefinitely. Root cause: the ernic server's RDMA command
+  processing path (`⚠ Full command processing (in progress)`) does not respond
+  to certain register reads during QP state transitions, causing QEMU's
+  vfio-user timeout. Single-shot perftest runs complete cleanly.
+
+- [x] **TCP throughput testing** — iperf3 installed. Results from two runs:
+
+  | Streams | Throughput     | Notes                        |
+  |---------|---------------|------------------------------|
+  | 1       | 18.4 Mbit/s   | Clean, zero retransmits      |
+  | 4       | ~15–16 Mbit/s | Clean, zero retransmits      |
+  | 8       | —             | VM crashed (RDMA interaction) |
+
+  Use `systemd-run` to keep the iperf3 server alive past SSH session teardown
+>>>>>>> Stashed changes
   (`KillUserProcesses=yes` is set in the VM image).
 
 ### `batesste-ci-images-ubuntu-qemu-libvfio-user`
