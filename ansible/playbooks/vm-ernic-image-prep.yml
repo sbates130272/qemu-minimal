@@ -1,0 +1,25 @@
+---
+- name: Bake rocm-ernic prerequisites into a base VM image
+  hosts: all
+  gather_facts: true
+  become: false
+  vars:
+    username: "{{ vm_username | default('ubuntu') }}"
+    root_user: "{{ vm_root_user | default('ubuntu') }}"
+    user_setup_motd: true
+    user_setup_install_amd_ca: true
+    rocm_setup_user: "{{ vm_username | default('ubuntu') }}"
+    rocm_setup_repo_stream: therock
+    rocm_setup_skip_reboot: false
+    rocm_setup_run_checks: true
+    rocm_setup_run_gpu_checks: false
+    rocm_setup_install_metrics_exporter: true
+    rocm_setup_extra_kernel_packages:
+      - linux-generic-hwe-24.04
+    ernic_image_rdma: true
+    ernic_gpu_passthrough: true
+  roles:
+    - role: sbates130272.batesste.user_setup
+    - role: sbates130272.batesste.fave_packages
+    - role: sbates130272.batesste.git_setup
+    - role: sbates130272.rocm_ernic.ernic_image_prep

@@ -41,6 +41,9 @@ jobs:
     - name: Syntax-check vm-rocm-setup playbook
       run: ansible-playbook --syntax-check playbooks/vm-rocm-setup.yml
       working-directory: ansible
+    - name: Syntax-check vm-ernic-image-prep playbook
+      run: ansible-playbook --syntax-check playbooks/vm-ernic-image-prep.yml
+      working-directory: ansible
 
   gen-vm-ansible-setup:
     name: gen-vm-ansible-setup

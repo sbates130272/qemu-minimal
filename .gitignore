@@ -75,3 +75,6 @@ PROJECT_COMPLETION_SUMMARY.md
 
 # Compose environment overrides
 .env
+
+# Personal working notes (not for repo)
+rocm-ernic-enablement.md

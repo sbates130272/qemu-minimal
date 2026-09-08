@@ -7,6 +7,14 @@
 [![Ubuntu](https://img.shields.io/badge/Ubuntu-Noble%20%7C%20Resolute-orange?style=flat-square&logo=ubuntu)](https://releases.ubuntu.com/noble/)
 [![GitHub Release](https://img.shields.io/github/v/release/sbates130272/qemu-minimal?style=flat-square)](https://github.com/sbates130272/qemu-minimal/releases/latest)
 [![VM Report](https://img.shields.io/badge/VM%20Report-live-blue?style=flat-square)](https://sbates130272.github.io/qemu-minimal/)
+[![Smoke Test](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/smoke-test.yml?branch=main&label=smoke-test&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/smoke-test.yml)
+[![qemu-tool Smoke Test](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-tool-smoke-test.yml?branch=main&label=qemu-tool-smoke&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-tool-smoke-test.yml)
+[![Dry-Run Tests](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-tool-dry-run.yml?branch=main&label=dry-run&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-tool-dry-run.yml)
+[![Ansible Test](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/ansible-setup-test.yml?branch=main&label=ansible&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/ansible-setup-test.yml)
+[![ShellCheck](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/shell-check.yml?branch=main&label=shellcheck&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/shell-check.yml)
+[![Spell Check](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/spell-check.yml?branch=main&label=spell-check&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/spell-check.yml)
+[![2VM Smoke Test](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/2vm-smoke-test.yml?branch=main&label=2vm-smoke&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/2vm-smoke-test.yml)
+[![2VM Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/2vm-vm-report.yml?branch=main&label=2vm-report&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/2vm-vm-report.yml)
 
 ## Summary
 
@@ -223,8 +231,13 @@ The host must have `ansible`, `ansible-galaxy`, and the Python
 (install with `pip install jmespath` inside the venv when needed). When the collection is not already installed, `gen-vm` runs
 `ansible-galaxy collection install -r ansible/requirements.yml`.
 
-Customize the default role list in
-[`ansible/playbooks/vm-setup.yml`](ansible/playbooks/vm-setup.yml).
+### Available profiles
+
+| Profile | Playbook | Description |
+|---------|----------|-------------|
+| `vm-setup` | `vm-setup.yml` | User setup, favourite packages, git config |
+| `vm-rocm-setup` | `vm-rocm-setup.yml` | As above, plus ROCm stack |
+| `vm-ernic-image-prep` | `vm-ernic-image-prep.yml` | As above, plus RDMA userspace and [rocm-ernic][rocm-ernic-galaxy] prerequisites baked in |
 
 ```bash
 qemu-tool gen-vm \
@@ -377,5 +390,6 @@ therefore a distinct overlay) to avoid data corruption.
 <!-- References -->
 
 [batesste-galaxy]: https://galaxy.ansible.com/ui/repo/published/sbates130272/batesste/
-[rocm-ernic]: https://github.com/sbates130272/batesste-ci-images
+[rocm-ernic]: https://github.com/ROCm/rocm-ernic
+[rocm-ernic-galaxy]: https://galaxy.ansible.com/ui/repo/published/sbates130272/rocm_ernic/
 [rocjitsu]: https://github.com/sbates130272/batesste-ci-images

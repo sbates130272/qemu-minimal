@@ -1,16 +1,24 @@
 #!/usr/bin/env bash
 # Generate a markdown VM inspection report from a running QEMU VM.
-# Usage: generate-vm-report.sh <output-dir> [ssh-port] [ssh-user]
+# Usage: generate-vm-report.sh <output-dir> [ssh-port] [ssh-user] [vm-label]
+#
+# vm-label is an optional display name for the VM (e.g. "VM 2"). When the
+# output dir is a subdirectory of an existing site, _config.yml is written
+# only at the site root (detected by the absence of _config.yml in OUTDIR's
+# parent). Pass vm-label to distinguish reports when calling this script for
+# multiple VMs.
 set -euo pipefail
 
 OUTDIR=${1:-site}
 PORT=${2:-2222}
 USER=${3:-ubuntu}
+VM_LABEL=${4:-}
 SSH="ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no -p ${PORT} ${USER}@localhost"
 
 TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M UTC')
 COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 REPO="sbates130272/qemu-minimal"
+TITLE_SUFFIX=${VM_LABEL:+" — ${VM_LABEL}"}
 
 collect() { $SSH "$1" 2>/dev/null || echo "(not available)"; }
 
@@ -38,18 +46,21 @@ JOURNAL=$(collect "journalctl -p err -b --no-pager 2>/dev/null | tail -5")
 
 mkdir -p "${OUTDIR}"
 
-cat > "${OUTDIR}/_config.yml" <<'CFG'
+# Write _config.yml only at the site root (skip for subdirectory reports).
+if [ ! -f "${OUTDIR}/../_config.yml" ] && [ ! -f "${OUTDIR}/_config.yml" ]; then
+  cat > "${OUTDIR}/_config.yml" <<'CFG'
 theme: minima
 title: qemu-minimal VM Report
 description: Live VM inspection report for the qemu-minimal project
 CFG
+fi
 
 cat > "${OUTDIR}/index.md" <<MD
 ---
-title: VM Report
+title: VM Report${TITLE_SUFFIX}
 ---
 
-# VM Report — qemu-minimal
+# VM Report — qemu-minimal${TITLE_SUFFIX}
 
 Generated: **${TIMESTAMP}** &middot; Commit: [\`${COMMIT}\`](https://github.com/${REPO}/commit/${COMMIT})
 

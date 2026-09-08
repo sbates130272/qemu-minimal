@@ -1,0 +1,178 @@
+name: 2vm-vm-report
+
+on:
+  schedule:
+    - cron: '0 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  ERNIC_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:ernic.e3ef00c-vfu.323f4cb
+  ROCJITSU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:rocjitsu.5e9cc7c
+  QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:qemu11.1.1-vfu.323f4cb
+  VM_IMAGES_DIR: /var/lib/qemu-tool/images
+  VM1_NAME: 2vm-report-1
+  VM2_NAME: 2vm-report-2
+
+jobs:
+  generate-2vm-report:
+    name: generate-2vm-vm-report
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4.3.1
+
+    - name: Enable KVM
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | \
+          sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
+
+    - name: Install packages
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq \
+          qemu-utils cloud-image-utils python3-pip
+
+    - name: Cache pip
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: pip-qemu-tool-${{ hashFiles('qemu/pyproject.toml') }}
+
+    - name: Install qemu-tool
+      run: pip install --break-system-packages -e ./qemu
+
+    - name: Generate SSH key-pair
+      run: mkdir -p "$HOME/.ssh" && ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
+
+    - name: Cache cloud image
+      uses: actions/cache@v4
+      with:
+        path: ${{ env.VM_IMAGES_DIR }}/*-server-cloudimg-*.img
+        key: cloud-img-amd64-noble-2vm-report
+
+    - name: Ensure images directory exists
+      run: sudo mkdir -p "$VM_IMAGES_DIR" && sudo chmod 777 "$VM_IMAGES_DIR"
+
+    - name: Generate VM 1
+      run: |
+        qemu-tool gen-vm \
+          --vm-name "$VM1_NAME" \
+          --images "$VM_IMAGES_DIR" \
+          --release noble \
+          --username ubuntu \
+          --password password \
+          --packages none \
+          --size 8
+
+    - name: Generate VM 2 from shared backing file
+      run: |
+        qemu-tool gen-vm \
+          --vm-name "$VM2_NAME" \
+          --images "$VM_IMAGES_DIR" \
+          --backing-file "$VM_IMAGES_DIR/${VM1_NAME}-backing.qcow2"
+
+    - name: Pull CI images
+      run: |
+        docker pull "$ERNIC_IMAGE"
+        docker pull "$ROCJITSU_IMAGE"
+        docker pull "$QEMU_IMAGE"
+
+    - name: Bring up full 2vm compose stack
+      working-directory: qemu/compose/vfio-user-2vm
+      env:
+        QEMU_TOOL_SRC: ${{ github.workspace }}
+      run: |
+        docker compose up --detach
+        echo "Compose stack started"
+
+    - name: Wait for GPU/NIC servers to be healthy
+      working-directory: qemu/compose/vfio-user-2vm
+      run: |
+        for i in $(seq 1 30); do
+          hub_ok=$(docker compose ps --format json ernic-hub \
+            | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('Health',''))" \
+            2>/dev/null || true)
+          worker_ok=$(docker compose ps --format json ernic-worker \
+            | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('Health',''))" \
+            2>/dev/null || true)
+          [ "$hub_ok" = "healthy" ] && [ "$worker_ok" = "healthy" ] && break
+          sleep 2
+        done
+        [ "$hub_ok" = "healthy" ]    || (docker compose logs ernic-hub    && exit 1)
+        [ "$worker_ok" = "healthy" ] || (docker compose logs ernic-worker && exit 1)
+        echo "GPU/NIC servers healthy"
+
+    - name: Wait for VM 1 SSH (180s timeout)
+      run: |
+        elapsed=0
+        while [ $elapsed -lt 180 ]; do
+          if ssh -o ConnectTimeout=1 \
+                 -o NoHostAuthenticationForLocalhost=yes \
+                 -o StrictHostKeyChecking=no \
+                 -p 2222 ubuntu@localhost true 2>/dev/null; then
+            echo "VM 1 ready after ${elapsed}s"
+            exit 0
+          fi
+          sleep 2; elapsed=$((elapsed + 2))
+        done
+        echo "VM 1 failed to boot in time"
+        exit 1
+
+    - name: Wait for VM 2 SSH (180s timeout)
+      run: |
+        elapsed=0
+        while [ $elapsed -lt 180 ]; do
+          if ssh -o ConnectTimeout=1 \
+                 -o NoHostAuthenticationForLocalhost=yes \
+                 -o StrictHostKeyChecking=no \
+                 -p 2223 ubuntu@localhost true 2>/dev/null; then
+            echo "VM 2 ready after ${elapsed}s"
+            exit 0
+          fi
+          sleep 2; elapsed=$((elapsed + 2))
+        done
+        echo "VM 2 failed to boot in time"
+        exit 1
+
+    - name: Generate VM 1 report
+      run: bash scripts/generate-vm-report.sh site 2222 ubuntu "VM 1"
+
+    - name: Generate VM 2 report
+      run: bash scripts/generate-vm-report.sh site/2vm 2223 ubuntu "VM 2"
+
+    - name: Show compose logs on failure
+      if: failure()
+      working-directory: qemu/compose/vfio-user-2vm
+      run: docker compose logs
+
+    - name: Setup Pages
+      uses: actions/configure-pages@v5
+
+    - name: Build Jekyll site
+      uses: actions/jekyll-build-pages@v1
+      with:
+        source: site/
+        destination: _site/
+
+    - name: Upload Pages artifact
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: _site/
+
+    - name: Deploy to GitHub Pages
+      id: deployment
+      uses: actions/deploy-pages@v4

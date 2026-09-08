@@ -180,6 +180,34 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
 3. `apply-rocm-ernic-dv.sh` omitted `dc.c`/`rocm_ernic_dc.h` — fixed locally
 4. rdma-core version inconsistency in rocm-ernic repo (62 vs 64 in different files)
 5. `docs/testing.rst` LD_LIBRARY_PATH points to non-existent path
+6. **Killing perftest mid-run breaks VM device context** — killing `ib_send_bw`
+   or any perftest process mid-operation (SIGTERM/SIGKILL) leaves the guest
+   RDMA driver in a broken state. `ibv_devinfo` reports "Failed to open device"
+   or "wasn't found". `rmmod`/`modprobe` hangs for 2 min (DSR timeout) and the
+   device does not recover. **Full stack restart required** (`docker compose down
+   && up`). Avoid killing tests; let them run to completion or use `ib_send_bw
+   --iters 100` to keep runs short.
+
+7. **ernic-hub crash requires full stack restart** — if `ernic-hub` crashes and
+   restarts (visible in `docker compose logs ernic-hub` as a re-initialization
+   from the top), the guest driver enters a DSR initialization timeout
+   (`-ETIMEDOUT`) on the next `modprobe rocm_ernic_rdma`. The vfio-user session
+   held by QEMU becomes stale and cannot be recovered by reloading modules alone.
+   **Fix: `docker compose down && docker compose up`** (all containers, not just
+   qemu-1/qemu-2). Restarting only the QEMU containers is insufficient because
+   the ernic-worker also needs a fresh TCP mesh connection to the new hub.
+
+7. **perftest server dies if SSH session closes** — `nohup`/`disown` is not
+   sufficient; the server exits with no output when the parent SSH session ends.
+   Workaround: keep the SSH session alive (run server in foreground in a
+   background job `&` and let the shell wait) or use `screen`/`tmux` inside
+   the VM. Example:
+   ```bash
+   # terminal 1 — server (keep session open)
+   ssh -p 2223 local-vm "ib_send_bw -d rocm-rdma-ernic0"
+   # terminal 2 — client
+   ssh -p 2222 local-vm "ib_send_bw -d rocm-rdma-ernic0 192.168.100.12"
+   ```
 
 ## Git / GitHub
 
