@@ -93,14 +93,15 @@ jobs:
         echo "$out" | grep -q "\-m 16384"
         echo "✓ --vcpus/--vmem passed"
 
-    - name: "Dry-run: --vfio-userdev with pcie-root-port"
+    - name: "Dry-run: --vfio-userdev attaches devices directly"
       run: |
         out=$(qemu-tool run-vm --vm-name dry-test --no-kvm \
               --vfio-userdev /tmp/a.sock,/tmp/b.sock --dry-run)
         echo "$out"
-        echo "$out" | grep -q "pcie-root-port,id=pcie-vfu.1"
-        echo "$out" | grep -q "pcie-root-port,id=pcie-vfu.2"
+        echo "$out" | grep -q "memory-backend-memfd"
         echo "$out" | grep -q "vfio-user-pci"
+        echo "$out" | grep -q "/tmp/a.sock"
+        echo "$out" | grep -q "/tmp/b.sock"
         echo "✓ --vfio-userdev passed"
 
     - name: "Dry-run: --qmp-socket (auto path)"
