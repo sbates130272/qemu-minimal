@@ -1,0 +1,141 @@
+---
+# Stage 1 — install (default): bake ernic prerequisites into a VM image.
+# Run via: qemu-tool gen-vm --ansible-playbook ansible/playbooks/vm-ernic.yml
+#
+# Stage 2 — configure (post-boot): bind the ernic driver and configure the
+# RDMA NIC after the ernic vfio-user server is running.
+# Run via: ansible-playbook -i inventory/qemu-minimal-vms.yml vm-ernic.yml --tags configure
+
+- name: Install ernic driver into VM image
+  hosts: all
+  gather_facts: true
+  become: true
+  tags: [install]
+  vars:
+    username: "{{ vm_username | default('ubuntu') }}"
+    root_user: "{{ vm_root_user | default('ubuntu') }}"
+    user_setup_motd: true
+    user_setup_install_amd_ca: false
+    user_setup_dotfiles_enable: true
+    rocm_setup_user: "{{ vm_username | default('ubuntu') }}"
+    rocm_setup_repo_stream: therock
+    rocm_setup_minimal: true
+    # hipcc is bundled in the ROCm meta-package under /opt/rocm/core-*/bin/
+    # and is not a standalone apt package in the therock stream. Drop it from
+    # the minimal list to avoid "no installation candidate" failures.
+    rocm_setup_minimal_packages:
+      - libstdc++-14-dev
+      - amdrocm-runtime-dev
+    rocm_setup_skip_reboot: false
+    rocm_setup_run_checks: true
+    rocm_setup_run_gpu_checks: false
+    rocm_setup_extra_kernel_packages:
+      - linux-generic-hwe-26.04
+    rocm_setup_install_metrics_exporter: true
+    ernic_image_rdma: true
+    ernic_gpu_passthrough: false
+  pre_tasks:
+    # Block distro (Ubuntu universe) versions of packages that the ROCm
+    # meta-package ships correctly under /opt/rocm/core-*/bin/. Without this
+    # apt resolves rocminfo/hipcc from universe during the rocm_setup role's
+    # package install steps, installing stale versions that crash against newer
+    # ROCm runtimes.
+    - name: Pin ROCm-conflicting Ubuntu universe packages to never-install
+      ansible.builtin.copy:
+        dest: /etc/apt/preferences.d/rocm-no-distro-packages
+        content: |
+          Package: rocminfo
+          Pin: release o=Ubuntu
+          Pin-Priority: -1
+
+          Package: hipcc
+          Pin: release o=Ubuntu
+          Pin-Priority: -1
+
+          Package: rocm-smi-lib
+          Pin: release o=Ubuntu
+          Pin-Priority: -1
+
+          Package: libhsakmt1
+          Pin: release o=Ubuntu
+          Pin-Priority: -1
+
+          Package: libhsa-runtime64-1
+          Pin: release o=Ubuntu
+          Pin-Priority: -1
+
+          Package: libhsa-runtime-dev
+          Pin: release o=Ubuntu
+          Pin-Priority: -1
+
+          Package: libamdhip64-*
+          Pin: release o=Ubuntu
+          Pin-Priority: -1
+        mode: '0644'
+      become: true
+
+    - name: Remove any partial dotfiles clone so user_setup can start fresh
+      ansible.builtin.file:
+        path: "/home/{{ username }}/.dotfiles"
+        state: absent
+      become: true
+
+    # Remove stale ROCm GPG keyring and sources so the rocm_setup role
+    # re-fetches both from scratch. Without this, idempotent key/source
+    # tasks on --ansible-only runs leave a mismatched keyring+sources pair
+    # that breaks apt-get update for all subsequent roles.
+    - name: Remove stale ROCm GPG keyrings and sources
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      become: true
+      loop:
+        - /etc/apt/keyrings/rocm.gpg
+        - /etc/apt/keyrings/amdrocm.gpg
+        - /etc/apt/sources.list.d/rocm.sources
+
+    - name: Remove any stale device-metrics-exporter apt sources
+      ansible.builtin.shell:
+        cmd: |
+          find /etc/apt/sources.list.d -type f \
+            -exec grep -l "device-metrics-exporter\|amdgpu-exporter" {} \; \
+            | xargs -r rm -f
+      become: true
+      changed_when: false
+
+  roles:
+    - role: sbates130272.batesste.user_setup
+    - role: sbates130272.batesste.fave_packages
+    - role: sbates130272.batesste.git_setup
+    - role: sbates130272.rocm_ernic.ernic_image_prep
+
+  tasks:
+    # ernic_guest_setup builds the DKMS module and rdma-core provider
+    # into the backing image so compose VMs don't have to rebuild on
+    # every boot.  The RDMA device check at the end of driver.yml
+    # expects hardware (ernic NIC via vfio-user) which is not present
+    # during image install — the rescue block catches that expected failure.
+    - name: Install rocm-ernic driver and rdma-core provider (hardware-free build)
+      block:
+        - ansible.builtin.include_role:
+            name: sbates130272.rocm_ernic.ernic_guest_setup
+          vars:
+            ernic_configure_nic: false
+            ernic_gpu_passthrough: false
+      rescue:
+        - ansible.builtin.debug:
+            msg: >-
+              ernic_guest_setup RDMA device check failed as expected
+              (no ernic NIC during image install). DKMS module is installed;
+              it will bind on compose VM boot.
+
+- name: Configure ernic NIC (post-boot, run with --tags configure)
+  hosts: all
+  gather_facts: true
+  become: false
+  tags: [configure, never]
+  vars:
+    username: "{{ vm_username | default('ubuntu') }}"
+    ernic_guest_agent: false
+  roles:
+    - role: sbates130272.rocm_ernic.ernic_guest_setup

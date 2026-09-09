@@ -56,6 +56,6 @@ class VMConfig:
     no_backing: bool = False
     restore_image: bool = False
     backing_file: Path | None = None
-    ansible_profile: Path | None = None
+    ansible_playbook: Path | None = None
     ca_cert_file: Path | None = None
     ansible_only: bool = False

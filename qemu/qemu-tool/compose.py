@@ -5,8 +5,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-_STACKS = ("vfio-user-vm", "vfio-user-2vm")
-_DEFAULT_STACK = "vfio-user-vm"
+_STACKS = (
+    "vfio-user-ernic-vm",
+    "vfio-user-rocjitsu-vm",
+    "vfio-user-ernic-rocjitsu-vm",
+    "vfio-user-ernic-2vm",
+)
+_DEFAULT_STACK = "vfio-user-ernic-rocjitsu-vm"
 
 # Installed location (Debian package).
 _INSTALLED_COMPOSE_ROOT = Path("/usr/share/qemu-tool/compose")

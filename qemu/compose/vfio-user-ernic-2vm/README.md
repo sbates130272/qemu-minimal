@@ -1,7 +1,8 @@
-# vfio-user 2-VM mesh — Docker Compose stack
+# vfio-user ernic 2-VM mesh — Docker Compose stack
 
-Spins up two VMs connected via a rocm-ernic TCP manager/worker mesh, each
-with its own rocjitsu GPU emulator. The ernic-hub relays L2 Ethernet
+Spins up two VMs connected via a rocm-ernic TCP manager/worker mesh.
+rocjitsu GPU emulators are optional per VM via Compose profiles
+(`rocjitsu-vm1`, `rocjitsu-vm2`). The ernic-hub relays L2 Ethernet
 frames between VMs so they share a private network; RDMA operations go
 peer-to-peer over the same TCP connections.
 
@@ -9,10 +10,10 @@ peer-to-peer over the same TCP connections.
 
 ```
 ernic-hub  (tcp:manager:listen:6320)  ──── VM 1 (qemu-1, SSH :2222)
-      │                                         └─ ernic-1.sock + rocjitsu-1.sock
+      │                                         └─ ernic-1.sock [+ rocjitsu-1.sock with profile rocjitsu-vm1]
       │  TCP mesh
 ernic-worker   (tcp:worker:ernic-hub) ──── VM 2 (qemu-2, SSH :2223)
-                                               └─ ernic-2.sock + rocjitsu-2.sock
+                                               └─ ernic-2.sock [+ rocjitsu-2.sock with profile rocjitsu-vm2]
 ```
 
 ## Prerequisites
@@ -34,8 +35,16 @@ $EDITOR .env   # set VM1_NAME, VM2_NAME, VM_IMAGES_DIR
 qemu-tool gen-vm --vm-name qemu-minimal-2 --backing-file \
   /var/lib/qemu-tool/images/qemu-minimal-backing.qcow2
 
-# 3. Start the stack
-qemu-tool compose --stack vfio-user-2vm --vm-name qemu-minimal up
+# 3a. Start ernic-only (no GPUs)
+qemu-tool compose --stack vfio-user-ernic-2vm --vm-name qemu-minimal up
+
+# 3b. Both VMs with GPUs
+qemu-tool compose --stack vfio-user-ernic-2vm --vm-name qemu-minimal \
+  --profile rocjitsu-vm1 --profile rocjitsu-vm2 up
+
+# 3c. VM 1 with GPU, VM 2 without
+qemu-tool compose --stack vfio-user-ernic-2vm --vm-name qemu-minimal \
+  --profile rocjitsu-vm1 up
 
 # 4. Connect to each VM
 ssh -p 2222 ubuntu@localhost   # VM 1
@@ -54,8 +63,18 @@ ssh -p 2223 ubuntu@localhost   # VM 2
 | `VM_VCPUS` | `4` | vCPU count (shared by both VMs) |
 | `VM_VMEM` | `8192` | RAM in MiB (shared by both VMs) |
 | `ERNIC_TCP_PORT` | `6320` | TCP port for ernic manager/worker mesh |
-| `ROCJITSU_CONFIG` | `gfx1250_mi455x.json` | rocjitsu GPU config |
+| `ROCJITSU_CONFIG` | `gfx1250_mi455x.json` | rocjitsu GPU config (used when rocjitsu profiles active) |
 | `VM_SHM_SIZE` | `8g` | Container shared memory (must be >= VM_VMEM MiB) |
+
+## Compose profiles
+
+| Profile | Effect |
+|---|---|
+| *(none)* | ernic mesh only — no GPU services |
+| `rocjitsu-vm1` | add rocjitsu GPU for VM 1 |
+| `rocjitsu-vm2` | add rocjitsu GPU for VM 2 |
+| `rocjitsu-vm1 rocjitsu-vm2` | both VMs get a GPU |
+
 
 ## VM image requirements
 
@@ -70,6 +89,6 @@ qemu-img create -f qcow2 -b /path/to/vm1-backing.qcow2 \
 
 ## Known issues
 
-See [../vfio-user-vm/README.md](../vfio-user-vm/README.md) for the amdgpu
+See [../vfio-user-ernic-rocjitsu-vm/README.md](../vfio-user-ernic-rocjitsu-vm/README.md) for the amdgpu
 driver panic workaround — apply it to both VM images before starting the
 stack.

@@ -1,7 +1,8 @@
-# vfio-user GPU VM — Docker Compose stack
+# vfio-user ernic + rocjitsu VM — Docker Compose stack
 
-Runs rocm-ernic and rocjitsu vfio-user GPU servers alongside a `qemu-system` VM
-that attaches them as emulated PCIe devices via the `vfio-user-pci` driver.
+Single VM with both a rocm-ernic RDMA NIC and a rocjitsu GPU attached via
+the `vfio-user-pci` driver. For ernic-only or rocjitsu-only single-VM stacks
+see `vfio-user-ernic-vm/` and `vfio-user-rocjitsu-vm/`.
 
 ## Prerequisites
 
@@ -95,5 +96,5 @@ and update the healthchecks accordingly.
 When installed from the Debian package this compose stack is at:
 
 ```
-/usr/share/qemu-tool/compose/vfio-user-vm/
+/usr/share/qemu-tool/compose/vfio-user-ernic-rocjitsu-vm/
 ```

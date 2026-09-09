@@ -285,15 +285,27 @@ jobs:
     - name: Check out code
       uses: actions/checkout@v4.3.1
 
-    - name: "Validate: vfio-user-vm compose config"
+    - name: "Validate: vfio-user-ernic-vm compose config"
       run: |
-        cd qemu/compose/vfio-user-vm
+        cd qemu/compose/vfio-user-ernic-vm
         docker compose config --quiet
-        echo "✓ compose config valid"
+        echo "✓ vfio-user-ernic-vm compose config valid"
+
+    - name: "Validate: vfio-user-rocjitsu-vm compose config"
+      run: |
+        cd qemu/compose/vfio-user-rocjitsu-vm
+        docker compose config --quiet
+        echo "✓ vfio-user-rocjitsu-vm compose config valid"
+
+    - name: "Validate: vfio-user-ernic-rocjitsu-vm compose config"
+      run: |
+        cd qemu/compose/vfio-user-ernic-rocjitsu-vm
+        docker compose config --quiet
+        echo "✓ vfio-user-ernic-rocjitsu-vm compose config valid"
 
     - name: "Smoke: ernic and rocjitsu GPU servers create vfio-user sockets"
       run: |
-        cd qemu/compose/vfio-user-vm
+        cd qemu/compose/vfio-user-ernic-rocjitsu-vm
         docker compose up --detach --no-deps ernic rocjitsu
         for i in $(seq 1 30); do
           ernic_ok=$(docker compose ps --format json ernic \
@@ -310,16 +322,17 @@ jobs:
         echo "✓ GPU server sockets healthy"
         docker compose down
 
-    - name: "Validate: vfio-user-2vm compose config"
+    - name: "Validate: vfio-user-ernic-2vm compose config"
       run: |
-        cd qemu/compose/vfio-user-2vm
+        cd qemu/compose/vfio-user-ernic-2vm
         docker compose config --quiet
-        echo "✓ 2vm compose config valid"
+        echo "✓ ernic-2vm compose config valid"
 
     - name: "Smoke: 2vm ernic hub and worker create vfio-user sockets"
       run: |
-        cd qemu/compose/vfio-user-2vm
-        docker compose up --detach --no-deps ernic-hub ernic-worker rocjitsu-1 rocjitsu-2
+        cd qemu/compose/vfio-user-ernic-2vm
+        docker compose --profile rocjitsu-vm1 --profile rocjitsu-vm2 \
+          up --detach --no-deps ernic-hub ernic-worker rocjitsu-1 rocjitsu-2
         for i in $(seq 1 30); do
           hub_ok=$(docker compose ps --format json ernic-hub \
             | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('Health',''))" \

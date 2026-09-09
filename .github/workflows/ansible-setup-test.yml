@@ -35,14 +35,20 @@ jobs:
         key: ansible-collections-${{ hashFiles('ansible/requirements.yml') }}
     - name: Install sbates130272.batesste collection
       run: ansible-galaxy collection install --pre -r ansible/requirements.yml
-    - name: Syntax-check vm-setup playbook
-      run: ansible-playbook --syntax-check playbooks/vm-setup.yml
+    - name: Syntax-check vm-basic playbook
+      run: ansible-playbook --syntax-check playbooks/vm-basic.yml
       working-directory: ansible
-    - name: Syntax-check vm-rocm-setup playbook
-      run: ansible-playbook --syntax-check playbooks/vm-rocm-setup.yml
+    - name: Syntax-check vm-rocm playbook
+      run: ansible-playbook --syntax-check playbooks/vm-rocm.yml
       working-directory: ansible
-    - name: Syntax-check vm-ernic-image-prep playbook
-      run: ansible-playbook --syntax-check playbooks/vm-ernic-image-prep.yml
+    - name: Syntax-check vm-ernic playbook
+      run: ansible-playbook --syntax-check playbooks/vm-ernic.yml
+      working-directory: ansible
+    - name: Syntax-check vm-rocjitsu playbook
+      run: ansible-playbook --syntax-check playbooks/vm-rocjitsu.yml
+      working-directory: ansible
+    - name: Syntax-check vm-ernic-rocjitsu playbook
+      run: ansible-playbook --syntax-check playbooks/vm-ernic-rocjitsu.yml
       working-directory: ansible
 
   gen-vm-ansible-setup:
@@ -101,7 +107,7 @@ jobs:
           --password password \
           --packages none \
           --size 8 \
-          --ansible-profile ansible/profiles/vm-setup
+          --ansible-playbook ansible/playbooks/vm-basic.yml
       env:
         ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false}'
     - name: Boot VM as background task

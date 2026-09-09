@@ -1,5 +1,5 @@
 ---
-- name: Bake rocm-ernic prerequisites into a base VM image
+- name: Bake rocjitsu prerequisites into a base VM image
   hosts: all
   gather_facts: true
   become: true
@@ -12,9 +12,6 @@
     rocm_setup_user: "{{ vm_username | default('ubuntu') }}"
     rocm_setup_repo_stream: therock
     rocm_setup_minimal: true
-    # hipcc is bundled in the ROCm meta-package under /opt/rocm/core-*/bin/
-    # and is not a standalone apt package in the therock stream. Drop it from
-    # the minimal list to avoid "no installation candidate" failures.
     rocm_setup_minimal_packages:
       - libstdc++-14-dev
       - amdrocm-runtime-dev
@@ -23,14 +20,8 @@
     rocm_setup_run_gpu_checks: false
     rocm_setup_extra_kernel_packages:
       - linux-generic-hwe-26.04
-    ernic_image_rdma: true
-    ernic_gpu_passthrough: true
+    rocm_setup_install_metrics_exporter: true
   pre_tasks:
-    # Block distro (Ubuntu universe) versions of packages that the ROCm
-    # meta-package ships correctly under /opt/rocm/core-*/bin/. Without this
-    # apt resolves rocminfo/hipcc from universe during the rocm_setup role's
-    # package install steps, installing stale versions that crash against newer
-    # ROCm runtimes.
     - name: Pin ROCm-conflicting Ubuntu universe packages to never-install
       ansible.builtin.copy:
         dest: /etc/apt/preferences.d/rocm-no-distro-packages
@@ -71,10 +62,6 @@
         state: absent
       become: true
 
-    # Remove stale ROCm GPG keyring and sources so the rocm_setup role
-    # re-fetches both from scratch. Without this, idempotent key/source
-    # tasks on --ansible-only runs leave a mismatched keyring+sources pair
-    # that breaks apt-get update for all subsequent roles.
     - name: Remove stale ROCm GPG keyrings and sources
       ansible.builtin.file:
         path: "{{ item }}"
@@ -98,32 +85,8 @@
     - role: sbates130272.batesste.user_setup
     - role: sbates130272.batesste.fave_packages
     - role: sbates130272.batesste.git_setup
-    - role: sbates130272.rocm_ernic.ernic_image_prep
 
   tasks:
-    # ernic_guest_setup builds the DKMS module and rdma-core provider
-    # into the backing image so compose VMs don't have to rebuild on
-    # every boot.  The RDMA device check at the end of driver.yml
-    # expects hardware (ernic NIC via vfio-user) which is not present
-    # during image prep — the rescue block catches that expected failure.
-    - name: Install rocm-ernic driver and rdma-core provider (hardware-free build)
-      block:
-        - ansible.builtin.include_role:
-            name: sbates130272.rocm_ernic.ernic_guest_setup
-          vars:
-            ernic_configure_nic: false
-            ernic_gpu_passthrough: false
-      rescue:
-        - ansible.builtin.debug:
-            msg: >-
-              ernic_guest_setup RDMA device check failed as expected
-              (no ernic NIC during image prep). DKMS module is installed;
-              it will bind on compose VM boot.
-
-  post_tasks:
-    # Purge any distro ROCm runtime libs that got pulled in as transitive
-    # dependencies before the apt pin was active. The ROCm 10.0 meta-package
-    # provides the correct versions under /opt/rocm/core-*/lib/.
     - name: Purge stale distro ROCm runtime packages
       ansible.builtin.package:
         name:
@@ -136,8 +99,6 @@
         purge: true
       become: true
 
-    # Blacklist amdgpu from autoloading so it can be probed manually after
-    # rocjitsu is ready to handle vfio-user BAR accesses.
     - name: Blacklist amdgpu autoload
       ansible.builtin.copy:
         dest: /etc/modprobe.d/amdgpu-blacklist.conf
@@ -145,8 +106,6 @@
         mode: '0644'
       become: true
 
-    # Generate all gfx1250 firmware stubs and ip_discovery.bin on the Ansible
-    # controller (where Docker is available), then copy the results to the guest.
     - name: Create local temp dir for firmware generation
       ansible.builtin.tempfile:
         state: directory
@@ -206,8 +165,7 @@
     # Patch the amdgpu DKMS source to assume PCIe atomics support when
     # emu_mode=1 is active. The emulated device cannot advertise atomics
     # through the vfio-user PCI capability, but KFD requires them to
-    # accept the device. This patches kfd_device.c in the installed DKMS
-    # source and triggers a module rebuild.
+    # accept the device.
     - name: Patch KFD atomics check for emu_mode in DKMS source
       ansible.builtin.shell:
         cmd: |
@@ -247,7 +205,6 @@
       become: true
       when: atomics_patch.changed
 
-    # Install rocBLAS dev headers so gfx1250 GEMM workloads can be compiled.
     - name: Install rocBLAS dev package
       ansible.builtin.package:
         name:
@@ -256,9 +213,6 @@
         update_cache: false
       become: true
 
-    # Install a helper script to probe amdgpu after rocjitsu is ready.
-    # amdgpu is blacklisted from autoloading; call this script post-boot
-    # once the vfio-user socket is up.
     - name: Install amdgpu probe script
       ansible.builtin.copy:
         dest: /usr/local/bin/amdgpu-probe

@@ -1,0 +1,69 @@
+name: slash-command-dispatch
+
+# Listens for slash commands in issue/PR comments from repo collaborators.
+# Supported commands:
+#   /run-ci-full  — trigger ansible-playbook-test on the PR branch (or main)
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: write
+  issues: write
+  pull-requests: write
+
+jobs:
+
+  run-ci-full:
+    name: /run-ci-full
+    if: |
+      github.event.comment.body == '/run-ci-full' &&
+      (github.event.comment.author_association == 'OWNER' ||
+       github.event.comment.author_association == 'MEMBER' ||
+       github.event.comment.author_association == 'COLLABORATOR')
+    runs-on: ubuntu-latest
+    steps:
+    - name: Resolve target branch
+      id: branch
+      uses: actions/github-script@v7
+      with:
+        result-encoding: string
+        script: |
+          if (context.payload.issue.pull_request) {
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.issue.number,
+            });
+            return pr.data.head.ref;
+          }
+          return context.payload.repository.default_branch;
+
+    - name: Trigger ansible-playbook-test
+      uses: actions/github-script@v7
+      with:
+        script: |
+          await github.rest.actions.createWorkflowDispatch({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            workflow_id: 'ansible-playbook-test.yml',
+            ref: '${{ steps.branch.outputs.result }}',
+          });
+
+    - name: Post acknowledgement comment
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const branch = '${{ steps.branch.outputs.result }}';
+          const runsUrl =
+            `https://github.com/${context.repo.owner}/${context.repo.repo}` +
+            `/actions/workflows/ansible-playbook-test.yml`;
+          await github.rest.issues.createComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.payload.issue.number,
+            body:
+              `Full CI triggered on \`${branch}\`. ` +
+              `[View runs](${runsUrl})`,
+          });
