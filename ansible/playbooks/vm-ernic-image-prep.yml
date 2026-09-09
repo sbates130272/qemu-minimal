@@ -11,7 +11,6 @@
     user_setup_dotfiles_enable: true
     rocm_setup_user: "{{ vm_username | default('ubuntu') }}"
     rocm_setup_repo_stream: therock
-    rocm_setup_therock_channel: nightly
     rocm_setup_minimal: true
     rocm_setup_skip_reboot: false
     rocm_setup_run_checks: true
