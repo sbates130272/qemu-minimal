@@ -3,6 +3,7 @@ images/*.iso
 images/*.img
 images/*.qcow2
 images/mnt
+images/golden/
 libvirt/hostname.tmp
 libvirt/focal-*.img
 libvirt/jammy-*.img
