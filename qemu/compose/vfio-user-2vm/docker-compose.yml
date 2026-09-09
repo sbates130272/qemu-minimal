@@ -129,7 +129,8 @@ services:
       - |
         if ! command -v qemu-tool > /dev/null 2>&1; then
           cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
-          PIPX_BIN_DIR=/usr/local/bin pipx install --pip-args="--no-build-isolation" /tmp/qemu-tool-build
+          python3 -m ensurepip --upgrade && \
+          python3 -m pip install --no-build-isolation --prefix=/usr/local /tmp/qemu-tool-build
         fi
         exec qemu-tool run-vm \
           --images "${VM_IMAGES_DIR:-/var/lib/qemu-tool/images}" \
@@ -155,7 +156,8 @@ services:
       - |
         if ! command -v qemu-tool > /dev/null 2>&1; then
           cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
-          PIPX_BIN_DIR=/usr/local/bin pipx install --pip-args="--no-build-isolation" /tmp/qemu-tool-build
+          python3 -m ensurepip --upgrade && \
+          python3 -m pip install --no-build-isolation --prefix=/usr/local /tmp/qemu-tool-build
         fi
         exec qemu-tool run-vm \
           --images "${VM_IMAGES_DIR:-/var/lib/qemu-tool/images}" \

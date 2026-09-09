@@ -7,9 +7,11 @@
     username: "{{ vm_username | default('ubuntu') }}"
     root_user: "{{ vm_root_user | default('ubuntu') }}"
     user_setup_motd: true
-    user_setup_install_amd_ca: true
+    user_setup_install_amd_ca: false
+    user_setup_dotfiles_enable: true
     rocm_setup_user: "{{ vm_username | default('ubuntu') }}"
     rocm_setup_repo_stream: therock
+    rocm_setup_minimal: true
     rocm_setup_skip_reboot: false
     rocm_setup_run_checks: true
     rocm_setup_run_gpu_checks: false

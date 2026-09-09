@@ -115,6 +115,8 @@ def _add_run_vm(
         help="Extra hostfwd rule e.g. tcp::9150-:9100. May be repeated.",
     )
     p.add_argument("--dry-run", action="store_true", default=_UNSET)
+    p.add_argument("--mgmt-tap", action="store_true", default=_UNSET,
+                   help="Use tap+bridge for management NIC instead of SLIRP.")
     p.add_argument(
         "--convert-to-libvirt", nargs="?", const="-", default=None,
         metavar="FILE",
@@ -184,6 +186,8 @@ def _add_gen_vm(
                    help="CA certificate to inject into the guest trust store.")
     p.add_argument("--ansible-only", action="store_true", default=_UNSET,
                    help="Skip cloud-init; re-run Ansible against an existing backing image.")
+    p.add_argument("--mgmt-tap", action="store_true", default=_UNSET,
+                   help="Use tap+bridge for management NIC instead of SLIRP.")
     p.set_defaults(func=_gen_vm_cmd)
 
 
@@ -284,6 +288,7 @@ def _extract_cli_overrides(
         _take("qmp_socket", "qmp_socket")
         _take("backing_shared", "backing_shared")
         _take("dry_run", "dry_run")
+        _take("mgmt_tap", "mgmt_tap")
 
         if ns.get("no_qemu_guest_agent"):
             overrides["qemu_guest_agent"] = False
@@ -315,6 +320,7 @@ def _extract_cli_overrides(
         _take("ansible_profile", "ansible_profile")
         _take("ca_cert_file", "ca_cert")
         _take("ansible_only", "ansible_only")
+        _take("mgmt_tap", "mgmt_tap")
 
         raw_pkg = ns.get("packages", _UNSET)
         if raw_pkg is not _UNSET:

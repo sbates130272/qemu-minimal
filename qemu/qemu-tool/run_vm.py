@@ -53,6 +53,8 @@ def run(cfg: VMConfig, caps: QemuCaps) -> None:
     if cfg.arch == "amd64" and cfg.qemu_guest_agent:
         qga_sock = Path(f"/tmp/qga-{cfg.vm_name}-{cfg.ssh_port}.sock")
         qga_sock.unlink(missing_ok=True)
+    if cfg.mgmt_tap:
+        _ensure_mgmt_bridge(cfg.ssh_port)
     if cfg.data_nic_queues > 0:
         _ensure_tap(f"dt{cfg.ssh_port}", cfg.data_nic_queues)
     os.execvp(cmd[0], cmd)
@@ -236,6 +238,13 @@ def _root_drive_args(cfg: VMConfig) -> list[str]:
 
 
 def _netdev_args(cfg: VMConfig) -> list[str]:
+    if cfg.mgmt_tap:
+        tap = _mgmt_tap_name(cfg.ssh_port)
+        mac = _mgmt_mac(cfg.ssh_port)
+        return [
+            "-netdev", f"tap,id=net0,ifname={tap},script=no,downscript=no,vhost=on",
+            "-device", f"virtio-net-pci,netdev=net0,mac={mac}",
+        ]
     hostfwd = f"hostfwd=tcp::{cfg.ssh_port}-:22"
     for rule in cfg.extra_hostfwd:
         hostfwd += f",hostfwd={rule}"
@@ -350,6 +359,118 @@ def _teardown_tap(tap: str) -> None:
         ["sudo", "ip", "tuntap", "del", "dev", tap, "mode", "tap"],
         capture_output=True,
     )
+
+
+# ---------------------------------------------------------------------------
+# Management-NIC tap+bridge helpers
+# ---------------------------------------------------------------------------
+
+def _mgmt_bridge_name(port: int) -> str:
+    return f"qemu-br{port}"
+
+
+def _mgmt_tap_name(port: int) -> str:
+    return f"mt{port}"
+
+
+def _mgmt_subnet(port: int) -> str:
+    octet = (port - 2000) % 254 + 1
+    return f"172.16.{octet}"
+
+
+def _mgmt_mac(port: int) -> str:
+    hi = (port >> 8) & 0xFF
+    lo = port & 0xFF
+    return f"52:54:00:00:{hi:02x}:{lo:02x}"
+
+
+def _ensure_mgmt_bridge(port: int) -> None:
+    br = _mgmt_bridge_name(port)
+    tap = _mgmt_tap_name(port)
+    subnet = _mgmt_subnet(port)
+
+    if subprocess.run(["ip", "link", "show", br], capture_output=True).returncode != 0:
+        subprocess.run(["sudo", "ip", "link", "add", br, "type", "bridge"], check=True)
+        subprocess.run(
+            ["sudo", "ip", "addr", "add", f"{subnet}.1/24", "dev", br], check=True
+        )
+        subprocess.run(["sudo", "ip", "link", "set", br, "up"], check=True)
+
+    subprocess.run(
+        ["sudo", "sysctl", "-qw", "net.ipv4.ip_forward=1"], check=True
+    )
+    subprocess.run(
+        ["sudo", "iptables", "-t", "nat", "-A", "POSTROUTING",
+         "-s", f"{subnet}.0/24", "!", "-d", f"{subnet}.0/24", "-j", "MASQUERADE"],
+        check=True,
+    )
+    subprocess.run(
+        ["sudo", "iptables", "-I", "FORWARD", "1", "-i", br, "-j", "ACCEPT"],
+        check=True,
+    )
+    subprocess.run(
+        ["sudo", "iptables", "-I", "FORWARD", "2", "-o", br,
+         "-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT"],
+        check=True,
+    )
+
+    pid_file = f"/tmp/qemu-dnsmasq-{port}.pid"
+    subprocess.run(
+        [
+            "sudo", "dnsmasq",
+            f"--pid-file={pid_file}",
+            f"--interface={br}",
+            "--bind-interface",
+            "--except-interface=lo",
+            f"--dhcp-range={subnet}.100,{subnet}.200,1h",
+        ],
+        check=True,
+    )
+
+    if subprocess.run(["ip", "link", "show", tap], capture_output=True).returncode != 0:
+        subprocess.run(
+            ["sudo", "ip", "tuntap", "add", "dev", tap, "mode", "tap",
+             "user", os.getlogin()],
+            check=True,
+        )
+    subprocess.run(["sudo", "ip", "link", "set", tap, "master", br], check=True)
+    subprocess.run(["sudo", "ip", "link", "set", tap, "up"], check=True)
+
+    atexit.register(_teardown_mgmt_bridge, port)
+
+
+def _teardown_mgmt_bridge(port: int) -> None:
+    br = _mgmt_bridge_name(port)
+    tap = _mgmt_tap_name(port)
+    subnet = _mgmt_subnet(port)
+    pid_file = f"/tmp/qemu-dnsmasq-{port}.pid"
+
+    try:
+        pid = int(Path(pid_file).read_text().strip())
+        subprocess.run(["sudo", "kill", str(pid)], capture_output=True)
+        Path(pid_file).unlink(missing_ok=True)
+    except Exception:
+        pass
+
+    subprocess.run(
+        ["sudo", "iptables", "-t", "nat", "-D", "POSTROUTING",
+         "-s", f"{subnet}.0/24", "!", "-d", f"{subnet}.0/24", "-j", "MASQUERADE"],
+        capture_output=True,
+    )
+    subprocess.run(
+        ["sudo", "iptables", "-D", "FORWARD", "-i", br, "-j", "ACCEPT"],
+        capture_output=True,
+    )
+    subprocess.run(
+        ["sudo", "iptables", "-D", "FORWARD", "-o", br,
+         "-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT"],
+        capture_output=True,
+    )
+    subprocess.run(
+        ["sudo", "ip", "tuntap", "del", "dev", tap, "mode", "tap"],
+        capture_output=True,
+    )
+    subprocess.run(["sudo", "ip", "link", "del", br], capture_output=True)
 
 
 # ---------------------------------------------------------------------------

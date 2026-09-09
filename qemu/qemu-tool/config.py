@@ -41,6 +41,7 @@ class VMConfig:
     backing_shared: bool = False
     extra_hostfwd: list[str] = field(default_factory=list)
     dry_run: bool = False
+    mgmt_tap: bool = False
 
     # ---- gen-vm ----
     size: int = 64

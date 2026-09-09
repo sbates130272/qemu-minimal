@@ -1,6 +1,6 @@
 ---
 collections:
   - name: sbates130272.batesste
-    version: ">=2.3.0"
+    version: ">=2.4.0"
   - name: sbates130272.rocm_ernic
     version: ">=0.1.0"
