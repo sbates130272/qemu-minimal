@@ -7,7 +7,7 @@ on:
 
 env:
   ERNIC_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:ernic.e3ef00c-vfu.323f4cb
-  ROCJITSU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:rocjitsu.5e9cc7c
+  ROCJITSU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:rocjitsu.730bc62
   QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:qemu11.1.1-vfu.323f4cb
   VM_IMAGES_DIR: /var/lib/qemu-tool/images
   VM1_NAME: 2vm-smoke-1

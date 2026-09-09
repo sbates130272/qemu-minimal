@@ -2,7 +2,7 @@
 - name: Bake rocm-ernic prerequisites into a base VM image
   hosts: all
   gather_facts: true
-  become: false
+  become: true
   vars:
     username: "{{ vm_username | default('ubuntu') }}"
     root_user: "{{ vm_root_user | default('ubuntu') }}"
@@ -13,13 +13,58 @@
     rocm_setup_skip_reboot: false
     rocm_setup_run_checks: true
     rocm_setup_run_gpu_checks: false
-    rocm_setup_install_metrics_exporter: true
     rocm_setup_extra_kernel_packages:
-      - linux-generic-hwe-24.04
+      - linux-generic-hwe-26.04
     ernic_image_rdma: true
     ernic_gpu_passthrough: true
+  pre_tasks:
+    # Remove stale ROCm GPG keyring and sources so the rocm_setup role
+    # re-fetches both from scratch. Without this, idempotent key/source
+    # tasks on --ansible-only runs leave a mismatched keyring+sources pair
+    # that breaks apt-get update for all subsequent roles.
+    - name: Remove stale ROCm GPG keyrings and sources
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      become: true
+      loop:
+        - /etc/apt/keyrings/rocm.gpg
+        - /etc/apt/keyrings/amdrocm.gpg
+        - /etc/apt/sources.list.d/rocm.sources
+
+    - name: Remove any stale device-metrics-exporter apt sources
+      ansible.builtin.shell:
+        cmd: |
+          find /etc/apt/sources.list.d -type f \
+            -exec grep -l "device-metrics-exporter\|amdgpu-exporter" {} \; \
+            | xargs -r rm -f
+      become: true
+      changed_when: false
+
   roles:
     - role: sbates130272.batesste.user_setup
     - role: sbates130272.batesste.fave_packages
     - role: sbates130272.batesste.git_setup
     - role: sbates130272.rocm_ernic.ernic_image_prep
+
+  post_tasks:
+    # The device-metrics-exporter repo has no resolute suite yet; pin to noble.
+    - name: Add device-metrics-exporter apt source (noble suite)
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/device-metrics-exporter.sources
+        content: |
+          Types: deb
+          URIs: https://repo.radeon.com/device-metrics-exporter/apt/1.5.1
+          Suites: noble
+          Components: main
+          Architectures: amd64
+          Signed-By: /etc/apt/keyrings/rocm.gpg
+        mode: '0644'
+      become: true
+
+    - name: Install AMD Device Metrics Exporter
+      ansible.builtin.package:
+        name: amdgpu-exporter
+        state: present
+        update_cache: true
+      become: true
