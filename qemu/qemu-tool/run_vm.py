@@ -67,6 +67,10 @@ def run(cfg: VMConfig, caps: QemuCaps) -> None:
 def _arch_args(cfg: VMConfig) -> list[str]:
     kvm_suffix = ",accel=kvm" if cfg.kvm else ""
     if cfg.arch == "amd64":
+        # When vfio-user devices are present, _vfio_userdev_args emits its own
+        # -machine with the shared memfd bound, so skip the machine arg here.
+        if cfg.vfio_userdev:
+            return ["-cpu", "EPYC"]
         return ["-machine", f"q35{kvm_suffix}", "-cpu", "EPYC"]
     if cfg.arch == "arm64":
         return [
@@ -210,19 +214,22 @@ def _pci_mmio_bridge_args(cfg: VMConfig, caps: QemuCaps) -> list[str]:
 def _vfio_userdev_args(cfg: VMConfig) -> list[str]:
     if not cfg.vfio_userdev:
         return []
-    chassis_base = len(cfg.pci_hostdev)
+    # Bind the shared memfd directly to the machine so the vfio-user server
+    # can map DMA windows into it. Per PR rocm-systems#11397, using a NUMA
+    # node memdev instead prevents the server from accessing guest RAM.
+    kvm_suffix = ",accel=kvm" if cfg.kvm else ""
     args: list[str] = [
         "-object",
         f"memory-backend-memfd,id=mem-vfio-user,size={cfg.vmem}M,share=on",
-        "-numa", "node,memdev=mem-vfio-user",
+        "-machine", f"q35{kvm_suffix},memory-backend=mem-vfio-user",
     ]
     for j, sock in enumerate(cfg.vfio_userdev, start=1):
         if not cfg.dry_run and not Path(sock).is_socket():
             sys.exit(f"ERROR: Socket {sock} does not exist.")
-        chassis = chassis_base + j
-        args += ["-device", f"pcie-root-port,id=pcie-vfu.{j},chassis={chassis}"]
+        # No PCIe root port — add the device directly. rombar=0 suppresses
+        # the ROM BAR that vfio-user-pci would otherwise advertise.
         dev_json = (
-            f'{{"driver":"vfio-user-pci","bus":"pcie-vfu.{j}",'
+            f'{{"driver":"vfio-user-pci","rombar":0,'
             f'"socket":{{"path":"{sock}","type":"unix"}}}}'
         )
         args += ["-device", dev_json]
@@ -242,7 +249,7 @@ def _netdev_args(cfg: VMConfig) -> list[str]:
         tap = _mgmt_tap_name(cfg.ssh_port)
         mac = _mgmt_mac(cfg.ssh_port)
         return [
-            "-netdev", f"tap,id=net0,ifname={tap},script=no,downscript=no,vhost=on",
+            "-netdev", f"tap,id=net0,ifname={tap},script=no,downscript=no",
             "-device", f"virtio-net-pci,netdev=net0,mac={mac}",
         ]
     hostfwd = f"hostfwd=tcp::{cfg.ssh_port}-:22"
@@ -390,7 +397,8 @@ def _ensure_mgmt_bridge(port: int) -> None:
     subnet = _mgmt_subnet(port)
 
     if subprocess.run(["ip", "link", "show", br], capture_output=True).returncode != 0:
-        subprocess.run(["sudo", "ip", "link", "add", br, "type", "bridge"], check=True)
+        subprocess.run(["sudo", "ip", "link", "add", br, "type", "bridge",
+                        "stp_state", "0"], check=True)
         subprocess.run(
             ["sudo", "ip", "addr", "add", f"{subnet}.1/24", "dev", br], check=True
         )
@@ -399,33 +407,45 @@ def _ensure_mgmt_bridge(port: int) -> None:
     subprocess.run(
         ["sudo", "sysctl", "-qw", "net.ipv4.ip_forward=1"], check=True
     )
-    subprocess.run(
-        ["sudo", "iptables", "-t", "nat", "-A", "POSTROUTING",
-         "-s", f"{subnet}.0/24", "!", "-d", f"{subnet}.0/24", "-j", "MASQUERADE"],
-        check=True,
-    )
-    subprocess.run(
-        ["sudo", "iptables", "-I", "FORWARD", "1", "-i", br, "-j", "ACCEPT"],
-        check=True,
-    )
-    subprocess.run(
-        ["sudo", "iptables", "-I", "FORWARD", "2", "-o", br,
-         "-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT"],
-        check=True,
-    )
+
+    def _ipt_ensure(table_args: list[str], rule: list[str]) -> None:
+        """Add rule only if it doesn't already exist."""
+        if subprocess.run(
+            ["sudo", "iptables"] + table_args + ["-C"] + rule, capture_output=True
+        ).returncode != 0:
+            subprocess.run(
+                ["sudo", "iptables"] + table_args + ["-A"] + rule, check=True
+            )
+
+    _ipt_ensure(["-t", "nat"], ["POSTROUTING",
+                "-s", f"{subnet}.0/24", "!", "-d", f"{subnet}.0/24", "-j", "MASQUERADE"])
+    _ipt_ensure([], ["FORWARD", "-i", br, "-j", "ACCEPT"])
+    _ipt_ensure([], ["FORWARD", "-o", br,
+                     "-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT"])
 
     pid_file = f"/tmp/qemu-dnsmasq-{port}.pid"
-    subprocess.run(
-        [
-            "sudo", "dnsmasq",
-            f"--pid-file={pid_file}",
-            f"--interface={br}",
-            "--bind-interface",
-            "--except-interface=lo",
-            f"--dhcp-range={subnet}.100,{subnet}.200,1h",
-        ],
-        check=True,
-    )
+    dnsmasq_running = False
+    try:
+        pid = int(Path(pid_file).read_text().strip())
+        dnsmasq_running = subprocess.run(
+            ["sudo", "kill", "-0", str(pid)], capture_output=True
+        ).returncode == 0
+    except Exception:
+        pass
+    if not dnsmasq_running:
+        subprocess.run(
+            [
+                "sudo", "dnsmasq",
+                f"--pid-file={pid_file}",
+                f"--interface={br}",
+                "--bind-interface",
+                "--except-interface=lo",
+                f"--dhcp-range={subnet}.100,{subnet}.200,1h",
+                "--log-dhcp",
+            ],
+            check=True,
+        )
+        print("dnsmasq DHCP log: sudo journalctl -t dnsmasq -f")
 
     if subprocess.run(["ip", "link", "show", tap], capture_output=True).returncode != 0:
         subprocess.run(

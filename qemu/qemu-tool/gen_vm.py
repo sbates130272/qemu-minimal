@@ -360,7 +360,8 @@ def _first_boot(cfg: VMConfig, images: Path, backing: Path) -> None:
         "-drive", f"if=virtio,format=qcow2,file={backing}",
         "-drive", f"if=virtio,format=qcow2,file={seed}",
         "-netdev", "user,id=net0",
-        "-device", "virtio-net-pci,netdev=net0",
+        "-device", "virtio-net-pci,netdev=net0"
+        + (f",mac={_mgmt_mac(cfg.ssh_port)}" if cfg.mgmt_tap else ""),
     ]
     subprocess.run(cmd, check=True)
 

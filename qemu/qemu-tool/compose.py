@@ -34,14 +34,21 @@ def run(
     images_dir: Path | None,
     compose_args: list[str],
     stack: str = _DEFAULT_STACK,
+    vm2_name: str | None = None,
 ) -> None:
     cdir = _compose_dir(stack)
     env = os.environ.copy()
     if vm_name is not None:
         env["VM_NAME"] = vm_name
         env["VM1_NAME"] = vm_name
+    if vm2_name is not None:
+        env["VM2_NAME"] = vm2_name
     if images_dir is not None:
         env["VM_IMAGES_DIR"] = str(images_dir.resolve())
-    cmd = ["docker", "compose", *compose_args]
+    cmd = ["docker", "compose"]
+    caller_env = Path.cwd() / ".env"
+    if caller_env.exists():
+        cmd += ["--env-file", str(caller_env)]
+    cmd += compose_args
     result = subprocess.run(cmd, cwd=cdir, env=env)
     sys.exit(result.returncode)

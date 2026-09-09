@@ -143,6 +143,10 @@ def _add_compose(sub: argparse._SubParsersAction) -> None:
         help="VM name (sets VM_NAME/VM1_NAME). Omit to use the value in .env.",
     )
     p.add_argument(
+        "--vm2-name", default=None, metavar="NAME",
+        help="Second VM name for 2-VM stacks (sets VM2_NAME). Omit to use the value in .env.",
+    )
+    p.add_argument(
         "--images", type=Path, default=None, metavar="DIR",
         help="Directory containing VM images (sets VM_IMAGES_DIR). Omit to use the value in .env.",
     )
@@ -227,7 +231,8 @@ def _run_vm_cmd(args: argparse.Namespace) -> None:
 
 
 def _compose_cmd(args: argparse.Namespace) -> None:
-    compose_run(args.vm_name, args.images, args.compose_args, stack=args.stack)
+    compose_run(args.vm_name, args.images, args.compose_args,
+                stack=args.stack, vm2_name=args.vm2_name)
 
 
 def _gen_vm_cmd(args: argparse.Namespace) -> None:

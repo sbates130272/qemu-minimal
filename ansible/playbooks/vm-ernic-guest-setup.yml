@@ -1,0 +1,10 @@
+---
+- name: Install rocm-ernic guest driver and configure emulated NIC
+  hosts: all
+  gather_facts: true
+  become: false
+  vars:
+    username: "{{ vm_username | default('ubuntu') }}"
+    ernic_guest_agent: false
+  roles:
+    - role: sbates130272.rocm_ernic.ernic_guest_setup
