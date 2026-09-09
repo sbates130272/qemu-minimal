@@ -211,25 +211,39 @@
     - name: Patch KFD atomics check for emu_mode in DKMS source
       ansible.builtin.shell:
         cmd: |
-          set -e
-          SRC=$(find /usr/src -maxdepth 1 -name 'amdgpu-*' | sort -V | tail -1)
-          FILE="$SRC/amd/amdkfd/kfd_device.c"
-          OLD='kfd->pci_atomic_requested = amdgpu_amdkfd_have_atomics_support(kfd->adev);'
-          NEW='kfd->pci_atomic_requested = amdgpu_amdkfd_have_atomics_support(kfd->adev) || (amdgpu_emu_mode == 1);'
-          if grep -qF "$NEW" "$FILE"; then
-            echo "already patched"
-            exit 0
-          fi
-          sed -i "s|$OLD|$NEW|g" "$FILE"
-          echo "patched $FILE"
+          python3 - << 'PYEOF'
+          import glob, sys
+          srcs = sorted(glob.glob('/usr/src/amdgpu-*'))
+          if not srcs:
+              print('no amdgpu DKMS source found', file=sys.stderr)
+              sys.exit(1)
+          path = srcs[-1] + '/amd/amdkfd/kfd_device.c'
+          old = 'kfd->pci_atomic_requested = amdgpu_amdkfd_have_atomics_support(kfd->adev);'
+          new = 'kfd->pci_atomic_requested = amdgpu_amdkfd_have_atomics_support(kfd->adev) || (amdgpu_emu_mode == 1);'
+          with open(path) as f:
+              content = f.read()
+          if new in content:
+              print('already patched')
+              sys.exit(0)
+          if old not in content:
+              print(f'target string not found in {path}', file=sys.stderr)
+              sys.exit(1)
+          with open(path, 'w') as f:
+              f.write(content.replace(old, new, 1))
+          print(f'patched {path}')
+          PYEOF
         executable: /bin/bash
       become: true
       register: atomics_patch
-      changed_when: "'patched' in atomics_patch.stdout"
+      changed_when: "'patched /' in atomics_patch.stdout"
 
     - name: Rebuild DKMS amdgpu module after atomics patch
-      ansible.builtin.command:
-        cmd: dkms autoinstall --force
+      ansible.builtin.shell:
+        cmd: |
+          VER=$(dkms status amdgpu | awk -F'[,/]' 'NR==1{gsub(/ /,"",$2); print $2}')
+          dkms build amdgpu/"$VER" -k $(uname -r) --force
+          dkms install amdgpu/"$VER" -k $(uname -r) --force
+        executable: /bin/bash
       become: true
       when: atomics_patch.changed
 
