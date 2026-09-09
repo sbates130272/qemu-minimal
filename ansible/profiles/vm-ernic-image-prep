@@ -1,1 +1,2 @@
 ANSIBLE_PLAYBOOK=playbooks/vm-ernic-image-prep.yml
+ANSIBLE_EXTRA_ARGS=-e {"rocm_setup_install_metrics_exporter":false}

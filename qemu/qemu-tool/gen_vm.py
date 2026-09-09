@@ -507,15 +507,25 @@ def _wait_for_ssh(cfg: VMConfig, timeout: int) -> bool:
     print(f"Waiting for VM to accept SSH on port {cfg.ssh_port}...")
     elapsed = 0
     while elapsed < timeout:
-        r = subprocess.run(
-            ["ssh", "-o", "ConnectTimeout=1",
-             "-o", "StrictHostKeyChecking=no",
-             "-o", "UserKnownHostsFile=/dev/null",
-             "-p", str(cfg.ssh_port),
-             f"{cfg.username}@localhost", "true"],
-            capture_output=True,
-        )
-        if r.returncode == 0:
+        try:
+            r = subprocess.run(
+                ["ssh",
+                 "-o", "BatchMode=yes",
+                 "-o", "ConnectTimeout=1",
+                 "-o", "StrictHostKeyChecking=no",
+                 "-o", "UserKnownHostsFile=/dev/null",
+                 "-p", str(cfg.ssh_port),
+                 f"{cfg.username}@localhost", "true"],
+                capture_output=True,
+                timeout=5,
+            )
+            if r.returncode == 0:
+                print(f"VM ready for Ansible after {elapsed} seconds.")
+                return True
+        except subprocess.TimeoutExpired:
+            # SSH connected (ConnectTimeout=1 would have fired otherwise)
+            # but background login processes kept the channel open.
+            # The VM is up.
             print(f"VM ready for Ansible after {elapsed} seconds.")
             return True
         time.sleep(2)
