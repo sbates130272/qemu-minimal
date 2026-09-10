@@ -1,0 +1,623 @@
+name: ansible-playbook-test
+
+on:
+  workflow_dispatch:
+
+env:
+  ERNIC_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:latest
+  ROCJITSU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:latest
+  QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:latest
+  VM_IMAGES_DIR: /var/lib/qemu-tool/images
+  ANSIBLE_EXTRA_ARGS: >-
+    -e {"git_setup_enable_gpg_signing":false,
+    "user_setup_dotfiles_enable":false,
+    "user_setup_install_amd_ca":false}
+
+jobs:
+
+  # ---------------------------------------------------------------------------
+  # vm-rocm: install ROCm stack, boot bare VM, verify packages
+  # ---------------------------------------------------------------------------
+  test-vm-rocm:
+    name: test-vm-rocm
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4.3.1
+
+    - name: Enable KVM
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | \
+          sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
+
+    - name: Install packages
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq \
+          qemu-system-x86 qemu-utils cloud-image-utils \
+          ansible openssh-client python3-pip
+
+    - name: Install jmespath for Ansible json_query filter
+      run: |
+        py=$(sed -n '1s/^#! *//p' "$(command -v ansible-playbook)" | awk '{print $1}')
+        "${py}" -m pip install --break-system-packages jmespath
+
+    - name: Cache pip
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: pip-qemu-tool-${{ hashFiles('qemu/pyproject.toml') }}
+
+    - name: Install qemu-tool
+      run: pip install --break-system-packages -e ./qemu
+
+    - name: Generate SSH key-pair
+      run: mkdir -p "$HOME/.ssh" && ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
+
+    - name: Prepare GnuPG directory for git_setup
+      run: mkdir -p "$HOME/.gnupg"
+
+    - name: Cache Ansible collections
+      uses: actions/cache@v4
+      with:
+        path: ~/.ansible/collections
+        key: ansible-collections-${{ hashFiles('ansible/requirements.yml') }}
+
+    - name: Install Ansible collections
+      run: ansible-galaxy collection install --pre -r ansible/requirements.yml
+
+    - name: Cache cloud image
+      uses: actions/cache@v4
+      with:
+        path: ${{ env.VM_IMAGES_DIR }}/*-server-cloudimg-*.img
+        key: cloud-img-amd64-noble-ansible-rocm
+
+    - name: Ensure images directory exists
+      run: sudo mkdir -p "$VM_IMAGES_DIR" && sudo chmod 777 "$VM_IMAGES_DIR"
+
+    - name: Generate VM with vm-rocm playbook
+      run: |
+        qemu-tool gen-vm \
+          --vm-name rocm-test \
+          --release noble \
+          --username ubuntu \
+          --password password \
+          --packages none \
+          --size 16 \
+          --ansible-playbook ansible/playbooks/vm-rocm.yml
+
+    - name: Boot VM
+      run: |
+        qemu-tool run-vm --vm-name rocm-test > run-vm-output.log 2>&1 &
+
+    - name: Wait for VM SSH (180s timeout)
+      run: |
+        elapsed=0
+        while [ $elapsed -lt 180 ]; do
+          if ssh -o ConnectTimeout=1 \
+                 -o NoHostAuthenticationForLocalhost=yes \
+                 -o StrictHostKeyChecking=no \
+                 -p 2222 ubuntu@localhost true 2>/dev/null; then
+            echo "VM ready after ${elapsed}s"
+            exit 0
+          fi
+          sleep 2; elapsed=$((elapsed + 2))
+        done
+        echo "VM failed to boot in time"
+        exit 1
+
+    - name: Verify ROCm directory present
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@localhost "ls /opt/rocm/"
+        echo "✓ /opt/rocm present"
+
+    - name: Verify amdrocm-runtime-dev installed
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@localhost \
+          "dpkg-query -W -f='\${Status}' amdrocm-runtime-dev" \
+          | grep -q "install ok installed"
+        echo "✓ amdrocm-runtime-dev installed"
+
+    - name: Print run-vm log on failure
+      if: failure()
+      run: cat run-vm-output.log
+
+  # ---------------------------------------------------------------------------
+  # vm-ernic: install ernic driver, boot with ernic compose, configure NIC
+  # ---------------------------------------------------------------------------
+  test-vm-ernic:
+    name: test-vm-ernic
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4.3.1
+
+    - name: Enable KVM
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | \
+          sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
+
+    - name: Install packages
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq \
+          qemu-utils cloud-image-utils \
+          ansible openssh-client python3-pip
+
+    - name: Install jmespath for Ansible json_query filter
+      run: |
+        py=$(sed -n '1s/^#! *//p' "$(command -v ansible-playbook)" | awk '{print $1}')
+        "${py}" -m pip install --break-system-packages jmespath
+
+    - name: Cache pip
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: pip-qemu-tool-${{ hashFiles('qemu/pyproject.toml') }}
+
+    - name: Install qemu-tool
+      run: pip install --break-system-packages -e ./qemu
+
+    - name: Generate SSH key-pair
+      run: mkdir -p "$HOME/.ssh" && ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
+
+    - name: Prepare GnuPG directory for git_setup
+      run: mkdir -p "$HOME/.gnupg"
+
+    - name: Cache Ansible collections
+      uses: actions/cache@v4
+      with:
+        path: ~/.ansible/collections
+        key: ansible-collections-${{ hashFiles('ansible/requirements.yml') }}
+
+    - name: Install Ansible collections
+      run: ansible-galaxy collection install --pre -r ansible/requirements.yml
+
+    - name: Cache cloud image
+      uses: actions/cache@v4
+      with:
+        path: ${{ env.VM_IMAGES_DIR }}/*-server-cloudimg-*.img
+        key: cloud-img-amd64-resolute-ansible-ernic
+
+    - name: Ensure images directory exists
+      run: sudo mkdir -p "$VM_IMAGES_DIR" && sudo chmod 777 "$VM_IMAGES_DIR"
+
+    - name: Pull CI images
+      run: |
+        docker pull "$ERNIC_IMAGE"
+        docker pull "$QEMU_IMAGE"
+
+    - name: Generate VM with vm-ernic playbook (install stage)
+      run: |
+        qemu-tool gen-vm \
+          --vm-name ernic-test \
+          --release resolute \
+          --username ubuntu \
+          --password password \
+          --packages none \
+          --size 16 \
+          --ansible-playbook ansible/playbooks/vm-ernic.yml
+
+    - name: Bring up ernic compose stack
+      working-directory: qemu/compose/vfio-user-ernic-vm
+      env:
+        VM_NAME: ernic-test
+        QEMU_TOOL_SRC: ${{ github.workspace }}
+      run: |
+        docker compose up --detach
+        echo "Compose stack started"
+
+    - name: Wait for ernic server healthy
+      working-directory: qemu/compose/vfio-user-ernic-vm
+      run: |
+        for i in $(seq 1 30); do
+          health=$(docker compose ps --format json ernic \
+            | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('Health',''))" \
+            2>/dev/null || true)
+          [ "$health" = "healthy" ] && break
+          sleep 2
+        done
+        [ "$health" = "healthy" ] || (docker compose logs ernic && exit 1)
+        echo "ernic server healthy"
+
+    - name: Wait for VM SSH (180s timeout)
+      run: |
+        elapsed=0
+        while [ $elapsed -lt 180 ]; do
+          if ssh -o ConnectTimeout=1 \
+                 -o NoHostAuthenticationForLocalhost=yes \
+                 -o StrictHostKeyChecking=no \
+                 -p 2222 ubuntu@localhost true 2>/dev/null; then
+            echo "VM ready after ${elapsed}s"
+            exit 0
+          fi
+          sleep 2; elapsed=$((elapsed + 2))
+        done
+        echo "VM failed to boot in time"
+        exit 1
+
+    - name: Verify ernic DKMS module built
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@localhost "dkms status" | grep -q amdgpu
+        echo "✓ amdgpu DKMS module present"
+
+    - name: Run vm-ernic configure stage
+      run: |
+        ansible-playbook \
+          -i "localhost," \
+          ansible/playbooks/vm-ernic.yml \
+          --tags configure \
+          -e "ansible_host=localhost" \
+          -e "ansible_port=2222" \
+          -e "ansible_user=ubuntu" \
+          -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"'
+
+    - name: Verify rocm_ernic kernel module loaded
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@localhost "lsmod | grep -q rocm_ernic"
+        echo "✓ rocm_ernic module loaded"
+
+    - name: Verify ernic network interface visible
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@localhost "ip link show | grep -q rocm-ernic0"
+        echo "✓ rocm-ernic0 interface present"
+
+    - name: Show compose logs on failure
+      if: failure()
+      working-directory: qemu/compose/vfio-user-ernic-vm
+      run: docker compose logs
+
+  # ---------------------------------------------------------------------------
+  # vm-rocjitsu: install firmware + driver, boot with rocjitsu compose,
+  # load amdgpu via amdgpu-probe
+  # ---------------------------------------------------------------------------
+  test-vm-rocjitsu:
+    name: test-vm-rocjitsu
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4.3.1
+
+    - name: Enable KVM
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | \
+          sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
+
+    - name: Install packages
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq \
+          qemu-utils cloud-image-utils \
+          ansible openssh-client python3-pip
+
+    - name: Install jmespath for Ansible json_query filter
+      run: |
+        py=$(sed -n '1s/^#! *//p' "$(command -v ansible-playbook)" | awk '{print $1}')
+        "${py}" -m pip install --break-system-packages jmespath
+
+    - name: Cache pip
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: pip-qemu-tool-${{ hashFiles('qemu/pyproject.toml') }}
+
+    - name: Install qemu-tool
+      run: pip install --break-system-packages -e ./qemu
+
+    - name: Generate SSH key-pair
+      run: mkdir -p "$HOME/.ssh" && ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
+
+    - name: Prepare GnuPG directory for git_setup
+      run: mkdir -p "$HOME/.gnupg"
+
+    - name: Cache Ansible collections
+      uses: actions/cache@v4
+      with:
+        path: ~/.ansible/collections
+        key: ansible-collections-${{ hashFiles('ansible/requirements.yml') }}
+
+    - name: Install Ansible collections
+      run: ansible-galaxy collection install --pre -r ansible/requirements.yml
+
+    - name: Cache cloud image
+      uses: actions/cache@v4
+      with:
+        path: ${{ env.VM_IMAGES_DIR }}/*-server-cloudimg-*.img
+        key: cloud-img-amd64-resolute-ansible-rocjitsu
+
+    - name: Ensure images directory exists
+      run: sudo mkdir -p "$VM_IMAGES_DIR" && sudo chmod 777 "$VM_IMAGES_DIR"
+
+    - name: Pull CI images
+      run: |
+        docker pull "$ROCJITSU_IMAGE"
+        docker pull "$QEMU_IMAGE"
+
+    - name: Generate VM with vm-rocjitsu playbook
+      run: |
+        qemu-tool gen-vm \
+          --vm-name rocjitsu-test \
+          --release resolute \
+          --username ubuntu \
+          --password password \
+          --packages none \
+          --size 16 \
+          --ansible-playbook ansible/playbooks/vm-rocjitsu.yml
+
+    - name: Bring up rocjitsu compose stack
+      working-directory: qemu/compose/vfio-user-rocjitsu-vm
+      env:
+        VM_NAME: rocjitsu-test
+        QEMU_TOOL_SRC: ${{ github.workspace }}
+      run: |
+        docker compose up --detach
+        echo "Compose stack started"
+
+    - name: Wait for rocjitsu server healthy
+      working-directory: qemu/compose/vfio-user-rocjitsu-vm
+      run: |
+        for i in $(seq 1 30); do
+          health=$(docker compose ps --format json rocjitsu \
+            | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('Health',''))" \
+            2>/dev/null || true)
+          [ "$health" = "healthy" ] && break
+          sleep 2
+        done
+        [ "$health" = "healthy" ] || (docker compose logs rocjitsu && exit 1)
+        echo "rocjitsu server healthy"
+
+    - name: Wait for VM SSH (180s timeout)
+      run: |
+        elapsed=0
+        while [ $elapsed -lt 180 ]; do
+          if ssh -o ConnectTimeout=1 \
+                 -o NoHostAuthenticationForLocalhost=yes \
+                 -o StrictHostKeyChecking=no \
+                 -p 2222 ubuntu@localhost true 2>/dev/null; then
+            echo "VM ready after ${elapsed}s"
+            exit 0
+          fi
+          sleep 2; elapsed=$((elapsed + 2))
+        done
+        echo "VM failed to boot in time"
+        exit 1
+
+    - name: Verify firmware stubs present
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@localhost \
+          "test -f /lib/firmware/amdgpu/gc_12_1_0_rlc_1.bin"
+        echo "✓ gfx1250 firmware stubs present"
+
+    - name: Verify amdgpu-probe installed
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@localhost \
+          "test -x /usr/local/bin/amdgpu-probe"
+        echo "✓ amdgpu-probe installed"
+
+    - name: Verify amdgpu DKMS module built and installed
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@localhost \
+          "dkms status amdgpu | grep -q installed"
+        echo "✓ amdgpu DKMS module installed"
+
+    - name: Load amdgpu via amdgpu-probe
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@localhost \
+          "sudo /usr/local/bin/amdgpu-probe"
+        echo "✓ amdgpu-probe completed"
+
+    - name: Verify amdgpu module loaded and KFD device present
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@localhost \
+          "lsmod | grep -q amdgpu"
+        echo "✓ amdgpu module loaded"
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@localhost \
+          "ls /dev/kfd"
+        echo "✓ /dev/kfd present"
+
+    - name: Show compose logs on failure
+      if: failure()
+      working-directory: qemu/compose/vfio-user-rocjitsu-vm
+      run: docker compose logs
+
+  # ---------------------------------------------------------------------------
+  # vm-ernic-rocjitsu: combined image, boot with full single-VM compose,
+  # verify ernic NIC + GPU
+  # ---------------------------------------------------------------------------
+  test-vm-ernic-rocjitsu:
+    name: test-vm-ernic-rocjitsu
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4.3.1
+
+    - name: Enable KVM
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | \
+          sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
+
+    - name: Install packages
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq \
+          qemu-utils cloud-image-utils \
+          ansible openssh-client python3-pip
+
+    - name: Install jmespath for Ansible json_query filter
+      run: |
+        py=$(sed -n '1s/^#! *//p' "$(command -v ansible-playbook)" | awk '{print $1}')
+        "${py}" -m pip install --break-system-packages jmespath
+
+    - name: Cache pip
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: pip-qemu-tool-${{ hashFiles('qemu/pyproject.toml') }}
+
+    - name: Install qemu-tool
+      run: pip install --break-system-packages -e ./qemu
+
+    - name: Generate SSH key-pair
+      run: mkdir -p "$HOME/.ssh" && ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
+
+    - name: Prepare GnuPG directory for git_setup
+      run: mkdir -p "$HOME/.gnupg"
+
+    - name: Cache Ansible collections
+      uses: actions/cache@v4
+      with:
+        path: ~/.ansible/collections
+        key: ansible-collections-${{ hashFiles('ansible/requirements.yml') }}
+
+    - name: Install Ansible collections
+      run: ansible-galaxy collection install --pre -r ansible/requirements.yml
+
+    - name: Cache cloud image
+      uses: actions/cache@v4
+      with:
+        path: ${{ env.VM_IMAGES_DIR }}/*-server-cloudimg-*.img
+        key: cloud-img-amd64-resolute-ansible-ernic-rocjitsu
+
+    - name: Ensure images directory exists
+      run: sudo mkdir -p "$VM_IMAGES_DIR" && sudo chmod 777 "$VM_IMAGES_DIR"
+
+    - name: Pull CI images
+      run: |
+        docker pull "$ERNIC_IMAGE"
+        docker pull "$ROCJITSU_IMAGE"
+        docker pull "$QEMU_IMAGE"
+
+    - name: Generate VM with vm-ernic-rocjitsu playbook
+      run: |
+        qemu-tool gen-vm \
+          --vm-name ernic-rocjitsu-test \
+          --release resolute \
+          --username ubuntu \
+          --password password \
+          --packages none \
+          --size 16 \
+          --ansible-playbook ansible/playbooks/vm-ernic-rocjitsu.yml
+
+    - name: Bring up ernic-rocjitsu compose stack
+      working-directory: qemu/compose/vfio-user-ernic-rocjitsu-vm
+      env:
+        VM_NAME: ernic-rocjitsu-test
+        QEMU_TOOL_SRC: ${{ github.workspace }}
+      run: |
+        docker compose up --detach
+        echo "Compose stack started"
+
+    - name: Wait for ernic and rocjitsu servers healthy
+      working-directory: qemu/compose/vfio-user-ernic-rocjitsu-vm
+      run: |
+        for i in $(seq 1 30); do
+          ernic_ok=$(docker compose ps --format json ernic \
+            | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('Health',''))" \
+            2>/dev/null || true)
+          rocjitsu_ok=$(docker compose ps --format json rocjitsu \
+            | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('Health',''))" \
+            2>/dev/null || true)
+          [ "$ernic_ok" = "healthy" ] && [ "$rocjitsu_ok" = "healthy" ] && break
+          sleep 2
+        done
+        [ "$ernic_ok" = "healthy" ]    || (docker compose logs ernic    && exit 1)
+        [ "$rocjitsu_ok" = "healthy" ] || (docker compose logs rocjitsu && exit 1)
+        echo "ernic and rocjitsu servers healthy"
+
+    - name: Wait for VM SSH (180s timeout)
+      run: |
+        elapsed=0
+        while [ $elapsed -lt 180 ]; do
+          if ssh -o ConnectTimeout=1 \
+                 -o NoHostAuthenticationForLocalhost=yes \
+                 -o StrictHostKeyChecking=no \
+                 -p 2222 ubuntu@localhost true 2>/dev/null; then
+            echo "VM ready after ${elapsed}s"
+            exit 0
+          fi
+          sleep 2; elapsed=$((elapsed + 2))
+        done
+        echo "VM failed to boot in time"
+        exit 1
+
+    - name: Verify amdgpu DKMS module installed
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@localhost \
+          "dkms status amdgpu | grep -q installed"
+        echo "✓ amdgpu DKMS module installed"
+
+    - name: Verify firmware stubs and amdgpu-probe present
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@localhost \
+          "test -f /lib/firmware/amdgpu/gc_12_1_0_rlc_1.bin && test -x /usr/local/bin/amdgpu-probe"
+        echo "✓ firmware stubs and amdgpu-probe present"
+
+    - name: Run vm-ernic configure stage
+      run: |
+        ansible-playbook \
+          -i "localhost," \
+          ansible/playbooks/vm-ernic.yml \
+          --tags configure \
+          -e "ansible_host=localhost" \
+          -e "ansible_port=2222" \
+          -e "ansible_user=ubuntu" \
+          -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"'
+
+    - name: Verify rocm_ernic module loaded and NIC visible
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@localhost \
+          "lsmod | grep -q rocm_ernic"
+        echo "✓ rocm_ernic module loaded"
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@localhost \
+          "ip link show | grep -q rocm-ernic0"
+        echo "✓ rocm-ernic0 interface present"
+
+    - name: Load amdgpu via amdgpu-probe
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@localhost \
+          "sudo /usr/local/bin/amdgpu-probe"
+        echo "✓ amdgpu-probe completed"
+
+    - name: Verify amdgpu module loaded and KFD device present
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@localhost \
+          "lsmod | grep -q amdgpu"
+        echo "✓ amdgpu module loaded"
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@localhost \
+          "ls /dev/kfd"
+        echo "✓ /dev/kfd present"
+
+    - name: Show compose logs on failure
+      if: failure()
+      working-directory: qemu/compose/vfio-user-ernic-rocjitsu-vm
+      run: docker compose logs

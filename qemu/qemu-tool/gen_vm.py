@@ -20,6 +20,14 @@ from pathlib import Path
 
 from .caps import qemu_binary
 from .config import VMConfig
+from .run_vm import (
+    _ensure_mgmt_bridge,
+    _mgmt_bridge_name,
+    _mgmt_mac,
+    _mgmt_tap_name,
+    _netdev_args,
+    _teardown_mgmt_bridge,
+)
 
 # Supported Ubuntu release codenames. Other codenames or XX.YY version
 # strings are also accepted by _resolve_cloud_image() but are untested.
@@ -48,8 +56,8 @@ def run(cfg: VMConfig) -> None:
         return
 
     if cfg.ansible_only:
-        if cfg.ansible_profile is None:
-            sys.exit("Error: --ansible-only requires --ansible-profile")
+        if cfg.ansible_playbook is None:
+            sys.exit("Error: --ansible-only requires --ansible-playbook")
         backing = images / f"{cfg.vm_name}-backing.qcow2"
         if not backing.exists():
             sys.exit(f"Error: --ansible-only requires an existing backing image at {backing}")
@@ -319,10 +327,6 @@ ethernets:
     match:
       name: en*
     dhcp4: true
-    # default libvirt network
-    gateway4: 192.168.122.1
-    nameservers:
-      addresses: [ 192.168.122.1,8.8.8.8 ]
 """)
 
 
@@ -356,7 +360,8 @@ def _first_boot(cfg: VMConfig, images: Path, backing: Path) -> None:
         "-drive", f"if=virtio,format=qcow2,file={backing}",
         "-drive", f"if=virtio,format=qcow2,file={seed}",
         "-netdev", "user,id=net0",
-        "-device", "virtio-net-pci,netdev=net0",
+        "-device", "virtio-net-pci,netdev=net0"
+        + (f",mac={_mgmt_mac(cfg.ssh_port)}" if cfg.mgmt_tap else ""),
     ]
     subprocess.run(cmd, check=True)
 
@@ -382,58 +387,49 @@ def _arch_args_for_gen(cfg: VMConfig, kvm: str) -> list[str]:
 # Ansible
 # ---------------------------------------------------------------------------
 
-def _parse_ansible_profile(profile: Path) -> dict[str, str]:
-    """Extract KEY=value or KEY=${KEY:-default} assignments from a shell profile."""
-    result: dict[str, str] = {}
-    for line in profile.read_text().splitlines():
-        line = line.strip()
-        m = re.match(r'^([A-Z_]+)=\$\{[A-Z_]+:-(.+?)\}$', line)
-        if m:
-            val = m.group(2).strip('"').strip("'")
-            if not val.startswith("$"):
-                result[m.group(1)] = val
-            continue
-        m = re.match(r'^([A-Z_]+)=(.+)$', line)
-        if m:
-            val = m.group(2).strip('"').strip("'")
-            if not val.startswith("$"):
-                result[m.group(1)] = val
-    return result
-
-
 def _prepare_ansible(cfg: VMConfig) -> None:
-    if cfg.ansible_profile is None:
+    if cfg.ansible_playbook is None:
         return
-    profile = Path(cfg.ansible_profile)
-    if not profile.exists():
-        sys.exit(f"Error: ANSIBLE_PROFILE {profile} does not exist!")
+    playbook = Path(cfg.ansible_playbook)
+    if not playbook.exists():
+        sys.exit(f"Error: ansible playbook {playbook} does not exist!")
     for tool in ("ansible-playbook", "ansible-galaxy"):
         if not _which(tool):
-            sys.exit(f"Error: {tool} not found (required for --ansible-profile)!")
+            sys.exit(f"Error: {tool} not found (required for --ansible-playbook)!")
+
+
+def _discover_vm_ip(bridge: str, mac: str, timeout: int = 120) -> str:
+    print(f"Waiting for VM (MAC {mac}) to appear on {bridge}...")
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        out = subprocess.run(
+            ["ip", "neigh", "show", "dev", bridge],
+            capture_output=True, text=True,
+        ).stdout
+        for line in out.splitlines():
+            if mac.lower() in line.lower():
+                ip = line.split()[0]
+                print(f"VM IP discovered: {ip}")
+                return ip
+        time.sleep(2)
+    sys.exit(f"Error: VM with MAC {mac} did not appear on {bridge} within {timeout}s.")
 
 
 def _run_ansible(cfg: VMConfig, images: Path, backing: Path) -> None:
-    if cfg.ansible_profile is None:
+    if cfg.ansible_playbook is None:
         return
 
-    profile = Path(cfg.ansible_profile)
-    env = _parse_ansible_profile(profile)
-
-    script_dir = Path(__file__).parent.parent  # qemu/
-    ansible_dir = Path(env.get("ANSIBLE_DIR", "../ansible"))
-    if not ansible_dir.is_absolute():
-        ansible_dir = (script_dir / ansible_dir).resolve()
-
-    playbook = env.get("ANSIBLE_PLAYBOOK", "playbooks/vm-setup.yml")
-    inventory = env.get("ANSIBLE_INVENTORY", "inventory/qemu-minimal-vms.yml")
-    tags = env.get("ANSIBLE_TAGS", "")
-    extra_args = env.get("ANSIBLE_EXTRA_ARGS") or os.environ.get("ANSIBLE_EXTRA_ARGS", "")
-    ansible_username = env.get("ANSIBLE_USERNAME", cfg.username)
-    timeout = int(env.get("ANSIBLE_TIMEOUT", "600"))
+    playbook = Path(cfg.ansible_playbook).resolve()
+    # Derive ansible_dir as the grandparent of the playbook
+    # (ansible/playbooks/foo.yml → ansible/)
+    ansible_dir = playbook.parent.parent
+    inventory = ansible_dir / "inventory/qemu-minimal-vms.yml"
+    extra_args = os.environ.get("ANSIBLE_EXTRA_ARGS", "")
+    timeout = 600
 
     for p, label in (
-        (ansible_dir / playbook, "playbook"),
-        (ansible_dir / inventory, "inventory"),
+        (playbook, "playbook"),
+        (inventory, "inventory"),
         (ansible_dir / "requirements.yml", "requirements"),
     ):
         if not p.exists():
@@ -441,6 +437,9 @@ def _run_ansible(cfg: VMConfig, images: Path, backing: Path) -> None:
 
     _ensure_jmespath()
     _ensure_ansible_collection(ansible_dir)
+
+    if cfg.mgmt_tap:
+        _ensure_mgmt_bridge(cfg.ssh_port)
 
     print(f"Booting {backing} for Ansible setup...")
     kvm = ",accel=kvm" if cfg.kvm else ""
@@ -452,12 +451,22 @@ def _run_ansible(cfg: VMConfig, images: Path, backing: Path) -> None:
         "-m", str(cfg.vmem),
         "-nographic",
         "-drive", f"if=virtio,format=qcow2,file={backing}",
-        "-netdev", f"user,id=net0,hostfwd=tcp::{cfg.ssh_port}-:22",
-        "-device", "virtio-net-pci,netdev=net0",
+        *_netdev_args(cfg),
     ])
 
     try:
-        if not _wait_for_ssh(cfg, timeout):
+        vm_host = "localhost"
+        vm_port = cfg.ssh_port
+        if cfg.mgmt_tap:
+            vm_ip = _discover_vm_ip(
+                _mgmt_bridge_name(cfg.ssh_port),
+                _mgmt_mac(cfg.ssh_port),
+                timeout,
+            )
+            vm_host = vm_ip
+            vm_port = 22
+
+        if not _wait_for_ssh(cfg, timeout, host=vm_host, port=vm_port):
             qemu_proc.kill()
             qemu_proc.wait()
             sys.exit("Error: VM did not accept SSH in time.")
@@ -466,22 +475,22 @@ def _run_ansible(cfg: VMConfig, images: Path, backing: Path) -> None:
         _restore_blocking_stdio()
         _ensure_jmespath()
 
-        ap_cmd = ["ansible-playbook", "-i", inventory, playbook,
-                  "-e", f"ansible_port={cfg.ssh_port}",
+        ap_cmd = ["ansible-playbook", "-i", str(inventory), str(playbook),
+                  "-e", f"ansible_host={vm_host}",
+                  "-e", f"ansible_port={vm_port}",
                   "-e", f"ansible_user={cfg.username}",
-                  "-e", f"username={ansible_username}",
-                  "-e", f"vm_username={ansible_username}",
+                  "-e", f"username={cfg.username}",
+                  "-e", f"vm_username={cfg.username}",
                   "-e", f"vm_root_user={cfg.username}"]
-        if tags:
-            ap_cmd += ["--tags", tags]
         if extra_args:
             ap_cmd += extra_args.split()
 
-        r = subprocess.run(
-            ap_cmd,
-            cwd=str(ansible_dir),
-            env={**os.environ, "ANSIBLE_CONFIG": str(ansible_dir / "ansible.cfg")},
-        )
+        ansible_env = {
+            k: v for k, v in os.environ.items()
+            if k.upper() not in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")
+        }
+        ansible_env["ANSIBLE_CONFIG"] = str(ansible_dir / "ansible.cfg")
+        r = subprocess.run(ap_cmd, cwd=str(ansible_dir), env=ansible_env)
         if r.returncode != 0:
             qemu_proc.kill()
             qemu_proc.wait()
@@ -491,20 +500,27 @@ def _run_ansible(cfg: VMConfig, images: Path, backing: Path) -> None:
         subprocess.run(
             ["ssh", "-o", "StrictHostKeyChecking=no",
              "-o", "UserKnownHostsFile=/dev/null",
-             "-p", str(cfg.ssh_port),
-             f"{cfg.username}@localhost", "sudo poweroff"],
+             "-p", str(vm_port),
+             f"{cfg.username}@{vm_host}", "sudo poweroff"],
             capture_output=True,
         )
         qemu_proc.wait()
+        if cfg.mgmt_tap:
+            _teardown_mgmt_bridge(cfg.ssh_port)
         print("Ansible post-setup complete.")
     except Exception:
         qemu_proc.kill()
         qemu_proc.wait()
+        if cfg.mgmt_tap:
+            _teardown_mgmt_bridge(cfg.ssh_port)
         raise
 
 
-def _wait_for_ssh(cfg: VMConfig, timeout: int) -> bool:
-    print(f"Waiting for VM to accept SSH on port {cfg.ssh_port}...")
+def _wait_for_ssh(
+    cfg: VMConfig, timeout: int, host: str = "localhost", port: int | None = None
+) -> bool:
+    p = port if port is not None else cfg.ssh_port
+    print(f"Waiting for VM to accept SSH at {host}:{p}...")
     elapsed = 0
     while elapsed < timeout:
         try:
@@ -514,8 +530,8 @@ def _wait_for_ssh(cfg: VMConfig, timeout: int) -> bool:
                  "-o", "ConnectTimeout=1",
                  "-o", "StrictHostKeyChecking=no",
                  "-o", "UserKnownHostsFile=/dev/null",
-                 "-p", str(cfg.ssh_port),
-                 f"{cfg.username}@localhost", "true"],
+                 "-p", str(p),
+                 f"{cfg.username}@{host}", "true"],
                 capture_output=True,
                 timeout=5,
             )

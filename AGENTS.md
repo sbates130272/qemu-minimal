@@ -8,10 +8,12 @@ file up to date as infrastructure changes.
 ## Repository layout
 
 - `qemu/` — qemu-tool Python package (installed as a Debian package or via pipx)
-- `qemu/compose/vfio-user-vm/` — single-VM vfio-user compose stack
-- `qemu/compose/vfio-user-2vm/` — two-VM rocm-ernic mesh stack (primary dev target)
+- `qemu/compose/vfio-user-ernic-vm/` — single-VM ernic-only compose stack
+- `qemu/compose/vfio-user-rocjitsu-vm/` — single-VM rocjitsu-only compose stack
+- `qemu/compose/vfio-user-ernic-rocjitsu-vm/` — single-VM ernic + rocjitsu compose stack
+- `qemu/compose/vfio-user-ernic-2vm/` — two-VM ernic mesh stack; rocjitsu GPUs opt-in via `--profile rocjitsu-vm1/vm2`
 - `images/` — qcow2 VM disk images (backing + overlay pairs, **not** `/var/lib/qemu-tool/images`)
-- `ansible/` — Ansible playbooks and profiles for VM provisioning
+- `ansible/` — Ansible playbooks for VM provisioning
 - `rocm-ernic-enablement.md` — running log of rocm-ernic integration status and bugs
 
 ## VM images
@@ -19,7 +21,7 @@ file up to date as infrastructure changes.
 All qcow2 images live at **`<repo-root>/images/`** (i.e.
 `/home/stebates/Projects/qemu-minimal/images/`), not at the default
 `/var/lib/qemu-tool/images`. Set `VM_IMAGES_DIR` accordingly in
-`qemu/compose/vfio-user-2vm/.env`.
+`qemu/compose/vfio-user-ernic-2vm/.env`.
 
 Active images for the 2-VM ernic stack:
 
@@ -50,10 +52,11 @@ are not available inside the VM.
 ## Two-VM compose stack
 
 ```bash
-cd qemu/compose/vfio-user-2vm
+cd qemu/compose/vfio-user-ernic-2vm
 cp env.example .env
 # Edit .env: set VM_IMAGES_DIR to the repo images/ absolute path
-docker compose up -d
+# Add --profile rocjitsu-vm1 --profile rocjitsu-vm2 to enable GPUs
+docker compose --profile rocjitsu-vm1 --profile rocjitsu-vm2 up -d
 ```
 
 Key `.env` values that differ from the example defaults:

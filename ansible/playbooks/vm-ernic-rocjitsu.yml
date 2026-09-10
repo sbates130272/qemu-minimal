@@ -1,0 +1,5 @@
+---
+# Bake both ernic and rocjitsu prerequisites into a base VM image.
+# Runs vm-ernic then vm-rocjitsu sequentially on the same host; both are idempotent.
+- import_playbook: vm-ernic.yml
+- import_playbook: vm-rocjitsu.yml

@@ -92,15 +92,15 @@ jobs:
         docker pull "$QEMU_IMAGE"
 
     - name: Bring up full 2vm compose stack
-      working-directory: qemu/compose/vfio-user-2vm
+      working-directory: qemu/compose/vfio-user-ernic-2vm
       env:
         QEMU_TOOL_SRC: ${{ github.workspace }}
       run: |
-        docker compose up --detach
+        docker compose --profile rocjitsu-vm1 --profile rocjitsu-vm2 up --detach
         echo "Compose stack started"
 
     - name: Wait for GPU/NIC servers to be healthy
-      working-directory: qemu/compose/vfio-user-2vm
+      working-directory: qemu/compose/vfio-user-ernic-2vm
       run: |
         for i in $(seq 1 30); do
           hub_ok=$(docker compose ps --format json ernic-hub \
@@ -156,8 +156,8 @@ jobs:
 
     - name: Show compose logs on failure
       if: failure()
-      working-directory: qemu/compose/vfio-user-2vm
-      run: docker compose logs
+      working-directory: qemu/compose/vfio-user-ernic-2vm
+      run: docker compose --profile rocjitsu-vm1 --profile rocjitsu-vm2 logs
 
     - name: Setup Pages
       uses: actions/configure-pages@v5

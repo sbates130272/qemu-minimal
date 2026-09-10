@@ -1,13 +1,18 @@
 ---
-# 2-VM vfio-user mesh stack
+# 2-VM ernic mesh stack with optional rocjitsu GPUs
 #
-# Spins up two VMs connected via a rocm-ernic TCP manager/worker mesh,
-# each with its own rocjitsu GPU. The ernic-hub relays L2 Ethernet
-# frames between VMs and handles RDMA peer-to-peer operations.
+# Always starts: ernic-hub (VM 1 NIC) + ernic-worker (VM 2 NIC) + qemu-1 + qemu-2.
+# rocjitsu GPUs are opt-in per VM via Compose profiles:
+#   --profile rocjitsu-vm1   add GPU to VM 1
+#   --profile rocjitsu-vm2   add GPU to VM 2
 #
 # Usage:
 #   cp env.example .env && $EDITOR .env
-#   qemu-tool compose --stack vfio-user-2vm --vm-name vm1-name up
+#   # ernic-only:
+#   qemu-tool compose --stack vfio-user-ernic-2vm --vm-name vm1-name up
+#   # both VMs with GPUs:
+#   qemu-tool compose --stack vfio-user-ernic-2vm --vm-name vm1-name \
+#     --profile rocjitsu-vm1 --profile rocjitsu-vm2 up
 #   ssh -p ${VM1_SSH_PORT:-2222} ubuntu@localhost   # VM 1
 #   ssh -p ${VM2_SSH_PORT:-2223} ubuntu@localhost   # VM 2
 
@@ -75,9 +80,10 @@ services:
       retries: 30
       start_period: 5s
 
-  # ---- rocjitsu GPU for VM 1 ----
+  # ---- rocjitsu GPU for VM 1 (opt-in: --profile rocjitsu-vm1) ----
   rocjitsu-1:
     <<: *gpu-common
+    profiles: [rocjitsu-vm1]
     image: "${ROCJITSU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:latest}"
     command:
       - rocjitsu
@@ -94,9 +100,10 @@ services:
       retries: 30
       start_period: 5s
 
-  # ---- rocjitsu GPU for VM 2 ----
+  # ---- rocjitsu GPU for VM 2 (opt-in: --profile rocjitsu-vm2) ----
   rocjitsu-2:
     <<: *gpu-common
+    profiles: [rocjitsu-vm2]
     image: "${ROCJITSU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:latest}"
     command:
       - rocjitsu
@@ -113,7 +120,7 @@ services:
       retries: 30
       start_period: 5s
 
-  # ---- VM 1: connected to ernic-hub + rocjitsu-1 ----
+  # ---- VM 1: always connected to ernic-hub; GPU added when rocjitsu-vm1 profile active ----
   qemu-1:
     <<: *qemu-common
     depends_on:
@@ -121,25 +128,25 @@ services:
         condition: service_healthy
       rocjitsu-1:
         condition: service_healthy
+        required: false
     ports:
       - "${VM1_SSH_PORT:-2222}:2222"
     entrypoint:
       - /bin/sh
       - -c
       - |
-        if ! command -v qemu-tool > /dev/null 2>&1; then
-          cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
-          PIPX_BIN_DIR=/usr/local/bin pipx install --pip-args="--no-build-isolation" /tmp/qemu-tool-build
-        fi
+        cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
+        PIPX_BIN_DIR=/usr/local/bin pipx install --force /tmp/qemu-tool-build
+        socks=$(ls /run/vfu/ernic-1.sock /run/vfu/rocjitsu-1.sock 2>/dev/null | tr '\n' ',' | sed 's/,$//')
         exec qemu-tool run-vm \
           --images "${VM_IMAGES_DIR:-/var/lib/qemu-tool/images}" \
           --vm-name "${VM1_NAME:-qemu-minimal}" \
           --vcpus "${VM_VCPUS:-4}" \
           --vmem "${VM_VMEM:-8192}" \
           --ssh-port 2222 \
-          --vfio-userdev /run/vfu/ernic-1.sock,/run/vfu/rocjitsu-1.sock
+          --vfio-userdev "$$socks"
 
-  # ---- VM 2: connected to ernic-worker + rocjitsu-2 ----
+  # ---- VM 2: always connected to ernic-worker; GPU added when rocjitsu-vm2 profile active ----
   qemu-2:
     <<: *qemu-common
     depends_on:
@@ -147,23 +154,23 @@ services:
         condition: service_healthy
       rocjitsu-2:
         condition: service_healthy
+        required: false
     ports:
       - "${VM2_SSH_PORT:-2223}:2222"
     entrypoint:
       - /bin/sh
       - -c
       - |
-        if ! command -v qemu-tool > /dev/null 2>&1; then
-          cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
-          PIPX_BIN_DIR=/usr/local/bin pipx install --pip-args="--no-build-isolation" /tmp/qemu-tool-build
-        fi
+        cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
+        PIPX_BIN_DIR=/usr/local/bin pipx install --force /tmp/qemu-tool-build
+        socks=$(ls /run/vfu/ernic-2.sock /run/vfu/rocjitsu-2.sock 2>/dev/null | tr '\n' ',' | sed 's/,$//')
         exec qemu-tool run-vm \
           --images "${VM_IMAGES_DIR:-/var/lib/qemu-tool/images}" \
           --vm-name "${VM2_NAME:-qemu-minimal-2}" \
           --vcpus "${VM_VCPUS:-4}" \
           --vmem "${VM_VMEM:-8192}" \
           --ssh-port 2222 \
-          --vfio-userdev /run/vfu/ernic-2.sock,/run/vfu/rocjitsu-2.sock
+          --vfio-userdev "$$socks"
 
 volumes:
   vfu-sockets:

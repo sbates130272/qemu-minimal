@@ -118,7 +118,7 @@ qemu-minimal/
     virt-install-ubuntu  Create VMs via libvirt
     create-nvme          Generate NVMe XML for libvirt
   ansible/
-    playbooks/vm-setup.yml  Post cloud-init Ansible playbook
+    playbooks/vm-basic.yml  Post cloud-init Ansible playbook
     requirements.yml        Galaxy collection requirements
   udev/
     99-qemu-minimal-vfio.rules  VFIO device permissions
@@ -146,9 +146,17 @@ prints this path if permissions are still wrong.
 ## Docker Compose: vfio-user GPU VM
 
 For testing with emulated AMD GPUs over libvfio-user — specifically
-[rocm-ernic][rocm-ernic] and [rocjitsu][rocjitsu] — a Docker Compose
-stack in [`qemu/compose/vfio-user-vm/`](qemu/compose/vfio-user-vm/)
-starts the GPU server containers and the `qemu-system` VM in one command.
+[rocm-ernic][rocm-ernic] and [rocjitsu][rocjitsu] — Docker Compose
+stacks under `qemu/compose/` start the GPU server containers and the
+`qemu-system` VM in one command. Available stacks:
+
+| Stack | VMs | ernic | rocjitsu |
+|---|---|---|---|
+| `vfio-user-ernic-vm/` | 1 | yes | no |
+| `vfio-user-rocjitsu-vm/` | 1 | no | yes |
+| `vfio-user-ernic-rocjitsu-vm/` | 1 | yes | yes |
+| `vfio-user-ernic-2vm/` | 2 | yes (mesh) | opt-in per VM via `--profile` |
+
 This is the recommended path when you do not have a physical GPU to pass
 through but need a guest that sees PCIe GPU devices.
 
@@ -168,12 +176,8 @@ stack whether running from source or an installed `.deb` package.
 Pass any `docker compose` subcommand after the `qemu-tool` flags
 (`up`, `down`, `ps`, `logs ernic`, etc.).
 
-The stack spins up one rocm-ernic and one rocjitsu vfio-user server by
-default; set `ERNIC_COUNT` and `ROCJITSU_COUNT` in the environment or a
-`.env` file to scale the replica count. See
-[`qemu/compose/vfio-user-vm/README.md`](qemu/compose/vfio-user-vm/README.md)
-for the full variable reference and the socket contract that the GPU
-server images must satisfy.
+Each stack has its own `README.md` and `env.example` with the full
+variable reference and socket contract.
 
 ## Images Directory
 
@@ -231,18 +235,20 @@ The host must have `ansible`, `ansible-galaxy`, and the Python
 (install with `pip install jmespath` inside the venv when needed). When the collection is not already installed, `gen-vm` runs
 `ansible-galaxy collection install -r ansible/requirements.yml`.
 
-### Available profiles
+### Available playbooks
 
-| Profile | Playbook | Description |
-|---------|----------|-------------|
-| `vm-setup` | `vm-setup.yml` | User setup, favourite packages, git config |
-| `vm-rocm-setup` | `vm-rocm-setup.yml` | As above, plus ROCm stack |
-| `vm-ernic-image-prep` | `vm-ernic-image-prep.yml` | As above, plus RDMA userspace and [rocm-ernic][rocm-ernic-galaxy] prerequisites baked in |
+| Playbook | Description |
+|---------|-------------|
+| `vm-basic.yml` | User setup, favourite packages, git config |
+| `vm-rocm.yml` | As above, plus ROCm stack |
+| `vm-ernic.yml` | ROCm + [rocm-ernic][rocm-ernic-galaxy] RDMA NIC prerequisites; `--tags configure` for post-boot NIC setup |
+| `vm-rocjitsu.yml` | ROCm + rocjitsu GPU firmware and driver prerequisites |
+| `vm-ernic-rocjitsu.yml` | Both ernic and rocjitsu prerequisites combined |
 
 ```bash
 qemu-tool gen-vm \
   --vm-name base \
-  --ansible-profile ../ansible/profiles/vm-setup
+  --ansible-playbook ansible/playbooks/vm-basic.yml
 ```
 
 Ansible changes are written into the backing qcow2, so overlays
@@ -284,7 +290,7 @@ flags take precedence over XML values).
 | `--no-backing` | off | Create flat image without a backing file |
 | `--restore-image` | off | Recreate overlay from existing backing file |
 | `--backing-file FILE` | — | Create overlay on top of this existing qcow2 |
-| `--ansible-profile FILE` | — | Path to Ansible profile file for post-setup |
+| `--ansible-playbook FILE` | — | Path to an Ansible playbook to run against the VM image after cloud-init |
 
 ### run-vm flags
 

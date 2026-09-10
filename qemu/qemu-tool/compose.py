@@ -5,8 +5,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-_STACKS = ("vfio-user-vm", "vfio-user-2vm")
-_DEFAULT_STACK = "vfio-user-vm"
+_STACKS = (
+    "vfio-user-ernic-vm",
+    "vfio-user-rocjitsu-vm",
+    "vfio-user-ernic-rocjitsu-vm",
+    "vfio-user-ernic-2vm",
+)
+_DEFAULT_STACK = "vfio-user-ernic-rocjitsu-vm"
 
 # Installed location (Debian package).
 _INSTALLED_COMPOSE_ROOT = Path("/usr/share/qemu-tool/compose")
@@ -34,14 +39,21 @@ def run(
     images_dir: Path | None,
     compose_args: list[str],
     stack: str = _DEFAULT_STACK,
+    vm2_name: str | None = None,
 ) -> None:
     cdir = _compose_dir(stack)
     env = os.environ.copy()
     if vm_name is not None:
         env["VM_NAME"] = vm_name
         env["VM1_NAME"] = vm_name
+    if vm2_name is not None:
+        env["VM2_NAME"] = vm2_name
     if images_dir is not None:
         env["VM_IMAGES_DIR"] = str(images_dir.resolve())
-    cmd = ["docker", "compose", *compose_args]
+    cmd = ["docker", "compose"]
+    caller_env = Path.cwd() / ".env"
+    if caller_env.exists():
+        cmd += ["--env-file", str(caller_env)]
+    cmd += compose_args
     result = subprocess.run(cmd, cwd=cdir, env=env)
     sys.exit(result.returncode)

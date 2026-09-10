@@ -115,6 +115,8 @@ def _add_run_vm(
         help="Extra hostfwd rule e.g. tcp::9150-:9100. May be repeated.",
     )
     p.add_argument("--dry-run", action="store_true", default=_UNSET)
+    p.add_argument("--mgmt-tap", action="store_true", default=_UNSET,
+                   help="Use tap+bridge for management NIC instead of SLIRP.")
     p.add_argument(
         "--convert-to-libvirt", nargs="?", const="-", default=None,
         metavar="FILE",
@@ -129,9 +131,9 @@ def _add_run_vm(
 def _add_compose(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
         "compose",
-        help="Run docker compose for the vfio-user GPU VM stack.",
+        help="Run docker compose for a vfio-user VM stack.",
         description=(
-            "Wrapper around 'docker compose' for the vfio-user-vm stack. "
+            "Wrapper around 'docker compose' for vfio-user VM stacks. "
             "Sets VM_NAME and VM_IMAGES_DIR, then passes remaining arguments "
             "directly to docker compose."
         ),
@@ -139,6 +141,10 @@ def _add_compose(sub: argparse._SubParsersAction) -> None:
     p.add_argument(
         "--vm-name", default=None, metavar="NAME",
         help="VM name (sets VM_NAME/VM1_NAME). Omit to use the value in .env.",
+    )
+    p.add_argument(
+        "--vm2-name", default=None, metavar="NAME",
+        help="Second VM name for 2-VM stacks (sets VM2_NAME). Omit to use the value in .env.",
     )
     p.add_argument(
         "--images", type=Path, default=None, metavar="DIR",
@@ -179,11 +185,14 @@ def _add_gen_vm(
     p.add_argument("--no-backing", action="store_true", default=_UNSET)
     p.add_argument("--restore-image", action="store_true", default=_UNSET)
     p.add_argument("--backing-file", type=Path, default=_UNSET, metavar="FILE")
-    p.add_argument("--ansible-profile", type=Path, default=_UNSET, metavar="FILE")
+    p.add_argument("--ansible-playbook", type=Path, default=_UNSET, metavar="FILE",
+                   help="Path to an Ansible playbook to run against the VM image after cloud-init.")
     p.add_argument("--ca-cert", type=Path, default=_UNSET, metavar="FILE",
                    help="CA certificate to inject into the guest trust store.")
     p.add_argument("--ansible-only", action="store_true", default=_UNSET,
                    help="Skip cloud-init; re-run Ansible against an existing backing image.")
+    p.add_argument("--mgmt-tap", action="store_true", default=_UNSET,
+                   help="Use tap+bridge for management NIC instead of SLIRP.")
     p.set_defaults(func=_gen_vm_cmd)
 
 
@@ -223,7 +232,8 @@ def _run_vm_cmd(args: argparse.Namespace) -> None:
 
 
 def _compose_cmd(args: argparse.Namespace) -> None:
-    compose_run(args.vm_name, args.images, args.compose_args, stack=args.stack)
+    compose_run(args.vm_name, args.images, args.compose_args,
+                stack=args.stack, vm2_name=args.vm2_name)
 
 
 def _gen_vm_cmd(args: argparse.Namespace) -> None:
@@ -284,6 +294,7 @@ def _extract_cli_overrides(
         _take("qmp_socket", "qmp_socket")
         _take("backing_shared", "backing_shared")
         _take("dry_run", "dry_run")
+        _take("mgmt_tap", "mgmt_tap")
 
         if ns.get("no_qemu_guest_agent"):
             overrides["qemu_guest_agent"] = False
@@ -312,9 +323,10 @@ def _extract_cli_overrides(
         _take("no_backing", "no_backing")
         _take("restore_image", "restore_image")
         _take("backing_file", "backing_file")
-        _take("ansible_profile", "ansible_profile")
+        _take("ansible_playbook", "ansible_playbook")
         _take("ca_cert_file", "ca_cert")
         _take("ansible_only", "ansible_only")
+        _take("mgmt_tap", "mgmt_tap")
 
         raw_pkg = ns.get("packages", _UNSET)
         if raw_pkg is not _UNSET:
@@ -332,7 +344,7 @@ def _merge(base: VMConfig, overrides: dict[str, Any]) -> VMConfig:
             # fields that can legitimately be set to None/False
             "filesystem", "nvme", "nvme_trace", "nvme_trace_file",
             "nvme_lbaf_mask", "mcast_group", "qmp_socket", "backing_file",
-            "ansible_profile", "packages",
+            "ansible_playbook", "packages",
             "qemu_guest_agent",
         ):
             d[k] = v
