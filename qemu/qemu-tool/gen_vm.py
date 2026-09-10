@@ -360,8 +360,7 @@ def _first_boot(cfg: VMConfig, images: Path, backing: Path) -> None:
         "-drive", f"if=virtio,format=qcow2,file={backing}",
         "-drive", f"if=virtio,format=qcow2,file={seed}",
         "-netdev", "user,id=net0",
-        "-device", "virtio-net-pci,netdev=net0"
-        + (f",mac={_mgmt_mac(cfg.ssh_port)}" if cfg.mgmt_tap else ""),
+        "-device", f"virtio-net-pci,netdev=net0,mac={_mgmt_mac(cfg.ssh_port)}",
     ]
     subprocess.run(cmd, check=True)
 
@@ -451,7 +450,7 @@ def _run_ansible(cfg: VMConfig, images: Path, backing: Path) -> None:
         "-m", str(cfg.vmem),
         "-nographic",
         "-drive", f"if=virtio,format=qcow2,file={backing}",
-        *_netdev_args(cfg),
+        *_netdev_args(cfg, mac=_mgmt_mac(cfg.ssh_port)),
     ])
 
     try:
