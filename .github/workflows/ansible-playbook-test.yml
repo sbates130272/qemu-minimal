@@ -147,7 +147,9 @@ jobs:
     - name: Install missing packages
       run: |
         apt-get update -qq
-        apt-get install -y -qq ansible python3-pip openssh-client
+        apt-get install -y -qq \
+          qemu-system-x86 qemu-utils cloud-image-utils \
+          ansible openssh-client python3-pip
 
     - name: Install jmespath for Ansible json_query filter
       run: |
@@ -296,7 +298,9 @@ jobs:
     - name: Install missing packages
       run: |
         apt-get update -qq
-        apt-get install -y -qq ansible python3-pip openssh-client
+        apt-get install -y -qq \
+          qemu-system-x86 qemu-utils cloud-image-utils \
+          ansible openssh-client python3-pip
 
     - name: Install jmespath for Ansible json_query filter
       run: |
@@ -453,7 +457,9 @@ jobs:
     - name: Install missing packages
       run: |
         apt-get update -qq
-        apt-get install -y -qq ansible python3-pip openssh-client
+        apt-get install -y -qq \
+          qemu-system-x86 qemu-utils cloud-image-utils \
+          ansible openssh-client python3-pip
 
     - name: Install jmespath for Ansible json_query filter
       run: |
