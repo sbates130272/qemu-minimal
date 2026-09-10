@@ -79,6 +79,8 @@ jobs:
       run: sudo mkdir -p "$VM_IMAGES_DIR" && sudo chmod 777 "$VM_IMAGES_DIR"
 
     - name: Generate VM with vm-rocm playbook
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         qemu-tool gen-vm \
           --vm-name rocm-test \
@@ -191,6 +193,8 @@ jobs:
         docker pull "$QEMU_IMAGE"
 
     - name: Generate VM with vm-ernic playbook (install stage)
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         qemu-tool gen-vm \
           --vm-name ernic-test \
@@ -338,6 +342,8 @@ jobs:
         docker pull "$QEMU_IMAGE"
 
     - name: Generate VM with vm-rocjitsu playbook
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         qemu-tool gen-vm \
           --vm-name rocjitsu-test \
@@ -494,6 +500,8 @@ jobs:
         docker pull "$QEMU_IMAGE"
 
     - name: Generate VM with vm-ernic-rocjitsu playbook
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         qemu-tool gen-vm \
           --vm-name ernic-rocjitsu-test \
