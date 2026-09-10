@@ -8,15 +8,15 @@ env:
   ROCJITSU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:latest
   QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:latest
   VM_IMAGES_DIR: /var/lib/qemu-tool/images
-  ANSIBLE_EXTRA_ARGS: >-
-    -e {"git_setup_enable_gpg_signing":false,
-    "user_setup_dotfiles_enable":false,
-    "user_setup_install_amd_ca":false}
+  # No spaces inside the JSON — gen_vm.py splits on whitespace so spaces
+  # inside the value create extra positional arguments for ansible-playbook.
+  ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false}'
 
 jobs:
 
   # ---------------------------------------------------------------------------
   # vm-rocm: install ROCm stack, boot bare VM, verify packages
+  # Runs on the bare runner because it boots QEMU directly via qemu-tool run-vm.
   # ---------------------------------------------------------------------------
   test-vm-rocm:
     name: test-vm-rocm
@@ -90,8 +90,7 @@ jobs:
           --ansible-playbook ansible/playbooks/vm-rocm.yml
 
     - name: Boot VM
-      run: |
-        qemu-tool run-vm --vm-name rocm-test > run-vm-output.log 2>&1 &
+      run: qemu-tool run-vm --vm-name rocm-test > run-vm-output.log 2>&1 &
 
     - name: Wait for VM SSH (180s timeout)
       run: |
@@ -129,28 +128,24 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # vm-ernic: install ernic driver, boot with ernic compose, configure NIC
+  # Runs inside the QEMU CI image (has qemu-system-x86_64, cloud-image-utils).
+  # Docker socket is mounted for the compose phase.
   # ---------------------------------------------------------------------------
   test-vm-ernic:
     name: test-vm-ernic
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    container:
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:latest
+      options: --device /dev/kvm -v /var/run/docker.sock:/var/run/docker.sock
     steps:
     - name: Check out code
       uses: actions/checkout@v4.3.1
 
-    - name: Enable KVM
+    - name: Install missing packages
       run: |
-        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | \
-          sudo tee /etc/udev/rules.d/99-kvm4all.rules
-        sudo udevadm control --reload-rules
-        sudo udevadm trigger --name-match=kvm
-
-    - name: Install packages
-      run: |
-        sudo apt-get update -qq
-        sudo apt-get install -y -qq \
-          qemu-utils cloud-image-utils \
-          ansible openssh-client python3-pip
+        apt-get update -qq
+        apt-get install -y -qq ansible python3-pip openssh-client
 
     - name: Install jmespath for Ansible json_query filter
       run: |
@@ -188,7 +183,7 @@ jobs:
         key: cloud-img-amd64-resolute-ansible-ernic
 
     - name: Ensure images directory exists
-      run: sudo mkdir -p "$VM_IMAGES_DIR" && sudo chmod 777 "$VM_IMAGES_DIR"
+      run: mkdir -p "$VM_IMAGES_DIR" && chmod 777 "$VM_IMAGES_DIR"
 
     - name: Pull CI images
       run: |
@@ -281,28 +276,23 @@ jobs:
   # ---------------------------------------------------------------------------
   # vm-rocjitsu: install firmware + driver, boot with rocjitsu compose,
   # load amdgpu via amdgpu-probe
+  # Runs inside the QEMU CI image (has qemu-system-x86_64, cloud-image-utils).
   # ---------------------------------------------------------------------------
   test-vm-rocjitsu:
     name: test-vm-rocjitsu
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    container:
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:latest
+      options: --device /dev/kvm -v /var/run/docker.sock:/var/run/docker.sock
     steps:
     - name: Check out code
       uses: actions/checkout@v4.3.1
 
-    - name: Enable KVM
+    - name: Install missing packages
       run: |
-        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | \
-          sudo tee /etc/udev/rules.d/99-kvm4all.rules
-        sudo udevadm control --reload-rules
-        sudo udevadm trigger --name-match=kvm
-
-    - name: Install packages
-      run: |
-        sudo apt-get update -qq
-        sudo apt-get install -y -qq \
-          qemu-utils cloud-image-utils \
-          ansible openssh-client python3-pip
+        apt-get update -qq
+        apt-get install -y -qq ansible python3-pip openssh-client
 
     - name: Install jmespath for Ansible json_query filter
       run: |
@@ -340,7 +330,7 @@ jobs:
         key: cloud-img-amd64-resolute-ansible-rocjitsu
 
     - name: Ensure images directory exists
-      run: sudo mkdir -p "$VM_IMAGES_DIR" && sudo chmod 777 "$VM_IMAGES_DIR"
+      run: mkdir -p "$VM_IMAGES_DIR" && chmod 777 "$VM_IMAGES_DIR"
 
     - name: Pull CI images
       run: |
@@ -427,12 +417,10 @@ jobs:
     - name: Verify amdgpu module loaded and KFD device present
       run: |
         ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
-          -p 2222 ubuntu@localhost \
-          "lsmod | grep -q amdgpu"
+          -p 2222 ubuntu@localhost "lsmod | grep -q amdgpu"
         echo "✓ amdgpu module loaded"
         ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
-          -p 2222 ubuntu@localhost \
-          "ls /dev/kfd"
+          -p 2222 ubuntu@localhost "ls /dev/kfd"
         echo "✓ /dev/kfd present"
 
     - name: Show compose logs on failure
@@ -443,28 +431,23 @@ jobs:
   # ---------------------------------------------------------------------------
   # vm-ernic-rocjitsu: combined image, boot with full single-VM compose,
   # verify ernic NIC + GPU
+  # Runs inside the QEMU CI image (has qemu-system-x86_64, cloud-image-utils).
   # ---------------------------------------------------------------------------
   test-vm-ernic-rocjitsu:
     name: test-vm-ernic-rocjitsu
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    container:
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:latest
+      options: --device /dev/kvm -v /var/run/docker.sock:/var/run/docker.sock
     steps:
     - name: Check out code
       uses: actions/checkout@v4.3.1
 
-    - name: Enable KVM
+    - name: Install missing packages
       run: |
-        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | \
-          sudo tee /etc/udev/rules.d/99-kvm4all.rules
-        sudo udevadm control --reload-rules
-        sudo udevadm trigger --name-match=kvm
-
-    - name: Install packages
-      run: |
-        sudo apt-get update -qq
-        sudo apt-get install -y -qq \
-          qemu-utils cloud-image-utils \
-          ansible openssh-client python3-pip
+        apt-get update -qq
+        apt-get install -y -qq ansible python3-pip openssh-client
 
     - name: Install jmespath for Ansible json_query filter
       run: |
@@ -502,7 +485,7 @@ jobs:
         key: cloud-img-amd64-resolute-ansible-ernic-rocjitsu
 
     - name: Ensure images directory exists
-      run: sudo mkdir -p "$VM_IMAGES_DIR" && sudo chmod 777 "$VM_IMAGES_DIR"
+      run: mkdir -p "$VM_IMAGES_DIR" && chmod 777 "$VM_IMAGES_DIR"
 
     - name: Pull CI images
       run: |
@@ -591,30 +574,25 @@ jobs:
     - name: Verify rocm_ernic module loaded and NIC visible
       run: |
         ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
-          -p 2222 ubuntu@localhost \
-          "lsmod | grep -q rocm_ernic"
+          -p 2222 ubuntu@localhost "lsmod | grep -q rocm_ernic"
         echo "✓ rocm_ernic module loaded"
         ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
-          -p 2222 ubuntu@localhost \
-          "ip link show | grep -q rocm-ernic0"
+          -p 2222 ubuntu@localhost "ip link show | grep -q rocm-ernic0"
         echo "✓ rocm-ernic0 interface present"
 
     - name: Load amdgpu via amdgpu-probe
       run: |
         ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
-          -p 2222 ubuntu@localhost \
-          "sudo /usr/local/bin/amdgpu-probe"
+          -p 2222 ubuntu@localhost "sudo /usr/local/bin/amdgpu-probe"
         echo "✓ amdgpu-probe completed"
 
     - name: Verify amdgpu module loaded and KFD device present
       run: |
         ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
-          -p 2222 ubuntu@localhost \
-          "lsmod | grep -q amdgpu"
+          -p 2222 ubuntu@localhost "lsmod | grep -q amdgpu"
         echo "✓ amdgpu module loaded"
         ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
-          -p 2222 ubuntu@localhost \
-          "ls /dev/kfd"
+          -p 2222 ubuntu@localhost "ls /dev/kfd"
         echo "✓ /dev/kfd present"
 
     - name: Show compose logs on failure
