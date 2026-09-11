@@ -500,6 +500,7 @@ def _run_ansible(cfg: VMConfig, images: Path, backing: Path) -> None:
         subprocess.run(
             ["ssh", "-o", "StrictHostKeyChecking=no",
              "-o", "UserKnownHostsFile=/dev/null",
+             *_ssh_identity_args(cfg),
              "-p", str(vm_port),
              f"{cfg.username}@{vm_host}", "sudo poweroff"],
             capture_output=True,
@@ -516,11 +517,21 @@ def _run_ansible(cfg: VMConfig, images: Path, backing: Path) -> None:
         raise
 
 
+def _ssh_identity_args(cfg: VMConfig) -> list[str]:
+    key_pub = Path(cfg.ssh_key_file).expanduser()
+    # Strip .pub to get the private key; fall back to no -i if missing.
+    private_key = key_pub.parent / key_pub.stem
+    if private_key.exists():
+        return ["-i", str(private_key)]
+    return []
+
+
 def _wait_for_ssh(
     cfg: VMConfig, timeout: int, host: str = "localhost", port: int | None = None
 ) -> bool:
     p = port if port is not None else cfg.ssh_port
     print(f"Waiting for VM to accept SSH at {host}:{p}...")
+    id_args = _ssh_identity_args(cfg)
     elapsed = 0
     while elapsed < timeout:
         try:
@@ -530,6 +541,7 @@ def _wait_for_ssh(
                  "-o", "ConnectTimeout=1",
                  "-o", "StrictHostKeyChecking=no",
                  "-o", "UserKnownHostsFile=/dev/null",
+                 *id_args,
                  "-p", str(p),
                  f"{cfg.username}@{host}", "true"],
                 capture_output=True,
