@@ -236,7 +236,9 @@ def _write_cloud_config(
     cfg: VMConfig, packages: str, ssh_key: Path, out: Path
 ) -> None:
     key_content = ssh_key.read_text().rstrip()
-    indented_key = key_content.replace("\n", "\n      ")
+    key_list = "\n".join(
+        f"      - {k}" for k in key_content.splitlines() if k.strip()
+    )
     ca_write, ca_runcmd = _ca_cert_fragment(cfg)
     out.write_text(f"""\
 #cloud-config
@@ -251,8 +253,8 @@ users:
     uid: {cfg.user_id}
     groups: users, admin
     shell: /bin/bash
-    ssh_authorized_keys: |
-      {indented_key}
+    ssh_authorized_keys:
+{key_list}
 apt:
   conf: |
     APT::Install-Recommends "false";
@@ -272,8 +274,7 @@ power_state:
   message: Shutting down
   timeout: 2
   condition: true
-timezone:
-  America/Edmonton
+timezone: America/Edmonton
 write_files:
 {ca_write}
   - path: /etc/sysctl.d/10-kernel-hardening.conf
