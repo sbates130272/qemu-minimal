@@ -20,6 +20,7 @@ jobs:
   # ---------------------------------------------------------------------------
   test-vm-rocm:
     name: test-vm-rocm
+    if: false  # disabled: CI runner disk too small for full ROCm install
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
