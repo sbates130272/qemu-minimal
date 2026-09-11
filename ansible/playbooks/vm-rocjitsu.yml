@@ -3,6 +3,14 @@
   hosts: all
   gather_facts: true
   become: true
+  module_defaults:
+    ansible.builtin.uri:
+      headers: >-
+        {{
+          ({'Authorization': 'token ' + lookup('env', 'GITHUB_TOKEN')}
+           if lookup('env', 'GITHUB_TOKEN')
+           else {})
+        }}
   vars:
     username: "{{ vm_username | default('ubuntu') }}"
     root_user: "{{ vm_root_user | default('ubuntu') }}"
