@@ -213,6 +213,9 @@ jobs:
       env:
         VM_NAME: ernic-test
         QEMU_TOOL_SRC: ${{ github.workspace }}
+        VM_VCPUS: "2"
+        VM_VMEM: "4096"
+        VM_SHM_SIZE: "5g"
       run: |
         docker compose up --detach
         echo "Compose stack started"
@@ -364,6 +367,9 @@ jobs:
       env:
         VM_NAME: rocjitsu-test
         QEMU_TOOL_SRC: ${{ github.workspace }}
+        VM_VCPUS: "2"
+        VM_VMEM: "4096"
+        VM_SHM_SIZE: "5g"
       run: |
         docker compose up --detach
         echo "Compose stack started"
@@ -524,6 +530,9 @@ jobs:
       env:
         VM_NAME: ernic-rocjitsu-test
         QEMU_TOOL_SRC: ${{ github.workspace }}
+        VM_VCPUS: "2"
+        VM_VMEM: "4096"
+        VM_SHM_SIZE: "5g"
       run: |
         docker compose up --detach
         echo "Compose stack started"
