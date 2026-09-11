@@ -244,20 +244,24 @@ def _root_drive_args(cfg: VMConfig) -> list[str]:
     return ["-drive", drv]
 
 
-def _netdev_args(cfg: VMConfig) -> list[str]:
+def _netdev_args(cfg: VMConfig, mac: str | None = None) -> list[str]:
     if cfg.mgmt_tap:
         tap = _mgmt_tap_name(cfg.ssh_port)
-        mac = _mgmt_mac(cfg.ssh_port)
+        m = mac or _mgmt_mac(cfg.ssh_port)
         return [
             "-netdev", f"tap,id=net0,ifname={tap},script=no,downscript=no",
-            "-device", f"virtio-net-pci,netdev=net0,mac={mac}",
+            "-device", f"virtio-net-pci,netdev=net0,mac={m}",
         ]
     hostfwd = f"hostfwd=tcp::{cfg.ssh_port}-:22"
     for rule in cfg.extra_hostfwd:
         hostfwd += f",hostfwd={rule}"
+    # Use a deterministic MAC so the VM's netplan (written by cloud-init
+    # during gen-vm first-boot with the same MAC) matches on all subsequent
+    # boots, including compose run-vm invocations.
+    m = mac or _mgmt_mac(cfg.ssh_port)
     return [
         "-netdev", f"user,id=net0,{hostfwd}",
-        "-device", "virtio-net-pci,netdev=net0",
+        "-device", f"virtio-net-pci,netdev=net0,mac={m}",
     ]
 
 
