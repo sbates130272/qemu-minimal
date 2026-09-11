@@ -475,13 +475,19 @@ def _run_ansible(cfg: VMConfig, images: Path, backing: Path) -> None:
         _restore_blocking_stdio()
         _ensure_jmespath()
 
+        id_args = _ssh_identity_args(cfg)
+        private_key_extra = (
+            ["-e", f"ansible_ssh_private_key_file={id_args[1]}"]
+            if id_args else []
+        )
         ap_cmd = ["ansible-playbook", "-i", str(inventory), str(playbook),
                   "-e", f"ansible_host={vm_host}",
                   "-e", f"ansible_port={vm_port}",
                   "-e", f"ansible_user={cfg.username}",
                   "-e", f"username={cfg.username}",
                   "-e", f"vm_username={cfg.username}",
-                  "-e", f"vm_root_user={cfg.username}"]
+                  "-e", f"vm_root_user={cfg.username}",
+                  *private_key_extra]
         if extra_args:
             ap_cmd += extra_args.split()
 
