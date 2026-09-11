@@ -93,6 +93,7 @@
     - role: sbates130272.batesste.user_setup
     - role: sbates130272.batesste.fave_packages
     - role: sbates130272.batesste.git_setup
+    - role: sbates130272.batesste.rocm_setup
 
   tasks:
     - name: Purge stale distro ROCm runtime packages

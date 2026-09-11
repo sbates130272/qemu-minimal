@@ -255,12 +255,13 @@ def _netdev_args(cfg: VMConfig, mac: str | None = None) -> list[str]:
     hostfwd = f"hostfwd=tcp::{cfg.ssh_port}-:22"
     for rule in cfg.extra_hostfwd:
         hostfwd += f",hostfwd={rule}"
-    dev = "virtio-net-pci,netdev=net0"
-    if mac:
-        dev += f",mac={mac}"
+    # Use a deterministic MAC so the VM's netplan (written by cloud-init
+    # during gen-vm first-boot with the same MAC) matches on all subsequent
+    # boots, including compose run-vm invocations.
+    m = mac or _mgmt_mac(cfg.ssh_port)
     return [
         "-netdev", f"user,id=net0,{hostfwd}",
-        "-device", dev,
+        "-device", f"virtio-net-pci,netdev=net0,mac={m}",
     ]
 
 
