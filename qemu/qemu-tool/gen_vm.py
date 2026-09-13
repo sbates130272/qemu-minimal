@@ -236,7 +236,9 @@ def _write_cloud_config(
     cfg: VMConfig, packages: str, ssh_key: Path, out: Path
 ) -> None:
     key_content = ssh_key.read_text().rstrip()
-    indented_key = key_content.replace("\n", "\n      ")
+    key_list = "\n".join(
+        f"      - {k}" for k in key_content.splitlines() if k.strip()
+    )
     ca_write, ca_runcmd = _ca_cert_fragment(cfg)
     out.write_text(f"""\
 #cloud-config
@@ -251,8 +253,8 @@ users:
     uid: {cfg.user_id}
     groups: users, admin
     shell: /bin/bash
-    ssh_authorized_keys: |
-      {indented_key}
+    ssh_authorized_keys:
+{key_list}
 apt:
   conf: |
     APT::Install-Recommends "false";
@@ -272,8 +274,7 @@ power_state:
   message: Shutting down
   timeout: 2
   condition: true
-timezone:
-  America/Edmonton
+timezone: America/Edmonton
 write_files:
 {ca_write}
   - path: /etc/sysctl.d/10-kernel-hardening.conf
@@ -360,8 +361,7 @@ def _first_boot(cfg: VMConfig, images: Path, backing: Path) -> None:
         "-drive", f"if=virtio,format=qcow2,file={backing}",
         "-drive", f"if=virtio,format=qcow2,file={seed}",
         "-netdev", "user,id=net0",
-        "-device", "virtio-net-pci,netdev=net0"
-        + (f",mac={_mgmt_mac(cfg.ssh_port)}" if cfg.mgmt_tap else ""),
+        "-device", f"virtio-net-pci,netdev=net0,mac={_mgmt_mac(cfg.ssh_port)}",
     ]
     subprocess.run(cmd, check=True)
 
@@ -451,7 +451,7 @@ def _run_ansible(cfg: VMConfig, images: Path, backing: Path) -> None:
         "-m", str(cfg.vmem),
         "-nographic",
         "-drive", f"if=virtio,format=qcow2,file={backing}",
-        *_netdev_args(cfg),
+        *_netdev_args(cfg, mac=_mgmt_mac(cfg.ssh_port)),
     ])
 
     try:
@@ -475,13 +475,19 @@ def _run_ansible(cfg: VMConfig, images: Path, backing: Path) -> None:
         _restore_blocking_stdio()
         _ensure_jmespath()
 
+        id_args = _ssh_identity_args(cfg)
+        private_key_extra = (
+            ["-e", f"ansible_ssh_private_key_file={id_args[1]}"]
+            if id_args else []
+        )
         ap_cmd = ["ansible-playbook", "-i", str(inventory), str(playbook),
                   "-e", f"ansible_host={vm_host}",
                   "-e", f"ansible_port={vm_port}",
                   "-e", f"ansible_user={cfg.username}",
                   "-e", f"username={cfg.username}",
                   "-e", f"vm_username={cfg.username}",
-                  "-e", f"vm_root_user={cfg.username}"]
+                  "-e", f"vm_root_user={cfg.username}",
+                  *private_key_extra]
         if extra_args:
             ap_cmd += extra_args.split()
 
@@ -500,6 +506,7 @@ def _run_ansible(cfg: VMConfig, images: Path, backing: Path) -> None:
         subprocess.run(
             ["ssh", "-o", "StrictHostKeyChecking=no",
              "-o", "UserKnownHostsFile=/dev/null",
+             *_ssh_identity_args(cfg),
              "-p", str(vm_port),
              f"{cfg.username}@{vm_host}", "sudo poweroff"],
             capture_output=True,
@@ -516,11 +523,21 @@ def _run_ansible(cfg: VMConfig, images: Path, backing: Path) -> None:
         raise
 
 
+def _ssh_identity_args(cfg: VMConfig) -> list[str]:
+    key_pub = Path(cfg.ssh_key_file).expanduser()
+    # Strip .pub to get the private key; fall back to no -i if missing.
+    private_key = key_pub.parent / key_pub.stem
+    if private_key.exists():
+        return ["-i", str(private_key)]
+    return []
+
+
 def _wait_for_ssh(
     cfg: VMConfig, timeout: int, host: str = "localhost", port: int | None = None
 ) -> bool:
     p = port if port is not None else cfg.ssh_port
     print(f"Waiting for VM to accept SSH at {host}:{p}...")
+    id_args = _ssh_identity_args(cfg)
     elapsed = 0
     while elapsed < timeout:
         try:
@@ -530,6 +547,7 @@ def _wait_for_ssh(
                  "-o", "ConnectTimeout=1",
                  "-o", "StrictHostKeyChecking=no",
                  "-o", "UserKnownHostsFile=/dev/null",
+                 *id_args,
                  "-p", str(p),
                  f"{cfg.username}@{host}", "true"],
                 capture_output=True,

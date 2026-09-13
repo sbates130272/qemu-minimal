@@ -8,6 +8,14 @@
 
 - name: Install ernic driver into VM image
   hosts: all
+  module_defaults:
+    ansible.builtin.uri:
+      headers: >-
+        {{
+          ({'Authorization': 'token ' + lookup('env', 'GITHUB_TOKEN')}
+           if lookup('env', 'GITHUB_TOKEN')
+           else {})
+        }}
   gather_facts: true
   become: true
   tags: [install]

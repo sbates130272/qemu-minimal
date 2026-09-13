@@ -70,10 +70,8 @@ services:
       - /bin/sh
       - -c
       - |
-        if ! command -v qemu-tool > /dev/null 2>&1; then
-          cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
-          PIPX_BIN_DIR=/usr/local/bin pipx install --pip-args="--no-build-isolation" /tmp/qemu-tool-build
-        fi
+        cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
+        PIPX_BIN_DIR=/usr/local/bin pipx install --force /tmp/qemu-tool-build
         socks=$(ls /run/vfu/*.sock 2>/dev/null | tr '\n' ',' | sed 's/,$//')
         if [ -z "$$socks" ]; then
           echo "ERROR: no vfio-user sockets found in /run/vfu" >&2
