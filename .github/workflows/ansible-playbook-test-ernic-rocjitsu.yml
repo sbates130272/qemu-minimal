@@ -181,11 +181,24 @@ jobs:
         grep -q PORT_ACTIVE /tmp/ibv_devinfo.txt
         echo "✓ RDMA port active"
 
+    # See ansible-playbook-test-rocjitsu.yml: this step has hung and only died to
+    # the job-level timeout, with no diagnostic output. Bound at all three layers
+    # -- the guest command, the ssh session and the step.
     - name: Load amdgpu via amdgpu-probe
+      timeout-minutes: 5
       run: |
         ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
-          -p 2222 ubuntu@qemu "sudo /usr/local/bin/amdgpu-probe"
+          -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
+          -p 2222 ubuntu@qemu "sudo timeout 120 /usr/local/bin/amdgpu-probe"
         echo "✓ amdgpu-probe completed"
+
+    - name: Dump guest dmesg on failure
+      if: failure()
+      timeout-minutes: 2
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
+          -p 2222 ubuntu@qemu "sudo dmesg | tail -200" || true
 
     # See ansible-playbook-test-rocjitsu.yml for why /dev/kfd is not a valid
     # probe assertion: kfd_chardev_init() creates it before amdgpu_init()

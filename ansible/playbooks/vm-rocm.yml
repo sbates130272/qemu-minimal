@@ -3,6 +3,18 @@
   hosts: all
   gather_facts: true
   become: false
+  # Same block as vm-ernic.yml and vm-rocjitsu.yml: set the token once here
+  # rather than relying on every workflow step to pass it through. Without it
+  # the roles hit the anonymous GitHub API rate limit, which surfaces as an
+  # intermittent 403 on a download and reads exactly like a flake.
+  module_defaults:
+    ansible.builtin.uri:
+      headers: >-
+        {{
+          ({'Authorization': 'token ' + lookup('env', 'GITHUB_TOKEN')}
+           if lookup('env', 'GITHUB_TOKEN')
+           else {})
+        }}
   vars:
     username: "{{ vm_username | default('ubuntu') }}"
     root_user: "{{ vm_root_user | default('ubuntu') }}"

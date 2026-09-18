@@ -143,12 +143,26 @@ jobs:
           "dkms status amdgpu | grep -q installed"
         echo "✓ amdgpu DKMS module installed"
 
+    # This step has hung, wedging the ssh session until the job-level
+    # timeout-minutes fired ~125 minutes later with no diagnostic output at all.
+    # Bound it at all three layers -- the guest command, the ssh session and the
+    # step -- so a hang fails in minutes and the dmesg dump below can be read.
     - name: Load amdgpu via amdgpu-probe
+      timeout-minutes: 5
       run: |
         ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
           -p 2222 ubuntu@qemu \
-          "sudo /usr/local/bin/amdgpu-probe"
+          "sudo timeout 120 /usr/local/bin/amdgpu-probe"
         echo "✓ amdgpu-probe completed"
+
+    - name: Dump guest dmesg on failure
+      if: failure()
+      timeout-minutes: 2
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
+          -p 2222 ubuntu@qemu "sudo dmesg | tail -200" || true
 
     # /dev/kfd is NOT evidence that the GPU bound. amdgpu_init() calls
     # amdgpu_amdkfd_init() -> kfd_chardev_init(), which device_create()s
