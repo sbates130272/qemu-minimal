@@ -38,6 +38,7 @@ bw
 bzImage
 bzimage
 cd
+ce
 centos
 CentOS
 changelog

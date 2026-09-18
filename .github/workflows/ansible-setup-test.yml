@@ -29,7 +29,7 @@ jobs:
   syntax-check:
     name: ansible-syntax-check
     runs-on: ubuntu-latest
-    container: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260917.g857483b-qemu11.1.1-vfu.8039244
+    container: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260918.g7438e48-qemu11.1.1-vfu.8039244
     steps:
     - name: Check out code
       uses: actions/checkout@v4.3.1
@@ -70,7 +70,7 @@ jobs:
     needs: syntax-check
     runs-on: ubuntu-latest
     container:
-      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260917.g857483b-qemu11.1.1-vfu.8039244
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260918.g7438e48-qemu11.1.1-vfu.8039244
       # Supplies qemu-system-x86_64, qemu-img and cloud-localds.
       options: --device /dev/kvm
     timeout-minutes: 90
