@@ -1,0 +1,19 @@
+---
+# The two ernic pins, written once. vm-ernic.yml has two plays -- install and
+# configure -- and plays cannot share a vars block, so without this file every
+# pin gets a copy per play and they drift apart silently.
+
+# Mainline kernel ref for ionic_image_prep. drivers/infiniband/hw/ionic merged
+# for 6.18 and ib_umem_get_va landed after 7.0, so no Ubuntu release ships a
+# kernel that can build ionic_rdma -- resolute GA is 7.0.0-31. Must stay within
+# a point release of IONIC_KERNEL_REF in the collection's
+# cmake/ErnicKernelModule.cmake: driver_ionic.yml compares major.minor and
+# fails the build otherwise.
+ionic_kernel_pin: v7.2.4
+
+# Commit ernic_source checks out. The role defaults ernic_source_repo_version
+# to "main", which would clone upstream HEAD while requirements.yml installs
+# the collection from a fixed SHA -- the sources and the roles that build them
+# could then come from different trees. Keep this equal to the version: field
+# in ansible/requirements.yml and bump both together.
+ernic_source_pin: 7b6fa94a9c6997a14f189f3e3d6460419e958c7c

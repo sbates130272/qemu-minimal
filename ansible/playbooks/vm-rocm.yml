@@ -3,6 +3,18 @@
   hosts: all
   gather_facts: true
   become: false
+  # Same block as vm-ernic.yml and vm-rocjitsu.yml: set the token once here
+  # rather than relying on every workflow step to pass it through. Without it
+  # the roles hit the anonymous GitHub API rate limit, which surfaces as an
+  # intermittent 403 on a download and reads exactly like a flake.
+  module_defaults:
+    ansible.builtin.uri:
+      headers: >-
+        {{
+          ({'Authorization': 'token ' + lookup('env', 'GITHUB_TOKEN')}
+           if lookup('env', 'GITHUB_TOKEN')
+           else {})
+        }}
   vars:
     username: "{{ vm_username | default('ubuntu') }}"
     root_user: "{{ vm_root_user | default('ubuntu') }}"
@@ -10,6 +22,12 @@
     user_setup_install_amd_ca: true
     rocm_setup_user: "{{ vm_username | default('ubuntu') }}"
     rocm_setup_repo_stream: therock
+    rocm_setup_minimal: true
+    # These are QEMU guests, never WSL. Pinned rather than left to the role's
+    # default(false) because a non-false wsl_mode silently drops the minimal
+    # path back to the full amdrocm meta-package.
+    rocm_setup_wsl: false
+    rocm_setup_wsl_install: false
     rocm_setup_skip_reboot: false
     rocm_setup_run_checks: true
     rocm_setup_run_gpu_checks: false

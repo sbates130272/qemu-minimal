@@ -1,0 +1,159 @@
+---
+# Install a pinned mainline kernel from the loose .debs on kernel.ubuntu.com,
+# mirroring what ubuntu-qcow2-gen/build-vm.sh does for the published ionic
+# image. Two details there are load-bearing and reproduced here:
+#
+#   - the -64k arm64 page-size variants are filtered out, because taking both
+#     installs two kernels and leaves grub picking between them;
+#   - the .debs go in as one apt transaction against local files rather than
+#     dpkg -i, so linux-base, kmod, wireless-regdb and an initramfs tool are
+#     resolved from the archive instead of leaving dpkg half-configured.
+#
+# build-vm.sh gets a dedicated provisioning boot and a separate verification
+# boot. Here the reboot and the post-reboot assert play those parts.
+
+# Empty by default on purpose -- see defaults/main.yml. Caught here rather than
+# at the mirror fetch, which would otherwise request .../mainline//amd64/ and
+# report a bare 404.
+- name: Fail when no kernel ref was pinned
+  ansible.builtin.assert:
+    that: ionic_image_kernel_ref | trim | length > 0
+    fail_msg: >-
+      ionic_image_kernel_ref is empty. Set it from ionic_kernel_pin in
+      playbooks/vars/ernic-pins.yml, which is what vm-ernic.yml does, so the
+      guest kernel matches the ionic sources this run builds.
+
+- name: Derive the mainline kernel version and architecture
+  ansible.builtin.set_fact:
+    ionic_image_kver: "{{ ionic_image_kernel_ref | regex_replace('^v', '') }}"
+    ionic_image_debarch: >-
+      {{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}
+
+- name: Check whether the pinned kernel is already the running one
+  ansible.builtin.set_fact:
+    ionic_image_kernel_current: >-
+      {{ ansible_kernel.split('-')[0] == ionic_image_kver }}
+
+- name: Install the pinned mainline kernel
+  when: not (ionic_image_kernel_current | bool)
+  block:
+
+    - name: Fetch the mainline index for the pinned ref
+      ansible.builtin.uri:
+        url: >-
+          {{ ionic_image_kernel_mirror }}/{{ ionic_image_kernel_ref }}/{{
+          ionic_image_debarch }}/
+        return_content: true
+        # The play sets a GITHUB_TOKEN Authorization header as a uri module
+        # default. kernel.ubuntu.com is not GitHub and must not see it.
+        headers: {}
+      register: ionic_image_kernel_index
+
+    - name: Select the kernel .deb files
+      ansible.builtin.set_fact:
+        # -64k is the arm64 64K-page flavour; see the header comment.
+        ionic_image_kernel_debs: >-
+          {{ ionic_image_kernel_index.content
+             | regex_findall('linux-[a-z-]+-[0-9][^"]*\.deb')
+             | reject('search', '-64k')
+             | unique | sort }}
+
+    - name: Assert the mainline ref published a usable kernel set
+      ansible.builtin.assert:
+        that:
+          - ionic_image_kernel_debs | select('match', 'linux-image') | length > 0
+          - ionic_image_kernel_debs | select('match', 'linux-headers') | length > 0
+          - ionic_image_kernel_debs | select('match', 'linux-modules') | length > 0
+        fail_msg: >-
+          {{ ionic_image_kernel_mirror }}/{{ ionic_image_kernel_ref }}/{{
+          ionic_image_debarch }}/ does not carry a complete image, headers and
+          modules set: {{ ionic_image_kernel_debs | join(', ') | default('nothing') }}.
+          Mainline builds are pruned over time and can fail for a release --
+          check the ref, or move ionic_image_kernel_ref and IONIC_KERNEL_REF
+          together.
+
+    - name: Create the kernel payload directory
+      ansible.builtin.file:
+        path: "{{ ionic_image_kernel_payload_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Download the kernel .deb files
+      ansible.builtin.get_url:
+        url: >-
+          {{ ionic_image_kernel_mirror }}/{{ ionic_image_kernel_ref }}/{{
+          ionic_image_debarch }}/{{ item }}
+        dest: "{{ ionic_image_kernel_payload_dir }}/{{ item }}"
+        mode: "0644"
+      loop: "{{ ionic_image_kernel_debs }}"
+      register: ionic_image_kernel_dl
+      retries: "{{ ionic_image_apt_retries }}"
+      delay: "{{ ionic_image_apt_delay }}"
+      until: ionic_image_kernel_dl is success
+
+    # One transaction, apt not dpkg -- see the header comment. The apt module
+    # cannot express this: its `deb` argument takes a single path, and looping
+    # it would install the .debs one at a time, which is the half-configured
+    # state the single transaction exists to avoid.
+    - name: Install the kernel .deb files
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: >-
+          apt-get install -y {{ ionic_image_kernel_payload_dir }}/*.deb
+      environment:
+        DEBIAN_FRONTEND: noninteractive
+      changed_when: true
+
+    - name: Update grub so the new kernel is the default
+      ansible.builtin.command:
+        argv:
+          - update-grub
+      changed_when: true
+
+    - name: Remove the kernel payload
+      ansible.builtin.file:
+        path: "{{ ionic_image_kernel_payload_dir }}"
+        state: absent
+
+    # build-vm.sh proves the kernel with a separate boot rather than trusting
+    # update-grub. Same idea: a kernel that installs but does not boot is a
+    # much more expensive failure once DKMS lanes are running against it.
+    - name: Reboot into the new kernel
+      ansible.builtin.reboot:
+        reboot_timeout: "{{ ionic_image_kernel_reboot_timeout }}"
+
+    - name: Re-gather facts after the reboot
+      ansible.builtin.setup:
+
+- name: Assert the guest booted the pinned kernel
+  ansible.builtin.assert:
+    that:
+      - ansible_kernel.split('-')[0] == ionic_image_kver
+    fail_msg: >-
+      Guest booted {{ ansible_kernel }}, not {{ ionic_image_kver }}. grub
+      picked a different entry, or the mainline .debs installed a kernel this
+      role did not expect.
+
+# The version match above is a proxy. This is the thing it is a proxy for, and
+# it is the exact check ernic_guest_setup's driver_ionic.yml makes before
+# building -- failing it here names the cause, where failing it there is a wall
+# of implicit-declaration errors deep inside a DKMS log.
+- name: Look for the IB-core helper the ionic sources need
+  ansible.builtin.command:
+    argv:
+      - grep
+      - -qs
+      - ib_umem_get_va
+      - "/lib/modules/{{ ansible_kernel }}/build/include/rdma/ib_umem.h"
+  register: ionic_image_umem_helper
+  failed_when: false
+  changed_when: false
+
+- name: Assert the kernel headers can build ionic_rdma
+  ansible.builtin.assert:
+    that:
+      - ionic_image_umem_helper.rc == 0
+    fail_msg: >-
+      /lib/modules/{{ ansible_kernel }}/build does not provide ib_umem_get_va.
+      The mainline headers .deb did not install, or this kernel predates the
+      helper -- it landed after 7.0, which is what the 7.0.0-31 guest failed on.

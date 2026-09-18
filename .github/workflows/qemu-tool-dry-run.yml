@@ -1,4 +1,4 @@
-name: qemu-tool-dry-run-tests
+name: qemu-minimal - dry-run-qemu-tool
 
 on:
   workflow_dispatch:
@@ -11,12 +11,17 @@ on:
       - 'qemu/compose/**'
       - '.github/workflows/qemu-tool-dry-run.yml'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Only supersede PR runs: a push to main or a scheduled run should finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
 
   dry-run-tests:
     name: dry-run-tests
     runs-on: ubuntu-latest
-    container: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:august-11-2026
+    container: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260918.g7438e48-qemu11.1.1-vfu.8039244
     steps:
     - name: Check out code
       uses: actions/checkout@v4.3.1
@@ -59,6 +64,20 @@ jobs:
         echo "$out" | grep -q "nvme,serial=dry-test-nvme0"
         echo "$out" | grep -q "nvme,serial=dry-test-nvme1"
         echo "✓ --nvme -2 passed"
+
+    # Regression test: QEMU 11 refuses to start when the nvme serial exceeds 20
+    # characters, which a long VM name silently produced. This was invisible on
+    # the bare runner because apt's QEMU 8.2 accepted it.
+    - name: "Dry-run: long VM name truncates the nvme serial to 20 chars"
+      run: |
+        out=$(qemu-tool run-vm --vm-name qemu-tool-smoke-test --no-kvm \
+              --nvme 1 --dry-run)
+        echo "$out"
+        serial=$(echo "$out" | sed -n 's/.*nvme,serial=\([^,]*\).*/\1/p' | head -1)
+        echo "serial=${serial} (${#serial} chars)"
+        [ "${#serial}" -le 20 ] || { echo "serial longer than 20 chars"; exit 1; }
+        echo "$out" | grep -q "nvme,serial=ool-smoke-test-nvme1"
+        echo "✓ long-name nvme serial truncation passed"
 
     - name: "Dry-run: x86 with --nvme custom string"
       run: |
@@ -278,6 +297,313 @@ jobs:
         echo "$out" | grep -qv "ModuleNotFoundError"
         echo "$out" | grep -qv "Compose directory not found"
         echo "✓ compose subcommand resolves correctly"
+
+    - name: "Dry-run: identity markers present on all arches"
+      run: |
+        for arch in amd64 arm64 riscv64; do
+          out=$(qemu-tool run-vm --vm-name dry-test --arch "$arch" --no-kvm --dry-run)
+          echo "$out"
+          echo "$out" | grep -q -- "-name guest=dry-test,debug-threads=on"
+          echo "$out" | grep -q -- "-uuid 26941056-3b06-5a48-a11d-948bcf877581"
+          # -smbios was rejected as the marker: riscv64 virt has no SMBIOS.
+          if echo "$out" | grep -q -- "-smbios"; then
+            echo "$arch must not be stamped with -smbios"
+            exit 1
+          fi
+        done
+        echo "✓ identity markers passed on all arches"
+
+    - name: "Identity: uuid is deterministic, per-name and per-role distinct"
+      run: |
+        uuid_of() {
+          qemu-tool run-vm --vm-name "$1" --no-kvm --dry-run \
+            | grep -oE "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" \
+            | head -1
+        }
+        u1=$(uuid_of dry-test); u2=$(uuid_of dry-test); u3=$(uuid_of other-test)
+        echo "dry-test=$u1 / $u2  other-test=$u3"
+        [ -n "$u1" ] || { echo "no uuid in dry-run output"; exit 1; }
+        [ "$u1" = "$u2" ] || { echo "uuid not deterministic"; exit 1; }
+        [ "$u1" != "$u3" ] || { echo "uuid collision across vm names"; exit 1; }
+        # Golden values: NS_QEMU_TOOL is frozen. Changing it stops every
+        # already-running VM from being recognised.
+        [ "$u1" = "26941056-3b06-5a48-a11d-948bcf877581" ] || { echo "namespace changed: $u1"; exit 1; }
+        [ "$u3" = "dced3717-c861-5918-a9bd-06af5e424302" ] || { echo "unexpected: $u3"; exit 1; }
+        # gen-vm has no --dry-run, so its role split is asserted on the module.
+        python3 -c "
+        from qemu_tool.identity import ROLES, vm_uuid
+        assert ROLES == ('run-vm', 'gen-vm'), ROLES
+        assert vm_uuid('run-vm', 'dry-test') == '$u1'
+        assert vm_uuid('gen-vm', 'dry-test') == '0bddbf3e-d9ce-5ae9-93c4-76538778ad38'
+        assert vm_uuid('run-vm', 'dry-test') != vm_uuid('gen-vm', 'dry-test')
+        "
+        echo "✓ uuid determinism and distinctness passed"
+
+    - name: "Dry-run: comma in --vm-name is rejected"
+      run: |
+        set +e
+        out=$(qemu-tool run-vm --vm-name 'my,vm' --no-kvm --dry-run 2>&1)
+        rc=$?
+        set -e
+        echo "$out"
+        [ $rc -ne 0 ] || { echo "comma in --vm-name should be rejected"; exit 1; }
+        echo "$out" | grep -q "must not contain a comma"
+        echo "✓ comma rejection passed"
+
+    - name: "List: no VMs running"
+      run: |
+        out=$(qemu-tool list)
+        echo "$out"
+        echo "$out" | grep -q "No QEMU VMs running."
+        out=$(qemu-tool list --qemu-tool-only)
+        echo "$out"
+        echo "$out" | grep -q "No qemu-tool VMs running."
+        out=$(qemu-tool list --json)
+        echo "$out"
+        echo "$out" | python3 -c "
+        import sys, json
+        d = json.load(sys.stdin)
+        assert d == [], d
+        "
+        echo "✓ empty list passed"
+
+    - name: "List: external vs qemu-tool identification"
+      timeout-minutes: 5
+      run: |
+        QEMU=$(command -v qemu-system-x86_64 || echo /opt/qemu/bin/qemu-system-x86_64)
+        [ -x "$QEMU" ] || { echo "no qemu-system-x86_64 in image"; exit 1; }
+
+        PIDS=""
+        # Never pkill qemu-system: these steps must not touch co-tenant
+        # processes if they are ever moved to a host runner.
+        cleanup() {
+          for p in $PIDS; do kill "$p" 2>/dev/null || true; done
+          sleep 1
+          for p in $PIDS; do kill -9 "$p" 2>/dev/null || true; done
+        }
+        trap cleanup EXIT
+
+        # Disk-less TCG guest: no KVM, no image, and silent on stdout.
+        QFLAGS="-machine q35 -m 128 -smp cpus=1 -display none -serial none -monitor none"
+
+        # Do not wrap these in timeout(1): $! would be the timeout pid and
+        # every pid-anchored grep below would silently fail.
+        "$QEMU" -name outsider -uuid 11111111-1111-1111-1111-111111111111 \
+          $QFLAGS > /tmp/ext-qemu.log 2>&1 &
+        ext_pid=$!
+        PIDS="$PIDS $ext_pid"
+
+        # Reuse the exact markers qemu-tool itself would emit.
+        marker=$(qemu-tool run-vm --vm-name ci-list-test --no-kvm --dry-run)
+        name_val=$(echo "$marker" | grep -o "guest=ci-list-test,debug-threads=on")
+        uuid_val=$(echo "$marker" \
+          | grep -oE "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" | head -1)
+        [ -n "$name_val" ] || { echo "no -name marker in dry-run output"; exit 1; }
+        [ "$uuid_val" = "43156abb-3309-57f3-8c19-5484fd078b18" ] || \
+          { echo "unexpected marker uuid: $uuid_val"; exit 1; }
+        "$QEMU" -name "$name_val" -uuid "$uuid_val" \
+          $QFLAGS > /tmp/our-qemu.log 2>&1 &
+        our_pid=$!
+        PIDS="$PIDS $our_pid"
+
+        sleep 3
+        kill -0 "$ext_pid" 2>/dev/null || { cat /tmp/ext-qemu.log; exit 1; }
+        kill -0 "$our_pid" 2>/dev/null || { cat /tmp/our-qemu.log; exit 1; }
+
+        # Anchor on PID: unlike run-vm --dry-run, list output is multi-line.
+        out=$(qemu-tool list 2>&1)
+        echo "$out"
+        echo "$out" | grep -qE "^${ext_pid}[[:space:]]+outsider[[:space:]]+external[[:space:]]+amd64"
+        echo "$out" | grep -qE "^${our_pid}[[:space:]]+ci-list-test[[:space:]]+qemu-tool/run-vm[[:space:]]+amd64"
+        echo "$out" | grep -q "were not started by this qemu-tool"
+
+        only=$(qemu-tool list --qemu-tool-only)
+        echo "$only"
+        echo "$only" | grep -qE "^${our_pid}[[:space:]]+ci-list-test[[:space:]]+qemu-tool/run-vm"
+        if echo "$only" | grep -qE "^${ext_pid}[[:space:]]"; then
+          echo "external VM leaked through --qemu-tool-only"
+          exit 1
+        fi
+
+        # The footnote goes to stderr; stdout must still lead with the header.
+        qemu-tool list > /tmp/both.log 2>&1
+        head -1 /tmp/both.log | grep -q "^PID" || \
+          { cat /tmp/both.log; echo "footnote printed before the table"; exit 1; }
+
+        # Never assert on CONTAINER here: docker is absent in this container.
+        qemu-tool list --json | python3 -c "
+        import sys, json
+        vms = {v['pid']: v for v in json.load(sys.stdin)}
+        ours, ext = vms[$our_pid], vms[$ext_pid]
+        assert ours['source'] == 'qemu-tool', ours
+        assert ours['role'] == 'run-vm', ours
+        assert ours['name'] == 'ci-list-test', ours
+        assert ours['arch'] == 'amd64', ours
+        assert ours['vcpus'] == 1, ours
+        assert ours['memory_mib'] == 128, ours
+        assert ours['kvm'] is False, ours
+        assert ours['vfio_user_sockets'] == [], ours
+        assert isinstance(ours['uptime_seconds'], int), ours
+        assert ext['source'] == 'external', ext
+        assert ext['role'] is None, ext
+        assert ext['name'] == 'outsider', ext
+        "
+        echo "✓ list identification passed"
+
+    - name: "Unit: list_vms and identity parsing helpers"
+      run: |
+        python3 - <<'PY'
+        import sys
+        from qemu_tool import identity, list_vms as L
+
+        fails = []
+        def check(label, got, want):
+            if got != want:
+                fails.append(f"{label}: got {got!r} want {want!r}")
+
+        # -m is a QemuOpts list: free key order, any size suffix, fractions.
+        check("-m 4096", L._memory(["q", "-m", "4096"]), 4096)
+        check("-m 512M", L._memory(["q", "-m", "512M"]), 512)
+        check("-m 8G", L._memory(["q", "-m", "8G"]), 8192)
+        check("-m 2g", L._memory(["q", "-m", "2g"]), 2048)
+        check("-m size=8G", L._memory(["q", "-m", "size=8G"]), 8192)
+        check("-m 8192K", L._memory(["q", "-m", "8192K"]), 8)
+        check("-m 1T", L._memory(["q", "-m", "1T"]), 1048576)
+        check("-m 1073741824B", L._memory(["q", "-m", "1073741824B"]), 1024)
+        check("-m 1.5G", L._memory(["q", "-m", "1.5G"]), 1536)
+        check("-m free key order", L._memory(["q", "-m", "slots=4,maxmem=16G,size=8G"]), 8192)
+        check("-m absent", L._memory(["q", "-nographic"]), None)
+
+        check("-smp 4", L._vcpus(["q", "-smp", "4"]), 4)
+        check("-smp cpus= first", L._vcpus(["q", "-smp", "cpus=8,sockets=1"]), 8)
+        check("-smp cpus= later", L._vcpus(["q", "-smp", "sockets=2,cores=2,cpus=4"]), 4)
+        check("-smp absent", L._vcpus(["q", "-nographic"]), None)
+
+        check("name marker", L._guest_name(["q", "-name", "guest=vm1,debug-threads=on"]), "vm1")
+        check("name bare", L._guest_name(["q", "-name", "outsider"]), "outsider")
+        check("name kv-only", L._guest_name(["q", "-name", "debug-threads=on"]), None)
+        check("name absent", L._guest_name(["q", "-nographic"]), None)
+        check("name last wins", L._guest_name(["q", "-name", "guest=a", "-name", "guest=b"]), "b")
+
+        check("uuid run-vm", identity.vm_uuid("run-vm", "dry-test"),
+              "26941056-3b06-5a48-a11d-948bcf877581")
+        check("uuid gen-vm", identity.vm_uuid("gen-vm", "dry-test"),
+              "0bddbf3e-d9ce-5ae9-93c4-76538778ad38")
+        check("identity_args", identity.identity_args("run-vm", "dry-test"),
+              ["-name", "guest=dry-test,debug-threads=on",
+               "-uuid", "26941056-3b06-5a48-a11d-948bcf877581"])
+        check("match run-vm",
+              identity.match_identity("dry-test", identity.vm_uuid("run-vm", "dry-test")), "run-vm")
+        check("match gen-vm",
+              identity.match_identity("dry-test", identity.vm_uuid("gen-vm", "dry-test")), "gen-vm")
+        check("match wrong name",
+              identity.match_identity("other", identity.vm_uuid("run-vm", "dry-test")), None)
+        check("match junk uuid", identity.match_identity("dry-test", "not-a-uuid"), None)
+        check("match no uuid", identity.match_identity("dry-test", None), None)
+        check("match no name", identity.match_identity(None, identity.vm_uuid("run-vm", "x")), None)
+
+        # Distro builds add suffixes to the emulator name.
+        for suffix in ("", "-spice", "-microvm"):
+            check(f"arch x86_64{suffix}",
+                  L._describe(1, [f"/usr/bin/qemu-system-x86_64{suffix}", "-m", "512"], {})["arch"],
+                  "amd64")
+        check("arch aarch64",
+              L._describe(1, ["/usr/bin/qemu-system-aarch64", "-m", "512"], {})["arch"], "arm64")
+        check("arch riscv64",
+              L._describe(1, ["/usr/bin/qemu-system-riscv64", "-m", "512"], {})["arch"], "riscv64")
+
+        # NVMe scratch drives are emitted before the root disk.
+        nvme = ["/usr/bin/qemu-system-x86_64", "-m", "512",
+                "-drive", "file=/var/lib/qemu-tool/images/dry-test-nvme1.qcow2"
+                          ",format=qcow2,if=none,id=nvme-1",
+                "-device", "nvme,serial=dry-test-nvme1,id=nvme-1-dev",
+                "-drive", "if=virtio,format=qcow2,file=/var/lib/qemu-tool/images/dry-test.qcow2",
+                ] + identity.identity_args("run-vm", "dry-test")
+        check("image is the root disk", L._describe(1, nvme, {})["image"],
+              "/var/lib/qemu-tool/images/dry-test.qcow2")
+
+        # Literal --nvme passthrough is appended before the markers, so a user
+        # -name cannot un-stamp a VM qemu-tool launched.
+        override = ["/usr/bin/qemu-system-x86_64", "-name", "guest=evil,debug-threads=on"] \
+            + identity.identity_args("run-vm", "myvm")
+        check("passthrough -name cannot strip identity",
+              L._describe(1, override, {})["source"], "qemu-tool")
+
+        argv = ["/usr/bin/qemu-system-x86_64", "-machine", "q35", "-smp", "cpus=2", "-m", "4096",
+                "-drive", "if=virtio,format=qcow2,file=/var/lib/qemu-tool/images/dry-test.qcow2",
+                "-netdev", "user,id=net0,hostfwd=tcp::2222-:22",
+                ] + identity.identity_args("run-vm", "dry-test")
+        d = L._describe(1, argv, {})
+        for key, want in [("name", "dry-test"), ("source", "qemu-tool"), ("role", "run-vm"),
+                          ("arch", "amd64"), ("vcpus", 2), ("memory_mib", 4096),
+                          ("ssh_port", 2222), ("kvm", False),
+                          ("image", "/var/lib/qemu-tool/images/dry-test.qcow2")]:
+            check(f"describe {key}", d[key], want)
+
+        ext = L._describe(2, ["/usr/bin/qemu-system-x86_64", "-name", "outsider",
+                              "-uuid", "11111111-1111-1111-1111-111111111111",
+                              "-m", "512"], {})
+        check("external source", ext["source"], "external")
+        check("external role", ext["role"], None)
+        check("external name", ext["name"], "outsider")
+        check("kvm detected",
+              L._describe(3, ["/usr/bin/qemu-system-x86_64", "-machine", "q35,accel=kvm"], {})["kvm"],
+              True)
+
+        if fails:
+            print("FAILED assertions:")
+            for f in fails:
+                print("  " + f)
+            sys.exit(1)
+        print(f"all parsing-helper assertions passed")
+        PY
+        echo "✓ parsing helpers passed"
+
+    - name: "Unit: /proc scanning is crash-resistant"
+      run: |
+        python3 - <<'PY'
+        import sys, pathlib
+        from qemu_tool import list_vms as L
+
+        fails = []
+
+        # cgroup path components are arbitrary kernel bytes; a non-UTF-8 one
+        # must cost that row its container name, not abort the whole listing.
+        fake = pathlib.Path("/tmp/fakeproc")
+        d = fake / "4242"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "cmdline").write_bytes(
+            b"/usr/bin/qemu-system-x86_64\0-name\0guest=badcg,debug-threads=on\0-m\0512\0")
+        (d / "cgroup").write_bytes(b"0::/system.slice/docker-\xff\xfe-bad.scope\n")
+        (d / "stat").write_text("4242 (qemu-system-x86) S " + " ".join(["0"] * 50) + "\n")
+        (d / "status").write_text("Name:\tqemu\n")
+
+        L._PROC = fake
+        try:
+            vms = L.collect()
+            if [(v["pid"], v["name"]) for v in vms] != [(4242, "badcg")]:
+                fails.append(f"non-utf8 cgroup: unexpected rows {vms!r}")
+        except Exception as exc:
+            fails.append(f"non-utf8 cgroup aborted the listing: {type(exc).__name__}: {exc}")
+
+        # /proc missing (chroot, mount namespace) must be a one-line error.
+        L._PROC = pathlib.Path("/tmp/definitely-not-a-proc")
+        try:
+            L.run()
+            fails.append("missing /proc: run() returned instead of erroring")
+        except SystemExit:
+            pass
+        except OSError as exc:
+            fails.append(f"missing /proc raised a bare traceback: {type(exc).__name__}: {exc}")
+
+        if fails:
+            print("FAILED assertions:")
+            for f in fails:
+                print("  " + f)
+            sys.exit(1)
+        print("/proc robustness assertions passed")
+        PY
+        echo "✓ /proc robustness passed"
 
   compose-tests:
     name: compose-tests

@@ -13,7 +13,11 @@ OUTDIR=${1:-site}
 PORT=${2:-2222}
 USER=${3:-ubuntu}
 VM_LABEL=${4:-}
-SSH="ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no -p ${PORT} ${USER}@localhost"
+# Defaults to localhost for bare-runner callers. Container jobs reach the VM
+# by its compose service name instead, since the published port lands on the
+# host rather than in the job container.
+HOST=${5:-localhost}
+SSH="ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no -p ${PORT} ${USER}@${HOST}"
 
 TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M UTC')
 COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")

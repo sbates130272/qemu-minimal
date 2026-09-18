@@ -1,8 +1,9 @@
-name: slash-command-dispatch
+name: qemu-minimal - slash-command-dispatch
 
 # Listens for slash commands in issue/PR comments from repo collaborators.
 # Supported commands:
-#   /run-ci-full  — trigger ansible-playbook-test on the PR branch (or main)
+#   /run-ci-full  — trigger every ansible-playbook-test-* workflow on the PR
+#                   branch (or main)
 
 on:
   issue_comment:
@@ -40,30 +41,38 @@ jobs:
           }
           return context.payload.repository.default_branch;
 
-    - name: Trigger ansible-playbook-test
+    - name: Trigger the ansible-playbook-test workflows
       uses: actions/github-script@v7
       with:
         script: |
-          await github.rest.actions.createWorkflowDispatch({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            workflow_id: 'ansible-playbook-test.yml',
-            ref: '${{ steps.branch.outputs.result }}',
-          });
+          const workflows = [
+            'ansible-playbook-test-rocm.yml',
+            'ansible-playbook-test-ernic.yml',
+            'ansible-playbook-test-rocjitsu.yml',
+            'ansible-playbook-test-ernic-rocjitsu.yml',
+          ];
+          for (const workflow_id of workflows) {
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id,
+              ref: '${{ steps.branch.outputs.result }}',
+            });
+          }
 
     - name: Post acknowledgement comment
       uses: actions/github-script@v7
       with:
         script: |
           const branch = '${{ steps.branch.outputs.result }}';
-          const runsUrl =
-            `https://github.com/${context.repo.owner}/${context.repo.repo}` +
-            `/actions/workflows/ansible-playbook-test.yml`;
+          const profiles = ['rocm', 'ernic', 'rocjitsu', 'ernic-rocjitsu'];
+          const links = profiles.map((p) =>
+            `[${p}](https://github.com/${context.repo.owner}/${context.repo.repo}` +
+            `/actions/workflows/ansible-playbook-test-${p}.yml)`
+          ).join(' · ');
           await github.rest.issues.createComment({
             owner: context.repo.owner,
             repo: context.repo.repo,
             issue_number: context.payload.issue.number,
-            body:
-              `Full CI triggered on \`${branch}\`. ` +
-              `[View runs](${runsUrl})`,
+            body: `Full CI triggered on \`${branch}\`. View runs: ${links}`,
           });

@@ -1,14 +1,14 @@
-.TH QEMU\-TOOL 1 "August 2026" "qemu-tool 1.2.0" "User Commands"
+.TH QEMU\-TOOL 1 "September 2026" "qemu-tool 1.3.0" "User Commands"
 .SH NAME
-qemu\-tool \- run and generate QEMU virtual machines
+qemu\-tool \- run, generate and list QEMU virtual machines
 .SH SYNOPSIS
 .B qemu\-tool
 .RB [ \-\-version ]
-.I {run\-vm,gen\-vm,compose}
+.I {run\-vm,gen\-vm,compose,list}
 .RI [ options ]
 .SH DESCRIPTION
 .B qemu\-tool
-provides three subcommands for managing QEMU-based virtual machines:
+provides four subcommands for managing QEMU-based virtual machines:
 .TP
 .B run\-vm
 Launch an existing VM image created by
@@ -22,6 +22,14 @@ Start the vfio-user GPU VM Docker Compose stack (rocm-ernic + rocjitsu),
 wrapping
 .B docker compose
 with VM_NAME and VM_IMAGES_DIR pre-configured.
+.TP
+.B list
+List every QEMU VM running on this node, including VMs inside containers, and
+identify which of them
+.B qemu\-tool
+started.
+See
+.BR "VM IDENTIFICATION" .
 .PP
 VM images are stored in
 .I /var/lib/qemu-tool/images
@@ -44,6 +52,8 @@ Name of the VM (default:
 .IR qemu-minimal ).
 Used to derive image file paths such as
 .IR <images>/<NAME>.qcow2 .
+May not contain a comma, which would terminate the QEMU option value it is
+substituted into.
 .TP
 .BI \-\-arch " ARCH"
 Target architecture:
@@ -242,6 +252,72 @@ Default:
 .PP
 All remaining arguments are forwarded verbatim to
 .BR "docker compose" .
+Do not place a
+.B \-\-
+separator before the
+.B "docker compose"
+subcommand; the remaining arguments are already collected verbatim, so a
+.B \-\-
+is passed through to
+.B docker
+and rejected.
+.SH LIST OPTIONS
+.TP
+.B \-\-json
+Emit JSON instead of the table. The JSON form additionally includes the full
+disk image path, full vfio-user socket paths, the owning user and the uptime in
+seconds.
+.TP
+.B \-\-qemu\-tool\-only
+Omit VMs that were not started by
+.BR qemu\-tool .
+.PP
+The table reports, per VM: PID, VM name, source, architecture, vCPU count,
+memory, forwarded SSH port, whether KVM is enabled, uptime, the container name
+when the VM runs inside one, and any attached vfio-user sockets.
+.SH VM IDENTIFICATION
+.B qemu\-tool
+stamps every VM it launches with two generic QEMU options:
+.PP
+.RS
+.EX
+\-name guest=<vm\-name>,debug\-threads=on
+\-uuid <uuid5(namespace, "<role>:<vm\-name>")>
+.EE
+.RE
+.PP
+where
+.I role
+is
+.B run\-vm
+or
+.BR gen\-vm .
+.B list
+recomputes the UUID from the parsed guest name and compares it against the
+.B \-uuid
+on the command line. An exact match identifies the VM as
+.BR qemu\-tool 's
+and reveals which subcommand started it, so a transient
+.B gen\-vm
+image-build VM is distinguishable from a running
+.B run\-vm
+VM.
+.PP
+Both options are generic rather than machine-specific, so they are accepted on
+all supported architectures, including
+.B riscv64
+where
+.B \-smbios
+is not.
+.PP
+VMs shown as
+.B external
+were either started by something other than
+.BR qemu\-tool ,
+or were started by a version predating these markers; restart such a VM for it
+to be identified. Identification is for operator convenience, not a security
+boundary \(em the markers are plain command-line arguments and can be set by
+anyone.
 .SH FILES
 .TP
 .I /var/lib/qemu-tool/images
@@ -297,6 +373,30 @@ Start the vfio-user GPU VM stack:
 .RS
 .EX
 qemu\-tool compose \-\-vm\-name myvm up
+.EE
+.RE
+.PP
+List every VM running on this node:
+.PP
+.RS
+.EX
+qemu\-tool list
+.EE
+.RE
+.PP
+List only VMs this tool started, as JSON:
+.PP
+.RS
+.EX
+qemu\-tool list \-\-qemu\-tool\-only \-\-json
+.EE
+.RE
+.PP
+Find the PID of a VM by name:
+.PP
+.RS
+.EX
+qemu\-tool list \-\-json | jq \-r '.[] | select(.name=="myvm") | .pid'
 .EE
 .RE
 .PP

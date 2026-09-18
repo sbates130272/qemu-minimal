@@ -1,6 +1,42 @@
 ---
+# Installed with --no-deps, so every collection the playbooks reach has to be
+# named here. That is deliberate: sbates130272.batesste declares amazon.aws and
+# community.libvirt, and letting galaxy resolve them pulled ~10 MiB this repo
+# never touches -- amazon.aws appears nowhere outside that collection's own
+# MANIFEST.json, and community.libvirt is used only by its vm_create role,
+# which none of these playbooks invoke.
+#
+# The cost of --no-deps is that a new upstream dependency goes missing here
+# instead of being installed silently, surfacing as a module-not-found. If that
+# happens, add the collection below rather than dropping --no-deps.
 collections:
   - name: sbates130272.batesste
     version: ">=2.4.0"
-  - name: sbates130272.rocm_ernic
-    version: ">=0.1.0"
+  # Pinned to the upstream git tree rather than Galaxy. Galaxy publishes only
+  # 0.1.0, which is the pre-ionic collection: it builds the out-of-tree
+  # rocm_ernic_eth/rocm_ernic_rdma modules and reads driver/ and rdma-core/,
+  # both deleted upstream on 2026-09-16. ">=0.1.0" looks like it would pick up
+  # 0.2.0 and never will, because 0.2.0 was never published. The collection
+  # lives in the repo's ansible/ subdirectory, which is what the #/ansible/
+  # fragment selects.
+  #
+  # Pinned to a SHA, not a branch: a git requirement is re-resolved on every
+  # ansible-galaxy run (there is no installed version for it to compare
+  # against), so a branch would silently move the collection under us
+  # mid-series. Bump this deliberately. Move back to a Galaxy version pin once
+  # 0.2.0 is published there.
+  #
+  # ernic_source clones the same repo again inside the guest to build from, and
+  # defaults that checkout to "main". playbooks/vars/ernic-pins.yml pins it to
+  # this same SHA so the roles and the sources they build come from one tree --
+  # bump both together.
+  - name: https://github.com/ROCm/rocm-ernic.git#/ansible/
+    type: git
+    version: 7b6fa94a9c6997a14f189f3e3d6460419e958c7c
+  - name: ansible.posix
+    version: ">=2.2.2"
+  - name: community.general
+    version: ">=13.3.0"
+  # Required by community.general itself, not used directly.
+  - name: community.library_inventory_filtering_v1
+    version: ">=1.0.0"

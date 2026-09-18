@@ -19,7 +19,7 @@ x-gpu-common: &gpu-common
 services:
   rocjitsu:
     <<: *gpu-common
-    image: "${ROCJITSU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:latest}"
+    image: "${ROCJITSU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20260918.g7438e48-rocjitsu.20d4ce1}"
     command:
       - rocjitsu
       - --config
@@ -34,7 +34,7 @@ services:
       start_period: 5s
 
   qemu:
-    image: "${QEMU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:latest}"
+    image: "${QEMU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260918.g7438e48-qemu11.1.1-vfu.8039244}"
     depends_on:
       rocjitsu:
         condition: service_healthy
@@ -51,10 +51,8 @@ services:
       - /bin/sh
       - -c
       - |
-        if ! command -v qemu-tool > /dev/null 2>&1; then
-          cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
-          PIPX_BIN_DIR=/usr/local/bin pipx install --pip-args="--no-build-isolation" /tmp/qemu-tool-build
-        fi
+        cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
+        PIPX_BIN_DIR=/usr/local/bin pipx install --force /tmp/qemu-tool-build
         socks=$(ls /run/vfu/*.sock 2>/dev/null | tr '\n' ',' | sed 's/,$//')
         if [ -z "$$socks" ]; then
           echo "ERROR: no vfio-user sockets found in /run/vfu" >&2

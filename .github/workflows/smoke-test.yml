@@ -1,4 +1,4 @@
-name: qemu-minimal-smoke-test
+name: qemu-minimal - smoke-test
 
 on:
   workflow_dispatch:
@@ -8,6 +8,11 @@ on:
     paths:
     - 'qemu/*-vm'
     - '.github/workflows/smoke-test.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Only supersede PR runs: a push to main or a scheduled run should finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
 
@@ -22,6 +27,17 @@ jobs:
     steps:
     - name: Check out code using action/checkout
       uses: actions/checkout@v4.3.1
+    - name: Enable KVM
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | \
+          sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
+    - name: Verify KVM is available
+      run: |
+        test -c /dev/kvm || { echo "::error::/dev/kvm missing - guest would run under TCG"; exit 1; }
+        test -r /dev/kvm && test -w /dev/kvm || { echo "::error::/dev/kvm not read-write"; exit 1; }
+        echo "KVM available: $(ls -l /dev/kvm)"
     - name: Install packages
       run: |
         sudo apt-get update -qq
@@ -41,7 +57,6 @@ jobs:
       env:
         VM_NAME: qemu-minimal-smoke-test
         RELEASE: ${{ matrix.release }}
-        KVM: none
         USERNAME: ubuntu
         PASS: password
         PACKAGES: none
@@ -99,7 +114,6 @@ jobs:
       working-directory: qemu
       env:
         VM_NAME: qemu-minimal-smoke-test
-        KVM: none
         NVME: 1
     - name: Wait for VM to boot (smart polling with 180s timeout)
       run: |
@@ -142,6 +156,17 @@ jobs:
     steps:
     - name: Check out code
       uses: actions/checkout@v4.3.1
+    - name: Enable KVM
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | \
+          sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
+    - name: Verify KVM is available
+      run: |
+        test -c /dev/kvm || { echo "::error::/dev/kvm missing - guest would run under TCG"; exit 1; }
+        test -r /dev/kvm && test -w /dev/kvm || { echo "::error::/dev/kvm not read-write"; exit 1; }
+        echo "KVM available: $(ls -l /dev/kvm)"
     - name: Install packages
       run: |
         sudo apt-get update -qq
@@ -160,7 +185,6 @@ jobs:
       working-directory: qemu
       env:
         VM_NAME: nullblk-smoke-test
-        KVM: none
         USERNAME: ubuntu
         PASS: password
         PACKAGES: none
@@ -189,7 +213,6 @@ jobs:
       working-directory: qemu
       env:
         VM_NAME: nullblk-smoke-test
-        KVM: none
         NVME: -2
     - name: Wait for VM to boot (180s timeout)
       if: steps.nullblk.outputs.has_nullblk == 'true'
@@ -228,7 +251,7 @@ jobs:
   dry-run-tests:
     name: dry-run-tests
     runs-on: ubuntu-latest
-    container: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:august-11-2026
+    container: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260918.g7438e48-qemu11.1.1-vfu.8039244
     steps:
     - name: Check out code
       uses: actions/checkout@v4.3.1

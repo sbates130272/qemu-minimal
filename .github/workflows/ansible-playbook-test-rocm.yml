@@ -1,0 +1,98 @@
+name: qemu-minimal - ansible-playbook-test-rocm
+
+# vm-rocm: install the ROCm stack, boot a bare VM, verify packages.
+# Boots QEMU directly via qemu-tool run-vm inside the CI image. No compose, so
+# the forwarded SSH port lives in this container and localhost is correct.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'ansible/playbooks/vm-rocm.yml'
+      - 'ansible/requirements.yml'
+      - 'qemu/qemu-tool/**'
+      - 'qemu/pyproject.toml'
+      - '.github/actions/setup-vm-job/action.yml'
+      - '.github/workflows/ansible-playbook-test-rocm.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Only supersede PR runs: a push to main or a scheduled run should finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  VM_IMAGES_DIR: /var/lib/qemu-tool/images
+  # No spaces inside the JSON — gen_vm.py splits on whitespace so spaces
+  # inside the value create extra positional arguments for ansible-playbook.
+  ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false}'
+
+jobs:
+  test-vm-rocm:
+    name: test-vm-rocm
+    runs-on: ubuntu-latest
+    container:
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260918.g7438e48-qemu11.1.1-vfu.8039244
+      # Supplies qemu-system-x86_64, qemu-img and cloud-localds.
+      options: --device /dev/kvm
+    timeout-minutes: 90
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4.3.1
+
+    - name: Set up VM job
+      uses: ./.github/actions/setup-vm-job
+      with:
+        cloud-image-key: rocm
+        release: noble
+
+    - name: Generate VM with vm-rocm playbook
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        qemu-tool gen-vm \
+          --vm-name rocm-test \
+          --release noble \
+          --username ubuntu \
+          --password password \
+          --packages none \
+          --size 64 \
+          --ansible-playbook ansible/playbooks/vm-rocm.yml
+
+    - name: Boot VM
+      run: qemu-tool run-vm --vm-name rocm-test > run-vm-output.log 2>&1 &
+
+    - name: Wait for VM SSH (180s timeout)
+      run: |
+        elapsed=0
+        while [ $elapsed -lt 180 ]; do
+          if ssh -o ConnectTimeout=1 \
+                 -o NoHostAuthenticationForLocalhost=yes \
+                 -o StrictHostKeyChecking=no \
+                 -p 2222 ubuntu@localhost true 2>/dev/null; then
+            echo "VM ready after ${elapsed}s"
+            exit 0
+          fi
+          sleep 2; elapsed=$((elapsed + 2))
+        done
+        echo "VM failed to boot in time"
+        exit 1
+
+    - name: Verify ROCm directory present
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@localhost "ls /opt/rocm/"
+        echo "✓ /opt/rocm present"
+
+    - name: Verify amdrocm-runtime-dev installed
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@localhost \
+          "dpkg-query -W -f='\${Status}' amdrocm-runtime-dev" \
+          | grep -q "install ok installed"
+        echo "✓ amdrocm-runtime-dev installed"
+
+    - name: Print run-vm log on failure
+      if: failure()
+      run: cat run-vm-output.log

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .caps import QemuCaps, qemu_binary
 from .config import VMConfig
+from .identity import identity_args
 
 _ARCH_MACHINE = {
     "amd64": "q35",
@@ -42,6 +43,9 @@ def build_command(cfg: VMConfig, caps: QemuCaps) -> list[str]:
     cmd += _mcast_args(cfg)
     cmd += _guest_agent_args(cfg)
     cmd += _qmp_args(cfg)
+    # Last: qemu and the listing parser both take the last -name/-uuid, so
+    # stamping here stops literal --nvme passthrough from un-identifying the VM.
+    cmd += identity_args("run-vm", cfg.vm_name)
     return cmd
 
 
@@ -129,6 +133,13 @@ def _pci_hostdev_args(cfg: VMConfig) -> list[str]:
     return args
 
 
+def _nvme_serial(name: str) -> str:
+    # QEMU rejects an nvme serial longer than 20 characters outright, so a VM
+    # name of any length would fail to start. Keep the tail rather than the
+    # head: the "-nvmeN" suffix is what distinguishes one drive from another.
+    return name[-20:]
+
+
 def _nvme_args(cfg: VMConfig, caps: QemuCaps) -> list[str]:
     if cfg.nvme is None:
         return []
@@ -145,7 +156,7 @@ def _nvme_args(cfg: VMConfig, caps: QemuCaps) -> list[str]:
             name = f"{cfg.vm_name}-nvme{i}"
             args += [
                 "-drive", f"file=/dev/nullb{i},format=raw,if=none,id=nvme-{i}",
-                "-device", f"nvme,serial={name},drive=nvme-{i}",
+                "-device", f"nvme,serial={_nvme_serial(name)},drive=nvme-{i}",
             ]
         return args
     # literal string — split and pass through
@@ -170,7 +181,7 @@ def _nvme_create(
         f",discard=unmap,detect-zeroes=unmap"
     )
 
-    dev = f"nvme,serial={name},id=nvme-{idx}-dev"
+    dev = f"nvme,serial={_nvme_serial(name)},id=nvme-{idx}-dev"
     if cfg.pci_mmio_bridge:
         if caps.has_ioeventfd:
             dev += ",ioeventfd=off"
@@ -244,20 +255,24 @@ def _root_drive_args(cfg: VMConfig) -> list[str]:
     return ["-drive", drv]
 
 
-def _netdev_args(cfg: VMConfig) -> list[str]:
+def _netdev_args(cfg: VMConfig, mac: str | None = None) -> list[str]:
     if cfg.mgmt_tap:
         tap = _mgmt_tap_name(cfg.ssh_port)
-        mac = _mgmt_mac(cfg.ssh_port)
+        m = mac or _mgmt_mac(cfg.ssh_port)
         return [
             "-netdev", f"tap,id=net0,ifname={tap},script=no,downscript=no",
-            "-device", f"virtio-net-pci,netdev=net0,mac={mac}",
+            "-device", f"virtio-net-pci,netdev=net0,mac={m}",
         ]
     hostfwd = f"hostfwd=tcp::{cfg.ssh_port}-:22"
     for rule in cfg.extra_hostfwd:
         hostfwd += f",hostfwd={rule}"
+    # Use a deterministic MAC so the VM's netplan (written by cloud-init
+    # during gen-vm first-boot with the same MAC) matches on all subsequent
+    # boots, including compose run-vm invocations.
+    m = mac or _mgmt_mac(cfg.ssh_port)
     return [
         "-netdev", f"user,id=net0,{hostfwd}",
-        "-device", "virtio-net-pci,netdev=net0",
+        "-device", f"virtio-net-pci,netdev=net0,mac={m}",
     ]
 
 

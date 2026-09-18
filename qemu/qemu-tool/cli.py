@@ -13,6 +13,7 @@ from .compose import _DEFAULT_STACK, _STACKS, run as compose_run
 from .config import _DEFAULT_IMAGES
 from .gen_vm import run as gen_vm_run
 from .libvirt_xml import LibvirtXml
+from .list_vms import run as list_vms_run
 from .run_vm import build_command, run as run_vm_run
 
 _UNSET = object()  # sentinel for "flag not provided on CLI"
@@ -43,11 +44,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
 
     shared = _shared_parent()
-    sub = parser.add_subparsers(metavar="{run-vm,gen-vm,compose}")
+    sub = parser.add_subparsers(metavar="{run-vm,gen-vm,compose,list}")
 
     _add_run_vm(sub, shared)
     _add_gen_vm(sub, shared)
     _add_compose(sub)
+    _add_list(sub)
 
     return parser
 
@@ -161,6 +163,26 @@ def _add_compose(sub: argparse._SubParsersAction) -> None:
     p.set_defaults(func=_compose_cmd)
 
 
+def _add_list(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser(
+        "list",
+        help="List QEMU VMs running on this node.",
+        description=(
+            "List every qemu-system process on this node, including those "
+            "inside containers, and identify which were started by qemu-tool."
+        ),
+    )
+    p.add_argument(
+        "--json", action="store_true", dest="as_json",
+        help="Emit JSON instead of a table (includes image path and full socket paths).",
+    )
+    p.add_argument(
+        "--qemu-tool-only", action="store_true",
+        help="Only show VMs started by qemu-tool.",
+    )
+    p.set_defaults(func=_list_cmd)
+
+
 def _add_gen_vm(
     sub: argparse._SubParsersAction, shared: argparse.ArgumentParser
 ) -> None:
@@ -236,6 +258,10 @@ def _compose_cmd(args: argparse.Namespace) -> None:
                 stack=args.stack, vm2_name=args.vm2_name)
 
 
+def _list_cmd(args: argparse.Namespace) -> None:
+    list_vms_run(as_json=args.as_json, qemu_tool_only=args.qemu_tool_only)
+
+
 def _gen_vm_cmd(args: argparse.Namespace) -> None:
     cfg = _build_config(args, subcommand="gen-vm")
     gen_vm_run(cfg)
@@ -252,7 +278,12 @@ def _build_config(args: argparse.Namespace, subcommand: str) -> VMConfig:
         xml_cfg = VMConfig()
 
     cli_overrides = _extract_cli_overrides(args, subcommand)
-    return _merge(xml_cfg, cli_overrides)
+    cfg = _merge(xml_cfg, cli_overrides)
+    if "," in cfg.vm_name:
+        # A comma terminates a qemu option value, so it corrupts -name, -uuid,
+        # -drive file= and -chardev path= alike.
+        sys.exit(f"Error: --vm-name must not contain a comma: {cfg.vm_name!r}")
+    return cfg
 
 
 def _extract_cli_overrides(

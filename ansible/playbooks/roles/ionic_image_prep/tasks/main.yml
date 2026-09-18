@@ -1,0 +1,163 @@
+---
+# Prepare a base Ubuntu guest for rocm-ernic's ionic mode. Everything here is
+# expensive and version-stable, so it belongs in the backing image rather than
+# in ernic_guest_setup, which runs per overlay on every test cycle.
+#
+# This is the local replacement for sbates130272.rocm_ernic.ernic_image_prep,
+# removed in collection 0.2.0. See defaults/main.yml for what it tracks.
+
+# Packages before the kernel: the mainline .debs depend on linux-base, kmod,
+# initramfs-tools and wireless-regdb, and pre-seeding them makes the kernel
+# install a local dpkg operation instead of a second archive resolution. This
+# is the same ordering packages/ionic.txt gets by running in cloud-init.
+- name: Install the RDMA userspace and DKMS toolchain
+  ansible.builtin.apt:
+    name: "{{ ionic_image_packages }}"
+    state: present
+    update_cache: true
+  register: ionic_image_apt_result
+  retries: "{{ ionic_image_apt_retries }}"
+  delay: "{{ ionic_image_apt_delay }}"
+  until: ionic_image_apt_result is success
+  when: ionic_image_packages | length > 0
+
+- name: Install the pinned mainline kernel
+  ansible.builtin.include_tasks: kernel.yml
+  when: ionic_image_kernel_install | bool
+
+- name: Write the rdma-core provider stamp
+  when: ionic_image_provider_stamp | bool
+  block:
+
+    - name: Read the installed rdma-core version
+      ansible.builtin.command:
+        argv:
+          - dpkg-query
+          - -W
+          - -f=${Version}
+          - rdma-core
+      register: ionic_image_rdma_core_pkg
+      changed_when: false
+
+    # The role's own verification, run here so a guest missing the provider
+    # fails this image rather than the consumer. The provider carries the ABI
+    # suffix rather than a bare name -- libionic-rdmav59.so at 61.0 -- so this
+    # matches on the prefix.
+    - name: Verify the ionic verbs provider is present
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: ls /usr/lib/*/libibverbs/libionic*.so
+      register: ionic_image_provider_ls
+      changed_when: false
+
+    - name: Create the stamp directory
+      ansible.builtin.file:
+        path: "{{ ionic_image_stamp_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    # Upstream strips the Debian revision (61.0-2ubuntu3 -> 61.0) because that
+    # is what ernic_rdma_core_version is compared against.
+    - name: Stamp the installed provider
+      ansible.builtin.copy:
+        dest: "{{ ionic_image_stamp_dir }}/provider.stamp"
+        content: "{{ ionic_image_rdma_core_pkg.stdout | regex_replace('-.*$', '') }}:none\n"
+        owner: root
+        group: root
+        mode: "0644"
+
+- name: Disable KillUserProcesses in logind
+  when: ionic_image_logind_keep_processes | bool
+  block:
+
+    # A cloud image does not necessarily ship the drop-in directory, and the
+    # copy below will not create it.
+    - name: Ensure the logind drop-in directory exists
+      ansible.builtin.file:
+        path: /etc/systemd/logind.conf.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Write the KillUserProcesses drop-in
+      ansible.builtin.copy:
+        dest: /etc/systemd/logind.conf.d/99-kill-user-processes.conf
+        content: |
+          [Login]
+          KillUserProcesses=no
+        owner: root
+        group: root
+        mode: "0644"
+
+- name: Enable the ionic modules on boot
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/rocm-ernic-ionic.conf
+    content: "{{ ionic_image_modules | join('\n') }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+  when: ionic_image_modules_load | bool
+
+- name: Register the emulated NIC in pci.ids
+  when: ionic_image_pciids | bool
+  block:
+
+    - name: Find the system pci.ids path
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /usr/share/hwdata/pci.ids
+        - /usr/share/misc/pci.ids
+      register: ionic_image_pciids_stat
+
+    - name: Set the pci.ids path fact
+      ansible.builtin.set_fact:
+        ionic_image_pciids_path: >-
+          {{ (ionic_image_pciids_stat.results
+              | selectattr('stat.exists')
+              | first
+              | default({})).item | default('') }}
+
+    - name: Check whether the entry already exists in pci.ids
+      ansible.builtin.command:
+        argv:
+          - grep
+          - -q
+          - "{{ ionic_image_pciids_entry }}"
+          - "{{ ionic_image_pciids_path }}"
+      register: ionic_image_pciids_grep
+      failed_when: false
+      changed_when: false
+      when: ionic_image_pciids_path | length > 0
+
+    - name: Merge the emulated NIC into pci.ids
+      ansible.builtin.replace:
+        path: "{{ ionic_image_pciids_path }}"
+        regexp: '^({{ ionic_image_pciids_vendor }}\s+.*)$'
+        replace: '\1\n\t{{ ionic_image_pciids_entry }}'
+      when:
+        - ionic_image_pciids_path | length > 0
+        - ionic_image_pciids_grep.rc | default(1) != 0
+
+# The collection defends against this with ernic_dpkg_lock_wait: 300 on every
+# guest task. Masking the units in the image is the cheaper half of that.
+- name: Mask unattended-upgrades
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    masked: true
+    enabled: false
+    state: stopped
+  loop:
+    - unattended-upgrades.service
+    - apt-daily.timer
+    - apt-daily-upgrade.timer
+  failed_when: false
+  when: ionic_image_mask_unattended_upgrades | bool
+
+- name: Clean the apt cache to shrink the image
+  ansible.builtin.apt:
+    autoclean: true
+  when: ionic_image_clean_apt | bool

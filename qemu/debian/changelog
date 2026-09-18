@@ -1,3 +1,12 @@
+python3-qemu-tool (1.3.0) unstable; urgency=low
+
+  * Add 'qemu-tool list' subcommand to list running QEMU VMs on the node,
+    including VMs inside containers
+  * Stamp VMs launched by run-vm and gen-vm with -name/-uuid identity markers
+    so list can identify which VMs qemu-tool started
+
+ -- Stephen Bates <sbates130272@users.noreply.github.com>  Mon, 15 Sep 2026 00:00:00 +0000
+
 python3-qemu-tool (1.2.0) unstable; urgency=low
 
   * Add Debian package (python3-qemu-tool) for system-wide installation

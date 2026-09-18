@@ -7,6 +7,17 @@
   # git_setup role's `community.general.git_config` (scope: global) tasks
   # would write to /root/.gitconfig instead of the target user's home.
   become: false
+  # See vm-rocm.yml: set the GitHub token once here instead of relying on each
+  # workflow step to pass it through, so the roles never fall back to the
+  # anonymous API rate limit.
+  module_defaults:
+    ansible.builtin.uri:
+      headers: >-
+        {{
+          ({'Authorization': 'token ' + lookup('env', 'GITHUB_TOKEN')}
+           if lookup('env', 'GITHUB_TOKEN')
+           else {})
+        }}
   vars:
     username: "{{ vm_username | default('ubuntu') }}"
     root_user: "{{ vm_root_user | default('ubuntu') }}"

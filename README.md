@@ -13,8 +13,8 @@
 [![Ansible Test](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/ansible-setup-test.yml?branch=main&label=ansible&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/ansible-setup-test.yml)
 [![ShellCheck](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/shell-check.yml?branch=main&label=shellcheck&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/shell-check.yml)
 [![Spell Check](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/spell-check.yml?branch=main&label=spell-check&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/spell-check.yml)
-[![2VM Smoke Test](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/2vm-smoke-test.yml?branch=main&label=2vm-smoke&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/2vm-smoke-test.yml)
-[![2VM Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/2vm-vm-report.yml?branch=main&label=2vm-report&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/2vm-vm-report.yml)
+[![Two-VM Smoke Test](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/smoke-test-rocm-two-vms.yml?branch=main&label=smoke-test-rocm-two-vms&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/smoke-test-rocm-two-vms.yml)
+[![Two-VM Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/vm-report-two-vms.yml?branch=main&label=vm-report-two-vms&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/vm-report-two-vms.yml)
 
 ## Summary
 
@@ -27,7 +27,7 @@ testing.
 
 **Key Features:**
 - Fast VM creation using Ubuntu cloud images and cloud-init (Noble and Resolute)
-- `qemu-tool` Python CLI with `run-vm`, `gen-vm`, and `compose` subcommands
+- `qemu-tool` Python CLI with `run-vm`, `gen-vm`, `compose`, and `list` subcommands
 - Bidirectional libvirt domain XML support (`--domain` input, `--convert-to-libvirt` output)
 - NVMe device emulation with tracing support
 - PCIe device passthrough (VFIO)
@@ -41,8 +41,11 @@ testing.
 Download the `.deb` from the [GitHub Releases](../../releases) page and install:
 
 ```bash
-sudo dpkg -i python3-qemu-tool_*.deb
+sudo apt install ./python3-qemu-tool_*.deb
 ```
+
+Use `apt` rather than `dpkg -i`: the package depends on a QEMU system emulator
+and `qemu-utils`, and `dpkg` will not resolve those for you.
 
 This installs `qemu-tool` to `/usr/bin/qemu-tool` and creates
 `/var/lib/qemu-tool/images` (owned `root:kvm`, mode `2775`).
@@ -55,13 +58,41 @@ sudo usermod -aG kvm $USER
 
 ## Quick Start (qemu-tool)
 
-Install the tool from source (from the repo root):
+Install the tool from source with [pipx](https://pipx.pypa.io/), which puts
+`qemu-tool` on your `PATH` in its own isolated virtualenv:
+
+```bash
+sudo apt install -y pipx
+pipx ensurepath          # adds ~/.local/bin to PATH; open a new shell after
+pipx install -e ./qemu   # from the repo root
+```
+
+`-e` installs in editable mode, so edits to the source tree take effect without
+reinstalling. This matters for more than convenience: `compose` locates its
+stack directories relative to the package source, so a non-editable
+`pipx install` cannot find them unless the `.deb` has also been installed.
+
+A pipx install deliberately does not provide everything the `.deb` does — the
+`/usr/share/qemu-tool` data files, the man page, and `/var/lib/qemu-tool/images`
+are all install-tree artifacts that cannot live inside a virtualenv. In
+particular, pass `--packages` explicitly, since its default
+(`/usr/share/qemu-tool/packages-default`) will not exist:
+
+```bash
+qemu-tool gen-vm --vm-name myvm --packages ./qemu/packages.d/packages-default
+```
+
+A plain virtualenv works too, if you prefer to activate it explicitly:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ./qemu
 ```
+
+If a build fails with `Cannot update time stamp of directory
+'qemu_tool.egg-info'`, a previous root-owned build left an artifact behind.
+Delete the `qemu/qemu_tool.egg-info` directory as root and retry.
 
 Generate and run a Noble VM:
 
@@ -187,7 +218,7 @@ The directory is created by the package installer with `root:kvm` ownership
 and mode `2775` (setgid) so any member of the `kvm` group can read and write
 images without `sudo`.
 
-When using a source checkout with `pip install -e ./qemu`, override the
+When using a source checkout (`pipx install -e ./qemu`), override the
 default with `--images`:
 
 ```bash
@@ -233,7 +264,16 @@ the backing image. This installs roles from the
 The host must have `ansible`, `ansible-galaxy`, and the Python
 `jmespath` module for the same interpreter as `ansible-playbook`
 (install with `pip install jmespath` inside the venv when needed). When the collection is not already installed, `gen-vm` runs
-`ansible-galaxy collection install -r ansible/requirements.yml`.
+`ansible-galaxy collection install --no-deps -r ansible/requirements.yml`.
+`requirements.yml` lists every collection the playbooks need, including the
+ones that would otherwise arrive as transitive dependencies, so `--no-deps`
+skips roughly 10 MiB of collections this repository never uses.
+
+One exception, temporary: `sbates130272.rocm_ernic` is pulled from the
+upstream [rocm-ernic][rocm-ernic] git tree at a pinned SHA rather than from
+Galaxy. Galaxy publishes only 0.1.0, the pre-ionic collection, and the ionic
+work needs 0.2.0. This reverts to a normal Galaxy version pin as soon as
+rocm-ernic publishes its next collection.
 
 ### Available playbooks
 
@@ -241,7 +281,7 @@ The host must have `ansible`, `ansible-galaxy`, and the Python
 |---------|-------------|
 | `vm-basic.yml` | User setup, favourite packages, git config |
 | `vm-rocm.yml` | As above, plus ROCm stack |
-| `vm-ernic.yml` | ROCm + [rocm-ernic][rocm-ernic-galaxy] RDMA NIC prerequisites; `--tags configure` for post-boot NIC setup |
+| `vm-ernic.yml` | ROCm + [rocm-ernic][rocm-ernic] RDMA NIC prerequisites; `--tags configure` for post-boot NIC setup |
 | `vm-rocjitsu.yml` | ROCm + rocjitsu GPU firmware and driver prerequisites |
 | `vm-ernic-rocjitsu.yml` | Both ernic and rocjitsu prerequisites combined |
 
@@ -316,6 +356,54 @@ flags take precedence over XML values).
 | `--extra-hostfwd RULE` | — | Extra hostfwd rule e.g. `tcp::9150-:9100` (repeatable) |
 | `--dry-run` | off | Print QEMU command instead of running |
 | `--convert-to-libvirt [FILE]` | — | Emit libvirt domain XML to FILE (default `<vm>.xml`) |
+
+### list flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--json` | off | Emit JSON instead of a table |
+| `--qemu-tool-only` | off | Omit VMs not started by qemu-tool |
+
+`qemu-tool list` shows every `qemu-system-*` process on the node — including
+VMs running inside containers, which it attributes back to the container name —
+and says which ones qemu-tool started:
+
+```console
+$ qemu-tool list
+PID    NAME         SOURCE            ARCH   VCPU  MEM    SSH   KVM  UPTIME  CONTAINER                     VFIO-USER
+37374  rocjitsu-vm  external          amd64  4     8192M  2222  yes  53m     vfio-user-rocjitsu-vm-qemu-1  rocjitsu-1.sock
+79805  marker-test  qemu-tool/run-vm  amd64  1     1024M  2223  yes  0m      -                             -
+```
+
+`--json` adds the disk image path, full vfio-user socket paths, owning user and
+uptime in seconds:
+
+```bash
+# PID of a VM by name
+qemu-tool list --json | jq -r '.[] | select(.name=="myvm") | .pid'
+```
+
+#### How VMs are identified
+
+qemu-tool stamps every VM it launches with two generic QEMU options:
+
+```
+-name guest=<vm-name>,debug-threads=on
+-uuid <uuid5(namespace, "<role>:<vm-name>")>
+```
+
+`list` recomputes the UUID from the parsed guest name and compares it against
+the `-uuid` on the command line. An exact match identifies the VM as
+qemu-tool's and reveals which subcommand started it, so a transient `gen-vm`
+image-build VM is distinguishable from a running `run-vm` VM.
+
+Both options are generic rather than machine-specific, so they work on all
+supported architectures — including riscv64, where `-smbios` would not.
+
+VMs shown as `external` were either started by something other than qemu-tool,
+or by a version predating these markers; restart such a VM for it to be
+identified. This is operator convenience, not a security boundary — the markers
+are ordinary command-line arguments and anyone can set them.
 
 ### Libvirt XML round-trip
 
@@ -397,5 +485,4 @@ therefore a distinct overlay) to avoid data corruption.
 
 [batesste-galaxy]: https://galaxy.ansible.com/ui/repo/published/sbates130272/batesste/
 [rocm-ernic]: https://github.com/ROCm/rocm-ernic
-[rocm-ernic-galaxy]: https://galaxy.ansible.com/ui/repo/published/sbates130272/rocm_ernic/
 [rocjitsu]: https://github.com/sbates130272/batesste-ci-images

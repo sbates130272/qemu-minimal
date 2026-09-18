@@ -1,0 +1,226 @@
+name: qemu-minimal - ansible-playbook-test-ernic-rocjitsu
+
+# vm-ernic-rocjitsu: combined image, boot with the full single-VM compose stack,
+# verify both the ernic NIC and the GPU.
+
+# Manual only for now. This lane was parked carrying two failures; one is gone.
+# The ernic DKMS failure against the guest's 7.0.0-31-generic kernel is fixed --
+# ionic_image_prep installs the pinned mainline kernel, and the ionic lane has
+# been green since b501f18. What remains is the rocjitsu amdgpu-probe hang,
+# which still burns ~50 minutes of a runner per push to fail the same way each
+# time. Restore the trigger below once that hang is fixed or bounded (the step
+# needs a timeout-minutes and a dmesg dump before it is worth running on PRs).
+on:
+  workflow_dispatch:
+  # pull_request:
+  #   branches:
+  #     - main
+  #   paths:
+  #     - 'ansible/playbooks/vm-ernic-rocjitsu.yml'
+  #     - 'ansible/playbooks/vm-ernic.yml'
+  #     - 'ansible/playbooks/vm-rocjitsu.yml'
+  #     - 'ansible/requirements.yml'
+  #     - 'qemu/qemu-tool/**'
+  #     - 'qemu/pyproject.toml'
+  #     - 'qemu/compose/vfio-user-ernic-rocjitsu-vm/**'
+  #     - '.github/actions/setup-vm-job/action.yml'
+  #     - '.github/workflows/ansible-playbook-test-ernic-rocjitsu.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  ERNIC_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20260918.g462eef6-ernic.6ca9a46-vfu.8039244
+  ROCJITSU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20260918.g7438e48-rocjitsu.20d4ce1
+  QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260918.g7438e48-qemu11.1.1-vfu.8039244
+  VM_IMAGES_DIR: /var/lib/qemu-tool/images
+  ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false}'
+
+jobs:
+  test-vm-ernic-rocjitsu:
+    name: test-vm-ernic-rocjitsu
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    container:
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260918.g7438e48-qemu11.1.1-vfu.8039244
+      # /var/lib/qemu-tool is bind-mounted from the host at the same path so the
+      # qcow2 this job generates is the same file the sibling qemu container opens:
+      # compose bind-mounts are resolved by the host docker daemon, not in this
+      # container's filesystem.
+      options: >-
+        --device /dev/kvm
+        -v /var/run/docker.sock:/var/run/docker.sock
+        -v /var/lib/qemu-tool:/var/lib/qemu-tool
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4.3.1
+
+    - name: Set up VM job
+      uses: ./.github/actions/setup-vm-job
+      with:
+        cloud-image-key: ernic-rocjitsu
+        stage-src: 'true'
+
+    - name: Pull CI images
+      run: |
+        docker pull "$ERNIC_IMAGE"
+        docker pull "$ROCJITSU_IMAGE"
+        docker pull "$QEMU_IMAGE"
+
+    - name: Generate VM with vm-ernic-rocjitsu playbook
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        qemu-tool gen-vm \
+          --vm-name ernic-rocjitsu-test \
+          --release resolute \
+          --username ubuntu \
+          --password password \
+          --packages none \
+          --size 64 \
+          --ansible-playbook ansible/playbooks/vm-ernic-rocjitsu.yml
+
+    - name: Bring up ernic-rocjitsu compose stack
+      working-directory: qemu/compose/vfio-user-ernic-rocjitsu-vm
+      env:
+        VM_NAME: ernic-rocjitsu-test
+        QEMU_TOOL_SRC: /var/lib/qemu-tool/src
+        # See ansible-playbook-test-ernic.yml: ionic_create_rdma_admin()
+        # hard-fails below 4 online CPUs, so this lane cannot run ionic_rdma
+        # at 2 either.
+        VM_VCPUS: "4"
+        VM_VMEM: "4096"
+        VM_SHM_SIZE: "5g"
+      run: |
+        docker compose up --detach
+        echo "Compose stack started"
+
+    # The qemu container publishes 2222 on the HOST, which this job
+    # container cannot reach: the runner puts it on its own bridge network
+    # and "--network" is not supported in container.options. Attach to the
+    # compose network instead and address the VM by its service name.
+    - name: Join the compose network
+      run: docker network connect vfio-user-ernic-rocjitsu-vm_default "$(cat /etc/hostname)"
+
+    - name: Wait for ernic and rocjitsu servers healthy
+      working-directory: qemu/compose/vfio-user-ernic-rocjitsu-vm
+      run: |
+        for i in $(seq 1 30); do
+          ernic_ok=$(docker compose ps --format json ernic \
+            | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('Health',''))" \
+            2>/dev/null || true)
+          rocjitsu_ok=$(docker compose ps --format json rocjitsu \
+            | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('Health',''))" \
+            2>/dev/null || true)
+          [ "$ernic_ok" = "healthy" ] && [ "$rocjitsu_ok" = "healthy" ] && break
+          sleep 2
+        done
+        [ "$ernic_ok" = "healthy" ]    || (docker compose logs ernic    && exit 1)
+        [ "$rocjitsu_ok" = "healthy" ] || (docker compose logs rocjitsu && exit 1)
+        echo "ernic and rocjitsu servers healthy"
+
+    - name: Wait for VM SSH (180s timeout)
+      run: |
+        elapsed=0
+        while [ $elapsed -lt 180 ]; do
+          if ssh -o ConnectTimeout=1 \
+                 -o NoHostAuthenticationForLocalhost=yes \
+                 -o StrictHostKeyChecking=no \
+                 -p 2222 ubuntu@qemu true 2>/dev/null; then
+            echo "VM ready after ${elapsed}s"
+            exit 0
+          fi
+          sleep 2; elapsed=$((elapsed + 2))
+        done
+        echo "VM failed to boot in time"
+        exit 1
+
+    - name: Verify amdgpu DKMS module installed
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@qemu \
+          "dkms status amdgpu | grep -q installed"
+        echo "✓ amdgpu DKMS module installed"
+
+    - name: Verify firmware stubs and amdgpu-probe present
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@qemu \
+          "test -f /lib/firmware/amdgpu/gc_12_1_0_rlc_1.bin && test -x /usr/local/bin/amdgpu-probe"
+        echo "✓ firmware stubs and amdgpu-probe present"
+
+    - name: Run vm-ernic configure stage
+      run: |
+        ansible-playbook \
+          -i "qemu," \
+          ansible/playbooks/vm-ernic.yml \
+          --tags configure \
+          -e "ansible_host=qemu" \
+          -e "ansible_port=2222" \
+          -e "ansible_user=ubuntu" \
+          -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"'
+
+    # Same rename as in ansible-playbook-test-ernic.yml: ionic mode builds
+    # ionic and ionic_rdma, and the rocm_ernic module this named is gone.
+    - name: Verify ionic modules loaded and NIC visible
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@qemu "lsmod | grep -qE '^ionic\b' && lsmod | grep -qE '^ionic_rdma\b'"
+        echo "✓ ionic and ionic_rdma modules loaded"
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@qemu "ip link show | grep -q rocm-ernic0"
+        echo "✓ rocm-ernic0 interface present"
+
+    # See ansible-playbook-test-ernic.yml: a device in ibv_devices can still
+    # have its port down, so gate on PORT_ACTIVE the way upstream does.
+    - name: Verify the RDMA port is active
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@qemu "ibv_devinfo" | tee /tmp/ibv_devinfo.txt
+        grep -q PORT_ACTIVE /tmp/ibv_devinfo.txt
+        echo "✓ RDMA port active"
+
+    # See ansible-playbook-test-rocjitsu.yml: this step has hung and only died to
+    # the job-level timeout, with no diagnostic output. Bound at all three layers
+    # -- the guest command, the ssh session and the step.
+    - name: Load amdgpu via amdgpu-probe
+      timeout-minutes: 5
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
+          -p 2222 ubuntu@qemu "sudo timeout 120 /usr/local/bin/amdgpu-probe"
+        echo "✓ amdgpu-probe completed"
+
+    - name: Dump guest dmesg on failure
+      if: failure()
+      timeout-minutes: 2
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
+          -p 2222 ubuntu@qemu "sudo dmesg | tail -200" || true
+
+    # See ansible-playbook-test-rocjitsu.yml for why /dev/kfd is not a valid
+    # probe assertion: kfd_chardev_init() creates it before amdgpu_init()
+    # registers the PCI driver, so it exists even when every probe fails.
+    # Node 0 is the CPU and has an empty name; a bound GPU adds a named node.
+    - name: Verify amdgpu module loaded and a GPU KFD node present
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@qemu "lsmod | grep -q amdgpu"
+        echo "✓ amdgpu module loaded"
+        gpus=$(ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@qemu \
+          "cat /sys/class/kfd/kfd/topology/nodes/*/name 2>/dev/null | grep -c .")
+        if [ "$gpus" -lt 1 ]; then
+          echo "no GPU KFD node: amdgpu loaded but never bound the device" >&2
+          ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+            -p 2222 ubuntu@qemu "sudo dmesg | grep -i amdgpu | tail -20" >&2
+          exit 1
+        fi
+        echo "✓ GPU KFD node present ($gpus)"
+
+    - name: Show compose logs on failure
+      if: failure()
+      working-directory: qemu/compose/vfio-user-ernic-rocjitsu-vm
+      run: docker compose logs
