@@ -1,0 +1,113 @@
+---
+# Everything the sbates130272.rocm_ernic collection stopped doing at 0.2.0,
+# when ernic_image_prep was removed and the collection narrowed to "turn an
+# already-prepared guest into an RDMA node". Upstream's prepared guest is the
+# published `ionic` qcow2 from batesste-ci-images; this repo builds its own
+# guest with gen-vm, so this role is that image's provisioning expressed as
+# Ansible. Keep it aligned with ubuntu-qcow2-gen/{build-vm.sh,provision/ionic.sh}
+# and packages/ionic.txt in that repo.
+
+# ── Mainline kernel ──────────────────────────────
+# The reason this role exists. drivers/infiniband/hw/ionic merged for 6.18, so
+# no Ubuntu release ships a kernel that can build ionic_rdma -- resolute GA is
+# 7.0.0-31. The HWE metapackage this replaced (linux-generic-hwe-26.04) is a
+# no-op on 26.04 and left every DKMS build failing against 7.0.0-31.
+#
+# The ref itself is deliberately NOT defaulted here. It has to agree with the
+# ernic_ionic_kernel_ref the same run hands the collection -- driver_ionic.yml
+# compares major.minor and fails the build otherwise -- so it lives in
+# playbooks/vars/ernic-pins.yml, which both plays of vm-ernic.yml load. A
+# default here would be a second copy that silently wins whenever a caller
+# forgets to pass one; kernel.yml asserts instead.
+ionic_image_kernel_install: true
+ionic_image_kernel_ref: ""
+ionic_image_kernel_mirror: https://kernel.ubuntu.com/mainline
+# Where the .debs land in the guest before the single apt transaction.
+ionic_image_kernel_payload_dir: /tmp/mainline-kernel
+ionic_image_kernel_reboot_timeout: 600
+
+# ── Packages ─────────────────────────────────────
+# packages/ionic.txt, minus what cloud-init and the other roles already bring.
+# Deliberately no linux-headers-generic and no linux-modules-extra: those are
+# metapackages for the release kernel, and DKMS must not build against it. The
+# matching headers and modules come from the mainline .debs above.
+ionic_image_packages:
+  # DKMS toolchain.
+  - build-essential
+  - cmake
+  - ninja-build
+  - pkg-config
+  - dkms
+  - git
+  # Dependencies of the mainline .debs, pre-seeded so the kernel install is a
+  # local dpkg operation rather than a second round of archive resolution.
+  - linux-base
+  - kmod
+  - initramfs-tools
+  - wireless-regdb
+  # rdma-core build dependencies, for the lanes whose provider pin moves past
+  # what the release packages or which need the GDA patches.
+  - libnl-3-dev
+  - libnl-route-3-dev
+  - libudev-dev
+  - libsystemd-dev
+  - python3-docutils
+  # The verbs userspace itself. On resolute this is 61.0, past the v61 that
+  # first shipped providers/ionic upstream, so ibverbs-providers already
+  # carries libionic-rdmav59.so and nothing has to be built to get it.
+  - rdma-core
+  - ibverbs-utils
+  - libibverbs-dev
+  # ib_send_bw and friends, for lanes that move traffic rather than only
+  # assert the modules built.
+  - perftest
+  # Not in ionic.txt, and the reason ernic_guest_build_deps exists upstream:
+  # iperf3 is what the TCP performance checks measure with.
+  - iperf3
+ionic_image_apt_retries: 3
+ionic_image_apt_delay: 10
+
+# ── rdma-core provider stamp ─────────────────────
+# ernic_guest_setup's rdma_core.yml reads this before deciding whether to
+# build rdma-core from source, a roughly seven-minute build that also puts the
+# GitHub release CDN on the critical path of every lane. Format is
+# <version>:<gda-patch-hash>, "none" when no GDA patches were applied; the role
+# compares the trimmed contents against a value it computes, so both the text
+# and the trailing newline matter. Written from what dpkg actually reports, not
+# from a pin -- a stamp that disagrees with the installed libraries is worse
+# than no stamp.
+ionic_image_provider_stamp: true
+ionic_image_stamp_dir: /usr/local/share/rocm-ernic
+
+# ── Emulated device ──────────────────────────────
+# 0.2.0 moved the emulated NIC from 1022:8001 to the Pensando vendor id,
+# matching the ionic hardware the guest driver is written for. Neither the
+# published image nor provision/ionic.sh writes this entry, despite the
+# changelog calling it the image's business -- so it stays here.
+ionic_image_pciids: true
+ionic_image_pciids_vendor: "1dd8"
+ionic_image_pciids_entry: "100a  ROCm Emulated RDMA NIC (ionic)"
+
+# Load the ionic modules at boot so a rebooted overlay comes back with its
+# RDMA device. ib_core and ib_uverbs are pulled in as dependencies, but naming
+# them matches ernic_guest_modules in the collection.
+ionic_image_modules_load: true
+ionic_image_modules:
+  - ib_core
+  - ib_uverbs
+  - ionic
+  - ionic_rdma
+
+# ── System tuning ────────────────────────────────
+# Keep user units (tmux sessions, background test runs) alive after the SSH
+# session that started them goes away.
+ionic_image_logind_keep_processes: true
+
+# A freshly booted guest runs unattended-upgrades, which holds the dpkg lock
+# for the first minute or so and makes every early task in a compose VM look
+# like a flake. The collection works around it with a 300s lock wait; masking
+# the units in the image removes the wait instead.
+ionic_image_mask_unattended_upgrades: true
+
+# Drop the apt cache at the end to shrink the backing image.
+ionic_image_clean_apt: true

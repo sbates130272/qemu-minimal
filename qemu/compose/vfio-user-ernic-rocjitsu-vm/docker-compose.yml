@@ -21,7 +21,7 @@ x-gpu-common: &gpu-common
 services:
   ernic:
     <<: *gpu-common
-    image: "${ERNIC_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20260917.g857483b-ernic.c34d798-vfu.8039244}"
+    image: "${ERNIC_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20260918.g462eef6-ernic.6ca9a46-vfu.8039244}"
     deploy:
       replicas: "${ERNIC_COUNT:-1}"
     command: ["rocm-ernic", "-s", "/run/vfu/ernic-1.sock"]

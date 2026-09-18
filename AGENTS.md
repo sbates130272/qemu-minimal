@@ -72,105 +72,82 @@ The ernic hub serves VM1 (`ernic-1.sock`); the worker serves VM2
 `192.168.100.12/24` on `enp1s0` — avoid `.1` (reserved as the hub DHCP
 `server_ip`; ARP for `.1` is intercepted by the hub).
 
-## rocm-ernic driver (in-VM, post-boot)
+## rocm-ernic driver and userspace provider (in-VM)
 
-The DKMS kernel driver (`rocm_ernic_eth` + `rocm_ernic_rdma`) is installed
-persistently in the VM images via:
+**rocm-ernic is now ionic-based.** Upstream deleted `driver/` and `rdma-core/`
+on 2026-09-16. There is no `rocm_ernic_eth`, no `rocm_ernic_rdma`, and no
+patched rocm_ernic verbs provider any more; anything still referring to those
+is describing a tree that no longer exists.
 
-```bash
-# On host — copy driver source
-scp -P 2222 -r ~/Projects/rocm-ernic/driver stebates@localhost:/tmp/rocm-ernic-driver
+What replaces them:
 
-# On VM — DKMS install
-VER=$(grep '^PACKAGE_VERSION=' /tmp/rocm-ernic-driver/dkms.conf | cut -d= -f2 | tr -d '"')
-MOD=$(grep '^PACKAGE_NAME='    /tmp/rocm-ernic-driver/dkms.conf | cut -d= -f2 | tr -d '"')
-sudo apt-get install -y linux-headers-$(uname -r) dkms
-sudo mkdir -p /usr/src/${MOD}-${VER}
-sudo cp -r /tmp/rocm-ernic-driver/. /usr/src/${MOD}-${VER}/
-sudo dkms add ${MOD}/${VER} && sudo dkms build ${MOD}/${VER} && sudo dkms install ${MOD}/${VER}
-```
+| Was | Is |
+|-----|-----|
+| out-of-tree `rocm_ernic_eth` + `rocm_ernic_rdma` | upstream `ionic` + `ionic_rdma`, two AMD patches on top |
+| DKMS package `rocm-ernic` | DKMS package `ionic-ernic`, built by `scripts/setup-ionic-dkms.sh` |
+| rdma-core ≥ 62 + `apply-rocm-ernic-dv.sh` | stock rdma-core ≥ 61, whose `providers/ionic` is upstream |
+| emulated device `1022:8001` | Pensando `1dd8:100a` |
 
-Persistent module loading: `/etc/modules-load.d/rocm-ernic.conf` contains:
-```
-ib_core
-rocm_ernic_eth
-rocm_ernic_rdma
-```
+`ionic_rdma` needs kernel ≥ 6.18 (`drivers/infiniband/hw/ionic` merged there)
+and `ib_umem_get_va`, which landed after 7.0. No Ubuntu release ships one, so
+the guest runs a pinned mainline kernel.
 
-After reboot the Ethernet interface is renamed to `rocm-ernic0` and the IB
-device to `rocm-rdma-ernic0` by the udev rule (see udev section below).
+None of this is done by hand in this repo. Two pieces of automation own it:
 
-**Known kernel compatibility patches** (applied to the local driver source,
-not yet upstream): `rocm_ernic_misc.c` needs `#if __has_include(<rdma/iter.h>)`
-for kernels ≥ 7.0.0-31 where `rdma/iter.h` was split out; `rocm_ernic_main.c`
-needs `__maybe_unused` on `rocm_ernic_alloc_hw_port_stats` and
-`rocm_ernic_get_hw_stats` to suppress `-Werror=unused-function`.
+- [`ansible/playbooks/roles/ionic_image_prep/`](ansible/playbooks/roles/ionic_image_prep/)
+  prepares the guest image — installs the pinned mainline kernel from
+  `kernel.ubuntu.com/mainline`, the build toolchain, the `1dd8:100a` pci.ids
+  entry, and `/etc/modules-load.d/rocm-ernic-ionic.conf`. Upstream assumes a
+  guest already prepared this way (their published `ionic` qcow2); this repo
+  builds its own, so it owns the preparation.
+- `sbates130272.rocm_ernic.ernic_guest_setup` from the collection builds and
+  installs the DKMS package, the rdma-core provider and the NIC config.
 
-## rocm-ernic userspace provider (in-VM)
+The kernel ref is pinned once as `ernic_ionic_kernel_ref` in
+[`vm-ernic.yml`](ansible/playbooks/vm-ernic.yml) and feeds
+`ionic_image_kernel_ref` from it, so the sources and the guest kernel cannot
+drift apart — `driver_ionic.yml` fails the build if they disagree on
+major.minor.
 
-The userspace verbs provider requires rdma-core **≥ 62.0** (Ubuntu 24.04
-ships v50 — insufficient). Install by cloning rdma-core, applying the
-rocm-ernic provider patch, and replacing the system libibverbs:
-
-```bash
-# On host
-scp -P 2222 -r ~/Projects/rocm-ernic/rdma-core stebates@localhost:/tmp/rocm-ernic-rdma-core
-
-# On VM
-sudo apt-get install -y cmake ninja-build pkg-config libibverbs-dev librdmacm-dev
-cd ~ && git clone --depth 1 --branch v62.0 \
-  https://github.com/linux-rdma/rdma-core.git rdma-core-v62
-bash /tmp/rocm-ernic-rdma-core/rocm-ernic-dv/apply-rocm-ernic-dv.sh ~/rdma-core-v62
-cmake -S ~/rdma-core-v62 -B ~/rdma-core-v62/build -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
-  -DNO_PYVERBS=1 -DENABLE_STATIC=0 -DNO_MAN_PAGES=1
-ninja -C ~/rdma-core-v62/build -j$(nproc)
-sudo ninja -C ~/rdma-core-v62/build install
-sudo ldconfig
-```
-
-`-DNO_MAN_PAGES=1` avoids a pandoc prebuilt-file install error on systems
-without pandoc. After install `ibv_devices` shows `rocm-rdma-ernic0`
-(`IBVERBS_PRIVATE_59`). System `perftest` (`ib_send_bw` etc.) works without
-`LD_LIBRARY_PATH` — safe in rocm_ernic-only VMs with no mlx5/efa hardware.
-
-Note: `docs/testing.rst` in the rocm-ernic repo references
-`LD_LIBRARY_PATH=/opt/rdma-core-ernic/lib` — that path does not exist;
-the real install prefix is `/usr`. Ignore that instruction.
+Device names are unchanged: Ethernet `rocm-ernic0`, IB `rocm-rdma-ernic0`, both
+still set by `99-rocm-ernic.rules` (see udev section below), now keyed on
+`1dd8:100a` and `DRIVERS=="ionic|ionic_rdma"`.
 
 ## udev rules (in-VM)
 
-Install `99-rocm-ernic.rules` from `~/Projects/rocm-ernic/udev/` to give
-the ernic devices stable names:
+`99-rocm-ernic.rules` gives the ernic devices stable names: Ethernet interface
+→ `rocm-ernic0`, IB device → `rocm-rdma-ernic0`. Use these with
+`ib_send_bw -d rocm-rdma-ernic0`.
 
-```bash
-# On host
-scp -P 2222 ~/Projects/rocm-ernic/udev/99-rocm-ernic.rules stebates@localhost:/tmp/
+There is nothing to install by hand. `ernic_guest_setup` ships the rules and
+reloads udev, and both renames are confirmed working in CI — the ionic lane's
+`Show NIC details` reports `rocm-ernic0` carrying `altname enp0s5np0`, which is
+the pre-rename kernel name, and `ibv_devinfo` reports `hca_id: rocm-rdma-ernic0`.
+The IB rename shells out to `/usr/bin/rdma`, which the gen-vm guest has.
 
-# On VM
-sudo cp /tmp/99-rocm-ernic.rules /etc/udev/rules.d/
-sudo udevadm control --reload-rules
-```
-
-After the next device event (or reboot): Ethernet interface → `rocm-ernic0`,
-IB device → `rocm-rdma-ernic0`. Use these names with `ib_send_bw -d rocm-rdma-ernic0`.
+If a guest somehow comes up with the kernel names instead, check that the rules
+matched rather than re-copying them: they key on `ATTR{device/vendor}=="0x1dd8"`
+and `ATTR{device/device}=="0x100a"`, so a guest still being served the old
+`1022:8001` device will not rename anything.
 
 ## PCI ID (in-VM)
 
-Install the rocm-ernic PCI ID so `lspci` shows `ROCm Emulated RDMA NIC`
-instead of `Device 8000`:
+So `lspci` names the emulated NIC instead of showing a bare device number.
+`ionic_image_prep` writes this into the image; there is nothing to do by hand.
+The entry goes under vendor `1dd8` (Pensando), not `1022` — upstream moved the
+emulated device off the AMD vendor id:
 
-```bash
-# On host
-scp -P 2222 ~/Projects/rocm-ernic/scripts/pci.ids.rocm-ernic stebates@localhost:/tmp/
-
-# On VM — patch both pci.ids files lspci may use
-for IDS in /usr/share/misc/pci.ids /usr/share/hwdata/pci.ids; do
-  [ -f "$IDS" ] || continue
-  grep -q '8000  ROCm Emulated RDMA NIC' "$IDS" && continue
-  sudo sed -i '/^1022  Advanced Micro Devices/a\\t8000  ROCm Emulated RDMA NIC' "$IDS"
-done
 ```
+1dd8  Pensando Systems Inc
+	100a  ROCm Emulated RDMA NIC (ionic)
+```
+
+`scripts/pci.ids.rocm-ernic` was deleted upstream along with the rest of the
+pre-ionic tree, so the id is this repo's to maintain — see
+`ionic_image_pciids_*` in
+[`ionic_image_prep/defaults/main.yml`](ansible/playbooks/roles/ionic_image_prep/defaults/main.yml).
+The 0.2.0 changelog calls pci.ids the guest image's business, but neither
+`provision/ionic.sh` nor `packages/ionic.txt` in batesste-ci-images writes it.
 
 **Note:** `update-pciids` will overwrite these files — re-apply after each run.
 
@@ -180,9 +157,14 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
 
 1. Worker `server_ip` ARP hijack when VM IP = `192.168.100.1` — use `.11`/`.12`
 2. ARP log printf aliasing in `pvrdma_eth.c:483-493` (cosmetic, misleading)
-3. `apply-rocm-ernic-dv.sh` omitted `dc.c`/`rocm_ernic_dc.h` — fixed locally
-4. rdma-core version inconsistency in rocm-ernic repo (62 vs 64 in different files)
-5. `docs/testing.rst` LD_LIBRARY_PATH points to non-existent path
+3. Collection 0.2.0 is not on Galaxy — only 0.1.0 is published, and 0.1.0 is
+   the pre-ionic collection. `requirements.yml` pins the upstream git SHA
+   instead; move back to a Galaxy version pin once 0.2.0 ships there
+4. `driver_ionic.yml` fail_msg still says to rebuild the golden image with
+   `ernic_image_kernel_mainline=true` — a variable on `ernic_image_prep`,
+   which 0.2.0 removed
+5. *(was an `apply-rocm-ernic-dv.sh` / rdma-core / `docs/testing.rst` bug —
+   all three files are gone with the pre-ionic tree)*
 6. **Killing perftest mid-run breaks VM device context** — killing `ib_send_bw`
    or any perftest process mid-operation (SIGTERM/SIGKILL) leaves the guest
    RDMA driver in a broken state. `ibv_devinfo` reports "Failed to open device"
@@ -194,13 +176,13 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
 7. **ernic-hub crash requires full stack restart** — if `ernic-hub` crashes and
    restarts (visible in `docker compose logs ernic-hub` as a re-initialization
    from the top), the guest driver enters a DSR initialization timeout
-   (`-ETIMEDOUT`) on the next `modprobe rocm_ernic_rdma`. The vfio-user session
+   (`-ETIMEDOUT`) on the next `modprobe ionic_rdma`. The vfio-user session
    held by QEMU becomes stale and cannot be recovered by reloading modules alone.
    **Fix: `docker compose down && docker compose up`** (all containers, not just
    qemu-1/qemu-2). Restarting only the QEMU containers is insufficient because
    the ernic-worker also needs a fresh TCP mesh connection to the new hub.
 
-7. **perftest server dies if SSH session closes** — `nohup`/`disown` is not
+8. **perftest server dies if SSH session closes** — `nohup`/`disown` is not
    sufficient; the server exits with no output when the parent SSH session ends.
    Workaround: keep the SSH session alive (run server in foreground in a
    background job `&` and let the shell wait) or use `screen`/`tmux` inside
@@ -212,9 +194,24 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
    ssh -p 2222 local-vm "ib_send_bw -d rocm-rdma-ernic0 192.168.100.12"
    ```
 
+9. **`ernic_source_repo_version` defaults to `main`** — so `ernic_source` clones
+   upstream HEAD inside the guest even when `requirements.yml` installs the
+   collection from a fixed SHA, and the roles can end up building sources from
+   a different tree than they came from. Pinned locally in
+   [`playbooks/vars/ernic-pins.yml`](ansible/playbooks/vars/ernic-pins.yml);
+   the default is still upstream's.
+10. **`ernic_nic_subnet` is not a role default** — it lives only in the upstream
+    repo's `ansible/group_vars/all.yml`, which a consumer using the collection
+    standalone never loads. Anything deriving a guest address from it has to
+    repeat the value; `vm-ernic.yml`'s configure play does.
+11. **The 4-vCPU floor is undocumented upstream** — `ionic_create_rdma_admin()`
+    rejects fewer than `IONIC_EQ_COUNT_MIN` EQs with a bare `-EINVAL` that
+    surfaces only as "Failed to register ibdev". There is no preflight assert
+    in the collection and no mention in its docs.
+
 ## Git / GitHub
 
 - Default GitHub account: `sbates130272` (verify with `gh auth status`)
 - GPG signing required on all commits (`-S`), signoff required (`-s`)
-- Main branch: `main`; current work branch: `feat/two-vm-compose`
+- Main branch: `main`; current work branch: `feat/working-compose`
 - Never use `--no-verify` or `--no-gpg-sign`

@@ -1,0 +1,18 @@
+---
+galaxy_info:
+  role_name: ionic_image_prep
+  author: Stephen Bates
+  description: >-
+    Prepare an Ubuntu guest for rocm-ernic ionic mode: a pinned mainline
+    kernel, the RDMA userspace, the DKMS toolchain and the emulated device
+    registration. The local replacement for the ernic_image_prep role removed
+    in sbates130272.rocm_ernic 0.2.0.
+  license: MIT
+  min_ansible_version: "2.18"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - noble
+        - resolute
+
+dependencies: []

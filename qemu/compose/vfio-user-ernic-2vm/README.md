@@ -51,6 +51,28 @@ ssh -p 2222 ubuntu@localhost   # VM 1
 ssh -p 2223 ubuntu@localhost   # VM 2
 ```
 
+## Configuring the NIC in each guest
+
+Run `vm-ernic.yml --tags configure` once per guest, and **pass `vm_index`** —
+it is what decides the address the guest takes on `rocm-ernic0`. The default is
+`1`, so running the play twice unchanged puts both guests on `192.168.200.10`
+and the mesh silently has an address collision rather than a working pair.
+
+```sh
+ansible-playbook -i "vm1," ansible/playbooks/vm-ernic.yml --tags configure \
+  -e ansible_host=localhost -e ansible_port=2222 -e ansible_user=ubuntu \
+  -e vm_index=1     # -> 192.168.200.10
+
+ansible-playbook -i "vm2," ansible/playbooks/vm-ernic.yml --tags configure \
+  -e ansible_host=localhost -e ansible_port=2223 -e ansible_user=ubuntu \
+  -e vm_index=2     # -> 192.168.200.20
+```
+
+The address is derived as `192.168.200.<10 * vm_index>`, which is the same
+arithmetic upstream's `vm-register.yml` applies to its instance manifest, so
+these are the addresses the rocm-ernic system test expects. `-e vm_ip=<addr>`
+overrides the result outright if you need a different scheme.
+
 ## Environment variables
 
 | Variable | Default | Description |
@@ -60,8 +82,8 @@ ssh -p 2223 ubuntu@localhost   # VM 2
 | `VM_IMAGES_DIR` | `/var/lib/qemu-tool/images` | Directory containing both VM images |
 | `VM1_SSH_PORT` | `2222` | Host port forwarded to VM 1 SSH |
 | `VM2_SSH_PORT` | `2223` | Host port forwarded to VM 2 SSH |
-| `VM_VCPUS` | `4` | vCPU count (shared by both VMs) |
-| `VM_VMEM` | `8192` | RAM in MiB (shared by both VMs) |
+| `VM_VCPUS` | `4` | vCPU count **per VM** (so 8 total); 4 is the floor for `ionic_rdma` |
+| `VM_VMEM` | `8192` | RAM in MiB **per VM** (so 16 GiB total) |
 | `ERNIC_TCP_PORT` | `6320` | TCP port for ernic manager/worker mesh |
 | `ROCJITSU_CONFIG` | `gfx1250_mi455x.json` | rocjitsu GPU config (used when rocjitsu profiles active) |
 | `VM_SHM_SIZE` | `8g` | Container shared memory (must be >= VM_VMEM MiB) |

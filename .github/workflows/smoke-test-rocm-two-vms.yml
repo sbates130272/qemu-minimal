@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  ERNIC_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20260917.g857483b-ernic.c34d798-vfu.8039244
+  ERNIC_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20260918.g462eef6-ernic.6ca9a46-vfu.8039244
   ROCJITSU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20260917.g857483b-rocjitsu.be38974
   QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260917.g857483b-qemu11.1.1-vfu.8039244
   VM_IMAGES_DIR: /var/lib/qemu-tool/images
@@ -128,6 +128,37 @@ jobs:
         docker pull "$ERNIC_IMAGE"
         docker pull "$ROCJITSU_IMAGE"
         docker pull "$QEMU_IMAGE"
+
+    # Size the guests from the runner instead of taking the compose defaults.
+    # Those are 4 vCPU / 8192 MB applied to EACH guest, which is the whole of
+    # a 4 vCPU / 16 GB hosted runner with nothing left for the two ernic
+    # servers, this job container and the runner agent. Deriving it the way
+    # upstream's system-tests.yml does means a larger runner class benefits
+    # without another edit here.
+    - name: Size the guests from the runner
+      env:
+        VMS: "2"
+      run: |
+        HOST_CPUS=$(nproc)
+        HOST_MEM_MB=$(awk '/^MemTotal:/ {print int($2 / 1024)}' /proc/meminfo)
+
+        VM_VCPUS=$(( (HOST_CPUS - 1) / VMS ))
+        # Four is a floor, not a preference: ionic_lif_size() sets
+        # neqs = min(rdma.eq_qtype.qid_count, num_online_cpus()) and
+        # ionic_create_rdma_admin() rejects anything below IONIC_EQ_COUNT_MIN
+        # (4) with a bare -EINVAL. Oversubscribing the runner is the cheaper
+        # problem; starving the guest fails every time.
+        if [ "$VM_VCPUS" -lt 4 ]; then VM_VCPUS=4; fi
+
+        # Three quarters of RAM split per guest -- the host keeps the rest.
+        VM_VMEM=$(( HOST_MEM_MB * 3 / 4 / VMS ))
+        if [ "$VM_VMEM" -gt 8192 ]; then VM_VMEM=8192; fi
+        if [ "$VM_VMEM" -lt 1024 ]; then VM_VMEM=1024; fi
+
+        echo "VM_VCPUS=$VM_VCPUS" >> "$GITHUB_ENV"
+        echo "VM_VMEM=$VM_VMEM" >> "$GITHUB_ENV"
+        echo "runner: ${HOST_CPUS} vCPU, ${HOST_MEM_MB} MB"
+        echo "guests: ${VMS} x ${VM_VCPUS} vCPU, ${VM_VMEM} MB"
 
     - name: Bring up full 2vm compose stack
       working-directory: qemu/compose/vfio-user-ernic-2vm

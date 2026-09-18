@@ -269,13 +269,19 @@ The host must have `ansible`, `ansible-galaxy`, and the Python
 ones that would otherwise arrive as transitive dependencies, so `--no-deps`
 skips roughly 10 MiB of collections this repository never uses.
 
+One exception, temporary: `sbates130272.rocm_ernic` is pulled from the
+upstream [rocm-ernic][rocm-ernic] git tree at a pinned SHA rather than from
+Galaxy. Galaxy publishes only 0.1.0, the pre-ionic collection, and the ionic
+work needs 0.2.0. This reverts to a normal Galaxy version pin as soon as
+rocm-ernic publishes its next collection.
+
 ### Available playbooks
 
 | Playbook | Description |
 |---------|-------------|
 | `vm-basic.yml` | User setup, favourite packages, git config |
 | `vm-rocm.yml` | As above, plus ROCm stack |
-| `vm-ernic.yml` | ROCm + [rocm-ernic][rocm-ernic-galaxy] RDMA NIC prerequisites; `--tags configure` for post-boot NIC setup |
+| `vm-ernic.yml` | ROCm + [rocm-ernic][rocm-ernic] RDMA NIC prerequisites; `--tags configure` for post-boot NIC setup |
 | `vm-rocjitsu.yml` | ROCm + rocjitsu GPU firmware and driver prerequisites |
 | `vm-ernic-rocjitsu.yml` | Both ernic and rocjitsu prerequisites combined |
 
@@ -479,5 +485,4 @@ therefore a distinct overlay) to avoid data corruption.
 
 [batesste-galaxy]: https://galaxy.ansible.com/ui/repo/published/sbates130272/batesste/
 [rocm-ernic]: https://github.com/ROCm/rocm-ernic
-[rocm-ernic-galaxy]: https://galaxy.ansible.com/ui/repo/published/sbates130272/rocm_ernic/
 [rocjitsu]: https://github.com/sbates130272/batesste-ci-images

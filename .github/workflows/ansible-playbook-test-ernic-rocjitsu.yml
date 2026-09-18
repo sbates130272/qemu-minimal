@@ -3,11 +3,13 @@ name: qemu-minimal - ansible-playbook-test-ernic-rocjitsu
 # vm-ernic-rocjitsu: combined image, boot with the full single-VM compose stack,
 # verify both the ernic NIC and the GPU.
 
-# Manual only for now. The pull_request trigger is parked while the focus is on
-# the ionic lane: this lane carries both the rocjitsu amdgpu-probe hang and the
-# ernic DKMS failure against the guest's 7.0.0-31-generic kernel, so every push
-# spent ~50 minutes of a runner to fail in a way already understood.
-# Restore the trigger below once both are fixed.
+# Manual only for now. This lane was parked carrying two failures; one is gone.
+# The ernic DKMS failure against the guest's 7.0.0-31-generic kernel is fixed --
+# ionic_image_prep installs the pinned mainline kernel, and the ionic lane has
+# been green since b501f18. What remains is the rocjitsu amdgpu-probe hang,
+# which still burns ~50 minutes of a runner per push to fail the same way each
+# time. Restore the trigger below once that hang is fixed or bounded (the step
+# needs a timeout-minutes and a dmesg dump before it is worth running on PRs).
 on:
   workflow_dispatch:
   # pull_request:
@@ -29,7 +31,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  ERNIC_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20260917.g857483b-ernic.c34d798-vfu.8039244
+  ERNIC_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20260918.g462eef6-ernic.6ca9a46-vfu.8039244
   ROCJITSU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20260917.g857483b-rocjitsu.be38974
   QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260917.g857483b-qemu11.1.1-vfu.8039244
   VM_IMAGES_DIR: /var/lib/qemu-tool/images
@@ -84,7 +86,10 @@ jobs:
       env:
         VM_NAME: ernic-rocjitsu-test
         QEMU_TOOL_SRC: /var/lib/qemu-tool/src
-        VM_VCPUS: "2"
+        # See ansible-playbook-test-ernic.yml: ionic_create_rdma_admin()
+        # hard-fails below 4 online CPUs, so this lane cannot run ionic_rdma
+        # at 2 either.
+        VM_VCPUS: "4"
         VM_VMEM: "4096"
         VM_SHM_SIZE: "5g"
       run: |
@@ -156,14 +161,25 @@ jobs:
           -e "ansible_user=ubuntu" \
           -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"'
 
-    - name: Verify rocm_ernic module loaded and NIC visible
+    # Same rename as in ansible-playbook-test-ernic.yml: ionic mode builds
+    # ionic and ionic_rdma, and the rocm_ernic module this named is gone.
+    - name: Verify ionic modules loaded and NIC visible
       run: |
         ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
-          -p 2222 ubuntu@qemu "lsmod | grep -q rocm_ernic"
-        echo "✓ rocm_ernic module loaded"
+          -p 2222 ubuntu@qemu "lsmod | grep -qE '^ionic\b' && lsmod | grep -qE '^ionic_rdma\b'"
+        echo "✓ ionic and ionic_rdma modules loaded"
         ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
           -p 2222 ubuntu@qemu "ip link show | grep -q rocm-ernic0"
         echo "✓ rocm-ernic0 interface present"
+
+    # See ansible-playbook-test-ernic.yml: a device in ibv_devices can still
+    # have its port down, so gate on PORT_ACTIVE the way upstream does.
+    - name: Verify the RDMA port is active
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@qemu "ibv_devinfo" | tee /tmp/ibv_devinfo.txt
+        grep -q PORT_ACTIVE /tmp/ibv_devinfo.txt
+        echo "✓ RDMA port active"
 
     - name: Load amdgpu via amdgpu-probe
       run: |

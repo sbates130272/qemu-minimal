@@ -19,6 +19,8 @@
   gather_facts: true
   become: true
   tags: [install]
+  vars_files:
+    - vars/ernic-pins.yml
   vars:
     username: "{{ vm_username | default('ubuntu') }}"
     root_user: "{{ vm_root_user | default('ubuntu') }}"
@@ -37,21 +39,26 @@
     rocm_setup_skip_reboot: false
     rocm_setup_run_checks: true
     rocm_setup_run_gpu_checks: false
-    rocm_setup_extra_kernel_packages:
-      - linux-generic-hwe-26.04
+    # No rocm_setup_extra_kernel_packages. It used to name
+    # linux-generic-hwe-26.04, which is a no-op on 26.04: the guest stayed on
+    # resolute GA 7.0.0-31, and every ionic DKMS build failed against it
+    # because drivers/infiniband/hw/ionic needs 6.18 and ib_umem_get_va landed
+    # after 7.0. ionic_image_prep installs a pinned mainline kernel instead.
     rocm_setup_install_metrics_exporter: true
-    ernic_image_rdma: true
     ernic_gpu_passthrough: false
-    # Pin the source, do not track main. Upstream reworked the driver onto
-    # patched upstream ionic on 2026-09-16, deleting driver/ and rdma-core/;
-    # the rocm_ernic collection we install still reads those paths, so a clone
-    # of main now fails ernic_source's "looks like a rocm-ernic checkout"
-    # assert. c34d798 is the last commit with the old layout, and it is the
-    # commit ERNIC_IMAGE (ernic.c34d798-vfu.*) is built from, so pinning here
-    # keeps the source and the container image on the same tree. Drop this
-    # once a collection release that understands the ionic layout is pinned
-    # in ansible/requirements.yml.
-    ernic_source_repo_version: c34d79894cb41b0c33c21b773ee9752c53ead5b0
+    # The collection does not carry a build toolchain and does not assume one;
+    # ionic_image_prep installs it, so leave the role's own gate off.
+    ernic_guest_build_deps: false
+    # One kernel pin, read by both sides. Left empty, ernic_source would take
+    # IONIC_KERNEL_REF out of the checkout's cmake/ErnicKernelModule.cmake --
+    # the same ref today, but upstream's to move, and driver_ionic.yml fails
+    # the build when the sources and the guest kernel disagree on major.minor.
+    # Since this repo installs the kernel itself, it can pin both to the same
+    # ref instead of hoping they stay compatible. See vars/ernic-pins.yml.
+    ernic_ionic_kernel_ref: "{{ ionic_kernel_pin }}"
+    ionic_image_kernel_ref: "{{ ernic_ionic_kernel_ref }}"
+    # ernic_source defaults this to "main". See vars/ernic-pins.yml.
+    ernic_source_repo_version: "{{ ernic_source_pin }}"
   pre_tasks:
     # Block distro (Ubuntu universe) versions of packages that the ROCm
     # meta-package ships correctly under /opt/rocm/core-*/bin/. Without this
@@ -125,7 +132,11 @@
     - role: sbates130272.batesste.user_setup
     - role: sbates130272.batesste.fave_packages
     - role: sbates130272.batesste.git_setup
-    - role: sbates130272.rocm_ernic.ernic_image_prep
+    # Repo-local: collection 0.2.0 removed ernic_image_prep and now assumes an
+    # already-prepared guest -- the published `ionic` qcow2 from
+    # batesste-ci-images. This repo builds its own guest with gen-vm, so it
+    # owns that preparation. See playbooks/roles/ionic_image_prep/defaults.
+    - role: ionic_image_prep
 
   tasks:
     # Resolve the checkout here rather than letting ernic_guest_setup do it
@@ -137,18 +148,18 @@
       ansible.builtin.include_role:
         name: sbates130272.rocm_ernic.ernic_source
 
-    # ernic_guest_setup builds the DKMS module and rdma-core provider
-    # into the backing image so compose VMs don't have to rebuild on
-    # every boot.  The RDMA device check at the end of driver.yml
-    # expects hardware (ernic NIC via vfio-user) which is not present
-    # during image install — the rescue block catches that expected failure.
-    - name: Install rocm-ernic driver and rdma-core provider (hardware-free build)
+    # ernic_guest_setup builds the ionic-ernic DKMS package (ionic +
+    # ionic_rdma) and the stock rdma-core providers/ionic into the backing
+    # image so compose VMs don't have to rebuild on every boot.  The RDMA
+    # device check at the end of driver.yml expects hardware (ernic NIC via
+    # vfio-user) which is not present during image install — the rescue block
+    # catches that expected failure.
+    - name: Install the ionic modules and rdma-core provider (hardware-free build)
       block:
         - ansible.builtin.include_role:
             name: sbates130272.rocm_ernic.ernic_guest_setup
           vars:
             ernic_configure_nic: false
-            ernic_gpu_passthrough: false
       rescue:
         # One expected failure only: driver.yml's "Verify the rocm-ernic RDMA
         # device exists". A DKMS build error or a staging failure lands here
@@ -174,13 +185,41 @@
 - name: Configure ernic NIC (post-boot, run with --tags configure)
   hosts: all
   gather_facts: true
-  become: false
+  # ernic_guest_setup escalates nowhere itself -- driver_common.yml reloads
+  # udev, modprobes and triggers udev with no become: at all -- so it expects
+  # the play to do it, which is what upstream's own guest-setup.yml does.
+  # Running this false got as far as "Reload udev rules" and died on "Failed to
+  # connect to udev via varlink: Permission denied"; the modprobe right after
+  # it would have gone the same way.
+  become: true
   tags: [configure, never]
+  vars_files:
+    - vars/ernic-pins.yml
   vars:
     username: "{{ vm_username | default('ubuntu') }}"
     ernic_guest_agent: false
+    ernic_guest_build_deps: false
+    # The collection defaults this true, which pulls in rocm_xio_fetch.yml and
+    # clones into /opt/rocm-xio. This lane has no GPU, so the GDA patches are
+    # neither wanted nor usable. The install play sets this false too.
+    ernic_gpu_passthrough: false
     # Separate play, separate vars: this one runs on its own via --tags
-    # configure, so it needs the pin too. See the install play above.
-    ernic_source_repo_version: c34d79894cb41b0c33c21b773ee9752c53ead5b0
+    # configure, so it needs both pins too. See vars/ernic-pins.yml.
+    ernic_ionic_kernel_ref: "{{ ionic_kernel_pin }}"
+    ernic_source_repo_version: "{{ ernic_source_pin }}"
+    # nic.yml asserts ernic_guest_vm_ip is non-empty and the role defaults it
+    # to "{{ vm_ip | default('') }}", so something has to supply it. Upstream
+    # has no static answer either: vm-register.yml derives it per guest as
+    # "{{ ernic_nic_subnet }}.{{ 10 * item.id }}" from the instance manifest,
+    # with ids running from 1. There is no manifest here -- this drives one
+    # guest straight over SSH -- so do the same arithmetic against a default
+    # index of 1, and let a caller override either half. ernic_nic_subnet is
+    # not a role default; it lives in the upstream repo's group_vars/all.yml,
+    # which this playbook does not load, so its value is repeated here.
+    ernic_nic_subnet: "192.168.200"
+    ernic_guest_vm_index: "{{ vm_index | default(1) }}"
+    ernic_guest_vm_ip: >-
+      {{ vm_ip | default(ernic_nic_subnet ~ '.'
+                         ~ (10 * (vm_index | default(1) | int))) }}
   roles:
     - role: sbates130272.rocm_ernic.ernic_guest_setup

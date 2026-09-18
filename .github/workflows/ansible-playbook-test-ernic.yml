@@ -23,7 +23,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  ERNIC_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20260917.g857483b-ernic.c34d798-vfu.8039244
+  ERNIC_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20260918.g462eef6-ernic.6ca9a46-vfu.8039244
   QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260917.g857483b-qemu11.1.1-vfu.8039244
   VM_IMAGES_DIR: /var/lib/qemu-tool/images
   ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false}'
@@ -76,7 +76,13 @@ jobs:
       env:
         VM_NAME: ernic-test
         QEMU_TOOL_SRC: /var/lib/qemu-tool/src
-        VM_VCPUS: "2"
+        # Four is a floor, not a preference. ionic_lif_size() sets
+        # neqs = min(rdma.eq_qtype.qid_count, num_online_cpus()) and
+        # ionic_create_rdma_admin() rejects anything under IONIC_EQ_COUNT_MIN
+        # (4) with a bare -EINVAL that surfaces only as "Failed to register
+        # ibdev". At 2 vCPUs ionic_rdma can never probe, whatever the device
+        # advertises. Oversubscribing a 4-vCPU runner is the cheaper problem.
+        VM_VCPUS: "4"
         VM_VMEM: "4096"
         VM_SHM_SIZE: "5g"
       run: |
@@ -119,11 +125,13 @@ jobs:
         echo "VM failed to boot in time"
         exit 1
 
-    # No amdgpu DKMS check here. ernic_image_prep gates rocm_setup on
-    # ernic_gpu_passthrough, which vm-ernic sets false, so this image has no
-    # amdgpu module to find and "dkms status | grep -q amdgpu" failed on every
-    # run since the workflows were split. The rocjitsu workflows cover amdgpu;
-    # this one covers rocm_ernic, below.
+    # No amdgpu DKMS check here. vm-ernic never installs ROCm -- the old
+    # ernic_image_prep gated rocm_setup on ernic_gpu_passthrough, which
+    # vm-ernic sets false, and its local replacement does not run rocm_setup at
+    # all -- so this image has no amdgpu module to find and
+    # "dkms status | grep -q amdgpu" failed on every run since the workflows
+    # were split. The rocjitsu workflows cover amdgpu; this one covers the
+    # ionic modules, below.
     - name: Run vm-ernic configure stage
       run: |
         ansible-playbook \
@@ -135,17 +143,34 @@ jobs:
           -e "ansible_user=ubuntu" \
           -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"'
 
-    - name: Verify rocm_ernic kernel module loaded
+    # ionic and ionic_rdma, not rocm_ernic: the out-of-tree module this used to
+    # name was deleted upstream, and setup-ionic-dkms.sh builds exactly these
+    # two into the ionic-ernic DKMS package. Both are checked because ionic
+    # alone loads fine without the RDMA half, which is the half under test.
+    - name: Verify ionic kernel modules loaded
       run: |
         ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
-          -p 2222 ubuntu@qemu "lsmod | grep -q rocm_ernic"
-        echo "✓ rocm_ernic module loaded"
+          -p 2222 ubuntu@qemu "lsmod | grep -qE '^ionic\b' && lsmod | grep -qE '^ionic_rdma\b'"
+        echo "✓ ionic and ionic_rdma modules loaded"
 
     - name: Verify ernic network interface visible
       run: |
         ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
           -p 2222 ubuntu@qemu "ip link show | grep -q rocm-ernic0"
         echo "✓ rocm-ernic0 interface present"
+
+    # A registered ibdev is not a usable one: the device can appear in
+    # ibv_devices with its port still down, which is all the collection's own
+    # "Verify the rocm-ernic RDMA device exists" assert checks. Upstream's
+    # vm-functional.sh gates on PORT_ACTIVE instead, so do the same here.
+    # Printed unconditionally -- when this fails, the state of the port is
+    # the first thing worth reading.
+    - name: Verify the RDMA port is active
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@qemu "ibv_devinfo" | tee /tmp/ibv_devinfo.txt
+        grep -q PORT_ACTIVE /tmp/ibv_devinfo.txt
+        echo "✓ RDMA port active"
 
     - name: Show compose logs on failure
       if: failure()
