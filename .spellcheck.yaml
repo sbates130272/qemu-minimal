@@ -4,7 +4,11 @@ matrix:
   aspell:
     lang: en
   sources:
-  - '**/*.md'
+  # commands.md, ci.md and vm-rocjitsu.md are local scratch notes listed in
+  # .git/info/exclude, so CI never sees them -- but a local pyspelling run
+  # globs the working tree and does. Exclude them here so the local run and
+  # the CI run agree instead of failing on files that are not in the repo.
+  - '**/*.md|!commands.md|!ci.md|!vm-rocjitsu.md'
   pipeline:
   - pyspelling.filters.markdown
   dictionary:

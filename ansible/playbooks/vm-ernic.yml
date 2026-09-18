@@ -8,6 +8,14 @@
 
 - name: Install ernic driver into VM image
   hosts: all
+  module_defaults:
+    ansible.builtin.uri:
+      headers: >-
+        {{
+          ({'Authorization': 'token ' + lookup('env', 'GITHUB_TOKEN')}
+           if lookup('env', 'GITHUB_TOKEN')
+           else {})
+        }}
   gather_facts: true
   become: true
   tags: [install]
@@ -34,6 +42,16 @@
     rocm_setup_install_metrics_exporter: true
     ernic_image_rdma: true
     ernic_gpu_passthrough: false
+    # Pin the source, do not track main. Upstream reworked the driver onto
+    # patched upstream ionic on 2026-09-16, deleting driver/ and rdma-core/;
+    # the rocm_ernic collection we install still reads those paths, so a clone
+    # of main now fails ernic_source's "looks like a rocm-ernic checkout"
+    # assert. c34d798 is the last commit with the old layout, and it is the
+    # commit ERNIC_IMAGE (ernic.c34d798-vfu.*) is built from, so pinning here
+    # keeps the source and the container image on the same tree. Drop this
+    # once a collection release that understands the ionic layout is pinned
+    # in ansible/requirements.yml.
+    ernic_source_repo_version: c34d79894cb41b0c33c21b773ee9752c53ead5b0
   pre_tasks:
     # Block distro (Ubuntu universe) versions of packages that the ROCm
     # meta-package ships correctly under /opt/rocm/core-*/bin/. Without this
@@ -110,6 +128,15 @@
     - role: sbates130272.rocm_ernic.ernic_image_prep
 
   tasks:
+    # Resolve the checkout here rather than letting ernic_guest_setup do it
+    # inside the rescue below. A reshaped or missing source tree is a real
+    # failure, and down there it gets swallowed and reported as "DKMS module
+    # is installed" when nothing was built. ernic_source sets
+    # ernic_source_resolved, so the copy inside ernic_guest_setup is a no-op.
+    - name: Resolve the rocm-ernic source checkout
+      ansible.builtin.include_role:
+        name: sbates130272.rocm_ernic.ernic_source
+
     # ernic_guest_setup builds the DKMS module and rdma-core provider
     # into the backing image so compose VMs don't have to rebuild on
     # every boot.  The RDMA device check at the end of driver.yml
@@ -123,7 +150,22 @@
             ernic_configure_nic: false
             ernic_gpu_passthrough: false
       rescue:
-        - ansible.builtin.debug:
+        # One expected failure only: driver.yml's "Verify the rocm-ernic RDMA
+        # device exists". A DKMS build error or a staging failure lands here
+        # too, and claiming the module is installed would be a lie that only
+        # surfaces later as an unrelated red step. Re-raise anything else.
+        - name: Re-raise an ernic_guest_setup failure that is not the NIC check
+          ansible.builtin.fail:
+            msg: >-
+              ernic_guest_setup failed at
+              "{{ ansible_failed_task.name | default('unknown task') }}":
+              {{ ansible_failed_result.msg | default('no message') }}
+          when: >-
+            'RDMA device exists'
+            not in (ansible_failed_task.name | default(''))
+
+        - name: Note the expected hardware-free RDMA check failure
+          ansible.builtin.debug:
             msg: >-
               ernic_guest_setup RDMA device check failed as expected
               (no ernic NIC during image install). DKMS module is installed;
@@ -137,5 +179,8 @@
   vars:
     username: "{{ vm_username | default('ubuntu') }}"
     ernic_guest_agent: false
+    # Separate play, separate vars: this one runs on its own via --tags
+    # configure, so it needs the pin too. See the install play above.
+    ernic_source_repo_version: c34d79894cb41b0c33c21b773ee9752c53ead5b0
   roles:
     - role: sbates130272.rocm_ernic.ernic_guest_setup

@@ -1,4 +1,4 @@
-name: release
+name: qemu-minimal - release
 
 on:
   push:
@@ -7,6 +7,11 @@ on:
 
 permissions:
   contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Never cancel a release mid-flight.
+  cancel-in-progress: false
 
 jobs:
   release:

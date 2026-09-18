@@ -1,6 +1,23 @@
 ---
+# Installed with --no-deps, so every collection the playbooks reach has to be
+# named here. That is deliberate: sbates130272.batesste declares amazon.aws and
+# community.libvirt, and letting galaxy resolve them pulled ~10 MiB this repo
+# never touches -- amazon.aws appears nowhere outside that collection's own
+# MANIFEST.json, and community.libvirt is used only by its vm_create role,
+# which none of these playbooks invoke.
+#
+# The cost of --no-deps is that a new upstream dependency goes missing here
+# instead of being installed silently, surfacing as a module-not-found. If that
+# happens, add the collection below rather than dropping --no-deps.
 collections:
   - name: sbates130272.batesste
     version: ">=2.4.0"
   - name: sbates130272.rocm_ernic
     version: ">=0.1.0"
+  - name: ansible.posix
+    version: ">=2.2.2"
+  - name: community.general
+    version: ">=13.3.0"
+  # Required by community.general itself, not used directly.
+  - name: community.library_inventory_filtering_v1
+    version: ">=1.0.0"

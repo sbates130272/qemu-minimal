@@ -13,8 +13,8 @@
 [![Ansible Test](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/ansible-setup-test.yml?branch=main&label=ansible&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/ansible-setup-test.yml)
 [![ShellCheck](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/shell-check.yml?branch=main&label=shellcheck&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/shell-check.yml)
 [![Spell Check](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/spell-check.yml?branch=main&label=spell-check&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/spell-check.yml)
-[![2VM Smoke Test](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/2vm-smoke-test.yml?branch=main&label=2vm-smoke&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/2vm-smoke-test.yml)
-[![2VM Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/2vm-vm-report.yml?branch=main&label=2vm-report&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/2vm-vm-report.yml)
+[![Two-VM Smoke Test](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/smoke-test-rocm-two-vms.yml?branch=main&label=smoke-test-rocm-two-vms&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/smoke-test-rocm-two-vms.yml)
+[![Two-VM Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/vm-report-two-vms.yml?branch=main&label=vm-report-two-vms&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/vm-report-two-vms.yml)
 
 ## Summary
 
@@ -264,7 +264,10 @@ the backing image. This installs roles from the
 The host must have `ansible`, `ansible-galaxy`, and the Python
 `jmespath` module for the same interpreter as `ansible-playbook`
 (install with `pip install jmespath` inside the venv when needed). When the collection is not already installed, `gen-vm` runs
-`ansible-galaxy collection install -r ansible/requirements.yml`.
+`ansible-galaxy collection install --no-deps -r ansible/requirements.yml`.
+`requirements.yml` lists every collection the playbooks need, including the
+ones that would otherwise arrive as transitive dependencies, so `--no-deps`
+skips roughly 10 MiB of collections this repository never uses.
 
 ### Available playbooks
 

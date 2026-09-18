@@ -20,7 +20,7 @@ x-gpu-common: &gpu-common
   restart: on-failure
 
 x-qemu-common: &qemu-common
-  image: "${QEMU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:qemu11.1.1-vfu.8039244}"
+  image: "${QEMU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260917.g857483b-qemu11.1.1-vfu.8039244}"
   volumes:
     - vfu-sockets:/run/vfu:ro
     - "${VM_IMAGES_DIR:-/var/lib/qemu-tool/images}:${VM_IMAGES_DIR:-/var/lib/qemu-tool/images}"
@@ -34,7 +34,7 @@ services:
   # ---- rocm-ernic NIC for VM 1: TCP manager (hub) ----
   ernic-hub:
     <<: *gpu-common
-    image: "${ERNIC_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:ernic.c34d798-vfu.8039244}"
+    image: "${ERNIC_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20260917.g857483b-ernic.c34d798-vfu.8039244}"
     environment:
       - ERNIC_DEBUG_MESH
     command:
@@ -57,7 +57,7 @@ services:
   # ---- rocm-ernic NIC for VM 2: TCP worker (spoke) ----
   ernic-worker:
     <<: *gpu-common
-    image: "${ERNIC_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:ernic.c34d798-vfu.8039244}"
+    image: "${ERNIC_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20260917.g857483b-ernic.c34d798-vfu.8039244}"
     environment:
       - ERNIC_DEBUG_MESH
     command:
@@ -84,7 +84,7 @@ services:
   rocjitsu-1:
     <<: *gpu-common
     profiles: [rocjitsu-vm1]
-    image: "${ROCJITSU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:rocjitsu.730bc62}"
+    image: "${ROCJITSU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20260917.g857483b-rocjitsu.be38974}"
     command:
       - rocjitsu
       - --config
@@ -104,7 +104,7 @@ services:
   rocjitsu-2:
     <<: *gpu-common
     profiles: [rocjitsu-vm2]
-    image: "${ROCJITSU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:rocjitsu.730bc62}"
+    image: "${ROCJITSU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20260917.g857483b-rocjitsu.be38974}"
     command:
       - rocjitsu
       - --config

@@ -1,4 +1,4 @@
-name: qemu-tool-dry-run-tests
+name: qemu-minimal - dry-run-qemu-tool
 
 on:
   workflow_dispatch:
@@ -11,12 +11,17 @@ on:
       - 'qemu/compose/**'
       - '.github/workflows/qemu-tool-dry-run.yml'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Only supersede PR runs: a push to main or a scheduled run should finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
 
   dry-run-tests:
     name: dry-run-tests
     runs-on: ubuntu-latest
-    container: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:qemu11.1.1-vfu.8039244
+    container: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260917.g857483b-qemu11.1.1-vfu.8039244
     steps:
     - name: Check out code
       uses: actions/checkout@v4.3.1
@@ -59,6 +64,20 @@ jobs:
         echo "$out" | grep -q "nvme,serial=dry-test-nvme0"
         echo "$out" | grep -q "nvme,serial=dry-test-nvme1"
         echo "✓ --nvme -2 passed"
+
+    # Regression test: QEMU 11 refuses to start when the nvme serial exceeds 20
+    # characters, which a long VM name silently produced. This was invisible on
+    # the bare runner because apt's QEMU 8.2 accepted it.
+    - name: "Dry-run: long VM name truncates the nvme serial to 20 chars"
+      run: |
+        out=$(qemu-tool run-vm --vm-name qemu-tool-smoke-test --no-kvm \
+              --nvme 1 --dry-run)
+        echo "$out"
+        serial=$(echo "$out" | sed -n 's/.*nvme,serial=\([^,]*\).*/\1/p' | head -1)
+        echo "serial=${serial} (${#serial} chars)"
+        [ "${#serial}" -le 20 ] || { echo "serial longer than 20 chars"; exit 1; }
+        echo "$out" | grep -q "nvme,serial=ool-smoke-test-nvme1"
+        echo "✓ long-name nvme serial truncation passed"
 
     - name: "Dry-run: x86 with --nvme custom string"
       run: |

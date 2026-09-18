@@ -1,4 +1,4 @@
-name: qemu-minimal-shellcheck
+name: qemu-minimal - shellcheck
 
 on:
   workflow_dispatch:
@@ -6,14 +6,25 @@ on:
     branches:
       - main
     paths:
-      - 'qemu/**'
-      - 'libvirt/**'
+      - 'qemu/gen-vm'
+      - 'qemu/run-vm'
+      - 'libvirt/create-nvme'
+      - 'libvirt/virt-install-ubuntu'
+      - '.github/workflows/shell-check.yml'
   push:
     branches:
       - main
     paths:
-      - 'qemu/**'
-      - 'libvirt/**'
+      - 'qemu/gen-vm'
+      - 'qemu/run-vm'
+      - 'libvirt/create-nvme'
+      - 'libvirt/virt-install-ubuntu'
+      - '.github/workflows/shell-check.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Only supersede PR runs: a push to main or a scheduled run should finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   shellcheck:

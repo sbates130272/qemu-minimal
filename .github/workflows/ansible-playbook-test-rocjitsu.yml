@@ -1,0 +1,183 @@
+name: qemu-minimal - ansible-playbook-test-rocjitsu
+
+# vm-rocjitsu: install firmware stubs + driver, boot with the rocjitsu compose
+# stack, load amdgpu via amdgpu-probe.
+
+# Manual only for now. The pull_request trigger is parked while the focus is on
+# the ionic lane: the last PR run hung in "Load amdgpu via amdgpu-probe" and only
+# died to the job-level timeout-minutes, burning ~125 minutes of a runner per push.
+# Restore the trigger below once the probe hang is fixed.
+on:
+  workflow_dispatch:
+  # pull_request:
+  #   branches:
+  #     - main
+  #   paths:
+  #     - 'ansible/playbooks/vm-rocjitsu.yml'
+  #     - 'ansible/requirements.yml'
+  #     - 'qemu/qemu-tool/**'
+  #     - 'qemu/pyproject.toml'
+  #     - 'qemu/compose/vfio-user-rocjitsu-vm/**'
+  #     - '.github/actions/setup-vm-job/action.yml'
+  #     - '.github/workflows/ansible-playbook-test-rocjitsu.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  ROCJITSU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20260917.g857483b-rocjitsu.be38974
+  QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260917.g857483b-qemu11.1.1-vfu.8039244
+  VM_IMAGES_DIR: /var/lib/qemu-tool/images
+  ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false}'
+
+jobs:
+  test-vm-rocjitsu:
+    name: test-vm-rocjitsu
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    container:
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260917.g857483b-qemu11.1.1-vfu.8039244
+      # /var/lib/qemu-tool is bind-mounted from the host at the same path so the
+      # qcow2 this job generates is the same file the sibling qemu container opens:
+      # compose bind-mounts are resolved by the host docker daemon, not in this
+      # container's filesystem.
+      options: >-
+        --device /dev/kvm
+        -v /var/run/docker.sock:/var/run/docker.sock
+        -v /var/lib/qemu-tool:/var/lib/qemu-tool
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4.3.1
+
+    - name: Set up VM job
+      uses: ./.github/actions/setup-vm-job
+      with:
+        cloud-image-key: rocjitsu
+        stage-src: 'true'
+
+    - name: Pull CI images
+      run: |
+        docker pull "$ROCJITSU_IMAGE"
+        docker pull "$QEMU_IMAGE"
+
+    - name: Generate VM with vm-rocjitsu playbook
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        qemu-tool gen-vm \
+          --vm-name rocjitsu-test \
+          --release resolute \
+          --username ubuntu \
+          --password password \
+          --packages none \
+          --size 64 \
+          --ansible-playbook ansible/playbooks/vm-rocjitsu.yml
+
+    - name: Bring up rocjitsu compose stack
+      working-directory: qemu/compose/vfio-user-rocjitsu-vm
+      env:
+        VM_NAME: rocjitsu-test
+        QEMU_TOOL_SRC: /var/lib/qemu-tool/src
+        VM_VCPUS: "2"
+        VM_VMEM: "4096"
+        VM_SHM_SIZE: "5g"
+      run: |
+        docker compose up --detach
+        echo "Compose stack started"
+
+    # The qemu container publishes 2222 on the HOST, which this job
+    # container cannot reach: the runner puts it on its own bridge network
+    # and "--network" is not supported in container.options. Attach to the
+    # compose network instead and address the VM by its service name.
+    - name: Join the compose network
+      run: docker network connect vfio-user-rocjitsu-vm_default "$(cat /etc/hostname)"
+
+    - name: Wait for rocjitsu server healthy
+      working-directory: qemu/compose/vfio-user-rocjitsu-vm
+      run: |
+        for i in $(seq 1 30); do
+          health=$(docker compose ps --format json rocjitsu \
+            | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('Health',''))" \
+            2>/dev/null || true)
+          [ "$health" = "healthy" ] && break
+          sleep 2
+        done
+        [ "$health" = "healthy" ] || (docker compose logs rocjitsu && exit 1)
+        echo "rocjitsu server healthy"
+
+    - name: Wait for VM SSH (180s timeout)
+      run: |
+        elapsed=0
+        while [ $elapsed -lt 180 ]; do
+          if ssh -o ConnectTimeout=1 \
+                 -o NoHostAuthenticationForLocalhost=yes \
+                 -o StrictHostKeyChecking=no \
+                 -p 2222 ubuntu@qemu true 2>/dev/null; then
+            echo "VM ready after ${elapsed}s"
+            exit 0
+          fi
+          sleep 2; elapsed=$((elapsed + 2))
+        done
+        echo "VM failed to boot in time"
+        exit 1
+
+    - name: Verify firmware stubs present
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@qemu \
+          "test -f /lib/firmware/amdgpu/gc_12_1_0_rlc_1.bin"
+        echo "✓ gfx1250 firmware stubs present"
+
+    - name: Verify amdgpu-probe installed
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@qemu \
+          "test -x /usr/local/bin/amdgpu-probe"
+        echo "✓ amdgpu-probe installed"
+
+    - name: Verify amdgpu DKMS module built and installed
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@qemu \
+          "dkms status amdgpu | grep -q installed"
+        echo "✓ amdgpu DKMS module installed"
+
+    - name: Load amdgpu via amdgpu-probe
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@qemu \
+          "sudo /usr/local/bin/amdgpu-probe"
+        echo "✓ amdgpu-probe completed"
+
+    # /dev/kfd is NOT evidence that the GPU bound. amdgpu_init() calls
+    # amdgpu_amdkfd_init() -> kfd_chardev_init(), which device_create()s
+    # /dev/kfd, *before* it calls pci_register_driver() -- so the node exists
+    # on module load even when every probe fails. Observed directly: a guest
+    # with "amdgpu: probe of 0000:00:05.0 failed with error -22" still had
+    # /dev/kfd and passed the old check.
+    #
+    # kfd_topology_init() always adds node 0 for the CPU, with an empty name.
+    # A bound GPU adds a further node whose name is non-empty ("ip discovery"
+    # for the rocjitsu gfx1250 model). Counting non-empty names is therefore
+    # the assertion that actually distinguishes a working probe.
+    - name: Verify amdgpu module loaded and a GPU KFD node present
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@qemu "lsmod | grep -q amdgpu"
+        echo "✓ amdgpu module loaded"
+        gpus=$(ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@qemu \
+          "cat /sys/class/kfd/kfd/topology/nodes/*/name 2>/dev/null | grep -c .")
+        if [ "$gpus" -lt 1 ]; then
+          echo "no GPU KFD node: amdgpu loaded but never bound the device" >&2
+          ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+            -p 2222 ubuntu@qemu "sudo dmesg | grep -i amdgpu | tail -20" >&2
+          exit 1
+        fi
+        echo "✓ GPU KFD node present ($gpus)"
+
+    - name: Show compose logs on failure
+      if: failure()
+      working-directory: qemu/compose/vfio-user-rocjitsu-vm
+      run: docker compose logs

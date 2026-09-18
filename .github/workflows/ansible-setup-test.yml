@@ -1,4 +1,4 @@
-name: ansible-setup-test
+name: qemu-minimal - ansible-setup-test
 
 on:
   workflow_dispatch:
@@ -7,34 +7,48 @@ on:
       - main
     paths:
       - 'ansible/**'
-      - 'qemu/gen-vm'
+      - 'qemu/qemu-tool/**'
+      - 'qemu/pyproject.toml'
       - '.github/workflows/ansible-setup-test.yml'
   push:
     branches:
       - main
     paths:
       - 'ansible/**'
-      - 'qemu/gen-vm'
+      - 'qemu/qemu-tool/**'
+      - 'qemu/pyproject.toml'
       - '.github/workflows/ansible-setup-test.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Only supersede PR runs: a push to main or a scheduled run should finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
 
   syntax-check:
     name: ansible-syntax-check
     runs-on: ubuntu-latest
-    container: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:qemu11.1.1-vfu.8039244
+    container: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260917.g857483b-qemu11.1.1-vfu.8039244
     steps:
     - name: Check out code
       uses: actions/checkout@v4.3.1
-    - name: Install ansible
-      run: apt-get update -qq && apt-get install -y -qq ansible python3-pip
+    # ansible ships in the CI image at /usr/local/bin; only pip is missing.
+    - name: Install pip
+      run: apt-get update -qq && apt-get install -y -qq python3-pip
+    # Resolve the path in the container; actions/cache expands ~ in Node on the
+    # runner, ansible-galaxy expands it from $HOME in here, and the two are not
+    # the same directory. See .github/actions/setup-vm-job/action.yml.
+    - name: Resolve the Ansible collections path
+      id: acp
+      run: echo "path=$HOME/.ansible/collections" >> "$GITHUB_OUTPUT"
     - name: Cache Ansible collections
       uses: actions/cache@v4
       with:
-        path: ~/.ansible/collections
-        key: ansible-collections-${{ hashFiles('ansible/requirements.yml') }}
+        path: ${{ steps.acp.outputs.path }}
+        key: ansible-collections-v2-${{ hashFiles('ansible/requirements.yml') }}
     - name: Install sbates130272.batesste collection
-      run: ansible-galaxy collection install --pre -r ansible/requirements.yml
+      run: ansible-galaxy collection install --pre --no-deps -r ansible/requirements.yml
     - name: Syntax-check vm-basic playbook
       run: ansible-playbook --syntax-check playbooks/vm-basic.yml
       working-directory: ansible
@@ -55,49 +69,25 @@ jobs:
     name: gen-vm-ansible-setup
     needs: syntax-check
     runs-on: ubuntu-latest
+    container:
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260917.g857483b-qemu11.1.1-vfu.8039244
+      # Supplies qemu-system-x86_64, qemu-img and cloud-localds.
+      options: --device /dev/kvm
     timeout-minutes: 90
     steps:
     - name: Check out code
       uses: actions/checkout@v4.3.1
-    - name: Enable KVM
-      run: |
-        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | \
-          sudo tee /etc/udev/rules.d/99-kvm4all.rules
-        sudo udevadm control --reload-rules
-        sudo udevadm trigger --name-match=kvm
-    - name: Install packages
-      run: |
-        sudo apt-get update -qq
-        sudo apt-get install -y -qq \
-          qemu-system-x86 qemu-utils cloud-image-utils ansible \
-          openssh-client python3-pip
-    - name: Install jmespath for Ansible json_query filter
-      run: |
-        py=$(sed -n '1s/^#! *//p' "$(command -v ansible-playbook)" | awk '{print $1}')
-        "${py}" -m pip install --break-system-packages jmespath
-    - name: Cache pip
-      uses: actions/cache@v4
+
+    # This job used to inline its own copy of the prologue, which is how it
+    # kept the "~/.ansible/collections" cache path after the composite action
+    # was fixed: actions/cache expands ~ in Node on the runner, ansible-galaxy
+    # expands it from $HOME in the container, so the restore never reached
+    # galaxy and gen-vm redownloaded the collections every run.
+    - name: Set up VM job
+      uses: ./.github/actions/setup-vm-job
       with:
-        path: ~/.cache/pip
-        key: pip-qemu-tool-${{ hashFiles('qemu/pyproject.toml') }}
-    - name: Install qemu-tool
-      run: pip install --break-system-packages -e ./qemu
-    - name: Generate SSH key-pair
-      run: mkdir -p "$HOME/.ssh" && ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
-    - name: Prepare GnuPG directory for git_setup
-      run: mkdir -p "$HOME/.gnupg"
-    - name: Cache cloud image
-      uses: actions/cache@v4
-      with:
-        path: /var/lib/qemu-tool/images/*-server-cloudimg-*.img
-        key: cloud-img-amd64-noble-ansible
-    - name: Cache Ansible collections
-      uses: actions/cache@v4
-      with:
-        path: ~/.ansible/collections
-        key: ansible-collections-${{ hashFiles('ansible/requirements.yml') }}
-    - name: Ensure images directory exists
-      run: sudo mkdir -p /var/lib/qemu-tool/images && sudo chmod 777 /var/lib/qemu-tool/images
+        cloud-image-key: ansible-setup
+        release: noble
     - name: Generate VM with Ansible post-setup
       run: |
         qemu-tool gen-vm \

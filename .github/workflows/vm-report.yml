@@ -1,4 +1,4 @@
-name: vm-report
+name: qemu-minimal - vm-report
 
 on:
   push:
@@ -21,6 +21,10 @@ jobs:
   generate-report:
     name: generate-vm-report
     runs-on: ubuntu-latest
+    container:
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260917.g857483b-qemu11.1.1-vfu.8039244
+      # Supplies qemu-system-x86_64, qemu-img and cloud-localds.
+      options: --device /dev/kvm
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -28,30 +32,46 @@ jobs:
     - name: Check out code
       uses: actions/checkout@v4.3.1
 
-    - name: Enable KVM
+    # No udev rule here: this job gets /dev/kvm from "options: --device /dev/kvm"
+    # and runs as root. The ioctl is the real test -- a bind-mounted node can
+    # exist and still be non-functional, and QEMU would silently fall back to TCG.
+    - name: Verify KVM is available
       run: |
-        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | \
-          sudo tee /etc/udev/rules.d/99-kvm4all.rules
-        sudo udevadm control --reload-rules
-        sudo udevadm trigger --name-match=kvm
+        test -c /dev/kvm || { echo "::error::/dev/kvm missing - guest would run under TCG"; exit 1; }
+        test -r /dev/kvm && test -w /dev/kvm || { echo "::error::/dev/kvm not read-write"; exit 1; }
+        python3 -c "import os, fcntl; fcntl.ioctl(os.open('/dev/kvm', os.O_RDWR), 0xAE00, 0)" \
+          || { echo "::error::/dev/kvm present but KVM_GET_API_VERSION failed"; exit 1; }
+        echo "KVM available: $(ls -l /dev/kvm)"
 
-    - name: Install packages
+    # Everything else -- qemu-system-x86_64, qemu-img, cloud-localds, ansible
+    # and openssh-client -- already ships in the CI image. Only pip is missing.
+    - name: Install missing packages
       run: |
-        sudo apt-get update -qq
-        sudo apt-get install -y -qq \
-          qemu-system-x86 qemu-utils cloud-image-utils python3-pip
+        apt-get update -qq
+        apt-get install -y -qq python3-pip
+
+    # Absolute, not "~/.cache/pip": actions/cache expands ~ on the runner and
+    # pip expands it in this container, so the restore never reached pip.
+    # See .github/actions/setup-vm-job/action.yml.
+    - name: Use a fixed pip cache directory
+      run: echo "PIP_CACHE_DIR=/var/cache/pip-ci" >> "$GITHUB_ENV"
 
     - name: Cache pip
       uses: actions/cache@v4
       with:
-        path: ~/.cache/pip
-        key: pip-qemu-tool-${{ hashFiles('qemu/pyproject.toml') }}
+        path: /var/cache/pip-ci
+        key: pip-qemu-tool-v2-${{ hashFiles('qemu/pyproject.toml') }}
 
     - name: Install qemu-tool
       run: pip install --break-system-packages -e ./qemu
 
     - name: Generate SSH key-pair
-      run: mkdir -p "$HOME/.ssh" && ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
+      run: |
+        mkdir -p "$HOME/.ssh" && ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
+        # ssh(1) expands ~ from the passwd entry, not $HOME. A container job
+        # runs as root with HOME=/github/home, so the default identity would be
+        # looked for at /root/.ssh/id_rsa, not found, and never offered.
+        [ "$HOME" = /root ] || { rm -rf /root/.ssh && ln -s "$HOME/.ssh" /root/.ssh; }
 
     - name: Cache cloud image
       uses: actions/cache@v4

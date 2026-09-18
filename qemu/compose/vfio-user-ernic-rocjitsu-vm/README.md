@@ -31,9 +31,9 @@ ssh -p 2222 ubuntu@localhost
 
 | Variable | Default | Description |
 |---|---|---|
-| `ERNIC_IMAGE` | `…-rocm-ernic:ernic.c34d798-vfu.8039244` | rocm-ernic vfio-user server image |
-| `ROCJITSU_IMAGE` | `…-rocm-rocjitsu:rocjitsu.730bc62` | rocjitsu vfio-user server image |
-| `QEMU_IMAGE` | `…-qemu-libvfio-user:qemu11.1.1-vfu.8039244` | qemu-system image (must include qemu-tool) |
+| `ERNIC_IMAGE` | `…-rocm-ernic:20260917.g857483b-ernic.c34d798-vfu.8039244` | rocm-ernic vfio-user server image |
+| `ROCJITSU_IMAGE` | `…-rocm-rocjitsu:20260917.g857483b-rocjitsu.be38974` | rocjitsu vfio-user server image |
+| `QEMU_IMAGE` | `…-qemu-libvfio-user:20260917.g857483b-qemu11.1.1-vfu.8039244` | qemu-system image (must include qemu-tool) |
 | `ERNIC_COUNT` | `1` | Number of ernic GPU replicas |
 | `ROCJITSU_COUNT` | `1` | Number of rocjitsu GPU replicas |
 | `ROCJITSU_CONFIG` | `gfx1250_mi455x.json` | Config filename under `/usr/local/share/rocjitsu/configs/` |

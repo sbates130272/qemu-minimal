@@ -1,4 +1,4 @@
-name: qemu-minimal-spell-check
+name: qemu-minimal - spell-check
 
 on:
   workflow_dispatch:
@@ -16,6 +16,11 @@ on:
       - '**.md'
       - '.wordlist.txt'
       - '.spellcheck.yaml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Only supersede PR runs: a push to main or a scheduled run should finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   spell-check:

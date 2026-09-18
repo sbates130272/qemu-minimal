@@ -1,0 +1,153 @@
+name: qemu-minimal - ansible-playbook-test-ernic
+
+# vm-ernic: install the ernic driver, boot with the ernic compose stack,
+# configure the NIC. Runs inside the QEMU CI image; the docker socket is
+# mounted for the compose phase.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'ansible/playbooks/vm-ernic.yml'
+      - 'ansible/requirements.yml'
+      - 'qemu/qemu-tool/**'
+      - 'qemu/pyproject.toml'
+      - 'qemu/compose/vfio-user-ernic-vm/**'
+      - '.github/actions/setup-vm-job/action.yml'
+      - '.github/workflows/ansible-playbook-test-ernic.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  ERNIC_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20260917.g857483b-ernic.c34d798-vfu.8039244
+  QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260917.g857483b-qemu11.1.1-vfu.8039244
+  VM_IMAGES_DIR: /var/lib/qemu-tool/images
+  ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false}'
+
+jobs:
+  test-vm-ernic:
+    name: test-vm-ernic
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    container:
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260917.g857483b-qemu11.1.1-vfu.8039244
+      # /var/lib/qemu-tool is bind-mounted from the host at the same path so the
+      # qcow2 this job generates is the same file the sibling qemu container opens:
+      # compose bind-mounts are resolved by the host docker daemon, not in this
+      # container's filesystem.
+      options: >-
+        --device /dev/kvm
+        -v /var/run/docker.sock:/var/run/docker.sock
+        -v /var/lib/qemu-tool:/var/lib/qemu-tool
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4.3.1
+
+    - name: Set up VM job
+      uses: ./.github/actions/setup-vm-job
+      with:
+        cloud-image-key: ernic
+        stage-src: 'true'
+
+    - name: Pull CI images
+      run: |
+        docker pull "$ERNIC_IMAGE"
+        docker pull "$QEMU_IMAGE"
+
+    - name: Generate VM with vm-ernic playbook (install stage)
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        qemu-tool gen-vm \
+          --vm-name ernic-test \
+          --release resolute \
+          --username ubuntu \
+          --password password \
+          --packages none \
+          --size 64 \
+          --ansible-playbook ansible/playbooks/vm-ernic.yml
+
+    - name: Bring up ernic compose stack
+      working-directory: qemu/compose/vfio-user-ernic-vm
+      env:
+        VM_NAME: ernic-test
+        QEMU_TOOL_SRC: /var/lib/qemu-tool/src
+        VM_VCPUS: "2"
+        VM_VMEM: "4096"
+        VM_SHM_SIZE: "5g"
+      run: |
+        docker compose up --detach
+        echo "Compose stack started"
+
+    # The qemu container publishes 2222 on the HOST, which this job
+    # container cannot reach: the runner puts it on its own bridge network
+    # and "--network" is not supported in container.options. Attach to the
+    # compose network instead and address the VM by its service name.
+    - name: Join the compose network
+      run: docker network connect vfio-user-ernic-vm_default "$(cat /etc/hostname)"
+
+    - name: Wait for ernic server healthy
+      working-directory: qemu/compose/vfio-user-ernic-vm
+      run: |
+        for i in $(seq 1 30); do
+          health=$(docker compose ps --format json ernic \
+            | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('Health',''))" \
+            2>/dev/null || true)
+          [ "$health" = "healthy" ] && break
+          sleep 2
+        done
+        [ "$health" = "healthy" ] || (docker compose logs ernic && exit 1)
+        echo "ernic server healthy"
+
+    - name: Wait for VM SSH (180s timeout)
+      run: |
+        elapsed=0
+        while [ $elapsed -lt 180 ]; do
+          if ssh -o ConnectTimeout=1 \
+                 -o NoHostAuthenticationForLocalhost=yes \
+                 -o StrictHostKeyChecking=no \
+                 -p 2222 ubuntu@qemu true 2>/dev/null; then
+            echo "VM ready after ${elapsed}s"
+            exit 0
+          fi
+          sleep 2; elapsed=$((elapsed + 2))
+        done
+        echo "VM failed to boot in time"
+        exit 1
+
+    # No amdgpu DKMS check here. ernic_image_prep gates rocm_setup on
+    # ernic_gpu_passthrough, which vm-ernic sets false, so this image has no
+    # amdgpu module to find and "dkms status | grep -q amdgpu" failed on every
+    # run since the workflows were split. The rocjitsu workflows cover amdgpu;
+    # this one covers rocm_ernic, below.
+    - name: Run vm-ernic configure stage
+      run: |
+        ansible-playbook \
+          -i "qemu," \
+          ansible/playbooks/vm-ernic.yml \
+          --tags configure \
+          -e "ansible_host=qemu" \
+          -e "ansible_port=2222" \
+          -e "ansible_user=ubuntu" \
+          -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"'
+
+    - name: Verify rocm_ernic kernel module loaded
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@qemu "lsmod | grep -q rocm_ernic"
+        echo "✓ rocm_ernic module loaded"
+
+    - name: Verify ernic network interface visible
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@qemu "ip link show | grep -q rocm-ernic0"
+        echo "✓ rocm-ernic0 interface present"
+
+    - name: Show compose logs on failure
+      if: failure()
+      working-directory: qemu/compose/vfio-user-ernic-vm
+      run: docker compose logs

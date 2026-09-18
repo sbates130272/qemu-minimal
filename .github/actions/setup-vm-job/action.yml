@@ -1,0 +1,144 @@
+name: Set up a qemu-tool VM job
+description: >-
+  Shared prologue for the ansible-playbook-test-* workflows: assert KVM is
+  genuinely usable, install qemu-tool and the Ansible collections, and prepare
+  the SSH identity and images directory. Expects the repository to already be
+  checked out.
+
+inputs:
+  cloud-image-key:
+    description: >-
+      Suffix for the cloud-image cache key, e.g. "rocjitsu". Keep one per
+      profile so a job never restores another profile's base image.
+    required: true
+  release:
+    description: Ubuntu release the job builds, used in the cloud-image cache key.
+    required: false
+    default: resolute
+  images-dir:
+    description: Directory qemu-tool reads and writes VM images in.
+    required: false
+    default: /var/lib/qemu-tool/images
+  stage-src:
+    description: >-
+      Copy the qemu-tool checkout to /var/lib/qemu-tool/src for a sibling
+      container. Only the compose-based jobs need this.
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    # "options: --device /dev/kvm" gets the node into the container, but a
+    # runner without nested virtualisation would still expose a node that only
+    # falls back to TCG. A bind-mounted node can exist and be non-functional,
+    # so the ioctl is the real test -- QEMU would otherwise silently use TCG.
+    - name: Verify KVM is available
+      shell: bash
+      run: |
+        test -c /dev/kvm || { echo "::error::/dev/kvm missing - guest would run under TCG"; exit 1; }
+        test -r /dev/kvm && test -w /dev/kvm || { echo "::error::/dev/kvm not read-write"; exit 1; }
+        python3 -c "import os, fcntl; fcntl.ioctl(os.open('/dev/kvm', os.O_RDWR), 0xAE00, 0)" \
+          || { echo "::error::/dev/kvm present but KVM_GET_API_VERSION failed"; exit 1; }
+        echo "KVM available: $(ls -l /dev/kvm)"
+
+    - name: Report disk space
+      shell: bash
+      run: df -h / "${{ inputs.images-dir }}" 2>/dev/null || df -h /
+
+    # Everything else -- qemu-system-x86_64, qemu-img, cloud-localds, ansible
+    # and openssh-client -- already ships in the CI image. Only pip is missing.
+    - name: Install missing packages
+      shell: bash
+      run: |
+        apt-get update -qq
+        apt-get install -y -qq python3-pip
+
+    # Pin pip's cache to an absolute path both sides agree on. "~/.cache/pip"
+    # silently did nothing: actions/cache expands ~ in Node on the runner, pip
+    # expands it from $HOME in this container, so the restore landed where pip
+    # never looked. Same trap as the collections cache below and the /root/.ssh
+    # symlink above, and an absolute path is the one form that cannot drift.
+    - name: Use a fixed pip cache directory
+      shell: bash
+      run: echo "PIP_CACHE_DIR=/var/cache/pip-ci" >> "$GITHUB_ENV"
+
+    - name: Cache pip
+      uses: actions/cache@v4
+      with:
+        path: /var/cache/pip-ci
+        key: pip-qemu-tool-v2-${{ hashFiles('qemu/pyproject.toml') }}
+
+    # Below the restore rather than above it, so this install pays the cache too.
+    - name: Install jmespath for Ansible json_query filter
+      shell: bash
+      run: |
+        py=$(sed -n '1s/^#! *//p' "$(command -v ansible-playbook)" | awk '{print $1}')
+        "${py}" -m pip install --break-system-packages jmespath
+
+    - name: Install qemu-tool
+      shell: bash
+      run: pip install --break-system-packages -e ./qemu
+
+    - name: Generate SSH key-pair
+      shell: bash
+      run: |
+        mkdir -p "$HOME/.ssh" && ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
+        # ssh(1) expands ~ from the passwd entry, not $HOME. A container job
+        # runs as root with HOME=/github/home, so the default identity would be
+        # looked for at /root/.ssh/id_rsa, not found, and never offered.
+        [ "$HOME" = /root ] || { rm -rf /root/.ssh && ln -s "$HOME/.ssh" /root/.ssh; }
+
+    - name: Prepare GnuPG directory for git_setup
+      shell: bash
+      run: mkdir -p "$HOME/.gnupg"
+
+    # Resolve the collections path in the container rather than writing "~" and
+    # letting actions/cache expand it. The cache action expands ~ in Node, on
+    # the runner; ansible-galaxy expands it from $HOME, in this container. Those
+    # are not the same directory, so the cache restored to one place and galaxy
+    # looked in the other, reported a full hit, and redownloaded all seven
+    # collections anyway -- 8 to 11 minutes on every job. Same trap as the
+    # /root/.ssh symlink above.
+    - name: Resolve the Ansible collections path
+      id: acp
+      shell: bash
+      run: echo "path=$HOME/.ansible/collections" >> "$GITHUB_OUTPUT"
+
+    - name: Cache Ansible collections
+      id: collections-cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.acp.outputs.path }}
+        key: ansible-collections-v2-${{ hashFiles('ansible/requirements.yml') }}
+
+    - name: Install Ansible collections
+      shell: bash
+      run: |
+        ansible-galaxy collection install --pre --no-deps -r ansible/requirements.yml
+        # On a working cache this prints "Nothing to do" above and the install
+        # is a sub-second no-op. Leave the count in the log so a future
+        # regression is one line to spot rather than a timing mystery.
+        echo "cache-hit=${{ steps.collections-cache.outputs.cache-hit }}, collections present: $(
+          ls -d "${{ steps.acp.outputs.path }}"/ansible_collections/*/*/ 2>/dev/null | wc -l
+        )"
+
+    - name: Cache cloud image
+      uses: actions/cache@v4
+      with:
+        path: ${{ inputs.images-dir }}/*-server-cloudimg-*.img
+        key: cloud-img-amd64-${{ inputs.release }}-ansible-${{ inputs.cloud-image-key }}
+
+    - name: Ensure images directory exists
+      shell: bash
+      run: mkdir -p "${{ inputs.images-dir }}" && chmod 777 "${{ inputs.images-dir }}"
+
+    # The compose stack mounts QEMU_TOOL_SRC by host path, and the checkout only
+    # exists inside this container. Copy it under the shared mount instead.
+    - name: Stage qemu-tool source for the sibling container
+      if: inputs.stage-src == 'true'
+      shell: bash
+      run: |
+        rm -rf /var/lib/qemu-tool/src
+        mkdir -p /var/lib/qemu-tool/src
+        cp -r qemu /var/lib/qemu-tool/src/
