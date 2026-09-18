@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.3.0] - 2026-09-15
+
+### Added
+
+- `qemu-tool list` subcommand: lists every `qemu-system-*` process on the node,
+  including VMs inside containers (attributed back to the container name), with
+  vCPU count, memory, forwarded SSH port, KVM state, uptime and attached
+  vfio-user sockets. `--json` for machine-readable output, `--qemu-tool-only`
+  to filter.
+- VM identity markers: `run-vm` and `gen-vm` now stamp each VM with
+  `-name guest=<vm-name>,debug-threads=on` and a deterministic
+  `-uuid <uuid5(namespace, "<role>:<vm-name>")>`. `list` recomputes the UUID
+  from the guest name to identify qemu-tool's VMs exactly, and to distinguish a
+  transient `gen-vm` build VM from a running `run-vm` VM. Both options are
+  generic, so they work on amd64, arm64 and riscv64 alike.
+
+### Changed
+
+- `--vm-name` now rejects a comma. A comma terminates a QEMU option value, so
+  it silently corrupted `-name`, `-uuid`, `-drive file=` and `-chardev path=`.
+
+### Fixed
+
+- The Debian package declared no dependencies beyond the Python interpreter.
+  It now `Depends` on a QEMU system emulator and `qemu-utils`, `Recommends`
+  `cloud-image-utils`, `openssh-client` and `wget` for `gen-vm`, and `Suggests`
+  `ansible`, `dnsmasq-base`, `docker.io` and `iproute2` for the optional paths.
+
 ## [v1.2.0] - 2026-08-31
 
 ### Added

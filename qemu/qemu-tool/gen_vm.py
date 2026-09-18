@@ -20,6 +20,7 @@ from pathlib import Path
 
 from .caps import qemu_binary
 from .config import VMConfig
+from .identity import identity_args
 from .run_vm import (
     _ensure_mgmt_bridge,
     _mgmt_bridge_name,
@@ -446,6 +447,7 @@ def _run_ansible(cfg: VMConfig, images: Path, backing: Path) -> None:
     arch_args = _arch_args_for_gen(cfg, kvm)
     qemu_proc = subprocess.Popen([
         qemu_binary(cfg),
+        *identity_args("gen-vm", cfg.vm_name),
         *arch_args,
         "-smp", f"cpus={cfg.vcpus}",
         "-m", str(cfg.vmem),

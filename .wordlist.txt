@@ -20,6 +20,7 @@ backend
 basename
 batesste
 bbs
+bc
 BDF
 Bjorling's
 blk
@@ -37,6 +38,7 @@ centos
 CentOS
 changelog
 Changelog
+chardev
 chroot
 ci
 cli
@@ -75,6 +77,7 @@ DKMS
 DMA
 dmabuf
 DNO
+dnsmasq
 dpkg
 DSR
 dv
@@ -87,6 +90,7 @@ enablement
 Enablement
 endif
 enp
+ensurepath
 env
 environemnt
 EOL
@@ -153,12 +157,14 @@ io
 IOMMU
 ip
 iperf
+iproute
 IPs
 IPv
 iter
 iters
 jessie
 jmespath
+jq
 json
 kbusch
 kickstart
@@ -194,6 +200,7 @@ Mbit
 mcast
 MCAST
 md
+MEM
 memfd
 MiB
 mkdir
@@ -209,6 +216,7 @@ multicast
 multistrap
 Multistrap
 myvm
+namespace
 natively
 nbd
 netdev
@@ -233,6 +241,7 @@ ol
 onboarding
 OpenChannel
 OpenChannelSSD
+openssh
 pandoc
 Passthrough
 passthrough
@@ -243,6 +252,8 @@ PCIe
 pciids
 perfers
 perftest
+PID
+pid
 pipx
 PMEM
 powerdown
@@ -253,6 +264,7 @@ printf
 PRs
 ps
 pvrdma
+pypa
 pyproject
 PYVERBS
 qcow
@@ -301,6 +313,7 @@ SHM
 SIGKILL
 signoff
 SIGTERM
+smbios
 snapshotted
 src
 SSD
@@ -338,12 +351,16 @@ UID
 ul
 umem
 uname
+UPTIME
+uptime
 USERDEV
 userdev
 usermod
 userspace
 usr
 utils
+UUID
+uuid
 uverbs
 vCPU
 vcpus
@@ -359,6 +376,7 @@ Virtfs
 virtfs
 VirtFS
 virtio
+virtualenv
 vm
 VM
 vmem

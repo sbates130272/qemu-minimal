@@ -27,7 +27,7 @@ testing.
 
 **Key Features:**
 - Fast VM creation using Ubuntu cloud images and cloud-init (Noble and Resolute)
-- `qemu-tool` Python CLI with `run-vm`, `gen-vm`, and `compose` subcommands
+- `qemu-tool` Python CLI with `run-vm`, `gen-vm`, `compose`, and `list` subcommands
 - Bidirectional libvirt domain XML support (`--domain` input, `--convert-to-libvirt` output)
 - NVMe device emulation with tracing support
 - PCIe device passthrough (VFIO)
@@ -41,8 +41,11 @@ testing.
 Download the `.deb` from the [GitHub Releases](../../releases) page and install:
 
 ```bash
-sudo dpkg -i python3-qemu-tool_*.deb
+sudo apt install ./python3-qemu-tool_*.deb
 ```
+
+Use `apt` rather than `dpkg -i`: the package depends on a QEMU system emulator
+and `qemu-utils`, and `dpkg` will not resolve those for you.
 
 This installs `qemu-tool` to `/usr/bin/qemu-tool` and creates
 `/var/lib/qemu-tool/images` (owned `root:kvm`, mode `2775`).
@@ -55,13 +58,41 @@ sudo usermod -aG kvm $USER
 
 ## Quick Start (qemu-tool)
 
-Install the tool from source (from the repo root):
+Install the tool from source with [pipx](https://pipx.pypa.io/), which puts
+`qemu-tool` on your `PATH` in its own isolated virtualenv:
+
+```bash
+sudo apt install -y pipx
+pipx ensurepath          # adds ~/.local/bin to PATH; open a new shell after
+pipx install -e ./qemu   # from the repo root
+```
+
+`-e` installs in editable mode, so edits to the source tree take effect without
+reinstalling. This matters for more than convenience: `compose` locates its
+stack directories relative to the package source, so a non-editable
+`pipx install` cannot find them unless the `.deb` has also been installed.
+
+A pipx install deliberately does not provide everything the `.deb` does — the
+`/usr/share/qemu-tool` data files, the man page, and `/var/lib/qemu-tool/images`
+are all install-tree artifacts that cannot live inside a virtualenv. In
+particular, pass `--packages` explicitly, since its default
+(`/usr/share/qemu-tool/packages-default`) will not exist:
+
+```bash
+qemu-tool gen-vm --vm-name myvm --packages ./qemu/packages.d/packages-default
+```
+
+A plain virtualenv works too, if you prefer to activate it explicitly:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ./qemu
 ```
+
+If a build fails with `Cannot update time stamp of directory
+'qemu_tool.egg-info'`, a previous root-owned build left an artifact behind.
+Delete the `qemu/qemu_tool.egg-info` directory as root and retry.
 
 Generate and run a Noble VM:
 
@@ -187,7 +218,7 @@ The directory is created by the package installer with `root:kvm` ownership
 and mode `2775` (setgid) so any member of the `kvm` group can read and write
 images without `sudo`.
 
-When using a source checkout with `pip install -e ./qemu`, override the
+When using a source checkout (`pipx install -e ./qemu`), override the
 default with `--images`:
 
 ```bash
@@ -316,6 +347,54 @@ flags take precedence over XML values).
 | `--extra-hostfwd RULE` | — | Extra hostfwd rule e.g. `tcp::9150-:9100` (repeatable) |
 | `--dry-run` | off | Print QEMU command instead of running |
 | `--convert-to-libvirt [FILE]` | — | Emit libvirt domain XML to FILE (default `<vm>.xml`) |
+
+### list flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--json` | off | Emit JSON instead of a table |
+| `--qemu-tool-only` | off | Omit VMs not started by qemu-tool |
+
+`qemu-tool list` shows every `qemu-system-*` process on the node — including
+VMs running inside containers, which it attributes back to the container name —
+and says which ones qemu-tool started:
+
+```console
+$ qemu-tool list
+PID    NAME         SOURCE            ARCH   VCPU  MEM    SSH   KVM  UPTIME  CONTAINER                     VFIO-USER
+37374  rocjitsu-vm  external          amd64  4     8192M  2222  yes  53m     vfio-user-rocjitsu-vm-qemu-1  rocjitsu-1.sock
+79805  marker-test  qemu-tool/run-vm  amd64  1     1024M  2223  yes  0m      -                             -
+```
+
+`--json` adds the disk image path, full vfio-user socket paths, owning user and
+uptime in seconds:
+
+```bash
+# PID of a VM by name
+qemu-tool list --json | jq -r '.[] | select(.name=="myvm") | .pid'
+```
+
+#### How VMs are identified
+
+qemu-tool stamps every VM it launches with two generic QEMU options:
+
+```
+-name guest=<vm-name>,debug-threads=on
+-uuid <uuid5(namespace, "<role>:<vm-name>")>
+```
+
+`list` recomputes the UUID from the parsed guest name and compares it against
+the `-uuid` on the command line. An exact match identifies the VM as
+qemu-tool's and reveals which subcommand started it, so a transient `gen-vm`
+image-build VM is distinguishable from a running `run-vm` VM.
+
+Both options are generic rather than machine-specific, so they work on all
+supported architectures — including riscv64, where `-smbios` would not.
+
+VMs shown as `external` were either started by something other than qemu-tool,
+or by a version predating these markers; restart such a VM for it to be
+identified. This is operator convenience, not a security boundary — the markers
+are ordinary command-line arguments and anyone can set them.
 
 ### Libvirt XML round-trip
 

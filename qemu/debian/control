@@ -8,11 +8,31 @@ Rules-Requires-Root: no
 
 Package: python3-qemu-tool
 Architecture: all
-Depends: ${python3:Depends}, ${misc:Depends}
-Description: CLI tool for running and generating QEMU VMs
- qemu-tool provides two subcommands: run-vm launches a QEMU virtual machine
+Depends: ${python3:Depends},
+         ${misc:Depends},
+         qemu-system-x86 | qemu-system-arm | qemu-system-misc | qemu-system,
+         qemu-utils
+Recommends: cloud-image-utils,
+            openssh-client,
+            wget
+Suggests: ansible,
+          dnsmasq-base,
+          docker.io,
+          iproute2
+Description: CLI tool for running, generating and listing QEMU VMs
+ qemu-tool provides four subcommands: run-vm launches a QEMU virtual machine
  with a flexible set of options for networking, storage, PCI passthrough, and
  architecture (amd64, arm64, riscv64); gen-vm creates a new cloud-init-seeded
- VM image using debootstrap or a cloud image download.
+ VM image using debootstrap or a cloud image download; compose wraps
+ docker compose for the vfio-user GPU VM stacks; and list reports the QEMU VMs
+ running on the node, identifying which of them qemu-tool started.
+ .
+ The package itself has no Python runtime dependencies, but the subcommands
+ shell out to external tools. qemu-system-* and qemu-img (qemu-utils) are
+ required. gen-vm additionally needs cloud-localds (cloud-image-utils), wget
+ and ssh, and needs ansible only when --ansible-playbook is used. run-vm needs
+ ip (iproute2) and dnsmasq only for its TAP/bridge networking modes. compose
+ needs docker; list uses docker only to resolve container names and degrades
+ gracefully without it.
  .
  VM images are stored in /var/lib/qemu-tool/images (kvm group writable).

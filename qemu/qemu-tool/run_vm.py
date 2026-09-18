@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .caps import QemuCaps, qemu_binary
 from .config import VMConfig
+from .identity import identity_args
 
 _ARCH_MACHINE = {
     "amd64": "q35",
@@ -42,6 +43,9 @@ def build_command(cfg: VMConfig, caps: QemuCaps) -> list[str]:
     cmd += _mcast_args(cfg)
     cmd += _guest_agent_args(cfg)
     cmd += _qmp_args(cfg)
+    # Last: qemu and the listing parser both take the last -name/-uuid, so
+    # stamping here stops literal --nvme passthrough from un-identifying the VM.
+    cmd += identity_args("run-vm", cfg.vm_name)
     return cmd
 
 

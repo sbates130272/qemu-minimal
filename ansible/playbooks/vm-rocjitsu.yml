@@ -119,7 +119,7 @@
         cmd: >-
           docker run --rm
           -v {{ rj_fw_tmp.path }}:/out
-          {{ rocjitsu_image | default('sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:latest') }}
+          {{ rocjitsu_image | default('sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:rocjitsu.730bc62') }}
           python3 /usr/local/bin/vfio_guest_firmware.py --output /out
       delegate_to: localhost
       become: false
@@ -129,7 +129,7 @@
         cmd: >-
           docker run --rm
           -v {{ rj_fw_tmp.path }}:/out
-          {{ rocjitsu_image | default('sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:latest') }}
+          {{ rocjitsu_image | default('sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:rocjitsu.730bc62') }}
           rj-ip-discovery gfx1250 /out/ip_discovery.bin
       delegate_to: localhost
       become: false
