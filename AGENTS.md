@@ -86,7 +86,7 @@ What replaces them:
 | out-of-tree `rocm_ernic_eth` + `rocm_ernic_rdma` | upstream `ionic` + `ionic_rdma`, two AMD patches on top |
 | DKMS package `rocm-ernic` | DKMS package `ionic-ernic`, built by `scripts/setup-ionic-dkms.sh` |
 | rdma-core ≥ 62 + `apply-rocm-ernic-dv.sh` | stock rdma-core ≥ 61, whose `providers/ionic` is upstream |
-| emulated device `1022:8001` | Pensando `1dd8:100a` |
+| emulated device `1022:8000` | Pensando `1dd8:100a` |
 
 `ionic_rdma` needs kernel ≥ 6.18 (`drivers/infiniband/hw/ionic` merged there)
 and `ib_umem_get_va`, which landed after 7.0. No Ubuntu release ships one, so
@@ -128,17 +128,45 @@ The IB rename shells out to `/usr/bin/rdma`, which the gen-vm guest has.
 If a guest somehow comes up with the kernel names instead, check that the rules
 matched rather than re-copying them: they key on `ATTR{device/vendor}=="0x1dd8"`
 and `ATTR{device/device}=="0x100a"`, so a guest still being served the old
-`1022:8001` device will not rename anything.
+`1022:8000` device will not rename anything.
 
 ## PCI ID (in-VM)
 
-So `lspci` names the emulated NIC instead of showing a bare device number.
-`ionic_image_prep` writes this into the image; there is nothing to do by hand.
-The entry goes under vendor `1dd8` (Pensando), not `1022` — upstream moved the
-emulated device off the AMD vendor id:
+`ionic_image_prep` owns this; there is nothing to do by hand. Two traps make it
+less straightforward than it looks.
+
+**The emulated NIC reuses a real, vendor-assigned pair.** hwdata 0.379 already
+lists `1dd8:100a` — as `DSC Serial Port Controller`. So on a current guest
+nothing is missing: `lspci` names the device, misleadingly but it names it. The
+"bare device number" case only arises on hwdata old enough to predate the entry.
+
+**pciutils rejects a duplicate device id outright.** Not "ignores the second
+entry" — it refuses to parse the file, and then resolves no names for *any*
+device on the bus:
 
 ```
-1dd8  Pensando Systems Inc
+$ lspci -i /tmp/merged.ids -nn
+lspci: Duplicate entry at /tmp/merged.ids, line 27685
+$ echo $?
+1
+```
+
+So the role's presence check is a block-scoped `awk` scan asking whether *this
+vendor's block* already lists the device — a bare `grep 100a` matches the same
+four hex digits under a dozen other vendors, and a `grep` for the entry text
+misses the upstream spelling. On current hwdata the role therefore skips by
+itself, which is the correct behaviour. When it does insert, the line goes
+directly under the vendor line (`pci.ids` is parsed sequentially, so an append
+at the end of the file lands under the class section and never matches), and a
+post-merge `lspci` parse check fails the play rather than quietly breaking every
+later `lspci`.
+
+The entry goes under vendor `1dd8`, not `1022` — upstream moved the emulated
+device off the AMD vendor id. hwdata spells the vendor `AMD Pensando Systems`,
+and the vendor line has to match for the block scan to find it:
+
+```
+1dd8  AMD Pensando Systems
 	100a  ROCm Emulated RDMA NIC (ionic)
 ```
 
@@ -208,6 +236,16 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     rejects fewer than `IONIC_EQ_COUNT_MIN` EQs with a bare `-EINVAL` that
     surfaces only as "Failed to register ibdev". There is no preflight assert
     in the collection and no mention in its docs.
+12. **A rebooted ernic guest is device-present but not test-ready.** Only module
+    loading persists (`ionic_image_prep` writes
+    `/etc/modules-load.d/rocm-ernic-ionic.conf`). The address on `rocm-ernic0`,
+    bringing the netdev up and the counters symlink are all run-time only, set
+    by `ernic_guest_setup`, so a reboot brings back the RDMA device without the
+    configuration around it. Re-run the configure play, or write a
+    systemd-networkd unit for the address. `rocm_xio` is deliberately *not* in
+    the `modules-load.d` drop-in — `rocm-xio.ko` is hand-copied into the running
+    kernel's `extra/`, not DKMS-managed, so an entry would outlive the module
+    across a kernel upgrade and leave `systemd-modules-load.service` failed.
 
 ## Git / GitHub
 

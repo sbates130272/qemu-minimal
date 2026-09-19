@@ -19,6 +19,7 @@ ATI
 ATTR
 auth
 awhisten
+awk
 backend
 basename
 batesste
@@ -86,6 +87,7 @@ dmabuf
 DNO
 dnsmasq
 dpkg
+DSC
 DSR
 dv
 eef
@@ -240,6 +242,7 @@ natively
 nbd
 netdev
 netplan
+networkd
 nic
 NIC
 nn
@@ -273,6 +276,7 @@ pci
 PCI
 PCIe
 pciids
+pciutils
 Pensando
 perfers
 perftest
@@ -426,6 +430,7 @@ withBtrfs
 wordlist
 www
 xc
+xio
 xml
 YAML
 yaml
