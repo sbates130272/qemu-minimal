@@ -19,7 +19,7 @@ x-gpu-common: &gpu-common
 services:
   ernic:
     <<: *gpu-common
-    image: "${ERNIC_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20260918.g462eef6-ernic.6ca9a46-vfu.8039244}"
+    image: "${ERNIC_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20260919.g959f0cf-ernic.0b48aa1-vfu.8039244}"
     command: ["rocm-ernic", "-s", "/run/vfu/ernic-1.sock"]
     healthcheck:
       test: ["CMD", "sh", "-c", "test -S /run/vfu/ernic-1.sock"]

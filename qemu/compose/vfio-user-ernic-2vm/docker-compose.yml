@@ -34,7 +34,7 @@ services:
   # ---- rocm-ernic NIC for VM 1: TCP manager (hub) ----
   ernic-hub:
     <<: *gpu-common
-    image: "${ERNIC_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20260918.g462eef6-ernic.6ca9a46-vfu.8039244}"
+    image: "${ERNIC_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20260919.g959f0cf-ernic.0b48aa1-vfu.8039244}"
     environment:
       - ERNIC_DEBUG_MESH
     command:
@@ -57,7 +57,7 @@ services:
   # ---- rocm-ernic NIC for VM 2: TCP worker (spoke) ----
   ernic-worker:
     <<: *gpu-common
-    image: "${ERNIC_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20260918.g462eef6-ernic.6ca9a46-vfu.8039244}"
+    image: "${ERNIC_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20260919.g959f0cf-ernic.0b48aa1-vfu.8039244}"
     environment:
       - ERNIC_DEBUG_MESH
     command:

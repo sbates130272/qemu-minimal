@@ -31,7 +31,7 @@ ssh -p 2222 ubuntu@localhost
 
 | Variable | Default | Description |
 |---|---|---|
-| `ERNIC_IMAGE` | `…-rocm-ernic:20260918.g462eef6-ernic.6ca9a46-vfu.8039244` | rocm-ernic vfio-user server image |
+| `ERNIC_IMAGE` | `…-rocm-ernic:20260919.g959f0cf-ernic.0b48aa1-vfu.8039244` | rocm-ernic vfio-user server image |
 | `ROCJITSU_IMAGE` | `…-rocm-rocjitsu:20260918.g7438e48-rocjitsu.20d4ce1` | rocjitsu vfio-user server image |
 | `QEMU_IMAGE` | `…-qemu-libvfio-user:20260918.g7438e48-qemu11.1.1-vfu.8039244` | qemu-system image (must include qemu-tool) |
 | `ERNIC_COUNT` | `1` | Number of ernic GPU replicas |
