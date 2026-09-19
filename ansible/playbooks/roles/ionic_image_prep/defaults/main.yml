@@ -80,13 +80,19 @@ ionic_image_provider_stamp: true
 ionic_image_stamp_dir: /usr/local/share/rocm-ernic
 
 # ── Emulated device ──────────────────────────────
-# 0.2.0 moved the emulated NIC from 1022:8001 to the Pensando vendor id,
+# 0.2.0 moved the emulated NIC from 1022:8000 to the Pensando vendor id,
 # matching the ionic hardware the guest driver is written for. Neither the
 # published image nor provision/ionic.sh writes this entry, despite the
 # changelog calling it the image's business -- so it stays here.
+#
+# On hwdata new enough to list 1dd8:100a itself (0.379 does, as "DSC Serial
+# Port Controller" -- the emulated NIC reuses a real pair) this whole block is
+# a no-op by design. Adding a second entry does not rename the device, it makes
+# pciutils refuse to parse the file and stop naming every device on the bus.
 ionic_image_pciids: true
 ionic_image_pciids_vendor: "1dd8"
-ionic_image_pciids_entry: "100a  ROCm Emulated RDMA NIC (ionic)"
+ionic_image_pciids_device: "100a"
+ionic_image_pciids_entry: "{{ ionic_image_pciids_device }}  ROCm Emulated RDMA NIC (ionic)"
 
 # Load the ionic modules at boot so a rebooted overlay comes back with its
 # RDMA device. ib_core and ib_uverbs are pulled in as dependencies, but naming

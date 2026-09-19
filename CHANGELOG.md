@@ -24,7 +24,7 @@ All notable changes to this project will be documented in this file.
   `rocm_ernic_eth`/`rocm_ernic_rdma` drivers and the patched verbs provider on
   2026-09-16. The guest now builds upstream `ionic` + `ionic_rdma` as the
   `ionic-ernic` DKMS package and uses stock rdma-core's `providers/ionic`; the
-  emulated device moved from `1022:8001` to Pensando `1dd8:100a`.
+  emulated device moved from `1022:8000` to Pensando `1dd8:100a`.
 - `ansible-playbook-test` split into per-profile workflows (`-rocm`,
   `-rocjitsu`, `-ernic`, `-ernic-rocjitsu`) sharing a `setup-vm-job` action,
   and every workflow renamed to a consistent `qemu-minimal - <name>` form.
@@ -47,6 +47,14 @@ All notable changes to this project will be documented in this file.
 - `ernic_source_repo_version` is pinned to the same commit as the collection.
   It defaults to `main`, so the sources built in the guest could come from a
   different tree than the roles building them.
+- `ionic_image_prep` no longer corrupts `pci.ids`. hwdata already lists
+  `1dd8:100a` (as `DSC Serial Port Controller` — the emulated NIC reuses a real
+  pair), and the presence check grepped for our own entry text, so it never
+  matched and appended a duplicate device id. pciutils refuses to parse a file
+  containing one, which left `lspci` resolving no names for any device on the
+  bus. The check is now a block-scoped `awk` scan for the device under its
+  vendor, and a post-merge `lspci` parse check fails the play if a merge ever
+  does break the file.
 
 ## [v1.3.0] - 2026-09-15
 
