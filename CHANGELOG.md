@@ -31,6 +31,10 @@ All notable changes to this project will be documented in this file.
 - `requirements.yml` pins the rocm-ernic collection to an upstream git SHA.
   Galaxy publishes only 0.1.0, which is the pre-ionic collection, so the
   previous `>=0.1.0` could never have resolved to 0.2.0.
+- The rocm-ernic server image moves to the `20260919.g959f0cf` build
+  (`ernic.6ca9a46` → `ernic.0b48aa1`). The libvfio-user revision is unchanged
+  at `vfu.8039244`, so it stays matched to the qemu and rocjitsu images, which
+  are not moved.
 - ernic guests now get 4 vCPUs. `ionic_lif_size()` derives its EQ count from
   `num_online_cpus()` and `ionic_create_rdma_admin()` rejects fewer than
   `IONIC_EQ_COUNT_MIN`, so at 2 vCPUs `ionic_rdma` could never probe.
