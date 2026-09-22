@@ -197,6 +197,30 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- `gemm-hipfile-bench` double-counted its device offset and aborted the whole
+  rocjitsu report at block 16 of 32, reporting
+  `warm hipFileRead block 16 returned -5022 of 1048576`.
+  `hipFileRead`'s second
+  argument is `buffer_base` and its fifth is `buffer_offset`, applied to that
+  base; both read loops passed an already-advanced `dev + blk * kBlock` *and*
+  the same increment again as the offset, so the effective destination was
+  `dev + 2 * blk * kBlock`. The buffer is registered for 32 MiB, which makes
+  block 15 the last one fully in range and block 16 the first to start past
+  the registration, which the library reports as `-5022`,
+  `hipFileInvalidValue`. Both loops now pass `dev`, the pointer
+  `hipFileBufRegister` was given. Note that the benchmark's own correctness
+  gate could not have caught this: it fails only when `failures` — elements
+  exceeding `kTolerance`, 1e-3 — is non-zero, and `kBOffset` is 64 KiB, so
+  both GEMM operands sit inside block 0, the one block the old arithmetic
+  addressed correctly. Verified instead with an ad-hoc harness on the
+  development VM, reading a 32 MiB random file from its NVMe and comparing
+  device memory against `pread`: all 32 blocks match byte-for-byte. The
+  benchmark then ran to completion for the first time — it had only ever been
+  compile-verified before. Ten runs on that VM gave a `read_gbs` between 0.115
+  and 0.151, which the report renders as 115–151 MB/s; note that the ~30%
+  run-to-run spread is wider than the trend the badge is meant to show, so the
+  single published figure should not be read as precise.
+
 - Neither rocjitsu benchmark had ever compiled. `sgemm-bench.hip` and
   `gemm-hipfile-bench.hip` both used `goto cleanup` to reach a single cleanup
   block, and every one of those jumps crossed the initialisation of a variable
