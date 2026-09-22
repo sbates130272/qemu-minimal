@@ -22,6 +22,7 @@ on:
       - qemu-minimal - vm-report
       - qemu-minimal - vm-report-rocjitsu
       - qemu-minimal - vm-report-two-vms
+      - qemu-minimal - vm-report-hipfile-fio
     types:
       - completed
   push:
@@ -86,6 +87,7 @@ jobs:
           fetch vm-report-1vm 1vm
           fetch vm-report-rocjitsu rocjitsu
           fetch vm-report-2vm two-vm
+          fetch vm-report-hipfile-fio hipfile-fio
 
           # generate-vm-report.sh writes a _config.yml wherever it thinks it is
           # at a site root. Assembled into subdirectories they are all nested,
@@ -123,6 +125,7 @@ jobs:
           | [rocjitsu VM](rocjitsu/) | `vm-report-rocjitsu` | One rocjitsu vfio-user guest with GEMM and hipFile/NVMe metrics. |
           | [Two VMs — VM 1](two-vm/) | `vm-report-two-vms` | The `vfio-user-ernic-2vm` compose stack, both guests with a rocjitsu GPU. |
           | [Two VMs — VM 2](two-vm/vm2/) | `vm-report-two-vms` | The second guest of the same stack. |
+          | [hipFile fio](hipfile-fio/) | `vm-report-hipfile-fio` | A rocjitsu guest measured with fio's `libhipfile` ioengine, built from a pinned fio master commit. |
 
           Each lane runs on its own schedule and publishes independently, so
           the reports here are not all from the same moment; each page carries

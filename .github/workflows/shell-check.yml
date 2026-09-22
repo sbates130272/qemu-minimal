@@ -37,5 +37,6 @@ jobs:
           shellcheck -S error \
             libvirt/create-nvme \
             libvirt/virt-install-ubuntu \
-            scripts/*.sh
+            scripts/*.sh \
+            scripts/vm-report/*.sh
 
