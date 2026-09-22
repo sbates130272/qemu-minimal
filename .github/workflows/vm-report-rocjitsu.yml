@@ -123,7 +123,7 @@ jobs:
       run: |
         ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
           -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
-          -p 2222 ubuntu@qemu "sudo timeout 120 /usr/local/bin/amdgpu-probe"
+          -p 2222 ubuntu@qemu "sudo -n timeout 120 /usr/local/bin/amdgpu-probe"
         echo "✓ amdgpu-probe completed"
 
     - name: Generate rocjitsu report
