@@ -56,7 +56,7 @@ JSON
 run_rocjitsu_gemm() {
   if ! copy_to_guest "${VM_REPORT_BENCH_DIR}/sgemm-bench.hip" /tmp/sgemm-bench.hip; then
     echo "sgemm-bench source upload failed"
-    return 0
+    return 1
   fi
 
   {
@@ -76,7 +76,7 @@ EOF
 run_rocjitsu_hipfile() {
   if ! copy_to_guest "${VM_REPORT_BENCH_DIR}/gemm-hipfile-bench.hip" /tmp/gemm-hipfile-bench.hip; then
     echo "gemm-hipfile-bench source upload failed"
-    return 0
+    return 1
   fi
 
   {

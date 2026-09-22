@@ -82,6 +82,7 @@ int main(int argc, char** argv) {
     std::vector<float> hc(static_cast<size_t>(kM) * kN, 0.0f);
 
     float *da = nullptr, *db = nullptr, *dc = nullptr;
+    int exit_code = 0;
     HIP_CHECK(hipMalloc(&da, ha.size() * sizeof(float)));
     HIP_CHECK(hipMalloc(&db, hb.size() * sizeof(float)));
     HIP_CHECK(hipMalloc(&dc, hc.size() * sizeof(float)));
@@ -122,7 +123,8 @@ int main(int argc, char** argv) {
                 max_abs_error, failures);
     if (failures != 0) {
         std::printf("sgemm-bench: FAIL\n");
-        return 3;
+        exit_code = 3;
+        goto cleanup;
     }
 
     const auto start = std::chrono::steady_clock::now();
@@ -138,11 +140,19 @@ int main(int argc, char** argv) {
     const double flops = 2.0 * kM * kN * kK;
     std::printf("sgemm-bench: seconds_per_iter=%.9g gflops=%.9g\n", seconds,
                 flops / seconds / 1e9);
+cleanup:
+    if (dc != nullptr) {
+        (void)hipFree(dc);
+    }
+    if (db != nullptr) {
+        (void)hipFree(db);
+    }
+    if (da != nullptr) {
+        (void)hipFree(da);
+    }
 
-    HIP_CHECK(hipFree(dc));
-    HIP_CHECK(hipFree(db));
-    HIP_CHECK(hipFree(da));
-
-    std::printf("sgemm-bench: PASS\n");
-    return 0;
+    if (exit_code == 0) {
+        std::printf("sgemm-bench: PASS\n");
+    }
+    return exit_code;
 }
