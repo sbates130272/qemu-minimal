@@ -1,16 +1,19 @@
+# image files for virtual machines
 images/*.ISO
 images/*.iso
 images/*.img
 images/*.qcow2
-images/mnt
-images/golden/
-libvirt/hostname.tmp
 libvirt/focal-*.img
 libvirt/jammy-*.img
 libvirt/noble-*.img
+
+# emacs backup files
 *~
 
-# Python
+# temporary hostname files
+libvirt/hostname.tmp
+
+# Python related
 __pycache__/
 *.py[cod]
 *$py.class
@@ -18,7 +21,7 @@ __pycache__/
 venv/
 *.egg-info/
 
-# Editors
+# Editor related
 .vscode/
 .idea/
 *.swp
@@ -35,7 +38,7 @@ venv/
 Module.symvers
 modules.order
 
-# Debian package build outputs (dpkg-buildpackage drops these at repo root)
+# Debian package related
 *.deb
 *.buildinfo
 *.changes
@@ -46,7 +49,7 @@ qemu/.pybuild/
 qemu/build/
 qemu/qemu_tool.egg-info/
 
-# debhelper working files generated inside qemu/debian/ during dpkg-buildpackage
+# debhelper related
 qemu/debian/python3-qemu-tool/
 qemu/debian/*.debhelper
 qemu/debian/debhelper-build-stamp
@@ -61,22 +64,11 @@ cloud-config-*
 network-config-*
 *-seed.qcow2
 
-# Personal test VMs (pattern-based)
-*-test-vm*.qcow2
-
 # Temporary files
-/tmp/
 *.tmp
 
-# Helper scripts (not for repo)
-review-and-push.sh
-wrap-markdown.py
-check-ci-status.sh
-PROJECT_COMPLETION_SUMMARY.md
-run-this.sh
-
-# Compose environment overrides
+# Environment files. .env.* covers per-profile settings files such as
+# .env.rocjitsu, selected with --env-file or $QEMU_TOOL_ENV. env.example has no
+# leading dot, so it stays tracked.
 .env
-
-# Personal working notes (not for repo)
-rocm-ernic-enablement.md
+.env.*

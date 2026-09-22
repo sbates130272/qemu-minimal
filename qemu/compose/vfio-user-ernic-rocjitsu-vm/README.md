@@ -35,8 +35,8 @@ file shared by `gen-vm`, `run-vm` and every compose stack.
 | Variable | Default | Description |
 |---|---|---|
 | `ERNIC_IMAGE` | `…-rocm-ernic:20260919.g959f0cf-ernic.0b48aa1-vfu.8039244` | rocm-ernic vfio-user server image |
-| `ROCJITSU_IMAGE` | `…-rocm-rocjitsu:20260918.g7438e48-rocjitsu.20d4ce1` | rocjitsu vfio-user server image |
-| `QEMU_IMAGE` | `…-qemu-libvfio-user:20260918.g7438e48-qemu11.1.1-vfu.8039244` | qemu-system image (must include qemu-tool) |
+| `ROCJITSU_IMAGE` | `…-rocm-rocjitsu:20260921.gb3399b3-rocjitsu.8e01a5a` | rocjitsu vfio-user server image |
+| `QEMU_IMAGE` | `…-qemu-libvfio-user:20260919.g359579e-qemu11.1.1-vfu.8039244` | qemu-system image (must include qemu-tool) |
 | `ERNIC_COUNT` | `1` | Number of ernic GPU replicas |
 | `ROCJITSU_COUNT` | `1` | Number of rocjitsu GPU replicas |
 | `ROCJITSU_CONFIG` | `gfx1250_mi455x.json` | Config filename under `/usr/local/share/rocjitsu/configs/` |

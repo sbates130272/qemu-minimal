@@ -147,7 +147,7 @@
         cmd: >-
           set -o pipefail &&
           docker run --rm --entrypoint /bin/sh
-          {{ rocjitsu_image | default('sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20260918.g7438e48-rocjitsu.20d4ce1') }}
+          {{ rocjitsu_image | default('sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20260921.gb3399b3-rocjitsu.8e01a5a') }}
           -c 'python3 /usr/local/bin/vfio_guest_firmware.py --output /out
           && rj-ip-discovery gfx1250 /out/ip_discovery.bin >/dev/null
           && tar -cf - -C /out .'

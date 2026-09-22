@@ -42,10 +42,19 @@ All notable changes to this project will be documented in this file.
 - `requirements.yml` pins the rocm-ernic collection to an upstream git SHA.
   Galaxy publishes only 0.1.0, which is the pre-ionic collection, so the
   previous `>=0.1.0` could never have resolved to 0.2.0.
-- The rocm-ernic server image moves to the `20260919.g959f0cf` build
-  (`ernic.6ca9a46` → `ernic.0b48aa1`). The libvfio-user revision is unchanged
-  at `vfu.8039244`, so it stays matched to the qemu and rocjitsu images, which
-  are not moved.
+- Container images move off the previous pins: rocm-ernic to
+  `20260919.g959f0cf` (`ernic.6ca9a46` → `ernic.0b48aa1`), qemu to
+  `20260919.g359579e`, and rocjitsu to `20260921.gb3399b3-rocjitsu.8e01a5a`
+  (`rocjitsu.20d4ce1` → `rocjitsu.2d8a73f` → `rocjitsu.8e01a5a`).
+
+  rocjitsu is built from rocm-systems `develop` at
+  `8e01a5a3fbee92f2b570dde97f314000d5226327`, which is where the vfio-pci work
+  landed — 14 commits ahead of the previous pin under `emulation/rocjitsu`,
+  including the `vram_store.cpp` 16-bit `atomic_load` and `compare_exchange`
+  fixes. Note that rocjitsu and qemu no longer share a CI build sha. That is
+  fine and deliberate: they only have to agree on libvfio-user, which is
+  unchanged at `vfu.8039244`. Do not "fix" the mismatch by rebuilding qemu
+  unless libvfio-user itself moves.
 - `spell-check` runs `codespell` instead of `pyspelling`/aspell. codespell
   matches a fixed list of known misspellings rather than validating every word
   against a dictionary, so the 441-entry `.wordlist.txt` is gone: hostnames,
@@ -77,6 +86,11 @@ All notable changes to this project will be documented in this file.
 - `ernic_source_repo_version` is pinned to the same commit as the collection.
   It defaults to `main`, so the sources built in the guest could come from a
   different tree than the roles building them.
+- `ansible-playbook-test-ernic` now triggers on `ansible/playbooks/roles/**`
+  and `vars/ernic-pins.yml`. Both are inputs to `vm-ernic.yml`, but neither was
+  in the workflow's `paths`, so a change to `ionic_image_prep` or to the kernel
+  and source pins reported all checks green without the ernic lane having run
+  at all.
 - `ionic_image_prep` no longer corrupts `pci.ids`. hwdata already lists
   `1dd8:100a` (as `DSC Serial Port Controller` — the emulated NIC reuses a real
   pair), and the presence check grepped for our own entry text, so it never
