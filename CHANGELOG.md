@@ -6,6 +6,29 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- A self-contained wheel. The compose stacks, both package manifests,
+  `env.example` and the man page now ship inside the Python distribution, so
+  `pipx install qemu-tool` is a working tool rather than a degraded one —
+  previously a non-editable install could not locate a compose stack or the
+  default package manifest at all. `pyproject.toml` maps them in from where
+  they already live via `[tool.setuptools.package-dir]`, so `qemu/compose/`
+  and `qemu/packages.d/` stay put and there is no second copy to keep in
+  sync. They are namespaced under `qemu_tool.share` rather than directly
+  under `qemu_tool`, because a data package named `qemu_tool.compose` would
+  collide with the `compose` module and `importlib.resources` would silently
+  resolve to the wrong directory.
+- Per-user fallbacks for the two paths a rootless install cannot have:
+  `$XDG_CONFIG_HOME/qemu-tool/env` for settings (searched between `qemu/.env`
+  and `/etc/qemu-tool/env`) and `$XDG_DATA_HOME/qemu-tool/images` for images.
+  The images default falls back only when `/var/lib/qemu-tool/images` is not
+  *writable*, so a user outside the `kvm` group gets a usable directory
+  instead of a permission failure on the default.
+- `package.yml`, replacing `deb-package.yml`, now covering the wheel as well
+  as the deb: it builds both, rebuilds the wheel from the sdist to prove the
+  sdist carries the same data, and installs the wheel into a bare
+  `python:3.12-slim` with no `/usr/share/qemu-tool` and no checkout to prove
+  a pipx install resolves every stack and manifest. See `ci.md`.
+
 - `rocjitsu_gpu_test`, a repo-local role that runs HIP workloads against a live
   rocjitsu vfio-user server: a scratch-free `vector_add`, a four-kernel
   private-segment repro, and an `hsa-snoop` trace of a dispatch on the emulated
@@ -46,6 +69,12 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- The `.deb` no longer ships the bundled copy of the data the wheel carries.
+  It installs it at the FHS locations as before, and `debian/rules` strips the
+  duplicate from `dist-packages` at `dh_installdeb` — not at
+  `dh_auto_install`, where `dh_python3` re-stages the package afterwards and
+  silently undoes the removal. The `/usr/share/qemu-tool` copies keep
+  precedence at runtime, so editing the installed files still takes effect.
 - **rocm-ernic is now ionic-based.** Upstream deleted the out-of-tree
   `rocm_ernic_eth`/`rocm_ernic_rdma` drivers and the patched verbs provider on
   2026-09-16. The guest now builds upstream `ionic` + `ionic_rdma` as the

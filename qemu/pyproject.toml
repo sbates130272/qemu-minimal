@@ -15,7 +15,33 @@ dependencies = []
 qemu-tool = "qemu_tool.__main__:main"
 
 [tool.setuptools]
-packages = ["qemu_tool"]
+packages = [
+    "qemu_tool",
+    "qemu_tool.share",
+    "qemu_tool.share.compose",
+    "qemu_tool.share.packages_d",
+]
 
+# The compose stacks and manifests are first-class artifacts used directly
+# with `docker compose` and referenced by path from CI and the docs, so they
+# stay at qemu/compose and qemu/packages.d. package-dir maps them into the
+# wheel from where they already are -- one source of truth, no copy to keep
+# in sync and no working-directory churn. "qemu_tool.share" maps the qemu/
+# directory itself; its package-data glob is deliberately a single filename
+# so nothing else in qemu/ is swept in.
+#
+# Everything data-ish hangs off qemu_tool.share rather than sitting directly
+# under qemu_tool: a data package named qemu_tool.compose would collide with
+# the qemu_tool.compose module in compose.py, and importlib.resources would
+# silently resolve to the module's directory instead of the stacks.
 [tool.setuptools.package-dir]
 "qemu_tool" = "qemu-tool"
+"qemu_tool.share" = "."
+"qemu_tool.share.compose" = "compose"
+"qemu_tool.share.packages_d" = "packages.d"
+
+[tool.setuptools.package-data]
+"qemu_tool" = ["man/qemu-tool.1"]
+"qemu_tool.share" = ["env.example"]
+"qemu_tool.share.compose" = ["*/docker-compose.yml", "*/README.md"]
+"qemu_tool.share.packages_d" = ["packages-*"]

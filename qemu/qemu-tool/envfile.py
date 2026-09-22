@@ -22,6 +22,17 @@ _INSTALLED_ENV = Path("/etc/qemu-tool/env")
 # Source checkout: this file is qemu/qemu-tool/envfile.py, so qemu/ is two up.
 _SOURCE_ENV = Path(__file__).parent.parent / ".env"
 
+
+def _xdg_env() -> Path:
+    """Per-user settings file, for installs that cannot write /etc.
+
+    `pipx install qemu-tool` never creates /etc/qemu-tool, so without this a
+    rootless install has nowhere to keep settings but the working directory.
+    """
+    raw = os.environ.get("XDG_CONFIG_HOME")
+    base = Path(raw).expanduser() if raw else Path.home() / ".config"
+    return base / "qemu-tool" / "env"
+
 # Field name -> env key, where "VM_" + field.upper() is not the name we want.
 _KEY_OVERRIDES = {
     "vm_name": "VM_NAME",
@@ -52,7 +63,9 @@ def find(explicit: Path | None = None) -> Path | None:
     from_env = os.environ.get("QEMU_TOOL_ENV")
     if from_env:
         candidates.append(Path(from_env))
-    candidates += [Path.cwd() / ".env", _SOURCE_ENV, _INSTALLED_ENV]
+    # A user's own file beats the system one; both lose to the checkout and
+    # to $QEMU_TOOL_ENV, which are the deliberate per-invocation choices.
+    candidates += [Path.cwd() / ".env", _SOURCE_ENV, _xdg_env(), _INSTALLED_ENV]
     for candidate in candidates:
         if candidate.is_file():
             return candidate

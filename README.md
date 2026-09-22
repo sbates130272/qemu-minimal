@@ -90,19 +90,28 @@ pipx install -e ./qemu   # from the repo root
 ```
 
 `-e` installs in editable mode, so edits to the source tree take effect without
-reinstalling. This matters for more than convenience: `compose` locates its
-stack directories relative to the package source, so a non-editable
-`pipx install` cannot find them unless the `.deb` has also been installed.
+reinstalling. It is a convenience, not a requirement — drop it, or install the
+published wheel with `pipx install qemu-tool`, and the tool still works
+standalone: the compose stacks, both package manifests, `env.example` and the
+man page all ship inside the wheel.
 
-A pipx install deliberately does not provide everything the `.deb` does — the
-`/usr/share/qemu-tool` data files, the man page, and `/var/lib/qemu-tool/images`
-are all install-tree artifacts that cannot live inside a virtualenv. In
-particular, pass `--packages` explicitly, since its default
-(`/usr/share/qemu-tool/packages-default`) will not exist:
+What a pipx install still does not get is the parts that are install-tree
+artifacts by nature — `/etc/qemu-tool/env`, `/var/lib/qemu-tool/images` and a
+man page on your `MANPATH`. Those defaults fall back to per-user locations
+rather than failing:
 
-```bash
-qemu-tool gen-vm --vm-name myvm --packages ./qemu/packages.d/packages-default
-```
+| Default | `.deb` | pipx / venv |
+|---|---|---|
+| Settings file | `/etc/qemu-tool/env` | `$XDG_CONFIG_HOME/qemu-tool/env` |
+| Images directory | `/var/lib/qemu-tool/images` | `$XDG_DATA_HOME/qemu-tool/images` |
+| Package manifest | `/usr/share/qemu-tool/packages-default` | bundled in the wheel |
+| Compose stacks | `/usr/share/qemu-tool/compose/` | bundled in the wheel |
+
+The system locations always win when they exist, so installing the `.deb`
+later does not strand settings you wrote under a system install. The images
+directory is the one exception worth knowing about: it is only used when it
+is *writable*, so if you are not in the `kvm` group you will quietly get the
+per-user path instead of a permission error. Pass `--images` to be explicit.
 
 A plain virtualenv works too, if you prefer to activate it explicitly:
 
@@ -241,6 +250,7 @@ The file is searched for in this order, first hit wins:
 | `$QEMU_TOOL_ENV` | explicit, per shell |
 | `./.env` | a per-project override |
 | `qemu/.env` | a source checkout |
+| `$XDG_CONFIG_HOME/qemu-tool/env` | a pipx or venv install (`~/.config` by default) |
 | `/etc/qemu-tool/env` | an installed `.deb` |
 
 The stack `README.md` files document the variables specific to each stack.
@@ -277,6 +287,10 @@ manifests are provided:
 - **packages-minimal** -- a smaller set with just `emacs-nox`,
   `fio`, `sysstat`, and `tree`. Installed to
   `/usr/share/qemu-tool/packages-minimal` by the `.deb` package.
+
+Both also ship inside the wheel, so a pipx install resolves the default
+manifest without a checkout or a system install. `/usr/share/qemu-tool` wins
+when it exists, so editing the installed copy still takes effect.
 
 Select a manifest via the `--packages` flag:
 
