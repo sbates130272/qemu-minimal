@@ -47,8 +47,12 @@ All notable changes to this project will be documented in this file.
   `env.example` and the man page now ship inside the Python distribution, so
   `pipx install qemu-tool` is a working tool rather than a degraded one —
   previously a non-editable install could not locate a compose stack or the
-  default package manifest at all. `pyproject.toml` maps them in from where
-  they already live via `[tool.setuptools.package-dir]`, so `qemu/compose/`
+  default package manifest at all. Bringing a stack *up* still needs
+  `QEMU_TOOL_SRC` pointing at a checkout, because every stack builds
+  qemu-tool from source inside its container and neither a wheel nor the
+  `.deb` is a source tree; the README says so now. `pyproject.toml` maps
+  them in from where they already live via
+  `[tool.setuptools.package-dir]`, so `qemu/compose/`
   and `qemu/packages.d/` stay put and there is no second copy to keep in
   sync. They are namespaced under `qemu_tool.share` rather than directly
   under `qemu_tool`, because a data package named `qemu_tool.compose` would
@@ -156,6 +160,28 @@ All notable changes to this project will be documented in this file.
   `IONIC_EQ_COUNT_MIN`, so at 2 vCPUs `ionic_rdma` could never probe.
 
 ### Fixed
+
+- `scripts/release.sh` dropped every paragraph after the first in a
+  multi-paragraph `CHANGELOG.md` bullet. A blank line ended the bullet, so
+  the indented paragraph that followed matched the continuation rule but
+  found an empty buffer and was discarded — silently, because the shortened
+  stanza still parses. Blank lines no longer terminate a bullet, and a
+  nested markdown item now becomes an entry of its own instead of being
+  appended to its parent with a literal `- ` left mid-sentence.
+- The wheel and sdist ship the MIT licence text. `license-files` was unset
+  and `LICENSE` lives above the sdist root, so the PyPI artifacts carried
+  only the `License: MIT` metadata string — not the text MIT requires be
+  included in all copies. `qemu/LICENSE` is a symlink to the repo's, so
+  there is no second copy to drift.
+- `build-essential` is installed before `dpkg-buildpackage` in both
+  `package.yml` and `release.yml`. `dpkg-checkbuilddeps` treats it as an
+  implicit build dependency of every source package, even an arch-all
+  Python one that compiles nothing, and the runner image does not ship it.
+  Neither deb build had ever run on a GitHub runner to find out.
+- The container jobs in `package.yml` pin `shell: bash`. The runner chose
+  `sh -e` for the `ubuntu:24.04` container despite bash being installed
+  there, and dash has no `set -o pipefail`, which every assertion step
+  opens with.
 
 - `vm-rocjitsu.yml` no longer stubs over the real gfx1250 firmware.
   `vfio_guest_firmware.py` changed contract: its default output is now the

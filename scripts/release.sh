@@ -78,14 +78,23 @@ unreleased_body() {
 #
 # A section marker is held back until a bullet actually follows it, so an
 # empty section in CHANGELOG.md does not leave a dangling header.
+#
+# Blank lines do not end a bullet. A bullet here often runs to several
+# paragraphs, and treating the blank line as a terminator dropped every
+# paragraph after the first -- silently, since the result still parses.
+# A nested markdown item becomes an entry of its own rather than more
+# continuation text, because appending it kept its literal "- " marker in
+# the middle of the parent sentence.
 deb_entries() {
   unreleased_body | awk '
     function flush() { if (buf != "") { print "b" buf; buf = "" } }
-    /^### /     { flush(); print "s" substr($0, 5); next }
-    /^- /       { flush(); buf = substr($0, 3); next }
-    /^  +[^ ]/  { if (buf != "") { sub(/^ +/, ""); buf = buf " " $0 }; next }
-                { flush() }
-    END         { flush() }
+    /^### /       { flush(); print "s" substr($0, 5); next }
+    /^- /         { flush(); buf = substr($0, 3); next }
+    /^[ \t]*$/    { next }
+    /^ +[-*] /    { flush(); sub(/^ +[-*] /, ""); buf = $0; next }
+    /^ +[^ ]/     { if (buf != "") { sub(/^ +/, ""); buf = buf " " $0 }; next }
+                  { flush() }
+    END           { flush() }
   ' | while IFS= read -r line; do
     case ${line} in
       s*) pending="  [ ${line#s} ]" ;;

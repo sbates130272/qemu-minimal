@@ -89,9 +89,18 @@ pipx ensurepath          # adds ~/.local/bin to PATH; open a new shell after
 pipx install qemu-tool
 ```
 
-That is a complete install: the compose stacks, both package manifests,
-`env.example` and the man page all ship inside the wheel, so nothing here
-depends on a checkout.
+That gives you a working `gen-vm` and `run-vm`: both package manifests,
+`env.example`, the man page and the compose stacks all ship inside the wheel,
+so none of those depend on a checkout.
+
+`qemu-tool compose` is the exception. The stacks are there, but each one
+bind-mounts a qemu-tool source tree into its container and builds the tool
+inside it, and neither a wheel nor the `.deb` is a source tree. To bring a
+stack up, point `QEMU_TOOL_SRC` at a checkout:
+
+```bash
+QEMU_TOOL_SRC=/path/to/qemu-minimal qemu-tool compose --vm-name myvm up
+```
 
 To work on the tool itself, install the checkout in editable mode instead, so
 edits take effect without reinstalling:
@@ -112,11 +121,14 @@ rather than failing:
 | Package manifest | `/usr/share/qemu-tool/packages-default` | bundled in the wheel |
 | Compose stacks | `/usr/share/qemu-tool/compose/` | bundled in the wheel |
 
-The system locations always win when they exist, so installing the `.deb`
-later does not strand settings you wrote under a system install. The images
-directory is the one exception worth knowing about: it is only used when it
-is *writable*, so if you are not in the `kvm` group you will quietly get the
-per-user path instead of a permission error. Pass `--images` to be explicit.
+A per-user settings file **beats** the system one, as XDG expects: if you
+wrote `$XDG_CONFIG_HOME/qemu-tool/env` under a pipx install and later install
+the `.deb`, your file still wins and edits to `/etc/qemu-tool/env` are
+ignored. Delete the per-user copy, or pass `--env-file`, to hand control back
+to the system file. The images directory works the other way round but has
+its own catch: the system path is preferred only when it is *writable*, so if
+you are not in the `kvm` group you quietly get the per-user path instead of a
+permission error. Pass `--images` to be explicit.
 
 A plain virtualenv works too, if you prefer to activate it explicitly:
 

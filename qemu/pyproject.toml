@@ -61,6 +61,11 @@ Issues = "https://github.com/sbates130272/qemu-minimal/issues"
 qemu-tool = "qemu_tool.__main__:main"
 
 [tool.setuptools]
+# MIT requires the licence text travel with every copy, and the metadata
+# string alone is not that text. LICENSE here is a symlink to the repo's,
+# because the sdist root is qemu/ and setuptools will not package a path
+# above it -- a symlink keeps one file rather than a second copy to drift.
+license-files = ["LICENSE"]
 packages = [
     "qemu_tool",
     "qemu_tool.share",

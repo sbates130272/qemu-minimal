@@ -292,7 +292,10 @@ contributes. Each lane's subtree is rsynced with its own scoped `--delete`,
 so an expired artifact leaves that lane's last report in place and anything
 else on the branch (a future `perf/`) survives untouched.
 
-Adding a lane is three edits: upload an artifact under a new name, add a
-`fetch <name> <dir>` line, and add a row to the landing page. Do **not** add
+Adding a lane is four edits: upload an artifact under a new name, add a
+`fetch <name> <dir>` line, add the lane's workflow `name:` to
+`on.workflow_run.workflows`, and add a row to the landing page. Miss the
+third and the lane publishes nothing until some *other* lane finishes, which
+looks like the site being stale rather than a missing trigger. Do **not** add
 `.nojekyll` — the reports are markdown that GitHub's Jekyll build renders,
 unlike rocm-ernic's pre-built Sphinx HTML.
