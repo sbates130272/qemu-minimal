@@ -6,6 +6,18 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- PyPI publishing, so `pipx install qemu-tool` needs no checkout and no
+  downloaded `.deb`. `release.yml` uploads via Trusted Publishing against a
+  `pypi` environment rather than a stored API token, and runs last: a PyPI
+  version can never be reused even after a delete, so publishing it before
+  the deb has built would burn the version for a release that then has to be
+  cut again as the next one. `qemu/pyproject.toml` gains the metadata a
+  project page needs — readme, classifiers, keywords and URLs. The readme is
+  written inline because the sdist root is `qemu/`, so `../README.md` is
+  outside the project and cannot be packaged, and because the repo README
+  documents compose stacks, Ansible and libvirt that a `pip install` does not
+  install. `package.yml` and `release.yml` both run `twine check --strict`,
+  so metadata that PyPI would reject fails on a PR rather than at tag time.
 - `scripts/release.sh <version>`, which cuts a release from a clean `main`:
   it stamps `qemu/pyproject.toml`, generates the `qemu/debian/changelog`
   stanza from the `[Unreleased]` section of this file — preserving the

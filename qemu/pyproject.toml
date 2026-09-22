@@ -10,6 +10,52 @@ requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [{name = "Stephen Bates"}]
 dependencies = []
+keywords = ["qemu", "kvm", "vm", "vfio", "cloud-init", "libvirt", "rocm"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Emulators",
+    "Topic :: System :: Systems Administration",
+]
+
+# Written inline rather than pointed at the repo README, for two reasons: the
+# sdist root is qemu/, so a path to ../README.md is outside the project and
+# setuptools will not package it; and the repo README documents the whole
+# repo -- compose stacks, Ansible, libvirt -- most of which a `pip install`
+# does not give you. This describes what the package actually installs.
+readme = {content-type = "text/markdown", text = """
+# qemu-tool
+
+A single CLI for creating and running QEMU virtual machines: cloud-init image
+generation for x86_64, ARM64 and RISC-V, a flexible runner with NVMe, VFIO,
+CXL, VirtFS and QMP support, and libvirt domain XML round-tripping.
+
+```bash
+pipx install qemu-tool
+qemu-tool gen-vm --vm-name vm1 --arch x86_64
+qemu-tool run-vm --vm-name vm1 --ssh-port 2222
+```
+
+The wheel bundles its compose stacks and package manifests, so a rootless
+install is fully functional. Settings come from
+`$XDG_CONFIG_HOME/qemu-tool/env` and images default to
+`$XDG_DATA_HOME/qemu-tool/images`. Installing the Debian package instead
+puts both at their system locations.
+
+Full documentation, the Docker Compose stacks and the Ansible playbooks live
+in the [qemu-minimal repository](https://github.com/sbates130272/qemu-minimal).
+"""}
+
+[project.urls]
+Homepage = "https://github.com/sbates130272/qemu-minimal"
+Repository = "https://github.com/sbates130272/qemu-minimal"
+Changelog = "https://github.com/sbates130272/qemu-minimal/blob/main/CHANGELOG.md"
+Issues = "https://github.com/sbates130272/qemu-minimal/issues"
 
 [project.scripts]
 qemu-tool = "qemu_tool.__main__:main"

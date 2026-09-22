@@ -266,3 +266,9 @@ Pushing the tag is what triggers `release.yml`, whose `verify-version` job
 refuses to build anything unless the tag, `pyproject.toml` and
 `debian/changelog` agree and `CHANGELOG.md` has a heading for the tag. That
 gate exists because v1.3.0 shipped with no tag at all and nothing noticed.
+
+`release.yml` then builds the wheel, the sdist and the `.deb`, attaches all
+three to one GitHub Release, and publishes to PyPI last — a PyPI version can
+never be reused, so it goes after everything repeatable has succeeded. PyPI
+uses Trusted Publishing against the `pypi` environment, so there is no API
+token anywhere in the repo.

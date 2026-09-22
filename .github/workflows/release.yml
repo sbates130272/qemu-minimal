@@ -5,8 +5,10 @@ on:
     tags:
       - 'v*'
 
+# Read by default; the two publishing jobs widen this themselves, so nothing
+# that merely builds an artifact can write a release or mint an OIDC token.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -55,8 +57,8 @@ jobs:
           fi
           echo "all three agree on ${TAG_VERSION}"
 
-  release:
-    name: create-github-release
+  build-python:
+    name: build-python-dists
     needs: verify-version
     runs-on: ubuntu-latest
     steps:
@@ -68,18 +70,24 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Build wheel
+      # Both, not just the wheel: PyPI wants an sdist so the project can be
+      # built from source on a platform no wheel targets.
+      - name: Build wheel and sdist
         run: |
           pip install build
-          python -m build qemu/ --wheel --outdir dist/
+          python -m build qemu/ --outdir dist/
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2.3.2
+      - name: Check the dists are well formed
+        run: |
+          pip install twine
+          twine check --strict dist/*
+
+      - name: Upload dists
+        uses: actions/upload-artifact@v4
         with:
-          generate_release_notes: true
-          draft: false
-          prerelease: false
-          files: dist/*.whl
+          name: python-dists
+          path: dist/
+          if-no-files-found: error
 
   build-deb:
     name: build-deb-package
@@ -98,10 +106,66 @@ jobs:
         working-directory: qemu
         run: dpkg-buildpackage -us -uc -b
 
-      - name: Upload deb to release
+      # dpkg-buildpackage writes to the parent of the source dir, so the deb
+      # lands beside the checkout rather than inside it.
+      - name: Upload deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb
+          path: "*.deb"
+          if-no-files-found: error
+
+  publish-github:
+    name: publish-github-release
+    needs: [build-python, build-deb]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download every artifact
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          merge-multiple: true
+
+      # One call, not one per artifact. Two jobs each calling action-gh-release
+      # raced to create the same release, so the notes came from whichever won
+      # and a failure in the loser left a release published but incomplete.
+      - name: Create the GitHub Release
         uses: softprops/action-gh-release@v2.3.2
         with:
-          generate_release_notes: false
+          generate_release_notes: true
           draft: false
           prerelease: false
-          files: "*.deb"
+          fail_on_unmatched_files: true
+          files: |
+            artifacts/*.whl
+            artifacts/*.tar.gz
+            artifacts/*.deb
+
+  publish-pypi:
+    name: publish-pypi
+    # Last, and gated on the GitHub release rather than just the wheel. A PyPI
+    # version number can never be reused, even after a delete, so publishing
+    # while the deb is still failing burns the version for a release that then
+    # has to be cut again as the next one. Everything before this is repeatable.
+    needs: publish-github
+    runs-on: ubuntu-latest
+    # Trusted Publishing: PyPI trusts this repo, workflow and environment by
+    # name and hands back a short-lived token, so there is no API token in the
+    # repo secrets to leak or rotate. The environment is the part PyPI pins,
+    # so it is also where a manual approval gate would go.
+    environment:
+      name: pypi
+      url: https://pypi.org/p/qemu-tool
+    permissions:
+      id-token: write
+    steps:
+      - name: Download dists
+        uses: actions/download-artifact@v4
+        with:
+          name: python-dists
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@v1.14.2

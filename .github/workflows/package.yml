@@ -275,7 +275,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install build tooling
-        run: python -m pip install --upgrade build
+        run: python -m pip install --upgrade build twine
 
       # sdist as well as wheel: PyPI consumers on an unsupported platform
       # build from the sdist, and package-data that reaches the wheel from a
@@ -284,6 +284,12 @@ jobs:
       - name: Build sdist and wheel
         working-directory: qemu
         run: python -m build --outdir "${GITHUB_WORKSPACE}/dist"
+
+      # PyPI rejects an upload whose metadata does not validate, and finding
+      # that out at tag time means a half-published release. --strict fails on
+      # warnings too, so a README that renders badly is caught here.
+      - name: Check the dist metadata is valid for PyPI
+        run: twine check --strict dist/*
 
       - name: Rebuild the wheel from the sdist
         run: |

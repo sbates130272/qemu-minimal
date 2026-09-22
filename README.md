@@ -80,20 +80,25 @@ sudo chmod 2775 /var/lib/qemu-tool/images
 
 ## Quick Start (qemu-tool)
 
-Install the tool from source with [pipx](https://pipx.pypa.io/), which puts
-`qemu-tool` on your `PATH` in its own isolated virtualenv:
+Install from PyPI with [pipx](https://pipx.pypa.io/), which puts `qemu-tool` on
+your `PATH` in its own isolated virtualenv:
 
 ```bash
 sudo apt install -y pipx
 pipx ensurepath          # adds ~/.local/bin to PATH; open a new shell after
-pipx install -e ./qemu   # from the repo root
+pipx install qemu-tool
 ```
 
-`-e` installs in editable mode, so edits to the source tree take effect without
-reinstalling. It is a convenience, not a requirement — drop it, or install the
-published wheel with `pipx install qemu-tool`, and the tool still works
-standalone: the compose stacks, both package manifests, `env.example` and the
-man page all ship inside the wheel.
+That is a complete install: the compose stacks, both package manifests,
+`env.example` and the man page all ship inside the wheel, so nothing here
+depends on a checkout.
+
+To work on the tool itself, install the checkout in editable mode instead, so
+edits take effect without reinstalling:
+
+```bash
+pipx install -e ./qemu   # from the repo root
+```
 
 What a pipx install still does not get is the parts that are install-tree
 artifacts by nature — `/etc/qemu-tool/env`, `/var/lib/qemu-tool/images` and a
