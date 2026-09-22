@@ -11,9 +11,14 @@ All notable changes to this project will be documented in this file.
   compiled them was the rocjitsu report lane, which runs on push to `main` and
   needs a GPU, a VM and two and a half hours — so a benchmark that was not
   valid C++ could sit on `main` indefinitely, and did. This lane installs
-  hipcc and the hipFile SDK from the same TheRock stream the guest uses and
-  runs the compile only: no GPU, no VM, and it is path-filtered, so it costs
-  nothing on the PRs that do not touch the benchmarks.
+  hipcc and the hipFile SDK from the same TheRock `stable` channel the guests
+  use — pinned to the `ubuntu2404` path, because the runner is `ubuntu-24.04`
+  while the rocjitsu guest is built `--release resolute` and takes
+  `ubuntu2604` — and runs the compile only: no GPU, no VM, and it is
+  path-filtered to `scripts/vm-report/**` and the workflow itself, so it costs
+  nothing on the PRs that do not touch the benchmarks. It compiles with
+  `-Wall -Wextra`, which is stricter than the report script's own line, and
+  without `-Werror`, so only hard errors fail it.
 
 - `--mac ADDR` (`VM_MAC`) on `run-vm` and `gen-vm`, which sets the management
   NIC MAC instead of deriving it from the SSH port. Images built by this
@@ -213,6 +218,15 @@ All notable changes to this project will be documented in this file.
   probe never matched and the lane exited before producing a `read_gbs`
   metric. The probe now accepts either layout, as the compile line below it and
   the benchmark's own `__has_include` already did.
+
+- The rocjitsu guest never had the hipFile SDK in the first place, so fixing
+  the probe alone would only have made it report the truth. `vm-rocjitsu.yml`
+  listed `amdrocm-runtime-dev`, which depends on `amdrocm-sysdeps`,
+  `amdrocm-runtime` and `amdrocm-llvm-dev` and nothing else — the development
+  VM that the benchmark was proven on had `amdrocm-hipfile-dev` installed by
+  hand. It is now in `rocm_setup_minimal_packages`, so a freshly generated
+  image can run `gemm-hipfile-bench` and produce a `read_gbs` metric instead of
+  aborting the report.
 
 - The management and multicast NICs of one guest were given the same MAC.
   `_mcast_args` derived its address from the SSH port with the same
