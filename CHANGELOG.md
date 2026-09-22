@@ -6,6 +6,17 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- `--mac ADDR` (`VM_MAC`) on `run-vm` and `gen-vm`, which sets the management
+  NIC MAC instead of deriving it from the SSH port. Images built by this
+  repo's `gen-vm` do not need it — their netplan matches on interface name —
+  but an image built elsewhere may pin `match: macaddress:` to a MAC
+  qemu-tool would never pick, and then the NIC comes up unconfigured and only
+  SLIRP's fallback eventually gets an address on it, slowly. `--mac` makes
+  qemu-tool present the MAC such an image expects, so it can be run as-is
+  rather than rebuilt. The value is validated as a unicast MAC up front,
+  because qemu rejects a malformed one at device-creation time, long after
+  `gen-vm` has fetched an image and built a seed.
+
 - `publish-pages.yml`, now the only workflow that writes the site. The report
   lanes upload a named artifact and stop; this assembles them onto a
   `gh-pages` branch behind a landing page at `/`, with the single-VM report

@@ -255,10 +255,14 @@ def _root_drive_args(cfg: VMConfig) -> list[str]:
     return ["-drive", drv]
 
 
+def _effective_mac(cfg: VMConfig) -> str:
+    return cfg.mac or _mgmt_mac(cfg.ssh_port)
+
+
 def _netdev_args(cfg: VMConfig, mac: str | None = None) -> list[str]:
     if cfg.mgmt_tap:
         tap = _mgmt_tap_name(cfg.ssh_port)
-        m = mac or _mgmt_mac(cfg.ssh_port)
+        m = mac or _effective_mac(cfg)
         return [
             "-netdev", f"tap,id=net0,ifname={tap},script=no,downscript=no",
             "-device", f"virtio-net-pci,netdev=net0,mac={m}",
@@ -266,10 +270,12 @@ def _netdev_args(cfg: VMConfig, mac: str | None = None) -> list[str]:
     hostfwd = f"hostfwd=tcp::{cfg.ssh_port}-:22"
     for rule in cfg.extra_hostfwd:
         hostfwd += f",hostfwd={rule}"
-    # Use a deterministic MAC so the VM's netplan (written by cloud-init
-    # during gen-vm first-boot with the same MAC) matches on all subsequent
-    # boots, including compose run-vm invocations.
-    m = mac or _mgmt_mac(cfg.ssh_port)
+    # Deterministic, so a guest that pins its netplan to the MAC it saw at
+    # first boot still matches on later boots. Images this repo's gen-vm
+    # builds do not pin -- they match `name: "en*"` -- but an image built
+    # elsewhere may, and then the MAC has to be whatever that image expects:
+    # --mac / VM_MAC is the way to say so.
+    m = mac or _effective_mac(cfg)
     return [
         "-netdev", f"user,id=net0,{hostfwd}",
         "-device", f"virtio-net-pci,netdev=net0,mac={m}",
