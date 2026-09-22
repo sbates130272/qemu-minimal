@@ -559,9 +559,9 @@
       rocjitsu_gpu_test_rvs_action_devices: >-
         {{ item.device
            if (item.device is sequence and item.device is not string)
-           else [item.device | string] }}
+           else (item.device | string).split(',') }}
       rocjitsu_gpu_test_rvs_action_device_strings: >-
-        {{ rocjitsu_gpu_test_rvs_action_devices | map('string') | map('lower') | list }}
+        {{ rocjitsu_gpu_test_rvs_action_devices | map('string') | map('trim') | map('lower') | list }}
       rocjitsu_gpu_test_rvs_action_is_all: >-
         {{ (rocjitsu_gpu_test_rvs_action_device_strings | difference(['all']) | length) == 0 }}
       rocjitsu_gpu_test_rvs_action_is_single_visible_gpu: >-
