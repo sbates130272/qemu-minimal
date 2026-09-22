@@ -89,6 +89,9 @@ jobs:
         cloud-image-key: ansible-setup
         release: noble
     - name: Generate VM with Ansible post-setup
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false}'
       run: |
         qemu-tool gen-vm \
           --vm-name ansible-setup-test \
@@ -98,8 +101,6 @@ jobs:
           --packages none \
           --size 8 \
           --ansible-playbook ansible/playbooks/vm-basic.yml
-      env:
-        ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false}'
     - name: Boot VM as background task
       run: |
         qemu-tool run-vm --vm-name ansible-setup-test > run-vm-output.log 2>&1 &
