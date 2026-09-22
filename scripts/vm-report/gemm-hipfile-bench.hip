@@ -320,8 +320,14 @@ int main(int argc, char** argv) {
                 buf_registered ? "yes" : "no");
 
     for (size_t blk = 0; blk < kBlocks; ++blk) {
+        // hipFileRead's second argument is buffer_base -- the base of the
+        // destination buffer, not an already-offset pointer into it -- and the
+        // fifth is the offset applied to that base. Advancing the pointer *and*
+        // passing the same increment as the offset put the destination at
+        // dev + 2 * blk * kBlock, which runs past the 32 MiB registration at
+        // block 16. Pass dev, the pointer hipFileBufRegister was given.
         const ssize_t n = hipFileRead(
-            fh, static_cast<char*>(dev) + blk * kBlock, kBlock,
+            fh, dev, kBlock,
             static_cast<off_t>(blk * kBlock), static_cast<off_t>(blk * kBlock));
         if (n != static_cast<ssize_t>(kBlock)) {
             std::fprintf(stderr,
@@ -335,8 +341,9 @@ int main(int argc, char** argv) {
     const auto read_start = std::chrono::steady_clock::now();
     for (int iter = 0; iter < iters; ++iter) {
         for (size_t blk = 0; blk < kBlocks; ++blk) {
+            // Same buffer_base / buffer_offset contract as the warm loop above.
             const ssize_t n = hipFileRead(
-                fh, static_cast<char*>(dev) + blk * kBlock, kBlock,
+                fh, dev, kBlock,
                 static_cast<off_t>(blk * kBlock), static_cast<off_t>(blk * kBlock));
             if (n != static_cast<ssize_t>(kBlock)) {
                 std::fprintf(stderr,
