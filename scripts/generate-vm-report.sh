@@ -90,7 +90,7 @@ rocm=$(for d in /opt/rocm /opt/rocm-* /opt/rocm/*; do
   [ -e "${d}/include/hipfile/hipfile.h" ] && [ -e "${d}/lib/libhipfile.so" ] && echo "${d}"
 done | head -1)
 [ -n "${rocm}" ] || { echo "hipFile headers or library unavailable"; exit 0; }
-dev=$(lsblk -dno NAME,TYPE | awk '$2=="disk" && $1 ~ /^nvme/ { print "/dev/" $1; exit }')
+dev=$(lsblk -dpno NAME,TYPE | awk '$2=="disk" && $1 ~ /^\/dev\/nvme[0-9]+n[0-9]+$/ { print $1; exit }')
 [ -n "${dev}" ] || { echo "No NVMe namespace present"; exit 0; }
 sudo -n mkdir -p /mnt/nvme
 if ! mountpoint -q /mnt/nvme; then

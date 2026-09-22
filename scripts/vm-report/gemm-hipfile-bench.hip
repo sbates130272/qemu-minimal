@@ -273,6 +273,7 @@ int main(int argc, char** argv) {
             goto cleanup;
         }
     }
+    if (!hip_ok(hipDeviceSynchronize(), "hipDeviceSynchronize()")) goto cleanup;
 
     const auto read_start = std::chrono::steady_clock::now();
     for (int iter = 0; iter < iters; ++iter) {
@@ -289,6 +290,7 @@ int main(int argc, char** argv) {
             }
         }
     }
+    if (!hip_ok(hipDeviceSynchronize(), "hipDeviceSynchronize()")) goto cleanup;
     const auto read_stop = std::chrono::steady_clock::now();
     const double read_seconds =
         std::chrono::duration<double>(read_stop - read_start).count() / iters;
