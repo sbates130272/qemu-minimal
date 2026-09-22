@@ -8,6 +8,7 @@ on:
     paths:
       - 'libvirt/create-nvme'
       - 'libvirt/virt-install-ubuntu'
+      - 'scripts/*.sh'
       - '.github/workflows/shell-check.yml'
   push:
     branches:
@@ -15,6 +16,7 @@ on:
     paths:
       - 'libvirt/create-nvme'
       - 'libvirt/virt-install-ubuntu'
+      - 'scripts/*.sh'
       - '.github/workflows/shell-check.yml'
 
 concurrency:
@@ -34,5 +36,6 @@ jobs:
         run: |
           shellcheck -S error \
             libvirt/create-nvme \
-            libvirt/virt-install-ubuntu
+            libvirt/virt-install-ubuntu \
+            scripts/*.sh
 

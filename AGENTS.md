@@ -252,3 +252,17 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
 - GPG signing required on all commits (`-S`), signoff required (`-s`)
 - Main branch: `main`; current work branch: `feat/working-compose`
 - Never use `--no-verify` or `--no-gpg-sign`
+
+## Cutting a release
+
+`scripts/release.sh <version>` from a clean `main`. It stamps the version in
+`qemu/pyproject.toml`, generates the `qemu/debian/changelog` stanza from the
+`CHANGELOG.md` `[Unreleased]` section, retitles that section as the new
+version, commits signed-off, and makes a signed tag. Run it with `--dry-run`
+first to see the generated stanza.
+
+It never pushes; it prints the `git push origin main v<version>` that does.
+Pushing the tag is what triggers `release.yml`, whose `verify-version` job
+refuses to build anything unless the tag, `pyproject.toml` and
+`debian/changelog` agree and `CHANGELOG.md` has a heading for the tag. That
+gate exists because v1.3.0 shipped with no tag at all and nothing noticed.

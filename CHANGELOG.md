@@ -6,6 +6,20 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- `scripts/release.sh <version>`, which cuts a release from a clean `main`:
+  it stamps `qemu/pyproject.toml`, generates the `qemu/debian/changelog`
+  stanza from the `[Unreleased]` section of this file — preserving the
+  Added/Changed/Fixed/Removed grouping as dpkg `[ Section ]` markers, since
+  flattened into one list a removal reads exactly like an addition —
+  retitles that section as the new version, commits signed-off and makes a
+  signed tag. `--dry-run` shows the generated stanza and touches nothing. It
+  never pushes; it prints the command that does. A failed commit restores
+  the tree, which is safe because it refuses to start on a dirty one.
+- A `verify-version` job gating `release.yml`. Nothing is built or published
+  unless the tag, `qemu/pyproject.toml` and `qemu/debian/changelog` agree on
+  the version and `CHANGELOG.md` has a heading for the tag. v1.3.0 shipped
+  with no tag at all and every check stayed green, because the tag was the
+  only thing that would have disagreed and nothing compared it to anything.
 - A self-contained wheel. The compose stacks, both package manifests,
   `env.example` and the man page now ship inside the Python distribution, so
   `pipx install qemu-tool` is a working tool rather than a degraded one —
