@@ -197,6 +197,20 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Every published VM report linked its commit to `/commit/unknown`. All four
+  pages — `1vm`, `two-vm`, `two-vm/vm2` and `rocjitsu` — carried the literal
+  text `Commit: unknown` wrapped in a dead link, because
+  `generate-vm-report.sh` resolved the SHA with `git rev-parse --short HEAD`
+  and every report lane runs the script inside a container, where that call
+  fails. `2>/dev/null` hid the reason, so it silently fell through to the
+  `unknown` fallback; whether git is absent from the container images or its
+  dubious-ownership check rejects the checkout was not pinned down, and the
+  fix short-circuits both. The
+  script now prefers `GITHUB_SHA`, which Actions always sets, and keeps git
+  only for local invocation; the link carries the full SHA while the text
+  shows the short form. When there is genuinely no commit to point at it
+  emits plain text instead of a link, so the dead-link case cannot come back.
+
 - `gemm-hipfile-bench` double-counted its device offset and aborted the whole
   rocjitsu report at block 16 of 32, reporting
   `warm hipFileRead block 16 returned -5022 of 1048576`.

@@ -23,8 +23,19 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 VM_REPORT_BENCH_DIR="${SCRIPT_DIR}/vm-report"
 
 TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M UTC')
-COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 REPO="sbates130272/qemu-minimal"
+# Every report lane runs the script inside a container, where git rev-parse
+# fails and the old fallback published a literal "unknown" linked to
+# /commit/unknown -- a dead link on all four pages. GITHUB_SHA is always set by
+# Actions; git is only the local-invocation path. Link with the full SHA and
+# display the short form, and emit plain text rather than a broken link when
+# there is genuinely no commit to point at.
+COMMIT_SHA=${GITHUB_SHA:-$(git rev-parse HEAD 2>/dev/null || true)}
+if [ -n "${COMMIT_SHA}" ]; then
+  COMMIT_MD="[\`${COMMIT_SHA:0:7}\`](https://github.com/${REPO}/commit/${COMMIT_SHA})"
+else
+  COMMIT_MD="unknown"
+fi
 TITLE_SUFFIX=${VM_LABEL:+" — ${VM_LABEL}"}
 
 collect() { $SSH "$1" 2>/dev/null || echo "(not available)"; }
@@ -237,7 +248,7 @@ title: VM Report${TITLE_SUFFIX}
 
 # VM Report — qemu-minimal${TITLE_SUFFIX}
 
-Generated: **${TIMESTAMP}** &middot; Commit: [\`${COMMIT}\`](https://github.com/${REPO}/commit/${COMMIT})
+Generated: **${TIMESTAMP}** &middot; Commit: ${COMMIT_MD}
 
 ## Hardware
 
