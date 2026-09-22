@@ -61,6 +61,19 @@ write_badge_json() {
 JSON
 }
 
+# A guest-side script that dies under set -e can leave nothing to print, and a
+# bare exit 1 then reports a 30-minute run as a single blank line. Always say
+# which benchmark failed, even when the guest said nothing at all.
+bench_failed() {
+  printf '%s failed\n' "$1" >&2
+  if [ -n "$2" ]; then
+    printf '%s\n' "$2" >&2
+  else
+    printf '(the guest produced no output before exiting)\n' >&2
+  fi
+  exit 1
+}
+
 run_rocjitsu_gemm() {
   if ! copy_to_guest "${VM_REPORT_BENCH_DIR}/sgemm-bench.hip" /tmp/sgemm-bench.hip; then
     echo "sgemm-bench source upload failed"
@@ -72,7 +85,11 @@ run_rocjitsu_gemm() {
 set -euo pipefail
 gpu_nodes=$(cat /sys/class/kfd/kfd/topology/nodes/*/name 2>/dev/null | grep -c . || true)
 [ "${gpu_nodes}" -ge 1 ] || { echo "No bound GPU KFD node"; exit 0; }
-hipcc=$(command -v hipcc || ls /opt/rocm*/bin/hipcc /opt/rocm/*/bin/hipcc 2>/dev/null | head -1)
+# || true: with pipefail set, no hipcc anywhere means the unmatched glob makes
+# ls exit non-zero, the assignment inherits that, and set -e kills this script
+# here -- silently, ls stderr being discarded -- so the guard below, which
+# exists to report precisely that case, never gets to run.
+hipcc=$(command -v hipcc || ls /opt/rocm*/bin/hipcc /opt/rocm/*/bin/hipcc 2>/dev/null | head -1 || true)
 [ -n "${hipcc}" ] || { echo "hipcc unavailable"; exit 0; }
 echo "hipcc: ${hipcc}"
 "${hipcc}" -O2 --offload-arch=gfx1250 -o /tmp/sgemm-bench /tmp/sgemm-bench.hip
@@ -92,11 +109,17 @@ run_rocjitsu_hipfile() {
 set -euo pipefail
 gpu_nodes=$(cat /sys/class/kfd/kfd/topology/nodes/*/name 2>/dev/null | grep -c . || true)
 [ "${gpu_nodes}" -ge 1 ] || { echo "No bound GPU KFD node"; exit 0; }
-hipcc=$(command -v hipcc || ls /opt/rocm*/bin/hipcc /opt/rocm/*/bin/hipcc 2>/dev/null | head -1)
+# || true: with pipefail set, no hipcc anywhere means the unmatched glob makes
+# ls exit non-zero, the assignment inherits that, and set -e kills this script
+# here -- silently, ls stderr being discarded -- so the guard below, which
+# exists to report precisely that case, never gets to run.
+hipcc=$(command -v hipcc || ls /opt/rocm*/bin/hipcc /opt/rocm/*/bin/hipcc 2>/dev/null | head -1 || true)
 [ -n "${hipcc}" ] || { echo "hipcc unavailable"; exit 0; }
+# || true for the same reason as hipcc above: with no matching tree the loop's
+# last test is what sets the exit status, and pipefail carries it out.
 rocm=$(for d in /opt/rocm /opt/rocm-* /opt/rocm/*; do
   [ -e "${d}/include/hipfile/hipfile.h" ] && [ -e "${d}/lib/libhipfile.so" ] && echo "${d}"
-done | head -1)
+done | head -1 || true)
 [ -n "${rocm}" ] || { echo "hipFile headers or library unavailable"; exit 0; }
 dev=$(lsblk -dpno NAME,TYPE | awk '$2=="disk" && $1 ~ /^\/dev\/nvme[0-9]+n[0-9]+$/ { print $1; exit }')
 [ -n "${dev}" ] || { echo "No NVMe namespace present"; exit 0; }
@@ -148,8 +171,7 @@ ROCJITSU_HIPFILE_OUTPUT=""
 ROCJITSU_HIPFILE_GBS=""
 if [ "${REPORT_ROCJITSU_BENCH:-0}" = "1" ]; then
   if ! ROCJITSU_GEMM_OUTPUT=$(run_rocjitsu_gemm); then
-    printf '%s\n' "${ROCJITSU_GEMM_OUTPUT}"
-    exit 1
+    bench_failed "rocjitsu GEMM benchmark" "${ROCJITSU_GEMM_OUTPUT}"
   fi
   ROCJITSU_GEMM_GFLOPS=$(printf '%s\n' "${ROCJITSU_GEMM_OUTPUT}" \
     | sed -n 's/.*gflops=\([0-9.eE+-]*\).*/\1/p' | tail -1)
@@ -159,8 +181,7 @@ if [ "${REPORT_ROCJITSU_BENCH:-0}" = "1" ]; then
     exit 1
   }
   if ! ROCJITSU_HIPFILE_OUTPUT=$(run_rocjitsu_hipfile); then
-    printf '%s\n' "${ROCJITSU_HIPFILE_OUTPUT}"
-    exit 1
+    bench_failed "rocjitsu hipFile benchmark" "${ROCJITSU_HIPFILE_OUTPUT}"
   fi
   ROCJITSU_HIPFILE_GBS=$(printf '%s\n' "${ROCJITSU_HIPFILE_OUTPUT}" \
     | sed -n 's/.*read_gbs=\([0-9.eE+-]*\).*/\1/p' | tail -1)
