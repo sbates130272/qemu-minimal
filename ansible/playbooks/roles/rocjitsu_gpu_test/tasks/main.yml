@@ -402,22 +402,44 @@
     msg: "{{ rocjitsu_gpu_test_rvs_gpus.stdout_lines }}"
   when: rocjitsu_gpu_test_rvs | bool
 
-- name: Run the RVS properties module
+- name: Check for a GPU-specific RVS config
+  ansible.builtin.stat:
+    path: >-
+      {{ rocjitsu_gpu_test_rvs_conf_dir }}/{{ rocjitsu_gpu_test_target }}/{{
+      rocjitsu_gpu_test_rvs_config_name }}
+  register: rocjitsu_gpu_test_rvs_gpu_config
+  when: rocjitsu_gpu_test_rvs | bool
+
+- name: Select the RVS config to run
+  ansible.builtin.set_fact:
+    rocjitsu_gpu_test_rvs_config_path: >-
+      {{ (rocjitsu_gpu_test_rvs_conf_dir ~ '/' ~ rocjitsu_gpu_test_target ~ '/'
+          ~ rocjitsu_gpu_test_rvs_config_name)
+         if rocjitsu_gpu_test_rvs_gpu_config.stat.exists else
+         (rocjitsu_gpu_test_rvs_conf_dir ~ '/' ~ rocjitsu_gpu_test_rvs_config_name) }}
+  when: rocjitsu_gpu_test_rvs | bool
+
+- name: Show the selected RVS config
+  ansible.builtin.debug:
+    msg: "Running RVS config {{ rocjitsu_gpu_test_rvs_config_path }}"
+  when: rocjitsu_gpu_test_rvs | bool
+
+- name: Run the RVS GPU properties smoke check
   ansible.builtin.command:
     cmd: >-
       timeout {{ rocjitsu_gpu_test_rvs_timeout }}
-      {{ rocjitsu_gpu_test_rvs_bin }} -m {{ rocjitsu_gpu_test_rvs_module }}
-  register: rocjitsu_gpu_test_rvs_module_out
+      {{ rocjitsu_gpu_test_rvs_bin }} -c {{ rocjitsu_gpu_test_rvs_config_path }}
+  register: rocjitsu_gpu_test_rvs_run
   changed_when: false
-  failed_when: rocjitsu_gpu_test_rvs_module_out.rc != 0
+  failed_when: rocjitsu_gpu_test_rvs_run.rc != 0
   environment:
     ROCM_PATH: /opt/rocm
     LD_LIBRARY_PATH: "/opt/rocm/lib:/opt/rocm/lib64:{{ rocjitsu_gpu_test_rocm }}/lib:{{ rocjitsu_gpu_test_rocm }}/lib64"
   when: rocjitsu_gpu_test_rvs | bool
 
-- name: Show the RVS module output
+- name: Show the RVS smoke-check output
   ansible.builtin.debug:
-    msg: "{{ ((rocjitsu_gpu_test_rvs_module_out.stdout_lines | default([]))
-              + (rocjitsu_gpu_test_rvs_module_out.stderr_lines | default([])))
+    msg: "{{ ((rocjitsu_gpu_test_rvs_run.stdout_lines | default([]))
+              + (rocjitsu_gpu_test_rvs_run.stderr_lines | default([])))
              | default(['(no output captured)'], true) }}"
   when: rocjitsu_gpu_test_rvs | bool

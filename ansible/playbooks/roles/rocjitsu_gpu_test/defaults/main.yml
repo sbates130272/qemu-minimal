@@ -102,5 +102,6 @@ rocjitsu_gpu_test_hsa_snoop_timeout: 120
 # query its properties, but it need not run the longer stress modules here.
 rocjitsu_gpu_test_rvs: true
 rocjitsu_gpu_test_rvs_bin: /opt/rocm/bin/rvs
-rocjitsu_gpu_test_rvs_module: gpup
+rocjitsu_gpu_test_rvs_conf_dir: /opt/rocm/share/rocm-validation-suite/conf
+rocjitsu_gpu_test_rvs_config_name: gpup_single.conf
 rocjitsu_gpu_test_rvs_timeout: 120
