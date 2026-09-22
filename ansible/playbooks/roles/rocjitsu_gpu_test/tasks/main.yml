@@ -462,6 +462,17 @@
     - not rocjitsu_gpu_test_rvs_gpu_config.stat.exists
     - not rocjitsu_gpu_test_rvs_default_config.stat.exists
 
+- name: Note when RVS has no target-specific config for this GPU
+  ansible.builtin.debug:
+    msg: >-
+      RVS ships no {{ rocjitsu_gpu_test_rvs_config_name }} for target
+      {{ rocjitsu_gpu_test_target }} under {{ rocjitsu_gpu_test_rvs_conf_dir }};
+      using the generic config instead.
+  when:
+    - rocjitsu_gpu_test_rvs | bool
+    - not rocjitsu_gpu_test_rvs_gpu_config.stat.exists
+    - rocjitsu_gpu_test_rvs_default_config.stat.exists
+
 - name: Select the RVS config to run
   ansible.builtin.set_fact:
     rocjitsu_gpu_test_rvs_config_path: >-
