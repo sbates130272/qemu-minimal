@@ -391,7 +391,7 @@
       {{ rocjitsu_gpu_test_rvs_bin }} -g
   register: rocjitsu_gpu_test_rvs_gpus
   changed_when: false
-  failed_when: rocjitsu_gpu_test_rvs_gpus.rc != 0
+  failed_when: false
   environment:
     ROCM_PATH: /opt/rocm
     LD_LIBRARY_PATH: "/opt/rocm/lib:/opt/rocm/lib64:{{ rocjitsu_gpu_test_rocm }}/lib:{{ rocjitsu_gpu_test_rocm }}/lib64"
@@ -401,6 +401,25 @@
   ansible.builtin.debug:
     msg: "{{ rocjitsu_gpu_test_rvs_gpus.stdout_lines }}"
   when: rocjitsu_gpu_test_rvs | bool
+
+- name: Fail when RVS GPU enumeration times out
+  ansible.builtin.fail:
+    msg: >-
+      rvs -g did not complete within {{ rocjitsu_gpu_test_rvs_timeout }}s.
+      The validation is bounded to keep CI from hanging; inspect earlier RVS
+      output for the last progress it reported.
+  when:
+    - rocjitsu_gpu_test_rvs | bool
+    - rocjitsu_gpu_test_rvs_gpus.rc == 124
+
+- name: Fail when RVS GPU enumeration fails
+  ansible.builtin.fail:
+    msg: >-
+      rvs -g exited {{ rocjitsu_gpu_test_rvs_gpus.rc }}. Inspect the RVS output
+      above for details.
+  when:
+    - rocjitsu_gpu_test_rvs | bool
+    - rocjitsu_gpu_test_rvs_gpus.rc not in [0, 124]
 
 - name: Check for a GPU-specific RVS config
   ansible.builtin.stat:
@@ -452,7 +471,7 @@
       {{ rocjitsu_gpu_test_rvs_bin }} -c {{ rocjitsu_gpu_test_rvs_config_path }}
   register: rocjitsu_gpu_test_rvs_run
   changed_when: false
-  failed_when: rocjitsu_gpu_test_rvs_run.rc != 0
+  failed_when: false
   environment:
     ROCM_PATH: /opt/rocm
     LD_LIBRARY_PATH: "/opt/rocm/lib:/opt/rocm/lib64:{{ rocjitsu_gpu_test_rocm }}/lib:{{ rocjitsu_gpu_test_rocm }}/lib64"
@@ -464,3 +483,24 @@
               + (rocjitsu_gpu_test_rvs_run.stderr_lines | default([])))
              | default(['(no output captured)'], true) }}"
   when: rocjitsu_gpu_test_rvs | bool
+
+- name: Fail when the RVS smoke check times out
+  ansible.builtin.fail:
+    msg: >-
+      RVS config {{ rocjitsu_gpu_test_rvs_config_path }} did not complete within
+      {{ rocjitsu_gpu_test_rvs_timeout }}s. The smoke check is bounded to keep
+      CI from hanging; inspect the RVS output above for the last progress it
+      reported.
+  when:
+    - rocjitsu_gpu_test_rvs | bool
+    - rocjitsu_gpu_test_rvs_run.rc == 124
+
+- name: Fail when the RVS smoke check fails
+  ansible.builtin.fail:
+    msg: >-
+      RVS config {{ rocjitsu_gpu_test_rvs_config_path }} exited
+      {{ rocjitsu_gpu_test_rvs_run.rc }}. Inspect the RVS output above for
+      details.
+  when:
+    - rocjitsu_gpu_test_rvs | bool
+    - rocjitsu_gpu_test_rvs_run.rc not in [0, 124]
