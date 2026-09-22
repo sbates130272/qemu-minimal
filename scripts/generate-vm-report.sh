@@ -33,6 +33,10 @@ copy_to_guest() {
   "${SCP[@]}" "$1" "${USER}@${HOST}:$2" >/dev/null 2>&1
 }
 
+json_string() {
+  python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"
+}
+
 write_badge_json() {
   local path=$1 label=$2 value=$3 unit=$4 color=$5
   local message badge_color
@@ -43,12 +47,16 @@ write_badge_json() {
     message="n/a"
     badge_color="lightgrey"
   fi
+  local label_json message_json color_json
+  label_json=$(json_string "${label}")
+  message_json=$(json_string "${message}")
+  color_json=$(json_string "${badge_color}")
   cat > "${path}" <<JSON
 {
   "schemaVersion": 1,
-  "label": "${label}",
-  "message": "${message}",
-  "color": "${badge_color}"
+  "label": ${label_json},
+  "message": ${message_json},
+  "color": ${color_json}
 }
 JSON
 }
@@ -142,12 +150,22 @@ if [ "${REPORT_ROCJITSU_BENCH:-0}" = "1" ]; then
   fi
   ROCJITSU_GEMM_GFLOPS=$(printf '%s\n' "${ROCJITSU_GEMM_OUTPUT}" \
     | sed -n 's/.*gflops=\([0-9.eE+-]*\).*/\1/p' | tail -1)
+  [ -n "${ROCJITSU_GEMM_GFLOPS}" ] || {
+    printf '%s\n' "${ROCJITSU_GEMM_OUTPUT}"
+    echo "rocjitsu GEMM benchmark produced no gflops metric" >&2
+    exit 1
+  }
   if ! ROCJITSU_HIPFILE_OUTPUT=$(run_rocjitsu_hipfile); then
     printf '%s\n' "${ROCJITSU_HIPFILE_OUTPUT}"
     exit 1
   fi
   ROCJITSU_HIPFILE_GBS=$(printf '%s\n' "${ROCJITSU_HIPFILE_OUTPUT}" \
     | sed -n 's/.*read_gbs=\([0-9.eE+-]*\).*/\1/p' | tail -1)
+  [ -n "${ROCJITSU_HIPFILE_GBS}" ] || {
+    printf '%s\n' "${ROCJITSU_HIPFILE_OUTPUT}"
+    echo "rocjitsu hipFile benchmark produced no read_gbs metric" >&2
+    exit 1
+  }
 fi
 
 mkdir -p "${OUTDIR}"
