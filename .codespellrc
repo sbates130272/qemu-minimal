@@ -1,0 +1,8 @@
+[codespell]
+# Local scratch notes in .git/info/exclude are not skipped: CI never sees them,
+# but a local run globs the working tree and checking them costs nothing.
+skip = .git,*.qcow2,*.img,*.deb
+# hsa: ROCm's Heterogeneous System Architecture, not a typo for "has".
+# blacklist: the literal modprobe/kernel command-line keyword.
+ignore-words-list = hsa,blacklist
+check-filenames =

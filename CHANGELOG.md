@@ -46,6 +46,13 @@ All notable changes to this project will be documented in this file.
   (`ernic.6ca9a46` → `ernic.0b48aa1`). The libvfio-user revision is unchanged
   at `vfu.8039244`, so it stays matched to the qemu and rocjitsu images, which
   are not moved.
+- `spell-check` runs `codespell` instead of `pyspelling`/aspell. codespell
+  matches a fixed list of known misspellings rather than validating every word
+  against a dictionary, so the 441-entry `.wordlist.txt` is gone: hostnames,
+  flags, image tags and hex fragments are no longer words anyone has to
+  allow-list. Configuration is `.codespellrc`, and the workflow runs a bare
+  `codespell` so a local run is the same command. It also covers the whole
+  tree, not just `**/*.md`.
 - ernic guests now get 4 vCPUs. `ionic_lif_size()` derives its EQ count from
   `num_online_cpus()` and `ionic_create_rdma_admin()` rejects fewer than
   `IONIC_EQ_COUNT_MIN`, so at 2 vCPUs `ionic_rdma` could never probe.

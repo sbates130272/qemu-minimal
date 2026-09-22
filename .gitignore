@@ -80,6 +80,3 @@ run-this.sh
 
 # Personal working notes (not for repo)
 rocm-ernic-enablement.md
-
-# Compiled dictionary emitted by pyspelling
-wordlist.dic
