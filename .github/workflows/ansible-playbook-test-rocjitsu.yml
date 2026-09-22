@@ -11,6 +11,7 @@ on:
     paths:
       - 'ansible/playbooks/vm-rocjitsu.yml'
       - 'ansible/playbooks/roles/**'
+      - '!ansible/playbooks/roles/ionic_image_prep/**'
       - 'ansible/requirements.yml'
       - 'qemu/qemu-tool/**'
       - 'qemu/pyproject.toml'
