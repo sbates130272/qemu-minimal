@@ -37,11 +37,29 @@ json_string() {
   python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"
 }
 
+# The benchmarks report in G-units, but the same code spans five orders of
+# magnitude between bare metal and a vfio-user guest, so a fixed unit renders
+# one of the two unreadably (0.00187734275 GFLOP/s on a badge). Pick the
+# prefix from the value and round to three significant figures.
+scale_metric() {
+  python3 - "$1" "$2" <<'PY'
+import sys
+
+value = float(sys.argv[1]) * 1e9
+unit = sys.argv[2]
+for prefix, factor in (("T", 1e12), ("G", 1e9), ("M", 1e6), ("k", 1e3)):
+    if abs(value) >= factor:
+        print(f"{value / factor:.3g} {prefix}{unit}")
+        break
+else:
+    print(f"{value:.3g} {unit}")
+PY
+}
+
 write_badge_json() {
-  local path=$1 label=$2 value=$3 unit=$4 color=$5
-  local message badge_color
-  if [ -n "${value}" ]; then
-    message="${value} ${unit}"
+  local path=$1 label=$2 message=$3 color=$4
+  local badge_color
+  if [ -n "${message}" ]; then
     badge_color="${color}"
   else
     message="n/a"
@@ -167,8 +185,10 @@ JOURNAL=$(collect "journalctl -p err -b --no-pager 2>/dev/null | tail -5")
 
 ROCJITSU_GEMM_OUTPUT=""
 ROCJITSU_GEMM_GFLOPS=""
+ROCJITSU_GEMM_DISPLAY=""
 ROCJITSU_HIPFILE_OUTPUT=""
 ROCJITSU_HIPFILE_GBS=""
+ROCJITSU_HIPFILE_DISPLAY=""
 if [ "${REPORT_ROCJITSU_BENCH:-0}" = "1" ]; then
   if ! ROCJITSU_GEMM_OUTPUT=$(run_rocjitsu_gemm); then
     bench_failed "rocjitsu GEMM benchmark" "${ROCJITSU_GEMM_OUTPUT}"
@@ -180,6 +200,7 @@ if [ "${REPORT_ROCJITSU_BENCH:-0}" = "1" ]; then
     echo "rocjitsu GEMM benchmark produced no gflops metric" >&2
     exit 1
   }
+  ROCJITSU_GEMM_DISPLAY=$(scale_metric "${ROCJITSU_GEMM_GFLOPS}" "FLOP/s")
   if ! ROCJITSU_HIPFILE_OUTPUT=$(run_rocjitsu_hipfile); then
     bench_failed "rocjitsu hipFile benchmark" "${ROCJITSU_HIPFILE_OUTPUT}"
   fi
@@ -190,6 +211,7 @@ if [ "${REPORT_ROCJITSU_BENCH:-0}" = "1" ]; then
     echo "rocjitsu hipFile benchmark produced no read_gbs metric" >&2
     exit 1
   }
+  ROCJITSU_HIPFILE_DISPLAY=$(scale_metric "${ROCJITSU_HIPFILE_GBS}" "B/s")
 fi
 
 mkdir -p "${OUTDIR}"
@@ -311,8 +333,13 @@ $(if [ "${REPORT_ROCJITSU_BENCH:-0}" = "1" ]; then cat <<ROCJITSU
 
 | Metric | Value |
 |---|---|
-| GEMM | ${ROCJITSU_GEMM_GFLOPS:-n/a}${ROCJITSU_GEMM_GFLOPS:+ GFLOP/s} |
-| hipFile read throughput | ${ROCJITSU_HIPFILE_GBS:-n/a}${ROCJITSU_HIPFILE_GBS:+ GB/s} |
+| GEMM | ${ROCJITSU_GEMM_DISPLAY:-n/a} |
+| hipFile read throughput | ${ROCJITSU_HIPFILE_DISPLAY:-n/a} |
+
+These run inside a QEMU guest with the GPU attached over vfio-user, so the
+absolute numbers sit far below what the same benchmark reports on bare metal —
+that is expected, not a regression. What is worth watching is how they move
+between runs. The unit is chosen from the value, so compare the unit too.
 
 ### GEMM output
 
@@ -330,8 +357,8 @@ fi)
 MD
 
 if [ "${REPORT_ROCJITSU_BENCH:-0}" = "1" ]; then
-  write_badge_json "${OUTDIR}/badge-gemm.json" gemm "${ROCJITSU_GEMM_GFLOPS}" "GFLOP/s" "ED1C24"
-  write_badge_json "${OUTDIR}/badge-hipfile.json" hipfile "${ROCJITSU_HIPFILE_GBS}" "GB/s" "76B900"
+  write_badge_json "${OUTDIR}/badge-gemm.json" gemm "${ROCJITSU_GEMM_DISPLAY}" "ED1C24"
+  write_badge_json "${OUTDIR}/badge-hipfile.json" hipfile "${ROCJITSU_HIPFILE_DISPLAY}" "76B900"
 fi
 
 echo "Report written to ${OUTDIR}/index.md"

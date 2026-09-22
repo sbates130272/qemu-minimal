@@ -121,6 +121,17 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- The rocjitsu benchmark numbers pick their own SI prefix instead of always
+  being reported in G-units. The GPU is attached over vfio-user, so the same
+  benchmark spans five orders of magnitude between bare metal and the guest —
+  231 GFLOP/s against 1.88 MFLOP/s — and a fixed unit renders one of the two
+  unreadably, as `0.00187734275 GFLOP/s` on a shields.io badge. The value now
+  selects between T, G, M, k and none, rounded to three significant figures,
+  for the report table and both badges. The benchmarks themselves still emit
+  `gflops=` and `read_gbs=`, so the parse and the raw output block are
+  unchanged. The table carries a note saying the low absolute numbers are
+  expected of a vfio-user guest and that the trend is what to watch.
+
 - `vm-report` and `vm-report-two-vms` no longer publish the site themselves.
   Both called `actions/deploy-pages` with their own full `_site/`, and a Pages
   deploy replaces the whole site, so whichever ran last won and the other
@@ -172,6 +183,20 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Neither rocjitsu benchmark had ever compiled. `sgemm-bench.hip` and
+  `gemm-hipfile-bench.hip` both used `goto cleanup` to reach a single cleanup
+  block, and every one of those jumps crossed the initialisation of a variable
+  declared later in the same scope — `block`, `grid`, `max_abs_error`,
+  `start`, `seconds` and the rest. That is ill-formed C++, not a warning, and
+  clang rejected it: 11 errors for `sgemm-bench.hip` against gfx1250. The
+  failure stayed invisible for as long as the lane reported a blank line,
+  because hipcc writes its diagnostics to stderr and the report script only
+  captured stdout. Both files now release their device buffers, file
+  descriptor, hipFile handle and driver through scope guards and return
+  directly, so no jump crosses an initialisation. Guard declaration order is
+  load-bearing: reverse-destruction order reproduces exactly what the
+  `cleanup:` block did. Exit codes and every diagnostic string are unchanged.
+
 - The management and multicast NICs of one guest were given the same MAC.
   `_mcast_args` derived its address from the SSH port with the same
   arithmetic as `_mgmt_mac` rather than calling it, so `--mcast-group` put
@@ -184,6 +209,7 @@ All notable changes to this project will be documented in this file.
   `52:54:00:12:34:56` — exactly the address older guest images pin their
   netplan to, so a guest with both NICs could match its management netplan
   against the data NIC.
+
 - The rocjitsu report lane reported its failures as a blank line. The
   guest-side benchmark scripts run under `set -euo pipefail`, and their
   `hipcc=$(command -v hipcc || ls /opt/rocm*/bin/hipcc ... | head -1)` probe

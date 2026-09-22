@@ -199,7 +199,54 @@ int main(int argc, char** argv) {
         return 4;
     }
 
-    bool driver_open = false;
+    // Each guard releases in reverse declaration order, which is exactly the
+    // order the goto-cleanup block used. Declaration order here is therefore
+    // load-bearing: driver, fd, handle, dev, buf registration, dc. The gotos
+    // this replaces jumped forward over initialisations in their own scope --
+    // ill-formed C++, so this file had never once compiled.
+    struct DriverGuard {
+        bool open = false;
+        ~DriverGuard() {
+            if (open) {
+                hipFileDriverClose();
+            }
+        }
+    };
+    struct FdGuard {
+        int fd = -1;
+        ~FdGuard() {
+            if (fd >= 0) {
+                ::close(fd);
+            }
+        }
+    };
+    struct HandleGuard {
+        hipFileHandle_t fh{};
+        bool registered = false;
+        ~HandleGuard() {
+            if (registered) {
+                (void)hipFileHandleDeregister(fh);
+            }
+        }
+    };
+    struct DeviceBuffer {
+        void* ptr = nullptr;
+        ~DeviceBuffer() {
+            if (ptr != nullptr) {
+                (void)hipFree(ptr);
+            }
+        }
+    };
+    struct BufRegGuard {
+        const void* ptr = nullptr;
+        ~BufRegGuard() {
+            if (ptr != nullptr) {
+                (void)hipFileBufDeregister(ptr);
+            }
+        }
+    };
+
+    DriverGuard driver;
     hipFileError_t hipfile_status = hipFileDriverOpen();
     if (hipfile_status.err != hipFileSuccess) {
         std::fprintf(stderr,
@@ -208,57 +255,61 @@ int main(int argc, char** argv) {
                      static_cast<int>(hipfile_status.hip_drv_err));
         return 2;
     }
-    driver_open = true;
-    int fd = ::open(path.c_str(), O_RDONLY | O_DIRECT);
-    if (fd < 0) {
+    driver.open = true;
+
+    FdGuard file;
+    file.fd = ::open(path.c_str(), O_RDONLY | O_DIRECT);
+    if (file.fd < 0) {
         std::fprintf(stderr,
                      "gemm-hipfile-bench: open %s O_DIRECT failed: %s; retrying "
                      "without O_DIRECT for compat mode\n",
                      path.c_str(), std::strerror(errno));
-        fd = ::open(path.c_str(), O_RDONLY);
-        if (fd < 0) {
+        file.fd = ::open(path.c_str(), O_RDONLY);
+        if (file.fd < 0) {
             std::fprintf(stderr, "gemm-hipfile-bench: open %s: %s\n",
                          path.c_str(), std::strerror(errno));
-            hipFileDriverClose();
             return 2;
         }
     }
 
-    hipFileHandle_t fh{};
+    HandleGuard handle;
+    DeviceBuffer dev_buf;
+    BufRegGuard buf_reg;
+    DeviceBuffer dc_buf;
+
+    hipFileHandle_t& fh = handle.fh;
     hipFileDescr_t descr{};
-    descr.handle.fd = fd;
+    descr.handle.fd = file.fd;
     descr.type = hipFileHandleTypeOpaqueFD;
-    bool handle_registered = false;
-    int exit_code = 0;
     std::vector<float> hc(static_cast<size_t>(kM) * kN, 0.0f);
-    auto hip_ok = [&](hipError_t err, const char* expr) {
+    auto hip_ok = [](hipError_t err, const char* expr) {
         if (err != hipSuccess) {
             std::fprintf(stderr, "gemm-hipfile-bench: %s failed: %s\n", expr,
                          hipGetErrorString(err));
-            exit_code = 1;
             return false;
         }
         return true;
     };
-    auto hipfile_ok = [&](hipFileError_t err, const char* expr) {
+    auto hipfile_ok = [](hipFileError_t err, const char* expr) {
         if (err.err != hipFileSuccess) {
             std::fprintf(stderr,
                          "gemm-hipfile-bench: %s failed: err=%d drv=%d\n", expr,
                          static_cast<int>(err.err), static_cast<int>(err.hip_drv_err));
-            exit_code = 2;
             return false;
         }
         return true;
     };
-    if (!hipfile_ok(hipFileHandleRegister(&fh, &descr), "hipFileHandleRegister(&fh, &descr)")) goto cleanup;
-    handle_registered = true;
+    if (!hipfile_ok(hipFileHandleRegister(&fh, &descr), "hipFileHandleRegister(&fh, &descr)")) return 2;
+    handle.registered = true;
 
-    void* dev = nullptr;
-    if (!hip_ok(hipMalloc(&dev, kPayload), "hipMalloc(&dev, kPayload)")) goto cleanup;
+    void*& dev = dev_buf.ptr;
+    if (!hip_ok(hipMalloc(&dev, kPayload), "hipMalloc(&dev, kPayload)")) return 1;
 
     const hipFileError_t reg = hipFileBufRegister(dev, kPayload, 0);
     const bool buf_registered = reg.err == hipFileSuccess;
-    float* dc = nullptr;
+    if (buf_registered) {
+        buf_reg.ptr = dev;
+    }
     if (!buf_registered) {
         std::fprintf(stderr,
                      "gemm-hipfile-bench: hipFileBufRegister refused the buffer (err=%d drv=%d)\n",
@@ -276,11 +327,10 @@ int main(int argc, char** argv) {
             std::fprintf(stderr,
                          "gemm-hipfile-bench: warm hipFileRead block %zu returned %zd of %zu\n",
                          blk, n, kBlock);
-            exit_code = 2;
-            goto cleanup;
+            return 2;
         }
     }
-    if (!hip_ok(hipDeviceSynchronize(), "hipDeviceSynchronize()")) goto cleanup;
+    if (!hip_ok(hipDeviceSynchronize(), "hipDeviceSynchronize()")) return 1;
 
     const auto read_start = std::chrono::steady_clock::now();
     for (int iter = 0; iter < iters; ++iter) {
@@ -292,12 +342,11 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr,
                              "gemm-hipfile-bench: hipFileRead block %zu returned %zd of %zu\n",
                              blk, n, kBlock);
-                exit_code = 2;
-                goto cleanup;
+                return 2;
             }
         }
     }
-    if (!hip_ok(hipDeviceSynchronize(), "hipDeviceSynchronize()")) goto cleanup;
+    if (!hip_ok(hipDeviceSynchronize(), "hipDeviceSynchronize()")) return 1;
     const auto read_stop = std::chrono::steady_clock::now();
     const double read_seconds =
         std::chrono::duration<double>(read_stop - read_start).count() / iters;
@@ -306,19 +355,20 @@ int main(int argc, char** argv) {
 
     float* const da = static_cast<float*>(dev);
     float* const db = reinterpret_cast<float*>(static_cast<char*>(dev) + kBOffset);
-    if (!hip_ok(hipMalloc(&dc, static_cast<size_t>(kM) * kN * sizeof(float)),
-                "hipMalloc(&dc, static_cast<size_t>(kM) * kN * sizeof(float))")) goto cleanup;
+    if (!hip_ok(hipMalloc(&dc_buf.ptr, static_cast<size_t>(kM) * kN * sizeof(float)),
+                "hipMalloc(&dc, static_cast<size_t>(kM) * kN * sizeof(float))")) return 1;
+    float* const dc = static_cast<float*>(dc_buf.ptr);
 
     const dim3 block(16, 16);
     const dim3 grid((kN + block.x - 1) / block.x, (kM + block.y - 1) / block.y);
     std::printf("gemm-hipfile-bench: m=%d n=%d k=%d\n", kM, kN, kK);
 
     hipLaunchKernelGGL(sgemm, grid, block, 0, 0, da, db, dc, kM, kN, kK);
-    if (!hip_ok(hipGetLastError(), "hipGetLastError()")) goto cleanup;
-    if (!hip_ok(hipDeviceSynchronize(), "hipDeviceSynchronize()")) goto cleanup;
+    if (!hip_ok(hipGetLastError(), "hipGetLastError()")) return 1;
+    if (!hip_ok(hipDeviceSynchronize(), "hipDeviceSynchronize()")) return 1;
 
     if (!hip_ok(hipMemcpy(hc.data(), dc, hc.size() * sizeof(float), hipMemcpyDeviceToHost),
-                "hipMemcpy(hc.data(), dc, hc.size() * sizeof(float), hipMemcpyDeviceToHost)")) goto cleanup;
+                "hipMemcpy(hc.data(), dc, hc.size() * sizeof(float), hipMemcpyDeviceToHost)")) return 1;
 
     double max_abs_error = 0.0;
     long failures = 0;
@@ -344,16 +394,15 @@ int main(int argc, char** argv) {
                 max_abs_error, failures);
     if (failures != 0) {
         std::printf("gemm-hipfile-bench: FAIL\n");
-        exit_code = 3;
-        goto cleanup;
+        return 3;
     }
 
     const auto gemm_start = std::chrono::steady_clock::now();
     for (int iter = 0; iter < iters; ++iter) {
         hipLaunchKernelGGL(sgemm, grid, block, 0, 0, da, db, dc, kM, kN, kK);
-        if (!hip_ok(hipGetLastError(), "hipGetLastError()")) goto cleanup;
+        if (!hip_ok(hipGetLastError(), "hipGetLastError()")) return 1;
     }
-    if (!hip_ok(hipDeviceSynchronize(), "hipDeviceSynchronize()")) goto cleanup;
+    if (!hip_ok(hipDeviceSynchronize(), "hipDeviceSynchronize()")) return 1;
     const auto gemm_stop = std::chrono::steady_clock::now();
     const double gemm_seconds =
         std::chrono::duration<double>(gemm_stop - gemm_start).count() / iters;
@@ -361,28 +410,6 @@ int main(int argc, char** argv) {
     std::printf("gemm-hipfile-bench: gemm_seconds_per_iter=%.9g gflops=%.9g\n",
                 gemm_seconds, flops / gemm_seconds / 1e9);
 
-cleanup:
-    if (dc != nullptr) {
-        (void)hipFree(dc);
-    }
-    if (buf_registered) {
-        (void)hipFileBufDeregister(dev);
-    }
-    if (dev != nullptr) {
-        (void)hipFree(dev);
-    }
-    if (handle_registered) {
-        (void)hipFileHandleDeregister(fh);
-    }
-    if (fd >= 0) {
-        ::close(fd);
-    }
-    if (driver_open) {
-        hipFileDriverClose();
-    }
-
-    if (exit_code == 0) {
-        std::printf("gemm-hipfile-bench: PASS\n");
-    }
-    return exit_code;
+    std::printf("gemm-hipfile-bench: PASS\n");
+    return 0;
 }
