@@ -421,17 +421,25 @@
     - rocjitsu_gpu_test_rvs | bool
     - rocjitsu_gpu_test_rvs_gpus.rc not in [0, 124]
 
-- name: Check for a GPU-specific RVS config
-  ansible.builtin.stat:
-    path: >-
+- name: Build the candidate RVS config paths
+  ansible.builtin.set_fact:
+    rocjitsu_gpu_test_rvs_gpu_config_path: >-
       {{ rocjitsu_gpu_test_rvs_conf_dir }}/{{ rocjitsu_gpu_test_target }}/{{
       rocjitsu_gpu_test_rvs_config_name }}
+    rocjitsu_gpu_test_rvs_default_config_path: >-
+      {{ rocjitsu_gpu_test_rvs_conf_dir }}/{{
+      rocjitsu_gpu_test_rvs_config_name }}
+  when: rocjitsu_gpu_test_rvs | bool
+
+- name: Check for a GPU-specific RVS config
+  ansible.builtin.stat:
+    path: "{{ rocjitsu_gpu_test_rvs_gpu_config_path }}"
   register: rocjitsu_gpu_test_rvs_gpu_config
   when: rocjitsu_gpu_test_rvs | bool
 
 - name: Check for the default RVS config
   ansible.builtin.stat:
-    path: "{{ rocjitsu_gpu_test_rvs_conf_dir }}/{{ rocjitsu_gpu_test_rvs_config_name }}"
+    path: "{{ rocjitsu_gpu_test_rvs_default_config_path }}"
   register: rocjitsu_gpu_test_rvs_default_config
   when: rocjitsu_gpu_test_rvs | bool
 
@@ -440,11 +448,10 @@
     msg: >-
       No RVS config {{ rocjitsu_gpu_test_rvs_config_name }} under
       {{ rocjitsu_gpu_test_rvs_conf_dir }}. Expected either
-      {{ rocjitsu_gpu_test_rvs_conf_dir }}/{{ rocjitsu_gpu_test_target }}/{{
-      rocjitsu_gpu_test_rvs_config_name }} or
-      {{ rocjitsu_gpu_test_rvs_conf_dir }}/{{ rocjitsu_gpu_test_rvs_config_name
-      }}. Reinstall rocm-validation-suite, or set rocjitsu_gpu_test_rvs=false
-      to skip the check.
+      {{ rocjitsu_gpu_test_rvs_gpu_config_path }} or
+      {{ rocjitsu_gpu_test_rvs_default_config_path }}. Reinstall
+      rocm-validation-suite, or set rocjitsu_gpu_test_rvs=false to skip the
+      check.
   when:
     - rocjitsu_gpu_test_rvs | bool
     - not rocjitsu_gpu_test_rvs_gpu_config.stat.exists
@@ -453,10 +460,9 @@
 - name: Select the RVS config to run
   ansible.builtin.set_fact:
     rocjitsu_gpu_test_rvs_config_path: >-
-      {{ (rocjitsu_gpu_test_rvs_conf_dir ~ '/' ~ rocjitsu_gpu_test_target ~ '/'
-          ~ rocjitsu_gpu_test_rvs_config_name)
+      {{ rocjitsu_gpu_test_rvs_gpu_config_path
          if rocjitsu_gpu_test_rvs_gpu_config.stat.exists else
-         (rocjitsu_gpu_test_rvs_conf_dir ~ '/' ~ rocjitsu_gpu_test_rvs_config_name) }}
+         rocjitsu_gpu_test_rvs_default_config_path }}
   when: rocjitsu_gpu_test_rvs | bool
 
 - name: Show the selected RVS config
