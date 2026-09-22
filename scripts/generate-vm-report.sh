@@ -135,8 +135,13 @@ hipcc=$(command -v hipcc || ls /opt/rocm*/bin/hipcc /opt/rocm/*/bin/hipcc 2>/dev
 [ -n "${hipcc}" ] || { echo "hipcc unavailable"; exit 0; }
 # || true for the same reason as hipcc above: with no matching tree the loop's
 # last test is what sets the exit status, and pipefail carries it out.
+# TheRock ships the header flat at include/hipfile.h; other ROCm layouts nest
+# it under include/hipfile/. Accept either, as the compile line below and the
+# benchmark's own __has_include already do -- looking only for the nested one
+# reported "unavailable" on a guest that had the SDK installed.
 rocm=$(for d in /opt/rocm /opt/rocm-* /opt/rocm/*; do
-  [ -e "${d}/include/hipfile/hipfile.h" ] && [ -e "${d}/lib/libhipfile.so" ] && echo "${d}"
+  { [ -e "${d}/include/hipfile/hipfile.h" ] || [ -e "${d}/include/hipfile.h" ]; } \
+    && [ -e "${d}/lib/libhipfile.so" ] && echo "${d}"
 done | head -1 || true)
 [ -n "${rocm}" ] || { echo "hipFile headers or library unavailable"; exit 0; }
 dev=$(lsblk -dpno NAME,TYPE | awk '$2=="disk" && $1 ~ /^\/dev\/nvme[0-9]+n[0-9]+$/ { print $1; exit }')

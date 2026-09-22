@@ -6,6 +6,15 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- `bench-compile.yml`, which compiles both `scripts/vm-report/*.hip` files on
+  every pull request that touches them. Until now the only thing that ever
+  compiled them was the rocjitsu report lane, which runs on push to `main` and
+  needs a GPU, a VM and two and a half hours — so a benchmark that was not
+  valid C++ could sit on `main` indefinitely, and did. This lane installs
+  hipcc and the hipFile SDK from the same TheRock stream the guest uses and
+  runs the compile only: no GPU, no VM, and it is path-filtered, so it costs
+  nothing on the PRs that do not touch the benchmarks.
+
 - `--mac ADDR` (`VM_MAC`) on `run-vm` and `gen-vm`, which sets the management
   NIC MAC instead of deriving it from the SSH port. Images built by this
   repo's `gen-vm` do not need it — their netplan matches on interface name —
@@ -196,6 +205,14 @@ All notable changes to this project will be documented in this file.
   directly, so no jump crosses an initialisation. Guard declaration order is
   load-bearing: reverse-destruction order reproduces exactly what the
   `cleanup:` block did. Exit codes and every diagnostic string are unchanged.
+
+- The hipFile benchmark reported "hipFile headers or library unavailable" on a
+  guest that had the SDK installed. `run_rocjitsu_hipfile` probed only for the
+  nested `include/hipfile/hipfile.h`, but TheRock — the stream
+  `vm-rocjitsu.yml` uses — ships the header flat at `include/hipfile.h`, so the
+  probe never matched and the lane exited before producing a `read_gbs`
+  metric. The probe now accepts either layout, as the compile line below it and
+  the benchmark's own `__has_include` already did.
 
 - The management and multicast NICs of one guest were given the same MAC.
   `_mcast_args` derived its address from the SSH port with the same

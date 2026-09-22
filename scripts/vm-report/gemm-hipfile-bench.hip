@@ -208,7 +208,7 @@ int main(int argc, char** argv) {
         bool open = false;
         ~DriverGuard() {
             if (open) {
-                hipFileDriverClose();
+                (void)hipFileDriverClose();
             }
         }
     };
