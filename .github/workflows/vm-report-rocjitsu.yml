@@ -78,7 +78,7 @@ jobs:
       env:
         VM_NAME: rocjitsu-report
         QEMU_TOOL_SRC: /var/lib/qemu-tool/src
-        VM_VCPUS: "2"
+        VM_VCPUS: "4"
         VM_VMEM: "4096"
         VM_SHM_SIZE: "5g"
         VM_NVME: "1"

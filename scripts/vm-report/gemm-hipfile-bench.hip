@@ -202,8 +202,9 @@ int main(int argc, char** argv) {
                 buf_registered ? "yes" : "no");
 
     for (size_t blk = 0; blk < kBlocks; ++blk) {
-        const ssize_t n = hipFileRead(fh, dev, kBlock, static_cast<off_t>(blk * kBlock),
-                                      static_cast<off_t>(blk * kBlock));
+        const ssize_t n = hipFileRead(
+            fh, static_cast<char*>(dev) + blk * kBlock, kBlock,
+            static_cast<off_t>(blk * kBlock), static_cast<off_t>(blk * kBlock));
         if (n != static_cast<ssize_t>(kBlock)) {
             std::fprintf(stderr,
                          "gemm-hipfile-bench: warm hipFileRead block %zu returned %zd of %zu\n",
@@ -215,9 +216,9 @@ int main(int argc, char** argv) {
     const auto read_start = std::chrono::steady_clock::now();
     for (int iter = 0; iter < iters; ++iter) {
         for (size_t blk = 0; blk < kBlocks; ++blk) {
-            const ssize_t n = hipFileRead(fh, dev, kBlock,
-                                          static_cast<off_t>(blk * kBlock),
-                                          static_cast<off_t>(blk * kBlock));
+            const ssize_t n = hipFileRead(
+                fh, static_cast<char*>(dev) + blk * kBlock, kBlock,
+                static_cast<off_t>(blk * kBlock), static_cast<off_t>(blk * kBlock));
             if (n != static_cast<ssize_t>(kBlock)) {
                 std::fprintf(stderr,
                              "gemm-hipfile-bench: hipFileRead block %zu returned %zd of %zu\n",
