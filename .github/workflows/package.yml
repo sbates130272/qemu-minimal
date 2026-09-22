@@ -43,7 +43,12 @@ jobs:
       - name: Install Debian build tools
         run: |
           sudo apt-get update -qq
+          # build-essential is an implicit build dependency of every source
+          # package, so dpkg-checkbuilddeps demands it even for an arch-all
+          # Python package that compiles nothing. The runner image no longer
+          # ships it.
           sudo apt-get install -y -qq \
+            build-essential \
             debhelper dh-python pybuild-plugin-pyproject \
             python3-all python3-setuptools python3-build lintian
 
