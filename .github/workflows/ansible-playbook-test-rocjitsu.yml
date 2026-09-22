@@ -1,25 +1,22 @@
 name: qemu-minimal - ansible-playbook-test-rocjitsu
 
 # vm-rocjitsu: install firmware stubs + driver, boot with the rocjitsu compose
-# stack, load amdgpu via amdgpu-probe.
+# stack, load amdgpu via amdgpu-probe, then run HIP workloads on the result.
 
-# Manual only for now. The pull_request trigger is parked while the focus is on
-# the ionic lane: the last PR run hung in "Load amdgpu via amdgpu-probe" and only
-# died to the job-level timeout-minutes, burning ~125 minutes of a runner per push.
-# Restore the trigger below once the probe hang is fixed.
 on:
   workflow_dispatch:
-  # pull_request:
-  #   branches:
-  #     - main
-  #   paths:
-  #     - 'ansible/playbooks/vm-rocjitsu.yml'
-  #     - 'ansible/requirements.yml'
-  #     - 'qemu/qemu-tool/**'
-  #     - 'qemu/pyproject.toml'
-  #     - 'qemu/compose/vfio-user-rocjitsu-vm/**'
-  #     - '.github/actions/setup-vm-job/action.yml'
-  #     - '.github/workflows/ansible-playbook-test-rocjitsu.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'ansible/playbooks/vm-rocjitsu.yml'
+      - 'ansible/playbooks/roles/**'
+      - 'ansible/requirements.yml'
+      - 'qemu/qemu-tool/**'
+      - 'qemu/pyproject.toml'
+      - 'qemu/compose/vfio-user-rocjitsu-vm/**'
+      - '.github/actions/setup-vm-job/action.yml'
+      - '.github/workflows/ansible-playbook-test-rocjitsu.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -122,11 +119,16 @@ jobs:
         echo "VM failed to boot in time"
         exit 1
 
+    # imu, not rlc_1. Under the default "gap" firmware set the generator emits
+    # only what no driver release ships, and rlc_1 is not in that list -- it
+    # comes from amdgpu-dkms-firmware, which installs to
+    # /lib/firmware/updates/amdgpu/. Asserting the old name at the old path
+    # tests neither the generator nor the package.
     - name: Verify firmware stubs present
       run: |
         ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
           -p 2222 ubuntu@qemu \
-          "test -f /lib/firmware/amdgpu/gc_12_1_0_rlc_1.bin"
+          "test -f /lib/firmware/amdgpu/gc_12_1_0_imu.bin"
         echo "✓ gfx1250 firmware stubs present"
 
     - name: Verify amdgpu-probe installed
@@ -190,6 +192,28 @@ jobs:
           exit 1
         fi
         echo "✓ GPU KFD node present ($gpus)"
+
+    # A bound device is not a working one. This runs vector_add, the four-kernel
+    # private-segment reproducer and an hsa-snoop trace against the live guest,
+    # which is the only place they can run: gen-vm's build VM has no vfio-user
+    # device attached, so the "test" play is tagged never and opted into here.
+    #
+    # timeout-minutes because the reproducer's failure mode is a hang, not an
+    # error -- a scratch-starved dispatch waits forever rather than returning.
+    # The role bounds the guest side with async/poll, but not a wedged ssh
+    # session. Note the dmesg dump sits earlier in the file and so will not fire
+    # for this step; "Show compose logs on failure" below will.
+    - name: Run GPU workloads on the live guest
+      timeout-minutes: 30
+      run: |
+        ansible-playbook \
+          -i "qemu," \
+          ansible/playbooks/vm-rocjitsu.yml \
+          --tags test \
+          -e "ansible_host=qemu" \
+          -e "ansible_port=2222" \
+          -e "ansible_user=ubuntu" \
+          -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"'
 
     - name: Show compose logs on failure
       if: failure()

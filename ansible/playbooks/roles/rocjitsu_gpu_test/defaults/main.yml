@@ -1,0 +1,98 @@
+---
+# Run against a live VM, not during image build: the tests need the rocjitsu
+# vfio-user server to be serving, which only the compose stack arranges.
+#
+#   qemu-tool compose --env-file qemu/.env.rocjitsu \
+#     --stack vfio-user-rocjitsu-vm up -d
+#   ansible-playbook -i <port>, ansible/playbooks/vm-rocjitsu-test.yml
+
+# The emulated device. lspci reports it as "Processing accelerators"; the role
+# fails early on a clear message rather than letting hipcc succeed and the
+# runtime report no agent.
+rocjitsu_gpu_test_pci_id: "1002:75c1"
+
+# Services stopped for the duration of the tests. Each polls the GPU on a
+# timer: amd-metrics-exporter every ~15s, which shows up as a steady drip of
+# "memory partition mode query is not supported" in dmesg, and hsa-snoop's
+# packaged unit scrapes queues for its :9488 exporter. On a real card that is
+# free; here the device is emulated and serves single-threaded, so every poll
+# is taken out of the same thread the dispatch under test is running on.
+# Stopped rather than masked: this is a measurement artifact we are removing,
+# not a service we think is wrong, and a reboot should bring it back.
+#
+# hsa-snoop is still exercised -- see the check below, which runs it in
+# --  <app> mode against a workload it owns, rather than leaving the
+# system-wide collector running underneath every other test.
+#
+# Both hsa-snoop units, not just hsa-snoop.service. The package ships two, and
+# hsa-snoop-prometheus.service -- "hsa-snoop --all --prometheus --ais-snoop" --
+# is the one enabled by default. Nothing here was stopping it, and it holds
+# trace_pipe for its whole life; trace_pipe admits a single reader, so the
+# role's own hsa-snoop died with "Device or resource busy" before tracing
+# anything. It is also why killing the collector by command line appeared not to
+# work: the unit has Restart=on-failure and simply brought it back.
+#
+# It is *not* the cause of the vector_add hangs seen while chasing this, which
+# was the obvious guess and the wrong one -- a run with the unit confirmed
+# stopped hung just the same. That hang is per-boot state: the first test run
+# after a boot passes, a second in the same boot wedges. CI boots a VM and runs
+# this play once, so it does not meet it; local iteration needs the compose
+# stack restarted between runs.
+rocjitsu_gpu_test_stop_services:
+  - amd-metrics-exporter.service
+  - prometheus-node-exporter.service
+  - hsa-snoop.service
+  - hsa-snoop-prometheus.service
+
+# Load amdgpu with the gfx1250 emulation parameters before testing. The module
+# is blacklisted at boot by design -- it must load after the vfio-user server
+# is serving -- so something has to do this, and doing it here keeps the role
+# self-contained. Set false if you have already probed by hand.
+rocjitsu_gpu_test_probe: true
+
+# Where /usr/local/bin/amdgpu-probe is installed by vm-rocjitsu.yml.
+rocjitsu_gpu_test_probe_cmd: /usr/local/bin/amdgpu-probe
+
+# Empty means "ask rocm_agent_enumerator". Pin it only to assert a specific
+# target; a wrong value here produces a code object the device cannot run,
+# which surfaces as a launch failure rather than as a clear error.
+rocjitsu_gpu_test_arch: ""
+
+rocjitsu_gpu_test_workdir: /var/tmp/rocjitsu-gpu-test
+
+# Emulation is slow, so every run is bounded rather than left to hang the play.
+rocjitsu_gpu_test_compile_timeout: 600
+rocjitsu_gpu_test_run_timeout: 600
+
+# Seconds the canonical repro's per-kernel watchdog waits before declaring a
+# hang. A scratch-starved dispatch does not fail, it waits, and
+# hipDeviceSynchronize() never returns -- so it cannot be waited on with an
+# ordinary timeout and the program arms its own thread and _exit()s instead.
+# That is the shape of the bug fixed by raising amdgpu.vramlimit to 1 GiB
+# (see amdgpu-probe in vm-rocjitsu.yml); the watchdog stays as the detector
+# that would catch it coming back.
+rocjitsu_gpu_test_repro_watchdog: 60
+
+rocjitsu_gpu_test_vector_add_n: 4096
+
+# hsa-snoop discovers AQL queues by planting an ftrace kprobe on the KFD's
+# create_queue ioctl, then reads the ring out of the target process with
+# process_vm_readv. Both need root, and the kprobe needs tracefs mounted --
+# neither is a given in a minimal guest, so the check reports what it found
+# rather than assuming.
+#
+# Pinned to a release tag, not the rolling "latest" pre-release: this is baked
+# into a VM image, and "latest" is reassigned on every upstream build, so the
+# same playbook would install different bits on a rebuild and a failure would
+# not be reproducible. Bump deliberately.
+rocjitsu_gpu_test_hsa_snoop: true
+rocjitsu_gpu_test_hsa_snoop_bin: /usr/local/bin/hsa-snoop
+
+# Seconds to let hsa-snoop trace the workload before killing it. This is a
+# wall-clock cost, not just a ceiling: hsa-snoop in "-- <app>" mode does not
+# reliably exit when the app does, so on the runs where it does not, the timeout
+# *is* how long the task takes. vector_add returns in under a second on the
+# emulated device once nothing else is polling the queues, so 600 bought nothing
+# and spent ten minutes of every such run. The role tolerates the resulting
+# rc 124 as long as an AQL queue was observed.
+rocjitsu_gpu_test_hsa_snoop_timeout: 120

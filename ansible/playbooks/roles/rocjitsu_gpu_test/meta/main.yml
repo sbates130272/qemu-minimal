@@ -1,0 +1,18 @@
+---
+galaxy_info:
+  role_name: rocjitsu_gpu_test
+  author: Stephen Bates
+  description: >-
+    Bring amdgpu up against a live rocjitsu vfio-user server and run HIP
+    workloads on the emulated gfx1250, including private-segment (scratch)
+    dispatches, which a low amdgpu.vramlimit starves, and an hsa-snoop trace
+    of a dispatch on the emulated device.
+  license: MIT
+  min_ansible_version: "2.18"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - noble
+        - resolute
+
+dependencies: []

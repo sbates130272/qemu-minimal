@@ -3,6 +3,7 @@
   hosts: all
   gather_facts: true
   become: true
+  tags: [install]
   module_defaults:
     ansible.builtin.uri:
       headers: >-
@@ -41,6 +42,19 @@
     # and the resulting image needs a manual update-initramfs before it works
     # at all. See the task below. Set false to keep the stale initramfs.
     rocjitsu_update_initramfs: "{{ vm_rocjitsu_update_initramfs | default(true) }}"
+    # A release tag, deliberately not the rolling "latest" pre-release: that
+    # tag is reassigned on every upstream build, so baking it into an image
+    # would mean two rebuilds of the same commit install different bits.
+    vm_rocjitsu_hsa_snoop_version: "{{ vm_hsa_snoop_version | default('1.1.1') }}"
+    # "gap" emits only what no driver release ships -- imu, mes, mes1 and
+    # ip_discovery -- alongside the real blobs from amdgpu-dkms-firmware 31.60,
+    # which live a directory up the search order in /lib/firmware/updates/amdgpu
+    # and so are not at risk of being shadowed by anything written here. "full"
+    # stubs the whole set, which is what we did before those blobs existed; it
+    # is still the right answer for a guest on an older driver release, and the
+    # wrong one otherwise, since a stub mec/rlc is strictly worse than the
+    # firmware it stands in for.
+    rocjitsu_firmware_set: "{{ vm_rocjitsu_firmware_set | default('gap') }}"
   pre_tasks:
     - name: Pin ROCm-conflicting Ubuntu universe packages to never-install
       ansible.builtin.copy:
@@ -108,6 +122,47 @@
     - role: sbates130272.batesste.rocm_setup
 
   tasks:
+    # WORKAROUND for sbates130272/batesste-ansible#248. TheRock installs to a
+    # versioned prefix (/opt/rocm/core-10.0), but rocm_setup writes
+    # /etc/ld.so.conf.d/rocm.conf pointing at /opt/rocm/lib and /opt/rocm/lib64
+    # and never adds anything to PATH. Both are absent, so ldconfig resolves no
+    # ROCm libraries and rocminfo is "command not found" despite being
+    # installed. Delete these four tasks once the role derives the prefix.
+    - name: Resolve the ROCm install prefix
+      ansible.builtin.find:
+        paths: /opt/rocm
+        patterns: 'core-*'
+        file_type: directory
+      register: rocjitsu_rocm_prefix_candidates
+
+    - name: Set the ROCm prefix fact
+      ansible.builtin.set_fact:
+        # A lexical sort, which is only correct while there is one core-* to
+        # find. Revisit if a guest ever carries two: core-9.0 sorts after
+        # core-10.0.
+        rocjitsu_rocm_prefix: >-
+          {{ (rocjitsu_rocm_prefix_candidates.files
+              | map(attribute='path') | sort | last)
+             if rocjitsu_rocm_prefix_candidates.files else '/opt/rocm' }}
+
+    - name: Point the linker and PATH at the resolved ROCm prefix
+      ansible.builtin.copy:
+        dest: "{{ item.dest }}"
+        content: "{{ item.content }}"
+        mode: '0644'
+      become: true
+      loop:
+        - dest: /etc/ld.so.conf.d/rocm.conf
+          content: "{{ rocjitsu_rocm_prefix }}/lib\n"
+        - dest: /etc/profile.d/rocm.sh
+          content: "export PATH={{ rocjitsu_rocm_prefix }}/bin:$PATH\n"
+
+    - name: Refresh the linker cache for the new ROCm path
+      ansible.builtin.command:
+        cmd: ldconfig
+      become: true
+      changed_when: false
+
     - name: Purge stale distro ROCm runtime packages
       ansible.builtin.package:
         name:
@@ -142,14 +197,17 @@
     # creates it empty, and the stubs land on the host where the controller
     # cannot see them. docker run still exits 0, so the failure only surfaces
     # much later as a missing gc_12_1_0_rlc_1.bin in the guest.
+    # The generator emits ip_discovery.bin itself unless --no-ip-discovery, so
+    # there is no separate rj-ip-discovery call: running one here only
+    # overwrote what had just been produced.
     - name: Generate gfx1250 firmware stubs on controller via rocjitsu container
       ansible.builtin.shell:
         cmd: >-
           set -o pipefail &&
           docker run --rm --entrypoint /bin/sh
           {{ rocjitsu_image | default('sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20260921.gb3399b3-rocjitsu.8e01a5a') }}
-          -c 'python3 /usr/local/bin/vfio_guest_firmware.py --output /out
-          && rj-ip-discovery gfx1250 /out/ip_discovery.bin >/dev/null
+          -c 'python3 /usr/local/bin/vfio_guest_firmware.py
+          --set {{ rocjitsu_firmware_set }} --output /out
           && tar -cf - -C /out .'
           | tar -xf - -C {{ rj_fw_tmp.path }}
         executable: /bin/bash
@@ -158,9 +216,15 @@
 
     # Guards against the silent-empty-directory failure above: if the stream
     # produced nothing, fail here rather than three tasks later in the guest.
+    #
+    # imu, not rlc_1. The default "gap" set deliberately omits rlc_1 and the
+    # other blobs amdgpu-dkms-firmware ships for real as of 31.60, so asserting
+    # on one of those fails against a working generator. imu is in both sets and
+    # in neither package: the driver opens it whenever fw_load_type is not PSP,
+    # which is exactly the fw_load_type=0 this guest boots with.
     - name: Assert the firmware stubs were generated
       ansible.builtin.stat:
-        path: "{{ rj_fw_tmp.path }}/gc_12_1_0_rlc_1.bin"
+        path: "{{ rj_fw_tmp.path }}/gc_12_1_0_imu.bin"
       register: _rj_fw_stat
       delegate_to: localhost
       become: false
@@ -180,28 +244,53 @@
       delegate_to: localhost
       become: false
 
-    # gc_12_1_0_mes.bin and gc_12_1_0_mes1.bin are requested by the gfx12.1
-    # driver path but not generated by vfio_guest_firmware.py. The uni_mes
-    # stub is a compatible placeholder for these older MES firmware paths.
-    # Not all rocjitsu image versions generate gc_12_1_0_uni_mes.bin, so
-    # guard the copy with a stat check.
-    - name: Check if gc_12_1_0_uni_mes.bin stub exists
+    # The gap set lands *beside* the packaged blobs rather than over them, so
+    # the packaged ones have to actually be there. They arrive with
+    # amdgpu-dkms-firmware, which amdgpu-dkms depends on, so this passes on any
+    # guest whose driver release is 31.60 or newer -- and fails loudly on one
+    # that is older, which is the case --set full exists for. Checking here
+    # rather than letting the driver fail: a missing blob surfaces as a bare
+    # "MES firmware reports incorrect version in ucode binary" or a -2 on
+    # request_firmware, neither of which names the package at fault.
+    #
+    # Note the path: amdgpu-dkms-firmware installs under /lib/firmware/updates/,
+    # not /lib/firmware/. That is deliberate on the package's part -- the kernel
+    # searches updates/ first, so the DKMS blobs win over anything of the same
+    # name in the base tree, including the stubs copied above. Asserting against
+    # /lib/firmware/amdgpu here instead finds only our own stubs, which is how
+    # this check came to pass on a guest carrying debris from an earlier
+    # --set full run and fail on a freshly built one that was entirely correct.
+    #
+    # The list is the package's own, and it does ship mec_1 and rlc. If this
+    # ever needs revisiting, the authoritative answers are the package manifest
+    # and the driver's, not a hand-kept list:
+    #   dpkg -L amdgpu-dkms-firmware | grep -E 'gc_12_1_0|sdma_7_1_0'
+    #   modinfo -F firmware "$(modinfo -n amdgpu)" | grep -E 'gc_12_1_0|sdma_7_1_0'
+    - name: Assert the driver-packaged gfx1250 firmware is present
       ansible.builtin.stat:
-        path: /lib/firmware/amdgpu/gc_12_1_0_uni_mes.bin
-      register: _uni_mes_stat
-      become: true
-
-    - name: Create gc_12_1_0_mes.bin and mes1.bin stubs from uni_mes
-      ansible.builtin.copy:
-        src: /lib/firmware/amdgpu/gc_12_1_0_uni_mes.bin
-        dest: /lib/firmware/amdgpu/{{ item }}
-        remote_src: true
-        mode: '0644'
+        path: /lib/firmware/updates/amdgpu/{{ item }}
+      register: _rj_pkg_fw
       become: true
       loop:
-        - gc_12_1_0_mes.bin
-        - gc_12_1_0_mes1.bin
-      when: _uni_mes_stat.stat.exists
+        - gc_12_1_0_mec.bin
+        - gc_12_1_0_mec_1.bin
+        - gc_12_1_0_rlc.bin
+        - gc_12_1_0_rlc_1.bin
+        - gc_12_1_0_uni_mes.bin
+        - sdma_7_1_0.bin
+      when: rocjitsu_firmware_set == 'gap'
+
+    - name: Fail when the driver-packaged firmware is missing
+      ansible.builtin.fail:
+        msg: >-
+          {{ _rj_pkg_fw.results | rejectattr('stat.exists') | map(attribute='item')
+             | list | join(', ') }} missing from /lib/firmware/updates/amdgpu.
+          These ship in amdgpu-dkms-firmware 31.60 and newer, which the default
+          "gap" firmware set assumes. Either install a 31.60+ driver release, or
+          set rocjitsu_firmware_set=full to stub the whole set as before.
+      when:
+        - rocjitsu_firmware_set == 'gap'
+        - _rj_pkg_fw.results | rejectattr('stat.exists') | list | length > 0
 
     # The initramfs on disk predates both /etc/modprobe.d/amdgpu-blacklist.conf
     # and the stubs copied above, and it contains amdgpu plus the stock
@@ -223,13 +312,9 @@
     # a clean insertion, so it is the default. Set vm_rocjitsu_update_initramfs
     # to false to skip it; "sudo update-initramfs -u" in the guest then gets the
     # same result by hand.
-    - name: Regenerate initramfs so the amdgpu blacklist and stubs take effect
-      ansible.builtin.command:
-        cmd: update-initramfs -u
-      become: true
-      when: rocjitsu_update_initramfs | bool
-      changed_when: true
-
+    # This runs after the DKMS patches below, not here, so the initramfs picks
+    # up the rebuilt module rather than the one shipped by the package.
+    #
     # Patch the amdgpu DKMS source to assume PCIe atomics support when
     # emu_mode=1 is active. The emulated device cannot advertise atomics
     # through the vfio-user PCI capability, but KFD requires them to
@@ -263,7 +348,48 @@
       register: atomics_patch
       changed_when: "'patched /' in atomics_patch.stdout"
 
-    - name: Rebuild DKMS amdgpu module after atomics patch
+    # The rocjitsu device is exposed with rombar=0, so there is no option ROM
+    # and amdgpu_device_init takes the "VBIOS image optional" path, leaving
+    # adev->mode_info.atom_context NULL. amdgpu_ras_init then queries the RAS
+    # capability from the VBIOS, and the atomfirmware helpers it calls
+    # dereference atom_context unconditionally, so the probe oopses in
+    # amdgpu_atom_parse_data_header and takes the guest down. Guard it the same
+    # way amdgpu_ras_get_quirks -- the function immediately above it -- already
+    # guards the same field.
+    - name: Patch RAS VBIOS capability query for a NULL atom_context
+      ansible.builtin.shell:
+        cmd: |
+          python3 - << 'PYEOF'
+          import glob, sys
+          srcs = sorted(glob.glob('/usr/src/amdgpu-*'))
+          if not srcs:
+              print('no amdgpu DKMS source found', file=sys.stderr)
+              sys.exit(1)
+          path = srcs[-1] + '/amd/amdgpu/amdgpu_ras.c'
+          old = ('static void amdgpu_ras_query_ras_capablity_from_vbios('
+                 'struct amdgpu_device *adev)\n{\n\t/* mem_ecc cap */')
+          new = ('static void amdgpu_ras_query_ras_capablity_from_vbios('
+                 'struct amdgpu_device *adev)\n{\n'
+                 '\tif (!adev->mode_info.atom_context)\n\t\treturn;\n\n'
+                 '\t/* mem_ecc cap */')
+          with open(path) as f:
+              content = f.read()
+          if new in content:
+              print('already patched')
+              sys.exit(0)
+          if old not in content:
+              print(f'target string not found in {path}', file=sys.stderr)
+              sys.exit(1)
+          with open(path, 'w') as f:
+              f.write(content.replace(old, new, 1))
+          print(f'patched {path}')
+          PYEOF
+        executable: /bin/bash
+      become: true
+      register: ras_vbios_patch
+      changed_when: "'patched /' in ras_vbios_patch.stdout"
+
+    - name: Rebuild DKMS amdgpu module after source patches
       ansible.builtin.shell:
         cmd: |
           VER=$(dkms status amdgpu | awk -F'[,/]' 'NR==1{gsub(/ /,"",$2); print $2}')
@@ -271,7 +397,14 @@
           dkms install amdgpu/"$VER" -k $(uname -r) --force
         executable: /bin/bash
       become: true
-      when: atomics_patch.changed
+      when: atomics_patch.changed or ras_vbios_patch.changed
+
+    - name: Regenerate initramfs so the amdgpu blacklist and stubs take effect
+      ansible.builtin.command:
+        cmd: update-initramfs -u
+      become: true
+      when: rocjitsu_update_initramfs | bool
+      changed_when: true
 
     - name: Install rocBLAS dev package
       ansible.builtin.package:
@@ -302,10 +435,25 @@
             emu_mode=1
             fw_load_type=0
             discovery=2
-            ip_block_mask=0x3f
+            # Upstream's qemu-vfio.md says 0x3f, which is right for its own
+            # driver: there the compute IP blocks enumerate as common, gmc, ih,
+            # gfx, sdma, mes -- indices 0..5. This DKMS build enumerates an
+            # extra ras_v1_0 at index 5, so mes lands at 6 and 0x3f masks it
+            # off. gfx_v12_1 needs MES to bring the command processor up, and
+            # without it the probe oopses in gfx_v12_1_xcc_cp_resume. Count the
+            # "detected ip block number" lines in dmesg before changing this.
+            ip_block_mask=0x7f
             vm_update_mode=3
             gpu_recovery=0
-            vramlimit=256
+            # 1 GiB, per upstream's qemu-vfio.md. Not a performance knob: it is
+            # the budget ROCr provisions queue scratch from, at the occupancy
+            # the device advertises. A smaller limit runs scratch-free kernels
+            # fine but makes a private-segment dispatch wait forever for an
+            # allocation that never arrives, which is exactly how the bug we
+            # chased presents. Unrelated to vram_aperture_bytes in the rocjitsu
+            # config -- that is the BAR window, and upstream leaves it at
+            # 256 MiB alongside this.
+            vramlimit=1024
           )
 
           # modprobe is a no-op on a resident module: it returns 0 without
@@ -365,3 +513,71 @@
         state: present
         update_cache: true
       become: true
+
+    # hsa-snoop watches AQL and SDMA queues by planting an ftrace kprobe on the
+    # KFD create_queue ioctl. Its own Depends, declared by the package.
+    - name: Install hsa-snoop runtime dependencies
+      ansible.builtin.package:
+        name:
+          - bpftrace
+        state: present
+        update_cache: true
+      become: true
+
+    # Downloaded in the guest rather than on the controller, which is not the
+    # obvious choice: the controller here sits behind a TLS-inspecting proxy
+    # whose CA is not in its trust store, so a GitHub release-asset fetch dies
+    # with "certificate signed by unknown authority" -- while the same fetch
+    # from inside the guest succeeds, as the ROCm install from repo.radeon.com
+    # already demonstrates. Keep it guest-side; moving it to the controller
+    # reintroduces a failure that only shows up on a corporate network.
+    - name: Install hsa-snoop
+      ansible.builtin.apt:
+        deb: >-
+          https://github.com/sbates130272/hsa-snoop/releases/download/v{{ vm_rocjitsu_hsa_snoop_version }}/hsa-snoop_{{ vm_rocjitsu_hsa_snoop_version }}_amd64.deb
+      become: true
+
+    # The package ships a system-wide collector that scrapes queues for its
+    # :9488 exporter. On a real card that is free; against a single-threaded
+    # emulator it competes with the dispatch under test, so it is disabled and
+    # hsa-snoop is instead invoked per-workload by the rocjitsu_gpu_test role.
+    # Disabled rather than masked -- this is a measurement decision, not a
+    # judgement that the unit is wrong.
+    #
+    # BOTH units, and hsa-snoop-prometheus is the one that matters: it is the
+    # unit the package enables by default, and its ExecStart is "hsa-snoop --all
+    # --prometheus --ais-snoop". Disabling only hsa-snoop.service left it running
+    # on every boot, holding trace_pipe -- which admits a single reader -- so the
+    # role's own hsa-snoop died with "Device or resource busy" before tracing
+    # anything. It also has Restart=on-failure, so killing the process without
+    # disabling the unit just brings it back five seconds later; that restart is
+    # what earlier looked like an "orphaned" collector surviving its unit.
+    - name: Disable the hsa-snoop collector services
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        enabled: false
+        state: stopped
+      become: true
+      loop:
+        - hsa-snoop.service
+        - hsa-snoop-prometheus.service
+
+# Tagged "never" so it is skipped by a default run, which is what gen-vm does:
+# that play bakes an image inside a build VM with no vfio-user device attached,
+# so there is no GPU to test at that point. These tests need the compose stack
+# up, and run against the live guest afterwards:
+#
+#   qemu-tool compose --env-file qemu/.env.rocjitsu \
+#     --stack vfio-user-rocjitsu-vm up -d
+#   ansible-playbook -i 127.0.0.1:2230, -u ubuntu \
+#     ansible/playbooks/vm-rocjitsu.yml --tags test
+#
+# Note the trailing comma in -i: it makes the argument an inventory list of one
+# host rather than a path to an inventory file. The port is the *host* side of
+# the compose publish (VM_SSH_PORT), not the 2222 inside the container.
+- name: Run GPU workloads on a live rocjitsu VM
+  hosts: all
+  gather_facts: true
+  tags: [test, never]
+  roles:
+    - role: rocjitsu_gpu_test

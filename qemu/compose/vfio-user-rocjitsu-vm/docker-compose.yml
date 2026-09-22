@@ -45,6 +45,12 @@ services:
     devices:
       - /dev/kvm
     shm_size: "${VM_SHM_SIZE:-8g}"
+    # Passed into the container rather than interpolated into the command, so
+    # the shell can drop --nvme entirely when the setting is unset. run-vm
+    # cannot find the settings file from inside the container, so anything it
+    # needs has to arrive as a flag.
+    environment:
+      VM_NVME: "${VM_NVME:-}"
     ports:
       - "${VM_SSH_PORT:-2222}:2222"
     entrypoint:
@@ -64,7 +70,8 @@ services:
           --vcpus "${VM_VCPUS:-4}" \
           --vmem "${VM_VMEM:-8192}" \
           --ssh-port 2222 \
-          --vfio-userdev "$$socks"
+          --vfio-userdev "$$socks" \
+          $${VM_NVME:+--nvme "$$VM_NVME"}
 
 volumes:
   vfu-sockets:
