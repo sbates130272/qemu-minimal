@@ -449,7 +449,7 @@
   ansible.builtin.set_fact:
     rocjitsu_gpu_test_rvs_visible_gpu_ids: >-
       {{ rocjitsu_gpu_test_rvs_gpus.stdout
-         | regex_findall('GPU\\[\\s*\\d+\\s*-\\s*(\\d+)\\]')
+         | regex_findall('GPU\\[\\s*\\d+\\s*-\\s*([^\\]\\s]+)\\s*\\]')
          | map('string') | map('lower') | unique | list }}
   when: rocjitsu_gpu_test_rvs | bool
 
