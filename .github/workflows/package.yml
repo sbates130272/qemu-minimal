@@ -133,6 +133,12 @@ jobs:
         kvm-group: [absent, present]
     container:
       image: ubuntu:24.04
+    defaults:
+      run:
+        # Explicit, because a container job does not reliably get bash: the
+        # runner fell back to `sh -e` here, which is dash, and dash has no
+        # `set -o pipefail`. Every step below opens with it.
+        shell: bash
     steps:
       - name: Download deb
         uses: actions/download-artifact@v4
@@ -340,6 +346,11 @@ jobs:
     # not find a stack and gen-vm could not find its package manifest.
     container:
       image: python:3.12-slim
+    defaults:
+      run:
+        # Same reason as install-smoke-test: this one happened to get bash,
+        # but nothing guarantees it, and every step here uses pipefail.
+        shell: bash
     steps:
       - name: Download wheel
         uses: actions/download-artifact@v4
