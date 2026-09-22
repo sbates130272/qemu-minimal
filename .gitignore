@@ -52,6 +52,7 @@ qemu/qemu_tool.egg-info/
 # debhelper related
 qemu/debian/python3-qemu-tool/
 qemu/debian/*.debhelper
+qemu/debian/*.substvars
 qemu/debian/debhelper-build-stamp
 qemu/debian/files
 

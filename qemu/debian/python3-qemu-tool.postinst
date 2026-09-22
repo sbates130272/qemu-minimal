@@ -2,9 +2,22 @@
 set -e
 
 if [ "$1" = "configure" ]; then
-    chown root:kvm /var/lib/qemu-tool/images
-    # setgid bit so new files inherit the kvm group
-    chmod 2775 /var/lib/qemu-tool/images
+    # Nothing we depend on guarantees the kvm group: it arrives with udev
+    # rules from a qemu-system package on a real host, but a container or a
+    # minimal install can have none. Failing here would leave the package
+    # half-configured, so hand the admin the fix-up instead.
+    if getent group kvm >/dev/null; then
+        chown root:kvm /var/lib/qemu-tool/images
+        # setgid bit so new files inherit the kvm group
+        chmod 2775 /var/lib/qemu-tool/images
+    else
+        chmod 0755 /var/lib/qemu-tool/images
+        echo "qemu-tool: no 'kvm' group on this system; leaving" >&2
+        echo "  /var/lib/qemu-tool/images owned by root and not group-writable." >&2
+        echo "  Once a kvm group exists, run:" >&2
+        echo "    sudo chown root:kvm /var/lib/qemu-tool/images" >&2
+        echo "    sudo chmod 2775 /var/lib/qemu-tool/images" >&2
+    fi
 
     # Seed the site settings file on first install only. Never overwrite it:
     # this is the copy the admin edits, and qemu-tool reads it on every run.
