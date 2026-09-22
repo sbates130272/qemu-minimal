@@ -6,6 +6,15 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- A repository-owned Pages site under `site/`, so the published `gh-pages`
+  branch is no longer just a generated landing page plus raw report subtrees.
+  The new layout is documentation-first, closer to the ROCm/rocm-ernic site:
+  it adds a styled home page, report index, publishing-flow documentation, and
+  a generated performance-trends page backed by retained badge history on
+  `gh-pages`. `publish-pages.yml` now checks out the repository, stages the
+  site content, seeds the trend renderer from the existing `perf/history.jsonl`
+  record on `gh-pages`, regenerates the badges at `/perf/`, and then syncs the
+  static site content and report artifacts together.
 - `bench-compile.yml`, which compiles both `scripts/vm-report/*.hip` files on
   every pull request that touches them. Until now the only thing that ever
   compiled them was the rocjitsu report lane, which runs on push to `main` and
