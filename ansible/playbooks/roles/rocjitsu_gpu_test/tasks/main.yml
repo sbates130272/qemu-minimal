@@ -1,0 +1,369 @@
+---
+- name: Check the emulated GPU is present on the guest PCI bus
+  ansible.builtin.shell:
+    cmd: "lspci -nn | grep -i '{{ rocjitsu_gpu_test_pci_id }}'"
+    executable: /bin/bash
+  become: true
+  register: rocjitsu_gpu_test_lspci
+  changed_when: false
+  failed_when: rocjitsu_gpu_test_lspci.rc != 0
+
+- name: Show the device
+  ansible.builtin.debug:
+    msg: "{{ rocjitsu_gpu_test_lspci.stdout }}"
+
+- name: Collect the guest's service list
+  ansible.builtin.service_facts:
+
+# Done before the probe, not just before the dispatches: the exporter starts
+# polling as soon as the device appears, so leaving it until later would let it
+# compete with amdgpu's own initialisation.
+#
+# Driven off service_facts rather than looping systemd directly so that a unit
+# which is not installed is simply skipped -- listing a service here is a
+# statement about noise we do not want, not an assertion that it exists.
+- name: Stop services that poll the GPU during the tests
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    state: stopped
+  become: true
+  loop: "{{ rocjitsu_gpu_test_stop_services }}"
+  when: item in ansible_facts.services
+
+# A backstop for a collector started by hand, outside systemd, which the loop
+# above cannot see. It is deliberately *after* that loop and not before it:
+# both packaged units carry Restart=on-failure, so killing the process of a unit
+# that is still running only earns a fresh one five seconds later. Stop the
+# units first, then reap what is left.
+#
+# That restart is worth spelling out, because it is what made this look like a
+# unit-outliving orphan for two rounds of debugging: "systemctl is-active
+# hsa-snoop.service" reported inactive while a hsa-snoop process ran on, so the
+# process appeared to have escaped its unit. It had not. It belonged to
+# hsa-snoop-prometheus.service, a second unit the package ships and enables,
+# which nothing here was stopping -- see rocjitsu_gpu_test_stop_services.
+#
+# Not gated on rocjitsu_gpu_test_hsa_snoop: a collector holds trace_pipe, which
+# admits exactly one reader, and polls queues for its :9488 exporter against a
+# single-threaded emulator -- neither is something we want underneath any of the
+# tests, whether or not this run intends to trace.
+- name: Reap any hsa-snoop collector started outside systemd
+  ansible.builtin.command:
+    cmd: pkill -f '{{ rocjitsu_gpu_test_hsa_snoop_bin }} --all'
+  become: true
+  register: rocjitsu_gpu_test_snoop_reap
+  # rc 1 is "nothing matched", which is the normal case.
+  changed_when: rocjitsu_gpu_test_snoop_reap.rc == 0
+  failed_when: false
+
+# amdgpu-probe is idempotent by design: on a resident module it compares the
+# live parameters against the ones it wants and exits 1 with a diff rather than
+# letting modprobe succeed having changed nothing. Both "loaded it" and
+# "already correct" are rc 0.
+- name: Load amdgpu with the gfx1250 emulation parameters
+  ansible.builtin.command:
+    cmd: "timeout {{ rocjitsu_gpu_test_run_timeout }} {{ rocjitsu_gpu_test_probe_cmd }}"
+  become: true
+  register: rocjitsu_gpu_test_probe_out
+  changed_when: "'already loaded' not in rocjitsu_gpu_test_probe_out.stdout"
+  failed_when: rocjitsu_gpu_test_probe_out.rc != 0
+  when: rocjitsu_gpu_test_probe | bool
+
+# A probe that oopses takes the guest down with it, so this is where a broken
+# driver shows up -- as an unreachable host, not as a task failure.
+- name: Wait for /dev/kfd
+  ansible.builtin.wait_for:
+    path: /dev/kfd
+    state: present
+    timeout: 60
+
+- name: Locate the versioned ROCm prefix
+  ansible.builtin.find:
+    paths: /opt/rocm
+    patterns: 'core-*'
+    file_type: directory
+  register: rocjitsu_gpu_test_prefix_candidates
+
+- name: Set the ROCm prefix
+  ansible.builtin.set_fact:
+    # Same lexical sort as vm-rocjitsu.yml, and the same caveat: correct only
+    # while there is one core-* to find, since core-9.0 sorts after core-10.0.
+    rocjitsu_gpu_test_rocm: >-
+      {{ (rocjitsu_gpu_test_prefix_candidates.files
+          | map(attribute='path') | sort | last)
+         if rocjitsu_gpu_test_prefix_candidates.files else '/opt/rocm' }}
+
+- name: Confirm hipcc is present in that prefix
+  ansible.builtin.stat:
+    path: "{{ rocjitsu_gpu_test_rocm }}/bin/hipcc"
+  register: rocjitsu_gpu_test_hipcc
+
+- name: Fail with a useful message when hipcc is missing
+  ansible.builtin.fail:
+    msg: >-
+      No hipcc at {{ rocjitsu_gpu_test_rocm }}/bin. The guest has no usable
+      ROCm toolchain, so vm-rocjitsu.yml has not run against this image.
+  when: not rocjitsu_gpu_test_hipcc.stat.exists
+
+- name: Enumerate ROCm agents
+  ansible.builtin.command:
+    cmd: "{{ rocjitsu_gpu_test_rocm }}/bin/rocm_agent_enumerator"
+  register: rocjitsu_gpu_test_agents
+  changed_when: false
+
+# gfx000 is the CPU agent and is always listed; a run where it is the only
+# entry means KFD came up without the GPU.
+- name: Determine the target architecture
+  ansible.builtin.set_fact:
+    rocjitsu_gpu_test_target: >-
+      {{ rocjitsu_gpu_test_arch if rocjitsu_gpu_test_arch else
+         (rocjitsu_gpu_test_agents.stdout_lines
+          | reject('match', '^gfx000$') | list | first | default('')) }}
+
+- name: Fail when no GPU agent was enumerated
+  ansible.builtin.fail:
+    msg: >-
+      rocm_agent_enumerator found no GPU agent (saw:
+      {{ rocjitsu_gpu_test_agents.stdout_lines | join(', ') }}). amdgpu loaded
+      but KFD did not attach the device.
+  when: rocjitsu_gpu_test_target | length == 0
+
+- name: Report the target
+  ansible.builtin.debug:
+    msg: "Testing against {{ rocjitsu_gpu_test_target }}"
+
+- name: Create the work directory
+  ansible.builtin.file:
+    path: "{{ rocjitsu_gpu_test_workdir }}"
+    state: directory
+    mode: '0755'
+
+- name: Copy the HIP sources
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "{{ rocjitsu_gpu_test_workdir }}/{{ item }}"
+    mode: '0644'
+  loop:
+    - vector_add.hip
+    - rocjitsu-scratch-repro.hip
+
+- name: Compile vector_add
+  ansible.builtin.command:
+    cmd: >-
+      timeout {{ rocjitsu_gpu_test_compile_timeout }}
+      {{ rocjitsu_gpu_test_rocm }}/bin/hipcc
+      --offload-arch={{ rocjitsu_gpu_test_target }}
+      -o {{ rocjitsu_gpu_test_workdir }}/vector_add
+      {{ rocjitsu_gpu_test_workdir }}/vector_add.hip
+  register: rocjitsu_gpu_test_build_va
+  changed_when: true
+  failed_when: rocjitsu_gpu_test_build_va.rc != 0
+
+- name: Run vector_add
+  ansible.builtin.command:
+    cmd: >-
+      timeout {{ rocjitsu_gpu_test_run_timeout }}
+      {{ rocjitsu_gpu_test_workdir }}/vector_add
+      {{ rocjitsu_gpu_test_vector_add_n }}
+  register: rocjitsu_gpu_test_run_va
+  changed_when: false
+  failed_when: >-
+    rocjitsu_gpu_test_run_va.rc != 0
+    or 'vector-add: PASS' not in rocjitsu_gpu_test_run_va.stdout
+
+- name: Show vector_add output
+  ansible.builtin.debug:
+    msg: "{{ rocjitsu_gpu_test_run_va.stdout_lines }}"
+
+# The canonical reproducer from batesste-ci-images. It is the authoritative
+# scratch test: it carries a scratch-free control kernel compiled the same way,
+# so a failure distinguishes "this device cannot run scratch" from "this device
+# cannot run anything", and it reports the private segment size the compiler
+# actually allocated rather than assuming one.
+#
+# -O2 is not optional. At -O0 the compiler spills the kernel arguments before
+# doing anything else, so every kernel gets a non-zero private segment --
+# including the control -- and the comparison the whole test rests on is gone.
+# The program checks this at runtime and exits 4 rather than misleading us.
+- name: Compile the canonical scratch reproducer
+  ansible.builtin.command:
+    cmd: >-
+      timeout {{ rocjitsu_gpu_test_compile_timeout }}
+      {{ rocjitsu_gpu_test_rocm }}/bin/hipcc -O2
+      --offload-arch={{ rocjitsu_gpu_test_target }}
+      -o {{ rocjitsu_gpu_test_workdir }}/rocjitsu-scratch-repro
+      {{ rocjitsu_gpu_test_workdir }}/rocjitsu-scratch-repro.hip
+  register: rocjitsu_gpu_test_build_repro
+  changed_when: true
+  failed_when: rocjitsu_gpu_test_build_repro.rc != 0
+
+# async/poll rather than a plain command:, and it has to stay that way even
+# though this now passes. If the starvation returns, the program's own
+# watchdog _exit()s but a ROCr thread is left wedged in a KFD ioctl that
+# cannot be interrupted; the process stays a zombie with a live thread, its
+# stdout is never closed, and a command: task blocks on the pipe forever. An
+# outer timeout(1) does not help -- it waits on a child SIGKILL cannot reap.
+# Only async/poll lets Ansible stop holding the pipe and give up on its own
+# clock, which is the difference between a failed play and a hung one.
+- name: Run the canonical scratch reproducer
+  ansible.builtin.command:
+    cmd: >-
+      {{ rocjitsu_gpu_test_workdir }}/rocjitsu-scratch-repro
+      {{ rocjitsu_gpu_test_repro_watchdog }}
+  register: rocjitsu_gpu_test_repro
+  changed_when: false
+  failed_when: false
+  async: "{{ (rocjitsu_gpu_test_repro_watchdog | int) * 2 + 120 }}"
+  poll: 5
+
+- name: Show the reproducer output
+  ansible.builtin.debug:
+    # Parenthesised around the concatenation: a filter binds tighter than +, so
+    # without these the default lands on stderr_lines alone and an empty stderr
+    # appends "(no output captured)" to output that was captured perfectly well.
+    msg: "{{ ((rocjitsu_gpu_test_repro.stdout_lines | default([]))
+              + (rocjitsu_gpu_test_repro.stderr_lines | default([])))
+             | default(['(no output captured)'], true) }}"
+
+# An async job that ran out of clock has no rc at all, so default it to -1
+# rather than letting the lookup raise on an undefined key.
+#
+# Every message below describes a regression, not an expected state: this
+# passed on a 1 GiB vramlimit against rocjitsu 8e01a5a3. If one of these fires,
+# suspect amdgpu.vramlimit first -- confirm with
+# "sudo cat /sys/module/amdgpu/parameters/vramlimit" in the guest, which must
+# read 1024.
+- name: Interpret the reproducer result
+  ansible.builtin.fail:
+    msg: >-
+      {{ {-1: 'The reproducer never returned, so even its own watchdog could
+               not end it. A ROCr thread is wedged in an uninterruptible KFD
+               ioctl and the process cannot be reaped. Restart the whole stack;
+               nothing on this boot will use the GPU again.',
+          1: 'A HIP API call failed outright.',
+          2: 'A scratch kernel HUNG: the dispatch never retired, so the
+              emulator never gave the runtime its scratch. The GPU is now
+              wedged -- restart the stack before testing anything else.',
+          3: 'A scratch kernel returned wrong or untouched results.',
+          4: 'The build is unsuitable (the control kernel also allocated a
+              private segment), so the comparison is meaningless. -O2 did not
+              take effect.'}[rocjitsu_gpu_test_repro.rc | default(-1)]
+         | default('Reproducer exited ' ~ (rocjitsu_gpu_test_repro.rc | default('?'))) }}
+  when: (rocjitsu_gpu_test_repro.rc | default(-1)) != 0
+
+- name: Confirm the scratch path works
+  ansible.builtin.debug:
+    msg: "Scratch dispatches completed correctly; the bug did not reproduce."
+
+- name: Check whether hsa-snoop is installed
+  ansible.builtin.stat:
+    path: "{{ rocjitsu_gpu_test_hsa_snoop_bin }}"
+  register: rocjitsu_gpu_test_snoop_bin
+  when: rocjitsu_gpu_test_hsa_snoop | bool
+
+- name: Fail when hsa-snoop is missing
+  ansible.builtin.fail:
+    msg: >-
+      No hsa-snoop at {{ rocjitsu_gpu_test_hsa_snoop_bin }}. It is installed by
+      vm-rocjitsu.yml, so this image predates that; rebuild it, or set
+      rocjitsu_gpu_test_hsa_snoop=false to skip the check.
+  when:
+    - rocjitsu_gpu_test_hsa_snoop | bool
+    - not rocjitsu_gpu_test_snoop_bin.stat.exists
+
+# hsa-snoop plants its kprobe by writing to /sys/kernel/tracing/kprobe_events,
+# so tracefs has to be mounted before it can discover anything. Mounting it is
+# idempotent and harmless, and doing it here means the check reports on
+# hsa-snoop rather than on a guest that happens not to have run anything
+# tracing-related yet.
+- name: Ensure tracefs is mounted for hsa-snoop's kprobe
+  ansible.builtin.command:
+    cmd: mount -t tracefs tracefs /sys/kernel/tracing
+  become: true
+  register: rocjitsu_gpu_test_tracefs
+  changed_when: rocjitsu_gpu_test_tracefs.rc == 0
+  # Already mounted exits non-zero; that is the good case, not a failure.
+  failed_when: false
+  when: rocjitsu_gpu_test_hsa_snoop | bool
+
+# Run in "-- <app>" mode rather than --all: this asserts that hsa-snoop can
+# see a dispatch on the *emulated* device, which needs a workload it controls
+# the lifetime of. vector_add is the right one -- it is already proven on this
+# device by the task above, so a failure here is hsa-snoop's, not the GPU's.
+#
+# Root for two independent reasons: the kprobe write, and the /proc/<pid>/pagemap
+# walk that resolves ring physical addresses (CAP_SYS_ADMIN).
+- name: Trace a dispatch with hsa-snoop
+  ansible.builtin.command:
+    cmd: >-
+      timeout {{ rocjitsu_gpu_test_hsa_snoop_timeout }}
+      {{ rocjitsu_gpu_test_hsa_snoop_bin }}
+      -- {{ rocjitsu_gpu_test_workdir }}/vector_add
+      {{ rocjitsu_gpu_test_vector_add_n }}
+  become: true
+  register: rocjitsu_gpu_test_snoop
+  changed_when: false
+  failed_when: false
+  when: rocjitsu_gpu_test_hsa_snoop | bool
+
+- name: Show the hsa-snoop output
+  ansible.builtin.debug:
+    msg: "{{ ((rocjitsu_gpu_test_snoop.stdout_lines | default([]))
+              + (rocjitsu_gpu_test_snoop.stderr_lines | default([])))
+             | default(['(no output captured)'], true) }}"
+  when: rocjitsu_gpu_test_hsa_snoop | bool
+
+# The question this task asks is whether hsa-snoop saw an AQL queue on the
+# emulated device, so it judges on the trace output rather than on the exit
+# status. rc is a poor proxy for it in both directions.
+#
+# In particular rc 124 -- our own timeout(1) firing -- is not a failure to
+# trace. hsa-snoop in "-- <app>" mode does not reliably exit when the app does:
+# observed exiting 0 after capturing packets on one run, and still watching at
+# the 600s mark on the next having captured none, with both AQL queues found
+# and printed either way. Treating that as fatal failed a run whose output
+# showed exactly what the check exists to prove, and blamed trace_pipe for it.
+#
+# "kind=aql" is the literal token hsa-snoop prints per discovered queue; it is
+# not prose, so it does not drift with wording changes the way a phrase from the
+# summary line would.
+- name: Determine whether hsa-snoop observed an AQL queue
+  ansible.builtin.set_fact:
+    rocjitsu_gpu_test_snoop_saw_queue: >-
+      {{ 'kind=aql' in (rocjitsu_gpu_test_snoop.stdout | default(''))
+                      ~ (rocjitsu_gpu_test_snoop.stderr | default('')) }}
+  when: rocjitsu_gpu_test_hsa_snoop | bool
+
+- name: Confirm hsa-snoop ran and observed an AQL queue
+  ansible.builtin.fail:
+    msg: >-
+      {{ 'hsa-snoop exited ' ~ rocjitsu_gpu_test_snoop.rc ~ ' having traced
+          nothing. Most likely another reader holds
+          /sys/kernel/tracing/trace_pipe -- it admits only one. Otherwise check
+          that tracefs is mounted and /sys/kernel/tracing/kprobe_events is
+          writable.'
+         if rocjitsu_gpu_test_snoop.rc not in [0, 124]
+         else 'hsa-snoop ran, but reported no AQL queue. The workload did
+               dispatch -- vector_add passed above -- so the KFD create_queue
+               kprobe did not fire, or the ring was not readable.' }}
+  when:
+    - rocjitsu_gpu_test_hsa_snoop | bool
+    - not (rocjitsu_gpu_test_snoop_saw_queue | bool)
+
+# Worth surfacing rather than swallowing: the queues were seen, so the check
+# passes, but hsa-snoop had to be killed and the .pftrace it wrote covers only
+# as much as it managed before that.
+- name: Note that hsa-snoop had to be timed out
+  ansible.builtin.debug:
+    msg: >-
+      hsa-snoop did not exit on its own and was killed after
+      {{ rocjitsu_gpu_test_hsa_snoop_timeout }}s. The AQL queues were observed,
+      so this is not a tracing failure, but the capture is truncated.
+  when:
+    - rocjitsu_gpu_test_hsa_snoop | bool
+    - rocjitsu_gpu_test_snoop.rc == 124
+
+- name: Confirm hsa-snoop works against the emulated GPU
+  ansible.builtin.debug:
+    msg: "hsa-snoop traced a dispatch on the emulated gfx1250."
+  when: rocjitsu_gpu_test_hsa_snoop | bool

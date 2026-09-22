@@ -5,9 +5,9 @@
 # that attaches them as emulated PCIe devices via the vfio-user-pci driver.
 #
 # Usage:
-#   cp env.example .env && $EDITOR .env   # set image tags and VM_IMAGE path
+#   cp qemu/env.example qemu/.env && $EDITOR qemu/.env   # image tags, VM_IMAGES_DIR
 #   qemu-tool gen-vm                      # build VM image if not already done
-#   docker compose up
+#   qemu-tool compose --stack vfio-user-ernic-rocjitsu-vm up
 #   ssh -p ${VM_SSH_PORT:-2222} ubuntu@localhost
 
 x-gpu-common: &gpu-common
@@ -34,7 +34,7 @@ services:
 
   rocjitsu:
     <<: *gpu-common
-    image: "${ROCJITSU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20260918.g7438e48-rocjitsu.20d4ce1}"
+    image: "${ROCJITSU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20260921.gb3399b3-rocjitsu.8e01a5a}"
     deploy:
       replicas: "${ROCJITSU_COUNT:-1}"
     command:
@@ -51,7 +51,7 @@ services:
       start_period: 5s
 
   qemu:
-    image: "${QEMU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260918.g7438e48-qemu11.1.1-vfu.8039244}"
+    image: "${QEMU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260919.g359579e-qemu11.1.1-vfu.8039244}"
     depends_on:
       ernic:
         condition: service_healthy

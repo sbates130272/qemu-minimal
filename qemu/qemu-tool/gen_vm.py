@@ -298,6 +298,19 @@ write_files:
     owner: root:root
     permissions: 0o644
     defer: true
+  - path: /etc/netplan/50-cloud-init.yaml
+    content: |
+      network:
+        version: 2
+        ethernets:
+          qemu-tool-en:
+            match:
+              name: "en*"
+            dhcp4: true
+    owner: root:root
+    permissions: 0o600
+    append: false
+    defer: true
   - path: /home/{cfg.username}/.emacs
     content: |
       ;; enable syntax highlighting
@@ -322,6 +335,14 @@ write_files:
 
 
 def _write_network_config(cfg: VMConfig, out: Path) -> None:
+    # Guests have been observed ignoring this and falling back to cloud-init's
+    # own generated config, which pins the interface to the MAC it saw at
+    # creation time. run-vm derives that MAC from --ssh-port, so changing the
+    # port later leaves the NIC unmanaged with no address and the VM
+    # unreachable. The write_files entry above overwrites the rendered
+    # 50-cloud-init.yaml late in first boot with a name match, which is what
+    # actually takes effect; this file is kept because a guest that does honour
+    # it gets the right config from the start.
     out.write_text("""\
 version: 2
 ethernets:

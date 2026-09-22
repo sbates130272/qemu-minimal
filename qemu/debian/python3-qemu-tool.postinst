@@ -5,4 +5,10 @@ if [ "$1" = "configure" ]; then
     chown root:kvm /var/lib/qemu-tool/images
     # setgid bit so new files inherit the kvm group
     chmod 2775 /var/lib/qemu-tool/images
+
+    # Seed the site settings file on first install only. Never overwrite it:
+    # this is the copy the admin edits, and qemu-tool reads it on every run.
+    if [ ! -e /etc/qemu-tool/env ]; then
+        cp /usr/share/qemu-tool/env.example /etc/qemu-tool/env
+    fi
 fi

@@ -6,7 +6,7 @@
 #
 # Install udev rules that grant the kvm group access to VFIO
 # character devices (/dev/vfio/N and /dev/vfio/devices/vfioN).
-# Required for PCI_HOSTDEV passthrough via run-vm without root.
+# Required for --pci-hostdev passthrough via qemu-tool run-vm without root.
 
 set -e
 

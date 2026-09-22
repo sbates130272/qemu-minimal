@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from .envfile import find as find_env_file
+
 _STACKS = (
     "vfio-user-ernic-vm",
     "vfio-user-rocjitsu-vm",
@@ -40,6 +42,7 @@ def run(
     compose_args: list[str],
     stack: str = _DEFAULT_STACK,
     vm2_name: str | None = None,
+    env_file: Path | None = None,
 ) -> None:
     cdir = _compose_dir(stack)
     env = os.environ.copy()
@@ -51,9 +54,12 @@ def run(
     if images_dir is not None:
         env["VM_IMAGES_DIR"] = str(images_dir.resolve())
     cmd = ["docker", "compose"]
-    caller_env = Path.cwd() / ".env"
-    if caller_env.exists():
-        cmd += ["--env-file", str(caller_env)]
+    # Same search path gen-vm and run-vm use, so one file drives all three.
+    # Without --env-file docker compose would read <stack dir>/.env instead,
+    # which is not where the settings live any more.
+    settings = find_env_file(env_file)
+    if settings is not None:
+        cmd += ["--env-file", str(settings.resolve())]
     cmd += compose_args
     result = subprocess.run(cmd, cwd=cdir, env=env)
     sys.exit(result.returncode)

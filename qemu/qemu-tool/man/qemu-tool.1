@@ -47,6 +47,13 @@ These options are accepted by both
 and
 .BR gen\-vm .
 .TP
+.BI \-\-env\-file " FILE"
+Read settings from
+.IR FILE
+instead of searching the default locations. See
+.B SETTINGS FILE
+below.
+.TP
 .BI \-\-vm\-name " NAME"
 Name of the VM (default:
 .IR qemu-minimal ).
@@ -249,6 +256,13 @@ Default:
 Directory containing VM image files, passed as VM_IMAGES_DIR.
 Default:
 .IR /var/lib/qemu-tool/images .
+.TP
+.BI \-\-env\-file " FILE"
+Settings file handed to
+.BR "docker compose \-\-env\-file" .
+See
+.B SETTINGS FILE
+below.
 .PP
 All remaining arguments are forwarded verbatim to
 .BR "docker compose" .
@@ -318,7 +332,50 @@ or were started by a version predating these markers; restart such a VM for it
 to be identified. Identification is for operator convenience, not a security
 boundary \(em the markers are plain command-line arguments and can be set by
 anyone.
+.SH SETTINGS FILE
+Every
+.B VM_*
+key in the settings file maps to the option of the same name:
+.B VM_VCPUS
+is
+.BR \-\-vcpus ,
+.B VM_IMAGES_DIR
+is
+.BR \-\-images .
+The file uses the docker compose env-file syntax, one
+.I KEY=value
+per line with no shell expansion, because
+.B compose
+hands the same file to
+.BR "docker compose \-\-env\-file" .
+An empty value is ignored.
+.PP
+Values are applied lowest to highest from the built-in defaults, a
+.B \-\-domain
+XML, the settings file, then explicit command-line options, so an option always
+beats the file. One-shot actions
+.RB ( \-\-dry\-run ,
+.BR \-\-force ,
+.BR \-\-restore\-image ,
+.BR \-\-ansible\-only ,
+.BR \-\-nvme\-recreate )
+are deliberately not readable from the file.
+.PP
+The first of these that exists is used:
+.BR \-\-env\-file ,
+.BR $QEMU_TOOL_ENV ,
+.IR ./.env ,
+.IR qemu/.env ,
+.IR /etc/qemu-tool/env .
 .SH FILES
+.TP
+.I /etc/qemu-tool/env
+Site settings file, seeded from
+.I /usr/share/qemu-tool/env.example
+on first install and never overwritten afterwards.
+.TP
+.I /usr/share/qemu-tool/env.example
+Settings template, documenting every key.
 .TP
 .I /var/lib/qemu-tool/images
 Default directory for VM image files.

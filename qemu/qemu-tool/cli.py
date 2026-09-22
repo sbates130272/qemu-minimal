@@ -11,6 +11,7 @@ from .caps import probe_caps
 from .config import VMConfig
 from .compose import _DEFAULT_STACK, _STACKS, run as compose_run
 from .config import _DEFAULT_IMAGES
+from .envfile import load as load_env_file
 from .gen_vm import run as gen_vm_run
 from .libvirt_xml import LibvirtXml
 from .list_vms import run as list_vms_run
@@ -66,6 +67,13 @@ def _shared_parent() -> argparse.ArgumentParser:
         "--kvm", action=argparse.BooleanOptionalAction, default=_UNSET
     )
     p.add_argument("--qemu-path", default=_UNSET, metavar="PATH")
+    p.add_argument(
+        "--env-file",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help="Settings file (see qemu/env.example). Overrides the search path.",
+    )
     p.add_argument(
         "--domain",
         default=None,
@@ -155,6 +163,10 @@ def _add_compose(sub: argparse._SubParsersAction) -> None:
     p.add_argument(
         "--stack", choices=_STACKS, default=_DEFAULT_STACK,
         help=f"Compose stack to use. Default: {_DEFAULT_STACK}.",
+    )
+    p.add_argument(
+        "--env-file", type=Path, default=None, metavar="FILE",
+        help="Settings file (see qemu/env.example). Overrides the search path.",
     )
     p.add_argument(
         "compose_args", nargs=argparse.REMAINDER,
@@ -255,7 +267,8 @@ def _run_vm_cmd(args: argparse.Namespace) -> None:
 
 def _compose_cmd(args: argparse.Namespace) -> None:
     compose_run(args.vm_name, args.images, args.compose_args,
-                stack=args.stack, vm2_name=args.vm2_name)
+                stack=args.stack, vm2_name=args.vm2_name,
+                env_file=args.env_file)
 
 
 def _list_cmd(args: argparse.Namespace) -> None:
@@ -278,7 +291,11 @@ def _build_config(args: argparse.Namespace, subcommand: str) -> VMConfig:
         xml_cfg = VMConfig()
 
     cli_overrides = _extract_cli_overrides(args, subcommand)
-    cfg = _merge(xml_cfg, cli_overrides)
+    # Lowest to highest: dataclass defaults, --domain XML, env file, CLI flags.
+    # The env file outranks the XML because it is the user's own standing
+    # configuration, where the XML is a description of somebody else's domain.
+    cfg = _merge(xml_cfg, load_env_file(args.env_file))
+    cfg = _merge(cfg, cli_overrides)
     if "," in cfg.vm_name:
         # A comma terminates a qemu option value, so it corrupts -name, -uuid,
         # -drive file= and -chardev path= alike.

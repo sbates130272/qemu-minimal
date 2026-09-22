@@ -6,6 +6,21 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- `rocjitsu_gpu_test`, a repo-local role that runs HIP workloads against a live
+  rocjitsu vfio-user server: a scratch-free `vector_add`, a four-kernel
+  private-segment repro, and an `hsa-snoop` trace of a dispatch on the emulated
+  device. It runs from `vm-rocjitsu-test.yml` against a booted guest rather
+  than at image build, because the server has to be serving. The repro carries
+  a per-kernel watchdog and is run with `async`/`poll`: a scratch-starved
+  dispatch hangs rather than failing, and the wedged ROCr thread leaves an
+  unreapable zombie whose stdout never closes, which blocks a plain `command:`
+  forever regardless of `timeout(1)`.
+- hsa-snoop 1.1.1 in the rocjitsu guest image, with `bpftrace`. Pinned to a
+  release tag rather than the rolling `latest` pre-release, so two builds of
+  the same commit install the same bits. The packaged system-wide collector is
+  disabled: it polls queues for its `:9488` exporter, which is free on real
+  hardware but competes with the workload on a device that serves
+  single-threaded. The test role invokes hsa-snoop per-workload instead.
 - `ionic_image_prep`, a repo-local Ansible role that prepares a guest image for
   rocm-ernic's ionic mode: a pinned mainline kernel from `kernel.ubuntu.com`,
   the DKMS and rdma-core toolchain, the `1dd8:100a` `pci.ids` entry, the
@@ -17,6 +32,17 @@ All notable changes to this project will be documented in this file.
   the runner rather than fixed, with a floor of 4 vCPUs per guest.
 - `ansible/playbooks/vars/ernic-pins.yml`: the mainline kernel ref and the
   rocm-ernic source commit, each written once and read by both plays.
+- `qemu/env.example`, one settings template for the whole tool, replacing the
+  four per-stack `env.example` files. Copy it to `qemu/.env`; `gen-vm`,
+  `run-vm` and `compose` all read that one file. Every `VM_*` key maps to the
+  flag of the same name, so `VM_VCPUS` is `--vcpus` and `VM_IMAGES_DIR` is
+  `--images`, and the file is searched for at `--env-file`, `$QEMU_TOOL_ENV`,
+  `./.env`, `qemu/.env`, then `/etc/qemu-tool/env`. Values apply lowest to
+  highest from the defaults, a `--domain` XML, the file, then explicit flags,
+  so a flag always beats the file. One-shot actions (`--dry-run`, `--force`,
+  `--restore-image`, `--ansible-only`, `--nvme-recreate`) are deliberately not
+  readable from it.
+- `--env-file` on `gen-vm`, `run-vm` and `compose`.
 
 ### Changed
 
@@ -31,22 +57,135 @@ All notable changes to this project will be documented in this file.
 - `requirements.yml` pins the rocm-ernic collection to an upstream git SHA.
   Galaxy publishes only 0.1.0, which is the pre-ionic collection, so the
   previous `>=0.1.0` could never have resolved to 0.2.0.
-- The rocm-ernic server image moves to the `20260919.g959f0cf` build
-  (`ernic.6ca9a46` → `ernic.0b48aa1`). The libvfio-user revision is unchanged
-  at `vfu.8039244`, so it stays matched to the qemu and rocjitsu images, which
-  are not moved.
+- Container images move off the previous pins: rocm-ernic to
+  `20260919.g959f0cf` (`ernic.6ca9a46` → `ernic.0b48aa1`), qemu to
+  `20260919.g359579e`, and rocjitsu to `20260921.gb3399b3-rocjitsu.8e01a5a`
+  (`rocjitsu.20d4ce1` → `rocjitsu.2d8a73f` → `rocjitsu.8e01a5a`).
+
+  rocjitsu is built from rocm-systems `develop` at
+  `8e01a5a3fbee92f2b570dde97f314000d5226327`, which is where the vfio-pci work
+  landed — 14 commits ahead of the previous pin under `emulation/rocjitsu`,
+  including the `vram_store.cpp` 16-bit `atomic_load` and `compare_exchange`
+  fixes. Note that rocjitsu and qemu no longer share a CI build sha. That is
+  fine and deliberate: they only have to agree on libvfio-user, which is
+  unchanged at `vfu.8039244`. Do not "fix" the mismatch by rebuilding qemu
+  unless libvfio-user itself moves.
+- `spell-check` runs `codespell` instead of `pyspelling`/aspell. codespell
+  matches a fixed list of known misspellings rather than validating every word
+  against a dictionary, so the 441-entry `.wordlist.txt` is gone: hostnames,
+  flags, image tags and hex fragments are no longer words anyone has to
+  allow-list. Configuration is `.codespellrc`, and the workflow runs a bare
+  `codespell` so a local run is the same command. It also covers the whole
+  tree, not just `**/*.md`.
 - ernic guests now get 4 vCPUs. `ionic_lif_size()` derives its EQ count from
   `num_online_cpus()` and `ionic_create_rdma_admin()` rejects fewer than
   `IONIC_EQ_COUNT_MIN`, so at 2 vCPUs `ionic_rdma` could never probe.
 
 ### Fixed
 
+- `vm-rocjitsu.yml` no longer stubs over the real gfx1250 firmware.
+  `vfio_guest_firmware.py` changed contract: its default output is now the
+  "gap" set -- `gc_12_1_0_imu.bin`, `gc_12_1_0_mes.bin`, `gc_12_1_0_mes1.bin`
+  and `ip_discovery.bin`, the files no driver release ships -- which lands
+  beside the packaged blobs instead of over them. As of amdgpu 31.60,
+  `amdgpu-dkms-firmware` ships real `gc_12_1_0_mec.bin`,
+  `gc_12_1_0_mec_1.bin`, `gc_12_1_0_rlc.bin`, `gc_12_1_0_rlc_1.bin`,
+  `gc_12_1_0_uni_mes.bin` and `sdma_7_1_0.bin`, and `amdgpu-dkms` depends on
+  it. That, plus `imu` from the generator, covers what upstream's
+  `docs/qemu-vfio.md` calls for.
+
+  Those blobs install under `/lib/firmware/updates/amdgpu/`, not
+  `/lib/firmware/amdgpu/`. The kernel searches `updates/` first, so they take
+  precedence over anything of the same name written into the base tree — which
+  is why the gap set is safe to copy in alongside them.
+
+  The playbook asserted on `gc_12_1_0_rlc_1.bin`, now deliberately absent, so a
+  working generator failed the build. It asserts on `imu` instead, which is in
+  both sets and in neither package. The separate `rj-ip-discovery` call is gone
+  — the generator emits `ip_discovery.bin` itself, so that call overwrote what
+  had just been produced. The `uni_mes` → `mes`/`mes1` copy is gone too, and
+  had become actively wrong: it overwrote the generator's real `mes`/`mes1`
+  stubs with the packaged `uni_mes` blob. A new guest-side check names any
+  missing packaged blob, because the driver otherwise reports only `MES
+  firmware reports incorrect version in ucode binary` or a bare `-2`. Set
+  `vm_rocjitsu_firmware_set=full` for a guest on a pre-31.60 driver release.
+
+  That check initially looked in `/lib/firmware/amdgpu/`, where it found only
+  the stubs an earlier `--set full` run had left behind. It therefore passed on
+  a guest carrying stale debris and failed on a freshly built one that was
+  entirely correct. It now checks `/lib/firmware/updates/amdgpu/`, against the
+  package's own file list.
+- HIP kernels with a private segment (scratch) now complete on the emulated
+  gfx1250 instead of hanging forever. `amdgpu-probe` passed
+  `amdgpu.vramlimit=256`; upstream's `qemu-vfio.md` says 1024, and it is not a
+  performance knob. ROCr provisions queue scratch out of that budget at the
+  occupancy the device advertises, so a kernel with no private segment is
+  unaffected — `vector_add` always passed in under a second — while one with a
+  private segment waits on an allocation that never arrives. The dispatch never
+  fails, so `hipDeviceSynchronize()` simply does not return and no ordinary
+  timeout catches it; the wedged ROCr thread then sits in an uninterruptible
+  KFD ioctl holding a KFD mutex for the rest of the boot, so only the first
+  such result in a boot means anything.
+
+  This is independent of `vram_aperture_bytes` in the rocjitsu config, which is
+  the BAR window — upstream leaves that at 256 MiB alongside a 1 GiB
+  `vramlimit`. Conflating the two sent this investigation down a dead end for
+  some time, so it is worth stating plainly. The A/B is clean: the same server
+  build, with only `vramlimit` changed, hangs at 256 and passes all four repro
+  kernels at 1024.
+- `amdgpu` now probes on the rocjitsu emulated device instead of oopsing the
+  guest. Two independent faults, both of which took the machine down hard
+  enough that `sudo amdgpu-probe` returned only `Killed`:
+  - The device is exposed with `rombar=0`, so there is no option ROM and
+    `amdgpu_device_init` takes its "VBIOS image optional" path, leaving
+    `adev->mode_info.atom_context` NULL. `amdgpu_ras_init` then queries the RAS
+    capability from the VBIOS and the atomfirmware helpers dereference that
+    field unguarded, oopsing in `amdgpu_atom_parse_data_header`.
+    `vm-rocjitsu.yml` now patches the DKMS source to return early when
+    `atom_context` is NULL, matching the guard `amdgpu_ras_get_quirks` already
+    has on the same field one function above.
+  - `amdgpu-probe` passed `ip_block_mask=0x3f`, taken from upstream's
+    `qemu-vfio.md`. That is correct for upstream's driver, where the compute IP
+    blocks enumerate as indices 0..5 ending in `mes`; this DKMS build
+    enumerates an extra `ras_v1_0` at index 5, so `mes_v12_1` lands at 6 and
+    `0x3f` masks it off. `gfx_v12_1` needs MES to resume the command processor,
+    so the probe oopsed in `gfx_v12_1_xcc_cp_resume`. Now `0x7f`.
+
+  With both applied the probe completes, `/dev/kfd` appears, and `rocminfo`
+  reports `gfx1250` with 32 CUs.
+- `gen-vm` guests no longer lose networking when `--ssh-port` changes. The
+  guest MAC is derived from the SSH port, and guests were ignoring the seed's
+  `network-config` and falling back to cloud-init's own, which pins the
+  interface to the MAC seen at creation time. Booting the same image on a
+  different port then left the NIC `unmanaged` with no address: slirp's
+  `hostfwd` still completed the TCP handshake, so SSH reported `Connection
+  timed out during banner exchange` rather than `refused`, and `gen-vm`
+  `--ansible-only` sat in `_wait_for_ssh` for its full 600 s without ever
+  reaching the playbook. First boot now overwrites the rendered
+  `/etc/netplan/50-cloud-init.yaml` with a `name: "en*"` match, so the MAC
+  stops being load-bearing. Existing images keep the old pin; regenerate, or
+  repoint netplan in the guest.
+- `vm-rocjitsu.yml` now resolves the ROCm install prefix and writes
+  `/etc/ld.so.conf.d/rocm.conf` and `/etc/profile.d/rocm.sh` against it.
+  TheRock installs to a versioned `/opt/rocm/core-10.0`, but `rocm_setup`
+  hardcodes the pre-TheRock `/opt/rocm/lib` and never sets `PATH`, so the
+  linker resolved no ROCm libraries (`ldconfig -p | grep -c hsa-runtime` was 0)
+  and `rocminfo` was `command not found` despite being installed. Apt then
+  helpfully offers the universe 5.2.3 package, which the play already pins to
+  priority `-1`. This is a workaround for
+  [batesste-ansible#248](https://github.com/sbates130272/batesste-ansible/issues/248)
+  and should be dropped once the role derives the prefix itself.
 - The ernic configure play supplies `ernic_guest_vm_ip`, which
   `ernic_guest_setup` asserts on and defaults to empty. Derived as
   `192.168.200.<10 * vm_index>`, matching upstream `vm-register.yml`.
 - `ernic_source_repo_version` is pinned to the same commit as the collection.
   It defaults to `main`, so the sources built in the guest could come from a
   different tree than the roles building them.
+- `ansible-playbook-test-ernic` now triggers on `ansible/playbooks/roles/**`
+  and `vars/ernic-pins.yml`. Both are inputs to `vm-ernic.yml`, but neither was
+  in the workflow's `paths`, so a change to `ionic_image_prep` or to the kernel
+  and source pins reported all checks green without the ernic lane having run
+  at all.
 - `ionic_image_prep` no longer corrupts `pci.ids`. hwdata already lists
   `1dd8:100a` (as `DSC Serial Port Controller` — the emulated NIC reuses a real
   pair), and the presence check grepped for our own entry text, so it never
@@ -55,6 +194,16 @@ All notable changes to this project will be documented in this file.
   bus. The check is now a block-scoped `awk` scan for the device under its
   vendor, and a post-merge `lspci` parse check fails the play if a merge ever
   does break the file.
+
+### Removed
+
+- `qemu/gen-vm` and `qemu/run-vm`. `qemu-tool gen-vm` and `qemu-tool run-vm`
+  have been the maintained path for some time and the two bash scripts had
+  drifted; keeping both meant every flag had to be added twice. `shell-check`
+  now lints only the two `libvirt/` scripts.
+- The four per-stack `qemu/compose/*/env.example` files, superseded by
+  `qemu/env.example`.
+- The `smoke-test` workflow, which drove the removed bash scripts.
 
 ## [v1.3.0] - 2026-09-15
 
