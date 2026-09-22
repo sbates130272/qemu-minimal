@@ -177,6 +177,18 @@ EOF
   } 2>&1
 }
 
+# Unlike the two benches above this one has no source to compile here: the
+# guest script builds fio itself and prints the metric, so all this does is
+# stage it and run it.
+run_hipfile_fio() {
+  if ! copy_to_guest "${VM_REPORT_BENCH_DIR}/fio-hipfile-bench.sh" /tmp/fio-hipfile-bench.sh; then
+    echo "fio-hipfile-bench upload failed"
+    return 1
+  fi
+
+  { $SSH "bash /tmp/fio-hipfile-bench.sh"; } 2>&1
+}
+
 KERNEL=$(collect "uname -r")
 PROC_VER=$(collect "cat /proc/version")
 CPU_INFO=$(collect "lscpu | grep -E '^CPU\(s\)|^Model name|^Thread|^Core|^Socket'")
@@ -228,6 +240,23 @@ if [ "${REPORT_ROCJITSU_BENCH:-0}" = "1" ]; then
     exit 1
   }
   ROCJITSU_HIPFILE_DISPLAY=$(scale_metric "${ROCJITSU_HIPFILE_GBS}" "B/s")
+fi
+
+HIPFILE_FIO_OUTPUT=""
+HIPFILE_FIO_GBS=""
+HIPFILE_FIO_DISPLAY=""
+if [ "${REPORT_HIPFILE_FIO_BENCH:-0}" = "1" ]; then
+  if ! HIPFILE_FIO_OUTPUT=$(run_hipfile_fio); then
+    bench_failed "hipFile fio benchmark" "${HIPFILE_FIO_OUTPUT}"
+  fi
+  HIPFILE_FIO_GBS=$(printf '%s\n' "${HIPFILE_FIO_OUTPUT}" \
+    | sed -n 's/.*read_gbs=\([0-9.eE+-]*\).*/\1/p' | tail -1)
+  [ -n "${HIPFILE_FIO_GBS}" ] || {
+    printf '%s\n' "${HIPFILE_FIO_OUTPUT}"
+    echo "hipFile fio benchmark produced no read_gbs metric" >&2
+    exit 1
+  }
+  HIPFILE_FIO_DISPLAY=$(scale_metric "${HIPFILE_FIO_GBS}" "B/s")
 fi
 
 mkdir -p "${OUTDIR}"
@@ -370,11 +399,37 @@ ${ROCJITSU_HIPFILE_OUTPUT:-not run}
 \`\`\`
 ROCJITSU
 fi)
+$(if [ "${REPORT_HIPFILE_FIO_BENCH:-0}" = "1" ]; then cat <<HIPFILEFIO
+
+## hipFile fio Benchmark
+
+| Metric | Value |
+|---|---|
+| fio libhipfile read throughput | ${HIPFILE_FIO_DISPLAY:-n/a} |
+
+This is fio's own \`libhipfile\` ioengine reading from the guest NVMe straight
+into VRAM, rather than the hand-written benchmark the rocjitsu report uses. fio
+is built in the guest from a pinned master commit, because the engine is not in
+any fio release tag. Same caveat as the other lanes: the GPU is emulated over
+vfio-user, so watch the trend between runs rather than the absolute number.
+
+### fio output
+
+\`\`\`
+${HIPFILE_FIO_OUTPUT:-not run}
+\`\`\`
+HIPFILEFIO
+fi)
 MD
 
 if [ "${REPORT_ROCJITSU_BENCH:-0}" = "1" ]; then
   write_badge_json "${OUTDIR}/badge-gemm.json" gemm "${ROCJITSU_GEMM_DISPLAY}" "ED1C24"
   write_badge_json "${OUTDIR}/badge-hipfile.json" hipfile "${ROCJITSU_HIPFILE_DISPLAY}" "76B900"
+fi
+
+if [ "${REPORT_HIPFILE_FIO_BENCH:-0}" = "1" ]; then
+  write_badge_json "${OUTDIR}/badge-hipfile-fio.json" "hipfile fio" \
+    "${HIPFILE_FIO_DISPLAY}" "0071C5"
 fi
 
 echo "Report written to ${OUTDIR}/index.md"
