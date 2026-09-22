@@ -20,6 +20,7 @@ on:
   workflow_run:
     workflows:
       - qemu-minimal - vm-report
+      - qemu-minimal - vm-report-rocjitsu
       - qemu-minimal - vm-report-two-vms
     types:
       - completed
@@ -79,6 +80,7 @@ jobs:
           }
 
           fetch vm-report-1vm 1vm
+          fetch vm-report-rocjitsu rocjitsu
           fetch vm-report-2vm two-vm
 
           # generate-vm-report.sh writes a _config.yml wherever it thinks it is
@@ -114,6 +116,7 @@ jobs:
           | Report | Lane | What it covers |
           |---|---|---|
           | [Single VM](1vm/) | `vm-report` | One `gen-vm` guest with an NVMe device, booted on a GitHub-hosted runner. |
+          | [rocjitsu VM](rocjitsu/) | `vm-report-rocjitsu` | One rocjitsu vfio-user guest with GEMM and hipFile/NVMe metrics. |
           | [Two VMs — VM 1](two-vm/) | `vm-report-two-vms` | The `vfio-user-ernic-2vm` compose stack, both guests with a rocjitsu GPU. |
           | [Two VMs — VM 2](two-vm/vm2/) | `vm-report-two-vms` | The second guest of the same stack. |
 
