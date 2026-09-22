@@ -426,6 +426,14 @@
     msg: "{{ rocjitsu_gpu_test_rvs_gpus.stdout_lines }}"
   when: rocjitsu_gpu_test_rvs | bool
 
+- name: Derive the GPU ids or indexes RVS reported
+  ansible.builtin.set_fact:
+    rocjitsu_gpu_test_rvs_visible_gpus: >-
+      {{ rocjitsu_gpu_test_rvs_gpus.stdout
+         | regex_findall('(?im)\\b(?:gpu(?:[_ -]id|[_ -]index)?|index)\\D*(\\d+)')
+         | map('string') | unique | list }}
+  when: rocjitsu_gpu_test_rvs | bool
+
 - name: Fail when RVS GPU enumeration times out
   ansible.builtin.fail:
     msg: >-
@@ -538,7 +546,17 @@
         (
           item.device is sequence
           and item.device is not string
-          and (item.device | difference(['all']) | length) == 0
+          and (
+            (item.device | map('string') | list | difference(['all']) | length) == 0
+            or
+            (
+              (rocjitsu_gpu_test_rvs_visible_gpus | length) > 0
+              and (item.device | map('string') | list
+                   | difference(rocjitsu_gpu_test_rvs_visible_gpus) | length) == 0
+              and (rocjitsu_gpu_test_rvs_visible_gpus
+                   | difference(item.device | map('string') | list) | length) == 0
+            )
+          )
         )
     fail_msg: >-
       Falling back to generic RVS config
