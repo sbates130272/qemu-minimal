@@ -83,20 +83,32 @@ int main(int argc, char** argv) {
 
     float *da = nullptr, *db = nullptr, *dc = nullptr;
     int exit_code = 0;
-    HIP_CHECK(hipMalloc(&da, ha.size() * sizeof(float)));
-    HIP_CHECK(hipMalloc(&db, hb.size() * sizeof(float)));
-    HIP_CHECK(hipMalloc(&dc, hc.size() * sizeof(float)));
-    HIP_CHECK(hipMemcpy(da, ha.data(), ha.size() * sizeof(float), hipMemcpyHostToDevice));
-    HIP_CHECK(hipMemcpy(db, hb.data(), hb.size() * sizeof(float), hipMemcpyHostToDevice));
+    auto hip_ok = [&](hipError_t err, const char* expr) {
+        if (err != hipSuccess) {
+            std::fprintf(stderr, "sgemm-bench: %s failed: %s\n", expr,
+                         hipGetErrorString(err));
+            exit_code = 1;
+            return false;
+        }
+        return true;
+    };
+    if (!hip_ok(hipMalloc(&da, ha.size() * sizeof(float)), "hipMalloc(&da, ha.size() * sizeof(float))")) goto cleanup;
+    if (!hip_ok(hipMalloc(&db, hb.size() * sizeof(float)), "hipMalloc(&db, hb.size() * sizeof(float))")) goto cleanup;
+    if (!hip_ok(hipMalloc(&dc, hc.size() * sizeof(float)), "hipMalloc(&dc, hc.size() * sizeof(float))")) goto cleanup;
+    if (!hip_ok(hipMemcpy(da, ha.data(), ha.size() * sizeof(float), hipMemcpyHostToDevice),
+                "hipMemcpy(da, ha.data(), ha.size() * sizeof(float), hipMemcpyHostToDevice)")) goto cleanup;
+    if (!hip_ok(hipMemcpy(db, hb.data(), hb.size() * sizeof(float), hipMemcpyHostToDevice),
+                "hipMemcpy(db, hb.data(), hb.size() * sizeof(float), hipMemcpyHostToDevice)")) goto cleanup;
 
     const dim3 block(16, 16);
     const dim3 grid((kN + block.x - 1) / block.x, (kM + block.y - 1) / block.y);
     std::printf("sgemm-bench: m=%d n=%d k=%d\n", kM, kN, kK);
 
     hipLaunchKernelGGL(sgemm, grid, block, 0, 0, da, db, dc, kM, kN, kK);
-    HIP_CHECK(hipGetLastError());
-    HIP_CHECK(hipDeviceSynchronize());
-    HIP_CHECK(hipMemcpy(hc.data(), dc, hc.size() * sizeof(float), hipMemcpyDeviceToHost));
+    if (!hip_ok(hipGetLastError(), "hipGetLastError()")) goto cleanup;
+    if (!hip_ok(hipDeviceSynchronize(), "hipDeviceSynchronize()")) goto cleanup;
+    if (!hip_ok(hipMemcpy(hc.data(), dc, hc.size() * sizeof(float), hipMemcpyDeviceToHost),
+                "hipMemcpy(hc.data(), dc, hc.size() * sizeof(float), hipMemcpyDeviceToHost)")) goto cleanup;
 
     double max_abs_error = 0.0;
     long failures = 0;
@@ -130,9 +142,9 @@ int main(int argc, char** argv) {
     const auto start = std::chrono::steady_clock::now();
     for (int i = 0; i < iters; ++i) {
         hipLaunchKernelGGL(sgemm, grid, block, 0, 0, da, db, dc, kM, kN, kK);
-        HIP_CHECK(hipGetLastError());
+        if (!hip_ok(hipGetLastError(), "hipGetLastError()")) goto cleanup;
     }
-    HIP_CHECK(hipDeviceSynchronize());
+    if (!hip_ok(hipDeviceSynchronize(), "hipDeviceSynchronize()")) goto cleanup;
     const auto stop = std::chrono::steady_clock::now();
 
     const double seconds =

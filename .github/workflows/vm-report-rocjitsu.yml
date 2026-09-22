@@ -129,7 +129,7 @@ jobs:
     - name: Generate rocjitsu report
       env:
         REPORT_ROCJITSU_BENCH: "1"
-      run: bash scripts/generate-vm-report.sh site 2222 ubuntu "rocjitsu VM" qemu
+      run: bash scripts/generate-vm-report.sh site/rocjitsu 2222 ubuntu "rocjitsu VM" qemu
 
     - name: Show compose logs on failure
       if: failure()
@@ -140,5 +140,5 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: vm-report-rocjitsu
-        path: site/
+        path: site/rocjitsu/
         if-no-files-found: error

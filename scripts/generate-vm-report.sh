@@ -136,10 +136,16 @@ ROCJITSU_GEMM_GFLOPS=""
 ROCJITSU_HIPFILE_OUTPUT=""
 ROCJITSU_HIPFILE_GBS=""
 if [ "${REPORT_ROCJITSU_BENCH:-0}" = "1" ]; then
-  ROCJITSU_GEMM_OUTPUT=$(run_rocjitsu_gemm)
+  if ! ROCJITSU_GEMM_OUTPUT=$(run_rocjitsu_gemm); then
+    printf '%s\n' "${ROCJITSU_GEMM_OUTPUT}"
+    exit 1
+  fi
   ROCJITSU_GEMM_GFLOPS=$(printf '%s\n' "${ROCJITSU_GEMM_OUTPUT}" \
     | sed -n 's/.*gflops=\([0-9.eE+-]*\).*/\1/p' | tail -1)
-  ROCJITSU_HIPFILE_OUTPUT=$(run_rocjitsu_hipfile)
+  if ! ROCJITSU_HIPFILE_OUTPUT=$(run_rocjitsu_hipfile); then
+    printf '%s\n' "${ROCJITSU_HIPFILE_OUTPUT}"
+    exit 1
+  fi
   ROCJITSU_HIPFILE_GBS=$(printf '%s\n' "${ROCJITSU_HIPFILE_OUTPUT}" \
     | sed -n 's/.*read_gbs=\([0-9.eE+-]*\).*/\1/p' | tail -1)
 fi
