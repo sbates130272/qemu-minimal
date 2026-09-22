@@ -486,11 +486,19 @@
   environment: "{{ rocjitsu_gpu_test_rvs_env }}"
   when: rocjitsu_gpu_test_rvs | bool
 
+- name: Collect the RVS smoke-check output lines
+  ansible.builtin.set_fact:
+    rocjitsu_gpu_test_rvs_run_output_lines: >-
+      {{ (rocjitsu_gpu_test_rvs_run.stdout_lines | default([]))
+         + (rocjitsu_gpu_test_rvs_run.stderr_lines | default([])) }}
+  when: rocjitsu_gpu_test_rvs | bool
+
 - name: Show the RVS smoke-check output
   ansible.builtin.debug:
-    msg: "{{ ((rocjitsu_gpu_test_rvs_run.stdout_lines | default([]))
-              + (rocjitsu_gpu_test_rvs_run.stderr_lines | default([])))
-             | default(['(no output captured)'], true) }}"
+    msg: >-
+      {{ rocjitsu_gpu_test_rvs_run_output_lines
+         if (rocjitsu_gpu_test_rvs_run_output_lines | length) > 0
+         else ['(no output captured)'] }}
   when: rocjitsu_gpu_test_rvs | bool
 
 - name: Fail when the RVS smoke check times out
