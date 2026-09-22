@@ -1,0 +1,54 @@
+---
+- name: Locate the versioned ROCm prefix
+  ansible.builtin.find:
+    paths: /opt/rocm
+    patterns: 'core-*'
+    file_type: directory
+  register: rocjitsu_hipfile_fio_prefix_candidates
+
+- name: Set the ROCm prefix
+  ansible.builtin.set_fact:
+    rocjitsu_hipfile_fio_rocm: >-
+      {{ (rocjitsu_hipfile_fio_prefix_candidates.files
+          | map(attribute='path') | sort | last)
+         if rocjitsu_hipfile_fio_prefix_candidates.files else '/opt/rocm' }}
+
+- name: Read the baked fio commit stamp
+  ansible.builtin.slurp:
+    src: "{{ rocjitsu_hipfile_fio_prefix }}/share/fio-commit.txt"
+  register: rocjitsu_hipfile_fio_stamp
+  failed_when: false
+
+- name: Determine whether fio needs rebuilding
+  ansible.builtin.set_fact:
+    rocjitsu_hipfile_fio_needs_build: >-
+      {{ (rocjitsu_hipfile_fio_stamp.content | default('') | b64decode | trim)
+         != rocjitsu_hipfile_fio_commit }}
+
+- name: Build fio with the libhipfile engine
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      rm -rf /tmp/fio-build
+      git init -q /tmp/fio-build
+      git -C /tmp/fio-build remote add origin "{{ rocjitsu_hipfile_fio_repo }}"
+      git -C /tmp/fio-build fetch -q --depth 1 origin "{{ rocjitsu_hipfile_fio_commit }}"
+      git -C /tmp/fio-build checkout -q FETCH_HEAD
+      export ROCM_PATH="{{ rocjitsu_hipfile_fio_rocm }}"
+      cd /tmp/fio-build
+      ./configure --disable-native --enable-libhipfile >/dev/null
+      make -j"$(nproc)" >/dev/null
+      make install "prefix={{ rocjitsu_hipfile_fio_prefix }}" >/dev/null
+      mkdir -p "{{ rocjitsu_hipfile_fio_prefix }}/share"
+      printf '%s\n' "{{ rocjitsu_hipfile_fio_commit }}" \
+        > "{{ rocjitsu_hipfile_fio_prefix }}/share/fio-commit.txt"
+    executable: /bin/bash
+  become: true
+  when: rocjitsu_hipfile_fio_needs_build | bool
+
+- name: Verify fio exposes the libhipfile engine
+  ansible.builtin.command:
+    cmd: "{{ rocjitsu_hipfile_fio_prefix }}/bin/fio --enghelp"
+  register: rocjitsu_hipfile_fio_enghelp
+  changed_when: false
+  failed_when: "'libhipfile' not in rocjitsu_hipfile_fio_enghelp.stdout"

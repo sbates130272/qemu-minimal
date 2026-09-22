@@ -1,0 +1,16 @@
+---
+# fio commit with libhipfile, kept in step with batesste-ci-images.
+rocjitsu_hipfile_fio_commit: "6bc57a931f04fa3f50348d8c8f087187f050c6e1"
+rocjitsu_hipfile_fio_repo: "https://github.com/axboe/fio.git"
+rocjitsu_hipfile_fio_prefix: /opt/fio-hipfile
+rocjitsu_hipfile_fio_mode: run
+
+# Live benchmark settings.
+rocjitsu_hipfile_fio_probe: true
+rocjitsu_hipfile_fio_probe_cmd: /usr/local/bin/amdgpu-probe
+rocjitsu_hipfile_fio_run_timeout: 600
+rocjitsu_hipfile_fio_workdir: /var/tmp/rocjitsu-hipfile-fio
+rocjitsu_hipfile_fio_result_dir: /var/tmp/rocjitsu-hipfile-fio
+rocjitsu_hipfile_fio_mount: /mnt/nvme
+rocjitsu_hipfile_fio_size_mb: 64
+rocjitsu_hipfile_fio_bs: 1M

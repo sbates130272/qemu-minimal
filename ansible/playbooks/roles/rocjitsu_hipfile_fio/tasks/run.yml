@@ -1,0 +1,95 @@
+---
+- name: Load amdgpu with the gfx1250 emulation parameters
+  ansible.builtin.command:
+    cmd: >-
+      timeout {{ rocjitsu_hipfile_fio_run_timeout }}
+      {{ rocjitsu_hipfile_fio_probe_cmd }}
+  become: true
+  register: rocjitsu_hipfile_fio_probe_out
+  changed_when: "'already loaded' not in rocjitsu_hipfile_fio_probe_out.stdout"
+  failed_when: rocjitsu_hipfile_fio_probe_out.rc != 0
+  when: rocjitsu_hipfile_fio_probe | bool
+
+- name: Wait for /dev/kfd
+  ansible.builtin.wait_for:
+    path: /dev/kfd
+    state: present
+    timeout: 60
+
+- name: Count GPU KFD nodes
+  ansible.builtin.shell:
+    cmd: "cat /sys/class/kfd/kfd/topology/nodes/*/name 2>/dev/null | grep -c ."
+    executable: /bin/bash
+  register: rocjitsu_hipfile_fio_gpu_nodes
+  changed_when: false
+
+- name: Fail when no GPU KFD node is present
+  ansible.builtin.fail:
+    msg: >-
+      No GPU KFD node is present. amdgpu loaded but never bound the rocjitsu
+      device.
+  when: (rocjitsu_hipfile_fio_gpu_nodes.stdout | int) < 1
+
+- name: Create the hipFile fio work directory
+  ansible.builtin.file:
+    path: "{{ rocjitsu_hipfile_fio_workdir }}"
+    state: directory
+    mode: '0755'
+
+- name: Create the hipFile fio result directory
+  ansible.builtin.file:
+    path: "{{ rocjitsu_hipfile_fio_result_dir }}"
+    state: directory
+    mode: '0755'
+
+- name: Copy the hipFile fio benchmark script
+  ansible.builtin.copy:
+    src: fio-hipfile-bench.sh
+    dest: "{{ rocjitsu_hipfile_fio_workdir }}/fio-hipfile-bench.sh"
+    mode: '0755'
+
+- name: Run the hipFile fio benchmark
+  ansible.builtin.command:
+    cmd: "bash {{ rocjitsu_hipfile_fio_workdir }}/fio-hipfile-bench.sh"
+  environment:
+    FIO_COMMIT: "{{ rocjitsu_hipfile_fio_commit }}"
+    FIO_REPO: "{{ rocjitsu_hipfile_fio_repo }}"
+    PREFIX: "{{ rocjitsu_hipfile_fio_prefix }}"
+    MNT: "{{ rocjitsu_hipfile_fio_mount }}"
+    SIZE_MB: "{{ rocjitsu_hipfile_fio_size_mb }}"
+    BS: "{{ rocjitsu_hipfile_fio_bs }}"
+  register: rocjitsu_hipfile_fio_run
+  changed_when: false
+
+- name: Extract the hipFile fio throughput metric
+  ansible.builtin.set_fact:
+    rocjitsu_hipfile_fio_read_gbs: >-
+      {{
+        rocjitsu_hipfile_fio_run.stdout
+        | regex_findall('read_gbs=([0-9.eE+-]+)')
+        | last | default('')
+      }}
+
+- name: Fail when the benchmark produced no throughput metric
+  ansible.builtin.fail:
+    msg: >-
+      hipFile fio benchmark produced no read_gbs metric:
+      {{ ((rocjitsu_hipfile_fio_run.stdout_lines | default([]))
+          + (rocjitsu_hipfile_fio_run.stderr_lines | default([]))) | join(' | ') }}
+  when: rocjitsu_hipfile_fio_read_gbs | length == 0
+
+- name: Persist the benchmark output for report generation
+  ansible.builtin.copy:
+    dest: "{{ rocjitsu_hipfile_fio_result_dir }}/output.txt"
+    content: "{{ rocjitsu_hipfile_fio_run.stdout }}\n"
+    mode: '0644'
+
+- name: Persist the hipFile fio throughput metric
+  ansible.builtin.copy:
+    dest: "{{ rocjitsu_hipfile_fio_result_dir }}/metric.env"
+    content: "read_gbs={{ rocjitsu_hipfile_fio_read_gbs }}\n"
+    mode: '0644'
+
+- name: Show the hipFile fio benchmark output
+  ansible.builtin.debug:
+    msg: "{{ rocjitsu_hipfile_fio_run.stdout_lines }}"

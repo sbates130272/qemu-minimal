@@ -354,6 +354,7 @@ rocm-ernic publishes its next collection.
 | `vm-rocm.yml` | As above, plus ROCm stack |
 | `vm-ernic.yml` | ROCm + [rocm-ernic][rocm-ernic] RDMA NIC prerequisites; `--tags configure` for post-boot NIC setup |
 | `vm-rocjitsu.yml` | ROCm + rocjitsu GPU firmware and driver prerequisites |
+| `vm-rocjitsu-hipfile-fio.yml` | `vm-rocjitsu.yml` plus fio's `libhipfile` ioengine baked into the image; `--tags hipfile-fio` for the live fio benchmark |
 | `vm-ernic-rocjitsu.yml` | Both ernic and rocjitsu prerequisites combined |
 
 ```bash

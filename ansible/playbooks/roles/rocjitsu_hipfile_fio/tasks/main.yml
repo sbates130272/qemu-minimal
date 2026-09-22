@@ -1,0 +1,15 @@
+---
+- name: Validate the hipFile fio role mode
+  ansible.builtin.fail:
+    msg: >-
+      rocjitsu_hipfile_fio_mode must be "install" or "run", got
+      "{{ rocjitsu_hipfile_fio_mode }}"
+  when: rocjitsu_hipfile_fio_mode not in ['install', 'run']
+
+- name: Build fio with libhipfile into the guest image
+  ansible.builtin.import_tasks: install.yml
+  when: rocjitsu_hipfile_fio_mode == 'install'
+
+- name: Run the hipFile fio benchmark on the live guest
+  ansible.builtin.import_tasks: run.yml
+  when: rocjitsu_hipfile_fio_mode == 'run'

@@ -177,16 +177,11 @@ EOF
   } 2>&1
 }
 
-# Unlike the two benches above this one has no source to compile here: the
-# guest script builds fio itself and prints the metric, so all this does is
-# stage it and run it.
+# Unlike the two benches above this one is prepared by
+# vm-rocjitsu-hipfile-fio.yml and writes its output in the guest for the report
+# step to read back.
 run_hipfile_fio() {
-  if ! copy_to_guest "${VM_REPORT_BENCH_DIR}/fio-hipfile-bench.sh" /tmp/fio-hipfile-bench.sh; then
-    echo "fio-hipfile-bench upload failed"
-    return 1
-  fi
-
-  { $SSH "bash /tmp/fio-hipfile-bench.sh"; } 2>&1
+  { $SSH "cat /var/tmp/rocjitsu-hipfile-fio/output.txt"; } 2>&1
 }
 
 KERNEL=$(collect "uname -r")

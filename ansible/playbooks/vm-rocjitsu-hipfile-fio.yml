@@ -1,0 +1,32 @@
+---
+# Bake the rocjitsu guest plus fio's libhipfile ioengine into one image, then
+# opt into the live benchmark afterwards with --tags hipfile-fio:
+#
+#   qemu-tool gen-vm --ansible-playbook ansible/playbooks/vm-rocjitsu-hipfile-fio.yml
+#   qemu-tool compose --stack vfio-user-rocjitsu-vm up -d
+#   ansible-playbook -i 127.0.0.1:2230, -u ubuntu \
+#     ansible/playbooks/vm-rocjitsu-hipfile-fio.yml --tags hipfile-fio
+#
+# Like vm-rocjitsu.yml's test play, the benchmark is tagged never because it
+# needs a live rocjitsu vfio-user server and an NVMe namespace.
+- import_playbook: vm-rocjitsu.yml
+
+- name: Bake fio's libhipfile ioengine into a rocjitsu base VM image
+  hosts: all
+  gather_facts: true
+  become: true
+  tags: [install]
+  roles:
+    - role: rocjitsu_hipfile_fio
+      vars:
+        rocjitsu_hipfile_fio_mode: install
+
+- name: Run hipFile fio on a live rocjitsu VM
+  hosts: all
+  gather_facts: true
+  become: true
+  tags: [hipfile-fio, never]
+  roles:
+    - role: rocjitsu_hipfile_fio
+      vars:
+        rocjitsu_hipfile_fio_mode: run

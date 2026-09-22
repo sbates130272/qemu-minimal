@@ -14,12 +14,12 @@ on:
       - main
     paths:
       - 'ansible/playbooks/vm-rocjitsu.yml'
+      - 'ansible/playbooks/vm-rocjitsu-hipfile-fio.yml'
       - 'ansible/playbooks/roles/**'
       - 'qemu/qemu-tool/**'
       - 'qemu/pyproject.toml'
       - 'qemu/compose/vfio-user-rocjitsu-vm/**'
       - 'scripts/generate-vm-report.sh'
-      - 'scripts/vm-report/fio-hipfile-bench.sh'
       - '.github/actions/setup-vm-job/action.yml'
       - '.github/workflows/vm-report-hipfile-fio.yml'
       - '.github/workflows/publish-pages.yml'
@@ -72,7 +72,7 @@ jobs:
         docker pull "$ROCJITSU_IMAGE"
         docker pull "$QEMU_IMAGE"
 
-    - name: Generate VM with vm-rocjitsu playbook
+    - name: Generate VM with the hipFile fio rocjitsu playbook
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
@@ -83,7 +83,7 @@ jobs:
           --password password \
           --packages none \
           --size 64 \
-          --ansible-playbook ansible/playbooks/vm-rocjitsu.yml
+          --ansible-playbook ansible/playbooks/vm-rocjitsu-hipfile-fio.yml
 
     - name: Bring up rocjitsu compose stack
       working-directory: qemu/compose/vfio-user-rocjitsu-vm
@@ -130,13 +130,17 @@ jobs:
         echo "VM failed to boot in time"
         exit 1
 
-    - name: Load amdgpu via amdgpu-probe
-      timeout-minutes: 5
+    - name: Run hipFile fio on the live guest
+      timeout-minutes: 30
       run: |
-        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
-          -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
-          -p 2222 ubuntu@qemu "sudo -n timeout 120 /usr/local/bin/amdgpu-probe"
-        echo "✓ amdgpu-probe completed"
+        ansible-playbook \
+          -i "qemu," \
+          ansible/playbooks/vm-rocjitsu-hipfile-fio.yml \
+          --tags hipfile-fio \
+          -e "ansible_host=qemu" \
+          -e "ansible_port=2222" \
+          -e "ansible_user=ubuntu" \
+          -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"'
 
     - name: Generate hipFile fio report
       env:

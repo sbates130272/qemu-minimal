@@ -1,0 +1,16 @@
+---
+galaxy_info:
+  role_name: rocjitsu_hipfile_fio
+  author: Stephen Bates
+  description: >-
+    Build fio with the libhipfile ioengine into a rocjitsu guest image and run
+    the hipFile fio benchmark against a live vfio-user GPU guest.
+  license: MIT
+  min_ansible_version: "2.18"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - noble
+        - resolute
+
+dependencies: []
