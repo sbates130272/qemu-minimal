@@ -499,6 +499,27 @@
          rocjitsu_gpu_test_rvs_default_config_path }}
   when: rocjitsu_gpu_test_rvs | bool
 
+- name: Read the generic RVS config when falling back to it
+  ansible.builtin.slurp:
+    src: "{{ rocjitsu_gpu_test_rvs_default_config_path }}"
+  register: rocjitsu_gpu_test_rvs_default_config_content
+  when:
+    - rocjitsu_gpu_test_rvs | bool
+    - rocjitsu_gpu_test_rvs_config_path == rocjitsu_gpu_test_rvs_default_config_path
+
+- name: Fail when the generic RVS config is not target-agnostic
+  ansible.builtin.fail:
+    msg: >-
+      Falling back to generic RVS config {{ rocjitsu_gpu_test_rvs_default_config_path }}
+      for target {{ rocjitsu_gpu_test_target }}, but that config does not
+      advertise "device: all". Refuse to run it against an unmatched target;
+      add a target-specific config, or disable the RVS check for this guest.
+  when:
+    - rocjitsu_gpu_test_rvs | bool
+    - rocjitsu_gpu_test_rvs_config_path == rocjitsu_gpu_test_rvs_default_config_path
+    - not ((rocjitsu_gpu_test_rvs_default_config_content.content | b64decode)
+           | regex_search('(?m)^\\s*device:\\s*all\\s*$'))
+
 - name: Show the selected RVS config
   ansible.builtin.debug:
     msg: "Running RVS config {{ rocjitsu_gpu_test_rvs_config_path }}"
