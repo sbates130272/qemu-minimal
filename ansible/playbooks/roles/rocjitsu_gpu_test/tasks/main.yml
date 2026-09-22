@@ -384,6 +384,13 @@
     - rocjitsu_gpu_test_rvs | bool
     - not rocjitsu_gpu_test_rvs_bin_stat.stat.exists
 
+- name: Build the RVS runtime environment
+  ansible.builtin.set_fact:
+    rocjitsu_gpu_test_rvs_env:
+      ROCM_PATH: /opt/rocm
+      LD_LIBRARY_PATH: "/opt/rocm/lib:/opt/rocm/lib64:{{ rocjitsu_gpu_test_rocm }}/lib:{{ rocjitsu_gpu_test_rocm }}/lib64"
+  when: rocjitsu_gpu_test_rvs | bool
+
 - name: List GPUs with RVS
   ansible.builtin.command:
     cmd: >-
@@ -392,9 +399,7 @@
   register: rocjitsu_gpu_test_rvs_gpus
   changed_when: false
   failed_when: false
-  environment:
-    ROCM_PATH: /opt/rocm
-    LD_LIBRARY_PATH: "/opt/rocm/lib:/opt/rocm/lib64:{{ rocjitsu_gpu_test_rocm }}/lib:{{ rocjitsu_gpu_test_rocm }}/lib64"
+  environment: "{{ rocjitsu_gpu_test_rvs_env }}"
   when: rocjitsu_gpu_test_rvs | bool
 
 - name: Show RVS GPU list output
@@ -478,9 +483,7 @@
   register: rocjitsu_gpu_test_rvs_run
   changed_when: false
   failed_when: false
-  environment:
-    ROCM_PATH: /opt/rocm
-    LD_LIBRARY_PATH: "/opt/rocm/lib:/opt/rocm/lib64:{{ rocjitsu_gpu_test_rocm }}/lib:{{ rocjitsu_gpu_test_rocm }}/lib64"
+  environment: "{{ rocjitsu_gpu_test_rvs_env }}"
   when: rocjitsu_gpu_test_rvs | bool
 
 - name: Show the RVS smoke-check output
