@@ -30,7 +30,8 @@ TITLE_SUFFIX=${VM_LABEL:+" — ${VM_LABEL}"}
 collect() { $SSH "$1" 2>/dev/null || echo "(not available)"; }
 
 copy_to_guest() {
-  ${SCP} "$1" "${USER}@${HOST}:$2" >/dev/null 2>&1
+  scp -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+    -P "${PORT}" "$1" "${USER}@${HOST}:$2" >/dev/null 2>&1
 }
 
 write_badge_json() {

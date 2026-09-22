@@ -33,6 +33,14 @@ constexpr size_t kBBytes = static_cast<size_t>(kK) * kN * sizeof(float);
 constexpr size_t kBOffset = kABytes;
 constexpr float kTolerance = 1e-3f;
 
+static std::string g_cleanup_path;
+
+static void cleanup_bench_file() {
+    if (!g_cleanup_path.empty()) {
+        ::unlink(g_cleanup_path.c_str());
+    }
+}
+
 #define HIP_CHECK(expr)                                                       \
     do {                                                                      \
         hipError_t err_ = (expr);                                             \
@@ -128,6 +136,16 @@ static bool write_payload(const std::string& path, const std::vector<float>& a,
     return ok;
 }
 
+static bool env_is_true(const char* value) {
+    if (value == nullptr) {
+        return false;
+    }
+    return std::strcmp(value, "1") == 0 || std::strcmp(value, "true") == 0 ||
+           std::strcmp(value, "TRUE") == 0 || std::strcmp(value, "yes") == 0 ||
+           std::strcmp(value, "YES") == 0 || std::strcmp(value, "on") == 0 ||
+           std::strcmp(value, "ON") == 0;
+}
+
 int main(int argc, char** argv) {
     std::string dir = "/mnt/nvme";
     int iters = 4;
@@ -142,10 +160,16 @@ int main(int argc, char** argv) {
         }
     }
     const std::string path = dir + "/gemm-hipfile-bench.bin";
+    g_cleanup_path = path;
+    std::atexit(cleanup_bench_file);
 
-    const bool compat_from_caller = ::getenv("HIPFILE_ALLOW_COMPAT_MODE") != nullptr;
+    const char* compat_env = ::getenv("HIPFILE_ALLOW_COMPAT_MODE");
+    const bool compat_from_caller = compat_env != nullptr;
+    const bool compat_enabled = env_is_true(compat_env);
     if (!compat_from_caller) {
         ::setenv("HIPFILE_ALLOW_COMPAT_MODE", "true", 0);
+    } else if (!compat_enabled) {
+        ::setenv("HIPFILE_ALLOW_COMPAT_MODE", "true", 1);
     }
 
     hipDeviceProp_t prop{};
@@ -198,7 +222,7 @@ int main(int argc, char** argv) {
                      static_cast<int>(reg.err), static_cast<int>(reg.hip_drv_err));
     }
     std::printf("gemm-hipfile-bench: compat_requested=%s buf_registered=%s\n",
-                compat_from_caller ? "caller" : "self",
+                compat_enabled ? "caller" : "self",
                 buf_registered ? "yes" : "no");
 
     for (size_t blk = 0; blk < kBlocks; ++blk) {
@@ -297,7 +321,6 @@ int main(int argc, char** argv) {
     hipFileHandleDeregister(fh);
     ::close(fd);
     hipFileDriverClose();
-    ::unlink(path.c_str());
 
     std::printf("gemm-hipfile-bench: PASS\n");
     return 0;
