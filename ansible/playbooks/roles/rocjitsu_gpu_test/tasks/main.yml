@@ -426,24 +426,6 @@
     msg: "{{ rocjitsu_gpu_test_rvs_gpus.stdout_lines }}"
   when: rocjitsu_gpu_test_rvs | bool
 
-- name: Derive the GPU ids RVS reported
-  ansible.builtin.set_fact:
-    rocjitsu_gpu_test_rvs_visible_gpu_ids: >-
-      {{ rocjitsu_gpu_test_rvs_gpus.stdout
-         | regex_findall('GPU\\[\\s*\\d+\\s*-\\s*(\\d+)\\]')
-         | map('string') | unique | list }}
-  when: rocjitsu_gpu_test_rvs | bool
-
-- name: Fail when the RVS GPU list output has no parseable gpu ids
-  ansible.builtin.fail:
-    msg: >-
-      rvs -g completed, but its output contained no parseable "GPU[node_id -
-      gpu_id]" entries. Refuse to guess device coverage for the fallback config;
-      inspect the RVS output above for a format change or enumeration problem.
-  when:
-    - rocjitsu_gpu_test_rvs | bool
-    - (rocjitsu_gpu_test_rvs_visible_gpu_ids | length) == 0
-
 - name: Fail when RVS GPU enumeration times out
   ansible.builtin.fail:
     msg: >-
@@ -462,6 +444,24 @@
   when:
     - rocjitsu_gpu_test_rvs | bool
     - rocjitsu_gpu_test_rvs_gpus.rc not in [0, 124]
+
+- name: Derive the GPU ids RVS reported
+  ansible.builtin.set_fact:
+    rocjitsu_gpu_test_rvs_visible_gpu_ids: >-
+      {{ rocjitsu_gpu_test_rvs_gpus.stdout
+         | regex_findall('GPU\\[\\s*\\d+\\s*-\\s*(\\d+)\\]')
+         | map('string') | unique | list }}
+  when: rocjitsu_gpu_test_rvs | bool
+
+- name: Fail when the RVS GPU list output has no parseable gpu ids
+  ansible.builtin.fail:
+    msg: >-
+      rvs -g completed, but its output contained no parseable "GPU[node_id -
+      gpu_id]" entries. Refuse to guess device coverage for the fallback config;
+      inspect the RVS output above for a format change or enumeration problem.
+  when:
+    - rocjitsu_gpu_test_rvs | bool
+    - (rocjitsu_gpu_test_rvs_visible_gpu_ids | length) == 0
 
 - name: Build the candidate RVS config paths
   ansible.builtin.set_fact:
@@ -549,31 +549,32 @@
 
 - name: Validate that the generic RVS config targets all devices
   ansible.builtin.assert:
+    quiet: true
     that:
       - item.device is defined
-      - item.device == 'all'
-        or
-        (
-          (item.device is string or item.device is number)
-          and item.device | string in rocjitsu_gpu_test_rvs_visible_gpu_ids
-          and (rocjitsu_gpu_test_rvs_visible_gpu_ids | length) == 1
-        )
-        or
-        (
-          item.device is sequence
-          and item.device is not string
-          and (
-            (item.device | map('string') | list | difference(['all']) | length) == 0
-            or
-            (
-              (rocjitsu_gpu_test_rvs_visible_gpu_ids | length) > 0
-              and (item.device | map('string') | list
-                   | difference(rocjitsu_gpu_test_rvs_visible_gpu_ids) | length) == 0
-              and (rocjitsu_gpu_test_rvs_visible_gpu_ids
-                   | difference(item.device | map('string') | list) | length) == 0
-            )
-          )
-        )
+      - rocjitsu_gpu_test_rvs_action_is_all
+        or rocjitsu_gpu_test_rvs_action_is_single_visible_gpu
+        or rocjitsu_gpu_test_rvs_action_matches_visible_gpu_ids
+    vars:
+      rocjitsu_gpu_test_rvs_action_devices: >-
+        {{ item.device
+           if (item.device is sequence and item.device is not string)
+           else [item.device | string] }}
+      rocjitsu_gpu_test_rvs_action_device_strings: >-
+        {{ rocjitsu_gpu_test_rvs_action_devices | map('string') | list }}
+      rocjitsu_gpu_test_rvs_action_is_all: >-
+        {{ (rocjitsu_gpu_test_rvs_action_device_strings | difference(['all']) | length) == 0 }}
+      rocjitsu_gpu_test_rvs_action_is_single_visible_gpu: >-
+        {{ (rocjitsu_gpu_test_rvs_visible_gpu_ids | length) == 1
+           and (rocjitsu_gpu_test_rvs_action_device_strings | length) == 1
+           and (rocjitsu_gpu_test_rvs_action_device_strings[0]
+                == rocjitsu_gpu_test_rvs_visible_gpu_ids[0]) }}
+      rocjitsu_gpu_test_rvs_action_matches_visible_gpu_ids: >-
+        {{ (rocjitsu_gpu_test_rvs_visible_gpu_ids | length) > 0
+           and (rocjitsu_gpu_test_rvs_action_device_strings
+                | difference(rocjitsu_gpu_test_rvs_visible_gpu_ids) | length) == 0
+           and (rocjitsu_gpu_test_rvs_visible_gpu_ids
+                | difference(rocjitsu_gpu_test_rvs_action_device_strings) | length) == 0 }}
     fail_msg: >-
       Falling back to generic RVS config
       {{ rocjitsu_gpu_test_rvs_default_config_path }} for target
