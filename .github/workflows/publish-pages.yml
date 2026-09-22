@@ -76,6 +76,10 @@ jobs:
             mkdir -p "staging/${dest}"
             curl -sSL -H "Authorization: Bearer ${GH_TOKEN}" "${url}" -o /tmp/"${name}".zip
             unzip -q /tmp/"${name}".zip -d "staging/${dest}"
+            if [ -d "staging/${dest}/site" ] && [ ! -e "staging/${dest}/index.md" ]; then
+              rsync -a "staging/${dest}/site/" "staging/${dest}/"
+              rm -rf "staging/${dest}/site"
+            fi
             echo "${name} -> ${dest}/ ($(find "staging/${dest}" -type f | wc -l) files)"
           }
 

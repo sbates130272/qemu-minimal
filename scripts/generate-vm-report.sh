@@ -70,7 +70,7 @@ echo "hipcc: ${hipcc}"
 "${hipcc}" -O2 --offload-arch=gfx1250 -o /tmp/sgemm-bench /tmp/sgemm-bench.hip
 sudo -n /tmp/sgemm-bench 8
 EOF
-  } 2>&1 || true
+  } 2>&1
 }
 
 run_rocjitsu_hipfile() {
@@ -106,7 +106,7 @@ echo "rocm: ${rocm}"
   -L"${rocm}/lib" -lhipfile -Wl,-rpath,"${rocm}/lib"
 sudo -n /tmp/gemm-hipfile-bench /mnt/nvme 4
 EOF
-  } 2>&1 || true
+  } 2>&1
 }
 
 KERNEL=$(collect "uname -r")
