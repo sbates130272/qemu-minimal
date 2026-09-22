@@ -6,8 +6,6 @@ on:
     branches:
       - main
     paths:
-      - 'qemu/gen-vm'
-      - 'qemu/run-vm'
       - 'libvirt/create-nvme'
       - 'libvirt/virt-install-ubuntu'
       - '.github/workflows/shell-check.yml'
@@ -15,8 +13,6 @@ on:
     branches:
       - main
     paths:
-      - 'qemu/gen-vm'
-      - 'qemu/run-vm'
       - 'libvirt/create-nvme'
       - 'libvirt/virt-install-ubuntu'
       - '.github/workflows/shell-check.yml'
@@ -37,8 +33,6 @@ jobs:
       - name: Run ShellCheck
         run: |
           shellcheck -S error \
-            qemu/gen-vm \
-            qemu/run-vm \
             libvirt/create-nvme \
             libvirt/virt-install-ubuntu
 

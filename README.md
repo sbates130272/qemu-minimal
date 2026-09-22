@@ -7,7 +7,6 @@
 [![Ubuntu](https://img.shields.io/badge/Ubuntu-Noble%20%7C%20Resolute-orange?style=flat-square&logo=ubuntu)](https://releases.ubuntu.com/noble/)
 [![GitHub Release](https://img.shields.io/github/v/release/sbates130272/qemu-minimal?style=flat-square)](https://github.com/sbates130272/qemu-minimal/releases/latest)
 [![VM Report](https://img.shields.io/badge/VM%20Report-live-blue?style=flat-square)](https://sbates130272.github.io/qemu-minimal/)
-[![Smoke Test](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/smoke-test.yml?branch=main&label=smoke-test&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/smoke-test.yml)
 [![qemu-tool Smoke Test](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-tool-smoke-test.yml?branch=main&label=qemu-tool-smoke&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-tool-smoke-test.yml)
 [![Dry-Run Tests](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-tool-dry-run.yml?branch=main&label=dry-run&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-tool-dry-run.yml)
 [![Ansible Test](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/ansible-setup-test.yml?branch=main&label=ansible&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/ansible-setup-test.yml)
@@ -116,19 +115,6 @@ qemu-tool run-vm --vm-name myvm --nvme 2 --convert-to-libvirt myvm.xml
 virsh define myvm.xml && virsh start myvm
 ```
 
-## Quick Start (Legacy bash scripts)
-
-> **Deprecated:** `gen-vm` and `run-vm` bash scripts emit a deprecation
-> warning and will be removed in a future release. Use `qemu-tool` instead.
-
-```bash
-cd qemu
-./gen-vm
-./run-vm
-ssh -p 2222 ubuntu@localhost
-# Password: password (or use SSH key)
-```
-
 ## Quick Start (Libvirt)
 
 ```bash
@@ -143,8 +129,7 @@ qemu-minimal/
     pyproject.toml  Python package manifest for qemu-tool
     qemu_tool/      Python package (qemu-tool CLI)
     packages.d/     Cloud-init package manifests
-    gen-vm          Legacy bash script (deprecated)
-    run-vm          Legacy bash script (deprecated)
+    env.example     Settings template -- copy to qemu/.env
   libvirt/
     virt-install-ubuntu  Create VMs via libvirt
     create-nvme          Generate NVMe XML for libvirt
@@ -171,8 +156,8 @@ be in the `kvm` group:
 ./udev/install-vfio-rules
 ```
 
-Re-login after group changes. `run-vm` checks VFIO access and
-prints this path if permissions are still wrong.
+Re-login after group changes. `qemu-tool run-vm` checks VFIO access
+and prints this path if permissions are still wrong.
 
 ## Docker Compose: vfio-user GPU VM
 
@@ -207,8 +192,35 @@ stack whether running from source or an installed `.deb` package.
 Pass any `docker compose` subcommand after the `qemu-tool` flags
 (`up`, `down`, `ps`, `logs ernic`, etc.).
 
-Each stack has its own `README.md` and `env.example` with the full
-variable reference and socket contract.
+### Settings file
+
+`qemu/env.example` is the single settings template for the whole tool. Copy it
+to `qemu/.env` and edit; `gen-vm`, `run-vm` and `compose` all read the same
+file, and `compose` hands it straight to `docker compose --env-file`.
+
+```bash
+cp qemu/env.example qemu/.env
+$EDITOR qemu/.env
+```
+
+Every `VM_*` key maps to the flag of the same name -- `VM_VCPUS` is `--vcpus`,
+`VM_IMAGES_DIR` is `--images`. Values are read lowest to highest from the
+built-in defaults, a `--domain` XML, this file, then explicit CLI flags, so a
+flag always wins over the file. One-shot actions (`--dry-run`, `--force`,
+`--restore-image`, `--ansible-only`, `--nvme-recreate`) are deliberately not
+readable from it.
+
+The file is searched for in this order, first hit wins:
+
+| Location | Used for |
+|---|---|
+| `--env-file FILE` | explicit, per invocation |
+| `$QEMU_TOOL_ENV` | explicit, per shell |
+| `./.env` | a per-project override |
+| `qemu/.env` | a source checkout |
+| `/etc/qemu-tool/env` | an installed `.deb` |
+
+The stack `README.md` files document the variables specific to each stack.
 
 ## Images Directory
 

@@ -20,8 +20,7 @@ file up to date as infrastructure changes.
 
 All qcow2 images live at **`<repo-root>/images/`** (i.e.
 `/home/stebates/Projects/qemu-minimal/images/`), not at the default
-`/var/lib/qemu-tool/images`. Set `VM_IMAGES_DIR` accordingly in
-`qemu/compose/vfio-user-ernic-2vm/.env`.
+`/var/lib/qemu-tool/images`. Set `VM_IMAGES_DIR` accordingly in `qemu/.env`.
 
 Active images for the 2-VM ernic stack:
 
@@ -52,14 +51,14 @@ are not available inside the VM.
 ## Two-VM compose stack
 
 ```bash
-cd qemu/compose/vfio-user-ernic-2vm
-cp env.example .env
-# Edit .env: set VM_IMAGES_DIR to the repo images/ absolute path
+cp qemu/env.example qemu/.env
+# Edit qemu/.env: set VM_IMAGES_DIR to the repo images/ absolute path
 # Add --profile rocjitsu-vm1 --profile rocjitsu-vm2 to enable GPUs
-docker compose --profile rocjitsu-vm1 --profile rocjitsu-vm2 up -d
+qemu-tool compose --stack vfio-user-ernic-2vm \
+  --profile rocjitsu-vm1 --profile rocjitsu-vm2 up -d
 ```
 
-Key `.env` values that differ from the example defaults:
+Key `qemu/.env` values that differ from the example defaults:
 
 | Variable       | Correct value                                        |
 |----------------|------------------------------------------------------|

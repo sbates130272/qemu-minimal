@@ -1,4 +1,7 @@
+etc/qemu-tool
 var/lib/qemu-tool/images
 usr/share/qemu-tool
-usr/share/qemu-tool/compose/vfio-user-vm
-usr/share/qemu-tool/compose/vfio-user-2vm
+usr/share/qemu-tool/compose/vfio-user-ernic-vm
+usr/share/qemu-tool/compose/vfio-user-rocjitsu-vm
+usr/share/qemu-tool/compose/vfio-user-ernic-rocjitsu-vm
+usr/share/qemu-tool/compose/vfio-user-ernic-2vm

@@ -17,6 +17,17 @@ All notable changes to this project will be documented in this file.
   the runner rather than fixed, with a floor of 4 vCPUs per guest.
 - `ansible/playbooks/vars/ernic-pins.yml`: the mainline kernel ref and the
   rocm-ernic source commit, each written once and read by both plays.
+- `qemu/env.example`, one settings template for the whole tool, replacing the
+  four per-stack `env.example` files. Copy it to `qemu/.env`; `gen-vm`,
+  `run-vm` and `compose` all read that one file. Every `VM_*` key maps to the
+  flag of the same name, so `VM_VCPUS` is `--vcpus` and `VM_IMAGES_DIR` is
+  `--images`, and the file is searched for at `--env-file`, `$QEMU_TOOL_ENV`,
+  `./.env`, `qemu/.env`, then `/etc/qemu-tool/env`. Values apply lowest to
+  highest from the defaults, a `--domain` XML, the file, then explicit flags,
+  so a flag always beats the file. One-shot actions (`--dry-run`, `--force`,
+  `--restore-image`, `--ansible-only`, `--nvme-recreate`) are deliberately not
+  readable from it.
+- `--env-file` on `gen-vm`, `run-vm` and `compose`.
 
 ### Changed
 
@@ -41,6 +52,18 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- `gen-vm` guests no longer lose networking when `--ssh-port` changes. The
+  guest MAC is derived from the SSH port, and guests were ignoring the seed's
+  `network-config` and falling back to cloud-init's own, which pins the
+  interface to the MAC seen at creation time. Booting the same image on a
+  different port then left the NIC `unmanaged` with no address: slirp's
+  `hostfwd` still completed the TCP handshake, so SSH reported `Connection
+  timed out during banner exchange` rather than `refused`, and `gen-vm`
+  `--ansible-only` sat in `_wait_for_ssh` for its full 600 s without ever
+  reaching the playbook. First boot now overwrites the rendered
+  `/etc/netplan/50-cloud-init.yaml` with a `name: "en*"` match, so the MAC
+  stops being load-bearing. Existing images keep the old pin; regenerate, or
+  repoint netplan in the guest.
 - The ernic configure play supplies `ernic_guest_vm_ip`, which
   `ernic_guest_setup` asserts on and defaults to empty. Derived as
   `192.168.200.<10 * vm_index>`, matching upstream `vm-register.yml`.
@@ -55,6 +78,16 @@ All notable changes to this project will be documented in this file.
   bus. The check is now a block-scoped `awk` scan for the device under its
   vendor, and a post-merge `lspci` parse check fails the play if a merge ever
   does break the file.
+
+### Removed
+
+- `qemu/gen-vm` and `qemu/run-vm`. `qemu-tool gen-vm` and `qemu-tool run-vm`
+  have been the maintained path for some time and the two bash scripts had
+  drifted; keeping both meant every flag had to be added twice. `shell-check`
+  now lints only the two `libvirt/` scripts.
+- The four per-stack `qemu/compose/*/env.example` files, superseded by
+  `qemu/env.example`.
+- The `smoke-test` workflow, which drove the removed bash scripts.
 
 ## [v1.3.0] - 2026-09-15
 

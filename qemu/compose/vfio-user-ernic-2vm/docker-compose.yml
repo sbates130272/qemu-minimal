@@ -7,7 +7,7 @@
 #   --profile rocjitsu-vm2   add GPU to VM 2
 #
 # Usage:
-#   cp env.example .env && $EDITOR .env
+#   cp qemu/env.example qemu/.env && $EDITOR qemu/.env
 #   # ernic-only:
 #   qemu-tool compose --stack vfio-user-ernic-2vm --vm-name vm1-name up
 #   # both VMs with GPUs:

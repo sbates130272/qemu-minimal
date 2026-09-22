@@ -6,9 +6,9 @@
 # vfio-user-ernic-rocjitsu-vm/ for both.
 #
 # Usage:
-#   cp env.example .env && $EDITOR .env
+#   cp qemu/env.example qemu/.env && $EDITOR qemu/.env
 #   qemu-tool gen-vm --ansible-playbook ansible/playbooks/vm-ernic.yml
-#   docker compose up
+#   qemu-tool compose --stack vfio-user-ernic-vm up
 #   ssh -p ${VM_SSH_PORT:-2222} ubuntu@localhost
 
 x-gpu-common: &gpu-common

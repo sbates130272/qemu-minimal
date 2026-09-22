@@ -5,9 +5,9 @@
 # that attaches them as emulated PCIe devices via the vfio-user-pci driver.
 #
 # Usage:
-#   cp env.example .env && $EDITOR .env   # set image tags and VM_IMAGE path
+#   cp qemu/env.example qemu/.env && $EDITOR qemu/.env   # image tags, VM_IMAGES_DIR
 #   qemu-tool gen-vm                      # build VM image if not already done
-#   docker compose up
+#   qemu-tool compose --stack vfio-user-ernic-rocjitsu-vm up
 #   ssh -p ${VM_SSH_PORT:-2222} ubuntu@localhost
 
 x-gpu-common: &gpu-common
