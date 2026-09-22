@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from dataclasses import fields
 from pathlib import Path
@@ -62,6 +63,14 @@ def _shared_parent() -> argparse.ArgumentParser:
     p.add_argument("--vmem", type=int, default=_UNSET, metavar="MiB")
     p.add_argument("--images", type=Path, default=_UNSET, metavar="DIR")
     p.add_argument("--ssh-port", type=int, default=_UNSET, metavar="PORT")
+    p.add_argument(
+        "--mac", default=_UNSET, metavar="ADDR",
+        help=(
+            "Management NIC MAC. Defaults to 52:54:00:00:<hi>:<lo> derived "
+            "from --ssh-port. Set it when the guest image pins its netplan "
+            "to a specific MAC."
+        ),
+    )
     p.add_argument(
         "--kvm", action=argparse.BooleanOptionalAction, default=_UNSET
     )
@@ -299,6 +308,14 @@ def _build_config(args: argparse.Namespace, subcommand: str) -> VMConfig:
         # A comma terminates a qemu option value, so it corrupts -name, -uuid,
         # -drive file= and -chardev path= alike.
         sys.exit(f"Error: --vm-name must not contain a comma: {cfg.vm_name!r}")
+    if cfg.mac is not None:
+        # Checked here rather than left to qemu: a malformed MAC makes qemu
+        # fail at device-creation time, long after gen-vm has downloaded an
+        # image and built a seed, and the error names the device, not the flag.
+        if not re.fullmatch(r"(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}", cfg.mac):
+            sys.exit(f"Error: --mac is not a MAC address: {cfg.mac!r}")
+        if int(cfg.mac[:2], 16) & 1:
+            sys.exit(f"Error: --mac has the multicast bit set: {cfg.mac!r}")
     return cfg
 
 
@@ -322,6 +339,7 @@ def _extract_cli_overrides(
     _take("vmem", "vmem")
     _take("images", "images")
     _take("ssh_port", "ssh_port")
+    _take("mac", "mac")
     _take("kvm", "kvm")
     _take("qemu_path", "qemu_path")
 

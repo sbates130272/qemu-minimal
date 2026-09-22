@@ -255,10 +255,14 @@ def _root_drive_args(cfg: VMConfig) -> list[str]:
     return ["-drive", drv]
 
 
+def _effective_mac(cfg: VMConfig) -> str:
+    return cfg.mac or _mgmt_mac(cfg.ssh_port)
+
+
 def _netdev_args(cfg: VMConfig, mac: str | None = None) -> list[str]:
     if cfg.mgmt_tap:
         tap = _mgmt_tap_name(cfg.ssh_port)
-        m = mac or _mgmt_mac(cfg.ssh_port)
+        m = mac or _effective_mac(cfg)
         return [
             "-netdev", f"tap,id=net0,ifname={tap},script=no,downscript=no",
             "-device", f"virtio-net-pci,netdev=net0,mac={m}",
@@ -266,10 +270,12 @@ def _netdev_args(cfg: VMConfig, mac: str | None = None) -> list[str]:
     hostfwd = f"hostfwd=tcp::{cfg.ssh_port}-:22"
     for rule in cfg.extra_hostfwd:
         hostfwd += f",hostfwd={rule}"
-    # Use a deterministic MAC so the VM's netplan (written by cloud-init
-    # during gen-vm first-boot with the same MAC) matches on all subsequent
-    # boots, including compose run-vm invocations.
-    m = mac or _mgmt_mac(cfg.ssh_port)
+    # Deterministic, so a guest that pins its netplan to the MAC it saw at
+    # first boot still matches on later boots. Images this repo's gen-vm
+    # builds do not pin -- they match `name: "en*"` -- but an image built
+    # elsewhere may, and then the MAC has to be whatever that image expects:
+    # --mac / VM_MAC is the way to say so.
+    m = mac or _effective_mac(cfg)
     return [
         "-netdev", f"user,id=net0,{hostfwd}",
         "-device", f"virtio-net-pci,netdev=net0,mac={m}",
@@ -288,19 +294,17 @@ def _data_nic_args(cfg: VMConfig) -> list[str]:
         f"tap,id=data0,ifname={tap},queues={cfg.data_nic_queues}"
         f",vhost=on,script=no,downscript=no",
         "-device",
-        f"virtio-net-pci,netdev=data0,mq=on,vectors={vectors}",
+        f"virtio-net-pci,netdev=data0,mq=on,vectors={vectors}"
+        f",mac={_nic_mac(cfg.ssh_port, 2)}",
     ]
 
 
 def _mcast_args(cfg: VMConfig) -> list[str]:
     if cfg.mcast_group is None:
         return []
-    hi = cfg.ssh_port // 256
-    lo = cfg.ssh_port % 256
-    mac = f"52:54:00:00:{hi:02x}:{lo:02x}"
     return [
         "-netdev", f"socket,id=net1,mcast={cfg.mcast_group}",
-        "-device", f"virtio-net-pci,netdev=net1,mac={mac}",
+        "-device", f"virtio-net-pci,netdev=net1,mac={_nic_mac(cfg.ssh_port, 1)}",
     ]
 
 
@@ -400,10 +404,22 @@ def _mgmt_subnet(port: int) -> str:
     return f"172.16.{octet}"
 
 
-def _mgmt_mac(port: int) -> str:
+def _nic_mac(port: int, index: int) -> str:
+    """Deterministic MAC for NIC `index` of the VM on `port`.
+
+    The index is a whole byte of its own so the NICs of one guest can never
+    collide: they used to, because the mcast NIC derived its MAC from the
+    port with the same arithmetic as the management NIC and landed on the
+    identical address. A guest with two interfaces sharing a MAC gets ARP
+    answers for the wrong one.
+    """
     hi = (port >> 8) & 0xFF
     lo = port & 0xFF
-    return f"52:54:00:00:{hi:02x}:{lo:02x}"
+    return f"52:54:00:{index:02x}:{hi:02x}:{lo:02x}"
+
+
+def _mgmt_mac(port: int) -> str:
+    return _nic_mac(port, 0)
 
 
 def _ensure_mgmt_bridge(port: int) -> None:

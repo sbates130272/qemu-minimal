@@ -84,6 +84,17 @@ Directory where VM image files are stored (default:
 .BI \-\-ssh\-port " PORT"
 Host port forwarded to guest SSH (default: 2222).
 .TP
+.BI \-\-mac " ADDR"
+Management NIC MAC address.
+By default it is derived from
+.BR \-\-ssh\-port
+as
+.IR 52:54:00:00:<hi>:<lo> .
+Set it when the guest image pins its netplan to a particular MAC; images
+built by
+.B gen\-vm
+match on interface name instead and do not need this.
+.TP
 .BR \-\-kvm " | " \-\-no\-kvm
 Enable or disable KVM hardware acceleration (default: enabled).
 .TP

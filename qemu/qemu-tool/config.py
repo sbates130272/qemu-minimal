@@ -56,6 +56,8 @@ class VMConfig:
     vmem: int = 4096           # MiB
     images: Path = field(default_factory=default_images)
     ssh_port: int = 2222
+    # None means derive from ssh_port; see run_vm._mgmt_mac.
+    mac: str | None = None
     kvm: bool = True
     qemu_path: str = ""
 
