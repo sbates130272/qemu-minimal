@@ -161,6 +161,19 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- The rocjitsu report lane reported its failures as a blank line. The
+  guest-side benchmark scripts run under `set -euo pipefail`, and their
+  `hipcc=$(command -v hipcc || ls /opt/rocm*/bin/hipcc ... | head -1)` probe
+  fails the whole assignment when no `hipcc` exists: the unmatched glob makes
+  `ls` exit non-zero and `pipefail` carries that out, so `set -e` killed the
+  script one line above the `hipcc unavailable` guard written for exactly
+  that case — with nothing printed, `ls` stderr being discarded. The
+  `rocm=$(for ...; done | head -1)` hipFile probe had the same shape. Both
+  now tolerate the empty result and reach their guard, and a benchmark that
+  fails with no output at all is reported by name rather than as an empty
+  `printf`. This is why `vm-report-rocjitsu` failed on its first run, took
+  the `publish-pages` artifact with it, and left `/rocjitsu/` a 404 with two
+  broken shields.io endpoint badges on the README.
 - `scripts/release.sh` dropped every paragraph after the first in a
   multi-paragraph `CHANGELOG.md` bullet. A blank line ended the bullet, so
   the indented paragraph that followed matched the continuation rule but
