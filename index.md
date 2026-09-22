@@ -12,6 +12,7 @@ actually built it rather than what the docs claim.
 | Report | Lane | What it covers |
 |---|---|---|
 | [Single VM](1vm/) | `vm-report` | One `gen-vm` guest with an NVMe device, booted on a GitHub-hosted runner. |
+| [rocjitsu VM](rocjitsu/) | `vm-report-rocjitsu` | One rocjitsu vfio-user guest with GEMM and hipFile/NVMe metrics. |
 | [Two VMs — VM 1](two-vm/) | `vm-report-two-vms` | The `vfio-user-ernic-2vm` compose stack, both guests with a rocjitsu GPU. |
 | [Two VMs — VM 2](two-vm/vm2/) | `vm-report-two-vms` | The second guest of the same stack. |
 
