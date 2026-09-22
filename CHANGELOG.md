@@ -172,6 +172,18 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- The management and multicast NICs of one guest were given the same MAC.
+  `_mcast_args` derived its address from the SSH port with the same
+  arithmetic as `_mgmt_mac` rather than calling it, so `--mcast-group` put
+  two interfaces on one address and the guest answered ARP for whichever
+  came up first. The NIC index is now a byte of its own —
+  `52:54:00:<index>:<hi>:<lo>` — so the management, multicast and data NICs
+  cannot collide. The management NIC keeps the address it already had, so
+  existing images that pin it still match. The data NIC gained an explicit
+  MAC at the same time: it had none, which meant QEMU's built-in default
+  `52:54:00:12:34:56` — exactly the address older guest images pin their
+  netplan to, so a guest with both NICs could match its management netplan
+  against the data NIC.
 - The rocjitsu report lane reported its failures as a blank line. The
   guest-side benchmark scripts run under `set -euo pipefail`, and their
   `hipcc=$(command -v hipcc || ls /opt/rocm*/bin/hipcc ... | head -1)` probe

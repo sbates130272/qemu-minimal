@@ -118,6 +118,20 @@ jobs:
         ! qemu-tool run-vm --vm-name dry-test --no-kvm --mac 53:54:00:12:34:56 --dry-run
         echo "✓ --mac passed"
 
+    # The mcast NIC once derived its MAC from the SSH port with the same
+    # arithmetic as the management NIC, so a guest using both got two
+    # interfaces on one address and ARP answers for whichever replied first.
+    - name: "Dry-run: every NIC gets a distinct MAC"
+      run: |
+        out=$(qemu-tool run-vm --vm-name dry-test --no-kvm --ssh-port 2222 \
+              --mcast-group 239.1.1.1:5000 --data-nic-queues 4 --dry-run)
+        echo "$out"
+        macs=$(echo "$out" | tr ' ' '\n' | sed -n 's/.*,mac=\([0-9a-f:]*\).*/\1/p')
+        echo "$macs"
+        [ "$(echo "$macs" | wc -l)" -eq 3 ] || { echo "expected 3 NICs"; exit 1; }
+        [ "$(echo "$macs" | sort -u | wc -l)" -eq 3 ] || { echo "duplicate MAC"; exit 1; }
+        echo "✓ distinct NIC MACs passed"
+
     - name: "Dry-run: custom --vcpus and --vmem"
       run: |
         out=$(qemu-tool run-vm --vm-name dry-test --no-kvm \
