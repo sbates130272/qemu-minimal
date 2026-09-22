@@ -169,7 +169,10 @@ int main(int argc, char** argv) {
     if (!compat_from_caller) {
         ::setenv("HIPFILE_ALLOW_COMPAT_MODE", "true", 0);
     } else if (!compat_enabled) {
-        ::setenv("HIPFILE_ALLOW_COMPAT_MODE", "true", 1);
+        std::fprintf(stderr,
+                     "gemm-hipfile-bench: HIPFILE_ALLOW_COMPAT_MODE is set but "
+                     "disabled; unset it or set it to true for this benchmark.\n");
+        return 2;
     }
 
     hipDeviceProp_t prop{};
@@ -222,7 +225,7 @@ int main(int argc, char** argv) {
                      static_cast<int>(reg.err), static_cast<int>(reg.hip_drv_err));
     }
     std::printf("gemm-hipfile-bench: compat_requested=%s buf_registered=%s\n",
-                compat_enabled ? "caller" : "self",
+                compat_from_caller ? "caller" : "self",
                 buf_registered ? "yes" : "no");
 
     for (size_t blk = 0; blk < kBlocks; ++blk) {

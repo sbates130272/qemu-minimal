@@ -18,7 +18,7 @@ VM_LABEL=${4:-}
 # host rather than in the job container.
 HOST=${5:-localhost}
 SSH="ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no -p ${PORT} ${USER}@${HOST}"
-SCP="scp -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no -P ${PORT}"
+SCP=(scp -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no -P "${PORT}")
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 VM_REPORT_BENCH_DIR="${SCRIPT_DIR}/vm-report"
 
@@ -30,8 +30,7 @@ TITLE_SUFFIX=${VM_LABEL:+" — ${VM_LABEL}"}
 collect() { $SSH "$1" 2>/dev/null || echo "(not available)"; }
 
 copy_to_guest() {
-  scp -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
-    -P "${PORT}" "$1" "${USER}@${HOST}:$2" >/dev/null 2>&1
+  "${SCP[@]}" "$1" "${USER}@${HOST}:$2" >/dev/null 2>&1
 }
 
 write_badge_json() {
