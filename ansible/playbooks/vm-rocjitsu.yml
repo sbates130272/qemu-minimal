@@ -514,6 +514,15 @@
         update_cache: true
       become: true
 
+    - name: Install ROCm Validation Suite
+      ansible.builtin.package:
+        name:
+          - amd-smi-lib
+          - rocm-validation-suite
+        state: present
+        update_cache: true
+      become: true
+
     # hsa-snoop watches AQL and SDMA queues by planting an ftrace kprobe on the
     # KFD create_queue ioctl. Its own Depends, declared by the package.
     - name: Install hsa-snoop runtime dependencies
