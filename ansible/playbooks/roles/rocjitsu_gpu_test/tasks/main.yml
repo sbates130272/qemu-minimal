@@ -450,7 +450,7 @@
     rocjitsu_gpu_test_rvs_visible_gpu_ids: >-
       {{ rocjitsu_gpu_test_rvs_gpus.stdout
          | regex_findall('GPU\\[\\s*\\d+\\s*-\\s*(\\d+)\\]')
-         | map('string') | unique | list }}
+         | map('string') | map('lower') | unique | list }}
   when: rocjitsu_gpu_test_rvs | bool
 
 - name: Fail when the RVS GPU list output has no parseable gpu ids
