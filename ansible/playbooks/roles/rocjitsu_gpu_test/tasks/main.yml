@@ -426,11 +426,11 @@
     msg: "{{ rocjitsu_gpu_test_rvs_gpus.stdout_lines }}"
   when: rocjitsu_gpu_test_rvs | bool
 
-- name: Derive the GPU ids or indexes RVS reported
+- name: Derive the GPU ids RVS reported
   ansible.builtin.set_fact:
-    rocjitsu_gpu_test_rvs_visible_gpus: >-
+    rocjitsu_gpu_test_rvs_visible_gpu_ids: >-
       {{ rocjitsu_gpu_test_rvs_gpus.stdout
-         | regex_findall('(?im)\\b(?:gpu(?:[_ -]id|[_ -]index)?|index)\\D*(\\d+)')
+         | regex_findall('GPU\\[\\s*\\d+\\s*-\\s*(\\d+)\\]')
          | map('string') | unique | list }}
   when: rocjitsu_gpu_test_rvs | bool
 
@@ -544,16 +544,22 @@
       - item.device == 'all'
         or
         (
+          (item.device is string or item.device is number)
+          and item.device | string in rocjitsu_gpu_test_rvs_visible_gpu_ids
+          and (rocjitsu_gpu_test_rvs_visible_gpu_ids | length) == 1
+        )
+        or
+        (
           item.device is sequence
           and item.device is not string
           and (
             (item.device | map('string') | list | difference(['all']) | length) == 0
             or
             (
-              (rocjitsu_gpu_test_rvs_visible_gpus | length) > 0
+              (rocjitsu_gpu_test_rvs_visible_gpu_ids | length) > 0
               and (item.device | map('string') | list
-                   | difference(rocjitsu_gpu_test_rvs_visible_gpus) | length) == 0
-              and (rocjitsu_gpu_test_rvs_visible_gpus
+                   | difference(rocjitsu_gpu_test_rvs_visible_gpu_ids) | length) == 0
+              and (rocjitsu_gpu_test_rvs_visible_gpu_ids
                    | difference(item.device | map('string') | list) | length) == 0
             )
           )
