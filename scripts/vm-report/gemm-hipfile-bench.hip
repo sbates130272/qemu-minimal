@@ -200,7 +200,8 @@ int main(int argc, char** argv) {
     }
 
     HIPFILE_CHECK(hipFileDriverOpen());
-    const int fd = ::open(path.c_str(), O_RDONLY | O_DIRECT);
+    bool driver_open = true;
+    int fd = ::open(path.c_str(), O_RDONLY | O_DIRECT);
     if (fd < 0) {
         std::fprintf(stderr, "gemm-hipfile-bench: open %s O_DIRECT: %s\n",
                      path.c_str(), std::strerror(errno));
@@ -213,12 +214,15 @@ int main(int argc, char** argv) {
     descr.handle.fd = fd;
     descr.type = hipFileHandleTypeOpaqueFD;
     HIPFILE_CHECK(hipFileHandleRegister(&fh, &descr));
+    bool handle_registered = true;
 
     void* dev = nullptr;
     HIP_CHECK(hipMalloc(&dev, kPayload));
 
     const hipFileError_t reg = hipFileBufRegister(dev, kPayload, 0);
     const bool buf_registered = reg.err == hipFileSuccess;
+    float* dc = nullptr;
+    int exit_code = 0;
     if (!buf_registered) {
         std::fprintf(stderr,
                      "gemm-hipfile-bench: hipFileBufRegister refused the buffer (err=%d drv=%d)\n",
@@ -236,7 +240,8 @@ int main(int argc, char** argv) {
             std::fprintf(stderr,
                          "gemm-hipfile-bench: warm hipFileRead block %zu returned %zd of %zu\n",
                          blk, n, kBlock);
-            return 2;
+            exit_code = 2;
+            goto cleanup;
         }
     }
 
@@ -250,7 +255,8 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr,
                              "gemm-hipfile-bench: hipFileRead block %zu returned %zd of %zu\n",
                              blk, n, kBlock);
-                return 2;
+                exit_code = 2;
+                goto cleanup;
             }
         }
     }
@@ -262,7 +268,6 @@ int main(int argc, char** argv) {
 
     float* const da = static_cast<float*>(dev);
     float* const db = reinterpret_cast<float*>(static_cast<char*>(dev) + kBOffset);
-    float* dc = nullptr;
     HIP_CHECK(hipMalloc(&dc, static_cast<size_t>(kM) * kN * sizeof(float)));
 
     const dim3 block(16, 16);
@@ -300,7 +305,8 @@ int main(int argc, char** argv) {
                 max_abs_error, failures);
     if (failures != 0) {
         std::printf("gemm-hipfile-bench: FAIL\n");
-        return 3;
+        exit_code = 3;
+        goto cleanup;
     }
 
     const auto gemm_start = std::chrono::steady_clock::now();
@@ -316,15 +322,28 @@ int main(int argc, char** argv) {
     std::printf("gemm-hipfile-bench: gemm_seconds_per_iter=%.9g gflops=%.9g\n",
                 gemm_seconds, flops / gemm_seconds / 1e9);
 
-    HIP_CHECK(hipFree(dc));
-    if (buf_registered) {
-        hipFileBufDeregister(dev);
+cleanup:
+    if (dc != nullptr) {
+        (void)hipFree(dc);
     }
-    HIP_CHECK(hipFree(dev));
-    hipFileHandleDeregister(fh);
-    ::close(fd);
-    hipFileDriverClose();
+    if (buf_registered) {
+        (void)hipFileBufDeregister(dev);
+    }
+    if (dev != nullptr) {
+        (void)hipFree(dev);
+    }
+    if (handle_registered) {
+        (void)hipFileHandleDeregister(fh);
+    }
+    if (fd >= 0) {
+        ::close(fd);
+    }
+    if (driver_open) {
+        hipFileDriverClose();
+    }
 
-    std::printf("gemm-hipfile-bench: PASS\n");
-    return 0;
+    if (exit_code == 0) {
+        std::printf("gemm-hipfile-bench: PASS\n");
+    }
+    return exit_code;
 }
