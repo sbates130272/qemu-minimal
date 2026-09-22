@@ -15,6 +15,7 @@ actually built it rather than what the docs claim.
 | [rocjitsu VM](rocjitsu/) | `vm-report-rocjitsu` | One rocjitsu vfio-user guest with GEMM and hipFile/NVMe metrics. |
 | [Two VMs — VM 1](two-vm/) | `vm-report-two-vms` | The `vfio-user-ernic-2vm` compose stack, both guests with a rocjitsu GPU. |
 | [Two VMs — VM 2](two-vm/vm2/) | `vm-report-two-vms` | The second guest of the same stack. |
+| [hipFile fio](hipfile-fio/) | `vm-report-hipfile-fio` | A rocjitsu guest measured with fio's `libhipfile` ioengine, built from a pinned fio master commit. |
 
 Each lane runs on its own schedule and publishes independently, so
 the reports here are not all from the same moment; each page carries
