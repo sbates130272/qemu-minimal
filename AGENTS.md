@@ -272,3 +272,27 @@ three to one GitHub Release, and publishes to PyPI last — a PyPI version can
 never be reused, so it goes after everything repeatable has succeeded. PyPI
 uses Trusted Publishing against the `pypi` environment, so there is no API
 token anywhere in the repo.
+
+## The published site
+
+<https://sbates130272.github.io/qemu-minimal/> is served from the `gh-pages`
+branch (Settings > Pages > Source = "Deploy from a branch", `gh-pages` /
+(root)), not from a Pages artifact. `.github/workflows/publish-pages.yml` is
+the only workflow that writes that branch; report lanes upload a named
+artifact and nothing else.
+
+That split is the whole point. `vm-report` and `vm-report-two-vms` each used
+to call `actions/deploy-pages` with their own full `_site/`, and a Pages
+deploy replaces the entire site, so whichever ran last won and the other
+lane's report disappeared — with both workflows green.
+
+`publish-pages` fetches each lane's latest artifact *by name*, not from the
+run that triggered it, so a lane that has not run for a week still
+contributes. Each lane's subtree is rsynced with its own scoped `--delete`,
+so an expired artifact leaves that lane's last report in place and anything
+else on the branch (a future `perf/`) survives untouched.
+
+Adding a lane is three edits: upload an artifact under a new name, add a
+`fetch <name> <dir>` line, and add a row to the landing page. Do **not** add
+`.nojekyll` — the reports are markdown that GitHub's Jekyll build renders,
+unlike rocm-ernic's pre-built Sphinx HTML.

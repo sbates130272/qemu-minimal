@@ -7,11 +7,9 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
-  group: pages
+  group: vm-report-two-vms
   cancel-in-progress: true
 
 env:
@@ -36,9 +34,6 @@ jobs:
         --device /dev/kvm
         -v /var/run/docker.sock:/var/run/docker.sock
         -v /var/lib/qemu-tool:/var/lib/qemu-tool
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
     - name: Check out code
       uses: actions/checkout@v4.3.1
@@ -228,27 +223,20 @@ jobs:
       run: bash scripts/generate-vm-report.sh site 2222 ubuntu "VM 1" qemu-1
 
     - name: Generate VM 2 report
-      run: bash scripts/generate-vm-report.sh site/2vm 2222 ubuntu "VM 2" qemu-2
+      run: bash scripts/generate-vm-report.sh site/vm2 2222 ubuntu "VM 2" qemu-2
 
     - name: Show compose logs on failure
       if: failure()
       working-directory: qemu/compose/vfio-user-ernic-2vm
       run: docker compose --profile rocjitsu-vm1 --profile rocjitsu-vm2 logs
 
-    - name: Setup Pages
-      uses: actions/configure-pages@v5
-
-    - name: Build Jekyll site
-      uses: actions/jekyll-build-pages@v1
+    # Upload only. publish-pages.yml is the sole writer of the site; this
+    # lane used to call deploy-pages itself, and a Pages deploy replaces the
+    # whole site, so it and vm-report-two-vms erased each other's report.
+    # No Jekyll build here either: the branch source builds the markdown.
+    - name: Upload the report
+      uses: actions/upload-artifact@v4
       with:
-        source: site/
-        destination: _site/
-
-    - name: Upload Pages artifact
-      uses: actions/upload-pages-artifact@v3
-      with:
-        path: _site/
-
-    - name: Deploy to GitHub Pages
-      id: deployment
-      uses: actions/deploy-pages@v4
+        name: vm-report-2vm
+        path: site/
+        if-no-files-found: error

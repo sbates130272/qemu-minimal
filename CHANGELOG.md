@@ -6,6 +6,17 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- `publish-pages.yml`, now the only workflow that writes the site. The report
+  lanes upload a named artifact and stop; this assembles them onto a
+  `gh-pages` branch behind a landing page at `/`, with the single-VM report
+  at `/1vm/` and the two-VM pair at `/two-vm/` and `/two-vm/vm2/`. It fetches
+  the latest artifact *by name* rather than from the run that triggered it,
+  so a lane that has not run for a week still contributes its last report and
+  the site is never partial. Each lane's subtree is synced with its own
+  scoped `--delete` instead of one delete over the whole site, so a lane
+  whose artifact has expired keeps the report it last published, and a
+  `perf/` record written by a future perf lane survives without needing to be
+  named. A push rejected by a concurrent writer is retried from the new tip.
 - PyPI publishing, so `pipx install qemu-tool` needs no checkout and no
   downloaded `.deb`. `release.yml` uploads via Trusted Publishing against a
   `pypi` environment rather than a stored API token, and runs last: a PyPI
@@ -94,6 +105,14 @@ All notable changes to this project will be documented in this file.
 - `--env-file` on `gen-vm`, `run-vm` and `compose`.
 
 ### Changed
+
+- `vm-report` and `vm-report-two-vms` no longer publish the site themselves.
+  Both called `actions/deploy-pages` with their own full `_site/`, and a Pages
+  deploy replaces the whole site, so whichever ran last won and the other
+  lane's report vanished — with both workflows reporting success. They now
+  upload an artifact and `publish-pages.yml` assembles the site. The second
+  guest's report moves from `site/2vm` to `site/vm2`, since nested under
+  `/two-vm/` the old name read as a duplicate of its parent.
 
 - The `.deb` no longer ships the bundled copy of the data the wheel carries.
   It installs it at the FHS locations as before, and `debian/rules` strips the
