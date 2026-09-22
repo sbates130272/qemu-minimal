@@ -508,6 +508,15 @@
     - rocjitsu_gpu_test_rvs | bool
     - rocjitsu_gpu_test_rvs_config_path == rocjitsu_gpu_test_rvs_default_config_path
 
+- name: Parse the generic RVS config when falling back to it
+  ansible.builtin.set_fact:
+    rocjitsu_gpu_test_rvs_default_config_data: >-
+      {{ rocjitsu_gpu_test_rvs_default_config_content.content
+         | b64decode | from_yaml }}
+  when:
+    - rocjitsu_gpu_test_rvs | bool
+    - rocjitsu_gpu_test_rvs_config_path == rocjitsu_gpu_test_rvs_default_config_path
+
 - name: Fail when the generic RVS config is not target-agnostic
   ansible.builtin.fail:
     msg: >-
@@ -518,8 +527,12 @@
   when:
     - rocjitsu_gpu_test_rvs | bool
     - rocjitsu_gpu_test_rvs_config_path == rocjitsu_gpu_test_rvs_default_config_path
-    - not ((rocjitsu_gpu_test_rvs_default_config_content.content | b64decode)
-           | regex_search('(?m)^\\s*device:\\s*all\\s*$'))
+    - (rocjitsu_gpu_test_rvs_default_config_data.actions | default([]) | length) == 0
+      or (rocjitsu_gpu_test_rvs_default_config_data.actions | default([])
+          | rejectattr('device', 'defined') | list | length) > 0
+      or (rocjitsu_gpu_test_rvs_default_config_data.actions | default([])
+          | selectattr('device', 'defined') | map(attribute='device')
+          | reject('equalto', 'all') | list | length) > 0
 
 - name: Show the selected RVS config
   ansible.builtin.debug:
