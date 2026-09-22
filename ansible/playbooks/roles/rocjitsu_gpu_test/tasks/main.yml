@@ -412,6 +412,7 @@
     argv:
       - "{{ rocjitsu_gpu_test_timeout_bin }}"
       - "{{ rocjitsu_gpu_test_rvs_timeout | string }}"
+      - --
       - "{{ rocjitsu_gpu_test_rvs_bin }}"
       - -g
   register: rocjitsu_gpu_test_rvs_gpus
@@ -530,6 +531,7 @@
     argv:
       - "{{ rocjitsu_gpu_test_timeout_bin }}"
       - "{{ rocjitsu_gpu_test_rvs_timeout | string }}"
+      - --
       - "{{ rocjitsu_gpu_test_rvs_bin }}"
       - -c
       - "{{ rocjitsu_gpu_test_rvs_config_path }}"
