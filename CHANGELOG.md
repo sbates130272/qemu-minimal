@@ -6,6 +6,70 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- `publish-pages.yml`, now the only workflow that writes the site. The report
+  lanes upload a named artifact and stop; this assembles them onto a
+  `gh-pages` branch behind a landing page at `/`, with the single-VM report
+  at `/1vm/` and the two-VM pair at `/two-vm/` and `/two-vm/vm2/`. It fetches
+  the latest artifact *by name* rather than from the run that triggered it,
+  so a lane that has not run for a week still contributes its last report and
+  the site is never partial. Each lane's subtree is synced with its own
+  scoped `--delete` instead of one delete over the whole site, so a lane
+  whose artifact has expired keeps the report it last published, and a
+  `perf/` record written by a future perf lane survives without needing to be
+  named. A push rejected by a concurrent writer is retried from the new tip.
+- PyPI publishing, so `pipx install qemu-tool` needs no checkout and no
+  downloaded `.deb`. `release.yml` uploads via Trusted Publishing against a
+  `pypi` environment rather than a stored API token, and runs last: a PyPI
+  version can never be reused even after a delete, so publishing it before
+  the deb has built would burn the version for a release that then has to be
+  cut again as the next one. `qemu/pyproject.toml` gains the metadata a
+  project page needs — readme, classifiers, keywords and URLs. The readme is
+  written inline because the sdist root is `qemu/`, so `../README.md` is
+  outside the project and cannot be packaged, and because the repo README
+  documents compose stacks, Ansible and libvirt that a `pip install` does not
+  install. `package.yml` and `release.yml` both run `twine check --strict`,
+  so metadata that PyPI would reject fails on a PR rather than at tag time.
+- `scripts/release.sh <version>`, which cuts a release from a clean `main`:
+  it stamps `qemu/pyproject.toml`, generates the `qemu/debian/changelog`
+  stanza from the `[Unreleased]` section of this file — preserving the
+  Added/Changed/Fixed/Removed grouping as dpkg `[ Section ]` markers, since
+  flattened into one list a removal reads exactly like an addition —
+  retitles that section as the new version, commits signed-off and makes a
+  signed tag. `--dry-run` shows the generated stanza and touches nothing. It
+  never pushes; it prints the command that does. A failed commit restores
+  the tree, which is safe because it refuses to start on a dirty one.
+- A `verify-version` job gating `release.yml`. Nothing is built or published
+  unless the tag, `qemu/pyproject.toml` and `qemu/debian/changelog` agree on
+  the version and `CHANGELOG.md` has a heading for the tag. v1.3.0 shipped
+  with no tag at all and every check stayed green, because the tag was the
+  only thing that would have disagreed and nothing compared it to anything.
+- A self-contained wheel. The compose stacks, both package manifests,
+  `env.example` and the man page now ship inside the Python distribution, so
+  `pipx install qemu-tool` is a working tool rather than a degraded one —
+  previously a non-editable install could not locate a compose stack or the
+  default package manifest at all. Bringing a stack *up* still needs
+  `QEMU_TOOL_SRC` pointing at a checkout, because every stack builds
+  qemu-tool from source inside its container and neither a wheel nor the
+  `.deb` is a source tree; the README says so now. `pyproject.toml` maps
+  them in from where they already live via
+  `[tool.setuptools.package-dir]`, so `qemu/compose/`
+  and `qemu/packages.d/` stay put and there is no second copy to keep in
+  sync. They are namespaced under `qemu_tool.share` rather than directly
+  under `qemu_tool`, because a data package named `qemu_tool.compose` would
+  collide with the `compose` module and `importlib.resources` would silently
+  resolve to the wrong directory.
+- Per-user fallbacks for the two paths a rootless install cannot have:
+  `$XDG_CONFIG_HOME/qemu-tool/env` for settings (searched between `qemu/.env`
+  and `/etc/qemu-tool/env`) and `$XDG_DATA_HOME/qemu-tool/images` for images.
+  The images default falls back only when `/var/lib/qemu-tool/images` is not
+  *writable*, so a user outside the `kvm` group gets a usable directory
+  instead of a permission failure on the default.
+- `package.yml`, replacing `deb-package.yml`, now covering the wheel as well
+  as the deb: it builds both, rebuilds the wheel from the sdist to prove the
+  sdist carries the same data, and installs the wheel into a bare
+  `python:3.12-slim` with no `/usr/share/qemu-tool` and no checkout to prove
+  a pipx install resolves every stack and manifest. See `ci.md`.
+
 - `rocjitsu_gpu_test`, a repo-local role that runs HIP workloads against a live
   rocjitsu vfio-user server: a scratch-free `vector_add`, a four-kernel
   private-segment repro, and an `hsa-snoop` trace of a dispatch on the emulated
@@ -46,6 +110,20 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- `vm-report` and `vm-report-two-vms` no longer publish the site themselves.
+  Both called `actions/deploy-pages` with their own full `_site/`, and a Pages
+  deploy replaces the whole site, so whichever ran last won and the other
+  lane's report vanished — with both workflows reporting success. They now
+  upload an artifact and `publish-pages.yml` assembles the site. The second
+  guest's report moves from `site/2vm` to `site/vm2`, since nested under
+  `/two-vm/` the old name read as a duplicate of its parent.
+
+- The `.deb` no longer ships the bundled copy of the data the wheel carries.
+  It installs it at the FHS locations as before, and `debian/rules` strips the
+  duplicate from `dist-packages` at `dh_installdeb` — not at
+  `dh_auto_install`, where `dh_python3` re-stages the package afterwards and
+  silently undoes the removal. The `/usr/share/qemu-tool` copies keep
+  precedence at runtime, so editing the installed files still takes effect.
 - **rocm-ernic is now ionic-based.** Upstream deleted the out-of-tree
   `rocm_ernic_eth`/`rocm_ernic_rdma` drivers and the patched verbs provider on
   2026-09-16. The guest now builds upstream `ionic` + `ionic_rdma` as the
@@ -82,6 +160,28 @@ All notable changes to this project will be documented in this file.
   `IONIC_EQ_COUNT_MIN`, so at 2 vCPUs `ionic_rdma` could never probe.
 
 ### Fixed
+
+- `scripts/release.sh` dropped every paragraph after the first in a
+  multi-paragraph `CHANGELOG.md` bullet. A blank line ended the bullet, so
+  the indented paragraph that followed matched the continuation rule but
+  found an empty buffer and was discarded — silently, because the shortened
+  stanza still parses. Blank lines no longer terminate a bullet, and a
+  nested markdown item now becomes an entry of its own instead of being
+  appended to its parent with a literal `- ` left mid-sentence.
+- The wheel and sdist ship the MIT licence text. `license-files` was unset
+  and `LICENSE` lives above the sdist root, so the PyPI artifacts carried
+  only the `License: MIT` metadata string — not the text MIT requires be
+  included in all copies. `qemu/LICENSE` is a symlink to the repo's, so
+  there is no second copy to drift.
+- `build-essential` is installed before `dpkg-buildpackage` in both
+  `package.yml` and `release.yml`. `dpkg-checkbuilddeps` treats it as an
+  implicit build dependency of every source package, even an arch-all
+  Python one that compiles nothing, and the runner image does not ship it.
+  Neither deb build had ever run on a GitHub runner to find out.
+- The container jobs in `package.yml` pin `shell: bash`. The runner chose
+  `sh -e` for the `ubuntu:24.04` container despite bash being installed
+  there, and dash has no `set -o pipefail`, which every assertion step
+  opens with.
 
 - `vm-rocjitsu.yml` no longer stubs over the real gfx1250 firmware.
   `vfio_guest_firmware.py` changed contract: its default output is now the

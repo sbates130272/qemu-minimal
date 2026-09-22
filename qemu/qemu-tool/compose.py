@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from .envfile import find as find_env_file
+from .resources import COMPOSE as _COMPOSE_PACKAGE, packaged_path
 
 _STACKS = (
     "vfio-user-ernic-vm",
@@ -30,8 +31,13 @@ def _compose_dir(stack: str) -> Path:
     source = _SOURCE_COMPOSE_ROOT / stack
     if source.is_dir():
         return source
+    # Last resort: the copy inside the wheel, which is all a pipx install has.
+    packaged = packaged_path(_COMPOSE_PACKAGE, stack)
+    if packaged is not None and packaged.is_dir():
+        return packaged
     raise FileNotFoundError(
-        f"Compose stack '{stack}' not found at {installed} or {source}. "
+        f"Compose stack '{stack}' not found at {installed} or {source}, "
+        f"and not bundled with this install. "
         f"Available stacks: {', '.join(_STACKS)}"
     )
 

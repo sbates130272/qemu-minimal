@@ -40,46 +40,95 @@ testing.
 Download the `.deb` from the [GitHub Releases](../../releases) page and install:
 
 ```bash
-sudo apt install ./python3-qemu-tool_*.deb
+sudo apt install --no-install-recommends \
+  ./python3-qemu-tool_*.deb \
+  cloud-image-utils openssh-client wget
 ```
 
 Use `apt` rather than `dpkg -i`: the package depends on a QEMU system emulator
 and `qemu-utils`, and `dpkg` will not resolve those for you.
 
+`--no-install-recommends` is worth the extra typing. Every `qemu-system-*`
+package *recommends* `qemu-system-gui`, so a plain `apt install` drags in GTK,
+SDL and the rest of a desktop display stack — 293 packages instead of 73 — none
+of which a headless VM needs. No package can decline another package's
+recommends, so the flag is the only way to say no. The three named packages are
+what the flag would otherwise skip and `gen-vm` genuinely needs: `cloud-localds`,
+`ssh` and `wget`.
+
+Add `ansible` too if you intend to use `gen-vm --ansible-playbook`.
+
 This installs `qemu-tool` to `/usr/bin/qemu-tool` and creates
-`/var/lib/qemu-tool/images` (owned `root:kvm`, mode `2775`).
-Add yourself to the `kvm` group if you have not already:
+`/var/lib/qemu-tool/images`. Where a `kvm` group exists — the normal case on a
+host with QEMU installed — that directory is owned `root:kvm` with mode `2775`,
+so the setgid bit keeps new images group-writable. Add yourself to the group if
+you have not already:
 
 ```bash
 sudo usermod -aG kvm $USER
 # re-login for the group to take effect
 ```
 
+On a system with no `kvm` group the install still succeeds, but the directory is
+left `root`-owned and not group-writable, and the package says so. Once a `kvm`
+group exists, apply the intended ownership yourself:
+
+```bash
+sudo chown root:kvm /var/lib/qemu-tool/images
+sudo chmod 2775 /var/lib/qemu-tool/images
+```
+
 ## Quick Start (qemu-tool)
 
-Install the tool from source with [pipx](https://pipx.pypa.io/), which puts
-`qemu-tool` on your `PATH` in its own isolated virtualenv:
+Install from PyPI with [pipx](https://pipx.pypa.io/), which puts `qemu-tool` on
+your `PATH` in its own isolated virtualenv:
 
 ```bash
 sudo apt install -y pipx
 pipx ensurepath          # adds ~/.local/bin to PATH; open a new shell after
+pipx install qemu-tool
+```
+
+That gives you a working `gen-vm` and `run-vm`: both package manifests,
+`env.example`, the man page and the compose stacks all ship inside the wheel,
+so none of those depend on a checkout.
+
+`qemu-tool compose` is the exception. The stacks are there, but each one
+bind-mounts a qemu-tool source tree into its container and builds the tool
+inside it, and neither a wheel nor the `.deb` is a source tree. To bring a
+stack up, point `QEMU_TOOL_SRC` at a checkout:
+
+```bash
+QEMU_TOOL_SRC=/path/to/qemu-minimal qemu-tool compose --vm-name myvm up
+```
+
+To work on the tool itself, install the checkout in editable mode instead, so
+edits take effect without reinstalling:
+
+```bash
 pipx install -e ./qemu   # from the repo root
 ```
 
-`-e` installs in editable mode, so edits to the source tree take effect without
-reinstalling. This matters for more than convenience: `compose` locates its
-stack directories relative to the package source, so a non-editable
-`pipx install` cannot find them unless the `.deb` has also been installed.
+What a pipx install still does not get is the parts that are install-tree
+artifacts by nature — `/etc/qemu-tool/env`, `/var/lib/qemu-tool/images` and a
+man page on your `MANPATH`. Those defaults fall back to per-user locations
+rather than failing:
 
-A pipx install deliberately does not provide everything the `.deb` does — the
-`/usr/share/qemu-tool` data files, the man page, and `/var/lib/qemu-tool/images`
-are all install-tree artifacts that cannot live inside a virtualenv. In
-particular, pass `--packages` explicitly, since its default
-(`/usr/share/qemu-tool/packages-default`) will not exist:
+| Default | `.deb` | pipx / venv |
+|---|---|---|
+| Settings file | `/etc/qemu-tool/env` | `$XDG_CONFIG_HOME/qemu-tool/env` |
+| Images directory | `/var/lib/qemu-tool/images` | `$XDG_DATA_HOME/qemu-tool/images` |
+| Package manifest | `/usr/share/qemu-tool/packages-default` | bundled in the wheel |
+| Compose stacks | `/usr/share/qemu-tool/compose/` | bundled in the wheel |
 
-```bash
-qemu-tool gen-vm --vm-name myvm --packages ./qemu/packages.d/packages-default
-```
+A per-user settings file **beats** the system one, as XDG expects: if you
+wrote `$XDG_CONFIG_HOME/qemu-tool/env` under a pipx install and later install
+the `.deb`, your file still wins and edits to `/etc/qemu-tool/env` are
+ignored. Delete the per-user copy, or pass `--env-file`, to hand control back
+to the system file. The images directory works the other way round but has
+its own catch: the system path is preferred only when it is *writable*, so if
+you are not in the `kvm` group you quietly get the per-user path instead of a
+permission error. Pass `--images` to be explicit.
 
 A plain virtualenv works too, if you prefer to activate it explicitly:
 
@@ -218,6 +267,7 @@ The file is searched for in this order, first hit wins:
 | `$QEMU_TOOL_ENV` | explicit, per shell |
 | `./.env` | a per-project override |
 | `qemu/.env` | a source checkout |
+| `$XDG_CONFIG_HOME/qemu-tool/env` | a pipx or venv install (`~/.config` by default) |
 | `/etc/qemu-tool/env` | an installed `.deb` |
 
 The stack `README.md` files document the variables specific to each stack.
@@ -226,9 +276,11 @@ The stack `README.md` files document the variables specific to each stack.
 
 When installed system-wide via the `.deb` package, `gen-vm` and `run-vm`
 default to `/var/lib/qemu-tool/images` for storing VM disk images.
-The directory is created by the package installer with `root:kvm` ownership
-and mode `2775` (setgid) so any member of the `kvm` group can read and write
-images without `sudo`.
+The directory is created by the package installer. Where a `kvm` group
+exists it is given `root:kvm` ownership and mode `2775` (setgid), so any
+member of that group can read and write images without `sudo`. On a host
+with no `kvm` group the installer leaves it `root:root` and mode `755`
+and prints the two commands to run once the group appears.
 
 When using a source checkout (`pipx install -e ./qemu`), override the
 default with `--images`:
@@ -252,6 +304,10 @@ manifests are provided:
 - **packages-minimal** -- a smaller set with just `emacs-nox`,
   `fio`, `sysstat`, and `tree`. Installed to
   `/usr/share/qemu-tool/packages-minimal` by the `.deb` package.
+
+Both also ship inside the wheel, so a pipx install resolves the default
+manifest without a checkout or a system install. `/usr/share/qemu-tool` wins
+when it exists, so editing the installed copy still takes effect.
 
 Select a manifest via the `--packages` flag:
 

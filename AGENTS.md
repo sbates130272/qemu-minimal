@@ -252,3 +252,50 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
 - GPG signing required on all commits (`-S`), signoff required (`-s`)
 - Main branch: `main`; current work branch: `feat/working-compose`
 - Never use `--no-verify` or `--no-gpg-sign`
+
+## Cutting a release
+
+`scripts/release.sh <version>` from a clean `main`. It stamps the version in
+`qemu/pyproject.toml`, generates the `qemu/debian/changelog` stanza from the
+`CHANGELOG.md` `[Unreleased]` section, retitles that section as the new
+version, commits signed-off, and makes a signed tag. Run it with `--dry-run`
+first to see the generated stanza.
+
+It never pushes; it prints the `git push origin main v<version>` that does.
+Pushing the tag is what triggers `release.yml`, whose `verify-version` job
+refuses to build anything unless the tag, `pyproject.toml` and
+`debian/changelog` agree and `CHANGELOG.md` has a heading for the tag. That
+gate exists because v1.3.0 shipped with no tag at all and nothing noticed.
+
+`release.yml` then builds the wheel, the sdist and the `.deb`, attaches all
+three to one GitHub Release, and publishes to PyPI last — a PyPI version can
+never be reused, so it goes after everything repeatable has succeeded. PyPI
+uses Trusted Publishing against the `pypi` environment, so there is no API
+token anywhere in the repo.
+
+## The published site
+
+<https://sbates130272.github.io/qemu-minimal/> is served from the `gh-pages`
+branch (Settings > Pages > Source = "Deploy from a branch", `gh-pages` /
+(root)), not from a Pages artifact. `.github/workflows/publish-pages.yml` is
+the only workflow that writes that branch; report lanes upload a named
+artifact and nothing else.
+
+That split is the whole point. `vm-report` and `vm-report-two-vms` each used
+to call `actions/deploy-pages` with their own full `_site/`, and a Pages
+deploy replaces the entire site, so whichever ran last won and the other
+lane's report disappeared — with both workflows green.
+
+`publish-pages` fetches each lane's latest artifact *by name*, not from the
+run that triggered it, so a lane that has not run for a week still
+contributes. Each lane's subtree is rsynced with its own scoped `--delete`,
+so an expired artifact leaves that lane's last report in place and anything
+else on the branch (a future `perf/`) survives untouched.
+
+Adding a lane is four edits: upload an artifact under a new name, add a
+`fetch <name> <dir>` line, add the lane's workflow `name:` to
+`on.workflow_run.workflows`, and add a row to the landing page. Miss the
+third and the lane publishes nothing until some *other* lane finishes, which
+looks like the site being stale rather than a missing trigger. Do **not** add
+`.nojekyll` — the reports are markdown that GitHub's Jekyll build renders,
+unlike rocm-ernic's pre-built Sphinx HTML.

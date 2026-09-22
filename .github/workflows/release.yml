@@ -5,8 +5,10 @@ on:
     tags:
       - 'v*'
 
+# Read by default; the two publishing jobs widen this themselves, so nothing
+# that merely builds an artifact can write a release or mint an OIDC token.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -14,8 +16,50 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: create-github-release
+  verify-version:
+    name: verify-version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4.3.1
+
+      # The tag is the only thing a user sees, but the wheel takes its version
+      # from pyproject.toml and the deb from debian/changelog, so a tag that
+      # disagrees with either ships artifacts labelled with the wrong release.
+      # Fail before anything is built or published rather than after.
+      - name: Check the tag, pyproject.toml and debian/changelog agree
+        run: |
+          set -euo pipefail
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PY_VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' qemu/pyproject.toml | head -1)
+          DEB_VERSION=$(sed -n '1s/^[^ ]* (\([^)]*\)).*/\1/p' qemu/debian/changelog)
+
+          echo "tag:              ${TAG_VERSION}"
+          echo "pyproject.toml:   ${PY_VERSION}"
+          echo "debian/changelog: ${DEB_VERSION}"
+
+          rc=0
+          if [ "${TAG_VERSION}" != "${PY_VERSION}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match qemu/pyproject.toml ${PY_VERSION}"
+            rc=1
+          fi
+          if [ "${TAG_VERSION}" != "${DEB_VERSION}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match qemu/debian/changelog ${DEB_VERSION}"
+            rc=1
+          fi
+          if ! grep -q "^## \[${GITHUB_REF_NAME}\] - " CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no '## [${GITHUB_REF_NAME}] - <date>' heading"
+            rc=1
+          fi
+          if [ "${rc}" -ne 0 ]; then
+            echo "::error::run scripts/release.sh ${TAG_VERSION} to stamp all three"
+            exit 1
+          fi
+          echo "all three agree on ${TAG_VERSION}"
+
+  build-python:
+    name: build-python-dists
+    needs: verify-version
     runs-on: ubuntu-latest
     steps:
       - name: Check out code
@@ -26,21 +70,28 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Build wheel
+      # Both, not just the wheel: PyPI wants an sdist so the project can be
+      # built from source on a platform no wheel targets.
+      - name: Build wheel and sdist
         run: |
           pip install build
-          python -m build qemu/ --wheel --outdir dist/
+          python -m build qemu/ --outdir dist/
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2.3.2
+      - name: Check the dists are well formed
+        run: |
+          pip install twine
+          twine check --strict dist/*
+
+      - name: Upload dists
+        uses: actions/upload-artifact@v4
         with:
-          generate_release_notes: true
-          draft: false
-          prerelease: false
-          files: dist/*.whl
+          name: python-dists
+          path: dist/
+          if-no-files-found: error
 
   build-deb:
     name: build-deb-package
+    needs: verify-version
     runs-on: ubuntu-latest
     steps:
       - name: Check out code
@@ -49,16 +100,75 @@ jobs:
       - name: Install Debian build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y debhelper dh-python pybuild-plugin-pyproject python3-all python3-setuptools python3-build
+          # build-essential: implicit build dependency of every source package,
+          # demanded by dpkg-checkbuilddeps even though this one compiles
+          # nothing. Not on the runner image.
+          sudo apt-get install -y build-essential debhelper dh-python pybuild-plugin-pyproject python3-all python3-setuptools python3-build
 
       - name: Build deb
         working-directory: qemu
         run: dpkg-buildpackage -us -uc -b
 
-      - name: Upload deb to release
+      # dpkg-buildpackage writes to the parent of the source dir, so the deb
+      # lands beside the checkout rather than inside it.
+      - name: Upload deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb
+          path: "*.deb"
+          if-no-files-found: error
+
+  publish-github:
+    name: publish-github-release
+    needs: [build-python, build-deb]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download every artifact
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          merge-multiple: true
+
+      # One call, not one per artifact. Two jobs each calling action-gh-release
+      # raced to create the same release, so the notes came from whichever won
+      # and a failure in the loser left a release published but incomplete.
+      - name: Create the GitHub Release
         uses: softprops/action-gh-release@v2.3.2
         with:
-          generate_release_notes: false
+          generate_release_notes: true
           draft: false
           prerelease: false
-          files: "*.deb"
+          fail_on_unmatched_files: true
+          files: |
+            artifacts/*.whl
+            artifacts/*.tar.gz
+            artifacts/*.deb
+
+  publish-pypi:
+    name: publish-pypi
+    # Last, and gated on the GitHub release rather than just the wheel. A PyPI
+    # version number can never be reused, even after a delete, so publishing
+    # while the deb is still failing burns the version for a release that then
+    # has to be cut again as the next one. Everything before this is repeatable.
+    needs: publish-github
+    runs-on: ubuntu-latest
+    # Trusted Publishing: PyPI trusts this repo, workflow and environment by
+    # name and hands back a short-lived token, so there is no API token in the
+    # repo secrets to leak or rotate. The environment is the part PyPI pins,
+    # so it is also where a manual approval gate would go.
+    environment:
+      name: pypi
+      url: https://pypi.org/p/qemu-tool
+    permissions:
+      id-token: write
+    steps:
+      - name: Download dists
+        uses: actions/download-artifact@v4
+        with:
+          name: python-dists
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@v1.14.2

@@ -10,7 +10,6 @@ from . import __version__
 from .caps import probe_caps
 from .config import VMConfig
 from .compose import _DEFAULT_STACK, _STACKS, run as compose_run
-from .config import _DEFAULT_IMAGES
 from .envfile import load as load_env_file
 from .gen_vm import run as gen_vm_run
 from .libvirt_xml import LibvirtXml
