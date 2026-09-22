@@ -102,7 +102,10 @@ dev=$(lsblk -dpno NAME,TYPE | awk '$2=="disk" && $1 ~ /^\/dev\/nvme[0-9]+n[0-9]+
 [ -n "${dev}" ] || { echo "No NVMe namespace present"; exit 0; }
 sudo -n mkdir -p /mnt/nvme
 if ! mountpoint -q /mnt/nvme; then
-  sudo -n mkfs.ext4 -q -F "${dev}"
+  fstype=$(sudo -n blkid -o value -s TYPE "${dev}" 2>/dev/null || true)
+  if [ -z "${fstype}" ]; then
+    sudo -n mkfs.ext4 -q -F "${dev}"
+  fi
   sudo -n mount -o noatime "${dev}" /mnt/nvme
 fi
 sudo -n chmod 1777 /mnt/nvme

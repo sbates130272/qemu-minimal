@@ -211,10 +211,17 @@ int main(int argc, char** argv) {
     driver_open = true;
     int fd = ::open(path.c_str(), O_RDONLY | O_DIRECT);
     if (fd < 0) {
-        std::fprintf(stderr, "gemm-hipfile-bench: open %s O_DIRECT: %s\n",
+        std::fprintf(stderr,
+                     "gemm-hipfile-bench: open %s O_DIRECT failed: %s; retrying "
+                     "without O_DIRECT for compat mode\n",
                      path.c_str(), std::strerror(errno));
-        hipFileDriverClose();
-        return 2;
+        fd = ::open(path.c_str(), O_RDONLY);
+        if (fd < 0) {
+            std::fprintf(stderr, "gemm-hipfile-bench: open %s: %s\n",
+                         path.c_str(), std::strerror(errno));
+            hipFileDriverClose();
+            return 2;
+        }
     }
 
     hipFileHandle_t fh{};
