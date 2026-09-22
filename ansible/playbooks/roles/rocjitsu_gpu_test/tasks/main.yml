@@ -434,6 +434,16 @@
          | map('string') | unique | list }}
   when: rocjitsu_gpu_test_rvs | bool
 
+- name: Fail when the RVS GPU list output has no parseable gpu ids
+  ansible.builtin.fail:
+    msg: >-
+      rvs -g completed, but its output contained no parseable "GPU[node_id -
+      gpu_id]" entries. Refuse to guess device coverage for the fallback config;
+      inspect the RVS output above for a format change or enumeration problem.
+  when:
+    - rocjitsu_gpu_test_rvs | bool
+    - (rocjitsu_gpu_test_rvs_visible_gpu_ids | length) == 0
+
 - name: Fail when RVS GPU enumeration times out
   ansible.builtin.fail:
     msg: >-
