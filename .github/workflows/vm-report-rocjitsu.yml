@@ -126,6 +126,21 @@ jobs:
           -p 2222 ubuntu@qemu "sudo -n timeout 120 /usr/local/bin/amdgpu-probe"
         echo "✓ amdgpu-probe completed"
 
+    # Reuse the same live-guest validation path as the PR-only rocjitsu test
+    # workflow used to, but run it here on the mainline Pages-report lane
+    # instead. The role owns the HIP, hsa-snoop and RVS smoke checks.
+    - name: Run rocjitsu live-guest validation
+      timeout-minutes: 30
+      run: |
+        ansible-playbook \
+          -i "qemu," \
+          ansible/playbooks/vm-rocjitsu.yml \
+          --tags test \
+          -e "ansible_host=qemu" \
+          -e "ansible_port=2222" \
+          -e "ansible_user=ubuntu" \
+          -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"'
+
     - name: Generate rocjitsu report
       env:
         REPORT_ROCJITSU_BENCH: "1"
