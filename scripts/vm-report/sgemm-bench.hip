@@ -81,34 +81,47 @@ int main(int argc, char** argv) {
     fill_operands(ha, hb);
     std::vector<float> hc(static_cast<size_t>(kM) * kN, 0.0f);
 
-    float *da = nullptr, *db = nullptr, *dc = nullptr;
-    int exit_code = 0;
-    auto hip_ok = [&](hipError_t err, const char* expr) {
+    // Frees on every exit path so the body below can just return. The goto
+    // chain this replaces jumped forward over the initialisations that follow
+    // it -- ill-formed C++, so this file had never once compiled.
+    struct DeviceBuffer {
+        float* ptr = nullptr;
+        ~DeviceBuffer() {
+            if (ptr != nullptr) {
+                (void)hipFree(ptr);
+            }
+        }
+    };
+    DeviceBuffer a_buf, b_buf, c_buf;
+    float*& da = a_buf.ptr;
+    float*& db = b_buf.ptr;
+    float*& dc = c_buf.ptr;
+
+    auto hip_ok = [](hipError_t err, const char* expr) {
         if (err != hipSuccess) {
             std::fprintf(stderr, "sgemm-bench: %s failed: %s\n", expr,
                          hipGetErrorString(err));
-            exit_code = 1;
             return false;
         }
         return true;
     };
-    if (!hip_ok(hipMalloc(&da, ha.size() * sizeof(float)), "hipMalloc(&da, ha.size() * sizeof(float))")) goto cleanup;
-    if (!hip_ok(hipMalloc(&db, hb.size() * sizeof(float)), "hipMalloc(&db, hb.size() * sizeof(float))")) goto cleanup;
-    if (!hip_ok(hipMalloc(&dc, hc.size() * sizeof(float)), "hipMalloc(&dc, hc.size() * sizeof(float))")) goto cleanup;
+    if (!hip_ok(hipMalloc(&da, ha.size() * sizeof(float)), "hipMalloc(&da, ha.size() * sizeof(float))")) return 1;
+    if (!hip_ok(hipMalloc(&db, hb.size() * sizeof(float)), "hipMalloc(&db, hb.size() * sizeof(float))")) return 1;
+    if (!hip_ok(hipMalloc(&dc, hc.size() * sizeof(float)), "hipMalloc(&dc, hc.size() * sizeof(float))")) return 1;
     if (!hip_ok(hipMemcpy(da, ha.data(), ha.size() * sizeof(float), hipMemcpyHostToDevice),
-                "hipMemcpy(da, ha.data(), ha.size() * sizeof(float), hipMemcpyHostToDevice)")) goto cleanup;
+                "hipMemcpy(da, ha.data(), ha.size() * sizeof(float), hipMemcpyHostToDevice)")) return 1;
     if (!hip_ok(hipMemcpy(db, hb.data(), hb.size() * sizeof(float), hipMemcpyHostToDevice),
-                "hipMemcpy(db, hb.data(), hb.size() * sizeof(float), hipMemcpyHostToDevice)")) goto cleanup;
+                "hipMemcpy(db, hb.data(), hb.size() * sizeof(float), hipMemcpyHostToDevice)")) return 1;
 
     const dim3 block(16, 16);
     const dim3 grid((kN + block.x - 1) / block.x, (kM + block.y - 1) / block.y);
     std::printf("sgemm-bench: m=%d n=%d k=%d\n", kM, kN, kK);
 
     hipLaunchKernelGGL(sgemm, grid, block, 0, 0, da, db, dc, kM, kN, kK);
-    if (!hip_ok(hipGetLastError(), "hipGetLastError()")) goto cleanup;
-    if (!hip_ok(hipDeviceSynchronize(), "hipDeviceSynchronize()")) goto cleanup;
+    if (!hip_ok(hipGetLastError(), "hipGetLastError()")) return 1;
+    if (!hip_ok(hipDeviceSynchronize(), "hipDeviceSynchronize()")) return 1;
     if (!hip_ok(hipMemcpy(hc.data(), dc, hc.size() * sizeof(float), hipMemcpyDeviceToHost),
-                "hipMemcpy(hc.data(), dc, hc.size() * sizeof(float), hipMemcpyDeviceToHost)")) goto cleanup;
+                "hipMemcpy(hc.data(), dc, hc.size() * sizeof(float), hipMemcpyDeviceToHost)")) return 1;
 
     double max_abs_error = 0.0;
     long failures = 0;
@@ -135,16 +148,15 @@ int main(int argc, char** argv) {
                 max_abs_error, failures);
     if (failures != 0) {
         std::printf("sgemm-bench: FAIL\n");
-        exit_code = 3;
-        goto cleanup;
+        return 3;
     }
 
     const auto start = std::chrono::steady_clock::now();
     for (int i = 0; i < iters; ++i) {
         hipLaunchKernelGGL(sgemm, grid, block, 0, 0, da, db, dc, kM, kN, kK);
-        if (!hip_ok(hipGetLastError(), "hipGetLastError()")) goto cleanup;
+        if (!hip_ok(hipGetLastError(), "hipGetLastError()")) return 1;
     }
-    if (!hip_ok(hipDeviceSynchronize(), "hipDeviceSynchronize()")) goto cleanup;
+    if (!hip_ok(hipDeviceSynchronize(), "hipDeviceSynchronize()")) return 1;
     const auto stop = std::chrono::steady_clock::now();
 
     const double seconds =
@@ -152,19 +164,7 @@ int main(int argc, char** argv) {
     const double flops = 2.0 * kM * kN * kK;
     std::printf("sgemm-bench: seconds_per_iter=%.9g gflops=%.9g\n", seconds,
                 flops / seconds / 1e9);
-cleanup:
-    if (dc != nullptr) {
-        (void)hipFree(dc);
-    }
-    if (db != nullptr) {
-        (void)hipFree(db);
-    }
-    if (da != nullptr) {
-        (void)hipFree(da);
-    }
 
-    if (exit_code == 0) {
-        std::printf("sgemm-bench: PASS\n");
-    }
-    return exit_code;
+    std::printf("sgemm-bench: PASS\n");
+    return 0;
 }

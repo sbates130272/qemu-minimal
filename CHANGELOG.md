@@ -6,6 +6,20 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- `bench-compile.yml`, which compiles both `scripts/vm-report/*.hip` files on
+  every pull request that touches them. Until now the only thing that ever
+  compiled them was the rocjitsu report lane, which runs on push to `main` and
+  needs a GPU, a VM and two and a half hours — so a benchmark that was not
+  valid C++ could sit on `main` indefinitely, and did. This lane installs
+  hipcc and the hipFile SDK from the same TheRock `stable` channel the guests
+  use — pinned to the `ubuntu2404` path, because the runner is `ubuntu-24.04`
+  while the rocjitsu guest is built `--release resolute` and takes
+  `ubuntu2604` — and runs the compile only: no GPU, no VM, and it is
+  path-filtered to `scripts/vm-report/**` and the workflow itself, so it costs
+  nothing on the PRs that do not touch the benchmarks. It compiles with
+  `-Wall -Wextra`, which is stricter than the report script's own line, and
+  without `-Werror`, so only hard errors fail it.
+
 - `--mac ADDR` (`VM_MAC`) on `run-vm` and `gen-vm`, which sets the management
   NIC MAC instead of deriving it from the SSH port. Images built by this
   repo's `gen-vm` do not need it — their netplan matches on interface name —
@@ -121,6 +135,17 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- The rocjitsu benchmark numbers pick their own SI prefix instead of always
+  being reported in G-units. The GPU is attached over vfio-user, so the same
+  benchmark spans five orders of magnitude between bare metal and the guest —
+  231 GFLOP/s against 1.88 MFLOP/s — and a fixed unit renders one of the two
+  unreadably, as `0.00187734275 GFLOP/s` on a shields.io badge. The value now
+  selects between T, G, M, k and none, rounded to three significant figures,
+  for the report table and both badges. The benchmarks themselves still emit
+  `gflops=` and `read_gbs=`, so the parse and the raw output block are
+  unchanged. The table carries a note saying the low absolute numbers are
+  expected of a vfio-user guest and that the trend is what to watch.
+
 - `vm-report` and `vm-report-two-vms` no longer publish the site themselves.
   Both called `actions/deploy-pages` with their own full `_site/`, and a Pages
   deploy replaces the whole site, so whichever ran last won and the other
@@ -172,6 +197,37 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Neither rocjitsu benchmark had ever compiled. `sgemm-bench.hip` and
+  `gemm-hipfile-bench.hip` both used `goto cleanup` to reach a single cleanup
+  block, and every one of those jumps crossed the initialisation of a variable
+  declared later in the same scope — `block`, `grid`, `max_abs_error`,
+  `start`, `seconds` and the rest. That is ill-formed C++, not a warning, and
+  clang rejected it: 11 errors for `sgemm-bench.hip` against gfx1250. The
+  failure stayed invisible for as long as the lane reported a blank line,
+  because hipcc writes its diagnostics to stderr and the report script only
+  captured stdout. Both files now release their device buffers, file
+  descriptor, hipFile handle and driver through scope guards and return
+  directly, so no jump crosses an initialisation. Guard declaration order is
+  load-bearing: reverse-destruction order reproduces exactly what the
+  `cleanup:` block did. Exit codes and every diagnostic string are unchanged.
+
+- The hipFile benchmark reported "hipFile headers or library unavailable" on a
+  guest that had the SDK installed. `run_rocjitsu_hipfile` probed only for the
+  nested `include/hipfile/hipfile.h`, but TheRock — the stream
+  `vm-rocjitsu.yml` uses — ships the header flat at `include/hipfile.h`, so the
+  probe never matched and the lane exited before producing a `read_gbs`
+  metric. The probe now accepts either layout, as the compile line below it and
+  the benchmark's own `__has_include` already did.
+
+- The rocjitsu guest never had the hipFile SDK in the first place, so fixing
+  the probe alone would only have made it report the truth. `vm-rocjitsu.yml`
+  listed `amdrocm-runtime-dev`, which depends on `amdrocm-sysdeps`,
+  `amdrocm-runtime` and `amdrocm-llvm-dev` and nothing else — the development
+  VM that the benchmark was proven on had `amdrocm-hipfile-dev` installed by
+  hand. It is now in `rocm_setup_minimal_packages`, so a freshly generated
+  image can run `gemm-hipfile-bench` and produce a `read_gbs` metric instead of
+  aborting the report.
+
 - The management and multicast NICs of one guest were given the same MAC.
   `_mcast_args` derived its address from the SSH port with the same
   arithmetic as `_mgmt_mac` rather than calling it, so `--mcast-group` put
@@ -184,6 +240,7 @@ All notable changes to this project will be documented in this file.
   `52:54:00:12:34:56` — exactly the address older guest images pin their
   netplan to, so a guest with both NICs could match its management netplan
   against the data NIC.
+
 - The rocjitsu report lane reported its failures as a blank line. The
   guest-side benchmark scripts run under `set -euo pipefail`, and their
   `hipcc=$(command -v hipcc || ls /opt/rocm*/bin/hipcc ... | head -1)` probe
