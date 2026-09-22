@@ -391,11 +391,29 @@
       LD_LIBRARY_PATH: "/opt/rocm/lib:/opt/rocm/lib64:{{ rocjitsu_gpu_test_rocm }}/lib:{{ rocjitsu_gpu_test_rocm }}/lib64"
   when: rocjitsu_gpu_test_rvs | bool
 
+- name: Check whether timeout is installed
+  ansible.builtin.stat:
+    path: "{{ rocjitsu_gpu_test_timeout_bin }}"
+  register: rocjitsu_gpu_test_timeout_bin_stat
+  when: rocjitsu_gpu_test_rvs | bool
+
+- name: Fail when timeout is missing
+  ansible.builtin.fail:
+    msg: >-
+      No timeout binary at {{ rocjitsu_gpu_test_timeout_bin }}. The RVS checks
+      are bounded with it to keep CI from hanging; install coreutils, or set
+      rocjitsu_gpu_test_rvs=false to skip the check.
+  when:
+    - rocjitsu_gpu_test_rvs | bool
+    - not rocjitsu_gpu_test_timeout_bin_stat.stat.exists
+
 - name: List GPUs with RVS
   ansible.builtin.command:
-    cmd: >-
-      timeout {{ rocjitsu_gpu_test_rvs_timeout }}
-      {{ rocjitsu_gpu_test_rvs_bin }} -g
+    argv:
+      - "{{ rocjitsu_gpu_test_timeout_bin }}"
+      - "{{ rocjitsu_gpu_test_rvs_timeout | string }}"
+      - "{{ rocjitsu_gpu_test_rvs_bin }}"
+      - -g
   register: rocjitsu_gpu_test_rvs_gpus
   changed_when: false
   failed_when: false
@@ -488,9 +506,12 @@
 
 - name: Run the RVS GPU properties smoke check
   ansible.builtin.command:
-    cmd: >-
-      timeout {{ rocjitsu_gpu_test_rvs_timeout }}
-      {{ rocjitsu_gpu_test_rvs_bin }} -c {{ rocjitsu_gpu_test_rvs_config_path }}
+    argv:
+      - "{{ rocjitsu_gpu_test_timeout_bin }}"
+      - "{{ rocjitsu_gpu_test_rvs_timeout | string }}"
+      - "{{ rocjitsu_gpu_test_rvs_bin }}"
+      - -c
+      - "{{ rocjitsu_gpu_test_rvs_config_path }}"
   register: rocjitsu_gpu_test_rvs_run
   changed_when: false
   failed_when: false

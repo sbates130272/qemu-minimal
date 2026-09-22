@@ -105,3 +105,4 @@ rocjitsu_gpu_test_rvs_bin: /opt/rocm/bin/rvs
 rocjitsu_gpu_test_rvs_conf_dir: /opt/rocm/share/rocm-validation-suite/conf
 rocjitsu_gpu_test_rvs_config_name: gpup_single.conf
 rocjitsu_gpu_test_rvs_timeout: 120
+rocjitsu_gpu_test_timeout_bin: /usr/bin/timeout
