@@ -10,11 +10,9 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
-  group: pages
+  group: vm-report
   cancel-in-progress: true
 
 jobs:
@@ -25,9 +23,6 @@ jobs:
       image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260919.g359579e-qemu11.1.1-vfu.8039244
       # Supplies qemu-system-x86_64, qemu-img and cloud-localds.
       options: --device /dev/kvm
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
     - name: Check out code
       uses: actions/checkout@v4.3.1
@@ -125,20 +120,13 @@ jobs:
       if: failure()
       run: cat run-vm-output.log
 
-    - name: Setup Pages
-      uses: actions/configure-pages@v5
-
-    - name: Build Jekyll site
-      uses: actions/jekyll-build-pages@v1
+    # Upload only. publish-pages.yml is the sole writer of the site; this
+    # lane used to call deploy-pages itself, and a Pages deploy replaces the
+    # whole site, so it and vm-report-two-vms erased each other's report.
+    # No Jekyll build here either: the branch source builds the markdown.
+    - name: Upload the report
+      uses: actions/upload-artifact@v4
       with:
-        source: site/
-        destination: _site/
-
-    - name: Upload Pages artifact
-      uses: actions/upload-pages-artifact@v3
-      with:
-        path: _site/
-
-    - name: Deploy to GitHub Pages
-      id: deployment
-      uses: actions/deploy-pages@v4
+        name: vm-report-1vm
+        path: site/
+        if-no-files-found: error

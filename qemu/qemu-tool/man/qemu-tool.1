@@ -84,6 +84,17 @@ Directory where VM image files are stored (default:
 .BI \-\-ssh\-port " PORT"
 Host port forwarded to guest SSH (default: 2222).
 .TP
+.BI \-\-mac " ADDR"
+Management NIC MAC address.
+By default it is derived from
+.BR \-\-ssh\-port
+as
+.IR 52:54:00:00:<hi>:<lo> .
+Set it when the guest image pins its netplan to a particular MAC; images
+built by
+.B gen\-vm
+match on interface name instead and do not need this.
+.TP
 .BR \-\-kvm " | " \-\-no\-kvm
 Enable or disable KVM hardware acceleration (default: enabled).
 .TP
@@ -366,6 +377,7 @@ The first of these that exists is used:
 .BR $QEMU_TOOL_ENV ,
 .IR ./.env ,
 .IR qemu/.env ,
+.IR $XDG_CONFIG_HOME/qemu-tool/env ,
 .IR /etc/qemu-tool/env .
 .SH FILES
 .TP
@@ -386,10 +398,25 @@ with permissions
 (setgid so new files inherit the
 .B kvm
 group).
+Used only when it is writable; otherwise
+.I $XDG_DATA_HOME/qemu-tool/images
+is used instead, so an unprivileged install still has somewhere to write.
 .TP
 .I /usr/share/qemu-tool/packages-default
 Default package manifest installed into new VMs by
 .BR gen\-vm .
+.TP
+.I /usr/share/qemu-tool/compose/
+Compose stack directories used by
+.BR compose .
+.PP
+The package manifests, the compose stacks and
+.I env.example
+are also bundled inside the Python distribution, so
+.B pipx install qemu-tool
+resolves them with no system install present. The
+.I /usr/share/qemu-tool
+copies take precedence whenever they exist.
 .SH EXAMPLES
 Create a VM named
 .I myvm

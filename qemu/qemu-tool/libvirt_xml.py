@@ -525,12 +525,11 @@ class LibvirtXml:
 
         # mcast NIC
         if cfg.mcast_group:
-            hi = cfg.ssh_port // 256
-            lo = cfg.ssh_port % 256
-            mac = f"52:54:00:00:{hi:02x}:{lo:02x}"
+            from .run_vm import _nic_mac
             args += [
                 "-netdev", f"socket,id=net1,mcast={cfg.mcast_group}",
-                "-device", f"virtio-net-pci,netdev=net1,mac={mac}",
+                "-device",
+                f"virtio-net-pci,netdev=net1,mac={_nic_mac(cfg.ssh_port, 1)}",
             ]
 
         # QMP

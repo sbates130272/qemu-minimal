@@ -10,12 +10,89 @@ requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [{name = "Stephen Bates"}]
 dependencies = []
+keywords = ["qemu", "kvm", "vm", "vfio", "cloud-init", "libvirt", "rocm"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Emulators",
+    "Topic :: System :: Systems Administration",
+]
+
+# Written inline rather than pointed at the repo README, for two reasons: the
+# sdist root is qemu/, so a path to ../README.md is outside the project and
+# setuptools will not package it; and the repo README documents the whole
+# repo -- compose stacks, Ansible, libvirt -- most of which a `pip install`
+# does not give you. This describes what the package actually installs.
+readme = {content-type = "text/markdown", text = """
+# qemu-tool
+
+A single CLI for creating and running QEMU virtual machines: cloud-init image
+generation for x86_64, ARM64 and RISC-V, a flexible runner with NVMe, VFIO,
+CXL, VirtFS and QMP support, and libvirt domain XML round-tripping.
+
+```bash
+pipx install qemu-tool
+qemu-tool gen-vm --vm-name vm1 --arch x86_64
+qemu-tool run-vm --vm-name vm1 --ssh-port 2222
+```
+
+The wheel bundles its compose stacks and package manifests, so a rootless
+install is fully functional. Settings come from
+`$XDG_CONFIG_HOME/qemu-tool/env` and images default to
+`$XDG_DATA_HOME/qemu-tool/images`. Installing the Debian package instead
+puts both at their system locations.
+
+Full documentation, the Docker Compose stacks and the Ansible playbooks live
+in the [qemu-minimal repository](https://github.com/sbates130272/qemu-minimal).
+"""}
+
+[project.urls]
+Homepage = "https://github.com/sbates130272/qemu-minimal"
+Repository = "https://github.com/sbates130272/qemu-minimal"
+Changelog = "https://github.com/sbates130272/qemu-minimal/blob/main/CHANGELOG.md"
+Issues = "https://github.com/sbates130272/qemu-minimal/issues"
 
 [project.scripts]
 qemu-tool = "qemu_tool.__main__:main"
 
 [tool.setuptools]
-packages = ["qemu_tool"]
+# MIT requires the licence text travel with every copy, and the metadata
+# string alone is not that text. LICENSE here is a symlink to the repo's,
+# because the sdist root is qemu/ and setuptools will not package a path
+# above it -- a symlink keeps one file rather than a second copy to drift.
+license-files = ["LICENSE"]
+packages = [
+    "qemu_tool",
+    "qemu_tool.share",
+    "qemu_tool.share.compose",
+    "qemu_tool.share.packages_d",
+]
 
+# The compose stacks and manifests are first-class artifacts used directly
+# with `docker compose` and referenced by path from CI and the docs, so they
+# stay at qemu/compose and qemu/packages.d. package-dir maps them into the
+# wheel from where they already are -- one source of truth, no copy to keep
+# in sync and no working-directory churn. "qemu_tool.share" maps the qemu/
+# directory itself; its package-data glob is deliberately a single filename
+# so nothing else in qemu/ is swept in.
+#
+# Everything data-ish hangs off qemu_tool.share rather than sitting directly
+# under qemu_tool: a data package named qemu_tool.compose would collide with
+# the qemu_tool.compose module in compose.py, and importlib.resources would
+# silently resolve to the module's directory instead of the stacks.
 [tool.setuptools.package-dir]
 "qemu_tool" = "qemu-tool"
+"qemu_tool.share" = "."
+"qemu_tool.share.compose" = "compose"
+"qemu_tool.share.packages_d" = "packages.d"
+
+[tool.setuptools.package-data]
+"qemu_tool" = ["man/qemu-tool.1"]
+"qemu_tool.share" = ["env.example"]
+"qemu_tool.share.compose" = ["*/docker-compose.yml", "*/README.md"]
+"qemu_tool.share.packages_d" = ["packages-*"]

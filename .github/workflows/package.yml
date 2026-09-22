@@ -1,0 +1,472 @@
+name: qemu-minimal - package
+
+# Build both shipping artifacts -- the python3-qemu-tool deb and the wheel --
+# and prove each one works where it lands. The release workflow only built
+# them at tag time, so packaging faults shipped unnoticed: a debian/*.install
+# entry for an untracked file, a postinst that ran chown against a kvm group
+# nothing guarantees exists, and a wheel carrying no compose stacks or package
+# manifests at all. None of those show up in a build's exit status -- only in
+# an install -- so both artifacts get installed and exercised here, on every
+# PR that touches the package.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'qemu/**'
+      - '.github/workflows/package.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'qemu/**'
+      - '.github/workflows/package.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Only supersede PR runs: a push to main or a scheduled run should finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build-deb
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4.3.1
+
+      - name: Install Debian build tools
+        run: |
+          sudo apt-get update -qq
+          # build-essential is an implicit build dependency of every source
+          # package, so dpkg-checkbuilddeps demands it even for an arch-all
+          # Python package that compiles nothing. The runner image no longer
+          # ships it.
+          sudo apt-get install -y -qq \
+            build-essential \
+            debhelper dh-python pybuild-plugin-pyproject \
+            python3-all python3-setuptools python3-build lintian
+
+      - name: Build deb
+        working-directory: qemu
+        run: dpkg-buildpackage -us -uc -b
+
+      # A file listed in debian/*.install but never committed builds fine
+      # from a dirty working tree and fails only on a clean checkout, so
+      # assert the payload rather than trusting the build's exit status.
+      - name: Check package contents
+        run: |
+          set -euo pipefail
+          deb=$(ls python3-qemu-tool_*_all.deb)
+          echo "Inspecting ${deb}"
+          contents=$(dpkg -c "${deb}")
+          echo "${contents}"
+          missing=0
+          for path in \
+            ./usr/bin/qemu-tool \
+            ./etc/qemu-tool/ \
+            ./var/lib/qemu-tool/images/ \
+            ./usr/share/man/man1/qemu-tool.1.gz \
+            ./usr/share/qemu-tool/env.example \
+            ./usr/share/qemu-tool/packages-default \
+            ./usr/share/qemu-tool/packages-minimal \
+            ./usr/share/qemu-tool/compose/vfio-user-ernic-vm/docker-compose.yml \
+            ./usr/share/qemu-tool/compose/vfio-user-rocjitsu-vm/docker-compose.yml \
+            ./usr/share/qemu-tool/compose/vfio-user-ernic-rocjitsu-vm/docker-compose.yml \
+            ./usr/share/qemu-tool/compose/vfio-user-ernic-2vm/docker-compose.yml
+          do
+            if ! grep -qF " ${path}" <<<"${contents}"; then
+              echo "::error::missing from package: ${path}"
+              missing=1
+            fi
+          done
+          exit "${missing}"
+
+      # The wheel bundles the same data so pipx installs have it, and the deb
+      # strips that copy back out in debian/rules because it ships the FHS
+      # one. That removal has to run late -- dh_python3 re-stages the package
+      # after dh_auto_install and silently undoes an earlier rm -- so guard
+      # it: a debhelper change that moves the hook would otherwise quietly
+      # put two copies of every stack and manifest in one package.
+      - name: Check the bundled copy was not shipped twice
+        run: |
+          set -euo pipefail
+          deb=$(ls python3-qemu-tool_*_all.deb)
+          dupes=$(dpkg -c "${deb}" | awk '{print $6}' \
+            | grep -E 'dist-packages/qemu_tool/(share|man)/' || true)
+          if [ -n "${dupes}" ]; then
+            echo "::error::data shipped twice; debian/rules should strip these:"
+            echo "${dupes}"
+            exit 1
+          fi
+
+      # lintian's default --fail-on is 'error' alone, which is what we want:
+      # errors are packaging faults and should stop the job, while warnings
+      # drift with each lintian release and would break unrelated PRs.
+      - name: Run lintian
+        run: lintian --tag-display-limit 0 python3-qemu-tool_*_all.deb
+
+      - name: Upload deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: python3-qemu-tool-deb
+          path: python3-qemu-tool_*_all.deb
+          if-no-files-found: error
+
+  install:
+    name: install-smoke-test (${{ matrix.kvm-group }})
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The kvm group arrives with udev rules from a qemu-system package
+        # on a real host, but a container or a minimal install can have
+        # none. postinst has to configure cleanly either way, so both are
+        # covered: without the group it degrades with an advisory, with it
+        # the images dir ends up kvm-writable.
+        kvm-group: [absent, present]
+    container:
+      image: ubuntu:24.04
+    defaults:
+      run:
+        # Explicit, because a container job does not reliably get bash: the
+        # runner fell back to `sh -e` here, which is dash, and dash has no
+        # `set -o pipefail`. Every step below opens with it.
+        shell: bash
+    steps:
+      - name: Download deb
+        uses: actions/download-artifact@v4
+        with:
+          name: python3-qemu-tool-deb
+
+      - name: Create the kvm group
+        if: matrix.kvm-group == 'present'
+        run: groupadd -r kvm
+
+      # Deliberately the exact command README.md tells users to run, so the
+      # documented install is the one under test. --no-install-recommends keeps
+      # the alternative-resolved qemu-system-x86 from dragging in
+      # qemu-system-gui and the whole GTK stack; the three named packages are
+      # what that flag would otherwise skip and gen-vm genuinely needs.
+      - name: Install the package
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update -qq
+          apt-get install -y --no-install-recommends \
+            ./python3-qemu-tool_*_all.deb \
+            cloud-image-utils openssh-client wget
+
+      - name: Check the tools gen-vm shells out to are present
+        run: |
+          set -euo pipefail
+          for bin in cloud-localds ssh wget qemu-img; do
+            command -v "${bin}" > /dev/null \
+              || { echo "::error::missing runtime dependency: ${bin}"; exit 1; }
+          done
+
+      # apt exits 0 on a postinst failure in some paths; the package can be
+      # left unpacked-but-not-configured. That is the state the kvm-group
+      # bug produced, so assert it explicitly.
+      # Every qemu-system-* package recommends qemu-system-gui, and no package
+      # can decline another's recommends -- --no-install-recommends is the only
+      # lever. Assert it worked, so a Depends change that reintroduces a GTK
+      # stack on a headless tool shows up here rather than in a user's install.
+      - name: Check no display stack was pulled in
+        run: |
+          set -euo pipefail
+          unwanted=0
+          for pkg in qemu-system-gui qemu-system-modules-opengl \
+                     qemu-system-modules-spice libgtk-3-0t64 libsdl2-2.0-0; do
+            if dpkg -s "${pkg}" >/dev/null 2>&1; then
+              echo "::error::${pkg} was installed; a headless tool should not pull it"
+              unwanted=1
+            fi
+          done
+          echo "installed package count: $(dpkg-query -f '.\n' -W | wc -l)"
+          exit "${unwanted}"
+
+      - name: Check the package is fully configured
+        run: |
+          set -euo pipefail
+          status=$(dpkg -s python3-qemu-tool | awk '/^Status:/ {print $0}')
+          echo "${status}"
+          [ "${status}" = "Status: install ok installed" ]
+
+      - name: Check the CLI works
+        run: |
+          set -euo pipefail
+          qemu-tool --help > /dev/null
+          for sub in run-vm gen-vm compose list; do
+            qemu-tool "${sub}" --help > /dev/null \
+              || { echo "::error::subcommand failed: ${sub}"; exit 1; }
+          done
+          qemu-tool list
+
+      # The base image carries path-exclude=/usr/share/man/*, so the file is
+      # stripped on install however good the package is. Contents are checked
+      # in the build job; here just confirm the tool ships a readable page.
+      - name: Check the man page source
+        run: test -s /usr/share/man/man1/qemu-tool.1.gz || echo "::notice::man page excluded by this image's dpkg path-exclude"
+
+      - name: Check the settings file was seeded
+        run: |
+          set -euo pipefail
+          test -f /etc/qemu-tool/env
+          diff -q /etc/qemu-tool/env /usr/share/qemu-tool/env.example
+
+      - name: Check the images directory
+        run: |
+          set -euo pipefail
+          got=$(stat -c '%U:%G %a' /var/lib/qemu-tool/images)
+          echo "images dir: ${got}"
+          if [ "${{ matrix.kvm-group }}" = "present" ]; then
+            want="root:kvm 2775"
+          else
+            want="root:root 755"
+          fi
+          [ "${got}" = "${want}" ] || {
+            echo "::error::images dir is '${got}', expected '${want}'"; exit 1; }
+
+      # The deb ships its data under /usr/share/qemu-tool, and that has to keep
+      # winning over the copy bundled in the wheel -- otherwise an admin's
+      # edits to /usr/share would be silently ignored in favour of a frozen
+      # copy they cannot see.
+      - name: Check the system data wins over the bundled copy
+        run: |
+          set -euo pipefail
+          cd /tmp
+          python3 - <<'PY'
+          import sys
+          from qemu_tool.compose import _STACKS, _compose_dir
+          from qemu_tool.config import default_packages
+          bad = 0
+          pkgs = default_packages()
+          if pkgs != "/usr/share/qemu-tool/packages-default":
+              print(f"::error::packages default resolved to {pkgs}")
+              bad = 1
+          for stack in _STACKS:
+              got = str(_compose_dir(stack))
+              want = f"/usr/share/qemu-tool/compose/{stack}"
+              if got != want:
+                  print(f"::error::{stack} resolved to {got}, expected {want}")
+                  bad = 1
+          sys.exit(bad)
+          PY
+
+      # Reinstalling must not clobber the admin's edited copy of the
+      # settings file -- postinst seeds it on first install only.
+      - name: Check reinstall preserves /etc/qemu-tool/env
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          set -euo pipefail
+          echo "# edited by the admin" >> /etc/qemu-tool/env
+          apt-get install -y --reinstall --no-install-recommends \
+            ./python3-qemu-tool_*_all.deb > /dev/null
+          grep -q "edited by the admin" /etc/qemu-tool/env \
+            || { echo "::error::reinstall overwrote /etc/qemu-tool/env"; exit 1; }
+
+  build-wheel:
+    name: build-wheel
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4.3.1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build tooling
+        run: python -m pip install --upgrade build twine
+
+      # sdist as well as wheel: PyPI consumers on an unsupported platform
+      # build from the sdist, and package-data that reaches the wheel from a
+      # working tree can still be missing from the sdist. Building the wheel
+      # *from the sdist* is the only check that catches that.
+      - name: Build sdist and wheel
+        working-directory: qemu
+        run: python -m build --outdir "${GITHUB_WORKSPACE}/dist"
+
+      # PyPI rejects an upload whose metadata does not validate, and finding
+      # that out at tag time means a half-published release. --strict fails on
+      # warnings too, so a README that renders badly is caught here.
+      - name: Check the dist metadata is valid for PyPI
+        run: twine check --strict dist/*
+
+      - name: Rebuild the wheel from the sdist
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/fromsdist
+          tar xzf dist/qemu_tool-*.tar.gz -C /tmp/fromsdist
+          ( cd /tmp/fromsdist/qemu_tool-* && python -m build --wheel --outdir /tmp/sdist-wheel )
+          python - "${GITHUB_WORKSPACE}/dist" /tmp/sdist-wheel <<'PY'
+          import glob
+          import sys
+          import zipfile
+
+          def data(directory):
+              path = sorted(glob.glob(f'{directory}/qemu_tool-*.whl'))[0]
+              return {n for n in zipfile.ZipFile(path).namelist()
+                      if not n.endswith('.py') and '.dist-info/' not in n}
+
+          direct, viasdist = data(sys.argv[1]), data(sys.argv[2])
+          missing = direct - viasdist
+          if missing:
+              print('::error::sdist drops data the wheel built from the tree has:')
+              for name in sorted(missing):
+                  print(f'  {name}')
+              raise SystemExit(1)
+          print(f'sdist round-trip carries all {len(viasdist)} data files')
+          PY
+
+      - name: Upload wheel and sdist
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-tool-wheel
+          path: dist/qemu_tool-*
+          if-no-files-found: error
+
+  wheel-install:
+    name: wheel-smoke-test
+    needs: build-wheel
+    runs-on: ubuntu-latest
+    # A bare python image, so there is no /usr/share/qemu-tool, no apt-
+    # installed qemu-tool and no git checkout -- exactly what a user gets
+    # from `pipx install qemu-tool`. Before the wheel carried its data this
+    # is the shape in which the tool was silently degraded: compose could
+    # not find a stack and gen-vm could not find its package manifest.
+    container:
+      image: python:3.12-slim
+    defaults:
+      run:
+        # Same reason as install-smoke-test: this one happened to get bash,
+        # but nothing guarantees it, and every step here uses pipefail.
+        shell: bash
+    steps:
+      - name: Download wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: qemu-tool-wheel
+
+      - name: Install the wheel
+        run: pip install --no-cache-dir ./qemu_tool-*.whl
+
+      - name: Check there really is no system data to fall back on
+        run: |
+          set -euo pipefail
+          for path in /usr/share/qemu-tool /etc/qemu-tool /var/lib/qemu-tool; do
+            if [ -e "${path}" ]; then
+              echo "::error::${path} exists; this job no longer tests a bare install"
+              exit 1
+            fi
+          done
+
+      - name: Check the CLI works
+        run: |
+          set -euo pipefail
+          qemu-tool --help > /dev/null
+          for sub in run-vm gen-vm compose list; do
+            qemu-tool "${sub}" --help > /dev/null \
+              || { echo "::error::subcommand failed: ${sub}"; exit 1; }
+          done
+
+      - name: Check every compose stack resolves from the wheel
+        run: |
+          set -euo pipefail
+          cd /tmp
+          python - <<'PY'
+          import sys
+          from qemu_tool.compose import _STACKS, _compose_dir
+          bad = 0
+          for stack in _STACKS:
+              try:
+                  found = _compose_dir(stack)
+              except FileNotFoundError as exc:
+                  print(f'::error::{stack}: {exc}')
+                  bad = 1
+                  continue
+              if not (found / 'docker-compose.yml').is_file():
+                  print(f'::error::{stack}: no docker-compose.yml under {found}')
+                  bad = 1
+              else:
+                  print(f'  {stack} -> {found}')
+          sys.exit(bad)
+          PY
+
+      - name: Check gen-vm finds its default package manifest
+        run: |
+          set -euo pipefail
+          cd /tmp
+          python - <<'PY'
+          from qemu_tool.config import VMConfig
+          from qemu_tool.gen_vm import _load_packages
+          cfg = VMConfig()
+          body = _load_packages(cfg)
+          print(f'manifest: {cfg.packages}')
+          if not body.strip():
+              raise SystemExit('::error::default package manifest is empty')
+          PY
+
+      # A rootless install cannot write /var/lib/qemu-tool/images, so the
+      # default has to land somewhere the user owns or gen-vm fails on its
+      # own default before it does anything.
+      - name: Check the images default falls back to XDG
+        env:
+          XDG_DATA_HOME: /tmp/xdg-data
+        run: |
+          set -euo pipefail
+          cd /tmp
+          got=$(python -c 'from qemu_tool.config import default_images; print(default_images())')
+          echo "images default: ${got}"
+          [ "${got}" = "/tmp/xdg-data/qemu-tool/images" ] || {
+            echo "::error::expected the XDG path, got ${got}"; exit 1; }
+
+      - name: Check the settings file is found under XDG
+        env:
+          XDG_CONFIG_HOME: /tmp/xdg-config
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/xdg-config/qemu-tool
+          echo 'VM_NAME=from-xdg' > /tmp/xdg-config/qemu-tool/env
+          cd /tmp
+          python - <<'PY'
+          from qemu_tool import envfile
+          found = envfile.find()
+          print(f'settings: {found}')
+          assert found is not None, '::error::no settings file found'
+          values = envfile.overrides(envfile.parse(found))
+          assert values.get('vm_name') == 'from-xdg', f'::error::{values}'
+          PY
+
+      - name: Check env.example ships with the wheel
+        run: |
+          set -euo pipefail
+          cd /tmp
+          python - <<'PY'
+          from qemu_tool.resources import SHARE, packaged_path
+          path = packaged_path(SHARE, 'env.example')
+          if path is None:
+              raise SystemExit('::error::env.example is not bundled in the wheel')
+          print(f'env.example: {path}')
+          PY
+
+      - name: Check the man page ships with the wheel
+        run: |
+          set -euo pipefail
+          cd /tmp
+          python - <<'PY'
+          from importlib.resources import files
+          page = files('qemu_tool') / 'man' / 'qemu-tool.1'
+          if not page.is_file():
+              raise SystemExit('::error::man page is not bundled in the wheel')
+          print(f'man page: {page}')
+          PY

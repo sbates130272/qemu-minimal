@@ -1,0 +1,98 @@
+name: qemu-minimal - bench-compile
+
+# The rocjitsu benchmarks only ever got compiled inside a guest, by a lane that
+# runs on push to main. Both .hip files shipped for months without being valid
+# C++ and nothing caught it. This lane compiles them on the PR, with no GPU and
+# no VM -- hipcc's host and device passes are enough to reject the class of bug
+# that got through (a goto jumping over an initialisation).
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'scripts/vm-report/**'
+      - '.github/workflows/bench-compile.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'scripts/vm-report/**'
+      - '.github/workflows/bench-compile.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Same TheRock stream ansible/playbooks/vm-rocjitsu.yml gives the guest, so
+  # this lane compiles against the headers the benchmarks actually run against.
+  ROCM_REPO: https://stable.repo.amd.com/rocm/core/packages/ubuntu2404
+  ROCM_GPG: https://stable.repo.amd.com/rocm/gpg/packages.gpg
+  OFFLOAD_ARCH: gfx1250
+
+jobs:
+  bench-compile:
+    name: bench-compile
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Install the ROCm toolchain
+        run: |
+          set -euo pipefail
+          sudo install -d -m 0755 /etc/apt/keyrings
+          curl -fsSL "${ROCM_GPG}" | sudo gpg --dearmor -o /etc/apt/keyrings/amdrocm.gpg
+          sudo tee /etc/apt/sources.list.d/rocm.sources >/dev/null <<EOF
+          Types: deb
+          URIs: ${ROCM_REPO}
+          Suites: stable
+          Components: main
+          Architectures: amd64
+          Signed-By: /etc/apt/keyrings/amdrocm.gpg
+          EOF
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libstdc++-14-dev amdrocm-runtime-dev amdrocm-hipfile-dev
+
+      - name: Locate hipcc and the hipFile SDK
+        id: rocm
+        run: |
+          set -euo pipefail
+          hipcc=$(command -v hipcc || ls /opt/rocm*/bin/hipcc /opt/rocm/*/bin/hipcc 2>/dev/null | head -1 || true)
+          [ -n "${hipcc}" ] || { echo "::error::hipcc not found after install"; exit 1; }
+          # Both layouts, matching scripts/generate-vm-report.sh: TheRock ships
+          # the header flat, other ROCm builds nest it under include/hipfile/.
+          rocm=$(for d in /opt/rocm /opt/rocm-* /opt/rocm/*; do
+            { [ -e "${d}/include/hipfile/hipfile.h" ] || [ -e "${d}/include/hipfile.h" ]; } \
+              && [ -e "${d}/lib/libhipfile.so" ] && echo "${d}"
+          done | head -1 || true)
+          [ -n "${rocm}" ] || { echo "::error::hipFile SDK not found after install"; exit 1; }
+          echo "hipcc=${hipcc}" >> "${GITHUB_OUTPUT}"
+          echo "rocm=${rocm}" >> "${GITHUB_OUTPUT}"
+          echo "hipcc: ${hipcc}"
+          echo "rocm:  ${rocm}"
+
+      - name: Compile sgemm-bench.hip
+        run: |
+          set -euo pipefail
+          "${{ steps.rocm.outputs.hipcc }}" -O2 -Wall -Wextra \
+            --offload-arch="${OFFLOAD_ARCH}" \
+            -o /tmp/sgemm-bench scripts/vm-report/sgemm-bench.hip
+
+      - name: Compile gemm-hipfile-bench.hip
+        run: |
+          set -euo pipefail
+          rocm='${{ steps.rocm.outputs.rocm }}'
+          "${{ steps.rocm.outputs.hipcc }}" -O2 -Wall -Wextra \
+            --offload-arch="${OFFLOAD_ARCH}" \
+            -I"${rocm}/include" -I"${rocm}/include/hipfile" \
+            -o /tmp/gemm-hipfile-bench scripts/vm-report/gemm-hipfile-bench.hip \
+            -L"${rocm}/lib" -lhipfile -Wl,-rpath,"${rocm}/lib"

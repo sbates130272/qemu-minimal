@@ -1,10 +1,50 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-_DEFAULT_IMAGES = Path("/var/lib/qemu-tool/images")
-_DEFAULT_PACKAGES = "/usr/share/qemu-tool/packages-default"
+from .resources import PACKAGES_D as _PACKAGES_D_PACKAGE, packaged_path
+
+# Created by the .deb. A pipx or source install has neither, so both defaults
+# below are resolved per-instance rather than at import time -- the answer
+# depends on what is on disk, and that can differ between processes.
+_INSTALLED_IMAGES = Path("/var/lib/qemu-tool/images")
+_INSTALLED_PACKAGES = Path("/usr/share/qemu-tool/packages-default")
+
+
+def _xdg_data_home() -> Path:
+    raw = os.environ.get("XDG_DATA_HOME")
+    return Path(raw).expanduser() if raw else Path.home() / ".local" / "share"
+
+
+def default_images() -> Path:
+    """Where to keep VM images when nothing overrides it.
+
+    /var/lib/qemu-tool/images is the shared, kvm-group-writable location the
+    .deb sets up. Only use it if it is actually writable: a rootless pipx
+    install has no such directory, and a host whose postinst could not find a
+    kvm group has one that root alone can write. Falling back to XDG keeps
+    gen-vm working for an unprivileged user instead of failing on the default.
+    """
+    if os.access(_INSTALLED_IMAGES, os.W_OK):
+        return _INSTALLED_IMAGES
+    return _xdg_data_home() / "qemu-tool" / "images"
+
+
+def default_packages() -> str:
+    """Path to the default cloud-init package manifest.
+
+    System copy first so an admin's edits to /usr/share/qemu-tool win, then
+    the copy bundled in the wheel. Returns the system path even when absent,
+    so the error gen-vm raises names the location a user would expect.
+    """
+    if _INSTALLED_PACKAGES.is_file():
+        return str(_INSTALLED_PACKAGES)
+    packaged = packaged_path(_PACKAGES_D_PACKAGE, "packages-default")
+    if packaged is not None:
+        return str(packaged)
+    return str(_INSTALLED_PACKAGES)
 
 
 @dataclass
@@ -14,8 +54,10 @@ class VMConfig:
     arch: str = "amd64"        # amd64 | arm64 | riscv64
     vcpus: int = 2
     vmem: int = 4096           # MiB
-    images: Path = field(default_factory=lambda: _DEFAULT_IMAGES)
+    images: Path = field(default_factory=default_images)
     ssh_port: int = 2222
+    # None means derive from ssh_port; see run_vm._mgmt_mac.
+    mac: str | None = None
     kvm: bool = True
     qemu_path: str = ""
 
@@ -51,7 +93,7 @@ class VMConfig:
     user_id: int = 1000
     password: str = "password"
     # packages: path to manifest file, or None meaning no extra packages
-    packages: str | None = field(default_factory=lambda: _DEFAULT_PACKAGES)
+    packages: str | None = field(default_factory=default_packages)
     force: bool = False
     no_backing: bool = False
     restore_image: bool = False

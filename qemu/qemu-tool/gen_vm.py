@@ -22,9 +22,9 @@ from .caps import qemu_binary
 from .config import VMConfig
 from .identity import identity_args
 from .run_vm import (
+    _effective_mac,
     _ensure_mgmt_bridge,
     _mgmt_bridge_name,
-    _mgmt_mac,
     _mgmt_tap_name,
     _netdev_args,
     _teardown_mgmt_bridge,
@@ -383,7 +383,7 @@ def _first_boot(cfg: VMConfig, images: Path, backing: Path) -> None:
         "-drive", f"if=virtio,format=qcow2,file={backing}",
         "-drive", f"if=virtio,format=qcow2,file={seed}",
         "-netdev", "user,id=net0",
-        "-device", f"virtio-net-pci,netdev=net0,mac={_mgmt_mac(cfg.ssh_port)}",
+        "-device", f"virtio-net-pci,netdev=net0,mac={_effective_mac(cfg)}",
     ]
     subprocess.run(cmd, check=True)
 
@@ -474,7 +474,7 @@ def _run_ansible(cfg: VMConfig, images: Path, backing: Path) -> None:
         "-m", str(cfg.vmem),
         "-nographic",
         "-drive", f"if=virtio,format=qcow2,file={backing}",
-        *_netdev_args(cfg, mac=_mgmt_mac(cfg.ssh_port)),
+        *_netdev_args(cfg),
     ])
 
     try:
@@ -483,7 +483,7 @@ def _run_ansible(cfg: VMConfig, images: Path, backing: Path) -> None:
         if cfg.mgmt_tap:
             vm_ip = _discover_vm_ip(
                 _mgmt_bridge_name(cfg.ssh_port),
-                _mgmt_mac(cfg.ssh_port),
+                _effective_mac(cfg),
                 timeout,
             )
             vm_host = vm_ip

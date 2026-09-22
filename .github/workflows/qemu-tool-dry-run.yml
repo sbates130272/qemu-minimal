@@ -103,6 +103,35 @@ jobs:
         echo "$out" | grep -q "\-machine virt"
         echo "✓ riscv64 passed"
 
+    # The default MAC is derived from the SSH port, so a guest image that pins
+    # its netplan to some other MAC never brings its NIC up. --mac is the way
+    # to run such an image without rebuilding it; assert both halves, and that
+    # a bad value is rejected here rather than by qemu much later.
+    - name: "Dry-run: management NIC MAC"
+      run: |
+        out=$(qemu-tool run-vm --vm-name dry-test --no-kvm --ssh-port 2222 --dry-run)
+        echo "$out" | grep -q "mac=52:54:00:00:08:ae"
+        out=$(qemu-tool run-vm --vm-name dry-test --no-kvm --ssh-port 2222 \
+              --mac 52:54:00:12:34:56 --dry-run)
+        echo "$out" | grep -q "mac=52:54:00:12:34:56"
+        ! qemu-tool run-vm --vm-name dry-test --no-kvm --mac nope --dry-run
+        ! qemu-tool run-vm --vm-name dry-test --no-kvm --mac 53:54:00:12:34:56 --dry-run
+        echo "✓ --mac passed"
+
+    # The mcast NIC once derived its MAC from the SSH port with the same
+    # arithmetic as the management NIC, so a guest using both got two
+    # interfaces on one address and ARP answers for whichever replied first.
+    - name: "Dry-run: every NIC gets a distinct MAC"
+      run: |
+        out=$(qemu-tool run-vm --vm-name dry-test --no-kvm --ssh-port 2222 \
+              --mcast-group 239.1.1.1:5000 --data-nic-queues 4 --dry-run)
+        echo "$out"
+        macs=$(echo "$out" | tr ' ' '\n' | sed -n 's/.*,mac=\([0-9a-f:]*\).*/\1/p')
+        echo "$macs"
+        [ "$(echo "$macs" | wc -l)" -eq 3 ] || { echo "expected 3 NICs"; exit 1; }
+        [ "$(echo "$macs" | sort -u | wc -l)" -eq 3 ] || { echo "duplicate MAC"; exit 1; }
+        echo "✓ distinct NIC MACs passed"
+
     - name: "Dry-run: custom --vcpus and --vmem"
       run: |
         out=$(qemu-tool run-vm --vm-name dry-test --no-kvm \

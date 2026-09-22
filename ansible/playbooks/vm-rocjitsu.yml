@@ -24,6 +24,11 @@
     rocm_setup_minimal_packages:
       - libstdc++-14-dev
       - amdrocm-runtime-dev
+      # gemm-hipfile-bench needs the hipFile SDK, and amdrocm-runtime-dev does
+      # not pull it in -- it depends only on sysdeps, runtime and llvm-dev.
+      # Without this the report script's probe correctly reports the headers
+      # unavailable, emits no read_gbs, and the whole run aborts.
+      - amdrocm-hipfile-dev
     # These are QEMU guests, never WSL. Pinned rather than left to the role's
     # default(false) because a non-false wsl_mode silently drops the minimal
     # path back to the full amdrocm meta-package.
@@ -519,6 +524,19 @@
         name:
           - amd-smi-lib
           - rocm-validation-suite
+
+    # fio-hipfile-bench builds fio from a pinned master commit in the guest,
+    # because the libhipfile ioengine is in no fio release tag. The distro fio
+    # that fave_packages installs has no such engine, so it cannot serve here.
+    # These are the build's own needs; amdrocm-hipfile-dev above supplies the
+    # hipFile SDK the engine probe looks for.
+    - name: Install fio build dependencies for the libhipfile engine
+      ansible.builtin.package:
+        name:
+          - libaio-dev
+          - libnuma-dev
+          - pkg-config
+          - zlib1g-dev
         state: present
         update_cache: true
       become: true

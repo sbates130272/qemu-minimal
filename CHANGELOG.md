@@ -6,6 +6,95 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- `bench-compile.yml`, which compiles both `scripts/vm-report/*.hip` files on
+  every pull request that touches them. Until now the only thing that ever
+  compiled them was the rocjitsu report lane, which runs on push to `main` and
+  needs a GPU, a VM and two and a half hours — so a benchmark that was not
+  valid C++ could sit on `main` indefinitely, and did. This lane installs
+  hipcc and the hipFile SDK from the same TheRock `stable` channel the guests
+  use — pinned to the `ubuntu2404` path, because the runner is `ubuntu-24.04`
+  while the rocjitsu guest is built `--release resolute` and takes
+  `ubuntu2604` — and runs the compile only: no GPU, no VM, and it is
+  path-filtered to `scripts/vm-report/**` and the workflow itself, so it costs
+  nothing on the PRs that do not touch the benchmarks. It compiles with
+  `-Wall -Wextra`, which is stricter than the report script's own line, and
+  without `-Werror`, so only hard errors fail it.
+
+- `--mac ADDR` (`VM_MAC`) on `run-vm` and `gen-vm`, which sets the management
+  NIC MAC instead of deriving it from the SSH port. Images built by this
+  repo's `gen-vm` do not need it — their netplan matches on interface name —
+  but an image built elsewhere may pin `match: macaddress:` to a MAC
+  qemu-tool would never pick, and then the NIC comes up unconfigured and only
+  SLIRP's fallback eventually gets an address on it, slowly. `--mac` makes
+  qemu-tool present the MAC such an image expects, so it can be run as-is
+  rather than rebuilt. The value is validated as a unicast MAC up front,
+  because qemu rejects a malformed one at device-creation time, long after
+  `gen-vm` has fetched an image and built a seed.
+
+- `publish-pages.yml`, now the only workflow that writes the site. The report
+  lanes upload a named artifact and stop; this assembles them onto a
+  `gh-pages` branch behind a landing page at `/`, with the single-VM report
+  at `/1vm/` and the two-VM pair at `/two-vm/` and `/two-vm/vm2/`. It fetches
+  the latest artifact *by name* rather than from the run that triggered it,
+  so a lane that has not run for a week still contributes its last report and
+  the site is never partial. Each lane's subtree is synced with its own
+  scoped `--delete` instead of one delete over the whole site, so a lane
+  whose artifact has expired keeps the report it last published, and a
+  `perf/` record written by a future perf lane survives without needing to be
+  named. A push rejected by a concurrent writer is retried from the new tip.
+- PyPI publishing, so `pipx install qemu-tool` needs no checkout and no
+  downloaded `.deb`. `release.yml` uploads via Trusted Publishing against a
+  `pypi` environment rather than a stored API token, and runs last: a PyPI
+  version can never be reused even after a delete, so publishing it before
+  the deb has built would burn the version for a release that then has to be
+  cut again as the next one. `qemu/pyproject.toml` gains the metadata a
+  project page needs — readme, classifiers, keywords and URLs. The readme is
+  written inline because the sdist root is `qemu/`, so `../README.md` is
+  outside the project and cannot be packaged, and because the repo README
+  documents compose stacks, Ansible and libvirt that a `pip install` does not
+  install. `package.yml` and `release.yml` both run `twine check --strict`,
+  so metadata that PyPI would reject fails on a PR rather than at tag time.
+- `scripts/release.sh <version>`, which cuts a release from a clean `main`:
+  it stamps `qemu/pyproject.toml`, generates the `qemu/debian/changelog`
+  stanza from the `[Unreleased]` section of this file — preserving the
+  Added/Changed/Fixed/Removed grouping as dpkg `[ Section ]` markers, since
+  flattened into one list a removal reads exactly like an addition —
+  retitles that section as the new version, commits signed-off and makes a
+  signed tag. `--dry-run` shows the generated stanza and touches nothing. It
+  never pushes; it prints the command that does. A failed commit restores
+  the tree, which is safe because it refuses to start on a dirty one.
+- A `verify-version` job gating `release.yml`. Nothing is built or published
+  unless the tag, `qemu/pyproject.toml` and `qemu/debian/changelog` agree on
+  the version and `CHANGELOG.md` has a heading for the tag. v1.3.0 shipped
+  with no tag at all and every check stayed green, because the tag was the
+  only thing that would have disagreed and nothing compared it to anything.
+- A self-contained wheel. The compose stacks, both package manifests,
+  `env.example` and the man page now ship inside the Python distribution, so
+  `pipx install qemu-tool` is a working tool rather than a degraded one —
+  previously a non-editable install could not locate a compose stack or the
+  default package manifest at all. Bringing a stack *up* still needs
+  `QEMU_TOOL_SRC` pointing at a checkout, because every stack builds
+  qemu-tool from source inside its container and neither a wheel nor the
+  `.deb` is a source tree; the README says so now. `pyproject.toml` maps
+  them in from where they already live via
+  `[tool.setuptools.package-dir]`, so `qemu/compose/`
+  and `qemu/packages.d/` stay put and there is no second copy to keep in
+  sync. They are namespaced under `qemu_tool.share` rather than directly
+  under `qemu_tool`, because a data package named `qemu_tool.compose` would
+  collide with the `compose` module and `importlib.resources` would silently
+  resolve to the wrong directory.
+- Per-user fallbacks for the two paths a rootless install cannot have:
+  `$XDG_CONFIG_HOME/qemu-tool/env` for settings (searched between `qemu/.env`
+  and `/etc/qemu-tool/env`) and `$XDG_DATA_HOME/qemu-tool/images` for images.
+  The images default falls back only when `/var/lib/qemu-tool/images` is not
+  *writable*, so a user outside the `kvm` group gets a usable directory
+  instead of a permission failure on the default.
+- `package.yml`, replacing `deb-package.yml`, now covering the wheel as well
+  as the deb: it builds both, rebuilds the wheel from the sdist to prove the
+  sdist carries the same data, and installs the wheel into a bare
+  `python:3.12-slim` with no `/usr/share/qemu-tool` and no checkout to prove
+  a pipx install resolves every stack and manifest. See `ci.md`.
+
 - `rocjitsu_gpu_test`, a repo-local role that runs HIP workloads against a live
   rocjitsu vfio-user server: a scratch-free `vector_add`, a four-kernel
   private-segment repro, and an `hsa-snoop` trace of a dispatch on the emulated
@@ -46,6 +135,31 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- The rocjitsu benchmark numbers pick their own SI prefix instead of always
+  being reported in G-units. The GPU is attached over vfio-user, so the same
+  benchmark spans five orders of magnitude between bare metal and the guest —
+  231 GFLOP/s against 1.88 MFLOP/s — and a fixed unit renders one of the two
+  unreadably, as `0.00187734275 GFLOP/s` on a shields.io badge. The value now
+  selects between T, G, M, k and none, rounded to three significant figures,
+  for the report table and both badges. The benchmarks themselves still emit
+  `gflops=` and `read_gbs=`, so the parse and the raw output block are
+  unchanged. The table carries a note saying the low absolute numbers are
+  expected of a vfio-user guest and that the trend is what to watch.
+
+- `vm-report` and `vm-report-two-vms` no longer publish the site themselves.
+  Both called `actions/deploy-pages` with their own full `_site/`, and a Pages
+  deploy replaces the whole site, so whichever ran last won and the other
+  lane's report vanished — with both workflows reporting success. They now
+  upload an artifact and `publish-pages.yml` assembles the site. The second
+  guest's report moves from `site/2vm` to `site/vm2`, since nested under
+  `/two-vm/` the old name read as a duplicate of its parent.
+
+- The `.deb` no longer ships the bundled copy of the data the wheel carries.
+  It installs it at the FHS locations as before, and `debian/rules` strips the
+  duplicate from `dist-packages` at `dh_installdeb` — not at
+  `dh_auto_install`, where `dh_python3` re-stages the package afterwards and
+  silently undoes the removal. The `/usr/share/qemu-tool` copies keep
+  precedence at runtime, so editing the installed files still takes effect.
 - **rocm-ernic is now ionic-based.** Upstream deleted the out-of-tree
   `rocm_ernic_eth`/`rocm_ernic_rdma` drivers and the patched verbs provider on
   2026-09-16. The guest now builds upstream `ionic` + `ionic_rdma` as the
@@ -82,6 +196,123 @@ All notable changes to this project will be documented in this file.
   `IONIC_EQ_COUNT_MIN`, so at 2 vCPUs `ionic_rdma` could never probe.
 
 ### Fixed
+
+- Every published VM report linked its commit to `/commit/unknown`. All four
+  pages — `1vm`, `two-vm`, `two-vm/vm2` and `rocjitsu` — carried the literal
+  text `Commit: unknown` wrapped in a dead link, because
+  `generate-vm-report.sh` resolved the SHA with `git rev-parse --short HEAD`
+  and every report lane runs the script inside a container, where that call
+  fails. `2>/dev/null` hid the reason, so it silently fell through to the
+  `unknown` fallback; whether git is absent from the container images or its
+  dubious-ownership check rejects the checkout was not pinned down, and the
+  fix short-circuits both. The
+  script now prefers `GITHUB_SHA`, which Actions always sets, and keeps git
+  only for local invocation; the link carries the full SHA while the text
+  shows the short form. When there is genuinely no commit to point at it
+  emits plain text instead of a link, so the dead-link case cannot come back.
+
+- `gemm-hipfile-bench` double-counted its device offset and aborted the whole
+  rocjitsu report at block 16 of 32, reporting
+  `warm hipFileRead block 16 returned -5022 of 1048576`.
+  `hipFileRead`'s second
+  argument is `buffer_base` and its fifth is `buffer_offset`, applied to that
+  base; both read loops passed an already-advanced `dev + blk * kBlock` *and*
+  the same increment again as the offset, so the effective destination was
+  `dev + 2 * blk * kBlock`. The buffer is registered for 32 MiB, which makes
+  block 15 the last one fully in range and block 16 the first to start past
+  the registration, which the library reports as `-5022`,
+  `hipFileInvalidValue`. Both loops now pass `dev`, the pointer
+  `hipFileBufRegister` was given. Note that the benchmark's own correctness
+  gate could not have caught this: it fails only when `failures` — elements
+  exceeding `kTolerance`, 1e-3 — is non-zero, and `kBOffset` is 64 KiB, so
+  both GEMM operands sit inside block 0, the one block the old arithmetic
+  addressed correctly. Verified instead with an ad-hoc harness on the
+  development VM, reading a 32 MiB random file from its NVMe and comparing
+  device memory against `pread`: all 32 blocks match byte-for-byte. The
+  benchmark then ran to completion for the first time — it had only ever been
+  compile-verified before. Ten runs on that VM gave a `read_gbs` between 0.115
+  and 0.151, which the report renders as 115–151 MB/s; note that the ~30%
+  run-to-run spread is wider than the trend the badge is meant to show, so the
+  single published figure should not be read as precise.
+
+- Neither rocjitsu benchmark had ever compiled. `sgemm-bench.hip` and
+  `gemm-hipfile-bench.hip` both used `goto cleanup` to reach a single cleanup
+  block, and every one of those jumps crossed the initialisation of a variable
+  declared later in the same scope — `block`, `grid`, `max_abs_error`,
+  `start`, `seconds` and the rest. That is ill-formed C++, not a warning, and
+  clang rejected it: 11 errors for `sgemm-bench.hip` against gfx1250. The
+  failure stayed invisible for as long as the lane reported a blank line,
+  because hipcc writes its diagnostics to stderr and the report script only
+  captured stdout. Both files now release their device buffers, file
+  descriptor, hipFile handle and driver through scope guards and return
+  directly, so no jump crosses an initialisation. Guard declaration order is
+  load-bearing: reverse-destruction order reproduces exactly what the
+  `cleanup:` block did. Exit codes and every diagnostic string are unchanged.
+
+- The hipFile benchmark reported "hipFile headers or library unavailable" on a
+  guest that had the SDK installed. `run_rocjitsu_hipfile` probed only for the
+  nested `include/hipfile/hipfile.h`, but TheRock — the stream
+  `vm-rocjitsu.yml` uses — ships the header flat at `include/hipfile.h`, so the
+  probe never matched and the lane exited before producing a `read_gbs`
+  metric. The probe now accepts either layout, as the compile line below it and
+  the benchmark's own `__has_include` already did.
+
+- The rocjitsu guest never had the hipFile SDK in the first place, so fixing
+  the probe alone would only have made it report the truth. `vm-rocjitsu.yml`
+  listed `amdrocm-runtime-dev`, which depends on `amdrocm-sysdeps`,
+  `amdrocm-runtime` and `amdrocm-llvm-dev` and nothing else — the development
+  VM that the benchmark was proven on had `amdrocm-hipfile-dev` installed by
+  hand. It is now in `rocm_setup_minimal_packages`, so a freshly generated
+  image can run `gemm-hipfile-bench` and produce a `read_gbs` metric instead of
+  aborting the report.
+
+- The management and multicast NICs of one guest were given the same MAC.
+  `_mcast_args` derived its address from the SSH port with the same
+  arithmetic as `_mgmt_mac` rather than calling it, so `--mcast-group` put
+  two interfaces on one address and the guest answered ARP for whichever
+  came up first. The NIC index is now a byte of its own —
+  `52:54:00:<index>:<hi>:<lo>` — so the management, multicast and data NICs
+  cannot collide. The management NIC keeps the address it already had, so
+  existing images that pin it still match. The data NIC gained an explicit
+  MAC at the same time: it had none, which meant QEMU's built-in default
+  `52:54:00:12:34:56` — exactly the address older guest images pin their
+  netplan to, so a guest with both NICs could match its management netplan
+  against the data NIC.
+
+- The rocjitsu report lane reported its failures as a blank line. The
+  guest-side benchmark scripts run under `set -euo pipefail`, and their
+  `hipcc=$(command -v hipcc || ls /opt/rocm*/bin/hipcc ... | head -1)` probe
+  fails the whole assignment when no `hipcc` exists: the unmatched glob makes
+  `ls` exit non-zero and `pipefail` carries that out, so `set -e` killed the
+  script one line above the `hipcc unavailable` guard written for exactly
+  that case — with nothing printed, `ls` stderr being discarded. The
+  `rocm=$(for ...; done | head -1)` hipFile probe had the same shape. Both
+  now tolerate the empty result and reach their guard, and a benchmark that
+  fails with no output at all is reported by name rather than as an empty
+  `printf`. This is why `vm-report-rocjitsu` failed on its first run, took
+  the `publish-pages` artifact with it, and left `/rocjitsu/` a 404 with two
+  broken shields.io endpoint badges on the README.
+- `scripts/release.sh` dropped every paragraph after the first in a
+  multi-paragraph `CHANGELOG.md` bullet. A blank line ended the bullet, so
+  the indented paragraph that followed matched the continuation rule but
+  found an empty buffer and was discarded — silently, because the shortened
+  stanza still parses. Blank lines no longer terminate a bullet, and a
+  nested markdown item now becomes an entry of its own instead of being
+  appended to its parent with a literal `- ` left mid-sentence.
+- The wheel and sdist ship the MIT licence text. `license-files` was unset
+  and `LICENSE` lives above the sdist root, so the PyPI artifacts carried
+  only the `License: MIT` metadata string — not the text MIT requires be
+  included in all copies. `qemu/LICENSE` is a symlink to the repo's, so
+  there is no second copy to drift.
+- `build-essential` is installed before `dpkg-buildpackage` in both
+  `package.yml` and `release.yml`. `dpkg-checkbuilddeps` treats it as an
+  implicit build dependency of every source package, even an arch-all
+  Python one that compiles nothing, and the runner image does not ship it.
+  Neither deb build had ever run on a GitHub runner to find out.
+- The container jobs in `package.yml` pin `shell: bash`. The runner chose
+  `sh -e` for the `ubuntu:24.04` container despite bash being installed
+  there, and dash has no `set -o pipefail`, which every assertion step
+  opens with.
 
 - `vm-rocjitsu.yml` no longer stubs over the real gfx1250 firmware.
   `vfio_guest_firmware.py` changed contract: its default output is now the
