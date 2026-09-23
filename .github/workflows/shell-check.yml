@@ -34,9 +34,11 @@ jobs:
       
       - name: Run ShellCheck
         run: |
-          shellcheck -S error \
-            libvirt/create-nvme \
-            libvirt/virt-install-ubuntu \
-            scripts/*.sh \
+          shopt -s nullglob
+          files=(
+            libvirt/create-nvme
+            libvirt/virt-install-ubuntu
+            scripts/*.sh
             scripts/vm-report/*.sh
-
+          )
+          shellcheck -S error "${files[@]}"
