@@ -107,6 +107,10 @@ jobs:
     # its netplan to some other MAC never brings its NIC up. --mac is the way
     # to run such an image without rebuilding it; assert both halves, and that
     # a bad value is rejected here rather than by qemu much later.
+    # 52:54:00:00:08:ae is _nic_mac(2222, 0): index 0 is reserved for the
+    # management NIC, and this value is load-bearing rather than incidental.
+    # Every existing guest that pins a derived MAC pinned one with that index,
+    # so moving it silently strands them exactly as the pre-3969f07 pin did.
     - name: "Dry-run: management NIC MAC"
       run: |
         out=$(qemu-tool run-vm --vm-name dry-test --no-kvm --ssh-port 2222 --dry-run)

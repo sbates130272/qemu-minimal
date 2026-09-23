@@ -68,7 +68,7 @@ def _shared_parent() -> argparse.ArgumentParser:
         help=(
             "Management NIC MAC. Defaults to 52:54:00:00:<hi>:<lo> derived "
             "from --ssh-port. Set it when the guest image pins its netplan "
-            "to a specific MAC."
+            "to a specific MAC, as images this repo built before 3969f07 do."
         ),
     )
     p.add_argument(
