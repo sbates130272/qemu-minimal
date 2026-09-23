@@ -370,7 +370,7 @@ profiles below. Pull requests stop after the build stage; pushes to `main`
 rebuild the same matrix and publish each qcow2 bundle to GHCR as a scratch
 image containing:
 
-- `/artifacts/<profile>.qcow2`
+- `/artifacts/<published qcow2 filename>`
 - `/artifacts/manifest.json`
 
 The manifest records the qcow2 filename and path, the Ansible playbook/profile,
