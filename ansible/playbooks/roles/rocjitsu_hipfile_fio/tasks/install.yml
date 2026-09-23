@@ -25,11 +25,17 @@
   register: rocjitsu_hipfile_fio_stamp
   failed_when: false
 
+- name: Check whether fio is already installed
+  ansible.builtin.stat:
+    path: "{{ rocjitsu_hipfile_fio_prefix }}/bin/fio"
+  register: rocjitsu_hipfile_fio_binary
+
 - name: Determine whether fio needs rebuilding
   ansible.builtin.set_fact:
     rocjitsu_hipfile_fio_needs_build: >-
-      {{ (rocjitsu_hipfile_fio_stamp.content | default('') | b64decode | trim)
-         != rocjitsu_hipfile_fio_commit }}
+      {{ (not rocjitsu_hipfile_fio_binary.stat.exists)
+         or ((rocjitsu_hipfile_fio_stamp.content | default('') | b64decode | trim)
+             != rocjitsu_hipfile_fio_commit) }}
 
 - name: Build fio with the libhipfile engine
   ansible.builtin.shell:
