@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Upgrading
+
+- A guest built by an older `gen-vm` may come up unreachable after a bump.
+  `run-vm` now always presents a MAC derived from `--ssh-port`, and a guest
+  whose netplan pins the MAC it saw at *its* first boot will not match it. SSH
+  reports `Connection timed out during banner exchange` rather than `refused`,
+  because slirp's `hostfwd` still completes the TCP handshake with nothing
+  behind it.
+
+  Check what the guest actually pinned, rather than reasoning from versions:
+  `grep -A4 ethernets /etc/netplan/50-cloud-init.yaml` in the guest, or on the
+  mounted qcow2. If there is a `macaddress:` line, pass that value as `--mac`
+  (or `VM_MAC`) and the guest runs as-is; otherwise the guest matches on
+  interface name and needs nothing. Rebuilding the guest also fixes it
+  permanently. Which MAC got baked in depends on both the commit and whether
+  the guest was built with `--mgmt-tap`, so the file in the guest is the only
+  reliable answer.
+
 ### Added
 
 - A repository-owned Pages site under `site/`, so the published `gh-pages`
@@ -30,15 +48,18 @@ All notable changes to this project will be documented in this file.
   without `-Werror`, so only hard errors fail it.
 
 - `--mac ADDR` (`VM_MAC`) on `run-vm` and `gen-vm`, which sets the management
-  NIC MAC instead of deriving it from the SSH port. Images built by this
-  repo's `gen-vm` do not need it — their netplan matches on interface name —
-  but an image built elsewhere may pin `match: macaddress:` to a MAC
-  qemu-tool would never pick, and then the NIC comes up unconfigured and only
-  SLIRP's fallback eventually gets an address on it, slowly. `--mac` makes
-  qemu-tool present the MAC such an image expects, so it can be run as-is
-  rather than rebuilt. The value is validated as a unicast MAC up front,
-  because qemu rejects a malformed one at device-creation time, long after
-  `gen-vm` has fetched an image and built a seed.
+  NIC MAC instead of deriving it from the SSH port. Images this repo's
+  `gen-vm` builds today do not need it — their netplan matches on interface
+  name — but images it built before `3969f07` pin `match: macaddress:` to
+  whatever MAC they saw at their own first boot, which is not necessarily one
+  qemu-tool will pick again; an image built elsewhere may do the same. The NIC
+  then comes up unconfigured and only SLIRP's fallback eventually gets an
+  address on it, slowly. `--mac` makes qemu-tool present the MAC such an image
+  expects, so it can be run as-is rather than rebuilt. See **Upgrading** above
+  for how to find out what a given guest pinned. The value is validated as a
+  unicast MAC up front, because qemu rejects a malformed one at
+  device-creation time, long after `gen-vm` has fetched an image and built a
+  seed.
 
 - `publish-pages.yml`, now the only workflow that writes the site. The report
   lanes upload a named artifact and stop; this assembles them onto a
@@ -393,15 +414,20 @@ All notable changes to this project will be documented in this file.
 
   With both applied the probe completes, `/dev/kfd` appears, and `rocminfo`
   reports `gfx1250` with 32 CUs.
-- `gen-vm` guests no longer lose networking when `--ssh-port` changes. The
-  guest MAC is derived from the SSH port, and guests were ignoring the seed's
-  `network-config` and falling back to cloud-init's own, which pins the
-  interface to the MAC seen at creation time. Booting the same image on a
-  different port then left the NIC `unmanaged` with no address: slirp's
-  `hostfwd` still completed the TCP handshake, so SSH reported `Connection
-  timed out during banner exchange` rather than `refused`, and `gen-vm`
-  `--ansible-only` sat in `_wait_for_ssh` for its full 600 s without ever
-  reaching the playbook. First boot now overwrites the rendered
+- `gen-vm` guests no longer lose networking when the MAC qemu-tool presents
+  changes. The guest MAC is derived from the SSH port, and guests were ignoring
+  the seed's `network-config` and falling back to cloud-init's own, which pins
+  the interface to the MAC seen at creation time. Booting such an image again
+  then left the NIC `unmanaged` with no address — on a different port, but also
+  on the same one, including the default: before `4532f91` the slirp path
+  passed no `mac=` at all, so QEMU's built-in `52:54:00:12:34:56` applied and
+  got baked into the guest, while every later boot presents the derived
+  address. A guest built with `--mgmt-tap` already got the derived MAC and so
+  only broke when the port changed. In every case slirp's `hostfwd` still
+  completed the TCP handshake, so SSH reported `Connection timed out during
+  banner exchange` rather than `refused`, and `gen-vm` `--ansible-only` sat in
+  `_wait_for_ssh` for its full 600 s without ever reaching the playbook. First
+  boot now overwrites the rendered
   `/etc/netplan/50-cloud-init.yaml` with a `name: "en*"` match, so the MAC
   stops being load-bearing. Existing images keep the old pin; regenerate, or
   repoint netplan in the guest.

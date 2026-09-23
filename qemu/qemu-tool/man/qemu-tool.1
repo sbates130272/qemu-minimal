@@ -90,10 +90,15 @@ By default it is derived from
 .BR \-\-ssh\-port
 as
 .IR 52:54:00:00:<hi>:<lo> .
-Set it when the guest image pins its netplan to a particular MAC; images
+Set it when the guest image pins its netplan to a particular MAC. Images
 built by
 .B gen\-vm
-match on interface name instead and do not need this.
+since
+.I 3969f07
+match on interface name instead and do not need this; images it built before
+that commit, and images built elsewhere, may still pin one. Run
+.I "grep \-A4 ethernets /etc/netplan/50\-cloud\-init.yaml"
+in the guest to see what it pinned.
 .TP
 .BR \-\-kvm " | " \-\-no\-kvm
 Enable or disable KVM hardware acceleration (default: enabled).

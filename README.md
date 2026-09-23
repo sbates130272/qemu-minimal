@@ -382,7 +382,7 @@ flags take precedence over XML values).
 | `--vmem MiB` | `4096` | Memory in MiB |
 | `--images DIR` | `/var/lib/qemu-tool/images` | Image directory |
 | `--ssh-port PORT` | `2222` | Host port forwarded to guest SSH |
-| `--mac ADDR` | (from `--ssh-port`) | Management NIC MAC; set it for an image that pins its netplan to one |
+| `--mac ADDR` | (from `--ssh-port`) | Management NIC MAC; set it for an image that pins its netplan to one, including images this repo built before `3969f07` |
 | `--kvm / --no-kvm` | kvm | KVM acceleration |
 | `--qemu-path PATH` | (system) | Directory containing QEMU binaries |
 | `--domain FILE` | — | Libvirt XML base config (`-` for stdin) |
