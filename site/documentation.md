@@ -50,7 +50,7 @@ permalink: /documentation/
 | --- | --- | --- |
 | `vm-report` | `/1vm/` | General single-VM guest inspection. |
 | `vm-report-rocjitsu` | `/rocjitsu/` | rocjitsu VM report with GEMM and hipFile benchmark output. |
-| `vm-report-two-vms` | `/two-vm/` and `/two-vm/vm2/` | Two-guest ernic stack reports. |
+| `vm-report-two-vms` | `/two-vm/` and `/two-vm/vm2/` | ernic stack reports for VM 1 and VM 2. |
 | `vm-report-hipfile-fio` | `/hipfile-fio/` | fio `libhipfile` benchmark report. |
 
 ## Notes

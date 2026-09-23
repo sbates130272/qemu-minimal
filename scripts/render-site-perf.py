@@ -63,8 +63,8 @@ CHART_COLORS = {
 REPORTS = (
     {"key": "1vm", "label": "Single VM", "path": "1vm/index.md"},
     {"key": "rocjitsu", "label": "rocjitsu", "path": "rocjitsu/index.md"},
-    {"key": "two-vm", "label": "Two-VM VM 1", "path": "two-vm/index.md"},
-    {"key": "two-vm-vm2", "label": "Two-VM VM 2", "path": "two-vm/vm2/index.md"},
+    {"key": "two-vm", "label": "ernic VM 1", "path": "two-vm/index.md"},
+    {"key": "two-vm-vm2", "label": "ernic VM 2", "path": "two-vm/vm2/index.md"},
     {"key": "hipfile-fio", "label": "hipFile fio", "path": "hipfile-fio/index.md"},
 )
 

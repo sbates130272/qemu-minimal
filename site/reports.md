@@ -17,8 +17,8 @@ permalink: /reports/
   </div>
   <div class="report-card">
     <span class="eyebrow">Two guests</span>
-    <h2><a href="{{ '/two-vm/' | relative_url }}">Two-VM report</a></h2>
-    <p>The ernic two-VM stack, with VM 1 at the top-level page and VM 2 nested underneath.</p>
+    <h2><a href="{{ '/two-vm/' | relative_url }}">ernic report</a></h2>
+    <p>The ernic stack, with VM 1 at the top-level page and VM 2 nested underneath.</p>
   </div>
   <div class="report-card">
     <span class="eyebrow">fio lane</span>
@@ -33,7 +33,7 @@ permalink: /reports/
 | --- | --- | --- |
 | `vm-report` | Push to `main`, weekly cron, manual dispatch | `/1vm/` |
 | `vm-report-rocjitsu` | Path-filtered push to `main`, weekly cron, manual dispatch | `/rocjitsu/` |
-| `vm-report-two-vms` | Weekly cron, manual dispatch | `/two-vm/` and `/two-vm/vm2/` |
+| `vm-report-two-vms` | Weekly cron, manual dispatch | `/two-vm/` and `/two-vm/vm2/` (ernic VM 1 / VM 2) |
 | `vm-report-hipfile-fio` | Path-filtered push to `main`, weekly cron, manual dispatch | `/hipfile-fio/` |
 
 ## Why the reports stay separate
