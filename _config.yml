@@ -1,3 +1,10 @@
 theme: minima
 title: qemu-minimal
-description: VM inspection reports for the qemu-minimal project
+description: Documentation, reports, and performance tracking for qemu-minimal
+header_pages:
+  - documentation.md
+  - reports.md
+  - publishing.md
+minima:
+  skin: auto
+show_excerpts: false
