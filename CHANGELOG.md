@@ -24,6 +24,12 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- `pciutils` in `packages.d/packages-default`, which backs the new PCI
+  devices section below. See **Fixed** for why the report lanes now use
+  that manifest at all.
+- A **PCI devices** section in every VM report, from `lspci -nn`. This
+  repository exists to run emulated PCI devices — ernic NICs, rocjitsu GPUs —
+  and the reports described the guests without ever listing them.
 - A repository-owned Pages site under `site/`, so the published `gh-pages`
   branch is no longer just a generated landing page plus raw report subtrees.
   The new layout is documentation-first, closer to the ROCm/rocm-ernic site:
@@ -227,6 +233,46 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Both rocjitsu-family report lanes failed on every push to `main` since RVS
+  was added, at `Install ROCm Validation Suite`: the task asked apt for
+  `amd-smi-lib` and `rocm-validation-suite`, which are `repo.radeon.com`
+  names, while the guest resolves against TheRock. TheRock carries amd-smi as
+  `amdrocm-amdsmi` and does not package RVS at all, under any name. The
+  amd-smi request is renamed, and RVS now comes from AMD's standalone tarball
+  at `repo.amd.com/rocm/rvs/tarball/`, unpacked into its own `/opt/rvs`
+  prefix — not over the versioned ROCm tree, which apt owns and whose `bin`,
+  `lib`, `include` and `share` the tarball would collide with. The task also
+  had no `become: true`, so it would have failed on permissions next; the
+  availability error simply fired first. `rocjitsu_gpu_test` follows the new
+  prefix. Only `amdrocm7` tarballs are published, but every soname RVS needs
+  is one TheRock 10.0 ships, and TheRock's own libraries pull `rocm_sysdeps`
+  and `llvm` in through their `$ORIGIN` rpaths — verified by running the
+  1.5.125 tarball against a bare 10.0.0-4 tree with nothing else on the
+  library path. See #153.
+- The published `/1vm/` report carried a nested copy of the whole site —
+  `1vm/index.md` alongside `1vm/reports.md`, `1vm/documentation.md`,
+  `1vm/publishing.md`, `1vm/assets/` and `1vm/perf/`. `vm-report.yml` checks
+  out the repository, which populates `site/` with the repository-owned pages,
+  then generated its report into that same `site/` and uploaded the whole tree
+  as the `vm-report-1vm` artifact. The duplicated pages declare absolute
+  permalinks (`/reports/` and friends), so they silently contended with the
+  real root pages for those URLs. Both `vm-report` and `vm-report-two-vms` now
+  generate into a lane subdirectory and upload only that — `site/1vm/`, and
+  `site/two-vm/` plus `site/two-vm/vm2/` — the shape the rocjitsu and
+  hipfile-fio lanes already used. `publish-pages.yml` syncs with `--delete`,
+  so the stale files clear on the next publish without touching `gh-pages`
+  by hand.
+- Every published report said `nvme-cli unavailable` under **NVMe**, three of
+  them next to a real device. `gen-vm` defaults `--packages` to
+  `packages-default`, which carries `nvme-cli`, but all eleven `gen-vm` call
+  sites in CI override that to `none` — a choice that arrived unexplained with
+  the first `vm-report` workflow and was copied ever since. `vm-report` passes
+  `--nvme 1`; `vm-report-rocjitsu` and `vm-report-hipfile-fio` reach the same
+  place through `VM_NVME: "1"` in their compose stacks. All four report lanes
+  now pass `--packages qemu/packages.d/packages-default`, so a report describes
+  the guest a plain `gen-vm` gives you rather than a stripped-down one. That
+  manifest is longer than `none`, so the lanes' SSH waits are worth watching if
+  cloud-init ever slows. `packages-minimal` is left alone.
 - Every published VM report linked its commit to `/commit/unknown`. All four
   pages — `1vm`, `two-vm`, `two-vm/vm2` and `rocjitsu` — carried the literal
   text `Commit: unknown` wrapped in a dead link, because

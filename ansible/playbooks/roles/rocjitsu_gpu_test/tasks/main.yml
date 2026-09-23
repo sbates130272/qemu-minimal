@@ -377,7 +377,7 @@
 - name: Fail when RVS is missing
   ansible.builtin.fail:
     msg: >-
-      No RVS at {{ rocjitsu_gpu_test_rvs_bin }}. It is installed by
+      No RVS at {{ rocjitsu_gpu_test_rvs_bin }}. It is unpacked there by
       vm-rocjitsu.yml, so this image predates that; rebuild it, or set
       rocjitsu_gpu_test_rvs=false to skip the check.
   when:
@@ -387,8 +387,14 @@
 - name: Build the RVS runtime environment
   ansible.builtin.set_fact:
     rocjitsu_gpu_test_rvs_env:
-      ROCM_PATH: /opt/rocm
-      LD_LIBRARY_PATH: "/opt/rocm/lib:/opt/rocm/lib64:{{ rocjitsu_gpu_test_rocm }}/lib:{{ rocjitsu_gpu_test_rocm }}/lib64"
+      ROCM_PATH: "{{ rocjitsu_gpu_test_rocm }}"
+      # The RVS lib dirs are named even though the binary's own RUNPATH covers
+      # them: the modules under lib/rvs are dlopened, and a bare dlopen of one
+      # outside the rvs process resolves librvslib from nowhere else.
+      LD_LIBRARY_PATH: >-
+        {{ rocjitsu_gpu_test_rvs_prefix }}/lib:{{
+        rocjitsu_gpu_test_rvs_prefix }}/lib/rvs:{{
+        rocjitsu_gpu_test_rocm }}/lib:{{ rocjitsu_gpu_test_rocm }}/lib64
   when: rocjitsu_gpu_test_rvs | bool
 
 - name: Check whether timeout is installed

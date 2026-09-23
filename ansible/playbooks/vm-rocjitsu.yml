@@ -51,6 +51,15 @@
     # tag is reassigned on every upstream build, so baking it into an image
     # would mean two rebuilds of the same commit install different bits.
     vm_rocjitsu_hsa_snoop_version: "{{ vm_hsa_snoop_version | default('1.1.1') }}"
+    # RVS is not in TheRock's apt index under any name, so it comes from AMD's
+    # standalone tarball instead. Pinned for the same reason as hsa-snoop above.
+    vm_rocjitsu_rvs_version: "{{ vm_rvs_version | default('1.5.125-620') }}"
+    # The tarballs are only built as "amdrocm7", but every soname RVS needs --
+    # libamdhip64.so.7, libhsa-runtime64.so.1, librocblas.so.5 -- is what
+    # TheRock 10.0 ships, and its libraries self-resolve rocm_sysdeps and llvm
+    # through their own $ORIGIN rpaths. Verified by running the 1.5.125 tarball
+    # against a bare 10.0.0-4 tree. Recheck this if either side bumps a major.
+    vm_rocjitsu_rvs_prefix: "{{ vm_rvs_prefix | default('/opt/rvs') }}"
     # "gap" emits only what no driver release ships -- imu, mes, mes1 and
     # ip_discovery -- alongside the real blobs from amdgpu-dkms-firmware 31.60,
     # which live a directory up the search order in /lib/firmware/updates/amdgpu
@@ -519,11 +528,32 @@
         update_cache: true
       become: true
 
-    - name: Install ROCm Validation Suite
+    - name: Install amd-smi
       ansible.builtin.package:
-        name:
-          - amd-smi-lib
-          - rocm-validation-suite
+        name: amdrocm-amdsmi
+        state: present
+        update_cache: true
+      become: true
+
+    - name: Create the RVS install prefix
+      ansible.builtin.file:
+        path: "{{ vm_rocjitsu_rvs_prefix }}"
+        state: directory
+        mode: '0755'
+      become: true
+
+    # Unpacked into its own prefix rather than over the ROCm tree: TheRock
+    # installs under a versioned path (/opt/rocm/core-10.0) that apt owns, and
+    # the tarball carries bin/, lib/, include/ and share/ that would collide
+    # there. Downloaded guest-side for the same proxy reason as hsa-snoop.
+    - name: Install ROCm Validation Suite from the AMD tarball
+      ansible.builtin.unarchive:
+        src: >-
+          https://repo.amd.com/rocm/rvs/tarball/amdrocm7-rvs-{{ vm_rocjitsu_rvs_version }}-Linux.tar.gz
+        dest: "{{ vm_rocjitsu_rvs_prefix }}"
+        remote_src: true
+        creates: "{{ vm_rocjitsu_rvs_prefix }}/bin/rvs"
+      become: true
 
     # fio-hipfile-bench builds fio from a pinned master commit in the guest,
     # because the libhipfile ioengine is in no fio release tag. The distro fio

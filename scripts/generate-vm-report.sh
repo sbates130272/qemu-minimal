@@ -202,6 +202,7 @@ SWAP=$(echo "$MEM" | awk '/^Swap/{print $2}')
 DISK=$(collect "lsblk -o NAME,SIZE,TYPE,MOUNTPOINT")
 DF=$(collect "df -h / /boot")
 NVME=$(collect "nvme list 2>/dev/null || echo 'nvme-cli unavailable'")
+PCI=$(collect "lspci -nn 2>/dev/null || echo 'pciutils unavailable'")
 NVME_CLI_PKG=$(collect "dpkg-query -W -f='\${binary:Package}\t\${Version}\n' | grep -E '^nvme-cli[[:space:]]' || echo 'nvme-cli not installed'")
 AMDGPU_PKGS=$(collect "dpkg-query -W -f='\${binary:Package}\t\${Version}\n' | grep -Ei '^[^[:space:]]*amdgpu[^[:space:]]*[[:space:]]' | sort || echo 'No amdgpu packages installed'")
 ROCM_PKGS=$(collect "dpkg-query -W -f='\${binary:Package}\t\${Version}\n' | grep -E '^amdrocm' | sort || echo 'No amdrocm packages installed'")
@@ -320,6 +321,12 @@ ${DF}
 
 \`\`\`
 ${NVME}
+\`\`\`
+
+## PCI devices
+
+\`\`\`
+${PCI}
 \`\`\`
 
 ## Debian Packages

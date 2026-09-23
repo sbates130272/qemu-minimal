@@ -77,6 +77,11 @@ jobs:
     - name: Ensure images directory exists
       run: mkdir -p images
 
+    # Not --packages none, which every other gen-vm call site here uses: the
+    # report collects "nvme list" and "lspci", and neither tool is in the
+    # stock cloud image. This lane reports on what gen-vm gives you by
+    # default, so it uses the default manifest rather than a report-specific
+    # one -- it is longer, so watch the SSH wait below if cloud-init slows.
     - name: Generate VM
       run: |
         qemu-tool gen-vm \
@@ -85,7 +90,7 @@ jobs:
           --release noble \
           --username ubuntu \
           --password password \
-          --packages none \
+          --packages qemu/packages.d/packages-default \
           --size 8
 
     - name: Boot VM
@@ -113,8 +118,12 @@ jobs:
         cat run-vm-output.log || true
         exit 1
 
+    # Into site/1vm, not site: the checkout already populated site/ with the
+    # repository-owned pages, and uploading that whole tree published a nested
+    # copy of the site under 1vm/ on gh-pages. Same shape the rocjitsu and
+    # hipfile-fio lanes already use.
     - name: Generate report
-      run: bash scripts/generate-vm-report.sh site 2222 ubuntu
+      run: bash scripts/generate-vm-report.sh site/1vm 2222 ubuntu
 
     - name: Show run-vm log on failure
       if: failure()
@@ -128,5 +137,5 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: vm-report-1vm
-        path: site/
+        path: site/1vm/
         if-no-files-found: error
