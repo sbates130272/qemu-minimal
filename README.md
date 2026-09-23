@@ -367,7 +367,7 @@ qemu-tool gen-vm \
 
 `qemu-minimal - qcow2-image-publish` builds the first-class Ansible image
 profiles below. Pull requests stop after the build stage; pushes to `main`
-rebuild the same matrix and publish each qcow2 bundle to GHCR as a scratch
+rebuild the same matrix and publish each qcow2 bundle to Docker Hub as a scratch
 image containing:
 
 - `/artifacts/<published qcow2 filename>`
@@ -375,17 +375,22 @@ image containing:
 
 The manifest records the qcow2 filename and path, the Ansible playbook/profile,
 the Ubuntu release, the source commit, the pinned container images the profile
-needs at run time, and the post-boot validation tag a consumer should run.
+needs at run time, the post-boot validation tag a consumer should run, and the
+published Docker Hub refs. The tag contract mirrors `batesste-ci-images` guest
+images: a rolling `latest-qcow2`, a rolling release/profile tag, and a fully
+qualified date + source tag for reproducible pins. Publishing requires the
+`DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` GitHub secrets.
 
 | Profile | Playbook | Baked into the qcow2 | Post-boot validation | Published ref |
 |---|---|---|---|---|
-| `rocjitsu` | `vm-rocjitsu.yml` | ROCm, rocjitsu firmware stubs, amdgpu tooling, hsa-snoop | `vm-rocjitsu.yml --tags test` | `ghcr.io/sbates130272/qemu-minimal-qcow2-rocjitsu:{stable,rocjitsu-resolute,rocjitsu-resolute-<sha>}` |
-| `rocjitsu-hipfile-fio` | `vm-rocjitsu-hipfile-fio.yml` | `rocjitsu` plus fio's `libhipfile` ioengine | `vm-rocjitsu-hipfile-fio.yml --tags hipfile-fio` | `ghcr.io/sbates130272/qemu-minimal-qcow2-rocjitsu-hipfile-fio:{stable,rocjitsu-hipfile-fio-resolute,rocjitsu-hipfile-fio-resolute-<sha>}` |
-| `ernic` | `vm-ernic.yml` | ROCm-ernic's ionic guest prerequisites and DKMS build | `vm-ernic.yml --tags configure` | `ghcr.io/sbates130272/qemu-minimal-qcow2-ernic:{stable,ernic-resolute,ernic-resolute-<sha>}` |
-| `ernic-rocjitsu` | `vm-ernic-rocjitsu.yml` | `ernic` and `rocjitsu` together | `vm-ernic-rocjitsu.yml --tags validate` | `ghcr.io/sbates130272/qemu-minimal-qcow2-ernic-rocjitsu:{stable,ernic-rocjitsu-resolute,ernic-rocjitsu-resolute-<sha>}` |
+| `rocjitsu` | `vm-rocjitsu.yml` | ROCm, rocjitsu firmware stubs, amdgpu tooling, hsa-snoop | `vm-rocjitsu.yml --tags test` | `docker.io/sbates130272/qemu-minimal-qcow2-rocjitsu:{latest-qcow2,vm.resolute-rocjitsu-qcow2,<date>.g<sha>-vm.resolute-rocjitsu-qcow2}` |
+| `rocjitsu-hipfile-fio` | `vm-rocjitsu-hipfile-fio.yml` | `rocjitsu` plus fio's `libhipfile` ioengine | `vm-rocjitsu-hipfile-fio.yml --tags hipfile-fio` | `docker.io/sbates130272/qemu-minimal-qcow2-rocjitsu-hipfile-fio:{latest-qcow2,vm.resolute-rocjitsu-hipfile-fio-qcow2,<date>.g<sha>-vm.resolute-rocjitsu-hipfile-fio-qcow2}` |
+| `ernic` | `vm-ernic.yml` | ROCm-ernic's ionic guest prerequisites and DKMS build | `vm-ernic.yml --tags configure` | `docker.io/sbates130272/qemu-minimal-qcow2-ernic:{latest-qcow2,vm.resolute-ernic-qcow2,<date>.g<sha>-vm.resolute-ernic-qcow2}` |
+| `ernic-rocjitsu` | `vm-ernic-rocjitsu.yml` | `ernic` and `rocjitsu` together | `vm-ernic-rocjitsu.yml --tags validate` | `docker.io/sbates130272/qemu-minimal-qcow2-ernic-rocjitsu:{latest-qcow2,vm.resolute-ernic-rocjitsu-qcow2,<date>.g<sha>-vm.resolute-ernic-rocjitsu-qcow2}` |
 
-Use the stable tag when you want “the latest published image for this profile”
-and the SHA tag or digest when you need a reproducible input. The companion
+Use `latest-qcow2` when you want “the latest published image for this profile”
+and the fully qualified date/SHA tag or digest when you need a reproducible
+input. The companion
 `qemu-minimal - qcow2-image-consumer` workflow accepts either a tag or a digest
 reference, pulls the published qcow2 bundle, boots it in the matching compose
 stack, and runs the validation tag recorded in the manifest.

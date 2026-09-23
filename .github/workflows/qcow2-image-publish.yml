@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: Publish the built qcow2 bundles to GHCR
+        description: Publish the built qcow2 bundles to Docker Hub
         required: false
         default: false
         type: boolean
@@ -192,7 +192,6 @@ jobs:
         shell: bash
     permissions:
       contents: read
-      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -300,50 +299,62 @@ jobs:
           rocjitsu-image: ${{ matrix.rocjitsu_image }}
           qemu-image: ${{ env.QEMU_IMAGE }}
 
-      - name: Publish the qcow2 bundle to GHCR
+      - name: Publish the qcow2 bundle to Docker Hub
         env:
-          PROFILE: ${{ matrix.profile }}
-          RELEASE: ${{ matrix.release }}
           QCOW2_FILENAME: ${{ matrix.qcow2_filename }}
           BUNDLE_DIR: dist/qcow2/${{ matrix.profile }}
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           set -euo pipefail
-          repo="ghcr.io/${GITHUB_REPOSITORY_OWNER}/qemu-minimal-qcow2-${PROFILE}"
-          version_tag="${PROFILE}-${RELEASE}-${GITHUB_SHA::12}"
-          release_tag="${PROFILE}-${RELEASE}"
-          stable_ref="${repo}:stable"
-          release_ref="${repo}:${release_tag}"
-          version_ref="${repo}:${version_tag}"
+          [ -n "${DOCKERHUB_USERNAME}" ] || { echo "::error::DOCKERHUB_USERNAME is not set"; exit 1; }
+          [ -n "${DOCKERHUB_TOKEN}" ] || { echo "::error::DOCKERHUB_TOKEN is not set"; exit 1; }
+          eval "$(
+            python3 - <<'PY'
+            import json
+            import os
+            import shlex
+            from pathlib import Path
+
+            manifest = json.loads(Path(os.environ["BUNDLE_DIR"], "manifest.json").read_text())
+            registry = manifest["registry"]
+            refs = registry["refs"]
+            print(f"repo={shlex.quote(registry['repository'])}")
+            print(f"primary_ref={shlex.quote(refs['primary'])}")
+            print(f"variant_ref={shlex.quote(refs['variant'])}")
+            print(f"latest_ref={shlex.quote(refs['latest'])}")
+            print(f"profile={shlex.quote(manifest['profile'])}")
+            PY
+          )"
 
           cat > "${BUNDLE_DIR}/Dockerfile" <<EOF
           FROM scratch
           LABEL org.opencontainers.image.source="https://github.com/${GITHUB_REPOSITORY}"
           LABEL org.opencontainers.image.revision="${GITHUB_SHA}"
-          LABEL org.opencontainers.image.title="qemu-minimal qcow2 ${PROFILE}"
+          LABEL org.opencontainers.image.title="qemu-minimal qcow2 ${profile}"
           COPY manifest.json /artifacts/manifest.json
           COPY ${QCOW2_FILENAME} /artifacts/${QCOW2_FILENAME}
           EOF
 
-          echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
-          docker build -t "${version_ref}" "${BUNDLE_DIR}"
-          docker push "${version_ref}"
-          digest=$(docker buildx imagetools inspect "${version_ref}" --format '{{json .Manifest}}' \
-            | python -c 'import json,sys; print(json.load(sys.stdin)["digest"])')
+          echo "${DOCKERHUB_TOKEN}" | docker login docker.io -u "${DOCKERHUB_USERNAME}" --password-stdin
+          docker build -t "${primary_ref}" "${BUNDLE_DIR}"
+          docker push "${primary_ref}"
+          digest=$(docker buildx imagetools inspect "${primary_ref}" --format '{{json .Manifest}}' \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])')
           [ -n "${digest}" ] || { echo "::error::failed to discover image digest"; exit 1; }
 
-          docker buildx imagetools create -t "${stable_ref}" "${repo}@${digest}"
-          docker buildx imagetools create -t "${release_ref}" "${repo}@${digest}"
+          docker buildx imagetools create -t "${variant_ref}" "${repo}@${digest}"
+          docker buildx imagetools create -t "${latest_ref}" "${repo}@${digest}"
 
-          python - <<PY
+          python3 - <<PY
           import json
           from pathlib import Path
           receipt = {
-              "profile": "${PROFILE}",
+              "profile": "${profile}",
               "repository": "${repo}",
-              "stable_ref": "${stable_ref}",
-              "release_ref": "${release_ref}",
-              "version_ref": "${version_ref}",
+              "primary_ref": "${primary_ref}",
+              "variant_ref": "${variant_ref}",
+              "latest_ref": "${latest_ref}",
               "digest_ref": f"${repo}@${digest}",
               "digest": "${digest}",
           }

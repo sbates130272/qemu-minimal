@@ -14,15 +14,14 @@ on:
           - ernic-rocjitsu
       image-ref:
         description: >-
-          Optional GHCR reference to pull, such as
-          ghcr.io/<owner>/qemu-minimal-qcow2-rocjitsu@sha256:... .
-          Defaults to the profile's stable tag.
+          Optional Docker Hub reference to pull, such as
+          docker.io/<owner>/qemu-minimal-qcow2-rocjitsu@sha256:... .
+          Defaults to the profile's latest-qcow2 tag.
         required: false
         type: string
 
 permissions:
   contents: read
-  packages: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.profile }}
@@ -58,10 +57,17 @@ jobs:
           release: resolute
           stage-src: 'true'
 
-      - name: Log in to GHCR
+      - name: Log in to Docker Hub
         env:
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "${DOCKERHUB_USERNAME}" ] && [ -n "${DOCKERHUB_TOKEN}" ]; then
+            echo "${DOCKERHUB_TOKEN}" | docker login docker.io -u "${DOCKERHUB_USERNAME}" --password-stdin
+          else
+            echo "Docker Hub credentials not configured; pulling anonymously"
+          fi
 
       - name: Resolve the qcow2 image reference
         env:
@@ -72,7 +78,7 @@ jobs:
           if [ -n "${INPUT_IMAGE_REF}" ]; then
             echo "QCOW2_IMAGE_REF=${INPUT_IMAGE_REF}" >> "$GITHUB_ENV"
           else
-            echo "QCOW2_IMAGE_REF=ghcr.io/${GITHUB_REPOSITORY_OWNER}/qemu-minimal-qcow2-${PROFILE}:stable" >> "$GITHUB_ENV"
+            echo "QCOW2_IMAGE_REF=docker.io/${GITHUB_REPOSITORY_OWNER}/qemu-minimal-qcow2-${PROFILE}:latest-qcow2" >> "$GITHUB_ENV"
           fi
 
       - name: Pull the published qcow2 bundle

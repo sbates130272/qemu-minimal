@@ -134,17 +134,35 @@ runs:
         python3 - <<'PY'
         import json
         import os
+        from datetime import datetime, timezone
         from pathlib import Path
 
         out = Path(os.environ["OUTPUT_DIR"])
         sha256 = (out / "sha256.txt").read_text().split()[0]
+        short_sha = os.environ["GITHUB_SHA"][:7]
+        build_timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        build_date = datetime.now(timezone.utc).strftime("%Y%m%d")
+        variant_tag = (
+            f"vm.{os.environ['RELEASE']}-{os.environ['PROFILE']}-qcow2"
+        )
+        primary_tag = f"{build_date}.g{short_sha}-{variant_tag}"
+        latest_tag = "latest-qcow2"
+        repository = (
+            f"docker.io/{os.environ['GITHUB_REPOSITORY_OWNER']}"
+            f"/qemu-minimal-qcow2-{os.environ['PROFILE']}"
+        )
 
         manifest = {
-            "schema_version": 1,
+            "schema_version": 2,
             "profile": os.environ["PROFILE"],
             "ansible_playbook": os.environ["PLAYBOOK"],
             "ubuntu_release": os.environ["RELEASE"],
             "source_commit": os.environ["GITHUB_SHA"],
+            "build_info": {
+                "build_timestamp": build_timestamp,
+                "source_short_commit": short_sha,
+                "source_date": build_date,
+            },
             "qcow2": {
                 "filename": os.environ["QCOW2_FILENAME"],
                 "artifact_path": f"artifacts/{os.environ['QCOW2_FILENAME']}",
@@ -169,10 +187,17 @@ runs:
                 },
             },
             "registry": {
-                "repository": f"ghcr.io/{os.environ['GITHUB_REPOSITORY_OWNER']}/qemu-minimal-qcow2-{os.environ['PROFILE']}",
-                "stable_tag": "stable",
-                "release_tag": f"{os.environ['PROFILE']}-{os.environ['RELEASE']}",
-                "version_tag": f"{os.environ['PROFILE']}-{os.environ['RELEASE']}-{os.environ['GITHUB_SHA'][:12]}",
+                "repository": repository,
+                "tags": {
+                    "primary": primary_tag,
+                    "variant": variant_tag,
+                    "latest": latest_tag,
+                },
+                "refs": {
+                    "primary": f"{repository}:{primary_tag}",
+                    "variant": f"{repository}:{variant_tag}",
+                    "latest": f"{repository}:{latest_tag}",
+                },
             },
         }
         (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
