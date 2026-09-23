@@ -4,7 +4,7 @@ title: VM Report
 
 # VM Report — qemu-minimal
 
-Generated: **2026-09-23 02:48 UTC** &middot; Commit: [`b407b9e`](https://github.com/sbates130272/qemu-minimal/commit/b407b9ec69ef702bec16a88e7a334be861fdde5a)
+Generated: **2026-09-23 03:25 UTC** &middot; Commit: [`26a0ee1`](https://github.com/sbates130272/qemu-minimal/commit/26a0ee18ec3c5b6c191540e6075a03df19b1df29)
 
 ## Hardware
 
@@ -57,9 +57,17 @@ Filesystem      Size  Used Avail Use% Mounted on
 nvme-cli unavailable
 ```
 
+## Debian Packages
+
+### nvme-cli
+
+```
+nvme-cli not installed
+```
+
 ## ROCm
 
-### Installed packages (sample)
+### Installed Debian packages
 
 ```
 
@@ -71,16 +79,16 @@ nvme-cli unavailable
 
 ```
 
-### hipFile
+### hipFile Debian packages
 
 ```
-(not available)
-```
-
-## AMDGPU Kernel Driver
 
 ```
-ii  libdrm-amdgpu1:amd64            2.4.125-1ubuntu0.1~24.04.2                       amd64        Userspace interface to amdgpu-specific kernel DRM services -- runtime
+
+## AMDGPU Debian Packages
+
+```
+libdrm-amdgpu1:amd64	2.4.125-1ubuntu0.1~24.04.2
 ```
 
 ## APT Sources
