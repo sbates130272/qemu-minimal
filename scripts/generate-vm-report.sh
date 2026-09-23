@@ -202,10 +202,11 @@ SWAP=$(echo "$MEM" | awk '/^Swap/{print $2}')
 DISK=$(collect "lsblk -o NAME,SIZE,TYPE,MOUNTPOINT")
 DF=$(collect "df -h / /boot")
 NVME=$(collect "nvme list 2>/dev/null || echo 'nvme-cli unavailable'")
-AMDGPU=$(collect "dpkg -l | grep '^ii' | grep -i amdgpu")
-ROCM_PKGS=$(collect "dpkg -l | grep '^ii' | grep '^ii  amdrocm' | awk '{print \$2, \$3}' | head -8")
+NVME_CLI_PKG=$(collect "dpkg-query -W -f='\${binary:Package}\t\${Version}\n' | grep -E '^nvme-cli[[:space:]]' || echo 'nvme-cli not installed'")
+AMDGPU_PKGS=$(collect "dpkg-query -W -f='\${binary:Package}\t\${Version}\n' | grep -E '^amdgpu(-|[[:space:]])' | sort || echo 'No amdgpu packages installed'")
+ROCM_PKGS=$(collect "dpkg-query -W -f='\${binary:Package}\t\${Version}\n' | grep -E '^amdrocm' | sort || echo 'No amdrocm packages installed'")
 ROCM_BINS=$(collect "ls /opt/rocm/bin/ 2>/dev/null | sort")
-HIPFILE=$(collect "dpkg -l | grep '^ii' | grep -i hipfile")
+HIPFILE_PKGS=$(collect "dpkg-query -W -f='\${binary:Package}\t\${Version}\n' | grep -i 'hipfile' | sort || echo 'No hipfile packages installed'")
 USER_GROUPS=$(collect "groups ${USER}")
 SERVICES=$(collect "systemctl list-units --type=service --state=running --no-pager --no-legend")
 SOURCES=$(collect "ls /etc/apt/sources.list.d/")
@@ -321,9 +322,17 @@ ${DF}
 ${NVME}
 \`\`\`
 
+## Debian Packages
+
+### nvme-cli
+
+\`\`\`
+${NVME_CLI_PKG}
+\`\`\`
+
 ## ROCm
 
-### Installed packages (sample)
+### Installed Debian packages
 
 \`\`\`
 ${ROCM_PKGS}
@@ -335,16 +344,16 @@ ${ROCM_PKGS}
 ${ROCM_BINS}
 \`\`\`
 
-### hipFile
+### hipFile Debian packages
 
 \`\`\`
-${HIPFILE}
+${HIPFILE_PKGS}
 \`\`\`
 
-## AMDGPU Kernel Driver
+## AMDGPU Debian Packages
 
 \`\`\`
-${AMDGPU}
+${AMDGPU_PKGS}
 \`\`\`
 
 ## APT Sources
