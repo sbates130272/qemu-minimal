@@ -139,7 +139,10 @@ jobs:
           emit("ROCJITSU_IMAGE", images.get("rocjitsu") or "")
           emit("QEMU_IMAGE_REQUIRED", images["qemu"])
           emit("HEALTH_SERVICES", " ".join(validation["health_services"]))
-          emit("PROFILE_VM_NAME", f"consumer-{manifest['profile']}")
+          emit(
+              "PROFILE_VM_NAME",
+              f"consumer-{manifest['profile']}-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}",
+          )
           emit(
               "COMPOSE_PROJECT_NAME",
               f"qcow2-consumer-{manifest['profile']}-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}",
