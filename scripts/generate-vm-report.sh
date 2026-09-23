@@ -423,7 +423,7 @@ fi)
 MD
 
 if [ "${REPORT_ROCJITSU_BENCH:-0}" = "1" ]; then
-  write_badge_json "${OUTDIR}/badge-gemm.json" gemm "${ROCJITSU_GEMM_DISPLAY}" "ED1C24"
+  write_badge_json "${OUTDIR}/badge-gemm.json" GEMM "${ROCJITSU_GEMM_DISPLAY}" "ED1C24"
   write_badge_json "${OUTDIR}/badge-hipfile.json" hipfile "${ROCJITSU_HIPFILE_DISPLAY}" "76B900"
 fi
 
