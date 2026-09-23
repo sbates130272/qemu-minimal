@@ -1,17 +1,23 @@
 ---
-- name: Locate the versioned ROCm prefix
-  ansible.builtin.find:
-    paths: /opt/rocm
-    patterns: 'core-*'
-    file_type: directory
-  register: rocjitsu_hipfile_fio_prefix_candidates
+- name: Locate the ROCm root with hipFile headers and library
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      for d in /opt/rocm /opt/rocm-* /opt/rocm/*; do
+        if { [ -e "${d}/include/hipfile/hipfile.h" ] || [ -e "${d}/include/hipfile.h" ]; } \
+           && [ -e "${d}/lib/libhipfile.so" ]; then
+          printf '%s\n' "${d}"
+          exit 0
+        fi
+      done
+      exit 1
+    executable: /bin/bash
+  register: rocjitsu_hipfile_fio_rocm_root
+  changed_when: false
 
-- name: Set the ROCm prefix
+- name: Set the ROCm root
   ansible.builtin.set_fact:
-    rocjitsu_hipfile_fio_rocm: >-
-      {{ (rocjitsu_hipfile_fio_prefix_candidates.files
-          | map(attribute='path') | sort | last)
-         if rocjitsu_hipfile_fio_prefix_candidates.files else '/opt/rocm' }}
+    rocjitsu_hipfile_fio_rocm: "{{ rocjitsu_hipfile_fio_rocm_root.stdout }}"
 
 - name: Read the baked fio commit stamp
   ansible.builtin.slurp:

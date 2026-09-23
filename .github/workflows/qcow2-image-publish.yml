@@ -326,10 +326,8 @@ jobs:
             | tail -1)
           [ -n "${digest}" ] || { echo "::error::failed to discover image digest"; exit 1; }
 
-          docker tag "${version_ref}" "${stable_ref}"
-          docker tag "${version_ref}" "${release_ref}"
-          docker push "${stable_ref}"
-          docker push "${release_ref}"
+          docker buildx imagetools create -t "${stable_ref}" "${repo}@${digest}"
+          docker buildx imagetools create -t "${release_ref}" "${repo}@${digest}"
 
           python - <<PY
           import json
