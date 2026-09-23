@@ -4,7 +4,7 @@ title: VM Report
 
 # VM Report — qemu-minimal
 
-Generated: **2026-09-23 04:04 UTC** &middot; Commit: [`a933df2`](https://github.com/sbates130272/qemu-minimal/commit/a933df2196a0e699b5701dd50a650ada233de8e7)
+Generated: **2026-09-23 20:13 UTC** &middot; Commit: [`d939b60`](https://github.com/sbates130272/qemu-minimal/commit/d939b601a6468b182b30c9c95f0e78e11dd88250)
 
 ## Hardware
 
@@ -19,13 +19,13 @@ Generated: **2026-09-23 04:04 UTC** &middot; Commit: [`a933df2`](https://github.
 ## Kernel
 
 ```
-6.8.0-139-generic
+6.8.0-142-generic
 ```
 
 <details><summary>Full version string</summary>
 
 ```
-Linux version 6.8.0-139-generic (buildd@lcy02-amd64-036) (x86_64-linux-gnu-gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, GNU ld (GNU Binutils for Ubuntu) 2.42) #139-Ubuntu SMP PREEMPT_DYNAMIC Sat Aug  1 03:52:05 UTC 2026
+Linux version 6.8.0-142-generic (buildd@lcy02-amd64-049) (x86_64-linux-gnu-gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, GNU ld (GNU Binutils for Ubuntu) 2.42) #142-Ubuntu SMP PREEMPT_DYNAMIC Wed Sep  2 14:24:27 UTC 2026
 ```
 
 </details>
@@ -47,14 +47,30 @@ nvme0n1    1T disk
 
 ```
 Filesystem      Size  Used Avail Use% Mounted on
-/dev/vda1       6.8G  1.9G  4.9G  28% /
-/dev/vda16      881M   64M  756M   8% /boot
+/dev/vda1       6.8G  4.4G  2.4G  65% /
+/dev/vda16      881M  181M  638M  23% /boot
 ```
 
 ### NVMe
 
 ```
-nvme-cli unavailable
+Node                  Generic               SN                   Model                                    Namespace  Usage                      Format           FW Rev  
+--------------------- --------------------- -------------------- ---------------------------------------- ---------- -------------------------- ---------------- --------
+/dev/nvme0n1          /dev/ng0n1            vm-report-nvme1      QEMU NVMe Ctrl                           0x1          1.10  TB /   1.10  TB    512   B +  0 B   11.1.1  
+```
+
+## PCI devices
+
+```
+00:00.0 Host bridge [0600]: Intel Corporation 82G33/G31/P35/P31 Express DRAM Controller [8086:29c0]
+00:01.0 VGA compatible controller [0300]: Device [1234:1111] (rev 02)
+00:02.0 Non-Volatile memory controller [0108]: Red Hat, Inc. QEMU NVM Express Controller [1b36:0010] (rev 02)
+00:03.0 Ethernet controller [0200]: Red Hat, Inc. Virtio network device [1af4:1000]
+00:04.0 Communication controller [0780]: Red Hat, Inc. Virtio console [1af4:1003]
+00:05.0 SCSI storage controller [0100]: Red Hat, Inc. Virtio block device [1af4:1001]
+00:1f.0 ISA bridge [0601]: Intel Corporation 82801IB (ICH9) LPC Interface Controller [8086:2918] (rev 02)
+00:1f.2 SATA controller [0106]: Intel Corporation 82801IR/IO/IH (ICH9R/DO/DH) 6 port SATA Controller [AHCI mode] [8086:2922] (rev 02)
+00:1f.3 SMBus [0c05]: Intel Corporation 82801I (ICH9 Family) SMBus Controller [8086:2930] (rev 02)
 ```
 
 ## Debian Packages
@@ -62,7 +78,7 @@ nvme-cli unavailable
 ### nvme-cli
 
 ```
-nvme-cli not installed
+nvme-cli	2.8-1ubuntu0.1
 ```
 
 ## ROCm
