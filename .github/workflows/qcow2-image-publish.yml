@@ -37,7 +37,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: >-
+    ${{ github.workflow }}-${{
+      github.event_name == 'workflow_dispatch'
+      && format('workflow-dispatch-{0}', github.run_id)
+      || format('{0}-{1}', github.event_name, github.ref)
+    }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -322,11 +327,9 @@ jobs:
 
           echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
           docker build -t "${version_ref}" "${BUNDLE_DIR}"
-          push_output=$(docker push "${version_ref}" 2>&1)
-          printf '%s\n' "${push_output}"
-          digest=$(printf '%s\n' "${push_output}" \
-            | sed -n 's/^.*digest: \(sha256:[0-9a-f]*\).*$/\1/p' \
-            | tail -1)
+          docker push "${version_ref}"
+          digest=$(docker buildx imagetools inspect "${version_ref}" --format '{{json .Manifest}}' \
+            | python -c 'import json,sys; print(json.load(sys.stdin)["digest"])')
           [ -n "${digest}" ] || { echo "::error::failed to discover image digest"; exit 1; }
 
           docker buildx imagetools create -t "${stable_ref}" "${repo}@${digest}"
