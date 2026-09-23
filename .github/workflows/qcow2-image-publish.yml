@@ -1,0 +1,350 @@
+name: qemu-minimal - qcow2-image-publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the built qcow2 bundles to GHCR
+        required: false
+        default: false
+        type: boolean
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'ansible/**'
+      - 'qemu/qemu-tool/**'
+      - 'qemu/pyproject.toml'
+      - 'qemu/compose/**'
+      - '.github/actions/setup-vm-job/action.yml'
+      - '.github/actions/prepare-qcow2-image/action.yml'
+      - '.github/workflows/qcow2-image-publish.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'ansible/**'
+      - 'qemu/qemu-tool/**'
+      - 'qemu/pyproject.toml'
+      - 'qemu/compose/**'
+      - '.github/actions/setup-vm-job/action.yml'
+      - '.github/actions/prepare-qcow2-image/action.yml'
+      - '.github/workflows/qcow2-image-publish.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  ERNIC_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20260919.g959f0cf-ernic.0b48aa1-vfu.8039244
+  ROCJITSU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20260921.gb3399b3-rocjitsu.8e01a5a
+  QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260919.g359579e-qemu11.1.1-vfu.8039244
+  VM_IMAGES_DIR: /var/lib/qemu-tool/images
+  ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false}'
+
+jobs:
+  build-qcow2:
+    name: build-qcow2 (${{ matrix.profile }})
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: rocjitsu
+            playbook: ansible/playbooks/vm-rocjitsu.yml
+            release: resolute
+            vm_name: qcow2-rocjitsu
+            qcow2_filename: qemu-minimal-rocjitsu-resolute.qcow2
+            compose_stack: vfio-user-rocjitsu-vm
+            compose_profiles: '[]'
+            health_services: '["rocjitsu"]'
+            validation_playbook: ansible/playbooks/vm-rocjitsu.yml
+            validation_tags: test
+            vm_vcpus: "4"
+            vm_vmem: "4096"
+            vm_shm_size: "5g"
+            vm_nvme: ""
+            ernic_image: ""
+            rocjitsu_image: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20260921.gb3399b3-rocjitsu.8e01a5a
+          - profile: rocjitsu-hipfile-fio
+            playbook: ansible/playbooks/vm-rocjitsu-hipfile-fio.yml
+            release: resolute
+            vm_name: qcow2-rocjitsu-hipfile-fio
+            qcow2_filename: qemu-minimal-rocjitsu-hipfile-fio-resolute.qcow2
+            compose_stack: vfio-user-rocjitsu-vm
+            compose_profiles: '[]'
+            health_services: '["rocjitsu"]'
+            validation_playbook: ansible/playbooks/vm-rocjitsu-hipfile-fio.yml
+            validation_tags: hipfile-fio
+            vm_vcpus: "4"
+            vm_vmem: "4096"
+            vm_shm_size: "5g"
+            vm_nvme: "1"
+            ernic_image: ""
+            rocjitsu_image: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20260921.gb3399b3-rocjitsu.8e01a5a
+          - profile: ernic
+            playbook: ansible/playbooks/vm-ernic.yml
+            release: resolute
+            vm_name: qcow2-ernic
+            qcow2_filename: qemu-minimal-ernic-resolute.qcow2
+            compose_stack: vfio-user-ernic-vm
+            compose_profiles: '[]'
+            health_services: '["ernic"]'
+            validation_playbook: ansible/playbooks/vm-ernic.yml
+            validation_tags: configure
+            vm_vcpus: "4"
+            vm_vmem: "4096"
+            vm_shm_size: "5g"
+            vm_nvme: ""
+            ernic_image: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20260919.g959f0cf-ernic.0b48aa1-vfu.8039244
+            rocjitsu_image: ""
+          - profile: ernic-rocjitsu
+            playbook: ansible/playbooks/vm-ernic-rocjitsu.yml
+            release: resolute
+            vm_name: qcow2-ernic-rocjitsu
+            qcow2_filename: qemu-minimal-ernic-rocjitsu-resolute.qcow2
+            compose_stack: vfio-user-ernic-rocjitsu-vm
+            compose_profiles: '[]'
+            health_services: '["ernic","rocjitsu"]'
+            validation_playbook: ansible/playbooks/vm-ernic-rocjitsu.yml
+            validation_tags: validate
+            vm_vcpus: "4"
+            vm_vmem: "4096"
+            vm_shm_size: "5g"
+            vm_nvme: ""
+            ernic_image: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20260919.g959f0cf-ernic.0b48aa1-vfu.8039244
+            rocjitsu_image: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20260921.gb3399b3-rocjitsu.8e01a5a
+    container:
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260919.g359579e-qemu11.1.1-vfu.8039244
+      options: >-
+        --device /dev/kvm
+        -v /var/run/docker.sock:/var/run/docker.sock
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4.3.1
+
+      - name: Set up VM job
+        uses: ./.github/actions/setup-vm-job
+        with:
+          cloud-image-key: qcow2-${{ matrix.profile }}
+          release: ${{ matrix.release }}
+
+      - name: Build the qcow2 bundle
+        uses: ./.github/actions/prepare-qcow2-image
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          profile: ${{ matrix.profile }}
+          playbook: ${{ matrix.playbook }}
+          release: ${{ matrix.release }}
+          vm-name: ${{ matrix.vm_name }}
+          qcow2-filename: ${{ matrix.qcow2_filename }}
+          output-dir: dist/qcow2/${{ matrix.profile }}
+          compose-stack: ${{ matrix.compose_stack }}
+          compose-profiles: ${{ matrix.compose_profiles }}
+          health-services: ${{ matrix.health_services }}
+          validation-playbook: ${{ matrix.validation_playbook }}
+          validation-tags: ${{ matrix.validation_tags }}
+          vm-vcpus: ${{ matrix.vm_vcpus }}
+          vm-vmem: ${{ matrix.vm_vmem }}
+          vm-shm-size: ${{ matrix.vm_shm_size }}
+          vm-nvme: ${{ matrix.vm_nvme }}
+          ernic-image: ${{ matrix.ernic_image }}
+          rocjitsu-image: ${{ matrix.rocjitsu_image }}
+          qemu-image: ${{ env.QEMU_IMAGE }}
+
+      - name: Upload qcow2 build metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: qcow2-build-metadata-${{ matrix.profile }}
+          path: |
+            dist/qcow2/${{ matrix.profile }}/manifest.json
+            dist/qcow2/${{ matrix.profile }}/qemu-img-info.txt
+            dist/qcow2/${{ matrix.profile }}/sha256.txt
+          if-no-files-found: error
+
+  publish-qcow2:
+    name: publish-qcow2 (${{ matrix.profile }})
+    needs: build-qcow2
+    if: >-
+      github.event_name == 'push'
+      || (github.event_name == 'workflow_dispatch' && inputs.publish)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: rocjitsu
+            playbook: ansible/playbooks/vm-rocjitsu.yml
+            release: resolute
+            vm_name: qcow2-rocjitsu
+            qcow2_filename: qemu-minimal-rocjitsu-resolute.qcow2
+            compose_stack: vfio-user-rocjitsu-vm
+            compose_profiles: '[]'
+            health_services: '["rocjitsu"]'
+            validation_playbook: ansible/playbooks/vm-rocjitsu.yml
+            validation_tags: test
+            vm_vcpus: "4"
+            vm_vmem: "4096"
+            vm_shm_size: "5g"
+            vm_nvme: ""
+            ernic_image: ""
+            rocjitsu_image: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20260921.gb3399b3-rocjitsu.8e01a5a
+          - profile: rocjitsu-hipfile-fio
+            playbook: ansible/playbooks/vm-rocjitsu-hipfile-fio.yml
+            release: resolute
+            vm_name: qcow2-rocjitsu-hipfile-fio
+            qcow2_filename: qemu-minimal-rocjitsu-hipfile-fio-resolute.qcow2
+            compose_stack: vfio-user-rocjitsu-vm
+            compose_profiles: '[]'
+            health_services: '["rocjitsu"]'
+            validation_playbook: ansible/playbooks/vm-rocjitsu-hipfile-fio.yml
+            validation_tags: hipfile-fio
+            vm_vcpus: "4"
+            vm_vmem: "4096"
+            vm_shm_size: "5g"
+            vm_nvme: "1"
+            ernic_image: ""
+            rocjitsu_image: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20260921.gb3399b3-rocjitsu.8e01a5a
+          - profile: ernic
+            playbook: ansible/playbooks/vm-ernic.yml
+            release: resolute
+            vm_name: qcow2-ernic
+            qcow2_filename: qemu-minimal-ernic-resolute.qcow2
+            compose_stack: vfio-user-ernic-vm
+            compose_profiles: '[]'
+            health_services: '["ernic"]'
+            validation_playbook: ansible/playbooks/vm-ernic.yml
+            validation_tags: configure
+            vm_vcpus: "4"
+            vm_vmem: "4096"
+            vm_shm_size: "5g"
+            vm_nvme: ""
+            ernic_image: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20260919.g959f0cf-ernic.0b48aa1-vfu.8039244
+            rocjitsu_image: ""
+          - profile: ernic-rocjitsu
+            playbook: ansible/playbooks/vm-ernic-rocjitsu.yml
+            release: resolute
+            vm_name: qcow2-ernic-rocjitsu
+            qcow2_filename: qemu-minimal-ernic-rocjitsu-resolute.qcow2
+            compose_stack: vfio-user-ernic-rocjitsu-vm
+            compose_profiles: '[]'
+            health_services: '["ernic","rocjitsu"]'
+            validation_playbook: ansible/playbooks/vm-ernic-rocjitsu.yml
+            validation_tags: validate
+            vm_vcpus: "4"
+            vm_vmem: "4096"
+            vm_shm_size: "5g"
+            vm_nvme: ""
+            ernic_image: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20260919.g959f0cf-ernic.0b48aa1-vfu.8039244
+            rocjitsu_image: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20260921.gb3399b3-rocjitsu.8e01a5a
+    container:
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260919.g359579e-qemu11.1.1-vfu.8039244
+      options: >-
+        --device /dev/kvm
+        -v /var/run/docker.sock:/var/run/docker.sock
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4.3.1
+
+      - name: Set up VM job
+        uses: ./.github/actions/setup-vm-job
+        with:
+          cloud-image-key: qcow2-publish-${{ matrix.profile }}
+          release: ${{ matrix.release }}
+
+      - name: Build the publishable qcow2 bundle
+        uses: ./.github/actions/prepare-qcow2-image
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          profile: ${{ matrix.profile }}
+          playbook: ${{ matrix.playbook }}
+          release: ${{ matrix.release }}
+          vm-name: ${{ matrix.vm_name }}
+          qcow2-filename: ${{ matrix.qcow2_filename }}
+          output-dir: dist/qcow2/${{ matrix.profile }}
+          compose-stack: ${{ matrix.compose_stack }}
+          compose-profiles: ${{ matrix.compose_profiles }}
+          health-services: ${{ matrix.health_services }}
+          validation-playbook: ${{ matrix.validation_playbook }}
+          validation-tags: ${{ matrix.validation_tags }}
+          vm-vcpus: ${{ matrix.vm_vcpus }}
+          vm-vmem: ${{ matrix.vm_vmem }}
+          vm-shm-size: ${{ matrix.vm_shm_size }}
+          vm-nvme: ${{ matrix.vm_nvme }}
+          ernic-image: ${{ matrix.ernic_image }}
+          rocjitsu-image: ${{ matrix.rocjitsu_image }}
+          qemu-image: ${{ env.QEMU_IMAGE }}
+
+      - name: Publish the qcow2 bundle to GHCR
+        env:
+          PROFILE: ${{ matrix.profile }}
+          RELEASE: ${{ matrix.release }}
+          QCOW2_FILENAME: ${{ matrix.qcow2_filename }}
+          BUNDLE_DIR: dist/qcow2/${{ matrix.profile }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          repo="ghcr.io/${GITHUB_REPOSITORY_OWNER}/qemu-minimal-qcow2-${PROFILE}"
+          version_tag="${RELEASE}-${GITHUB_SHA::12}"
+          stable_ref="${repo}:stable"
+          release_ref="${repo}:${RELEASE}"
+          version_ref="${repo}:${version_tag}"
+
+          cat > "${BUNDLE_DIR}/Dockerfile" <<EOF
+          FROM scratch
+          LABEL org.opencontainers.image.source="https://github.com/${GITHUB_REPOSITORY}"
+          LABEL org.opencontainers.image.revision="${GITHUB_SHA}"
+          LABEL org.opencontainers.image.title="qemu-minimal qcow2 ${PROFILE}"
+          COPY manifest.json /artifacts/manifest.json
+          COPY ${QCOW2_FILENAME} /artifacts/${QCOW2_FILENAME}
+          EOF
+
+          echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          docker build -t "${version_ref}" "${BUNDLE_DIR}"
+          push_output=$(docker push "${version_ref}" 2>&1)
+          printf '%s\n' "${push_output}"
+          digest=$(printf '%s\n' "${push_output}" \
+            | sed -n 's/^.*digest: \(sha256:[0-9a-f]*\).*$/\1/p' \
+            | tail -1)
+          [ -n "${digest}" ] || { echo "::error::failed to discover image digest"; exit 1; }
+
+          docker tag "${version_ref}" "${stable_ref}"
+          docker tag "${version_ref}" "${release_ref}"
+          docker push "${stable_ref}"
+          docker push "${release_ref}"
+
+          python - <<PY
+          import json
+          from pathlib import Path
+          receipt = {
+              "profile": "${PROFILE}",
+              "repository": "${repo}",
+              "stable_ref": "${stable_ref}",
+              "release_ref": "${release_ref}",
+              "version_ref": "${version_ref}",
+              "digest_ref": f"${repo}@${digest}",
+              "digest": "${digest}",
+          }
+          Path("${BUNDLE_DIR}/publish.json").write_text(json.dumps(receipt, indent=2) + "\\n")
+          PY
+
+      - name: Upload publish receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: qcow2-publish-${{ matrix.profile }}
+          path: dist/qcow2/${{ matrix.profile }}/publish.json
+          if-no-files-found: error

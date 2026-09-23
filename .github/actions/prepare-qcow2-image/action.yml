@@ -1,0 +1,184 @@
+name: Prepare a qcow2 image bundle
+description: >-
+  Build a base qcow2 image from an Ansible playbook, stage it with a standard
+  manifest, and record image metadata for later publication or validation.
+
+inputs:
+  profile:
+    description: Short profile name, e.g. rocjitsu
+    required: true
+  playbook:
+    description: Ansible playbook used to build the image
+    required: true
+  release:
+    description: Ubuntu release passed to qemu-tool gen-vm
+    required: true
+  vm-name:
+    description: Temporary VM name used while building the image
+    required: true
+  qcow2-filename:
+    description: Published qcow2 filename
+    required: true
+  output-dir:
+    description: Directory to write the staged qcow2 bundle into
+    required: true
+  compose-stack:
+    description: Compose stack used for post-boot validation
+    required: true
+  compose-profiles:
+    description: JSON array of compose profiles required for validation
+    required: false
+    default: "[]"
+  health-services:
+    description: JSON array of compose services that must become healthy
+    required: true
+  validation-playbook:
+    description: Playbook to run for post-boot validation
+    required: true
+  validation-tags:
+    description: Tags to run for post-boot validation
+    required: true
+  vm-vcpus:
+    description: VM_VCPUS for the validation compose stack
+    required: true
+  vm-vmem:
+    description: VM_VMEM for the validation compose stack
+    required: true
+  vm-shm-size:
+    description: VM_SHM_SIZE for the validation compose stack
+    required: true
+  vm-nvme:
+    description: Optional VM_NVME value for the validation compose stack
+    required: false
+    default: ""
+  ernic-image:
+    description: Optional pinned ernic container image required by the profile
+    required: false
+    default: ""
+  rocjitsu-image:
+    description: Optional pinned rocjitsu container image required by the profile
+    required: false
+    default: ""
+  qemu-image:
+    description: Pinned qemu/libvfio-user container image
+    required: true
+
+outputs:
+  bundle-dir:
+    description: Directory containing the staged qcow2 bundle
+    value: ${{ steps.stage.outputs.bundle_dir }}
+  qcow2-path:
+    description: Full path to the staged qcow2 file
+    value: ${{ steps.stage.outputs.qcow2_path }}
+  manifest-path:
+    description: Full path to the staged manifest file
+    value: ${{ steps.stage.outputs.manifest_path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Pull helper images needed during image build
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ -n "${{ inputs.rocjitsu-image }}" ]; then
+          docker pull "${{ inputs.rocjitsu-image }}"
+        fi
+        if [ -n "${{ inputs.ernic-image }}" ]; then
+          docker pull "${{ inputs.ernic-image }}"
+        fi
+
+    - name: Generate the qcow2 image
+      shell: bash
+      run: |
+        set -euo pipefail
+        qemu-tool gen-vm \
+          --vm-name "${{ inputs.vm-name }}" \
+          --release "${{ inputs.release }}" \
+          --username ubuntu \
+          --password password \
+          --packages none \
+          --size 64 \
+          --ansible-playbook "${{ inputs.playbook }}"
+
+    - name: Stage the qcow2 bundle
+      id: stage
+      shell: bash
+      env:
+        PROFILE: ${{ inputs.profile }}
+        PLAYBOOK: ${{ inputs.playbook }}
+        RELEASE: ${{ inputs.release }}
+        VM_NAME: ${{ inputs.vm-name }}
+        QCOW2_FILENAME: ${{ inputs.qcow2-filename }}
+        OUTPUT_DIR: ${{ inputs.output-dir }}
+        COMPOSE_STACK: ${{ inputs.compose-stack }}
+        COMPOSE_PROFILES_JSON: ${{ inputs.compose-profiles }}
+        HEALTH_SERVICES_JSON: ${{ inputs.health-services }}
+        VALIDATION_PLAYBOOK: ${{ inputs.validation-playbook }}
+        VALIDATION_TAGS: ${{ inputs.validation-tags }}
+        VM_VCPUS: ${{ inputs.vm-vcpus }}
+        VM_VMEM: ${{ inputs.vm-vmem }}
+        VM_SHM_SIZE: ${{ inputs.vm-shm-size }}
+        VM_NVME: ${{ inputs.vm-nvme }}
+        ERNIC_IMAGE: ${{ inputs.ernic-image }}
+        ROCJITSU_IMAGE: ${{ inputs.rocjitsu-image }}
+        QEMU_IMAGE: ${{ inputs.qemu-image }}
+      run: |
+        set -euo pipefail
+        mkdir -p "${OUTPUT_DIR}"
+        source_qcow2="${VM_IMAGES_DIR:-/var/lib/qemu-tool/images}/${VM_NAME}-backing.qcow2"
+        staged_qcow2="${OUTPUT_DIR}/${QCOW2_FILENAME}"
+        cp "${source_qcow2}" "${staged_qcow2}"
+        qemu-img info "${staged_qcow2}" > "${OUTPUT_DIR}/qemu-img-info.txt"
+        sha256sum "${staged_qcow2}" > "${OUTPUT_DIR}/sha256.txt"
+        python - <<'PY'
+        import json
+        import os
+        from pathlib import Path
+
+        out = Path(os.environ["OUTPUT_DIR"])
+        sha256 = (out / "sha256.txt").read_text().split()[0]
+
+        manifest = {
+            "schema_version": 1,
+            "profile": os.environ["PROFILE"],
+            "ansible_playbook": os.environ["PLAYBOOK"],
+            "ubuntu_release": os.environ["RELEASE"],
+            "source_commit": os.environ["GITHUB_SHA"],
+            "qcow2": {
+                "filename": os.environ["QCOW2_FILENAME"],
+                "artifact_path": f"artifacts/{os.environ['QCOW2_FILENAME']}",
+                "sha256": sha256,
+            },
+            "required_container_image_pins": {
+                "ernic": os.environ["ERNIC_IMAGE"] or None,
+                "rocjitsu": os.environ["ROCJITSU_IMAGE"] or None,
+                "qemu": os.environ["QEMU_IMAGE"],
+            },
+            "post_boot_validation": {
+                "compose_stack": os.environ["COMPOSE_STACK"],
+                "compose_profiles": json.loads(os.environ["COMPOSE_PROFILES_JSON"]),
+                "health_services": json.loads(os.environ["HEALTH_SERVICES_JSON"]),
+                "playbook": os.environ["VALIDATION_PLAYBOOK"],
+                "tags": os.environ["VALIDATION_TAGS"],
+                "compose_env": {
+                    "VM_VCPUS": os.environ["VM_VCPUS"],
+                    "VM_VMEM": os.environ["VM_VMEM"],
+                    "VM_SHM_SIZE": os.environ["VM_SHM_SIZE"],
+                    "VM_NVME": os.environ["VM_NVME"] or None,
+                },
+            },
+            "registry": {
+                "repository": f"ghcr.io/{os.environ['GITHUB_REPOSITORY_OWNER']}/qemu-minimal-qcow2-{os.environ['PROFILE']}",
+                "stable_tag": "stable",
+                "version_tag": f"{os.environ['RELEASE']}-{os.environ['GITHUB_SHA'][:12]}",
+                "release_tag": os.environ["RELEASE"],
+            },
+        }
+        (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        PY
+        {
+          echo "bundle_dir=${OUTPUT_DIR}"
+          echo "qcow2_path=${staged_qcow2}"
+          echo "manifest_path=${OUTPUT_DIR}/manifest.json"
+        } >> "$GITHUB_OUTPUT"

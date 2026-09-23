@@ -1,0 +1,230 @@
+name: qemu-minimal - qcow2-image-consumer
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Published qcow2 profile to consume
+        required: true
+        type: choice
+        options:
+          - rocjitsu
+          - rocjitsu-hipfile-fio
+          - ernic
+          - ernic-rocjitsu
+      image-ref:
+        description: >-
+          Optional GHCR reference to pull, such as
+          ghcr.io/<owner>/qemu-minimal-qcow2-rocjitsu@sha256:... .
+          Defaults to the profile's stable tag.
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.profile }}
+  cancel-in-progress: false
+
+env:
+  QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260919.g359579e-qemu11.1.1-vfu.8039244
+  VM_IMAGES_DIR: /var/lib/qemu-tool/images
+  ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false}'
+
+jobs:
+  consume-qcow2:
+    name: consume-qcow2 (${{ inputs.profile }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: bash
+    container:
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260919.g359579e-qemu11.1.1-vfu.8039244
+      options: >-
+        --device /dev/kvm
+        -v /var/run/docker.sock:/var/run/docker.sock
+        -v /var/lib/qemu-tool:/var/lib/qemu-tool
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4.3.1
+
+      - name: Set up VM job
+        uses: ./.github/actions/setup-vm-job
+        with:
+          cloud-image-key: qcow2-consumer-${{ inputs.profile }}
+          release: resolute
+          stage-src: 'true'
+
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+
+      - name: Resolve the qcow2 image reference
+        env:
+          INPUT_IMAGE_REF: ${{ inputs.image-ref }}
+          PROFILE: ${{ inputs.profile }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_IMAGE_REF}" ]; then
+            echo "QCOW2_IMAGE_REF=${INPUT_IMAGE_REF}" >> "$GITHUB_ENV"
+          else
+            echo "QCOW2_IMAGE_REF=ghcr.io/${GITHUB_REPOSITORY_OWNER}/qemu-minimal-qcow2-${PROFILE}:stable" >> "$GITHUB_ENV"
+          fi
+
+      - name: Pull the published qcow2 bundle
+        run: |
+          set -euo pipefail
+          docker pull "${QCOW2_IMAGE_REF}"
+
+      - name: Extract the manifest and qcow2
+        run: |
+          set -euo pipefail
+          cid=$(docker create "${QCOW2_IMAGE_REF}")
+          trap 'docker rm -f "${cid}" >/dev/null 2>&1 || true' EXIT
+          mkdir -p /tmp/qcow2-consumer
+          docker cp "${cid}:/artifacts/manifest.json" /tmp/qcow2-consumer/manifest.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifest = json.loads(Path("/tmp/qcow2-consumer/manifest.json").read_text())
+          Path("/tmp/qcow2-consumer/qcow2-filename").write_text(manifest["qcow2"]["filename"])
+          Path("/tmp/qcow2-consumer/compose-stack").write_text(manifest["post_boot_validation"]["compose_stack"])
+          PY
+          qcow2_filename=$(cat /tmp/qcow2-consumer/qcow2-filename)
+          docker cp "${cid}:/artifacts/${qcow2_filename}" "/tmp/qcow2-consumer/${qcow2_filename}"
+          docker rm -f "${cid}" >/dev/null 2>&1 || true
+          trap - EXIT
+
+      - name: Load the qcow2 manifest into the environment
+        run: |
+          set -euo pipefail
+          python - <<'PY' >> "$GITHUB_ENV"
+          import json
+          from pathlib import Path
+
+          manifest = json.loads(Path("/tmp/qcow2-consumer/manifest.json").read_text())
+          validation = manifest["post_boot_validation"]
+          compose_env = validation["compose_env"]
+          images = manifest["required_container_image_pins"]
+
+          def emit(key, value):
+            print(f"{key}={value}")
+
+          emit("PUBLISHED_QCOW2_FILENAME", manifest["qcow2"]["filename"])
+          emit("PUBLISHED_QCOW2_SHA256", manifest["qcow2"]["sha256"])
+          emit("COMPOSE_STACK", validation["compose_stack"])
+          emit("COMPOSE_DIR", f"/home/runner/work/qemu-minimal/qemu-minimal/qemu/compose/{validation['compose_stack']}")
+          emit("VALIDATION_PLAYBOOK", validation["playbook"])
+          emit("VALIDATION_TAGS", validation["tags"])
+          emit("VM_VCPUS", compose_env["VM_VCPUS"])
+          emit("VM_VMEM", compose_env["VM_VMEM"])
+          emit("VM_SHM_SIZE", compose_env["VM_SHM_SIZE"])
+          emit("VM_NVME", compose_env.get("VM_NVME") or "")
+          emit("ERNIC_IMAGE", images.get("ernic") or "")
+          emit("ROCJITSU_IMAGE", images.get("rocjitsu") or "")
+          emit("QEMU_IMAGE_REQUIRED", images["qemu"])
+          emit("HEALTH_SERVICES", " ".join(validation["health_services"]))
+          emit("PROFILE_VM_NAME", f"consumer-{manifest['profile']}")
+          PY
+
+      - name: Verify the pulled qcow2 checksum
+        run: |
+          set -euo pipefail
+          cd /tmp/qcow2-consumer
+          echo "${PUBLISHED_QCOW2_SHA256}  ${PUBLISHED_QCOW2_FILENAME}" | sha256sum -c
+
+      - name: Install the published qcow2 as a backing image
+        run: |
+          set -euo pipefail
+          mkdir -p "${VM_IMAGES_DIR}"
+          backing="${VM_IMAGES_DIR}/published-${{ inputs.profile }}.qcow2"
+          cp "/tmp/qcow2-consumer/${PUBLISHED_QCOW2_FILENAME}" "${backing}"
+          qemu-img info "${backing}"
+          qemu-tool gen-vm \
+            --vm-name "${PROFILE_VM_NAME}" \
+            --images "${VM_IMAGES_DIR}" \
+            --backing-file "${backing}"
+
+      - name: Pull compose images required by the manifest
+        run: |
+          set -euo pipefail
+          docker pull "${QEMU_IMAGE_REQUIRED}"
+          if [ -n "${ERNIC_IMAGE}" ]; then
+            docker pull "${ERNIC_IMAGE}"
+          fi
+          if [ -n "${ROCJITSU_IMAGE}" ]; then
+            docker pull "${ROCJITSU_IMAGE}"
+          fi
+
+      - name: Bring up the compose stack
+        env:
+          VM_NAME: ${{ env.PROFILE_VM_NAME }}
+          QEMU_TOOL_SRC: /var/lib/qemu-tool/src
+          QEMU_IMAGE: ${{ env.QEMU_IMAGE_REQUIRED }}
+          ERNIC_IMAGE: ${{ env.ERNIC_IMAGE }}
+          ROCJITSU_IMAGE: ${{ env.ROCJITSU_IMAGE }}
+          VM_VCPUS: ${{ env.VM_VCPUS }}
+          VM_VMEM: ${{ env.VM_VMEM }}
+          VM_SHM_SIZE: ${{ env.VM_SHM_SIZE }}
+          VM_NVME: ${{ env.VM_NVME }}
+        run: |
+          set -euo pipefail
+          cd "${COMPOSE_DIR}"
+          docker compose up --detach
+
+      - name: Join the compose network
+        run: docker network connect "${COMPOSE_STACK}_default" "$(cat /etc/hostname)"
+
+      - name: Wait for compose services to be healthy
+        run: |
+          set -euo pipefail
+          cd "${COMPOSE_DIR}"
+          for service in ${HEALTH_SERVICES}; do
+            ok=""
+            for i in $(seq 1 30); do
+              ok=$(docker compose ps --format json "${service}" \
+                | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('Health',''))" \
+                2>/dev/null || true)
+              [ "${ok}" = "healthy" ] && break
+              sleep 2
+            done
+            [ "${ok}" = "healthy" ] || { docker compose logs "${service}"; exit 1; }
+          done
+
+      - name: Wait for VM SSH (180s timeout)
+        run: |
+          elapsed=0
+          while [ $elapsed -lt 180 ]; do
+            if ssh -o ConnectTimeout=1 \
+                   -o NoHostAuthenticationForLocalhost=yes \
+                   -o StrictHostKeyChecking=no \
+                   -p 2222 ubuntu@qemu true 2>/dev/null; then
+              echo "VM ready after ${elapsed}s"
+              exit 0
+            fi
+            sleep 2; elapsed=$((elapsed + 2))
+          done
+          echo "VM failed to boot in time"
+          exit 1
+
+      - name: Run the post-boot validation tag
+        run: |
+          ansible-playbook \
+            -i "qemu," \
+            "${VALIDATION_PLAYBOOK}" \
+            --tags "${VALIDATION_TAGS}" \
+            -e "ansible_host=qemu" \
+            -e "ansible_port=2222" \
+            -e "ansible_user=ubuntu" \
+            -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"'
+
+      - name: Show compose logs on failure
+        if: failure()
+        run: |
+          cd "${COMPOSE_DIR}"
+          docker compose logs

@@ -355,13 +355,52 @@ rocm-ernic publishes its next collection.
 | `vm-ernic.yml` | ROCm + [rocm-ernic][rocm-ernic] RDMA NIC prerequisites; `--tags configure` for post-boot NIC setup |
 | `vm-rocjitsu.yml` | ROCm + rocjitsu GPU firmware and driver prerequisites |
 | `vm-rocjitsu-hipfile-fio.yml` | `vm-rocjitsu.yml` plus fio's `libhipfile` ioengine baked into the image; `--tags hipfile-fio` for the live fio benchmark |
-| `vm-ernic-rocjitsu.yml` | Both ernic and rocjitsu prerequisites combined |
+| `vm-ernic-rocjitsu.yml` | Both ernic and rocjitsu prerequisites combined; `--tags validate` for the live combined validation |
 
 ```bash
 qemu-tool gen-vm \
   --vm-name base \
   --ansible-playbook ansible/playbooks/vm-basic.yml
 ```
+
+### Published qcow2 profiles
+
+`qemu-minimal - qcow2-image-publish` builds the first-class Ansible image
+profiles below. Pull requests stop after the build stage; pushes to `main`
+rebuild the same matrix and publish each qcow2 bundle to GHCR as a scratch
+image containing:
+
+- `/artifacts/<profile>.qcow2`
+- `/artifacts/manifest.json`
+
+The manifest records the qcow2 filename and path, the Ansible playbook/profile,
+the Ubuntu release, the source commit, the pinned container images the profile
+needs at run time, and the post-boot validation tag a consumer should run.
+
+| Profile | Playbook | Baked into the qcow2 | Post-boot validation | Published ref |
+|---|---|---|---|---|
+| `rocjitsu` | `vm-rocjitsu.yml` | ROCm, rocjitsu firmware stubs, amdgpu tooling, hsa-snoop | `vm-rocjitsu.yml --tags test` | `ghcr.io/sbates130272/qemu-minimal-qcow2-rocjitsu:{stable,resolute,<sha>}` |
+| `rocjitsu-hipfile-fio` | `vm-rocjitsu-hipfile-fio.yml` | `rocjitsu` plus fio's `libhipfile` ioengine | `vm-rocjitsu-hipfile-fio.yml --tags hipfile-fio` | `ghcr.io/sbates130272/qemu-minimal-qcow2-rocjitsu-hipfile-fio:{stable,resolute,<sha>}` |
+| `ernic` | `vm-ernic.yml` | ROCm-ernic's ionic guest prerequisites and DKMS build | `vm-ernic.yml --tags configure` | `ghcr.io/sbates130272/qemu-minimal-qcow2-ernic:{stable,resolute,<sha>}` |
+| `ernic-rocjitsu` | `vm-ernic-rocjitsu.yml` | `ernic` and `rocjitsu` together | `vm-ernic-rocjitsu.yml --tags validate` | `ghcr.io/sbates130272/qemu-minimal-qcow2-ernic-rocjitsu:{stable,resolute,<sha>}` |
+
+Use the stable tag when you want “the latest published image for this profile”
+and the SHA tag or digest when you need a reproducible input. The companion
+`qemu-minimal - qcow2-image-consumer` workflow accepts either a tag or a digest
+reference, pulls the published qcow2 bundle, boots it in the matching compose
+stack, and runs the validation tag recorded in the manifest.
+
+When choosing an image:
+
+- use `rocjitsu` for the standard GPU lane
+- use `rocjitsu-hipfile-fio` when the live validation must include the fio
+  `libhipfile` benchmark and an NVMe device
+- use `ernic` when you only need the RDMA NIC path
+- use `ernic-rocjitsu` when the guest must carry both the NIC and the GPU stack
+
+All four images bake only the install-time prerequisites. The live validation
+tags still require the matching vfio-user compose stack to be running so the
+guest sees the emulated devices before Ansible performs the post-boot checks.
 
 Ansible changes are written into the backing qcow2, so overlays
 created with `--backing-file` inherit them. Ansible is skipped when

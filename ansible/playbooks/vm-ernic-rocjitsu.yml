@@ -3,3 +3,32 @@
 # Runs vm-ernic then vm-rocjitsu sequentially on the same host; both are idempotent.
 - import_playbook: vm-ernic.yml
 - import_playbook: vm-rocjitsu.yml
+
+# Run the post-boot validation for the combined profile in one tag so workflows
+# can consume a published image and prove both halves still work together:
+#
+#   qemu-tool compose --stack vfio-user-ernic-rocjitsu-vm up -d
+#   ansible-playbook -i 127.0.0.1:2230, -u ubuntu \
+#     ansible/playbooks/vm-ernic-rocjitsu.yml --tags validate
+- name: Validate a live ernic + rocjitsu VM
+  hosts: all
+  gather_facts: true
+  become: true
+  tags: [validate, never]
+  vars_files:
+    - vars/ernic-pins.yml
+  vars:
+    username: "{{ vm_username | default('ubuntu') }}"
+    ernic_guest_agent: false
+    ernic_guest_build_deps: false
+    ernic_gpu_passthrough: false
+    ernic_ionic_kernel_ref: "{{ ionic_kernel_pin }}"
+    ernic_source_repo_version: "{{ ernic_source_pin }}"
+    ernic_nic_subnet: "192.168.200"
+    ernic_guest_vm_index: "{{ vm_index | default(1) }}"
+    ernic_guest_vm_ip: >-
+      {{ vm_ip | default(ernic_nic_subnet ~ '.'
+                         ~ (10 * (vm_index | default(1) | int))) }}
+  roles:
+    - role: sbates130272.rocm_ernic.ernic_guest_setup
+    - role: rocjitsu_gpu_test
