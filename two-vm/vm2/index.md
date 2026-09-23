@@ -4,7 +4,7 @@ title: VM Report — VM 2
 
 # VM Report — qemu-minimal — VM 2
 
-Generated: **2026-09-22 21:00 UTC** &middot; Commit: [`13c504e`](https://github.com/sbates130272/qemu-minimal/commit/13c504e99774e4bb63653c769898ad79b5325e2a)
+Generated: **2026-09-23 20:17 UTC** &middot; Commit: [`d939b60`](https://github.com/sbates130272/qemu-minimal/commit/d939b601a6468b182b30c9c95f0e78e11dd88250)
 
 ## Hardware
 
@@ -19,13 +19,13 @@ Generated: **2026-09-22 21:00 UTC** &middot; Commit: [`13c504e`](https://github.
 ## Kernel
 
 ```
-6.8.0-139-generic
+6.8.0-142-generic
 ```
 
 <details><summary>Full version string</summary>
 
 ```
-Linux version 6.8.0-139-generic (buildd@lcy02-amd64-036) (x86_64-linux-gnu-gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, GNU ld (GNU Binutils for Ubuntu) 2.42) #139-Ubuntu SMP PREEMPT_DYNAMIC Sat Aug  1 03:52:05 UTC 2026
+Linux version 6.8.0-142-generic (buildd@lcy02-amd64-049) (x86_64-linux-gnu-gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, GNU ld (GNU Binutils for Ubuntu) 2.42) #142-Ubuntu SMP PREEMPT_DYNAMIC Wed Sep  2 14:24:27 UTC 2026
 ```
 
 </details>
@@ -46,19 +46,43 @@ vda        8G disk
 
 ```
 Filesystem      Size  Used Avail Use% Mounted on
-/dev/vda1       6.8G  1.9G  4.9G  28% /
-/dev/vda16      881M   64M  756M   8% /boot
+/dev/vda1       6.8G  4.4G  2.4G  65% /
+/dev/vda16      881M  181M  638M  23% /boot
 ```
 
 ### NVMe
 
 ```
-nvme-cli unavailable
+Node                  Generic               SN                   Model                                    Namespace  Usage                      Format           FW Rev  
+--------------------- --------------------- -------------------- ---------------------------------------- ---------- -------------------------- ---------------- --------
+```
+
+## PCI devices
+
+```
+00:00.0 Host bridge [0600]: Intel Corporation 82G33/G31/P35/P31 Express DRAM Controller [8086:29c0]
+00:01.0 VGA compatible controller [0300]: Device [1234:1111] (rev 02)
+00:02.0 Ethernet controller [0200]: Red Hat, Inc. Virtio network device [1af4:1000]
+00:03.0 Communication controller [0780]: Red Hat, Inc. Virtio console [1af4:1003]
+00:04.0 SCSI storage controller [0100]: Red Hat, Inc. Virtio block device [1af4:1001]
+00:05.0 Ethernet controller [0200]: AMD Pensando Systems DSC Serial Port Controller [1dd8:100a]
+00:06.0 Processing accelerators [1200]: Advanced Micro Devices, Inc. [AMD/ATI] Device [1002:75c1]
+00:1f.0 ISA bridge [0601]: Intel Corporation 82801IB (ICH9) LPC Interface Controller [8086:2918] (rev 02)
+00:1f.2 SATA controller [0106]: Intel Corporation 82801IR/IO/IH (ICH9R/DO/DH) 6 port SATA Controller [AHCI mode] [8086:2922] (rev 02)
+00:1f.3 SMBus [0c05]: Intel Corporation 82801I (ICH9 Family) SMBus Controller [8086:2930] (rev 02)
+```
+
+## Debian Packages
+
+### nvme-cli
+
+```
+nvme-cli	2.8-1ubuntu0.1
 ```
 
 ## ROCm
 
-### Installed packages (sample)
+### Installed Debian packages
 
 ```
 
@@ -70,16 +94,16 @@ nvme-cli unavailable
 
 ```
 
-### hipFile
+### hipFile Debian packages
 
 ```
-(not available)
-```
-
-## AMDGPU Kernel Driver
 
 ```
-ii  libdrm-amdgpu1:amd64            2.4.125-1ubuntu0.1~24.04.2                       amd64        Userspace interface to amdgpu-specific kernel DRM services -- runtime
+
+## AMDGPU Debian Packages
+
+```
+libdrm-amdgpu1:amd64	2.4.125-1ubuntu0.1~24.04.2
 ```
 
 ## APT Sources
@@ -127,4 +151,5 @@ ubuntu : ubuntu users admin
 ```
 -- No entries --
 ```
+
 
