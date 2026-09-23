@@ -367,3 +367,279 @@
   ansible.builtin.debug:
     msg: "hsa-snoop traced a dispatch on the emulated gfx1250."
   when: rocjitsu_gpu_test_hsa_snoop | bool
+
+- name: Check whether RVS is installed
+  ansible.builtin.stat:
+    path: "{{ rocjitsu_gpu_test_rvs_bin }}"
+  register: rocjitsu_gpu_test_rvs_bin_stat
+  when: rocjitsu_gpu_test_rvs | bool
+
+- name: Fail when RVS is missing
+  ansible.builtin.fail:
+    msg: >-
+      No RVS at {{ rocjitsu_gpu_test_rvs_bin }}. It is installed by
+      vm-rocjitsu.yml, so this image predates that; rebuild it, or set
+      rocjitsu_gpu_test_rvs=false to skip the check.
+  when:
+    - rocjitsu_gpu_test_rvs | bool
+    - not rocjitsu_gpu_test_rvs_bin_stat.stat.exists
+
+- name: Build the RVS runtime environment
+  ansible.builtin.set_fact:
+    rocjitsu_gpu_test_rvs_env:
+      ROCM_PATH: /opt/rocm
+      LD_LIBRARY_PATH: "/opt/rocm/lib:/opt/rocm/lib64:{{ rocjitsu_gpu_test_rocm }}/lib:{{ rocjitsu_gpu_test_rocm }}/lib64"
+  when: rocjitsu_gpu_test_rvs | bool
+
+- name: Check whether timeout is installed
+  ansible.builtin.stat:
+    path: "{{ rocjitsu_gpu_test_timeout_bin }}"
+  register: rocjitsu_gpu_test_timeout_bin_stat
+  when: rocjitsu_gpu_test_rvs | bool
+
+- name: Fail when timeout is missing
+  ansible.builtin.fail:
+    msg: >-
+      No timeout binary at {{ rocjitsu_gpu_test_timeout_bin }}. The RVS checks
+      are bounded with it to keep CI from hanging; install coreutils, or set
+      rocjitsu_gpu_test_rvs=false to skip the check.
+  when:
+    - rocjitsu_gpu_test_rvs | bool
+    - not rocjitsu_gpu_test_timeout_bin_stat.stat.exists
+
+- name: List GPUs with RVS
+  ansible.builtin.command:
+    argv:
+      - "{{ rocjitsu_gpu_test_timeout_bin }}"
+      - "{{ rocjitsu_gpu_test_rvs_timeout | string }}"
+      - --
+      - "{{ rocjitsu_gpu_test_rvs_bin }}"
+      - -g
+  register: rocjitsu_gpu_test_rvs_gpus
+  changed_when: false
+  failed_when: false
+  environment: "{{ rocjitsu_gpu_test_rvs_env }}"
+  when: rocjitsu_gpu_test_rvs | bool
+
+- name: Show RVS GPU list output
+  ansible.builtin.debug:
+    msg: "{{ rocjitsu_gpu_test_rvs_gpus.stdout_lines }}"
+  when: rocjitsu_gpu_test_rvs | bool
+
+- name: Fail when RVS GPU enumeration times out
+  ansible.builtin.fail:
+    msg: >-
+      rvs -g did not complete within {{ rocjitsu_gpu_test_rvs_timeout }}s.
+      The validation is bounded to keep CI from hanging; inspect earlier RVS
+      output for the last progress it reported.
+  when:
+    - rocjitsu_gpu_test_rvs | bool
+    - rocjitsu_gpu_test_rvs_gpus.rc == 124
+
+- name: Fail when RVS GPU enumeration fails
+  ansible.builtin.fail:
+    msg: >-
+      rvs -g exited {{ rocjitsu_gpu_test_rvs_gpus.rc }}. Inspect the RVS output
+      above for details.
+  when:
+    - rocjitsu_gpu_test_rvs | bool
+    - rocjitsu_gpu_test_rvs_gpus.rc not in [0, 124]
+
+- name: Derive the GPU ids RVS reported
+  ansible.builtin.set_fact:
+    rocjitsu_gpu_test_rvs_visible_gpu_ids: >-
+      {{ rocjitsu_gpu_test_rvs_gpus.stdout
+         | regex_findall('GPU\\[\\s*\\d+\\s*-\\s*([^\\]\\s]+)\\s*\\]')
+         | map('string') | map('lower') | unique | list }}
+  when: rocjitsu_gpu_test_rvs | bool
+
+- name: Fail when the RVS GPU list output has no parseable gpu ids
+  ansible.builtin.fail:
+    msg: >-
+      rvs -g completed, but its output contained no parseable "GPU[node_id -
+      gpu_id]" entries. Refuse to guess device coverage for the fallback config;
+      inspect the RVS output above for a format change or enumeration problem.
+  when:
+    - rocjitsu_gpu_test_rvs | bool
+    - (rocjitsu_gpu_test_rvs_visible_gpu_ids | length) == 0
+
+- name: Build the candidate RVS config paths
+  ansible.builtin.set_fact:
+    rocjitsu_gpu_test_rvs_gpu_config_path: >-
+      {{ rocjitsu_gpu_test_rvs_conf_dir }}/{{ rocjitsu_gpu_test_target }}/{{
+      rocjitsu_gpu_test_rvs_config_name }}
+    rocjitsu_gpu_test_rvs_default_config_path: >-
+      {{ rocjitsu_gpu_test_rvs_conf_dir }}/{{
+      rocjitsu_gpu_test_rvs_config_name }}
+  when: rocjitsu_gpu_test_rvs | bool
+
+- name: Check for a GPU-specific RVS config
+  ansible.builtin.stat:
+    path: "{{ rocjitsu_gpu_test_rvs_gpu_config_path }}"
+  register: rocjitsu_gpu_test_rvs_gpu_config
+  when: rocjitsu_gpu_test_rvs | bool
+
+- name: Check for the default RVS config
+  ansible.builtin.stat:
+    path: "{{ rocjitsu_gpu_test_rvs_default_config_path }}"
+  register: rocjitsu_gpu_test_rvs_default_config
+  when: rocjitsu_gpu_test_rvs | bool
+
+- name: Fail when the required RVS config is missing
+  ansible.builtin.fail:
+    msg: >-
+      No RVS config {{ rocjitsu_gpu_test_rvs_config_name }} under
+      {{ rocjitsu_gpu_test_rvs_conf_dir }}. Expected either
+      {{ rocjitsu_gpu_test_rvs_gpu_config_path }} or
+      {{ rocjitsu_gpu_test_rvs_default_config_path }}. Reinstall
+      rocm-validation-suite, or set rocjitsu_gpu_test_rvs=false to skip the
+      check.
+  when:
+    - rocjitsu_gpu_test_rvs | bool
+    - not rocjitsu_gpu_test_rvs_gpu_config.stat.exists
+    - not rocjitsu_gpu_test_rvs_default_config.stat.exists
+
+- name: Note when RVS has no target-specific config for this GPU
+  ansible.builtin.debug:
+    msg: >-
+      RVS ships no {{ rocjitsu_gpu_test_rvs_config_name }} for target
+      {{ rocjitsu_gpu_test_target }} under {{ rocjitsu_gpu_test_rvs_conf_dir }};
+      using the generic config instead.
+  when:
+    - rocjitsu_gpu_test_rvs | bool
+    - not rocjitsu_gpu_test_rvs_gpu_config.stat.exists
+    - rocjitsu_gpu_test_rvs_default_config.stat.exists
+
+- name: Select the RVS config to run
+  ansible.builtin.set_fact:
+    rocjitsu_gpu_test_rvs_config_path: >-
+      {{ rocjitsu_gpu_test_rvs_gpu_config_path
+         if rocjitsu_gpu_test_rvs_gpu_config.stat.exists else
+         rocjitsu_gpu_test_rvs_default_config_path }}
+  when: rocjitsu_gpu_test_rvs | bool
+
+- name: Read the generic RVS config when falling back to it
+  ansible.builtin.slurp:
+    src: "{{ rocjitsu_gpu_test_rvs_default_config_path }}"
+  register: rocjitsu_gpu_test_rvs_default_config_content
+  when:
+    - rocjitsu_gpu_test_rvs | bool
+    - rocjitsu_gpu_test_rvs_config_path == rocjitsu_gpu_test_rvs_default_config_path
+
+- name: Parse the generic RVS config when falling back to it
+  ansible.builtin.set_fact:
+    rocjitsu_gpu_test_rvs_default_config_data: >-
+      {{ rocjitsu_gpu_test_rvs_default_config_content.content
+         | b64decode | from_yaml }}
+  when:
+    - rocjitsu_gpu_test_rvs | bool
+    - rocjitsu_gpu_test_rvs_config_path == rocjitsu_gpu_test_rvs_default_config_path
+
+- name: Fail when the generic RVS config has no actions
+  ansible.builtin.fail:
+    msg: >-
+      Falling back to generic RVS config {{ rocjitsu_gpu_test_rvs_default_config_path }}
+      for target {{ rocjitsu_gpu_test_target }}, but it defines no actions.
+      Refuse to run an empty fallback config; add a target-specific config, or
+      disable the RVS check for this guest.
+  when:
+    - rocjitsu_gpu_test_rvs | bool
+    - rocjitsu_gpu_test_rvs_config_path == rocjitsu_gpu_test_rvs_default_config_path
+    - (rocjitsu_gpu_test_rvs_default_config_data.actions | default([]) | length) == 0
+
+- name: Validate that the generic RVS config targets all devices
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - item.device is defined
+      - rocjitsu_gpu_test_rvs_action_is_all
+        or rocjitsu_gpu_test_rvs_action_is_single_visible_gpu
+        or rocjitsu_gpu_test_rvs_action_matches_visible_gpu_ids
+    vars:
+      rocjitsu_gpu_test_rvs_action_devices: >-
+        {{ item.device
+           if (item.device is sequence and item.device is not string)
+           else (item.device | string).split(',') }}
+      rocjitsu_gpu_test_rvs_action_device_strings: >-
+        {{ rocjitsu_gpu_test_rvs_action_devices | map('string') | map('trim') | map('lower') | list }}
+      rocjitsu_gpu_test_rvs_action_is_all: >-
+        {{ (rocjitsu_gpu_test_rvs_action_device_strings | difference(['all']) | length) == 0 }}
+      rocjitsu_gpu_test_rvs_action_is_single_visible_gpu: >-
+        {{ (rocjitsu_gpu_test_rvs_visible_gpu_ids | length) == 1
+           and (rocjitsu_gpu_test_rvs_action_device_strings | length) == 1
+           and (rocjitsu_gpu_test_rvs_action_device_strings[0]
+                == rocjitsu_gpu_test_rvs_visible_gpu_ids[0]) }}
+      rocjitsu_gpu_test_rvs_action_matches_visible_gpu_ids: >-
+        {{ (rocjitsu_gpu_test_rvs_visible_gpu_ids | length) > 0
+           and (rocjitsu_gpu_test_rvs_action_device_strings
+                | difference(rocjitsu_gpu_test_rvs_visible_gpu_ids) | length) == 0
+           and (rocjitsu_gpu_test_rvs_visible_gpu_ids
+                | difference(rocjitsu_gpu_test_rvs_action_device_strings) | length) == 0 }}
+    fail_msg: >-
+      Falling back to generic RVS config
+      {{ rocjitsu_gpu_test_rvs_default_config_path }} for target
+      {{ rocjitsu_gpu_test_target }}, but action
+      {{ item.name | default('(unnamed action)') }} restricts device to
+      {{ item.device | default('(missing)') }}. Refuse to run an unmatched
+      fallback config; add a target-specific config, or disable the RVS check
+      for this guest.
+  loop: "{{ rocjitsu_gpu_test_rvs_default_config_data.actions | default([]) }}"
+  when:
+    - rocjitsu_gpu_test_rvs | bool
+    - rocjitsu_gpu_test_rvs_config_path == rocjitsu_gpu_test_rvs_default_config_path
+
+- name: Show the selected RVS config
+  ansible.builtin.debug:
+    msg: "Running RVS config {{ rocjitsu_gpu_test_rvs_config_path }}"
+  when: rocjitsu_gpu_test_rvs | bool
+
+- name: Run the RVS GPU properties smoke check
+  ansible.builtin.command:
+    argv:
+      - "{{ rocjitsu_gpu_test_timeout_bin }}"
+      - "{{ rocjitsu_gpu_test_rvs_timeout | string }}"
+      - --
+      - "{{ rocjitsu_gpu_test_rvs_bin }}"
+      - -c
+      - "{{ rocjitsu_gpu_test_rvs_config_path }}"
+  register: rocjitsu_gpu_test_rvs_run
+  changed_when: false
+  failed_when: false
+  environment: "{{ rocjitsu_gpu_test_rvs_env }}"
+  when: rocjitsu_gpu_test_rvs | bool
+
+- name: Collect the RVS smoke-check output lines
+  ansible.builtin.set_fact:
+    rocjitsu_gpu_test_rvs_run_output_lines: >-
+      {{ (rocjitsu_gpu_test_rvs_run.stdout_lines | default([]))
+         + (rocjitsu_gpu_test_rvs_run.stderr_lines | default([])) }}
+  when: rocjitsu_gpu_test_rvs | bool
+
+- name: Show the RVS smoke-check output
+  ansible.builtin.debug:
+    msg: >-
+      {{ rocjitsu_gpu_test_rvs_run_output_lines
+         if (rocjitsu_gpu_test_rvs_run_output_lines | length) > 0
+         else ['(no output captured)'] }}
+  when: rocjitsu_gpu_test_rvs | bool
+
+- name: Fail when the RVS smoke check times out
+  ansible.builtin.fail:
+    msg: >-
+      RVS config {{ rocjitsu_gpu_test_rvs_config_path }} did not complete within
+      {{ rocjitsu_gpu_test_rvs_timeout }}s. The smoke check is bounded to keep
+      CI from hanging; inspect the RVS output above for the last progress it
+      reported.
+  when:
+    - rocjitsu_gpu_test_rvs | bool
+    - rocjitsu_gpu_test_rvs_run.rc == 124
+
+- name: Fail when the RVS smoke check fails
+  ansible.builtin.fail:
+    msg: >-
+      RVS config {{ rocjitsu_gpu_test_rvs_config_path }} exited
+      {{ rocjitsu_gpu_test_rvs_run.rc }}. Inspect the RVS output above for
+      details.
+  when:
+    - rocjitsu_gpu_test_rvs | bool
+    - rocjitsu_gpu_test_rvs_run.rc not in [0, 124]

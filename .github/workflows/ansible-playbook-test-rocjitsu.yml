@@ -5,22 +5,10 @@ name: qemu-minimal - ansible-playbook-test-rocjitsu
 
 on:
   workflow_dispatch:
-  pull_request:
-    branches:
-      - main
-    paths:
-      - 'ansible/playbooks/vm-rocjitsu.yml'
-      - 'ansible/playbooks/roles/**'
-      - 'ansible/requirements.yml'
-      - 'qemu/qemu-tool/**'
-      - 'qemu/pyproject.toml'
-      - 'qemu/compose/vfio-user-rocjitsu-vm/**'
-      - '.github/actions/setup-vm-job/action.yml'
-      - '.github/workflows/ansible-playbook-test-rocjitsu.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: false
 
 env:
   ROCJITSU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20260921.gb3399b3-rocjitsu.8e01a5a

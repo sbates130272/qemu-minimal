@@ -138,6 +138,20 @@ jobs:
           -p 2222 ubuntu@qemu "sudo -n timeout 120 /usr/local/bin/amdgpu-probe"
         echo "✓ amdgpu-probe completed"
 
+    # Keep the mainline rocjitsu report lanes on the same validated guest path:
+    # the role owns the HIP, hsa-snoop and RVS smoke checks.
+    - name: Run rocjitsu live-guest validation
+      timeout-minutes: 30
+      run: |
+        ansible-playbook \
+          -i "qemu," \
+          ansible/playbooks/vm-rocjitsu.yml \
+          --tags test \
+          -e "ansible_host=qemu" \
+          -e "ansible_port=2222" \
+          -e "ansible_user=ubuntu" \
+          -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"'
+
     - name: Generate hipFile fio report
       env:
         REPORT_HIPFILE_FIO_BENCH: "1"

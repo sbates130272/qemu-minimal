@@ -519,6 +519,12 @@
         update_cache: true
       become: true
 
+    - name: Install ROCm Validation Suite
+      ansible.builtin.package:
+        name:
+          - amd-smi-lib
+          - rocm-validation-suite
+
     # fio-hipfile-bench builds fio from a pinned master commit in the guest,
     # because the libhipfile ioengine is in no fio release tag. The distro fio
     # that fave_packages installs has no such engine, so it cannot serve here.

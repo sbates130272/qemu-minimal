@@ -12,6 +12,7 @@ on:
     paths:
       - 'ansible/playbooks/vm-ernic.yml'
       - 'ansible/playbooks/roles/**'
+      - '!ansible/playbooks/roles/rocjitsu_gpu_test/**'
       - 'ansible/playbooks/vars/ernic-pins.yml'
       - 'ansible/requirements.yml'
       - 'qemu/qemu-tool/**'
