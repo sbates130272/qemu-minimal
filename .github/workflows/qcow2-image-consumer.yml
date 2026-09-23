@@ -101,6 +101,8 @@ jobs:
           trap - EXIT
 
       - name: Load the qcow2 manifest into the environment
+        env:
+          REQUESTED_PROFILE: ${{ inputs.profile }}
         run: |
           set -euo pipefail
           python - <<'PY' >> "$GITHUB_ENV"
@@ -109,6 +111,11 @@ jobs:
           from pathlib import Path
 
           manifest = json.loads(Path("/tmp/qcow2-consumer/manifest.json").read_text())
+          if manifest["profile"] != os.environ["REQUESTED_PROFILE"]:
+            raise SystemExit(
+                f"::error::pulled profile {manifest['profile']} does not match requested profile "
+                f"{os.environ['REQUESTED_PROFILE']}"
+            )
           validation = manifest["post_boot_validation"]
           compose_env = validation["compose_env"]
           images = manifest["required_container_image_pins"]

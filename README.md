@@ -379,10 +379,10 @@ needs at run time, and the post-boot validation tag a consumer should run.
 
 | Profile | Playbook | Baked into the qcow2 | Post-boot validation | Published ref |
 |---|---|---|---|---|
-| `rocjitsu` | `vm-rocjitsu.yml` | ROCm, rocjitsu firmware stubs, amdgpu tooling, hsa-snoop | `vm-rocjitsu.yml --tags test` | `ghcr.io/sbates130272/qemu-minimal-qcow2-rocjitsu:{stable,resolute,<sha>}` |
-| `rocjitsu-hipfile-fio` | `vm-rocjitsu-hipfile-fio.yml` | `rocjitsu` plus fio's `libhipfile` ioengine | `vm-rocjitsu-hipfile-fio.yml --tags hipfile-fio` | `ghcr.io/sbates130272/qemu-minimal-qcow2-rocjitsu-hipfile-fio:{stable,resolute,<sha>}` |
-| `ernic` | `vm-ernic.yml` | ROCm-ernic's ionic guest prerequisites and DKMS build | `vm-ernic.yml --tags configure` | `ghcr.io/sbates130272/qemu-minimal-qcow2-ernic:{stable,resolute,<sha>}` |
-| `ernic-rocjitsu` | `vm-ernic-rocjitsu.yml` | `ernic` and `rocjitsu` together | `vm-ernic-rocjitsu.yml --tags validate` | `ghcr.io/sbates130272/qemu-minimal-qcow2-ernic-rocjitsu:{stable,resolute,<sha>}` |
+| `rocjitsu` | `vm-rocjitsu.yml` | ROCm, rocjitsu firmware stubs, amdgpu tooling, hsa-snoop | `vm-rocjitsu.yml --tags test` | `ghcr.io/sbates130272/qemu-minimal-qcow2-rocjitsu:{stable,rocjitsu-resolute,<sha>}` |
+| `rocjitsu-hipfile-fio` | `vm-rocjitsu-hipfile-fio.yml` | `rocjitsu` plus fio's `libhipfile` ioengine | `vm-rocjitsu-hipfile-fio.yml --tags hipfile-fio` | `ghcr.io/sbates130272/qemu-minimal-qcow2-rocjitsu-hipfile-fio:{stable,rocjitsu-hipfile-fio-resolute,<sha>}` |
+| `ernic` | `vm-ernic.yml` | ROCm-ernic's ionic guest prerequisites and DKMS build | `vm-ernic.yml --tags configure` | `ghcr.io/sbates130272/qemu-minimal-qcow2-ernic:{stable,ernic-resolute,<sha>}` |
+| `ernic-rocjitsu` | `vm-ernic-rocjitsu.yml` | `ernic` and `rocjitsu` together | `vm-ernic-rocjitsu.yml --tags validate` | `ghcr.io/sbates130272/qemu-minimal-qcow2-ernic-rocjitsu:{stable,ernic-rocjitsu-resolute,<sha>}` |
 
 Use the stable tag when you want “the latest published image for this profile”
 and the SHA tag or digest when you need a reproducible input. The companion

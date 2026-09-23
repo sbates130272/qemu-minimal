@@ -19,6 +19,7 @@ on:
       - '.github/actions/setup-vm-job/action.yml'
       - '.github/actions/prepare-qcow2-image/action.yml'
       - '.github/workflows/qcow2-image-publish.yml'
+      - 'README.md'
   push:
     branches:
       - main
@@ -30,6 +31,7 @@ on:
       - '.github/actions/setup-vm-job/action.yml'
       - '.github/actions/prepare-qcow2-image/action.yml'
       - '.github/workflows/qcow2-image-publish.yml'
+      - 'README.md'
 
 permissions:
   contents: read
@@ -304,8 +306,9 @@ jobs:
           set -euo pipefail
           repo="ghcr.io/${GITHUB_REPOSITORY_OWNER}/qemu-minimal-qcow2-${PROFILE}"
           version_tag="${RELEASE}-${GITHUB_SHA::12}"
+          release_tag="${PROFILE}-${RELEASE}"
           stable_ref="${repo}:stable"
-          release_ref="${repo}:${RELEASE}"
+          release_ref="${repo}:${release_tag}"
           version_ref="${repo}:${version_tag}"
 
           cat > "${BUNDLE_DIR}/Dockerfile" <<EOF
