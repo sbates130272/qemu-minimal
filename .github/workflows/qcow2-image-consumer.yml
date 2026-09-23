@@ -105,12 +105,14 @@ jobs:
           set -euo pipefail
           python - <<'PY' >> "$GITHUB_ENV"
           import json
+          import os
           from pathlib import Path
 
           manifest = json.loads(Path("/tmp/qcow2-consumer/manifest.json").read_text())
           validation = manifest["post_boot_validation"]
           compose_env = validation["compose_env"]
           images = manifest["required_container_image_pins"]
+          compose_profiles = validation["compose_profiles"]
 
           def emit(key, value):
             print(f"{key}={value}")
@@ -118,7 +120,8 @@ jobs:
           emit("PUBLISHED_QCOW2_FILENAME", manifest["qcow2"]["filename"])
           emit("PUBLISHED_QCOW2_SHA256", manifest["qcow2"]["sha256"])
           emit("COMPOSE_STACK", validation["compose_stack"])
-          emit("COMPOSE_DIR", f"/home/runner/work/qemu-minimal/qemu-minimal/qemu/compose/{validation['compose_stack']}")
+          emit("COMPOSE_DIR", f"{os.environ['GITHUB_WORKSPACE']}/qemu/compose/{validation['compose_stack']}")
+          emit("COMPOSE_PROFILE_ARGS", " ".join(f"--profile {p}" for p in compose_profiles))
           emit("VALIDATION_PLAYBOOK", validation["playbook"])
           emit("VALIDATION_TAGS", validation["tags"])
           emit("VM_VCPUS", compose_env["VM_VCPUS"])
@@ -175,7 +178,7 @@ jobs:
         run: |
           set -euo pipefail
           cd "${COMPOSE_DIR}"
-          docker compose up --detach
+          docker compose ${COMPOSE_PROFILE_ARGS} up --detach
 
       - name: Join the compose network
         run: docker network connect "${COMPOSE_STACK}_default" "$(cat /etc/hostname)"
