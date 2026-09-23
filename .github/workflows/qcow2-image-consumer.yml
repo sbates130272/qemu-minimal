@@ -141,6 +141,10 @@ jobs:
           emit("HEALTH_SERVICES", " ".join(validation["health_services"]))
           emit("PROFILE_VM_NAME", f"consumer-{manifest['profile']}")
           emit(
+              "COMPOSE_PROJECT_NAME",
+              f"qcow2-consumer-{manifest['profile']}-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}",
+          )
+          emit(
               "PUBLISHED_BACKING_PATH",
               f"{os.environ['VM_IMAGES_DIR']}/published-{manifest['profile']}-"
               f"{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}.qcow2",
@@ -186,15 +190,18 @@ jobs:
           VM_VMEM: ${{ env.VM_VMEM }}
           VM_SHM_SIZE: ${{ env.VM_SHM_SIZE }}
           VM_NVME: ${{ env.VM_NVME }}
+          COMPOSE_PROJECT_NAME: ${{ env.COMPOSE_PROJECT_NAME }}
         run: |
           set -euo pipefail
           cd "${COMPOSE_DIR}"
           docker compose ${COMPOSE_PROFILE_ARGS} up --detach
 
       - name: Join the compose network
-        run: docker network connect "${COMPOSE_STACK}_default" "$(cat /etc/hostname)"
+        run: docker network connect "${COMPOSE_PROJECT_NAME}_default" "$(cat /etc/hostname)"
 
       - name: Wait for compose services to be healthy
+        env:
+          COMPOSE_PROJECT_NAME: ${{ env.COMPOSE_PROJECT_NAME }}
         run: |
           set -euo pipefail
           cd "${COMPOSE_DIR}"
@@ -239,6 +246,23 @@ jobs:
 
       - name: Show compose logs on failure
         if: failure()
+        env:
+          COMPOSE_PROJECT_NAME: ${{ env.COMPOSE_PROJECT_NAME }}
         run: |
           cd "${COMPOSE_DIR}"
           docker compose logs
+
+      - name: Tear down compose resources and qcow2 copies
+        if: always()
+        env:
+          COMPOSE_PROJECT_NAME: ${{ env.COMPOSE_PROJECT_NAME }}
+        run: |
+          set -euo pipefail
+          if [ -n "${COMPOSE_DIR:-}" ] && [ -d "${COMPOSE_DIR}" ]; then
+            (
+              cd "${COMPOSE_DIR}"
+              docker compose down -v || true
+            )
+          fi
+          rm -f "${PUBLISHED_BACKING_PATH:-}" \
+                "${VM_IMAGES_DIR}/${PROFILE_VM_NAME:-}.qcow2"
