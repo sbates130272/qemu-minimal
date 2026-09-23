@@ -131,7 +131,7 @@ runs:
         cp --reflink=auto "${source_qcow2}" "${staged_qcow2}"
         qemu-img info "${staged_qcow2}" > "${OUTPUT_DIR}/qemu-img-info.txt"
         sha256sum "${staged_qcow2}" > "${OUTPUT_DIR}/sha256.txt"
-        python - <<'PY'
+        python3 - <<'PY'
         import json
         import os
         from pathlib import Path
