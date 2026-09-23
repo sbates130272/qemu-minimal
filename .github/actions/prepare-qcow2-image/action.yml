@@ -128,7 +128,7 @@ runs:
         mkdir -p "${OUTPUT_DIR}"
         source_qcow2="${VM_IMAGES_DIR:-/var/lib/qemu-tool/images}/${VM_NAME}-backing.qcow2"
         staged_qcow2="${OUTPUT_DIR}/${QCOW2_FILENAME}"
-        cp "${source_qcow2}" "${staged_qcow2}"
+        cp --reflink=auto "${source_qcow2}" "${staged_qcow2}"
         qemu-img info "${staged_qcow2}" > "${OUTPUT_DIR}/qemu-img-info.txt"
         sha256sum "${staged_qcow2}" > "${OUTPUT_DIR}/sha256.txt"
         python - <<'PY'

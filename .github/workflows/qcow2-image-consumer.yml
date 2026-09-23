@@ -133,6 +133,7 @@ jobs:
           emit("QEMU_IMAGE_REQUIRED", images["qemu"])
           emit("HEALTH_SERVICES", " ".join(validation["health_services"]))
           emit("PROFILE_VM_NAME", f"consumer-{manifest['profile']}")
+          emit("PUBLISHED_BACKING_PATH", f"{os.environ['VM_IMAGES_DIR']}/published-{manifest['profile']}-{os.environ['GITHUB_RUN_ID']}.qcow2")
           PY
 
       - name: Verify the pulled qcow2 checksum
@@ -145,13 +146,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "${VM_IMAGES_DIR}"
-          backing="${VM_IMAGES_DIR}/published-${{ inputs.profile }}.qcow2"
-          cp "/tmp/qcow2-consumer/${PUBLISHED_QCOW2_FILENAME}" "${backing}"
-          qemu-img info "${backing}"
+          cp --reflink=auto "/tmp/qcow2-consumer/${PUBLISHED_QCOW2_FILENAME}" "${PUBLISHED_BACKING_PATH}"
+          qemu-img info "${PUBLISHED_BACKING_PATH}"
           qemu-tool gen-vm \
             --vm-name "${PROFILE_VM_NAME}" \
             --images "${VM_IMAGES_DIR}" \
-            --backing-file "${backing}"
+            --backing-file "${PUBLISHED_BACKING_PATH}"
 
       - name: Pull compose images required by the manifest
         run: |

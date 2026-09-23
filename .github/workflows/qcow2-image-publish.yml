@@ -48,6 +48,10 @@ env:
 jobs:
   build-qcow2:
     name: build-qcow2 (${{ matrix.profile }})
+    if: >-
+      github.event_name == 'pull_request'
+      || github.event_name == 'push'
+      || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     defaults:
       run:
