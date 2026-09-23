@@ -69,7 +69,7 @@ jobs:
           --release resolute \
           --username ubuntu \
           --password password \
-          --packages none \
+          --packages qemu/packages.d/packages-default \
           --size 64 \
           --ansible-playbook ansible/playbooks/vm-rocjitsu.yml
 

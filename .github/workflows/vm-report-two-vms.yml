@@ -105,7 +105,7 @@ jobs:
           --release noble \
           --username ubuntu \
           --password password \
-          --packages none \
+          --packages qemu/packages.d/packages-default \
           --size 8
 
     - name: Generate VM 2 from shared backing file
@@ -219,11 +219,16 @@ jobs:
             -vv -p 2222 ubuntu@qemu-2 true 2>&1 | tail -30 || true
         exit 1
 
+    # Into site/two-vm, not site: the checkout already populated site/ with the
+    # repository-owned pages, and uploading that whole tree would publish a
+    # nested copy of the site under two-vm/ on gh-pages.
     - name: Generate VM 1 report
-      run: bash scripts/generate-vm-report.sh site 2222 ubuntu "VM 1" qemu-1
+      run: bash scripts/generate-vm-report.sh site/two-vm 2222 ubuntu "VM 1" qemu-1
 
     - name: Generate VM 2 report
-      run: bash scripts/generate-vm-report.sh site/vm2 2222 ubuntu "VM 2" qemu-2
+      run: >-
+        bash scripts/generate-vm-report.sh site/two-vm/vm2 2222 ubuntu
+        "VM 2" qemu-2
 
     - name: Show compose logs on failure
       if: failure()
@@ -238,5 +243,5 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: vm-report-2vm
-        path: site/
+        path: site/two-vm/
         if-no-files-found: error

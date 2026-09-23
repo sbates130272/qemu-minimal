@@ -101,8 +101,12 @@ rocjitsu_gpu_test_hsa_snoop_timeout: 120
 # exercise above: it should see the emulated GPU through ROCm and be able to
 # query its properties, but it need not run the longer stress modules here.
 rocjitsu_gpu_test_rvs: true
-rocjitsu_gpu_test_rvs_bin: /opt/rocm/bin/rvs
-rocjitsu_gpu_test_rvs_conf_dir: /opt/rocm/share/rocm-validation-suite/conf
+# Its own prefix, not the ROCm tree: RVS comes from AMD's standalone tarball
+# rather than apt, because TheRock packages no RVS. See vm-rocjitsu.yml.
+rocjitsu_gpu_test_rvs_prefix: /opt/rvs
+rocjitsu_gpu_test_rvs_bin: "{{ rocjitsu_gpu_test_rvs_prefix }}/bin/rvs"
+rocjitsu_gpu_test_rvs_conf_dir: >-
+  {{ rocjitsu_gpu_test_rvs_prefix }}/share/rocm-validation-suite/conf
 rocjitsu_gpu_test_rvs_config_name: gpup_single.conf
 rocjitsu_gpu_test_rvs_timeout: 120
 rocjitsu_gpu_test_timeout_bin: /usr/bin/timeout
