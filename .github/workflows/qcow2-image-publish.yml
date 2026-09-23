@@ -72,6 +72,7 @@ jobs:
             release: resolute
             vm_name: qcow2-rocjitsu
             qcow2_filename: qemu-minimal-rocjitsu-resolute.qcow2
+            ansible_extra_args: -e rocm_setup_run_checks=false
             compose_stack: vfio-user-rocjitsu-vm
             compose_profiles: '[]'
             health_services: '["rocjitsu"]'
@@ -88,6 +89,7 @@ jobs:
             release: resolute
             vm_name: qcow2-rocjitsu-hipfile-fio
             qcow2_filename: qemu-minimal-rocjitsu-hipfile-fio-resolute.qcow2
+            ansible_extra_args: -e rocm_setup_run_checks=false
             compose_stack: vfio-user-rocjitsu-vm
             compose_profiles: '[]'
             health_services: '["rocjitsu"]'
@@ -104,6 +106,7 @@ jobs:
             release: resolute
             vm_name: qcow2-ernic
             qcow2_filename: qemu-minimal-ernic-resolute.qcow2
+            ansible_extra_args: ""
             compose_stack: vfio-user-ernic-vm
             compose_profiles: '[]'
             health_services: '["ernic"]'
@@ -120,6 +123,10 @@ jobs:
             release: resolute
             vm_name: qcow2-ernic-rocjitsu
             qcow2_filename: qemu-minimal-ernic-rocjitsu-resolute.qcow2
+            ansible_extra_args: >-
+              -e rocm_setup_run_checks=false
+              -e rocm_setup_install_kernel_driver=false
+              -e rocjitsu_firmware_set=full
             compose_stack: vfio-user-ernic-rocjitsu-vm
             compose_profiles: '[]'
             health_services: '["ernic","rocjitsu"]'
@@ -157,6 +164,7 @@ jobs:
           vm-name: ${{ matrix.vm_name }}
           qcow2-filename: ${{ matrix.qcow2_filename }}
           output-dir: dist/qcow2/${{ matrix.profile }}
+          ansible-extra-args: ${{ matrix.ansible_extra_args }}
           compose-stack: ${{ matrix.compose_stack }}
           compose-profiles: ${{ matrix.compose_profiles }}
           health-services: ${{ matrix.health_services }}
@@ -201,6 +209,7 @@ jobs:
             release: resolute
             vm_name: qcow2-rocjitsu
             qcow2_filename: qemu-minimal-rocjitsu-resolute.qcow2
+            ansible_extra_args: -e rocm_setup_run_checks=false
             compose_stack: vfio-user-rocjitsu-vm
             compose_profiles: '[]'
             health_services: '["rocjitsu"]'
@@ -217,6 +226,7 @@ jobs:
             release: resolute
             vm_name: qcow2-rocjitsu-hipfile-fio
             qcow2_filename: qemu-minimal-rocjitsu-hipfile-fio-resolute.qcow2
+            ansible_extra_args: -e rocm_setup_run_checks=false
             compose_stack: vfio-user-rocjitsu-vm
             compose_profiles: '[]'
             health_services: '["rocjitsu"]'
@@ -233,6 +243,7 @@ jobs:
             release: resolute
             vm_name: qcow2-ernic
             qcow2_filename: qemu-minimal-ernic-resolute.qcow2
+            ansible_extra_args: ""
             compose_stack: vfio-user-ernic-vm
             compose_profiles: '[]'
             health_services: '["ernic"]'
@@ -249,6 +260,10 @@ jobs:
             release: resolute
             vm_name: qcow2-ernic-rocjitsu
             qcow2_filename: qemu-minimal-ernic-rocjitsu-resolute.qcow2
+            ansible_extra_args: >-
+              -e rocm_setup_run_checks=false
+              -e rocm_setup_install_kernel_driver=false
+              -e rocjitsu_firmware_set=full
             compose_stack: vfio-user-ernic-rocjitsu-vm
             compose_profiles: '[]'
             health_services: '["ernic","rocjitsu"]'
@@ -286,6 +301,7 @@ jobs:
           vm-name: ${{ matrix.vm_name }}
           qcow2-filename: ${{ matrix.qcow2_filename }}
           output-dir: dist/qcow2/${{ matrix.profile }}
+          ansible-extra-args: ${{ matrix.ansible_extra_args }}
           compose-stack: ${{ matrix.compose_stack }}
           compose-profiles: ${{ matrix.compose_profiles }}
           health-services: ${{ matrix.health_services }}

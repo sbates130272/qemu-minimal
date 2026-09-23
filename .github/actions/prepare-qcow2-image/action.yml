@@ -22,6 +22,10 @@ inputs:
   output-dir:
     description: Directory to write the staged qcow2 bundle into
     required: true
+  ansible-extra-args:
+    description: Optional extra ansible-playbook arguments for image generation
+    required: false
+    default: ""
   compose-stack:
     description: Compose stack used for post-boot validation
     required: true
@@ -90,8 +94,17 @@ runs:
 
     - name: Generate the qcow2 image
       shell: bash
+      env:
+        PREPARE_QCOW2_ANSIBLE_EXTRA_ARGS: ${{ inputs.ansible-extra-args }}
       run: |
         set -euo pipefail
+        if [ -n "${PREPARE_QCOW2_ANSIBLE_EXTRA_ARGS}" ]; then
+          if [ -n "${ANSIBLE_EXTRA_ARGS:-}" ]; then
+            export ANSIBLE_EXTRA_ARGS="${ANSIBLE_EXTRA_ARGS} ${PREPARE_QCOW2_ANSIBLE_EXTRA_ARGS}"
+          else
+            export ANSIBLE_EXTRA_ARGS="${PREPARE_QCOW2_ANSIBLE_EXTRA_ARGS}"
+          fi
+        fi
         qemu-tool gen-vm \
           --vm-name "${{ inputs.vm-name }}" \
           --release "${{ inputs.release }}" \
