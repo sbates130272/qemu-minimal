@@ -305,7 +305,7 @@ jobs:
         run: |
           set -euo pipefail
           repo="ghcr.io/${GITHUB_REPOSITORY_OWNER}/qemu-minimal-qcow2-${PROFILE}"
-          version_tag="${RELEASE}-${GITHUB_SHA::12}"
+          version_tag="${PROFILE}-${RELEASE}-${GITHUB_SHA::12}"
           release_tag="${PROFILE}-${RELEASE}"
           stable_ref="${repo}:stable"
           release_ref="${repo}:${release_tag}"

@@ -140,7 +140,11 @@ jobs:
           emit("QEMU_IMAGE_REQUIRED", images["qemu"])
           emit("HEALTH_SERVICES", " ".join(validation["health_services"]))
           emit("PROFILE_VM_NAME", f"consumer-{manifest['profile']}")
-          emit("PUBLISHED_BACKING_PATH", f"{os.environ['VM_IMAGES_DIR']}/published-{manifest['profile']}-{os.environ['GITHUB_RUN_ID']}.qcow2")
+          emit(
+              "PUBLISHED_BACKING_PATH",
+              f"{os.environ['VM_IMAGES_DIR']}/published-{manifest['profile']}-"
+              f"{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}.qcow2",
+          )
           PY
 
       - name: Verify the pulled qcow2 checksum

@@ -172,7 +172,7 @@ runs:
                 "repository": f"ghcr.io/{os.environ['GITHUB_REPOSITORY_OWNER']}/qemu-minimal-qcow2-{os.environ['PROFILE']}",
                 "stable_tag": "stable",
                 "release_tag": f"{os.environ['PROFILE']}-{os.environ['RELEASE']}",
-                "version_tag": f"{os.environ['RELEASE']}-{os.environ['GITHUB_SHA'][:12]}",
+                "version_tag": f"{os.environ['PROFILE']}-{os.environ['RELEASE']}-{os.environ['GITHUB_SHA'][:12]}",
             },
         }
         (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")

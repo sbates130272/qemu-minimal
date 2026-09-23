@@ -19,6 +19,31 @@
   ansible.builtin.set_fact:
     rocjitsu_hipfile_fio_rocm: "{{ rocjitsu_hipfile_fio_rocm_root.stdout }}"
 
+- name: Check for the nested hipFile header
+  ansible.builtin.stat:
+    path: "{{ rocjitsu_hipfile_fio_rocm }}/include/hipfile/hipfile.h"
+  register: rocjitsu_hipfile_fio_header_nested
+
+- name: Check for the flat hipFile header
+  ansible.builtin.stat:
+    path: "{{ rocjitsu_hipfile_fio_rocm }}/include/hipfile.h"
+  register: rocjitsu_hipfile_fio_header_flat
+
+- name: Check for the hipFile library
+  ansible.builtin.stat:
+    path: "{{ rocjitsu_hipfile_fio_rocm }}/lib/libhipfile.so"
+  register: rocjitsu_hipfile_fio_library
+
+- name: Fail when the selected ROCm root has no usable hipFile install
+  ansible.builtin.fail:
+    msg: >-
+      Selected ROCm root {{ rocjitsu_hipfile_fio_rocm }} has neither a nested
+      nor a flat hipFile header, or is missing lib/libhipfile.so.
+  when: >-
+    ((not rocjitsu_hipfile_fio_header_nested.stat.exists)
+     and (not rocjitsu_hipfile_fio_header_flat.stat.exists))
+    or (not rocjitsu_hipfile_fio_library.stat.exists)
+
 - name: Read the baked fio commit stamp
   ansible.builtin.slurp:
     src: "{{ rocjitsu_hipfile_fio_prefix }}/share/fio-commit.txt"
