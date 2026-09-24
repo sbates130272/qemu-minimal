@@ -1,0 +1,68 @@
+name: Detect whether a PR touches relevant paths
+description: >-
+  Job-level replacement for a workflow-level "paths:" filter, for use by the
+  always-on required checks. A workflow-level filter is unusable for a required
+  check: GitHub never starts the workflow, the context never reports, and the PR
+  stays blocked on a status that will never arrive. A job skipped by "if:" does
+  report, and branch protection counts a skipped required check as passing, so
+  the gate stays green on a docs-only PR without paying for it.
+
+  On any event other than pull_request this returns "true", so a manual dispatch
+  or a push always runs the full job.
+
+inputs:
+  patterns:
+    description: >-
+      Newline-separated globs, matched against each changed file. "*" crosses
+      "/", so "qemu/**" and "qemu/*" behave identically here.
+    required: true
+
+outputs:
+  changed:
+    description: '"true" if any changed file matched a pattern, else "false".'
+    value: ${{ steps.match.outputs.changed }}
+
+runs:
+  using: composite
+  steps:
+    # The REST API rather than "git diff": it needs no checkout and no
+    # fetch-depth: 0, which on a required check that usually skips would be the
+    # dominant cost of the job.
+    - name: Match changed paths
+      id: match
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PATTERNS: ${{ inputs.patterns }}
+        EVENT: ${{ github.event_name }}
+        REPO: ${{ github.repository }}
+        PR: ${{ github.event.pull_request.number }}
+      run: |
+        set -euo pipefail
+        if [ "${EVENT}" != "pull_request" ]; then
+          echo "event is ${EVENT}, not pull_request - running unconditionally"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        gh api "repos/${REPO}/pulls/${PR}/files" --paginate \
+          --jq '.[].filename' > /tmp/changed-files.txt
+        echo "changed files:"
+        sed 's/^/  /' /tmp/changed-files.txt
+        python3 - <<'PY' >> "$GITHUB_OUTPUT"
+        import fnmatch
+        import os
+        import sys
+
+        patterns = [p.strip() for p in os.environ["PATTERNS"].splitlines() if p.strip()]
+        with open("/tmp/changed-files.txt", encoding="utf-8") as fh:
+            files = [line.strip() for line in fh if line.strip()]
+
+        for name in files:
+            for pattern in patterns:
+                if fnmatch.fnmatch(name, pattern):
+                    print(f"matched {name} against {pattern}", file=sys.stderr)
+                    print("changed=true")
+                    sys.exit(0)
+        print("no changed file matched any pattern", file=sys.stderr)
+        print("changed=false")
+        PY

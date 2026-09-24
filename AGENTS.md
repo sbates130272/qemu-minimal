@@ -262,12 +262,12 @@ version, commits signed-off, and makes a signed tag. Run it with `--dry-run`
 first to see the generated stanza.
 
 It never pushes; it prints the `git push origin main v<version>` that does.
-Pushing the tag is what triggers `release.yml`, whose `verify-version` job
+Pushing the tag is what triggers `qemu-minimal-release.yml`, whose `Verify Version` job
 refuses to build anything unless the tag, `pyproject.toml` and
 `debian/changelog` agree and `CHANGELOG.md` has a heading for the tag. That
 gate exists because v1.3.0 shipped with no tag at all and nothing noticed.
 
-`release.yml` then builds the wheel, the sdist and the `.deb`, attaches all
+That workflow then builds the wheel, the sdist and the `.deb`, attaches all
 three to one GitHub Release, and publishes to PyPI last — a PyPI version can
 never be reused, so it goes after everything repeatable has succeeded. PyPI
 uses Trusted Publishing against the `pypi` environment, so there is no API
@@ -277,11 +277,11 @@ token anywhere in the repo.
 
 <https://sbates130272.github.io/qemu-minimal/> is served from the `gh-pages`
 branch (Settings > Pages > Source = "Deploy from a branch", `gh-pages` /
-(root)), not from a Pages artifact. `.github/workflows/publish-pages.yml` is
+(root)), not from a Pages artifact. `.github/workflows/qemu-minimal-publish-pages.yml` is
 the only workflow that writes that branch; report lanes upload a named
 artifact and nothing else.
 
-That split is the whole point. `vm-report` and `vm-report-two-vms` each used
+That split is the whole point. `report-for-vm-basic` and `report-for-vm-ernic` each used
 to call `actions/deploy-pages` with their own full `_site/`, and a Pages
 deploy replaces the entire site, so whichever ran last won and the other
 lane's report disappeared — with both workflows green.

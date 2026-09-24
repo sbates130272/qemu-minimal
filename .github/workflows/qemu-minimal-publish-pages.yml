@@ -1,11 +1,11 @@
-name: qemu-minimal - publish-pages
+name: qemu-minimal - Publish Pages
 
 # The only workflow that writes the site. Every report lane uploads a named
 # artifact and stops there; this assembles them into one site on the gh-pages
 # branch.
 #
 # It exists because the lanes used to publish themselves: vm-report and
-# vm-report-two-vms each called actions/deploy-pages with their own full
+# vm-report-ernic each called actions/deploy-pages with their own full
 # _site/, and a Pages deploy replaces the whole site. Whichever ran last won
 # and the other lane's report simply vanished, with both workflows green.
 #
@@ -19,17 +19,20 @@ name: qemu-minimal - publish-pages
 on:
   workflow_run:
     workflows:
-      - qemu-minimal - vm-report
-      - qemu-minimal - vm-report-rocjitsu
-      - qemu-minimal - vm-report-two-vms
-      - qemu-minimal - vm-report-hipfile-fio
+      # "Report for vm-rocjitsu" produces both the vm-report-rocjitsu and the
+      # vm-report-hipfile-fio artifacts since the two lanes were merged; there
+      # is no separate "Report for hipfile-fio" workflow to wait on any more.
+      # The fetch list below is unchanged and still names both artifacts.
+      - qemu-minimal - Report for vm-basic
+      - qemu-minimal - Report for vm-rocjitsu
+      - qemu-minimal - Report for vm-ernic
     types:
       - completed
   push:
     branches:
       - main
     paths:
-      - '.github/workflows/publish-pages.yml'
+      - '.github/workflows/qemu-minimal-publish-pages.yml'
       - 'site/**'
       - 'scripts/render-site-perf.py'
   workflow_dispatch:
@@ -45,7 +48,7 @@ concurrency:
 
 jobs:
   publish:
-    name: publish-pages
+    name: Publish Pages
     # A failed report lane has nothing worth publishing, but a push or a manual
     # run has no triggering run to judge.
     if: >-
@@ -91,7 +94,7 @@ jobs:
 
           fetch vm-report-1vm 1vm
           fetch vm-report-rocjitsu rocjitsu
-          fetch vm-report-2vm two-vm
+          fetch vm-report-ernic ernic
           fetch vm-report-hipfile-fio hipfile-fio
 
           # generate-vm-report.sh writes a _config.yml wherever it thinks it is
@@ -152,7 +155,7 @@ jobs:
             sync_dir ../staging/perf perf
             sync_dir ../staging/1vm 1vm
             sync_dir ../staging/rocjitsu rocjitsu
-            sync_dir ../staging/two-vm two-vm
+            sync_dir ../staging/ernic ernic
             sync_dir ../staging/hipfile-fio hipfile-fio
 
             git add -A

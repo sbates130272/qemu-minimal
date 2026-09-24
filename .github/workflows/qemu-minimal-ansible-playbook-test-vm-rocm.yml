@@ -1,4 +1,4 @@
-name: qemu-minimal - ansible-playbook-test-rocm
+name: qemu-minimal - Ansible Playbook Test - vm-rocm
 
 # vm-rocm: install the ROCm stack, boot a bare VM, verify packages.
 # Boots QEMU directly via qemu-tool run-vm inside the CI image. No compose, so
@@ -9,13 +9,13 @@ on:
   pull_request:
     branches:
       - main
+    # 'qemu/qemu-tool/**' and 'qemu/pyproject.toml' are deliberately absent --
+    # see the note in qemu-minimal-ansible-playbook-test-vm-rocjitsu.yml.
     paths:
       - 'ansible/playbooks/vm-rocm.yml'
       - 'ansible/requirements.yml'
-      - 'qemu/qemu-tool/**'
-      - 'qemu/pyproject.toml'
       - '.github/actions/setup-vm-job/action.yml'
-      - '.github/workflows/ansible-playbook-test-rocm.yml'
+      - '.github/workflows/qemu-minimal-ansible-playbook-test-vm-rocm.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -26,14 +26,27 @@ env:
   VM_IMAGES_DIR: /var/lib/qemu-tool/images
   # No spaces inside the JSON — gen_vm.py splits on whitespace so spaces
   # inside the value create extra positional arguments for ansible-playbook.
-  ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false}'
+  # rocm_setup_skip_system_upgrade turns off the role's "upgrade: safe" +
+  # autoremove pass. That pass pulls the whole distro forward -- 28 packages
+  # and 18.1 MB on a recent run, perl and netplan and polkit and sudo, none of
+  # them under test here -- and it is the single largest source of flake in
+  # these lanes, because it is what meets the security.ubuntu.com mirror skew
+  # (one stale node in an eight-address pool, which re-running does not
+  # dependably route around). It is also a reproducibility hole: the ernic
+  # side pins the guest kernel via ernic_ionic_kernel_ref and fails the build
+  # on a major.minor mismatch precisely so the guest does not drift, and then
+  # this re-randomises everything around that kernel, so two bakes of the same
+  # playbook against the same cloud image are not the same guest. Upstream's
+  # own default documents the knob as "useful in CI". Local bakes are
+  # unaffected and still upgrade.
+  ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false,"rocm_setup_skip_system_upgrade":true}'
 
 jobs:
   test-vm-rocm:
-    name: test-vm-rocm
+    name: Ansible Playbook Test - vm-rocm
     runs-on: ubuntu-latest
     container:
-      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260919.g359579e-qemu11.1.1-vfu.8039244
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260924.ge1cd640-qemu11.1.1-vfu.8039244
       # Supplies qemu-system-x86_64, qemu-img and cloud-localds.
       options: --device /dev/kvm
     timeout-minutes: 90

@@ -1,11 +1,11 @@
-name: qemu-minimal - spell-check
+name: qemu-minimal - Spell Check
 
+# PR only: every commit reaches main through a PR merge, so a post-merge run
+# would re-check a tree this already passed on. Never path-filtered, which is
+# also what a required check needs -- see qemu-minimal-shell-check.yml. 12s.
 on:
   workflow_dispatch:
   pull_request:
-    branches:
-      - main
-  push:
     branches:
       - main
 
@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   spell-check:
-    name: spell-check
+    name: Spell Check
     runs-on: ubuntu-latest
     steps:
     - name: Check out code

@@ -46,13 +46,12 @@ runs:
       shell: bash
       run: df -h / "${{ inputs.images-dir }}" 2>/dev/null || df -h /
 
-    # Everything else -- qemu-system-x86_64, qemu-img, cloud-localds, ansible
-    # and openssh-client -- already ships in the CI image. Only pip is missing.
-    - name: Install missing packages
-      shell: bash
-      run: |
-        apt-get update -qq
-        apt-get install -y -qq python3-pip
+    # No package installation step here any more. qemu-system-x86_64, qemu-img,
+    # cloud-localds, ansible and openssh-client always shipped in the CI image;
+    # python3-pip was the one gap, and it closed in the qemu image at
+    # 20260924.ge1cd640, which is the pin above. Do not reintroduce an
+    # apt-get here without checking the pin -- an older image has no pip at all
+    # and every "pip install" below would fail on a bare ModuleNotFoundError.
 
     # Pin pip's cache to an absolute path both sides agree on. "~/.cache/pip"
     # silently did nothing: actions/cache expands ~ in Node on the runner, pip

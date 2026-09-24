@@ -1,41 +1,61 @@
-name: qemu-minimal - ansible-setup-test
+name: qemu-minimal - Ansible Setup Test
 
+# PR only, and unfiltered at the workflow level: these are required checks, and
+# a path-filtered required check never reports on a PR outside its filter,
+# leaving the PR blocked forever. See qemu-minimal-shell-check.yml.
+#
+# The filtering happens at JOB level instead, via the "changes" job below. A
+# skipped job still reports its context and branch protection counts it as
+# passing, so a docs-only PR gets both green checks in seconds rather than
+# paying ~7m. This was the lane flagged as "the one to revisit first".
 on:
   workflow_dispatch:
   pull_request:
     branches:
       - main
-    paths:
-      - 'ansible/**'
-      - 'qemu/qemu-tool/**'
-      - 'qemu/pyproject.toml'
-      - '.github/workflows/ansible-setup-test.yml'
-  push:
-    branches:
-      - main
-    paths:
-      - 'ansible/**'
-      - 'qemu/qemu-tool/**'
-      - 'qemu/pyproject.toml'
-      - '.github/workflows/ansible-setup-test.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   # Only supersede PR runs: a push to main or a scheduled run should finish.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+permissions:
+  contents: read
+  # paths-changed reads the PR's file list through the REST API.
+  pull-requests: read
+
 jobs:
 
-  syntax-check:
-    name: ansible-syntax-check
+  changes:
+    name: Detect Changes
     runs-on: ubuntu-latest
-    container: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260919.g359579e-qemu11.1.1-vfu.8039244
+    outputs:
+      relevant: ${{ steps.filter.outputs.changed }}
     steps:
     - name: Check out code
       uses: actions/checkout@v4.3.1
-    # ansible ships in the CI image at /usr/local/bin; only pip is missing.
-    - name: Install pip
-      run: apt-get update -qq && apt-get install -y -qq python3-pip
+    - name: Filter paths
+      id: filter
+      uses: ./.github/actions/paths-changed
+      with:
+        patterns: |
+          ansible/**
+          qemu/**
+          .github/actions/setup-vm-job/action.yml
+          .github/actions/paths-changed/action.yml
+          .github/workflows/qemu-minimal-ansible-setup-test.yml
+
+  syntax-check:
+    name: Ansible Syntax Check
+    needs: changes
+    if: needs.changes.outputs.relevant == 'true'
+    runs-on: ubuntu-latest
+    container: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260924.ge1cd640-qemu11.1.1-vfu.8039244
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4.3.1
+    # ansible ships in the CI image at /usr/local/bin, and so does pip as of
+    # the 20260924.ge1cd640 pin above -- nothing left to install.
     # Resolve the path in the container; actions/cache expands ~ in Node on the
     # runner, ansible-galaxy expands it from $HOME in here, and the two are not
     # the same directory. See .github/actions/setup-vm-job/action.yml.
@@ -66,11 +86,11 @@ jobs:
       working-directory: ansible
 
   gen-vm-ansible-setup:
-    name: gen-vm-ansible-setup
+    name: Generate VM Ansible Setup
     needs: syntax-check
     runs-on: ubuntu-latest
     container:
-      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260919.g359579e-qemu11.1.1-vfu.8039244
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260924.ge1cd640-qemu11.1.1-vfu.8039244
       # Supplies qemu-system-x86_64, qemu-img and cloud-localds.
       options: --device /dev/kvm
     timeout-minutes: 90

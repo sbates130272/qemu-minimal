@@ -1,4 +1,4 @@
-name: qemu-minimal - smoke-test-qemu-tool
+name: qemu-minimal - Smoke Test - qemu-tool
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ on:
     paths:
       - 'qemu/qemu-tool/**'
       - 'qemu/pyproject.toml'
-      - '.github/workflows/qemu-tool-smoke-test.yml'
+      - '.github/workflows/qemu-minimal-smoke-test-qemu-tool.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -20,10 +20,10 @@ concurrency:
 jobs:
 
   smoke-test-x86:
-    name: smoke-test-x86-${{ matrix.release }}
+    name: Smoke Test - x86 ${{ matrix.release }}
     runs-on: ubuntu-latest
     container:
-      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260919.g359579e-qemu11.1.1-vfu.8039244
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260924.ge1cd640-qemu11.1.1-vfu.8039244
       # Supplies qemu-system-x86_64, qemu-img and cloud-localds.
       options: --device /dev/kvm
     strategy:
@@ -44,12 +44,10 @@ jobs:
         python3 -c "import os, fcntl; fcntl.ioctl(os.open('/dev/kvm', os.O_RDWR), 0xAE00, 0)" \
           || { echo "::error::/dev/kvm present but KVM_GET_API_VERSION failed"; exit 1; }
         echo "KVM available: $(ls -l /dev/kvm)"
-    # Everything else -- qemu-system-x86_64, qemu-img, cloud-localds, ansible
-    # and openssh-client -- already ships in the CI image. Only pip is missing.
-    - name: Install missing packages
-      run: |
-        apt-get update -qq
-        apt-get install -y -qq python3-pip
+    # No package installation step here any more: python3-pip was the only gap
+    # in the CI image and it closed at 20260924.ge1cd640, the pin above. The
+    # arm64 and riscv64 jobs below still apt-get it -- they run on a bare
+    # ubuntu-latest runner, not in this container.
     # Absolute, not "~/.cache/pip": actions/cache expands ~ on the runner and
     # pip expands it in this container, so the restore never reached pip.
     # See .github/actions/setup-vm-job/action.yml.
@@ -159,7 +157,7 @@ jobs:
         echo "✓ qemu-guest-agent installed in guest"
 
   smoke-test-arm64:
-    name: smoke-test-arm64
+    name: Smoke Test - arm64
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     steps:
@@ -193,7 +191,7 @@ jobs:
           --size 8
 
   smoke-test-riscv64:
-    name: smoke-test-riscv64
+    name: Smoke Test - riscv64
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     steps:

@@ -1,23 +1,15 @@
-name: qemu-minimal - shellcheck
+name: qemu-minimal - Shell Check
 
+# No push: trigger and no paths: filter, unlike most lanes here. Every commit
+# reaches main through a PR merge, so a post-merge run would re-test a tree
+# this already passed on. And the job below is a required check: a required
+# check that is path-filtered never reports at all on a PR outside the filter,
+# which leaves that PR blocked on a status that will never arrive. 17s.
 on:
   workflow_dispatch:
   pull_request:
     branches:
       - main
-    paths:
-      - 'libvirt/create-nvme'
-      - 'libvirt/virt-install-ubuntu'
-      - 'scripts/*.sh'
-      - '.github/workflows/shell-check.yml'
-  push:
-    branches:
-      - main
-    paths:
-      - 'libvirt/create-nvme'
-      - 'libvirt/virt-install-ubuntu'
-      - 'scripts/*.sh'
-      - '.github/workflows/shell-check.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -26,7 +18,7 @@ concurrency:
 
 jobs:
   shellcheck:
-    name: shellcheck
+    name: Shell Check
     runs-on: ubuntu-latest
     steps:
       - name: Check out code

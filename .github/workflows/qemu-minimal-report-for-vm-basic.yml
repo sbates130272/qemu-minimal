@@ -1,11 +1,17 @@
-name: qemu-minimal - vm-report
+name: qemu-minimal - Report for vm-basic
 
+# The report lanes all share one shape: push to main, a daily cron, and manual.
+# Push, because a report describes the merged tree and there is nothing to
+# publish from a PR head. All four crons fire together at 01:00 MST (08:00 UTC,
+# MST being a fixed -07:00 with no DST) rather than staggered across the small
+# hours. This one is unfiltered -- it is the post-merge canary, and at ~3m it is
+# cheap enough to run on every merge.
 on:
   push:
     branches:
       - main
   schedule:
-    - cron: '0 3 * * 1'
+    - cron: '0 8 * * *'
   workflow_dispatch:
 
 permissions:
@@ -17,10 +23,10 @@ concurrency:
 
 jobs:
   generate-report:
-    name: generate-vm-report
+    name: Report for vm-basic
     runs-on: ubuntu-latest
     container:
-      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260919.g359579e-qemu11.1.1-vfu.8039244
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260924.ge1cd640-qemu11.1.1-vfu.8039244
       # Supplies qemu-system-x86_64, qemu-img and cloud-localds.
       options: --device /dev/kvm
     steps:
@@ -38,12 +44,8 @@ jobs:
           || { echo "::error::/dev/kvm present but KVM_GET_API_VERSION failed"; exit 1; }
         echo "KVM available: $(ls -l /dev/kvm)"
 
-    # Everything else -- qemu-system-x86_64, qemu-img, cloud-localds, ansible
-    # and openssh-client -- already ships in the CI image. Only pip is missing.
-    - name: Install missing packages
-      run: |
-        apt-get update -qq
-        apt-get install -y -qq python3-pip
+    # No package installation step here any more: python3-pip was the only gap
+    # in the CI image and it closed at 20260924.ge1cd640, the pin above.
 
     # Absolute, not "~/.cache/pip": actions/cache expands ~ on the runner and
     # pip expands it in this container, so the restore never reached pip.
@@ -131,7 +133,7 @@ jobs:
 
     # Upload only. publish-pages.yml is the sole writer of the site; this
     # lane used to call deploy-pages itself, and a Pages deploy replaces the
-    # whole site, so it and vm-report-two-vms erased each other's report.
+    # whole site, so it and vm-report-ernic erased each other's report.
     # No Jekyll build here either: the branch source builds the markdown.
     - name: Upload the report
       uses: actions/upload-artifact@v4

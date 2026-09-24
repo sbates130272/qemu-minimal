@@ -4,7 +4,209 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- `vm-rocjitsu.yml` builds the amdgpu DKMS module **once**, from patched
+  source, instead of building it for every installed kernel and then throwing
+  the result away. The four source patches report `changed` on every run, so
+  the module the `amdgpu-dkms` postinst produced was always discarded by the
+  rebuild that follows them — while costing 23m55s of a 47m48s standalone lane
+  and 28m20s of a 55m46s combined lane, against ~12m for the rebuild that
+  produces what the guest loads. The postinst built "for 7.0.0-31-generic,
+  7.0.0-34-generic and 7.2.4-070204-generic"; the guest boots one of those.
+  `/etc/dkms/no-autoinstall` now stops it before it starts, replacing the
+  `no-autoinstall-errors` marker that let the doomed build run and then ignored
+  its exit status. That marker's fallout goes with it: `dpkg --configure -a`
+  has nothing left to settle, and genuine DKMS failures elsewhere in the image
+  stay fatal rather than being swallowed for the rest of the run. Because
+  `no-autoinstall` short-circuits above `dkms add` as well as the build loop,
+  the rebuild task registers the module itself and takes the version from
+  `/usr/src/amdgpu-<version>` — `dkms status` names nothing until something has
+  been added, and the old `awk` over its first line was producing an empty
+  version.
+
+  That empty version turned out to have a second consumer. `amdgpu-dkms`'s own
+  postinst runs after `common.postinst` returns and derives a kernel version
+  from the DKMS state that the early exit never wrote, so it called
+  `update-initramfs -u -k` with nothing after the `-k` and exited 2 — a
+  maintainer script this playbook does not own, on an install that belongs to
+  `rocm_setup`, so dpkg's failure became apt's rc 100 and failed the play.
+  `/usr/sbin/update-initramfs` is now diverted to a no-op for exactly the
+  window the marker covers (`dpkg-divert`, not a PATH shim, because the
+  postinst calls the absolute path). Nothing is lost by skipping that call: the
+  initramfs it would build describes a guest with no amdgpu module and no
+  blacklist yet, and the existing "Regenerate initramfs" task rebuilds it once
+  both exist — the undivert is placed before that task so it gets the real
+  binary.
+
+- RVS and the rocBLAS host library it links against are no longer baked into
+  the rocjitsu image. The check that consumes them is off (no `amdrocm10` RVS
+  tarball exists, and the `amdrocm7` one cannot run against this guest's ROCm
+  10 tree), but the install tasks were ungated and every bake still downloaded
+  and unpacked the tarball and pulled in `amdrocm-blas-host<ver>`. They are now
+  gated on `vm_rocjitsu_install_rvs`, default false; turn it on in the same
+  change that sets `rocjitsu_gpu_test_rvs` true. The role-side RVS tasks were
+  already gated and are unchanged.
+
+- `rocm_setup_extra_kernel_packages` is gone from `vm-rocjitsu.yml`. Its
+  comment claimed `linux-generic-hwe-26.04` resolved to the running
+  `7.0.0-31-generic` and so was a no-op; it reported `changed` on every run,
+  and by the time it ran the guest was already on `7.0.0-34-generic`, so it
+  installed a metapackage for a kernel nothing here boots — and fed that kernel
+  to the postinst build above. In the combined lane the guest runs the pinned
+  mainline `7.2.4` from `ionic_image_prep`, where a 7.0.x HWE kernel is pure
+  weight. `vm-ernic.yml` had already dropped it for the same reason.
+
+- Three no-op tasks removed from `vm-rocjitsu.yml`, each confirmed `ok` on
+  every run of both lanes. The device-metrics-exporter apt source and
+  `amdgpu-exporter` install duplicated what `rocm_setup_install_metrics_exporter`
+  already does, adding a second apt source for the same repo; the suite pin
+  they carried ("no resolute suite yet") was stale, since the role's own source
+  resolves on resolute. The purge of five distro ROCm runtime packages named
+  exactly what the `rocm-no-distro-packages` pin already pins to Priority -1
+  before any role runs, so apt cannot install them to begin with.
+
+- Workflow triggers now follow from the fact that `main` is protected and every
+  commit arrives as a PR merge. No workflow runs on both `pull_request` and
+  `push: main` any more — `shell-check`, `spell-check`,
+  `rocm-gemm-benchmark-compile`, `build-packages` and `ansible-setup-test` each used to run twice per change with
+  byte-identical path filters. Those five lost their `push` trigger *and* their
+  `paths` filter, because they are intended to become required checks and a
+  path-filtered required check never reports on a PR outside its filter,
+  leaving that PR blocked on a status that never arrives. The trade is that a
+  docs-only PR now also pays `build-packages` (~7m) and `ansible-setup-test`
+  (~7m). The four report lanes converged on one shape — `push: main` plus a
+  daily cron plus manual — which gives `vm-report-ernic` a push trigger it
+  never had, and their crons moved from weekly to daily.
+  `smoke-test-rocm-ernic` moved from Monday 04:00 to Monday 07:07.
+
+- The four report lanes are all scheduled at **01:00 MST (`0 8 * * *`)**
+  rather than staggered across 02:47–06:29 UTC. GitHub cron is UTC-only and
+  MST is a fixed `-07:00` with no DST, so one expression holds year round;
+  under Mountain *Daylight* Time it lands at 02:00 local. Each lane gets its
+  own hosted runner, so the nightly window contracts from ~3h45m of wall clock
+  to roughly the ~57m of the slowest lane. `publish-pages` consequently sees
+  four `workflow_run` completions inside an hour rather than spread across the
+  night; it sets `cancel-in-progress: false`, so they queue and none is
+  dropped, but the Pages branch is rewritten four times in succession and the
+  site only settles after the last drains. Scheduled runs at `:00` are also the
+  most likely to start late, `:00` being the most contended minute on the
+  platform.
+
+- `ansible-playbook-test-rocjitsu` and `ansible-playbook-test-ernic-rocjitsu`
+  gate pull requests again. The rocjitsu lane had become dispatch-only while
+  still being documented as the PR gate for the emulated GPU, which is how the
+  RVS regression in #154 reached `main` and was found an hour later by
+  `vm-report-rocjitsu` instead of before merge. Neither is a required check.
+
+- Every file in `.github/workflows/` is now named for the workflow it
+  contains, slugified: `qemu-minimal - Shell Check` lives in
+  `qemu-minimal-shell-check.yml`. Most were a missing `qemu-minimal-` prefix;
+  eight more were renamed a second time on 2026-09-23 once the display names
+  settled, so that the rule now has no exceptions: lowercase the workflow name,
+  turn each ` - ` and each space into `-`, append `.yml`. The four playbook
+  tests gained the `vm-` their names carry (`...-ansible-playbook-test-rocm.yml`
+  → `...-ansible-playbook-test-vm-rocm.yml`), and the four report lanes moved
+  from `vm-report*` to `report-for-*`. Five had drifted further still and were
+  renamed harder — `shell-check.yml` →
+  `qemu-minimal-shell-check.yml`, `bench-compile.yml` →
+  `qemu-minimal-rocm-gemm-benchmark-compile.yml`, `qemu-tool-dry-run.yml` →
+  `qemu-minimal-dry-run-qemu-tool.yml`, `qemu-tool-smoke-test.yml` →
+  `qemu-minimal-smoke-test-qemu-tool.yml`, and `smoke-test-rocm-two-vms.yml` →
+  `qemu-minimal-smoke-test-rocm-ernic.yml`. Nothing about what any workflow
+  *does* changed. The self-referential entries in each `paths:` filter, the
+  `workflow_run` list in `publish-pages`, and the README badges were all
+  updated to match. Concurrency groups and uploaded
+  artifact names were deliberately *not* renamed: `publish-pages` fetches each
+  report by artifact name, so those are load-bearing across workflows.
+  See **Upgrading**.
+
+- Workflow `name:` fields are now title-cased prose rather than a second copy
+  of the filename: `qemu-minimal - Shell Check`, `qemu-minimal - Spell Check`,
+  `qemu-minimal - ROCm GEMM Benchmark Compile`, `qemu-minimal - Ansible
+  Playbook Test - vm-rocjitsu`, `qemu-minimal - Smoke Test - rocm-ernic`. The four report lanes
+  are named for the playbook they exercise — `qemu-minimal - Report for
+  vm-basic`, `- Report for vm-rocjitsu`, `- Report for vm-ernic` — except
+  `Report for hipfile-fio`, which runs `vm-rocjitsu.yml` but reports on the
+  hipFile/fio storage benchmark. `publish-pages` selects its upstream lanes by
+  workflow *name* in its `workflow_run` trigger, so all four were updated there
+  in the same commit; a mismatch there fails silently and freezes the site.
+  `qemu-minimal - Package` became `qemu-minimal - Build Packages` (and
+  `qemu-minimal-build-packages.yml`), since "Package" named a noun where every
+  other lane names an action.
+
+- Job `name:` fields follow the workflow names. They were kebab-case slugs that
+  had drifted from their lanes — `shell-check.yml` declared `shellcheck`,
+  `rocm-gemm-benchmark-compile.yml` declared `bench-compile`. Two rules now
+  cover all 28 jobs: a single-job workflow names its job after the workflow
+  minus the `qemu-minimal - ` prefix (`Shell Check`, `Report for hipfile-fio`,
+  `Ansible Playbook Test - vm-rocm`), and a multi-job workflow title-cases each
+  job's own identity (`Build Packages` holds `Build Deb`, `Install Smoke Test
+  (<kvm-group>)`, `Build Wheel`, `Wheel Smoke Test`). Job **ids** are
+  unchanged, so every `needs:` edge still resolves. Branch protection matches
+  job names unqualified by workflow, which is why the single-job rule keeps the
+  profile suffix — four lanes all naming a job `Report` would collapse into one
+  required context. See **Upgrading**.
+
+- `vm-report-two-vms` is now `vm-report-ernic`, and its report moves from
+  `/two-vm/` to `/ernic/` and `/two-vm/vm2/` to `/ernic/vm2/`. The old name
+  described the *shape* of the lane — two guests — while every other report
+  lane is named for the thing it exercises, and what this one actually proves
+  is the ernic RDMA NIC across a pair of guests. The workflow file, workflow
+  name, job id, concurrency group, guest names (`ernic-report-1` and
+  `-2`), cloud-image cache key and uploaded artifact (`vm-report-ernic`) all
+  follow. The compose stack keeps its `vfio-user-ernic-2vm` name, since
+  `smoke-test-rocm-ernic` shares it. See **Upgrading**.
+
+### Removed
+
+- The `slash-command-dispatch` workflow, and with it the `/run-ci-full` comment
+  command. It existed so a reviewer could ask for the four
+  `ansible-playbook-test-*` lanes on a pull request back when those lanes had
+  no `pull_request` trigger at all. All four are now PR-triggered within their
+  path filters and all four carry `workflow_dispatch`, so the remaining case —
+  forcing a run on a PR whose changes fell outside the filter — is served by
+  the Actions "Run workflow" button. Two things do change for reviewers: that
+  button is per-workflow, so it is four selections rather than one comment, and
+  it needs write access to the repository, where the comment path accepted any
+  commenter who passed the workflow's own permission check. See **Upgrading**.
+
 ### Upgrading
+
+- `/run-ci-full` comments are no longer answered by anything. A comment
+  containing it is now inert rather than an error, so the only signal that it
+  stopped working is the absence of the acknowledgement reply. Use the Actions
+  "Run workflow" button on each `ansible-playbook-test-vm-*` workflow instead.
+
+- `main` has no required status checks configured: the `contexts` list under
+  `required_status_checks` is empty, which is why the post-merge `push`
+  triggers removed here were the only guaranteed validation. Nothing in this release changes branch
+  protection. Once the renamed workflows have landed and each gate has reported
+  once, add `Shell Check`, `Spell Check`, `ROCm GEMM Benchmark Compile`,
+  `Ansible Syntax Check`, `Generate VM Ansible Setup`, `Build Deb`,
+  `Build Wheel` and `Wheel Smoke Test` as required contexts. Adding them
+  *before* the first run leaves PRs waiting on contexts GitHub has never seen —
+  and because the job renames above mean GitHub has seen *none* of these eight
+  strings, that sequencing is not optional here.
+
+- Renaming a workflow file orphans its run history: GitHub keys runs on the
+  file path, so each renamed workflow starts empty and its README badge reads
+  "no status" until it next runs. The old runs are still reachable in the
+  Actions tab under the retired filename. Any bookmark of the form
+  `/actions/workflows/<old>.yml` needs updating. Branch protection is not
+  disturbed by the *file* renames — required checks key on job name — but the
+  job renames in this release do change every context string, so any protection
+  rule, external status consumer or merge-queue config pinned to the old
+  kebab-case names must be updated in step.
+
+- The two-guest ernic report moved from `/two-vm/` to `/ernic/`. Links to
+  `https://sbates130272.github.io/qemu-minimal/two-vm/` will keep serving the
+  last report published under the old name until that directory is removed
+  from `gh-pages` by hand — `publish-pages.yml` scopes its `--delete` to the
+  lane directories it knows about, so a retired one is left untouched rather
+  than silently erased. `/ernic/` itself stays empty until the renamed lane
+  next runs; it is cron- and dispatch-only, so trigger it if you want the new
+  path populated sooner.
 
 - A guest built by an older `gen-vm` may come up unreachable after a bump.
   `run-vm` now always presents a MAC derived from `--ssh-port`, and a guest
@@ -209,17 +411,42 @@ All notable changes to this project will be documented in this file.
   previous `>=0.1.0` could never have resolved to 0.2.0.
 - Container images move off the previous pins: rocm-ernic to
   `20260919.g959f0cf` (`ernic.6ca9a46` → `ernic.0b48aa1`), qemu to
-  `20260919.g359579e`, and rocjitsu to `20260921.gb3399b3-rocjitsu.8e01a5a`
-  (`rocjitsu.20d4ce1` → `rocjitsu.2d8a73f` → `rocjitsu.8e01a5a`).
+  `20260924.ge1cd640`, and rocjitsu to `20260924.gad7a357-rocjitsu.c85bb75`
+  (`rocjitsu.20d4ce1` → `rocjitsu.2d8a73f` → `rocjitsu.8e01a5a` →
+  `rocjitsu.c85bb75`).
 
-  rocjitsu is built from rocm-systems `develop` at
+  rocjitsu was built from rocm-systems `develop` at
   `8e01a5a3fbee92f2b570dde97f314000d5226327`, which is where the vfio-pci work
-  landed — 14 commits ahead of the previous pin under `emulation/rocjitsu`,
+  landed — 14 commits ahead of the pin before it under `emulation/rocjitsu`,
   including the `vram_store.cpp` 16-bit `atomic_load` and `compare_exchange`
-  fixes. Note that rocjitsu and qemu no longer share a CI build sha. That is
-  fine and deliberate: they only have to agree on libvfio-user, which is
-  unchanged at `vfu.8039244`. Do not "fix" the mismatch by rebuilding qemu
-  unless libvfio-user itself moves.
+  fixes. It now tracks `c85bb752577b6608745f4ff7835e3da91a190795`, a further
+  100 commits on (`ahead 100, behind 0` — a straight fast-forward), of which 22
+  are `[rocjitsu]`. Those are host-side footprint and throughput work rather
+  than device-model changes: lazily constructed wavefronts instead of 16,384
+  built at VM init (#11952), pooled KFD page-table nodes (#11951), lazy SGPR
+  chunks (#11948), cached MTYPE lookups and sharded reader counters
+  (#11949, #11950).
+
+  Nothing guest-visible moved with it, which is the point worth recording.
+  `gfx1250_mi455x.json` is byte-identical across the two images, as is the
+  output of `vfio_guest_firmware.py --set gap` and the installed package set;
+  the only config edits anywhere in the image are to `gfx1100_w7900.json`
+  (`sgprs_per_wf` 104 → 106) and a new `gfx1251_synthetic.json`, neither of
+  which this repo serves. In particular **none of this touches the guest
+  scratch path**, so `vramlimit=1024` in `amdgpu-probe` stays exactly as it is
+  — see the note there.
+
+  `vfio_guest_firmware.py` did gain a `--generation gfx1250` flag, mutually
+  exclusive with `--config`, for a caller with no rocjitsu config on disk (it
+  leaves `config` null in the manifest). This repo generates stubs inside the
+  container on the controller, where the config does exist, so it is unused
+  here; it is the flag to reach for if firmware generation ever moves into the
+  guest.
+
+  Note that rocjitsu and qemu no longer share a CI build sha. That is fine and
+  deliberate: they only have to agree on libvfio-user, which is unchanged at
+  `vfu.8039244`. Do not "fix" the mismatch by rebuilding qemu unless
+  libvfio-user itself moves.
 - `spell-check` runs `codespell` instead of `pyspelling`/aspell. codespell
   matches a fixed list of known misspellings rather than validating every word
   against a dictionary, so the 441-entry `.wordlist.txt` is gone: hostnames,

@@ -100,7 +100,23 @@ rocjitsu_gpu_test_hsa_snoop_timeout: 120
 # RVS is a second view of the same live guest that the direct HIP workloads
 # exercise above: it should see the emulated GPU through ROCm and be able to
 # query its properties, but it need not run the longer stress modules here.
-rocjitsu_gpu_test_rvs: true
+#
+# Off until AMD publishes an amdrocm10 tarball. RVS 1.5.125-620 needs
+# libamd_smi.so.26 and TheRock 10.0 ships soname 27, so `rvs -g` dies in the
+# loader with rc 127 before enumerating anything. Not a missing package --
+# amdrocm-amdsmi is installed and provides libamd_smi.so.27 -- and not
+# fixable by bumping the pin either: repo.amd.com/rocm/rvs/tarball carries
+# four builds, all amdrocm7, and 1.5.125-620 is already the newest. A .26 ->
+# .27 symlink is not the answer; a soname bump is the ABI saying it changed.
+#
+# This is the "recheck if either side bumps a major" caveat in
+# vm-rocjitsu.yml firing. That note lists libamdhip64.so.7,
+# libhsa-runtime64.so.1 and librocblas.so.5; amd_smi was missing from it.
+#
+# Re-enable by setting this true once an amdrocm10 tarball exists. Everything
+# else in the role -- the HIP workloads, hsa-snoop, the KFD checks -- is
+# unaffected and still runs.
+rocjitsu_gpu_test_rvs: false
 # Its own prefix, not the ROCm tree: RVS comes from AMD's standalone tarball
 # rather than apt, because TheRock packages no RVS. See vm-rocjitsu.yml.
 rocjitsu_gpu_test_rvs_prefix: /opt/rvs
