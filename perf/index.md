@@ -12,7 +12,7 @@ new CI data lands.
 
 ## Latest published snapshot
 
-Generated from `d939b601` at **2026-09-23 20:13 UTC**.
+Generated from `e73a1e63` at **2026-09-24 23:18 UTC**.
 
 ![rocjitsu GEMM](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-gemm.json)
 ![rocjitsu hipFile](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile.json)
@@ -45,6 +45,7 @@ Generated from `d939b601` at **2026-09-23 20:13 UTC**.
 | 26a0ee18 | 2026-09-23 03:25 UTC | 484 kFLOP/s | 159 MB/s | 147 MB/s |
 | a933df21 | 2026-09-23 04:05 UTC | 484 kFLOP/s | 159 MB/s | 147 MB/s |
 | d939b601 | 2026-09-23 20:13 UTC | 484 kFLOP/s | 159 MB/s | 147 MB/s |
+| e73a1e63 | 2026-09-24 23:18 UTC | 484 kFLOP/s | 159 MB/s | 147 MB/s |
 
 ## Current report freshness
 
@@ -52,6 +53,4 @@ Generated from `d939b601` at **2026-09-23 20:13 UTC**.
 | --- | --- | --- | --- |
 | Single VM | 2026-09-23 20:13 UTC | `d939b60` | [/1vm/](/1vm/) |
 | rocjitsu | 2026-09-22 23:41 UTC | `c3d041a` | [/rocjitsu/](/rocjitsu/) |
-| ernic VM 1 | 2026-09-22 21:00 UTC | `13c504e` | [/two-vm/](/two-vm/) |
-| ernic VM 2 | 2026-09-22 21:00 UTC | `13c504e` | [/two-vm/vm2/](/two-vm/vm2/) |
 | hipFile fio | 2026-09-22 23:41 UTC | `c3d041a` | [/hipfile-fio/](/hipfile-fio/) |

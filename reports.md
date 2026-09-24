@@ -17,7 +17,7 @@ permalink: /reports/
   </div>
   <div class="report-card">
     <span class="eyebrow">Two guests</span>
-    <h2><a href="{{ '/two-vm/' | relative_url }}">ernic report</a></h2>
+    <h2><a href="{{ '/ernic/' | relative_url }}">ernic report</a></h2>
     <p>The ernic stack, with VM 1 at the top-level page and VM 2 nested underneath.</p>
   </div>
   <div class="report-card">
@@ -31,13 +31,16 @@ permalink: /reports/
 
 | Lane | Schedule / trigger | Output |
 | --- | --- | --- |
-| `vm-report` | Push to `main`, weekly cron, manual dispatch | `/1vm/` |
-| `vm-report-rocjitsu` | Path-filtered push to `main`, weekly cron, manual dispatch | `/rocjitsu/` |
-| `vm-report-two-vms` | Weekly cron, manual dispatch | `/two-vm/` and `/two-vm/vm2/` (ernic VM 1 / VM 2) |
-| `vm-report-hipfile-fio` | Path-filtered push to `main`, weekly cron, manual dispatch | `/hipfile-fio/` |
+| `report-for-vm-basic` | Push to `main`, daily 01:00 MST, manual dispatch | `/1vm/` |
+| `report-for-vm-rocjitsu` | Path-filtered push to `main`, daily 01:00 MST, manual dispatch | `/rocjitsu/` |
+| `report-for-vm-ernic` | Path-filtered push to `main`, daily 01:00 MST, manual dispatch | `/ernic/` and `/ernic/vm2/` (ernic VM 1 / VM 2) |
+| `report-for-hipfile-fio` | Path-filtered push to `main`, daily 01:00 MST, manual dispatch | `/hipfile-fio/` |
 
 ## Why the reports stay separate
 
 Each lane uploads a named artifact and stops. The Pages publisher assembles the
 latest artifact from each lane so one run cannot erase another lane's content.
-That keeps the site complete even when lanes run on different schedules.
+That keeps the site complete even when a lane has not run for days. The four
+crons now fire together, so the publisher sees four completions in quick
+succession; it never cancels a run in progress, so they queue and the site
+settles once the last one drains.
