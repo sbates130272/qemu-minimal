@@ -391,10 +391,19 @@
       # The RVS lib dirs are named even though the binary's own RUNPATH covers
       # them: the modules under lib/rvs are dlopened, and a bare dlopen of one
       # outside the rvs process resolves librvslib from nowhere else.
+      #
+      # lib/llvm/lib carries libomp.so, which the tarball does not ship and
+      # which bin/rvs and all 15 modules under lib/rvs list in DT_NEEDED. The
+      # binary's RUNPATH does name an llvm/lib, but only as /opt/rocm/lib/llvm/lib
+      # and /opt/rocm/core-7/lib/llvm/lib -- this guest is core-10.0, so neither
+      # exists and RUNPATH supplies nothing. Without this entry libomp.so
+      # resolves nowhere and rvs dies in the loader, exiting 127 with an empty
+      # stdout.
       LD_LIBRARY_PATH: >-
         {{ rocjitsu_gpu_test_rvs_prefix }}/lib:{{
         rocjitsu_gpu_test_rvs_prefix }}/lib/rvs:{{
-        rocjitsu_gpu_test_rocm }}/lib:{{ rocjitsu_gpu_test_rocm }}/lib64
+        rocjitsu_gpu_test_rocm }}/lib:{{ rocjitsu_gpu_test_rocm }}/lib64:{{
+        rocjitsu_gpu_test_rocm }}/lib/llvm/lib
   when: rocjitsu_gpu_test_rvs | bool
 
 - name: Check whether timeout is installed
@@ -429,7 +438,14 @@
 
 - name: Show RVS GPU list output
   ansible.builtin.debug:
-    msg: "{{ rocjitsu_gpu_test_rvs_gpus.stdout_lines }}"
+    # stderr as well as stdout: an rvs that dies in the dynamic loader exits
+    # 127 with nothing on stdout, so printing stdout alone reports an empty
+    # list and the "error while loading shared libraries: ..." naming the
+    # missing soname -- the only thing that identifies the fault -- is
+    # discarded. Same concatenation as the reproducer and smoke-check tasks.
+    msg: "{{ ((rocjitsu_gpu_test_rvs_gpus.stdout_lines | default([]))
+              + (rocjitsu_gpu_test_rvs_gpus.stderr_lines | default([])))
+             | default(['(no output captured)'], true) }}"
   when: rocjitsu_gpu_test_rvs | bool
 
 - name: Fail when RVS GPU enumeration times out

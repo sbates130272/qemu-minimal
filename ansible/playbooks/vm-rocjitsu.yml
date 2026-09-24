@@ -129,6 +129,50 @@
       become: true
       changed_when: false
 
+    # Stop a failing DKMS build from aborting dpkg, before rocm_setup installs
+    # amdgpu-dkms. In the combined ernic+rocjitsu lane the guest is already on
+    # the pinned mainline kernel by this point (vm-ernic.yml runs first and
+    # ionic_image_prep installs it), so the amdgpu-dkms postinst builds against
+    # every installed kernel -- the two 7.0.0 ones and 7.2.4. The 7.2.4 build
+    # is what the source patches below exist to fix, so it fails, and one
+    # failing build fails the whole postinst: the kernel packages end up
+    # half-configured and apt-get returns 100. The patch tasks then never run.
+    #
+    # AUTOINSTALL in dkms.conf is the wrong lever here and does nothing: the
+    # amdgpu-dkms postinst defers to /usr/lib/dkms/common.postinst, which never
+    # calls `dkms autoinstall`. It loops over the installed kernels calling
+    # `dkms build -k $KERNEL` directly, and a non-zero, non-77 rc makes it
+    # `exit $res`. The documented escape is this marker file, which turns that
+    # into "Ignored." and lets the postinst finish. Checked against
+    # common.postinst as shipped with dkms 3.2.2.
+    #
+    # This is deliberately narrow in time, not scope: the marker is removed
+    # again once amdgpu has been patched and rebuilt, so it cannot go on
+    # silently swallowing genuine DKMS failures for the rest of the run. The
+    # rebuild task below invokes dkms directly and still fails loudly.
+    #
+    # In the standalone rocjitsu lane none of this applies -- there is no 7.2.4
+    # kernel installed, every build succeeds, and the marker is inert.
+    #
+    # The directory is created first because in the standalone lane this runs
+    # before dkms is installed, so /etc/dkms does not exist yet and
+    # ansible.builtin.file will not create a missing parent for the marker.
+    # dpkg is content to unpack into a directory that already exists.
+    - name: Ensure the DKMS config directory exists
+      ansible.builtin.file:
+        path: /etc/dkms
+        state: directory
+        mode: '0755'
+      become: true
+
+    - name: Let a failing DKMS build not abort dpkg
+      ansible.builtin.file:
+        path: /etc/dkms/no-autoinstall-errors
+        state: touch
+        mode: '0644'
+      become: true
+      changed_when: false
+
   roles:
     - role: sbates130272.batesste.user_setup
     - role: sbates130272.batesste.fave_packages
@@ -403,6 +447,179 @@
       register: ras_vbios_patch
       changed_when: "'patched /' in ras_vbios_patch.stdout"
 
+    # amdgpu-dkms 7.1.9 predates kernel 7.2, which moved dumpability and the
+    # exec-time user_ns off mm_struct onto task->exec_state. The replacements
+    # -- task_exec_state_get_dumpable() and task_exec_state_rcu() -- are not
+    # exported, so an out-of-tree module cannot call them: porting the gate to
+    # the new API compiles and then fails at modpost. Fail closed instead and
+    # require CAP_SYS_PTRACE unconditionally, which only ever denies what the
+    # in-tree check would have allowed. Version-gated, so <= 7.1 keeps the
+    # upstream logic verbatim.
+    # From ROCm/hipObject ci/ernic/patches/amdgpu/0001, which established that
+    # this guest can run amdgpu and ionic on the same 7.2.4 kernel.
+    - name: Patch KFD ptrace gate to fail closed on kernels 7.2 and newer
+      ansible.builtin.shell:
+        cmd: |
+          python3 - << 'PYEOF'
+          import glob, sys
+          srcs = sorted(glob.glob('/usr/src/amdgpu-*'))
+          if not srcs:
+              print('no amdgpu DKMS source found', file=sys.stderr)
+              sys.exit(1)
+          path = srcs[-1] + '/amd/amdkfd/kfd_process_queue_manager.c'
+          with open(path) as f:
+              content = f.read()
+          if 'LINUX_VERSION_CODE < KERNEL_VERSION(7, 2, 0)' in content:
+              print('already patched')
+              sys.exit(0)
+          old = ('\tif (get_dumpable(mm) != SUID_DUMP_USER &&\n'
+                 '\t    !ns_capable(mm->user_ns, CAP_SYS_PTRACE)) {\n'
+                 '\t\tmmput(mm);\n'
+                 '\t\tgoto deny;\n'
+                 '\t}\n')
+          new = ('#if LINUX_VERSION_CODE < KERNEL_VERSION(7, 2, 0)\n'
+                 + old +
+                 '#else\n'
+                 '\tif (!ns_capable(tcred_ns, CAP_SYS_PTRACE)) {\n'
+                 '\t\tmmput(mm);\n'
+                 '\t\tgoto deny;\n'
+                 '\t}\n'
+                 '#endif\n')
+          inc_old = '#include <linux/sched/coredump.h>'
+          inc_new = '#include <linux/version.h>\n#include <linux/sched/coredump.h>'
+          if old not in content or inc_old not in content:
+              print(f'target string not found in {path}', file=sys.stderr)
+              sys.exit(1)
+          content = content.replace(inc_old, inc_new, 1).replace(old, new, 1)
+          with open(path, 'w') as f:
+              f.write(content)
+          print(f'patched {path}')
+          PYEOF
+        executable: /bin/bash
+      become: true
+      register: ptrace_gate_patch
+      changed_when: "'patched /' in ptrace_gate_patch.stdout"
+
+    # amdgpu_dm_set_panel_type() is gated on HAVE_DRM_DISPLAY_INFO_AMD_VSDB,
+    # whose probe cites a commit that did merge, at v6.19 -- but the body uses
+    # display_info->panel_type and DRM_MODE_PANEL_TYPE_LCD, which are
+    # AMD-downstream only and never merged upstream. So on any mainline kernel
+    # >= 6.19 the probe says yes and the build then fails on two things that
+    # are not there. Probe the member and the constant separately and guard
+    # each use. A plain bug in amdgpu, independent of this lane.
+    # From ROCm/hipObject ci/ernic/patches/amdgpu/0002.
+    - name: Patch amdgpu panel_type probes to test the member and the constant
+      ansible.builtin.shell:
+        cmd: |
+          python3 - << 'PYEOF'
+          import glob, sys
+          srcs = sorted(glob.glob('/usr/src/amdgpu-*'))
+          if not srcs:
+              print('no amdgpu DKMS source found', file=sys.stderr)
+              sys.exit(1)
+          root = srcs[-1]
+          m4 = root + '/amd/dkms/m4/drm-display-info.m4'
+          c = root + '/amd/display/amdgpu_dm/amdgpu_dm_connector.c'
+
+          with open(m4) as f:
+              m4_content = f.read()
+          with open(c) as f:
+              c_content = f.read()
+          if 'HAVE_DRM_DISPLAY_INFO_PANEL_TYPE' in m4_content:
+              print('already patched')
+              sys.exit(0)
+
+          probes = '''
+          AC_DEFUN([AC_AMDGPU_DRM_DISPLAY_INFO_PANEL_TYPE], [
+          \tAC_KERNEL_DO_BACKGROUND([
+          \t\tAC_KERNEL_TRY_COMPILE([
+          \t\t\t#include <drm/drm_connector.h>
+          \t\t], [
+          \t\t\tstruct drm_display_info *display_info = NULL;
+          \t\t\tdisplay_info->panel_type = DRM_MODE_PANEL_TYPE_LCD;
+          \t\t], [
+          \t\t\tAC_DEFINE(HAVE_DRM_DISPLAY_INFO_PANEL_TYPE, 1,
+          \t\t\t\t[display_info->panel_type is available])
+          \t\t])
+          \t])
+          ])
+
+          AC_DEFUN([AC_AMDGPU_DRM_MODE_PANEL_TYPE_LCD], [
+          \tAC_KERNEL_DO_BACKGROUND([
+          \t\tAC_KERNEL_TRY_COMPILE([
+          \t\t\t#include <uapi/drm/drm_mode.h>
+          \t\t], [
+          \t\t\tint v = DRM_MODE_PANEL_TYPE_LCD;
+          \t\t\t(void)v;
+          \t\t], [
+          \t\t\tAC_DEFINE(HAVE_DRM_MODE_PANEL_TYPE_LCD, 1,
+          \t\t\t\t[DRM_MODE_PANEL_TYPE_LCD is available])
+          \t\t])
+          \t])
+          ])
+
+          '''.replace('\n          ', '\n').lstrip('\n')
+
+          anchor = 'AC_DEFUN([AC_AMDGPU_DRM_DISPLAY_INFO], ['
+          call = '\tAC_AMDGPU_DRM_DISPLAY_INFO_AMD_VSDB\n'
+          if anchor not in m4_content or call not in m4_content:
+              print(f'target string not found in {m4}', file=sys.stderr)
+              sys.exit(1)
+          m4_content = m4_content.replace(anchor, probes + anchor, 1)
+          m4_content = m4_content.replace(
+              call,
+              call + '\tAC_AMDGPU_DRM_DISPLAY_INFO_PANEL_TYPE\n'
+                     '\tAC_AMDGPU_DRM_MODE_PANEL_TYPE_LCD\n', 1)
+
+          did_old = ('\tif (panel_type == PANEL_TYPE_NONE) {\n'
+                     '\t\tif (display_info->panel_type == DRM_MODE_PANEL_TYPE_LCD)\n'
+                     '\t\t\tpanel_type = PANEL_TYPE_LCD;\n'
+                     '\t\telse if (display_info->panel_type == DRM_MODE_PANEL_TYPE_OLED)\n'
+                     '\t\t\tpanel_type = PANEL_TYPE_OLED;\n'
+                     '\t}\n')
+          did_new = ('#ifdef HAVE_DRM_DISPLAY_INFO_PANEL_TYPE\n' + did_old + '#endif\n')
+
+          set_old = ('\telse if (link->panel_type == PANEL_TYPE_LCD)\n'
+                     '\t\tdrm_object_property_set_value(&connector->base,\n'
+                     '\t\t    adev_to_drm(adev)->mode_config.panel_type_property,\n'
+                     '\t\t    DRM_MODE_PANEL_TYPE_LCD);\n')
+          set_new = ('#ifdef HAVE_DRM_MODE_PANEL_TYPE_LCD\n' + set_old + '#endif\n')
+
+          if did_old not in c_content or set_old not in c_content:
+              print(f'target string not found in {c}', file=sys.stderr)
+              sys.exit(1)
+          c_content = c_content.replace(did_old, did_new, 1)
+          c_content = c_content.replace(set_old, set_new, 1)
+
+          with open(m4, 'w') as f:
+              f.write(m4_content)
+          with open(c, 'w') as f:
+              f.write(c_content)
+          print(f'patched {m4} and {c}')
+          PYEOF
+        executable: /bin/bash
+      become: true
+      register: panel_type_patch
+      changed_when: "'patched /' in panel_type_patch.stdout"
+
+    # In the combined lane the postinst's build for the running 7.2.4 kernel was
+    # allowed to fail (see "Let a failing DKMS build not abort dpkg"), so there
+    # is no amdgpu for that kernel yet and this task is what supplies it. It
+    # therefore cannot be gated on a patch having changed alone -- on a re-run
+    # where the patches are already applied every *_patch.changed is false, and
+    # the guest would be left with no module. Build whenever a patch moved *or*
+    # there is no installed amdgpu for the running kernel.
+    - name: Check whether amdgpu DKMS is installed for the running kernel
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          dkms status amdgpu -k "$(uname -r)" 2>/dev/null \
+            | grep -c installed || true
+        executable: /bin/bash
+      become: true
+      register: amdgpu_dkms_installed
+      changed_when: false
+
     - name: Rebuild DKMS amdgpu module after source patches
       ansible.builtin.shell:
         cmd: |
@@ -412,6 +629,26 @@
         executable: /bin/bash
       become: true
       when: atomics_patch.changed or ras_vbios_patch.changed
+            or ptrace_gate_patch.changed or panel_type_patch.changed
+            or amdgpu_dkms_installed.stdout | trim == '0'
+
+    # amdgpu is now built for the running kernel, so drop the escape hatch
+    # rather than leave it swallowing every later DKMS failure in the image.
+    - name: Restore fatal DKMS build errors
+      ansible.builtin.file:
+        path: /etc/dkms/no-autoinstall-errors
+        state: absent
+      become: true
+
+    # The postinst's failed 7.2.4 build left amdgpu-dkms half-configured, and
+    # apt refuses further work until dpkg is settled. Everything it needs is in
+    # place by now: the source is patched and the module is built and installed
+    # for the running kernel, so the postinst's own build finds it already done.
+    - name: Settle any package left half-configured by the DKMS build
+      ansible.builtin.command:
+        cmd: dpkg --configure -a
+      become: true
+      changed_when: false
 
     - name: Regenerate initramfs so the amdgpu blacklist and stubs take effect
       ansible.builtin.command:
@@ -420,10 +657,30 @@
       when: rocjitsu_update_initramfs | bool
       changed_when: true
 
-    - name: Install rocBLAS dev package
+    # amdrocm-blas-dev ships headers and the unversioned librocblas.so symlink
+    # and nothing else -- it is 6 MB installed and depends only on libc6, so
+    # installing it alone leaves librocblas.so.5 absent and every DT_NEEDED on
+    # it dangling. That is what made `rvs -g` exit 127 with "librocblas.so.5:
+    # cannot open shared object file" once libomp.so was resolved. The library
+    # lives in amdrocm-blas-host<ver>, which nothing else pulls in: the only
+    # meta that depends on it, amdrocm-blas, also drags in all 26 per-gfx
+    # device-library packages at ~66 MB each.
+    #
+    # The package name carries the ROCm major.minor, so derive it from the
+    # prefix resolved above rather than pinning it here. If that fell back to
+    # a bare /opt/rocm the name comes out wrong and this task fails loudly,
+    # which is the right outcome -- hipcc and rocminfo are already broken by
+    # then.
+    #
+    # Host library only. This guest's RVS config is a properties smoke check
+    # and dispatches no GEMM; add amdrocm-blas<ver>-gfx1250 if one ever does.
+    - name: Install rocBLAS
       ansible.builtin.package:
         name:
           - amdrocm-blas-dev
+          - >-
+            amdrocm-blas-host{{ rocjitsu_rocm_prefix | basename
+                                | regex_replace('^core-', '') }}
         state: present
         update_cache: false
       become: true

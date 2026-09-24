@@ -147,12 +147,27 @@ jobs:
           "dkms status amdgpu | grep -q installed"
         echo "✓ amdgpu DKMS module installed"
 
-    - name: Verify firmware stubs and amdgpu-probe present
+    # imu, not rlc_1, and one step each rather than an "&&" pair. Under the
+    # default "gap" firmware set the generator emits only what no driver
+    # release ships, and rlc_1 is not in that list -- it comes from
+    # amdgpu-dkms-firmware, which installs to /lib/firmware/updates/amdgpu/.
+    # So the old assertion named a file that is never written to the path it
+    # looked in, and being one half of an "&&" under "sh -e" it failed with
+    # nothing but "exit code 1", giving no way to tell which half was at
+    # fault. vm-rocjitsu.yml already splits these two.
+    - name: Verify firmware stubs present
       run: |
         ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
           -p 2222 ubuntu@qemu \
-          "test -f /lib/firmware/amdgpu/gc_12_1_0_rlc_1.bin && test -x /usr/local/bin/amdgpu-probe"
-        echo "✓ firmware stubs and amdgpu-probe present"
+          "test -f /lib/firmware/amdgpu/gc_12_1_0_imu.bin"
+        echo "✓ gfx1250 firmware stubs present"
+
+    - name: Verify amdgpu-probe installed
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@qemu \
+          "test -x /usr/local/bin/amdgpu-probe"
+        echo "✓ amdgpu-probe installed"
 
     - name: Run vm-ernic configure stage
       run: |
