@@ -72,7 +72,8 @@ jobs:
             release: resolute
             vm_name: qcow2-rocjitsu
             qcow2_filename: qemu-minimal-rocjitsu-resolute.qcow2
-            ansible_extra_args: -e rocm_setup_run_checks=false
+            ansible_extra_args: >-
+              -e {"rocm_setup_run_checks":false}
             compose_stack: vfio-user-rocjitsu-vm
             compose_profiles: '[]'
             health_services: '["rocjitsu"]'
@@ -89,7 +90,8 @@ jobs:
             release: resolute
             vm_name: qcow2-rocjitsu-hipfile-fio
             qcow2_filename: qemu-minimal-rocjitsu-hipfile-fio-resolute.qcow2
-            ansible_extra_args: -e rocm_setup_run_checks=false
+            ansible_extra_args: >-
+              -e {"rocm_setup_run_checks":false}
             compose_stack: vfio-user-rocjitsu-vm
             compose_profiles: '[]'
             health_services: '["rocjitsu"]'
@@ -124,9 +126,7 @@ jobs:
             vm_name: qcow2-ernic-rocjitsu
             qcow2_filename: qemu-minimal-ernic-rocjitsu-resolute.qcow2
             ansible_extra_args: >-
-              -e rocm_setup_run_checks=false
-              -e rocm_setup_install_kernel_driver=false
-              -e rocjitsu_firmware_set=full
+              -e {"rocm_setup_run_checks":false,"rocm_setup_install_kernel_driver":false,"rocjitsu_firmware_set":"full"}
             compose_stack: vfio-user-ernic-rocjitsu-vm
             compose_profiles: '[]'
             health_services: '["ernic","rocjitsu"]'
@@ -209,7 +209,8 @@ jobs:
             release: resolute
             vm_name: qcow2-rocjitsu
             qcow2_filename: qemu-minimal-rocjitsu-resolute.qcow2
-            ansible_extra_args: -e rocm_setup_run_checks=false
+            ansible_extra_args: >-
+              -e {"rocm_setup_run_checks":false}
             compose_stack: vfio-user-rocjitsu-vm
             compose_profiles: '[]'
             health_services: '["rocjitsu"]'
@@ -226,7 +227,8 @@ jobs:
             release: resolute
             vm_name: qcow2-rocjitsu-hipfile-fio
             qcow2_filename: qemu-minimal-rocjitsu-hipfile-fio-resolute.qcow2
-            ansible_extra_args: -e rocm_setup_run_checks=false
+            ansible_extra_args: >-
+              -e {"rocm_setup_run_checks":false}
             compose_stack: vfio-user-rocjitsu-vm
             compose_profiles: '[]'
             health_services: '["rocjitsu"]'
@@ -261,9 +263,7 @@ jobs:
             vm_name: qcow2-ernic-rocjitsu
             qcow2_filename: qemu-minimal-ernic-rocjitsu-resolute.qcow2
             ansible_extra_args: >-
-              -e rocm_setup_run_checks=false
-              -e rocm_setup_install_kernel_driver=false
-              -e rocjitsu_firmware_set=full
+              -e {"rocm_setup_run_checks":false,"rocm_setup_install_kernel_driver":false,"rocjitsu_firmware_set":"full"}
             compose_stack: vfio-user-ernic-rocjitsu-vm
             compose_profiles: '[]'
             health_services: '["ernic","rocjitsu"]'
