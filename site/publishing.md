@@ -11,7 +11,7 @@ The published site is built from two sources:
 1. Repository-owned Pages content under <code>site/</code>.
 2. The latest unexpired report artifacts uploaded by the report workflows.
 
-The <code>publish-pages.yml</code> workflow copies the repository-owned site into a
+The <code>qemu-minimal-publish-pages.yml</code> workflow copies the repository-owned site into a
 staging tree, fetches each report artifact by name, and then syncs the staged
 content onto the <code>gh-pages</code> branch.
 
@@ -31,8 +31,9 @@ retained trends over time.
 ## Adding another report lane
 
 1. Upload the lane output under its own stable artifact name.
-2. Teach <code>publish-pages.yml</code> to fetch that artifact into a dedicated path.
-3. Add the workflow name to the <code>workflow_run</code> trigger list.
+2. Teach <code>qemu-minimal-publish-pages.yml</code> to fetch that artifact into a dedicated path.
+3. Add the lane's workflow <code>name:</code> &mdash; not its filename &mdash; to the
+   <code>workflow_run</code> trigger list.
 4. Add the lane to the report index and, if it exposes numeric badges, to the
    performance renderer.
 

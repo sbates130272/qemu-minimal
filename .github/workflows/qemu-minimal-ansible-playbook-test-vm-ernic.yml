@@ -1,4 +1,4 @@
-name: qemu-minimal - ansible-playbook-test-ernic
+name: qemu-minimal - Ansible Playbook Test - vm-ernic
 
 # vm-ernic: install the ernic driver, boot with the ernic compose stack,
 # configure the NIC. Runs inside the QEMU CI image; the docker socket is
@@ -9,17 +9,17 @@ on:
   pull_request:
     branches:
       - main
+    # 'qemu/qemu-tool/**' and 'qemu/pyproject.toml' are deliberately absent --
+    # see the note in qemu-minimal-ansible-playbook-test-vm-rocjitsu.yml.
     paths:
       - 'ansible/playbooks/vm-ernic.yml'
       - 'ansible/playbooks/roles/**'
       - '!ansible/playbooks/roles/rocjitsu_gpu_test/**'
       - 'ansible/playbooks/vars/ernic-pins.yml'
       - 'ansible/requirements.yml'
-      - 'qemu/qemu-tool/**'
-      - 'qemu/pyproject.toml'
       - 'qemu/compose/vfio-user-ernic-vm/**'
       - '.github/actions/setup-vm-job/action.yml'
-      - '.github/workflows/ansible-playbook-test-ernic.yml'
+      - '.github/workflows/qemu-minimal-ansible-playbook-test-vm-ernic.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -33,7 +33,7 @@ env:
 
 jobs:
   test-vm-ernic:
-    name: test-vm-ernic
+    name: Ansible Playbook Test - vm-ernic
     runs-on: ubuntu-latest
     timeout-minutes: 120
     container:

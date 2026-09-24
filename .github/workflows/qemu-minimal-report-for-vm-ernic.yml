@@ -1,15 +1,31 @@
-name: qemu-minimal - vm-report-two-vms
+name: qemu-minimal - Report for vm-ernic
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'ansible/playbooks/vm-ernic.yml'
+      - 'ansible/playbooks/roles/**'
+      - 'ansible/playbooks/vars/ernic-pins.yml'
+      - 'qemu/qemu-tool/**'
+      - 'qemu/pyproject.toml'
+      - 'qemu/compose/vfio-user-ernic-2vm/**'
+      - 'scripts/generate-vm-report.sh'
+      - '.github/actions/setup-vm-job/action.yml'
+      - '.github/workflows/qemu-minimal-report-for-vm-ernic.yml'
+      - '.github/workflows/qemu-minimal-publish-pages.yml'
+  # Daily at 01:00 MST alongside the other three report lanes -- see
+  # report-for-vm-basic.yml.
   schedule:
-    - cron: '0 5 * * 1'
+    - cron: '0 8 * * *'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: vm-report-two-vms
+  group: vm-report-ernic
   cancel-in-progress: true
 
 env:
@@ -17,12 +33,12 @@ env:
   ROCJITSU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20260921.gb3399b3-rocjitsu.8e01a5a
   QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260919.g359579e-qemu11.1.1-vfu.8039244
   VM_IMAGES_DIR: /var/lib/qemu-tool/images
-  VM1_NAME: 2vm-report-1
-  VM2_NAME: 2vm-report-2
+  VM1_NAME: ernic-report-1
+  VM2_NAME: ernic-report-2
 
 jobs:
-  generate-2vm-report:
-    name: generate-vm-report-two-vms
+  generate-ernic-report:
+    name: Report for vm-ernic
     runs-on: ubuntu-latest
     container:
       image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260919.g359579e-qemu11.1.1-vfu.8039244
@@ -83,7 +99,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: ${{ env.VM_IMAGES_DIR }}/*-server-cloudimg-*.img
-        key: cloud-img-amd64-noble-2vm-report
+        key: cloud-img-amd64-noble-ernic-report
 
     - name: Ensure images directory exists
       run: mkdir -p "$VM_IMAGES_DIR" && chmod 777 "$VM_IMAGES_DIR"
@@ -121,7 +137,7 @@ jobs:
         docker pull "$ROCJITSU_IMAGE"
         docker pull "$QEMU_IMAGE"
 
-    # See smoke-test-rocm-two-vms.yml: the compose defaults are per-guest, so
+    # See smoke-test-rocm-ernic.yml: the compose defaults are per-guest, so
     # taking them uses the whole runner. Derive from it instead.
     - name: Size the guests from the runner
       env:
@@ -219,15 +235,15 @@ jobs:
             -vv -p 2222 ubuntu@qemu-2 true 2>&1 | tail -30 || true
         exit 1
 
-    # Into site/two-vm, not site: the checkout already populated site/ with the
+    # Into site/ernic, not site: the checkout already populated site/ with the
     # repository-owned pages, and uploading that whole tree would publish a
-    # nested copy of the site under two-vm/ on gh-pages.
+    # nested copy of the site under ernic/ on gh-pages.
     - name: Generate VM 1 report
-      run: bash scripts/generate-vm-report.sh site/two-vm 2222 ubuntu "VM 1" qemu-1
+      run: bash scripts/generate-vm-report.sh site/ernic 2222 ubuntu "VM 1" qemu-1
 
     - name: Generate VM 2 report
       run: >-
-        bash scripts/generate-vm-report.sh site/two-vm/vm2 2222 ubuntu
+        bash scripts/generate-vm-report.sh site/ernic/vm2 2222 ubuntu
         "VM 2" qemu-2
 
     - name: Show compose logs on failure
@@ -237,11 +253,11 @@ jobs:
 
     # Upload only. publish-pages.yml is the sole writer of the site; this
     # lane used to call deploy-pages itself, and a Pages deploy replaces the
-    # whole site, so it and vm-report-two-vms erased each other's report.
+    # whole site, so it and vm-report erased each other's report.
     # No Jekyll build here either: the branch source builds the markdown.
     - name: Upload the report
       uses: actions/upload-artifact@v4
       with:
-        name: vm-report-2vm
-        path: site/two-vm/
+        name: vm-report-ernic
+        path: site/ernic/
         if-no-files-found: error

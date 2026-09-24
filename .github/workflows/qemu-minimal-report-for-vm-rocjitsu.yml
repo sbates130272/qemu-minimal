@@ -1,5 +1,22 @@
-name: qemu-minimal - vm-report-rocjitsu
+name: qemu-minimal - Report for vm-rocjitsu
 
+# Produces BOTH rocjitsu reports -- the GEMM/hipFile one under site/rocjitsu/
+# and the fio libhipfile one under site/hipfile-fio/ -- from a single guest.
+#
+# They were two lanes until they were merged. The two gen-vm invocations were
+# byte-identical apart from --vm-name, and gen-vm is ~90% of the lane (2866s of
+# 3200s on run 35787709858), so the split cost a full extra guest build, ~50
+# minutes, every night for nothing.
+#
+# The original split had two stated reasons. "The two can move on separate
+# schedules" stopped being true when all four report lanes moved to 0 8 * * *.
+# "A fio-side regression cannot take the GEMM and hipFile badges down with it"
+# is preserved here instead by structure: each report step is
+# continue-on-error and each upload runs under if: always(), so a failure in
+# one benchmark still publishes the other. publish-pages fetches each lane's
+# newest artifact BY NAME, so both artifact names must keep being uploaded --
+# vm-report-rocjitsu and vm-report-hipfile-fio -- or that section of the site
+# silently freezes.
 on:
   push:
     branches:
@@ -13,11 +30,13 @@ on:
       - 'scripts/generate-vm-report.sh'
       - 'scripts/vm-report/**'
       - '.github/actions/setup-vm-job/action.yml'
-      - '.github/workflows/vm-report-rocjitsu.yml'
-      - '.github/workflows/publish-pages.yml'
+      - '.github/workflows/qemu-minimal-report-for-vm-rocjitsu.yml'
+      - '.github/workflows/qemu-minimal-publish-pages.yml'
       - 'README.md'
+  # Daily at 01:00 MST alongside the other three report lanes -- see
+  # report-for-vm-basic.yml.
   schedule:
-    - cron: '0 4 * * 1'
+    - cron: '0 8 * * *'
   workflow_dispatch:
 
 permissions:
@@ -35,9 +54,11 @@ env:
 
 jobs:
   generate-rocjitsu-report:
-    name: generate-vm-report-rocjitsu
+    name: Report for vm-rocjitsu
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    # 180 rather than the old lane's 150: one guest now carries both benchmarks,
+    # and the fio one builds fio from source in-guest.
+    timeout-minutes: 180
     container:
       image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260919.g359579e-qemu11.1.1-vfu.8039244
       options: >-
@@ -126,9 +147,9 @@ jobs:
           -p 2222 ubuntu@qemu "sudo -n timeout 120 /usr/local/bin/amdgpu-probe"
         echo "✓ amdgpu-probe completed"
 
-    # Reuse the same live-guest validation path as the PR-only rocjitsu test
-    # workflow used to, but run it here on the mainline Pages-report lane
-    # instead. The role owns the HIP, hsa-snoop and RVS smoke checks.
+    # The same live-guest validation the PR gate in
+    # qemu-minimal-ansible-playbook-test-vm-rocjitsu.yml runs, repeated here on
+    # the merged tree. The role owns the HIP, hsa-snoop and RVS smoke checks.
     - name: Run rocjitsu live-guest validation
       timeout-minutes: 30
       run: |
@@ -141,19 +162,65 @@ jobs:
           -e "ansible_user=ubuntu" \
           -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"'
 
+    # Both benchmarks run against the one guest. continue-on-error on each,
+    # paired with if: always() on its upload, is what keeps the two badges
+    # independent now that they share a lane -- a fio-side regression must not
+    # take the GEMM and hipFile report down with it, which was the reason the
+    # two lanes were separate in the first place.
     - name: Generate rocjitsu report
+      id: rocjitsu-report
+      continue-on-error: true
       env:
         REPORT_ROCJITSU_BENCH: "1"
       run: bash scripts/generate-vm-report.sh site/rocjitsu 2222 ubuntu "rocjitsu VM" qemu
 
-    - name: Show compose logs on failure
-      if: failure()
-      working-directory: qemu/compose/vfio-user-rocjitsu-vm
-      run: docker compose logs
-
-    - name: Upload the report
+    - name: Upload the rocjitsu report
+      if: always() && steps.rocjitsu-report.outcome == 'success'
       uses: actions/upload-artifact@v4
       with:
         name: vm-report-rocjitsu
         path: site/rocjitsu/
         if-no-files-found: error
+
+    - name: Generate hipFile fio report
+      id: hipfile-fio-report
+      continue-on-error: true
+      env:
+        REPORT_HIPFILE_FIO_BENCH: "1"
+      run: bash scripts/generate-vm-report.sh site/hipfile-fio 2222 ubuntu "hipFile fio VM" qemu
+
+    - name: Upload the hipFile fio report
+      if: always() && steps.hipfile-fio-report.outcome == 'success'
+      uses: actions/upload-artifact@v4
+      with:
+        name: vm-report-hipfile-fio
+        path: site/hipfile-fio/
+        if-no-files-found: error
+
+    - name: Show compose logs on failure
+      if: failure() || steps.rocjitsu-report.outcome == 'failure'
+        || steps.hipfile-fio-report.outcome == 'failure'
+      working-directory: qemu/compose/vfio-user-rocjitsu-vm
+      run: docker compose logs
+
+    # continue-on-error above keeps the job green, so fail it explicitly when
+    # either benchmark failed -- otherwise publish-pages, which gates on
+    # workflow_run conclusion == success, would publish a stale half-report as
+    # though the run had been clean.
+    - name: Fail if either report failed
+      if: always()
+      run: |
+        set -euo pipefail
+        rc=0
+        for pair in \
+          "rocjitsu:${{ steps.rocjitsu-report.outcome }}" \
+          "hipfile-fio:${{ steps.hipfile-fio-report.outcome }}"
+        do
+          name=${pair%%:*}
+          outcome=${pair#*:}
+          if [ "${outcome}" != "success" ]; then
+            echo "::error::${name} report failed (${outcome})"
+            rc=1
+          fi
+        done
+        exit "${rc}"

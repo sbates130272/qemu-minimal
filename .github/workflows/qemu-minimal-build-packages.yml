@@ -1,4 +1,4 @@
-name: qemu-minimal - package
+name: qemu-minimal - Build Packages
 
 # Build both shipping artifacts -- the python3-qemu-tool deb and the wheel --
 # and prove each one works where it lands. The release workflow only built
@@ -7,22 +7,20 @@ name: qemu-minimal - package
 # nothing guarantees exists, and a wheel carrying no compose stacks or package
 # manifests at all. None of those show up in a build's exit status -- only in
 # an install -- so both artifacts get installed and exercised here, on every
-# PR that touches the package.
+# PR.
 
+# PR only, and unfiltered at the workflow level: these are required checks, and
+# a path-filtered required check never reports on a PR outside its filter,
+# leaving the PR blocked forever. See qemu-minimal-shell-check.yml.
+#
+# The filtering happens at JOB level instead, via the "changes" job below. A
+# skipped job still reports its context and branch protection counts it as
+# passing, so a docs-only PR no longer pays this lane's ~7m.
 on:
   workflow_dispatch:
   pull_request:
     branches:
       - main
-    paths:
-      - 'qemu/**'
-      - '.github/workflows/package.yml'
-  push:
-    branches:
-      - main
-    paths:
-      - 'qemu/**'
-      - '.github/workflows/package.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -31,10 +29,31 @@ concurrency:
 
 permissions:
   contents: read
+  # paths-changed reads the PR's file list through the REST API.
+  pull-requests: read
 
 jobs:
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.filter.outputs.changed }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4.3.1
+      - name: Filter paths
+        id: filter
+        uses: ./.github/actions/paths-changed
+        with:
+          patterns: |
+            qemu/**
+            .github/actions/paths-changed/action.yml
+            .github/workflows/qemu-minimal-build-packages.yml
+
   build:
-    name: build-deb
+    name: Build Deb
+    needs: changes
+    if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Check out code
@@ -119,7 +138,7 @@ jobs:
           if-no-files-found: error
 
   install:
-    name: install-smoke-test (${{ matrix.kvm-group }})
+    name: Install Smoke Test (${{ matrix.kvm-group }})
     needs: build
     runs-on: ubuntu-latest
     strategy:
@@ -274,7 +293,9 @@ jobs:
             || { echo "::error::reinstall overwrote /etc/qemu-tool/env"; exit 1; }
 
   build-wheel:
-    name: build-wheel
+    name: Build Wheel
+    needs: changes
+    if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Check out code
@@ -336,7 +357,7 @@ jobs:
           if-no-files-found: error
 
   wheel-install:
-    name: wheel-smoke-test
+    name: Wheel Smoke Test
     needs: build-wheel
     runs-on: ubuntu-latest
     # A bare python image, so there is no /usr/share/qemu-tool, no apt-

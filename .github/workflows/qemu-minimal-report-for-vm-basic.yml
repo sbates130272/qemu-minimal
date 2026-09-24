@@ -1,11 +1,17 @@
-name: qemu-minimal - vm-report
+name: qemu-minimal - Report for vm-basic
 
+# The report lanes all share one shape: push to main, a daily cron, and manual.
+# Push, because a report describes the merged tree and there is nothing to
+# publish from a PR head. All four crons fire together at 01:00 MST (08:00 UTC,
+# MST being a fixed -07:00 with no DST) rather than staggered across the small
+# hours. This one is unfiltered -- it is the post-merge canary, and at ~3m it is
+# cheap enough to run on every merge.
 on:
   push:
     branches:
       - main
   schedule:
-    - cron: '0 3 * * 1'
+    - cron: '0 8 * * *'
   workflow_dispatch:
 
 permissions:
@@ -17,7 +23,7 @@ concurrency:
 
 jobs:
   generate-report:
-    name: generate-vm-report
+    name: Report for vm-basic
     runs-on: ubuntu-latest
     container:
       image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260919.g359579e-qemu11.1.1-vfu.8039244
@@ -131,7 +137,7 @@ jobs:
 
     # Upload only. publish-pages.yml is the sole writer of the site; this
     # lane used to call deploy-pages itself, and a Pages deploy replaces the
-    # whole site, so it and vm-report-two-vms erased each other's report.
+    # whole site, so it and vm-report-ernic erased each other's report.
     # No Jekyll build here either: the branch source builds the markdown.
     - name: Upload the report
       uses: actions/upload-artifact@v4

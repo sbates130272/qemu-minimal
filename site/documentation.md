@@ -48,10 +48,10 @@ permalink: /documentation/
 
 | Workflow | Published path | Notes |
 | --- | --- | --- |
-| `vm-report` | `/1vm/` | General single-VM guest inspection. |
-| `vm-report-rocjitsu` | `/rocjitsu/` | rocjitsu VM report with GEMM and hipFile benchmark output. |
-| `vm-report-two-vms` | `/two-vm/` and `/two-vm/vm2/` | ernic stack reports for VM 1 and VM 2. |
-| `vm-report-hipfile-fio` | `/hipfile-fio/` | fio `libhipfile` benchmark report. |
+| `report-for-vm-basic` | `/1vm/` | General single-VM guest inspection. |
+| `report-for-vm-rocjitsu` | `/rocjitsu/` | rocjitsu VM report with GEMM and hipFile benchmark output. |
+| `report-for-vm-ernic` | `/ernic/` and `/ernic/vm2/` | ernic stack reports for VM 1 and VM 2. |
+| `report-for-hipfile-fio` | `/hipfile-fio/` | fio `libhipfile` benchmark report. |
 
 ## Notes
 

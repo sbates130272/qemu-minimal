@@ -1,4 +1,4 @@
-name: qemu-minimal - dry-run-qemu-tool
+name: qemu-minimal - Dry Run - qemu-tool
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ on:
       - 'qemu/qemu-tool/**'
       - 'qemu/pyproject.toml'
       - 'qemu/compose/**'
-      - '.github/workflows/qemu-tool-dry-run.yml'
+      - '.github/workflows/qemu-minimal-dry-run-qemu-tool.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -19,7 +19,7 @@ concurrency:
 jobs:
 
   dry-run-tests:
-    name: dry-run-tests
+    name: Dry Run Tests
     runs-on: ubuntu-latest
     container: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260919.g359579e-qemu11.1.1-vfu.8039244
     steps:
@@ -639,7 +639,7 @@ jobs:
         echo "✓ /proc robustness passed"
 
   compose-tests:
-    name: compose-tests
+    name: Compose Tests
     runs-on: ubuntu-latest
     steps:
     - name: Check out code

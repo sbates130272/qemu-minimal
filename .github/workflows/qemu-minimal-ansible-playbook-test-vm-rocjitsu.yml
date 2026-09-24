@@ -1,10 +1,33 @@
-name: qemu-minimal - ansible-playbook-test-rocjitsu
+name: qemu-minimal - Ansible Playbook Test - vm-rocjitsu
 
 # vm-rocjitsu: install firmware stubs + driver, boot with the rocjitsu compose
 # stack, load amdgpu via amdgpu-probe, then run HIP workloads on the result.
 
+# The PR gate for the emulated GPU. Path-filtered and deliberately NOT a
+# required check: a GPU regression should be visible before merge rather than
+# an hour later in vm-report-rocjitsu, which is how the RVS break in #154
+# landed.
 on:
   workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    # No 'qemu/qemu-tool/**' or 'qemu/pyproject.toml' here on purpose. This
+    # lane exercises the playbook, not the CLI; a gen-vm regression surfaces in
+    # Smoke Test - qemu-tool in ~2 minutes and in Dry Run - qemu-tool in ~3,
+    # both of which do filter on those paths. Listing them here cost ~140
+    # runner-minutes across the four playbook lanes for every qemu-tool edit.
+    paths:
+      - 'ansible/playbooks/vm-rocjitsu.yml'
+      - 'ansible/playbooks/roles/**'
+      # ionic_image_prep is ernic-only; editing it should not cost 50 minutes
+      # of GPU lane. The ernic lane already excludes rocjitsu_gpu_test
+      # symmetrically.
+      - '!ansible/playbooks/roles/ionic_image_prep/**'
+      - 'ansible/requirements.yml'
+      - 'qemu/compose/vfio-user-rocjitsu-vm/**'
+      - '.github/actions/setup-vm-job/action.yml'
+      - '.github/workflows/qemu-minimal-ansible-playbook-test-vm-rocjitsu.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -18,7 +41,7 @@ env:
 
 jobs:
   test-vm-rocjitsu:
-    name: test-vm-rocjitsu
+    name: Ansible Playbook Test - vm-rocjitsu
     runs-on: ubuntu-latest
     timeout-minutes: 120
     container:

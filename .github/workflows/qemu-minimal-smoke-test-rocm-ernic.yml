@@ -1,4 +1,4 @@
-name: qemu-minimal - smoke-test-rocm-two-vms
+name: qemu-minimal - Smoke Test - rocm-ernic
 
 on:
   workflow_dispatch:
@@ -10,9 +10,11 @@ on:
       - 'qemu/pyproject.toml'
       - 'qemu/compose/**'
       - 'ansible/**'
-      - '.github/workflows/smoke-test-rocm-two-vms.yml'
+      - '.github/workflows/qemu-minimal-smoke-test-rocm-ernic.yml'
+  # Monday only, and ahead of the nightly report lanes: all four of those now
+  # fire together at 08:00 and this wants a KVM-capable runner to itself.
   schedule:
-    - cron: '0 4 * * 1'
+    - cron: '7 7 * * 1'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -30,7 +32,7 @@ env:
 jobs:
 
   smoke-test-2vm:
-    name: smoke-test-2vm
+    name: Smoke Test - rocm-ernic
     runs-on: ubuntu-latest
     container:
       image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260919.g359579e-qemu11.1.1-vfu.8039244

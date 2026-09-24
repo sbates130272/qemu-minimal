@@ -1,30 +1,34 @@
-name: qemu-minimal - ansible-playbook-test-ernic-rocjitsu
+name: qemu-minimal - Ansible Playbook Test - vm-ernic-rocjitsu
 
 # vm-ernic-rocjitsu: combined image, boot with the full single-VM compose stack,
 # verify both the ernic NIC and the GPU.
 
-# Manual only for now. This lane was parked carrying two failures; one is gone.
-# The ernic DKMS failure against the guest's 7.0.0-31-generic kernel is fixed --
-# ionic_image_prep installs the pinned mainline kernel, and the ionic lane has
-# been green since b501f18. What remains is the rocjitsu amdgpu-probe hang,
-# which still burns ~50 minutes of a runner per push to fail the same way each
-# time. Restore the trigger below once that hang is fixed or bounded (the step
-# needs a timeout-minutes and a dmesg dump before it is worth running on PRs).
+# This lane was parked carrying two failures. The ernic DKMS failure against
+# the guest's 7.0.0-31-generic kernel is fixed -- ionic_image_prep installs the
+# pinned mainline kernel, and the ionic lane has been green since b501f18. The
+# parking note also cited a rocjitsu amdgpu-probe hang burning ~50 minutes per
+# run, but the last run (35783675534) failed in 12 minutes inside the playbook
+# step, so whatever remains is not that hang. The PR trigger is restored on
+# that basis; if a ~50m hang reappears, bound the probe step with a
+# timeout-minutes and a dmesg dump rather than parking the lane again.
+#
+# Not a required check -- it is the slowest lane here and fires on any
+# ansible/playbooks/roles change.
 on:
   workflow_dispatch:
-  # pull_request:
-  #   branches:
-  #     - main
-  #   paths:
-  #     - 'ansible/playbooks/vm-ernic-rocjitsu.yml'
-  #     - 'ansible/playbooks/vm-ernic.yml'
-  #     - 'ansible/playbooks/vm-rocjitsu.yml'
-  #     - 'ansible/requirements.yml'
-  #     - 'qemu/qemu-tool/**'
-  #     - 'qemu/pyproject.toml'
-  #     - 'qemu/compose/vfio-user-ernic-rocjitsu-vm/**'
-  #     - '.github/actions/setup-vm-job/action.yml'
-  #     - '.github/workflows/ansible-playbook-test-ernic-rocjitsu.yml'
+  pull_request:
+    branches:
+      - main
+    # 'qemu/qemu-tool/**' and 'qemu/pyproject.toml' are deliberately absent --
+    # see the note in qemu-minimal-ansible-playbook-test-vm-rocjitsu.yml.
+    paths:
+      - 'ansible/playbooks/vm-ernic-rocjitsu.yml'
+      - 'ansible/playbooks/vm-ernic.yml'
+      - 'ansible/playbooks/vm-rocjitsu.yml'
+      - 'ansible/requirements.yml'
+      - 'qemu/compose/vfio-user-ernic-rocjitsu-vm/**'
+      - '.github/actions/setup-vm-job/action.yml'
+      - '.github/workflows/qemu-minimal-ansible-playbook-test-vm-ernic-rocjitsu.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -39,7 +43,7 @@ env:
 
 jobs:
   test-vm-ernic-rocjitsu:
-    name: test-vm-ernic-rocjitsu
+    name: Ansible Playbook Test - vm-ernic-rocjitsu
     runs-on: ubuntu-latest
     timeout-minutes: 120
     container:
@@ -86,7 +90,7 @@ jobs:
       env:
         VM_NAME: ernic-rocjitsu-test
         QEMU_TOOL_SRC: /var/lib/qemu-tool/src
-        # See ansible-playbook-test-ernic.yml: ionic_create_rdma_admin()
+        # See ansible-playbook-test-vm-ernic.yml: ionic_create_rdma_admin()
         # hard-fails below 4 online CPUs, so this lane cannot run ionic_rdma
         # at 2 either.
         VM_VCPUS: "4"
@@ -161,7 +165,7 @@ jobs:
           -e "ansible_user=ubuntu" \
           -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"'
 
-    # Same rename as in ansible-playbook-test-ernic.yml: ionic mode builds
+    # Same rename as in ansible-playbook-test-vm-ernic.yml: ionic mode builds
     # ionic and ionic_rdma, and the rocm_ernic module this named is gone.
     - name: Verify ionic modules loaded and NIC visible
       run: |
@@ -172,7 +176,7 @@ jobs:
           -p 2222 ubuntu@qemu "ip link show | grep -q rocm-ernic0"
         echo "✓ rocm-ernic0 interface present"
 
-    # See ansible-playbook-test-ernic.yml: a device in ibv_devices can still
+    # See ansible-playbook-test-vm-ernic.yml: a device in ibv_devices can still
     # have its port down, so gate on PORT_ACTIVE the way upstream does.
     - name: Verify the RDMA port is active
       run: |
@@ -181,7 +185,7 @@ jobs:
         grep -q PORT_ACTIVE /tmp/ibv_devinfo.txt
         echo "✓ RDMA port active"
 
-    # See ansible-playbook-test-rocjitsu.yml: this step has hung and only died to
+    # See ansible-playbook-test-vm-rocjitsu.yml: this step has hung and only died to
     # the job-level timeout, with no diagnostic output. Bound at all three layers
     # -- the guest command, the ssh session and the step.
     - name: Load amdgpu via amdgpu-probe
@@ -200,7 +204,7 @@ jobs:
           -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
           -p 2222 ubuntu@qemu "sudo dmesg | tail -200" || true
 
-    # See ansible-playbook-test-rocjitsu.yml for why /dev/kfd is not a valid
+    # See ansible-playbook-test-vm-rocjitsu.yml for why /dev/kfd is not a valid
     # probe assertion: kfd_chardev_init() creates it before amdgpu_init()
     # registers the PCI driver, so it exists even when every probe fails.
     # Node 0 is the CPU and has an empty name; a bound GPU adds a named node.

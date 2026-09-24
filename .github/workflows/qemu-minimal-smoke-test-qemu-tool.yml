@@ -1,4 +1,4 @@
-name: qemu-minimal - smoke-test-qemu-tool
+name: qemu-minimal - Smoke Test - qemu-tool
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ on:
     paths:
       - 'qemu/qemu-tool/**'
       - 'qemu/pyproject.toml'
-      - '.github/workflows/qemu-tool-smoke-test.yml'
+      - '.github/workflows/qemu-minimal-smoke-test-qemu-tool.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -20,7 +20,7 @@ concurrency:
 jobs:
 
   smoke-test-x86:
-    name: smoke-test-x86-${{ matrix.release }}
+    name: Smoke Test - x86 ${{ matrix.release }}
     runs-on: ubuntu-latest
     container:
       image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260919.g359579e-qemu11.1.1-vfu.8039244
@@ -159,7 +159,7 @@ jobs:
         echo "✓ qemu-guest-agent installed in guest"
 
   smoke-test-arm64:
-    name: smoke-test-arm64
+    name: Smoke Test - arm64
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     steps:
@@ -193,7 +193,7 @@ jobs:
           --size 8
 
   smoke-test-riscv64:
-    name: smoke-test-riscv64
+    name: Smoke Test - riscv64
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     steps:
