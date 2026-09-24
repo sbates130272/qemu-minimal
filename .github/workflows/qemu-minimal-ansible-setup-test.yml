@@ -50,13 +50,12 @@ jobs:
     needs: changes
     if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
-    container: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260919.g359579e-qemu11.1.1-vfu.8039244
+    container: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260924.ge1cd640-qemu11.1.1-vfu.8039244
     steps:
     - name: Check out code
       uses: actions/checkout@v4.3.1
-    # ansible ships in the CI image at /usr/local/bin; only pip is missing.
-    - name: Install pip
-      run: apt-get update -qq && apt-get install -y -qq python3-pip
+    # ansible ships in the CI image at /usr/local/bin, and so does pip as of
+    # the 20260924.ge1cd640 pin above -- nothing left to install.
     # Resolve the path in the container; actions/cache expands ~ in Node on the
     # runner, ansible-galaxy expands it from $HOME in here, and the two are not
     # the same directory. See .github/actions/setup-vm-job/action.yml.
@@ -91,7 +90,7 @@ jobs:
     needs: syntax-check
     runs-on: ubuntu-latest
     container:
-      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260919.g359579e-qemu11.1.1-vfu.8039244
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260924.ge1cd640-qemu11.1.1-vfu.8039244
       # Supplies qemu-system-x86_64, qemu-img and cloud-localds.
       options: --device /dev/kvm
     timeout-minutes: 90

@@ -36,10 +36,23 @@ concurrency:
 
 env:
   ERNIC_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20260919.g959f0cf-ernic.0b48aa1-vfu.8039244
-  ROCJITSU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20260921.gb3399b3-rocjitsu.8e01a5a
-  QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260919.g359579e-qemu11.1.1-vfu.8039244
+  ROCJITSU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20260924.gad7a357-rocjitsu.c85bb75
+  QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260924.ge1cd640-qemu11.1.1-vfu.8039244
   VM_IMAGES_DIR: /var/lib/qemu-tool/images
-  ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false}'
+  # rocm_setup_skip_system_upgrade turns off the role's "upgrade: safe" +
+  # autoremove pass. That pass pulls the whole distro forward -- 28 packages
+  # and 18.1 MB on a recent run, perl and netplan and polkit and sudo, none of
+  # them under test here -- and it is the single largest source of flake in
+  # these lanes, because it is what meets the security.ubuntu.com mirror skew
+  # (one stale node in an eight-address pool, which re-running does not
+  # dependably route around). It is also a reproducibility hole: the ernic
+  # side pins the guest kernel via ernic_ionic_kernel_ref and fails the build
+  # on a major.minor mismatch precisely so the guest does not drift, and then
+  # this re-randomises everything around that kernel, so two bakes of the same
+  # playbook against the same cloud image are not the same guest. Upstream's
+  # own default documents the knob as "useful in CI". Local bakes are
+  # unaffected and still upgrade.
+  ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false,"rocm_setup_skip_system_upgrade":true}'
 
 jobs:
   test-vm-ernic-rocjitsu:
@@ -47,7 +60,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     container:
-      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260919.g359579e-qemu11.1.1-vfu.8039244
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260924.ge1cd640-qemu11.1.1-vfu.8039244
       # /var/lib/qemu-tool is bind-mounted from the host at the same path so the
       # qcow2 this job generates is the same file the sibling qemu container opens:
       # compose bind-mounts are resolved by the host docker daemon, not in this

@@ -23,8 +23,8 @@ concurrency:
 
 env:
   ERNIC_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20260919.g959f0cf-ernic.0b48aa1-vfu.8039244
-  ROCJITSU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20260921.gb3399b3-rocjitsu.8e01a5a
-  QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260919.g359579e-qemu11.1.1-vfu.8039244
+  ROCJITSU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20260924.gad7a357-rocjitsu.c85bb75
+  QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260924.ge1cd640-qemu11.1.1-vfu.8039244
   VM_IMAGES_DIR: /var/lib/qemu-tool/images
   VM1_NAME: 2vm-smoke-1
   VM2_NAME: 2vm-smoke-2
@@ -35,7 +35,7 @@ jobs:
     name: Smoke Test - rocm-ernic
     runs-on: ubuntu-latest
     container:
-      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260919.g359579e-qemu11.1.1-vfu.8039244
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260924.ge1cd640-qemu11.1.1-vfu.8039244
       # Provides qemu-system-x86_64 and cloud-image-utils. /var/lib/qemu-tool is
       # bind-mounted from the host at the same path so the qcow2 generated here
       # is the same file the sibling qemu containers open: compose bind-mounts
@@ -59,12 +59,8 @@ jobs:
           || { echo "::error::/dev/kvm present but KVM_GET_API_VERSION failed"; exit 1; }
         echo "KVM available: $(ls -l /dev/kvm)"
 
-    # Everything else -- qemu-system-x86_64, qemu-img, cloud-localds, ansible
-    # and openssh-client -- already ships in the CI image. Only pip is missing.
-    - name: Install missing packages
-      run: |
-        apt-get update -qq
-        apt-get install -y -qq python3-pip
+    # No package installation step here any more: python3-pip was the only gap
+    # in the CI image and it closed at 20260924.ge1cd640, the pin above.
 
     # Absolute, not "~/.cache/pip": actions/cache expands ~ on the runner and
     # pip expands it in this container, so the restore never reached pip.

@@ -229,8 +229,12 @@
 # rather than letting the lookup raise on an undefined key.
 #
 # Every message below describes a regression, not an expected state: this
-# passed on a 1 GiB vramlimit against rocjitsu 8e01a5a3. If one of these fires,
-# suspect amdgpu.vramlimit first -- confirm with
+# passed on a 1 GiB vramlimit against rocjitsu 8e01a5a3 and again at c85bb752.
+# The 100 commits between them include a run of rocjitsu memory work -- lazy
+# wavefront construction, pooled KFD page-table nodes, lazy SGPR chunks -- but
+# all of it is host-side footprint, not the guest's private-segment path, so it
+# does not relax the vramlimit requirement. If one of these fires, suspect
+# amdgpu.vramlimit first -- confirm with
 # "sudo cat /sys/module/amdgpu/parameters/vramlimit" in the guest, which must
 # read 1024.
 - name: Interpret the reproducer result
@@ -377,9 +381,10 @@
 - name: Fail when RVS is missing
   ansible.builtin.fail:
     msg: >-
-      No RVS at {{ rocjitsu_gpu_test_rvs_bin }}. It is unpacked there by
-      vm-rocjitsu.yml, so this image predates that; rebuild it, or set
-      rocjitsu_gpu_test_rvs=false to skip the check.
+      No RVS at {{ rocjitsu_gpu_test_rvs_bin }}. vm-rocjitsu.yml unpacks it
+      there only when vm_rocjitsu_install_rvs is true, which it is not by
+      default; rebake the image with it set, or set rocjitsu_gpu_test_rvs=false
+      to skip the check.
   when:
     - rocjitsu_gpu_test_rvs | bool
     - not rocjitsu_gpu_test_rvs_bin_stat.stat.exists

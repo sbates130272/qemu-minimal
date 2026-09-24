@@ -37,10 +37,14 @@
     rocm_setup_skip_reboot: false
     rocm_setup_run_checks: true
     rocm_setup_run_gpu_checks: false
-    # Both spellings resolve to 7.0.0-31-generic from the stock archive, but
-    # neither package name exists on the other release.
-    rocm_setup_extra_kernel_packages:
-      - "linux-generic-hwe-{{ '24.04' if ansible_distribution_release == 'noble' else '26.04' }}"
+    # No rocm_setup_extra_kernel_packages. It named linux-generic-hwe-26.04,
+    # whose comment claimed both spellings resolve to the running 7.0.0-31 and
+    # so the task was a no-op. It is not: it reported "changed" on every run,
+    # and by the time it ran the guest was already on 7.0.0-34 from the image's
+    # own upgrade, so all it did was install a metapackage for a kernel nothing
+    # here boots. The combined lane is worse -- that guest runs the pinned
+    # mainline 7.2.4 from ionic_image_prep, where a 7.0.x HWE kernel is pure
+    # weight. vm-ernic.yml dropped this for the same reason; see its comment.
     rocm_setup_install_metrics_exporter: true
     # Regenerate the initramfs after writing the amdgpu blacklist and the
     # gfx1250 stubs. On by default: without it the blacklist is inert at boot
@@ -51,6 +55,13 @@
     # tag is reassigned on every upstream build, so baking it into an image
     # would mean two rebuilds of the same commit install different bits.
     vm_rocjitsu_hsa_snoop_version: "{{ vm_hsa_snoop_version | default('1.1.1') }}"
+    # Whether to bake RVS and the rocBLAS host library it links against into
+    # the image at all. Off, because the only consumer -- the RVS check in the
+    # rocjitsu_gpu_test role -- is itself off: the tarball is built only as
+    # amdrocm7 and no amdrocm10 one exists yet, so `rvs -g` cannot run against
+    # this guest's ROCm 10 tree. Turn this on in the same change that sets
+    # rocjitsu_gpu_test_rvs true.
+    vm_rocjitsu_install_rvs: "{{ vm_install_rvs | default(false) }}"
     # RVS is not in TheRock's apt index under any name, so it comes from AMD's
     # standalone tarball instead. Pinned for the same reason as hsa-snoop above.
     vm_rocjitsu_rvs_version: "{{ vm_rvs_version | default('1.5.125-620') }}"
@@ -129,30 +140,41 @@
       become: true
       changed_when: false
 
-    # Stop a failing DKMS build from aborting dpkg, before rocm_setup installs
-    # amdgpu-dkms. In the combined ernic+rocjitsu lane the guest is already on
-    # the pinned mainline kernel by this point (vm-ernic.yml runs first and
-    # ionic_image_prep installs it), so the amdgpu-dkms postinst builds against
-    # every installed kernel -- the two 7.0.0 ones and 7.2.4. The 7.2.4 build
-    # is what the source patches below exist to fix, so it fails, and one
-    # failing build fails the whole postinst: the kernel packages end up
-    # half-configured and apt-get returns 100. The patch tasks then never run.
+    # Stop the amdgpu-dkms postinst building anything, before rocm_setup
+    # installs it. Every one of the four source patches below reports "changed"
+    # on every run, so the module that postinst builds is always thrown away by
+    # the rebuild that follows them -- and it is not a cheap thing to throw
+    # away. Measured on the last green runs at cbf9f94: 23m55s of a 47m48s
+    # standalone lane and 28m20s of a 55m46s combined lane, against 12m for the
+    # patched rebuild that actually produces the module the guest loads. In the
+    # combined lane that build does not even succeed: the guest is on the pinned
+    # mainline 7.2.4 by then (vm-ernic.yml runs first and ionic_image_prep
+    # installs it) and 7.2.4 is precisely what the ptrace patch exists to fix,
+    # so ~28 minutes are spent reaching a compile error.
     #
-    # AUTOINSTALL in dkms.conf is the wrong lever here and does nothing: the
-    # amdgpu-dkms postinst defers to /usr/lib/dkms/common.postinst, which never
-    # calls `dkms autoinstall`. It loops over the installed kernels calling
-    # `dkms build -k $KERNEL` directly, and a non-zero, non-77 rc makes it
-    # `exit $res`. The documented escape is this marker file, which turns that
-    # into "Ignored." and lets the postinst finish. Checked against
-    # common.postinst as shipped with dkms 3.2.2.
+    # /usr/lib/dkms/common.postinst, which the amdgpu-dkms postinst defers to,
+    # checks for this marker before it does anything else and exits 0. Checked
+    # against the shipped script:
     #
-    # This is deliberately narrow in time, not scope: the marker is removed
-    # again once amdgpu has been patched and rebuilt, so it cannot go on
-    # silently swallowing genuine DKMS failures for the rest of the run. The
-    # rebuild task below invokes dkms directly and still fails loudly.
+    #   if [ -f /etc/dkms/no-autoinstall ]; then
+    #       echo "autoinstall for dkms modules has been disabled."
+    #       exit 0
+    #   fi
     #
-    # In the standalone rocjitsu lane none of this applies -- there is no 7.2.4
-    # kernel installed, every build succeeds, and the marker is inert.
+    # This supersedes the no-autoinstall-errors marker that used to be here.
+    # That one let the doomed build run and then ignored its exit status, which
+    # cost the same ~28 minutes and additionally left dpkg half-configured --
+    # hence the "dpkg --configure -a" task that used to follow the rebuild.
+    # Skipping the build outright means there is no failure to swallow, so
+    # genuine DKMS errors elsewhere in the image stay fatal.
+    #
+    # Note that the early exit is above common.postinst's `dkms add` as well as
+    # its build loop, so the module is never registered in /var/lib/dkms either.
+    # The rebuild task below does its own `dkms add`; do not assume `dkms
+    # status` can name a version before that runs.
+    #
+    # The marker is removed once amdgpu has been patched and built, so a later
+    # kernel upgrade inside the image still autoinstalls normally.
     #
     # The directory is created first because in the standalone lane this runs
     # before dkms is installed, so /etc/dkms does not exist yet and
@@ -165,13 +187,52 @@
         mode: '0755'
       become: true
 
-    - name: Let a failing DKMS build not abort dpkg
+    - name: Suppress the amdgpu-dkms postinst build of the unpatched source
       ansible.builtin.file:
-        path: /etc/dkms/no-autoinstall-errors
+        path: /etc/dkms/no-autoinstall
         state: touch
         mode: '0644'
       become: true
       changed_when: false
+
+    # The marker alone is not enough, which run 36048829734 found the hard way.
+    # common.postinst exits 0 as intended, but control returns to amdgpu-dkms's
+    # own postinst, which then runs update-initramfs with a kernel version it
+    # derives from the DKMS state common.postinst never wrote:
+    #
+    #   autoinstall for dkms modules has been disabled.
+    #   /usr/sbin/update-initramfs: option requires an argument -- 'k'
+    #   dpkg: error processing package amdgpu-dkms (--configure):
+    #    old amdgpu-dkms package postinst maintainer script subprocess failed
+    #    with exit status 2
+    #
+    # That is the same empty-version bug as the one fixed in the rebuild task
+    # below, but in a maintainer script this playbook does not own and cannot
+    # make tolerant -- the install is rocm_setup's, and it fails the play.
+    #
+    # So make the call a no-op for the same window. A dpkg-divert is used
+    # rather than a PATH shim because the postinst calls the absolute path.
+    # Nothing is lost by skipping it: the initramfs built here would describe
+    # a guest with no amdgpu module and no blacklist yet, and the "Regenerate
+    # initramfs" task below rebuilds it after both exist. That task runs after
+    # the undivert, which is why the undivert is not at the end of the play.
+    - name: Divert update-initramfs for the duration of the amdgpu-dkms install
+      ansible.builtin.command:
+        cmd: >-
+          dpkg-divert --local --rename --quiet
+          --divert /usr/sbin/update-initramfs.dkms-bypass
+          --add /usr/sbin/update-initramfs
+        creates: /usr/sbin/update-initramfs.dkms-bypass
+      become: true
+
+    - name: Install a no-op update-initramfs in its place
+      ansible.builtin.copy:
+        dest: /usr/sbin/update-initramfs
+        content: |
+          #!/bin/sh
+          exit 0
+        mode: '0755'
+      become: true
 
   roles:
     - role: sbates130272.batesste.user_setup
@@ -221,24 +282,53 @@
       become: true
       changed_when: false
 
-    - name: Purge stale distro ROCm runtime packages
-      ansible.builtin.package:
-        name:
-          - libhsakmt1
-          - libhsa-runtime64-1
-          - libhsa-runtime-dev
-          - libamdhip64-7
-          - libamdhip64-dev
-        state: absent
-        purge: true
-      become: true
-
+    # No "purge stale distro ROCm runtime packages" task here any more. It
+    # named the same five packages the rocm-no-distro-packages pin above pins
+    # to Priority -1 before any role runs, so apt cannot install them in the
+    # first place and the purge reported ok on every run in both lanes. It was
+    # only ever load-bearing on an image built before that pin existed.
     - name: Blacklist amdgpu autoload
       ansible.builtin.copy:
         dest: /etc/modprobe.d/amdgpu-blacklist.conf
         content: "blacklist amdgpu\n"
         mode: '0644'
       become: true
+
+    # One pin, two consumers, and until now they could disagree in silence.
+    # The compose stacks take the server image from $ROCJITSU_IMAGE; the task
+    # below generates the firmware stubs that same server hands the guest, so
+    # the two have to resolve to one image or the device model and its firmware
+    # come from different rocjitsu builds. Nothing ever passed rocjitsu_image
+    # -- the workflows set ROCJITSU_IMAGE, which reached `docker pull` and
+    # compose but not Ansible -- so the literal fallback was used regardless of
+    # what was being served, and a half-finished bump would drift with nothing
+    # to show for it but a guest booting against another build's stubs.
+    #
+    # gen-vm forwards its whole environment to ansible-playbook (see
+    # gen_vm.py), so reading $ROCJITSU_IMAGE here closes the gap for every
+    # caller rather than only the workflows that remember an -e. The literal
+    # stays as the fallback for a bare `ansible-playbook` run with nothing set;
+    # keep it equal to the compose defaults.
+    #
+    # default(..., true) rather than default(...): lookup('env') returns an
+    # empty string when the variable is unset, which is defined but useless,
+    # and only the boolean form treats it as absent.
+    #
+    # A new fact name rather than reassigning rocjitsu_image: a set_fact whose
+    # value templates the same name is a recursive loop as far as Ansible's
+    # templar is concerned, and it fails at run time, not at --syntax-check.
+    - name: Resolve the rocjitsu image for firmware generation
+      ansible.builtin.set_fact:
+        rocjitsu_firmware_image: >-
+          {{ rocjitsu_image | default(lookup('env', 'ROCJITSU_IMAGE'), true)
+             | default('sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20260924.gad7a357-rocjitsu.c85bb75', true) }}
+
+    # Printed rather than assumed: the whole failure mode above was a pin that
+    # was wrong without being visible. One line in the log says which build the
+    # stubs came from.
+    - name: Show the rocjitsu image the stubs come from
+      ansible.builtin.debug:
+        msg: "Generating gfx1250 firmware stubs with {{ rocjitsu_firmware_image }}"
 
     - name: Create local temp dir for firmware generation
       ansible.builtin.tempfile:
@@ -263,7 +353,7 @@
         cmd: >-
           set -o pipefail &&
           docker run --rm --entrypoint /bin/sh
-          {{ rocjitsu_image | default('sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20260921.gb3399b3-rocjitsu.8e01a5a') }}
+          {{ rocjitsu_firmware_image }}
           -c 'python3 /usr/local/bin/vfio_guest_firmware.py
           --set {{ rocjitsu_firmware_set }} --output /out
           && tar -cf - -C /out .'
@@ -602,13 +692,14 @@
       register: panel_type_patch
       changed_when: "'patched /' in panel_type_patch.stdout"
 
-    # In the combined lane the postinst's build for the running 7.2.4 kernel was
-    # allowed to fail (see "Let a failing DKMS build not abort dpkg"), so there
-    # is no amdgpu for that kernel yet and this task is what supplies it. It
-    # therefore cannot be gated on a patch having changed alone -- on a re-run
-    # where the patches are already applied every *_patch.changed is false, and
-    # the guest would be left with no module. Build whenever a patch moved *or*
-    # there is no installed amdgpu for the running kernel.
+    # This task is the only thing that builds amdgpu now -- the postinst was
+    # stopped from building the unpatched source (see "Suppress the amdgpu-dkms
+    # postinst build" above), so on a first pass there is no module for any
+    # kernel until this runs. It therefore cannot be gated on a patch having
+    # changed alone: on a re-run where the patches are already applied every
+    # *_patch.changed is false, and the guest would be left with no module.
+    # Build whenever a patch moved *or* there is no installed amdgpu for the
+    # running kernel.
     - name: Check whether amdgpu DKMS is installed for the running kernel
       ansible.builtin.shell:
         cmd: |
@@ -620,35 +711,57 @@
       register: amdgpu_dkms_installed
       changed_when: false
 
-    - name: Rebuild DKMS amdgpu module after source patches
+    # The version comes from the source directory, not from `dkms status`.
+    # common.postinst's `dkms add` is below its no-autoinstall early exit, so
+    # nothing has registered amdgpu in /var/lib/dkms at this point and `dkms
+    # status amdgpu` prints nothing at all -- the old awk over its first line
+    # produced an empty VER and every later argument became "amdgpu/".
+    # /usr/src/amdgpu-<version> is laid down by dpkg unpacking the package,
+    # which happens whatever the postinst then decides to do.
+    - name: Build and install the patched amdgpu DKMS module
       ansible.builtin.shell:
         cmd: |
-          VER=$(dkms status amdgpu | awk -F'[,/]' 'NR==1{gsub(/ /,"",$2); print $2}')
-          dkms build amdgpu/"$VER" -k $(uname -r) --force
-          dkms install amdgpu/"$VER" -k $(uname -r) --force
+          set -euo pipefail
+          SRC=$(ls -d /usr/src/amdgpu-* 2>/dev/null | sort | tail -1) || true
+          VER=${SRC#/usr/src/amdgpu-}
+          if [ -z "$VER" ]; then
+            echo "no amdgpu DKMS source in /usr/src" >&2
+            exit 1
+          fi
+          dkms status amdgpu/"$VER" | grep -q . || dkms add amdgpu/"$VER"
+          dkms build amdgpu/"$VER" -k "$(uname -r)" --force
+          dkms install amdgpu/"$VER" -k "$(uname -r)" --force
         executable: /bin/bash
       become: true
       when: atomics_patch.changed or ras_vbios_patch.changed
             or ptrace_gate_patch.changed or panel_type_patch.changed
             or amdgpu_dkms_installed.stdout | trim == '0'
 
-    # amdgpu is now built for the running kernel, so drop the escape hatch
-    # rather than leave it swallowing every later DKMS failure in the image.
-    - name: Restore fatal DKMS build errors
+    # amdgpu is built for the running kernel, so let DKMS autoinstall again:
+    # a kernel upgrade inside the image should rebuild it the normal way.
+    - name: Restore DKMS autoinstall
       ansible.builtin.file:
-        path: /etc/dkms/no-autoinstall-errors
+        path: /etc/dkms/no-autoinstall
         state: absent
       become: true
 
-    # The postinst's failed 7.2.4 build left amdgpu-dkms half-configured, and
-    # apt refuses further work until dpkg is settled. Everything it needs is in
-    # place by now: the source is patched and the module is built and installed
-    # for the running kernel, so the postinst's own build finds it already done.
-    - name: Settle any package left half-configured by the DKMS build
-      ansible.builtin.command:
-        cmd: dpkg --configure -a
+    # Undo the diversion before anything wants a real initramfs again. Removing
+    # the stub first is what makes the --remove a plain rename back; leave it in
+    # place and dpkg-divert refuses rather than clobber it.
+    - name: Remove the no-op update-initramfs
+      ansible.builtin.file:
+        path: /usr/sbin/update-initramfs
+        state: absent
       become: true
-      changed_when: false
+
+    - name: Undivert update-initramfs
+      ansible.builtin.command:
+        cmd: >-
+          dpkg-divert --local --rename --quiet
+          --divert /usr/sbin/update-initramfs.dkms-bypass
+          --remove /usr/sbin/update-initramfs
+        removes: /usr/sbin/update-initramfs.dkms-bypass
+      become: true
 
     - name: Regenerate initramfs so the amdgpu blacklist and stubs take effect
       ansible.builtin.command:
@@ -684,6 +797,7 @@
         state: present
         update_cache: false
       become: true
+      when: vm_rocjitsu_install_rvs | bool
 
     - name: Install amdgpu probe script
       ansible.builtin.copy:
@@ -764,27 +878,13 @@
           exec sudo modprobe amdgpu "${params[@]}"
       become: true
 
-    # The device-metrics-exporter repo has no resolute suite yet; pin to noble.
-    - name: Add device-metrics-exporter apt source (noble suite)
-      ansible.builtin.copy:
-        dest: /etc/apt/sources.list.d/device-metrics-exporter.sources
-        content: |
-          Types: deb
-          URIs: https://repo.radeon.com/device-metrics-exporter/apt/1.5.1
-          Suites: noble
-          Components: main
-          Architectures: amd64
-          Signed-By: /etc/apt/keyrings/rocm.gpg
-        mode: '0644'
-      become: true
-
-    - name: Install AMD Device Metrics Exporter
-      ansible.builtin.package:
-        name: amdgpu-exporter
-        state: present
-        update_cache: true
-      become: true
-
+    # No device-metrics-exporter source or install here any more.
+    # rocm_setup_install_metrics_exporter above already does both: its
+    # "Install AMD Device Metrics Exporter package" task reports changed, and
+    # the copy that used to live here then reported ok every run, having added
+    # a second apt source for the same repo. The suite pin it carried ("no
+    # resolute suite yet; pin to noble") was stale too -- the role's own source
+    # resolves on resolute, which is why every update_cache below succeeds.
     - name: Install amd-smi
       ansible.builtin.package:
         name: amdrocm-amdsmi
@@ -798,6 +898,7 @@
         state: directory
         mode: '0755'
       become: true
+      when: vm_rocjitsu_install_rvs | bool
 
     # Unpacked into its own prefix rather than over the ROCm tree: TheRock
     # installs under a versioned path (/opt/rocm/core-10.0) that apt owns, and
@@ -811,6 +912,7 @@
         remote_src: true
         creates: "{{ vm_rocjitsu_rvs_prefix }}/bin/rvs"
       become: true
+      when: vm_rocjitsu_install_rvs | bool
 
     # fio-hipfile-bench builds fio from a pinned master commit in the guest,
     # because the libhipfile ioengine is in no fio release tag. The distro fio

@@ -26,7 +26,7 @@ jobs:
     name: Report for vm-basic
     runs-on: ubuntu-latest
     container:
-      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260919.g359579e-qemu11.1.1-vfu.8039244
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260924.ge1cd640-qemu11.1.1-vfu.8039244
       # Supplies qemu-system-x86_64, qemu-img and cloud-localds.
       options: --device /dev/kvm
     steps:
@@ -44,12 +44,8 @@ jobs:
           || { echo "::error::/dev/kvm present but KVM_GET_API_VERSION failed"; exit 1; }
         echo "KVM available: $(ls -l /dev/kvm)"
 
-    # Everything else -- qemu-system-x86_64, qemu-img, cloud-localds, ansible
-    # and openssh-client -- already ships in the CI image. Only pip is missing.
-    - name: Install missing packages
-      run: |
-        apt-get update -qq
-        apt-get install -y -qq python3-pip
+    # No package installation step here any more: python3-pip was the only gap
+    # in the CI image and it closed at 20260924.ge1cd640, the pin above.
 
     # Absolute, not "~/.cache/pip": actions/cache expands ~ on the runner and
     # pip expands it in this container, so the restore never reached pip.

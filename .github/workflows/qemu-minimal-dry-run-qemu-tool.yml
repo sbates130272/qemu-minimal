@@ -21,15 +21,13 @@ jobs:
   dry-run-tests:
     name: Dry Run Tests
     runs-on: ubuntu-latest
-    container: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260919.g359579e-qemu11.1.1-vfu.8039244
+    container: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260924.ge1cd640-qemu11.1.1-vfu.8039244
     steps:
     - name: Check out code
       uses: actions/checkout@v4.3.1
-    - name: Install pip and qemu-tool
-      run: |
-        apt-get update -qq
-        apt-get install -y -qq python3-pip
-        python3 -m pip install --break-system-packages -e ./qemu
+    # pip ships in the CI image as of the 20260924.ge1cd640 pin above.
+    - name: Install qemu-tool
+      run: python3 -m pip install --break-system-packages -e ./qemu
     - name: Create images directory
       run: mkdir -p /var/lib/qemu-tool/images
 

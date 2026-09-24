@@ -6,6 +6,66 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- `vm-rocjitsu.yml` builds the amdgpu DKMS module **once**, from patched
+  source, instead of building it for every installed kernel and then throwing
+  the result away. The four source patches report `changed` on every run, so
+  the module the `amdgpu-dkms` postinst produced was always discarded by the
+  rebuild that follows them — while costing 23m55s of a 47m48s standalone lane
+  and 28m20s of a 55m46s combined lane, against ~12m for the rebuild that
+  produces what the guest loads. The postinst built "for 7.0.0-31-generic,
+  7.0.0-34-generic and 7.2.4-070204-generic"; the guest boots one of those.
+  `/etc/dkms/no-autoinstall` now stops it before it starts, replacing the
+  `no-autoinstall-errors` marker that let the doomed build run and then ignored
+  its exit status. That marker's fallout goes with it: `dpkg --configure -a`
+  has nothing left to settle, and genuine DKMS failures elsewhere in the image
+  stay fatal rather than being swallowed for the rest of the run. Because
+  `no-autoinstall` short-circuits above `dkms add` as well as the build loop,
+  the rebuild task registers the module itself and takes the version from
+  `/usr/src/amdgpu-<version>` — `dkms status` names nothing until something has
+  been added, and the old `awk` over its first line was producing an empty
+  version.
+
+  That empty version turned out to have a second consumer. `amdgpu-dkms`'s own
+  postinst runs after `common.postinst` returns and derives a kernel version
+  from the DKMS state that the early exit never wrote, so it called
+  `update-initramfs -u -k` with nothing after the `-k` and exited 2 — a
+  maintainer script this playbook does not own, on an install that belongs to
+  `rocm_setup`, so dpkg's failure became apt's rc 100 and failed the play.
+  `/usr/sbin/update-initramfs` is now diverted to a no-op for exactly the
+  window the marker covers (`dpkg-divert`, not a PATH shim, because the
+  postinst calls the absolute path). Nothing is lost by skipping that call: the
+  initramfs it would build describes a guest with no amdgpu module and no
+  blacklist yet, and the existing "Regenerate initramfs" task rebuilds it once
+  both exist — the undivert is placed before that task so it gets the real
+  binary.
+
+- RVS and the rocBLAS host library it links against are no longer baked into
+  the rocjitsu image. The check that consumes them is off (no `amdrocm10` RVS
+  tarball exists, and the `amdrocm7` one cannot run against this guest's ROCm
+  10 tree), but the install tasks were ungated and every bake still downloaded
+  and unpacked the tarball and pulled in `amdrocm-blas-host<ver>`. They are now
+  gated on `vm_rocjitsu_install_rvs`, default false; turn it on in the same
+  change that sets `rocjitsu_gpu_test_rvs` true. The role-side RVS tasks were
+  already gated and are unchanged.
+
+- `rocm_setup_extra_kernel_packages` is gone from `vm-rocjitsu.yml`. Its
+  comment claimed `linux-generic-hwe-26.04` resolved to the running
+  `7.0.0-31-generic` and so was a no-op; it reported `changed` on every run,
+  and by the time it ran the guest was already on `7.0.0-34-generic`, so it
+  installed a metapackage for a kernel nothing here boots — and fed that kernel
+  to the postinst build above. In the combined lane the guest runs the pinned
+  mainline `7.2.4` from `ionic_image_prep`, where a 7.0.x HWE kernel is pure
+  weight. `vm-ernic.yml` had already dropped it for the same reason.
+
+- Three no-op tasks removed from `vm-rocjitsu.yml`, each confirmed `ok` on
+  every run of both lanes. The device-metrics-exporter apt source and
+  `amdgpu-exporter` install duplicated what `rocm_setup_install_metrics_exporter`
+  already does, adding a second apt source for the same repo; the suite pin
+  they carried ("no resolute suite yet") was stale, since the role's own source
+  resolves on resolute. The purge of five distro ROCm runtime packages named
+  exactly what the `rocm-no-distro-packages` pin already pins to Priority -1
+  before any role runs, so apt cannot install them to begin with.
+
 - Workflow triggers now follow from the fact that `main` is protected and every
   commit arrives as a PR merge. No workflow runs on both `pull_request` and
   `push: main` any more — `shell-check`, `spell-check`,
@@ -351,17 +411,42 @@ All notable changes to this project will be documented in this file.
   previous `>=0.1.0` could never have resolved to 0.2.0.
 - Container images move off the previous pins: rocm-ernic to
   `20260919.g959f0cf` (`ernic.6ca9a46` → `ernic.0b48aa1`), qemu to
-  `20260919.g359579e`, and rocjitsu to `20260921.gb3399b3-rocjitsu.8e01a5a`
-  (`rocjitsu.20d4ce1` → `rocjitsu.2d8a73f` → `rocjitsu.8e01a5a`).
+  `20260924.ge1cd640`, and rocjitsu to `20260924.gad7a357-rocjitsu.c85bb75`
+  (`rocjitsu.20d4ce1` → `rocjitsu.2d8a73f` → `rocjitsu.8e01a5a` →
+  `rocjitsu.c85bb75`).
 
-  rocjitsu is built from rocm-systems `develop` at
+  rocjitsu was built from rocm-systems `develop` at
   `8e01a5a3fbee92f2b570dde97f314000d5226327`, which is where the vfio-pci work
-  landed — 14 commits ahead of the previous pin under `emulation/rocjitsu`,
+  landed — 14 commits ahead of the pin before it under `emulation/rocjitsu`,
   including the `vram_store.cpp` 16-bit `atomic_load` and `compare_exchange`
-  fixes. Note that rocjitsu and qemu no longer share a CI build sha. That is
-  fine and deliberate: they only have to agree on libvfio-user, which is
-  unchanged at `vfu.8039244`. Do not "fix" the mismatch by rebuilding qemu
-  unless libvfio-user itself moves.
+  fixes. It now tracks `c85bb752577b6608745f4ff7835e3da91a190795`, a further
+  100 commits on (`ahead 100, behind 0` — a straight fast-forward), of which 22
+  are `[rocjitsu]`. Those are host-side footprint and throughput work rather
+  than device-model changes: lazily constructed wavefronts instead of 16,384
+  built at VM init (#11952), pooled KFD page-table nodes (#11951), lazy SGPR
+  chunks (#11948), cached MTYPE lookups and sharded reader counters
+  (#11949, #11950).
+
+  Nothing guest-visible moved with it, which is the point worth recording.
+  `gfx1250_mi455x.json` is byte-identical across the two images, as is the
+  output of `vfio_guest_firmware.py --set gap` and the installed package set;
+  the only config edits anywhere in the image are to `gfx1100_w7900.json`
+  (`sgprs_per_wf` 104 → 106) and a new `gfx1251_synthetic.json`, neither of
+  which this repo serves. In particular **none of this touches the guest
+  scratch path**, so `vramlimit=1024` in `amdgpu-probe` stays exactly as it is
+  — see the note there.
+
+  `vfio_guest_firmware.py` did gain a `--generation gfx1250` flag, mutually
+  exclusive with `--config`, for a caller with no rocjitsu config on disk (it
+  leaves `config` null in the manifest). This repo generates stubs inside the
+  container on the controller, where the config does exist, so it is unused
+  here; it is the flag to reach for if firmware generation ever moves into the
+  guest.
+
+  Note that rocjitsu and qemu no longer share a CI build sha. That is fine and
+  deliberate: they only have to agree on libvfio-user, which is unchanged at
+  `vfu.8039244`. Do not "fix" the mismatch by rebuilding qemu unless
+  libvfio-user itself moves.
 - `spell-check` runs `codespell` instead of `pyspelling`/aspell. codespell
   matches a fixed list of known misspellings rather than validating every word
   against a dictionary, so the 441-entry `.wordlist.txt` is gone: hostnames,
