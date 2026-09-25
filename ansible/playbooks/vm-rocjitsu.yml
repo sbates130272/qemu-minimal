@@ -12,6 +12,10 @@
            if lookup('env', 'GITHUB_TOKEN')
            else {})
         }}
+  vars_files:
+    # For ionic_kernel_pin. One pin for the guest kernel across every lane --
+    # see the mainline kernel task below.
+    - vars/ernic-pins.yml
   vars:
     username: "{{ vm_username | default('ubuntu') }}"
     root_user: "{{ vm_root_user | default('ubuntu') }}"
@@ -80,6 +84,12 @@
     # wrong one otherwise, since a stub mec/rlc is strictly worse than the
     # firmware it stands in for.
     rocjitsu_firmware_set: "{{ vm_rocjitsu_firmware_set | default('gap') }}"
+    # The guest kernel, from the one pin in vars/ernic-pins.yml that vm-ernic.yml
+    # already reads. See the mainline kernel task in pre_tasks.
+    ionic_image_kernel_ref: "{{ ionic_kernel_pin }}"
+    # This lane never builds ionic_rdma, so kernel.yml's closing ib_umem_get_va
+    # assert is not its precondition to fail on.
+    ionic_image_kernel_assert_ionic: false
   pre_tasks:
     - name: Pin ROCm-conflicting Ubuntu universe packages to never-install
       ansible.builtin.copy:
@@ -139,6 +149,32 @@
             | xargs -r rm -f
       become: true
       changed_when: false
+
+    # The guest kernel, before anything below touches DKMS.
+    #
+    # Two of the four amdgpu patches further down -- the ptrace gate and the
+    # panel_type probe -- are version-gated to >= 7.2 and are deliberate no-ops
+    # on anything older. resolute GA is 7.0.0-34, so the standalone lane has
+    # been carrying the 7.2 fixes and then booting a kernel that switches them
+    # off. The combined lane never had that problem: vm-ernic.yml runs first and
+    # ionic_image_prep puts it on 7.2.4 (see the comment below, which already
+    # assumes this). This puts both lanes on the same kernel, which is also the
+    # kernel the published ernic-rocjitsu qcow2 boots.
+    #
+    # Position is load-bearing. The kernel .debs run update-initramfs
+    # themselves, and the divert below replaces it with a no-op for the whole
+    # amdgpu-dkms install -- installing the kernel after that point leaves 7.2.4
+    # on disk with no initramfs and the guest unbootable. It also has to precede
+    # the DKMS build, which must target the kernel the guest actually boots.
+    #
+    # kernel.yml short-circuits when the pinned kernel is already running, so
+    # this is a no-op in the combined lane rather than a second install. The
+    # role is named for ionic because that is what needed a mainline kernel
+    # first; only its kernel.yml is used here.
+    - name: Install the pinned mainline kernel
+      ansible.builtin.include_role:
+        name: ionic_image_prep
+        tasks_from: kernel
 
     # Stop the amdgpu-dkms postinst building anything, before rocm_setup
     # installs it. Every one of the four source patches below reports "changed"
