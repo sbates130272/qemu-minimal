@@ -155,7 +155,7 @@ jobs:
         echo "runner: ${HOST_CPUS} vCPU, ${HOST_MEM_MB} MB"
         echo "guests: ${VMS} x ${VM_VCPUS} vCPU, ${VM_VMEM} MB"
 
-    - name: Bring up full 2vm compose stack
+    - name: Bring up the full two-VM rocm-ernic compose stack
       working-directory: qemu/compose/vfio-user-ernic-2vm
       env:
         QEMU_TOOL_SRC: /var/lib/qemu-tool/src

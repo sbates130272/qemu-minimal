@@ -684,9 +684,9 @@ jobs:
       run: |
         cd qemu/compose/vfio-user-ernic-2vm
         docker compose config --quiet
-        echo "✓ ernic-2vm compose config valid"
+        echo "✓ two-VM ernic compose config valid"
 
-    - name: "Smoke: 2vm ernic hub and worker create vfio-user sockets"
+    - name: "Smoke: two-VM ernic hub and worker create vfio-user sockets"
       run: |
         cd qemu/compose/vfio-user-ernic-2vm
         docker compose --profile rocjitsu-vm1 --profile rocjitsu-vm2 \
@@ -703,5 +703,5 @@ jobs:
         done
         [ "$hub_ok" = "healthy" ]    || (docker compose logs ernic-hub    && exit 1)
         [ "$worker_ok" = "healthy" ] || (docker compose logs ernic-worker && exit 1)
-        echo "✓ 2vm ernic hub and worker healthy"
+        echo "✓ two-VM ernic hub and worker healthy"
         docker compose down
