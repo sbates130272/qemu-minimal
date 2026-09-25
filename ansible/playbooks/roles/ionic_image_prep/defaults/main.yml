@@ -25,6 +25,11 @@ ionic_image_kernel_mirror: https://kernel.ubuntu.com/mainline
 # Where the .debs land in the guest before the single apt transaction.
 ionic_image_kernel_payload_dir: /tmp/mainline-kernel
 ionic_image_kernel_reboot_timeout: 600
+# kernel.yml ends by asserting the installed headers carry ib_umem_get_va, the
+# helper ionic_rdma needs. vm-rocjitsu.yml reuses kernel.yml for the kernel
+# alone and never builds ionic_rdma, so it turns this off rather than failing a
+# GPU lane on an RDMA precondition it does not care about.
+ionic_image_kernel_assert_ionic: true
 
 # ── Packages ─────────────────────────────────────
 # packages/ionic.txt, minus what cloud-init and the other roles already bring.

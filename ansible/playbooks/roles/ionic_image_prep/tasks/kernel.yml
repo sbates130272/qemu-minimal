@@ -138,6 +138,9 @@
 # it is the exact check ernic_guest_setup's driver_ionic.yml makes before
 # building -- failing it here names the cause, where failing it there is a wall
 # of implicit-declaration errors deep inside a DKMS log.
+#
+# Gated because vm-rocjitsu.yml reuses this file for the kernel alone; see
+# ionic_image_kernel_assert_ionic in defaults/main.yml.
 - name: Look for the IB-core helper the ionic sources need
   ansible.builtin.command:
     argv:
@@ -148,8 +151,10 @@
   register: ionic_image_umem_helper
   failed_when: false
   changed_when: false
+  when: ionic_image_kernel_assert_ionic | bool
 
 - name: Assert the kernel headers can build ionic_rdma
+  when: ionic_image_kernel_assert_ionic | bool
   ansible.builtin.assert:
     that:
       - ionic_image_umem_helper.rc == 0

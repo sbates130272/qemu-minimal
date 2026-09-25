@@ -6,6 +6,30 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- `vm-rocjitsu.yml` installs the pinned mainline kernel (`ionic_kernel_pin`,
+  currently `v7.2.4`) before it touches DKMS, so the standalone rocjitsu lane
+  boots the same kernel as the combined lane and as the published
+  `ernic-rocjitsu` qcow2. It had been booting resolute GA, 7.0.0-34, while
+  carrying two amdgpu patches — the ptrace gate and the `panel_type` probe —
+  that are version-gated to >= 7.2 and are therefore deliberate no-ops there.
+  The combined lane never had the problem because `vm-ernic.yml` runs first and
+  `ionic_image_prep` puts the guest on 7.2.4; the standalone lane is now the
+  same guest. The kernel comes from `ionic_image_prep`'s `kernel.yml` via
+  `tasks_from`, reusing one installer and one pin rather than a second copy,
+  and `kernel.yml` short-circuits when the pinned kernel is already running so
+  the combined lane does not install it twice. Its closing `ib_umem_get_va`
+  assert is now gated on a new `ionic_image_kernel_assert_ionic`, which the GPU
+  lane sets false — that check is `ionic_rdma`'s precondition, not a reason to
+  fail a lane that never builds it. Position in `pre_tasks` is load-bearing:
+  the kernel `.debs` run `update-initramfs` themselves, so the install has to
+  precede the `dpkg-divert` that replaces it with a no-op, and it has to
+  precede the DKMS build, which must target the kernel the guest boots.
+
+  This is the one remaining difference between the guest the rocjitsu lane
+  builds per run and the published qcow2, which runs `sgemm-bench` to
+  completion — 8/8, including under a GitHub-runner CPU and memory envelope —
+  where the lane's own guest hangs in `hipFuncGetAttributes`.
+
 - `vm-rocjitsu.yml` builds the amdgpu DKMS module **once**, from patched
   source, instead of building it for every installed kernel and then throwing
   the result away. The four source patches report `changed` on every run, so
