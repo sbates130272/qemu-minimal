@@ -207,8 +207,13 @@ jobs:
     # either benchmark failed -- otherwise publish-pages, which gates on
     # workflow_run conclusion == success, would publish a stale half-report as
     # though the run had been clean.
+    # shell: bash is not decoration. This job runs in the qemu container, where
+    # GitHub resolves the default shell to `sh -e {0}`, and dash rejects
+    # `set -o pipefail` outright -- "Illegal option -o pipefail", exit 2. That
+    # failed the lane on a run where both reports had succeeded.
     - name: Fail if either report failed
       if: always()
+      shell: bash
       run: |
         set -euo pipefail
         rc=0

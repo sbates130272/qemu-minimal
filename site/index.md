@@ -26,7 +26,7 @@ permalink: /
     </div>
     <div class="metric-card">
       <div class="eyebrow">Published reports</div>
-      <p>Single VM, rocjitsu, two-VM, and hipFile fio outputs stay live on the site and are refreshed by CI.</p>
+      <p>Single VM, rocjitsu, rocm-ernic, and hipFile fio outputs stay live on the site and are refreshed by CI.</p>
     </div>
     <div class="metric-card">
       <div class="eyebrow">Publishing model</div>

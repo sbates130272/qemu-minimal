@@ -18,7 +18,7 @@ permalink: /documentation/
     <span class="eyebrow">Reports</span>
     <h2>What is live</h2>
     <p>
-      The report lanes publish single-VM, rocjitsu, two-VM, and hipFile fio guest
+      The report lanes publish single-VM, rocjitsu, rocm-ernic, and hipFile fio guest
       inspection pages. Each page is regenerated from CI artifacts and linked from
       the report index.
     </p>
