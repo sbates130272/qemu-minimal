@@ -4,7 +4,7 @@ title: VM Report — VM 2
 
 # VM Report — qemu-minimal — VM 2
 
-Generated: **2026-09-25 20:34 UTC** &middot; Commit: [`603b8c8`](https://github.com/sbates130272/qemu-minimal/commit/603b8c818ffe1143054808e7320406831d067416)
+Generated: **2026-09-25 23:58 UTC** &middot; Commit: [`fa6d855`](https://github.com/sbates130272/qemu-minimal/commit/fa6d8556572e6a71cc99a193f1624f7c529c4a20)
 
 ## Hardware
 
@@ -13,7 +13,7 @@ Generated: **2026-09-25 20:34 UTC** &middot; Commit: [`603b8c8`](https://github.
 | CPU | AMD EPYC Processor |
 | vCPUs | 4 |
 | Threads/core | 1 |
-| RAM | 5.6Gi total, 5.2Gi free |
+| RAM | 5.6Gi total, 5.3Gi free |
 | Swap | 0B |
 
 ## Kernel
