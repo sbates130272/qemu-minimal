@@ -124,7 +124,12 @@ jobs:
     # repository-owned pages, and uploading that whole tree published a nested
     # copy of the site under 1vm/ on gh-pages. Same shape the rocjitsu and
     # hipfile-fio lanes already use.
+    # timeout-minutes: the report script's ~17 guest `ssh` calls are
+    # unbounded and silent, so an unresponsive guest hangs the step until
+    # the job timeout cancels the whole job. See the longer note in
+    # qemu-minimal-report-for-vm-rocjitsu.yml.
     - name: Generate report
+      timeout-minutes: 15
       run: bash scripts/generate-vm-report.sh site/1vm 2222 ubuntu
 
     - name: Show run-vm log on failure
