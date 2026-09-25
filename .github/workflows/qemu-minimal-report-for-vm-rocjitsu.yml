@@ -167,9 +167,23 @@ jobs:
     # independent now that they share a lane -- a fio-side regression must not
     # take the GEMM and hipFile report down with it, which was the reason the
     # two lanes were separate in the first place.
+    #
+    # timeout-minutes on both: generate-vm-report.sh talks to the guest over
+    # ~17 unbounded `ssh` calls and then runs a GEMM on the emulated GPU, and
+    # an unresponsive guest hangs any of them forever -- silently, since the
+    # script prints nothing until "Report written". Three runs have now sat in
+    # this step for 69m, 180m and 15m+ against a 1m44s healthy baseline.
+    # Without a step timeout the only backstop is the job's 180m, which
+    # *cancels* the job: continue-on-error never applies, the sibling report
+    # never runs, and the lane burns three runner-hours to publish nothing.
+    # A step timeout instead produces a normal step failure, which
+    # continue-on-error converts into the outcome the gate below reads.
+    # 20 and 25 are roughly 10x the healthy times -- wide enough not to fire
+    # on a slow-but-working run, narrow enough to fail fast on a hang.
     - name: Generate rocjitsu report
       id: rocjitsu-report
       continue-on-error: true
+      timeout-minutes: 20
       env:
         REPORT_ROCJITSU_BENCH: "1"
       run: bash scripts/generate-vm-report.sh site/rocjitsu 2222 ubuntu "rocjitsu VM" qemu
@@ -185,6 +199,7 @@ jobs:
     - name: Generate hipFile fio report
       id: hipfile-fio-report
       continue-on-error: true
+      timeout-minutes: 25
       env:
         REPORT_HIPFILE_FIO_BENCH: "1"
       run: bash scripts/generate-vm-report.sh site/hipfile-fio 2222 ubuntu "hipFile fio VM" qemu

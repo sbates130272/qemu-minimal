@@ -234,10 +234,16 @@ jobs:
     # Into site/ernic, not site: the checkout already populated site/ with the
     # repository-owned pages, and uploading that whole tree would publish a
     # nested copy of the site under ernic/ on gh-pages.
+    # timeout-minutes: the report script's ~17 guest `ssh` calls are
+    # unbounded and silent, so an unresponsive guest hangs the step until
+    # the job timeout cancels the whole job. See the longer note in
+    # qemu-minimal-report-for-vm-rocjitsu.yml.
     - name: Generate VM 1 report
+      timeout-minutes: 15
       run: bash scripts/generate-vm-report.sh site/ernic 2222 ubuntu "VM 1" qemu-1
 
     - name: Generate VM 2 report
+      timeout-minutes: 15
       run: >-
         bash scripts/generate-vm-report.sh site/ernic/vm2 2222 ubuntu
         "VM 2" qemu-2
