@@ -43,7 +43,26 @@
     rocm_setup_skip_reboot: false
     rocm_setup_run_checks: true
     rocm_setup_run_gpu_checks: false
+    # Stays on, unlike the two below. The plain ROCm guest has no GPU and gets
+    # nothing from it, but vm-rocjitsu.yml imports this file and does have one
+    # under passthrough, and it deleted its own exporter install in favour of
+    # this line (see the comment above its amd-smi task). Turning it off here
+    # would silently take it out of the rocjitsu lane too.
     rocm_setup_install_metrics_exporter: true
+    # Both of these default to true in the role, so leaving them unset baked
+    # them into every ROCm lane by accident. Nothing in this repo consumes
+    # either, and no CI lane asserts on them.
+    #
+    # rocm-cli's installer is a curl of https://raw.githubusercontent.com/
+    # ROCm/rocm-cli/main/install.sh piped straight to sh -- an unpinned branch
+    # fetched at bake time, executed as the user, editing the shell profile.
+    # That is a supply-chain hole for a tool no playbook or test here calls.
+    rocm_setup_install_rocm_cli: false
+    # xrocmtop is a btop-style interactive terminal UI. These guests are
+    # headless CI images driven over ssh; the binary is dead weight in the
+    # qcow2 and its install is an unauthenticated GitHub API call plus a
+    # release download that fails the play when either is unavailable.
+    rocm_setup_install_xrocmtop: false
     # Empty by default. This used to name linux-generic-hwe-24.04, which was
     # right while the plain ROCm lane ran noble; every lane is resolute now,
     # where a 24.04 HWE metapackage is simply the wrong release's. There is no
