@@ -7,6 +7,9 @@
   tags: [install]
   vars:
     vm_install_amd_ca: "{{ vm_rocm_install_amd_ca | default(true) }}"
+    # The whole ROCm install still has to run after this, and it needs the apt
+    # lists and /tmp that a slim pass here would take away. See vm-slim.yml.
+    image_slim_enable: false
 
 - name: Post cloud-init VM setup with ROCm and hipFile
   hosts: all
@@ -282,3 +285,8 @@
 
   roles:
     - role: sbates130272.batesste.rocm_setup
+
+# Last line of every leaf. Importers pass image_slim_enable: false so this
+# does not run in the middle of their chain; see vm-slim.yml.
+- import_playbook: vm-slim.yml
+  tags: [install]

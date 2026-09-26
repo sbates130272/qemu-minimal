@@ -26,6 +26,12 @@
     # long-form reasoning for each is on the tasks in vm-rocm.yml.
     vm_rocm_mainline_kernel: true
     vm_rocm_suppress_dkms: true
+    # Silences the slim pass at the end of vm-rocm.yml *and* the one at the end
+    # of vm-basic.yml underneath it -- import vars propagate through nested
+    # imports. The rocjitsu play below patches and rebuilds /usr/src/amdgpu-*
+    # and installs rocBLAS with update_cache: false, so neither the build trees
+    # nor the apt lists can be swept before it runs. See vm-slim.yml.
+    image_slim_enable: false
 
 - name: Bake rocjitsu prerequisites into a base VM image
   hosts: all
@@ -860,3 +866,10 @@
   tags: [test, never]
   roles:
     - role: rocjitsu_gpu_test
+
+# Last line of every leaf. Importers pass image_slim_enable: false so this does
+# not run in the middle of their chain; see vm-slim.yml. It sits after the test
+# play only because that is the end of the file -- the two never meet, one
+# being install-tagged and the other never-tagged.
+- import_playbook: vm-slim.yml
+  tags: [install]

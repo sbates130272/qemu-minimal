@@ -1,0 +1,125 @@
+---
+# What a bake leaves behind that the finished image does not need: the apt
+# archive it installed ROCm from, the package lists it resolved against, the
+# journal of the bake itself, and whatever the build roles dropped in /tmp.
+#
+# None of this shrinks the qcow2 on its own. The bake boot attaches the disk
+# with discard=unmap,detect-zeroes=unmap (run_vm.py), so the guest can hand
+# freed blocks back to the image file -- but only when something issues the
+# discard. That is what the fstrim at the end of tasks/main.yml is for, and it
+# is why this role deletes and trims in one pass rather than leaving the trim
+# to the caller.
+
+# The master switch, and the mechanism that keeps this role from running in
+# the middle of a chain. vm-slim.yml is imported as the last line of every
+# leaf playbook, but four of those leaves are themselves imported by another
+# (vm-basic by vm-rocm and vm-ernic, vm-rocm by vm-rocjitsu, both of those by
+# vm-ernic-rocjitsu), so an ungated import would slim up to six times per bake
+# with real work still to come after each one. Those parents pass
+# image_slim_enable: false on the import; see the comment in vm-slim.yml for
+# why that is a correctness fix and not an optimisation.
+image_slim_enable: true
+
+# ── apt ──────────────────────────────────────────
+# /var/cache/apt/archives is the single largest reclaimable item on a ROCm
+# guest -- every .deb the ROCm install downloaded is still sitting in it, and
+# nothing in this repo cleaned it (ionic_image_prep does an autoclean, which
+# only drops packages no longer downloadable, not the ones just installed).
+#
+# The lists are the smaller half and cost a human an `apt-get update` before
+# their next install. No automated step pays that cost: the post-boot configure
+# play installs nothing (ernic_guest_build_deps is false in both vm-ernic.yml
+# plays), rocjitsu_gpu_test installs nothing, and generate-vm-report.sh only
+# runs dpkg-query.
+image_slim_apt_clean: true
+image_slim_apt_lists: true
+
+# ── DKMS scratch ─────────────────────────────────
+# Only the per-module build/ directories, which dkms itself removes after a
+# successful build and which it recreates on the next one. Deliberately not
+# the source/ and installed state under the same tree: that is what makes
+# dkms autoinstall work on a later kernel upgrade, which vm-rocjitsu.yml
+# restores /etc/dkms/no-autoinstall for on purpose.
+image_slim_dkms_build_trees: true
+
+# ── Logs ─────────────────────────────────────────
+# The only consumer of the guest journal anywhere in CI is
+# `journalctl -p err -b` in generate-vm-report.sh -- current boot, which a
+# vacuum of archived journals does not touch. Failure paths dump `sudo dmesg`,
+# the kernel ring buffer, which is not on disk at all. No workflow copies
+# /var/log out of a guest.
+image_slim_journal_max: 16M
+image_slim_rotated_logs: true
+
+# ── Scratch directories ──────────────────────────
+# Swept to a depth of one, so the directories themselves survive with their
+# modes intact.
+image_slim_scratch_dirs:
+  - /tmp
+  - /var/tmp
+
+# Anchored regexes, matched against the full path of each candidate.
+#
+# /var/tmp/ionic-src is the one that must not go, and the reason this sweep is
+# not a blanket rm. It is the guest-side sparse kernel checkout
+# fetch-ionic-sources.sh makes from git.kernel.org, and driver_ionic.yml re-runs
+# setup-ionic-dkms.sh --source-dir against it unconditionally on every
+# `--tags configure` run -- which is exactly what the two ernic CI lanes do
+# against the booted guest after this bake. Delete it and every ernic lane
+# re-clones a kernel from inside the VM. Drop it only for an image whose
+# consumer will never run the configure play; see image_slim_drop_ionic_src.
+#
+# systemd's PrivateTmp and snapd's per-snap bind mounts own their directories
+# for as long as the units are running; removing them underneath a live service
+# is not something the image gains anything from.
+#
+# ansible-tmp-* is this play's own footing. remote_tmp defaults to
+# ~/.ansible/tmp and so is normally out of the sweep entirely, but it falls
+# back to a tmp directory when the home is not writable, and a sweep that
+# deletes the directory the module it is running from was copied into fails in
+# a way that takes a while to recognise.
+image_slim_scratch_keep:
+  - '^/var/tmp/ionic-src$'
+  - '/systemd-private-'
+  - '/snap-private-tmp'
+  - '/ansible-tmp-'
+
+# cloud-init's logs, but not its state. `cloud-init clean` would take
+# /var/lib/cloud with it, and these images have no datasource on a later boot:
+# gen-vm attaches the NoCloud seed only for the first boot and deletes it
+# afterwards, and neither run-vm nor any compose stack attaches one. A guest
+# whose instance state has been wiped therefore treats its next boot as a first
+# boot with no datasource, falls back to generating its own network config, and
+# writes the MAC-pinned 50-cloud-init.yaml that gen-vm goes out of its way to
+# neutralise -- and run-vm derives the guest MAC from --ssh-port, so a pinned
+# MAC means an unreachable VM the moment the port changes. Logs only.
+image_slim_cloud_init_logs: true
+
+# ── Opt-in, because each one removes a fallback ──
+# The cloud image's GA kernel is dead weight once the guest boots the pinned
+# mainline kernel -- and it is also the only thing left to boot if a mainline
+# pin regresses. Several hundred MB against that. Right for a throwaway CI
+# image, wrong for one a human will debug on.
+image_slim_purge_old_kernels: false
+
+# /usr/src/amdgpu-* is the tree vm-rocjitsu.yml patches and rebuilds. Removing
+# it means the guest can never rebuild amdgpu against a future kernel, which is
+# the opposite of what the no-autoinstall restore in that playbook is for.
+# ionic-ernic-* is deliberately not in this list: it is the DKMS source of a
+# module the ernic lanes still load.
+image_slim_purge_dkms_sources: false
+image_slim_dkms_source_globs:
+  - amdgpu-*
+
+# See image_slim_scratch_keep. Off unless the image is published to a consumer
+# who will never run `vm-ernic.yml --tags configure`.
+image_slim_drop_ionic_src: false
+image_slim_ionic_src_dir: /var/tmp/ionic-src
+
+# ── fstrim ───────────────────────────────────────
+# -a skips filesystems that cannot discard rather than failing on them, but a
+# container-ish or overlay root can still return non-zero, and a bake that has
+# otherwise succeeded must not go red over an optimisation. The rc is reported
+# instead; the df delta below it is the number that says whether anything was
+# actually reclaimed.
+image_slim_fstrim: true

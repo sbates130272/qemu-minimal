@@ -84,6 +84,12 @@ jobs:
     - name: Syntax-check vm-ernic-rocjitsu playbook
       run: ansible-playbook --syntax-check playbooks/vm-ernic-rocjitsu.yml
       working-directory: ansible
+    # Reached by import from all five above, so it is already checked
+    # transitively -- but it is also runnable on its own against a baked
+    # guest, and this job checks files by name.
+    - name: Syntax-check vm-slim playbook
+      run: ansible-playbook --syntax-check playbooks/vm-slim.yml
+      working-directory: ansible
 
   gen-vm-ansible-setup:
     name: Generate VM Ansible Setup

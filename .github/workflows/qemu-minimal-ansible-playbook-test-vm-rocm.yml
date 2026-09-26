@@ -15,7 +15,15 @@ on:
       - 'ansible/playbooks/vm-rocm.yml'
       # vm-rocm.yml imports vm-basic.yml and reads both vars files.
       - 'ansible/playbooks/vm-basic.yml'
+      # ... and imports vm-slim.yml as its last play, which is where the guest
+      # cleanup and fstrim happen. Named explicitly because these filters
+      # enumerate playbooks rather than globbing ansible/playbooks/*.yml.
+      - 'ansible/playbooks/vm-slim.yml'
       - 'ansible/playbooks/vars/**'
+      # ionic_image_prep's kernel.yml installs the pinned mainline kernel from
+      # this playbook (vm-rocm.yml:180), and image_slim is the role vm-slim.yml
+      # runs, so a change under roles/ changes this guest.
+      - 'ansible/playbooks/roles/**'
       - 'ansible/requirements.yml'
       - '.github/actions/setup-vm-job/action.yml'
       - '.github/actions/report-image-size/action.yml'

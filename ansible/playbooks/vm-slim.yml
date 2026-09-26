@@ -1,0 +1,52 @@
+---
+# The last play of every bake: delete what the build left behind and fstrim it
+# back to the qcow2. Imported as the final line of each leaf playbook rather
+# than bolted onto vm-basic.yml's post_tasks, because vm-basic is now the
+# *first* play in every chain and its post_tasks are nowhere near last.
+#
+# It can also be run on its own against an already-baked guest:
+#   ansible-playbook -i 127.0.0.1:2222, -u ubuntu ansible/playbooks/vm-slim.yml
+#
+# ── Why the parents disable it ───────────────────
+#
+# import_playbook splices plays inline and does not dedupe, so a leaf that is
+# imported by another leaf contributes its slim play mid-chain: on
+# vm-ernic-rocjitsu.yml, an ungated import of this file from all five leaves
+# expands to six slim passes, only the last of which is actually last. That is
+# not merely wasteful, it is wrong. Everything this play removes is state a
+# later play in the same run still uses:
+#
+#   * vm-rocjitsu.yml's rocBLAS install is `update_cache: false` -- it installs
+#     from the apt lists an earlier play refreshed. A mid-chain slim empties
+#     /var/lib/apt/lists and that task resolves against nothing.
+#   * the ernic install play's DKMS build and vm-rocjitsu.yml's patch-and-
+#     rebuild of /usr/src/amdgpu-* both read build trees a slim pass with the
+#     opt-in purges enabled would have deleted; vm-rocjitsu.yml:588 fails
+#     outright with "no amdgpu DKMS source in /usr/src".
+#   * ernic_source stages sources into /tmp, which the scratch sweep empties.
+#
+# So every importing playbook passes image_slim_enable: false on its import,
+# and only the leaf that is genuinely last leaves it at the default. Vars set
+# on an import_playbook propagate through nested imports, so vm-rocjitsu.yml
+# passing false to vm-rocm.yml also silences the vm-basic.yml pass underneath
+# it; a leaf never has to know how deep its own chain goes.
+#
+# Tagged install, like every other bake play. A consequence worth naming: the
+# post-boot `ansible-playbook vm-ernic.yml --tags configure` run the ernic CI
+# lanes do will not slim, because none of the tasks below carry the configure
+# tag. That is the right way round -- a configure run leaves the guest holding
+# exactly the state this role must not remove.
+- name: Slim the baked image
+  hosts: all
+  # For ansible_kernel, which the opt-in kernel purge filters on. Gathered
+  # afresh here even in a chained run: ansible.cfg sets no `gathering`, so the
+  # default `implicit` injects the setup block into every play that does not
+  # say gather_facts: false, and the in-memory fact cache is only consulted
+  # under `smart`. One extra gather per bake, and it is the one that sees the
+  # kernel the guest ended up running.
+  gather_facts: true
+  become: true
+  tags: [install]
+  roles:
+    - role: image_slim
+      when: image_slim_enable | default(true) | bool

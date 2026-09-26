@@ -23,6 +23,7 @@ on:
       - main
     paths:
       - 'ansible/playbooks/vm-rocjitsu.yml'
+      - 'ansible/playbooks/vm-slim.yml'
       - 'ansible/playbooks/roles/**'
       - 'qemu/qemu-tool/**'
       - 'qemu/pyproject.toml'

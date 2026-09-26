@@ -14,6 +14,9 @@
   vars:
     vm_install_amd_ca: false
     user_setup_dotfiles_enable: true
+    # ionic_image_prep, the mainline kernel install and the ionic DKMS build
+    # all still have to run after this. See vm-slim.yml.
+    image_slim_enable: false
 
 - name: Install ernic driver into VM image
   hosts: all
@@ -141,3 +144,10 @@
                          ~ (10 * (vm_index | default(1) | int))) }}
   roles:
     - role: sbates130272.rocm_ernic.ernic_guest_setup
+
+# Last line of every leaf. Importers pass image_slim_enable: false so this
+# does not run in the middle of their chain; see vm-slim.yml. Tagged install,
+# so the --tags configure invocation of the play above does not slim a guest
+# that has just been configured.
+- import_playbook: vm-slim.yml
+  tags: [install]

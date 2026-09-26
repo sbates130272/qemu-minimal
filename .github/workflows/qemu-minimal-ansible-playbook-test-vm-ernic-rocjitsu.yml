@@ -29,7 +29,15 @@ on:
       # vm-rocjitsu.yml -> vm-rocm.yml -> vm-basic.yml.
       - 'ansible/playbooks/vm-rocm.yml'
       - 'ansible/playbooks/vm-basic.yml'
+      # Every one of those ends with vm-slim.yml, and this lane is the one that
+      # runs it last of all. Named explicitly because these filters enumerate
+      # playbooks rather than globbing ansible/playbooks/*.yml.
+      - 'ansible/playbooks/vm-slim.yml'
       - 'ansible/playbooks/vars/**'
+      # Both parents pull roles from here -- ionic_image_prep on either side of
+      # the chain, image_slim from vm-slim.yml -- so a change under roles/
+      # changes this guest. The other three playbook-test lanes already say so.
+      - 'ansible/playbooks/roles/**'
       - 'ansible/requirements.yml'
       - 'qemu/compose/vfio-user-ernic-rocjitsu-vm/**'
       - '.github/actions/setup-vm-job/action.yml'

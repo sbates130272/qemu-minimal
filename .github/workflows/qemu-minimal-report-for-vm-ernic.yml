@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - 'ansible/playbooks/vm-ernic.yml'
+      - 'ansible/playbooks/vm-slim.yml'
       - 'ansible/playbooks/roles/**'
       - 'ansible/playbooks/vars/ernic-pins.yml'
       - 'qemu/qemu-tool/**'

@@ -22,6 +22,9 @@ on:
       # vm-rocjitsu.yml imports vm-rocm.yml, which imports vm-basic.yml.
       - 'ansible/playbooks/vm-rocm.yml'
       - 'ansible/playbooks/vm-basic.yml'
+      # ... and all three end with vm-slim.yml. roles/** below already covers
+      # the image_slim role it runs; this catches the playbook itself.
+      - 'ansible/playbooks/vm-slim.yml'
       - 'ansible/playbooks/vars/**'
       # ionic_image_prep is no longer ernic-only: vm-rocm.yml uses its
       # kernel.yml to install the pinned mainline kernel this lane boots, so a

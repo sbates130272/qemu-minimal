@@ -35,3 +35,8 @@
     - role: sbates130272.batesste.user_setup
     - role: sbates130272.batesste.fave_packages
     - role: sbates130272.batesste.git_setup
+
+# Last line of every leaf. Importers pass image_slim_enable: false so this
+# does not run in the middle of their chain; see vm-slim.yml.
+- import_playbook: vm-slim.yml
+  tags: [install]

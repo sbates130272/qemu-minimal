@@ -15,6 +15,9 @@ on:
       - 'ansible/playbooks/vm-ernic.yml'
       # vm-ernic.yml imports vm-basic.yml, so a change there changes this guest.
       - 'ansible/playbooks/vm-basic.yml'
+      # Both leaves end with vm-slim.yml. roles/** below already covers the
+      # image_slim role it runs; this catches the playbook itself.
+      - 'ansible/playbooks/vm-slim.yml'
       - 'ansible/playbooks/roles/**'
       - '!ansible/playbooks/roles/rocjitsu_gpu_test/**'
       - 'ansible/playbooks/vars/ernic-pins.yml'

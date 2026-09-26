@@ -1,5 +1,17 @@
 ---
 # Bake both ernic and rocjitsu prerequisites into a base VM image.
 # Runs vm-ernic then vm-rocjitsu sequentially on the same host; both are idempotent.
+#
+# Both imports suppress their own trailing slim play: vm-ernic's would run
+# before all of vm-rocm and vm-rocjitsu, and vm-rocjitsu's before nothing at
+# all here, but it is the same flag either way and the last line below is the
+# one pass that is genuinely last. See vm-slim.yml.
 - import_playbook: vm-ernic.yml
+  vars:
+    image_slim_enable: false
 - import_playbook: vm-rocjitsu.yml
+  vars:
+    image_slim_enable: false
+
+- import_playbook: vm-slim.yml
+  tags: [install]

@@ -1,0 +1,273 @@
+---
+# Reclaim the scratch a bake leaves in the guest, then discard it back to the
+# qcow2. Runs as the last play of a bake, immediately before gen-vm powers the
+# guest off over SSH, so nothing here has to leave the guest usable for a
+# later task in the same run -- only for the next boot, and for the post-boot
+# `--tags configure` play the ernic lanes run against the booted image.
+#
+# Every task is idempotent and none of them fails on a path that is not there:
+# a second run finds an already-clean tree and reports zero reclaimed, which is
+# also what the mid-chain case would look like if the gate in vm-slim.yml ever
+# fails open.
+
+- name: Measure filesystem usage before slimming
+  ansible.builtin.command:
+    argv: [df, --output=used, -B1, /]
+  register: image_slim_df_before
+  changed_when: false
+
+# ── apt ──────────────────────────────────────────
+
+# clean, not autoclean: autoclean only drops .debs that are no longer
+# downloadable, which on a freshly installed guest is almost none of them.
+- name: Empty the apt package cache
+  ansible.builtin.apt:
+    clean: true
+  when: image_slim_apt_clean | bool
+
+# Keeping lock and partial rather than emptying the directory wholesale. apt
+# recreates both, but it complains about their absence in ways that look like a
+# broken image to whoever meets it next, and neither is large.
+- name: Find apt package lists
+  ansible.builtin.find:
+    paths: /var/lib/apt/lists
+    file_type: any
+    hidden: true
+    excludes:
+      - lock
+      - partial
+  register: image_slim_apt_list_files
+  when: image_slim_apt_lists | bool
+
+- name: Remove apt package lists
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ image_slim_apt_list_files.files | default([]) | map(attribute='path') | list }}"
+  loop_control:
+    label: "{{ item }}"
+  when: image_slim_apt_lists | bool
+
+# ── DKMS scratch ─────────────────────────────────
+
+# /var/lib/dkms/<module>/<version>/build only. The siblings -- source, which is
+# a symlink into /usr/src, and the per-kernel module/ trees -- are the
+# registration dkms autoinstall needs, and removing those would break the
+# kernel-upgrade rebuild vm-rocjitsu.yml deliberately re-enables.
+- name: Find leftover DKMS build trees
+  ansible.builtin.find:
+    paths: /var/lib/dkms
+    patterns: build
+    file_type: directory
+    recurse: true
+    depth: 3
+  register: image_slim_dkms_builds
+  when: image_slim_dkms_build_trees | bool
+
+- name: Remove leftover DKMS build trees
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ image_slim_dkms_builds.files | default([]) | map(attribute='path') | list }}"
+  loop_control:
+    label: "{{ item }}"
+  when: image_slim_dkms_build_trees | bool
+
+# ── Logs ─────────────────────────────────────────
+
+# Archived journals only; the current boot's journal is what
+# generate-vm-report.sh reads with `journalctl -p err -b`, and vacuum-size
+# never rotates away the active file. journalctl reports what it freed on
+# stderr, which is the only honest changed signal available here.
+- name: Vacuum the systemd journal
+  ansible.builtin.command:
+    argv:
+      - journalctl
+      - "--vacuum-size={{ image_slim_journal_max }}"
+  register: image_slim_journal
+  changed_when: "'freed 0B' not in (image_slim_journal.stderr | default(''))"
+
+- name: Find rotated log files
+  ansible.builtin.find:
+    paths: /var/log
+    patterns:
+      - '*.gz'
+      - '*.xz'
+      - '*.old'
+      - '*.[0-9]'
+    recurse: true
+  register: image_slim_old_logs
+  when: image_slim_rotated_logs | bool
+
+- name: Remove rotated log files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ image_slim_old_logs.files | default([]) | map(attribute='path') | list }}"
+  loop_control:
+    label: "{{ item }}"
+  when: image_slim_rotated_logs | bool
+
+- name: Remove cloud-init logs
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /var/log/cloud-init.log
+    - /var/log/cloud-init-output.log
+  when: image_slim_cloud_init_logs | bool
+
+# ── Scratch directories ──────────────────────────
+
+# Depth one, so /tmp and /var/tmp keep their own 1777 modes -- recreating a
+# directory with the wrong mode is a subtler way to break a guest than leaving
+# a few megabytes in it. The keep list is regexes against the full path; see
+# defaults/main.yml for why /var/tmp/ionic-src is on it.
+- name: Find scratch entries
+  ansible.builtin.find:
+    paths: "{{ image_slim_scratch_dirs }}"
+    file_type: any
+    hidden: true
+    recurse: false
+  register: image_slim_scratch
+
+# The empty keep list has to be special-cased, and not with a `when`. Joining
+# [] yields the empty pattern, and re.search('', path) matches every path, so a
+# plain reject() on it discards every candidate -- an operator who writes
+# image_slim_scratch_keep: [] to mean "keep nothing, sweep everything" would
+# silently get the exact inverse, with no failure and nothing in the output
+# connecting the two. '(?!)' is a regex that matches nothing, so rejecting on
+# it keeps nothing back and the sweep is total, which is what was asked for.
+- name: Remove scratch entries
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  vars:
+    image_slim_scratch_keep_re: >-
+      {{ image_slim_scratch_keep | join('|')
+         if image_slim_scratch_keep | length > 0 else '(?!)' }}
+  loop: >-
+    {{ image_slim_scratch.files | map(attribute='path')
+       | reject('search', image_slim_scratch_keep_re)
+       | list }}
+  loop_control:
+    label: "{{ item }}"
+
+- name: Drop the guest-side ionic kernel checkout
+  ansible.builtin.file:
+    path: "{{ image_slim_ionic_src_dir }}"
+    state: absent
+  when: image_slim_drop_ionic_src | bool
+
+# ── Opt-in removals ──────────────────────────────
+
+# dpkg-query exits 1 and writes to stderr when a pattern matches nothing, which
+# is the normal case for several of these on any given guest.
+- name: List installed kernel packages
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: >-
+      dpkg-query -W -f='${Package}\n'
+      'linux-image-[0-9]*' 'linux-image-unsigned-[0-9]*'
+      'linux-headers-[0-9]*' 'linux-modules-[0-9]*'
+      'linux-modules-extra-[0-9]*' 2>/dev/null || true
+  register: image_slim_kernel_pkgs
+  changed_when: false
+  when: image_slim_purge_old_kernels | bool
+
+# Filtered on ansible_kernel rather than on a pin, so this cannot remove what
+# the guest is running however it got there. Removing the GA kernel takes the
+# linux-generic metapackage with it, which is the point: the metapackage would
+# pull the GA kernel straight back on the next upgrade.
+#
+# The flavour suffix has to come off before the match, and getting this wrong
+# purges the running kernel's own headers. A mainline install lays down a pair
+# -- linux-headers-7.2.4-070204 (Architecture: all) and
+# linux-headers-7.2.4-070204-generic, which Depends on it -- and ansible_kernel
+# is the flavoured spelling, so a search for "7.2.4-070204-generic" does not
+# match the _all package. It would be left in the purge list, and apt would
+# then take the -generic one with it to satisfy the dependency: no headers for
+# the running kernel, and every later DKMS build fails. Matching on the version
+# alone keeps both. It also keeps a different flavour of the same version
+# (-lowlatency), which is the safe direction to err in.
+- name: Purge kernel packages other than the running one
+  ansible.builtin.apt:
+    name: "{{ image_slim_stale_kernel_pkgs }}"
+    state: absent
+    purge: true
+    autoremove: false
+  vars:
+    image_slim_running_kernel_version: >-
+      {{ ansible_kernel | regex_replace('-[a-z][a-z0-9]*$', '') }}
+    image_slim_stale_kernel_pkgs: >-
+      {{ image_slim_kernel_pkgs.stdout_lines | default([])
+         | reject('search', image_slim_running_kernel_version | regex_escape)
+         | list }}
+  when:
+    - image_slim_purge_old_kernels | bool
+    - image_slim_stale_kernel_pkgs | length > 0
+
+- name: Find DKMS source trees to purge
+  ansible.builtin.find:
+    paths: /usr/src
+    patterns: "{{ image_slim_dkms_source_globs }}"
+    file_type: directory
+    recurse: false
+  register: image_slim_dkms_sources
+  when: image_slim_purge_dkms_sources | bool
+
+- name: Purge DKMS source trees
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ image_slim_dkms_sources.files | default([]) | map(attribute='path') | list }}"
+  loop_control:
+    label: "{{ item }}"
+  when: image_slim_purge_dkms_sources | bool
+
+# ── Discard ──────────────────────────────────────
+
+# The task that turns all of the above into a smaller file. Without it the
+# deletions are invisible to the qcow2: the blocks stay allocated and the image
+# never shrinks, which is why this role trims rather than leaving it to the
+# caller.
+#
+# failed_when: false because a filesystem that cannot discard is a reason for
+# the image to stay its current size, not a reason for the bake to go red. rc
+# and stderr are reported below so a silent no-op is still visible.
+- name: Discard freed blocks back to the image
+  ansible.builtin.command:
+    argv: [fstrim, -av]
+  register: image_slim_fstrim_result
+  changed_when: false
+  failed_when: false
+  when: image_slim_fstrim | bool
+
+- name: Report the fstrim outcome
+  ansible.builtin.debug:
+    msg: >-
+      {{ image_slim_fstrim_result.stdout_lines | default([]) if
+         image_slim_fstrim_result.rc | default(1) == 0
+         else 'fstrim reported rc=' ~ (image_slim_fstrim_result.rc | default('skipped') | string)
+              ~ ': ' ~ (image_slim_fstrim_result.stderr | default('') | trim)
+              ~ ' -- the image keeps its current size.' }}
+  when: image_slim_fstrim | bool
+
+- name: Measure filesystem usage after slimming
+  ansible.builtin.command:
+    argv: [df, --output=used, -B1, /]
+  register: image_slim_df_after
+  changed_when: false
+
+# The number this whole role exists to produce. df of / is the right proxy for
+# what the qcow2 gives back, because the fstrim above has already handed every
+# freed block to the image file.
+- name: Report the space reclaimed
+  ansible.builtin.debug:
+    msg: >-
+      image_slim reclaimed
+      {{ (((image_slim_df_before.stdout_lines[1] | int)
+            - (image_slim_df_after.stdout_lines[1] | int)) / 1048576) | round(1) }} MiB
+      ({{ ((image_slim_df_before.stdout_lines[1] | int) / 1048576) | round(1) }} MiB used
+      before,
+      {{ ((image_slim_df_after.stdout_lines[1] | int) / 1048576) | round(1) }} MiB after).
