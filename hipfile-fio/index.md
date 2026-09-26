@@ -4,7 +4,7 @@ title: VM Report — hipFile fio VM
 
 # VM Report — qemu-minimal — hipFile fio VM
 
-Generated: **2026-09-26 13:14 UTC** &middot; Commit: [`fa6d855`](https://github.com/sbates130272/qemu-minimal/commit/fa6d8556572e6a71cc99a193f1624f7c529c4a20)
+Generated: **2026-09-26 20:47 UTC** &middot; Commit: [`84fa06d`](https://github.com/sbates130272/qemu-minimal/commit/84fa06d10bb502ee51d74588e70f6a7ea0131ab6)
 
 ## Hardware
 
@@ -13,7 +13,7 @@ Generated: **2026-09-26 13:14 UTC** &middot; Commit: [`fa6d855`](https://github.
 | CPU | AMD EPYC Processor |
 | vCPUs | 4 |
 | Threads/core | 1 |
-| RAM | 3.8Gi total, 2.8Gi free |
+| RAM | 3.8Gi total, 2.7Gi free |
 | Swap | 0B |
 
 ## Kernel
@@ -40,7 +40,7 @@ vda       64G disk
 ├─vda13 1023M part /boot
 ├─vda14    4M part 
 └─vda15  106M part /boot/efi
-nvme0n1    1T disk 
+nvme0n1    1T disk /mnt/nvme
 ```
 
 ### Disk usage
@@ -141,26 +141,28 @@ ubuntu : ubuntu video users render admin
 ## Running Services
 
 ```
-  chrony.service              loaded active running chrony, an NTP client/server
-  cron.service                loaded active running Regular background program processing daemon
-  dbus.service                loaded active running D-Bus System Message Bus
-  getty@tty1.service          loaded active running Getty on tty1
-  ModemManager.service        loaded active running Modem Manager
-  multipathd.service          loaded active running Device-Mapper Multipath Device Controller
-  networkd-dispatcher.service loaded active running Dispatcher daemon for systemd-networkd
-  polkit.service              loaded active running Authorization Manager
-  qemu-guest-agent.service    loaded active running QEMU Guest Agent
-  rsyslog.service             loaded active running System Logging Service
-  serial-getty@ttyS0.service  loaded active running Serial Getty on ttyS0
-  ssh.service                 loaded active running OpenBSD Secure Shell server
-  systemd-journald.service    loaded active running Journal Service
-  systemd-logind.service      loaded active running User Login Management
-  systemd-networkd.service    loaded active running Network Management
-  systemd-resolved.service    loaded active running Network Name Resolution
-  systemd-udevd.service       loaded active running Rule-based Manager for Device Events and Files
-  udisks2.service             loaded active running Disk Manager
-  unattended-upgrades.service loaded active running Unattended Upgrades Shutdown
-  user@1000.service           loaded active running User Manager for UID 1000
+  amd-metrics-exporter.service     loaded active running AMD GPU Prometheus Exporter Service
+  chrony.service                   loaded active running chrony, an NTP client/server
+  cron.service                     loaded active running Regular background program processing daemon
+  dbus.service                     loaded active running D-Bus System Message Bus
+  getty@tty1.service               loaded active running Getty on tty1
+  ModemManager.service             loaded active running Modem Manager
+  multipathd.service               loaded active running Device-Mapper Multipath Device Controller
+  networkd-dispatcher.service      loaded active running Dispatcher daemon for systemd-networkd
+  polkit.service                   loaded active running Authorization Manager
+  prometheus-node-exporter.service loaded active running Prometheus exporter for machine metrics
+  qemu-guest-agent.service         loaded active running QEMU Guest Agent
+  rsyslog.service                  loaded active running System Logging Service
+  serial-getty@ttyS0.service       loaded active running Serial Getty on ttyS0
+  ssh.service                      loaded active running OpenBSD Secure Shell server
+  systemd-journald.service         loaded active running Journal Service
+  systemd-logind.service           loaded active running User Login Management
+  systemd-networkd.service         loaded active running Network Management
+  systemd-resolved.service         loaded active running Network Name Resolution
+  systemd-udevd.service            loaded active running Rule-based Manager for Device Events and Files
+  udisks2.service                  loaded active running Disk Manager
+  unattended-upgrades.service      loaded active running Unattended Upgrades Shutdown
+  user@1000.service                loaded active running User Manager for UID 1000
 ```
 
 ## System Health
@@ -176,7 +178,7 @@ ubuntu : ubuntu video users render admin
 
 | Metric | Value |
 |---|---|
-| fio libhipfile read throughput | 10 MB/s |
+| fio libhipfile read throughput | 144 MB/s |
 
 This is fio's own `libhipfile` ioengine reading from the guest NVMe straight
 into VRAM, rather than the hand-written benchmark the rocjitsu report uses. fio
@@ -191,5 +193,5 @@ rocm: /opt/rocm/core-10.0
 building fio 6bc57a931f04fa3f50348d8c8f087187f050c6e1
 FIO_VERSION = fio-3.42
 fio: fio-3.42 commit=6bc57a931f04fa3f50348d8c8f087187f050c6e1
-fio-hipfile-bench: read_bytes=67108864 seconds=6.694 read_gbs=0.010025226
+fio-hipfile-bench: read_bytes=67108864 seconds=0.467 read_gbs=0.143702064
 ```
