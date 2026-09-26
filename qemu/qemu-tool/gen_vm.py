@@ -22,6 +22,7 @@ from .caps import qemu_binary
 from .config import VMConfig
 from .identity import identity_args
 from .run_vm import (
+    DISCARD_OPTS,
     _effective_mac,
     _ensure_mgmt_bridge,
     _mgmt_bridge_name,
@@ -380,7 +381,9 @@ def _first_boot(cfg: VMConfig, images: Path, backing: Path) -> None:
         "-smp", f"cpus={cfg.vcpus}",
         "-m", str(cfg.vmem),
         "-nographic",
-        "-drive", f"if=virtio,format=qcow2,file={backing}",
+        # The seed drive deliberately does not get DISCARD_OPTS: _cleanup
+        # deletes it, so there is nothing to reclaim.
+        "-drive", f"if=virtio,format=qcow2,file={backing}{DISCARD_OPTS}",
         "-drive", f"if=virtio,format=qcow2,file={seed}",
         "-netdev", "user,id=net0",
         "-device", f"virtio-net-pci,netdev=net0,mac={_effective_mac(cfg)}",
@@ -473,7 +476,7 @@ def _run_ansible(cfg: VMConfig, images: Path, backing: Path) -> None:
         "-smp", f"cpus={cfg.vcpus}",
         "-m", str(cfg.vmem),
         "-nographic",
-        "-drive", f"if=virtio,format=qcow2,file={backing}",
+        "-drive", f"if=virtio,format=qcow2,file={backing}{DISCARD_OPTS}",
         *_netdev_args(cfg),
     ])
 
