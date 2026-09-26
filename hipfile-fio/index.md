@@ -4,7 +4,7 @@ title: VM Report — hipFile fio VM
 
 # VM Report — qemu-minimal — hipFile fio VM
 
-Generated: **2026-09-25 21:12 UTC** &middot; Commit: [`603b8c8`](https://github.com/sbates130272/qemu-minimal/commit/603b8c818ffe1143054808e7320406831d067416)
+Generated: **2026-09-26 00:39 UTC** &middot; Commit: [`fa6d855`](https://github.com/sbates130272/qemu-minimal/commit/fa6d8556572e6a71cc99a193f1624f7c529c4a20)
 
 ## Hardware
 
@@ -13,19 +13,19 @@ Generated: **2026-09-25 21:12 UTC** &middot; Commit: [`603b8c8`](https://github.
 | CPU | AMD EPYC Processor |
 | vCPUs | 4 |
 | Threads/core | 1 |
-| RAM | 3.8Gi total, 2.8Gi free |
+| RAM | 3.8Gi total, 2.7Gi free |
 | Swap | 0B |
 
 ## Kernel
 
 ```
-7.0.0-34-generic
+7.2.4-070204-generic
 ```
 
 <details><summary>Full version string</summary>
 
 ```
-Linux version 7.0.0-34-generic (buildd@lcy02-amd64-082) (x86_64-linux-gnu-gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0, GNU ld (GNU Binutils for Ubuntu) 2.46) #34-Ubuntu SMP PREEMPT_DYNAMIC Wed Sep  2 14:29:37 UTC 2026
+Linux version 7.2.4-070204-generic (kernel@balboa) (x86_64-linux-gnu-gcc-15 (Ubuntu 15.2.0-12ubuntu1) 15.2.0, GNU ld (GNU Binutils for Ubuntu) 2.46) #202609072054 SMP PREEMPT_DYNAMIC Thu Sep 10 15:53:25 UTC 2026
 ```
 
 </details>
@@ -47,8 +47,8 @@ nvme0n1    1T disk
 
 ```
 Filesystem      Size  Used Avail Use% Mounted on
-/dev/vda1        61G   11G   51G  18% /
-/dev/vda13      989M  285M  638M  31% /boot
+/dev/vda1        61G   11G   50G  18% /
+/dev/vda13      989M  371M  551M  41% /boot
 ```
 
 ### NVMe
@@ -176,7 +176,7 @@ ubuntu : ubuntu video users render admin
 
 | Metric | Value |
 |---|---|
-| fio libhipfile read throughput | 11.2 MB/s |
+| fio libhipfile read throughput | 10.6 MB/s |
 
 This is fio's own `libhipfile` ioengine reading from the guest NVMe straight
 into VRAM, rather than the hand-written benchmark the rocjitsu report uses. fio
@@ -191,5 +191,5 @@ rocm: /opt/rocm/core-10.0
 building fio 6bc57a931f04fa3f50348d8c8f087187f050c6e1
 FIO_VERSION = fio-3.42
 fio: fio-3.42 commit=6bc57a931f04fa3f50348d8c8f087187f050c6e1
-fio-hipfile-bench: read_bytes=67108864 seconds=5.978 read_gbs=0.011225972
+fio-hipfile-bench: read_bytes=67108864 seconds=6.356 read_gbs=0.010558348
 ```
