@@ -34,10 +34,20 @@ rocjitsu_gpu_test_pci_id: "1002:75c1"
 #
 # It is *not* the cause of the vector_add hangs seen while chasing this, which
 # was the obvious guess and the wrong one -- a run with the unit confirmed
-# stopped hung just the same. That hang is per-boot state: the first test run
-# after a boot passes, a second in the same boot wedges. CI boots a VM and runs
-# this play once, so it does not meet it; local iteration needs the compose
-# stack restarted between runs.
+# stopped hung just the same. That hang is per-boot state, and it is now
+# understood: the emulated GPU serves a private/scratch segment to exactly one
+# process per device lifetime. The second process in the same boot that asks
+# for scratch hangs, and the device is then wedged for every later process --
+# including ones that request no scratch at all, which block on the first call
+# that forces a code object onto them. Measured: sgemm-bench (no scratch) runs
+# twelve times over without trouble, while rocjitsu-scratch-repro wedges the
+# device on its second run.
+#
+# "CI runs this play once, so it does not meet it" used to be written here and
+# was wrong. report-for-vm-rocjitsu runs this play and then two benchmarks
+# against the same boot, so the benchmarks were the second consumer and hung;
+# that lane restarts the compose stack between the two for this reason. Local
+# iteration needs the same restart between runs.
 rocjitsu_gpu_test_stop_services:
   - amd-metrics-exporter.service
   - prometheus-node-exporter.service

@@ -49,11 +49,36 @@ concurrency:
 jobs:
   publish:
     name: Publish Pages
-    # A failed report lane has nothing worth publishing, but a push or a manual
-    # run has no triggering run to judge.
+    # This used to gate on `conclusion == 'success'`, on the reasoning that a
+    # failed report lane "has nothing worth publishing". That reasoning does not
+    # survive the merge of the two rocjitsu lanes.
+    #
+    # report-for-vm-rocjitsu now runs two benchmarks against one guest, each
+    # continue-on-error with its own upload gated on that step's outcome, and
+    # then fails the job on purpose if either half failed. Since 2026-09-24 the
+    # GEMM half has hung every run and the fio half has passed every run -- so
+    # every run uploads a good, fresh vm-report-hipfile-fio and concludes
+    # `failure`. Under the old gate its own workflow_run always skipped, and
+    # that artifact reached the site only if some unrelated lane happened to
+    # trigger a publish later while it was still unexpired. On 2026-09-26 both
+    # of the day's publishes ran before the artifact existed and the 13:15 run
+    # triggered by the lane itself skipped, so a good report sat in artifact
+    # storage for a day. That defeated the entire reason the lane was
+    # restructured to survive a hang.
+    #
+    # Publishing on a failed run cannot publish a stale half-report as clean,
+    # which was the stated fear. `fetch` below resolves each artifact NAME
+    # independently against the newest unexpired upload of that name, and a
+    # half that failed uploaded nothing, so its subtree is simply left as it
+    # already is on the branch. That is the same outcome the by-name fetch
+    # produces for a lane that has not run in a week -- long-accepted, and the
+    # whole point of fetching by name rather than from the triggering run.
+    #
+    # `skipped` is still excluded: the triggering workflow did no work at all,
+    # so there is nothing new to assemble and no reason to spend a runner.
     if: >-
       github.event_name != 'workflow_run' ||
-      github.event.workflow_run.conclusion == 'success'
+      github.event.workflow_run.conclusion != 'skipped'
     runs-on: ubuntu-latest
     steps:
       - name: Check out code

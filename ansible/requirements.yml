@@ -10,8 +10,14 @@
 # instead of being installed silently, surfacing as a module-not-found. If that
 # happens, add the collection below rather than dropping --no-deps.
 collections:
+  # Exact, not ">=2.4.0". The floating range resolves to 3.0.0, whose git_setup
+  # role asserts git_setup_user_name and git_setup_user_email are set; nothing
+  # in this repo sets either, so every gen-vm lane aborts before rocm_setup
+  # runs. CI has not hit it only because its collections cache still holds a
+  # 2.x -- the next eviction would break all of them at once. Move to 3.0.0
+  # deliberately, in its own PR, supplying the identity vars.
   - name: sbates130272.batesste
-    version: ">=2.4.0"
+    version: "2.4.0"
   # Pinned to the upstream git tree rather than Galaxy. Galaxy publishes only
   # 0.1.0, which is the pre-ionic collection: it builds the out-of-tree
   # rocm_ernic_eth/rocm_ernic_rdma modules and reads driver/ and rdma-core/,
