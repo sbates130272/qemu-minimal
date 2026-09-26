@@ -162,6 +162,72 @@ jobs:
           -e "ansible_user=ubuntu" \
           -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"'
 
+    # The emulated GPU serves a private/scratch segment to exactly one process
+    # per device lifetime. The second process in the same boot that asks for
+    # scratch hangs -- and from then on the device is wedged for every later
+    # process, including ones that request no scratch at all, which block on the
+    # first call that forces a code object onto it. Nothing is logged in the
+    # guest; the only evidence is "pci: cannot remove queue at doorbell 0x4000"
+    # on the rocjitsu side.
+    #
+    # The validation play above runs rocjitsu-scratch-repro, so it spends that
+    # one allowance. Without this restart the GEMM benchmark is the next
+    # consumer and hangs at hipFuncGetAttributes -- which is what has failed
+    # this lane on every run since 2026-09-24, and why the fio half was
+    # reporting 10 MB/s rather than the ~400 MB/s it gets on a healthy device.
+    #
+    # Bouncing the stack is a fresh device, so the benchmarks get the allowance
+    # to themselves. It costs about a minute against a 180-minute job. Drop it
+    # once the emulator reclaims scratch on process exit; a run of
+    # rocjitsu-scratch-repro twice in one boot is the check.
+    - name: Restart the compose stack so the benchmarks get a fresh device
+      working-directory: qemu/compose/vfio-user-rocjitsu-vm
+      timeout-minutes: 10
+      env:
+        VM_NAME: rocjitsu-report
+        QEMU_TOOL_SRC: /var/lib/qemu-tool/src
+        VM_VCPUS: "4"
+        VM_VMEM: "4096"
+        VM_SHM_SIZE: "5g"
+        VM_NVME: "1"
+      shell: bash
+      run: |
+        set -euo pipefail
+        docker compose down
+        docker compose up --detach
+        # down removes the network, so the job container's attachment goes with
+        # it and has to be remade before any ssh to "qemu" can resolve.
+        docker network connect vfio-user-rocjitsu-vm_default "$(cat /etc/hostname)"
+
+        for _ in $(seq 1 30); do
+          health=$(docker compose ps --format json rocjitsu \
+            | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('Health',''))" \
+            2>/dev/null || true)
+          [ "$health" = "healthy" ] && break
+          sleep 2
+        done
+        [ "$health" = "healthy" ] || { docker compose logs rocjitsu; exit 1; }
+
+        elapsed=0
+        while [ $elapsed -lt 180 ]; do
+          if ssh -o ConnectTimeout=1 \
+                 -o NoHostAuthenticationForLocalhost=yes \
+                 -o StrictHostKeyChecking=no \
+                 -p 2222 ubuntu@qemu true 2>/dev/null; then
+            break
+          fi
+          sleep 2; elapsed=$((elapsed + 2))
+        done
+        [ $elapsed -lt 180 ] || { echo "::error::VM did not come back after the restart"; exit 1; }
+        echo "VM back after ${elapsed}s"
+
+        # amdgpu is blacklisted at boot by design -- it must load after the
+        # vfio-user server is serving -- so the fresh guest has no GPU until
+        # this runs, exactly as after the first boot.
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
+          -p 2222 ubuntu@qemu "sudo -n timeout 120 /usr/local/bin/amdgpu-probe"
+
     # Both benchmarks run against the one guest. continue-on-error on each,
     # paired with if: always() on its upload, is what keeps the two badges
     # independent now that they share a lane -- a fio-side regression must not
@@ -219,9 +285,14 @@ jobs:
       run: docker compose logs
 
     # continue-on-error above keeps the job green, so fail it explicitly when
-    # either benchmark failed -- otherwise publish-pages, which gates on
-    # workflow_run conclusion == success, would publish a stale half-report as
-    # though the run had been clean.
+    # either benchmark failed -- otherwise a hung GEMM looks like a clean run
+    # and nothing ever goes red about it.
+    #
+    # This no longer has anything to do with publish-pages. That workflow used
+    # to gate on workflow_run conclusion == success, which made this step's
+    # (correct) red conclusion suppress the publish of the half that *did*
+    # succeed; it now runs on any non-skipped conclusion and resolves each
+    # artifact by name. See the comment on its `publish` job.
     # shell: bash is not decoration. This job runs in the qemu container, where
     # GitHub resolves the default shell to `sh -e {0}`, and dash rejects
     # `set -o pipefail` outright -- "Illegal option -o pipefail", exit 2. That
