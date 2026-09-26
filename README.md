@@ -352,13 +352,24 @@ rocm-ernic publishes its next collection.
 
 ### Available playbooks
 
-| Playbook | Description |
-|---------|-------------|
-| `vm-basic.yml` | User setup, favourite packages, git config |
-| `vm-rocm.yml` | As above, plus ROCm stack |
-| `vm-ernic.yml` | ROCm + [rocm-ernic][rocm-ernic] RDMA NIC prerequisites; `--tags configure` for post-boot NIC setup |
-| `vm-rocjitsu.yml` | ROCm + rocjitsu GPU firmware and driver prerequisites |
-| `vm-ernic-rocjitsu.yml` | Both ernic and rocjitsu prerequisites combined |
+The playbooks are layered rather than independent: `vm-basic.yml` is the base
+for every guest, and `vm-rocm.yml` is the base for every guest that needs ROCm.
+Each one imports its parent, so the shared work has exactly one definition.
+
+```text
+vm-basic.yml                 user setup, favourite packages, git config
+  |-- vm-rocm.yml            + apt pins, ROCm stack            [ROCm base]
+  |     `-- vm-rocjitsu.yml  + mainline kernel, amdgpu patches, firmware
+  `-- vm-ernic.yml           + ionic driver and RDMA prerequisites
+```
+
+| Playbook | Imports | Description |
+|---------|---------|-------------|
+| `vm-basic.yml` | — | User setup, favourite packages, git config |
+| `vm-rocm.yml` | `vm-basic.yml` | As above, plus the ROCm stack. The base for any ROCm guest |
+| `vm-ernic.yml` | `vm-basic.yml` | [rocm-ernic][rocm-ernic] RDMA NIC prerequisites; `--tags configure` for post-boot NIC setup. Installs no ROCm |
+| `vm-rocjitsu.yml` | `vm-rocm.yml` | ROCm + rocjitsu GPU firmware and driver prerequisites |
+| `vm-ernic-rocjitsu.yml` | both of the above | Both ernic and rocjitsu prerequisites combined |
 
 ```bash
 qemu-tool gen-vm \

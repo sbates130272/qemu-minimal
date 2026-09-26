@@ -1,0 +1,16 @@
+---
+# The GitHub API auth header, written once. Several roles fetch release
+# metadata from api.github.com; without a token they hit the anonymous rate
+# limit, which surfaces as an intermittent 403 on a download and reads exactly
+# like a flake.
+#
+# This is a vars file rather than a shared module_defaults block because
+# module_defaults is play-scoped and is not inherited through import_playbook.
+# Every play still needs its own key; this at least gives them all one
+# definition of the value. Same reasoning as vars/ernic-pins.yml.
+github_api_headers: >-
+  {{
+    ({'Authorization': 'token ' + lookup('env', 'GITHUB_TOKEN')}
+     if lookup('env', 'GITHUB_TOKEN')
+     else {})
+  }}

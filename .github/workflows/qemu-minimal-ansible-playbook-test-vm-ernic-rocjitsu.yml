@@ -25,6 +25,11 @@ on:
       - 'ansible/playbooks/vm-ernic-rocjitsu.yml'
       - 'ansible/playbooks/vm-ernic.yml'
       - 'ansible/playbooks/vm-rocjitsu.yml'
+      # Both of those import their own bases: vm-ernic.yml -> vm-basic.yml,
+      # vm-rocjitsu.yml -> vm-rocm.yml -> vm-basic.yml.
+      - 'ansible/playbooks/vm-rocm.yml'
+      - 'ansible/playbooks/vm-basic.yml'
+      - 'ansible/playbooks/vars/**'
       - 'ansible/requirements.yml'
       - 'qemu/compose/vfio-user-ernic-rocjitsu-vm/**'
       - '.github/actions/setup-vm-job/action.yml'

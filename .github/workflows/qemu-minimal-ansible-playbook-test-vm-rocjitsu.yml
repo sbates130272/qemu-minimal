@@ -19,11 +19,15 @@ on:
     # runner-minutes across the four playbook lanes for every qemu-tool edit.
     paths:
       - 'ansible/playbooks/vm-rocjitsu.yml'
+      # vm-rocjitsu.yml imports vm-rocm.yml, which imports vm-basic.yml.
+      - 'ansible/playbooks/vm-rocm.yml'
+      - 'ansible/playbooks/vm-basic.yml'
+      - 'ansible/playbooks/vars/**'
+      # ionic_image_prep is no longer ernic-only: vm-rocm.yml uses its
+      # kernel.yml to install the pinned mainline kernel this lane boots, so a
+      # change there changes this guest. The exclusion that used to sit here
+      # predated that.
       - 'ansible/playbooks/roles/**'
-      # ionic_image_prep is ernic-only; editing it should not cost 50 minutes
-      # of GPU lane. The ernic lane already excludes rocjitsu_gpu_test
-      # symmetrically.
-      - '!ansible/playbooks/roles/ionic_image_prep/**'
       - 'ansible/requirements.yml'
       - 'qemu/compose/vfio-user-rocjitsu-vm/**'
       - '.github/actions/setup-vm-job/action.yml'

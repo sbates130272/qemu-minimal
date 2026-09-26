@@ -1,4 +1,7 @@
 ---
+# The base for every guest this repo builds. vm-rocm.yml imports it and adds
+# the ROCm stack; vm-ernic.yml imports it and adds the ernic prerequisites.
+# Nothing else should carry a copy of the roles below.
 - name: Post cloud-init VM setup
   hosts: all
   gather_facts: true
@@ -7,22 +10,27 @@
   # git_setup role's `community.general.git_config` (scope: global) tasks
   # would write to /root/.gitconfig instead of the target user's home.
   become: false
-  # See vm-rocm.yml: set the GitHub token once here instead of relying on each
-  # workflow step to pass it through, so the roles never fall back to the
-  # anonymous API rate limit.
+  tags: [install]
+  vars_files:
+    - vars/github-api.yml
   module_defaults:
     ansible.builtin.uri:
-      headers: >-
-        {{
-          ({'Authorization': 'token ' + lookup('env', 'GITHUB_TOKEN')}
-           if lookup('env', 'GITHUB_TOKEN')
-           else {})
-        }}
+      headers: "{{ github_api_headers }}"
   vars:
     username: "{{ vm_username | default('ubuntu') }}"
     root_user: "{{ vm_root_user | default('ubuntu') }}"
     user_setup_motd: true
-    user_setup_install_amd_ca: true
+    # Importers turn this off: the ernic and rocjitsu guests do not need the
+    # AMD corporate CA.
+    user_setup_install_amd_ca: "{{ vm_install_amd_ca | default(true) }}"
+  pre_tasks:
+    # Has to precede user_setup, which is why it lives in this play rather than
+    # in the importers.
+    - name: Remove any partial dotfiles clone so user_setup can start fresh
+      ansible.builtin.file:
+        path: "/home/{{ username }}/.dotfiles"
+        state: absent
+      become: true
   roles:
     - role: sbates130272.batesste.user_setup
     - role: sbates130272.batesste.fave_packages
