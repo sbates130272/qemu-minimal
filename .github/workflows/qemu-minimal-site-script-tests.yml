@@ -1,0 +1,83 @@
+name: qemu-minimal - Site Script Tests
+
+# render-site-perf.py runs exactly once per Pages publish, on a runner, against
+# state that only exists on the gh-pages branch. workflow_run and schedule only
+# ever run the default branch's copy of a workflow, so publish-pages cannot be
+# exercised from a PR at all -- every bug in the renderer used to be a
+# post-merge bug, found by reading the published site afterwards. This lane is
+# the pre-merge half: it drives the same code paths against fixtures in about a
+# second, with no VM and no branch state.
+#
+# No push: trigger and no paths: filter, matching shell-check and setup-test --
+# every commit reaches main through a PR, and a path-filtered required check
+# never reports on a PR outside its filter, leaving that PR blocked forever.
+# The job is seconds, so there is nothing to save by filtering it.
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Only supersede PR runs: a push to main or a scheduled run should finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  site-script-tests:
+    name: Site Script Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4.3.1
+
+      # Stdlib unittest on the runner's system python. The tests deliberately
+      # take no dependency, so there is nothing to install and nothing to pin.
+      - name: Run the renderer unit tests
+        run: python3 -m unittest discover -s tests -v
+
+      # The unit tests hand-write the report meta line, so on its own the suite
+      # would still pass if generate-vm-report.sh changed the format out from
+      # under the parser. This step closes that loop by having the real script
+      # write the real line. It needs no VM: every field is gathered through
+      # collect(), which falls back to "(not available)" when ssh fails, so
+      # pointing it at a dead port produces a structurally complete report.
+      - name: Check the two scripts still agree on the report format
+        run: |
+          set -euo pipefail
+          staging=$(mktemp -d)
+
+          # Port 1 has nothing listening, so every collect() takes its fallback.
+          for path in 1vm rocjitsu ernic ernic/vm2 hipfile-fio; do
+            scripts/generate-vm-report.sh "${staging}/${path}" 1 nobody >/dev/null
+          done
+
+          # One metric badge, in the shape a report lane uploads, so the badge
+          # and history paths are exercised too rather than just the green one.
+          mkdir -p "${staging}/rocjitsu"
+          cat > "${staging}/rocjitsu/badge-gemm.json" <<'JSON'
+          {"schemaVersion":1,"label":"rocjitsu GEMM","message":"823 GFLOP/s","color":"blue"}
+          JSON
+
+          out=$(mktemp -d)
+          python3 scripts/render-site-perf.py \
+            --site-dir "${staging}" \
+            --history-out "${out}/history.jsonl" \
+            --green-out "${out}/green.json"
+
+          echo "--- green.json"
+          cat "${out}/green.json"
+
+          # The reports were written seconds ago and stamped pass by the script
+          # itself, so anything other than green means the stamp the renderer
+          # looks for is not the stamp the report carries.
+          python3 - "${out}/green.json" <<'PY'
+          import json, sys
+          state = json.load(open(sys.argv[1]))
+          if not state.get("green"):
+              sys.exit("freshly generated pass-stamped reports did not read as green: %r" % state)
+          print("all reports green as of", state.get("last_all_green"))
+          PY

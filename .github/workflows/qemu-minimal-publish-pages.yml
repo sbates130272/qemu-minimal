@@ -158,10 +158,18 @@ jobs:
               git checkout -q -b gh-pages
             fi
 
+            # Both --*-in paths are relative to this gh-pages clone, i.e. the
+            # state as published, and both --*-out paths go into staging so the
+            # sync_dir below is what actually writes them back. green.json is
+            # kept apart from history.jsonl because the history appends only
+            # when a benchmark number changes, and the all-green date has to be
+            # able to advance on a publish where nothing did.
             python3 ../scripts/render-site-perf.py \
               --site-dir ../staging \
               --history-in perf/history.jsonl \
-              --history-out ../staging/perf/history.jsonl
+              --history-out ../staging/perf/history.jsonl \
+              --green-in perf/green.json \
+              --green-out ../staging/perf/green.json
 
             cp ../staging/_config.yml \
               ../staging/index.md \

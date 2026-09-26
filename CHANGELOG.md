@@ -6,6 +6,42 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- **The VM playbooks are layered** the way the README has always described
+  them, instead of four standalone files re-copying the shared parts.
+  `vm-basic.yml` is the base for every guest; `vm-rocm.yml` imports it and is
+  the base for every guest that needs ROCm; `vm-rocjitsu.yml` imports
+  `vm-rocm.yml`; `vm-ernic.yml` imports `vm-basic.yml`. What had been
+  duplicated: the GitHub-token `module_defaults` block (four verbatim copies,
+  now one expression in `vars/github-api.yml`), the
+  `user_setup`/`fave_packages`/`git_setup` trio (four copies), and the ROCm
+  apt pin plus three stale-source cleanups (two copies, ~60 lines each).
+  `vm-ernic.yml` sits on `vm-basic.yml` rather than `vm-rocm.yml` because it
+  installs no ROCm at all — its `rocm_setup_*` vars, the ROCm apt pin and the
+  ROCm keyring cleanup were configuring a role that never ran, and are gone
+  with it. `ansible-playbook --list-tasks --tags install` is unchanged for the
+  combined lane and changes only as intended for the other two.
+  `vm-ernic-rocjitsu.yml` is untouched.
+
+- **Every CI lane that bakes a guest now runs `resolute`.** The `vm-rocm`,
+  `ansible-setup-test`, `report-for-vm-basic`, `report-for-vm-ernic` and
+  `smoke-test-rocm-ernic` lanes were still on `noble`, so half the fleet was
+  being proved on a release nothing else used. `smoke-test-qemu-tool` keeps its
+  `noble` × `resolute` matrix deliberately — it is the one lane whose subject
+  *is* release coverage, and collapsing it would leave `noble` advertised by
+  the CLI and untested everywhere.
+
+- **`gen-vm` defaults to `--release resolute`** (was `noble`), so a bare
+  `qemu-tool gen-vm` builds what CI proves. README, the man page and
+  `env.example` follow. Pass `--release noble` to get the old default back;
+  `noble` remains supported and matrix-tested.
+
+- `vm-rocm.yml`'s `rocm_setup_extra_kernel_packages` now defaults to `[]`. It
+  named `linux-generic-hwe-24.04`, which was correct only while the plain ROCm
+  lane ran noble; on resolute that is another release's metapackage, and there
+  is no resolute equivalent worth naming because resolute's GA kernel already
+  is the current one. Naming one there installs a kernel nothing boots, which
+  is the trap `vm-rocjitsu.yml` already documents on its own `[]` override.
+
 - `vm-rocjitsu.yml` installs the pinned mainline kernel (`ionic_kernel_pin`,
   currently `v7.2.4`) before it touches DKMS, so the standalone rocjitsu lane
   boots the same kernel as the combined lane and as the published
@@ -249,6 +285,72 @@ All notable changes to this project will be documented in this file.
   reliable answer.
 
 ### Added
+
+- **The performance badges now encode health rather than branding.** They used
+  to carry the AMD/NVIDIA/Intel brand colours, so rocjitsu GEMM rendered red on
+  its best day and none of the three ever changed — the colour half of each
+  badge carried no information at all. Each badge now compares the latest
+  reading against the mean of the previous five *distinct* readings and colours
+  green at or above 95% of it, amber down to 80%, red below, with the delta
+  appended to the message. Distinct matters: a history row is a *publish*, not a
+  benchmark run, and any lane finishing re-records the other lanes' unchanged
+  numbers, so a naive mean over the last five rows weights whichever plateau
+  happened to be republished most. A reading with nothing to compare against is
+  blue, not green — no verdict has been made — and a metric with no badge at all
+  is grey `n/a`. The 95/80 dead band is wide on purpose: these benchmarks run
+  against an emulated GPU over vfio-user and swing hard between runs.
+
+- **An "all reports green" date badge**, served from `perf/badge-all-green.json`
+  and shown on the README's report row and the site landing page. It is green
+  with today's date while every one of the five report lanes has published a
+  fresh passing report, amber carrying the last such date once any lane stops,
+  and red `never` before the first one. Green needs both halves: a `pass` stamp
+  *and* a report generated within 36 hours. A failing lane uploads nothing and
+  its last good report stays on the branch, so the stamp alone would read green
+  forever; freshness alone would call a fresh failure green. The date lives in
+  its own `perf/green.json` rather than in `perf/history.jsonl`, because the
+  history appends only when a benchmark number changes and the date has to be
+  able to advance on a publish where nothing did.
+
+- **`generate-vm-report.sh` stamps `Status: **pass**`** into each report's meta
+  line, which is what the badge above reads. It is earned rather than
+  decorative: the script runs under `set -e` and every benchmark path ends in
+  `bench_failed`, so reaching the report heredoc at all means nothing failed.
+  Reports already on `gh-pages` predate the stamp and parse as `unknown`, which
+  is treated as not-green rather than as a pass. Override with `REPORT_STATUS`
+  only if a caller has a verdict the script cannot see.
+
+- **A `Site Script Tests` lane and `tests/test_render_site_perf.py`** — the
+  repo's first Python tests, stdlib `unittest`, no dependency to install. Run
+  them with `python3 -m unittest discover -s tests`. `render-site-perf.py` runs
+  exactly once per publish, on a runner, against state that only exists on
+  `gh-pages`, and `workflow_run`/`schedule` only ever run the default branch's
+  copy of a workflow — so every bug in it used to be a post-merge bug, found by
+  reading the published site afterwards. The lane covers the colour thresholds,
+  the distinct-value collapsing, the green/stale/unstamped cases and the badge
+  JSON shape in about a second, with no VM. It also drives
+  `generate-vm-report.sh` against a dead SSH port and feeds the result to the
+  renderer, so the two scripts cannot drift on the meta-line format without a
+  PR going red.
+
+- **Two opt-out knobs on `vm-rocjitsu.yml`'s firmware generation**, so the
+  playbook can drive a build whose Ansible controller has no Docker daemon.
+  `rocjitsu_generate_firmware` (default `true`) gates the seven controller-side
+  tasks — the generation step is a `delegate_to: localhost` `docker run`, and a
+  BuildKit `RUN --security=insecure` step has the CLI on `PATH` with no socket
+  behind it. `rocjitsu_firmware_ip_discovery` (default `true`) appends
+  `--no-ip-discovery` to the generator argv when false: `ip_discovery.bin` is
+  per-config and has to match the rocjitsu build the *consumer* serves the
+  device from, not the one that built the disk, so a published qcow2 must not
+  bake one in. Defaults preserve current behaviour exactly. The two
+  driver-packaged firmware assertions stay ungated — they only stat what
+  `amdgpu-dkms-firmware` installed and need no controller Docker.
+
+- **`.github/actions/report-image-size`**, wired into all four bake lanes.
+  Prints the baked qcow2's allocated size and an in-guest `du`/`dpkg-query`
+  breakdown. Purely diagnostic and non-fatal. The ROCm images are ~19–20 GiB
+  of real allocation and nothing had ever measured why, so any attempt to
+  shrink them would have been judged against a guess.
 
 - `pciutils` in `packages.d/packages-default`, which backs the new PCI
   devices section below. See **Fixed** for why the report lanes now use

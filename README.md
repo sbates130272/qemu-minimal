@@ -6,15 +6,42 @@
 [![Platform](https://img.shields.io/badge/platform-x86__64%20%7C%20ARM64%20%7C%20RISC--V-blue?style=flat-square)](https://github.com/sbates130272/qemu-minimal)
 [![Ubuntu](https://img.shields.io/badge/Ubuntu-Noble%20%7C%20Resolute-orange?style=flat-square&logo=ubuntu)](https://releases.ubuntu.com/noble/)
 [![GitHub Release](https://img.shields.io/github/v/release/sbates130272/qemu-minimal?style=flat-square)](https://github.com/sbates130272/qemu-minimal/releases/latest)
+
+<!-- Reports. The blank lines around this block and the performance one below
+     are load-bearing: a blank line is what makes GitHub start a new paragraph,
+     and therefore a new row of badges. A <br> inside the paragraph does not.
+     All three report lanes run on main (push and a daily 08:00 cron), so all
+     three are pinned with ?branch=main.
+
+     The date badge is the odd one out: it is not a workflow status. It is
+     computed during the Pages publish from the reports actually on the site,
+     and shows the last date on which every one of them was both stamped
+     `pass` and freshly generated. A lane can be red while the site still
+     serves its last good report, and that distinction is the whole point --
+     see scripts/render-site-perf.py's update_green(). -->
 [![VM Report](https://img.shields.io/badge/VM%20Report-live-blue?style=flat-square)](https://sbates130272.github.io/qemu-minimal/)
+[![basic Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-vm-basic.yml?branch=main&label=report-for-vm-basic&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-vm-basic.yml)
+[![rocjitsu Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-vm-rocjitsu.yml?branch=main&label=report-for-vm-rocjitsu&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-vm-rocjitsu.yml)
+[![ernic Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-vm-ernic.yml?branch=main&label=report-for-vm-ernic&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-vm-ernic.yml)
+[![All Reports Green](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-all-green.json&style=flat-square)](https://sbates130272.github.io/qemu-minimal/perf/)
+
+<!-- Performance. These are shields.io *endpoint* badges: the label, value and
+     colour all come from JSON that the Pages publish writes, so the colour is
+     a verdict rather than decoration. Green means the latest reading is within
+     5% of the mean of the previous five distinct readings, amber down to 20%
+     below it, red past that, and blue means there is nothing to compare
+     against yet. They used to be fixed AMD/NVIDIA/Intel brand colours, which
+     meant GEMM rendered red on its best day. -->
 [![rocjitsu GEMM](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-gemm.json&style=flat-square)](https://sbates130272.github.io/qemu-minimal/perf/)
 [![rocjitsu hipFile](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile.json&style=flat-square)](https://sbates130272.github.io/qemu-minimal/perf/)
 [![hipFile fio](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile-fio.json&style=flat-square)](https://sbates130272.github.io/qemu-minimal/perf/)
+
 [![qemu-tool Smoke Test](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-smoke-test-qemu-tool.yml?branch=main&label=qemu-tool-smoke&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-smoke-test-qemu-tool.yml)
 <!-- The four PR-only lanes below (dry-run, ansible, shell-check, spell-check)
      carry no ?branch=main: they have no push-to-main and no cron trigger, so
      they have no run on main and shields renders "no status" for a pinned
-     badge. The three that do run on main stay pinned. -->
+     badge. The two smoke-test lanes in this row do run on main and stay
+     pinned, as do the report lanes in their own row above. -->
 [![Dry-Run Tests](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-dry-run-qemu-tool.yml?label=dry-run&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-dry-run-qemu-tool.yml)
 [![Ansible Test](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-ansible-setup-test.yml?label=ansible&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-ansible-setup-test.yml)
 [![Shell Check](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-shell-check.yml?label=shell-check&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-shell-check.yml)
@@ -152,7 +179,7 @@ Delete the `qemu/qemu_tool.egg-info` directory as root and retry.
 Generate and run a Noble VM:
 
 ```bash
-qemu-tool gen-vm --vm-name myvm --release noble
+qemu-tool gen-vm --vm-name myvm --release resolute
 qemu-tool run-vm --vm-name myvm
 ssh -p 2222 ubuntu@localhost
 ```
@@ -406,7 +433,7 @@ flags take precedence over XML values).
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--release NAME` | `noble` | Ubuntu codename (`noble`, `resolute`) or `XX.YY` |
+| `--release NAME` | `resolute` | Ubuntu codename (`resolute`, `noble`) or `XX.YY` |
 | `--size GB` | `64` | Disk size in GB |
 | `--username USER` | `ubuntu` | Guest username |
 | `--password PASS` | `password` | Guest password |
