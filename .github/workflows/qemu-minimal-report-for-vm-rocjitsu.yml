@@ -180,7 +180,25 @@ jobs:
     # to themselves. It costs about a minute against a 180-minute job. Drop it
     # once the emulator reclaims scratch on process exit; a run of
     # rocjitsu-scratch-repro twice in one boot is the check.
+    #
+    # Scoped to the two services rather than `docker compose down`. `down` also
+    # removes the network -- and this job runs in a container that "Join the
+    # compose network" attached to that very network, so the removal fails with
+    # "Resource is still in use", the job container is never detached, and a
+    # follow-up `docker network connect` then dies on an endpoint that never
+    # went away. That is exactly how run 36265820822 failed.
+    #
+    # `rm --stop --force` is what `down` already reduced to in this job, since
+    # the network removal was the only extra thing it attempted and that is the
+    # part that could not succeed. Same clean server and guest state, no shared
+    # infrastructure touched, and nothing to reconnect afterwards.
     - name: Restart the compose stack so the benchmarks get a fresh device
+      id: restart-stack
+      # Not fatal on its own: the report steps below are bounded and gated on
+      # their own outcomes, and a failure here is reported by the final gate.
+      # Hard-failing cost both artifacts on 36265820822, where the fio half
+      # would otherwise have uploaded as it had on every previous run.
+      continue-on-error: true
       working-directory: qemu/compose/vfio-user-rocjitsu-vm
       timeout-minutes: 10
       env:
@@ -193,11 +211,8 @@ jobs:
       shell: bash
       run: |
         set -euo pipefail
-        docker compose down
+        docker compose rm --stop --force qemu rocjitsu
         docker compose up --detach
-        # down removes the network, so the job container's attachment goes with
-        # it and has to be remade before any ssh to "qemu" can resolve.
-        docker network connect vfio-user-rocjitsu-vm_default "$(cat /etc/hostname)"
 
         for _ in $(seq 1 30); do
           health=$(docker compose ps --format json rocjitsu \
@@ -279,14 +294,18 @@ jobs:
         if-no-files-found: error
 
     - name: Show compose logs on failure
-      if: failure() || steps.rocjitsu-report.outcome == 'failure'
+      if: failure() || steps.restart-stack.outcome == 'failure'
+        || steps.rocjitsu-report.outcome == 'failure'
         || steps.hipfile-fio-report.outcome == 'failure'
       working-directory: qemu/compose/vfio-user-rocjitsu-vm
       run: docker compose logs
 
     # continue-on-error above keeps the job green, so fail it explicitly when
     # either benchmark failed -- otherwise a hung GEMM looks like a clean run
-    # and nothing ever goes red about it.
+    # and nothing ever goes red about it. The stack restart is checked here too,
+    # for the same reason: it is continue-on-error so that a failure there
+    # cannot skip both report steps, which means this is the only thing that
+    # makes it visible.
     #
     # This no longer has anything to do with publish-pages. That workflow used
     # to gate on workflow_run conclusion == success, which made this step's
@@ -304,6 +323,7 @@ jobs:
         set -euo pipefail
         rc=0
         for pair in \
+          "stack-restart:${{ steps.restart-stack.outcome }}" \
           "rocjitsu:${{ steps.rocjitsu-report.outcome }}" \
           "hipfile-fio:${{ steps.hipfile-fio-report.outcome }}"
         do
