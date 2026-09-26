@@ -10,8 +10,10 @@ cloud-init.
 from __future__ import annotations
 
 import base64
+import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -64,6 +66,7 @@ def run(cfg: VMConfig) -> None:
         if not backing.exists():
             sys.exit(f"Error: --ansible-only requires an existing backing image at {backing}")
         _run_ansible(cfg, images, backing)
+        _compact_backing(cfg, backing)
         overlay = images / f"{cfg.vm_name}.qcow2"
         if cfg.no_backing:
             backing.rename(overlay)
@@ -108,6 +111,7 @@ def run(cfg: VMConfig) -> None:
         _first_boot(cfg, images, backing)
 
     _run_ansible(cfg, images, backing)
+    _compact_backing(cfg, backing)
 
     overlay = images / f"{cfg.vm_name}.qcow2"
     if cfg.no_backing:
@@ -150,6 +154,112 @@ def _save_timestamp(path: Path) -> float | None:
         return path.stat().st_mtime
     except OSError:
         return None
+
+
+def _allocated_bytes(path: Path) -> int:
+    """Bytes the image actually occupies on disk, not its virtual size.
+
+    st_blocks is in 512-byte units on every platform regardless of the
+    filesystem block size. This is the number that matters here: a baked
+    backing image is 64G virtual and ~20G allocated, so a free-space check
+    against the virtual size would refuse on any sane disk.
+    """
+    return path.stat().st_blocks * 512
+
+
+def _gib(nbytes: int) -> str:
+    return f"{nbytes / (1 << 30):.2f} GiB"
+
+
+def _compact_backing(cfg: VMConfig, backing: Path) -> None:
+    """Recompress the freshly baked backing image in place.
+
+    -c (zlib) is right *because* this is a backing file: in normal use every
+    guest write lands in the overlay, so nothing rewrites a compressed cluster
+    and the usual "compressed qcow2 is slow to write" objection does not apply.
+    A ROCm tree is mostly ELF, which compresses well. If decompression ever
+    shows up in guest boot time, -o compression_type=zstd is the next lever.
+
+    One path does write to it: --ansible-only re-enters _run_ansible on an
+    existing backing and boots it as the writable root disk, with no overlay
+    in front. If that image was compacted by an earlier bake, the run pays for
+    it -- a sub-cluster write read-decompresses its 64 KiB cluster and
+    allocates a fresh uncompressed one, so the image inflates while Ansible
+    runs. The call below is what recovers it: the mode compacts again at the
+    end, and --no-compact is there for a rebuild loop that would rather keep
+    the image uncompressed throughout.
+
+    This flattens nothing. The backing image is a byte copy of the downloaded
+    cloud image (see run()) and Ubuntu cloud images are standalone qcow2, so
+    there is no chain underneath to collapse — the convert is a pure
+    recompress and the result depends on exactly what it depended on before.
+    (--backing-file, which *is* handed a caller-supplied image that may have a
+    chain, returns from run() long before here and is never rewritten.)
+
+    A failure must never fail the bake: by this point an hour of Ansible is
+    already on disk and an uncompacted image is perfectly usable. Every path
+    warns, removes the temporary file and leaves the original untouched.
+    """
+    if not cfg.compact:
+        return
+    if cfg.no_backing:
+        # This image is about to *become* the overlay, so the guest will write
+        # to it. Compressing clusters that are going to be rewritten is the
+        # one case where -c is actively the wrong choice.
+        return
+
+    before = _allocated_bytes(backing)
+    free = shutil.disk_usage(backing.parent).free
+    if free < before:
+        print(f"Warning: skipping compaction of {backing.name}: the convert "
+              f"holds both copies at once, needing up to {_gib(before)}, and "
+              f"only {_gib(free)} is free.")
+        return
+
+    # Sibling temp file, so os.replace() is an atomic same-filesystem rename
+    # and an interrupted convert cannot destroy an image that took an hour to
+    # bake.
+    tmp = backing.parent / f"{backing.name}.compact"
+    ts = _save_timestamp(backing)
+    print(f"Compacting {backing.name} ({_gib(before)} allocated)...")
+    try:
+        subprocess.run(
+            ["qemu-img", "convert", "-O", "qcow2", "-c",
+             str(backing), str(tmp)],
+            check=True,
+        )
+        # The cheap post-condition: qemu-img info both proves the result parses
+        # as qcow2 and gives us the virtual size to compare. A full qemu-img
+        # check would read every referenced cluster of a 20G image for a
+        # failure mode convert does not have.
+        if _virtual_size(tmp) != _virtual_size(backing):
+            raise ValueError("virtual size changed across the convert")
+        os.replace(tmp, backing)
+        if ts is not None:
+            os.utime(backing, (ts, ts))
+    except FileNotFoundError:
+        print("Error: qemu-img not found; leaving "
+              f"{backing.name} uncompacted.")
+        return
+    except (subprocess.CalledProcessError, ValueError, OSError) as exc:
+        print(f"Error: compaction of {backing.name} failed ({exc}); the "
+              "original image is intact and unchanged.")
+        return
+    finally:
+        tmp.unlink(missing_ok=True)
+
+    after = _allocated_bytes(backing)
+    ratio = before / after if after else 0.0
+    print(f"Compacted {backing.name}: {_gib(before)} -> {_gib(after)} "
+          f"({ratio:.2f}x)")
+
+
+def _virtual_size(path: Path) -> int:
+    r = subprocess.run(
+        ["qemu-img", "info", "--output=json", "-U", str(path)],
+        capture_output=True, text=True, check=True,
+    )
+    return int(json.loads(r.stdout)["virtual-size"])
 
 
 def _check_not_in_use(path: Path) -> None:

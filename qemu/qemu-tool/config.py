@@ -95,6 +95,7 @@ class VMConfig:
     # packages: path to manifest file, or None meaning no extra packages
     packages: str | None = field(default_factory=default_packages)
     force: bool = False
+    compact: bool = True
     no_backing: bool = False
     restore_image: bool = False
     backing_file: Path | None = None

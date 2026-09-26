@@ -243,6 +243,19 @@ Default:
 .B \-\-force
 Overwrite an existing VM image.
 .TP
+.BR \-\-compact " | " \-\-no\-compact
+Recompress the backing image with
+.I "qemu\-img convert \-c"
+once the bake finishes (default: enabled).
+Compression is safe on a backing file because guest writes land in the
+overlay and never rewrite a compressed cluster.
+Skipped when
+.B \-\-no\-backing
+is set.
+Use
+.B \-\-no\-compact
+for a fast local rebuild loop.
+.TP
 .B \-\-no\-backing
 Create a single flat image rather than a backing/overlay pair.
 .TP

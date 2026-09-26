@@ -388,7 +388,17 @@ vm-basic.yml                 user setup, favourite packages, git config
   |-- vm-rocm.yml            + apt pins, ROCm stack            [ROCm base]
   |     `-- vm-rocjitsu.yml  + mainline kernel, amdgpu patches, firmware
   `-- vm-ernic.yml           + ionic driver and RDMA prerequisites
+
+vm-slim.yml                  imported as the last line of every leaf above
 ```
+
+Every leaf ends by importing `vm-slim.yml`, which deletes the scratch the bake
+left behind — the apt cache and package lists, DKMS build trees, archived
+journals, `/tmp` and `/var/tmp` — and then `fstrim`s it back out of the qcow2.
+Every playbook that *imports* another passes `image_slim_enable: false` on that
+import, so exactly one slim pass runs per bake and it is the last play in the
+run. The flag propagates through nested imports, so a leaf never has to know
+how deep its own chain goes.
 
 | Playbook | Imports | Description |
 |---------|---------|-------------|
@@ -397,6 +407,7 @@ vm-basic.yml                 user setup, favourite packages, git config
 | `vm-ernic.yml` | `vm-basic.yml` | [rocm-ernic][rocm-ernic] RDMA NIC prerequisites; `--tags configure` for post-boot NIC setup. Installs no ROCm |
 | `vm-rocjitsu.yml` | `vm-rocm.yml` | ROCm + rocjitsu GPU firmware and driver prerequisites |
 | `vm-ernic-rocjitsu.yml` | both of the above | Both ernic and rocjitsu prerequisites combined |
+| `vm-slim.yml` | — | Reclaim bake scratch and `fstrim` it back to the qcow2. Imported last by every leaf; also runnable on its own against a baked guest |
 
 ```bash
 qemu-tool gen-vm \
@@ -441,6 +452,7 @@ flags take precedence over XML values).
 | `--ssh-key-file FILE` | `~/.ssh/id_rsa.pub` | SSH public key to inject |
 | `--packages FILE` | `packages.d/packages-default` | Package manifest or `none` |
 | `--force` | off | Force re-download of cloud image |
+| `--compact / --no-compact` | compact | Recompress the backing image after the bake |
 | `--no-backing` | off | Create flat image without a backing file |
 | `--restore-image` | off | Recreate overlay from existing backing file |
 | `--backing-file FILE` | — | Create overlay on top of this existing qcow2 |

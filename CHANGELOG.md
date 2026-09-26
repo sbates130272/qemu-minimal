@@ -35,6 +35,18 @@ All notable changes to this project will be documented in this file.
   `env.example` follow. Pass `--release noble` to get the old default back;
   `noble` remains supported and matrix-tested.
 
+- **`vm-rocm.yml` stops installing `rocm-cli` and `xrocmtop`.** Both
+  `rocm_setup_install_rocm_cli` and `rocm_setup_install_xrocmtop` default to
+  true in the role and were set nowhere here, so every ROCm lane — plain
+  rocjitsu and ernic-rocjitsu alike — baked them in by accident. Nothing in
+  this repo runs either and no lane asserts on them. `rocm-cli` is the bigger
+  reason: its installer is an unpinned `curl … rocm-cli/main/install.sh | sh`
+  executed at bake time. `xrocmtop` is an interactive terminal UI in a
+  headless CI guest. `rocm_setup_install_metrics_exporter` stays true —
+  `vm-rocjitsu.yml` deleted its own exporter install in favour of it, and the
+  guest that had no GPU and no use for it, `vm-ernic.yml`, no longer runs
+  `rocm_setup` at all.
+
 - `vm-rocm.yml`'s `rocm_setup_extra_kernel_packages` now defaults to `[]`. It
   named `linux-generic-hwe-24.04`, which was correct only while the plain ROCm
   lane ran noble; on resolute that is another release's metapackage, and there
@@ -285,6 +297,67 @@ All notable changes to this project will be documented in this file.
   reliable answer.
 
 ### Added
+
+- **Every bake now ends by slimming the guest it just built.** A new
+  `image_slim` role, invoked from a one-play `vm-slim.yml` that each leaf
+  playbook imports as its final line, empties the apt cache and package lists
+  (the largest single item on a ROCm guest, and nothing cleaned them before),
+  removes leftover DKMS `build/` trees, vacuums archived journals to 16M,
+  drops rotated and cloud-init logs, sweeps `/tmp` and `/var/tmp`, and then
+  `fstrim -av`s — which, with the bake boot's `discard=unmap`, punches all of
+  it back out of the qcow2 in place. It prints the reclaimed MiB. Two opt-in
+  flags go further at the cost of a fallback: `image_slim_purge_old_kernels`
+  removes the GA kernel the guest no longer boots, and
+  `image_slim_purge_dkms_sources` removes `/usr/src/amdgpu-*`; both default
+  false so a local bake keeps the ability to boot back and to rebuild.
+  `/var/tmp/ionic-src` is kept by default and only removed under
+  `image_slim_drop_ionic_src`, because the ernic lanes' post-boot
+  `--tags configure` run re-invokes `setup-ionic-dkms.sh` against it and would
+  otherwise re-clone a kernel from inside the VM. `cloud-init clean` is
+  deliberately *not* run: these images have no datasource on a later boot, so
+  wiping instance state would make that boot a first boot and regenerate the
+  MAC-pinned netplan `gen-vm` goes out of its way to neutralise.
+
+  Where it runs is the subtle part. `import_playbook` splices plays inline and
+  does not dedupe, so an ungated import from all five leaves would slim six
+  times on `vm-ernic-rocjitsu.yml` — five of them mid-chain, with real work
+  still to come. That is a bug, not waste: `vm-rocjitsu.yml` installs rocBLAS
+  with `update_cache: false` against lists an earlier pass would have deleted,
+  and both DKMS builds read trees the opt-in purges remove. Each importing
+  playbook therefore passes `image_slim_enable: false`, and because import
+  vars propagate through nested imports, one `false` silences every pass
+  beneath it. Exactly one slim pass runs per entry point and it is the last
+  play in the run.
+
+- **`gen-vm` compacts the backing image after the bake**, with
+  `--no-compact` (or `VM_COMPACT=false`) to opt out. Once Ansible has
+  finished, the backing image is rewritten with `qemu-img convert -O qcow2
+  -c` and the before/after allocated size and ratio are printed into the bake
+  log — that number is what the rest of the image-size work is measured
+  against. zlib compression is safe here precisely because this is a
+  *backing* file: in normal use every guest write lands in the overlay, so no
+  compressed cluster is rewritten, and a ROCm tree is mostly ELF. The one
+  exception is `--ansible-only`, which boots an existing backing as the
+  writable root disk with no overlay in front; that mode compacts again at the
+  end, and `--no-compact` is there for a rebuild loop that would rather stay
+  uncompressed throughout. Nothing is
+  flattened — the backing image is a byte copy of a standalone Ubuntu cloud
+  image, so the convert is a pure recompress. It writes a sibling temp file
+  and `os.replace`s only after `qemu-img info` confirms the result, so an
+  interrupted convert cannot destroy an image that took an hour to bake, and
+  a failed one warns and leaves the original in place rather than failing the
+  bake. Skipped under `--no-backing`, where the image becomes the overlay and
+  will be written to.
+
+- **The `vm-rocm` and `vm-ernic-rocjitsu` lanes now trigger on
+  `ansible/playbooks/roles/**`.** They did not, and both run roles from there —
+  `vm-rocm.yml` includes `ionic_image_prep`'s `kernel.yml` to install the pinned
+  mainline kernel it boots, and the new `image_slim` runs last in every bake.
+  Every bake and report lane also now lists `vm-slim.yml`. These filters
+  enumerate playbooks by name rather than globbing `ansible/playbooks/*.yml`,
+  so a newly added playbook is invisible to them until it is named: the lanes
+  that actually execute a change were not the lanes being run on it, which is
+  the same class of drift as a recipe kept in two places.
 
 - **The performance badges now encode health rather than branding.** They used
   to carry the AMD/NVIDIA/Intel brand colours, so rocjitsu GEMM rendered red on
