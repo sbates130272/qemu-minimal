@@ -31,6 +31,7 @@ on:
       - 'ansible/requirements.yml'
       - 'qemu/compose/vfio-user-rocjitsu-vm/**'
       - '.github/actions/setup-vm-job/action.yml'
+      - '.github/actions/report-image-size/action.yml'
       - '.github/workflows/qemu-minimal-ansible-playbook-test-vm-rocjitsu.yml'
 
 concurrency:
@@ -242,6 +243,16 @@ jobs:
           -e "ansible_port=2222" \
           -e "ansible_user=ubuntu" \
           -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"'
+
+    # Diagnostic only, and always() so a red lane still reports what it
+    # built -- the size question is most interesting exactly when
+    # something else went wrong.
+    - name: Report VM image size
+      if: always()
+      uses: ./.github/actions/report-image-size
+      with:
+        vm-name: rocjitsu-test
+        ssh-host: qemu
 
     - name: Show compose logs on failure
       if: failure()

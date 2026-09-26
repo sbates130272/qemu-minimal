@@ -44,11 +44,15 @@
     rocm_setup_run_checks: true
     rocm_setup_run_gpu_checks: false
     rocm_setup_install_metrics_exporter: true
-    # Defaults to the noble HWE kernel, which is what the plain ROCm lane
-    # wants. Lanes that boot the pinned mainline kernel below pass [] -- an
-    # HWE metapackage for a kernel nothing there boots is pure weight.
+    # Empty by default. This used to name linux-generic-hwe-24.04, which was
+    # right while the plain ROCm lane ran noble; every lane is resolute now,
+    # where a 24.04 HWE metapackage is simply the wrong release's. There is no
+    # resolute equivalent worth naming either -- resolute's GA kernel already
+    # is the current one, so an HWE metapackage there installs a kernel
+    # nothing boots, which is the exact trap vm-rocjitsu.yml documents on its
+    # own [] override. A caller that genuinely wants one can still pass it.
     rocm_setup_extra_kernel_packages: "{{
-        vm_rocm_extra_kernel_packages | default(['linux-generic-hwe-24.04'])
+        vm_rocm_extra_kernel_packages | default([])
       }}"
     # Install the pinned mainline kernel from vars/ernic-pins.yml instead of
     # relying on the distro kernel. Off here, on for rocjitsu; see the task.

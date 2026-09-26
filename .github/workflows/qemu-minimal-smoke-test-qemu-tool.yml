@@ -176,13 +176,21 @@ jobs:
       uses: actions/cache@v4
       with:
         path: /var/lib/qemu-tool/images
-        key: cloud-img-arm64-noble-qemu-tool
+        key: cloud-img-arm64-resolute-qemu-tool
     - name: Ensure images directory exists
       run: sudo mkdir -p /var/lib/qemu-tool/images && sudo chmod 777 /var/lib/qemu-tool/images
+    # --release is explicit even though it matches gen-vm's default, unlike the
+    # x86 matrix above which parameterises it. The cache key is a fixed string
+    # and a key is immutable once saved, so a job that inherits the default
+    # follows a change to that default while its key does not -- restoring the
+    # previous release's image forever and never saving the new one, since an
+    # exact-key hit suppresses the post-job save. Naming the release here keeps
+    # it and the key visibly in one place.
     - name: Generate arm64 VM with qemu-tool gen-vm
       run: |
         qemu-tool gen-vm \
           --vm-name qemu-tool-smoke-test-arm64 \
+          --release resolute \
           --arch arm64 \
           --no-kvm \
           --username ubuntu \
@@ -210,13 +218,15 @@ jobs:
       uses: actions/cache@v4
       with:
         path: /var/lib/qemu-tool/images
-        key: cloud-img-riscv64-noble-qemu-tool
+        key: cloud-img-riscv64-resolute-qemu-tool
     - name: Ensure images directory exists
       run: sudo mkdir -p /var/lib/qemu-tool/images && sudo chmod 777 /var/lib/qemu-tool/images
+    # Explicit --release for the same reason as the arm64 job above.
     - name: Generate riscv64 VM with qemu-tool gen-vm
       run: |
         qemu-tool gen-vm \
           --vm-name qemu-tool-smoke-test-riscv64 \
+          --release resolute \
           --arch riscv64 \
           --no-kvm \
           --username ubuntu \

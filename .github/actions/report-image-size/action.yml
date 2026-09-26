@@ -1,0 +1,115 @@
+name: Report VM image size
+description: >-
+  Print the allocated size of the qcow2 pair a lane just baked, plus an
+  in-guest breakdown of where that allocation went. Purely diagnostic: every
+  command is non-fatal, so a measurement can never turn a lane red.
+
+  This exists because there is no baseline. The ROCm images are ~19-20 GiB of
+  real allocation and nothing in the repo has ever measured why, so any change
+  aimed at shrinking them would be judged against a guess. Land this first and
+  every later number is comparable.
+
+inputs:
+  vm-name:
+    description: The --vm-name the lane passed to gen-vm.
+    required: true
+  images-dir:
+    description: Directory qemu-tool wrote the images to.
+    required: false
+    default: /var/lib/qemu-tool/images
+  ssh-host:
+    description: >-
+      Host the guest answers SSH on -- "localhost" for a run-vm lane,
+      "qemu" for a compose lane. Leave empty to skip the in-guest half.
+    required: false
+    default: ''
+  ssh-port:
+    description: Port the guest answers SSH on.
+    required: false
+    default: '2222'
+  ssh-user:
+    description: User to log into the guest as.
+    required: false
+    default: ubuntu
+
+runs:
+  using: composite
+  steps:
+    # "disk size" is the number that matters; "virtual size" is not. qcow2 is
+    # sparse, so --size 64 costs nothing by itself -- what costs is written
+    # clusters, and only this line counts those.
+    #
+    # -U because the guest is still running at this point in every lane, and
+    # QEMU holds an exclusive write lock on the overlay it boots. Without it
+    # the overlay line is a "Failed to get shared write lock" that || true
+    # swallows, leaving no disk size for the delta image -- and only for the
+    # delta image, since the backing file is opened read-only and reports fine.
+    # An asymmetric silent gap is the worst possible failure for a step whose
+    # entire job is to be the baseline later numbers are compared against.
+    - name: Report qcow2 allocation
+      shell: bash
+      run: |
+        echo "::group::qcow2 allocation"
+        for img in "${{ inputs.images-dir }}/${{ inputs.vm-name }}-backing.qcow2" \
+                   "${{ inputs.images-dir }}/${{ inputs.vm-name }}.qcow2"; do
+          if [ -f "$img" ]; then
+            qemu-img info -U "$img" || true
+            echo
+          else
+            echo "absent: $img"
+          fi
+        done
+        df -h "${{ inputs.images-dir }}" || true
+        echo "::endgroup::"
+
+    # Where the allocation actually went. Without this the only way to pick
+    # what to stop installing is to guess, and a dpkg Installed-Size sum is an
+    # upper bound on a cut rather than a prediction -- shared dependencies mean
+    # dropping two packages usually frees less than the sum of the two.
+    #
+    # || true on every command: a guest that has rebooted out from under the
+    # lane, or one where a path does not exist, must not fail a lane whose
+    # actual subject is the driver under test.
+    #
+    # Bounded at all three layers, the same way
+    # qemu-minimal-ansible-playbook-test-vm-rocjitsu.yml already bounds its
+    # amdgpu-probe ssh after that step wedged a job for ~125 minutes.
+    # ConnectTimeout only covers the handshake, and || true only rewrites an
+    # exit status that a hang never produces -- so a guest wedged mid-du would
+    # otherwise block until the caller's job timeout. Callers cannot supply the
+    # outer bound themselves: GitHub does not honour timeout-minutes on a step
+    # that `uses:` a composite action, so it has to live here. This step is
+    # if: always() at every call site, which means it runs precisely on the
+    # runs where the guest is most likely to be in that state.
+    - name: Report in-guest disk usage
+      if: inputs.ssh-host != ''
+      shell: bash
+      run: |
+        echo "::group::in-guest disk usage"
+        timeout 300 ssh \
+            -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+            -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
+            -p "${{ inputs.ssh-port }}" \
+            "${{ inputs.ssh-user }}@${{ inputs.ssh-host }}" bash -s <<'PROBE' || true
+        set +e
+        echo "### df"
+        df -h /
+        echo
+        # timeout on the du specifically: it is the one probe that walks the
+        # whole filesystem, so it is the one that stalls on wedged guest I/O.
+        echo "### largest trees"
+        sudo timeout 120 du -xh --max-depth=2 / 2>/dev/null | sort -rh | head -40
+        echo
+        echo "### usual suspects"
+        sudo du -sh /var/cache/apt/archives /var/lib/apt/lists /usr/src \
+                    /var/lib/dkms /boot /usr/lib/modules /var/log /opt/rocm \
+                    2>/dev/null
+        echo
+        echo "### installed kernels"
+        dpkg-query -W -f='${Package}\n' 'linux-image-*' 2>/dev/null
+        echo
+        echo "### largest packages (KiB installed)"
+        dpkg-query -W -f='${Installed-Size}\t${Package}\n' 2>/dev/null \
+          | sort -rn | head -40
+        PROBE
+        echo "::endgroup::"

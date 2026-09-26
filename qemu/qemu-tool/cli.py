@@ -215,7 +215,7 @@ def _add_gen_vm(
     p.add_argument("--size", type=int, default=_UNSET, metavar="GB")
     p.add_argument("--release", default=_UNSET,
                    metavar="NAME",
-                   help="Ubuntu codename (noble) or version (24.04).")
+                   help="Ubuntu codename (resolute) or version (26.04).")
     p.add_argument("--ssh-key-file", type=Path, default=_UNSET, metavar="FILE")
     p.add_argument("--username", default=_UNSET)
     p.add_argument("--user-id", type=int, default=_UNSET, metavar="UID")

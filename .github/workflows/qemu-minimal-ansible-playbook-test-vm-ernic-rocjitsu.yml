@@ -33,6 +33,7 @@ on:
       - 'ansible/requirements.yml'
       - 'qemu/compose/vfio-user-ernic-rocjitsu-vm/**'
       - '.github/actions/setup-vm-job/action.yml'
+      - '.github/actions/report-image-size/action.yml'
       - '.github/workflows/qemu-minimal-ansible-playbook-test-vm-ernic-rocjitsu.yml'
 
 concurrency:
@@ -256,6 +257,16 @@ jobs:
           exit 1
         fi
         echo "✓ GPU KFD node present ($gpus)"
+
+    # Diagnostic only, and always() so a red lane still reports what it
+    # built -- the size question is most interesting exactly when
+    # something else went wrong.
+    - name: Report VM image size
+      if: always()
+      uses: ./.github/actions/report-image-size
+      with:
+        vm-name: ernic-rocjitsu-test
+        ssh-host: qemu
 
     - name: Show compose logs on failure
       if: failure()

@@ -107,7 +107,7 @@ jobs:
       uses: ./.github/actions/setup-vm-job
       with:
         cloud-image-key: ansible-setup
-        release: noble
+        release: resolute
     - name: Generate VM with Ansible post-setup
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -115,7 +115,7 @@ jobs:
       run: |
         qemu-tool gen-vm \
           --vm-name ansible-setup-test \
-          --release noble \
+          --release resolute \
           --username ubuntu \
           --password password \
           --packages none \

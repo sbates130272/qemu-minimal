@@ -18,6 +18,7 @@ on:
       - 'ansible/playbooks/vars/**'
       - 'ansible/requirements.yml'
       - '.github/actions/setup-vm-job/action.yml'
+      - '.github/actions/report-image-size/action.yml'
       - '.github/workflows/qemu-minimal-ansible-playbook-test-vm-rocm.yml'
 
 concurrency:
@@ -61,7 +62,7 @@ jobs:
       uses: ./.github/actions/setup-vm-job
       with:
         cloud-image-key: rocm
-        release: noble
+        release: resolute
 
     - name: Generate VM with vm-rocm playbook
       env:
@@ -69,7 +70,7 @@ jobs:
       run: |
         qemu-tool gen-vm \
           --vm-name rocm-test \
-          --release noble \
+          --release resolute \
           --username ubuntu \
           --password password \
           --packages none \
@@ -108,6 +109,16 @@ jobs:
           "dpkg-query -W -f='\${Status}' amdrocm-runtime-dev" \
           | grep -q "install ok installed"
         echo "✓ amdrocm-runtime-dev installed"
+
+    # Diagnostic only, and always() so a red lane still reports what it
+    # built -- the size question is most interesting exactly when
+    # something else went wrong.
+    - name: Report VM image size
+      if: always()
+      uses: ./.github/actions/report-image-size
+      with:
+        vm-name: rocm-test
+        ssh-host: localhost
 
     - name: Print run-vm log on failure
       if: failure()
