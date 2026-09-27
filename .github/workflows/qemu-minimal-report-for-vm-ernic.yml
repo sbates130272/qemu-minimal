@@ -6,9 +6,13 @@ on:
       - main
     paths:
       - 'ansible/playbooks/vm-ernic.yml'
+      # vm-ernic.yml imports vm-basic.yml and reads vars/github-api.yml, so a
+      # push touching either changes this guest. Widened from the single
+      # ernic-pins.yml entry for the same reason the playbook-test lanes were.
+      - 'ansible/playbooks/vm-basic.yml'
+      - 'ansible/playbooks/vars/**'
       - 'ansible/playbooks/vm-slim.yml'
       - 'ansible/playbooks/roles/**'
-      - 'ansible/playbooks/vars/ernic-pins.yml'
       - 'qemu/qemu-tool/**'
       - 'qemu/pyproject.toml'
       - 'qemu/compose/vfio-user-ernic-2vm/**'
