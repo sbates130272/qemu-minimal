@@ -4,7 +4,7 @@ title: VM Report — VM 1
 
 # VM Report — qemu-minimal — VM 1
 
-Generated: **2026-09-27 13:48 UTC** &middot; Commit: [`84fa06d`](https://github.com/sbates130272/qemu-minimal/commit/84fa06d10bb502ee51d74588e70f6a7ea0131ab6)
+Generated: **2026-09-27 19:25 UTC** &middot; Commit: [`2963e28`](https://github.com/sbates130272/qemu-minimal/commit/2963e28d55d48d1740992a26a6cb62a085507b67) &middot; Status: **pass**
 
 ## Hardware
 
@@ -13,19 +13,19 @@ Generated: **2026-09-27 13:48 UTC** &middot; Commit: [`84fa06d`](https://github.
 | CPU | AMD EPYC Processor |
 | vCPUs | 4 |
 | Threads/core | 1 |
-| RAM | 5.6Gi total, 5.3Gi free |
+| RAM | 5.6Gi total, 5.1Gi free |
 | Swap | 0B |
 
 ## Kernel
 
 ```
-6.8.0-142-generic
+7.0.0-34-generic
 ```
 
 <details><summary>Full version string</summary>
 
 ```
-Linux version 6.8.0-142-generic (buildd@lcy02-amd64-049) (x86_64-linux-gnu-gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, GNU ld (GNU Binutils for Ubuntu) 2.42) #142-Ubuntu SMP PREEMPT_DYNAMIC Wed Sep  2 14:24:27 UTC 2026
+Linux version 7.0.0-34-generic (buildd@lcy02-amd64-082) (x86_64-linux-gnu-gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0, GNU ld (GNU Binutils for Ubuntu) 2.46) #34-Ubuntu SMP PREEMPT_DYNAMIC Wed Sep  2 14:29:37 UTC 2026
 ```
 
 </details>
@@ -36,18 +36,18 @@ Linux version 6.8.0-142-generic (buildd@lcy02-amd64-049) (x86_64-linux-gnu-gcc-1
 NAME     SIZE TYPE MOUNTPOINT
 sr0     1024M rom  
 vda        8G disk 
-├─vda1     7G part /
+├─vda1   6.9G part /
+├─vda13 1023M part /boot
 ├─vda14    4M part 
-├─vda15  106M part /boot/efi
-└─vda16  913M part /boot
+└─vda15  106M part /boot/efi
 ```
 
 ### Disk usage
 
 ```
 Filesystem      Size  Used Avail Use% Mounted on
-/dev/vda1       6.8G  4.4G  2.4G  65% /
-/dev/vda16      881M  181M  638M  23% /boot
+/dev/vda1       6.7G  4.9G  1.8G  73% /
+/dev/vda13      989M  183M  739M  20% /boot
 ```
 
 ### NVMe
@@ -77,7 +77,7 @@ Node                  Generic               SN                   Model          
 ### nvme-cli
 
 ```
-nvme-cli	2.8-1ubuntu0.1
+nvme-cli	2.16-1
 ```
 
 ## ROCm
@@ -103,7 +103,7 @@ nvme-cli	2.8-1ubuntu0.1
 ## AMDGPU Debian Packages
 
 ```
-libdrm-amdgpu1:amd64	2.4.125-1ubuntu0.1~24.04.2
+libdrm-amdgpu1:amd64	2.4.131-1
 ```
 
 ## APT Sources
@@ -121,23 +121,23 @@ ubuntu : ubuntu users admin
 ## Running Services
 
 ```
+  chrony.service              loaded active running chrony, an NTP client/server
   cron.service                loaded active running Regular background program processing daemon
   dbus.service                loaded active running D-Bus System Message Bus
   getty@tty1.service          loaded active running Getty on tty1
   ModemManager.service        loaded active running Modem Manager
   multipathd.service          loaded active running Device-Mapper Multipath Device Controller
+  networkd-dispatcher.service loaded active running Dispatcher daemon for systemd-networkd
   polkit.service              loaded active running Authorization Manager
   qemu-guest-agent.service    loaded active running QEMU Guest Agent
   rsyslog.service             loaded active running System Logging Service
   serial-getty@ttyS0.service  loaded active running Serial Getty on ttyS0
   ssh.service                 loaded active running OpenBSD Secure Shell server
-  systemd-fsckd.service       loaded active running File System Check Daemon to report status
   systemd-journald.service    loaded active running Journal Service
   systemd-logind.service      loaded active running User Login Management
-  systemd-networkd.service    loaded active running Network Configuration
+  systemd-networkd.service    loaded active running Network Management
   systemd-resolved.service    loaded active running Network Name Resolution
   systemd-timedated.service   loaded active running Time & Date Service
-  systemd-timesyncd.service   loaded active running Network Time Synchronization
   systemd-udevd.service       loaded active running Rule-based Manager for Device Events and Files
   udisks2.service             loaded active running Disk Manager
   unattended-upgrades.service loaded active running Unattended Upgrades Shutdown
