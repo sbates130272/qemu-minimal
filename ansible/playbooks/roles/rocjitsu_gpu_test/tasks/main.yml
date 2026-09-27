@@ -77,21 +77,56 @@
     state: present
     timeout: 60
 
+# Byte-for-byte the command rocm_setup uses to pick the prefix it puts on the
+# linker path. Deliberately a shell rather than ansible.builtin.find: find
+# cannot express `sort -V`, and the two have to agree -- see the next task.
 - name: Locate the versioned ROCm prefix
-  ansible.builtin.find:
-    paths: /opt/rocm
-    patterns: 'core-*'
-    file_type: directory
-  register: rocjitsu_gpu_test_prefix_candidates
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      ls -d /opt/rocm/core-* 2>/dev/null | sort -V | tail -1 || true
+    executable: /bin/bash
+  register: rocjitsu_gpu_test_prefix_raw
+  changed_when: false
 
 - name: Set the ROCm prefix
   ansible.builtin.set_fact:
-    # Same lexical sort as vm-rocjitsu.yml, and the same caveat: correct only
-    # while there is one core-* to find, since core-9.0 sorts after core-10.0.
+    # A *version* sort, via the command above, matching what rocm_setup uses to
+    # decide which prefix goes on the linker path. This used to be an
+    # ansible.builtin.find plus a lexical sort, which agreed with the role only
+    # while there was one core-* to find: lexically core-9.0 sorts after
+    # core-10.0,
+    # so on a guest carrying both, this role would compile against one prefix
+    # while ld.so was pointed at the other, and the binary would fail to load
+    # its own libamdhip64 at run time. The two have to agree, and the role's
+    # choice is the one the runtime honours, so follow it rather than it us.
     rocjitsu_gpu_test_rocm: >-
-      {{ (rocjitsu_gpu_test_prefix_candidates.files
-          | map(attribute='path') | sort | last)
-         if rocjitsu_gpu_test_prefix_candidates.files else '/opt/rocm' }}
+      {{ rocjitsu_gpu_test_prefix_raw.stdout | trim
+         if (rocjitsu_gpu_test_prefix_raw.stdout | trim | length > 0)
+         else '/opt/rocm' }}
+
+# Cheap, and the difference between a one-line answer and another 27-minute
+# lane: the failure mode this role hits is "vector_add: error while loading
+# shared libraries", which says nothing about which prefix was chosen or what
+# the linker was told.
+- name: Report the ROCm prefix and what the linker knows about it
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      echo "candidates: $(ls -d /opt/rocm/core-* 2>/dev/null | tr '\n' ' ')"
+      echo "chosen:     {{ rocjitsu_gpu_test_rocm }}"
+      echo "--- /etc/ld.so.conf.d/rocm.conf"
+      cat /etc/ld.so.conf.d/rocm.conf 2>&1 || true
+      echo "--- ldconfig -p | grep amdhip"
+      ldconfig -p | grep amdhip || echo "(no libamdhip64 in the linker cache)"
+    executable: /bin/bash
+  register: rocjitsu_gpu_test_prefix_report
+  changed_when: false
+  failed_when: false
+
+- name: Show the ROCm prefix report
+  ansible.builtin.debug:
+    msg: "{{ rocjitsu_gpu_test_prefix_report.stdout_lines }}"
 
 - name: Confirm hipcc is present in that prefix
   ansible.builtin.stat:

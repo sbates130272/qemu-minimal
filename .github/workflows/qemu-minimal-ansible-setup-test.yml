@@ -171,11 +171,14 @@ jobs:
           "dpkg-query -W -f='\${Status}' fio" \
           | grep -q 'install ok installed'
         echo "✓ fave_packages installed fio in guest"
+    # "qemu-minimal VM", not "Stephen Bates": the identity is set in
+    # vm-basic.yml and is deliberately impersonal, because these guests are
+    # published as qcow2s. It used to come from the collection's own default.
     - name: Verify git_setup configured git identity
       run: |
         ssh -o NoHostAuthenticationForLocalhost=yes \
           -o StrictHostKeyChecking=no \
           -p 2222 ubuntu@localhost \
           git config --global user.name \
-          | grep -q 'Stephen Bates'
+          | grep -q 'qemu-minimal VM'
         echo "✓ git_setup configured git user.name in guest"
