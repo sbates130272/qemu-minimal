@@ -114,10 +114,16 @@ jobs:
       with:
         cloud-image-key: ansible-setup
         release: resolute
+    # Deliberately no "user_setup_deploy_ssh_key":false here, unlike the bake
+    # lanes. "Verify user_setup copied SSH key" below asserts the key landed in
+    # the guest, so turning the deploy off fails this lane on its own
+    # assertion. The reason the bake lanes turn it off does not apply: this VM
+    # is built and destroyed inside the job and no image leaves it, and the key
+    # is the throwaway pair "Set up VM job" generates a few steps earlier.
     - name: Generate VM with Ansible post-setup
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false,"user_setup_deploy_ssh_key":false}'
+        ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false}'
       run: |
         qemu-tool gen-vm \
           --vm-name ansible-setup-test \
