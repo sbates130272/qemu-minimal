@@ -349,6 +349,22 @@ All notable changes to this project will be documented in this file.
   bake. Skipped under `--no-backing`, where the image becomes the overlay and
   will be written to.
 
+  **Measured, across all four bake lanes.** The two stages are complementary
+  rather than redundant: the slim removes ~1.9 GiB of real files, and the
+  compaction then finds a further 2.3–2.5x in what remains, because what
+  remains is mostly ELF.
+
+  | Lane | before | after slim | after compaction | total |
+  |---|---|---|---|---|
+  | `vm-ernic` | 6.41 GiB | 4.84 GiB | **2.89 GiB** | −55% |
+  | `vm-rocm` | 10.5 GiB | 8.42 GiB | **3.44 GiB** | −67% |
+  | `vm-rocjitsu` | 10.8 GiB | 8.80 GiB | **3.59 GiB** | −67% |
+  | `vm-ernic-rocjitsu` | 11.2 GiB | 9.15 GiB | **3.90 GiB** | −65% |
+
+  The ROCm guests compress at 2.45x against ernic's 1.67x, so the lanes that
+  were worst off benefit most. Four images that totalled 38.9 GiB now total
+  13.8 GiB.
+
 - **The `vm-rocm` and `vm-ernic-rocjitsu` lanes now trigger on
   `ansible/playbooks/roles/**`.** They did not, and both run roles from there —
   `vm-rocm.yml` includes `ionic_image_prep`'s `kernel.yml` to install the pinned
