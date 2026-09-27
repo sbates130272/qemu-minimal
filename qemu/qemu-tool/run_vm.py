@@ -20,6 +20,20 @@ _ARCH_MACHINE = {
 
 NVME_SIZE = "1024G"
 
+# Let a guest give clusters back. Without it a qcow2 only ever grows: a
+# deletion inside the guest frees nothing at the image level, so a bake that
+# installs a toolchain and then removes it costs the same as one that keeps it,
+# and a long-lived VM's overlay grows monotonically for the life of the VM.
+# detect-zeroes=unmap additionally punches out an all-zero write rather than
+# allocating a cluster of zeros, which is what makes a guest-side `fstrim`
+# actually shrink the file.
+#
+# This is the same pair the NVMe scratch drives have always used; it was simply
+# never applied to a root disk, including the ones gen-vm boots. Appending it is
+# safe for list_vms._drive_file(), which splits the -drive spec on commas and
+# matches the `file=` part, not the whole string.
+DISCARD_OPTS = ",discard=unmap,detect-zeroes=unmap"
+
 
 # ---------------------------------------------------------------------------
 # Public entry points
@@ -178,7 +192,7 @@ def _nvme_create(
     drv = (
         f"file={img},format=qcow2,if=none,id=nvme-{idx}"
         f",aio={caps.aio_mode},cache.direct=on"
-        f",discard=unmap,detect-zeroes=unmap"
+        f"{DISCARD_OPTS}"
     )
 
     dev = f"nvme,serial={_nvme_serial(name)},id=nvme-{idx}-dev"
@@ -249,7 +263,7 @@ def _vfio_userdev_args(cfg: VMConfig) -> list[str]:
 
 def _root_drive_args(cfg: VMConfig) -> list[str]:
     img = Path(cfg.images) / f"{cfg.vm_name}.qcow2"
-    drv = f"if=virtio,format=qcow2,file={img}"
+    drv = f"if=virtio,format=qcow2,file={img}{DISCARD_OPTS}"
     if cfg.backing_shared:
         drv += ",file.locking=off,backing.file.locking=off"
     return ["-drive", drv]

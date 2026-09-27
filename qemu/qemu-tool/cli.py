@@ -215,7 +215,7 @@ def _add_gen_vm(
     p.add_argument("--size", type=int, default=_UNSET, metavar="GB")
     p.add_argument("--release", default=_UNSET,
                    metavar="NAME",
-                   help="Ubuntu codename (noble) or version (24.04).")
+                   help="Ubuntu codename (resolute) or version (26.04).")
     p.add_argument("--ssh-key-file", type=Path, default=_UNSET, metavar="FILE")
     p.add_argument("--username", default=_UNSET)
     p.add_argument("--user-id", type=int, default=_UNSET, metavar="UID")
@@ -224,6 +224,8 @@ def _add_gen_vm(
                    metavar="FILE",
                    help="Package manifest file, or 'none'.")
     p.add_argument("--force", action="store_true", default=_UNSET)
+    p.add_argument("--compact", action=argparse.BooleanOptionalAction, default=_UNSET,
+                   help="Recompress the backing image after the bake (default: on).")
     p.add_argument("--no-backing", action="store_true", default=_UNSET)
     p.add_argument("--restore-image", action="store_true", default=_UNSET)
     p.add_argument("--backing-file", type=Path, default=_UNSET, metavar="FILE")
@@ -385,6 +387,7 @@ def _extract_cli_overrides(
         _take("user_id", "user_id")
         _take("password", "password")
         _take("force", "force")
+        _take("compact", "compact")
         _take("no_backing", "no_backing")
         _take("restore_image", "restore_image")
         _take("backing_file", "backing_file")

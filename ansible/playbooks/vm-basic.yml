@@ -1,4 +1,7 @@
 ---
+# The base for every guest this repo builds. vm-rocm.yml imports it and adds
+# the ROCm stack; vm-ernic.yml imports it and adds the ernic prerequisites.
+# Nothing else should carry a copy of the roles below.
 - name: Post cloud-init VM setup
   hosts: all
   gather_facts: true
@@ -7,23 +10,67 @@
   # git_setup role's `community.general.git_config` (scope: global) tasks
   # would write to /root/.gitconfig instead of the target user's home.
   become: false
-  # See vm-rocm.yml: set the GitHub token once here instead of relying on each
-  # workflow step to pass it through, so the roles never fall back to the
-  # anonymous API rate limit.
+  tags: [install]
+  vars_files:
+    - vars/github-api.yml
   module_defaults:
     ansible.builtin.uri:
-      headers: >-
-        {{
-          ({'Authorization': 'token ' + lookup('env', 'GITHUB_TOKEN')}
-           if lookup('env', 'GITHUB_TOKEN')
-           else {})
-        }}
+      headers: "{{ github_api_headers }}"
   vars:
     username: "{{ vm_username | default('ubuntu') }}"
     root_user: "{{ vm_root_user | default('ubuntu') }}"
     user_setup_motd: true
-    user_setup_install_amd_ca: true
+    # Importers turn this off: the ernic and rocjitsu guests do not need the
+    # AMD corporate CA.
+    user_setup_install_amd_ca: "{{ vm_install_amd_ca | default(true) }}"
+  pre_tasks:
+    # Has to precede user_setup, which is why it lives in this play rather than
+    # in the importers.
+    - name: Remove any partial dotfiles clone so user_setup can start fresh
+      ansible.builtin.file:
+        path: "/home/{{ username }}/.dotfiles"
+        state: absent
+      become: true
+
+    # These two live here, rather than next to the ROCm apt pin in vm-rocm.yml,
+    # because of what they protect: fave_packages below opens with
+    # `update_cache: true`, and a mismatched keyring+sources pair fails the
+    # whole play before any importer's pre_tasks get a turn. They used to sit
+    # ahead of these roles in each leaf's single play; the layering made the
+    # roles a play of their own and moved the cleanup a play *later*, which
+    # silently inverted the ordering the cleanup exists for.
+    #
+    # `state: absent` on a guest that never saw ROCm is a no-op, so vm-basic
+    # carrying three ROCm-named paths costs nothing on the basic and ernic
+    # lanes. The apt *pin* stays in vm-rocm.yml -- a pin does not affect
+    # update_cache, so it has no ordering constraint against this play.
+    #
+    # Only reachable on --ansible-only re-runs: a bake from the pristine cloud
+    # image has no stale keyring to mismatch, which is why CI never showed it.
+    - name: Remove stale ROCm GPG keyrings and sources
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      become: true
+      loop:
+        - /etc/apt/keyrings/rocm.gpg
+        - /etc/apt/keyrings/amdrocm.gpg
+        - /etc/apt/sources.list.d/rocm.sources
+
+    - name: Remove any stale device-metrics-exporter apt sources
+      ansible.builtin.shell:
+        cmd: |
+          find /etc/apt/sources.list.d -type f \
+            -exec grep -l "device-metrics-exporter\|amdgpu-exporter" {} \; \
+            | xargs -r rm -f
+      become: true
+      changed_when: false
   roles:
     - role: sbates130272.batesste.user_setup
     - role: sbates130272.batesste.fave_packages
     - role: sbates130272.batesste.git_setup
+
+# Last line of every leaf. Importers pass image_slim_enable: false so this
+# does not run in the middle of their chain; see vm-slim.yml.
+- import_playbook: vm-slim.yml
+  tags: [install]

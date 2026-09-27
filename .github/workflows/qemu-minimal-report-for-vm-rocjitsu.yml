@@ -23,6 +23,16 @@ on:
       - main
     paths:
       - 'ansible/playbooks/vm-rocjitsu.yml'
+      # vm-rocjitsu.yml imports vm-rocm.yml, which imports vm-basic.yml, and
+      # both read vars/. The four playbook-test lanes list these; this lane
+      # was given only vm-slim.yml and so stayed blind to its own parents --
+      # a push touching just vm-rocm.yml (the pinned mainline kernel this
+      # guest boots is installed there) would not rebuild the report, and
+      # publish-pages fetches by name, so the stale one gets republished.
+      - 'ansible/playbooks/vm-rocm.yml'
+      - 'ansible/playbooks/vm-basic.yml'
+      - 'ansible/playbooks/vars/**'
+      - 'ansible/playbooks/vm-slim.yml'
       - 'ansible/playbooks/roles/**'
       - 'qemu/qemu-tool/**'
       - 'qemu/pyproject.toml'

@@ -37,6 +37,14 @@ else
   COMMIT_MD="unknown"
 fi
 TITLE_SUFFIX=${VM_LABEL:+" — ${VM_LABEL}"}
+# Stamped into the report so the Pages publish can tell a report that passed
+# from one that is merely still on the branch. It is earned rather than
+# decorative: the script runs under set -e and every benchmark path ends in
+# bench_failed, which exits 1, so reaching the heredoc at all means nothing
+# failed. A half that did fail writes no report and uploads no artifact, and
+# render-site-perf.py then sees that lane's subtree go stale rather than green.
+# Override only if a caller has a verdict this script cannot see.
+REPORT_STATUS=${REPORT_STATUS:-pass}
 
 collect() { $SSH "$1" 2>/dev/null || echo "(not available)"; }
 
@@ -279,7 +287,7 @@ title: VM Report${TITLE_SUFFIX}
 
 # VM Report — qemu-minimal${TITLE_SUFFIX}
 
-Generated: **${TIMESTAMP}** &middot; Commit: ${COMMIT_MD}
+Generated: **${TIMESTAMP}** &middot; Commit: ${COMMIT_MD} &middot; Status: **${REPORT_STATUS}**
 
 ## Hardware
 

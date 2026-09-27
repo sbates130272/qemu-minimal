@@ -6,6 +6,54 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- **The VM playbooks are layered** the way the README has always described
+  them, instead of four standalone files re-copying the shared parts.
+  `vm-basic.yml` is the base for every guest; `vm-rocm.yml` imports it and is
+  the base for every guest that needs ROCm; `vm-rocjitsu.yml` imports
+  `vm-rocm.yml`; `vm-ernic.yml` imports `vm-basic.yml`. What had been
+  duplicated: the GitHub-token `module_defaults` block (four verbatim copies,
+  now one expression in `vars/github-api.yml`), the
+  `user_setup`/`fave_packages`/`git_setup` trio (four copies), and the ROCm
+  apt pin plus three stale-source cleanups (two copies, ~60 lines each).
+  `vm-ernic.yml` sits on `vm-basic.yml` rather than `vm-rocm.yml` because it
+  installs no ROCm at all — its `rocm_setup_*` vars, the ROCm apt pin and the
+  ROCm keyring cleanup were configuring a role that never ran, and are gone
+  with it. `ansible-playbook --list-tasks --tags install` is unchanged for the
+  combined lane and changes only as intended for the other two.
+  `vm-ernic-rocjitsu.yml` is untouched.
+
+- **Every CI lane that bakes a guest now runs `resolute`.** The `vm-rocm`,
+  `ansible-setup-test`, `report-for-vm-basic`, `report-for-vm-ernic` and
+  `smoke-test-rocm-ernic` lanes were still on `noble`, so half the fleet was
+  being proved on a release nothing else used. `smoke-test-qemu-tool` keeps its
+  `noble` × `resolute` matrix deliberately — it is the one lane whose subject
+  *is* release coverage, and collapsing it would leave `noble` advertised by
+  the CLI and untested everywhere.
+
+- **`gen-vm` defaults to `--release resolute`** (was `noble`), so a bare
+  `qemu-tool gen-vm` builds what CI proves. README, the man page and
+  `env.example` follow. Pass `--release noble` to get the old default back;
+  `noble` remains supported and matrix-tested.
+
+- **`vm-rocm.yml` stops installing `rocm-cli` and `xrocmtop`.** Both
+  `rocm_setup_install_rocm_cli` and `rocm_setup_install_xrocmtop` default to
+  true in the role and were set nowhere here, so every ROCm lane — plain
+  rocjitsu and ernic-rocjitsu alike — baked them in by accident. Nothing in
+  this repo runs either and no lane asserts on them. `rocm-cli` is the bigger
+  reason: its installer is an unpinned `curl … rocm-cli/main/install.sh | sh`
+  executed at bake time. `xrocmtop` is an interactive terminal UI in a
+  headless CI guest. `rocm_setup_install_metrics_exporter` stays true —
+  `vm-rocjitsu.yml` deleted its own exporter install in favour of it, and the
+  guest that had no GPU and no use for it, `vm-ernic.yml`, no longer runs
+  `rocm_setup` at all.
+
+- `vm-rocm.yml`'s `rocm_setup_extra_kernel_packages` now defaults to `[]`. It
+  named `linux-generic-hwe-24.04`, which was correct only while the plain ROCm
+  lane ran noble; on resolute that is another release's metapackage, and there
+  is no resolute equivalent worth naming because resolute's GA kernel already
+  is the current one. Naming one there installs a kernel nothing boots, which
+  is the trap `vm-rocjitsu.yml` already documents on its own `[]` override.
+
 - `vm-rocjitsu.yml` installs the pinned mainline kernel (`ionic_kernel_pin`,
   currently `v7.2.4`) before it touches DKMS, so the standalone rocjitsu lane
   boots the same kernel as the combined lane and as the published
@@ -182,6 +230,20 @@ All notable changes to this project will be documented in this file.
   follow. The compose stack keeps its `vfio-user-ernic-2vm` name, since
   `smoke-test-rocm-ernic` shares it. See **Upgrading**.
 
+### Fixed
+
+- `render-site-perf.py`'s "Current report freshness" table read its stamps from
+  `history[-1]`, but `append_history` dedupes on `(sha, metrics)` — so a publish
+  whose benchmarks produced identical numbers against an unchanged sha appended
+  no row, and the table printed the *previous* publish's timestamps directly
+  underneath an all-green badge computed live from the reports on disk. It now
+  takes a reports dict read off disk, which is what `update_green` already does
+  and says why in its docstring: report freshness moves independently of
+  benchmark values. Covered by three new cases in `tests/test_render_site_perf.py`.
+- The man page documented `--ansible-profile FILE` ("the specified profile
+  directory"); the flag is and always was `--ansible-playbook FILE`, and it takes
+  a playbook. Anyone following `man qemu-tool` got `unrecognized arguments`.
+
 ### Removed
 
 - The `slash-command-dispatch` workflow, and with it the `/run-ci-full` comment
@@ -249,6 +311,149 @@ All notable changes to this project will be documented in this file.
   reliable answer.
 
 ### Added
+
+- **Every bake now ends by slimming the guest it just built.** A new
+  `image_slim` role, invoked from a one-play `vm-slim.yml` that each leaf
+  playbook imports as its final line, empties the apt cache and package lists
+  (the largest single item on a ROCm guest, and nothing cleaned them before),
+  removes leftover DKMS `build/` trees, vacuums archived journals to 16M,
+  drops rotated and cloud-init logs, sweeps `/tmp` and `/var/tmp`, and then
+  `fstrim -av`s — which, with the bake boot's `discard=unmap`, punches all of
+  it back out of the qcow2 in place. It prints the reclaimed MiB. Two opt-in
+  flags go further at the cost of a fallback: `image_slim_purge_old_kernels`
+  removes the GA kernel the guest no longer boots, and
+  `image_slim_purge_dkms_sources` removes `/usr/src/amdgpu-*`; both default
+  false so a local bake keeps the ability to boot back and to rebuild.
+  `/var/tmp/ionic-src` is kept by default and only removed under
+  `image_slim_drop_ionic_src`, because the ernic lanes' post-boot
+  `--tags configure` run re-invokes `setup-ionic-dkms.sh` against it and would
+  otherwise re-clone a kernel from inside the VM. `cloud-init clean` is
+  deliberately *not* run: these images have no datasource on a later boot, so
+  wiping instance state would make that boot a first boot and regenerate the
+  MAC-pinned netplan `gen-vm` goes out of its way to neutralise.
+
+  Where it runs is the subtle part. `import_playbook` splices plays inline and
+  does not dedupe, so an ungated import from all five leaves would slim six
+  times on `vm-ernic-rocjitsu.yml` — five of them mid-chain, with real work
+  still to come. That is a bug, not waste: `vm-rocjitsu.yml` installs rocBLAS
+  with `update_cache: false` against lists an earlier pass would have deleted,
+  and both DKMS builds read trees the opt-in purges remove. Each importing
+  playbook therefore passes `image_slim_enable: false`, and because import
+  vars propagate through nested imports, one `false` silences every pass
+  beneath it. Exactly one slim pass runs per entry point and it is the last
+  play in the run.
+
+- **`gen-vm` compacts the backing image after the bake**, with
+  `--no-compact` (or `VM_COMPACT=false`) to opt out. Once Ansible has
+  finished, the backing image is rewritten with `qemu-img convert -O qcow2
+  -c` and the before/after allocated size and ratio are printed into the bake
+  log — that number is what the rest of the image-size work is measured
+  against. zlib compression is safe here precisely because this is a
+  *backing* file: in normal use every guest write lands in the overlay, so no
+  compressed cluster is rewritten, and a ROCm tree is mostly ELF. The one
+  exception is `--ansible-only`, which boots an existing backing as the
+  writable root disk with no overlay in front; that mode compacts again at the
+  end, and `--no-compact` is there for a rebuild loop that would rather stay
+  uncompressed throughout. Nothing is
+  flattened — the backing image is a byte copy of a standalone Ubuntu cloud
+  image, so the convert is a pure recompress. It writes a sibling temp file
+  and `os.replace`s only after `qemu-img info` confirms the result, so an
+  interrupted convert cannot destroy an image that took an hour to bake, and
+  a failed one warns and leaves the original in place rather than failing the
+  bake. Skipped under `--no-backing`, where the image becomes the overlay and
+  will be written to.
+
+  **Measured, across all four bake lanes.** The two stages are complementary
+  rather than redundant: the slim removes ~1.9 GiB of real files, and the
+  compaction then finds a further 2.3–2.5x in what remains, because what
+  remains is mostly ELF.
+
+  | Lane | before | after slim | after compaction | total |
+  |---|---|---|---|---|
+  | `vm-ernic` | 6.41 GiB | 4.84 GiB | **2.89 GiB** | −55% |
+  | `vm-rocm` | 10.5 GiB | 8.42 GiB | **3.44 GiB** | −67% |
+  | `vm-rocjitsu` | 10.8 GiB | 8.80 GiB | **3.59 GiB** | −67% |
+  | `vm-ernic-rocjitsu` | 11.2 GiB | 9.15 GiB | **3.90 GiB** | −65% |
+
+  The ROCm guests compress at 2.45x against ernic's 1.67x, so the lanes that
+  were worst off benefit most. Four images that totalled 38.9 GiB now total
+  13.8 GiB.
+
+- **The `vm-rocm` and `vm-ernic-rocjitsu` lanes now trigger on
+  `ansible/playbooks/roles/**`.** They did not, and both run roles from there —
+  `vm-rocm.yml` includes `ionic_image_prep`'s `kernel.yml` to install the pinned
+  mainline kernel it boots, and the new `image_slim` runs last in every bake.
+  Every bake and report lane also now lists `vm-slim.yml`. These filters
+  enumerate playbooks by name rather than globbing `ansible/playbooks/*.yml`,
+  so a newly added playbook is invisible to them until it is named: the lanes
+  that actually execute a change were not the lanes being run on it, which is
+  the same class of drift as a recipe kept in two places.
+
+- **The performance badges now encode health rather than branding.** They used
+  to carry the AMD/NVIDIA/Intel brand colours, so rocjitsu GEMM rendered red on
+  its best day and none of the three ever changed — the colour half of each
+  badge carried no information at all. Each badge now compares the latest
+  reading against the mean of the previous five *distinct* readings and colours
+  green at or above 95% of it, amber down to 80%, red below, with the delta
+  appended to the message. Distinct matters: a history row is a *publish*, not a
+  benchmark run, and any lane finishing re-records the other lanes' unchanged
+  numbers, so a naive mean over the last five rows weights whichever plateau
+  happened to be republished most. A reading with nothing to compare against is
+  blue, not green — no verdict has been made — and a metric with no badge at all
+  is grey `n/a`. The 95/80 dead band is wide on purpose: these benchmarks run
+  against an emulated GPU over vfio-user and swing hard between runs.
+
+- **An "all reports green" date badge**, served from `perf/badge-all-green.json`
+  and shown on the README's report row and the site landing page. It is green
+  with today's date while every one of the five report lanes has published a
+  fresh passing report, amber carrying the last such date once any lane stops,
+  and red `never` before the first one. Green needs both halves: a `pass` stamp
+  *and* a report generated within 36 hours. A failing lane uploads nothing and
+  its last good report stays on the branch, so the stamp alone would read green
+  forever; freshness alone would call a fresh failure green. The date lives in
+  its own `perf/green.json` rather than in `perf/history.jsonl`, because the
+  history appends only when a benchmark number changes and the date has to be
+  able to advance on a publish where nothing did.
+
+- **`generate-vm-report.sh` stamps `Status: **pass**`** into each report's meta
+  line, which is what the badge above reads. It is earned rather than
+  decorative: the script runs under `set -e` and every benchmark path ends in
+  `bench_failed`, so reaching the report heredoc at all means nothing failed.
+  Reports already on `gh-pages` predate the stamp and parse as `unknown`, which
+  is treated as not-green rather than as a pass. Override with `REPORT_STATUS`
+  only if a caller has a verdict the script cannot see.
+
+- **A `Site Script Tests` lane and `tests/test_render_site_perf.py`** — the
+  repo's first Python tests, stdlib `unittest`, no dependency to install. Run
+  them with `python3 -m unittest discover -s tests`. `render-site-perf.py` runs
+  exactly once per publish, on a runner, against state that only exists on
+  `gh-pages`, and `workflow_run`/`schedule` only ever run the default branch's
+  copy of a workflow — so every bug in it used to be a post-merge bug, found by
+  reading the published site afterwards. The lane covers the colour thresholds,
+  the distinct-value collapsing, the green/stale/unstamped cases and the badge
+  JSON shape in about a second, with no VM. It also drives
+  `generate-vm-report.sh` against a dead SSH port and feeds the result to the
+  renderer, so the two scripts cannot drift on the meta-line format without a
+  PR going red.
+
+- **Two opt-out knobs on `vm-rocjitsu.yml`'s firmware generation**, so the
+  playbook can drive a build whose Ansible controller has no Docker daemon.
+  `rocjitsu_generate_firmware` (default `true`) gates the seven controller-side
+  tasks — the generation step is a `delegate_to: localhost` `docker run`, and a
+  BuildKit `RUN --security=insecure` step has the CLI on `PATH` with no socket
+  behind it. `rocjitsu_firmware_ip_discovery` (default `true`) appends
+  `--no-ip-discovery` to the generator argv when false: `ip_discovery.bin` is
+  per-config and has to match the rocjitsu build the *consumer* serves the
+  device from, not the one that built the disk, so a published qcow2 must not
+  bake one in. Defaults preserve current behaviour exactly. The two
+  driver-packaged firmware assertions stay ungated — they only stat what
+  `amdgpu-dkms-firmware` installed and need no controller Docker.
+
+- **`.github/actions/report-image-size`**, wired into all four bake lanes.
+  Prints the baked qcow2's allocated size and an in-guest `du`/`dpkg-query`
+  breakdown. Purely diagnostic and non-fatal. The ROCm images are ~19–20 GiB
+  of real allocation and nothing had ever measured why, so any attempt to
+  shrink them would have been judged against a guess.
 
 - `pciutils` in `packages.d/packages-default`, which backs the new PCI
   devices section below. See **Fixed** for why the report lanes now use

@@ -6,21 +6,47 @@
 [![Platform](https://img.shields.io/badge/platform-x86__64%20%7C%20ARM64%20%7C%20RISC--V-blue?style=flat-square)](https://github.com/sbates130272/qemu-minimal)
 [![Ubuntu](https://img.shields.io/badge/Ubuntu-Noble%20%7C%20Resolute-orange?style=flat-square&logo=ubuntu)](https://releases.ubuntu.com/noble/)
 [![GitHub Release](https://img.shields.io/github/v/release/sbates130272/qemu-minimal?style=flat-square)](https://github.com/sbates130272/qemu-minimal/releases/latest)
+
+<!-- Reports. The blank lines around this block and the performance one below
+     are load-bearing: a blank line is what makes GitHub start a new paragraph,
+     and therefore a new row of badges. A <br> inside the paragraph does not.
+     All three report lanes run on main (push and a daily 08:00 cron), so all
+     three are pinned with ?branch=main.
+
+     The date badge is the odd one out: it is not a workflow status. It is
+     computed during the Pages publish from the reports actually on the site,
+     and shows the last date on which every one of them was both stamped
+     `pass` and freshly generated. A lane can be red while the site still
+     serves its last good report, and that distinction is the whole point --
+     see scripts/render-site-perf.py's update_green(). -->
 [![VM Report](https://img.shields.io/badge/VM%20Report-live-blue?style=flat-square)](https://sbates130272.github.io/qemu-minimal/)
+[![basic Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-vm-basic.yml?branch=main&label=report-for-vm-basic&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-vm-basic.yml)
+[![rocjitsu Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-vm-rocjitsu.yml?branch=main&label=report-for-vm-rocjitsu&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-vm-rocjitsu.yml)
+[![ernic Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-vm-ernic.yml?branch=main&label=report-for-vm-ernic&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-vm-ernic.yml)
+[![All Reports Green](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-all-green.json&style=flat-square)](https://sbates130272.github.io/qemu-minimal/perf/)
+
+<!-- Performance. These are shields.io *endpoint* badges: the label, value and
+     colour all come from JSON that the Pages publish writes, so the colour is
+     a verdict rather than decoration. Green means the latest reading is within
+     5% of the mean of the previous five distinct readings, amber down to 20%
+     below it, red past that, and blue means there is nothing to compare
+     against yet. They used to be fixed AMD/NVIDIA/Intel brand colours, which
+     meant GEMM rendered red on its best day. -->
 [![rocjitsu GEMM](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-gemm.json&style=flat-square)](https://sbates130272.github.io/qemu-minimal/perf/)
 [![rocjitsu hipFile](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile.json&style=flat-square)](https://sbates130272.github.io/qemu-minimal/perf/)
 [![hipFile fio](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile-fio.json&style=flat-square)](https://sbates130272.github.io/qemu-minimal/perf/)
+
 [![qemu-tool Smoke Test](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-smoke-test-qemu-tool.yml?branch=main&label=qemu-tool-smoke&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-smoke-test-qemu-tool.yml)
 <!-- The four PR-only lanes below (dry-run, ansible, shell-check, spell-check)
      carry no ?branch=main: they have no push-to-main and no cron trigger, so
      they have no run on main and shields renders "no status" for a pinned
-     badge. The three that do run on main stay pinned. -->
+     badge. The two smoke-test lanes in this row do run on main and stay
+     pinned, as do the report lanes in their own row above. -->
 [![Dry-Run Tests](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-dry-run-qemu-tool.yml?label=dry-run&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-dry-run-qemu-tool.yml)
 [![Ansible Test](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-ansible-setup-test.yml?label=ansible&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-ansible-setup-test.yml)
 [![Shell Check](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-shell-check.yml?label=shell-check&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-shell-check.yml)
 [![Spell Check](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-spell-check.yml?label=spell-check&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-spell-check.yml)
 [![rocm-ernic Smoke Test](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-smoke-test-rocm-ernic.yml?branch=main&label=smoke-test-rocm-ernic&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-smoke-test-rocm-ernic.yml)
-[![ernic Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-vm-ernic.yml?branch=main&label=report-for-vm-ernic&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-vm-ernic.yml)
 
 ## Summary
 
@@ -152,7 +178,7 @@ Delete the `qemu/qemu_tool.egg-info` directory as root and retry.
 Generate and run a Noble VM:
 
 ```bash
-qemu-tool gen-vm --vm-name myvm --release noble
+qemu-tool gen-vm --vm-name myvm --release resolute
 qemu-tool run-vm --vm-name myvm
 ssh -p 2222 ubuntu@localhost
 ```
@@ -352,13 +378,35 @@ rocm-ernic publishes its next collection.
 
 ### Available playbooks
 
-| Playbook | Description |
-|---------|-------------|
-| `vm-basic.yml` | User setup, favourite packages, git config |
-| `vm-rocm.yml` | As above, plus ROCm stack |
-| `vm-ernic.yml` | ROCm + [rocm-ernic][rocm-ernic] RDMA NIC prerequisites; `--tags configure` for post-boot NIC setup |
-| `vm-rocjitsu.yml` | ROCm + rocjitsu GPU firmware and driver prerequisites |
-| `vm-ernic-rocjitsu.yml` | Both ernic and rocjitsu prerequisites combined |
+The playbooks are layered rather than independent: `vm-basic.yml` is the base
+for every guest, and `vm-rocm.yml` is the base for every guest that needs ROCm.
+Each one imports its parent, so the shared work has exactly one definition.
+
+```text
+vm-basic.yml                 user setup, favourite packages, git config
+  |-- vm-rocm.yml            + apt pins, ROCm stack            [ROCm base]
+  |     `-- vm-rocjitsu.yml  + mainline kernel, amdgpu patches, firmware
+  `-- vm-ernic.yml           + ionic driver and RDMA prerequisites
+
+vm-slim.yml                  imported as the last line of every leaf above
+```
+
+Every leaf ends by importing `vm-slim.yml`, which deletes the scratch the bake
+left behind — the apt cache and package lists, DKMS build trees, archived
+journals, `/tmp` and `/var/tmp` — and then `fstrim`s it back out of the qcow2.
+Every playbook that *imports* another passes `image_slim_enable: false` on that
+import, so exactly one slim pass runs per bake and it is the last play in the
+run. The flag propagates through nested imports, so a leaf never has to know
+how deep its own chain goes.
+
+| Playbook | Imports | Description |
+|---------|---------|-------------|
+| `vm-basic.yml` | — | User setup, favourite packages, git config |
+| `vm-rocm.yml` | `vm-basic.yml` | As above, plus the ROCm stack. The base for any ROCm guest |
+| `vm-ernic.yml` | `vm-basic.yml` | [rocm-ernic][rocm-ernic] RDMA NIC prerequisites; `--tags configure` for post-boot NIC setup. Installs no ROCm |
+| `vm-rocjitsu.yml` | `vm-rocm.yml` | ROCm + rocjitsu GPU firmware and driver prerequisites |
+| `vm-ernic-rocjitsu.yml` | both of the above | Both ernic and rocjitsu prerequisites combined |
+| `vm-slim.yml` | — | Reclaim bake scratch and `fstrim` it back to the qcow2. Imported last by every leaf; also runnable on its own against a baked guest |
 
 ```bash
 qemu-tool gen-vm \
@@ -395,7 +443,7 @@ flags take precedence over XML values).
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--release NAME` | `noble` | Ubuntu codename (`noble`, `resolute`) or `XX.YY` |
+| `--release NAME` | `resolute` | Ubuntu codename (`resolute`, `noble`) or `XX.YY` |
 | `--size GB` | `64` | Disk size in GB |
 | `--username USER` | `ubuntu` | Guest username |
 | `--password PASS` | `password` | Guest password |
@@ -403,6 +451,7 @@ flags take precedence over XML values).
 | `--ssh-key-file FILE` | `~/.ssh/id_rsa.pub` | SSH public key to inject |
 | `--packages FILE` | `packages.d/packages-default` | Package manifest or `none` |
 | `--force` | off | Force re-download of cloud image |
+| `--compact / --no-compact` | compact | Recompress the backing image after the bake |
 | `--no-backing` | off | Create flat image without a backing file |
 | `--restore-image` | off | Recreate overlay from existing backing file |
 | `--backing-file FILE` | — | Create overlay on top of this existing qcow2 |

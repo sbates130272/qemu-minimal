@@ -84,6 +84,12 @@ jobs:
     - name: Syntax-check vm-ernic-rocjitsu playbook
       run: ansible-playbook --syntax-check playbooks/vm-ernic-rocjitsu.yml
       working-directory: ansible
+    # Reached by import from all five above, so it is already checked
+    # transitively -- but it is also runnable on its own against a baked
+    # guest, and this job checks files by name.
+    - name: Syntax-check vm-slim playbook
+      run: ansible-playbook --syntax-check playbooks/vm-slim.yml
+      working-directory: ansible
 
   gen-vm-ansible-setup:
     name: Generate VM Ansible Setup
@@ -107,7 +113,7 @@ jobs:
       uses: ./.github/actions/setup-vm-job
       with:
         cloud-image-key: ansible-setup
-        release: noble
+        release: resolute
     - name: Generate VM with Ansible post-setup
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -115,7 +121,7 @@ jobs:
       run: |
         qemu-tool gen-vm \
           --vm-name ansible-setup-test \
-          --release noble \
+          --release resolute \
           --username ubuntu \
           --password password \
           --packages none \

@@ -19,14 +19,22 @@ on:
     # runner-minutes across the four playbook lanes for every qemu-tool edit.
     paths:
       - 'ansible/playbooks/vm-rocjitsu.yml'
+      # vm-rocjitsu.yml imports vm-rocm.yml, which imports vm-basic.yml.
+      - 'ansible/playbooks/vm-rocm.yml'
+      - 'ansible/playbooks/vm-basic.yml'
+      # ... and all three end with vm-slim.yml. roles/** below already covers
+      # the image_slim role it runs; this catches the playbook itself.
+      - 'ansible/playbooks/vm-slim.yml'
+      - 'ansible/playbooks/vars/**'
+      # ionic_image_prep is no longer ernic-only: vm-rocm.yml uses its
+      # kernel.yml to install the pinned mainline kernel this lane boots, so a
+      # change there changes this guest. The exclusion that used to sit here
+      # predated that.
       - 'ansible/playbooks/roles/**'
-      # ionic_image_prep is ernic-only; editing it should not cost 50 minutes
-      # of GPU lane. The ernic lane already excludes rocjitsu_gpu_test
-      # symmetrically.
-      - '!ansible/playbooks/roles/ionic_image_prep/**'
       - 'ansible/requirements.yml'
       - 'qemu/compose/vfio-user-rocjitsu-vm/**'
       - '.github/actions/setup-vm-job/action.yml'
+      - '.github/actions/report-image-size/action.yml'
       - '.github/workflows/qemu-minimal-ansible-playbook-test-vm-rocjitsu.yml'
 
 concurrency:
@@ -238,6 +246,16 @@ jobs:
           -e "ansible_port=2222" \
           -e "ansible_user=ubuntu" \
           -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"'
+
+    # Diagnostic only, and always() so a red lane still reports what it
+    # built -- the size question is most interesting exactly when
+    # something else went wrong.
+    - name: Report VM image size
+      if: always()
+      uses: ./.github/actions/report-image-size
+      with:
+        vm-name: rocjitsu-test
+        ssh-host: qemu
 
     - name: Show compose logs on failure
       if: failure()

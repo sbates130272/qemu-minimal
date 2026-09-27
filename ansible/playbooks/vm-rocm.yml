@@ -1,28 +1,43 @@
 ---
+# The base for any guest that needs ROCm. Run standalone this is the plain
+# ROCm image; vm-rocjitsu.yml imports it and layers the rocjitsu pieces on top.
+# vm-ernic.yml does NOT import this -- that guest installs no ROCm at all and
+# sits directly on vm-basic.yml.
+- import_playbook: vm-basic.yml
+  tags: [install]
+  vars:
+    vm_install_amd_ca: "{{ vm_rocm_install_amd_ca | default(true) }}"
+    # The whole ROCm install still has to run after this, and it needs the apt
+    # lists and /tmp that a slim pass here would take away. See vm-slim.yml.
+    image_slim_enable: false
+
 - name: Post cloud-init VM setup with ROCm and hipFile
   hosts: all
   gather_facts: true
   become: false
-  # Same block as vm-ernic.yml and vm-rocjitsu.yml: set the token once here
-  # rather than relying on every workflow step to pass it through. Without it
-  # the roles hit the anonymous GitHub API rate limit, which surfaces as an
-  # intermittent 403 on a download and reads exactly like a flake.
+  tags: [install]
+  vars_files:
+    - vars/github-api.yml
+    # For ionic_kernel_pin, used only when vm_rocm_mainline_kernel is true.
+    # Loading it unconditionally is inert otherwise.
+    - vars/ernic-pins.yml
   module_defaults:
     ansible.builtin.uri:
-      headers: >-
-        {{
-          ({'Authorization': 'token ' + lookup('env', 'GITHUB_TOKEN')}
-           if lookup('env', 'GITHUB_TOKEN')
-           else {})
-        }}
+      headers: "{{ github_api_headers }}"
   vars:
     username: "{{ vm_username | default('ubuntu') }}"
-    root_user: "{{ vm_root_user | default('ubuntu') }}"
-    user_setup_motd: true
-    user_setup_install_amd_ca: true
     rocm_setup_user: "{{ vm_username | default('ubuntu') }}"
     rocm_setup_repo_stream: therock
     rocm_setup_minimal: true
+    # Not the role default, which names hipcc and rocminfo. hipcc is bundled in
+    # the ROCm meta-package under /opt/rocm/core-*/bin/ and is not a standalone
+    # apt package in the therock stream, and both are pinned to never-install
+    # below so apt cannot silently satisfy them from Ubuntu universe instead.
+    # Importers extend rather than replace this via vm_rocm_extra_packages.
+    rocm_setup_minimal_packages: "{{
+        ['libstdc++-14-dev', 'amdrocm-runtime-dev']
+        + (vm_rocm_extra_packages | default([]))
+      }}"
     # These are QEMU guests, never WSL. Pinned rather than left to the role's
     # default(false) because a non-false wsl_mode silently drops the minimal
     # path back to the full amdrocm meta-package.
@@ -31,11 +46,229 @@
     rocm_setup_skip_reboot: false
     rocm_setup_run_checks: true
     rocm_setup_run_gpu_checks: false
+    # Stays on, unlike the two below. The plain ROCm guest has no GPU and gets
+    # nothing from it, but vm-rocjitsu.yml imports this file and does have one
+    # under passthrough, and it deleted its own exporter install in favour of
+    # this line (see the comment above its amd-smi task). Turning it off here
+    # would silently take it out of the rocjitsu lane too.
     rocm_setup_install_metrics_exporter: true
-    rocm_setup_extra_kernel_packages:
-      - linux-generic-hwe-24.04
+    # Both of these default to true in the role, so leaving them unset baked
+    # them into every ROCm lane by accident. Nothing in this repo consumes
+    # either, and no CI lane asserts on them.
+    #
+    # rocm-cli's installer is a curl of https://raw.githubusercontent.com/
+    # ROCm/rocm-cli/main/install.sh piped straight to sh -- an unpinned branch
+    # fetched at bake time, executed as the user, editing the shell profile.
+    # That is a supply-chain hole for a tool no playbook or test here calls.
+    rocm_setup_install_rocm_cli: false
+    # xrocmtop is a btop-style interactive terminal UI. These guests are
+    # headless CI images driven over ssh; the binary is dead weight in the
+    # qcow2 and its install is an unauthenticated GitHub API call plus a
+    # release download that fails the play when either is unavailable.
+    rocm_setup_install_xrocmtop: false
+    # Empty by default. This used to name linux-generic-hwe-24.04, which was
+    # right while the plain ROCm lane ran noble; every lane is resolute now,
+    # where a 24.04 HWE metapackage is simply the wrong release's. There is no
+    # resolute equivalent worth naming either -- resolute's GA kernel already
+    # is the current one, so an HWE metapackage there installs a kernel
+    # nothing boots, which is the exact trap vm-rocjitsu.yml documents on its
+    # own [] override. A caller that genuinely wants one can still pass it.
+    rocm_setup_extra_kernel_packages: "{{
+        vm_rocm_extra_kernel_packages | default([])
+      }}"
+    # Install the pinned mainline kernel from vars/ernic-pins.yml instead of
+    # relying on the distro kernel. Off here, on for rocjitsu; see the task.
+    rocm_base_mainline_kernel: "{{ vm_rocm_mainline_kernel | default(false) }}"
+    # Stop the amdgpu-dkms postinst building the unpatched source. Only useful
+    # to a lane that patches and rebuilds amdgpu itself, i.e. rocjitsu.
+    rocm_base_suppress_dkms: "{{ vm_rocm_suppress_dkms | default(false) }}"
+    ionic_image_kernel_ref: "{{ ionic_kernel_pin }}"
+    # This role only builds ionic_rdma in the ernic lane, so kernel.yml's
+    # closing ib_umem_get_va assert is not this play's precondition to fail on.
+    ionic_image_kernel_assert_ionic: false
+  pre_tasks:
+    # Block distro (Ubuntu universe) versions of packages that the ROCm
+    # meta-package ships correctly under /opt/rocm/core-*/bin/. Without this
+    # apt resolves rocminfo/hipcc from universe during the rocm_setup role's
+    # package install steps, installing stale versions that crash against newer
+    # ROCm runtimes.
+    - name: Pin ROCm-conflicting Ubuntu universe packages to never-install
+      ansible.builtin.copy:
+        dest: /etc/apt/preferences.d/rocm-no-distro-packages
+        content: |
+          Package: rocminfo
+          Pin: release o=Ubuntu
+          Pin-Priority: -1
+
+          Package: hipcc
+          Pin: release o=Ubuntu
+          Pin-Priority: -1
+
+          Package: rocm-smi-lib
+          Pin: release o=Ubuntu
+          Pin-Priority: -1
+
+          Package: libhsakmt1
+          Pin: release o=Ubuntu
+          Pin-Priority: -1
+
+          Package: libhsa-runtime64-1
+          Pin: release o=Ubuntu
+          Pin-Priority: -1
+
+          Package: libhsa-runtime-dev
+          Pin: release o=Ubuntu
+          Pin-Priority: -1
+
+          Package: libamdhip64-*
+          Pin: release o=Ubuntu
+          Pin-Priority: -1
+        mode: '0644'
+      become: true
+
+    # The stale-keyring and stale-exporter-source cleanups that used to sit
+    # here are in vm-basic.yml's pre_tasks. They have to run before the first
+    # `update_cache: true`, which is fave_packages in that play -- a play
+    # earlier than this one. See the comment there.
+
+    # The guest kernel, before anything below touches DKMS.
+    #
+    # Two of the four amdgpu patches in vm-rocjitsu.yml -- the ptrace gate and
+    # the panel_type probe -- are version-gated to >= 7.2 and are deliberate
+    # no-ops on anything older. resolute GA is 7.0.0-34, so a lane on the distro
+    # kernel would carry the 7.2 fixes and then boot a kernel that switches them
+    # off. This puts every mainline lane on the same kernel, which is also the
+    # kernel the published ernic-rocjitsu qcow2 boots.
+    #
+    # Position is load-bearing. The kernel .debs run update-initramfs
+    # themselves, and the divert below replaces it with a no-op for the whole
+    # amdgpu-dkms install -- installing the kernel after that point leaves the
+    # new kernel on disk with no initramfs and the guest unbootable. It also has
+    # to precede the DKMS build, which must target the kernel the guest boots.
+    #
+    # kernel.yml short-circuits when the pinned kernel is already running, so
+    # this is a no-op in the combined lane -- where vm-ernic.yml has already
+    # installed it -- rather than a second install. The role is named for ionic
+    # because that is what needed a mainline kernel first; only kernel.yml is
+    # used here.
+    #
+    # apply.become because ionic_image_prep sets no become of its own -- it was
+    # written for a play that escalates, and this play does not. It has to be
+    # apply: rather than a bare become: on the include; ansible-core rejects
+    # become as an attribute of IncludeRole, and apply is what propagates to
+    # the included tasks in any case.
+    - name: Install the pinned mainline kernel
+      ansible.builtin.include_role:
+        name: ionic_image_prep
+        tasks_from: kernel
+        apply:
+          become: true
+      when: rocm_base_mainline_kernel | bool
+
+    # Stop the amdgpu-dkms postinst building anything, before rocm_setup
+    # installs it. In the rocjitsu lane every one of the four source patches
+    # reports "changed" on every run, so the module that postinst builds is
+    # always thrown away by the rebuild that follows them -- and it is not a
+    # cheap thing to throw away. Measured on the last green runs at cbf9f94:
+    # 23m55s of a 47m48s standalone lane and 28m20s of a 55m46s combined lane,
+    # against 12m for the patched rebuild that actually produces the module the
+    # guest loads. In the combined lane that build does not even succeed: the
+    # guest is on the pinned mainline kernel by then and that is precisely what
+    # the ptrace patch exists to fix, so ~28 minutes are spent reaching a
+    # compile error.
+    #
+    # /usr/lib/dkms/common.postinst, which the amdgpu-dkms postinst defers to,
+    # checks for this marker before it does anything else and exits 0. Checked
+    # against the shipped script:
+    #
+    #   if [ -f /etc/dkms/no-autoinstall ]; then
+    #       echo "autoinstall for dkms modules has been disabled."
+    #       exit 0
+    #   fi
+    #
+    # This supersedes the no-autoinstall-errors marker that used to be here.
+    # That one let the doomed build run and then ignored its exit status, which
+    # cost the same ~28 minutes and additionally left dpkg half-configured --
+    # hence the "dpkg --configure -a" task that used to follow the rebuild.
+    # Skipping the build outright means there is no failure to swallow, so
+    # genuine DKMS errors elsewhere in the image stay fatal.
+    #
+    # Note that the early exit is above common.postinst's `dkms add` as well as
+    # its build loop, so the module is never registered in /var/lib/dkms either.
+    # vm-rocjitsu.yml's rebuild task does its own `dkms add`; do not assume
+    # `dkms status` can name a version before that runs.
+    #
+    # The marker is removed once amdgpu has been patched and built, so a later
+    # kernel upgrade inside the image still autoinstalls normally.
+    #
+    # The directory is created first because in the standalone lane this runs
+    # before dkms is installed, so /etc/dkms does not exist yet and
+    # ansible.builtin.file will not create a missing parent for the marker.
+    # dpkg is content to unpack into a directory that already exists.
+    - name: Ensure the DKMS config directory exists
+      ansible.builtin.file:
+        path: /etc/dkms
+        state: directory
+        mode: '0755'
+      become: true
+      when: rocm_base_suppress_dkms | bool
+
+    - name: Suppress the amdgpu-dkms postinst build of the unpatched source
+      ansible.builtin.file:
+        path: /etc/dkms/no-autoinstall
+        state: touch
+        mode: '0644'
+      become: true
+      changed_when: false
+      when: rocm_base_suppress_dkms | bool
+
+    # The marker alone is not enough, which run 36048829734 found the hard way.
+    # common.postinst exits 0 as intended, but control returns to amdgpu-dkms's
+    # own postinst, which then runs update-initramfs with a kernel version it
+    # derives from the DKMS state common.postinst never wrote:
+    #
+    #   autoinstall for dkms modules has been disabled.
+    #   /usr/sbin/update-initramfs: option requires an argument -- 'k'
+    #   dpkg: error processing package amdgpu-dkms (--configure):
+    #    old amdgpu-dkms package postinst maintainer script subprocess failed
+    #    with exit status 2
+    #
+    # That is the same empty-version bug as the one fixed in vm-rocjitsu.yml's
+    # rebuild task, but in a maintainer script this playbook does not own and
+    # cannot make tolerant -- the install is rocm_setup's, and it fails the
+    # play.
+    #
+    # So make the call a no-op for the same window. A dpkg-divert is used
+    # rather than a PATH shim because the postinst calls the absolute path.
+    # Nothing is lost by skipping it: the initramfs built here would describe
+    # a guest with no amdgpu module and no blacklist yet, and vm-rocjitsu.yml's
+    # "Regenerate initramfs" task rebuilds it after both exist. That task runs
+    # after the undivert, which is why the undivert is not at the end of the
+    # play.
+    - name: Divert update-initramfs for the duration of the amdgpu-dkms install
+      ansible.builtin.command:
+        cmd: >-
+          dpkg-divert --local --rename --quiet
+          --divert /usr/sbin/update-initramfs.dkms-bypass
+          --add /usr/sbin/update-initramfs
+        creates: /usr/sbin/update-initramfs.dkms-bypass
+      become: true
+      when: rocm_base_suppress_dkms | bool
+
+    - name: Install a no-op update-initramfs in its place
+      ansible.builtin.copy:
+        dest: /usr/sbin/update-initramfs
+        content: |
+          #!/bin/sh
+          exit 0
+        mode: '0755'
+      become: true
+      when: rocm_base_suppress_dkms | bool
+
   roles:
-    - role: sbates130272.batesste.user_setup
-    - role: sbates130272.batesste.fave_packages
-    - role: sbates130272.batesste.git_setup
     - role: sbates130272.batesste.rocm_setup
+
+# Last line of every leaf. Importers pass image_slim_enable: false so this
+# does not run in the middle of their chain; see vm-slim.yml.
+- import_playbook: vm-slim.yml
+  tags: [install]

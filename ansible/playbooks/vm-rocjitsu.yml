@@ -1,55 +1,51 @@
 ---
+# vm-rocm.yml is the base for any guest that needs ROCm. It carries the
+# rocm_setup vars, the apt pins and keyring cleanups, the pinned mainline
+# kernel and the amdgpu-dkms suppression -- all of which used to be copied
+# here. What is left below is only what is specific to rocjitsu.
+- import_playbook: vm-rocm.yml
+  tags: [install]
+  vars:
+    vm_rocm_install_amd_ca: false
+    user_setup_dotfiles_enable: true
+    # gemm-hipfile-bench needs the hipFile SDK, and amdrocm-runtime-dev does
+    # not pull it in -- it depends only on sysdeps, runtime and llvm-dev.
+    # Without this the report script's probe correctly reports the headers
+    # unavailable, emits no read_gbs, and the whole run aborts.
+    vm_rocm_extra_packages: [amdrocm-hipfile-dev]
+    # No extra kernel metapackage. This used to name linux-generic-hwe-26.04,
+    # whose comment claimed both spellings resolve to the running 7.0.0-31 and
+    # so the task was a no-op. It is not: it reported "changed" on every run,
+    # and by the time it ran the guest was already on 7.0.0-34 from the image's
+    # own upgrade, so all it did was install a metapackage for a kernel nothing
+    # here boots. This lane runs the pinned mainline kernel, where a 7.0.x HWE
+    # kernel is pure weight.
+    vm_rocm_extra_kernel_packages: []
+    # Both lanes on the pinned mainline kernel, and the amdgpu-dkms postinst
+    # build suppressed because the patch-and-rebuild below throws it away. The
+    # long-form reasoning for each is on the tasks in vm-rocm.yml.
+    vm_rocm_mainline_kernel: true
+    vm_rocm_suppress_dkms: true
+    # Silences the slim pass at the end of vm-rocm.yml *and* the one at the end
+    # of vm-basic.yml underneath it -- import vars propagate through nested
+    # imports. The rocjitsu play below patches and rebuilds /usr/src/amdgpu-*
+    # and installs rocBLAS with update_cache: false, so neither the build trees
+    # nor the apt lists can be swept before it runs. See vm-slim.yml.
+    image_slim_enable: false
+
 - name: Bake rocjitsu prerequisites into a base VM image
   hosts: all
   gather_facts: true
   become: true
   tags: [install]
+  vars_files:
+    - vars/github-api.yml
   module_defaults:
     ansible.builtin.uri:
-      headers: >-
-        {{
-          ({'Authorization': 'token ' + lookup('env', 'GITHUB_TOKEN')}
-           if lookup('env', 'GITHUB_TOKEN')
-           else {})
-        }}
-  vars_files:
-    # For ionic_kernel_pin. One pin for the guest kernel across every lane --
-    # see the mainline kernel task below.
-    - vars/ernic-pins.yml
+      headers: "{{ github_api_headers }}"
   vars:
     username: "{{ vm_username | default('ubuntu') }}"
     root_user: "{{ vm_root_user | default('ubuntu') }}"
-    user_setup_motd: true
-    user_setup_install_amd_ca: false
-    user_setup_dotfiles_enable: true
-    rocm_setup_user: "{{ vm_username | default('ubuntu') }}"
-    rocm_setup_repo_stream: therock
-    rocm_setup_minimal: true
-    rocm_setup_minimal_packages:
-      - libstdc++-14-dev
-      - amdrocm-runtime-dev
-      # gemm-hipfile-bench needs the hipFile SDK, and amdrocm-runtime-dev does
-      # not pull it in -- it depends only on sysdeps, runtime and llvm-dev.
-      # Without this the report script's probe correctly reports the headers
-      # unavailable, emits no read_gbs, and the whole run aborts.
-      - amdrocm-hipfile-dev
-    # These are QEMU guests, never WSL. Pinned rather than left to the role's
-    # default(false) because a non-false wsl_mode silently drops the minimal
-    # path back to the full amdrocm meta-package.
-    rocm_setup_wsl: false
-    rocm_setup_wsl_install: false
-    rocm_setup_skip_reboot: false
-    rocm_setup_run_checks: true
-    rocm_setup_run_gpu_checks: false
-    # No rocm_setup_extra_kernel_packages. It named linux-generic-hwe-26.04,
-    # whose comment claimed both spellings resolve to the running 7.0.0-31 and
-    # so the task was a no-op. It is not: it reported "changed" on every run,
-    # and by the time it ran the guest was already on 7.0.0-34 from the image's
-    # own upgrade, so all it did was install a metapackage for a kernel nothing
-    # here boots. The combined lane is worse -- that guest runs the pinned
-    # mainline 7.2.4 from ionic_image_prep, where a 7.0.x HWE kernel is pure
-    # weight. vm-ernic.yml dropped this for the same reason; see its comment.
-    rocm_setup_install_metrics_exporter: true
     # Regenerate the initramfs after writing the amdgpu blacklist and the
     # gfx1250 stubs. On by default: without it the blacklist is inert at boot
     # and the resulting image needs a manual update-initramfs before it works
@@ -84,197 +80,23 @@
     # wrong one otherwise, since a stub mec/rlc is strictly worse than the
     # firmware it stands in for.
     rocjitsu_firmware_set: "{{ vm_rocjitsu_firmware_set | default('gap') }}"
-    # The guest kernel, from the one pin in vars/ernic-pins.yml that vm-ernic.yml
-    # already reads. See the mainline kernel task in pre_tasks.
-    ionic_image_kernel_ref: "{{ ionic_kernel_pin }}"
-    # This lane never builds ionic_rdma, so kernel.yml's closing ib_umem_get_va
-    # assert is not its precondition to fail on.
-    ionic_image_kernel_assert_ionic: false
-  pre_tasks:
-    - name: Pin ROCm-conflicting Ubuntu universe packages to never-install
-      ansible.builtin.copy:
-        dest: /etc/apt/preferences.d/rocm-no-distro-packages
-        content: |
-          Package: rocminfo
-          Pin: release o=Ubuntu
-          Pin-Priority: -1
-
-          Package: hipcc
-          Pin: release o=Ubuntu
-          Pin-Priority: -1
-
-          Package: rocm-smi-lib
-          Pin: release o=Ubuntu
-          Pin-Priority: -1
-
-          Package: libhsakmt1
-          Pin: release o=Ubuntu
-          Pin-Priority: -1
-
-          Package: libhsa-runtime64-1
-          Pin: release o=Ubuntu
-          Pin-Priority: -1
-
-          Package: libhsa-runtime-dev
-          Pin: release o=Ubuntu
-          Pin-Priority: -1
-
-          Package: libamdhip64-*
-          Pin: release o=Ubuntu
-          Pin-Priority: -1
-        mode: '0644'
-      become: true
-
-    - name: Remove any partial dotfiles clone so user_setup can start fresh
-      ansible.builtin.file:
-        path: "/home/{{ username }}/.dotfiles"
-        state: absent
-      become: true
-
-    - name: Remove stale ROCm GPG keyrings and sources
-      ansible.builtin.file:
-        path: "{{ item }}"
-        state: absent
-      become: true
-      loop:
-        - /etc/apt/keyrings/rocm.gpg
-        - /etc/apt/keyrings/amdrocm.gpg
-        - /etc/apt/sources.list.d/rocm.sources
-
-    - name: Remove any stale device-metrics-exporter apt sources
-      ansible.builtin.shell:
-        cmd: |
-          find /etc/apt/sources.list.d -type f \
-            -exec grep -l "device-metrics-exporter\|amdgpu-exporter" {} \; \
-            | xargs -r rm -f
-      become: true
-      changed_when: false
-
-    # The guest kernel, before anything below touches DKMS.
-    #
-    # Two of the four amdgpu patches further down -- the ptrace gate and the
-    # panel_type probe -- are version-gated to >= 7.2 and are deliberate no-ops
-    # on anything older. resolute GA is 7.0.0-34, so the standalone lane has
-    # been carrying the 7.2 fixes and then booting a kernel that switches them
-    # off. The combined lane never had that problem: vm-ernic.yml runs first and
-    # ionic_image_prep puts it on 7.2.4 (see the comment below, which already
-    # assumes this). This puts both lanes on the same kernel, which is also the
-    # kernel the published ernic-rocjitsu qcow2 boots.
-    #
-    # Position is load-bearing. The kernel .debs run update-initramfs
-    # themselves, and the divert below replaces it with a no-op for the whole
-    # amdgpu-dkms install -- installing the kernel after that point leaves 7.2.4
-    # on disk with no initramfs and the guest unbootable. It also has to precede
-    # the DKMS build, which must target the kernel the guest actually boots.
-    #
-    # kernel.yml short-circuits when the pinned kernel is already running, so
-    # this is a no-op in the combined lane rather than a second install. The
-    # role is named for ionic because that is what needed a mainline kernel
-    # first; only its kernel.yml is used here.
-    - name: Install the pinned mainline kernel
-      ansible.builtin.include_role:
-        name: ionic_image_prep
-        tasks_from: kernel
-
-    # Stop the amdgpu-dkms postinst building anything, before rocm_setup
-    # installs it. Every one of the four source patches below reports "changed"
-    # on every run, so the module that postinst builds is always thrown away by
-    # the rebuild that follows them -- and it is not a cheap thing to throw
-    # away. Measured on the last green runs at cbf9f94: 23m55s of a 47m48s
-    # standalone lane and 28m20s of a 55m46s combined lane, against 12m for the
-    # patched rebuild that actually produces the module the guest loads. In the
-    # combined lane that build does not even succeed: the guest is on the pinned
-    # mainline 7.2.4 by then (vm-ernic.yml runs first and ionic_image_prep
-    # installs it) and 7.2.4 is precisely what the ptrace patch exists to fix,
-    # so ~28 minutes are spent reaching a compile error.
-    #
-    # /usr/lib/dkms/common.postinst, which the amdgpu-dkms postinst defers to,
-    # checks for this marker before it does anything else and exits 0. Checked
-    # against the shipped script:
-    #
-    #   if [ -f /etc/dkms/no-autoinstall ]; then
-    #       echo "autoinstall for dkms modules has been disabled."
-    #       exit 0
-    #   fi
-    #
-    # This supersedes the no-autoinstall-errors marker that used to be here.
-    # That one let the doomed build run and then ignored its exit status, which
-    # cost the same ~28 minutes and additionally left dpkg half-configured --
-    # hence the "dpkg --configure -a" task that used to follow the rebuild.
-    # Skipping the build outright means there is no failure to swallow, so
-    # genuine DKMS errors elsewhere in the image stay fatal.
-    #
-    # Note that the early exit is above common.postinst's `dkms add` as well as
-    # its build loop, so the module is never registered in /var/lib/dkms either.
-    # The rebuild task below does its own `dkms add`; do not assume `dkms
-    # status` can name a version before that runs.
-    #
-    # The marker is removed once amdgpu has been patched and built, so a later
-    # kernel upgrade inside the image still autoinstalls normally.
-    #
-    # The directory is created first because in the standalone lane this runs
-    # before dkms is installed, so /etc/dkms does not exist yet and
-    # ansible.builtin.file will not create a missing parent for the marker.
-    # dpkg is content to unpack into a directory that already exists.
-    - name: Ensure the DKMS config directory exists
-      ansible.builtin.file:
-        path: /etc/dkms
-        state: directory
-        mode: '0755'
-      become: true
-
-    - name: Suppress the amdgpu-dkms postinst build of the unpatched source
-      ansible.builtin.file:
-        path: /etc/dkms/no-autoinstall
-        state: touch
-        mode: '0644'
-      become: true
-      changed_when: false
-
-    # The marker alone is not enough, which run 36048829734 found the hard way.
-    # common.postinst exits 0 as intended, but control returns to amdgpu-dkms's
-    # own postinst, which then runs update-initramfs with a kernel version it
-    # derives from the DKMS state common.postinst never wrote:
-    #
-    #   autoinstall for dkms modules has been disabled.
-    #   /usr/sbin/update-initramfs: option requires an argument -- 'k'
-    #   dpkg: error processing package amdgpu-dkms (--configure):
-    #    old amdgpu-dkms package postinst maintainer script subprocess failed
-    #    with exit status 2
-    #
-    # That is the same empty-version bug as the one fixed in the rebuild task
-    # below, but in a maintainer script this playbook does not own and cannot
-    # make tolerant -- the install is rocm_setup's, and it fails the play.
-    #
-    # So make the call a no-op for the same window. A dpkg-divert is used
-    # rather than a PATH shim because the postinst calls the absolute path.
-    # Nothing is lost by skipping it: the initramfs built here would describe
-    # a guest with no amdgpu module and no blacklist yet, and the "Regenerate
-    # initramfs" task below rebuilds it after both exist. That task runs after
-    # the undivert, which is why the undivert is not at the end of the play.
-    - name: Divert update-initramfs for the duration of the amdgpu-dkms install
-      ansible.builtin.command:
-        cmd: >-
-          dpkg-divert --local --rename --quiet
-          --divert /usr/sbin/update-initramfs.dkms-bypass
-          --add /usr/sbin/update-initramfs
-        creates: /usr/sbin/update-initramfs.dkms-bypass
-      become: true
-
-    - name: Install a no-op update-initramfs in its place
-      ansible.builtin.copy:
-        dest: /usr/sbin/update-initramfs
-        content: |
-          #!/bin/sh
-          exit 0
-        mode: '0755'
-      become: true
-
-  roles:
-    - role: sbates130272.batesste.user_setup
-    - role: sbates130272.batesste.fave_packages
-    - role: sbates130272.batesste.git_setup
-    - role: sbates130272.batesste.rocm_setup
+    # Whether to generate the gfx1250 stubs at all. On by default: every lane
+    # here boots a guest that needs them. Turn it off when the controller has
+    # no Docker *daemon* -- the generation step is a delegate_to: localhost
+    # `docker run`, and a BuildKit `RUN --security=insecure` step has the CLI
+    # on PATH with no socket behind it. batesste-ci-images' ubuntu-qcow2-gen is
+    # exactly that, and cannot be given one. With this false the guest gets no
+    # /lib/firmware/amdgpu stubs and the caller supplies them later; the
+    # packaged-firmware assertions below still run, since they only stat what
+    # amdgpu-dkms-firmware installed.
+    rocjitsu_generate_firmware: "{{ vm_rocjitsu_generate_firmware | default(true) }}"
+    # Whether the generator also emits ip_discovery.bin. On by default because
+    # a guest built and run against one rocjitsu pin wants it baked in. Turn it
+    # off when the image is *published* for other consumers to run: the blob is
+    # per-config (rj-ip-discovery gfx1250) and has to match the rocjitsu build
+    # the consumer serves the device from, not the one that built the disk, so
+    # a baked copy is wrong for every consumer on a different build.
+    rocjitsu_firmware_ip_discovery: "{{ vm_rocjitsu_firmware_ip_discovery | default(true) }}"
 
   tasks:
     # WORKAROUND for sbates130272/batesste-ansible#248. TheRock installs to a
@@ -330,103 +152,114 @@
         mode: '0644'
       become: true
 
-    # One pin, two consumers, and until now they could disagree in silence.
-    # The compose stacks take the server image from $ROCJITSU_IMAGE; the task
-    # below generates the firmware stubs that same server hands the guest, so
-    # the two have to resolve to one image or the device model and its firmware
-    # come from different rocjitsu builds. Nothing ever passed rocjitsu_image
-    # -- the workflows set ROCJITSU_IMAGE, which reached `docker pull` and
-    # compose but not Ansible -- so the literal fallback was used regardless of
-    # what was being served, and a half-finished bump would drift with nothing
-    # to show for it but a guest booting against another build's stubs.
-    #
-    # gen-vm forwards its whole environment to ansible-playbook (see
-    # gen_vm.py), so reading $ROCJITSU_IMAGE here closes the gap for every
-    # caller rather than only the workflows that remember an -e. The literal
-    # stays as the fallback for a bare `ansible-playbook` run with nothing set;
-    # keep it equal to the compose defaults.
-    #
-    # default(..., true) rather than default(...): lookup('env') returns an
-    # empty string when the variable is unset, which is defined but useless,
-    # and only the boolean form treats it as absent.
-    #
-    # A new fact name rather than reassigning rocjitsu_image: a set_fact whose
-    # value templates the same name is a recursive loop as far as Ansible's
-    # templar is concerned, and it fails at run time, not at --syntax-check.
-    - name: Resolve the rocjitsu image for firmware generation
-      ansible.builtin.set_fact:
-        rocjitsu_firmware_image: >-
-          {{ rocjitsu_image | default(lookup('env', 'ROCJITSU_IMAGE'), true)
-             | default('sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20260924.gad7a357-rocjitsu.c85bb75', true) }}
+    # Everything from here to the temp-dir cleanup runs on the *controller*
+    # and needs a Docker daemon there, which is what rocjitsu_generate_firmware
+    # gates. One when: on the block rather than seven copies -- and the
+    # set_fact has to stay inside it, since the docker run task templates
+    # rocjitsu_firmware_image from it and would fail to template rather than
+    # skip if it were left outside.
+    - name: Generate and install the gfx1250 firmware stubs
+      when: rocjitsu_generate_firmware | bool
+      block:
+        # One pin, two consumers, and until now they could disagree in silence.
+        # The compose stacks take the server image from $ROCJITSU_IMAGE; the task
+        # below generates the firmware stubs that same server hands the guest, so
+        # the two have to resolve to one image or the device model and its firmware
+        # come from different rocjitsu builds. Nothing ever passed rocjitsu_image
+        # -- the workflows set ROCJITSU_IMAGE, which reached `docker pull` and
+        # compose but not Ansible -- so the literal fallback was used regardless of
+        # what was being served, and a half-finished bump would drift with nothing
+        # to show for it but a guest booting against another build's stubs.
+        #
+        # gen-vm forwards its whole environment to ansible-playbook (see
+        # gen_vm.py), so reading $ROCJITSU_IMAGE here closes the gap for every
+        # caller rather than only the workflows that remember an -e. The literal
+        # stays as the fallback for a bare `ansible-playbook` run with nothing set;
+        # keep it equal to the compose defaults.
+        #
+        # default(..., true) rather than default(...): lookup('env') returns an
+        # empty string when the variable is unset, which is defined but useless,
+        # and only the boolean form treats it as absent.
+        #
+        # A new fact name rather than reassigning rocjitsu_image: a set_fact whose
+        # value templates the same name is a recursive loop as far as Ansible's
+        # templar is concerned, and it fails at run time, not at --syntax-check.
+        - name: Resolve the rocjitsu image for firmware generation
+          ansible.builtin.set_fact:
+            rocjitsu_firmware_image: >-
+              {{ rocjitsu_image | default(lookup('env', 'ROCJITSU_IMAGE'), true)
+                 | default('sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20260924.gad7a357-rocjitsu.c85bb75', true) }}
 
-    # Printed rather than assumed: the whole failure mode above was a pin that
-    # was wrong without being visible. One line in the log says which build the
-    # stubs came from.
-    - name: Show the rocjitsu image the stubs come from
-      ansible.builtin.debug:
-        msg: "Generating gfx1250 firmware stubs with {{ rocjitsu_firmware_image }}"
+        # Printed rather than assumed: the whole failure mode above was a pin that
+        # was wrong without being visible. One line in the log says which build the
+        # stubs came from.
+        - name: Show the rocjitsu image the stubs come from
+          ansible.builtin.debug:
+            msg: "Generating gfx1250 firmware stubs with {{ rocjitsu_firmware_image }}"
 
-    - name: Create local temp dir for firmware generation
-      ansible.builtin.tempfile:
-        state: directory
-        prefix: rj_fw_
-      register: rj_fw_tmp
-      delegate_to: localhost
-      become: false
+        - name: Create local temp dir for firmware generation
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: rj_fw_
+          register: rj_fw_tmp
+          delegate_to: localhost
+          become: false
 
-    # Generate inside the container and stream the result out as a tar rather
-    # than bind-mounting rj_fw_tmp.path to /out. "docker run -v" is resolved by
-    # the daemon, so when this controller is itself a container talking to the
-    # host's docker socket -- as it is in CI -- the host has no such path,
-    # creates it empty, and the stubs land on the host where the controller
-    # cannot see them. docker run still exits 0, so the failure only surfaces
-    # much later as a missing gc_12_1_0_rlc_1.bin in the guest.
-    # The generator emits ip_discovery.bin itself unless --no-ip-discovery, so
-    # there is no separate rj-ip-discovery call: running one here only
-    # overwrote what had just been produced.
-    - name: Generate gfx1250 firmware stubs on controller via rocjitsu container
-      ansible.builtin.shell:
-        cmd: >-
-          set -o pipefail &&
-          docker run --rm --entrypoint /bin/sh
-          {{ rocjitsu_firmware_image }}
-          -c 'python3 /usr/local/bin/vfio_guest_firmware.py
-          --set {{ rocjitsu_firmware_set }} --output /out
-          && tar -cf - -C /out .'
-          | tar -xf - -C {{ rj_fw_tmp.path }}
-        executable: /bin/bash
-      delegate_to: localhost
-      become: false
+        # Generate inside the container and stream the result out as a tar rather
+        # than bind-mounting rj_fw_tmp.path to /out. "docker run -v" is resolved by
+        # the daemon, so when this controller is itself a container talking to the
+        # host's docker socket -- as it is in CI -- the host has no such path,
+        # creates it empty, and the stubs land on the host where the controller
+        # cannot see them. docker run still exits 0, so the failure only surfaces
+        # much later as a missing gc_12_1_0_rlc_1.bin in the guest.
+        # The generator emits ip_discovery.bin itself, so there is no separate
+        # rj-ip-discovery call: running one here only overwrote what had just
+        # been produced. --no-ip-discovery suppresses it, which is what
+        # rocjitsu_firmware_ip_discovery: false asks for -- see the var.
+        - name: Generate gfx1250 firmware stubs on controller via rocjitsu container
+          ansible.builtin.shell:
+            cmd: >-
+              set -o pipefail &&
+              docker run --rm --entrypoint /bin/sh
+              {{ rocjitsu_firmware_image }}
+              -c 'python3 /usr/local/bin/vfio_guest_firmware.py
+              --set {{ rocjitsu_firmware_set }} --output /out
+              {{ '' if rocjitsu_firmware_ip_discovery | bool else '--no-ip-discovery' }}
+              && tar -cf - -C /out .'
+              | tar -xf - -C {{ rj_fw_tmp.path }}
+            executable: /bin/bash
+          delegate_to: localhost
+          become: false
 
-    # Guards against the silent-empty-directory failure above: if the stream
-    # produced nothing, fail here rather than three tasks later in the guest.
-    #
-    # imu, not rlc_1. The default "gap" set deliberately omits rlc_1 and the
-    # other blobs amdgpu-dkms-firmware ships for real as of 31.60, so asserting
-    # on one of those fails against a working generator. imu is in both sets and
-    # in neither package: the driver opens it whenever fw_load_type is not PSP,
-    # which is exactly the fw_load_type=0 this guest boots with.
-    - name: Assert the firmware stubs were generated
-      ansible.builtin.stat:
-        path: "{{ rj_fw_tmp.path }}/gc_12_1_0_imu.bin"
-      register: _rj_fw_stat
-      delegate_to: localhost
-      become: false
-      failed_when: not _rj_fw_stat.stat.exists
+        # Guards against the silent-empty-directory failure above: if the stream
+        # produced nothing, fail here rather than three tasks later in the guest.
+        #
+        # imu, not rlc_1. The default "gap" set deliberately omits rlc_1 and the
+        # other blobs amdgpu-dkms-firmware ships for real as of 31.60, so asserting
+        # on one of those fails against a working generator. imu is in both sets and
+        # in neither package: the driver opens it whenever fw_load_type is not PSP,
+        # which is exactly the fw_load_type=0 this guest boots with.
+        - name: Assert the firmware stubs were generated
+          ansible.builtin.stat:
+            path: "{{ rj_fw_tmp.path }}/gc_12_1_0_imu.bin"
+          register: _rj_fw_stat
+          delegate_to: localhost
+          become: false
+          failed_when: not _rj_fw_stat.stat.exists
 
-    - name: Copy firmware stubs to guest /lib/firmware/amdgpu/
-      ansible.builtin.copy:
-        src: "{{ rj_fw_tmp.path }}/"
-        dest: /lib/firmware/amdgpu/
-        mode: '0644'
-      become: true
+        - name: Copy firmware stubs to guest /lib/firmware/amdgpu/
+          ansible.builtin.copy:
+            src: "{{ rj_fw_tmp.path }}/"
+            dest: /lib/firmware/amdgpu/
+            mode: '0644'
+          become: true
 
-    - name: Clean up local firmware temp dir
-      ansible.builtin.file:
-        path: "{{ rj_fw_tmp.path }}"
-        state: absent
-      delegate_to: localhost
-      become: false
+        - name: Clean up local firmware temp dir
+          ansible.builtin.file:
+            path: "{{ rj_fw_tmp.path }}"
+            state: absent
+          delegate_to: localhost
+          become: false
 
     # The gap set lands *beside* the packaged blobs rather than over them, so
     # the packaged ones have to actually be there. They arrive with
@@ -1033,3 +866,10 @@
   tags: [test, never]
   roles:
     - role: rocjitsu_gpu_test
+
+# Last line of every leaf. Importers pass image_slim_enable: false so this does
+# not run in the middle of their chain; see vm-slim.yml. It sits after the test
+# play only because that is the end of the file -- the two never meet, one
+# being install-tagged and the other never-tagged.
+- import_playbook: vm-slim.yml
+  tags: [install]

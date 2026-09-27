@@ -23,10 +23,12 @@ permalink: /
       <p><img alt="rocjitsu GEMM" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-gemm.json" /></p>
       <p><img alt="rocjitsu hipFile" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile.json" /></p>
       <p><img alt="hipFile fio" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile-fio.json" /></p>
+      <p>Green is within 5% of the mean of the last five distinct readings, amber within 20%, red below that.</p>
     </div>
     <div class="metric-card">
       <div class="eyebrow">Published reports</div>
-      <p>Single VM, rocjitsu, rocm-ernic, and hipFile fio outputs stay live on the site and are refreshed by CI.</p>
+      <p><img alt="all reports green" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-all-green.json" /></p>
+      <p>Single VM, rocjitsu, rocm-ernic, and hipFile fio outputs stay live on the site and are refreshed by CI. The badge above carries the last date on which every lane published a fresh passing report.</p>
     </div>
     <div class="metric-card">
       <div class="eyebrow">Publishing model</div>

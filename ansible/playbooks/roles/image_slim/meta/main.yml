@@ -1,0 +1,17 @@
+---
+galaxy_info:
+  role_name: image_slim
+  author: Stephen Bates
+  description: >-
+    Reclaim the scratch a bake leaves in a guest -- the apt cache and lists,
+    DKMS build trees, archived journals, /tmp and /var/tmp -- and fstrim it
+    back to the qcow2. Runs as the last play of every image build.
+  license: MIT
+  min_ansible_version: "2.18"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - noble
+        - resolute
+
+dependencies: []

@@ -13,12 +13,19 @@ on:
     # see the note in qemu-minimal-ansible-playbook-test-vm-rocjitsu.yml.
     paths:
       - 'ansible/playbooks/vm-ernic.yml'
+      # vm-ernic.yml imports vm-basic.yml, so a change there changes this guest.
+      - 'ansible/playbooks/vm-basic.yml'
+      # Both leaves end with vm-slim.yml. roles/** below already covers the
+      # image_slim role it runs; this catches the playbook itself.
+      - 'ansible/playbooks/vm-slim.yml'
       - 'ansible/playbooks/roles/**'
       - '!ansible/playbooks/roles/rocjitsu_gpu_test/**'
       - 'ansible/playbooks/vars/ernic-pins.yml'
+      - 'ansible/playbooks/vars/github-api.yml'
       - 'ansible/requirements.yml'
       - 'qemu/compose/vfio-user-ernic-vm/**'
       - '.github/actions/setup-vm-job/action.yml'
+      - '.github/actions/report-image-size/action.yml'
       - '.github/workflows/qemu-minimal-ansible-playbook-test-vm-ernic.yml'
 
 concurrency:
@@ -174,6 +181,16 @@ jobs:
           -p 2222 ubuntu@qemu "ibv_devinfo" | tee /tmp/ibv_devinfo.txt
         grep -q PORT_ACTIVE /tmp/ibv_devinfo.txt
         echo "✓ RDMA port active"
+
+    # Diagnostic only, and always() so a red lane still reports what it
+    # built -- the size question is most interesting exactly when
+    # something else went wrong.
+    - name: Report VM image size
+      if: always()
+      uses: ./.github/actions/report-image-size
+      with:
+        vm-name: ernic-test
+        ssh-host: qemu
 
     - name: Show compose logs on failure
       if: failure()

@@ -6,8 +6,13 @@ on:
       - main
     paths:
       - 'ansible/playbooks/vm-ernic.yml'
+      # vm-ernic.yml imports vm-basic.yml and reads vars/github-api.yml, so a
+      # push touching either changes this guest. Widened from the single
+      # ernic-pins.yml entry for the same reason the playbook-test lanes were.
+      - 'ansible/playbooks/vm-basic.yml'
+      - 'ansible/playbooks/vars/**'
+      - 'ansible/playbooks/vm-slim.yml'
       - 'ansible/playbooks/roles/**'
-      - 'ansible/playbooks/vars/ernic-pins.yml'
       - 'qemu/qemu-tool/**'
       - 'qemu/pyproject.toml'
       - 'qemu/compose/vfio-user-ernic-2vm/**'
@@ -95,7 +100,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: ${{ env.VM_IMAGES_DIR }}/*-server-cloudimg-*.img
-        key: cloud-img-amd64-noble-ernic-report
+        key: cloud-img-amd64-resolute-ernic-report
 
     - name: Ensure images directory exists
       run: mkdir -p "$VM_IMAGES_DIR" && chmod 777 "$VM_IMAGES_DIR"
@@ -114,7 +119,7 @@ jobs:
         qemu-tool gen-vm \
           --vm-name "$VM1_NAME" \
           --images "$VM_IMAGES_DIR" \
-          --release noble \
+          --release resolute \
           --username ubuntu \
           --password password \
           --packages qemu/packages.d/packages-default \

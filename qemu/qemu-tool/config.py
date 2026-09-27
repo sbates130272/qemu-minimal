@@ -87,7 +87,7 @@ class VMConfig:
 
     # ---- gen-vm ----
     size: int = 64
-    release: str = "noble"
+    release: str = "resolute"
     ssh_key_file: Path = field(default_factory=lambda: Path("~/.ssh/id_rsa.pub"))
     username: str = "ubuntu"
     user_id: int = 1000
@@ -95,6 +95,7 @@ class VMConfig:
     # packages: path to manifest file, or None meaning no extra packages
     packages: str | None = field(default_factory=default_packages)
     force: bool = False
+    compact: bool = True
     no_backing: bool = False
     restore_image: bool = False
     backing_file: Path | None = None

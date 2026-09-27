@@ -350,6 +350,11 @@ class LibvirtXml:
         driver.set("type", "qcow2")
         driver.set("cache", "none")
         driver.set("discard", "unmap")
+        # The libvirt spelling of detect-zeroes=unmap, which discard alone does
+        # not imply: it is what turns an all-zero write into a hole instead of
+        # an allocated cluster of zeros, and so what lets a guest-side fstrim
+        # actually shrink the file.
+        driver.set("detect_zeroes", "unmap")
         src = _sub(disk, "source")
         img = Path(cfg.images) / f"{cfg.vm_name}.qcow2"
         src.set("file", str(img))
@@ -448,11 +453,17 @@ class LibvirtXml:
         args: list[str] = []
 
         # backing_shared root disk (omitted from native <disk>)
+        #
+        # DISCARD_OPTS here too: this branch replaces the native <disk> element
+        # entirely, and that element is where discard="unmap" is set. Without
+        # it a backing_shared libvirt guest was the one configuration whose
+        # root disk could never reclaim a cluster.
         if cfg.backing_shared:
+            from .run_vm import DISCARD_OPTS
             img = Path(cfg.images) / f"{cfg.vm_name}.qcow2"
             args += [
                 "-drive",
-                f"if=virtio,format=qcow2,file={img}"
+                f"if=virtio,format=qcow2,file={img}{DISCARD_OPTS}"
                 ",file.locking=off,backing.file.locking=off",
             ]
 
@@ -569,12 +580,12 @@ class LibvirtXml:
     def _nvme_qemu_args(
         cls, name: str, idx: int, cfg: VMConfig, caps: QemuCaps
     ) -> list[str]:
-        from .run_vm import NVME_SIZE
+        from .run_vm import DISCARD_OPTS, NVME_SIZE
         img = Path(cfg.images) / f"{name}.qcow2"
         drv = (
             f"file={img},format=qcow2,if=none,id=nvme-{idx}"
             f",aio={caps.aio_mode},cache.direct=on"
-            f",discard=unmap,detect-zeroes=unmap"
+            f"{DISCARD_OPTS}"
         )
         dev = f"nvme,serial={name},id=nvme-{idx}-dev"
         if cfg.pci_mmio_bridge:
