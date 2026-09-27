@@ -230,6 +230,20 @@ All notable changes to this project will be documented in this file.
   follow. The compose stack keeps its `vfio-user-ernic-2vm` name, since
   `smoke-test-rocm-ernic` shares it. See **Upgrading**.
 
+### Fixed
+
+- `render-site-perf.py`'s "Current report freshness" table read its stamps from
+  `history[-1]`, but `append_history` dedupes on `(sha, metrics)` — so a publish
+  whose benchmarks produced identical numbers against an unchanged sha appended
+  no row, and the table printed the *previous* publish's timestamps directly
+  underneath an all-green badge computed live from the reports on disk. It now
+  takes a reports dict read off disk, which is what `update_green` already does
+  and says why in its docstring: report freshness moves independently of
+  benchmark values. Covered by three new cases in `tests/test_render_site_perf.py`.
+- The man page documented `--ansible-profile FILE` ("the specified profile
+  directory"); the flag is and always was `--ansible-playbook FILE`, and it takes
+  a playbook. Anyone following `man qemu-tool` got `unrecognized arguments`.
+
 ### Removed
 
 - The `slash-command-dispatch` workflow, and with it the `/run-ci-full` comment
