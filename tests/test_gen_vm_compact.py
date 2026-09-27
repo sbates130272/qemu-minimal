@@ -161,10 +161,21 @@ class CompactTests(unittest.TestCase):
 
 class FlagTests(unittest.TestCase):
     def _config(self, argv: list[str], env: str | None = None) -> VMConfig:
-        if env is not None:
-            path = Path(tempfile.mkdtemp()) / "env"
-            path.write_text(env)
-            argv = argv + ["--env-file", str(path)]
+        # Always pass --env-file, even for the no-env cases. Without it
+        # envfile.find() walks its ambient candidate list -- $QEMU_TOOL_ENV,
+        # ./.env, the checkout's qemu/.env, ~/.config/qemu-tool/env and the
+        # .deb's /etc/qemu-tool/env -- and `compact` is not in
+        # _NOT_CONFIGURABLE, so any of those files reaches into this unit
+        # test. A developer with VM_COMPACT set turns test_default_on red on
+        # code that is fine, and the inverse is worse: an ambient
+        # VM_COMPACT=true would make it pass even if the default were flipped,
+        # so the test would stop pinning the documented default at all. CI
+        # never sees either, because a hosted runner has none of those files.
+        # An empty file is equivalent to no file for parsing and reaches the
+        # same code path deterministically.
+        path = Path(tempfile.mkdtemp()) / "env"
+        path.write_text(env or "")
+        argv = argv + ["--env-file", str(path)]
         ns = cli._build_parser().parse_args(argv)
         return cli._build_config(ns, "gen-vm")
 
