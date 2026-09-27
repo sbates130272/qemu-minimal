@@ -177,6 +177,11 @@ The 0.2.0 changelog calls pci.ids the guest image's business, but neither
 `provision/ionic.sh` nor `packages/ionic.txt` in batesste-ci-images writes it.
 
 **Note:** `update-pciids` will overwrite these files — re-apply after each run.
+Nothing in a bake runs it any more, though: `rocm_setup` used to call it
+unconditionally, and `sbates130272.batesste` 3.0.0 defaults
+`rocm_setup_update_pciids` to false. So the hazard is now a hand-run
+`update-pciids`, or a lane that sets that variable back to true, rather than
+something every ROCm guest does to itself on the way past.
 
 ## Known issues / open bugs
 

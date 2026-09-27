@@ -6,6 +6,37 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- **`sbates130272.batesste` is pinned to 3.0.0** (was `>=2.4.0`), and the
+  workarounds that release makes unnecessary are gone. `vm-rocm.yml` loses the
+  four hand-rolled pre_tasks that wrote `/etc/dkms/no-autoinstall` and diverted
+  `update-initramfs` — `rocm_setup_amdgpu_dkms_defer_build` does that in the
+  role, immediately before the `amdgpu-dkms` install rather than a play
+  boundary away. `vm-rocjitsu.yml` loses its ROCm-prefix fixup
+  (batesste-ansible#248) and reads `rocm_setup_therock_prefix` instead; the
+  `setup-vm-job` action loses its `jmespath` install (2.4.0's `check_platform`
+  was the only `json_query` caller) and its `~/.gnupg` step (`git_setup` no
+  longer deploys a GnuPG config by default). The pin is exact, not a floor:
+  3.0.0 is a breaking release, and the next one should arrive as a PR rather
+  than as a lane that broke overnight when the collections cache was evicted.
+
+- **The ROCm lanes no longer run a distro-wide `apt upgrade`.** 3.0.0 defaults
+  `rocm_setup_skip_system_upgrade` to true, so what CI passed explicitly is now
+  the behaviour everywhere, local bakes included. That pass was the largest
+  source of flake in these lanes — it is what met the `security.ubuntu.com`
+  mirror skew — and a reproducibility hole against the pinned guest kernel.
+  Pass `rocm_setup_skip_system_upgrade=false` to get it back. In the same
+  release `rocm_setup` stopped running `update-pciids` and stopped installing
+  `rocm-cli` and `xrocmtop` by default; this repo already disabled the latter
+  two, and the `ionic_image_prep` pci.ids entry is no longer clobbered by a
+  bake.
+
+- **Guests get a generic git identity.** 3.0.0's `git_setup` asserts on an
+  unset `user.name`/`user.email` instead of leaving them blank, so
+  `vm-basic.yml` sets `qemu-minimal VM <qemu-minimal@localhost>`. Deliberately
+  impersonal: these images are published as qcow2s and nothing in a guest makes
+  a commit anyone reads. CI additionally passes
+  `user_setup_deploy_ssh_key=false`.
+
 - **The VM playbooks are layered** the way the README has always described
   them, instead of four standalone files re-copying the shared parts.
   `vm-basic.yml` is the base for every guest; `vm-rocm.yml` imports it and is
