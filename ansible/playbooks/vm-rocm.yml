@@ -89,6 +89,16 @@
     # that makes it optional; before that the only lever was the role's own
     # install_kernel_driver, which this repo needs.
     rocm_setup_install_kernel_meta: "{{ not (rocm_base_mainline_kernel | bool) }}"
+    # Held at the pre-3.0.0 behaviour on purpose. The role flipped its default
+    # to true, i.e. no distro-wide "upgrade: safe" + autoremove pass at all;
+    # that is right for CI, which passes true in ANSIBLE_EXTRA_ARGS for its own
+    # documented reasons, and wrong for a local bake, where the point of the
+    # bake is usually a current guest. Setting it here rather than leaving the
+    # role's default keeps that split explicit and keeps CI's override visible
+    # as an override. Extra vars outrank play vars, so CI still wins.
+    rocm_setup_skip_system_upgrade: "{{
+        vm_rocm_skip_system_upgrade | default(false)
+      }}"
     # Stop the amdgpu-dkms postinst building the unpatched source. Only useful
     # to a lane that patches and rebuilds amdgpu itself, i.e. rocjitsu.
     rocm_base_suppress_dkms: "{{ vm_rocm_suppress_dkms | default(false) }}"

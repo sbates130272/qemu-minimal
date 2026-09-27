@@ -19,12 +19,15 @@ All notable changes to this project will be documented in this file.
   3.0.0 is a breaking release, and the next one should arrive as a PR rather
   than as a lane that broke overnight when the collections cache was evicted.
 
-- **The ROCm lanes no longer run a distro-wide `apt upgrade`.** 3.0.0 defaults
-  `rocm_setup_skip_system_upgrade` to true, so what CI passed explicitly is now
-  the behaviour everywhere, local bakes included. That pass was the largest
-  source of flake in these lanes — it is what met the `security.ubuntu.com`
-  mirror skew — and a reproducibility hole against the pinned guest kernel.
-  Pass `rocm_setup_skip_system_upgrade=false` to get it back. In the same
+- **A local ROCm bake still runs its distro-wide `apt upgrade`.** 3.0.0 flipped
+  `rocm_setup_skip_system_upgrade` to true, which would have taken that pass
+  away from every bake; `vm-rocm.yml` holds it at false, so the behaviour is
+  unchanged and CI's explicit `true` is a real override again rather than a
+  restatement of the default. Pass `vm_rocm_skip_system_upgrade=true` to opt a
+  local bake out — CI does it for its own reasons, documented in the workflows:
+  that pass is the largest source of flake in those lanes, since it is what
+  meets the `security.ubuntu.com` mirror skew, and a reproducibility hole
+  against the pinned guest kernel. In the same
   release `rocm_setup` stopped running `update-pciids` and stopped installing
   `rocm-cli` and `xrocmtop` by default; this repo already disabled the latter
   two, and the `ionic_image_prep` pci.ids entry is no longer clobbered by a
