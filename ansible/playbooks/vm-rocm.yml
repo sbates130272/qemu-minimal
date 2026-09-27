@@ -126,28 +126,10 @@
         mode: '0644'
       become: true
 
-    # Remove stale ROCm GPG keyring and sources so the rocm_setup role
-    # re-fetches both from scratch. Without this, idempotent key/source
-    # tasks on --ansible-only runs leave a mismatched keyring+sources pair
-    # that breaks apt-get update for all subsequent roles.
-    - name: Remove stale ROCm GPG keyrings and sources
-      ansible.builtin.file:
-        path: "{{ item }}"
-        state: absent
-      become: true
-      loop:
-        - /etc/apt/keyrings/rocm.gpg
-        - /etc/apt/keyrings/amdrocm.gpg
-        - /etc/apt/sources.list.d/rocm.sources
-
-    - name: Remove any stale device-metrics-exporter apt sources
-      ansible.builtin.shell:
-        cmd: |
-          find /etc/apt/sources.list.d -type f \
-            -exec grep -l "device-metrics-exporter\|amdgpu-exporter" {} \; \
-            | xargs -r rm -f
-      become: true
-      changed_when: false
+    # The stale-keyring and stale-exporter-source cleanups that used to sit
+    # here are in vm-basic.yml's pre_tasks. They have to run before the first
+    # `update_cache: true`, which is fave_packages in that play -- a play
+    # earlier than this one. See the comment there.
 
     # The guest kernel, before anything below touches DKMS.
     #

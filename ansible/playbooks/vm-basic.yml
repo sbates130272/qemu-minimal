@@ -31,6 +31,40 @@
         path: "/home/{{ username }}/.dotfiles"
         state: absent
       become: true
+
+    # These two live here, rather than next to the ROCm apt pin in vm-rocm.yml,
+    # because of what they protect: fave_packages below opens with
+    # `update_cache: true`, and a mismatched keyring+sources pair fails the
+    # whole play before any importer's pre_tasks get a turn. They used to sit
+    # ahead of these roles in each leaf's single play; the layering made the
+    # roles a play of their own and moved the cleanup a play *later*, which
+    # silently inverted the ordering the cleanup exists for.
+    #
+    # `state: absent` on a guest that never saw ROCm is a no-op, so vm-basic
+    # carrying three ROCm-named paths costs nothing on the basic and ernic
+    # lanes. The apt *pin* stays in vm-rocm.yml -- a pin does not affect
+    # update_cache, so it has no ordering constraint against this play.
+    #
+    # Only reachable on --ansible-only re-runs: a bake from the pristine cloud
+    # image has no stale keyring to mismatch, which is why CI never showed it.
+    - name: Remove stale ROCm GPG keyrings and sources
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      become: true
+      loop:
+        - /etc/apt/keyrings/rocm.gpg
+        - /etc/apt/keyrings/amdrocm.gpg
+        - /etc/apt/sources.list.d/rocm.sources
+
+    - name: Remove any stale device-metrics-exporter apt sources
+      ansible.builtin.shell:
+        cmd: |
+          find /etc/apt/sources.list.d -type f \
+            -exec grep -l "device-metrics-exporter\|amdgpu-exporter" {} \; \
+            | xargs -r rm -f
+      become: true
+      changed_when: false
   roles:
     - role: sbates130272.batesste.user_setup
     - role: sbates130272.batesste.fave_packages
