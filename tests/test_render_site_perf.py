@@ -180,6 +180,54 @@ class ReportStamps(unittest.TestCase):
         self.assertIsNone(rsp.parse_report_stamp(self.site, rsp.REPORTS[0]))
 
 
+class ReportFreshnessTable(unittest.TestCase):
+    """report_rows must read live reports, never the deduped history tail.
+
+    append_history dedupes on (sha, metrics). A publish whose benchmarks
+    produced identical numbers against an unchanged sha appends no row at
+    all -- so a freshness table sourced from history[-1] prints the previous
+    publish's timestamps directly underneath an all-green badge that main()
+    computes from a live build_reports(). update_green's docstring already
+    describes this hazard for the green stamp; the table reaches it the same
+    way, because report freshness moves independently of benchmark values.
+    """
+
+    def _stamp(self, generated: str) -> dict:
+        key = rsp.REPORTS[0]["key"]
+        return {
+            key: {
+                "label": rsp.REPORTS[0]["label"],
+                "generated": generated,
+                "status": "pass",
+                "commit": "abc1234",
+                "path": rsp.REPORTS[0]["path"],
+            }
+        }
+
+    def test_renders_the_reports_it_is_given(self):
+        out = rsp.report_rows(self._stamp("2026-09-26 12:00 UTC"))
+        self.assertIn("2026-09-26 12:00 UTC", out)
+
+    def test_does_not_take_its_stamps_from_history(self):
+        # The regression: yesterday's publish is the last history row because
+        # today's was deduped away, but today's reports are on disk and fresh.
+        stale = {"sha": "abc1234", "metrics": {}, "reports": self._stamp("2026-09-25 08:00 UTC")}
+        fresh = self._stamp("2026-09-26 08:00 UTC")
+        history = [stale]
+        # Sourcing from history would print the 09-25 stamp; sourcing from the
+        # live reports prints 09-26. Passing the history row's own reports dict
+        # must not be what report_rows does implicitly.
+        out = rsp.report_rows(fresh)
+        self.assertIn("2026-09-26 08:00 UTC", out)
+        self.assertNotIn("2026-09-25 08:00 UTC", out)
+        self.assertEqual(rsp.append_history(history, dict(stale)), history)
+
+    def test_empty_reports_render_a_placeholder_not_an_empty_table(self):
+        # An empty table body renders as a malformed table; the placeholder
+        # row is what keeps the page readable when no report has been fetched.
+        self.assertIn("No report metadata available", rsp.report_rows({}))
+
+
 class GreenEvaluation(unittest.TestCase):
     NOW = datetime(2026, 9, 26, 12, 0, tzinfo=timezone.utc)
 

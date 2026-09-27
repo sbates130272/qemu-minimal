@@ -488,8 +488,18 @@ def write_history(history_path: Path, history: List[Dict]) -> None:
     history_path.write_text("".join(json.dumps(row) + "\n" for row in history))
 
 
-def report_rows(history: List[Dict]) -> str:
-    latest_reports = history[-1].get("reports", {}) if history else {}
+def report_rows(reports: Dict[str, Dict]) -> str:
+    """Render the freshness table from reports read live off disk.
+
+    Deliberately NOT from history[-1]: append_history dedupes on
+    (sha, metrics), so a publish whose benchmarks produced identical numbers
+    against an unchanged sha appends no row, and this table would then print
+    the previous publish's timestamps underneath an all-green badge that
+    main() computes from a live build_reports(). That is the same dedupe
+    hazard update_green's docstring describes, and it reaches this table for
+    the same reason: report freshness moves independently of benchmark values.
+    """
+    latest_reports = reports or {}
     rows = []
     for report in REPORTS:
         item = latest_reports.get(report["key"])
@@ -546,7 +556,10 @@ def latest_metric_rows(history: List[Dict]) -> str:
 
 
 def write_perf_page(site_dir: Path, history: List[Dict], green: Dict,
-                    green_max_age: float) -> None:
+                    green_max_age: float,
+                    reports: Optional[Dict[str, Dict]] = None) -> None:
+    if reports is None:
+        reports = build_reports(site_dir)
     perf_dir = site_dir / "perf"
     perf_dir.mkdir(parents=True, exist_ok=True)
     charts = [meta for meta in METRICS if write_chart(perf_dir, meta, history)]
@@ -618,7 +631,7 @@ Last all-green: **{green.get('last_all_green') or 'never'}** &middot; checked
 
 | Report | Generated | Status | Commit | Page |
 | --- | --- | --- | --- | --- |
-{report_rows(history)}
+{report_rows(reports)}
 """
     (perf_dir / "index.md").write_text(body)
 
@@ -658,7 +671,8 @@ def main() -> None:
 
     write_badges(args.site_dir / "perf", history)
     write_green_badge(args.site_dir / "perf", green)
-    write_perf_page(args.site_dir, history, green, args.green_max_age_hours)
+    write_perf_page(args.site_dir, history, green, args.green_max_age_hours,
+                    reports=build_reports(args.site_dir))
 
 
 if __name__ == "__main__":
