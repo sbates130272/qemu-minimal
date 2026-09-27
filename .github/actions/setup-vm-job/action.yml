@@ -69,12 +69,12 @@ runs:
         key: pip-qemu-tool-v2-${{ hashFiles('qemu/pyproject.toml') }}
 
     # Below the restore rather than above it, so this install pays the cache too.
-    - name: Install jmespath for Ansible json_query filter
-      shell: bash
-      run: |
-        py=$(sed -n '1s/^#! *//p' "$(command -v ansible-playbook)" | awk '{print $1}')
-        "${py}" -m pip install --break-system-packages jmespath
-
+    #
+    # The jmespath install that used to sit here is gone. It existed for exactly
+    # one caller: sbates130272.batesste 2.4.0's check_platform used json_query,
+    # which is the only filter in ansible.utils that needs the library. 3.0.0
+    # rewrote that role without it, and nothing else in this repo, in the ernic
+    # collection, or under scripts/ calls json_query.
     - name: Install qemu-tool
       shell: bash
       run: pip install --break-system-packages -e ./qemu
@@ -88,9 +88,11 @@ runs:
         # looked for at /root/.ssh/id_rsa, not found, and never offered.
         [ "$HOME" = /root ] || { rm -rf /root/.ssh && ln -s "$HOME/.ssh" /root/.ssh; }
 
-    - name: Prepare GnuPG directory for git_setup
-      shell: bash
-      run: mkdir -p "$HOME/.gnupg"
+    # No "prepare GnuPG directory" step here any more: it existed because
+    # git_setup deployed a GnuPG config unconditionally and failed on a runner
+    # with no ~/.gnupg. sbates130272.batesste 3.0.0 defaults
+    # git_setup_deploy_gnupg to false, and nothing here turns it back on -- no
+    # private key is deployed to these guests, so there is nothing to configure.
 
     # Resolve the collections path in the container rather than writing "~" and
     # letting actions/cache expand it. The cache action expands ~ in Node, on

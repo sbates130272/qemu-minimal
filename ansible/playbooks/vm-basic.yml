@@ -23,14 +23,25 @@
     # Importers turn this off: the ernic and rocjitsu guests do not need the
     # AMD corporate CA.
     user_setup_install_amd_ca: "{{ vm_install_amd_ca | default(true) }}"
+    # sbates130272.batesste 3.0.0's git_setup asserts on both of these whenever
+    # git_setup_dotfiles_enable is false, which is its default and is what every
+    # bake here runs -- nothing sets it, and the dotfiles switch CI passes in
+    # ANSIBLE_EXTRA_ARGS is user_setup_dotfiles_enable, a different role's. Set
+    # here rather than in the leaves because git_setup runs in this play and
+    # nowhere else.
+    #
+    # Deliberately generic. These guests are published as qcow2s, so a personal
+    # name and address do not belong in their ~/.gitconfig, and nothing in a
+    # guest makes a commit anyone reads. git_setup_signingkey stays at its 3.0.0
+    # default of "" -- no private key is deployed here, and the role skips the
+    # user.signingkey write when it is empty.
+    git_setup_user_name: "qemu-minimal VM"
+    git_setup_user_email: "qemu-minimal@localhost"
   pre_tasks:
-    # Has to precede user_setup, which is why it lives in this play rather than
-    # in the importers.
-    - name: Remove any partial dotfiles clone so user_setup can start fresh
-      ansible.builtin.file:
-        path: "/home/{{ username }}/.dotfiles"
-        state: absent
-      become: true
+    # No "remove any partial dotfiles clone" task here any more. It existed
+    # because a detached-HEAD or wrong-ref checkout made user_setup's git task
+    # fail; sbates130272.batesste 3.0.0 clones with force: true, which discards
+    # exactly that and re-clones cleanly.
 
     # These two live here, rather than next to the ROCm apt pin in vm-rocm.yml,
     # because of what they protect: fave_packages below opens with

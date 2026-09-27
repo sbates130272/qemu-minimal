@@ -52,9 +52,12 @@
     # this line (see the comment above its amd-smi task). Turning it off here
     # would silently take it out of the rocjitsu lane too.
     rocm_setup_install_metrics_exporter: true
-    # Both of these default to true in the role, so leaving them unset baked
-    # them into every ROCm lane by accident. Nothing in this repo consumes
-    # either, and no CI lane asserts on them.
+    # Both of these defaulted to true until sbates130272.batesste 3.0.0, so
+    # leaving them unset baked them into every ROCm lane by accident. 3.0.0
+    # flipped both to false, which is how this repo already wanted them; they
+    # stay spelled out because the reasons below are this repo's and not
+    # upstream's, and a future flip back should not silently reach these
+    # guests. Nothing here consumes either, and no CI lane asserts on them.
     #
     # rocm-cli's installer is a curl of https://raw.githubusercontent.com/
     # ROCm/rocm-cli/main/install.sh piped straight to sh -- an unpinned branch
@@ -79,9 +82,55 @@
     # Install the pinned mainline kernel from vars/ernic-pins.yml instead of
     # relying on the distro kernel. Off here, on for rocjitsu; see the task.
     rocm_base_mainline_kernel: "{{ vm_rocm_mainline_kernel | default(false) }}"
+    # linux-generic, which rocm_setup installs alongside the headers whenever
+    # it installs the kernel driver. On a mainline lane that is resolute's GA
+    # kernel arriving on a guest that boots 7.2.4 -- weight in the qcow2 and a
+    # second kernel for the DKMS build to be tempted by. 3.0.0 added the flag
+    # that makes it optional; before that the only lever was the role's own
+    # install_kernel_driver, which this repo needs.
+    rocm_setup_install_kernel_meta: "{{ not (rocm_base_mainline_kernel | bool) }}"
     # Stop the amdgpu-dkms postinst building the unpatched source. Only useful
     # to a lane that patches and rebuilds amdgpu itself, i.e. rocjitsu.
     rocm_base_suppress_dkms: "{{ vm_rocm_suppress_dkms | default(false) }}"
+    # Hand that suppression to the role. 3.0.0 does exactly what the four
+    # pre_tasks that used to sit below did -- /etc/dkms/no-autoinstall plus a
+    # dpkg-divert of update-initramfs to a no-op -- and does it immediately
+    # before its own amdgpu-dkms install, which is the point those pre_tasks
+    # could only approximate from a play boundary away.
+    #
+    # Why it is suppressed at all, which is this repo's finding and not
+    # upstream's: in the rocjitsu lane all four amdgpu source patches report
+    # "changed" on every run, so the module the postinst builds is always
+    # thrown away by the rebuild that follows. Measured on the last green runs
+    # at cbf9f94, that discarded build was 23m55s of a 47m48s standalone lane
+    # and 28m20s of a 55m46s combined one, against ~12m for the patched rebuild
+    # that produces the module the guest actually loads. In the combined lane
+    # it does not even succeed -- the guest is on the pinned mainline kernel by
+    # then, which is precisely what the ptrace patch exists to fix, so the ~28
+    # minutes are spent reaching a compile error.
+    #
+    # The marker alone is not enough, which run 36048829734 found the hard way:
+    # /usr/lib/dkms/common.postinst exits 0 as intended, but control returns to
+    # amdgpu-dkms's own postinst, which then calls update-initramfs with a
+    # kernel version derived from the DKMS state common.postinst never wrote:
+    #
+    #   autoinstall for dkms modules has been disabled.
+    #   /usr/sbin/update-initramfs: option requires an argument -- 'k'
+    #   dpkg: error processing package amdgpu-dkms (--configure):
+    #    old amdgpu-dkms package postinst maintainer script subprocess failed
+    #    with exit status 2
+    #
+    # Hence the diversion as well. Nothing is lost by skipping that call: the
+    # initramfs built there would describe a guest with no amdgpu module and no
+    # blacklist yet, and vm-rocjitsu.yml regenerates it once both exist.
+    #
+    # Restoration is the consumer's, by upstream's own documented contract:
+    # vm-rocjitsu.yml removes the marker and undiverts once it has built the
+    # patched module. Note also that common.postinst's early exit is above its
+    # `dkms add`, so while the marker is set nothing is registered in
+    # /var/lib/dkms -- `dkms status` can name no version until that rebuild
+    # does its own add.
+    rocm_setup_amdgpu_dkms_defer_build: "{{ rocm_base_suppress_dkms | bool }}"
     ionic_image_kernel_ref: "{{ ionic_kernel_pin }}"
     # This role only builds ionic_rdma in the ernic lane, so kernel.yml's
     # closing ib_umem_get_va assert is not this play's precondition to fail on.
@@ -140,11 +189,14 @@
     # off. This puts every mainline lane on the same kernel, which is also the
     # kernel the published ernic-rocjitsu qcow2 boots.
     #
-    # Position is load-bearing. The kernel .debs run update-initramfs
-    # themselves, and the divert below replaces it with a no-op for the whole
-    # amdgpu-dkms install -- installing the kernel after that point leaves the
-    # new kernel on disk with no initramfs and the guest unbootable. It also has
-    # to precede the DKMS build, which must target the kernel the guest boots.
+    # Position is load-bearing, and now more so than when the diversion was a
+    # pre_task here. The kernel .debs run update-initramfs themselves, and
+    # rocm_setup replaces it with a no-op for the whole amdgpu-dkms install --
+    # installing the kernel after that point leaves the new kernel on disk with
+    # no initramfs and the guest unbootable. A pre_task is always ahead of the
+    # roles of its own play, so this is safe where it stands; do not move it
+    # into the roles list. It also has to precede the DKMS build, which must
+    # target the kernel the guest boots.
     #
     # kernel.yml short-circuits when the pinned kernel is already running, so
     # this is a no-op in the combined lane -- where vm-ernic.yml has already
@@ -164,106 +216,6 @@
         apply:
           become: true
       when: rocm_base_mainline_kernel | bool
-
-    # Stop the amdgpu-dkms postinst building anything, before rocm_setup
-    # installs it. In the rocjitsu lane every one of the four source patches
-    # reports "changed" on every run, so the module that postinst builds is
-    # always thrown away by the rebuild that follows them -- and it is not a
-    # cheap thing to throw away. Measured on the last green runs at cbf9f94:
-    # 23m55s of a 47m48s standalone lane and 28m20s of a 55m46s combined lane,
-    # against 12m for the patched rebuild that actually produces the module the
-    # guest loads. In the combined lane that build does not even succeed: the
-    # guest is on the pinned mainline kernel by then and that is precisely what
-    # the ptrace patch exists to fix, so ~28 minutes are spent reaching a
-    # compile error.
-    #
-    # /usr/lib/dkms/common.postinst, which the amdgpu-dkms postinst defers to,
-    # checks for this marker before it does anything else and exits 0. Checked
-    # against the shipped script:
-    #
-    #   if [ -f /etc/dkms/no-autoinstall ]; then
-    #       echo "autoinstall for dkms modules has been disabled."
-    #       exit 0
-    #   fi
-    #
-    # This supersedes the no-autoinstall-errors marker that used to be here.
-    # That one let the doomed build run and then ignored its exit status, which
-    # cost the same ~28 minutes and additionally left dpkg half-configured --
-    # hence the "dpkg --configure -a" task that used to follow the rebuild.
-    # Skipping the build outright means there is no failure to swallow, so
-    # genuine DKMS errors elsewhere in the image stay fatal.
-    #
-    # Note that the early exit is above common.postinst's `dkms add` as well as
-    # its build loop, so the module is never registered in /var/lib/dkms either.
-    # vm-rocjitsu.yml's rebuild task does its own `dkms add`; do not assume
-    # `dkms status` can name a version before that runs.
-    #
-    # The marker is removed once amdgpu has been patched and built, so a later
-    # kernel upgrade inside the image still autoinstalls normally.
-    #
-    # The directory is created first because in the standalone lane this runs
-    # before dkms is installed, so /etc/dkms does not exist yet and
-    # ansible.builtin.file will not create a missing parent for the marker.
-    # dpkg is content to unpack into a directory that already exists.
-    - name: Ensure the DKMS config directory exists
-      ansible.builtin.file:
-        path: /etc/dkms
-        state: directory
-        mode: '0755'
-      become: true
-      when: rocm_base_suppress_dkms | bool
-
-    - name: Suppress the amdgpu-dkms postinst build of the unpatched source
-      ansible.builtin.file:
-        path: /etc/dkms/no-autoinstall
-        state: touch
-        mode: '0644'
-      become: true
-      changed_when: false
-      when: rocm_base_suppress_dkms | bool
-
-    # The marker alone is not enough, which run 36048829734 found the hard way.
-    # common.postinst exits 0 as intended, but control returns to amdgpu-dkms's
-    # own postinst, which then runs update-initramfs with a kernel version it
-    # derives from the DKMS state common.postinst never wrote:
-    #
-    #   autoinstall for dkms modules has been disabled.
-    #   /usr/sbin/update-initramfs: option requires an argument -- 'k'
-    #   dpkg: error processing package amdgpu-dkms (--configure):
-    #    old amdgpu-dkms package postinst maintainer script subprocess failed
-    #    with exit status 2
-    #
-    # That is the same empty-version bug as the one fixed in vm-rocjitsu.yml's
-    # rebuild task, but in a maintainer script this playbook does not own and
-    # cannot make tolerant -- the install is rocm_setup's, and it fails the
-    # play.
-    #
-    # So make the call a no-op for the same window. A dpkg-divert is used
-    # rather than a PATH shim because the postinst calls the absolute path.
-    # Nothing is lost by skipping it: the initramfs built here would describe
-    # a guest with no amdgpu module and no blacklist yet, and vm-rocjitsu.yml's
-    # "Regenerate initramfs" task rebuilds it after both exist. That task runs
-    # after the undivert, which is why the undivert is not at the end of the
-    # play.
-    - name: Divert update-initramfs for the duration of the amdgpu-dkms install
-      ansible.builtin.command:
-        cmd: >-
-          dpkg-divert --local --rename --quiet
-          --divert /usr/sbin/update-initramfs.dkms-bypass
-          --add /usr/sbin/update-initramfs
-        creates: /usr/sbin/update-initramfs.dkms-bypass
-      become: true
-      when: rocm_base_suppress_dkms | bool
-
-    - name: Install a no-op update-initramfs in its place
-      ansible.builtin.copy:
-        dest: /usr/sbin/update-initramfs
-        content: |
-          #!/bin/sh
-          exit 0
-        mode: '0755'
-      become: true
-      when: rocm_base_suppress_dkms | bool
 
   roles:
     - role: sbates130272.batesste.rocm_setup

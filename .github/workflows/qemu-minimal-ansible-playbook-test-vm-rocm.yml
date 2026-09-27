@@ -38,20 +38,20 @@ env:
   VM_IMAGES_DIR: /var/lib/qemu-tool/images
   # No spaces inside the JSON — gen_vm.py splits on whitespace so spaces
   # inside the value create extra positional arguments for ansible-playbook.
-  # rocm_setup_skip_system_upgrade turns off the role's "upgrade: safe" +
-  # autoremove pass. That pass pulls the whole distro forward -- 28 packages
-  # and 18.1 MB on a recent run, perl and netplan and polkit and sudo, none of
-  # them under test here -- and it is the single largest source of flake in
-  # these lanes, because it is what meets the security.ubuntu.com mirror skew
-  # (one stale node in an eight-address pool, which re-running does not
-  # dependably route around). It is also a reproducibility hole: the ernic
-  # side pins the guest kernel via ernic_ionic_kernel_ref and fails the build
-  # on a major.minor mismatch precisely so the guest does not drift, and then
-  # this re-randomises everything around that kernel, so two bakes of the same
-  # playbook against the same cloud image are not the same guest. Upstream's
-  # own default documents the knob as "useful in CI". Local bakes are
-  # unaffected and still upgrade.
-  ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false,"rocm_setup_skip_system_upgrade":true}'
+  # No rocm_setup_skip_system_upgrade here any more: sbates130272.batesste
+  # 3.0.0 defaults it true, so the role's "upgrade: safe" + autoremove pass is
+  # off everywhere, local bakes included. This lane asked for that on its own
+  # behalf and the reasons hold for any bake -- the pass pulls the whole distro
+  # forward (28 packages and 18.1 MB on a recent run: perl, netplan, polkit,
+  # sudo, none of them under test), it is the single largest source of flake
+  # here because it is what meets the security.ubuntu.com mirror skew (one
+  # stale node in an eight-address pool, which re-running does not dependably
+  # route around), and it is a reproducibility hole: the ernic side pins the
+  # guest kernel via ernic_ionic_kernel_ref and fails the build on a
+  # major.minor mismatch precisely so the guest does not drift, and this then
+  # re-randomises everything around that kernel. Pass
+  # rocm_setup_skip_system_upgrade=false to get it back.
+  ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false,"user_setup_deploy_ssh_key":false}'
 
 jobs:
   test-vm-rocm:

@@ -99,46 +99,19 @@
     rocjitsu_firmware_ip_discovery: "{{ vm_rocjitsu_firmware_ip_discovery | default(true) }}"
 
   tasks:
-    # WORKAROUND for sbates130272/batesste-ansible#248. TheRock installs to a
-    # versioned prefix (/opt/rocm/core-10.0), but rocm_setup writes
-    # /etc/ld.so.conf.d/rocm.conf pointing at /opt/rocm/lib and /opt/rocm/lib64
-    # and never adds anything to PATH. Both are absent, so ldconfig resolves no
-    # ROCm libraries and rocminfo is "command not found" despite being
-    # installed. Delete these four tasks once the role derives the prefix.
-    - name: Resolve the ROCm install prefix
-      ansible.builtin.find:
-        paths: /opt/rocm
-        patterns: 'core-*'
-        file_type: directory
-      register: rocjitsu_rocm_prefix_candidates
-
-    - name: Set the ROCm prefix fact
-      ansible.builtin.set_fact:
-        # A lexical sort, which is only correct while there is one core-* to
-        # find. Revisit if a guest ever carries two: core-9.0 sorts after
-        # core-10.0.
-        rocjitsu_rocm_prefix: >-
-          {{ (rocjitsu_rocm_prefix_candidates.files
-              | map(attribute='path') | sort | last)
-             if rocjitsu_rocm_prefix_candidates.files else '/opt/rocm' }}
-
-    - name: Point the linker and PATH at the resolved ROCm prefix
-      ansible.builtin.copy:
-        dest: "{{ item.dest }}"
-        content: "{{ item.content }}"
-        mode: '0644'
-      become: true
-      loop:
-        - dest: /etc/ld.so.conf.d/rocm.conf
-          content: "{{ rocjitsu_rocm_prefix }}/lib\n"
-        - dest: /etc/profile.d/rocm.sh
-          content: "export PATH={{ rocjitsu_rocm_prefix }}/bin:$PATH\n"
-
-    - name: Refresh the linker cache for the new ROCm path
-      ansible.builtin.command:
-        cmd: ldconfig
-      become: true
-      changed_when: false
+    # No ROCm-prefix resolution here any more. Four tasks used to work around
+    # sbates130272/batesste-ansible#248 -- TheRock installs to a versioned
+    # prefix (/opt/rocm/core-10.0) while rocm_setup pointed
+    # /etc/ld.so.conf.d/rocm.conf at the absent /opt/rocm/lib and added nothing
+    # to PATH, so ldconfig resolved no ROCm libraries and rocminfo was "command
+    # not found" despite being installed. 3.0.0 closed it, and closed it wider
+    # than the workaround did: the role discovers the prefix with sort -V
+    # (which the local version could not do -- it sorted lexically, so core-9.0
+    # would have beaten core-10.0), writes rocm.conf, runs ldconfig, and writes
+    # a /etc/profile.d/rocm.sh exporting LD_LIBRARY_PATH as well as PATH.
+    #
+    # The prefix itself is still needed below, for the rocBLAS package name.
+    # rocm_setup publishes it as rocm_setup_therock_prefix; see that task.
 
     # No "purge stale distro ROCm runtime packages" task here any more. It
     # named the same five packages the rocm-no-distro-packages pin above pins
@@ -606,6 +579,13 @@
             or ptrace_gate_patch.changed or panel_type_patch.changed
             or amdgpu_dkms_installed.stdout | trim == '0'
 
+    # Restoring both halves of rocm_setup_amdgpu_dkms_defer_build is this
+    # playbook's job by upstream's own contract -- the role sets the marker and
+    # the diversion and leaves them for whoever asked to patch and build. The
+    # names below are the role's, not the ones the pre_tasks in vm-rocm.yml
+    # used before 3.0.0: it diverts to update-initramfs.distrib, with
+    # --add --rename and no --local.
+    #
     # amdgpu is built for the running kernel, so let DKMS autoinstall again:
     # a kernel upgrade inside the image should rebuild it the normal way.
     - name: Restore DKMS autoinstall
@@ -626,10 +606,9 @@
     - name: Undivert update-initramfs
       ansible.builtin.command:
         cmd: >-
-          dpkg-divert --local --rename --quiet
-          --divert /usr/sbin/update-initramfs.dkms-bypass
-          --remove /usr/sbin/update-initramfs
-        removes: /usr/sbin/update-initramfs.dkms-bypass
+          dpkg-divert --remove --rename --quiet
+          /usr/sbin/update-initramfs
+        removes: /usr/sbin/update-initramfs.distrib
       become: true
 
     - name: Regenerate initramfs so the amdgpu blacklist and stubs take effect
@@ -649,10 +628,13 @@
     # device-library packages at ~66 MB each.
     #
     # The package name carries the ROCm major.minor, so derive it from the
-    # prefix resolved above rather than pinning it here. If that fell back to
-    # a bare /opt/rocm the name comes out wrong and this task fails loudly,
-    # which is the right outcome -- hipcc and rocminfo are already broken by
-    # then.
+    # install prefix rather than pinning it here. rocm_setup set_facts that
+    # prefix as rocm_setup_therock_prefix in the vm-rocm.yml play, and set_fact
+    # values are host facts that survive into later plays of the same run --
+    # which is every route to this file, since it imports vm-rocm.yml. If the
+    # role found no core-* it never sets the fact and this templates to an
+    # undefined-variable error, which is the right outcome: hipcc and rocminfo
+    # are already broken by then, and a wrong package name would be worse.
     #
     # Host library only. This guest's RVS config is a properties smoke check
     # and dispatches no GEMM; add amdrocm-blas<ver>-gfx1250 if one ever does.
@@ -661,7 +643,7 @@
         name:
           - amdrocm-blas-dev
           - >-
-            amdrocm-blas-host{{ rocjitsu_rocm_prefix | basename
+            amdrocm-blas-host{{ rocm_setup_therock_prefix | basename
                                 | regex_replace('^core-', '') }}
         state: present
         update_cache: false
