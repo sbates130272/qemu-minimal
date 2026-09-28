@@ -167,6 +167,19 @@
   ansible.builtin.debug:
     msg: "Testing against {{ rocjitsu_gpu_test_target }}"
 
+- name: Build the ROCm runtime environment for the test binaries
+  ansible.builtin.set_fact:
+    rocjitsu_gpu_test_runtime_env:
+      ROCM_PATH: "{{ rocjitsu_gpu_test_rocm }}"
+      # The guest image is supposed to publish these globally via ldconfig and
+      # /etc/profile.d/rocm.sh, but the test role still needs to run when that
+      # state is stale or absent. Name the runtime dirs explicitly so the HIP
+      # workloads and the hsa-snoop wrapper see the same ROCm tree hipcc just
+      # compiled against.
+      LD_LIBRARY_PATH: >-
+        {{ rocjitsu_gpu_test_rocm }}/lib:{{ rocjitsu_gpu_test_rocm }}/lib64:{{
+        rocjitsu_gpu_test_rocm }}/lib/llvm/lib
+
 - name: Create the work directory
   ansible.builtin.file:
     path: "{{ rocjitsu_gpu_test_workdir }}"
@@ -200,6 +213,7 @@
       timeout {{ rocjitsu_gpu_test_run_timeout }}
       {{ rocjitsu_gpu_test_workdir }}/vector_add
       {{ rocjitsu_gpu_test_vector_add_n }}
+  environment: "{{ rocjitsu_gpu_test_runtime_env }}"
   register: rocjitsu_gpu_test_run_va
   changed_when: false
   failed_when: >-
@@ -245,6 +259,7 @@
     cmd: >-
       {{ rocjitsu_gpu_test_workdir }}/rocjitsu-scratch-repro
       {{ rocjitsu_gpu_test_repro_watchdog }}
+  environment: "{{ rocjitsu_gpu_test_runtime_env }}"
   register: rocjitsu_gpu_test_repro
   changed_when: false
   failed_when: false
@@ -340,6 +355,7 @@
       -- {{ rocjitsu_gpu_test_workdir }}/vector_add
       {{ rocjitsu_gpu_test_vector_add_n }}
   become: true
+  environment: "{{ rocjitsu_gpu_test_runtime_env }}"
   register: rocjitsu_gpu_test_snoop
   changed_when: false
   failed_when: false
