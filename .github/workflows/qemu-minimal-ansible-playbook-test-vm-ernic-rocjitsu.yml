@@ -53,6 +53,7 @@ env:
   ROCJITSU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20260924.gad7a357-rocjitsu.c85bb75
   QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260924.ge1cd640-qemu11.1.1-vfu.8039244
   VM_IMAGES_DIR: /var/lib/qemu-tool/images
+<<<<<<< Updated upstream
   # rocm_setup_skip_system_upgrade turns off the role's "upgrade: safe" +
   # autoremove pass. That pass pulls the whole distro forward -- 28 packages
   # and 18.1 MB on a recent run, perl and netplan and polkit and sudo, none of
@@ -70,6 +71,22 @@ env:
   # bake still upgrades. So this line is a real override again, not a
   # restatement of the default. Local bakes are unaffected.
   ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false,"user_setup_deploy_ssh_key":false,"rocm_setup_skip_system_upgrade":true}'
+=======
+  # No rocm_setup_skip_system_upgrade here any more: sbates130272.batesste
+  # 3.0.0 defaults it true, so the role's "upgrade: safe" + autoremove pass is
+  # off everywhere, local bakes included. This lane asked for that on its own
+  # behalf and the reasons hold for any bake -- the pass pulls the whole distro
+  # forward (28 packages and 18.1 MB on a recent run: perl, netplan, polkit,
+  # sudo, none of them under test), it is the single largest source of flake
+  # here because it is what meets the security.ubuntu.com mirror skew (one
+  # stale node in an eight-address pool, which re-running does not dependably
+  # route around), and it is a reproducibility hole: the ernic side pins the
+  # guest kernel via ernic_ionic_kernel_ref and fails the build on a
+  # major.minor mismatch precisely so the guest does not drift, and this then
+  # re-randomises everything around that kernel. Pass
+  # rocm_setup_skip_system_upgrade=false to get it back.
+  ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false,"user_setup_deploy_ssh_key":false}'
+>>>>>>> Stashed changes
 
 jobs:
   test-vm-ernic-rocjitsu:

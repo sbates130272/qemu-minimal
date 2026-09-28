@@ -123,7 +123,7 @@ jobs:
     - name: Generate VM with Ansible post-setup
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false}'
+        ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false,"user_setup_deploy_ssh_key":false}'
       run: |
         qemu-tool gen-vm \
           --vm-name ansible-setup-test \
