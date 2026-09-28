@@ -4,7 +4,7 @@ title: VM Report — VM 2
 
 # VM Report — qemu-minimal — VM 2
 
-Generated: **2026-09-27 19:25 UTC** &middot; Commit: [`2963e28`](https://github.com/sbates130272/qemu-minimal/commit/2963e28d55d48d1740992a26a6cb62a085507b67) &middot; Status: **pass**
+Generated: **2026-09-28 05:34 UTC** &middot; Commit: [`54cc234`](https://github.com/sbates130272/qemu-minimal/commit/54cc234d0668a6c3d34140fcc24cff20c32e5724) &middot; Status: **pass**
 
 ## Hardware
 
@@ -132,7 +132,6 @@ ubuntu : ubuntu users admin
   qemu-guest-agent.service    loaded active running QEMU Guest Agent
   rsyslog.service             loaded active running System Logging Service
   serial-getty@ttyS0.service  loaded active running Serial Getty on ttyS0
-  snapd.service               loaded active running Snap Daemon
   ssh.service                 loaded active running OpenBSD Secure Shell server
   systemd-journald.service    loaded active running Journal Service
   systemd-logind.service      loaded active running User Login Management
