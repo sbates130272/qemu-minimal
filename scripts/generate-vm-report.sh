@@ -128,8 +128,12 @@ gpu_nodes=$(cat /sys/class/kfd/kfd/topology/nodes/*/name 2>/dev/null | grep -c .
 # exists to report precisely that case, never gets to run.
 hipcc=$(command -v hipcc || ls /opt/rocm*/bin/hipcc /opt/rocm/*/bin/hipcc 2>/dev/null | head -1 || true)
 [ -n "${hipcc}" ] || { echo "hipcc unavailable"; exit 0; }
+rocm_prefix=$(dirname "$(dirname "${hipcc}")")
 echo "hipcc: ${hipcc}"
-"${hipcc}" -O2 --offload-arch=gfx1250 -o /tmp/sgemm-bench /tmp/sgemm-bench.hip
+echo "rocm: ${rocm_prefix}"
+"${hipcc}" -O2 --offload-arch=gfx1250 \
+  -Wl,-rpath,"${rocm_prefix}/lib" \
+  -o /tmp/sgemm-bench /tmp/sgemm-bench.hip
 /tmp/sgemm-bench 8
 EOF
   } 2>&1
