@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 220" width="100%" role="img" aria-label="rocjitsu GEMM trend">
   <rect width="100%" height="100%" rx="18" fill="#ffffff" stroke="#d9e2f0"/>
-  <polyline fill="none" stroke="#d94b52" stroke-width="4" points="28.0,188.2 60.8,188.2 93.7,188.2 126.5,188.2 159.4,188.2 192.2,188.2 225.1,28.0 257.9,28.0 290.7,28.0 323.6,28.0 356.4,28.0 389.3,28.0 422.1,28.0 454.9,186.8 487.8,190.6 520.6,190.6 553.5,192.0 586.3,192.0 619.2,192.0 652.0,192.0"/>
+  <polyline fill="none" stroke="#d94b52" stroke-width="4" points="28.0,188.2 59.2,188.2 90.4,188.2 121.6,188.2 152.8,188.2 184.0,188.2 215.2,28.0 246.4,28.0 277.6,28.0 308.8,28.0 340.0,28.0 371.2,28.0 402.4,28.0 433.6,186.8 464.8,190.6 496.0,190.6 527.2,192.0 558.4,192.0 589.6,192.0 620.8,192.0 652.0,192.0"/>
   <text x="28" y="34" fill="#111827" font-family="system-ui,sans-serif" font-size="18" font-weight="700">rocjitsu GEMM</text>
   <text x="28" y="56" fill="#4b5563" font-family="system-ui,sans-serif" font-size="12">oldest run at left, newest at right</text>
   <text x="28" y="190" fill="#6b7280" font-family="system-ui,sans-serif" font-size="12">4cf27216</text>
-  <text x="652" y="190" text-anchor="end" fill="#6b7280" font-family="system-ui,sans-serif" font-size="12">f3f5fc5d</text>
+  <text x="652" y="190" text-anchor="end" fill="#6b7280" font-family="system-ui,sans-serif" font-size="12">6d2d4f93</text>
   <text x="652" y="34" text-anchor="end" fill="#111827" font-family="system-ui,sans-serif" font-size="14" font-weight="700">latest: 476 kFLOP/s</text>
 </svg>
