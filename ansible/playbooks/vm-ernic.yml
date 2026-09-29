@@ -81,6 +81,7 @@
             name: sbates130272.rocm_ernic.ernic_guest_setup
           vars:
             ernic_configure_nic: false
+            ernic_guest_preflight_device: false
       rescue:
         # One expected failure only: driver.yml's "Verify the rocm-ernic RDMA
         # device exists". A DKMS build error or a staging failure lands here

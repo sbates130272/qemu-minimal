@@ -38,7 +38,7 @@ collections:
   # bump both together.
   - name: https://github.com/ROCm/rocm-ernic.git#/ansible/
     type: git
-    version: 7b6fa94a9c6997a14f189f3e3d6460419e958c7c
+    version: 1484557971b038f655da85b0d77ef0ba88308c22
   - name: ansible.posix
     version: ">=2.2.2"
   # Floor from sbates130272.batesste 3.0.0's galaxy.yml. --no-deps means galaxy
