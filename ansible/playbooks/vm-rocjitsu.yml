@@ -594,6 +594,24 @@
         state: absent
       become: true
 
+    # Guests baked before sbates130272.batesste 3.0.0 may still carry the old
+    # local diversion target. The new role only owns update-initramfs.distrib,
+    # so fail before the .distrib-only cleanup below removes the stub and then
+    # leaves /usr/sbin/update-initramfs missing.
+    - name: Check for the legacy update-initramfs diversion
+      ansible.builtin.stat:
+        path: /usr/sbin/update-initramfs.dkms-bypass
+      register: legacy_update_initramfs_diversion
+      become: true
+
+    - name: Reject the legacy update-initramfs diversion
+      ansible.builtin.fail:
+        msg: >-
+          Found legacy /usr/sbin/update-initramfs.dkms-bypass diversion from a
+          pre-3.0.0 bake. Rebuild the guest image or remove that diversion
+          before rerunning this playbook with --ansible-only.
+      when: legacy_update_initramfs_diversion.stat.exists
+
     # Undo the diversion before anything wants a real initramfs again. Removing
     # the stub first is what makes the --remove a plain rename back; leave it in
     # place and dpkg-divert refuses rather than clobber it.
