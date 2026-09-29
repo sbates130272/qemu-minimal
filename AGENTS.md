@@ -192,9 +192,8 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
 3. Collection 0.2.0 is not on Galaxy — only 0.1.0 is published, and 0.1.0 is
    the pre-ionic collection. `requirements.yml` pins the upstream git SHA
    instead; move back to a Galaxy version pin once 0.2.0 ships there
-4. `driver_ionic.yml` fail_msg still says to rebuild the golden image with
-   `ernic_image_kernel_mainline=true` — a variable on `ernic_image_prep`,
-   which 0.2.0 removed
+4. *(fixed upstream — `driver_ionic.yml` fail_msg no longer references the
+   dead `ernic_image_kernel_mainline` variable; resolved in rocm-ernic@1484557)*
 5. *(was an `apply-rocm-ernic-dv.sh` / rdma-core / `docs/testing.rst` bug —
    all three files are gone with the pre-ionic tree)*
 6. **Killing perftest mid-run breaks VM device context** — killing `ib_send_bw`
@@ -232,24 +231,22 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
    a different tree than they came from. Pinned locally in
    [`playbooks/vars/ernic-pins.yml`](ansible/playbooks/vars/ernic-pins.yml);
    the default is still upstream's.
-10. **`ernic_nic_subnet` is not a role default** — it lives only in the upstream
-    repo's `ansible/group_vars/all.yml`, which a consumer using the collection
-    standalone never loads. Anything deriving a guest address from it has to
-    repeat the value; `vm-ernic.yml`'s configure play does.
-11. **The 4-vCPU floor is undocumented upstream** — `ionic_create_rdma_admin()`
-    rejects fewer than `IONIC_EQ_COUNT_MIN` EQs with a bare `-EINVAL` that
-    surfaces only as "Failed to register ibdev". There is no preflight assert
-    in the collection and no mention in its docs.
-12. **A rebooted ernic guest is device-present but not test-ready.** Only module
-    loading persists (`ionic_image_prep` writes
-    `/etc/modules-load.d/rocm-ernic-ionic.conf`). The address on `rocm-ernic0`,
-    bringing the netdev up and the counters symlink are all run-time only, set
-    by `ernic_guest_setup`, so a reboot brings back the RDMA device without the
-    configuration around it. Re-run the configure play, or write a
-    systemd-networkd unit for the address. `rocm_xio` is deliberately *not* in
-    the `modules-load.d` drop-in — `rocm-xio.ko` is hand-copied into the running
-    kernel's `extra/`, not DKMS-managed, so an entry would outlive the module
-    across a kernel upgrade and leave `systemd-modules-load.service` failed.
+10. **`ernic_nic_subnet` is now a role default upstream** (rocm-ernic@1484557),
+    but it still has to be repeated at play-var level in `vm-ernic.yml`'s
+    configure play because role defaults are not in scope when play vars are
+    evaluated. The upstream commit documents this explicitly.
+11. *(fixed upstream — `ernic_guest_setup` now includes `preflight.yml` which
+    checks `ansible_processor_nproc >= IONIC_EQ_COUNT_MIN` before any expensive
+    apt/DKMS work and fails with a clear message; resolved in rocm-ernic@1484557)*
+12. **A rebooted ernic guest is device-present but not fully test-ready.**
+    As of rocm-ernic@1484557, `ernic_guest_setup` writes persistent
+    `/etc/modules-load.d/` entries for `ionic` and `ionic_rdma` (via
+    `modprobe persistent:`), so the RDMA device comes back after a reboot.
+    `rocm_xio` is deliberately excluded — it is hand-copied into the running
+    kernel's `extra/`, not DKMS-managed, so a persistent entry would outlive
+    the module across a kernel upgrade. The address on `rocm-ernic0`, bringing
+    the netdev up and the counters symlink are still run-time only; re-run the
+    configure play to restore full test-readiness after a reboot.
 
 ## Git / GitHub
 
