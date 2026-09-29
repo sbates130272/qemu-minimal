@@ -4,7 +4,7 @@ title: VM Report — rocjitsu VM
 
 # VM Report — qemu-minimal — rocjitsu VM
 
-Generated: **2026-09-27 19:49 UTC** &middot; Commit: [`2963e28`](https://github.com/sbates130272/qemu-minimal/commit/2963e28d55d48d1740992a26a6cb62a085507b67) &middot; Status: **pass**
+Generated: **2026-09-29 23:37 UTC** &middot; Commit: [`86cb532`](https://github.com/sbates130272/qemu-minimal/commit/86cb5326295af3fae22e3a162b99781a1f7ca88e) &middot; Status: **pass**
 
 ## Hardware
 
@@ -13,7 +13,7 @@ Generated: **2026-09-27 19:49 UTC** &middot; Commit: [`2963e28`](https://github.
 | CPU | AMD EPYC Processor |
 | vCPUs | 4 |
 | Threads/core | 1 |
-| RAM | 3.8Gi total, 3.1Gi free |
+| RAM | 3.8Gi total, 3.2Gi free |
 | Swap | 0B |
 
 ## Kernel
@@ -47,7 +47,7 @@ nvme0n1    1T disk
 
 ```
 Filesystem      Size  Used Avail Use% Mounted on
-/dev/vda1        61G  9.1G   52G  15% /
+/dev/vda1        61G  8.7G   53G  15% /
 /dev/vda13      989M  371M  551M  41% /boot
 ```
 
@@ -127,7 +127,6 @@ libdrm-amdgpu1:amd64	2.4.131-1
 ## APT Sources
 
 ```
-hashicorp.list
 rocm.sources
 ubuntu.sources
 ```
@@ -178,8 +177,8 @@ ubuntu : ubuntu video users render admin
 
 | Metric | Value |
 |---|---|
-| GEMM | 476 kFLOP/s |
-| hipFile read throughput | 157 MB/s |
+| GEMM | 381 kFLOP/s |
+| hipFile read throughput | 158 MB/s |
 
 These run inside a QEMU guest with the GPU attached over vfio-user, so the
 absolute numbers sit far below what the same benchmark reports on bare metal —
@@ -190,11 +189,12 @@ between runs. The unit is chosen from the value, so compare the unit too.
 
 ```
 hipcc: /opt/rocm/core-10.0/bin/hipcc
+rocm: /opt/rocm/core-10.0
 sgemm-bench: device=AMD Radeon Graphics arch=gfx1250
 sgemm-bench: private_segment_bytes=0
 sgemm-bench: m=128 n=128 k=128
 sgemm-bench: max_absolute_error=0 failures=0
-sgemm-bench: seconds_per_iter=8.80948738 gflops=0.000476112153
+sgemm-bench: seconds_per_iter=11.0211935 gflops=0.000380567133
 sgemm-bench: PASS
 ```
 
@@ -207,10 +207,10 @@ gemm-hipfile-bench: device=AMD Radeon Graphics arch=gfx1250
 gemm-hipfile-bench: path=/mnt/nvme/gemm-hipfile-bench.bin block_bytes=1048576 blocks=32 iters=4
 gemm-hipfile-bench: private_segment_bytes=0
 gemm-hipfile-bench: compat_requested=self buf_registered=yes
-gemm-hipfile-bench: read_bytes=33554432 seconds_per_pass=0.213502121 read_gbs=0.157162055
+gemm-hipfile-bench: read_bytes=33554432 seconds_per_pass=0.212367279 read_gbs=0.158001893
 gemm-hipfile-bench: m=128 n=128 k=128
 gemm-hipfile-bench: max_absolute_error=0 failures=0
-gemm-hipfile-bench: gemm_seconds_per_iter=8.81153395 gflops=0.000476001571
+gemm-hipfile-bench: gemm_seconds_per_iter=11.0966554 gflops=0.000377979116
 gemm-hipfile-bench: PASS
 ```
 

@@ -4,7 +4,7 @@ title: VM Report — hipFile fio VM
 
 # VM Report — qemu-minimal — hipFile fio VM
 
-Generated: **2026-09-29 18:37 UTC** &middot; Commit: [`37d6f80`](https://github.com/sbates130272/qemu-minimal/commit/37d6f802802ba1966179c475ba063b3f3ab56cde) &middot; Status: **pass**
+Generated: **2026-09-29 23:40 UTC** &middot; Commit: [`86cb532`](https://github.com/sbates130272/qemu-minimal/commit/86cb5326295af3fae22e3a162b99781a1f7ca88e) &middot; Status: **pass**
 
 ## Hardware
 
@@ -13,7 +13,7 @@ Generated: **2026-09-29 18:37 UTC** &middot; Commit: [`37d6f80`](https://github.
 | CPU | AMD EPYC Processor |
 | vCPUs | 4 |
 | Threads/core | 1 |
-| RAM | 3.8Gi total, 2.9Gi free |
+| RAM | 3.8Gi total, 2.8Gi free |
 | Swap | 0B |
 
 ## Kernel
@@ -40,7 +40,7 @@ vda       64G disk
 ├─vda13 1023M part /boot
 ├─vda14    4M part 
 └─vda15  106M part /boot/efi
-nvme0n1    1T disk 
+nvme0n1    1T disk /mnt/nvme
 ```
 
 ### Disk usage
@@ -145,7 +145,6 @@ ubuntu : ubuntu video users render admin
   cron.service                     loaded active running Regular background program processing daemon
   dbus.service                     loaded active running D-Bus System Message Bus
   getty@tty1.service               loaded active running Getty on tty1
-  gpuagent.service                 loaded active running AMD GPU Metrics Reader Service
   ModemManager.service             loaded active running Modem Manager
   multipathd.service               loaded active running Device-Mapper Multipath Device Controller
   networkd-dispatcher.service      loaded active running Dispatcher daemon for systemd-networkd
@@ -159,7 +158,6 @@ ubuntu : ubuntu video users render admin
   systemd-logind.service           loaded active running User Login Management
   systemd-networkd.service         loaded active running Network Management
   systemd-resolved.service         loaded active running Network Name Resolution
-  systemd-timedated.service        loaded active running Time & Date Service
   systemd-udevd.service            loaded active running Rule-based Manager for Device Events and Files
   udisks2.service                  loaded active running Disk Manager
   unattended-upgrades.service      loaded active running Unattended Upgrades Shutdown
@@ -179,7 +177,7 @@ ubuntu : ubuntu video users render admin
 
 | Metric | Value |
 |---|---|
-| fio libhipfile read throughput | 208 MB/s |
+| fio libhipfile read throughput | 147 MB/s |
 
 This is fio's own `libhipfile` ioengine reading from the guest NVMe straight
 into VRAM, rather than the hand-written benchmark the rocjitsu report uses. fio
@@ -194,5 +192,5 @@ rocm: /opt/rocm/core-10.0
 building fio 6bc57a931f04fa3f50348d8c8f087187f050c6e1
 FIO_VERSION = fio-3.42
 fio: fio-3.42 commit=6bc57a931f04fa3f50348d8c8f087187f050c6e1
-fio-hipfile-bench: read_bytes=67108864 seconds=0.323 read_gbs=0.20776738
+fio-hipfile-bench: read_bytes=67108864 seconds=0.457 read_gbs=0.146846529
 ```
