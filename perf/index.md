@@ -72,13 +72,13 @@ branch and would otherwise keep reading `pass` indefinitely. The badge above
 shows the last date on which all 5 reports were green at once —
 amber once that date is no longer today.
 
-Last all-green: **2026-09-29** &middot; checked
-2026-09-29 03:23 UTC &middot; currently
-all green.
+Last all-green: **2026-09-28** &middot; checked
+2026-09-29 14:47 UTC &middot; currently
+not all green.
 
 | Report | Generated | Status | Commit | Page |
 | --- | --- | --- | --- | --- |
-| Single VM | 2026-09-29 02:57 UTC | pass | `6d2d4f9` | [/1vm/](/1vm/) |
+| Single VM | 2026-09-29 14:47 UTC | pass | `6d2d4f9` | [/1vm/](/1vm/) |
 | rocjitsu | 2026-09-27 19:49 UTC | pass | `2963e28` | [/rocjitsu/](/rocjitsu/) |
 | ernic VM 1 | 2026-09-29 02:58 UTC | pass | `6d2d4f9` | [/ernic/](/ernic/) |
 | ernic VM 2 | 2026-09-29 02:58 UTC | pass | `6d2d4f9` | [/ernic/vm2/](/ernic/vm2/) |
