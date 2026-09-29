@@ -303,7 +303,11 @@ def _download_if_needed(
     target = images / fname
     if cfg.force or not target.exists():
         target.unlink(missing_ok=True)
-        subprocess.run(["wget", "-P", str(images), url], check=True)
+        subprocess.run(
+            ["wget", "--timeout=60", "--tries=3", "--waitretry=10",
+             "-P", str(images), url],
+            check=True,
+        )
 
 
 # ---------------------------------------------------------------------------
