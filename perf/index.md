@@ -12,7 +12,7 @@ new CI data lands.
 
 ## Latest published snapshot
 
-Generated from `f3f5fc5d` at **2026-09-29 01:03 UTC**.
+Generated from `f3f5fc5d` at **2026-09-29 01:18 UTC**.
 
 ![rocjitsu GEMM](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-gemm.json)
 ![rocjitsu hipFile](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile.json)
@@ -32,7 +32,7 @@ vfio-user and swing hard between runs.
 | --- | --- | --- | --- |
 | rocjitsu GEMM | 476 kFLOP/s | 568 kFLOP/s | watch (-16%) |
 | rocjitsu hipFile | 157 MB/s | 151 MB/s | within tolerance (+4%) |
-| hipFile fio | 147 MB/s | 59.4 MB/s | within tolerance (+148%) |
+| hipFile fio | 226 MB/s | 86.5 MB/s | within tolerance (+161%) |
 
 ## Trend charts
 
@@ -50,7 +50,6 @@ vfio-user and swing hard between runs.
 
 | Commit | Generated | GEMM | hipFile | hipFile fio |
 | --- | --- | --- | --- | --- |
-| fa6d8556 | 2026-09-25 23:57 UTC | 823 kFLOP/s | 123 MB/s | 11.2 MB/s |
 | fa6d8556 | 2026-09-26 12:49 UTC | 823 kFLOP/s | 123 MB/s | 10.6 MB/s |
 | 9e3ccdf2 | 2026-09-26 19:22 UTC | 823 kFLOP/s | 123 MB/s | 10 MB/s |
 | 84fa06d1 | 2026-09-26 20:21 UTC | 823 kFLOP/s | 123 MB/s | 10 MB/s |
@@ -60,6 +59,7 @@ vfio-user and swing hard between runs.
 | 2963e28d | 2026-09-27 19:52 UTC | 476 kFLOP/s | 157 MB/s | 147 MB/s |
 | 54cc234d | 2026-09-28 05:28 UTC | 476 kFLOP/s | 157 MB/s | 147 MB/s |
 | f3f5fc5d | 2026-09-29 01:03 UTC | 476 kFLOP/s | 157 MB/s | 147 MB/s |
+| f3f5fc5d | 2026-09-29 01:18 UTC | 476 kFLOP/s | 157 MB/s | 226 MB/s |
 
 ## Current report freshness
 
@@ -73,13 +73,13 @@ shows the last date on which all 5 reports were green at once —
 amber once that date is no longer today.
 
 Last all-green: **2026-09-29** &middot; checked
-2026-09-29 01:03 UTC &middot; currently
+2026-09-29 01:18 UTC &middot; currently
 all green.
 
 | Report | Generated | Status | Commit | Page |
 | --- | --- | --- | --- | --- |
 | Single VM | 2026-09-29 01:02 UTC | pass | `f3f5fc5` | [/1vm/](/1vm/) |
 | rocjitsu | 2026-09-27 19:49 UTC | pass | `2963e28` | [/rocjitsu/](/rocjitsu/) |
-| ernic VM 1 | 2026-09-28 16:44 UTC | pass | `54cc234` | [/ernic/](/ernic/) |
-| ernic VM 2 | 2026-09-28 16:44 UTC | pass | `54cc234` | [/ernic/vm2/](/ernic/vm2/) |
-| hipFile fio | 2026-09-27 19:51 UTC | pass | `2963e28` | [/hipfile-fio/](/hipfile-fio/) |
+| ernic VM 1 | 2026-09-29 01:03 UTC | pass | `f3f5fc5` | [/ernic/](/ernic/) |
+| ernic VM 2 | 2026-09-29 01:03 UTC | pass | `f3f5fc5` | [/ernic/vm2/](/ernic/vm2/) |
+| hipFile fio | 2026-09-29 01:18 UTC | pass | `f3f5fc5` | [/hipfile-fio/](/hipfile-fio/) |
