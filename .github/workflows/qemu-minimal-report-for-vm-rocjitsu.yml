@@ -157,12 +157,6 @@ jobs:
           -p 2222 ubuntu@qemu "sudo -n timeout 120 /usr/local/bin/amdgpu-probe"
         echo "✓ amdgpu-probe completed"
 
-    - name: Grant the default user access to GPU devices
-      run: |
-        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
-          -o ConnectTimeout=10 \
-          -p 2222 ubuntu@qemu "sudo -n usermod -aG render,video ubuntu"
-
     # The same live-guest validation the PR gate in
     # qemu-minimal-ansible-playbook-test-vm-rocjitsu.yml runs, repeated here on
     # the merged tree. The role owns the HIP, hsa-snoop and RVS smoke checks.
