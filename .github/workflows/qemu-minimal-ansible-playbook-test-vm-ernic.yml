@@ -79,6 +79,7 @@ jobs:
           --password password \
           --packages none \
           --size 64 \
+          --vcpus 4 \
           --ansible-playbook ansible/playbooks/vm-ernic.yml
 
     - name: Bring up ernic compose stack
