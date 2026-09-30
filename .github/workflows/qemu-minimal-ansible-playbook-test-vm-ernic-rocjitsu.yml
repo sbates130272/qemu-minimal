@@ -69,7 +69,7 @@ env:
   # knob as "useful in CI", but vm-rocm.yml holds it at false so that a local
   # bake still upgrades. So this line is a real override again, not a
   # restatement of the default. Local bakes are unaffected.
-  ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false,"user_setup_deploy_ssh_key":false,"rocm_setup_skip_system_upgrade":true}'
+  ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false,"user_setup_deploy_ssh_key":false,"rocm_setup_skip_system_upgrade":true,"vm_rocjitsu_firmware_set":"full"}'
 
 jobs:
   test-vm-ernic-rocjitsu:
