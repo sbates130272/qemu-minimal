@@ -161,7 +161,7 @@
           ansible.builtin.set_fact:
             rocjitsu_firmware_image: >-
               {{ rocjitsu_image | default(lookup('env', 'ROCJITSU_IMAGE'), true)
-                 | default('sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20260924.gad7a357-rocjitsu.c85bb75', true) }}
+                 | default('sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20260929.g2bdbd16-rocjitsu.f2d13fb', true) }}
 
         # Printed rather than assumed: the whole failure mode above was a pin that
         # was wrong without being visible. One line in the log says which build the
