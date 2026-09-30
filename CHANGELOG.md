@@ -4,7 +4,92 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **`qemu-tool gen-compose` generates an N-VM rocm-ernic mesh stack** from a
+  settings file, with one emulated RDMA NIC and one rocjitsu GPU per VM. Same
+  topology as `vfio-user-ernic-2vm`, sized by a variable rather than by hand.
+  Per-VM values are comma-lists, not numbered variables — `VM1_NAME`/`VM2_NAME`
+  does not survive eight VMs, let alone the mesh's 64-node ceiling. A bare value
+  broadcasts, a list of length `VM_COUNT` applies positionally, and any other
+  length is an error naming the key and both lengths. Keys naming a field that
+  is already `list[str]` (`VM_EXTRA_HOSTFWD` and friends) keep their existing
+  meaning and go whole to every VM; the two cases are told apart from
+  `VMConfig`'s own type hints rather than a hand-kept list of names, so a scalar
+  field added later becomes per-VM-overridable for free. Settings template in
+  `qemu/env.scale-out`, generated stack in
+  `qemu/compose/vfio-user-ernic-rocjitsu-scale-out/`.
+
+  The generator refuses an image set that cannot have been built together: all
+  four image tags must share one `<date>.<ci-sha>` stamp, and the qemu and ernic
+  images must share one `vfu.*` revision. Both guard the same failure, which is
+  worth an up-front check because it does not present as a version problem — a
+  guest driver and a host server from different SHAs wedge at the vfio-user/DSR
+  boundary and look like a broken device.
+
+  Every service gets a static address on the stack's own `fleet` network and
+  nothing in the stack resolves a service name at run time. That is a scaling
+  fix, not tidiness: Docker runs one embedded resolver per network, and the
+  mesh advertises each node by `gethostname()` so that peers resolve it to
+  dial — which puts that one resolver in the path of all N×(N−1) peer links.
+  At 48 VMs it saturated, workers died on `Temporary failure in name
+  resolution`, and because the mesh takes a new node id on every reconnect and
+  never reclaims the old one, the restarts walked the fleet toward its 64-node
+  protocol ceiling. Naming each container after its own address makes those
+  numeric lookups: 4497 resolution failures at 48 VMs became zero.
+
+  Measured ceiling on a 128-core / 503G host at 4 vCPU and 8G per VM: 40 VMs
+  boot clean in 117 s, 44 lose 3 guests, 48 lose 7. The binding constraint is
+  CPU, not memory (48 VMs used 107G of 503G) — the manager's heartbeat timeout
+  is 20 s of wall clock and is not tunable, so an oversubscribed host makes it
+  mistake slow nodes for dead ones and evict them, taking their guests down
+  with `vfio-user: timed out waiting for reply`. Full write-up in the stack's
+  README; the fleet-wide consequences are AGENTS.md issues 13 and 14.
+
+  Every ernic service now sets `ulimits.nofile` from a new `ERNIC_NOFILE`
+  setting (default 65536). Docker's default soft limit is 1024, and the manager
+  does not close the socket of a node it evicts — so each eviction leaks a file
+  descriptor and a 40-VM fleet reaches the limit inside a normal run. Past it
+  the manager cannot even reopen its own stats file, spins in an
+  `accept()`/EMFILE loop with no backoff (3.3 GB of log in 12 hours, measured),
+  and the guest attached to it dies on a QEMU assertion. Raising the limit does
+  not fix the leak, which is upstream's; it buys the run enough headroom to
+  finish. AGENTS.md issue 15.
+
+  The generated YAML records the hash of the settings file it came from, and
+  `qemu-tool compose` warns on stderr when they disagree. It never blocks:
+  `down` against a stale tree is how a bad edit is recovered from.
+  `gen-compose --check` turns the same comparison into a CI gate.
+
+- **`qemu-tool ernic-stats`** serves the stats dumps written by
+  `rocm-ernic -S` as Prometheus metrics — per-QP bytes, doorbells, CQEs, WQEs
+  by opcode, MMIO and interrupt counts. Metric and label names are taken
+  verbatim from rocm-ernic's own `prometheus/ernic-exporter`, so that project's
+  `grafana/ernic-dashboard.json` works against this endpoint unmodified. The
+  implementation is separate because that exporter is systemd-shaped: it needs
+  an `instances.json` manifest ernicctl writes, only reads files whose stem
+  parses as an integer, and checks liveness with PIDs from its own namespace —
+  none of which survive a compose stack where each server is PID 1 in its own
+  container. The CI image also ships only the `rocm-ernic` binary.
+
+- **`qemu-tool gen-vm --backing-image OCI_REF`** pulls a published backing
+  qcow2 from a registry with `oras`, decompresses it and creates the overlay —
+  the same job as the cloud-image download, from a different source. The
+  artifact is not a runnable image (`artifactType`
+  `application/vnd.batesste.vm-image.v1`, one zstd layer), so `docker pull`
+  will not fetch it. `zstd` is now a `Recommends`.
+
 ### Changed
+
+- **`qemu-tool list` reports the SSH port a containerised VM is actually
+  reachable on.** It read the port out of the QEMU command line, but a
+  containerised guest's `-hostfwd` port is the port inside that container's
+  network namespace — and the scale-out stack gives every guest 2222 there, so
+  a forty-VM fleet listed forty VMs on port 2222. True, and useless. The
+  listing now also resolves the published mapping and shows `host->guest` when
+  the two differ (`2231->2222`); JSON output gains `ssh_port_host` alongside
+  the existing `ssh_port`. An uncontainerised listing is unchanged, still one
+  port per row.
 
 - **`sbates130272.batesste` is pinned to 3.0.0** (was `>=2.4.0`), and the
   workarounds that release makes unnecessary are gone. `vm-rocm.yml` loses the

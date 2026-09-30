@@ -12,6 +12,9 @@ file up to date as infrastructure changes.
 - `qemu/compose/vfio-user-rocjitsu-vm/` — single-VM rocjitsu-only compose stack
 - `qemu/compose/vfio-user-ernic-rocjitsu-vm/` — single-VM ernic + rocjitsu compose stack
 - `qemu/compose/vfio-user-ernic-2vm/` — two-VM ernic mesh stack; rocjitsu GPUs opt-in via `--profile rocjitsu-vm1/vm2`
+- `qemu/compose/vfio-user-ernic-rocjitsu-scale-out/` — N-VM ernic mesh + one
+  GPU per VM. **Generated** by `qemu-tool gen-compose` from `qemu/env.scale-out`;
+  do not hand-edit it
 - `images/` — qcow2 VM disk images (backing + overlay pairs, **not** `/var/lib/qemu-tool/images`)
 - `ansible/` — Ansible playbooks for VM provisioning
 - `rocm-ernic-enablement.md` — running log of rocm-ernic integration status and bugs
@@ -70,6 +73,46 @@ The ernic hub serves VM1 (`ernic-1.sock`); the worker serves VM2
 (`ernic-2.sock`). VMs should be assigned IPs in `192.168.100.11/24` and
 `192.168.100.12/24` on `enp1s0` — avoid `.1` (reserved as the hub DHCP
 `server_ip`; ARP for `.1` is intercepted by the hub).
+
+## Scale-out fleet stack
+
+`vfio-user-ernic-rocjitsu-scale-out` is an N-VM version of the 2-VM stack: one
+emulated RDMA NIC and one rocjitsu GPU per VM, VM 1 the mesh manager and 2..N
+workers dialling it.
+
+**Its `docker-compose.yml` and `prometheus.yml` are generated.** Edit
+`qemu/env.scale-out` and re-run `qemu-tool gen-compose`; a hand edit is lost on
+the next regeneration and `gen-compose --check` fails in CI. Both files are
+committed so the stack stays reviewable in a diff and usable with plain
+`docker compose`.
+
+```bash
+qemu-tool gen-vm --env-file qemu/env.scale-out \
+    --vm-name stebates-fleet-1 --backing-image "$VM_BACKING_IMAGE"
+for n in $(seq 2 8); do
+  qemu-tool gen-vm --env-file qemu/env.scale-out --vm-name stebates-fleet-$n \
+      --backing-file images/stebates-fleet-1-backing.qcow2
+done
+qemu-tool gen-compose --env-file qemu/env.scale-out
+qemu-tool compose --env-file qemu/env.scale-out \
+    --stack vfio-user-ernic-rocjitsu-scale-out --profile metrics up -d
+```
+
+Per-VM values are comma-lists, not numbered variables. The trap worth knowing
+before editing that file: keys naming a field that is *already* `list[str]`
+(`VM_PCI_HOSTDEV`, `VM_VFIO_USERDEV`, `VM_EXTRA_HOSTFWD`) keep their existing
+meaning — the commas are several values for **one** VM, so the whole value goes
+to **every** VM. `VM_EXTRA_HOSTFWD=a,b` is two hostfwd rules per guest, not one
+rule each for two guests. Do not "fix" such a key by padding it to `VM_COUNT`.
+
+`ernic-1` is `restart: "no"` on purpose (issue 7 below): a manager restart
+wedges every guest on a DSR timeout that only `down && up` clears, and
+`on-failure` would turn a visible crash into a quiet wedge.
+
+Ceilings, nearest first: the mesh topology payload caps at 64 nodes
+(`rdma_backend_tcp.c`), `VM_SHM_SIZE × VM_COUNT` must fit `/dev/shm`, and
+`VM_VCPUS × VM_COUNT` should not exceed `nproc`. `VM_VCPUS` must stay ≥ 4 or
+`ionic_rdma` never probes.
 
 ## rocm-ernic driver and userspace provider (in-VM)
 
@@ -247,6 +290,136 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     the module across a kernel upgrade. The address on `rocm-ernic0`, bringing
     the netdev up and the counters symlink are still run-time only; re-run the
     configure play to restore full test-readiness after a reboot.
+13. **The mesh allocates a new node id on every reconnect and never reclaims
+    the old one.** This is the fact that decides how large a fleet can be. A
+    worker that dies and is restarted by Docker does not resume its old id; it
+    consumes the next one. The topology payload caps at 64 nodes
+    (`rdma_backend_tcp.c:2570`), so a fleet does not have 64 VMs' worth of
+    headroom — it has 64 *connection events*. Measured: a 48-VM fleet whose
+    workers flapped during start reached node id 61 before settling.
+
+    The corollary is that anything causing worker churn shortens the fleet. The
+    one that bit here was Docker's embedded DNS: one resolver per network, and a
+    144-container start burst saturates it, so workers died with `Failed to
+    resolve host 'ernic-1': Temporary failure in name resolution`, restarted,
+    and burned ids. `vfio-user-ernic-rocjitsu-scale-out` therefore pins a static
+    address on every service and resolves no service names at run time. A fleet
+    that reintroduces name resolution on the start path will hit this again.
+
+    Secondary symptom of the same churn: `depends_on: service_healthy` against
+    a flapping ernic makes compose abort the whole `up` with `dependency failed
+    to start: container fleet-ernic-10-1 is unhealthy`, leaving containers in
+    `Created` and guests dead with `vfio-user: timed out waiting for reply`.
+14. **The mesh manager's 20 s heartbeat timeout turns CPU oversubscription into
+    lost VMs, and it is not tunable.** `rocm-ernic --help` exposes no knob. When
+    a fleet allocates more vCPU than the host has cores, the manager slips past
+    20 s and declares live nodes dead (`Node N failed health check (last
+    heartbeat: 20 seconds ago)`). The evicted worker exits, its vfio-user socket
+    disappears, and the guest attached to it dies with `vfio-user: timed out
+    waiting for reply` — lost guests match restarted ernics one for one.
+
+    Measured on a 128-core / 503G host at 4 vCPU per VM: 40 VMs boot clean in
+    117 s, 44 lose 3, 48 lose 7. Memory is never the constraint (48 VMs used
+    107G of 503G). Budget by `VM_VCPUS * VM_COUNT <= nproc` plus about 25%,
+    not by RAM, and remember `VM_VCPUS` cannot go below 4 on an ernic stack.
+15. **The manager leaks a file descriptor per evicted node, and Docker's
+    default soft `nofile` is 1024.** This, not CPU directly, is what actually
+    kills a large fleet — issues 13 and 14 are the two halves of the mechanism
+    and this is where they land.
+
+    The cascade, observed end to end on a 40-VM fleet: the manager slips its
+    20 s heartbeat under CPU pressure and evicts live workers (issue 14) —
+    eighteen of them before its own guest had even attached. Each evicted
+    worker reconnects, takes a fresh node id (issue 13) and a fresh socket,
+    and **the manager never closes the old one**. At about one leaked fd per
+    eviction the 1024 default is reached well inside a normal run. The first
+    casualty is the manager reopening its own stats file:
+
+    ```
+    ERROR: rdma: Failed to open stats file /run/ernic-stats/ernic-1.stats: Too many open files
+    ERROR: rdma: TCP: Failed to accept connection: Too many open files
+    ```
+
+    after which it spins in an `accept()`→EMFILE loop with no backoff — **3.3 GB
+    of log in 12 hours**, measured. The manager then goes unhealthy, and because
+    it is `restart: "no"` (issue 7) the guest attached to it dies:
+    `qemu-system-x86_64: ../util/error.c:62: error_setv: Assertion *errp == NULL failed`.
+
+    `gen_compose.py` now sets `ulimits.nofile` on every ernic service from
+    `ERNIC_NOFILE` (default 65536). That does **not** fix the leak, which is
+    upstream's; it moves the wall out far enough that a fleet-length run
+    finishes first. A fleet that churns hard enough will still get there.
+
+    Re-measured at 40 VMs with the limit raised: manager steady at 165 fds,
+    zero EMFILE, max node id 31 of 64 (it reached 50–61 before). The long-run
+    death is gone. **The boot ceiling is not** — the same run still lost 3
+    guests to 24 heartbeat evictions, with the lost guests matching the
+    restarted ernics one for one, and load peaked at 417 on 128 cores. Budget
+    by issue 14 regardless of what `ERNIC_NOFILE` says.
+16. **Stock in-tree `ionic` drives the emulated device; only the PCI ID is
+    missing.** On a mainline kernel (verified on 7.2.4) no DKMS build and no
+    AMD patch is needed to bring the NIC and the RDMA device up — the shipped
+    `ionic.ko`/`ionic_rdma.ko` bind to `1dd8:100a` and work as soon as the id
+    is added to the driver's table:
+
+    ```
+    echo "1dd8 100a" > /sys/bus/pci/drivers/ionic/new_id
+    ```
+
+    That yields `ionic 0000:00:05.0: FW: rocm-ernic-1.0`, `Link up - 100 Gbps`,
+    an `enp0s5np0` netdev and an `ibv_devinfo` reporting `PORT_ACTIVE` over
+    Ethernet (RoCE). `ib_send_bw` then runs and the ernic byte counters move.
+    Whether the AMD patches matter for correctness beyond the id table has not
+    been established here — but "needs the DKMS package to come up at all" is
+    not true on a mainline guest.
+
+    Two caveats on a guest that has only had `new_id` done to it: the udev
+    rules are not installed, so the devices keep kernel names (`rocep0s5`, not
+    `rocm-rdma-ernic0`), and **IP traffic does not cross the mesh** — ARP goes
+    unanswered and ping gets 100% loss even with static neighbours seeded. So
+    inter-VM `ib_send_bw` does not work; a loopback run on one guest does, and
+    is enough to exercise the QPs and light up the counters. Full inter-VM
+    testing still needs the `ernic_guest_setup` configure play.
+17. **The mesh saturates at about 40 registered nodes — the 64-node protocol
+    cap is not reachable.** Measured by asking for 64 VMs on a 128-core host.
+    It settled at **40 of 64**; the other 24 workers never registered, dying in
+    a permanent restart loop on:
+
+    ```
+    ERROR: rdma: TCP: Registration timeout
+    ERROR: rdma: Backend tcp init failed: -1
+    Failed to realize PVRDMA device with backend 'tcp:worker:172.31.1.1:6320'
+    ```
+
+    **This is not CPU starvation.** Load peaked at 843 during the boot burst,
+    but the stragglers still failed identically once the host was back to load
+    16, and freeing a slot by stopping a healthy worker let others in — so it
+    is a capacity wall in the mesh, not a scheduling delay.
+
+    The cause is that the mesh is a **full mesh**. A worker holds ~N+2 sockets
+    where N is the *registered* size, not `VM_COUNT`: 42 sockets measured at
+    both the 40-VM and the 64-VM fleet. So registering node N+1 costs N new
+    connections and touches every existing node, through a single-threaded
+    manager, against a fixed wall-clock registration timeout. The cost per
+    registration grows with the mesh until registration cannot finish — around
+    40 on this host.
+
+    The 64-node topology payload cap (`rdma_backend_tcp.c:2570`) never came
+    into it: max node id reached **30**. The mesh dies of connection
+    establishment cost well before its own advertised limit, so treat ~40, not
+    64, as the real ceiling and expect it to move with host speed.
+
+    Two consequences worth knowing:
+
+    - **A stuck worker retries forever; its guest gets one chance.** `ernic` is
+      `restart: on-failure` and `qemu` is `restart: "no"`, so by the time a
+      worker on its fifteenth attempt registers, the VM it exists to serve has
+      been dead for ten minutes. The 24 stuck workers matched the 24 dead
+      guests exactly.
+    - **Failed registrations leak manager fds too.** The manager went 623 ->
+      943 sockets in about fifteen minutes with 24 workers retrying. Issue 15's
+      `ERNIC_NOFILE` keeps that from becoming EMFILE for days rather than
+      minutes, but a fleet parked above the wall leaks continuously.
 
 ## Git / GitHub
 

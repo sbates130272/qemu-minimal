@@ -13,8 +13,13 @@ _STACKS = (
     "vfio-user-rocjitsu-vm",
     "vfio-user-ernic-rocjitsu-vm",
     "vfio-user-ernic-2vm",
+    "vfio-user-ernic-rocjitsu-scale-out",
 )
 _DEFAULT_STACK = "vfio-user-ernic-rocjitsu-vm"
+
+# Stacks whose docker-compose.yml is produced by `qemu-tool gen-compose` rather
+# than hand-written, and so can fall out of step with the env file.
+_GENERATED_STACKS = frozenset({"vfio-user-ernic-rocjitsu-scale-out"})
 
 # Installed location (Debian package).
 _INSTALLED_COMPOSE_ROOT = Path("/usr/share/qemu-tool/compose")
@@ -42,6 +47,30 @@ def _compose_dir(stack: str) -> Path:
     )
 
 
+def _warn_if_stale(
+    cdir: Path, settings: Path, stack: str, env_file: Path | None
+) -> None:
+    """Warn, never block, when the generated YAML predates the env file.
+
+    Blocking would be wrong: `down` against a stale tree is exactly how you
+    recover from a bad edit, and `logs`/`ps` have to keep working too.
+    """
+    from . import gen_compose
+
+    recorded = gen_compose.recorded_digest(cdir / "docker-compose.yml")
+    if recorded is None:
+        return
+    if recorded == gen_compose.env_digest(settings):
+        return
+    arg = f" --env-file {env_file}" if env_file is not None else ""
+    print(
+        f"Warning: {cdir / 'docker-compose.yml'} was generated from a different "
+        f"version of {settings}.\n"
+        f"         Regenerate with: qemu-tool gen-compose --stack {stack}{arg}",
+        file=sys.stderr,
+    )
+
+
 def run(
     vm_name: str | None,
     images_dir: Path | None,
@@ -66,6 +95,8 @@ def run(
     settings = find_env_file(env_file)
     if settings is not None:
         cmd += ["--env-file", str(settings.resolve())]
+        if stack in _GENERATED_STACKS:
+            _warn_if_stale(cdir, settings, stack, env_file)
     cmd += compose_args
     result = subprocess.run(cmd, cwd=cdir, env=env)
     sys.exit(result.returncode)

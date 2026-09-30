@@ -4,11 +4,11 @@ qemu\-tool \- run, generate and list QEMU virtual machines
 .SH SYNOPSIS
 .B qemu\-tool
 .RB [ \-\-version ]
-.I {run\-vm,gen\-vm,compose,list}
+.I {run\-vm,gen\-vm,gen\-compose,compose,ernic\-stats,list}
 .RI [ options ]
 .SH DESCRIPTION
 .B qemu\-tool
-provides four subcommands for managing QEMU-based virtual machines:
+provides six subcommands for managing QEMU-based virtual machines:
 .TP
 .B run\-vm
 Launch an existing VM image created by
@@ -22,6 +22,15 @@ Start the vfio-user GPU VM Docker Compose stack (rocm-ernic + rocjitsu),
 wrapping
 .B docker compose
 with VM_NAME and VM_IMAGES_DIR pre-configured.
+.TP
+.B gen\-compose
+Generate a scale-out compose stack \- an N-VM rocm-ernic mesh, one emulated
+RDMA NIC and one rocjitsu GPU per VM \- from the fleet keys in a settings file.
+.TP
+.B ernic\-stats
+Serve the stats files written by
+.B "rocm\-ernic \-S"
+as Prometheus metrics. Runs inside the compose stack; rarely invoked by hand.
 .TP
 .B list
 List every QEMU VM running on this node, including VMs inside containers, and
@@ -273,6 +282,102 @@ Inject a CA certificate into the guest trust store.
 .TP
 .B \-\-ansible\-only
 Skip cloud-init provisioning; only re-run Ansible against an existing backing image.
+.TP
+.BI \-\-backing\-image " OCI_REF"
+Pull a published backing qcow2 from a container registry with
+.BR oras (1),
+decompress it, and create the overlay on top of it. No download from
+cloud-images.ubuntu.com, no cloud-init and no bake: the same job as the
+cloud-image path, from a different source. The artifact is not a runnable
+image (artifactType application/vnd.batesste.vm-image.v1, one zstd layer), so
+.B "docker pull"
+will not fetch it. Requires
+.B oras
+and
+.B zstd
+on PATH. Mutually exclusive with
+.B \-\-backing\-file
+and
+.BR \-\-no\-backing .
+Re-running is a no-op unless
+.B \-\-force
+is given.
+.SH GEN-COMPOSE OPTIONS
+.PP
+Generates
+.I docker\-compose.yml
+and
+.I prometheus.yml
+for an N-VM rocm-ernic mesh from the fleet keys in the settings file. VM 1 is
+the mesh manager; VMs 2..N are workers that dial it.
+.PP
+Per-VM values are comma-lists, not numbered variables \-
+.B VM1_NAME
+does not survive eight VMs, let alone the mesh's sixty-four. A bare value
+broadcasts to every VM; a list whose length equals
+.B VM_COUNT
+applies positionally; any other length is an error naming the key and both
+lengths. The exception is a key naming a field that is already a list
+.RB ( VM_PCI_HOSTDEV ,
+.BR VM_VFIO_USERDEV ,
+.BR VM_EXTRA_HOSTFWD ),
+where the commas mean several values for
+.I one
+VM and the whole value goes to every VM. See
+.I env.scale\-out
+for the full key list.
+.TP
+.BI \-\-stack " NAME"
+Stack to generate. Default:
+.IR vfio\-user\-ernic\-rocjitsu\-scale\-out .
+.TP
+.BI \-\-env\-file " FILE"
+Settings file. Same search path as every other subcommand.
+.TP
+.BI \-\-output\-dir " DIR"
+Where to write. Defaults to the resolved stack directory, except that
+generating into
+.I /usr/share/qemu\-tool/compose
+must be asked for explicitly: that tree is owned by the Debian package.
+.TP
+.B \-\-check
+Exit non-zero if regenerating would change anything, and write nothing.
+For CI.
+.TP
+.B \-\-dry\-run
+Print the generated files to standard output instead of writing them.
+.PP
+The generated
+.I docker\-compose.yml
+carries a
+.B "# env\-sha256:"
+header recording the settings file it was built from.
+.B compose
+recomputes it and warns on standard error when the two disagree. It never
+refuses to run:
+.B down
+against a stale tree is exactly how a bad edit is recovered from.
+.SH ERNIC-STATS OPTIONS
+.PP
+Parses the stats dumps written by
+.B "rocm\-ernic \-S PATH"
+and serves them on
+.I /metrics
+in Prometheus text format. Metric and label names match rocm-ernic's own
+.IR prometheus/ernic\-exporter ,
+so its Grafana dashboard works against this endpoint unmodified.
+.TP
+.BI \-\-stats\-dir " DIR"
+Directory of
+.I *.stats
+files. Default:
+.IR /run/ernic\-stats .
+.TP
+.BI \-\-port " PORT"
+Listen port. Default: 9840.
+.TP
+.BI \-\-addr " ADDR"
+Listen address. Default: 0.0.0.0.
 .SH COMPOSE OPTIONS
 .TP
 .BI \-\-vm\-name " NAME"
@@ -318,6 +423,19 @@ Omit VMs that were not started by
 The table reports, per VM: PID, VM name, source, architecture, vCPU count,
 memory, forwarded SSH port, whether KVM is enabled, uptime, the container name
 when the VM runs inside one, and any attached vfio-user sockets.
+.PP
+The SSH column shows
+.IR host \-> guest
+whenever the two differ, which they do for a containerised VM: the guest's
+.B \-hostfwd
+port is the port inside that container's network namespace, and a fleet stack
+gives every guest the same one. The host port \(em the one to actually
+.BR ssh (1)
+to \(em is the published mapping. In JSON output these are
+.B ssh_port_host
+and
+.BR ssh_port .
+An uncontainerised listing shows the single port, unchanged.
 .SH VM IDENTIFICATION
 .B qemu\-tool
 stamps every VM it launches with two generic QEMU options:
@@ -427,6 +545,21 @@ Default package manifest installed into new VMs by
 .I /usr/share/qemu-tool/compose/
 Compose stack directories used by
 .BR compose .
+.TP
+.I /usr/share/qemu-tool/env.scale-out
+Settings template for the scale-out fleet, documenting
+.B VM_COUNT
+and the rest of the fleet keys
+.B gen\-compose
+reads. Not seeded into
+.IR /etc ;
+name it with
+.BR \-\-env\-file .
+.TP
+.I /usr/share/qemu-tool/compose/vfio-user-ernic-rocjitsu-scale-out/
+The generated fleet stack. Both files in it are written by
+.BR gen\-compose ;
+edit the settings file, not them.
 .PP
 The package manifests, the compose stacks and
 .I env.example
@@ -475,6 +608,31 @@ Start the vfio-user GPU VM stack:
 .RS
 .EX
 qemu\-tool compose \-\-vm\-name myvm up
+.EE
+.RE
+.PP
+Bring up an eight-VM rocm-ernic fleet with metrics. Fetch the published
+backing image once, overlay the rest on it, generate the stack, start it:
+.PP
+.RS
+.EX
+qemu\-tool gen\-vm \-\-env\-file qemu/env.scale\-out \\
+    \-\-vm\-name fleet\-1 \-\-backing\-image "$VM_BACKING_IMAGE"
+for n in 2 3 4 5 6 7 8; do
+    qemu\-tool gen\-vm \-\-env\-file qemu/env.scale\-out \\
+        \-\-vm\-name fleet\-$n \-\-backing\-file images/fleet\-1\-backing.qcow2
+done
+qemu\-tool gen\-compose \-\-env\-file qemu/env.scale\-out
+qemu\-tool compose \-\-env\-file qemu/env.scale\-out \\
+    \-\-stack vfio\-user\-ernic\-rocjitsu\-scale\-out \-\-profile metrics up \-d
+.EE
+.RE
+.PP
+Confirm the committed stack is in step with the settings file, for CI:
+.PP
+.RS
+.EX
+qemu\-tool gen\-compose \-\-env\-file qemu/env.scale\-out \-\-check
 .EE
 .RE
 .PP

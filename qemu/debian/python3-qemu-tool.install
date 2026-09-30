@@ -7,3 +7,7 @@ compose/vfio-user-ernic-rocjitsu-vm/docker-compose.yml usr/share/qemu-tool/compo
 compose/vfio-user-ernic-rocjitsu-vm/README.md usr/share/qemu-tool/compose/vfio-user-ernic-rocjitsu-vm/
 compose/vfio-user-ernic-2vm/docker-compose.yml usr/share/qemu-tool/compose/vfio-user-ernic-2vm/
 compose/vfio-user-ernic-2vm/README.md usr/share/qemu-tool/compose/vfio-user-ernic-2vm/
+env.scale-out usr/share/qemu-tool/
+compose/vfio-user-ernic-rocjitsu-scale-out/docker-compose.yml usr/share/qemu-tool/compose/vfio-user-ernic-rocjitsu-scale-out/
+compose/vfio-user-ernic-rocjitsu-scale-out/prometheus.yml usr/share/qemu-tool/compose/vfio-user-ernic-rocjitsu-scale-out/
+compose/vfio-user-ernic-rocjitsu-scale-out/README.md usr/share/qemu-tool/compose/vfio-user-ernic-rocjitsu-scale-out/

@@ -16,6 +16,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from contextlib import ExitStack
 from pathlib import Path
@@ -72,6 +73,11 @@ def run(cfg: VMConfig) -> None:
             backing.rename(overlay)
         else:
             _create_overlay(overlay, backing)
+        return
+
+    if cfg.backing_image is not None:
+        backing = _fetch_backing_image(cfg, images)
+        _create_overlay(images / f"{cfg.vm_name}.qcow2", backing)
         return
 
     if cfg.backing_file is not None:
@@ -136,6 +142,53 @@ def _restore_image(cfg: VMConfig, images: Path) -> None:
     print(f"Creating new image with backing file: {overlay}")
     _create_overlay(overlay, backing)
     print(f"Successfully created {overlay} with backing file {backing}")
+
+
+def _fetch_backing_image(cfg: VMConfig, images: Path) -> Path:
+    """Pull a published backing qcow2 from a registry, decompressed.
+
+    The artifact is not a runnable image -- artifactType
+    application/vnd.batesste.vm-image.v1, one zstd layer -- so it needs `oras`,
+    not `docker pull`. Same job as _download_if_needed(), different source.
+    """
+    backing = images / f"{cfg.vm_name}-backing.qcow2"
+    if backing.exists() and not cfg.force:
+        print(f"Backing image already present: {backing} (use --force to refetch)")
+        return backing
+
+    for tool in ("oras", "zstd"):
+        if not _which(tool):
+            sys.exit(
+                f"Error: --backing-image needs '{tool}', which is not on PATH.\n"
+                "Install it, or fetch the qcow2 yourself and use --backing-file."
+            )
+
+    with tempfile.TemporaryDirectory(dir=images) as tmp:
+        tmpdir = Path(tmp)
+        print(f"Pulling {cfg.backing_image}")
+        subprocess.run(["oras", "pull", cfg.backing_image, "-o", str(tmpdir)], check=True)
+
+        compressed = sorted(tmpdir.glob("*.qcow2.zst"))
+        plain = sorted(tmpdir.glob("*.qcow2"))
+        if compressed:
+            src = compressed[0]
+            print(f"Decompressing {src.name}")
+            # Straight to the final name: -o writes the output path itself, so
+            # there is no second full-size copy of a ~12G image.
+            subprocess.run(
+                ["zstd", "-d", "-f", str(src), "-o", str(backing)], check=True
+            )
+        elif plain:
+            subprocess.run(["cp", str(plain[0]), str(backing)], check=True)
+        else:
+            found = ", ".join(p.name for p in sorted(tmpdir.iterdir())) or "nothing"
+            sys.exit(
+                f"Error: {cfg.backing_image} has no .qcow2 or .qcow2.zst layer "
+                f"(pulled: {found})."
+            )
+
+    print(f"Backing image ready: {backing}")
+    return backing
 
 
 def _create_overlay(overlay: Path, backing: Path) -> None:
@@ -779,9 +832,14 @@ def _validate(cfg: VMConfig) -> None:
         sys.exit("Error: --backing-file and --no-backing cannot both be set.")
     if cfg.backing_file is not None and not Path(cfg.backing_file).exists():
         sys.exit(f"Error: --backing-file {cfg.backing_file} does not exist!")
+    if cfg.backing_image is not None and cfg.backing_file is not None:
+        sys.exit("Error: --backing-image and --backing-file cannot both be set.")
+    if cfg.backing_image is not None and cfg.no_backing:
+        sys.exit("Error: --backing-image and --no-backing cannot both be set.")
     # Warn on unknown releases; XX.YY version strings are always accepted.
     if (
         cfg.backing_file is None
+        and cfg.backing_image is None
         and not cfg.restore_image
         and not re.match(r"^\d+\.\d+$", cfg.release)
         and cfg.release not in KNOWN_RELEASES

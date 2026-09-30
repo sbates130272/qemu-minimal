@@ -59,7 +59,8 @@ testing.
 
 **Key Features:**
 - Fast VM creation using Ubuntu cloud images and cloud-init (Noble and Resolute)
-- `qemu-tool` Python CLI with `run-vm`, `gen-vm`, `compose`, and `list` subcommands
+- `qemu-tool` Python CLI with `run-vm`, `gen-vm`, `gen-compose`, `compose`,
+  `ernic-stats` and `list` subcommands
 - Bidirectional libvirt domain XML support (`--domain` input, `--convert-to-libvirt` output)
 - NVMe device emulation with tracing support
 - PCIe device passthrough (VFIO)
@@ -254,6 +255,11 @@ stacks under `qemu/compose/` start the GPU server containers and the
 | `vfio-user-rocjitsu-vm/` | 1 | no | yes |
 | `vfio-user-ernic-rocjitsu-vm/` | 1 | yes | yes |
 | `vfio-user-ernic-2vm/` | 2 | yes (mesh) | opt-in per VM via `--profile` |
+| `vfio-user-ernic-rocjitsu-scale-out/` | N (generated) | yes (mesh) | yes |
+
+The first four are hand-written and committed. The last is generated from a
+settings file by `qemu-tool gen-compose` — see [Scale-out fleet](#scale-out-fleet)
+below.
 
 This is the recommended path when you do not have a physical GPU to pass
 through but need a guest that sees PCIe GPU devices.
@@ -273,6 +279,46 @@ qemu-tool compose --vm-name qemu-minimal down
 stack whether running from source or an installed `.deb` package.
 Pass any `docker compose` subcommand after the `qemu-tool` flags
 (`up`, `down`, `ps`, `logs ernic`, etc.).
+
+### Scale-out fleet
+
+`qemu-tool gen-compose` generates an N-VM rocm-ernic mesh — one emulated RDMA
+NIC and one rocjitsu GPU per VM — from the fleet keys in a settings file. Same
+topology as `vfio-user-ernic-2vm`, sized by a variable rather than by hand.
+
+```bash
+qemu-tool gen-compose --env-file qemu/env.scale-out
+qemu-tool compose --env-file qemu/env.scale-out \
+    --stack vfio-user-ernic-rocjitsu-scale-out --profile metrics up -d
+```
+
+Per-VM values are comma-lists, not numbered variables: `VM1_NAME`/`VM2_NAME`
+does not survive eight VMs, let alone the mesh's sixty-four. A bare value
+broadcasts to every VM, a list of length `VM_COUNT` applies positionally, and
+any other length is an error naming the key and both lengths.
+
+The exception matters, because getting it backwards fails silently: a key
+naming a field that is *already* a list — `VM_PCI_HOSTDEV`, `VM_VFIO_USERDEV`,
+`VM_EXTRA_HOSTFWD` — uses its commas for several values belonging to **one**
+VM, so the whole value goes to **every** VM. `VM_EXTRA_HOSTFWD=a,b` is two
+hostfwd rules per guest, not one rule each for two guests. Which case applies
+is read off `VMConfig`'s own type hints rather than a hand-kept list of names.
+
+`VM_VCPUS` must not drop below 4 on an ernic stack. `ionic_lif_size()` derives
+its EQ count from `num_online_cpus()` and `ionic_create_rdma_admin()` rejects
+fewer than `IONIC_EQ_COUNT_MIN`, so `ionic_rdma` never probes; the only symptom
+is "Failed to register ibdev" in the guest log.
+
+The generated `docker-compose.yml` records the hash of the settings file it was
+built from, and `qemu-tool compose` warns on stderr when they disagree. It
+never blocks: `down` against a stale tree is how you recover from a bad edit.
+`gen-compose --check` turns the same comparison into a CI gate.
+
+With `--profile metrics` the stack also brings up Prometheus and
+`qemu-tool ernic-stats`, which serves the per-QP counters each `rocm-ernic -S`
+writes. Full detail in
+[the stack README](qemu/compose/vfio-user-ernic-rocjitsu-scale-out/README.md)
+and [`qemu/env.scale-out`](qemu/env.scale-out).
 
 ### Settings file
 
@@ -455,6 +501,7 @@ flags take precedence over XML values).
 | `--no-backing` | off | Create flat image without a backing file |
 | `--restore-image` | off | Recreate overlay from existing backing file |
 | `--backing-file FILE` | — | Create overlay on top of this existing qcow2 |
+| `--backing-image OCI_REF` | — | Pull a published backing qcow2 with `oras`, then overlay on it |
 | `--ansible-playbook FILE` | — | Path to an Ansible playbook to run against the VM image after cloud-init |
 
 ### run-vm flags
@@ -481,6 +528,31 @@ flags take precedence over XML values).
 | `--extra-hostfwd RULE` | — | Extra hostfwd rule e.g. `tcp::9150-:9100` (repeatable) |
 | `--dry-run` | off | Print QEMU command instead of running |
 | `--convert-to-libvirt [FILE]` | — | Emit libvirt domain XML to FILE (default `<vm>.xml`) |
+
+### gen-compose flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--stack NAME` | `vfio-user-ernic-rocjitsu-scale-out` | Stack to generate |
+| `--env-file FILE` | search path | Settings file (see `qemu/env.scale-out`) |
+| `--output-dir DIR` | the stack directory | Where to write |
+| `--check` | off | Exit non-zero if regenerating would change anything; writes nothing |
+| `--dry-run` | off | Print the generated files instead of writing them |
+
+`--output-dir` will not default into `/usr/share/qemu-tool/compose`; that tree
+belongs to the Debian package, so overwriting it has to be asked for by name.
+
+### ernic-stats flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--stats-dir DIR` | `/run/ernic-stats` | Directory of `*.stats` files |
+| `--port PORT` | `9840` | Listen port |
+| `--addr ADDR` | `0.0.0.0` | Listen address |
+
+Runs inside the generated stack; rarely invoked by hand. Metric and label names
+match rocm-ernic's own `prometheus/ernic-exporter`, so that project's Grafana
+dashboard works against this endpoint unmodified.
 
 ### list flags
 

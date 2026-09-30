@@ -75,3 +75,7 @@ network-config-*
 # leading dot, so it stays tracked.
 .env
 .env.*
+
+# Scratch output from local fleet runs -- rendered dashboards, captured
+# metrics. Reproducible from a running stack, so it is not worth versioning.
+artifacts/

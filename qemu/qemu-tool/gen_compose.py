@@ -1,0 +1,610 @@
+"""Generate the scale-out compose stack from the env file.
+
+The 2-VM stack hand-writes every socket path, MAC, SSH port and qcow2 name.
+That does not survive 8 VMs, let alone the mesh's 64, so this derives all of
+them from VM_COUNT and a handful of bases.
+
+Per-VM values are comma-lists, not numbered keys. A bare value broadcasts to
+every VM; a list of length VM_COUNT applies positionally; any other length is
+an error naming the key and both lengths.
+
+The exception is the one that silently does the wrong thing if you get it
+backwards: three VMConfig fields are ALREADY list[str] (pci_hostdev,
+vfio_userdev, extra_hostfwd), where the commas mean "several values for ONE
+VM". VM_EXTRA_HOSTFWD=a,b is two hostfwd rules for every guest, not one rule
+each for two guests. Which case applies is read off VMConfig's own type hints
+rather than a hand-kept list of key names, so a scalar field added to VMConfig
+later becomes per-VM-overridable for free.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import sys
+import typing
+from pathlib import Path
+from typing import Any
+
+from .config import VMConfig
+from .envfile import _coerce, env_key, find as find_env_file, parse as parse_env
+
+# Fields the generated qemu entrypoint forwards to run-vm, in emit order.
+# Everything here is per-VM overridable by the rules above.
+_VM_FLAGS = [
+    ("vcpus", "--vcpus"),
+    ("vmem", "--vmem"),
+    ("extra_hostfwd", "--extra-hostfwd"),
+]
+
+# Per-VM keys that name no VMConfig field, so they need their own split.
+_EXTRA_PER_VM = ["VM_SHM_SIZE", "ROCJITSU_CONFIG"]
+
+# Derived per-VM, each with an optional override list.
+_DEFAULTS = {
+    "VM_NAME_PREFIX": "qemu-fleet",
+    "VM_SSH_PORT_BASE": "2222",
+    "ERNIC_MAC_PREFIX": "72:6f:63:6d",
+    "ERNIC_GUEST_SUBNET": "192.168.100",
+    "ERNIC_TCP_PORT": "6320",
+    "ERNIC_STATS_PORT": "9840",
+    "ERNIC_NOFILE": "65536",
+    "PROM_PORT": "9090",
+    "PROM_SCRAPE_INTERVAL": "15s",
+    "PROM_RETENTION": "7d",
+    "VM_SHM_SIZE": "8g",
+    "ROCJITSU_CONFIG": "gfx1250_mi455x.json",
+    "VM_IMAGES_DIR": "/var/lib/qemu-tool/images",
+    "QEMU_TOOL_SRC": "../../..",
+    "FLEET_NET_PREFIX": "172.31",
+}
+
+# Third octet per service family. Static addressing keeps Docker's embedded
+# DNS off the critical path: measured at 48 VMs, a fleet that resolves service
+# names loses workers to "Temporary failure in name resolution" during the
+# start burst, and each restart consumes a fresh mesh node id -- so a 48-VM
+# fleet reached id 61 against a 64-node protocol ceiling. See the stack README.
+_NET_ERNIC, _NET_ROCJITSU, _NET_QEMU, _NET_INFRA = 1, 2, 3, 0
+
+# rocm-ernic's topology payload builder caps the mesh here
+# (src/rdma/rdma_backend_tcp.c: `num_nodes < 64`).
+_MESH_MAX = 64
+
+_PROVENANCE = "# env-sha256: "
+
+
+def env_digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def recorded_digest(compose_file: Path) -> str | None:
+    """Return the env hash a generated compose file was built from."""
+    try:
+        for line in compose_file.read_text().splitlines()[:20]:
+            if line.startswith(_PROVENANCE):
+                return line[len(_PROVENANCE):].strip()
+    except OSError:
+        return None
+    return None
+
+
+def _get(values: dict[str, str], key: str) -> str:
+    raw = values.get(key, "")
+    return raw if raw else _DEFAULTS.get(key, "")
+
+
+def _split_per_vm(raw: str, count: int, key: str) -> list[str]:
+    """Broadcast a scalar, or apply a length-VM_COUNT list positionally."""
+    items = [p.strip() for p in raw.split(",")]
+    if len(items) == 1:
+        return items * count
+    if len(items) != count:
+        sys.exit(
+            f"Error: {key} has {len(items)} values but VM_COUNT is {count}. "
+            f"Give one value to apply to every VM, or exactly {count}."
+        )
+    return items
+
+
+def _per_vm_flags(values: dict[str, str], count: int) -> list[list[tuple[str, str]]]:
+    """Resolve the run-vm flags for each VM as (flag, value) pairs."""
+    hints = typing.get_type_hints(VMConfig)
+    per_vm: list[list[tuple[str, str]]] = [[] for _ in range(count)]
+    for field, flag in _VM_FLAGS:
+        key = env_key(field)
+        raw = values.get(key, "")
+        if not raw:
+            continue
+        if typing.get_origin(hints[field]) is list:
+            # A list[str] field: the commas are already spoken for. The whole
+            # value goes to every VM, once per element.
+            for item in _coerce(hints[field], raw, key):
+                for vm in per_vm:
+                    vm.append((flag, item))
+            continue
+        for index, item in enumerate(_split_per_vm(raw, count, key)):
+            # Coerce per element so a per-VM value is type-checked exactly as
+            # a broadcast one is.
+            _coerce(hints[field], item, key)
+            per_vm[index].append((flag, item))
+    return per_vm
+
+
+def _check_image_coherence(values: dict[str, str]) -> None:
+    """Refuse an image set that cannot have been built together.
+
+    batesste-ci-images tags carry a shared <date>.<ci-sha> build stamp across
+    the containers and the qcow2, so this is a string comparison. It is worth
+    doing because the failure it prevents does not present as a version
+    problem: a guest driver and a host server from different SHAs wedge at the
+    vfio-user/DSR boundary, surfacing as the -ETIMEDOUT and "Failed to register
+    ibdev" symptoms in AGENTS.md. Across a whole fleet that is an expensive
+    afternoon.
+    """
+    keys = ["QEMU_IMAGE", "ERNIC_IMAGE", "ROCJITSU_IMAGE", "VM_BACKING_IMAGE"]
+    stamps: dict[str, str] = {}
+    vfu: dict[str, str] = {}
+    for key in keys:
+        ref = values.get(key, "")
+        if not ref or ":" not in ref:
+            continue
+        tag = ref.rsplit(":", 1)[1]
+        stamps[key] = tag.split("-", 1)[0]
+        for part in tag.split("-"):
+            if part.startswith("vfu."):
+                vfu[key] = part
+
+    distinct = set(stamps.values())
+    if len(distinct) > 1:
+        detail = "\n".join(f"  {k} -> {v}" for k, v in sorted(stamps.items()))
+        sys.exit(
+            "Error: image tags do not share one build stamp:\n" + detail +
+            "\nAll four must come from the same batesste-ci-images build."
+        )
+
+    distinct_vfu = set(vfu.values())
+    if len(distinct_vfu) > 1:
+        detail = "\n".join(f"  {k} -> {v}" for k, v in sorted(vfu.items()))
+        sys.exit(
+            "Error: libvfio-user revisions differ between qemu and the device "
+            "servers:\n" + detail +
+            "\nThe vfio-user wire protocol is not compatible across revisions."
+        )
+
+
+def plan(values: dict[str, str]) -> dict[str, Any]:
+    """Resolve the env file into everything the templates need."""
+    raw_count = _get(values, "VM_COUNT")
+    if not raw_count:
+        sys.exit("Error: VM_COUNT is required in the env file for this stack.")
+    try:
+        count = int(raw_count)
+    except ValueError:
+        sys.exit(f"Error: VM_COUNT must be an integer, got {raw_count!r}")
+    if count < 1:
+        sys.exit(f"Error: VM_COUNT must be at least 1, got {count}")
+    if count > _MESH_MAX:
+        sys.exit(
+            f"Error: VM_COUNT is {count}, above the {_MESH_MAX}-node ceiling "
+            "in rocm-ernic's mesh topology payload (rdma_backend_tcp.c)."
+        )
+
+    _check_image_coherence(values)
+
+    prefix = _get(values, "VM_NAME_PREFIX")
+    names = _override_list(values, "VM_NAMES", count) or \
+        [f"{prefix}-{n}" for n in range(1, count + 1)]
+
+    port_base = int(_get(values, "VM_SSH_PORT_BASE"))
+    ports = _override_list(values, "VM_SSH_PORTS", count) or \
+        [str(port_base + n - 1) for n in range(1, count + 1)]
+
+    mac_prefix = _get(values, "ERNIC_MAC_PREFIX")
+    macs = _override_list(values, "ERNIC_MACS", count) or \
+        [f"{mac_prefix}:{n >> 8:02x}:{n & 0xff:02x}" for n in range(1, count + 1)]
+
+    subnet = _get(values, "ERNIC_GUEST_SUBNET")
+    # Guests start at .11. Avoid .1: the mesh manager claims it as its DHCP
+    # server_ip and intercepts ARP for it (AGENTS.md known issue 1).
+    ips = _override_list(values, "ERNIC_GUEST_IPS", count) or \
+        [f"{subnet}.{10 + n}" for n in range(1, count + 1)]
+
+    for label, seq in (("VM name", names), ("SSH port", ports), ("ernic MAC", macs)):
+        if len(set(seq)) != len(seq):
+            sys.exit(f"Error: {label} values are not unique across the fleet: {seq}")
+
+    extras = {
+        key: _split_per_vm(_get(values, key), count, key)
+        for key in _EXTRA_PER_VM
+    }
+
+    flags = _per_vm_flags(values, count)
+
+    net = _get(values, "FLEET_NET_PREFIX")
+
+    vms = []
+    for index in range(count):
+        n = index + 1
+        vms.append({
+            "n": n,
+            "ernic_addr": f"{net}.{_NET_ERNIC}.{n}",
+            "rocjitsu_addr": f"{net}.{_NET_ROCJITSU}.{n}",
+            "qemu_addr": f"{net}.{_NET_QEMU}.{n}",
+            "name": names[index],
+            "ssh_port": ports[index],
+            "mac": macs[index],
+            "ip": ips[index],
+            "ernic_sock": f"/run/vfu/ernic-{n}.sock",
+            "rocjitsu_sock": f"/run/vfu/rocjitsu-{n}.sock",
+            "stats_file": f"/run/ernic-stats/ernic-{n}.stats",
+            "shm_size": extras["VM_SHM_SIZE"][index],
+            "rocjitsu_config": extras["ROCJITSU_CONFIG"][index],
+            "flags": flags[index],
+        })
+
+    return {
+        "count": count,
+        "vms": vms,
+        "net_prefix": net,
+        "exporter_addr": f"{net}.{_NET_INFRA}.10",
+        "prometheus_addr": f"{net}.{_NET_INFRA}.11",
+        "tcp_port": _get(values, "ERNIC_TCP_PORT"),
+        "stats_port": _get(values, "ERNIC_STATS_PORT"),
+        "ernic_nofile": _get(values, "ERNIC_NOFILE"),
+        "prom_port": _get(values, "PROM_PORT"),
+        "prom_interval": _get(values, "PROM_SCRAPE_INTERVAL"),
+        "prom_retention": _get(values, "PROM_RETENTION"),
+    }
+
+
+def _override_list(values: dict[str, str], key: str, count: int) -> list[str] | None:
+    raw = values.get(key, "")
+    if not raw:
+        return None
+    items = [p.strip() for p in raw.split(",") if p.strip()]
+    if len(items) != count:
+        sys.exit(
+            f"Error: {key} has {len(items)} values but VM_COUNT is {count}."
+        )
+    return items
+
+
+def _pipx_install() -> list[str]:
+    """The entrypoint's install step, as lines of an 8-space block scalar."""
+    return [
+        "        for i in 1 2 3 4 5; do",
+        "          PIPX_BIN_DIR=/usr/local/bin pipx install --force \\",
+        "            /tmp/qemu-tool-build && break",
+        "          sleep 10",
+        "        done",
+    ]
+
+
+def render_compose(spec: dict[str, Any], env_name: str, digest: str) -> str:
+    out: list[str] = ["---"]
+    out.append("# Generated by `qemu-tool gen-compose`. Do not edit.")
+    out.append("#")
+    out.append(f"# Regenerate after changing {env_name}:")
+    out.append(f"#   qemu-tool gen-compose --env-file {env_name}")
+    out.append("#")
+    out.append(f"# env-file: {env_name}")
+    out.append(f"{_PROVENANCE}{digest}")
+    out.append("")
+    out.append("x-ernic-common: &ernic-common")
+    out.append('  image: "${ERNIC_IMAGE}"')
+    # Docker's default soft nofile limit is 1024, and the mesh manager does not
+    # close the socket of a node it evicts -- a reconnecting worker gets a new
+    # node id and a new fd, and the old one is never reclaimed. At fleet scale
+    # the manager therefore leaks roughly one fd per eviction until accept()
+    # starts returning EMFILE, after which it spins in a tight error loop (3.3
+    # GB of log in 12 hours, measured at 40 VMs) and the guest attached to it
+    # dies. Raising the limit does not fix the leak, it just moves the wall far
+    # enough out that a fleet-length run finishes first.
+    out.append("  ulimits:")
+    out.append("    nofile:")
+    out.append(f"      soft: {spec['ernic_nofile']}")
+    out.append(f"      hard: {spec['ernic_nofile']}")
+    out.append("  volumes:")
+    out.append("    - vfu-sockets:/run/vfu")
+    out.append("    - ernic-stats:/run/ernic-stats")
+    out.append("  environment:")
+    out.append("    - ERNIC_DEBUG_MESH")
+    out.append("")
+    out.append("x-qemu-common: &qemu-common")
+    out.append('  image: "${QEMU_IMAGE}"')
+    out.append("  volumes:")
+    out.append("    - vfu-sockets:/run/vfu:ro")
+    out.append('    - "${VM_IMAGES_DIR}:${VM_IMAGES_DIR}"')
+    out.append('    - "${QEMU_TOOL_SRC:-../../..}:/qemu-tool-src:ro"')
+    out.append("  devices:")
+    out.append("    - /dev/kvm")
+    out.append('  restart: "no"')
+    out.append("")
+    out.append("services:")
+
+    for vm in spec["vms"]:
+        n = vm["n"]
+        out.append("")
+        if n == 1:
+            out.append(f"  # ---- VM {n} NIC: TCP mesh manager ----")
+        else:
+            out.append(f"  # ---- VM {n} NIC: TCP mesh worker ----")
+        out.append(f"  ernic-{n}:")
+        out.append("    <<: *ernic-common")
+        # The node's hostname IS its mesh address: each rocm-ernic advertises
+        # gethostname() to the manager and every peer then resolves that name
+        # to dial it, so the default (the container id) puts Docker's embedded
+        # DNS on every one of the fleet's N*(N-1) peer links. Naming the
+        # container after its own address makes that a numeric getaddrinfo.
+        out.append(f"    hostname: {vm['ernic_addr']}")
+        out.append("    networks:")
+        out.append("      fleet:")
+        out.append(f"        ipv4_address: {vm['ernic_addr']}")
+        if n == 1:
+            backend = f"tcp:manager:listen:{spec['tcp_port']}"
+            # A manager restart leaves every guest driver wedged on a DSR
+            # timeout that only `down && up` clears (AGENTS.md issue 7), so
+            # a crash must stay visible rather than be papered over.
+            out.append('    restart: "no"')
+        else:
+            # The manager by address, not by name. Resolving "ernic-1" here
+            # puts Docker's embedded DNS in the path of every worker's start,
+            # and at fleet scale that is where the fleet breaks.
+            backend = f"tcp:worker:{spec['vms'][0]['ernic_addr']}:{spec['tcp_port']}"
+            out.append("    restart: on-failure")
+        out.append("    command:")
+        out.append("      - rocm-ernic")
+        out.append("      - -s")
+        out.append(f"      - {vm['ernic_sock']}")
+        out.append("      - -b")
+        out.append(f'      - "{backend}"')
+        out.append("      - -m")
+        out.append(f'      - "{vm["mac"]}"')
+        out.append("      - -S")
+        out.append(f"      - {vm['stats_file']}")
+        if n != 1:
+            out.append("    depends_on:")
+            out.append("      ernic-1:")
+            out.append("        condition: service_healthy")
+        out.append("    healthcheck:")
+        if n == 1:
+            # The socket file alone is not enough for the manager: workers
+            # gate on this condition and then dial its TCP port, so the check
+            # has to prove that port is accepting, not just that the process
+            # got as far as binding a unix socket. No nc or ss in the image;
+            # python3 is there.
+            out.append(
+                '      test: ["CMD", "python3", "-c", '
+                f'"import socket,sys; s=socket.create_connection((\'127.0.0.1\','
+                f'{spec["tcp_port"]}),2); s.close()"]'
+            )
+        else:
+            out.append(f'      test: ["CMD", "test", "-S", "{vm["ernic_sock"]}"]')
+        out.append("      interval: 2s")
+        out.append("      timeout: 5s")
+        out.append("      retries: 30")
+        out.append("      start_period: 5s")
+
+    for vm in spec["vms"]:
+        n = vm["n"]
+        out.append("")
+        out.append(f"  # ---- VM {n} GPU ----")
+        out.append(f"  rocjitsu-{n}:")
+        out.append("    <<: *ernic-common")
+        out.append('    image: "${ROCJITSU_IMAGE}"')
+        out.append("    networks:")
+        out.append("      fleet:")
+        out.append(f"        ipv4_address: {vm['rocjitsu_addr']}")
+        out.append("    restart: on-failure")
+        out.append("    command:")
+        out.append("      - rocjitsu")
+        out.append("      - --config")
+        out.append(f"      - /usr/local/share/rocjitsu/configs/{vm['rocjitsu_config']}")
+        out.append("      - --vfio-socket")
+        out.append(f"      - {vm['rocjitsu_sock']}")
+        out.append("    healthcheck:")
+        out.append(f'      test: ["CMD", "sh", "-c", "test -S {vm["rocjitsu_sock"]}"]')
+        out.append("      interval: 2s")
+        out.append("      timeout: 5s")
+        out.append("      retries: 30")
+        out.append("      start_period: 5s")
+
+    for vm in spec["vms"]:
+        n = vm["n"]
+        out.append("")
+        out.append(f"  # ---- VM {n}: guest ernic IP {vm['ip']} ----")
+        out.append(f"  qemu-{n}:")
+        out.append("    <<: *qemu-common")
+        out.append("    networks:")
+        out.append("      fleet:")
+        out.append(f"        ipv4_address: {vm['qemu_addr']}")
+        out.append(f'    shm_size: "{vm["shm_size"]}"')
+        out.append("    depends_on:")
+        out.append(f"      ernic-{n}:")
+        out.append("        condition: service_healthy")
+        out.append(f"      rocjitsu-{n}:")
+        out.append("        condition: service_healthy")
+        out.append("    ports:")
+        out.append(f'      - "{vm["ssh_port"]}:2222"')
+        out.append("    entrypoint:")
+        out.append("      - /bin/sh")
+        out.append("      - -c")
+        out.append("      - |")
+        out.append("        cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build")
+        # pipx reaches pypi.org for the build backend, and a fleet's worth of
+        # these racing at container start is enough to make Docker's embedded
+        # resolver drop queries -- measured at 48 VMs, where 12 guests died on
+        # "Failed to resolve 'pypi.org'" before QEMU ever started. Retry
+        # rather than lose the guest.
+        out.extend(_pipx_install())
+        out.append("        exec qemu-tool run-vm \\")
+        out.append('          --images "${VM_IMAGES_DIR}" \\')
+        out.append(f'          --vm-name "{vm["name"]}" \\')
+        out.append("          --ssh-port 2222 \\")
+        out.append("          --backing-shared \\")
+        for flag, value in vm["flags"]:
+            out.append(f'          {flag} "{value}" \\')
+        # Sockets are passed explicitly rather than globbed: with a fleet's
+        # worth of sockets on one shared tmpfs, the single-VM stack's
+        # `ls /run/vfu/*.sock` would attach every device to every VM.
+        out.append(f'          --vfio-userdev "{vm["ernic_sock"]},{vm["rocjitsu_sock"]}"')
+
+    out.append("")
+    out.append("  # ---- metrics (opt-in: --profile metrics) ----")
+    out.append("  ernic-stats-exporter:")
+    out.append("    <<: *qemu-common")
+    out.append("    profiles: [metrics]")
+    out.append("    networks:")
+    out.append("      fleet:")
+    out.append(f"        ipv4_address: {spec['exporter_addr']}")
+    out.append("    devices: []")
+    out.append("    volumes:")
+    out.append("      - ernic-stats:/run/ernic-stats:ro")
+    out.append('      - "${QEMU_TOOL_SRC:-../../..}:/qemu-tool-src:ro"')
+    out.append("    entrypoint:")
+    out.append("      - /bin/sh")
+    out.append("      - -c")
+    out.append("      - |")
+    out.append("        cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build")
+    out.extend(_pipx_install())
+    out.append("        exec qemu-tool ernic-stats \\")
+    out.append("          --stats-dir /run/ernic-stats \\")
+    out.append(f"          --port {spec['stats_port']}")
+    out.append("")
+    out.append("  prometheus:")
+    out.append("    image: docker.io/prom/prometheus:latest")
+    out.append("    profiles: [metrics]")
+    out.append("    networks:")
+    out.append("      fleet:")
+    out.append(f"        ipv4_address: {spec['prometheus_addr']}")
+    out.append("    restart: on-failure")
+    out.append("    volumes:")
+    out.append("      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro")
+    out.append("      - prom-data:/prometheus")
+    out.append("    command:")
+    out.append("      - --config.file=/etc/prometheus/prometheus.yml")
+    out.append(f"      - --storage.tsdb.retention.time={spec['prom_retention']}")
+    out.append("    ports:")
+    out.append(f'      - "{spec["prom_port"]}:9090"')
+
+    out.append("")
+    out.append("networks:")
+    out.append("  # Every service has a fixed address and nothing resolves a")
+    out.append("  # service name at run time. Docker's embedded DNS is a single")
+    out.append("  # resolver per network, and a fleet start burst saturates it:")
+    out.append("  # at 48 VMs, workers died with 'Temporary failure in name")
+    out.append("  # resolution', and because the mesh allocates a NEW node id on")
+    out.append("  # every reconnect, the restarts walked the fleet toward the")
+    out.append("  # 64-node protocol ceiling. Third octet is the service family:")
+    out.append(f"  #   {_NET_INFRA} infra   {_NET_ERNIC} ernic   {_NET_ROCJITSU} rocjitsu   {_NET_QEMU} qemu")
+    out.append("  fleet:")
+    out.append("    driver: bridge")
+    out.append("    ipam:")
+    out.append("      config:")
+    out.append(f"        - subnet: {spec['net_prefix']}.0.0/16")
+    out.append("")
+    out.append("volumes:")
+    for name in ("vfu-sockets", "ernic-stats"):
+        out.append(f"  {name}:")
+        out.append("    driver: local")
+        out.append("    driver_opts:")
+        out.append("      type: tmpfs")
+        out.append("      device: tmpfs")
+    out.append("  prom-data:")
+    return "\n".join(out) + "\n"
+
+
+def render_prometheus(spec: dict[str, Any], env_name: str, digest: str) -> str:
+    out: list[str] = ["---"]
+    out.append("# Generated by `qemu-tool gen-compose`. Do not edit.")
+    out.append(f"# env-file: {env_name}")
+    out.append(f"{_PROVENANCE}{digest}")
+    out.append("")
+    out.append("global:")
+    out.append(f"  scrape_interval: {spec['prom_interval']}")
+    out.append("")
+    out.append("scrape_configs:")
+    out.append("  # The guests sit behind QEMU SLIRP inside their qemu")
+    out.append("  # containers and have no address on this network. The")
+    out.append("  # container is the target; --extra-hostfwd forwards :9100")
+    out.append("  # through to the guest's node-exporter. Each container has")
+    out.append("  # its own netns, so every VM uses the same port.")
+    out.append("  #")
+    out.append("  # Targets are addresses, not names: the compose file pins one")
+    out.append("  # per service so nothing in the fleet depends on Docker's")
+    out.append("  # embedded DNS, and a scrape loop is no exception.")
+    out.append("  - job_name: fleet-node")
+    out.append("    static_configs:")
+    for vm in spec["vms"]:
+        out.append(f"      - targets: [\"{vm['qemu_addr']}:9100\"]")
+        out.append("        labels:")
+        out.append(f'          vm: "{vm["n"]}"')
+        out.append(f'          vm_name: "{vm["name"]}"')
+    out.append("")
+    out.append("  - job_name: ernic-stats")
+    out.append("    static_configs:")
+    out.append(f"      - targets: [\"{spec['exporter_addr']}:{spec['stats_port']}\"]")
+    return "\n".join(out) + "\n"
+
+
+def run(
+    env_file: Path | None,
+    output_dir: Path,
+    check: bool = False,
+    dry_run: bool = False,
+) -> None:
+    path = find_env_file(env_file)
+    if path is None:
+        sys.exit("Error: no env file found. Pass --env-file.")
+    values = parse_env(path)
+    spec = plan(values)
+    digest = env_digest(path)
+    env_name = str(env_file) if env_file is not None else path.name
+
+    artifacts = {
+        "docker-compose.yml": render_compose(spec, env_name, digest),
+        "prometheus.yml": render_prometheus(spec, env_name, digest),
+    }
+
+    if dry_run:
+        for name, body in artifacts.items():
+            print(f"===== {name} =====")
+            print(body, end="")
+        return
+
+    if check:
+        stale = [
+            name for name, body in artifacts.items()
+            if not (output_dir / name).is_file()
+            or (output_dir / name).read_text() != body
+        ]
+        if stale:
+            sys.exit(
+                "Error: generated files are out of date: " + ", ".join(sorted(stale)) +
+                f"\nRegenerate with: qemu-tool gen-compose --env-file {env_name}"
+            )
+        print(f"Up to date: {output_dir}")
+        return
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for name, body in artifacts.items():
+        (output_dir / name).write_text(body)
+        print(f"Wrote {output_dir / name}")
+
+    _print_next_steps(spec, values)
+
+
+def _print_next_steps(spec: dict[str, Any], values: dict[str, str]) -> None:
+    backing = values.get("VM_BACKING_IMAGE", "")
+    first = spec["vms"][0]["name"]
+    images = _get(values, "VM_IMAGES_DIR")
+    print()
+    print(f"{spec['count']} VMs. If the images do not exist yet:")
+    print()
+    if backing:
+        print(f"  qemu-tool gen-vm --vm-name {first} \\")
+        print(f'      --backing-image "{backing}"')
+    else:
+        print(f"  qemu-tool gen-vm --vm-name {first}")
+    for vm in spec["vms"][1:]:
+        print(f"  qemu-tool gen-vm --vm-name {vm['name']} \\")
+        print(f"      --backing-file {images}/{first}-backing.qcow2")
