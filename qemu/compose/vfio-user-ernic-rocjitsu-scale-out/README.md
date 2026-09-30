@@ -268,6 +268,9 @@ around ~40, expect it to move with host speed, and note two consequences:
   `restart: on-failure`, `qemu` is `restart: "no"`. By the time a worker on its
   fifteenth attempt registers, the VM it exists to serve has been dead for ten
   minutes. The 24 stuck workers matched the 24 dead guests exactly.
-- **Failed registrations leak manager fds too** — 623 to 943 sockets in fifteen
-  minutes with 24 workers retrying. `ERNIC_NOFILE` makes that days rather than
-  minutes, but a fleet parked above the wall leaks continuously.
+- **Failed registrations leak manager fds too, and faster than evictions do.**
+  Measured over a six-hour run parked above the wall: 8006 worker restarts and
+  50 fds/min at the manager, reaching 18164 open descriptors. That is Docker's
+  1024 default in 20 minutes and `ERNIC_NOFILE=65536` in about 22 hours — a
+  working day, not an indefinite reprieve. Size the fleet below the wall; no
+  fd limit makes sitting above it survivable.

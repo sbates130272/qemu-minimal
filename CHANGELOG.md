@@ -38,13 +38,20 @@ All notable changes to this project will be documented in this file.
   protocol ceiling. Naming each container after its own address makes those
   numeric lookups: 4497 resolution failures at 48 VMs became zero.
 
-  Measured ceiling on a 128-core / 503G host at 4 vCPU and 8G per VM: 40 VMs
-  boot clean in 117 s, 44 lose 3 guests, 48 lose 7. The binding constraint is
-  CPU, not memory (48 VMs used 107G of 503G) — the manager's heartbeat timeout
-  is 20 s of wall clock and is not tunable, so an oversubscribed host makes it
-  mistake slow nodes for dead ones and evict them, taking their guests down
-  with `vfio-user: timed out waiting for reply`. Full write-up in the stack's
-  README; the fleet-wide consequences are AGENTS.md issues 13 and 14.
+  Measured ceiling on a 128-core / 503G host at 4 vCPU and 8G per VM: 32 VMs
+  boot clean every time, 40 is marginal (40/40 once, 37/40 on a repeat), 44
+  lose 3 guests, 48 lose 7. Memory is never the constraint — 48 VMs used 107G
+  of 503G. Two things bind instead. The manager's heartbeat timeout is 20 s of
+  wall clock and is not tunable, so an oversubscribed host makes it mistake
+  slow nodes for dead ones and evict them, taking their guests down with
+  `vfio-user: timed out waiting for reply`. And the mesh stops registering new
+  workers at about 40 nodes: asking for 64 VMs settles at 40 of 64, with the
+  rest dying on `TCP: Registration timeout` on an idle host as much as a busy
+  one, because the mesh is a full mesh and registering node N+1 costs N new
+  connections against a fixed timeout. The 64-node protocol cap in
+  `rdma_backend_tcp.c` is therefore not reachable — the 64-VM fleet peaked at
+  node id 30. Full write-up in the stack's README; the fleet-wide consequences
+  are AGENTS.md issues 13, 14 and 17.
 
   Every ernic service now sets `ulimits.nofile` from a new `ERNIC_NOFILE`
   setting (default 65536). Docker's default soft limit is 1024, and the manager

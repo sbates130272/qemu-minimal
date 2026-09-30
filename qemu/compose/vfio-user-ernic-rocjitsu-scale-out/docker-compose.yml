@@ -5,7 +5,7 @@
 #   qemu-tool gen-compose --env-file qemu/env.scale-out
 #
 # env-file: qemu/env.scale-out
-# env-sha256: e4b9ed72f2266298d057ee73695887fd869384a2dac823e09dc5c622a90a8fef
+# env-sha256: c406ef4ad8de91e668546be513cc86993eef6f4c1802a82111420601e7842317
 
 x-ernic-common: &ernic-common
   image: "${ERNIC_IMAGE}"

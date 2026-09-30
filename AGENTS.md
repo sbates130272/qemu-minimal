@@ -109,9 +109,11 @@ rule each for two guests. Do not "fix" such a key by padding it to `VM_COUNT`.
 wedges every guest on a DSR timeout that only `down && up` clears, and
 `on-failure` would turn a visible crash into a quiet wedge.
 
-Ceilings, nearest first: the mesh topology payload caps at 64 nodes
-(`rdma_backend_tcp.c`), `VM_SHM_SIZE × VM_COUNT` must fit `/dev/shm`, and
-`VM_VCPUS × VM_COUNT` should not exceed `nproc`. `VM_VCPUS` must stay ≥ 4 or
+Ceilings, nearest first: **the mesh stops registering new workers at about 40
+nodes** (issue 17 — the 64-node topology payload cap in `rdma_backend_tcp.c` is
+not reachable), `VM_VCPUS × VM_COUNT` should not exceed `nproc` plus about 25%
+(issue 14), and `VM_SHM_SIZE × VM_COUNT` must fit `/dev/shm`. Memory never
+binds in practice: 48 VMs used 107G of 503G. `VM_VCPUS` must stay ≥ 4 or
 `ionic_rdma` never probes.
 
 ## rocm-ernic driver and userspace provider (in-VM)
@@ -416,10 +418,14 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
       worker on its fifteenth attempt registers, the VM it exists to serve has
       been dead for ten minutes. The 24 stuck workers matched the 24 dead
       guests exactly.
-    - **Failed registrations leak manager fds too.** The manager went 623 ->
-      943 sockets in about fifteen minutes with 24 workers retrying. Issue 15's
-      `ERNIC_NOFILE` keeps that from becoming EMFILE for days rather than
-      minutes, but a fleet parked above the wall leaks continuously.
+    - **Failed registrations leak manager fds too, and faster than evictions
+      do.** Measured over a six-hour run parked above the wall: **8006 worker
+      restarts** and **50 fds/min** at the manager, reaching 18164 open
+      descriptors. Extrapolated, that is Docker's 1024 default in **20
+      minutes** and issue 15's `ERNIC_NOFILE=65536` in about **22 hours** — so
+      raising the limit buys a working day, not an indefinite reprieve. A
+      fleet left above the wall will eventually reach EMFILE whatever the
+      limit is; the fix is to size the fleet below it.
 
 ## Git / GitHub
 
