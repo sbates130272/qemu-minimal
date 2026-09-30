@@ -10,14 +10,29 @@ from typing import Any
 from . import __version__
 from .caps import probe_caps
 from .config import VMConfig
-from .compose import _DEFAULT_STACK, _STACKS, run as compose_run
+from .compose import (
+    _DEFAULT_STACK,
+    _GENERATED_STACKS,
+    _SOURCE_COMPOSE_ROOT,
+    _STACKS,
+    _compose_dir,
+    run as compose_run,
+)
 from .envfile import load as load_env_file
+from .ernic_stats import run as ernic_stats_run
+from .gen_compose import run as gen_compose_run
 from .gen_vm import run as gen_vm_run
 from .libvirt_xml import LibvirtXml
 from .list_vms import run as list_vms_run
 from .run_vm import build_command, run as run_vm_run
 
 _UNSET = object()  # sentinel for "flag not provided on CLI"
+
+_DEFAULT_GENERATED_STACK = "vfio-user-ernic-rocjitsu-scale-out"
+
+# dpkg owns this tree. Generating into it would leave a package file modified
+# with no record, so it has to be asked for by name.
+_INSTALLED_COMPOSE_ROOT = Path("/usr/share/qemu-tool/compose")
 
 
 # ---------------------------------------------------------------------------
@@ -45,11 +60,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
 
     shared = _shared_parent()
-    sub = parser.add_subparsers(metavar="{run-vm,gen-vm,compose,list}")
+    sub = parser.add_subparsers(
+        metavar="{run-vm,gen-vm,gen-compose,compose,ernic-stats,list}"
+    )
 
     _add_run_vm(sub, shared)
     _add_gen_vm(sub, shared)
+    _add_gen_compose(sub)
     _add_compose(sub)
+    _add_ernic_stats(sub)
     _add_list(sub)
 
     return parser
@@ -183,6 +202,66 @@ def _add_compose(sub: argparse._SubParsersAction) -> None:
     p.set_defaults(func=_compose_cmd)
 
 
+def _add_gen_compose(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser(
+        "gen-compose",
+        help="Generate a scale-out compose stack from an env file.",
+        description=(
+            "Generate docker-compose.yml and prometheus.yml for an N-VM "
+            "rocm-ernic mesh from VM_COUNT and the per-VM lists in the env "
+            "file. Per-VM values are comma-lists, not numbered keys; see "
+            "qemu/env.scale-out."
+        ),
+    )
+    p.add_argument(
+        "--stack", choices=sorted(_GENERATED_STACKS), default=_DEFAULT_GENERATED_STACK,
+        help=f"Stack to generate. Default: {_DEFAULT_GENERATED_STACK}.",
+    )
+    p.add_argument(
+        "--env-file", type=Path, default=None, metavar="FILE",
+        help="Settings file (see qemu/env.scale-out). Overrides the search path.",
+    )
+    p.add_argument(
+        "--output-dir", type=Path, default=None, metavar="DIR",
+        help="Where to write. Default: the resolved stack directory.",
+    )
+    p.add_argument(
+        "--check", action="store_true",
+        help="Exit non-zero if regenerating would change anything. Writes nothing.",
+    )
+    p.add_argument(
+        "--dry-run", action="store_true",
+        help="Print the generated files to stdout instead of writing them.",
+    )
+    p.set_defaults(func=_gen_compose_cmd)
+
+
+def _add_ernic_stats(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser(
+        "ernic-stats",
+        help="Serve rocm-ernic stats files as Prometheus metrics.",
+        description=(
+            "Parse the stats dumps written by 'rocm-ernic -S PATH' and serve "
+            "them on /metrics in Prometheus text format. Metric and label "
+            "names match rocm-ernic's own prometheus/ernic-exporter, so "
+            "ernic-dashboard.json works against this endpoint unmodified."
+        ),
+    )
+    p.add_argument(
+        "--stats-dir", type=Path, default=Path("/run/ernic-stats"), metavar="DIR",
+        help="Directory of *.stats files. Default: /run/ernic-stats.",
+    )
+    p.add_argument(
+        "--port", type=int, default=9840, metavar="PORT",
+        help="Listen port. Default: 9840 (matches the upstream exporter).",
+    )
+    p.add_argument(
+        "--addr", default="0.0.0.0", metavar="ADDR",
+        help="Listen address. Default: 0.0.0.0.",
+    )
+    p.set_defaults(func=_ernic_stats_cmd)
+
+
 def _add_list(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
         "list",
@@ -229,6 +308,10 @@ def _add_gen_vm(
     p.add_argument("--no-backing", action="store_true", default=_UNSET)
     p.add_argument("--restore-image", action="store_true", default=_UNSET)
     p.add_argument("--backing-file", type=Path, default=_UNSET, metavar="FILE")
+    p.add_argument("--backing-image", default=_UNSET, metavar="OCI_REF",
+                   help="Pull a published backing qcow2 with oras, then overlay "
+                        "on it. Same job as the cloud-image download, different "
+                        "source; no cloud-init and no bake.")
     p.add_argument("--ansible-playbook", type=Path, default=_UNSET, metavar="FILE",
                    help="Path to an Ansible playbook to run against the VM image after cloud-init.")
     p.add_argument("--ca-cert", type=Path, default=_UNSET, metavar="FILE",
@@ -283,6 +366,27 @@ def _compose_cmd(args: argparse.Namespace) -> None:
 
 def _list_cmd(args: argparse.Namespace) -> None:
     list_vms_run(as_json=args.as_json, qemu_tool_only=args.qemu_tool_only)
+
+
+def _gen_compose_cmd(args: argparse.Namespace) -> None:
+    output_dir = args.output_dir
+    if output_dir is None:
+        try:
+            output_dir = _compose_dir(args.stack)
+        except FileNotFoundError:
+            # First generation: the stack directory does not exist yet.
+            output_dir = _SOURCE_COMPOSE_ROOT / args.stack
+        if output_dir.is_relative_to(_INSTALLED_COMPOSE_ROOT):
+            sys.exit(
+                f"Error: {output_dir} is owned by the qemu-tool package.\n"
+                "Pass --output-dir to generate somewhere writable, or name "
+                "that path explicitly if you really mean to modify it."
+            )
+    gen_compose_run(args.env_file, output_dir, check=args.check, dry_run=args.dry_run)
+
+
+def _ernic_stats_cmd(args: argparse.Namespace) -> None:
+    ernic_stats_run(args.stats_dir, args.port, args.addr)
 
 
 def _gen_vm_cmd(args: argparse.Namespace) -> None:
@@ -391,6 +495,16 @@ def _extract_cli_overrides(
         _take("no_backing", "no_backing")
         _take("restore_image", "restore_image")
         _take("backing_file", "backing_file")
+        _take("backing_image", "backing_image")
+        # The two are mutually exclusive, but only within one layer. A fleet's
+        # env file names VM_BACKING_IMAGE for VM 1, and every other VM is then
+        # created with --backing-file against the image that fetched -- so an
+        # explicit flag has to clear its partner rather than collide with it,
+        # the same way CLI outranks the env file everywhere else.
+        if ns.get("backing_file", _UNSET) is not _UNSET:
+            overrides["backing_image"] = None
+        elif ns.get("backing_image", _UNSET) is not _UNSET:
+            overrides["backing_file"] = None
         _take("ansible_playbook", "ansible_playbook")
         _take("ca_cert_file", "ca_cert")
         _take("ansible_only", "ansible_only")
@@ -411,7 +525,8 @@ def _merge(base: VMConfig, overrides: dict[str, Any]) -> VMConfig:
         if v is not _UNSET and v is not None or k in (
             # fields that can legitimately be set to None/False
             "filesystem", "nvme", "nvme_trace", "nvme_trace_file",
-            "nvme_lbaf_mask", "mcast_group", "qmp_socket", "backing_file",
+            "nvme_lbaf_mask", "mcast_group", "qmp_socket",
+            "backing_file", "backing_image",
             "ansible_playbook", "packages",
             "qemu_guest_agent",
         ):

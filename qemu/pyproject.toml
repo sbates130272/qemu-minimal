@@ -93,6 +93,6 @@ packages = [
 
 [tool.setuptools.package-data]
 "qemu_tool" = ["man/qemu-tool.1"]
-"qemu_tool.share" = ["env.example"]
-"qemu_tool.share.compose" = ["*/docker-compose.yml", "*/README.md"]
+"qemu_tool.share" = ["env.example", "env.scale-out"]
+"qemu_tool.share.compose" = ["*/docker-compose.yml", "*/prometheus.yml", "*/README.md"]
 "qemu_tool.share.packages_d" = ["packages-*"]

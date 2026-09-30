@@ -14,17 +14,20 @@ Depends: ${python3:Depends},
          qemu-utils
 Recommends: cloud-image-utils,
             openssh-client,
-            wget
+            wget,
+            zstd
 Suggests: ansible,
           dnsmasq-base,
           docker.io,
           iproute2
 Description: CLI tool for running, generating and listing QEMU VMs
- qemu-tool provides four subcommands: run-vm launches a QEMU virtual machine
+ qemu-tool provides six subcommands: run-vm launches a QEMU virtual machine
  with a flexible set of options for networking, storage, PCI passthrough, and
  architecture (amd64, arm64, riscv64); gen-vm creates a new cloud-init-seeded
  VM image using debootstrap or a cloud image download; compose wraps
- docker compose for the vfio-user GPU VM stacks; and list reports the QEMU VMs
+ docker compose for the vfio-user GPU VM stacks; gen-compose generates an
+ N-VM rocm-ernic mesh stack from a settings file; ernic-stats serves the
+ mesh's stats files as Prometheus metrics; and list reports the QEMU VMs
  running on the node, identifying which of them qemu-tool started.
  .
  The package itself has no Python runtime dependencies, but the subcommands

@@ -14,6 +14,7 @@ from .identity import match_identity
 _PROC = Path("/proc")
 _CONTAINER_ID_RE = re.compile(r"\b([0-9a-f]{64})\b")
 _HOSTFWD_RE = re.compile(r"hostfwd=tcp::(\d+)-:22")
+_PUBLISHED_RE = re.compile(r":(\d+)->(\d+)/tcp")
 _CLK_TCK = os.sysconf("SC_CLK_TCK")
 
 _ARCH_BY_BINARY = {
@@ -75,6 +76,14 @@ def _describe(pid: int, argv: list[str], containers: dict[str, str]) -> dict[str
         name = Path(image).stem  # pre-marker VMs: best-effort from the disk
     machine = _opt(argv, "-machine") or ""
     ssh = _HOSTFWD_RE.search(" ".join(argv))
+    guest_port = int(ssh.group(1)) if ssh else None
+    container_name, published = containers.get(_container_id(pid) or "",
+                                               (None, {}))
+    # Uncontainerised, the guest's hostfwd port *is* the host port. Inside a
+    # container it is only the port in that netns, and the fleet stacks give
+    # every guest 2222 there -- what a user can actually ssh to is whatever
+    # docker published it as.
+    host_port = published.get(guest_port) if container_name else guest_port
     return {
         "pid": pid,
         "name": name,
@@ -83,11 +92,12 @@ def _describe(pid: int, argv: list[str], containers: dict[str, str]) -> dict[str
         "arch": _arch(argv[0]),
         "vcpus": _vcpus(argv),
         "memory_mib": _memory(argv),
-        "ssh_port": int(ssh.group(1)) if ssh else None,
+        "ssh_port": guest_port,
+        "ssh_port_host": host_port,
         "kvm": "accel=kvm" in machine,
         "image": image,
         "vfio_user_sockets": _vfio_sockets(argv),
-        "container": containers.get(_container_id(pid) or "", None),
+        "container": container_name,
         "user": _owner(pid),
         "uptime_seconds": _uptime(pid),
     }
@@ -207,23 +217,44 @@ def _container_id(pid: int) -> str | None:
     return m.group(1) if m else None
 
 
-def _container_names() -> dict[str, str]:
-    """Full container id -> name. Best effort; docker may be absent."""
+def _container_names() -> dict[str, tuple[str, dict[int, int]]]:
+    """Full container id -> (name, {container port: published host port}).
+
+    The published map matters because a containerised guest's -hostfwd port is
+    the port inside that container's netns, and the fleet stacks give every
+    guest the same one -- distinguishing them is the job of the published
+    mapping, not of the QEMU command line.
+    """
     try:
         out = subprocess.run(
-            ["docker", "ps", "--no-trunc", "--format", "{{.ID}}\t{{.Names}}"],
+            ["docker", "ps", "--no-trunc",
+             "--format", "{{.ID}}\t{{.Names}}\t{{.Ports}}"],
             capture_output=True, text=True, timeout=5,
         )
     except (OSError, subprocess.SubprocessError):
         return {}
     if out.returncode != 0:
         return {}
-    names = {}
+    names: dict[str, tuple[str, dict[int, int]]] = {}
     for line in out.stdout.splitlines():
-        cid, _, name = line.partition("\t")
+        cid, _, rest = line.partition("\t")
+        name, _, ports = rest.partition("\t")
         if cid and name:
-            names[cid] = name
+            names[cid] = (name, _published_ports(ports))
     return names
+
+
+def _published_ports(ports: str) -> dict[int, int]:
+    """Parse docker's Ports column into {container port: host port}.
+
+    A container publishing on both stacks is listed once per address family
+    ("0.0.0.0:2231->2222/tcp, [::]:2231->2222/tcp"); the host port is the same
+    in both, so last-wins is fine.
+    """
+    published: dict[int, int] = {}
+    for m in _PUBLISHED_RE.finditer(ports):
+        published[int(m.group(2))] = int(m.group(1))
+    return published
 
 
 def _owner(pid: int) -> str | None:
@@ -267,6 +298,18 @@ def _fmt_uptime(seconds: int | None) -> str:
     return f"{h}h{m:02d}m" if h else f"{m}m"
 
 
+def _fmt_ssh(vm: dict[str, Any], show_split: bool) -> str:
+    """The SSH column: "host->guest" where they differ, else the one port.
+
+    Only splits when some VM in the listing actually differs, so an
+    uncontainerised listing is unchanged.
+    """
+    host, guest = vm["ssh_port_host"], vm["ssh_port"]
+    if not show_split:
+        return str(guest or "-")
+    return f"{host or '-'}->{guest or '-'}"
+
+
 def _print_table(vms: list[dict[str, Any]], qemu_tool_only: bool = False) -> None:
     if not vms:
         print("No qemu-tool VMs running." if qemu_tool_only
@@ -275,6 +318,7 @@ def _print_table(vms: list[dict[str, Any]], qemu_tool_only: bool = False) -> Non
 
     headers = ["PID", "NAME", "SOURCE", "ARCH", "VCPU", "MEM", "SSH",
                "KVM", "UPTIME", "CONTAINER", "VFIO-USER"]
+    show_split = any(v["ssh_port_host"] != v["ssh_port"] for v in vms)
     rows = []
     for v in vms:
         source = v["source"]
@@ -287,7 +331,7 @@ def _print_table(vms: list[dict[str, Any]], qemu_tool_only: bool = False) -> Non
             v["arch"],
             str(v["vcpus"] or "-"),
             f"{v['memory_mib']}M" if v["memory_mib"] else "-",
-            str(v["ssh_port"] or "-"),
+            _fmt_ssh(v, show_split),
             "yes" if v["kvm"] else "no",
             _fmt_uptime(v["uptime_seconds"]),
             v["container"] or "-",

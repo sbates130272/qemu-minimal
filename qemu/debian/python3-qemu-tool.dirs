@@ -5,3 +5,4 @@ usr/share/qemu-tool/compose/vfio-user-ernic-vm
 usr/share/qemu-tool/compose/vfio-user-rocjitsu-vm
 usr/share/qemu-tool/compose/vfio-user-ernic-rocjitsu-vm
 usr/share/qemu-tool/compose/vfio-user-ernic-2vm
+usr/share/qemu-tool/compose/vfio-user-ernic-rocjitsu-scale-out
