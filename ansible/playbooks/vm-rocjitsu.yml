@@ -125,6 +125,32 @@
         mode: '0644'
       become: true
 
+    # Pre-flight for gap mode: the gap set lands *beside* the packaged blobs
+    # rather than replacing them, so those blobs have to be present first
+    # (amdgpu-dkms-firmware >=31.60). Detect their absence before generating
+    # stubs and fall back silently to full mode when the driver package is
+    # older. This lets callers on a fresh cloud image with whatever ROCm
+    # version the repo currently serves avoid having to know whether it
+    # predates 31.60 or not -- the generator just stubs the whole set.
+    # Only useful when generation is enabled; the hard-fail below still
+    # catches the generate_firmware=false + gap + missing-blobs case.
+    - name: Check whether driver-packaged gfx1250 firmware is present
+      ansible.builtin.stat:
+        path: /lib/firmware/updates/amdgpu/gc_12_1_0_mec.bin
+      register: _rj_pkg_fw_precheck
+      become: true
+      when:
+        - rocjitsu_generate_firmware | bool
+        - rocjitsu_firmware_set == 'gap'
+
+    - name: Fall back to full firmware set when driver package predates 31.60
+      ansible.builtin.set_fact:
+        rocjitsu_firmware_set: full
+      when:
+        - rocjitsu_generate_firmware | bool
+        - rocjitsu_firmware_set == 'gap'
+        - not (_rj_pkg_fw_precheck.stat.exists | default(true))
+
     # Everything from here to the temp-dir cleanup runs on the *controller*
     # and needs a Docker daemon there, which is what rocjitsu_generate_firmware
     # gates. One when: on the block rather than seven copies -- and the
@@ -420,6 +446,13 @@
           inc_old = '#include <linux/sched/coredump.h>'
           inc_new = '#include <linux/version.h>\n#include <linux/sched/coredump.h>'
           if old not in content or inc_old not in content:
+              # The gate may have been removed upstream (amdgpu-dkms >=7.1.3
+              # no longer has get_dumpable/SUID_DUMP_USER at this site).
+              # If neither the old code nor any recognisable ptrace gate is
+              # present, the file is already compatible with kernel 7.2.x.
+              if 'get_dumpable' not in content and 'SUID_DUMP_USER' not in content:
+                  print('ptrace gate absent in this version — no patch needed')
+                  sys.exit(0)
               print(f'target string not found in {path}', file=sys.stderr)
               sys.exit(1)
           content = content.replace(inc_old, inc_new, 1).replace(old, new, 1)
