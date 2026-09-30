@@ -26,6 +26,13 @@
     # long-form reasoning for each is on the tasks in vm-rocm.yml.
     vm_rocm_mainline_kernel: true
     vm_rocm_suppress_dkms: true
+    # Pin the AMDGPU kernel driver to 31.60: this is the first directory on
+    # repo.radeon.com/amdgpu/ that ships amdgpu-dkms 7.1.9 and
+    # amdgpu-dkms-firmware >=31.60 (required by the default "gap" firmware
+    # set and by the KFD ptrace patch). rocm-latest auto-discovers latest
+    # from the directory listing, which may lag behind newly published
+    # directories; pin explicitly so CI always gets the right version.
+    rocm_setup_amdgpu_driver_version: "31.60"
     # Silences the slim pass at the end of vm-rocm.yml *and* the one at the end
     # of vm-basic.yml underneath it -- import vars propagate through nested
     # imports. The rocjitsu play below patches and rebuilds /usr/src/amdgpu-*
