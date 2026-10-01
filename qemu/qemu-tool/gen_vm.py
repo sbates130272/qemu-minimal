@@ -555,7 +555,20 @@ def _first_boot(cfg: VMConfig, images: Path, backing: Path) -> None:
         "-netdev", "user,id=net0",
         "-device", f"virtio-net-pci,netdev=net0,mac={_effective_mac(cfg)}",
     ]
-    subprocess.run(cmd, check=True)
+    # Without KVM, emulation is slow enough that cloud-init's rootfs expand
+    # (growpart + resize2fs) can take 30+ minutes on arm64/riscv64. Cap the
+    # wait so a hung guest produces a clear error rather than silently burning
+    # the CI job timeout.
+    boot_timeout = None if cfg.kvm else 3300  # 55 min; job ceiling is 60 min
+    try:
+        subprocess.run(cmd, check=True, timeout=boot_timeout)
+    except subprocess.TimeoutExpired:
+        sys.exit(
+            f"Error: first boot timed out after {boot_timeout}s on "
+            f"{cfg.arch} (no KVM). cloud-init did not complete — "
+            f"check rootfs expansion (growpart/resize2fs) in the "
+            f"QEMU console log."
+        )
 
 
 def _arch_args_for_gen(cfg: VMConfig, kvm: str) -> list[str]:
@@ -568,8 +581,10 @@ def _arch_args_for_gen(cfg: VMConfig, kvm: str) -> list[str]:
             "-bios", "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
         ]
     if cfg.arch == "riscv64":
+        # Avoid a trailing comma in the machine string when kvm is empty.
+        machine = f"virt{kvm}" if kvm else "virt"
         return [
-            "-machine", f"virt,{kvm}",
+            "-machine", machine,
             "-kernel", "/usr/lib/u-boot/qemu-riscv64_smode/uboot.elf",
         ]
     sys.exit(f"Error: no ARCH mapping for '{cfg.arch}'")
