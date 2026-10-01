@@ -147,10 +147,11 @@ None of this is done by hand in this repo. Two pieces of automation own it:
 - `sbates130272.rocm_ernic.ernic_guest_setup` from the collection builds and
   installs the DKMS package, the rdma-core provider and the NIC config.
 
-The kernel ref is pinned once as `ernic_ionic_kernel_ref` in
-[`vm-ernic.yml`](ansible/playbooks/vm-ernic.yml) and feeds
-`ionic_image_kernel_ref` from it, so the sources and the guest kernel cannot
-drift apart — `driver_ionic.yml` fails the build if they disagree on
+The kernel ref is pinned to `v7.2.4` (via `ionic_kernel_pin` in
+[`playbooks/vars/ernic-pins.yml`](ansible/playbooks/vars/ernic-pins.yml)) as
+`ernic_ionic_kernel_ref` in [`vm-ernic.yml`](ansible/playbooks/vm-ernic.yml),
+which also feeds `ionic_image_kernel_ref` so the sources and the guest kernel
+cannot drift apart — `driver_ionic.yml` fails the build if they disagree on
 major.minor.
 
 Device names are unchanged: Ethernet `rocm-ernic0`, IB `rocm-rdma-ernic0`, both
@@ -233,7 +234,8 @@ something every ROCm guest does to itself on the way past.
 See `rocm-ernic-enablement.md` for the full tracking list. Short version:
 
 1. Worker `server_ip` ARP hijack when VM IP = `192.168.100.1` — use `.11`/`.12`
-2. ARP log printf aliasing in `pvrdma_eth.c:483-493` (cosmetic, misleading)
+2. *(was ARP log printf aliasing in `pvrdma_eth.c:483-493` — file is gone
+   with the pre-ionic `driver/` tree deleted 2026-09-16)*
 3. Collection 0.2.0 is not on Galaxy — only 0.1.0 is published, and 0.1.0 is
    the pre-ionic collection. `requirements.yml` pins the upstream git SHA
    instead; move back to a Galaxy version pin once 0.2.0 ships there
@@ -431,7 +433,7 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
 
 - Default GitHub account: `sbates130272` (verify with `gh auth status`)
 - GPG signing required on all commits (`-S`), signoff required (`-s`)
-- Main branch: `main`; current work branch: `feat/working-compose`
+- Main branch: `main`; current work branch: `feat/pypi-package`
 - Never use `--no-verify` or `--no-gpg-sign`
 
 ## Cutting a release
