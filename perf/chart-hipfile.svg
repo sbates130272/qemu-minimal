@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 220" width="100%" role="img" aria-label="rocjitsu hipFile trend">
   <rect width="100%" height="100%" rx="18" fill="#ffffff" stroke="#d9e2f0"/>
-  <polyline fill="none" stroke="#198754" stroke-width="4" points="28.0,40.6 49.5,40.6 71.0,40.6 92.6,40.6 114.1,40.6 135.6,40.6 157.1,192.0 178.6,192.0 200.1,192.0 221.7,192.0 243.2,192.0 264.7,192.0 286.2,192.0 307.7,32.2 329.2,28.0 350.8,28.0 372.3,49.0 393.8,49.0 415.3,49.0 436.8,49.0 458.3,49.0 479.9,49.0 501.4,49.0 522.9,49.0 544.4,49.0 565.9,49.0 587.4,44.8 609.0,82.7 630.5,82.7 652.0,82.7"/>
+  <polyline fill="none" stroke="#198754" stroke-width="4" points="28.0,40.6 48.8,40.6 69.6,40.6 90.4,40.6 111.2,40.6 132.0,40.6 152.8,192.0 173.6,192.0 194.4,192.0 215.2,192.0 236.0,192.0 256.8,192.0 277.6,192.0 298.4,32.2 319.2,28.0 340.0,28.0 360.8,49.0 381.6,49.0 402.4,49.0 423.2,49.0 444.0,49.0 464.8,49.0 485.6,49.0 506.4,49.0 527.2,49.0 548.0,49.0 568.8,44.8 589.6,82.7 610.4,82.7 631.2,82.7 652.0,103.7"/>
   <text x="28" y="34" fill="#111827" font-family="system-ui,sans-serif" font-size="18" font-weight="700">rocjitsu hipFile</text>
   <text x="28" y="56" fill="#4b5563" font-family="system-ui,sans-serif" font-size="12">oldest run at left, newest at right</text>
   <text x="28" y="190" fill="#6b7280" font-family="system-ui,sans-serif" font-size="12">4cf27216</text>
   <text x="652" y="190" text-anchor="end" fill="#6b7280" font-family="system-ui,sans-serif" font-size="12">b7b730b7</text>
-  <text x="652" y="34" text-anchor="end" fill="#111827" font-family="system-ui,sans-serif" font-size="14" font-weight="700">latest: 149 MB/s</text>
+  <text x="652" y="34" text-anchor="end" fill="#111827" font-family="system-ui,sans-serif" font-size="14" font-weight="700">latest: 144 MB/s</text>
 </svg>
