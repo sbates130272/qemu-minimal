@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 220" width="100%" role="img" aria-label="rocjitsu GEMM trend">
   <rect width="100%" height="100%" rx="18" fill="#ffffff" stroke="#d9e2f0"/>
-  <polyline fill="none" stroke="#d94b52" stroke-width="4" points="28.0,153.8 48.8,153.8 69.6,153.8 90.4,153.8 111.2,153.8 132.0,153.8 152.8,28.0 173.6,28.0 194.4,28.0 215.2,28.0 236.0,28.0 256.8,28.0 277.6,28.0 298.4,152.7 319.2,155.6 340.0,155.6 360.8,156.8 381.6,156.8 402.4,156.8 423.2,156.8 444.0,156.8 464.8,156.8 485.6,156.8 506.4,156.8 527.2,156.8 548.0,156.8 568.8,192.0 589.6,156.4 610.4,156.4 631.2,156.4 652.0,28.4"/>
+  <polyline fill="none" stroke="#d94b52" stroke-width="4" points="28.0,153.8 48.1,153.8 68.3,153.8 88.4,153.8 108.5,153.8 128.6,153.8 148.8,28.0 168.9,28.0 189.0,28.0 209.2,28.0 229.3,28.0 249.4,28.0 269.5,28.0 289.7,152.7 309.8,155.6 329.9,155.6 350.1,156.8 370.2,156.8 390.3,156.8 410.5,156.8 430.6,156.8 450.7,156.8 470.8,156.8 491.0,156.8 511.1,156.8 531.2,156.8 551.4,192.0 571.5,156.4 591.6,156.4 611.7,156.4 631.9,28.4 652.0,61.0"/>
   <text x="28" y="34" fill="#111827" font-family="system-ui,sans-serif" font-size="18" font-weight="700">rocjitsu GEMM</text>
   <text x="28" y="56" fill="#4b5563" font-family="system-ui,sans-serif" font-size="12">oldest run at left, newest at right</text>
   <text x="28" y="190" fill="#6b7280" font-family="system-ui,sans-serif" font-size="12">4cf27216</text>
   <text x="652" y="190" text-anchor="end" fill="#6b7280" font-family="system-ui,sans-serif" font-size="12">b7b730b7</text>
-  <text x="652" y="34" text-anchor="end" fill="#111827" font-family="system-ui,sans-serif" font-size="14" font-weight="700">latest: 822 kFLOP/s</text>
+  <text x="652" y="34" text-anchor="end" fill="#111827" font-family="system-ui,sans-serif" font-size="14" font-weight="700">latest: 734 kFLOP/s</text>
 </svg>
