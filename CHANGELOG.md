@@ -4,6 +4,75 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **`ERNIC_TAP` gives fleet guests working Ethernet.** rocm-ernic's TCP mesh
+  carries RDMA payload only, so without a TAP the guest driver transmits, the
+  device drops the frames, ARP goes unanswered and `ib_send_bw` can never
+  complete the out-of-band exchange that precedes an inter-node transfer —
+  inter-node RDMA was simply not possible on any generated fleet. Each ernic
+  now gets a TAP that a short-lived sidecar bridges onto a shared `l2`
+  network, putting every guest on one L2 segment. Measured after: 31/31 peers
+  reachable from one guest on a 32-VM fleet, where it had been 100% loss.
+
+  `CAP_NET_ADMIN` lives in that sidecar, which exits once the wiring is up.
+  The long-running server needs only `/dev/net/tun` — attaching to a
+  pre-created, owned TAP needs no capability, verified against a fleet running
+  at Docker's default capability set. The sidecar image is built by compose
+  from a committed context rather than pulled: 32 containers each running
+  `apk add` at start is the same start-burst that already cost twelve guests
+  when `pipx install` raced pypi.org.
+
+- **Per-node `ERNIC_TCP_GUEST_GIDS`.** The mesh resolves a destination GID to
+  a node by asking each node which GIDs it owns, so the set is inherently
+  per-node and cannot live in the fleet-wide anchor. Derived here — EUI-64
+  link-local from the fleet MAC plus the guest IPv4 — rather than restated in
+  the settings file, and canonicalised through `ipaddress` so a MAC with small
+  leading octets cannot produce a non-canonical address the mesh will not
+  match.
+
+- **`PROM_DATA_DIR` bind-mounts the Prometheus TSDB.** A named volume buries
+  the record of a run under `/var/lib/docker/volumes` as root, invisible to
+  whoever ran the fleet and silently reused by the next run of a different
+  size. The container runs as `nobody`, so the directory needs
+  `chown 65534:65534` before `up`.
+
+- **A `Gen Compose Check` CI lane.** AGENTS.md and the stack README have both
+  claimed "`gen-compose --check` fails in CI" since the generator landed. It
+  did not — no workflow ran it, so a hand edit to the generated tree, or a
+  settings change without a regenerate, would have shipped undetected. The
+  lane now runs the unit tests, `--check`, and `docker compose config` against
+  both the committed stack and a tap-enabled render, since `ERNIC_TAP` is off
+  by default and the committed copy only exercises one of the two shapes.
+
+### Changed
+
+- **The mesh-manager healthcheck no longer opens a connection.** rocm-ernic
+  never closes a connection that disconnects without registering, leaving it
+  in `CLOSE_WAIT` forever, so probing the port every 2 s leaked a manager file
+  descriptor every time it ran: measured at 28/min on a 32-VM fleet with zero
+  evictions and zero restarts, which alone reaches Docker's 1024 default in
+  about 37 minutes. It now reads `/proc/net/tcp` for a `LISTEN` instead —
+  the same guarantee for the workers that gate on it, without the connection.
+  Re-measured after: 50 descriptors, flat, zero `CLOSE_WAIT`.
+
+- **Every service bounds its log** via `LOG_MAX_SIZE` and `LOG_MAX_FILE`
+  (50m × 3). Docker's json-file driver is unlimited by default and a manager
+  that reaches EMFILE spins in an `accept()` error loop with no backoff: one
+  wrote **295 GB** in two days before anyone looked.
+
+- **The stats exporter runs unprivileged** (`user: "65534:65534"`). It reads
+  world-readable dumps off a sticky tmpfs and binds an unprivileged port, so
+  it never needed root. The other services are root only because their base
+  images declare no `USER`, which is a default rather than a decision; this
+  one was cheap to fix and is verified end to end as `nobody`.
+
+- **Image refs with no build stamp are excluded from the coherence check**
+  with a warning, instead of being refused. That allows a locally built image
+  carrying a fix under test to be run against a fleet, which is how the
+  upstream GID-resolution fix was validated at 32 nodes. The check still
+  catches what it exists for: two *different* real builds mixed together.
+
 ## [v1.4.1] - 2026-10-02
 
 ### Fixed

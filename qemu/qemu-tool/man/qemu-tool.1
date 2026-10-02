@@ -357,6 +357,57 @@ recomputes it and warns on standard error when the two disagree. It never
 refuses to run:
 .B down
 against a stale tree is exactly how a bad edit is recovered from.
+.PP
+Four settings-file keys shape the generated fleet beyond its size. They live
+in the settings file, not on the command line, because they have to match the
+committed stack the next regeneration produces.
+.TP
+.B ERNIC_TAP
+Give the guests working Ethernet. The rocm-ernic TCP mesh carries RDMA
+payload only; without a TAP the guest driver transmits, the device drops the
+frames, ARP goes unanswered, and
+.BR ib_send_bw (1)
+cannot complete the out-of-band exchange that precedes any inter-node
+transfer. With this set, each ernic is attached to a TAP that a short-lived
+privileged sidecar bridges onto a shared
+.I l2
+network, so every guest shares one L2 segment. The sidecar holds
+.B CAP_NET_ADMIN
+and exits; the long-running server needs only
+.IR /dev/net/tun ,
+because attaching to a pre-created, owned TAP requires no capability.
+Default: false.
+.TP
+.B PROM_DATA_DIR
+Host path bind-mounted as the Prometheus TSDB, relative to the stack
+directory. A bind mount rather than a named volume so the record of a run is
+visible to whoever made it, instead of being buried under
+.I /var/lib/docker/volumes
+as root and silently reused by the next fleet of a different size. Create it
+and
+.B "chown 65534:65534"
+before
+.BR up :
+the container runs as
+.IR nobody ,
+and Docker creates a missing bind source as root. Default:
+.IR ./prom\-data .
+.TP
+.B ERNIC_NOFILE
+File-descriptor limit for every ernic service. Docker's default soft limit is
+1024, which a mesh manager can reach inside a single run. Default: 65536.
+.TP
+.BR LOG_MAX_SIZE ", " LOG_MAX_FILE
+Rotation for every service's log. Docker's json-file driver is unlimited by
+default, and a wedged server with no backoff on its error path can fill a
+disk. Defaults: 50m and 3.
+.PP
+Each ernic is additionally given its own
+.B ERNIC_TCP_GUEST_GIDS
+naming the GIDs its guest owns \(em the EUI-64 link-local derived from the
+fleet MAC, and the guest IPv4. The mesh resolves a destination GID to a node
+by asking each node what it owns, so this is inherently per-node and is
+derived rather than configured.
 .SH ERNIC-STATS OPTIONS
 .PP
 Parses the stats dumps written by
