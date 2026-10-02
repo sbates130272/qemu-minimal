@@ -20,6 +20,8 @@ later becomes per-VM-overridable for free.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
+import re
 import sys
 import typing
 from pathlib import Path
@@ -48,6 +50,10 @@ _DEFAULTS = {
     "ERNIC_TCP_PORT": "6320",
     "ERNIC_STATS_PORT": "9840",
     "ERNIC_NOFILE": "65536",
+    "ERNIC_TAP": "false",
+    "LOG_MAX_SIZE": "50m",
+    "LOG_MAX_FILE": "3",
+    "PROM_DATA_DIR": "./prom-data",
     "PROM_PORT": "9090",
     "PROM_SCRAPE_INTERVAL": "15s",
     "PROM_RETENTION": "7d",
@@ -68,6 +74,9 @@ _NET_ERNIC, _NET_ROCJITSU, _NET_QEMU, _NET_INFRA = 1, 2, 3, 0
 # rocm-ernic's topology payload builder caps the mesh here
 # (src/rdma/rdma_backend_tcp.c: `num_nodes < 64`).
 _MESH_MAX = 64
+_STAMP_RE = re.compile(r"\d{8}\.g[0-9a-f]+")
+_TAP_IF = "tap0"
+_TAPSETUP_IMAGE = "qemu-tool/ernic-tapsetup:1"
 
 _PROVENANCE = "# env-sha256: "
 
@@ -143,15 +152,33 @@ def _check_image_coherence(values: dict[str, str]) -> None:
     keys = ["QEMU_IMAGE", "ERNIC_IMAGE", "ROCJITSU_IMAGE", "VM_BACKING_IMAGE"]
     stamps: dict[str, str] = {}
     vfu: dict[str, str] = {}
+    unstamped: list[str] = []
     for key in keys:
         ref = values.get(key, "")
         if not ref or ":" not in ref:
             continue
         tag = ref.rsplit(":", 1)[1]
-        stamps[key] = tag.split("-", 1)[0]
+        stamp = tag.split("-", 1)[0]
+        # A tag with no <date>.<ci-sha> stamp did not come from
+        # batesste-ci-images, so there is nothing to compare it against. That
+        # is the shape of a locally built image carrying a fix under test --
+        # exactly what you want to run a fleet against before it ships. Warn
+        # and exclude it rather than refusing: the check still catches the
+        # dangerous case, which is two *different* real builds mixed together.
+        if not _STAMP_RE.fullmatch(stamp):
+            unstamped.append(f"  {key} -> {ref}")
+            continue
+        stamps[key] = stamp
         for part in tag.split("-"):
             if part.startswith("vfu."):
                 vfu[key] = part
+
+    if unstamped:
+        print("Warning: image(s) with no build stamp, excluded from the "
+              "coherence check:", file=sys.stderr)
+        print("\n".join(unstamped), file=sys.stderr)
+        print("  A mismatched driver/server pair wedges at the vfio-user/DSR "
+              "boundary; verify by hand.", file=sys.stderr)
 
     distinct = set(stamps.values())
     if len(distinct) > 1:
@@ -232,6 +259,7 @@ def plan(values: dict[str, str]) -> dict[str, Any]:
             "name": names[index],
             "ssh_port": ports[index],
             "mac": macs[index],
+            "guest_gids": f"{_link_local_gid(macs[index])},{ips[index]}",
             "ip": ips[index],
             "ernic_sock": f"/run/vfu/ernic-{n}.sock",
             "rocjitsu_sock": f"/run/vfu/rocjitsu-{n}.sock",
@@ -250,6 +278,11 @@ def plan(values: dict[str, str]) -> dict[str, Any]:
         "tcp_port": _get(values, "ERNIC_TCP_PORT"),
         "stats_port": _get(values, "ERNIC_STATS_PORT"),
         "ernic_nofile": _get(values, "ERNIC_NOFILE"),
+        "ernic_tap": _get(values, "ERNIC_TAP").strip().lower()
+        in ("1", "true", "yes", "on"),
+        "log_max_size": _get(values, "LOG_MAX_SIZE"),
+        "log_max_file": _get(values, "LOG_MAX_FILE"),
+        "prom_data_dir": _get(values, "PROM_DATA_DIR"),
         "prom_port": _get(values, "PROM_PORT"),
         "prom_interval": _get(values, "PROM_SCRAPE_INTERVAL"),
         "prom_retention": _get(values, "PROM_RETENTION"),
@@ -268,11 +301,36 @@ def _override_list(values: dict[str, str], key: str, count: int) -> list[str] | 
     return items
 
 
-def _pipx_install() -> list[str]:
-    """The entrypoint's install step, as lines of an 8-space block scalar."""
+def _link_local_gid(mac: str) -> str:
+    """The IPv6 link-local address a guest autoconfigures from `mac`.
+
+    EUI-64: flip the universal/local bit of the first octet and insert
+    ff:fe in the middle. The guests really do come up on this -- verified
+    against a running fleet -- so deriving it is better than asking the
+    settings file to repeat what the MAC already says.
+    """
+    o = [int(x, 16) for x in mac.split(":")]
+    eui = bytes([o[0] ^ 0x02, o[1], o[2], 0xFF, 0xFE, o[3], o[4], o[5]])
+    # Let ipaddress do the zero-compression: hand-rolling it produces
+    # non-canonical forms like "fe80::0:ff:fe00:1" for MACs whose first
+    # three octets are small, and a GID the mesh cannot match is exactly
+    # the silent-misroute this setting exists to prevent.
+    return str(ipaddress.IPv6Address(bytes.fromhex("fe80") + bytes(6) + eui))
+
+
+def _pipx_install(bin_dir: str = "/usr/local/bin") -> list[str]:
+    """The entrypoint's install step, as lines of an 8-space block scalar.
+
+    bin_dir is a parameter because the stats exporter runs unprivileged and
+    cannot write /usr/local/bin; it installs under /tmp instead. pipx also
+    wants a writable HOME, which nobody does not otherwise have.
+    """
+    env = f"PIPX_BIN_DIR={bin_dir}"
+    if not bin_dir.startswith("/usr"):
+        env = f"HOME=/tmp PIPX_HOME=/tmp/pipx {env}"
     return [
         "        for i in 1 2 3 4 5; do",
-        "          PIPX_BIN_DIR=/usr/local/bin pipx install --force \\",
+        f"          {env} pipx install --force \\",
         "            /tmp/qemu-tool-build && break",
         "          sleep 10",
         "        done",
@@ -289,8 +347,20 @@ def render_compose(spec: dict[str, Any], env_name: str, digest: str) -> str:
     out.append(f"# env-file: {env_name}")
     out.append(f"{_PROVENANCE}{digest}")
     out.append("")
+    # Bound every container's log. Docker's json-file driver is unlimited by
+    # default, and an ernic manager that reaches EMFILE spins in an accept()
+    # error loop with no backoff: one measured here wrote **295 GB** in two
+    # days before anyone looked. Rotation keeps the tail -- which is the part
+    # worth reading -- without letting a wedged service fill the disk.
+    out.append("x-logging: &logging")
+    out.append("  driver: json-file")
+    out.append("  options:")
+    out.append(f'    max-size: "{spec["log_max_size"]}"')
+    out.append(f'    max-file: "{spec["log_max_file"]}"')
+    out.append("")
     out.append("x-ernic-common: &ernic-common")
     out.append('  image: "${ERNIC_IMAGE}"')
+    out.append("  logging: *logging")
     # Docker's default soft nofile limit is 1024, and the mesh manager does not
     # close the socket of a node it evicts -- a reconnecting worker gets a new
     # node id and a new fd, and the old one is never reclaimed. At fleet scale
@@ -306,11 +376,10 @@ def render_compose(spec: dict[str, Any], env_name: str, digest: str) -> str:
     out.append("  volumes:")
     out.append("    - vfu-sockets:/run/vfu")
     out.append("    - ernic-stats:/run/ernic-stats")
-    out.append("  environment:")
-    out.append("    - ERNIC_DEBUG_MESH")
     out.append("")
     out.append("x-qemu-common: &qemu-common")
     out.append('  image: "${QEMU_IMAGE}"')
+    out.append("  logging: *logging")
     out.append("  volumes:")
     out.append("    - vfu-sockets:/run/vfu:ro")
     out.append('    - "${VM_IMAGES_DIR}:${VM_IMAGES_DIR}"')
@@ -336,7 +405,14 @@ def render_compose(spec: dict[str, Any], env_name: str, digest: str) -> str:
         # DNS on every one of the fleet's N*(N-1) peer links. Naming the
         # container after its own address makes that a numeric getaddrinfo.
         out.append(f"    hostname: {vm['ernic_addr']}")
+        if spec["ernic_tap"]:
+            # Attaching to a pre-created, owned tap needs the device node and
+            # nothing else -- no NET_ADMIN. That capability is the sidecar's.
+            out.append("    devices:")
+            out.append("      - /dev/net/tun")
         out.append("    networks:")
+        if spec["ernic_tap"]:
+            out.append("      l2: {}")
         out.append("      fleet:")
         out.append(f"        ipv4_address: {vm['ernic_addr']}")
         if n == 1:
@@ -351,34 +427,81 @@ def render_compose(spec: dict[str, Any], env_name: str, digest: str) -> str:
             # and at fleet scale that is where the fleet breaks.
             backend = f"tcp:worker:{spec['vms'][0]['ernic_addr']}:{spec['tcp_port']}"
             out.append("    restart: on-failure")
-        out.append("    command:")
-        out.append("      - rocm-ernic")
-        out.append("      - -s")
-        out.append(f"      - {vm['ernic_sock']}")
-        out.append("      - -b")
-        out.append(f'      - "{backend}"')
-        out.append("      - -m")
-        out.append(f'      - "{vm["mac"]}"')
-        out.append("      - -S")
-        out.append(f"      - {vm['stats_file']}")
+        # Per node, not in the shared anchor: the GID set is what lets the
+        # mesh resolve a destination GID to *this* node, so it is inherently
+        # per-node. Getting it wrong is not a startup error -- the mesh
+        # silently routes to some other node and the transfer fails with
+        # "Completion with error at client".
+        out.append("    environment:")
+        out.append(f"      - ERNIC_TCP_GUEST_GIDS={vm['guest_gids']}")
+        argv = ["rocm-ernic", "-s", vm["ernic_sock"], "-b", backend,
+                "-m", vm["mac"], "-S", vm["stats_file"]]
+        if spec["ernic_tap"]:
+            argv += ["-T", _TAP_IF]
+            # The sidecar can only run once this container exists, because it
+            # shares its netns -- so the tap does not exist at the instant
+            # rocm-ernic starts. Wait for it rather than racing and dying.
+            quoted = " ".join(f"'{a}'" for a in argv[1:])
+            out.append("    entrypoint:")
+            out.append("      - /bin/sh")
+            out.append("      - -c")
+            out.append("      - |")
+            out.append(f"        n=0; until [ -e /sys/class/net/{_TAP_IF} ]; do")
+            out.append("          n=$$((n+1))")
+            out.append(f"          [ $$n -gt 240 ] && echo '{_TAP_IF} never appeared' && exit 1")
+            out.append("          sleep 0.5")
+            out.append("        done")
+            out.append(f"        exec {argv[0]} {quoted}")
+        else:
+            out.append("    command:")
+            for a in argv:
+                out.append(f'      - "{a}"')
         if n != 1:
+            # Chained, not all-depend-on-the-manager. The mesh assigns node
+            # ids in *connection* order, but the GID->node resolver assumes
+            # id == (last MAC byte - 1). Let workers race and whichever wins
+            # takes node 1, so a guest addressing ernic-2 has its RDMA payload
+            # routed to whichever ernic happened to register first -- the
+            # transfer then fails with "Completion with error at client".
+            # Starting them one at a time makes registration order match
+            # index order, which is the only order the resolver gets right.
             out.append("    depends_on:")
-            out.append("      ernic-1:")
+            out.append(f"      ernic-{n - 1}:")
             out.append("        condition: service_healthy")
         out.append("    healthcheck:")
         if n == 1:
             # The socket file alone is not enough for the manager: workers
             # gate on this condition and then dial its TCP port, so the check
-            # has to prove that port is accepting, not just that the process
-            # got as far as binding a unix socket. No nc or ss in the image;
-            # python3 is there.
+            # has to prove that port is listening, not just that the process
+            # got as far as binding a unix socket.
+            #
+            # It reads /proc/net/tcp rather than connecting, because the
+            # manager never closes a connection that disconnects without
+            # registering -- it leaves it in CLOSE_WAIT forever. A connecting
+            # check at this interval therefore leaks a manager fd every time
+            # it runs: measured at 28/min on an otherwise perfectly healthy
+            # 32-VM fleet with zero evictions and zero restarts, which alone
+            # reaches Docker's 1024 default in about 37 minutes. The leak is
+            # upstream's; handing it a connection every 2 s was ours.
+            #
+            # Fields are hex and space-separated: local_address is $2 as
+            # <addr>:<port>, st is $4, and 0A is TCP_LISTEN.
+            port_hex = f"{int(spec['tcp_port']):04X}"
             out.append(
-                '      test: ["CMD", "python3", "-c", '
-                f'"import socket,sys; s=socket.create_connection((\'127.0.0.1\','
-                f'{spec["tcp_port"]}),2); s.close()"]'
+                '      test: ["CMD", "awk", '
+                f'"$2 ~ /:{port_hex}$/ && $4 == \\"0A\\" {{found=1}} '
+                'END {exit !found}", "/proc/net/tcp"]'
             )
         else:
-            out.append(f'      test: ["CMD", "test", "-S", "{vm["ernic_sock"]}"]')
+            # Proving the socket exists is not enough to serialise
+            # registration: rocm-ernic binds it before it has registered with
+            # the manager. An ESTABLISHED connection to the manager's port is
+            # the observable that registration actually happened.
+            out.append(
+                '      test: ["CMD", "awk", '
+                f'"$3 ~ /:{port_hex}$/ && $4 == \\"01\\" {{found=1}} '
+                'END {exit !found}", "/proc/net/tcp"]'
+            )
         out.append("      interval: 2s")
         out.append("      timeout: 5s")
         out.append("      retries: 30")
@@ -457,6 +580,11 @@ def render_compose(spec: dict[str, Any], env_name: str, digest: str) -> str:
     out.append("      fleet:")
     out.append(f"        ipv4_address: {spec['exporter_addr']}")
     out.append("    devices: []")
+    # The exporter needs no privilege: it reads world-readable dumps off a
+    # sticky tmpfs and binds an unprivileged port. Every other service in the
+    # stack is root only because its base image declares no USER, which is a
+    # default rather than a decision; this one is cheap to fix, so it is.
+    out.append('    user: "65534:65534"')
     out.append("    volumes:")
     out.append("      - ernic-stats:/run/ernic-stats:ro")
     out.append('      - "${QEMU_TOOL_SRC:-../../..}:/qemu-tool-src:ro"')
@@ -465,13 +593,14 @@ def render_compose(spec: dict[str, Any], env_name: str, digest: str) -> str:
     out.append("      - -c")
     out.append("      - |")
     out.append("        cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build")
-    out.extend(_pipx_install())
-    out.append("        exec qemu-tool ernic-stats \\")
+    out.extend(_pipx_install("/tmp/bin"))
+    out.append("        exec /tmp/bin/qemu-tool ernic-stats \\")
     out.append("          --stats-dir /run/ernic-stats \\")
     out.append(f"          --port {spec['stats_port']}")
     out.append("")
     out.append("  prometheus:")
     out.append("    image: docker.io/prom/prometheus:latest")
+    out.append("    logging: *logging")
     out.append("    profiles: [metrics]")
     out.append("    networks:")
     out.append("      fleet:")
@@ -479,15 +608,47 @@ def render_compose(spec: dict[str, Any], env_name: str, digest: str) -> str:
     out.append("    restart: on-failure")
     out.append("    volumes:")
     out.append("      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro")
-    out.append("      - prom-data:/prometheus")
+    # A bind mount, not a named volume: the TSDB is the record of a fleet run,
+    # and a named volume puts it under /var/lib/docker/volumes where it is
+    # root-owned, invisible to the person who ran the fleet, and silently
+    # shared with the next run of a different size. A path they chose is one
+    # they can archive next to the rest of the run's artifacts.
+    out.append(f"      - {spec['prom_data_dir']}:/prometheus")
     out.append("    command:")
     out.append("      - --config.file=/etc/prometheus/prometheus.yml")
     out.append(f"      - --storage.tsdb.retention.time={spec['prom_retention']}")
     out.append("    ports:")
     out.append(f'      - "{spec["prom_port"]}:9090"')
 
+    if spec["ernic_tap"]:
+        out.append("")
+        out.append("  # ---- guest Ethernet wiring ----")
+        out.append("  # One short-lived privileged sidecar per ernic. It shares")
+        out.append("  # that ernic's network namespace, creates the tap and the")
+        out.append("  # bridge, and exits. NET_ADMIN lives here and nowhere else.")
+        for vm in spec["vms"]:
+            n = vm["n"]
+            out.append(f"  tapsetup-{n}:")
+            out.append("    build: ./tapsetup")
+            out.append(f'    image: "{_TAPSETUP_IMAGE}"')
+            out.append("    logging: *logging")
+            out.append(f'    network_mode: "service:ernic-{n}"')
+            out.append("    cap_add: [NET_ADMIN]")
+            out.append("    devices:")
+            out.append("      - /dev/net/tun")
+            out.append('    restart: "no"')
+            out.append("    depends_on:")
+            out.append(f"      ernic-{n}:")
+            out.append("        condition: service_started")
+
     out.append("")
     out.append("networks:")
+    if spec["ernic_tap"]:
+        out.append("  # Dumb shared L2 carrying guest Ethernet only. No address")
+        out.append("  # is assigned: each ernic bridges its tap onto it, and the")
+        out.append("  # guests address each other over ERNIC_GUEST_SUBNET.")
+        out.append("  l2:")
+        out.append("    driver: bridge")
     out.append("  # Every service has a fixed address and nothing resolves a")
     out.append("  # service name at run time. Docker's embedded DNS is a single")
     out.append("  # resolver per network, and a fleet start burst saturates it:")
@@ -509,7 +670,6 @@ def render_compose(spec: dict[str, Any], env_name: str, digest: str) -> str:
         out.append("    driver_opts:")
         out.append("      type: tmpfs")
         out.append("      device: tmpfs")
-    out.append("  prom-data:")
     return "\n".join(out) + "\n"
 
 

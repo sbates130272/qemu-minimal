@@ -79,3 +79,7 @@ network-config-*
 # Scratch output from local fleet runs -- rendered dashboards, captured
 # metrics. Reproducible from a running stack, so it is not worth versioning.
 artifacts/
+
+# Prometheus TSDB, bind-mounted into the metrics profile (PROM_DATA_DIR).
+# Default lands inside the stack directory; it is run output, not source.
+prom-data/
