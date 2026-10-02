@@ -97,6 +97,13 @@
     # the consumer serves the device from, not the one that built the disk, so
     # a baked copy is wrong for every consumer on a different build.
     rocjitsu_firmware_ip_discovery: "{{ vm_rocjitsu_firmware_ip_discovery | default(true) }}"
+    # GPU generation passed to vfio_guest_firmware.py --generation. Using
+    # --generation rather than --config removes the dependency on a config
+    # file existing in the rocjitsu container, which matters when generation
+    # moves into the guest (where no container config is available). The
+    # manifest's config key is null in this mode; nothing in this tree reads
+    # the manifest, so there is no breakage.
+    rocjitsu_firmware_generation: "{{ vm_rocjitsu_firmware_generation | default('gfx1250') }}"
 
   tasks:
     # No ROCm-prefix resolution here any more. Four tasks used to work around
@@ -222,6 +229,7 @@
               docker run --rm --entrypoint /bin/sh
               {{ rocjitsu_firmware_image }}
               -c 'python3 /usr/local/bin/vfio_guest_firmware.py
+              --generation {{ rocjitsu_firmware_generation }}
               --set {{ rocjitsu_firmware_set }} --output /out
               {{ '' if rocjitsu_firmware_ip_discovery | bool else '--no-ip-discovery' }}
               && tar -cf - -C /out .'
