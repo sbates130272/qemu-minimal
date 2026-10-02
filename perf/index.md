@@ -73,13 +73,13 @@ shows the last date on which all 5 reports were green at once —
 amber once that date is no longer today.
 
 Last all-green: **2026-10-02** &middot; checked
-2026-10-02 21:30 UTC &middot; currently
+2026-10-02 21:36 UTC &middot; currently
 all green.
 
 | Report | Generated | Status | Commit | Page |
 | --- | --- | --- | --- | --- |
-| Single VM | 2026-10-02 21:12 UTC | pass | `a4b1556` | [/1vm/](/1vm/) |
+| Single VM | 2026-10-02 21:34 UTC | pass | `4bb8f75` | [/1vm/](/1vm/) |
 | rocjitsu | 2026-10-02 20:26 UTC | pass | `d32c43c` | [/rocjitsu/](/rocjitsu/) |
-| ernic VM 1 | 2026-10-02 20:11 UTC | pass | `d32c43c` | [/ernic/](/ernic/) |
-| ernic VM 2 | 2026-10-02 20:11 UTC | pass | `d32c43c` | [/ernic/vm2/](/ernic/vm2/) |
+| ernic VM 1 | 2026-10-02 21:35 UTC | pass | `4bb8f75` | [/ernic/](/ernic/) |
+| ernic VM 2 | 2026-10-02 21:35 UTC | pass | `4bb8f75` | [/ernic/vm2/](/ernic/vm2/) |
 | hipFile fio | 2026-10-02 20:28 UTC | pass | `d32c43c` | [/hipfile-fio/](/hipfile-fio/) |
