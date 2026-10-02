@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`gen-vm` first-boot timeout for arm64 and riscv64** — without KVM,
+  cloud-init's rootfs expansion (growpart + resize2fs) can stall for 30+
+  minutes under software emulation, causing the CI job to be silently
+  cancelled at its ceiling with no diagnostic output. `_first_boot` now
+  caps the QEMU subprocess at 55 minutes and exits with a message pointing
+  at the architecture and cloud-init step when the deadline is exceeded.
+
+- **riscv64 trailing comma in QEMU machine string** — `f"virt,{kvm}"` with
+  an empty `kvm` string produced `"virt,"`. Fixed to emit `"virt"` or
+  `"virt,accel=kvm"` cleanly.
+
 ## [v1.4.0] - 2026-10-02
 
 ### Added
