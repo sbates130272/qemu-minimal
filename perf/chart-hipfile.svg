@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 220" width="100%" role="img" aria-label="rocjitsu hipFile trend">
   <rect width="100%" height="100%" rx="18" fill="#ffffff" stroke="#d9e2f0"/>
-  <polyline fill="none" stroke="#198754" stroke-width="4" points="28.0,144.0 44.0,144.0 60.0,144.0 76.0,144.0 92.0,144.0 108.0,144.0 124.0,192.0 140.0,192.0 156.0,192.0 172.0,192.0 188.0,192.0 204.0,192.0 220.0,192.0 236.0,141.3 252.0,140.0 268.0,140.0 284.0,146.7 300.0,146.7 316.0,146.7 332.0,146.7 348.0,146.7 364.0,146.7 380.0,146.7 396.0,146.7 412.0,146.7 428.0,146.7 444.0,145.3 460.0,157.3 476.0,157.3 492.0,157.3 508.0,164.0 524.0,177.3 540.0,177.3 556.0,177.3 572.0,177.3 588.0,177.3 604.0,140.0 620.0,140.0 636.0,140.0 652.0,28.0"/>
+  <polyline fill="none" stroke="#198754" stroke-width="4" points="28.0,144.0 43.6,144.0 59.2,144.0 74.8,144.0 90.4,144.0 106.0,144.0 121.6,192.0 137.2,192.0 152.8,192.0 168.4,192.0 184.0,192.0 199.6,192.0 215.2,192.0 230.8,141.3 246.4,140.0 262.0,140.0 277.6,146.7 293.2,146.7 308.8,146.7 324.4,146.7 340.0,146.7 355.6,146.7 371.2,146.7 386.8,146.7 402.4,146.7 418.0,146.7 433.6,145.3 449.2,157.3 464.8,157.3 480.4,157.3 496.0,164.0 511.6,177.3 527.2,177.3 542.8,177.3 558.4,177.3 574.0,177.3 589.6,140.0 605.2,140.0 620.8,140.0 636.4,28.0 652.0,28.0"/>
   <text x="28" y="34" fill="#111827" font-family="system-ui,sans-serif" font-size="18" font-weight="700">rocjitsu hipFile</text>
   <text x="28" y="56" fill="#4b5563" font-family="system-ui,sans-serif" font-size="12">oldest run at left, newest at right</text>
   <text x="28" y="190" fill="#6b7280" font-family="system-ui,sans-serif" font-size="12">4cf27216</text>
-  <text x="652" y="190" text-anchor="end" fill="#6b7280" font-family="system-ui,sans-serif" font-size="12">d32c43c7</text>
+  <text x="652" y="190" text-anchor="end" fill="#6b7280" font-family="system-ui,sans-serif" font-size="12">a4b1556b</text>
   <text x="652" y="34" text-anchor="end" fill="#111827" font-family="system-ui,sans-serif" font-size="14" font-weight="700">latest: 246 MB/s</text>
 </svg>

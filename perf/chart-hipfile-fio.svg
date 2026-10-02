@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 220" width="100%" role="img" aria-label="hipFile fio trend">
   <rect width="100%" height="100%" rx="18" fill="#ffffff" stroke="#d9e2f0"/>
-  <polyline fill="none" stroke="#0d6efd" stroke-width="4" points="28.0,88.0 44.0,88.0 60.0,88.0 76.0,88.0 92.0,88.0 108.0,88.0 124.0,137.9 140.0,137.9 156.0,137.9 172.0,191.1 188.0,191.5 204.0,192.0 220.0,192.0 236.0,90.3 252.0,107.7 268.0,107.7 284.0,88.0 300.0,88.0 316.0,88.0 332.0,28.0 348.0,28.0 364.0,88.7 380.0,89.5 396.0,89.5 412.0,41.7 428.0,41.7 444.0,88.0 460.0,97.1 476.0,97.1 492.0,97.1 508.0,113.0 524.0,158.7 540.0,158.7 556.0,158.7 572.0,158.7 588.0,158.7 604.0,98.6 620.0,98.6 636.0,98.6 652.0,77.4"/>
+  <polyline fill="none" stroke="#0d6efd" stroke-width="4" points="28.0,88.0 43.6,88.0 59.2,88.0 74.8,88.0 90.4,88.0 106.0,88.0 121.6,137.9 137.2,137.9 152.8,137.9 168.4,191.1 184.0,191.5 199.6,192.0 215.2,192.0 230.8,90.3 246.4,107.7 262.0,107.7 277.6,88.0 293.2,88.0 308.8,88.0 324.4,28.0 340.0,28.0 355.6,88.7 371.2,89.5 386.8,89.5 402.4,41.7 418.0,41.7 433.6,88.0 449.2,97.1 464.8,97.1 480.4,97.1 496.0,113.0 511.6,158.7 527.2,158.7 542.8,158.7 558.4,158.7 574.0,158.7 589.6,98.6 605.2,98.6 620.8,98.6 636.4,77.4 652.0,77.4"/>
   <text x="28" y="34" fill="#111827" font-family="system-ui,sans-serif" font-size="18" font-weight="700">hipFile fio</text>
   <text x="28" y="56" fill="#4b5563" font-family="system-ui,sans-serif" font-size="12">oldest run at left, newest at right</text>
   <text x="28" y="190" fill="#6b7280" font-family="system-ui,sans-serif" font-size="12">4cf27216</text>
-  <text x="652" y="190" text-anchor="end" fill="#6b7280" font-family="system-ui,sans-serif" font-size="12">d32c43c7</text>
+  <text x="652" y="190" text-anchor="end" fill="#6b7280" font-family="system-ui,sans-serif" font-size="12">a4b1556b</text>
   <text x="652" y="34" text-anchor="end" fill="#111827" font-family="system-ui,sans-serif" font-size="14" font-weight="700">latest: 161 MB/s</text>
 </svg>
