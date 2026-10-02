@@ -4,7 +4,7 @@ title: VM Report — hipFile fio VM
 
 # VM Report — qemu-minimal — hipFile fio VM
 
-Generated: **2026-10-01 20:26 UTC** &middot; Commit: [`b7b730b`](https://github.com/sbates130272/qemu-minimal/commit/b7b730b74e9acd51993aa1eb2adc6e124f1ddee4) &middot; Status: **pass**
+Generated: **2026-10-02 19:47 UTC** &middot; Commit: [`fe1fb96`](https://github.com/sbates130272/qemu-minimal/commit/fe1fb969f8d8b0f0cf704b167f14eb1d0beab9c1) &middot; Status: **pass**
 
 ## Hardware
 
@@ -48,7 +48,7 @@ nvme0n1    1T disk /mnt/nvme
 ```
 Filesystem      Size  Used Avail Use% Mounted on
 /dev/vda1        61G  8.7G   53G  15% /
-/dev/vda13      989M  371M  551M  41% /boot
+/dev/vda13      989M  369M  553M  40% /boot
 ```
 
 ### NVMe
@@ -118,8 +118,8 @@ amdrocm-hipfile10.0	10.0.0-4
 ## AMDGPU Debian Packages
 
 ```
-amdgpu-dkms	1:7.1.9.31600000-2403767.26.04
-amdgpu-dkms-firmware	1:31.60.0.0.31600000-2403767.26.04
+amdgpu-dkms	1:7.1.3.31500000-2390945.26.04
+amdgpu-dkms-firmware	1:31.50.0.0.31500000-2390945.26.04
 amdgpu-exporter	1.5.2-10~24.04
 libdrm-amdgpu1:amd64	2.4.131-1
 ```
@@ -145,6 +145,7 @@ ubuntu : ubuntu video users render admin
   cron.service                     loaded active running Regular background program processing daemon
   dbus.service                     loaded active running D-Bus System Message Bus
   getty@tty1.service               loaded active running Getty on tty1
+  gpuagent.service                 loaded active running AMD GPU Metrics Reader Service
   ModemManager.service             loaded active running Modem Manager
   multipathd.service               loaded active running Device-Mapper Multipath Device Controller
   networkd-dispatcher.service      loaded active running Dispatcher daemon for systemd-networkd
@@ -177,7 +178,7 @@ ubuntu : ubuntu video users render admin
 
 | Metric | Value |
 |---|---|
-| fio libhipfile read throughput | 53.8 MB/s |
+| fio libhipfile read throughput | 133 MB/s |
 
 This is fio's own `libhipfile` ioengine reading from the guest NVMe straight
 into VRAM, rather than the hand-written benchmark the rocjitsu report uses. fio
@@ -192,5 +193,5 @@ rocm: /opt/rocm/core-10.0
 building fio 6bc57a931f04fa3f50348d8c8f087187f050c6e1
 FIO_VERSION = fio-3.42
 fio: fio-3.42 commit=6bc57a931f04fa3f50348d8c8f087187f050c6e1
-fio-hipfile-bench: read_bytes=67108864 seconds=1.248 read_gbs=0.053773128
+fio-hipfile-bench: read_bytes=67108864 seconds=0.506 read_gbs=0.132626213
 ```

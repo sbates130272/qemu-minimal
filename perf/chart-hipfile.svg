@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 220" width="100%" role="img" aria-label="rocjitsu hipFile trend">
   <rect width="100%" height="100%" rx="18" fill="#ffffff" stroke="#d9e2f0"/>
-  <polyline fill="none" stroke="#198754" stroke-width="4" points="28.0,40.6 45.8,40.6 63.7,40.6 81.5,40.6 99.3,40.6 117.1,40.6 135.0,192.0 152.8,192.0 170.6,192.0 188.5,192.0 206.3,192.0 224.1,192.0 241.9,192.0 259.8,32.2 277.6,28.0 295.4,28.0 313.3,49.0 331.1,49.0 348.9,49.0 366.7,49.0 384.6,49.0 402.4,49.0 420.2,49.0 438.1,49.0 455.9,49.0 473.7,49.0 491.5,44.8 509.4,82.7 527.2,82.7 545.0,82.7 562.9,103.7 580.7,145.7 598.5,145.7 616.3,145.7 634.2,145.7 652.0,145.7"/>
+  <polyline fill="none" stroke="#198754" stroke-width="4" points="28.0,40.6 45.3,40.6 62.7,40.6 80.0,40.6 97.3,40.6 114.7,40.6 132.0,192.0 149.3,192.0 166.7,192.0 184.0,192.0 201.3,192.0 218.7,192.0 236.0,192.0 253.3,32.2 270.7,28.0 288.0,28.0 305.3,49.0 322.7,49.0 340.0,49.0 357.3,49.0 374.7,49.0 392.0,49.0 409.3,49.0 426.7,49.0 444.0,49.0 461.3,49.0 478.7,44.8 496.0,82.7 513.3,82.7 530.7,82.7 548.0,103.7 565.3,145.7 582.7,145.7 600.0,145.7 617.3,145.7 634.7,145.7 652.0,28.0"/>
   <text x="28" y="34" fill="#111827" font-family="system-ui,sans-serif" font-size="18" font-weight="700">rocjitsu hipFile</text>
   <text x="28" y="56" fill="#4b5563" font-family="system-ui,sans-serif" font-size="12">oldest run at left, newest at right</text>
   <text x="28" y="190" fill="#6b7280" font-family="system-ui,sans-serif" font-size="12">4cf27216</text>
   <text x="652" y="190" text-anchor="end" fill="#6b7280" font-family="system-ui,sans-serif" font-size="12">fe1fb969</text>
-  <text x="652" y="34" text-anchor="end" fill="#111827" font-family="system-ui,sans-serif" font-size="14" font-weight="700">latest: 134 MB/s</text>
+  <text x="652" y="34" text-anchor="end" fill="#111827" font-family="system-ui,sans-serif" font-size="14" font-weight="700">latest: 162 MB/s</text>
 </svg>
