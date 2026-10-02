@@ -105,6 +105,14 @@ jobs:
           # nothing. Not on the runner image.
           sudo apt-get install -y build-essential debhelper dh-python pybuild-plugin-pyproject python3-all python3-setuptools python3-build
 
+      - name: Upgrade setuptools for PEP 639 support
+        run: |
+          python3 -m venv /tmp/setuptools-venv
+          /tmp/setuptools-venv/bin/pip install -q "setuptools>=72" "packaging>=24.2"
+          site=$(/tmp/setuptools-venv/bin/python3 -c \
+            'import sysconfig; print(sysconfig.get_paths()["purelib"])')
+          echo "PYTHONPATH=${site}" >> "$GITHUB_ENV"
+
       - name: Build deb
         working-directory: qemu
         run: dpkg-buildpackage -us -uc -b
