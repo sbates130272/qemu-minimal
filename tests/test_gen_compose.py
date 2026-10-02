@@ -160,19 +160,134 @@ class TestRender(unittest.TestCase):
         self.assertEqual(body.count("ipv4_address:"), 8 * 3 + 2)
         self.assertIn("subnet: 172.31.0.0/16", body)
 
+    def test_prometheus_data_is_a_bind_mount_not_a_named_volume(self):
+        # A named volume puts the TSDB under /var/lib/docker/volumes as root,
+        # where the next fleet of a different size silently reuses it.
+        body = gen_compose.render_compose(_plan(), "env", "abc")
+        self.assertIn("- ./prom-data:/prometheus", body)
+        self.assertNotIn("prom-data:/prometheus\n      -", body)
+        # and it must not reappear as a declared volume
+        volumes = body.split("\nvolumes:\n")[1]
+        self.assertNotIn("prom-data", volumes)
+
+    def test_prometheus_data_dir_is_overridable(self):
+        body = gen_compose.render_compose(
+            _plan("\nPROM_DATA_DIR=/srv/fleet-runs/run-7/tsdb\n"), "env", "abc")
+        self.assertIn("- /srv/fleet-runs/run-7/tsdb:/prometheus", body)
+
+    def test_every_service_bounds_its_log(self):
+        # Docker's json-file driver is unlimited by default; a wedged ernic
+        # manager wrote 295 GB in two days before this existed. Services
+        # inherit the cap through the two commons, so assert the anchor is
+        # defined once and merged everywhere a service can come from.
+        body = gen_compose.render_compose(_plan(), "env", "abc")
+        self.assertIn('x-logging: &logging', body)
+        self.assertIn('max-size: "50m"', body)
+        self.assertIn('max-file: "3"', body)
+        for anchor in ("x-ernic-common: &ernic-common",
+                       "x-qemu-common: &qemu-common"):
+            blk = body[body.index(anchor):]
+            self.assertIn("logging: *logging", blk[:blk.index("\n\n")])
+        prom = body[body.index("  prometheus:"):]
+        self.assertIn("logging: *logging", prom[:200])
+
+    def test_log_cap_is_overridable(self):
+        body = gen_compose.render_compose(
+            _plan("\nLOG_MAX_SIZE=10m\nLOG_MAX_FILE=5\n"), "env", "abc")
+        self.assertIn('max-size: "10m"', body)
+        self.assertIn('max-file: "5"', body)
+
+    def test_each_ernic_advertises_its_own_guest_gids(self):
+        # Per node, never in the shared anchor. A node advertising another
+        # node's GID set does not fail at startup -- the mesh routes the
+        # payload to the wrong node and the transfer dies with "Completion
+        # with error at client", which is very hard to attribute.
+        body = gen_compose.render_compose(_plan(), "env", "abc")
+        for n, last in ((1, "1"), (2, "2"), (8, "8")):
+            blk = body[body.index(f"  ernic-{n}:"):]
+            blk = blk[:blk.index("healthcheck:")]
+            self.assertIn(
+                f"- ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:{last},"
+                f"192.168.100.{10 + n}", blk)
+
+    def test_guest_gids_are_not_in_the_shared_anchor(self):
+        body = gen_compose.render_compose(_plan(), "env", "abc")
+        anchor = body[body.index("x-ernic-common:"):body.index("x-qemu-common:")]
+        self.assertNotIn("ERNIC_TCP_GUEST_GIDS", anchor)
+
+    def test_ernic_debug_mesh_is_gone(self):
+        # Removed upstream in Stage 1; emitting it is now just noise.
+        body = gen_compose.render_compose(_plan(), "env", "abc")
+        self.assertNotIn("ERNIC_DEBUG_MESH", body)
+
+    def test_link_local_gid_is_canonical_eui64(self):
+        # Verified against a running fleet: guests autoconfigure exactly
+        # these addresses from the fleet MACs.
+        self.assertEqual(gen_compose._link_local_gid("72:6f:63:6d:00:01"),
+                         "fe80::706f:63ff:fe6d:1")
+        self.assertEqual(gen_compose._link_local_gid("72:6f:63:6d:01:00"),
+                         "fe80::706f:63ff:fe6d:100")
+        # Hand-rolled compression gets this one wrong ("fe80::0:ff:fe00:1").
+        self.assertEqual(gen_compose._link_local_gid("02:00:00:00:00:01"),
+                         "fe80::ff:fe00:1")
+
+    def test_tap_is_off_by_default(self):
+        body = gen_compose.render_compose(_plan(), "env", "abc")
+        self.assertNotIn("tapsetup-1:", body)
+        self.assertNotIn("/dev/net/tun", body)
+        self.assertIn("    command:\n      - \"rocm-ernic\"", body)
+
+    def test_tap_adds_a_sidecar_per_ernic_and_a_shared_l2(self):
+        body = gen_compose.render_compose(_plan("\nERNIC_TAP=true\n"), "e", "a")
+        self.assertEqual(body.count("build: ./tapsetup"), 8)
+        self.assertIn('network_mode: "service:ernic-8"', body)
+        self.assertIn("  l2:\n    driver: bridge", body)
+
+    def test_tap_keeps_net_admin_out_of_the_long_lived_service(self):
+        # rocm-ernic attaches to a pre-created owned tap with only the device
+        # node; NET_ADMIN belongs to the sidecar that exits.
+        body = gen_compose.render_compose(_plan("\nERNIC_TAP=true\n"), "e", "a")
+        ernic1 = body[body.index("  ernic-1:"):body.index("  ernic-2:")]
+        self.assertIn("- /dev/net/tun", ernic1)
+        self.assertNotIn("cap_add", ernic1)
+        self.assertEqual(body.count("cap_add: [NET_ADMIN]"), 8)
+
+    def test_tap_entrypoint_waits_for_the_tap_before_exec(self):
+        # The sidecar shares this netns, so it cannot run until the container
+        # is already up -- the tap does not exist at process start.
+        body = gen_compose.render_compose(_plan("\nERNIC_TAP=true\n"), "e", "a")
+        self.assertIn("until [ -e /sys/class/net/tap0 ]", body)
+        self.assertIn("exec rocm-ernic", body)
+        self.assertIn("'-T' 'tap0'", body)
+
     def test_ernic_services_raise_the_file_descriptor_limit(self):
         # Docker's 1024 default is reached by the manager's fd leak on node
         # eviction well inside a fleet-length run; see AGENTS.md issue 15.
         body = gen_compose.render_compose(_plan(), "env", "abc")
         self.assertIn("  ulimits:\n    nofile:\n      soft: 65536", body)
 
-    def test_manager_healthcheck_proves_the_tcp_port_accepts(self):
+    def test_manager_healthcheck_proves_the_tcp_port_listens(self):
         # Workers gate on this condition and then dial the manager's TCP
         # port; a socket-file test says nothing about that listener.
         body = gen_compose.render_compose(_plan(), "env", "abc")
         head = body[body.index("  ernic-1:"):body.index("  ernic-2:")]
-        self.assertIn("create_connection", head)
-        self.assertIn("6320", head)
+        self.assertIn("/proc/net/tcp", head)
+        self.assertIn(":18B0$", head)    # 6320, the port, in the hex /proc uses
+        self.assertIn('0A', head)        # TCP_LISTEN
+
+    def test_manager_healthcheck_does_not_open_a_connection(self):
+        # The manager never closes a connection that disconnects without
+        # registering, so a connecting check leaks one of its fds every
+        # interval -- 28/min measured on a healthy 32-VM fleet.
+        body = gen_compose.render_compose(_plan(), "env", "abc")
+        head = body[body.index("  ernic-1:"):body.index("  ernic-2:")]
+        self.assertNotIn("create_connection", head)
+
+    def test_manager_healthcheck_tracks_a_custom_tcp_port(self):
+        body = gen_compose.render_compose(
+            _plan("\nERNIC_TCP_PORT=7000\n"), "env", "abc")
+        head = body[body.index("  ernic-1:"):body.index("  ernic-2:")]
+        self.assertIn(":1B58$", head)    # 7000
 
     def test_manager_does_not_restart(self):
         """AGENTS.md issue 7: a manager restart wedges every guest on a DSR

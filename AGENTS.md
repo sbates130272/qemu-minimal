@@ -82,7 +82,9 @@ workers dialling it.
 
 **Its `docker-compose.yml` and `prometheus.yml` are generated.** Edit
 `qemu/env.scale-out` and re-run `qemu-tool gen-compose`; a hand edit is lost on
-the next regeneration and `gen-compose --check` fails in CI. Both files are
+the next regeneration and `gen-compose --check` fails in CI — the
+`Gen Compose Check` lane, which also runs `docker compose config` against
+both the committed stack and a tap-enabled render. Both files are
 committed so the stack stays reviewable in a diff and usable with plain
 `docker compose`.
 
@@ -104,6 +106,21 @@ before editing that file: keys naming a field that is *already* `list[str]`
 meaning — the commas are several values for **one** VM, so the whole value goes
 to **every** VM. `VM_EXTRA_HOSTFWD=a,b` is two hostfwd rules per guest, not one
 rule each for two guests. Do not "fix" such a key by padding it to `VM_COUNT`.
+
+**`ERNIC_TAP=true` is what makes inter-node anything possible.** The TCP mesh
+carries RDMA payload only; without a TAP the guests have no Ethernet, ARP goes
+unanswered, and `ib_send_bw` cannot do its out-of-band exchange — so no
+inter-node RDMA test runs at all. It costs one short-lived sidecar per VM
+(holding the `CAP_NET_ADMIN` the long-running server does not need) and a
+shared `l2` network. Each ernic also gets its own `ERNIC_TCP_GUEST_GIDS`,
+derived from its MAC; that one is per-node and must never be hoisted into the
+shared anchor (issue 18).
+
+Two other keys worth knowing: `PROM_DATA_DIR` bind-mounts the Prometheus TSDB
+to a path you can actually find — create it and `chown 65534:65534` first, as
+the container runs as `nobody` — and `LOG_MAX_SIZE`/`LOG_MAX_FILE` bound every
+service's log, because Docker's default is unlimited and a wedged manager with
+no backoff on its error path wrote 295 GB in two days.
 
 `ernic-1` is `restart: "no"` on purpose (issue 7 below): a manager restart
 wedges every guest on a DSR timeout that only `down && up` clears, and
@@ -354,6 +371,17 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     upstream's; it moves the wall out far enough that a fleet-length run
     finishes first. A fleet that churns hard enough will still get there.
 
+    **Correction: evictions were not the main source.** The manager also
+    never closes a connection that disconnects *without registering*, and our
+    own manager healthcheck connected to the mesh port every 2 seconds. That
+    leaked a descriptor per probe regardless of churn: measured at **28/min on
+    a 32-VM fleet with zero evictions and zero restarts**, 1118 sockets in
+    `CLOSE_WAIT`, all from `127.0.0.1:<tcp_port>`. On Docker's 1024 default
+    that alone is EMFILE in about 37 minutes. The healthcheck now reads
+    `/proc/net/tcp` for a `LISTEN` rather than connecting; re-measured after,
+    the manager sits at **50 descriptors, flat, zero CLOSE_WAIT**. Anything
+    that periodically opens and closes the mesh port will reintroduce this.
+
     Re-measured at 40 VMs with the limit raised: manager steady at 165 fds,
     zero EMFILE, max node id 31 of 64 (it reached 50–61 before). The long-run
     death is gone. **The boot ceiling is not** — the same run still lost 3
@@ -428,6 +456,42 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
       raising the limit buys a working day, not an indefinite reprieve. A
       fleet left above the wall will eventually reach EMFILE whatever the
       limit is; the fix is to size the fleet below it.
+
+18. **The TCP backend resolved every GID to the same node — fixed upstream.**
+    This is why inter-node RDMA never worked on a fleet larger than two nodes,
+    and why `vfio-user-ernic-2vm` was the only stack that ever appeared
+    healthy: with a single peer, the wrong answer is also the right one.
+
+    Caught by comparing what the manager assigned against what the resolver
+    returned, in the same run:
+
+    ```
+    TCP: Registered node 1 at 172.28.1.2        <- ernic-2
+    TCP: Registered node 2 at 172.28.1.3        <- ernic-3
+    TCP: Registered node 3 at 172.28.1.4        <- ernic-4
+
+    TCP: Resolved GID 254.109.0.3 -> node 1     <- should be node 2
+    TCP: Resolved GID 254.109.0.4 -> node 1     <- should be node 3
+    ```
+
+    Three distinct GIDs, one answer each time: the first other node that
+    instance knew about, regardless of which GID was asked for. The payload
+    reached a node with no matching queue pair and the client saw `Completion
+    with error at client` (`ib_send_bw` exit 17).
+
+    Fixed upstream by resolving against a per-node advertised GID set, which
+    this repo now supplies as `ERNIC_TCP_GUEST_GIDS` — see the scale-out
+    README. Re-measured on 32 nodes against the fix: **16 concurrent disjoint
+    pairs pass, 8-to-1 incast passes 8/8 at ~11.4 GB/s into one node, 1.72 TB
+    moved in a 25-minute soak with zero evictions.**
+
+    Two things worth keeping from the hunt. **Mesh size is the trigger, not
+    the cause** — 2 nodes passes everything, 4/8/32 fail identically, so a
+    two-node reproduction will never show it. And **node-id assignment order
+    is a red herring**: ids are handed out in connection order and do not
+    match node index unless starts are serialised, which is true and
+    irrelevant, because the resolver never consulted the id. Serialising
+    worker startup costs about 56 s of boot at 32 nodes and fixes nothing.
 
 ## Git / GitHub
 

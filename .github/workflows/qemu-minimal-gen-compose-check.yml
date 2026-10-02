@@ -1,0 +1,81 @@
+name: qemu-minimal - Gen Compose Check
+
+# The scale-out stack's docker-compose.yml and prometheus.yml are generated
+# from qemu/env.scale-out and committed, so they can be reviewed in a diff and
+# used with plain `docker compose`. That only holds if the committed copy
+# actually matches the settings file.
+#
+# AGENTS.md and the stack README have both claimed "gen-compose --check fails
+# in CI" since the generator landed. It did not: no workflow ran it, so a hand
+# edit to the generated tree -- or a settings change without a regenerate --
+# would have shipped undetected. This lane makes the claim true.
+#
+# No push: trigger and no paths: filter, matching site-script-tests and
+# shell-check -- every commit reaches main through a PR, and a path-filtered
+# required check never reports on a PR outside its filter, leaving that PR
+# blocked forever. The job is seconds, so there is nothing to save by
+# filtering it.
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  gen-compose-check:
+    name: Gen Compose Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4.3.1
+
+      # qemu-tool is stdlib-only, so an editable install needs no resolver and
+      # pulls nothing. Installing it rather than importing from the tree keeps
+      # this honest about the entry point users actually run.
+      - name: Install qemu-tool
+        run: python3 -m pip install --user -e ./qemu
+
+      - name: Unit tests
+        run: python3 -m unittest discover -s tests -v
+
+      # The gate itself. --check regenerates into a temporary directory and
+      # compares, so it fails on a stale committed stack *and* on a settings
+      # file edited without regenerating.
+      - name: Committed stack matches qemu/env.scale-out
+        run: |
+          python3 -m qemu_tool gen-compose \
+            --env-file qemu/env.scale-out \
+            --output-dir qemu/compose/vfio-user-ernic-rocjitsu-scale-out \
+            --check
+
+      # A generated file that is in step with its settings can still be
+      # invalid YAML or reference an undefined network, which --check cannot
+      # see. compose parses and resolves it without starting anything.
+      - name: Generated stack is valid compose
+        run: |
+          docker compose \
+            --project-directory qemu/compose/vfio-user-ernic-rocjitsu-scale-out \
+            --env-file qemu/env.scale-out config -q
+
+      # ERNIC_TAP is opt-in and off by default, so the committed stack only
+      # exercises one of the two shapes. Render the other into a scratch
+      # directory and validate that too -- the tap path adds a network, a
+      # per-service device and a sidecar per VM, which is exactly where an
+      # invalid reference would hide.
+      - name: Tap-enabled stack also renders and validates
+        run: |
+          sed 's/^ERNIC_TAP=.*/ERNIC_TAP=true/' qemu/env.scale-out > /tmp/env.tap
+          grep -q '^ERNIC_TAP=true' /tmp/env.tap
+          mkdir -p /tmp/tapstack
+          python3 -m qemu_tool gen-compose \
+            --env-file /tmp/env.tap --output-dir /tmp/tapstack
+          cp -r qemu/compose/vfio-user-ernic-rocjitsu-scale-out/tapsetup /tmp/tapstack/
+          docker compose --project-directory /tmp/tapstack \
+            --env-file /tmp/env.tap config -q

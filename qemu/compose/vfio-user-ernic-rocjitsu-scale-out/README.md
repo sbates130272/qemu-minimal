@@ -7,7 +7,7 @@ Same topology as `vfio-user-ernic-2vm`, sized by a variable instead of by hand.
 Edit [`qemu/env.scale-out`](../../env.scale-out) and regenerate; do not edit
 them directly. Both are committed so the stack stays reviewable in a diff and
 usable with plain `docker compose`, but a hand edit is lost on the next
-regeneration and `gen-compose --check` will fail in CI.
+regeneration and the `Gen Compose Check` CI lane will fail.
 
 ```bash
 qemu-tool gen-compose --env-file qemu/env.scale-out
@@ -92,6 +92,56 @@ on the next `modprobe ionic_rdma`, and the vfio-user sessions QEMU holds are
 stale — reloading guest modules does not recover them. The only fix is
 `docker compose down && up` for the whole stack. `restart: on-failure` would
 turn that into a quiet wedge instead of a visible crash. See AGENTS.md issue 7.
+
+## Guest Ethernet (`ERNIC_TAP`)
+
+Off by default. Turn it on and the guests can talk IP to each other; leave it
+off and they cannot, at all.
+
+**rocm-ernic's TCP mesh carries RDMA payload only.** The emulated NIC has no
+Ethernet datapath unless it is attached to a TAP (`-T`). Without one the guest
+driver transmits happily — `ethtool -S` counts the packets — the device drops
+them, `ernic_ip_bytes_tx_total` never moves, ARP goes unanswered and ping gets
+100% loss. Since `ib_send_bw` exchanges queue-pair parameters out of band over
+TCP, that also means **no inter-node RDMA test can run at all**.
+
+With `ERNIC_TAP=true` each ernic gets `tap0`, and a `tapsetup-<n>` sidecar
+sharing that container's network namespace creates the tap, creates a bridge,
+and enslaves both the tap and the container's `l2` interface. Every ernic is
+on the same `l2` network, so every guest lands on one L2 segment. Measured on
+a 32-VM fleet: 31/31 peers reachable, ARP resolving to the real ernic MACs.
+
+Three things about the shape are deliberate:
+
+- **`CAP_NET_ADMIN` is in the sidecar, which exits.** Creating a tap or a
+  bridge needs it; *attaching* to a pre-created, owned tap does not — only
+  `/dev/net/tun`. Verified: an ernic at Docker's default capability set
+  reports `Ethernet attached to TAP tap0`. Nothing privileged stays running.
+- **The bridge takes `l2`, never the mesh interface.** The mesh interface
+  carries the address workers dial; moving it into a bridge would break
+  registration.
+- **The ernic entrypoint waits for `tap0` before exec.** The sidecar shares
+  the ernic's namespace, so it cannot run until that container exists — the
+  tap is not there at the instant `rocm-ernic` would start.
+
+The sidecar image is built by compose from `tapsetup/` rather than pulled. It
+is three lines and not worth publishing, and 32 containers each running
+`apk add` at start is exactly the start-burst that cost twelve guests when
+`pipx install` raced pypi.org.
+
+### Per-node GIDs
+
+Each ernic is given `ERNIC_TCP_GUEST_GIDS` naming the GIDs its guest owns:
+the EUI-64 link-local derived from the fleet MAC, and the guest IPv4. The mesh
+resolves a destination GID to a node by asking each node what it owns, so this
+is inherently per-node — it cannot be set once in the shared anchor. It is
+derived from the MAC rather than restated in the settings file, because the
+MAC already says it.
+
+Getting this wrong is not a startup error. The mesh routes the payload to
+whichever node answers, the receiving node has no matching queue pair, and the
+transfer fails with `Completion with error at client` — a long way from the
+cause.
 
 ## Metrics
 

@@ -5,10 +5,17 @@
 #   qemu-tool gen-compose --env-file qemu/env.scale-out
 #
 # env-file: qemu/env.scale-out
-# env-sha256: c406ef4ad8de91e668546be513cc86993eef6f4c1802a82111420601e7842317
+# env-sha256: ff7a6108922dac27f99d911642e67cb231b491b40d22fc86516ecda2449ffc38
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
 
 x-ernic-common: &ernic-common
   image: "${ERNIC_IMAGE}"
+  logging: *logging
   ulimits:
     nofile:
       soft: 65536
@@ -16,11 +23,10 @@ x-ernic-common: &ernic-common
   volumes:
     - vfu-sockets:/run/vfu
     - ernic-stats:/run/ernic-stats
-  environment:
-    - ERNIC_DEBUG_MESH
 
 x-qemu-common: &qemu-common
   image: "${QEMU_IMAGE}"
+  logging: *logging
   volumes:
     - vfu-sockets:/run/vfu:ro
     - "${VM_IMAGES_DIR}:${VM_IMAGES_DIR}"
@@ -35,22 +41,27 @@ services:
   ernic-1:
     <<: *ernic-common
     hostname: 172.31.1.1
+    devices:
+      - /dev/net/tun
     networks:
+      l2: {}
       fleet:
         ipv4_address: 172.31.1.1
     restart: "no"
-    command:
-      - rocm-ernic
-      - -s
-      - /run/vfu/ernic-1.sock
-      - -b
-      - "tcp:manager:listen:6320"
-      - -m
-      - "72:6f:63:6d:00:01"
-      - -S
-      - /run/ernic-stats/ernic-1.stats
+    environment:
+      - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:1,192.168.100.11
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        n=0; until [ -e /sys/class/net/tap0 ]; do
+          n=$$((n+1))
+          [ $$n -gt 240 ] && echo 'tap0 never appeared' && exit 1
+          sleep 0.5
+        done
+        exec rocm-ernic '-s' '/run/vfu/ernic-1.sock' '-b' 'tcp:manager:listen:6320' '-m' '72:6f:63:6d:00:01' '-S' '/run/ernic-stats/ernic-1.stats' '-T' 'tap0'
     healthcheck:
-      test: ["CMD", "python3", "-c", "import socket,sys; s=socket.create_connection(('127.0.0.1',6320),2); s.close()"]
+      test: ["CMD", "awk", "$2 ~ /:18B0$/ && $4 == \"0A\" {found=1} END {exit !found}", "/proc/net/tcp"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -60,25 +71,30 @@ services:
   ernic-2:
     <<: *ernic-common
     hostname: 172.31.1.2
+    devices:
+      - /dev/net/tun
     networks:
+      l2: {}
       fleet:
         ipv4_address: 172.31.1.2
     restart: on-failure
-    command:
-      - rocm-ernic
-      - -s
-      - /run/vfu/ernic-2.sock
-      - -b
-      - "tcp:worker:172.31.1.1:6320"
-      - -m
-      - "72:6f:63:6d:00:02"
-      - -S
-      - /run/ernic-stats/ernic-2.stats
+    environment:
+      - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:2,192.168.100.12
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        n=0; until [ -e /sys/class/net/tap0 ]; do
+          n=$$((n+1))
+          [ $$n -gt 240 ] && echo 'tap0 never appeared' && exit 1
+          sleep 0.5
+        done
+        exec rocm-ernic '-s' '/run/vfu/ernic-2.sock' '-b' 'tcp:worker:172.31.1.1:6320' '-m' '72:6f:63:6d:00:02' '-S' '/run/ernic-stats/ernic-2.stats' '-T' 'tap0'
     depends_on:
       ernic-1:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "test", "-S", "/run/vfu/ernic-2.sock"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -88,25 +104,30 @@ services:
   ernic-3:
     <<: *ernic-common
     hostname: 172.31.1.3
+    devices:
+      - /dev/net/tun
     networks:
+      l2: {}
       fleet:
         ipv4_address: 172.31.1.3
     restart: on-failure
-    command:
-      - rocm-ernic
-      - -s
-      - /run/vfu/ernic-3.sock
-      - -b
-      - "tcp:worker:172.31.1.1:6320"
-      - -m
-      - "72:6f:63:6d:00:03"
-      - -S
-      - /run/ernic-stats/ernic-3.stats
+    environment:
+      - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:3,192.168.100.13
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        n=0; until [ -e /sys/class/net/tap0 ]; do
+          n=$$((n+1))
+          [ $$n -gt 240 ] && echo 'tap0 never appeared' && exit 1
+          sleep 0.5
+        done
+        exec rocm-ernic '-s' '/run/vfu/ernic-3.sock' '-b' 'tcp:worker:172.31.1.1:6320' '-m' '72:6f:63:6d:00:03' '-S' '/run/ernic-stats/ernic-3.stats' '-T' 'tap0'
     depends_on:
-      ernic-1:
+      ernic-2:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "test", "-S", "/run/vfu/ernic-3.sock"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -116,25 +137,30 @@ services:
   ernic-4:
     <<: *ernic-common
     hostname: 172.31.1.4
+    devices:
+      - /dev/net/tun
     networks:
+      l2: {}
       fleet:
         ipv4_address: 172.31.1.4
     restart: on-failure
-    command:
-      - rocm-ernic
-      - -s
-      - /run/vfu/ernic-4.sock
-      - -b
-      - "tcp:worker:172.31.1.1:6320"
-      - -m
-      - "72:6f:63:6d:00:04"
-      - -S
-      - /run/ernic-stats/ernic-4.stats
+    environment:
+      - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:4,192.168.100.14
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        n=0; until [ -e /sys/class/net/tap0 ]; do
+          n=$$((n+1))
+          [ $$n -gt 240 ] && echo 'tap0 never appeared' && exit 1
+          sleep 0.5
+        done
+        exec rocm-ernic '-s' '/run/vfu/ernic-4.sock' '-b' 'tcp:worker:172.31.1.1:6320' '-m' '72:6f:63:6d:00:04' '-S' '/run/ernic-stats/ernic-4.stats' '-T' 'tap0'
     depends_on:
-      ernic-1:
+      ernic-3:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "test", "-S", "/run/vfu/ernic-4.sock"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -144,25 +170,30 @@ services:
   ernic-5:
     <<: *ernic-common
     hostname: 172.31.1.5
+    devices:
+      - /dev/net/tun
     networks:
+      l2: {}
       fleet:
         ipv4_address: 172.31.1.5
     restart: on-failure
-    command:
-      - rocm-ernic
-      - -s
-      - /run/vfu/ernic-5.sock
-      - -b
-      - "tcp:worker:172.31.1.1:6320"
-      - -m
-      - "72:6f:63:6d:00:05"
-      - -S
-      - /run/ernic-stats/ernic-5.stats
+    environment:
+      - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:5,192.168.100.15
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        n=0; until [ -e /sys/class/net/tap0 ]; do
+          n=$$((n+1))
+          [ $$n -gt 240 ] && echo 'tap0 never appeared' && exit 1
+          sleep 0.5
+        done
+        exec rocm-ernic '-s' '/run/vfu/ernic-5.sock' '-b' 'tcp:worker:172.31.1.1:6320' '-m' '72:6f:63:6d:00:05' '-S' '/run/ernic-stats/ernic-5.stats' '-T' 'tap0'
     depends_on:
-      ernic-1:
+      ernic-4:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "test", "-S", "/run/vfu/ernic-5.sock"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -172,25 +203,30 @@ services:
   ernic-6:
     <<: *ernic-common
     hostname: 172.31.1.6
+    devices:
+      - /dev/net/tun
     networks:
+      l2: {}
       fleet:
         ipv4_address: 172.31.1.6
     restart: on-failure
-    command:
-      - rocm-ernic
-      - -s
-      - /run/vfu/ernic-6.sock
-      - -b
-      - "tcp:worker:172.31.1.1:6320"
-      - -m
-      - "72:6f:63:6d:00:06"
-      - -S
-      - /run/ernic-stats/ernic-6.stats
+    environment:
+      - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:6,192.168.100.16
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        n=0; until [ -e /sys/class/net/tap0 ]; do
+          n=$$((n+1))
+          [ $$n -gt 240 ] && echo 'tap0 never appeared' && exit 1
+          sleep 0.5
+        done
+        exec rocm-ernic '-s' '/run/vfu/ernic-6.sock' '-b' 'tcp:worker:172.31.1.1:6320' '-m' '72:6f:63:6d:00:06' '-S' '/run/ernic-stats/ernic-6.stats' '-T' 'tap0'
     depends_on:
-      ernic-1:
+      ernic-5:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "test", "-S", "/run/vfu/ernic-6.sock"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -200,25 +236,30 @@ services:
   ernic-7:
     <<: *ernic-common
     hostname: 172.31.1.7
+    devices:
+      - /dev/net/tun
     networks:
+      l2: {}
       fleet:
         ipv4_address: 172.31.1.7
     restart: on-failure
-    command:
-      - rocm-ernic
-      - -s
-      - /run/vfu/ernic-7.sock
-      - -b
-      - "tcp:worker:172.31.1.1:6320"
-      - -m
-      - "72:6f:63:6d:00:07"
-      - -S
-      - /run/ernic-stats/ernic-7.stats
+    environment:
+      - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:7,192.168.100.17
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        n=0; until [ -e /sys/class/net/tap0 ]; do
+          n=$$((n+1))
+          [ $$n -gt 240 ] && echo 'tap0 never appeared' && exit 1
+          sleep 0.5
+        done
+        exec rocm-ernic '-s' '/run/vfu/ernic-7.sock' '-b' 'tcp:worker:172.31.1.1:6320' '-m' '72:6f:63:6d:00:07' '-S' '/run/ernic-stats/ernic-7.stats' '-T' 'tap0'
     depends_on:
-      ernic-1:
+      ernic-6:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "test", "-S", "/run/vfu/ernic-7.sock"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -228,25 +269,30 @@ services:
   ernic-8:
     <<: *ernic-common
     hostname: 172.31.1.8
+    devices:
+      - /dev/net/tun
     networks:
+      l2: {}
       fleet:
         ipv4_address: 172.31.1.8
     restart: on-failure
-    command:
-      - rocm-ernic
-      - -s
-      - /run/vfu/ernic-8.sock
-      - -b
-      - "tcp:worker:172.31.1.1:6320"
-      - -m
-      - "72:6f:63:6d:00:08"
-      - -S
-      - /run/ernic-stats/ernic-8.stats
+    environment:
+      - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:8,192.168.100.18
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        n=0; until [ -e /sys/class/net/tap0 ]; do
+          n=$$((n+1))
+          [ $$n -gt 240 ] && echo 'tap0 never appeared' && exit 1
+          sleep 0.5
+        done
+        exec rocm-ernic '-s' '/run/vfu/ernic-8.sock' '-b' 'tcp:worker:172.31.1.1:6320' '-m' '72:6f:63:6d:00:08' '-S' '/run/ernic-stats/ernic-8.stats' '-T' 'tap0'
     depends_on:
-      ernic-1:
+      ernic-7:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "test", "-S", "/run/vfu/ernic-8.sock"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -700,6 +746,7 @@ services:
       fleet:
         ipv4_address: 172.31.0.10
     devices: []
+    user: "65534:65534"
     volumes:
       - ernic-stats:/run/ernic-stats:ro
       - "${QEMU_TOOL_SRC:-../../..}:/qemu-tool-src:ro"
@@ -709,16 +756,17 @@ services:
       - |
         cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
         for i in 1 2 3 4 5; do
-          PIPX_BIN_DIR=/usr/local/bin pipx install --force \
+          HOME=/tmp PIPX_HOME=/tmp/pipx PIPX_BIN_DIR=/tmp/bin pipx install --force \
             /tmp/qemu-tool-build && break
           sleep 10
         done
-        exec qemu-tool ernic-stats \
+        exec /tmp/bin/qemu-tool ernic-stats \
           --stats-dir /run/ernic-stats \
           --port 9840
 
   prometheus:
     image: docker.io/prom/prometheus:latest
+    logging: *logging
     profiles: [metrics]
     networks:
       fleet:
@@ -726,14 +774,120 @@ services:
     restart: on-failure
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prom-data:/prometheus
+      - ./prom-data:/prometheus
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.retention.time=7d
     ports:
       - "9090:9090"
 
+  # ---- guest Ethernet wiring ----
+  # One short-lived privileged sidecar per ernic. It shares
+  # that ernic's network namespace, creates the tap and the
+  # bridge, and exits. NET_ADMIN lives here and nowhere else.
+  tapsetup-1:
+    build: ./tapsetup
+    image: "qemu-tool/ernic-tapsetup:1"
+    logging: *logging
+    network_mode: "service:ernic-1"
+    cap_add: [NET_ADMIN]
+    devices:
+      - /dev/net/tun
+    restart: "no"
+    depends_on:
+      ernic-1:
+        condition: service_started
+  tapsetup-2:
+    build: ./tapsetup
+    image: "qemu-tool/ernic-tapsetup:1"
+    logging: *logging
+    network_mode: "service:ernic-2"
+    cap_add: [NET_ADMIN]
+    devices:
+      - /dev/net/tun
+    restart: "no"
+    depends_on:
+      ernic-2:
+        condition: service_started
+  tapsetup-3:
+    build: ./tapsetup
+    image: "qemu-tool/ernic-tapsetup:1"
+    logging: *logging
+    network_mode: "service:ernic-3"
+    cap_add: [NET_ADMIN]
+    devices:
+      - /dev/net/tun
+    restart: "no"
+    depends_on:
+      ernic-3:
+        condition: service_started
+  tapsetup-4:
+    build: ./tapsetup
+    image: "qemu-tool/ernic-tapsetup:1"
+    logging: *logging
+    network_mode: "service:ernic-4"
+    cap_add: [NET_ADMIN]
+    devices:
+      - /dev/net/tun
+    restart: "no"
+    depends_on:
+      ernic-4:
+        condition: service_started
+  tapsetup-5:
+    build: ./tapsetup
+    image: "qemu-tool/ernic-tapsetup:1"
+    logging: *logging
+    network_mode: "service:ernic-5"
+    cap_add: [NET_ADMIN]
+    devices:
+      - /dev/net/tun
+    restart: "no"
+    depends_on:
+      ernic-5:
+        condition: service_started
+  tapsetup-6:
+    build: ./tapsetup
+    image: "qemu-tool/ernic-tapsetup:1"
+    logging: *logging
+    network_mode: "service:ernic-6"
+    cap_add: [NET_ADMIN]
+    devices:
+      - /dev/net/tun
+    restart: "no"
+    depends_on:
+      ernic-6:
+        condition: service_started
+  tapsetup-7:
+    build: ./tapsetup
+    image: "qemu-tool/ernic-tapsetup:1"
+    logging: *logging
+    network_mode: "service:ernic-7"
+    cap_add: [NET_ADMIN]
+    devices:
+      - /dev/net/tun
+    restart: "no"
+    depends_on:
+      ernic-7:
+        condition: service_started
+  tapsetup-8:
+    build: ./tapsetup
+    image: "qemu-tool/ernic-tapsetup:1"
+    logging: *logging
+    network_mode: "service:ernic-8"
+    cap_add: [NET_ADMIN]
+    devices:
+      - /dev/net/tun
+    restart: "no"
+    depends_on:
+      ernic-8:
+        condition: service_started
+
 networks:
+  # Dumb shared L2 carrying guest Ethernet only. No address
+  # is assigned: each ernic bridges its tap onto it, and the
+  # guests address each other over ERNIC_GUEST_SUBNET.
+  l2:
+    driver: bridge
   # Every service has a fixed address and nothing resolves a
   # service name at run time. Docker's embedded DNS is a single
   # resolver per network, and a fleet start burst saturates it:
@@ -759,4 +913,3 @@ volumes:
     driver_opts:
       type: tmpfs
       device: tmpfs
-  prom-data:
