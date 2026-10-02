@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v1.4.0] - 2026-10-02
+
 ### Added
 
 - **`qemu-tool gen-compose` generates an N-VM rocm-ernic mesh stack** from a

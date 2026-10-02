@@ -1,3 +1,1089 @@
+python3-qemu-tool (1.4.0) unstable; urgency=low
+
+  [ Added ]
+  * **`qemu-tool gen-compose` generates an N-VM rocm-ernic mesh stack**
+    from a settings file, with one emulated RDMA NIC and one rocjitsu GPU
+    per VM. Same topology as `vfio-user-ernic-2vm`, sized by a variable
+    rather than by hand. Per-VM values are comma-lists, not numbered
+    variables — `VM1_NAME`/`VM2_NAME` does not survive eight VMs, let
+    alone the mesh's 64-node ceiling. A bare value broadcasts, a list
+    of length `VM_COUNT` applies positionally, and any other length is
+    an error naming the key and both lengths. Keys naming a field that
+    is already `list[str]` (`VM_EXTRA_HOSTFWD` and friends) keep their
+    existing meaning and go whole to every VM; the two cases are told
+    apart from `VMConfig`'s own type hints rather than a hand-kept list of
+    names, so a scalar field added later becomes per-VM-overridable for
+    free. Settings template in `qemu/env.scale-out`, generated stack in
+    `qemu/compose/vfio-user-ernic-rocjitsu-scale-out/`. The generator
+    refuses an image set that cannot have been built together: all four
+    image tags must share one `<date>.<ci-sha>` stamp, and the qemu
+    and ernic images must share one `vfu.*` revision. Both guard the
+    same failure, which is worth an up-front check because it does not
+    present as a version problem — a guest driver and a host server
+    from different SHAs wedge at the vfio-user/DSR boundary and look like
+    a broken device. Every service gets a static address on the stack's
+    own `fleet` network and nothing in the stack resolves a service name
+    at run time. That is a scaling fix, not tidiness: Docker runs one
+    embedded resolver per network, and the mesh advertises each node by
+    `gethostname()` so that peers resolve it to dial — which puts that
+    one resolver in the path of all N×(N−1) peer links. At 48 VMs it
+    saturated, workers died on `Temporary failure in name resolution`,
+    and because the mesh takes a new node id on every reconnect and never
+    reclaims the old one, the restarts walked the fleet toward its 64-node
+    protocol ceiling. Naming each container after its own address makes
+    those numeric lookups: 4497 resolution failures at 48 VMs became
+    zero. Measured ceiling on a 128-core / 503G host at 4 vCPU and 8G
+    per VM: 32 VMs boot clean every time, 40 is marginal (40/40 once,
+    37/40 on a repeat), 44 lose 3 guests, 48 lose 7. Memory is never the
+    constraint — 48 VMs used 107G of 503G. Two things bind instead. The
+    manager's heartbeat timeout is 20 s of wall clock and is not tunable,
+    so an oversubscribed host makes it mistake slow nodes for dead ones
+    and evict them, taking their guests down with `vfio-user: timed out
+    waiting for reply`. And the mesh stops registering new workers at
+    about 40 nodes: asking for 64 VMs settles at 40 of 64, with the rest
+    dying on `TCP: Registration timeout` on an idle host as much as a
+    busy one, because the mesh is a full mesh and registering node N+1
+    costs N new connections against a fixed timeout. The 64-node protocol
+    cap in `rdma_backend_tcp.c` is therefore not reachable — the 64-VM
+    fleet peaked at node id 30. Full write-up in the stack's README; the
+    fleet-wide consequences are AGENTS.md issues 13, 14 and 17. Every
+    ernic service now sets `ulimits.nofile` from a new `ERNIC_NOFILE`
+    setting (default 65536). Docker's default soft limit is 1024, and
+    the manager does not close the socket of a node it evicts — so each
+    eviction leaks a file descriptor and a 40-VM fleet reaches the limit
+    inside a normal run. Past it the manager cannot even reopen its own
+    stats file, spins in an `accept()`/EMFILE loop with no backoff (3.3
+    GB of log in 12 hours, measured), and the guest attached to it dies
+    on a QEMU assertion. Raising the limit does not fix the leak, which
+    is upstream's; it buys the run enough headroom to finish. AGENTS.md
+    issue 15. The generated YAML records the hash of the settings file
+    it came from, and `qemu-tool compose` warns on stderr when they
+    disagree. It never blocks: `down` against a stale tree is how a bad
+    edit is recovered from. `gen-compose --check` turns the same comparison
+    into a CI gate.
+  * **`qemu-tool ernic-stats`** serves the stats dumps written by
+    `rocm-ernic -S` as Prometheus metrics — per-QP bytes, doorbells,
+    CQEs, WQEs by opcode, MMIO and interrupt counts. Metric and label names
+    are taken verbatim from rocm-ernic's own `prometheus/ernic-exporter`,
+    so that project's `grafana/ernic-dashboard.json` works against this
+    endpoint unmodified. The implementation is separate because that
+    exporter is systemd-shaped: it needs an `instances.json` manifest
+    ernicctl writes, only reads files whose stem parses as an integer,
+    and checks liveness with PIDs from its own namespace — none of
+    which survive a compose stack where each server is PID 1 in its own
+    container. The CI image also ships only the `rocm-ernic` binary.
+  * **`qemu-tool gen-vm --backing-image OCI_REF`** pulls a published
+    backing qcow2 from a registry with `oras`, decompresses it and creates
+    the overlay — the same job as the cloud-image download, from a
+    different source. The artifact is not a runnable image (`artifactType`
+    `application/vnd.batesste.vm-image.v1`, one zstd layer), so `docker
+    pull` will not fetch it. `zstd` is now a `Recommends`.
+  [ Changed ]
+  * **`qemu-tool list` reports the SSH port a containerised VM is
+    actually reachable on.** It read the port out of the QEMU command
+    line, but a containerised guest's `-hostfwd` port is the port inside
+    that container's network namespace — and the scale-out stack gives
+    every guest 2222 there, so a forty-VM fleet listed forty VMs on port
+    2222. True, and useless. The listing now also resolves the published
+    mapping and shows `host->guest` when the two differ (`2231->2222`);
+    JSON output gains `ssh_port_host` alongside the existing `ssh_port`. An
+    uncontainerised listing is unchanged, still one port per row.
+  * **`sbates130272.batesste` is pinned to 3.0.0** (was `>=2.4.0`),
+    and the workarounds that release makes unnecessary are
+    gone. `vm-rocm.yml` loses the four hand-rolled pre_tasks that
+    wrote `/etc/dkms/no-autoinstall` and diverted `update-initramfs`
+    — `rocm_setup_amdgpu_dkms_defer_build` does that in the role,
+    immediately before the `amdgpu-dkms` install rather than a play
+    boundary away. `vm-rocjitsu.yml` loses its ROCm-prefix fixup
+    (batesste-ansible#248) and reads `rocm_setup_therock_prefix` instead;
+    the `setup-vm-job` action loses its `jmespath` install (2.4.0's
+    `check_platform` was the only `json_query` caller) and its `~/.gnupg`
+    step (`git_setup` no longer deploys a GnuPG config by default). The
+    pin is exact, not a floor: 3.0.0 is a breaking release, and the next
+    one should arrive as a PR rather than as a lane that broke overnight
+    when the collections cache was evicted.
+  * **A local ROCm bake still runs its distro-wide `apt upgrade`.**
+    3.0.0 flipped `rocm_setup_skip_system_upgrade` to true, which would
+    have taken that pass away from every bake; `vm-rocm.yml` holds it at
+    false, so the behaviour is unchanged and CI's explicit `true` is a
+    real override again rather than a restatement of the default. Pass
+    `vm_rocm_skip_system_upgrade=true` to opt a local bake out — CI
+    does it for its own reasons, documented in the workflows: that pass
+    is the largest source of flake in those lanes, since it is what meets
+    the `security.ubuntu.com` mirror skew, and a reproducibility hole
+    against the pinned guest kernel. In the same release `rocm_setup`
+    stopped running `update-pciids` and stopped installing `rocm-cli` and
+    `xrocmtop` by default; this repo already disabled the latter two, and
+    the `ionic_image_prep` pci.ids entry is no longer clobbered by a bake.
+  * **Guests get a generic git identity.** 3.0.0's `git_setup`
+    asserts on an unset `user.name`/`user.email` instead of
+    leaving them blank, so `vm-basic.yml` sets `qemu-minimal VM
+    <qemu-minimal@localhost>`. Deliberately impersonal: these images
+    are published as qcow2s and nothing in a guest makes a commit anyone
+    reads. CI additionally passes `user_setup_deploy_ssh_key=false`.
+  * **The VM playbooks are layered** the way the README has always
+    described them, instead of four standalone files re-copying
+    the shared parts. `vm-basic.yml` is the base for every guest;
+    `vm-rocm.yml` imports it and is the base for every guest that
+    needs ROCm; `vm-rocjitsu.yml` imports `vm-rocm.yml`; `vm-ernic.yml`
+    imports `vm-basic.yml`. What had been duplicated: the GitHub-token
+    `module_defaults` block (four verbatim copies, now one expression in
+    `vars/github-api.yml`), the `user_setup`/`fave_packages`/`git_setup`
+    trio (four copies), and the ROCm apt pin plus three stale-source
+    cleanups (two copies, ~60 lines each). `vm-ernic.yml` sits on
+    `vm-basic.yml` rather than `vm-rocm.yml` because it installs no
+    ROCm at all — its `rocm_setup_*` vars, the ROCm apt pin and the
+    ROCm keyring cleanup were configuring a role that never ran, and
+    are gone with it. `ansible-playbook --list-tasks --tags install`
+    is unchanged for the combined lane and changes only as intended for
+    the other two. `vm-ernic-rocjitsu.yml` is untouched.
+  * **Every CI lane that bakes a guest now runs `resolute`.**
+    The `vm-rocm`, `ansible-setup-test`, `report-for-vm-basic`,
+    `report-for-vm-ernic` and `smoke-test-rocm-ernic` lanes were still
+    on `noble`, so half the fleet was being proved on a release nothing
+    else used. `smoke-test-qemu-tool` keeps its `noble` × `resolute`
+    matrix deliberately — it is the one lane whose subject *is* release
+    coverage, and collapsing it would leave `noble` advertised by the
+    CLI and untested everywhere.
+  * **`gen-vm` defaults to `--release resolute`** (was `noble`), so a bare
+    `qemu-tool gen-vm` builds what CI proves. README, the man page and
+    `env.example` follow. Pass `--release noble` to get the old default
+    back; `noble` remains supported and matrix-tested.
+  * **`vm-rocm.yml` stops installing `rocm-cli` and `xrocmtop`.** Both
+    `rocm_setup_install_rocm_cli` and `rocm_setup_install_xrocmtop`
+    default to true in the role and were set nowhere here, so every
+    ROCm lane — plain rocjitsu and ernic-rocjitsu alike — baked
+    them in by accident. Nothing in this repo runs either and no lane
+    asserts on them. `rocm-cli` is the bigger reason: its installer is
+    an unpinned `curl … rocm-cli/main/install.sh | sh` executed at
+    bake time. `xrocmtop` is an interactive terminal UI in a headless
+    CI guest. `rocm_setup_install_metrics_exporter` stays true —
+    `vm-rocjitsu.yml` deleted its own exporter install in favour of it,
+    and the guest that had no GPU and no use for it, `vm-ernic.yml`,
+    no longer runs `rocm_setup` at all.
+  * `vm-rocm.yml`'s `rocm_setup_extra_kernel_packages` now defaults to
+    `[]`. It named `linux-generic-hwe-24.04`, which was correct only while
+    the plain ROCm lane ran noble; on resolute that is another release's
+    metapackage, and there is no resolute equivalent worth naming because
+    resolute's GA kernel already is the current one. Naming one there
+    installs a kernel nothing boots, which is the trap `vm-rocjitsu.yml`
+    already documents on its own `[]` override.
+  * `vm-rocjitsu.yml` installs the pinned mainline kernel
+    (`ionic_kernel_pin`, currently `v7.2.4`) before it touches DKMS, so
+    the standalone rocjitsu lane boots the same kernel as the combined
+    lane and as the published `ernic-rocjitsu` qcow2. It had been booting
+    resolute GA, 7.0.0-34, while carrying two amdgpu patches — the
+    ptrace gate and the `panel_type` probe — that are version-gated
+    to >= 7.2 and are therefore deliberate no-ops there. The combined
+    lane never had the problem because `vm-ernic.yml` runs first and
+    `ionic_image_prep` puts the guest on 7.2.4; the standalone lane
+    is now the same guest. The kernel comes from `ionic_image_prep`'s
+    `kernel.yml` via `tasks_from`, reusing one installer and one pin
+    rather than a second copy, and `kernel.yml` short-circuits when the
+    pinned kernel is already running so the combined lane does not install
+    it twice. Its closing `ib_umem_get_va` assert is now gated on a new
+    `ionic_image_kernel_assert_ionic`, which the GPU lane sets false —
+    that check is `ionic_rdma`'s precondition, not a reason to fail a
+    lane that never builds it. Position in `pre_tasks` is load-bearing:
+    the kernel `.debs` run `update-initramfs` themselves, so the install
+    has to precede the `dpkg-divert` that replaces it with a no-op, and
+    it has to precede the DKMS build, which must target the kernel the
+    guest boots. This is the one remaining difference between the guest
+    the rocjitsu lane builds per run and the published qcow2, which runs
+    `sgemm-bench` to completion — 8/8, including under a GitHub-runner
+    CPU and memory envelope — where the lane's own guest hangs in
+    `hipFuncGetAttributes`.
+  * `vm-rocjitsu.yml` builds the amdgpu DKMS module **once**, from
+    patched source, instead of building it for every installed kernel
+    and then throwing the result away. The four source patches report
+    `changed` on every run, so the module the `amdgpu-dkms` postinst
+    produced was always discarded by the rebuild that follows them —
+    while costing 23m55s of a 47m48s standalone lane and 28m20s of a
+    55m46s combined lane, against ~12m for the rebuild that produces
+    what the guest loads. The postinst built "for 7.0.0-31-generic,
+    7.0.0-34-generic and 7.2.4-070204-generic"; the guest boots one
+    of those. `/etc/dkms/no-autoinstall` now stops it before it starts,
+    replacing the `no-autoinstall-errors` marker that let the doomed build
+    run and then ignored its exit status. That marker's fallout goes with
+    it: `dpkg --configure -a` has nothing left to settle, and genuine DKMS
+    failures elsewhere in the image stay fatal rather than being swallowed
+    for the rest of the run. Because `no-autoinstall` short-circuits above
+    `dkms add` as well as the build loop, the rebuild task registers the
+    module itself and takes the version from `/usr/src/amdgpu-<version>`
+    — `dkms status` names nothing until something has been added, and
+    the old `awk` over its first line was producing an empty version. That
+    empty version turned out to have a second consumer. `amdgpu-dkms`'s
+    own postinst runs after `common.postinst` returns and derives a kernel
+    version from the DKMS state that the early exit never wrote, so it
+    called `update-initramfs -u -k` with nothing after the `-k` and exited
+    2 — a maintainer script this playbook does not own, on an install
+    that belongs to `rocm_setup`, so dpkg's failure became apt's rc 100
+    and failed the play. `/usr/sbin/update-initramfs` is now diverted to a
+    no-op for exactly the window the marker covers (`dpkg-divert`, not a
+    PATH shim, because the postinst calls the absolute path). Nothing is
+    lost by skipping that call: the initramfs it would build describes a
+    guest with no amdgpu module and no blacklist yet, and the existing
+    "Regenerate initramfs" task rebuilds it once both exist — the
+    undivert is placed before that task so it gets the real binary.
+  * RVS and the rocBLAS host library it links against are no longer
+    baked into the rocjitsu image. The check that consumes them is off
+    (no `amdrocm10` RVS tarball exists, and the `amdrocm7` one cannot
+    run against this guest's ROCm 10 tree), but the install tasks were
+    ungated and every bake still downloaded and unpacked the tarball
+    and pulled in `amdrocm-blas-host<ver>`. They are now gated on
+    `vm_rocjitsu_install_rvs`, default false; turn it on in the same
+    change that sets `rocjitsu_gpu_test_rvs` true. The role-side RVS
+    tasks were already gated and are unchanged.
+  * `rocm_setup_extra_kernel_packages` is gone from `vm-rocjitsu.yml`. Its
+    comment claimed `linux-generic-hwe-26.04` resolved to the running
+    `7.0.0-31-generic` and so was a no-op; it reported `changed`
+    on every run, and by the time it ran the guest was already on
+    `7.0.0-34-generic`, so it installed a metapackage for a kernel
+    nothing here boots — and fed that kernel to the postinst build
+    above. In the combined lane the guest runs the pinned mainline
+    `7.2.4` from `ionic_image_prep`, where a 7.0.x HWE kernel is pure
+    weight. `vm-ernic.yml` had already dropped it for the same reason.
+  * Three no-op tasks removed from `vm-rocjitsu.yml`, each confirmed
+    `ok` on every run of both lanes. The device-metrics-exporter
+    apt source and `amdgpu-exporter` install duplicated what
+    `rocm_setup_install_metrics_exporter` already does, adding a second apt
+    source for the same repo; the suite pin they carried ("no resolute
+    suite yet") was stale, since the role's own source resolves on
+    resolute. The purge of five distro ROCm runtime packages named exactly
+    what the `rocm-no-distro-packages` pin already pins to Priority -1
+    before any role runs, so apt cannot install them to begin with.
+  * Workflow triggers now follow from the fact that `main` is protected
+    and every commit arrives as a PR merge. No workflow runs on both
+    `pull_request` and `push: main` any more — `shell-check`,
+    `spell-check`, `rocm-gemm-benchmark-compile`, `build-packages`
+    and `ansible-setup-test` each used to run twice per change with
+    byte-identical path filters. Those five lost their `push` trigger
+    *and* their `paths` filter, because they are intended to become
+    required checks and a path-filtered required check never reports
+    on a PR outside its filter, leaving that PR blocked on a status
+    that never arrives. The trade is that a docs-only PR now also pays
+    `build-packages` (~7m) and `ansible-setup-test` (~7m). The four report
+    lanes converged on one shape — `push: main` plus a daily cron plus
+    manual — which gives `vm-report-ernic` a push trigger it never had,
+    and their crons moved from weekly to daily. `smoke-test-rocm-ernic`
+    moved from Monday 04:00 to Monday 07:07.
+  * The four report lanes are all scheduled at **01:00 MST (`0 8 * *
+    *`)** rather than staggered across 02:47–06:29 UTC. GitHub cron is
+    UTC-only and MST is a fixed `-07:00` with no DST, so one expression
+    holds year round; under Mountain *Daylight* Time it lands at 02:00
+    local. Each lane gets its own hosted runner, so the nightly window
+    contracts from ~3h45m of wall clock to roughly the ~57m of the
+    slowest lane. `publish-pages` consequently sees four `workflow_run`
+    completions inside an hour rather than spread across the night; it
+    sets `cancel-in-progress: false`, so they queue and none is dropped,
+    but the Pages branch is rewritten four times in succession and the
+    site only settles after the last drains. Scheduled runs at `:00` are
+    also the most likely to start late, `:00` being the most contended
+    minute on the platform.
+  * `ansible-playbook-test-rocjitsu` and
+    `ansible-playbook-test-ernic-rocjitsu` gate pull requests again. The
+    rocjitsu lane had become dispatch-only while still being documented as
+    the PR gate for the emulated GPU, which is how the RVS regression in
+    #154 reached `main` and was found an hour later by `vm-report-rocjitsu`
+    instead of before merge. Neither is a required check.
+  * Every file in `.github/workflows/` is now named for the workflow
+    it contains, slugified: `qemu-minimal - Shell Check` lives in
+    `qemu-minimal-shell-check.yml`. Most were a missing `qemu-minimal-`
+    prefix; eight more were renamed a second time on 2026-09-23 once
+    the display names settled, so that the rule now has no exceptions:
+    lowercase the workflow name, turn each ` - ` and each space into
+    `-`, append `.yml`. The four playbook tests gained the `vm-`
+    their names carry (`...-ansible-playbook-test-rocm.yml` →
+    `...-ansible-playbook-test-vm-rocm.yml`), and the four report
+    lanes moved from `vm-report*` to `report-for-*`. Five had drifted
+    further still and were renamed harder — `shell-check.yml`
+    → `qemu-minimal-shell-check.yml`, `bench-compile.yml` →
+    `qemu-minimal-rocm-gemm-benchmark-compile.yml`, `qemu-tool-dry-run.yml`
+    → `qemu-minimal-dry-run-qemu-tool.yml`, `qemu-tool-smoke-test.yml`
+    → `qemu-minimal-smoke-test-qemu-tool.yml`,
+    and `smoke-test-rocm-two-vms.yml` →
+    `qemu-minimal-smoke-test-rocm-ernic.yml`. Nothing about what any
+    workflow *does* changed. The self-referential entries in each `paths:`
+    filter, the `workflow_run` list in `publish-pages`, and the README
+    badges were all updated to match. Concurrency groups and uploaded
+    artifact names were deliberately *not* renamed: `publish-pages`
+    fetches each report by artifact name, so those are load-bearing across
+    workflows. See **Upgrading**.
+  * Workflow `name:` fields are now title-cased prose rather than a second
+    copy of the filename: `qemu-minimal - Shell Check`, `qemu-minimal
+    - Spell Check`, `qemu-minimal - ROCm GEMM Benchmark Compile`,
+    `qemu-minimal - Ansible Playbook Test - vm-rocjitsu`, `qemu-minimal
+    - Smoke Test - rocm-ernic`. The four report lanes are named for the
+    playbook they exercise — `qemu-minimal - Report for vm-basic`, `-
+    Report for vm-rocjitsu`, `- Report for vm-ernic` — except `Report
+    for hipfile-fio`, which runs `vm-rocjitsu.yml` but reports on the
+    hipFile/fio storage benchmark. `publish-pages` selects its upstream
+    lanes by workflow *name* in its `workflow_run` trigger, so all four
+    were updated there in the same commit; a mismatch there fails silently
+    and freezes the site. `qemu-minimal - Package` became `qemu-minimal
+    - Build Packages` (and `qemu-minimal-build-packages.yml`), since
+    "Package" named a noun where every other lane names an action.
+  * Job `name:` fields follow the workflow names. They were kebab-case
+    slugs that had drifted from their lanes — `shell-check.yml`
+    declared `shellcheck`, `rocm-gemm-benchmark-compile.yml` declared
+    `bench-compile`. Two rules now cover all 28 jobs: a single-job
+    workflow names its job after the workflow minus the `qemu-minimal -
+    ` prefix (`Shell Check`, `Report for hipfile-fio`, `Ansible Playbook
+    Test - vm-rocm`), and a multi-job workflow title-cases each job's
+    own identity (`Build Packages` holds `Build Deb`, `Install Smoke Test
+    (<kvm-group>)`, `Build Wheel`, `Wheel Smoke Test`). Job **ids** are
+    unchanged, so every `needs:` edge still resolves. Branch protection
+    matches job names unqualified by workflow, which is why the single-job
+    rule keeps the profile suffix — four lanes all naming a job `Report`
+    would collapse into one required context. See **Upgrading**.
+  * `vm-report-two-vms` is now `vm-report-ernic`, and its report moves
+    from `/two-vm/` to `/ernic/` and `/two-vm/vm2/` to `/ernic/vm2/`. The
+    old name described the *shape* of the lane — two guests — while
+    every other report lane is named for the thing it exercises, and
+    what this one actually proves is the ernic RDMA NIC across a pair of
+    guests. The workflow file, workflow name, job id, concurrency group,
+    guest names (`ernic-report-1` and `-2`), cloud-image cache key and
+    uploaded artifact (`vm-report-ernic`) all follow. The compose stack
+    keeps its `vfio-user-ernic-2vm` name, since `smoke-test-rocm-ernic`
+    shares it. See **Upgrading**.
+  [ Fixed ]
+  * `render-site-perf.py`'s "Current report freshness" table read its
+    stamps from `history[-1]`, but `append_history` dedupes on `(sha,
+    metrics)` — so a publish whose benchmarks produced identical numbers
+    against an unchanged sha appended no row, and the table printed the
+    *previous* publish's timestamps directly underneath an all-green badge
+    computed live from the reports on disk. It now takes a reports dict
+    read off disk, which is what `update_green` already does and says why
+    in its docstring: report freshness moves independently of benchmark
+    values. Covered by three new cases in `tests/test_render_site_perf.py`.
+  * The man page documented `--ansible-profile FILE` ("the specified
+    profile directory"); the flag is and always was `--ansible-playbook
+    FILE`, and it takes a playbook. Anyone following `man qemu-tool` got
+    `unrecognized arguments`.
+  [ Removed ]
+  * The `slash-command-dispatch` workflow, and with it the `/run-ci-full`
+    comment command. It existed so a reviewer could ask for the four
+    `ansible-playbook-test-*` lanes on a pull request back when those lanes
+    had no `pull_request` trigger at all. All four are now PR-triggered
+    within their path filters and all four carry `workflow_dispatch`, so
+    the remaining case — forcing a run on a PR whose changes fell outside
+    the filter — is served by the Actions "Run workflow" button. Two
+    things do change for reviewers: that button is per-workflow, so it
+    is four selections rather than one comment, and it needs write access
+    to the repository, where the comment path accepted any commenter who
+    passed the workflow's own permission check. See **Upgrading**.
+  [ Upgrading ]
+  * `/run-ci-full` comments are no longer answered by anything. A
+    comment containing it is now inert rather than an error, so
+    the only signal that it stopped working is the absence of the
+    acknowledgement reply. Use the Actions "Run workflow" button on each
+    `ansible-playbook-test-vm-*` workflow instead.
+  * `main` has no required status checks configured: the `contexts`
+    list under `required_status_checks` is empty, which is why the
+    post-merge `push` triggers removed here were the only guaranteed
+    validation. Nothing in this release changes branch protection. Once
+    the renamed workflows have landed and each gate has reported once,
+    add `Shell Check`, `Spell Check`, `ROCm GEMM Benchmark Compile`,
+    `Ansible Syntax Check`, `Generate VM Ansible Setup`, `Build Deb`,
+    `Build Wheel` and `Wheel Smoke Test` as required contexts. Adding them
+    *before* the first run leaves PRs waiting on contexts GitHub has never
+    seen — and because the job renames above mean GitHub has seen *none*
+    of these eight strings, that sequencing is not optional here.
+  * Renaming a workflow file orphans its run history: GitHub keys runs on
+    the file path, so each renamed workflow starts empty and its README
+    badge reads "no status" until it next runs. The old runs are still
+    reachable in the Actions tab under the retired filename. Any bookmark
+    of the form `/actions/workflows/<old>.yml` needs updating. Branch
+    protection is not disturbed by the *file* renames — required checks
+    key on job name — but the job renames in this release do change every
+    context string, so any protection rule, external status consumer or
+    merge-queue config pinned to the old kebab-case names must be updated
+    in step.
+  * The two-guest ernic report moved from `/two-vm/` to `/ernic/`. Links to
+    `https://sbates130272.github.io/qemu-minimal/two-vm/` will keep serving
+    the last report published under the old name until that directory is
+    removed from `gh-pages` by hand — `publish-pages.yml` scopes its
+    `--delete` to the lane directories it knows about, so a retired one
+    is left untouched rather than silently erased. `/ernic/` itself stays
+    empty until the renamed lane next runs; it is cron- and dispatch-only,
+    so trigger it if you want the new path populated sooner.
+  * A guest built by an older `gen-vm` may come up unreachable after a
+    bump. `run-vm` now always presents a MAC derived from `--ssh-port`,
+    and a guest whose netplan pins the MAC it saw at *its* first boot
+    will not match it. SSH reports `Connection timed out during banner
+    exchange` rather than `refused`, because slirp's `hostfwd` still
+    completes the TCP handshake with nothing behind it. Check what
+    the guest actually pinned, rather than reasoning from versions:
+    `grep -A4 ethernets /etc/netplan/50-cloud-init.yaml` in the guest,
+    or on the mounted qcow2. If there is a `macaddress:` line, pass that
+    value as `--mac` (or `VM_MAC`) and the guest runs as-is; otherwise
+    the guest matches on interface name and needs nothing. Rebuilding the
+    guest also fixes it permanently. Which MAC got baked in depends on
+    both the commit and whether the guest was built with `--mgmt-tap`,
+    so the file in the guest is the only reliable answer.
+  [ Added ]
+  * **Every bake now ends by slimming the guest it just built.** A new
+    `image_slim` role, invoked from a one-play `vm-slim.yml` that each
+    leaf playbook imports as its final line, empties the apt cache and
+    package lists (the largest single item on a ROCm guest, and nothing
+    cleaned them before), removes leftover DKMS `build/` trees, vacuums
+    archived journals to 16M, drops rotated and cloud-init logs, sweeps
+    `/tmp` and `/var/tmp`, and then `fstrim -av`s — which, with the
+    bake boot's `discard=unmap`, punches all of it back out of the qcow2
+    in place. It prints the reclaimed MiB. Two opt-in flags go further at
+    the cost of a fallback: `image_slim_purge_old_kernels` removes the GA
+    kernel the guest no longer boots, and `image_slim_purge_dkms_sources`
+    removes `/usr/src/amdgpu-*`; both default false so a local bake
+    keeps the ability to boot back and to rebuild. `/var/tmp/ionic-src`
+    is kept by default and only removed under `image_slim_drop_ionic_src`,
+    because the ernic lanes' post-boot `--tags configure` run re-invokes
+    `setup-ionic-dkms.sh` against it and would otherwise re-clone a kernel
+    from inside the VM. `cloud-init clean` is deliberately *not* run:
+    these images have no datasource on a later boot, so wiping instance
+    state would make that boot a first boot and regenerate the MAC-pinned
+    netplan `gen-vm` goes out of its way to neutralise. Where it runs is
+    the subtle part. `import_playbook` splices plays inline and does not
+    dedupe, so an ungated import from all five leaves would slim six times
+    on `vm-ernic-rocjitsu.yml` — five of them mid-chain, with real work
+    still to come. That is a bug, not waste: `vm-rocjitsu.yml` installs
+    rocBLAS with `update_cache: false` against lists an earlier pass
+    would have deleted, and both DKMS builds read trees the opt-in purges
+    remove. Each importing playbook therefore passes `image_slim_enable:
+    false`, and because import vars propagate through nested imports,
+    one `false` silences every pass beneath it. Exactly one slim pass
+    runs per entry point and it is the last play in the run.
+  * **`gen-vm` compacts the backing image after the bake**, with
+    `--no-compact` (or `VM_COMPACT=false`) to opt out. Once Ansible has
+    finished, the backing image is rewritten with `qemu-img convert -O
+    qcow2 -c` and the before/after allocated size and ratio are printed
+    into the bake log — that number is what the rest of the image-size
+    work is measured against. zlib compression is safe here precisely
+    because this is a *backing* file: in normal use every guest write lands
+    in the overlay, so no compressed cluster is rewritten, and a ROCm tree
+    is mostly ELF. The one exception is `--ansible-only`, which boots an
+    existing backing as the writable root disk with no overlay in front;
+    that mode compacts again at the end, and `--no-compact` is there for a
+    rebuild loop that would rather stay uncompressed throughout. Nothing
+    is flattened — the backing image is a byte copy of a standalone
+    Ubuntu cloud image, so the convert is a pure recompress. It writes
+    a sibling temp file and `os.replace`s only after `qemu-img info`
+    confirms the result, so an interrupted convert cannot destroy an
+    image that took an hour to bake, and a failed one warns and leaves
+    the original in place rather than failing the bake. Skipped under
+    `--no-backing`, where the image becomes the overlay and will be
+    written to. **Measured, across all four bake lanes.** The two stages
+    are complementary rather than redundant: the slim removes ~1.9 GiB
+    of real files, and the compaction then finds a further 2.3–2.5x in
+    what remains, because what remains is mostly ELF. | Lane | before
+    | after slim | after compaction | total | |---|---|---|---|---| |
+    `vm-ernic` | 6.41 GiB | 4.84 GiB | **2.89 GiB** | −55% | | `vm-rocm`
+    | 10.5 GiB | 8.42 GiB | **3.44 GiB** | −67% | | `vm-rocjitsu` | 10.8
+    GiB | 8.80 GiB | **3.59 GiB** | −67% | | `vm-ernic-rocjitsu` | 11.2
+    GiB | 9.15 GiB | **3.90 GiB** | −65% | The ROCm guests compress at
+    2.45x against ernic's 1.67x, so the lanes that were worst off benefit
+    most. Four images that totalled 38.9 GiB now total 13.8 GiB.
+  * **The `vm-rocm` and `vm-ernic-rocjitsu` lanes now trigger on
+    `ansible/playbooks/roles/**`.** They did not, and both run roles from
+    there — `vm-rocm.yml` includes `ionic_image_prep`'s `kernel.yml` to
+    install the pinned mainline kernel it boots, and the new `image_slim`
+    runs last in every bake. Every bake and report lane also now lists
+    `vm-slim.yml`. These filters enumerate playbooks by name rather than
+    globbing `ansible/playbooks/*.yml`, so a newly added playbook is
+    invisible to them until it is named: the lanes that actually execute
+    a change were not the lanes being run on it, which is the same class
+    of drift as a recipe kept in two places.
+  * **The performance badges now encode health rather than branding.**
+    They used to carry the AMD/NVIDIA/Intel brand colours, so rocjitsu GEMM
+    rendered red on its best day and none of the three ever changed —
+    the colour half of each badge carried no information at all. Each badge
+    now compares the latest reading against the mean of the previous five
+    *distinct* readings and colours green at or above 95% of it, amber down
+    to 80%, red below, with the delta appended to the message. Distinct
+    matters: a history row is a *publish*, not a benchmark run, and any
+    lane finishing re-records the other lanes' unchanged numbers, so a
+    naive mean over the last five rows weights whichever plateau happened
+    to be republished most. A reading with nothing to compare against is
+    blue, not green — no verdict has been made — and a metric with no
+    badge at all is grey `n/a`. The 95/80 dead band is wide on purpose:
+    these benchmarks run against an emulated GPU over vfio-user and swing
+    hard between runs.
+  * **An "all reports green" date badge**, served from
+    `perf/badge-all-green.json` and shown on the README's report row and
+    the site landing page. It is green with today's date while every one
+    of the five report lanes has published a fresh passing report, amber
+    carrying the last such date once any lane stops, and red `never` before
+    the first one. Green needs both halves: a `pass` stamp *and* a report
+    generated within 36 hours. A failing lane uploads nothing and its last
+    good report stays on the branch, so the stamp alone would read green
+    forever; freshness alone would call a fresh failure green. The date
+    lives in its own `perf/green.json` rather than in `perf/history.jsonl`,
+    because the history appends only when a benchmark number changes and
+    the date has to be able to advance on a publish where nothing did.
+  * **`generate-vm-report.sh` stamps `Status: **pass**`** into each
+    report's meta line, which is what the badge above reads. It is
+    earned rather than decorative: the script runs under `set -e` and
+    every benchmark path ends in `bench_failed`, so reaching the report
+    heredoc at all means nothing failed. Reports already on `gh-pages`
+    predate the stamp and parse as `unknown`, which is treated as not-green
+    rather than as a pass. Override with `REPORT_STATUS` only if a caller
+    has a verdict the script cannot see.
+  * **A `Site Script Tests` lane and `tests/test_render_site_perf.py`**
+    — the repo's first Python tests, stdlib `unittest`, no dependency
+    to install. Run them with `python3 -m unittest discover -s
+    tests`. `render-site-perf.py` runs exactly once per publish,
+    on a runner, against state that only exists on `gh-pages`, and
+    `workflow_run`/`schedule` only ever run the default branch's copy of
+    a workflow — so every bug in it used to be a post-merge bug, found
+    by reading the published site afterwards. The lane covers the colour
+    thresholds, the distinct-value collapsing, the green/stale/unstamped
+    cases and the badge JSON shape in about a second, with no VM. It also
+    drives `generate-vm-report.sh` against a dead SSH port and feeds
+    the result to the renderer, so the two scripts cannot drift on the
+    meta-line format without a PR going red.
+  * **Two opt-out knobs on `vm-rocjitsu.yml`'s firmware generation**,
+    so the playbook can drive a build whose Ansible controller has
+    no Docker daemon. `rocjitsu_generate_firmware` (default `true`)
+    gates the seven controller-side tasks — the generation step
+    is a `delegate_to: localhost` `docker run`, and a BuildKit `RUN
+    --security=insecure` step has the CLI on `PATH` with no socket
+    behind it. `rocjitsu_firmware_ip_discovery` (default `true`)
+    appends `--no-ip-discovery` to the generator argv when false:
+    `ip_discovery.bin` is per-config and has to match the rocjitsu build
+    the *consumer* serves the device from, not the one that built the disk,
+    so a published qcow2 must not bake one in. Defaults preserve current
+    behaviour exactly. The two driver-packaged firmware assertions stay
+    ungated — they only stat what `amdgpu-dkms-firmware` installed and
+    need no controller Docker.
+  * **`.github/actions/report-image-size`**, wired into all four bake
+    lanes. Prints the baked qcow2's allocated size and an in-guest
+    `du`/`dpkg-query` breakdown. Purely diagnostic and non-fatal. The
+    ROCm images are ~19–20 GiB of real allocation and nothing had ever
+    measured why, so any attempt to shrink them would have been judged
+    against a guess.
+  * `pciutils` in `packages.d/packages-default`, which backs the new PCI
+    devices section below. See **Fixed** for why the report lanes now
+    use that manifest at all.
+  * A **PCI devices** section in every VM report, from `lspci -nn`. This
+    repository exists to run emulated PCI devices — ernic NICs,
+    rocjitsu GPUs — and the reports described the guests without ever
+    listing them.
+  * A repository-owned Pages site under `site/`, so the published
+    `gh-pages` branch is no longer just a generated landing page plus
+    raw report subtrees. The new layout is documentation-first, closer to
+    the ROCm/rocm-ernic site: it adds a styled home page, report index,
+    publishing-flow documentation, and a generated performance-trends page
+    backed by retained badge history on `gh-pages`. `publish-pages.yml`
+    now checks out the repository, stages the site content, seeds the
+    trend renderer from the existing `perf/history.jsonl` record on
+    `gh-pages`, regenerates the badges at `/perf/`, and then syncs the
+    static site content and report artifacts together.
+  * `bench-compile.yml`, which compiles both `scripts/vm-report/*.hip`
+    files on every pull request that touches them. Until now the only
+    thing that ever compiled them was the rocjitsu report lane, which
+    runs on push to `main` and needs a GPU, a VM and two and a half
+    hours — so a benchmark that was not valid C++ could sit on `main`
+    indefinitely, and did. This lane installs hipcc and the hipFile SDK
+    from the same TheRock `stable` channel the guests use — pinned to
+    the `ubuntu2404` path, because the runner is `ubuntu-24.04` while the
+    rocjitsu guest is built `--release resolute` and takes `ubuntu2604`
+    — and runs the compile only: no GPU, no VM, and it is path-filtered
+    to `scripts/vm-report/**` and the workflow itself, so it costs nothing
+    on the PRs that do not touch the benchmarks. It compiles with `-Wall
+    -Wextra`, which is stricter than the report script's own line, and
+    without `-Werror`, so only hard errors fail it.
+  * `--mac ADDR` (`VM_MAC`) on `run-vm` and `gen-vm`, which sets the
+    management NIC MAC instead of deriving it from the SSH port. Images
+    this repo's `gen-vm` builds today do not need it — their netplan
+    matches on interface name — but images it built before `3969f07` pin
+    `match: macaddress:` to whatever MAC they saw at their own first boot,
+    which is not necessarily one qemu-tool will pick again; an image built
+    elsewhere may do the same. The NIC then comes up unconfigured and only
+    SLIRP's fallback eventually gets an address on it, slowly. `--mac`
+    makes qemu-tool present the MAC such an image expects, so it can be run
+    as-is rather than rebuilt. See **Upgrading** above for how to find out
+    what a given guest pinned. The value is validated as a unicast MAC up
+    front, because qemu rejects a malformed one at device-creation time,
+    long after `gen-vm` has fetched an image and built a seed.
+  * `publish-pages.yml`, now the only workflow that writes the site. The
+    report lanes upload a named artifact and stop; this assembles them
+    onto a `gh-pages` branch behind a landing page at `/`, with the
+    single-VM report at `/1vm/` and the two-VM pair at `/two-vm/` and
+    `/two-vm/vm2/`. It fetches the latest artifact *by name* rather
+    than from the run that triggered it, so a lane that has not run
+    for a week still contributes its last report and the site is never
+    partial. Each lane's subtree is synced with its own scoped `--delete`
+    instead of one delete over the whole site, so a lane whose artifact
+    has expired keeps the report it last published, and a `perf/` record
+    written by a future perf lane survives without needing to be named. A
+    push rejected by a concurrent writer is retried from the new tip.
+  * PyPI publishing, so `pipx install qemu-tool` needs no checkout and no
+    downloaded `.deb`. `release.yml` uploads via Trusted Publishing against
+    a `pypi` environment rather than a stored API token, and runs last:
+    a PyPI version can never be reused even after a delete, so publishing
+    it before the deb has built would burn the version for a release that
+    then has to be cut again as the next one. `qemu/pyproject.toml` gains
+    the metadata a project page needs — readme, classifiers, keywords and
+    URLs. The readme is written inline because the sdist root is `qemu/`,
+    so `../README.md` is outside the project and cannot be packaged,
+    and because the repo README documents compose stacks, Ansible and
+    libvirt that a `pip install` does not install. `package.yml` and
+    `release.yml` both run `twine check --strict`, so metadata that PyPI
+    would reject fails on a PR rather than at tag time.
+  * `scripts/release.sh <version>`, which cuts a release from a
+    clean `main`: it stamps `qemu/pyproject.toml`, generates the
+    `qemu/debian/changelog` stanza from the `[Unreleased]` section of
+    this file — preserving the Added/Changed/Fixed/Removed grouping as
+    dpkg `[ Section ]` markers, since flattened into one list a removal
+    reads exactly like an addition — retitles that section as the new
+    version, commits signed-off and makes a signed tag. `--dry-run`
+    shows the generated stanza and touches nothing. It never pushes;
+    it prints the command that does. A failed commit restores the tree,
+    which is safe because it refuses to start on a dirty one.
+  * A `verify-version` job gating `release.yml`. Nothing is
+    built or published unless the tag, `qemu/pyproject.toml` and
+    `qemu/debian/changelog` agree on the version and `CHANGELOG.md` has
+    a heading for the tag. v1.3.0 shipped with no tag at all and every
+    check stayed green, because the tag was the only thing that would
+    have disagreed and nothing compared it to anything.
+  * A self-contained wheel. The compose stacks, both package manifests,
+    `env.example` and the man page now ship inside the Python distribution,
+    so `pipx install qemu-tool` is a working tool rather than a degraded
+    one — previously a non-editable install could not locate a compose
+    stack or the default package manifest at all. Bringing a stack
+    *up* still needs `QEMU_TOOL_SRC` pointing at a checkout, because
+    every stack builds qemu-tool from source inside its container and
+    neither a wheel nor the `.deb` is a source tree; the README says
+    so now. `pyproject.toml` maps them in from where they already
+    live via `[tool.setuptools.package-dir]`, so `qemu/compose/` and
+    `qemu/packages.d/` stay put and there is no second copy to keep in
+    sync. They are namespaced under `qemu_tool.share` rather than directly
+    under `qemu_tool`, because a data package named `qemu_tool.compose`
+    would collide with the `compose` module and `importlib.resources`
+    would silently resolve to the wrong directory.
+  * Per-user fallbacks for the two paths a rootless install
+    cannot have: `$XDG_CONFIG_HOME/qemu-tool/env` for settings
+    (searched between `qemu/.env` and `/etc/qemu-tool/env`) and
+    `$XDG_DATA_HOME/qemu-tool/images` for images. The images default
+    falls back only when `/var/lib/qemu-tool/images` is not *writable*,
+    so a user outside the `kvm` group gets a usable directory instead of
+    a permission failure on the default.
+  * `package.yml`, replacing `deb-package.yml`, now covering the wheel as
+    well as the deb: it builds both, rebuilds the wheel from the sdist to
+    prove the sdist carries the same data, and installs the wheel into a
+    bare `python:3.12-slim` with no `/usr/share/qemu-tool` and no checkout
+    to prove a pipx install resolves every stack and manifest. See `ci.md`.
+  * `rocjitsu_gpu_test`, a repo-local role that runs HIP workloads
+    against a live rocjitsu vfio-user server: a scratch-free `vector_add`,
+    a four-kernel private-segment repro, and an `hsa-snoop` trace of a
+    dispatch on the emulated device. It runs from `vm-rocjitsu-test.yml`
+    against a booted guest rather than at image build, because the server
+    has to be serving. The repro carries a per-kernel watchdog and is
+    run with `async`/`poll`: a scratch-starved dispatch hangs rather
+    than failing, and the wedged ROCr thread leaves an unreapable zombie
+    whose stdout never closes, which blocks a plain `command:` forever
+    regardless of `timeout(1)`.
+  * hsa-snoop 1.1.1 in the rocjitsu guest image, with `bpftrace`. Pinned
+    to a release tag rather than the rolling `latest` pre-release, so
+    two builds of the same commit install the same bits. The packaged
+    system-wide collector is disabled: it polls queues for its `:9488`
+    exporter, which is free on real hardware but competes with the
+    workload on a device that serves single-threaded. The test role
+    invokes hsa-snoop per-workload instead.
+  * `ionic_image_prep`, a repo-local Ansible role that prepares a guest
+    image for rocm-ernic's ionic mode: a pinned mainline kernel from
+    `kernel.ubuntu.com`, the DKMS and rdma-core toolchain, the `1dd8:100a`
+    `pci.ids` entry, the `modules-load.d` drop-in and the rdma-core
+    provider stamp. Collection 0.2.0 removed `ernic_image_prep` and now
+    assumes an already-prepared guest; this repo builds its own with
+    `gen-vm`, so it owns that preparation.
+  * `smoke-test-rocm-two-vms` and `vm-report-two-vms` workflows, replacing
+    `2vm-smoke-test` and `2vm-vm-report`. Guest vCPU and memory are derived
+    from the runner rather than fixed, with a floor of 4 vCPUs per guest.
+  * `ansible/playbooks/vars/ernic-pins.yml`: the mainline kernel ref and
+    the rocm-ernic source commit, each written once and read by both plays.
+  * `qemu/env.example`, one settings template for the whole tool, replacing
+    the four per-stack `env.example` files. Copy it to `qemu/.env`;
+    `gen-vm`, `run-vm` and `compose` all read that one file. Every
+    `VM_*` key maps to the flag of the same name, so `VM_VCPUS` is
+    `--vcpus` and `VM_IMAGES_DIR` is `--images`, and the file is searched
+    for at `--env-file`, `$QEMU_TOOL_ENV`, `./.env`, `qemu/.env`, then
+    `/etc/qemu-tool/env`. Values apply lowest to highest from the defaults,
+    a `--domain` XML, the file, then explicit flags, so a flag always beats
+    the file. One-shot actions (`--dry-run`, `--force`, `--restore-image`,
+    `--ansible-only`, `--nvme-recreate`) are deliberately not readable
+    from it.
+  * `--env-file` on `gen-vm`, `run-vm` and `compose`.
+  [ Changed ]
+  * The rocjitsu benchmark numbers pick their own SI prefix instead of
+    always being reported in G-units. The GPU is attached over vfio-user,
+    so the same benchmark spans five orders of magnitude between bare metal
+    and the guest — 231 GFLOP/s against 1.88 MFLOP/s — and a fixed
+    unit renders one of the two unreadably, as `0.00187734275 GFLOP/s`
+    on a shields.io badge. The value now selects between T, G, M, k and
+    none, rounded to three significant figures, for the report table
+    and both badges. The benchmarks themselves still emit `gflops=` and
+    `read_gbs=`, so the parse and the raw output block are unchanged. The
+    table carries a note saying the low absolute numbers are expected of
+    a vfio-user guest and that the trend is what to watch.
+  * `vm-report` and `vm-report-two-vms` no longer publish the site
+    themselves. Both called `actions/deploy-pages` with their own full
+    `_site/`, and a Pages deploy replaces the whole site, so whichever ran
+    last won and the other lane's report vanished — with both workflows
+    reporting success. They now upload an artifact and `publish-pages.yml`
+    assembles the site. The second guest's report moves from `site/2vm`
+    to `site/vm2`, since nested under `/two-vm/` the old name read as a
+    duplicate of its parent.
+  * The `.deb` no longer ships the bundled copy of the data the
+    wheel carries. It installs it at the FHS locations as before,
+    and `debian/rules` strips the duplicate from `dist-packages` at
+    `dh_installdeb` — not at `dh_auto_install`, where `dh_python3`
+    re-stages the package afterwards and silently undoes the removal. The
+    `/usr/share/qemu-tool` copies keep precedence at runtime, so editing
+    the installed files still takes effect.
+  * **rocm-ernic is now ionic-based.** Upstream deleted the out-of-tree
+    `rocm_ernic_eth`/`rocm_ernic_rdma` drivers and the patched verbs
+    provider on 2026-09-16. The guest now builds upstream `ionic` +
+    `ionic_rdma` as the `ionic-ernic` DKMS package and uses stock
+    rdma-core's `providers/ionic`; the emulated device moved from
+    `1022:8000` to Pensando `1dd8:100a`.
+  * `ansible-playbook-test` split into per-profile workflows (`-rocm`,
+    `-rocjitsu`, `-ernic`, `-ernic-rocjitsu`) sharing a `setup-vm-job`
+    action, and every workflow renamed to a consistent `qemu-minimal -
+    <name>` form.
+  * `requirements.yml` pins the rocm-ernic collection to an upstream git
+    SHA. Galaxy publishes only 0.1.0, which is the pre-ionic collection,
+    so the previous `>=0.1.0` could never have resolved to 0.2.0.
+  * Container images move off the previous pins:
+    rocm-ernic to `20260919.g959f0cf` (`ernic.6ca9a46`
+    → `ernic.0b48aa1`), qemu to `20260924.ge1cd640`,
+    and rocjitsu to `20260924.gad7a357-rocjitsu.c85bb75`
+    (`rocjitsu.20d4ce1` → `rocjitsu.2d8a73f` → `rocjitsu.8e01a5a`
+    → `rocjitsu.c85bb75`). rocjitsu was built from rocm-systems
+    `develop` at `8e01a5a3fbee92f2b570dde97f314000d5226327`, which
+    is where the vfio-pci work landed — 14 commits ahead of the pin
+    before it under `emulation/rocjitsu`, including the `vram_store.cpp`
+    16-bit `atomic_load` and `compare_exchange` fixes. It now tracks
+    `c85bb752577b6608745f4ff7835e3da91a190795`, a further 100 commits on
+    (`ahead 100, behind 0` — a straight fast-forward), of which 22 are
+    `[rocjitsu]`. Those are host-side footprint and throughput work rather
+    than device-model changes: lazily constructed wavefronts instead of
+    16,384 built at VM init (#11952), pooled KFD page-table nodes (#11951),
+    lazy SGPR chunks (#11948), cached MTYPE lookups and sharded reader
+    counters (#11949, #11950). Nothing guest-visible moved with it, which
+    is the point worth recording. `gfx1250_mi455x.json` is byte-identical
+    across the two images, as is the output of `vfio_guest_firmware.py
+    --set gap` and the installed package set; the only config edits
+    anywhere in the image are to `gfx1100_w7900.json` (`sgprs_per_wf`
+    104 → 106) and a new `gfx1251_synthetic.json`, neither of which
+    this repo serves. In particular **none of this touches the guest
+    scratch path**, so `vramlimit=1024` in `amdgpu-probe` stays exactly
+    as it is — see the note there. `vfio_guest_firmware.py` did gain a
+    `--generation gfx1250` flag, mutually exclusive with `--config`,
+    for a caller with no rocjitsu config on disk (it leaves `config`
+    null in the manifest). This repo generates stubs inside the container
+    on the controller, where the config does exist, so it is unused here;
+    it is the flag to reach for if firmware generation ever moves into the
+    guest. Note that rocjitsu and qemu no longer share a CI build sha. That
+    is fine and deliberate: they only have to agree on libvfio-user,
+    which is unchanged at `vfu.8039244`. Do not "fix" the mismatch by
+    rebuilding qemu unless libvfio-user itself moves.
+  * `spell-check` runs `codespell` instead of
+    `pyspelling`/aspell. codespell matches a fixed list of known
+    misspellings rather than validating every word against a dictionary,
+    so the 441-entry `.wordlist.txt` is gone: hostnames, flags,
+    image tags and hex fragments are no longer words anyone has to
+    allow-list. Configuration is `.codespellrc`, and the workflow runs a
+    bare `codespell` so a local run is the same command. It also covers
+    the whole tree, not just `**/*.md`.
+  * ernic guests now get 4 vCPUs. `ionic_lif_size()` derives its EQ
+    count from `num_online_cpus()` and `ionic_create_rdma_admin()`
+    rejects fewer than `IONIC_EQ_COUNT_MIN`, so at 2 vCPUs `ionic_rdma`
+    could never probe.
+  [ Fixed ]
+  * Both rocjitsu-family report lanes failed on every push to `main`
+    since RVS was added, at `Install ROCm Validation Suite`: the
+    task asked apt for `amd-smi-lib` and `rocm-validation-suite`,
+    which are `repo.radeon.com` names, while the guest resolves
+    against TheRock. TheRock carries amd-smi as `amdrocm-amdsmi` and
+    does not package RVS at all, under any name. The amd-smi request
+    is renamed, and RVS now comes from AMD's standalone tarball at
+    `repo.amd.com/rocm/rvs/tarball/`, unpacked into its own `/opt/rvs`
+    prefix — not over the versioned ROCm tree, which apt owns and whose
+    `bin`, `lib`, `include` and `share` the tarball would collide with. The
+    task also had no `become: true`, so it would have failed on permissions
+    next; the availability error simply fired first. `rocjitsu_gpu_test`
+    follows the new prefix. Only `amdrocm7` tarballs are published, but
+    every soname RVS needs is one TheRock 10.0 ships, and TheRock's own
+    libraries pull `rocm_sysdeps` and `llvm` in through their `$ORIGIN`
+    rpaths — verified by running the 1.5.125 tarball against a bare
+    10.0.0-4 tree with nothing else on the library path. See #153.
+  * The published `/1vm/` report carried a nested copy of the whole site
+    — `1vm/index.md` alongside `1vm/reports.md`, `1vm/documentation.md`,
+    `1vm/publishing.md`, `1vm/assets/` and `1vm/perf/`. `vm-report.yml`
+    checks out the repository, which populates `site/` with the
+    repository-owned pages, then generated its report into that
+    same `site/` and uploaded the whole tree as the `vm-report-1vm`
+    artifact. The duplicated pages declare absolute permalinks (`/reports/`
+    and friends), so they silently contended with the real root pages for
+    those URLs. Both `vm-report` and `vm-report-two-vms` now generate
+    into a lane subdirectory and upload only that — `site/1vm/`, and
+    `site/two-vm/` plus `site/two-vm/vm2/` — the shape the rocjitsu
+    and hipfile-fio lanes already used. `publish-pages.yml` syncs with
+    `--delete`, so the stale files clear on the next publish without
+    touching `gh-pages` by hand.
+  * Every published report said `nvme-cli unavailable` under **NVMe**,
+    three of them next to a real device. `gen-vm` defaults `--packages`
+    to `packages-default`, which carries `nvme-cli`, but all eleven
+    `gen-vm` call sites in CI override that to `none` — a choice that
+    arrived unexplained with the first `vm-report` workflow and was copied
+    ever since. `vm-report` passes `--nvme 1`; `vm-report-rocjitsu` and
+    `vm-report-hipfile-fio` reach the same place through `VM_NVME: "1"`
+    in their compose stacks. All four report lanes now pass `--packages
+    qemu/packages.d/packages-default`, so a report describes the guest
+    a plain `gen-vm` gives you rather than a stripped-down one. That
+    manifest is longer than `none`, so the lanes' SSH waits are worth
+    watching if cloud-init ever slows. `packages-minimal` is left alone.
+  * Every published VM report linked its commit to `/commit/unknown`. All
+    four pages — `1vm`, `two-vm`, `two-vm/vm2` and `rocjitsu` — carried
+    the literal text `Commit: unknown` wrapped in a dead link, because
+    `generate-vm-report.sh` resolved the SHA with `git rev-parse --short
+    HEAD` and every report lane runs the script inside a container, where
+    that call fails. `2>/dev/null` hid the reason, so it silently fell
+    through to the `unknown` fallback; whether git is absent from the
+    container images or its dubious-ownership check rejects the checkout
+    was not pinned down, and the fix short-circuits both. The script now
+    prefers `GITHUB_SHA`, which Actions always sets, and keeps git only for
+    local invocation; the link carries the full SHA while the text shows
+    the short form. When there is genuinely no commit to point at it emits
+    plain text instead of a link, so the dead-link case cannot come back.
+  * `gemm-hipfile-bench` double-counted its device offset and aborted the
+    whole rocjitsu report at block 16 of 32, reporting `warm hipFileRead
+    block 16 returned -5022 of 1048576`. `hipFileRead`'s second argument is
+    `buffer_base` and its fifth is `buffer_offset`, applied to that base;
+    both read loops passed an already-advanced `dev + blk * kBlock` *and*
+    the same increment again as the offset, so the effective destination
+    was `dev + 2 * blk * kBlock`. The buffer is registered for 32 MiB,
+    which makes block 15 the last one fully in range and block 16 the
+    first to start past the registration, which the library reports
+    as `-5022`, `hipFileInvalidValue`. Both loops now pass `dev`, the
+    pointer `hipFileBufRegister` was given. Note that the benchmark's
+    own correctness gate could not have caught this: it fails only when
+    `failures` — elements exceeding `kTolerance`, 1e-3 — is non-zero,
+    and `kBOffset` is 64 KiB, so both GEMM operands sit inside block 0,
+    the one block the old arithmetic addressed correctly. Verified instead
+    with an ad-hoc harness on the development VM, reading a 32 MiB random
+    file from its NVMe and comparing device memory against `pread`: all 32
+    blocks match byte-for-byte. The benchmark then ran to completion for
+    the first time — it had only ever been compile-verified before. Ten
+    runs on that VM gave a `read_gbs` between 0.115 and 0.151, which
+    the report renders as 115–151 MB/s; note that the ~30% run-to-run
+    spread is wider than the trend the badge is meant to show, so the
+    single published figure should not be read as precise.
+  * Neither rocjitsu benchmark had ever compiled. `sgemm-bench.hip`
+    and `gemm-hipfile-bench.hip` both used `goto cleanup` to reach
+    a single cleanup block, and every one of those jumps crossed the
+    initialisation of a variable declared later in the same scope —
+    `block`, `grid`, `max_abs_error`, `start`, `seconds` and the rest. That
+    is ill-formed C++, not a warning, and clang rejected it: 11 errors for
+    `sgemm-bench.hip` against gfx1250. The failure stayed invisible for
+    as long as the lane reported a blank line, because hipcc writes its
+    diagnostics to stderr and the report script only captured stdout. Both
+    files now release their device buffers, file descriptor, hipFile
+    handle and driver through scope guards and return directly, so no jump
+    crosses an initialisation. Guard declaration order is load-bearing:
+    reverse-destruction order reproduces exactly what the `cleanup:`
+    block did. Exit codes and every diagnostic string are unchanged.
+  * The hipFile benchmark reported "hipFile headers or library unavailable"
+    on a guest that had the SDK installed. `run_rocjitsu_hipfile`
+    probed only for the nested `include/hipfile/hipfile.h`, but TheRock
+    — the stream `vm-rocjitsu.yml` uses — ships the header flat
+    at `include/hipfile.h`, so the probe never matched and the lane
+    exited before producing a `read_gbs` metric. The probe now accepts
+    either layout, as the compile line below it and the benchmark's own
+    `__has_include` already did.
+  * The rocjitsu guest never had the hipFile SDK in the first place,
+    so fixing the probe alone would only have made it report the
+    truth. `vm-rocjitsu.yml` listed `amdrocm-runtime-dev`, which depends
+    on `amdrocm-sysdeps`, `amdrocm-runtime` and `amdrocm-llvm-dev`
+    and nothing else — the development VM that the benchmark was
+    proven on had `amdrocm-hipfile-dev` installed by hand. It is now in
+    `rocm_setup_minimal_packages`, so a freshly generated image can run
+    `gemm-hipfile-bench` and produce a `read_gbs` metric instead of
+    aborting the report.
+  * The management and multicast NICs of one guest were given the same
+    MAC. `_mcast_args` derived its address from the SSH port with the same
+    arithmetic as `_mgmt_mac` rather than calling it, so `--mcast-group`
+    put two interfaces on one address and the guest answered ARP for
+    whichever came up first. The NIC index is now a byte of its own —
+    `52:54:00:<index>:<hi>:<lo>` — so the management, multicast and data
+    NICs cannot collide. The management NIC keeps the address it already
+    had, so existing images that pin it still match. The data NIC gained
+    an explicit MAC at the same time: it had none, which meant QEMU's
+    built-in default `52:54:00:12:34:56` — exactly the address older
+    guest images pin their netplan to, so a guest with both NICs could
+    match its management netplan against the data NIC.
+  * The rocjitsu report lane reported its failures as a blank line. The
+    guest-side benchmark scripts run under `set -euo pipefail`, and
+    their `hipcc=$(command -v hipcc || ls /opt/rocm*/bin/hipcc ... |
+    head -1)` probe fails the whole assignment when no `hipcc` exists:
+    the unmatched glob makes `ls` exit non-zero and `pipefail` carries
+    that out, so `set -e` killed the script one line above the `hipcc
+    unavailable` guard written for exactly that case — with nothing
+    printed, `ls` stderr being discarded. The `rocm=$(for ...; done |
+    head -1)` hipFile probe had the same shape. Both now tolerate the
+    empty result and reach their guard, and a benchmark that fails
+    with no output at all is reported by name rather than as an empty
+    `printf`. This is why `vm-report-rocjitsu` failed on its first run,
+    took the `publish-pages` artifact with it, and left `/rocjitsu/`
+    a 404 with two broken shields.io endpoint badges on the README.
+  * `scripts/release.sh` dropped every paragraph after the first in a
+    multi-paragraph `CHANGELOG.md` bullet. A blank line ended the bullet,
+    so the indented paragraph that followed matched the continuation
+    rule but found an empty buffer and was discarded — silently,
+    because the shortened stanza still parses. Blank lines no longer
+    terminate a bullet, and a nested markdown item now becomes an entry
+    of its own instead of being appended to its parent with a literal `-
+    ` left mid-sentence.
+  * The wheel and sdist ship the MIT licence text. `license-files` was
+    unset and `LICENSE` lives above the sdist root, so the PyPI artifacts
+    carried only the `License: MIT` metadata string — not the text MIT
+    requires be included in all copies. `qemu/LICENSE` is a symlink to
+    the repo's, so there is no second copy to drift.
+  * `build-essential` is installed before `dpkg-buildpackage` in both
+    `package.yml` and `release.yml`. `dpkg-checkbuilddeps` treats it as an
+    implicit build dependency of every source package, even an arch-all
+    Python one that compiles nothing, and the runner image does not ship
+    it. Neither deb build had ever run on a GitHub runner to find out.
+  * The container jobs in `package.yml` pin `shell: bash`. The runner chose
+    `sh -e` for the `ubuntu:24.04` container despite bash being installed
+    there, and dash has no `set -o pipefail`, which every assertion step
+    opens with.
+  * `vm-rocjitsu.yml` no longer stubs over the real gfx1250
+    firmware. `vfio_guest_firmware.py` changed contract: its default output
+    is now the "gap" set -- `gc_12_1_0_imu.bin`, `gc_12_1_0_mes.bin`,
+    `gc_12_1_0_mes1.bin` and `ip_discovery.bin`, the files no driver
+    release ships -- which lands beside the packaged blobs instead of
+    over them. As of amdgpu 31.60, `amdgpu-dkms-firmware` ships real
+    `gc_12_1_0_mec.bin`, `gc_12_1_0_mec_1.bin`, `gc_12_1_0_rlc.bin`,
+    `gc_12_1_0_rlc_1.bin`, `gc_12_1_0_uni_mes.bin` and `sdma_7_1_0.bin`,
+    and `amdgpu-dkms` depends on it. That, plus `imu` from the
+    generator, covers what upstream's `docs/qemu-vfio.md` calls
+    for. Those blobs install under `/lib/firmware/updates/amdgpu/`, not
+    `/lib/firmware/amdgpu/`. The kernel searches `updates/` first, so
+    they take precedence over anything of the same name written into the
+    base tree — which is why the gap set is safe to copy in alongside
+    them. The playbook asserted on `gc_12_1_0_rlc_1.bin`, now deliberately
+    absent, so a working generator failed the build. It asserts on
+    `imu` instead, which is in both sets and in neither package. The
+    separate `rj-ip-discovery` call is gone — the generator emits
+    `ip_discovery.bin` itself, so that call overwrote what had just been
+    produced. The `uni_mes` → `mes`/`mes1` copy is gone too, and had
+    become actively wrong: it overwrote the generator's real `mes`/`mes1`
+    stubs with the packaged `uni_mes` blob. A new guest-side check names
+    any missing packaged blob, because the driver otherwise reports only
+    `MES firmware reports incorrect version in ucode binary` or a bare
+    `-2`. Set `vm_rocjitsu_firmware_set=full` for a guest on a pre-31.60
+    driver release. That check initially looked in `/lib/firmware/amdgpu/`,
+    where it found only the stubs an earlier `--set full` run had left
+    behind. It therefore passed on a guest carrying stale debris and
+    failed on a freshly built one that was entirely correct. It now checks
+    `/lib/firmware/updates/amdgpu/`, against the package's own file list.
+  * HIP kernels with a private segment (scratch) now complete on the
+    emulated gfx1250 instead of hanging forever. `amdgpu-probe` passed
+    `amdgpu.vramlimit=256`; upstream's `qemu-vfio.md` says 1024, and it
+    is not a performance knob. ROCr provisions queue scratch out of that
+    budget at the occupancy the device advertises, so a kernel with no
+    private segment is unaffected — `vector_add` always passed in under a
+    second — while one with a private segment waits on an allocation that
+    never arrives. The dispatch never fails, so `hipDeviceSynchronize()`
+    simply does not return and no ordinary timeout catches it; the wedged
+    ROCr thread then sits in an uninterruptible KFD ioctl holding a KFD
+    mutex for the rest of the boot, so only the first such result in a
+    boot means anything. This is independent of `vram_aperture_bytes` in
+    the rocjitsu config, which is the BAR window — upstream leaves that
+    at 256 MiB alongside a 1 GiB `vramlimit`. Conflating the two sent this
+    investigation down a dead end for some time, so it is worth stating
+    plainly. The A/B is clean: the same server build, with only `vramlimit`
+    changed, hangs at 256 and passes all four repro kernels at 1024.
+  * `amdgpu` now probes on the rocjitsu emulated device instead of oopsing
+    the guest. Two independent faults, both of which took the machine
+    down hard enough that `sudo amdgpu-probe` returned only `Killed`:
+  * The device is exposed with `rombar=0`, so there is no option ROM
+    and `amdgpu_device_init` takes its "VBIOS image optional" path,
+    leaving `adev->mode_info.atom_context` NULL. `amdgpu_ras_init`
+    then queries the RAS capability from the VBIOS and the
+    atomfirmware helpers dereference that field unguarded, oopsing in
+    `amdgpu_atom_parse_data_header`. `vm-rocjitsu.yml` now patches the
+    DKMS source to return early when `atom_context` is NULL, matching
+    the guard `amdgpu_ras_get_quirks` already has on the same field one
+    function above.
+  * `amdgpu-probe` passed `ip_block_mask=0x3f`, taken from upstream's
+    `qemu-vfio.md`. That is correct for upstream's driver, where the
+    compute IP blocks enumerate as indices 0..5 ending in `mes`;
+    this DKMS build enumerates an extra `ras_v1_0` at index 5,
+    so `mes_v12_1` lands at 6 and `0x3f` masks it off. `gfx_v12_1`
+    needs MES to resume the command processor, so the probe oopsed in
+    `gfx_v12_1_xcc_cp_resume`. Now `0x7f`. With both applied the probe
+    completes, `/dev/kfd` appears, and `rocminfo` reports `gfx1250`
+    with 32 CUs.
+  * `gen-vm` guests no longer lose networking when the MAC qemu-tool
+    presents changes. The guest MAC is derived from the SSH port, and
+    guests were ignoring the seed's `network-config` and falling back to
+    cloud-init's own, which pins the interface to the MAC seen at creation
+    time. Booting such an image again then left the NIC `unmanaged` with no
+    address — on a different port, but also on the same one, including
+    the default: before `4532f91` the slirp path passed no `mac=` at all,
+    so QEMU's built-in `52:54:00:12:34:56` applied and got baked into
+    the guest, while every later boot presents the derived address. A
+    guest built with `--mgmt-tap` already got the derived MAC and so
+    only broke when the port changed. In every case slirp's `hostfwd`
+    still completed the TCP handshake, so SSH reported `Connection timed
+    out during banner exchange` rather than `refused`, and `gen-vm`
+    `--ansible-only` sat in `_wait_for_ssh` for its full 600 s without
+    ever reaching the playbook. First boot now overwrites the rendered
+    `/etc/netplan/50-cloud-init.yaml` with a `name: "en*"` match, so
+    the MAC stops being load-bearing. Existing images keep the old pin;
+    regenerate, or repoint netplan in the guest.
+  * `vm-rocjitsu.yml` now resolves the ROCm install prefix and writes
+    `/etc/ld.so.conf.d/rocm.conf` and `/etc/profile.d/rocm.sh` against
+    it. TheRock installs to a versioned `/opt/rocm/core-10.0`, but
+    `rocm_setup` hardcodes the pre-TheRock `/opt/rocm/lib` and never sets
+    `PATH`, so the linker resolved no ROCm libraries (`ldconfig -p | grep
+    -c hsa-runtime` was 0) and `rocminfo` was `command not found` despite
+    being installed. Apt then helpfully offers the universe 5.2.3 package,
+    which the play already pins to priority `-1`. This is a workaround for
+    [batesste-ansible#248](https://github.com/sbates130272/batesste-ansible/issues/248)
+    and should be dropped once the role derives the prefix itself.
+  * The ernic configure play supplies `ernic_guest_vm_ip`, which
+    `ernic_guest_setup` asserts on and defaults to empty. Derived as
+    `192.168.200.<10 * vm_index>`, matching upstream `vm-register.yml`.
+  * `ernic_source_repo_version` is pinned to the same commit as the
+    collection. It defaults to `main`, so the sources built in the guest
+    could come from a different tree than the roles building them.
+  * `ansible-playbook-test-ernic` now triggers on
+    `ansible/playbooks/roles/**` and `vars/ernic-pins.yml`. Both are
+    inputs to `vm-ernic.yml`, but neither was in the workflow's `paths`,
+    so a change to `ionic_image_prep` or to the kernel and source pins
+    reported all checks green without the ernic lane having run at all.
+  * `ionic_image_prep` no longer corrupts `pci.ids`. hwdata already lists
+    `1dd8:100a` (as `DSC Serial Port Controller` — the emulated NIC
+    reuses a real pair), and the presence check grepped for our own entry
+    text, so it never matched and appended a duplicate device id. pciutils
+    refuses to parse a file containing one, which left `lspci` resolving
+    no names for any device on the bus. The check is now a block-scoped
+    `awk` scan for the device under its vendor, and a post-merge `lspci`
+    parse check fails the play if a merge ever does break the file.
+  [ Removed ]
+  * `qemu/gen-vm` and `qemu/run-vm`. `qemu-tool gen-vm` and `qemu-tool
+    run-vm` have been the maintained path for some time and the two bash
+    scripts had drifted; keeping both meant every flag had to be added
+    twice. `shell-check` now lints only the two `libvirt/` scripts.
+  * The four per-stack `qemu/compose/*/env.example` files, superseded by
+    `qemu/env.example`.
+  * The `smoke-test` workflow, which drove the removed bash scripts.
+
+ -- Stephen Bates <sbates130272@users.noreply.github.com>  Fri, 02 Oct 2026 15:41:37 +0000
+
 python3-qemu-tool (1.3.0) unstable; urgency=low
 
   * Add 'qemu-tool list' subcommand to list running QEMU VMs on the node,
