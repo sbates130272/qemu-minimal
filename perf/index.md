@@ -12,7 +12,7 @@ new CI data lands.
 
 ## Latest published snapshot
 
-Generated from `29d91692` at **2026-10-02 15:03 UTC**.
+Generated from `254e1a6b` at **2026-10-02 15:46 UTC**.
 
 ![rocjitsu GEMM](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-gemm.json)
 ![rocjitsu hipFile](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile.json)
@@ -50,7 +50,6 @@ vfio-user and swing hard between runs.
 
 | Commit | Generated | GEMM | hipFile | hipFile fio |
 | --- | --- | --- | --- | --- |
-| 37d6f802 | 2026-09-29 18:18 UTC | 476 kFLOP/s | 157 MB/s | 145 MB/s |
 | 37d6f802 | 2026-09-29 18:37 UTC | 476 kFLOP/s | 157 MB/s | 208 MB/s |
 | 86cb5326 | 2026-09-29 23:11 UTC | 476 kFLOP/s | 157 MB/s | 208 MB/s |
 | 86cb5326 | 2026-09-29 23:41 UTC | 381 kFLOP/s | 158 MB/s | 147 MB/s |
@@ -60,6 +59,7 @@ vfio-user and swing hard between runs.
 | b7b730b7 | 2026-10-01 01:55 UTC | 822 kFLOP/s | 144 MB/s | 114 MB/s |
 | b7b730b7 | 2026-10-01 20:26 UTC | 734 kFLOP/s | 134 MB/s | 53.8 MB/s |
 | 29d91692 | 2026-10-02 15:03 UTC | 734 kFLOP/s | 134 MB/s | 53.8 MB/s |
+| 254e1a6b | 2026-10-02 15:46 UTC | 734 kFLOP/s | 134 MB/s | 53.8 MB/s |
 
 ## Current report freshness
 
@@ -73,13 +73,13 @@ shows the last date on which all 5 reports were green at once —
 amber once that date is no longer today.
 
 Last all-green: **2026-10-02** &middot; checked
-2026-10-02 15:03 UTC &middot; currently
+2026-10-02 15:46 UTC &middot; currently
 all green.
 
 | Report | Generated | Status | Commit | Page |
 | --- | --- | --- | --- | --- |
-| Single VM | 2026-10-02 15:02 UTC | pass | `29d9169` | [/1vm/](/1vm/) |
+| Single VM | 2026-10-02 15:46 UTC | pass | `254e1a6` | [/1vm/](/1vm/) |
 | rocjitsu | 2026-10-01 20:24 UTC | pass | `b7b730b` | [/rocjitsu/](/rocjitsu/) |
-| ernic VM 1 | 2026-10-02 14:42 UTC | pass | `b7b730b` | [/ernic/](/ernic/) |
-| ernic VM 2 | 2026-10-02 14:43 UTC | pass | `b7b730b` | [/ernic/vm2/](/ernic/vm2/) |
+| ernic VM 1 | 2026-10-02 15:03 UTC | pass | `29d9169` | [/ernic/](/ernic/) |
+| ernic VM 2 | 2026-10-02 15:03 UTC | pass | `29d9169` | [/ernic/vm2/](/ernic/vm2/) |
 | hipFile fio | 2026-10-01 20:26 UTC | pass | `b7b730b` | [/hipfile-fio/](/hipfile-fio/) |
