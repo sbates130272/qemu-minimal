@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 220" width="100%" role="img" aria-label="rocjitsu GEMM trend">
   <rect width="100%" height="100%" rx="18" fill="#ffffff" stroke="#d9e2f0"/>
-  <polyline fill="none" stroke="#d94b52" stroke-width="4" points="28.0,153.8 42.5,153.8 57.0,153.8 71.5,153.8 86.0,153.8 100.6,153.8 115.1,28.0 129.6,28.0 144.1,28.0 158.6,28.0 173.1,28.0 187.6,28.0 202.1,28.0 216.7,152.7 231.2,155.6 245.7,155.6 260.2,156.8 274.7,156.8 289.2,156.8 303.7,156.8 318.2,156.8 332.7,156.8 347.3,156.8 361.8,156.8 376.3,156.8 390.8,156.8 405.3,192.0 419.8,156.4 434.3,156.4 448.8,156.4 463.3,28.4 477.9,61.0 492.4,61.0 506.9,61.0 521.4,61.0 535.9,61.0 550.4,191.3 564.9,191.3 579.4,191.3 594.0,86.6 608.5,86.6 623.0,86.6 637.5,157.1 652.0,29.5"/>
+  <polyline fill="none" stroke="#d94b52" stroke-width="4" points="28.0,153.8 42.2,153.8 56.4,153.8 70.5,153.8 84.7,153.8 98.9,153.8 113.1,28.0 127.3,28.0 141.5,28.0 155.6,28.0 169.8,28.0 184.0,28.0 198.2,28.0 212.4,152.7 226.5,155.6 240.7,155.6 254.9,156.8 269.1,156.8 283.3,156.8 297.5,156.8 311.6,156.8 325.8,156.8 340.0,156.8 354.2,156.8 368.4,156.8 382.5,156.8 396.7,192.0 410.9,156.4 425.1,156.4 439.3,156.4 453.5,28.4 467.6,61.0 481.8,61.0 496.0,61.0 510.2,61.0 524.4,61.0 538.5,191.3 552.7,191.3 566.9,191.3 581.1,86.6 595.3,86.6 609.5,86.6 623.6,157.1 637.8,29.5 652.0,153.8"/>
   <text x="28" y="34" fill="#111827" font-family="system-ui,sans-serif" font-size="18" font-weight="700">rocjitsu GEMM</text>
   <text x="28" y="56" fill="#4b5563" font-family="system-ui,sans-serif" font-size="12">oldest run at left, newest at right</text>
   <text x="28" y="190" fill="#6b7280" font-family="system-ui,sans-serif" font-size="12">4cf27216</text>
   <text x="652" y="190" text-anchor="end" fill="#6b7280" font-family="system-ui,sans-serif" font-size="12">4bb8f75f</text>
-  <text x="652" y="34" text-anchor="end" fill="#111827" font-family="system-ui,sans-serif" font-size="14" font-weight="700">latest: 819 kFLOP/s</text>
+  <text x="652" y="34" text-anchor="end" fill="#111827" font-family="system-ui,sans-serif" font-size="14" font-weight="700">latest: 484 kFLOP/s</text>
 </svg>

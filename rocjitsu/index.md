@@ -4,7 +4,7 @@ title: VM Report — rocjitsu VM
 
 # VM Report — qemu-minimal — rocjitsu VM
 
-Generated: **2026-10-03 13:20 UTC** &middot; Commit: [`4bb8f75`](https://github.com/sbates130272/qemu-minimal/commit/4bb8f75f090a22998e108f3b47a9ecb1a5dc2f45) &middot; Status: **pass**
+Generated: **2026-10-04 13:59 UTC** &middot; Commit: [`4bb8f75`](https://github.com/sbates130272/qemu-minimal/commit/4bb8f75f090a22998e108f3b47a9ecb1a5dc2f45) &middot; Status: **pass**
 
 ## Hardware
 
@@ -13,7 +13,7 @@ Generated: **2026-10-03 13:20 UTC** &middot; Commit: [`4bb8f75`](https://github.
 | CPU | AMD EPYC Processor |
 | vCPUs | 4 |
 | Threads/core | 1 |
-| RAM | 3.8Gi total, 3.1Gi free |
+| RAM | 3.8Gi total, 3.2Gi free |
 | Swap | 0B |
 
 ## Kernel
@@ -177,8 +177,8 @@ ubuntu : ubuntu video users render admin
 
 | Metric | Value |
 |---|---|
-| GEMM | 819 kFLOP/s |
-| hipFile read throughput | 110 MB/s |
+| GEMM | 484 kFLOP/s |
+| hipFile read throughput | 157 MB/s |
 
 These run inside a QEMU guest with the GPU attached over vfio-user, so the
 absolute numbers sit far below what the same benchmark reports on bare metal —
@@ -194,7 +194,7 @@ sgemm-bench: device=AMD Radeon Graphics arch=gfx1250
 sgemm-bench: private_segment_bytes=0
 sgemm-bench: m=128 n=128 k=128
 sgemm-bench: max_absolute_error=0 failures=0
-sgemm-bench: seconds_per_iter=5.12387783 gflops=0.000818580016
+sgemm-bench: seconds_per_iter=8.67053019 gflops=0.000483742506
 sgemm-bench: PASS
 ```
 
@@ -207,10 +207,10 @@ gemm-hipfile-bench: device=AMD Radeon Graphics arch=gfx1250
 gemm-hipfile-bench: path=/mnt/nvme/gemm-hipfile-bench.bin block_bytes=1048576 blocks=32 iters=4
 gemm-hipfile-bench: private_segment_bytes=0
 gemm-hipfile-bench: compat_requested=self buf_registered=yes
-gemm-hipfile-bench: read_bytes=33554432 seconds_per_pass=0.305143769 read_gbs=0.109962698
+gemm-hipfile-bench: read_bytes=33554432 seconds_per_pass=0.213899898 read_gbs=0.156869789
 gemm-hipfile-bench: m=128 n=128 k=128
 gemm-hipfile-bench: max_absolute_error=0 failures=0
-gemm-hipfile-bench: gemm_seconds_per_iter=5.16230461 gflops=0.000812486732
+gemm-hipfile-bench: gemm_seconds_per_iter=8.63801551 gflops=0.000485563379
 gemm-hipfile-bench: PASS
 ```
 
