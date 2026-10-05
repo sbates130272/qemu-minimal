@@ -105,7 +105,6 @@ jobs:
           --ansible-playbook ansible/playbooks/vm-rocjitsu.yml
 
     - name: Bring up rocjitsu compose stack
-      working-directory: qemu/compose/vfio-user-rocjitsu-vm
       env:
         VM_NAME: rocjitsu-report
         QEMU_TOOL_SRC: /var/lib/qemu-tool/src
@@ -114,23 +113,22 @@ jobs:
         VM_SHM_SIZE: "5g"
         VM_NVME: "1"
       run: |
-        docker compose up --detach
+        qemu-tool compose --stack vfio-user-rocjitsu-vm up --detach
         echo "Compose stack started"
 
     - name: Join the compose network
       run: docker network connect vfio-user-rocjitsu-vm_default "$(cat /etc/hostname)"
 
     - name: Wait for rocjitsu server healthy
-      working-directory: qemu/compose/vfio-user-rocjitsu-vm
       run: |
         for i in $(seq 1 30); do
-          health=$(docker compose ps --format json rocjitsu \
+          health=$(qemu-tool compose --stack vfio-user-rocjitsu-vm ps --format json rocjitsu \
             | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('Health',''))" \
             2>/dev/null || true)
           [ "$health" = "healthy" ] && break
           sleep 2
         done
-        [ "$health" = "healthy" ] || (docker compose logs rocjitsu && exit 1)
+        [ "$health" = "healthy" ] || (qemu-tool compose --stack vfio-user-rocjitsu-vm logs rocjitsu && exit 1)
         echo "rocjitsu server healthy"
 
     - name: Wait for VM SSH (180s timeout)
@@ -209,7 +207,6 @@ jobs:
       # Hard-failing cost both artifacts on 36265820822, where the fio half
       # would otherwise have uploaded as it had on every previous run.
       continue-on-error: true
-      working-directory: qemu/compose/vfio-user-rocjitsu-vm
       timeout-minutes: 10
       env:
         VM_NAME: rocjitsu-report
@@ -221,17 +218,17 @@ jobs:
       shell: bash
       run: |
         set -euo pipefail
-        docker compose rm --stop --force qemu rocjitsu
-        docker compose up --detach
+        qemu-tool compose --stack vfio-user-rocjitsu-vm rm --stop --force qemu rocjitsu
+        qemu-tool compose --stack vfio-user-rocjitsu-vm up --detach
 
         for _ in $(seq 1 30); do
-          health=$(docker compose ps --format json rocjitsu \
+          health=$(qemu-tool compose --stack vfio-user-rocjitsu-vm ps --format json rocjitsu \
             | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('Health',''))" \
             2>/dev/null || true)
           [ "$health" = "healthy" ] && break
           sleep 2
         done
-        [ "$health" = "healthy" ] || { docker compose logs rocjitsu; exit 1; }
+        [ "$health" = "healthy" ] || { qemu-tool compose --stack vfio-user-rocjitsu-vm logs rocjitsu; exit 1; }
 
         elapsed=0
         while [ $elapsed -lt 180 ]; do
@@ -307,8 +304,7 @@ jobs:
       if: failure() || steps.restart-stack.outcome == 'failure'
         || steps.rocjitsu-report.outcome == 'failure'
         || steps.hipfile-fio-report.outcome == 'failure'
-      working-directory: qemu/compose/vfio-user-rocjitsu-vm
-      run: docker compose logs
+      run: qemu-tool compose --stack vfio-user-rocjitsu-vm logs
 
     # continue-on-error above keeps the job green, so fail it explicitly when
     # either benchmark failed -- otherwise a hung GEMM looks like a clean run

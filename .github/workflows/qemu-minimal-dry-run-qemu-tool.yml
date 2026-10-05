@@ -643,65 +643,63 @@ jobs:
     - name: Check out code
       uses: actions/checkout@v4.3.1
 
+    - name: Install qemu-tool
+      run: python3 -m pip install --break-system-packages -e ./qemu
+
     - name: "Validate: vfio-user-ernic-vm compose config"
       run: |
-        cd qemu/compose/vfio-user-ernic-vm
-        docker compose config --quiet
+        qemu-tool compose --stack vfio-user-ernic-vm config --quiet
         echo "✓ vfio-user-ernic-vm compose config valid"
 
     - name: "Validate: vfio-user-rocjitsu-vm compose config"
       run: |
-        cd qemu/compose/vfio-user-rocjitsu-vm
-        docker compose config --quiet
+        qemu-tool compose --stack vfio-user-rocjitsu-vm config --quiet
         echo "✓ vfio-user-rocjitsu-vm compose config valid"
 
     - name: "Validate: vfio-user-ernic-rocjitsu-vm compose config"
       run: |
-        cd qemu/compose/vfio-user-ernic-rocjitsu-vm
-        docker compose config --quiet
+        qemu-tool compose --stack vfio-user-ernic-rocjitsu-vm config --quiet
         echo "✓ vfio-user-ernic-rocjitsu-vm compose config valid"
 
     - name: "Smoke: ernic and rocjitsu GPU servers create vfio-user sockets"
       run: |
-        cd qemu/compose/vfio-user-ernic-rocjitsu-vm
-        docker compose up --detach --no-deps ernic rocjitsu
+        qemu-tool compose --stack vfio-user-ernic-rocjitsu-vm up --detach --no-deps ernic rocjitsu
         for i in $(seq 1 30); do
-          ernic_ok=$(docker compose ps --format json ernic \
+          ernic_ok=$(qemu-tool compose --stack vfio-user-ernic-rocjitsu-vm ps --format json ernic \
             | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('Health',''))" \
             2>/dev/null || true)
-          rocjitsu_ok=$(docker compose ps --format json rocjitsu \
+          rocjitsu_ok=$(qemu-tool compose --stack vfio-user-ernic-rocjitsu-vm ps --format json rocjitsu \
             | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('Health',''))" \
             2>/dev/null || true)
           [ "$ernic_ok" = "healthy" ] && [ "$rocjitsu_ok" = "healthy" ] && break
           sleep 2
         done
-        [ "$ernic_ok" = "healthy" ]   || (docker compose logs ernic   && exit 1)
-        [ "$rocjitsu_ok" = "healthy" ] || (docker compose logs rocjitsu && exit 1)
+        [ "$ernic_ok" = "healthy" ]    || (qemu-tool compose --stack vfio-user-ernic-rocjitsu-vm logs ernic    && exit 1)
+        [ "$rocjitsu_ok" = "healthy" ] || (qemu-tool compose --stack vfio-user-ernic-rocjitsu-vm logs rocjitsu && exit 1)
         echo "✓ GPU server sockets healthy"
-        docker compose down
+        qemu-tool compose --stack vfio-user-ernic-rocjitsu-vm down
 
     - name: "Validate: vfio-user-ernic-2vm compose config"
       run: |
-        cd qemu/compose/vfio-user-ernic-2vm
-        docker compose config --quiet
+        qemu-tool compose --stack vfio-user-ernic-2vm config --quiet
         echo "✓ two-VM ernic compose config valid"
 
     - name: "Smoke: two-VM ernic hub and worker create vfio-user sockets"
       run: |
-        cd qemu/compose/vfio-user-ernic-2vm
-        docker compose --profile rocjitsu-vm1 --profile rocjitsu-vm2 \
+        qemu-tool compose --stack vfio-user-ernic-2vm \
+          --profile rocjitsu-vm1 --profile rocjitsu-vm2 \
           up --detach --no-deps ernic-hub ernic-worker rocjitsu-1 rocjitsu-2
         for i in $(seq 1 30); do
-          hub_ok=$(docker compose ps --format json ernic-hub \
+          hub_ok=$(qemu-tool compose --stack vfio-user-ernic-2vm ps --format json ernic-hub \
             | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('Health',''))" \
             2>/dev/null || true)
-          worker_ok=$(docker compose ps --format json ernic-worker \
+          worker_ok=$(qemu-tool compose --stack vfio-user-ernic-2vm ps --format json ernic-worker \
             | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('Health',''))" \
             2>/dev/null || true)
           [ "$hub_ok" = "healthy" ] && [ "$worker_ok" = "healthy" ] && break
           sleep 2
         done
-        [ "$hub_ok" = "healthy" ]    || (docker compose logs ernic-hub    && exit 1)
-        [ "$worker_ok" = "healthy" ] || (docker compose logs ernic-worker && exit 1)
+        [ "$hub_ok" = "healthy" ]    || (qemu-tool compose --stack vfio-user-ernic-2vm logs ernic-hub    && exit 1)
+        [ "$worker_ok" = "healthy" ] || (qemu-tool compose --stack vfio-user-ernic-2vm logs ernic-worker && exit 1)
         echo "✓ two-VM ernic hub and worker healthy"
-        docker compose down
+        qemu-tool compose --stack vfio-user-ernic-2vm down

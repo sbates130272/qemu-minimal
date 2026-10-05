@@ -83,7 +83,6 @@ jobs:
           --ansible-playbook ansible/playbooks/vm-ernic.yml
 
     - name: Bring up ernic compose stack
-      working-directory: qemu/compose/vfio-user-ernic-vm
       env:
         VM_NAME: ernic-test
         QEMU_TOOL_SRC: /var/lib/qemu-tool/src
@@ -97,7 +96,7 @@ jobs:
         VM_VMEM: "4096"
         VM_SHM_SIZE: "5g"
       run: |
-        docker compose up --detach
+        qemu-tool compose --stack vfio-user-ernic-vm up --detach
         echo "Compose stack started"
 
     # The qemu container publishes 2222 on the HOST, which this job
@@ -108,16 +107,15 @@ jobs:
       run: docker network connect vfio-user-ernic-vm_default "$(cat /etc/hostname)"
 
     - name: Wait for ernic server healthy
-      working-directory: qemu/compose/vfio-user-ernic-vm
       run: |
         for i in $(seq 1 30); do
-          health=$(docker compose ps --format json ernic \
+          health=$(qemu-tool compose --stack vfio-user-ernic-vm ps --format json ernic \
             | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('Health',''))" \
             2>/dev/null || true)
           [ "$health" = "healthy" ] && break
           sleep 2
         done
-        [ "$health" = "healthy" ] || (docker compose logs ernic && exit 1)
+        [ "$health" = "healthy" ] || (qemu-tool compose --stack vfio-user-ernic-vm logs ernic && exit 1)
         echo "ernic server healthy"
 
     - name: Wait for VM SSH (180s timeout)
@@ -195,5 +193,4 @@ jobs:
 
     - name: Show compose logs on failure
       if: failure()
-      working-directory: qemu/compose/vfio-user-ernic-vm
-      run: docker compose logs
+      run: qemu-tool compose --stack vfio-user-ernic-vm logs

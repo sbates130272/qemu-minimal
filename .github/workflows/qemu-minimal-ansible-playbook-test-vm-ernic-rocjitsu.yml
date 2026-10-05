@@ -117,7 +117,6 @@ jobs:
           --ansible-playbook ansible/playbooks/vm-ernic-rocjitsu.yml
 
     - name: Bring up ernic-rocjitsu compose stack
-      working-directory: qemu/compose/vfio-user-ernic-rocjitsu-vm
       env:
         VM_NAME: ernic-rocjitsu-test
         QEMU_TOOL_SRC: /var/lib/qemu-tool/src
@@ -128,7 +127,7 @@ jobs:
         VM_VMEM: "4096"
         VM_SHM_SIZE: "5g"
       run: |
-        docker compose up --detach
+        qemu-tool compose --stack vfio-user-ernic-rocjitsu-vm up --detach
         echo "Compose stack started"
 
     # The qemu container publishes 2222 on the HOST, which this job
@@ -139,20 +138,19 @@ jobs:
       run: docker network connect vfio-user-ernic-rocjitsu-vm_default "$(cat /etc/hostname)"
 
     - name: Wait for ernic and rocjitsu servers healthy
-      working-directory: qemu/compose/vfio-user-ernic-rocjitsu-vm
       run: |
         for i in $(seq 1 30); do
-          ernic_ok=$(docker compose ps --format json ernic \
+          ernic_ok=$(qemu-tool compose --stack vfio-user-ernic-rocjitsu-vm ps --format json ernic \
             | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('Health',''))" \
             2>/dev/null || true)
-          rocjitsu_ok=$(docker compose ps --format json rocjitsu \
+          rocjitsu_ok=$(qemu-tool compose --stack vfio-user-ernic-rocjitsu-vm ps --format json rocjitsu \
             | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('Health',''))" \
             2>/dev/null || true)
           [ "$ernic_ok" = "healthy" ] && [ "$rocjitsu_ok" = "healthy" ] && break
           sleep 2
         done
-        [ "$ernic_ok" = "healthy" ]    || (docker compose logs ernic    && exit 1)
-        [ "$rocjitsu_ok" = "healthy" ] || (docker compose logs rocjitsu && exit 1)
+        [ "$ernic_ok" = "healthy" ]    || (qemu-tool compose --stack vfio-user-ernic-rocjitsu-vm logs ernic    && exit 1)
+        [ "$rocjitsu_ok" = "healthy" ] || (qemu-tool compose --stack vfio-user-ernic-rocjitsu-vm logs rocjitsu && exit 1)
         echo "ernic and rocjitsu servers healthy"
 
     - name: Wait for VM SSH (180s timeout)
@@ -282,5 +280,4 @@ jobs:
 
     - name: Show compose logs on failure
       if: failure()
-      working-directory: qemu/compose/vfio-user-ernic-rocjitsu-vm
-      run: docker compose logs
+      run: qemu-tool compose --stack vfio-user-ernic-rocjitsu-vm logs
