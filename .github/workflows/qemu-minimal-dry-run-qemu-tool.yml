@@ -687,7 +687,7 @@ jobs:
     - name: "Smoke: two-VM ernic hub and worker create vfio-user sockets"
       run: |
         qemu-tool compose --stack vfio-user-ernic-2vm \
-          --profile rocjitsu-vm1 --profile rocjitsu-vm2 \
+          -- --profile rocjitsu-vm1 --profile rocjitsu-vm2 \
           up --detach --no-deps ernic-hub ernic-worker rocjitsu-1 rocjitsu-2
         for i in $(seq 1 30); do
           hub_ok=$(qemu-tool compose --stack vfio-user-ernic-2vm ps --format json ernic-hub \

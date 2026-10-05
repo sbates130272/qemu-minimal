@@ -163,7 +163,7 @@ jobs:
         QEMU_TOOL_SRC: /var/lib/qemu-tool/src
       run: |
         qemu-tool compose --stack vfio-user-ernic-2vm \
-          --profile rocjitsu-vm1 --profile rocjitsu-vm2 up --detach
+          -- --profile rocjitsu-vm1 --profile rocjitsu-vm2 up --detach
         echo "Compose stack started"
 
     # Both qemu containers publish their SSH port on the HOST, which this job
