@@ -4,7 +4,7 @@ title: VM Report — hipFile fio VM
 
 # VM Report — qemu-minimal — hipFile fio VM
 
-Generated: **2026-10-04 14:01 UTC** &middot; Commit: [`4bb8f75`](https://github.com/sbates130272/qemu-minimal/commit/4bb8f75f090a22998e108f3b47a9ecb1a5dc2f45) &middot; Status: **pass**
+Generated: **2026-10-05 16:58 UTC** &middot; Commit: [`4bb8f75`](https://github.com/sbates130272/qemu-minimal/commit/4bb8f75f090a22998e108f3b47a9ecb1a5dc2f45) &middot; Status: **pass**
 
 ## Hardware
 
@@ -48,7 +48,7 @@ nvme0n1    1T disk /mnt/nvme
 ```
 Filesystem      Size  Used Avail Use% Mounted on
 /dev/vda1        61G  8.7G   53G  15% /
-/dev/vda13      989M  369M  553M  40% /boot
+/dev/vda13      989M  372M  551M  41% /boot
 ```
 
 ### NVMe
@@ -87,18 +87,18 @@ nvme-cli	2.16-1
 ### Installed Debian packages
 
 ```
-amdrocm-amdsmi	10.0.0-4
-amdrocm-amdsmi10.0	10.0.0-4
-amdrocm-base10.0	10.0.0-4
-amdrocm-hipfile-dev	10.0.0-4
-amdrocm-hipfile-dev10.0	10.0.0-4
-amdrocm-hipfile10.0	10.0.0-4
-amdrocm-llvm-dev10.0	10.0.0-4
-amdrocm-llvm10.0	10.0.0-4
-amdrocm-runtime-dev	10.0.0-4
-amdrocm-runtime-dev10.0	10.0.0-4
-amdrocm-runtime10.0	10.0.0-4
-amdrocm-sysdeps10.0	10.0.0-4
+amdrocm-amdsmi	10.1.0-3
+amdrocm-amdsmi10.1	10.1.0-3
+amdrocm-base10.1	10.1.0-3
+amdrocm-hipfile-dev	10.1.0-3
+amdrocm-hipfile-dev10.1	10.1.0-3
+amdrocm-hipfile10.1	10.1.0-3
+amdrocm-llvm-dev10.1	10.1.0-3
+amdrocm-llvm10.1	10.1.0-3
+amdrocm-runtime-dev	10.1.0-3
+amdrocm-runtime-dev10.1	10.1.0-3
+amdrocm-runtime10.1	10.1.0-3
+amdrocm-sysdeps10.1	10.1.0-3
 ```
 
 ### /opt/rocm/bin
@@ -110,16 +110,16 @@ amdrocm-sysdeps10.0	10.0.0-4
 ### hipFile Debian packages
 
 ```
-amdrocm-hipfile-dev	10.0.0-4
-amdrocm-hipfile-dev10.0	10.0.0-4
-amdrocm-hipfile10.0	10.0.0-4
+amdrocm-hipfile-dev	10.1.0-3
+amdrocm-hipfile-dev10.1	10.1.0-3
+amdrocm-hipfile10.1	10.1.0-3
 ```
 
 ## AMDGPU Debian Packages
 
 ```
-amdgpu-dkms	1:7.1.3.31500000-2390945.26.04
-amdgpu-dkms-firmware	1:31.50.0.0.31500000-2390945.26.04
+amdgpu-dkms	1:7.1.9.31600000-2407772.26.04
+amdgpu-dkms-firmware	1:31.60.0.0.31600000-2407772.26.04
 amdgpu-exporter	1.5.2-10~24.04
 libdrm-amdgpu1:amd64	2.4.131-1
 ```
@@ -145,7 +145,6 @@ ubuntu : ubuntu video users render admin
   cron.service                     loaded active running Regular background program processing daemon
   dbus.service                     loaded active running D-Bus System Message Bus
   getty@tty1.service               loaded active running Getty on tty1
-  gpuagent.service                 loaded active running AMD GPU Metrics Reader Service
   ModemManager.service             loaded active running Modem Manager
   multipathd.service               loaded active running Device-Mapper Multipath Device Controller
   networkd-dispatcher.service      loaded active running Dispatcher daemon for systemd-networkd
@@ -178,7 +177,7 @@ ubuntu : ubuntu video users render admin
 
 | Metric | Value |
 |---|---|
-| fio libhipfile read throughput | 140 MB/s |
+| fio libhipfile read throughput | 132 MB/s |
 
 This is fio's own `libhipfile` ioengine reading from the guest NVMe straight
 into VRAM, rather than the hand-written benchmark the rocjitsu report uses. fio
@@ -189,9 +188,9 @@ vfio-user, so watch the trend between runs rather than the absolute number.
 ### fio output
 
 ```
-rocm: /opt/rocm/core-10.0
+rocm: /opt/rocm/core-10.1
 building fio 6bc57a931f04fa3f50348d8c8f087187f050c6e1
 FIO_VERSION = fio-3.42
 fio: fio-3.42 commit=6bc57a931f04fa3f50348d8c8f087187f050c6e1
-fio-hipfile-bench: read_bytes=67108864 seconds=0.479 read_gbs=0.140102012
+fio-hipfile-bench: read_bytes=67108864 seconds=0.51 read_gbs=0.131586007
 ```
