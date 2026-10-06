@@ -211,7 +211,7 @@ jobs:
       run: |
         sudo apt-get update -qq
         sudo apt-get install -y -qq \
-          qemu-system-misc qemu-utils u-boot-qemu cloud-image-utils python3-pip
+          qemu-system-misc qemu-utils qemu-efi-riscv64 cloud-image-utils python3-pip
     - name: Install qemu-tool
       run: pip install --break-system-packages -e ./qemu
     - name: Generate SSH key-pair

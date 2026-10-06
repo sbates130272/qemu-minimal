@@ -109,12 +109,13 @@ def run(cfg: VMConfig) -> None:
         cloud_cfg_path = Path(f"cloud-config-{cfg.vm_name}")
         net_cfg_path = Path(f"network-config-{cfg.vm_name}")
         seed_path = images / f"{cfg.vm_name}-seed.qcow2"
-        stack.callback(_cleanup, cloud_cfg_path, net_cfg_path, seed_path)
+        efi_vars_path = _create_efi_vars(cfg, images)
+        stack.callback(_cleanup, cloud_cfg_path, net_cfg_path, seed_path, efi_vars_path)
 
         _write_cloud_config(cfg, packages, ssh_key, cloud_cfg_path)
         _write_network_config(cfg, net_cfg_path)
         _create_seed_iso(cfg, images, cloud_cfg_path, net_cfg_path)
-        _first_boot(cfg, images, backing)
+        _first_boot(cfg, images, backing, efi_vars_path)
 
     _run_ansible(cfg, images, backing)
     _compact_backing(cfg, backing)
@@ -329,9 +330,11 @@ def _check_not_in_use(path: Path) -> None:
     print(f"Warning: cannot check if {path} is in use (fuser/lsof not found).")
 
 
-def _cleanup(cloud_cfg: Path, net_cfg: Path, seed: Path) -> None:
+def _cleanup(cloud_cfg: Path, net_cfg: Path, seed: Path, efi_vars: Path | None = None) -> None:
     for p in (cloud_cfg, net_cfg, seed):
         p.unlink(missing_ok=True)
+    if efi_vars is not None:
+        efi_vars.unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -536,11 +539,11 @@ def _create_seed_iso(
 # First boot (cloud-init)
 # ---------------------------------------------------------------------------
 
-def _first_boot(cfg: VMConfig, images: Path, backing: Path) -> None:
+def _first_boot(cfg: VMConfig, images: Path, backing: Path, efi_vars: Path | None) -> None:
     kvm = ",accel=kvm" if cfg.kvm else ""
     qarch = _ARCH_MAP[cfg.arch]
     qemu = qemu_binary(cfg)
-    arch_args = _arch_args_for_gen(cfg, kvm)
+    arch_args = _arch_args_for_gen(cfg, kvm, efi_vars)
     seed = images / f"{cfg.vm_name}-seed.qcow2"
     cmd = [
         qemu,
@@ -571,7 +574,19 @@ def _first_boot(cfg: VMConfig, images: Path, backing: Path) -> None:
         )
 
 
-def _arch_args_for_gen(cfg: VMConfig, kvm: str) -> list[str]:
+_RISCV_EFI_CODE = "/usr/share/qemu-efi-riscv64/RISCV_VIRT_CODE.fd"
+_RISCV_EFI_VARS_TEMPLATE = "/usr/share/qemu-efi-riscv64/RISCV_VIRT_VARS.fd"
+
+
+def _create_efi_vars(cfg: VMConfig, images: Path) -> Path | None:
+    if cfg.arch != "riscv64":
+        return None
+    dst = images / f"{cfg.vm_name}-efi-vars.fd"
+    subprocess.run(["cp", _RISCV_EFI_VARS_TEMPLATE, str(dst)], check=True)
+    return dst
+
+
+def _arch_args_for_gen(cfg: VMConfig, kvm: str, efi_vars: Path | None = None) -> list[str]:
     if cfg.arch == "amd64":
         return ["-machine", f"q35{kvm}"]
     if cfg.arch == "arm64":
@@ -581,16 +596,17 @@ def _arch_args_for_gen(cfg: VMConfig, kvm: str) -> list[str]:
             "-bios", "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
         ]
     if cfg.arch == "riscv64":
-        # Avoid a trailing comma in the machine string when kvm is empty.
-        machine = f"virt{kvm}" if kvm else "virt"
+        # EDK2 needs two pflash drives: read-only firmware code and a
+        # per-VM writable variable store. acpi=off selects device-tree
+        # mode, which Ubuntu riscv64 cloud images require.
+        machine = f"virt,acpi=off{kvm}" if kvm else "virt,acpi=off"
+        vars_path = str(efi_vars) if efi_vars else _RISCV_EFI_VARS_TEMPLATE
         return [
             "-machine", machine,
-            "-kernel", "/usr/lib/u-boot/qemu-riscv64_smode/uboot.elf",
-            # U-Boot enforces EFI_RNG_PROTOCOL and stalls at boot without an
-            # RNG device. virtio-rng-device is the correct bus type for the
-            # riscv64 virt machine (MMIO virtio, not PCIe).
+            "-drive", f"if=pflash,format=raw,unit=0,file={_RISCV_EFI_CODE},readonly=on",
+            "-drive", f"if=pflash,format=raw,unit=1,file={vars_path}",
             "-object", "rng-random,filename=/dev/urandom,id=rng0",
-            "-device", "virtio-rng-device,rng=rng0",
+            "-device", "virtio-rng-pci,rng=rng0",
         ]
     sys.exit(f"Error: no ARCH mapping for '{cfg.arch}'")
 

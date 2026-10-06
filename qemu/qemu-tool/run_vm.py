@@ -97,14 +97,22 @@ def _arch_args(cfg: VMConfig) -> list[str]:
             "-bios", "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
         ]
     if cfg.arch == "riscv64":
+        # EDK2 needs two pflash drives: read-only firmware code and a
+        # per-VM writable variable store. acpi=off selects device-tree
+        # mode, which Ubuntu riscv64 cloud images require.
+        machine = f"virt,acpi=off,{kvm_suffix}" if kvm_suffix else "virt,acpi=off"
+        vars_src = "/usr/share/qemu-efi-riscv64/RISCV_VIRT_VARS.fd"
+        vars_dst = Path(cfg.images) / f"{cfg.vm_name}-efi-vars.fd"
+        if not vars_dst.exists() and not cfg.dry_run:
+            subprocess.run(["cp", vars_src, str(vars_dst)], check=True)
+        vars_path = str(vars_dst) if (vars_dst.exists() or cfg.dry_run) else vars_src
         return [
-            "-machine", f"virt,{kvm_suffix}",
-            "-kernel", "/usr/lib/u-boot/qemu-riscv64_smode/uboot.elf",
-            # U-Boot enforces EFI_RNG_PROTOCOL and stalls at boot without an
-            # RNG device. virtio-rng-device is the correct bus type for the
-            # riscv64 virt machine (MMIO virtio, not PCIe).
+            "-machine", machine,
+            "-drive", "if=pflash,format=raw,unit=0,"
+                      "file=/usr/share/qemu-efi-riscv64/RISCV_VIRT_CODE.fd,readonly=on",
+            "-drive", f"if=pflash,format=raw,unit=1,file={vars_path}",
             "-object", "rng-random,filename=/dev/urandom,id=rng0",
-            "-device", "virtio-rng-device,rng=rng0",
+            "-device", "virtio-rng-pci,rng=rng0",
         ]
     sys.exit(f"Error: no ARCH mapping for '{cfg.arch}'")
 
