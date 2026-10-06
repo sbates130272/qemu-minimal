@@ -551,12 +551,9 @@ def _first_boot(cfg: VMConfig, images: Path, backing: Path, efi_vars: Path | Non
         "-smp", f"cpus={cfg.vcpus}",
         "-m", str(cfg.vmem),
         "-nographic",
-        # The seed drive deliberately does not get DISCARD_OPTS: _cleanup
-        # deletes it, so there is nothing to reclaim.
-        "-drive", f"if=virtio,format=qcow2,file={backing}{DISCARD_OPTS}",
-        "-drive", f"if=virtio,format=qcow2,file={seed}",
+        *_drive_args_for_gen(cfg, backing, seed),
         "-netdev", "user,id=net0",
-        "-device", f"virtio-net-pci,netdev=net0,mac={_effective_mac(cfg)}",
+        *_net_device_args_for_gen(cfg),
     ]
     # Without KVM, emulation is slow enough that cloud-init's rootfs expand
     # (growpart + resize2fs) can take 30+ minutes on arm64/riscv64. Cap the
@@ -572,6 +569,32 @@ def _first_boot(cfg: VMConfig, images: Path, backing: Path, efi_vars: Path | Non
             f"check rootfs expansion (growpart/resize2fs) in the "
             f"QEMU console log."
         )
+
+
+def _drive_args_for_gen(cfg: VMConfig, backing: Path, seed: Path) -> list[str]:
+    if cfg.arch == "riscv64":
+        # EDK2 riscv64 only has the VirtIO MMIO driver; virtio-blk-pci
+        # (produced by -drive if=virtio) is invisible to it.
+        return [
+            "-drive", f"id=hd0,format=qcow2,file={backing}{DISCARD_OPTS},if=none",
+            "-device", "virtio-blk-device,drive=hd0",
+            "-drive", f"id=seed,format=qcow2,file={seed},if=none",
+            "-device", "virtio-blk-device,drive=seed",
+        ]
+    return [
+        # The seed drive deliberately does not get DISCARD_OPTS: _cleanup
+        # deletes it, so there is nothing to reclaim.
+        "-drive", f"if=virtio,format=qcow2,file={backing}{DISCARD_OPTS}",
+        "-drive", f"if=virtio,format=qcow2,file={seed}",
+    ]
+
+
+def _net_device_args_for_gen(cfg: VMConfig) -> list[str]:
+    mac = _effective_mac(cfg)
+    if cfg.arch == "riscv64":
+        # EDK2 riscv64 only has VirtIO MMIO drivers.
+        return ["-device", f"virtio-net-device,netdev=net0,mac={mac}"]
+    return ["-device", f"virtio-net-pci,netdev=net0,mac={mac}"]
 
 
 _RISCV_EFI_CODE = "/usr/share/qemu-efi-riscv64/RISCV_VIRT_CODE.fd"
@@ -597,16 +620,18 @@ def _arch_args_for_gen(cfg: VMConfig, kvm: str, efi_vars: Path | None = None) ->
         ]
     if cfg.arch == "riscv64":
         # EDK2 needs two pflash drives: read-only firmware code and a
-        # per-VM writable variable store. Ubuntu 26.04 riscv64 cloud
-        # images are UEFI/GPT and work with the default ACPI mode.
-        machine = f"virt{kvm}" if kvm else "virt"
+        # per-VM writable variable store. acpi=off selects device-tree
+        # mode, which is required because the EDK2 riscv64 firmware only
+        # has VirtIO MMIO drivers (not PCI); MMIO devices appear in the
+        # device-tree but not in ACPI tables.
+        machine = f"virt,acpi=off{kvm}" if kvm else "virt,acpi=off"
         vars_path = str(efi_vars) if efi_vars else _RISCV_EFI_VARS_TEMPLATE
         return [
             "-machine", machine,
             "-drive", f"if=pflash,format=raw,unit=0,file={_RISCV_EFI_CODE},readonly=on",
             "-drive", f"if=pflash,format=raw,unit=1,file={vars_path}",
             "-object", "rng-random,filename=/dev/urandom,id=rng0",
-            "-device", "virtio-rng-pci,rng=rng0",
+            "-device", "virtio-rng-device,rng=rng0",
         ]
     sys.exit(f"Error: no ARCH mapping for '{cfg.arch}'")
 
