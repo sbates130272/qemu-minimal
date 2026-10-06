@@ -586,6 +586,11 @@ def _arch_args_for_gen(cfg: VMConfig, kvm: str) -> list[str]:
         return [
             "-machine", machine,
             "-kernel", "/usr/lib/u-boot/qemu-riscv64_smode/uboot.elf",
+            # U-Boot enforces EFI_RNG_PROTOCOL and stalls at boot without an
+            # RNG device. virtio-rng-device is the correct bus type for the
+            # riscv64 virt machine (MMIO virtio, not PCIe).
+            "-object", "rng-random,filename=/dev/urandom,id=rng0",
+            "-device", "virtio-rng-device,rng=rng0",
         ]
     sys.exit(f"Error: no ARCH mapping for '{cfg.arch}'")
 
