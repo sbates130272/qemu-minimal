@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 220" width="100%" role="img" aria-label="rocjitsu GEMM trend">
   <rect width="100%" height="100%" rx="18" fill="#ffffff" stroke="#d9e2f0"/>
-  <polyline fill="none" stroke="#d94b52" stroke-width="4" points="28.0,153.8 41.6,153.8 55.1,153.8 68.7,153.8 82.3,153.8 95.8,153.8 109.4,28.0 123.0,28.0 136.5,28.0 150.1,28.0 163.7,28.0 177.2,28.0 190.8,28.0 204.3,152.7 217.9,155.6 231.5,155.6 245.0,156.8 258.6,156.8 272.2,156.8 285.7,156.8 299.3,156.8 312.9,156.8 326.4,156.8 340.0,156.8 353.6,156.8 367.1,156.8 380.7,192.0 394.3,156.4 407.8,156.4 421.4,156.4 435.0,28.4 448.5,61.0 462.1,61.0 475.7,61.0 489.2,61.0 502.8,61.0 516.3,191.3 529.9,191.3 543.5,191.3 557.0,86.6 570.6,86.6 584.2,86.6 597.7,157.1 611.3,29.5 624.9,153.8 638.4,156.8 652.0,156.8"/>
+  <polyline fill="none" stroke="#d94b52" stroke-width="4" points="28.0,153.8 41.3,153.8 54.6,153.8 67.8,153.8 81.1,153.8 94.4,153.8 107.7,28.0 120.9,28.0 134.2,28.0 147.5,28.0 160.8,28.0 174.0,28.0 187.3,28.0 200.6,152.7 213.9,155.6 227.1,155.6 240.4,156.8 253.7,156.8 267.0,156.8 280.3,156.8 293.5,156.8 306.8,156.8 320.1,156.8 333.4,156.8 346.6,156.8 359.9,156.8 373.2,192.0 386.5,156.4 399.7,156.4 413.0,156.4 426.3,28.4 439.6,61.0 452.9,61.0 466.1,61.0 479.4,61.0 492.7,61.0 506.0,191.3 519.2,191.3 532.5,191.3 545.8,86.6 559.1,86.6 572.3,86.6 585.6,157.1 598.9,29.5 612.2,153.8 625.4,156.8 638.7,156.8 652.0,64.0"/>
   <text x="28" y="34" fill="#111827" font-family="system-ui,sans-serif" font-size="18" font-weight="700">rocjitsu GEMM</text>
   <text x="28" y="56" fill="#4b5563" font-family="system-ui,sans-serif" font-size="12">oldest run at left, newest at right</text>
   <text x="28" y="190" fill="#6b7280" font-family="system-ui,sans-serif" font-size="12">4cf27216</text>
   <text x="652" y="190" text-anchor="end" fill="#6b7280" font-family="system-ui,sans-serif" font-size="12">bfa9d453</text>
-  <text x="652" y="34" text-anchor="end" fill="#111827" font-family="system-ui,sans-serif" font-size="14" font-weight="700">latest: 476 kFLOP/s</text>
+  <text x="652" y="34" text-anchor="end" fill="#111827" font-family="system-ui,sans-serif" font-size="14" font-weight="700">latest: 726 kFLOP/s</text>
 </svg>
