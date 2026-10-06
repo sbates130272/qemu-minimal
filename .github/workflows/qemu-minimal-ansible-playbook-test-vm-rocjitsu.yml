@@ -94,28 +94,33 @@ jobs:
         docker pull "$QEMU_IMAGE"
 
     - name: Generate VM with vm-rocjitsu playbook
+      uses: sbates130272/qemu-tool-action@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        qemu-tool gen-vm \
-          --vm-name rocjitsu-test \
-          --release resolute \
-          --username ubuntu \
-          --password password \
-          --packages none \
-          --size 64 \
-          --ansible-playbook ansible/playbooks/vm-rocjitsu.yml
+      with:
+        operation: gen-vm
+        qemu-tool-source: ./qemu
+        vm-name: rocjitsu-test
+        release: resolute
+        size: '64'
+        ansible-playbook: ansible/playbooks/vm-rocjitsu.yml
+        extra-args: --username ubuntu --password password --packages none
 
     - name: Bring up rocjitsu compose stack
+      uses: sbates130272/qemu-tool-action@v1
       env:
-        VM_NAME: rocjitsu-test
         QEMU_TOOL_SRC: /var/lib/qemu-tool/src
         VM_VCPUS: "2"
         VM_VMEM: "4096"
         VM_SHM_SIZE: "5g"
-      run: |
-        qemu-tool compose --stack vfio-user-rocjitsu-vm up --detach
-        echo "Compose stack started"
+      with:
+        operation: compose
+        qemu-tool-source: ./qemu
+        vm-name: rocjitsu-test
+        stack: vfio-user-rocjitsu-vm
+        compose-args: up --detach
+        wait-for-healthy: 'true'
+        wait-timeout: '60'
 
     # The qemu container publishes 2222 on the HOST, which this job
     # container cannot reach: the runner puts it on its own bridge network
@@ -123,18 +128,6 @@ jobs:
     # compose network instead and address the VM by its service name.
     - name: Join the compose network
       run: docker network connect vfio-user-rocjitsu-vm_default "$(cat /etc/hostname)"
-
-    - name: Wait for rocjitsu server healthy
-      run: |
-        for i in $(seq 1 30); do
-          health=$(qemu-tool compose --stack vfio-user-rocjitsu-vm ps --format json rocjitsu \
-            | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('Health',''))" \
-            2>/dev/null || true)
-          [ "$health" = "healthy" ] && break
-          sleep 2
-        done
-        [ "$health" = "healthy" ] || (qemu-tool compose --stack vfio-user-rocjitsu-vm logs rocjitsu && exit 1)
-        echo "rocjitsu server healthy"
 
     - name: Wait for VM SSH (180s timeout)
       run: |

@@ -76,17 +76,17 @@ jobs:
         release: resolute
 
     - name: Generate VM with vm-rocm playbook
+      uses: sbates130272/qemu-tool-action@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        qemu-tool gen-vm \
-          --vm-name rocm-test \
-          --release resolute \
-          --username ubuntu \
-          --password password \
-          --packages none \
-          --size 64 \
-          --ansible-playbook ansible/playbooks/vm-rocm.yml
+      with:
+        operation: gen-vm
+        qemu-tool-source: ./qemu
+        vm-name: rocm-test
+        release: resolute
+        size: '64'
+        ansible-playbook: ansible/playbooks/vm-rocm.yml
+        extra-args: --username ubuntu --password password --packages none
 
     - name: Boot VM
       run: qemu-tool run-vm --vm-name rocm-test > run-vm-output.log 2>&1 &

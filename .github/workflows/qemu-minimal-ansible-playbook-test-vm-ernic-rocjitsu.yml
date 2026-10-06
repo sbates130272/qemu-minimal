@@ -103,22 +103,22 @@ jobs:
         docker pull "$QEMU_IMAGE"
 
     - name: Generate VM with vm-ernic-rocjitsu playbook
+      uses: sbates130272/qemu-tool-action@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        qemu-tool gen-vm \
-          --vm-name ernic-rocjitsu-test \
-          --release resolute \
-          --username ubuntu \
-          --password password \
-          --packages none \
-          --size 64 \
-          --vcpus 4 \
-          --ansible-playbook ansible/playbooks/vm-ernic-rocjitsu.yml
+      with:
+        operation: gen-vm
+        qemu-tool-source: ./qemu
+        vm-name: ernic-rocjitsu-test
+        release: resolute
+        size: '64'
+        vcpus: '4'
+        ansible-playbook: ansible/playbooks/vm-ernic-rocjitsu.yml
+        extra-args: --username ubuntu --password password --packages none
 
     - name: Bring up ernic-rocjitsu compose stack
+      uses: sbates130272/qemu-tool-action@v1
       env:
-        VM_NAME: ernic-rocjitsu-test
         QEMU_TOOL_SRC: /var/lib/qemu-tool/src
         # See ansible-playbook-test-vm-ernic.yml: ionic_create_rdma_admin()
         # hard-fails below 4 online CPUs, so this lane cannot run ionic_rdma
@@ -126,9 +126,14 @@ jobs:
         VM_VCPUS: "4"
         VM_VMEM: "4096"
         VM_SHM_SIZE: "5g"
-      run: |
-        qemu-tool compose --stack vfio-user-ernic-rocjitsu-vm up --detach
-        echo "Compose stack started"
+      with:
+        operation: compose
+        qemu-tool-source: ./qemu
+        vm-name: ernic-rocjitsu-test
+        stack: vfio-user-ernic-rocjitsu-vm
+        compose-args: up --detach
+        wait-for-healthy: 'true'
+        wait-timeout: '60'
 
     # The qemu container publishes 2222 on the HOST, which this job
     # container cannot reach: the runner puts it on its own bridge network
@@ -136,22 +141,6 @@ jobs:
     # compose network instead and address the VM by its service name.
     - name: Join the compose network
       run: docker network connect vfio-user-ernic-rocjitsu-vm_default "$(cat /etc/hostname)"
-
-    - name: Wait for ernic and rocjitsu servers healthy
-      run: |
-        for i in $(seq 1 30); do
-          ernic_ok=$(qemu-tool compose --stack vfio-user-ernic-rocjitsu-vm ps --format json ernic \
-            | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('Health',''))" \
-            2>/dev/null || true)
-          rocjitsu_ok=$(qemu-tool compose --stack vfio-user-ernic-rocjitsu-vm ps --format json rocjitsu \
-            | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('Health',''))" \
-            2>/dev/null || true)
-          [ "$ernic_ok" = "healthy" ] && [ "$rocjitsu_ok" = "healthy" ] && break
-          sleep 2
-        done
-        [ "$ernic_ok" = "healthy" ]    || (qemu-tool compose --stack vfio-user-ernic-rocjitsu-vm logs ernic    && exit 1)
-        [ "$rocjitsu_ok" = "healthy" ] || (qemu-tool compose --stack vfio-user-ernic-rocjitsu-vm logs rocjitsu && exit 1)
-        echo "ernic and rocjitsu servers healthy"
 
     - name: Wait for VM SSH (180s timeout)
       run: |
