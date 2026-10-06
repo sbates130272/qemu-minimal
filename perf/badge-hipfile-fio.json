@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
   "label": "hipFile fio",
-  "message": "102 MB/s (-24%)",
-  "color": "red"
+  "message": "133 MB/s (+8%)",
+  "color": "brightgreen"
 }
