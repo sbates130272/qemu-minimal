@@ -161,11 +161,11 @@ jobs:
         echo "guests: ${VMS} x ${VM_VCPUS} vCPU, ${VM_VMEM} MB"
 
     - name: Bring up the full two-VM rocm-ernic compose stack
-      working-directory: qemu/compose/vfio-user-ernic-2vm
       env:
         QEMU_TOOL_SRC: /var/lib/qemu-tool/src
       run: |
-        docker compose --profile rocjitsu-vm1 --profile rocjitsu-vm2 up --detach
+        qemu-tool compose --stack vfio-user-ernic-2vm \
+          -- --profile rocjitsu-vm1 --profile rocjitsu-vm2 up --detach
         echo "Compose stack started"
 
     # Both qemu containers publish their SSH port on the HOST, which this job
@@ -176,20 +176,19 @@ jobs:
       run: docker network connect vfio-user-ernic-2vm_default "$(cat /etc/hostname)"
 
     - name: Wait for GPU/NIC servers to be healthy
-      working-directory: qemu/compose/vfio-user-ernic-2vm
       run: |
         for i in $(seq 1 30); do
-          hub_ok=$(docker compose ps --format json ernic-hub \
+          hub_ok=$(qemu-tool compose --stack vfio-user-ernic-2vm ps --format json ernic-hub \
             | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('Health',''))" \
             2>/dev/null || true)
-          worker_ok=$(docker compose ps --format json ernic-worker \
+          worker_ok=$(qemu-tool compose --stack vfio-user-ernic-2vm ps --format json ernic-worker \
             | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('Health',''))" \
             2>/dev/null || true)
           [ "$hub_ok" = "healthy" ] && [ "$worker_ok" = "healthy" ] && break
           sleep 2
         done
-        [ "$hub_ok" = "healthy" ]    || (docker compose logs ernic-hub    && exit 1)
-        [ "$worker_ok" = "healthy" ] || (docker compose logs ernic-worker && exit 1)
+        [ "$hub_ok" = "healthy" ]    || (qemu-tool compose --stack vfio-user-ernic-2vm logs ernic-hub    && exit 1)
+        [ "$worker_ok" = "healthy" ] || (qemu-tool compose --stack vfio-user-ernic-2vm logs ernic-worker && exit 1)
         echo "GPU/NIC servers healthy"
 
     - name: Wait for VM 1 SSH (180s timeout)
@@ -255,8 +254,7 @@ jobs:
 
     - name: Show compose logs on failure
       if: failure()
-      working-directory: qemu/compose/vfio-user-ernic-2vm
-      run: docker compose --profile rocjitsu-vm1 --profile rocjitsu-vm2 logs
+      run: qemu-tool compose --stack vfio-user-ernic-2vm -- --profile rocjitsu-vm1 --profile rocjitsu-vm2 logs
 
     # Upload only. publish-pages.yml is the sole writer of the site; this
     # lane used to call deploy-pages itself, and a Pages deploy replaces the
