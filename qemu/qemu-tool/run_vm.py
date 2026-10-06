@@ -97,21 +97,12 @@ def _arch_args(cfg: VMConfig) -> list[str]:
             "-bios", "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
         ]
     if cfg.arch == "riscv64":
-        # EDK2 needs two pflash drives: read-only firmware code and a
-        # per-VM writable variable store. acpi=off selects device-tree
-        # mode, required because EDK2 riscv64 only has VirtIO MMIO
-        # drivers; MMIO devices appear in device-tree, not ACPI tables.
-        machine = f"virt,acpi=off,{kvm_suffix}" if kvm_suffix else "virt,acpi=off"
-        vars_src = "/usr/share/qemu-efi-riscv64/RISCV_VIRT_VARS.fd"
-        vars_dst = Path(cfg.images) / f"{cfg.vm_name}-efi-vars.fd"
-        if not vars_dst.exists() and not cfg.dry_run:
-            subprocess.run(["cp", vars_src, str(vars_dst)], check=True)
-        vars_path = str(vars_dst) if (vars_dst.exists() or cfg.dry_run) else vars_src
         return [
-            "-machine", machine,
-            "-drive", "if=pflash,format=raw,unit=0,"
-                      "file=/usr/share/qemu-efi-riscv64/RISCV_VIRT_CODE.fd,readonly=on",
-            "-drive", f"if=pflash,format=raw,unit=1,file={vars_path}",
+            "-machine", f"virt,{kvm_suffix}" if kvm_suffix else "virt",
+            "-kernel", "/usr/lib/u-boot/qemu-riscv64_smode/uboot.elf",
+            # U-Boot uses EFI_RNG_PROTOCOL during boot; without a VirtIO
+            # RNG device it stalls. virtio-rng-device is the MMIO form
+            # required by the riscv64 virt machine's U-Boot build.
             "-object", "rng-random,filename=/dev/urandom,id=rng0",
             "-device", "virtio-rng-device,rng=rng0",
         ]
@@ -277,12 +268,6 @@ def _vfio_userdev_args(cfg: VMConfig) -> list[str]:
 
 def _root_drive_args(cfg: VMConfig) -> list[str]:
     img = Path(cfg.images) / f"{cfg.vm_name}.qcow2"
-    if cfg.arch == "riscv64":
-        # EDK2 riscv64 only has VirtIO MMIO drivers; use virtio-blk-device.
-        drv = f"id=hd0,format=qcow2,file={img}{DISCARD_OPTS},if=none"
-        if cfg.backing_shared:
-            drv += ",file.locking=off,backing.file.locking=off"
-        return ["-drive", drv, "-device", "virtio-blk-device,drive=hd0"]
     drv = f"if=virtio,format=qcow2,file={img}{DISCARD_OPTS}"
     if cfg.backing_shared:
         drv += ",file.locking=off,backing.file.locking=off"
@@ -310,11 +295,9 @@ def _netdev_args(cfg: VMConfig, mac: str | None = None) -> list[str]:
     # elsewhere may, and then the MAC has to be whatever that image expects:
     # --mac / VM_MAC is the way to say so.
     m = mac or _effective_mac(cfg)
-    # EDK2 riscv64 only has VirtIO MMIO drivers.
-    nic = "virtio-net-device" if cfg.arch == "riscv64" else "virtio-net-pci"
     return [
         "-netdev", f"user,id=net0,{hostfwd}",
-        "-device", f"{nic},netdev=net0,mac={m}",
+        "-device", f"virtio-net-pci,netdev=net0,mac={m}",
     ]
 
 

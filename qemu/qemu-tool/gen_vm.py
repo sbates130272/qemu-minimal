@@ -109,13 +109,12 @@ def run(cfg: VMConfig) -> None:
         cloud_cfg_path = Path(f"cloud-config-{cfg.vm_name}")
         net_cfg_path = Path(f"network-config-{cfg.vm_name}")
         seed_path = images / f"{cfg.vm_name}-seed.qcow2"
-        efi_vars_path = _create_efi_vars(cfg, images)
-        stack.callback(_cleanup, cloud_cfg_path, net_cfg_path, seed_path, efi_vars_path)
+        stack.callback(_cleanup, cloud_cfg_path, net_cfg_path, seed_path)
 
         _write_cloud_config(cfg, packages, ssh_key, cloud_cfg_path)
         _write_network_config(cfg, net_cfg_path)
         _create_seed_iso(cfg, images, cloud_cfg_path, net_cfg_path)
-        _first_boot(cfg, images, backing, efi_vars_path)
+        _first_boot(cfg, images, backing)
 
     _run_ansible(cfg, images, backing)
     _compact_backing(cfg, backing)
@@ -330,11 +329,9 @@ def _check_not_in_use(path: Path) -> None:
     print(f"Warning: cannot check if {path} is in use (fuser/lsof not found).")
 
 
-def _cleanup(cloud_cfg: Path, net_cfg: Path, seed: Path, efi_vars: Path | None = None) -> None:
+def _cleanup(cloud_cfg: Path, net_cfg: Path, seed: Path) -> None:
     for p in (cloud_cfg, net_cfg, seed):
         p.unlink(missing_ok=True)
-    if efi_vars is not None:
-        efi_vars.unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -539,11 +536,11 @@ def _create_seed_iso(
 # First boot (cloud-init)
 # ---------------------------------------------------------------------------
 
-def _first_boot(cfg: VMConfig, images: Path, backing: Path, efi_vars: Path | None) -> None:
+def _first_boot(cfg: VMConfig, images: Path, backing: Path) -> None:
     kvm = ",accel=kvm" if cfg.kvm else ""
     qarch = _ARCH_MAP[cfg.arch]
     qemu = qemu_binary(cfg)
-    arch_args = _arch_args_for_gen(cfg, kvm, efi_vars)
+    arch_args = _arch_args_for_gen(cfg, kvm)
     seed = images / f"{cfg.vm_name}-seed.qcow2"
     cmd = [
         qemu,
@@ -551,62 +548,31 @@ def _first_boot(cfg: VMConfig, images: Path, backing: Path, efi_vars: Path | Non
         "-smp", f"cpus={cfg.vcpus}",
         "-m", str(cfg.vmem),
         "-nographic",
-        *_drive_args_for_gen(cfg, backing, seed),
-        "-netdev", "user,id=net0",
-        *_net_device_args_for_gen(cfg),
-    ]
-    # Without KVM, emulation is slow enough that cloud-init's rootfs expand
-    # (growpart + resize2fs) can take 30+ minutes on arm64/riscv64. Cap the
-    # wait so a hung guest produces a clear error rather than silently burning
-    # the CI job timeout.
-    boot_timeout = None if cfg.kvm else 3300  # 55 min; job ceiling is 60 min
-    try:
-        subprocess.run(cmd, check=True, timeout=boot_timeout)
-    except subprocess.TimeoutExpired:
-        sys.exit(
-            f"Error: first boot timed out after {boot_timeout}s on "
-            f"{cfg.arch} (no KVM). cloud-init did not complete — "
-            f"check rootfs expansion (growpart/resize2fs) in the "
-            f"QEMU console log."
-        )
-
-
-def _drive_args_for_gen(cfg: VMConfig, backing: Path, seed: Path) -> list[str]:
-    if cfg.arch == "riscv64":
-        # EDK2 riscv64 only has the VirtIO MMIO driver; virtio-blk-pci
-        # (produced by -drive if=virtio) is invisible to it.
-        return [
-            "-drive", f"id=hd0,format=qcow2,file={backing}{DISCARD_OPTS},if=none",
-            "-device", "virtio-blk-device,drive=hd0",
-            "-drive", f"id=seed,format=qcow2,file={seed},if=none",
-            "-device", "virtio-blk-device,drive=seed",
-        ]
-    return [
         # The seed drive deliberately does not get DISCARD_OPTS: _cleanup
         # deletes it, so there is nothing to reclaim.
         "-drive", f"if=virtio,format=qcow2,file={backing}{DISCARD_OPTS}",
         "-drive", f"if=virtio,format=qcow2,file={seed}",
+        "-netdev", "user,id=net0",
+        "-device", f"virtio-net-pci,netdev=net0,mac={_effective_mac(cfg)}",
     ]
-
-
-def _net_device_args_for_gen(cfg: VMConfig) -> list[str]:
-    mac = _effective_mac(cfg)
-    if cfg.arch == "riscv64":
-        # EDK2 riscv64 only has VirtIO MMIO drivers.
-        return ["-device", f"virtio-net-device,netdev=net0,mac={mac}"]
-    return ["-device", f"virtio-net-pci,netdev=net0,mac={mac}"]
-
-
-_RISCV_EFI_CODE = "/usr/share/qemu-efi-riscv64/RISCV_VIRT_CODE.fd"
-_RISCV_EFI_VARS_TEMPLATE = "/usr/share/qemu-efi-riscv64/RISCV_VIRT_VARS.fd"
-
-
-def _create_efi_vars(cfg: VMConfig, images: Path) -> Path | None:
-    if cfg.arch != "riscv64":
-        return None
-    dst = images / f"{cfg.vm_name}-efi-vars.fd"
-    subprocess.run(["cp", _RISCV_EFI_VARS_TEMPLATE, str(dst)], check=True)
-    return dst
+    # Without KVM, emulation is slow enough that cloud-init's rootfs expand
+    # (growpart + resize2fs) can take 30+ minutes on arm64/riscv64. Cap the
+    # wait so a hung guest produces a clear error rather than silently burning
+    # the CI job timeout. riscv64 under U-Boot + GRUB is slower still.
+    if not cfg.kvm:
+        boot_timeout = 5100 if cfg.arch == "riscv64" else 3300  # job ceilings: 90/60 min
+    else:
+        boot_timeout = None
+    try:
+        subprocess.run(cmd, check=True, timeout=boot_timeout)
+    except subprocess.TimeoutExpired:
+        mins = boot_timeout // 60
+        sys.exit(
+            f"Error: first boot timed out after {boot_timeout}s ({mins}m) on "
+            f"{cfg.arch} (no KVM). cloud-init did not complete — "
+            f"check rootfs expansion (growpart/resize2fs) in the "
+            f"QEMU console log."
+        )
 
 
 def _arch_args_for_gen(cfg: VMConfig, kvm: str, efi_vars: Path | None = None) -> list[str]:
@@ -619,17 +585,14 @@ def _arch_args_for_gen(cfg: VMConfig, kvm: str, efi_vars: Path | None = None) ->
             "-bios", "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
         ]
     if cfg.arch == "riscv64":
-        # EDK2 needs two pflash drives: read-only firmware code and a
-        # per-VM writable variable store. acpi=off selects device-tree
-        # mode, which is required because the EDK2 riscv64 firmware only
-        # has VirtIO MMIO drivers (not PCI); MMIO devices appear in the
-        # device-tree but not in ACPI tables.
-        machine = f"virt,acpi=off{kvm}" if kvm else "virt,acpi=off"
-        vars_path = str(efi_vars) if efi_vars else _RISCV_EFI_VARS_TEMPLATE
+        # Avoid a trailing comma in the machine string when kvm is empty.
+        machine = f"virt{kvm}" if kvm else "virt"
         return [
             "-machine", machine,
-            "-drive", f"if=pflash,format=raw,unit=0,file={_RISCV_EFI_CODE},readonly=on",
-            "-drive", f"if=pflash,format=raw,unit=1,file={vars_path}",
+            "-kernel", "/usr/lib/u-boot/qemu-riscv64_smode/uboot.elf",
+            # U-Boot uses EFI_RNG_PROTOCOL during boot; without a VirtIO
+            # RNG device it stalls. virtio-rng-device is the MMIO form
+            # required by the riscv64 virt machine's U-Boot build.
             "-object", "rng-random,filename=/dev/urandom,id=rng0",
             "-device", "virtio-rng-device,rng=rng0",
         ]
