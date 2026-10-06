@@ -597,9 +597,9 @@ def _arch_args_for_gen(cfg: VMConfig, kvm: str, efi_vars: Path | None = None) ->
         ]
     if cfg.arch == "riscv64":
         # EDK2 needs two pflash drives: read-only firmware code and a
-        # per-VM writable variable store. acpi=off selects device-tree
-        # mode, which Ubuntu riscv64 cloud images require.
-        machine = f"virt,acpi=off{kvm}" if kvm else "virt,acpi=off"
+        # per-VM writable variable store. Ubuntu 26.04 riscv64 cloud
+        # images are UEFI/GPT and work with the default ACPI mode.
+        machine = f"virt{kvm}" if kvm else "virt"
         vars_path = str(efi_vars) if efi_vars else _RISCV_EFI_VARS_TEMPLATE
         return [
             "-machine", machine,

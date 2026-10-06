@@ -98,9 +98,9 @@ def _arch_args(cfg: VMConfig) -> list[str]:
         ]
     if cfg.arch == "riscv64":
         # EDK2 needs two pflash drives: read-only firmware code and a
-        # per-VM writable variable store. acpi=off selects device-tree
-        # mode, which Ubuntu riscv64 cloud images require.
-        machine = f"virt,acpi=off,{kvm_suffix}" if kvm_suffix else "virt,acpi=off"
+        # per-VM writable variable store. Ubuntu 26.04 riscv64 cloud
+        # images are UEFI/GPT and work with the default ACPI mode.
+        machine = f"virt,{kvm_suffix}" if kvm_suffix else "virt"
         vars_src = "/usr/share/qemu-efi-riscv64/RISCV_VIRT_VARS.fd"
         vars_dst = Path(cfg.images) / f"{cfg.vm_name}-efi-vars.fd"
         if not vars_dst.exists() and not cfg.dry_run:
