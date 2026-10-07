@@ -30,5 +30,17 @@ jobs:
             libvirt/create-nvme \
             libvirt/virt-install-ubuntu \
             scripts/*.sh \
-            scripts/vm-report/*.sh
+            scripts/vm-report/*.sh \
+            qemu/compose/*/tapsetup/*.sh
+
+      # The sidecar scripts under qemu/compose/ were outside the list above
+      # until they had already shipped a bug this would have caught: setup.sh
+      # iterated `ls /sys/class/net` (SC2045) while picking the interface to
+      # bridge, which is the exact line that mis-bridged the mesh interface on
+      # a 2-VM fleet. A glob here is one target; the lane is 17s.
+      #
+      # Not linted, deliberately: the lmcache_guest role's *.sh.j2 templates.
+      # They are bash, but Jinja expressions are not shell syntax and
+      # shellcheck fails to parse them outright. Rendering them first needs the
+      # whole role's variable scope, which is a different lane's job.
 

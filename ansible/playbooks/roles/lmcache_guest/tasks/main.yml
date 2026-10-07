@@ -112,8 +112,9 @@
       register: lmcache_hostfs_load
 
     - name: Copy the image archive into the guest
-      when: not (lmcache_guest_hostfs_enable | bool)
-      when: lmcache_guest_image_archive | length > 0
+      when:
+        - not (lmcache_guest_hostfs_enable | bool)
+        - lmcache_guest_image_archive | length > 0
       ansible.builtin.copy:
         src: "{{ lmcache_guest_image_archive }}"
         dest: "{{ lmcache_guest_image_archive_remote }}"

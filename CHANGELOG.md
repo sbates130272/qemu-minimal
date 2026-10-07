@@ -149,6 +149,38 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **CI covered none of the LMCache work, and three gaps each hid a live
+  bug.** Adding the lanes found them, which is the argument for the lanes:
+
+  - **Gen Compose Check validated no observability service.** Profiles
+    *filter* services out of `docker compose config`, and both existing
+    validation steps ran with none enabled — so `prometheus`, `grafana`,
+    `loki`, `alloy`, `lmcache-coordinator` and the two stats exporters were
+    parsed by nothing. A new step enables `lmcache` and `metrics` and asserts
+    the seven services are present before validating, because `config -q` on
+    a render whose services were all filtered away also exits 0.
+  - **Shell Check skipped `qemu/compose/*/tapsetup/*.sh`.** Adding it
+    immediately failed on SC2045 in `setup.sh` — `for dev in $(ls
+    /sys/class/net)` — on the very line that picks the interface to bridge,
+    which is the line the 2-VM mesh bug was traced to. Now a glob.
+  - **`fleet-lmcache.yml` was syntax-checked by nothing**, being imported by
+    none of the five playbooks the lane names. Checking it found a duplicate
+    `when` key in `lmcache_guest/tasks/main.yml`, where the second silently
+    replaced the first and the image copy lost its "only when the 9p share is
+    off" guard — a ~2.8 GB write per guest in the configuration the role
+    exists to avoid. The job now sets `ANSIBLE_DUPLICATE_YAML_DICT_KEY=error`,
+    because a duplicate key is a warning by default and `--syntax-check`
+    exits 0 regardless: measured on this instance, 0 → 4.
+
+- **`VM_NVME` could not carry a literal QEMU argument string, and said it
+  could.** The key names a `str` field, so commas are the per-VM split. At
+  `VM_COUNT=8` `4096,logical_block_size=4096` is a loud count mismatch; at
+  `VM_COUNT=2` it is a silent one, giving guest 1 `4096` and guest 2
+  `logical_block_size=4096`. Behaviour unchanged — a fix needs a quoting
+  convention across every `str` field — but the source comment claiming all
+  three forms "pass straight through" is corrected and both halves are pinned
+  by tests.
+
 - **`gen-vm` first-boot timeout for arm64 and riscv64** — without KVM,
   cloud-init's rootfs expansion (growpart + resize2fs) can stall for 30+
   minutes under software emulation, causing the CI job to be silently

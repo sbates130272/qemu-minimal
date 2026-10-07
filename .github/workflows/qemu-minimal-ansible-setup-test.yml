@@ -51,6 +51,14 @@ jobs:
     if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     container: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260924.ge1cd640-qemu11.1.1-vfu.8039244
+    # A duplicate key in a task is a WARNING by default and `--syntax-check`
+    # still exits 0, so this job read "Found duplicate mapping key 'when'" out
+    # loud and passed anyway. Ansible keeps the last value, which means the
+    # dropped one is a condition the author wrote and the play does not honour
+    # -- invisible in a diff, and it never fails. Promote it: measured on the
+    # real instance of this, --syntax-check goes 0 -> 4.
+    env:
+      ANSIBLE_DUPLICATE_YAML_DICT_KEY: error
     steps:
     - name: Check out code
       uses: actions/checkout@v4.3.1
@@ -89,6 +97,16 @@ jobs:
     # guest, and this job checks files by name.
     - name: Syntax-check vm-slim playbook
       run: ansible-playbook --syntax-check playbooks/vm-slim.yml
+      working-directory: ansible
+    # Imported by none of the above -- it runs against the generated
+    # fleet-inventory.yml, not a single baked guest -- so it was checked by
+    # nothing at all. Worth having for more than the YAML: the first run of
+    # this step found a duplicate `when` key in lmcache_guest/tasks/main.yml,
+    # where the second silently replaced the first and the archive copy lost
+    # its "only when the 9p share is off" guard. That is a ~2.8 GB write per
+    # guest in the configuration the role exists to avoid, and it parses.
+    - name: Syntax-check fleet-lmcache playbook
+      run: ansible-playbook --syntax-check playbooks/fleet-lmcache.yml
       working-directory: ansible
 
   gen-vm-ansible-setup:

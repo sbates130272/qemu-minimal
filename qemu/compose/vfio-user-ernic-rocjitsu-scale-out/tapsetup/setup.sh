@@ -42,7 +42,9 @@ BR=${BR:-br0}
 FLEET_PREFIX=${FLEET_PREFIX:-172.31}
 
 pick_l2() {
-    for dev in $(ls /sys/class/net); do
+    for path in /sys/class/net/*; do
+        [ -e "$path" ] || continue
+        dev=${path##*/}
         case "$dev" in lo|"$TAP"|"$BR"|docker*|veth*) continue ;; esac
         addr=$(ip -4 -o addr show dev "$dev" 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
         [ -n "$addr" ] || continue
