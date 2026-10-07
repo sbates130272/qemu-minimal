@@ -1,0 +1,16 @@
+---
+galaxy_info:
+  role_name: lmcache_guest
+  author: qemu-minimal
+  description: >-
+    Install Docker in an ernic+rocjitsu guest and run the LMCache worker
+    container as a systemd unit gated on the emulated devices being present
+    and configured.
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - noble
+        - resolute
+dependencies: []

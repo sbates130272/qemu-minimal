@@ -12,6 +12,8 @@ file up to date as infrastructure changes.
 - `qemu/compose/vfio-user-rocjitsu-vm/` — single-VM rocjitsu-only compose stack
 - `qemu/compose/vfio-user-ernic-rocjitsu-vm/` — single-VM ernic + rocjitsu compose stack
 - `qemu/compose/vfio-user-ernic-2vm/` — two-VM ernic mesh stack; rocjitsu GPUs opt-in via `--profile rocjitsu-vm1/vm2`
+- `qemu/compose/vfio-user-ernic-rocjitsu-scale-out/` — N-VM fleet, **generated** by `qemu-tool gen-compose` from `qemu/env.scale-out`; `--profile metrics` adds Prometheus+Grafana, `--profile lmcache` adds the LMCache coordinator
+- `qemu/docker/` — Dockerfiles this repo owns, one directory per image (`lmcache/` so far). Built by hand and referenced by tag, unlike the stack-local `tapsetup/` which compose builds itself
 - `qemu/compose/vfio-user-ernic-rocjitsu-scale-out/` — N-VM ernic mesh + one
   GPU per VM. **Generated** by `qemu-tool gen-compose` from `qemu/env.scale-out`;
   do not hand-edit it
@@ -492,6 +494,26 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     match node index unless starts are serialised, which is true and
     irrelevant, because the resolver never consulted the id. Serialising
     worker startup costs about 56 s of boot at 32 nodes and fixes nothing.
+
+13. **vfio-user P2P DMA needs a QEMU patch that is in no published image.**
+    Anything that has one vfio-user device DMA into another's BAR — LMCache
+    P2P reading GPU memory over the ernic, most obviously — does not work on
+    the stock QEMU this repo pins, and does not complain: the BAR window is
+    simply never advertised to peer servers.
+
+    The fix is `31e3d06a` on `sbates130272/qemu`, branch
+    `dev/stephen/pci-mmio-bridge-submit`: *"hw/vfio: assign region fd to
+    RAMBlock for vfio-user P2P DMA"* (`hw/vfio/region.c`, +17).
+    `vfio_user_dma_map` skips the fd in DMA_MAP when
+    `memory_region_get_fd()` returns -1, and for vfio-user mmap regions the
+    fd arrives from GET_REGION_INFO into `vbasedev->region_fds[]` but is
+    never propagated to the RAMBlock.
+
+    **Every** tag of `...-qemu-libvfio-user-sbates-fork` is built from
+    `qemu.d757fa6` (2026-09-22), one commit short of it. The fork image needs
+    a rebuild. Do not be misled by `pci-mmio-bridge`, which those images *do*
+    have and stock does not — it is a different mechanism in the same branch,
+    not the one P2P DMA needs.
 
 ## Git / GitHub
 

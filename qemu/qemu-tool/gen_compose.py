@@ -35,6 +35,19 @@ from .envfile import _coerce, env_key, find as find_env_file, parse as parse_env
 _VM_FLAGS = [
     ("vcpus", "--vcpus"),
     ("vmem", "--vmem"),
+    # Emulated NVMe, as LMCache's L2 tier. run-vm creates the backing qcow2
+    # per device itself (_nvme_create), so unlike the root disk there is no
+    # gen-vm step to pair with this. A bare count ("1") is the common case;
+    # the field also takes a negative count for null_blk or a literal QEMU
+    # argument string, and all three pass straight through.
+    ("nvme", "--nvme"),
+    # A host directory shared into every guest over 9p (mount_tag=hostfs).
+    # This is how a fleet gets a large artifact -- the LMCache image tarball,
+    # most obviously -- without copying it per VM: one file on the host,
+    # read by all N guests. At VM_COUNT=8 that is 22 GB of transfer saved,
+    # at 40 it is 112 GB. The directory must be readable by the qemu
+    # container, so it is bind-mounted in below.
+    ("filesystem", "--filesystem"),
     ("extra_hostfwd", "--extra-hostfwd"),
 ]
 
@@ -53,8 +66,22 @@ _DEFAULTS = {
     "ERNIC_TAP": "false",
     "LOG_MAX_SIZE": "50m",
     "LOG_MAX_FILE": "3",
-    "PROM_DATA_DIR": "./prom-data",
+    # Absolute, and deliberately NOT "./prom-data". A relative path resolves
+    # against the STACK directory, and the stack directory is wherever
+    # qemu-tool found it -- for a pipx or .deb install that is inside
+    # site-packages or /usr/share, so the TSDB a fleet run produced lands
+    # somewhere nobody thinks to look and a reinstall deletes. Measured: a
+    # pipx-installed run put it under
+    # ~/.local/share/pipx/venvs/qemu-tool/.../share/compose/<stack>/prom-data,
+    # root-owned, and Prometheus then crash-looped on "mkdir data/:
+    # permission denied".
+    "PROM_DATA_DIR": "/var/lib/qemu-tool/prom-data",
     "PROM_PORT": "9090",
+    # Host interface the published ports bind to. 0.0.0.0 so a fleet running
+    # on a lab box is reachable from a workstation; set to 127.0.0.1 to keep
+    # it local. Grafana has anonymous admin enabled, so this is the control
+    # that decides who can reach it.
+    "PUBLISH_BIND_ADDR": "0.0.0.0",
     "PROM_SCRAPE_INTERVAL": "15s",
     "PROM_RETENTION": "7d",
     "VM_SHM_SIZE": "8g",
@@ -62,6 +89,69 @@ _DEFAULTS = {
     "VM_IMAGES_DIR": "/var/lib/qemu-tool/images",
     "QEMU_TOOL_SRC": "../../..",
     "FLEET_NET_PREFIX": "172.31",
+    "VM_USERNAME": "ubuntu",
+    "VM_FILESYSTEM": "",
+    "VM_VFIO_USER_ROOT_PORT": "false",
+    # ---- LMCache -----------------------------------------------------------
+    # Off by default so an env file that predates this feature regenerates
+    # byte-identical output. qemu/env.scale-out turns it on.
+    #
+    # Two switches, not one, because they answer different questions.
+    # LMCACHE_ENABLE decides whether the services and their scrape jobs are
+    # EMITTED; `--profile lmcache` decides whether they RUN. The scrape jobs
+    # are the reason the first one has to exist: prometheus.yml has no notion
+    # of a profile, so jobs emitted for a profile nobody selected would just
+    # be permanently-down targets.
+    "LMCACHE_ENABLE": "false",
+    "LMCACHE_IMAGE": "qemu-tool/lmcache-rocm:0.5.5-gfx1250",
+    # The MP coordinator's HTTP port (`lmcache coordinator`, default 9300).
+    # This is the MP-mode coordinator -- membership, the key directory, L2
+    # quota and eviction -- and NOT `lmcache_controller`, which is the legacy
+    # in-process mode's controller and tracks a different thing entirely.
+    "LMCACHE_COORD_PORT": "9300",
+    # Seconds without a heartbeat before an instance is evicted, and the sweep
+    # interval. Upstream's defaults; restated because a fleet boot burst can
+    # outrun a 30 s timeout the same way the ernic mesh's 20 s heartbeat does.
+    "LMCACHE_INSTANCE_TIMEOUT": "30",
+    "LMCACHE_HEALTH_CHECK_INTERVAL": "10",
+    # Must be identical on the coordinator and every server: the coordinator
+    # resolves pin token_ids to keys with them, so a mismatch silently fails
+    # to match rather than erroring.
+    "LMCACHE_CHUNK_SIZE": "256",
+    "LMCACHE_HASH_ALGORITHM": "blake3",
+    # In-guest ports, reached through the qemu container's hostfwd rules.
+    # LMCACHE_SERVER_HTTP_PORT is where /metrics lives -- NOT the server's
+    # --prometheus-port, which is only used when the HTTP server is off.
+    "LMCACHE_SERVER_HTTP_PORT": "9500",
+    "LMCACHE_SERVER_ZMQ_PORT": "5555",
+    # The P2P transfer-channel endpoint each guest advertises to its peers.
+    "LMCACHE_P2P_PORT": "9400",
+    # nixl or mooncake_te. nixl here, and not by preference: mooncake's wheel
+    # is a CUDA build and fails on a ROCm image with "libcudart.so.12: cannot
+    # open shared object file".
+    "LMCACHE_P2P_TRANSFER_ENGINE": "nixl",
+    "LMCACHE_L1_SIZE_GB": "2",
+    "LMCACHE_EVICTION_POLICY": "LRU",
+    "LMCACHE_STATS_PORT": "9841",
+    # ---- Logs --------------------------------------------------------------
+    # Loki plus an Alloy on the host; the guests get their own Alloy from the
+    # lmcache_guest role. Rides the `metrics` profile: a log panel beside a
+    # metric panel is the whole point, and a third switch for "observability
+    # but only half of it" helps nobody.
+    "LOGS_ENABLE": "true",
+    "LOKI_IMAGE": "docker.io/grafana/loki:3.3.2",
+    "LOKI_PORT": "3100",
+    "LOKI_DATA_DIR": "/var/lib/qemu-tool/loki-data",
+    "ALLOY_IMAGE": "docker.io/grafana/alloy:v1.5.1",
+    # ---- Grafana -----------------------------------------------------------
+    "GRAFANA_ENABLE": "true",
+    "GRAFANA_IMAGE": "docker.io/grafana/grafana:latest",
+    "GRAFANA_PORT": "3000",
+    "GRAFANA_ADMIN_PASSWORD": "admin",
+    # Grafana's own sqlite. The dashboards are provisioned from files so they
+    # survive without this, but annotations, starred dashboards and any
+    # ad-hoc exploration do not. Absolute for the same reason as the TSDB.
+    "GRAFANA_DATA_DIR": "/var/lib/qemu-tool/grafana-data",
 }
 
 # Third octet per service family. Static addressing keeps Docker's embedded
@@ -77,6 +167,12 @@ _MESH_MAX = 64
 _STAMP_RE = re.compile(r"\d{8}\.g[0-9a-f]+")
 _TAP_IF = "tap0"
 _TAPSETUP_IMAGE = "qemu-tool/ernic-tapsetup:1"
+
+# Fourth octet within the infra family. Appending only: these are baked into a
+# generated prometheus.yml and into the ansible role's controller address, so
+# renumbering one silently repoints a scrape or a worker's registration.
+_INFRA_EXPORTER, _INFRA_PROM, _INFRA_LMCACHE, _INFRA_GRAFANA = 10, 11, 12, 13
+_INFRA_LMCACHE_STATS, _INFRA_LOKI, _INFRA_ALLOY = 14, 15, 16
 
 _PROVENANCE = "# env-sha256: "
 
@@ -99,6 +195,10 @@ def recorded_digest(compose_file: Path) -> str | None:
 def _get(values: dict[str, str], key: str) -> str:
     raw = values.get(key, "")
     return raw if raw else _DEFAULTS.get(key, "")
+
+
+def _flag(values: dict[str, str], key: str) -> bool:
+    return _get(values, key).strip().lower() in ("1", "true", "yes", "on")
 
 
 def _split_per_vm(raw: str, count: int, key: str) -> list[str]:
@@ -273,16 +373,49 @@ def plan(values: dict[str, str]) -> dict[str, Any]:
         "count": count,
         "vms": vms,
         "net_prefix": net,
-        "exporter_addr": f"{net}.{_NET_INFRA}.10",
-        "prometheus_addr": f"{net}.{_NET_INFRA}.11",
+        "exporter_addr": f"{net}.{_NET_INFRA}.{_INFRA_EXPORTER}",
+        "prometheus_addr": f"{net}.{_NET_INFRA}.{_INFRA_PROM}",
+        "lmcache_addr": f"{net}.{_NET_INFRA}.{_INFRA_LMCACHE}",
+        "grafana_addr": f"{net}.{_NET_INFRA}.{_INFRA_GRAFANA}",
+        "lmcache_stats_addr": f"{net}.{_NET_INFRA}.{_INFRA_LMCACHE_STATS}",
+        "loki_addr": f"{net}.{_NET_INFRA}.{_INFRA_LOKI}",
+        "alloy_addr": f"{net}.{_NET_INFRA}.{_INFRA_ALLOY}",
+        "logs": _flag(values, "LOGS_ENABLE"),
+        "loki_image": _get(values, "LOKI_IMAGE"),
+        "loki_port": _get(values, "LOKI_PORT"),
+        "loki_data_dir": _get(values, "LOKI_DATA_DIR"),
+        "alloy_image": _get(values, "ALLOY_IMAGE"),
+        "lmcache": _flag(values, "LMCACHE_ENABLE"),
+        "lmcache_image": _get(values, "LMCACHE_IMAGE"),
+        "lmcache_coord_port": _get(values, "LMCACHE_COORD_PORT"),
+        "lmcache_instance_timeout": _get(values, "LMCACHE_INSTANCE_TIMEOUT"),
+        "lmcache_health_interval": _get(values, "LMCACHE_HEALTH_CHECK_INTERVAL"),
+        "lmcache_chunk_size": _get(values, "LMCACHE_CHUNK_SIZE"),
+        "lmcache_hash_algorithm": _get(values, "LMCACHE_HASH_ALGORITHM"),
+        "lmcache_http_port": _get(values, "LMCACHE_SERVER_HTTP_PORT"),
+        "lmcache_zmq_port": _get(values, "LMCACHE_SERVER_ZMQ_PORT"),
+        "lmcache_p2p_port": _get(values, "LMCACHE_P2P_PORT"),
+        "lmcache_p2p_engine": _get(values, "LMCACHE_P2P_TRANSFER_ENGINE"),
+        "lmcache_l1_size_gb": _get(values, "LMCACHE_L1_SIZE_GB"),
+        "lmcache_eviction_policy": _get(values, "LMCACHE_EVICTION_POLICY"),
+        "lmcache_stats_port": _get(values, "LMCACHE_STATS_PORT"),
+        "grafana": _flag(values, "GRAFANA_ENABLE"),
+        "grafana_image": _get(values, "GRAFANA_IMAGE"),
+        "grafana_port": _get(values, "GRAFANA_PORT"),
+        "grafana_password": _get(values, "GRAFANA_ADMIN_PASSWORD"),
+        "subnet": subnet,
+        "vm_username": _get(values, "VM_USERNAME"),
+        "vm_filesystem": _get(values, "VM_FILESYSTEM"),
+        "vfio_user_root_port": _flag(values, "VM_VFIO_USER_ROOT_PORT"),
         "tcp_port": _get(values, "ERNIC_TCP_PORT"),
         "stats_port": _get(values, "ERNIC_STATS_PORT"),
         "ernic_nofile": _get(values, "ERNIC_NOFILE"),
-        "ernic_tap": _get(values, "ERNIC_TAP").strip().lower()
-        in ("1", "true", "yes", "on"),
+        "ernic_tap": _flag(values, "ERNIC_TAP"),
         "log_max_size": _get(values, "LOG_MAX_SIZE"),
         "log_max_file": _get(values, "LOG_MAX_FILE"),
         "prom_data_dir": _get(values, "PROM_DATA_DIR"),
+        "bind_addr": _get(values, "PUBLISH_BIND_ADDR"),
+        "grafana_data_dir": _get(values, "GRAFANA_DATA_DIR"),
         "prom_port": _get(values, "PROM_PORT"),
         "prom_interval": _get(values, "PROM_SCRAPE_INTERVAL"),
         "prom_retention": _get(values, "PROM_RETENTION"),
@@ -383,6 +516,11 @@ def render_compose(spec: dict[str, Any], env_name: str, digest: str) -> str:
     out.append("  volumes:")
     out.append("    - vfu-sockets:/run/vfu:ro")
     out.append('    - "${VM_IMAGES_DIR}:${VM_IMAGES_DIR}"')
+    if spec["vm_filesystem"]:
+        # Same path inside the container as outside: run-vm passes the path
+        # straight to -virtfs, so a remapped mount point would name a
+        # directory the guest cannot see.
+        out.append(f'    - "{spec["vm_filesystem"]}:{spec["vm_filesystem"]}:ro"')
     out.append('    - "${QEMU_TOOL_SRC:-../../..}:/qemu-tool-src:ro"')
     out.append("  devices:")
     out.append("    - /dev/kvm")
@@ -564,6 +702,10 @@ def render_compose(spec: dict[str, Any], env_name: str, digest: str) -> str:
         out.append(f'          --vm-name "{vm["name"]}" \\')
         out.append("          --ssh-port 2222 \\")
         out.append("          --backing-shared \\")
+        if spec["vfio_user_root_port"]:
+            # A boolean, so it is emitted here rather than through _VM_FLAGS,
+            # which renders --flag "value" pairs.
+            out.append("          --vfio-user-root-port \\")
         for flag, value in vm["flags"]:
             out.append(f'          {flag} "{value}" \\')
         # Sockets are passed explicitly rather than globbed: with a fleet's
@@ -618,7 +760,200 @@ def render_compose(spec: dict[str, Any], env_name: str, digest: str) -> str:
     out.append("      - --config.file=/etc/prometheus/prometheus.yml")
     out.append(f"      - --storage.tsdb.retention.time={spec['prom_retention']}")
     out.append("    ports:")
-    out.append(f'      - "{spec["prom_port"]}:9090"')
+    out.append(f'      - "{spec["bind_addr"]}:{spec["prom_port"]}:9090"')
+
+    if spec["logs"]:
+        out.append("")
+        out.append("  # ---- logs (opt-in: --profile metrics) ----")
+        out.append("  loki:")
+        out.append(f'    image: "{spec["loki_image"]}"')
+        out.append("    logging: *logging")
+        out.append("    profiles: [metrics]")
+        out.append("    networks:")
+        out.append("      fleet:")
+        out.append(f"        ipv4_address: {spec['loki_addr']}")
+        out.append("    restart: on-failure")
+        out.append("    volumes:")
+        out.append("      - ./logging/loki-config.yml:/etc/loki/config.yml:ro")
+        # Absolute, for the same reason as the TSDB: a relative path resolves
+        # against the stack directory, which for an installed qemu-tool is
+        # inside site-packages.
+        out.append(f"      - {spec['loki_data_dir']}:/loki")
+        out.append("    command:")
+        out.append("      - -config.file=/etc/loki/config.yml")
+        out.append("    ports:")
+        out.append(f'      - "{spec["bind_addr"]}:{spec["loki_port"]}:3100"')
+        out.append("    healthcheck:")
+        out.append('      test: ["CMD-SHELL", "wget -q -O- '
+                   'http://127.0.0.1:3100/ready | grep -q ready"]')
+        out.append("      interval: 10s")
+        out.append("      timeout: 5s")
+        out.append("      retries: 30")
+        out.append("      start_period: 30s")
+        out.append("")
+        out.append("  # Ships every stack container's logs. The guests run")
+        out.append("  # their own Alloy: a VM's journal is behind QEMU, not")
+        out.append("  # on this Docker socket.")
+        out.append("  alloy:")
+        out.append(f'    image: "{spec["alloy_image"]}"')
+        out.append("    logging: *logging")
+        out.append("    profiles: [metrics]")
+        out.append("    networks:")
+        out.append("      fleet:")
+        out.append(f"        ipv4_address: {spec['alloy_addr']}")
+        out.append("    restart: on-failure")
+        out.append("    depends_on:")
+        out.append("      loki:")
+        out.append("        condition: service_healthy")
+        out.append("    environment:")
+        out.append(f"      - LOKI_HOST={spec['loki_addr']}:3100")
+        out.append("    volumes:")
+        out.append("      - ./logging/alloy-host.alloy:/etc/alloy/config.alloy:ro")
+        # Read-only: this collector only ever reads logs and container
+        # metadata. A writable socket here would be root on the host.
+        out.append("      - /var/run/docker.sock:/var/run/docker.sock:ro")
+        out.append("    command:")
+        out.append("      - run")
+        out.append("      - /etc/alloy/config.alloy")
+        out.append("      - --storage.path=/tmp/alloy")
+
+    if spec["grafana"]:
+        out.append("")
+        out.append("  grafana:")
+        out.append(f'    image: "{spec["grafana_image"]}"')
+        out.append("    logging: *logging")
+        out.append("    profiles: [metrics]")
+        out.append("    networks:")
+        out.append("      fleet:")
+        out.append(f"        ipv4_address: {spec['grafana_addr']}")
+        out.append("    restart: on-failure")
+        out.append("    depends_on:")
+        out.append("      - prometheus")
+        out.append("    environment:")
+        out.append(f"      - GF_SECURITY_ADMIN_PASSWORD={spec['grafana_password']}")
+        # The fleet is a disposable lab behind a host port, and a login prompt
+        # between the operator and the only dashboard is pure friction. It is
+        # still a published port, so do not point this at anything shared.
+        out.append("      - GF_AUTH_ANONYMOUS_ENABLED=true")
+        out.append("      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin")
+        out.append("      - GF_USERS_DEFAULT_THEME=dark")
+        out.append("    volumes:")
+        # Provisioned from files, not clicked in: a dashboard that exists only
+        # in Grafana's own sqlite dies with the container, and the whole point
+        # of the generated stack is that a fleet is reproducible from the env
+        # file. :ro because Grafana must not edit what the generator owns.
+        out.append("      - ./grafana/provisioning:/etc/grafana/provisioning:ro")
+        out.append("      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro")
+        # Grafana's sqlite, on the host. The dashboards are provisioned from
+        # files and survive without it, but annotations and anything explored
+        # ad hoc do not.
+        out.append(f"      - {spec['grafana_data_dir']}:/var/lib/grafana")
+        out.append("    ports:")
+        out.append(f'      - "{spec["bind_addr"]}:{spec["grafana_port"]}:3000"')
+
+    if spec["lmcache"]:
+        out.append("")
+        out.append("  # ---- LMCache (opt-in: --profile lmcache) ----")
+        out.append("  # The MP coordinator, beside the vfio-user device")
+        out.append("  # servers rather than inside a guest. The per-VM MP")
+        out.append("  # servers are containers INSIDE the guests, started by a")
+        out.append("  # systemd unit the lmcache_guest ansible role installs --")
+        out.append("  # compose has no reach into a VM, so they cannot live")
+        out.append("  # here.")
+        out.append("  #")
+        out.append("  # Membership only. The coordinator answers 'who are my")
+        out.append("  # live peers?'; it never sees KV data and is not in the")
+        out.append("  # lookup path. The guests read each other's KV directly")
+        out.append("  # over one-sided RDMA, which is what the ernic NIC each")
+        out.append("  # guest already has is for.")
+        out.append("  lmcache-coordinator:")
+        out.append(f'    image: "{spec["lmcache_image"]}"')
+        out.append("    logging: *logging")
+        out.append("    profiles: [lmcache]")
+        out.append("    networks:")
+        out.append("      fleet:")
+        out.append(f"        ipv4_address: {spec['lmcache_addr']}")
+        out.append("    restart: on-failure")
+        # Reachable from the guests without publishing anything: QEMU's SLIRP
+        # NATs guest egress out through the qemu container's own stack, and
+        # that container is on this network. So a guest dials the
+        # coordinator's fleet address directly. Published anyway, because the
+        # REST API is the thing an operator actually queries, and 0.0.0.0 on
+        # the coordinator side is what makes both paths work.
+        out.append("    ports:")
+        out.append(
+            f'      - "{spec["bind_addr"]}:{spec["lmcache_coord_port"]}'
+            f':{spec["lmcache_coord_port"]}"')
+        out.append("    entrypoint: []")
+        out.append("    command:")
+        # `lmcache coordinator`, the MP coordinator. NOT lmcache_controller,
+        # which is the legacy in-process mode's controller: it listens on a
+        # ZMQ pull/reply pair for LMCacheWorker registrations that an MP
+        # server never sends, so pairing the two leaves every guest
+        # registered with nothing.
+        out.append("      - lmcache")
+        out.append("      - coordinator")
+        out.append("      - --host")
+        out.append('      - "0.0.0.0"')
+        out.append("      - --port")
+        out.append(f'      - "{spec["lmcache_coord_port"]}"')
+        out.append("      - --instance-timeout")
+        out.append(f'      - "{spec["lmcache_instance_timeout"]}"')
+        out.append("      - --health-check-interval")
+        out.append(f'      - "{spec["lmcache_health_interval"]}"')
+        # Both must equal the servers'. The coordinator resolves pin
+        # token_ids to keys with them, so a mismatch does not error -- it
+        # silently stops matching.
+        out.append("      - --chunk-size")
+        out.append(f'      - "{spec["lmcache_chunk_size"]}"')
+        out.append("      - --hash-algorithm")
+        out.append(f'      - "{spec["lmcache_hash_algorithm"]}"')
+        out.append("    healthcheck:")
+        # /instances, not /metrics and not /. It is the endpoint whose answer
+        # the fleet actually depends on, and /health does not exist on this
+        # service (404).
+        out.append(
+            '      test: ["CMD", "python3", "-c", "import urllib.request; '
+            f"urllib.request.urlopen('http://127.0.0.1:{spec['lmcache_coord_port']}"
+            '/instances\').read()"]'
+        )
+        out.append("      interval: 5s")
+        out.append("      timeout: 5s")
+        out.append("      retries: 30")
+        out.append("      start_period: 20s")
+
+        out.append("")
+        out.append("  # The coordinator's directory, as Prometheus metrics.")
+        out.append("  # Its own /metrics carries only the OpenTelemetry")
+        out.append("  # event-bus series -- every directory, membership and")
+        out.append("  # per-tier usage figure is HTTP-only, so a dashboard")
+        out.append("  # cannot see which node holds what without this.")
+        out.append("  lmcache-stats-exporter:")
+        out.append("    <<: *qemu-common")
+        out.append("    profiles: [lmcache]")
+        out.append("    networks:")
+        out.append("      fleet:")
+        out.append(f"        ipv4_address: {spec['lmcache_stats_addr']}")
+        out.append("    devices: []")
+        # Same reasoning as the ernic exporter: it only reads an HTTP API and
+        # binds an unprivileged port, so it has no business running as root.
+        out.append('    user: "65534:65534"')
+        out.append("    volumes:")
+        out.append('      - "${QEMU_TOOL_SRC:-../../..}:/qemu-tool-src:ro"')
+        out.append("    depends_on:")
+        out.append("      lmcache-coordinator:")
+        out.append("        condition: service_healthy")
+        out.append("    entrypoint:")
+        out.append("      - /bin/sh")
+        out.append("      - -c")
+        out.append("      - |")
+        out.append("        cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build")
+        out.extend(_pipx_install("/tmp/bin"))
+        out.append("        exec /tmp/bin/qemu-tool lmcache-stats \\")
+        out.append(
+            f"          --coordinator-url http://{spec['lmcache_addr']}"
+            f":{spec['lmcache_coord_port']} \\")
+        out.append(f"          --port {spec['lmcache_stats_port']}")
 
     if spec["ernic_tap"]:
         out.append("")
@@ -634,6 +969,13 @@ def render_compose(spec: dict[str, Any], env_name: str, digest: str) -> str:
             out.append("    logging: *logging")
             out.append(f'    network_mode: "service:ernic-{n}"')
             out.append("    cap_add: [NET_ADMIN]")
+            # The sidecar picks the l2 interface by address, because Docker
+            # does not guarantee which network lands on which interface and
+            # it genuinely differs between containers in one `up`. Bridging
+            # the mesh interface by mistake breaks the fleet in a way that
+            # looks like a worker bug -- see tapsetup/setup.sh.
+            out.append("    environment:")
+            out.append(f"      - FLEET_PREFIX={spec['net_prefix']}")
             out.append("    devices:")
             out.append("      - /dev/net/tun")
             out.append('    restart: "no"')
@@ -703,6 +1045,126 @@ def render_prometheus(spec: dict[str, Any], env_name: str, digest: str) -> str:
     out.append("  - job_name: ernic-stats")
     out.append("    static_configs:")
     out.append(f"      - targets: [\"{spec['exporter_addr']}:{spec['stats_port']}\"]")
+
+    if spec["lmcache"]:
+        out.append("")
+        out.append("  # The LMCache MP server inside each guest. Same shape as")
+        out.append("  # fleet-node above and for the same reason -- the target")
+        out.append("  # is the qemu CONTAINER, and VM_EXTRA_HOSTFWD forwards")
+        out.append("  # the port through to the server. Add")
+        out.append(f"  #   tcp::{spec['lmcache_http_port']}"
+                   f"-:{spec['lmcache_http_port']}")
+        out.append("  # to VM_EXTRA_HOSTFWD or every target here stays down.")
+        out.append("  #")
+        out.append("  # This is the server's --http-port, which is where")
+        out.append("  # /metrics actually lives. Its --prometheus-port is a")
+        out.append("  # decoy here: it only binds when the HTTP server is off,")
+        out.append("  # and `lmcache server` always runs it.")
+        out.append("  - job_name: lmcache-server")
+        out.append("    static_configs:")
+        for vm in spec["vms"]:
+            out.append(
+                f"      - targets: [\"{vm['qemu_addr']}:"
+                f"{spec['lmcache_http_port']}\"]"
+            )
+            out.append("        labels:")
+            out.append(f'          vm: "{vm["n"]}"')
+            out.append(f'          vm_name: "{vm["name"]}"')
+            # The id the controller knows this worker by, so a Grafana panel
+            # can join a scraped series to a controller query without a
+            # lookup table.
+            out.append(f'          lmcache_instance_id: "{vm["name"]}"')
+        out.append("")
+        out.append("  # The coordinator's directory, via qemu-tool")
+        out.append("  # lmcache-stats. Separate from the job below because")
+        out.append("  # the coordinator's own /metrics does not carry it.")
+        out.append("  - job_name: lmcache-directory")
+        out.append("    static_configs:")
+        out.append(
+            f"      - targets: [\"{spec['lmcache_stats_addr']}:"
+            f"{spec['lmcache_stats_port']}\"]")
+        out.append("")
+        out.append("  - job_name: lmcache-coordinator")
+        out.append("    static_configs:")
+        out.append(
+            f"      - targets: [\"{spec['lmcache_addr']}:"
+            f"{spec['lmcache_coord_port']}\"]"
+        )
+    return "\n".join(out) + "\n"
+
+
+def render_inventory(spec: dict[str, Any], env_name: str, digest: str) -> str:
+    """The fleet's ansible inventory, derived from the same VM_COUNT.
+
+    Generated rather than hand-kept because the failure mode of a stale one is
+    quiet: ansible-playbook against an inventory listing six of eight guests
+    configures six and reports success. The SSH ports and guest IPs here are
+    the same values the compose file publishes, from the same `plan()`.
+    """
+    out: list[str] = ["---"]
+    out.append("# Generated by `qemu-tool gen-compose`. Do not edit.")
+    out.append(f"# env-file: {env_name}")
+    out.append(f"{_PROVENANCE}{digest}")
+    out.append("")
+    out.append("all:")
+    out.append("  vars:")
+    out.append("    ansible_host: 127.0.0.1")
+    # From VM_USERNAME, which is a VMConfig field (config.py) and so already
+    # understood by gen-vm and run-vm. The published guest images carry their
+    # own user -- the ernic-rocjitsu qcow2 ships vm-info.json naming
+    # "batesste" -- so the ubuntu default is right only for a guest this repo
+    # built itself.
+    out.append(f"    ansible_user: {spec['vm_username']}")
+    out.append("    ansible_ssh_common_args: >-")
+    out.append("      -o StrictHostKeyChecking=no")
+    out.append("      -o UserKnownHostsFile=/dev/null")
+    out.append("")
+    out.append("  children:")
+    out.append("    fleet:")
+    out.append("      vars:")
+    # The coordinator by its fleet address, not 10.0.2.2 and not a service
+    # name. SLIRP NATs guest egress through the qemu container, which is on
+    # the fleet network, so this address resolves from inside a guest without
+    # anything being published -- and unlike 10.0.2.2 it names the
+    # coordinator rather than whatever else the container might be serving.
+    out.append(
+        f"        lmcache_guest_coordinator_url: "
+        f"http://{spec['lmcache_addr']}:{spec['lmcache_coord_port']}"
+    )
+    out.append(
+        f"        lmcache_guest_loki_url: http://{spec['loki_addr']}"
+        f":{spec['loki_port']}")
+    out.append(f"        lmcache_guest_http_port: {spec['lmcache_http_port']}")
+    out.append(f"        lmcache_guest_zmq_port: {spec['lmcache_zmq_port']}")
+    out.append(f"        lmcache_guest_p2p_port: {spec['lmcache_p2p_port']}")
+    out.append(
+        f'        lmcache_guest_p2p_transfer_engine: "{spec["lmcache_p2p_engine"]}"'
+    )
+    out.append(f"        lmcache_guest_chunk_size: {spec['lmcache_chunk_size']}")
+    out.append(
+        f'        lmcache_guest_hash_algorithm: "{spec["lmcache_hash_algorithm"]}"'
+    )
+    out.append(f"        lmcache_guest_l1_size_gb: {spec['lmcache_l1_size_gb']}")
+    out.append(
+        f'        lmcache_guest_eviction_policy: "{spec["lmcache_eviction_policy"]}"'
+    )
+    out.append(f'        lmcache_guest_image: "{spec["lmcache_image"]}"')
+    # /24 is implied by ERNIC_GUEST_SUBNET being three octets; the generator
+    # has no key for a prefix because the ernic L2 segment is flat by
+    # construction.
+    out.append("        fleet_guest_prefix: 24")
+    out.append("      hosts:")
+    for vm in spec["vms"]:
+        # Keyed by VM name, which is also lmcache_instance_id in
+        # fleet-lmcache.yml and the lmcache_instance_id label in
+        # prometheus.yml -- one identifier across all three.
+        out.append(f"        {vm['name']}:")
+        out.append(f"          ansible_port: {vm['ssh_port']}")
+        out.append(f"          fleet_guest_ip: {vm['ip']}")
+        # The guest finds its ernic by MAC, not by device name: the udev
+        # rename comes from ernic_guest_setup and a guest without it keeps
+        # the kernel name, so a name here is sometimes simply wrong.
+        out.append(f"          lmcache_guest_ernic_mac: {vm['mac']}")
     return "\n".join(out) + "\n"
 
 
@@ -723,6 +1185,10 @@ def run(
     artifacts = {
         "docker-compose.yml": render_compose(spec, env_name, digest),
         "prometheus.yml": render_prometheus(spec, env_name, digest),
+        # Alongside the other two rather than under ansible/inventory/, so all
+        # three carry one env-sha256 and `--check` stays a single comparison
+        # against one directory. Point ansible-playbook at it with -i.
+        "fleet-inventory.yml": render_inventory(spec, env_name, digest),
     }
 
     if dry_run:
