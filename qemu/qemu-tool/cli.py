@@ -20,6 +20,7 @@ from .compose import (
 )
 from .envfile import load as load_env_file
 from .ernic_stats import run as ernic_stats_run
+from .lmcache_stats import run as lmcache_stats_run
 from .gen_compose import run as gen_compose_run
 from .gen_vm import run as gen_vm_run
 from .libvirt_xml import LibvirtXml
@@ -61,7 +62,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     shared = _shared_parent()
     sub = parser.add_subparsers(
-        metavar="{run-vm,gen-vm,gen-compose,compose,ernic-stats,list}"
+        metavar="{run-vm,gen-vm,gen-compose,compose,ernic-stats,lmcache-stats,list}"
     )
 
     _add_run_vm(sub, shared)
@@ -69,6 +70,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_gen_compose(sub)
     _add_compose(sub)
     _add_ernic_stats(sub)
+    _add_lmcache_stats(sub)
     _add_list(sub)
 
     return parser
@@ -120,6 +122,8 @@ def _add_run_vm(
         description="Run a QEMU VM previously created by gen-vm.",
     )
     p.add_argument("--filesystem", default=_UNSET, metavar="DIR")
+    p.add_argument("--vfio-user-root-port", action="store_true",
+                   default=_UNSET)
     p.add_argument("--nvme", default=_UNSET, metavar="VALUE",
                    help="Positive int=count, negative int=null_blk, else literal args.")
     p.add_argument("--nvme-trace", default=_UNSET,
@@ -234,6 +238,43 @@ def _add_gen_compose(sub: argparse._SubParsersAction) -> None:
         help="Print the generated files to stdout instead of writing them.",
     )
     p.set_defaults(func=_gen_compose_cmd)
+
+
+def _add_lmcache_stats(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser(
+        "lmcache-stats",
+        help="Serve the LMCache MP coordinator's directory as Prometheus "
+             "metrics.",
+        description=(
+            "Poll the coordinator's HTTP API and republish it on /metrics. "
+            "The coordinator has its own /metrics, but it carries only the "
+            "OpenTelemetry event-bus series -- every directory, membership "
+            "and per-tier usage figure is HTTP-only, which is why this "
+            "exists."
+        ),
+    )
+    p.add_argument(
+        "--coordinator-url", default="http://127.0.0.1:9300", metavar="URL",
+        help="Base URL of the coordinator HTTP API. "
+             "Default: http://127.0.0.1:9300.",
+    )
+    p.add_argument(
+        "--port", type=int, default=9841, metavar="PORT",
+        help="Listen port. Default: 9841, one past the ernic exporter.",
+    )
+    p.add_argument(
+        "--addr", default="0.0.0.0", metavar="ADDR",
+        help="Listen address. Default: 0.0.0.0.",
+    )
+    p.add_argument(
+        "--timeout", type=float, default=5.0, metavar="SECONDS",
+        help="Per-request timeout when polling. Default: 5.",
+    )
+    p.add_argument(
+        "--once", action="store_true",
+        help="Print one scrape to stdout and exit.",
+    )
+    p.set_defaults(func=_lmcache_stats_cmd)
 
 
 def _add_ernic_stats(sub: argparse._SubParsersAction) -> None:
@@ -389,6 +430,14 @@ def _ernic_stats_cmd(args: argparse.Namespace) -> None:
     ernic_stats_run(args.stats_dir, args.port, args.addr)
 
 
+def _lmcache_stats_cmd(args: argparse.Namespace) -> None:
+    if args.once:
+        from .lmcache_stats import collect
+        sys.stdout.write(collect(args.coordinator_url, args.timeout))
+        return
+    lmcache_stats_run(args.coordinator_url, args.port, args.addr, args.timeout)
+
+
 def _gen_vm_cmd(args: argparse.Namespace) -> None:
     cfg = _build_config(args, subcommand="gen-vm")
     gen_vm_run(cfg)
@@ -451,6 +500,7 @@ def _extract_cli_overrides(
 
     if subcommand == "run-vm":
         _take("filesystem", "filesystem")
+        _take("vfio_user_root_port", "vfio_user_root_port")
         _take("nvme", "nvme")
         _take("nvme_trace", "nvme_trace")
         _take("nvme_trace_file", "nvme_trace_file")

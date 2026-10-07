@@ -1,0 +1,114 @@
+# {{ ansible_managed }}
+[Unit]
+Description=LMCache MP server ({{ lmcache_guest_instance_id }})
+Documentation=https://docs.lmcache.ai/mp/p2p.html
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+{% if lmcache_guest_l2_enable %}
+# The L2 tier is a filesystem on the emulated NVMe. Without this the unit can
+# start before the mount lands and the adapter then writes into the mount
+# POINT on the root disk -- which works, fills the wrong device, and is
+# invisible until someone wonders why the NVMe is empty.
+RequiresMountsFor={{ lmcache_guest_l2_mount }}
+{% endif %}
+
+[Service]
+Type=exec
+Restart=on-failure
+RestartSec=10s
+
+# The preflight both waits for the emulated devices and configures the ernic
+# netdev, because only module loading survives a reboot (AGENTS.md issue 12).
+# It is allowed to take a while -- rocjitsu probes single-threaded and a fleet
+# boots VM_COUNT of these at once -- so the start timeout has to exceed its own
+# timeout or systemd kills it first and the failure reads as a unit timeout
+# rather than as the device problem it is.
+{% if lmcache_guest_preflight_enable %}
+ExecStartPre=/usr/local/sbin/lmcache-preflight
+# The preflight's timeout is PER WAIT, and it has four of them (kfd, a DRI
+# node, the ernic netdev, its IB device). An earlier version set this to
+# timeout+120 and systemd killed start-pre mid-probe: amdgpu alone consumed
+# the full 180 s, the 300 s cap then fired during the RDMA wait, and the unit
+# restart-looped having never once reached the device it actually needs.
+TimeoutStartSec={{ lmcache_guest_preflight_timeout * 4 + 120 }}
+{% else %}
+TimeoutStartSec=120
+{% endif %}
+
+# The preflight writes this; the leading '-' tolerates its absence on the
+# very first start and when the preflight is disabled.
+#
+# It carries LMCACHE_DEVICE_ARGS, which is how the GPU device flags get onto
+# the command line conditionally. systemd does NOT run ExecStart through a
+# shell, so a $(test -e ...) in the line below would be handed to docker as
+# four literal arguments rather than expanded. A single-$ variable reference
+# is the one thing systemd does split on whitespace -- ${BRACED} does not,
+# and would pass the whole string as one argv entry.
+EnvironmentFile=-/run/lmcache-server-devices.env
+
+ExecStartPre=-/usr/bin/docker rm -f {{ lmcache_guest_container_name }}
+
+# The --l2-adapter JSON below is single-quoted on purpose. systemd applies
+# its own quoting to ExecStart and strips bare double quotes, which would
+# hand docker {type:fs,base_path:/...} -- rejected by LMCache as malformed
+# JSON, a long way from here. Note also that a comment may not appear inside
+# a line continuation, which is why this sits above the command.
+#
+# --network host, and for P2P it is not merely convenient. The address this
+# server advertises to its peers has to be one they can open a connection to,
+# and that is the guest's own ernic address -- a Docker bridge inside the
+# guest would advertise a 172.17.x.x that means something different on every
+# guest in the fleet.
+ExecStart=/usr/bin/docker run \
+    --rm \
+    --name {{ lmcache_guest_container_name }} \
+    --network host \
+    --ipc host \
+    --shm-size {{ lmcache_guest_shm_size }} \
+    --security-opt seccomp=unconfined \
+{% for g in lmcache_guest_docker_groups %}
+    --group-add {{ g }} \
+{% endfor %}
+{% if lmcache_guest_l2_enable %}
+    -v {{ lmcache_guest_l2_mount }}:{{ lmcache_guest_l2_mount }} \
+{% endif %}
+    --ulimit memlock=-1:-1 \
+{% if lmcache_guest_ucx_exclude_ernic %}
+    -e UCX_NET_DEVICES=${UCX_NET_DEVICES} \
+{% endif %}
+    --device /dev/infiniband \
+    $LMCACHE_DEVICE_ARGS \
+    {{ lmcache_guest_image }} \
+    lmcache server \
+    --instance-id {{ lmcache_guest_instance_id }} \
+    --host 0.0.0.0 \
+    --port {{ lmcache_guest_zmq_port }} \
+    --http-port {{ lmcache_guest_http_port }} \
+    --l1-size-gb {{ lmcache_guest_l1_size_gb }} \
+    --l1-align-bytes {{ lmcache_guest_l1_align_bytes }} \
+    --eviction-policy {{ lmcache_guest_eviction_policy }} \
+    --chunk-size {{ lmcache_guest_chunk_size }} \
+    --hash-algorithm {{ lmcache_guest_hash_algorithm }} \
+    --coordinator-url {{ lmcache_guest_coordinator_url }} \
+    --coordinator-advertise-ip {{ lmcache_guest_advertise_ip }} \
+    --coordinator-heartbeat-interval {{ lmcache_guest_heartbeat_interval }} \
+    --coordinator-event-reporting \
+{% if lmcache_guest_l2_enable %}
+    --l2-adapter '{"type":"fs","base_path":"{{ lmcache_guest_l2_mount }}/{{ lmcache_guest_l2_subdir }}"}' \
+{% endif %}
+{% if lmcache_guest_p2p_enable %}
+    --p2p-advertise-url {{ lmcache_guest_advertise_ip }}:{{ lmcache_guest_p2p_port }} \
+    --p2p-listen-url 0.0.0.0:{{ lmcache_guest_p2p_port }} \
+    --p2p-transfer-engine {{ lmcache_guest_p2p_transfer_engine }} \
+{% endif %}
+    --eviction-ratio {{ lmcache_guest_eviction_ratio }}
+
+# docker run --rm already removes it; this is for the kill path, where the
+# container outlives the client that started it. Give it time to deregister
+# from the coordinator rather than being declared dead on a heartbeat
+# timeout, which leaves peers trying to read from a server that has gone.
+ExecStop=-/usr/bin/docker stop -t 30 {{ lmcache_guest_container_name }}
+
+[Install]
+WantedBy=multi-user.target

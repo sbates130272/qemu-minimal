@@ -6,6 +6,78 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **`qemu/docker/`, and an LMCache image for gfx1250 in it.** One directory
+  per image, so the next Dockerfile has somewhere to go.
+  `qemu/docker/lmcache/` builds LMCache v0.5.5 from source with
+  `BUILD_WITH_HIP=1` and `PYTORCH_ROCM_ARCH=gfx1250`. A source build rather
+  than a wheel because upstream publishes neither: PyPI's `lmcache` is a CUDA
+  wheel, and the official ROCm wheels cover `gfx942,gfx950` only.
+
+  The base is `rocm/pytorch:rocm10.1.0_ubuntu24.04_py3.12_...`, and both
+  halves of that are forced rather than preferred. A PyTorch base because
+  torch is needed *before* the build runs (`--no-build-isolation`, hipcc
+  against torch's own headers) and cannot be installed — the newest
+  `download.pytorch.org/whl/rocm*` channel is `rocm7.2`, with `rocm10.0` and
+  `rocm10.1` both 403. Ubuntu 24.04 rather than 26.04 because every ROCm 10.1
+  / 26.04 tag is py3.14 and LMCache 0.5.5 pins `requires-python <3.14`.
+
+- **An `lmcache` compose profile on the scale-out stack, in MP mode.** An MP
+  coordinator (`lmcache coordinator`) beside the vfio-user device servers, and
+  an MP cache server (`lmcache server`) inside each of the N guests, with L1 in
+  host memory, L2 on an emulated NVMe, and P2P reads between guests over the
+  ernic.
+
+  Both are upstream entrypoints. Deliberately **not** `lmcache_controller`,
+  which is the legacy in-process mode's controller: it waits on a ZMQ
+  pull/reply pair for `LMCacheWorker` registrations an MP server never sends,
+  so pairing the two leaves every guest registered with nothing and nothing
+  erroring.
+
+  The split across the VM boundary is forced: compose has no reach into a VM,
+  so the per-VM servers cannot be services. They are started by a systemd unit
+  that the new `lmcache_guest` role installs, whose `ExecStartPre` is where the
+  interesting failures live. It runs `amdgpu-probe` rather than `modprobe
+  amdgpu` — the image keeps amdgpu blacklisted and ships that helper with the
+  emulation parameters, and unloading to retry spins at 100% CPU indefinitely.
+  It finds the ernic by **MAC and PCI association** rather than by name,
+  because the udev rules that produce `rocm-ernic0`/`rocm-rdma-ernic0` ship
+  with `ernic_guest_setup` and without them the kernel names stand (measured:
+  `enp1s0np0`, `rocep0s7`). It registers `1dd8:100a` with the in-tree ionic via
+  `new_id`, which otherwise claims only `1002`/`1003` and binds nothing with no
+  dmesg line at all. And it **reassigns the ernic address**, because only
+  module loading survives a guest reboot (AGENTS.md issue 12) — with P2P, a
+  guest that comes back without its address advertises an endpoint no peer can
+  reach.
+
+  KV stays out of device memory on purpose: rocjitsu serves single-threaded,
+  the same reason the stack already declines to scrape the in-guest GPU
+  exporters.
+
+  Images reach the guests over a 9p host share (`VM_FILESYSTEM`) rather than
+  being copied — one file read by all N guests instead of ~2.8 GB per VM, which
+  is 22 GB of transfer at `VM_COUNT=8` and 112 GB at 40.
+
+  `LMCACHE_ENABLE` gates *emission*, `--profile lmcache` gates *running*. Both
+  exist because `prometheus.yml` has no notion of a profile, so scrape jobs
+  emitted for an unselected profile would be permanently-down targets.
+
+- **Grafana in the `metrics` profile, with a provisioned fleet dashboard.**
+  Datasource and dashboard come from files under the stack directory rather
+  than from clicks, so they survive `down`; the dashboard directory is mounted
+  read-only and `allowUiUpdates` is off, since a UI that accepts an edit it
+  cannot persist is worse than one that refuses it. Per-VM panels are bar
+  gauges keyed by `vm_name` rather than one line per VM — a line per VM stops
+  being readable well before this stack's ~40-node ceiling — and every
+  timeseries panel is single-axis.
+
+- **`fleet-inventory.yml` is generated alongside the compose file.** The
+  fleet's ansible inventory is derived from the same `VM_COUNT`, SSH ports and
+  guest IPs as everything else, because the failure mode of a hand-kept one is
+  quiet: a playbook against an inventory listing six of eight guests
+  configures six and reports success. VM name, `lmcache_instance_id` and the
+  Prometheus `lmcache_instance_id` label are all the same string, so a panel
+  can join a scraped series to a controller query with no lookup table.
+
 - **`ERNIC_TAP` gives fleet guests working Ethernet.** rocm-ernic's TCP mesh
   carries RDMA payload only, so without a TAP the guest driver transmits, the
   device drops the frames, ARP goes unanswered and `ib_send_bw` can never

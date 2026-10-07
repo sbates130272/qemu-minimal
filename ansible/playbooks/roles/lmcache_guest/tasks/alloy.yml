@@ -1,0 +1,77 @@
+---
+# Install Alloy in the guest and point it at Loki.
+#
+# Delivered the same way the LMCache image is: off the 9p host share when one
+# is mounted, so N guests read one file instead of pulling N copies through
+# one SLIRP NAT. Falls back to a registry pull.
+#
+# become is on each task rather than on the include: it is not a valid
+# attribute on a TaskInclude.
+
+- name: Check whether the Alloy image is already loaded
+  become: true
+  ansible.builtin.command:
+    cmd: docker image inspect {{ lmcache_guest_alloy_image }}
+  register: lmcache_alloy_present
+  changed_when: false
+  failed_when: false
+
+- name: Look for Alloy on the host share
+  become: true
+  when: lmcache_alloy_present.rc != 0
+  ansible.builtin.stat:
+    path: "{{ lmcache_guest_hostfs_mount }}/{{ lmcache_guest_alloy_hostfs_archive }}"
+  register: lmcache_alloy_archive
+
+- name: Load Alloy from the host share
+  become: true
+  when:
+    - lmcache_alloy_present.rc != 0
+    - lmcache_alloy_archive.stat.exists | default(false)
+  ansible.builtin.command:
+    cmd: >-
+      docker load -i
+      {{ lmcache_guest_hostfs_mount }}/{{ lmcache_guest_alloy_hostfs_archive }}
+  changed_when: true
+
+# Only when the share did not have it. A pull per guest is the thing the
+# share exists to avoid, so it is the fallback and not the default.
+- name: Pull Alloy
+  become: true
+  when:
+    - lmcache_alloy_present.rc != 0
+    - not (lmcache_alloy_archive.stat.exists | default(false))
+  ansible.builtin.command:
+    cmd: docker pull {{ lmcache_guest_alloy_image }}
+  changed_when: true
+
+- name: Create the Alloy config directory
+  become: true
+  ansible.builtin.file:
+    path: "{{ lmcache_guest_alloy_config_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Write the Alloy config
+  become: true
+  ansible.builtin.template:
+    src: alloy-guest.alloy.j2
+    dest: "{{ lmcache_guest_alloy_config_dir }}/config.alloy"
+    mode: "0644"
+  notify: Restart guest Alloy
+
+- name: Install the Alloy unit
+  become: true
+  ansible.builtin.template:
+    src: alloy-guest.service.j2
+    dest: /etc/systemd/system/{{ lmcache_guest_alloy_container_name }}.service
+    mode: "0644"
+  notify: Restart guest Alloy
+
+- name: Enable and start Alloy
+  become: true
+  ansible.builtin.systemd_service:
+    name: "{{ lmcache_guest_alloy_container_name }}"
+    state: started
+    enabled: true
+    daemon_reload: true

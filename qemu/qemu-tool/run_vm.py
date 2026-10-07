@@ -251,10 +251,24 @@ def _vfio_userdev_args(cfg: VMConfig) -> list[str]:
     for j, sock in enumerate(cfg.vfio_userdev, start=1):
         if not cfg.dry_run and not Path(sock).is_socket():
             sys.exit(f"ERROR: Socket {sock} does not exist.")
-        # No PCIe root port — add the device directly. rombar=0 suppresses
-        # the ROM BAR that vfio-user-pci would otherwise advertise.
+        # rombar=0 suppresses the ROM BAR that vfio-user-pci would otherwise
+        # advertise.
+        #
+        # On the root complex by default. q35 IS a PCIe machine, but a device
+        # with no bus= lands on pcie.0 as a CONVENTIONAL PCI endpoint, with
+        # no Express capability and therefore no link speed or width -- the
+        # guest's ionic then logs "0.000 Gb/s available PCIe bandwidth
+        # (Unknown x255 link)". A root port gives it real PCIe semantics,
+        # which is what BAR-to-BAR DMA between two vfio-user devices needs.
+        bus = ""
+        if cfg.vfio_user_root_port:
+            args += [
+                "-device",
+                f"pcie-root-port,id=vfur{j},chassis={j},slot={j}",
+            ]
+            bus = f'"bus":"vfur{j}",'
         dev_json = (
-            f'{{"driver":"vfio-user-pci","rombar":0,'
+            f'{{"driver":"vfio-user-pci",{bus}"rombar":0,'
             f'"socket":{{"path":"{sock}","type":"unix"}}}}'
         )
         args += ["-device", dev_json]

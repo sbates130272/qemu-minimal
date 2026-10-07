@@ -93,5 +93,19 @@ packages = [
 [tool.setuptools.package-data]
 "qemu_tool" = ["man/qemu-tool.1", "py.typed"]
 "qemu_tool.share" = ["env.example", "env.scale-out"]
-"qemu_tool.share.compose" = ["*/docker-compose.yml", "*/prometheus.yml", "*/README.md"]
+# Every file a stack needs to come up, not just the YAML. A stack directory is
+# used verbatim as a `docker compose` working directory, so anything it
+# bind-mounts or builds has to be in the wheel too -- and the failure when it
+# is not is quiet: Docker creates a missing bind-mount source as an empty
+# directory, so Grafana starts with no datasource and no dashboard rather than
+# erroring, and a missing tapsetup/ only fails once ERNIC_TAP is turned on.
+"qemu_tool.share.compose" = [
+    "*/docker-compose.yml",
+    "*/prometheus.yml",
+    "*/fleet-inventory.yml",
+    "*/README.md",
+    "*/grafana/provisioning/*/*.yml",
+    "*/grafana/dashboards/*/*.json",
+    "*/tapsetup/*",
+]
 "qemu_tool.share.packages_d" = ["packages-*"]
