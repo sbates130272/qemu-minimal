@@ -485,6 +485,19 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     pairs pass, 8-to-1 incast passes 8/8 at ~11.4 GB/s into one node, 1.72 TB
     moved in a 25-minute soak with zero evictions.**
 
+    Measured performance once it works, so there is a baseline to regress
+    against: `ib_send_bw` scales 3.19 MiB/s at 64 B to 4028 MiB/s at 4 MB;
+    Above about 256 KB the three bandwidth verbs are
+    indistinguishable: repeated sampling shows up to 39% run-to-run spread,
+    which swamps any difference between them, so do not quote verb ordering
+    or a per-size ranking from a single run. Concurrency is close to linear -- 16 disjoint
+    pairs (every node at once) give **20.51 GB/s** aggregate, per-pair sagging
+    only ~23% from one pair.
+    Latency is 260 us typical at 1 KB; quote `t_typical`, not `t_max`, which
+    is nearly 3x higher. TCP/IP over the same L2 runs 200-270 MiB/s at 0.66 ms
+    RTT -- about 6x slower than RDMA, since Ethernet crosses the TAP and
+    bridge while RDMA goes over the mesh.
+
     Two things worth keeping from the hunt. **Mesh size is the trigger, not
     the cause** — 2 nodes passes everything, 4/8/32 fail identically, so a
     two-node reproduction will never show it. And **node-id assignment order
