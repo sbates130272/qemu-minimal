@@ -64,6 +64,31 @@ jobs:
             --project-directory qemu/compose/vfio-user-ernic-rocjitsu-scale-out \
             --env-file qemu/env.scale-out config -q
 
+      # Profiles FILTER services out of `config` output, so the step above
+      # validates only the default set -- ernic, qemu, rocjitsu, tapsetup.
+      # Every observability and LMCache service is profile-gated, so all seven
+      # of them (prometheus, grafana, loki, alloy, lmcache-coordinator and the
+      # two stats exporters) were parsed by nothing: a dangling depends_on or a
+      # bad bind-mount path in any of them shipped green. Enable both profiles
+      # and assert the services are actually present, because `config -q` on a
+      # file whose services were all filtered away also exits 0 -- the
+      # assertion is what stops this silently reverting to checking nothing.
+      - name: Profile-gated services also validate
+        run: |
+          svcs="$(docker compose \
+            --project-directory qemu/compose/vfio-user-ernic-rocjitsu-scale-out \
+            --env-file qemu/env.scale-out \
+            --profile lmcache --profile metrics config --services)"
+          for s in prometheus grafana loki alloy lmcache-coordinator \
+                   lmcache-stats-exporter ernic-stats-exporter; do
+            echo "$svcs" | grep -qx "$s" || {
+              echo "::error::$s missing from the lmcache+metrics render"; exit 1; }
+          done
+          docker compose \
+            --project-directory qemu/compose/vfio-user-ernic-rocjitsu-scale-out \
+            --env-file qemu/env.scale-out \
+            --profile lmcache --profile metrics config -q
+
       # ERNIC_TAP is opt-in and off by default, so the committed stack only
       # exercises one of the two shapes. Render the other into a scratch
       # directory and validate that too -- the tap path adds a network, a

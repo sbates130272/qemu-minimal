@@ -50,7 +50,8 @@ def _load_package():
 
 
 _load_package()
-from qemu_tool import gen_compose  # noqa: E402
+from qemu_tool import gen_compose, run_vm  # noqa: E402
+from qemu_tool.config import VMConfig  # noqa: E402
 from qemu_tool.envfile import parse as parse_env  # noqa: E402
 
 
@@ -541,6 +542,157 @@ class TestInventory(unittest.TestCase):
             out = Path(tmp) / "fleet-inventory.yml"
             out.write_text(gen_compose.render_inventory(_plan(), "env", "beef"))
             self.assertEqual(gen_compose.recorded_digest(out), "beef")
+
+
+class TestNVMe(unittest.TestCase):
+    """VM_NVME, the emulated disk LMCache's L2 tier lives on.
+
+    Untested when it landed, and it is one of the keys where "off" has to
+    mean *absent*: run-vm's _nvme_create makes a backing qcow2 per device, so
+    a --nvme that leaks through at the default would silently allocate a disk
+    per guest on every fleet that never asked for one.
+    """
+
+    def test_absent_by_default(self):
+        self.assertNotIn("--nvme", gen_compose.render_compose(_plan(), "e", "d"))
+
+    def test_a_bare_count_is_forwarded(self):
+        out = gen_compose.render_compose(_plan("\nVM_NVME=1\n"), "e", "d")
+        self.assertIn('--nvme "1"', out)
+
+    def test_every_vm_gets_one(self):
+        out = gen_compose.render_compose(_plan("\nVM_NVME=1\n"), "e", "d")
+        self.assertEqual(out.count('--nvme "1"'), 8)
+
+    # VM_NVME names a str field, so commas are the PER-VM SPLIT here, not
+    # part of one value. run-vm's --nvme accepts a literal QEMU argument
+    # string, but the fleet generator cannot carry one: there is no quoting
+    # convention that survives the split. These two tests pin that down
+    # because the failure mode differs with VM_COUNT and only one half of it
+    # is loud.
+    def test_a_comma_bearing_value_is_rejected_when_it_misfits_vm_count(self):
+        with self.assertRaises(SystemExit) as caught:
+            _plan("\nVM_NVME=4096,logical_block_size=4096\n")
+        self.assertIn("VM_NVME has 2 values", str(caught.exception))
+
+    def test_a_comma_bearing_value_splits_silently_when_it_fits(self):
+        # The dangerous half: at VM_COUNT=2 the same string is a legal
+        # two-VM override list, so guest 1 gets "4096" and guest 2 gets
+        # "logical_block_size=4096" with no warning. Asserted as-is rather
+        # than fixed -- changing it needs a quoting convention across every
+        # str field -- so that a future fix has to come past this test.
+        spec = _plan("\nVM_NVME=4096,logical_block_size=4096\n",
+                     base=_BASE_ENV.replace("VM_COUNT=8", "VM_COUNT=2"))
+        got = [dict(vm["flags"])["--nvme"] for vm in spec["vms"]]
+        self.assertEqual(got, ["4096", "logical_block_size=4096"])
+
+
+class TestHostShare(unittest.TestCase):
+    """VM_FILESYSTEM, the 9p share that carries the image tarball.
+
+    The bind mount and the --filesystem flag have to agree on one path: the
+    flag goes straight to -virtfs, so a remapped mount point names a
+    directory inside the container that the host path does not reach.
+    """
+
+    def test_absent_by_default(self):
+        out = gen_compose.render_compose(_plan(), "e", "d")
+        self.assertNotIn("--filesystem", out)
+        self.assertNotIn("hostfs", out)
+
+    def test_the_flag_and_the_bind_mount_name_the_same_path(self):
+        out = gen_compose.render_compose(
+            _plan("\nVM_FILESYSTEM=/srv/fleet-share\n"), "e", "d")
+        self.assertIn('--filesystem "/srv/fleet-share"', out)
+        self.assertIn('"/srv/fleet-share:/srv/fleet-share:ro"', out)
+
+    def test_the_share_is_read_only(self):
+        # N guests mount one host directory at once. Read-write would let any
+        # one of them corrupt the artifact the other N-1 are still loading.
+        out = gen_compose.render_compose(
+            _plan("\nVM_FILESYSTEM=/srv/fleet-share\n"), "e", "d")
+        self.assertNotIn('"/srv/fleet-share:/srv/fleet-share"', out)
+
+    def test_it_is_mounted_once_on_the_common_anchor(self):
+        # Not per service: the point of the share is one copy for the fleet.
+        out = gen_compose.render_compose(
+            _plan("\nVM_FILESYSTEM=/srv/fleet-share\n"), "e", "d")
+        self.assertEqual(out.count('"/srv/fleet-share:/srv/fleet-share:ro"'), 1)
+
+
+class TestVfioUserRootPort(unittest.TestCase):
+    """VM_VFIO_USER_ROOT_PORT -- a boolean, so it has its own emit path.
+
+    With no root port the vfio-user devices land on pcie.0 as conventional
+    endpoints with no Express capability, and the guest's ionic reports
+    "0.000 Gb/s available PCIe bandwidth (Unknown x255 link)".
+    """
+
+    def test_off_by_default(self):
+        self.assertNotIn("--vfio-user-root-port",
+                         gen_compose.render_compose(_plan(), "e", "d"))
+
+    def test_enabled_for_every_vm(self):
+        out = gen_compose.render_compose(
+            _plan("\nVM_VFIO_USER_ROOT_PORT=true\n"), "e", "d")
+        self.assertEqual(out.count("--vfio-user-root-port"), 8)
+
+    # It is emitted outside _VM_FLAGS because that renders --flag "value"
+    # pairs, and a bare boolean given a value would be rejected by run-vm.
+    def test_emitted_as_a_bare_flag_with_no_value(self):
+        out = gen_compose.render_compose(
+            _plan("\nVM_VFIO_USER_ROOT_PORT=true\n"), "e", "d")
+        self.assertNotIn('--vfio-user-root-port "', out)
+
+    def test_false_is_off_rather_than_a_literal(self):
+        # _flag() parses it; a plain truthiness test on the string "false"
+        # would turn the documented way of disabling it into enabling it.
+        out = gen_compose.render_compose(
+            _plan("\nVM_VFIO_USER_ROOT_PORT=false\n"), "e", "d")
+        self.assertNotIn("--vfio-user-root-port", out)
+
+
+class TestRunVMRootPort(unittest.TestCase):
+    """The QEMU arguments the flag above ends up producing."""
+
+    def _args(self, root_port: bool):
+        # dry_run skips the "socket must exist" guard, which is the only
+        # thing in this function that touches the filesystem. The argument
+        # construction under test is identical either way.
+        cfg = VMConfig(
+            vm_name="fleet-1",
+            vfio_userdev=["/run/vfu/ernic-1.sock", "/run/vfu/rocjitsu-1.sock"],
+            vfio_user_root_port=root_port,
+            dry_run=True,
+        )
+        return run_vm._vfio_userdev_args(cfg)
+
+    def test_each_device_gets_its_own_root_port(self):
+        args = " ".join(self._args(True))
+        self.assertEqual(args.count("pcie-root-port"), 2)
+
+    # Two devices sharing a chassis/slot is a QEMU error at startup, and a
+    # loop that forgets to vary them produces exactly that.
+    def test_root_ports_do_not_collide(self):
+        args = self._args(True)
+        ports = [a for a in args if a.startswith("pcie-root-port")]
+        self.assertEqual(len(ports), len(set(ports)))
+
+    def test_each_device_is_placed_on_its_own_port(self):
+        args = " ".join(self._args(True))
+        self.assertIn('"bus":"vfur1"', args)
+        self.assertIn('"bus":"vfur2"', args)
+
+    def test_without_it_devices_carry_no_bus(self):
+        args = " ".join(self._args(False))
+        self.assertNotIn("pcie-root-port", args)
+        self.assertNotIn('"bus"', args)
+
+    def test_the_sockets_are_still_attached_either_way(self):
+        for root_port in (True, False):
+            args = " ".join(self._args(root_port))
+            self.assertIn("/run/vfu/ernic-1.sock", args)
+            self.assertIn("/run/vfu/rocjitsu-1.sock", args)
 
 
 if __name__ == "__main__":

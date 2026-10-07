@@ -82,11 +82,16 @@ The ernic hub serves VM1 (`ernic-1.sock`); the worker serves VM2
 emulated RDMA NIC and one rocjitsu GPU per VM, VM 1 the mesh manager and 2..N
 workers dialling it.
 
-**Its `docker-compose.yml` and `prometheus.yml` are generated.** Edit
-`qemu/env.scale-out` and re-run `qemu-tool gen-compose`; a hand edit is lost on
-the next regeneration and `gen-compose --check` fails in CI — the
-`Gen Compose Check` lane, which also runs `docker compose config` against
-both the committed stack and a tap-enabled render. Both files are
+**Its `docker-compose.yml`, `prometheus.yml` and `fleet-inventory.yml` are
+generated.** Edit `qemu/env.scale-out` and re-run `qemu-tool gen-compose`; a
+hand edit is lost on the next regeneration and `gen-compose --check` fails in
+CI — the `Gen Compose Check` lane, which also runs `docker compose config`
+against the committed stack, a tap-enabled render, and a
+`--profile lmcache --profile metrics` render. That last one is not optional
+polish: profiles *filter* services out of `config` output, so until it existed
+every observability and LMCache service was validated by nothing, and
+`config -q` on a render with all services filtered away still exits 0 — hence
+the step asserts the seven services are present first. All three files are
 committed so the stack stays reviewable in a diff and usable with plain
 `docker compose`.
 

@@ -37,9 +37,15 @@ _VM_FLAGS = [
     ("vmem", "--vmem"),
     # Emulated NVMe, as LMCache's L2 tier. run-vm creates the backing qcow2
     # per device itself (_nvme_create), so unlike the root disk there is no
-    # gen-vm step to pair with this. A bare count ("1") is the common case;
-    # the field also takes a negative count for null_blk or a literal QEMU
-    # argument string, and all three pass straight through.
+    # gen-vm step to pair with this. A bare count ("1") is the common case,
+    # and a negative count for null_blk works too.
+    #
+    # run-vm's --nvme also accepts a literal QEMU argument string, but NOT
+    # through here: this names a str field, so commas are the per-VM split.
+    # "4096,logical_block_size=4096" is two values, which at VM_COUNT=8 is a
+    # loud count mismatch and at VM_COUNT=2 is a silent one -- guest 1 gets
+    # "4096", guest 2 gets "logical_block_size=4096". Pinned by
+    # TestNVMe in tests/test_gen_compose.py.
     ("nvme", "--nvme"),
     # A host directory shared into every guest over 9p (mount_tag=hostfs).
     # This is how a fleet gets a large artifact -- the LMCache image tarball,
