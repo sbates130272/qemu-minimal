@@ -83,3 +83,9 @@ artifacts/
 # Prometheus TSDB, bind-mounted into the metrics profile (PROM_DATA_DIR).
 # Default lands inside the stack directory; it is run output, not source.
 prom-data/
+
+# Local env overrides for a workstation-sized fleet. env.scale-out is the
+# committed, authoritative one; these carry machine-specific absolute paths
+# (VM_IMAGES_DIR, VM_FILESYSTEM) and locally built image tags, so they are
+# useful to keep and wrong to share.
+qemu/env.local-*

@@ -50,7 +50,8 @@ def _load_package():
 
 
 _load_package()
-from qemu_tool import gen_compose  # noqa: E402
+from qemu_tool import gen_compose, run_vm  # noqa: E402
+from qemu_tool.config import VMConfig  # noqa: E402
 from qemu_tool.envfile import parse as parse_env  # noqa: E402
 
 
@@ -156,16 +157,35 @@ class TestRender(unittest.TestCase):
         self.assertEqual(body.count("tcp:worker:172.31.1.1"), 7)
 
     def test_every_service_has_a_fixed_address(self):
+        # 3 per VM (ernic, rocjitsu, qemu) plus the infra family: the stats
+        # exporter, Prometheus, Grafana, Loki and Alloy. LMCache is off in the
+        # default env, so its two services are not emitted here -- see the
+        # lmcache tests.
         body = gen_compose.render_compose(_plan(), "env", "abc")
-        self.assertEqual(body.count("ipv4_address:"), 8 * 3 + 2)
+        self.assertEqual(body.count("ipv4_address:"), 8 * 3 + 5)
         self.assertIn("subnet: 172.31.0.0/16", body)
+
+    def test_lmcache_adds_the_coordinator_and_its_exporter(self):
+        # Two services, not one: the coordinator's own /metrics carries only
+        # the event-bus series, so the directory needs its own exporter.
+        body = gen_compose.render_compose(
+            _plan("\nLMCACHE_ENABLE=true\n"), "env", "abc")
+        self.assertEqual(body.count("ipv4_address:"), 8 * 3 + 7)
+        self.assertIn("ipv4_address: 172.31.0.12", body)
+        self.assertIn("ipv4_address: 172.31.0.14", body)
+
+    def test_directory_exporter_is_scraped(self):
+        body = gen_compose.render_prometheus(
+            _plan("\nLMCACHE_ENABLE=true\n"), "env", "abc")
+        self.assertIn("job_name: lmcache-directory", body)
+        self.assertIn('targets: ["172.31.0.14:9841"]', body)
 
     def test_prometheus_data_is_a_bind_mount_not_a_named_volume(self):
         # A named volume puts the TSDB under /var/lib/docker/volumes as root,
         # where the next fleet of a different size silently reuses it.
         body = gen_compose.render_compose(_plan(), "env", "abc")
-        self.assertIn("- ./prom-data:/prometheus", body)
-        self.assertNotIn("prom-data:/prometheus\n      -", body)
+        self.assertIn("- /var/lib/qemu-tool/prom-data:/prometheus", body)
+        
         # and it must not reappear as a declared volume
         volumes = body.split("\nvolumes:\n")[1]
         self.assertNotIn("prom-data", volumes)
@@ -321,6 +341,358 @@ class TestRender(unittest.TestCase):
         self.assertIn('targets: ["172.31.3.1:9100"]', body)
         self.assertIn('targets: ["172.31.3.8:9100"]', body)
         self.assertIn('targets: ["172.31.0.10:9840"]', body)
+
+
+class TestLMCache(unittest.TestCase):
+    """LMCACHE_ENABLE gates EMISSION; --profile lmcache gates RUNNING.
+
+    Both exist because prometheus.yml has no notion of a profile, so a scrape
+    job emitted for a profile nobody selected is a permanently-down target.
+    """
+
+    def test_off_by_default(self):
+        # An env file predating the feature must regenerate unchanged.
+        compose = gen_compose.render_compose(_plan(), "env", "abc")
+        prom = gen_compose.render_prometheus(_plan(), "env", "abc")
+        self.assertNotIn("lmcache-coordinator", compose)
+        self.assertNotIn("lmcache", prom)
+
+    def test_coordinator_is_behind_its_own_profile(self):
+        body = gen_compose.render_compose(
+            _plan("\nLMCACHE_ENABLE=true\n"), "env", "abc")
+        head = body[body.index("  lmcache-coordinator:"):]
+        self.assertIn("profiles: [lmcache]", head)
+        self.assertIn("      - lmcache\n      - coordinator", head)
+
+    def test_runs_the_mp_coordinator_not_the_legacy_controller(self):
+        # lmcache_controller is the in-process mode's controller: it waits on
+        # a ZMQ pull/reply pair for LMCacheWorker registrations an MP server
+        # never sends, so pairing the two leaves every guest registered with
+        # nothing -- and nothing errors.
+        body = gen_compose.render_compose(
+            _plan("\nLMCACHE_ENABLE=true\n"), "env", "abc")
+        self.assertIn("      - lmcache\n      - coordinator", body)
+        self.assertNotIn("lmcache_controller", body)
+
+    def test_chunk_size_and_hash_reach_the_coordinator_and_the_guests(self):
+        # Both must match on every side; a mismatch silently stops matching
+        # rather than erroring, so the generator is the only thing keeping
+        # them in step.
+        spec = _plan("\nLMCACHE_ENABLE=true\nLMCACHE_CHUNK_SIZE=512\n")
+        body = gen_compose.render_compose(spec, "env", "abc")
+        inventory = gen_compose.render_inventory(spec, "env", "abc")
+        self.assertIn("      - --chunk-size\n      - \"512\"", body)
+        self.assertIn("lmcache_guest_chunk_size: 512", inventory)
+
+    def test_scrape_jobs_target_the_containers(self):
+        # Same reason as fleet-node: the worker is inside a guest behind
+        # SLIRP, so the qemu container is the target and hostfwd bridges it.
+        body = gen_compose.render_prometheus(
+            _plan("\nLMCACHE_ENABLE=true\n"), "env", "abc")
+        self.assertIn("job_name: lmcache-server", body)
+        self.assertIn('targets: ["172.31.3.1:9500"]', body)
+        self.assertIn('targets: ["172.31.3.8:9500"]', body)
+        self.assertIn("job_name: lmcache-coordinator", body)
+        self.assertIn('targets: ["172.31.0.12:9300"]', body)
+
+    def test_coordinator_port_is_overridable(self):
+        body = gen_compose.render_compose(
+            _plan("\nLMCACHE_ENABLE=true\nLMCACHE_COORD_PORT=9900\n"),
+            "env", "abc")
+        self.assertIn('"0.0.0.0:9900:9900"', body)
+
+
+class TestPublishing(unittest.TestCase):
+    """Published ports and on-host state.
+
+    Both of these were real failures, not hypotheticals. A relative
+    PROM_DATA_DIR resolves against the stack directory, which for an installed
+    qemu-tool is inside site-packages -- a live TSDB landed there, root-owned,
+    and Prometheus crash-looped on "mkdir data/: permission denied".
+    """
+
+    def test_state_dirs_are_absolute(self):
+        body = gen_compose.render_compose(_plan(), "env", "abc")
+        self.assertIn("- /var/lib/qemu-tool/prom-data:/prometheus", body)
+        self.assertIn("- /var/lib/qemu-tool/grafana-data:/var/lib/grafana", body)
+
+    def test_published_ports_carry_the_bind_address(self):
+        body = gen_compose.render_compose(
+            _plan("\nLMCACHE_ENABLE=true\n"), "env", "abc")
+        self.assertIn('"0.0.0.0:9090:9090"', body)
+        self.assertIn('"0.0.0.0:3000:3000"', body)
+        self.assertIn('"0.0.0.0:9300:9300"', body)
+
+    def test_bind_address_can_be_narrowed(self):
+        # Grafana runs with anonymous admin, so this is the only thing
+        # deciding who can reach it on a shared host.
+        body = gen_compose.render_compose(
+            _plan("\nPUBLISH_BIND_ADDR=127.0.0.1\n"), "env", "abc")
+        self.assertIn('"127.0.0.1:3000:3000"', body)
+        self.assertNotIn('"0.0.0.0:', body)
+
+    def test_every_service_is_on_the_fleet_network_only(self):
+        # No service may fall back to Docker's default bridge: the fleet gets
+        # its own /16 and fixed addresses, and prometheus.yml scrapes those
+        # addresses directly.
+        body = gen_compose.render_compose(
+            _plan("\nLMCACHE_ENABLE=true\n"), "env", "abc")
+        services = body.count("\n  ") and body
+        self.assertEqual(
+            body.count("ipv4_address:"), body.count("      fleet:"))
+
+
+class TestLogs(unittest.TestCase):
+    """Loki and a host-side Alloy, in the metrics profile.
+
+    The guests run their own Alloy, installed by the lmcache_guest role: a
+    VM's journal is behind QEMU and is not reachable on the host's Docker
+    socket, so one collector cannot cover both sides.
+    """
+
+    def test_loki_and_alloy_ride_the_metrics_profile(self):
+        body = gen_compose.render_compose(_plan(), "env", "abc")
+        for svc in ("\n  loki:", "\n  alloy:"):
+            self.assertIn(svc, body)
+        head = body[body.index("\n  loki:"):body.index("\n  alloy:")]
+        self.assertIn("profiles: [metrics]", head)
+
+    def test_alloy_gets_the_docker_socket_read_only(self):
+        # It only ever reads logs and container metadata; a writable socket
+        # here would be root on the host.
+        body = gen_compose.render_compose(_plan(), "env", "abc")
+        self.assertIn("/var/run/docker.sock:/var/run/docker.sock:ro", body)
+
+    def test_loki_data_is_an_absolute_bind_mount(self):
+        # Same reason as the TSDB: a relative path resolves against the stack
+        # directory, which for an installed qemu-tool is inside site-packages.
+        body = gen_compose.render_compose(_plan(), "env", "abc")
+        self.assertIn("- /var/lib/qemu-tool/loki-data:/loki", body)
+
+    def test_guests_are_told_where_loki_is(self):
+        # By fleet address: SLIRP NATs guest egress out through the qemu
+        # container, which is on that network.
+        inventory = gen_compose.render_inventory(_plan(), "env", "abc")
+        self.assertIn("lmcache_guest_loki_url: http://172.31.0.15:3100",
+                      inventory)
+
+    def test_can_be_turned_off(self):
+        body = gen_compose.render_compose(
+            _plan("\nLOGS_ENABLE=false\n"), "env", "abc")
+        self.assertNotIn("\n  loki:", body)
+        self.assertNotIn("\n  alloy:", body)
+
+
+class TestGrafana(unittest.TestCase):
+    def test_rides_the_metrics_profile(self):
+        # Grafana without Prometheus is an empty dashboard, so it opts in with
+        # the same flag rather than inventing a third one.
+        body = gen_compose.render_compose(_plan(), "env", "abc")
+        head = body[body.index("  grafana:"):body.index("\nnetworks:")]
+        self.assertIn("profiles: [metrics]", head)
+        self.assertIn("/etc/grafana/provisioning:ro", head)
+
+    def test_can_be_turned_off(self):
+        # Matched on the service header, not a bare substring: the Loki and
+        # Alloy services bind-mount paths under ./grafana/, so "grafana"
+        # appears in the file even with the dashboard turned off.
+        body = gen_compose.render_compose(
+            _plan("\nGRAFANA_ENABLE=false\n"), "env", "abc")
+        self.assertNotIn("\n  grafana:", body)
+
+
+class TestInventory(unittest.TestCase):
+    """The fleet inventory is generated for the same reason the compose file
+    is: a hand-kept one that lists six of eight guests configures six and
+    reports success."""
+
+    def test_one_host_per_vm_with_its_ssh_port_and_guest_ip(self):
+        body = gen_compose.render_inventory(_plan(), "env", "abc")
+        self.assertIn("        fleet-1:", body)
+        self.assertIn("          ansible_port: 2222", body)
+        self.assertIn("          fleet_guest_ip: 192.168.100.11", body)
+        self.assertIn("        fleet-8:", body)
+        self.assertIn("          ansible_port: 2229", body)
+        self.assertIn("          fleet_guest_ip: 192.168.100.18", body)
+        self.assertEqual(body.count("ansible_port:"), 8)
+
+    def test_coordinator_is_the_fleet_address_not_the_slirp_gateway(self):
+        # SLIRP NATs guest egress out through the qemu container's own stack,
+        # and that container is on the fleet network -- so the coordinator's
+        # fleet address resolves from inside a guest with nothing published,
+        # and unlike 10.0.2.2 it names the coordinator rather than whatever
+        # else the container happens to serve.
+        body = gen_compose.render_inventory(_plan(), "env", "abc")
+        self.assertIn(
+            "lmcache_guest_coordinator_url: http://172.31.0.12:9300", body)
+        self.assertNotIn("10.0.2.2", body)
+
+    def test_instance_id_matches_the_prometheus_label(self):
+        # fleet-lmcache.yml derives lmcache_guest_instance_id from
+        # inventory_hostname, so a Grafana panel can join a scraped series to
+        # a controller query with no lookup table in between.
+        spec = _plan("\nLMCACHE_ENABLE=true\n")
+        inventory = gen_compose.render_inventory(spec, "env", "abc")
+        prom = gen_compose.render_prometheus(spec, "env", "abc")
+        self.assertIn("        fleet-3:", inventory)
+        self.assertIn('lmcache_instance_id: "fleet-3"', prom)
+
+    def test_provenance_round_trips(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "fleet-inventory.yml"
+            out.write_text(gen_compose.render_inventory(_plan(), "env", "beef"))
+            self.assertEqual(gen_compose.recorded_digest(out), "beef")
+
+
+class TestNVMe(unittest.TestCase):
+    """VM_NVME, the emulated disk LMCache's L2 tier lives on.
+
+    Untested when it landed, and it is one of the keys where "off" has to
+    mean *absent*: run-vm's _nvme_create makes a backing qcow2 per device, so
+    a --nvme that leaks through at the default would silently allocate a disk
+    per guest on every fleet that never asked for one.
+    """
+
+    def test_absent_by_default(self):
+        self.assertNotIn("--nvme", gen_compose.render_compose(_plan(), "e", "d"))
+
+    def test_a_bare_count_is_forwarded(self):
+        out = gen_compose.render_compose(_plan("\nVM_NVME=1\n"), "e", "d")
+        self.assertIn('--nvme "1"', out)
+
+    def test_every_vm_gets_one(self):
+        out = gen_compose.render_compose(_plan("\nVM_NVME=1\n"), "e", "d")
+        self.assertEqual(out.count('--nvme "1"'), 8)
+
+    # VM_NVME names a str field, so commas are the PER-VM SPLIT here, not
+    # part of one value. run-vm's --nvme accepts a literal QEMU argument
+    # string, but the fleet generator cannot carry one: there is no quoting
+    # convention that survives the split. These two tests pin that down
+    # because the failure mode differs with VM_COUNT and only one half of it
+    # is loud.
+    def test_a_comma_bearing_value_is_rejected_when_it_misfits_vm_count(self):
+        with self.assertRaises(SystemExit) as caught:
+            _plan("\nVM_NVME=4096,logical_block_size=4096\n")
+        self.assertIn("VM_NVME has 2 values", str(caught.exception))
+
+    def test_a_comma_bearing_value_splits_silently_when_it_fits(self):
+        # The dangerous half: at VM_COUNT=2 the same string is a legal
+        # two-VM override list, so guest 1 gets "4096" and guest 2 gets
+        # "logical_block_size=4096" with no warning. Asserted as-is rather
+        # than fixed -- changing it needs a quoting convention across every
+        # str field -- so that a future fix has to come past this test.
+        spec = _plan("\nVM_NVME=4096,logical_block_size=4096\n",
+                     base=_BASE_ENV.replace("VM_COUNT=8", "VM_COUNT=2"))
+        got = [dict(vm["flags"])["--nvme"] for vm in spec["vms"]]
+        self.assertEqual(got, ["4096", "logical_block_size=4096"])
+
+
+class TestHostShare(unittest.TestCase):
+    """VM_FILESYSTEM, the 9p share that carries the image tarball.
+
+    The bind mount and the --filesystem flag have to agree on one path: the
+    flag goes straight to -virtfs, so a remapped mount point names a
+    directory inside the container that the host path does not reach.
+    """
+
+    def test_absent_by_default(self):
+        out = gen_compose.render_compose(_plan(), "e", "d")
+        self.assertNotIn("--filesystem", out)
+        self.assertNotIn("hostfs", out)
+
+    def test_the_flag_and_the_bind_mount_name_the_same_path(self):
+        out = gen_compose.render_compose(
+            _plan("\nVM_FILESYSTEM=/srv/fleet-share\n"), "e", "d")
+        self.assertIn('--filesystem "/srv/fleet-share"', out)
+        self.assertIn('"/srv/fleet-share:/srv/fleet-share:ro"', out)
+
+    def test_the_share_is_read_only(self):
+        # N guests mount one host directory at once. Read-write would let any
+        # one of them corrupt the artifact the other N-1 are still loading.
+        out = gen_compose.render_compose(
+            _plan("\nVM_FILESYSTEM=/srv/fleet-share\n"), "e", "d")
+        self.assertNotIn('"/srv/fleet-share:/srv/fleet-share"', out)
+
+    def test_it_is_mounted_once_on_the_common_anchor(self):
+        # Not per service: the point of the share is one copy for the fleet.
+        out = gen_compose.render_compose(
+            _plan("\nVM_FILESYSTEM=/srv/fleet-share\n"), "e", "d")
+        self.assertEqual(out.count('"/srv/fleet-share:/srv/fleet-share:ro"'), 1)
+
+
+class TestVfioUserRootPort(unittest.TestCase):
+    """VM_VFIO_USER_ROOT_PORT -- a boolean, so it has its own emit path.
+
+    With no root port the vfio-user devices land on pcie.0 as conventional
+    endpoints with no Express capability, and the guest's ionic reports
+    "0.000 Gb/s available PCIe bandwidth (Unknown x255 link)".
+    """
+
+    def test_off_by_default(self):
+        self.assertNotIn("--vfio-user-root-port",
+                         gen_compose.render_compose(_plan(), "e", "d"))
+
+    def test_enabled_for_every_vm(self):
+        out = gen_compose.render_compose(
+            _plan("\nVM_VFIO_USER_ROOT_PORT=true\n"), "e", "d")
+        self.assertEqual(out.count("--vfio-user-root-port"), 8)
+
+    # It is emitted outside _VM_FLAGS because that renders --flag "value"
+    # pairs, and a bare boolean given a value would be rejected by run-vm.
+    def test_emitted_as_a_bare_flag_with_no_value(self):
+        out = gen_compose.render_compose(
+            _plan("\nVM_VFIO_USER_ROOT_PORT=true\n"), "e", "d")
+        self.assertNotIn('--vfio-user-root-port "', out)
+
+    def test_false_is_off_rather_than_a_literal(self):
+        # _flag() parses it; a plain truthiness test on the string "false"
+        # would turn the documented way of disabling it into enabling it.
+        out = gen_compose.render_compose(
+            _plan("\nVM_VFIO_USER_ROOT_PORT=false\n"), "e", "d")
+        self.assertNotIn("--vfio-user-root-port", out)
+
+
+class TestRunVMRootPort(unittest.TestCase):
+    """The QEMU arguments the flag above ends up producing."""
+
+    def _args(self, root_port: bool):
+        # dry_run skips the "socket must exist" guard, which is the only
+        # thing in this function that touches the filesystem. The argument
+        # construction under test is identical either way.
+        cfg = VMConfig(
+            vm_name="fleet-1",
+            vfio_userdev=["/run/vfu/ernic-1.sock", "/run/vfu/rocjitsu-1.sock"],
+            vfio_user_root_port=root_port,
+            dry_run=True,
+        )
+        return run_vm._vfio_userdev_args(cfg)
+
+    def test_each_device_gets_its_own_root_port(self):
+        args = " ".join(self._args(True))
+        self.assertEqual(args.count("pcie-root-port"), 2)
+
+    # Two devices sharing a chassis/slot is a QEMU error at startup, and a
+    # loop that forgets to vary them produces exactly that.
+    def test_root_ports_do_not_collide(self):
+        args = self._args(True)
+        ports = [a for a in args if a.startswith("pcie-root-port")]
+        self.assertEqual(len(ports), len(set(ports)))
+
+    def test_each_device_is_placed_on_its_own_port(self):
+        args = " ".join(self._args(True))
+        self.assertIn('"bus":"vfur1"', args)
+        self.assertIn('"bus":"vfur2"', args)
+
+    def test_without_it_devices_carry_no_bus(self):
+        args = " ".join(self._args(False))
+        self.assertNotIn("pcie-root-port", args)
+        self.assertNotIn('"bus"', args)
+
+    def test_the_sockets_are_still_attached_either_way(self):
+        for root_port in (True, False):
+            args = " ".join(self._args(root_port))
+            self.assertIn("/run/vfu/ernic-1.sock", args)
+            self.assertIn("/run/vfu/rocjitsu-1.sock", args)
 
 
 if __name__ == "__main__":

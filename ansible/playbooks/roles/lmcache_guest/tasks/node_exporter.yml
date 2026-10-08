@@ -1,0 +1,48 @@
+---
+# prometheus-node-exporter in the guest, on the port the generated
+# prometheus.yml already scrapes.
+#
+# The scrape target has existed since the stack was first generated -- the
+# fleet-node job points at the qemu CONTAINER and VM_EXTRA_HOSTFWD forwards
+# :9100 through to the guest -- but nothing ever installed the exporter, so
+# every one of those targets sat down. qemu/env.scale-out claimed the image
+# already carried it ("vm-basic.yml runs fave_packages, whose
+# fave_packages_node_exporter_enable defaults true"), and on the published
+# ernic-rocjitsu qcow2 that is not true: no binary, no unit, no package.
+#
+# Distro package rather than a container or an upstream tarball: it ships a
+# hardened systemd unit, it already defaults to :9100, and it is one apt
+# transaction on a guest that has to reach the archive anyway.
+#
+# become is on each task rather than on the include: it is not a valid
+# attribute on a TaskInclude.
+
+- name: Install prometheus-node-exporter
+  become: true
+  ansible.builtin.apt:
+    name: prometheus-node-exporter
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Enable and start it
+  become: true
+  ansible.builtin.systemd_service:
+    name: prometheus-node-exporter
+    state: started
+    enabled: true
+
+# Proves the thing Prometheus actually needs, which is not "the unit is
+# active" but "something answers on the forwarded port". A unit that starts
+# and binds the wrong interface looks healthy from in here and scrapes as
+# down from outside.
+- name: Confirm it answers on the scraped port
+  become: true
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ lmcache_guest_node_exporter_port }}/metrics"
+    return_content: false
+    status_code: 200
+  register: lmcache_node_exporter_probe
+  retries: 10
+  delay: 3
+  until: lmcache_node_exporter_probe is succeeded

@@ -64,6 +64,13 @@ class VMConfig:
     # ---- run-vm ----
     filesystem: str | None = None
     # nvme: None=off, digit-str=count, negative-digit-str=null_blk, else literal args
+    # Put each vfio-user device behind its own pcie-root-port instead of on
+    # the root complex. Off by default: it changes guest PCI topology, and
+    # the devices work without it. On, because without an Express capability
+    # a device reports no link speed or width -- ionic logs "0.000 Gb/s
+    # available PCIe bandwidth (Unknown x255 link)" -- and BAR-to-BAR DMA
+    # between two vfio-user devices needs real PCIe semantics.
+    vfio_user_root_port: bool = False
     nvme: str | None = None
     nvme_trace: str | None = None   # doorbell | all | event-name
     nvme_trace_file: Path | None = None

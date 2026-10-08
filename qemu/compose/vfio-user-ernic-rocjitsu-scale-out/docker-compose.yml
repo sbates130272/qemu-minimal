@@ -5,7 +5,7 @@
 #   qemu-tool gen-compose --env-file qemu/env.scale-out
 #
 # env-file: qemu/env.scale-out
-# env-sha256: ff7a6108922dac27f99d911642e67cb231b491b40d22fc86516ecda2449ffc38
+# env-sha256: 61b89f4047b67478234ad3194c383843bf7e0bbf99478eeb35037858061f11ab
 
 x-logging: &logging
   driver: json-file
@@ -30,6 +30,7 @@ x-qemu-common: &qemu-common
   volumes:
     - vfu-sockets:/run/vfu:ro
     - "${VM_IMAGES_DIR}:${VM_IMAGES_DIR}"
+    - "/var/lib/qemu-tool/share:/var/lib/qemu-tool/share:ro"
     - "${QEMU_TOOL_SRC:-../../..}:/qemu-tool-src:ro"
   devices:
     - /dev/kvm
@@ -495,9 +496,13 @@ services:
           --vm-name "stebates-fleet-1" \
           --ssh-port 2222 \
           --backing-shared \
+          --vfio-user-root-port \
           --vcpus "4" \
           --vmem "8192" \
+          --nvme "1" \
+          --filesystem "/var/lib/qemu-tool/share" \
           --extra-hostfwd "tcp::9100-:9100" \
+          --extra-hostfwd "tcp::9500-:9500" \
           --vfio-userdev "/run/vfu/ernic-1.sock,/run/vfu/rocjitsu-1.sock"
 
   # ---- VM 2: guest ernic IP 192.168.100.12 ----
@@ -529,9 +534,13 @@ services:
           --vm-name "stebates-fleet-2" \
           --ssh-port 2222 \
           --backing-shared \
+          --vfio-user-root-port \
           --vcpus "4" \
           --vmem "8192" \
+          --nvme "1" \
+          --filesystem "/var/lib/qemu-tool/share" \
           --extra-hostfwd "tcp::9100-:9100" \
+          --extra-hostfwd "tcp::9500-:9500" \
           --vfio-userdev "/run/vfu/ernic-2.sock,/run/vfu/rocjitsu-2.sock"
 
   # ---- VM 3: guest ernic IP 192.168.100.13 ----
@@ -563,9 +572,13 @@ services:
           --vm-name "stebates-fleet-3" \
           --ssh-port 2222 \
           --backing-shared \
+          --vfio-user-root-port \
           --vcpus "4" \
           --vmem "8192" \
+          --nvme "1" \
+          --filesystem "/var/lib/qemu-tool/share" \
           --extra-hostfwd "tcp::9100-:9100" \
+          --extra-hostfwd "tcp::9500-:9500" \
           --vfio-userdev "/run/vfu/ernic-3.sock,/run/vfu/rocjitsu-3.sock"
 
   # ---- VM 4: guest ernic IP 192.168.100.14 ----
@@ -597,9 +610,13 @@ services:
           --vm-name "stebates-fleet-4" \
           --ssh-port 2222 \
           --backing-shared \
+          --vfio-user-root-port \
           --vcpus "4" \
           --vmem "8192" \
+          --nvme "1" \
+          --filesystem "/var/lib/qemu-tool/share" \
           --extra-hostfwd "tcp::9100-:9100" \
+          --extra-hostfwd "tcp::9500-:9500" \
           --vfio-userdev "/run/vfu/ernic-4.sock,/run/vfu/rocjitsu-4.sock"
 
   # ---- VM 5: guest ernic IP 192.168.100.15 ----
@@ -631,9 +648,13 @@ services:
           --vm-name "stebates-fleet-5" \
           --ssh-port 2222 \
           --backing-shared \
+          --vfio-user-root-port \
           --vcpus "4" \
           --vmem "8192" \
+          --nvme "1" \
+          --filesystem "/var/lib/qemu-tool/share" \
           --extra-hostfwd "tcp::9100-:9100" \
+          --extra-hostfwd "tcp::9500-:9500" \
           --vfio-userdev "/run/vfu/ernic-5.sock,/run/vfu/rocjitsu-5.sock"
 
   # ---- VM 6: guest ernic IP 192.168.100.16 ----
@@ -665,9 +686,13 @@ services:
           --vm-name "stebates-fleet-6" \
           --ssh-port 2222 \
           --backing-shared \
+          --vfio-user-root-port \
           --vcpus "4" \
           --vmem "8192" \
+          --nvme "1" \
+          --filesystem "/var/lib/qemu-tool/share" \
           --extra-hostfwd "tcp::9100-:9100" \
+          --extra-hostfwd "tcp::9500-:9500" \
           --vfio-userdev "/run/vfu/ernic-6.sock,/run/vfu/rocjitsu-6.sock"
 
   # ---- VM 7: guest ernic IP 192.168.100.17 ----
@@ -699,9 +724,13 @@ services:
           --vm-name "stebates-fleet-7" \
           --ssh-port 2222 \
           --backing-shared \
+          --vfio-user-root-port \
           --vcpus "4" \
           --vmem "8192" \
+          --nvme "1" \
+          --filesystem "/var/lib/qemu-tool/share" \
           --extra-hostfwd "tcp::9100-:9100" \
+          --extra-hostfwd "tcp::9500-:9500" \
           --vfio-userdev "/run/vfu/ernic-7.sock,/run/vfu/rocjitsu-7.sock"
 
   # ---- VM 8: guest ernic IP 192.168.100.18 ----
@@ -733,9 +762,13 @@ services:
           --vm-name "stebates-fleet-8" \
           --ssh-port 2222 \
           --backing-shared \
+          --vfio-user-root-port \
           --vcpus "4" \
           --vmem "8192" \
+          --nvme "1" \
+          --filesystem "/var/lib/qemu-tool/share" \
           --extra-hostfwd "tcp::9100-:9100" \
+          --extra-hostfwd "tcp::9500-:9500" \
           --vfio-userdev "/run/vfu/ernic-8.sock,/run/vfu/rocjitsu-8.sock"
 
   # ---- metrics (opt-in: --profile metrics) ----
@@ -774,12 +807,159 @@ services:
     restart: on-failure
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./prom-data:/prometheus
+      - /var/lib/qemu-tool/prom-data:/prometheus
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.retention.time=7d
     ports:
-      - "9090:9090"
+      - "0.0.0.0:9090:9090"
+
+  # ---- logs (opt-in: --profile metrics) ----
+  loki:
+    image: "docker.io/grafana/loki:3.3.2"
+    logging: *logging
+    profiles: [metrics]
+    networks:
+      fleet:
+        ipv4_address: 172.31.0.15
+    restart: on-failure
+    volumes:
+      - ./logging/loki-config.yml:/etc/loki/config.yml:ro
+      - /var/lib/qemu-tool/loki-data:/loki
+    command:
+      - -config.file=/etc/loki/config.yml
+    ports:
+      - "0.0.0.0:3100:3100"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:3100/ready | grep -q ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  # Ships every stack container's logs. The guests run
+  # their own Alloy: a VM's journal is behind QEMU, not
+  # on this Docker socket.
+  alloy:
+    image: "docker.io/grafana/alloy:v1.5.1"
+    logging: *logging
+    profiles: [metrics]
+    networks:
+      fleet:
+        ipv4_address: 172.31.0.16
+    restart: on-failure
+    depends_on:
+      loki:
+        condition: service_healthy
+    environment:
+      - LOKI_HOST=172.31.0.15:3100
+    volumes:
+      - ./logging/alloy-host.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command:
+      - run
+      - /etc/alloy/config.alloy
+      - --storage.path=/tmp/alloy
+
+  grafana:
+    image: "docker.io/grafana/grafana:latest"
+    logging: *logging
+    profiles: [metrics]
+    networks:
+      fleet:
+        ipv4_address: 172.31.0.13
+    restart: on-failure
+    depends_on:
+      - prometheus
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_USERS_DEFAULT_THEME=dark
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - /var/lib/qemu-tool/grafana-data:/var/lib/grafana
+    ports:
+      - "0.0.0.0:3000:3000"
+
+  # ---- LMCache (opt-in: --profile lmcache) ----
+  # The MP coordinator, beside the vfio-user device
+  # servers rather than inside a guest. The per-VM MP
+  # servers are containers INSIDE the guests, started by a
+  # systemd unit the lmcache_guest ansible role installs --
+  # compose has no reach into a VM, so they cannot live
+  # here.
+  #
+  # Membership only. The coordinator answers 'who are my
+  # live peers?'; it never sees KV data and is not in the
+  # lookup path. The guests read each other's KV directly
+  # over one-sided RDMA, which is what the ernic NIC each
+  # guest already has is for.
+  lmcache-coordinator:
+    image: "qemu-tool/lmcache-rocm:0.5.5-gfx1250"
+    logging: *logging
+    profiles: [lmcache]
+    networks:
+      fleet:
+        ipv4_address: 172.31.0.12
+    restart: on-failure
+    ports:
+      - "0.0.0.0:9300:9300"
+    entrypoint: []
+    command:
+      - lmcache
+      - coordinator
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "9300"
+      - --instance-timeout
+      - "30"
+      - --health-check-interval
+      - "10"
+      - --chunk-size
+      - "256"
+      - --hash-algorithm
+      - "blake3"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9300/instances').read()"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  # The coordinator's directory, as Prometheus metrics.
+  # Its own /metrics carries only the OpenTelemetry
+  # event-bus series -- every directory, membership and
+  # per-tier usage figure is HTTP-only, so a dashboard
+  # cannot see which node holds what without this.
+  lmcache-stats-exporter:
+    <<: *qemu-common
+    profiles: [lmcache]
+    networks:
+      fleet:
+        ipv4_address: 172.31.0.14
+    devices: []
+    user: "65534:65534"
+    volumes:
+      - "${QEMU_TOOL_SRC:-../../..}:/qemu-tool-src:ro"
+    depends_on:
+      lmcache-coordinator:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
+        for i in 1 2 3 4 5; do
+          HOME=/tmp PIPX_HOME=/tmp/pipx PIPX_BIN_DIR=/tmp/bin pipx install --force \
+            /tmp/qemu-tool-build && break
+          sleep 10
+        done
+        exec /tmp/bin/qemu-tool lmcache-stats \
+          --coordinator-url http://172.31.0.12:9300 \
+          --port 9841
 
   # ---- guest Ethernet wiring ----
   # One short-lived privileged sidecar per ernic. It shares
@@ -791,6 +971,8 @@ services:
     logging: *logging
     network_mode: "service:ernic-1"
     cap_add: [NET_ADMIN]
+    environment:
+      - FLEET_PREFIX=172.31
     devices:
       - /dev/net/tun
     restart: "no"
@@ -803,6 +985,8 @@ services:
     logging: *logging
     network_mode: "service:ernic-2"
     cap_add: [NET_ADMIN]
+    environment:
+      - FLEET_PREFIX=172.31
     devices:
       - /dev/net/tun
     restart: "no"
@@ -815,6 +999,8 @@ services:
     logging: *logging
     network_mode: "service:ernic-3"
     cap_add: [NET_ADMIN]
+    environment:
+      - FLEET_PREFIX=172.31
     devices:
       - /dev/net/tun
     restart: "no"
@@ -827,6 +1013,8 @@ services:
     logging: *logging
     network_mode: "service:ernic-4"
     cap_add: [NET_ADMIN]
+    environment:
+      - FLEET_PREFIX=172.31
     devices:
       - /dev/net/tun
     restart: "no"
@@ -839,6 +1027,8 @@ services:
     logging: *logging
     network_mode: "service:ernic-5"
     cap_add: [NET_ADMIN]
+    environment:
+      - FLEET_PREFIX=172.31
     devices:
       - /dev/net/tun
     restart: "no"
@@ -851,6 +1041,8 @@ services:
     logging: *logging
     network_mode: "service:ernic-6"
     cap_add: [NET_ADMIN]
+    environment:
+      - FLEET_PREFIX=172.31
     devices:
       - /dev/net/tun
     restart: "no"
@@ -863,6 +1055,8 @@ services:
     logging: *logging
     network_mode: "service:ernic-7"
     cap_add: [NET_ADMIN]
+    environment:
+      - FLEET_PREFIX=172.31
     devices:
       - /dev/net/tun
     restart: "no"
@@ -875,6 +1069,8 @@ services:
     logging: *logging
     network_mode: "service:ernic-8"
     cap_add: [NET_ADMIN]
+    environment:
+      - FLEET_PREFIX=172.31
     devices:
       - /dev/net/tun
     restart: "no"

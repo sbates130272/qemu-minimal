@@ -1,0 +1,23 @@
+---
+# Not generated: there is nothing in here that depends on VM_COUNT.
+#
+# The Prometheus URL is its fixed fleet address, matching the rest of the
+# stack -- nothing here resolves a compose service name at run time, and a
+# datasource poll every few seconds is no exception. It is the
+# FLEET_NET_PREFIX.0.11 the generator assigns; change that key and this
+# follows by hand.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: fleet-prometheus
+    type: prometheus
+    access: proxy
+    url: http://172.31.0.11:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      # Matches PROM_SCRAPE_INTERVAL. Grafana uses it to pick a sane $__rate_interval,
+      # and leaving it at the 15s default while Prometheus scrapes slower
+      # produces rate() panels full of gaps that look like a dead exporter.
+      timeInterval: 15s
