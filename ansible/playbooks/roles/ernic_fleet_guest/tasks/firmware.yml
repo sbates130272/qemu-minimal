@@ -1,0 +1,67 @@
+---
+# Generated on the controller from the rocjitsu container that will serve the
+# device, then copied in. Not baked upstream on purpose: ip_discovery.bin is
+# per rocjitsu build, so a copy baked into a published image is wrong for
+# every consumer serving a different one. The corollary is that this must be
+# regenerated whenever ROCJITSU_IMAGE moves.
+- name: Assert the rocjitsu image to generate firmware from
+  ansible.builtin.assert:
+    that:
+      - ernic_fleet_firmware_image | length > 0
+    fail_msg: >-
+      ernic_fleet_firmware_image must name the rocjitsu container that will
+      serve the device. Stubs from a different build load and then fail at
+      discovery, which reads as a broken GPU rather than a mismatched blob.
+
+- name: Create a staging directory on the controller
+  ansible.builtin.tempfile:
+    state: directory
+    prefix: ernic_fleet_fw_
+  register: _fleet_fw_tmp
+  delegate_to: localhost
+  become: false
+
+# Streamed out as a tar rather than bind-mounted: `docker run -v` is resolved
+# by the daemon, so a containerised controller talking to the host's socket
+# gets an empty directory on the host and no error. See vm-rocjitsu.yml,
+# which hit exactly that.
+- name: Generate the guest firmware stubs
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail &&
+      docker run --rm --entrypoint /bin/sh {{ ernic_fleet_firmware_image }}
+      -c 'python3 /usr/local/bin/vfio_guest_firmware.py
+      --generation {{ ernic_fleet_firmware_generation }}
+      --set {{ ernic_fleet_firmware_set }} --output /out
+      && tar -cf - -C /out .'
+      | tar -xf - -C {{ _fleet_fw_tmp.path }}
+    executable: /bin/bash
+  delegate_to: localhost
+  become: false
+  changed_when: true
+
+- name: Assert the stubs were produced
+  # Guards the silent-empty-directory failure above. ip_discovery.bin is the
+  # one the driver opens first and the one whose absence produces
+  # "discovery failed: -2".
+  ansible.builtin.stat:
+    path: "{{ _fleet_fw_tmp.path }}/ip_discovery.bin"
+  register: _fleet_fw_stat
+  delegate_to: localhost
+  become: false
+  failed_when: not _fleet_fw_stat.stat.exists
+
+- name: Install the stubs into the guest
+  ansible.builtin.copy:
+    src: "{{ _fleet_fw_tmp.path }}/"
+    dest: /lib/firmware/amdgpu/
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Remove the staging directory
+  ansible.builtin.file:
+    path: "{{ _fleet_fw_tmp.path }}"
+    state: absent
+  delegate_to: localhost
+  become: false

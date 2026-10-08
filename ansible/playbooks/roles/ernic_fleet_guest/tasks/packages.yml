@@ -1,0 +1,55 @@
+---
+# Local .debs when the caller supplies them, apt otherwise. The .deb path
+# exists because a fleet guest reaches the archive through SLIRP behind a
+# corporate proxy; dpkg on four copied files is both faster and deterministic.
+- name: Copy the local package set into the guest
+  ansible.builtin.copy:
+    src: "{{ ernic_fleet_deb_dir }}/"
+    dest: /tmp/fleet-debs/
+    mode: "0644"
+  when: ernic_fleet_deb_dir | length > 0
+
+- name: Install the local package set
+  # One dpkg call with every .deb, so dpkg orders them itself: iperf3 needs
+  # libsctp1 and libiperf0, and installing them separately in the wrong order
+  # leaves the binary present but unconfigured and unable to start.
+  #
+  # The environment matters as much as the command. needrestart hooks dpkg on
+  # Ubuntu and, unsuppressed, stalls the run indefinitely on a prompt nothing
+  # will answer -- measured here as a dpkg sitting for over five minutes with
+  # a needrestart child. No --fix-broken either: the .deb set is
+  # self-contained by construction, and reaching the archive through SLIRP
+  # behind a proxy is the thing the local set exists to avoid.
+  ansible.builtin.shell:
+    cmd: dpkg -i /tmp/fleet-debs/*.deb && dpkg --configure -a
+    executable: /bin/bash
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+    NEEDRESTART_MODE: a
+    NEEDRESTART_SUSPEND: "1"
+  when: ernic_fleet_deb_dir | length > 0
+  changed_when: true
+
+- name: Remove the staged packages
+  ansible.builtin.file:
+    path: /tmp/fleet-debs
+    state: absent
+  when: ernic_fleet_deb_dir | length > 0
+
+- name: Install the test tooling from the archive
+  ansible.builtin.apt:
+    name: "{{ ernic_fleet_packages }}"
+    state: present
+    update_cache: true
+  when:
+    - ernic_fleet_deb_dir | length == 0
+    - ernic_fleet_packages | length > 0
+
+- name: Enable the node exporter
+  # Prometheus scrapes the qemu CONTAINER on :9100 and VM_EXTRA_HOSTFWD
+  # forwards that to the guest, so an exporter that is installed but not
+  # enabled shows up as a silently empty fleet-node job.
+  ansible.builtin.systemd_service:
+    name: prometheus-node-exporter
+    enabled: true
+  failed_when: false

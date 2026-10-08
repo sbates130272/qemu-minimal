@@ -1,0 +1,44 @@
+#!/bin/bash
+# Bring the emulated ernic up and address it at boot, with no per-guest state.
+#
+# This is the run-time half of the rocm-ernic configure play -- the half
+# AGENTS.md issue 12 says does not survive a reboot: the netdev up, the
+# address, and the counters symlink the stats exporter reads. Module loading
+# and the stable names are handled by modules-load.d and 99-rocm-ernic.rules.
+#
+# The guest index comes from the NIC's own MAC rather than being passed in.
+# gen-compose hands VM n the MAC <ERNIC_MAC_PREFIX>:<n>>8>:<n&0xff> and the
+# address <subnet>.<10+n>, so the MAC already carries n and one image serves
+# every guest in the fleet.
+#
+# Managed by Ansible (roles/ernic_fleet_guest) -- edit the template.
+set -u
+
+NIC=rocm-ernic0
+SUBNET={{ ernic_fleet_nic_subnet }}
+PREFIX=24
+
+for _ in $(seq 1 30); do
+    [ -e "/sys/class/net/$NIC" ] && break
+    sleep 1
+done
+[ -e "/sys/class/net/$NIC" ] || { echo "$NIC never appeared" >&2; exit 1; }
+
+mac=$(cat "/sys/class/net/$NIC/address")
+n=$(( 0x${mac:12:2} * 256 + 0x${mac:15:2} ))
+[ "$n" -gt 0 ] || { echo "refusing index 0 from MAC $mac" >&2; exit 1; }
+
+ip link set "$NIC" up
+addr="$SUBNET.$(( 10 + n ))"
+ip addr show dev "$NIC" | grep -q "$addr/" || ip addr add "$addr/$PREFIX" dev "$NIC"
+
+# The RDMA exporter reads ports/*/counters; the emulated device only exposes
+# hw_counters.
+for d in /sys/class/infiniband/rocm-rdma-ernic*/ports/*/; do
+    [ -d "$d/hw_counters" ] || continue
+    [ -e "$d/counters" ] && continue
+    ln -s hw_counters "$d/counters"
+done
+
+hostnamectl set-hostname "ernic-vm-$n" 2>/dev/null || true
+echo "configured $NIC as $addr (index $n)"

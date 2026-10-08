@@ -1,0 +1,54 @@
+---
+# Prebuilt ionic + ionic_rdma carrying the two AMD patches, installed into
+# updates/dkms where they outrank the in-tree modules. Built once with
+# scripts/setup-ionic-dkms.sh against the pinned kernel; see
+# defaults/main.yml for why this is not a per-guest DKMS build.
+- name: Create the module directory
+  ansible.builtin.file:
+    path: "/lib/modules/{{ ernic_fleet_kernel }}/updates/dkms"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the patched ionic modules
+  ansible.builtin.copy:
+    src: "{{ ernic_fleet_ionic_modules_dir }}/{{ item }}"
+    dest: "/lib/modules/{{ ernic_fleet_kernel }}/updates/dkms/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - ionic.ko.zst
+    - ionic_rdma.ko.zst
+  notify: Run depmod
+
+- name: Verify the installed module carries the emulated device id
+  # The whole point of the patched build. An in-tree module here would load
+  # cleanly and bind nothing, which presents as a missing device rather than
+  # as a wrong module.
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail;
+      modinfo -F alias
+      /lib/modules/{{ ernic_fleet_kernel }}/updates/dkms/ionic.ko.zst
+      | grep -qi 'd0000100A'
+    executable: /bin/bash
+  changed_when: false
+
+- name: Install the rocm-ernic udev naming rules
+  ansible.builtin.copy:
+    src: "{{ ernic_fleet_udev_rules_src }}"
+    dest: /etc/udev/rules.d/99-rocm-ernic.rules
+    owner: root
+    group: root
+    mode: "0644"
+  when: ernic_fleet_udev_rules_src | length > 0
+
+- name: Load the ernic modules at boot
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/rocm-ernic-ionic.conf
+    content: "{{ ernic_fleet_modules | join('\n') }}\n"
+    owner: root
+    group: root
+    mode: "0644"

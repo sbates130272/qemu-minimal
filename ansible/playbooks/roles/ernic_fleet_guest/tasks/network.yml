@@ -1,0 +1,57 @@
+---
+- name: Keep systemd-networkd off the emulated ernic
+  # The image's netplan is `match: name: "en*"` and udev leaves enp0s5np0 as
+  # an altname, which that glob matches -- so networkd adopts rocm-ernic0,
+  # runs DHCP and flushes the static address out from under netcfg. 05- sorts
+  # before netplan's generated /run/systemd/network/10-netplan-*, and /etc
+  # outranks /run, so this match is the one that applies.
+  ansible.builtin.copy:
+    dest: /etc/systemd/network/05-rocm-ernic.network
+    content: |
+      [Match]
+      Name=rocm-ernic*
+
+      [Link]
+      Unmanaged=yes
+    owner: root
+    group: root
+    mode: "0644"
+  when: ernic_fleet_networkd_unmanaged | bool
+
+- name: Install the boot-time NIC configuration script
+  ansible.builtin.template:
+    src: rocm-ernic-netcfg.sh.j2
+    dest: /usr/local/sbin/rocm-ernic-netcfg.sh
+    owner: root
+    group: root
+    mode: "0755"
+  when: ernic_fleet_netcfg | bool
+
+- name: Install the NIC configuration unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/rocm-ernic-netcfg.service
+    content: |
+      [Unit]
+      Description=Configure the emulated rocm-ernic NIC
+      After=systemd-networkd.service systemd-udev-settle.service
+      Wants=systemd-networkd.service systemd-udev-settle.service
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/local/sbin/rocm-ernic-netcfg.sh
+      StandardOutput=journal
+      StandardError=journal
+
+      [Install]
+      WantedBy=multi-user.target
+    owner: root
+    group: root
+    mode: "0644"
+  when: ernic_fleet_netcfg | bool
+
+- name: Enable the NIC configuration unit
+  ansible.builtin.systemd_service:
+    name: rocm-ernic-netcfg
+    enabled: true
+  when: ernic_fleet_netcfg | bool

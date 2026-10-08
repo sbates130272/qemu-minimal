@@ -1,0 +1,61 @@
+---
+# perftest built --enable-rocm --enable-rocm-dmabuf. The distro package has no
+# --use_rocm at all, so GPU-memory RDMA is not expressible without this.
+# Installed beside the distro binaries rather than over them: the stock ones
+# stay available and nothing in the image is shadowed.
+- name: Create the perftest prefix
+  ansible.builtin.file:
+    path: "{{ ernic_fleet_perftest_prefix }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the ROCm-enabled perftest binaries
+  ansible.builtin.copy:
+    src: "{{ ernic_fleet_perftest_dir }}/"
+    dest: "{{ ernic_fleet_perftest_prefix }}/"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the rocm-perftest wrapper
+  ansible.builtin.copy:
+    dest: /usr/local/bin/rocm-perftest
+    content: |
+      #!/bin/sh
+      # Run a perftest binary against GPU-accessible memory on this stack.
+      #
+      #   rocm-perftest ib_send_bw -d rocm-rdma-ernic0 -s 65536 [<peer>]
+      #
+      # PERFTEST_ASSUME_DMABUF skips perftest's kernel-config gate, which
+      # greps for CONFIG_DMABUF_MOVE_NOTIFY and never asks the device
+      # anything. move_notify governs *dynamic* dma_buf attachments, while
+      # ionic_reg_user_mr_dmabuf() takes the pinned path and needs
+      # dma_buf_pin() instead, so the gate refuses a combination that works.
+      #
+      # Managed by Ansible (roles/ernic_fleet_guest).
+      set -e
+      bin=$1; shift
+      exec env PERFTEST_ASSUME_DMABUF=1 \
+           "{{ ernic_fleet_perftest_prefix }}/$bin" --use_rocm=0 "$@"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Put the ROCm prefix on PATH and in the loader cache
+  # TheRock installs to a versioned prefix (/opt/rocm/core-N.N) that nothing
+  # adds to PATH or ld.so.conf, so rocm_agent_enumerator is "command not
+  # found" despite being installed. Discovered with sort -V rather than
+  # hardcoded: a lexical sort puts core-9.0 above core-10.0.
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      rocm=$(ls -d /opt/rocm/core-* 2>/dev/null | sort -V | tail -1)
+      [ -n "$rocm" ] || exit 0
+      echo "$rocm/lib" > /etc/ld.so.conf.d/rocm.conf
+      ldconfig
+      printf 'export PATH=%s/bin:$PATH\n' "$rocm" > /etc/profile.d/rocm.sh
+      chmod 644 /etc/profile.d/rocm.sh
+    executable: /bin/bash
+  changed_when: true

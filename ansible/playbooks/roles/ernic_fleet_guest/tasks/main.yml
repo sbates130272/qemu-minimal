@@ -1,0 +1,79 @@
+---
+# See defaults/main.yml for why each of these is here. Ordering matters in
+# two places and nowhere else: the driver has to be in place before depmod,
+# and the netcfg unit has to be enabled after the networkd drop-in exists so
+# a first boot cannot race.
+
+- name: Assert the inputs that have no safe default
+  ansible.builtin.assert:
+    that:
+      - ernic_fleet_ssh_pubkey_file | length > 0
+    fail_msg: >-
+      ernic_fleet_ssh_pubkey_file must name the public key the fleet drivers
+      will use. There is no default: a key baked in from somewhere the caller
+      did not choose is worse than a failed run.
+
+- name: Create the fleet login user
+  ansible.builtin.user:
+    name: "{{ ernic_fleet_user }}"
+    uid: "{{ ernic_fleet_user_uid }}"
+    shell: /bin/bash
+    groups: "{{ ernic_fleet_user_groups }}"
+    append: true
+    create_home: true
+    password: "{{ ernic_fleet_user_password | password_hash('sha512') }}"
+
+- name: Authorise the fleet key
+  ansible.posix.authorized_key:
+    user: "{{ ernic_fleet_user }}"
+    key: "{{ lookup('file', ernic_fleet_ssh_pubkey_file) }}"
+    state: present
+
+- name: Allow passwordless sudo for the fleet user
+  ansible.builtin.copy:
+    dest: "/etc/sudoers.d/90-{{ ernic_fleet_user }}"
+    content: "{{ ernic_fleet_user }} ALL=(ALL) NOPASSWD:ALL\n"
+    owner: root
+    group: root
+    mode: "0440"
+    validate: visudo -cf %s
+
+# Password auth is on because the credential is documented and people land in
+# these guests from a console as often as over SSH.
+- name: Permit password authentication
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/99-fleet.conf
+    content: |
+      PasswordAuthentication yes
+      PermitRootLogin no
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Enable lingering so --user units outlive the SSH session
+  ansible.builtin.command:
+    cmd: "loginctl enable-linger {{ ernic_fleet_user }}"
+    creates: "/var/lib/systemd/linger/{{ ernic_fleet_user }}"
+  when: ernic_fleet_user_linger | bool
+
+- name: Install the test tooling
+  ansible.builtin.include_tasks: packages.yml
+
+- name: Install the patched ionic modules and their naming rules
+  ansible.builtin.include_tasks: driver.yml
+  when: ernic_fleet_ionic_modules_dir | length > 0
+
+- name: Raise the locked-memory limit for RDMA
+  ansible.builtin.include_tasks: memlock.yml
+  when: ernic_fleet_memlock_unlimited | bool
+
+- name: Configure the guest Ethernet
+  ansible.builtin.include_tasks: network.yml
+
+- name: Install the emulated GPU firmware stubs
+  ansible.builtin.include_tasks: firmware.yml
+  when: ernic_fleet_firmware | bool
+
+- name: Install the ROCm-enabled perftest
+  ansible.builtin.include_tasks: perftest.yml
+  when: ernic_fleet_perftest_dir | length > 0
