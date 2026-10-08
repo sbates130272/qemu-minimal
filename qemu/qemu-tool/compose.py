@@ -97,6 +97,15 @@ def run(
         cmd += ["--env-file", str(settings.resolve())]
         if stack in _GENERATED_STACKS:
             _warn_if_stale(cdir, settings, stack, env_file)
+    # argparse.REMAINDER KEEPS the "--" separator in the list, and docker
+    # compose treats everything after a "--" as positional arguments. So
+    # `qemu-tool compose -- --profile lmcache up -d` forwarded a literal "--"
+    # and docker silently ignored the profile, bringing up the default
+    # services and reporting success. Without the "--", argparse rejects the
+    # call outright -- so before this, there was no way to pass a profile
+    # through at all, and the failure that mattered was the quiet one.
+    if compose_args and compose_args[0] == "--":
+        compose_args = compose_args[1:]
     cmd += compose_args
     result = subprocess.run(cmd, cwd=cdir, env=env)
     sys.exit(result.returncode)
