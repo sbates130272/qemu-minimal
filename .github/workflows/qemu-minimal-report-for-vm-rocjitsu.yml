@@ -57,8 +57,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  ROCJITSU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20260924.gad7a357-rocjitsu.c85bb75
-  QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260924.ge1cd640-qemu11.1.1-vfu.8039244
+  ROCJITSU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261007.g677e113-rocjitsu.4c86d86
+  QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261007.g677e113-qemu11.1.2-vfu.8039244
   VM_IMAGES_DIR: /var/lib/qemu-tool/images
   ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false,"user_setup_deploy_ssh_key":false}'
 
@@ -70,7 +70,7 @@ jobs:
     # and the fio one builds fio from source in-guest.
     timeout-minutes: 180
     container:
-      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260924.ge1cd640-qemu11.1.1-vfu.8039244
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261007.g677e113-qemu11.1.2-vfu.8039244
       options: >-
         --device /dev/kvm
         -v /var/run/docker.sock:/var/run/docker.sock

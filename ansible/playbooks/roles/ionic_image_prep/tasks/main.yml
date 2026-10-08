@@ -121,15 +121,15 @@
               | first
               | default({})).item | default('') }}
 
-    # The emulated NIC reuses a real, vendor-assigned pair, and hwdata 0.379
-    # already lists 1dd8:100a -- as "DSC Serial Port Controller". Appending a
-    # second 100a under that vendor does not shadow the upstream name, it makes
-    # pciutils refuse to parse the file outright ("lspci: Duplicate entry at
-    # ..., line N", rc 1), after which lspci resolves no names for *any* device
-    # on the bus. So the test has to be "does this vendor's block already list
-    # this device", scoped to the block: grepping for the entry text misses the
-    # upstream spelling, and grepping for a bare 100a matches the same four hex
-    # digits under a dozen other vendors.
+    # 1dd8:1002 is not yet in the upstream pciids database, so this is usually
+    # a "vendor nodevice" scan and the entry gets inserted. The duplicate guard
+    # exists for the day a future hwdata release adds it: inserting a second
+    # entry does not shadow the upstream name, it makes pciutils refuse to parse
+    # the file outright ("lspci: Duplicate entry at ..., line N", rc 1), after
+    # which lspci resolves no names for *any* device on the bus. So the test
+    # must be "does this vendor's block already list this device", scoped to the
+    # block: grepping for a bare 1002 matches the same four hex digits under
+    # dozens of other vendors.
     #
     # Spelt with -v and dynamic regexes rather than {{ }} inside an awk literal
     # so the shape of the program does not depend on the variables, and with
@@ -176,9 +176,8 @@
         msg: >-
           {{ ionic_image_pciids_vendor }}:{{ ionic_image_pciids_device }} is
           already in {{ ionic_image_pciids_path }}; leaving it alone. lspci
-          will call the device whatever hwdata calls it, which for this pair is
-          a serial port controller rather than a NIC -- misleading, but a
-          second entry would break parsing of the whole file.
+          will call the device whatever hwdata calls it; a second entry would
+          break pciutils parsing of the whole file.
       when: ionic_image_pciids_scan.stdout | default('') == 'vendor device'
 
     # Inserted directly under the vendor line, not appended: pci.ids is parsed

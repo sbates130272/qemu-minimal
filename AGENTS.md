@@ -147,7 +147,7 @@ What replaces them:
 | out-of-tree `rocm_ernic_eth` + `rocm_ernic_rdma` | upstream `ionic` + `ionic_rdma`, two AMD patches on top |
 | DKMS package `rocm-ernic` | DKMS package `ionic-ernic`, built by `scripts/setup-ionic-dkms.sh` |
 | rdma-core ≥ 62 + `apply-rocm-ernic-dv.sh` | stock rdma-core ≥ 61, whose `providers/ionic` is upstream |
-| emulated device `1022:8000` | Pensando `1dd8:100a` |
+| emulated device `1022:8000` | Pensando `1dd8:1002` (subsystem `1dd8:5400`) |
 
 `ionic_rdma` needs kernel ≥ 6.18 (`drivers/infiniband/hw/ionic` merged there)
 and `ib_umem_get_va`, which landed after 7.0. No Ubuntu release ships one, so
@@ -157,7 +157,7 @@ None of this is done by hand in this repo. Two pieces of automation own it:
 
 - [`ansible/playbooks/roles/ionic_image_prep/`](ansible/playbooks/roles/ionic_image_prep/)
   prepares the guest image — installs the pinned mainline kernel from
-  `kernel.ubuntu.com/mainline`, the build toolchain, the `1dd8:100a` pci.ids
+  `kernel.ubuntu.com/mainline`, the build toolchain, the `1dd8:1002` pci.ids
   entry, and `/etc/modules-load.d/rocm-ernic-ionic.conf`. Upstream assumes a
   guest already prepared this way (their published `ionic` qcow2); this repo
   builds its own, so it owns the preparation.
@@ -173,7 +173,7 @@ major.minor.
 
 Device names are unchanged: Ethernet `rocm-ernic0`, IB `rocm-rdma-ernic0`, both
 still set by `99-rocm-ernic.rules` (see udev section below), now keyed on
-`1dd8:100a` and `DRIVERS=="ionic|ionic_rdma"`.
+`1dd8:1002` (subsystem `1dd8:5400`) and `DRIVERS=="ionic|ionic_rdma"`.
 
 ## udev rules (in-VM)
 
@@ -188,19 +188,27 @@ the pre-rename kernel name, and `ibv_devinfo` reports `hca_id: rocm-rdma-ernic0`
 The IB rename shells out to `/usr/bin/rdma`, which the gen-vm guest has.
 
 If a guest somehow comes up with the kernel names instead, check that the rules
-matched rather than re-copying them: they key on `ATTR{device/vendor}=="0x1dd8"`
-and `ATTR{device/device}=="0x100a"`, so a guest still being served the old
-`1022:8000` device will not rename anything.
+matched rather than re-copying them: they key on `ATTR{device/vendor}=="0x1dd8"`,
+`ATTR{device/device}=="0x1002"`, and subsystem `0x1dd8:0x5400`, so a guest still
+being served the old `1022:8000` device (or `1dd8:100a`) will not rename anything.
 
 ## PCI ID (in-VM)
 
 `ionic_image_prep` owns this; there is nothing to do by hand. Two traps make it
 less straightforward than it looks.
 
-**The emulated NIC reuses a real, vendor-assigned pair.** hwdata 0.379 already
-lists `1dd8:100a` — as `DSC Serial Port Controller`. So on a current guest
-nothing is missing: `lspci` names the device, misleadingly but it names it. The
-"bare device number" case only arises on hwdata old enough to predate the entry.
+**`1dd8:1002` (subsystem `1dd8:5400`) is not yet in the upstream pciids database.**
+rocm-ernic PR #190 moved the emulated device from `1dd8:100a` (a real Pensando
+DSC Serial Port Controller that hwdata already named) to `1dd8:1002`, the device
+ID the real ionic hardware presents. Neither `update-pciids` nor the upstream
+collection's own `driver_common.yml` call injects a custom entry — `ernic_guest_setup`
+runs `update-pciids` and then warns if the subsystem label is absent, which it
+always is until AMD submits the entry upstream. `ionic_image_prep` fills the gap:
+
+```
+1dd8  AMD Pensando Systems
+	1002  ROCm Emulated RDMA NIC (ionic)
+```
 
 **pciutils rejects a duplicate device id outright.** Not "ignores the second
 entry" — it refuses to parse the file, and then resolves no names for *any*
@@ -214,30 +222,15 @@ $ echo $?
 ```
 
 So the role's presence check is a block-scoped `awk` scan asking whether *this
-vendor's block* already lists the device — a bare `grep 100a` matches the same
-four hex digits under a dozen other vendors, and a `grep` for the entry text
-misses the upstream spelling. On current hwdata the role therefore skips by
-itself, which is the correct behaviour. When it does insert, the line goes
-directly under the vendor line (`pci.ids` is parsed sequentially, so an append
-at the end of the file lands under the class section and never matches), and a
-post-merge `lspci` parse check fails the play rather than quietly breaking every
-later `lspci`.
+vendor's block* already lists the device — a bare `grep 1002` matches the same
+four hex digits under dozens of other vendors, and a `grep` for the entry text
+misses any future upstream spelling. When it does insert, the line goes directly
+under the vendor line (`pci.ids` is parsed sequentially, so an append at the end
+of the file lands under the class section and never matches), and a post-merge
+`lspci` parse check fails the play rather than quietly breaking every later `lspci`.
 
-The entry goes under vendor `1dd8`, not `1022` — upstream moved the emulated
-device off the AMD vendor id. hwdata spells the vendor `AMD Pensando Systems`,
-and the vendor line has to match for the block scan to find it:
-
-```
-1dd8  AMD Pensando Systems
-	100a  ROCm Emulated RDMA NIC (ionic)
-```
-
-`scripts/pci.ids.rocm-ernic` was deleted upstream along with the rest of the
-pre-ionic tree, so the id is this repo's to maintain — see
-`ionic_image_pciids_*` in
+See `ionic_image_pciids_*` in
 [`ionic_image_prep/defaults/main.yml`](ansible/playbooks/roles/ionic_image_prep/defaults/main.yml).
-The 0.2.0 changelog calls pci.ids the guest image's business, but neither
-`provision/ionic.sh` nor `packages/ionic.txt` in batesste-ci-images writes it.
 
 **Note:** `update-pciids` will overwrite these files — re-apply after each run.
 Nothing in a bake runs it any more, though: `rocm_setup` used to call it
@@ -391,11 +384,11 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
 16. **Stock in-tree `ionic` drives the emulated device; only the PCI ID is
     missing.** On a mainline kernel (verified on 7.2.4) no DKMS build and no
     AMD patch is needed to bring the NIC and the RDMA device up — the shipped
-    `ionic.ko`/`ionic_rdma.ko` bind to `1dd8:100a` and work as soon as the id
-    is added to the driver's table:
+    `ionic.ko`/`ionic_rdma.ko` bind to `1dd8:1002` (subsystem `1dd8:5400`) and
+    work as soon as the id is added to the driver's table:
 
     ```
-    echo "1dd8 100a" > /sys/bus/pci/drivers/ionic/new_id
+    echo "1dd8 1002" > /sys/bus/pci/drivers/ionic/new_id
     ```
 
     That yields `ionic 0000:00:05.0: FW: rocm-ernic-1.0`, `Link up - 100 Gbps`,

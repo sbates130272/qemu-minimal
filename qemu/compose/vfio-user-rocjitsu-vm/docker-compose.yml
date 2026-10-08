@@ -19,7 +19,7 @@ x-gpu-common: &gpu-common
 services:
   rocjitsu:
     <<: *gpu-common
-    image: "${ROCJITSU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20260929.g2bdbd16-rocjitsu.f2d13fb}"
+    image: "${ROCJITSU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261007.g677e113-rocjitsu.4c86d86}"
     command:
       - rocjitsu
       - --config
@@ -34,7 +34,7 @@ services:
       start_period: 5s
 
   qemu:
-    image: "${QEMU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260929.g2bdbd16-qemu11.1.2-vfu.8039244}"
+    image: "${QEMU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261007.g677e113-qemu11.1.2-vfu.8039244}"
     depends_on:
       rocjitsu:
         condition: service_healthy
