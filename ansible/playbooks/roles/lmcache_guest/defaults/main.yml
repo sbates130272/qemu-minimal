@@ -170,6 +170,17 @@ lmcache_guest_l2_subdir: chunks
 # Guard. The role refuses to mkfs a device that already carries a filesystem
 # unless this is set, so a re-run cannot silently destroy a populated L2.
 lmcache_guest_l2_force_format: false
+# Size of the FILESYSTEM, not the device -- an mke2fs fs-size argument, so it
+# takes a suffix ("20G"). Empty means the whole device, which is the hazard
+# this exists to bound: run-vm creates the NVMe backing file at NVME_SIZE,
+# currently 1024G, as a SPARSE qcow2, and the --l2-adapter has no size cap of
+# its own. So an unbounded L2 grows until the HOST filesystem is full, and it
+# does it quietly because the guest sees a terabyte of free space the whole
+# time. Measured on a 2-VM soak: 106 GB and 85 GB of host disk consumed by
+# two guests that each believed they had plenty left.
+#
+# Set this to whatever the host can actually spare, divided by VM_COUNT.
+lmcache_guest_l2_size: ""
 
 # ── L1 ───────────────────────────────────────────
 # Host memory, in GB, per guest. Must fit inside VM_VMEM with room for the

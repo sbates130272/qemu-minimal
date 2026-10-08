@@ -52,11 +52,30 @@
 
 - name: Create the filesystem
   become: true
-  when: lmcache_l2_blkid.stdout | trim | length == 0 or lmcache_guest_l2_force_format | bool
+  when:
+    - lmcache_l2_blkid.stdout | trim | length == 0 or lmcache_guest_l2_force_format | bool
+    - lmcache_guest_l2_size | length == 0
   community.general.filesystem:
     fstype: "{{ lmcache_guest_l2_fstype }}"
     dev: "{{ lmcache_guest_l2_device }}"
     force: "{{ lmcache_guest_l2_force_format | bool }}"
+
+# mke2fs takes the filesystem size as a POSITIONAL argument after the device,
+# which community.general.filesystem has no parameter for -- hence the direct
+# command rather than an `opts` string. Bounding the filesystem is the only
+# place the cap can go: the device is 1024G sparse and the fs adapter accepts
+# no quota, so a full L2 has to mean ENOSPC inside the guest rather than a
+# full host disk.
+- name: Create a size-bounded filesystem
+  become: true
+  when:
+    - lmcache_l2_blkid.stdout | trim | length == 0 or lmcache_guest_l2_force_format | bool
+    - lmcache_guest_l2_size | length > 0
+  ansible.builtin.command:
+    cmd: >-
+      mkfs.{{ lmcache_guest_l2_fstype }} -F
+      {{ lmcache_guest_l2_device }} {{ lmcache_guest_l2_size }}
+  changed_when: true
 
 # By UUID, not by /dev name. The device name is a function of probe order and
 # this entry goes in fstab, where a guest that reorders its controllers would
@@ -68,13 +87,21 @@
   register: lmcache_l2_uuid
   changed_when: false
 
+# nofail is not optional. Without it, a guest whose L2 device is missing or
+# has been recreated does not come up degraded -- it drops to EMERGENCY MODE
+# and never reaches sshd, because an fstab entry with default options is
+# required by local-fs.target. Observed exactly this way: the host's L2 qcow2
+# was deleted between runs, run-vm made a fresh empty one, the UUID in fstab
+# no longer resolved, and the guest hung for 90s on
+# dev-disk-by-uuid-....device before dropping to a console nobody can reach
+# over SSH. L2 is a CACHE; losing it must cost cache, not the node.
 - name: Mount it
   become: true
   ansible.posix.mount:
     path: "{{ lmcache_guest_l2_mount }}"
     src: "UUID={{ lmcache_l2_uuid.stdout | trim }}"
     fstype: "{{ lmcache_guest_l2_fstype }}"
-    opts: defaults,noatime
+    opts: defaults,noatime,nofail
     state: mounted
 
 - name: Create the adapter's subdirectory
