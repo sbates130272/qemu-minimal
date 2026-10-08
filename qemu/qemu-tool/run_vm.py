@@ -362,12 +362,19 @@ def _pci_check(bdf: str, dry_run: bool) -> None:
         sys.exit(f"ERROR: PCIe bus address is invalid ({bdf}).")
     if dry_run:
         return
-    result = subprocess.run(
-        ["lspci", "-k", "-s", bdf], capture_output=True, text=True
-    )
-    if "vfio-pci" not in result.stdout:
-        sys.exit(f"ERROR: Device {bdf} is not bound to vfio-pci driver.")
     sysbdf = _pci_sys_bdf(bdf)
+    # Read the binding out of sysfs rather than shelling out to lspci. The
+    # container that runs this carries QEMU and little else -- no pciutils --
+    # so the lspci call this replaces died with FileNotFoundError before any
+    # of the checks below could run, which reads as a qemu-tool crash rather
+    # than as a missing package.
+    driver_link = Path(f"/sys/bus/pci/devices/{sysbdf}/driver")
+    if not driver_link.exists():
+        sys.exit(f"ERROR: Device {bdf} is not bound to any driver "
+                 f"(expected vfio-pci).")
+    driver = driver_link.resolve().name
+    if driver != "vfio-pci":
+        sys.exit(f"ERROR: Device {bdf} is bound to {driver}, not vfio-pci.")
     iommu = Path(f"/sys/bus/pci/devices/{sysbdf}/iommu_group")
     if iommu.exists():
         group = Path(iommu).resolve().name

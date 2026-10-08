@@ -1,0 +1,5 @@
+---
+- name: Run depmod
+  ansible.builtin.command:
+    cmd: "depmod -a {{ ernic_fleet_kernel }}"
+  changed_when: true

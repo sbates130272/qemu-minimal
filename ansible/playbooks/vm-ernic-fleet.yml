@@ -1,0 +1,37 @@
+---
+# Prepare a backing image for the compose fleet.
+#
+# The fleet stacks boot guests from one backing qcow2 through
+# `qemu-tool compose` and run no Ansible at all, so the run-time configure
+# stage of sbates130272.rocm_ernic.ernic_guest_setup never executes. This
+# playbook is the fleet's equivalent: applied once to the image, it leaves a
+# guest that comes up test-ready with no per-boot Ansible.
+#
+# It does not replace vm-ernic.yml. That one builds the guest -- mainline
+# kernel, toolchain, DKMS, rdma-core provider -- against a cloud image. This
+# one starts from the published ernic-rocjitsu qcow2, which already has all
+# of that, and adds only what the published disk leaves out. See
+# artifacts/scaling-report-mi100.md, "What the published qcow2 does not give
+# you", for the list and how each item was found.
+#
+# Run against an existing backing image:
+#
+#   qemu-tool gen-vm --ansible-only \
+#     --ansible-playbook ansible/playbooks/vm-ernic-fleet.yml \
+#     --env-file qemu/env.scale-out-mi100 \
+#     --vm-name stebates-mi100-1 \
+#     -e ernic_fleet_ssh_pubkey_file=<path> \
+#     -e ernic_fleet_ionic_modules_dir=<dir> \
+#     -e ernic_fleet_firmware_image=<rocjitsu image ref>
+#
+# Every path input is deliberately unset by default. The modules have to come
+# from a build against the same pinned kernel the image carries, and the
+# firmware stubs from the same rocjitsu build that will serve the device --
+# neither is safe to guess, and both fail in ways that look like broken
+# hardware rather than a wrong input.
+- name: Prepare a fleet guest image
+  hosts: all
+  gather_facts: true
+  become: true
+  roles:
+    - role: ernic_fleet_guest

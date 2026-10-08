@@ -1,0 +1,28 @@
+---
+- name: Allow unlimited locked memory for logins
+  ansible.builtin.copy:
+    dest: /etc/security/limits.d/90-rdma-memlock.conf
+    content: |
+      # RDMA pins its buffers; the 8192 KB default fails ibv_create_cq at
+      # 4 MB message size with "Couldn't create CQ".
+      * soft memlock unlimited
+      * hard memlock unlimited
+      root soft memlock unlimited
+      root hard memlock unlimited
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Allow unlimited locked memory for systemd units
+  # Both managers. The perftest servers run as `systemd-run --user` units and
+  # inherit the user manager's limits, so the system drop-in alone leaves
+  # them at the default.
+  ansible.builtin.copy:
+    dest: "/etc/systemd/{{ item }}.conf.d/90-rdma-memlock.conf"
+    content: |
+      [Manager]
+      DefaultLimitMEMLOCK=infinity
+    owner: root
+    group: root
+    mode: "0644"
+  loop: [system, user]

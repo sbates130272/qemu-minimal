@@ -1,0 +1,105 @@
+---
+# Everything a compose fleet guest needs that the published ernic-rocjitsu
+# qcow2 does not provide.
+#
+# Why this is a role and not the collection's configure play: a fleet boots
+# from a backing image through `qemu-tool compose` and runs no Ansible at all,
+# so the run-time configure stage of sbates130272.rocm_ernic.ernic_guest_setup
+# never happens. Anything a fleet guest needs has to be in the image, or be a
+# boot-time unit the image carries. This role is that list, applied once to
+# the backing image:
+#
+#   qemu-tool gen-vm --ansible-only \
+#     --ansible-playbook ansible/playbooks/vm-ernic-fleet.yml \
+#     --vm-name <name> --env-file qemu/env.scale-out-mi100
+#
+# It was a pile of virt-customize invocations first. Each item below is there
+# because a fleet failed without it, and the comment says how.
+
+# ── Login ────────────────────────────────────────
+# gen-vm's --backing-image path takes an early return before cloud-init
+# (gen_vm.py:78-81), so VM_USERNAME/VM_PASSWORD are never applied and the
+# published disk's only account is `batesste`, holding an authorized key for
+# root@buildkitsandbox that nobody outside CI has. Without this a fleet guest
+# cannot be logged into at all.
+ernic_fleet_user: ubuntu
+ernic_fleet_user_uid: 1001
+ernic_fleet_user_password: ubuntu
+ernic_fleet_user_groups: [sudo, adm, video, render, users, kvm]
+# Perftest servers run as transient `systemd-run --user` units because a
+# server started over SSH dies with the session even when disowned
+# (AGENTS.md issue 8). A user manager only outlives the connection with
+# linger enabled.
+ernic_fleet_user_linger: true
+# Public half of the key the fleet drivers use. No default: a key baked in
+# from somewhere unexpected is worse than a failed assert.
+ernic_fleet_ssh_pubkey_file: ""
+
+# ── Driver ───────────────────────────────────────
+# Stock in-tree ionic advertises 1dd8:1002 and 1dd8:1003, not the emulated
+# device's 1dd8:100a, so nothing binds without the AMD patches. Building DKMS
+# per guest costs ~30 s each and needs a toolchain and network in every
+# guest; the kernel is pinned fleet-wide, so a prebuilt module installed into
+# updates/dkms is identical and free. Point this at modules built once with
+# scripts/setup-ionic-dkms.sh from the pinned rocm-ernic tree.
+ernic_fleet_ionic_modules_dir: ""
+ernic_fleet_kernel: 7.2.4-070204-generic
+# Stable names: Ethernet rocm-ernic0, IB rocm-rdma-ernic0. Shipped by the
+# rocm-ernic tree; without them a guest keeps kernel names and every
+# `-d rocm-rdma-ernic0` in the test drivers fails.
+ernic_fleet_udev_rules_src: ""
+ernic_fleet_modules: [ionic, ionic_rdma]
+
+# ── RDMA limits ──────────────────────────────────
+# The default 8192 KB is enough to fail ibv_create_cq at 4 MB with
+# "Couldn't create CQ". The user drop-in matters as much as the system one:
+# the perftest servers run as --user units and inherit the user manager's
+# limits, not the system manager's.
+ernic_fleet_memlock_unlimited: true
+
+# ── Guest Ethernet ───────────────────────────────
+# The image's netplan is `match: name: "en*"`, and udev's rename leaves
+# enp0s5np0 behind as an altname, which that glob matches -- so networkd
+# adopts rocm-ernic0, runs DHCP on it and flushes the static address. It is a
+# race, and not one that is reliably won: 2 of 8 guests lost the address on
+# first boot. 05- sorts before netplan's generated 10-netplan-*, and /etc
+# outranks /run.
+ernic_fleet_networkd_unmanaged: true
+# Addresses the NIC at boot from the NIC's own MAC, so one image serves every
+# guest in the fleet. gen-compose hands VM n the MAC
+# <ERNIC_MAC_PREFIX>:<n>>8>:<n&0xff> and the address <subnet>.<10+n>, so the
+# MAC already carries n. This is the run-time half of the configure play --
+# the half AGENTS.md issue 12 says does not survive a reboot.
+ernic_fleet_netcfg: true
+ernic_fleet_nic_subnet: "192.168.100"
+
+# ── Emulated GPU ─────────────────────────────────
+# The qcow2 deliberately ships no gfx1250 stubs: ip_discovery.bin is per
+# rocjitsu build, so a baked copy is wrong for every consumer serving a
+# different one. Generated from the rocjitsu container that will serve the
+# device, which makes this the one item that must be regenerated whenever
+# ROCJITSU_IMAGE moves.
+#
+# Easy to think they are already present: the image ships several files
+# matching `ip_discovery`, but they are real-chip firmwares like
+# aldebaran_ip_discovery.bin.zst. The driver wants amdgpu/ip_discovery.bin and
+# fails with "discovery failed: -2" without the generated one.
+ernic_fleet_firmware: true
+ernic_fleet_firmware_image: ""
+ernic_fleet_firmware_generation: gfx1250
+ernic_fleet_firmware_set: gap
+
+# ── Test tooling ─────────────────────────────────
+# iperf3 is the only way to measure TCP/IP over the ernic L2, which is the
+# natural baseline for every RDMA number. node_exporter is assumed present by
+# AGENTS.md -- true of gen-vm images, not of this qcow2 -- so Prometheus's
+# fleet-node job scrapes nothing without it.
+ernic_fleet_packages: [iperf3, prometheus-node-exporter, sysstat]
+# Local .debs rather than apt: a fleet guest reaches the archive through SLIRP
+# behind a corporate proxy, and 64 of them doing it at once is slower and less
+# reliable than copying in four files. Leave empty to use apt instead.
+ernic_fleet_deb_dir: ""
+# perftest built --enable-rocm: the distro build has no --use_rocm at all.
+# Leave empty to skip.
+ernic_fleet_perftest_dir: ""
+ernic_fleet_perftest_prefix: /usr/local/lib/perftest-rocm

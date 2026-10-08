@@ -36,6 +36,13 @@ _VM_FLAGS = [
     ("vcpus", "--vcpus"),
     ("vmem", "--vmem"),
     ("extra_hostfwd", "--extra-hostfwd"),
+    # Like extra_hostfwd this is list[str], so the commas are several devices
+    # for ONE VM and the whole value reaches every VM. That is the right
+    # meaning for a field of this type and the wrong thing to ask for at
+    # VM_COUNT > 1: a PCI function cannot be assigned to two guests, so the
+    # second QEMU to claim it fails to start. Passing through one device per
+    # guest needs per-VM hostdev support, which does not exist yet.
+    ("pci_hostdev", "--pci-hostdev"),
 ]
 
 # Per-VM keys that name no VMConfig field, so they need their own split.
