@@ -37,6 +37,9 @@ _MAC_RE = re.compile(r"\b((?:[0-9a-f]{2}:){5}[0-9a-f]{2})\b", re.I)
 _DEVICE_ARGV: dict[str, str] = {}
 _CLK_TCK = os.sysconf("SC_CLK_TCK")
 
+_QMP_RE = re.compile(r"unix:([^,]+)")
+_GA_CHARDEV_RE = re.compile(r"socket,(?:[^,]*,)*path=([^,]+)")
+
 _ARCH_BY_BINARY = {
     "x86_64": "amd64",
     "amd64": "amd64",
@@ -119,6 +122,8 @@ def _describe(pid: int, argv: list[str], containers: dict[str, str]) -> dict[str
         "vfio_user_sockets": _vfio_sockets(argv),
         "gpus": _gpus(_vfio_sockets(argv)),
         "rdma_devices": _rdma_devices(_vfio_sockets(argv)),
+        "qmp_socket": _qmp_socket(argv),
+        "ga_socket": _ga_socket(argv),
         "container": container_name,
         # "<network>=<ip>" per attachment. Empty for an uncontainerised VM,
         # which has no Docker network at all rather than an unknown one.
@@ -208,6 +213,27 @@ def _drive_file(argv: list[str]) -> str | None:
                 return path
             fallback = fallback or path
     return fallback
+
+
+def _qmp_socket(argv: list[str]) -> str | None:
+    for i, a in enumerate(argv):
+        if a == "-qmp" and i + 1 < len(argv):
+            m = _QMP_RE.match(argv[i + 1])
+            if m:
+                return m.group(1)
+    return None
+
+
+def _ga_socket(argv: list[str]) -> str | None:
+    for i, a in enumerate(argv):
+        if a == "-chardev" and i + 1 < len(argv):
+            spec = argv[i + 1]
+            if "qga" not in spec and "guest_agent" not in spec:
+                continue
+            m = _GA_CHARDEV_RE.search(spec)
+            if m:
+                return m.group(1)
+    return None
 
 
 def _vfio_sockets(argv: list[str]) -> list[str]:
