@@ -21,7 +21,7 @@ jobs:
   dry-run-tests:
     name: Dry Run Tests
     runs-on: ubuntu-latest
-    container: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260924.ge1cd640-qemu11.1.1-vfu.8039244
+    container: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261007.g677e113-qemu11.1.2-vfu.8039244
     steps:
     - name: Check out code
       uses: actions/checkout@v4.3.1
@@ -589,6 +589,72 @@ jobs:
         print(f"all parsing-helper assertions passed")
         PY
         echo "✓ parsing helpers passed"
+
+    - name: "Unit: gen-vm --backing-file writes sidecar JSON"
+      run: |
+        mkdir -p /tmp/ci-images
+        # Generate a throwaway key so the sidecar records a readable path.
+        ssh-keygen -t ed25519 -N "" -f /tmp/ci-images/ci-key -q
+        # Fake a backing qcow2 so gen-vm --backing-file has something to overlay.
+        qemu-img create -f qcow2 /tmp/ci-images/fake-backing.qcow2 100M
+        qemu-tool gen-vm --vm-name sidecar-test \
+          --images /tmp/ci-images \
+          --username ci-user \
+          --ssh-key-file /tmp/ci-images/ci-key.pub \
+          --backing-file /tmp/ci-images/fake-backing.qcow2
+        # Sidecar must exist next to the overlay.
+        [ -f /tmp/ci-images/sidecar-test.json ] || {
+          echo "sidecar-test.json not written"; exit 1; }
+        python3 - <<'PY'
+        import json, pathlib
+        info = json.loads(pathlib.Path("/tmp/ci-images/sidecar-test.json").read_text())
+        assert info["username"] == "ci-user", info
+        assert "ssh_key_file" in info, info
+        print("sidecar content:", info)
+        PY
+        echo "✓ gen-vm sidecar passed"
+
+    - name: "Unit: inspect reads sidecar for username and key"
+      run: |
+        python3 - <<'PY'
+        import json, pathlib, sys
+        from qemu_tool.inspect import _read_vm_info, _ssh_key_for_image
+        from qemu_tool.config import VMConfig
+
+        images = pathlib.Path("/tmp/ci-images")
+        image = str(images / "sidecar-test.qcow2")
+        info = _read_vm_info(image)
+        assert info.get("username") == "ci-user", info
+
+        cfg = VMConfig()
+        pub_keys, priv = _ssh_key_for_image(image, info, cfg)
+        # sidecar's ssh_key_file (the generated ci-key.pub) must be readable
+        assert pub_keys, "no public key found"
+        print("key (first 40 chars):", pub_keys[0][:40])
+        PY
+        echo "✓ inspect sidecar read passed"
+
+    - name: "Unit: list_vms extracts QMP and GA socket paths"
+      run: |
+        python3 - <<'PY'
+        import sys
+        from qemu_tool import list_vms as L, identity
+
+        argv = ["/usr/bin/qemu-system-x86_64", "-m", "512",
+                "-chardev", "socket,id=qga0,path=/tmp/qga-myvm-2222.sock,server=on,wait=off",
+                "-qmp", "unix:/tmp/qmp-myvm-2222.sock,server,nowait",
+                ] + identity.identity_args("run-vm", "myvm")
+
+        assert L._ga_socket(argv) == "/tmp/qga-myvm-2222.sock", L._ga_socket(argv)
+        assert L._qmp_socket(argv) == "/tmp/qmp-myvm-2222.sock", L._qmp_socket(argv)
+
+        # Absent when flags not present.
+        bare = ["/usr/bin/qemu-system-x86_64", "-m", "512"]
+        assert L._ga_socket(bare) is None
+        assert L._qmp_socket(bare) is None
+        print("QMP/GA socket extraction passed")
+        PY
+        echo "✓ QMP/GA socket extraction passed"
 
     - name: "Unit: /proc scanning is crash-resistant"
       run: |

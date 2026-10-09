@@ -23,6 +23,7 @@ from .ernic_stats import run as ernic_stats_run
 from .gen_compose import run as gen_compose_run
 from .gen_vm import run as gen_vm_run
 from .libvirt_xml import LibvirtXml
+from .inspect import run as inspect_run
 from .list_vms import run as list_vms_run
 from .run_vm import build_command, run as run_vm_run
 
@@ -61,7 +62,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     shared = _shared_parent()
     sub = parser.add_subparsers(
-        metavar="{run-vm,gen-vm,gen-compose,compose,ernic-stats,list}"
+        metavar="{run-vm,gen-vm,gen-compose,compose,ernic-stats,list,inspect}"
     )
 
     _add_run_vm(sub, shared)
@@ -70,6 +71,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_compose(sub)
     _add_ernic_stats(sub)
     _add_list(sub)
+    _add_inspect(sub)
 
     return parser
 
@@ -282,6 +284,30 @@ def _add_list(sub: argparse._SubParsersAction) -> None:
     p.set_defaults(func=_list_cmd)
 
 
+def _add_inspect(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser(
+        "inspect",
+        help="Show JSON manifest for running VMs.",
+        description=(
+            "Emit a JSON manifest for each running VM: SSH access details, "
+            "username, public key, and hardware summary. Always outputs JSON."
+        ),
+    )
+    p.add_argument(
+        "--vm-name", default=None, metavar="NAME",
+        help="Filter to a single VM by name. Default: all running VMs.",
+    )
+    p.add_argument(
+        "--env-file", type=Path, default=None, metavar="FILE",
+        help="Settings file (see qemu/env.example). Overrides the search path.",
+    )
+    p.add_argument(
+        "--json", action="store_true", dest="as_json",
+        help="Emit JSON instead of human-readable output.",
+    )
+    p.set_defaults(func=_inspect_cmd)
+
+
 def _add_gen_vm(
     sub: argparse._SubParsersAction, shared: argparse.ArgumentParser
 ) -> None:
@@ -362,6 +388,10 @@ def _compose_cmd(args: argparse.Namespace) -> None:
     compose_run(args.vm_name, args.images, args.compose_args,
                 stack=args.stack, vm2_name=args.vm2_name,
                 env_file=args.env_file)
+
+
+def _inspect_cmd(args: argparse.Namespace) -> None:
+    inspect_run(args.vm_name, args.env_file, as_json=args.as_json)
 
 
 def _list_cmd(args: argparse.Namespace) -> None:

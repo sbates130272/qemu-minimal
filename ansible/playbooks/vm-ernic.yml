@@ -83,10 +83,13 @@
             ernic_configure_nic: false
             ernic_guest_preflight_device: false
       rescue:
-        # One expected failure only: driver.yml's "Verify the rocm-ernic RDMA
-        # device exists". A DKMS build error or a staging failure lands here
-        # too, and claiming the module is installed would be a lie that only
-        # surfaces later as an unrelated red step. Re-raise anything else.
+        # Two expected hardware-absent failures during the image install stage:
+        # - "Verify the rocm-ernic RDMA device exists" (driver.yml, pre-65f3e2f)
+        # - "Verify lspci reports the emulated NIC PCI identity" (driver_common.yml,
+        #   65f3e2f+): sysfs-scans for the NIC BDF and exits rc=1 when absent.
+        # Any other failure (DKMS build error, staging failure) must be re-raised;
+        # claiming the module is installed would be a lie that surfaces later as
+        # an unrelated red step.
         - name: Re-raise an ernic_guest_setup failure that is not the NIC check
           ansible.builtin.fail:
             msg: >-
@@ -95,6 +98,9 @@
               {{ ansible_failed_result.msg | default('no message') }}
           when: >-
             'RDMA device exists'
+            not in (ansible_failed_task.name | default(''))
+            and
+            'Verify lspci reports the emulated NIC PCI identity'
             not in (ansible_failed_task.name | default(''))
 
         - name: Note the expected hardware-free RDMA check failure

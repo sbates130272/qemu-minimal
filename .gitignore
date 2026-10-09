@@ -1,3 +1,6 @@
+# personal runbooks — not for version control
+vm-ernic-rocjitsu.md
+
 # image files for virtual machines
 images/*.ISO
 images/*.iso

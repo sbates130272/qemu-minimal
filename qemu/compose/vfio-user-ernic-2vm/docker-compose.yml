@@ -20,11 +20,11 @@ x-gpu-common: &gpu-common
   restart: on-failure
 
 x-qemu-common: &qemu-common
-  image: "${QEMU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260929.g2bdbd16-qemu11.1.2-vfu.8039244}"
+  image: "${QEMU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261007.g677e113-qemu11.1.2-vfu.8039244}"
   volumes:
     - vfu-sockets:/run/vfu:ro
     - "${VM_IMAGES_DIR:-/var/lib/qemu-tool/images}:${VM_IMAGES_DIR:-/var/lib/qemu-tool/images}"
-    - "${QEMU_TOOL_SRC:-../../..}:/qemu-tool-src:ro"
+    - "${QEMU_TOOL_SRC:-/tmp}:/qemu-tool-src:ro"
   devices:
     - /dev/kvm
   shm_size: "${VM_SHM_SIZE:-8g}"
@@ -34,7 +34,7 @@ services:
   # ---- rocm-ernic NIC for VM 1: TCP manager (hub) ----
   ernic-hub:
     <<: *gpu-common
-    image: "${ERNIC_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20260929.g2bdbd16-ernic.1484557-vfu.8039244}"
+    image: "${ERNIC_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261008.ga1a1e65-ernic.65f3e2f-vfu.8039244}"
     environment:
       - ERNIC_DEBUG_MESH
     command:
@@ -57,7 +57,7 @@ services:
   # ---- rocm-ernic NIC for VM 2: TCP worker (spoke) ----
   ernic-worker:
     <<: *gpu-common
-    image: "${ERNIC_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20260929.g2bdbd16-ernic.1484557-vfu.8039244}"
+    image: "${ERNIC_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261008.ga1a1e65-ernic.65f3e2f-vfu.8039244}"
     environment:
       - ERNIC_DEBUG_MESH
     command:
@@ -84,7 +84,7 @@ services:
   rocjitsu-1:
     <<: *gpu-common
     profiles: [rocjitsu-vm1]
-    image: "${ROCJITSU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20260929.g2bdbd16-rocjitsu.f2d13fb}"
+    image: "${ROCJITSU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261007.g677e113-rocjitsu.4c86d86}"
     command:
       - rocjitsu
       - --config
@@ -104,7 +104,7 @@ services:
   rocjitsu-2:
     <<: *gpu-common
     profiles: [rocjitsu-vm2]
-    image: "${ROCJITSU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20260929.g2bdbd16-rocjitsu.f2d13fb}"
+    image: "${ROCJITSU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261007.g677e113-rocjitsu.4c86d86}"
     command:
       - rocjitsu
       - --config
@@ -135,8 +135,12 @@ services:
       - /bin/sh
       - -c
       - |
-        cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
-        PIPX_BIN_DIR=/usr/local/bin pipx install --force /tmp/qemu-tool-build
+        if [ -f /qemu-tool-src/qemu/pyproject.toml ]; then
+          cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
+          PIPX_BIN_DIR=/usr/local/bin pipx install --force /tmp/qemu-tool-build
+        else
+          PIPX_BIN_DIR=/usr/local/bin pipx install --force qemu-tool
+        fi
         socks=$(ls /run/vfu/ernic-1.sock /run/vfu/rocjitsu-1.sock 2>/dev/null | tr '\n' ',' | sed 's/,$//')
         exec qemu-tool run-vm \
           --images "${VM_IMAGES_DIR:-/var/lib/qemu-tool/images}" \
@@ -161,8 +165,12 @@ services:
       - /bin/sh
       - -c
       - |
-        cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
-        PIPX_BIN_DIR=/usr/local/bin pipx install --force /tmp/qemu-tool-build
+        if [ -f /qemu-tool-src/qemu/pyproject.toml ]; then
+          cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
+          PIPX_BIN_DIR=/usr/local/bin pipx install --force /tmp/qemu-tool-build
+        else
+          PIPX_BIN_DIR=/usr/local/bin pipx install --force qemu-tool
+        fi
         socks=$(ls /run/vfu/ernic-2.sock /run/vfu/rocjitsu-2.sock 2>/dev/null | tr '\n' ',' | sed 's/,$//')
         exec qemu-tool run-vm \
           --images "${VM_IMAGES_DIR:-/var/lib/qemu-tool/images}" \

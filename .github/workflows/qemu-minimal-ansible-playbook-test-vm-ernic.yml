@@ -33,8 +33,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  ERNIC_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20260929.g2bdbd16-ernic.1484557-vfu.8039244
-  QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260929.g2bdbd16-qemu11.1.2-vfu.8039244
+  ERNIC_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261008.ga1a1e65-ernic.65f3e2f-vfu.8039244
+  QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261007.g677e113-qemu11.1.2-vfu.8039244
   VM_IMAGES_DIR: /var/lib/qemu-tool/images
   ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false,"user_setup_deploy_ssh_key":false}'
 
@@ -44,7 +44,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     container:
-      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260929.g2bdbd16-qemu11.1.2-vfu.8039244
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261007.g677e113-qemu11.1.2-vfu.8039244
       # /var/lib/qemu-tool is bind-mounted from the host at the same path so the
       # qcow2 this job generates is the same file the sibling qemu container opens:
       # compose bind-mounts are resolved by the host docker daemon, not in this
