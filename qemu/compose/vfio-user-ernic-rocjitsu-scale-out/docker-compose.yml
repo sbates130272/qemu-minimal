@@ -5,7 +5,7 @@
 #   qemu-tool gen-compose --env-file qemu/env.scale-out
 #
 # env-file: qemu/env.scale-out
-# env-sha256: ff7a6108922dac27f99d911642e67cb231b491b40d22fc86516ecda2449ffc38
+# env-sha256: 650f44880cb092eb0e143e353981374735d2eb80e1052cdceb0d7dcb9f49536e
 
 x-logging: &logging
   driver: json-file
@@ -780,6 +780,27 @@ services:
       - --storage.tsdb.retention.time=7d
     ports:
       - "9090:9090"
+
+  grafana:
+    image: docker.io/grafana/grafana:latest
+    logging: *logging
+    profiles: [metrics]
+    networks:
+      fleet:
+        ipv4_address: 172.31.0.12
+    restart: on-failure
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    volumes:
+      - ./grafana-datasources.yml:/etc/grafana/provisioning/datasources/fleet.yml:ro
+      - ./grafana-dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      prometheus:
+        condition: service_started
 
   # ---- guest Ethernet wiring ----
   # One short-lived privileged sidecar per ernic. It shares
