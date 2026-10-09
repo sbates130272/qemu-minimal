@@ -107,6 +107,8 @@ def _describe(pid: int, argv: list[str], containers: dict[str, str]) -> dict[str
     # every guest 2222 there -- what a user can actually ssh to is whatever
     # docker published it as.
     host_port = published.get(guest_port) if container_name else guest_port
+    qmp_sock = _qmp_socket(argv)
+    ga_sock = _ga_socket(argv)
     return {
         "pid": pid,
         "name": name,
@@ -122,8 +124,10 @@ def _describe(pid: int, argv: list[str], containers: dict[str, str]) -> dict[str
         "vfio_user_sockets": _vfio_sockets(argv),
         "gpus": _gpus(_vfio_sockets(argv)),
         "rdma_devices": _rdma_devices(_vfio_sockets(argv)),
-        "qmp_socket": _qmp_socket(argv),
-        "ga_socket": _ga_socket(argv),
+        "qmp_socket": qmp_sock,
+        "qmp_available": _socket_exists(pid, qmp_sock) or (bool(container_name) and bool(qmp_sock)),
+        "ga_socket": ga_sock,
+        "ga_available": _socket_exists(pid, ga_sock) or (bool(container_name) and bool(ga_sock)),
         "container": container_name,
         # "<network>=<ip>" per attachment. Empty for an uncontainerised VM,
         # which has no Docker network at all rather than an unknown one.
@@ -234,6 +238,32 @@ def _ga_socket(argv: list[str]) -> str | None:
             if m:
                 return m.group(1)
     return None
+
+
+def _socket_exists(pid: int, path: str | None) -> bool:
+    """Return True if the socket file is present.
+
+    For non-containerised VMs the path is on the host — check directly.
+    For containerised VMs /proc/<pid>/root requires root, so fall back to
+    checking the path directly (usually absent on the host) and then trusting
+    that a configured socket path means the socket exists inside the container.
+    The list column shows 'configured'; inspect's live GA query is authoritative.
+    """
+    if not path:
+        return False
+    try:
+        if Path(path).exists():
+            return True
+    except OSError:
+        pass
+    # Try the container's root via /proc (works when running as root).
+    try:
+        container_path = _PROC / str(pid) / "root" / Path(path).relative_to("/")
+        if container_path.exists():
+            return True
+    except (OSError, ValueError):
+        pass
+    return False
 
 
 def _vfio_sockets(argv: list[str]) -> list[str]:
@@ -501,6 +531,16 @@ def _fmt_ssh(vm: dict[str, Any], show_split: bool) -> str:
     return f"{host or '-'}->{guest or '-'}"
 
 
+def _fmt_mgmt(v: dict[str, Any]) -> str:
+    """Compact MGMT column: which management sockets are available."""
+    parts = []
+    if v.get("qmp_available"):
+        parts.append("qmp")
+    if v.get("ga_available"):
+        parts.append("ga")
+    return ",".join(parts) or "-"
+
+
 def _print_table(vms: list[dict[str, Any]], qemu_tool_only: bool = False) -> None:
     if not vms:
         print("No qemu-tool VMs running." if qemu_tool_only
@@ -509,7 +549,7 @@ def _print_table(vms: list[dict[str, Any]], qemu_tool_only: bool = False) -> Non
 
     headers = ["PID", "NAME", "SOURCE", "ARCH", "VCPU", "MEM", "SSH",
                "KVM", "UPTIME", "CONTAINER", "NETWORK", "GPU", "RDMA",
-               "VFIO-USER"]
+               "VFIO-USER", "MGMT"]
     show_split = any(v["ssh_port_host"] != v["ssh_port"] for v in vms)
     rows = []
     for v in vms:
@@ -531,6 +571,7 @@ def _print_table(vms: list[dict[str, Any]], qemu_tool_only: bool = False) -> Non
             ",".join(v["gpus"]) or "-",
             ",".join(v["rdma_devices"]) or "-",
             ",".join(Path(s).name for s in v["vfio_user_sockets"]) or "-",
+            _fmt_mgmt(v),
         ])
 
     widths = [max(len(h), *(len(r[i]) for r in rows))
