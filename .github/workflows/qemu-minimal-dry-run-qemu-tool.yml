@@ -593,12 +593,14 @@ jobs:
     - name: "Unit: gen-vm --backing-file writes sidecar JSON"
       run: |
         mkdir -p /tmp/ci-images
+        # Generate a throwaway key so the sidecar records a readable path.
+        ssh-keygen -t ed25519 -N "" -f /tmp/ci-images/ci-key -q
         # Fake a backing qcow2 so gen-vm --backing-file has something to overlay.
         qemu-img create -f qcow2 /tmp/ci-images/fake-backing.qcow2 100M
         qemu-tool gen-vm --vm-name sidecar-test \
           --images /tmp/ci-images \
           --username ci-user \
-          --ssh-key-file ~/.ssh/id_rsa.pub \
+          --ssh-key-file /tmp/ci-images/ci-key.pub \
           --backing-file /tmp/ci-images/fake-backing.qcow2
         # Sidecar must exist next to the overlay.
         [ -f /tmp/ci-images/sidecar-test.json ] || {
@@ -626,7 +628,7 @@ jobs:
 
         cfg = VMConfig()
         pub_keys, priv = _ssh_key_for_image(image, info, cfg)
-        # sidecar's ssh_key_file must be preferred over cfg default
+        # sidecar's ssh_key_file (the generated ci-key.pub) must be readable
         assert pub_keys, "no public key found"
         print("key (first 40 chars):", pub_keys[0][:40])
         PY
