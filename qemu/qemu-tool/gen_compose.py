@@ -324,16 +324,28 @@ def _pipx_install(bin_dir: str = "/usr/local/bin") -> list[str]:
     bin_dir is a parameter because the stats exporter runs unprivileged and
     cannot write /usr/local/bin; it installs under /tmp instead. pipx also
     wants a writable HOME, which nobody does not otherwise have.
+
+    Falls back to 'pipx install qemu-tool' from PyPI when QEMU_TOOL_SRC is
+    not set (no source checkout on the node). The volume default of /tmp means
+    /qemu-tool-src/qemu/pyproject.toml will not exist in that case.
     """
     env = f"PIPX_BIN_DIR={bin_dir}"
     if not bin_dir.startswith("/usr"):
         env = f"HOME=/tmp PIPX_HOME=/tmp/pipx {env}"
     return [
-        "        for i in 1 2 3 4 5; do",
-        f"          {env} pipx install --force \\",
-        "            /tmp/qemu-tool-build && break",
-        "          sleep 10",
-        "        done",
+        "        if [ -f /qemu-tool-src/qemu/pyproject.toml ]; then",
+        "          cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build",
+        "          for i in 1 2 3 4 5; do",
+        f"            {env} pipx install --force \\",
+        "              /tmp/qemu-tool-build && break",
+        "            sleep 10",
+        "          done",
+        "        else",
+        "          for i in 1 2 3 4 5; do",
+        f"            {env} pipx install --force qemu-tool && break",
+        "            sleep 10",
+        "          done",
+        "        fi",
     ]
 
 
@@ -552,7 +564,6 @@ def render_compose(spec: dict[str, Any], env_name: str, digest: str) -> str:
         out.append("      - /bin/sh")
         out.append("      - -c")
         out.append("      - |")
-        out.append("        cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build")
         # pipx reaches pypi.org for the build backend, and a fleet's worth of
         # these racing at container start is enough to make Docker's embedded
         # resolver drop queries -- measured at 48 VMs, where 12 guests died on
@@ -587,12 +598,11 @@ def render_compose(spec: dict[str, Any], env_name: str, digest: str) -> str:
     out.append('    user: "65534:65534"')
     out.append("    volumes:")
     out.append("      - ernic-stats:/run/ernic-stats:ro")
-    out.append('      - "${QEMU_TOOL_SRC:-../../..}:/qemu-tool-src:ro"')
+    out.append('      - "${QEMU_TOOL_SRC:-/tmp}:/qemu-tool-src:ro"')
     out.append("    entrypoint:")
     out.append("      - /bin/sh")
     out.append("      - -c")
     out.append("      - |")
-    out.append("        cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build")
     out.extend(_pipx_install("/tmp/bin"))
     out.append("        exec /tmp/bin/qemu-tool ernic-stats \\")
     out.append("          --stats-dir /run/ernic-stats \\")

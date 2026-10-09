@@ -97,6 +97,12 @@ def run(
         cmd += ["--env-file", str(settings.resolve())]
         if stack in _GENERATED_STACKS:
             _warn_if_stale(cdir, settings, stack, env_file)
+    # argparse.REMAINDER keeps a leading '--' separator if the caller used it to
+    # stop qemu-tool option parsing. Strip it: docker compose interprets '--' as
+    # "end of global options", which turns '--profile' into a positional argument
+    # (the subcommand name) rather than a global option, silently disabling profiles.
+    if compose_args and compose_args[0] == "--":
+        compose_args = compose_args[1:]
     cmd += compose_args
     result = subprocess.run(cmd, cwd=cdir, env=env)
     sys.exit(result.returncode)
