@@ -157,7 +157,8 @@ class TestRender(unittest.TestCase):
 
     def test_every_service_has_a_fixed_address(self):
         body = gen_compose.render_compose(_plan(), "env", "abc")
-        self.assertEqual(body.count("ipv4_address:"), 8 * 3 + 2)
+        # three services per VM, plus prometheus, grafana and the stats exporter
+        self.assertEqual(body.count("ipv4_address:"), 8 * 3 + 3)
         self.assertIn("subnet: 172.31.0.0/16", body)
 
     def test_prometheus_data_is_a_bind_mount_not_a_named_volume(self):
