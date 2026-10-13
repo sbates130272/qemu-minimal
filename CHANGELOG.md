@@ -6,6 +6,78 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **`qemu/docker/`, and an LMCache image for gfx1250 in it.** One directory
+  per image, so the next Dockerfile has somewhere to go.
+  `qemu/docker/lmcache/` builds LMCache v0.5.5 from source with
+  `BUILD_WITH_HIP=1` and `PYTORCH_ROCM_ARCH=gfx1250`. A source build rather
+  than a wheel because upstream publishes neither: PyPI's `lmcache` is a CUDA
+  wheel, and the official ROCm wheels cover `gfx942,gfx950` only.
+
+  The base is `rocm/pytorch:rocm10.1.0_ubuntu24.04_py3.12_...`, and both
+  halves of that are forced rather than preferred. A PyTorch base because
+  torch is needed *before* the build runs (`--no-build-isolation`, hipcc
+  against torch's own headers) and cannot be installed — the newest
+  `download.pytorch.org/whl/rocm*` channel is `rocm7.2`, with `rocm10.0` and
+  `rocm10.1` both 403. Ubuntu 24.04 rather than 26.04 because every ROCm 10.1
+  / 26.04 tag is py3.14 and LMCache 0.5.5 pins `requires-python <3.14`.
+
+- **An `lmcache` compose profile on the scale-out stack, in MP mode.** An MP
+  coordinator (`lmcache coordinator`) beside the vfio-user device servers, and
+  an MP cache server (`lmcache server`) inside each of the N guests, with L1 in
+  host memory, L2 on an emulated NVMe, and P2P reads between guests over the
+  ernic.
+
+  Both are upstream entrypoints. Deliberately **not** `lmcache_controller`,
+  which is the legacy in-process mode's controller: it waits on a ZMQ
+  pull/reply pair for `LMCacheWorker` registrations an MP server never sends,
+  so pairing the two leaves every guest registered with nothing and nothing
+  erroring.
+
+  The split across the VM boundary is forced: compose has no reach into a VM,
+  so the per-VM servers cannot be services. They are started by a systemd unit
+  that the new `lmcache_guest` role installs, whose `ExecStartPre` is where the
+  interesting failures live. It runs `amdgpu-probe` rather than `modprobe
+  amdgpu` — the image keeps amdgpu blacklisted and ships that helper with the
+  emulation parameters, and unloading to retry spins at 100% CPU indefinitely.
+  It finds the ernic by **MAC and PCI association** rather than by name,
+  because the udev rules that produce `rocm-ernic0`/`rocm-rdma-ernic0` ship
+  with `ernic_guest_setup` and without them the kernel names stand (measured:
+  `enp1s0np0`, `rocep0s7`). It registers `1dd8:100a` with the in-tree ionic via
+  `new_id`, which otherwise claims only `1002`/`1003` and binds nothing with no
+  dmesg line at all. And it **reassigns the ernic address**, because only
+  module loading survives a guest reboot (AGENTS.md issue 12) — with P2P, a
+  guest that comes back without its address advertises an endpoint no peer can
+  reach.
+
+  KV stays out of device memory on purpose: rocjitsu serves single-threaded,
+  the same reason the stack already declines to scrape the in-guest GPU
+  exporters.
+
+  Images reach the guests over a 9p host share (`VM_FILESYSTEM`) rather than
+  being copied — one file read by all N guests instead of ~2.8 GB per VM, which
+  is 22 GB of transfer at `VM_COUNT=8` and 112 GB at 40.
+
+  `LMCACHE_ENABLE` gates *emission*, `--profile lmcache` gates *running*. Both
+  exist because `prometheus.yml` has no notion of a profile, so scrape jobs
+  emitted for an unselected profile would be permanently-down targets.
+
+- **Grafana in the `metrics` profile, with a provisioned fleet dashboard.**
+  Datasource and dashboard come from files under the stack directory rather
+  than from clicks, so they survive `down`; the dashboard directory is mounted
+  read-only and `allowUiUpdates` is off, since a UI that accepts an edit it
+  cannot persist is worse than one that refuses it. Per-VM panels are bar
+  gauges keyed by `vm_name` rather than one line per VM — a line per VM stops
+  being readable well before this stack's ~40-node ceiling — and every
+  timeseries panel is single-axis.
+
+- **`fleet-inventory.yml` is generated alongside the compose file.** The
+  fleet's ansible inventory is derived from the same `VM_COUNT`, SSH ports and
+  guest IPs as everything else, because the failure mode of a hand-kept one is
+  quiet: a playbook against an inventory listing six of eight guests
+  configures six and reports success. VM name, `lmcache_instance_id` and the
+  Prometheus `lmcache_instance_id` label are all the same string, so a panel
+  can join a scraped series to a controller query with no lookup table.
+
 - **`ERNIC_TAP` gives fleet guests working Ethernet.** rocm-ernic's TCP mesh
   carries RDMA payload only, so without a TAP the guest driver transmits, the
   device drops the frames, ARP goes unanswered and `ib_send_bw` can never
@@ -76,6 +148,38 @@ All notable changes to this project will be documented in this file.
 ## [v1.4.1] - 2026-10-02
 
 ### Fixed
+
+- **CI covered none of the LMCache work, and three gaps each hid a live
+  bug.** Adding the lanes found them, which is the argument for the lanes:
+
+  - **Gen Compose Check validated no observability service.** Profiles
+    *filter* services out of `docker compose config`, and both existing
+    validation steps ran with none enabled — so `prometheus`, `grafana`,
+    `loki`, `alloy`, `lmcache-coordinator` and the two stats exporters were
+    parsed by nothing. A new step enables `lmcache` and `metrics` and asserts
+    the seven services are present before validating, because `config -q` on
+    a render whose services were all filtered away also exits 0.
+  - **Shell Check skipped `qemu/compose/*/tapsetup/*.sh`.** Adding it
+    immediately failed on SC2045 in `setup.sh` — `for dev in $(ls
+    /sys/class/net)` — on the very line that picks the interface to bridge,
+    which is the line the 2-VM mesh bug was traced to. Now a glob.
+  - **`fleet-lmcache.yml` was syntax-checked by nothing**, being imported by
+    none of the five playbooks the lane names. Checking it found a duplicate
+    `when` key in `lmcache_guest/tasks/main.yml`, where the second silently
+    replaced the first and the image copy lost its "only when the 9p share is
+    off" guard — a ~2.8 GB write per guest in the configuration the role
+    exists to avoid. The job now sets `ANSIBLE_DUPLICATE_YAML_DICT_KEY=error`,
+    because a duplicate key is a warning by default and `--syntax-check`
+    exits 0 regardless: measured on this instance, 0 → 4.
+
+- **`VM_NVME` could not carry a literal QEMU argument string, and said it
+  could.** The key names a `str` field, so commas are the per-VM split. At
+  `VM_COUNT=8` `4096,logical_block_size=4096` is a loud count mismatch; at
+  `VM_COUNT=2` it is a silent one, giving guest 1 `4096` and guest 2
+  `logical_block_size=4096`. Behaviour unchanged — a fix needs a quoting
+  convention across every `str` field — but the source comment claiming all
+  three forms "pass straight through" is corrected and both halves are pinned
+  by tests.
 
 - **`gen-vm` first-boot timeout for arm64 and riscv64** — without KVM,
   cloud-init's rootfs expansion (growpart + resize2fs) can stall for 30+

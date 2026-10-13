@@ -1,0 +1,41 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Grafana Alloy (guest log shipper)
+Documentation=https://grafana.com/docs/alloy/
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=exec
+Restart=on-failure
+RestartSec=10s
+TimeoutStartSec=120
+
+ExecStartPre=-/usr/bin/docker rm -f {{ lmcache_guest_alloy_container_name }}
+
+# --network host so Loki is reached the same way the MP server reaches the
+# coordinator: QEMU's SLIRP NATs guest egress out through the qemu
+# container's stack, and that container is on the fleet network. A bridge in
+# between would be one more translation for nothing.
+#
+# /var/log/journal and /run/log/journal are both mounted because a guest may
+# be using persistent or volatile journald storage, and which one is live is
+# not knowable from here -- mounting only the wrong one yields an Alloy that
+# starts cleanly and ships nothing.
+ExecStart=/usr/bin/docker run \
+    --rm \
+    --name {{ lmcache_guest_alloy_container_name }} \
+    --network host \
+    -v /var/run/docker.sock:/var/run/docker.sock:ro \
+    -v /var/log/journal:/var/log/journal:ro \
+    -v /run/log/journal:/run/log/journal:ro \
+    -v /etc/machine-id:/etc/machine-id:ro \
+    -v {{ lmcache_guest_alloy_config_dir }}:{{ lmcache_guest_alloy_config_dir }}:ro \
+    {{ lmcache_guest_alloy_image }} \
+    run {{ lmcache_guest_alloy_config_dir }}/config.alloy \
+    --storage.path=/tmp/alloy
+
+ExecStop=-/usr/bin/docker stop -t 10 {{ lmcache_guest_alloy_container_name }}
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,88 @@
+// {{ ansible_managed }}
+//
+// Alloy inside the guest. The host's Alloy cannot see any of this: a VM's
+// journal and its in-guest Docker containers are behind QEMU, not on the
+// host's Docker socket. Two sources, one destination.
+//
+// Every stream carries vm_name, and it is the SAME value Prometheus uses as
+// a target label -- so a log panel and a metric panel can be filtered by the
+// same variable, which is the entire point of shipping these at all.
+
+loki.write "default" {
+	endpoint {
+		url = "{{ lmcache_guest_loki_url }}/loki/api/v1/push"
+	}
+}
+
+// ---- systemd journal ------------------------------------------------------
+// This is where lmcache-server lives, including everything the preflight
+// prints about amdgpu, the ernic netdev and the IB device. On a guest that
+// fails to come up, this is the log you actually want.
+loki.relabel "journal" {
+	forward_to = []
+
+	rule {
+		source_labels = ["__journal__systemd_unit"]
+		target_label  = "unit"
+	}
+
+	rule {
+		source_labels = ["__journal_syslog_identifier"]
+		target_label  = "syslog_identifier"
+	}
+
+	rule {
+		source_labels = ["__journal_priority_keyword"]
+		target_label  = "level"
+	}
+}
+
+loki.source.journal "guest" {
+	forward_to    = [loki.write.default.receiver]
+	relabel_rules = loki.relabel.journal.rules
+	labels        = {
+		job     = "systemd-journal",
+		origin  = "guest",
+		vm_name = "{{ lmcache_guest_instance_id }}",
+	}
+	// Only what happened since Alloy started. The guest's journal carries
+	// the whole boot including a kernel ring buffer replay, and VM_COUNT
+	// guests replaying theirs at once is exactly the burst Loki's default
+	// ingestion limits reject.
+	max_age = "{{ lmcache_guest_alloy_journal_max_age }}"
+}
+
+// ---- in-guest Docker ------------------------------------------------------
+// The LMCache MP server runs as a container in here, so its stdout is a
+// Docker log inside the VM, not a journal entry.
+discovery.docker "guest" {
+	host             = "unix:///var/run/docker.sock"
+	refresh_interval = "10s"
+}
+
+discovery.relabel "guest" {
+	targets = discovery.docker.guest.targets
+
+	rule {
+		source_labels = ["__meta_docker_container_name"]
+		regex         = "/(.*)"
+		target_label  = "container"
+	}
+
+	rule {
+		target_label = "origin"
+		replacement  = "guest"
+	}
+
+	rule {
+		target_label = "vm_name"
+		replacement  = "{{ lmcache_guest_instance_id }}"
+	}
+}
+
+loki.source.docker "guest" {
+	host       = "unix:///var/run/docker.sock"
+	targets    = discovery.relabel.guest.output
+	labels     = {job = "docker"}
+	forward_to = [loki.write.default.receiver]
+}

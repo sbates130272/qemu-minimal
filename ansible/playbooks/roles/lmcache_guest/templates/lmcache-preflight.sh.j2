@@ -1,0 +1,261 @@
+#!/bin/bash
+# {{ ansible_managed }}
+#
+# ExecStartPre for {{ lmcache_guest_container_name }}.service. Proves the
+# emulated devices are present AND configured before the container starts.
+#
+# The configuration half is the point. AGENTS.md issue 12: a rebooted ernic
+# guest is device-present but not test-ready -- ionic_image_prep writes
+# /etc/modules-load.d/rocm-ernic-ionic.conf, so the modules come back, but the
+# address on the netdev and bringing it up are run-time only and do not. With
+# P2P that is worse than it sounds: the server would advertise an endpoint no
+# peer can reach.
+#
+# Nothing here matches on a device NAME. 99-rocm-ernic.rules renames the ernic
+# devices, but it ships with ernic_guest_setup and a guest without it keeps the
+# kernel names -- so the netdev is found by the MAC the ernic server was given
+# with -m, and the IB device by walking back to the same PCI function.
+#
+# rocm_xio is deliberately absent, for the same reason it is absent from the
+# modules-load.d drop-in: rocm-xio.ko is hand-copied into the running kernel's
+# extra/ rather than DKMS-managed, so a hard requirement on it would wedge the
+# unit after a kernel upgrade.
+
+set -uo pipefail
+
+TIMEOUT={{ lmcache_guest_preflight_timeout }}
+ERNIC_MAC="{{ lmcache_guest_ernic_mac | lower }}"
+ETH_ADDR="{{ lmcache_guest_eth_address }}"
+DEVENV=/run/lmcache-server-devices.env
+
+log() { echo "lmcache-preflight: $*"; }
+
+wait_for() {
+    local what="$1" cond="$2" waited=0
+    while ! eval "$cond"; do
+        if [ "$waited" -ge "$TIMEOUT" ]; then
+            log "timed out after ${TIMEOUT}s waiting for $what"
+            return 1
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    [ "$waited" -gt 0 ] && log "$what after ${waited}s"
+    return 0
+}
+
+# ---- amdgpu ---------------------------------------------------------------
+# The guest keeps amdgpu blacklisted and ships amdgpu-probe to load it with
+# the gfx1250 emulation parameters. A plain `modprobe amdgpu` loads a driver
+# that finds no GPU and logs "no gpu node! Cannot create KFD process" forever.
+#
+# Readiness is a KFD TOPOLOGY NODE, not /dev/kfd: the character device exists
+# as soon as the module loads, with or without a GPU behind it, so waiting on
+# it proves nothing. A node directory with a non-empty name is a real device.
+probe_amdgpu() {
+    if [ -x "{{ lmcache_guest_amdgpu_probe_cmd }}" ]; then
+        if lsmod | grep -q "^amdgpu"; then
+            # Loaded is not the same as loaded CORRECTLY. amdgpu is
+            # blacklisted in this image, but `blacklist` only stops automatic
+            # alias loading -- an explicit modprobe still works, and
+            # something in this guest does exactly that at boot. The result
+            # is a driver with emu_mode=0 that finds no GPU and logs
+            # "no gpu node! Cannot create KFD process" forever.
+            #
+            # Say so rather than silently waiting out the timeout. There is
+            # no recovery from here: amdgpu-probe cannot change parameters of
+            # a loaded module, and unloading it spins at 100% CPU forever.
+            emu=$(cat /sys/module/amdgpu/parameters/emu_mode 2>/dev/null)
+            if [ "$emu" != "1" ]; then
+                log "amdgpu is loaded with emu_mode=${emu:-unset}, not 1."
+                log "  It was loaded WITHOUT the emulation parameters, so it"
+                log "  will never find the rocjitsu device. amdgpu-probe"
+                log "  cannot fix a module that is already up, and"
+                log "  'modprobe -r amdgpu' hangs indefinitely here."
+                log "  Find what loads amdgpu before this unit and stop it,"
+                log "  then let amdgpu-probe run first."
+                return 1
+            fi
+            log "amdgpu already loaded with emu_mode=1"
+        else
+            log "running {{ lmcache_guest_amdgpu_probe_cmd }}"
+            # Backgrounded with its own bound: on the emulated device this
+            # can take minutes, and it must not hold the whole preflight.
+            timeout "$TIMEOUT" {{ lmcache_guest_amdgpu_probe_cmd }} \
+                2>&1 | sed 's/^/lmcache-preflight:   /' || \
+                log "amdgpu-probe returned $?"
+        fi
+    else
+        log "{{ lmcache_guest_amdgpu_probe_cmd }} not present; falling back"
+{% for mod in lmcache_guest_amdgpu_modules %}
+        modprobe {{ mod }} 2>/dev/null || log "modprobe {{ mod }} returned $?"
+{% endfor %}
+    fi
+
+    wait_for "a KFD GPU node" \
+        'grep -qvE "^$" /sys/class/kfd/kfd/topology/nodes/*/name 2>/dev/null' \
+        || return 1
+    log "amdgpu ready ($(cat /sys/class/kfd/kfd/topology/nodes/*/name 2>/dev/null | grep -v '^$' | tr '\n' ' '))"
+    return 0
+}
+
+# ---- RDMA NIC -------------------------------------------------------------
+bind_ionic() {
+{% if lmcache_guest_ionic_bind_new_id %}
+    # The in-tree ionic claims 1dd8:1002 and 1dd8:1003 only; the emulated NIC
+    # is {{ lmcache_guest_ernic_pci_id | replace(' ', ':') }}. Without this the device enumerates and nothing
+    # binds -- no netdev, no IB device, and not one ionic line in dmesg.
+    local drv=/sys/bus/pci/drivers/ionic
+    [ -d "$drv" ] || return 0
+    if echo "{{ lmcache_guest_ernic_pci_id }}" > "$drv/new_id" 2>/dev/null; then
+        log "registered {{ lmcache_guest_ernic_pci_id }} with the ionic driver"
+        sleep 3
+    fi
+{% endif %}
+    return 0
+}
+
+# Echo the netdev carrying ERNIC_MAC, if any.
+find_ernic_netdev() {
+    local dev addr
+    for dev in $(ls /sys/class/net 2>/dev/null); do
+        addr=$(cat "/sys/class/net/$dev/address" 2>/dev/null)
+        [ "${addr,,}" = "$ERNIC_MAC" ] && { echo "$dev"; return 0; }
+    done
+    return 1
+}
+
+# Echo the IB device on the same PCI function as netdev $1.
+find_ib_for_netdev() {
+    local netdev="$1" pci ib
+    pci=$(basename "$(readlink -f "/sys/class/net/$netdev/device" 2>/dev/null)" 2>/dev/null)
+    [ -n "$pci" ] || return 1
+    for ib in $(ls /sys/class/infiniband 2>/dev/null); do
+        if [ "$(basename "$(readlink -f "/sys/class/infiniband/$ib/device")")" = "$pci" ]; then
+            echo "$ib"; return 0
+        fi
+    done
+    return 1
+}
+
+probe_rdma() {
+    if [ -z "$ERNIC_MAC" ]; then
+        log "no ernic MAC configured; cannot identify the device"
+        return 1
+    fi
+{% for mod in lmcache_guest_rdma_modules %}
+    modprobe {{ mod }} 2>/dev/null || log "modprobe {{ mod }} returned $?"
+{% endfor %}
+    bind_ionic
+
+    wait_for "a netdev with MAC $ERNIC_MAC" 'find_ernic_netdev >/dev/null' || {
+        log "  the ernic NIC never appeared. If dmesg shows the device"
+        log "  enumerated with no ionic probe at all, the driver does not"
+        log "  claim its PCI id -- see lmcache_guest_ionic_bind_new_id."
+        return 1
+    }
+    ETH_DEV=$(find_ernic_netdev)
+    log "ernic netdev is $ETH_DEV"
+
+    wait_for "an IB device on the same function" \
+        "find_ib_for_netdev $ETH_DEV >/dev/null" || return 1
+    RDMA_DEV=$(find_ib_for_netdev "$ETH_DEV")
+    log "ernic IB device is $RDMA_DEV"
+
+    if [ -n "$ETH_ADDR" ]; then
+        if ip -4 addr show dev "$ETH_DEV" | grep -q "inet ${ETH_ADDR%%/*}/"; then
+            log "$ETH_DEV already holds ${ETH_ADDR}"
+        else
+            log "assigning $ETH_ADDR to $ETH_DEV"
+            ip addr replace "$ETH_ADDR" dev "$ETH_DEV" || return 1
+        fi
+    fi
+    ip link set "$ETH_DEV" up || return 1
+    wait_for "$ETH_DEV to carry a v4 address" \
+        "ip -4 addr show dev $ETH_DEV | grep -q 'inet '" || return 1
+
+    # ibv_devinfo distinguishes "the driver bound" from "the device context
+    # opens". AGENTS.md issues 6 and 7 both present exactly here, and both
+    # need a host-side restart -- much better to say so now.
+    if command -v ibv_devinfo >/dev/null 2>&1; then
+        if ! ibv_devinfo -d "$RDMA_DEV" >/dev/null 2>&1; then
+            log "ibv_devinfo cannot open $RDMA_DEV."
+            log "  Present but its context will not open: the AGENTS.md"
+            log "  issue 6/7 shape -- a perftest killed mid-run, or an"
+            log "  ernic-hub that crashed and restarted. Reloading guest"
+            log "  modules does not recover it; fix on the HOST with"
+            log "    docker compose down && docker compose up -d"
+            return 1
+        fi
+        log "ibv_devinfo opened $RDMA_DEV"
+    fi
+    log "RDMA NIC ready"
+    return 0
+}
+
+# ---- device flags for the unit ---------------------------------------------
+# systemd does not run ExecStart through a shell, so the unit cannot decide
+# whether to pass --device itself. Decide it here and hand the result over as
+# an EnvironmentFile; the unit references it unbraced, which is the form
+# systemd splits on whitespace.
+write_device_args() {
+    local args=""
+    [ -e /dev/kfd ] && args="$args --device /dev/kfd"
+    [ -d /dev/dri ] && args="$args --device /dev/dri"
+    [ -d /dev/infiniband ] && args="$args --device /dev/infiniband"
+    printf 'LMCACHE_DEVICE_ARGS=%s\n' "${args# }" > "$DEVENV"
+    printf 'LMCACHE_RDMA_DEV=%s\n' "${RDMA_DEV:-}" >> "$DEVENV"
+{% if lmcache_guest_ucx_exclude_ernic %}
+    # WORKAROUND: keep UCX off the ernic, which reports no link speed, so
+    # nixl can build its agent at all. Without this every start dies on
+    #   UCX ERROR failed to unpack address, invalid bandwidth 0.00
+    # before the server reaches any of its own code. Delete this block once
+    # rocm-ernic reports a speed -- see rocm-ernic-link-speed-report.md.
+    #
+    # The management interface, found from the default route rather than
+    # named: enabling the pcie-root-port renamed it enp0s4 -> enp0s6.
+    local mgmt
+    mgmt=$(ip -o route get 1.1.1.1 2>/dev/null | awk '{print $5}' | head -1)
+    if [ -n "$mgmt" ] && [ "$mgmt" != "${ETH_DEV:-}" ]; then
+        printf 'UCX_NET_DEVICES=%s\n' "$mgmt" >> "$DEVENV"
+        log "UCX pinned to $mgmt (ernic reports no link speed)"
+    else
+        log "no management interface found to pin UCX to; nixl may fail"
+    fi
+{% endif %}
+    printf 'LMCACHE_ETH_DEV=%s\n' "${ETH_DEV:-}" >> "$DEVENV"
+    if [ -n "$args" ]; then
+        log "passing devices:${args}"
+    else
+        log "no device nodes to pass"
+    fi
+}
+
+rc=0
+RDMA_DEV=""
+ETH_DEV=""
+
+if probe_amdgpu; then :; else
+{% if lmcache_guest_require_amdgpu %}
+    log "amdgpu preflight FAILED and lmcache_guest_require_amdgpu is set"
+    rc=1
+{% else %}
+    # Not fatal by design: L1 is host memory and the P2P reads land in it, so
+    # a guest with no GPU is still a useful cache peer.
+    log "amdgpu preflight failed; continuing (lmcache_guest_require_amdgpu unset)"
+{% endif %}
+fi
+
+if probe_rdma; then :; else
+{% if lmcache_guest_require_rdma %}
+    log "RDMA preflight FAILED"
+    rc=1
+{% else %}
+    log "RDMA preflight failed; continuing (lmcache_guest_require_rdma unset)"
+{% endif %}
+fi
+
+# After both probes, so it reflects what actually came up.
+write_device_args
+
+exit "$rc"

@@ -1,0 +1,315 @@
+---
+# Put Docker in an ernic+rocjitsu guest and run an LMCache MP server in it, as
+# a systemd unit gated on the emulated devices actually being there.
+#
+# This role is the guest half of the compose stack's `lmcache` profile. The
+# other half -- the MP coordinator the servers register with, Prometheus and
+# Grafana -- is generated into
+# qemu/compose/vfio-user-ernic-rocjitsu-scale-out/ by `qemu-tool gen-compose`.
+#
+# MP mode, not the legacy in-process mode. The difference matters at every
+# level: `lmcache server` is a standalone process with its own ZMQ and HTTP
+# servers and needs no vLLM to exist, it is configured entirely by CLI flags
+# rather than a YAML engine config, and the thing it registers with is the MP
+# coordinator (`lmcache coordinator`, membership + key directory) rather than
+# `lmcache_controller`. Pairing an MP server with lmcache_controller leaves
+# every guest registered with nothing: the controller waits on a ZMQ
+# pull/reply pair for LMCacheWorker registrations an MP server never sends.
+#
+# Why a role and not a line in the qcow2 recipe: the backing image is baked by
+# provision/*.sh in batesste-ci-images, not by anything here (that is the whole
+# point of AGENTS.md's note that the qcow2 does not run this repo's playbooks).
+# So this installs into a running guest today.
+
+# ── Docker ───────────────────────────────────────
+lmcache_guest_docker_install: true
+lmcache_guest_docker_repo_url: https://download.docker.com/linux/ubuntu
+lmcache_guest_docker_gpg_url: https://download.docker.com/linux/ubuntu/gpg
+lmcache_guest_docker_keyring: /etc/apt/keyrings/docker.asc
+lmcache_guest_docker_packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-buildx-plugin
+  - docker-compose-plugin
+
+# ── The image ────────────────────────────────────
+# Built by qemu/docker/lmcache/Dockerfile.
+lmcache_guest_image: qemu-tool/lmcache-rocm:0.5.5-gfx1250
+
+# Three ways in, in this order of preference.
+#
+# 1. THE 9p HOST SHARE (lmcache_guest_hostfs_*). `docker save` once on the
+#    host into VM_FILESYSTEM, and every guest reads that one file over 9p --
+#    run-vm already exports the directory as mount_tag=hostfs. Nothing is
+#    copied per VM, which is the whole point: the tar is ~2.8 GB and
+#    identical everywhere, so copying it is 22 GB of transfer at VM_COUNT=8
+#    and 112 GB at 40.
+# 2. An archive copied in (lmcache_guest_image_archive), for a guest with no
+#    share.
+# 3. A registry pull, which costs VM_COUNT simultaneous multi-GB pulls
+#    through one SLIRP NAT -- the same start-burst shape that cost twelve
+#    guests when pipx raced pypi.org.
+lmcache_guest_hostfs_enable: true
+lmcache_guest_hostfs_tag: hostfs
+lmcache_guest_hostfs_mount: /mnt/hostfs
+# Filename within the share, produced by:
+#   docker save <image> -o $VM_FILESYSTEM/lmcache-slim.tar
+lmcache_guest_hostfs_archive: lmcache-slim.tar
+
+# Two ways in, and the archive wins when set. A fleet guest reaches the
+# internet through QEMU SLIRP, so a registry pull works but costs VM_COUNT
+# simultaneous multi-GB pulls through one NAT -- the same start-burst shape
+# that cost twelve guests when pipx raced pypi.org (see the stack README).
+# `docker save` once on the host and hand each guest the tar instead:
+#
+#   docker save qemu-tool/lmcache-rocm:0.5.5-gfx1250 -o /tmp/lmcache-rocm.tar
+#
+# Mind the size: this image is ~38 GB, so VM_COUNT copies is a lot of qcow2
+# overlay. Check free space under VM_IMAGES_DIR first.
+lmcache_guest_image_archive: ""
+lmcache_guest_image_archive_remote: /var/tmp/lmcache-rocm.tar
+
+# ── Identity ─────────────────────────────────────
+# Required and unique. It is the coordinator's membership key and the OTel
+# service.instance.id on every metric, so a duplicate does not error -- the
+# second guest replaces the first in /instances and half the fleet goes
+# invisible. fleet-lmcache.yml derives it from the inventory hostname.
+lmcache_guest_instance_id: ""
+
+# The address this guest advertises to the coordinator AND to its P2P peers.
+# Its ernic IP, because the peers are the other guests and the ernic L2
+# segment is the only network they share -- a Docker-bridge or SLIRP address
+# would mean something different on every guest. Derived from the generated
+# inventory's fleet_guest_ip.
+#
+# This is why ERNIC_TAP=true is a hard requirement for P2P: without a TAP the
+# guests have no Ethernet path to each other at all, so peers can be
+# discovered and never connected.
+lmcache_guest_advertise_ip: ""
+
+# ── The coordinator ──────────────────────────────
+# Its fleet address, reachable from inside a guest because QEMU's SLIRP NATs
+# guest egress out through the qemu container's stack and that container is on
+# the fleet network. Overridden by the generated inventory.
+lmcache_guest_coordinator_url: "http://172.31.0.12:9300"
+# Doubles as the P2P peer-discovery poll interval.
+lmcache_guest_heartbeat_interval: 5
+
+# ── Ports (all inside the guest's netns) ─────────
+# The ZMQ request server; also what the coordinator records as mq_port and
+# what peers dial.
+lmcache_guest_zmq_port: 5555
+# The HTTP API, and where /metrics lives. NOT --prometheus-port, which only
+# binds when the HTTP server is off and `lmcache server` always runs it.
+# Must match LMCACHE_SERVER_HTTP_PORT and appear in VM_EXTRA_HOSTFWD.
+lmcache_guest_http_port: 9500
+# The P2P transfer-channel endpoint.
+lmcache_guest_p2p_port: 9400
+
+# ── P2P ──────────────────────────────────────────
+# The point of running this on an ernic fleet: a cache miss on one guest is
+# served by a one-sided RDMA read out of a peer guest's L1, rather than being
+# recomputed. Setting p2p_advertise_url is what enables it, and a server given
+# one with no coordinator URL refuses to start.
+lmcache_guest_p2p_enable: true
+# nixl or mooncake_te. nixl is not a preference here -- mooncake's wheel is a
+# CUDA build and dies on a ROCm image with "libcudart.so.12: cannot open
+# shared object file".
+lmcache_guest_p2p_transfer_engine: nixl
+
+# WORKAROUND, and it should be deleted once rocm-ernic reports a link speed.
+#
+# UCX computes a device's bandwidth from the netdev's ethtool speed, and the
+# emulated ernic reports none:
+#
+#     $ cat /sys/class/net/<ernic>/speed        -> 0
+#     $ ethtool <ernic>                         -> Speed: Unknown!  Duplex: Half
+#
+# so nixl's UCX backend dies at startup on
+#
+#     UCX ERROR failed to unpack address, invalid bandwidth 0.00
+#     createBackend: backend 'UCX' ... NIXL_ERR_BACKEND
+#
+# and the server never starts -- P2P or not, because the agent is built
+# before anything else. Naming a device with a real speed keeps UCX off the
+# ernic and lets the server come up; P2P then runs over that interface rather
+# than the emulated NIC, which is a real limitation, not a fix.
+#
+# Note ionic's OWN link-up message says "Link up - 100 Gbps", so the device
+# does know its speed -- it just does not surface it through the field
+# ethtool reads. That is rocm-ernic's to fix.
+#
+# Deliberately a SWITCH, not a device name: the preflight discovers the
+# management interface from the default route and writes it out. A literal
+# name does not survive the topology -- enabling VM_VFIO_USER_ROOT_PORT moved
+# the ernic to a new PCI slot and renamed the management NIC enp0s4 -> enp0s6
+# in the same boot.
+lmcache_guest_ucx_exclude_ernic: false
+
+# ── L2, on the emulated NVMe ─────────────────────
+# The guest's NVMe (VM_NVME=1 in the env file, backed by a qcow2 run-vm
+# creates) formatted and mounted, with LMCache's fs L2 adapter pointed at it.
+#
+# This is where L2 has to live. The tempting shortcut -- an fs adapter on some
+# convenient path -- lands on a tmpfs if that path is under /tmp, and then KV
+# chunks are written into RAM until the filesystem fills; on a 16 GB /tmp that
+# is one bench run. A block device is also the only version of L2 that says
+# anything about real storage behaviour, which is the point of emulating one.
+lmcache_guest_l2_enable: true
+# First namespace of the first emulated controller. The role resolves this to
+# whatever is actually there rather than trusting the name, because the root
+# disk is virtio and a second NVMe would shift the numbering.
+lmcache_guest_l2_device: /dev/nvme0n1
+lmcache_guest_l2_mount: /mnt/lmcache-l2
+lmcache_guest_l2_fstype: ext4
+# The adapter writes under this subdirectory of the mount rather than at its
+# root, so lost+found and anything else the filesystem owns stays out of the
+# cache's namespace.
+lmcache_guest_l2_subdir: chunks
+# Guard. The role refuses to mkfs a device that already carries a filesystem
+# unless this is set, so a re-run cannot silently destroy a populated L2.
+lmcache_guest_l2_force_format: false
+# Size of the FILESYSTEM, not the device -- an mke2fs fs-size argument, so it
+# takes a suffix ("20G"). Empty means the whole device, which is the hazard
+# this exists to bound: run-vm creates the NVMe backing file at NVME_SIZE,
+# currently 1024G, as a SPARSE qcow2, and the --l2-adapter has no size cap of
+# its own. So an unbounded L2 grows until the HOST filesystem is full, and it
+# does it quietly because the guest sees a terabyte of free space the whole
+# time. Measured on a 2-VM soak: 106 GB and 85 GB of host disk consumed by
+# two guests that each believed they had plenty left.
+#
+# Set this to whatever the host can actually spare, divided by VM_COUNT.
+lmcache_guest_l2_size: ""
+
+# ── L1 ───────────────────────────────────────────
+# Host memory, in GB, per guest. Must fit inside VM_VMEM with room for the
+# guest itself; the default is sized for the stack's 8192 MiB guests.
+lmcache_guest_l1_size_gb: 2
+# 64 KB, on upstream's advice for P2P: the transfer channel registers the
+# whole L1 for RDMA, and a larger alignment lets it issue bigger, better
+# aligned reads. The 4 KB default is only right for non-P2P deployments.
+lmcache_guest_l1_align_bytes: 65536
+lmcache_guest_eviction_policy: LRU
+lmcache_guest_eviction_ratio: 0.2
+
+# Shared memory for the container. The MP server's workers pass KV through
+# shm, and Docker's 64m default is far too small.
+lmcache_guest_shm_size: 2g
+
+# ── Must match the coordinator ───────────────────
+# The coordinator resolves pin token_ids to keys with both of these, so a
+# mismatch does not error -- it silently stops matching.
+lmcache_guest_chunk_size: 256
+lmcache_guest_hash_algorithm: blake3
+
+# ── Device preflight ─────────────────────────────
+# The unit does not start until these are true. AGENTS.md issue 12: a rebooted
+# ernic guest is device-present but not test-ready -- only module loading
+# persists, while the address on the netdev and bringing it up are run-time
+# only. A unit that started on the device node alone would come up against an
+# unconfigured NIC on every reboot, and with P2P that means advertising an
+# address no peer can reach.
+lmcache_guest_preflight_enable: true
+# amdgpu-probe, NOT `modprobe amdgpu`. The guest image ships this helper and
+# keeps amdgpu BLACKLISTED, so a bare modprobe can never produce a working
+# GPU -- it needs the emulation parameters the script carries:
+#
+#   emu_mode=1 fw_load_type=0 discovery=2 ip_block_mask=0x7f
+#   vm_update_mode=3 gpu_recovery=0 vramlimit=1024
+#
+# The script's own comments are worth reading before changing any of them --
+# ip_block_mask is 0x7f and not upstream's 0x3f because this DKMS build
+# enumerates an extra ras_v1_0, so 0x3f masks off MES and the probe oopses in
+# gfx_v12_1_xcc_cp_resume.
+#
+# NEVER unload amdgpu to "retry": `modprobe -r amdgpu` against the emulated
+# device spins at 100% CPU indefinitely (measured: 7+ minutes, never
+# returned) and the guest then needs a full stack restart. The probe below is
+# a no-op when the driver is already up, which is the only retry needed.
+lmcache_guest_amdgpu_probe_cmd: /usr/local/bin/amdgpu-probe
+lmcache_guest_amdgpu_modules:
+  - amdgpu
+lmcache_guest_rdma_modules:
+  - ionic
+  - ionic_rdma
+# Discovered, not assumed. 99-rocm-ernic.rules renames the ernic devices to
+# rocm-ernic0 / rocm-rdma-ernic0, but those rules ship with
+# ernic_guest_setup; on a guest without them the kernel names stand, and a
+# hardcoded name then waits forever for a device that is already there under
+# another name. Measured on such a guest:
+#
+#     ionic 0000:00:07.0 enp0s7np0: renamed from eth0
+#     ionic 0000:00:07.0 rocep0s7: Port: 1 Link ACTIVE
+#
+# So the preflight finds the netdev by its MAC -- which the ernic server was
+# given with -m and the generator therefore knows per VM -- and finds the IB
+# device by walking back to the same PCI function. Both names fall out of
+# that, renamed or not.
+lmcache_guest_ernic_mac: ""
+
+# The emulated NIC is 1dd8:100a, which the IN-TREE ionic does not claim: its
+# PCI table has only 1dd8:1002 and 1dd8:1003, so on a stock mainline kernel
+# nothing binds and the device sits there enumerated and driverless, with not
+# one line in dmesg. The ionic-ernic DKMS package adds the id properly; this
+# is the runtime equivalent, via the driver's new_id sysfs attribute, so the
+# fleet works on a guest that has the mainline driver and nothing else.
+# Harmless where the DKMS package is installed -- the write just fails
+# because the id is already claimed.
+lmcache_guest_ionic_bind_new_id: true
+lmcache_guest_ernic_pci_id: "1dd8 100a"
+# The guest's address on the ernic L2 segment, e.g. 192.168.100.11/24. The
+# preflight assigns it when it is missing, which is what makes the unit
+# survive a reboot. Empty means "assume something else configured it".
+lmcache_guest_eth_address: ""
+lmcache_guest_preflight_timeout: 180
+# amdgpu is the one the fleet can legitimately do without: L1 is host memory
+# and the P2P reads land in it, so a guest can be a useful cache peer with no
+# GPU at all. The RDMA NIC is not optional -- it is the transport.
+lmcache_guest_require_amdgpu: false
+lmcache_guest_require_rdma: true
+
+# Supplementary groups for the container. Empty by default and that is
+# correct here: the container runs as root, so it needs no group membership
+# to open /dev/kfd or /dev/dri.
+#
+# Deliberately NOT "keep-groups", which ROCm's own container docs recommend --
+# that is a PODMAN option. Docker has no such concept, reads it as a literal
+# group name, and dies with
+#   unable to find group keep-groups: no matching entries in group file
+# Use "video" and/or "render" if a non-root container ever needs them.
+lmcache_guest_docker_groups: []
+
+# ── Guest log shipping ───────────────────────────
+# An Alloy in the guest, pushing the journal and the in-guest Docker logs to
+# Loki. The host's Alloy cannot reach either: a VM's journal is behind QEMU,
+# not on the host's Docker socket.
+#
+# Every stream is labelled with vm_name, the same value Prometheus uses as a
+# target label, so a log panel and a metric panel filter on one variable.
+# prometheus-node-exporter on the port the generated prometheus.yml already
+# scrapes. The fleet-node job and its hostfwd rule predate this role; what
+# was missing was anything installing the exporter, so those targets were
+# down from the day the stack was written.
+lmcache_guest_node_exporter_enable: true
+lmcache_guest_node_exporter_port: 9100
+
+lmcache_guest_alloy_enable: true
+lmcache_guest_alloy_image: docker.io/grafana/alloy:v1.5.1
+# Loki's FLEET address, reached the same way the coordinator is -- SLIRP NATs
+# guest egress out through the qemu container, which is on that network. The
+# generated inventory sets this; the default is only right for the default
+# FLEET_NET_PREFIX.
+lmcache_guest_loki_url: "http://172.31.0.15:3100"
+lmcache_guest_alloy_config_dir: /etc/alloy
+lmcache_guest_alloy_container_name: alloy-guest
+# Only the recent journal. A guest's journal carries its whole boot including
+# a kernel ring-buffer replay, and VM_COUNT guests replaying at once is the
+# burst Loki's default ingestion limits reject -- so the lines you most want
+# are the ones that would be dropped.
+lmcache_guest_alloy_journal_max_age: 12h
+# Same delivery problem as the LMCache image: a registry pull per guest
+# through one SLIRP NAT. Prefer the 9p share.
+lmcache_guest_alloy_hostfs_archive: alloy.tar
+
+lmcache_guest_container_name: lmcache-server

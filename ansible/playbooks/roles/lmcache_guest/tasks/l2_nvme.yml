@@ -1,0 +1,124 @@
+---
+# Format and mount the emulated NVMe as LMCache's L2 tier.
+#
+# Resolved rather than assumed: lmcache_guest_l2_device is a default, and the
+# namespace numbering shifts the moment a second controller is added. The role
+# checks the named device exists and is a block device before touching it --
+# an mkfs against a wrong-but-present path is not recoverable.
+#
+# become is on each task rather than on the include: it is not a valid
+# attribute on a TaskInclude.
+
+- name: Check the configured L2 device
+  become: true
+  ansible.builtin.stat:
+    path: "{{ lmcache_guest_l2_device }}"
+  register: lmcache_l2_dev
+
+- name: Fail clearly when the emulated NVMe is absent
+  become: true
+  when: not (lmcache_l2_dev.stat.exists and lmcache_l2_dev.stat.isblk | default(false))
+  ansible.builtin.fail:
+    msg: >-
+      {{ lmcache_guest_l2_device }} is not a block device in this guest.
+      The emulated NVMe comes from VM_NVME in the env file -- run-vm creates
+      its backing qcow2 and attaches it, so a guest started without that key
+      has no L2 device at all. Set VM_NVME=1, regenerate the stack and
+      recreate the VM, or set lmcache_guest_l2_enable=false to run L1-only.
+
+# blkid returns 2 for "no filesystem", which is the normal first-run state
+# and not a failure.
+- name: Look for an existing filesystem
+  become: true
+  ansible.builtin.command:
+    cmd: blkid -o value -s TYPE {{ lmcache_guest_l2_device }}
+  register: lmcache_l2_blkid
+  changed_when: false
+  failed_when: lmcache_l2_blkid.rc not in [0, 2]
+
+- name: Refuse to reformat a device that already holds data
+  become: true
+  when:
+    - lmcache_l2_blkid.stdout | trim | length > 0
+    - lmcache_l2_blkid.stdout | trim != lmcache_guest_l2_fstype
+    - not lmcache_guest_l2_force_format | bool
+  ansible.builtin.fail:
+    msg: >-
+      {{ lmcache_guest_l2_device }} already carries a
+      {{ lmcache_l2_blkid.stdout | trim }} filesystem, not
+      {{ lmcache_guest_l2_fstype }}. Refusing to mkfs over it. This role is
+      expected to be re-run, and a populated L2 is a cache someone may be
+      measuring; set lmcache_guest_l2_force_format=true to overwrite it.
+
+- name: Create the filesystem
+  become: true
+  when:
+    - lmcache_l2_blkid.stdout | trim | length == 0 or lmcache_guest_l2_force_format | bool
+    - lmcache_guest_l2_size | length == 0
+  community.general.filesystem:
+    fstype: "{{ lmcache_guest_l2_fstype }}"
+    dev: "{{ lmcache_guest_l2_device }}"
+    force: "{{ lmcache_guest_l2_force_format | bool }}"
+
+# mke2fs takes the filesystem size as a POSITIONAL argument after the device,
+# which community.general.filesystem has no parameter for -- hence the direct
+# command rather than an `opts` string. Bounding the filesystem is the only
+# place the cap can go: the device is 1024G sparse and the fs adapter accepts
+# no quota, so a full L2 has to mean ENOSPC inside the guest rather than a
+# full host disk.
+- name: Create a size-bounded filesystem
+  become: true
+  when:
+    - lmcache_l2_blkid.stdout | trim | length == 0 or lmcache_guest_l2_force_format | bool
+    - lmcache_guest_l2_size | length > 0
+  ansible.builtin.command:
+    cmd: >-
+      mkfs.{{ lmcache_guest_l2_fstype }} -F
+      {{ lmcache_guest_l2_device }} {{ lmcache_guest_l2_size }}
+  changed_when: true
+
+# By UUID, not by /dev name. The device name is a function of probe order and
+# this entry goes in fstab, where a guest that reorders its controllers would
+# otherwise mount the wrong thing -- or fail to boot.
+- name: Read the filesystem UUID
+  become: true
+  ansible.builtin.command:
+    cmd: blkid -o value -s UUID {{ lmcache_guest_l2_device }}
+  register: lmcache_l2_uuid
+  changed_when: false
+
+# nofail is not optional. Without it, a guest whose L2 device is missing or
+# has been recreated does not come up degraded -- it drops to EMERGENCY MODE
+# and never reaches sshd, because an fstab entry with default options is
+# required by local-fs.target. Observed exactly this way: the host's L2 qcow2
+# was deleted between runs, run-vm made a fresh empty one, the UUID in fstab
+# no longer resolved, and the guest hung for 90s on
+# dev-disk-by-uuid-....device before dropping to a console nobody can reach
+# over SSH. L2 is a CACHE; losing it must cost cache, not the node.
+- name: Mount it
+  become: true
+  ansible.posix.mount:
+    path: "{{ lmcache_guest_l2_mount }}"
+    src: "UUID={{ lmcache_l2_uuid.stdout | trim }}"
+    fstype: "{{ lmcache_guest_l2_fstype }}"
+    opts: defaults,noatime,nofail
+    state: mounted
+
+- name: Create the adapter's subdirectory
+  become: true
+  ansible.builtin.file:
+    path: "{{ lmcache_guest_l2_mount }}/{{ lmcache_guest_l2_subdir }}"
+    state: directory
+    mode: "0755"
+
+- name: Report the L2 tier
+  become: true
+  ansible.builtin.command:
+    cmd: df -h {{ lmcache_guest_l2_mount }}
+  register: lmcache_l2_df
+  changed_when: false
+
+- name: Show it
+  become: true
+  ansible.builtin.debug:
+    var: lmcache_l2_df.stdout_lines

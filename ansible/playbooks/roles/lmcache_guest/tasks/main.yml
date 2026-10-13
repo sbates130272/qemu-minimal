@@ -1,0 +1,187 @@
+---
+- name: Assert the per-guest identity and advertised address were supplied
+  ansible.builtin.assert:
+    that:
+      - lmcache_guest_instance_id | length > 0
+      - lmcache_guest_advertise_ip | length > 0
+    fail_msg: >-
+      lmcache_guest_instance_id and lmcache_guest_advertise_ip are both
+      required, and both must be unique across the fleet. Neither failure is
+      loud at run time: a duplicate instance id makes the second guest replace
+      the first in the coordinator's /instances, and a wrong advertise IP
+      registers fine and simply never serves a peer read. fleet-lmcache.yml
+      derives both from the generated inventory.
+  tags: [install, configure]
+
+- name: Assert P2P has a coordinator
+  when: lmcache_guest_p2p_enable | bool
+  ansible.builtin.assert:
+    that:
+      - lmcache_guest_coordinator_url | length > 0
+    fail_msg: >-
+      P2P needs the coordinator for peer discovery, and `lmcache server`
+      refuses to start when --p2p-advertise-url is set without
+      --coordinator-url. Set lmcache_guest_coordinator_url, or turn
+      lmcache_guest_p2p_enable off.
+  tags: [install, configure]
+
+- name: Install Docker
+  when: lmcache_guest_docker_install | bool
+  become: true
+  tags: [install]
+  block:
+    - name: Create the apt keyring directory
+      ansible.builtin.file:
+        path: "{{ lmcache_guest_docker_keyring | dirname }}"
+        state: directory
+        mode: "0755"
+
+    - name: Fetch the Docker apt key
+      ansible.builtin.get_url:
+        url: "{{ lmcache_guest_docker_gpg_url }}"
+        dest: "{{ lmcache_guest_docker_keyring }}"
+        mode: "0644"
+
+    - name: Add the Docker apt repository
+      ansible.builtin.apt_repository:
+        repo: >-
+          deb [arch={{ 'amd64' if ansible_architecture == 'x86_64'
+          else ansible_architecture }}
+          signed-by={{ lmcache_guest_docker_keyring }}]
+          {{ lmcache_guest_docker_repo_url }}
+          {{ ansible_distribution_release }} stable
+        filename: docker
+        state: present
+
+    - name: Install the Docker packages
+      ansible.builtin.apt:
+        name: "{{ lmcache_guest_docker_packages }}"
+        state: present
+        update_cache: true
+
+    - name: Start and enable Docker
+      ansible.builtin.systemd_service:
+        name: docker
+        state: started
+        enabled: true
+
+    # So an interactive debug session in the guest does not need sudo for every
+    # `docker logs`. The unit itself runs as root and does not depend on this.
+    - name: Put the login user in the docker group
+      ansible.builtin.user:
+        name: "{{ ansible_user_id }}"
+        groups: docker
+        append: true
+
+- name: Deliver the LMCache image
+  become: true
+  tags: [install]
+  block:
+    # Is it already here? `docker load` of a 2.8 GB tar is not free and this
+    # role is expected to be re-run, so every delivery path below is gated on
+    # the image being absent rather than on a changed-file check.
+    - name: Check whether the image is already loaded
+      ansible.builtin.command:
+        cmd: docker image inspect {{ lmcache_guest_image }}
+      register: lmcache_image_present
+      changed_when: false
+      failed_when: false
+
+    - name: Mount the host share
+      when:
+        - lmcache_guest_hostfs_enable | bool
+        - lmcache_image_present.rc != 0
+      ansible.posix.mount:
+        path: "{{ lmcache_guest_hostfs_mount }}"
+        src: "{{ lmcache_guest_hostfs_tag }}"
+        fstype: 9p
+        opts: trans=virtio,version=9p2000.L,ro
+        state: mounted
+
+    # Straight from the share. No copy: the file is read over 9p as docker
+    # loads it.
+    - name: Load the image from the host share
+      when:
+        - lmcache_guest_hostfs_enable | bool
+        - lmcache_image_present.rc != 0
+      ansible.builtin.command:
+        cmd: >-
+          docker load -i
+          {{ lmcache_guest_hostfs_mount }}/{{ lmcache_guest_hostfs_archive }}
+      changed_when: true
+      register: lmcache_hostfs_load
+
+    - name: Copy the image archive into the guest
+      when:
+        - not (lmcache_guest_hostfs_enable | bool)
+        - lmcache_guest_image_archive | length > 0
+      ansible.builtin.copy:
+        src: "{{ lmcache_guest_image_archive }}"
+        dest: "{{ lmcache_guest_image_archive_remote }}"
+        mode: "0644"
+      register: lmcache_guest_archive_copy
+
+    # Only when the archive changed. `docker load` of a multi-GB tar is not
+    # free, and this role is expected to be re-run.
+    - name: Load the image from the archive
+      when:
+        - not (lmcache_guest_hostfs_enable | bool)
+        - lmcache_guest_image_archive | length > 0
+        - lmcache_guest_archive_copy is changed
+      ansible.builtin.command:
+        cmd: docker load -i {{ lmcache_guest_image_archive_remote }}
+      changed_when: true
+
+    - name: Pull the image
+      when:
+        - not (lmcache_guest_hostfs_enable | bool)
+        - lmcache_guest_image_archive | length == 0
+        - lmcache_image_present.rc != 0
+      ansible.builtin.command:
+        cmd: docker pull {{ lmcache_guest_image }}
+      changed_when: true
+
+# become lives on the included tasks, not here: it is not a valid attribute
+# on a TaskInclude.
+- name: Install the node exporter
+  when: lmcache_guest_node_exporter_enable | bool
+  tags: [install, configure]
+  ansible.builtin.include_tasks: node_exporter.yml
+
+- name: Ship guest logs to Loki
+  when: lmcache_guest_alloy_enable | bool
+  tags: [install, configure]
+  ansible.builtin.include_tasks: alloy.yml
+
+- name: Prepare the emulated NVMe as the L2 tier
+  when: lmcache_guest_l2_enable | bool
+  tags: [install, configure]
+  ansible.builtin.include_tasks: l2_nvme.yml
+
+- name: Configure the MP server
+  become: true
+  tags: [install, configure]
+  block:
+    # No engine config file: an MP server is configured entirely by CLI flags.
+    # The YAML config is the legacy in-process mode's, and writing one here
+    # would be inert and misleading.
+    - name: Install the device preflight script
+      ansible.builtin.template:
+        src: lmcache-preflight.sh.j2
+        dest: /usr/local/sbin/lmcache-preflight
+        mode: "0755"
+      notify: Restart the LMCache MP server
+
+    - name: Install the MP server unit
+      ansible.builtin.template:
+        src: lmcache-server.service.j2
+        dest: /etc/systemd/system/{{ lmcache_guest_container_name }}.service
+        mode: "0644"
+      notify: Restart the LMCache MP server
+
+    - name: Enable and start the MP server
+      ansible.builtin.systemd_service:
+        name: "{{ lmcache_guest_container_name }}"
+        state: started
+        enabled: true
+        daemon_reload: true

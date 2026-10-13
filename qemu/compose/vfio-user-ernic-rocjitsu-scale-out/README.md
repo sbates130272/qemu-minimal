@@ -3,11 +3,15 @@
 An N-VM rocm-ernic mesh, one emulated RDMA NIC and one rocjitsu GPU per VM.
 Same topology as `vfio-user-ernic-2vm`, sized by a variable instead of by hand.
 
-**`docker-compose.yml` and `prometheus.yml` in this directory are generated.**
-Edit [`qemu/env.scale-out`](../../env.scale-out) and regenerate; do not edit
-them directly. Both are committed so the stack stays reviewable in a diff and
-usable with plain `docker compose`, but a hand edit is lost on the next
-regeneration and the `Gen Compose Check` CI lane will fail.
+**`docker-compose.yml`, `prometheus.yml` and `fleet-inventory.yml` in this
+directory are generated.** Edit [`qemu/env.scale-out`](../../env.scale-out)
+and regenerate; do not edit them directly. All three are committed so the
+stack stays reviewable in a diff and usable with plain `docker compose`, but a
+hand edit is lost on the next regeneration and the `Gen Compose Check` CI lane
+will fail.
+
+`grafana/` is **not** generated — nothing in it depends on `VM_COUNT`, because
+every query groups by a label instead of naming a VM.
 
 ```bash
 qemu-tool gen-compose --env-file qemu/env.scale-out
@@ -61,7 +65,9 @@ is not optional here: all N VMs open it at once, and that needs
 | `rocjitsu-1..N` | one emulated GPU per VM |
 | `qemu-1..N` | the guests, each attached to its own two sockets |
 | `ernic-stats-exporter` | `--profile metrics`, serves `:9840/metrics` |
-| `prometheus` | `--profile metrics`, scrapes both sources |
+| `prometheus` | `--profile metrics`, scrapes every source below |
+| `grafana` | `--profile metrics`, provisioned dashboard on `:3000` |
+| `lmcache-coordinator` | `--profile lmcache`, the controller the in-guest workers register with |
 
 Derived per VM `n`: name `<VM_NAME_PREFIX>-<n>`, SSH port
 `VM_SSH_PORT_BASE + n - 1`, MAC `<ERNIC_MAC_PREFIX>:<n>>8>:<n&0xff>`, guest IP
@@ -163,6 +169,134 @@ The in-guest GPU exporters (`amd-metrics-exporter` on :5000,
 `hsa-snoop-prometheus` on :9488) are deliberately *not* scraped: they poll the
 emulated device, and rocjitsu serves single-threaded, so every scrape comes out
 of the same thread as the workload being measured.
+
+### Grafana
+
+Rides the same `metrics` profile — Grafana without Prometheus is an empty
+page, so it does not get a third switch. `:3000`, anonymous admin, dark.
+
+Datasource and dashboard are provisioned from `grafana/` rather than clicked
+in: a dashboard that exists only in Grafana's own sqlite dies with the
+container, which defeats the point of a stack that is reproducible from one
+env file. The dashboard directory is mounted read-only and `allowUiUpdates` is
+off, because a UI that accepts an edit it then silently fails to persist is
+worse than one that refuses it. Edit the JSON and `docker compose restart
+grafana`.
+
+Two shape rules in the dashboard are worth keeping if you extend it:
+
+- **Per-VM panels are bar gauges, not one line per VM.** A line per VM stops
+  being readable long before this stack's ~40-node ceiling, and a palette that
+  cycles hues past eight makes two VMs the same colour.
+- **No panel has two y-axes.** Where two measures do not share a unit they get
+  two panels.
+
+## LMCache
+
+Opt in with `--profile lmcache`, on top of `--profile metrics`.
+
+```bash
+docker build -t qemu-tool/lmcache-rocm:0.5.5-gfx1250 ../../docker/lmcache
+qemu-tool compose --env-file qemu/env.scale-out \
+    --stack vfio-user-ernic-rocjitsu-scale-out \
+    --profile metrics --profile lmcache up -d
+
+docker save qemu-tool/lmcache-rocm:0.5.5-gfx1250 -o /tmp/lmcache-rocm.tar
+cd ansible && ansible-playbook \
+    -i ../qemu/compose/vfio-user-ernic-rocjitsu-scale-out/fleet-inventory.yml \
+    playbooks/fleet-lmcache.yml \
+    -e lmcache_guest_image_archive=/tmp/lmcache-rocm.tar
+```
+
+The image does not exist until you build it. There is no published LMCache
+wheel for gfx1250 — see [`qemu/docker/README.md`](../../docker/README.md).
+
+### Why half of it is not in this file
+
+One coordinator container beside the device servers, and one worker container
+**inside** each guest. Compose has no reach into a VM, so the workers cannot
+be services here no matter how much tidier that would be. They are started by
+a systemd unit that
+[`roles/lmcache_guest`](../../../ansible/playbooks/roles/lmcache_guest/)
+installs.
+
+That unit's `ExecStartPre` is the part that matters. It probes `amdgpu`, waits
+for `rocm-rdma-ernic0`, **and reassigns the address on `rocm-ernic0`** —
+because only module loading survives a guest reboot (AGENTS.md issue 12), so a
+unit gated on the device node alone would come up cleanly against an
+unconfigured NIC every time the guest restarted. It also fails loudly when
+`ibv_devinfo` cannot open the device, which is the issue 6/7 shape: that needs
+a host-side `docker compose down && up`, and is otherwise diagnosed from
+inside the guest for an hour.
+
+`amdgpu` is non-fatal by default and the RDMA NIC is fatal. A guest with no
+GPU is still a useful mesh member here, because L1 is host memory and the
+P2P reads land in it; a guest with no RDMA device is not.
+
+### MP mode, and why that matters
+
+Both halves are upstream entrypoints: `lmcache coordinator` on the host and
+`lmcache server` in each guest. **Not `lmcache_controller`** — that is the
+legacy in-process mode's controller, and it waits on a ZMQ pull/reply pair
+for `LMCacheWorker` registrations an MP server never sends. Pair the two and
+both come up cleanly with every guest registered to nothing.
+
+An MP server needs no vLLM and no engine config file; it is configured
+entirely by the CLI flags the unit passes.
+
+L1 is host memory and L2 is the emulated NVMe. Keeping KV out of device
+memory is the same decision as not scraping the in-guest GPU exporters:
+rocjitsu serves single-threaded, so anything asked of the device comes out of
+the same thread as whatever else is using it.
+
+### P2P serves L1 only
+
+A peer reads what is resident in another node's *memory*; it cannot reach
+that node's L2. So a cross-node hit depends on the key still being in the
+peer's L1, and L1 is small — at `LMCACHE_L1_SIZE_GB=1` with 8 MiB chunks that
+is ~128 chunks, about 16 sequences of 8.
+
+Measured here: `lmcache_coord_l1_keys` sat at ~95 per node while the
+coordinator's directory held 6464 keys. Everything else had spilled to the
+local NVMe and was no longer P2P-reachable, so a cross-read of an older range
+returns `0/8` — which looks like P2P being broken and is not.
+
+The serving node does not count the transfer either. LMCache publishes the
+requesting side only (`l2_load_completed_requests`, labelled
+`l2_name="p2p"`). `l2_store_completed_requests{l2_name="p2p"}` is not the
+counterpart: it increments on both guests roughly equally and tracks the
+adapter being offered stores, not reads served.
+
+### How a guest reaches the coordinator
+
+The guests reach the coordinator at its **fleet address**, `172.31.0.12`, not
+at SLIRP's `10.0.2.2` gateway and not by service name. A guest has no
+interface on the fleet network, but QEMU's user-mode networking NATs its
+egress out through the qemu container's own stack — and that container is on
+that network. So the ZMQ pull/reply ports need not be published at all. Only
+`LMCACHE_COORD_PORT` is, because the REST API is what an operator queries:
+
+```bash
+curl -s localhost:9000/query_worker_info \
+    -H 'content-type: application/json' \
+    -d '{"instance_id": "stebates-fleet-1"}'
+```
+
+Worth doing, because **a worker that is up is not necessarily a worker that
+registered.** The engine builds either way and an unreachable controller is a
+log line, not an exit — so the dashboard's "LMCache workers up" is scrape
+reachability, and this is the registration check.
+
+### Two switches
+
+`LMCACHE_ENABLE` decides whether the services and scrape jobs are
+**generated**; `--profile lmcache` decides whether they **run**. Both exist
+because `prometheus.yml` has no notion of a profile, so a job emitted for a
+profile nobody selected is just a permanently-down target.
+
+`LMCACHE_WORKER_METRICS_PORT` has to match `lmcache_guest_metrics_port` in the
+role, and has to appear in `VM_EXTRA_HOSTFWD`. Nothing cross-checks those
+three; a mismatch shows up only as a scrape target that never comes up.
 
 ## Staleness
 
