@@ -4,7 +4,7 @@ title: VM Report — hipFile fio VM
 
 # VM Report — qemu-minimal — hipFile fio VM
 
-Generated: **2026-10-13 16:02 UTC** &middot; Commit: [`b6e1231`](https://github.com/sbates130272/qemu-minimal/commit/b6e1231fe925b0c085f64ec10edeab8288271e35) &middot; Status: **pass**
+Generated: **2026-10-13 22:45 UTC** &middot; Commit: [`c5d51ce`](https://github.com/sbates130272/qemu-minimal/commit/c5d51ce8d7e9d4b258235cf3ed934591951c7a67) &middot; Status: **pass**
 
 ## Hardware
 
@@ -120,7 +120,7 @@ amdrocm-hipfile10.1	10.1.0-3
 ```
 amdgpu-dkms	1:7.1.9.31600000-2407772.26.04
 amdgpu-dkms-firmware	1:31.60.0.0.31600000-2407772.26.04
-amdgpu-exporter	1.5.2-10~24.04
+amdgpu-exporter	1.5.3~24.04
 libdrm-amdgpu1:amd64	2.4.131-1
 ```
 
@@ -145,7 +145,6 @@ ubuntu : ubuntu video users render admin
   cron.service                     loaded active running Regular background program processing daemon
   dbus.service                     loaded active running D-Bus System Message Bus
   getty@tty1.service               loaded active running Getty on tty1
-  gpuagent.service                 loaded active running AMD GPU Metrics Reader Service
   ModemManager.service             loaded active running Modem Manager
   multipathd.service               loaded active running Device-Mapper Multipath Device Controller
   networkd-dispatcher.service      loaded active running Dispatcher daemon for systemd-networkd
@@ -178,7 +177,7 @@ ubuntu : ubuntu video users render admin
 
 | Metric | Value |
 |---|---|
-| fio libhipfile read throughput | 193 MB/s |
+| fio libhipfile read throughput | 110 MB/s |
 
 This is fio's own `libhipfile` ioengine reading from the guest NVMe straight
 into VRAM, rather than the hand-written benchmark the rocjitsu report uses. fio
@@ -193,5 +192,5 @@ rocm: /opt/rocm/core-10.1
 building fio 6bc57a931f04fa3f50348d8c8f087187f050c6e1
 FIO_VERSION = fio-3.42
 fio: fio-3.42 commit=6bc57a931f04fa3f50348d8c8f087187f050c6e1
-fio-hipfile-bench: read_bytes=67108864 seconds=0.347 read_gbs=0.193397302
+fio-hipfile-bench: read_bytes=67108864 seconds=0.612 read_gbs=0.109655006
 ```
