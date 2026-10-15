@@ -48,6 +48,20 @@
 [![Spell Check](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-spell-check.yml?label=spell-check&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-spell-check.yml)
 [![rocm-ernic Smoke Test](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-smoke-test-rocm-ernic.yml?branch=main&label=smoke-test-rocm-ernic&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-smoke-test-rocm-ernic.yml)
 
+<!-- The two Ansible collections ansible/requirements.yml installs. Exact
+     pins, both of them, and neither is a range: sbates130272.batesste
+     follows a breaking 3.x line, and the rocm-ernic one is a git SHA because
+     Galaxy only ever published 0.1.0, which is the pre-ionic collection.
+
+     rocm-ernic's shortrev is load-bearing beyond the collection itself. SRQ
+     ships in two halves -- the device emulation in the ernic server
+     container and the guest-side driver built from this tree -- so this
+     badge and the rocm-ernic one in the row below have to agree. If they
+     ever disagree, the guest cannot create an SRQ at all. See AGENTS.md
+     issue 20. -->
+[![batesste collection](https://img.shields.io/badge/sbates130272.batesste-3.1.0-9cf?style=flat-square)](https://galaxy.ansible.com/ui/repo/published/sbates130272/batesste/)
+[![rocm-ernic collection](https://img.shields.io/badge/sbates130272.rocm__ernic-3fb74d1-9cf?style=flat-square)](https://github.com/ROCm/rocm-ernic)
+
 <!-- The batesste-ci-images this repo pins. STATIC badges, hand-edited with
      the tags: shields has no endpoint for "what does this repo pin", and a
      dynamic Docker Hub badge would report that registry's newest tag, which
@@ -70,7 +84,13 @@
 [![rocm-ernic](https://img.shields.io/badge/rocm--ernic-3fb74d1-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-rocm-ernic/tags)
 [![rocjitsu](https://img.shields.io/badge/rocjitsu-84fb06b-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu/tags)
 [![guest qcow2](https://img.shields.io/badge/guest-resolute%20%7C%20qm.c5d51ce-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu/tags)
-[![qemu fork](https://img.shields.io/badge/sbates--fork-qemu.31e3d06-lightgrey?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork/tags)
+[![qemu fork](https://img.shields.io/badge/sbates--fork-qemu.31e3d06-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork/tags)
+<!-- The LMCache ref qemu/docker/lmcache/Dockerfile builds from. Not a
+     batesste-ci-image: this one is built here and referenced by tag, so it
+     carries no build stamp and sits outside the coherence check above. It
+     still moves with that row in practice, because the thing it talks to is
+     the ernic. Green rather than blue to say "ours, not theirs". -->
+[![LMCache](https://img.shields.io/badge/LMCache-v0.5.6-success?style=flat-square)](https://github.com/LMCache/LMCache/releases/tag/v0.5.6)
 
 ## Summary
 

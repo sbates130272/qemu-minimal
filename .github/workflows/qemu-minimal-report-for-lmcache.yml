@@ -98,6 +98,14 @@ jobs:
     - name: Install qemu-tool
       run: pipx install ./qemu || pip install ./qemu
 
+    # Required before the build. `load: true` on the default DOCKER driver
+    # cannot export a cache -- the first dispatch of this lane died on
+    # "Cache export is not supported for the docker driver" before it built
+    # anything. setup-buildx-action creates a docker-container builder, which
+    # supports both loading into the daemon and the gha cache.
+    - name: Set up buildx
+      uses: docker/setup-buildx-action@v3
+
     # Built, not pulled: nothing publishes this image. The cache is what makes
     # a second run cheap -- the base layer alone is 11.58 GB.
     - name: Build the LMCache image
@@ -305,10 +313,17 @@ jobs:
           echo '```'
         } > site/lmcache/index.md
 
+    # No working-directory: an early failure (the image build, say) never
+    # creates the stack directory, and a step that chdir's into a missing
+    # path dies with "chdir to cwd ... exit 127" -- replacing the real error
+    # in the log with its own. Guarded instead.
     - name: Show logs on failure
       if: failure()
-      working-directory: /var/lib/qemu-tool/stacks/lmcache-ci
       run: |
+        cd /var/lib/qemu-tool/stacks/lmcache-ci 2>/dev/null || {
+          echo "stack directory absent; the run failed before it was created"
+          exit 0
+        }
         docker compose --env-file "$GITHUB_WORKSPACE/$ENV_FILE" --profile lmcache logs --tail 100 || true
         ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
             -i /tmp/guest-key/id_rsa batesste@qemu-1 \

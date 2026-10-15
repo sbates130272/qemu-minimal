@@ -73,11 +73,13 @@ def run(cfg: VMConfig) -> None:
             backing.rename(overlay)
         else:
             _create_overlay(overlay, backing)
+        _write_vm_info(cfg, images)
         return
 
     if cfg.backing_image is not None:
         backing = _fetch_backing_image(cfg, images)
         _create_overlay(images / f"{cfg.vm_name}.qcow2", backing)
+        _write_vm_info(cfg, images)
         return
 
     if cfg.backing_file is not None:
@@ -85,6 +87,7 @@ def run(cfg: VMConfig) -> None:
             images / f"{cfg.vm_name}.qcow2",
             cfg.backing_file,
         )
+        _write_vm_info(cfg, images)
         return
 
     cloud_img_file, cloud_img_url = _resolve_cloud_image(cfg)
@@ -124,6 +127,27 @@ def run(cfg: VMConfig) -> None:
         backing.rename(overlay)
     else:
         _create_overlay(overlay, backing)
+    _write_vm_info(cfg, images)
+
+
+# ---------------------------------------------------------------------------
+# VM info sidecar
+# ---------------------------------------------------------------------------
+
+def _write_vm_info(cfg: VMConfig, images: Path) -> None:
+    """Write <vm-name>.json alongside the qcow2 for inspect to read.
+
+    Records the username and SSH public key path baked into the image so that
+    inspect can report correct connection details without needing the env file
+    that was active at gen-vm time.
+    """
+    info = {
+        "username": cfg.username,
+        "ssh_key_file": str(Path(cfg.ssh_key_file).expanduser()),
+    }
+    info_path = images / f"{cfg.vm_name}.json"
+    info_path.write_text(json.dumps(info, indent=2) + "\n")
+    print(f"VM info written: {info_path}")
 
 
 # ---------------------------------------------------------------------------

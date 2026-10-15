@@ -60,7 +60,7 @@ services:
     volumes:
       - vfu-sockets:/run/vfu:ro
       - "${VM_IMAGES_DIR:-/var/lib/qemu-tool/images}:${VM_IMAGES_DIR:-/var/lib/qemu-tool/images}"
-      - "${QEMU_TOOL_SRC:-../../..}:/qemu-tool-src:ro"
+      - "${QEMU_TOOL_SRC:-/tmp}:/qemu-tool-src:ro"
     devices:
       - /dev/kvm
     shm_size: "${VM_SHM_SIZE:-8g}"
@@ -70,8 +70,12 @@ services:
       - /bin/sh
       - -c
       - |
-        cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
-        PIPX_BIN_DIR=/usr/local/bin pipx install --force /tmp/qemu-tool-build
+        if [ -f /qemu-tool-src/qemu/pyproject.toml ]; then
+          cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
+          PIPX_BIN_DIR=/usr/local/bin pipx install --force /tmp/qemu-tool-build
+        else
+          PIPX_BIN_DIR=/usr/local/bin pipx install --force qemu-tool
+        fi
         socks=$(ls /run/vfu/*.sock 2>/dev/null | tr '\n' ',' | sed 's/,$//')
         if [ -z "$$socks" ]; then
           echo "ERROR: no vfio-user sockets found in /run/vfu" >&2

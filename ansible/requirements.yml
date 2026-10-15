@@ -10,14 +10,20 @@
 # instead of being installed silently, surfacing as a module-not-found. If that
 # happens, add the collection below rather than dropping --no-deps.
 collections:
-  # Exact, not a range. 3.0.0 is a breaking release -- git_setup now asserts on
-  # an unset identity, check_platform fails instead of ending the host, and
-  # four rocm_setup/fave_packages defaults flipped -- and an exact pin is what
-  # makes the next one arrive as a deliberate PR rather than as a lane that
-  # broke overnight when the collections cache was evicted. vm-basic.yml
-  # supplies the identity; see git_setup_user_name there.
+  # Exact, not a range. 3.0.0 was the breaking release -- git_setup now
+  # asserts on an unset identity, check_platform fails instead of ending the
+  # host, and four rocm_setup/fave_packages defaults flipped -- and an exact
+  # pin is what makes the next one arrive as a deliberate PR rather than as a
+  # lane that broke overnight when the collections cache was evicted.
+  # vm-basic.yml supplies the identity; see git_setup_user_name there.
+  #
+  # 3.1.0 adds a ROCm 10.x minimal package set to rocm_setup and a rocjitsu
+  # lane, which is why it is worth taking here: this repo's guests are ROCm
+  # 10.1. Nothing in it is breaking. Watch the vm-rocm and vm-rocjitsu lanes
+  # on the bump -- rocm_setup is what they run, so they are where a surprise
+  # would land.
   - name: sbates130272.batesste
-    version: "3.0.0"
+    version: "3.1.0"
   # Pinned to the upstream git tree rather than Galaxy. Galaxy publishes only
   # 0.1.0, which is the pre-ionic collection: it builds the out-of-tree
   # rocm_ernic_eth/rocm_ernic_rdma modules and reads driver/ and rdma-core/,
