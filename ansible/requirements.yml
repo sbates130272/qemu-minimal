@@ -36,9 +36,18 @@ collections:
   # defaults that checkout to "main". playbooks/vars/ernic-pins.yml pins it to
   # this same SHA so the roles and the sources they build come from one tree --
   # bump both together.
+  #
+  # A THIRD thing moves with them: the ernic.<sha> in env.scale-out's
+  # ERNIC_IMAGE. SRQ is the reason -- 3fb74d1 is the feat/srq-support merge,
+  # and the two halves of SRQ ship separately. The device-side emulation is in
+  # the server container; the userspace provider is built in-guest from this
+  # tree, because no rdma-core release has create_srq in providers/ionic. Run
+  # a guest ahead of its server and ibv_create_srq() fails, UCX declines
+  # rc_verbs, and NIXL quietly moves LMCache P2P back onto TCP -- the exact
+  # silent fallback qemu/docker/lmcache exists to prevent.
   - name: https://github.com/ROCm/rocm-ernic.git#/ansible/
     type: git
-    version: 1484557971b038f655da85b0d77ef0ba88308c22
+    version: 3fb74d11b35e5b0fed1fb0c64003e2dcb023c78c
   - name: ansible.posix
     version: ">=2.2.2"
   # Floor from sbates130272.batesste 3.0.0's galaxy.yml. --no-deps means galaxy

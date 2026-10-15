@@ -88,7 +88,19 @@ def parse(path: Path) -> dict[str, str]:
         value = value.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
             value = value[1:-1]
-        values[key] = value
+        # Interpolate ${VAR} against the environment, because compose does and
+        # this is the same file. Without it the two readers disagree about what
+        # the file says: VM_IMAGES_DIR=${HOME}/... gives compose the right
+        # directory and gen-vm a LITERAL one, so a 16 GB backing image lands in
+        # a directory named '${HOME}' under the cwd and the stack then starts
+        # every guest against a qcow2 that is not there. Measured, not
+        # hypothetical.
+        #
+        # expanduser() in _coerce() is not enough: it handles ~ and nothing
+        # else. An unset variable is left as written, as in compose. A literal
+        # '$' in a value is therefore interpolation syntax here, which is also
+        # true of the env file compose reads.
+        values[key] = os.path.expandvars(value)
     return values
 
 

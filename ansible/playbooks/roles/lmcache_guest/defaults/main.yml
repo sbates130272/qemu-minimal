@@ -35,7 +35,35 @@ lmcache_guest_docker_packages:
 
 # ── The image ────────────────────────────────────
 # Built by qemu/docker/lmcache/Dockerfile.
-lmcache_guest_image: qemu-tool/lmcache-rocm:0.5.5-gfx1250
+#
+# The -srq tag, and the SAME tag on every guest. Two separate failures live
+# here, and the fleet hit both at once.
+#
+# 1. NIXL serialises descriptor lists with pickle, which records the defining
+#    module by name. The -srq build ships the ROCm wheel (nixl_rocm); the
+#    plain tag ships a CUDA one whose classes claim `nixl_cu13`. A guest on
+#    one tag therefore cannot unpickle a peer on the other:
+#      ModuleNotFoundError: No module named 'nixl_cu13'
+#    raised inside the transfer-channel serve loop, which then sends no reply,
+#    so the initiating peer's _recv_handshake blocks until its ZMQ deadline and
+#    logs only "Failed to add P2P adapter for peer". No p2p L2 adapter is ever
+#    created and every later load reports "P2P load task N timed out" -- a
+#    timeout three layers above a mismatch that has nothing to do with the
+#    transport.
+#
+#    v0.5.6 removed pickle from lmcache/v1/distributed (CVE-2026-105192) and
+#    the handshake is now msgspec msgpack, so that specific unpickling failure
+#    is gone. THE ONE-TAG RULE STAYS. The variant probe that loads the wrong
+#    module is untouched, a mixed fleet has never been measured working, and
+#    one tag costs nothing. Measure before relaxing it. Measured: a fleet split across both tags had VM2 holding zero
+#    p2p adapters; stopping the mismatched peers made them appear immediately.
+#    (Upstream is renaming the wheel; once every build is _rocm this stops
+#    being load-bearing, but the tags must still match.)
+# 2. The -rdma tag's rdma-core has no SRQ support, and UCX opens rc_verbs with
+#    one, so the server dies before its own code runs:
+#      UCX ERROR rocep1s0: ibv_create_srq() failed: Operation not supported
+#      -> uct_iface_open(rc_verbs/...) failed -> NIXL_ERR_BACKEND
+lmcache_guest_image: qemu-tool/lmcache-rocm:0.5.6-gfx1250-srq
 
 # Three ways in, in this order of preference.
 #
@@ -54,8 +82,11 @@ lmcache_guest_hostfs_enable: true
 lmcache_guest_hostfs_tag: hostfs
 lmcache_guest_hostfs_mount: /mnt/hostfs
 # Filename within the share, produced by:
-#   docker save <image> -o $VM_FILESYSTEM/lmcache-slim.tar
-lmcache_guest_hostfs_archive: lmcache-slim.tar
+#   docker save qemu-tool/lmcache-rocm:0.5.6-gfx1250-srq \
+#       -o $VM_FILESYSTEM/lmcache-srq.tar
+# Keep this in step with lmcache_guest_image: the tar is how most guests get
+# the image, so a stale name here is how a fleet ends up split across tags.
+lmcache_guest_hostfs_archive: lmcache-srq.tar
 
 # Two ways in, and the archive wins when set. A fleet guest reaches the
 # internet through QEMU SLIRP, so a registry pull works but costs VM_COUNT
@@ -63,7 +94,7 @@ lmcache_guest_hostfs_archive: lmcache-slim.tar
 # that cost twelve guests when pipx raced pypi.org (see the stack README).
 # `docker save` once on the host and hand each guest the tar instead:
 #
-#   docker save qemu-tool/lmcache-rocm:0.5.5-gfx1250 -o /tmp/lmcache-rocm.tar
+#   docker save qemu-tool/lmcache-rocm:0.5.6-gfx1250 -o /tmp/lmcache-rocm.tar
 #
 # Mind the size: this image is ~38 GB, so VM_COUNT copies is a lot of qcow2
 # overlay. Check free space under VM_IMAGES_DIR first.
@@ -182,9 +213,47 @@ lmcache_guest_l2_force_format: false
 # Set this to whatever the host can actually spare, divided by VM_COUNT.
 lmcache_guest_l2_size: ""
 
+# ── Huge pages ───────────────────────────────────
+# On by default: without them L1 is capped near 1 GiB by the page-table
+# allocation in the guest's RDMA driver, not by memory. See tasks/hugepages.yml
+# for the full chain -- it is the single thing that decides how large L1 can be
+# on this emulated device.
+lmcache_guest_thp_enable: true
+# Anonymous memory. `always` rather than the Ubuntu default `madvise`, because
+# nothing in the LMCache or nixl path calls madvise(MADV_HUGEPAGE).
+lmcache_guest_thp_enabled: always
+# tmpfs, which is where a POSIX SHM L1 arena lives. `force` rather than
+# `always`: Docker mounts the container's /dev/shm itself, so there is no
+# chance to pass `huge=` as a mount option, and nothing madvises it either.
+lmcache_guest_thp_shmem: force
+
 # ── L1 ───────────────────────────────────────────
 # Host memory, in GB, per guest. Must fit inside VM_VMEM with room for the
 # guest itself; the default is sized for the stack's 8192 MiB guests.
+# Make glibc align and madvise its large allocations so THP can actually back
+# them. Setting transparent_hugepage=always is NOT enough on its own, and that
+# is the trap: THP only backs a mapping that is at least 2 MiB AND 2 MiB
+# aligned, and glibc hands back a 2 GiB arena at 4 KiB alignment, so L1 gets
+# 4 KiB pages however the sysfs knob is set.
+#
+# It matters because of how the driver builds a memory region. ionic_pgtbl.c
+# allocates the page table with a single kmalloc:
+#
+#     buf->tbl_buf = kmalloc(buf->tbl_size, GFP_KERNEL);
+#
+# A 2 GiB region at 4 KiB pages needs 524288 entries, 4 MiB of physically
+# contiguous memory, which is at kmalloc's ceiling and fails under any
+# fragmentation -- ibv_reg_mr returns ENOMEM and the server will not start.
+# At 2 MiB pages the same region needs 8 KiB. (kvmalloc is not a fix here:
+# the table is handed to dma_map_single and has to be physically contiguous.)
+#
+# Measured: with this set, the server's AnonHugePages goes from ~0 to 2.2 GB
+# and a 2 GB L1 registers. Without it, 2 GB fails and 1 GB is the ceiling.
+#
+# 1 = madvise large allocations (THP). 2 = explicit hugetlbfs, which needs
+# pages reserved up front and is not what this fleet does. Empty disables it.
+lmcache_guest_glibc_hugetlb: 1
+
 lmcache_guest_l1_size_gb: 2
 # 64 KB, on upstream's advice for P2P: the transfer channel registers the
 # whole L1 for RDMA, and a larger alignment lets it issue bigger, better
@@ -192,6 +261,30 @@ lmcache_guest_l1_size_gb: 2
 lmcache_guest_l1_align_bytes: 65536
 lmcache_guest_eviction_policy: LRU
 lmcache_guest_eviction_ratio: 0.2
+
+# Which MP transfer paths the server will answer. Left at upstream's default
+# deliberately -- `auto` is the tempting change and it is the wrong one.
+#
+# The bench client maps `auto` to gpu->lmcache_driven, cpu->engine_driven, so
+# on these guests (no usable GPU, hence --mode cpu) it registers with
+# REGISTER_KV_CACHE_ENGINE_DRIVEN_CONTEXT and a lmcache_driven-only server
+# refuses it:
+#
+#   ERROR No handler registered for request type
+#         RequestType.REGISTER_KV_CACHE_ENGINE_DRIVEN_CONTEXT
+#
+# which the client reports only as "REGISTER_KV_CACHE: FAIL". Setting `auto`
+# here makes that registration succeed and buys nothing: engine-driven's store
+# path then fails anyway, inside the server, as
+#   EOFError: Ran out of input   (server_transfer.py:212, in commit_store)
+# so every STORE burns its full 10 s deadline and reports "timeout". The fast,
+# legible failure becomes a slow, obscure one.
+#
+# Drive the client with --transfer-mode lmcache_driven instead: that is
+# REGISTER_KV_CACHE + STORE/RETRIEVE over POSIX SHM, every handler of which a
+# default server already installs, and it is the path measured working here
+# (STORE 26 ms, RETRIEVE 24 ms, 2/2 chunks hit).
+lmcache_guest_supported_transfer_mode: lmcache_driven
 
 # Shared memory for the container. The MP server's workers pass KV through
 # shm, and Docker's 64m default is far too small.
@@ -230,6 +323,22 @@ lmcache_guest_preflight_enable: true
 lmcache_guest_amdgpu_probe_cmd: /usr/local/bin/amdgpu-probe
 lmcache_guest_amdgpu_modules:
   - amdgpu
+
+# Generate and install the gfx1250 firmware gap set, ip_discovery.bin chiefly.
+# amdgpu-probe loads the driver with discovery=2 ("IP discovery table from a
+# firmware file"), so without that blob the PCI probe fails -2, no KFD node is
+# created, and the guest presents as GPU-less with the device unbound. The blob
+# is per-rocjitsu-build and published images omit it deliberately, so supplying
+# it is the fleet's job -- see tasks/amdgpu_firmware.yml.
+lmcache_guest_amdgpu_firmware_enable: true
+# The image to generate from. MUST be the one the stack serves the device from
+# -- a blob from a different rocjitsu build does not match the device. The
+# generated inventory carries it from ROCJITSU_IMAGE; empty disables the step.
+lmcache_guest_rocjitsu_image: ""
+lmcache_guest_amdgpu_firmware_generation: gfx1250
+# "gap" emits only what no driver release ships (imu, mes, mes1, ip_discovery);
+# "full" stubs the whole set and is strictly worse where real blobs exist.
+lmcache_guest_amdgpu_firmware_set: gap
 lmcache_guest_rdma_modules:
   - ionic
   - ionic_rdma
@@ -248,20 +357,128 @@ lmcache_guest_rdma_modules:
 # that, renamed or not.
 lmcache_guest_ernic_mac: ""
 
-# The emulated NIC is 1dd8:100a, which the IN-TREE ionic does not claim: its
-# PCI table has only 1dd8:1002 and 1dd8:1003, so on a stock mainline kernel
-# nothing binds and the device sits there enumerated and driverless, with not
-# one line in dmesg. The ionic-ernic DKMS package adds the id properly; this
-# is the runtime equivalent, via the driver's new_id sysfs attribute, so the
-# fleet works on a guest that has the mainline driver and nothing else.
-# Harmless where the DKMS package is installed -- the write just fails
-# because the id is already claimed.
-lmcache_guest_ionic_bind_new_id: true
-lmcache_guest_ernic_pci_id: "1dd8 100a"
+# OFF: the in-tree driver now claims this device by itself.
+#
+# This existed because the emulated NIC was 1dd8:100a while the in-tree
+# ionic's PCI table held only 1dd8:1002 and 1dd8:1003 -- so on a stock
+# mainline kernel nothing bound, and the device sat there enumerated and
+# driverless with not one line in dmesg. rocm-ernic@3fb74d1 moved the device
+# to 1dd8:1002, which is in that table, so the gap this filled is gone.
+#
+# Confirmed on a live guest rather than inferred from the table:
+#
+#   modinfo ionic | grep 1DD8
+#     alias: pci:v00001DD8d00001002sv*sd*bc*sc*i*
+#     alias: pci:v00001DD8d00001003sv*sd*bc*sc*i*
+#
+# and the device is bound with no new_id write anywhere.
+#
+# Kept, off, rather than deleted: the id has moved twice already
+# (1022:8000 -> 1dd8:100a -> 1dd8:1002), and if it moves again to something
+# outside the table this is the one-line fix. Set it true and correct the id
+# below. Harmless if turned on by mistake -- the write just fails, because
+# the id is already claimed.
+lmcache_guest_ionic_bind_new_id: false
+lmcache_guest_ernic_pci_id: "1dd8 1002"
 # The guest's address on the ernic L2 segment, e.g. 192.168.100.11/24. The
 # preflight assigns it when it is missing, which is what makes the unit
 # survive a reboot. Empty means "assume something else configured it".
 lmcache_guest_eth_address: ""
+
+# ── Prefetch retention ───────────────────────────
+# `retain`, not v0.5.6's `default`, and this is worth 2x the mesh traffic.
+#
+# Prefetch controller v2 added a retention policy, and
+# DefaultPrefetchPolicy.plan_l1_retention() returns False for every key:
+#
+#     Returns:
+#         ``False`` for every key.
+#     ...
+#     return [False] * len(keys)
+#
+# A key that is not retained is marked is_temporary, and L1Manager.finish_read()
+# frees it the instant the read completes. P2P is an L2 ADAPTER, so every chunk
+# pulled across the ernic is loaded into L1, read once, and thrown away -- the
+# next request for the same keys pulls it over RDMA again.
+#
+# Measured on this fleet, same geometry, freshly restarted servers:
+#
+#   v0.5.5                       8,388,608 B per request
+#   v0.5.6 --l2-prefetch-policy default   16,777,216 B   (exactly 2x)
+#   v0.5.6 --l2-prefetch-policy retain     8,388,608 B   (back to parity)
+#
+# and on `default` the puller's own counters tell the story -- 4 chunks
+# written to L1, 4 evicted, 0 L1 lookup hits, 4 L2 hits -- with warm LOOKUP
+# going 2-3 ms -> 54 ms and warm RETRIEVE ~3 ms -> 677 ms, because the warm
+# pass crosses the mesh instead of hitting locally.
+#
+# `default` is a reasonable upstream choice for a cache whose L2 is local
+# disk, where a re-read is cheap. Ours is a peer across an emulated RDMA NIC,
+# where it is the entire cost.
+lmcache_guest_l2_prefetch_policy: retain
+
+# ── Worker threads ───────────────────────────────
+# Upstream's default is 1, for BOTH the GPU and CPU pools, and 1 wedges the
+# server. With a single worker slot the AffinityThreadPool serialises every
+# client's tasks onto one thread and says so:
+#
+#   AffinityThreadPool: affinity_key=... wrapped onto worker slot 0 (only 1
+#   workers), so it shares a thread with an earlier key and their tasks are
+#   serialized. Increase the worker count to give each client its own thread.
+#
+# What follows is not slowness. The server stops processing mid-session --
+# register, two stores, then silence, no error and no further log line ever.
+# The client's UNREGISTER_KV_CACHE then times out (the bench distinguishes
+# success from an RPC timeout only, at 10 s), which leaves instance_id 1000
+# registered, and because every bench client uses that same id EVERY later
+# client fails REGISTER_KV_CACHE until the server is restarted. One stuck
+# session poisons the server.
+#
+# Measured on one guest, 512-token sessions back to back:
+#   --max-workers 1 (default): first session FAILs, the next 5 cannot register
+#   --max-workers 4:           8 of 8 clean
+lmcache_guest_max_workers: 4
+
+# ── SRQ ──────────────────────────────────────────
+# Build the SRQ-capable ionic driver in the guest. On by default because P2P
+# does not work without it -- UCX's rc_verbs transport is built on a shared
+# receive queue, and with max_srq 0 the only verbs transport left is ud_verbs,
+# which has no one-sided RDMA. See tasks/srq_driver.yml for the full chain.
+#
+# Turn it off only for a guest whose image already carries the SRQ driver; the
+# build is expensive and the reload interrupts the device.
+lmcache_guest_srq_enable: true
+# Rebuild even when the device already reports an SRQ. Off: the build ends in
+# a module reload that can hang the guest (AGENTS.md issue 6), so it runs only
+# when there is something to fix.
+lmcache_guest_srq_force: false
+# The rocm-ernic ref the SRQ series is built from. Keep equal to the version:
+# in ansible/requirements.yml and to ernic_source_pin in
+# playbooks/vars/ernic-pins.yml -- and to the ernic.<sha> in ERNIC_IMAGE,
+# because the device half of SRQ lives in the server container and the two
+# halves have to come from one tree.
+lmcache_guest_srq_source_ref: 3fb74d11b35e5b0fed1fb0c64003e2dcb023c78c
+
+# ── The IB device name ───────────────────────────
+# What the preflight renames the ernic's IB device to. NOT cosmetic: UCX
+# cannot open a device whose name contains '-' or '_', so the
+# rocm-rdma-ernic0 that ernic_guest_setup's udev rule installs leaves UCX with
+# no verbs transport and NIXL silently running over TCP. Measured both ways;
+# see rename_ib_for_ucx in templates/lmcache-preflight.sh.j2.
+#
+# Empty disables the rename, which is right for a guest that never had the
+# udev rule applied -- there the kernel name (rocep0s7) is already fine.
+lmcache_guest_ib_device_name: rocmernic0
+
+# Declare that address to systemd-networkd as well as assigning it in the
+# preflight. The preflight repairs it at unit start; this re-applies it
+# whenever the link appears, which is what a module reload needs -- see
+# tasks/netplan_ernic.yml.
+lmcache_guest_netplan_ernic: true
+# The name netplan renames the matched interface to. Distinct from the udev
+# rename ernic_guest_setup does (rocm-ernic0) so the two cannot fight over
+# the same name on a guest that has both.
+lmcache_guest_ernic_netplan_name: ernic0
 lmcache_guest_preflight_timeout: 180
 # amdgpu is the one the fleet can legitimately do without: L1 is host memory
 # and the P2P reads land in it, so a guest can be a useful cache peer with no

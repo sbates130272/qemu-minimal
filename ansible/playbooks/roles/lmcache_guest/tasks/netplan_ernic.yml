@@ -1,0 +1,67 @@
+---
+# Declare the ernic address to systemd-networkd rather than only assigning it.
+#
+# The preflight already assigns it, and that is enough to survive a reboot --
+# but only because the unit starts after one. It does not help while the
+# server is running: reloading the ionic modules drops the address (AGENTS.md
+# issue 12, the address is run-time only), ARP goes INCOMPLETE, and the L2
+# segment is dead until something restarts the unit. During development that
+# looks exactly like a broken mesh, and it cost an hour of chasing one that
+# had been working minutes earlier.
+#
+# Matched on MAC, not interface name, for the same reason find_ernic_netdev()
+# in the preflight does: the name is not stable. Enabling
+# VM_VFIO_USER_ROOT_PORT moved the ernic to a new PCI slot and renamed the
+# management NIC in the same boot, and ernic_guest_setup's udev rules rename
+# the ernic itself to rocm-ernic0 when they are installed. The MAC is what
+# the emulator was started with (-m) and does not move.
+
+- name: Assert the facts this needs
+  ansible.builtin.assert:
+    that:
+      - lmcache_guest_ernic_mac | length > 0
+      - lmcache_guest_eth_address | length > 0
+    fail_msg: >-
+      netplan_ernic needs both lmcache_guest_ernic_mac and
+      lmcache_guest_eth_address. Without the MAC there is nothing stable to
+      match on, and without the address there is nothing to declare.
+
+- name: Check systemd-networkd is the renderer
+  ansible.builtin.service_facts:
+
+- name: Record whether networkd is running
+  ansible.builtin.set_fact:
+    lmcache_guest_networkd_active: >-
+      {{ (ansible_facts.services['systemd-networkd.service'].state
+          | default('unknown')) == 'running' }}
+
+- name: Warn when networkd is not running
+  ansible.builtin.debug:
+    msg: >-
+      systemd-networkd is {{ lmcache_guest_networkd.stdout | default('absent') }},
+      so this file will not be applied. The preflight still assigns the
+      address at unit start; only the re-apply on link-up is lost.
+  when: lmcache_guest_networkd.stdout | default('') != 'active'
+
+# 60- so it sorts after cloud-init's 50-, which owns the management NIC.
+# Mode 0600: netplan warns loudly about world-readable configs, and the
+# warning is noise that hides real ones.
+# A template, not copy+content: `ansible_managed` is injected by the template
+# action only, so the inline form fails at task-arg finalisation with
+# "'ansible_managed' is undefined" -- after 66 tasks have already run.
+- name: Declare the ernic interface to netplan
+  become: true
+  ansible.builtin.template:
+    src: netplan-ernic.yaml.j2
+    dest: /etc/netplan/60-ernic.yaml
+    mode: "0600"
+  register: lmcache_guest_netplan_file
+
+- name: Apply it now when it changed
+  become: true
+  ansible.builtin.command:
+    cmd: netplan apply
+  when:
+    - lmcache_guest_netplan_file.changed
+    - lmcache_guest_networkd_active | bool
+  changed_when: true

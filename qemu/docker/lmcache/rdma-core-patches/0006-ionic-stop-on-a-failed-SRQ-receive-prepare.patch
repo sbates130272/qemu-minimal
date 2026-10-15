@@ -1,0 +1,52 @@
+From 058a7def226fda58f9f0bf29f1411995e5c5ffe0 Mon Sep 17 00:00:00 2001
+From: rocm-ernic CI <ci@rocm-ernic.invalid>
+Date: Tue, 13 Oct 2026 12:05:07 -0600
+Subject: [PATCH] ionic: stop on a failed SRQ receive prepare
+
+ionic_post_recv_srq() ran both preparation helpers for their side effects
+and then carried on regardless of what they returned.
+
+ionic_v1_prep_recv()'s result was stored in rc but not acted on, and
+ionic_v1_prep_defer_recv()'s was discarded entirely -- it is declared int
+and returns -signed_len from ionic_v1_prep_pld() when a scatter-gather
+list will not fit. Either way the loop fell through to the same two
+statements:
+
+	srq->in_use++;
+	wr = wr->next;
+
+so a work request that was never prepared was counted as occupying a slot,
+the walk moved past it, and the next iteration overwrote rc -- with
+success, if that one worked. Three things go wrong from one missing check.
+in_use drifts up until it reaches queue.mask and the queue reports itself
+permanently full; *bad points at the work request after the one that
+failed, so a caller that retries from *bad silently drops the bad one; and
+the caller is told the whole list posted.
+
+Break on a non-zero rc, before the accounting. The out: path is unchanged
+and still rings the doorbell for whatever was prepared before the failure,
+which is what a partial post should do.
+---
+ providers/ionic/ionic_verbs.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/providers/ionic/ionic_verbs.c b/providers/ionic/ionic_verbs.c
+index 7e1b06bf..30931a5d 100644
+--- a/providers/ionic/ionic_verbs.c
++++ b/providers/ionic/ionic_verbs.c
+@@ -3574,11 +3574,14 @@ static int ionic_post_recv_srq(struct ibv_srq *ibsrq, struct ibv_recv_wr *wr,
+ 			}
+ 
+ 			/* Prepare wqe and push it to pending list */
+-			ionic_v1_prep_defer_recv(srq, ctx, wr);
++			rc = ionic_v1_prep_defer_recv(srq, ctx, wr);
+ 		} else {
+ 			rc = ionic_v1_prep_recv(&srq->rq, ctx, wr);
+ 		}
+ 
++		if (rc)
++			break;
++
+ 		srq->in_use++;
+ 		wr = wr->next;
+ 	}

@@ -12,22 +12,22 @@
   become: true
   ansible.builtin.command:
     cmd: docker image inspect {{ lmcache_guest_alloy_image }}
-  register: lmcache_alloy_present
+  register: lmcache_guest_alloy_present
   changed_when: false
   failed_when: false
 
 - name: Look for Alloy on the host share
   become: true
-  when: lmcache_alloy_present.rc != 0
+  when: lmcache_guest_alloy_present.rc != 0
   ansible.builtin.stat:
     path: "{{ lmcache_guest_hostfs_mount }}/{{ lmcache_guest_alloy_hostfs_archive }}"
-  register: lmcache_alloy_archive
+  register: lmcache_guest_alloy_archive
 
 - name: Load Alloy from the host share
   become: true
   when:
-    - lmcache_alloy_present.rc != 0
-    - lmcache_alloy_archive.stat.exists | default(false)
+    - lmcache_guest_alloy_present.rc != 0
+    - lmcache_guest_alloy_archive.stat.exists | default(false)
   ansible.builtin.command:
     cmd: >-
       docker load -i
@@ -39,8 +39,8 @@
 - name: Pull Alloy
   become: true
   when:
-    - lmcache_alloy_present.rc != 0
-    - not (lmcache_alloy_archive.stat.exists | default(false))
+    - lmcache_guest_alloy_present.rc != 0
+    - not (lmcache_guest_alloy_archive.stat.exists | default(false))
   ansible.builtin.command:
     cmd: docker pull {{ lmcache_guest_alloy_image }}
   changed_when: true

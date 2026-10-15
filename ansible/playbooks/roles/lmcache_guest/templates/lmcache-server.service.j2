@@ -74,6 +74,9 @@ ExecStart=/usr/bin/docker run \
     -v {{ lmcache_guest_l2_mount }}:{{ lmcache_guest_l2_mount }} \
 {% endif %}
     --ulimit memlock=-1:-1 \
+{% if lmcache_guest_glibc_hugetlb %}
+    -e GLIBC_TUNABLES=glibc.malloc.hugetlb={{ lmcache_guest_glibc_hugetlb }} \
+{% endif %}
 {% if lmcache_guest_ucx_exclude_ernic %}
     -e UCX_NET_DEVICES=${UCX_NET_DEVICES} \
 {% endif %}
@@ -87,9 +90,12 @@ ExecStart=/usr/bin/docker run \
     --http-port {{ lmcache_guest_http_port }} \
     --l1-size-gb {{ lmcache_guest_l1_size_gb }} \
     --l1-align-bytes {{ lmcache_guest_l1_align_bytes }} \
+    --max-workers {{ lmcache_guest_max_workers }} \
+    --l2-prefetch-policy {{ lmcache_guest_l2_prefetch_policy }} \
     --eviction-policy {{ lmcache_guest_eviction_policy }} \
     --chunk-size {{ lmcache_guest_chunk_size }} \
     --hash-algorithm {{ lmcache_guest_hash_algorithm }} \
+    --supported-transfer-mode {{ lmcache_guest_supported_transfer_mode }} \
     --coordinator-url {{ lmcache_guest_coordinator_url }} \
     --coordinator-advertise-ip {{ lmcache_guest_advertise_ip }} \
     --coordinator-heartbeat-interval {{ lmcache_guest_heartbeat_interval }} \

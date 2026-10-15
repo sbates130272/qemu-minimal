@@ -154,7 +154,7 @@ What replaces them:
 | out-of-tree `rocm_ernic_eth` + `rocm_ernic_rdma` | upstream `ionic` + `ionic_rdma`, two AMD patches on top |
 | DKMS package `rocm-ernic` | DKMS package `ionic-ernic`, built by `scripts/setup-ionic-dkms.sh` |
 | rdma-core ≥ 62 + `apply-rocm-ernic-dv.sh` | stock rdma-core ≥ 61, whose `providers/ionic` is upstream |
-| emulated device `1022:8000` | Pensando `1dd8:100a` |
+| emulated device `1022:8000` | Pensando `1dd8:1002`, subsystem `1dd8:5400` (was `1dd8:100a` before rocm-ernic@3fb74d1) |
 
 `ionic_rdma` needs kernel ≥ 6.18 (`drivers/infiniband/hw/ionic` merged there)
 and `ib_umem_get_va`, which landed after 7.0. No Ubuntu release ships one, so
@@ -164,8 +164,10 @@ None of this is done by hand in this repo. Two pieces of automation own it:
 
 - [`ansible/playbooks/roles/ionic_image_prep/`](ansible/playbooks/roles/ionic_image_prep/)
   prepares the guest image — installs the pinned mainline kernel from
-  `kernel.ubuntu.com/mainline`, the build toolchain, the `1dd8:100a` pci.ids
-  entry, and `/etc/modules-load.d/rocm-ernic-ionic.conf`. Upstream assumes a
+  `kernel.ubuntu.com/mainline`, the build toolchain, and
+  `/etc/modules-load.d/rocm-ernic-ionic.conf`. It no longer writes a pci.ids
+  entry — upstream hwdata carries the device, see the PCI ID section.
+  Upstream assumes a
   guest already prepared this way (their published `ionic` qcow2); this repo
   builds its own, so it owns the preparation.
 - `sbates130272.rocm_ernic.ernic_guest_setup` from the collection builds and
@@ -180,13 +182,15 @@ major.minor.
 
 Device names are unchanged: Ethernet `rocm-ernic0`, IB `rocm-rdma-ernic0`, both
 still set by `99-rocm-ernic.rules` (see udev section below), now keyed on
-`1dd8:100a` and `DRIVERS=="ionic|ionic_rdma"`.
+`1dd8:1002` with the `1dd8:5400` subsystem pair, and
+`DRIVERS=="ionic|ionic_rdma"`.
 
 ## udev rules (in-VM)
 
 `99-rocm-ernic.rules` gives the ernic devices stable names: Ethernet interface
-→ `rocm-ernic0`, IB device → `rocm-rdma-ernic0`. Use these with
-`ib_send_bw -d rocm-rdma-ernic0`.
+→ `rocm-ernic0`, IB device → `rocm-rdma-ernic0`. Use the Ethernet one with
+`ib_send_bw -d ...`; **do not use the IB one with anything built on UCX** —
+see issue 21, and `lmcache_guest` renames it back for exactly that reason.
 
 There is nothing to install by hand. `ernic_guest_setup` ships the rules and
 reloads udev, and both renames are confirmed working in CI — the ionic lane's
@@ -194,24 +198,52 @@ reloads udev, and both renames are confirmed working in CI — the ionic lane's
 the pre-rename kernel name, and `ibv_devinfo` reports `hca_id: rocm-rdma-ernic0`.
 The IB rename shells out to `/usr/bin/rdma`, which the gen-vm guest has.
 
-If a guest somehow comes up with the kernel names instead, check that the rules
-matched rather than re-copying them: they key on `ATTR{device/vendor}=="0x1dd8"`
-and `ATTR{device/device}=="0x100a"`, so a guest still being served the old
-`1022:8000` device will not rename anything.
+As of rocm-ernic@3fb74d1 the rules match on four attributes, not two —
+`0x1dd8`/`0x1002` plus the subsystem pair `0x1dd8`/`0x5400`:
+
+```
+SUBSYSTEM=="net", ACTION=="add", \
+  ATTR{device/vendor}=="0x1dd8", \
+  ATTR{device/device}=="0x1002", \
+  ATTR{device/subsystem_vendor}=="0x1dd8", \
+  ATTR{device/subsystem_device}=="0x5400", \
+  DRIVERS=="ionic", NAME="rocm-ernic%n"
+```
+
+The subsystem pair is what distinguishes this device from a real Pensando
+NIC, because `1dd8:1002` is a real one's id — see the PCI ID section. So a
+guest that comes up with kernel names has a device that failed one of four
+matches, not two; check all four before re-copying anything.
 
 ## PCI ID (in-VM)
 
-`ionic_image_prep` owns this; there is nothing to do by hand. Two traps make it
-less straightforward than it looks.
+**Nothing to do: upstream hwdata names this device, and injecting an entry is
+now actively harmful.** This section used to describe a pci.ids entry the repo
+maintained. `ionic_image_prep_pciids` defaults to `false` and the entry should
+stay unwritten.
 
-**The emulated NIC reuses a real, vendor-assigned pair.** hwdata 0.379 already
-lists `1dd8:100a` — as `DSC Serial Port Controller`. So on a current guest
-nothing is missing: `lspci` names the device, misleadingly but it names it. The
-"bare device number" case only arises on hwdata old enough to predate the entry.
+What changed is the id. rocm-ernic@3fb74d1 moved the emulated NIC from
+`1dd8:100a` to `1dd8:1002`, and `1dd8:1002` is **a real Pensando device id**
+that hwdata has always carried. What identifies *this* device is the
+subsystem pair, and that is what upstream now names:
 
-**pciutils rejects a duplicate device id outright.** Not "ignores the second
-entry" — it refuses to parse the file, and then resolves no names for *any*
-device on the bus:
+```
+1dd8  AMD Pensando Systems
+	1002  DSC Ethernet Controller
+		1dd8 5400  ROCm Emulated RDMA NIC
+```
+
+Confirmed three ways, rather than assumed: the entry is in
+<https://pci-ids.ucw.cz/v2.2/pci.ids>; a fleet guest's
+`/usr/share/misc/pci.ids` already contains the `5400` line; and `lspci -nn`
+on that guest reports `AMD Pensando Systems DSC Ethernet Controller
+[1dd8:1002]` with nothing injected. `update-pciids` refreshes it like any
+other entry — so the old warning that `update-pciids` *destroys* our entry is
+inverted: it now delivers it.
+
+**Why injecting would break the guest rather than being merely redundant.**
+pciutils does not ignore a duplicate device id under one vendor; it refuses to
+parse the file, and then resolves no names for *any* device on the bus:
 
 ```
 $ lspci -i /tmp/merged.ids -nn
@@ -220,38 +252,33 @@ $ echo $?
 1
 ```
 
-So the role's presence check is a block-scoped `awk` scan asking whether *this
-vendor's block* already lists the device — a bare `grep 100a` matches the same
-four hex digits under a dozen other vendors, and a `grep` for the entry text
-misses the upstream spelling. On current hwdata the role therefore skips by
-itself, which is the correct behaviour. When it does insert, the line goes
-directly under the vendor line (`pci.ids` is parsed sequentially, so an append
-at the end of the file lands under the class section and never matches), and a
-post-merge `lspci` parse check fails the play rather than quietly breaking every
-later `lspci`.
+Since `1002` is already present upstream, an insert is exactly that duplicate.
+The role's presence check — a block-scoped `awk` scan of this vendor's block,
+because a bare `grep 1002` matches the same four hex digits under a dozen
+other vendors — would skip it in practice. The default is `false` so that the
+outcome does not depend on that check being right.
 
-The entry goes under vendor `1dd8`, not `1022` — upstream moved the emulated
-device off the AMD vendor id. hwdata spells the vendor `AMD Pensando Systems`,
-and the vendor line has to match for the block scan to find it:
+The machinery is kept, off, because the id has moved twice already
+(`1022:8000` → `1dd8:100a` → `1dd8:1002`). If it moves again to something
+hwdata does not carry, set `ionic_image_prep_pciids` true and the device to
+the new id; the insert goes directly under the vendor line, since `pci.ids` is
+parsed sequentially and an append at the end of the file lands under the class
+section and never matches.
+
+**A second thing follows from the id move.** The in-tree `ionic` driver's PCI
+table has always held `1dd8:1002` and `1dd8:1003`, so the device it would not
+previously bind — `100a` — is now one it claims natively:
 
 ```
-1dd8  AMD Pensando Systems
-	100a  ROCm Emulated RDMA NIC (ionic)
+$ modinfo ionic | grep 1DD8
+alias: pci:v00001DD8d00001002sv*sd*bc*sc*i*
+alias: pci:v00001DD8d00001003sv*sd*bc*sc*i*
 ```
 
-`scripts/pci.ids.rocm-ernic` was deleted upstream along with the rest of the
-pre-ionic tree, so the id is this repo's to maintain — see
-`ionic_image_pciids_*` in
-[`ionic_image_prep/defaults/main.yml`](ansible/playbooks/roles/ionic_image_prep/defaults/main.yml).
-The 0.2.0 changelog calls pci.ids the guest image's business, but neither
-`provision/ionic.sh` nor `packages/ionic.txt` in batesste-ci-images writes it.
-
-**Note:** `update-pciids` will overwrite these files — re-apply after each run.
-Nothing in a bake runs it any more, though: `rocm_setup` used to call it
-unconditionally, and `sbates130272.batesste` 3.0.0 defaults
-`rocm_setup_update_pciids` to false. So the hazard is now a hand-run
-`update-pciids`, or a lane that sets that variable back to true, rather than
-something every ROCm guest does to itself on the way past.
+So the `new_id` workaround below (issue 16) and
+`lmcache_guest_ionic_bind_new_id` are both obsolete on a current image; the
+latter defaults to `false`. The DKMS modules are still required, but for SRQ
+(issue 20) rather than for the device appearing at all.
 
 ## Known issues / open bugs
 
@@ -395,15 +422,20 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     guests to 24 heartbeat evictions, with the lost guests matching the
     restarted ernics one for one, and load peaked at 417 on 128 cores. Budget
     by issue 14 regardless of what `ERNIC_NOFILE` says.
-16. **Stock in-tree `ionic` drives the emulated device; only the PCI ID is
-    missing.** On a mainline kernel (verified on 7.2.4) no DKMS build and no
-    AMD patch is needed to bring the NIC and the RDMA device up — the shipped
-    `ionic.ko`/`ionic_rdma.ko` bind to `1dd8:100a` and work as soon as the id
-    is added to the driver's table:
+16. **Stock in-tree `ionic` drives the emulated device — and since
+    rocm-ernic@3fb74d1 it binds with no help at all.** On a mainline kernel
+    (verified on 7.2.4) no DKMS build and no AMD patch is needed to bring the
+    NIC and the RDMA device up. This used to need the id adding to the
+    driver's table by hand:
 
     ```
-    echo "1dd8 100a" > /sys/bus/pci/drivers/ionic/new_id
+    echo "1dd8 100a" > /sys/bus/pci/drivers/ionic/new_id   # NO LONGER NEEDED
     ```
+
+    The device moved to `1dd8:1002`, which the in-tree table already held
+    (alongside `1dd8:1003`), so it binds natively. `new_id` is now a no-op
+    and `lmcache_guest_ionic_bind_new_id` defaults to `false`. What the DKMS
+    modules are still needed for is SRQ — see issue 20.
 
     That yields `ionic 0000:00:05.0: FW: rocm-ernic-1.0`, `Link up - 100 Gbps`,
     an `enp0s5np0` netdev and an `ibv_devinfo` reporting `PORT_ACTIVE` over
@@ -513,7 +545,7 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     irrelevant, because the resolver never consulted the id. Serialising
     worker startup costs about 56 s of boot at 32 nodes and fixes nothing.
 
-13. **vfio-user P2P DMA needs a QEMU patch that is in no published image.**
+19. **vfio-user P2P DMA needs a QEMU patch the stock image does not carry.**
     Anything that has one vfio-user device DMA into another's BAR — LMCache
     P2P reading GPU memory over the ernic, most obviously — does not work on
     the stock QEMU this repo pins, and does not complain: the BAR window is
@@ -527,11 +559,135 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     fd arrives from GET_REGION_INFO into `vbasedev->region_fds[]` but is
     never propagated to the RAMBlock.
 
-    **Every** tag of `...-qemu-libvfio-user-sbates-fork` is built from
-    `qemu.d757fa6` (2026-09-22), one commit short of it. The fork image needs
-    a rebuild. Do not be misled by `pci-mmio-bridge`, which those images *do*
-    have and stock does not — it is a different mechanism in the same branch,
-    not the one P2P DMA needs.
+    **The fork image now carries it.** This used to say that every tag of
+    `...-qemu-libvfio-user-sbates-fork` was built from `qemu.d757fa6`
+    (2026-09-22), one commit short, and needed a rebuild. That rebuild has
+    happened: the tag reads `qemu.31e3d06`, which is this patch. So the
+    choice is now a real one — `env.scale-out-mi100` pins the fork and gets
+    P2P DMA; everything else pins the stock image and does not.
+
+    What has NOT changed is that the stock image cannot do it, so a stack
+    that needs one vfio-user device to DMA into another's BAR must pin the
+    fork deliberately. Do not be misled by `pci-mmio-bridge`, which the fork
+    images *also* have and stock does not — it is a different mechanism in
+    the same branch, not the one P2P DMA needs.
+
+    Untested here. The fork tag carrying the patch is read from the tag name;
+    nothing in this repo has yet run a P2P DMA workload against it.
+
+20. **`ernic_guest_setup` does not build SRQ, and without SRQ there is no
+    P2P at all.** SRQ ships as two separate upstream roles — `ernic_srq_dkms`
+    (kernel) and `ernic_srq_provider` (rdma-core) — driven by a playbook the
+    galaxy build of the collection does not package. Nothing in this repo ran
+    either until `lmcache_guest`'s `srq_driver.yml`.
+
+    The failure names nothing it is about: `max_srq: 0`, so UCX's `rc_verbs`
+    (which is built on a shared receive queue) is declined and only `ud_verbs`
+    is left, which has no one-sided RDMA. NIXL then dies with
+    `NIXL_ERR_BACKEND`, every MP server crash-loops, and the coordinator
+    reports 0 of N registered — with the RDMA device present, `PORT_ACTIVE`
+    and perfectly healthy.
+
+    `ernic_srq_dkms_reload` defaults to **false**, which builds and installs
+    the modules while the running kernel keeps the old ones: indistinguishable
+    from the build never having happened. With the reload, `max_srq` goes to
+    256 and `rc_verbs` appears — and `rc_verbs` appearing is the proof, since
+    that transport requires an SRQ. Note the reload drops the netdev's address
+    and link; the lmcache preflight reassigns both at unit start, which is why
+    the SRQ build must run before the MP server is configured.
+
+    Both halves must come from one tree: the device half lives in the ernic
+    server container, so the collection SHA and the `ernic.<sha>` in
+    `ERNIC_IMAGE` move together.
+
+21. **UCX cannot open an IB device whose name contains `-` or `_`, so the
+    udev rename silently disables RDMA.** `ernic_guest_setup`'s rule names the
+    IB device `rocm-rdma-ernic0`; UCX derives a memory-domain name from it and
+    fails to find it:
+
+    ```
+    ib_md.c:1122 IB device rocm-rdma-ernic not found
+    # < failed to open memory domain rocm-rdma-ernic for component ib >
+    ```
+
+    and then enumerates **no verbs transport at all**. Nothing notices:
+    `ibv_devinfo` works, the port is `PORT_ACTIVE`, and NIXL comes up and
+    moves every byte over TCP — a cache hit on every lookup and zero RDMA
+    bytes on the ernic counters. Observed by accident, as 4/4 chunks hit with
+    a counter delta of zero.
+
+    Measured by renaming the same device and re-running `ucx_info -d`:
+    `rocm-rdma-ernic0` and `rocm_rdma_ernic0` give no verbs transport;
+    `rocmernic0` and `ernic0` give `rc_verbs` + `ud_verbs`. So it is the
+    separators, not the trailing digit. `lmcache_guest` renames it in the
+    preflight (`lmcache_guest_ib_device_name`, default `rocmernic0`) rather
+    than shipping a competing udev rule, because the preflight also runs after
+    every module reload.
+
+    This conflicts with the `ib_send_bw -d rocm-rdma-ernic0` the udev section
+    above recommends: a guest set up for UCX will not answer to that name.
+
+22. **A single RDMA READ of 16 MiB tears down the mesh connection.**
+    `TCP_MAX_PAYLOAD_LEN` in `rdma_backend_tcp.c` bounds one wire message at
+    16 MiB, and the receiver drops the connection on anything over it. The
+    initiator sees `NIXL_ERR_REMOTE_DISCONNECT`, and the responder's log fills
+    with `SEND from node N to unknown QP M` as the connection is rebuilt.
+
+    Bisected on fresh servers, one READ per request: 8, 12, 14 and 15 MiB all
+    pass; 16 MiB (2^24) fails. It is a **per-request total**, not per-chunk —
+    16 MiB fails both as 4 × 4 MiB and as 2 × 8 MiB, while 14 MiB passes as
+    2 × 7 MiB. So chunking does not get you under it.
+
+    The device advertises `max_msg_sz: 0x80000000` (2 GiB) while the mesh can
+    carry 16 MiB, so UCX sizes transfers to a figure the device cannot honour
+    and is given a connection teardown rather than a completion with error.
+    Keep per-request payloads under ~15 MiB until this is fixed upstream;
+    note the fleet's default KV geometry is far larger.
+
+23. **`--max-workers` defaults to 1, and 1 wedges the MP server.** With one
+    worker slot the `AffinityThreadPool` serialises every client's tasks onto
+    one thread and warns that it is doing so. The server then stops processing
+    mid-session — register, two stores, then silence, no error and no further
+    log line. The client's `UNREGISTER_KV_CACHE` times out (the bench
+    distinguishes success from an RPC timeout only, at 10 s), leaving
+    `instance_id 1000` registered; since every bench client uses that id,
+    **every later client fails `REGISTER_KV_CACHE` until the server is
+    restarted**. One stuck session poisons the server, and the symptom appears
+    later and elsewhere as a clean cache miss.
+
+    Measured on one guest, back-to-back 512-token sessions: at the default the
+    first session failed and the next five could not register; at
+    `--max-workers 4`, 8 of 8 were clean. `lmcache_guest_max_workers` defaults
+    to 4.
+
+24. **LMCache v0.5.6's default prefetch policy doubles the mesh traffic.**
+    Prefetch controller v2 added a retention policy, and
+    `DefaultPrefetchPolicy.plan_l1_retention()` returns `False` for every key
+    — literally `return [False] * len(keys)`. A key that is not retained is
+    marked `is_temporary`, and `L1Manager.finish_read()` frees it the instant
+    the read completes.
+
+    **P2P is an L2 adapter.** So every chunk pulled across the ernic is
+    written into L1, read once and thrown away, and the next request for the
+    same keys pulls it over RDMA again. Measured on a 2-guest fleet, same
+    geometry, freshly restarted servers:
+
+    | | bytes per request |
+    | --- | --- |
+    | v0.5.5 | 8,388,608 |
+    | v0.5.6 `--l2-prefetch-policy default` | 16,777,216 (exactly 2x) |
+    | v0.5.6 `--l2-prefetch-policy retain` | 8,388,608 |
+
+    On `default` the puller's own counters say it plainly — 4 chunks written
+    to L1, 4 evicted, **0** L1 lookup hits, 4 L2 hits — and warm `LOOKUP`
+    goes from 2–3 ms to 54 ms while warm `RETRIEVE` goes from ~3 ms to
+    677 ms, because the warm pass crosses the mesh instead of hitting
+    locally.
+
+    `default` is a reasonable upstream choice when L2 is local disk, where a
+    re-read is cheap. Here L2 is a peer across an emulated RDMA NIC, where it
+    is the entire cost. `lmcache_guest_l2_prefetch_policy` defaults to
+    `retain` and tests/test_lmcache_unit_render.py pins it.
 
 ## Git / GitHub
 

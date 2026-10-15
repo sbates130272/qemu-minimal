@@ -1,0 +1,17 @@
+# {{ ansible_managed }}
+# Matched by MAC: the interface name is not stable across topology
+# changes or the ernic udev rules.
+network:
+  version: 2
+  ethernets:
+    ernic:
+      match:
+        macaddress: "{{ lmcache_guest_ernic_mac | lower }}"
+      set-name: {{ lmcache_guest_ernic_netplan_name }}
+      addresses:
+        - {{ lmcache_guest_eth_address }}
+      dhcp4: false
+      dhcp6: false
+      # The guest must boot without it: the ernic is a vfio-user device
+      # and the server may be started before its backend is up.
+      optional: true

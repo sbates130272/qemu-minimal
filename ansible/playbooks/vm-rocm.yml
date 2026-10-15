@@ -141,10 +141,10 @@
     # /var/lib/dkms -- `dkms status` can name no version until that rebuild
     # does its own add.
     rocm_setup_amdgpu_dkms_defer_build: "{{ rocm_base_suppress_dkms | bool }}"
-    ionic_image_kernel_ref: "{{ ionic_kernel_pin }}"
+    ionic_image_prep_kernel_ref: "{{ ionic_kernel_pin }}"
     # This role only builds ionic_rdma in the ernic lane, so kernel.yml's
     # closing ib_umem_get_va assert is not this play's precondition to fail on.
-    ionic_image_kernel_assert_ionic: false
+    ionic_image_prep_kernel_assert_ionic: false
   pre_tasks:
     # Block distro (Ubuntu universe) versions of packages that the ROCm
     # meta-package ships correctly under /opt/rocm/core-*/bin/. Without this

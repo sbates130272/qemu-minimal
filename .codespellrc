@@ -1,7 +1,13 @@
 [codespell]
 # Local scratch notes in .git/info/exclude are not skipped: CI never sees them,
 # but a local run globs the working tree and checking them costs nothing.
-skip = .git,*.qcow2,*.img,*.deb
+# The vendored rdma-core SRQ series is byte-identical to rocm-ernic's
+# patches/rdma-core and is diffed against it; qemu/docker/lmcache/Dockerfile
+# applies it with `git am`, which fails on a changed context line. One of them
+# spells "Recieved" in a comment. That is upstream's to fix, and correcting it
+# here would both break the apply and hide the drift the two trees are kept
+# in step by, so the directory is skipped rather than the word ignored.
+skip = .git,*.qcow2,*.img,*.deb,./qemu/docker/lmcache/rdma-core-patches
 # hsa: ROCm's Heterogeneous System Architecture, not a typo for "has".
 # blacklist: the literal modprobe/kernel command-line keyword.
 ignore-words-list = hsa,blacklist
