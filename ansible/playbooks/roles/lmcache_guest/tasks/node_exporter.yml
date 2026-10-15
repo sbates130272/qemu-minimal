@@ -25,12 +25,35 @@
     update_cache: true
     cache_valid_time: 3600
 
+# The ethtool collector, because it is the only guest-side view of RDMA
+# traffic that exists on this device.
+#
+# The obvious choice would be --collector.infiniband, and it is useless here:
+# it reads /sys/class/infiniband/<dev>/ports/<n>/{counters,hw_counters}, and
+# the emulated ionic_rdma implements neither directory. Measured on a live
+# guest -- the port exposes cap_mask, gids, rate and state, and the cm_* files
+# are empty. `rdma statistic show` answers "Invalid argument".
+#
+# What the device DOES keep is the ionic netdev's own stats, which ethtool -S
+# reports (tx_bytes, rx_bytes, and per-queue breakdowns). RoCE rides on that
+# netdev, so RDMA payload is counted there even though no IB counter exists.
+- name: Enable the ethtool collector
+  become: true
+  ansible.builtin.lineinfile:
+    path: /etc/default/prometheus-node-exporter
+    regexp: '^ARGS='
+    line: 'ARGS="--collector.ethtool"'
+    create: true
+    mode: "0644"
+  notify: Restart node exporter
+
 - name: Enable and start it
   become: true
   ansible.builtin.systemd_service:
     name: prometheus-node-exporter
     state: started
     enabled: true
+    daemon_reload: true
 
 # Proves the thing Prometheus actually needs, which is not "the unit is
 # active" but "something answers on the forwarded port". A unit that starts
@@ -42,7 +65,7 @@
     url: "http://127.0.0.1:{{ lmcache_guest_node_exporter_port }}/metrics"
     return_content: false
     status_code: 200
-  register: lmcache_node_exporter_probe
+  register: lmcache_guest_node_exporter_probe
   retries: 10
   delay: 3
-  until: lmcache_node_exporter_probe is succeeded
+  until: lmcache_guest_node_exporter_probe is succeeded

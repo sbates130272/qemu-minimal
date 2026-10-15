@@ -52,6 +52,7 @@ permalink: /documentation/
 | `report-for-vm-rocjitsu` | `/rocjitsu/` | rocjitsu VM report with GEMM and hipFile benchmark output. |
 | `report-for-vm-ernic` | `/ernic/` and `/ernic/vm2/` | ernic stack reports for VM 1 and VM 2. |
 | `report-for-hipfile-fio` | `/hipfile-fio/` | fio `libhipfile` benchmark report. |
+| `report-for-lmcache` | `/lmcache/` | LMCache L1 P2P between two guests, with the ernic RDMA byte counters. |
 
 ## Notes
 

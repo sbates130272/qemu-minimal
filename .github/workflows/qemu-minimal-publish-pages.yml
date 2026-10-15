@@ -26,6 +26,7 @@ on:
       - qemu-minimal - Report for vm-basic
       - qemu-minimal - Report for vm-rocjitsu
       - qemu-minimal - Report for vm-ernic
+      - qemu-minimal - Report for lmcache
     types:
       - completed
   push:
@@ -121,6 +122,7 @@ jobs:
           fetch vm-report-rocjitsu rocjitsu
           fetch vm-report-ernic ernic
           fetch vm-report-hipfile-fio hipfile-fio
+          fetch vm-report-lmcache lmcache
 
           # generate-vm-report.sh writes a _config.yml wherever it thinks it is
           # at a site root. Assembled into subdirectories they are all nested,
@@ -190,6 +192,7 @@ jobs:
             sync_dir ../staging/rocjitsu rocjitsu
             sync_dir ../staging/ernic ernic
             sync_dir ../staging/hipfile-fio hipfile-fio
+            sync_dir ../staging/lmcache lmcache
 
             git add -A
             if git diff --cached --quiet; then

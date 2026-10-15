@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import re
+import shutil
 import sys
 import typing
 from pathlib import Path
@@ -108,8 +109,15 @@ _DEFAULTS = {
     # are the reason the first one has to exist: prometheus.yml has no notion
     # of a profile, so jobs emitted for a profile nobody selected would just
     # be permanently-down targets.
+    # Excuses VM_BACKING_IMAGE from the build-stamp check, and nothing
+    # else. Off by default: the check is the thing that stops a mixed set
+    # wedging a fleet at the vfio-user boundary.
+    "IMAGE_ALLOW_GUEST_LAG": "false",
     "LMCACHE_ENABLE": "false",
-    "LMCACHE_IMAGE": "qemu-tool/lmcache-rocm:0.5.5-gfx1250",
+    # -srq: only that tag has nixl built as the rocm wheel variant, and a
+    # fleet mixing variants cannot unpickle each other's NIXL descriptors.
+    # See LMCACHE_IMAGE in env.scale-out.
+    "LMCACHE_IMAGE": "qemu-tool/lmcache-rocm:0.5.6-gfx1250-srq",
     # The MP coordinator's HTTP port (`lmcache coordinator`, default 9300).
     # This is the MP-mode coordinator -- membership, the key directory, L2
     # quota and eviction -- and NOT `lmcache_controller`, which is the legacy
@@ -254,8 +262,32 @@ def _check_image_coherence(values: dict[str, str]) -> None:
     vfio-user/DSR boundary, surfacing as the -ETIMEDOUT and "Failed to register
     ibdev" symptoms in AGENTS.md. Across a whole fleet that is an expensive
     afternoon.
+
+    IMAGE_ALLOW_GUEST_LAG=true excuses VM_BACKING_IMAGE from the stamp
+    comparison, and nothing else. It exists because the qcow2 is published by
+    a slower job than the containers, so there are days when the newest
+    coherent set does not include the fix you are trying to test -- and the
+    qcow2 is the one image in the set that provably does not carry the moving
+    parts. ubuntu-qcow2-gen's provision/ionic.sh installs no driver and no
+    rdma-core; it asserts the distro rdma-core version and records it. Both
+    halves of the RDMA stack are built inside the guest by ernic_guest_setup
+    from the collection pin, which is not in this comparison at all.
+
+    The three that genuinely must match are not excusable this way: QEMU and
+    the two device servers speak vfio-user to each other, and that is the
+    boundary the wedge happens at. Set it per node, in that node's env file,
+    with a note saying what you are waiting for.
     """
     keys = ["QEMU_IMAGE", "ERNIC_IMAGE", "ROCJITSU_IMAGE", "VM_BACKING_IMAGE"]
+    if _flag(values, "IMAGE_ALLOW_GUEST_LAG"):
+        keys.remove("VM_BACKING_IMAGE")
+        print(
+            "Warning: IMAGE_ALLOW_GUEST_LAG is set -- VM_BACKING_IMAGE is "
+            "excluded from the build-stamp check.\n"
+            "  The guest image may be older than the device servers. Verify "
+            "by hand that it is old in ways you do not care about.",
+            file=sys.stderr,
+        )
     stamps: dict[str, str] = {}
     vfu: dict[str, str] = {}
     unstamped: list[str] = []
@@ -393,6 +425,10 @@ def plan(values: dict[str, str]) -> dict[str, Any]:
         "alloy_image": _get(values, "ALLOY_IMAGE"),
         "lmcache": _flag(values, "LMCACHE_ENABLE"),
         "lmcache_image": _get(values, "LMCACHE_IMAGE"),
+        # Carried into the inventory so lmcache_guest can generate the guest's
+        # ip_discovery.bin from the SAME rocjitsu build that serves the device.
+        # A blob from another build does not match it.
+        "rocjitsu_image": _get(values, "ROCJITSU_IMAGE"),
         "lmcache_coord_port": _get(values, "LMCACHE_COORD_PORT"),
         "lmcache_instance_timeout": _get(values, "LMCACHE_INSTANCE_TIMEOUT"),
         "lmcache_health_interval": _get(values, "LMCACHE_HEALTH_CHECK_INTERVAL"),
@@ -1155,6 +1191,9 @@ def render_inventory(spec: dict[str, Any], env_name: str, digest: str) -> str:
         f'        lmcache_guest_eviction_policy: "{spec["lmcache_eviction_policy"]}"'
     )
     out.append(f'        lmcache_guest_image: "{spec["lmcache_image"]}"')
+    out.append(
+        f'        lmcache_guest_rocjitsu_image: "{spec["rocjitsu_image"]}"'
+    )
     # /24 is implied by ERNIC_GUEST_SUBNET being three octets; the generator
     # has no key for a prefix because the ernic L2 segment is flat by
     # construction.
@@ -1172,6 +1211,61 @@ def render_inventory(spec: dict[str, Any], env_name: str, digest: str) -> str:
         # the kernel name, so a name here is sometimes simply wrong.
         out.append(f"          lmcache_guest_ernic_mac: {vm['mac']}")
     return "\n".join(out) + "\n"
+
+
+# Every `./x` the rendered compose file names: a build context, a bind-mounted
+# config file, a directory of them.
+_RELATIVE_REF = re.compile(r"\./([A-Za-z0-9_.-]+)")
+
+
+def _copy_stack_assets(
+    compose_body: str, generated: set[str], output_dir: Path
+) -> None:
+    """Copy the stack's non-generated assets next to the generated files.
+
+    Only the three rendered files used to be written, which made the
+    documented --output-dir workflow produce a stack that could not run. Two
+    different failures, neither of which names a missing file:
+
+        unable to prepare context: path ".../tapsetup" not found
+        failed parsing config: read /etc/loki/config.yml: is a directory
+
+    The second is the nastier one. A bind mount whose host path does not exist
+    is not an error to Docker -- it CREATES it, as a directory -- so loki,
+    alloy and grafana come up mounting empty directories over their configs
+    and crash-loop on a config file that is a directory. Nothing reports the
+    real cause, and the directories are left behind to confuse the next run.
+
+    Generating to a scratch directory is the documented workflow
+    (env.scale-out-mi100), precisely because writing over the committed stack
+    is what `gen-compose --check` exists to catch. The committed stack is
+    unaffected: there source and destination are the same directory, and each
+    copy is skipped.
+    """
+    from .compose import _compose_dir
+
+    source = _compose_dir("vfio-user-ernic-rocjitsu-scale-out")
+    for name in sorted(set(_RELATIVE_REF.findall(compose_body))):
+        # "." and ".." are references out of the stack, not assets of it: the
+        # compose file mounts ./.. for the qemu-tool source tree. Copying one
+        # means copying the whole compose root into the parent of the output
+        # directory, which is both wrong and, mercifully, usually a permission
+        # error rather than a silent mess.
+        if name in {".", ".."} or name in generated:
+            continue
+        src = source / name
+        dst = output_dir / name
+        if not src.exists() or src.resolve() == dst.resolve():
+            continue
+        # Docker may have left a directory here standing in for a file it was
+        # asked to bind-mount. Clear it, or copytree/copy2 fails or nests.
+        if dst.is_dir() and not src.is_dir():
+            shutil.rmtree(dst)
+        if src.is_dir():
+            shutil.copytree(src, dst, dirs_exist_ok=True)
+        else:
+            shutil.copy2(src, dst)
+        print(f"Copied {src} -> {dst}")
 
 
 def run(
@@ -1221,6 +1315,10 @@ def run(
     for name, body in artifacts.items():
         (output_dir / name).write_text(body)
         print(f"Wrote {output_dir / name}")
+
+    _copy_stack_assets(
+        artifacts["docker-compose.yml"], set(artifacts), output_dir
+    )
 
     _print_next_steps(spec, values)
 

@@ -19,24 +19,24 @@
 # playbooks/vars/ernic-pins.yml, which both plays of vm-ernic.yml load. A
 # default here would be a second copy that silently wins whenever a caller
 # forgets to pass one; kernel.yml asserts instead.
-ionic_image_kernel_install: true
-ionic_image_kernel_ref: ""
-ionic_image_kernel_mirror: https://kernel.ubuntu.com/mainline
+ionic_image_prep_kernel_install: true
+ionic_image_prep_kernel_ref: ""
+ionic_image_prep_kernel_mirror: https://kernel.ubuntu.com/mainline
 # Where the .debs land in the guest before the single apt transaction.
-ionic_image_kernel_payload_dir: /tmp/mainline-kernel
-ionic_image_kernel_reboot_timeout: 600
+ionic_image_prep_kernel_payload_dir: /tmp/mainline-kernel
+ionic_image_prep_kernel_reboot_timeout: 600
 # kernel.yml ends by asserting the installed headers carry ib_umem_get_va, the
 # helper ionic_rdma needs. vm-rocjitsu.yml reuses kernel.yml for the kernel
 # alone and never builds ionic_rdma, so it turns this off rather than failing a
 # GPU lane on an RDMA precondition it does not care about.
-ionic_image_kernel_assert_ionic: true
+ionic_image_prep_kernel_assert_ionic: true
 
 # ── Packages ─────────────────────────────────────
 # packages/ionic.txt, minus what cloud-init and the other roles already bring.
 # Deliberately no linux-headers-generic and no linux-modules-extra: those are
 # metapackages for the release kernel, and DKMS must not build against it. The
 # matching headers and modules come from the mainline .debs above.
-ionic_image_packages:
+ionic_image_prep_packages:
   # DKMS toolchain.
   - build-essential
   - cmake
@@ -69,8 +69,8 @@ ionic_image_packages:
   # Not in ionic.txt, and the reason ernic_guest_build_deps exists upstream:
   # iperf3 is what the TCP performance checks measure with.
   - iperf3
-ionic_image_apt_retries: 3
-ionic_image_apt_delay: 10
+ionic_image_prep_apt_retries: 3
+ionic_image_prep_apt_delay: 10
 
 # ── rdma-core provider stamp ─────────────────────
 # ernic_guest_setup's rdma_core.yml reads this before deciding whether to
@@ -81,29 +81,45 @@ ionic_image_apt_delay: 10
 # and the trailing newline matter. Written from what dpkg actually reports, not
 # from a pin -- a stamp that disagrees with the installed libraries is worse
 # than no stamp.
-ionic_image_provider_stamp: true
-ionic_image_stamp_dir: /usr/local/share/rocm-ernic
+ionic_image_prep_provider_stamp: true
+ionic_image_prep_stamp_dir: /usr/local/share/rocm-ernic
 
 # ── Emulated device ──────────────────────────────
-# 0.2.0 moved the emulated NIC from 1022:8000 to the Pensando vendor id,
-# matching the ionic hardware the guest driver is written for. Neither the
-# published image nor provision/ionic.sh writes this entry, despite the
-# changelog calling it the image's business -- so it stays here.
+# OFF, because upstream hwdata now carries this and injecting it is worse
+# than useless. pci-ids.ucw.cz lists, under AMD Pensando Systems:
 #
-# On hwdata new enough to list 1dd8:100a itself (0.379 does, as "DSC Serial
-# Port Controller" -- the emulated NIC reuses a real pair) this whole block is
-# a no-op by design. Adding a second entry does not rename the device, it makes
-# pciutils refuse to parse the file and stop naming every device on the bus.
-ionic_image_pciids: true
-ionic_image_pciids_vendor: "1dd8"
-ionic_image_pciids_device: "100a"
-ionic_image_pciids_entry: "{{ ionic_image_pciids_device }}  ROCm Emulated RDMA NIC (ionic)"
+#   1dd8  AMD Pensando Systems
+#   	1002  DSC Ethernet Controller
+#   		1dd8 5400  ROCm Emulated RDMA NIC
+#
+# -- so the name arrives through the SUBSYSTEM pair (1dd8:5400), which is
+# this device's, rather than through the device id, which is a real Pensando
+# NIC's and was never ours to name. Confirmed on a live guest: `lspci -nn`
+# reports "AMD Pensando Systems DSC Ethernet Controller [1dd8:1002]" with
+# nothing injected, and the guest's /usr/share/misc/pci.ids already contains
+# the 5400 line. `update-pciids` refreshes it like any other entry.
+#
+# Leaving it on would be actively harmful now, not merely redundant. The
+# device id moved from 100a to 1002 in rocm-ernic@3fb74d1, and 1002 is
+# already present upstream -- so an insert would be a DUPLICATE device id
+# under one vendor, which pciutils does not ignore: it refuses to parse the
+# file and then names nothing on the bus. The role's block-scoped presence
+# check would skip in practice; this is off so that it cannot come down to
+# that check being right.
+#
+# Kept rather than deleted because the id has now moved twice (1022:8000 ->
+# 1dd8:100a -> 1dd8:1002). If it moves again before hwdata catches up, set
+# this true and the device to the new id.
+ionic_image_prep_pciids: false
+ionic_image_prep_pciids_vendor: "1dd8"
+ionic_image_prep_pciids_device: "1002"
+ionic_image_prep_pciids_entry: "{{ ionic_image_prep_pciids_device }}  ROCm Emulated RDMA NIC (ionic)"
 
 # Load the ionic modules at boot so a rebooted overlay comes back with its
 # RDMA device. ib_core and ib_uverbs are pulled in as dependencies, but naming
 # them matches ernic_guest_modules in the collection.
-ionic_image_modules_load: true
-ionic_image_modules:
+ionic_image_prep_modules_load: true
+ionic_image_prep_modules:
   - ib_core
   - ib_uverbs
   - ionic
@@ -112,13 +128,13 @@ ionic_image_modules:
 # ── System tuning ────────────────────────────────
 # Keep user units (tmux sessions, background test runs) alive after the SSH
 # session that started them goes away.
-ionic_image_logind_keep_processes: true
+ionic_image_prep_logind_keep_processes: true
 
 # A freshly booted guest runs unattended-upgrades, which holds the dpkg lock
 # for the first minute or so and makes every early task in a compose VM look
 # like a flake. The collection works around it with a 300s lock wait; masking
 # the units in the image removes the wait instead.
-ionic_image_mask_unattended_upgrades: true
+ionic_image_prep_mask_unattended_upgrades: true
 
 # Drop the apt cache at the end to shrink the backing image.
-ionic_image_clean_apt: true
+ionic_image_prep_clean_apt: true

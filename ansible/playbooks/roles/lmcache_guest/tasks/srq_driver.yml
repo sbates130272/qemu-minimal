@@ -1,0 +1,129 @@
+---
+# Build and install the SRQ-capable ionic driver in the guest.
+#
+# WITHOUT THIS THERE IS NO P2P AT ALL, and the way it fails names nothing:
+#
+#   max_srq: 0                              (ibv_devinfo -v)
+#   UCX offers ud_verbs and no rc_verbs     (rc_verbs is built on an SRQ)
+#   nixl_rocm._bindings.nixlBackendError: NIXL_ERR_BACKEND
+#   ERROR: Application startup failed. Exiting.
+#
+# so every MP server crash-loops and the coordinator reports 0 of N
+# registered, with the RDMA device present, PORT_ACTIVE and perfectly healthy.
+#
+# ernic_guest_setup does NOT do this. SRQ ships as two separate upstream roles
+# -- ernic_srq_dkms for the kernel half, ernic_srq_provider for the rdma-core
+# half -- driven by a playbook the galaxy build of the collection does not
+# even package. Only the kernel half is run here: the provider that has to
+# create the SRQ is the one inside the LMCache container, which carries its
+# own patched rdma-core (see qemu/docker/lmcache/rdma-core-patches/), and the
+# guest's own rdma-core never creates one.
+#
+# This runs before the MP server is configured, because the reload below drops
+# the netdev's address and link -- the preflight reassigns both at unit start,
+# so the order matters.
+
+# Check before acting. The build below ends in a module reload, and on this
+# emulated device `rmmod ionic` can hang on a DSR timeout and take the guest
+# with it (AGENTS.md issue 6) -- observed wedging a healthy guest on a re-run,
+# SSH included, recoverable only by `docker compose down && up`.
+#
+# A guest that already reports a usable SRQ needs none of this, so ask first.
+# This is what makes the role safe to re-run, which matters because the
+# documented way to restore a rebooted guest is to re-run the configure play.
+- name: Check whether the device already advertises an SRQ
+  ansible.builtin.shell: >-
+    set -o pipefail;
+    ibv_devinfo -v 2>/dev/null | awk '/max_srq:/ {print $2 + 0; exit}'
+  args:
+    executable: /bin/bash
+  register: lmcache_guest_srq_existing
+  changed_when: false
+  failed_when: false
+
+- name: Decide whether the SRQ build has to run
+  ansible.builtin.set_fact:
+    lmcache_guest_srq_needed: >-
+      {{ lmcache_guest_srq_force | bool
+         or (lmcache_guest_srq_existing.stdout | default('0') | trim | int) < 1 }}
+
+- name: Note that the SRQ build is being skipped
+  when: not (lmcache_guest_srq_needed | bool)
+  ansible.builtin.debug:
+    msg: >-
+      Device already advertises max_srq={{
+      lmcache_guest_srq_existing.stdout | default('') | trim }}; skipping the
+      SRQ build and its module reload. Force with -e lmcache_guest_srq_force=true.
+
+- name: Resolve a rocm-ernic checkout in the guest
+  when: lmcache_guest_srq_needed
+  ansible.builtin.include_role:
+    name: sbates130272.rocm_ernic.ernic_source
+  vars:
+    # The same pin the collection itself is installed from. ernic_source
+    # defaults this to a branch, which would build the SRQ series from a tree
+    # that has nothing to do with the one in requirements.yml.
+    ernic_source_repo_version: "{{ lmcache_guest_srq_source_ref }}"
+
+- name: Build and install the SRQ-capable ionic modules
+  when: lmcache_guest_srq_needed
+  ansible.builtin.include_role:
+    name: sbates130272.rocm_ernic.ernic_srq_dkms
+  vars:
+    ernic_srq_dkms_install: true
+    # Defaults to false, and false means the modules are built and installed
+    # while the running kernel keeps the old ones -- indistinguishable from
+    # the build never having happened, because max_srq stays 0 and every
+    # symptom above persists. Measured: with the reload, max_srq goes to 256
+    # and rc_verbs appears.
+    ernic_srq_dkms_reload: true
+    # ernic_source clones on the CONTROLLER, not the guest -- it is a
+    # controller-side role, and ernic_source_dir is a controller path. So the
+    # fetch-and-patch has to happen here too, and the role then archives the
+    # patched tree and unpacks it on the target. Pointing these at the guest
+    # instead fails with a bare rc=2 and no stderr, from a script that is not
+    # there.
+    #
+    # Fetching once on the controller is also the cheaper half of the trade:
+    # it clones the Linux stable tree, and a fleet would otherwise do that
+    # per guest, through SLIRP.
+    ernic_srq_dkms_fetch_on_controller: true
+    # Do NOT re-fetch. The role's controller-side tasks are delegate_to:
+    # localhost with no run_once, so on a fleet every host runs them at once
+    # against ONE shared directory -- and with force_fetch on, the first task
+    # is "Discard any controller checkout", which deletes that directory
+    # while another host's git is working inside it:
+    #
+    #   fatal: unable to get current working directory: No such file or directory
+    #
+    # Measured on a 2-guest run: one host failed there, the other completed.
+    # The fetch itself is guarded by `creates:` and so is idempotent; it is
+    # only the discard that is destructive, and nothing here needs it -- the
+    # ref is a pin, so a stale checkout of it is the same checkout.
+    ernic_srq_dkms_force_fetch: false
+    ernic_srq_dkms_scripts_dir: "{{ ernic_source_dir }}/scripts"
+    ernic_srq_dkms_patches_dir: "{{ ernic_source_dir }}/patches/srq"
+
+- name: Confirm the device now advertises an SRQ
+  ansible.builtin.shell: >-
+    set -o pipefail;
+    ibv_devinfo -v 2>/dev/null | awk '/max_srq:/ {print $2; exit}'
+  args:
+    executable: /bin/bash
+  register: lmcache_guest_srq_cap
+  changed_when: false
+  failed_when: false
+
+# A warning, not a failure: the device is only queryable once ionic_rdma has
+# bound, and on a guest where that has not happened yet this would fail the
+# play for a reason that has nothing to do with the build. The MP server's own
+# preflight is what gates on a working device.
+- name: Warn when SRQ is still unavailable
+  when: (lmcache_guest_srq_cap.stdout | default('0') | trim) in ['', '0']
+  ansible.builtin.debug:
+    msg: >-
+      max_srq is {{ lmcache_guest_srq_cap.stdout | default('unreadable') }}
+      after the SRQ build. UCX will not offer rc_verbs, NIXL will fail with
+      NIXL_ERR_BACKEND, and the MP server will not start. Check that the
+      ernic server image is ernic.3fb74d1 or newer -- the device half of SRQ
+      lives there, and both halves are required.

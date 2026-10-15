@@ -50,7 +50,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
-    container: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260924.ge1cd640-qemu11.1.1-vfu.8039244
+    container: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261014.geea0485-qemu11.1.2-vfu.8039244
     # A duplicate key in a task is a WARNING by default and `--syntax-check`
     # still exits 0, so this job read "Found duplicate mapping key 'when'" out
     # loud and passed anyway. Ansible keeps the last value, which means the
@@ -109,12 +109,30 @@ jobs:
       run: ansible-playbook --syntax-check playbooks/fleet-lmcache.yml
       working-directory: ansible
 
+    # Scoped to the two repo-local roles that are clean at the `production`
+    # profile, rather than all of ansible/: the rest are not yet, and a gate
+    # that fails on day one gets disabled rather than fixed. lmcache_guest is
+    # the role no lane executes -- fleet-lmcache.yml runs against a generated
+    # fleet inventory, not a baked guest -- so a syntax check is otherwise the
+    # only thing behind it, and a syntax check passes whatever the tasks say.
+    # Widen this list as other roles are cleaned.
+    # pipx, not pip: the CI image's interpreter is externally managed (PEP
+    # 668), so a plain `pip install` exits 1 with "This environment is
+    # externally managed" before ansible-lint ever runs. PIPX_BIN_DIR puts
+    # the entry point somewhere already on PATH, as the compose lanes do.
+    - name: Lint the lmcache_guest role
+      run: |
+        command -v ansible-lint >/dev/null 2>&1 \
+          || PIPX_BIN_DIR=/usr/local/bin pipx install ansible-lint
+        ansible-lint playbooks/roles/lmcache_guest/ playbooks/roles/ionic_image_prep/
+      working-directory: ansible
+
   gen-vm-ansible-setup:
     name: Generate VM Ansible Setup
     needs: syntax-check
     runs-on: ubuntu-latest
     container:
-      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20260924.ge1cd640-qemu11.1.1-vfu.8039244
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261014.geea0485-qemu11.1.2-vfu.8039244
       # Supplies qemu-system-x86_64, qemu-img and cloud-localds.
       options: --device /dev/kvm
     timeout-minutes: 90

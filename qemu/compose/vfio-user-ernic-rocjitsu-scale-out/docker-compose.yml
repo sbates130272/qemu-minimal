@@ -5,7 +5,7 @@
 #   qemu-tool gen-compose --env-file qemu/env.scale-out
 #
 # env-file: qemu/env.scale-out
-# env-sha256: 61b89f4047b67478234ad3194c383843bf7e0bbf99478eeb35037858061f11ab
+# env-sha256: 011510d7e63f6714502aba304c458d7037bcb46c837988151e56351ff708b7db
 
 x-logging: &logging
   driver: json-file
@@ -897,7 +897,7 @@ services:
   # over one-sided RDMA, which is what the ernic NIC each
   # guest already has is for.
   lmcache-coordinator:
-    image: "qemu-tool/lmcache-rocm:0.5.5-gfx1250"
+    image: "qemu-tool/lmcache-rocm:0.5.6-gfx1250-srq"
     logging: *logging
     profiles: [lmcache]
     networks:

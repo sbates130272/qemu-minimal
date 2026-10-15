@@ -12,3 +12,13 @@
     name: "{{ lmcache_guest_alloy_container_name }}"
     state: restarted
     daemon_reload: true
+
+# The exporter reads its flags from /etc/default/prometheus-node-exporter via
+# EnvironmentFile, which systemd evaluates at start -- so a change to ARGS
+# does nothing until the unit is restarted.
+- name: Restart node exporter
+  become: true
+  ansible.builtin.systemd_service:
+    name: prometheus-node-exporter
+    state: restarted
+    daemon_reload: true

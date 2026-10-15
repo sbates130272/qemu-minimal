@@ -1,6 +1,6 @@
 # LMCache built from source for gfx1250, on ROCm 10.1.
 #
-#   docker build -t qemu-tool/lmcache-rocm:0.5.5-gfx1250 qemu/docker/lmcache
+#   docker build -t qemu-tool/lmcache-rocm:0.5.6-gfx1250 qemu/docker/lmcache
 #
 # Upstream ships docker/Dockerfile.rocm, but it targets gfx942,gfx950 and
 # nothing else -- there is no published LMCache wheel for gfx1250, so this
@@ -21,7 +21,7 @@
 # 10.1 torch is the only route to one.
 #
 # WHY 24.04 AND NOT 26.04. rocm/pytorch does publish 26.04, but every ROCm
-# 10.1 / 26.04 tag is py3.14 and LMCache 0.5.5 pins
+# 10.1 / 26.04 tag is py3.14 and LMCache 0.5.6 pins
 # requires-python = ">=3.10,<3.14" (pyproject.toml). So 26.04 is excluded by
 # the interpreter, not by preference; revisit when LMCache widens that pin.
 # The guest distro does not have to match the container's, and does not here.
@@ -38,7 +38,7 @@ FROM ${BASE_IMAGE} AS builder
 # The newest LMCache release at the time of writing. A tag, not a branch:
 # the build clones --depth 1 -b this, and setuptools_scm derives the version
 # from it, so a branch name yields a dev version that cannot be pinned.
-ARG LMCACHE_VERSION=v0.5.5
+ARG LMCACHE_VERSION=v0.5.6
 
 # gfx1250 is the whole point of this file. PYTORCH_ROCM_ARCH is what
 # torch.utils.cpp_extension reads to pick HIP targets; comma-separate to fatten
@@ -63,10 +63,191 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_ROOT_USER_ACTION=ignore \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
+# providers/ionic -- the userspace half of the emulated ernic -- first appears
+# in rdma-core 61. Checked against the upstream tree: v59.0 and v60.0 have no
+# ionic directory, v61.0 does. 61 is therefore the floor, not the target.
+# Parity with the guest's own rdma-core is not required: this provider talks
+# to the guest KERNEL's ionic_rdma, not to the guest's userspace.
+#
+# PINNED TO A SHA, NOT A TAG, AND PATCHED. SRQ support for providers/ionic is
+# not in any rdma-core release -- not v65, not master -- it is still open as
+# linux-rdma/rdma-core#1799. Without it ibv_create_srq() returns EOPNOTSUPP,
+# UCX's rc_verbs transport declines the device, and the only verbs transport
+# left is ud_verbs, which has no one-sided RDMA. That is precisely why LMCache
+# P2P fell back to TCP. A release tag here is therefore a TCP build.
+ARG RDMA_CORE_VERSION=bd3282a1cf1025c7869a8664c2d54266a4dded44
+
+# The series applied on top, from the build context rather than fetched.
+#
+# NOT a curl of the PR. A GitHub PR patch URL is not immutable -- the author
+# force-pushes and the same URL yields different code with nothing to notice
+# -- and the series is not purely upstream rdma-core anyway: 0005 and 0006 fix
+# bugs in #1799 itself. 0005 is the one that decides whether SRQ works at all
+# (it rings the CQ qtype instead of the RQ qtype, so the device never learns a
+# receive was posted and the first message hangs); 0006 stops a failed prepare
+# being counted as a posted receive.
+#
+# These are byte-identical to rocm-ernic's own patches/rdma-core, which is now
+# the series' home -- it vendored them in f608391 and its CI checks the base
+# SHA above against its patches/rdma-core/README.md. Take changes from there
+# rather than re-deriving them, and keep the two in step: the whole directory
+# is applied by glob, so adding a file upstream is all it takes.
+#
+# Deliberately NOT paired with #1733 (RCQ), which collides with #1799 in
+# ionic_verbs.c and is not needed: the guest kernel's rcq_sign_bit +
+# comp_mask occupy exactly the three bytes upstream still calls rsvd2[3],
+# and the provider never reads phc_offset.
+COPY rdma-core-patches/ /tmp/rdma-core-patches/
+
+# Newest UCX release. Note the prebuilt nixl wheel reports UCX 1.23.0 -- that
+# is an unreleased master build ("git branch <unknown>, revision 65e342a"),
+# not something pinnable; 1.22.0 is the latest tag with a release tarball, and
+# the tarball matters because it ships a generated ./configure (no autotools).
+ARG UCX_VERSION=1.22.0
+
+# Newest nixl release, and the same version the prebuilt wheel shipped -- so
+# this changes HOW nixl is built without also moving WHAT is built.
+ARG NIXL_VERSION=v1.5.0
+
 RUN apt-get update -y \
     && apt-get install -y --no-install-recommends \
         git ca-certificates curl \
+        cmake ninja-build pkg-config make \
+        libnl-3-dev libnl-route-3-dev libudev-dev libnuma-dev \
     && rm -rf /var/lib/apt/lists/*
+
+# ── RDMA: rdma-core, UCX and nixl, all from source ───────────────────────────
+#
+# WHY NOT `pip install nixl`. The prebuilt wheel cannot drive this device, and
+# the way it fails is silent: nixl comes up, reports "Backend UCX was
+# instantiated", and moves every byte over TCP. Measured on a 4-node fleet --
+# cross-node P2P hit 100% of chunks while ernic_qp_bytes_rdma_{read,write}_total
+# stayed at exactly zero and ernic_ip_bytes_total climbed by 423 MB.
+#
+# The chain of causes, each verified rather than assumed:
+#
+#   1. The wheel vendors its own rdma-core, auditwheel-mangled to
+#      libibverbs-<hash>.so.1.14.48.0 -- i.e. rdma-core 48, a RHEL 8 build.
+#   2. `ionic` entered rdma-core at 61. So the vendored tree PREDATES the only
+#      provider this device has; there was never a version of it to load.
+#   3. libibverbs therefore enumerates nothing, UCX finds no IB device
+#      ("ib_md.c:887 no devices are found") and correctly reports rc_verbs as
+#      unavailable. The verbs transport itself is present and loads fine -- it
+#      has no hardware to drive.
+#   4. None of this is fixable from outside the wheel. The mangled SONAME
+#      defeats LD_PRELOAD; the RHEL-8 search path
+#      (/usr/lib64/libibverbs/lib%s-rdmav34.so) defeats bind-mounting Ubuntu's
+#      providers; and renaming a 61-era provider to -rdmav34 still yields zero
+#      devices, because the loader validates the provider ABI struct.
+#
+# So the wheel has to go. Building the three in order -- rdma-core, then UCX
+# against it, then nixl against that UCX -- is what gives the UCX plugin a
+# libibverbs that can actually open rocep1s0.
+#
+# The acceptance test is not "it starts": it is ernic_qp_bytes_rdma_read_total
+# leaving zero during a cross-node fetch. Both counters are already scraped.
+RUN --mount=type=cache,target=/root/.cache/pip set -eux; \
+    SP=/usr/local/lib/python3.12/dist-packages; \
+    \
+    # No --depth 1 -b: that only resolves a tag or branch, and the pin above
+    # is a SHA. blob:none keeps the clone cheap anyway.
+    git clone --filter=blob:none \
+        https://github.com/linux-rdma/rdma-core.git /tmp/rdma-core; \
+    git -C /tmp/rdma-core checkout -q "${RDMA_CORE_VERSION}"; \
+    test -d /tmp/rdma-core/providers/ionic; \
+    for p in /tmp/rdma-core-patches/*.patch; do \
+        git -C /tmp/rdma-core \
+            -c user.email=build@invalid -c user.name=build \
+            am --whitespace=fix "$p"; \
+    done; \
+    # The whole reason for the patch: fail the build here rather than ship an
+    # image whose UCX silently has no rc_verbs.
+    grep -q "create_srq" /tmp/rdma-core/providers/ionic/ionic_verbs.c; \
+    cmake -G Ninja -S /tmp/rdma-core -B /tmp/rdma-core/build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/opt/rdma \
+        -DCMAKE_INSTALL_LIBDIR=lib \
+        -DCMAKE_INSTALL_SYSCONFDIR=/etc \
+        -DNO_MAN_PAGES=1 -DENABLE_STATIC=0; \
+    ninja -C /tmp/rdma-core/build; \
+    ninja -C /tmp/rdma-core/build install; \
+    # Globbed, not a fixed name: the provider ABI suffix tracks the release
+    # (61 -> libionic-rdmav59.so, 65 -> libionic-rdmav65.so), so pinning it
+    # would break the build on the next bump for no reason.
+    ls /opt/rdma/lib/libibverbs/libionic-rdmav*.so >/dev/null; \
+    test -f /etc/libibverbs.d/ionic.driver; \
+    rm -rf /tmp/rdma-core; \
+    \
+    # ROCm here is pip packages, not /opt/rocm, and _rocm_sdk_core ships the
+    # runtime .so under its SONAME only. UCX's configure link tests want the
+    # bare -l name, so give it the two dev symlinks. They go in _rocm_sdk_core
+    # and not _rocm_sdk_devel deliberately: the devel tree is 18 GB and is
+    # deleted below, while core survives into the runtime stage, so UCX's rocm
+    # module still resolves there.
+    ln -sf libhsa-runtime64.so.1 "$SP/_rocm_sdk_core/lib/libhsa-runtime64.so"; \
+    ln -sf libamdhip64.so.7      "$SP/_rocm_sdk_core/lib/libamdhip64.so"; \
+    \
+    curl -sSL -o /tmp/ucx.tar.gz \
+        "https://github.com/openucx/ucx/releases/download/v${UCX_VERSION}/ucx-${UCX_VERSION}.tar.gz"; \
+    tar xf /tmp/ucx.tar.gz -C /tmp; \
+    cd "/tmp/ucx-${UCX_VERSION}"; \
+    # --with-rocm is not decoration on an AMD image: it builds the rocm UCT
+    # module, which is what lets UCX register and move HIP device memory. The
+    # fleet's L1 is host memory today and the emulated rocjitsu exposes no KFD
+    # node, so nothing exercises it yet -- but compiling it out would bake a
+    # ceiling into the image that is invisible until the day L1 moves to VRAM.
+    # --without-cuda stays: there is no CUDA here and probing for it only
+    # produces a confusing wheel variant.
+    # --with-verbs=DIR/--with-rdmacm=DIR are not enough on their own: the
+    # configure checks LINK against librdmacm, and with rdma-core in a
+    # non-default prefix the link fails with "RDMACM requested but librdmacm
+    # is not found or does not provide rdma_establish() API" -- which reads
+    # like a too-old rdma-core and is really just a search path. The rpath
+    # matters as much as the -L: without it the built modules would need
+    # LD_LIBRARY_PATH set for every later configure test too.
+    export CPPFLAGS="-I/opt/rdma/include"; \
+    export LDFLAGS="-L/opt/rdma/lib -Wl,-rpath,/opt/rdma/lib"; \
+    export LD_LIBRARY_PATH=/opt/rdma/lib; \
+    ./configure --prefix=/opt/ucx \
+        --with-verbs=/opt/rdma --with-rdmacm=/opt/rdma \
+        --with-rocm="$SP/_rocm_sdk_core" \
+        --without-cuda --without-java --without-go \
+        --enable-mt --disable-doxygen-doc; \
+    make -j"${MAX_JOBS}"; \
+    make install; \
+    # Fail here rather than in a fleet: an rdma-core that configure could not
+    # link against silently drops the ib module and everything still builds.
+    /opt/ucx/bin/ucx_info -b | grep -q '^#define HAVE_IB  *1$'; \
+    /opt/ucx/bin/ucx_info -b | grep -q '^#define HAVE_ROCM  *1$'; \
+    test -f /opt/ucx/lib/ucx/libuct_ib.so; \
+    cd /; rm -rf "/tmp/ucx-${UCX_VERSION}" /tmp/ucx.tar.gz; \
+    \
+    pip install meson meson-python ninja pybind11 patchelf; \
+    git clone --depth 1 -b "${NIXL_VERSION}" \
+        https://github.com/ai-dynamo/nixl.git /tmp/nixl; \
+    cd /tmp/nixl; \
+    # wheel_variant=rocm names the package nixl_rocm, which is the third name
+    # the `nixl` meta package looks for (nixl_cu13, nixl_cu12, nixl_rocm) --
+    # so LMCache's `from nixl._api import ...` resolves to it with no shim.
+    # The autodetected default would be nixl_cu12, which works but describes a
+    # CUDA build that is not what this is.
+    pip install . --no-build-isolation \
+        -Csetup-args=-Ducx_path=/opt/ucx \
+        -Csetup-args=-Drocm_path="$SP/_rocm_sdk_core" \
+        -Csetup-args=-Dwheel_variant=rocm \
+        -Csetup-args=-Dbuild_docs=false; \
+    cd /; rm -rf /tmp/nixl; \
+    \
+    # The meta package only, with --no-deps: it is pure Python and its
+    # dependency is a prebuilt variant wheel -- the very thing being replaced.
+    pip install --no-deps "nixl==${NIXL_VERSION#v}"; \
+    \
+    test -d "$SP/nixl_rocm"; \
+    python3 -c "from nixl._api import nixl_agent, nixl_agent_config; import nixl_rocm; print('nixl ok via', nixl_rocm.__name__)"; \
+    # The whole point: the plugin must bind OUR ucx, not a vendored copy.
+    P="$(find "$SP" -name libplugin_UCX.so -print -quit)"; \
+    ldd "$P" | grep -q '/opt/ucx/lib/libucp.so'; \
+    echo "UCX plugin bound to /opt/ucx"
 
 # Build deps come from the cloned source's own requirements/build.txt rather
 # than being restated here, so they cannot drift from the tag being built.
@@ -80,17 +261,18 @@ RUN apt-get update -y \
 # pin and it predates ROCm 10; it installs and imports here, but if a cupy
 # path ever misbehaves on this base, that pin is the first place to look.
 #
-# patch-cxx-std.py raises LMCache's hardcoded -std=c++17 to c++20 before the
-# build. Without it the build FAILS -- libtorch requires C++20, LMCache gives
-# its .hip sources c++20 but its host .cpp sources c++17, and the flag cannot
-# be overridden from outside because setuptools appends it last. The script
-# carries the full diagnosis and exits non-zero if it finds nothing to patch.
-COPY patch-cxx-std.py /usr/local/bin/lmcache-patch-cxx-std
+# No -std=c++17 patch here any more. Through v0.5.5 LMCache gave its .hip
+# sources c++20 and its host .cpp sources c++17, which fails against a C++20
+# libtorch and could not be overridden from outside, because setuptools
+# appends extra_compile_args last and the last -std= wins. v0.5.6 ships c++20
+# in both setup_extensions/common_cpp.py and build_profiles/rocm.py, so the
+# patch script found nothing and said so -- it is deleted along with this
+# step. The only -std=c++17 left is in storage_backend_profiles/hf3fs.py,
+# which this image does not build.
 RUN --mount=type=cache,target=/root/.cache/pip \
     git clone --depth 1 -b ${LMCACHE_VERSION} \
         https://github.com/LMCache/LMCache.git /tmp/lmcache \
     && cd /tmp/lmcache \
-    && python3 -I /usr/local/bin/lmcache-patch-cxx-std /tmp/lmcache \
     && pip install -r requirements/build.txt \
     && python3 -c 'import torch; print("TORCH=", torch.__version__, "HIP=", torch.version.hip)' \
     && BUILD_WITH_HIP=1 CXX=hipcc \
@@ -105,16 +287,13 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # ModuleNotFoundError and `lmcache server` and `lmcache coordinator`, the two
 # entrypoints this image exists for, are unreachable.
 #
-# nixl: the P2P transfer engine. LMCache ships it as the `lmcache[nixl]`
-# extra, and upstream's own Dockerfile.rocm skips it with "not yet available
-# on ROCm" -- that is stale, it installs and its UCX backend instantiates
-# fine on this base (verified: "Backend UCX was instantiated"). It is also
-# the ONLY option here: the alternative engine, mooncake_te, is a CUDA build
-# and fails on this image with "libcudart.so.12: cannot open shared object
-# file". Without nixl a server started with --p2p-advertise-url refuses to
-# start.
+# nixl, the P2P transfer engine, is installed above rather than here --
+# from source, because the published wheel cannot reach this device. It is
+# still the only engine option: the alternative, mooncake_te, is a CUDA build
+# and dies on "libcudart.so.12: cannot open shared object file". Without nixl
+# a server started with --p2p-advertise-url refuses to start at all.
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install openai nixl \
+    pip install openai \
     && lmcache --help > /dev/null \
     && python3 -c "import nixl; print('nixl ok')"
 
@@ -189,11 +368,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1
 
 # Runtime shared libraries only, no toolchain. libnuma and libdrm are what
-# the ROCm runtime and UCX link against; libgomp is torch's OpenMP.
+# the ROCm runtime and UCX link against; libgomp is torch's OpenMP; the two
+# libnl are what libibverbs needs to talk to the kernel's RDMA netlink.
 RUN apt-get update -y \
     && apt-get install -y --no-install-recommends \
         python3 python3-pkg-resources \
         libnuma1 libdrm2 libelf1 libgomp1 libatomic1 \
+        libnl-3-200 libnl-route-3-200 \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
@@ -202,6 +383,23 @@ COPY --from=builder /usr/local/lib/python3.12/dist-packages \
 # The console scripts (`lmcache`, `lmcache_server`, `lmcache_controller`) and
 # anything else the wheels installed onto PATH.
 COPY --from=builder /usr/local/bin /usr/local/bin
+
+# The RDMA stack. ~78 MB for both, against an 11 GB image, and without them
+# nixl's UCX plugin has no libibverbs to open the ernic with.
+#
+# /etc/libibverbs.d comes too and is not optional: libibverbs reads those
+# .driver files to learn which provider to dlopen, so without ionic.driver it
+# enumerates nothing and UCX falls back to TCP -- which is the silent failure
+# this whole arrangement exists to avoid.
+COPY --from=builder /opt/rdma /opt/rdma
+COPY --from=builder /opt/ucx /opt/ucx
+COPY --from=builder /etc/libibverbs.d /etc/libibverbs.d
+
+# libibverbs and the UCX libs are outside the dynamic linker's default search
+# path, and UCX's rocm module needs the HIP runtime that lives inside
+# site-packages (_rocm_sdk_core survived the prune; _rocm_sdk_devel did not).
+ENV LD_LIBRARY_PATH=/opt/rdma/lib:/opt/ucx/lib:/usr/local/lib/python3.12/dist-packages/_rocm_sdk_core/lib
+ENV PATH=/opt/rdma/bin:/opt/ucx/bin:$PATH
 
 # Re-run the checks in the stage that actually ships. Running them only in the
 # builder would prove the wrong filesystem: everything below depends on the
@@ -227,6 +425,24 @@ RUN python3 -c "import torch; print('TORCH=', torch.__version__, 'HIP=', torch.v
        fi \
     && echo "verified ${PYTORCH_ROCM_ARCH} device code in $SO" \
     && lmcache server --help > /dev/null && echo "cli ok"
+
+# The RDMA half, checked in the shipping stage for the same reason as above:
+# the COPY steps must have brought across a usable stack, not just some files.
+#
+# These are the checks that would have caught the original defect. A plain
+# "nixl imports" says nothing -- it imported fine on the wheel too, and then
+# ran everything over TCP.
+RUN set -eux; \
+    ibv_devinfo -l > /dev/null 2>&1 || true; \
+    command -v ibv_devinfo > /dev/null; \
+    ucx_info -b | grep -q '^#define HAVE_IB  *1$'; \
+    ucx_info -b | grep -q '^#define HAVE_ROCM  *1$'; \
+    ls /etc/libibverbs.d/ionic.driver > /dev/null; \
+    ls /opt/rdma/lib/libibverbs/libionic-rdmav*.so > /dev/null; \
+    python3 -c "from nixl._api import nixl_agent, nixl_agent_config; import nixl_rocm; print('nixl', nixl_rocm.__name__)"; \
+    P="$(find /usr/local/lib/python3.12/dist-packages -name libplugin_UCX.so -print -quit)"; \
+    ldd "$P" | grep -q '/opt/ucx/lib/libucp.so'; \
+    echo "rdma stack ok: verbs+rocm UCX, ionic provider, nixl bound to /opt/ucx"
 
 WORKDIR /workspace
 

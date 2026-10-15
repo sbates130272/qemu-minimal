@@ -49,7 +49,7 @@
     # Since this repo installs the kernel itself, it can pin both to the same
     # ref instead of hoping they stay compatible. See vars/ernic-pins.yml.
     ernic_ionic_kernel_ref: "{{ ionic_kernel_pin }}"
-    ionic_image_kernel_ref: "{{ ernic_ionic_kernel_ref }}"
+    ionic_image_prep_kernel_ref: "{{ ernic_ionic_kernel_ref }}"
     # ernic_source defaults this to "main". See vars/ernic-pins.yml.
     ernic_source_repo_version: "{{ ernic_source_pin }}"
   roles:
@@ -83,19 +83,32 @@
             ernic_configure_nic: false
             ernic_guest_preflight_device: false
       rescue:
-        # One expected failure only: driver.yml's "Verify the rocm-ernic RDMA
-        # device exists". A DKMS build error or a staging failure lands here
-        # too, and claiming the module is installed would be a lie that only
-        # surfaces later as an unrelated red step. Re-raise anything else.
-        - name: Re-raise an ernic_guest_setup failure that is not the NIC check
+        # Expected failures only -- the role's checks that require the ernic
+        # hardware, which is not attached during an image install. A DKMS
+        # build error or a staging failure lands here too, and claiming the
+        # module is installed would be a lie that only surfaces later as an
+        # unrelated red step. Re-raise anything else.
+        #
+        # Matched by name, and the list grows as upstream adds checks: 3fb74d1
+        # added "Verify lspci reports the emulated NIC PCI identity" ahead of
+        # the RDMA one, and because the rescue named only the RDMA check this
+        # play started failing the bake at a check it was always meant to
+        # tolerate. A new hardware check upstream presents here as a red
+        # install stage, not as a missing-device message.
+        - name: Re-raise an ernic_guest_setup failure that is not a hardware check
+          vars:
+            ernic_hardware_checks:
+              - 'RDMA device exists'
+              - 'lspci reports the emulated NIC'
           ansible.builtin.fail:
             msg: >-
               ernic_guest_setup failed at
               "{{ ansible_failed_task.name | default('unknown task') }}":
               {{ ansible_failed_result.msg | default('no message') }}
           when: >-
-            'RDMA device exists'
-            not in (ansible_failed_task.name | default(''))
+            ernic_hardware_checks
+            | select('in', ansible_failed_task.name | default(''))
+            | list | length == 0
 
         - name: Note the expected hardware-free RDMA check failure
           ansible.builtin.debug:

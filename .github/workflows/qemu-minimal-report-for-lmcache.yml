@@ -1,0 +1,325 @@
+name: qemu-minimal - Report for lmcache
+
+# LMCache L1 P2P between two guests, over NIXL -> UCX -> RDMA -> rocm-ernic.
+#
+# WHAT THIS LANE IS FOR. Everything else that touches LMCache checks it at the
+# edges: ansible-setup-test.yml syntax-checks fleet-lmcache.yml, gen-compose
+# -check.yml asserts the services appear in a --profile lmcache render, and
+# tests/test_lmcache_unit_render.py asserts the server's flags. None of them
+# runs the role, boots a guest, or moves a byte. Every defect that cost real
+# time here was invisible to all three -- a driver that was never built, a
+# device name UCX silently refused, a worker count that wedged the server --
+# and each presented as a cache miss or a healthy-looking fallback to TCP.
+#
+# THE ACCEPTANCE TEST IS THE ERNIC BYTE COUNTER, NOT A CACHE HIT. A hit proves
+# the key was found, not that it crossed the mesh: a guest serving from its own
+# L1 hits 2/2 with zero RDMA bytes, and so does a fleet whose NIXL has fallen
+# back to TCP. Only total_bytes_rdma_read moving says RDMA happened.
+#
+# NOT ON PULL REQUESTS. It builds an ~11 GB image and boots two guests under
+# TCG-free KVM; it is by some distance the most expensive lane here. Weekly,
+# plus on demand, plus on a push that touches the parts it exercises.
+#
+# STATUS: this lane has not yet run green end to end. It is assembled from a
+# sequence that was driven by hand on a 32-core host, and the first dispatch
+# should be expected to shake out runner-sized problems -- most likely disk
+# for the image build, and guest memory. Treat a first red run as that, not as
+# a regression in what it tests.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'ansible/playbooks/fleet-lmcache.yml'
+      - 'ansible/playbooks/roles/lmcache_guest/**'
+      - 'ansible/requirements.yml'
+      - 'qemu/docker/lmcache/**'
+      - 'qemu/env.scale-out-ci'
+      - 'qemu/qemu-tool/gen_compose.py'
+      - '.github/workflows/qemu-minimal-report-for-lmcache.yml'
+      - '.github/workflows/qemu-minimal-publish-pages.yml'
+  # Weekly rather than daily: the other report lanes bake one guest, this one
+  # builds an image and boots two.
+  schedule:
+    - cron: '0 9 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vm-report-lmcache
+  cancel-in-progress: true
+
+env:
+  ENV_FILE: qemu/env.scale-out-ci
+  STACK_DIR: /var/lib/qemu-tool/stacks/lmcache-ci
+  LMCACHE_IMAGE: qemu-tool/lmcache-rocm:0.5.6-gfx1250-srq
+  QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261014.geea0485-qemu11.1.2-vfu.8039244
+
+jobs:
+  generate-lmcache-report:
+    name: Report for lmcache
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    container:
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261014.geea0485-qemu11.1.2-vfu.8039244
+      options: >-
+        --device /dev/kvm
+        -v /var/run/docker.sock:/var/run/docker.sock
+        -v /var/lib/qemu-tool:/var/lib/qemu-tool
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4.3.1
+
+    # The ioctl, not the node: a bind-mounted /dev/kvm can exist and still be
+    # non-functional, and QEMU would fall back to TCG without saying so. Two
+    # guests under TCG will not finish inside any timeout worth setting.
+    - name: Verify KVM is available
+      run: |
+        test -c /dev/kvm
+        python3 - <<'PY'
+        import fcntl, os
+        fd = os.open("/dev/kvm", os.O_RDWR)
+        assert fcntl.ioctl(fd, 0xAE00, 0) >= 0
+        print("KVM usable")
+        PY
+
+    # The image build wants ~11 GB and the guest qcow2 another ~16 GB. A
+    # stock runner does not have that on / without help.
+    - name: Free disk space
+      run: |
+        df -h /
+        rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
+        docker image prune -af || true
+        df -h /
+
+    - name: Install qemu-tool
+      run: pipx install ./qemu || pip install ./qemu
+
+    # Built, not pulled: nothing publishes this image. The cache is what makes
+    # a second run cheap -- the base layer alone is 11.58 GB.
+    - name: Build the LMCache image
+      uses: docker/build-push-action@v6
+      with:
+        context: qemu/docker/lmcache
+        tags: ${{ env.LMCACHE_IMAGE }}
+        load: true
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    # Verified in the shipping stage of the Dockerfile too, but repeated here
+    # because this is the thing the whole lane depends on and its absence is
+    # the silent-TCP failure rather than an error.
+    - name: Verify the image carries a usable RDMA stack
+      run: |
+        docker run --rm "$LMCACHE_IMAGE" bash -c '
+          ucx_info -b | grep -q "^#define HAVE_IB  *1$"
+          ls /etc/libibverbs.d/ionic.driver >/dev/null
+          python3 -c "import nixl_rocm; print(\"nixl variant:\", nixl_rocm.__name__)"
+        '
+
+    - name: Export the image for the guests
+      run: |
+        mkdir -p /var/lib/qemu-tool/share
+        docker save "$LMCACHE_IMAGE" -o /var/lib/qemu-tool/share/lmcache-srq.tar
+        ls -lh /var/lib/qemu-tool/share/lmcache-srq.tar
+
+    # A runner is smaller than any node a human runs this on, so the fleet
+    # defaults would ask for more than it has. Same derivation as
+    # report-for-vm-ernic.yml; 4 vCPU is the ionic_rdma floor, not a choice.
+    - name: Size the guests from the runner
+      env:
+        VMS: "2"
+      run: |
+        HOST_CPUS=$(nproc)
+        HOST_MEM_MB=$(awk '/^MemTotal:/ {print int($2 / 1024)}' /proc/meminfo)
+        VM_VCPUS=$(( (HOST_CPUS - 1) / VMS ))
+        if [ "$VM_VCPUS" -lt 4 ]; then VM_VCPUS=4; fi
+        VM_VMEM=$(( HOST_MEM_MB * 3 / 4 / VMS ))
+        if [ "$VM_VMEM" -gt 8192 ]; then VM_VMEM=8192; fi
+        if [ "$VM_VMEM" -lt 4096 ]; then VM_VMEM=4096; fi
+        {
+          echo "VM_VCPUS=$VM_VCPUS"
+          echo "VM_VMEM=$VM_VMEM"
+          echo "VM_SHM_SIZE=${VM_VMEM}m"
+        } >> "$GITHUB_ENV"
+        echo "runner: ${HOST_CPUS} vCPU, ${HOST_MEM_MB} MB"
+        echo "guests: ${VMS} x ${VM_VCPUS} vCPU, ${VM_VMEM} MB"
+
+    # Overridden on top of the committed env file rather than edited into it,
+    # so the file stays reviewable and the sizing stays runner-derived.
+    - name: Apply the runner-derived sizing
+      run: |
+        {
+          echo "VM_VCPUS=${VM_VCPUS}"
+          echo "VM_VMEM=${VM_VMEM}"
+          echo "VM_SHM_SIZE=${VM_SHM_SIZE}"
+        } >> "$ENV_FILE"
+
+    # Generated to a scratch directory. gen-compose also copies the stack's
+    # non-generated assets (tapsetup/, logging/, grafana/) next to the
+    # generated files -- without them compose creates the missing bind-mount
+    # sources as directories and loki crash-loops on a config that is a
+    # directory.
+    - name: Generate the two-VM fleet stack
+      run: |
+        qemu-tool gen-compose --env-file "$ENV_FILE" --output-dir "$STACK_DIR"
+        ls -la "$STACK_DIR"
+
+    - name: Fetch the guest image and create the overlays
+      run: |
+        set -eux
+        BACKING=$(grep '^VM_BACKING_IMAGE=' "$ENV_FILE" | cut -d= -f2-)
+        qemu-tool gen-vm --env-file "$ENV_FILE" \
+          --vm-name lmcache-ci-1 --backing-image "$BACKING"
+        qemu-tool gen-vm --env-file "$ENV_FILE" \
+          --vm-name lmcache-ci-2 \
+          --backing-file /var/lib/qemu-tool/images/lmcache-ci-1-backing.qcow2
+
+    # The keypair ships as an ORAS referrer next to the qcow2; gen-vm pulls
+    # only the disk. Without it the generated inventory authenticates as a
+    # user that exists with a key that does not.
+    - name: Fetch the guest SSH key
+      run: |
+        set -eux
+        BACKING=$(grep '^VM_BACKING_IMAGE=' "$ENV_FILE" | cut -d= -f2-)
+        REF=$(oras discover "$BACKING" --format json \
+              | python3 -c 'import sys,json; print(json.load(sys.stdin)["manifests"][0]["reference"])')
+        mkdir -p /tmp/guest-key
+        oras pull "$REF" -o /tmp/guest-key
+        chmod 600 /tmp/guest-key/id_rsa
+
+    - name: Bring up the fleet
+      working-directory: /var/lib/qemu-tool/stacks/lmcache-ci
+      run: |
+        docker compose --env-file "$GITHUB_WORKSPACE/$ENV_FILE" \
+          --profile lmcache up --detach
+        docker compose --env-file "$GITHUB_WORKSPACE/$ENV_FILE" --profile lmcache ps
+
+    # Both qemu containers publish SSH on the HOST, which this job container
+    # cannot reach. Join the compose network and address guests by service
+    # name, as report-for-vm-ernic.yml does.
+    - name: Join the compose network
+      run: |
+        NET=$(docker network ls --format '{{.Name}}' | grep 'lmcache-ci.*fleet' | head -1)
+        docker network connect "$NET" "$(hostname)"
+
+    - name: Wait for both guests
+      timeout-minutes: 20
+      run: |
+        for host in qemu-1 qemu-2; do
+          for _ in $(seq 1 60); do
+            if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                   -o ConnectTimeout=5 -i /tmp/guest-key/id_rsa \
+                   batesste@"$host" true 2>/dev/null; then
+              echo "$host up"; break
+            fi
+            sleep 10
+          done
+        done
+
+    - name: Install collections
+      run: ansible-galaxy collection install --no-deps -r ansible/requirements.yml
+
+    # The long one: builds the SRQ ionic driver in each guest, loads the
+    # image over 9p, formats L2 and starts the MP servers.
+    - name: Configure the fleet
+      timeout-minutes: 120
+      working-directory: ansible
+      run: |
+        ansible-playbook -i "$STACK_DIR/fleet-inventory.yml" \
+          playbooks/fleet-lmcache.yml --private-key /tmp/guest-key/id_rsa
+
+    # A green playbook recap does NOT mean a working fleet: registration is
+    # reported as a message, not a failure, so assert it separately.
+    - name: Assert both instances registered
+      run: |
+        n=$(curl -sf http://lmcache-coordinator:9300/instances \
+            | python3 -c 'import sys,json; print(len(json.load(sys.stdin)["instances"]))')
+        echo "registered: $n"
+        [ "$n" = "2" ] || { echo "::error::expected 2 registered instances, got $n"; exit 1; }
+
+    # The test itself: seed on guest 1, settle, pull the SAME keys on guest 2.
+    # Geometry is deliberately small -- the default takes ~20 minutes to
+    # allocate on the emulated GPU and buys nothing, and a per-request total
+    # at or above 16 MiB tears the mesh connection down (AGENTS.md issue 22).
+    - name: Run the P2P transfer
+      timeout-minutes: 30
+      run: |
+        set -eux
+        SSH="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /tmp/guest-key/id_rsa"
+        BENCH="sudo docker exec lmcache-server lmcache bench server --mode gpu \
+          --kvcache-shape-spec '(2,32,16,8,128):float16:4' --num-tokens 512 --start 600 --end 602"
+        before=$(docker exec lmcache-ci-ernic-stats-exporter-1 \
+                 sh -c 'grep total_bytes_rdma_read /run/ernic-stats/ernic-1.stats' | awk '{print $3}')
+        $SSH batesste@qemu-1 "$BENCH" | tee /tmp/seed.log
+        sleep 20
+        $SSH batesste@qemu-2 "$BENCH" | tee /tmp/pull.log
+        sleep 10
+        after=$(docker exec lmcache-ci-ernic-stats-exporter-1 \
+                sh -c 'grep total_bytes_rdma_read /run/ernic-stats/ernic-1.stats' | awk '{print $3}')
+        echo "rdma_read delta: $((after - before))"
+        echo "RDMA_DELTA=$((after - before))" >> "$GITHUB_ENV"
+
+    # 16 KiB/token x 512 tokens x 2 requests. Asserted exactly, not as "more
+    # than zero": a partial transfer is a defect, and the figure has been
+    # stable across every passing run.
+    - name: Assert the bytes crossed the mesh
+      run: |
+        [ "$RDMA_DELTA" = "16777216" ] || {
+          echo "::error::expected 16777216 RDMA bytes, got $RDMA_DELTA."
+          echo "A cache hit with zero bytes means NIXL fell back to TCP --"
+          echo "check the IB device name and that max_srq is non-zero."
+          exit 1
+        }
+
+    - name: Build the report
+      if: always()
+      run: |
+        mkdir -p site/lmcache
+        {
+          echo "# LMCache L1 P2P report"
+          echo
+          echo "- Run: ${GITHUB_RUN_ID}"
+          echo "- Date: $(date -u '+%Y-%m-%d %H:%M UTC')"
+          echo "- RDMA bytes moved: ${RDMA_DELTA:-unknown} (expected 16777216)"
+          echo
+          echo '## Guest device state'
+          echo '```'
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -i /tmp/guest-key/id_rsa batesste@qemu-1 \
+              'ibv_devinfo | head -5; ibv_devinfo -v | grep -E "max_srq:|max_msg_sz"' 2>&1 || true
+          echo '```'
+          echo
+          echo '## ernic counters'
+          echo '```'
+          docker exec lmcache-ci-ernic-stats-exporter-1 \
+            sh -c 'grep -E "total_bytes_rdma|total_bytes_sent" /run/ernic-stats/ernic-*.stats' 2>&1 || true
+          echo '```'
+          echo
+          echo '## Pull output'
+          echo '```'
+          grep -E 'cold\] (LOOKUP|RETRIEVE)' /tmp/pull.log 2>/dev/null || echo "no pull output"
+          echo '```'
+        } > site/lmcache/index.md
+
+    - name: Show logs on failure
+      if: failure()
+      working-directory: /var/lib/qemu-tool/stacks/lmcache-ci
+      run: |
+        docker compose --env-file "$GITHUB_WORKSPACE/$ENV_FILE" --profile lmcache logs --tail 100 || true
+        ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i /tmp/guest-key/id_rsa batesste@qemu-1 \
+            'sudo docker logs lmcache-server 2>&1 | tail -50' || true
+
+    # Upload only. publish-pages.yml is the sole writer of the site: a Pages
+    # deploy replaces the whole site, so a lane that deploys erases the others.
+    - name: Upload the report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: vm-report-lmcache
+        path: site/lmcache/
+        if-no-files-found: error

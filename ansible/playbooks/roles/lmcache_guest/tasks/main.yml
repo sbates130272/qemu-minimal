@@ -83,14 +83,14 @@
     - name: Check whether the image is already loaded
       ansible.builtin.command:
         cmd: docker image inspect {{ lmcache_guest_image }}
-      register: lmcache_image_present
+      register: lmcache_guest_image_present
       changed_when: false
       failed_when: false
 
     - name: Mount the host share
       when:
         - lmcache_guest_hostfs_enable | bool
-        - lmcache_image_present.rc != 0
+        - lmcache_guest_image_present.rc != 0
       ansible.posix.mount:
         path: "{{ lmcache_guest_hostfs_mount }}"
         src: "{{ lmcache_guest_hostfs_tag }}"
@@ -103,13 +103,13 @@
     - name: Load the image from the host share
       when:
         - lmcache_guest_hostfs_enable | bool
-        - lmcache_image_present.rc != 0
+        - lmcache_guest_image_present.rc != 0
       ansible.builtin.command:
         cmd: >-
           docker load -i
           {{ lmcache_guest_hostfs_mount }}/{{ lmcache_guest_hostfs_archive }}
       changed_when: true
-      register: lmcache_hostfs_load
+      register: lmcache_guest_hostfs_load
 
     - name: Copy the image archive into the guest
       when:
@@ -136,7 +136,7 @@
       when:
         - not (lmcache_guest_hostfs_enable | bool)
         - lmcache_guest_image_archive | length == 0
-        - lmcache_image_present.rc != 0
+        - lmcache_guest_image_present.rc != 0
       ansible.builtin.command:
         cmd: docker pull {{ lmcache_guest_image }}
       changed_when: true
@@ -153,10 +153,34 @@
   tags: [install, configure]
   ansible.builtin.include_tasks: alloy.yml
 
+- name: Enable transparent huge pages for the L1 arena
+  when: lmcache_guest_thp_enable | bool
+  ansible.builtin.include_tasks: hugepages.yml
+
 - name: Prepare the emulated NVMe as the L2 tier
   when: lmcache_guest_l2_enable | bool
   tags: [install, configure]
   ansible.builtin.include_tasks: l2_nvme.yml
+
+# Before the MP server block, because the preflight that block installs is
+# what waits for a KFD node -- and without this firmware there will never be
+# one, so the unit would restart-loop for the full preflight timeout with the
+# GPU sitting unbound the whole time.
+- name: Supply the gfx1250 firmware amdgpu's probe needs
+  when:
+    - lmcache_guest_amdgpu_firmware_enable | bool
+    - lmcache_guest_rocjitsu_image | length > 0
+  tags: [install, configure]
+  ansible.builtin.include_tasks: amdgpu_firmware.yml
+
+# Before the MP server block for two reasons. The reload inside it drops the
+# ernic's address and link, and the preflight that block installs is what puts
+# them back; and without SRQ the server cannot start at all, so installing the
+# unit first would just restart-loop it for the whole preflight timeout.
+- name: Give the guest an SRQ-capable ionic driver
+  when: lmcache_guest_srq_enable | bool
+  tags: [install, configure]
+  ansible.builtin.include_tasks: srq_driver.yml
 
 - name: Configure the MP server
   become: true
@@ -165,6 +189,16 @@
     # No engine config file: an MP server is configured entirely by CLI flags.
     # The YAML config is the legacy in-process mode's, and writing one here
     # would be inert and misleading.
+    # Before the preflight, so a guest that already has the address keeps it
+    # and the preflight's assignment becomes the fallback rather than the
+    # only mechanism.
+    - name: Declare the ernic address to networkd
+      ansible.builtin.include_tasks: netplan_ernic.yml
+      when:
+        - lmcache_guest_netplan_ernic | bool
+        - lmcache_guest_ernic_mac | length > 0
+        - lmcache_guest_eth_address | length > 0
+
     - name: Install the device preflight script
       ansible.builtin.template:
         src: lmcache-preflight.sh.j2

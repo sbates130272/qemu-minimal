@@ -1,0 +1,55 @@
+From d62e89ddf6d2cfdefbc1380a8b1e440479117bc6 Mon Sep 17 00:00:00 2001
+From: rocm-ernic <ci@rocm-ernic.invalid>
+Date: Thu, 8 Oct 2026 21:14:21 -0600
+Subject: [PATCH] ionic: ring the RQ qtype for SRQ receives, not the CQ qtype
+
+ionic_post_recv_srq() rang ctx->cq_qtype when posting receives to a shared
+receive queue. The normal receive path a few lines up rings ctx->rq_qtype,
+and that is what an SRQ needs too: a receive doorbell sent to the CQ qtype
+reaches the device as a completion-queue consumer-index update for whatever
+CQ shares that id, so the SRQ never learns a receive was posted.
+
+The effect is a hang rather than an error. A QP bound to an SRQ completes
+its sends normally and never completes a receive, because as far as the
+device is concerned no receive buffer exists. UCX's rc_verbs transport,
+whose entire receive path is ibv_post_srq_recv(), hangs on the first
+message.
+
+ionic_post_pending_srq_wrs() rings the same doorbell for the same queue and
+had the same mistake. It is the harder one to notice: it only runs once the
+hardware SRQ has filled and work requests have been deferred to the pending
+list, so a test that posts a few receives into a deep queue never reaches
+it. The failure then looks like a queue that worked under light load and
+stopped under pressure, which reads as congestion rather than as a wrong
+doorbell.
+
+Both are the SRQ's own receive queue, so both ring rq_qtype. The two
+remaining cq_qtype doorbells in this file, in ionic_reserve_sync_cq() and
+ionic_arm_cq(), are genuine completion-queue updates and stay as they are.
+
+---
+ providers/ionic/ionic_verbs.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/providers/ionic/ionic_verbs.c b/providers/ionic/ionic_verbs.c
+index 134be1cb..7e1b06bf 100644
+--- a/providers/ionic/ionic_verbs.c
++++ b/providers/ionic/ionic_verbs.c
+@@ -983,7 +983,7 @@ static void ionic_post_pending_srq_wrs(struct ionic_srq *srq)
+ 			udma_to_device_barrier();
+ 			verbs_debug(&ctx->vctx, "dbell srq %u rq val %#lx",
+ 				    srq->srqid, ionic_queue_dbell_val(&srq->rq.queue));
+-			ionic_dbell_ring(&ctx->dbpage[ctx->cq_qtype],
++			ionic_dbell_ring(&ctx->dbpage[ctx->rq_qtype],
+ 					 ionic_queue_dbell_val(&srq->rq.queue));
+ 		}
+ 	}
+@@ -3592,7 +3592,7 @@ out:
+ 			udma_to_device_barrier();
+ 			verbs_debug(&ctx->vctx, "dbell srq %u rq val %#lx",
+ 				    srq->srqid, ionic_queue_dbell_val(&srq->rq.queue));
+-			ionic_dbell_ring(&ctx->dbpage[ctx->cq_qtype],
++			ionic_dbell_ring(&ctx->dbpage[ctx->rq_qtype],
+ 					 ionic_queue_dbell_val(&srq->rq.queue));
+ 		}
+ 	}

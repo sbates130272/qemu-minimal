@@ -13,11 +13,11 @@
   become: true
   ansible.builtin.stat:
     path: "{{ lmcache_guest_l2_device }}"
-  register: lmcache_l2_dev
+  register: lmcache_guest_l2_dev
 
 - name: Fail clearly when the emulated NVMe is absent
   become: true
-  when: not (lmcache_l2_dev.stat.exists and lmcache_l2_dev.stat.isblk | default(false))
+  when: not (lmcache_guest_l2_dev.stat.exists and lmcache_guest_l2_dev.stat.isblk | default(false))
   ansible.builtin.fail:
     msg: >-
       {{ lmcache_guest_l2_device }} is not a block device in this guest.
@@ -32,20 +32,20 @@
   become: true
   ansible.builtin.command:
     cmd: blkid -o value -s TYPE {{ lmcache_guest_l2_device }}
-  register: lmcache_l2_blkid
+  register: lmcache_guest_l2_blkid
   changed_when: false
-  failed_when: lmcache_l2_blkid.rc not in [0, 2]
+  failed_when: lmcache_guest_l2_blkid.rc not in [0, 2]
 
 - name: Refuse to reformat a device that already holds data
   become: true
   when:
-    - lmcache_l2_blkid.stdout | trim | length > 0
-    - lmcache_l2_blkid.stdout | trim != lmcache_guest_l2_fstype
+    - lmcache_guest_l2_blkid.stdout | trim | length > 0
+    - lmcache_guest_l2_blkid.stdout | trim != lmcache_guest_l2_fstype
     - not lmcache_guest_l2_force_format | bool
   ansible.builtin.fail:
     msg: >-
       {{ lmcache_guest_l2_device }} already carries a
-      {{ lmcache_l2_blkid.stdout | trim }} filesystem, not
+      {{ lmcache_guest_l2_blkid.stdout | trim }} filesystem, not
       {{ lmcache_guest_l2_fstype }}. Refusing to mkfs over it. This role is
       expected to be re-run, and a populated L2 is a cache someone may be
       measuring; set lmcache_guest_l2_force_format=true to overwrite it.
@@ -53,7 +53,7 @@
 - name: Create the filesystem
   become: true
   when:
-    - lmcache_l2_blkid.stdout | trim | length == 0 or lmcache_guest_l2_force_format | bool
+    - lmcache_guest_l2_blkid.stdout | trim | length == 0 or lmcache_guest_l2_force_format | bool
     - lmcache_guest_l2_size | length == 0
   community.general.filesystem:
     fstype: "{{ lmcache_guest_l2_fstype }}"
@@ -69,7 +69,7 @@
 - name: Create a size-bounded filesystem
   become: true
   when:
-    - lmcache_l2_blkid.stdout | trim | length == 0 or lmcache_guest_l2_force_format | bool
+    - lmcache_guest_l2_blkid.stdout | trim | length == 0 or lmcache_guest_l2_force_format | bool
     - lmcache_guest_l2_size | length > 0
   ansible.builtin.command:
     cmd: >-
@@ -84,7 +84,7 @@
   become: true
   ansible.builtin.command:
     cmd: blkid -o value -s UUID {{ lmcache_guest_l2_device }}
-  register: lmcache_l2_uuid
+  register: lmcache_guest_l2_uuid
   changed_when: false
 
 # nofail is not optional. Without it, a guest whose L2 device is missing or
@@ -99,7 +99,7 @@
   become: true
   ansible.posix.mount:
     path: "{{ lmcache_guest_l2_mount }}"
-    src: "UUID={{ lmcache_l2_uuid.stdout | trim }}"
+    src: "UUID={{ lmcache_guest_l2_uuid.stdout | trim }}"
     fstype: "{{ lmcache_guest_l2_fstype }}"
     opts: defaults,noatime,nofail
     state: mounted
@@ -115,10 +115,10 @@
   become: true
   ansible.builtin.command:
     cmd: df -h {{ lmcache_guest_l2_mount }}
-  register: lmcache_l2_df
+  register: lmcache_guest_l2_df
   changed_when: false
 
 - name: Show it
   become: true
   ansible.builtin.debug:
-    var: lmcache_l2_df.stdout_lines
+    var: lmcache_guest_l2_df.stdout_lines

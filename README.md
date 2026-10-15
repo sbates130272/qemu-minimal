@@ -48,6 +48,30 @@
 [![Spell Check](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-spell-check.yml?label=spell-check&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-spell-check.yml)
 [![rocm-ernic Smoke Test](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-smoke-test-rocm-ernic.yml?branch=main&label=smoke-test-rocm-ernic&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-smoke-test-rocm-ernic.yml)
 
+<!-- The batesste-ci-images this repo pins. STATIC badges, hand-edited with
+     the tags: shields has no endpoint for "what does this repo pin", and a
+     dynamic Docker Hub badge would report that registry's newest tag, which
+     is the opposite of what these are for -- the point is which build the
+     stacks are on, not which exists.
+
+     All five share one <date>.<ci-sha> stamp by construction:
+     gen_compose.py's _check_image_coherence refuses a mixed set, because a
+     guest driver and a host server from different builds wedge at the
+     vfio-user/DSR boundary. So when one moves, they all move, and these
+     badges move with them. The stamp is the first badge; the rest carry the
+     component revision that distinguishes the build.
+
+     sbates-fork is the odd one out: it is pinned only by
+     qemu/env.scale-out-mi100, for vfio-user P2P DMA, and carries a QEMU
+     patch the stock image does not. See AGENTS.md issue 19. -->
+[![CI image build](https://img.shields.io/badge/ci--images-20261014.geea0485-informational?style=flat-square&logo=docker)](https://hub.docker.com/u/sbates130272)
+[![qemu](https://img.shields.io/badge/qemu-11.1.2-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user/tags)
+[![libvfio-user](https://img.shields.io/badge/libvfio--user-8039244-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user/tags)
+[![rocm-ernic](https://img.shields.io/badge/rocm--ernic-3fb74d1-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-rocm-ernic/tags)
+[![rocjitsu](https://img.shields.io/badge/rocjitsu-84fb06b-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu/tags)
+[![guest qcow2](https://img.shields.io/badge/guest-resolute%20%7C%20qm.c5d51ce-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu/tags)
+[![qemu fork](https://img.shields.io/badge/sbates--fork-qemu.31e3d06-lightgrey?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork/tags)
+
 ## Summary
 
 This repository provides a modern, cloud-init based

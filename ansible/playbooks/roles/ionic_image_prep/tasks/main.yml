@@ -12,21 +12,21 @@
 # is the same ordering packages/ionic.txt gets by running in cloud-init.
 - name: Install the RDMA userspace and DKMS toolchain
   ansible.builtin.apt:
-    name: "{{ ionic_image_packages }}"
+    name: "{{ ionic_image_prep_packages }}"
     state: present
     update_cache: true
-  register: ionic_image_apt_result
-  retries: "{{ ionic_image_apt_retries }}"
-  delay: "{{ ionic_image_apt_delay }}"
-  until: ionic_image_apt_result is success
-  when: ionic_image_packages | length > 0
+  register: ionic_image_prep_apt_result
+  retries: "{{ ionic_image_prep_apt_retries }}"
+  delay: "{{ ionic_image_prep_apt_delay }}"
+  until: ionic_image_prep_apt_result is success
+  when: ionic_image_prep_packages | length > 0
 
 - name: Install the pinned mainline kernel
   ansible.builtin.include_tasks: kernel.yml
-  when: ionic_image_kernel_install | bool
+  when: ionic_image_prep_kernel_install | bool
 
 - name: Write the rdma-core provider stamp
-  when: ionic_image_provider_stamp | bool
+  when: ionic_image_prep_provider_stamp | bool
   block:
 
     - name: Read the installed rdma-core version
@@ -36,7 +36,7 @@
           - -W
           - -f=${Version}
           - rdma-core
-      register: ionic_image_rdma_core_pkg
+      register: ionic_image_prep_rdma_core_pkg
       changed_when: false
 
     # The role's own verification, run here so a guest missing the provider
@@ -47,12 +47,12 @@
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: ls /usr/lib/*/libibverbs/libionic*.so
-      register: ionic_image_provider_ls
+      register: ionic_image_prep_provider_ls
       changed_when: false
 
     - name: Create the stamp directory
       ansible.builtin.file:
-        path: "{{ ionic_image_stamp_dir }}"
+        path: "{{ ionic_image_prep_stamp_dir }}"
         state: directory
         owner: root
         group: root
@@ -62,14 +62,14 @@
     # is what ernic_rdma_core_version is compared against.
     - name: Stamp the installed provider
       ansible.builtin.copy:
-        dest: "{{ ionic_image_stamp_dir }}/provider.stamp"
-        content: "{{ ionic_image_rdma_core_pkg.stdout | regex_replace('-.*$', '') }}:none\n"
+        dest: "{{ ionic_image_prep_stamp_dir }}/provider.stamp"
+        content: "{{ ionic_image_prep_rdma_core_pkg.stdout | regex_replace('-.*$', '') }}:none\n"
         owner: root
         group: root
         mode: "0644"
 
 - name: Disable KillUserProcesses in logind
-  when: ionic_image_logind_keep_processes | bool
+  when: ionic_image_prep_logind_keep_processes | bool
   block:
 
     # A cloud image does not necessarily ship the drop-in directory, and the
@@ -95,14 +95,14 @@
 - name: Enable the ionic modules on boot
   ansible.builtin.copy:
     dest: /etc/modules-load.d/rocm-ernic-ionic.conf
-    content: "{{ ionic_image_modules | join('\n') }}\n"
+    content: "{{ ionic_image_prep_modules | join('\n') }}\n"
     owner: root
     group: root
     mode: "0644"
-  when: ionic_image_modules_load | bool
+  when: ionic_image_prep_modules_load | bool
 
 - name: Register the emulated NIC in pci.ids
-  when: ionic_image_pciids | bool
+  when: ionic_image_prep_pciids | bool
   block:
 
     - name: Find the system pci.ids path
@@ -111,12 +111,12 @@
       loop:
         - /usr/share/hwdata/pci.ids
         - /usr/share/misc/pci.ids
-      register: ionic_image_pciids_stat
+      register: ionic_image_prep_pciids_stat
 
     - name: Set the pci.ids path fact
       ansible.builtin.set_fact:
-        ionic_image_pciids_path: >-
-          {{ (ionic_image_pciids_stat.results
+        ionic_image_prep_pciids_path: >-
+          {{ (ionic_image_prep_pciids_stat.results
               | selectattr('stat.exists')
               | first
               | default({})).item | default('') }}
@@ -140,71 +140,71 @@
     - name: Look for lspci
       ansible.builtin.stat:
         path: /usr/bin/lspci
-      register: ionic_image_pciids_lspci
+      register: ionic_image_prep_pciids_lspci
 
     - name: Scan the vendor block in pci.ids for the emulated NIC
       ansible.builtin.command:
         argv:
           - awk
           - -v
-          - "vend={{ ionic_image_pciids_vendor }}"
+          - "vend={{ ionic_image_prep_pciids_vendor }}"
           - -v
-          - "dev={{ ionic_image_pciids_device }}"
+          - "dev={{ ionic_image_prep_pciids_device }}"
           - >-
             $0 ~ "^" vend "[ \t]" { blk = 1; vendor = 1; next }
             /^[^\t]/ { blk = 0 }
             blk && $0 ~ "^\t" dev "[ \t]" { device = 1 }
             END { print (vendor ? "vendor" : "novendor"), (device ? "device" : "nodevice") }
-          - "{{ ionic_image_pciids_path }}"
-      register: ionic_image_pciids_scan
+          - "{{ ionic_image_prep_pciids_path }}"
+      register: ionic_image_prep_pciids_scan
       changed_when: false
-      when: ionic_image_pciids_path | length > 0
+      when: ionic_image_prep_pciids_path | length > 0
 
     # hwdata too old to know the vendor at all. The insert below keys off the
     # vendor line, so it would be a silent no-op -- say so instead.
     - name: Warn when pci.ids has no block for the vendor
       ansible.builtin.debug:
         msg: >-
-          {{ ionic_image_pciids_path }} has no vendor block for
-          {{ ionic_image_pciids_vendor }}; the emulated NIC cannot be merged
+          {{ ionic_image_prep_pciids_path }} has no vendor block for
+          {{ ionic_image_prep_pciids_vendor }}; the emulated NIC cannot be merged
           into it. Run update-pciids, or accept that lspci will show the device
           by number.
-      when: ionic_image_pciids_scan.stdout | default('') is search('novendor')
+      when: ionic_image_prep_pciids_scan.stdout | default('') is search('novendor')
 
     - name: Note that pci.ids already names the emulated NIC
       ansible.builtin.debug:
         msg: >-
-          {{ ionic_image_pciids_vendor }}:{{ ionic_image_pciids_device }} is
-          already in {{ ionic_image_pciids_path }}; leaving it alone. lspci
+          {{ ionic_image_prep_pciids_vendor }}:{{ ionic_image_prep_pciids_device }} is
+          already in {{ ionic_image_prep_pciids_path }}; leaving it alone. lspci
           will call the device whatever hwdata calls it, which for this pair is
           a serial port controller rather than a NIC -- misleading, but a
           second entry would break parsing of the whole file.
-      when: ionic_image_pciids_scan.stdout | default('') == 'vendor device'
+      when: ionic_image_prep_pciids_scan.stdout | default('') == 'vendor device'
 
     # Inserted directly under the vendor line, not appended: pci.ids is parsed
     # sequentially, so an entry at the end of the file lands under the class
     # section and never matches.
     - name: Merge the emulated NIC into pci.ids
       ansible.builtin.replace:
-        path: "{{ ionic_image_pciids_path }}"
-        regexp: '^({{ ionic_image_pciids_vendor }}\s+.*)$'
-        replace: '\1\n\t{{ ionic_image_pciids_entry }}'
-      when: ionic_image_pciids_scan.stdout | default('') == 'vendor nodevice'
-      register: ionic_image_pciids_merge
+        path: "{{ ionic_image_prep_pciids_path }}"
+        regexp: '^({{ ionic_image_prep_pciids_vendor }}\s+.*)$'
+        replace: '\1\n\t{{ ionic_image_prep_pciids_entry }}'
+      when: ionic_image_prep_pciids_scan.stdout | default('') == 'vendor nodevice'
+      register: ionic_image_prep_pciids_merge
 
     - name: Check that pciutils still parses pci.ids
       ansible.builtin.command:
         argv:
           - lspci
           - -i
-          - "{{ ionic_image_pciids_path }}"
+          - "{{ ionic_image_prep_pciids_path }}"
           - -nn
-      register: ionic_image_pciids_parse
+      register: ionic_image_prep_pciids_parse
       changed_when: false
-      failed_when: ionic_image_pciids_parse.rc != 0
+      failed_when: ionic_image_prep_pciids_parse.rc != 0
       when:
-        - ionic_image_pciids_merge is changed
-        - ionic_image_pciids_lspci.stat.exists | default(false)
+        - ionic_image_prep_pciids_merge is changed
+        - ionic_image_prep_pciids_lspci.stat.exists | default(false)
 
 # The collection defends against this with ernic_dpkg_lock_wait: 300 on every
 # guest task. Masking the units in the image is the cheaper half of that.
@@ -219,9 +219,9 @@
     - apt-daily.timer
     - apt-daily-upgrade.timer
   failed_when: false
-  when: ionic_image_mask_unattended_upgrades | bool
+  when: ionic_image_prep_mask_unattended_upgrades | bool
 
 - name: Clean the apt cache to shrink the image
   ansible.builtin.apt:
     autoclean: true
-  when: ionic_image_clean_apt | bool
+  when: ionic_image_prep_clean_apt | bool

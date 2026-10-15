@@ -1,0 +1,64 @@
+---
+# Transparent huge pages, because they are what decides how large L1 can be.
+#
+# LMCache registers its WHOLE L1 arena as a single RDMA memory region
+# (nixl_impl.py:341), and the guest's ionic_rdma builds that region's page
+# table with a physically contiguous allocation -- 8 bytes per page:
+#
+#     buf->tbl_buf = kmalloc(buf->tbl_size, GFP_KERNEL);
+#     (drivers/infiniband/hw/ionic/ionic_pgtbl.c:60)
+#
+# kmalloc, not kvmalloc. At 4 KiB pages a 2 GiB region needs 524288 PTEs =
+# 4 MiB contiguous, which is order-10 and the largest the buddy allocator will
+# ever return, so it fails with ENOMEM no matter how much memory is free.
+# Measured: 1 GiB registers (2 MiB table), 2 GiB does not, on a guest with
+# 5.7 GB available.
+#
+# At 2 MiB pages the same 2 GiB region needs 1024 PTEs = 8 KiB, and the
+# ceiling stops mattering. The driver negotiates this itself --
+# ionic_reg_user_mr() calls ib_umem_find_best_pgsz() against
+# page_size_supported (ionic_controlpath.c:904), which is 4 KiB|2 MiB|1 GiB --
+# so nothing has to ask for huge pages explicitly, they only have to be
+# available and the mapping has to be aligned.
+#
+# Two settings, and both are needed for different halves:
+#   enabled        governs anonymous memory
+#   shmem_enabled  governs tmpfs, which is where a POSIX SHM L1 lives
+# shmem_enabled defaults to `never` on Ubuntu, so /dev/shm gets 4 KiB pages
+# however `enabled` is set. `force` rather than `always` because the container
+# does not madvise its SHM arena and the tmpfs is mounted by Docker, so there
+# is no mount option to carry `huge=` either.
+#
+# Verified: with these set, a 2 GiB registration that previously failed with
+# "ibv_reg_mr ... Cannot allocate memory" succeeds, and AnonHugePages rises
+# across the call.
+
+- name: Enable transparent huge pages now
+  become: true
+  ansible.builtin.shell: |
+    set -e
+    echo {{ lmcache_guest_thp_enabled }} > /sys/kernel/mm/transparent_hugepage/enabled
+    echo {{ lmcache_guest_thp_shmem }} > /sys/kernel/mm/transparent_hugepage/shmem_enabled
+  changed_when: true
+
+# Persist across reboot. tmpfiles.d is the right home rather than a sysctl --
+# these are sysfs files, not sysctls -- and systemd-tmpfiles-setup applies
+# `w` lines on every boot before any service that would use them.
+- name: Persist the huge page settings across reboots
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/tmpfiles.d/lmcache-hugepages.conf
+    mode: "0644"
+    content: |
+      # Managed by the lmcache_guest Ansible role -- local edits are lost.
+      # See ansible/playbooks/roles/lmcache_guest/tasks/hugepages.yml for why.
+      w /sys/kernel/mm/transparent_hugepage/enabled - - - - {{ lmcache_guest_thp_enabled }}
+      w /sys/kernel/mm/transparent_hugepage/shmem_enabled - - - - {{ lmcache_guest_thp_shmem }}
+
+- name: Confirm both took effect
+  become: true
+  ansible.builtin.shell: |
+    set -e
+    grep -q '\[{{ lmcache_guest_thp_enabled }}\]' /sys/kernel/mm/transparent_hugepage/enabled
+    grep -q '\[{{ lmcache_guest_thp_shmem }}\]' /sys/kernel/mm/transparent_hugepage/shmem_enabled
+  changed_when: false

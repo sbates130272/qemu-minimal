@@ -52,6 +52,40 @@ wait_for() {
 # Readiness is a KFD TOPOLOGY NODE, not /dev/kfd: the character device exists
 # as soon as the module loads, with or without a GPU behind it, so waiting on
 # it proves nothing. A node directory with a non-empty name is a real device.
+# amdgpu can be loaded with exactly the right parameters and still have no
+# device behind it. amdgpu-probe passes discovery=2 -- "take the IP discovery
+# table from a firmware file" -- so its PCI probe fails when
+# /lib/firmware/amdgpu/ip_discovery.bin is absent:
+#
+#   amdgpu 0000:02:00.0: can't load firmware "amdgpu/ip_discovery.bin"
+#   amdgpu 0000:02:00.0: [drm] *ERROR* discovery failed: -2
+#   amdgpu 0000:02:00.0: probe with driver amdgpu failed with error -2
+#
+# and the function is left unbound with no KFD node, which looks from here
+# exactly like a GPU that never arrived. That blob is per-rocjitsu-build, so
+# published guest images deliberately omit it (see rocjitsu_firmware_ip_discovery
+# in vm-rocjitsu.yml) and the caller supplies it -- amdgpu_firmware.yml does.
+#
+# Once it is in place the module does not retry on its own. Re-bind the
+# function, which re-runs the probe where it stands: `modprobe -r amdgpu` is
+# not an option here, it spins at 100% CPU indefinitely.
+bind_amdgpu() {
+    local drv=/sys/bus/pci/drivers/amdgpu dev slot
+    [ -d "$drv" ] || return 0
+    for dev in /sys/bus/pci/devices/*; do
+        [ "$(cat "$dev/vendor" 2>/dev/null)" = "0x1002" ] || continue
+        [ -e "$dev/driver" ] && continue
+        slot=$(basename "$dev")
+        log "amdgpu left $slot unbound; re-binding"
+        if echo "$slot" > "$drv/bind" 2>/dev/null; then
+            sleep 3
+        else
+            log "  bind failed -- is /lib/firmware/amdgpu/ip_discovery.bin present?"
+        fi
+    done
+    return 0
+}
+
 probe_amdgpu() {
     if [ -x "{{ lmcache_guest_amdgpu_probe_cmd }}" ]; then
         if lsmod | grep -q "^amdgpu"; then
@@ -92,6 +126,8 @@ probe_amdgpu() {
 {% endfor %}
     fi
 
+    bind_amdgpu
+
     wait_for "a KFD GPU node" \
         'grep -qvE "^$" /sys/class/kfd/kfd/topology/nodes/*/name 2>/dev/null' \
         || return 1
@@ -112,6 +148,41 @@ bind_ionic() {
         sleep 3
     fi
 {% endif %}
+    return 0
+}
+
+# A guest can boot an `ionic` that is not the one on disk -- an older copy out
+# of the initramfs, while /lib/modules carries the current DKMS build. The two
+# disagree about symbol versions, so ionic_rdma cannot bind to the loaded one
+# and refuses to load at all:
+#
+#   ionic_rdma: disagrees about version of symbol ionic_adminq_post_wait
+#   ionic_rdma: Unknown symbol ionic_adminq_post_wait (err -22)
+#   modprobe: ERROR: could not insert 'ionic_rdma': Invalid argument
+#
+# Waiting cannot fix that: the IB device never appears, so the preflight burns
+# its whole timeout and the unit restart-loops indefinitely with the NIC in
+# reach the entire time. Reload instead, and only when the versions actually
+# differ, so this is a no-op on a healthy guest.
+#
+# Unloading ionic takes the netdev and its address with it; that is safe here
+# because probe_rdma reassigns ETH_ADDR and brings the link up further down.
+reload_ionic_if_stale() {
+    lsmod | grep -q '^ionic_rdma' && return 0
+    lsmod | grep -q '^ionic[[:space:]]' || return 0
+
+    local live ondisk
+    live=$(cat /sys/module/ionic/srcversion 2>/dev/null)
+    ondisk=$(modinfo -F srcversion ionic 2>/dev/null)
+    [ -n "$live" ] && [ -n "$ondisk" ] && [ "$live" = "$ondisk" ] && return 0
+
+    log "loaded ionic (srcversion ${live:-unknown}) is not the one on disk"
+    log "  (${ondisk:-unknown}); ionic_rdma cannot bind to it. Reloading."
+    if ! rmmod ionic 2>/dev/null; then
+        log "  rmmod ionic failed -- something still holds it"
+        return 1
+    fi
+    modprobe ionic_rdma 2>/dev/null || log "  modprobe ionic_rdma returned $?"
     return 0
 }
 
@@ -138,6 +209,47 @@ find_ib_for_netdev() {
     return 1
 }
 
+# UCX cannot open an IB device whose name contains '-' or '_', and the udev
+# rule ernic_guest_setup installs names it rocm-rdma-ernic0. UCX derives a
+# memory-domain name from the device name, fails to find it, and enumerates NO
+# verbs transport at all:
+#
+#   ib_md.c:1122 IB device rocm-rdma-ernic not found
+#   # < failed to open memory domain rocm-rdma-ernic for component ib >
+#
+# Nothing else notices. ibv_devinfo works, the port is ACTIVE, and NIXL comes
+# up and moves every byte over TCP -- a cache hit on every lookup and zero
+# RDMA bytes on the ernic counters. That silent fallback is the exact failure
+# qemu/docker/lmcache exists to prevent, reintroduced one layer down.
+#
+# Measured, renaming the same device each time and re-running `ucx_info -d`:
+#
+#   rocm-rdma-ernic0  no verbs transport     rocmernic0  rc_verbs + ud_verbs
+#   rocm_rdma_ernic0  no verbs transport     ernic0      rc_verbs + ud_verbs
+#
+# So it is the separators, not the trailing digit. Renaming here rather than
+# shipping a competing udev rule: this runs at every unit start, which is also
+# after every module reload, and the DKMS reload in srq_driver.yml drops the
+# device back to its kernel name anyway.
+rename_ib_for_ucx() {
+    local want="{{ lmcache_guest_ib_device_name }}"
+    [ -n "$want" ] || return 0
+    [ -n "$RDMA_DEV" ] || return 0
+    [ "$RDMA_DEV" = "$want" ] && return 0
+    case "$RDMA_DEV" in
+        *-*|*_*) ;;
+        *) log "IB device $RDMA_DEV has no separator; leaving it alone"
+           return 0 ;;
+    esac
+    log "renaming IB device $RDMA_DEV to $want (UCX cannot open a name with - or _)"
+    if ! rdma dev set "$RDMA_DEV" name "$want" 2>&1 | sed 's/^/  /'; then
+        log "  rename failed -- UCX will fall back to TCP and the ernic"
+        log "  rdma_read counters will stay at zero"
+        return 1
+    fi
+    return 0
+}
+
 probe_rdma() {
     if [ -z "$ERNIC_MAC" ]; then
         log "no ernic MAC configured; cannot identify the device"
@@ -146,6 +258,7 @@ probe_rdma() {
 {% for mod in lmcache_guest_rdma_modules %}
     modprobe {{ mod }} 2>/dev/null || log "modprobe {{ mod }} returned $?"
 {% endfor %}
+    reload_ionic_if_stale
     bind_ionic
 
     wait_for "a netdev with MAC $ERNIC_MAC" 'find_ernic_netdev >/dev/null' || {
@@ -161,6 +274,9 @@ probe_rdma() {
         "find_ib_for_netdev $ETH_DEV >/dev/null" || return 1
     RDMA_DEV=$(find_ib_for_netdev "$ETH_DEV")
     log "ernic IB device is $RDMA_DEV"
+
+    rename_ib_for_ucx
+    RDMA_DEV=$(find_ib_for_netdev "$ETH_DEV")
 
     if [ -n "$ETH_ADDR" ]; then
         if ip -4 addr show dev "$ETH_DEV" | grep -q "inet ${ETH_ADDR%%/*}/"; then

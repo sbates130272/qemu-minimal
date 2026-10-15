@@ -36,8 +36,13 @@ ernic_fleet_user_linger: true
 ernic_fleet_ssh_pubkey_file: ""
 
 # ── Driver ───────────────────────────────────────
-# Stock in-tree ionic advertises 1dd8:1002 and 1dd8:1003, not the emulated
-# device's 1dd8:100a, so nothing binds without the AMD patches. Building DKMS
+# Stock in-tree ionic advertises 1dd8:1002 and 1dd8:1003, which since
+# rocm-ernic@3fb74d1 INCLUDES the emulated device -- it moved from 1dd8:100a
+# to 1dd8:1002 -- so the NIC now binds on a stock mainline kernel with no AMD
+# patches at all. The patched modules are still what provide SRQ, and SRQ is
+# what UCX's rc_verbs needs, so this is still the path for anything doing
+# one-sided RDMA; it is no longer the difference between a device and no
+# device. Building DKMS
 # per guest costs ~30 s each and needs a toolchain and network in every
 # guest; the kernel is pinned fleet-wide, so a prebuilt module installed into
 # updates/dkms is identical and free. Point this at modules built once with

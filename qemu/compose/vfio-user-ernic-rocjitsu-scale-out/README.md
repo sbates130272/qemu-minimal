@@ -196,12 +196,12 @@ Two shape rules in the dashboard are worth keeping if you extend it:
 Opt in with `--profile lmcache`, on top of `--profile metrics`.
 
 ```bash
-docker build -t qemu-tool/lmcache-rocm:0.5.5-gfx1250 ../../docker/lmcache
+docker build -t qemu-tool/lmcache-rocm:0.5.6-gfx1250 ../../docker/lmcache
 qemu-tool compose --env-file qemu/env.scale-out \
     --stack vfio-user-ernic-rocjitsu-scale-out \
     --profile metrics --profile lmcache up -d
 
-docker save qemu-tool/lmcache-rocm:0.5.5-gfx1250 -o /tmp/lmcache-rocm.tar
+docker save qemu-tool/lmcache-rocm:0.5.6-gfx1250 -o /tmp/lmcache-rocm.tar
 cd ansible && ansible-playbook \
     -i ../qemu/compose/vfio-user-ernic-rocjitsu-scale-out/fleet-inventory.yml \
     playbooks/fleet-lmcache.yml \

@@ -12,7 +12,6 @@ galaxy_info:
   platforms:
     - name: Ubuntu
       versions:
-        - noble
-        - resolute
+        - all
 
 dependencies: []

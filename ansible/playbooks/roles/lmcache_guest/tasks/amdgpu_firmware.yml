@@ -1,0 +1,118 @@
+---
+# Put the gfx1250 firmware gap-set into the guest, ip_discovery.bin above all.
+#
+# amdgpu-probe loads the driver with discovery=2, which means "read the IP
+# discovery table from a firmware file". Without /lib/firmware/amdgpu/
+# ip_discovery.bin the PCI probe fails -2 and no KFD node is ever created, so
+# the guest looks GPU-less while the device sits there unbound.
+#
+# The blob is NOT baked into a published guest image on purpose: it is
+# per-config, generated for one rocjitsu build, and a copy baked from a
+# different build is wrong for every consumer. vm-rocjitsu.yml says so at
+# rocjitsu_firmware_ip_discovery and leaves it to the caller. This is the
+# caller: generate from the SAME image the stack serves the device from, which
+# the inventory carries as lmcache_guest_rocjitsu_image.
+#
+# Generated once on the controller and fanned out, not generated per guest:
+# the output is identical for a given image and the generator is a docker run.
+
+- name: Check whether the guest already has the discovery blob
+  ansible.builtin.stat:
+    path: /lib/firmware/amdgpu/ip_discovery.bin
+  register: lmcache_guest_ipdisc
+
+# The generation half carries no per-host `when`, deliberately. A `run_once`
+# task is pinned to the first host in the play, so gating it on a per-host
+# condition means that host can skip it while every other host still reads the
+# registered result -- which is then a skip record, and the copy below fails
+# with "object of type 'dict' has no attribute 'path'". Generate
+# unconditionally (one docker run per play, not per guest) and gate only the
+# guest-side copy, which is the part that is actually per-host.
+- name: Generate the gfx1250 firmware on the controller
+  block:
+    - name: Make a staging directory on the controller
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: rjfw
+      register: lmcache_guest_rjfw
+      delegate_to: localhost
+      run_once: true
+      become: false
+
+    # Streamed through tar rather than written to a bind mount: the generator
+    # runs in a container talking to the host's docker daemon, so a -v path is
+    # resolved by the daemon, not by this controller -- the same trap
+    # vm-rocjitsu.yml documents, where the stubs land somewhere the controller
+    # cannot see and docker run still exits 0.
+    - name: Generate the firmware set from the rocjitsu image
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail &&
+          docker run --rm --entrypoint /bin/sh
+          {{ lmcache_guest_rocjitsu_image }}
+          -c 'python3 /usr/local/bin/vfio_guest_firmware.py
+          --generation {{ lmcache_guest_amdgpu_firmware_generation }}
+          --set {{ lmcache_guest_amdgpu_firmware_set }} --output /out
+          && tar -cf - -C /out .'
+          | tar -xf - -C {{ lmcache_guest_rjfw.path }}
+        executable: /bin/bash
+      delegate_to: localhost
+      run_once: true
+      become: false
+      changed_when: true
+
+    # The stream can produce nothing and still exit 0; fail here rather than
+    # leaving a guest to time out waiting for a KFD node that cannot appear.
+    - name: Assert the discovery blob was produced
+      ansible.builtin.stat:
+        path: "{{ lmcache_guest_rjfw.path }}/ip_discovery.bin"
+      register: lmcache_guest_rjfw_ipdisc
+      delegate_to: localhost
+      run_once: true
+      become: false
+      failed_when: not lmcache_guest_rjfw_ipdisc.stat.exists
+
+- name: Install the firmware into the guest
+  when: not lmcache_guest_ipdisc.stat.exists | default(false)
+  block:
+    - name: Ensure the guest firmware directory exists
+      become: true
+      ansible.builtin.file:
+        path: /lib/firmware/amdgpu
+        state: directory
+        mode: "0755"
+
+    - name: Copy the firmware into the guest
+      become: true
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: /lib/firmware/amdgpu/
+        mode: "0644"
+      loop: "{{ lookup('ansible.builtin.fileglob',
+                       lmcache_guest_rjfw.path + '/*.bin', wantlist=True) }}"
+      register: lmcache_guest_fw_copied
+
+    # Only when something landed. The driver does not re-probe by itself, and
+    # the preflight's bind_amdgpu does this at unit start anyway -- this is so
+    # a run that installs the firmware does not also require a restart to make
+    # the GPU appear.
+    # A handler is exactly what this must not be, hence the noqa. It has to
+    # run here, before the MP server block installs and starts the unit,
+    # because the preflight waits on a KFD node that does not exist until the
+    # re-bind happens. A handler runs at the end of the play, by which time
+    # the unit has already restart-looped through its whole preflight timeout.
+    - name: Re-bind any unbound AMD function so the probe re-runs  # noqa: no-handler
+      become: true
+      when: lmcache_guest_fw_copied.changed
+      ansible.builtin.shell:
+        cmd: |
+          set -e
+          drv=/sys/bus/pci/drivers/amdgpu
+          [ -d "$drv" ] || exit 0
+          for dev in /sys/bus/pci/devices/*; do
+            [ "$(cat "$dev/vendor" 2>/dev/null)" = "0x1002" ] || continue
+            [ -e "$dev/driver" ] && continue
+            echo "$(basename "$dev")" > "$drv/bind" || true
+          done
+        executable: /bin/bash
+      changed_when: true
