@@ -283,8 +283,14 @@ jobs:
           exit 1
         }
 
+    # NOT if: always(). The other report lanes upload on success only -- the
+    # default -- and deviating from that published a FAILED run's debris to
+    # the site as a plausible-looking page: "RDMA bytes moved: unknown",
+    # "Could not resolve hostname qemu-1", "No such container". publish-pages
+    # cannot tell a failed run's artifact from a good one; it fetches the
+    # latest by name. Diagnostics for a failure belong in the run log, which
+    # the "Show logs on failure" step already dumps, not on the front page.
     - name: Build the report
-      if: always()
       run: |
         mkdir -p site/lmcache
         {
@@ -293,6 +299,11 @@ jobs:
           echo "- Run: ${GITHUB_RUN_ID}"
           echo "- Date: $(date -u '+%Y-%m-%d %H:%M UTC')"
           echo "- RDMA bytes moved: ${RDMA_DELTA:-unknown} (expected 16777216)"
+          # The stamp render-site-perf.py's REPORT_STATUS_RE reads. A report
+          # with no Status is treated as unknown rather than as a pass, so
+          # without this the lane could never contribute to the all-green
+          # badge. Only reachable on success now, hence the constant.
+          echo "- Generated: **$(date -u '+%Y-%m-%d %H:%M UTC')** &middot; Commit: \`${GITHUB_SHA:0:7}\` &middot; Status: **pass**"
           echo
           echo '## Guest device state'
           echo '```'
@@ -332,7 +343,6 @@ jobs:
     # Upload only. publish-pages.yml is the sole writer of the site: a Pages
     # deploy replaces the whole site, so a lane that deploys erases the others.
     - name: Upload the report
-      if: always()
       uses: actions/upload-artifact@v4
       with:
         name: vm-report-lmcache
