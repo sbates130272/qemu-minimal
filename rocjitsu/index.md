@@ -4,7 +4,7 @@ title: VM Report — rocjitsu VM
 
 # VM Report — qemu-minimal — rocjitsu VM
 
-Generated: **2026-10-15 13:23 UTC** &middot; Commit: [`c5d51ce`](https://github.com/sbates130272/qemu-minimal/commit/c5d51ce8d7e9d4b258235cf3ed934591951c7a67) &middot; Status: **pass**
+Generated: **2026-10-15 20:55 UTC** &middot; Commit: [`4b223d9`](https://github.com/sbates130272/qemu-minimal/commit/4b223d97268d9c2b2ec289ca59a439d543bf79b1) &middot; Status: **pass**
 
 ## Hardware
 
@@ -13,7 +13,7 @@ Generated: **2026-10-15 13:23 UTC** &middot; Commit: [`c5d51ce`](https://github.
 | CPU | AMD EPYC Processor |
 | vCPUs | 4 |
 | Threads/core | 1 |
-| RAM | 3.8Gi total, 3.1Gi free |
+| RAM | 3.8Gi total, 3.2Gi free |
 | Swap | 0B |
 
 ## Kernel
@@ -56,7 +56,7 @@ Filesystem      Size  Used Avail Use% Mounted on
 ```
 Node                  Generic               SN                   Model                                    Namespace  Usage                      Format           FW Rev  
 --------------------- --------------------- -------------------- ---------------------------------------- ---------- -------------------------- ---------------- --------
-/dev/nvme0n1          /dev/ng0n1            ocjitsu-report-nvme1 QEMU NVMe Ctrl                           0x1          1.10  TB /   1.10  TB    512   B +  0 B   11.1.1  
+/dev/nvme0n1          /dev/ng0n1            ocjitsu-report-nvme1 QEMU NVMe Ctrl                           0x1          1.10  TB /   1.10  TB    512   B +  0 B   11.1.2  
 ```
 
 ## PCI devices
@@ -120,7 +120,7 @@ amdrocm-hipfile10.1	10.1.0-3
 ```
 amdgpu-dkms	1:7.1.9.31600000-2407772.26.04
 amdgpu-dkms-firmware	1:31.60.0.0.31600000-2407772.26.04
-amdgpu-exporter	1.5.2-10~24.04
+amdgpu-exporter	1.5.3~24.04
 libdrm-amdgpu1:amd64	2.4.131-1
 ```
 
@@ -177,8 +177,8 @@ ubuntu : ubuntu video users render admin
 
 | Metric | Value |
 |---|---|
-| GEMM | 479 kFLOP/s |
-| hipFile read throughput | 152 MB/s |
+| GEMM | 497 kFLOP/s |
+| hipFile read throughput | 161 MB/s |
 
 These run inside a QEMU guest with the GPU attached over vfio-user, so the
 absolute numbers sit far below what the same benchmark reports on bare metal —
@@ -194,7 +194,7 @@ sgemm-bench: device=AMD Radeon Graphics arch=gfx1250
 sgemm-bench: private_segment_bytes=0
 sgemm-bench: m=128 n=128 k=128
 sgemm-bench: max_absolute_error=0 failures=0
-sgemm-bench: seconds_per_iter=8.75821627 gflops=0.000478899341
+sgemm-bench: seconds_per_iter=8.43487883 gflops=0.000497257173
 sgemm-bench: PASS
 ```
 
@@ -207,10 +207,10 @@ gemm-hipfile-bench: device=AMD Radeon Graphics arch=gfx1250
 gemm-hipfile-bench: path=/mnt/nvme/gemm-hipfile-bench.bin block_bytes=1048576 blocks=32 iters=4
 gemm-hipfile-bench: private_segment_bytes=0
 gemm-hipfile-bench: compat_requested=self buf_registered=yes
-gemm-hipfile-bench: read_bytes=33554432 seconds_per_pass=0.220430814 read_gbs=0.152222057
+gemm-hipfile-bench: read_bytes=33554432 seconds_per_pass=0.208323143 read_gbs=0.161069152
 gemm-hipfile-bench: m=128 n=128 k=128
 gemm-hipfile-bench: max_absolute_error=0 failures=0
-gemm-hipfile-bench: gemm_seconds_per_iter=8.77994327 gflops=0.000477714248
+gemm-hipfile-bench: gemm_seconds_per_iter=8.51228189 gflops=0.000492735562
 gemm-hipfile-bench: PASS
 ```
 
