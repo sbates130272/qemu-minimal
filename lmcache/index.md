@@ -1,7 +1,7 @@
 # LMCache L1 P2P report
 
-- Run: 38801731530
-- Date: 2026-10-15 20:27 UTC
+- Run: 38811621987
+- Date: 2026-10-15 21:41 UTC
 - RDMA bytes moved: unknown (expected 16777216)
 
 ## Guest device state
