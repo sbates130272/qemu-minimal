@@ -134,6 +134,30 @@ jobs:
         docker save "$LMCACHE_IMAGE" -o /var/lib/qemu-tool/share/lmcache-srq.tar
         ls -lh /var/lib/qemu-tool/share/lmcache-srq.tar
 
+    # Reclaim before the qcow2 arrives, which is where this lane ran out of
+    # disk: "zstd: error 70 : Write error : cannot write block : No space
+    # left on device".
+    #
+    # The runner is NOT short of a filesystem -- / is 145G with 87G free
+    # after the cleanup above. This lane simply spends it: an 11.58 GB base
+    # image, a ~10.8 GB built image in the daemon, the buildx builder's own
+    # copy of every layer (cache-to mode=max), a 7.3 GB save tar, and then a
+    # ~17 GB compressed qcow2 that decompresses to about the same again.
+    #
+    # By this point the only ones still needed are the tar (the guests load
+    # it over 9p) and the image in the daemon. The builder cache has already
+    # been exported to gha, so dropping it locally costs nothing on the next
+    # run; the base image is only an input to a build that has finished.
+    - name: Reclaim build space
+      run: |
+        df -h /
+        docker buildx prune --all --force || true
+        docker image rm "$BASE_IMAGE" 2>/dev/null || true
+        docker image prune --force || true
+        df -h /
+      env:
+        BASE_IMAGE: rocm/pytorch:rocm10.1.0_ubuntu24.04_py3.12_pytorch_release_2.14.0
+
     # A runner is smaller than any node a human runs this on, so the fleet
     # defaults would ask for more than it has. Same derivation as
     # report-for-vm-ernic.yml; 4 vCPU is the ionic_rdma floor, not a choice.
@@ -179,6 +203,10 @@ jobs:
     - name: Fetch the guest image and create the overlays
       run: |
         set -eux
+        # Printed because the failure mode here is a bare zstd "No space left
+        # on device" from inside gen-vm, which says nothing about how much
+        # was free when it started.
+        df -h /
         BACKING=$(grep '^VM_BACKING_IMAGE=' "$ENV_FILE" | cut -d= -f2-)
         qemu-tool gen-vm --env-file "$ENV_FILE" \
           --vm-name lmcache-ci-1 --backing-image "$BACKING"
