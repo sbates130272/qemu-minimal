@@ -735,10 +735,18 @@ contributes. Each lane's subtree is rsynced with its own scoped `--delete`,
 so an expired artifact leaves that lane's last report in place and anything
 else on the branch (a future `perf/`) survives untouched.
 
-Adding a lane is four edits: upload an artifact under a new name, add a
+Adding a lane is five edits: upload an artifact under a new name, add a
 `fetch <name> <dir>` line, add the lane's workflow `name:` to
-`on.workflow_run.workflows`, and add a row to the landing page. Miss the
-third and the lane publishes nothing until some *other* lane finishes, which
-looks like the site being stale rather than a missing trigger. Do **not** add
+`on.workflow_run.workflows`, add a row to the landing page, and add a status
+badge to the README's report row. Miss the third and the lane publishes
+nothing until some *other* lane finishes, which looks like the site being
+stale rather than a missing trigger. Miss the fifth and the lane is invisible
+on the front page — which is how report-for-lmcache shipped without one, this
+list having said "four" at the time.
+
+A badge for a lane that does NOT run on every push to main wants no
+`?branch=main`: shields pins that query to main's latest run, and a weekly
+or dispatch-only lane can have none for days, which renders as "no status"
+rather than as its real result. Do **not** add
 `.nojekyll` — the reports are markdown that GitHub's Jekyll build renders,
 unlike rocm-ernic's pre-built Sphinx HTML.
