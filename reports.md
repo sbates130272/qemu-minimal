@@ -21,6 +21,11 @@ permalink: /reports/
     <p>The ernic stack, with VM 1 at the top-level page and VM 2 nested underneath.</p>
   </div>
   <div class="report-card">
+    <span class="eyebrow">Two guests</span>
+    <h2><a href="{{ '/lmcache/' | relative_url }}">lmcache report</a></h2>
+    <p>LMCache L1 P2P between two guests: whether the KV bytes crossed the ernic as RDMA rather than falling back to TCP.</p>
+  </div>
+  <div class="report-card">
     <span class="eyebrow">fio lane</span>
     <h2><a href="{{ '/hipfile-fio/' | relative_url }}">hipFile fio report</a></h2>
     <p>The fio <code>libhipfile</code> benchmark lane, published independently from the rocjitsu report.</p>
@@ -34,6 +39,7 @@ permalink: /reports/
 | `report-for-vm-basic` | Push to `main`, daily 01:00 MST, manual dispatch | `/1vm/` |
 | `report-for-vm-rocjitsu` | Path-filtered push to `main`, daily 01:00 MST, manual dispatch | `/rocjitsu/` |
 | `report-for-vm-ernic` | Path-filtered push to `main`, daily 01:00 MST, manual dispatch | `/ernic/` and `/ernic/vm2/` (ernic VM 1 / VM 2) |
+| `report-for-lmcache` | Path-filtered push to `main`, weekly Sunday, manual dispatch | `/lmcache/` (LMCache L1 P2P over ernic RDMA) |
 | `report-for-hipfile-fio` | Path-filtered push to `main`, daily 01:00 MST, manual dispatch | `/hipfile-fio/` |
 
 ## Why the reports stay separate
