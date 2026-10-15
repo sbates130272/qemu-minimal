@@ -485,12 +485,19 @@ services:
       - /bin/sh
       - -c
       - |
-        cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
-        for i in 1 2 3 4 5; do
-          PIPX_BIN_DIR=/usr/local/bin pipx install --force \
-            /tmp/qemu-tool-build && break
-          sleep 10
-        done
+        if [ -f /qemu-tool-src/qemu/pyproject.toml ]; then
+          cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
+          for i in 1 2 3 4 5; do
+            PIPX_BIN_DIR=/usr/local/bin pipx install --force \
+              /tmp/qemu-tool-build && break
+            sleep 10
+          done
+        else
+          for i in 1 2 3 4 5; do
+            PIPX_BIN_DIR=/usr/local/bin pipx install --force qemu-tool && break
+            sleep 10
+          done
+        fi
         exec qemu-tool run-vm \
           --images "${VM_IMAGES_DIR}" \
           --vm-name "stebates-fleet-1" \
@@ -523,12 +530,19 @@ services:
       - /bin/sh
       - -c
       - |
-        cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
-        for i in 1 2 3 4 5; do
-          PIPX_BIN_DIR=/usr/local/bin pipx install --force \
-            /tmp/qemu-tool-build && break
-          sleep 10
-        done
+        if [ -f /qemu-tool-src/qemu/pyproject.toml ]; then
+          cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
+          for i in 1 2 3 4 5; do
+            PIPX_BIN_DIR=/usr/local/bin pipx install --force \
+              /tmp/qemu-tool-build && break
+            sleep 10
+          done
+        else
+          for i in 1 2 3 4 5; do
+            PIPX_BIN_DIR=/usr/local/bin pipx install --force qemu-tool && break
+            sleep 10
+          done
+        fi
         exec qemu-tool run-vm \
           --images "${VM_IMAGES_DIR}" \
           --vm-name "stebates-fleet-2" \
@@ -561,12 +575,19 @@ services:
       - /bin/sh
       - -c
       - |
-        cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
-        for i in 1 2 3 4 5; do
-          PIPX_BIN_DIR=/usr/local/bin pipx install --force \
-            /tmp/qemu-tool-build && break
-          sleep 10
-        done
+        if [ -f /qemu-tool-src/qemu/pyproject.toml ]; then
+          cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
+          for i in 1 2 3 4 5; do
+            PIPX_BIN_DIR=/usr/local/bin pipx install --force \
+              /tmp/qemu-tool-build && break
+            sleep 10
+          done
+        else
+          for i in 1 2 3 4 5; do
+            PIPX_BIN_DIR=/usr/local/bin pipx install --force qemu-tool && break
+            sleep 10
+          done
+        fi
         exec qemu-tool run-vm \
           --images "${VM_IMAGES_DIR}" \
           --vm-name "stebates-fleet-3" \
@@ -599,12 +620,19 @@ services:
       - /bin/sh
       - -c
       - |
-        cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
-        for i in 1 2 3 4 5; do
-          PIPX_BIN_DIR=/usr/local/bin pipx install --force \
-            /tmp/qemu-tool-build && break
-          sleep 10
-        done
+        if [ -f /qemu-tool-src/qemu/pyproject.toml ]; then
+          cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
+          for i in 1 2 3 4 5; do
+            PIPX_BIN_DIR=/usr/local/bin pipx install --force \
+              /tmp/qemu-tool-build && break
+            sleep 10
+          done
+        else
+          for i in 1 2 3 4 5; do
+            PIPX_BIN_DIR=/usr/local/bin pipx install --force qemu-tool && break
+            sleep 10
+          done
+        fi
         exec qemu-tool run-vm \
           --images "${VM_IMAGES_DIR}" \
           --vm-name "stebates-fleet-4" \
@@ -637,12 +665,19 @@ services:
       - /bin/sh
       - -c
       - |
-        cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
-        for i in 1 2 3 4 5; do
-          PIPX_BIN_DIR=/usr/local/bin pipx install --force \
-            /tmp/qemu-tool-build && break
-          sleep 10
-        done
+        if [ -f /qemu-tool-src/qemu/pyproject.toml ]; then
+          cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
+          for i in 1 2 3 4 5; do
+            PIPX_BIN_DIR=/usr/local/bin pipx install --force \
+              /tmp/qemu-tool-build && break
+            sleep 10
+          done
+        else
+          for i in 1 2 3 4 5; do
+            PIPX_BIN_DIR=/usr/local/bin pipx install --force qemu-tool && break
+            sleep 10
+          done
+        fi
         exec qemu-tool run-vm \
           --images "${VM_IMAGES_DIR}" \
           --vm-name "stebates-fleet-5" \
@@ -675,12 +710,19 @@ services:
       - /bin/sh
       - -c
       - |
-        cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
-        for i in 1 2 3 4 5; do
-          PIPX_BIN_DIR=/usr/local/bin pipx install --force \
-            /tmp/qemu-tool-build && break
-          sleep 10
-        done
+        if [ -f /qemu-tool-src/qemu/pyproject.toml ]; then
+          cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
+          for i in 1 2 3 4 5; do
+            PIPX_BIN_DIR=/usr/local/bin pipx install --force \
+              /tmp/qemu-tool-build && break
+            sleep 10
+          done
+        else
+          for i in 1 2 3 4 5; do
+            PIPX_BIN_DIR=/usr/local/bin pipx install --force qemu-tool && break
+            sleep 10
+          done
+        fi
         exec qemu-tool run-vm \
           --images "${VM_IMAGES_DIR}" \
           --vm-name "stebates-fleet-6" \
@@ -713,12 +755,19 @@ services:
       - /bin/sh
       - -c
       - |
-        cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
-        for i in 1 2 3 4 5; do
-          PIPX_BIN_DIR=/usr/local/bin pipx install --force \
-            /tmp/qemu-tool-build && break
-          sleep 10
-        done
+        if [ -f /qemu-tool-src/qemu/pyproject.toml ]; then
+          cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
+          for i in 1 2 3 4 5; do
+            PIPX_BIN_DIR=/usr/local/bin pipx install --force \
+              /tmp/qemu-tool-build && break
+            sleep 10
+          done
+        else
+          for i in 1 2 3 4 5; do
+            PIPX_BIN_DIR=/usr/local/bin pipx install --force qemu-tool && break
+            sleep 10
+          done
+        fi
         exec qemu-tool run-vm \
           --images "${VM_IMAGES_DIR}" \
           --vm-name "stebates-fleet-7" \
@@ -751,12 +800,19 @@ services:
       - /bin/sh
       - -c
       - |
-        cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
-        for i in 1 2 3 4 5; do
-          PIPX_BIN_DIR=/usr/local/bin pipx install --force \
-            /tmp/qemu-tool-build && break
-          sleep 10
-        done
+        if [ -f /qemu-tool-src/qemu/pyproject.toml ]; then
+          cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
+          for i in 1 2 3 4 5; do
+            PIPX_BIN_DIR=/usr/local/bin pipx install --force \
+              /tmp/qemu-tool-build && break
+            sleep 10
+          done
+        else
+          for i in 1 2 3 4 5; do
+            PIPX_BIN_DIR=/usr/local/bin pipx install --force qemu-tool && break
+            sleep 10
+          done
+        fi
         exec qemu-tool run-vm \
           --images "${VM_IMAGES_DIR}" \
           --vm-name "stebates-fleet-8" \
@@ -782,17 +838,24 @@ services:
     user: "65534:65534"
     volumes:
       - ernic-stats:/run/ernic-stats:ro
-      - "${QEMU_TOOL_SRC:-../../..}:/qemu-tool-src:ro"
+      - "${QEMU_TOOL_SRC:-/tmp}:/qemu-tool-src:ro"
     entrypoint:
       - /bin/sh
       - -c
       - |
-        cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
-        for i in 1 2 3 4 5; do
-          HOME=/tmp PIPX_HOME=/tmp/pipx PIPX_BIN_DIR=/tmp/bin pipx install --force \
-            /tmp/qemu-tool-build && break
-          sleep 10
-        done
+        if [ -f /qemu-tool-src/qemu/pyproject.toml ]; then
+          cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
+          for i in 1 2 3 4 5; do
+            HOME=/tmp PIPX_HOME=/tmp/pipx PIPX_BIN_DIR=/tmp/bin pipx install --force \
+              /tmp/qemu-tool-build && break
+            sleep 10
+          done
+        else
+          for i in 1 2 3 4 5; do
+            HOME=/tmp PIPX_HOME=/tmp/pipx PIPX_BIN_DIR=/tmp/bin pipx install --force qemu-tool && break
+            sleep 10
+          done
+        fi
         exec /tmp/bin/qemu-tool ernic-stats \
           --stats-dir /run/ernic-stats \
           --port 9840
@@ -952,11 +1015,19 @@ services:
       - -c
       - |
         cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
-        for i in 1 2 3 4 5; do
-          HOME=/tmp PIPX_HOME=/tmp/pipx PIPX_BIN_DIR=/tmp/bin pipx install --force \
-            /tmp/qemu-tool-build && break
-          sleep 10
-        done
+        if [ -f /qemu-tool-src/qemu/pyproject.toml ]; then
+          cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
+          for i in 1 2 3 4 5; do
+            HOME=/tmp PIPX_HOME=/tmp/pipx PIPX_BIN_DIR=/tmp/bin pipx install --force \
+              /tmp/qemu-tool-build && break
+            sleep 10
+          done
+        else
+          for i in 1 2 3 4 5; do
+            HOME=/tmp PIPX_HOME=/tmp/pipx PIPX_BIN_DIR=/tmp/bin pipx install --force qemu-tool && break
+            sleep 10
+          done
+        fi
         exec /tmp/bin/qemu-tool lmcache-stats \
           --coordinator-url http://172.31.0.12:9300 \
           --port 9841
