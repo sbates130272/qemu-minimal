@@ -197,10 +197,21 @@ jobs:
         {
           echo "VM_VCPUS=$VM_VCPUS"
           echo "VM_VMEM=$VM_VMEM"
-          echo "VM_SHM_SIZE=${VM_VMEM}m"
+          # Headroom, not the exact minimum. env.scale-out's rule is
+          # "VM_SHM_SIZE >= VM_VMEM, per VM", and setting it EQUAL leaves a
+          # vfio-user memfd backend sitting on the boundary. The two-VM
+          # ernic report lane -- which passes -- leaves this at the stack
+          # default of 8g for guests this size. shm_size caps a tmpfs rather
+          # than reserving it, so the slack is free until touched.
+          echo "VM_SHM_SIZE=$((VM_VMEM + 1024))m"
         } >> "$GITHUB_ENV"
         echo "runner: ${HOST_CPUS} vCPU, ${HOST_MEM_MB} MB"
         echo "guests: ${VMS} x ${VM_VCPUS} vCPU, ${VM_VMEM} MB"
+        # Printed because guest 2 failing to register looks identical to
+        # memory pressure, and neither df nor free appears anywhere else in
+        # this lane.
+        df -h /dev/shm || true
+        free -m || true
 
     # Overridden on top of the committed env file rather than edited into it,
     # so the file stays reviewable and the sizing stays runner-derived.
