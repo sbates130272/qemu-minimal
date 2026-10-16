@@ -1,0 +1,361 @@
+---
+# Make a running two-VM quickstart fleet test-ready, then prove the GPU and
+# the RDMA NIC with one test each.
+#
+#   qemu-tool gen-compose --env-file qemu/env.quickstart --output-dir <dir>
+#   docker compose --env-file qemu/env.quickstart up -d      # from <dir>
+#   ansible-playbook -i <dir>/fleet-inventory.yml \
+#       playbooks/fleet-quickstart.yml --private-key <key>
+#
+# Normally reached through scripts/quickstart-2vm.sh, which is also what the
+# daily report-for-quickstart lane runs.
+#
+# Unlike the vm-* playbooks this configures a RUNNING fleet rather than baking
+# an image, and it is re-runnable. It is deliberately small: the published
+# ernic-rocjitsu qcow2 already carries the mainline kernel, the ionic-ernic
+# DKMS modules, the udev naming rules, rdma-core, perftest and ROCm 10.1, so
+# only three things are missing from a guest that has just booted.
+#
+#   1. /lib/firmware/amdgpu/ip_discovery.bin. Omitted from the published disk
+#      on purpose -- it is per rocjitsu build -- and without it amdgpu probes
+#      -2, no KFD node appears and the guest looks GPU-less (AGENTS.md
+#      ip_discovery note).
+#   2. An address on the ernic. Run-time only state, so a boot does not have
+#      it (AGENTS.md issue 12), and without it ARP goes unanswered and
+#      ib_send_bw cannot do its out-of-band exchange at all.
+#   3. amdgpu loaded. It is blacklisted at boot by design: the device is
+#      attached from outside the guest, so the driver must not load before
+#      the rocjitsu server is serving.
+#
+# Everything else here is a test or a fact for the report.
+
+- name: Make both guests test-ready
+  hosts: fleet
+  gather_facts: true
+  # No play-level become: the firmware role delegates tasks to the controller,
+  # where sudo is neither wanted nor available. Each task that needs root in
+  # the guest takes become for itself, as the included roles already do.
+  become: false
+  vars:
+    # Consumed by the two lmcache_guest task files included below. Reused
+    # rather than reimplemented: both are exactly what a quickstart guest
+    # needs, and a second copy would be a second thing to keep right.
+    lmcache_guest_eth_address: "{{ fleet_guest_ip }}/{{ fleet_guest_prefix }}"
+    # The name the udev rules in the image already give this interface. The
+    # role's default renames it to ernic0, which is right for an LMCache guest
+    # and pointless here -- matching the existing name makes netplan's
+    # set-name a no-op instead of a rename race against udev.
+    lmcache_guest_ernic_netplan_name: rocm-ernic0
+  tasks:
+    - name: Install the gfx1250 firmware stubs generated from this stack's rocjitsu
+      ansible.builtin.include_role:
+        name: lmcache_guest
+        tasks_from: amdgpu_firmware
+
+    - name: Declare the ernic address to netplan
+      ansible.builtin.include_role:
+        name: lmcache_guest
+        tasks_from: netplan_ernic
+
+    - name: Check whether KFD is already up
+      ansible.builtin.stat:
+        path: /dev/kfd
+      register: quickstart_kfd
+
+    # The image's own wrapper, not a bare modprobe: modprobe on an already
+    # resident amdgpu silently discards its parameters and returns 0, and
+    # amdgpu-probe refuses in that case. The parameters are not optional --
+    # discovery=2 is what makes the driver read ip_discovery.bin at all.
+    - name: Probe amdgpu with the emulation parameters
+      become: true
+      ansible.builtin.command:
+        cmd: /usr/local/bin/amdgpu-probe
+      when: not quickstart_kfd.stat.exists
+      changed_when: true
+
+    - name: Wait for the KFD node
+      ansible.builtin.wait_for:
+        path: /dev/kfd
+        timeout: 120
+
+    # TheRock installs to a versioned prefix that nothing puts on PATH, so
+    # rocminfo is "command not found" on a fresh guest despite being
+    # installed. sort -V, not a lexical sort: that puts core-9.0 above
+    # core-10.0.
+    - name: Locate the ROCm prefix
+      ansible.builtin.shell:
+        cmd: set -o pipefail; ls -d /opt/rocm/core-* 2>/dev/null | sort -V | tail -1
+        executable: /bin/bash
+      register: quickstart_rocm_raw
+      changed_when: false
+
+    - name: Record the ROCm prefix
+      ansible.builtin.set_fact:
+        quickstart_rocm: >-
+          {{ quickstart_rocm_raw.stdout | trim
+             if (quickstart_rocm_raw.stdout | trim | length > 0)
+             else '/opt/rocm' }}
+
+    - name: Fail with a useful message when the prefix has no hipcc
+      ansible.builtin.stat:
+        path: "{{ quickstart_rocm }}/bin/hipcc"
+      register: quickstart_hipcc
+      failed_when: not quickstart_hipcc.stat.exists
+
+    # Asked for rather than assumed. The udev rules in the image name it
+    # rocm-rdma-ernic0, but a guest prepared for UCX answers to something else
+    # (AGENTS.md issue 21), and a wrong -d is a confusing failure.
+    - name: Find the IB device
+      ansible.builtin.command:
+        cmd: ibv_devinfo -l
+      register: quickstart_ibv_list
+      changed_when: false
+
+    - name: Record the IB device name
+      ansible.builtin.set_fact:
+        quickstart_ib_device: >-
+          {{ quickstart_ibv_list.stdout_lines[1:]
+             | map('trim') | reject('equalto', '') | list | first }}
+
+    - name: Wait for the port to come up
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail;
+          ibv_devinfo -d {{ quickstart_ib_device }} | grep -q 'state:.*PORT_ACTIVE'
+        executable: /bin/bash
+      register: quickstart_port
+      until: quickstart_port.rc == 0
+      retries: 30
+      delay: 2
+      changed_when: false
+
+    - name: Report what each guest has
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: kernel {{ ansible_kernel }},
+          ROCm {{ quickstart_rocm }}, IB {{ quickstart_ib_device }}
+          ({{ quickstart_port.attempts | default(1) }} attempt(s) to PORT_ACTIVE),
+          ernic {{ fleet_guest_ip }}
+
+# ---------------------------------------------------------------------------
+# GPU test
+# ---------------------------------------------------------------------------
+#
+# ONE scratch-using process per guest per device lifetime. The emulated GPU
+# serves its private/scratch segment to exactly one process, and the second
+# one in the same boot wedges the device for every later process -- see
+# roles/rocjitsu_gpu_test/defaults/main.yml. So this play runs a single
+# workload and nothing else touches the GPU afterwards.
+- name: Prove the GPU
+  hosts: fleet
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Create the work directory
+      ansible.builtin.file:
+        path: /var/tmp/quickstart
+        state: directory
+        mode: "0755"
+
+    # The source rocjitsu_gpu_test already owns, by relative path rather than
+    # a second copy: it reports the device name and CU count, then checks the
+    # result rather than only that the kernel launched.
+    - name: Copy the HIP source
+      ansible.builtin.copy:
+        src: roles/rocjitsu_gpu_test/files/vector_add.hip
+        dest: /var/tmp/quickstart/vector_add.hip
+        mode: "0644"
+
+    - name: Enumerate the ROCm agents
+      ansible.builtin.command:
+        cmd: "{{ quickstart_rocm }}/bin/rocm_agent_enumerator"
+      register: quickstart_agents
+      changed_when: false
+
+    # gfx000 is the CPU agent and is always listed; a run where it is the only
+    # entry means KFD came up without the GPU attached.
+    - name: Record the GPU target
+      ansible.builtin.set_fact:
+        quickstart_arch: >-
+          {{ quickstart_agents.stdout_lines | map('trim')
+             | reject('match', '^gfx000$') | reject('equalto', '')
+             | list | first | default('') }}
+
+    - name: Fail when no GPU agent was enumerated
+      ansible.builtin.fail:
+        msg: >-
+          rocm_agent_enumerator found no GPU agent (saw
+          {{ quickstart_agents.stdout_lines | join(', ') }}). amdgpu loaded but
+          KFD did not attach the device.
+      when: quickstart_arch | length == 0
+
+    - name: Compile vector_add
+      ansible.builtin.command:
+        cmd: >-
+          timeout 600 {{ quickstart_rocm }}/bin/hipcc
+          --offload-arch={{ quickstart_arch }}
+          -o /var/tmp/quickstart/vector_add
+          /var/tmp/quickstart/vector_add.hip
+      changed_when: true
+
+    # The runtime dirs named explicitly rather than trusted to ldconfig: the
+    # published image does not put this prefix in the linker cache, and the
+    # symptom is "error while loading shared libraries" rather than anything
+    # about ROCm.
+    - name: Run vector_add
+      ansible.builtin.command:
+        cmd: timeout 600 /var/tmp/quickstart/vector_add 4096
+      environment:
+        ROCM_PATH: "{{ quickstart_rocm }}"
+        LD_LIBRARY_PATH: >-
+          {{ quickstart_rocm }}/lib:{{ quickstart_rocm }}/lib64:{{
+          quickstart_rocm }}/lib/llvm/lib
+      register: quickstart_vector_add
+      changed_when: false
+      failed_when: >-
+        quickstart_vector_add.rc != 0
+        or 'vector-add: PASS' not in quickstart_vector_add.stdout
+
+    - name: Show the GPU test output
+      ansible.builtin.debug:
+        msg: "{{ quickstart_vector_add.stdout_lines }}"
+
+# ---------------------------------------------------------------------------
+# RDMA test
+# ---------------------------------------------------------------------------
+#
+# ib_send_bw from guest 1 to guest 2 over the mesh. The server goes into a
+# transient SYSTEM unit, not a backgrounded SSH command: a perftest server
+# started over SSH exits with the session even when disowned (AGENTS.md
+# issue 8). It is never killed either -- it exits on its own once the client
+# finishes, and killing a perftest mid-run leaves the guest RDMA device
+# broken until the whole stack is recreated (AGENTS.md issue 6).
+- name: Start the RDMA server on the last guest
+  hosts: fleet[-1]
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Clear any unit left by an earlier run
+      ansible.builtin.command:
+        cmd: systemctl reset-failed quickstart-ib-send-bw.service
+      changed_when: false
+      failed_when: false
+
+    - name: Start ib_send_bw as a transient unit
+      ansible.builtin.command:
+        cmd: >-
+          systemd-run --unit=quickstart-ib-send-bw --collect
+          /usr/bin/ib_send_bw -d {{ quickstart_ib_device }}
+          --iters 1000 --size 65536
+      changed_when: true
+
+    # Read the listening socket; do NOT connect to it. `wait_for: port:` was
+    # the first attempt and it is a trap here: it opens a TCP connection,
+    # which IS the client as far as ib_send_bw is concerned. The server took
+    # the probe for its peer, failed the parameter exchange
+    # ("ethernet_read_data: Couldn't read reports") and exited before the
+    # real client arrived a second later, which then reported "Couldn't
+    # connect" and looked like a broken L2 segment. Same shape as the ernic
+    # healthcheck in AGENTS.md issue 15: anything that opens this port
+    # changes what it is measuring.
+    - name: Wait for it to listen
+      ansible.builtin.shell:
+        cmd: set -o pipefail; ss -ltn 'sport = :18515' | grep -q LISTEN
+        executable: /bin/bash
+      register: quickstart_server_listening
+      until: quickstart_server_listening.rc == 0
+      retries: 30
+      delay: 2
+      changed_when: false
+
+- name: Run the RDMA client on the first guest
+  hosts: fleet[0]
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Run ib_send_bw against the peer
+      ansible.builtin.command:
+        cmd: >-
+          timeout 300 /usr/bin/ib_send_bw -d {{ quickstart_ib_device }}
+          --iters 1000 --size 65536
+          {{ hostvars[groups['fleet'][-1]].fleet_guest_ip }}
+      register: quickstart_ib_send_bw
+      changed_when: false
+
+    - name: Show the RDMA test output
+      ansible.builtin.debug:
+        msg: "{{ quickstart_ib_send_bw.stdout_lines }}"
+
+    # The BW line, not the exit status: ib_send_bw exits 0 on runs that moved
+    # nothing useful, and this is the number the report quotes.
+    - name: Assert the run reported a non-zero bandwidth
+      ansible.builtin.set_fact:
+        quickstart_bw: >-
+          {{ quickstart_ib_send_bw.stdout_lines
+             | select('search', '^\s*65536\s')
+             | list | first | default('') }}
+      failed_when: quickstart_bw | length == 0
+
+# ---------------------------------------------------------------------------
+# Facts for the report
+# ---------------------------------------------------------------------------
+- name: Collect the facts the report quotes
+  hosts: fleet
+  gather_facts: false
+  become: false
+  vars:
+    # Where scripts/quickstart-2vm.sh collects per-guest output from. Writing
+    # files rather than printing lets the script assemble a report without
+    # parsing an Ansible recap.
+    quickstart_artifacts_dir: /var/tmp/quickstart-artifacts
+  tasks:
+    - name: Gather a summary in the guest
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          echo "## {{ inventory_hostname }}"
+          echo
+          echo '```'
+          echo "kernel:  $(uname -r)"
+          echo "rocm:    {{ quickstart_rocm }}"
+          echo "gpu:     {{ quickstart_arch | default('none') }}"
+          ibv_devinfo -d {{ quickstart_ib_device }} | head -8
+          echo "--- block devices (nvme0n1 is the emulated NVMe)"
+          lsblk -d -o NAME,SIZE,TYPE
+          echo "--- addresses"
+          ip -br addr
+          echo '```'
+        executable: /bin/bash
+      register: quickstart_summary
+      changed_when: false
+
+    # Not run_once: it would behave differently under the free strategy, and
+    # creating the same directory once per guest costs nothing.
+    - name: Make the artifacts directory on the controller
+      ansible.builtin.file:
+        path: "{{ quickstart_artifacts_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    - name: Write this guest's summary to the controller
+      ansible.builtin.copy:
+        content: |
+          {{ quickstart_summary.stdout }}
+
+          ### GPU test
+
+          ```
+          {{ quickstart_vector_add.stdout | default('not run') }}
+          ```
+
+          {% if quickstart_ib_send_bw is defined %}
+          ### RDMA test (client)
+
+          ```
+          {{ quickstart_ib_send_bw.stdout }}
+          ```
+          {% endif %}
+        dest: "{{ quickstart_artifacts_dir }}/{{ inventory_hostname }}.md"
+        mode: "0644"
+      delegate_to: localhost

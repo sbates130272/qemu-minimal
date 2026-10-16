@@ -108,6 +108,13 @@ jobs:
     - name: Syntax-check fleet-lmcache playbook
       run: ansible-playbook --syntax-check playbooks/fleet-lmcache.yml
       working-directory: ansible
+    # Same reasoning as fleet-lmcache above: it runs against the generated
+    # fleet inventory rather than a baked guest, so no other lane parses it
+    # on a PR. report-for-quickstart does execute it, but daily and after the
+    # merge.
+    - name: Syntax-check fleet-quickstart playbook
+      run: ansible-playbook --syntax-check playbooks/fleet-quickstart.yml
+      working-directory: ansible
 
     # Scoped to the two repo-local roles that are clean at the `production`
     # profile, rather than all of ansible/: the rest are not yet, and a gate

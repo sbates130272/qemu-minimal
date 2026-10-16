@@ -91,6 +91,14 @@ REPORTS = (
     # all-green badge to go green, and that lane is weekly -- so it would be
     # stale six days in seven and hold the badge down permanently. Adding it
     # needs the lane moved to a daily cadence first, not just a line here.
+    #
+    # report-for-quickstart is absent for a different reason: it IS daily, so
+    # it would qualify, but it is new and boots two guests on a runner that
+    # cannot give them a core each (AGENTS.md issue 14). Adding it before it
+    # has a green streak would put the all-green badge at the mercy of a lane
+    # still shaking out runner-sized problems. Add
+    #   {"key": "quickstart", "label": "quickstart", "path": "quickstart/index.md"}
+    # once it has run clean for a week or so.
 )
 
 BADGE_RE = re.compile(r"^([0-9]+(?:\.[0-9]+)?)\s*([kMGT]?)([A-Za-z/]+)$")

@@ -14,7 +14,8 @@
      are pinned with ?branch=main. report-for-lmcache is NOT: it is weekly,
      dispatch, and a path-filtered push, so it can go days with no run on
      main, and a pinned badge would render that as "no status" rather than as
-     its real last result.
+     its real last result. report-for-quickstart is pinned: it is daily and
+     path-filtered on push to main, like the vm-* lanes.
 
      The date badge is the odd one out: it is not a workflow status. It is
      computed during the Pages publish from the reports actually on the site,
@@ -27,6 +28,7 @@
 [![rocjitsu Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-vm-rocjitsu.yml?branch=main&label=report-for-vm-rocjitsu&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-vm-rocjitsu.yml)
 [![ernic Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-vm-ernic.yml?branch=main&label=report-for-vm-ernic&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-vm-ernic.yml)
 [![lmcache Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-lmcache.yml?label=report-for-lmcache&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-lmcache.yml)
+[![quickstart Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-quickstart.yml?branch=main&label=report-for-quickstart&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-quickstart.yml)
 [![All Reports Green](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-all-green.json&style=flat-square)](https://sbates130272.github.io/qemu-minimal/perf/)
 
 <!-- Performance. These are shields.io *endpoint* badges: the label, value and
@@ -116,6 +118,56 @@ testing.
 - Multi-architecture support (x86_64, ARM64, RISC-V)
 - Declarative package management via manifests
 - KVM acceleration support
+
+## Quick Start: two GPU + RDMA VMs
+
+The fastest way to something real: two guests, each with an emulated gfx1250,
+an emulated NVMe and an emulated rocm-ernic RDMA NIC, plus a GPU test and an
+RDMA test across them. Nothing is built — the guest comes from a published
+qcow2 that already carries the mainline kernel, the ionic driver, rdma-core,
+perftest and ROCm 10.1, and the device servers come from tagged CI images.
+
+You need KVM, Docker with compose, Ansible, [`oras`](https://oras.land/),
+8 cores, 16 GB of RAM and about 60 GB of disk. Then:
+
+```bash
+pipx install -e ./qemu                                     # or the .deb, see below
+ansible-galaxy collection install -r ansible/requirements.yml
+scripts/quickstart-2vm.sh
+```
+
+That script is the whole path, and the daily
+[report-for-quickstart](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-quickstart.yml)
+lane runs the same one — so what is documented here is what CI proves every
+morning. It:
+
+1. pulls the guest image (~17 GB, the long step) and its SSH keypair, which
+   ships beside it as an ORAS referrer;
+2. creates two overlays of one backing file and generates a two-VM stack from
+   [`qemu/env.quickstart`](qemu/env.quickstart);
+3. brings the stack up — per guest a `rocm-ernic` NIC server, a `rocjitsu` GPU
+   server and a QEMU container, with the two NICs joined by a TCP mesh;
+4. stages the per-build `ip_discovery.bin`, loads `amdgpu` and gives each guest
+   its address on the ernic L2 segment;
+5. runs `vector_add` on each guest's GPU and `ib_send_bw` from guest 1 to
+   guest 2, then checks the NIC's own byte counter moved — a passing
+   `ib_send_bw` proves the verbs worked, only the counter proves the bytes
+   crossed the mesh.
+
+Measured on a 32-core workstation: **2 m 47 s** end to end once the backing
+image is cached, and a first run is that plus however long pulling ~20 GB
+takes you (about 3 minutes here). When it finishes:
+
+```bash
+ssh -i /var/lib/qemu-tool/quickstart-key/id_rsa -p 2222 batesste@localhost
+scripts/quickstart-2vm.sh down     # stop the stack, keep the overlays
+```
+
+Useful variations: `scripts/quickstart-2vm.sh preflight` checks this machine
+without touching anything, `up` stops once the guests are booted, and `test`
+re-runs the configuration and the tests against a stack that is already up.
+For more than two guests see [Scale-out fleet](#scale-out-fleet), which is the
+same stack generator with a larger `VM_COUNT`.
 
 ## System-wide Install (Debian/Ubuntu)
 
