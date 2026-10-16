@@ -217,14 +217,31 @@ jobs:
     # The keypair ships as an ORAS referrer next to the qcow2; gen-vm pulls
     # only the disk. Without it the generated inventory authenticates as a
     # user that exists with a key that does not.
+    # The qcow2 ships its keypair as an ORAS REFERRER, not inside the image,
+    # and gen-vm pulls only the disk -- so without this the generated
+    # inventory authenticates as a user that exists with a key that does not.
+    #
+    # Selected by artifactType, not by position. The first cut read
+    # ["manifests"][0] and died with KeyError: 'manifests' -- oras 1.3.4
+    # calls the list "referrers" -- and [0] would have been a second guess
+    # waiting to break the day a signature or SBOM referrer is attached ahead
+    # of this one. Verified against the pinned qcow2, which has exactly one.
+    #
+    # One line on purpose: a heredoc inside a `run: |` block keeps its
+    # leading whitespace, so an indented Python body is an IndentationError.
     - name: Fetch the guest SSH key
+      env:
+        VM_INFO_TYPE: application/vnd.batesste.vm-info.v1
       run: |
-        set -eux
+        set -euo pipefail
         BACKING=$(grep '^VM_BACKING_IMAGE=' "$ENV_FILE" | cut -d= -f2-)
-        REF=$(oras discover "$BACKING" --format json \
-              | python3 -c 'import sys,json; print(json.load(sys.stdin)["manifests"][0]["reference"])')
+        oras discover "$BACKING" --format json > /tmp/referrers.json
+        REF=$(python3 -I -c 'import json,os,sys; want=os.environ["VM_INFO_TYPE"]; refs=json.load(sys.stdin).get("referrers",[]); hits=[r["reference"] for r in refs if r.get("artifactType")==want]; print(hits[0]) if hits else sys.exit("no %s referrer on the qcow2; found %r. The guest keypair ships as a referrer -- without it the inventory has a user and no key." % (want,[r.get("artifactType") for r in refs]))' < /tmp/referrers.json)
         mkdir -p /tmp/guest-key
         oras pull "$REF" -o /tmp/guest-key
+        # Named explicitly: a silent miss here surfaces much later as an SSH
+        # permission denial against a guest that is perfectly healthy.
+        test -f /tmp/guest-key/id_rsa
         chmod 600 /tmp/guest-key/id_rsa
 
     - name: Bring up the fleet
