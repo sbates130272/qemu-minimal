@@ -372,12 +372,45 @@ jobs:
 
     # A green playbook recap does NOT mean a working fleet: registration is
     # reported as a message, not a failure, so assert it separately.
+    # Polled, not asked once. Registration is asynchronous: the server starts,
+    # loads torch and the ROCm runtime, registers its KV cache and only then
+    # appears to the coordinator. A single curl the instant the play returns
+    # is a race, and it lost -- the play's own check (12 x 10s) reported
+    # "1 of 2 registered. Missing: ['lmcache-ci-2']" and this step then
+    # failed immediately on the same answer.
+    #
+    # 300s because the bench sees ~70s on a 32-core host and this runner is
+    # slower; a guest that is merely slow should pass, and one that is stuck
+    # should fail with its log attached rather than with a bare count.
     - name: Assert both instances registered
       run: |
-        n=$(curl -sf http://lmcache-coordinator:9300/instances \
-            | python3 -c 'import sys,json; print(len(json.load(sys.stdin)["instances"]))')
-        echo "registered: $n"
-        [ "$n" = "2" ] || { echo "::error::expected 2 registered instances, got $n"; exit 1; }
+        set -eu
+        elapsed=0
+        n=0
+        while [ "$elapsed" -lt 300 ]; do
+          n=$(curl -sf http://lmcache-coordinator:9300/instances 2>/dev/null \
+              | python3 -I -c 'import sys,json; print(len(json.load(sys.stdin).get("instances",[])))' 2>/dev/null || echo 0)
+          [ "$n" = "2" ] && break
+          sleep 10
+          elapsed=$((elapsed + 10))
+        done
+        echo "registered: $n after ${elapsed}s"
+        if [ "$n" != "2" ]; then
+          echo "::error::expected 2 registered instances, got $n after ${elapsed}s"
+          curl -sf http://lmcache-coordinator:9300/instances || true
+          echo
+          # Both guests, not just the first: the one that failed to register
+          # is by definition the one whose log is wanted, and last time that
+          # was guest 2 while the step only ever dumped guest 1.
+          for host in qemu-1 qemu-2; do
+            echo "--- $host lmcache-server ---"
+            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                -o ConnectTimeout=5 -p 2222 -i /tmp/guest-key/id_rsa \
+                batesste@"$host" \
+                'systemctl is-active lmcache-server; sudo docker logs --tail 40 lmcache-server 2>&1' || true
+          done
+          exit 1
+        fi
 
     # The test itself: seed on guest 1, settle, pull the SAME keys on guest 2.
     # Geometry is deliberately small -- the default takes ~20 minutes to
