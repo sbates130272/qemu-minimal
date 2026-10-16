@@ -17,6 +17,7 @@ file up to date as infrastructure changes.
 - `qemu/compose/vfio-user-ernic-rocjitsu-scale-out/` — N-VM ernic mesh + one
   GPU per VM. **Generated** by `qemu-tool gen-compose` from `qemu/env.scale-out`;
   do not hand-edit it
+- `qemu/env.quickstart` + `scripts/quickstart-2vm.sh` + `ansible/playbooks/fleet-quickstart.yml` — the README's Quick Start: two guests from the published qcow2, each with a GPU, an NVMe and an ernic, plus a GPU test and an inter-guest RDMA test. The `report-for-quickstart` lane runs *that script*, not a copy of its steps, so the documented path cannot rot
 - `images/` — qcow2 VM disk images (backing + overlay pairs, **not** `/var/lib/qemu-tool/images`)
 - `ansible/` — Ansible playbooks for VM provisioning
 - `rocm-ernic-enablement.md` — running log of rocm-ernic integration status and bugs
@@ -197,6 +198,17 @@ reloads udev, and both renames are confirmed working in CI — the ionic lane's
 `Show NIC details` reports `rocm-ernic0` carrying `altname enp0s5np0`, which is
 the pre-rename kernel name, and `ibv_devinfo` reports `hca_id: rocm-rdma-ernic0`.
 The IB rename shells out to `/usr/bin/rdma`, which the gen-vm guest has.
+
+**On the published `ernic-rocjitsu` qcow2 only the Ethernet rename happens.**
+Measured 2026-10-16 on both guests of a `quickstart` stack from
+`20261014.geea0485`: the netdev comes up as `rocm-ernic0`, and `ibv_devinfo`
+reports `hca_id: rocep1s0` — the kernel name. The rules file is in the image
+(`/etc/udev/rules.d/99-rocm-ernic.rules`, from the build, not from Ansible),
+so this is the IB half of it not firing rather than the rules being absent.
+The consequence is practical: anything on a fleet guest that passes
+`-d rocm-rdma-ernic0` fails there, so resolve the name from `ibv_devinfo -l`
+rather than hardcoding it — which is what `fleet-quickstart.yml` does, and
+why its RDMA test works on a guest whose device has either name.
 
 As of rocm-ernic@3fb74d1 the rules match on four attributes, not two —
 `0x1dd8`/`0x1002` plus the subsystem pair `0x1dd8`/`0x5400`:
@@ -742,7 +754,11 @@ badge to the README's report row. Miss the third and the lane publishes
 nothing until some *other* lane finishes, which looks like the site being
 stale rather than a missing trigger. Miss the fifth and the lane is invisible
 on the front page — which is how report-for-lmcache shipped without one, this
-list having said "four" at the time.
+list having said "four" at the time. There are six lanes now; the sixth,
+report-for-quickstart, is also the only one that *executes the README* —
+it runs `scripts/quickstart-2vm.sh`, the same script the Quick Start tells a
+reader to run, so a change that breaks the documented path turns that lane
+red rather than being discovered by the next person to follow it.
 
 A badge for a lane that does NOT run on every push to main wants no
 `?branch=main`: shields pins that query to main's latest run, and a weekly

@@ -6,6 +6,34 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **A Quick Start that CI runs every day.** `scripts/quickstart-2vm.sh` takes a
+  machine with KVM and Docker to two guests — each with an emulated gfx1250, an
+  emulated NVMe and an emulated rocm-ernic RDMA NIC — and then proves both
+  devices: `vector_add` on each GPU, `ib_send_bw` between the guests, and the
+  NIC's own `total_bytes_sent` counter as the acceptance test, because a
+  passing `ib_send_bw` proves the verbs worked while only the counter proves
+  the bytes crossed the mesh.
+
+  Nothing is built. The guest is the published `ernic-rocjitsu` qcow2, which
+  already carries the mainline kernel, the ionic-ernic DKMS modules, the udev
+  naming rules, rdma-core, perftest and ROCm 10.1, and the device servers are
+  the tagged CI images. What the image does *not* carry is the per-rocjitsu
+  `ip_discovery.bin`, an address on the ernic and a loaded `amdgpu` — so
+  `ansible/playbooks/fleet-quickstart.yml` stages those three and nothing else,
+  reusing `lmcache_guest`'s `amdgpu_firmware` and `netplan_ernic` task files
+  and `rocjitsu_gpu_test`'s `vector_add.hip` rather than copying them.
+
+  The stack comes from `qemu/env.quickstart`, a two-VM cut of the scale-out
+  settings generated to a scratch directory, with `VM_NVME=1` and
+  `ERNIC_TAP=true` — the TAP is not optional, since the TCP mesh carries RDMA
+  payload only and without Ethernet `ib_send_bw` cannot do its out-of-band
+  exchange at all.
+
+  `report-for-quickstart` runs that same script daily and publishes to
+  `/quickstart/` on the site. One script for the README and the lane, on
+  purpose: a documented path nothing executes rots, and a lane that executes
+  something else proves nothing about the documentation.
+
 - **`qemu/docker/`, and an LMCache image for gfx1250 in it.** One directory
   per image, so the next Dockerfile has somewhere to go.
   `qemu/docker/lmcache/` builds LMCache v0.5.5 from source with

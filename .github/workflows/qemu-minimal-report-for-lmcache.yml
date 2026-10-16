@@ -427,21 +427,52 @@ jobs:
     # Geometry is deliberately small -- the default takes ~20 minutes to
     # allocate on the emulated GPU and buys nothing, and a per-request total
     # at or above 16 MiB tears the mesh connection down (AGENTS.md issue 22).
+    # This step reported SUCCESS while doing nothing at all, which is worse
+    # than the failure it was hiding. Three bugs at once:
+    #
+    #   ssh: connect to host qemu-1 port 22: Connection refused
+    #   Error response from daemon: No such container: ...-ernic-stats-exporter-1
+    #   rdma_read delta: 0
+    #
+    # No -p 2222 (the wait step was fixed, this was not); the counter was read
+    # from a container in the METRICS profile while the lane brings up only
+    # lmcache; and `ssh ... | tee` takes tee's exit status, so set -e never
+    # fired. With before= and after= both empty, $((after - before)) is 0 --
+    # so the acceptance test printed exactly the number it would have printed
+    # had everything worked and transferred nothing. A test that cannot fail
+    # is worse than no test.
+    #
+    # The counters are now read from the ernic container itself, which has no
+    # profile and is always up, via the shared /run/ernic-stats volume. The
+    # bench output is redirected rather than piped, and its exit status
+    # checked, so a failed run fails the step.
     - name: Run the P2P transfer
       timeout-minutes: 30
       run: |
-        set -eux
-        SSH="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /tmp/guest-key/id_rsa"
+        set -eu
+        SSH="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 -i /tmp/guest-key/id_rsa"
         BENCH="sudo docker exec lmcache-server lmcache bench server --mode gpu \
           --kvcache-shape-spec '(2,32,16,8,128):float16:4' --num-tokens 512 --start 600 --end 602"
-        before=$(docker exec lmcache-ci-ernic-stats-exporter-1 \
-                 sh -c 'grep total_bytes_rdma_read /run/ernic-stats/ernic-1.stats' | awk '{print $3}')
-        $SSH batesste@qemu-1 "$BENCH" | tee /tmp/seed.log
+        read_counter() {
+          docker exec "$(docker ps --filter 'name=ernic-1' --format '{{.Names}}' | head -1)" \
+            sh -c 'grep total_bytes_rdma_read /run/ernic-stats/ernic-1.stats' | awk '{print $3}'
+        }
+        before=$(read_counter)
+        : "${before:?could not read the ernic rdma_read counter before the run}"
+        echo "before: $before"
+
+        $SSH batesste@qemu-1 "$BENCH" > /tmp/seed.log 2>&1 || {
+          echo "::error::seed on qemu-1 failed"; tail -30 /tmp/seed.log; exit 1; }
+        grep -c "STORE: stored" /tmp/seed.log
         sleep 20
-        $SSH batesste@qemu-2 "$BENCH" | tee /tmp/pull.log
+        $SSH batesste@qemu-2 "$BENCH" > /tmp/pull.log 2>&1 || {
+          echo "::error::pull on qemu-2 failed"; tail -30 /tmp/pull.log; exit 1; }
+        grep -E "cold\] (LOOKUP|RETRIEVE)" /tmp/pull.log || true
         sleep 10
-        after=$(docker exec lmcache-ci-ernic-stats-exporter-1 \
-                sh -c 'grep total_bytes_rdma_read /run/ernic-stats/ernic-1.stats' | awk '{print $3}')
+
+        after=$(read_counter)
+        : "${after:?could not read the ernic rdma_read counter after the run}"
+        echo "after: $after"
         echo "rdma_read delta: $((after - before))"
         echo "RDMA_DELTA=$((after - before))" >> "$GITHUB_ENV"
 

@@ -104,3 +104,24 @@ jobs:
           cp -r qemu/compose/vfio-user-ernic-rocjitsu-scale-out/tapsetup /tmp/tapstack/
           docker compose --project-directory /tmp/tapstack \
             --env-file /tmp/env.tap config -q
+
+      # qemu/env.quickstart is the settings file README.md's Quick Start and
+      # report-for-quickstart both use, through scripts/quickstart-2vm.sh.
+      # Nothing else here renders it, and the lane that does runs daily and
+      # after the merge -- so without this a broken quickstart is found the
+      # next morning rather than on the PR that broke it. The service
+      # assertion is the same guard as above: `config -q` on a render with no
+      # services also exits 0.
+      - name: Quickstart stack renders and validates
+        run: |
+          mkdir -p /tmp/qsstack
+          python3 -m qemu_tool gen-compose \
+            --env-file qemu/env.quickstart --output-dir /tmp/qsstack
+          svcs="$(docker compose --project-directory /tmp/qsstack \
+            --env-file qemu/env.quickstart config --services)"
+          for s in ernic-1 ernic-2 rocjitsu-1 rocjitsu-2 qemu-1 qemu-2; do
+            echo "$svcs" | grep -qx "$s" || {
+              echo "::error::$s missing from the quickstart render"; exit 1; }
+          done
+          docker compose --project-directory /tmp/qsstack \
+            --env-file qemu/env.quickstart config -q
