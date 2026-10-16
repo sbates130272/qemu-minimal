@@ -233,7 +233,14 @@ jobs:
       env:
         VM_INFO_TYPE: application/vnd.batesste.vm-info.v1
       run: |
-        set -euo pipefail
+        # set -eu, not -euo pipefail: no `shell:` is set anywhere in this
+        # lane, so steps run under the container's /bin/sh -- dash, which
+        # answers pipefail with "Illegal option -o pipefail" and exits 2.
+        # The other two scripted steps here use `set -eux` for the same
+        # reason. Nothing below needs pipefail: the one pipe feeds a
+        # variable that is checked by the python that follows, and oras
+        # writes to a file rather than into a pipe.
+        set -eu
         BACKING=$(grep '^VM_BACKING_IMAGE=' "$ENV_FILE" | cut -d= -f2-)
         oras discover "$BACKING" --format json > /tmp/referrers.json
         REF=$(python3 -I -c 'import json,os,sys; want=os.environ["VM_INFO_TYPE"]; refs=json.load(sys.stdin).get("referrers",[]); hits=[r["reference"] for r in refs if r.get("artifactType")==want]; print(hits[0]) if hits else sys.exit("no %s referrer on the qcow2; found %r. The guest keypair ships as a referrer -- without it the inventory has a user and no key." % (want,[r.get("artifactType") for r in refs]))' < /tmp/referrers.json)
