@@ -4,7 +4,7 @@ title: VM Report — rocjitsu VM
 
 # VM Report — qemu-minimal — rocjitsu VM
 
-Generated: **2026-10-16 22:43 UTC** &middot; Commit: [`6e0227d`](https://github.com/sbates130272/qemu-minimal/commit/6e0227d44babe73ac40ecb26aff02572decdc336) &middot; Status: **pass**
+Generated: **2026-10-16 23:16 UTC** &middot; Commit: [`6ee9eb7`](https://github.com/sbates130272/qemu-minimal/commit/6ee9eb7551b1a932145fd6de122bc12586154a38) &middot; Status: **pass**
 
 ## Hardware
 
@@ -177,8 +177,8 @@ ubuntu : ubuntu video users render admin
 
 | Metric | Value |
 |---|---|
-| GEMM | 651 kFLOP/s |
-| hipFile read throughput | 232 MB/s |
+| GEMM | 489 kFLOP/s |
+| hipFile read throughput | 155 MB/s |
 
 These run inside a QEMU guest with the GPU attached over vfio-user, so the
 absolute numbers sit far below what the same benchmark reports on bare metal —
@@ -194,7 +194,7 @@ sgemm-bench: device=AMD Radeon Graphics arch=gfx1250
 sgemm-bench: private_segment_bytes=0
 sgemm-bench: m=128 n=128 k=128
 sgemm-bench: max_absolute_error=0 failures=0
-sgemm-bench: seconds_per_iter=6.44740726 gflops=0.000650541192
+sgemm-bench: seconds_per_iter=8.57371511 gflops=0.000489204965
 sgemm-bench: PASS
 ```
 
@@ -207,10 +207,10 @@ gemm-hipfile-bench: device=AMD Radeon Graphics arch=gfx1250
 gemm-hipfile-bench: path=/mnt/nvme/gemm-hipfile-bench.bin block_bytes=1048576 blocks=32 iters=4
 gemm-hipfile-bench: private_segment_bytes=0
 gemm-hipfile-bench: compat_requested=self buf_registered=yes
-gemm-hipfile-bench: read_bytes=33554432 seconds_per_pass=0.144813803 read_gbs=0.231707415
+gemm-hipfile-bench: read_bytes=33554432 seconds_per_pass=0.216250942 read_gbs=0.155164327
 gemm-hipfile-bench: m=128 n=128 k=128
 gemm-hipfile-bench: max_absolute_error=0 failures=0
-gemm-hipfile-bench: gemm_seconds_per_iter=6.39759668 gflops=0.000655606192
+gemm-hipfile-bench: gemm_seconds_per_iter=8.44182683 gflops=0.000496847908
 gemm-hipfile-bench: PASS
 ```
 
