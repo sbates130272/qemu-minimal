@@ -79,6 +79,16 @@
 # with a warm /tmp and bit on EVERY CI run. run_once + the same `creates:`
 # guard means one host clones while the others wait on the task, and the
 # role's own fetch is then a no-op for all of them.
+- name: Fail clearly when the kernel pin is not in scope
+  when: lmcache_guest_srq_needed
+  ansible.builtin.assert:
+    that: lmcache_guest_srq_kernel_ref | length > 0
+    fail_msg: >-
+      lmcache_guest_srq_kernel_ref is empty, which means ionic_kernel_pin is
+      not in scope. Load ansible/playbooks/vars/ernic-pins.yml in the play
+      (fleet-lmcache.yml does) or set the variable directly. Without it the
+      SRQ sources would be fetched for an unspecified kernel.
+
 - name: Fetch the SRQ sources once, before any guest races for them
   when: lmcache_guest_srq_needed
   run_once: true
@@ -87,11 +97,11 @@
   ansible.builtin.command:
     cmd: >-
       {{ ernic_source_dir }}/scripts/fetch-ionic-sources.sh
-      --source-dir {{ lmcache_guest_srq_controller_dir }}/{{ ionic_kernel_pin }}
-      --kernel-ref {{ ionic_kernel_pin }}
+      --source-dir {{ lmcache_guest_srq_controller_dir }}/{{ lmcache_guest_srq_kernel_ref }}
+      --kernel-ref {{ lmcache_guest_srq_kernel_ref }}
       --repo {{ lmcache_guest_srq_kernel_repo }}
       --patches-dir {{ ernic_source_dir }}/patches/srq
-    creates: "{{ lmcache_guest_srq_controller_dir }}/{{ ionic_kernel_pin }}/drivers/infiniband/hw/ionic"
+    creates: "{{ lmcache_guest_srq_controller_dir }}/{{ lmcache_guest_srq_kernel_ref }}/drivers/infiniband/hw/ionic"
 
 - name: Build and install the SRQ-capable ionic modules
   when: lmcache_guest_srq_needed

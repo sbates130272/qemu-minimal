@@ -84,6 +84,15 @@
   hosts: fleet
   gather_facts: true
   become: false
+  # The same pins vm-ernic.yml reads. lmcache_guest builds the SRQ driver
+  # from them, so without this ionic_kernel_pin is undefined here and the
+  # build fails with "'ionic_kernel_pin' is undefined" -- which is what
+  # happened the first time the fleet reached that task in CI. Loading the
+  # file rather than restating the values keeps one source of truth: the
+  # kernel ref has to match IONIC_KERNEL_REF in the collection, and the
+  # source ref has to match the ernic.<sha> in ERNIC_IMAGE.
+  vars_files:
+    - vars/ernic-pins.yml
   # One at a time would take VM_COUNT x image-load; all at once is the start
   # burst the stack README warns about. This is a compromise that has the
   # guests' apt and docker load overlapping without a fleet-wide thundering
