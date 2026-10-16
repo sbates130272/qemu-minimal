@@ -288,18 +288,44 @@ jobs:
         NET=$(docker network ls --format '{{.Name}}' | grep 'lmcache-ci.*fleet' | head -1)
         docker network connect "$NET" "$(hostname)"
 
+    # -p 2222, which the first cut of this omitted -- so it spent its whole
+    # 20 minutes connecting to port 22 of the qemu CONTAINER, where nothing
+    # listens, and reported only "context canceled". Each guest's sshd is
+    # reached through that container's own hostfwd on 2222; note both
+    # services use 2222 INSIDE their container even though the host
+    # publishes 2222 and 2223. The vm-* report lanes have always done this.
+    #
+    # The last ssh error is kept and printed on timeout. Discarding it is
+    # what made the previous failure unreadable: a guest that never booted,
+    # a guest with no network and a name that does not resolve all look
+    # identical when stderr goes to /dev/null.
     - name: Wait for both guests
-      timeout-minutes: 20
+      timeout-minutes: 12
       run: |
+        set -eu
         for host in qemu-1 qemu-2; do
-          for _ in $(seq 1 60); do
-            if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-                   -o ConnectTimeout=5 -i /tmp/guest-key/id_rsa \
-                   batesste@"$host" true 2>/dev/null; then
-              echo "$host up"; break
+          elapsed=0
+          ready=
+          while [ "$elapsed" -lt 300 ]; do
+            if err=$(ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                         -o NoHostAuthenticationForLocalhost=yes \
+                         -o ConnectTimeout=5 -p 2222 -i /tmp/guest-key/id_rsa \
+                         batesste@"$host" true 2>&1); then
+              echo "$host ready after ${elapsed}s"
+              ready=yes
+              break
             fi
-            sleep 10
+            sleep 5
+            elapsed=$((elapsed + 5))
           done
+          if [ -z "$ready" ]; then
+            echo "::error::$host never answered ssh; last error: $err"
+            echo "--- containers ---"
+            docker ps --format '{{.Names}}\t{{.Status}}' || true
+            echo "--- $host console tail ---"
+            docker logs --tail 40 "$(docker ps --filter "name=$host" --format '{{.Names}}' | head -1)" 2>&1 | tail -40 || true
+            exit 1
+          fi
         done
 
     - name: Install collections
@@ -307,11 +333,41 @@ jobs:
 
     # The long one: builds the SRQ ionic driver in each guest, loads the
     # image over 9p, formats L2 and starts the MP servers.
+    # An overlay, not an edit of the generated inventory. gen-compose writes
+    # ansible_host: 127.0.0.1 with the PUBLISHED ports (2222, 2223), which is
+    # right from the host and wrong from here: this job runs in a container
+    # attached to the compose network, where 127.0.0.1 is the job container
+    # itself. On the network each guest is its service name on 2222 -- both
+    # of them, since the published 2223 is a host-side mapping of qemu-2's
+    # own in-container 2222.
+    #
+    # Ansible merges inventory sources left to right and the later one wins,
+    # so the generated file keeps supplying every lmcache_guest_* var and
+    # this supplies only the addressing.
+    - name: Address the guests over the compose network
+      run: |
+        set -eu
+        cat > /tmp/ci-addressing.yml <<'YAML'
+        all:
+          children:
+            fleet:
+              hosts:
+                lmcache-ci-1:
+                  ansible_host: qemu-1
+                  ansible_port: 2222
+                lmcache-ci-2:
+                  ansible_host: qemu-2
+                  ansible_port: 2222
+        YAML
+        cat /tmp/ci-addressing.yml
+
     - name: Configure the fleet
       timeout-minutes: 120
       working-directory: ansible
       run: |
-        ansible-playbook -i "$STACK_DIR/fleet-inventory.yml" \
+        ansible-playbook \
+          -i "$STACK_DIR/fleet-inventory.yml" \
+          -i /tmp/ci-addressing.yml \
           playbooks/fleet-lmcache.yml --private-key /tmp/guest-key/id_rsa
 
     # A green playbook recap does NOT mean a working fleet: registration is
