@@ -95,8 +95,30 @@ jobs:
         docker image prune -af || true
         df -h /
 
+    # --force and PIPX_BIN_DIR, because the CI image already ships one.
+    # /usr/local/bin/qemu-tool is a symlink to /opt/qemu-tool/bin/qemu-tool,
+    # baked into the image, and it wins on PATH -- so a plain `pipx install`
+    # succeeds, prints "not /opt/pipx/venvs/qemu-tool/bin/qemu-tool", and the
+    # lane then runs the IMAGE's qemu-tool for every gen-compose and gen-vm
+    # call. That build predates _copy_stack_assets, so the generated stack
+    # arrived without tapsetup/ and the fleet died with "unable to prepare
+    # context: path .../tapsetup not found" -- a fix present in the tree,
+    # absent from the binary, and invisible in the log but for one warning.
+    #
+    # Then assert it, because a version string cannot catch this: both builds
+    # call themselves 1.4.1.
     - name: Install qemu-tool
-      run: pipx install ./qemu || pip install ./qemu
+      run: |
+        set -eu
+        PIPX_BIN_DIR=/usr/local/bin pipx install --force ./qemu
+        RESOLVED=$(readlink -f "$(command -v qemu-tool)")
+        echo "qemu-tool resolves to: $RESOLVED"
+        case "$RESOLVED" in
+          /opt/qemu-tool/*)
+            echo "::error::the image's qemu-tool is shadowing the one just installed"
+            exit 1
+            ;;
+        esac
 
     # Required before the build. `load: true` on the default DOCKER driver
     # cannot export a cache -- the first dispatch of this lane died on
