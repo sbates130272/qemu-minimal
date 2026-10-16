@@ -452,6 +452,17 @@ lmcache_guest_srq_enable: true
 # a module reload that can hang the guest (AGENTS.md issue 6), so it runs only
 # when there is something to fix.
 lmcache_guest_srq_force: false
+# Where the controller-side kernel checkout lands. Matches
+# ernic_srq_dkms_controller_root so the role's own fetch sees it already
+# present and skips -- the point of doing it once up front is that the role
+# then has nothing to race over.
+# Taken from the play's vars/ernic-pins.yml rather than restated, so the
+# kernel the SRQ series is built against cannot drift from the one
+# ernic_guest_setup uses. Empty when the role runs outside a play that loads
+# that file, which srq_driver.yml asserts against rather than guessing.
+lmcache_guest_srq_kernel_ref: "{{ ionic_kernel_pin | default('') }}"
+lmcache_guest_srq_controller_dir: /tmp/ionic-srq-src-controller
+lmcache_guest_srq_kernel_repo: https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
 # The rocm-ernic ref the SRQ series is built from. Keep equal to the version:
 # in ansible/requirements.yml and to ernic_source_pin in
 # playbooks/vars/ernic-pins.yml -- and to the ernic.<sha> in ERNIC_IMAGE,

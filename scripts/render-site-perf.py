@@ -85,6 +85,12 @@ REPORTS = (
     {"key": "ernic", "label": "ernic VM 1", "path": "ernic/index.md"},
     {"key": "ernic-vm2", "label": "ernic VM 2", "path": "ernic/vm2/index.md"},
     {"key": "hipfile-fio", "label": "hipFile fio", "path": "hipfile-fio/index.md"},
+    # report-for-lmcache is deliberately ABSENT, though it publishes to
+    # lmcache/index.md like the rest. Every entry here must be present,
+    # stamped pass AND fresher than DEFAULT_GREEN_MAX_AGE_HOURS (36) for the
+    # all-green badge to go green, and that lane is weekly -- so it would be
+    # stale six days in seven and hold the badge down permanently. Adding it
+    # needs the lane moved to a daily cadence first, not just a line here.
 )
 
 BADGE_RE = re.compile(r"^([0-9]+(?:\.[0-9]+)?)\s*([kMGT]?)([A-Za-z/]+)$")

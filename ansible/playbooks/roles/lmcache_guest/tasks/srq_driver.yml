@@ -65,6 +65,44 @@
     # that has nothing to do with the one in requirements.yml.
     ernic_source_repo_version: "{{ lmcache_guest_srq_source_ref }}"
 
+# Do the controller-side fetch ONCE, before the role runs.
+#
+# ernic_srq_dkms's fetch is delegate_to: localhost with no run_once, so on a
+# fleet every host runs it at the same instant against ONE shared directory.
+# `creates:` does not serialise them -- both see it missing together, both
+# start cloning, and the second trips over the first:
+#
+#   rm: cannot remove '/tmp/ionic-srq-src-controller/v7.2.4/.git': Directory not empty
+#   fatal: not a git repository (or any of the parent directories): .git
+#
+# A cold controller is the trigger, which is why this never bit on a dev box
+# with a warm /tmp and bit on EVERY CI run. run_once + the same `creates:`
+# guard means one host clones while the others wait on the task, and the
+# role's own fetch is then a no-op for all of them.
+- name: Fail clearly when the kernel pin is not in scope
+  when: lmcache_guest_srq_needed
+  ansible.builtin.assert:
+    that: lmcache_guest_srq_kernel_ref | length > 0
+    fail_msg: >-
+      lmcache_guest_srq_kernel_ref is empty, which means ionic_kernel_pin is
+      not in scope. Load ansible/playbooks/vars/ernic-pins.yml in the play
+      (fleet-lmcache.yml does) or set the variable directly. Without it the
+      SRQ sources would be fetched for an unspecified kernel.
+
+- name: Fetch the SRQ sources once, before any guest races for them
+  when: lmcache_guest_srq_needed
+  run_once: true
+  delegate_to: localhost
+  become: false
+  ansible.builtin.command:
+    cmd: >-
+      {{ ernic_source_dir }}/scripts/fetch-ionic-sources.sh
+      --source-dir {{ lmcache_guest_srq_controller_dir }}/{{ lmcache_guest_srq_kernel_ref }}
+      --kernel-ref {{ lmcache_guest_srq_kernel_ref }}
+      --repo {{ lmcache_guest_srq_kernel_repo }}
+      --patches-dir {{ ernic_source_dir }}/patches/srq
+    creates: "{{ lmcache_guest_srq_controller_dir }}/{{ lmcache_guest_srq_kernel_ref }}/drivers/infiniband/hw/ionic"
+
 - name: Build and install the SRQ-capable ionic modules
   when: lmcache_guest_srq_needed
   ansible.builtin.include_role:

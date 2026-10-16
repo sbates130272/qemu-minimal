@@ -95,8 +95,30 @@ jobs:
         docker image prune -af || true
         df -h /
 
+    # --force and PIPX_BIN_DIR, because the CI image already ships one.
+    # /usr/local/bin/qemu-tool is a symlink to /opt/qemu-tool/bin/qemu-tool,
+    # baked into the image, and it wins on PATH -- so a plain `pipx install`
+    # succeeds, prints "not /opt/pipx/venvs/qemu-tool/bin/qemu-tool", and the
+    # lane then runs the IMAGE's qemu-tool for every gen-compose and gen-vm
+    # call. That build predates _copy_stack_assets, so the generated stack
+    # arrived without tapsetup/ and the fleet died with "unable to prepare
+    # context: path .../tapsetup not found" -- a fix present in the tree,
+    # absent from the binary, and invisible in the log but for one warning.
+    #
+    # Then assert it, because a version string cannot catch this: both builds
+    # call themselves 1.4.1.
     - name: Install qemu-tool
-      run: pipx install ./qemu || pip install ./qemu
+      run: |
+        set -eu
+        PIPX_BIN_DIR=/usr/local/bin pipx install --force ./qemu
+        RESOLVED=$(readlink -f "$(command -v qemu-tool)")
+        echo "qemu-tool resolves to: $RESOLVED"
+        case "$RESOLVED" in
+          /opt/qemu-tool/*)
+            echo "::error::the image's qemu-tool is shadowing the one just installed"
+            exit 1
+            ;;
+        esac
 
     # Required before the build. `load: true` on the default DOCKER driver
     # cannot export a cache -- the first dispatch of this lane died on
@@ -134,6 +156,30 @@ jobs:
         docker save "$LMCACHE_IMAGE" -o /var/lib/qemu-tool/share/lmcache-srq.tar
         ls -lh /var/lib/qemu-tool/share/lmcache-srq.tar
 
+    # Reclaim before the qcow2 arrives, which is where this lane ran out of
+    # disk: "zstd: error 70 : Write error : cannot write block : No space
+    # left on device".
+    #
+    # The runner is NOT short of a filesystem -- / is 145G with 87G free
+    # after the cleanup above. This lane simply spends it: an 11.58 GB base
+    # image, a ~10.8 GB built image in the daemon, the buildx builder's own
+    # copy of every layer (cache-to mode=max), a 7.3 GB save tar, and then a
+    # ~17 GB compressed qcow2 that decompresses to about the same again.
+    #
+    # By this point the only ones still needed are the tar (the guests load
+    # it over 9p) and the image in the daemon. The builder cache has already
+    # been exported to gha, so dropping it locally costs nothing on the next
+    # run; the base image is only an input to a build that has finished.
+    - name: Reclaim build space
+      run: |
+        df -h /
+        docker buildx prune --all --force || true
+        docker image rm "$BASE_IMAGE" 2>/dev/null || true
+        docker image prune --force || true
+        df -h /
+      env:
+        BASE_IMAGE: rocm/pytorch:rocm10.1.0_ubuntu24.04_py3.12_pytorch_release_2.14.0
+
     # A runner is smaller than any node a human runs this on, so the fleet
     # defaults would ask for more than it has. Same derivation as
     # report-for-vm-ernic.yml; 4 vCPU is the ionic_rdma floor, not a choice.
@@ -151,10 +197,21 @@ jobs:
         {
           echo "VM_VCPUS=$VM_VCPUS"
           echo "VM_VMEM=$VM_VMEM"
-          echo "VM_SHM_SIZE=${VM_VMEM}m"
+          # Headroom, not the exact minimum. env.scale-out's rule is
+          # "VM_SHM_SIZE >= VM_VMEM, per VM", and setting it EQUAL leaves a
+          # vfio-user memfd backend sitting on the boundary. The two-VM
+          # ernic report lane -- which passes -- leaves this at the stack
+          # default of 8g for guests this size. shm_size caps a tmpfs rather
+          # than reserving it, so the slack is free until touched.
+          echo "VM_SHM_SIZE=$((VM_VMEM + 1024))m"
         } >> "$GITHUB_ENV"
         echo "runner: ${HOST_CPUS} vCPU, ${HOST_MEM_MB} MB"
         echo "guests: ${VMS} x ${VM_VCPUS} vCPU, ${VM_VMEM} MB"
+        # Printed because guest 2 failing to register looks identical to
+        # memory pressure, and neither df nor free appears anywhere else in
+        # this lane.
+        df -h /dev/shm || true
+        free -m || true
 
     # Overridden on top of the committed env file rather than edited into it,
     # so the file stays reviewable and the sizing stays runner-derived.
@@ -179,6 +236,10 @@ jobs:
     - name: Fetch the guest image and create the overlays
       run: |
         set -eux
+        # Printed because the failure mode here is a bare zstd "No space left
+        # on device" from inside gen-vm, which says nothing about how much
+        # was free when it started.
+        df -h /
         BACKING=$(grep '^VM_BACKING_IMAGE=' "$ENV_FILE" | cut -d= -f2-)
         qemu-tool gen-vm --env-file "$ENV_FILE" \
           --vm-name lmcache-ci-1 --backing-image "$BACKING"
@@ -189,14 +250,38 @@ jobs:
     # The keypair ships as an ORAS referrer next to the qcow2; gen-vm pulls
     # only the disk. Without it the generated inventory authenticates as a
     # user that exists with a key that does not.
+    # The qcow2 ships its keypair as an ORAS REFERRER, not inside the image,
+    # and gen-vm pulls only the disk -- so without this the generated
+    # inventory authenticates as a user that exists with a key that does not.
+    #
+    # Selected by artifactType, not by position. The first cut read
+    # ["manifests"][0] and died with KeyError: 'manifests' -- oras 1.3.4
+    # calls the list "referrers" -- and [0] would have been a second guess
+    # waiting to break the day a signature or SBOM referrer is attached ahead
+    # of this one. Verified against the pinned qcow2, which has exactly one.
+    #
+    # One line on purpose: a heredoc inside a `run: |` block keeps its
+    # leading whitespace, so an indented Python body is an IndentationError.
     - name: Fetch the guest SSH key
+      env:
+        VM_INFO_TYPE: application/vnd.batesste.vm-info.v1
       run: |
-        set -eux
+        # set -eu, not -euo pipefail: no `shell:` is set anywhere in this
+        # lane, so steps run under the container's /bin/sh -- dash, which
+        # answers pipefail with "Illegal option -o pipefail" and exits 2.
+        # The other two scripted steps here use `set -eux` for the same
+        # reason. Nothing below needs pipefail: the one pipe feeds a
+        # variable that is checked by the python that follows, and oras
+        # writes to a file rather than into a pipe.
+        set -eu
         BACKING=$(grep '^VM_BACKING_IMAGE=' "$ENV_FILE" | cut -d= -f2-)
-        REF=$(oras discover "$BACKING" --format json \
-              | python3 -c 'import sys,json; print(json.load(sys.stdin)["manifests"][0]["reference"])')
+        oras discover "$BACKING" --format json > /tmp/referrers.json
+        REF=$(python3 -I -c 'import json,os,sys; want=os.environ["VM_INFO_TYPE"]; refs=json.load(sys.stdin).get("referrers",[]); hits=[r["reference"] for r in refs if r.get("artifactType")==want]; print(hits[0]) if hits else sys.exit("no %s referrer on the qcow2; found %r. The guest keypair ships as a referrer -- without it the inventory has a user and no key." % (want,[r.get("artifactType") for r in refs]))' < /tmp/referrers.json)
         mkdir -p /tmp/guest-key
         oras pull "$REF" -o /tmp/guest-key
+        # Named explicitly: a silent miss here surfaces much later as an SSH
+        # permission denial against a guest that is perfectly healthy.
+        test -f /tmp/guest-key/id_rsa
         chmod 600 /tmp/guest-key/id_rsa
 
     - name: Bring up the fleet
@@ -214,18 +299,44 @@ jobs:
         NET=$(docker network ls --format '{{.Name}}' | grep 'lmcache-ci.*fleet' | head -1)
         docker network connect "$NET" "$(hostname)"
 
+    # -p 2222, which the first cut of this omitted -- so it spent its whole
+    # 20 minutes connecting to port 22 of the qemu CONTAINER, where nothing
+    # listens, and reported only "context canceled". Each guest's sshd is
+    # reached through that container's own hostfwd on 2222; note both
+    # services use 2222 INSIDE their container even though the host
+    # publishes 2222 and 2223. The vm-* report lanes have always done this.
+    #
+    # The last ssh error is kept and printed on timeout. Discarding it is
+    # what made the previous failure unreadable: a guest that never booted,
+    # a guest with no network and a name that does not resolve all look
+    # identical when stderr goes to /dev/null.
     - name: Wait for both guests
-      timeout-minutes: 20
+      timeout-minutes: 12
       run: |
+        set -eu
         for host in qemu-1 qemu-2; do
-          for _ in $(seq 1 60); do
-            if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-                   -o ConnectTimeout=5 -i /tmp/guest-key/id_rsa \
-                   batesste@"$host" true 2>/dev/null; then
-              echo "$host up"; break
+          elapsed=0
+          ready=
+          while [ "$elapsed" -lt 300 ]; do
+            if err=$(ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                         -o NoHostAuthenticationForLocalhost=yes \
+                         -o ConnectTimeout=5 -p 2222 -i /tmp/guest-key/id_rsa \
+                         batesste@"$host" true 2>&1); then
+              echo "$host ready after ${elapsed}s"
+              ready=yes
+              break
             fi
-            sleep 10
+            sleep 5
+            elapsed=$((elapsed + 5))
           done
+          if [ -z "$ready" ]; then
+            echo "::error::$host never answered ssh; last error: $err"
+            echo "--- containers ---"
+            docker ps --format '{{.Names}}\t{{.Status}}' || true
+            echo "--- $host console tail ---"
+            docker logs --tail 40 "$(docker ps --filter "name=$host" --format '{{.Names}}' | head -1)" 2>&1 | tail -40 || true
+            exit 1
+          fi
         done
 
     - name: Install collections
@@ -233,21 +344,84 @@ jobs:
 
     # The long one: builds the SRQ ionic driver in each guest, loads the
     # image over 9p, formats L2 and starts the MP servers.
+    # An overlay, not an edit of the generated inventory. gen-compose writes
+    # ansible_host: 127.0.0.1 with the PUBLISHED ports (2222, 2223), which is
+    # right from the host and wrong from here: this job runs in a container
+    # attached to the compose network, where 127.0.0.1 is the job container
+    # itself. On the network each guest is its service name on 2222 -- both
+    # of them, since the published 2223 is a host-side mapping of qemu-2's
+    # own in-container 2222.
+    #
+    # Ansible merges inventory sources left to right and the later one wins,
+    # so the generated file keeps supplying every lmcache_guest_* var and
+    # this supplies only the addressing.
+    - name: Address the guests over the compose network
+      run: |
+        set -eu
+        cat > /tmp/ci-addressing.yml <<'YAML'
+        all:
+          children:
+            fleet:
+              hosts:
+                lmcache-ci-1:
+                  ansible_host: qemu-1
+                  ansible_port: 2222
+                lmcache-ci-2:
+                  ansible_host: qemu-2
+                  ansible_port: 2222
+        YAML
+        cat /tmp/ci-addressing.yml
+
     - name: Configure the fleet
       timeout-minutes: 120
       working-directory: ansible
       run: |
-        ansible-playbook -i "$STACK_DIR/fleet-inventory.yml" \
+        ansible-playbook \
+          -i "$STACK_DIR/fleet-inventory.yml" \
+          -i /tmp/ci-addressing.yml \
           playbooks/fleet-lmcache.yml --private-key /tmp/guest-key/id_rsa
 
     # A green playbook recap does NOT mean a working fleet: registration is
     # reported as a message, not a failure, so assert it separately.
+    # Polled, not asked once. Registration is asynchronous: the server starts,
+    # loads torch and the ROCm runtime, registers its KV cache and only then
+    # appears to the coordinator. A single curl the instant the play returns
+    # is a race, and it lost -- the play's own check (12 x 10s) reported
+    # "1 of 2 registered. Missing: ['lmcache-ci-2']" and this step then
+    # failed immediately on the same answer.
+    #
+    # 300s because the bench sees ~70s on a 32-core host and this runner is
+    # slower; a guest that is merely slow should pass, and one that is stuck
+    # should fail with its log attached rather than with a bare count.
     - name: Assert both instances registered
       run: |
-        n=$(curl -sf http://lmcache-coordinator:9300/instances \
-            | python3 -c 'import sys,json; print(len(json.load(sys.stdin)["instances"]))')
-        echo "registered: $n"
-        [ "$n" = "2" ] || { echo "::error::expected 2 registered instances, got $n"; exit 1; }
+        set -eu
+        elapsed=0
+        n=0
+        while [ "$elapsed" -lt 300 ]; do
+          n=$(curl -sf http://lmcache-coordinator:9300/instances 2>/dev/null \
+              | python3 -I -c 'import sys,json; print(len(json.load(sys.stdin).get("instances",[])))' 2>/dev/null || echo 0)
+          [ "$n" = "2" ] && break
+          sleep 10
+          elapsed=$((elapsed + 10))
+        done
+        echo "registered: $n after ${elapsed}s"
+        if [ "$n" != "2" ]; then
+          echo "::error::expected 2 registered instances, got $n after ${elapsed}s"
+          curl -sf http://lmcache-coordinator:9300/instances || true
+          echo
+          # Both guests, not just the first: the one that failed to register
+          # is by definition the one whose log is wanted, and last time that
+          # was guest 2 while the step only ever dumped guest 1.
+          for host in qemu-1 qemu-2; do
+            echo "--- $host lmcache-server ---"
+            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                -o ConnectTimeout=5 -p 2222 -i /tmp/guest-key/id_rsa \
+                batesste@"$host" \
+                'systemctl is-active lmcache-server; sudo docker logs --tail 40 lmcache-server 2>&1' || true
+          done
+          exit 1
+        fi
 
     # The test itself: seed on guest 1, settle, pull the SAME keys on guest 2.
     # Geometry is deliberately small -- the default takes ~20 minutes to
@@ -283,8 +457,14 @@ jobs:
           exit 1
         }
 
+    # NOT if: always(). The other report lanes upload on success only -- the
+    # default -- and deviating from that published a FAILED run's debris to
+    # the site as a plausible-looking page: "RDMA bytes moved: unknown",
+    # "Could not resolve hostname qemu-1", "No such container". publish-pages
+    # cannot tell a failed run's artifact from a good one; it fetches the
+    # latest by name. Diagnostics for a failure belong in the run log, which
+    # the "Show logs on failure" step already dumps, not on the front page.
     - name: Build the report
-      if: always()
       run: |
         mkdir -p site/lmcache
         {
@@ -293,6 +473,11 @@ jobs:
           echo "- Run: ${GITHUB_RUN_ID}"
           echo "- Date: $(date -u '+%Y-%m-%d %H:%M UTC')"
           echo "- RDMA bytes moved: ${RDMA_DELTA:-unknown} (expected 16777216)"
+          # The stamp render-site-perf.py's REPORT_STATUS_RE reads. A report
+          # with no Status is treated as unknown rather than as a pass, so
+          # without this the lane could never contribute to the all-green
+          # badge. Only reachable on success now, hence the constant.
+          echo "- Generated: **$(date -u '+%Y-%m-%d %H:%M UTC')** &middot; Commit: \`${GITHUB_SHA:0:7}\` &middot; Status: **pass**"
           echo
           echo '## Guest device state'
           echo '```'
@@ -332,7 +517,6 @@ jobs:
     # Upload only. publish-pages.yml is the sole writer of the site: a Pages
     # deploy replaces the whole site, so a lane that deploys erases the others.
     - name: Upload the report
-      if: always()
       uses: actions/upload-artifact@v4
       with:
         name: vm-report-lmcache
