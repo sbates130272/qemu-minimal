@@ -1298,7 +1298,7 @@ def _copy_stack_assets(
     real cause, and the directories are left behind to confuse the next run.
 
     Generating to a scratch directory is the documented workflow
-    (env.scale-out-mi100), precisely because writing over the committed stack
+    (env.overlay-mi100), precisely because writing over the committed stack
     is what `gen-compose --check` exists to catch. The committed stack is
     unaffected: there source and destination are the same directory, and each
     copy is skipped.

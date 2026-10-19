@@ -10,19 +10,35 @@
 # It does not replace vm-ernic.yml. That one builds the guest -- mainline
 # kernel, toolchain, DKMS, rdma-core provider -- against a cloud image. This
 # one starts from the published ernic-rocjitsu qcow2, which already has all
-# of that, and adds only what the published disk leaves out. See
-# artifacts/scaling-report-mi100.md, "What the published qcow2 does not give
-# you", for the list and how each item was found.
+# of that, and adds only what the published disk leaves out. The list is
+# roles/ernic_fleet_guest/defaults/main.yml itself: every item there is there
+# because a fleet failed without it, and its comment says how it was found.
 #
 # Run against an existing backing image:
 #
 #   qemu-tool gen-vm --ansible-only \
 #     --ansible-playbook ansible/playbooks/vm-ernic-fleet.yml \
-#     --env-file qemu/env.scale-out-mi100 \
+#     --env-file qemu/env.scale-out --env-file qemu/env.overlay-mi100 \
 #     --vm-name stebates-mi100-1 \
 #     -e ernic_fleet_ssh_pubkey_file=<path> \
 #     -e ernic_fleet_ionic_modules_dir=<dir> \
 #     -e ernic_fleet_firmware_image=<rocjitsu image ref>
+#
+# The overlay is the fleet's own layer over the golden settings file;
+# --env-file is repeatable and last-wins, so it supplies VM_NAME_PREFIX,
+# VM_IMAGES_DIR and VM_COUNT for this host and the golden file supplies the
+# rest. Drop it and the bake looks for the backing image in the wrong
+# directory.
+#
+# The account is `ubuntu`, here as everywhere else in this repo. It has to
+# exist in the backing image before this runs: gen-vm reaches that image
+# through --backing-image / --backing-file, both of which return before
+# cloud-init (gen_vm.py:79-91), so VM_USERNAME is never applied to the disk --
+# it only ever names the account the image already has. _run_ansible then
+# connects as that account, and an image without it dies at "VM did not accept
+# SSH in time", which reads like a boot failure and is a login failure. If you
+# are bringing up an image that predates this, give it an `ubuntu` account
+# first; --username overrides the settings file for one invocation.
 #
 # Every path input is deliberately unset by default. The modules have to come
 # from a build against the same pinned kernel the image carries, and the

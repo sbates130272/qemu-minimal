@@ -145,7 +145,67 @@ All notable changes to this project will be documented in this file.
   both the committed stack and a tap-enabled render, since `ERNIC_TAP` is off
   by default and the committed copy only exercises one of the two shapes.
 
+- **`--env-file` is repeatable, and layers last-wins.** Pass it more than once
+  to `run-vm`, `gen-vm`, `gen-compose`, `compose` or `inspect` and the files
+  apply left to right, key by key: a key a later file sets wins, a key it
+  omits keeps the earlier value.
+
+  ```bash
+  qemu-tool gen-compose \
+      --env-file qemu/env.scale-out --env-file qemu/env.overlay-mi100
+  ```
+
+  `compose` passes each layer through to `docker compose` as its own
+  `--env-file` in the same order rather than merging them itself, because
+  `docker compose` already takes the flag repeatedly and applies the same
+  rule — verified on compose v5.3.1 — so both sides resolve every key
+  identically instead of nearly so.
+
+  Only `--env-file` layers. The search path (`$QEMU_TOOL_ENV`, `./.env`,
+  `qemu/.env`, …) still resolves to exactly one file: layering is asked for
+  on the command line and never inherited from the ambient environment.
+
+  A generated stack records one `# env-file:` line per layer and a single
+  `# env-sha256:` over all of them concatenated, so an edit to the overlay
+  makes the stack stale exactly as an edit to the golden file does. The digest
+  of a single layer is unchanged, so stacks generated before this still parse.
+
 ### Changed
+
+- **One golden fleet settings file plus committed overlays**, replacing
+  `qemu/env.scale-out{,-ci,-mi100,-strix}`. The four were full copies of each
+  other that agreed on about twenty keys and differed on about ten, hand-synced
+  — and only the first of them documented what any key meant, so the other
+  three drifted silently and a reader of one of them had no way to tell a
+  deliberate difference from a missed sync.
+
+  `qemu/env.scale-out` is now authoritative. The fleets that differ from it
+  state only their differing keys in `qemu/env.overlay-ci` and
+  `qemu/env.overlay-mi100`, layered over it with a repeated `--env-file`.
+  `qemu/env.scale-out-strix` is deleted with no
+  replacement overlay.
+
+  The overlays are committed, not generated and not site-local, so a fleet
+  that differs is a diff someone can review. They are deliberately **not**
+  packaged: each names one CI lane or one host, so it is meaningless away from
+  the checkout that explains it. `env.scale-out` ships as before.
+
+- **The golden fleet settings file sets `VM_USERNAME=ubuntu` and
+  `VM_PASSWORD=ubuntu`**, where it used to set `VM_USERNAME=batesste` and
+  leave the password at the built-in `password`. `batesste` is the account on
+  the published CI image and means nothing to anyone outside it; the four
+  files disagreed on both keys (`batesste`, `ubuntu`, `changeme`) for no
+  reason anyone recorded. This is visible beyond the guest login: `gen-compose`
+  writes `ansible_user` into the generated `fleet-inventory.yml` from
+  `VM_USERNAME`, so a fleet regenerated after upgrading addresses its guests
+  as `ubuntu`.
+
+  One path needs an explicit override. `gen-vm` returns before cloud-init on
+  `--backing-image` and `--backing-file`, so `VM_USERNAME` is never applied
+  to a published qcow2, whose only account is `batesste` — and
+  `ansible/playbooks/vm-ernic-fleet.yml` is what creates `ubuntu` on it. Bake
+  that image with `--username batesste` or the run dies at "VM did not accept
+  SSH in time", which reads like a boot failure and is a login failure.
 
 - **The mesh-manager healthcheck no longer opens a connection.** rocm-ernic
   never closes a connection that disconnects without registering, leaving it

@@ -89,21 +89,41 @@ jobs:
             --env-file qemu/env.scale-out \
             --profile lmcache --profile metrics config -q
 
-      # ERNIC_TAP is opt-in and off by default, so the committed stack only
-      # exercises one of the two shapes. Render the other into a scratch
-      # directory and validate that too -- the tap path adds a network, a
-      # per-service device and a sidecar per VM, which is exactly where an
-      # invalid reference would hide.
-      - name: Tap-enabled stack also renders and validates
+      # Every lane here runs the golden file alone, so an overlay only gets
+      # rendered by the lane that uses it -- report-for-lmcache is weekly, and
+      # the mi100 overlay has no lane at all. A key renamed in the golden
+      # would sit broken in an overlay until someone ran a fleet. Render each
+      # committed overlay on top of the golden and validate the result.
+      - name: Committed overlays render and validate
         run: |
-          sed 's/^ERNIC_TAP=.*/ERNIC_TAP=true/' qemu/env.scale-out > /tmp/env.tap
-          grep -q '^ERNIC_TAP=true' /tmp/env.tap
-          mkdir -p /tmp/tapstack
+          for overlay in qemu/env.overlay-ci qemu/env.overlay-mi100; do
+            dir="/tmp/stack-$(basename "$overlay")"
+            mkdir -p "$dir"
+            python3 -m qemu_tool gen-compose \
+              --env-file qemu/env.scale-out --env-file "$overlay" \
+              --output-dir "$dir"
+            docker compose --project-directory "$dir" \
+              --env-file qemu/env.scale-out --env-file "$overlay" config -q
+          done
+
+      # ERNIC_TAP has two shapes and the golden sets it to true, so every
+      # render above covers the tap one: the tap path's extra network,
+      # per-service device and sidecar per VM are already validated, and the
+      # shape validated nowhere is the one WITHOUT them. This step used to
+      # sed ERNIC_TAP=true into a copy of a file that already said true, so
+      # it re-checked the committed shape and the other shape shipped
+      # unparsed. The override is a one-key scratch overlay rather than a sed
+      # of the golden, which also exercises the repeatable --env-file
+      # layering the overlays depend on.
+      - name: Tap-less stack also renders and validates
+        run: |
+          echo 'ERNIC_TAP=false' > /tmp/env.notap
+          mkdir -p /tmp/notapstack
           python3 -m qemu_tool gen-compose \
-            --env-file /tmp/env.tap --output-dir /tmp/tapstack
-          cp -r qemu/compose/vfio-user-ernic-rocjitsu-scale-out/tapsetup /tmp/tapstack/
-          docker compose --project-directory /tmp/tapstack \
-            --env-file /tmp/env.tap config -q
+            --env-file qemu/env.scale-out --env-file /tmp/env.notap \
+            --output-dir /tmp/notapstack
+          docker compose --project-directory /tmp/notapstack \
+            --env-file qemu/env.scale-out --env-file /tmp/env.notap config -q
 
       # qemu/env.quickstart is the settings file README.md's Quick Start and
       # report-for-quickstart both use, through scripts/quickstart-2vm.sh.

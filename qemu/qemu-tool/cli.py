@@ -43,11 +43,60 @@ _INSTALLED_COMPOSE_ROOT = Path("/usr/share/qemu-tool/compose")
 
 def main(argv: list[str] | None = None) -> None:
     parser = _build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(_split_compose_argv(argv))
     if not hasattr(args, "func"):
         parser.print_help()
         sys.exit(1)
     args.func(args)
+
+
+# Our own flags on `compose`; everything else on that line is docker's.
+_COMPOSE_OURS = frozenset({
+    "--vm-name", "--vm2-name", "--images", "--stack", "--stack-dir", "--env-file",
+})
+
+
+def _split_compose_argv(argv: list[str] | None) -> list[str]:
+    """Insert the "--" that `qemu-tool compose` used to demand of the user.
+
+    compose_args is argparse.REMAINDER, which only starts capturing at the
+    first positional, so `compose --stack X --profile metrics up -d` died with
+    "unrecognized arguments: --profile" -- there was no way to pass a profile
+    without knowing to type a bare "--" first, and the man page's own example
+    got it wrong. Claiming only our flags and handing argparse the rest behind
+    a separator keeps docker's arguments in the order typed, which matters
+    because docker compose is order-sensitive.
+    """
+    tokens = list(sys.argv[1:] if argv is None else argv)
+    if not tokens or tokens[0] != "compose":
+        return tokens
+    ours: list[str] = []
+    theirs: list[str] = []
+    rest = tokens[1:]
+    index = 0
+    while index < len(rest):
+        token = rest[index]
+        if token == "--":
+            # A user-typed separator still means "all docker from here", and
+            # is not forwarded: docker reads a literal "--" as end-of-options
+            # and ignored the profile that followed it.
+            theirs.extend(rest[index + 1:])
+            break
+        if token.split("=", 1)[0] in _COMPOSE_OURS:
+            if "=" in token:
+                ours.append(token)
+                index += 1
+            else:
+                ours.extend(rest[index:index + 2])
+                index += 2
+            continue
+        if token in ("-h", "--help"):
+            ours.append(token)
+            index += 1
+            continue
+        theirs.append(token)
+        index += 1
+    return ["compose", *ours, *(["--", *theirs] if theirs else [])]
 
 
 # ---------------------------------------------------------------------------
@@ -201,8 +250,17 @@ def _add_compose(sub: argparse._SubParsersAction) -> None:
         help="Directory containing VM images (sets VM_IMAGES_DIR). Omit to use the value in .env.",
     )
     p.add_argument(
-        "--stack", choices=_STACKS, default=_DEFAULT_STACK,
+        "--stack", choices=_STACKS, default=None,
         help=f"Compose stack to use. Default: {_DEFAULT_STACK}.",
+    )
+    p.add_argument(
+        "--stack-dir", type=Path, default=None, metavar="DIR",
+        help=(
+            "Run a stack rendered by 'gen-compose --output-dir DIR' instead of "
+            "a named one. Required for an overlay fleet: VM_COUNT and the VM "
+            "names are baked into the generated YAML, not read from the env "
+            "file. Mutually exclusive with --stack."
+        ),
     )
     p.add_argument(
         "--env-file", action="append", type=Path, default=None, metavar="FILE",
@@ -444,7 +502,7 @@ def _run_vm_cmd(args: argparse.Namespace) -> None:
 def _compose_cmd(args: argparse.Namespace) -> None:
     compose_run(args.vm_name, args.images, args.compose_args,
                 stack=args.stack, vm2_name=args.vm2_name,
-                env_file=args.env_file)
+                env_file=args.env_file, stack_dir=args.stack_dir)
 
 
 def _inspect_cmd(args: argparse.Namespace) -> None:

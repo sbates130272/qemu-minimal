@@ -59,7 +59,13 @@ and
 .BI \-\-env\-file " FILE"
 Read settings from
 .IR FILE
-instead of searching the default locations. See
+instead of searching the default locations.
+.B Repeatable:
+give it more than once and the files are layered left to right, a key set by
+a later file overriding the same key in an earlier one and a key absent from
+the later file keeping the earlier value. That is what lets one golden
+settings file carry the ~20 keys every fleet shares while a small committed
+overlay states only the handful that differ. See
 .B SETTINGS FILE
 below.
 .TP
@@ -332,7 +338,13 @@ Stack to generate. Default:
 .IR vfio\-user\-ernic\-rocjitsu\-scale\-out .
 .TP
 .BI \-\-env\-file " FILE"
-Settings file. Same search path as every other subcommand.
+Settings file. Same search path, and the same repeatable last-wins layering,
+as every other subcommand. The generated header records one
+.I "# env\-file:"
+line per layer and a single
+.I "# env\-sha256:"
+over all of them concatenated, so an edit to the overlay invalidates the
+render exactly as an edit to the golden file does.
 .TP
 .BI \-\-output\-dir " DIR"
 Where to write. Defaults to the resolved stack directory, except that
@@ -442,24 +454,44 @@ Directory containing VM image files, passed as VM_IMAGES_DIR.
 Default:
 .IR /var/lib/qemu-tool/images .
 .TP
+.BI \-\-stack " NAME"
+Committed stack to run. Default:
+.IR vfio\-user\-ernic\-rocjitsu\-vm .
+.TP
+.BI \-\-stack\-dir " DIR"
+Run a stack rendered by
+.B "gen\-compose \-\-output\-dir"
+.I DIR
+instead of a committed one. Mutually exclusive with
+.BR \-\-stack ,
+and required for a fleet rendered from an overlay:
+.B VM_COUNT
+and the VM names are baked into the generated YAML, so without it the
+committed stack comes up instead, reporting success.
+.TP
 .BI \-\-env\-file " FILE"
 Settings file handed to
 .BR "docker compose \-\-env\-file" .
-See
+Repeatable, and each layer is passed through as its own
+.B \-\-env\-file
+in the same order:
+.B "docker compose"
+applies them last-wins too, so compose and
+.B qemu\-tool
+resolve every key to the same value. See
 .B SETTINGS FILE
 below.
 .PP
-All remaining arguments are forwarded verbatim to
-.BR "docker compose" .
-Do not place a
-.B \-\-
-separator before the
+All remaining arguments are forwarded to
 .B "docker compose"
-subcommand; the remaining arguments are already collected verbatim, so a
+in the order typed, options included, so
+.B "\-\-profile metrics up \-d"
+needs no separator. A
 .B \-\-
-is passed through to
-.B docker
-and rejected.
+before the subcommand is still accepted and dropped rather than forwarded:
+.B "docker compose"
+reads one as end\-of\-options and silently ignored the profile that followed
+it, bringing up the default services and reporting success.
 .SH LIST OPTIONS
 .TP
 .B \-\-json
@@ -566,6 +598,12 @@ The first of these that exists is used:
 .IR qemu/.env ,
 .IR $XDG_CONFIG_HOME/qemu-tool/env ,
 .IR /etc/qemu-tool/env .
+.PP
+Only
+.B \-\-env\-file
+layers. The search path still resolves to exactly one file, so layering is
+something asked for on the command line and never something inherited from
+the ambient environment.
 .SH FILES
 .TP
 .I /etc/qemu-tool/env
@@ -598,14 +636,21 @@ Compose stack directories used by
 .BR compose .
 .TP
 .I /usr/share/qemu-tool/env.scale-out
-Settings template for the scale-out fleet, documenting
+The golden settings file for the scale-out fleet, documenting
 .B VM_COUNT
 and the rest of the fleet keys
 .B gen\-compose
-reads. Not seeded into
+reads. It is the authoritative copy: a fleet that differs from it states only
+the differing keys in an overlay named after it on the command line, rather
+than forking the whole file. Not seeded into
 .IR /etc ;
 name it with
 .BR \-\-env\-file .
+The overlays themselves
+.RI ( qemu/env.overlay\-ci ,
+.IR qemu/env.overlay\-mi100 )
+are not packaged: they name a particular CI lane and a particular host, so
+they are only meaningful beside the repository that describes them.
 .TP
 .I /usr/share/qemu-tool/compose/vfio-user-ernic-rocjitsu-scale-out/
 The generated fleet stack. Both files in it are written by
@@ -686,6 +731,35 @@ Confirm the committed stack is in step with the settings file, for CI:
 qemu\-tool gen\-compose \-\-env\-file qemu/env.scale\-out \-\-check
 .EE
 .RE
+.PP
+Render and run the same fleet sized for a particular host, by layering that
+host's overlay over the golden file. Only the keys the overlay states change;
+everything else still comes from
+.IR env.scale\-out :
+.PP
+.RS
+.EX
+qemu\-tool gen\-compose \\
+    \-\-env\-file qemu/env.scale\-out \-\-env\-file qemu/env.overlay\-mi100 \\
+    \-\-output\-dir /var/lib/qemu\-tool/stacks/mi100\-fleet
+qemu\-tool compose \-\-stack\-dir /var/lib/qemu\-tool/stacks/mi100\-fleet \\
+    \-\-env\-file qemu/env.scale\-out \-\-env\-file qemu/env.overlay\-mi100 \\
+    \-\-profile metrics up \-d
+.EE
+.RE
+.PP
+Both directory flags are required for an overlay fleet.
+.B \-\-output\-dir
+keeps the render off the committed stack, which
+.B gen\-compose
+writes by default and
+.B \-\-check
+compares against; and
+.B \-\-stack\-dir
+is what runs the render, since
+.B VM_COUNT
+and the VM names are baked into the generated YAML rather than read from the
+settings layers at run time.
 .PP
 List every VM running on this node:
 .PP

@@ -81,9 +81,9 @@
      badges move with them. The stamp is the first badge; the rest carry the
      component revision that distinguishes the build.
 
-     sbates-fork is the odd one out: it is pinned only by
-     qemu/env.scale-out-mi100, for vfio-user P2P DMA, and carries a QEMU
-     patch the stock image does not. See AGENTS.md issue 19. -->
+     sbates-fork is the odd one out: it is pinned only by the
+     qemu/env.overlay-mi100 overlay, for vfio-user P2P DMA, and carries a
+     QEMU patch the stock image does not. See AGENTS.md issue 19. -->
 [![CI image build](https://img.shields.io/badge/ci--images-20261014.geea0485-informational?style=flat-square&logo=docker)](https://hub.docker.com/u/sbates130272)
 [![qemu](https://img.shields.io/badge/qemu-11.1.2-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user/tags)
 [![libvfio-user](https://img.shields.io/badge/libvfio--user-8039244-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user/tags)
@@ -159,7 +159,7 @@ image is cached, and a first run is that plus however long pulling ~20 GB
 takes you (about 3 minutes here). When it finishes:
 
 ```bash
-ssh -i /var/lib/qemu-tool/quickstart-key/id_rsa -p 2222 batesste@localhost
+ssh -i /var/lib/qemu-tool/quickstart-key/id_rsa -p 2222 ubuntu@localhost
 scripts/quickstart-2vm.sh down     # stop the stack, keep the overlays
 ```
 
@@ -392,6 +392,32 @@ qemu-tool compose --env-file qemu/env.scale-out \
     --stack vfio-user-ernic-rocjitsu-scale-out --profile metrics up -d
 ```
 
+`qemu/env.scale-out` is the one authoritative fleet settings file. A host or a
+CI lane that needs different values adds a small committed overlay on top of it
+rather than a whole fourth copy to hand-sync — `--env-file` is repeatable and
+later files win key by key:
+
+```bash
+qemu-tool gen-compose --env-file qemu/env.scale-out --env-file qemu/env.overlay-mi100 \
+    --output-dir /var/lib/qemu-tool/stacks/mi100-fleet
+qemu-tool compose --stack-dir /var/lib/qemu-tool/stacks/mi100-fleet \
+    --env-file qemu/env.scale-out --env-file qemu/env.overlay-mi100 \
+    --profile metrics up -d
+```
+
+Keys the overlay does not mention keep the golden file's value, so the overlay
+is short enough to read in a diff. `compose` passes the same layers through to
+`docker compose --env-file` in the same order, which applies the same last-wins
+rule, so the tool and compose never see different values.
+
+An overlay render needs both directory flags, and omitting either fails
+quietly. `gen-compose` defaults its output to the committed stack directory, so
+without `--output-dir` the overlay's fleet is written over the golden 8-VM one
+and `Gen Compose Check` fails on the next push. And `VM_COUNT` and the VM names
+are baked into the generated YAML rather than interpolated from the settings
+file at run time, so without `--stack-dir` `compose` brings up that committed
+8-VM stack whatever layers it is given.
+
 Per-VM values are comma-lists, not numbered variables: `VM1_NAME`/`VM2_NAME`
 does not survive eight VMs, let alone the mesh's sixty-four. A bare value
 broadcasts to every VM, a list of length `VM_COUNT` applies positionally, and
@@ -418,7 +444,9 @@ With `--profile metrics` the stack also brings up Prometheus and
 `qemu-tool ernic-stats`, which serves the per-QP counters each `rocm-ernic -S`
 writes. Full detail in
 [the stack README](qemu/compose/vfio-user-ernic-rocjitsu-scale-out/README.md)
-and [`qemu/env.scale-out`](qemu/env.scale-out).
+and [`qemu/env.scale-out`](qemu/env.scale-out), with the committed overlays in
+[`qemu/env.overlay-ci`](qemu/env.overlay-ci) and
+[`qemu/env.overlay-mi100`](qemu/env.overlay-mi100).
 
 ### Settings file
 
@@ -442,7 +470,7 @@ The file is searched for in this order, first hit wins:
 
 | Location | Used for |
 |---|---|
-| `--env-file FILE` | explicit, per invocation |
+| `--env-file FILE` | explicit, per invocation; repeatable, later files win key by key |
 | `$QEMU_TOOL_ENV` | explicit, per shell |
 | `./.env` | a per-project override |
 | `qemu/.env` | a source checkout |
@@ -634,13 +662,32 @@ flags take precedence over XML values).
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--stack NAME` | `vfio-user-ernic-rocjitsu-scale-out` | Stack to generate |
-| `--env-file FILE` | search path | Settings file (see `qemu/env.scale-out`) |
+| `--env-file FILE` | search path | Settings file (see `qemu/env.scale-out`). Repeatable: later files override keys set by earlier ones |
 | `--output-dir DIR` | the stack directory | Where to write |
 | `--check` | off | Exit non-zero if regenerating would change anything; writes nothing |
 | `--dry-run` | off | Print the generated files instead of writing them |
 
 `--output-dir` will not default into `/usr/share/qemu-tool/compose`; that tree
 belongs to the Debian package, so overwriting it has to be asked for by name.
+In a checkout it defaults to the committed stack directory instead, so any
+render that layers an overlay must name an `--output-dir` of its own or it
+overwrites the committed fleet and breaks `--check`.
+
+### compose flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--stack NAME` | `vfio-user-ernic-rocjitsu-vm` | Committed stack to run |
+| `--stack-dir DIR` | — | Run a stack rendered by `gen-compose --output-dir DIR`. Mutually exclusive with `--stack` |
+| `--vm-name NAME` | from settings | Sets `VM_NAME`/`VM1_NAME` |
+| `--vm2-name NAME` | from settings | Sets `VM2_NAME`, for the 2-VM stacks |
+| `--images DIR` | from settings | Sets `VM_IMAGES_DIR` |
+| `--env-file FILE` | search path | Settings file, passed through to `docker compose --env-file`. Repeatable: later files win |
+
+Everything else on the line goes to `docker compose` in the order typed, so
+`--profile metrics up -d` needs no separator. A `--` before the subcommand is
+still accepted and dropped, because `docker compose` reads one as end-of-options
+and would silently ignore the profile that followed it.
 
 ### ernic-stats flags
 
