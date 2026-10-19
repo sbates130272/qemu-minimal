@@ -48,7 +48,7 @@ def _compose_dir(stack: str) -> Path:
 
 
 def _warn_if_stale(
-    cdir: Path, settings: Path, stack: str, env_file: Path | None
+    cdir: Path, settings: list[Path], stack: str, env_file: list[Path] | None
 ) -> None:
     """Warn, never block, when the generated YAML predates the env file.
 
@@ -60,12 +60,16 @@ def _warn_if_stale(
     recorded = gen_compose.recorded_digest(cdir / "docker-compose.yml")
     if recorded is None:
         return
+    # Against the digest of all the layers, not the first one: an overlay is
+    # as much an input to the render as the golden file it sits on, so an
+    # edit to either has to read as stale.
     if recorded == gen_compose.env_digest(settings):
         return
-    arg = f" --env-file {env_file}" if env_file is not None else ""
+    arg = "".join(f" --env-file {p}" for p in env_file) if env_file else ""
+    names = ", ".join(str(p) for p in settings)
     print(
         f"Warning: {cdir / 'docker-compose.yml'} was generated from a different "
-        f"version of {settings}.\n"
+        f"version of {names}.\n"
         f"         Regenerate with: qemu-tool gen-compose --stack {stack}{arg}",
         file=sys.stderr,
     )
@@ -77,7 +81,7 @@ def run(
     compose_args: list[str],
     stack: str = _DEFAULT_STACK,
     vm2_name: str | None = None,
-    env_file: Path | None = None,
+    env_file: list[Path] | None = None,
 ) -> None:
     cdir = _compose_dir(stack)
     env = os.environ.copy()
@@ -93,8 +97,14 @@ def run(
     # Without --env-file docker compose would read <stack dir>/.env instead,
     # which is not where the settings live any more.
     settings = find_env_file(env_file)
-    if settings is not None:
-        cmd += ["--env-file", str(settings.resolve())]
+    if settings:
+        # One --env-file per layer, in our order. This reads like it would be a
+        # conflict, but docker compose takes the flag repeatedly and applies
+        # last-wins across the files -- the same rule envfile.merge() uses, so
+        # compose and qemu-tool see identical values. Verified on compose
+        # v5.3.1 here; do not "simplify" this to a single file.
+        for layer in settings:
+            cmd += ["--env-file", str(layer.resolve())]
         if stack in _GENERATED_STACKS:
             _warn_if_stale(cdir, settings, stack, env_file)
     # argparse.REMAINDER KEEPS the "--" separator in the list, and docker

@@ -103,10 +103,14 @@ def _shared_parent() -> argparse.ArgumentParser:
     p.add_argument("--qemu-path", default=_UNSET, metavar="PATH")
     p.add_argument(
         "--env-file",
+        action="append",
         type=Path,
         default=None,
         metavar="FILE",
-        help="Settings file (see qemu/env.example). Overrides the search path.",
+        help=(
+            "Settings file (see qemu/env.example). Overrides the search path. "
+            "Repeatable: later files override keys set by earlier ones."
+        ),
     )
     p.add_argument(
         "--domain",
@@ -201,8 +205,11 @@ def _add_compose(sub: argparse._SubParsersAction) -> None:
         help=f"Compose stack to use. Default: {_DEFAULT_STACK}.",
     )
     p.add_argument(
-        "--env-file", type=Path, default=None, metavar="FILE",
-        help="Settings file (see qemu/env.example). Overrides the search path.",
+        "--env-file", action="append", type=Path, default=None, metavar="FILE",
+        help=(
+            "Settings file (see qemu/env.example). Overrides the search path. "
+            "Repeatable: later files override keys set by earlier ones."
+        ),
     )
     p.add_argument(
         "compose_args", nargs=argparse.REMAINDER,
@@ -227,8 +234,11 @@ def _add_gen_compose(sub: argparse._SubParsersAction) -> None:
         help=f"Stack to generate. Default: {_DEFAULT_GENERATED_STACK}.",
     )
     p.add_argument(
-        "--env-file", type=Path, default=None, metavar="FILE",
-        help="Settings file (see qemu/env.scale-out). Overrides the search path.",
+        "--env-file", action="append", type=Path, default=None, metavar="FILE",
+        help=(
+            "Settings file (see qemu/env.scale-out). Overrides the search path. "
+            "Repeatable: later files override keys set by earlier ones."
+        ),
     )
     p.add_argument(
         "--output-dir", type=Path, default=None, metavar="DIR",
@@ -342,8 +352,11 @@ def _add_inspect(sub: argparse._SubParsersAction) -> None:
         help="Filter to a single VM by name. Default: all running VMs.",
     )
     p.add_argument(
-        "--env-file", type=Path, default=None, metavar="FILE",
-        help="Settings file (see qemu/env.example). Overrides the search path.",
+        "--env-file", action="append", type=Path, default=None, metavar="FILE",
+        help=(
+            "Settings file (see qemu/env.example). Overrides the search path. "
+            "Repeatable: later files override keys set by earlier ones."
+        ),
     )
     p.add_argument(
         "--json", action="store_true", dest="as_json",

@@ -12,6 +12,7 @@ import os
 import sys
 import types
 import typing
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any, Union, get_args, get_origin
 
@@ -53,12 +54,28 @@ def env_key(field_name: str) -> str:
     return _KEY_OVERRIDES.get(field_name, "VM_" + field_name.upper())
 
 
-def find(explicit: Path | None = None) -> Path | None:
-    """Return the env file to use, or None if there is no file to read."""
+def find(explicit: Path | Sequence[Path] | None = None) -> list[Path]:
+    """Return the env files to use, lowest precedence first.
+
+    Several explicit files layer, so a small committed overlay can sit on top
+    of the one golden settings file instead of being hand-synced into a fourth
+    copy of it. The search path is unchanged and still resolves to exactly one
+    file: layering is something you ask for, never something you inherit from
+    the ambient environment.
+
+    Returns [] when there is no file to read.
+    """
     if explicit is not None:
-        if not explicit.is_file():
-            sys.exit(f"Error: env file not found: {explicit}")
-        return explicit
+        paths = [explicit] if isinstance(explicit, Path) else list(explicit)
+        for index, path in enumerate(paths, start=1):
+            if not path.is_file():
+                # Name the layer as well as the path: with two files on the
+                # command line, "env file not found" alone does not say which
+                # of them the shell failed to expand.
+                where = f" (layer {index} of {len(paths)})" if len(paths) > 1 else ""
+                sys.exit(f"Error: env file not found: {path}{where}")
+        if paths:
+            return paths
     candidates = []
     from_env = os.environ.get("QEMU_TOOL_ENV")
     if from_env:
@@ -68,8 +85,8 @@ def find(explicit: Path | None = None) -> Path | None:
     candidates += [Path.cwd() / ".env", _SOURCE_ENV, _xdg_env(), _INSTALLED_ENV]
     for candidate in candidates:
         if candidate.is_file():
-            return candidate
-    return None
+            return [candidate]
+    return []
 
 
 def parse(path: Path) -> dict[str, str]:
@@ -123,12 +140,30 @@ def overrides(values: dict[str, str]) -> dict[str, Any]:
     return result
 
 
-def load(explicit: Path | None = None) -> dict[str, Any]:
+def merge(layers: Iterable[dict[str, str]]) -> dict[str, str]:
+    """Flatten parsed layers, later layers overriding earlier keys.
+
+    Same rule parse() already applies WITHIN a file -- a key repeated in one
+    file takes its last value -- applied ACROSS files. A key absent from a
+    later layer keeps the value the earlier one gave it, which is what makes
+    an overlay small enough to read in a diff.
+    """
+    merged: dict[str, str] = {}
+    for layer in layers:
+        merged.update(layer)
+    return merged
+
+
+def parse_layers(paths: Sequence[Path]) -> dict[str, str]:
+    return merge(parse(path) for path in paths)
+
+
+def load(explicit: Path | Sequence[Path] | None = None) -> dict[str, Any]:
     """find() + parse() + overrides(), the combination every caller wants."""
-    path = find(explicit)
-    if path is None:
+    paths = find(explicit)
+    if not paths:
         return {}
-    return overrides(parse(path))
+    return overrides(parse_layers(paths))
 
 
 def _coerce(hint: Any, raw: str, key: str) -> Any:

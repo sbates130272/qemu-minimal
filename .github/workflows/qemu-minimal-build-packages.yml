@@ -475,8 +475,8 @@ jobs:
           from qemu_tool import envfile
           found = envfile.find()
           print(f'settings: {found}')
-          assert found is not None, '::error::no settings file found'
-          values = envfile.overrides(envfile.parse(found))
+          assert found, '::error::no settings file found'
+          values = envfile.overrides(envfile.parse_layers(found))
           assert values.get('vm_name') == 'from-xdg', f'::error::{values}'
           PY
 

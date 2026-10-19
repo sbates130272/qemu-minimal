@@ -8,11 +8,19 @@ from pathlib import Path
 from typing import Any
 
 from .config import VMConfig
-from .envfile import find as _find_env, overrides as _env_overrides, parse as _parse_env
+from .envfile import (
+    find as _find_env,
+    overrides as _env_overrides,
+    parse_layers as _parse_env_layers,
+)
 from .list_vms import collect as _collect_vms, _fmt_uptime
 
 
-def run(vm_name: str | None, env_file: Path | None, as_json: bool = False) -> None:
+def run(
+    vm_name: str | None,
+    env_file: list[Path] | None,
+    as_json: bool = False,
+) -> None:
     try:
         vms = _collect_vms()
     except OSError as exc:
@@ -36,9 +44,9 @@ def run(vm_name: str | None, env_file: Path | None, as_json: bool = False) -> No
         _print_human(records)
 
 
-def _load_config(env_file: Path | None) -> VMConfig:
-    path = _find_env(env_file)
-    env_overrides = _env_overrides(_parse_env(path)) if path else {}
+def _load_config(env_file: list[Path] | None) -> VMConfig:
+    paths = _find_env(env_file)
+    env_overrides = _env_overrides(_parse_env_layers(paths)) if paths else {}
     import dataclasses
     d = dataclasses.asdict(VMConfig())
     d.update(env_overrides)
