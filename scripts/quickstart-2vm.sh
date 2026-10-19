@@ -288,6 +288,13 @@ generate_stack() {
   mkdir -p "$STACK_DIR"
   qemu-tool gen-compose --env-file "$ENV_FILE" --output-dir "$STACK_DIR" >/dev/null
   echo "wrote $STACK_DIR/docker-compose.yml"
+  # Copy the repo's qemu package into the stack directory so the QEMU
+  # containers can install from source even when $REPO_ROOT is a
+  # container-internal path that the host docker daemon cannot resolve as a
+  # bind-mount source.  QEMU_TOOL_SRC is then set to $STACK_DIR (host-
+  # accessible), and the generated compose bind-mounts it as /qemu-tool-src.
+  rm -rf "$STACK_DIR/qemu"
+  cp -r "$REPO_ROOT/qemu" "$STACK_DIR/qemu"
 }
 
 compose() {
@@ -297,9 +304,11 @@ compose() {
 
 up() {
   say "Bringing the stack up"
-  # An absolute path: the stack lives in a scratch directory, so the settings
-  # file's relative default would resolve somewhere that is not a checkout.
-  QEMU_TOOL_SRC="$REPO_ROOT" compose up --detach
+  # Use the stack directory as the source root: $REPO_ROOT is a
+  # container-internal path that the host docker daemon cannot resolve as a
+  # bind-mount source when this script runs inside a CI job container.
+  # generate_stack() already copied $REPO_ROOT/qemu there.
+  QEMU_TOOL_SRC="$STACK_DIR" compose up --detach
 
   say "Waiting for the NIC servers"
   n=0
