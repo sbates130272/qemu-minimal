@@ -6,6 +6,30 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **An `NVME` column on `qemu-tool list`.** Every NVMe attached to a VM,
+  emulated or passed through, from the same per-PID `argv` parse the GPU, RDMA
+  and VFIO-USER columns already come from. Repeats collapse (`emul*2`), and a
+  VM with none prints `-`.
+
+  The column says which address space it is quoting, because the two are not
+  interchangeable and a BDF alone does not say which one it is. A passthrough
+  entry is a **host** BDF — `-device vfio-pci,host=0000:03:00.0` names a
+  device on this machine — so it is printed labelled, as `host:03:00.0`.
+  Since a GPU and a NIC are passed through by exactly that same argument, the
+  class is read from `/sys/bus/pci/devices/<bdf>/class` and only `0x0108xx`
+  is claimed as NVMe; a BDF this host has no sysfs entry for keeps a trailing
+  `?` rather than being dropped, so an unverified entry is visible but never
+  mistaken for a confirmed one.
+
+  An emulated NVMe prints its **guest** BDF, `00:05.0`, but only where the VM
+  has a QMP monitor to ask: `run-vm` emits `-device nvme,...` with no `addr=`,
+  so QEMU assigns the slot at realize time and the guest address is simply not
+  on the command line. With `--qmp-socket` the entry is upgraded from
+  `query-pci` (proxied with `docker exec` for a containerised VM, since the
+  socket lives in the container's filesystem namespace); without one it reads
+  `emul`. `--json` gains an `nvme` array carrying the canonical BDF, the kind,
+  and whether the address came from `argv` or `qmp`.
+
 - **A Quick Start that CI runs every day.** `scripts/quickstart-2vm.sh` takes a
   machine with KVM and Docker to two guests — each with an emulated gfx1250, an
   emulated NVMe and an emulated rocm-ernic RDMA NIC — and then proves both

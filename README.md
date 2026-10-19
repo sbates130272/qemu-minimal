@@ -714,13 +714,48 @@ and says which ones qemu-tool started:
 
 ```console
 $ qemu-tool list
-PID    NAME         SOURCE            ARCH   VCPU  MEM    SSH   KVM  UPTIME  CONTAINER                     VFIO-USER
-37374  rocjitsu-vm  external          amd64  4     8192M  2222  yes  53m     vfio-user-rocjitsu-vm-qemu-1  rocjitsu-1.sock
-79805  marker-test  qemu-tool/run-vm  amd64  1     1024M  2223  yes  0m      -                             -
+PID    NAME         SOURCE            ARCH   VCPU  MEM    SSH   KVM  UPTIME  CONTAINER                     NVME      VFIO-USER
+37374  rocjitsu-vm  external          amd64  4     8192M  2222  yes  53m     vfio-user-rocjitsu-vm-qemu-1  00:05.0   rocjitsu-1.sock
+79805  marker-test  qemu-tool/run-vm  amd64  1     1024M  2223  yes  0m      -                             -         -
 ```
 
+#### The NVME column
+
+Every NVMe attached to the VM, emulated or passed through, comma-joined, with
+identical labels collapsed as `label*N` (`VM_NVME=2` is ordinary, and two
+identical labels say no more than one plus a count). `-` when the VM has none.
+
+| Entry | Meaning |
+|-------|---------|
+| `00:05.0` | **Guest** BDF of an emulated NVMe, read from the VM's QMP monitor. The `0000:` domain is dropped for table width; `--json` keeps the canonical form |
+| `emul` | An emulated NVMe whose guest BDF is not knowable — the VM has no QMP socket, or the query failed |
+| `host:03:00.0` | A passed-through device, by its **host** BDF |
+| `host:03:00.0?` | The same, with no sysfs entry on this host to confirm it is an NVMe |
+
+Examples: `emul*2`, `emul,host:03:00.0`, `00:05.0,00:06.0`, `-`.
+
+**A host BDF and a guest BDF are different address spaces**, which is why a
+passthrough entry is labelled rather than printed bare: `host:03:00.0` is the
+address on *this* machine, the address `lspci` inside the guest reports is a
+different one, and sending someone to the wrong namespace's device is worse
+than telling them nothing. Only the guest BDF is actionable inside the VM, and
+it is only available when the VM was started with `--qmp-socket` — without a
+monitor to ask, an emulated NVMe is reported as `emul` and nothing more,
+because `run-vm` emits `-device nvme,...` with no `addr=` and QEMU picks the
+slot at realize time, so the guest address never appears on the command line.
+
+Passthrough entries come from `-device vfio-pci,host=...`, which is also how a
+GPU or a NIC is passed through, so the device class is checked in
+`/sys/bus/pci/devices/<bdf>/class` and only `0x0108xx` (NVM Express) is
+claimed. A BDF this host has no sysfs entry for is reported with a trailing
+`?` rather than dropped — dropping would silently hide a real NVMe.
+
 `--json` adds the disk image path, full vfio-user socket paths, owning user and
-uptime in seconds:
+uptime in seconds, plus an `nvme` array of objects per VM — `bdf` (canonical
+`dddd:bb:dd.f`, or `null` for an emulated device whose guest BDF is unknown),
+`kind` (`emulated` or `passthrough`), `source` (`argv` or `qmp`, i.e. whether
+the BDF was upgraded from the monitor), `qdev_id`, and `serial` or
+`class_verified` respectively:
 
 ```bash
 # PID of a VM by name

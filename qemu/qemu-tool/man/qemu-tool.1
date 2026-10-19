@@ -496,8 +496,18 @@ it, bringing up the default services and reporting success.
 .TP
 .B \-\-json
 Emit JSON instead of the table. The JSON form additionally includes the full
-disk image path, full vfio-user socket paths, the owning user and the uptime in
-seconds.
+disk image path, full vfio-user socket paths, the owning user, the uptime in
+seconds, and an
+.B nvme
+array per VM whose entries carry
+.BR bdf " (canonical " dddd:bb:dd.f ", or null for an emulated device whose"
+guest BDF is unknown),
+.BR kind " (" emulated " or " passthrough ),
+.BR source " (" argv " or " qmp ),
+.BR qdev_id ,
+and
+.BR serial " or " class_verified
+respectively.
 .TP
 .B \-\-qemu\-tool\-only
 Omit VMs that were not started by
@@ -505,7 +515,70 @@ Omit VMs that were not started by
 .PP
 The table reports, per VM: PID, VM name, source, architecture, vCPU count,
 memory, forwarded SSH port, whether KVM is enabled, uptime, the container name
-when the VM runs inside one, and any attached vfio-user sockets.
+when the VM runs inside one, any attached NVMe, and any attached vfio-user
+sockets.
+.PP
+The
+.B NVME
+column lists every NVMe attached to the VM, emulated or passed through,
+comma-joined, with identical labels collapsed as
+.IR label *N
+.RB ( VM_NVME=2
+is ordinary, and two identical labels say no more than one plus a count), or
+.B \-
+when the VM has none. Four forms:
+.RS
+.TP
+.B 00:05.0
+The
+.I guest
+BDF of an emulated NVMe, read from the VM's QMP monitor. The
+.B 0000:
+domain is dropped for table width;
+.B \-\-json
+keeps the canonical form.
+.TP
+.B emul
+An emulated NVMe whose guest BDF is not knowable \(em the VM has no QMP
+socket, or the query failed.
+.TP
+.B host:03:00.0
+A passed-through device, by its
+.I host
+BDF.
+.TP
+.B host:03:00.0?
+The same, with no sysfs entry on this host to confirm it is an NVMe.
+.RE
+.PP
+A host BDF and a guest BDF are
+.I different address spaces,
+which is why a passthrough entry is labelled rather than printed bare:
+.B host:03:00.0
+is the address on this machine, and the address
+.BR lspci (8)
+inside the guest reports is a different one. Only the guest BDF is actionable
+inside the VM, and it is only available when the VM was started with
+.BR \-\-qmp\-socket :
+.B run\-vm
+emits
+.B \-device nvme,...
+with no
+.BR addr= ,
+so QEMU picks the slot at realize time and the guest address never appears on
+the command line.
+.PP
+Passthrough entries come from
+.BR "\-device vfio\-pci,host=" ...,
+which is equally how a GPU or a NIC is passed through, so the class is checked
+in
+.I /sys/bus/pci/devices/<bdf>/class
+and only
+.B 0x0108xx
+(NVM Express) is claimed. A BDF this host has no sysfs entry for keeps a
+trailing
+.B ?
+rather than being dropped, since dropping would silently hide a real NVMe.
 .PP
 The SSH column shows
 .IR host \-> guest
