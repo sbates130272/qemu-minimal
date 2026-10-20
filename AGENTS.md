@@ -103,6 +103,19 @@ the step asserts the seven services are present first. All three files are
 committed so the stack stays reviewable in a diff and usable with plain
 `docker compose`.
 
+The same lane is where the two cheap guards live that no guest-booting lane
+can replace. It runs the unit suite with `CI=true` after installing udevadm,
+pciutils, PyYAML and Jinja2, because `tests/test_ernic_identity.py` is the
+only thing that asks udev to *parse* `udev/99-rocm-ernic.rules` and the only
+thing that reads `ernic_fleet_guest`'s wiring — nothing runs that role against
+a guest — and under `CI=true` those checks fail instead of skipping. And it
+renders a 3-VM stack to a scratch directory and runs `qemu-tool compose
+config` inside it with no flags, asserting the compose project name (taken
+from the working directory) and the service list, because resolving to the
+*wrong* stack also exits 0. Note the render passes `--env-file` absolute: a
+provenance header records layer paths as typed, and relative ones resolve
+against the stack directory.
+
 ```bash
 qemu-tool gen-vm --env-file qemu/env/scale-out \
     --vm-name stebates-fleet-1 --backing-image "$VM_BACKING_IMAGE"

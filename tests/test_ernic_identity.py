@@ -31,6 +31,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -51,6 +52,32 @@ try:
 except ImportError:  # pragma: no cover - exercised only on a bare runner
     jinja2 = None
     yaml = None
+
+# GitHub sets CI=true on every runner and the repo sets no variable of its own,
+# so this is what "running where someone will believe the result" keys on.
+IN_CI = os.environ.get("CI", "").lower() == "true"
+
+
+def _require(available: bool, what: str) -> None:
+    """Skip locally when a tool is missing; fail in CI.
+
+    A skip reads as coverage in a summary line and is why the unescaped RUN
+    value shipped: the one check that would have caught it was free to not
+    run. Locally a missing udevadm or lspci is a laptop, not a defect, so a
+    skip is right -- but it is printed rather than only counted, because
+    `unittest` without -v renders it as a bare 's'. In CI there is no such
+    excuse: every tool these tests need is installed by the lane, so absence
+    means the lane changed underneath them and the right answer is red.
+    """
+    if available:
+        return
+    if IN_CI:
+        raise AssertionError(
+            f"{what} is missing in CI. These checks must not be skipped here -- "
+            "install it in the workflow or delete the check deliberately."
+        )
+    print(f"SKIP: {what} not installed; this check is NOT running", file=sys.stderr)
+    raise unittest.SkipTest(f"{what} not installed")
 
 
 def _defaults(role: Path) -> dict:
@@ -125,8 +152,17 @@ class UdevRulesTest(unittest.TestCase):
         to parse the file.
         """
         udevadm = shutil.which("udevadm")
-        if udevadm is None:
-            self.skipTest("udevadm not installed")
+        _require(udevadm is not None, "udevadm (package: udev)")
+        # `verify` arrived in systemd 251. An older udevadm would exit non-zero
+        # on an unknown verb and read as a rejected rules file, so it is
+        # separated out: in CI that is a lane that lost its guard, not a bad
+        # rule.
+        _require(
+            subprocess.run(
+                [udevadm, "verify", "--help"], capture_output=True
+            ).returncode == 0,
+            "udevadm verify (systemd >= 251)",
+        )
         proc = subprocess.run(
             [udevadm, "verify", str(RULES)],
             capture_output=True, text=True,
@@ -137,8 +173,10 @@ class UdevRulesTest(unittest.TestCase):
         self.assertNotIn("Fail:    1", proc.stdout)
 
 
-@unittest.skipIf(yaml is None, "PyYAML not installed")
 class RoleWiringTest(unittest.TestCase):
+    def setUp(self):
+        _require(yaml is not None, "PyYAML")
+
     def test_defaults_agree_with_the_rules_file(self):
         d = _defaults(FLEET_ROLE)
         self.assertEqual(d["ernic_fleet_pci_vendor"], VENDOR)
@@ -162,8 +200,8 @@ class RoleWiringTest(unittest.TestCase):
         self.assertEqual(d["ionic_image_prep_pciids_subvendor"], SUBSYSTEM_VENDOR[2:])
         self.assertEqual(d["ionic_image_prep_pciids_subdevice"], SUBSYSTEM_DEVICE[2:])
 
-    @unittest.skipIf(jinja2 is None, "jinja2 not installed")
     def test_pciids_entries_have_the_exact_spacing(self):
+        _require(jinja2 is not None, "Jinja2")
         # Two spaces between an id and its name, one between the two
         # subsystem ids. Getting this wrong is not cosmetic: pciutils either
         # mis-parses the name or refuses the file.
@@ -179,7 +217,59 @@ class RoleWiringTest(unittest.TestCase):
         )
 
 
-@unittest.skipIf(jinja2 is None or yaml is None, "jinja2/PyYAML not installed")
+class FleetRoleInstallsTheRulesTest(unittest.TestCase):
+    """The copy task must actually fire under the role's own defaults.
+
+    Checking that the default names a file that exists is not the same as
+    checking that the task guarded by it runs: the task is `when:
+    ernic_fleet_udev_rules_src | length > 0`, so a default reverted to "" --
+    which is what it was, and why the fleet inherited the image's 0x100a
+    rules -- leaves every id assertion in this file green while no rules are
+    installed at all. No lane runs this role against a guest, so the
+    evaluation is done here, on the condition as written in the task file.
+    """
+
+    DEST = "/etc/udev/rules.d/99-rocm-ernic.rules"
+
+    def setUp(self):
+        _require(yaml is not None and jinja2 is not None, "PyYAML and Jinja2")
+        self.defaults = _defaults(FLEET_ROLE)
+        self.tasks = yaml.safe_load(
+            (FLEET_ROLE / "tasks" / "driver.yml").read_text()
+        )
+
+    def _copy_task(self) -> dict:
+        found = [
+            t for t in self.tasks
+            if t.get("ansible.builtin.copy", {}).get("dest") == self.DEST
+        ]
+        self.assertEqual(len(found), 1, "exactly one task may install the rules")
+        return found[0]
+
+    def test_the_copy_task_takes_its_source_from_the_default(self):
+        copy = self._copy_task()["ansible.builtin.copy"]
+        self.assertEqual(
+            jinja2.Environment().from_string(copy["src"]).render(**self.defaults),
+            self.defaults["ernic_fleet_udev_rules_src"],
+        )
+
+    def test_the_condition_is_true_under_the_defaults(self):
+        when = self._copy_task()["when"]
+        self.assertTrue(
+            jinja2.Environment().compile_expression(when)(**self.defaults),
+            f"{when!r} is false with the role's own defaults: no rules get installed",
+        )
+
+    def test_installing_the_rules_reloads_udev(self):
+        # Rules are read at rename time, but a udevadm trigger before the
+        # reload would re-run the stale file.
+        self.assertIn("Reload udev rules", str(self._copy_task().get("notify")))
+        handlers = yaml.safe_load(
+            (FLEET_ROLE / "handlers" / "main.yml").read_text()
+        )
+        self.assertIn("Reload udev rules", [h.get("name") for h in handlers])
+
+
 class NetcfgDiscoveryTest(unittest.TestCase):
     """The netcfg script must find the device by tuple, not by name.
 
@@ -189,6 +279,7 @@ class NetcfgDiscoveryTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        _require(jinja2 is not None and yaml is not None, "Jinja2 and PyYAML")
         values = _defaults(FLEET_ROLE)
         values.setdefault("ernic_fleet_nic_subnet", "192.168.100")
         env = jinja2.Environment(
@@ -263,10 +354,17 @@ class NetcfgDiscoveryTest(unittest.TestCase):
         self.assertIn("0x5201", err)
 
     def test_name_is_never_hardcoded(self):
-        self.assertNotRegex(self.script_text, r"^NIC=rocm-ernic0\s*$")
+        # (?m) is load-bearing. assertNotRegex uses re.search, so without it
+        # ^ and $ anchor to the whole rendered script -- which starts with a
+        # shebang -- and the pattern can never match whatever the template
+        # says. Measured: with the template reverted to a literal
+        # NIC=rocm-ernic0, the regression this test is named for, the suite
+        # still reported OK. A test that cannot fail is the same defect as
+        # the udev rule that matched and did nothing.
+        self.assertNotRegex(self.script_text, r"(?m)^NIC=rocm-ernic0\s*$")
+        self.assertNotRegex(self.script_text, r"(?m)^\s*NIC=rocm-ernic0\s*$")
 
 
-@unittest.skipIf(shutil.which("awk") is None, "awk not installed")
 class PciIdsAwkTest(unittest.TestCase):
     """The pci.ids entry is three levels deep and the device line is upstream's.
 
@@ -276,6 +374,9 @@ class PciIdsAwkTest(unittest.TestCase):
 
     SCAN = PREP_ROLE / "files" / "pciids-scan.awk"
     MERGE = PREP_ROLE / "files" / "pciids-merge.awk"
+
+    def setUp(self):
+        _require(shutil.which("awk") is not None, "awk")
 
     VENDOR_LINE = "1dd8  AMD Pensando Systems"
     DEVICE_LINE = "\t1002  DSC Ethernet Controller"
@@ -386,13 +487,15 @@ class PciIdsAwkTest(unittest.TestCase):
         self.assertEqual(out.splitlines().count(self.DEVICE_LINE), 1)
 
 
-@unittest.skipIf(shutil.which("lspci") is None, "pciutils not installed")
 class PciIdsParseTest(unittest.TestCase):
     """What the role's lspci parse check is guarding against, exercised here.
 
     This is the claim the whole pci.ids design rests on: a duplicate is not
     ignored, it costs the names of every device on the bus.
     """
+
+    def setUp(self):
+        _require(shutil.which("lspci") is not None, "lspci (package: pciutils)")
 
     def _parse(self, lines: list[str]) -> int:
         d = Path(tempfile.mkdtemp(prefix="pciids-parse-"))

@@ -48,6 +48,13 @@ All notable changes to this project will be documented in this file.
   fleet`, which `gen-compose` already renders, and one guest is the `ssh`
   command `inspect` already prints. See the README and the man page.
 
+  `Gen Compose Check` renders a 3-VM stack to a scratch directory and runs
+  `qemu-tool compose config` inside it with no flags. The assertion is on the
+  project name — which `docker compose` derives from the working directory —
+  and on the service list, not on the exit status: resolving to the wrong
+  stack also exits 0, and that is the failure worth catching. A second run
+  one directory up asserts the stack is *not* adopted from outside it.
+
 - **`qemu-tool list --summary`** — a per-fleet aggregate of the same bytes
   `list` already prints, plus a measured load picture across CPU, memory,
   storage, the RDMA mesh, GPUs and logged-in users. VMs are grouped by Docker
@@ -365,7 +372,14 @@ All notable changes to this project will be documented in this file.
     an address rather than sshd. `fleet.sh check <N>` reports each guest's
     device and address.
   - `tests/test_ernic_identity.py` pins the rules, the discovery script and the
-    pci.ids awk programs, including the pciutils parse rules they depend on.
+    pci.ids awk programs, including the pciutils parse rules they depend on. It
+    also evaluates the fleet role's install task — a `when:` that is false
+    under the role's own defaults installs nothing while every id assertion
+    stays green — and `Gen Compose Check` now installs the tools it needs and
+    runs it with `CI=true`, under which a missing `udevadm`, `lspci`, `awk`,
+    PyYAML or Jinja2 fails rather than skips. The check that asks udev to
+    parse the file is the only one that can catch a rule rejected at parse
+    time, and it was free to not run: a skip reads as coverage.
 
   Driver binding is deliberately left loose: `ionic`'s match table wildcards
   the subsystem because the same driver drives real Pensando cards, so udev is
