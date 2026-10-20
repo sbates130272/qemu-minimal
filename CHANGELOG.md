@@ -291,6 +291,56 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- **`gen-compose` now mirrors a stack's asset directories instead of adding to
+  them.** `grafana/`, `logging/` and `tapsetup/` in the output directory are
+  made to match the repo: a file the repo does not have is removed, and every
+  removal is printed with the source directory it is missing from.
+
+  The additive version cost the live 32-VM fleet two hours of metrics. A
+  hand-made `grafana/provisioning/datasources/prom.yml` survived a
+  regeneration alongside the repo's `prometheus.yml`, both `isDefault: true`,
+  and Grafana refuses to provision two default datasources
+  (`Only one datasource per organization can be marked as default`). It
+  crash-looped unnoticed, because an extra file breaks nothing until something
+  downstream reads the whole directory; it surfaced as `infra 1/3` in
+  `qemu-tool list --summary`.
+
+  The deletion is scoped per asset directory — the same shape as
+  `publish-pages` rsyncing each lane's subtree with its own `--delete`.
+  Everything else in a stack directory belongs to the operator and is neither
+  read nor written: on the live fleet that is 2.4 GB of TSDB under
+  `prom-data/`, plus `grafana-data/`, `loki-data/`, `results/`, scripts,
+  tarballs and a `docker-compose.override.yml`. A name is owned only if the
+  rendered compose file references it as `./name` **and** the repo's stack
+  directory has something of that name, so a relative `PROM_DATA_DIR` can
+  never make a data directory look like an asset.
+
+  Ownership holds at any depth: a relative bind mount nested under an owned
+  name, such as `LOKI_DATA_DIR=./logging/data`, is the operator's data and is
+  skipped by the prune, not just a `./prom-data` at the top. And the mirror
+  deletes nothing outside the output directory — a symlink on an owned path,
+  at the top level or inside, is refused with the link and its target named
+  rather than followed. Following one emptied the directory the link pointed
+  at while printing paths through the link, so the log never said which
+  directory had actually been emptied.
+
+  Copies run before the prune, and a removal that fails is collected and
+  reported at the end rather than raised on the spot, so a regeneration that
+  fails part way leaves the stack no emptier than it started.
+
+  `--check` compares the asset directories as well as the three generated
+  files, and compares them symmetrically: `missing`, `modified` and `extra`
+  are reported separately. Reporting only the extras answered "would a
+  regeneration delete anything" — `rm <stack>/logging/loki-config.yml` left it
+  printing `Up to date` for a stack that cannot boot, since Docker recreates
+  that bind-mount source as a directory and loki dies on
+  `read /etc/loki/config.yml: is a directory`.
+
+  The first regeneration against a hand-managed directory will remove
+  hand-added dashboards and provisioning files, including anything renamed
+  aside during a repair. That is intended; the `Removed` lines are there so it
+  is not the next mystery.
+
 - **The settings files moved into `qemu/env/`, dropping the `env.` prefix.**
   Five files that were `qemu/env.<name>` are now `qemu/env/<name>`:
 

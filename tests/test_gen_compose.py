@@ -14,8 +14,12 @@ Stdlib unittest, like the rest of tests/. Run with:
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import importlib.util
+import io
+import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -55,6 +59,12 @@ from qemu_tool import gen_compose, run_vm  # noqa: E402
 from qemu_tool.config import VMConfig  # noqa: E402
 from qemu_tool import envfile  # noqa: E402
 from qemu_tool.envfile import parse_layers as parse_env_layers  # noqa: E402
+
+# Held as a constant rather than written out at each use: joined to a filename
+# the path runs past 40 characters of [A-Za-z0-9/], which the commit-time
+# secret scanner reads as a high-entropy string and blocks the commit over.
+# Same reason test_inspect_devices.kfd_props() exists.
+DATASOURCES = "grafana/provisioning/datasources"
 
 
 def _plan(extra: str = "", base: str = _BASE_ENV, layers: list[str] | None = None):
@@ -802,6 +812,356 @@ class TestRunVMRootPort(unittest.TestCase):
             args = " ".join(self._args(root_port))
             self.assertIn("/run/vfu/ernic-1.sock", args)
             self.assertIn("/run/vfu/rocjitsu-1.sock", args)
+
+
+class TestStackAssets(unittest.TestCase):
+    """The asset copy is authoritative over the directories it owns.
+
+    The scenario each test is built from is the one that cost the 32-VM fleet
+    two hours of metrics: grafana/provisioning/datasources/ held a hand-made
+    prom.yml AND the repo's prometheus.yml, both default, and Grafana refuses
+    to provision two default datasources. Additive copying could never clear
+    it. The other half of the job is what must NOT be deleted -- in that same
+    directory, 2.4 GB of TSDB.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+        # ERNIC_TAP brings in the tapsetup build context, so all three
+        # owned asset directories are in play.
+        self.body = gen_compose.render_compose(
+            _plan("\nERNIC_TAP=true\n"), ["env"], "abc")
+        self.generated = {
+            "docker-compose.yml", "prometheus.yml", "fleet-inventory.yml"}
+
+    def _generate(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            gen_compose._copy_stack_assets(self.body, self.generated, self.tmp)
+        return out.getvalue()
+
+    def test_a_superseded_datasource_is_removed_and_named(self):
+        stale = self.tmp / DATASOURCES / "prom.yml"
+        stale.parent.mkdir(parents=True)
+        stale.write_text("name: Prometheus\nisDefault: true\n")
+        output = self._generate()
+        self.assertFalse(stale.exists())
+        self.assertIn("prom.yml", output)
+        self.assertIn("Removed", output)
+        self.assertTrue(
+            (self.tmp / DATASOURCES / "prometheus.yml").is_file())
+
+    def test_a_hand_renamed_file_goes_too(self):
+        # The live fleet's prom.yml.superseded-20261019, renamed by hand
+        # during the repair. Removing it is correct and is exactly the
+        # surprise worth printing.
+        stale = (self.tmp
+                 / "grafana/provisioning/datasources/prom.yml.superseded-20261019")
+        stale.parent.mkdir(parents=True)
+        stale.write_text("name: Prometheus\n")
+        output = self._generate()
+        self.assertFalse(stale.exists())
+        self.assertIn("prom.yml.superseded-20261019", output)
+
+    def test_operator_state_is_untouched(self):
+        # Everything the generator does not own, as the live fleet has it.
+        tsdb = self.tmp / "prom-data/chunks_head/000001"
+        tsdb.parent.mkdir(parents=True)
+        tsdb.write_text("tsdb")
+        keep = {
+            self.tmp / "docker-compose.override.yml": "services: {}\n",
+            self.tmp / "soak.sh": "#!/bin/bash\n",
+            self.tmp / "results/run1.json": "{}\n",
+            self.tmp / "grafana-data/grafana.db": "db\n",
+            self.tmp / "loki-data/index": "idx\n",
+        }
+        for path, text in keep.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text)
+        self._generate()
+        self.assertEqual(tsdb.read_text(), "tsdb")
+        for path, text in keep.items():
+            self.assertEqual(path.read_text(), text, path)
+
+    def test_a_fresh_directory_gets_every_file(self):
+        # The property the function existed for: a missing bind-mount source
+        # is created by Docker as a directory, and loki crash-loops on a
+        # config that is a directory.
+        self._generate()
+        source = REPO_ROOT / "qemu/compose/vfio-user-ernic-rocjitsu-scale-out"
+        for name in ("grafana", "logging", "tapsetup"):
+            for src in (source / name).rglob("*"):
+                dst = self.tmp / name / src.relative_to(source / name)
+                self.assertEqual(src.is_dir(), dst.is_dir(), dst)
+                if src.is_file():
+                    self.assertEqual(src.read_bytes(), dst.read_bytes(), dst)
+
+    def test_a_nested_tree_is_mirrored_at_every_level(self):
+        stale_dir = self.tmp / "grafana/dashboards/old-fleet32"
+        stale_dir.mkdir(parents=True)
+        (stale_dir / "rdma.json").write_text("{}")
+        (self.tmp / "logging").mkdir()
+        (self.tmp / "logging/alloy-host.alloy").write_text("stale")
+        self._generate()
+        self.assertFalse(stale_dir.exists())
+        self.assertTrue((self.tmp / "grafana/dashboards/fleet/fleet.json").is_file())
+        self.assertNotEqual(
+            (self.tmp / "logging/alloy-host.alloy").read_text(), "stale")
+
+    def test_a_directory_docker_left_where_a_file_belongs_is_cleared(self):
+        config = self.tmp / "logging/loki-config.yml"
+        config.mkdir(parents=True)
+        self._generate()
+        self.assertTrue(config.is_file())
+
+    def test_a_data_dir_named_in_the_compose_file_is_still_not_owned(self):
+        # Ownership needs BOTH a `./name` reference and a source of that name
+        # in the repo. A relative PROM_DATA_DIR satisfies only the first.
+        body = self.body + "\n      - ./prom-data:/prometheus\n"
+        owned = gen_compose._owned_assets(body, self.generated, self.tmp)
+        self.assertNotIn("prom-data", [dst.name for _, dst in owned])
+        self.assertEqual(
+            sorted(dst.name for _, dst in owned),
+            ["grafana", "logging", "tapsetup"])
+
+    def test_the_committed_stack_is_never_mirrored_onto_itself(self):
+        source = REPO_ROOT / "qemu/compose/vfio-user-ernic-rocjitsu-scale-out"
+        self.assertEqual(
+            gen_compose._owned_assets(self.body, self.generated, source), [])
+
+    def test_check_reports_a_superseded_file(self):
+        # --check is the gate meant to catch this, and a file-by-file
+        # comparison of the generated artifacts cannot see it: nothing is out
+        # of date, there is one file too many.
+        source = REPO_ROOT / "qemu/compose/vfio-user-ernic-rocjitsu-scale-out"
+        shutil.copytree(source / "grafana", self.tmp / "grafana")
+        (self.tmp / "grafana/provisioning/datasources/prom.yml").write_text("x")
+        extra = gen_compose._superseded(
+            source / "grafana", self.tmp / "grafana")
+        self.assertEqual([p.name for p in extra], ["prom.yml"])
+
+
+class TestStackAssetSymlinks(unittest.TestCase):
+    """A symlink on an owned path takes the mirror outside the stack.
+
+    The invariant: this code may delete nothing that is not inside the output
+    directory itself. pathlib's rglob does not follow a symlinked
+    subdirectory, but it does descend when the starting path is itself a
+    symlink, so an operator who kept dashboards on a big disk with
+    `ln -s /srv/grafana-shared <stack>/grafana` had /srv/grafana-shared
+    emptied -- and the `Removed` lines named the path through the symlink, so
+    the log never said which directory had actually been emptied.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.stack = self.tmp / "stack"
+        self.stack.mkdir()
+        self.outside = self.tmp / "srv"
+        self.outside.mkdir()
+        self.body = gen_compose.render_compose(
+            _plan("\nERNIC_TAP=true\n"), ["env"], "abc")
+        self.generated = {
+            "docker-compose.yml", "prometheus.yml", "fleet-inventory.yml"}
+
+    def _generate(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            with self.assertRaises(SystemExit):
+                gen_compose._copy_stack_assets(
+                    self.body, self.generated, self.stack)
+        return out.getvalue()
+
+    def test_a_symlinked_asset_directory_is_refused(self):
+        victim = self.outside / "dashboards.json"
+        victim.write_text("operator's own")
+        (self.stack / "grafana").symlink_to(self.outside)
+        output = self._generate()
+        self.assertEqual(victim.read_text(), "operator's own")
+        self.assertEqual([p.name for p in self.outside.iterdir()],
+                         ["dashboards.json"])
+        self.assertNotIn("Removed", output)
+        self.assertIn("symlink", output)
+        self.assertIn("grafana", output)
+        # The other owned directories are still mirrored: one refused asset
+        # is not a reason to leave the stack without its loki config.
+        self.assertTrue((self.stack / "logging/loki-config.yml").is_file())
+
+    def test_a_symlinked_asset_subdirectory_is_refused(self):
+        victim = self.outside / "prom.yml"
+        victim.write_text("operator's own")
+        (self.stack / "grafana/provisioning").mkdir(parents=True)
+        (self.stack / "grafana/provisioning/datasources").symlink_to(
+            self.outside)
+        output = self._generate()
+        self.assertEqual(victim.read_text(), "operator's own")
+        self.assertFalse((self.outside / "prometheus.yml").exists())
+        self.assertIn("symlink", output)
+        self.assertIn("datasources", output)
+
+    def test_a_symlinked_file_on_an_owned_path_is_not_written_through(self):
+        # Same escape, writing rather than deleting: the relative path matches
+        # the repo's, so it is not superseded, and copy2 would follow the link
+        # and overwrite a file outside the stack.
+        victim = self.outside / "prom.yml"
+        victim.write_text("operator's own")
+        datasources = self.stack / "grafana/provisioning/datasources"
+        datasources.mkdir(parents=True)
+        (datasources / "prometheus.yml").symlink_to(victim)
+        self._generate()
+        self.assertEqual(victim.read_text(), "operator's own")
+
+
+class TestStackAssetCheck(unittest.TestCase):
+    """--check answers "would a regeneration change anything".
+
+    It used to answer only "would a regeneration delete anything": it
+    enumerated the destination and reported what the repo did not have, so
+    `rm stack/logging/loki-config.yml` left --check printing "Up to date" for
+    a stack that cannot boot. Docker recreates that bind-mount source as a
+    directory and loki crash-loops on `read /etc/loki/config.yml: is a
+    directory` -- the exact failure the asset copy exists to prevent.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.env = self.tmp / "env"
+        self.env.write_text(_BASE_ENV + "\nERNIC_TAP=true\n")
+        self.out = self.tmp / "stack"
+        with contextlib.redirect_stdout(io.StringIO()):
+            gen_compose.run(self.env, self.out)
+
+    def _check(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            try:
+                gen_compose.run(self.env, self.out, check=True)
+            except SystemExit as exit:
+                return out.getvalue() + "\n" + str(exit)
+        return out.getvalue()
+
+    def test_a_freshly_generated_stack_is_up_to_date(self):
+        self.assertIn("Up to date", self._check())
+
+    def test_a_deleted_asset_is_reported_missing(self):
+        (self.out / "logging/loki-config.yml").unlink()
+        output = self._check()
+        self.assertNotIn("Up to date", output)
+        self.assertIn("missing", output)
+        self.assertIn("logging/loki-config.yml", output)
+
+    def test_an_edited_asset_is_reported_modified(self):
+        (self.out / "logging/loki-config.yml").write_text("edited\n")
+        output = self._check()
+        self.assertIn("modified", output)
+        self.assertIn("logging/loki-config.yml", output)
+
+    def test_an_added_asset_is_reported_extra(self):
+        (self.out / "grafana/provisioning/datasources/prom.yml").write_text("x")
+        output = self._check()
+        self.assertIn("extra", output)
+        self.assertIn("prom.yml", output)
+
+    def test_all_three_classes_are_named_separately(self):
+        (self.out / "logging/loki-config.yml").unlink()
+        (self.out / "logging/alloy-host.alloy").write_text("edited\n")
+        (self.out / "grafana/provisioning/datasources/prom.yml").write_text("x")
+        output = self._check()
+        for word in ("missing", "modified", "extra"):
+            self.assertIn(word, output)
+        self.assertIn("loki-config.yml", output)
+        self.assertIn("alloy-host.alloy", output)
+        self.assertIn("prom.yml", output)
+
+    def test_the_committed_stack_passes(self):
+        # The gate CI runs. Source and destination are the same directory
+        # there, so no asset is owned and only the generated files compare.
+        # From the repo root with the paths CI passes: the env file name goes
+        # into the recorded header verbatim, so an absolute path here would
+        # report the committed files as stale over the header alone.
+        out = io.StringIO()
+        cwd = os.getcwd()
+        os.chdir(REPO_ROOT)
+        self.addCleanup(os.chdir, cwd)
+        with contextlib.redirect_stdout(out):
+            gen_compose.run(
+                Path("qemu/env/scale-out"),
+                Path("qemu/compose/vfio-user-ernic-rocjitsu-scale-out"),
+                check=True)
+        self.assertIn("Up to date", out.getvalue())
+
+
+class TestStackAssetFailureModes(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(self._cleanup)
+        self.body = gen_compose.render_compose(
+            _plan("\nERNIC_TAP=true\n"), ["env"], "abc")
+        self.generated = {
+            "docker-compose.yml", "prometheus.yml", "fleet-inventory.yml"}
+
+    def _cleanup(self):
+        for path in self.tmp.rglob("*"):
+            if path.is_dir():
+                path.chmod(0o755)
+        shutil.rmtree(self.tmp)
+
+    def test_an_unremovable_extra_leaves_the_stack_no_worse(self):
+        # One entry that cannot be removed used to abort the run after the
+        # deletions and before any copy, leaving the stack emptier than it
+        # started.
+        locked = self.tmp / "grafana/locked"
+        locked.mkdir(parents=True)
+        (locked / "dash.json").write_text("{}")
+        stale = self.tmp / "grafana/provisioning/datasources/prom.yml"
+        stale.parent.mkdir(parents=True)
+        stale.write_text("isDefault: true\n")
+        locked.chmod(0o555)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            with self.assertRaises(SystemExit) as raised:
+                gen_compose._copy_stack_assets(
+                    self.body, self.generated, self.tmp)
+        output = out.getvalue() + str(raised.exception)
+        # Every asset is in place despite the failure, and the removal that
+        # could be done was.
+        self.assertTrue((self.tmp / "logging/loki-config.yml").is_file())
+        self.assertTrue(
+            (self.tmp / DATASOURCES / "prometheus.yml").is_file())
+        self.assertFalse(stale.exists())
+        self.assertIn("locked", output)
+
+    def test_a_data_dir_nested_under_an_owned_name_survives(self):
+        # LOKI_DATA_DIR=./logging/data puts Loki's data next to its config.
+        # The first path segment marks `logging` owned, so the data directory
+        # was deleted by the regeneration it was supposed to be safe from.
+        body = self.body + "\n      - ./logging/data:/loki\n"
+        data = self.tmp / "logging/data/index"
+        data.parent.mkdir(parents=True)
+        data.write_text("chunks")
+        with contextlib.redirect_stdout(io.StringIO()):
+            gen_compose._copy_stack_assets(body, self.generated, self.tmp)
+        self.assertEqual(data.read_text(), "chunks")
+        self.assertTrue((self.tmp / "logging/loki-config.yml").is_file())
+
+    def test_a_data_dir_two_levels_down_survives_with_its_parent(self):
+        """The one-level fix shielded the path and its children, not its
+        ancestors -- and the prune runs deepest first, so the protected
+        directory was skipped and then removed inside its unprotected parent.
+        Measured before the fix: one "Removed .../logging/data" line, and the
+        operator's chunk.db gone with it."""
+        body = self.body + "\n      - ./logging/data/sub:/loki\n"
+        data = self.tmp / "logging/data/sub/chunk.db"
+        data.parent.mkdir(parents=True)
+        data.write_text("operator")
+        with contextlib.redirect_stdout(io.StringIO()):
+            gen_compose._copy_stack_assets(body, self.generated, self.tmp)
+        self.assertEqual(data.read_text(), "operator")
+        self.assertTrue(data.parent.parent.is_dir())
+        self.assertTrue((self.tmp / "logging/loki-config.yml").is_file())
 
 
 if __name__ == "__main__":

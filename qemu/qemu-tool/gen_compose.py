@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+import os
 import re
 import shutil
 import sys
@@ -1447,14 +1448,224 @@ def render_inventory(spec: dict[str, Any], env_names: Sequence[str], digest: str
 
 
 # Every `./x` the rendered compose file names: a build context, a bind-mounted
-# config file, a directory of them.
-_RELATIVE_REF = re.compile(r"\./([A-Za-z0-9_.-]+)")
+# config file, a directory of them. Captured whole, not just the first
+# segment -- `./logging/data` is a reference to a data directory, not to
+# `logging` (see _protected_paths).
+_RELATIVE_REF = re.compile(r"\./([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*)")
+
+
+def _stack_source() -> Path:
+    """This repo's copy of the stack: the authority the mirror copies from."""
+    from .compose import _compose_dir
+
+    return _compose_dir("vfio-user-ernic-rocjitsu-scale-out")
+
+
+def _owned_assets(
+    compose_body: str, generated: set[str], output_dir: Path
+) -> list[tuple[Path, Path]]:
+    """The (source, destination) pairs this generator owns, in copy order.
+
+    Ownership is deliberately narrow, because the destination is a live stack
+    directory full of things that are not ours: in the 32-VM fleet's directory,
+    2.4 GB of Prometheus TSDB under prom-data, grafana-data, loki-data,
+    results/, ad-hoc scripts, tarballs and a docker-compose.override.yml. A
+    name qualifies only if the rendered compose file names it as `./name` AND
+    the repo's stack directory has something of that name to copy. A
+    `./prom-data` bind mount therefore does not qualify -- the repo has no
+    prom-data -- so no amount of compose-file editing can point the mirror at
+    an operator's data.
+    """
+    source = _stack_source()
+    pairs = []
+    # The first segment is what names an asset directory; the rest of the
+    # reference is a path inside it, and _protected_paths is what reads that.
+    names = {ref.split("/")[0] for ref in _RELATIVE_REF.findall(compose_body)}
+    for name in sorted(names):
+        # "." and ".." are references out of the stack, not assets of it: the
+        # compose file mounts ./.. for the qemu-tool source tree. Copying one
+        # means copying the whole compose root into the parent of the output
+        # directory, which is both wrong and, mercifully, usually a permission
+        # error rather than a silent mess.
+        if name in {".", ".."} or name in generated:
+            continue
+        src = source / name
+        dst = output_dir / name
+        if not src.exists() or src.resolve() == dst.resolve():
+            continue
+        pairs.append((src, dst))
+    return pairs
+
+
+def _protected_paths(
+    compose_body: str, source: Path, output_dir: Path
+) -> set[Path]:
+    """Relative bind-mount sources, in full, that the repo has nothing for.
+
+    _owned_assets reasons about the first path segment only, which is right
+    for deciding what is an asset directory and wrong for deciding what is in
+    it. `LOKI_DATA_DIR=./logging/data` -- Loki's data next to
+    logging/loki-config.yml, a natural choice that plan() accepts without
+    comment -- marks `logging` owned and contributes nothing to the wanted
+    set, so the regeneration deleted the data directory the stack had just
+    been told to use. A multi-segment reference the repo cannot supply is the
+    operator's at any depth, exactly as `./prom-data` is at the top. One the
+    repo CAN supply is an asset, and stays prunable: protecting
+    `./grafana/provisioning` because it is bind-mounted would shield the
+    superseded datasource this whole mirror exists to remove.
+    """
+    protected = set()
+    for ref in set(_RELATIVE_REF.findall(compose_body)):
+        if "/" not in ref or ref.startswith(".."):
+            continue
+        if (source / ref).exists():
+            continue
+        protected.add(output_dir / ref)
+    return protected
+
+
+def _walk_owned(dst: Path) -> tuple[list[Path], list[Path]]:
+    """Every real path under dst, and every symlink the walk refused to cross.
+
+    The invariant the mirror has to hold: it may never delete or write
+    anything that is not inside the output directory itself. A symlink on an
+    owned path breaks that in both directions, and pathlib hides it --
+    rglob does not recurse into a symlinked subdirectory, but it does descend
+    when the starting path is itself a symlink. An operator keeping dashboards
+    on a big disk with `ln -s /srv/grafana-shared <stack>/grafana` had
+    /srv/grafana-shared enumerated and emptied, with every `Removed` line
+    naming the path through the link rather than the directory actually being
+    emptied. Comparing resolved paths is not a fix: it rejects one alias out
+    of many. So no symlink is followed and no symlink is deleted -- it is
+    reported and its asset is left alone.
+    """
+    if dst.is_symlink():
+        return [], [dst]
+    if not dst.is_dir():
+        return [], []
+    paths: list[Path] = []
+    links: list[Path] = []
+    pending = [dst]
+    while pending:
+        for entry in sorted(pending.pop().iterdir()):
+            if entry.is_symlink():
+                links.append(entry)
+                continue
+            paths.append(entry)
+            if entry.is_dir():
+                pending.append(entry)
+    return paths, links
+
+
+def _diff_result(**kwargs: list[Path]) -> dict[str, list[Path]]:
+    result: dict[str, list[Path]] = {
+        key: []
+        for key in ("missing", "modified", "retyped", "extra", "unowned")
+    }
+    result.update(kwargs)
+    return result
+
+
+def _asset_diff(
+    src: Path, dst: Path, protected: frozenset[Path] | set[Path] = frozenset()
+) -> dict[str, list[Path]]:
+    """How dst differs from src, as lists of dst paths.
+
+    Four classes, because --check has to answer "would a regeneration change
+    anything" and not just "would it delete anything": `missing` is in the
+    repo and not the stack, `modified` is in both and differs, `extra` is in
+    the stack and not the repo, `unowned` is a symlink the mirror will not
+    cross. `retyped` is the subset of `modified` whose file/directory type
+    differs, which the copy cannot overwrite in place.
+    """
+    if dst.is_symlink():
+        return _diff_result(unowned=[dst])
+    if dst.exists() and dst.is_dir() != src.is_dir():
+        # Docker creates a missing bind-mount source as a directory, so this
+        # is the ordinary state of a stack that was started before its assets
+        # were copied. The copy restores the right type immediately.
+        return _diff_result(modified=[dst], retyped=[dst])
+
+    present, unowned = _walk_owned(dst)
+    if unowned:
+        return _diff_result(unowned=unowned)
+    if not src.is_dir():
+        if not dst.exists():
+            return _diff_result(missing=[dst])
+        if dst.read_bytes() != src.read_bytes():
+            return _diff_result(modified=[dst])
+        return _diff_result()
+
+    have = {path.relative_to(dst) for path in present}
+    wanted = set()
+    missing, modified, retyped = [], [], []
+    for path in sorted(src.rglob("*")):
+        rel = path.relative_to(src)
+        wanted.add(rel)
+        target = dst / rel
+        if rel not in have:
+            missing.append(target)
+        elif path.is_dir() != target.is_dir():
+            modified.append(target)
+            retyped.append(target)
+        elif path.is_file() and path.read_bytes() != target.read_bytes():
+            modified.append(target)
+    # Deepest first: a directory's contents have to go before the directory.
+    #
+    # A protected path shields its ANCESTORS as well as itself and everything
+    # under it, and the deepest-first order is exactly why. With
+    # LOKI_DATA_DIR=./logging/data/sub, `logging/data/sub` is skipped as
+    # protected and then `logging/data` -- unprotected, unwanted, and holding
+    # it -- is rmtree'd with the protected directory still inside. Measured:
+    # one line of output, "Removed .../logging/data", and the operator's
+    # chunk.db gone. Shielding only the path and its children reads as
+    # sufficient and is not.
+    extra = [
+        path for path in sorted(present, reverse=True)
+        if path.relative_to(dst) not in wanted
+        and not any(
+            path == keep or keep in path.parents or path in keep.parents
+            for keep in protected
+        )
+    ]
+    return _diff_result(
+        missing=missing, modified=modified, retyped=retyped, extra=extra)
+
+
+def _superseded(
+    src: Path, dst: Path, protected: frozenset[Path] | set[Path] = frozenset()
+) -> list[Path]:
+    """Everything under dst that src does not have, deepest first."""
+    return _asset_diff(src, dst, protected)["extra"]
 
 
 def _copy_stack_assets(
     compose_body: str, generated: set[str], output_dir: Path
 ) -> None:
-    """Copy the stack's non-generated assets next to the generated files.
+    """Mirror the stack's non-generated assets next to the generated files.
+
+    Authoritative, not additive: after this runs each owned asset directory
+    matches the repo. The additive version cost the 32-VM fleet two hours of
+    metrics. A hand-made grafana/provisioning/datasources/prom.yml survived
+    alongside the repo's prometheus.yml, both `isDefault: true`, and Grafana
+    refuses to start on that:
+
+        Only one datasource per organization can be marked as default
+
+    It crash-looped unnoticed, because an asset that is merely *extra* breaks
+    nothing until something downstream reads the whole directory. So extra
+    files are removed -- and named on the way out, since a silent deletion of
+    an operator's hand-added file is the next two-hour mystery. The deletion
+    is scoped per asset directory, the same shape as publish-pages rsyncing
+    each lane's subtree with its own --delete: nothing else in the stack
+    directory is read, let alone written.
+
+    The invariant that scoping rests on, and the one to preserve in any later
+    change here: this function may delete nothing that is not inside
+    output_dir itself. Two things can carry it out of there, and both are
+    refused rather than resolved -- a symlink anywhere on an owned path (see
+    _walk_owned) and a relative bind-mount source nested under an owned name
+    (see _protected_paths).
 
     Only the three rendered files used to be written, which made the
     documented --output-dir workflow produce a stack that could not run. Two
@@ -1474,31 +1685,61 @@ def _copy_stack_assets(
     is what `gen-compose --check` exists to catch. The committed stack is
     unaffected: there source and destination are the same directory, and each
     copy is skipped.
-    """
-    from .compose import _compose_dir
 
-    source = _compose_dir("vfio-user-ernic-rocjitsu-scale-out")
-    for name in sorted(set(_RELATIVE_REF.findall(compose_body))):
-        # "." and ".." are references out of the stack, not assets of it: the
-        # compose file mounts ./.. for the qemu-tool source tree. Copying one
-        # means copying the whole compose root into the parent of the output
-        # directory, which is both wrong and, mercifully, usually a permission
-        # error rather than a silent mess.
-        if name in {".", ".."} or name in generated:
+    Two orderings matter, both because this code deletes files for a living.
+    Copy first and prune second: the prune set is computed from the source
+    before anything is written, so the order is free, and prune-first turned
+    one unremovable entry into a stack emptier than it started -- the
+    hand-made file deleted, the PermissionError propagating out, and not one
+    asset copied. The only deletions that still precede a copy are type
+    mismatches, each of which the very next copy recreates. And a failed
+    removal is collected rather than raised, so the remaining assets are still
+    mirrored before anything is reported.
+    """
+    source = _stack_source()
+    protected = _protected_paths(compose_body, source, output_dir)
+    problems: list[str] = []
+    for src, dst in _owned_assets(compose_body, generated, output_dir):
+        diff = _asset_diff(src, dst, protected)
+        if diff["unowned"]:
+            # Left strictly alone: following it would write outside the output
+            # directory and pruning it would empty a directory the operator
+            # put somewhere else on purpose. Say so and move on -- an operator
+            # who symlinked grafana/ would rather be told than have /srv
+            # emptied under the name of a stack asset.
+            for path in diff["unowned"]:
+                target = os.readlink(path)
+                where = "it" if path == dst else dst
+                problems.append(
+                    f"{path} is a symlink to {target}; {where} was left alone"
+                )
+                print(f"Refused {path}: symlink to {target}, not this stack's")
             continue
-        src = source / name
-        dst = output_dir / name
-        if not src.exists() or src.resolve() == dst.resolve():
-            continue
-        # Docker may have left a directory here standing in for a file it was
-        # asked to bind-mount. Clear it, or copytree/copy2 fails or nests.
-        if dst.is_dir() and not src.is_dir():
-            shutil.rmtree(dst)
+        for path in diff["retyped"]:
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
         if src.is_dir():
             shutil.copytree(src, dst, dirs_exist_ok=True)
         else:
             shutil.copy2(src, dst)
         print(f"Copied {src} -> {dst}")
+        for path in diff["extra"]:
+            try:
+                if path.is_dir():
+                    shutil.rmtree(path)
+                else:
+                    path.unlink()
+            except OSError as error:
+                problems.append(f"{path}: {error.strerror}")
+                continue
+            print(f"Removed {path} (not in {src})")
+    if problems:
+        sys.exit(
+            "Error: the stack directory was not fully mirrored:\n  "
+            + "\n  ".join(problems)
+        )
 
 
 def run(
@@ -1544,11 +1785,61 @@ def run(
             if not (output_dir / name).is_file()
             or (output_dir / name).read_text() != body
         ]
-        if stale:
-            sys.exit(
-                "Error: generated files are out of date: " + ", ".join(sorted(stale)) +
-                f"\nRegenerate with: qemu-tool gen-compose {_env_file_args(env_names)}"
+        # --check is the gate that is meant to notice exactly the two-hour
+        # Grafana outage, and a superseded file is invisible to a file-by-file
+        # comparison of the generated artifacts: nothing is out of date, there
+        # is simply one file too many. The asset trees are therefore compared
+        # too -- and compared symmetrically, because enumerating only the
+        # destination answers "would a regeneration DELETE anything", not
+        # "would it CHANGE anything". `rm stack/logging/loki-config.yml` used
+        # to leave --check printing "Up to date" for a stack that cannot boot:
+        # Docker recreates that bind-mount source as a directory and loki
+        # crash-loops on `read /etc/loki/config.yml: is a directory`, the exact
+        # failure _copy_stack_assets exists to prevent. Each class is worded
+        # separately so a CI log says which of the three it found.
+        compose_body = artifacts["docker-compose.yml"]
+        protected = _protected_paths(
+            compose_body, _stack_source(), output_dir)
+        drift: dict[str, list[str]] = {
+            "missing": [], "modified": [], "extra": [], "unowned": []}
+        owned = _owned_assets(compose_body, set(artifacts), output_dir)
+        for src, dst in owned:
+            diff = _asset_diff(src, dst, protected)
+            for key in drift:
+                drift[key] += [
+                    str(path.relative_to(output_dir)) for path in diff[key]
+                ]
+        if stale or any(drift.values()):
+            message = []
+            if stale:
+                message.append(
+                    "Error: generated files are out of date: "
+                    + ", ".join(sorted(stale))
+                )
+            if drift["missing"]:
+                message.append(
+                    "Error: stack assets missing from the output directory: "
+                    + ", ".join(sorted(drift["missing"]))
+                )
+            if drift["modified"]:
+                message.append(
+                    "Error: stack assets modified from the repo's: "
+                    + ", ".join(sorted(drift["modified"]))
+                )
+            if drift["extra"]:
+                message.append(
+                    "Error: extra stack assets the repo does not have: "
+                    + ", ".join(sorted(drift["extra"]))
+                )
+            if drift["unowned"]:
+                message.append(
+                    "Error: stack assets are symlinks and will not be "
+                    "mirrored: " + ", ".join(sorted(drift["unowned"]))
+                )
+            message.append(
+                f"Regenerate with: qemu-tool gen-compose {_env_file_args(env_names)}"
             )
+            sys.exit("\n".join(message))
         print(f"Up to date: {output_dir}")
         return
 

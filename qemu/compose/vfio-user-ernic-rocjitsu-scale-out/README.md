@@ -348,6 +348,82 @@ profile nobody selected is just a permanently-down target.
 role, and has to appear in `VM_EXTRA_HOSTFWD`. Nothing cross-checks those
 three; a mismatch shows up only as a scrape target that never comes up.
 
+## What a regeneration owns in the output directory
+
+`gen-compose` writes the three generated files and then **mirrors** the stack's
+non-generated assets — `grafana/`, `logging/`, `tapsetup/` — into the output
+directory. Mirrors, not copies: after a regeneration those directories match
+this one exactly. Anything in them that this directory does not have is
+deleted, and every deletion is printed by name.
+
+Everything else in the output directory belongs to whoever put it there and is
+never read or written: `prom-data/`, `grafana-data/`, `loki-data/`, results,
+scripts, tarballs, a `docker-compose.override.yml`. A directory qualifies only
+if the rendered compose file names it as `./name` **and** this directory has
+something of that name, so a relative `PROM_DATA_DIR` cannot make a TSDB look
+like an asset.
+
+That holds at any depth, not just at the top. A relative bind mount nested
+under an owned name — `LOKI_DATA_DIR=./logging/data`, Loki's data next to
+`logging/loki-config.yml` — is the operator's too, and is skipped by the
+prune. Absolute paths are still what the settings file documents for the three
+`*_DATA_DIR` keys, and still what the fleet uses.
+
+The rule the mirror will not break: **it deletes nothing outside the output
+directory.** A symlink would take it there — `ln -s /srv/grafana-shared
+<stack>/grafana` to keep dashboards on a big disk — so a symlink on an owned
+path is refused rather than followed, at the top level and inside:
+
+```
+Refused /srv/fleet/grafana: symlink to /srv/grafana-shared, not this stack's
+Error: the stack directory was not fully mirrored:
+  /srv/fleet/grafana is a symlink to /srv/grafana-shared; it was left alone
+```
+
+Nothing under the link is read, written or removed; the other asset
+directories are still mirrored, `--check` reports the asset as a symlink, and
+`gen-compose` exits non-zero. Replace the link with a real directory to get
+that asset mirrored again.
+
+A removal that fails — a read-only directory, a file owned by another uid —
+is collected and reported at the end rather than raised on the spot, and the
+copies all run first. A regeneration that fails part way therefore leaves the
+stack no emptier than it started.
+
+Additive copying is what this replaced, and it cost the 32-VM fleet two hours
+of metrics. `grafana/provisioning/datasources/` ended up holding a hand-made
+`prom.yml` *and* this directory's `prometheus.yml`, both `isDefault: true`:
+
+```
+Datasource provisioning error: datasource.yaml config is invalid.
+Only one datasource per organization can be marked as default
+```
+
+Grafana crash-looped on that for two hours with nothing alerting; it surfaced
+only as `infra 1/3` in `qemu-tool list --summary`. An extra file breaks
+nothing until something downstream reads the whole directory, which is why
+`--check` now compares the asset directories as well as the three generated
+files — it is the gate that is supposed to notice exactly this.
+
+The comparison is symmetric, and names what it found:
+
+```
+Error: stack assets missing from the output directory: logging/loki-config.yml
+Error: stack assets modified from the repo's: tapsetup/Dockerfile
+Error: extra stack assets the repo does not have: grafana/provisioning/datasources/prom.yml
+```
+
+Reporting only the extras would answer "would a regeneration delete
+anything", which is not the question: `rm <stack>/logging/loki-config.yml`
+left `--check` printing `Up to date` for a stack that cannot boot, because
+Docker recreates that bind-mount source as a directory and loki dies on
+`read /etc/loki/config.yml: is a directory`.
+
+The first regeneration against a directory that has been hand-managed will
+therefore remove hand-added dashboards, provisioning files and anything
+renamed aside during a repair. That is the intent. Read the `Removed` lines;
+move anything worth keeping into this directory and commit it.
+
 ## Staleness
 
 `docker-compose.yml` carries an `# env-sha256:` header recording the settings
