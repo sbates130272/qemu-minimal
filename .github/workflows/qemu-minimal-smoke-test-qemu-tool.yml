@@ -10,6 +10,7 @@ on:
     paths:
       - 'qemu/qemu-tool/**'
       - 'qemu/pyproject.toml'
+      - 'scripts/check-vm-devices.sh'
       - '.github/workflows/qemu-minimal-smoke-test-qemu-tool.yml'
 
 concurrency:
@@ -117,9 +118,15 @@ jobs:
         echo "✓ --backing-file test passed"
     - name: Boot VM with qemu-tool run-vm
       run: |
+        # --qmp-socket is here for the device check below, not for the boot:
+        # without QMP the guest address of an emulated NVMe is unknowable and
+        # `qemu-tool list` can only say "emul". This is the only lane that can
+        # exercise the BDF path at all -- no compose stack can pass the flag,
+        # since gen_compose._VM_FLAGS has no qmp_socket entry.
         qemu-tool run-vm \
           --vm-name qemu-tool-smoke-test \
           --nvme 1 \
+          --qmp-socket \
           > run-vm-output.log 2>&1 &
     - name: Wait for VM to boot (180s timeout)
       run: |
@@ -155,6 +162,35 @@ jobs:
           "dpkg-query -W -f='\${Status}' qemu-guest-agent" \
           | grep -q "install ok installed"
         echo "✓ qemu-guest-agent installed in guest"
+
+    # The device reporting, against a guest that genuinely has an NVMe. Every
+    # field involved degrades to a placeholder instead of an error, so these
+    # are positive-value checks; see scripts/check-vm-devices.sh.
+    #
+    # This lane runs the VM in the job container rather than in a sibling, so
+    # it needs no --pid=host and, being PR-triggered, it catches a regression
+    # before merge. It has no GPU and no RDMA, so it covers NVMe, disks, the
+    # key and the login only -- and it is the only lane that can require a
+    # guest BDF rather than "emul", because it is the only one that can pass
+    # --qmp-socket. About 3 s.
+    - name: Check the reported devices
+      run: |
+        set -eu
+        # Nothing else here holds a session open, and the Login line is only
+        # non-empty while one exists. -tt for a pty, so the session shows up
+        # in utmp on noble and in logind on resolute, which has no utmp.
+        ssh -o NoHostAuthenticationForLocalhost=yes \
+            -o StrictHostKeyChecking=no -tt \
+            -p 2222 ubuntu@localhost "sleep 120" >/dev/null 2>&1 &
+        SSH_PID=$!
+        trap 'kill "$SSH_PID" 2>/dev/null || true' EXIT
+        sleep 5
+        kill -0 "$SSH_PID" 2>/dev/null || {
+          echo "::error::the background SSH session did not stay up"
+          exit 1
+        }
+        scripts/check-vm-devices.sh --nvme-bdf --strict-key \
+          --login ubuntu qemu-tool-smoke-test
 
   smoke-test-arm64:
     name: Smoke Test - arm64

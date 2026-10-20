@@ -315,6 +315,7 @@ class JsonShape(_ClassPatch):
             "source": "argv",
             "qdev_id": "nvme-1-dev",
             "serial": "vm-nvme1",
+            "image": "/img/vm-nvme1.qcow2",
         })
         self.assertEqual(devs[1], {
             "bdf": "0000:03:00.0",
@@ -322,6 +323,8 @@ class JsonShape(_ClassPatch):
             "source": "argv",
             "qdev_id": "vfio-host1",
             "class_verified": True,
+            # A passed-through controller has no host-side image at all.
+            "image": None,
         })
 
     def test_describe_carries_the_nvme_key(self):

@@ -248,6 +248,7 @@ fetch_key() {
   say "Fetching the guest keypair"
   if [ -f "$KEY" ]; then
     echo "already at $KEY"
+    publish_pubkey
     return 0
   fi
   mkdir -p "$KEY_DIR"
@@ -259,6 +260,21 @@ fetch_key() {
   # denial against a guest that is perfectly healthy.
   [ -f "$KEY" ] || die "the referrer carried no id_rsa"
   chmod 600 "$KEY"
+  publish_pubkey
+}
+
+# `qemu-tool inspect` looks for the public half beside the images
+# (<images>/keys/) and in ~/.ssh, never in the key directory this script
+# pulls to -- so without this it reports the guest's key as "accepted by
+# guest, not found locally" and its SSH line carries no -i. The public half
+# only; the private one stays where it was pulled.
+publish_pubkey() {
+  pub="${VM_IMAGES_DIR}/keys/quickstart_id_rsa.pub"
+  if [ -f "$pub" ]; then
+    return 0
+  fi
+  mkdir -p "${VM_IMAGES_DIR}/keys"
+  ssh-keygen -y -f "$KEY" > "$pub" || die "could not derive the public key from $KEY"
 }
 
 # ~17 GB pulled and decompressed once; VM 2 is an overlay of the same backing

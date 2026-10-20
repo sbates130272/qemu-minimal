@@ -6,6 +6,63 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **`qemu-tool list --summary`** — a per-fleet aggregate of the same bytes
+  `list` already prints, plus a measured load picture across CPU, memory,
+  storage, the RDMA mesh, GPUs and logged-in users. VMs are grouped by Docker
+  Compose project, so two stacks on one node stay two fleets.
+
+  Four sections: a header roll-call (`qemu 32/32 ernic 32/32 rocjitsu 32/32
+  infra 1/3`), `HEADROOM` (how many more VMs fit by each ceiling and which one
+  binds), `LOAD`, and `OUTLIERS`. The headroom ceilings are the measured walls
+  this repo records rather than nominal limits: the mesh stops registering at
+  about 40 nodes (issue 17, *not* the 64-node payload cap) and vCPU is budgeted
+  at `nproc` plus 25% (issue 14). On the 32-VM fleet the mesh binds at +8 VMs
+  while vCPU still shows +28, which is the point of printing all four.
+
+  Several numbers are deliberately not the obvious ones:
+
+  - CPU is split by service class, because the ernic mesh sidecars burn as much
+    host CPU as the VMs they serve — a summary reporting only QEMU understates
+    the fleet's cost on the node by over 2x.
+  - Guest RAM resident is cgroup `memory.stat` **shmem**, not `anon`. Guest RAM
+    is a `memory-backend-memfd` with `share=on`, so anon across 32 qemu
+    containers is 2.0 GiB against 45.5 GiB of shmem — anon is 20x low.
+  - Ethernet is the **tx** sum only. The `l2` bridge floods every frame to every
+    guest, so summing rx counts the same ~1 MB once per guest and reports 31 MB
+    of traffic on a fleet that offered 1.
+  - Disk is the **host** figure. Asking the guests gives 301 GiB used across 32
+    guests against the 26.7 GiB this node holds, because every guest counts the
+    whole shared backing file as its own. Both are right; only one decides
+    whether another VM fits.
+  - GPUs are reported as count and gfx target with *utilisation not measurable*
+    spelled out. rocjitsu exposes no stats interface at all and these guests
+    have no amdgpu, so a busy% would be a number nobody could falsify.
+
+  Every collector has a defined unavailable state and renders it rather than a
+  zero, including the unknown bucket for guests whose agent could not answer:
+  an idle fleet and a fleet whose stats files could not be read must not look
+  the same. An ernic instance whose stats file is caught mid-rewrite shrinks
+  the denominator (`31/32 ernic stats read`) instead of contributing a zero.
+
+  `--no-guests` drops the one collector that contacts a guest; the users line
+  then reads `not collected`. Measured on the live 32-VM fleet: 7.0 s with
+  guests, 6.9 s without, of which 5 s is the sample window, which cannot shrink
+  below ~2 s because the ernic servers rewrite their stats at 1 Hz. `docker
+  stats` is used nowhere — it costs 4.2 s for 100 containers against 45 ms for
+  the same figures out of cgroup v2 sysfs. Plain `list` is unchanged and still
+  never opens a guest socket.
+
+  `--summary --json` emits one object whatever the VM count — deliberately not
+  `inspect --json`'s shape, which is a dict for one VM and a list for many —
+  carrying `sampled_seconds`, a `source` per metric group and units in the key
+  names.
+
+- `qemu-tool list --json` gains an `image` field on each `nvme` entry: the
+  scratch qcow2 backing an emulated controller, or null for a passed-through
+  one, which has no host-side image at all. Those images carry the bulk of a
+  fleet's virtual size (1 TiB each against the root overlay's 512 GiB) and were
+  parsed out of `argv` and discarded.
+
 - **An `NVME` column on `qemu-tool list`.** Every NVMe attached to a VM,
   emulated or passed through, from the same per-PID `argv` parse the GPU, RDMA
   and VFIO-USER columns already come from. Repeats collapse (`emul*2`), and a
@@ -29,6 +86,44 @@ All notable changes to this project will be documented in this file.
   socket lives in the container's filesystem namespace); without one it reads
   `emul`. `--json` gains an `nvme` array carrying the canonical BDF, the kind,
   and whether the address came from `argv` or `qmp`.
+
+- **CI assertions on what `list` and `inspect` report about a live guest.**
+  `scripts/check-vm-devices.sh` takes a running VM's name and demands the
+  positive value for every field the device reporting produces: the `NVME`
+  column is not `-`, `inspect` names a block device on the `nvme` bus with a
+  non-zero capacity and a resolved origin, the GPU names a gfx version and an
+  origin, the SSH key is the one the guest's own `authorized_keys` carries
+  (`ssh_key_source == "guest"`, accepted, found locally) rather than the
+  configured default labelled unverified, and `Login` names the expected user.
+
+  Positive values rather than exit status, because every one of these fields
+  degrades to a plausible-looking placeholder — `-`, a missing line,
+  `configured default, unverified`, `unknown` — with the command still
+  exiting 0, so a lane that only ran it would stay green through a total
+  regression. It reads `--json` rather than the rendered lines, which are
+  prose and get reworded; the sole exception is the `NVME` column, which
+  exists only in the table and is read by field index off the header, never
+  by character offset. On failure it prints the full `list` and `inspect`
+  output, since a CI failure nobody can diagnose from the log gets rerun
+  rather than fixed.
+
+  Two lanes run it, for a few seconds each. `report-for-quickstart` covers
+  all four fields daily on a guest that has an emulated NVMe, an emulated
+  gfx1250 and an ernic at once; it gained `--pid=host` on its job container,
+  without which `list` and `inspect` enumerate a `/proc` holding none of the
+  sibling containers' QEMU processes and print an empty table.
+  `smoke-test-qemu-tool` covers the half no compose stack can reach, on
+  every PR: it
+  passes `--qmp-socket` to `run-vm` and requires a guest BDF rather than
+  `emul`, which `gen-compose` can never emit. Both open their own SSH session
+  first — nothing else in either lane holds one, and these guests have no
+  `/var/run/utmp`, so the login comes from logind state and is only non-empty
+  while somebody is logged in.
+
+  `quickstart-2vm.sh` now also writes the pulled guest key's public half to
+  `<images>/keys/`, one of the places `inspect` looks; without it the Key line
+  reads "accepted by guest, not found locally" and the printed `ssh` command
+  carries no `-i`.
 
 - **A Quick Start that CI runs every day.** `scripts/quickstart-2vm.sh` takes a
   machine with KVM and Docker to two guests — each with an emulated gfx1250, an

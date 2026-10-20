@@ -137,9 +137,15 @@ def run(cfg: VMConfig) -> None:
 def _write_vm_info(cfg: VMConfig, images: Path) -> None:
     """Write <vm-name>.json alongside the qcow2 for inspect to read.
 
-    Records the username and SSH public key path baked into the image so that
-    inspect can report correct connection details without needing the env file
-    that was active at gen-vm time.
+    Records the username and SSH public key path *this gen-vm run was
+    configured with*, so inspect does not need the env file that was active
+    here. That is not the same as what the image accepts: the restore and
+    backing-file paths above write this file without creating any image
+    content, and a guest booted from an overlay made by some earlier run, or
+    from an image whose keys were injected by Ansible, accepts whatever is in
+    its own authorized_keys. inspect therefore treats a live guest's answer as
+    authoritative over this file -- printing this as fact once sent a user into
+    three password prompts on a fleet guest that only takes the fleet key.
     """
     info = {
         "username": cfg.username,

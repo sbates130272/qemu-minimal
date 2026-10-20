@@ -19,6 +19,11 @@ name: qemu-minimal - Report for quickstart
 # counter moved. A passing ib_send_bw proves the verbs worked; only
 # total_bytes_sent moving proves the bytes crossed the mesh.
 #
+# It also asserts what qemu-tool reports about the guests while they are up --
+# the NVMe, the disk, the GPU, the verified SSH key and the login -- because
+# every one of those fields fails to a plausible placeholder rather than to an
+# error. See scripts/check-vm-devices.sh.
+#
 # SIZING. A GitHub runner is smaller than any host a human runs this on, so
 # --size-from-host derives the guest sizes from it -- but 4 vCPU is the
 # ionic_rdma floor, so a 4-core runner gets two 4-vCPU guests and is 2x
@@ -32,6 +37,7 @@ on:
       - main
     paths:
       - 'scripts/quickstart-2vm.sh'
+      - 'scripts/check-vm-devices.sh'
       - 'qemu/env/quickstart'
       - 'ansible/playbooks/fleet-quickstart.yml'
       - 'ansible/playbooks/roles/lmcache_guest/tasks/amdgpu_firmware.yml'
@@ -71,8 +77,15 @@ jobs:
       # the qcow2 pulled in here is the file the sibling qemu containers open:
       # compose bind mounts are resolved by the host docker daemon, not in
       # this container.
+      #
+      # --pid=host is what lets the device checks below see anything at all:
+      # qemu-tool list and inspect enumerate /proc, and the QEMU processes run
+      # in SIBLING containers. Without it both commands print an empty table
+      # and exit 0, which is the exact false green those checks exist to
+      # catch.
       options: >-
         --device /dev/kvm
+        --pid=host
         -v /var/run/docker.sock:/var/run/docker.sock
         -v /var/lib/qemu-tool:/var/lib/qemu-tool
     steps:
@@ -145,6 +158,47 @@ jobs:
           --report-dir site/quickstart \
           --in-network \
           test
+
+    # Here and not at the end: the guests are only booted between the step
+    # above and "Take the stack down", and the whole point is to ask a LIVE
+    # guest what it has. Deliberately not `if: always()` for the same reason.
+    #
+    # Every field checked here degrades to a plausible placeholder rather than
+    # to an error -- "-", no Disk line, "configured default, unverified",
+    # "unknown" -- so the checks demand the positive value. Roughly 2 s: four
+    # qemu-tool invocations, each one docker exec per VM.
+    - name: Check the reported devices
+      run: |
+        set -eu
+        NET=$(sed -n 's/^FLEET_NET_PREFIX=//p' "$ENV_FILE" | tail -1)
+        GUEST_USER=$(sed -n 's/^VM_USERNAME=//p' "$ENV_FILE" | tail -1)
+        PREFIX=$(sed -n 's/^VM_NAME_PREFIX=//p' "$ENV_FILE" | tail -1)
+
+        # Nothing else in this lane holds an SSH session open: Ansible closes
+        # its connections and the RDMA test runs as a transient systemd unit,
+        # which is not a login session. These guests have no /var/run/utmp, so
+        # the Login line comes from logind session files and is only non-empty
+        # while somebody is actually logged in -- hence this one, held for the
+        # length of the check.
+        # -tt, so the session gets a pty: that is what makes it visible to
+        # both sources inspect reads, utmp and logind, rather than only one.
+        ssh -i "${KEY_DIR}/id_rsa" -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 \
+            -tt "${GUEST_USER}@${NET}.3.1" "sleep 120" >/dev/null 2>&1 &
+        SSH_PID=$!
+        trap 'kill "$SSH_PID" 2>/dev/null || true' EXIT
+        sleep 5
+        kill -0 "$SSH_PID" 2>/dev/null || {
+          echo "::error::the background SSH session to guest 1 did not stay up"
+          exit 1
+        }
+
+        scripts/check-vm-devices.sh --env-file "$ENV_FILE" \
+          --gpu gfx1250 --strict-key --login "$GUEST_USER" "${PREFIX}-1"
+        # Guest 2 has the same devices but no session of its own, so its
+        # Login check is only "logind answered" -- see the script.
+        scripts/check-vm-devices.sh --env-file "$ENV_FILE" \
+          --gpu gfx1250 --strict-key "${PREFIX}-2"
 
     - name: Show logs on failure
       if: failure()

@@ -512,6 +512,56 @@ respectively.
 .B \-\-qemu\-tool\-only
 Omit VMs that were not started by
 .BR qemu\-tool .
+.TP
+.B \-\-summary
+Replace the per-VM table with a per-fleet aggregate and a measured load
+picture. VMs are grouped by Docker Compose project; uncontainerised ones are
+grouped as
+.BR (uncontainerised) .
+Four sections are printed: a header with the service roll-call,
+.B HEADROOM
+(how many more VMs fit by each ceiling, and which one binds),
+.B LOAD
+(CPU by service class, host load average, guest RAM resident, RDMA and
+Ethernet totals, GPUs, logged-in users) and
+.B OUTLIERS
+(VMs far off the fleet's own CPU median, occupied guests, and any container
+that is not running).
+.IP
+Every figure has an unavailable state and prints it rather than a zero: an
+unreadable collector must not look like an idle fleet. The mesh and vCPU
+ceilings are the measured walls recorded in
+.BR AGENTS.md " issues 17 and 14."
+.IP
+Costs about 7 s against a 32-VM fleet, of which 5 s is the sampling window
+\(em the ernic servers rewrite their stats at 1 Hz, so a shorter window
+samples that rewrite rather than a rate. Plain
+.B list
+is unchanged and still never contacts a guest.
+.TP
+.B \-\-no\-guests
+With
+.BR \-\-summary ,
+skip the only collector that contacts a guest: the logged-in-users line,
+which costs about 2.8 s over 32 VMs and runs underneath the sample window.
+The users line then reads
+.B "not collected"
+rather than zero, and the users row of
+.B OUTLIERS
+is omitted. An error without
+.BR \-\-summary .
+.PP
+.B \-\-summary
+and
+.B \-\-json
+compose: the JSON form is one object whatever the VM count, carrying
+.BR sampled_seconds ,
+a
+.B source
+per metric group
+.RB ( proc ", " cgroup ", " ernic-stats ", " guest-agent ", " unavailable )
+and units in the key names
+.RB ( cores_busy ", " memory_mib ", " ip_bytes_tx ).
 .PP
 The table reports, per VM: PID, VM name, source, architecture, vCPU count,
 memory, forwarded SSH port, whether KVM is enabled, uptime, the container name

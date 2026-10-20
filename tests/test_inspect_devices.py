@@ -87,9 +87,15 @@ def kfd_props(node: int = 1) -> str:
 
 
 def ga(**kw):
-    """A guest-agent payload with the keys a healthy agent returns."""
+    """A guest-agent payload with the keys a healthy agent returns.
+
+    gpu_complete is one of them: the in-guest script sets it once the KFD
+    probe has reached the end of the node list, and without it an empty GPU
+    list is a probe that did not run rather than a VM with no GPU.
+    """
     files = kw.pop("files", {"/proc/partitions": PARTITIONS})
-    payload = {"hostname": {"host-name": "vm1"}, "interfaces": [], "files": files}
+    payload = {"hostname": {"host-name": "vm1"}, "interfaces": [],
+               "files": files, "gpu_complete": True}
     payload.update(kw)
     return payload
 
@@ -282,6 +288,71 @@ class Gpus(unittest.TestCase):
         self.assertIsNone(inspect_mod._gfx_from_kfd("simd_count 0\n"))
 
 
+class AStarvedDeviceProbeIsUnknown(unittest.TestCase):
+    """M1. The device probes share the 8 s in-guest budget with the session walk.
+
+    They are not symmetric: a truncated session walk says "unknown", while a
+    truncated KFD probe used to say "this VM has no GPU" -- a claim, and a
+    false one, caused by somebody being logged in. The order is the fix (the
+    bounded always-wanted probes go first); this is the evidence that makes
+    the remaining starvation readable.
+    """
+
+    def test_an_unprobed_guest_has_an_unknown_gpu_count_not_a_zero(self):
+        starved = ga(files={"/proc/partitions": PARTITIONS}, gpu_complete=False)
+        self.assertIsNone(inspect_mod._gpu_devices(vm(), starved, []))
+
+    def test_a_missing_completeness_flag_is_also_unknown(self):
+        payload = ga()
+        payload.pop("gpu_complete")
+        self.assertIsNone(inspect_mod._gpu_devices(vm(), payload, []))
+
+    def test_a_completed_probe_that_found_nothing_is_a_real_none(self):
+        self.assertEqual(inspect_mod._gpu_devices(vm(), ga(), []), [])
+
+    def test_no_agent_at_all_is_still_a_real_none(self):
+        """The command line is the whole evidence: a guest cannot have a GPU
+        the host never handed it, so an unreachable agent does not make the
+        host's own answer doubtful."""
+        self.assertEqual(inspect_mod._gpu_devices(vm(), {}, []), [])
+
+    def test_a_host_derived_gpu_needs_no_guest_evidence(self):
+        with mock.patch.object(inspect_mod, "_rocjitsu_gpus",
+                               lambda s: ["gfx1250"]):
+            gpus = inspect_mod._gpu_devices(
+                vm(vfio_user_sockets=["/run/vfu/rocjitsu-1.sock"]),
+                ga(gpu_complete=False), [])
+        self.assertEqual([g["origin"] for g in gpus], ["emulated"])
+
+    def test_the_human_line_says_unknown_rather_than_printing_nothing(self):
+        out = StringIO()
+        record = {"name": "qt-vm1", "pid": 1, "arch": "amd64", "vcpus": 4,
+                  "memory_mib": 1024, "ssh_cmd": None, "ssh_port": 2222,
+                  "username": "ubuntu", "image": None, "container": None,
+                  "uptime_seconds": 1, "vfio_user_sockets": [],
+                  "ga_socket": "/tmp/qga.sock", "gpus": None,
+                  "block_devices": None, "ssh_sessions": None}
+        with mock.patch("sys.stdout", out):
+            inspect_mod._print_human([record])
+        text = out.getvalue()
+        self.assertIn("  GPU:       unknown", text)
+        self.assertIn("  Disk:      unknown", text)
+        self.assertIn("  Login:     unknown", text)
+
+    def test_a_vm_with_no_agent_socket_claims_nothing_either_way(self):
+        out = StringIO()
+        record = {"name": "qt-vm1", "pid": 1, "arch": "amd64", "vcpus": 4,
+                  "memory_mib": 1024, "ssh_cmd": None, "ssh_port": 2222,
+                  "username": "ubuntu", "image": None, "container": None,
+                  "uptime_seconds": 1, "vfio_user_sockets": [],
+                  "ga_socket": None, "gpus": [],
+                  "block_devices": None, "ssh_sessions": None}
+        with mock.patch("sys.stdout", out):
+            inspect_mod._print_human([record])
+        self.assertNotIn("Disk:", out.getvalue())
+        self.assertNotIn("Login:", out.getvalue())
+
+
 class Sessions(unittest.TestCase):
     def test_nobody_logged_in(self):
         r = {"ga_socket": "/tmp/qga.sock",
@@ -336,7 +407,11 @@ class RecordShape(unittest.TestCase):
             return inspect_mod._record(vm(**vm_kw), VMConfig())
 
     def test_json_shape(self):
-        r = self._record(ga(disks=[ROOT_DISK, ROOT_PART], fsinfo=FSINFO, users=[]),
+        # utmp=True is what makes the empty users list a reportable "none";
+        # without that evidence the session field is None, which is a
+        # different shape and is tested next door.
+        r = self._record(ga(disks=[ROOT_DISK, ROOT_PART], fsinfo=FSINFO,
+                            users=[], utmp=True),
                          vfio_user_sockets=["/run/vfu/rocjitsu-1.sock"])
         json.dumps(r)  # the three new sections must be serialisable
         self.assertEqual(r["gpus"], [{"gfx": "gfx1250", "origin": "emulated",
@@ -368,7 +443,9 @@ class RecordShape(unittest.TestCase):
         text = out.getvalue()
         self.assertIn("VM: qt-vm1", text)
         self.assertIn("Arch:", text)
-        self.assertNotIn("Disk:", text)
+        # The agent socket is there and did not answer, so the disks are in
+        # exactly the state the Login line is in: unasked, not empty.
+        self.assertIn("Disk:      unknown", text)
         self.assertIn("Login:     unknown", text)
 
     def test_human_output_of_a_full_record(self):

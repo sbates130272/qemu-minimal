@@ -27,6 +27,7 @@ from .libvirt_xml import LibvirtXml
 from .inspect import run as inspect_run
 from .list_vms import run as list_vms_run
 from .run_vm import build_command, run as run_vm_run
+from . import summary
 
 _UNSET = object()  # sentinel for "flag not provided on CLI"
 
@@ -393,6 +394,25 @@ def _add_list(sub: argparse._SubParsersAction) -> None:
         "--qemu-tool-only", action="store_true",
         help="Only show VMs started by qemu-tool.",
     )
+    p.add_argument(
+        "--summary", action="store_true",
+        help=(
+            "Aggregate the listing per fleet and add a measured load picture "
+            "(CPU, memory, disk, RDMA mesh, GPUs, logins). Takes a "
+            f"{summary.SAMPLE_SECONDS:.0f}s sample, so it costs about "
+            f"{summary.SAMPLE_SECONDS + 2:.0f}s against a 32-VM fleet; plain "
+            "`list` is unchanged."
+        ),
+    )
+    p.add_argument(
+        "--no-guests", action="store_true",
+        help=(
+            "With --summary, skip the only collector that contacts a guest "
+            "(the logged-in users line, ~2.8s over 32 VMs). Everything else "
+            "is host-side. The users line then reads 'not collected' rather "
+            "than zero."
+        ),
+    )
     p.set_defaults(func=_list_cmd)
 
 
@@ -510,6 +530,16 @@ def _inspect_cmd(args: argparse.Namespace) -> None:
 
 
 def _list_cmd(args: argparse.Namespace) -> None:
+    if args.summary:
+        summary.run(as_json=args.as_json,
+                    qemu_tool_only=args.qemu_tool_only,
+                    guests=not args.no_guests)
+        return
+    if args.no_guests:
+        # Silently ignoring it would teach that plain `list` talks to guests,
+        # which is the one property it has.
+        sys.exit("Error: --no-guests only applies to --summary "
+                 "(plain `list` never contacts a guest).")
     list_vms_run(as_json=args.as_json, qemu_tool_only=args.qemu_tool_only)
 
 

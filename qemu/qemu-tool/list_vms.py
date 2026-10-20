@@ -534,6 +534,53 @@ def _pci_class(bdf: str) -> str | None:
         return None
 
 
+def _drive_files(argv: list[str]) -> dict[str, str]:
+    """-drive id -> file, for the if=none drives an NVMe controller is backed by.
+
+    The scratch qcow2s are named only here. _drive_file above deliberately
+    skips if=none because it is hunting the root disk, so without this map the
+    path of every --nvme image is parsed and thrown away -- and those images
+    carry the bulk of a fleet's virtual size (1 TiB each against the root
+    overlay's 512 GiB).
+    """
+    found: dict[str, str] = {}
+    for i, a in enumerate(argv):
+        if a != "-drive" or i + 1 >= len(argv):
+            continue
+        opts = {}
+        for part in argv[i + 1].split(","):
+            k, sep, v = part.partition("=")
+            if sep:
+                opts[k] = v
+        if opts.get("id") and opts.get("file"):
+            found[opts["id"]] = opts["file"]
+    return found
+
+
+def _nvme_image(opts: dict[str, str], argv: list[str],
+                drives: dict[str, str]) -> str | None:
+    """The backing file of one -device nvme, or None for a passthrough one.
+
+    Two spellings, because run_vm emits both: the null_blk form puts
+    drive=nvme-N on the controller itself, while the qcow2 form hangs an
+    -device nvme-ns off it and the drive= lives there, joined back by
+    bus=<controller id>.
+    """
+    direct = opts.get("drive")
+    if direct:
+        return drives.get(direct)
+    qdev_id = opts.get("id")
+    if not qdev_id:
+        return None
+    for i, a in enumerate(argv):
+        if a != "-device" or i + 1 >= len(argv):
+            continue
+        driver, ns = _device_opts(argv[i + 1])
+        if driver == "nvme-ns" and ns.get("bus") == qdev_id and ns.get("drive"):
+            return drives.get(ns["drive"])
+    return None
+
+
 def _nvme_devices(argv: list[str]) -> list[dict[str, Any]]:
     """NVMe devices attached to a VM, derived from the QEMU command line.
 
@@ -555,6 +602,7 @@ def _nvme_devices(argv: list[str]) -> list[dict[str, Any]]:
     is never mistaken for a confirmed one.
     """
     out: list[dict[str, Any]] = []
+    drives = _drive_files(argv)
     for i, a in enumerate(argv):
         if a != "-device" or i + 1 >= len(argv):
             continue
@@ -568,6 +616,7 @@ def _nvme_devices(argv: list[str]) -> list[dict[str, Any]]:
                 "source": "argv",
                 "qdev_id": opts.get("id"),
                 "serial": opts.get("serial"),
+                "image": _nvme_image(opts, argv, drives),
             })
         elif driver == "vfio-pci":
             bdf = _normalise_bdf(opts.get("host", ""))
@@ -582,6 +631,9 @@ def _nvme_devices(argv: list[str]) -> list[dict[str, Any]]:
                 "source": "argv",
                 "qdev_id": opts.get("id"),
                 "class_verified": cls is not None,
+                # A passed-through controller has no host-side image file at
+                # all; None here means "no such thing", not "unknown".
+                "image": None,
             })
     return out
 
