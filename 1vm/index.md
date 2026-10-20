@@ -4,7 +4,7 @@ title: VM Report
 
 # VM Report — qemu-minimal
 
-Generated: **2026-10-20 13:29 UTC** &middot; Commit: [`b4eb552`](https://github.com/sbates130272/qemu-minimal/commit/b4eb552841c6ade51e48ac9f40d900cda889ee81) &middot; Status: **pass**
+Generated: **2026-10-20 15:57 UTC** &middot; Commit: [`48f9eef`](https://github.com/sbates130272/qemu-minimal/commit/48f9eef911b4db6e7dafa46dcc304c2330b8a1ad) &middot; Status: **pass**
 
 ## Hardware
 
@@ -127,19 +127,16 @@ ubuntu : ubuntu users admin
   dbus.service                loaded active running D-Bus System Message Bus
   getty@tty1.service          loaded active running Getty on tty1
   ModemManager.service        loaded active running Modem Manager
-  multipathd.service          loaded active running Device-Mapper Multipath Device Controller
   networkd-dispatcher.service loaded active running Dispatcher daemon for systemd-networkd
   polkit.service              loaded active running Authorization Manager
   qemu-guest-agent.service    loaded active running QEMU Guest Agent
   rsyslog.service             loaded active running System Logging Service
   serial-getty@ttyS0.service  loaded active running Serial Getty on ttyS0
-  snapd.service               loaded active running Snap Daemon
   ssh.service                 loaded active running OpenBSD Secure Shell server
   systemd-journald.service    loaded active running Journal Service
   systemd-logind.service      loaded active running User Login Management
   systemd-networkd.service    loaded active running Network Management
   systemd-resolved.service    loaded active running Network Name Resolution
-  systemd-timedated.service   loaded active running Time & Date Service
   systemd-udevd.service       loaded active running Rule-based Manager for Device Events and Files
   udisks2.service             loaded active running Disk Manager
   unattended-upgrades.service loaded active running Unattended Upgrades Shutdown
