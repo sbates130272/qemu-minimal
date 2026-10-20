@@ -4,7 +4,7 @@ title: VM Report
 
 # VM Report — qemu-minimal
 
-Generated: **2026-10-20 15:57 UTC** &middot; Commit: [`48f9eef`](https://github.com/sbates130272/qemu-minimal/commit/48f9eef911b4db6e7dafa46dcc304c2330b8a1ad) &middot; Status: **pass**
+Generated: **2026-10-20 18:53 UTC** &middot; Commit: [`2f489fa`](https://github.com/sbates130272/qemu-minimal/commit/2f489fa152580b2ebe2b28c5bf5610421fc911ef) &middot; Status: **pass**
 
 ## Hardware
 
@@ -13,7 +13,7 @@ Generated: **2026-10-20 15:57 UTC** &middot; Commit: [`48f9eef`](https://github.
 | CPU | AMD EPYC Processor |
 | vCPUs | 2 |
 | Threads/core | 1 |
-| RAM | 3.8Gi total, 3.3Gi free |
+| RAM | 3.8Gi total, 3.4Gi free |
 | Swap | 0B |
 
 ## Kernel
@@ -47,8 +47,8 @@ nvme0n1    1T disk
 
 ```
 Filesystem      Size  Used Avail Use% Mounted on
-/dev/vda1       6.7G  4.9G  1.8G  74% /
-/dev/vda13      989M  183M  739M  20% /boot
+/dev/vda1       6.7G  4.3G  2.4G  65% /
+/dev/vda13      989M   98M  824M  11% /boot
 ```
 
 ### NVMe
