@@ -4,7 +4,7 @@ An N-VM rocm-ernic mesh, one emulated RDMA NIC and one rocjitsu GPU per VM.
 Same topology as `vfio-user-ernic-2vm`, sized by a variable instead of by hand.
 
 **`docker-compose.yml`, `prometheus.yml` and `fleet-inventory.yml` in this
-directory are generated.** Edit [`qemu/env.scale-out`](../../env.scale-out)
+directory are generated.** Edit [`qemu/env/scale-out`](../../env/scale-out)
 and regenerate; do not edit them directly. All three are committed so the
 stack stays reviewable in a diff and usable with plain `docker compose`, but a
 hand edit is lost on the next regeneration and the `Gen Compose Check` CI lane
@@ -14,22 +14,22 @@ will fail.
 every query groups by a label instead of naming a VM.
 
 ```bash
-qemu-tool gen-compose --env-file qemu/env.scale-out
+qemu-tool gen-compose --env-file qemu/env/scale-out
 ```
 
 ## One golden file, plus overlays
 
-`qemu/env.scale-out` is the **golden** settings file and the only one that
+`qemu/env/scale-out` is the **golden** settings file and the only one that
 documents every key. A fleet that differs from it — a CI lane, a particular
 host — states only the keys it differs on, in a small committed overlay named
 after the golden file on the command line:
 
 ```bash
 qemu-tool gen-compose \
-    --env-file qemu/env.scale-out --env-file qemu/env.overlay-mi100 \
+    --env-file qemu/env/scale-out --env-file qemu/env/overlay-mi100 \
     --output-dir /var/lib/qemu-tool/stacks/mi100-fleet
 qemu-tool compose --stack-dir /var/lib/qemu-tool/stacks/mi100-fleet \
-    --env-file qemu/env.scale-out --env-file qemu/env.overlay-mi100 \
+    --env-file qemu/env/scale-out --env-file qemu/env/overlay-mi100 \
     --profile metrics up -d
 ```
 
@@ -48,8 +48,8 @@ brings up the committed stack and reports success.
 This replaces four full copies of the same file —
 `env.scale-out{,-ci,-mi100,-strix}` — that shared about twenty identical keys
 and were hand-synced. The committed overlays are
-[`qemu/env.overlay-ci`](../../env.overlay-ci) and
-[`qemu/env.overlay-mi100`](../../env.overlay-mi100).
+[`qemu/env/overlay-ci`](../../env/overlay-ci) and
+[`qemu/env/overlay-mi100`](../../env/overlay-mi100).
 
 The generated files in this directory come from the golden file alone, so they
 record one `# env-file:` line. A render with an overlay records one line per
@@ -69,7 +69,7 @@ Per-VM values in the settings file are comma-lists, not numbered variables:
 list of length `VM_COUNT` applies positionally, and any other length is an
 error. The exception is a key naming a field that is *already* a list
 (`VM_EXTRA_HOSTFWD` and friends), where the commas mean several values for one
-VM and the whole value goes to every VM. The golden `env.scale-out` documents
+VM and the whole value goes to every VM. The golden `env/scale-out` documents
 this at length because getting it backwards fails silently — and it is the
 only one of the settings files that does, which is most of why there is now
 one of them and not four.
@@ -81,15 +81,15 @@ overlay the rest on it — `gen-compose` prints these commands with the names
 filled in:
 
 ```bash
-qemu-tool gen-vm --env-file qemu/env.scale-out \
+qemu-tool gen-vm --env-file qemu/env/scale-out \
     --vm-name stebates-fleet-1 --backing-image "$VM_BACKING_IMAGE"
 for n in $(seq 2 8); do
-  qemu-tool gen-vm --env-file qemu/env.scale-out \
+  qemu-tool gen-vm --env-file qemu/env/scale-out \
       --vm-name stebates-fleet-$n \
       --backing-file images/stebates-fleet-1-backing.qcow2
 done
 
-qemu-tool compose --env-file qemu/env.scale-out \
+qemu-tool compose --env-file qemu/env/scale-out \
     --stack vfio-user-ernic-rocjitsu-scale-out --profile metrics up -d
 ```
 
@@ -97,7 +97,7 @@ One backing file serves the whole fleet, which is why `VM_BACKING_SHARED=true`
 is not optional here: all N VMs open it at once, and that needs
 `backing.file.locking=off`.
 
-For a fleet with an overlay, append `--env-file qemu/env.overlay-<name>` to
+For a fleet with an overlay, append `--env-file qemu/env/overlay-<name>` to
 **every** command above — `gen-vm` takes it repeatedly too, and it is where
 `VM_IMAGES_DIR` comes from, so a layer dropped from one of them silently builds
 the overlays in the wrong directory. `VM_NAME_PREFIX` is not a `VMConfig` field
@@ -247,7 +247,7 @@ Opt in with `--profile lmcache`, on top of `--profile metrics`.
 
 ```bash
 docker build -t qemu-tool/lmcache-rocm:0.5.6-gfx1250 ../../docker/lmcache
-qemu-tool compose --env-file qemu/env.scale-out \
+qemu-tool compose --env-file qemu/env/scale-out \
     --stack vfio-user-ernic-rocjitsu-scale-out \
     --profile metrics --profile lmcache up -d
 

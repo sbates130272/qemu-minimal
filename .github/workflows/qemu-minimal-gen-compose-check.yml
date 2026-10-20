@@ -1,7 +1,7 @@
 name: qemu-minimal - Gen Compose Check
 
 # The scale-out stack's docker-compose.yml and prometheus.yml are generated
-# from qemu/env.scale-out and committed, so they can be reviewed in a diff and
+# from qemu/env/scale-out and committed, so they can be reviewed in a diff and
 # used with plain `docker compose`. That only holds if the committed copy
 # actually matches the settings file.
 #
@@ -48,10 +48,10 @@ jobs:
       # The gate itself. --check regenerates into a temporary directory and
       # compares, so it fails on a stale committed stack *and* on a settings
       # file edited without regenerating.
-      - name: Committed stack matches qemu/env.scale-out
+      - name: Committed stack matches qemu/env/scale-out
         run: |
           python3 -m qemu_tool gen-compose \
-            --env-file qemu/env.scale-out \
+            --env-file qemu/env/scale-out \
             --output-dir qemu/compose/vfio-user-ernic-rocjitsu-scale-out \
             --check
 
@@ -62,7 +62,7 @@ jobs:
         run: |
           docker compose \
             --project-directory qemu/compose/vfio-user-ernic-rocjitsu-scale-out \
-            --env-file qemu/env.scale-out config -q
+            --env-file qemu/env/scale-out config -q
 
       # Profiles FILTER services out of `config` output, so the step above
       # validates only the default set -- ernic, qemu, rocjitsu, tapsetup.
@@ -77,7 +77,7 @@ jobs:
         run: |
           svcs="$(docker compose \
             --project-directory qemu/compose/vfio-user-ernic-rocjitsu-scale-out \
-            --env-file qemu/env.scale-out \
+            --env-file qemu/env/scale-out \
             --profile lmcache --profile metrics config --services)"
           for s in prometheus grafana loki alloy lmcache-coordinator \
                    lmcache-stats-exporter ernic-stats-exporter; do
@@ -86,7 +86,7 @@ jobs:
           done
           docker compose \
             --project-directory qemu/compose/vfio-user-ernic-rocjitsu-scale-out \
-            --env-file qemu/env.scale-out \
+            --env-file qemu/env/scale-out \
             --profile lmcache --profile metrics config -q
 
       # Every lane here runs the golden file alone, so an overlay only gets
@@ -96,14 +96,14 @@ jobs:
       # committed overlay on top of the golden and validate the result.
       - name: Committed overlays render and validate
         run: |
-          for overlay in qemu/env.overlay-ci qemu/env.overlay-mi100; do
+          for overlay in qemu/env/overlay-ci qemu/env/overlay-mi100; do
             dir="/tmp/stack-$(basename "$overlay")"
             mkdir -p "$dir"
             python3 -m qemu_tool gen-compose \
-              --env-file qemu/env.scale-out --env-file "$overlay" \
+              --env-file qemu/env/scale-out --env-file "$overlay" \
               --output-dir "$dir"
             docker compose --project-directory "$dir" \
-              --env-file qemu/env.scale-out --env-file "$overlay" config -q
+              --env-file qemu/env/scale-out --env-file "$overlay" config -q
           done
 
       # ERNIC_TAP has two shapes and the golden sets it to true, so every
@@ -120,12 +120,12 @@ jobs:
           echo 'ERNIC_TAP=false' > /tmp/env.notap
           mkdir -p /tmp/notapstack
           python3 -m qemu_tool gen-compose \
-            --env-file qemu/env.scale-out --env-file /tmp/env.notap \
+            --env-file qemu/env/scale-out --env-file /tmp/env.notap \
             --output-dir /tmp/notapstack
           docker compose --project-directory /tmp/notapstack \
-            --env-file qemu/env.scale-out --env-file /tmp/env.notap config -q
+            --env-file qemu/env/scale-out --env-file /tmp/env.notap config -q
 
-      # qemu/env.quickstart is the settings file README.md's Quick Start and
+      # qemu/env/quickstart is the settings file README.md's Quick Start and
       # report-for-quickstart both use, through scripts/quickstart-2vm.sh.
       # Nothing else here renders it, and the lane that does runs daily and
       # after the merge -- so without this a broken quickstart is found the
@@ -136,12 +136,12 @@ jobs:
         run: |
           mkdir -p /tmp/qsstack
           python3 -m qemu_tool gen-compose \
-            --env-file qemu/env.quickstart --output-dir /tmp/qsstack
+            --env-file qemu/env/quickstart --output-dir /tmp/qsstack
           svcs="$(docker compose --project-directory /tmp/qsstack \
-            --env-file qemu/env.quickstart config --services)"
+            --env-file qemu/env/quickstart config --services)"
           for s in ernic-1 ernic-2 rocjitsu-1 rocjitsu-2 qemu-1 qemu-2; do
             echo "$svcs" | grep -qx "$s" || {
               echo "::error::$s missing from the quickstart render"; exit 1; }
           done
           docker compose --project-directory /tmp/qsstack \
-            --env-file qemu/env.quickstart config -q
+            --env-file qemu/env/quickstart config -q

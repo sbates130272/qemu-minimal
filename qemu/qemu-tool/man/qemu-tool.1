@@ -330,7 +330,7 @@ lengths. The exception is a key naming a field that is already a list
 where the commas mean several values for
 .I one
 VM and the whole value goes to every VM. See
-.I env.scale\-out
+.I env/scale\-out
 for the full key list.
 .TP
 .BI \-\-stack " NAME"
@@ -681,10 +681,10 @@ the ambient environment.
 .TP
 .I /etc/qemu-tool/env
 Site settings file, seeded from
-.I /usr/share/qemu-tool/env.example
+.I /usr/share/qemu-tool/env/example
 on first install and never overwritten afterwards.
 .TP
-.I /usr/share/qemu-tool/env.example
+.I /usr/share/qemu-tool/env/example
 Settings template, documenting every key.
 .TP
 .I /var/lib/qemu-tool/images
@@ -708,7 +708,7 @@ Default package manifest installed into new VMs by
 Compose stack directories used by
 .BR compose .
 .TP
-.I /usr/share/qemu-tool/env.scale-out
+.I /usr/share/qemu-tool/env/scale-out
 The golden settings file for the scale-out fleet, documenting
 .B VM_COUNT
 and the rest of the fleet keys
@@ -720,8 +720,8 @@ than forking the whole file. Not seeded into
 name it with
 .BR \-\-env\-file .
 The overlays themselves
-.RI ( qemu/env.overlay\-ci ,
-.IR qemu/env.overlay\-mi100 )
+.RI ( qemu/env/overlay\-ci ,
+.IR qemu/env/overlay\-mi100 )
 are not packaged: they name a particular CI lane and a particular host, so
 they are only meaningful beside the repository that describes them.
 .TP
@@ -731,7 +731,7 @@ The generated fleet stack. Both files in it are written by
 edit the settings file, not them.
 .PP
 The package manifests, the compose stacks and
-.I env.example
+.I env/example
 are also bundled inside the Python distribution, so
 .B pipx install qemu-tool
 resolves them with no system install present. The
@@ -785,14 +785,14 @@ backing image once, overlay the rest on it, generate the stack, start it:
 .PP
 .RS
 .EX
-qemu\-tool gen\-vm \-\-env\-file qemu/env.scale\-out \\
+qemu\-tool gen\-vm \-\-env\-file qemu/env/scale\-out \\
     \-\-vm\-name fleet\-1 \-\-backing\-image "$VM_BACKING_IMAGE"
 for n in 2 3 4 5 6 7 8; do
-    qemu\-tool gen\-vm \-\-env\-file qemu/env.scale\-out \\
+    qemu\-tool gen\-vm \-\-env\-file qemu/env/scale\-out \\
         \-\-vm\-name fleet\-$n \-\-backing\-file images/fleet\-1\-backing.qcow2
 done
-qemu\-tool gen\-compose \-\-env\-file qemu/env.scale\-out
-qemu\-tool compose \-\-env\-file qemu/env.scale\-out \\
+qemu\-tool gen\-compose \-\-env\-file qemu/env/scale\-out
+qemu\-tool compose \-\-env\-file qemu/env/scale\-out \\
     \-\-stack vfio\-user\-ernic\-rocjitsu\-scale\-out \-\-profile metrics up \-d
 .EE
 .RE
@@ -801,22 +801,22 @@ Confirm the committed stack is in step with the settings file, for CI:
 .PP
 .RS
 .EX
-qemu\-tool gen\-compose \-\-env\-file qemu/env.scale\-out \-\-check
+qemu\-tool gen\-compose \-\-env\-file qemu/env/scale\-out \-\-check
 .EE
 .RE
 .PP
 Render and run the same fleet sized for a particular host, by layering that
 host's overlay over the golden file. Only the keys the overlay states change;
 everything else still comes from
-.IR env.scale\-out :
+.IR env/scale\-out :
 .PP
 .RS
 .EX
 qemu\-tool gen\-compose \\
-    \-\-env\-file qemu/env.scale\-out \-\-env\-file qemu/env.overlay\-mi100 \\
+    \-\-env\-file qemu/env/scale\-out \-\-env\-file qemu/env/overlay\-mi100 \\
     \-\-output\-dir /var/lib/qemu\-tool/stacks/mi100\-fleet
 qemu\-tool compose \-\-stack\-dir /var/lib/qemu\-tool/stacks/mi100\-fleet \\
-    \-\-env\-file qemu/env.scale\-out \-\-env\-file qemu/env.overlay\-mi100 \\
+    \-\-env\-file qemu/env/scale\-out \-\-env\-file qemu/env/overlay\-mi100 \\
     \-\-profile metrics up \-d
 .EE
 .RE

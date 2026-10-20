@@ -4,7 +4,7 @@ name: qemu-minimal - Report for quickstart
 #
 # WHAT THIS LANE IS FOR. It is the only lane that executes the documented
 # fast path end to end: pull the published ernic-rocjitsu qcow2, generate a
-# two-VM stack from qemu/env.quickstart, boot it, and prove both emulated
+# two-VM stack from qemu/env/quickstart, boot it, and prove both emulated
 # devices with one test each. Every other lane here either bakes its own
 # guest with Ansible (the vm-* report lanes, ~50 minutes of gen-vm) or builds
 # an 11 GB container first (report-for-lmcache), so none of them would notice
@@ -32,7 +32,7 @@ on:
       - main
     paths:
       - 'scripts/quickstart-2vm.sh'
-      - 'qemu/env.quickstart'
+      - 'qemu/env/quickstart'
       - 'ansible/playbooks/fleet-quickstart.yml'
       - 'ansible/playbooks/roles/lmcache_guest/tasks/amdgpu_firmware.yml'
       - 'ansible/playbooks/roles/lmcache_guest/tasks/netplan_ernic.yml'
@@ -56,7 +56,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  ENV_FILE: qemu/env.quickstart
+  ENV_FILE: qemu/env/quickstart
   STACK_DIR: /var/lib/qemu-tool/stacks/quickstart
   KEY_DIR: /var/lib/qemu-tool/quickstart-key
 

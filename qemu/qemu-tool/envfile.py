@@ -1,6 +1,6 @@
 """Read VM settings from the env file shared with docker compose.
 
-One file (qemu/env.example -> qemu/.env) configures gen-vm, run-vm and the
+One file (qemu/env/example -> qemu/.env) configures gen-vm, run-vm and the
 compose stacks. The format is the docker compose env-file format, so compose
 consumes the same file verbatim via --env-file.
 """

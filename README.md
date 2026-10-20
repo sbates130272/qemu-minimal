@@ -82,7 +82,7 @@
      component revision that distinguishes the build.
 
      sbates-fork is the odd one out: it is pinned only by the
-     qemu/env.overlay-mi100 overlay, for vfio-user P2P DMA, and carries a
+     qemu/env/overlay-mi100 overlay, for vfio-user P2P DMA, and carries a
      QEMU patch the stock image does not. See AGENTS.md issue 19. -->
 [![CI image build](https://img.shields.io/badge/ci--images-20261014.geea0485-informational?style=flat-square&logo=docker)](https://hub.docker.com/u/sbates130272)
 [![qemu](https://img.shields.io/badge/qemu-11.1.2-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user/tags)
@@ -144,7 +144,7 @@ morning. It:
 1. pulls the guest image (~17 GB, the long step) and its SSH keypair, which
    ships beside it as an ORAS referrer;
 2. creates two overlays of one backing file and generates a two-VM stack from
-   [`qemu/env.quickstart`](qemu/env.quickstart);
+   [`qemu/env/quickstart`](qemu/env/quickstart);
 3. brings the stack up — per guest a `rocm-ernic` NIC server, a `rocjitsu` GPU
    server and a QEMU container, with the two NICs joined by a TCP mesh;
 4. stages the per-build `ip_discovery.bin`, loads `amdgpu` and gives each guest
@@ -224,7 +224,7 @@ pipx install qemu-tool
 ```
 
 That gives you a working `gen-vm` and `run-vm`: both package manifests,
-`env.example`, the man page and the compose stacks all ship inside the wheel,
+`env/example`, the man page and the compose stacks all ship inside the wheel,
 so none of those depend on a checkout.
 
 `qemu-tool compose` is the exception. The stacks are there, but each one
@@ -312,7 +312,7 @@ qemu-minimal/
     pyproject.toml  Python package manifest for qemu-tool
     qemu_tool/      Python package (qemu-tool CLI)
     packages.d/     Cloud-init package manifests
-    env.example     Settings template -- copy to qemu/.env
+    env/            Settings files -- `example` is the template, copy to qemu/.env
   libvirt/
     virt-install-ubuntu  Create VMs via libvirt
     create-nvme          Generate NVMe XML for libvirt
@@ -387,21 +387,21 @@ NIC and one rocjitsu GPU per VM — from the fleet keys in a settings file. Same
 topology as `vfio-user-ernic-2vm`, sized by a variable rather than by hand.
 
 ```bash
-qemu-tool gen-compose --env-file qemu/env.scale-out
-qemu-tool compose --env-file qemu/env.scale-out \
+qemu-tool gen-compose --env-file qemu/env/scale-out
+qemu-tool compose --env-file qemu/env/scale-out \
     --stack vfio-user-ernic-rocjitsu-scale-out --profile metrics up -d
 ```
 
-`qemu/env.scale-out` is the one authoritative fleet settings file. A host or a
+`qemu/env/scale-out` is the one authoritative fleet settings file. A host or a
 CI lane that needs different values adds a small committed overlay on top of it
 rather than a whole fourth copy to hand-sync — `--env-file` is repeatable and
 later files win key by key:
 
 ```bash
-qemu-tool gen-compose --env-file qemu/env.scale-out --env-file qemu/env.overlay-mi100 \
+qemu-tool gen-compose --env-file qemu/env/scale-out --env-file qemu/env/overlay-mi100 \
     --output-dir /var/lib/qemu-tool/stacks/mi100-fleet
 qemu-tool compose --stack-dir /var/lib/qemu-tool/stacks/mi100-fleet \
-    --env-file qemu/env.scale-out --env-file qemu/env.overlay-mi100 \
+    --env-file qemu/env/scale-out --env-file qemu/env/overlay-mi100 \
     --profile metrics up -d
 ```
 
@@ -444,18 +444,18 @@ With `--profile metrics` the stack also brings up Prometheus and
 `qemu-tool ernic-stats`, which serves the per-QP counters each `rocm-ernic -S`
 writes. Full detail in
 [the stack README](qemu/compose/vfio-user-ernic-rocjitsu-scale-out/README.md)
-and [`qemu/env.scale-out`](qemu/env.scale-out), with the committed overlays in
-[`qemu/env.overlay-ci`](qemu/env.overlay-ci) and
-[`qemu/env.overlay-mi100`](qemu/env.overlay-mi100).
+and [`qemu/env/scale-out`](qemu/env/scale-out), with the committed overlays in
+[`qemu/env/overlay-ci`](qemu/env/overlay-ci) and
+[`qemu/env/overlay-mi100`](qemu/env/overlay-mi100).
 
 ### Settings file
 
-`qemu/env.example` is the single settings template for the whole tool. Copy it
+`qemu/env/example` is the single settings template for the whole tool. Copy it
 to `qemu/.env` and edit; `gen-vm`, `run-vm` and `compose` all read the same
 file, and `compose` hands it straight to `docker compose --env-file`.
 
 ```bash
-cp qemu/env.example qemu/.env
+cp qemu/env/example qemu/.env
 $EDITOR qemu/.env
 ```
 
@@ -662,7 +662,7 @@ flags take precedence over XML values).
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--stack NAME` | `vfio-user-ernic-rocjitsu-scale-out` | Stack to generate |
-| `--env-file FILE` | search path | Settings file (see `qemu/env.scale-out`). Repeatable: later files override keys set by earlier ones |
+| `--env-file FILE` | search path | Settings file (see `qemu/env/scale-out`). Repeatable: later files override keys set by earlier ones |
 | `--output-dir DIR` | the stack directory | Where to write |
 | `--check` | off | Exit non-zero if regenerating would change anything; writes nothing |
 | `--dry-run` | off | Print the generated files instead of writing them |

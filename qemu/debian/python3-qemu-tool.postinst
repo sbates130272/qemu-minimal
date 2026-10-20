@@ -21,7 +21,10 @@ if [ "$1" = "configure" ]; then
 
     # Seed the site settings file on first install only. Never overwrite it:
     # this is the copy the admin edits, and qemu-tool reads it on every run.
+    # The destination is a file, not a directory: envfile._INSTALLED_ENV looks
+    # for /etc/qemu-tool/env exactly, so it does not follow the templates'
+    # move into a share/qemu-tool/env/ directory.
     if [ ! -e /etc/qemu-tool/env ]; then
-        cp /usr/share/qemu-tool/env.example /etc/qemu-tool/env
+        cp /usr/share/qemu-tool/env/example /etc/qemu-tool/env
     fi
 fi

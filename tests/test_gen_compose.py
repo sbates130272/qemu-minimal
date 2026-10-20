@@ -370,22 +370,22 @@ class TestEnvFileLayering(unittest.TestCase):
 
     def test_header_names_every_layer_in_order(self):
         body = gen_compose.render_compose(
-            _plan(), ["qemu/env.scale-out", "qemu/env.overlay-ci"], "abc")
+            _plan(), ["qemu/env/scale-out", "qemu/env/overlay-ci"], "abc")
         named = [line[len("# env-file: "):] for line in body.splitlines()
                  if line.startswith("# env-file: ")]
-        self.assertEqual(named, ["qemu/env.scale-out", "qemu/env.overlay-ci"])
+        self.assertEqual(named, ["qemu/env/scale-out", "qemu/env/overlay-ci"])
 
     def test_regenerate_comment_reproduces_the_render(self):
-        names = ["qemu/env.scale-out", "qemu/env.overlay-ci"]
+        names = ["qemu/env/scale-out", "qemu/env/overlay-ci"]
         body = gen_compose.render_compose(_plan(), names, "abc")
         self.assertIn(
-            "#   qemu-tool gen-compose --env-file qemu/env.scale-out "
-            "--env-file qemu/env.overlay-ci",
+            "#   qemu-tool gen-compose --env-file qemu/env/scale-out "
+            "--env-file qemu/env/overlay-ci",
             body,
         )
 
     def test_provenance_round_trips_with_two_layers(self):
-        names = ["qemu/env.scale-out", "qemu/env.overlay-ci"]
+        names = ["qemu/env/scale-out", "qemu/env/overlay-ci"]
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "docker-compose.yml"
             out.write_text(gen_compose.render_compose(_plan(), names, "cafef00d"))

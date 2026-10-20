@@ -18,7 +18,7 @@
 #
 #   qemu-tool gen-vm --ansible-only \
 #     --ansible-playbook ansible/playbooks/vm-ernic-fleet.yml \
-#     --env-file qemu/env.scale-out --env-file qemu/env.overlay-mi100 \
+#     --env-file qemu/env/scale-out --env-file qemu/env/overlay-mi100 \
 #     --vm-name stebates-mi100-1 \
 #     -e ernic_fleet_ssh_pubkey_file=<path> \
 #     -e ernic_fleet_ionic_modules_dir=<dir> \

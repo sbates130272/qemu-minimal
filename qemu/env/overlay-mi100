@@ -3,16 +3,16 @@
 #
 # Deltas only. Layer it on the golden file, which supplies everything else:
 #
-#   qemu-tool gen-compose --env-file qemu/env.scale-out \
-#     --env-file qemu/env.overlay-mi100 \
+#   qemu-tool gen-compose --env-file qemu/env/scale-out \
+#     --env-file qemu/env/overlay-mi100 \
 #     --output-dir /var/lib/qemu-tool/stacks/mi100-fleet
 #   qemu-tool compose --stack-dir /var/lib/qemu-tool/stacks/mi100-fleet \
-#     --env-file qemu/env.scale-out --env-file qemu/env.overlay-mi100 \
+#     --env-file qemu/env/scale-out --env-file qemu/env/overlay-mi100 \
 #     --profile metrics up -d
 #
 # --output-dir is what keeps it off the committed stack:
 # qemu/compose/vfio-user-ernic-rocjitsu-scale-out/docker-compose.yml is
-# generated from qemu/env.scale-out alone and CI's `gen-compose --check` lane
+# generated from qemu/env/scale-out alone and CI's `gen-compose --check` lane
 # compares the two, so a 32-VM render landing on gen-compose's default output
 # directory fails that lane. --stack-dir then runs what was rendered; without
 # it compose runs the committed 8-VM stack, because VM_COUNT is baked into the
@@ -85,3 +85,18 @@ LOGS_ENABLE=false
 # root port; changing that at the same time as adding a drive would make a
 # device-enumeration change indistinguishable from an NVMe problem.
 VM_VFIO_USER_ROOT_PORT=false
+
+# ---------------------------------------------------------------------------
+# Run the containers as the operator, not as root
+# ---------------------------------------------------------------------------
+# VM_NVME above makes this matter: run-vm creates each drive qcow2 from INSIDE
+# the qemu container, so without this all 32 land root-owned in an images
+# directory this user otherwise owns, and clearing them needs sudo. Proven on
+# a one-VM probe: same image and command, `-u 0:0` gives a root-owned file
+# and `-u <uid>:<gid>` gives a user-owned one.
+#
+# The kvm gid is a property of the host, not of the fleet, so it cannot be
+# defaulted: the qemu service needs it in group_add to open /dev/kvm. 136 is
+# this node's; check with `getent group kvm` before reusing this file.
+CONTAINER_USER=244227127:1274200513
+CONTAINER_KVM_GID=136

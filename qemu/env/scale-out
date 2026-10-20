@@ -4,13 +4,13 @@
 # Not copied to qemu/.env -- named explicitly, the way the rocjitsu lane does it
 # (see ansible/playbooks/roles/rocjitsu_gpu_test/defaults/main.yml):
 #
-#   qemu-tool gen-compose --env-file qemu/env.scale-out
-#   qemu-tool compose --env-file qemu/env.scale-out \
+#   qemu-tool gen-compose --env-file qemu/env/scale-out
+#   qemu-tool compose --env-file qemu/env/scale-out \
 #     --stack vfio-user-ernic-rocjitsu-scale-out --profile metrics up -d
 #
-# Everything in qemu/env.example applies here too -- same syntax, same
+# Everything in qemu/env/example applies here too -- same syntax, same
 # precedence, same consumers. This file adds the fleet keys and the list
-# semantics below. Read env.example first; it explains the keys that are
+# semantics below. Read env/example first; it explains the keys that are
 # merely repeated here.
 #
 # ---- Layering --------------------------------------------------------------
@@ -24,11 +24,11 @@
 # is repeatable and later files win key by key, so a deployment is this file
 # plus a short overlay carrying only the keys that differ:
 #
-#   qemu-tool gen-compose --env-file qemu/env.scale-out \
-#     --env-file qemu/env.overlay-mi100 \
+#   qemu-tool gen-compose --env-file qemu/env/scale-out \
+#     --env-file qemu/env/overlay-mi100 \
 #     --output-dir /var/lib/qemu-tool/stacks/mi100-fleet
 #   qemu-tool compose --stack-dir /var/lib/qemu-tool/stacks/mi100-fleet \
-#     --env-file qemu/env.scale-out --env-file qemu/env.overlay-mi100 \
+#     --env-file qemu/env/scale-out --env-file qemu/env/overlay-mi100 \
 #     --profile metrics up -d
 #
 # Both directory flags are load-bearing. gen-compose defaults its output to the
@@ -41,12 +41,12 @@
 #
 # Two overlays are committed, and both are deltas only:
 #
-#   qemu/env.overlay-ci      the two-VM fleet in report-for-lmcache.yml
-#   qemu/env.overlay-mi100   the 32-VM fleet on ctr-mi100-rack33a-9
+#   qemu/env/overlay-ci      the two-VM fleet in report-for-lmcache.yml
+#   qemu/env/overlay-mi100   the 32-VM fleet on ctr-mi100-rack33a-9
 #
 # Restating a golden value in an overlay is the thing to avoid -- it is a copy
 # that no longer tracks, which is exactly how the four hand-synced files this
-# replaces drifted. For a machine that is only yours, qemu/env.local-* is
+# replaces drifted. For a machine that is only yours, qemu/env/local-* is
 # git-ignored and layers the same way.
 #
 # ---- List semantics -------------------------------------------------------
@@ -613,7 +613,7 @@ QEMU_TOOL_SRC=../../..
 # resolves the value at `up`, so the uid never enters the committed render and
 # `gen-compose --check` stays machine-independent. Put both keys in an overlay
 # env file of your own and regenerate to a scratch --output-dir, the way
-# env.overlay-mi100 does. Left commented, the generated stack is byte-identical
+# env/overlay-mi100 does. Left commented, the generated stack is byte-identical
 # to one generated without this feature at all.
 #
 # CONTAINER_KVM_GID is required whenever CONTAINER_USER is set: a container

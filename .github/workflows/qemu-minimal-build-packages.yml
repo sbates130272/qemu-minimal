@@ -103,7 +103,7 @@ jobs:
             ./etc/qemu-tool/ \
             ./var/lib/qemu-tool/images/ \
             ./usr/share/man/man1/qemu-tool.1.gz \
-            ./usr/share/qemu-tool/env.example \
+            ./usr/share/qemu-tool/env/example \
             ./usr/share/qemu-tool/packages-default \
             ./usr/share/qemu-tool/packages-minimal \
             ./usr/share/qemu-tool/compose/vfio-user-ernic-vm/docker-compose.yml \
@@ -250,7 +250,7 @@ jobs:
         run: |
           set -euo pipefail
           test -f /etc/qemu-tool/env
-          diff -q /etc/qemu-tool/env /usr/share/qemu-tool/env.example
+          diff -q /etc/qemu-tool/env /usr/share/qemu-tool/env/example
 
       - name: Check the images directory
         run: |
@@ -480,16 +480,16 @@ jobs:
           assert values.get('vm_name') == 'from-xdg', f'::error::{values}'
           PY
 
-      - name: Check env.example ships with the wheel
+      - name: Check env/example ships with the wheel
         run: |
           set -euo pipefail
           cd /tmp
           python - <<'PY'
-          from qemu_tool.resources import SHARE, packaged_path
-          path = packaged_path(SHARE, 'env.example')
+          from qemu_tool.resources import ENV, packaged_path
+          path = packaged_path(ENV, 'example')
           if path is None:
-              raise SystemExit('::error::env.example is not bundled in the wheel')
-          print(f'env.example: {path}')
+              raise SystemExit('::error::env/example is not bundled in the wheel')
+          print(f'env/example: {path}')
           PY
 
       - name: Check the man page ships with the wheel

@@ -107,7 +107,7 @@ _DEFAULTS = {
     "VM_VFIO_USER_ROOT_PORT": "false",
     # ---- LMCache -----------------------------------------------------------
     # Off by default so an env file that predates this feature regenerates
-    # byte-identical output. qemu/env.scale-out turns it on.
+    # byte-identical output. qemu/env/scale-out turns it on.
     #
     # Two switches, not one, because they answer different questions.
     # LMCACHE_ENABLE decides whether the services and their scrape jobs are
@@ -122,7 +122,7 @@ _DEFAULTS = {
     "LMCACHE_ENABLE": "false",
     # -srq: only that tag has nixl built as the rocm wheel variant, and a
     # fleet mixing variants cannot unpickle each other's NIXL descriptors.
-    # See LMCACHE_IMAGE in env.scale-out.
+    # See LMCACHE_IMAGE in env/scale-out.
     "LMCACHE_IMAGE": "qemu-tool/lmcache-rocm:0.5.6-gfx1250-srq",
     # The MP coordinator's HTTP port (`lmcache coordinator`, default 9300).
     # This is the MP-mode coordinator -- membership, the key directory, L2
@@ -1470,7 +1470,7 @@ def _copy_stack_assets(
     real cause, and the directories are left behind to confuse the next run.
 
     Generating to a scratch directory is the documented workflow
-    (env.overlay-mi100), precisely because writing over the committed stack
+    (env/overlay-mi100), precisely because writing over the committed stack
     is what `gen-compose --check` exists to catch. The committed stack is
     unaffected: there source and destination are the same directory, and each
     copy is skipped.

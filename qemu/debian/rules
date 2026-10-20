@@ -4,7 +4,7 @@
 
 STAGED_PKG = debian/python3-qemu-tool/usr/lib/python3/dist-packages/qemu_tool
 
-# The wheel bundles the compose stacks, the manifests, env.example and the man
+# The wheel bundles the compose stacks, the manifests, env/example and the man
 # page so `pipx install qemu-tool` has them -- a rootless install has no
 # /usr/share/qemu-tool to read. This package ships all of it at the FHS
 # locations instead, and those come first in the runtime lookup, so the

@@ -1,16 +1,16 @@
 packages.d/packages-default usr/share/qemu-tool/
 packages.d/packages-minimal usr/share/qemu-tool/
-env.example usr/share/qemu-tool/
+env/example usr/share/qemu-tool/env/
 compose/vfio-user-ernic-vm/docker-compose.yml usr/share/qemu-tool/compose/vfio-user-ernic-vm/
 compose/vfio-user-rocjitsu-vm/docker-compose.yml usr/share/qemu-tool/compose/vfio-user-rocjitsu-vm/
 compose/vfio-user-ernic-rocjitsu-vm/docker-compose.yml usr/share/qemu-tool/compose/vfio-user-ernic-rocjitsu-vm/
 compose/vfio-user-ernic-rocjitsu-vm/README.md usr/share/qemu-tool/compose/vfio-user-ernic-rocjitsu-vm/
 compose/vfio-user-ernic-2vm/docker-compose.yml usr/share/qemu-tool/compose/vfio-user-ernic-2vm/
 compose/vfio-user-ernic-2vm/README.md usr/share/qemu-tool/compose/vfio-user-ernic-2vm/
-# The golden fleet settings file. qemu/env.overlay-* deliberately do NOT ship:
+# The golden fleet settings file. qemu/env/overlay-* deliberately do NOT ship:
 # an overlay states only the keys one CI lane or one host differs on, so it is
 # unusable without the checkout that explains it and is not a template.
-env.scale-out usr/share/qemu-tool/
+env/scale-out usr/share/qemu-tool/env/
 compose/vfio-user-ernic-rocjitsu-scale-out/docker-compose.yml usr/share/qemu-tool/compose/vfio-user-ernic-rocjitsu-scale-out/
 compose/vfio-user-ernic-rocjitsu-scale-out/prometheus.yml usr/share/qemu-tool/compose/vfio-user-ernic-rocjitsu-scale-out/
 compose/vfio-user-ernic-rocjitsu-scale-out/README.md usr/share/qemu-tool/compose/vfio-user-ernic-rocjitsu-scale-out/

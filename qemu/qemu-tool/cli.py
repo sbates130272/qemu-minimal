@@ -157,7 +157,7 @@ def _shared_parent() -> argparse.ArgumentParser:
         default=None,
         metavar="FILE",
         help=(
-            "Settings file (see qemu/env.example). Overrides the search path. "
+            "Settings file (see qemu/env/example). Overrides the search path. "
             "Repeatable: later files override keys set by earlier ones."
         ),
     )
@@ -265,7 +265,7 @@ def _add_compose(sub: argparse._SubParsersAction) -> None:
     p.add_argument(
         "--env-file", action="append", type=Path, default=None, metavar="FILE",
         help=(
-            "Settings file (see qemu/env.example). Overrides the search path. "
+            "Settings file (see qemu/env/example). Overrides the search path. "
             "Repeatable: later files override keys set by earlier ones."
         ),
     )
@@ -284,7 +284,7 @@ def _add_gen_compose(sub: argparse._SubParsersAction) -> None:
             "Generate docker-compose.yml and prometheus.yml for an N-VM "
             "rocm-ernic mesh from VM_COUNT and the per-VM lists in the env "
             "file. Per-VM values are comma-lists, not numbered keys; see "
-            "qemu/env.scale-out."
+            "qemu/env/scale-out."
         ),
     )
     p.add_argument(
@@ -294,7 +294,7 @@ def _add_gen_compose(sub: argparse._SubParsersAction) -> None:
     p.add_argument(
         "--env-file", action="append", type=Path, default=None, metavar="FILE",
         help=(
-            "Settings file (see qemu/env.scale-out). Overrides the search path. "
+            "Settings file (see qemu/env/scale-out). Overrides the search path. "
             "Repeatable: later files override keys set by earlier ones."
         ),
     )
@@ -412,7 +412,7 @@ def _add_inspect(sub: argparse._SubParsersAction) -> None:
     p.add_argument(
         "--env-file", action="append", type=Path, default=None, metavar="FILE",
         help=(
-            "Settings file (see qemu/env.example). Overrides the search path. "
+            "Settings file (see qemu/env/example). Overrides the search path. "
             "Repeatable: later files override keys set by earlier ones."
         ),
     )

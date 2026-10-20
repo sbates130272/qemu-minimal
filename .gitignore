@@ -74,8 +74,8 @@ network-config-*
 *.tmp
 
 # Environment files. .env.* covers per-profile settings files such as
-# .env.rocjitsu, selected with --env-file or $QEMU_TOOL_ENV. env.example and
-# the env.overlay-* files have no leading dot, so they stay tracked.
+# .env.rocjitsu, selected with --env-file or $QEMU_TOOL_ENV. The committed
+# settings files live in qemu/env/ with no leading dot, so they stay tracked.
 .env
 .env.*
 
@@ -87,9 +87,9 @@ artifacts/
 # Default lands inside the stack directory; it is run output, not source.
 prom-data/
 
-# Ad-hoc env overlays for one machine. qemu/env.scale-out is the committed,
-# authoritative one and qemu/env.overlay-* are the committed deltas layered on
+# Ad-hoc env overlays for one machine. qemu/env/scale-out is the committed,
+# authoritative one and qemu/env/overlay-* are the committed deltas layered on
 # it with a second --env-file; these carry machine-specific absolute paths
 # (VM_IMAGES_DIR, VM_FILESYSTEM) and locally built image tags, so they are
 # useful to keep and wrong to share.
-qemu/env.local-*
+qemu/env/local-*

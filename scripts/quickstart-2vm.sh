@@ -21,7 +21,7 @@ set -eu
 
 REPO_ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 
-ENV_FILE="${REPO_ROOT}/qemu/env.quickstart"
+ENV_FILE="${REPO_ROOT}/qemu/env/quickstart"
 STACK_DIR=/var/lib/qemu-tool/stacks/quickstart
 STACK_DIR_EXPLICIT=0
 KEY_DIR=/var/lib/qemu-tool/quickstart-key
@@ -35,7 +35,7 @@ usage() {
   cat <<'EOF'
 Usage: quickstart-2vm.sh [options] [all|preflight|up|test|report|down]
 
-  --env-file FILE     settings file (default qemu/env.quickstart)
+  --env-file FILE     settings file (default qemu/env/quickstart)
   --stack-dir DIR     where the stack is generated (default
                       /var/lib/qemu-tool/stacks/quickstart)
   --key-dir DIR       where the guest keypair is pulled to
@@ -225,7 +225,7 @@ size_from_host() {
   {
     echo "VM_VCPUS=${vcpus}"
     echo "VM_VMEM=${vmem}"
-    # VM_VMEM plus 1 GiB, not equal to it. env.scale-out's rule is
+    # VM_VMEM plus 1 GiB, not equal to it. env/scale-out's rule is
     # "VM_SHM_SIZE >= VM_VMEM, per VM", so equal is the boundary and leaves
     # the vfio-user memfd backend no slack -- which is what the lmcache lane
     # set and had to correct. shm_size caps a tmpfs rather than reserving
@@ -280,7 +280,7 @@ make_overlays() {
 }
 
 # To a scratch directory, never over the committed stack: that one is
-# generated from qemu/env.scale-out and `gen-compose --check` compares the
+# generated from qemu/env/scale-out and `gen-compose --check` compares the
 # two. gen-compose also copies the stack's non-generated assets (tapsetup/),
 # without which compose fails with "unable to prepare context".
 generate_stack() {

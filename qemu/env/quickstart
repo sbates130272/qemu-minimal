@@ -7,12 +7,12 @@
 # documented path cannot rot, and that only works while the two run the same
 # thing.
 #
-# Same keys and same list semantics as qemu/env.scale-out -- read that file
+# Same keys and same list semantics as qemu/env/scale-out -- read that file
 # first; this one only records what the quickstart needs differently, and why.
 #
 # Generated to a scratch directory by the script, never over the committed
 # stack: qemu/compose/vfio-user-ernic-rocjitsu-scale-out/docker-compose.yml is
-# generated from qemu/env.scale-out and `gen-compose --check` compares the two.
+# generated from qemu/env/scale-out and `gen-compose --check` compares the two.
 
 # ---------------------------------------------------------------------------
 # Fleet shape
@@ -50,7 +50,7 @@ VM_BACKING_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-erni
 # generated inventory hands Ansible a user that does not exist -- which
 # presents as "Permission denied" with the guest perfectly healthy.
 #
-# `ubuntu` is the fleet-wide login account, matching qemu/env.scale-out. The
+# `ubuntu` is the fleet-wide login account, matching qemu/env/scale-out. The
 # published ernic-rocjitsu qcow2 bakes only `batesste`, so this quickstart
 # depends on the backing image having been given an `ubuntu` account first --
 # that is what ansible/playbooks/vm-ernic-fleet.yml's ernic_fleet_guest role

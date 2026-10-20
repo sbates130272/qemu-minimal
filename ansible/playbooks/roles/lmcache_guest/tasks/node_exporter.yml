@@ -5,7 +5,7 @@
 # The scrape target has existed since the stack was first generated -- the
 # fleet-node job points at the qemu CONTAINER and VM_EXTRA_HOSTFWD forwards
 # :9100 through to the guest -- but nothing ever installed the exporter, so
-# every one of those targets sat down. qemu/env.scale-out claimed the image
+# every one of those targets sat down. qemu/env/scale-out claimed the image
 # already carried it ("vm-basic.yml runs fave_packages, whose
 # fave_packages_node_exporter_enable defaults true"), and on the published
 # ernic-rocjitsu qcow2 that is not true: no binary, no unit, no package.

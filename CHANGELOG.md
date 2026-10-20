@@ -47,7 +47,7 @@ All notable changes to this project will be documented in this file.
   reusing `lmcache_guest`'s `amdgpu_firmware` and `netplan_ernic` task files
   and `rocjitsu_gpu_test`'s `vector_add.hip` rather than copying them.
 
-  The stack comes from `qemu/env.quickstart`, a two-VM cut of the scale-out
+  The stack comes from `qemu/env/quickstart`, a two-VM cut of the scale-out
   settings generated to a scratch directory, with `VM_NVME=1` and
   `ERNIC_TAP=true` — the TAP is not optional, since the TCP mesh carries RDMA
   payload only and without Ethernet `ib_send_bw` cannot do its out-of-band
@@ -176,7 +176,7 @@ All notable changes to this project will be documented in this file.
 
   ```bash
   qemu-tool gen-compose \
-      --env-file qemu/env.scale-out --env-file qemu/env.overlay-mi100
+      --env-file qemu/env/scale-out --env-file qemu/env/overlay-mi100
   ```
 
   `compose` passes each layer through to `docker compose` as its own
@@ -196,6 +196,41 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- **The settings files moved into `qemu/env/`, dropping the `env.` prefix.**
+  Five files that were `qemu/env.<name>` are now `qemu/env/<name>`:
+
+  | Was | Is |
+  |-----|----|
+  | `qemu/env.example` | `qemu/env/example` |
+  | `qemu/env.scale-out` | `qemu/env/scale-out` |
+  | `qemu/env.quickstart` | `qemu/env/quickstart` |
+  | `qemu/env.overlay-ci` | `qemu/env/overlay-ci` |
+  | `qemu/env.overlay-mi100` | `qemu/env/overlay-mi100` |
+
+  **Every documented command that names a settings file has to change.** The
+  flag and the file contents are untouched; only the path moves:
+
+  ```bash
+  qemu-tool gen-compose \
+      --env-file qemu/env/scale-out --env-file qemu/env/overlay-mi100
+  ```
+
+  A gitignored local file follows the same rule — `qemu/env.local-*` is now
+  `qemu/env/local-*`. `qemu/.env` and the rest of the search path
+  (`$QEMU_TOOL_ENV`, `./.env`, `/etc/qemu-tool/env`) are unaffected, so a
+  machine that never passes `--env-file` needs no change.
+
+  The .deb follows the layout: the packaged template is
+  `/usr/share/qemu-tool/env/example`, not `/usr/share/qemu-tool/env.example`.
+  `postinst` still seeds `/etc/qemu-tool/env` from it on first install, so an
+  upgrade keeps its existing settings.
+
+  `qemu/env/` is a third sibling of `qemu/compose/` and `qemu/packages.d/`,
+  mapped into the wheel in place for the same reason they are: the files are
+  referenced by path from CI and the docs, so there is one copy and no
+  working-directory churn. They are data, not Python, so they do not belong
+  under `qemu/qemu-tool/`.
+
 - **One golden fleet settings file plus committed overlays**, replacing
   `qemu/env.scale-out{,-ci,-mi100,-strix}`. The four were full copies of each
   other that agreed on about twenty keys and differed on about ten, hand-synced
@@ -203,16 +238,16 @@ All notable changes to this project will be documented in this file.
   three drifted silently and a reader of one of them had no way to tell a
   deliberate difference from a missed sync.
 
-  `qemu/env.scale-out` is now authoritative. The fleets that differ from it
-  state only their differing keys in `qemu/env.overlay-ci` and
-  `qemu/env.overlay-mi100`, layered over it with a repeated `--env-file`.
+  `qemu/env/scale-out` is now authoritative. The fleets that differ from it
+  state only their differing keys in `qemu/env/overlay-ci` and
+  `qemu/env/overlay-mi100`, layered over it with a repeated `--env-file`.
   `qemu/env.scale-out-strix` is deleted with no
   replacement overlay.
 
   The overlays are committed, not generated and not site-local, so a fleet
   that differs is a diff someone can review. They are deliberately **not**
   packaged: each names one CI lane or one host, so it is meaningless away from
-  the checkout that explains it. `env.scale-out` ships as before.
+  the checkout that explains it. `env/scale-out` ships as before.
 
 - **The golden fleet settings file sets `VM_USERNAME=ubuntu` and
   `VM_PASSWORD=ubuntu`**, where it used to set `VM_USERNAME=batesste` and

@@ -12,7 +12,7 @@
 #   qemu-tool gen-vm --ansible-only \
 #     --ansible-playbook ansible/playbooks/vm-ernic-fleet.yml \
 #     --vm-name <name> \
-#     --env-file qemu/env.scale-out --env-file qemu/env.overlay-mi100
+#     --env-file qemu/env/scale-out --env-file qemu/env/overlay-mi100
 #
 # --env-file is repeatable and last-wins: the golden file plus this fleet's
 # overlay. The login account is covered under Login below.

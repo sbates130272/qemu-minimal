@@ -35,8 +35,8 @@ on:
       - 'ansible/playbooks/roles/lmcache_guest/**'
       - 'ansible/requirements.yml'
       - 'qemu/docker/lmcache/**'
-      - 'qemu/env.scale-out'
-      - 'qemu/env.overlay-ci'
+      - 'qemu/env/scale-out'
+      - 'qemu/env/overlay-ci'
       - 'qemu/qemu-tool/gen_compose.py'
       - '.github/workflows/qemu-minimal-report-for-lmcache.yml'
       - '.github/workflows/qemu-minimal-publish-pages.yml'
@@ -59,8 +59,8 @@ env:
   # "Apply the runner-derived sizing". --env-file is repeatable in both
   # qemu-tool and docker compose and the last file wins key by key, so every
   # call site below passes $ENV_ARGS rather than one file.
-  ENV_GOLDEN: qemu/env.scale-out
-  ENV_OVERLAY: qemu/env.overlay-ci
+  ENV_GOLDEN: qemu/env/scale-out
+  ENV_OVERLAY: qemu/env/overlay-ci
   ENV_SIZING: /tmp/env.overlay-sizing
   STACK_DIR: /var/lib/qemu-tool/stacks/lmcache-ci
   LMCACHE_IMAGE: qemu-tool/lmcache-rocm:0.5.6-gfx1250-srq
@@ -205,7 +205,7 @@ jobs:
         {
           echo "VM_VCPUS=$VM_VCPUS"
           echo "VM_VMEM=$VM_VMEM"
-          # Headroom, not the exact minimum. env.scale-out's rule is
+          # Headroom, not the exact minimum. env/scale-out's rule is
           # "VM_SHM_SIZE >= VM_VMEM, per VM", and setting it EQUAL leaves a
           # vfio-user memfd backend sitting on the boundary. The two-VM
           # ernic report lane -- which passes -- leaves this at the stack
