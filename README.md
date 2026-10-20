@@ -405,6 +405,34 @@ qemu-tool compose --stack-dir /var/lib/qemu-tool/stacks/mi100-fleet \
     --profile metrics up -d
 ```
 
+Every later command against that fleet needs none of those flags. The
+generated `docker-compose.yml` already records the layers it was rendered
+from, so `compose` reads them back:
+
+```bash
+cd /var/lib/qemu-tool/stacks/mi100-fleet && qemu-tool compose ps
+# or, from anywhere:
+export QEMU_TOOL_STACK=/var/lib/qemu-tool/stacks/mi100-fleet
+qemu-tool compose ps
+```
+
+A stack is found three ways, in this order: `--stack-dir`, then
+`$QEMU_TOOL_STACK`, then the current directory when it is itself a rendered
+stack — recognised by the generator's provenance header, not by the presence
+of a `docker-compose.yml`, so an unrelated docker project is never adopted.
+There is deliberately no walk-up: `docker compose` can walk up because what it
+finds is what it runs, whereas here a walk-up from inside this checkout
+reaches `qemu/compose/<default>/` and would drive the committed 8-VM stack
+under the name of a 32-VM fleet.
+
+`--env-file` still wins over the remembered layers, and the layers are
+resolved honestly: the header records them as typed, so a relative name is
+tried against the stack directory and the current directory and nothing else.
+A layer that is not at either, or a generated stack whose header names no
+layers at all, is an error naming the path and where it was looked for —
+never a quiet fall-back to the search path, which is how a 32-VM fleet ends up
+driven by an 8-VM `qemu/.env`.
+
 Keys the overlay does not mention keep the golden file's value, so the overlay
 is short enough to read in a diff. `compose` passes the same layers through to
 `docker compose --env-file` in the same order, which applies the same last-wins
@@ -678,16 +706,55 @@ overwrites the committed fleet and breaks `--check`.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--stack NAME` | `vfio-user-ernic-rocjitsu-vm` | Committed stack to run |
-| `--stack-dir DIR` | — | Run a stack rendered by `gen-compose --output-dir DIR`. Mutually exclusive with `--stack` |
+| `--stack-dir DIR` | `$QEMU_TOOL_STACK`, else the cwd if it is a rendered stack | Run a stack rendered by `gen-compose --output-dir DIR`. Mutually exclusive with `--stack` |
 | `--vm-name NAME` | from settings | Sets `VM_NAME`/`VM1_NAME` |
 | `--vm2-name NAME` | from settings | Sets `VM2_NAME`, for the 2-VM stacks |
 | `--images DIR` | from settings | Sets `VM_IMAGES_DIR` |
-| `--env-file FILE` | search path | Settings file, passed through to `docker compose --env-file`. Repeatable: later files win |
+| `--env-file FILE` | the stack's recorded layers, else the search path | Settings file, passed through to `docker compose --env-file`. Repeatable: later files win |
 
 Everything else on the line goes to `docker compose` in the order typed, so
 `--profile metrics up -d` needs no separator. A `--` before the subcommand is
 still accepted and dropped, because `docker compose` reads one as end-of-options
 and would silently ignore the profile that followed it.
+
+Two things `compose` deliberately does not do, both of which a fleet wrapper
+script used to:
+
+- **It never regenerates, and never edits a settings file.** Resizing a fleet
+  is `gen-compose --output-dir` after editing `VM_COUNT` yourself. Those files
+  are tracked and hand-written, with the reasoning for each value in the
+  comments above it; a tool that rewrites `VM_COUNT` as a side effect of `up`
+  can write it into `qemu/env/scale-out` and break `Gen Compose Check` from a
+  command that looks like a start.
+- **It is not a command runner.** `ssh`/`each` over a fleet is
+
+  ```bash
+  ansible -i <stack>/fleet-inventory.yml fleet -f <N> -m raw \
+      --private-key <key> -a '…'
+  ```
+
+  `gen-compose` renders that inventory beside the compose file, with every
+  host, port and user, and ansible runs the fleet in parallel with real exit
+  codes. `--private-key` is not optional: the generated inventory carries the
+  host, port and user but deliberately no key path, because the key is not a
+  property of the fleet — without it ansible reports every guest `UNREACHABLE`.
+  For one guest, `qemu-tool inspect --vm-name <name>` prints a complete `ssh`
+  command, with the key it verified the guest actually accepts.
+- **Readiness is partly covered, and the gap is worth knowing.**
+  `qemu-tool inspect --vm-name <name>` reports whether the guest agent answers
+  and lists the guest's addressed interfaces, which is enough to tell a booted
+  guest from a running QEMU. It does **not** identify the ernic: it prints
+  whatever `guest-network-get-interfaces` returns, so the ernic appears only
+  once it has an address, and only under whatever name udev gave it. "RDMA
+  ready" — `rocm-ernic0` present, addressed, and `rocm-rdma-ernic0`
+  `PORT_ACTIVE` — is not something the tool asserts today. The read-only
+  guest-agent boundary is what makes what it does report safe to run against
+  someone else's live fleet.
+
+`down -v` is worth typing in full: without `-v` a killed run leaves its
+sockets in the shared `/run/vfu` volume and the next `up` dies on
+`cannot serve /run/vfu/rocjitsu-1.sock: Address already in use`, surfacing as
+`dependency failed to start: container … is unhealthy`.
 
 ### ernic-stats flags
 

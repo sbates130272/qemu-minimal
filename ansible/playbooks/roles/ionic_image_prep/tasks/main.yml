@@ -121,47 +121,73 @@
               | first
               | default({})).item | default('') }}
 
-    # The emulated NIC reuses a real, vendor-assigned pair, and hwdata 0.379
-    # already lists 1dd8:100a -- as "DSC Serial Port Controller". Appending a
-    # second 100a under that vendor does not shadow the upstream name, it makes
-    # pciutils refuse to parse the file outright ("lspci: Duplicate entry at
-    # ..., line N", rc 1), after which lspci resolves no names for *any* device
-    # on the bus. So the test has to be "does this vendor's block already list
-    # this device", scoped to the block: grepping for the entry text misses the
-    # upstream spelling, and grepping for a bare 100a matches the same four hex
-    # digits under a dozen other vendors.
+    # What identifies the emulated NIC is the four-field tuple, and pci.ids
+    # spells that as a THREE-level entry -- the subsystem line nested under
+    # the device line:
     #
-    # Spelt with -v and dynamic regexes rather than {{ }} inside an awk literal
-    # so the shape of the program does not depend on the variables, and with
-    # character classes rather than intervals because mawk is Ubuntu's default
-    # awk and does not do interval expressions.
+    #   1dd8  AMD Pensando Systems
+    #   <tab>1002  DSC Ethernet Controller
+    #   <tab><tab>1dd8 5400  ROCm Emulated RDMA NIC
+    #
+    # 1dd8:1002 is a real Pensando device that hwdata has always carried, so
+    # the device line is not ours to write and a second one would be the
+    # duplicate that makes pciutils refuse the whole file. The subsystem line
+    # is ours. That is also why the presence check below asks for the
+    # subsystem line: a check that stopped at the device would see upstream's
+    # 1002 and skip forever.
+    #
+    # The two awk programs live in files/ so they can be run, and are, by
+    # tests/test_ernic_identity.py -- this role is executed by no CI lane, and
+    # the failure mode of getting pci.ids wrong is not a crash but an lspci
+    # that names nothing on the bus.
+    #
     # The role does not install pciutils, and a missing binary must not turn
-    # the post-merge parse check into a false pass or a task failure.
+    # the parse checks into a false pass or a task failure.
     - name: Look for lspci
       ansible.builtin.stat:
         path: /usr/bin/lspci
       register: ionic_image_prep_pciids_lspci
 
+    - name: Make a directory for the pci.ids awk programs
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: pciids
+      register: ionic_image_prep_pciids_tmp
+      changed_when: false
+
+    - name: Stage the pci.ids awk programs
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: "{{ ionic_image_prep_pciids_tmp.path }}/{{ item }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop:
+        - pciids-scan.awk
+        - pciids-merge.awk
+      changed_when: false
+
     - name: Scan the vendor block in pci.ids for the emulated NIC
       ansible.builtin.command:
         argv:
           - awk
+          - -f
+          - "{{ ionic_image_prep_pciids_tmp.path }}/pciids-scan.awk"
           - -v
           - "vend={{ ionic_image_prep_pciids_vendor }}"
           - -v
           - "dev={{ ionic_image_prep_pciids_device }}"
-          - >-
-            $0 ~ "^" vend "[ \t]" { blk = 1; vendor = 1; next }
-            /^[^\t]/ { blk = 0 }
-            blk && $0 ~ "^\t" dev "[ \t]" { device = 1 }
-            END { print (vendor ? "vendor" : "novendor"), (device ? "device" : "nodevice") }
+          - -v
+          - "subv={{ ionic_image_prep_pciids_subvendor }}"
+          - -v
+          - "subd={{ ionic_image_prep_pciids_subdevice }}"
           - "{{ ionic_image_prep_pciids_path }}"
       register: ionic_image_prep_pciids_scan
       changed_when: false
       when: ionic_image_prep_pciids_path | length > 0
 
-    # hwdata too old to know the vendor at all. The insert below keys off the
-    # vendor line, so it would be a silent no-op -- say so instead.
+    # hwdata too old to know the vendor at all. The merge keys off the vendor
+    # line, so it would be a silent no-op -- say so instead.
     - name: Warn when pci.ids has no block for the vendor
       ansible.builtin.debug:
         msg: >-
@@ -174,23 +200,69 @@
     - name: Note that pci.ids already names the emulated NIC
       ansible.builtin.debug:
         msg: >-
-          {{ ionic_image_prep_pciids_vendor }}:{{ ionic_image_prep_pciids_device }} is
-          already in {{ ionic_image_prep_pciids_path }}; leaving it alone. lspci
-          will call the device whatever hwdata calls it, which for this pair is
-          a serial port controller rather than a NIC -- misleading, but a
-          second entry would break parsing of the whole file.
-      when: ionic_image_prep_pciids_scan.stdout | default('') == 'vendor device'
+          {{ ionic_image_prep_pciids_vendor }}:{{ ionic_image_prep_pciids_device }}
+          subsystem {{ ionic_image_prep_pciids_subvendor }}:{{ ionic_image_prep_pciids_subdevice }}
+          is already in {{ ionic_image_prep_pciids_path }}; leaving it alone.
+          A second entry at any level would break parsing of the whole file.
+      when: ionic_image_prep_pciids_scan.stdout | default('') == 'vendor device subsys'
 
-    # Inserted directly under the vendor line, not appended: pci.ids is parsed
-    # sequentially, so an entry at the end of the file lands under the class
-    # section and never matches.
+    - name: Choose what pci.ids is missing
+      ansible.builtin.set_fact:
+        ionic_image_prep_pciids_mode: >-
+          {{ {'vendor device nosubsys': 'sub',
+              'vendor nodevice nosubsys': 'dev'}
+             .get(ionic_image_prep_pciids_scan.stdout | default('') | trim, '') }}
+
+    # Built beside the real file and parse-checked before it replaces it: a
+    # pci.ids that pciutils refuses is worse than one that is merely missing
+    # the entry, because it costs the names of every device on the bus.
+    - name: Build a merged pci.ids candidate
+      ansible.builtin.shell:
+        cmd: >-
+          awk -f '{{ ionic_image_prep_pciids_tmp.path }}/pciids-merge.awk'
+          -v vend='{{ ionic_image_prep_pciids_vendor }}'
+          -v dev='{{ ionic_image_prep_pciids_device }}'
+          -v mode='{{ ionic_image_prep_pciids_mode }}'
+          -v devline='{{ ionic_image_prep_pciids_device_entry }}'
+          -v subline='{{ ionic_image_prep_pciids_subsystem_entry }}'
+          '{{ ionic_image_prep_pciids_path }}'
+          > '{{ ionic_image_prep_pciids_path }}.rocm-ernic.new'
+      changed_when: false
+      when: ionic_image_prep_pciids_mode | length > 0
+
+    - name: Check that pciutils parses the candidate before installing it
+      ansible.builtin.command:
+        argv:
+          - lspci
+          - -i
+          - "{{ ionic_image_prep_pciids_path }}.rocm-ernic.new"
+          - -nn
+      register: ionic_image_prep_pciids_precheck
+      changed_when: false
+      failed_when: ionic_image_prep_pciids_precheck.rc != 0
+      when:
+        - ionic_image_prep_pciids_mode | length > 0
+        - ionic_image_prep_pciids_lspci.stat.exists | default(false)
+
     - name: Merge the emulated NIC into pci.ids
-      ansible.builtin.replace:
-        path: "{{ ionic_image_prep_pciids_path }}"
-        regexp: '^({{ ionic_image_prep_pciids_vendor }}\s+.*)$'
-        replace: '\1\n\t{{ ionic_image_prep_pciids_entry }}'
-      when: ionic_image_prep_pciids_scan.stdout | default('') == 'vendor nodevice'
+      ansible.builtin.copy:
+        src: "{{ ionic_image_prep_pciids_path }}.rocm-ernic.new"
+        dest: "{{ ionic_image_prep_pciids_path }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0644"
       register: ionic_image_prep_pciids_merge
+      when: ionic_image_prep_pciids_mode | length > 0
+
+    - name: Remove the candidate and the staged awk programs
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ ionic_image_prep_pciids_path }}.rocm-ernic.new"
+        - "{{ ionic_image_prep_pciids_tmp.path }}"
+      changed_when: false
 
     - name: Check that pciutils still parses pci.ids
       ansible.builtin.command:

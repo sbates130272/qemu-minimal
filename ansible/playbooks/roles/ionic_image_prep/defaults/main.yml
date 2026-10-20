@@ -99,21 +99,33 @@ ionic_image_prep_stamp_dir: /usr/local/share/rocm-ernic
 # nothing injected, and the guest's /usr/share/misc/pci.ids already contains
 # the 5400 line. `update-pciids` refreshes it like any other entry.
 #
-# Leaving it on would be actively harmful now, not merely redundant. The
-# device id moved from 100a to 1002 in rocm-ernic@3fb74d1, and 1002 is
-# already present upstream -- so an insert would be a DUPLICATE device id
-# under one vendor, which pciutils does not ignore: it refuses to parse the
-# file and then names nothing on the bus. The role's block-scoped presence
-# check would skip in practice; this is off so that it cannot come down to
-# that check being right.
+# Off because there is nothing to add, NOT because adding is unsafe. What the
+# role writes is the THREE-level entry above -- the subsystem line nested
+# under the device line -- and its presence check asks for that subsystem
+# line, so on a current guest it finds 1dd8 5400 already there and skips. The
+# earlier version wrote a second DEVICE line for 1002 under vendor 1dd8, which
+# is a duplicate: pciutils does not ignore a duplicate, it refuses to parse the
+# file and then names nothing on the bus. That shape is gone; this stays off
+# because hwdata is right, not to protect against the role.
 #
 # Kept rather than deleted because the id has now moved twice (1022:8000 ->
-# 1dd8:100a -> 1dd8:1002). If it moves again before hwdata catches up, set
-# this true and the device to the new id.
+# 1dd8:100a -> 1dd8:1002). If it moves again before hwdata catches up, set this
+# true and the four ids below to the new ones; the role inserts whichever of
+# the device and subsystem lines is missing and refuses to insert either twice.
 ionic_image_prep_pciids: false
 ionic_image_prep_pciids_vendor: "1dd8"
 ionic_image_prep_pciids_device: "1002"
-ionic_image_prep_pciids_entry: "{{ ionic_image_prep_pciids_device }}  ROCm Emulated RDMA NIC (ionic)"
+ionic_image_prep_pciids_subvendor: "1dd8"
+ionic_image_prep_pciids_subdevice: "5400"
+# Two spaces between an id and its name, one space between the two subsystem
+# ids, and the indentation is TABS -- spaces are a parse error, not a style
+# difference. The tabs are supplied by the merge, not by these values.
+ionic_image_prep_pciids_device_name: "DSC Ethernet Controller"
+ionic_image_prep_pciids_subsystem_name: "ROCm Emulated RDMA NIC"
+ionic_image_prep_pciids_device_entry: >-
+  {{ ionic_image_prep_pciids_device }}  {{ ionic_image_prep_pciids_device_name }}
+ionic_image_prep_pciids_subsystem_entry: >-
+  {{ ionic_image_prep_pciids_subvendor }} {{ ionic_image_prep_pciids_subdevice }}  {{ ionic_image_prep_pciids_subsystem_name }}
 
 # Load the ionic modules at boot so a rebooted overlay comes back with its
 # RDMA device. ib_core and ib_uverbs are pulled in as dependencies, but naming

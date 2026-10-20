@@ -44,6 +44,24 @@ ernic_fleet_user_linger: true
 # from somewhere unexpected is worse than a failed assert.
 ernic_fleet_ssh_pubkey_file: ""
 
+# ── Emulated device identity ─────────────────────
+# The full tuple, and nothing shorter. rocm-ernic@3fb74d1 moved the emulated
+# device from 1dd8:100a to 1dd8:1002, and 1dd8:1002 is a real Pensando DSC
+# Ethernet Controller id that physical cards ship with -- so vendor+device no
+# longer identifies the emulation and the subsystem pair is what does.
+# Lowercase, 0x-prefixed, four hex digits: that is how sysfs spells them, and
+# every consumer here compares them literally.
+#
+# udev/99-rocm-ernic.rules carries the same four values. tests/
+# test_ernic_identity.py asserts the two agree, because a rules file that
+# matches the wrong id renames nothing, which presents as a missing device
+# rather than as a wrong id -- 32 guests sat unusable for 18 hours on exactly
+# that.
+ernic_fleet_pci_vendor: "0x1dd8"
+ernic_fleet_pci_device: "0x1002"
+ernic_fleet_pci_subsystem_vendor: "0x1dd8"
+ernic_fleet_pci_subsystem_device: "0x5400"
+
 # ── Driver ───────────────────────────────────────
 # Stock in-tree ionic advertises 1dd8:1002 and 1dd8:1003, which since
 # rocm-ernic@3fb74d1 INCLUDES the emulated device -- it moved from 1dd8:100a
@@ -58,10 +76,17 @@ ernic_fleet_ssh_pubkey_file: ""
 # scripts/setup-ionic-dkms.sh from the pinned rocm-ernic tree.
 ernic_fleet_ionic_modules_dir: ""
 ernic_fleet_kernel: 7.2.4-070204-generic
-# Stable names: Ethernet rocm-ernic0, IB rocm-rdma-ernic0. Shipped by the
-# rocm-ernic tree; without them a guest keeps kernel names and every
-# `-d rocm-rdma-ernic0` in the test drivers fails.
-ernic_fleet_udev_rules_src: ""
+# Stable names: Ethernet rocm-ernic0, IB rocm-rdma-ernic0. Without them a
+# guest keeps kernel names and every `-d rocm-rdma-ernic0` in the test drivers
+# fails.
+#
+# This used to be "" and no playbook ever set it, so the role installed no
+# rules and inherited whatever the published qcow2 baked in -- which is how a
+# fleet ended up matching an id that upstream had moved away from. The repo now
+# carries the file; the role name resolves through files/, which is a symlink
+# to the canonical udev/99-rocm-ernic.rules so the two cannot drift. Set this
+# to "" only to deliberately keep the image's own copy.
+ernic_fleet_udev_rules_src: 99-rocm-ernic.rules
 ernic_fleet_modules: [ionic, ionic_rdma]
 
 # ── RDMA limits ──────────────────────────────────

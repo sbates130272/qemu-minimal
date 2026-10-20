@@ -6,6 +6,55 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **`qemu-tool compose` remembers the stack.** From inside a directory
+  rendered by `gen-compose --output-dir`, `qemu-tool compose ps` now works
+  with no flags at all, the way `docker compose` works beside a
+  `compose.yaml`. The memory was already on disk: every generated
+  `docker-compose.yml` has always recorded its env layers in its provenance
+  header, and until now nothing but a unit test read them back, so each
+  invocation had to repeat the directory and both layers — which is the only
+  reason a wrapper script existed.
+
+  The stack directory is found by `--stack-dir`, then `$QEMU_TOOL_STACK`
+  (the same shape as `$QEMU_TOOL_ENV`, so a fleet is selected once per
+  shell), then the current directory if it is itself a rendered stack.
+  Recognition is the provenance header, not the file name, so an unrelated
+  docker project is never adopted, and there is deliberately **no walk-up**:
+  `docker compose` can walk up because what it finds is what it runs, whereas
+  here a walk-up from inside the checkout reaches `qemu/compose/<default>/`
+  and would drive the committed 8-VM stack under the name of a 32-VM fleet —
+  the exact silent substitution `--stack-dir` was added to prevent.
+
+  Recorded layers are resolved as typed: absolute as themselves, relative
+  against the stack directory and then the cwd. A layer that is at neither,
+  or a generated stack whose header names no layers, is an error naming the
+  path and where it was looked for. It never falls back to the ambient env
+  search path, because that is how a 32-VM YAML gets driven by an 8-VM
+  `qemu/.env`.
+
+  The staleness check matters more, not less, now that the inputs need not be
+  typed, so it still re-hashes the layers' current bytes — adopting the
+  recorded names is not taken as satisfying the recorded digest. It also now
+  distinguishes the two faults: content drift ("generated from a different
+  version of …") from being handed layers that are not the ones the stack was
+  rendered from ("was rendered from A, B; you passed A, C").
+
+  Not absorbed, deliberately: `compose` does not regenerate and does not edit
+  settings files (resizing a fleet stays an explicit `VM_COUNT` edit plus
+  `gen-compose --output-dir`; a tool that rewrote `VM_COUNT` as a side effect
+  of `up` could write it into the tracked `qemu/env/scale-out` and break
+  `Gen Compose Check` from a command that looks like a start), and it is not
+  a command runner — a whole fleet is `ansible -i <stack>/fleet-inventory.yml
+  fleet`, which `gen-compose` already renders, and one guest is the `ssh`
+  command `inspect` already prints. See the README and the man page.
+
+  `Gen Compose Check` renders a 3-VM stack to a scratch directory and runs
+  `qemu-tool compose config` inside it with no flags. The assertion is on the
+  project name — which `docker compose` derives from the working directory —
+  and on the service list, not on the exit status: resolving to the wrong
+  stack also exits 0, and that is the failure worth catching. A second run
+  one directory up asserts the stack is *not* adopted from outside it.
+
 - **`qemu-tool list --summary`** — a per-fleet aggregate of the same bytes
   `list` already prints, plus a measured load picture across CPU, memory,
   storage, the RDMA mesh, GPUs and logged-in users. VMs are grouped by Docker
@@ -290,6 +339,51 @@ All notable changes to this project will be documented in this file.
   of a single layer is unchanged, so stacks generated before this still parse.
 
 ### Changed
+
+- **The emulated ernic is identified by its full PCI tuple — vendor `0x1dd8`,
+  device `0x1002`, subsystem vendor `0x1dd8`, subsystem device `0x5400` — and
+  by nothing shorter.** rocm-ernic@3fb74d1 moved the device from `1dd8:100a` to
+  `1dd8:1002`, which is a real Pensando DSC Ethernet Controller id that
+  physical cards ship with, so vendor+device no longer distinguishes the
+  emulation.
+
+  A fleet was found broken for exactly this reason: the guests'
+  `99-rocm-ernic.rules` still matched `0x100a`, udev renamed nothing, and
+  `rocm-ernic-netcfg.service` — which hardcoded `NIC=rocm-ernic0` — exited 1 at
+  boot, leaving 32 guests with no address for 18 hours while sshd answered
+  normally.
+
+  - `udev/99-rocm-ernic.rules` is carried in the repo and installed by
+    `ernic_fleet_guest`, matching all four fields in both the netdev and the
+    InfiniBand stanza. `ernic_fleet_udev_rules_src` no longer defaults to `""`,
+    which installed nothing and skipped silently.
+  - `rocm-ernic-netcfg.sh` discovers the device by tuple and addresses it under
+    whatever name it has, warning when the rename is missing instead of exiting.
+  - `ionic_image_prep` writes the three-level pci.ids entry (the `1dd8 5400`
+    subsystem line nested under upstream's `1002` device line) and its presence
+    check asks for that subsystem line. The merge is parse-checked with `lspci
+    -i` before it replaces the real file. It stays off by default because
+    current hwdata already carries the entry.
+  - The `ernic_fleet_guest` module check no longer greps the alias table for
+    `d0000100A` — a hard failure on any current module, which aborted guest
+    provisioning before the udev rules were installed.
+  - `scripts/fleet.sh` is now a repo artifact, takes its paths from
+    `FLEET_ENV`/`FLEET_STACK`/`FLEET_KEY`, and its `wait` requires the tuple and
+    an address rather than sshd. `fleet.sh check <N>` reports each guest's
+    device and address.
+  - `tests/test_ernic_identity.py` pins the rules, the discovery script and the
+    pci.ids awk programs, including the pciutils parse rules they depend on. It
+    also evaluates the fleet role's install task — a `when:` that is false
+    under the role's own defaults installs nothing while every id assertion
+    stays green — and `Gen Compose Check` now installs the tools it needs and
+    runs it with `CI=true`, under which a missing `udevadm`, `lspci`, `awk`,
+    PyYAML or Jinja2 fails rather than skips. The check that asks udev to
+    parse the file is the only one that can catch a rule rejected at parse
+    time, and it was free to not run: a skip reads as coverage.
+
+  Driver binding is deliberately left loose: `ionic`'s match table wildcards
+  the subsystem because the same driver drives real Pensando cards, so udev is
+  the only layer that can discriminate.
 
 - **`gen-compose` now mirrors a stack's asset directories instead of adding to
   them.** `grafana/`, `logging/` and `tapsetup/` in the output directory are

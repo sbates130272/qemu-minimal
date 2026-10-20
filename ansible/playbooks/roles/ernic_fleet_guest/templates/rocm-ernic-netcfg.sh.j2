@@ -14,17 +14,89 @@
 # Managed by Ansible (roles/ernic_fleet_guest) -- edit the template.
 set -u
 
-NIC=rocm-ernic0
+# The device is found by its PCI identity, not by the name udev was supposed
+# to give it. The previous version hardcoded NIC=rocm-ernic0 and exited 1 when
+# that name never appeared: when the guests' udev rules still matched the old
+# 0x100a id, nothing was renamed, this unit failed at boot on all 32 guests,
+# and they sat with no address for 18 hours. A missed rename must degrade --
+# address the device under whatever name it has and say the rename is missing
+# -- not take the network down with it.
+#
+# All four fields, because 1dd8:1002 is also a real Pensando DSC Ethernet
+# Controller: only the 1dd8:5400 subsystem pair means "the emulation".
+PCI_VENDOR={{ ernic_fleet_pci_vendor }}
+PCI_DEVICE={{ ernic_fleet_pci_device }}
+PCI_SUBSYSTEM_VENDOR={{ ernic_fleet_pci_subsystem_vendor }}
+PCI_SUBSYSTEM_DEVICE={{ ernic_fleet_pci_subsystem_device }}
+
 SUBNET={{ ernic_fleet_nic_subnet }}
 PREFIX=24
 
+# Overridable so the matcher can be exercised against a fabricated sysfs tree
+# without a guest; see tests/test_ernic_identity.py.
+SYSFS=${ERNIC_SYSFS_ROOT:-/sys}
+
+attr() { cat "$1" 2>/dev/null; }
+
+ernic_tuple() {
+    printf '%s:%s:%s:%s' \
+        "$(attr "$1/vendor")" "$(attr "$1/device")" \
+        "$(attr "$1/subsystem_vendor")" "$(attr "$1/subsystem_device")"
+}
+
+want_tuple() {
+    printf '%s:%s:%s:%s' \
+        "$PCI_VENDOR" "$PCI_DEVICE" \
+        "$PCI_SUBSYSTEM_VENDOR" "$PCI_SUBSYSTEM_DEVICE"
+}
+
+# Prefers the renamed name when several devices match, so a guest whose udev
+# rules did fire keeps the name the test drivers expect.
+find_ernic_netdev() {
+    local dev name fallback=""
+    for dev in "$SYSFS"/class/net/*; do
+        [ -e "$dev/device/vendor" ] || continue
+        [ "$(ernic_tuple "$dev/device")" = "$(want_tuple)" ] || continue
+        name=${dev##*/}
+        case $name in
+            rocm-ernic*) printf '%s\n' "$name"; return 0 ;;
+            *) [ -n "$fallback" ] || fallback=$name ;;
+        esac
+    done
+    [ -n "$fallback" ] || return 1
+    printf '%s\n' "$fallback"
+}
+
+# What was looked for and what was actually on the bus. The fleet's symptom
+# was "rocm-ernic0 never appeared", which says nothing about why.
+report_no_match() {
+    local dev
+    echo "no netdev matches ${PCI_VENDOR}:${PCI_DEVICE} subsystem" \
+         "${PCI_SUBSYSTEM_VENDOR}:${PCI_SUBSYSTEM_DEVICE}" >&2
+    for dev in "$SYSFS"/class/net/*; do
+        [ -e "$dev/device/vendor" ] || continue
+        echo "  ${dev##*/}: $(ernic_tuple "$dev/device")" >&2
+    done
+}
+
+if [ "${1:-}" = "discover" ]; then
+    find_ernic_netdev || { report_no_match; exit 1; }
+    exit 0
+fi
+
 for _ in $(seq 1 30); do
-    [ -e "/sys/class/net/$NIC" ] && break
+    NIC=$(find_ernic_netdev) && break
     sleep 1
 done
-[ -e "/sys/class/net/$NIC" ] || { echo "$NIC never appeared" >&2; exit 1; }
+[ -n "${NIC:-}" ] || { report_no_match; exit 1; }
 
-mac=$(cat "/sys/class/net/$NIC/address")
+case $NIC in
+    rocm-ernic*) ;;
+    *) echo "warning: $NIC was not renamed by 99-rocm-ernic.rules;" \
+            "check that the rules match all four of $(want_tuple)" >&2 ;;
+esac
+
+mac=$(cat "$SYSFS/class/net/$NIC/address")
 n=$(( 0x${mac:12:2} * 256 + 0x${mac:15:2} ))
 [ "$n" -gt 0 ] || { echo "refusing index 0 from MAC $mac" >&2; exit 1; }
 
@@ -33,8 +105,10 @@ addr="$SUBNET.$(( 10 + n ))"
 ip addr show dev "$NIC" | grep -q "$addr/" || ip addr add "$addr/$PREFIX" dev "$NIC"
 
 # The RDMA exporter reads ports/*/counters; the emulated device only exposes
-# hw_counters.
-for d in /sys/class/infiniband/rocm-rdma-ernic*/ports/*/; do
+# hw_counters. Walked through the NIC's own PCI device rather than globbed as
+# rocm-rdma-ernic*, so it works on a guest whose IB rename did not fire -- the
+# published qcow2 is one such guest (AGENTS.md, udev section).
+for d in "$SYSFS/class/net/$NIC/device/infiniband"/*/ports/*/; do
     [ -d "$d/hw_counters" ] || continue
     [ -e "$d/counters" ] && continue
     ln -s hw_counters "$d/counters"

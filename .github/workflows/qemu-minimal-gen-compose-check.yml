@@ -42,7 +42,43 @@ jobs:
       - name: Install qemu-tool
         run: python3 -m pip install --user -e ./qemu
 
+      # tests/test_ernic_identity.py is the only thing in the repo that asks
+      # udev to parse the rules file, and the only thing that reads the fleet
+      # role's wiring -- no lane runs ernic_fleet_guest against a guest. Both
+      # used to skip themselves when a tool was absent, which is how an IB
+      # rule that udev REJECTED at parse time shipped beside thirty green
+      # tests. Belt and braces, because either half alone still fails open:
+      # this step guarantees the tools are here and says which are missing,
+      # and _require() in the test file turns a skip into a failure whenever
+      # CI=true, so moving the suite into a leaner container or onto a
+      # different runner image goes red here instead of quietly testing less.
+      # Seconds: three pip wheels, and apt only on an image that dropped one.
+      - name: Tooling the identity tests must not skip for
+        run: |
+          python3 -m pip install --user --quiet PyYAML Jinja2
+          need=""
+          command -v lspci >/dev/null || need="$need pciutils"
+          command -v udevadm >/dev/null || need="$need udev"
+          if [ -n "$need" ]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq $need
+          fi
+          for t in awk lspci udevadm; do
+            command -v "$t" >/dev/null || {
+              echo "::error::$t is unavailable and the identity tests need it"; exit 1; }
+          done
+          # `verify` is systemd >= 251; an older udevadm would fail the rules
+          # check for the wrong reason.
+          udevadm verify --help >/dev/null || {
+            echo "::error::udevadm has no verify subcommand"; exit 1; }
+          python3 -c "import yaml, jinja2"
+
+      # CI=true is set by GitHub on every runner; the tests key on it to
+      # refuse to skip. Set explicitly so the behaviour is visible here and
+      # survives a local `act` run.
       - name: Unit tests
+        env:
+          CI: "true"
         run: python3 -m unittest discover -s tests -v
 
       # The gate itself. --check regenerates into a temporary directory and
@@ -145,3 +181,50 @@ jobs:
           done
           docker compose --project-directory /tmp/qsstack \
             --env-file qemu/env/quickstart config -q
+
+      # `qemu-tool compose` inside a rendered directory needs no flags: it
+      # reads the layers back out of the provenance header. The failure that
+      # makes this worth a lane is not the command erroring -- it is the
+      # command succeeding against the WRONG stack, which is how an 8-VM
+      # golden render once stood in for a 32-VM fleet and reported success.
+      # So the assertion is on which directory compose acted in, taken from
+      # the project name (docker compose derives it from the working
+      # directory, so it cannot agree by coincidence), and on a VM_COUNT that
+      # belongs to no committed stack. Exit status asserts nothing here.
+      # `config` resolves and prints; it starts nothing.
+      #
+      # The layers are passed absolute: a header records the paths as given,
+      # and relative ones resolve against the stack directory, so a render
+      # driven by relative paths from the checkout cannot be re-read from
+      # inside /tmp. That is the documented rule, exercised rather than
+      # assumed.
+      - name: A rendered stack is resolved from the cwd with no flags
+        run: |
+          probe=/tmp/stack-memory-probe
+          mkdir -p "$probe"
+          echo 'VM_COUNT=3' > /tmp/env.probe
+          python3 -m qemu_tool gen-compose \
+            --env-file "$PWD/qemu/env/scale-out" --env-file /tmp/env.probe \
+            --output-dir "$probe"
+          ( cd "$probe" && python3 -m qemu_tool compose config --format json ) > /tmp/probe.json
+          python3 - <<'PY'
+          import json, sys
+          cfg = json.load(open("/tmp/probe.json"))
+          svcs = sorted(cfg["services"])
+          want = ["qemu-1", "qemu-2", "qemu-3"]
+          bad = []
+          if cfg["name"] != "stack-memory-probe":
+              bad.append(f"compose ran in project {cfg['name']!r}, not the rendered stack")
+          if [s for s in svcs if s.startswith("qemu-")] != want:
+              bad.append(f"resolved to a stack with qemu services {svcs}, wanted {want}")
+          for line in bad:
+              print(f"::error::{line}")
+          sys.exit(1 if bad else 0)
+          PY
+          # The other half of the same guard: one directory up is not a
+          # rendered stack, and must not be treated as one. A walk-up would
+          # make every command in a fleet's parent directory drive the fleet.
+          out="$( cd /tmp && python3 -m qemu_tool compose config --services 2>&1 || true )"
+          echo "$out" | grep -qx 'qemu-3' && {
+            echo "::error::compose adopted the probe stack from outside it"; exit 1; }
+          exit 0
