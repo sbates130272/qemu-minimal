@@ -600,7 +600,7 @@ def _first_boot(cfg: VMConfig, images: Path, backing: Path) -> None:
     # (growpart + resize2fs) can take 30+ minutes on arm64/riscv64. Cap the
     # wait so a hung guest produces a clear error rather than silently burning
     # the CI job timeout.
-    boot_timeout = None if cfg.kvm else 3300  # 55 min; job ceiling is 60 min
+    boot_timeout = None if cfg.kvm else 5100  # 85 min; job ceiling is 90 min
     try:
         subprocess.run(cmd, check=True, timeout=boot_timeout)
     except subprocess.TimeoutExpired:

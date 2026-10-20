@@ -159,7 +159,7 @@ jobs:
   smoke-test-arm64:
     name: Smoke Test - arm64
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     steps:
     - name: Check out code
@@ -202,7 +202,7 @@ jobs:
   smoke-test-riscv64:
     name: Smoke Test - riscv64
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     steps:
     - name: Check out code
