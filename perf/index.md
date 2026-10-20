@@ -12,7 +12,7 @@ new CI data lands.
 
 ## Latest published snapshot
 
-Generated from `b4eb5528` at **2026-10-20 13:34 UTC**.
+Generated from `48f9eef9` at **2026-10-20 16:34 UTC**.
 
 ![rocjitsu GEMM](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-gemm.json)
 ![rocjitsu hipFile](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile.json)
@@ -30,9 +30,9 @@ vfio-user and swing hard between runs.
 
 | Metric | Latest value | Baseline (last 5 distinct) | Verdict |
 | --- | --- | --- | --- |
-| rocjitsu GEMM | 504 kFLOP/s | 507 kFLOP/s | within tolerance (-1%) |
-| rocjitsu hipFile | 199 MB/s | 179 MB/s | within tolerance (+11%) |
-| hipFile fio | 176 MB/s | 128 MB/s | within tolerance (+38%) |
+| rocjitsu GEMM | 750 kFLOP/s | 477 kFLOP/s | within tolerance (+57%) |
+| rocjitsu hipFile | 109 MB/s | 187 MB/s | regressed (-42%) |
+| hipFile fio | 88.5 MB/s | 126 MB/s | regressed (-30%) |
 
 ## Trend charts
 
@@ -50,8 +50,6 @@ vfio-user and swing hard between runs.
 
 | Commit | Generated | GEMM | hipFile | hipFile fio |
 | --- | --- | --- | --- | --- |
-| 2a3b2597 | 2026-10-16 13:18 UTC | 495 kFLOP/s | 159 MB/s | 143 MB/s |
-| 6e0227d4 | 2026-10-16 22:20 UTC | 495 kFLOP/s | 159 MB/s | 143 MB/s |
 | 6e0227d4 | 2026-10-16 22:45 UTC | 651 kFLOP/s | 232 MB/s | 186 MB/s |
 | 6ee9eb75 | 2026-10-16 22:46 UTC | 651 kFLOP/s | 232 MB/s | 186 MB/s |
 | 6ee9eb75 | 2026-10-16 23:19 UTC | 489 kFLOP/s | 155 MB/s | 142 MB/s |
@@ -60,6 +58,8 @@ vfio-user and swing hard between runs.
 | 6ee9eb75 | 2026-10-19 15:59 UTC | 385 kFLOP/s | 152 MB/s | 145 MB/s |
 | b4eb5528 | 2026-10-19 23:18 UTC | 385 kFLOP/s | 152 MB/s | 145 MB/s |
 | b4eb5528 | 2026-10-20 13:34 UTC | 504 kFLOP/s | 199 MB/s | 176 MB/s |
+| 48f9eef9 | 2026-10-20 15:59 UTC | 504 kFLOP/s | 199 MB/s | 176 MB/s |
+| 48f9eef9 | 2026-10-20 16:34 UTC | 750 kFLOP/s | 109 MB/s | 88.5 MB/s |
 
 ## Current report freshness
 
@@ -73,13 +73,13 @@ shows the last date on which all 5 reports were green at once —
 amber once that date is no longer today.
 
 Last all-green: **2026-10-20** &middot; checked
-2026-10-20 13:34 UTC &middot; currently
+2026-10-20 16:34 UTC &middot; currently
 all green.
 
 | Report | Generated | Status | Commit | Page |
 | --- | --- | --- | --- | --- |
-| Single VM | 2026-10-20 13:29 UTC | pass | `b4eb552` | [/1vm/](/1vm/) |
-| rocjitsu | 2026-10-20 13:31 UTC | pass | `b4eb552` | [/rocjitsu/](/rocjitsu/) |
-| ernic VM 1 | 2026-10-19 15:33 UTC | pass | `6ee9eb7` | [/ernic/](/ernic/) |
-| ernic VM 2 | 2026-10-19 15:33 UTC | pass | `6ee9eb7` | [/ernic/vm2/](/ernic/vm2/) |
-| hipFile fio | 2026-10-20 13:33 UTC | pass | `b4eb552` | [/hipfile-fio/](/hipfile-fio/) |
+| Single VM | 2026-10-20 15:57 UTC | pass | `48f9eef` | [/1vm/](/1vm/) |
+| rocjitsu | 2026-10-20 16:30 UTC | pass | `48f9eef` | [/rocjitsu/](/rocjitsu/) |
+| ernic VM 1 | 2026-10-20 16:06 UTC | pass | `48f9eef` | [/ernic/](/ernic/) |
+| ernic VM 2 | 2026-10-20 16:06 UTC | pass | `48f9eef` | [/ernic/vm2/](/ernic/vm2/) |
+| hipFile fio | 2026-10-20 16:32 UTC | pass | `48f9eef` | [/hipfile-fio/](/hipfile-fio/) |

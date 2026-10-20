@@ -4,7 +4,7 @@ title: VM Report — rocjitsu VM
 
 # VM Report — qemu-minimal — rocjitsu VM
 
-Generated: **2026-10-20 13:31 UTC** &middot; Commit: [`b4eb552`](https://github.com/sbates130272/qemu-minimal/commit/b4eb552841c6ade51e48ac9f40d900cda889ee81) &middot; Status: **pass**
+Generated: **2026-10-20 16:30 UTC** &middot; Commit: [`48f9eef`](https://github.com/sbates130272/qemu-minimal/commit/48f9eef911b4db6e7dafa46dcc304c2330b8a1ad) &middot; Status: **pass**
 
 ## Hardware
 
@@ -145,9 +145,7 @@ ubuntu : ubuntu video users render admin
   cron.service                     loaded active running Regular background program processing daemon
   dbus.service                     loaded active running D-Bus System Message Bus
   getty@tty1.service               loaded active running Getty on tty1
-  gpuagent.service                 loaded active running AMD GPU Metrics Reader Service
   ModemManager.service             loaded active running Modem Manager
-  multipathd.service               loaded active running Device-Mapper Multipath Device Controller
   networkd-dispatcher.service      loaded active running Dispatcher daemon for systemd-networkd
   polkit.service                   loaded active running Authorization Manager
   prometheus-node-exporter.service loaded active running Prometheus exporter for machine metrics
@@ -159,7 +157,6 @@ ubuntu : ubuntu video users render admin
   systemd-logind.service           loaded active running User Login Management
   systemd-networkd.service         loaded active running Network Management
   systemd-resolved.service         loaded active running Network Name Resolution
-  systemd-timedated.service        loaded active running Time & Date Service
   systemd-udevd.service            loaded active running Rule-based Manager for Device Events and Files
   udisks2.service                  loaded active running Disk Manager
   unattended-upgrades.service      loaded active running Unattended Upgrades Shutdown
@@ -178,8 +175,8 @@ ubuntu : ubuntu video users render admin
 
 | Metric | Value |
 |---|---|
-| GEMM | 504 kFLOP/s |
-| hipFile read throughput | 199 MB/s |
+| GEMM | 750 kFLOP/s |
+| hipFile read throughput | 109 MB/s |
 
 These run inside a QEMU guest with the GPU attached over vfio-user, so the
 absolute numbers sit far below what the same benchmark reports on bare metal —
@@ -195,7 +192,7 @@ sgemm-bench: device=AMD Radeon Graphics arch=gfx1250
 sgemm-bench: private_segment_bytes=0
 sgemm-bench: m=128 n=128 k=128
 sgemm-bench: max_absolute_error=0 failures=0
-sgemm-bench: seconds_per_iter=8.32180701 gflops=0.000504013611
+sgemm-bench: seconds_per_iter=5.592042 gflops=0.00075004873
 sgemm-bench: PASS
 ```
 
@@ -208,10 +205,10 @@ gemm-hipfile-bench: device=AMD Radeon Graphics arch=gfx1250
 gemm-hipfile-bench: path=/mnt/nvme/gemm-hipfile-bench.bin block_bytes=1048576 blocks=32 iters=4
 gemm-hipfile-bench: private_segment_bytes=0
 gemm-hipfile-bench: compat_requested=self buf_registered=yes
-gemm-hipfile-bench: read_bytes=33554432 seconds_per_pass=0.168792685 read_gbs=0.198790795
+gemm-hipfile-bench: read_bytes=33554432 seconds_per_pass=0.309104704 read_gbs=0.108553611
 gemm-hipfile-bench: m=128 n=128 k=128
 gemm-hipfile-bench: max_absolute_error=0 failures=0
-gemm-hipfile-bench: gemm_seconds_per_iter=8.34355546 gflops=0.000502699841
+gemm-hipfile-bench: gemm_seconds_per_iter=5.80092395 gflops=0.000723040681
 gemm-hipfile-bench: PASS
 ```
 
