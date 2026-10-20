@@ -93,3 +93,6 @@ prom-data/
 # (VM_IMAGES_DIR, VM_FILESYSTEM) and locally built image tags, so they are
 # useful to keep and wrong to share.
 qemu/env/local-*
+
+# Added by ggshield
+.cache_ggshield
