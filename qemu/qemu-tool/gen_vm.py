@@ -633,9 +633,18 @@ def _arch_args_for_gen(cfg: VMConfig, kvm: str) -> list[str]:
         # aplic-imsic; U-Boot 2025.10 does not support AIA IMSIC for EFI
         # boot, causing "Failed to load '/'" and a 55-minute cloud-init
         # timeout when ubuntu-latest moved to Ubuntu 26 (QEMU 10.x).
+        #
+        # -cpu max: QEMU ≥ 9.1 dropped the V (vector) and B (bit-manipulation)
+        # extensions from the default rv64 CPU profile. Ubuntu 26.04 (resolute)
+        # ships userspace binaries (ld-linux-riscv64-lp64d.so.1 and others)
+        # that use both; without them they SIGILL on the first executed insn,
+        # killing init and panicking the kernel before cloud-init can run.
+        # "max" enables all extensions the emulator supports, which is the
+        # right choice for an emulated guest with no physical hardware to match.
         machine = f"virt,aia=none{kvm}" if kvm else "virt,aia=none"
         return [
             "-machine", machine,
+            "-cpu", "max",
             "-kernel", "/usr/lib/u-boot/qemu-riscv64_smode/uboot.elf",
         ]
     sys.exit(f"Error: no ARCH mapping for '{cfg.arch}'")
