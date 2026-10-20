@@ -547,7 +547,7 @@ def _print_table(vms: list[dict[str, Any]], qemu_tool_only: bool = False) -> Non
               else "No QEMU VMs running.")
         return
 
-    headers = ["PID", "NAME", "SOURCE", "ARCH", "VCPU", "MEM", "SSH",
+    headers = ["NAME", "PID", "SOURCE", "ARCH", "VCPU", "MEM", "SSH",
                "KVM", "UPTIME", "CONTAINER", "NETWORK", "GPU", "RDMA",
                "VFIO-USER", "MGMT"]
     show_split = any(v["ssh_port_host"] != v["ssh_port"] for v in vms)
@@ -557,8 +557,8 @@ def _print_table(vms: list[dict[str, Any]], qemu_tool_only: bool = False) -> Non
         if v["role"]:
             source = f"qemu-tool/{v['role']}"
         rows.append([
-            str(v["pid"]),
             v["name"] or "-",
+            str(v["pid"]),
             source,
             v["arch"],
             str(v["vcpus"] or "-"),

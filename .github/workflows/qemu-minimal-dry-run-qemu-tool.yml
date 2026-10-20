@@ -441,24 +441,24 @@ jobs:
         kill -0 "$ext_pid" 2>/dev/null || { cat /tmp/ext-qemu.log; exit 1; }
         kill -0 "$our_pid" 2>/dev/null || { cat /tmp/our-qemu.log; exit 1; }
 
-        # Anchor on PID: unlike run-vm --dry-run, list output is multi-line.
+        # NAME is the first column; anchor rows on name, confirm PID appears.
         out=$(qemu-tool list 2>&1)
         echo "$out"
-        echo "$out" | grep -qE "^${ext_pid}[[:space:]]+outsider[[:space:]]+external[[:space:]]+amd64"
-        echo "$out" | grep -qE "^${our_pid}[[:space:]]+ci-list-test[[:space:]]+qemu-tool/run-vm[[:space:]]+amd64"
+        echo "$out" | grep -qE "^outsider[[:space:]]+${ext_pid}[[:space:]]+external[[:space:]]+amd64"
+        echo "$out" | grep -qE "^ci-list-test[[:space:]]+${our_pid}[[:space:]]+qemu-tool/run-vm[[:space:]]+amd64"
         echo "$out" | grep -q "were not started by this qemu-tool"
 
         only=$(qemu-tool list --qemu-tool-only)
         echo "$only"
-        echo "$only" | grep -qE "^${our_pid}[[:space:]]+ci-list-test[[:space:]]+qemu-tool/run-vm"
-        if echo "$only" | grep -qE "^${ext_pid}[[:space:]]"; then
+        echo "$only" | grep -qE "^ci-list-test[[:space:]]+${our_pid}[[:space:]]+qemu-tool/run-vm"
+        if echo "$only" | grep -qE "^outsider[[:space:]]+${ext_pid}[[:space:]]"; then
           echo "external VM leaked through --qemu-tool-only"
           exit 1
         fi
 
         # The footnote goes to stderr; stdout must still lead with the header.
         qemu-tool list > /tmp/both.log 2>&1
-        head -1 /tmp/both.log | grep -q "^PID" || \
+        head -1 /tmp/both.log | grep -q "^NAME" || \
           { cat /tmp/both.log; echo "footnote printed before the table"; exit 1; }
 
         # Never assert on CONTAINER here: docker is absent in this container.

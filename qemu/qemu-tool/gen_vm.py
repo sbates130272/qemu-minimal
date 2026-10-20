@@ -459,6 +459,9 @@ packages:
 runcmd:
   - systemctl disable openipmi.service
   - systemctl mask openipmi.service
+  - systemctl mask multipathd.service multipathd.socket
+  - systemctl mask iscsid.service iscsid.socket
+  - systemctl mask snapd.service snapd.socket snapd.seeded.service
   - loginctl enable-linger {cfg.username}
 {ca_runcmd}
 power_state:
@@ -470,6 +473,20 @@ power_state:
 timezone: America/Edmonton
 write_files:
 {ca_write}
+  - path: /etc/systemd/system/multipathd.service.d/99-timeout.conf
+    content: |
+      [Service]
+      TimeoutStopSec=5s
+    owner: root:root
+    permissions: '0644'
+    defer: false
+  - path: /etc/systemd/system/iscsid.service.d/99-timeout.conf
+    content: |
+      [Service]
+      TimeoutStopSec=5s
+    owner: root:root
+    permissions: '0644'
+    defer: false
   - path: /etc/sysctl.d/10-kernel-hardening.conf
     content: 'kernel.dmesg_restrict = 0'
     owner: root:root
@@ -605,8 +622,12 @@ def _arch_args_for_gen(cfg: VMConfig, kvm: str) -> list[str]:
             "-bios", "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
         ]
     if cfg.arch == "riscv64":
-        # Avoid a trailing comma in the machine string when kvm is empty.
-        machine = f"virt{kvm}" if kvm else "virt"
+        # aia=none keeps the PLIC interrupt controller regardless of QEMU
+        # version. QEMU 9.0 changed the virt machine default from none to
+        # aplic-imsic; U-Boot 2025.10 does not support AIA IMSIC for EFI
+        # boot, causing "Failed to load '/'" and a 55-minute cloud-init
+        # timeout when ubuntu-latest moved to Ubuntu 26 (QEMU 10.x).
+        machine = f"virt,aia=none{kvm}" if kvm else "virt,aia=none"
         return [
             "-machine", machine,
             "-kernel", "/usr/lib/u-boot/qemu-riscv64_smode/uboot.elf",
