@@ -6,7 +6,7 @@ by `scripts/quickstart-2vm.sh`.
 
 - Guest image: `20261014.geea0485-vm.resolute-ernic-rocjitsu-qm.c5d51ce-qcow2`
 - RDMA bytes across the mesh: 65536000
-- Generated: **2026-10-20 15:49 UTC** &middot; Commit: `unknown` &middot; Status: **pass**
+- Generated: **2026-10-20 16:05 UTC** &middot; Commit: `unknown` &middot; Status: **pass**
 
 ## quickstart-1
 
@@ -60,13 +60,13 @@ vector-add: PASS
  rdma_cm QPs	 : OFF
  Data ex. method : Ethernet
 ---------------------------------------------------------------------------------------
- local address: LID 0000 QPN 0x0002 PSN 0x19e0d2
+ local address: LID 0000 QPN 0x0002 PSN 0xe7a85f
  GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:11
- remote address: LID 0000 QPN 0x0002 PSN 0x538171
+ remote address: LID 0000 QPN 0x0002 PSN 0xa72e11
  GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:12
 ---------------------------------------------------------------------------------------
  #bytes     #iterations    BW peak[MiB/sec]    BW average[MiB/sec]   MsgRate[Mpps]
- 65536      1000             1029.54            1024.63		     0.016394
+ 65536      1000             972.14             959.66 		     0.015355
 ---------------------------------------------------------------------------------------
 ```
 
