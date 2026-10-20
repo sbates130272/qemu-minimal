@@ -235,7 +235,7 @@ class LogindSessions(unittest.TestCase):
         }))
         by_id = {x["session"]: x for x in s}
         self.assertEqual(sorted(by_id), ["3", "9"])
-        # An unparseable timestamp is no timestamp, not a timestamp of zero.
+        # An unparsable timestamp is no timestamp, not a timestamp of zero.
         self.assertIsNone(by_id["3"]["login_time"])
         line = inspect_mod._login_line({"ga_socket": "/s", "ssh_sessions": s})
         self.assertIn("ubuntu", line)
