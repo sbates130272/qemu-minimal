@@ -23,19 +23,52 @@
     - ionic_rdma.ko.zst
   notify: Run depmod
 
-- name: Verify the installed module carries the emulated device id
-  # The whole point of the patched build. An in-tree module here would load
-  # cleanly and bind nothing, which presents as a missing device rather than
-  # as a wrong module.
-  ansible.builtin.shell:
-    cmd: >-
-      set -o pipefail;
-      modinfo -F alias
-      /lib/modules/{{ ernic_fleet_kernel }}/updates/dkms/ionic.ko.zst
-      | grep -qi 'd0000100A'
-    executable: /bin/bash
+- name: Read the installed module's PCI alias table
+  ansible.builtin.command:
+    argv:
+      - modinfo
+      - -F
+      - alias
+      - "/lib/modules/{{ ernic_fleet_kernel }}/updates/dkms/ionic.ko.zst"
+  register: ernic_fleet_ionic_alias
   changed_when: false
 
+# Deliberately NOT the four-field tuple. A driver match table identifies what
+# the module can bind, and ionic's entries wildcard the subsystem
+# (pci:v00001DD8d00001002sv*sd*bc*sc*i*) because the same driver drives real
+# Pensando cards -- so the device id is the whole of what is assertable here.
+# The tuple belongs in udev, which is the layer that has to tell the emulated
+# NIC apart from a real 1dd8:1002.
+#
+# This also used to grep for d0000100A and claim it proved the module was the
+# patched build. Both halves are dead: the id moved in rocm-ernic@3fb74d1, so
+# the check failed outright on a current module and took fleet provisioning
+# with it before the udev rules were ever installed; and in-tree ionic now
+# advertises 1002 too, so no PCI id can distinguish patched from stock. What
+# the patched build adds is SRQ (AGENTS.md issue 20), which is a run-time
+# capability of the device and not visible in modinfo. So this asserts only
+# "a module that binds the emulated NIC at all" -- and says so when it fails,
+# because the symptom it guards against is a device that never appears.
+- name: Verify the installed module can bind the emulated device id
+  ansible.builtin.assert:
+    that:
+      - ernic_fleet_ionic_alias.stdout is search(ernic_fleet_ionic_alias_want)
+    fail_msg: >-
+      {{ ernic_fleet_ionic_modules_dir }}/ionic.ko.zst does not bind the
+      emulated NIC. Looked for a PCI alias matching
+      "{{ ernic_fleet_ionic_alias_want }}"
+      (vendor {{ ernic_fleet_pci_vendor }}, device {{ ernic_fleet_pci_device }});
+      modinfo reports:
+      {{ ernic_fleet_ionic_alias.stdout_lines | join(' | ') | default('no aliases') }}.
+      A module built before rocm-ernic@3fb74d1 advertises d0000100A instead --
+      rebuild it with scripts/setup-ionic-dkms.sh from the pinned tree.
+  vars:
+    ernic_fleet_ionic_alias_want: >-
+      pci:v0000{{ ernic_fleet_pci_vendor[2:] | upper }}d0000{{ ernic_fleet_pci_device[2:] | upper }}
+
+# Loud, not silently skipped: these rules are the single file whose absence
+# cost 32 guests 18 hours, so an empty source is a decision that has to be
+# stated rather than a default that quietly leaves the image's own copy.
 - name: Install the rocm-ernic udev naming rules
   ansible.builtin.copy:
     src: "{{ ernic_fleet_udev_rules_src }}"
@@ -44,6 +77,15 @@
     group: root
     mode: "0644"
   when: ernic_fleet_udev_rules_src | length > 0
+  notify: Reload udev rules
+
+- name: Warn that the guest keeps whatever naming rules its image shipped
+  ansible.builtin.debug:
+    msg: >-
+      ernic_fleet_udev_rules_src is empty, so 99-rocm-ernic.rules is whatever
+      the image baked in. If it matches 0x100a the device will not be renamed
+      and rocm-ernic-netcfg will fall back to the kernel name.
+  when: ernic_fleet_udev_rules_src | length == 0
 
 - name: Load the ernic modules at boot
   ansible.builtin.copy:

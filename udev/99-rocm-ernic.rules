@@ -1,0 +1,104 @@
+# Copyright (c) Advanced Micro Devices, Inc. All rights reserved.
+#
+# SPDX-License-Identifier: MIT
+#
+# rocm-ernic persistent device naming rules.
+#
+# Renames the network interface and the InfiniBand device of the emulated
+# RDMA NIC to stable names, so guests always see rocm-ernic<n> and
+# rocm-rdma-ernic<n> instead of PCI-topology names.
+#
+# The device is identified by the FULL four-field tuple:
+#
+#   vendor            0x1dd8   AMD Pensando Systems
+#   device            0x1002   DSC Ethernet Controller
+#   subsystem_vendor  0x1dd8
+#   subsystem_device  0x5400   ROCm Emulated RDMA NIC
+#
+# All four are required. rocm-ernic@3fb74d1 moved the emulated device from
+# 1dd8:100a to 1dd8:1002, and 1dd8:1002 is a REAL Pensando DSC Ethernet
+# Controller id that physical cards ship with -- hwdata lists ~23 real
+# subsystem variants of it. Only the subsystem pair distinguishes the
+# emulation, so a vendor+device match would rename a real Pensando NIC on any
+# host that had one. The in-tree ionic driver's own PCI table wildcards the
+# subsystem (sv*sd*) and cannot tell them apart; udev is the only layer that
+# can, which is why the discrimination lives here.
+#
+# Matching the old id is what cost 32 fleet guests 18 hours: the rules said
+# 0x100a, the device was 0x1002, nothing was renamed, and
+# rocm-ernic-netcfg.service died at boot on a NIC name that never appeared.
+#
+# Installed into guests by ansible/playbooks/roles/ernic_fleet_guest
+# (ernic_fleet_udev_rules_src). By hand:
+#
+#   sudo cp udev/99-rocm-ernic.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules
+#   sudo udevadm trigger
+
+# --- Network interface naming ---
+#
+# The four ids are plain files under /sys/class/net/<if>/device/, so they are
+# reachable with ATTR{device/...} on the netdev itself. Note that
+# `udevadm info -a` on a netdev does not print these rows -- only the parent
+# walk shows them -- so "absent from udevadm info -a" is not evidence the
+# attribute is missing.
+
+SUBSYSTEM=="net", ACTION=="add", \
+  ATTR{device/vendor}=="0x1dd8", \
+  ATTR{device/device}=="0x1002", \
+  ATTR{device/subsystem_vendor}=="0x1dd8", \
+  ATTR{device/subsystem_device}=="0x5400", \
+  DRIVERS=="ionic", \
+  NAME="rocm-ernic%n"
+
+# --- InfiniBand device naming ---
+#
+# Renames the RDMA device from the PCI-topology name (e.g. rocep2s0) to
+# rocm-rdma-ernic<n>.
+#
+# The IB device's own sysfs directory carries none of the four ids -- it has
+# node_guid, hca_type and so on, and `device` is a symlink to the PCI device.
+# So this rule matches with ATTRS{} off that PCI parent instead. All four come
+# from the one parent, which satisfies udev's one-parent-per-rule restriction.
+#
+# DRIVERS=="ionic|ionic_rdma" is deliberately loose: the parent reports
+# DRIVERS=="ionic" (ionic_rdma is an auxiliary driver, not a PCI one), and the
+# alternative costs nothing if that ever changes. The tuple, not the driver
+# name, is what makes this rule specific.
+#
+# The system rule 60-rdma-persistent-naming.rules renames the device from its
+# kernel-registered name (ionic_%d) to a PCI-topology name via rdma_rename
+# before this rule runs, so %k is stale by the time we see it. The PCI part of
+# $devpath is not: the sysfs directory moves with the rename but its parent
+# does not, so $pci/infiniband/ always lists the device's current name. That is
+# also what makes this rule act only on the device the event is about -- an
+# earlier version scanned all of /sys/class/infiniband and renamed every match
+# to the same hard-coded rocm-rdma-ernic0, so a guest with two emulated devices
+# had the second rename fail.
+#
+# Reading the current name this way also removes the reason for the old
+# "(sleep 2; ...) &": udev runs 60- before 99- within one event, so rdma_rename
+# has already happened and there is nothing to wait for. Backgrounding it meant
+# the rename completed some seconds after udev settled, which a caller checking
+# for the device could lose a race against.
+#
+# The rocm-rdma-ernic* guard makes this idempotent -- without it a re-triggered
+# event would rename an already-correct device to the next free index.
+
+SUBSYSTEM=="infiniband", ACTION=="add", \
+  DRIVERS=="ionic|ionic_rdma", \
+  ATTRS{vendor}=="0x1dd8", \
+  ATTRS{device}=="0x1002", \
+  ATTRS{subsystem_vendor}=="0x1dd8", \
+  ATTRS{subsystem_device}=="0x5400", \
+  RUN+="/bin/sh -c 'pci=/sys$devpath; pci=$${pci%%/infiniband/*}; \
+    for ibdev in $$pci/infiniband/*; do \
+      [ -d $$ibdev ] || continue; \
+      cur=$${ibdev##*/}; \
+      case $$cur in rocm-rdma-ernic*) continue;; esac; \
+      i=0; \
+      while [ -e /sys/class/infiniband/rocm-rdma-ernic$$i ]; do \
+        i=$$((i+1)); \
+      done; \
+      /usr/bin/rdma dev set $$cur name rocm-rdma-ernic$$i; \
+    done'"

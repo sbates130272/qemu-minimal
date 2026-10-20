@@ -250,8 +250,19 @@ still set by `99-rocm-ernic.rules` (see udev section below), now keyed on
 `ib_send_bw -d ...`; **do not use the IB one with anything built on UCX** —
 see issue 21, and `lmcache_guest` renames it back for exactly that reason.
 
-There is nothing to install by hand. `ernic_guest_setup` ships the rules and
-reloads udev, and both renames are confirmed working in CI — the ionic lane's
+**This repo now carries the rules**, at
+[`udev/99-rocm-ernic.rules`](udev/99-rocm-ernic.rules), and
+`ernic_fleet_guest` installs them —
+`ernic_fleet_udev_rules_src` defaults to the role's `files/` entry, which is a
+symlink to that one file so the two cannot drift. It used to default to `""`
+and no playbook ever set it, so the role installed nothing and every guest
+inherited whatever its image baked in; that is how a fleet ended up matching an
+id upstream had retired (issue 25). An empty `src` is still allowed, and now
+says so in the play output instead of skipping silently.
+`tests/test_ernic_identity.py` asserts both stanzas match all four fields.
+
+`ernic_guest_setup` ships its own copy and reloads udev, and both renames are
+confirmed working in CI — the ionic lane's
 `Show NIC details` reports `rocm-ernic0` carrying `altname enp0s5np0`, which is
 the pre-rename kernel name, and `ibv_devinfo` reports `hca_id: rocm-rdma-ernic0`.
 The IB rename shells out to `/usr/bin/rdma`, which the gen-vm guest has.
@@ -286,10 +297,10 @@ matches, not two; check all four before re-copying anything.
 
 ## PCI ID (in-VM)
 
-**Nothing to do: upstream hwdata names this device, and injecting an entry is
-now actively harmful.** This section used to describe a pci.ids entry the repo
-maintained. `ionic_image_prep_pciids` defaults to `false` and the entry should
-stay unwritten.
+**Nothing to do on a current guest: upstream hwdata already names this
+device.** `ionic_image_prep_pciids` defaults to `false` and the entry stays
+unwritten — not because writing it is unsafe, but because it is already
+there.
 
 What changed is the id. rocm-ernic@3fb74d1 moved the emulated NIC from
 `1dd8:100a` to `1dd8:1002`, and `1dd8:1002` is **a real Pensando device id**
@@ -310,9 +321,26 @@ on that guest reports `AMD Pensando Systems DSC Ethernet Controller
 other entry — so the old warning that `update-pciids` *destroys* our entry is
 inverted: it now delivers it.
 
-**Why injecting would break the guest rather than being merely redundant.**
-pciutils does not ignore a duplicate device id under one vendor; it refuses to
-parse the file, and then resolves no names for *any* device on the bus:
+**The entry is three levels deep, and the device line is not ours.** Vendor
+→ device (one tab) → subsystem (two tabs), tabs and not spaces. hwdata has
+named `1dd8:1002` for years, so the only line this repo could ever contribute
+is the `1dd8 5400` subsystem line nested under it. `ionic_image_prep` writes
+exactly that shape, and its presence check asks for the **subsystem** line: a
+check that stopped at the device would see upstream's `1002`, skip forever,
+and never write the one line that is ours.
+
+Four parse rules, measured against pciutils 3.14 on a fleet guest rather than
+assumed, and pinned by `tests/test_ernic_identity.py`:
+
+| Input | Result |
+|---|---|
+| correct three-level entry | parses, `-nn` names the device, `-v` names the subsystem |
+| duplicate at any level | `lspci: Duplicate entry at <file>, line N`, rc 1 |
+| subsystem line with no device line above it | `lspci: Parse error`, rc 1 |
+| spaces instead of tabs | `lspci: Parse error`, rc 1 |
+
+A failure is never local to the entry — after any of those, `lspci` resolves
+no names for *any* device on the bus:
 
 ```
 $ lspci -i /tmp/merged.ids -nn
@@ -321,18 +349,20 @@ $ echo $?
 1
 ```
 
-Since `1002` is already present upstream, an insert is exactly that duplicate.
-The role's presence check — a block-scoped `awk` scan of this vendor's block,
-because a bare `grep 1002` matches the same four hex digits under a dozen
-other vendors — would skip it in practice. The default is `false` so that the
-outcome does not depend on that check being right.
+That is why the role builds the merged file beside the real one, runs `lspci
+-i` against the candidate, and only then installs it — and still parse-checks
+the installed file afterwards. The merge `awk` exits 3 rather than succeeding
+if it inserted nothing, because a silent no-op reads as a successful merge.
 
-The machinery is kept, off, because the id has moved twice already
-(`1022:8000` → `1dd8:100a` → `1dd8:1002`). If it moves again to something
-hwdata does not carry, set `ionic_image_prep_pciids` true and the device to
-the new id; the insert goes directly under the vendor line, since `pci.ids` is
-parsed sequentially and an append at the end of the file lands under the class
-section and never matches.
+`ionic_image_prep_pciids` defaults to `false` all the same — on a current
+guest hwdata is right and there is nothing to add. The machinery is kept,
+off, because the id has moved twice already (`1022:8000` → `1dd8:100a` →
+`1dd8:1002`). If it moves again to something hwdata does not carry, set
+`ionic_image_prep_pciids` true and the four `ionic_image_prep_pciids_*` ids to
+the new ones; the role inserts whichever of the device and subsystem lines is
+missing, directly under its parent, since `pci.ids` is parsed sequentially and
+an append at the end of the file lands under the class section and never
+matches.
 
 **A second thing follows from the id move.** The in-tree `ionic` driver's PCI
 table has always held `1dd8:1002` and `1dd8:1003`, so the device it would not
@@ -758,6 +788,52 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     re-read is cheap. Here L2 is a peer across an emulated RDMA NIC, where it
     is the entire cost. `lmcache_guest_l2_prefetch_policy` defaults to
     `retain` and tests/test_lmcache_unit_render.py pins it.
+25. **The emulated NIC's PCI id moved and the guests' udev rules did not —
+    32 guests sat unusable for 18 hours.** Found 2026-10-20 on `mi100-fleet`.
+    The mechanism is worth keeping because every step of it was silent.
+
+    rocm-ernic@3fb74d1 moved the device from `1dd8:100a` to `1dd8:1002`. The
+    guests' `99-rocm-ernic.rules` still said `ATTR{device/device}=="0x100a"`,
+    so udev matched nothing and renamed nothing. The netdev came up as
+    `enp0s6np0` and the IB device as `rocep0s6`. `rocm-ernic-netcfg.service`
+    hardcoded `NIC=rocm-ernic0`, waited 30 s for a name that was never going
+    to appear, and exited 1 — so no address was assigned, no counters symlink
+    was made, and every `-d rocm-rdma-ernic0` in the test drivers failed. The
+    guests were up, SSH answered, and `fleet.sh wait` called them ready,
+    because it polled sshd. Nothing reported a wrong id; the only symptom was
+    a missing device name, which says nothing about why.
+
+    **The subsystem is now part of the identity, and that is the lasting
+    change.** `1dd8:1002` is a real Pensando DSC Ethernet Controller id that
+    physical cards ship with — hwdata lists ~23 real subsystem variants of it
+    — so vendor+device no longer means "the emulation". Only
+    `1dd8:5400` does. A rule that matched just the new device id would be
+    correct on this host and would rename a real Pensando NIC on a host that
+    had one.
+
+    What changed in the repo:
+
+    - `udev/99-rocm-ernic.rules` is carried here now, matching all four
+      fields in both stanzas, and `ernic_fleet_guest` installs it rather than
+      defaulting to `""` and inheriting the image's copy.
+    - `rocm-ernic-netcfg.sh` finds the device by tuple and addresses it under
+      whatever name it has, warning when the rename is missing. A missed
+      rename degrades; it no longer takes the network down.
+    - The `ernic_fleet_guest` module check no longer greps the alias table for
+      `d0000100A`. That had become a hard failure that aborted provisioning
+      before the rules were installed — and it never proved what it claimed:
+      in-tree `ionic` advertises `1002` too, so no PCI id distinguishes the
+      patched build. SRQ (issue 20) does.
+    - `scripts/fleet.sh wait` requires the tuple *and* an address, not sshd.
+      `fleet.sh check <N>` prints each guest's device and address.
+    - `tests/test_ernic_identity.py` pins all of it.
+
+    **Where a looser match is still right:** driver binding. `ionic`'s table
+    is `pci:v00001DD8d00001002sv*sd*bc*sc*i*` — it wildcards the subsystem
+    because the same driver drives real Pensando cards, and it cannot tell
+    them apart. That is upstream's and should not be tightened. udev is the
+    only layer that can discriminate, so the tuple discipline belongs there
+    and in anything scanning sysfs or `lspci`, not in the driver.
 
 ## Git / GitHub
 

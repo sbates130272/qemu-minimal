@@ -3,3 +3,12 @@
   ansible.builtin.command:
     cmd: "depmod -a {{ ernic_fleet_kernel }}"
   changed_when: true
+
+# Reload only, no trigger: the kernel refuses to rename a netdev that is
+# already up (EBUSY), so new naming rules take on the next boot or the next
+# module load, not here. Reloading still matters -- without it even a reboot
+# of udev's own state would use the stale file.
+- name: Reload udev rules
+  ansible.builtin.command:
+    cmd: udevadm control --reload-rules
+  changed_when: true

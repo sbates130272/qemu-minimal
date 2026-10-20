@@ -291,6 +291,44 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- **The emulated ernic is identified by its full PCI tuple — vendor `0x1dd8`,
+  device `0x1002`, subsystem vendor `0x1dd8`, subsystem device `0x5400` — and
+  by nothing shorter.** rocm-ernic@3fb74d1 moved the device from `1dd8:100a` to
+  `1dd8:1002`, which is a real Pensando DSC Ethernet Controller id that
+  physical cards ship with, so vendor+device no longer distinguishes the
+  emulation.
+
+  A fleet was found broken for exactly this reason: the guests'
+  `99-rocm-ernic.rules` still matched `0x100a`, udev renamed nothing, and
+  `rocm-ernic-netcfg.service` — which hardcoded `NIC=rocm-ernic0` — exited 1 at
+  boot, leaving 32 guests with no address for 18 hours while sshd answered
+  normally.
+
+  - `udev/99-rocm-ernic.rules` is carried in the repo and installed by
+    `ernic_fleet_guest`, matching all four fields in both the netdev and the
+    InfiniBand stanza. `ernic_fleet_udev_rules_src` no longer defaults to `""`,
+    which installed nothing and skipped silently.
+  - `rocm-ernic-netcfg.sh` discovers the device by tuple and addresses it under
+    whatever name it has, warning when the rename is missing instead of exiting.
+  - `ionic_image_prep` writes the three-level pci.ids entry (the `1dd8 5400`
+    subsystem line nested under upstream's `1002` device line) and its presence
+    check asks for that subsystem line. The merge is parse-checked with `lspci
+    -i` before it replaces the real file. It stays off by default because
+    current hwdata already carries the entry.
+  - The `ernic_fleet_guest` module check no longer greps the alias table for
+    `d0000100A` — a hard failure on any current module, which aborted guest
+    provisioning before the udev rules were installed.
+  - `scripts/fleet.sh` is now a repo artifact, takes its paths from
+    `FLEET_ENV`/`FLEET_STACK`/`FLEET_KEY`, and its `wait` requires the tuple and
+    an address rather than sshd. `fleet.sh check <N>` reports each guest's
+    device and address.
+  - `tests/test_ernic_identity.py` pins the rules, the discovery script and the
+    pci.ids awk programs, including the pciutils parse rules they depend on.
+
+  Driver binding is deliberately left loose: `ionic`'s match table wildcards
+  the subsystem because the same driver drives real Pensando cards, so udev is
+  the only layer that can discriminate.
+
 - **`gen-compose` now mirrors a stack's asset directories instead of adding to
   them.** `grafana/`, `logging/` and `tapsetup/` in the output directory are
   made to match the repo: a file the repo does not have is removed, and every
