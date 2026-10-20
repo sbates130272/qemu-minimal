@@ -159,7 +159,7 @@ jobs:
   smoke-test-arm64:
     name: Smoke Test - arm64
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 60
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     steps:
     - name: Check out code
@@ -173,13 +173,13 @@ jobs:
       run: pip install --break-system-packages -e ./qemu
     - name: Generate SSH key-pair
       run: mkdir -p "$HOME/.ssh" && ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
+    - name: Ensure images directory exists
+      run: sudo mkdir -p /var/lib/qemu-tool/images && sudo chmod 777 /var/lib/qemu-tool/images
     - name: Cache cloud image
       uses: actions/cache@v4
       with:
         path: /var/lib/qemu-tool/images
         key: cloud-img-arm64-resolute-qemu-tool
-    - name: Ensure images directory exists
-      run: sudo mkdir -p /var/lib/qemu-tool/images && sudo chmod 777 /var/lib/qemu-tool/images
     # --release is explicit even though it matches gen-vm's default, unlike the
     # x86 matrix above which parameterises it. The cache key is a fixed string
     # and a key is immutable once saved, so a job that inherits the default
@@ -202,7 +202,7 @@ jobs:
   smoke-test-riscv64:
     name: Smoke Test - riscv64
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 60
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     steps:
     - name: Check out code
@@ -216,13 +216,13 @@ jobs:
       run: pip install --break-system-packages -e ./qemu
     - name: Generate SSH key-pair
       run: mkdir -p "$HOME/.ssh" && ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
+    - name: Ensure images directory exists
+      run: sudo mkdir -p /var/lib/qemu-tool/images && sudo chmod 777 /var/lib/qemu-tool/images
     - name: Cache cloud image
       uses: actions/cache@v4
       with:
         path: /var/lib/qemu-tool/images
         key: cloud-img-riscv64-resolute-qemu-tool
-    - name: Ensure images directory exists
-      run: sudo mkdir -p /var/lib/qemu-tool/images && sudo chmod 777 /var/lib/qemu-tool/images
     # Explicit --release for the same reason as the arm64 job above.
     - name: Generate riscv64 VM with qemu-tool gen-vm
       run: |
