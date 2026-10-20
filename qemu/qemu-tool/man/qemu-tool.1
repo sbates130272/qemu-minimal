@@ -468,6 +468,20 @@ and required for a fleet rendered from an overlay:
 .B VM_COUNT
 and the VM names are baked into the generated YAML, so without it the
 committed stack comes up instead, reporting success.
+.IP
+Defaults to
+.BR $QEMU_TOOL_STACK ,
+and failing that to the current directory when that directory is itself a
+rendered stack, the way
+.B "docker compose"
+picks up a
+.I compose.yaml
+beside you. A rendered stack is recognised by the generator's provenance
+header, not by the presence of a
+.IR docker\-compose.yml ,
+so an unrelated docker project is never adopted. There is no walk\-up: from
+anywhere in a checkout it would reach the committed stack directory and drive
+an 8\-VM stack under the name of a fleet.
 .TP
 .BI \-\-env\-file " FILE"
 Settings file handed to
@@ -481,6 +495,53 @@ applies them last-wins too, so compose and
 resolve every key to the same value. See
 .B SETTINGS FILE
 below.
+.IP
+Against a rendered stack this is optional: the generated
+.I docker\-compose.yml
+records the layers it was built from and they are read back from it, so a
+fleet needs no flags at all once it exists. The recorded names are resolved
+as typed \(em an absolute name as itself, a relative one against the stack
+directory and then the current directory, and nowhere else. A layer that is
+at neither, or a generated stack naming no layers, is an error giving the
+path and where it was looked for, never a fall\-back to the search path: that
+is how a 32\-VM fleet ends up driven by an 8\-VM
+.IR qemu/.env .
+Passing
+.B \-\-env\-file
+overrides the memory, and layers that differ from the recorded ones are named
+in the staleness warning, which still re\-hashes the files' current bytes.
+.PP
+.B compose
+never regenerates and never edits a settings file: resizing a fleet is an
+edit to
+.B VM_COUNT
+followed by
+.BR "gen\-compose \-\-output\-dir" ,
+so a re\-render is always a decision rather than a side effect of
+.BR up .
+Nor is it a command runner. For a whole fleet use
+.B "ansible \-i"
+.I <stack>/fleet\-inventory.yml
+.BR fleet ,
+which
+.B gen\-compose
+renders beside the compose file; for one guest,
+.B inspect
+prints a complete
+.B ssh
+command, and reports the ernic netdev and its address without a login.
+.PP
+Pass
+.B \-v
+to
+.BR down .
+Without it a killed run leaves its sockets in the shared
+.I /run/vfu
+volume and the next
+.B up
+dies on
+.IR "cannot serve /run/vfu/rocjitsu\-1.sock: Address already in use" ,
+seen as a dependency failing its health check.
 .PP
 All remaining arguments are forwarded to
 .B "docker compose"

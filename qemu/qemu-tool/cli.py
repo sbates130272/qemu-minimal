@@ -235,7 +235,9 @@ def _add_compose(sub: argparse._SubParsersAction) -> None:
         description=(
             "Wrapper around 'docker compose' for vfio-user VM stacks. "
             "Sets VM_NAME and VM_IMAGES_DIR, then passes remaining arguments "
-            "directly to docker compose."
+            "directly to docker compose. A stack rendered by gen-compose "
+            "names its own env files in its provenance header, so from inside "
+            "such a directory no flags are needed at all."
         ),
     )
     p.add_argument(
@@ -260,7 +262,9 @@ def _add_compose(sub: argparse._SubParsersAction) -> None:
             "Run a stack rendered by 'gen-compose --output-dir DIR' instead of "
             "a named one. Required for an overlay fleet: VM_COUNT and the VM "
             "names are baked into the generated YAML, not read from the env "
-            "file. Mutually exclusive with --stack."
+            "file. Mutually exclusive with --stack. Defaults to "
+            "$QEMU_TOOL_STACK, or to the current directory when that is "
+            "itself a rendered stack."
         ),
     )
     p.add_argument(

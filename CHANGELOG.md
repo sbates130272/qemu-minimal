@@ -6,6 +6,48 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **`qemu-tool compose` remembers the stack.** From inside a directory
+  rendered by `gen-compose --output-dir`, `qemu-tool compose ps` now works
+  with no flags at all, the way `docker compose` works beside a
+  `compose.yaml`. The memory was already on disk: every generated
+  `docker-compose.yml` has always recorded its env layers in its provenance
+  header, and until now nothing but a unit test read them back, so each
+  invocation had to repeat the directory and both layers — which is the only
+  reason a wrapper script existed.
+
+  The stack directory is found by `--stack-dir`, then `$QEMU_TOOL_STACK`
+  (the same shape as `$QEMU_TOOL_ENV`, so a fleet is selected once per
+  shell), then the current directory if it is itself a rendered stack.
+  Recognition is the provenance header, not the file name, so an unrelated
+  docker project is never adopted, and there is deliberately **no walk-up**:
+  `docker compose` can walk up because what it finds is what it runs, whereas
+  here a walk-up from inside the checkout reaches `qemu/compose/<default>/`
+  and would drive the committed 8-VM stack under the name of a 32-VM fleet —
+  the exact silent substitution `--stack-dir` was added to prevent.
+
+  Recorded layers are resolved as typed: absolute as themselves, relative
+  against the stack directory and then the cwd. A layer that is at neither,
+  or a generated stack whose header names no layers, is an error naming the
+  path and where it was looked for. It never falls back to the ambient env
+  search path, because that is how a 32-VM YAML gets driven by an 8-VM
+  `qemu/.env`.
+
+  The staleness check matters more, not less, now that the inputs need not be
+  typed, so it still re-hashes the layers' current bytes — adopting the
+  recorded names is not taken as satisfying the recorded digest. It also now
+  distinguishes the two faults: content drift ("generated from a different
+  version of …") from being handed layers that are not the ones the stack was
+  rendered from ("was rendered from A, B; you passed A, C").
+
+  Not absorbed, deliberately: `compose` does not regenerate and does not edit
+  settings files (resizing a fleet stays an explicit `VM_COUNT` edit plus
+  `gen-compose --output-dir`; a tool that rewrote `VM_COUNT` as a side effect
+  of `up` could write it into the tracked `qemu/env/scale-out` and break
+  `Gen Compose Check` from a command that looks like a start), and it is not
+  a command runner — a whole fleet is `ansible -i <stack>/fleet-inventory.yml
+  fleet`, which `gen-compose` already renders, and one guest is the `ssh`
+  command `inspect` already prints. See the README and the man page.
+
 - **`qemu-tool list --summary`** — a per-fleet aggregate of the same bytes
   `list` already prints, plus a measured load picture across CPU, memory,
   storage, the RDMA mesh, GPUs and logged-in users. VMs are grouped by Docker

@@ -115,6 +115,23 @@ qemu-tool compose --env-file qemu/env/scale-out \
     --stack vfio-user-ernic-rocjitsu-scale-out --profile metrics up -d
 ```
 
+**A rendered stack names its own inputs, so driving one takes no flags.** A
+`docker-compose.yml` written by `gen-compose` records its env layers in its
+provenance header, and `compose` reads them back, so after the stack exists:
+
+```bash
+cd /var/lib/qemu-tool/stacks/mi100-fleet && qemu-tool compose ps
+export QEMU_TOOL_STACK=/var/lib/qemu-tool/stacks/mi100-fleet   # or, from anywhere
+```
+
+The directory comes from `--stack-dir`, then `$QEMU_TOOL_STACK`, then the cwd
+if it carries that header — no walk-up, because a walk-up from inside this
+checkout lands on the committed 8-VM stack. Explicit `--env-file` still wins,
+a recorded layer that has moved is an error rather than a fall-back to the
+search path, and the digest is still re-hashed, so a stack rendered from an
+edited layer still warns. `compose` does not regenerate and does not edit
+`VM_COUNT`: a re-render stays a typed `gen-compose --output-dir`.
+
 **One golden file plus overlays, not a file per host.** `qemu/env/scale-out` is
 authoritative and is what packaging ships; a CI lane or a particular host adds
 a short committed overlay naming only the keys it changes. `--env-file` is
