@@ -117,14 +117,23 @@ if row is None:
 # The NVME column, read by field index off the header: _print_table pads every
 # column to its widest cell, so character offsets move with the data. No cell
 # contains a space, so the split is unambiguous.
-header = next((l for l in table if l.split()[:2] == ["PID", "NAME"]), None)
-check(header is not None, "`qemu-tool list` printed no header row")
+# Found by WHICH columns it has, not by their order. Pinning the first two to
+# ["PID", "NAME"] made this lane fail the day main reordered them (#189), and
+# the failure said "printed no header row" above a dump containing the header
+# -- an assertion that lies about what it saw costs more than the drift it
+# catches. The row is likewise located by the NAME cell wherever it sits.
+header = next(
+    (l for l in table if {"PID", "NAME", "NVME"} <= set(l.split())), None)
+check(header is not None, "`qemu-tool list` printed no recognisable header row")
 if header is not None:
     cols = header.split()
     check("NVME" in cols, f"no NVME column in the table header: {cols}")
     if "NVME" in cols:
         idx = cols.index("NVME")
-        line = next((l for l in table if l.split()[1:2] == [name]), None)
+        name_idx = cols.index("NAME")
+        line = next(
+            (l for l in table if l.split()[name_idx:name_idx + 1] == [name]),
+            None)
         check(line is not None, f"no table row for {name}")
         if line is not None:
             cell = line.split()[idx]
