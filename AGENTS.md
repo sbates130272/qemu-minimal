@@ -175,10 +175,28 @@ wedges every guest on a DSR timeout that only `down && up` clears, and
 
 Ceilings, nearest first: **the mesh stops registering new workers at about 40
 nodes** (issue 17 — the 64-node topology payload cap in `rdma_backend_tcp.c` is
-not reachable), `VM_VCPUS × VM_COUNT` should not exceed `nproc` plus about 25%
-(issue 14), and `VM_SHM_SIZE × VM_COUNT` must fit `/dev/shm`. Memory never
-binds in practice: 48 VMs used 107G of 503G. `VM_VCPUS` must stay ≥ 4 or
-`ionic_rdma` never probes.
+not reachable), and `VM_VCPUS × VM_COUNT` should not exceed `nproc` plus about
+25% (issue 14). Memory never binds in practice: 48 VMs used 107G of 503G.
+`VM_VCPUS` must stay ≥ 4 or `ionic_rdma` never probes.
+
+**`VM_SHM_SIZE × VM_COUNT` against `/dev/shm` is not the memory ceiling, and
+reading it as one looks reassuring while measuring nothing.** Guest RAM is a
+`memory-backend-memfd` (`-object memory-backend-memfd,share=on`), and a memfd
+is anonymous — it is charged to the container's cgroup as `shmem`, never to
+`/dev/shm`. Measured on the 32-VM fleet, 8 GiB per guest: host `/dev/shm`
+489G with **64K used**, each container's own `/dev/shm` an 8G tmpfs with
+**0 used**, while `memory.stat shmem` across the qemu containers was **40.6
+GiB** — the guest RAM, exactly where the accounting says it is. `shm_size`
+still has to be ≥ `VM_VMEM` or QEMU refuses to allocate the backend, so the
+setting matters; what does not hold is the idea that watching `/dev/shm` tells
+you how much of it is in use.
+
+Two corollaries for anyone reading memory numbers off this stack. The
+container's `anon` is **not** fleet memory — it was 2.0 GiB across all 32,
+20× below the real figure, because the guest RAM is shmem. And
+`memory.current` folds in qcow2 page cache, so it overstates: it answers
+"what can the host not reclaim cheaply", not "how much RAM do the guests
+hold". `qemu-tool list --summary` reports the shmem figure and labels it.
 
 ## rocm-ernic driver and userspace provider (in-VM)
 
