@@ -4,7 +4,7 @@ title: VM Report — hipFile fio VM
 
 # VM Report — qemu-minimal — hipFile fio VM
 
-Generated: **2026-10-20 19:17 UTC** &middot; Commit: [`2f489fa`](https://github.com/sbates130272/qemu-minimal/commit/2f489fa152580b2ebe2b28c5bf5610421fc911ef) &middot; Status: **pass**
+Generated: **2026-10-20 22:59 UTC** &middot; Commit: [`1da2263`](https://github.com/sbates130272/qemu-minimal/commit/1da22630e2347fd2c2a49ea859e4efac01dc2d2d) &middot; Status: **pass**
 
 ## Hardware
 
@@ -47,8 +47,8 @@ nvme0n1    1T disk /mnt/nvme
 
 ```
 Filesystem      Size  Used Avail Use% Mounted on
-/dev/vda1        61G  8.7G   53G  15% /
-/dev/vda13      989M  372M  550M  41% /boot
+/dev/vda1        61G  8.4G   53G  14% /
+/dev/vda13      989M  286M  636M  32% /boot
 ```
 
 ### NVMe
