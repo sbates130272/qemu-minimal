@@ -459,6 +459,9 @@ packages:
 runcmd:
   - systemctl disable openipmi.service
   - systemctl mask openipmi.service
+  - systemctl mask multipathd.service multipathd.socket
+  - systemctl mask iscsid.service iscsid.socket
+  - systemctl mask snapd.service snapd.socket snapd.seeded.service
   - loginctl enable-linger {cfg.username}
 {ca_runcmd}
 power_state:
@@ -470,6 +473,20 @@ power_state:
 timezone: America/Edmonton
 write_files:
 {ca_write}
+  - path: /etc/systemd/system/multipathd.service.d/99-timeout.conf
+    content: |
+      [Service]
+      TimeoutStopSec=5s
+    owner: root:root
+    permissions: '0644'
+    defer: false
+  - path: /etc/systemd/system/iscsid.service.d/99-timeout.conf
+    content: |
+      [Service]
+      TimeoutStopSec=5s
+    owner: root:root
+    permissions: '0644'
+    defer: false
   - path: /etc/sysctl.d/10-kernel-hardening.conf
     content: 'kernel.dmesg_restrict = 0'
     owner: root:root
