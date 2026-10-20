@@ -5,7 +5,7 @@
 # that attaches them as emulated PCIe devices via the vfio-user-pci driver.
 #
 # Usage:
-#   cp qemu/env.example qemu/.env && $EDITOR qemu/.env   # image tags, VM_IMAGES_DIR
+#   cp qemu/env/example qemu/.env && $EDITOR qemu/.env   # image tags, VM_IMAGES_DIR
 #   qemu-tool gen-vm                      # build VM image if not already done
 #   qemu-tool compose --stack vfio-user-ernic-rocjitsu-vm up
 #   ssh -p ${VM_SSH_PORT:-2222} ubuntu@localhost

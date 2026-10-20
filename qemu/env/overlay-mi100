@@ -1,0 +1,102 @@
+# Overlay for the scale-out ernic+rocjitsu fleet on ctr-mi100-rack33a-9
+# (192 cores, 976 GiB, 489 GiB /dev/shm, 8x MI100).
+#
+# Deltas only. Layer it on the golden file, which supplies everything else:
+#
+#   qemu-tool gen-compose --env-file qemu/env/scale-out \
+#     --env-file qemu/env/overlay-mi100 \
+#     --output-dir /var/lib/qemu-tool/stacks/mi100-fleet
+#   qemu-tool compose --stack-dir /var/lib/qemu-tool/stacks/mi100-fleet \
+#     --env-file qemu/env/scale-out --env-file qemu/env/overlay-mi100 \
+#     --profile metrics up -d
+#
+# --output-dir is what keeps it off the committed stack:
+# qemu/compose/vfio-user-ernic-rocjitsu-scale-out/docker-compose.yml is
+# generated from qemu/env/scale-out alone and CI's `gen-compose --check` lane
+# compares the two, so a 32-VM render landing on gen-compose's default output
+# directory fails that lane. --stack-dir then runs what was rendered; without
+# it compose runs the committed 8-VM stack, because VM_COUNT is baked into the
+# YAML and not read from these layers at run time.
+
+# Set per ramp step. 192 cores at 4 vCPU/VM budgets ~48 VMs by the issue-14
+# heartbeat rule; the ~40-node mesh registration wall (issue 17) was measured
+# on a 128-core host and is what this ramp is here to re-measure.
+VM_COUNT=32
+
+# NOT stebates-fleet. /home is NFS and shared across nodes, and the
+# stebates-fleet-* overlays were being written by a live fleet on another node
+# while this one was being set up. A node-local prefix and a node-local
+# VM_IMAGES_DIR are what keep the two runs from corrupting each other.
+VM_NAME_PREFIX=stebates-mi100
+
+# Local NVMe (/dev/sda3, 3.4T free), not the in-tree images/ directory: that
+# path is NFS here, qcow2 locking over NFS is unreliable, and 32 guests doing
+# overlay writes over NFS is a boot-time cost the measurement does not need.
+VM_IMAGES_DIR=/var/lib/qemu-tool/images-stebates
+
+# The sbates-fork variant of the same build stamp, so it carries 31e3d06a4
+# "hw/vfio: assign region fd to RAMBlock for vfio-user P2P DMA". Without that
+# commit a peer device's BAR is DMA_MAP-ed to the NIC with no fd, arrives as
+# vaddr=(nil), and every WQE touching GPU memory dies in vfu_sgl_get() as
+# "could not gather N bytes" -- which is the whole point of this node.
+# Verify a candidate with `-device help | grep pci-mmio-bridge`, present only
+# in fork builds, and /build/qemu-commit.txt.
+QEMU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:20261014.geea0485-qemu.31e3d06-vfu.8039244
+
+# Node-exporter only. The LMCache MP server's HTTP port is not forwarded here;
+# this is a list[str] field, so the value replaces both of the golden's rules
+# for every guest.
+VM_EXTRA_HOSTFWD=tcp::9100-:9100
+
+# Absolute, and per run: the TSDB is the record of one fleet size, and the
+# ramp overwrites it otherwise. Create it and chown 65534:65534 before `up`.
+PROM_DATA_DIR=/var/lib/qemu-tool/stacks/mi100-fleet/prom-data
+
+# Absolute: the stack is generated outside the repo, so the golden's
+# ../../.. does not reach the checkout.
+QEMU_TOOL_SRC=/home/AMD/stebates/Projects/qemu-minimal
+
+# ---------------------------------------------------------------------------
+# What this node deliberately does not run
+# ---------------------------------------------------------------------------
+# The golden sets all four of these; the file this overlay replaced left them
+# unset, so they would arrive as a side effect of consolidation rather than as
+# a decision. The fleet has been up for ten days and is being measured, so the
+# NVMe is the only intended change: anything that breaks after the next
+# restart has exactly one suspect. Flip any of these to take the golden's
+# value.
+
+# One emulated NVMe per guest. This IS the intended change.
+VM_NVME=1
+
+# No 9p share. The golden points VM_FILESYSTEM at /var/lib/qemu-tool/share,
+# which does not exist on this node -- and a missing bind-mount source is
+# created by dockerd, as root, so every guest would get a mount it cannot
+# write rather than an error anyone would notice.
+VM_FILESYSTEM=
+
+# No LMCache coordinator, exporter, or the three scrape jobs that follow it.
+LMCACHE_ENABLE=false
+
+# No Loki or Alloy. This fleet has never run them and the TSDB is the record.
+LOGS_ENABLE=false
+
+# Keep today's guest PCI topology. The golden puts vfio-user devices behind a
+# root port; changing that at the same time as adding a drive would make a
+# device-enumeration change indistinguishable from an NVMe problem.
+VM_VFIO_USER_ROOT_PORT=false
+
+# ---------------------------------------------------------------------------
+# Run the containers as the operator, not as root
+# ---------------------------------------------------------------------------
+# VM_NVME above makes this matter: run-vm creates each drive qcow2 from INSIDE
+# the qemu container, so without this all 32 land root-owned in an images
+# directory this user otherwise owns, and clearing them needs sudo. Proven on
+# a one-VM probe: same image and command, `-u 0:0` gives a root-owned file
+# and `-u <uid>:<gid>` gives a user-owned one.
+#
+# The kvm gid is a property of the host, not of the fleet, so it cannot be
+# defaulted: the qemu service needs it in group_add to open /dev/kvm. 136 is
+# this node's; check with `getent group kvm` before reusing this file.
+CONTAINER_USER=244227127:1274200513
+CONTAINER_KVM_GID=136

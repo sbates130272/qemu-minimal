@@ -27,7 +27,7 @@ ernic-worker   (tcp:worker:ernic-hub) ──── VM 2 (qemu-2, SSH :2223)
 
 ```sh
 # 1. Configure
-cp qemu/env.example qemu/.env
+cp qemu/env/example qemu/.env
 $EDITOR qemu/.env   # set VM1_NAME, VM2_NAME, VM_IMAGES_DIR
 
 # 2. Create a second VM overlay if you only have one image

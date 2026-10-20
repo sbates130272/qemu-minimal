@@ -12,7 +12,7 @@ galaxy_info:
     - name: Ubuntu
       # `all`, not the codenames this used to carry: galaxy's schema accepts
       # only its own enum here, and noble/resolute are not in it. The guests
-      # this runs on are pinned by the qcow2 in env.scale-out, not by this
+      # this runs on are pinned by the qcow2 in env/scale-out, not by this
       # field, so narrowing it bought nothing and failed the lint gate.
       versions:
         - all

@@ -3,7 +3,7 @@
 qemu-tool has three install shapes and each puts its data somewhere different:
 the .deb writes /usr/share/qemu-tool, a source checkout has qemu/ alongside
 this file, and `pipx install qemu-tool` has neither -- only the wheel. The
-wheel carries the compose stacks, the package manifests and env.example as
+wheel carries the compose stacks, the package manifests and env/example as
 package data (see [tool.setuptools.package-dir] in pyproject.toml, which maps
 them in place rather than duplicating them under the package directory).
 
@@ -21,6 +21,7 @@ from pathlib import Path
 # hands back its parent directory, which fails silently rather than loudly.
 SHARE = "qemu_tool.share"
 COMPOSE = "qemu_tool.share.compose"
+ENV = "qemu_tool.share.env"
 PACKAGES_D = "qemu_tool.share.packages_d"
 
 

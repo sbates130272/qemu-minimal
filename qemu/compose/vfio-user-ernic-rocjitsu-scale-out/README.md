@@ -4,7 +4,7 @@ An N-VM rocm-ernic mesh, one emulated RDMA NIC and one rocjitsu GPU per VM.
 Same topology as `vfio-user-ernic-2vm`, sized by a variable instead of by hand.
 
 **`docker-compose.yml`, `prometheus.yml` and `fleet-inventory.yml` in this
-directory are generated.** Edit [`qemu/env.scale-out`](../../env.scale-out)
+directory are generated.** Edit [`qemu/env/scale-out`](../../env/scale-out)
 and regenerate; do not edit them directly. All three are committed so the
 stack stays reviewable in a diff and usable with plain `docker compose`, but a
 hand edit is lost on the next regeneration and the `Gen Compose Check` CI lane
@@ -14,8 +14,47 @@ will fail.
 every query groups by a label instead of naming a VM.
 
 ```bash
-qemu-tool gen-compose --env-file qemu/env.scale-out
+qemu-tool gen-compose --env-file qemu/env/scale-out
 ```
+
+## One golden file, plus overlays
+
+`qemu/env/scale-out` is the **golden** settings file and the only one that
+documents every key. A fleet that differs from it — a CI lane, a particular
+host — states only the keys it differs on, in a small committed overlay named
+after the golden file on the command line:
+
+```bash
+qemu-tool gen-compose \
+    --env-file qemu/env/scale-out --env-file qemu/env/overlay-mi100 \
+    --output-dir /var/lib/qemu-tool/stacks/mi100-fleet
+qemu-tool compose --stack-dir /var/lib/qemu-tool/stacks/mi100-fleet \
+    --env-file qemu/env/scale-out --env-file qemu/env/overlay-mi100 \
+    --profile metrics up -d
+```
+
+`--env-file` is repeatable and layers left to right, key by key: a key the
+overlay sets wins, a key it omits keeps the golden value. `qemu-tool` passes
+each layer through to `docker compose` as its own `--env-file` in the same
+order, which applies the same last-wins rule, so both see identical values.
+
+The two directory flags are not decoration. `gen-compose` writes to this
+directory by default, so an overlay render without `--output-dir` replaces the
+committed 8-VM stack with the overlay's fleet and the `Gen Compose Check` lane
+fails. And the layers do not size a running stack: `VM_COUNT` and the VM names
+are baked into the YAML at generation time, so `compose` without `--stack-dir`
+brings up the committed stack and reports success.
+
+This replaces four full copies of the same file —
+`env.scale-out{,-ci,-mi100,-strix}` — that shared about twenty identical keys
+and were hand-synced. The committed overlays are
+[`qemu/env/overlay-ci`](../../env/overlay-ci) and
+[`qemu/env/overlay-mi100`](../../env/overlay-mi100).
+
+The generated files in this directory come from the golden file alone, so they
+record one `# env-file:` line. A render with an overlay records one line per
+layer and a single `# env-sha256:` over all of them concatenated — an edit to
+the overlay makes the stack stale exactly as an edit to the golden file does.
 
 ## Why generated
 
@@ -30,8 +69,10 @@ Per-VM values in the settings file are comma-lists, not numbered variables:
 list of length `VM_COUNT` applies positionally, and any other length is an
 error. The exception is a key naming a field that is *already* a list
 (`VM_EXTRA_HOSTFWD` and friends), where the commas mean several values for one
-VM and the whole value goes to every VM. `env.scale-out` documents this at
-length because getting it backwards fails silently.
+VM and the whole value goes to every VM. The golden `env/scale-out` documents
+this at length because getting it backwards fails silently — and it is the
+only one of the settings files that does, which is most of why there is now
+one of them and not four.
 
 ## Bringing it up
 
@@ -40,21 +81,30 @@ overlay the rest on it — `gen-compose` prints these commands with the names
 filled in:
 
 ```bash
-qemu-tool gen-vm --env-file qemu/env.scale-out \
+qemu-tool gen-vm --env-file qemu/env/scale-out \
     --vm-name stebates-fleet-1 --backing-image "$VM_BACKING_IMAGE"
 for n in $(seq 2 8); do
-  qemu-tool gen-vm --env-file qemu/env.scale-out \
+  qemu-tool gen-vm --env-file qemu/env/scale-out \
       --vm-name stebates-fleet-$n \
       --backing-file images/stebates-fleet-1-backing.qcow2
 done
 
-qemu-tool compose --env-file qemu/env.scale-out \
+qemu-tool compose --env-file qemu/env/scale-out \
     --stack vfio-user-ernic-rocjitsu-scale-out --profile metrics up -d
 ```
 
 One backing file serves the whole fleet, which is why `VM_BACKING_SHARED=true`
 is not optional here: all N VMs open it at once, and that needs
 `backing.file.locking=off`.
+
+For a fleet with an overlay, append `--env-file qemu/env/overlay-<name>` to
+**every** command above — `gen-vm` takes it repeatedly too, and it is where
+`VM_IMAGES_DIR` comes from, so a layer dropped from one of them silently builds
+the overlays in the wrong directory. `VM_NAME_PREFIX` is not a `VMConfig` field
+and `gen-vm` never reads it: only `gen-compose` does, and it reaches `gen-vm`
+through the `--vm-name` arguments you type — which is why `gen-compose` prints
+the whole list with the names already filled in. Run the `compose` command with
+`--stack-dir` pointing at the `--output-dir` the overlay was rendered to.
 
 ## Topology
 
@@ -197,7 +247,7 @@ Opt in with `--profile lmcache`, on top of `--profile metrics`.
 
 ```bash
 docker build -t qemu-tool/lmcache-rocm:0.5.6-gfx1250 ../../docker/lmcache
-qemu-tool compose --env-file qemu/env.scale-out \
+qemu-tool compose --env-file qemu/env/scale-out \
     --stack vfio-user-ernic-rocjitsu-scale-out \
     --profile metrics --profile lmcache up -d
 
@@ -297,6 +347,82 @@ profile nobody selected is just a permanently-down target.
 `LMCACHE_WORKER_METRICS_PORT` has to match `lmcache_guest_metrics_port` in the
 role, and has to appear in `VM_EXTRA_HOSTFWD`. Nothing cross-checks those
 three; a mismatch shows up only as a scrape target that never comes up.
+
+## What a regeneration owns in the output directory
+
+`gen-compose` writes the three generated files and then **mirrors** the stack's
+non-generated assets — `grafana/`, `logging/`, `tapsetup/` — into the output
+directory. Mirrors, not copies: after a regeneration those directories match
+this one exactly. Anything in them that this directory does not have is
+deleted, and every deletion is printed by name.
+
+Everything else in the output directory belongs to whoever put it there and is
+never read or written: `prom-data/`, `grafana-data/`, `loki-data/`, results,
+scripts, tarballs, a `docker-compose.override.yml`. A directory qualifies only
+if the rendered compose file names it as `./name` **and** this directory has
+something of that name, so a relative `PROM_DATA_DIR` cannot make a TSDB look
+like an asset.
+
+That holds at any depth, not just at the top. A relative bind mount nested
+under an owned name — `LOKI_DATA_DIR=./logging/data`, Loki's data next to
+`logging/loki-config.yml` — is the operator's too, and is skipped by the
+prune. Absolute paths are still what the settings file documents for the three
+`*_DATA_DIR` keys, and still what the fleet uses.
+
+The rule the mirror will not break: **it deletes nothing outside the output
+directory.** A symlink would take it there — `ln -s /srv/grafana-shared
+<stack>/grafana` to keep dashboards on a big disk — so a symlink on an owned
+path is refused rather than followed, at the top level and inside:
+
+```
+Refused /srv/fleet/grafana: symlink to /srv/grafana-shared, not this stack's
+Error: the stack directory was not fully mirrored:
+  /srv/fleet/grafana is a symlink to /srv/grafana-shared; it was left alone
+```
+
+Nothing under the link is read, written or removed; the other asset
+directories are still mirrored, `--check` reports the asset as a symlink, and
+`gen-compose` exits non-zero. Replace the link with a real directory to get
+that asset mirrored again.
+
+A removal that fails — a read-only directory, a file owned by another uid —
+is collected and reported at the end rather than raised on the spot, and the
+copies all run first. A regeneration that fails part way therefore leaves the
+stack no emptier than it started.
+
+Additive copying is what this replaced, and it cost the 32-VM fleet two hours
+of metrics. `grafana/provisioning/datasources/` ended up holding a hand-made
+`prom.yml` *and* this directory's `prometheus.yml`, both `isDefault: true`:
+
+```
+Datasource provisioning error: datasource.yaml config is invalid.
+Only one datasource per organization can be marked as default
+```
+
+Grafana crash-looped on that for two hours with nothing alerting; it surfaced
+only as `infra 1/3` in `qemu-tool list --summary`. An extra file breaks
+nothing until something downstream reads the whole directory, which is why
+`--check` now compares the asset directories as well as the three generated
+files — it is the gate that is supposed to notice exactly this.
+
+The comparison is symmetric, and names what it found:
+
+```
+Error: stack assets missing from the output directory: logging/loki-config.yml
+Error: stack assets modified from the repo's: tapsetup/Dockerfile
+Error: extra stack assets the repo does not have: grafana/provisioning/datasources/prom.yml
+```
+
+Reporting only the extras would answer "would a regeneration delete
+anything", which is not the question: `rm <stack>/logging/loki-config.yml`
+left `--check` printing `Up to date` for a stack that cannot boot, because
+Docker recreates that bind-mount source as a directory and loki dies on
+`read /etc/loki/config.yml: is a directory`.
+
+The first regeneration against a directory that has been hand-managed will
+therefore remove hand-added dashboards, provisioning files and anything
+renamed aside during a repair. That is the intent. Read the `Removed` lines;
+move anything worth keeping into this directory and commit it.
 
 ## Staleness
 

@@ -35,7 +35,8 @@ on:
       - 'ansible/playbooks/roles/lmcache_guest/**'
       - 'ansible/requirements.yml'
       - 'qemu/docker/lmcache/**'
-      - 'qemu/env.scale-out-ci'
+      - 'qemu/env/scale-out'
+      - 'qemu/env/overlay-ci'
       - 'qemu/qemu-tool/gen_compose.py'
       - '.github/workflows/qemu-minimal-report-for-lmcache.yml'
       - '.github/workflows/qemu-minimal-publish-pages.yml'
@@ -53,7 +54,14 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  ENV_FILE: qemu/env.scale-out-ci
+  # Settings are layered, not copied: the golden fleet file, the committed CI
+  # overlay, and a third scratch overlay of runner-derived sizing written by
+  # "Apply the runner-derived sizing". --env-file is repeatable in both
+  # qemu-tool and docker compose and the last file wins key by key, so every
+  # call site below passes $ENV_ARGS rather than one file.
+  ENV_GOLDEN: qemu/env/scale-out
+  ENV_OVERLAY: qemu/env/overlay-ci
+  ENV_SIZING: /tmp/env.overlay-sizing
   STACK_DIR: /var/lib/qemu-tool/stacks/lmcache-ci
   LMCACHE_IMAGE: qemu-tool/lmcache-rocm:0.5.6-gfx1250-srq
   QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261014.geea0485-qemu11.1.2-vfu.8039244
@@ -197,7 +205,7 @@ jobs:
         {
           echo "VM_VCPUS=$VM_VCPUS"
           echo "VM_VMEM=$VM_VMEM"
-          # Headroom, not the exact minimum. env.scale-out's rule is
+          # Headroom, not the exact minimum. env/scale-out's rule is
           # "VM_SHM_SIZE >= VM_VMEM, per VM", and setting it EQUAL leaves a
           # vfio-user memfd backend sitting on the boundary. The two-VM
           # ernic report lane -- which passes -- leaves this at the stack
@@ -213,15 +221,36 @@ jobs:
         df -h /dev/shm || true
         free -m || true
 
-    # Overridden on top of the committed env file rather than edited into it,
-    # so the file stays reviewable and the sizing stays runner-derived.
+    # Overridden on top of the committed env files rather than edited into
+    # them, so they stay reviewable and the sizing stays runner-derived: the
+    # three keys go to a scratch overlay appended as the last --env-file,
+    # leaving the tracked files untouched in the checkout.
+    #
+    # ENV_ARGS and ENV_LAYERS are built here, absolute, because the steps
+    # below run from two different directories -- the workspace for qemu-tool
+    # and the stack directory for docker compose.
+    #
+    # GUEST_USER is derived from the same layers, last match winning, rather
+    # than written literally into each ssh call. Six hardcoded `batesste@`
+    # targets are how this lane drifted from VM_USERNAME in the first place:
+    # the settings file moved to `ubuntu` and every ssh here kept logging in
+    # as an account the fleet guest no longer has, which presents as
+    # "Permission denied" against a perfectly healthy guest.
     - name: Apply the runner-derived sizing
       run: |
         {
           echo "VM_VCPUS=${VM_VCPUS}"
           echo "VM_VMEM=${VM_VMEM}"
           echo "VM_SHM_SIZE=${VM_SHM_SIZE}"
-        } >> "$ENV_FILE"
+        } > "$ENV_SIZING"
+        LAYERS="$GITHUB_WORKSPACE/$ENV_GOLDEN $GITHUB_WORKSPACE/$ENV_OVERLAY $ENV_SIZING"
+        GUEST_USER=$(grep -h '^VM_USERNAME=' $LAYERS | tail -1 | cut -d= -f2-)
+        : "${GUEST_USER:?no VM_USERNAME in any env layer}"
+        {
+          echo "ENV_LAYERS=$LAYERS"
+          echo "ENV_ARGS=--env-file $GITHUB_WORKSPACE/$ENV_GOLDEN --env-file $GITHUB_WORKSPACE/$ENV_OVERLAY --env-file $ENV_SIZING"
+          echo "GUEST_USER=$GUEST_USER"
+        } >> "$GITHUB_ENV"
 
     # Generated to a scratch directory. gen-compose also copies the stack's
     # non-generated assets (tapsetup/, logging/, grafana/) next to the
@@ -230,7 +259,7 @@ jobs:
     # directory.
     - name: Generate the two-VM fleet stack
       run: |
-        qemu-tool gen-compose --env-file "$ENV_FILE" --output-dir "$STACK_DIR"
+        qemu-tool gen-compose $ENV_ARGS --output-dir "$STACK_DIR"
         ls -la "$STACK_DIR"
 
     - name: Fetch the guest image and create the overlays
@@ -240,10 +269,15 @@ jobs:
         # on device" from inside gen-vm, which says nothing about how much
         # was free when it started.
         df -h /
-        BACKING=$(grep '^VM_BACKING_IMAGE=' "$ENV_FILE" | cut -d= -f2-)
-        qemu-tool gen-vm --env-file "$ENV_FILE" \
+        # The layers are read in order and the LAST match wins, matching what
+        # --env-file does: whether VM_BACKING_IMAGE comes from the golden or
+        # is overridden in the overlay, this reads the value the stack is
+        # actually built from. Reading one layer would pick up a pin the
+        # other had moved.
+        BACKING=$(grep -h '^VM_BACKING_IMAGE=' $ENV_LAYERS | tail -1 | cut -d= -f2-)
+        qemu-tool gen-vm $ENV_ARGS \
           --vm-name lmcache-ci-1 --backing-image "$BACKING"
-        qemu-tool gen-vm --env-file "$ENV_FILE" \
+        qemu-tool gen-vm $ENV_ARGS \
           --vm-name lmcache-ci-2 \
           --backing-file /var/lib/qemu-tool/images/lmcache-ci-1-backing.qcow2
 
@@ -274,7 +308,8 @@ jobs:
         # variable that is checked by the python that follows, and oras
         # writes to a file rather than into a pipe.
         set -eu
-        BACKING=$(grep '^VM_BACKING_IMAGE=' "$ENV_FILE" | cut -d= -f2-)
+        # Last match across the layers, as above.
+        BACKING=$(grep -h '^VM_BACKING_IMAGE=' $ENV_LAYERS | tail -1 | cut -d= -f2-)
         oras discover "$BACKING" --format json > /tmp/referrers.json
         REF=$(python3 -I -c 'import json,os,sys; want=os.environ["VM_INFO_TYPE"]; refs=json.load(sys.stdin).get("referrers",[]); hits=[r["reference"] for r in refs if r.get("artifactType")==want]; print(hits[0]) if hits else sys.exit("no %s referrer on the qcow2; found %r. The guest keypair ships as a referrer -- without it the inventory has a user and no key." % (want,[r.get("artifactType") for r in refs]))' < /tmp/referrers.json)
         mkdir -p /tmp/guest-key
@@ -287,9 +322,8 @@ jobs:
     - name: Bring up the fleet
       working-directory: /var/lib/qemu-tool/stacks/lmcache-ci
       run: |
-        docker compose --env-file "$GITHUB_WORKSPACE/$ENV_FILE" \
-          --profile lmcache up --detach
-        docker compose --env-file "$GITHUB_WORKSPACE/$ENV_FILE" --profile lmcache ps
+        docker compose $ENV_ARGS --profile lmcache up --detach
+        docker compose $ENV_ARGS --profile lmcache ps
 
     # Both qemu containers publish SSH on the HOST, which this job container
     # cannot reach. Join the compose network and address guests by service
@@ -321,7 +355,7 @@ jobs:
             if err=$(ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
                          -o NoHostAuthenticationForLocalhost=yes \
                          -o ConnectTimeout=5 -p 2222 -i /tmp/guest-key/id_rsa \
-                         batesste@"$host" true 2>&1); then
+                         "$GUEST_USER"@"$host" true 2>&1); then
               echo "$host ready after ${elapsed}s"
               ready=yes
               break
@@ -417,7 +451,7 @@ jobs:
             echo "--- $host lmcache-server ---"
             ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
                 -o ConnectTimeout=5 -p 2222 -i /tmp/guest-key/id_rsa \
-                batesste@"$host" \
+                "$GUEST_USER"@"$host" \
                 'systemctl is-active lmcache-server; sudo docker logs --tail 40 lmcache-server 2>&1' || true
           done
           exit 1
@@ -461,11 +495,11 @@ jobs:
         : "${before:?could not read the ernic rdma_read counter before the run}"
         echo "before: $before"
 
-        $SSH batesste@qemu-1 "$BENCH" > /tmp/seed.log 2>&1 || {
+        $SSH "$GUEST_USER"@qemu-1 "$BENCH" > /tmp/seed.log 2>&1 || {
           echo "::error::seed on qemu-1 failed"; tail -30 /tmp/seed.log; exit 1; }
         grep -c "STORE: stored" /tmp/seed.log
         sleep 20
-        $SSH batesste@qemu-2 "$BENCH" > /tmp/pull.log 2>&1 || {
+        $SSH "$GUEST_USER"@qemu-2 "$BENCH" > /tmp/pull.log 2>&1 || {
           echo "::error::pull on qemu-2 failed"; tail -30 /tmp/pull.log; exit 1; }
         grep -E "cold\] (LOOKUP|RETRIEVE)" /tmp/pull.log || true
         sleep 10
@@ -513,7 +547,7 @@ jobs:
           echo '## Guest device state'
           echo '```'
           ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              -i /tmp/guest-key/id_rsa batesste@qemu-1 \
+              -i /tmp/guest-key/id_rsa "$GUEST_USER"@qemu-1 \
               'ibv_devinfo | head -5; ibv_devinfo -v | grep -E "max_srq:|max_msg_sz"' 2>&1 || true
           echo '```'
           echo
@@ -540,9 +574,9 @@ jobs:
           echo "stack directory absent; the run failed before it was created"
           exit 0
         }
-        docker compose --env-file "$GITHUB_WORKSPACE/$ENV_FILE" --profile lmcache logs --tail 100 || true
+        docker compose $ENV_ARGS --profile lmcache logs --tail 100 || true
         ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-            -i /tmp/guest-key/id_rsa batesste@qemu-1 \
+            -i /tmp/guest-key/id_rsa "$GUEST_USER"@qemu-1 \
             'sudo docker logs lmcache-server 2>&1 | tail -50' || true
 
     # Upload only. publish-pages.yml is the sole writer of the site: a Pages

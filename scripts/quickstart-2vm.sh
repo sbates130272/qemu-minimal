@@ -21,7 +21,7 @@ set -eu
 
 REPO_ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 
-ENV_FILE="${REPO_ROOT}/qemu/env.quickstart"
+ENV_FILE="${REPO_ROOT}/qemu/env/quickstart"
 STACK_DIR=/var/lib/qemu-tool/stacks/quickstart
 STACK_DIR_EXPLICIT=0
 KEY_DIR=/var/lib/qemu-tool/quickstart-key
@@ -35,7 +35,7 @@ usage() {
   cat <<'EOF'
 Usage: quickstart-2vm.sh [options] [all|preflight|up|test|report|down]
 
-  --env-file FILE     settings file (default qemu/env.quickstart)
+  --env-file FILE     settings file (default qemu/env/quickstart)
   --stack-dir DIR     where the stack is generated (default
                       /var/lib/qemu-tool/stacks/quickstart)
   --key-dir DIR       where the guest keypair is pulled to
@@ -225,7 +225,7 @@ size_from_host() {
   {
     echo "VM_VCPUS=${vcpus}"
     echo "VM_VMEM=${vmem}"
-    # VM_VMEM plus 1 GiB, not equal to it. env.scale-out's rule is
+    # VM_VMEM plus 1 GiB, not equal to it. env/scale-out's rule is
     # "VM_SHM_SIZE >= VM_VMEM, per VM", so equal is the boundary and leaves
     # the vfio-user memfd backend no slack -- which is what the lmcache lane
     # set and had to correct. shm_size caps a tmpfs rather than reserving
@@ -248,6 +248,7 @@ fetch_key() {
   say "Fetching the guest keypair"
   if [ -f "$KEY" ]; then
     echo "already at $KEY"
+    publish_pubkey
     return 0
   fi
   mkdir -p "$KEY_DIR"
@@ -259,6 +260,21 @@ fetch_key() {
   # denial against a guest that is perfectly healthy.
   [ -f "$KEY" ] || die "the referrer carried no id_rsa"
   chmod 600 "$KEY"
+  publish_pubkey
+}
+
+# `qemu-tool inspect` looks for the public half beside the images
+# (<images>/keys/) and in ~/.ssh, never in the key directory this script
+# pulls to -- so without this it reports the guest's key as "accepted by
+# guest, not found locally" and its SSH line carries no -i. The public half
+# only; the private one stays where it was pulled.
+publish_pubkey() {
+  pub="${VM_IMAGES_DIR}/keys/quickstart_id_rsa.pub"
+  if [ -f "$pub" ]; then
+    return 0
+  fi
+  mkdir -p "${VM_IMAGES_DIR}/keys"
+  ssh-keygen -y -f "$KEY" > "$pub" || die "could not derive the public key from $KEY"
 }
 
 # ~17 GB pulled and decompressed once; VM 2 is an overlay of the same backing
@@ -280,7 +296,7 @@ make_overlays() {
 }
 
 # To a scratch directory, never over the committed stack: that one is
-# generated from qemu/env.scale-out and `gen-compose --check` compares the
+# generated from qemu/env/scale-out and `gen-compose --check` compares the
 # two. gen-compose also copies the stack's non-generated assets (tapsetup/),
 # without which compose fails with "unable to prepare context".
 generate_stack() {

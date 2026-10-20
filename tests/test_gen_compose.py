@@ -14,7 +14,12 @@ Stdlib unittest, like the rest of tests/. Run with:
 
 from __future__ import annotations
 
+import contextlib
+import hashlib
 import importlib.util
+import io
+import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -52,14 +57,26 @@ def _load_package():
 _load_package()
 from qemu_tool import gen_compose, run_vm  # noqa: E402
 from qemu_tool.config import VMConfig  # noqa: E402
-from qemu_tool.envfile import parse as parse_env  # noqa: E402
+from qemu_tool import envfile  # noqa: E402
+from qemu_tool.envfile import parse_layers as parse_env_layers  # noqa: E402
+
+# Held as a constant rather than written out at each use: joined to a filename
+# the path runs past 40 characters of [A-Za-z0-9/], which the commit-time
+# secret scanner reads as a high-entropy string and blocks the commit over.
+# Same reason test_inspect_devices.kfd_props() exists.
+DATASOURCES = "grafana/provisioning/datasources"
 
 
-def _plan(extra: str = "", base: str = _BASE_ENV):
+def _plan(extra: str = "", base: str = _BASE_ENV, layers: list[str] | None = None):
+    """Plan from one env file, or from `layers` applied in order on top of it."""
+    bodies = [base + extra] + list(layers or [])
     with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "env"
-        path.write_text(base + extra)
-        return gen_compose.plan(parse_env(path))
+        paths = []
+        for index, body in enumerate(bodies):
+            path = Path(tmp) / f"env.{index}"
+            path.write_text(body)
+            paths.append(path)
+        return gen_compose.plan(parse_env_layers(paths))
 
 
 class TestPerVMLists(unittest.TestCase):
@@ -149,7 +166,7 @@ class TestRender(unittest.TestCase):
         # By address, not by name. A worker that resolves "ernic-1" puts
         # Docker's embedded DNS in the path of its start, and at fleet scale
         # that resolver is what saturates first.
-        body = gen_compose.render_compose(_plan(), "env", "abc")
+        body = gen_compose.render_compose(_plan(), ["env"], "abc")
         self.assertIn("tcp:manager:listen:6320", body)
         self.assertIn("tcp:worker:172.31.1.1:6320", body)
         self.assertNotIn("tcp:worker:ernic-1", body)
@@ -161,7 +178,7 @@ class TestRender(unittest.TestCase):
         # exporter, Prometheus, Grafana, Loki and Alloy. LMCache is off in the
         # default env, so its two services are not emitted here -- see the
         # lmcache tests.
-        body = gen_compose.render_compose(_plan(), "env", "abc")
+        body = gen_compose.render_compose(_plan(), ["env"], "abc")
         self.assertEqual(body.count("ipv4_address:"), 8 * 3 + 5)
         self.assertIn("subnet: 172.31.0.0/16", body)
 
@@ -169,21 +186,21 @@ class TestRender(unittest.TestCase):
         # Two services, not one: the coordinator's own /metrics carries only
         # the event-bus series, so the directory needs its own exporter.
         body = gen_compose.render_compose(
-            _plan("\nLMCACHE_ENABLE=true\n"), "env", "abc")
+            _plan("\nLMCACHE_ENABLE=true\n"), ["env"], "abc")
         self.assertEqual(body.count("ipv4_address:"), 8 * 3 + 7)
         self.assertIn("ipv4_address: 172.31.0.12", body)
         self.assertIn("ipv4_address: 172.31.0.14", body)
 
     def test_directory_exporter_is_scraped(self):
         body = gen_compose.render_prometheus(
-            _plan("\nLMCACHE_ENABLE=true\n"), "env", "abc")
+            _plan("\nLMCACHE_ENABLE=true\n"), ["env"], "abc")
         self.assertIn("job_name: lmcache-directory", body)
         self.assertIn('targets: ["172.31.0.14:9841"]', body)
 
     def test_prometheus_data_is_a_bind_mount_not_a_named_volume(self):
         # A named volume puts the TSDB under /var/lib/docker/volumes as root,
         # where the next fleet of a different size silently reuses it.
-        body = gen_compose.render_compose(_plan(), "env", "abc")
+        body = gen_compose.render_compose(_plan(), ["env"], "abc")
         self.assertIn("- /var/lib/qemu-tool/prom-data:/prometheus", body)
         
         # and it must not reappear as a declared volume
@@ -192,7 +209,7 @@ class TestRender(unittest.TestCase):
 
     def test_prometheus_data_dir_is_overridable(self):
         body = gen_compose.render_compose(
-            _plan("\nPROM_DATA_DIR=/srv/fleet-runs/run-7/tsdb\n"), "env", "abc")
+            _plan("\nPROM_DATA_DIR=/srv/fleet-runs/run-7/tsdb\n"), ["env"], "abc")
         self.assertIn("- /srv/fleet-runs/run-7/tsdb:/prometheus", body)
 
     def test_every_service_bounds_its_log(self):
@@ -200,7 +217,7 @@ class TestRender(unittest.TestCase):
         # manager wrote 295 GB in two days before this existed. Services
         # inherit the cap through the two commons, so assert the anchor is
         # defined once and merged everywhere a service can come from.
-        body = gen_compose.render_compose(_plan(), "env", "abc")
+        body = gen_compose.render_compose(_plan(), ["env"], "abc")
         self.assertIn('x-logging: &logging', body)
         self.assertIn('max-size: "50m"', body)
         self.assertIn('max-file: "3"', body)
@@ -213,7 +230,7 @@ class TestRender(unittest.TestCase):
 
     def test_log_cap_is_overridable(self):
         body = gen_compose.render_compose(
-            _plan("\nLOG_MAX_SIZE=10m\nLOG_MAX_FILE=5\n"), "env", "abc")
+            _plan("\nLOG_MAX_SIZE=10m\nLOG_MAX_FILE=5\n"), ["env"], "abc")
         self.assertIn('max-size: "10m"', body)
         self.assertIn('max-file: "5"', body)
 
@@ -222,7 +239,7 @@ class TestRender(unittest.TestCase):
         # node's GID set does not fail at startup -- the mesh routes the
         # payload to the wrong node and the transfer dies with "Completion
         # with error at client", which is very hard to attribute.
-        body = gen_compose.render_compose(_plan(), "env", "abc")
+        body = gen_compose.render_compose(_plan(), ["env"], "abc")
         for n, last in ((1, "1"), (2, "2"), (8, "8")):
             blk = body[body.index(f"  ernic-{n}:"):]
             blk = blk[:blk.index("healthcheck:")]
@@ -231,13 +248,13 @@ class TestRender(unittest.TestCase):
                 f"192.168.100.{10 + n}", blk)
 
     def test_guest_gids_are_not_in_the_shared_anchor(self):
-        body = gen_compose.render_compose(_plan(), "env", "abc")
+        body = gen_compose.render_compose(_plan(), ["env"], "abc")
         anchor = body[body.index("x-ernic-common:"):body.index("x-qemu-common:")]
         self.assertNotIn("ERNIC_TCP_GUEST_GIDS", anchor)
 
     def test_ernic_debug_mesh_is_gone(self):
         # Removed upstream in Stage 1; emitting it is now just noise.
-        body = gen_compose.render_compose(_plan(), "env", "abc")
+        body = gen_compose.render_compose(_plan(), ["env"], "abc")
         self.assertNotIn("ERNIC_DEBUG_MESH", body)
 
     def test_link_local_gid_is_canonical_eui64(self):
@@ -252,13 +269,13 @@ class TestRender(unittest.TestCase):
                          "fe80::ff:fe00:1")
 
     def test_tap_is_off_by_default(self):
-        body = gen_compose.render_compose(_plan(), "env", "abc")
+        body = gen_compose.render_compose(_plan(), ["env"], "abc")
         self.assertNotIn("tapsetup-1:", body)
         self.assertNotIn("/dev/net/tun", body)
         self.assertIn("    command:\n      - \"rocm-ernic\"", body)
 
     def test_tap_adds_a_sidecar_per_ernic_and_a_shared_l2(self):
-        body = gen_compose.render_compose(_plan("\nERNIC_TAP=true\n"), "e", "a")
+        body = gen_compose.render_compose(_plan("\nERNIC_TAP=true\n"), ["e"], "a")
         self.assertEqual(body.count("build: ./tapsetup"), 8)
         self.assertIn('network_mode: "service:ernic-8"', body)
         self.assertIn("  l2:\n    driver: bridge", body)
@@ -266,7 +283,7 @@ class TestRender(unittest.TestCase):
     def test_tap_keeps_net_admin_out_of_the_long_lived_service(self):
         # rocm-ernic attaches to a pre-created owned tap with only the device
         # node; NET_ADMIN belongs to the sidecar that exits.
-        body = gen_compose.render_compose(_plan("\nERNIC_TAP=true\n"), "e", "a")
+        body = gen_compose.render_compose(_plan("\nERNIC_TAP=true\n"), ["e"], "a")
         ernic1 = body[body.index("  ernic-1:"):body.index("  ernic-2:")]
         self.assertIn("- /dev/net/tun", ernic1)
         self.assertNotIn("cap_add", ernic1)
@@ -275,7 +292,7 @@ class TestRender(unittest.TestCase):
     def test_tap_entrypoint_waits_for_the_tap_before_exec(self):
         # The sidecar shares this netns, so it cannot run until the container
         # is already up -- the tap does not exist at process start.
-        body = gen_compose.render_compose(_plan("\nERNIC_TAP=true\n"), "e", "a")
+        body = gen_compose.render_compose(_plan("\nERNIC_TAP=true\n"), ["e"], "a")
         self.assertIn("until [ -e /sys/class/net/tap0 ]", body)
         self.assertIn("exec rocm-ernic", body)
         self.assertIn("'-T' 'tap0'", body)
@@ -283,13 +300,13 @@ class TestRender(unittest.TestCase):
     def test_ernic_services_raise_the_file_descriptor_limit(self):
         # Docker's 1024 default is reached by the manager's fd leak on node
         # eviction well inside a fleet-length run; see AGENTS.md issue 15.
-        body = gen_compose.render_compose(_plan(), "env", "abc")
+        body = gen_compose.render_compose(_plan(), ["env"], "abc")
         self.assertIn("  ulimits:\n    nofile:\n      soft: 65536", body)
 
     def test_manager_healthcheck_proves_the_tcp_port_listens(self):
         # Workers gate on this condition and then dial the manager's TCP
         # port; a socket-file test says nothing about that listener.
-        body = gen_compose.render_compose(_plan(), "env", "abc")
+        body = gen_compose.render_compose(_plan(), ["env"], "abc")
         head = body[body.index("  ernic-1:"):body.index("  ernic-2:")]
         self.assertIn("/proc/net/tcp", head)
         self.assertIn(":18B0$", head)    # 6320, the port, in the hex /proc uses
@@ -299,48 +316,150 @@ class TestRender(unittest.TestCase):
         # The manager never closes a connection that disconnects without
         # registering, so a connecting check leaks one of its fds every
         # interval -- 28/min measured on a healthy 32-VM fleet.
-        body = gen_compose.render_compose(_plan(), "env", "abc")
+        body = gen_compose.render_compose(_plan(), ["env"], "abc")
         head = body[body.index("  ernic-1:"):body.index("  ernic-2:")]
         self.assertNotIn("create_connection", head)
 
     def test_manager_healthcheck_tracks_a_custom_tcp_port(self):
         body = gen_compose.render_compose(
-            _plan("\nERNIC_TCP_PORT=7000\n"), "env", "abc")
+            _plan("\nERNIC_TCP_PORT=7000\n"), ["env"], "abc")
         head = body[body.index("  ernic-1:"):body.index("  ernic-2:")]
         self.assertIn(":1B58$", head)    # 7000
 
     def test_manager_does_not_restart(self):
         """AGENTS.md issue 7: a manager restart wedges every guest on a DSR
         timeout that only `down && up` clears, so a crash must stay visible."""
-        body = gen_compose.render_compose(_plan(), "env", "abc")
+        body = gen_compose.render_compose(_plan(), ["env"], "abc")
         head = body[body.index("  ernic-1:"):body.index("  ernic-2:")]
         self.assertIn('restart: "no"', head)
         self.assertNotIn("on-failure", head)
 
     def test_each_vm_gets_only_its_own_sockets(self):
-        body = gen_compose.render_compose(_plan(), "env", "abc")
+        body = gen_compose.render_compose(_plan(), ["env"], "abc")
         self.assertIn(
             '--vfio-userdev "/run/vfu/ernic-3.sock,/run/vfu/rocjitsu-3.sock"', body
         )
 
     def test_output_is_deterministic(self):
         # --check in CI is only meaningful if regeneration is byte-stable.
-        a = gen_compose.render_compose(_plan(), "env", "abc")
-        b = gen_compose.render_compose(_plan(), "env", "abc")
+        a = gen_compose.render_compose(_plan(), ["env"], "abc")
+        b = gen_compose.render_compose(_plan(), ["env"], "abc")
         self.assertEqual(a, b)
 
     def test_provenance_round_trips(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "docker-compose.yml"
-            out.write_text(gen_compose.render_compose(_plan(), "env", "cafef00d"))
+            out.write_text(gen_compose.render_compose(_plan(), ["env"], "cafef00d"))
             self.assertEqual(gen_compose.recorded_digest(out), "cafef00d")
 
     def test_prometheus_targets_the_containers_not_the_guests(self):
         # The guests are behind SLIRP and have no address on this network.
-        body = gen_compose.render_prometheus(_plan(), "env", "abc")
+        body = gen_compose.render_prometheus(_plan(), ["env"], "abc")
         self.assertIn('targets: ["172.31.3.1:9100"]', body)
         self.assertIn('targets: ["172.31.3.8:9100"]', body)
         self.assertIn('targets: ["172.31.0.10:9840"]', body)
+
+
+class TestEnvFileLayering(unittest.TestCase):
+    """--env-file is repeatable, and the provenance header records every layer.
+
+    The header is a CI gate (Gen Compose Check), so it has to round-trip
+    exactly and it has to invalidate on a change to ANY layer -- an overlay is
+    as much an input to the render as the golden file under it.
+    """
+
+    def test_overlay_overrides_a_golden_key(self):
+        spec = _plan(layers=["VM_COUNT=2\n"])
+        self.assertEqual(spec["count"], 2)
+
+    def test_key_absent_from_overlay_is_inherited(self):
+        spec = _plan(layers=["VM_COUNT=2\n"])
+        for vm in spec["vms"]:
+            # VM_VMEM is set only in the golden layer.
+            self.assertIn(("--vmem", "8192"), vm["flags"])
+
+    def test_header_names_every_layer_in_order(self):
+        body = gen_compose.render_compose(
+            _plan(), ["qemu/env/scale-out", "qemu/env/overlay-ci"], "abc")
+        named = [line[len("# env-file: "):] for line in body.splitlines()
+                 if line.startswith("# env-file: ")]
+        self.assertEqual(named, ["qemu/env/scale-out", "qemu/env/overlay-ci"])
+
+    def test_regenerate_comment_reproduces_the_render(self):
+        names = ["qemu/env/scale-out", "qemu/env/overlay-ci"]
+        body = gen_compose.render_compose(_plan(), names, "abc")
+        self.assertIn(
+            "#   qemu-tool gen-compose --env-file qemu/env/scale-out "
+            "--env-file qemu/env/overlay-ci",
+            body,
+        )
+
+    def test_provenance_round_trips_with_two_layers(self):
+        names = ["qemu/env/scale-out", "qemu/env/overlay-ci"]
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "docker-compose.yml"
+            out.write_text(gen_compose.render_compose(_plan(), names, "cafef00d"))
+            self.assertEqual(gen_compose.recorded_digest(out), "cafef00d")
+            self.assertEqual(gen_compose.recorded_env_files(out), names)
+
+    def test_old_single_file_header_still_parses(self):
+        # /var/lib/qemu-tool/stacks/mi100-fleet was generated before layering
+        # and _warn_if_stale still reads it.
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "docker-compose.yml"
+            out.write_text(
+                "---\n"
+                "# Generated by `qemu-tool gen-compose`. Do not edit.\n"
+                "# env-file: qemu/env.scale-out-mi100\n"
+                "# env-sha256: deadbeef\n"
+            )
+            self.assertEqual(gen_compose.recorded_digest(out), "deadbeef")
+
+    def test_digest_changes_when_either_layer_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            golden = Path(tmp) / "golden"
+            overlay = Path(tmp) / "overlay"
+            golden.write_text("VM_COUNT=8\n")
+            overlay.write_text("VM_COUNT=2\n")
+            both = gen_compose.env_digest([golden, overlay])
+
+            golden.write_text("VM_COUNT=9\n")
+            self.assertNotEqual(gen_compose.env_digest([golden, overlay]), both)
+
+            golden.write_text("VM_COUNT=8\n")
+            self.assertEqual(gen_compose.env_digest([golden, overlay]), both)
+            overlay.write_text("VM_COUNT=3\n")
+            self.assertNotEqual(gen_compose.env_digest([golden, overlay]), both)
+
+    def test_single_layer_digest_is_the_file_digest(self):
+        # The committed stack was generated before layering; its recorded
+        # digest has to keep matching or every `compose up` warns.
+        with tempfile.TemporaryDirectory() as tmp:
+            golden = Path(tmp) / "golden"
+            golden.write_text("VM_COUNT=8\n")
+            self.assertEqual(
+                gen_compose.env_digest([golden]),
+                hashlib.sha256(golden.read_bytes()).hexdigest(),
+            )
+            self.assertEqual(
+                gen_compose.env_digest(golden), gen_compose.env_digest([golden]))
+
+    def test_single_layer_header_is_unchanged(self):
+        body = gen_compose.render_compose(_plan(), ["env.scale-out"], "abc")
+        self.assertIn("# Regenerate after changing env.scale-out:\n", body)
+        self.assertIn("#   qemu-tool gen-compose --env-file env.scale-out\n", body)
+        self.assertIn("# env-file: env.scale-out\n", body)
+        self.assertIn("# env-sha256: abc\n", body)
+        self.assertEqual(body.count("# env-file: "), 1)
+
+    def test_missing_layer_names_the_offending_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            golden = Path(tmp) / "golden"
+            golden.write_text("VM_COUNT=8\n")
+            missing = Path(tmp) / "overlay-typo"
+            with self.assertRaises(SystemExit) as caught:
+                envfile.find([golden, missing])
+            self.assertIn("overlay-typo", str(caught.exception))
 
 
 class TestLMCache(unittest.TestCase):
@@ -352,14 +471,14 @@ class TestLMCache(unittest.TestCase):
 
     def test_off_by_default(self):
         # An env file predating the feature must regenerate unchanged.
-        compose = gen_compose.render_compose(_plan(), "env", "abc")
-        prom = gen_compose.render_prometheus(_plan(), "env", "abc")
+        compose = gen_compose.render_compose(_plan(), ["env"], "abc")
+        prom = gen_compose.render_prometheus(_plan(), ["env"], "abc")
         self.assertNotIn("lmcache-coordinator", compose)
         self.assertNotIn("lmcache", prom)
 
     def test_coordinator_is_behind_its_own_profile(self):
         body = gen_compose.render_compose(
-            _plan("\nLMCACHE_ENABLE=true\n"), "env", "abc")
+            _plan("\nLMCACHE_ENABLE=true\n"), ["env"], "abc")
         head = body[body.index("  lmcache-coordinator:"):]
         self.assertIn("profiles: [lmcache]", head)
         self.assertIn("      - lmcache\n      - coordinator", head)
@@ -370,7 +489,7 @@ class TestLMCache(unittest.TestCase):
         # never sends, so pairing the two leaves every guest registered with
         # nothing -- and nothing errors.
         body = gen_compose.render_compose(
-            _plan("\nLMCACHE_ENABLE=true\n"), "env", "abc")
+            _plan("\nLMCACHE_ENABLE=true\n"), ["env"], "abc")
         self.assertIn("      - lmcache\n      - coordinator", body)
         self.assertNotIn("lmcache_controller", body)
 
@@ -379,8 +498,8 @@ class TestLMCache(unittest.TestCase):
         # rather than erroring, so the generator is the only thing keeping
         # them in step.
         spec = _plan("\nLMCACHE_ENABLE=true\nLMCACHE_CHUNK_SIZE=512\n")
-        body = gen_compose.render_compose(spec, "env", "abc")
-        inventory = gen_compose.render_inventory(spec, "env", "abc")
+        body = gen_compose.render_compose(spec, ["env"], "abc")
+        inventory = gen_compose.render_inventory(spec, ["env"], "abc")
         self.assertIn("      - --chunk-size\n      - \"512\"", body)
         self.assertIn("lmcache_guest_chunk_size: 512", inventory)
 
@@ -388,7 +507,7 @@ class TestLMCache(unittest.TestCase):
         # Same reason as fleet-node: the worker is inside a guest behind
         # SLIRP, so the qemu container is the target and hostfwd bridges it.
         body = gen_compose.render_prometheus(
-            _plan("\nLMCACHE_ENABLE=true\n"), "env", "abc")
+            _plan("\nLMCACHE_ENABLE=true\n"), ["env"], "abc")
         self.assertIn("job_name: lmcache-server", body)
         self.assertIn('targets: ["172.31.3.1:9500"]', body)
         self.assertIn('targets: ["172.31.3.8:9500"]', body)
@@ -412,13 +531,13 @@ class TestPublishing(unittest.TestCase):
     """
 
     def test_state_dirs_are_absolute(self):
-        body = gen_compose.render_compose(_plan(), "env", "abc")
+        body = gen_compose.render_compose(_plan(), ["env"], "abc")
         self.assertIn("- /var/lib/qemu-tool/prom-data:/prometheus", body)
         self.assertIn("- /var/lib/qemu-tool/grafana-data:/var/lib/grafana", body)
 
     def test_published_ports_carry_the_bind_address(self):
         body = gen_compose.render_compose(
-            _plan("\nLMCACHE_ENABLE=true\n"), "env", "abc")
+            _plan("\nLMCACHE_ENABLE=true\n"), ["env"], "abc")
         self.assertIn('"0.0.0.0:9090:9090"', body)
         self.assertIn('"0.0.0.0:3000:3000"', body)
         self.assertIn('"0.0.0.0:9300:9300"', body)
@@ -427,7 +546,7 @@ class TestPublishing(unittest.TestCase):
         # Grafana runs with anonymous admin, so this is the only thing
         # deciding who can reach it on a shared host.
         body = gen_compose.render_compose(
-            _plan("\nPUBLISH_BIND_ADDR=127.0.0.1\n"), "env", "abc")
+            _plan("\nPUBLISH_BIND_ADDR=127.0.0.1\n"), ["env"], "abc")
         self.assertIn('"127.0.0.1:3000:3000"', body)
         self.assertNotIn('"0.0.0.0:', body)
 
@@ -436,7 +555,7 @@ class TestPublishing(unittest.TestCase):
         # its own /16 and fixed addresses, and prometheus.yml scrapes those
         # addresses directly.
         body = gen_compose.render_compose(
-            _plan("\nLMCACHE_ENABLE=true\n"), "env", "abc")
+            _plan("\nLMCACHE_ENABLE=true\n"), ["env"], "abc")
         services = body.count("\n  ") and body
         self.assertEqual(
             body.count("ipv4_address:"), body.count("      fleet:"))
@@ -451,7 +570,7 @@ class TestLogs(unittest.TestCase):
     """
 
     def test_loki_and_alloy_ride_the_metrics_profile(self):
-        body = gen_compose.render_compose(_plan(), "env", "abc")
+        body = gen_compose.render_compose(_plan(), ["env"], "abc")
         for svc in ("\n  loki:", "\n  alloy:"):
             self.assertIn(svc, body)
         head = body[body.index("\n  loki:"):body.index("\n  alloy:")]
@@ -460,25 +579,25 @@ class TestLogs(unittest.TestCase):
     def test_alloy_gets_the_docker_socket_read_only(self):
         # It only ever reads logs and container metadata; a writable socket
         # here would be root on the host.
-        body = gen_compose.render_compose(_plan(), "env", "abc")
+        body = gen_compose.render_compose(_plan(), ["env"], "abc")
         self.assertIn("/var/run/docker.sock:/var/run/docker.sock:ro", body)
 
     def test_loki_data_is_an_absolute_bind_mount(self):
         # Same reason as the TSDB: a relative path resolves against the stack
         # directory, which for an installed qemu-tool is inside site-packages.
-        body = gen_compose.render_compose(_plan(), "env", "abc")
+        body = gen_compose.render_compose(_plan(), ["env"], "abc")
         self.assertIn("- /var/lib/qemu-tool/loki-data:/loki", body)
 
     def test_guests_are_told_where_loki_is(self):
         # By fleet address: SLIRP NATs guest egress out through the qemu
         # container, which is on that network.
-        inventory = gen_compose.render_inventory(_plan(), "env", "abc")
+        inventory = gen_compose.render_inventory(_plan(), ["env"], "abc")
         self.assertIn("lmcache_guest_loki_url: http://172.31.0.15:3100",
                       inventory)
 
     def test_can_be_turned_off(self):
         body = gen_compose.render_compose(
-            _plan("\nLOGS_ENABLE=false\n"), "env", "abc")
+            _plan("\nLOGS_ENABLE=false\n"), ["env"], "abc")
         self.assertNotIn("\n  loki:", body)
         self.assertNotIn("\n  alloy:", body)
 
@@ -487,7 +606,7 @@ class TestGrafana(unittest.TestCase):
     def test_rides_the_metrics_profile(self):
         # Grafana without Prometheus is an empty dashboard, so it opts in with
         # the same flag rather than inventing a third one.
-        body = gen_compose.render_compose(_plan(), "env", "abc")
+        body = gen_compose.render_compose(_plan(), ["env"], "abc")
         head = body[body.index("  grafana:"):body.index("\nnetworks:")]
         self.assertIn("profiles: [metrics]", head)
         self.assertIn("/etc/grafana/provisioning:ro", head)
@@ -497,7 +616,7 @@ class TestGrafana(unittest.TestCase):
         # Alloy services bind-mount paths under ./grafana/, so "grafana"
         # appears in the file even with the dashboard turned off.
         body = gen_compose.render_compose(
-            _plan("\nGRAFANA_ENABLE=false\n"), "env", "abc")
+            _plan("\nGRAFANA_ENABLE=false\n"), ["env"], "abc")
         self.assertNotIn("\n  grafana:", body)
 
 
@@ -507,7 +626,7 @@ class TestInventory(unittest.TestCase):
     reports success."""
 
     def test_one_host_per_vm_with_its_ssh_port_and_guest_ip(self):
-        body = gen_compose.render_inventory(_plan(), "env", "abc")
+        body = gen_compose.render_inventory(_plan(), ["env"], "abc")
         self.assertIn("        fleet-1:", body)
         self.assertIn("          ansible_port: 2222", body)
         self.assertIn("          fleet_guest_ip: 192.168.100.11", body)
@@ -522,7 +641,7 @@ class TestInventory(unittest.TestCase):
         # fleet address resolves from inside a guest with nothing published,
         # and unlike 10.0.2.2 it names the coordinator rather than whatever
         # else the container happens to serve.
-        body = gen_compose.render_inventory(_plan(), "env", "abc")
+        body = gen_compose.render_inventory(_plan(), ["env"], "abc")
         self.assertIn(
             "lmcache_guest_coordinator_url: http://172.31.0.12:9300", body)
         self.assertNotIn("10.0.2.2", body)
@@ -532,15 +651,15 @@ class TestInventory(unittest.TestCase):
         # inventory_hostname, so a Grafana panel can join a scraped series to
         # a controller query with no lookup table in between.
         spec = _plan("\nLMCACHE_ENABLE=true\n")
-        inventory = gen_compose.render_inventory(spec, "env", "abc")
-        prom = gen_compose.render_prometheus(spec, "env", "abc")
+        inventory = gen_compose.render_inventory(spec, ["env"], "abc")
+        prom = gen_compose.render_prometheus(spec, ["env"], "abc")
         self.assertIn("        fleet-3:", inventory)
         self.assertIn('lmcache_instance_id: "fleet-3"', prom)
 
     def test_provenance_round_trips(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "fleet-inventory.yml"
-            out.write_text(gen_compose.render_inventory(_plan(), "env", "beef"))
+            out.write_text(gen_compose.render_inventory(_plan(), ["env"], "beef"))
             self.assertEqual(gen_compose.recorded_digest(out), "beef")
 
 
@@ -554,14 +673,14 @@ class TestNVMe(unittest.TestCase):
     """
 
     def test_absent_by_default(self):
-        self.assertNotIn("--nvme", gen_compose.render_compose(_plan(), "e", "d"))
+        self.assertNotIn("--nvme", gen_compose.render_compose(_plan(), ["e"], "d"))
 
     def test_a_bare_count_is_forwarded(self):
-        out = gen_compose.render_compose(_plan("\nVM_NVME=1\n"), "e", "d")
+        out = gen_compose.render_compose(_plan("\nVM_NVME=1\n"), ["e"], "d")
         self.assertIn('--nvme "1"', out)
 
     def test_every_vm_gets_one(self):
-        out = gen_compose.render_compose(_plan("\nVM_NVME=1\n"), "e", "d")
+        out = gen_compose.render_compose(_plan("\nVM_NVME=1\n"), ["e"], "d")
         self.assertEqual(out.count('--nvme "1"'), 8)
 
     # VM_NVME names a str field, so commas are the PER-VM SPLIT here, not
@@ -596,13 +715,13 @@ class TestHostShare(unittest.TestCase):
     """
 
     def test_absent_by_default(self):
-        out = gen_compose.render_compose(_plan(), "e", "d")
+        out = gen_compose.render_compose(_plan(), ["e"], "d")
         self.assertNotIn("--filesystem", out)
         self.assertNotIn("hostfs", out)
 
     def test_the_flag_and_the_bind_mount_name_the_same_path(self):
         out = gen_compose.render_compose(
-            _plan("\nVM_FILESYSTEM=/srv/fleet-share\n"), "e", "d")
+            _plan("\nVM_FILESYSTEM=/srv/fleet-share\n"), ["e"], "d")
         self.assertIn('--filesystem "/srv/fleet-share"', out)
         self.assertIn('"/srv/fleet-share:/srv/fleet-share:ro"', out)
 
@@ -610,13 +729,13 @@ class TestHostShare(unittest.TestCase):
         # N guests mount one host directory at once. Read-write would let any
         # one of them corrupt the artifact the other N-1 are still loading.
         out = gen_compose.render_compose(
-            _plan("\nVM_FILESYSTEM=/srv/fleet-share\n"), "e", "d")
+            _plan("\nVM_FILESYSTEM=/srv/fleet-share\n"), ["e"], "d")
         self.assertNotIn('"/srv/fleet-share:/srv/fleet-share"', out)
 
     def test_it_is_mounted_once_on_the_common_anchor(self):
         # Not per service: the point of the share is one copy for the fleet.
         out = gen_compose.render_compose(
-            _plan("\nVM_FILESYSTEM=/srv/fleet-share\n"), "e", "d")
+            _plan("\nVM_FILESYSTEM=/srv/fleet-share\n"), ["e"], "d")
         self.assertEqual(out.count('"/srv/fleet-share:/srv/fleet-share:ro"'), 1)
 
 
@@ -630,25 +749,25 @@ class TestVfioUserRootPort(unittest.TestCase):
 
     def test_off_by_default(self):
         self.assertNotIn("--vfio-user-root-port",
-                         gen_compose.render_compose(_plan(), "e", "d"))
+                         gen_compose.render_compose(_plan(), ["e"], "d"))
 
     def test_enabled_for_every_vm(self):
         out = gen_compose.render_compose(
-            _plan("\nVM_VFIO_USER_ROOT_PORT=true\n"), "e", "d")
+            _plan("\nVM_VFIO_USER_ROOT_PORT=true\n"), ["e"], "d")
         self.assertEqual(out.count("--vfio-user-root-port"), 8)
 
     # It is emitted outside _VM_FLAGS because that renders --flag "value"
     # pairs, and a bare boolean given a value would be rejected by run-vm.
     def test_emitted_as_a_bare_flag_with_no_value(self):
         out = gen_compose.render_compose(
-            _plan("\nVM_VFIO_USER_ROOT_PORT=true\n"), "e", "d")
+            _plan("\nVM_VFIO_USER_ROOT_PORT=true\n"), ["e"], "d")
         self.assertNotIn('--vfio-user-root-port "', out)
 
     def test_false_is_off_rather_than_a_literal(self):
         # _flag() parses it; a plain truthiness test on the string "false"
         # would turn the documented way of disabling it into enabling it.
         out = gen_compose.render_compose(
-            _plan("\nVM_VFIO_USER_ROOT_PORT=false\n"), "e", "d")
+            _plan("\nVM_VFIO_USER_ROOT_PORT=false\n"), ["e"], "d")
         self.assertNotIn("--vfio-user-root-port", out)
 
 
@@ -693,6 +812,356 @@ class TestRunVMRootPort(unittest.TestCase):
             args = " ".join(self._args(root_port))
             self.assertIn("/run/vfu/ernic-1.sock", args)
             self.assertIn("/run/vfu/rocjitsu-1.sock", args)
+
+
+class TestStackAssets(unittest.TestCase):
+    """The asset copy is authoritative over the directories it owns.
+
+    The scenario each test is built from is the one that cost the 32-VM fleet
+    two hours of metrics: grafana/provisioning/datasources/ held a hand-made
+    prom.yml AND the repo's prometheus.yml, both default, and Grafana refuses
+    to provision two default datasources. Additive copying could never clear
+    it. The other half of the job is what must NOT be deleted -- in that same
+    directory, 2.4 GB of TSDB.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+        # ERNIC_TAP brings in the tapsetup build context, so all three
+        # owned asset directories are in play.
+        self.body = gen_compose.render_compose(
+            _plan("\nERNIC_TAP=true\n"), ["env"], "abc")
+        self.generated = {
+            "docker-compose.yml", "prometheus.yml", "fleet-inventory.yml"}
+
+    def _generate(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            gen_compose._copy_stack_assets(self.body, self.generated, self.tmp)
+        return out.getvalue()
+
+    def test_a_superseded_datasource_is_removed_and_named(self):
+        stale = self.tmp / DATASOURCES / "prom.yml"
+        stale.parent.mkdir(parents=True)
+        stale.write_text("name: Prometheus\nisDefault: true\n")
+        output = self._generate()
+        self.assertFalse(stale.exists())
+        self.assertIn("prom.yml", output)
+        self.assertIn("Removed", output)
+        self.assertTrue(
+            (self.tmp / DATASOURCES / "prometheus.yml").is_file())
+
+    def test_a_hand_renamed_file_goes_too(self):
+        # The live fleet's prom.yml.superseded-20261019, renamed by hand
+        # during the repair. Removing it is correct and is exactly the
+        # surprise worth printing.
+        stale = (self.tmp
+                 / "grafana/provisioning/datasources/prom.yml.superseded-20261019")
+        stale.parent.mkdir(parents=True)
+        stale.write_text("name: Prometheus\n")
+        output = self._generate()
+        self.assertFalse(stale.exists())
+        self.assertIn("prom.yml.superseded-20261019", output)
+
+    def test_operator_state_is_untouched(self):
+        # Everything the generator does not own, as the live fleet has it.
+        tsdb = self.tmp / "prom-data/chunks_head/000001"
+        tsdb.parent.mkdir(parents=True)
+        tsdb.write_text("tsdb")
+        keep = {
+            self.tmp / "docker-compose.override.yml": "services: {}\n",
+            self.tmp / "soak.sh": "#!/bin/bash\n",
+            self.tmp / "results/run1.json": "{}\n",
+            self.tmp / "grafana-data/grafana.db": "db\n",
+            self.tmp / "loki-data/index": "idx\n",
+        }
+        for path, text in keep.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text)
+        self._generate()
+        self.assertEqual(tsdb.read_text(), "tsdb")
+        for path, text in keep.items():
+            self.assertEqual(path.read_text(), text, path)
+
+    def test_a_fresh_directory_gets_every_file(self):
+        # The property the function existed for: a missing bind-mount source
+        # is created by Docker as a directory, and loki crash-loops on a
+        # config that is a directory.
+        self._generate()
+        source = REPO_ROOT / "qemu/compose/vfio-user-ernic-rocjitsu-scale-out"
+        for name in ("grafana", "logging", "tapsetup"):
+            for src in (source / name).rglob("*"):
+                dst = self.tmp / name / src.relative_to(source / name)
+                self.assertEqual(src.is_dir(), dst.is_dir(), dst)
+                if src.is_file():
+                    self.assertEqual(src.read_bytes(), dst.read_bytes(), dst)
+
+    def test_a_nested_tree_is_mirrored_at_every_level(self):
+        stale_dir = self.tmp / "grafana/dashboards/old-fleet32"
+        stale_dir.mkdir(parents=True)
+        (stale_dir / "rdma.json").write_text("{}")
+        (self.tmp / "logging").mkdir()
+        (self.tmp / "logging/alloy-host.alloy").write_text("stale")
+        self._generate()
+        self.assertFalse(stale_dir.exists())
+        self.assertTrue((self.tmp / "grafana/dashboards/fleet/fleet.json").is_file())
+        self.assertNotEqual(
+            (self.tmp / "logging/alloy-host.alloy").read_text(), "stale")
+
+    def test_a_directory_docker_left_where_a_file_belongs_is_cleared(self):
+        config = self.tmp / "logging/loki-config.yml"
+        config.mkdir(parents=True)
+        self._generate()
+        self.assertTrue(config.is_file())
+
+    def test_a_data_dir_named_in_the_compose_file_is_still_not_owned(self):
+        # Ownership needs BOTH a `./name` reference and a source of that name
+        # in the repo. A relative PROM_DATA_DIR satisfies only the first.
+        body = self.body + "\n      - ./prom-data:/prometheus\n"
+        owned = gen_compose._owned_assets(body, self.generated, self.tmp)
+        self.assertNotIn("prom-data", [dst.name for _, dst in owned])
+        self.assertEqual(
+            sorted(dst.name for _, dst in owned),
+            ["grafana", "logging", "tapsetup"])
+
+    def test_the_committed_stack_is_never_mirrored_onto_itself(self):
+        source = REPO_ROOT / "qemu/compose/vfio-user-ernic-rocjitsu-scale-out"
+        self.assertEqual(
+            gen_compose._owned_assets(self.body, self.generated, source), [])
+
+    def test_check_reports_a_superseded_file(self):
+        # --check is the gate meant to catch this, and a file-by-file
+        # comparison of the generated artifacts cannot see it: nothing is out
+        # of date, there is one file too many.
+        source = REPO_ROOT / "qemu/compose/vfio-user-ernic-rocjitsu-scale-out"
+        shutil.copytree(source / "grafana", self.tmp / "grafana")
+        (self.tmp / "grafana/provisioning/datasources/prom.yml").write_text("x")
+        extra = gen_compose._superseded(
+            source / "grafana", self.tmp / "grafana")
+        self.assertEqual([p.name for p in extra], ["prom.yml"])
+
+
+class TestStackAssetSymlinks(unittest.TestCase):
+    """A symlink on an owned path takes the mirror outside the stack.
+
+    The invariant: this code may delete nothing that is not inside the output
+    directory itself. pathlib's rglob does not follow a symlinked
+    subdirectory, but it does descend when the starting path is itself a
+    symlink, so an operator who kept dashboards on a big disk with
+    `ln -s /srv/grafana-shared <stack>/grafana` had /srv/grafana-shared
+    emptied -- and the `Removed` lines named the path through the symlink, so
+    the log never said which directory had actually been emptied.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.stack = self.tmp / "stack"
+        self.stack.mkdir()
+        self.outside = self.tmp / "srv"
+        self.outside.mkdir()
+        self.body = gen_compose.render_compose(
+            _plan("\nERNIC_TAP=true\n"), ["env"], "abc")
+        self.generated = {
+            "docker-compose.yml", "prometheus.yml", "fleet-inventory.yml"}
+
+    def _generate(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            with self.assertRaises(SystemExit):
+                gen_compose._copy_stack_assets(
+                    self.body, self.generated, self.stack)
+        return out.getvalue()
+
+    def test_a_symlinked_asset_directory_is_refused(self):
+        victim = self.outside / "dashboards.json"
+        victim.write_text("operator's own")
+        (self.stack / "grafana").symlink_to(self.outside)
+        output = self._generate()
+        self.assertEqual(victim.read_text(), "operator's own")
+        self.assertEqual([p.name for p in self.outside.iterdir()],
+                         ["dashboards.json"])
+        self.assertNotIn("Removed", output)
+        self.assertIn("symlink", output)
+        self.assertIn("grafana", output)
+        # The other owned directories are still mirrored: one refused asset
+        # is not a reason to leave the stack without its loki config.
+        self.assertTrue((self.stack / "logging/loki-config.yml").is_file())
+
+    def test_a_symlinked_asset_subdirectory_is_refused(self):
+        victim = self.outside / "prom.yml"
+        victim.write_text("operator's own")
+        (self.stack / "grafana/provisioning").mkdir(parents=True)
+        (self.stack / "grafana/provisioning/datasources").symlink_to(
+            self.outside)
+        output = self._generate()
+        self.assertEqual(victim.read_text(), "operator's own")
+        self.assertFalse((self.outside / "prometheus.yml").exists())
+        self.assertIn("symlink", output)
+        self.assertIn("datasources", output)
+
+    def test_a_symlinked_file_on_an_owned_path_is_not_written_through(self):
+        # Same escape, writing rather than deleting: the relative path matches
+        # the repo's, so it is not superseded, and copy2 would follow the link
+        # and overwrite a file outside the stack.
+        victim = self.outside / "prom.yml"
+        victim.write_text("operator's own")
+        datasources = self.stack / "grafana/provisioning/datasources"
+        datasources.mkdir(parents=True)
+        (datasources / "prometheus.yml").symlink_to(victim)
+        self._generate()
+        self.assertEqual(victim.read_text(), "operator's own")
+
+
+class TestStackAssetCheck(unittest.TestCase):
+    """--check answers "would a regeneration change anything".
+
+    It used to answer only "would a regeneration delete anything": it
+    enumerated the destination and reported what the repo did not have, so
+    `rm stack/logging/loki-config.yml` left --check printing "Up to date" for
+    a stack that cannot boot. Docker recreates that bind-mount source as a
+    directory and loki crash-loops on `read /etc/loki/config.yml: is a
+    directory` -- the exact failure the asset copy exists to prevent.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.env = self.tmp / "env"
+        self.env.write_text(_BASE_ENV + "\nERNIC_TAP=true\n")
+        self.out = self.tmp / "stack"
+        with contextlib.redirect_stdout(io.StringIO()):
+            gen_compose.run(self.env, self.out)
+
+    def _check(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            try:
+                gen_compose.run(self.env, self.out, check=True)
+            except SystemExit as exit:
+                return out.getvalue() + "\n" + str(exit)
+        return out.getvalue()
+
+    def test_a_freshly_generated_stack_is_up_to_date(self):
+        self.assertIn("Up to date", self._check())
+
+    def test_a_deleted_asset_is_reported_missing(self):
+        (self.out / "logging/loki-config.yml").unlink()
+        output = self._check()
+        self.assertNotIn("Up to date", output)
+        self.assertIn("missing", output)
+        self.assertIn("logging/loki-config.yml", output)
+
+    def test_an_edited_asset_is_reported_modified(self):
+        (self.out / "logging/loki-config.yml").write_text("edited\n")
+        output = self._check()
+        self.assertIn("modified", output)
+        self.assertIn("logging/loki-config.yml", output)
+
+    def test_an_added_asset_is_reported_extra(self):
+        (self.out / "grafana/provisioning/datasources/prom.yml").write_text("x")
+        output = self._check()
+        self.assertIn("extra", output)
+        self.assertIn("prom.yml", output)
+
+    def test_all_three_classes_are_named_separately(self):
+        (self.out / "logging/loki-config.yml").unlink()
+        (self.out / "logging/alloy-host.alloy").write_text("edited\n")
+        (self.out / "grafana/provisioning/datasources/prom.yml").write_text("x")
+        output = self._check()
+        for word in ("missing", "modified", "extra"):
+            self.assertIn(word, output)
+        self.assertIn("loki-config.yml", output)
+        self.assertIn("alloy-host.alloy", output)
+        self.assertIn("prom.yml", output)
+
+    def test_the_committed_stack_passes(self):
+        # The gate CI runs. Source and destination are the same directory
+        # there, so no asset is owned and only the generated files compare.
+        # From the repo root with the paths CI passes: the env file name goes
+        # into the recorded header verbatim, so an absolute path here would
+        # report the committed files as stale over the header alone.
+        out = io.StringIO()
+        cwd = os.getcwd()
+        os.chdir(REPO_ROOT)
+        self.addCleanup(os.chdir, cwd)
+        with contextlib.redirect_stdout(out):
+            gen_compose.run(
+                Path("qemu/env/scale-out"),
+                Path("qemu/compose/vfio-user-ernic-rocjitsu-scale-out"),
+                check=True)
+        self.assertIn("Up to date", out.getvalue())
+
+
+class TestStackAssetFailureModes(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(self._cleanup)
+        self.body = gen_compose.render_compose(
+            _plan("\nERNIC_TAP=true\n"), ["env"], "abc")
+        self.generated = {
+            "docker-compose.yml", "prometheus.yml", "fleet-inventory.yml"}
+
+    def _cleanup(self):
+        for path in self.tmp.rglob("*"):
+            if path.is_dir():
+                path.chmod(0o755)
+        shutil.rmtree(self.tmp)
+
+    def test_an_unremovable_extra_leaves_the_stack_no_worse(self):
+        # One entry that cannot be removed used to abort the run after the
+        # deletions and before any copy, leaving the stack emptier than it
+        # started.
+        locked = self.tmp / "grafana/locked"
+        locked.mkdir(parents=True)
+        (locked / "dash.json").write_text("{}")
+        stale = self.tmp / "grafana/provisioning/datasources/prom.yml"
+        stale.parent.mkdir(parents=True)
+        stale.write_text("isDefault: true\n")
+        locked.chmod(0o555)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            with self.assertRaises(SystemExit) as raised:
+                gen_compose._copy_stack_assets(
+                    self.body, self.generated, self.tmp)
+        output = out.getvalue() + str(raised.exception)
+        # Every asset is in place despite the failure, and the removal that
+        # could be done was.
+        self.assertTrue((self.tmp / "logging/loki-config.yml").is_file())
+        self.assertTrue(
+            (self.tmp / DATASOURCES / "prometheus.yml").is_file())
+        self.assertFalse(stale.exists())
+        self.assertIn("locked", output)
+
+    def test_a_data_dir_nested_under_an_owned_name_survives(self):
+        # LOKI_DATA_DIR=./logging/data puts Loki's data next to its config.
+        # The first path segment marks `logging` owned, so the data directory
+        # was deleted by the regeneration it was supposed to be safe from.
+        body = self.body + "\n      - ./logging/data:/loki\n"
+        data = self.tmp / "logging/data/index"
+        data.parent.mkdir(parents=True)
+        data.write_text("chunks")
+        with contextlib.redirect_stdout(io.StringIO()):
+            gen_compose._copy_stack_assets(body, self.generated, self.tmp)
+        self.assertEqual(data.read_text(), "chunks")
+        self.assertTrue((self.tmp / "logging/loki-config.yml").is_file())
+
+    def test_a_data_dir_two_levels_down_survives_with_its_parent(self):
+        """The one-level fix shielded the path and its children, not its
+        ancestors -- and the prune runs deepest first, so the protected
+        directory was skipped and then removed inside its unprotected parent.
+        Measured before the fix: one "Removed .../logging/data" line, and the
+        operator's chunk.db gone with it."""
+        body = self.body + "\n      - ./logging/data/sub:/loki\n"
+        data = self.tmp / "logging/data/sub/chunk.db"
+        data.parent.mkdir(parents=True)
+        data.write_text("operator")
+        with contextlib.redirect_stdout(io.StringIO()):
+            gen_compose._copy_stack_assets(body, self.generated, self.tmp)
+        self.assertEqual(data.read_text(), "operator")
+        self.assertTrue(data.parent.parent.is_dir())
+        self.assertTrue((self.tmp / "logging/loki-config.yml").is_file())
 
 
 if __name__ == "__main__":

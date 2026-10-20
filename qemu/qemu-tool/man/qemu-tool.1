@@ -59,7 +59,13 @@ and
 .BI \-\-env\-file " FILE"
 Read settings from
 .IR FILE
-instead of searching the default locations. See
+instead of searching the default locations.
+.B Repeatable:
+give it more than once and the files are layered left to right, a key set by
+a later file overriding the same key in an earlier one and a key absent from
+the later file keeping the earlier value. That is what lets one golden
+settings file carry the ~20 keys every fleet shares while a small committed
+overlay states only the handful that differ. See
 .B SETTINGS FILE
 below.
 .TP
@@ -324,7 +330,7 @@ lengths. The exception is a key naming a field that is already a list
 where the commas mean several values for
 .I one
 VM and the whole value goes to every VM. See
-.I env.scale\-out
+.I env/scale\-out
 for the full key list.
 .TP
 .BI \-\-stack " NAME"
@@ -332,7 +338,13 @@ Stack to generate. Default:
 .IR vfio\-user\-ernic\-rocjitsu\-scale\-out .
 .TP
 .BI \-\-env\-file " FILE"
-Settings file. Same search path as every other subcommand.
+Settings file. Same search path, and the same repeatable last-wins layering,
+as every other subcommand. The generated header records one
+.I "# env\-file:"
+line per layer and a single
+.I "# env\-sha256:"
+over all of them concatenated, so an edit to the overlay invalidates the
+render exactly as an edit to the golden file does.
 .TP
 .BI \-\-output\-dir " DIR"
 Where to write. Defaults to the resolved stack directory, except that
@@ -442,38 +454,181 @@ Directory containing VM image files, passed as VM_IMAGES_DIR.
 Default:
 .IR /var/lib/qemu-tool/images .
 .TP
+.BI \-\-stack " NAME"
+Committed stack to run. Default:
+.IR vfio\-user\-ernic\-rocjitsu\-vm .
+.TP
+.BI \-\-stack\-dir " DIR"
+Run a stack rendered by
+.B "gen\-compose \-\-output\-dir"
+.I DIR
+instead of a committed one. Mutually exclusive with
+.BR \-\-stack ,
+and required for a fleet rendered from an overlay:
+.B VM_COUNT
+and the VM names are baked into the generated YAML, so without it the
+committed stack comes up instead, reporting success.
+.TP
 .BI \-\-env\-file " FILE"
 Settings file handed to
 .BR "docker compose \-\-env\-file" .
-See
+Repeatable, and each layer is passed through as its own
+.B \-\-env\-file
+in the same order:
+.B "docker compose"
+applies them last-wins too, so compose and
+.B qemu\-tool
+resolve every key to the same value. See
 .B SETTINGS FILE
 below.
 .PP
-All remaining arguments are forwarded verbatim to
-.BR "docker compose" .
-Do not place a
-.B \-\-
-separator before the
+All remaining arguments are forwarded to
 .B "docker compose"
-subcommand; the remaining arguments are already collected verbatim, so a
+in the order typed, options included, so
+.B "\-\-profile metrics up \-d"
+needs no separator. A
 .B \-\-
-is passed through to
-.B docker
-and rejected.
+before the subcommand is still accepted and dropped rather than forwarded:
+.B "docker compose"
+reads one as end\-of\-options and silently ignored the profile that followed
+it, bringing up the default services and reporting success.
 .SH LIST OPTIONS
 .TP
 .B \-\-json
 Emit JSON instead of the table. The JSON form additionally includes the full
-disk image path, full vfio-user socket paths, the owning user and the uptime in
-seconds.
+disk image path, full vfio-user socket paths, the owning user, the uptime in
+seconds, and an
+.B nvme
+array per VM whose entries carry
+.BR bdf " (canonical " dddd:bb:dd.f ", or null for an emulated device whose"
+guest BDF is unknown),
+.BR kind " (" emulated " or " passthrough ),
+.BR source " (" argv " or " qmp ),
+.BR qdev_id ,
+and
+.BR serial " or " class_verified
+respectively.
 .TP
 .B \-\-qemu\-tool\-only
 Omit VMs that were not started by
 .BR qemu\-tool .
+.TP
+.B \-\-summary
+Replace the per-VM table with a per-fleet aggregate and a measured load
+picture. VMs are grouped by Docker Compose project; uncontainerised ones are
+grouped as
+.BR (uncontainerised) .
+Four sections are printed: a header with the service roll-call,
+.B HEADROOM
+(how many more VMs fit by each ceiling, and which one binds),
+.B LOAD
+(CPU by service class, host load average, guest RAM resident, RDMA and
+Ethernet totals, GPUs, logged-in users) and
+.B OUTLIERS
+(VMs far off the fleet's own CPU median, occupied guests, and any container
+that is not running).
+.IP
+Every figure has an unavailable state and prints it rather than a zero: an
+unreadable collector must not look like an idle fleet. The mesh and vCPU
+ceilings are the measured walls recorded in
+.BR AGENTS.md " issues 17 and 14."
+.IP
+Costs about 7 s against a 32-VM fleet, of which 5 s is the sampling window
+\(em the ernic servers rewrite their stats at 1 Hz, so a shorter window
+samples that rewrite rather than a rate. Plain
+.B list
+is unchanged and still never contacts a guest.
+.TP
+.B \-\-no\-guests
+With
+.BR \-\-summary ,
+skip the only collector that contacts a guest: the logged-in-users line,
+which costs about 2.8 s over 32 VMs and runs underneath the sample window.
+The users line then reads
+.B "not collected"
+rather than zero, and the users row of
+.B OUTLIERS
+is omitted. An error without
+.BR \-\-summary .
+.PP
+.B \-\-summary
+and
+.B \-\-json
+compose: the JSON form is one object whatever the VM count, carrying
+.BR sampled_seconds ,
+a
+.B source
+per metric group
+.RB ( proc ", " cgroup ", " ernic-stats ", " guest-agent ", " unavailable )
+and units in the key names
+.RB ( cores_busy ", " memory_mib ", " ip_bytes_tx ).
 .PP
 The table reports, per VM: PID, VM name, source, architecture, vCPU count,
 memory, forwarded SSH port, whether KVM is enabled, uptime, the container name
-when the VM runs inside one, and any attached vfio-user sockets.
+when the VM runs inside one, any attached NVMe, and any attached vfio-user
+sockets.
+.PP
+The
+.B NVME
+column lists every NVMe attached to the VM, emulated or passed through,
+comma-joined, with identical labels collapsed as
+.IR label *N
+.RB ( VM_NVME=2
+is ordinary, and two identical labels say no more than one plus a count), or
+.B \-
+when the VM has none. Four forms:
+.RS
+.TP
+.B 00:05.0
+The
+.I guest
+BDF of an emulated NVMe, read from the VM's QMP monitor. The
+.B 0000:
+domain is dropped for table width;
+.B \-\-json
+keeps the canonical form.
+.TP
+.B emul
+An emulated NVMe whose guest BDF is not knowable \(em the VM has no QMP
+socket, or the query failed.
+.TP
+.B host:03:00.0
+A passed-through device, by its
+.I host
+BDF.
+.TP
+.B host:03:00.0?
+The same, with no sysfs entry on this host to confirm it is an NVMe.
+.RE
+.PP
+A host BDF and a guest BDF are
+.I different address spaces,
+which is why a passthrough entry is labelled rather than printed bare:
+.B host:03:00.0
+is the address on this machine, and the address
+.BR lspci (8)
+inside the guest reports is a different one. Only the guest BDF is actionable
+inside the VM, and it is only available when the VM was started with
+.BR \-\-qmp\-socket :
+.B run\-vm
+emits
+.B \-device nvme,...
+with no
+.BR addr= ,
+so QEMU picks the slot at realize time and the guest address never appears on
+the command line.
+.PP
+Passthrough entries come from
+.BR "\-device vfio\-pci,host=" ...,
+which is equally how a GPU or a NIC is passed through, so the class is checked
+in
+.I /sys/bus/pci/devices/<bdf>/class
+and only
+.B 0x0108xx
+(NVM Express) is claimed. A BDF this host has no sysfs entry for keeps a
+trailing
+.B ?
+rather than being dropped, since dropping would silently hide a real NVMe.
 .PP
 The SSH column shows
 .IR host \-> guest
@@ -566,14 +721,20 @@ The first of these that exists is used:
 .IR qemu/.env ,
 .IR $XDG_CONFIG_HOME/qemu-tool/env ,
 .IR /etc/qemu-tool/env .
+.PP
+Only
+.B \-\-env\-file
+layers. The search path still resolves to exactly one file, so layering is
+something asked for on the command line and never something inherited from
+the ambient environment.
 .SH FILES
 .TP
 .I /etc/qemu-tool/env
 Site settings file, seeded from
-.I /usr/share/qemu-tool/env.example
+.I /usr/share/qemu-tool/env/example
 on first install and never overwritten afterwards.
 .TP
-.I /usr/share/qemu-tool/env.example
+.I /usr/share/qemu-tool/env/example
 Settings template, documenting every key.
 .TP
 .I /var/lib/qemu-tool/images
@@ -597,15 +758,22 @@ Default package manifest installed into new VMs by
 Compose stack directories used by
 .BR compose .
 .TP
-.I /usr/share/qemu-tool/env.scale-out
-Settings template for the scale-out fleet, documenting
+.I /usr/share/qemu-tool/env/scale-out
+The golden settings file for the scale-out fleet, documenting
 .B VM_COUNT
 and the rest of the fleet keys
 .B gen\-compose
-reads. Not seeded into
+reads. It is the authoritative copy: a fleet that differs from it states only
+the differing keys in an overlay named after it on the command line, rather
+than forking the whole file. Not seeded into
 .IR /etc ;
 name it with
 .BR \-\-env\-file .
+The overlays themselves
+.RI ( qemu/env/overlay\-ci ,
+.IR qemu/env/overlay\-mi100 )
+are not packaged: they name a particular CI lane and a particular host, so
+they are only meaningful beside the repository that describes them.
 .TP
 .I /usr/share/qemu-tool/compose/vfio-user-ernic-rocjitsu-scale-out/
 The generated fleet stack. Both files in it are written by
@@ -613,7 +781,7 @@ The generated fleet stack. Both files in it are written by
 edit the settings file, not them.
 .PP
 The package manifests, the compose stacks and
-.I env.example
+.I env/example
 are also bundled inside the Python distribution, so
 .B pipx install qemu-tool
 resolves them with no system install present. The
@@ -667,14 +835,14 @@ backing image once, overlay the rest on it, generate the stack, start it:
 .PP
 .RS
 .EX
-qemu\-tool gen\-vm \-\-env\-file qemu/env.scale\-out \\
+qemu\-tool gen\-vm \-\-env\-file qemu/env/scale\-out \\
     \-\-vm\-name fleet\-1 \-\-backing\-image "$VM_BACKING_IMAGE"
 for n in 2 3 4 5 6 7 8; do
-    qemu\-tool gen\-vm \-\-env\-file qemu/env.scale\-out \\
+    qemu\-tool gen\-vm \-\-env\-file qemu/env/scale\-out \\
         \-\-vm\-name fleet\-$n \-\-backing\-file images/fleet\-1\-backing.qcow2
 done
-qemu\-tool gen\-compose \-\-env\-file qemu/env.scale\-out
-qemu\-tool compose \-\-env\-file qemu/env.scale\-out \\
+qemu\-tool gen\-compose \-\-env\-file qemu/env/scale\-out
+qemu\-tool compose \-\-env\-file qemu/env/scale\-out \\
     \-\-stack vfio\-user\-ernic\-rocjitsu\-scale\-out \-\-profile metrics up \-d
 .EE
 .RE
@@ -683,9 +851,38 @@ Confirm the committed stack is in step with the settings file, for CI:
 .PP
 .RS
 .EX
-qemu\-tool gen\-compose \-\-env\-file qemu/env.scale\-out \-\-check
+qemu\-tool gen\-compose \-\-env\-file qemu/env/scale\-out \-\-check
 .EE
 .RE
+.PP
+Render and run the same fleet sized for a particular host, by layering that
+host's overlay over the golden file. Only the keys the overlay states change;
+everything else still comes from
+.IR env/scale\-out :
+.PP
+.RS
+.EX
+qemu\-tool gen\-compose \\
+    \-\-env\-file qemu/env/scale\-out \-\-env\-file qemu/env/overlay\-mi100 \\
+    \-\-output\-dir /var/lib/qemu\-tool/stacks/mi100\-fleet
+qemu\-tool compose \-\-stack\-dir /var/lib/qemu\-tool/stacks/mi100\-fleet \\
+    \-\-env\-file qemu/env/scale\-out \-\-env\-file qemu/env/overlay\-mi100 \\
+    \-\-profile metrics up \-d
+.EE
+.RE
+.PP
+Both directory flags are required for an overlay fleet.
+.B \-\-output\-dir
+keeps the render off the committed stack, which
+.B gen\-compose
+writes by default and
+.B \-\-check
+compares against; and
+.B \-\-stack\-dir
+is what runs the render, since
+.B VM_COUNT
+and the VM names are baked into the generated YAML rather than read from the
+settings layers at run time.
 .PP
 List every VM running on this node:
 .PP

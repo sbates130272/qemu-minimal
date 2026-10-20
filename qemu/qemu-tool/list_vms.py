@@ -6,6 +6,7 @@ import pwd
 import re
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +39,12 @@ _DEVICE_ARGV: dict[str, str] = {}
 _CLK_TCK = os.sysconf("SC_CLK_TCK")
 
 _QMP_RE = re.compile(r"unix:([^,]+)")
+# PCI class 01h subclass 08h is NVM Express. sysfs spells the full 24-bit
+# class as 0x0108xx, the last byte being the programming interface (02 = NVMe
+# I/O controller), so the prefix is what to match on.
+_NVME_CLASS_PREFIX = "0x0108"
+_SYS_PCI = Path("/sys/bus/pci/devices")
+_BDF_RE = re.compile(r"^(?:([0-9a-f]{4}):)?([0-9a-f]{2}):([0-9a-f]{2})\.([0-7])$", re.I)
 _GA_CHARDEV_RE = re.compile(r"socket,(?:[^,]*,)*path=([^,]+)")
 
 _ARCH_BY_BINARY = {
@@ -70,6 +77,7 @@ def run(as_json: bool = False, qemu_tool_only: bool = False) -> None:
 def collect() -> list[dict[str, Any]]:
     containers = _container_names()
     vms = [_describe(pid, argv, containers) for pid, argv in _iter_qemu()]
+    _upgrade_nvme_bdfs(vms)
     return sorted(vms, key=lambda v: v["pid"])
 
 
@@ -124,6 +132,7 @@ def _describe(pid: int, argv: list[str], containers: dict[str, str]) -> dict[str
         "vfio_user_sockets": _vfio_sockets(argv),
         "gpus": _gpus(_vfio_sockets(argv)),
         "rdma_devices": _rdma_devices(_vfio_sockets(argv)),
+        "nvme": _nvme_devices(argv),
         "qmp_socket": qmp_sock,
         "qmp_available": _socket_exists(pid, qmp_sock) or (bool(container_name) and bool(qmp_sock)),
         "ga_socket": ga_sock,
@@ -478,6 +487,287 @@ def _rdma_devices(sockets: list[str]) -> list[str]:
     return out
 
 
+# ---------------------------------------------------------------------------
+# NVMe
+# ---------------------------------------------------------------------------
+
+def _device_opts(spec: str) -> tuple[str, dict[str, str]]:
+    """(driver, options) for a -device argument in key=value form.
+
+    Returns ("", {}) for the JSON form, which vfio-user-pci uses and no NVMe
+    does -- splitting a JSON object on commas would produce nonsense keys.
+    """
+    if spec.startswith("{"):
+        return "", {}
+    parts = spec.split(",")
+    opts = {}
+    for p in parts[1:]:
+        k, sep, v = p.partition("=")
+        if sep:
+            opts[k] = v
+    return parts[0], opts
+
+
+def _normalise_bdf(bdf: str) -> str | None:
+    """Canonical dddd:bb:dd.f, or None if this is not a BDF at all.
+
+    Callers feed this straight into a /sys path, so anything that does not
+    parse must not become a path component.
+    """
+    m = _BDF_RE.match(bdf.strip())
+    if not m:
+        return None
+    dom, bus, dev, fn = m.groups()
+    return f"{(dom or '0000').lower()}:{bus.lower()}:{dev.lower()}.{fn}"
+
+
+def _pci_class(bdf: str) -> str | None:
+    """Host PCI class of a BDF, or None if this host has no such device.
+
+    /sys is the host's view, which is the right question for a passthrough
+    BDF (run_vm's -device vfio-pci,host=... names a device on this host) and
+    meaningless for a guest one.
+    """
+    try:
+        return (_SYS_PCI / bdf / "class").read_text().strip().lower()
+    except OSError:
+        return None
+
+
+def _drive_files(argv: list[str]) -> dict[str, str]:
+    """-drive id -> file, for the if=none drives an NVMe controller is backed by.
+
+    The scratch qcow2s are named only here. _drive_file above deliberately
+    skips if=none because it is hunting the root disk, so without this map the
+    path of every --nvme image is parsed and thrown away -- and those images
+    carry the bulk of a fleet's virtual size (1 TiB each against the root
+    overlay's 512 GiB).
+    """
+    found: dict[str, str] = {}
+    for i, a in enumerate(argv):
+        if a != "-drive" or i + 1 >= len(argv):
+            continue
+        opts = {}
+        for part in argv[i + 1].split(","):
+            k, sep, v = part.partition("=")
+            if sep:
+                opts[k] = v
+        if opts.get("id") and opts.get("file"):
+            found[opts["id"]] = opts["file"]
+    return found
+
+
+def _nvme_image(opts: dict[str, str], argv: list[str],
+                drives: dict[str, str]) -> str | None:
+    """The backing file of one -device nvme, or None for a passthrough one.
+
+    Two spellings, because run_vm emits both: the null_blk form puts
+    drive=nvme-N on the controller itself, while the qcow2 form hangs an
+    -device nvme-ns off it and the drive= lives there, joined back by
+    bus=<controller id>.
+    """
+    direct = opts.get("drive")
+    if direct:
+        return drives.get(direct)
+    qdev_id = opts.get("id")
+    if not qdev_id:
+        return None
+    for i, a in enumerate(argv):
+        if a != "-device" or i + 1 >= len(argv):
+            continue
+        driver, ns = _device_opts(argv[i + 1])
+        if driver == "nvme-ns" and ns.get("bus") == qdev_id and ns.get("drive"):
+            return drives.get(ns["drive"])
+    return None
+
+
+def _nvme_devices(argv: list[str]) -> list[dict[str, Any]]:
+    """NVMe devices attached to a VM, derived from the QEMU command line.
+
+    Two shapes, and the host can say much less about the first than it would
+    like:
+
+    - emulated: run_vm emits "-device nvme,serial=...,id=nvme-N-dev" with no
+      addr=, so QEMU picks the slot at realize time and the guest BDF is
+      simply not in argv. Recorded with bdf None; _upgrade_nvme_bdfs fills it
+      in over QMP where a monitor socket exists.
+    - passthrough: "-device vfio-pci,...,host=0000:03:00.0" names a HOST BDF.
+      A GPU and a NIC are passed through by exactly the same argument, so the
+      class is checked in sysfs and only 0x0108xx is claimed as NVMe.
+
+    A BDF with no sysfs entry (unbound since boot, or a VM whose container is
+    served by another host's device) is reported with class_verified False
+    rather than dropped: dropping would silently hide a real NVMe, and the
+    renderer marks the uncertainty with a trailing "?" so an unverified entry
+    is never mistaken for a confirmed one.
+    """
+    out: list[dict[str, Any]] = []
+    drives = _drive_files(argv)
+    for i, a in enumerate(argv):
+        if a != "-device" or i + 1 >= len(argv):
+            continue
+        driver, opts = _device_opts(argv[i + 1])
+        if driver == "nvme":
+            # Exact match: "nvme-ns" is a namespace hanging off a controller
+            # already counted here, not a second drive.
+            out.append({
+                "bdf": None,
+                "kind": "emulated",
+                "source": "argv",
+                "qdev_id": opts.get("id"),
+                "serial": opts.get("serial"),
+                "image": _nvme_image(opts, argv, drives),
+            })
+        elif driver == "vfio-pci":
+            bdf = _normalise_bdf(opts.get("host", ""))
+            if not bdf:
+                continue
+            cls = _pci_class(bdf)
+            if cls is not None and not cls.startswith(_NVME_CLASS_PREFIX):
+                continue  # a GPU or NIC passed through to the same guest
+            out.append({
+                "bdf": bdf,
+                "kind": "passthrough",
+                "source": "argv",
+                "qdev_id": opts.get("id"),
+                "class_verified": cls is not None,
+                # A passed-through controller has no host-side image file at
+                # all; None here means "no such thing", not "unknown".
+                "image": None,
+            })
+    return out
+
+
+# Runs under `docker exec python3 -c` for a containerised VM, and under this
+# interpreter as a subprocess otherwise -- one implementation, and in both
+# cases subprocess.run's timeout is a hard bound, which an in-process
+# connect() to a wedged socket would not be. A listing must never hang.
+_QMP_SCRIPT = r"""
+import json, socket, sys
+
+def query(path, timeout):
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        s.connect(path)
+    except OSError:
+        return []
+    # recv-only timeout: connect must be blocking to avoid EAGAIN on Unix sockets
+    s.settimeout(timeout)
+    f = s.makefile("rwb")
+
+    def recv():
+        line = f.readline()
+        return json.loads(line) if line else {}
+
+    def send(cmd):
+        f.write(json.dumps({"execute": cmd}).encode() + b"\n")
+        f.flush()
+        # Flush events and any stale response: QMP interleaves asynchronous
+        # events with command replies, and only a return/error is ours.
+        for _ in range(20):
+            r = recv()
+            if "return" in r or "error" in r:
+                return r
+        return {}
+
+    try:
+        greeting = recv()           # QMP announces itself before accepting
+        if "QMP" not in greeting:   # anything else is not a QMP monitor
+            return []
+        if "return" not in send("qmp_capabilities"):
+            return []
+        reply = send("query-pci")
+    except (OSError, ValueError):
+        return []
+    found = []
+    def walk(devices):
+        for d in devices:
+            # class_info.class is the 16-bit class/subclass pair: 0x0108 is
+            # NVM Express, whatever the programming interface byte says.
+            if (d.get("class_info") or {}).get("class") == 0x0108:
+                found.append({
+                    "bdf": "0000:%02x:%02x.%d" % (
+                        d.get("bus", 0), d.get("slot", 0), d.get("function", 0)),
+                    "qdev_id": d.get("qdev_id") or None,
+                })
+            # An NVMe behind a pcie-root-port is one level down.
+            walk((d.get("pci_bridge") or {}).get("devices") or [])
+    for bus in (reply.get("return") or []):
+        walk(bus.get("devices") or [])
+    return found
+
+print(json.dumps(query(__SOCKET__, __TIMEOUT__)))
+"""
+
+
+def _qmp_nvme(socket_path: str, container: str | None,
+              timeout: float = 3.0) -> list[dict[str, Any]]:
+    """NVMe controllers a VM's QMP monitor reports, as [{bdf, qdev_id}].
+
+    Empty on any failure at all -- a wedged monitor on one VM must cost the
+    listing that VM's guest BDFs and nothing else.
+    """
+    script = (_QMP_SCRIPT
+              .replace("__SOCKET__", repr(socket_path))
+              .replace("__TIMEOUT__", repr(float(timeout))))
+    if container:
+        # The socket lives in the container's filesystem namespace, so it has
+        # to be opened from inside it (same reason inspect.py proxies the
+        # guest agent).
+        cmd = ["docker", "exec", container, "python3", "-c", script]
+    else:
+        cmd = [sys.executable, "-I", "-c", script]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True,
+                           timeout=timeout + 2)
+        if r.returncode != 0 or not r.stdout.strip():
+            return []
+        out = json.loads(r.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return []
+    return out if isinstance(out, list) else []
+
+
+def _upgrade_nvme_bdfs(vms: list[dict[str, Any]]) -> None:
+    """Fill in guest BDFs for emulated NVMes from each VM's QMP monitor.
+
+    Only VMs that have both a monitor and an unresolved emulated NVMe are
+    probed -- on the fleet stacks no guest has either, so the common case
+    costs nothing. Those that qualify are probed in parallel because the
+    containerised path is a `docker exec` of a few hundred ms and 32 of them
+    in series is a visible regression on a command whose job is to print one
+    table.
+    """
+    todo = [v for v in vms
+            if v.get("qmp_available") and v.get("qmp_socket")
+            and any(d["bdf"] is None for d in v["nvme"])]
+    if not todo:
+        return
+    with ThreadPoolExecutor(max_workers=min(8, len(todo))) as pool:
+        results = pool.map(
+            lambda v: _qmp_nvme(v["qmp_socket"], v["container"]), todo)
+        for vm, found in zip(todo, results):
+            _merge_nvme(vm["nvme"], found)
+
+
+def _merge_nvme(devices: list[dict[str, Any]],
+                found: list[dict[str, Any]]) -> None:
+    by_id = {f["qdev_id"]: f for f in found if f.get("qdev_id")}
+    spare = [f for f in found if not f.get("qdev_id")]
+    for d in devices:
+        if d["bdf"] is not None:
+            continue
+        hit = by_id.pop(d.get("qdev_id"), None)
+        if hit is None:
+            # No qdev id to correlate on (the nullb form of --nvme sets none):
+            # take controllers in the order QMP reported them.
+            hit = spare.pop(0) if spare else None
+        if hit is None:
+            continue
+        d["bdf"] = hit["bdf"]
+        d["source"] = "qmp"
+
+
 def _owner(pid: int) -> str | None:
     try:
         # The pid directory keeps the effective uid; files under it revert to
@@ -541,6 +831,41 @@ def _fmt_mgmt(v: dict[str, Any]) -> str:
     return ",".join(parts) or "-"
 
 
+def _short_bdf(bdf: str) -> str:
+    """Drop a 0000 domain for the table; --json keeps the canonical form."""
+    return bdf[5:] if bdf.startswith("0000:") else bdf
+
+
+def _fmt_nvme(v: dict[str, Any]) -> str:
+    """The NVME column.
+
+    Four cases, kept short enough to survive a 32-row table:
+
+      00:05.0        guest BDF, read from the VM's QMP monitor
+      emul           an emulated NVMe whose guest BDF is not knowable
+      host:03:00.0   a passed-through host BDF -- a different address space
+                     from the guest's, so it is labelled rather than printed
+                     bare, because sending someone to the wrong namespace's
+                     device is worse than telling them nothing
+      host:03:00.0?  the same, with no sysfs entry on this host to confirm it
+                     is an NVMe at all
+
+    Repeats collapse ("emul*2"): VM_NVME=2 is ordinary and two identical
+    labels say no more than one plus a count.
+    """
+    labels: list[str] = []
+    for d in v.get("nvme") or []:
+        if d["kind"] == "emulated":
+            labels.append(_short_bdf(d["bdf"]) if d["bdf"] else "emul")
+        else:
+            mark = "" if d.get("class_verified") else "?"
+            labels.append(f"host:{_short_bdf(d['bdf'])}{mark}")
+    counts: dict[str, int] = {}
+    for label in labels:
+        counts[label] = counts.get(label, 0) + 1
+    return ",".join(f"{k}*{n}" if n > 1 else k for k, n in counts.items()) or "-"
+
+
 def _print_table(vms: list[dict[str, Any]], qemu_tool_only: bool = False) -> None:
     if not vms:
         print("No qemu-tool VMs running." if qemu_tool_only
@@ -549,7 +874,7 @@ def _print_table(vms: list[dict[str, Any]], qemu_tool_only: bool = False) -> Non
 
     headers = ["NAME", "PID", "SOURCE", "ARCH", "VCPU", "MEM", "SSH",
                "KVM", "UPTIME", "CONTAINER", "NETWORK", "GPU", "RDMA",
-               "VFIO-USER", "MGMT"]
+               "NVME", "VFIO-USER", "MGMT"]
     show_split = any(v["ssh_port_host"] != v["ssh_port"] for v in vms)
     rows = []
     for v in vms:
@@ -570,6 +895,7 @@ def _print_table(vms: list[dict[str, Any]], qemu_tool_only: bool = False) -> Non
             ",".join(v["networks"]) or "-",
             ",".join(v["gpus"]) or "-",
             ",".join(v["rdma_devices"]) or "-",
+            _fmt_nvme(v),
             ",".join(Path(s).name for s in v["vfio_user_sockets"]) or "-",
             _fmt_mgmt(v),
         ])

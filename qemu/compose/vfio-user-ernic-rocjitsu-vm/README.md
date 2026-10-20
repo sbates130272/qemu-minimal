@@ -14,7 +14,7 @@ see `vfio-user-ernic-vm/` and `vfio-user-rocjitsu-vm/`.
 
 ```sh
 # 1. Configure
-cp qemu/env.example qemu/.env
+cp qemu/env/example qemu/.env
 $EDITOR qemu/.env     # set image tags, VM_IMAGES_DIR, GPU counts
 
 # 2. Build the VM image (skip if you already have one)
@@ -29,7 +29,7 @@ ssh -p 2222 ubuntu@localhost
 
 ## Environment variables
 
-All of these live in `qemu/.env` (copy `qemu/env.example`), the single settings
+All of these live in `qemu/.env` (copy `qemu/env/example`), the single settings
 file shared by `gen-vm`, `run-vm` and every compose stack.
 
 | Variable | Default | Description |

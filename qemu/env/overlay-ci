@@ -1,0 +1,41 @@
+# Overlay for the two-VM LMCache fleet that
+# .github/workflows/qemu-minimal-report-for-lmcache.yml runs.
+#
+# Deltas only. Layer it on the golden file, which supplies everything else:
+#
+#   qemu-tool gen-compose --env-file qemu/env/scale-out \
+#     --env-file qemu/env/overlay-ci --output-dir "$STACK_DIR"
+#
+# --output-dir is not optional: gen-compose defaults it to the committed stack
+# directory, and qemu/compose/vfio-user-ernic-rocjitsu-scale-out/docker-compose.yml
+# is generated from qemu/env/scale-out alone, with `gen-compose --check`
+# comparing the two. A two-VM render landing there fails that lane.
+#
+# VM_VCPUS, VM_VMEM and VM_SHM_SIZE are absent here but NOT unset: the golden
+# file sets 4, 8192 and 8g. The lane is safe because it derives all three from
+# the runner it lands on and writes them to a third scratch overlay layered
+# last, after this one -- a GitHub runner is smaller than any node a human runs
+# this on, so leaving the golden's values in force would oversubscribe it.
+# Dropping that sizing layer silently reinstates the golden values; it is not a
+# step this overlay can do without.
+
+# Two: the smallest fleet that can move a byte between guests, and as many as
+# a GitHub runner can boot. It proves transport, not scale -- issue 18 is
+# invisible at two nodes, because with a single peer the wrong answer is also
+# the right one.
+VM_COUNT=2
+
+VM_NAME_PREFIX=lmcache-ci
+
+# Runner-local, and absolute. Bind-mounted into the job container at the same
+# path so the qcow2 generated in the container is the file the sibling qemu
+# containers open -- compose bind-mounts resolve on the host daemon, not in
+# here, so the golden's ${HOME}-relative path would resolve to two different
+# directories.
+VM_IMAGES_DIR=/var/lib/qemu-tool/images
+
+# The password baked into the published ernic-rocjitsu qcow2, which this lane
+# boots directly rather than through the fleet bake. gen-vm does not apply it
+# on the --backing-image path, so it is the image that decides and this only
+# records what the image has.
+VM_PASSWORD=changeme

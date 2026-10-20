@@ -81,9 +81,9 @@
      badges move with them. The stamp is the first badge; the rest carry the
      component revision that distinguishes the build.
 
-     sbates-fork is the odd one out: it is pinned only by
-     qemu/env.scale-out-mi100, for vfio-user P2P DMA, and carries a QEMU
-     patch the stock image does not. See AGENTS.md issue 19. -->
+     sbates-fork is the odd one out: it is pinned only by the
+     qemu/env/overlay-mi100 overlay, for vfio-user P2P DMA, and carries a
+     QEMU patch the stock image does not. See AGENTS.md issue 19. -->
 [![CI image build](https://img.shields.io/badge/ci--images-20261014.geea0485-informational?style=flat-square&logo=docker)](https://hub.docker.com/u/sbates130272)
 [![qemu](https://img.shields.io/badge/qemu-11.1.2-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user/tags)
 [![libvfio-user](https://img.shields.io/badge/libvfio--user-8039244-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user/tags)
@@ -144,7 +144,7 @@ morning. It:
 1. pulls the guest image (~17 GB, the long step) and its SSH keypair, which
    ships beside it as an ORAS referrer;
 2. creates two overlays of one backing file and generates a two-VM stack from
-   [`qemu/env.quickstart`](qemu/env.quickstart);
+   [`qemu/env/quickstart`](qemu/env/quickstart);
 3. brings the stack up — per guest a `rocm-ernic` NIC server, a `rocjitsu` GPU
    server and a QEMU container, with the two NICs joined by a TCP mesh;
 4. stages the per-build `ip_discovery.bin`, loads `amdgpu` and gives each guest
@@ -159,7 +159,7 @@ image is cached, and a first run is that plus however long pulling ~20 GB
 takes you (about 3 minutes here). When it finishes:
 
 ```bash
-ssh -i /var/lib/qemu-tool/quickstart-key/id_rsa -p 2222 batesste@localhost
+ssh -i /var/lib/qemu-tool/quickstart-key/id_rsa -p 2222 ubuntu@localhost
 scripts/quickstart-2vm.sh down     # stop the stack, keep the overlays
 ```
 
@@ -224,7 +224,7 @@ pipx install qemu-tool
 ```
 
 That gives you a working `gen-vm` and `run-vm`: both package manifests,
-`env.example`, the man page and the compose stacks all ship inside the wheel,
+`env/example`, the man page and the compose stacks all ship inside the wheel,
 so none of those depend on a checkout.
 
 `qemu-tool compose` is the exception. The stacks are there, but each one
@@ -312,7 +312,7 @@ qemu-minimal/
     pyproject.toml  Python package manifest for qemu-tool
     qemu_tool/      Python package (qemu-tool CLI)
     packages.d/     Cloud-init package manifests
-    env.example     Settings template -- copy to qemu/.env
+    env/            Settings files -- `example` is the template, copy to qemu/.env
   libvirt/
     virt-install-ubuntu  Create VMs via libvirt
     create-nvme          Generate NVMe XML for libvirt
@@ -387,10 +387,36 @@ NIC and one rocjitsu GPU per VM — from the fleet keys in a settings file. Same
 topology as `vfio-user-ernic-2vm`, sized by a variable rather than by hand.
 
 ```bash
-qemu-tool gen-compose --env-file qemu/env.scale-out
-qemu-tool compose --env-file qemu/env.scale-out \
+qemu-tool gen-compose --env-file qemu/env/scale-out
+qemu-tool compose --env-file qemu/env/scale-out \
     --stack vfio-user-ernic-rocjitsu-scale-out --profile metrics up -d
 ```
+
+`qemu/env/scale-out` is the one authoritative fleet settings file. A host or a
+CI lane that needs different values adds a small committed overlay on top of it
+rather than a whole fourth copy to hand-sync — `--env-file` is repeatable and
+later files win key by key:
+
+```bash
+qemu-tool gen-compose --env-file qemu/env/scale-out --env-file qemu/env/overlay-mi100 \
+    --output-dir /var/lib/qemu-tool/stacks/mi100-fleet
+qemu-tool compose --stack-dir /var/lib/qemu-tool/stacks/mi100-fleet \
+    --env-file qemu/env/scale-out --env-file qemu/env/overlay-mi100 \
+    --profile metrics up -d
+```
+
+Keys the overlay does not mention keep the golden file's value, so the overlay
+is short enough to read in a diff. `compose` passes the same layers through to
+`docker compose --env-file` in the same order, which applies the same last-wins
+rule, so the tool and compose never see different values.
+
+An overlay render needs both directory flags, and omitting either fails
+quietly. `gen-compose` defaults its output to the committed stack directory, so
+without `--output-dir` the overlay's fleet is written over the golden 8-VM one
+and `Gen Compose Check` fails on the next push. And `VM_COUNT` and the VM names
+are baked into the generated YAML rather than interpolated from the settings
+file at run time, so without `--stack-dir` `compose` brings up that committed
+8-VM stack whatever layers it is given.
 
 Per-VM values are comma-lists, not numbered variables: `VM1_NAME`/`VM2_NAME`
 does not survive eight VMs, let alone the mesh's sixty-four. A bare value
@@ -418,16 +444,18 @@ With `--profile metrics` the stack also brings up Prometheus and
 `qemu-tool ernic-stats`, which serves the per-QP counters each `rocm-ernic -S`
 writes. Full detail in
 [the stack README](qemu/compose/vfio-user-ernic-rocjitsu-scale-out/README.md)
-and [`qemu/env.scale-out`](qemu/env.scale-out).
+and [`qemu/env/scale-out`](qemu/env/scale-out), with the committed overlays in
+[`qemu/env/overlay-ci`](qemu/env/overlay-ci) and
+[`qemu/env/overlay-mi100`](qemu/env/overlay-mi100).
 
 ### Settings file
 
-`qemu/env.example` is the single settings template for the whole tool. Copy it
+`qemu/env/example` is the single settings template for the whole tool. Copy it
 to `qemu/.env` and edit; `gen-vm`, `run-vm` and `compose` all read the same
 file, and `compose` hands it straight to `docker compose --env-file`.
 
 ```bash
-cp qemu/env.example qemu/.env
+cp qemu/env/example qemu/.env
 $EDITOR qemu/.env
 ```
 
@@ -442,7 +470,7 @@ The file is searched for in this order, first hit wins:
 
 | Location | Used for |
 |---|---|
-| `--env-file FILE` | explicit, per invocation |
+| `--env-file FILE` | explicit, per invocation; repeatable, later files win key by key |
 | `$QEMU_TOOL_ENV` | explicit, per shell |
 | `./.env` | a per-project override |
 | `qemu/.env` | a source checkout |
@@ -634,13 +662,32 @@ flags take precedence over XML values).
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--stack NAME` | `vfio-user-ernic-rocjitsu-scale-out` | Stack to generate |
-| `--env-file FILE` | search path | Settings file (see `qemu/env.scale-out`) |
+| `--env-file FILE` | search path | Settings file (see `qemu/env/scale-out`). Repeatable: later files override keys set by earlier ones |
 | `--output-dir DIR` | the stack directory | Where to write |
 | `--check` | off | Exit non-zero if regenerating would change anything; writes nothing |
 | `--dry-run` | off | Print the generated files instead of writing them |
 
 `--output-dir` will not default into `/usr/share/qemu-tool/compose`; that tree
 belongs to the Debian package, so overwriting it has to be asked for by name.
+In a checkout it defaults to the committed stack directory instead, so any
+render that layers an overlay must name an `--output-dir` of its own or it
+overwrites the committed fleet and breaks `--check`.
+
+### compose flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--stack NAME` | `vfio-user-ernic-rocjitsu-vm` | Committed stack to run |
+| `--stack-dir DIR` | — | Run a stack rendered by `gen-compose --output-dir DIR`. Mutually exclusive with `--stack` |
+| `--vm-name NAME` | from settings | Sets `VM_NAME`/`VM1_NAME` |
+| `--vm2-name NAME` | from settings | Sets `VM2_NAME`, for the 2-VM stacks |
+| `--images DIR` | from settings | Sets `VM_IMAGES_DIR` |
+| `--env-file FILE` | search path | Settings file, passed through to `docker compose --env-file`. Repeatable: later files win |
+
+Everything else on the line goes to `docker compose` in the order typed, so
+`--profile metrics up -d` needs no separator. A `--` before the subcommand is
+still accepted and dropped, because `docker compose` reads one as end-of-options
+and would silently ignore the profile that followed it.
 
 ### ernic-stats flags
 
@@ -667,13 +714,48 @@ and says which ones qemu-tool started:
 
 ```console
 $ qemu-tool list
-PID    NAME         SOURCE            ARCH   VCPU  MEM    SSH   KVM  UPTIME  CONTAINER                     VFIO-USER
-37374  rocjitsu-vm  external          amd64  4     8192M  2222  yes  53m     vfio-user-rocjitsu-vm-qemu-1  rocjitsu-1.sock
-79805  marker-test  qemu-tool/run-vm  amd64  1     1024M  2223  yes  0m      -                             -
+PID    NAME         SOURCE            ARCH   VCPU  MEM    SSH   KVM  UPTIME  CONTAINER                     NVME      VFIO-USER
+37374  rocjitsu-vm  external          amd64  4     8192M  2222  yes  53m     vfio-user-rocjitsu-vm-qemu-1  00:05.0   rocjitsu-1.sock
+79805  marker-test  qemu-tool/run-vm  amd64  1     1024M  2223  yes  0m      -                             -         -
 ```
 
+#### The NVME column
+
+Every NVMe attached to the VM, emulated or passed through, comma-joined, with
+identical labels collapsed as `label*N` (`VM_NVME=2` is ordinary, and two
+identical labels say no more than one plus a count). `-` when the VM has none.
+
+| Entry | Meaning |
+|-------|---------|
+| `00:05.0` | **Guest** BDF of an emulated NVMe, read from the VM's QMP monitor. The `0000:` domain is dropped for table width; `--json` keeps the canonical form |
+| `emul` | An emulated NVMe whose guest BDF is not knowable — the VM has no QMP socket, or the query failed |
+| `host:03:00.0` | A passed-through device, by its **host** BDF |
+| `host:03:00.0?` | The same, with no sysfs entry on this host to confirm it is an NVMe |
+
+Examples: `emul*2`, `emul,host:03:00.0`, `00:05.0,00:06.0`, `-`.
+
+**A host BDF and a guest BDF are different address spaces**, which is why a
+passthrough entry is labelled rather than printed bare: `host:03:00.0` is the
+address on *this* machine, the address `lspci` inside the guest reports is a
+different one, and sending someone to the wrong namespace's device is worse
+than telling them nothing. Only the guest BDF is actionable inside the VM, and
+it is only available when the VM was started with `--qmp-socket` — without a
+monitor to ask, an emulated NVMe is reported as `emul` and nothing more,
+because `run-vm` emits `-device nvme,...` with no `addr=` and QEMU picks the
+slot at realize time, so the guest address never appears on the command line.
+
+Passthrough entries come from `-device vfio-pci,host=...`, which is also how a
+GPU or a NIC is passed through, so the device class is checked in
+`/sys/bus/pci/devices/<bdf>/class` and only `0x0108xx` (NVM Express) is
+claimed. A BDF this host has no sysfs entry for is reported with a trailing
+`?` rather than dropped — dropping would silently hide a real NVMe.
+
 `--json` adds the disk image path, full vfio-user socket paths, owning user and
-uptime in seconds:
+uptime in seconds, plus an `nvme` array of objects per VM — `bdf` (canonical
+`dddd:bb:dd.f`, or `null` for an emulated device whose guest BDF is unknown),
+`kind` (`emulated` or `passthrough`), `source` (`argv` or `qmp`, i.e. whether
+the BDF was upgraded from the monitor), `qdev_id`, and `serial` or
+`class_verified` respectively:
 
 ```bash
 # PID of a VM by name

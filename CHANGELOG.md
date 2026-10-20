@@ -6,6 +6,125 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **`qemu-tool list --summary`** — a per-fleet aggregate of the same bytes
+  `list` already prints, plus a measured load picture across CPU, memory,
+  storage, the RDMA mesh, GPUs and logged-in users. VMs are grouped by Docker
+  Compose project, so two stacks on one node stay two fleets.
+
+  Four sections: a header roll-call (`qemu 32/32 ernic 32/32 rocjitsu 32/32
+  infra 1/3`), `HEADROOM` (how many more VMs fit by each ceiling and which one
+  binds), `LOAD`, and `OUTLIERS`. The headroom ceilings are the measured walls
+  this repo records rather than nominal limits: the mesh stops registering at
+  about 40 nodes (issue 17, *not* the 64-node payload cap) and vCPU is budgeted
+  at `nproc` plus 25% (issue 14). On the 32-VM fleet the mesh binds at +8 VMs
+  while vCPU still shows +28, which is the point of printing all four.
+
+  Several numbers are deliberately not the obvious ones:
+
+  - CPU is split by service class, because the ernic mesh sidecars burn as much
+    host CPU as the VMs they serve — a summary reporting only QEMU understates
+    the fleet's cost on the node by over 2x.
+  - Guest RAM resident is cgroup `memory.stat` **shmem**, not `anon`. Guest RAM
+    is a `memory-backend-memfd` with `share=on`, so anon across 32 qemu
+    containers is 2.0 GiB against 45.5 GiB of shmem — anon is 20x low.
+  - Ethernet is the **tx** sum only. The `l2` bridge floods every frame to every
+    guest, so summing rx counts the same ~1 MB once per guest and reports 31 MB
+    of traffic on a fleet that offered 1.
+  - Disk is the **host** figure. Asking the guests gives 301 GiB used across 32
+    guests against the 26.7 GiB this node holds, because every guest counts the
+    whole shared backing file as its own. Both are right; only one decides
+    whether another VM fits.
+  - GPUs are reported as count and gfx target with *utilisation not measurable*
+    spelled out. rocjitsu exposes no stats interface at all and these guests
+    have no amdgpu, so a busy% would be a number nobody could falsify.
+
+  Every collector has a defined unavailable state and renders it rather than a
+  zero, including the unknown bucket for guests whose agent could not answer:
+  an idle fleet and a fleet whose stats files could not be read must not look
+  the same. An ernic instance whose stats file is caught mid-rewrite shrinks
+  the denominator (`31/32 ernic stats read`) instead of contributing a zero.
+
+  `--no-guests` drops the one collector that contacts a guest; the users line
+  then reads `not collected`. Measured on the live 32-VM fleet: 7.0 s with
+  guests, 6.9 s without, of which 5 s is the sample window, which cannot shrink
+  below ~2 s because the ernic servers rewrite their stats at 1 Hz. `docker
+  stats` is used nowhere — it costs 4.2 s for 100 containers against 45 ms for
+  the same figures out of cgroup v2 sysfs. Plain `list` is unchanged and still
+  never opens a guest socket.
+
+  `--summary --json` emits one object whatever the VM count — deliberately not
+  `inspect --json`'s shape, which is a dict for one VM and a list for many —
+  carrying `sampled_seconds`, a `source` per metric group and units in the key
+  names.
+
+- `qemu-tool list --json` gains an `image` field on each `nvme` entry: the
+  scratch qcow2 backing an emulated controller, or null for a passed-through
+  one, which has no host-side image at all. Those images carry the bulk of a
+  fleet's virtual size (1 TiB each against the root overlay's 512 GiB) and were
+  parsed out of `argv` and discarded.
+
+- **An `NVME` column on `qemu-tool list`.** Every NVMe attached to a VM,
+  emulated or passed through, from the same per-PID `argv` parse the GPU, RDMA
+  and VFIO-USER columns already come from. Repeats collapse (`emul*2`), and a
+  VM with none prints `-`.
+
+  The column says which address space it is quoting, because the two are not
+  interchangeable and a BDF alone does not say which one it is. A passthrough
+  entry is a **host** BDF — `-device vfio-pci,host=0000:03:00.0` names a
+  device on this machine — so it is printed labelled, as `host:03:00.0`.
+  Since a GPU and a NIC are passed through by exactly that same argument, the
+  class is read from `/sys/bus/pci/devices/<bdf>/class` and only `0x0108xx`
+  is claimed as NVMe; a BDF this host has no sysfs entry for keeps a trailing
+  `?` rather than being dropped, so an unverified entry is visible but never
+  mistaken for a confirmed one.
+
+  An emulated NVMe prints its **guest** BDF, `00:05.0`, but only where the VM
+  has a QMP monitor to ask: `run-vm` emits `-device nvme,...` with no `addr=`,
+  so QEMU assigns the slot at realize time and the guest address is simply not
+  on the command line. With `--qmp-socket` the entry is upgraded from
+  `query-pci` (proxied with `docker exec` for a containerised VM, since the
+  socket lives in the container's filesystem namespace); without one it reads
+  `emul`. `--json` gains an `nvme` array carrying the canonical BDF, the kind,
+  and whether the address came from `argv` or `qmp`.
+
+- **CI assertions on what `list` and `inspect` report about a live guest.**
+  `scripts/check-vm-devices.sh` takes a running VM's name and demands the
+  positive value for every field the device reporting produces: the `NVME`
+  column is not `-`, `inspect` names a block device on the `nvme` bus with a
+  non-zero capacity and a resolved origin, the GPU names a gfx version and an
+  origin, the SSH key is the one the guest's own `authorized_keys` carries
+  (`ssh_key_source == "guest"`, accepted, found locally) rather than the
+  configured default labelled unverified, and `Login` names the expected user.
+
+  Positive values rather than exit status, because every one of these fields
+  degrades to a plausible-looking placeholder — `-`, a missing line,
+  `configured default, unverified`, `unknown` — with the command still
+  exiting 0, so a lane that only ran it would stay green through a total
+  regression. It reads `--json` rather than the rendered lines, which are
+  prose and get reworded; the sole exception is the `NVME` column, which
+  exists only in the table and is read by field index off the header, never
+  by character offset. On failure it prints the full `list` and `inspect`
+  output, since a CI failure nobody can diagnose from the log gets rerun
+  rather than fixed.
+
+  Two lanes run it, for a few seconds each. `report-for-quickstart` covers
+  all four fields daily on a guest that has an emulated NVMe, an emulated
+  gfx1250 and an ernic at once; it gained `--pid=host` on its job container,
+  without which `list` and `inspect` enumerate a `/proc` holding none of the
+  sibling containers' QEMU processes and print an empty table.
+  `smoke-test-qemu-tool` covers the half no compose stack can reach, on
+  every PR: it
+  passes `--qmp-socket` to `run-vm` and requires a guest BDF rather than
+  `emul`, which `gen-compose` can never emit. Both open their own SSH session
+  first — nothing else in either lane holds one, and these guests have no
+  `/var/run/utmp`, so the login comes from logind state and is only non-empty
+  while somebody is logged in.
+
+  `quickstart-2vm.sh` now also writes the pulled guest key's public half to
+  `<images>/keys/`, one of the places `inspect` looks; without it the Key line
+  reads "accepted by guest, not found locally" and the printed `ssh` command
+  carries no `-i`.
+
 - **A Quick Start that CI runs every day.** `scripts/quickstart-2vm.sh` takes a
   machine with KVM and Docker to two guests — each with an emulated gfx1250, an
   emulated NVMe and an emulated rocm-ernic RDMA NIC — and then proves both
@@ -23,7 +142,7 @@ All notable changes to this project will be documented in this file.
   reusing `lmcache_guest`'s `amdgpu_firmware` and `netplan_ernic` task files
   and `rocjitsu_gpu_test`'s `vector_add.hip` rather than copying them.
 
-  The stack comes from `qemu/env.quickstart`, a two-VM cut of the scale-out
+  The stack comes from `qemu/env/quickstart`, a two-VM cut of the scale-out
   settings generated to a scratch directory, with `VM_NVME=1` and
   `ERNIC_TAP=true` — the TAP is not optional, since the TCP mesh carries RDMA
   payload only and without Ethernet `ib_send_bw` cannot do its out-of-band
@@ -145,7 +264,152 @@ All notable changes to this project will be documented in this file.
   both the committed stack and a tap-enabled render, since `ERNIC_TAP` is off
   by default and the committed copy only exercises one of the two shapes.
 
+- **`--env-file` is repeatable, and layers last-wins.** Pass it more than once
+  to `run-vm`, `gen-vm`, `gen-compose`, `compose` or `inspect` and the files
+  apply left to right, key by key: a key a later file sets wins, a key it
+  omits keeps the earlier value.
+
+  ```bash
+  qemu-tool gen-compose \
+      --env-file qemu/env/scale-out --env-file qemu/env/overlay-mi100
+  ```
+
+  `compose` passes each layer through to `docker compose` as its own
+  `--env-file` in the same order rather than merging them itself, because
+  `docker compose` already takes the flag repeatedly and applies the same
+  rule — verified on compose v5.3.1 — so both sides resolve every key
+  identically instead of nearly so.
+
+  Only `--env-file` layers. The search path (`$QEMU_TOOL_ENV`, `./.env`,
+  `qemu/.env`, …) still resolves to exactly one file: layering is asked for
+  on the command line and never inherited from the ambient environment.
+
+  A generated stack records one `# env-file:` line per layer and a single
+  `# env-sha256:` over all of them concatenated, so an edit to the overlay
+  makes the stack stale exactly as an edit to the golden file does. The digest
+  of a single layer is unchanged, so stacks generated before this still parse.
+
 ### Changed
+
+- **`gen-compose` now mirrors a stack's asset directories instead of adding to
+  them.** `grafana/`, `logging/` and `tapsetup/` in the output directory are
+  made to match the repo: a file the repo does not have is removed, and every
+  removal is printed with the source directory it is missing from.
+
+  The additive version cost the live 32-VM fleet two hours of metrics. A
+  hand-made `grafana/provisioning/datasources/prom.yml` survived a
+  regeneration alongside the repo's `prometheus.yml`, both `isDefault: true`,
+  and Grafana refuses to provision two default datasources
+  (`Only one datasource per organization can be marked as default`). It
+  crash-looped unnoticed, because an extra file breaks nothing until something
+  downstream reads the whole directory; it surfaced as `infra 1/3` in
+  `qemu-tool list --summary`.
+
+  The deletion is scoped per asset directory — the same shape as
+  `publish-pages` rsyncing each lane's subtree with its own `--delete`.
+  Everything else in a stack directory belongs to the operator and is neither
+  read nor written: on the live fleet that is 2.4 GB of TSDB under
+  `prom-data/`, plus `grafana-data/`, `loki-data/`, `results/`, scripts,
+  tarballs and a `docker-compose.override.yml`. A name is owned only if the
+  rendered compose file references it as `./name` **and** the repo's stack
+  directory has something of that name, so a relative `PROM_DATA_DIR` can
+  never make a data directory look like an asset.
+
+  Ownership holds at any depth: a relative bind mount nested under an owned
+  name, such as `LOKI_DATA_DIR=./logging/data`, is the operator's data and is
+  skipped by the prune, not just a `./prom-data` at the top. And the mirror
+  deletes nothing outside the output directory — a symlink on an owned path,
+  at the top level or inside, is refused with the link and its target named
+  rather than followed. Following one emptied the directory the link pointed
+  at while printing paths through the link, so the log never said which
+  directory had actually been emptied.
+
+  Copies run before the prune, and a removal that fails is collected and
+  reported at the end rather than raised on the spot, so a regeneration that
+  fails part way leaves the stack no emptier than it started.
+
+  `--check` compares the asset directories as well as the three generated
+  files, and compares them symmetrically: `missing`, `modified` and `extra`
+  are reported separately. Reporting only the extras answered "would a
+  regeneration delete anything" — `rm <stack>/logging/loki-config.yml` left it
+  printing `Up to date` for a stack that cannot boot, since Docker recreates
+  that bind-mount source as a directory and loki dies on
+  `read /etc/loki/config.yml: is a directory`.
+
+  The first regeneration against a hand-managed directory will remove
+  hand-added dashboards and provisioning files, including anything renamed
+  aside during a repair. That is intended; the `Removed` lines are there so it
+  is not the next mystery.
+
+- **The settings files moved into `qemu/env/`, dropping the `env.` prefix.**
+  Five files that were `qemu/env.<name>` are now `qemu/env/<name>`:
+
+  | Was | Is |
+  |-----|----|
+  | `qemu/env.example` | `qemu/env/example` |
+  | `qemu/env.scale-out` | `qemu/env/scale-out` |
+  | `qemu/env.quickstart` | `qemu/env/quickstart` |
+  | `qemu/env.overlay-ci` | `qemu/env/overlay-ci` |
+  | `qemu/env.overlay-mi100` | `qemu/env/overlay-mi100` |
+
+  **Every documented command that names a settings file has to change.** The
+  flag and the file contents are untouched; only the path moves:
+
+  ```bash
+  qemu-tool gen-compose \
+      --env-file qemu/env/scale-out --env-file qemu/env/overlay-mi100
+  ```
+
+  A gitignored local file follows the same rule — `qemu/env.local-*` is now
+  `qemu/env/local-*`. `qemu/.env` and the rest of the search path
+  (`$QEMU_TOOL_ENV`, `./.env`, `/etc/qemu-tool/env`) are unaffected, so a
+  machine that never passes `--env-file` needs no change.
+
+  The .deb follows the layout: the packaged template is
+  `/usr/share/qemu-tool/env/example`, not `/usr/share/qemu-tool/env.example`.
+  `postinst` still seeds `/etc/qemu-tool/env` from it on first install, so an
+  upgrade keeps its existing settings.
+
+  `qemu/env/` is a third sibling of `qemu/compose/` and `qemu/packages.d/`,
+  mapped into the wheel in place for the same reason they are: the files are
+  referenced by path from CI and the docs, so there is one copy and no
+  working-directory churn. They are data, not Python, so they do not belong
+  under `qemu/qemu-tool/`.
+
+- **One golden fleet settings file plus committed overlays**, replacing
+  `qemu/env.scale-out{,-ci,-mi100,-strix}`. The four were full copies of each
+  other that agreed on about twenty keys and differed on about ten, hand-synced
+  — and only the first of them documented what any key meant, so the other
+  three drifted silently and a reader of one of them had no way to tell a
+  deliberate difference from a missed sync.
+
+  `qemu/env/scale-out` is now authoritative. The fleets that differ from it
+  state only their differing keys in `qemu/env/overlay-ci` and
+  `qemu/env/overlay-mi100`, layered over it with a repeated `--env-file`.
+  `qemu/env.scale-out-strix` is deleted with no
+  replacement overlay.
+
+  The overlays are committed, not generated and not site-local, so a fleet
+  that differs is a diff someone can review. They are deliberately **not**
+  packaged: each names one CI lane or one host, so it is meaningless away from
+  the checkout that explains it. `env/scale-out` ships as before.
+
+- **The golden fleet settings file sets `VM_USERNAME=ubuntu` and
+  `VM_PASSWORD=ubuntu`**, where it used to set `VM_USERNAME=batesste` and
+  leave the password at the built-in `password`. `batesste` is the account on
+  the published CI image and means nothing to anyone outside it; the four
+  files disagreed on both keys (`batesste`, `ubuntu`, `changeme`) for no
+  reason anyone recorded. This is visible beyond the guest login: `gen-compose`
+  writes `ansible_user` into the generated `fleet-inventory.yml` from
+  `VM_USERNAME`, so a fleet regenerated after upgrading addresses its guests
+  as `ubuntu`.
+
+  One path needs an explicit override. `gen-vm` returns before cloud-init on
+  `--backing-image` and `--backing-file`, so `VM_USERNAME` is never applied
+  to a published qcow2, whose only account is `batesste` — and
+  `ansible/playbooks/vm-ernic-fleet.yml` is what creates `ubuntu` on it. Bake
+  that image with `--username batesste` or the run dies at "VM did not accept
+  SSH in time", which reads like a boot failure and is a login failure.
 
 - **The mesh-manager healthcheck no longer opens a connection.** rocm-ernic
   never closes a connection that disconnects without registering, leaving it

@@ -21,15 +21,22 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+import os
 import re
 import shutil
 import sys
 import typing
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 from .config import VMConfig
-from .envfile import _coerce, env_key, find as find_env_file, parse as parse_env
+from .envfile import (
+    _coerce,
+    env_key,
+    find as find_env_file,
+    parse_layers as parse_env_layers,
+)
 
 # Fields the generated qemu entrypoint forwards to run-vm, in emit order.
 # Everything here is per-VM overridable by the rules above.
@@ -101,7 +108,7 @@ _DEFAULTS = {
     "VM_VFIO_USER_ROOT_PORT": "false",
     # ---- LMCache -----------------------------------------------------------
     # Off by default so an env file that predates this feature regenerates
-    # byte-identical output. qemu/env.scale-out turns it on.
+    # byte-identical output. qemu/env/scale-out turns it on.
     #
     # Two switches, not one, because they answer different questions.
     # LMCACHE_ENABLE decides whether the services and their scrape jobs are
@@ -116,7 +123,7 @@ _DEFAULTS = {
     "LMCACHE_ENABLE": "false",
     # -srq: only that tag has nixl built as the rocm wheel variant, and a
     # fleet mixing variants cannot unpickle each other's NIXL descriptors.
-    # See LMCACHE_IMAGE in env.scale-out.
+    # See LMCACHE_IMAGE in env/scale-out.
     "LMCACHE_IMAGE": "qemu-tool/lmcache-rocm:0.5.6-gfx1250-srq",
     # The MP coordinator's HTTP port (`lmcache coordinator`, default 9300).
     # This is the MP-mode coordinator -- membership, the key directory, L2
@@ -166,6 +173,10 @@ _DEFAULTS = {
     # survive without this, but annotations, starred dashboards and any
     # ad-hoc exploration do not. Absolute for the same reason as the TSDB.
     "GRAFANA_DATA_DIR": "/var/lib/qemu-tool/grafana-data",
+    # ---- Container user ----------------------------------------------------
+    # Empty means "every service keeps its image's own user", which for all of
+    # these is root. See _container_user().
+    "CONTAINER_USER": "",
 }
 
 # Third octet per service family. Static addressing keeps Docker's embedded
@@ -188,22 +199,92 @@ _TAPSETUP_IMAGE = "qemu-tool/ernic-tapsetup:1"
 _INFRA_EXPORTER, _INFRA_PROM, _INFRA_LMCACHE, _INFRA_GRAFANA = 10, 11, 12, 13
 _INFRA_LMCACHE_STATS, _INFRA_LOKI, _INFRA_ALLOY = 14, 15, 16
 
+# CONTAINER_USER reaches the YAML as a compose variable reference, never as
+# the value the generator read. The generated stack is committed and
+# `gen-compose --check` compares it byte for byte in CI, so a uid baked into
+# the render would fail that check on every machine but the one that ran the
+# generator. The key is therefore read here only as a switch: present means
+# "emit the reference", and the uid itself is resolved by compose at `up`.
+#
+# The :? form, not :- , because the silent-failure spelling is the one people
+# reach for. Measured on compose v5.3.1: an unset variable interpolates to the
+# empty string, `user: ":"` is not an error to Docker, and the container runs
+# as root -- a fleet that looks configured and is not, with one warning line
+# as the only evidence.
+_USER_VAR = "${CONTAINER_USER:?set CONTAINER_USER=<uid>:<gid>}"
+_USER_REF = f'"{_USER_VAR}"'
+# The host's kvm group. Only the qemu service needs it, and only to open
+# /dev/kvm: a container given --user <uid>:<gid> holds no supplementary
+# groups, so without this `accel=kvm` fails on a device node that is
+# crw-rw---- root:kvm. The gid differs per host (136 here, 108 on other
+# distributions), so like the uid it is resolved at `up`, not baked.
+_KVM_GID_REF = '"${CONTAINER_KVM_GID:?set CONTAINER_KVM_GID to the host kvm gid}"'
+_UID_GID_RE = re.compile(r"[0-9]+:[0-9]+")
+
 _PROVENANCE = "# env-sha256: "
+_ENV_FILE_LINE = "# env-file: "
+
+# Lines of header to scan for the digest. Generous because the header now
+# carries one env-file line per layer, and a file whose digest is just past
+# the window reads as "not generated" -- which silences the staleness warning
+# instead of raising it.
+_PROVENANCE_SCAN_LINES = 40
 
 
-def env_digest(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def env_digest(paths: Path | Sequence[Path]) -> str:
+    """One digest over every layer, concatenated in order.
+
+    Not a digest of the last layer or a set of per-file digests: an overlay is
+    as much an input to the render as the golden file under it, so a change in
+    ANY layer -- or a reordering of them -- has to invalidate the result. A
+    single layer still hashes to the bytes of that file, so stacks generated
+    before layering existed keep their recorded digest.
+    """
+    layers = [paths] if isinstance(paths, Path) else list(paths)
+    digest = hashlib.sha256()
+    for layer in layers:
+        digest.update(layer.read_bytes())
+    return digest.hexdigest()
 
 
 def recorded_digest(compose_file: Path) -> str | None:
-    """Return the env hash a generated compose file was built from."""
+    """Return the env hash a generated compose file was built from.
+
+    The digest line is unchanged from the single-file header, so a stack
+    generated by the old code -- /var/lib/qemu-tool/stacks/mi100-fleet was,
+    and _warn_if_stale still reads it -- still parses here.
+    """
     try:
-        for line in compose_file.read_text().splitlines()[:20]:
+        for line in compose_file.read_text().splitlines()[:_PROVENANCE_SCAN_LINES]:
             if line.startswith(_PROVENANCE):
                 return line[len(_PROVENANCE):].strip()
     except OSError:
         return None
     return None
+
+
+def recorded_env_files(compose_file: Path) -> list[str]:
+    """The env-file layers a generated file names, in order. [] if none."""
+    names: list[str] = []
+    try:
+        for line in compose_file.read_text().splitlines()[:_PROVENANCE_SCAN_LINES]:
+            if line.startswith(_ENV_FILE_LINE):
+                names.append(line[len(_ENV_FILE_LINE):].strip())
+    except OSError:
+        return []
+    return names
+
+
+def _env_file_args(env_names: Sequence[str]) -> str:
+    """The --env-file arguments that reproduce this render, in order."""
+    return " ".join(f"--env-file {name}" for name in env_names)
+
+
+def _provenance_lines(env_names: Sequence[str], digest: str) -> list[str]:
+    """One env-file line per layer, then the digest over all of them."""
+    out = [f"{_ENV_FILE_LINE}{name}" for name in env_names]
+    out.append(f"{_PROVENANCE}{digest}")
+    return out
 
 
 def _get(values: dict[str, str], key: str) -> str:
@@ -336,6 +417,40 @@ def _check_image_coherence(values: dict[str, str]) -> None:
         )
 
 
+def _container_user(values: dict[str, str]) -> bool:
+    """Whether to emit `user:`, after refusing values that cannot work.
+
+    The value itself is not used -- see _USER_REF -- but it is checked here,
+    because every way of getting it wrong fails somewhere far from the env
+    file:
+
+    * A name ("stebates"). The uid running these containers has no passwd
+      entry inside the images; only `nobody` does. Docker resolves a name
+      against the IMAGE's /etc/passwd and fails at container create with
+      "unable to find user".
+    * A bare uid ("1000"). Docker then takes the gid from that uid's passwd
+      entry, which does not exist either.
+    * "${UID}:${GID}", which is the spelling people try first and the worst
+      of the three. Bash exports neither, so envfile's expandvars leaves the
+      text literal, compose substitutes empty for both, and `user: ":"` runs
+      as root without erroring.
+    """
+    raw = _get(values, "CONTAINER_USER").strip()
+    if not raw:
+        return False
+    if not _UID_GID_RE.fullmatch(raw):
+        sys.exit(
+            f"Error: CONTAINER_USER must be numeric <uid>:<gid>, got {raw!r}.\n"
+            "  A user name does not resolve: the images carry no passwd entry "
+            "for your uid.\n"
+            "  ${UID}:${GID} does not work either -- bash exports neither, so "
+            "it silently becomes root.\n"
+            "  Use the literal ids, e.g. CONTAINER_USER=$(id -u):$(id -g) "
+            "evaluated by your shell."
+        )
+    return True
+
+
 def plan(values: dict[str, str]) -> dict[str, Any]:
     """Resolve the env file into everything the templates need."""
     raw_count = _get(values, "VM_COUNT")
@@ -445,6 +560,7 @@ def plan(values: dict[str, str]) -> dict[str, Any]:
         "grafana_image": _get(values, "GRAFANA_IMAGE"),
         "grafana_port": _get(values, "GRAFANA_PORT"),
         "grafana_password": _get(values, "GRAFANA_ADMIN_PASSWORD"),
+        "container_user": _container_user(values),
         "subnet": subnet,
         "vm_username": _get(values, "VM_USERNAME"),
         "vm_filesystem": _get(values, "VM_FILESYSTEM"),
@@ -524,15 +640,14 @@ def _pipx_install(bin_dir: str = "/usr/local/bin") -> list[str]:
     ]
 
 
-def render_compose(spec: dict[str, Any], env_name: str, digest: str) -> str:
+def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) -> str:
     out: list[str] = ["---"]
     out.append("# Generated by `qemu-tool gen-compose`. Do not edit.")
     out.append("#")
-    out.append(f"# Regenerate after changing {env_name}:")
-    out.append(f"#   qemu-tool gen-compose --env-file {env_name}")
+    out.append(f"# Regenerate after changing {' or '.join(env_names)}:")
+    out.append(f"#   qemu-tool gen-compose {_env_file_args(env_names)}")
     out.append("#")
-    out.append(f"# env-file: {env_name}")
-    out.append(f"{_PROVENANCE}{digest}")
+    out += _provenance_lines(env_names, digest)
     out.append("")
     # Bound every container's log. Docker's json-file driver is unlimited by
     # default, and an ernic manager that reaches EMFILE spins in an accept()
@@ -548,6 +663,19 @@ def render_compose(spec: dict[str, Any], env_name: str, digest: str) -> str:
     out.append("x-ernic-common: &ernic-common")
     out.append('  image: "${ERNIC_IMAGE}"')
     out.append("  logging: *logging")
+    if spec["container_user"]:
+        # Both device servers only write into the two tmpfs volumes, which a
+        # tmpfs mounts 1777, so an unprivileged uid creates its socket and its
+        # stats file there with no pre-seeding and no init container.
+        #
+        # This anchor also carries rocjitsu, and that is not incidental:
+        # rocjitsu does not chmod its vfio-user socket, so it stays 0755 owned
+        # by whoever created it, and connect(2) on a unix socket needs write
+        # on the inode. A qemu on a different uid than rocjitsu therefore
+        # cannot attach the GPU at all. rocm-ernic hides this by chmodding its
+        # own socket to 0666; do not generalise from it. The two anchors must
+        # move together.
+        out.append(f"  user: {_USER_REF}")
     # Docker's default soft nofile limit is 1024, and the mesh manager does not
     # close the socket of a node it evicts -- a reconnecting worker gets a new
     # node id and a new fd, and the old one is never reclaimed. At fleet scale
@@ -578,6 +706,20 @@ def render_compose(spec: dict[str, Any], env_name: str, digest: str) -> str:
     out.append('    - "${QEMU_TOOL_SRC:-../../..}:/qemu-tool-src:ro"')
     out.append("  devices:")
     out.append("    - /dev/kvm")
+    if spec["container_user"]:
+        # The point of the whole setting: with VM_NVME set, run-vm creates
+        # <VM_IMAGES_DIR>/<vm>-nvmeN.qcow2 from INSIDE this container, into a
+        # directory that belongs to the person who started the fleet. As root
+        # that lands 0644 root-owned in their own images/.
+        #
+        # Which is also the migration hazard: 0644 root-owned is not writable
+        # by the uid, and QEMU opens a drive read-write, so an NVMe qcow2 left
+        # behind by an earlier root run stops the guest booting rather than
+        # merely having the wrong owner. Delete those before the first
+        # non-root run.
+        out.append(f"  user: {_USER_REF}")
+        out.append("  group_add:")
+        out.append(f"    - {_KVM_GID_REF}")
     out.append('  restart: "no"')
     out.append("")
     out.append("services:")
@@ -749,8 +891,20 @@ def render_compose(spec: dict[str, Any], env_name: str, digest: str) -> str:
         # resolver drop queries -- measured at 48 VMs, where 12 guests died on
         # "Failed to resolve 'pypi.org'" before QEMU ever started. Retry
         # rather than lose the guest.
-        out.extend(_pipx_install())
-        out.append("        exec qemu-tool run-vm \\")
+        if spec["container_user"]:
+            # /usr/local/bin is root-owned 0755 and the image's HOME is "/",
+            # also unwritable, so the default install prefix fails before QEMU
+            # ever starts -- and this service is restart: "no", so that is a
+            # lost guest, not a retry. Same writable-prefix path the stats
+            # exporter has always used.
+            out.extend(_pipx_install("/tmp/bin"))
+            # /tmp/bin is not on PATH. Missing this is the easy one: the
+            # install succeeds and the failure is a bare "qemu-tool: not
+            # found" at exec.
+            out.append("        exec /tmp/bin/qemu-tool run-vm \\")
+        else:
+            out.extend(_pipx_install())
+            out.append("        exec qemu-tool run-vm \\")
         out.append('          --images "${VM_IMAGES_DIR}" \\')
         out.append(f'          --vm-name "{vm["name"]}" \\')
         out.append("          --ssh-port 2222 \\")
@@ -775,10 +929,20 @@ def render_compose(spec: dict[str, Any], env_name: str, digest: str) -> str:
     out.append("      fleet:")
     out.append(f"        ipv4_address: {spec['exporter_addr']}")
     out.append("    devices: []")
+    if spec["container_user"]:
+        # Nulls out the kvm group the qemu anchor adds, beside the devices: []
+        # that nulls out the device it is for. This service never touches
+        # /dev/kvm.
+        out.append("    group_add: []")
     # The exporter needs no privilege: it reads world-readable dumps off a
     # sticky tmpfs and binds an unprivileged port. Every other service in the
     # stack is root only because its base image declares no USER, which is a
     # default rather than a decision; this one is cheap to fix, so it is.
+    #
+    # Deliberately NOT CONTAINER_USER, which overrides this line if it is ever
+    # emitted after the merge key: nobody is the right answer here. This
+    # process creates nothing on the host, so there is no ownership to get
+    # right, and 65534 is the stronger position of the two.
     out.append('    user: "65534:65534"')
     out.append("    volumes:")
     out.append("      - ernic-stats:/run/ernic-stats:ro")
@@ -800,6 +964,13 @@ def render_compose(spec: dict[str, Any], env_name: str, digest: str) -> str:
     out.append("      fleet:")
     out.append(f"        ipv4_address: {spec['prometheus_addr']}")
     out.append("    restart: on-failure")
+    if spec["container_user"]:
+        # This image already defaults to nobody, so the change here is not
+        # root -> unprivileged, it is 65534 -> you: PROM_DATA_DIR is a host
+        # bind mount, and the TSDB of a fleet run should belong to the person
+        # who ran the fleet. It must be chowned to the same uid first, or
+        # Prometheus crash-loops on "mkdir data/: permission denied".
+        out.append(f"    user: {_USER_REF}")
     out.append("    volumes:")
     out.append("      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro")
     # A bind mount, not a named volume: the TSDB is the record of a fleet run,
@@ -825,6 +996,10 @@ def render_compose(spec: dict[str, Any], env_name: str, digest: str) -> str:
         out.append("      fleet:")
         out.append(f"        ipv4_address: {spec['loki_addr']}")
         out.append("    restart: on-failure")
+        if spec["container_user"]:
+            # Same as Prometheus: LOKI_DATA_DIR is a host bind mount and has
+            # to be chowned to this uid before the first run.
+            out.append(f"    user: {_USER_REF}")
         out.append("    volumes:")
         out.append("      - ./logging/loki-config.yml:/etc/loki/config.yml:ro")
         # Absolute, for the same reason as the TSDB: a relative path resolves
@@ -846,6 +1021,17 @@ def render_compose(spec: dict[str, Any], env_name: str, digest: str) -> str:
         out.append("  # Ships every stack container's logs. The guests run")
         out.append("  # their own Alloy: a VM's journal is behind QEMU, not")
         out.append("  # on this Docker socket.")
+        if spec["container_user"]:
+            # Exempt from CONTAINER_USER, and the only one exempted by
+            # judgement rather than by a hard requirement.
+            out.append("  #")
+            out.append("  # Stays root under CONTAINER_USER. It writes no")
+            out.append("  # host state -- its only mount is the Docker")
+            out.append("  # socket, read-only, and --storage.path is /tmp --")
+            out.append("  # so there is no ownership here to fix. Running it")
+            out.append("  # as the invoking user would need that user in the")
+            out.append("  # host docker group, which is root-equivalent on")
+            out.append("  # the host: uniform, not safer.")
         out.append("  alloy:")
         out.append(f'    image: "{spec["alloy_image"]}"')
         out.append("    logging: *logging")
@@ -879,6 +1065,12 @@ def render_compose(spec: dict[str, Any], env_name: str, digest: str) -> str:
         out.append("      fleet:")
         out.append(f"        ipv4_address: {spec['grafana_addr']}")
         out.append("    restart: on-failure")
+        if spec["container_user"]:
+            # Grafana's image defaults to uid 472 and GRAFANA_DATA_DIR does
+            # not usually exist before the first `up`, so the daemon creates
+            # it root-owned and Grafana cannot write its sqlite. Owning it as
+            # the invoking user is the same fix with a better owner.
+            out.append(f"    user: {_USER_REF}")
         out.append("    depends_on:")
         out.append("      - prometheus")
         out.append("    environment:")
@@ -926,6 +1118,12 @@ def render_compose(spec: dict[str, Any], env_name: str, digest: str) -> str:
         out.append("      fleet:")
         out.append(f"        ipv4_address: {spec['lmcache_addr']}")
         out.append("    restart: on-failure")
+        if spec["container_user"]:
+            # No devices, no mounts, no volumes and an unprivileged port, so
+            # there is nothing here that needs uid 0. Untested against the
+            # real image, which is not on every node: if it turns out to want
+            # a writable HOME for a ~/.cache, that is where it will fail.
+            out.append(f"    user: {_USER_REF}")
         # Reachable from the guests without publishing anything: QEMU's SLIRP
         # NATs guest egress out through the qemu container's own stack, and
         # that container is on this network. So a guest dials the
@@ -987,8 +1185,12 @@ def render_compose(spec: dict[str, Any], env_name: str, digest: str) -> str:
         out.append("      fleet:")
         out.append(f"        ipv4_address: {spec['lmcache_stats_addr']}")
         out.append("    devices: []")
+        if spec["container_user"]:
+            out.append("    group_add: []")
         # Same reasoning as the ernic exporter: it only reads an HTTP API and
         # binds an unprivileged port, so it has no business running as root.
+        # CONTAINER_USER does not apply, for the same reason -- it owns
+        # nothing on the host.
         out.append('    user: "65534:65534"')
         out.append("    volumes:")
         out.append('      - "${QEMU_TOOL_SRC:-../../..}:/qemu-tool-src:ro"')
@@ -1013,6 +1215,28 @@ def render_compose(spec: dict[str, Any], env_name: str, digest: str) -> str:
         out.append("  # One short-lived privileged sidecar per ernic. It shares")
         out.append("  # that ernic's network namespace, creates the tap and the")
         out.append("  # bridge, and exits. NET_ADMIN lives here and nowhere else.")
+        if spec["container_user"]:
+            # The one service that CANNOT take CONTAINER_USER. Say so here,
+            # because "why is this one still root" is the first question a
+            # reader of the generated file will have.
+            out.append("  #")
+            out.append("  # The one service CONTAINER_USER does not apply to,")
+            out.append("  # and not by choice. cap_add raises only the bounding")
+            out.append("  # and permitted sets; Docker sets no AMBIENT")
+            out.append("  # capabilities, so a non-root uid holds nothing")
+            out.append("  # effective and NET_ADMIN is dropped at the switch to")
+            out.append("  # it. Measured: --user <uid> --cap-add NET_ADMIN gives")
+            out.append("  # 'RTNETLINK answers: Operation not permitted' on the")
+            out.append("  # first `ip` call. Compose cannot express ambient")
+            out.append("  # caps, so there is no fix -- only this container, for")
+            out.append("  # the seconds it takes to wire a bridge.")
+            out.append("  #")
+            out.append("  # TAP_OWNER below is how the ernic stays unprivileged")
+            out.append("  # anyway: the tap is created persistent and owned by")
+            out.append("  # the uid that will attach to it, because TUNSETIFF on")
+            out.append("  # a persistent tap needs a matching owner or")
+            out.append("  # NET_ADMIN. Left at the default of 0 it would hand a")
+            out.append("  # non-root ernic EPERM and a guest with no Ethernet.")
         for vm in spec["vms"]:
             n = vm["n"]
             out.append(f"  tapsetup-{n}:")
@@ -1028,6 +1252,8 @@ def render_compose(spec: dict[str, Any], env_name: str, digest: str) -> str:
             # looks like a worker bug -- see tapsetup/setup.sh.
             out.append("    environment:")
             out.append(f"      - FLEET_PREFIX={spec['net_prefix']}")
+            if spec["container_user"]:
+                out.append(f'      - "TAP_OWNER={_USER_VAR}"')
             out.append("    devices:")
             out.append("      - /dev/net/tun")
             out.append('    restart: "no"')
@@ -1067,11 +1293,10 @@ def render_compose(spec: dict[str, Any], env_name: str, digest: str) -> str:
     return "\n".join(out) + "\n"
 
 
-def render_prometheus(spec: dict[str, Any], env_name: str, digest: str) -> str:
+def render_prometheus(spec: dict[str, Any], env_names: Sequence[str], digest: str) -> str:
     out: list[str] = ["---"]
     out.append("# Generated by `qemu-tool gen-compose`. Do not edit.")
-    out.append(f"# env-file: {env_name}")
-    out.append(f"{_PROVENANCE}{digest}")
+    out += _provenance_lines(env_names, digest)
     out.append("")
     out.append("global:")
     out.append(f"  scrape_interval: {spec['prom_interval']}")
@@ -1145,7 +1370,7 @@ def render_prometheus(spec: dict[str, Any], env_name: str, digest: str) -> str:
     return "\n".join(out) + "\n"
 
 
-def render_inventory(spec: dict[str, Any], env_name: str, digest: str) -> str:
+def render_inventory(spec: dict[str, Any], env_names: Sequence[str], digest: str) -> str:
     """The fleet's ansible inventory, derived from the same VM_COUNT.
 
     Generated rather than hand-kept because the failure mode of a stale one is
@@ -1155,8 +1380,7 @@ def render_inventory(spec: dict[str, Any], env_name: str, digest: str) -> str:
     """
     out: list[str] = ["---"]
     out.append("# Generated by `qemu-tool gen-compose`. Do not edit.")
-    out.append(f"# env-file: {env_name}")
-    out.append(f"{_PROVENANCE}{digest}")
+    out += _provenance_lines(env_names, digest)
     out.append("")
     out.append("all:")
     out.append("  vars:")
@@ -1224,14 +1448,224 @@ def render_inventory(spec: dict[str, Any], env_name: str, digest: str) -> str:
 
 
 # Every `./x` the rendered compose file names: a build context, a bind-mounted
-# config file, a directory of them.
-_RELATIVE_REF = re.compile(r"\./([A-Za-z0-9_.-]+)")
+# config file, a directory of them. Captured whole, not just the first
+# segment -- `./logging/data` is a reference to a data directory, not to
+# `logging` (see _protected_paths).
+_RELATIVE_REF = re.compile(r"\./([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*)")
+
+
+def _stack_source() -> Path:
+    """This repo's copy of the stack: the authority the mirror copies from."""
+    from .compose import _compose_dir
+
+    return _compose_dir("vfio-user-ernic-rocjitsu-scale-out")
+
+
+def _owned_assets(
+    compose_body: str, generated: set[str], output_dir: Path
+) -> list[tuple[Path, Path]]:
+    """The (source, destination) pairs this generator owns, in copy order.
+
+    Ownership is deliberately narrow, because the destination is a live stack
+    directory full of things that are not ours: in the 32-VM fleet's directory,
+    2.4 GB of Prometheus TSDB under prom-data, grafana-data, loki-data,
+    results/, ad-hoc scripts, tarballs and a docker-compose.override.yml. A
+    name qualifies only if the rendered compose file names it as `./name` AND
+    the repo's stack directory has something of that name to copy. A
+    `./prom-data` bind mount therefore does not qualify -- the repo has no
+    prom-data -- so no amount of compose-file editing can point the mirror at
+    an operator's data.
+    """
+    source = _stack_source()
+    pairs = []
+    # The first segment is what names an asset directory; the rest of the
+    # reference is a path inside it, and _protected_paths is what reads that.
+    names = {ref.split("/")[0] for ref in _RELATIVE_REF.findall(compose_body)}
+    for name in sorted(names):
+        # "." and ".." are references out of the stack, not assets of it: the
+        # compose file mounts ./.. for the qemu-tool source tree. Copying one
+        # means copying the whole compose root into the parent of the output
+        # directory, which is both wrong and, mercifully, usually a permission
+        # error rather than a silent mess.
+        if name in {".", ".."} or name in generated:
+            continue
+        src = source / name
+        dst = output_dir / name
+        if not src.exists() or src.resolve() == dst.resolve():
+            continue
+        pairs.append((src, dst))
+    return pairs
+
+
+def _protected_paths(
+    compose_body: str, source: Path, output_dir: Path
+) -> set[Path]:
+    """Relative bind-mount sources, in full, that the repo has nothing for.
+
+    _owned_assets reasons about the first path segment only, which is right
+    for deciding what is an asset directory and wrong for deciding what is in
+    it. `LOKI_DATA_DIR=./logging/data` -- Loki's data next to
+    logging/loki-config.yml, a natural choice that plan() accepts without
+    comment -- marks `logging` owned and contributes nothing to the wanted
+    set, so the regeneration deleted the data directory the stack had just
+    been told to use. A multi-segment reference the repo cannot supply is the
+    operator's at any depth, exactly as `./prom-data` is at the top. One the
+    repo CAN supply is an asset, and stays prunable: protecting
+    `./grafana/provisioning` because it is bind-mounted would shield the
+    superseded datasource this whole mirror exists to remove.
+    """
+    protected = set()
+    for ref in set(_RELATIVE_REF.findall(compose_body)):
+        if "/" not in ref or ref.startswith(".."):
+            continue
+        if (source / ref).exists():
+            continue
+        protected.add(output_dir / ref)
+    return protected
+
+
+def _walk_owned(dst: Path) -> tuple[list[Path], list[Path]]:
+    """Every real path under dst, and every symlink the walk refused to cross.
+
+    The invariant the mirror has to hold: it may never delete or write
+    anything that is not inside the output directory itself. A symlink on an
+    owned path breaks that in both directions, and pathlib hides it --
+    rglob does not recurse into a symlinked subdirectory, but it does descend
+    when the starting path is itself a symlink. An operator keeping dashboards
+    on a big disk with `ln -s /srv/grafana-shared <stack>/grafana` had
+    /srv/grafana-shared enumerated and emptied, with every `Removed` line
+    naming the path through the link rather than the directory actually being
+    emptied. Comparing resolved paths is not a fix: it rejects one alias out
+    of many. So no symlink is followed and no symlink is deleted -- it is
+    reported and its asset is left alone.
+    """
+    if dst.is_symlink():
+        return [], [dst]
+    if not dst.is_dir():
+        return [], []
+    paths: list[Path] = []
+    links: list[Path] = []
+    pending = [dst]
+    while pending:
+        for entry in sorted(pending.pop().iterdir()):
+            if entry.is_symlink():
+                links.append(entry)
+                continue
+            paths.append(entry)
+            if entry.is_dir():
+                pending.append(entry)
+    return paths, links
+
+
+def _diff_result(**kwargs: list[Path]) -> dict[str, list[Path]]:
+    result: dict[str, list[Path]] = {
+        key: []
+        for key in ("missing", "modified", "retyped", "extra", "unowned")
+    }
+    result.update(kwargs)
+    return result
+
+
+def _asset_diff(
+    src: Path, dst: Path, protected: frozenset[Path] | set[Path] = frozenset()
+) -> dict[str, list[Path]]:
+    """How dst differs from src, as lists of dst paths.
+
+    Four classes, because --check has to answer "would a regeneration change
+    anything" and not just "would it delete anything": `missing` is in the
+    repo and not the stack, `modified` is in both and differs, `extra` is in
+    the stack and not the repo, `unowned` is a symlink the mirror will not
+    cross. `retyped` is the subset of `modified` whose file/directory type
+    differs, which the copy cannot overwrite in place.
+    """
+    if dst.is_symlink():
+        return _diff_result(unowned=[dst])
+    if dst.exists() and dst.is_dir() != src.is_dir():
+        # Docker creates a missing bind-mount source as a directory, so this
+        # is the ordinary state of a stack that was started before its assets
+        # were copied. The copy restores the right type immediately.
+        return _diff_result(modified=[dst], retyped=[dst])
+
+    present, unowned = _walk_owned(dst)
+    if unowned:
+        return _diff_result(unowned=unowned)
+    if not src.is_dir():
+        if not dst.exists():
+            return _diff_result(missing=[dst])
+        if dst.read_bytes() != src.read_bytes():
+            return _diff_result(modified=[dst])
+        return _diff_result()
+
+    have = {path.relative_to(dst) for path in present}
+    wanted = set()
+    missing, modified, retyped = [], [], []
+    for path in sorted(src.rglob("*")):
+        rel = path.relative_to(src)
+        wanted.add(rel)
+        target = dst / rel
+        if rel not in have:
+            missing.append(target)
+        elif path.is_dir() != target.is_dir():
+            modified.append(target)
+            retyped.append(target)
+        elif path.is_file() and path.read_bytes() != target.read_bytes():
+            modified.append(target)
+    # Deepest first: a directory's contents have to go before the directory.
+    #
+    # A protected path shields its ANCESTORS as well as itself and everything
+    # under it, and the deepest-first order is exactly why. With
+    # LOKI_DATA_DIR=./logging/data/sub, `logging/data/sub` is skipped as
+    # protected and then `logging/data` -- unprotected, unwanted, and holding
+    # it -- is rmtree'd with the protected directory still inside. Measured:
+    # one line of output, "Removed .../logging/data", and the operator's
+    # chunk.db gone. Shielding only the path and its children reads as
+    # sufficient and is not.
+    extra = [
+        path for path in sorted(present, reverse=True)
+        if path.relative_to(dst) not in wanted
+        and not any(
+            path == keep or keep in path.parents or path in keep.parents
+            for keep in protected
+        )
+    ]
+    return _diff_result(
+        missing=missing, modified=modified, retyped=retyped, extra=extra)
+
+
+def _superseded(
+    src: Path, dst: Path, protected: frozenset[Path] | set[Path] = frozenset()
+) -> list[Path]:
+    """Everything under dst that src does not have, deepest first."""
+    return _asset_diff(src, dst, protected)["extra"]
 
 
 def _copy_stack_assets(
     compose_body: str, generated: set[str], output_dir: Path
 ) -> None:
-    """Copy the stack's non-generated assets next to the generated files.
+    """Mirror the stack's non-generated assets next to the generated files.
+
+    Authoritative, not additive: after this runs each owned asset directory
+    matches the repo. The additive version cost the 32-VM fleet two hours of
+    metrics. A hand-made grafana/provisioning/datasources/prom.yml survived
+    alongside the repo's prometheus.yml, both `isDefault: true`, and Grafana
+    refuses to start on that:
+
+        Only one datasource per organization can be marked as default
+
+    It crash-looped unnoticed, because an asset that is merely *extra* breaks
+    nothing until something downstream reads the whole directory. So extra
+    files are removed -- and named on the way out, since a silent deletion of
+    an operator's hand-added file is the next two-hour mystery. The deletion
+    is scoped per asset directory, the same shape as publish-pages rsyncing
+    each lane's subtree with its own --delete: nothing else in the stack
+    directory is read, let alone written.
+
+    The invariant that scoping rests on, and the one to preserve in any later
+    change here: this function may delete nothing that is not inside
+    output_dir itself. Two things can carry it out of there, and both are
+    refused rather than resolved -- a symlink anywhere on an owned path (see
+    _walk_owned) and a relative bind-mount source nested under an owned name
+    (see _protected_paths).
 
     Only the three rendered files used to be written, which made the
     documented --output-dir workflow produce a stack that could not run. Two
@@ -1247,58 +1681,96 @@ def _copy_stack_assets(
     real cause, and the directories are left behind to confuse the next run.
 
     Generating to a scratch directory is the documented workflow
-    (env.scale-out-mi100), precisely because writing over the committed stack
+    (env/overlay-mi100), precisely because writing over the committed stack
     is what `gen-compose --check` exists to catch. The committed stack is
     unaffected: there source and destination are the same directory, and each
     copy is skipped.
-    """
-    from .compose import _compose_dir
 
-    source = _compose_dir("vfio-user-ernic-rocjitsu-scale-out")
-    for name in sorted(set(_RELATIVE_REF.findall(compose_body))):
-        # "." and ".." are references out of the stack, not assets of it: the
-        # compose file mounts ./.. for the qemu-tool source tree. Copying one
-        # means copying the whole compose root into the parent of the output
-        # directory, which is both wrong and, mercifully, usually a permission
-        # error rather than a silent mess.
-        if name in {".", ".."} or name in generated:
+    Two orderings matter, both because this code deletes files for a living.
+    Copy first and prune second: the prune set is computed from the source
+    before anything is written, so the order is free, and prune-first turned
+    one unremovable entry into a stack emptier than it started -- the
+    hand-made file deleted, the PermissionError propagating out, and not one
+    asset copied. The only deletions that still precede a copy are type
+    mismatches, each of which the very next copy recreates. And a failed
+    removal is collected rather than raised, so the remaining assets are still
+    mirrored before anything is reported.
+    """
+    source = _stack_source()
+    protected = _protected_paths(compose_body, source, output_dir)
+    problems: list[str] = []
+    for src, dst in _owned_assets(compose_body, generated, output_dir):
+        diff = _asset_diff(src, dst, protected)
+        if diff["unowned"]:
+            # Left strictly alone: following it would write outside the output
+            # directory and pruning it would empty a directory the operator
+            # put somewhere else on purpose. Say so and move on -- an operator
+            # who symlinked grafana/ would rather be told than have /srv
+            # emptied under the name of a stack asset.
+            for path in diff["unowned"]:
+                target = os.readlink(path)
+                where = "it" if path == dst else dst
+                problems.append(
+                    f"{path} is a symlink to {target}; {where} was left alone"
+                )
+                print(f"Refused {path}: symlink to {target}, not this stack's")
             continue
-        src = source / name
-        dst = output_dir / name
-        if not src.exists() or src.resolve() == dst.resolve():
-            continue
-        # Docker may have left a directory here standing in for a file it was
-        # asked to bind-mount. Clear it, or copytree/copy2 fails or nests.
-        if dst.is_dir() and not src.is_dir():
-            shutil.rmtree(dst)
+        for path in diff["retyped"]:
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
         if src.is_dir():
             shutil.copytree(src, dst, dirs_exist_ok=True)
         else:
             shutil.copy2(src, dst)
         print(f"Copied {src} -> {dst}")
+        for path in diff["extra"]:
+            try:
+                if path.is_dir():
+                    shutil.rmtree(path)
+                else:
+                    path.unlink()
+            except OSError as error:
+                problems.append(f"{path}: {error.strerror}")
+                continue
+            print(f"Removed {path} (not in {src})")
+    if problems:
+        sys.exit(
+            "Error: the stack directory was not fully mirrored:\n  "
+            + "\n  ".join(problems)
+        )
 
 
 def run(
-    env_file: Path | None,
+    env_file: Path | Sequence[Path] | None,
     output_dir: Path,
     check: bool = False,
     dry_run: bool = False,
 ) -> None:
-    path = find_env_file(env_file)
-    if path is None:
+    paths = find_env_file(env_file)
+    if not paths:
         sys.exit("Error: no env file found. Pass --env-file.")
-    values = parse_env(path)
+    values = parse_env_layers(paths)
     spec = plan(values)
-    digest = env_digest(path)
-    env_name = str(env_file) if env_file is not None else path.name
+    digest = env_digest(paths)
+    # The names as the user wrote them, so the recorded header is a command
+    # that can be pasted back. Falls back to the basename of what the search
+    # path found, which is what the single-file header always recorded.
+    if env_file is None:
+        env_names = [paths[0].name]
+    elif isinstance(env_file, Path):
+        env_names = [str(env_file)]
+    else:
+        env_names = [str(layer) for layer in env_file]
 
     artifacts = {
-        "docker-compose.yml": render_compose(spec, env_name, digest),
-        "prometheus.yml": render_prometheus(spec, env_name, digest),
+        "docker-compose.yml": render_compose(spec, env_names, digest),
+        "prometheus.yml": render_prometheus(spec, env_names, digest),
         # Alongside the other two rather than under ansible/inventory/, so all
         # three carry one env-sha256 and `--check` stays a single comparison
         # against one directory. Point ansible-playbook at it with -i.
-        "fleet-inventory.yml": render_inventory(spec, env_name, digest),
+        "fleet-inventory.yml": render_inventory(spec, env_names, digest),
     }
 
     if dry_run:
@@ -1313,11 +1785,61 @@ def run(
             if not (output_dir / name).is_file()
             or (output_dir / name).read_text() != body
         ]
-        if stale:
-            sys.exit(
-                "Error: generated files are out of date: " + ", ".join(sorted(stale)) +
-                f"\nRegenerate with: qemu-tool gen-compose --env-file {env_name}"
+        # --check is the gate that is meant to notice exactly the two-hour
+        # Grafana outage, and a superseded file is invisible to a file-by-file
+        # comparison of the generated artifacts: nothing is out of date, there
+        # is simply one file too many. The asset trees are therefore compared
+        # too -- and compared symmetrically, because enumerating only the
+        # destination answers "would a regeneration DELETE anything", not
+        # "would it CHANGE anything". `rm stack/logging/loki-config.yml` used
+        # to leave --check printing "Up to date" for a stack that cannot boot:
+        # Docker recreates that bind-mount source as a directory and loki
+        # crash-loops on `read /etc/loki/config.yml: is a directory`, the exact
+        # failure _copy_stack_assets exists to prevent. Each class is worded
+        # separately so a CI log says which of the three it found.
+        compose_body = artifacts["docker-compose.yml"]
+        protected = _protected_paths(
+            compose_body, _stack_source(), output_dir)
+        drift: dict[str, list[str]] = {
+            "missing": [], "modified": [], "extra": [], "unowned": []}
+        owned = _owned_assets(compose_body, set(artifacts), output_dir)
+        for src, dst in owned:
+            diff = _asset_diff(src, dst, protected)
+            for key in drift:
+                drift[key] += [
+                    str(path.relative_to(output_dir)) for path in diff[key]
+                ]
+        if stale or any(drift.values()):
+            message = []
+            if stale:
+                message.append(
+                    "Error: generated files are out of date: "
+                    + ", ".join(sorted(stale))
+                )
+            if drift["missing"]:
+                message.append(
+                    "Error: stack assets missing from the output directory: "
+                    + ", ".join(sorted(drift["missing"]))
+                )
+            if drift["modified"]:
+                message.append(
+                    "Error: stack assets modified from the repo's: "
+                    + ", ".join(sorted(drift["modified"]))
+                )
+            if drift["extra"]:
+                message.append(
+                    "Error: extra stack assets the repo does not have: "
+                    + ", ".join(sorted(drift["extra"]))
+                )
+            if drift["unowned"]:
+                message.append(
+                    "Error: stack assets are symlinks and will not be "
+                    "mirrored: " + ", ".join(sorted(drift["unowned"]))
+                )
+            message.append(
+                f"Regenerate with: qemu-tool gen-compose {_env_file_args(env_names)}"
             )
+            sys.exit("\n".join(message))
         print(f"Up to date: {output_dir}")
         return
 

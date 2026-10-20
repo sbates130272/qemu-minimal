@@ -11,17 +11,26 @@
 #
 #   qemu-tool gen-vm --ansible-only \
 #     --ansible-playbook ansible/playbooks/vm-ernic-fleet.yml \
-#     --vm-name <name> --env-file qemu/env.scale-out-mi100
+#     --vm-name <name> \
+#     --env-file qemu/env/scale-out --env-file qemu/env/overlay-mi100
+#
+# --env-file is repeatable and last-wins: the golden file plus this fleet's
+# overlay. The login account is covered under Login below.
 #
 # It was a pile of virt-customize invocations first. Each item below is there
 # because a fleet failed without it, and the comment says how.
 
 # ── Login ────────────────────────────────────────
-# gen-vm's --backing-image path takes an early return before cloud-init
-# (gen_vm.py:78-81), so VM_USERNAME/VM_PASSWORD are never applied and the
-# published disk's only account is `batesste`, holding an authorized key for
-# root@buildkitsandbox that nobody outside CI has. Without this a fleet guest
-# cannot be logged into at all.
+# gen-vm's --backing-image and --backing-file paths both take an early return
+# before cloud-init (gen_vm.py:79-91), so VM_USERNAME/VM_PASSWORD are never
+# applied to the disk -- the setting names the account the image already has,
+# it does not create one. This block is what gives a fleet guest its login,
+# and it sets the same `ubuntu` the settings files name everywhere else, so a
+# guest ends up with one account under one name whichever path built it.
+#
+# Without this block a fleet guest cannot be logged into at all: the published
+# qcow2 ships one account holding an authorized key for root@buildkitsandbox
+# that nobody outside CI has.
 ernic_fleet_user: ubuntu
 ernic_fleet_user_uid: 1001
 ernic_fleet_user_password: ubuntu

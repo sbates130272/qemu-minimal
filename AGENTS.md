@@ -12,12 +12,19 @@ file up to date as infrastructure changes.
 - `qemu/compose/vfio-user-rocjitsu-vm/` — single-VM rocjitsu-only compose stack
 - `qemu/compose/vfio-user-ernic-rocjitsu-vm/` — single-VM ernic + rocjitsu compose stack
 - `qemu/compose/vfio-user-ernic-2vm/` — two-VM ernic mesh stack; rocjitsu GPUs opt-in via `--profile rocjitsu-vm1/vm2`
-- `qemu/compose/vfio-user-ernic-rocjitsu-scale-out/` — N-VM fleet, **generated** by `qemu-tool gen-compose` from `qemu/env.scale-out`; `--profile metrics` adds Prometheus+Grafana, `--profile lmcache` adds the LMCache coordinator
+- `qemu/compose/vfio-user-ernic-rocjitsu-scale-out/` — N-VM fleet, **generated** by `qemu-tool gen-compose` from `qemu/env/scale-out` plus whichever overlay applies; `--profile metrics` adds Prometheus+Grafana, `--profile lmcache` adds the LMCache coordinator
 - `qemu/docker/` — Dockerfiles this repo owns, one directory per image (`lmcache/` so far). Built by hand and referenced by tag, unlike the stack-local `tapsetup/` which compose builds itself
 - `qemu/compose/vfio-user-ernic-rocjitsu-scale-out/` — N-VM ernic mesh + one
-  GPU per VM. **Generated** by `qemu-tool gen-compose` from `qemu/env.scale-out`;
-  do not hand-edit it
-- `qemu/env.quickstart` + `scripts/quickstart-2vm.sh` + `ansible/playbooks/fleet-quickstart.yml` — the README's Quick Start: two guests from the published qcow2, each with a GPU, an NVMe and an ernic, plus a GPU test and an inter-guest RDMA test. The `report-for-quickstart` lane runs *that script*, not a copy of its steps, so the documented path cannot rot
+  GPU per VM. **Generated** by `qemu-tool gen-compose` from `qemu/env/scale-out`
+  (plus an overlay, see below); do not hand-edit it
+- `qemu/env/` — every settings file, named without the old `env.` prefix the
+  folder now carries. It is a sibling of `qemu/compose/` and `qemu/packages.d/`
+  and is mapped in place by `package-dir`, for the same reason they are: these
+  are data the wheel ships, not Python source, so they do not belong under
+  `qemu/qemu-tool/`
+- `qemu/env/scale-out` + `qemu/env/overlay-ci` + `qemu/env/overlay-mi100` — the
+  fleet settings: one golden file and the committed overlays that sit on it
+- `qemu/env/quickstart` + `scripts/quickstart-2vm.sh` + `ansible/playbooks/fleet-quickstart.yml` — the README's Quick Start: two guests from the published qcow2, each with a GPU, an NVMe and an ernic, plus a GPU test and an inter-guest RDMA test. The `report-for-quickstart` lane runs *that script*, not a copy of its steps, so the documented path cannot rot
 - `images/` — qcow2 VM disk images (backing + overlay pairs, **not** `/var/lib/qemu-tool/images`)
 - `ansible/` — Ansible playbooks for VM provisioning
 - `rocm-ernic-enablement.md` — running log of rocm-ernic integration status and bugs
@@ -57,7 +64,7 @@ are not available inside the VM.
 ## Two-VM compose stack
 
 ```bash
-cp qemu/env.example qemu/.env
+cp qemu/env/example qemu/.env
 # Edit qemu/.env: set VM_IMAGES_DIR to the repo images/ absolute path
 # Add --profile rocjitsu-vm1 --profile rocjitsu-vm2 to enable GPUs
 qemu-tool compose --stack vfio-user-ernic-2vm \
@@ -84,7 +91,7 @@ emulated RDMA NIC and one rocjitsu GPU per VM, VM 1 the mesh manager and 2..N
 workers dialling it.
 
 **Its `docker-compose.yml`, `prometheus.yml` and `fleet-inventory.yml` are
-generated.** Edit `qemu/env.scale-out` and re-run `qemu-tool gen-compose`; a
+generated.** Edit `qemu/env/scale-out` and re-run `qemu-tool gen-compose`; a
 hand edit is lost on the next regeneration and `gen-compose --check` fails in
 CI — the `Gen Compose Check` lane, which also runs `docker compose config`
 against the committed stack, a tap-enabled render, and a
@@ -97,16 +104,48 @@ committed so the stack stays reviewable in a diff and usable with plain
 `docker compose`.
 
 ```bash
-qemu-tool gen-vm --env-file qemu/env.scale-out \
+qemu-tool gen-vm --env-file qemu/env/scale-out \
     --vm-name stebates-fleet-1 --backing-image "$VM_BACKING_IMAGE"
 for n in $(seq 2 8); do
-  qemu-tool gen-vm --env-file qemu/env.scale-out --vm-name stebates-fleet-$n \
+  qemu-tool gen-vm --env-file qemu/env/scale-out --vm-name stebates-fleet-$n \
       --backing-file images/stebates-fleet-1-backing.qcow2
 done
-qemu-tool gen-compose --env-file qemu/env.scale-out
-qemu-tool compose --env-file qemu/env.scale-out \
+qemu-tool gen-compose --env-file qemu/env/scale-out
+qemu-tool compose --env-file qemu/env/scale-out \
     --stack vfio-user-ernic-rocjitsu-scale-out --profile metrics up -d
 ```
+
+**One golden file plus overlays, not a file per host.** `qemu/env/scale-out` is
+authoritative and is what packaging ships; a CI lane or a particular host adds
+a short committed overlay naming only the keys it changes. `--env-file` is
+repeatable on `gen-vm`, `run-vm`, `gen-compose`, `compose` and `inspect`, and
+later files win key by key, so the overlay goes last:
+
+```bash
+qemu-tool gen-compose --env-file qemu/env/scale-out --env-file qemu/env/overlay-mi100 \
+    --output-dir /var/lib/qemu-tool/stacks/mi100-fleet
+qemu-tool compose --stack-dir /var/lib/qemu-tool/stacks/mi100-fleet \
+    --env-file qemu/env/scale-out --env-file qemu/env/overlay-mi100 \
+    --profile metrics up -d
+```
+
+An overlay render needs both directory flags. `gen-compose` defaults its output
+to the committed stack directory, so without `--output-dir` the overlay's fleet
+lands on top of the golden 8-VM one and `Gen Compose Check` fails. `VM_COUNT`
+and the VM names are baked into the generated YAML rather than read from the
+settings file at run time, so without `--stack-dir` `compose` runs that
+committed stack whatever layers it is handed — an 8-VM stack standing in for
+the 32-VM one just rendered, with no error.
+
+This replaced `env.scale-out-ci`, `env.scale-out-mi100` and
+`env.scale-out-strix` — three near-copies of the golden file, sharing ~20
+identical keys, hand-synced and reliably out of step. `env.scale-out-strix` was dropped outright and has no
+overlay. Do not reintroduce a standalone per-host settings file; add an
+overlay, or add the key to the golden file if every fleet wants it.
+`compose` passes each layer through to `docker compose --env-file` in order and
+compose applies the same last-wins rule, so the tool and the containers cannot
+disagree about a value. The staleness digest covers every layer, so editing an
+overlay marks the generated stack stale just as editing the golden file does.
 
 Per-VM values are comma-lists, not numbered variables. The trap worth knowing
 before editing that file: keys naming a field that is *already* `list[str]`
@@ -136,10 +175,28 @@ wedges every guest on a DSR timeout that only `down && up` clears, and
 
 Ceilings, nearest first: **the mesh stops registering new workers at about 40
 nodes** (issue 17 — the 64-node topology payload cap in `rdma_backend_tcp.c` is
-not reachable), `VM_VCPUS × VM_COUNT` should not exceed `nproc` plus about 25%
-(issue 14), and `VM_SHM_SIZE × VM_COUNT` must fit `/dev/shm`. Memory never
-binds in practice: 48 VMs used 107G of 503G. `VM_VCPUS` must stay ≥ 4 or
-`ionic_rdma` never probes.
+not reachable), and `VM_VCPUS × VM_COUNT` should not exceed `nproc` plus about
+25% (issue 14). Memory never binds in practice: 48 VMs used 107G of 503G.
+`VM_VCPUS` must stay ≥ 4 or `ionic_rdma` never probes.
+
+**`VM_SHM_SIZE × VM_COUNT` against `/dev/shm` is not the memory ceiling, and
+reading it as one looks reassuring while measuring nothing.** Guest RAM is a
+`memory-backend-memfd` (`-object memory-backend-memfd,share=on`), and a memfd
+is anonymous — it is charged to the container's cgroup as `shmem`, never to
+`/dev/shm`. Measured on the 32-VM fleet, 8 GiB per guest: host `/dev/shm`
+489G with **64K used**, each container's own `/dev/shm` an 8G tmpfs with
+**0 used**, while `memory.stat shmem` across the qemu containers was **40.6
+GiB** — the guest RAM, exactly where the accounting says it is. `shm_size`
+still has to be ≥ `VM_VMEM` or QEMU refuses to allocate the backend, so the
+setting matters; what does not hold is the idea that watching `/dev/shm` tells
+you how much of it is in use.
+
+Two corollaries for anyone reading memory numbers off this stack. The
+container's `anon` is **not** fleet memory — it was 2.0 GiB across all 32,
+20× below the real figure, because the guest RAM is shmem. And
+`memory.current` folds in qcow2 page cache, so it overstates: it answers
+"what can the host not reclaim cheaply", not "how much RAM do the guests
+hold". `qemu-tool list --summary` reports the shmem figure and labels it.
 
 ## rocm-ernic driver and userspace provider (in-VM)
 
@@ -575,8 +632,9 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     `...-qemu-libvfio-user-sbates-fork` was built from `qemu.d757fa6`
     (2026-09-22), one commit short, and needed a rebuild. That rebuild has
     happened: the tag reads `qemu.31e3d06`, which is this patch. So the
-    choice is now a real one — `env.scale-out-mi100` pins the fork and gets
-    P2P DMA; everything else pins the stock image and does not.
+    choice is now a real one — the `qemu/env/overlay-mi100` overlay pins the
+    fork and gets P2P DMA; the golden `env/scale-out`, and so everything
+    without that overlay, pins the stock image and does not.
 
     What has NOT changed is that the stock image cannot do it, so a stack
     that needs one vfio-user device to DMA into another's BAR must pin the
