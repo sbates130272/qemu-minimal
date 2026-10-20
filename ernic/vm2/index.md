@@ -4,7 +4,7 @@ title: VM Report — VM 2
 
 # VM Report — qemu-minimal — VM 2
 
-Generated: **2026-10-20 13:36 UTC** &middot; Commit: [`b4eb552`](https://github.com/sbates130272/qemu-minimal/commit/b4eb552841c6ade51e48ac9f40d900cda889ee81) &middot; Status: **pass**
+Generated: **2026-10-20 16:06 UTC** &middot; Commit: [`48f9eef`](https://github.com/sbates130272/qemu-minimal/commit/48f9eef911b4db6e7dafa46dcc304c2330b8a1ad) &middot; Status: **pass**
 
 ## Hardware
 
@@ -13,7 +13,7 @@ Generated: **2026-10-20 13:36 UTC** &middot; Commit: [`b4eb552`](https://github.
 | CPU | AMD EPYC Processor |
 | vCPUs | 4 |
 | Threads/core | 1 |
-| RAM | 5.6Gi total, 5.1Gi free |
+| RAM | 5.6Gi total, 5.2Gi free |
 | Swap | 0B |
 
 ## Kernel
@@ -126,7 +126,6 @@ ubuntu : ubuntu users admin
   dbus.service                loaded active running D-Bus System Message Bus
   getty@tty1.service          loaded active running Getty on tty1
   ModemManager.service        loaded active running Modem Manager
-  multipathd.service          loaded active running Device-Mapper Multipath Device Controller
   networkd-dispatcher.service loaded active running Dispatcher daemon for systemd-networkd
   polkit.service              loaded active running Authorization Manager
   qemu-guest-agent.service    loaded active running QEMU Guest Agent
