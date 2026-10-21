@@ -262,6 +262,13 @@ adopt_login() {
   [ "$from_image" = "$VM_USERNAME" ] && return 0
   say "Guest account is ${from_image} per the image, not ${VM_USERNAME} per ${ENV_FILE}; using ${from_image}"
   VM_USERNAME=$from_image
+  # Refresh here, not only at dispatch. On a fresh runner vm-info.json does
+  # not exist yet when the verb starts, so the dispatch-time call sees the
+  # settings file's name, writes no layer, and fixes ENV_LAYERS to the base
+  # file -- and this call, from fetch_key after the referrer is pulled, is
+  # the one that has the real answer. Without it gen-vm and gen-compose both
+  # baked `ubuntu` and Ansible could not reach either guest.
+  write_login_layer
 }
 
 # One layer, passed to every qemu-tool call that BAKES the account rather than
