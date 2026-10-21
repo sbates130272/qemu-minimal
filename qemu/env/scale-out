@@ -162,10 +162,10 @@ VM_NAME_PREFIX=stebates-fleet
 #
 # Once rebuilt, switch to the fork tag whose <date>.<ci-sha> stamp matches the
 # other three images, so _check_image_coherence still passes:
-#   sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:<stamp>-qemu.<sha>-vfu.8039244
-QEMU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261014.geea0485-qemu11.1.2-vfu.8039244
-ERNIC_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261014.geea0485-ernic.3fb74d1-vfu.8039244
-ROCJITSU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261014.geea0485-rocjitsu.84fb06b
+#   sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:20261021.g0f1f43f-qemu.aa4344e-vfu.8039244
+QEMU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261021.g0f1f43f-qemu11.1.2-vfu.8039244
+ERNIC_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261021.g0f1f43f-ernic.31d3114-vfu.8039244
+ROCJITSU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261021.g0f1f43f-rocjitsu.84fb06b
 
 # The backing qcow2, as an OCI artifact -- artifactType
 # application/vnd.batesste.vm-image.v1, one zstd layer named
@@ -174,7 +174,7 @@ ROCJITSU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20
 # does the pull and the decompression.
 # The bare (non -qcow2) tag is a conventional image carrying the same file,
 # ~2 GiB larger, extractable with docker create + docker cp if oras is absent.
-VM_BACKING_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu:20261014.geea0485-vm.resolute-ernic-rocjitsu-qm.c5d51ce-qcow2
+VM_BACKING_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu:20261021.g0f1f43f-vm.resolute-ernic-rocjitsu-qm.b4eb552-qcow2
 
 # ---------------------------------------------------------------------------
 # Per-VM resources  (scalar broadcasts; comma-list of length VM_COUNT overrides)
