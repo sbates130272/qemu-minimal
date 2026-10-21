@@ -473,9 +473,17 @@ jobs:
     - name: Address the guests over the compose network
       run: |
         set -eu
-        # Unquoted heredoc, deliberately: the two ansible_host values are the
-        # only expansions in it, and they must become addresses. Quoted, this
-        # wrote the literal string ${GUEST_1} into the inventory.
+        # Unquoted heredoc, deliberately: the ansible_host and ansible_user
+        # values are the only expansions in it, and they must become real
+        # values. Quoted, this wrote the literal string ${GUEST_1} instead.
+        #
+        # ansible_user is here because gen-compose renders fleet-inventory.yml
+        # from the SETTINGS LAYERS, so it says `ubuntu` while the published
+        # qcow2 ships `batesste` -- and this file is the second -i, so it wins.
+        # Without it the play reached the guests and could not log in:
+        #   fatal: [lmcache-ci-2]: UNREACHABLE! ... Failed to connect via ssh
+        # which is the same account drift that cost report-for-quickstart four
+        # separate fixes, in the one consumer this lane had left.
         cat > /tmp/ci-addressing.yml <<YAML
         all:
           children:
@@ -484,9 +492,11 @@ jobs:
                 lmcache-ci-1:
                   ansible_host: ${GUEST_1}
                   ansible_port: 2222
+                  ansible_user: ${GUEST_USER}
                 lmcache-ci-2:
                   ansible_host: ${GUEST_2}
                   ansible_port: 2222
+                  ansible_user: ${GUEST_USER}
         YAML
         cat /tmp/ci-addressing.yml
 
