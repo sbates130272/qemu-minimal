@@ -11,8 +11,9 @@ new subcommand or flag is documented or it fails here, and the failure names
 what is missing.
 """
 
+import argparse
+import importlib.util
 import re
-import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -20,6 +21,27 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MAN = REPO_ROOT / "qemu" / "qemu-tool" / "man" / "qemu-tool.1"
 CLI = REPO_ROOT / "qemu" / "qemu-tool" / "cli.py"
+
+
+def _load_package():
+    # Same loader as the other suites: the package directory is "qemu-tool"
+    # with a hyphen and is importable as qemu_tool only via pyproject's
+    # package-dir. Importing beats shelling out to the installed entry point,
+    # which is what the first version of this file did -- `Site Script Tests`
+    # runs the suite without installing qemu-tool, so the subprocess raised
+    # FileNotFoundError and the check errored instead of running.
+    pkg = REPO_ROOT / "qemu" / "qemu-tool"
+    spec = importlib.util.spec_from_file_location(
+        "qemu_tool", pkg / "__init__.py", submodule_search_locations=[str(pkg)]
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["qemu_tool"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_load_package()
+from qemu_tool import cli as cli_mod  # noqa: E402
 
 # -h/--help is on every parser by construction and documenting it on each
 # subcommand would be noise, not coverage.
@@ -39,17 +61,19 @@ def _subcommands() -> list[str]:
     return sorted(set(re.findall(r'add_parser\(\s*\n?\s*"([a-z0-9-]+)"', source)))
 
 
+def _subparsers() -> dict[str, argparse.ArgumentParser]:
+    parser = cli_mod._build_parser()
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            return dict(action.choices)
+    raise AssertionError("no subparsers on the qemu-tool parser")
+
+
 def _options(cmd: str) -> list[str]:
-    proc = subprocess.run(
-        [sys.executable, "-m", "qemu_tool.cli", cmd, "--help"],
-        capture_output=True, text=True, cwd=REPO_ROOT,
-    )
-    if proc.returncode != 0:
-        proc = subprocess.run(
-            ["qemu-tool", cmd, "--help"], capture_output=True, text=True,
-        )
-    out = proc.stdout
-    return sorted(set(re.findall(r"(?<![\w-])--[a-z][a-z0-9-]+", out)) - UNIVERSAL)
+    opts: set[str] = set()
+    for action in _subparsers()[cmd]._actions:
+        opts.update(o for o in action.option_strings if o.startswith("--"))
+    return sorted(opts - UNIVERSAL)
 
 
 class ManPageTest(unittest.TestCase):
@@ -63,6 +87,14 @@ class ManPageTest(unittest.TestCase):
         self.assertTrue(MAN.is_file())
         pyproject = (REPO_ROOT / "qemu" / "pyproject.toml").read_text()
         self.assertIn("man/qemu-tool.1", pyproject)
+
+    def test_the_cli_advertises_every_subcommand(self):
+        # Not the man page, but the same drift: the subparser metavar used to
+        # be a hand-written string, so `--help` listed a command set that no
+        # longer matched the registered one the moment `man` was added.
+        advertised = cli_mod._build_parser().format_help()
+        missing = [c for c in self.cmds if c not in advertised]
+        self.assertEqual([], missing, f"not in --help: {missing}")
 
     def test_every_subcommand_is_in_the_synopsis(self):
         # Unescape first and split after: splitting the combined text would

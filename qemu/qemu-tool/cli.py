@@ -112,12 +112,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
 
     shared = _shared_parent()
-    sub = parser.add_subparsers(
-        metavar=(
-            "{run-vm,gen-vm,gen-compose,compose,ernic-stats,lmcache-stats,"
-            "list,inspect}"
-        )
-    )
+    # No metavar: argparse derives the list from what is actually registered.
+    # The hand-written one had already gone stale -- it still read
+    # "...,list,inspect}" after `man` was added, so --help advertised a
+    # command set the tool did not have.
+    sub = parser.add_subparsers()
 
     _add_run_vm(sub, shared)
     _add_gen_vm(sub, shared)
