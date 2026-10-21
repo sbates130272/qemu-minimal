@@ -215,11 +215,23 @@ jobs:
           exit 1
         }
 
-        scripts/check-vm-devices.sh --env-file "$ENV_FILE" \
+        # The adopted account has to reach qemu-tool as well, not just this
+        # step's ssh. `inspect` verifies the key by reading THAT USER's
+        # authorized_keys over the guest agent, and it learns the user from
+        # the settings layers -- so with only $ENV_FILE it looked under
+        # /home/ubuntu on a guest whose account is batesste, found nothing,
+        # and reported ssh_key_source None, which --strict-key correctly
+        # refused. quickstart-2vm.sh writes the adopted name to
+        # env.image-login beside the stack for exactly this.
+        set -- --env-file "$ENV_FILE"
+        [ -f "${STACK_DIR}/env.image-login" ] &&
+          set -- "$@" --env-file "${STACK_DIR}/env.image-login"
+
+        scripts/check-vm-devices.sh "$@" \
           --gpu gfx1250 --strict-key --login "$GUEST_USER" "${PREFIX}-1"
         # Guest 2 has the same devices but no session of its own, so its
         # Login check is only "logind answered" -- see the script.
-        scripts/check-vm-devices.sh --env-file "$ENV_FILE" \
+        scripts/check-vm-devices.sh "$@" \
           --gpu gfx1250 --strict-key "${PREFIX}-2"
 
     - name: Show logs on failure
