@@ -264,6 +264,24 @@ adopt_login() {
   VM_USERNAME=$from_image
 }
 
+# One layer, passed to every qemu-tool call that BAKES the account rather than
+# merely using it. gen-vm records the username in the per-VM sidecar, and
+# inspect prefers that sidecar over the settings layers
+# (`info.get("username") or cfg.username`), so an overlay handed only to
+# gen-compose left inspect reading /home/ubuntu on a batesste guest and
+# reporting the key as unverified.
+#
+# ENV_LAYERS is expanded UNQUOTED at its use sites, as check-vm-devices.sh
+# does with ENV_ARGS: it must become no argument at all when empty.
+write_login_layer() {
+  ENV_LAYERS="--env-file $ENV_FILE"
+  [ "$VM_USERNAME" = "$(env_get VM_USERNAME)" ] && return 0
+  mkdir -p "$STACK_DIR"
+  printf '# Written by quickstart-2vm.sh: the account the image reports.\nVM_USERNAME=%s\n' \
+      "$VM_USERNAME" > "${STACK_DIR}/env.image-login"
+  ENV_LAYERS="$ENV_LAYERS --env-file ${STACK_DIR}/env.image-login"
+}
+
 fetch_key() {
   say "Fetching the guest keypair"
   if [ -f "$KEY" ]; then
@@ -306,13 +324,15 @@ make_overlays() {
   if [ -f "${VM_IMAGES_DIR}/${VM1}.qcow2" ]; then
     echo "${VM1} already exists, leaving it alone"
   else
-    qemu-tool gen-vm --env-file "$ENV_FILE" \
+    # shellcheck disable=SC2086
+    qemu-tool gen-vm $ENV_LAYERS \
       --vm-name "$VM1" --backing-image "$VM_BACKING_IMAGE"
   fi
   if [ -f "${VM_IMAGES_DIR}/${VM2}.qcow2" ]; then
     echo "${VM2} already exists, leaving it alone"
   else
-    qemu-tool gen-vm --env-file "$ENV_FILE" \
+    # shellcheck disable=SC2086
+    qemu-tool gen-vm $ENV_LAYERS \
       --vm-name "$VM2" --backing-file "${VM_IMAGES_DIR}/${VM1}-backing.qcow2"
   fi
 }
@@ -330,15 +350,8 @@ generate_stack() {
   # play authenticated as an account the guest does not have. Hand the
   # adopted name back as a second layer rather than rewriting generated
   # output -- --env-file is repeatable and last wins, which is exactly this.
-  if [ "$VM_USERNAME" != "$(env_get VM_USERNAME)" ]; then
-    printf '# Written by quickstart-2vm.sh: the account the image reports.\nVM_USERNAME=%s\n' \
-        "$VM_USERNAME" > "${STACK_DIR}/env.image-login"
-    qemu-tool gen-compose --env-file "$ENV_FILE" \
-        --env-file "${STACK_DIR}/env.image-login" \
-        --output-dir "$STACK_DIR" >/dev/null
-  else
-    qemu-tool gen-compose --env-file "$ENV_FILE" --output-dir "$STACK_DIR" >/dev/null
-  fi
+  # shellcheck disable=SC2086
+  qemu-tool gen-compose $ENV_LAYERS --output-dir "$STACK_DIR" >/dev/null
   echo "wrote $STACK_DIR/docker-compose.yml"
   # Copy the repo's qemu package into the stack directory so the QEMU
   # containers can install from source even when $REPO_ROOT is a
@@ -517,6 +530,7 @@ resolve_stack_dir
 # failing to reach it. The referrer is already on disk by then, so this is a
 # local file read, and a no-op before the first fetch.
 adopt_login
+write_login_layer
 
 case "$VERB" in
   preflight)
