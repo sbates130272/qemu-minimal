@@ -359,6 +359,33 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- **Every pinned image moves to the 2026-10-21 build, `g0f1f43f`.** The pins
+  were a coherent 2026-10-14 set and a week stale. Only two components
+  actually changed — `qemu-libvfio-user` and `rocm-rocjitsu` are the same
+  builds restamped — but the ernic move, `3fb74d1` to `31d3114`, is 132 files
+  and lands on limits this repo documents as live:
+
+  - *close and replace a worker's dead connections to its peers* (#287) —
+    the manager fd leak of AGENTS issue 15, which wrote 3.3 GB of log in
+    twelve hours and is what eventually kills a long fleet run;
+  - *take a worker's node id only from its manager's first answer* (#286) —
+    the id churn of issue 13, the mechanism behind the ~40-node ceiling;
+  - *lock down the vfio-user socket* (#285) — owner-only by default, with
+    `--socket-group`. Safe here because `CONTAINER_USER` is applied to both
+    `x-ernic-common` and `x-qemu-common`, so the server and QEMU already
+    share a uid; CI lanes set no user at all and run as root.
+
+  `ansible/requirements.yml` moves with `ERNIC_IMAGE` to
+  `31d311417ff74e914f1f4c3b08833c2fe98a2117`, as AGENTS issue 20 requires —
+  the two halves of SRQ ship from one tree.
+
+  **The mi100 fork pin needed checking rather than bumping.** Its branch,
+  `dev/stephen/pci-mmio-bridge-submit`, was rebased between builds, so
+  `qemu.aa4344e` *diverges* from the `31e3d06a` the overlay used to name —
+  106 ahead, 12 behind, that id in neither history. The P2P DMA change
+  survived the rebase as `5de56a35c`, verified by subject, so the capability
+  is intact; the comment now says to check for the change and not the id.
+
 - **vfio-user devices go behind a PCIe root port by default.** Off is not
   cosmetic. Without a root port the device is a conventional PCI endpoint
   with no Express capability and a 32-bit prefetchable BAR; measured on the

@@ -44,7 +44,7 @@ collections:
   # bump both together.
   #
   # A THIRD thing moves with them: the ernic.<sha> in env/scale-out's
-  # ERNIC_IMAGE. SRQ is the reason -- 3fb74d1 is the feat/srq-support merge,
+  # ERNIC_IMAGE. SRQ is the reason -- the SRQ support merged at 3fb74d1,
   # and the two halves of SRQ ship separately. The device-side emulation is in
   # the server container; the userspace provider is built in-guest from this
   # tree, because no rdma-core release has create_srq in providers/ionic. Run
@@ -53,7 +53,7 @@ collections:
   # silent fallback qemu/docker/lmcache exists to prevent.
   - name: https://github.com/ROCm/rocm-ernic.git#/ansible/
     type: git
-    version: 3fb74d11b35e5b0fed1fb0c64003e2dcb023c78c
+    version: 31d311417ff74e914f1f4c3b08833c2fe98a2117
   - name: ansible.posix
     version: ">=2.2.2"
   # Floor from sbates130272.batesste 3.0.0's galaxy.yml. --no-deps means galaxy

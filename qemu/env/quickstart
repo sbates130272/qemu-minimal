@@ -29,20 +29,20 @@ VM_NAME_PREFIX=quickstart
 # Images -- containers AND qcow2, one build stamp across all four
 # ---------------------------------------------------------------------------
 #
-# One build stamp (20261014.geea0485) with ernic.3fb74d1. The generator
+# One build stamp (20261021.g0f1f43f) with ernic.31d3114. The generator
 # asserts this: a guest driver and a host rocm-ernic server from different
 # builds do not fail cleanly across the vfio-user/DSR boundary, they wedge.
 # Move all four together.
-QEMU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261014.geea0485-qemu11.1.2-vfu.8039244
-ERNIC_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261014.geea0485-ernic.3fb74d1-vfu.8039244
-ROCJITSU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261014.geea0485-rocjitsu.84fb06b
+QEMU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261021.g0f1f43f-qemu11.1.2-vfu.8039244
+ERNIC_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261021.g0f1f43f-ernic.31d3114-vfu.8039244
+ROCJITSU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261021.g0f1f43f-rocjitsu.84fb06b
 
 # The published guest, as an OCI artifact -- not a runnable image. `qemu-tool
 # gen-vm --backing-image` does the `oras pull` and the decompression. This is
 # what makes the quickstart quick: the disk already carries the mainline
 # kernel, the ionic-ernic DKMS modules, the udev naming rules, rdma-core,
 # perftest and ROCm 10.1, so nothing is built here.
-VM_BACKING_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu:20261014.geea0485-vm.resolute-ernic-rocjitsu-qm.c5d51ce-qcow2
+VM_BACKING_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu:20261021.g0f1f43f-vm.resolute-ernic-rocjitsu-qm.b4eb552-qcow2
 
 # The image bakes its own account; it is not a cloud image cloud-init is about
 # to personalise, and gen-vm --backing-image returns before cloud-init

@@ -34,14 +34,20 @@ VM_NAME_PREFIX=stebates-mi100
 # overlay writes over NFS is a boot-time cost the measurement does not need.
 VM_IMAGES_DIR=/var/lib/qemu-tool/images-stebates
 
-# The sbates-fork variant of the same build stamp, so it carries 31e3d06a4
-# "hw/vfio: assign region fd to RAMBlock for vfio-user P2P DMA". Without that
+# The sbates-fork variant of the same build stamp, for
+# "hw/vfio: assign region fd to RAMBlock for vfio-user P2P DMA". Checked by
+# subject rather than by commit id, and deliberately: the branch
+# dev/stephen/pci-mmio-bridge-submit was rebased between builds, so
+# qemu.aa4344e DIVERGES from the 31e3d06a this used to name -- 106 ahead and
+# 12 behind, with that id in neither history. The change itself survived as
+# 5de56a35c, so the capability is intact and the id is not a way to check
+# for it. Without that
 # commit a peer device's BAR is DMA_MAP-ed to the NIC with no fd, arrives as
 # vaddr=(nil), and every WQE touching GPU memory dies in vfu_sgl_get() as
 # "could not gather N bytes" -- which is the whole point of this node.
 # Verify a candidate with `-device help | grep pci-mmio-bridge`, present only
 # in fork builds, and /build/qemu-commit.txt.
-QEMU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:20261014.geea0485-qemu.31e3d06-vfu.8039244
+QEMU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:20261021.g0f1f43f-qemu.aa4344e-vfu.8039244
 
 # Node-exporter only. The LMCache MP server's HTTP port is not forwarded here;
 # this is a list[str] field, so the value replaces both of the golden's rules
