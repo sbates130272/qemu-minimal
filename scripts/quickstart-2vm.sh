@@ -244,10 +244,31 @@ size_from_host() {
 # Selected by artifactType rather than by position: oras 1.3.4 calls the list
 # "referrers", and [0] is a guess waiting to break the day a signature or an
 # SBOM referrer is attached ahead of this one.
+# The same referrer carries vm-info.json, and it names the account the image
+# was actually built with. The settings file only names the one we expect, and
+# a wrong guess is expensive: when VM_USERNAME became `ubuntu` against a qcow2
+# built with `batesste`, every guest was healthy and `wait_for_guests` still
+# spent ten minutes retrying before dying with "did not answer SSH", which
+# says nothing about the account. The image is the authority on which users
+# exist in it, so it wins -- and the disagreement is reported rather than
+# silently papered over, because the settings file is then wrong for everyone
+# else too.
+adopt_login() {
+  info="${KEY_DIR}/vm-info.json"
+  [ -f "$info" ] || return 0
+  from_image=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1])).get("username") or "")' \
+      "$info" 2>/dev/null) || return 0
+  [ -n "$from_image" ] || return 0
+  [ "$from_image" = "$VM_USERNAME" ] && return 0
+  say "Guest account is ${from_image} per the image, not ${VM_USERNAME} per ${ENV_FILE}; using ${from_image}"
+  VM_USERNAME=$from_image
+}
+
 fetch_key() {
   say "Fetching the guest keypair"
   if [ -f "$KEY" ]; then
     echo "already at $KEY"
+    adopt_login
     publish_pubkey
     return 0
   fi
@@ -260,6 +281,7 @@ fetch_key() {
   # denial against a guest that is perfectly healthy.
   [ -f "$KEY" ] || die "the referrer carried no id_rsa"
   chmod 600 "$KEY"
+  adopt_login
   publish_pubkey
 }
 

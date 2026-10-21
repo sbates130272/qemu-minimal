@@ -172,6 +172,14 @@ jobs:
         set -eu
         NET=$(sed -n 's/^FLEET_NET_PREFIX=//p' "$ENV_FILE" | tail -1)
         GUEST_USER=$(sed -n 's/^VM_USERNAME=//p' "$ENV_FILE" | tail -1)
+        # The image beats the settings file on who exists in it, the same way
+        # quickstart-2vm.sh's adopt_login does -- the script has already pulled
+        # vm-info.json here as part of the keypair referrer. Without this the
+        # check logs in as whoever the settings file names, which is how this
+        # lane went red against guests that were entirely healthy.
+        FROM_IMAGE=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1])).get("username") or "")' \
+            "${KEY_DIR}/vm-info.json" 2>/dev/null || true)
+        [ -n "$FROM_IMAGE" ] && GUEST_USER=$FROM_IMAGE
         PREFIX=$(sed -n 's/^VM_NAME_PREFIX=//p' "$ENV_FILE" | tail -1)
 
         # Nothing else in this lane holds an SSH session open: Ansible closes

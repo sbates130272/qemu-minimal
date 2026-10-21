@@ -6,6 +6,25 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **`qemu-tool man`, because only the `.deb` ever put the page on
+  `MANPATH`.** The manual ships as package data in the wheel, and neither
+  pipx nor uv has any mechanism for installing a man page — measured, not
+  assumed: `uv tool install ./qemu` leaves it at
+  `…/site-packages/qemu_tool/man/qemu-tool.1` with no `share/man` anywhere.
+  So every non-Debian install carried a manual nothing could read.
+  `qemu-tool man` hands that bundled file to `man(1)` directly, and
+  `qemu-tool man --path` prints its location.
+
+- **The manual page is now checked against argparse.** It had drifted exactly
+  as unread prose does: `inspect` and `lmcache-stats` were missing from the
+  SYNOPSIS and had no OPTIONS section at all, `list --summary` — the largest
+  addition of this release — was not mentioned anywhere, and `--mgmt-tap`,
+  `--vfio-user-root-port` and `--vm2-name` had never been written up. All are
+  documented now, and `tests/test_man_page.py` asserts that every subcommand
+  appears in the SYNOPSIS, has an OPTIONS section, and has every long option
+  documented. It caught `qemu-tool man` itself while that command was being
+  added.
+
 - **`qemu-tool compose` remembers the stack.** From inside a directory
   rendered by `gen-compose --output-dir`, `qemu-tool compose ps` now works
   with no flags at all, the way `docker compose` works beside a
@@ -534,6 +553,27 @@ All notable changes to this project will be documented in this file.
 ## [v1.4.1] - 2026-10-02
 
 ### Fixed
+
+- **The guest account comes from the image's own manifest, not from a
+  settings file that guesses it.** Setting `VM_USERNAME=ubuntu` in the golden
+  file (above) turned `report-for-quickstart` and `report-for-lmcache` red the
+  hour it merged: the published qcow2 is built with `batesste`, so every SSH
+  went to an account that does not exist there. The guests were entirely
+  healthy, and the symptom was `guest 1 did not answer SSH` after ten minutes
+  of retries — which says nothing about the account.
+
+  The answer was already published and unread. The qcow2 carries an ORAS
+  referrer of type `application/vnd.batesste.vm-info.v1`, and both lanes
+  already pulled it for the guest keypair while ignoring the `username`,
+  `password` and `ssh_keys` sitting beside it in `vm-info.json`.
+  `quickstart-2vm.sh` now adopts that username (`adopt_login`), and both lanes
+  prefer it over the settings file, announcing the disagreement rather than
+  correcting it silently — the settings file is then wrong for everyone else
+  too. `VM_USERNAME` remains what the settings declare and is used whenever
+  the image names nothing.
+
+  This is the same rule the SSH key verification follows: ask the thing
+  itself. An image is the authority on which accounts exist in it.
 
 - **CI covered none of the LMCache work, and three gaps each hid a live
   bug.** Adding the lanes found them, which is the argument for the lanes:

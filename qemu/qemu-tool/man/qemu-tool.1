@@ -4,7 +4,7 @@ qemu\-tool \- run, generate and list QEMU virtual machines
 .SH SYNOPSIS
 .B qemu\-tool
 .RB [ \-\-version ]
-.I {run\-vm,gen\-vm,gen\-compose,compose,ernic\-stats,list}
+.I {run\-vm,gen\-vm,gen\-compose,compose,ernic\-stats,lmcache\-stats,list,inspect,man}
 .RI [ options ]
 .SH DESCRIPTION
 .B qemu\-tool
@@ -136,6 +136,21 @@ CLI flags override values from the XML.
 .BI \-\-filesystem " DIR"
 Expose a host directory to the guest via virtio-9p.
 .TP
+.B \-\-vfio\-user\-root\-port
+Place vfio\-user devices behind a PCIe root port. Without it they land on the
+root bus as conventional PCI endpoints with no Express capability, so the
+guest sees no link speed or width \(em
+.I 0.000 Gb/s available PCIe bandwidth (Unknown x255 link)
+from
+.IR ionic ,
+and no Express capabilities in
+.BR "lspci \-vv" .
+That is cosmetic for the Ethernet path and not for DMA between two vfio\-user
+devices, which needs real PCIe semantics.
+.TP
+.B \-\-mgmt\-tap
+Use tap+bridge for the management NIC instead of SLIRP.
+.TP
 .BI \-\-nvme " VALUE"
 Attach NVMe storage.
 A positive integer creates that many QCOW2-backed NVMe drives.
@@ -220,6 +235,9 @@ or to stdout when
 .B \-
 is given.
 .SH GEN-VM OPTIONS
+.TP
+.B \-\-mgmt\-tap
+Use tap+bridge for the management NIC instead of SLIRP.
 .TP
 .BI \-\-size " GB"
 Overlay image size in GB (default: 64).
@@ -441,7 +459,37 @@ Listen port. Default: 9840.
 .TP
 .BI \-\-addr " ADDR"
 Listen address. Default: 0.0.0.0.
+.SH LMCACHE\-STATS OPTIONS
+Serves LMCache coordinator metrics in Prometheus text format, the same shape
+as
+.BR ernic\-stats .
+Where that one reads stats files written by each ernic, this one polls the
+coordinator's HTTP API, so an unreachable coordinator is a scrape that
+reports nothing rather than a crash.
+.TP
+.BI \-\-coordinator\-url " URL"
+Base URL of the coordinator HTTP API. Default:
+.IR http://127.0.0.1:9300 .
+.TP
+.BI \-\-port " PORT"
+Listen port. Default: 9841, one past the ernic exporter so both can run on
+one host.
+.TP
+.BI \-\-addr " ADDR"
+Listen address. Default: 0.0.0.0.
+.TP
+.BI \-\-timeout " SECONDS"
+Per\-request timeout when polling the coordinator. Default: 5.
+.TP
+.B \-\-once
+Print one scrape to stdout and exit, instead of serving. Useful for checking
+what a scrape would contain without standing up Prometheus.
 .SH COMPOSE OPTIONS
+.TP
+.BI \-\-vm2\-name " NAME"
+Second VM's name, for the two\-VM stacks, passed through as VM2_NAME. Ignored
+by a stack that has one guest, and by the generated scale\-out stack, which
+bakes every VM name into its YAML.
 .TP
 .BI \-\-vm\-name " NAME"
 VM name passed to the compose stack as VM_NAME (basename of the qcow2 without
@@ -703,6 +751,101 @@ to \(em is the published mapping. In JSON output these are
 and
 .BR ssh_port .
 An uncontainerised listing shows the single port, unchanged.
+.TP
+.B \-\-summary
+Aggregate the listing per fleet and add a measured load picture: CPU, memory,
+disk, RDMA mesh, GPUs and logins, with the headroom each one leaves. Takes a
+5\ s sample, so it costs about 7\ s against a 32\-VM fleet; plain
+.B list
+is unchanged and still contacts no guest.
+.IP
+Three numbers are worth knowing before reading it. Memory is reported as the
+cgroup's
+.B shmem
+figure, because guest RAM is a
+.B memory\-backend\-memfd
+and so is charged as shared memory, never to
+.IR /dev/shm ;
+the container's
+.B anon
+would understate a 32\-VM fleet twentyfold. The CPU line counts the ernic and
+rocjitsu sidecars as well as QEMU, because on an emulated fleet the sidecars
+burn more than the guests they serve. And GPU utilisation is reported as not
+measurable rather than as a number, because the devices are emulated.
+.TP
+.B \-\-no\-guests
+With
+.BR \-\-summary ,
+skip the one collector that contacts a guest \(em the logged\-in users line,
+about 2.8\ s over 32 VMs. Everything else is host\-side. The users line then
+reads
+.I not collected
+rather than zero, because nobody logged in and nobody asked are different
+facts.
+.SH INSPECT OPTIONS
+Reports what a running VM actually has, joining the host\-side command line to
+what the guest agent answers. Every field that cannot be established says so
+rather than guessing: a device whose origin cannot be decided reads
+.IR unknown ,
+not
+.IR emulated .
+.TP
+.BI \-\-vm\-name " NAME"
+Inspect a single VM. Default: every running VM.
+.TP
+.BI \-\-env\-file " FILE"
+Settings file. Overrides the search path, and is repeatable with later files
+winning key by key, as everywhere else.
+.TP
+.B \-\-json
+Emit JSON instead of the human\-readable report. The JSON carries the same
+fields, including
+.BR ssh_keys " (fingerprint, comment, path and whether the guest accepts it),"
+.BR block_devices ", " gpus " and " ssh_sessions .
+.PP
+Two fields repay explanation.
+.B Key
+names the key the guest will actually accept: it is read from that user's
+.I authorized_keys
+over the guest agent and matched against local candidates by fingerprint, so
+.I accepted by guest
+is a measurement rather than the configured default restated. A
+.B cert\-authority
+line is never offered, because a CA key signs certificates and does not log in.
+.PP
+.B Login
+distinguishes
+.IR none " from " unknown .
+These guests have no
+.IR /var/run/utmp ,
+so
+.B guest\-get\-users
+answers with an empty list whether or not anyone is logged in; the answer
+comes from systemd\-logind state files instead, read\-only, with no
+.BR guest\-exec .
+.I none
+is returned only against positive evidence that a complete look happened \(em
+an expired budget, a failed read or a filter that excluded an account all read
+.I unknown
+instead.
+.SH MAN OPTIONS
+Opens this page with
+.BR man (1).
+Only the Debian package installs it where
+.BR man (1)
+finds it unaided: the wheel ships it as package data, and neither
+.BR uv " nor " pipx
+has any mechanism for putting a man page on
+.IR MANPATH ,
+so an installed tool otherwise carries a manual nothing can read. The page is
+handed to
+.BR man (1)
+as a file for exactly that reason.
+.TP
+.B \-\-path
+Print the path to the bundled page and exit without opening it \(em for
+piping into a pager of your own, or for adding to
+.IR MANPATH .
 .SH VM IDENTIFICATION
 .B qemu\-tool
 stamps every VM it launches with two generic QEMU options:

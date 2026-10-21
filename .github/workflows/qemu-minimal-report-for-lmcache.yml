@@ -318,6 +318,20 @@ jobs:
         # permission denial against a guest that is perfectly healthy.
         test -f /tmp/guest-key/id_rsa
         chmod 600 /tmp/guest-key/id_rsa
+        # The referrer that carries the key also carries vm-info.json, which
+        # names the account the image was BUILT with. GUEST_USER above is only
+        # what the settings layers EXPECT, and the two drift: the golden file
+        # moved to `ubuntu` while the published qcow2 still ships `batesste`,
+        # which presents as "Permission denied" against a healthy guest and
+        # cost this lane and report-for-quickstart a day of red. The image is
+        # the authority on which accounts exist in it, so it wins, and the
+        # disagreement is announced rather than silently corrected.
+        FROM_IMAGE=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1])).get("username") or "")' \
+            /tmp/guest-key/vm-info.json 2>/dev/null || true)
+        if [ -n "$FROM_IMAGE" ] && [ "$FROM_IMAGE" != "$GUEST_USER" ]; then
+          echo "::notice::guest account is $FROM_IMAGE per the image, not $GUEST_USER per the settings layers"
+          echo "GUEST_USER=$FROM_IMAGE" >> "$GITHUB_ENV"
+        fi
 
     - name: Bring up the fleet
       working-directory: /var/lib/qemu-tool/stacks/lmcache-ci
