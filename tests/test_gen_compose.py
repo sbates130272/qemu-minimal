@@ -744,12 +744,35 @@ class TestVfioUserRootPort(unittest.TestCase):
 
     With no root port the vfio-user devices land on pcie.0 as conventional
     endpoints with no Express capability, and the guest's ionic reports
-    "0.000 Gb/s available PCIe bandwidth (Unknown x255 link)".
+    "0.000 Gb/s available PCIe bandwidth (Unknown x255 link)". Worse on a
+    GPU: a 16M 32-bit BAR instead of 256M 64-bit, so amdgpu's probe fails
+    with -22 and HIP reports "no ROCm-capable device is detected".
     """
 
-    def test_off_by_default(self):
-        self.assertNotIn("--vfio-user-root-port",
-                         gen_compose.render_compose(_plan(), ["e"], "d"))
+    def test_on_by_default(self):
+        # Flipped from off: the default used to leave every GPU unusable,
+        # and the failure named something three layers away.
+        self.assertIn("--vfio-user-root-port",
+                      gen_compose.render_compose(_plan(), ["e"], "d"))
+
+    def test_off_is_still_expressible(self):
+        self.assertNotIn(
+            "--vfio-user-root-port",
+            gen_compose.render_compose(
+                _plan("\nVM_VFIO_USER_ROOT_PORT=false\n"), ["e"], "d"))
+
+    def test_turning_it_off_warns_about_the_gpu(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            _plan("\nVM_VFIO_USER_ROOT_PORT=false\n")
+        self.assertIn("VM_VFIO_USER_ROOT_PORT is false", err.getvalue())
+        self.assertIn("amdgpu", err.getvalue())
+
+    def test_the_default_does_not_warn(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            _plan()
+        self.assertNotIn("VM_VFIO_USER_ROOT_PORT", err.getvalue())
 
     def test_enabled_for_every_vm(self):
         out = gen_compose.render_compose(

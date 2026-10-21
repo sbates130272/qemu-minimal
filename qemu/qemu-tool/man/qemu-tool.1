@@ -137,16 +137,47 @@ CLI flags override values from the XML.
 Expose a host directory to the guest via virtio-9p.
 .TP
 .B \-\-vfio\-user\-root\-port
-Place vfio\-user devices behind a PCIe root port. Without it they land on the
-root bus as conventional PCI endpoints with no Express capability, so the
-guest sees no link speed or width \(em
+Place vfio\-user devices behind a PCIe root port.
+.BR "On by default" ;
+.B \-\-no\-vfio\-user\-root\-port
+asks for the old topology, as does
+.B VM_VFIO_USER_ROOT_PORT=false
+in a settings file.
+.IP
+Without a root port the devices land on the root bus as conventional PCI
+endpoints with no Express capability and a 32\-bit prefetchable BAR. For the
+Ethernet path that costs only the reported link speed \(em
 .I 0.000 Gb/s available PCIe bandwidth (Unknown x255 link)
 from
-.IR ionic ,
-and no Express capabilities in
-.BR "lspci \-vv" .
-That is cosmetic for the Ethernet path and not for DMA between two vfio\-user
-devices, which needs real PCIe semantics.
+.IR ionic .
+For a GPU it is fatal. Measured on the emulated rocjitsu, same guest and
+image, with only this changed:
+.PP
+.RS
+.nf
+off: Region 0: fd000000   (32\-bit, prefetchable) [size=16M]
+on:  Region 0: c040000000 (64\-bit, prefetchable) [size=256M]
+     Capabilities: [40] Express (v2) Endpoint
+.fi
+.RE
+.PP
+16M is far too small for a VRAM aperture, so
+.IR amdgpu 's
+memory controller cannot initialise and the probe unwinds with \-22. The
+module still loads, so nothing looks wrong locally, no KFD node appears, and
+the first complaint arrives from HIP as
+.IR "no ROCm\-capable device is detected" .
+.BR gen\-compose
+warns when a stack renders GPUs with this turned off, because that message
+names nothing about the cause.
+.IP
+It is necessary and not sufficient: 256M is still short of a gfx1250
+aperture, and the remaining limit is the rocjitsu device model's BAR size.
+.TP
+.B \-\-no\-vfio\-user\-root\-port
+Keep vfio\-user devices on the root bus as conventional endpoints. A GPU will
+not bind
+.IR amdgpu .
 .TP
 .B \-\-mgmt\-tap
 Use tap+bridge for the management NIC instead of SLIRP.

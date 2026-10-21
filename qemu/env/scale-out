@@ -316,6 +316,16 @@ VM_NVME=1
 # That is cosmetic for the Ethernet path but not for DMA between two
 # vfio-user devices, which needs real PCIe semantics -- the same territory as
 # the fd-backed-region patch noted against QEMU_IMAGE above.
+#
+# And it is not cosmetic at all for a GPU. A conventional endpoint gets a
+# 32-bit prefetchable BAR: 16M measured on the emulated rocjitsu, against
+# 256M 64-bit behind a port. 16M cannot be a VRAM aperture, so amdgpu's probe
+# fails with -22, no KFD node appears, and HIP reports "no ROCm-capable
+# device is detected" -- three layers from the cause.
+#
+# This is now the DEFAULT, so the line below only states intent. Turning it
+# off makes gen-compose warn, because the combination has produced a wrong
+# diagnosis before.
 VM_VFIO_USER_ROOT_PORT=true
 
 # A host directory shared into every guest over 9p, mounted in the guest with
