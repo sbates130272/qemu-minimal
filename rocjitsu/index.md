@@ -4,7 +4,7 @@ title: VM Report — rocjitsu VM
 
 # VM Report — qemu-minimal — rocjitsu VM
 
-Generated: **2026-10-21 00:23 UTC** &middot; Commit: [`71c0046`](https://github.com/sbates130272/qemu-minimal/commit/71c00464ce4079c75f06ae865ad29ccfcc91f4a2) &middot; Status: **pass**
+Generated: **2026-10-21 02:16 UTC** &middot; Commit: [`23dc08d`](https://github.com/sbates130272/qemu-minimal/commit/23dc08d2a6b06ecb1f112f289e3b9088a1348f4b) &middot; Status: **pass**
 
 ## Hardware
 
@@ -48,7 +48,7 @@ nvme0n1    1T disk
 ```
 Filesystem      Size  Used Avail Use% Mounted on
 /dev/vda1        61G  8.4G   53G  14% /
-/dev/vda13      989M  287M  636M  32% /boot
+/dev/vda13      989M  286M  636M  32% /boot
 ```
 
 ### NVMe
@@ -145,6 +145,7 @@ ubuntu : ubuntu video users render admin
   cron.service                     loaded active running Regular background program processing daemon
   dbus.service                     loaded active running D-Bus System Message Bus
   getty@tty1.service               loaded active running Getty on tty1
+  gpuagent.service                 loaded active running AMD GPU Metrics Reader Service
   ModemManager.service             loaded active running Modem Manager
   networkd-dispatcher.service      loaded active running Dispatcher daemon for systemd-networkd
   polkit.service                   loaded active running Authorization Manager
@@ -175,8 +176,8 @@ ubuntu : ubuntu video users render admin
 
 | Metric | Value |
 |---|---|
-| GEMM | 496 kFLOP/s |
-| hipFile read throughput | 159 MB/s |
+| GEMM | 662 kFLOP/s |
+| hipFile read throughput | 220 MB/s |
 
 These run inside a QEMU guest with the GPU attached over vfio-user, so the
 absolute numbers sit far below what the same benchmark reports on bare metal —
@@ -192,7 +193,7 @@ sgemm-bench: device=AMD Radeon Graphics arch=gfx1250
 sgemm-bench: private_segment_bytes=0
 sgemm-bench: m=128 n=128 k=128
 sgemm-bench: max_absolute_error=0 failures=0
-sgemm-bench: seconds_per_iter=8.45856886 gflops=0.000495864498
+sgemm-bench: seconds_per_iter=6.33179113 gflops=0.000662419829
 sgemm-bench: PASS
 ```
 
@@ -205,10 +206,10 @@ gemm-hipfile-bench: device=AMD Radeon Graphics arch=gfx1250
 gemm-hipfile-bench: path=/mnt/nvme/gemm-hipfile-bench.bin block_bytes=1048576 blocks=32 iters=4
 gemm-hipfile-bench: private_segment_bytes=0
 gemm-hipfile-bench: compat_requested=self buf_registered=yes
-gemm-hipfile-bench: read_bytes=33554432 seconds_per_pass=0.211273027 read_gbs=0.158820236
+gemm-hipfile-bench: read_bytes=33554432 seconds_per_pass=0.152789323 read_gbs=0.219612413
 gemm-hipfile-bench: m=128 n=128 k=128
 gemm-hipfile-bench: max_absolute_error=0 failures=0
-gemm-hipfile-bench: gemm_seconds_per_iter=8.47837412 gflops=0.000494706171
+gemm-hipfile-bench: gemm_seconds_per_iter=6.20907358 gflops=0.000675512046
 gemm-hipfile-bench: PASS
 ```
 
