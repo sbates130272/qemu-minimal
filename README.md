@@ -248,12 +248,19 @@ artifacts by nature — `/etc/qemu-tool/env`, `/var/lib/qemu-tool/images` and a
 man page on your `MANPATH`. Those defaults fall back to per-user locations
 rather than failing:
 
-| Default | `.deb` | pipx / venv |
+| Default | `.deb` | pipx / uv / venv |
 |---|---|---|
 | Settings file | `/etc/qemu-tool/env` | `$XDG_CONFIG_HOME/qemu-tool/env` |
 | Images directory | `/var/lib/qemu-tool/images` | `$XDG_DATA_HOME/qemu-tool/images` |
 | Package manifest | `/usr/share/qemu-tool/packages-default` | bundled in the wheel |
 | Compose stacks | `/usr/share/qemu-tool/compose/` | bundled in the wheel |
+| Manual page | `/usr/share/man/man1/` | bundled; read it with `qemu-tool man` |
+
+The manual page is the one of those a fallback path cannot fix. Neither pipx
+nor uv has any mechanism for installing onto `MANPATH` — the page ships as
+package data either way — so `man qemu-tool` works only from the `.deb`.
+`qemu-tool man` opens the bundled copy regardless of how the tool was
+installed, and `qemu-tool man --path` prints where it is.
 
 A per-user settings file **beats** the system one, as XDG expects: if you
 wrote `$XDG_CONFIG_HOME/qemu-tool/env` under a pipx install and later install

@@ -112,12 +112,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
 
     shared = _shared_parent()
-    sub = parser.add_subparsers(
-        metavar=(
-            "{run-vm,gen-vm,gen-compose,compose,ernic-stats,lmcache-stats,"
-            "list,inspect}"
-        )
-    )
+    # No metavar: argparse derives the list from what is actually registered.
+    # The hand-written one had already gone stale -- it still read
+    # "...,list,inspect}" after `man` was added, so --help advertised a
+    # command set the tool did not have.
+    sub = parser.add_subparsers()
 
     _add_run_vm(sub, shared)
     _add_gen_vm(sub, shared)
@@ -127,6 +126,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_lmcache_stats(sub)
     _add_list(sub)
     _add_inspect(sub)
+    _add_man(sub)
 
     return parser
 
@@ -447,6 +447,25 @@ def _add_inspect(sub: argparse._SubParsersAction) -> None:
     p.set_defaults(func=_inspect_cmd)
 
 
+def _add_man(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser(
+        "man",
+        help="Show this tool's manual page.",
+        description=(
+            "Open the bundled manual page with man(1). Only the Debian "
+            "package installs it where man finds it on its own: the wheel "
+            "ships it as package data, and neither uv nor pipx has any "
+            "mechanism for putting a man page on MANPATH, so an installed "
+            "tool otherwise carries a manual nothing can read."
+        ),
+    )
+    p.add_argument(
+        "--path", action="store_true",
+        help="Print the path to the bundled page and exit, without opening it.",
+    )
+    p.set_defaults(func=_man_cmd)
+
+
 def _add_gen_vm(
     sub: argparse._SubParsersAction, shared: argparse.ArgumentParser
 ) -> None:
@@ -531,6 +550,35 @@ def _compose_cmd(args: argparse.Namespace) -> None:
 
 def _inspect_cmd(args: argparse.Namespace) -> None:
     inspect_run(args.vm_name, args.env_file, as_json=args.as_json)
+
+
+def _man_cmd(args: argparse.Namespace) -> None:
+    # as_file, not a bare path: the page is package data, so a zipimported
+    # install has no real file until it is extracted, and man(1) cannot read
+    # a path inside a wheel.
+    import shutil
+    import subprocess
+    from contextlib import ExitStack
+    from importlib.resources import as_file, files
+
+    with ExitStack() as stack:
+        page = stack.enter_context(
+            as_file(files("qemu_tool").joinpath("man/qemu-tool.1")))
+        if not page.is_file():
+            sys.exit(f"the bundled manual page is missing at {page}")
+        if args.path:
+            print(page)
+            return
+        man = shutil.which("man")
+        if man is None:
+            sys.exit(
+                "man(1) is not installed, so the page cannot be rendered. "
+                f"It is at:\n  {page}\nor run `qemu-tool man --path` to print "
+                "that path alone."
+            )
+        # Hand man the file rather than a name: the whole point is that the
+        # page is not on MANPATH for a uv, uvx or pipx install.
+        raise SystemExit(subprocess.call([man, "-l", str(page)]))
 
 
 def _list_cmd(args: argparse.Namespace) -> None:
