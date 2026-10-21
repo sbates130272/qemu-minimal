@@ -358,7 +358,33 @@ jobs:
     - name: Join the compose network
       run: |
         NET=$(docker network ls --format '{{.Name}}' | grep 'lmcache-ci.*fleet' | head -1)
-        docker network connect "$NET" "$(hostname)"
+        : "${NET:?no lmcache-ci fleet network found}"
+        # $(cat /etc/hostname) to match report-for-quickstart, which joins
+        # its fleet network this way and works. Not because that is the
+        # proven cause: reproduced locally -- a container on the default
+        # bridge, a second network with subnet 172.31.0.0/16 holding a
+        # container at 172.31.3.1, then `docker network connect` -- and the
+        # join worked, the caller gained 172.31.0.2 and pinged the target
+        # with no loss, with hostname(1) and /etc/hostname identical. So the
+        # mechanism is sound and the real cause is still open; this only
+        # removes a difference from the lane that works.
+        docker network connect "$NET" "$(cat /etc/hostname)"
+        # Printed because the previous failure could not be read without it.
+        # Once the service names were replaced by the generator's addresses
+        # the error became "No route to host" for 172.31.3.1, which says the
+        # connect did not give this container a route to the fleet subnet --
+        # and nothing in the log said what it DID give it. An unreachable
+        # address and an unjoined network look identical from the ssh error.
+        echo "joined network: $NET"
+        echo "--- this container's addresses ---"
+        ip -br addr 2>/dev/null || ip addr
+        echo "--- routes ---"
+        ip route 2>/dev/null || true
+        echo "--- the network's subnet and members ---"
+        docker network inspect "$NET" \
+          --format '{{range .IPAM.Config}}subnet={{.Subnet}} {{end}}' 2>/dev/null || true
+        docker network inspect "$NET" \
+          --format '{{range $k, $v := .Containers}}{{$v.Name}}={{$v.IPv4Address}} {{end}}' 2>/dev/null || true
 
     # -p 2222, which the first cut of this omitted -- so it spent its whole
     # 20 minutes connecting to port 22 of the qemu CONTAINER, where nothing
