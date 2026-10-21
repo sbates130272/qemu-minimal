@@ -273,6 +273,24 @@ jobs:
     - name: Generate the two-VM fleet stack
       run: |
         qemu-tool gen-compose $ENV_ARGS --output-dir "$STACK_DIR"
+        # The qemu package goes beside the stack so the QEMU containers can
+        # install qemu-tool FROM SOURCE. Without it they fall back to the
+        # PyPI release, and that is what has been killing this lane: the
+        # generated entrypoint passes --vfio-user-root-port, released 1.4.1
+        # has never heard of it, and every guest container exits on
+        #     qemu-tool: error: unrecognized arguments: --vfio-user-root-port
+        # before it opens a port. The wait loop then reports "No route to
+        # host" for an address nothing holds, which is true and says nothing
+        # about why. scripts/quickstart-2vm.sh does exactly this, and that is
+        # why the quickstart lane survived the same flag.
+        #
+        # Copied rather than bind-mounted from the workspace: $GITHUB_WORKSPACE
+        # is a path inside THIS container, and the host docker daemon resolves
+        # compose bind mounts, so it cannot see it. $STACK_DIR is under
+        # /var/lib/qemu-tool, which is bind-mounted from the host at the same
+        # path, so both sides agree on it.
+        rm -rf "$STACK_DIR/qemu"
+        cp -r "$GITHUB_WORKSPACE/qemu" "$STACK_DIR/qemu"
         ls -la "$STACK_DIR"
 
     - name: Fetch the guest image and create the overlays
@@ -349,7 +367,10 @@ jobs:
     - name: Bring up the fleet
       working-directory: /var/lib/qemu-tool/stacks/lmcache-ci
       run: |
-        docker compose $ENV_ARGS --profile lmcache up --detach
+        # QEMU_TOOL_SRC is what the generated compose bind-mounts as
+        # /qemu-tool-src; the entrypoint installs from it when it finds a
+        # pyproject.toml there and from PyPI when it does not.
+        QEMU_TOOL_SRC="$STACK_DIR" docker compose $ENV_ARGS --profile lmcache up --detach
         docker compose $ENV_ARGS --profile lmcache ps
 
     # Both qemu containers publish SSH on the HOST, which this job container
