@@ -4,9 +4,9 @@ Two guests from the published `ernic-rocjitsu` image, each with an
 emulated gfx1250, an emulated NVMe and an emulated RDMA NIC, booted
 by `scripts/quickstart-2vm.sh`.
 
-- Guest image: `20261014.geea0485-vm.resolute-ernic-rocjitsu-qm.c5d51ce-qcow2`
+- Guest image: `20261021.g0f1f43f-vm.resolute-ernic-rocjitsu-qm.b4eb552-qcow2`
 - RDMA bytes across the mesh: 65536000
-- Generated: **2026-10-21 16:09 UTC** &middot; Commit: `unknown` &middot; Status: **pass**
+- Generated: **2026-10-21 22:22 UTC** &middot; Commit: `unknown` &middot; Status: **pass**
 
 ## quickstart-1
 
@@ -60,13 +60,13 @@ vector-add: PASS
  rdma_cm QPs	 : OFF
  Data ex. method : Ethernet
 ---------------------------------------------------------------------------------------
- local address: LID 0000 QPN 0x0002 PSN 0x250be2
+ local address: LID 0000 QPN 0x0002 PSN 0x99863
  GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:11
- remote address: LID 0000 QPN 0x0002 PSN 0xc0532e
+ remote address: LID 0000 QPN 0x0002 PSN 0x6f9d0f
  GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:12
 ---------------------------------------------------------------------------------------
  #bytes     #iterations    BW peak[MiB/sec]    BW average[MiB/sec]   MsgRate[Mpps]
- 65536      1000             983.49             981.33 		     0.015701
+ 65536      1000             1261.67            1228.09		     0.019649
 ---------------------------------------------------------------------------------------
 ```
 
