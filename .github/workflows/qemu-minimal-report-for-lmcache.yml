@@ -643,7 +643,7 @@ jobs:
           # with no Status is treated as unknown rather than as a pass, so
           # without this the lane could never contribute to the all-green
           # badge. Only reachable on success now, hence the constant.
-          echo "- Generated: **$(date -u '+%Y-%m-%d %H:%M UTC')** &middot; Commit: \`${GITHUB_SHA:0:7}\` &middot; Status: **pass**"
+          echo "- Generated: **$(date -u '+%Y-%m-%d %H:%M UTC')** &middot; Commit: \`$(echo "$GITHUB_SHA" | cut -c1-7)\` &middot; Status: **pass**"
           echo
           echo '## Guest device state'
           echo '```'
