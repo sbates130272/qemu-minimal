@@ -1,0 +1,272 @@
+---
+# Bake the SRQ-capable ionic stack into an already-provisioned ernic guest.
+#
+# Run against a BOOTED guest, over SSH:
+#
+#   ansible-playbook -i <inventory> vm-ernic-srq.yml
+#
+# and not through "gen-vm --ansible-playbook". Both halves below build against
+# the kernel the guest is running, and gen-vm's playbook pass happens before a
+# consumer that pins its own kernel has installed one -- batesste-ci-images
+# installs mainline 7.2.4 in a provisioning boot of its own, after gen-vm has
+# finished. That repo's build-vm.sh runs this playbook in a later
+# PROBE_PERSIST boot for exactly that reason.
+#
+# WHY THIS EXISTS
+#
+# Stock v7.2.4 has no SRQ in drivers/infiniband/hw/ionic, and no rdma-core
+# release -- nor master -- has create_srq in providers/ionic. A guest built
+# from either reports:
+#
+#   max_srq: 0                            (ibv_devinfo -v)
+#   UCX offers ud_verbs and no rc_verbs   (rc_verbs is built on an SRQ)
+#
+# UD has no one-sided RDMA READ/WRITE, so NIXL falls back to a transport that
+# fragments to the MTU and does reliability in software: measured on two
+# guests over one emulated rocm-ernic NIC, 0.064 GB/s against MORI_IO's 0.355
+# at 1 MiB, on a device where ib_write_bw reaches 594 MB/s. Nothing in that
+# failure names SRQ, which is the real cost -- the symptom that reaches a user
+# is "UCX is 5x slower than MORI".
+#
+# BOTH HALVES OR NEITHER
+#
+# ernic_srq_dkms is the kernel half, ernic_srq_provider the userspace one.
+# The kernel half alone produces a guest that reads as a contradiction: the
+# device advertises max_srq, and ibv_create_srq() returns EOPNOTSUPP, because
+# libibverbs dispatches into a provider with no create_srq op at all. Running
+# only one of the two is worse than running neither, because it looks fixed.
+#
+# NO MODULE RELOAD
+#
+# ernic_srq_dkms_reload stays off. This runs at image-build time with no
+# vfio-user device attached, so there is nothing to reload for -- and `rmmod
+# ionic` on the emulated device can hang on a DSR timeout and take the guest
+# with it (rocm-ernic AGENTS.md issue 6), which here would be a lost image
+# build rather than a wedged dev VM. The modules land in updates/dkms and are
+# what modprobe picks on the guest's next boot, which is the first boot that
+# has a device at all.
+#
+# WHERE THE SERIES COMES FROM
+#
+# Both patch series live in rocm-ernic -- patches/srq for the kernel half,
+# patches/rdma-core for the provider -- and are reached through the collection
+# pin in ansible/requirements.yml plus the matching source pin in
+# vars/ernic-pins.yml. Nothing is vendored here: a copy of a nine-patch kernel
+# series in a second repository is a copy that drifts.
+
+- name: Build the SRQ-capable ionic stack into the guest
+  hosts: all
+  gather_facts: true
+  become: true
+  vars_files:
+    - vars/ernic-pins.yml
+  vars:
+    # The roles are controller-side: ernic_source clones on the controller and
+    # ernic_srq_dkms archives the patched tree over to the target. Keep this
+    # equal to the collection pin in requirements.yml -- see ernic-pins.yml.
+    ernic_source_repo_version: "{{ ernic_source_pin }}"
+    ionic_srq_stamp: /etc/ionic-srq.json
+    # Passed INTO the roles below rather than read back out of them.
+    # include_role is public: false, so a role's defaults are scoped to the
+    # role and every reference to one after the include is undefined -- the
+    # cleanup and the stamp at the bottom both need these paths, and a
+    # silently-undefined path in an `ansible.builtin.file: state=absent` is a
+    # cleanup that removes nothing and says it changed something.
+    ionic_srq_stage_dir: /var/tmp/srq
+    ionic_srq_source_root: /var/tmp/ionic-srq-src
+    ionic_srq_provider_src: /var/tmp/rdma-core-srq
+    ionic_srq_provider_prefix: /usr/local
+
+  tasks:
+    # The series is rebased onto v7.2.4 and ionic tracks IB-core helpers that
+    # move between minor releases. ernic_srq_dkms only warns about a mismatch,
+    # because building a ref against another kernel is a legitimate thing to
+    # ask it for; baking an image is not that thing. A guest whose kernel does
+    # not match the pin has to fail here, where the pin and the kernel are
+    # both on screen, rather than inside a DKMS make.log.
+    - name: Assert the guest kernel matches the pinned ref
+      ansible.builtin.assert:
+        that:
+          - ansible_kernel is version(ionic_kernel_pin | regex_replace('^v', ''), '>=')
+          - (ansible_kernel | regex_replace('^([0-9]+\.[0-9]+).*$', '\1'))
+            == (ionic_kernel_pin | regex_replace('^v', '')
+                | regex_replace('^([0-9]+\.[0-9]+).*$', '\1'))
+        fail_msg: >-
+          This guest runs {{ ansible_kernel }}, but the SRQ series is pinned
+          to {{ ionic_kernel_pin }}. Repin the guest image to a matching
+          kernel; do not build across a minor release.
+
+    - name: Resolve the rocm-ernic source checkout on the controller
+      ansible.builtin.include_role:
+        name: sbates130272.rocm_ernic.ernic_source
+
+    # The kernel half: ionic.ko + ionic_rdma.ko from the pinned ref plus
+    # patches/srq, registered and installed as the ionic-ernic DKMS package.
+    #
+    # The package name and version are the ones ernic_guest_setup uses, which
+    # is deliberate: a consumer that rebuilds ionic-ernic in this guest
+    # replaces what is here rather than colliding with it. It also rebuilds it
+    # WITHOUT the SRQ series unless it passes patches/srq, which is the one
+    # way to silently lose this -- see the note in the consumers doc.
+    - name: Build and install the SRQ-capable ionic modules
+      ansible.builtin.include_role:
+        name: sbates130272.rocm_ernic.ernic_srq_dkms
+      vars:
+        ernic_srq_dkms_install: true
+        ernic_srq_dkms_reload: false
+        # The fetch and the patching happen where the checkout and the network
+        # are. The guest's outbound path is SLIRP that nothing else in the
+        # image build depends on, and a failure in it would present as the
+        # series not applying -- the one answer this must never give for the
+        # wrong reason.
+        ernic_srq_dkms_fetch_on_controller: true
+        # The ref is a pin, so a warm checkout of it is the same checkout, and
+        # the discard that force_fetch does first is the only destructive part.
+        ernic_srq_dkms_force_fetch: false
+        ernic_srq_dkms_scripts_dir: "{{ ernic_source_dir }}/scripts"
+        ernic_srq_dkms_patches_dir: "{{ ernic_source_dir }}/patches/srq"
+        ernic_srq_dkms_stage_dir: "{{ ionic_srq_stage_dir }}"
+        ernic_srq_dkms_source_root: "{{ ionic_srq_source_root }}"
+        ernic_srq_dkms_sources:
+          - ref: "{{ ionic_kernel_pin }}"
+            repo: https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
+
+    # What the DKMS install is worth, checked on the artefact rather than on
+    # the build log.
+    #
+    # nm, NOT strings. `strings ionic_rdma.ko | grep -i srq` returns around a
+    # dozen hits on a module with no SRQ support whatsoever --
+    # IB_USER_VERBS_CMD_CREATE_SRQ, IONIC_QPT_SRQ, rq_tbl_index_srq_id are BTF
+    # enumerator and struct-field names carried in the protocol header. A
+    # DKMS build with no BTF returns zero for the same grep, so the two
+    # together read as "the new image has SRQ and the old one did not" when
+    # neither had any. The symbol table is what answers the question.
+    - name: Confirm the installed ionic_rdma carries the SRQ verbs
+      ansible.builtin.shell: |
+        set -euo pipefail
+        ko=$(modinfo -n ionic_rdma)
+        case "${ko}" in
+            */updates/dkms/*) ;;
+            *)
+                echo "modprobe would load ${ko}, not the DKMS module" >&2
+                exit 1
+                ;;
+        esac
+        tmp=$(mktemp -d)
+        trap 'rm -rf "${tmp}"' EXIT
+        case "${ko}" in
+            *.zst) zstd -qdc "${ko}" > "${tmp}/m.ko" ;;
+            *.xz)  xz -dc "${ko}"    > "${tmp}/m.ko" ;;
+            *.gz)  gzip -dc "${ko}"  > "${tmp}/m.ko" ;;
+            *)     cp "${ko}" "${tmp}/m.ko" ;;
+        esac
+        nm "${tmp}/m.ko" | grep -c ionic_create_srq
+      args:
+        executable: /bin/bash
+      changed_when: false
+      register: ionic_srq_symbols
+      failed_when: ionic_srq_symbols.stdout | int < 1
+
+    # The userspace half: rdma-core from the pinned SHA plus
+    # patches/rdma-core, into /usr/local. The distro's rdma-core stays
+    # installed and untouched -- ld.so searches /usr/local/lib first, so the
+    # patched libibverbs and its provider win at run time without a single
+    # dpkg-owned file being overwritten, and backing it out is removing a
+    # prefix rather than repairing the package database.
+    - name: Build and install the SRQ-capable ionic provider
+      ansible.builtin.include_role:
+        name: sbates130272.rocm_ernic.ernic_srq_provider
+      vars:
+        ernic_srq_provider_prefix: "{{ ionic_srq_provider_prefix }}"
+        ernic_srq_provider_source_dir: "{{ ionic_srq_provider_src }}"
+
+    # The overlay has to be the one that loads, and loading is not the same as
+    # being present: a /usr/local libibverbs that cannot resolve its own
+    # NEEDED entries leaves every verbs tool broken in a guest where
+    # `ls /usr/local/lib` looks perfect. ibv_devinfo with no device attached
+    # exits non-zero with "No IB devices found", which is the correct answer
+    # here and not a failure, so the assertion is on the loader's resolution.
+    - name: Confirm the overlay provider is what libibverbs resolves
+      ansible.builtin.shell: |
+        set -euo pipefail
+        ldconfig -p | grep -q '/usr/local/lib/libibverbs\.so'
+        ldd "$(command -v ibv_devinfo)" | grep -q '/usr/local/lib/libibverbs'
+        ls /usr/local/lib/libibverbs/libionic-rdmav*.so
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    # Read back rather than restated. The provider's base SHA is a pin that
+    # lives in rocm-ernic -- in the role's defaults and in the series README,
+    # which the role cross-checks against each other -- so writing a third
+    # copy of it here is how the stamp ends up describing a tree the guest was
+    # not built from. The README in the checkout this run actually used is the
+    # one thing guaranteed to be true.
+    - name: Read the provider base SHA from the series README
+      delegate_to: localhost
+      become: false
+      ansible.builtin.shell: |
+        set -o pipefail
+        sed -n 's/^## The base: `\([0-9a-f]\{40\}\)`.*/\1/p' \
+          "{{ ernic_source_dir }}/patches/rdma-core/README.md" | head -1
+      args:
+        executable: /bin/bash
+      changed_when: false
+      register: ionic_srq_provider_base
+
+    - name: Assert the provider base was readable
+      ansible.builtin.assert:
+        that: ionic_srq_provider_base.stdout | trim | length == 40
+        fail_msg: >-
+          No base SHA in {{ ernic_source_dir }}/patches/rdma-core/README.md.
+          The role that just built the provider reads the same line and would
+          have failed first, so this means the README moved -- fix the stamp
+          rather than dropping the field.
+
+    # What this guest's ionic stack actually is, machine-readable, beside the
+    # flavour's own record. A consumer that finds max_srq = 0 at run time has
+    # to be able to tell "the image was never built with SRQ" from "the server
+    # half is older than the guest's" without reading a build log that no
+    # longer exists.
+    - name: Record the SRQ build in the guest
+      ansible.builtin.copy:
+        dest: "{{ ionic_srq_stamp }}"
+        mode: "0644"
+        content: |
+          {
+            "kernel_ref": "{{ ionic_kernel_pin }}",
+            "built_for_kernel": "{{ ansible_kernel }}",
+            "rocm_ernic_ref": "{{ ernic_source_pin }}",
+            "kernel_patches": "rocm-ernic patches/srq",
+            "dkms_package": "ionic-ernic/{{ ionic_kernel_pin | regex_replace('^v', '') }}",
+            "provider_base": "{{ ionic_srq_provider_base.stdout | trim }}",
+            "provider_patches": "rocm-ernic patches/rdma-core",
+            "provider_prefix": "{{ ionic_srq_provider_prefix }}",
+            "modules_reloaded": false,
+            "note": "Both halves are required. The device half lives in the rocm-ernic server image; a guest ahead of its server still reports max_srq 0."
+          }
+
+    # The staged kernel tree is ~1 GB of checkout that has already done its
+    # job, and the rdma-core clone another few hundred MB. Left behind they
+    # ship in the image -- and in the slim flavour they would be removed by a
+    # trim that has no idea they are there, which is a saving that depends on
+    # somebody else's /var/tmp sweep. Take it here instead.
+    - name: Remove the build trees
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ ionic_srq_stage_dir }}"
+        - "{{ ionic_srq_source_root }}"
+        - "{{ ionic_srq_provider_src }}"
+        - "{{ ionic_srq_provider_src | dirname }}/rdma-core-patches"
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: >-
+          ionic SRQ stack installed: kernel half from {{ ionic_kernel_pin }} +
+          patches/srq ({{ ionic_srq_symbols.stdout | trim }} create_srq
+          symbols in ionic_rdma), provider from
+          {{ ionic_srq_provider_base.stdout | trim | truncate(12, true, '') }}
+          + patches/rdma-core in {{ ionic_srq_provider_prefix }}.
+          Recorded in {{ ionic_srq_stamp }}.
