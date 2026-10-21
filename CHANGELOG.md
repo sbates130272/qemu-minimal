@@ -359,6 +359,39 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- **vfio-user devices go behind a PCIe root port by default.** Off is not
+  cosmetic. Without a root port the device is a conventional PCI endpoint
+  with no Express capability and a 32-bit prefetchable BAR; measured on the
+  emulated rocjitsu GPU, same guest and image, only this changed:
+
+  ```
+  off: Region 0: fd000000   (32-bit, prefetchable) [size=16M]
+  on:  Region 0: c040000000 (64-bit, prefetchable) [size=256M]
+       Capabilities: [40] Express (v2) Endpoint
+  ```
+
+  16M cannot be a VRAM aperture, so `amdgpu`'s memory controller never
+  initialises and the probe unwinds with `-22`. The module itself still
+  loads, so `lsmod` looks healthy and no KFD node is created — and the first
+  complaint arrives from HIP as `no ROCm-capable device is detected`, three
+  layers from the cause. That has already produced one wrong diagnosis.
+
+  `--no-vfio-user-root-port` and `VM_VFIO_USER_ROOT_PORT=false` keep the old
+  topology, and `gen-compose` now **warns** when a stack renders GPUs with it
+  off, naming the BAR rather than leaving HIP to misreport it. The CLI gained
+  the negative form because with the default flipped the positive flag could
+  only restate the default, which would have made the settings file the only
+  way to ask for the old behaviour.
+
+  `qemu/env/overlay-mi100` no longer forces it off. That override was
+  deliberate and transitional — it kept the mi100 fleet's enumeration stable
+  while NVMe was added — but env files layer, so anything built on
+  `scale-out` **plus** that overlay silently inherited a GPU that could not
+  bind. A two-VM cluster hit exactly that.
+
+  Necessary, not sufficient: 256M is still short of a gfx1250 aperture, and
+  the remaining limit is the rocjitsu device model's BAR size.
+
 - **The emulated ernic is identified by its full PCI tuple — vendor `0x1dd8`,
   device `0x1002`, subsystem vendor `0x1dd8`, subsystem device `0x5400` — and
   by nothing shorter.** rocm-ernic@3fb74d1 moved the device from `1dd8:100a` to

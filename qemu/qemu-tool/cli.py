@@ -181,8 +181,19 @@ def _add_run_vm(
         description="Run a QEMU VM previously created by gen-vm.",
     )
     p.add_argument("--filesystem", default=_UNSET, metavar="DIR")
+    # Both halves, because the default is now on: --vfio-user-root-port alone
+    # became a flag that could only restate the default, leaving no way to ask
+    # for the old topology from the command line at all. The settings file has
+    # always been able to; the CLI should not be the weaker of the two.
     p.add_argument("--vfio-user-root-port", action="store_true",
-                   default=_UNSET)
+                   default=_UNSET,
+                   help="Put each vfio-user device behind its own PCIe root "
+                        "port. On by default; a GPU cannot bind amdgpu "
+                        "without it.")
+    p.add_argument("--no-vfio-user-root-port", action="store_false",
+                   dest="vfio_user_root_port", default=_UNSET,
+                   help="Keep vfio-user devices on the root bus as "
+                        "conventional endpoints. A GPU will not work.")
     p.add_argument("--nvme", default=_UNSET, metavar="VALUE",
                    help="Positive int=count, negative int=null_blk, else literal args.")
     p.add_argument("--nvme-trace", default=_UNSET,

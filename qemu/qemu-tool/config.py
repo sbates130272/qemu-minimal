@@ -65,12 +65,31 @@ class VMConfig:
     filesystem: str | None = None
     # nvme: None=off, digit-str=count, negative-digit-str=null_blk, else literal args
     # Put each vfio-user device behind its own pcie-root-port instead of on
-    # the root complex. Off by default: it changes guest PCI topology, and
-    # the devices work without it. On, because without an Express capability
-    # a device reports no link speed or width -- ionic logs "0.000 Gb/s
-    # available PCIe bandwidth (Unknown x255 link)" -- and BAR-to-BAR DMA
-    # between two vfio-user devices needs real PCIe semantics.
-    vfio_user_root_port: bool = False
+    # the root complex. ON by default, because off is not merely cosmetic.
+    #
+    # Without a root port the device is a conventional PCI endpoint with no
+    # Express capability, and it gets a 32-bit prefetchable BAR. Measured on
+    # the emulated rocjitsu GPU, same guest and image, only this changing:
+    #
+    #   off: Region 0: fd000000   (32-bit, prefetchable) [size=16M]
+    #   on:  Region 0: c040000000 (64-bit, prefetchable) [size=256M]
+    #        Capabilities: [40] Express (v2) Endpoint
+    #
+    # 16M is far too small for a VRAM aperture, so amdgpu's memory controller
+    # cannot initialise and the probe unwinds with -22. The module still
+    # loads, so lsmod looks fine and no KFD node appears -- and the symptom
+    # surfaces three layers up as "hipSetDevice failed: no ROCm-capable
+    # device is detected", which is a wrong diagnosis waiting to happen. It
+    # cost exactly that once.
+    #
+    # The ionic path only loses its link speed ("0.000 Gb/s available PCIe
+    # bandwidth (Unknown x255 link)"), and BAR-to-BAR DMA between two
+    # vfio-user devices needs the real PCIe semantics either way.
+    #
+    # 256M is still short of what a gfx1250 aperture wants, so this is
+    # necessary and not sufficient: the remaining limit is the rocjitsu
+    # device model's BAR size, which is not ours.
+    vfio_user_root_port: bool = True
     nvme: str | None = None
     nvme_trace: str | None = None   # doorbell | all | event-name
     nvme_trace_file: Path | None = None

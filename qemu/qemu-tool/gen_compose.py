@@ -105,7 +105,9 @@ _DEFAULTS = {
     "FLEET_NET_PREFIX": "172.31",
     "VM_USERNAME": "ubuntu",
     "VM_FILESYSTEM": "",
-    "VM_VFIO_USER_ROOT_PORT": "false",
+    # True, matching VMConfig: off leaves a GPU with a 16M 32-bit BAR that
+    # amdgpu cannot initialise. See the comment on VMConfig.vfio_user_root_port.
+    "VM_VFIO_USER_ROOT_PORT": "true",
     # ---- LMCache -----------------------------------------------------------
     # Off by default so an env file that predates this feature regenerates
     # byte-identical output. qemu/env/scale-out turns it on.
@@ -333,6 +335,36 @@ def _per_vm_flags(values: dict[str, str], count: int) -> list[list[tuple[str, st
     return per_vm
 
 
+def _warn_if_gpu_without_root_port(values: dict[str, str]) -> None:
+    """A GPU with no root port cannot bind amdgpu, and says so three layers up.
+
+    Every stack this renders attaches a rocjitsu GPU per guest, so the
+    combination is always wrong rather than merely unusual. Without the root
+    port the device is a conventional endpoint with a 32-bit prefetchable
+    BAR -- 16M measured on the emulated GPU, against 256M behind a port --
+    which is too small for a VRAM aperture, so amdgpu's probe fails with -22
+    and no KFD node is created. The module still loads, so nothing local
+    looks broken, and the first complaint arrives from HIP as "no ROCm-capable
+    device is detected". That is far enough from the cause to have produced a
+    wrong diagnosis once, which is what this warning is for.
+
+    A warning and not an error: the setting exists so a stack can deliberately
+    keep today's enumeration while something else is being changed, and an
+    ernic-only guest loses only its link-speed reporting.
+    """
+    if _flag(values, "VM_VFIO_USER_ROOT_PORT"):
+        return
+    print(
+        "Warning: VM_VFIO_USER_ROOT_PORT is false and this stack gives every "
+        "guest a rocjitsu GPU.\n"
+        "  Without a root port the GPU gets a 16M 32-bit BAR, amdgpu's probe "
+        "fails with -22, and\n"
+        "  the guest reports 'no ROCm-capable device is detected' from HIP "
+        "rather than naming the BAR.",
+        file=sys.stderr,
+    )
+
+
 def _check_image_coherence(values: dict[str, str]) -> None:
     """Refuse an image set that cannot have been built together.
 
@@ -469,6 +501,7 @@ def plan(values: dict[str, str]) -> dict[str, Any]:
         )
 
     _check_image_coherence(values)
+    _warn_if_gpu_without_root_port(values)
 
     prefix = _get(values, "VM_NAME_PREFIX")
     names = _override_list(values, "VM_NAMES", count) or \

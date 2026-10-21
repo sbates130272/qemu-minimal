@@ -81,10 +81,6 @@ LMCACHE_ENABLE=false
 # No Loki or Alloy. This fleet has never run them and the TSDB is the record.
 LOGS_ENABLE=false
 
-# Keep today's guest PCI topology. The golden puts vfio-user devices behind a
-# root port; changing that at the same time as adding a drive would make a
-# device-enumeration change indistinguishable from an NVMe problem.
-VM_VFIO_USER_ROOT_PORT=false
 
 # ---------------------------------------------------------------------------
 # Run the containers as the operator, not as root
