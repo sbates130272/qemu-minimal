@@ -324,7 +324,21 @@ make_overlays() {
 generate_stack() {
   say "Generating the stack"
   mkdir -p "$STACK_DIR"
-  qemu-tool gen-compose --env-file "$ENV_FILE" --output-dir "$STACK_DIR" >/dev/null
+  # gen-compose renders fleet-inventory.yml's ansible_user from the SETTINGS
+  # FILE, not from this shell, so adopting the image's username above was not
+  # enough on its own: the inventory still said `ubuntu` and every Ansible
+  # play authenticated as an account the guest does not have. Hand the
+  # adopted name back as a second layer rather than rewriting generated
+  # output -- --env-file is repeatable and last wins, which is exactly this.
+  if [ "$VM_USERNAME" != "$(env_get VM_USERNAME)" ]; then
+    printf '# Written by quickstart-2vm.sh: the account the image reports.\nVM_USERNAME=%s\n' \
+        "$VM_USERNAME" > "${STACK_DIR}/env.image-login"
+    qemu-tool gen-compose --env-file "$ENV_FILE" \
+        --env-file "${STACK_DIR}/env.image-login" \
+        --output-dir "$STACK_DIR" >/dev/null
+  else
+    qemu-tool gen-compose --env-file "$ENV_FILE" --output-dir "$STACK_DIR" >/dev/null
+  fi
   echo "wrote $STACK_DIR/docker-compose.yml"
   # Copy the repo's qemu package into the stack directory so the QEMU
   # containers can install from source even when $REPO_ROOT is a
@@ -495,6 +509,14 @@ down() {
 # ---------------------------------------------------------------------------
 
 resolve_stack_dir
+
+# Every verb, not just the ones that fetch. `up` and `test` are separate
+# processes in CI -- the lane runs them as two steps -- so adopting the
+# username inside fetch_key alone died with the `up` process, and
+# wait_for_guests went back to the settings file's name and spent ten minutes
+# failing to reach it. The referrer is already on disk by then, so this is a
+# local file read, and a no-op before the first fetch.
+adopt_login
 
 case "$VERB" in
   preflight)
