@@ -376,10 +376,17 @@ jobs:
         # and nothing in the log said what it DID give it. An unreachable
         # address and an unjoined network look identical from the ssh error.
         echo "joined network: $NET"
-        echo "--- this container's addresses ---"
-        ip -br addr 2>/dev/null || ip addr
-        echo "--- routes ---"
-        ip route 2>/dev/null || true
+        # Asked through docker, not through ip(8): this image has none, and
+        # the first cut of this ran `ip -br addr 2>/dev/null || ip addr`, so
+        # both halves failed, the compound returned non-zero, and `sh -e`
+        # killed the step before printing anything. docker is here by
+        # definition -- the lane drives compose through the mounted socket --
+        # and it answers the actual question, which is whether THIS container
+        # is on the fleet network and with what address.
+        echo "--- networks this container is attached to ---"
+        docker inspect "$(cat /etc/hostname)" \
+          --format '{{range $n, $v := .NetworkSettings.Networks}}{{$n}}={{$v.IPAddress}} {{end}}' \
+          2>/dev/null || echo "(could not inspect self)"
         echo "--- the network's subnet and members ---"
         docker network inspect "$NET" \
           --format '{{range .IPAM.Config}}subnet={{.Subnet}} {{end}}' 2>/dev/null || true
