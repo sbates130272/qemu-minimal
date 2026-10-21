@@ -4,7 +4,7 @@ title: VM Report — hipFile fio VM
 
 # VM Report — qemu-minimal — hipFile fio VM
 
-Generated: **2026-10-21 02:18 UTC** &middot; Commit: [`23dc08d`](https://github.com/sbates130272/qemu-minimal/commit/23dc08d2a6b06ecb1f112f289e3b9088a1348f4b) &middot; Status: **pass**
+Generated: **2026-10-21 07:06 UTC** &middot; Commit: [`cc93a5b`](https://github.com/sbates130272/qemu-minimal/commit/cc93a5bc6fdba96c5d547ae737d90a0af4d2f9ce) &middot; Status: **pass**
 
 ## Hardware
 
@@ -13,7 +13,7 @@ Generated: **2026-10-21 02:18 UTC** &middot; Commit: [`23dc08d`](https://github.
 | CPU | AMD EPYC Processor |
 | vCPUs | 4 |
 | Threads/core | 1 |
-| RAM | 3.8Gi total, 2.8Gi free |
+| RAM | 3.8Gi total, 2.9Gi free |
 | Swap | 0B |
 
 ## Kernel
@@ -65,13 +65,14 @@ Node                  Generic               SN                   Model          
 00:00.0 Host bridge [0600]: Intel Corporation 82G33/G31/P35/P31 Express DRAM Controller [8086:29c0]
 00:01.0 VGA compatible controller [0300]: Device [1234:1111] (rev 02)
 00:02.0 Non-Volatile memory controller [0108]: Red Hat, Inc. QEMU NVM Express Controller [1b36:0010] (rev 02)
-00:03.0 Ethernet controller [0200]: Red Hat, Inc. Virtio network device [1af4:1000]
-00:04.0 Communication controller [0780]: Red Hat, Inc. Virtio console [1af4:1003]
-00:05.0 SCSI storage controller [0100]: Red Hat, Inc. Virtio block device [1af4:1001]
-00:06.0 Processing accelerators [1200]: Advanced Micro Devices, Inc. [AMD/ATI] Device [1002:75c1]
+00:03.0 PCI bridge [0604]: Red Hat, Inc. QEMU PCIe Root port [1b36:000c]
+00:04.0 Ethernet controller [0200]: Red Hat, Inc. Virtio network device [1af4:1000]
+00:05.0 Communication controller [0780]: Red Hat, Inc. Virtio console [1af4:1003]
+00:06.0 SCSI storage controller [0100]: Red Hat, Inc. Virtio block device [1af4:1001]
 00:1f.0 ISA bridge [0601]: Intel Corporation 82801IB (ICH9) LPC Interface Controller [8086:2918] (rev 02)
 00:1f.2 SATA controller [0106]: Intel Corporation 82801IR/IO/IH (ICH9R/DO/DH) 6 port SATA Controller [AHCI mode] [8086:2922] (rev 02)
 00:1f.3 SMBus [0c05]: Intel Corporation 82801I (ICH9 Family) SMBus Controller [8086:2930] (rev 02)
+01:00.0 Processing accelerators [1200]: Advanced Micro Devices, Inc. [AMD/ATI] Device [1002:75c1]
 ```
 
 ## Debian Packages
@@ -145,7 +146,6 @@ ubuntu : ubuntu video users render admin
   cron.service                     loaded active running Regular background program processing daemon
   dbus.service                     loaded active running D-Bus System Message Bus
   getty@tty1.service               loaded active running Getty on tty1
-  gpuagent.service                 loaded active running AMD GPU Metrics Reader Service
   ModemManager.service             loaded active running Modem Manager
   networkd-dispatcher.service      loaded active running Dispatcher daemon for systemd-networkd
   polkit.service                   loaded active running Authorization Manager
@@ -177,7 +177,7 @@ ubuntu : ubuntu video users render admin
 
 | Metric | Value |
 |---|---|
-| fio libhipfile read throughput | 219 MB/s |
+| fio libhipfile read throughput | 59 MB/s |
 
 This is fio's own `libhipfile` ioengine reading from the guest NVMe straight
 into VRAM, rather than the hand-written benchmark the rocjitsu report uses. fio
@@ -192,5 +192,5 @@ rocm: /opt/rocm/core-10.1
 building fio 6bc57a931f04fa3f50348d8c8f087187f050c6e1
 FIO_VERSION = fio-3.42
 fio: fio-3.42 commit=6bc57a931f04fa3f50348d8c8f087187f050c6e1
-fio-hipfile-bench: read_bytes=67108864 seconds=0.306 read_gbs=0.219310013
+fio-hipfile-bench: read_bytes=67108864 seconds=1.138 read_gbs=0.058970882
 ```
