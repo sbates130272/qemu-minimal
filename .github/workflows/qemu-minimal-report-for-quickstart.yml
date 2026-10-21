@@ -192,12 +192,26 @@ jobs:
         # both sources inspect reads, utmp and logind, rather than only one.
         ssh -i "${KEY_DIR}/id_rsa" -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 \
-            -tt "${GUEST_USER}@${NET}.3.1" "sleep 120" >/dev/null 2>&1 &
+            -p 2222 -tt "${GUEST_USER}@${NET}.3.1" "sleep 120" \
+            >/tmp/devcheck-ssh.log 2>&1 &
         SSH_PID=$!
         trap 'kill "$SSH_PID" 2>/dev/null || true' EXIT
         sleep 5
         kill -0 "$SSH_PID" 2>/dev/null || {
+          # -p 2222 is not optional, and its absence is why this step had
+          # never once run to completion: each guest's sshd is published on
+          # 2222 INSIDE its own container's network namespace, so without the
+          # flag this connected to port 22 of the qemu container, where
+          # nothing listens. report-for-lmcache learned the same thing and
+          # says so above its own wait loop.
+          #
+          # The ssh output is kept rather than sent to /dev/null, because
+          # "did not stay up" describes a guest that never booted, a wrong
+          # account and a closed port identically -- which is exactly what
+          # made this failure take a second run to read.
           echo "::error::the background SSH session to guest 1 did not stay up"
+          echo "--- ssh output ---"
+          cat /tmp/devcheck-ssh.log 2>/dev/null || echo "(no output captured)"
           exit 1
         }
 
