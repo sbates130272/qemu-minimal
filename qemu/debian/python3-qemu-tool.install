@@ -14,3 +14,14 @@ env/scale-out usr/share/qemu-tool/env/
 compose/vfio-user-ernic-rocjitsu-scale-out/docker-compose.yml usr/share/qemu-tool/compose/vfio-user-ernic-rocjitsu-scale-out/
 compose/vfio-user-ernic-rocjitsu-scale-out/prometheus.yml usr/share/qemu-tool/compose/vfio-user-ernic-rocjitsu-scale-out/
 compose/vfio-user-ernic-rocjitsu-scale-out/README.md usr/share/qemu-tool/compose/vfio-user-ernic-rocjitsu-scale-out/
+
+# The MI355X-shaped stack, same shape as the scale-out entry above: a golden
+# settings file plus the three generated artifacts and the README. It has to
+# be listed because compose.py's _STACKS now advertises it -- an advertised
+# stack that is not installed makes `compose --stack vfio-user-mi355x-node`
+# fail with "not found at /usr/share/qemu-tool/compose/...", which is what
+# the Install Smoke Test caught.
+env/mi355x-node usr/share/qemu-tool/env/
+compose/vfio-user-mi355x-node/docker-compose.yml usr/share/qemu-tool/compose/vfio-user-mi355x-node/
+compose/vfio-user-mi355x-node/prometheus.yml usr/share/qemu-tool/compose/vfio-user-mi355x-node/
+compose/vfio-user-mi355x-node/README.md usr/share/qemu-tool/compose/vfio-user-mi355x-node/

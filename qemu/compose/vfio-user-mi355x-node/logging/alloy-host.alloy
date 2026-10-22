@@ -1,0 +1,68 @@
+// Alloy on the HOST: ships every stack container's logs to Loki.
+//
+// This is the outside half. The guests run their own Alloy (installed by the
+// lmcache_guest role) because a container log on the host and a systemd unit
+// inside a VM are not reachable by the same collector -- the VM's journal is
+// behind QEMU, not on the Docker socket.
+//
+// Not generated: it discovers containers at run time rather than being told
+// VM_COUNT of them, so nothing here changes when the fleet is resized.
+
+// Docker's socket, read-only. Discovery is dynamic, so a container that
+// restarts -- an ernic worker flapping, say -- is picked up again without
+// Alloy being restarted.
+discovery.docker "stack" {
+	host             = "unix:///var/run/docker.sock"
+	refresh_interval = "10s"
+}
+
+// Label by compose service rather than container name. The raw name is
+// "<project>-<service>-<n>", which repeats the project on every line and
+// sorts badly in a log panel; the service is what anyone actually filters
+// on. Keep the full name too, for the one case where the replica index
+// matters.
+discovery.relabel "stack" {
+	targets = discovery.docker.stack.targets
+
+	rule {
+		source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+		target_label  = "service"
+	}
+
+	rule {
+		source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+		target_label  = "project"
+	}
+
+	rule {
+		source_labels = ["__meta_docker_container_name"]
+		regex         = "/(.*)"
+		target_label  = "container"
+	}
+
+	// Everything from this collector is host-side. The guests' own Alloy
+	// sets origin="guest", so one label separates "the device server" from
+	// "the thing inside the VM talking to it" -- which is the distinction
+	// you want when an ernic and its guest disagree about what happened.
+	rule {
+		target_label = "origin"
+		replacement  = "host"
+	}
+}
+
+loki.source.docker "stack" {
+	host       = "unix:///var/run/docker.sock"
+	targets    = discovery.relabel.stack.output
+	labels     = {job = "docker"}
+	forward_to = [loki.write.default.receiver]
+}
+
+loki.write "default" {
+	endpoint {
+		url = string.format("http://%s/loki/api/v1/push", coalesce(sys.env("LOKI_HOST"), "loki:3100"))
+	}
+
+	// A fleet start burst produces far more than the default batch carries,
+	// and the overflow is dropped rather than queued.
+	external_labels = {}
+}

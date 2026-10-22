@@ -99,6 +99,17 @@ REPORTS = (
     # still shaking out runner-sized problems. Add
     #   {"key": "quickstart", "label": "quickstart", "path": "quickstart/index.md"}
     # once it has run clean for a week or so.
+    #
+    # report-for-mi355x IS here, deliberately and from day one, unlike the two
+    # above. It is the riskiest lane on a runner -- one guest with seventeen
+    # device-server containers behind it on 4 cores, eight of them ernics
+    # against the mesh manager's untunable 20 s heartbeat (AGENTS.md issue
+    # 14) -- and that is the argument for including it rather than against.
+    # A lane whose flakiness is invisible on the front page is a lane nobody
+    # fixes. Expect the badge to be non-green until its first run lands, and
+    # expect it to be the entry that holds the badge down when it does flake;
+    # that signal is the point.
+    {"key": "mi355x", "label": "MI355X node", "path": "mi355x/index.md"},
 )
 
 BADGE_RE = re.compile(r"^([0-9]+(?:\.[0-9]+)?)\s*([kMGT]?)([A-Za-z/]+)$")

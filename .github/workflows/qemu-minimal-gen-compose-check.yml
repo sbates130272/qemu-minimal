@@ -130,17 +130,55 @@ jobs:
       # the mi100 overlay has no lane at all. A key renamed in the golden
       # would sit broken in an overlay until someone ran a fleet. Render each
       # committed overlay on top of the golden and validate the result.
+      #
+      # Each overlay is paired with the golden file it is a delta OF, rather
+      # than every overlay being assumed to sit on scale-out: overlay-mi355x-ci
+      # layers on qemu/env/mi355x-node, and rendering it against the wrong
+      # golden would validate a stack nobody runs while leaving the real one
+      # unchecked. --stack matters for the same reason it does elsewhere --
+      # it is what the asset mirror reads FROM.
       - name: Committed overlays render and validate
         run: |
-          for overlay in qemu/env/overlay-ci qemu/env/overlay-mi100; do
+          for pair in \
+            vfio-user-ernic-rocjitsu-scale-out:qemu/env/scale-out:qemu/env/overlay-ci \
+            vfio-user-ernic-rocjitsu-scale-out:qemu/env/scale-out:qemu/env/overlay-mi100 \
+            vfio-user-mi355x-node:qemu/env/mi355x-node:qemu/env/overlay-mi355x-ci; do
+            stack=${pair%%:*}; rest=${pair#*:}
+            golden=${rest%%:*}; overlay=${rest#*:}
             dir="/tmp/stack-$(basename "$overlay")"
             mkdir -p "$dir"
-            python3 -m qemu_tool gen-compose \
-              --env-file qemu/env/scale-out --env-file "$overlay" \
+            python3 -m qemu_tool gen-compose --stack "$stack" \
+              --env-file "$golden" --env-file "$overlay" \
               --output-dir "$dir"
             docker compose --project-directory "$dir" \
-              --env-file qemu/env/scale-out --env-file "$overlay" config -q
+              --env-file "$golden" --env-file "$overlay" config -q
           done
+
+      # The MI355X CI overlay exists to shrink the FLEET and the guest, never
+      # the topology: a lane that quietly halved the devices would publish a
+      # green report about a shape nobody runs. Assert the reduced render
+      # still carries the full switch wiring, because that is exactly the
+      # property a well-meaning "make CI faster" edit would drop.
+      - name: The MI355X CI overlay reduces the fleet, not the topology
+        run: |
+          set -eu
+          dir=/tmp/stack-overlay-mi355x-ci
+          grep -q -- '--vfio-user-switch-width 2' "$dir/docker-compose.yml" \
+            || { echo "::error::the CI overlay lost --vfio-user-switch-width"; exit 1; }
+          for s in ernic-1-8 rocjitsu-1-8; do
+            docker compose --project-directory "$dir" \
+              --env-file qemu/env/mi355x-node \
+              --env-file qemu/env/overlay-mi355x-ci config --services \
+              | grep -qx "$s" \
+              || { echo "::error::$s missing: the overlay reduced the device count"; exit 1; }
+          done
+          # One VM, though: that part IS meant to shrink.
+          docker compose --project-directory "$dir" \
+            --env-file qemu/env/mi355x-node \
+            --env-file qemu/env/overlay-mi355x-ci config --services \
+            | grep -qx qemu-2 \
+            && { echo "::error::the CI overlay rendered more than one VM"; exit 1; }
+          echo "topology intact, fleet reduced to one VM"
 
       # ERNIC_TAP has two shapes and the golden sets it to true, so every
       # render above covers the tap one: the tap path's extra network,
@@ -228,3 +266,79 @@ jobs:
           echo "$out" | grep -qx 'qemu-3' && {
             echo "::error::compose adopted the probe stack from outside it"; exit 1; }
           exit 0
+
+      # The MI355X-shaped stack: 8 ernics and 8 rocjitsus per VM behind 8
+      # PCIe switches. Its committed tree is generated the same way and gets
+      # the same gate.
+      #
+      # --stack is not optional here even though --output-dir names the same
+      # directory. It is what the asset mirror reads FROM, and its default is
+      # the scale-out stack -- so without it this would compare mi355x's
+      # grafana/, logging/ and tapsetup/ against the other stack's and then,
+      # on a real generation, overwrite them authoritatively.
+      - name: Committed MI355X stack matches qemu/env/mi355x-node
+        run: |
+          python3 -m qemu_tool gen-compose \
+            --stack vfio-user-mi355x-node \
+            --env-file qemu/env/mi355x-node \
+            --output-dir qemu/compose/vfio-user-mi355x-node \
+            --check
+
+      # Both renders, for the same reason the scale-out stack validates both:
+      # profiles filter services out of `config` output, and `config -q` on a
+      # render with everything filtered away still exits 0. The service
+      # assertion is what stops this silently checking nothing.
+      #
+      # ernic-4-8 and rocjitsu-4-8 specifically: they are the LAST device of
+      # the LAST VM, so they only exist if the per-VM device loop ran to the
+      # end rather than emitting one of each.
+      - name: MI355X stack renders and validates
+        run: |
+          svcs="$(docker compose \
+            --project-directory qemu/compose/vfio-user-mi355x-node \
+            --env-file qemu/env/mi355x-node \
+            --profile metrics config --services)"
+          for s in ernic-1-1 ernic-4-8 rocjitsu-1-1 rocjitsu-4-8 \
+                   qemu-1 qemu-4 prometheus grafana; do
+            echo "$svcs" | grep -qx "$s" || {
+              echo "::error::$s missing from the mi355x render"; exit 1; }
+          done
+          docker compose \
+            --project-directory qemu/compose/vfio-user-mi355x-node \
+            --env-file qemu/env/mi355x-node config -q
+          docker compose \
+            --project-directory qemu/compose/vfio-user-mi355x-node \
+            --env-file qemu/env/mi355x-node \
+            --profile metrics config -q
+
+      # The topology is the point of the stack, and a flat tree boots just as
+      # happily as a switched one -- so assert the guest actually gets the
+      # switches rather than trusting that the flag was passed along.
+      - name: MI355X guest gets 8 switches, each with one NIC and one GPU
+        run: |
+          python3 - <<'PY'
+          import re
+          from qemu_tool.config import VMConfig
+          from qemu_tool import run_vm
+          socks = []
+          for i in range(1, 9):
+              socks += [f"/run/vfu/ernic-1-{i}.sock",
+                        f"/run/vfu/rocjitsu-1-{i}.sock"]
+          cfg = VMConfig(vm_name="mi355x-1", vcpus=8, vfio_userdev=socks,
+                         vfio_user_switch_width=2, cpu_sockets=1,
+                         pci_hole64_size="512G", dry_run=True)
+          args = run_vm._vfio_userdev_args(cfg)
+          joined = " ".join(args)
+          assert joined.count("x3130-upstream") == 8, "expected 8 switches"
+          assert joined.count("xio3130-downstream") == 16
+          chassis = re.findall(r"chassis=(\d+)", joined)
+          assert len(chassis) == len(set(chassis)) == 24, "chassis collision"
+          assert all("hotplug=off" in a for a in args
+                     if a.startswith(("pcie-root-port", "xio3130-downstream")))
+          for s in range(8):
+              assert f'"bus":"vfudp{s}.0"' in joined
+              assert f'"bus":"vfudp{s}.1"' in joined
+          assert run_vm._smp_args(cfg) == [
+              "-smp", "cpus=8,sockets=1,cores=8,threads=1"]
+          print("topology OK: 8 switches, 24 unique chassis, 1 socket")
+          PY

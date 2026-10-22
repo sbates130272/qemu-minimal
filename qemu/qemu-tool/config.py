@@ -90,6 +90,28 @@ class VMConfig:
     # necessary and not sufficient: the remaining limit is the rocjitsu
     # device model's BAR size, which is not ours.
     vfio_user_root_port: bool = True
+    # Group vfio-user devices under PCIe switches, this many per switch, in
+    # the order --vfio-userdev gives them. 0 is off. A real MI355X node pairs
+    # each GPU with a NIC below a switch so their traffic never crosses the
+    # root complex, and software that reads the PCIe tree -- ROCm topology
+    # detection, P2P path selection -- decides differently on a flat tree.
+    # Implies vfio_user_root_port: each switch needs one to hang off.
+    vfio_user_switch_width: int = 0
+    # Pin the guest's socket count. 0 leaves QEMU to infer it, which means
+    # `-smp cpus=N` yields N single-core sockets -- so every guest this repo
+    # has ever booted sees N EPYC sockets rather than one. Set to 1 to look
+    # like a single-socket server.
+    cpu_sockets: int = 0
+    # Size of the 64-bit PCI hole, as a QEMU size string ("512G"). None leaves
+    # the machine default, which does not fit eight emulated GPUs' BARs.
+    #
+    # Bounded by the CPU's physical address width, and the failure is a hard
+    # refusal at startup, not a degraded boot:
+    #   Address space limit 0xffffffffff < 0x1ffffffffff phys-bits too low (40)
+    # -cpu EPYC gives 40 bits (1 TiB). Measured on QEMU 10.2.1: 512G is
+    # accepted, 1T is not. Going above that needs host-phys-bits=on or an
+    # explicit phys-bits= on the -cpu argument.
+    pci_hole64_size: str | None = None
     nvme: str | None = None
     nvme_trace: str | None = None   # doorbell | all | event-name
     nvme_trace_file: Path | None = None

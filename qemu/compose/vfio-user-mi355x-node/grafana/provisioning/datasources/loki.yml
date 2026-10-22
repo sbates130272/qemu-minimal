@@ -1,0 +1,20 @@
+---
+# Not generated: nothing here depends on VM_COUNT.
+#
+# By fixed fleet address, matching the rest of the stack -- nothing resolves a
+# compose service name at run time, and a datasource is no exception.
+apiVersion: 1
+
+datasources:
+  - name: Loki
+    uid: fleet-loki
+    type: loki
+    access: proxy
+    url: http://172.31.0.15:3100
+    isDefault: false
+    editable: false
+    jsonData:
+      # Matches the stack's retention_period. Grafana otherwise offers time
+      # ranges Loki will answer empty, which reads as "no logs" rather than
+      # "outside retention".
+      maxLines: 2000

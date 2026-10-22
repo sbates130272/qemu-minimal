@@ -14,12 +14,16 @@ _STACKS = (
     "vfio-user-ernic-rocjitsu-vm",
     "vfio-user-ernic-2vm",
     "vfio-user-ernic-rocjitsu-scale-out",
+    "vfio-user-mi355x-node",
 )
 _DEFAULT_STACK = "vfio-user-ernic-rocjitsu-vm"
 
 # Stacks whose docker-compose.yml is produced by `qemu-tool gen-compose` rather
 # than hand-written, and so can fall out of step with the env file.
-_GENERATED_STACKS = frozenset({"vfio-user-ernic-rocjitsu-scale-out"})
+_GENERATED_STACKS = frozenset({
+    "vfio-user-ernic-rocjitsu-scale-out",
+    "vfio-user-mi355x-node",
+})
 
 # Names a rendered stack directory for every compose command in this shell,
 # so a fleet is selected once instead of on every invocation. Mirrors
