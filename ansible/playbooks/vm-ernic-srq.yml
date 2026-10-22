@@ -179,6 +179,15 @@
       vars:
         ernic_srq_provider_prefix: "{{ ionic_srq_provider_prefix }}"
         ernic_srq_provider_source_dir: "{{ ionic_srq_provider_src }}"
+        # Not optional, for the same reason the two ernic_srq_dkms_*_dir
+        # overrides above are not: this default is
+        # "{{ playbook_dir }}/../../patches/rdma-core", which resolves against
+        # whichever repo the *playbook* lives in. In rocm-ernic that is the
+        # series; here it is a path in qemu-minimal that does not exist, and
+        # the role's own guard then fails with "No *.patch in ...".
+        #
+        # ernic_srq_provider_readme derives from this, so it follows.
+        ernic_srq_provider_patches_dir: "{{ ernic_source_dir }}/patches/rdma-core"
 
     # The overlay has to be the one that loads, and loading is not the same as
     # being present: a /usr/local libibverbs that cannot resolve its own
