@@ -292,6 +292,41 @@ id upstream had retired (issue 25). An empty `src` is still allowed, and now
 says so in the play output instead of skipping silently.
 `tests/test_ernic_identity.py` asserts both stanzas match all four fields.
 
+**That "installs them" was false until 2026-10-22, in the configuration
+everyone uses.** The copy task lived in `driver.yml`, which `main.yml`
+includes only `when: ernic_fleet_ionic_modules_dir | length > 0` — and that
+dir is empty by default and *meant* to be, since in-tree `ionic` binds the
+device natively (issue 16). So the documented setup installed no rules and no
+`modules-load.d` entry. Measured on a 32-guest fleet: 64 NICs, none renamed,
+none addressed. The tasks now live in `naming.yml`, included unconditionally;
+`driver.yml` keeps its gate because the patched modules really are optional.
+Every id assertion in `tests/test_ernic_identity.py` stayed green throughout,
+because they read the task and never asked whether it runs — there is now a
+test that the include carries no `when:`.
+
+**The published qcow2 ships no rules of its own either**, as of
+`20261021.g742e8e2`. Read straight off the image over `qemu-nbd`, not
+inferred: `/etc/udev/rules.d/` has no `99-rocm-ernic.rules`. The note below
+about the Oct-14 image carrying one no longer holds, so a guest that has had
+no Ansible run against it has no rules from any source.
+
+**`NAME="rocm-ernic%n"` could only ever name one NIC per guest.** `%n` is the
+kernel number — the trailing digits of the sysname — and every emulated NIC
+comes up as `...np0`, so `%n` is 0 for all of them and the second rename fails
+with the name already in use. Unreachable while every fleet had one NIC per
+guest; `ERNIC_PER_VM` made it reachable and the MI355X node shape, at eight
+NICs per VM, makes it certain. The rule now searches for the first free index,
+which is what the InfiniBand stanza below already did. Verified on a running
+two-NIC guest: `enp1s0np0` → `rocm-ernic0`, `enp2s0np0` → `rocm-ernic1`.
+Note udev applies `NAME=` only at device-add and will not rename a live
+interface, so a re-trigger needs the links down first.
+
+**`rocm-ernic-netcfg.sh` configures every matching NIC**, not just the first.
+It walks all of them and derives each address from that NIC's own MAC, which
+matches `gen-compose` keying MACs and IPs on the global NIC ordinal — so VM
+*n*'s devices land on consecutive addresses from `.11` up. The hostname still
+comes from the first NIC only: it names the guest, not the device.
+
 `ernic_guest_setup` ships its own copy and reloads udev, and both renames are
 confirmed working in CI — the ionic lane's
 `Show NIC details` reports `rocm-ernic0` carrying `altname enp0s5np0`, which is

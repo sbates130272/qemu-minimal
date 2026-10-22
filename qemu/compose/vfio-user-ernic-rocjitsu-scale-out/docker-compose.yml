@@ -5,7 +5,7 @@
 #   qemu-tool gen-compose --env-file qemu/env/scale-out
 #
 # env-file: qemu/env/scale-out
-# env-sha256: 2ce5a396b89076f07674109652e71f1ac9b43bdeb8e170626a46da734f5d3246
+# env-sha256: de2ed7dcdf9b3307d131daa27887a18de0b52af8e340dba71709a364647c308c
 
 x-logging: &logging
   driver: json-file
@@ -16,6 +16,7 @@ x-logging: &logging
 x-ernic-common: &ernic-common
   image: "${ERNIC_IMAGE}"
   logging: *logging
+  stop_signal: SIGKILL
   ulimits:
     nofile:
       soft: 65536
@@ -34,6 +35,7 @@ x-qemu-common: &qemu-common
     - "${QEMU_TOOL_SRC:-../../..}:/qemu-tool-src:ro"
   devices:
     - /dev/kvm
+  stop_grace_period: 120s
   restart: "no"
 
 services:

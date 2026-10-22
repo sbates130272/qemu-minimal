@@ -183,12 +183,62 @@ class BlockDevices(unittest.TestCase):
         self.assertIsNone(inspect_mod._block_devices(vm(), {}))
         self.assertEqual(inspect_mod._disk_lines(None), [])
 
-    def test_long_list_collapses(self):
+    def test_every_disk_is_listed(self):
+        # Was capped at six with a "+N more" tail. On a fleet guest with
+        # VM_NVME=8 that hid a third of the devices, and could hide the root
+        # disk -- the one you most want named.
         disks = [dict(ROOT_DISK, name=f"/dev/vd{c}") for c in "abcdefgh"]
         lines = inspect_mod._disk_lines(inspect_mod._block_devices(
             vm(), ga(disks=disks)))
-        self.assertEqual(len(lines), inspect_mod._DISK_LINE_LIMIT + 1)
-        self.assertEqual(lines[-1], "+2 more")
+        self.assertEqual(len(lines), 8)
+        self.assertFalse([t for _, t in lines if "more" in t])
+
+    def test_disks_are_sorted_naturally_not_lexicographically(self):
+        # nvme10n1 after nvme9n1. VM_NVME has no ceiling, so a two-digit
+        # fleet is reachable, and plain sorted() puts nvme10 next to nvme1.
+        names = ["/dev/nvme10n1", "/dev/nvme2n1", "/dev/nvme1n1", "/dev/nvme9n1"]
+        disks = [dict(ROOT_DISK, name=n, mountpoints=[]) for n in names]
+        lines = inspect_mod._disk_lines(inspect_mod._block_devices(
+            vm(), ga(disks=disks)))
+        self.assertEqual(
+            [text.split()[0] for _, text in lines],
+            ["/dev/nvme1n1", "/dev/nvme2n1", "/dev/nvme9n1", "/dev/nvme10n1"])
+
+    def test_the_boot_disk_is_identified(self):
+        # By mountpoint, not by position: the agent returned the root disk
+        # SECOND on a fleet guest with 8 NVMe, so "the first one" is wrong.
+        disks = [
+            dict(NVME_DISK, name="/dev/nvme1n1"),
+            ROOT_DISK,
+            ROOT_PART,
+        ]
+        lines = inspect_mod._disk_lines(inspect_mod._block_devices(
+            vm(), ga(disks=disks, fsinfo=FSINFO)))
+        self.assertEqual(lines[0][0], "Boot Disk", lines)
+        self.assertTrue(lines[0][1].startswith("/dev/vda"), lines)
+        self.assertEqual([lab for lab, _ in lines[1:]], ["Disk"], lines)
+
+    def test_nvme_partition_parents_resolve(self):
+        # Stripping trailing digits gives "nvme0n" and "nvme0n1p", neither of
+        # which names a device, so a mounted NVMe used to show no mountpoint.
+        self.assertEqual(inspect_mod._parent_device("nvme0n1"), "nvme0n1")
+        self.assertEqual(inspect_mod._parent_device("nvme0n1p3"), "nvme0n1")
+        self.assertEqual(inspect_mod._parent_device("nvme10n1p2"), "nvme10n1")
+        self.assertEqual(inspect_mod._parent_device("mmcblk0p1"), "mmcblk0")
+        # Unchanged for the names that already worked.
+        self.assertEqual(inspect_mod._parent_device("vda1"), "vda")
+        self.assertEqual(inspect_mod._parent_device("sdb2"), "sdb")
+        self.assertEqual(inspect_mod._parent_device("vda"), "vda")
+
+    def test_a_disk_with_mounts_but_no_root_is_not_the_boot_disk(self):
+        # A data NVMe mounted at /mnt/nvme0 is mounted, not bootable.
+        fsinfo = [{"name": "nvme1n1", "mountpoint": "/mnt/nvme0", "type": "ext4",
+                   "disk": [{"bus-type": "nvme", "dev": "/dev/nvme1n1"}]}]
+        disks = [dict(NVME_DISK, name="/dev/nvme1n1")]
+        lines = inspect_mod._disk_lines(inspect_mod._block_devices(
+            vm(), ga(disks=disks, fsinfo=fsinfo)))
+        self.assertEqual(lines[0][0], "Disk")
+        self.assertIn("/mnt/nvme0", lines[0][1])
 
 
 class Capacity(unittest.TestCase):

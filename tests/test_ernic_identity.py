@@ -102,8 +102,81 @@ class UdevRulesTest(unittest.TestCase):
         ib = [s for s in stanzas if 'SUBSYSTEM=="infiniband"' in s]
         self.assertEqual(len(net), 1, stanzas)
         self.assertEqual(len(ib), 1, stanzas)
-        self.assertIn('NAME="rocm-ernic%n"', net[0])
+        self.assertIn("rocm-ernic", net[0])
         self.assertIn("rocm-rdma-ernic", ib[0])
+
+    def test_netdev_name_is_not_derived_from_the_kernel_number(self):
+        """%n is 0 for BOTH NICs on a two-NIC guest, so it cannot be the index.
+
+        The kernel number is the trailing digits of the sysname, and the
+        emulated NICs come up as enp1s0np0 and enp2s0np0 -- measured on
+        dense-fleet guest 1, with ERNIC_PER_VM=2. Both end in 0, so
+        NAME="rocm-ernic%n" asks for rocm-ernic0 twice and the second rename
+        fails with the name in use.
+
+        Unreachable while every fleet had one NIC per guest, which is why it
+        survived until ERNIC_PER_VM existed.
+        """
+        (net,) = [s for s in _rule_stanzas() if 'SUBSYSTEM=="net"' in s]
+        self.assertNotIn(
+            '"rocm-ernic%n"', net,
+            "%n collides at rocm-ernic0 for both NICs of a two-NIC guest")
+
+    def test_netdev_name_comes_from_the_pci_position(self):
+        """Deterministic ordering, not whichever device udev saw first.
+
+        A free-index search ("first rocm-ernicN that does not exist") fixes
+        the %n collision but numbers in udev event order, which is a race.
+        Measured on a 32-guest fleet: guest 3 came up with rocm-ernic1 on PCI
+        01:00.0 and rocm-ernic0 on 02:00.0, while guests 7 and 20 got the
+        opposite. Walking /sys/bus/pci/devices in bus order instead makes
+        rocm-ernic0 always the guest's lowest-addressed ernic.
+        """
+        (net,) = [s for s in _rule_stanzas() if 'SUBSYSTEM=="net"' in s]
+        self.assertIn("PROGRAM=", net)
+        self.assertIn('NAME="%c"', net)
+        self.assertIn("/sys/bus/pci/devices/", net)
+        # The old scheme, which must not come back.
+        self.assertNotIn("/sys/class/net/rocm-ernic$$i", net)
+
+    def test_the_netdev_program_rechecks_all_four_ids(self):
+        # The loop walks EVERY PCI device, so the rule's own match does not
+        # constrain it. 1dd8:1002 is also a real Pensando card; only the
+        # subsystem pair means the emulation, and counting a real NIC would
+        # shift every index after it.
+        (net,) = [s for s in _rule_stanzas() if 'SUBSYSTEM=="net"' in s]
+        for want in ("0x1dd8", "0x1002", "0x5400"):
+            self.assertIn(want, net)
+        for attr in ("vendor", "device", "subsystem_vendor", "subsystem_device"):
+            self.assertIn(f"$$d/{attr}", net)
+
+    def test_the_netdev_program_uses_no_double_quotes(self):
+        # udev does not parse a nested double quote inside PROGRAM="...".
+        (net,) = [s for s in _rule_stanzas() if 'SUBSYSTEM=="net"' in s]
+        body = net.split("PROGRAM=", 1)[1]
+        body = body[body.index("'"):body.rindex("'")]
+        self.assertNotIn('"', body, "a double quote inside PROGRAM breaks parsing")
+
+    def test_shell_variables_are_doubled(self):
+        # A bare $ is udev's own substitution character.
+        (net,) = [s for s in _rule_stanzas() if 'SUBSYSTEM=="net"' in s]
+        body = net.split("PROGRAM=", 1)[1]
+        stripped = body.replace("$$", "")
+        self.assertNotIn("$d", stripped)
+        self.assertNotIn("$i", stripped)
+        self.assertNotIn("$p", stripped)
+
+    def test_both_stanzas_guard_against_renaming_twice(self):
+        """A re-triggered event must not walk an already-correct device on.
+
+        The IB stanza skips a device already called rocm-rdma-ernic*; the net
+        stanza matches KERNEL!="rocm-ernic*". Without it, a re-trigger computes
+        the next free index for a device that is already right.
+        """
+        (net,) = [s for s in _rule_stanzas() if 'SUBSYSTEM=="net"' in s]
+        (ib,) = [s for s in _rule_stanzas() if 'SUBSYSTEM=="infiniband"' in s]
+        self.assertIn('KERNEL!="rocm-ernic*"', net)
+        self.assertIn("rocm-rdma-ernic*", ib)
 
     def test_netdev_rule_matches_the_whole_tuple(self):
         # ATTR{device/...} on the netdev: the four ids are plain files under
@@ -235,8 +308,44 @@ class FleetRoleInstallsTheRulesTest(unittest.TestCase):
         _require(yaml is not None and jinja2 is not None, "PyYAML and Jinja2")
         self.defaults = _defaults(FLEET_ROLE)
         self.tasks = yaml.safe_load(
-            (FLEET_ROLE / "tasks" / "driver.yml").read_text()
+            (FLEET_ROLE / "tasks" / "naming.yml").read_text()
         )
+        self.main = yaml.safe_load(
+            (FLEET_ROLE / "tasks" / "main.yml").read_text()
+        )
+
+    def _include_of(self, name: str) -> dict:
+        found = [
+            t for t in self.main
+            if t.get("ansible.builtin.include_tasks") == name
+        ]
+        self.assertEqual(len(found), 1, f"expected one include of {name}")
+        return found[0]
+
+    def test_the_naming_include_is_not_conditional(self):
+        """The regression that put 64 NICs on a fleet with no rules at all.
+
+        These tasks lived in driver.yml, which main.yml includes only
+        `when: ernic_fleet_ionic_modules_dir | length > 0`. That dir is empty
+        by default and is meant to be -- in-tree ionic binds the emulated
+        device natively since rocm-ernic@3fb74d1 -- so the documented
+        configuration installed no udev rules and no modules-load.d entry
+        while AGENTS.md said this role installs them.
+
+        Every id assertion in this file stayed green throughout, because they
+        read the task and never asked whether it runs.
+        """
+        self.assertNotIn(
+            "when", self._include_of("naming.yml"),
+            "naming.yml must run for every guest: device naming does not "
+            "depend on which build of the driver is loaded",
+        )
+
+    def test_the_patched_module_install_stays_conditional(self):
+        # The other half: the patched modules ARE optional, so driver.yml
+        # must keep its gate or every fleet needs a DKMS build it has no use
+        # for.
+        self.assertIn("when", self._include_of("driver.yml"))
 
     def _copy_task(self) -> dict:
         found = [
@@ -328,10 +437,35 @@ class NetcfgDiscoveryTest(unittest.TestCase):
         self.assertEqual(got.returncode, 0, got.stderr)
         self.assertEqual(got.stdout.strip(), "enp0s6np0")
 
-    def test_prefers_the_renamed_name(self):
+    def test_renamed_names_come_first(self):
+        # Ordering, not filtering: both are configured, but the renamed one
+        # heads the list so it is the name the hostname and the test drivers
+        # pick up.
         root = self._sysfs({"enp0s6np0": self.TUPLE, "rocm-ernic0": self.TUPLE})
         got = self._discover(root)
-        self.assertEqual(got.stdout.strip(), "rocm-ernic0")
+        self.assertEqual(got.stdout.split(), ["rocm-ernic0", "enp0s6np0"])
+
+    def test_every_matching_nic_is_discovered(self):
+        # With ERNIC_PER_VM > 1 a guest has several emulated NICs, each its
+        # own mesh node with its own MAC, GID and address. Returning only the
+        # first left the second with a link and no address -- a half-working
+        # fabric rather than a visibly missing step.
+        root = self._sysfs({
+            "rocm-ernic0": self.TUPLE,
+            "rocm-ernic1": self.TUPLE,
+            "enp0s14": ("0x8086", "0x100e", "0x8086", "0x0000"),
+        })
+        got = self._discover(root)
+        self.assertEqual(got.returncode, 0, got.stderr)
+        self.assertEqual(got.stdout.split(), ["rocm-ernic0", "rocm-ernic1"])
+
+    def test_a_non_matching_nic_is_never_configured(self):
+        # The management NIC must not be addressed on the ernic subnet.
+        root = self._sysfs({
+            "rocm-ernic0": self.TUPLE,
+            "enp0s14": ("0x8086", "0x100e", "0x8086", "0x0000"),
+        })
+        self.assertNotIn("enp0s14", self._discover(root).stdout)
 
     def test_subsystem_is_required(self):
         # 1dd8:1002 with a different subsystem is a real Pensando card. The

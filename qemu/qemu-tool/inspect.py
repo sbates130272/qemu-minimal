@@ -3,9 +3,13 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
+import re
+import shlex
 import subprocess
 import sys
 import time
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -41,11 +45,19 @@ _EMULATED_BUS_TYPES = ("virtio", "ide", "sata")
 _QEMU_NVME_NQN_PREFIX = "nqn.2019-08.org.qemu:"
 
 
-def run(
+def records(
     vm_name: str | None,
     env_file: list[Path] | None,
-    as_json: bool = False,
-) -> None:
+) -> list[dict[str, Any]]:
+    """Every running VM's record, or just one named VM's.
+
+    Factored out of run() so `qemu-tool ssh` reaches a guest through exactly
+    the same resolution inspect prints -- the username from the image's own
+    sidecar, and the key the GUEST says it accepts rather than the configured
+    default. A second implementation would be free to disagree with the
+    output the user is reading, which is the whole failure this record exists
+    to prevent.
+    """
     try:
         vms = _collect_vms()
     except OSError as exc:
@@ -63,17 +75,109 @@ def run(
     # order so --json stays diffable between runs.
     if len(vms) > 1:
         with ThreadPoolExecutor(max_workers=min(8, len(vms))) as pool:
-            records = list(pool.map(lambda v: _record(v, cfg), vms))
-    else:
-        records = [_record(v, cfg) for v in vms]
+            return list(pool.map(lambda v: _record(v, cfg), vms))
+    return [_record(v, cfg) for v in vms]
+
+
+def run(
+    vm_name: str | None,
+    env_file: list[Path] | None,
+    as_json: bool = False,
+) -> None:
+    found = records(vm_name, env_file)
 
     if as_json:
-        if vm_name is not None and len(records) == 1:
-            print(json.dumps(records[0], indent=2))
+        if vm_name is not None and len(found) == 1:
+            print(json.dumps(found[0], indent=2))
         else:
-            print(json.dumps(records, indent=2))
+            print(json.dumps(found, indent=2))
     else:
-        _print_human(records)
+        _print_human(found)
+
+
+# Guests built from one backing image all carry the SAME host key, and the
+# fleet hands them consecutive ports on localhost -- so port 2222 is a
+# different machine on every fleet, and re-creating an overlay changes nothing
+# about that. Strict checking therefore fails with REMOTE HOST IDENTIFICATION
+# HAS CHANGED as a matter of course, and writing these to known_hosts would
+# poison the entry for whatever uses that port next. The generated ansible
+# inventory passes exactly this pair for the same reason.
+_SSH_LOOSE_HOST_KEY = [
+    "-o", "StrictHostKeyChecking=no",
+    "-o", "UserKnownHostsFile=/dev/null",
+    # Without this the two options above still print a warning per connection.
+    "-o", "LogLevel=ERROR",
+]
+
+
+def ssh_argv(
+    record: dict[str, Any],
+    strict_host_key: bool = False,
+    extra: Sequence[str] | None = None,
+) -> list[str]:
+    """The ssh command for a VM record, as argv.
+
+    Built from the record rather than from the config, so it agrees with what
+    `inspect` printed: the username the image actually has, and an -i only
+    when the guest named a key whose private half is on this host. When it did
+    not, no -i is passed and ssh falls through to its other methods -- offering
+    an identity the guest does not accept just buys a refusal.
+    """
+    port = record.get("ssh_port")
+    if port is None:
+        sys.exit(
+            f"Error: {record['name']} has no host SSH port, so there is "
+            "nothing to connect to.\n"
+            "       Its qemu container publishes none -- check the stack's "
+            "ports: mapping."
+        )
+
+    argv = ["ssh"]
+    if not strict_host_key:
+        argv += _SSH_LOOSE_HOST_KEY
+    argv += ["-p", str(port)]
+    if record.get("ssh_key_file"):
+        argv += ["-i", record["ssh_key_file"]]
+    argv.append(f"{record['username']}@{record.get('ssh_host') or 'localhost'}")
+    argv += list(extra or [])
+    return argv
+
+
+def ssh_run(
+    vm_name: str,
+    env_file: list[Path] | None,
+    strict_host_key: bool = False,
+    extra: Sequence[str] | None = None,
+    dry_run: bool = False,
+) -> None:
+    found = records(vm_name, env_file)
+    record = found[0]
+    argv = ssh_argv(record, strict_host_key=strict_host_key, extra=extra)
+
+    # Say why a password prompt is about to appear, BEFORE it appears. The
+    # guest publishing only a key we do not hold is the common case on a fleet
+    # booted from a published image, and an unexplained prompt reads as a
+    # broken VM rather than a missing key.
+    if not record.get("ssh_key_file"):
+        note = record.get("ssh_key_note") or "no local key matched"
+        print(f"Note: connecting without a key ({note}).", file=sys.stderr)
+        for key in record.get("ssh_keys") or []:
+            if key.get("accepted"):
+                comment = f" {key['comment']}" if key.get("comment") else ""
+                print(f"      guest accepts {key['fingerprint']}{comment}",
+                      file=sys.stderr)
+
+    if dry_run:
+        print(shlex.join(argv))
+        return
+
+    try:
+        # exec rather than subprocess: ssh wants the real tty for its password
+        # prompt and for an interactive session, and the caller should see
+        # ssh's own exit status, not a wrapper's.
+        os.execvp(argv[0], argv)
+    except OSError as exc:
+        sys.exit(f"Error: cannot run ssh: {exc}")
 
 
 def _load_config(env_file: list[Path] | None) -> VMConfig:
@@ -1155,6 +1259,32 @@ def _block_devices(vm: dict[str, Any],
     return out
 
 
+# A whole device whose own name ends in a digit, so trailing digits are part
+# of its identity rather than a partition number.
+_WHOLE_DEV_RE = re.compile(r"^(?:nvme\d+n\d+|mmcblk\d+|loop\d+|md\d+)$")
+
+# A partition on such a device: the "p" separator is what marks it.
+_P_PART_RE = re.compile(r"^(.*\d)p\d+$")
+
+
+def _parent_device(dev: str) -> str:
+    """The whole-disk name a partition belongs to.
+
+    Stripping trailing digits is right for vda1 -> vda and sdb2 -> sdb, and
+    WRONG for every NVMe: nvme0n1 is a whole disk, not partition 1 of
+    "nvme0n", and nvme0n1p3 is its third partition. Stripping gave "nvme0n"
+    and "nvme0n1p", neither of which names a device, so a mounted NVMe
+    matched nothing and inspect showed it with no mountpoint at all. On a
+    fleet guest with VM_NVME=8 that is every data disk on the box.
+    """
+    part = _P_PART_RE.match(dev)
+    if part:
+        return part.group(1)
+    if _WHOLE_DEV_RE.match(dev):
+        return dev
+    return dev.rstrip("0123456789") or dev
+
+
 def _mountpoints(fsinfo: list[dict[str, Any]] | None) -> dict[str, list[str]]:
     """Parent device base name -> mountpoints of its filesystems."""
     out: dict[str, list[str]] = {}
@@ -1168,8 +1298,7 @@ def _mountpoints(fsinfo: list[dict[str, Any]] | None) -> dict[str, list[str]]:
                 continue
             # vda1 belongs to vda; a 9p mount has an empty disk list and so
             # never reaches here, which is right -- it is not a block device.
-            parent = dev.rstrip("0123456789") or dev
-            out.setdefault(parent, []).append(mount)
+            out.setdefault(_parent_device(dev), []).append(mount)
     return out
 
 
@@ -1480,8 +1609,11 @@ def _print_human(records: list[dict[str, Any]]) -> None:
             # unasked, and a blank where the Disk lines go reads as a VM with
             # no disks. A VM with no agent socket at all prints neither line.
             print("  Disk:      unknown")
-        for line in _disk_lines(devices):
-            print(f"  Disk:      {line}")
+        for label, line in _disk_lines(devices):
+            # Labels are padded to the same 11 columns every other repeated
+            # label uses, so "Boot Disk:" lines up with "Disk:" rather than
+            # pushing its value out by five.
+            print(f"  {label + ':':<11}{line}")
         login = _login_line(r)
         if login is not None:
             print(f"  Login:     {login}")
@@ -1512,19 +1644,57 @@ def _key_line(key: dict[str, Any]) -> str:
     return " ".join(parts)
 
 
-_DISK_LINE_LIMIT = 6
+def _disk_sort_key(dev: str) -> list[Any]:
+    """Natural order, so nvme10n1 sorts after nvme9n1 rather than after nvme1n1.
+
+    Plain lexicographic order is alphabetical only while every number is the
+    same width. A guest with 8 NVMe is fine either way; one with 10+ is not,
+    and VM_NVME has no ceiling.
+    """
+    return [
+        int(part) if part.isdigit() else part
+        for part in re.split(r"(\d+)", dev)
+    ]
 
 
-def _disk_lines(devices: list[dict[str, Any]] | None) -> list[str]:
-    """One line per disk, in the repeated-label style of Key: and IP:.
+def _is_boot_disk(d: dict[str, Any]) -> bool:
+    """The disk carrying /, which is not reliably the first one listed.
+
+    The guest agent returns disks in its own order -- on a fleet guest with 8
+    NVMe the root /dev/vda came back second -- so the boot disk has to be
+    identified by where it is mounted, not by position.
+    """
+    return "/" in (d.get("mountpoints") or [])
+
+
+def _disk_lines(
+    devices: list[dict[str, Any]] | None,
+) -> list[tuple[str, str]]:
+    """(label, text) per disk, in the repeated-label style of Key: and IP:.
+
+    Every disk, with the boot disk FIRST and labelled "Boot Disk" rather than
+    sorted in among the data disks under a marker. The root device is the one
+    you look for first, so it should not be something you find by scanning a
+    column -- on a guest with 8 NVMe it sorted to the bottom, after everything
+    it is least like.
+
+    The rest follow in natural order. It used to print the first six in
+    agent order and then "+N more", which hid a third of the devices behind a
+    count and could hide the root disk itself. Truncating a list whose length
+    is a setting (VM_NVME) was the wrong call: it is as long as the operator
+    asked for.
 
     Nothing at all when the agent could not answer, matching how a failed
     hostname or interfaces query leaves no trace in the record.
     """
     if not devices:
         return []
+    ordered = sorted(devices, key=lambda x: _disk_sort_key(x["dev"]))
+    # Stable within each group, so several boot-ish disks keep natural order.
+    ordered.sort(key=lambda d: not _is_boot_disk(d))
+
     lines = []
-    for d in devices[:_DISK_LINE_LIMIT]:
+    for d in ordered:
         origin = d["origin"]
         if origin == "passthrough" and d.get("host_bdf"):
             # A host BDF is a different address space from the guest's, so it
@@ -1532,10 +1702,9 @@ def _disk_lines(devices: list[dict[str, Any]] | None) -> list[str]:
             origin = f"passthrough host:{_short_bdf(d['host_bdf'])}"
         bus = f" ({d['bus']})" if d.get("bus") else ""
         mounts = "  " + ",".join(d["mountpoints"]) if d.get("mountpoints") else ""
-        lines.append(f"{d['dev']:<14} {d['size']:>10}  {origin}{bus}{mounts}")
-    extra = len(devices) - _DISK_LINE_LIMIT
-    if extra > 0:
-        lines.append(f"+{extra} more")
+        label = "Boot Disk" if _is_boot_disk(d) else "Disk"
+        lines.append(
+            (label, f"{d['dev']:<14} {d['size']:>10}  {origin}{bus}{mounts}"))
     return lines
 
 

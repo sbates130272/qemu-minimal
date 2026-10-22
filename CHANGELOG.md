@@ -6,6 +6,27 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **`qemu-tool ssh <vm>`**, which reaches a guest through exactly the
+  resolution `inspect` prints: `records()` is factored out of `inspect.run()`
+  so the two cannot disagree. The username comes from the image's own sidecar
+  and an `-i` only when the guest names a key whose private half is on this
+  host; when it does not, no identity is offered -- that only buys a refusal --
+  and a note says why *before* the password prompt, because an unexplained
+  prompt reads as a broken VM rather than a missing key. Host-key checking is
+  off by default: guests built from one backing image share a host key and the
+  fleet reuses localhost ports, so strict checking fails as a matter of course
+  and `known_hosts` entries would poison the next fleet. `--strict-host-key`
+  restores it. It `execvp`s, so ssh gets the real tty and the caller sees ssh's
+  own exit status.
+
+- **`qemu-tool inspect <vm>` takes the VM positionally**, alongside
+  `--vm-name`. Naming it both ways with different values is an error rather
+  than a precedence rule nobody can remember.
+
+- **`qemu/env/overlay-dense`**, a 32-VM fleet with two GPUs, two ernics and
+  eight NVMe per guest on the sbates-fork QEMU, for exercising
+  `ERNIC_PER_VM`/`ROCJITSU_PER_VM` at the 64-node mesh cap.
+
 - **A report lane for the MI355X node shape**, published at
   `/mi355x/` on the site. `gen-compose --check` already proves the committed
   render is byte-identical, and that says nothing about the tree the guest
@@ -458,7 +479,66 @@ All notable changes to this project will be documented in this file.
   makes the stack stale exactly as an edit to the golden file does. The digest
   of a single layer is unchanged, so stacks generated before this still parse.
 
+### Fixed
+
+- **`ernic_fleet_guest` installed no udev rules under its own defaults.** The
+  rules copy and the `modules-load.d` entry lived in `driver.yml`, which
+  `main.yml` includes only `when: ernic_fleet_ionic_modules_dir | length > 0`.
+  That dir is empty by default and is *meant* to be -- in-tree `ionic` binds
+  the emulated device natively since rocm-ernic@3fb74d1 -- so the documented
+  configuration installed neither, while AGENTS.md stated this role installs
+  them. Measured on a 32-guest fleet: 64 NICs, none renamed, none addressed.
+  Naming moves to `naming.yml` and is included unconditionally; `driver.yml`
+  keeps its gate, because the patched modules really are optional. Confirmed
+  over `qemu-nbd` that the published `g742e8e2` qcow2 ships no rules of its
+  own either, so such a guest had none from any source.
+
+- **The udev netdev rule could only name one NIC per guest.**
+  `NAME="rocm-ernic%n"` takes the index from the kernel number, and every
+  emulated NIC comes up as `...np0`, so `%n` is 0 for all of them and the
+  second rename failed with the name in use. Now a free-index search -- the
+  fix the InfiniBand stanza already carried -- plus a `KERNEL!="rocm-ernic*"`
+  guard for idempotency. Unreachable while fleets had one NIC per guest;
+  certain at the MI355X node shape's eight.
+
+- **`rocm-ernic-netcfg.sh` configured only the first NIC.** It now walks every
+  matching device, each deriving its address from its own MAC, which matches
+  `gen-compose` keying MACs and IPs on the global NIC ordinal. The hostname
+  still comes from the first NIC only: it names the guest, not the device.
+
+- **`memlock` half-applied the RDMA limit.** The drop-ins go to
+  `/etc/systemd/{system,user}.conf.d` in a loop, `copy` does not create the
+  parent, and a stock Ubuntu cloud image has `system.conf.d` but not
+  `user.conf.d` -- so system units got `infinity` and the `systemd-run --user`
+  perftest servers, the ones that needed it, kept the 8192 KB default. That
+  surfaces as "Couldn't create CQ" at 4 MB, naming neither the limit nor the
+  directory.
+
+- **`gen-vm` waited out a QEMU that had already exited.** QEMU refuses to start
+  on a hostfwd whose host port is taken, which a fleet settings file invites:
+  the fleet runs QEMU in a per-VM netns where every guest can bind 9100, while
+  `gen-vm` runs it on the host where that port may be a service. The error
+  scrolled past and the run failed ten minutes later with "VM did not accept
+  SSH in time", blaming the guest. `_wait_for_ssh` now polls the process and
+  reports its exit status immediately.
+
+- **`inspect` truncated the disk list at six**, in guest-agent order, then
+  `+N more` -- hiding a third of the devices on an 8-NVMe guest and possibly
+  the root disk. It now lists every disk, boot disk first and labelled
+  `Boot Disk:`, found by mountpoint rather than position, with the rest in
+  natural order so `nvme10n1` follows `nvme9n1`.
+
+- **A mounted NVMe showed no mountpoint at all.** `_mountpoints` found a
+  partition's parent by stripping trailing digits -- right for `vda1` -> `vda`,
+  wrong for every NVMe, where `nvme1n1` became `nvme1n` and named no device.
+
+
 ### Changed
+
+- **Image pins moved to the `20261021.g742e8e2` build** in
+  `qemu/env/scale-out` and `qemu/env/overlay-mi100`. Component SHAs are
+  unchanged, so this is a CI base-layer refresh; both files move together or
+  `_check_image_coherence` errors on the mixed build stamp.
 
 - **Every pinned image moves to the 2026-10-21 build, `g0f1f43f`.** The pins
   were a coherent 2026-10-14 set and a week stale. Only two components

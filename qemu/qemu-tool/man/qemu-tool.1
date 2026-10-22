@@ -4,7 +4,7 @@ qemu\-tool \- run, generate and list QEMU virtual machines
 .SH SYNOPSIS
 .B qemu\-tool
 .RB [ \-\-version ]
-.I {run\-vm,gen\-vm,gen\-compose,compose,ernic\-stats,lmcache\-stats,list,inspect,man}
+.I {run\-vm,gen\-vm,gen\-compose,compose,ernic\-stats,lmcache\-stats,list,inspect,ssh,shutdown,man}
 .RI [ options ]
 .SH DESCRIPTION
 .B qemu\-tool
@@ -872,6 +872,13 @@ rather than guessing: a device whose origin cannot be decided reads
 not
 .IR emulated .
 .TP
+.I VM
+Inspect a single VM, named positionally. Equivalent to
+.BR \-\-vm\-name ,
+which is kept because it is the spelling every other subcommand takes. Naming
+the VM both ways with different values is an error rather than a precedence
+rule nobody can remember.
+.TP
 .BI \-\-vm\-name " NAME"
 Inspect a single VM. Default: every running VM.
 .TP
@@ -928,6 +935,98 @@ as a file for exactly that reason.
 Print the path to the bundled page and exit without opening it \(em for
 piping into a pager of your own, or for adding to
 .IR MANPATH .
+.SH SSH OPTIONS
+Opens an SSH session to a running VM, resolving the port, username and key
+through exactly the same path
+.B inspect
+prints them \(em the username from the image's own sidecar rather than the
+configured default, and an identity only when the guest names a key whose
+private half is on this host. When it does not, no
+.B \-i
+is passed and a note says why before the password prompt appears; offering a
+key the guest does not accept only buys a refusal.
+.PP
+Everything after the VM name goes to
+.BR ssh (1),
+so this tool's own options come
+.I before
+it \(em the order
+.BR ssh (1)
+and
+.B docker exec
+also take.
+.TP
+.I VM
+Name of the running VM. Required.
+.TP
+.BI \-\-env\-file " FILE"
+Settings file. Repeatable; later files win.
+.TP
+.B \-\-strict\-host\-key
+Keep
+.BR ssh (1)'s
+own host\-key checking, which is off by default. Every guest built from one
+backing image carries the
+.I same
+host key, and a fleet hands them consecutive ports on
+.IR localhost ,
+so port 2222 names a different machine on every fleet. Strict checking
+therefore fails with
+.I REMOTE HOST IDENTIFICATION HAS CHANGED
+as a matter of course, and recording these in
+.I known_hosts
+would poison the entry for whatever uses that port next. The generated
+.I fleet\-inventory.yml
+passes the same pair, for the same reason.
+.TP
+.B \-\-dry\-run
+Print the
+.BR ssh (1)
+command instead of running it.
+.PP
+To run a remote command, separate it with
+.BR \-\- :
+.PP
+.EX
+qemu\-tool ssh stebates\-fleet\-1 \-\- ibv_devinfo \-l
+.EE
+.SH SHUTDOWN OPTIONS
+Asks each running guest to power off through the QEMU guest agent, then waits
+for it to go.
+.PP
+This exists because stopping the container does not stop the guest.
+.B run\-vm
+execs QEMU, so PID 1 in a qemu container
+.I is
+.BR qemu\-system\-x86_64 ,
+and QEMU exits on
+.B SIGTERM
+rather than ACPI\-shutting\-down the guest. A
+.B docker compose down
+is therefore a power cut: guest filesystems are left needing journal replay,
+and on a 32\-guest fleet one came back with an aborted journal and a root
+remounted read\-only. Raising
+.B stop_grace_period
+alone does not help, because nothing has asked the guest to stop \(em it only
+makes Docker wait longer before the kill. Run this first, then
+.BR down .
+.PP
+The guest agent is used rather than QMP because every guest already has one:
+.B run\-vm
+wires a virtserialport unconditionally, while QMP is opt\-in and off by
+default.
+.TP
+.I VM
+One VM to shut down. Default: every running VM.
+.TP
+.BI \-\-timeout " SECONDS"
+How long to wait for guests to power off. Default: 120. Exceeding it warns and
+names the guests still running rather than failing \(em the caller's next step
+is to stop the containers regardless, and knowing which were not clean is more
+use than a refusal.
+.TP
+.B \-\-dry\-run
+List what would be shut down and exit.
 .SH VM IDENTIFICATION
 .B qemu\-tool
 stamps every VM it launches with two generic QEMU options:

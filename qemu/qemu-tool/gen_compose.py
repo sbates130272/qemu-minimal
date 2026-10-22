@@ -76,6 +76,9 @@ _DEFAULTS = {
     "ERNIC_MAC_PREFIX": "72:6f:63:6d",
     "ERNIC_GUEST_SUBNET": "192.168.100",
     "ERNIC_TCP_PORT": "6320",
+    # Long enough for a guest asked to power off to finish. See the
+    # comment where it is emitted.
+    "STOP_GRACE_PERIOD": "120s",
     "ERNIC_STATS_PORT": "9840",
     "ERNIC_NOFILE": "65536",
     "ERNIC_TAP": "false",
@@ -705,6 +708,7 @@ def plan(values: dict[str, str]) -> dict[str, Any]:
         "stats_port": _get(values, "ERNIC_STATS_PORT"),
         "ernic_nofile": _get(values, "ERNIC_NOFILE"),
         "ernic_tap": _flag(values, "ERNIC_TAP"),
+        "stop_grace_period": _get(values, "STOP_GRACE_PERIOD"),
         "log_max_size": _get(values, "LOG_MAX_SIZE"),
         "log_max_file": _get(values, "LOG_MAX_FILE"),
         "prom_data_dir": _get(values, "PROM_DATA_DIR"),
@@ -832,6 +836,23 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
     out.append("x-ernic-common: &ernic-common")
     out.append('  image: "${ERNIC_IMAGE}"')
     out.append("  logging: *logging")
+    # rocm-ernic does not handle SIGTERM: measured, `docker stop` on one takes
+    # 12.5 s and the container exits 137, which is the SIGKILL after Docker's
+    # 10 s grace. The wait buys nothing.
+    #
+    # It costs a great deal, because the ernic services are chained
+    # depends_on so registration order matches index order (see the service
+    # comments), and compose therefore stops them STRICTLY ONE AT A TIME in
+    # reverse. At 64 NICs that is 64 x 12.5 s -- a thirteen-minute teardown
+    # spent entirely waiting to kill processes that were never going to exit.
+    #
+    # Safe to kill outright: these servers hold nothing durable. The sockets
+    # and the stats files live on tmpfs volumes that `down -v` destroys, and
+    # the stats file is rewritten every second, so the most that is lost is a
+    # second of counters. Guests should already be down -- `qemu-tool
+    # shutdown` is what makes that true -- and a guest still attached has
+    # lost its device either way.
+    out.append("  stop_signal: SIGKILL")
     if spec["container_user"]:
         # Both device servers only write into the two tmpfs volumes, which a
         # tmpfs mounts 1777, so an unprivileged uid creates its socket and its
@@ -889,6 +910,13 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
         out.append(f"  user: {_USER_REF}")
         out.append("  group_add:")
         out.append(f"    - {_KVM_GID_REF}")
+    # Docker's default is 10 s, then SIGKILL. QEMU is PID 1 here (run_vm
+    # execs it) and exits on SIGTERM without ACPI-shutting-down the guest, so
+    # a stop is a power cut however long the grace period is -- that is what
+    # `qemu-tool shutdown` exists to fix. This buys the guest time to finish
+    # powering off when something DOES ask it to, and stops a guest that is
+    # mid-flush being killed partway.
+    out.append(f"  stop_grace_period: {spec['stop_grace_period']}")
     out.append('  restart: "no"')
     out.append("")
     out.append("services:")

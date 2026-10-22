@@ -734,7 +734,8 @@ def _run_ansible(cfg: VMConfig, images: Path, backing: Path) -> None:
             vm_host = vm_ip
             vm_port = 22
 
-        if not _wait_for_ssh(cfg, timeout, host=vm_host, port=vm_port):
+        if not _wait_for_ssh(cfg, timeout, host=vm_host, port=vm_port,
+                             proc=qemu_proc):
             qemu_proc.kill()
             qemu_proc.wait()
             sys.exit("Error: VM did not accept SSH in time.")
@@ -801,13 +802,30 @@ def _ssh_identity_args(cfg: VMConfig) -> list[str]:
 
 
 def _wait_for_ssh(
-    cfg: VMConfig, timeout: int, host: str = "localhost", port: int | None = None
+    cfg: VMConfig, timeout: int, host: str = "localhost", port: int | None = None,
+    proc: subprocess.Popen | None = None,
 ) -> bool:
     p = port if port is not None else cfg.ssh_port
     print(f"Waiting for VM to accept SSH at {host}:{p}...")
     id_args = _ssh_identity_args(cfg)
     elapsed = 0
     while elapsed < timeout:
+        # QEMU exiting is not something to wait out. It refuses to start on a
+        # hostfwd whose host port is taken -- which a fleet settings file
+        # invites, because the fleet runs QEMU inside a per-VM netns where
+        # every guest can bind the same port, while gen-vm runs it on the
+        # host where that port may already be a service. Without this check
+        # the real error scrolls past and ten minutes later the run fails
+        # with "VM did not accept SSH in time", which blames the guest.
+        if proc is not None and proc.poll() is not None:
+            print(
+                f"Error: QEMU exited with status {proc.returncode} before the "
+                "VM accepted SSH.\n"
+                "       Its message is above; a hostfwd collision on the host "
+                "is the usual cause.",
+                file=sys.stderr,
+            )
+            return False
         try:
             r = subprocess.run(
                 ["ssh",

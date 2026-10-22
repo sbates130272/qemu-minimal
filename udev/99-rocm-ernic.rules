@@ -42,14 +42,62 @@
 # `udevadm info -a` on a netdev does not print these rows -- only the parent
 # walk shows them -- so "absent from udevadm info -a" is not evidence the
 # attribute is missing.
+#
+# The index is this device's POSITION AMONG THE MATCHING PCI DEVICES, not %n
+# and not the next free name.
+#
+# %n is the kernel number -- the trailing digits of the sysname -- and every
+# emulated NIC comes up as "...np0", so %n is 0 for all of them and the second
+# rename fails with the name already in use. Unreachable while a fleet had one
+# NIC per guest; certain at ERNIC_PER_VM > 1.
+#
+# A free-index search ("first rocm-ernicN that does not exist yet") fixes the
+# collision but is ORDER-DEPENDENT: it numbers in udev event order, which is a
+# race. Measured on a 32-guest fleet with two NICs each -- guest 3 came up with
+# rocm-ernic1 on PCI 01:00.0 and rocm-ernic0 on 02:00.0, while guests 7 and 20
+# got the opposite. The addresses were still right, because netcfg derives each
+# from that NIC's own MAC, but the NAME could not be relied on to say which
+# device it was.
+#
+# Walking the PCI devices in bus order fixes that. gen-compose passes the
+# vfio-user sockets to QEMU in ordinal order, QEMU assigns PCI slots in the
+# order it is given them, and the sysfs glob sorts by BDF -- so position here
+# tracks the global NIC ordinal, and therefore the MAC and the address that
+# netcfg derives from it. Verified across three guests: 01:00.0 is always the
+# lower ordinal. rocm-ernic0 is now always the guest's lowest-addressed ernic,
+# on every boot.
+#
+# The four ids are re-checked inside the loop rather than trusted from the
+# rule match: the loop walks every PCI device, and a real Pensando card shares
+# 1dd8:1002 (see the header). grep -qx rather than $(cat) keeps the whole
+# program free of double quotes, which udev does not parse inside PROGRAM="".
+#
+# $$ throughout: udev reads a bare $ as the start of its own substitution, so
+# a shell variable has to be written doubled. %p is the devpath, which for a
+# netdev ends in /net/<name> under the PCI device it belongs to.
+#
+# KERNEL!= makes it idempotent. udev refuses to rename an interface that has
+# already been renamed, so without the guard a re-triggered event would
+# recompute a name for an already-correct device and log a failed rename --
+# harmless, but it reads like the bug this rule exists to prevent.
 
-SUBSYSTEM=="net", ACTION=="add", \
+SUBSYSTEM=="net", ACTION=="add", KERNEL!="rocm-ernic*", \
   ATTR{device/vendor}=="0x1dd8", \
   ATTR{device/device}=="0x1002", \
   ATTR{device/subsystem_vendor}=="0x1dd8", \
   ATTR{device/subsystem_device}=="0x5400", \
   DRIVERS=="ionic", \
-  NAME="rocm-ernic%n"
+  PROGRAM="/bin/sh -c 'p=%p; self=$${p%%/net/*}; self=$${self##*/}; i=0; \
+    for d in /sys/bus/pci/devices/*; do \
+      grep -qx 0x1dd8 $$d/vendor 2>/dev/null || continue; \
+      grep -qx 0x1002 $$d/device 2>/dev/null || continue; \
+      grep -qx 0x1dd8 $$d/subsystem_vendor 2>/dev/null || continue; \
+      grep -qx 0x5400 $$d/subsystem_device 2>/dev/null || continue; \
+      [ $${d##*/} = $$self ] && { echo rocm-ernic$$i; exit 0; }; \
+      i=$$((i+1)); \
+    done; \
+    exit 1'", \
+  NAME="%c"
 
 # --- InfiniBand device naming ---
 #

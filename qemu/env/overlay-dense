@@ -1,0 +1,96 @@
+# qemu-tool overlay: a 32-node fleet with two of everything per guest.
+#
+# An overlay on `scale-out`, which stays authoritative -- this file carries
+# only the keys that differ. Render and bring up with BOTH directory flags:
+#
+#   qemu-tool gen-compose --env-file qemu/env/scale-out \
+#       --env-file qemu/env/overlay-dense \
+#       --output-dir /var/lib/qemu-tool/stacks/dense-fleet
+#   qemu-tool compose --stack-dir /var/lib/qemu-tool/stacks/dense-fleet \
+#       --env-file qemu/env/scale-out --env-file qemu/env/overlay-dense \
+#       --profile metrics up -d
+#
+# Without --output-dir the render lands on the committed 8-VM stack and CI's
+# `Gen Compose Check` goes red; without --stack-dir the compose run brings up
+# that committed stack rather than this one, whatever layers it is handed.
+#
+# ---- What this overlay is for ----------------------------------------------
+#
+# Three experiments at once, on a 192-core / 976G host:
+#
+#   two rocjitsu GPUs per guest   -- untested before this fleet
+#   two ernics per guest          -- 64 mesh nodes, see the warning below
+#   eight NVMe per guest          -- 256 drives across the fleet
+#
+# Separate from overlay-mi100 rather than layered on it: that one describes a
+# known-good 32-VM fleet and is worth keeping runnable while this is in flight.
+# The host-specific keys below are duplicated from it deliberately; if a third
+# fleet wants them, promote them rather than copying a second time.
+
+VM_COUNT=32
+VM_NAME_PREFIX=stebates-dense
+
+# ---- The experiment ---------------------------------------------------------
+
+# 32 x 2 = 64 ernics, which is EXACTLY the 64-node cap in rocm-ernic's
+# topology payload and ~1.6x the ~40-node wall where registration was measured
+# to stall (AGENTS.md issue 17). gen-compose warns and renders anyway; that is
+# the point of this fleet. Expect some workers parked in "Registration
+# timeout" restart loops with their guests already dead on "vfio-user: timed
+# out waiting for reply", and read the result off
+#   docker compose logs ernic-1-1 | grep -c 'Registered node'
+# (the mesh manager is device 1 of VM 1; above ERNIC_PER_VM=1 the service
+# suffix is <vm>-<device>, while MACs, addresses and GIDs are keyed on the
+# GLOBAL nic ordinal -- so VM 2's first NIC is ernic-2-1 on 192.168.100.13.)
+# Note that count is only visible at log level info; the manager defaults to
+# warn, so an empty grep means the lines are not being emitted, not that
+# nothing registered.
+# There is also no headroom for a single reconnect: node ids are allocated on
+# every connect and never reclaimed (issue 13), so one flapping worker walks
+# the fleet off the cap.
+ERNIC_PER_VM=2
+
+# No mesh cost -- the GPUs do not join it. The cost is PCIe BAR space: two
+# 256M apertures per guest behind their own root ports, on top of two ernics
+# and eight NVMe on one q35.
+ROCJITSU_PER_VM=2
+
+# Eight per guest, 1024G virtual each but sparse, so this is ~nothing until
+# written. They arrive unformatted.
+VM_NVME=8
+
+# ---- Host-specific (same values as overlay-mi100) ---------------------------
+
+VM_IMAGES_DIR=/var/lib/qemu-tool/images-stebates
+QEMU_TOOL_SRC=/home/AMD/stebates/Projects/qemu-minimal
+
+# The key these guests actually accept, which is NOT the ~/.ssh/id_rsa.pub
+# default. They boot from the published batesste-ci-images qcow2, whose
+# authorized_keys carries that project's own guest key (SHA256:a56c2m...,
+# comment "guest") baked in at image build time -- gen-vm's --backing-image
+# path returns before cloud-init, so nothing here ever injected a key of ours.
+#
+# The private half lives in the batesste-ci-images checkout, which is a
+# different repo and so is in none of the places inspect searches: the
+# sidecar, <image>.pub, the images dir, images/keys/ and ~/.ssh. Naming it
+# here is what makes `qemu-tool ssh` and inspect's Key line find it; without
+# it both correctly report "guest accepts no key found locally" and fall
+# through to a password prompt.
+#
+# Point this at your own checkout. A fleet built by vm-ernic-fleet.yml instead
+# takes the fleet key in VM_IMAGES_DIR/keys and does not need this.
+VM_SSH_KEY_FILE=/home/AMD/stebates/Projects/batesste-ci-images/common/ssh/id_rsa.pub
+PROM_DATA_DIR=/var/lib/qemu-tool/stacks/dense-fleet/prom-data
+VM_EXTRA_HOSTFWD=tcp::9100-:9100
+VM_FILESYSTEM=
+LMCACHE_ENABLE=false
+LOGS_ENABLE=false
+CONTAINER_USER=244227127:1274200513
+CONTAINER_KVM_GID=136
+
+# The sbates-fork flavour, pinned deliberately and not inherited. It is the
+# only one carrying the vfio-user P2P DMA patch (AGENTS.md issue 19), which is
+# what lets one vfio-user device DMA into another's BAR -- with two GPUs and
+# two NICs sharing a guest, that is the interesting case. Same build stamp as
+# the golden file's images; _check_image_coherence hard-errors on a mismatch.
+QEMU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:20261021.g742e8e2-qemu.aa4344e-vfu.8039244

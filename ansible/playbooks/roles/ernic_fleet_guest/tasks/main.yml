@@ -59,9 +59,18 @@
 - name: Install the test tooling
   ansible.builtin.include_tasks: packages.yml
 
-- name: Install the patched ionic modules and their naming rules
+- name: Install the patched ionic modules
   ansible.builtin.include_tasks: driver.yml
   when: ernic_fleet_ionic_modules_dir | length > 0
+
+# NOT gated on the modules dir. The naming rules and the autoload entry are
+# needed on every guest, and the patched modules are needed on almost none --
+# in-tree ionic binds the emulated device natively since rocm-ernic@3fb74d1.
+# While these lived in driver.yml the default configuration installed neither,
+# which is issue 25 again: 64 NICs on a 32-guest fleet, none renamed, none
+# addressed, and nothing saying why.
+- name: Install the device naming rules and module autoload
+  ansible.builtin.include_tasks: naming.yml
 
 - name: Raise the locked-memory limit for RDMA
   ansible.builtin.include_tasks: memlock.yml

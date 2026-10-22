@@ -1,0 +1,49 @@
+---
+# Stable device names and module autoload. Deliberately NOT part of
+# driver.yml.
+#
+# These three tasks used to live there, and driver.yml is included only
+# `when: ernic_fleet_ionic_modules_dir | length > 0`. That dir is empty by
+# default and is *meant* to be: since rocm-ernic@3fb74d1 the in-tree ionic
+# driver binds the emulated device natively, so a fleet needs no patched
+# modules at all (AGENTS.md issue 16). The result was that the normal,
+# documented configuration installed no udev rules and no modules-load.d
+# entry, while AGENTS.md stated that this role installs them.
+#
+# That is issue 25 with the same shape and the same silence: nothing reports
+# a missing rules file, the devices simply keep their kernel names, and
+# rocm-ernic-netcfg addresses them under whatever name it finds while warning
+# that the rename did not happen. Measured on a 32-guest fleet built this
+# way -- 64 NICs, none renamed, none addressed.
+#
+# Naming does not depend on which build of the driver is loaded, so it must
+# not be gated on one.
+
+# Loud, not silently skipped: these rules are the single file whose absence
+# cost 32 guests 18 hours, so an empty source is a decision that has to be
+# stated rather than a default that quietly leaves the image's own copy.
+- name: Install the rocm-ernic udev naming rules
+  ansible.builtin.copy:
+    src: "{{ ernic_fleet_udev_rules_src }}"
+    dest: /etc/udev/rules.d/99-rocm-ernic.rules
+    owner: root
+    group: root
+    mode: "0644"
+  when: ernic_fleet_udev_rules_src | length > 0
+  notify: Reload udev rules
+
+- name: Warn that the guest keeps whatever naming rules its image shipped
+  ansible.builtin.debug:
+    msg: >-
+      ernic_fleet_udev_rules_src is empty, so 99-rocm-ernic.rules is whatever
+      the image baked in. If it matches 0x100a the device will not be renamed
+      and rocm-ernic-netcfg will fall back to the kernel name.
+  when: ernic_fleet_udev_rules_src | length == 0
+
+- name: Load the ernic modules at boot
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/rocm-ernic-ionic.conf
+    content: "{{ ernic_fleet_modules | join('\n') }}\n"
+    owner: root
+    group: root
+    mode: "0644"
