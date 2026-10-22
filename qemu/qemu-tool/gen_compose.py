@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+import itertools
 import os
 import re
 import shutil
@@ -101,6 +102,24 @@ _DEFAULTS = {
     "VM_SHM_SIZE": "8g",
     "ROCJITSU_CONFIG": "gfx1250_mi455x.json",
     "VM_IMAGES_DIR": "/var/lib/qemu-tool/images",
+    # Devices per VM. Both default to 1, which is the shape every stack had
+    # before this existed and what keeps the committed scale-out stack
+    # regenerating byte-identical.
+    #
+    # ERNIC_PER_VM multiplies MESH NODES, not just containers: each rocm-ernic
+    # is its own node, so 8 per VM against the ~40-node registration wall
+    # (AGENTS.md issue 17) caps the fleet near 5 VMs, not 40. plan() refuses
+    # anything past the protocol ceiling and names the product.
+    "ERNIC_PER_VM": "1",
+    "ROCJITSU_PER_VM": "1",
+    # Group the guest's vfio-user devices under PCIe switches, this many per
+    # switch. 2 with equal ernic/rocjitsu counts gives the MI355X shape: one
+    # NIC and one GPU below each switch. 0 is off.
+    "VM_PCIE_SWITCH_WIDTH": "0",
+    # Guest socket count, and the 64-bit PCI hole. Empty leaves both to QEMU,
+    # whose -smp inference gives one single-core socket per vCPU.
+    "VM_CPU_SOCKETS": "",
+    "VM_PCI_HOLE64_SIZE": "",
     "QEMU_TOOL_SRC": "../../..",
     "FLEET_NET_PREFIX": "172.31",
     "VM_USERNAME": "ubuntu",
@@ -191,6 +210,12 @@ _NET_ERNIC, _NET_ROCJITSU, _NET_QEMU, _NET_INFRA = 1, 2, 3, 0
 # rocm-ernic's topology payload builder caps the mesh here
 # (src/rdma/rdma_backend_tcp.c: `num_nodes < 64`).
 _MESH_MAX = 64
+# What the mesh has actually been measured to register. The protocol ceiling
+# above is not reachable: the mesh is a full mesh, so registering node N+1
+# costs N new connections through a single-threaded manager against a fixed
+# timeout, and it stops completing around here. Asking for 64 settled at 40
+# with max node id 30 (AGENTS.md issue 17).
+_MESH_PRACTICAL = 40
 _STAMP_RE = re.compile(r"\d{8}\.g[0-9a-f]+")
 _TAP_IF = "tap0"
 _TAPSETUP_IMAGE = "qemu-tool/ernic-tapsetup:1"
@@ -494,10 +519,31 @@ def plan(values: dict[str, str]) -> dict[str, Any]:
         sys.exit(f"Error: VM_COUNT must be an integer, got {raw_count!r}")
     if count < 1:
         sys.exit(f"Error: VM_COUNT must be at least 1, got {count}")
-    if count > _MESH_MAX:
+
+    ernic_per_vm = _positive_int(values, "ERNIC_PER_VM")
+    rocjitsu_per_vm = _positive_int(values, "ROCJITSU_PER_VM")
+
+    # The mesh counts rocm-ernic PROCESSES, not VMs. At ERNIC_PER_VM > 1 the
+    # two differ by that factor, and a message naming only VM_COUNT would
+    # send someone looking at the wrong number.
+    nic_count = count * ernic_per_vm
+    if nic_count > _MESH_MAX:
+        detail = (
+            f"{count} VMs x {ernic_per_vm} ernics"
+            if ernic_per_vm > 1 else f"VM_COUNT is {count}"
+        )
         sys.exit(
-            f"Error: VM_COUNT is {count}, above the {_MESH_MAX}-node ceiling "
-            "in rocm-ernic's mesh topology payload (rdma_backend_tcp.c)."
+            f"Error: {detail} is {nic_count} mesh nodes, above the "
+            f"{_MESH_MAX}-node ceiling in rocm-ernic's mesh topology payload "
+            "(rdma_backend_tcp.c)."
+        )
+    if nic_count > _MESH_PRACTICAL:
+        print(
+            f"Warning: {nic_count} mesh nodes is above the ~{_MESH_PRACTICAL} "
+            "the mesh has been measured to register (AGENTS.md issue 17). "
+            "Workers past it die on 'TCP: Registration timeout' in a restart "
+            "loop and take their guests with them.",
+            file=sys.stderr,
         )
 
     _check_image_coherence(values)
@@ -511,15 +557,24 @@ def plan(values: dict[str, str]) -> dict[str, Any]:
     ports = _override_list(values, "VM_SSH_PORTS", count) or \
         [str(port_base + n - 1) for n in range(1, count + 1)]
 
+    # Keyed on the GLOBAL NIC ordinal, not the VM index. At ERNIC_PER_VM=1 the
+    # two are the same number, which is what keeps the existing stack
+    # byte-identical; above that, every NIC in the fleet still gets its own
+    # MAC, IP and GID.
     mac_prefix = _get(values, "ERNIC_MAC_PREFIX")
-    macs = _override_list(values, "ERNIC_MACS", count) or \
-        [f"{mac_prefix}:{n >> 8:02x}:{n & 0xff:02x}" for n in range(1, count + 1)]
+    macs = _override_list(values, "ERNIC_MACS", nic_count) or \
+        [f"{mac_prefix}:{o >> 8:02x}:{o & 0xff:02x}"
+         for o in range(1, nic_count + 1)]
 
     subnet = _get(values, "ERNIC_GUEST_SUBNET")
     # Guests start at .11. Avoid .1: the mesh manager claims it as its DHCP
     # server_ip and intercepts ARP for it (AGENTS.md known issue 1).
-    ips = _override_list(values, "ERNIC_GUEST_IPS", count) or \
-        [f"{subnet}.{10 + n}" for n in range(1, count + 1)]
+    #
+    # No /24 exhaustion check: the mesh ceiling above caps nic_count at 64,
+    # so the highest address this can derive is .74. Anything that raises
+    # _MESH_MAX past ~240 needs one.
+    ips = _override_list(values, "ERNIC_GUEST_IPS", nic_count) or \
+        [f"{subnet}.{10 + o}" for o in range(1, nic_count + 1)]
 
     for label, seq in (("VM name", names), ("SSH port", ports), ("ernic MAC", macs)):
         if len(set(seq)) != len(seq):
@@ -535,21 +590,62 @@ def plan(values: dict[str, str]) -> dict[str, Any]:
     net = _get(values, "FLEET_NET_PREFIX")
 
     vms = []
+    nics: list[dict[str, Any]] = []
+    gpus: list[dict[str, Any]] = []
     for index in range(count):
         n = index + 1
+        vm_nics = []
+        for d in range(1, ernic_per_vm + 1):
+            o = index * ernic_per_vm + d
+            suffix = _dev_suffix(n, d, ernic_per_vm)
+            vm_nics.append({
+                "n": n, "d": d, "o": o,
+                "service": f"ernic-{suffix}",
+                "addr": f"{net}.{_NET_ERNIC}.{o}",
+                "mac": macs[o - 1],
+                "ip": ips[o - 1],
+                "guest_gids": f"{_link_local_gid(macs[o - 1])},{ips[o - 1]}",
+                "sock": f"/run/vfu/ernic-{suffix}.sock",
+                "stats_file": f"/run/ernic-stats/ernic-{suffix}.stats",
+            })
+        vm_gpus = []
+        for d in range(1, rocjitsu_per_vm + 1):
+            o = index * rocjitsu_per_vm + d
+            suffix = _dev_suffix(n, d, rocjitsu_per_vm)
+            vm_gpus.append({
+                "n": n, "d": d, "o": o,
+                "service": f"rocjitsu-{suffix}",
+                "addr": f"{net}.{_NET_ROCJITSU}.{o}",
+                "sock": f"/run/vfu/rocjitsu-{suffix}.sock",
+                "config": extras["ROCJITSU_CONFIG"][index],
+            })
+        nics += vm_nics
+        gpus += vm_gpus
         vms.append({
             "n": n,
-            "ernic_addr": f"{net}.{_NET_ERNIC}.{n}",
-            "rocjitsu_addr": f"{net}.{_NET_ROCJITSU}.{n}",
             "qemu_addr": f"{net}.{_NET_QEMU}.{n}",
             "name": names[index],
             "ssh_port": ports[index],
-            "mac": macs[index],
-            "guest_gids": f"{_link_local_gid(macs[index])},{ips[index]}",
-            "ip": ips[index],
-            "ernic_sock": f"/run/vfu/ernic-{n}.sock",
-            "rocjitsu_sock": f"/run/vfu/rocjitsu-{n}.sock",
-            "stats_file": f"/run/ernic-stats/ernic-{n}.stats",
+            "nics": vm_nics,
+            "gpus": vm_gpus,
+            # The order the guest sees, and therefore what ends up paired
+            # under each switch. Round-robin so NIC d and GPU d are adjacent:
+            # with VM_PCIE_SWITCH_WIDTH=2 that is one NIC and one GPU per
+            # switch, which is the whole point of the MI355X shape.
+            "vfio_socks": _interleave(
+                [x["sock"] for x in vm_nics], [x["sock"] for x in vm_gpus]
+            ),
+            # Aliases to the first device of each kind. Everything that
+            # predates multi-device VMs reads these, and at the default of one
+            # each they are the only device there is.
+            "ernic_addr": vm_nics[0]["addr"],
+            "rocjitsu_addr": vm_gpus[0]["addr"] if vm_gpus else "",
+            "mac": vm_nics[0]["mac"],
+            "ip": vm_nics[0]["ip"],
+            "guest_gids": vm_nics[0]["guest_gids"],
+            "ernic_sock": vm_nics[0]["sock"],
+            "rocjitsu_sock": vm_gpus[0]["sock"] if vm_gpus else "",
+            "stats_file": vm_nics[0]["stats_file"],
             "shm_size": extras["VM_SHM_SIZE"][index],
             "rocjitsu_config": extras["ROCJITSU_CONFIG"][index],
             "flags": flags[index],
@@ -558,6 +654,13 @@ def plan(values: dict[str, str]) -> dict[str, Any]:
     return {
         "count": count,
         "vms": vms,
+        "nics": nics,
+        "gpus": gpus,
+        "ernic_per_vm": ernic_per_vm,
+        "rocjitsu_per_vm": rocjitsu_per_vm,
+        "switch_width": int(_get(values, "VM_PCIE_SWITCH_WIDTH") or 0),
+        "cpu_sockets": _get(values, "VM_CPU_SOCKETS"),
+        "pci_hole64_size": _get(values, "VM_PCI_HOLE64_SIZE"),
         "net_prefix": net,
         "exporter_addr": f"{net}.{_NET_INFRA}.{_INFRA_EXPORTER}",
         "prometheus_addr": f"{net}.{_NET_INFRA}.{_INFRA_PROM}",
@@ -611,6 +714,39 @@ def plan(values: dict[str, str]) -> dict[str, Any]:
         "prom_interval": _get(values, "PROM_SCRAPE_INTERVAL"),
         "prom_retention": _get(values, "PROM_RETENTION"),
     }
+
+
+def _positive_int(values: dict[str, str], key: str) -> int:
+    raw = _get(values, key)
+    try:
+        n = int(raw)
+    except ValueError:
+        sys.exit(f"Error: {key} must be an integer, got {raw!r}")
+    if n < 1:
+        sys.exit(f"Error: {key} must be at least 1, got {n}")
+    return n
+
+
+def _dev_suffix(n: int, d: int, per_vm: int) -> str:
+    """Service/socket suffix for device `d` of VM `n`.
+
+    Single-device VMs keep the bare VM number. That is not cosmetic: it is
+    what makes the committed scale-out stack regenerate byte-identical, so
+    CI's `gen-compose --check` stays a real gate rather than a diff to
+    re-baseline.
+    """
+    return f"{n}" if per_vm == 1 else f"{n}-{d}"
+
+
+def _interleave(a: list[str], b: list[str]) -> list[str]:
+    """Round-robin two lists, keeping any tail. Equal lengths pair 1:1."""
+    out: list[str] = []
+    for x, y in itertools.zip_longest(a, b):
+        if x is not None:
+            out.append(x)
+        if y is not None:
+            out.append(y)
+    return out
 
 
 def _override_list(values: dict[str, str], key: str, count: int) -> list[str] | None:
@@ -757,21 +893,30 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
     out.append("")
     out.append("services:")
 
-    for vm in spec["vms"]:
-        n = vm["n"]
+    for nic in spec["nics"]:
+        n, o = nic["n"], nic["o"]
+        # "NIC d of VM n" once there is more than one; the mesh role is what
+        # the first line has to say, because it decides restart policy,
+        # backend mode and who waits on whom.
+        label = f"VM {n} NIC" if spec["ernic_per_vm"] == 1 \
+            else f"VM {n} NIC {nic['d']}/{spec['ernic_per_vm']}"
         out.append("")
-        if n == 1:
-            out.append(f"  # ---- VM {n} NIC: TCP mesh manager ----")
+        if o == 1:
+            out.append(f"  # ---- {label}: TCP mesh manager ----")
+        elif spec["ernic_per_vm"] == 1:
+            out.append(f"  # ---- {label}: TCP mesh worker ----")
         else:
-            out.append(f"  # ---- VM {n} NIC: TCP mesh worker ----")
-        out.append(f"  ernic-{n}:")
+            # Only worth saying when it is not just the VM number: the mesh
+            # node ordinal is what the registration chain runs on.
+            out.append(f"  # ---- {label}: TCP mesh worker (node {o}) ----")
+        out.append(f"  {nic['service']}:")
         out.append("    <<: *ernic-common")
         # The node's hostname IS its mesh address: each rocm-ernic advertises
         # gethostname() to the manager and every peer then resolves that name
         # to dial it, so the default (the container id) puts Docker's embedded
         # DNS on every one of the fleet's N*(N-1) peer links. Naming the
         # container after its own address makes that a numeric getaddrinfo.
-        out.append(f"    hostname: {vm['ernic_addr']}")
+        out.append(f"    hostname: {nic['addr']}")
         if spec["ernic_tap"]:
             # Attaching to a pre-created, owned tap needs the device node and
             # nothing else -- no NET_ADMIN. That capability is the sidecar's.
@@ -781,8 +926,8 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
         if spec["ernic_tap"]:
             out.append("      l2: {}")
         out.append("      fleet:")
-        out.append(f"        ipv4_address: {vm['ernic_addr']}")
-        if n == 1:
+        out.append(f"        ipv4_address: {nic['addr']}")
+        if o == 1:
             backend = f"tcp:manager:listen:{spec['tcp_port']}"
             # A manager restart leaves every guest driver wedged on a DSR
             # timeout that only `down && up` clears (AGENTS.md issue 7), so
@@ -792,7 +937,7 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
             # The manager by address, not by name. Resolving "ernic-1" here
             # puts Docker's embedded DNS in the path of every worker's start,
             # and at fleet scale that is where the fleet breaks.
-            backend = f"tcp:worker:{spec['vms'][0]['ernic_addr']}:{spec['tcp_port']}"
+            backend = f"tcp:worker:{spec['nics'][0]['addr']}:{spec['tcp_port']}"
             out.append("    restart: on-failure")
         # Per node, not in the shared anchor: the GID set is what lets the
         # mesh resolve a destination GID to *this* node, so it is inherently
@@ -800,9 +945,9 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
         # silently routes to some other node and the transfer fails with
         # "Completion with error at client".
         out.append("    environment:")
-        out.append(f"      - ERNIC_TCP_GUEST_GIDS={vm['guest_gids']}")
-        argv = ["rocm-ernic", "-s", vm["ernic_sock"], "-b", backend,
-                "-m", vm["mac"], "-S", vm["stats_file"]]
+        out.append(f"      - ERNIC_TCP_GUEST_GIDS={nic['guest_gids']}")
+        argv = ["rocm-ernic", "-s", nic["sock"], "-b", backend,
+                "-m", nic["mac"], "-S", nic["stats_file"]]
         if spec["ernic_tap"]:
             argv += ["-T", _TAP_IF]
             # The sidecar can only run once this container exists, because it
@@ -823,7 +968,7 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
             out.append("    command:")
             for a in argv:
                 out.append(f'      - "{a}"')
-        if n != 1:
+        if o != 1:
             # Chained, not all-depend-on-the-manager. The mesh assigns node
             # ids in *connection* order, but the GID->node resolver assumes
             # id == (last MAC byte - 1). Let workers race and whichever wins
@@ -832,11 +977,15 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
             # transfer then fails with "Completion with error at client".
             # Starting them one at a time makes registration order match
             # index order, which is the only order the resolver gets right.
+            #
+            # The chain is over the GLOBAL ordinal, so at several NICs per VM
+            # it runs across VM boundaries too. That is what registration
+            # order has to be; it costs ~56 s of boot at 32 nodes.
             out.append("    depends_on:")
-            out.append(f"      ernic-{n - 1}:")
+            out.append(f"      {spec['nics'][o - 2]['service']}:")
             out.append("        condition: service_healthy")
         out.append("    healthcheck:")
-        if n == 1:
+        if o == 1:
             # The socket file alone is not enough for the manager: workers
             # gate on this condition and then dial its TCP port, so the check
             # has to prove that port is listening, not just that the process
@@ -874,25 +1023,27 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
         out.append("      retries: 30")
         out.append("      start_period: 5s")
 
-    for vm in spec["vms"]:
-        n = vm["n"]
+    for gpu in spec["gpus"]:
+        n = gpu["n"]
+        label = f"VM {n} GPU" if spec["rocjitsu_per_vm"] == 1 \
+            else f"VM {n} GPU {gpu['d']}/{spec['rocjitsu_per_vm']}"
         out.append("")
-        out.append(f"  # ---- VM {n} GPU ----")
-        out.append(f"  rocjitsu-{n}:")
+        out.append(f"  # ---- {label} ----")
+        out.append(f"  {gpu['service']}:")
         out.append("    <<: *ernic-common")
         out.append('    image: "${ROCJITSU_IMAGE}"')
         out.append("    networks:")
         out.append("      fleet:")
-        out.append(f"        ipv4_address: {vm['rocjitsu_addr']}")
+        out.append(f"        ipv4_address: {gpu['addr']}")
         out.append("    restart: on-failure")
         out.append("    command:")
         out.append("      - rocjitsu")
         out.append("      - --config")
-        out.append(f"      - /usr/local/share/rocjitsu/configs/{vm['rocjitsu_config']}")
+        out.append(f"      - /usr/local/share/rocjitsu/configs/{gpu['config']}")
         out.append("      - --vfio-socket")
-        out.append(f"      - {vm['rocjitsu_sock']}")
+        out.append(f"      - {gpu['sock']}")
         out.append("    healthcheck:")
-        out.append(f'      test: ["CMD", "sh", "-c", "test -S {vm["rocjitsu_sock"]}"]')
+        out.append(f'      test: ["CMD", "sh", "-c", "test -S {gpu["sock"]}"]')
         out.append("      interval: 2s")
         out.append("      timeout: 5s")
         out.append("      retries: 30")
@@ -909,10 +1060,12 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
         out.append(f"        ipv4_address: {vm['qemu_addr']}")
         out.append(f'    shm_size: "{vm["shm_size"]}"')
         out.append("    depends_on:")
-        out.append(f"      ernic-{n}:")
-        out.append("        condition: service_healthy")
-        out.append(f"      rocjitsu-{n}:")
-        out.append("        condition: service_healthy")
+        # Every device this guest attaches, not just the first. QEMU exits if
+        # any one vfio-user socket is missing, so a guest that starts while
+        # its eighth NIC is still coming up dies outright.
+        for dev in vm["nics"] + vm["gpus"]:
+            out.append(f"      {dev['service']}:")
+            out.append("        condition: service_healthy")
         out.append("    ports:")
         out.append(f'      - "{vm["ssh_port"]}:2222"')
         out.append("    entrypoint:")
@@ -946,12 +1099,24 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
             # A boolean, so it is emitted here rather than through _VM_FLAGS,
             # which renders --flag "value" pairs.
             out.append("          --vfio-user-root-port \\")
+        if spec["switch_width"]:
+            out.append(
+                f'          --vfio-user-switch-width {spec["switch_width"]} \\')
+        if spec["cpu_sockets"]:
+            out.append(f'          --cpu-sockets {spec["cpu_sockets"]} \\')
+        if spec["pci_hole64_size"]:
+            out.append(
+                f'          --pci-hole64-size "{spec["pci_hole64_size"]}" \\')
         for flag, value in vm["flags"]:
             out.append(f'          {flag} "{value}" \\')
         # Sockets are passed explicitly rather than globbed: with a fleet's
         # worth of sockets on one shared tmpfs, the single-VM stack's
         # `ls /run/vfu/*.sock` would attach every device to every VM.
-        out.append(f'          --vfio-userdev "{vm["ernic_sock"]},{vm["rocjitsu_sock"]}"')
+        #
+        # ORDER MATTERS when switches are on: run-vm groups this list left to
+        # right, so the NIC/GPU round-robin is what puts one of each below
+        # every switch.
+        out.append(f'          --vfio-userdev "{",".join(vm["vfio_socks"])}"')
 
     out.append("")
     out.append("  # ---- metrics (opt-in: --profile metrics) ----")
@@ -1270,13 +1435,13 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
             out.append("  # a persistent tap needs a matching owner or")
             out.append("  # NET_ADMIN. Left at the default of 0 it would hand a")
             out.append("  # non-root ernic EPERM and a guest with no Ethernet.")
-        for vm in spec["vms"]:
-            n = vm["n"]
-            out.append(f"  tapsetup-{n}:")
+        for nic in spec["nics"]:
+            suffix = _dev_suffix(nic["n"], nic["d"], spec["ernic_per_vm"])
+            out.append(f"  tapsetup-{suffix}:")
             out.append("    build: ./tapsetup")
             out.append(f'    image: "{_TAPSETUP_IMAGE}"')
             out.append("    logging: *logging")
-            out.append(f'    network_mode: "service:ernic-{n}"')
+            out.append(f'    network_mode: "service:{nic["service"]}"')
             out.append("    cap_add: [NET_ADMIN]")
             # The sidecar picks the l2 interface by address, because Docker
             # does not guarantee which network lands on which interface and
@@ -1291,7 +1456,7 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
             out.append("      - /dev/net/tun")
             out.append('    restart: "no"')
             out.append("    depends_on:")
-            out.append(f"      ernic-{n}:")
+            out.append(f"      {nic['service']}:")
             out.append("        condition: service_started")
 
     out.append("")
@@ -1477,6 +1642,18 @@ def render_inventory(spec: dict[str, Any], env_names: Sequence[str], digest: str
         # rename comes from ernic_guest_setup and a guest without it keeps
         # the kernel name, so a name here is sometimes simply wrong.
         out.append(f"          lmcache_guest_ernic_mac: {vm['mac']}")
+        if len(vm["nics"]) > 1:
+            # The remaining NICs, which the single-NIC vars above cannot
+            # express. Nothing in ansible/ consumes this yet --
+            # ernic_guest_setup's configure play addresses one device. It is
+            # emitted so the per-NIC MAC/IP pairing is recorded where a role
+            # that loops over them will look, rather than having to be
+            # re-derived from the compose file.
+            out.append("          fleet_guest_nics:")
+            for nic in vm["nics"]:
+                out.append(f"            - index: {nic['d']}")
+                out.append(f"              mac: {nic['mac']}")
+                out.append(f"              ip: {nic['ip']}")
     return "\n".join(out) + "\n"
 
 
@@ -1487,15 +1664,26 @@ def render_inventory(spec: dict[str, Any], env_names: Sequence[str], digest: str
 _RELATIVE_REF = re.compile(r"\./([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*)")
 
 
-def _stack_source() -> Path:
-    """This repo's copy of the stack: the authority the mirror copies from."""
+_DEFAULT_SOURCE_STACK = "vfio-user-ernic-rocjitsu-scale-out"
+
+
+def _stack_source(stack: str = _DEFAULT_SOURCE_STACK) -> Path:
+    """This repo's copy of the stack: the authority the mirror copies from.
+
+    Named, not fixed, because there is now more than one generated stack and
+    each owns its own assets. Rendering mi355x-node while this answered
+    "scale-out" would mirror the scale-out stack's grafana/, logging/ and
+    tapsetup/ over it, authoritatively -- the deletion half of
+    _copy_stack_assets, aimed at the wrong directory.
+    """
     from .compose import _compose_dir
 
-    return _compose_dir("vfio-user-ernic-rocjitsu-scale-out")
+    return _compose_dir(stack)
 
 
 def _owned_assets(
-    compose_body: str, generated: set[str], output_dir: Path
+    compose_body: str, generated: set[str], output_dir: Path,
+    stack: str = _DEFAULT_SOURCE_STACK,
 ) -> list[tuple[Path, Path]]:
     """The (source, destination) pairs this generator owns, in copy order.
 
@@ -1509,7 +1697,7 @@ def _owned_assets(
     prom-data -- so no amount of compose-file editing can point the mirror at
     an operator's data.
     """
-    source = _stack_source()
+    source = _stack_source(stack)
     pairs = []
     # The first segment is what names an asset directory; the rest of the
     # reference is a path inside it, and _protected_paths is what reads that.
@@ -1673,7 +1861,8 @@ def _superseded(
 
 
 def _copy_stack_assets(
-    compose_body: str, generated: set[str], output_dir: Path
+    compose_body: str, generated: set[str], output_dir: Path,
+    stack: str = _DEFAULT_SOURCE_STACK,
 ) -> None:
     """Mirror the stack's non-generated assets next to the generated files.
 
@@ -1729,10 +1918,10 @@ def _copy_stack_assets(
     removal is collected rather than raised, so the remaining assets are still
     mirrored before anything is reported.
     """
-    source = _stack_source()
+    source = _stack_source(stack)
     protected = _protected_paths(compose_body, source, output_dir)
     problems: list[str] = []
-    for src, dst in _owned_assets(compose_body, generated, output_dir):
+    for src, dst in _owned_assets(compose_body, generated, output_dir, stack):
         diff = _asset_diff(src, dst, protected)
         if diff["unowned"]:
             # Left strictly alone: following it would write outside the output
@@ -1780,6 +1969,7 @@ def run(
     output_dir: Path,
     check: bool = False,
     dry_run: bool = False,
+    stack: str = _DEFAULT_SOURCE_STACK,
 ) -> None:
     paths = find_env_file(env_file)
     if not paths:
@@ -1832,10 +2022,11 @@ def run(
         # separately so a CI log says which of the three it found.
         compose_body = artifacts["docker-compose.yml"]
         protected = _protected_paths(
-            compose_body, _stack_source(), output_dir)
+            compose_body, _stack_source(stack), output_dir)
         drift: dict[str, list[str]] = {
             "missing": [], "modified": [], "extra": [], "unowned": []}
-        owned = _owned_assets(compose_body, set(artifacts), output_dir)
+        owned = _owned_assets(
+            compose_body, set(artifacts), output_dir, stack)
         for src, dst in owned:
             diff = _asset_diff(src, dst, protected)
             for key in drift:
@@ -1882,7 +2073,7 @@ def run(
         print(f"Wrote {output_dir / name}")
 
     _copy_stack_assets(
-        artifacts["docker-compose.yml"], set(artifacts), output_dir
+        artifacts["docker-compose.yml"], set(artifacts), output_dir, stack
     )
 
     _print_next_steps(spec, values)

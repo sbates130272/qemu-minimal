@@ -1,0 +1,162 @@
+# qemu-tool settings for the MI355X-shaped PCIe topology stack.
+#
+# Each VM is one EPYC socket, 8 gfx1250 GPUs, 8 ernic NICs and 8 PCIe
+# switches -- one NIC and one GPU below each switch, each switch on its own
+# root port off the CPU. Simplified against a real MI355X node (single
+# socket, no host-level NIC/GPU asymmetry), but the tree the guest enumerates
+# is the shape that matters: ROCm topology detection, affinity heuristics and
+# P2P path selection all read the bus, and they read a flat tree differently.
+#
+#   qemu-tool gen-compose --stack vfio-user-mi355x-node \
+#     --env-file qemu/env/mi355x-node
+#   qemu-tool compose --env-file qemu/env/mi355x-node \
+#     --stack vfio-user-mi355x-node --profile metrics up -d
+#
+# Everything in qemu/env/example and qemu/env/scale-out applies here too --
+# same syntax, same precedence, same list semantics. This file records what
+# this topology needs differently, and why.
+
+# ---------------------------------------------------------------------------
+# Fleet shape
+# ---------------------------------------------------------------------------
+
+# 4, and the ceiling is much nearer than on the scale-out stack because
+# ERNIC_PER_VM multiplies MESH NODES, not just containers. Each rocm-ernic is
+# its own node, so this fleet is 4 x 8 = 32 nodes against the ~40 the mesh has
+# actually been measured to register (AGENTS.md issue 17). 32 is also exactly
+# the size issue 18's GID-resolution fix was re-verified at.
+#
+#   VM_COUNT=4  ->  32 mesh nodes   proven
+#   VM_COUNT=5  ->  40 mesh nodes   at the wall, expect losses
+#   VM_COUNT=6  ->  48 mesh nodes   gen-compose warns; workers will not register
+#   VM_COUNT=8  ->  64 mesh nodes   gen-compose refuses (protocol ceiling)
+#
+# The other ceilings move too. 4 VMs x 8 vCPU is 32 vCPU, which wants a host
+# of ~40 cores by the issue-14 heartbeat rule, and 4 x 16g is 64g of
+# /dev/shm. This does not fit a 32-core workstation; it is a lab-node stack.
+VM_COUNT=4
+
+VM_NAME_PREFIX=stebates-mi355x
+
+# ---------------------------------------------------------------------------
+# The MI355X shape
+# ---------------------------------------------------------------------------
+
+# 8 NICs and 8 GPUs per VM. Equal counts are what make the round-robin below
+# pair cleanly; unequal counts still render, they just stop being pairs.
+ERNIC_PER_VM=8
+ROCJITSU_PER_VM=8
+
+# 2 devices per switch. gen-compose hands run-vm the sockets round-robined
+# (ernic-n-1, rocjitsu-n-1, ernic-n-2, ...), and run-vm groups that list left
+# to right, so width 2 puts exactly one NIC and one GPU below each switch.
+# Set to 0 to get the flat tree the other stacks have.
+VM_PCIE_SWITCH_WIDTH=2
+
+# One EPYC socket. Without this QEMU infers sockets=cpus from `-smp cpus=N`
+# and the guest reports N single-core sockets -- which is what every other
+# stack in this repo has always done, and is wrong for anything reading
+# socket count or per-socket topology out of the guest.
+VM_CPU_SOCKETS=1
+
+# Eight emulated GPUs' BARs do not fit the default 64-bit hole. Bounded by
+# the CPU's physical address width: -cpu EPYC gives 40 bits (1 TiB), and
+# QEMU refuses outright at startup with
+#   Address space limit 0xffffffffff < 0x1ffffffffff phys-bits too low (40)
+# Measured on QEMU 10.2.1: 512G is accepted, 1T is not.
+#
+# TUNE THIS against what the gfx1250 rocjitsu config actually advertises --
+# read the BARs with `lspci -vv` in a guest and multiply by 8. 512G is the
+# ceiling, not a measurement.
+VM_PCI_HOLE64_SIZE=512G
+
+# ---------------------------------------------------------------------------
+# Images -- one build stamp across all four
+# ---------------------------------------------------------------------------
+#
+# The QEMU is the sbates-fork variant, deliberately. It carries 31e3d06a
+# "hw/vfio: assign region fd to RAMBlock for vfio-user P2P DMA"; without that
+# commit a peer device's BAR is DMA_MAP-ed with no fd, arrives as
+# vaddr=(nil), and every WQE touching GPU memory dies in vfu_sgl_get() as
+# "could not gather N bytes". Putting a GPU and a NIC under one switch and
+# then having no working P2P between them would miss the point of the stack.
+#
+# Verify a candidate with `-device help | grep pci-mmio-bridge`, present only
+# in fork builds, and /build/qemu-commit.txt.
+#
+# All four share the 20261014.geea0485 stamp, and the qemu/ernic pair share
+# vfu.8039244 -- gen-compose refuses a set that does not.
+QEMU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:20261014.geea0485-qemu.31e3d06-vfu.8039244
+ERNIC_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261014.geea0485-ernic.3fb74d1-vfu.8039244
+ROCJITSU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261014.geea0485-rocjitsu.84fb06b
+VM_BACKING_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu:20261014.geea0485-vm.resolute-ernic-rocjitsu-qm.c5d51ce-qcow2
+
+# ---------------------------------------------------------------------------
+# Guest login
+# ---------------------------------------------------------------------------
+
+VM_USERNAME=ubuntu
+VM_PASSWORD=ubuntu
+
+# ---------------------------------------------------------------------------
+# Per-VM resources
+# ---------------------------------------------------------------------------
+
+# 8, not the usual 4. The floor is 4 on any ernic stack --
+# ionic_create_rdma_admin() rejects fewer than IONIC_EQ_COUNT_MIN EQs and
+# ionic_rdma never probes -- but this guest probes EIGHT ionic devices and
+# eight GPUs at boot, so the floor is not a sensible target here.
+VM_VCPUS=8
+VM_VMEM=16384
+
+# 16g, double the scale-out default: eight vfio-user device servers share
+# this guest's memfd rather than one.
+VM_SHM_SIZE=16g
+
+ROCJITSU_CONFIG=gfx1250_mi455x.json
+
+# ---------------------------------------------------------------------------
+# Fleet-wide
+# ---------------------------------------------------------------------------
+
+VM_IMAGES_DIR=/var/lib/qemu-tool/images
+VM_BACKING_SHARED=true
+
+FLEET_NET_PREFIX=172.31
+ERNIC_TCP_PORT=6320
+
+# ---------------------------------------------------------------------------
+# Derived per-NIC identity
+# ---------------------------------------------------------------------------
+#
+# At ERNIC_PER_VM > 1 the MAC, guest IP and GID are keyed on the GLOBAL NIC
+# ordinal (VM-1)*8+d, not the VM index -- so this fleet's 32 NICs take
+# 192.168.100.11 through .42 and MACs ...:00:01 through ...:00:20. The
+# override lists ERNIC_MACS and ERNIC_GUEST_IPS, if used, must therefore be
+# 32 long, not 4.
+VM_SSH_PORT_BASE=2222
+ERNIC_MAC_PREFIX=72:6f:63:6d
+ERNIC_GUEST_SUBNET=192.168.100
+
+# ---------------------------------------------------------------------------
+# Metrics and guest Ethernet
+# ---------------------------------------------------------------------------
+
+VM_EXTRA_HOSTFWD=tcp::9100-:9100
+ERNIC_STATS_PORT=9840
+
+# One short-lived privileged sidecar per NIC -- 32 of them here, each exiting
+# immediately. Without a TAP the mesh carries RDMA payload only, ARP goes
+# unanswered, and ib_send_bw cannot do its out-of-band exchange at all.
+ERNIC_TAP=true
+
+ERNIC_NOFILE=65536
+
+PROM_DATA_DIR=/var/lib/qemu-tool/stacks/mi355x-node/prom-data
+PROM_PORT=9090
+PROM_SCRAPE_INTERVAL=15s
+PROM_RETENTION=7d
+
+# LMCache off: it is orthogonal to the topology this stack exists to test,
+# and its guest-side half assumes one ernic per guest.
+LMCACHE_ENABLE=false

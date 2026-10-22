@@ -194,6 +194,24 @@ def _add_run_vm(
                    dest="vfio_user_root_port", default=_UNSET,
                    help="Keep vfio-user devices on the root bus as "
                         "conventional endpoints. A GPU will not work.")
+    p.add_argument(
+        "--vfio-user-switch-width", type=int, default=_UNSET, metavar="N",
+        help=(
+            "Group vfio-user devices under PCIe switches, N per switch, in "
+            "--vfio-userdev order. 0 (default) is off."
+        ),
+    )
+    p.add_argument(
+        "--cpu-sockets", type=int, default=_UNSET, metavar="N",
+        help=(
+            "Pin the guest socket count. Without it QEMU infers sockets=cpus, "
+            "so the guest sees N single-core sockets."
+        ),
+    )
+    p.add_argument(
+        "--pci-hole64-size", default=_UNSET, metavar="SIZE",
+        help="Size of the 64-bit PCI hole, e.g. 1T. Needed for many large BARs.",
+    )
     p.add_argument("--nvme", default=_UNSET, metavar="VALUE",
                    help="Positive int=count, negative int=null_blk, else literal args.")
     p.add_argument("--nvme-trace", default=_UNSET,
@@ -620,7 +638,8 @@ def _gen_compose_cmd(args: argparse.Namespace) -> None:
                 "Pass --output-dir to generate somewhere writable, or name "
                 "that path explicitly if you really mean to modify it."
             )
-    gen_compose_run(args.env_file, output_dir, check=args.check, dry_run=args.dry_run)
+    gen_compose_run(args.env_file, output_dir, check=args.check,
+                    dry_run=args.dry_run, stack=args.stack)
 
 
 def _ernic_stats_cmd(args: argparse.Namespace) -> None:
@@ -698,6 +717,9 @@ def _extract_cli_overrides(
     if subcommand == "run-vm":
         _take("filesystem", "filesystem")
         _take("vfio_user_root_port", "vfio_user_root_port")
+        _take("vfio_user_switch_width", "vfio_user_switch_width")
+        _take("cpu_sockets", "cpu_sockets")
+        _take("pci_hole64_size", "pci_hole64_size")
         _take("nvme", "nvme")
         _take("nvme_trace", "nvme_trace")
         _take("nvme_trace_file", "nvme_trace_file")

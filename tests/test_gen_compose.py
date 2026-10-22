@@ -1185,6 +1185,226 @@ class TestStackAssetFailureModes(unittest.TestCase):
         self.assertEqual(data.read_text(), "operator")
         self.assertTrue(data.parent.parent.is_dir())
         self.assertTrue((self.tmp / "logging/loki-config.yml").is_file())
+_MI355X = """
+VM_COUNT=4
+ERNIC_PER_VM=8
+ROCJITSU_PER_VM=8
+VM_PCIE_SWITCH_WIDTH=2
+VM_CPU_SOCKETS=1
+VM_PCI_HOLE64_SIZE=512G
+"""
+
+
+class TestDevicesPerVM(unittest.TestCase):
+    """8 NICs and 8 GPUs per VM -- the MI355X-shaped stack.
+
+    The expensive failure here is not a crash either: it is a fleet whose 32
+    NICs share an address, or whose guest attaches the wrong set of sockets,
+    both of which come up looking healthy.
+    """
+
+    def test_defaults_are_one_each(self):
+        spec = _plan()
+        self.assertEqual(spec["ernic_per_vm"], 1)
+        self.assertEqual(spec["rocjitsu_per_vm"], 1)
+        self.assertEqual(len(spec["nics"]), 8)
+
+    def test_single_device_naming_is_unchanged(self):
+        # This is what keeps the committed scale-out stack byte-identical,
+        # so gen-compose --check stays a real gate.
+        spec = _plan()
+        self.assertEqual(spec["nics"][0]["service"], "ernic-1")
+        self.assertEqual(spec["gpus"][0]["service"], "rocjitsu-1")
+        self.assertEqual(spec["vms"][0]["ernic_sock"], "/run/vfu/ernic-1.sock")
+
+    def test_multi_device_naming_carries_both_indices(self):
+        spec = _plan(_MI355X)
+        self.assertEqual(len(spec["nics"]), 32)
+        self.assertEqual(len(spec["gpus"]), 32)
+        self.assertEqual(spec["nics"][0]["service"], "ernic-1-1")
+        self.assertEqual(spec["nics"][-1]["service"], "ernic-4-8")
+
+    def test_every_nic_in_the_fleet_has_its_own_identity(self):
+        spec = _plan(_MI355X)
+        for key in ("mac", "ip", "addr", "sock", "guest_gids", "stats_file"):
+            vals = [n[key] for n in spec["nics"]]
+            self.assertEqual(len(set(vals)), 32, f"{key} collides")
+
+    def test_identity_is_keyed_on_the_global_ordinal(self):
+        # VM 2's first NIC continues VM 1's numbering rather than restarting,
+        # which is what stops two VMs' NICs colliding.
+        spec = _plan(_MI355X)
+        vm2_first = spec["vms"][1]["nics"][0]
+        self.assertEqual(vm2_first["o"], 9)
+        self.assertEqual(vm2_first["mac"], "72:6f:63:6d:00:09")
+        self.assertEqual(vm2_first["ip"], "192.168.100.19")
+
+    def test_sockets_are_interleaved_so_switches_pair_nic_with_gpu(self):
+        # run-vm groups the list left to right, so the order IS the pairing.
+        socks = _plan(_MI355X)["vms"][0]["vfio_socks"]
+        self.assertEqual(socks[0], "/run/vfu/ernic-1-1.sock")
+        self.assertEqual(socks[1], "/run/vfu/rocjitsu-1-1.sock")
+        self.assertEqual(socks[2], "/run/vfu/ernic-1-2.sock")
+        self.assertEqual(len(socks), 16)
+
+    def test_the_guest_waits_for_every_device_not_just_the_first(self):
+        # QEMU exits if any one vfio-user socket is missing.
+        body = gen_compose.render_compose(_plan(_MI355X), "e", "d")
+        qemu1 = body[body.index("  qemu-1:"):body.index("  qemu-2:")]
+        for d in range(1, 9):
+            self.assertIn(f"ernic-1-{d}:", qemu1)
+            self.assertIn(f"rocjitsu-1-{d}:", qemu1)
+
+    def test_registration_chain_crosses_vm_boundaries(self):
+        # Node ids are handed out in connection order, so the chain has to be
+        # over the global ordinal or registration order stops matching it.
+        body = gen_compose.render_compose(_plan(_MI355X), "e", "d")
+        head = body[body.index("  ernic-2-1:"):body.index("  ernic-2-2:")]
+        self.assertIn("ernic-1-8:", head)
+
+    def test_only_the_very_first_nic_is_the_manager(self):
+        body = gen_compose.render_compose(_plan(_MI355X), "e", "d")
+        self.assertEqual(body.count("tcp:manager:listen:"), 1)
+        self.assertEqual(body.count("tcp:worker:"), 31)
+
+    def test_one_tapsetup_per_nic(self):
+        body = gen_compose.render_compose(
+            _plan(_MI355X + "ERNIC_TAP=true\n"), "e", "d")
+        self.assertIn("  tapsetup-4-8:", body)
+        self.assertEqual(body.count("    build: ./tapsetup"), 32)
+
+    def test_topology_flags_reach_run_vm(self):
+        body = gen_compose.render_compose(_plan(_MI355X), "e", "d")
+        self.assertEqual(body.count("--vfio-user-switch-width 2"), 4)
+        self.assertEqual(body.count("--cpu-sockets 1"), 4)
+        self.assertEqual(body.count('--pci-hole64-size "512G"'), 4)
+
+    def test_topology_flags_are_absent_by_default(self):
+        body = gen_compose.render_compose(_plan(), "e", "d")
+        for flag in ("--vfio-user-switch-width", "--cpu-sockets",
+                     "--pci-hole64-size"):
+            self.assertNotIn(flag, body)
+
+    def test_mesh_ceiling_counts_nodes_not_vms(self):
+        # 8 VMs x 8 ernics is 64 nodes. The message must name the product,
+        # because VM_COUNT=8 is not the number that is too large.
+        with self.assertRaises(SystemExit) as ctx:
+            _plan(_MI355X.replace("VM_COUNT=4", "VM_COUNT=9"))
+        msg = str(ctx.exception)
+        self.assertIn("72", msg)
+        self.assertIn("64", msg)
+
+    def test_per_vm_counts_must_be_positive(self):
+        with self.assertRaises(SystemExit) as ctx:
+            _plan("\nERNIC_PER_VM=0\n")
+        self.assertIn("ERNIC_PER_VM", str(ctx.exception))
+
+
+class TestPcieSwitchArgs(unittest.TestCase):
+    """The QEMU arguments the switch topology produces.
+
+    A wrong tree here boots perfectly and is silently flat, which is the one
+    outcome the whole stack exists to avoid -- so these assert the shape,
+    not just that something was emitted.
+    """
+
+    def _args(self, width=2, devices=16):
+        socks = []
+        for i in range(1, devices // 2 + 1):
+            socks += [f"/run/vfu/ernic-1-{i}.sock",
+                      f"/run/vfu/rocjitsu-1-{i}.sock"]
+        cfg = VMConfig(
+            vm_name="mi355x-1", vcpus=8, vfio_userdev=socks[:devices],
+            vfio_user_switch_width=width, dry_run=True,
+        )
+        return run_vm._vfio_userdev_args(cfg)
+
+    def test_one_root_port_and_one_upstream_per_switch(self):
+        args = " ".join(self._args())
+        self.assertEqual(args.count("pcie-root-port"), 8)
+        self.assertEqual(args.count("x3130-upstream"), 8)
+        self.assertEqual(args.count("xio3130-downstream"), 16)
+
+    def test_chassis_is_unique_across_every_port(self):
+        # QEMU identifies a slot by (chassis, slot), so a repeat silently
+        # collapses two slots into one and the second device never appears.
+        import re as _re
+        args = " ".join(self._args())
+        chassis = _re.findall(r"chassis=(\d+)", args)
+        self.assertEqual(len(chassis), 24)
+        self.assertEqual(len(set(chassis)), 24)
+
+    def test_every_device_sits_on_a_downstream_port(self):
+        args = self._args()
+        buses = [a for a in args if "vfio-user-pci" in a]
+        self.assertEqual(len(buses), 16)
+        for b in buses:
+            self.assertIn('"bus":"vfudp', b)
+
+    def test_each_switch_carries_one_nic_and_one_gpu(self):
+        args = " ".join(self._args())
+        for s in range(8):
+            self.assertIn(f'"bus":"vfudp{s}.0","rombar":0,'
+                          f'"socket":{{"path":"/run/vfu/ernic-1-{s + 1}.sock"',
+                          args)
+            self.assertIn(f'"bus":"vfudp{s}.1","rombar":0,'
+                          f'"socket":{{"path":"/run/vfu/rocjitsu-1-{s + 1}.sock"',
+                          args)
+
+    def test_hotplug_is_off_on_every_port(self):
+        # Each hotplug-capable port reserves an MMIO window for a device that
+        # might arrive later; 24 of those exhaust the 32-bit hole and the
+        # guest then fails BAR assignment for devices already present.
+        args = self._args()
+        ports = [a for a in args
+                 if a.startswith(("pcie-root-port", "xio3130-downstream"))]
+        self.assertEqual(len(ports), 24)
+        for p in ports:
+            self.assertIn("hotplug=off", p)
+
+    def test_width_one_gives_a_switch_per_device(self):
+        args = " ".join(self._args(width=1, devices=4))
+        self.assertEqual(args.count("x3130-upstream"), 4)
+        self.assertEqual(args.count("xio3130-downstream"), 4)
+
+    def test_off_by_default_keeps_the_flat_tree(self):
+        cfg = VMConfig(vfio_userdev=["/run/vfu/a.sock"], dry_run=True)
+        args = " ".join(run_vm._vfio_userdev_args(cfg))
+        self.assertNotIn("x3130-upstream", args)
+
+    def test_a_negative_width_is_refused_not_treated_as_off(self):
+        cfg = VMConfig(vfio_userdev=["/run/vfu/a.sock"], dry_run=True,
+                       vfio_user_switch_width=-1)
+        with self.assertRaises(SystemExit) as ctx:
+            run_vm._vfio_userdev_args(cfg)
+        self.assertIn("must be 0 (off) or positive", str(ctx.exception))
+
+    def test_the_hole_is_only_emitted_when_asked_for(self):
+        cfg = VMConfig(vfio_userdev=["/run/vfu/a.sock"], dry_run=True)
+        self.assertNotIn("pci-hole64-size",
+                         " ".join(run_vm._vfio_userdev_args(cfg)))
+        cfg.pci_hole64_size = "512G"
+        self.assertIn("q35-pcihost.pci-hole64-size=512G",
+                      " ".join(run_vm._vfio_userdev_args(cfg)))
+
+
+class TestCpuSockets(unittest.TestCase):
+    """`-smp`. Bare cpus=N makes QEMU infer sockets=N, cores=1."""
+
+    def test_default_is_unchanged(self):
+        self.assertEqual(run_vm._smp_args(VMConfig(vcpus=8)),
+                         ["-smp", "cpus=8"])
+
+    def test_pinning_one_socket_gives_one_socket_of_n_cores(self):
+        self.assertEqual(
+            run_vm._smp_args(VMConfig(vcpus=8, cpu_sockets=1)),
+            ["-smp", "cpus=8,sockets=1,cores=8,threads=1"],
+        )
+
+    def test_an_indivisible_split_is_refused(self):
+        with self.assertRaises(SystemExit) as ctx:
+            run_vm._smp_args(VMConfig(vcpus=6, cpu_sockets=4))
+        self.assertIn("does not divide", str(ctx.exception))
 
 
 if __name__ == "__main__":

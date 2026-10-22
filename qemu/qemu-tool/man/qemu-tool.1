@@ -179,6 +179,57 @@ Keep vfio\-user devices on the root bus as conventional endpoints. A GPU will
 not bind
 .IR amdgpu .
 .TP
+.BI \-\-vfio\-user\-switch\-width " N"
+Group vfio\-user devices under PCIe switches,
+.I N
+per switch, in
+.B \-\-vfio\-userdev
+order. One
+.B pcie\-root\-port
+per switch, an
+.B x3130\-upstream
+on it, and an
+.B xio3130\-downstream
+per device. 0, the default, is off and leaves the flat tree.
+.IP
+Order is the pairing: nothing inspects what a socket serves, so the caller
+decides what shares a switch by the order it lists the sockets. The
+MI355X\-shaped stack interleaves its NIC and GPU sockets and asks for width
+2, so each switch carries one of each and their traffic has a path that does
+not cross the root complex.
+.IP
+Not representable in libvirt XML:
+.B \-\-convert\-to\-libvirt
+refuses a switched configuration rather than emitting a domain with a flat
+tree.
+.TP
+.BI \-\-cpu\-sockets " N"
+Pin the guest socket count. Without it QEMU infers
+.IR sockets=cpus ", " cores=1 ,
+so a guest given 8 vCPUs reports eight single\-core sockets. Must divide
+.BR \-\-vcpus .
+.TP
+.BI \-\-pci\-hole64\-size " SIZE"
+Size of the 64\-bit PCI hole as a QEMU size string, e.g.\&
+.IR 512G .
+The machine default does not fit many large BARs at once; eight emulated
+GPUs will not enumerate without this.
+.IP
+Bounded by the CPU's physical address width, and the failure is a refusal at
+startup rather than a degraded boot.
+.B \-cpu EPYC
+gives 40 bits, so on QEMU 10.2.1
+.I 512G
+is accepted and
+.I 1T
+is not; above that needs
+.B host\-phys\-bits=on
+or an explicit
+.B phys\-bits=
+on the
+.B \-cpu
+argument.
+.TP
 .B \-\-mgmt\-tap
 Use tap+bridge for the management NIC instead of SLIRP.
 .TP

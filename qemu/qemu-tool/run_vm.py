@@ -43,7 +43,7 @@ def build_command(cfg: VMConfig, caps: QemuCaps) -> list[str]:
     cmd: list[str] = [qemu_binary(cfg)]
     cmd += _arch_args(cfg)
     cmd += _trace_args(cfg)
-    cmd += ["-smp", f"cpus={cfg.vcpus}", "-m", str(cfg.vmem)]
+    cmd += _smp_args(cfg) + ["-m", str(cfg.vmem)]
     cmd += _filesystem_args(cfg)
     cmd += ["-nographic"]
     cmd += _pci_testdev_args(cfg)
@@ -102,6 +102,30 @@ def _arch_args(cfg: VMConfig) -> list[str]:
             "-kernel", "/usr/lib/u-boot/qemu-riscv64_smode/uboot.elf",
         ]
     sys.exit(f"Error: no ARCH mapping for '{cfg.arch}'")
+
+
+def _smp_args(cfg: VMConfig) -> list[str]:
+    """`-smp`, with the socket count pinned when asked for.
+
+    Bare `cpus=N` leaves QEMU to infer the rest, and what it infers is
+    sockets=N, cores=1: a guest given 8 vCPUs reports EIGHT single-core
+    sockets. Nothing real looks like that, and anything in the guest that
+    reads socket count or per-socket topology -- ROCm affinity, NUMA
+    heuristics -- reads it wrong. Off by default so no existing stack
+    changes shape.
+    """
+    if cfg.cpu_sockets <= 0:
+        return ["-smp", f"cpus={cfg.vcpus}"]
+    if cfg.vcpus % cfg.cpu_sockets:
+        sys.exit(
+            f"Error: --cpu-sockets ({cfg.cpu_sockets}) does not divide "
+            f"--vcpus ({cfg.vcpus})."
+        )
+    cores = cfg.vcpus // cfg.cpu_sockets
+    return [
+        "-smp",
+        f"cpus={cfg.vcpus},sockets={cfg.cpu_sockets},cores={cores},threads=1",
+    ]
 
 
 def _trace_args(cfg: VMConfig) -> list[str]:
@@ -236,6 +260,62 @@ def _pci_mmio_bridge_args(cfg: VMConfig, caps: QemuCaps) -> list[str]:
     ]
 
 
+def _vfio_user_dev_json(sock: str, bus: str | None) -> str:
+    # rombar=0 suppresses the ROM BAR that vfio-user-pci would otherwise
+    # advertise.
+    bus_part = f'"bus":"{bus}",' if bus else ""
+    return (
+        f'{{"driver":"vfio-user-pci",{bus_part}"rombar":0,'
+        f'"socket":{{"path":"{sock}","type":"unix"}}}}'
+    )
+
+
+def _vfio_user_switch_args(cfg: VMConfig) -> list[str]:
+    """Group the vfio-user devices under PCIe switches, in socket order.
+
+    One `pcie-root-port` per switch off the root complex, an
+    `x3130-upstream` on it, and a `xio3130-downstream` per device. This is
+    the MI355X shape in miniature: with width=2 and an interleaved socket
+    list, each switch carries one NIC and one GPU, so their traffic has a
+    path that does not cross the root complex.
+
+    ORDER IS THE PAIRING. The caller decides what ends up together by the
+    order it passes --vfio-userdev; nothing here looks at what a socket
+    serves.
+    """
+    width = cfg.vfio_user_switch_width
+    socks = cfg.vfio_userdev
+    args: list[str] = []
+    # Unique across every port in the machine, root and downstream alike --
+    # NOT per switch. QEMU uses (chassis, slot) to identify a slot, so a
+    # repeated pair silently collapses two slots into one and the second
+    # device never appears in the guest.
+    chassis = 0
+    for s, start in enumerate(range(0, len(socks), width)):
+        chassis += 1
+        # hotplug=off on every port is load-bearing, not tidiness. A port
+        # that accepts hotplug reserves an MMIO/IO window for the device
+        # that might arrive later, and eight switches' worth of those
+        # reservations exhaust the 32-bit hole -- at which point the guest
+        # fails BAR assignment for devices that are already present. None of
+        # these ports is a hotplug target.
+        args += [
+            "-device",
+            f"pcie-root-port,id=vfurp{s},chassis={chassis},slot={s},hotplug=off",
+        ]
+        args += ["-device", f"x3130-upstream,id=vfusw{s},bus=vfurp{s}"]
+        for k, sock in enumerate(socks[start:start + width]):
+            chassis += 1
+            port = f"vfudp{s}.{k}"
+            args += [
+                "-device",
+                f"xio3130-downstream,id={port},bus=vfusw{s}"
+                f",chassis={chassis},slot={k},hotplug=off",
+            ]
+            args += ["-device", _vfio_user_dev_json(sock, port)]
+    return args
+
+
 def _vfio_userdev_args(cfg: VMConfig) -> list[str]:
     if not cfg.vfio_userdev:
         return []
@@ -248,30 +328,42 @@ def _vfio_userdev_args(cfg: VMConfig) -> list[str]:
         f"memory-backend-memfd,id=mem-vfio-user,size={cfg.vmem}M,share=on",
         "-machine", f"q35{kvm_suffix},memory-backend=mem-vfio-user",
     ]
-    for j, sock in enumerate(cfg.vfio_userdev, start=1):
+    if cfg.pci_hole64_size:
+        # The default 64-bit hole does not fit many large BARs at once --
+        # eight emulated GPUs will not enumerate without this.
+        args += [
+            "-global",
+            f"q35-pcihost.pci-hole64-size={cfg.pci_hole64_size}",
+        ]
+    for sock in cfg.vfio_userdev:
         if not cfg.dry_run and not Path(sock).is_socket():
             sys.exit(f"ERROR: Socket {sock} does not exist.")
-        # rombar=0 suppresses the ROM BAR that vfio-user-pci would otherwise
-        # advertise.
-        #
+
+    if cfg.vfio_user_switch_width < 0:
+        # Not silently "off": a negative width is a typo, and treating it as
+        # off hands back a flat tree that looks like it worked.
+        sys.exit(
+            "Error: --vfio-user-switch-width must be 0 (off) or positive, "
+            f"got {cfg.vfio_user_switch_width}."
+        )
+    if cfg.vfio_user_switch_width > 0:
+        return args + _vfio_user_switch_args(cfg)
+
+    for j, sock in enumerate(cfg.vfio_userdev, start=1):
         # On the root complex by default. q35 IS a PCIe machine, but a device
         # with no bus= lands on pcie.0 as a CONVENTIONAL PCI endpoint, with
         # no Express capability and therefore no link speed or width -- the
         # guest's ionic then logs "0.000 Gb/s available PCIe bandwidth
         # (Unknown x255 link)". A root port gives it real PCIe semantics,
         # which is what BAR-to-BAR DMA between two vfio-user devices needs.
-        bus = ""
+        bus = None
         if cfg.vfio_user_root_port:
             args += [
                 "-device",
                 f"pcie-root-port,id=vfur{j},chassis={j},slot={j}",
             ]
-            bus = f'"bus":"vfur{j}",'
-        dev_json = (
-            f'{{"driver":"vfio-user-pci",{bus}"rombar":0,'
-            f'"socket":{{"path":"{sock}","type":"unix"}}}}'
-        )
-        args += ["-device", dev_json]
+            bus = f"vfur{j}"
+        args += ["-device", _vfio_user_dev_json(sock, bus)]
     return args
 
 

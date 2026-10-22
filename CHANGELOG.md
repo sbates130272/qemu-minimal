@@ -6,6 +6,38 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **An MI355X-shaped PCIe topology stack.** `vfio-user-mi355x-node` gives each
+  VM one EPYC socket, 8 gfx1250 GPUs, 8 ernic NICs and 8 PCIe switches, with
+  one NIC and one GPU below each switch and each switch on its own root port.
+  Every other stack here hangs one NIC and one GPU flat off the root complex,
+  so there was nothing to exercise software that reads the PCIe tree — ROCm
+  topology detection, affinity heuristics, P2P path selection — against.
+
+  `run-vm` grows `--vfio-user-switch-width N`, which groups `--vfio-userdev`
+  into `x3130-upstream`/`xio3130-downstream` switches N at a time in the order
+  given; `gen-compose` round-robins the NIC and GPU socket lists so each
+  switch gets one of each. Two things that are easy to lose and silently
+  break the result: `hotplug=off` on all 24 ports, without which their
+  hotplug MMIO reservations exhaust the 32-bit hole and the guest fails BAR
+  assignment for devices already present, and `--pci-hole64-size`, without
+  which eight GPUs' BARs do not fit. The hole is bounded by the CPU's
+  physical address width — `-cpu EPYC` gives 40 bits, and QEMU 10.2.1 accepts
+  512G but refuses 1T outright.
+
+  `gen-compose` grows `ERNIC_PER_VM`/`ROCJITSU_PER_VM`. Both default to 1, so
+  the committed scale-out stack regenerates byte-identical. Above 1, per-NIC
+  identity (MAC, guest IP, GID, fleet address) is keyed on a global NIC
+  ordinal rather than the VM index, and the mesh registration chain
+  serialises across VM boundaries. **Each ernic is its own mesh node**, so 8
+  per VM caps the fleet near 4 VMs rather than 40 — the ceiling check now
+  counts nodes and names the product, because `VM_COUNT` is not the number
+  that is too large.
+
+- **`run-vm --cpu-sockets N`.** Bare `-smp cpus=N` leaves QEMU to infer
+  `sockets=N, cores=1`, so every guest this repo has booted reports N
+  single-core EPYC sockets rather than one CPU. Off by default; the MI355X
+  stack sets 1.
+
 - **A playbook that bakes the ionic SRQ stack into a guest image**,
   `ansible/playbooks/vm-ernic-srq.yml`. Stock v7.2.4 has no SRQ in
   `drivers/infiniband/hw/ionic`, and no rdma-core release — nor master — has

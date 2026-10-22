@@ -516,6 +516,16 @@ class LibvirtXml:
 
         # libvfio-user devices
         if cfg.vfio_userdev:
+            # This path emits one flat root port per device and knows nothing
+            # about switches. Emitting it anyway for a switched config would
+            # hand back a domain that boots fine and has the wrong topology --
+            # the one failure the switch mode exists to avoid -- so refuse.
+            if cfg.vfio_user_switch_width > 0:
+                sys.exit(
+                    "Error: --convert-to-libvirt cannot represent "
+                    "--vfio-user-switch-width; the generated domain would "
+                    "have a flat PCIe tree. Run it with run-vm instead."
+                )
             chassis_base = len(cfg.pci_hostdev)
             args += [
                 "-object",
