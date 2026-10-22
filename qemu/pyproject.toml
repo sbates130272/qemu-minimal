@@ -99,7 +99,7 @@ packages = [
 # `overlay-*` state just the keys one CI lane or one host differs on, so they
 # are not usable without the checkout that explains them -- same reason
 # `quickstart` is not here either.
-"qemu_tool.share.env" = ["example", "scale-out"]
+"qemu_tool.share.env" = ["example", "scale-out", "mi355x-node"]
 # Every file a stack needs to come up, not just the YAML. A stack directory is
 # used verbatim as a `docker compose` working directory, so anything it
 # bind-mounts or builds has to be in the wheel too -- and the failure when it
