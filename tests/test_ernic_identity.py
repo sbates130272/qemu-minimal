@@ -122,15 +122,49 @@ class UdevRulesTest(unittest.TestCase):
             '"rocm-ernic%n"', net,
             "%n collides at rocm-ernic0 for both NICs of a two-NIC guest")
 
-    def test_netdev_name_comes_from_a_free_index_search(self):
-        # Same shape as the IB stanza, which already solved this. Both walk
-        # upward from 0 to the first name that does not exist.
+    def test_netdev_name_comes_from_the_pci_position(self):
+        """Deterministic ordering, not whichever device udev saw first.
+
+        A free-index search ("first rocm-ernicN that does not exist") fixes
+        the %n collision but numbers in udev event order, which is a race.
+        Measured on a 32-guest fleet: guest 3 came up with rocm-ernic1 on PCI
+        01:00.0 and rocm-ernic0 on 02:00.0, while guests 7 and 20 got the
+        opposite. Walking /sys/bus/pci/devices in bus order instead makes
+        rocm-ernic0 always the guest's lowest-addressed ernic.
+        """
         (net,) = [s for s in _rule_stanzas() if 'SUBSYSTEM=="net"' in s]
         self.assertIn("PROGRAM=", net)
         self.assertIn('NAME="%c"', net)
-        self.assertIn("/sys/class/net/rocm-ernic$$i", net)
-        # Doubled, or udev eats the $ as its own substitution.
-        self.assertNotIn("$i'", net.replace("$$i", ""))
+        self.assertIn("/sys/bus/pci/devices/", net)
+        # The old scheme, which must not come back.
+        self.assertNotIn("/sys/class/net/rocm-ernic$$i", net)
+
+    def test_the_netdev_program_rechecks_all_four_ids(self):
+        # The loop walks EVERY PCI device, so the rule's own match does not
+        # constrain it. 1dd8:1002 is also a real Pensando card; only the
+        # subsystem pair means the emulation, and counting a real NIC would
+        # shift every index after it.
+        (net,) = [s for s in _rule_stanzas() if 'SUBSYSTEM=="net"' in s]
+        for want in ("0x1dd8", "0x1002", "0x5400"):
+            self.assertIn(want, net)
+        for attr in ("vendor", "device", "subsystem_vendor", "subsystem_device"):
+            self.assertIn(f"$$d/{attr}", net)
+
+    def test_the_netdev_program_uses_no_double_quotes(self):
+        # udev does not parse a nested double quote inside PROGRAM="...".
+        (net,) = [s for s in _rule_stanzas() if 'SUBSYSTEM=="net"' in s]
+        body = net.split("PROGRAM=", 1)[1]
+        body = body[body.index("'"):body.rindex("'")]
+        self.assertNotIn('"', body, "a double quote inside PROGRAM breaks parsing")
+
+    def test_shell_variables_are_doubled(self):
+        # A bare $ is udev's own substitution character.
+        (net,) = [s for s in _rule_stanzas() if 'SUBSYSTEM=="net"' in s]
+        body = net.split("PROGRAM=", 1)[1]
+        stripped = body.replace("$$", "")
+        self.assertNotIn("$d", stripped)
+        self.assertNotIn("$i", stripped)
+        self.assertNotIn("$p", stripped)
 
     def test_both_stanzas_guard_against_renaming_twice(self):
         """A re-triggered event must not walk an already-correct device on.
