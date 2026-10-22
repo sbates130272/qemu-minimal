@@ -561,6 +561,42 @@ class TestPublishing(unittest.TestCase):
             body.count("ipv4_address:"), body.count("      fleet:"))
 
 
+class TestStopBehaviour(unittest.TestCase):
+    """How long a teardown takes, and whether it is clean.
+
+    The two anchors want opposite things and the reasons are not symmetric,
+    so both are pinned here rather than left to look like an inconsistency.
+    """
+
+    def test_ernic_is_killed_outright(self):
+        """rocm-ernic ignores SIGTERM, so the grace period is pure waiting.
+
+        Measured: `docker stop` on one takes 12.5 s and the container exits
+        137 -- the SIGKILL after Docker's 10 s default. Because the ernic
+        services are chained depends_on, compose stops them one at a time in
+        reverse, so at 64 NICs that default is a thirteen-minute teardown
+        spent waiting to kill processes that were never going to exit.
+        """
+        out = gen_compose.render_compose(_plan(), ["e"], "d")
+        anchor = out.split("x-ernic-common:")[1].split("x-qemu-common:")[0]
+        self.assertIn("stop_signal: SIGKILL", anchor)
+
+    def test_qemu_is_not_killed_outright(self):
+        # The opposite call, for the opposite reason: a guest may be mid-flush
+        # when something asks it to stop, and killing it there is what leaves
+        # an ext4 journal needing replay. QEMU is PID 1 (run_vm execs it), so
+        # this is the only lever compose has.
+        out = gen_compose.render_compose(_plan(), ["e"], "d")
+        anchor = out.split("x-qemu-common:")[1].split("services:")[0]
+        self.assertNotIn("stop_signal: SIGKILL", anchor)
+        self.assertIn("stop_grace_period:", anchor)
+
+    def test_the_grace_period_is_settable(self):
+        out = gen_compose.render_compose(
+            _plan("\nSTOP_GRACE_PERIOD=45s\n"), ["e"], "d")
+        self.assertIn("stop_grace_period: 45s", out)
+
+
 class TestLogs(unittest.TestCase):
     """Loki and a host-side Alloy, in the metrics profile.
 

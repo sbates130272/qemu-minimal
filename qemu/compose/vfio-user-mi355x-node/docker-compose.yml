@@ -16,6 +16,7 @@ x-logging: &logging
 x-ernic-common: &ernic-common
   image: "${ERNIC_IMAGE}"
   logging: *logging
+  stop_signal: SIGKILL
   ulimits:
     nofile:
       soft: 65536
@@ -33,6 +34,7 @@ x-qemu-common: &qemu-common
     - "${QEMU_TOOL_SRC:-../../..}:/qemu-tool-src:ro"
   devices:
     - /dev/kvm
+  stop_grace_period: 120s
   restart: "no"
 
 services:

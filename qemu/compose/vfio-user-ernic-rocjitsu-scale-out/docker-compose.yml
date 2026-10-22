@@ -16,6 +16,7 @@ x-logging: &logging
 x-ernic-common: &ernic-common
   image: "${ERNIC_IMAGE}"
   logging: *logging
+  stop_signal: SIGKILL
   ulimits:
     nofile:
       soft: 65536

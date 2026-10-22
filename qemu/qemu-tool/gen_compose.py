@@ -836,6 +836,23 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
     out.append("x-ernic-common: &ernic-common")
     out.append('  image: "${ERNIC_IMAGE}"')
     out.append("  logging: *logging")
+    # rocm-ernic does not handle SIGTERM: measured, `docker stop` on one takes
+    # 12.5 s and the container exits 137, which is the SIGKILL after Docker's
+    # 10 s grace. The wait buys nothing.
+    #
+    # It costs a great deal, because the ernic services are chained
+    # depends_on so registration order matches index order (see the service
+    # comments), and compose therefore stops them STRICTLY ONE AT A TIME in
+    # reverse. At 64 NICs that is 64 x 12.5 s -- a thirteen-minute teardown
+    # spent entirely waiting to kill processes that were never going to exit.
+    #
+    # Safe to kill outright: these servers hold nothing durable. The sockets
+    # and the stats files live on tmpfs volumes that `down -v` destroys, and
+    # the stats file is rewritten every second, so the most that is lost is a
+    # second of counters. Guests should already be down -- `qemu-tool
+    # shutdown` is what makes that true -- and a guest still attached has
+    # lost its device either way.
+    out.append("  stop_signal: SIGKILL")
     if spec["container_user"]:
         # Both device servers only write into the two tmpfs volumes, which a
         # tmpfs mounts 1777, so an unprivileged uid creates its socket and its
