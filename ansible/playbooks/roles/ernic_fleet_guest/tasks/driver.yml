@@ -65,32 +65,3 @@
   vars:
     ernic_fleet_ionic_alias_want: >-
       pci:v0000{{ ernic_fleet_pci_vendor[2:] | upper }}d0000{{ ernic_fleet_pci_device[2:] | upper }}
-
-# Loud, not silently skipped: these rules are the single file whose absence
-# cost 32 guests 18 hours, so an empty source is a decision that has to be
-# stated rather than a default that quietly leaves the image's own copy.
-- name: Install the rocm-ernic udev naming rules
-  ansible.builtin.copy:
-    src: "{{ ernic_fleet_udev_rules_src }}"
-    dest: /etc/udev/rules.d/99-rocm-ernic.rules
-    owner: root
-    group: root
-    mode: "0644"
-  when: ernic_fleet_udev_rules_src | length > 0
-  notify: Reload udev rules
-
-- name: Warn that the guest keeps whatever naming rules its image shipped
-  ansible.builtin.debug:
-    msg: >-
-      ernic_fleet_udev_rules_src is empty, so 99-rocm-ernic.rules is whatever
-      the image baked in. If it matches 0x100a the device will not be renamed
-      and rocm-ernic-netcfg will fall back to the kernel name.
-  when: ernic_fleet_udev_rules_src | length == 0
-
-- name: Load the ernic modules at boot
-  ansible.builtin.copy:
-    dest: /etc/modules-load.d/rocm-ernic-ionic.conf
-    content: "{{ ernic_fleet_modules | join('\n') }}\n"
-    owner: root
-    group: root
-    mode: "0644"

@@ -50,21 +50,29 @@ want_tuple() {
         "$PCI_SUBSYSTEM_VENDOR" "$PCI_SUBSYSTEM_DEVICE"
 }
 
-# Prefers the renamed name when several devices match, so a guest whose udev
-# rules did fire keeps the name the test drivers expect.
-find_ernic_netdev() {
-    local dev name fallback=""
+# EVERY matching device, not just the first: with ERNIC_PER_VM > 1 a guest has
+# several emulated NICs and each is its own mesh node with its own MAC, GID and
+# address. Configuring only the first left the second with a link and no
+# address, which looks like a half-working fabric rather than a missing step.
+#
+# Renamed names come first so the ordering is stable and a guest whose udev
+# rules fired keeps the name the test drivers expect at the head of the list.
+# Within each group the glob sorts, so the order does not depend on readdir.
+find_ernic_netdevs() {
+    local dev name renamed="" fallback=""
     for dev in "$SYSFS"/class/net/*; do
         [ -e "$dev/device/vendor" ] || continue
         [ "$(ernic_tuple "$dev/device")" = "$(want_tuple)" ] || continue
         name=${dev##*/}
         case $name in
-            rocm-ernic*) printf '%s\n' "$name"; return 0 ;;
-            *) [ -n "$fallback" ] || fallback=$name ;;
+            rocm-ernic*) renamed="$renamed$name
+" ;;
+            *) fallback="$fallback$name
+" ;;
         esac
     done
-    [ -n "$fallback" ] || return 1
-    printf '%s\n' "$fallback"
+    [ -n "$renamed$fallback" ] || return 1
+    printf '%s' "$renamed$fallback"
 }
 
 # What was looked for and what was actually on the bus. The fleet's symptom
@@ -80,39 +88,65 @@ report_no_match() {
 }
 
 if [ "${1:-}" = "discover" ]; then
-    find_ernic_netdev || { report_no_match; exit 1; }
+    find_ernic_netdevs || { report_no_match; exit 1; }
     exit 0
 fi
 
 for _ in $(seq 1 30); do
-    NIC=$(find_ernic_netdev) && break
+    NICS=$(find_ernic_netdevs) && break
     sleep 1
 done
-[ -n "${NIC:-}" ] || { report_no_match; exit 1; }
+[ -n "${NICS:-}" ] || { report_no_match; exit 1; }
 
-case $NIC in
-    rocm-ernic*) ;;
-    *) echo "warning: $NIC was not renamed by 99-rocm-ernic.rules;" \
-            "check that the rules match all four of $(want_tuple)" >&2 ;;
-esac
+# The hostname comes from the FIRST NIC only -- it names the guest, not the
+# device, and a guest with two NICs would otherwise be renamed twice and keep
+# whichever ran last.
+first=1
+rc=0
 
-mac=$(cat "$SYSFS/class/net/$NIC/address")
-n=$(( 0x${mac:12:2} * 256 + 0x${mac:15:2} ))
-[ "$n" -gt 0 ] || { echo "refusing index 0 from MAC $mac" >&2; exit 1; }
+while read -r NIC; do
+    [ -n "$NIC" ] || continue
 
-ip link set "$NIC" up
-addr="$SUBNET.$(( 10 + n ))"
-ip addr show dev "$NIC" | grep -q "$addr/" || ip addr add "$addr/$PREFIX" dev "$NIC"
+    case $NIC in
+        rocm-ernic*) ;;
+        *) echo "warning: $NIC was not renamed by 99-rocm-ernic.rules;" \
+                "check that the rules match all four of $(want_tuple)" >&2 ;;
+    esac
 
-# The RDMA exporter reads ports/*/counters; the emulated device only exposes
-# hw_counters. Walked through the NIC's own PCI device rather than globbed as
-# rocm-rdma-ernic*, so it works on a guest whose IB rename did not fire -- the
-# published qcow2 is one such guest (AGENTS.md, udev section).
-for d in "$SYSFS/class/net/$NIC/device/infiniband"/*/ports/*/; do
-    [ -d "$d/hw_counters" ] || continue
-    [ -e "$d/counters" ] && continue
-    ln -s hw_counters "$d/counters"
-done
+    mac=$(cat "$SYSFS/class/net/$NIC/address")
+    # Each NIC carries its own index: gen-compose numbers ernics FLAT across
+    # the fleet, so guest n's two devices are 2n-1 and 2n and their addresses
+    # follow from their own MACs. Deriving one index per guest would give both
+    # NICs the same address.
+    n=$(( 0x${mac:12:2} * 256 + 0x${mac:15:2} ))
+    if [ "$n" -le 0 ]; then
+        echo "refusing index 0 from MAC $mac on $NIC" >&2
+        rc=1
+        continue
+    fi
 
-hostnamectl set-hostname "ernic-vm-$n" 2>/dev/null || true
-echo "configured $NIC as $addr (index $n)"
+    ip link set "$NIC" up
+    addr="$SUBNET.$(( 10 + n ))"
+    ip addr show dev "$NIC" | grep -q "$addr/" || ip addr add "$addr/$PREFIX" dev "$NIC"
+
+    # The RDMA exporter reads ports/*/counters; the emulated device only
+    # exposes hw_counters. Walked through the NIC's own PCI device rather than
+    # globbed as rocm-rdma-ernic*, so it works on a guest whose IB rename did
+    # not fire -- the published qcow2 is one such guest (AGENTS.md, udev
+    # section).
+    for d in "$SYSFS/class/net/$NIC/device/infiniband"/*/ports/*/; do
+        [ -d "$d/hw_counters" ] || continue
+        [ -e "$d/counters" ] && continue
+        ln -s hw_counters "$d/counters"
+    done
+
+    if [ "$first" = 1 ]; then
+        hostnamectl set-hostname "ernic-vm-$n" 2>/dev/null || true
+        first=0
+    fi
+    echo "configured $NIC as $addr (index $n)"
+done <<EOF
+$NICS
+EOF
+
+exit $rc

@@ -13,6 +13,22 @@
     group: root
     mode: "0644"
 
+# copy does not create the parent, and a stock Ubuntu cloud image has
+# /etc/systemd/system.conf.d but NOT /etc/systemd/user.conf.d -- nothing has
+# needed a user-manager drop-in yet. So the loop below succeeded on the first
+# item and failed on the second with "Destination directory ... does not
+# exist", half-applying the limit: system units got infinity and the
+# `systemd-run --user` perftest servers, which are the ones that actually
+# needed it, did not.
+- name: Ensure the systemd drop-in directories exist
+  ansible.builtin.file:
+    path: "/etc/systemd/{{ item }}.conf.d"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop: [system, user]
+
 - name: Allow unlimited locked memory for systemd units
   # Both managers. The perftest servers run as `systemd-run --user` units and
   # inherit the user manager's limits, so the system drop-in alone leaves

@@ -42,14 +42,37 @@
 # `udevadm info -a` on a netdev does not print these rows -- only the parent
 # walk shows them -- so "absent from udevadm info -a" is not evidence the
 # attribute is missing.
+#
+# The index comes from a free-index search, not from %n. %n is the kernel
+# number -- the trailing digits of the sysname -- and BOTH emulated NICs on a
+# two-NIC guest are "...np0", so %n is 0 for both and the second rename fails
+# with the name already in use. That cost nothing while every fleet had one
+# NIC per guest; ERNIC_PER_VM=2 is what made it reachable.
+#
+# This is the same fix the InfiniBand stanza below already carries, for the
+# same reason -- see the note there about an earlier version hard-coding
+# rocm-rdma-ernic0. The two stanzas should keep matching shapes.
+#
+# $$ throughout: udev reads a bare $ as the start of its own substitution, so
+# a shell variable has to be written doubled.
+#
+# KERNEL!= makes it idempotent. udev refuses to rename an interface that has
+# already been renamed, so without the guard a re-triggered event would
+# compute the NEXT free index for an already-correct device and log a failed
+# rename -- harmless, but it reads like the bug this rule exists to prevent.
 
-SUBSYSTEM=="net", ACTION=="add", \
+SUBSYSTEM=="net", ACTION=="add", KERNEL!="rocm-ernic*", \
   ATTR{device/vendor}=="0x1dd8", \
   ATTR{device/device}=="0x1002", \
   ATTR{device/subsystem_vendor}=="0x1dd8", \
   ATTR{device/subsystem_device}=="0x5400", \
   DRIVERS=="ionic", \
-  NAME="rocm-ernic%n"
+  PROGRAM="/bin/sh -c 'i=0; \
+    while [ -e /sys/class/net/rocm-ernic$$i ]; do \
+      i=$$((i+1)); \
+    done; \
+    echo rocm-ernic$$i'", \
+  NAME="%c"
 
 # --- InfiniBand device naming ---
 #

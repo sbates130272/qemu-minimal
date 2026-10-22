@@ -25,6 +25,7 @@ from .gen_compose import run as gen_compose_run
 from .gen_vm import run as gen_vm_run
 from .libvirt_xml import LibvirtXml
 from .inspect import run as inspect_run
+from .inspect import ssh_run as inspect_ssh_run
 from .list_vms import run as list_vms_run
 from .run_vm import build_command, run as run_vm_run
 from . import summary
@@ -126,6 +127,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_lmcache_stats(sub)
     _add_list(sub)
     _add_inspect(sub)
+    _add_ssh(sub)
     _add_man(sub)
 
     return parser
@@ -459,6 +461,10 @@ def _add_inspect(sub: argparse._SubParsersAction) -> None:
         ),
     )
     p.add_argument(
+        "vm", nargs="?", default=None, metavar="VM",
+        help="VM to inspect. Same as --vm-name, which still works.",
+    )
+    p.add_argument(
         "--vm-name", default=None, metavar="NAME",
         help="Filter to a single VM by name. Default: all running VMs.",
     )
@@ -474,6 +480,48 @@ def _add_inspect(sub: argparse._SubParsersAction) -> None:
         help="Emit JSON instead of human-readable output.",
     )
     p.set_defaults(func=_inspect_cmd)
+
+
+def _add_ssh(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser(
+        "ssh",
+        help="SSH into a running VM.",
+        description=(
+            "Open an SSH session to a running VM, resolving the port, "
+            "username and key the same way `inspect` reports them -- the "
+            "username from the image's own sidecar, and an identity only "
+            "when the guest accepts a key whose private half is on this "
+            "host. Host-key checking is off by default because guests "
+            "sharing a backing image share a host key and the fleet reuses "
+            "localhost ports. "
+            "Everything after the VM name is passed to ssh, so this tool's "
+            "own options go BEFORE it -- `qemu-tool ssh --dry-run vm1`, the "
+            "same order ssh(1) and docker exec take. "
+            "Run a remote command with `qemu-tool ssh vm1 -- uptime`."
+        ),
+    )
+    p.add_argument("vm", metavar="VM", help="Name of the running VM.")
+    p.add_argument(
+        "--env-file", action="append", type=Path, default=None, metavar="FILE",
+        help="Settings file. Repeatable; later files win.",
+    )
+    p.add_argument(
+        "--strict-host-key", action="store_true",
+        help=(
+            "Keep ssh's own host-key checking. Off by default: every guest "
+            "from one backing image has the same host key, so strict "
+            "checking fails as a matter of course."
+        ),
+    )
+    p.add_argument(
+        "--dry-run", action="store_true",
+        help="Print the ssh command instead of running it.",
+    )
+    p.add_argument(
+        "ssh_args", nargs=argparse.REMAINDER, metavar="...",
+        help="Remaining arguments, passed through to ssh (e.g. a command).",
+    )
+    p.set_defaults(func=_ssh_cmd)
 
 
 def _add_man(sub: argparse._SubParsersAction) -> None:
@@ -578,7 +626,41 @@ def _compose_cmd(args: argparse.Namespace) -> None:
 
 
 def _inspect_cmd(args: argparse.Namespace) -> None:
-    inspect_run(args.vm_name, args.env_file, as_json=args.as_json)
+    inspect_run(_one_vm_name(args), args.env_file, as_json=args.as_json)
+
+
+def _one_vm_name(args: argparse.Namespace) -> str | None:
+    """The VM named positionally, by --vm-name, or neither.
+
+    Both spellings are accepted because --vm-name is what every other
+    subcommand takes, and a bare name is what you reach for. Giving both and
+    disagreeing is a typo, not an intent, so it is an error rather than a
+    silent precedence rule nobody can remember.
+    """
+    positional = getattr(args, "vm", None)
+    flagged = getattr(args, "vm_name", None)
+    if positional and flagged and positional != flagged:
+        raise SystemExit(
+            f"Error: VM named twice and differently: {positional!r} "
+            f"positionally, {flagged!r} via --vm-name."
+        )
+    return positional or flagged
+
+
+def _ssh_cmd(args: argparse.Namespace) -> None:
+    # argparse consumes the first "--" itself, so this is usually a no-op.
+    # Defensive because when a separator does survive, ssh passes it to the
+    # guest's shell as a literal argument and the command fails somewhere
+    # that does not mention the separator.
+    extra = list(args.ssh_args)
+    if extra and extra[0] == "--":
+        extra = extra[1:]
+    inspect_ssh_run(
+        args.vm, args.env_file,
+        strict_host_key=args.strict_host_key,
+        extra=extra,
+        dry_run=args.dry_run,
+    )
 
 
 def _man_cmd(args: argparse.Namespace) -> None:
