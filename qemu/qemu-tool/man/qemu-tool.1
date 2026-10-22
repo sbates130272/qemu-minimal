@@ -4,7 +4,7 @@ qemu\-tool \- run, generate and list QEMU virtual machines
 .SH SYNOPSIS
 .B qemu\-tool
 .RB [ \-\-version ]
-.I {run\-vm,gen\-vm,gen\-compose,compose,ernic\-stats,lmcache\-stats,list,inspect,ssh,man}
+.I {run\-vm,gen\-vm,gen\-compose,compose,ernic\-stats,lmcache\-stats,list,inspect,ssh,shutdown,man}
 .RI [ options ]
 .SH DESCRIPTION
 .B qemu\-tool
@@ -990,6 +990,43 @@ To run a remote command, separate it with
 .EX
 qemu\-tool ssh stebates\-fleet\-1 \-\- ibv_devinfo \-l
 .EE
+.SH SHUTDOWN OPTIONS
+Asks each running guest to power off through the QEMU guest agent, then waits
+for it to go.
+.PP
+This exists because stopping the container does not stop the guest.
+.B run\-vm
+execs QEMU, so PID 1 in a qemu container
+.I is
+.BR qemu\-system\-x86_64 ,
+and QEMU exits on
+.B SIGTERM
+rather than ACPI\-shutting\-down the guest. A
+.B docker compose down
+is therefore a power cut: guest filesystems are left needing journal replay,
+and on a 32\-guest fleet one came back with an aborted journal and a root
+remounted read\-only. Raising
+.B stop_grace_period
+alone does not help, because nothing has asked the guest to stop \(em it only
+makes Docker wait longer before the kill. Run this first, then
+.BR down .
+.PP
+The guest agent is used rather than QMP because every guest already has one:
+.B run\-vm
+wires a virtserialport unconditionally, while QMP is opt\-in and off by
+default.
+.TP
+.I VM
+One VM to shut down. Default: every running VM.
+.TP
+.BI \-\-timeout " SECONDS"
+How long to wait for guests to power off. Default: 120. Exceeding it warns and
+names the guests still running rather than failing \(em the caller's next step
+is to stop the containers regardless, and knowing which were not clean is more
+use than a refusal.
+.TP
+.B \-\-dry\-run
+List what would be shut down and exit.
 .SH VM IDENTIFICATION
 .B qemu\-tool
 stamps every VM it launches with two generic QEMU options:

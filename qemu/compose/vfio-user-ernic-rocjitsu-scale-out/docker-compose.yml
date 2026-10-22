@@ -34,6 +34,7 @@ x-qemu-common: &qemu-common
     - "${QEMU_TOOL_SRC:-../../..}:/qemu-tool-src:ro"
   devices:
     - /dev/kvm
+  stop_grace_period: 120s
   restart: "no"
 
 services:

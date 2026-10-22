@@ -76,6 +76,9 @@ _DEFAULTS = {
     "ERNIC_MAC_PREFIX": "72:6f:63:6d",
     "ERNIC_GUEST_SUBNET": "192.168.100",
     "ERNIC_TCP_PORT": "6320",
+    # Long enough for a guest asked to power off to finish. See the
+    # comment where it is emitted.
+    "STOP_GRACE_PERIOD": "120s",
     "ERNIC_STATS_PORT": "9840",
     "ERNIC_NOFILE": "65536",
     "ERNIC_TAP": "false",
@@ -705,6 +708,7 @@ def plan(values: dict[str, str]) -> dict[str, Any]:
         "stats_port": _get(values, "ERNIC_STATS_PORT"),
         "ernic_nofile": _get(values, "ERNIC_NOFILE"),
         "ernic_tap": _flag(values, "ERNIC_TAP"),
+        "stop_grace_period": _get(values, "STOP_GRACE_PERIOD"),
         "log_max_size": _get(values, "LOG_MAX_SIZE"),
         "log_max_file": _get(values, "LOG_MAX_FILE"),
         "prom_data_dir": _get(values, "PROM_DATA_DIR"),
@@ -889,6 +893,13 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
         out.append(f"  user: {_USER_REF}")
         out.append("  group_add:")
         out.append(f"    - {_KVM_GID_REF}")
+    # Docker's default is 10 s, then SIGKILL. QEMU is PID 1 here (run_vm
+    # execs it) and exits on SIGTERM without ACPI-shutting-down the guest, so
+    # a stop is a power cut however long the grace period is -- that is what
+    # `qemu-tool shutdown` exists to fix. This buys the guest time to finish
+    # powering off when something DOES ask it to, and stops a guest that is
+    # mid-flush being killed partway.
+    out.append(f"  stop_grace_period: {spec['stop_grace_period']}")
     out.append('  restart: "no"')
     out.append("")
     out.append("services:")

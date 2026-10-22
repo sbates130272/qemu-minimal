@@ -26,6 +26,7 @@ from .gen_vm import run as gen_vm_run
 from .libvirt_xml import LibvirtXml
 from .inspect import run as inspect_run
 from .inspect import ssh_run as inspect_ssh_run
+from .shutdown import run as shutdown_run
 from .list_vms import run as list_vms_run
 from .run_vm import build_command, run as run_vm_run
 from . import summary
@@ -128,6 +129,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_list(sub)
     _add_inspect(sub)
     _add_ssh(sub)
+    _add_shutdown(sub)
     _add_man(sub)
 
     return parser
@@ -524,6 +526,35 @@ def _add_ssh(sub: argparse._SubParsersAction) -> None:
     p.set_defaults(func=_ssh_cmd)
 
 
+def _add_shutdown(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser(
+        "shutdown",
+        help="Cleanly power off running VMs before stopping their containers.",
+        description=(
+            "Ask each running guest to power off through the QEMU guest "
+            "agent, then wait for it to go. run-vm execs QEMU, so PID 1 in a "
+            "qemu container IS qemu-system-x86_64 -- and QEMU exits on "
+            "SIGTERM rather than ACPI-shutting-down the guest. `docker "
+            "compose down` is therefore a power cut, which leaves guest "
+            "filesystems needing journal replay and has been observed to "
+            "abort one outright. Run this first."
+        ),
+    )
+    p.add_argument(
+        "vm", nargs="?", default=None, metavar="VM",
+        help="One VM to shut down. Default: every running VM.",
+    )
+    p.add_argument(
+        "--timeout", type=int, default=120, metavar="SECONDS",
+        help="How long to wait for guests to power off. Default: 120.",
+    )
+    p.add_argument(
+        "--dry-run", action="store_true",
+        help="List what would be shut down and exit.",
+    )
+    p.set_defaults(func=_shutdown_cmd)
+
+
 def _add_man(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
         "man",
@@ -661,6 +692,10 @@ def _ssh_cmd(args: argparse.Namespace) -> None:
         extra=extra,
         dry_run=args.dry_run,
     )
+
+
+def _shutdown_cmd(args: argparse.Namespace) -> None:
+    shutdown_run(args.vm, timeout=args.timeout, dry_run=args.dry_run)
 
 
 def _man_cmd(args: argparse.Namespace) -> None:
