@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
   "label": "GEMM",
-  "message": "717 kFLOP/s",
+  "message": "478 kFLOP/s",
   "color": "ED1C24"
 }
