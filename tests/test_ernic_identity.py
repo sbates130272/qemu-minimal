@@ -497,6 +497,32 @@ class PciIdsParseTest(unittest.TestCase):
     def setUp(self):
         _require(shutil.which("lspci") is not None, "lspci (package: pciutils)")
 
+    def _requires_a_strict_lspci(self):
+        """Skip the refusal cases on an lspci that accepts a malformed file.
+
+        The four parse rules in AGENTS.md were measured on pciutils 3.10 and
+        3.14, both of which exit 1 on a duplicate entry and resolve no names
+        at all afterwards. That is not universal: a GitHub runner's lspci
+        returned 0 for the same duplicate, which turned three of these into
+        failures on every PR for a change that touched none of this.
+
+        The positive case stays strict, because that is the property this
+        repo depends on -- the role builds the merged file beside the real
+        one and validates it with `lspci -i` before installing. What a
+        DIFFERENT pciutils does with a malformed file is upstream behaviour
+        we neither control nor ship, so it is reported and skipped rather
+        than asserted. Worth knowing when it happens: on such a host that
+        validation step is weaker than AGENTS.md describes.
+        """
+        duplicate = self.GOOD + ["\t1002  DSC Ethernet Controller"]
+        if self._parse(duplicate) == 0:
+            version = subprocess.run(
+                ["lspci", "--version"], capture_output=True, text=True
+            ).stdout.strip() or "unknown"
+            self.skipTest(
+                f"this lspci accepts a duplicate entry ({version}); the "
+                "role's `lspci -i` validation cannot catch one here")
+
     def _parse(self, lines: list[str]) -> int:
         d = Path(tempfile.mkdtemp(prefix="pciids-parse-"))
         self.addCleanup(shutil.rmtree, d, ignore_errors=True)
@@ -516,14 +542,17 @@ class PciIdsParseTest(unittest.TestCase):
         self.assertEqual(self._parse(self.GOOD), 0)
 
     def test_duplicate_device_is_refused(self):
+        self._requires_a_strict_lspci()
         self.assertNotEqual(self._parse(self.GOOD + ["\t1002  DSC Ethernet Controller"]), 0)
 
     def test_subsystem_without_a_device_is_refused(self):
+        self._requires_a_strict_lspci()
         self.assertNotEqual(
             self._parse(["1dd8  AMD Pensando Systems", "\t\t1dd8 5400  ROCm Emulated RDMA NIC"]), 0
         )
 
     def test_spaces_instead_of_tabs_are_refused(self):
+        self._requires_a_strict_lspci()
         self.assertNotEqual(
             self._parse([
                 "1dd8  AMD Pensando Systems",

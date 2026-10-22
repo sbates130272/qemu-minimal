@@ -359,8 +359,8 @@ exactly that shape, and its presence check asks for the **subsystem** line: a
 check that stopped at the device would see upstream's `1002`, skip forever,
 and never write the one line that is ours.
 
-Four parse rules, measured against pciutils 3.14 on a fleet guest rather than
-assumed, and pinned by `tests/test_ernic_identity.py`:
+Four parse rules, measured against pciutils 3.14 on a fleet guest and 3.10 on
+the dev host rather than assumed, and pinned by `tests/test_ernic_identity.py`:
 
 | Input | Result |
 |---|---|
@@ -368,6 +368,16 @@ assumed, and pinned by `tests/test_ernic_identity.py`:
 | duplicate at any level | `lspci: Duplicate entry at <file>, line N`, rc 1 |
 | subsystem line with no device line above it | `lspci: Parse error`, rc 1 |
 | spaces instead of tabs | `lspci: Parse error`, rc 1 |
+
+**The three refusals are version-dependent, and only the first row is a
+property to rely on.** A GitHub runner's `lspci` returned 0 for the duplicate
+case, which turned those three assertions red on a PR that touched none of
+this. The test now probes the local `lspci` and skips the refusal cases,
+naming the version, when it accepts a malformed file — and that skip is worth
+reading, because on such a host `ionic_image_prep`'s "validate the merged
+file with `lspci -i` before installing it" step cannot catch a duplicate. The
+positive row stays asserted everywhere: it is the behaviour this repo
+depends on.
 
 A failure is never local to the entry — after any of those, `lspci` resolves
 no names for *any* device on the bus:
