@@ -51,7 +51,15 @@ jobs:
           staging=$(mktemp -d)
 
           # Port 1 has nothing listening, so every collect() takes its fallback.
-          for path in 1vm rocjitsu ernic ernic/vm2 hipfile-fio; do
+          #
+          # This list must carry one entry per REPORTS entry in
+          # scripts/render-site-perf.py, because the assertion below is that
+          # freshly generated pass-stamped reports read as GREEN -- and green
+          # requires every REPORTS entry to be present. Adding a lane to
+          # REPORTS without adding it here fails this step with "freshly
+          # generated pass-stamped reports did not read as green", which
+          # names the symptom and not this loop.
+          for path in 1vm rocjitsu ernic ernic/vm2 hipfile-fio mi355x; do
             scripts/generate-vm-report.sh "${staging}/${path}" 1 nobody >/dev/null
           done
 
