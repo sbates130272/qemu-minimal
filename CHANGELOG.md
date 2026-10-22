@@ -6,6 +6,47 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **A playbook that bakes the ionic SRQ stack into a guest image**,
+  `ansible/playbooks/vm-ernic-srq.yml`. Stock v7.2.4 has no SRQ in
+  `drivers/infiniband/hw/ionic`, and no rdma-core release — nor master — has
+  `create_srq` in `providers/ionic`, so a guest built from either reports
+  `max_srq = 0`. UCX then declines `rc_verbs` and offers only `ud_verbs`: no
+  one-sided RDMA. Measured, NIXL at **0.064 GB/s** against MORI_IO's
+  **0.355** at 1 MiB on a device where `ib_write_bw` reaches **594 MB/s**,
+  and nothing in that failure names SRQ.
+
+  rocm-ernic already carries both halves — `patches/srq` for the kernel
+  driver, `patches/rdma-core` for the provider — and this repo already pins
+  that collection. What was missing was a way to apply them to an **image**
+  rather than to a running fleet: `srq_driver.yml` does the kernel half only,
+  inside `lmcache_guest`, because the provider that creates the SRQ there
+  lives in a container.
+
+  Three things differ from the fleet path, each only sensible at build time:
+  no module reload (nothing is attached to reload for, and `rmmod ionic` on
+  the emulated device can hang on a DSR timeout and take the build with it);
+  the kernel pin is asserted rather than warned about; and the artefact is
+  checked with `nm` rather than `strings`, because `strings ionic_rdma.ko |
+  grep -i srq` returns a dozen BTF hits on a module with no SRQ support and
+  zero on a build without BTF — a difference that is not there.
+
+  Both halves or neither: with only the kernel one the device advertises an
+  SRQ and `ibv_create_srq()` returns `EOPNOTSUPP`, which is a more confusing
+  guest than one that never claimed to do SRQ. It is deliberately not run
+  from `gen-vm --ansible-playbook`, which happens before a consumer installs
+  its pinned kernel.
+
+- **SRQ detection is checked on every PR**, in `tests/test_srq_detection.py`,
+  44 ms. The capability itself needs a booted guest, so these cover what
+  fails silently instead: the detection pipeline is lifted out of
+  `srq_driver.yml` *by pattern* and run against real `ibv_devinfo` shapes, so
+  editing the role without editing the test fails here; and
+  `ernic_srq_dkms_reload` is asserted on, because upstream defaults it false,
+  which installs the modules while the running kernel keeps the old ones —
+  indistinguishable from never building, since `max_srq` stays 0. Before
+  this, SRQ was exercised only by `report-for-lmcache`: weekly, behind an
+  11 GB container build, and red at the time.
+
 - **`qemu-tool man`, because only the `.deb` ever put the page on
   `MANPATH`.** The manual ships as package data in the wheel, and neither
   pipx nor uv has any mechanism for installing a man page — measured, not
@@ -614,10 +655,48 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **`report-for-lmcache` ran to the end for the first time**, after four
+  distinct faults, none of which was the one the lane's comments assumed.
+  It had been red for over a week and never reached the assertion it exists
+  for.
+
+  The last of them was the cause: the lane's QEMU containers were installing
+  qemu-tool **from PyPI**. The generated entrypoint builds from
+  `/qemu-tool-src` when a `pyproject.toml` is there and falls back to the
+  release otherwise, and this lane set `QEMU_TOOL_SRC` nowhere — so every
+  guest container died on
+
+      qemu-tool: error: unrecognized arguments: --vfio-user-root-port
+
+  because released 1.4.1 has never heard of that flag, which this stack has
+  passed all along. `scripts/quickstart-2vm.sh` has copied the package beside
+  the stack since #188, which is why the quickstart lane survived the same
+  flag.
+
+  Before that could be seen, three others had to go: the lane addressed
+  guests by compose **service name**, which cannot resolve from a container
+  joined to the network after it was created, so it now uses the generator's
+  fixed addresses the way `--in-network` does; the Ansible inventory took its
+  `ansible_user` from the settings layers rather than the image; and the
+  report step used `${GITHUB_SHA:0:7}`, a bash substring expansion, under
+  `dash`.
+
+  The run that found the real cause did so because the step finally printed
+  what it saw — the network it joined, this container's addresses, and the
+  network's members, which listed every service **except** the two guests.
+  `No route to host` was exactly true. One diagnostic attempt had to be
+  thrown away first: it used `ip(8)`, which that image does not have, and so
+  killed the step it was meant to explain.
+
+  End to end afterwards: both guests up, Ansible configured, the SRQ driver
+  built and reloaded, and `RDMA_DELTA: 16777216` — the exact figure the mesh
+  assertion wants, so NIXL used RDMA rather than falling back to TCP.
+
 - **The guest account comes from the image's own manifest, not from a
   settings file that guesses it.** Setting `VM_USERNAME=ubuntu` in the golden
-  file (above) turned `report-for-quickstart` and `report-for-lmcache` red the
-  hour it merged: the published qcow2 is built with `batesste`, so every SSH
+  file (above) turned `report-for-quickstart` red the hour it merged
+  (`report-for-lmcache` was already red for an unrelated reason, below): the
+  published qcow2 is built with `batesste`, so every SSH
   went to an account that does not exist there. The guests were entirely
   healthy, and the symptom was `guest 1 did not answer SSH` after ten minutes
   of retries — which says nothing about the account.
