@@ -84,12 +84,19 @@ VM_PCI_HOLE64_SIZE=512G
 # Verify a candidate with `-device help | grep pci-mmio-bridge`, present only
 # in fork builds, and /build/qemu-commit.txt.
 #
-# All four share the 20261014.geea0485 stamp, and the qemu/ernic pair share
+# All four share the 20261021.g0f1f43f stamp, and the qemu/ernic pair share
 # vfu.8039244 -- gen-compose refuses a set that does not.
-QEMU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:20261014.geea0485-qemu.31e3d06-vfu.8039244
-ERNIC_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261014.geea0485-ernic.3fb74d1-vfu.8039244
-ROCJITSU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261014.geea0485-rocjitsu.84fb06b
-VM_BACKING_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu:20261014.geea0485-vm.resolute-ernic-rocjitsu-qm.c5d51ce-qcow2
+#
+# The fork build here is qemu.aa4344e, NOT the qemu.31e3d06 named above, and
+# aa4344e is not a descendant of it -- the branch was rebased, so the two
+# have diverged (106 ahead, 12 behind). Do not reason about this from the
+# tag. Checked against the tree instead: the patch is present as 5de56a3,
+# same subject, and `-device help` lists pci-mmio-bridge, which only fork
+# builds have. A future tag needs the same check, not this sentence.
+QEMU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:20261021.g0f1f43f-qemu.aa4344e-vfu.8039244
+ERNIC_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261021.g0f1f43f-ernic.31d3114-vfu.8039244
+ROCJITSU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261021.g0f1f43f-rocjitsu.84fb06b
+VM_BACKING_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu:20261021.g0f1f43f-vm.resolute-ernic-rocjitsu-qm.b4eb552-qcow2
 
 # ---------------------------------------------------------------------------
 # Guest login
