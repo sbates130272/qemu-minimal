@@ -5,7 +5,7 @@
 #   qemu-tool gen-compose --env-file qemu/env/mi355x-node
 #
 # env-file: qemu/env/mi355x-node
-# env-sha256: 775ff2539128ec2ac59c1172d83bbe85653cdfa2d25e157b70988a8db52f6098
+# env-sha256: d6f477dc6a06933384d232ad1efc8780e2e78bec96a4269667dd32c0e2ca5ca2
 
 x-logging: &logging
   driver: json-file
@@ -1832,6 +1832,7 @@ services:
           --pci-hole64-size "512G" \
           --vcpus "8" \
           --vmem "16384" \
+          --nvme "2" \
           --extra-hostfwd "tcp::9100-:9100" \
           --vfio-userdev "/run/vfu/ernic-1-1.sock,/run/vfu/rocjitsu-1-1.sock,/run/vfu/ernic-1-2.sock,/run/vfu/rocjitsu-1-2.sock,/run/vfu/ernic-1-3.sock,/run/vfu/rocjitsu-1-3.sock,/run/vfu/ernic-1-4.sock,/run/vfu/rocjitsu-1-4.sock,/run/vfu/ernic-1-5.sock,/run/vfu/rocjitsu-1-5.sock,/run/vfu/ernic-1-6.sock,/run/vfu/rocjitsu-1-6.sock,/run/vfu/ernic-1-7.sock,/run/vfu/rocjitsu-1-7.sock,/run/vfu/ernic-1-8.sock,/run/vfu/rocjitsu-1-8.sock"
 
@@ -1905,6 +1906,7 @@ services:
           --pci-hole64-size "512G" \
           --vcpus "8" \
           --vmem "16384" \
+          --nvme "2" \
           --extra-hostfwd "tcp::9100-:9100" \
           --vfio-userdev "/run/vfu/ernic-2-1.sock,/run/vfu/rocjitsu-2-1.sock,/run/vfu/ernic-2-2.sock,/run/vfu/rocjitsu-2-2.sock,/run/vfu/ernic-2-3.sock,/run/vfu/rocjitsu-2-3.sock,/run/vfu/ernic-2-4.sock,/run/vfu/rocjitsu-2-4.sock,/run/vfu/ernic-2-5.sock,/run/vfu/rocjitsu-2-5.sock,/run/vfu/ernic-2-6.sock,/run/vfu/rocjitsu-2-6.sock,/run/vfu/ernic-2-7.sock,/run/vfu/rocjitsu-2-7.sock,/run/vfu/ernic-2-8.sock,/run/vfu/rocjitsu-2-8.sock"
 
@@ -1978,6 +1980,7 @@ services:
           --pci-hole64-size "512G" \
           --vcpus "8" \
           --vmem "16384" \
+          --nvme "2" \
           --extra-hostfwd "tcp::9100-:9100" \
           --vfio-userdev "/run/vfu/ernic-3-1.sock,/run/vfu/rocjitsu-3-1.sock,/run/vfu/ernic-3-2.sock,/run/vfu/rocjitsu-3-2.sock,/run/vfu/ernic-3-3.sock,/run/vfu/rocjitsu-3-3.sock,/run/vfu/ernic-3-4.sock,/run/vfu/rocjitsu-3-4.sock,/run/vfu/ernic-3-5.sock,/run/vfu/rocjitsu-3-5.sock,/run/vfu/ernic-3-6.sock,/run/vfu/rocjitsu-3-6.sock,/run/vfu/ernic-3-7.sock,/run/vfu/rocjitsu-3-7.sock,/run/vfu/ernic-3-8.sock,/run/vfu/rocjitsu-3-8.sock"
 
@@ -2051,6 +2054,7 @@ services:
           --pci-hole64-size "512G" \
           --vcpus "8" \
           --vmem "16384" \
+          --nvme "2" \
           --extra-hostfwd "tcp::9100-:9100" \
           --vfio-userdev "/run/vfu/ernic-4-1.sock,/run/vfu/rocjitsu-4-1.sock,/run/vfu/ernic-4-2.sock,/run/vfu/rocjitsu-4-2.sock,/run/vfu/ernic-4-3.sock,/run/vfu/rocjitsu-4-3.sock,/run/vfu/ernic-4-4.sock,/run/vfu/rocjitsu-4-4.sock,/run/vfu/ernic-4-5.sock,/run/vfu/rocjitsu-4-5.sock,/run/vfu/ernic-4-6.sock,/run/vfu/rocjitsu-4-6.sock,/run/vfu/ernic-4-7.sock,/run/vfu/rocjitsu-4-7.sock,/run/vfu/ernic-4-8.sock,/run/vfu/rocjitsu-4-8.sock"
 

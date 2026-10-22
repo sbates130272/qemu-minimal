@@ -929,11 +929,25 @@ badge to the README's report row. Miss the third and the lane publishes
 nothing until some *other* lane finishes, which looks like the site being
 stale rather than a missing trigger. Miss the fifth and the lane is invisible
 on the front page — which is how report-for-lmcache shipped without one, this
-list having said "four" at the time. There are six lanes now; the sixth,
-report-for-quickstart, is also the only one that *executes the README* —
-it runs `scripts/quickstart-2vm.sh`, the same script the Quick Start tells a
-reader to run, so a change that breaks the documented path turns that lane
-red rather than being discovered by the next person to follow it.
+list having said "four" at the time. There are seven lanes now. Two of them
+run a *script a human is told to run* rather than a copy of its steps:
+report-for-quickstart runs `scripts/quickstart-2vm.sh`, the same script the
+README's Quick Start names, and report-for-mi355x runs
+`scripts/mi355x-node.sh`, the one the MI355X stack's README names. A change
+that breaks either documented path turns that lane red rather than being
+discovered by the next person to follow it.
+
+report-for-mi355x is the only lane whose point is a *shape* rather than a
+result. `gen-compose --check` already proves the render is byte-identical,
+and that says nothing about the tree the guest enumerates — a flat PCIe tree
+boots exactly as happily as a switched one and nothing in the guest
+complains. So the lane asks the guest, and the report publishes its
+`lspci -tv`. It runs ONE VM where the lab stack is four (a runner has 4
+cores against the stack's 32) but reduces nothing about the topology, since
+a lane that quietly halved the devices would publish a green report about a
+shape nobody runs. The corollary is that its RDMA figure is a *loopback*
+run: with one guest there is no second node, so it proves the verbs, never
+the mesh.
 
 A badge for a lane that does NOT run on every push to main wants no
 `?branch=main`: shields pins that query to main's latest run, and a weekly

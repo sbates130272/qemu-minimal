@@ -116,6 +116,21 @@ stack**, not something a 32-core workstation runs.
 
 ## Bringing it up
 
+The short way, which is also what CI runs — `scripts/mi355x-node.sh` fetches
+the guest keypair from the qcow2's OCI referrer, makes the overlays, renders
+the stack and brings it up, then makes the guest test-ready and checks the
+shape:
+
+```bash
+scripts/mi355x-node.sh up
+scripts/mi355x-node.sh test --report-dir /tmp/mi355x-report
+scripts/mi355x-node.sh down
+```
+
+It defaults to `qemu/env/overlay-mi355x-ci`, which is **one** guest sized for
+a CI runner. Pass `--overlay` with your own delta for a full four-VM lab run,
+or drive the steps by hand:
+
 ```bash
 qemu-tool gen-vm --env-file qemu/env/mi355x-node \
     --vm-name stebates-mi355x-1 --backing-image "$VM_BACKING_IMAGE"

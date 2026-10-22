@@ -130,17 +130,55 @@ jobs:
       # the mi100 overlay has no lane at all. A key renamed in the golden
       # would sit broken in an overlay until someone ran a fleet. Render each
       # committed overlay on top of the golden and validate the result.
+      #
+      # Each overlay is paired with the golden file it is a delta OF, rather
+      # than every overlay being assumed to sit on scale-out: overlay-mi355x-ci
+      # layers on qemu/env/mi355x-node, and rendering it against the wrong
+      # golden would validate a stack nobody runs while leaving the real one
+      # unchecked. --stack matters for the same reason it does elsewhere --
+      # it is what the asset mirror reads FROM.
       - name: Committed overlays render and validate
         run: |
-          for overlay in qemu/env/overlay-ci qemu/env/overlay-mi100; do
+          for pair in \
+            vfio-user-ernic-rocjitsu-scale-out:qemu/env/scale-out:qemu/env/overlay-ci \
+            vfio-user-ernic-rocjitsu-scale-out:qemu/env/scale-out:qemu/env/overlay-mi100 \
+            vfio-user-mi355x-node:qemu/env/mi355x-node:qemu/env/overlay-mi355x-ci; do
+            stack=${pair%%:*}; rest=${pair#*:}
+            golden=${rest%%:*}; overlay=${rest#*:}
             dir="/tmp/stack-$(basename "$overlay")"
             mkdir -p "$dir"
-            python3 -m qemu_tool gen-compose \
-              --env-file qemu/env/scale-out --env-file "$overlay" \
+            python3 -m qemu_tool gen-compose --stack "$stack" \
+              --env-file "$golden" --env-file "$overlay" \
               --output-dir "$dir"
             docker compose --project-directory "$dir" \
-              --env-file qemu/env/scale-out --env-file "$overlay" config -q
+              --env-file "$golden" --env-file "$overlay" config -q
           done
+
+      # The MI355X CI overlay exists to shrink the FLEET and the guest, never
+      # the topology: a lane that quietly halved the devices would publish a
+      # green report about a shape nobody runs. Assert the reduced render
+      # still carries the full switch wiring, because that is exactly the
+      # property a well-meaning "make CI faster" edit would drop.
+      - name: The MI355X CI overlay reduces the fleet, not the topology
+        run: |
+          set -eu
+          dir=/tmp/stack-overlay-mi355x-ci
+          grep -q -- '--vfio-user-switch-width 2' "$dir/docker-compose.yml" \
+            || { echo "::error::the CI overlay lost --vfio-user-switch-width"; exit 1; }
+          for s in ernic-1-8 rocjitsu-1-8; do
+            docker compose --project-directory "$dir" \
+              --env-file qemu/env/mi355x-node \
+              --env-file qemu/env/overlay-mi355x-ci config --services \
+              | grep -qx "$s" \
+              || { echo "::error::$s missing: the overlay reduced the device count"; exit 1; }
+          done
+          # One VM, though: that part IS meant to shrink.
+          docker compose --project-directory "$dir" \
+            --env-file qemu/env/mi355x-node \
+            --env-file qemu/env/overlay-mi355x-ci config --services \
+            | grep -qx qemu-2 \
+            && { echo "::error::the CI overlay rendered more than one VM"; exit 1; }
+          echo "topology intact, fleet reduced to one VM"
 
       # ERNIC_TAP has two shapes and the golden sets it to true, so every
       # render above covers the tap one: the tap path's extra network,

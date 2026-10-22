@@ -122,6 +122,22 @@ VM_SHM_SIZE=16g
 
 ROCJITSU_CONFIG=gfx1250_mi455x.json
 
+# Two local NVMe per guest, where scale-out and quickstart each take one.
+# A node shaped like an MI355X has local storage as well as a PCIe tree, and
+# two is the smallest count that is visibly a SET rather than a single device:
+# anything that enumerates drives, stripes across them or picks one by index
+# behaves differently at two than at one, and at one those paths are never
+# taken.
+#
+# run-vm creates the backing files itself (<vm>-nvme1.qcow2, -nvme2.qcow2
+# under VM_IMAGES_DIR), so unlike the root disk there is no gen-vm step to
+# pair with this.
+#
+# This is also where an LMCache L2 belongs. The alternative is worse than it
+# looks: an L2 fs adapter pointed at a tmpfs path writes KV chunks into RAM
+# until the filesystem fills, which on this stack's /tmp takes one bench run.
+VM_NVME=2
+
 # ---------------------------------------------------------------------------
 # Fleet-wide
 # ---------------------------------------------------------------------------

@@ -6,6 +6,34 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **A report lane for the MI355X node shape**, published at
+  `/mi355x/` on the site. `gen-compose --check` already proves the committed
+  render is byte-identical, and that says nothing about the tree the guest
+  enumerates — a flat PCIe tree boots exactly as happily as a switched one
+  and nothing in the guest complains. So the lane boots a node and publishes
+  its `lspci -tv`, alongside the bound GPU count, the RDMA devices, the NVMe
+  and what `inspect` reports about the live guest.
+
+  It runs `scripts/mi355x-node.sh`, the script the stack's README names, for
+  the reason report-for-quickstart runs `quickstart-2vm.sh`: a documented
+  path that nothing executes rots.
+
+  **One VM where the lab stack is four**, via the committed
+  `qemu/env/overlay-mi355x-ci` — a runner has 4 cores against the stack's 32.
+  The overlay reduces the fleet and the guest's memory and *nothing* about
+  the topology: `ERNIC_PER_VM`, `ROCJITSU_PER_VM` and `VM_PCIE_SWITCH_WIDTH`
+  keep their golden values, because a lane that quietly halved them would
+  publish a green report about a shape nobody runs. The corollary is stated
+  in the report itself: with one guest there is no second node, so its RDMA
+  figure is a **loopback** run that proves the verbs, never the mesh.
+
+- **`VM_NVME=2` on the MI355X stack.** It had none, where scale-out and
+  quickstart each take one, so `inspect` reported no storage on a node shape
+  meant to resemble a real one. Two rather than one is the smallest count
+  that is visibly a *set*: anything that enumerates drives, stripes across
+  them or picks one by index behaves differently at two, and at one those
+  paths are never taken.
+
 - **An MI355X-shaped PCIe topology stack.** `vfio-user-mi355x-node` gives each
   VM one EPYC socket, 8 gfx1250 GPUs, 8 ernic NICs and 8 PCIe switches, with
   one NIC and one GPU below each switch and each switch on its own root port.

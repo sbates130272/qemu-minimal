@@ -28,6 +28,7 @@ on:
       - qemu-minimal - Report for vm-ernic
       - qemu-minimal - Report for lmcache
       - qemu-minimal - Report for quickstart
+      - qemu-minimal - Report for mi355x
     types:
       - completed
   push:
@@ -125,6 +126,7 @@ jobs:
           fetch vm-report-hipfile-fio hipfile-fio
           fetch vm-report-lmcache lmcache
           fetch vm-report-quickstart quickstart
+          fetch vm-report-mi355x mi355x
 
           # generate-vm-report.sh writes a _config.yml wherever it thinks it is
           # at a site root. Assembled into subdirectories they are all nested,
@@ -196,6 +198,7 @@ jobs:
             sync_dir ../staging/hipfile-fio hipfile-fio
             sync_dir ../staging/lmcache lmcache
             sync_dir ../staging/quickstart quickstart
+            sync_dir ../staging/mi355x mi355x
 
             git add -A
             if git diff --cached --quiet; then

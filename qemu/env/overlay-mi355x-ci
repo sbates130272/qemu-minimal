@@ -1,0 +1,79 @@
+# Overlay for the ONE-VM MI355X node that
+# .github/workflows/qemu-minimal-report-for-mi355x.yml boots.
+#
+# Deltas only. Layer it on the golden file, which supplies everything else:
+#
+#   qemu-tool gen-compose --stack vfio-user-mi355x-node \
+#     --env-file qemu/env/mi355x-node \
+#     --env-file qemu/env/overlay-mi355x-ci --output-dir "$STACK_DIR"
+#
+# --stack is not optional: it is what the asset mirror reads FROM, and its
+# default is the scale-out stack. --output-dir is not optional either, for
+# the same reason it is not in overlay-ci: gen-compose defaults it to the
+# committed stack directory, which is generated from the golden file alone
+# and compared against it by `gen-compose --check`.
+#
+# WHAT IS DELIBERATELY NOT HERE: ERNIC_PER_VM, ROCJITSU_PER_VM and
+# VM_PCIE_SWITCH_WIDTH. The 8 GPUs, 8 NICs and 8 switches are the entire
+# point of the stack, and a lane that quietly halved them would publish a
+# green report about a shape nobody runs. Everything reduced below is a host
+# limit; nothing reduced below changes the PCIe tree the guest enumerates.
+
+# ---------------------------------------------------------------------------
+# Fleet shape
+# ---------------------------------------------------------------------------
+
+# One, not the golden four. Four guests is 32 vCPU and 32 mesh nodes; a
+# GitHub runner has 4 cores. One guest still carries the full 8+8 topology,
+# which is what this lane exists to prove, and still exercises the mesh --
+# eight ernics register with the manager even when they all live in one VM.
+#
+# What one guest CANNOT show is inter-node RDMA: with a single guest there is
+# no second node to send to, so the report's RDMA figure is a loopback run.
+# Treat it as proof that the verbs and the queue pairs work, never as a
+# bandwidth number for the mesh (AGENTS.md issue 18 -- a two-node result is
+# not a fleet result either, but a one-node result is not even a mesh one).
+VM_COUNT=1
+
+VM_NAME_PREFIX=mi355x-ci
+
+# ---------------------------------------------------------------------------
+# Per-VM resources
+# ---------------------------------------------------------------------------
+
+# 4, down from the golden 8, because a GitHub runner has 4 cores. This is the
+# FLOOR, not a choice: ionic_create_rdma_admin() rejects fewer than
+# IONIC_EQ_COUNT_MIN EQs and ionic_rdma never probes, so 2 would not give the
+# guest an RDMA device at all and the lane would fail with a message about
+# ibv_devinfo rather than about sizing.
+#
+# The golden file's comment explains why 8 is right for a real run: this
+# guest probes eight ionic devices and eight GPUs at boot. At 4 that boot is
+# slower, not different, which is a trade a report lane can make.
+VM_VCPUS=4
+
+# 6 GiB of a 16 GiB runner, leaving room for 17 device-server containers, the
+# job container and the host. The golden 16384 would not fit at all.
+#
+# Enough to boot, probe 8 GPUs and bring up 8 RDMA devices. NOT enough for a
+# real ROCm workload across eight GPUs -- if this lane ever grows one, size
+# it first.
+VM_VMEM=6144
+
+# Tracks VM_VMEM: this is the qemu container's /dev/shm, which has to hold
+# the guest's memory-backend-memfd. Leaving it at the golden 16g would
+# reserve more than the guest can use on a host with none to spare.
+VM_SHM_SIZE=8g
+
+# ---------------------------------------------------------------------------
+# Fleet-wide
+# ---------------------------------------------------------------------------
+
+VM_IMAGES_DIR=/var/lib/qemu-tool/images
+
+# The runner's TSDB path. The golden file points at a lab path that does not
+# exist on a runner, and Prometheus runs as nobody, so the directory has to
+# be created and chowned before --profile metrics would start. This lane does
+# not ask for that profile; the value is here so a dispatch that does has
+# somewhere writable to land.
+PROM_DATA_DIR=/var/lib/qemu-tool/stacks/mi355x-ci/prom-data

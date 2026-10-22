@@ -1,0 +1,195 @@
+name: qemu-minimal - Report for mi355x
+
+# The MI355X-shaped PCIe topology, booted and photographed.
+#
+# WHAT THIS LANE IS FOR. vfio-user-mi355x-node gives a guest 8 GPUs, 8 NICs
+# and 8 PCIe switches with one NIC and one GPU below each switch. Every other
+# stack in this repo hangs one of each flat off the root complex, so no other
+# lane exercises software that reads a realistic PCIe tree.
+#
+# The failure it guards against is not a crash. A flat tree boots exactly as
+# happily as a switched one and nothing in the guest complains -- so
+# `gen-compose --check` proving the render is byte-identical says nothing
+# about what the guest ENUMERATES. This lane asks the guest.
+#
+# SIZING, and why this is one VM where a lab run is four. A GitHub runner has
+# 4 vCPU and 16 GB; four guests would be 32 vCPU and 32 mesh nodes.
+# qemu/env/overlay-mi355x-ci reduces the fleet to one guest at the 4-vCPU
+# ionic_rdma floor, and reduces NOTHING about the topology: ERNIC_PER_VM,
+# ROCJITSU_PER_VM and VM_PCIE_SWITCH_WIDTH stay at their golden values,
+# because a lane that quietly halved them would publish a green report about
+# a shape nobody runs.
+#
+# WHAT IT THEREFORE CANNOT SHOW. With one guest there is no second node, so
+# the RDMA figure is a loopback run: proof that the verbs and the queue pairs
+# work, not a mesh bandwidth number. The report says so in those words.
+# Inter-node RDMA on this stack is a lab exercise; see its README.
+#
+# It runs scripts/mi355x-node.sh, the same script the stack's README tells a
+# human to run, for the reason report-for-quickstart runs quickstart-2vm.sh:
+# a documented path that nothing executes rots.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'scripts/mi355x-node.sh'
+      - 'qemu/env/mi355x-node'
+      - 'qemu/env/overlay-mi355x-ci'
+      - 'qemu/compose/vfio-user-mi355x-node/**'
+      - 'ansible/playbooks/fleet-quickstart.yml'
+      - 'qemu/qemu-tool/**'
+      - 'qemu/pyproject.toml'
+      - '.github/workflows/qemu-minimal-report-for-mi355x.yml'
+      - '.github/workflows/qemu-minimal-publish-pages.yml'
+  # Daily, and deliberately not in the 08:00 block the four vm-* lanes share
+  # nor on report-for-quickstart's 11:17: this boots 17 device-server
+  # containers and publish-pages should not be assembling it alongside
+  # another fresh report.
+  schedule:
+    - cron: '41 13 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vm-report-mi355x
+  cancel-in-progress: true
+
+env:
+  ENV_FILE: qemu/env/mi355x-node
+  OVERLAY: qemu/env/overlay-mi355x-ci
+  STACK_DIR: /var/lib/qemu-tool/stacks/mi355x
+  KEY_DIR: /var/lib/qemu-tool/mi355x-key
+
+jobs:
+  generate-mi355x-report:
+    name: Report for mi355x
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    container:
+      # The FORK image, not the stock one the other lanes pin. This stack
+      # puts a GPU and a NIC under one switch so their traffic need not cross
+      # the root complex, and vfio-user P2P DMA between two such devices
+      # needs a patch stock QEMU does not carry (AGENTS.md issue 19). The
+      # lane does not yet exercise P2P, but pinning stock here would mean the
+      # report describes a machine the stack is not meant to run on.
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:20261021.g0f1f43f-qemu.aa4344e-vfu.8039244
+      # /var/lib/qemu-tool is bind-mounted from the host at the same path so
+      # the qcow2 pulled in here is the file the sibling qemu container
+      # opens: compose bind mounts are resolved by the host docker daemon,
+      # not in this container.
+      #
+      # --pid=host is what lets qemu-tool inspect see anything: it enumerates
+      # /proc and the QEMU process runs in a SIBLING container. Without it
+      # inspect prints an empty table and exits 0, which is the exact false
+      # green the report would then publish.
+      options: >-
+        --device /dev/kvm
+        --pid=host
+        -v /var/run/docker.sock:/var/run/docker.sock
+        -v /var/lib/qemu-tool:/var/lib/qemu-tool
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4.3.1
+
+    # The script does not check this; a runner without working KVM would
+    # otherwise fail much later, inside a boot that silently fell back to TCG
+    # and timed out waiting for SSH.
+    - name: Verify KVM is available
+      run: |
+        test -c /dev/kvm || { echo "::error::/dev/kvm missing"; exit 1; }
+        python3 -I -c "import fcntl, os; assert fcntl.ioctl(os.open('/dev/kvm', os.O_RDWR), 0xAE00, 0) >= 0; print('KVM usable')"
+
+    # The guest qcow2 is ~2.8 GB compressed and ~9.7 GB on disk. A stock
+    # runner does not have that on / without help -- this is where
+    # report-for-lmcache ran out of disk with a bare zstd "No space left on
+    # device" that named nothing.
+    - name: Free disk space
+      run: |
+        df -h /
+        rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
+        docker image prune -af || true
+        df -h /
+
+    # --force and PIPX_BIN_DIR, because the CI image ships a qemu-tool at
+    # /usr/local/bin that wins on PATH -- so a plain install succeeds and
+    # every gen-vm and gen-compose below still runs the IMAGE's copy. The
+    # switch flags this stack needs are unreleased, so that copy would fail
+    # with "unrecognized arguments: --vfio-user-switch-width". Assert where
+    # it resolved rather than trusting the version string.
+    - name: Install qemu-tool
+      run: |
+        set -eu
+        PIPX_BIN_DIR=/usr/local/bin pipx install --force ./qemu
+        RESOLVED=$(readlink -f "$(command -v qemu-tool)")
+        echo "qemu-tool resolves to: $RESOLVED"
+        case "$RESOLVED" in
+          /opt/qemu-tool/*)
+            echo "::error::the image's qemu-tool is shadowing the one just installed"
+            exit 1
+            ;;
+        esac
+        qemu-tool run-vm --help | grep -q -- --vfio-user-switch-width \
+          || { echo "::error::installed qemu-tool has no --vfio-user-switch-width"; exit 1; }
+
+    - name: Install collections
+      run: ansible-galaxy collection install --no-deps -r ansible/requirements.yml
+
+    # Split at the one point a CI run differs from a human one: the guest is
+    # published on a HOST port, which this job container cannot reach -- the
+    # runner puts it on its own bridge and `--network` is not available in
+    # container.options. So join the fleet network between the two halves and
+    # address the guest on it.
+    - name: Fetch the guest image and bring the node up
+      run: |
+        scripts/mi355x-node.sh \
+          --env-file "$ENV_FILE" \
+          --overlay "$OVERLAY" \
+          --stack-dir "$STACK_DIR" \
+          --key-dir "$KEY_DIR" \
+          up
+
+    - name: Join the fleet network
+      run: docker network connect mi355x_fleet "$(cat /etc/hostname)"
+
+    - name: Configure the guest, check the shape and write the report
+      run: |
+        scripts/mi355x-node.sh \
+          --env-file "$ENV_FILE" \
+          --overlay "$OVERLAY" \
+          --stack-dir "$STACK_DIR" \
+          --key-dir "$KEY_DIR" \
+          --report-dir site/mi355x \
+          --in-network \
+          test
+
+    - name: Show logs on failure
+      if: failure()
+      run: |
+        cd "$STACK_DIR" 2>/dev/null || {
+          echo "stack directory absent; the run failed before it was created"
+          exit 0
+        }
+        docker compose --project-name mi355x \
+          --env-file "${GITHUB_WORKSPACE}/${ENV_FILE}" \
+          --env-file "${GITHUB_WORKSPACE}/${OVERLAY}" logs --tail 100 || true
+
+    - name: Take the node down
+      if: always()
+      run: |
+        scripts/mi355x-node.sh --stack-dir "$STACK_DIR" \
+          --env-file "$ENV_FILE" --overlay "$OVERLAY" down || true
+
+    # Upload only, and on success only. publish-pages.yml is the sole writer
+    # of the site and fetches each lane's latest artifact BY NAME -- it
+    # cannot tell a failed run's debris from a good report, so a failed run
+    # must upload nothing. Diagnostics belong in the run log above.
+    - name: Upload the report
+      uses: actions/upload-artifact@v4
+      with:
+        name: vm-report-mi355x
+        path: site/mi355x/
+        if-no-files-found: error

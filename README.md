@@ -14,8 +14,8 @@
      are pinned with ?branch=main. report-for-lmcache is NOT: it is weekly,
      dispatch, and a path-filtered push, so it can go days with no run on
      main, and a pinned badge would render that as "no status" rather than as
-     its real last result. report-for-quickstart is pinned: it is daily and
-     path-filtered on push to main, like the vm-* lanes.
+     its real last result. report-for-quickstart and report-for-mi355x are pinned: both are
+     daily and path-filtered on push to main, like the vm-* lanes.
 
      The date badge is the odd one out: it is not a workflow status. It is
      computed during the Pages publish from the reports actually on the site,
@@ -29,6 +29,7 @@
 [![ernic Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-vm-ernic.yml?branch=main&label=report-for-vm-ernic&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-vm-ernic.yml)
 [![lmcache Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-lmcache.yml?label=report-for-lmcache&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-lmcache.yml)
 [![quickstart Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-quickstart.yml?branch=main&label=report-for-quickstart&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-quickstart.yml)
+[![mi355x Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-mi355x.yml?branch=main&label=report-for-mi355x&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-mi355x.yml)
 [![All Reports Green](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-all-green.json&style=flat-square)](https://sbates130272.github.io/qemu-minimal/perf/)
 
 <!-- Performance. These are shields.io *endpoint* badges: the label, value and
