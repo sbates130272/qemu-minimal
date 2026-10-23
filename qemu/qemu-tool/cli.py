@@ -225,7 +225,7 @@ def _add_quick_start(sub: argparse._SubParsersAction) -> None:
         help=(
             "Directory for the guest qcow2 files. Overrides VM_IMAGES_DIR; "
             "without it an unwritable default is asked about rather than "
-            "failing inside a 17 GB pull."
+            "failing part way into the pull."
         ),
     )
     p.add_argument(

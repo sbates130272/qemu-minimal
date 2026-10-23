@@ -28,9 +28,9 @@ What is new here:
     4 vCPU / 4 GiB whatever it was run on.
   * Prometheus and Grafana come up with the stack, with their data
     directories under the stack directory so neither needs root or a chown.
-  * it asks. A new user finds out this wants ~60 GB of disk and a writable
-    images directory from a prompt, not from a failure three minutes into a
-    17 GB pull. Every prompt has an answer it takes on its own when stdin is
+  * it asks. A new user finds out what this wants in disk and a writable
+    images directory from a prompt, not from a failure part way into the
+    pull. Every prompt has an answer it takes on its own when stdin is
     not a terminal, so CI is unaffected -- see _ask.
 """
 
@@ -59,10 +59,16 @@ _ENV_NAME = "quickstart"
 # Where the guest keypair referrer is pulled to, and what it carries.
 _VM_INFO_TYPE = "application/vnd.batesste.vm-info.v1"
 
-# Rough, and deliberately so: the qcow2 is ~17 GB compressed and decompresses
-# to about the same again, then each guest takes an overlay. Warned about
-# rather than enforced, because `down` and `test` do not need it.
-_DISK_NEEDED_GB = 60
+# Rough, and deliberately so. Measured against the pinned tag rather than
+# guessed: the registry reports 2.5 GB compressed and the image's own
+# annotation says 9.2 GB on disk, then each guest takes an overlay that grows
+# as it is written and `--nvme 1` adds another file per guest. 30 leaves room
+# for that without being the ~60 this claimed for years -- a figure inherited
+# from a "17 GB compressed, 17 GB decompressed" reading that was about 7x the
+# real download and turned the check into a warning nobody could satisfy on a
+# laptop. Warned about rather than enforced, because `down` and `test` do not
+# need it.
+_DISK_NEEDED_GB = 30
 
 # ionic_lif_size() derives its EQ count from num_online_cpus() and
 # ionic_create_rdma_admin() rejects fewer than IONIC_EQ_COUNT_MIN, so below
@@ -528,7 +534,7 @@ def _resolve_images_dir(state: _State) -> None:
     """Make sure the images directory exists and this user can write it.
 
     /var/lib/qemu-tool/images needs root on a fresh box, and the failure
-    without this lands inside a 17 GB pull.
+    without this lands part way into the pull.
     """
     images = state.images_dir
     probe = images
@@ -558,8 +564,9 @@ def _resolve_images_dir(state: _State) -> None:
     free = _free_gb(images)
     if free < _DISK_NEEDED_GB:
         print(f"warning: {images} has {free:.0f} GB free; this wants about "
-              f"{_DISK_NEEDED_GB} GB (a ~17 GB pull, decompressed, plus two "
-              f"overlays).", file=sys.stderr)
+              f"{_DISK_NEEDED_GB} GB (a ~2.5 GB pull that unpacks to ~9 GB, "
+              f"plus an overlay and an NVMe image per guest).",
+              file=sys.stderr)
 
 
 def _resolve_ports(state: _State) -> None:
@@ -644,7 +651,7 @@ def fetch_key(state: _State) -> None:
     if state.key.is_file():
         print(f"already at {state.key}")
         _adopt_login(state)
-        _publish_pubkey(state)
+        _publish_keypair(state)
         return
 
     state.key_dir.mkdir(parents=True, exist_ok=True)
@@ -669,29 +676,51 @@ def fetch_key(state: _State) -> None:
         _die("the referrer carried no id_rsa")
     state.key.chmod(0o600)
     _adopt_login(state)
-    _publish_pubkey(state)
+    _publish_keypair(state)
 
 
-def _publish_pubkey(state: _State) -> None:
-    """Put the public half where `inspect` and `ssh` look for it.
+def _publish_keypair(state: _State) -> None:
+    """Put the keypair where `inspect` and `ssh` look for it.
 
     Those two search <images>/keys/ and ~/.ssh, never the key directory this
     pulls to -- so without it they report the guest's key as "accepted by
     guest, not found locally" and the SSH line they print carries no -i.
+
+    BOTH halves, and the private one is the whole point. inspect's
+    _local_key_index derives the private path from the public one by
+    stripping ".pub" and offers an identity only when that file exists
+    (inspect.py:546-555). Publishing the public half alone therefore bought
+    exactly nothing: `qemu-tool ssh quickstart-1` found the key, matched it
+    against the guest, and still connected with no -i -- which lands on a
+    password prompt, and reads as a broken guest rather than a missing file.
+    The README tells people to use that command, so it has to work.
+
+    This is not a secret being spread around: the key ships in a public OCI
+    referrer beside a public image, and every guest built from that image
+    accepts it. It is written 0600 regardless, because ssh refuses a private
+    key the group can read and the failure names permissions rather than
+    this.
     """
     pub = state.images_dir / "keys" / "quickstart_id_rsa.pub"
-    if pub.is_file():
-        return
+    private = pub.with_suffix("")
     pub.parent.mkdir(parents=True, exist_ok=True)
-    derived = subprocess.run(["ssh-keygen", "-y", "-f", str(state.key)],
-                             capture_output=True, text=True)
-    if derived.returncode != 0:
-        _die(f"could not derive the public key from {state.key}")
-    pub.write_text(derived.stdout)
+    if not pub.is_file():
+        derived = subprocess.run(["ssh-keygen", "-y", "-f", str(state.key)],
+                                 capture_output=True, text=True)
+        if derived.returncode != 0:
+            _die(f"could not derive the public key from {state.key}")
+        pub.write_text(derived.stdout)
+    # Not gated on the public half existing: an install from before this
+    # published the private one has the .pub already, and would otherwise
+    # never gain the half that makes it useful.
+    if not private.is_file():
+        shutil.copyfile(state.key, private)
+        private.chmod(0o600)
 
 
 def make_overlays(state: _State) -> None:
-    """Two overlays of one backing file. This is the long step: ~17 GB."""
+    """Two overlays of one backing file. This is the long step: ~2.5 GB
+    pulled and unpacked to ~9 GB, once, however many guests there are."""
     _say("Creating the guest overlays")
     images = state.images_dir
     base_cfg = env_overrides(state.values)

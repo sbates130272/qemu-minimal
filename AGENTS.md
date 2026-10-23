@@ -977,6 +977,29 @@ that Prometheus answers a query, which is not padding: they are part of the
 documented quickstart now, and a lane that only looked at the guests would
 publish a green report about a stack half of which had not started.
 
+**`pr-quickstart-boot` is the PR-time half of that lane, and is not a report
+lane.** report-for-quickstart runs on push to main and on a cron, so a broken
+quickstart was found the morning after the merge; `Gen Compose Check` renders
+`qemu/env/quickstart` on every PR but starts nothing. This one boots **one**
+guest and asserts the emulated NIC is there by its full `1dd8:1002` +
+`1dd8:5400` tuple and that `ibv_devinfo` reports `PORT_ACTIVE`, then stops. It
+publishes nothing and uploads no artifact, so none of the five publish-pages
+edits above apply to it.
+
+Three choices in it are load-bearing. **One guest, not two**: the 4 vCPU floor
+is real and two guests on a 4-core runner is 2x oversubscribed against the
+mesh manager's untunable 20 s heartbeat (issue 14) — tolerable once a day,
+not on a check that gates merges. At `VM_COUNT=1` the mesh is just the
+manager and `gen_compose` omits the worker branch entirely. **The `-slim`
+guest image**, pinned through an *overlay* so `qemu/env/quickstart` is
+untouched: slim is 0.75 GB against the fat image's 2.52 GB at the same stamp,
+and it keeps the 7.2.4 kernel, the ionic DKMS modules, rdma-core and perftest
+while dropping every compiler — which is exactly why the GPU test stays in
+the daily lane, since `fleet-quickstart.yml` hard-fails on a missing `hipcc`.
+Do not repoint the settings file at slim. **The IB device name is resolved
+from `ibv_devinfo -l`**, never hardcoded: neither published image ships the
+udev rules, so the device keeps its kernel name.
+
 report-for-mi355x is the only lane whose point is a *shape* rather than a
 result. `gen-compose --check` already proves the render is byte-identical,
 and that says nothing about the tree the guest enumerates — a flat PCIe tree

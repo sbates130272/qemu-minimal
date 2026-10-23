@@ -38,6 +38,19 @@ All notable changes to this project will be documented in this file.
   which resolves the port, the account and the key, and the plain `ssh` line
   spelled out beside it — and where to watch it.
 
+- **A PR-time boot check for the quickstart**, `pr-quickstart-boot`. The
+  daily report lane runs on push to main and on a cron, so a broken quickstart
+  was found the morning after the merge; `Gen Compose Check` renders the
+  settings file on every PR but starts nothing. This boots one guest from the
+  `-slim` image — 0.75 GB against the fat image's 2.52 GB at the same stamp —
+  and asserts the emulated NIC is present by its full `1dd8:1002` +
+  `1dd8:5400` tuple and that `ibv_devinfo` reports `PORT_ACTIVE`. One guest,
+  not two, because the 4 vCPU floor is real and two of them on a 4-core runner
+  is 2x oversubscribed against a 20 s heartbeat that is not tunable; a daily
+  report can absorb that flake and a merge gate cannot. The slim image is
+  pinned through an overlay, leaving `qemu/env/quickstart` alone: slim has no
+  compiler, so the GPU test cannot build there and stays in the daily lane.
+
 - **`qemu-tool ssh <vm>`**, which reaches a guest through exactly the
   resolution `inspect` prints: `records()` is factored out of `inspect.run()`
   so the two cannot disagree. The username comes from the image's own sidecar
@@ -566,6 +579,22 @@ All notable changes to this project will be documented in this file.
 
 
 ### Changed
+
+- **The quickstart's disk estimate was wrong by about 7x, and is now
+  measured.** It claimed a "~17 GB pull" needing ~60 GB free — a figure that
+  predates anyone checking. The registry reports 2.52 GB compressed for the
+  pinned tag and the image's own annotation says 9.17 GB on disk, so the
+  warning threshold is 30 GB and the prose says what the numbers are. The old
+  figure made the check unsatisfiable on a laptop, which is the same as not
+  having one.
+
+- **`qemu-tool ssh` now works against a quickstart guest.** `inspect` derives
+  the private key path from the public one by stripping `.pub` and offers an
+  identity only if that file exists, and quick-start published the public half
+  alone — so the command the README tells you to run found the key, matched it
+  against the guest, and connected with no `-i`, landing on a password prompt.
+  Both halves are published now. The key is not a secret: it ships in a public
+  OCI referrer beside a public image.
 
 - **The Quick Start is a subcommand, and `scripts/quickstart-2vm.sh` is
   gone.** It was 558 lines of `/bin/sh` doing what the tool could do with the

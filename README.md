@@ -44,11 +44,18 @@
 [![hipFile fio](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile-fio.json&style=flat-square)](https://sbates130272.github.io/qemu-minimal/perf/)
 
 [![qemu-tool Smoke Test](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-smoke-test-qemu-tool.yml?branch=main&label=qemu-tool-smoke&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-smoke-test-qemu-tool.yml)
-<!-- The four PR-only lanes below (dry-run, ansible, shell-check, spell-check)
-     carry no ?branch=main: they have no push-to-main and no cron trigger, so
-     they have no run on main and shields renders "no status" for a pinned
-     badge. The two smoke-test lanes in this row do run on main and stay
-     pinned, as do the report lanes in their own row above. -->
+<!-- The five PR-only lanes below (pr-quickstart-boot, dry-run, ansible,
+     shell-check, spell-check) carry no ?branch=main: they have no
+     push-to-main and no cron trigger, so they have no run on main and
+     shields renders "no status" for a pinned badge. The two smoke-test lanes
+     in this row do run on main and stay pinned, as do the report lanes in
+     their own row above.
+
+     pr-quickstart-boot is the only one of the five that boots a guest. It is
+     deliberately NOT a report lane -- it publishes nothing and uploads no
+     artifact, so publish-pages.yml neither knows nor needs to know about
+     it. -->
+[![PR quickstart boot](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-pr-quickstart-boot.yml?label=pr-quickstart-boot&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-pr-quickstart-boot.yml)
 [![Dry-Run Tests](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-dry-run-qemu-tool.yml?label=dry-run&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-dry-run-qemu-tool.yml)
 [![Ansible Test](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-ansible-setup-test.yml?label=ansible&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-ansible-setup-test.yml)
 [![Shell Check](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-shell-check.yml?label=shell-check&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-shell-check.yml)
@@ -148,7 +155,7 @@ mainline kernel, the ionic driver, rdma-core, perftest and ROCm 10.1, and the
 device servers come from tagged CI images.
 
 You need KVM, Docker with compose, Ansible, [`oras`](https://oras.land/),
-8 cores, 16 GB of RAM and about 60 GB of disk. Then:
+8 cores, 16 GB of RAM and about 30 GB of disk. Then:
 
 ```bash
 pipx install -e ./qemu                                     # or the .deb, see below
@@ -171,7 +178,8 @@ every morning. It:
 1. checks this machine: KVM actually usable (the ioctl, not just the device
    node), the tools on `PATH`, a writable images directory, free disk, and
    nothing already sitting on the ports it wants;
-2. pulls the guest image (~17 GB, the long step) and its SSH keypair, which
+2. pulls the guest image (~2.5 GB, unpacking to ~9 GB — the long step) and
+   its SSH keypair, which
    ships beside it as an ORAS referrer;
 3. creates two overlays of one backing file and generates a two-VM stack from
    [`qemu/env/quickstart`](qemu/env/quickstart);
