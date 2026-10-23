@@ -178,31 +178,57 @@ jobs:
     # vfio-user socket was ever opened. Only the guest can answer that, so
     # the lane asks the guest.
     #
-    # Reached on the published host port: the qemu container publishes the
-    # guest's sshd, and with one guest and no TAP there is no fleet network
-    # to join.
+    # The guest is published on a HOST port, which this job container cannot
+    # reach: the runner puts the job on its own bridge, and `--network` is
+    # not available in container.options. So join the stack's network and
+    # address the guest on it, by the fixed address the generator gave its
+    # container -- this stack resolves no service names at run time, on
+    # purpose.
+    #
+    # The first cut of this lane skipped the step, reasoning that with one
+    # guest and no TAP there was no fleet network to join. That was wrong
+    # twice over: the `fleet` network is always created (ERNIC_TAP controls
+    # the separate `l2` one), and a host-published port is unreachable from
+    # here however many guests there are. The guest booted, sshd listened,
+    # and the lane spent ten minutes failing to reach it.
+    - name: Join the stack network
+      run: docker network connect pr-boot_fleet "$(cat /etc/hostname)"
+
     - name: The guest booted and has its emulated RDMA NIC
       run: |
         set -eu
-        PORT=$(sed -n 's/^VM_SSH_PORT_BASE=//p' qemu/env/quickstart | tail -1)
+        NET=$(sed -n 's/^FLEET_NET_PREFIX=//p' qemu/env/quickstart | tail -1)
+        # Third octet 3 is the qemu family, fourth is the 1-based VM index.
+        # Port 2222 is the guest's own, inside its container's namespace --
+        # NOT VM_SSH_PORT_BASE, which is the host-side published port and
+        # means nothing on this network.
+        HOST="${NET}.3.1"
+        PORT=2222
         # The image is the authority on which account exists in it, the same
         # rule quick-start's _adopt_login follows; it has already pulled
         # vm-info.json as part of the keypair referrer.
         USER_IN_IMAGE=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1])).get("username") or "ubuntu")' \
             "${KEY_DIR}/vm-info.json" 2>/dev/null || echo ubuntu)
-        echo "connecting as ${USER_IN_IMAGE} on port ${PORT}"
+        echo "connecting as ${USER_IN_IMAGE} to ${HOST}:${PORT}"
 
         g() {
           ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
               -o ConnectTimeout=10 -i "${KEY_DIR}/id_rsa" -p "$PORT" \
-              "${USER_IN_IMAGE}@localhost" "$@"
+              "${USER_IN_IMAGE}@${HOST}" "$@"
         }
 
         # Up to 10 minutes. quick-start's own wait_for_guests is only on the
         # `test` path, which this lane does not take.
         for i in $(seq 1 120); do
           g true 2>/dev/null && break
-          [ "$i" = 120 ] && { echo "::error::the guest never answered SSH"; exit 1; }
+          [ "$i" = 120 ] && {
+            echo "::error::the guest never answered SSH at ${HOST}:${PORT}"
+            echo "--- last ssh attempt, verbose ---"
+            ssh -v -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                -o ConnectTimeout=10 -i "${KEY_DIR}/id_rsa" -p "$PORT" \
+                "${USER_IN_IMAGE}@${HOST}" true 2>&1 | tail -20 || true
+            exit 1
+          }
           sleep 5
         done
         echo "guest answered SSH"
