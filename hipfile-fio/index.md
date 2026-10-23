@@ -4,7 +4,7 @@ title: VM Report — hipFile fio VM
 
 # VM Report — qemu-minimal — hipFile fio VM
 
-Generated: **2026-10-23 13:25 UTC** &middot; Commit: [`c151650`](https://github.com/sbates130272/qemu-minimal/commit/c151650f5a3cbf605733fc7c5bb7b377d9d099f2) &middot; Status: **pass**
+Generated: **2026-10-23 22:27 UTC** &middot; Commit: [`9ec66ea`](https://github.com/sbates130272/qemu-minimal/commit/9ec66ea4c905190e91687a344d59a18443b0585a) &middot; Status: **pass**
 
 ## Hardware
 
@@ -177,7 +177,7 @@ ubuntu : ubuntu video users render admin
 
 | Metric | Value |
 |---|---|
-| fio libhipfile read throughput | 142 MB/s |
+| fio libhipfile read throughput | 139 MB/s |
 
 This is fio's own `libhipfile` ioengine reading from the guest NVMe straight
 into VRAM, rather than the hand-written benchmark the rocjitsu report uses. fio
@@ -192,5 +192,5 @@ rocm: /opt/rocm/core-10.1
 building fio 6bc57a931f04fa3f50348d8c8f087187f050c6e1
 FIO_VERSION = fio-3.42
 fio: fio-3.42 commit=6bc57a931f04fa3f50348d8c8f087187f050c6e1
-fio-hipfile-bench: read_bytes=67108864 seconds=0.474 read_gbs=0.141579881
+fio-hipfile-bench: read_bytes=67108864 seconds=0.482 read_gbs=0.139230008
 ```
