@@ -202,6 +202,47 @@ class UdevRulesTest(unittest.TestCase):
         ):
             self.assertIn(f'ATTRS{{{attr}}}=="{want}"', ib)
 
+    def test_ib_name_comes_from_the_pci_position(self):
+        """The IB index must not be a free-index search -- that races.
+
+        This is the netdev rule's lesson applied to the stanza that did not
+        get it. udev runs one worker per PCI function concurrently, so on a
+        two-NIC guest both workers run
+
+            i=0
+            while [ -e /sys/class/infiniband/rocm-rdma-ernic$i ]; do i=$((i+1)); done
+            rdma dev set $cur name rocm-rdma-ernic$i
+
+        before either has renamed anything, both choose i=0, and both try to
+        claim rocm-rdma-ernic0. One wins and the loser's device keeps its
+        PCI-topology name.
+
+        Measured on the 32-guest dense-fleet at ERNIC_PER_VM=2: 13 guests
+        correct, 13 with the IB index crossed against the netdev index, 6
+        where the second rename failed and left rocep3s0 -- 19 of 32 wrong.
+        The crossed ones are the reason this is a test and not a bug report:
+        every name resolves, so the only symptom is traffic going to the
+        wrong NIC at plausible speed.
+
+        Walking /sys/bus/pci/devices in bus order makes the index a pure
+        function of the device's own BDF, which cannot race and which makes
+        rocm-rdma-ernic<n> and rocm-ernic<n> the same device by construction.
+        """
+        (ib,) = [s for s in _rule_stanzas() if 'SUBSYSTEM=="infiniband"' in s]
+        self.assertIn("/sys/bus/pci/devices/", ib)
+        # The racy scheme, which must not come back.
+        self.assertNotIn(
+            "while [ -e /sys/class/infiniband/rocm-rdma-ernic$$i ]", ib,
+            "free-index search: two udev workers both pick i=0 and one rename fails")
+
+    def test_the_ib_program_rechecks_all_four_ids(self):
+        # Same reason as the netdev rule: the loop walks EVERY PCI device, so
+        # the stanza's own ATTRS match does not constrain it, and 1dd8:1002 is
+        # a real Pensando id. Counting a real card would shift our index.
+        (ib,) = [s for s in _rule_stanzas() if 'SUBSYSTEM=="infiniband"' in s]
+        for want in (VENDOR, DEVICE, SUBSYSTEM_VENDOR, SUBSYSTEM_DEVICE):
+            self.assertIn(want, ib)
+
     def test_no_dead_device_id_is_matched(self):
         for stanza in _rule_stanzas():
             self.assertNotIn("100a", stanza.lower(), "0x100a was retired in rocm-ernic@3fb74d1")
