@@ -12,7 +12,7 @@ exercises software reading a realistic PCIe tree.
   `99-rocm-ernic.rules` names the Ethernet interface `rocm-ernic%n` and `%n`
   is 0 for every one of them, so a single NIC wins that name and the other
   seven keep kernel names. Only the named one carries an address.
-- Generated: **2026-10-22 20:02 UTC** &middot; Commit: `unknown` &middot; Status: **pass**
+- Generated: **2026-10-23 00:08 UTC** &middot; Commit: `unknown` &middot; Status: **pass**
 
 ## The PCIe tree the guest enumerates
 
@@ -72,18 +72,18 @@ mesh bandwidth figure and must not be read as one.
 ```
 
 == RDMA on guest 1 ==
- remote address: LID 0000 QPN 0x0008 PSN 0x4f21e8
+ remote address: LID 0000 QPN 0x0008 PSN 0x672414
  GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:11
 ---------------------------------------------------------------------------------------
  #bytes     #iterations    BW peak[MiB/sec]    BW average[MiB/sec]   MsgRate[Mpps]
- 65536      200              2723.64            2487.25		     0.039796
+ 65536      200              2684.22            2580.14		     0.041282
 ---------------------------------------------------------------------------------------
 ```
 
 ## What qemu-tool reports about the live guest
 
 ```
-VM: mi355x-ci-1  (pid 10004)
+VM: mi355x-ci-1  (pid 10114)
   SSH:       ssh -p 2222 ubuntu@localhost   (the accepted key has no private half here)
   User:      ubuntu
   Key:       SHA256:a56c2mbgJwKvkrLWcQhEoB2EHvcXLJZsVnmMO2nd4vk batesste-ci-images guest key (/var/lib/qemu-tool/images/keys/mi355x_id_rsa.pub, accepted by guest)
@@ -105,10 +105,10 @@ VM: mi355x-ci-1  (pid 10004)
   IP:        127.0.0.1 (lo)
   IP:        10.0.2.15 (enp0s12)
   IP:        192.168.100.11 (rocm-ernic0)
-  Disk:      /dev/vda        512.0 GiB  emulated (virtio)  /boot/efi,/boot,/
+  Boot Disk: /dev/vda        512.0 GiB  emulated (virtio)  /boot/efi,/boot,/
+  Disk:      /dev/nvme0n1      1.0 TiB  emulated (nvme)
   Disk:      /dev/nvme1n1      1.0 TiB  emulated (nvme)
   Disk:      /dev/sr0       1024.0 MiB  emulated (sata)
-  Disk:      /dev/nvme0n1      1.0 TiB  emulated (nvme)
-  Login:     ubuntu from 172.31.0.2 (since 20:01, 1m)
+  Login:     ubuntu from 172.31.0.2 (since 00:07, 1m)
 
 ```
