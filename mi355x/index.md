@@ -12,7 +12,7 @@ exercises software reading a realistic PCIe tree.
   `99-rocm-ernic.rules` names the Ethernet interface `rocm-ernic%n` and `%n`
   is 0 for every one of them, so a single NIC wins that name and the other
   seven keep kernel names. Only the named one carries an address.
-- Generated: **2026-10-23 00:08 UTC** &middot; Commit: `unknown` &middot; Status: **pass**
+- Generated: **2026-10-23 05:31 UTC** &middot; Commit: `unknown` &middot; Status: **pass**
 
 ## The PCIe tree the guest enumerates
 
@@ -59,8 +59,8 @@ NVMe:     /dev/nvme0n1 /dev/nvme1n1
 NAME     SIZE TYPE
 sr0     1024M rom
 vda      512G disk
-nvme1n1    1T disk
 nvme0n1    1T disk
+nvme1n1    1T disk
 ```
 
 ## RDMA
@@ -72,18 +72,18 @@ mesh bandwidth figure and must not be read as one.
 ```
 
 == RDMA on guest 1 ==
- remote address: LID 0000 QPN 0x0008 PSN 0x672414
+ remote address: LID 0000 QPN 0x0002 PSN 0xcf8b92
  GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:11
 ---------------------------------------------------------------------------------------
  #bytes     #iterations    BW peak[MiB/sec]    BW average[MiB/sec]   MsgRate[Mpps]
- 65536      200              2684.22            2580.14		     0.041282
+ 65536      200              2698.39            2692.29		     0.043077
 ---------------------------------------------------------------------------------------
 ```
 
 ## What qemu-tool reports about the live guest
 
 ```
-VM: mi355x-ci-1  (pid 10114)
+VM: mi355x-ci-1  (pid 10058)
   SSH:       ssh -p 2222 ubuntu@localhost   (the accepted key has no private half here)
   User:      ubuntu
   Key:       SHA256:a56c2mbgJwKvkrLWcQhEoB2EHvcXLJZsVnmMO2nd4vk batesste-ci-images guest key (/var/lib/qemu-tool/images/keys/mi355x_id_rsa.pub, accepted by guest)
@@ -109,6 +109,6 @@ VM: mi355x-ci-1  (pid 10114)
   Disk:      /dev/nvme0n1      1.0 TiB  emulated (nvme)
   Disk:      /dev/nvme1n1      1.0 TiB  emulated (nvme)
   Disk:      /dev/sr0       1024.0 MiB  emulated (sata)
-  Login:     ubuntu from 172.31.0.2 (since 00:07, 1m)
+  Login:     ubuntu from 172.31.0.2 (since 05:30, 1m)
 
 ```
