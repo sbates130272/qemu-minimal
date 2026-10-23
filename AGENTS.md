@@ -25,7 +25,7 @@ file up to date as infrastructure changes.
   `qemu/qemu-tool/`
 - `qemu/env/scale-out` + `qemu/env/overlay-ci` + `qemu/env/overlay-mi100` — the
   fleet settings: one golden file and the committed overlays that sit on it
-- `qemu/env/quickstart` + `scripts/quickstart-2vm.sh` + `ansible/playbooks/fleet-quickstart.yml` — the README's Quick Start: two guests from the published qcow2, each with a GPU, an NVMe and an ernic, plus a GPU test and an inter-guest RDMA test. The `report-for-quickstart` lane runs *that script*, not a copy of its steps, so the documented path cannot rot
+- `qemu/env/quickstart` + `qemu/qemu-tool/quick_start.py` + `ansible/playbooks/fleet-quickstart.yml` — the README's Quick Start, which is now `qemu-tool quick-start`: two guests from the published qcow2, each with a GPU, an NVMe and an ernic, Prometheus and Grafana beside them, plus a GPU test and an inter-guest RDMA test. The `report-for-quickstart` lane runs *that subcommand*, not a copy of its steps, so the documented path cannot rot. It replaced the shell script that used to live under `scripts/`, which is deleted; do not reintroduce a shell wrapper beside it. The guests are sized from the host by default (4 vCPU floor, 8 ceiling), and every prompt it asks takes its default answer when stdin is not a terminal, so CI needs no flag to stay non-interactive. Its settings file runs AHEAD of `qemu/env/scale-out` on purpose — the stamp check is per file, not across them
 - `images/` — qcow2 VM disk images (backing + overlay pairs, **not** `/var/lib/qemu-tool/images`)
 - `ansible/` — Ansible playbooks for VM provisioning
 - `rocm-ernic-enablement.md` — running log of rocm-ernic integration status and bugs
@@ -965,12 +965,17 @@ nothing until some *other* lane finishes, which looks like the site being
 stale rather than a missing trigger. Miss the fifth and the lane is invisible
 on the front page — which is how report-for-lmcache shipped without one, this
 list having said "four" at the time. There are seven lanes now. Two of them
-run a *script a human is told to run* rather than a copy of its steps:
-report-for-quickstart runs `scripts/quickstart-2vm.sh`, the same script the
+run *the thing a human is told to run* rather than a copy of its steps:
+report-for-quickstart runs `qemu-tool quick-start`, the same command the
 README's Quick Start names, and report-for-mi355x runs
 `scripts/mi355x-node.sh`, the one the MI355X stack's README names. A change
 that breaks either documented path turns that lane red rather than being
 discovered by the next person to follow it.
+
+report-for-quickstart also checks that Prometheus and Grafana are running and
+that Prometheus answers a query, which is not padding: they are part of the
+documented quickstart now, and a lane that only looked at the guests would
+publish a green report about a stack half of which had not started.
 
 report-for-mi355x is the only lane whose point is a *shape* rather than a
 result. `gen-compose --check` already proves the render is byte-identical,

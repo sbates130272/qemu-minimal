@@ -26,6 +26,7 @@ from .gen_vm import run as gen_vm_run
 from .libvirt_xml import LibvirtXml
 from .inspect import run as inspect_run
 from .inspect import ssh_run as inspect_ssh_run
+from .quick_start import VERBS as _QUICK_START_VERBS, run as quick_start_run
 from .shutdown import run as shutdown_run
 from .list_vms import run as list_vms_run
 from .run_vm import build_command, run as run_vm_run
@@ -120,6 +121,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # command set the tool did not have.
     sub = parser.add_subparsers()
 
+    _add_quick_start(sub)
     _add_run_vm(sub, shared)
     _add_gen_vm(sub, shared)
     _add_gen_compose(sub)
@@ -173,6 +175,99 @@ def _shared_parent() -> argparse.ArgumentParser:
         help="Libvirt domain XML to use as base config ('-' for stdin).",
     )
     return p
+
+
+def _add_quick_start(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser(
+        "quick-start",
+        help="Boot two GPU + RDMA guests sized for this host, and test them.",
+        description=(
+            "Two guests from a published image, each with an emulated "
+            "gfx1250, an emulated NVMe and an emulated rocm-ernic RDMA NIC, "
+            "plus Prometheus and Grafana beside them -- then a GPU test on "
+            "each and an RDMA test across them. Nothing is built. The guests "
+            "are sized from this machine, and anything still unknown is "
+            "asked for on stdin; pass --yes to take every default instead, "
+            "which is also what happens when stdin is not a terminal."
+        ),
+    )
+    p.add_argument(
+        "verb", nargs="?", default="all", choices=list(_QUICK_START_VERBS),
+        help=(
+            "all (default) does the lot. preflight checks this machine and "
+            "touches nothing, up stops once the guests are booted, test "
+            "configures and tests an already-up stack, report rewrites the "
+            "report, down stops it and keeps the overlays."
+        ),
+    )
+    p.add_argument(
+        "--env-file", action="append", type=Path, default=None, metavar="FILE",
+        help=(
+            "Settings file. Defaults to the bundled qemu/env/quickstart. "
+            "Repeatable: later files override keys set by earlier ones."
+        ),
+    )
+    p.add_argument(
+        "--stack-dir", type=Path, default=None, metavar="DIR",
+        help=(
+            "Where the stack is generated. Default: "
+            "/var/lib/qemu-tool/stacks/quickstart, falling back to "
+            "$XDG_STATE_HOME when that is not writable."
+        ),
+    )
+    p.add_argument(
+        "--key-dir", type=Path,
+        default=Path("/var/lib/qemu-tool/quickstart-key"), metavar="DIR",
+        help="Where the guest keypair is pulled to.",
+    )
+    p.add_argument(
+        "--images", type=Path, default=None, metavar="DIR",
+        help=(
+            "Directory for the guest qcow2 files. Overrides VM_IMAGES_DIR; "
+            "without it an unwritable default is asked about rather than "
+            "failing inside a 17 GB pull."
+        ),
+    )
+    p.add_argument(
+        "--report-dir", type=Path, default=None, metavar="DIR",
+        help="Write a markdown report here (implies the report step).",
+    )
+    p.add_argument(
+        "--repo-root", type=Path, default=None, metavar="DIR",
+        help=(
+            "The checkout holding ansible/playbooks/fleet-quickstart.yml. "
+            "Found automatically from a source install; an installed tool "
+            "with no checkout brings the guests up and skips the tests."
+        ),
+    )
+    p.add_argument(
+        "--size-from-host", action=argparse.BooleanOptionalAction, default=True,
+        help=(
+            "Derive VM_VCPUS, VM_VMEM and VM_SHM_SIZE from this machine. On "
+            "by default; --no-size-from-host uses the settings file as "
+            "written."
+        ),
+    )
+    p.add_argument(
+        "--metrics", action=argparse.BooleanOptionalAction, default=True,
+        help=(
+            "Bring Prometheus and Grafana up with the stack, with their data "
+            "directories beside it. On by default."
+        ),
+    )
+    p.add_argument(
+        "--in-network", action="store_true",
+        help=(
+            "Reach the guests on the compose network rather than on "
+            "published host ports, for a caller that is itself a container "
+            "attached to that network (the CI lane)."
+        ),
+    )
+    p.add_argument(
+        "--yes", "-y", action="store_true",
+        help="Take the default answer to every prompt without asking.",
+    )
+    p.set_defaults(func=_quick_start_cmd)
 
 
 def _add_run_vm(
@@ -648,6 +743,22 @@ def _run_vm_cmd(args: argparse.Namespace) -> None:
 
     caps = probe_caps(cfg)
     run_vm_run(cfg, caps)
+
+
+def _quick_start_cmd(args: argparse.Namespace) -> None:
+    quick_start_run(
+        args.verb,
+        args.env_file,
+        args.stack_dir,
+        args.key_dir,
+        args.report_dir,
+        args.repo_root,
+        args.images,
+        in_network=args.in_network,
+        metrics=args.metrics,
+        size_from_host=args.size_from_host,
+        assume_yes=args.yes,
+    )
 
 
 def _compose_cmd(args: argparse.Namespace) -> None:

@@ -254,7 +254,7 @@ jobs:
         # fails with "Temporary failure in name resolution". That is what had
         # this lane red: `qemu-1 never answered ssh` for a guest that was up
         # and healthy the whole time. The third octet is the service family;
-        # 3 is qemu, as scripts/quickstart-2vm.sh --in-network also relies on.
+        # 3 is qemu, as `qemu-tool quick-start --in-network` also relies on.
         NET=$(grep -h '^FLEET_NET_PREFIX=' $LAYERS | tail -1 | cut -d= -f2-)
         : "${NET:?no FLEET_NET_PREFIX in any env layer}"
         {
@@ -281,7 +281,7 @@ jobs:
         #     qemu-tool: error: unrecognized arguments: --vfio-user-root-port
         # before it opens a port. The wait loop then reports "No route to
         # host" for an address nothing holds, which is true and says nothing
-        # about why. scripts/quickstart-2vm.sh does exactly this, and that is
+        # about why. `qemu-tool quick-start` does exactly this, and that is
         # why the quickstart lane survived the same flag.
         #
         # Copied rather than bind-mounted from the workspace: $GITHUB_WORKSPACE

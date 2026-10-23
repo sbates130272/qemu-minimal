@@ -65,9 +65,14 @@
      container and the guest-side driver built from this tree -- so this
      badge and the rocm-ernic one in the row below have to agree. If they
      ever disagree, the guest cannot create an SRQ at all. See AGENTS.md
-     issue 20. -->
+     issue 20.
+
+     "The row below" means the FLEET row, the one tracking qemu/env/scale-out
+     -- that is where LMCache and therefore SRQ live. The quick-start badge
+     is deliberately ahead of both and is not part of this pairing; it boots
+     no LMCache and creates no SRQ. -->
 [![batesste collection](https://img.shields.io/badge/sbates130272.batesste-3.1.0-9cf?style=flat-square)](https://galaxy.ansible.com/ui/repo/published/sbates130272/batesste/)
-[![rocm-ernic collection](https://img.shields.io/badge/sbates130272.rocm__ernic-3fb74d1-9cf?style=flat-square)](https://github.com/ROCm/rocm-ernic)
+[![rocm-ernic collection](https://img.shields.io/badge/sbates130272.rocm__ernic-31d3114-9cf?style=flat-square)](https://github.com/ROCm/rocm-ernic)
 
 <!-- The batesste-ci-images this repo pins. STATIC badges, hand-edited with
      the tags: shields has no endpoint for "what does this repo pin", and a
@@ -75,23 +80,36 @@
      is the opposite of what these are for -- the point is which build the
      stacks are on, not which exists.
 
-     All five share one <date>.<ci-sha> stamp by construction:
-     gen_compose.py's _check_image_coherence refuses a mixed set, because a
-     guest driver and a host server from different builds wedge at the
-     vfio-user/DSR boundary. So when one moves, they all move, and these
-     badges move with them. The stamp is the first badge; the rest carry the
-     component revision that distinguishes the build.
+     WHICH FILE THESE TRACK: qemu/env/scale-out, the fleet settings. That is
+     the pin a long soak runs on and the one the committed stack is generated
+     from. Within it the five share one <date>.<ci-sha> stamp by
+     construction: gen_compose.py's _check_image_coherence refuses a mixed
+     set, because a guest driver and a host server from different builds
+     wedge at the vfio-user/DSR boundary. So when one moves they all move,
+     and these move with them. The stamp is the first badge; the rest carry
+     the component revision that distinguishes the build.
 
-     sbates-fork is the odd one out: it is pinned only by the
-     qemu/env/overlay-mi100 overlay, for vfio-user P2P DMA, and carries a
-     QEMU patch the stock image does not. See AGENTS.md issue 19. -->
-[![CI image build](https://img.shields.io/badge/ci--images-20261014.geea0485-informational?style=flat-square&logo=docker)](https://hub.docker.com/u/sbates130272)
+     The quick-start badge is separate BECAUSE it is separate. The coherence
+     check is per settings file, not across them, and qemu/env/quickstart
+     runs ahead of the fleet on purpose -- it is the shop window and should
+     show the current build. One badge for it, carrying its own stamp; do not
+     try to fold it into the row above, and do not "fix" the two to agree.
+
+     sbates-fork is the odd one out in the other direction: it is pinned only
+     by the qemu/env/overlay-mi100 overlay, for vfio-user P2P DMA, and
+     carries a QEMU patch the stock image does not. See AGENTS.md issue 19. -->
+[![CI image build](https://img.shields.io/badge/ci--images-20261021.g742e8e2-informational?style=flat-square&logo=docker)](https://hub.docker.com/u/sbates130272)
 [![qemu](https://img.shields.io/badge/qemu-11.1.2-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user/tags)
 [![libvfio-user](https://img.shields.io/badge/libvfio--user-8039244-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user/tags)
-[![rocm-ernic](https://img.shields.io/badge/rocm--ernic-3fb74d1-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-rocm-ernic/tags)
+[![rocm-ernic](https://img.shields.io/badge/rocm--ernic-31d3114-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-rocm-ernic/tags)
 [![rocjitsu](https://img.shields.io/badge/rocjitsu-84fb06b-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu/tags)
-[![guest qcow2](https://img.shields.io/badge/guest-resolute%20%7C%20qm.c5d51ce-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu/tags)
-[![qemu fork](https://img.shields.io/badge/sbates--fork-qemu.31e3d06-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork/tags)
+[![guest qcow2](https://img.shields.io/badge/guest-resolute%20%7C%20qm.b4eb552-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu/tags)
+[![qemu fork](https://img.shields.io/badge/sbates--fork-qemu.aa4344e-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork/tags)
+
+<!-- What `qemu-tool quick-start` boots, from qemu/env/quickstart. One badge,
+     carrying that file's own build stamp; the ernic and rocjitsu revisions
+     it implies are the ones in that stamp's tags. -->
+[![quick-start build](https://img.shields.io/badge/quick--start-20261022.gc533d98-success?style=flat-square&logo=docker)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu/tags)
 <!-- The LMCache ref qemu/docker/lmcache/Dockerfile builds from. Not a
      batesste-ci-image: this one is built here and referenced by tag, so it
      carries no build stamp and sits outside the coherence check above. It
@@ -123,10 +141,11 @@ testing.
 ## Quick Start: two GPU + RDMA VMs
 
 The fastest way to something real: two guests, each with an emulated gfx1250,
-an emulated NVMe and an emulated rocm-ernic RDMA NIC, plus a GPU test and an
-RDMA test across them. Nothing is built — the guest comes from a published
-qcow2 that already carries the mainline kernel, the ionic driver, rdma-core,
-perftest and ROCm 10.1, and the device servers come from tagged CI images.
+an emulated NVMe and an emulated rocm-ernic RDMA NIC, with Prometheus and
+Grafana beside them, plus a GPU test and an RDMA test across them. Nothing is
+built — the guest comes from a published qcow2 that already carries the
+mainline kernel, the ionic driver, rdma-core, perftest and ROCm 10.1, and the
+device servers come from tagged CI images.
 
 You need KVM, Docker with compose, Ansible, [`oras`](https://oras.land/),
 8 cores, 16 GB of RAM and about 60 GB of disk. Then:
@@ -134,41 +153,75 @@ You need KVM, Docker with compose, Ansible, [`oras`](https://oras.land/),
 ```bash
 pipx install -e ./qemu                                     # or the .deb, see below
 ansible-galaxy collection install -r ansible/requirements.yml
-scripts/quickstart-2vm.sh
+qemu-tool quick-start
 ```
 
-That script is the whole path, and the daily
-[report-for-quickstart](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-quickstart.yml)
-lane runs the same one — so what is documented here is what CI proves every
-morning. It:
+One command, and it sizes the guests for whatever machine you ran it on
+rather than asking you to. It shows you the plan — vCPU, RAM, where the
+images are going, how much disk that needs — and asks before it does
+anything; anything it cannot work out on its own it asks for too. Pass
+`--yes` to take every default, which is also what it does when stdin is not a
+terminal, so nothing hangs in a script.
 
-1. pulls the guest image (~17 GB, the long step) and its SSH keypair, which
+The daily
+[report-for-quickstart](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-quickstart.yml)
+lane runs that same command — so what is documented here is what CI proves
+every morning. It:
+
+1. checks this machine: KVM actually usable (the ioctl, not just the device
+   node), the tools on `PATH`, a writable images directory, free disk, and
+   nothing already sitting on the ports it wants;
+2. pulls the guest image (~17 GB, the long step) and its SSH keypair, which
    ships beside it as an ORAS referrer;
-2. creates two overlays of one backing file and generates a two-VM stack from
+3. creates two overlays of one backing file and generates a two-VM stack from
    [`qemu/env/quickstart`](qemu/env/quickstart);
-3. brings the stack up — per guest a `rocm-ernic` NIC server, a `rocjitsu` GPU
-   server and a QEMU container, with the two NICs joined by a TCP mesh;
-4. stages the per-build `ip_discovery.bin`, loads `amdgpu` and gives each guest
+4. brings the stack up — per guest a `rocm-ernic` NIC server, a `rocjitsu` GPU
+   server and a QEMU container, with the two NICs joined by a TCP mesh, plus
+   Prometheus and Grafana;
+5. stages the per-build `ip_discovery.bin`, loads `amdgpu` and gives each guest
    its address on the ernic L2 segment;
-5. runs `vector_add` on each guest's GPU and `ib_send_bw` from guest 1 to
+6. runs `vector_add` on each guest's GPU and `ib_send_bw` from guest 1 to
    guest 2, then checks the NIC's own byte counter moved — a passing
    `ib_send_bw` proves the verbs worked, only the counter proves the bytes
    crossed the mesh.
 
 Measured on a 32-core workstation: **2 m 47 s** end to end once the backing
 image is cached, and a first run is that plus however long pulling ~20 GB
-takes you (about 3 minutes here). When it finishes:
+takes you (about 3 minutes here). When it finishes it prints how to get in,
+which is:
 
 ```bash
+qemu-tool ssh quickstart-1                  # port, account and key resolved for you
+qemu-tool ssh quickstart-1 -- ibv_devinfo   # or run one command and come back
+
+# the same thing spelled out, if you would rather
 ssh -i /var/lib/qemu-tool/quickstart-key/id_rsa -p 2222 ubuntu@localhost
-scripts/quickstart-2vm.sh down     # stop the stack, keep the overlays
 ```
 
-Useful variations: `scripts/quickstart-2vm.sh preflight` checks this machine
-without touching anything, `up` stops once the guests are booted, and `test`
-re-runs the configuration and the tests against a stack that is already up.
-For more than two guests see [Scale-out fleet](#scale-out-fleet), which is the
-same stack generator with a larger `VM_COUNT`.
+and where to watch it:
+
+| Service | Where |
+|---|---|
+| Prometheus | <http://localhost:9090> |
+| Grafana | <http://localhost:3000> — anonymous admin, so no login |
+
+The ernic dashboard is provisioned from files and is under **Dashboards** in
+the Grafana sidebar; its data is the stats dump each `rocm-ernic` writes,
+scraped by the exporter. Both ports move automatically if something on your
+machine already has them. `--no-metrics` leaves the pair out.
+
+Useful variations — `qemu-tool quick-start <verb>`:
+
+| Verb | What it does |
+|---|---|
+| `preflight` | check this machine and touch nothing |
+| `up` | stop once the guests are booted |
+| `test` | configure and test a stack that is already up |
+| `down` | power the guests off and stop the stack, keeping the overlays |
+
+`qemu-tool quick-start --help` has the rest, and `qemu-tool man` has all of
+it. For more than two guests see [Scale-out fleet](#scale-out-fleet), which is
+the same stack generator with a larger `VM_COUNT`.
 
 ## System-wide Install (Debian/Ubuntu)
 
