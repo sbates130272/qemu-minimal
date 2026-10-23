@@ -4,16 +4,17 @@ name: qemu-minimal - Report for quickstart
 #
 # WHAT THIS LANE IS FOR. It is the only lane that executes the documented
 # fast path end to end: pull the published ernic-rocjitsu qcow2, generate a
-# two-VM stack from qemu/env/quickstart, boot it, and prove both emulated
-# devices with one test each. Every other lane here either bakes its own
-# guest with Ansible (the vm-* report lanes, ~50 minutes of gen-vm) or builds
-# an 11 GB container first (report-for-lmcache), so none of them would notice
-# the quickstart breaking.
+# two-VM stack from qemu/env/quickstart, boot it with Prometheus and Grafana
+# beside it, and prove both emulated devices with one test each. Every other
+# lane here either bakes its own guest with Ansible (the vm-* report lanes,
+# ~50 minutes of gen-vm) or builds an 11 GB container first
+# (report-for-lmcache), so none of them would notice the quickstart breaking.
 #
-# It runs scripts/quickstart-2vm.sh, the same script the README tells a human
+# It runs `qemu-tool quick-start`, the same command the README tells a human
 # to run, with the same settings file. That is deliberate and worth keeping:
 # a documented path nothing executes rots, and a lane that executes something
-# else proves nothing about the documentation.
+# else proves nothing about the documentation. This used to be a shell script
+# under scripts/; it is gone, and the subcommand is the one implementation.
 #
 # WHAT IT ASSERTS, beyond the two tests passing: that the NIC's own byte
 # counter moved. A passing ib_send_bw proves the verbs worked; only
@@ -24,19 +25,25 @@ name: qemu-minimal - Report for quickstart
 # every one of those fields fails to a plausible placeholder rather than to an
 # error. See scripts/check-vm-devices.sh.
 #
-# SIZING. A GitHub runner is smaller than any host a human runs this on, so
-# --size-from-host derives the guest sizes from it -- but 4 vCPU is the
-# ionic_rdma floor, so a 4-core runner gets two 4-vCPU guests and is 2x
-# oversubscribed against the mesh manager's untunable 20 s heartbeat. Treat a
-# first red run as that (AGENTS.md issue 14), not as a regression in what it
-# tests.
+# SIZING. The guests are now sized from the host by DEFAULT rather than under
+# a flag, so this lane passes no sizing argument at all: what it exercises is
+# what a human gets. A GitHub runner is smaller than any host a human runs
+# this on, and 4 vCPU is the ionic_rdma floor, so a 4-core runner gets two
+# 4-vCPU guests and is 2x oversubscribed against the mesh manager's untunable
+# 20 s heartbeat. Treat a first red run as that (AGENTS.md issue 14), not as
+# a regression in what it tests.
+#
+# NON-INTERACTIVE. `quick-start` prompts, and takes the default answer to
+# every prompt when stdin is not a terminal -- which it is not here. --yes is
+# passed anyway, so the lane does not depend on how the runner happens to
+# wire stdin, and so a reader can see the choice rather than infer it.
 
 on:
   push:
     branches:
       - main
     paths:
-      - 'scripts/quickstart-2vm.sh'
+      - 'qemu/qemu-tool/quick_start.py'
       - 'scripts/check-vm-devices.sh'
       - 'qemu/env/quickstart'
       - 'ansible/playbooks/fleet-quickstart.yml'
@@ -92,8 +99,9 @@ jobs:
     - name: Check out code
       uses: actions/checkout@v4.3.1
 
-    # The script checks this too. Repeated here so a runner without working
-    # KVM fails in two seconds with a named cause rather than inside a pull.
+    # quick-start checks this too, in its preflight. Repeated here so a
+    # runner without working KVM fails in two seconds with a named cause
+    # rather than inside a pull.
     - name: Verify KVM is available
       run: |
         test -c /dev/kvm
@@ -115,6 +123,10 @@ jobs:
     # succeeds and every gen-vm and gen-compose below still runs the IMAGE's
     # copy, which is a different build calling itself the same version. Assert
     # it rather than trusting the version string.
+    #
+    # Asserting `quick-start` exists is not belt-and-braces either: the
+    # image's qemu-tool predates the subcommand, so a shadowed install fails
+    # here with "invalid choice" rather than running the wrong quickstart.
     - name: Install qemu-tool
       run: |
         set -eu
@@ -127,37 +139,65 @@ jobs:
             exit 1
             ;;
         esac
+        qemu-tool quick-start --help >/dev/null
 
     - name: Install collections
       run: ansible-galaxy collection install --no-deps -r ansible/requirements.yml
 
-    # The same script the README documents, split at the one point a CI run
+    # The same command the README documents, split at the one point a CI run
     # differs from a human one: the guests are published on HOST ports, which
     # this job container cannot reach -- the runner puts it on its own bridge
     # and `--network` is not available in container.options. So join the
     # fleet network between the two halves and address the guests on it.
     - name: Fetch the guest image and bring the stack up
       run: |
-        scripts/quickstart-2vm.sh \
+        qemu-tool quick-start up \
           --env-file "$ENV_FILE" \
           --stack-dir "$STACK_DIR" \
           --key-dir "$KEY_DIR" \
-          --size-from-host \
           --in-network \
-          up
+          --yes
 
     - name: Join the fleet network
       run: docker network connect quickstart_fleet "$(cat /etc/hostname)"
 
     - name: Configure the guests, run the tests and write the report
       run: |
-        scripts/quickstart-2vm.sh \
+        qemu-tool quick-start test \
           --env-file "$ENV_FILE" \
           --stack-dir "$STACK_DIR" \
           --key-dir "$KEY_DIR" \
           --report-dir site/quickstart \
           --in-network \
-          test
+          --yes
+
+    # Prometheus and Grafana are part of the documented quickstart now, so a
+    # lane that never looked at them would publish a green report about a
+    # stack half of which had not started. Asked of the containers rather
+    # than of compose: `compose ps` reports a service that exited as absent
+    # rather than as failed, and Prometheus crash-looping on an unwritable
+    # TSDB is exactly the failure the data-directory choice exists to avoid.
+    - name: Check the monitoring sidecars
+      run: |
+        set -eu
+        for svc in prometheus grafana; do
+          state=$(docker inspect -f '{{.State.Status}}' "quickstart-${svc}-1")
+          echo "${svc}: ${state}"
+          [ "$state" = running ] || {
+            echo "::error::${svc} is ${state}, not running"
+            docker logs --tail 50 "quickstart-${svc}-1" || true
+            exit 1
+          }
+        done
+        # Prometheus is only useful if it is actually scraping the ernic
+        # exporter. An up-but-scraping-nothing Prometheus is the quiet
+        # version of this failing.
+        docker exec quickstart-prometheus-1 \
+          wget -q -O- 'http://127.0.0.1:9090/api/v1/query?query=up' \
+          | grep -q '"status":"success"' || {
+            echo "::error::Prometheus answered no query"
+            exit 1
+          }
 
     # Here and not at the end: the guests are only booted between the step
     # above and "Take the stack down", and the whole point is to ask a LIVE
@@ -173,7 +213,7 @@ jobs:
         NET=$(sed -n 's/^FLEET_NET_PREFIX=//p' "$ENV_FILE" | tail -1)
         GUEST_USER=$(sed -n 's/^VM_USERNAME=//p' "$ENV_FILE" | tail -1)
         # The image beats the settings file on who exists in it, the same way
-        # quickstart-2vm.sh's adopt_login does -- the script has already pulled
+        # quick-start's _adopt_login does -- it has already pulled
         # vm-info.json here as part of the keypair referrer. Without this the
         # check logs in as whoever the settings file names, which is how this
         # lane went red against guests that were entirely healthy.
@@ -221,8 +261,8 @@ jobs:
         # the settings layers -- so with only $ENV_FILE it looked under
         # /home/ubuntu on a guest whose account is batesste, found nothing,
         # and reported ssh_key_source None, which --strict-key correctly
-        # refused. quickstart-2vm.sh writes the adopted name to
-        # env.image-login beside the stack for exactly this.
+        # refused. quick-start writes the adopted name to env.image-login
+        # beside the stack for exactly this.
         set -- --env-file "$ENV_FILE"
         [ -f "${STACK_DIR}/env.image-login" ] &&
           set -- "$@" --env-file "${STACK_DIR}/env.image-login"
@@ -242,13 +282,16 @@ jobs:
           exit 0
         }
         docker compose --project-name quickstart \
-          --env-file "${GITHUB_WORKSPACE}/${ENV_FILE}" logs --tail 100 || true
+          --env-file "${GITHUB_WORKSPACE}/${ENV_FILE}" --profile metrics \
+          logs --tail 100 || true
 
     - name: Take the stack down
       if: always()
       run: |
-        scripts/quickstart-2vm.sh --stack-dir "$STACK_DIR" \
-          --env-file "$ENV_FILE" down || true
+        qemu-tool quick-start down \
+          --stack-dir "$STACK_DIR" \
+          --env-file "$ENV_FILE" \
+          --yes || true
 
     # Upload only, and on success only. publish-pages.yml is the sole writer
     # of the site, and it fetches each lane's latest artifact BY NAME -- it

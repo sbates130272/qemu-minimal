@@ -4,11 +4,20 @@ qemu\-tool \- run, generate and list QEMU virtual machines
 .SH SYNOPSIS
 .B qemu\-tool
 .RB [ \-\-version ]
-.I {run\-vm,gen\-vm,gen\-compose,compose,ernic\-stats,lmcache\-stats,list,inspect,ssh,shutdown,man}
+.I {quick\-start,run\-vm,gen\-vm,gen\-compose,compose,ernic\-stats,lmcache\-stats,list,inspect,ssh,shutdown,man}
 .RI [ options ]
 .SH DESCRIPTION
 .B qemu\-tool
-provides six subcommands for managing QEMU-based virtual machines:
+provides subcommands for managing QEMU-based virtual machines:
+.TP
+.B quick\-start
+Boot two guests \(em each with an emulated GPU, NVMe and RDMA NIC \(em sized
+for this host, bring Prometheus and Grafana up beside them, and run a GPU
+test on each and an RDMA test across them. Nothing is built; the guest comes
+from a published image. This is the fastest path to a working stack and the
+one the daily
+.I report\-for\-quickstart
+lane runs.
 .TP
 .B run\-vm
 Launch an existing VM image created by
@@ -131,6 +140,82 @@ Use
 .B \-
 to read from stdin.
 CLI flags override values from the XML.
+.SH QUICK-START OPTIONS
+.B quick\-start
+takes one optional verb:
+.BR all " (the default), " preflight ", " up ", " test ", " report " or " down .
+.B preflight
+checks this machine and touches nothing;
+.B up
+stops once the guests are booted;
+.B test
+configures and tests a stack that is already up;
+.B down
+stops it and leaves the overlays in place, so a later run skips the pull.
+.IP
+Anything still unknown is asked for on stdin. Every prompt has an answer it
+takes on its own when stdin is not a terminal, so a CI run needs no flags to
+stay non\-interactive \(em and the chosen answer is printed either way.
+.TP
+.BI \-\-env\-file " FILE"
+Settings file. Defaults to the bundled
+.IR qemu/env/quickstart ,
+which ships inside the wheel, so this works with no checkout. Repeatable;
+later files override keys set by earlier ones.
+.TP
+.BI \-\-stack\-dir " DIR"
+Where the stack is generated. Default
+.IR /var/lib/qemu\-tool/stacks/quickstart ,
+falling back to a directory under
+.B $XDG_STATE_HOME
+when that is not writable \(em which on a fresh host it is not.
+.TP
+.BI \-\-key\-dir " DIR"
+Where the guest keypair is pulled to. Default
+.IR /var/lib/qemu\-tool/quickstart\-key .
+The keypair ships as an ORAS referrer beside the guest qcow2, not inside it.
+.TP
+.BI \-\-images " DIR"
+Directory for the guest qcow2 files, overriding
+.BR VM_IMAGES_DIR .
+Without it an unwritable default is asked about up front rather than failing
+part way into the pull.
+.TP
+.BI \-\-report\-dir " DIR"
+Write a markdown report here, and run the report step.
+.TP
+.BI \-\-repo\-root " DIR"
+The checkout holding
+.IR ansible/playbooks/fleet\-quickstart.yml .
+Found automatically from a source install. An installed tool with no checkout
+brings the guests up and skips the configuration and the tests, saying so.
+.TP
+.B \-\-size\-from\-host
+Derive
+.BR VM_VCPUS ", " VM_VMEM " and " VM_SHM_SIZE
+from this machine, written to an
+.I env.sized
+layer beside the stack rather than into the settings file.
+.BR "On by default" ;
+.B \-\-no\-size\-from\-host
+uses the values as written. The floors still apply: 4 vCPU, below which
+.B ionic_rdma
+never probes, and 4 GiB.
+.TP
+.B \-\-metrics
+Bring Prometheus and Grafana up with the stack, with their data directories
+beside it so neither needs root or a chown.
+.BR "On by default" ;
+.B \-\-no\-metrics
+leaves both out.
+.TP
+.B \-\-in\-network
+Reach the guests on the compose network rather than on published host ports.
+For a caller that is itself a container attached to that network, which is
+what the CI lane is.
+.TP
+.BR \-\-yes ", " \-y
+Take the default answer to every prompt without asking.
 .SH RUN-VM OPTIONS
 .TP
 .BI \-\-filesystem " DIR"

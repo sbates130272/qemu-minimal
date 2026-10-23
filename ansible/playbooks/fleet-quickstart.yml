@@ -7,7 +7,7 @@
 #   ansible-playbook -i <dir>/fleet-inventory.yml \
 #       playbooks/fleet-quickstart.yml --private-key <key>
 #
-# Normally reached through scripts/quickstart-2vm.sh, which is also what the
+# Normally reached through `qemu-tool quick-start`, which is also what the
 # daily report-for-quickstart lane runs.
 #
 # Unlike the vm-* playbooks this configures a RUNNING fleet rather than baking
@@ -304,9 +304,9 @@
   gather_facts: false
   become: false
   vars:
-    # Where scripts/quickstart-2vm.sh collects per-guest output from. Writing
-    # files rather than printing lets the script assemble a report without
-    # parsing an Ansible recap.
+    # Where `qemu-tool quick-start` collects per-guest output from. Writing
+    # files rather than printing lets it assemble a report without parsing an
+    # Ansible recap.
     quickstart_artifacts_dir: /var/tmp/quickstart-artifacts
   tasks:
     - name: Gather a summary in the guest

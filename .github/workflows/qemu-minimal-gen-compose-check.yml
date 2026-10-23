@@ -200,7 +200,7 @@ jobs:
             --env-file qemu/env/scale-out --env-file /tmp/env.notap config -q
 
       # qemu/env/quickstart is the settings file README.md's Quick Start and
-      # report-for-quickstart both use, through scripts/quickstart-2vm.sh.
+      # report-for-quickstart both use, through `qemu-tool quick-start`.
       # Nothing else here renders it, and the lane that does runs daily and
       # after the merge -- so without this a broken quickstart is found the
       # next morning rather than on the PR that broke it. The service

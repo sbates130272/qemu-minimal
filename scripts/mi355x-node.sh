@@ -15,11 +15,11 @@
 # guest, not merely that the guest came up.
 #
 # It is also what .github/workflows/qemu-minimal-report-for-mi355x.yml runs,
-# for the reason report-for-quickstart runs quickstart-2vm.sh: a documented
+# for the reason report-for-quickstart runs `qemu-tool quick-start`: a documented
 # path that nothing executes rots, and a lane that executes something else
 # proves nothing about the documentation.
 #
-# Deliberately NOT a copy of quickstart-2vm.sh. That script owns fetching a
+# Deliberately NOT a copy of `qemu-tool quick-start`. That one owns fetching a
 # keypair, adopting the image's account and sizing from the host, and all
 # three are reused here rather than reimplemented -- this file is the
 # MI355X-specific parts: the overlay to layer, and the report.
@@ -108,7 +108,7 @@ compose() {
 # The guest keypair ships as an ORAS referrer next to the qcow2, not inside
 # it, and gen-vm pulls only the disk. Selected by artifactType rather than by
 # position, because [0] breaks the day a signature referrer is attached
-# ahead of this one. Same logic as quickstart-2vm.sh's fetch_key.
+# ahead of this one. Same logic as quick-start's fetch_key().
 fetch_key() {
   say "Fetching the guest keypair"
   if [ -f "$KEY" ]; then echo "already at $KEY"; publish_pubkey; return 0; fi

@@ -6,6 +6,51 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **`qemu-tool quick-start`**, one command that brings up two guests sized for
+  whatever machine it was run on. Each gets an emulated gfx1250, an emulated
+  NVMe and an emulated rocm-ernic RDMA NIC; Prometheus and Grafana come up
+  beside them; then a GPU test runs on each guest and an RDMA test across
+  them, and the NIC's own byte counter is checked to have moved.
+
+  The sizing is the point. `VM_VCPUS`, `VM_VMEM` and `VM_SHM_SIZE` are derived
+  from `nproc` and `MemTotal` and written to an overlay beside the stack, so a
+  run on a small host does not look like a settings change in the diff. The
+  floors are not preferences — below 4 vCPU `ionic_rdma` never probes, and the
+  only symptom is a line in a guest log nobody is reading. There is a ceiling
+  too, at 8: vCPU the guest cannot use is vCPU that makes the mesh manager
+  slip its untunable 20 s heartbeat and evict live nodes.
+
+  It asks rather than assuming, and tells you what it is about to do before it
+  does it — the plan, the images directory and the disk it needs. An
+  unwritable `/var/lib/qemu-tool/images` is a question up front instead of a
+  failure three minutes into a 17 GB pull; a busy 9090 or 3000 is moved rather
+  than discovered at `up`; a missing `docker`, `oras` or `ansible-playbook` is
+  named with the command that installs it. Every prompt takes its default
+  answer when stdin is not a terminal, so nothing hangs in a script, and the
+  answer it took is printed either way.
+
+  Prometheus and Grafana write to directories beside the generated stack
+  rather than to their defaults under `/var/lib/qemu-tool`. The defaults need
+  root to create and then a chown to uid 65534 and 472 respectively; this
+  needs neither, and puts the TSDB where somebody would think to look for it.
+
+  When it finishes it prints how to get in — `qemu-tool ssh quickstart-1`,
+  which resolves the port, the account and the key, and the plain `ssh` line
+  spelled out beside it — and where to watch it.
+
+- **A PR-time boot check for the quickstart**, `pr-quickstart-boot`. The
+  daily report lane runs on push to main and on a cron, so a broken quickstart
+  was found the morning after the merge; `Gen Compose Check` renders the
+  settings file on every PR but starts nothing. This boots one guest from the
+  `-slim` image — 0.75 GB against the fat image's 2.52 GB at the same stamp —
+  and asserts the emulated NIC is present by its full `1dd8:1002` +
+  `1dd8:5400` tuple and that `ibv_devinfo` reports `PORT_ACTIVE`. One guest,
+  not two, because the 4 vCPU floor is real and two of them on a 4-core runner
+  is 2x oversubscribed against a 20 s heartbeat that is not tunable; a daily
+  report can absorb that flake and a merge gate cannot. The slim image is
+  pinned through an overlay, leaving `qemu/env/quickstart` alone: slim has no
+  compiler, so the GPU test cannot build there and stays in the daily lane.
+
 - **`qemu-tool ssh <vm>`**, which reaches a guest through exactly the
   resolution `inspect` prints: `records()` is factored out of `inspect.run()`
   so the two cannot disagree. The username comes from the image's own sidecar
@@ -36,7 +81,7 @@ All notable changes to this project will be documented in this file.
   and what `inspect` reports about the live guest.
 
   It runs `scripts/mi355x-node.sh`, the script the stack's README names, for
-  the reason report-for-quickstart runs `quickstart-2vm.sh`: a documented
+  the reason report-for-quickstart runs `qemu-tool quick-start`: a documented
   path that nothing executes rots.
 
   **One VM where the lab stack is four**, via the committed
@@ -534,6 +579,47 @@ All notable changes to this project will be documented in this file.
 
 
 ### Changed
+
+- **The quickstart's disk estimate was wrong by about 7x, and is now
+  measured.** It claimed a "~17 GB pull" needing ~60 GB free — a figure that
+  predates anyone checking. The registry reports 2.52 GB compressed for the
+  pinned tag and the image's own annotation says 9.17 GB on disk, so the
+  warning threshold is 30 GB and the prose says what the numbers are. The old
+  figure made the check unsatisfiable on a laptop, which is the same as not
+  having one.
+
+- **`qemu-tool ssh` now works against a quickstart guest.** `inspect` derives
+  the private key path from the public one by stripping `.pub` and offers an
+  identity only if that file exists, and quick-start published the public half
+  alone — so the command the README tells you to run found the key, matched it
+  against the guest, and connected with no `-i`, landing on a password prompt.
+  Both halves are published now. The key is not a secret: it ships in a public
+  OCI referrer beside a public image.
+
+- **The Quick Start is a subcommand, and `scripts/quickstart-2vm.sh` is
+  gone.** It was 558 lines of `/bin/sh` doing what the tool could do with the
+  generator and the config loader it already has, and the README, the daily
+  lane and the badge now all name `qemu-tool quick-start`. The arrangement
+  that script existed for is unchanged and is the reason it was replaced
+  rather than kept beside the subcommand: the path a human is told to run and
+  the path CI runs have to be one thing, and two implementations of it is the
+  drift that arrangement prevents. `tests/test_quick_start.py` fails if
+  anything current points at the old script.
+
+  Everything the script had learned the hard way moved with it — the guest
+  account coming from the image rather than the settings file, the keypair
+  referrer selected by `artifactType` rather than by position, the public half
+  published where `inspect` looks for it, `--in-network`, and the stack
+  directory falling back off an unwritable `/var/lib/qemu-tool`. What changed
+  is that sizing from the host is the default rather than a CI-only flag, the
+  monitoring sidecars come up with it, and it asks.
+
+- **`qemu/env/quickstart` moved to the `20261022.gc533d98` build**, with
+  `ernic.151379b` and `rocjitsu.98f6a72`, and switched Grafana on. It now runs
+  deliberately ahead of `qemu/env/scale-out`: the build-stamp coherence check
+  is per settings file, not across them, and the quickstart is the shop window
+  while the fleet file is what a long soak is pinned to. The README carries a
+  separate badge for it for that reason — do not fold the two together.
 
 - **Image pins moved to the `20261021.g742e8e2` build** in
   `qemu/env/scale-out` and `qemu/env/overlay-mi100`. Component SHAs are

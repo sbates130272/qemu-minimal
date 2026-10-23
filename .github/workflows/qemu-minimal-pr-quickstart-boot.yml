@@ -1,0 +1,314 @@
+name: qemu-minimal - PR quickstart boot
+
+# Does `qemu-tool quick-start` still boot a guest? Asked on every PR.
+#
+# WHY THIS EXISTS BESIDE report-for-quickstart. That lane is the real thing --
+# two guests, the full Ansible configure, a GPU test, an inter-guest RDMA test
+# and a published report -- and it runs on push to main and on a daily cron,
+# never on a PR. So the quickstart breaking is found the morning after the
+# merge. Gen Compose Check already renders qemu/env/quickstart on every PR and
+# asserts the services are there, which catches a broken settings file or
+# generator; what neither of them does is start QEMU. This lane does only
+# that, and stops.
+#
+# WHAT IT DELIBERATELY DOES NOT DO:
+#
+#   * Two guests. ONE. The 4 vCPU floor is real -- below it ionic_rdma never
+#     probes -- and two of them on a 4-core runner is 2x oversubscribed
+#     against the mesh manager's untunable 20 s heartbeat (AGENTS.md issue
+#     14). report-for-quickstart accepts that flake once a day; a lane that
+#     runs on every PR must not. At VM_COUNT=1 the mesh is just the manager,
+#     which gen_compose renders without the worker branch.
+#   * The Ansible play, the GPU test and the RDMA test. See the image note
+#     below: the slim guest has no compiler, so the GPU test cannot build.
+#   * Prometheus and Grafana (--no-metrics). They are covered by
+#     report-for-quickstart.
+#   * Publish anything. publish-pages.yml fetches report artifacts BY NAME;
+#     this lane uploads none and is not a report lane, so it needs none of
+#     the five edits AGENTS.md lists for adding one.
+#
+# THE IMAGE. This points VM_BACKING_IMAGE at the `-slim` flavour of the same
+# build stamp, through an OVERLAY -- qemu/env/quickstart itself is untouched,
+# because report-for-quickstart runs that file and the slim guest would fail
+# its GPU test. Measured on the registry, same stamp: slim is 0.75 GB
+# compressed against the fat image's 2.52 GB, so this is a ~3.4x smaller pull
+# on every PR.
+#
+# What slim keeps is exactly what this lane asserts: the pinned 7.2.4 kernel,
+# the ionic-ernic DKMS modules, rdma-core and perftest. What it drops is
+# every compiler -- no gcc, no hipcc -- which is why the GPU half stays in
+# the daily lane and not here.
+#
+# Two things the slim image does NOT have, both handled explicitly below
+# rather than assumed: no `/etc/modules-load.d` entry for ionic_rdma, so the
+# lane loads it; and no udev rules, so the IB device keeps its kernel name
+# and the assertion resolves it from `ibv_devinfo -l` instead of hardcoding
+# `rocm-rdma-ernic0`.
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'qemu/qemu-tool/quick_start.py'
+      - 'qemu/qemu-tool/gen_compose.py'
+      - 'qemu/qemu-tool/run_vm.py'
+      - 'qemu/qemu-tool/gen_vm.py'
+      - 'qemu/env/quickstart'
+      - '.github/workflows/qemu-minimal-pr-quickstart-boot.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  pr-quickstart-boot:
+    name: PR quickstart boot
+    runs-on: ubuntu-latest
+    # Roughly 3x a measured run, not the daily lane's 180. A wedged mesh
+    # should cost a coffee, not an afternoon -- this gates merges.
+    timeout-minutes: 45
+    container:
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261022.gc533d98-qemu11.1.2-vfu.8039244
+      # Same three as report-for-quickstart, for the same reasons:
+      # /var/lib/qemu-tool bind-mounted at the same path so the qcow2 pulled
+      # in here is the file the sibling qemu container opens (compose bind
+      # mounts are resolved by the HOST daemon), the docker socket to drive
+      # that daemon, and --pid=host so qemu-tool can see a QEMU running in a
+      # sibling container.
+      options: >-
+        --device /dev/kvm
+        --pid=host
+        -v /var/run/docker.sock:/var/run/docker.sock
+        -v /var/lib/qemu-tool:/var/lib/qemu-tool
+    env:
+      STACK_DIR: /var/lib/qemu-tool/stacks/pr-boot
+      KEY_DIR: /var/lib/qemu-tool/pr-boot-key
+      OVERLAY: /var/lib/qemu-tool/stacks/pr-boot.env
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4.3.1
+
+    # The ioctl, not the node. A device node can exist and still be
+    # non-functional, and QEMU falls back to TCG WITHOUT SAYING SO -- which
+    # would not fail this lane, it would just blow the time budget.
+    - name: Verify KVM is usable
+      run: |
+        test -c /dev/kvm
+        python3 -I -c "import fcntl, os; assert fcntl.ioctl(os.open('/dev/kvm', os.O_RDWR), 0xAE00, 0) >= 0; print('KVM usable')"
+
+    - name: Install qemu-tool
+      run: |
+        set -eu
+        # --force and PIPX_BIN_DIR: the CI image ships a qemu-tool at
+        # /usr/local/bin that wins on PATH, so a plain install succeeds and
+        # every command below still runs the IMAGE's copy. The image's copy
+        # predates this subcommand, so asserting it resolves is also what
+        # catches the shadowing.
+        PIPX_BIN_DIR=/usr/local/bin pipx install --force ./qemu
+        RESOLVED=$(readlink -f "$(command -v qemu-tool)")
+        echo "qemu-tool resolves to: $RESOLVED"
+        case "$RESOLVED" in
+          /opt/qemu-tool/*)
+            echo "::error::the image's qemu-tool is shadowing the one just installed"
+            exit 1
+            ;;
+        esac
+        qemu-tool quick-start --help >/dev/null
+
+    # One guest, no TAP, and the slim disk. Written as an overlay rather than
+    # an edit: --env-file is repeatable and last wins, so qemu/env/quickstart
+    # stays the file a reader diffs and the file report-for-quickstart runs.
+    #
+    # ERNIC_TAP=false is safe HERE and nowhere else: the TAP is the guests'
+    # L2 path and inter-node RDMA is impossible without it, but this lane
+    # runs one guest and reaches it over the qemu container's slirp hostfwd,
+    # which is a different path entirely.
+    - name: Write the PR overlay
+      run: |
+        set -eu
+        mkdir -p "$(dirname "$OVERLAY")"
+        # printf, not an indented heredoc. qemu-tool's own parser strips each
+        # line, but `docker compose --env-file` does not, and the overlay is
+        # handed to BOTH -- so leading spaces would give the tool and the
+        # containers different values for the same key, which is the one
+        # thing the shared settings file exists to prevent.
+        {
+          printf '# Written by qemu-minimal-pr-quickstart-boot.yml.\n'
+          printf '# Not a settings file anyone runs by hand.\n'
+          printf 'VM_COUNT=1\n'
+          printf 'VM_NAME_PREFIX=prboot\n'
+          printf 'ERNIC_TAP=false\n'
+          printf 'VM_BACKING_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu-slim:20261022.gc533d98-vm.resolute-ernic-rocjitsu-slim-qm.c079195-qcow2\n'
+        } > "$OVERLAY"
+        cat "$OVERLAY"
+        # The stamp has to match the three container images in
+        # qemu/env/quickstart, or the generator's coherence check is being
+        # satisfied by a tag that is not the one being booted. Asserted here
+        # because the overlay is the only place the two can drift.
+        STAMP=$(sed -n 's/^QEMU_IMAGE=.*:\([0-9]\{8\}\.g[0-9a-f]*\)-.*/\1/p' qemu/env/quickstart)
+        echo "quickstart stamp: $STAMP"
+        grep -q "ernic-rocjitsu-slim:${STAMP}-" "$OVERLAY" || {
+          echo "::error::the slim tag in this lane is not on ${STAMP}, the stamp qemu/env/quickstart pins"
+          exit 1
+        }
+
+    # Boot it. `up` stops as soon as the rocm-ernic container is healthy, and
+    # --yes makes every prompt take its default (which is also what happens
+    # with no terminal -- passed anyway so the choice is visible).
+    - name: Boot one guest
+      run: |
+        qemu-tool quick-start up \
+          --env-file qemu/env/quickstart \
+          --env-file "$OVERLAY" \
+          --stack-dir "$STACK_DIR" \
+          --key-dir "$KEY_DIR" \
+          --no-metrics \
+          --yes
+
+    # THE ASSERTION THIS LANE EXISTS FOR.
+    #
+    # `up` returning proves the rocm-ernic container bound its port -- its
+    # healthcheck reads /proc/net/tcp for a LISTEN -- and nothing more. It
+    # does not prove QEMU started, that the guest booted, or that the
+    # vfio-user socket was ever opened. Only the guest can answer that, so
+    # the lane asks the guest.
+    #
+    # The guest is published on a HOST port, which this job container cannot
+    # reach: the runner puts the job on its own bridge, and `--network` is
+    # not available in container.options. So join the stack's network and
+    # address the guest on it, by the fixed address the generator gave its
+    # container -- this stack resolves no service names at run time, on
+    # purpose.
+    #
+    # The first cut of this lane skipped the step, reasoning that with one
+    # guest and no TAP there was no fleet network to join. That was wrong
+    # twice over: the `fleet` network is always created (ERNIC_TAP controls
+    # the separate `l2` one), and a host-published port is unreachable from
+    # here however many guests there are. The guest booted, sshd listened,
+    # and the lane spent ten minutes failing to reach it.
+    - name: Join the stack network
+      run: docker network connect pr-boot_fleet "$(cat /etc/hostname)"
+
+    - name: The guest booted and has its emulated RDMA NIC
+      run: |
+        set -eu
+        NET=$(sed -n 's/^FLEET_NET_PREFIX=//p' qemu/env/quickstart | tail -1)
+        # Third octet 3 is the qemu family, fourth is the 1-based VM index.
+        # Port 2222 is the guest's own, inside its container's namespace --
+        # NOT VM_SSH_PORT_BASE, which is the host-side published port and
+        # means nothing on this network.
+        HOST="${NET}.3.1"
+        PORT=2222
+        # The image is the authority on which account exists in it, the same
+        # rule quick-start's _adopt_login follows; it has already pulled
+        # vm-info.json as part of the keypair referrer.
+        USER_IN_IMAGE=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1])).get("username") or "ubuntu")' \
+            "${KEY_DIR}/vm-info.json" 2>/dev/null || echo ubuntu)
+        echo "connecting as ${USER_IN_IMAGE} to ${HOST}:${PORT}"
+
+        g() {
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -o ConnectTimeout=10 -i "${KEY_DIR}/id_rsa" -p "$PORT" \
+              "${USER_IN_IMAGE}@${HOST}" "$@"
+        }
+
+        # Up to 10 minutes. quick-start's own wait_for_guests is only on the
+        # `test` path, which this lane does not take.
+        for i in $(seq 1 120); do
+          g true 2>/dev/null && break
+          [ "$i" = 120 ] && {
+            echo "::error::the guest never answered SSH at ${HOST}:${PORT}"
+            echo "--- last ssh attempt, verbose ---"
+            ssh -v -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                -o ConnectTimeout=10 -i "${KEY_DIR}/id_rsa" -p "$PORT" \
+                "${USER_IN_IMAGE}@${HOST}" true 2>&1 | tail -20 || true
+            exit 1
+          }
+          sleep 5
+        done
+        echo "guest answered SSH"
+
+        # The emulated NIC, by its FULL identity. 1dd8:1002 is a real
+        # Pensando DSC id that physical cards ship with -- only the
+        # 1dd8:5400 subsystem says "this is the emulation" (AGENTS.md issue
+        # 25), so matching on vendor+device alone would pass against
+        # hardware this runner does not have and would not notice the id
+        # moving again.
+        g lspci -nn | tee /tmp/lspci.txt
+        grep -q '1dd8:1002' /tmp/lspci.txt || {
+          echo "::error::no 1dd8:1002 device in the guest"; exit 1; }
+        g 'lspci -nnv -d 1dd8:1002' | grep -qi 'Subsystem:.*1dd8:5400' || {
+          echo "::error::the 1dd8:1002 device is not the 1dd8:5400 emulation"; exit 1; }
+        echo "emulated ernic present, subsystem matches"
+
+        # `ionic` is in-tree and binds on PCI probe; `ionic_rdma` is an
+        # auxiliary-bus module from DKMS and SHOULD autoload off the aux
+        # modalias. The slim image has no /etc/modules-load.d entry for it,
+        # though, so nudge it rather than assuming. Idempotent if it is
+        # already in, and non-fatal either way -- the real verdict is
+        # ibv_devinfo below.
+        g sudo modprobe ionic_rdma 2>&1 || echo "note: modprobe ionic_rdma did not succeed"
+        g lsmod | grep -E '^ionic' || echo "note: no ionic modules listed"
+
+        # Resolve the device name, never hardcode it: neither published
+        # image ships udev/99-rocm-ernic.rules, so the IB device keeps its
+        # kernel name (rocep0s5, not rocm-rdma-ernic0) and a hardcoded -d
+        # would fail against a perfectly healthy guest.
+        IB=$(g ibv_devinfo -l | sed -n '2p' | tr -d ' \t\r')
+        [ -n "$IB" ] || {
+          echo "::error::ibv_devinfo -l named no device."
+          echo "The PCI device is present (asserted above), so this is the"
+          echo "RDMA half: ionic_rdma did not probe. Usual causes, in order:"
+          echo "  - fewer than 4 vCPU, so ionic_create_rdma_admin() refused"
+          echo "  - the DKMS module missing or built for another kernel"
+          g uname -r || true
+          g 'modinfo ionic_rdma 2>&1 | head -3' || true
+          exit 1
+        }
+        echo "IB device: ${IB}"
+        g ibv_devinfo -d "$IB" | tee /tmp/ibv.txt
+        grep -q 'PORT_ACTIVE' /tmp/ibv.txt || {
+          echo "::error::${IB} is present but its port is not PORT_ACTIVE"; exit 1; }
+        echo "RDMA device is PORT_ACTIVE"
+
+    # Named separately from the boot step so a heartbeat eviction reads as
+    # itself rather than as a mystery. The mesh manager is single-threaded
+    # against a 20 s wall clock; at one guest this should never fire, and if
+    # it does the lane's sizing assumption is wrong and should be revisited
+    # rather than retried.
+    - name: No heartbeat evictions
+      if: always()
+      run: |
+        set -eu
+        LOG=$(docker logs pr-boot-ernic-1-1 2>&1 || true)
+        if echo "$LOG" | grep -qi 'failed health check'; then
+          echo "::error::the mesh manager evicted a node at VM_COUNT=1 -- see AGENTS.md issue 14"
+          echo "$LOG" | grep -i 'failed health check' | head -5
+          exit 1
+        fi
+        echo "no evictions"
+
+    - name: Show logs on failure
+      if: failure()
+      run: |
+        cd "$STACK_DIR" 2>/dev/null || {
+          echo "stack directory absent; the run failed before it was created"
+          exit 0
+        }
+        docker compose --project-name pr-boot \
+          --env-file "${GITHUB_WORKSPACE}/qemu/env/quickstart" \
+          --env-file "$OVERLAY" logs --tail 100 || true
+
+    - name: Take it down
+      if: always()
+      run: |
+        qemu-tool quick-start down \
+          --env-file qemu/env/quickstart \
+          --env-file "$OVERLAY" \
+          --stack-dir "$STACK_DIR" \
+          --yes || true

@@ -3,9 +3,11 @@
 #
 # This is the file README.md's Quick Start and
 # .github/workflows/qemu-minimal-report-for-quickstart.yml both use, through
-# scripts/quickstart-2vm.sh. Keep it that way: the lane exists so the
-# documented path cannot rot, and that only works while the two run the same
-# thing.
+# `qemu-tool quick-start`. Keep it that way: the lane exists so the documented
+# path cannot rot, and that only works while the two run the same thing.
+#
+# It is bundled in the wheel, so `qemu-tool quick-start` finds it without a
+# checkout and needs no --env-file.
 #
 # Same keys and same list semantics as qemu/env/scale-out -- read that file
 # first; this one only records what the quickstart needs differently, and why.
@@ -29,20 +31,26 @@ VM_NAME_PREFIX=quickstart
 # Images -- containers AND qcow2, one build stamp across all four
 # ---------------------------------------------------------------------------
 #
-# One build stamp (20261021.g0f1f43f) with ernic.31d3114. The generator
-# asserts this: a guest driver and a host rocm-ernic server from different
-# builds do not fail cleanly across the vfio-user/DSR boundary, they wedge.
-# Move all four together.
-QEMU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261021.g0f1f43f-qemu11.1.2-vfu.8039244
-ERNIC_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261021.g0f1f43f-ernic.31d3114-vfu.8039244
-ROCJITSU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261021.g0f1f43f-rocjitsu.84fb06b
+# One build stamp (20261022.gc533d98) with ernic.151379b and rocjitsu.98f6a72.
+# The generator asserts this: a guest driver and a host rocm-ernic server from
+# different builds do not fail cleanly across the vfio-user/DSR boundary, they
+# wedge. Move all four together.
+#
+# This quickstart deliberately runs AHEAD of qemu/env/scale-out, which is
+# still on 20261021.g742e8e2. The fleet file is what a long soak is pinned to
+# and what the committed stack is generated from, so it moves on purpose; this
+# one is the shop window and should show the current build. The two are
+# independent -- the stamp check is per settings file, not across them.
+QEMU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261022.gc533d98-qemu11.1.2-vfu.8039244
+ERNIC_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261022.gc533d98-ernic.151379b-vfu.8039244
+ROCJITSU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261022.gc533d98-rocjitsu.98f6a72
 
 # The published guest, as an OCI artifact -- not a runnable image. `qemu-tool
 # gen-vm --backing-image` does the `oras pull` and the decompression. This is
 # what makes the quickstart quick: the disk already carries the mainline
 # kernel, the ionic-ernic DKMS modules, the udev naming rules, rdma-core,
 # perftest and ROCm 10.1, so nothing is built here.
-VM_BACKING_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu:20261021.g0f1f43f-vm.resolute-ernic-rocjitsu-qm.b4eb552-qcow2
+VM_BACKING_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu:20261022.gc533d98-vm.resolute-ernic-rocjitsu-qm.c079195-qcow2
 
 # The image bakes its own account; it is not a cloud image cloud-init is about
 # to personalise, and gen-vm --backing-image returns before cloud-init
@@ -60,7 +68,7 @@ VM_BACKING_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-erni
 # quickstart cannot log in.
 #
 # The matching keypair ships as an ORAS REFERRER next to the qcow2, not inside
-# it; scripts/quickstart-2vm.sh pulls it.
+# it; `qemu-tool quick-start` pulls it.
 VM_USERNAME=ubuntu
 VM_PASSWORD=changeme
 
@@ -79,9 +87,11 @@ VM_VMEM=4096
 # have to fit in /dev/shm at once, so this quickstart wants ~10g free there.
 VM_SHM_SIZE=5g
 
-# scripts/quickstart-2vm.sh --size-from-host overrides the three above from
-# nproc and MemTotal rather than editing this file, which is how the CI lane
-# fits them onto a runner smaller than any host a human runs this on.
+# `qemu-tool quick-start` overrides the three above from nproc and MemTotal,
+# writing an env.sized layer beside the stack rather than editing this file --
+# so a run on a small host does not look like a settings change in the diff.
+# That is on by default; --no-size-from-host takes the values written here.
+# The floors above are still floors: the sizing clamps to 4 vCPU and 4 GiB.
 
 # rocjitsu GPU config, a filename under /usr/local/share/rocjitsu/configs/
 # inside the rocjitsu image.
@@ -146,19 +156,32 @@ ERNIC_NOFILE=65536
 ERNIC_STATS_PORT=9840
 
 # ---------------------------------------------------------------------------
-# Off for the quickstart
+# Observability
 # ---------------------------------------------------------------------------
 #
-# Prometheus, Grafana, Loki and the LMCache coordinator are all real parts of
-# the scale-out stack and all beside the point here. LMCACHE_ENABLE also
-# decides whether the coordinator service and its scrape jobs are GENERATED,
-# not merely whether they run, so turning it off keeps the generated stack to
-# what this quickstart actually boots.
+# Prometheus and Grafana come up with the stack. Prometheus is emitted
+# unconditionally by the generator; this is the switch for Grafana, and
+# `qemu-tool quick-start` selects `--profile metrics` so both actually run.
+# It is on because the ernic dashboard is the only place a new user can watch
+# the RDMA test move bytes, and a monitoring stack nobody switched on monitors
+# nothing. `--no-metrics` leaves both out.
+#
+# PROM_DATA_DIR and GRAFANA_DATA_DIR are deliberately NOT set here. Their
+# defaults are under /var/lib/qemu-tool, which on a fresh host is root-owned
+# -- and the two containers then want it chowned to uid 65534 and 472
+# respectively. quick-start writes both to directories beside the generated
+# stack instead, which needs no root and no chown, and puts the TSDB where
+# somebody would think to look for it.
+GRAFANA_ENABLE=true
+
+# Loki and the LMCache coordinator are real parts of the scale-out stack and
+# beside the point here. LMCACHE_ENABLE also decides whether the coordinator
+# service and its scrape jobs are GENERATED, not merely whether they run, so
+# turning it off keeps the generated stack to what this quickstart boots.
 LMCACHE_ENABLE=false
 LOGS_ENABLE=false
-GRAFANA_ENABLE=false
 
 # Path to the repo root, resolved relative to the compose stack directory.
-# scripts/quickstart-2vm.sh overrides it with an absolute path, because the
+# `qemu-tool quick-start` overrides it with an absolute path, because the
 # stack is generated to a scratch directory rather than used in place.
 QEMU_TOOL_SRC=../../..

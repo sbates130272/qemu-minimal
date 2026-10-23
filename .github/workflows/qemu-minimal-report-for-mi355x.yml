@@ -26,7 +26,7 @@ name: qemu-minimal - Report for mi355x
 # Inter-node RDMA on this stack is a lab exercise; see its README.
 #
 # It runs scripts/mi355x-node.sh, the same script the stack's README tells a
-# human to run, for the reason report-for-quickstart runs quickstart-2vm.sh:
+# human to run, for the reason report-for-quickstart runs `qemu-tool quick-start`:
 # a documented path that nothing executes rots.
 
 on:
