@@ -73,7 +73,7 @@ shows the last date on which all 6 reports were green at once —
 amber once that date is no longer today.
 
 Last all-green: **2026-10-23** &middot; checked
-2026-10-23 15:54 UTC &middot; currently
+2026-10-23 18:04 UTC &middot; currently
 all green.
 
 | Report | Generated | Status | Commit | Page |
@@ -83,4 +83,4 @@ all green.
 | ernic VM 1 | 2026-10-23 13:22 UTC | pass | `c151650` | [/ernic/](/ernic/) |
 | ernic VM 2 | 2026-10-23 13:22 UTC | pass | `c151650` | [/ernic/vm2/](/ernic/vm2/) |
 | hipFile fio | 2026-10-23 13:25 UTC | pass | `c151650` | [/hipfile-fio/](/hipfile-fio/) |
-| MI355X node | 2026-10-23 05:31 UTC | pass | ``unknown`` | [/mi355x/](/mi355x/) |
+| MI355X node | 2026-10-23 18:04 UTC | pass | ``unknown`` | [/mi355x/](/mi355x/) |
