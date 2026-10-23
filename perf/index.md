@@ -73,7 +73,7 @@ shows the last date on which all 6 reports were green at once —
 amber once that date is no longer today.
 
 Last all-green: **2026-10-23** &middot; checked
-2026-10-23 13:26 UTC &middot; currently
+2026-10-23 15:54 UTC &middot; currently
 all green.
 
 | Report | Generated | Status | Commit | Page |
