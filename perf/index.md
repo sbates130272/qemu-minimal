@@ -12,7 +12,7 @@ new CI data lands.
 
 ## Latest published snapshot
 
-Generated from `3c522b9a` at **2026-10-23 00:33 UTC**.
+Generated from `c151650f` at **2026-10-23 05:24 UTC**.
 
 ![rocjitsu GEMM](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-gemm.json)
 ![rocjitsu hipFile](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile.json)
@@ -50,7 +50,6 @@ vfio-user and swing hard between runs.
 
 | Commit | Generated | GEMM | hipFile | hipFile fio |
 | --- | --- | --- | --- | --- |
-| b3056c5f | 2026-10-21 23:53 UTC | 717 kFLOP/s | 251 MB/s | 231 MB/s |
 | abd79c8e | 2026-10-22 00:20 UTC | 717 kFLOP/s | 251 MB/s | 231 MB/s |
 | f7a0e002 | 2026-10-22 00:30 UTC | 717 kFLOP/s | 251 MB/s | 231 MB/s |
 | b0ea911a | 2026-10-22 00:45 UTC | 717 kFLOP/s | 251 MB/s | 231 MB/s |
@@ -60,6 +59,7 @@ vfio-user and swing hard between runs.
 | c7af4403 | 2026-10-22 20:28 UTC | 490 kFLOP/s | 160 MB/s | 141 MB/s |
 | 3c522b9a | 2026-10-23 00:04 UTC | 490 kFLOP/s | 160 MB/s | 141 MB/s |
 | 3c522b9a | 2026-10-23 00:33 UTC | 495 kFLOP/s | 162 MB/s | 140 MB/s |
+| c151650f | 2026-10-23 05:24 UTC | 495 kFLOP/s | 162 MB/s | 140 MB/s |
 
 ## Current report freshness
 
@@ -73,7 +73,7 @@ shows the last date on which all 6 reports were green at once —
 amber once that date is no longer today.
 
 Last all-green: **2026-10-23** &middot; checked
-2026-10-23 00:33 UTC &middot; currently
+2026-10-23 05:24 UTC &middot; currently
 all green.
 
 | Report | Generated | Status | Commit | Page |
