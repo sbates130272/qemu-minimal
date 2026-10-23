@@ -1041,6 +1041,7 @@ services:
   tapsetup-1:
     build: ./tapsetup
     image: "qemu-tool/ernic-tapsetup:1"
+    pull_policy: build
     logging: *logging
     network_mode: "service:ernic-1"
     cap_add: [NET_ADMIN]
@@ -1055,6 +1056,7 @@ services:
   tapsetup-2:
     build: ./tapsetup
     image: "qemu-tool/ernic-tapsetup:1"
+    pull_policy: build
     logging: *logging
     network_mode: "service:ernic-2"
     cap_add: [NET_ADMIN]
@@ -1069,6 +1071,7 @@ services:
   tapsetup-3:
     build: ./tapsetup
     image: "qemu-tool/ernic-tapsetup:1"
+    pull_policy: build
     logging: *logging
     network_mode: "service:ernic-3"
     cap_add: [NET_ADMIN]
@@ -1083,6 +1086,7 @@ services:
   tapsetup-4:
     build: ./tapsetup
     image: "qemu-tool/ernic-tapsetup:1"
+    pull_policy: build
     logging: *logging
     network_mode: "service:ernic-4"
     cap_add: [NET_ADMIN]
@@ -1097,6 +1101,7 @@ services:
   tapsetup-5:
     build: ./tapsetup
     image: "qemu-tool/ernic-tapsetup:1"
+    pull_policy: build
     logging: *logging
     network_mode: "service:ernic-5"
     cap_add: [NET_ADMIN]
@@ -1111,6 +1116,7 @@ services:
   tapsetup-6:
     build: ./tapsetup
     image: "qemu-tool/ernic-tapsetup:1"
+    pull_policy: build
     logging: *logging
     network_mode: "service:ernic-6"
     cap_add: [NET_ADMIN]
@@ -1125,6 +1131,7 @@ services:
   tapsetup-7:
     build: ./tapsetup
     image: "qemu-tool/ernic-tapsetup:1"
+    pull_policy: build
     logging: *logging
     network_mode: "service:ernic-7"
     cap_add: [NET_ADMIN]
@@ -1139,6 +1146,7 @@ services:
   tapsetup-8:
     build: ./tapsetup
     image: "qemu-tool/ernic-tapsetup:1"
+    pull_policy: build
     logging: *logging
     network_mode: "service:ernic-8"
     cap_add: [NET_ADMIN]

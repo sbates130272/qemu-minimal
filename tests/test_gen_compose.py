@@ -280,6 +280,27 @@ class TestRender(unittest.TestCase):
         self.assertIn('network_mode: "service:ernic-8"', body)
         self.assertIn("  l2:\n    driver: bridge", body)
 
+    def test_tapsetup_never_tries_the_registry(self):
+        """Every tapsetup service pins pull_policy: build.
+
+        The image is built from the ./tapsetup beside the generated file and
+        `qemu-tool/ernic-tapsetup` exists in no registry, so compose's
+        default pull-then-build greets a first run on a fresh host with
+
+            ! Image qemu-tool/ernic-tapsetup:1  pull access denied ...
+              repository does not exist or may require 'docker login'
+
+        It is harmless -- the build follows -- and it reads exactly like a
+        missing credential, which cost a new user a support round trip.
+        Worth a test because it is invisible to everyone who could recognise
+        it: once you have run a fleet, the image is in your local store and
+        compose never attempts the pull again.
+        """
+        body = gen_compose.render_compose(_plan("\nERNIC_TAP=true\n"), ["e"], "a")
+        self.assertEqual(body.count("build: ./tapsetup"),
+                         body.count("pull_policy: build"))
+        self.assertEqual(body.count("pull_policy: build"), 8)
+
     def test_tap_keeps_net_admin_out_of_the_long_lived_service(self):
         # rocm-ernic attaches to a pre-created owned tap with only the device
         # node; NET_ADMIN belongs to the sidecar that exits.
@@ -1308,6 +1329,9 @@ class TestDevicesPerVM(unittest.TestCase):
             _plan(_MI355X + "ERNIC_TAP=true\n"), "e", "d")
         self.assertIn("  tapsetup-4-8:", body)
         self.assertEqual(body.count("    build: ./tapsetup"), 32)
+        # One pull_policy per sidecar, not one for the stack: a count
+        # mismatch here means some were emitted without it.
+        self.assertEqual(body.count("    pull_policy: build"), 32)
 
     def test_topology_flags_reach_run_vm(self):
         body = gen_compose.render_compose(_plan(_MI355X), "e", "d")
