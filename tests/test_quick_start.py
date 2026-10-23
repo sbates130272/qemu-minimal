@@ -47,6 +47,22 @@ from qemu_tool import cli as cli_mod  # noqa: E402
 from qemu_tool import quick_start as qs  # noqa: E402
 
 
+
+def _env_package_data() -> str:
+    """The wheel's env allow-list, from [tool.setuptools.package-data].
+
+    Anchored on the LIST form. The same key appears under package-dir as a
+    bare string ("qemu_tool.share.env" = "env"), and a naive split takes that
+    one -- which is how the first version of this check compared against the
+    string "env" rather than the file list.
+    """
+    text = (REPO_ROOT / "qemu" / "pyproject.toml").read_text()
+    match = re.search(r'^"qemu_tool\.share\.env"\s*=\s*(\[[^\]]*\])',
+                      text, re.M)
+    assert match, "no package-data list for qemu_tool.share.env"
+    return match.group(1)
+
+
 def _state(**kwargs):
     defaults = dict(
         env_file=ENV_FILE,
@@ -198,11 +214,29 @@ class SettingsFileTest(unittest.TestCase):
         self.assertEqual("true", self.values.get("ERNIC_TAP"))
 
     def test_it_ships_in_the_wheel(self):
-        # `quick-start` with no --env-file reads this file, and a pipx
-        # install has no checkout to read it from.
-        pyproject = (REPO_ROOT / "qemu" / "pyproject.toml").read_text()
-        self.assertIn("env", pyproject)
-        self.assertIsNotNone(qs._packaged_env())
+        # `quick-start` with no --env-file reads this file, and a `uv tool
+        # install` or `pipx install` has no checkout to read it from.
+        #
+        # Asserted against the package-data ALLOW-LIST, not against
+        # _packaged_env(). The first version of this test called that
+        # function and passed while the wheel shipped no such file at all:
+        # _packaged_env() checks the source tree first, and the suite runs
+        # from the checkout, so it was answering a question nobody asked.
+        # Measured afterwards on a real `uv tool install ./qemu`:
+        # _packaged_env() returned None and `quick-start` exited with
+        # "qemu/env/quickstart is missing from this install".
+        self.assertIn('"quickstart"', _env_package_data(),
+                      "quickstart is not in the wheel's env allow-list: "
+                      + _env_package_data())
+
+    def test_the_overlays_still_do_not_ship(self):
+        # They state only the keys one CI lane or one host differs on, so
+        # they are not usable without the checkout that explains them. The
+        # list is enumerated rather than globbed precisely to keep them out,
+        # and a `*` added for convenience would ship them silently.
+        block = _env_package_data()
+        self.assertNotIn("overlay", block)
+        self.assertNotIn("*", block)
 
 
 class CliTest(unittest.TestCase):
