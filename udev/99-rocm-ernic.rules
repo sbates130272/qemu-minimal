@@ -132,6 +132,38 @@ SUBSYSTEM=="net", ACTION=="add", KERNEL!="rocm-ernic*", \
 #
 # The rocm-rdma-ernic* guard makes this idempotent -- without it a re-triggered
 # event would rename an already-correct device to the next free index.
+#
+# The index comes from the PCI bus-order position, exactly as the netdev rule
+# above computes it, and for the same reason -- plus a sharper one.
+#
+# A free-index search ("first rocm-rdma-ernicN that does not exist yet") is not
+# merely order-dependent here, it is a TOCTOU race that LOSES DEVICES. udev
+# runs one worker per PCI function concurrently, so on a two-NIC guest both
+# workers evaluate the while-loop before either has renamed anything, both
+# settle on i=0, and both call `rdma dev set ... rocm-rdma-ernic0`. One wins;
+# the other fails and the device keeps its PCI-topology name:
+#
+#   (udev-worker)[456]: ionic_1: Process '/bin/sh -c ... ' failed with exit code 1.
+#
+# Measured on the 32-guest dense-fleet (ERNIC_PER_VM=2, 64 devices): 13 guests
+# correct, 13 with the IB index CROSSED against the netdev index, and 6 where
+# the second rename failed outright and left rocep3s0. 19 of 32 wrong.
+#
+# The crossed half is the dangerous half. Those guests resolve every name,
+# ibv_devinfo is happy, and `ib_send_bw -d rocm-rdma-ernic0` runs fine --
+# against the NIC addressed .18 instead of .17. Anything that pairs an IB
+# device name with the address of the like-numbered netdev is silently talking
+# to the wrong device and getting plausible numbers back.
+#
+# Deriving the index from the device's own BDF removes the shared mutable
+# state, so there is nothing to race on, and makes rocm-rdma-ernic<n> and
+# rocm-ernic<n> the same physical device BY CONSTRUCTION rather than by luck.
+# Verified by scrambling both IB names on all 32 guests and re-triggering
+# concurrently: 64/64 came back correctly named and correctly paired.
+#
+# The four ids are re-checked inside the loop for the same reason the netdev
+# rule re-checks them: the loop walks every PCI device, and 1dd8:1002 is also
+# a real Pensando card.
 
 SUBSYSTEM=="infiniband", ACTION=="add", \
   DRIVERS=="ionic|ionic_rdma", \
@@ -140,13 +172,19 @@ SUBSYSTEM=="infiniband", ACTION=="add", \
   ATTRS{subsystem_vendor}=="0x1dd8", \
   ATTRS{subsystem_device}=="0x5400", \
   RUN+="/bin/sh -c 'pci=/sys$devpath; pci=$${pci%%/infiniband/*}; \
+    self=$${pci##*/}; i=0; found=no; \
+    for d in /sys/bus/pci/devices/*; do \
+      grep -qx 0x1dd8 $$d/vendor 2>/dev/null || continue; \
+      grep -qx 0x1002 $$d/device 2>/dev/null || continue; \
+      grep -qx 0x1dd8 $$d/subsystem_vendor 2>/dev/null || continue; \
+      grep -qx 0x5400 $$d/subsystem_device 2>/dev/null || continue; \
+      [ $${d##*/} = $$self ] && { found=yes; break; }; \
+      i=$$((i+1)); \
+    done; \
+    [ $$found = yes ] || exit 1; \
     for ibdev in $$pci/infiniband/*; do \
       [ -d $$ibdev ] || continue; \
       cur=$${ibdev##*/}; \
       case $$cur in rocm-rdma-ernic*) continue;; esac; \
-      i=0; \
-      while [ -e /sys/class/infiniband/rocm-rdma-ernic$$i ]; do \
-        i=$$((i+1)); \
-      done; \
       /usr/bin/rdma dev set $$cur name rocm-rdma-ernic$$i; \
     done'"

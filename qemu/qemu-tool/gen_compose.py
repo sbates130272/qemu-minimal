@@ -1468,6 +1468,21 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
             out.append(f"  tapsetup-{suffix}:")
             out.append("    build: ./tapsetup")
             out.append(f'    image: "{_TAPSETUP_IMAGE}"')
+            # Never try the registry. This image is built here, from the
+            # ./tapsetup beside this file, and `qemu-tool/ernic-tapsetup`
+            # exists in no registry anywhere -- so compose's default
+            # pull-then-build greets every first run on a fresh host with
+            #
+            #   ! Image qemu-tool/ernic-tapsetup:1  pull access denied for
+            #     qemu-tool/ernic-tapsetup, repository does not exist or may
+            #     require 'docker login': denied
+            #
+            # which is harmless (the build follows) and reads exactly like a
+            # missing credential. It cost a new user a support round trip.
+            # Nobody who has run a fleet before ever sees it, because the
+            # image is then already in their local store -- so it is
+            # invisible precisely to the people who would recognise it.
+            out.append("    pull_policy: build")
             out.append("    logging: *logging")
             out.append(f'    network_mode: "service:{nic["service"]}"')
             out.append("    cap_add: [NET_ADMIN]")

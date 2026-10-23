@@ -94,12 +94,20 @@ packages = [
 
 [tool.setuptools.package-data]
 "qemu_tool" = ["man/qemu-tool.1", "py.typed"]
-# The two templates, and only those -- the glob is enumerated rather than
-# `*` because the overlays sit in the same directory and must not ship.
-# `overlay-*` state just the keys one CI lane or one host differs on, so they
-# are not usable without the checkout that explains them -- same reason
-# `quickstart` is not here either.
-"qemu_tool.share.env" = ["example", "scale-out", "mi355x-node"]
+# The standalone settings files, and only those -- the list is enumerated
+# rather than `*` because the overlays sit in the same directory and must not
+# ship. `overlay-*` state just the keys one CI lane or one host differs on,
+# so they are not usable without the checkout that explains them.
+#
+# `quickstart` IS here, and used not to be, on the same "not usable without
+# the checkout" reasoning. That stopped being true when the Quick Start
+# became `qemu-tool quick-start`: the subcommand reads this file as its
+# default, so without it in the wheel a `uv tool install` or `pipx install`
+# dies on "qemu/env/quickstart is missing from this install; pass
+# --env-file" before doing anything at all. Unlike an overlay it is a
+# complete, self-contained settings file, which is exactly the property that
+# makes shipping it meaningful.
+"qemu_tool.share.env" = ["example", "scale-out", "mi355x-node", "quickstart"]
 # Every file a stack needs to come up, not just the YAML. A stack directory is
 # used verbatim as a `docker compose` working directory, so anything it
 # bind-mounts or builds has to be in the wheel too -- and the failure when it
