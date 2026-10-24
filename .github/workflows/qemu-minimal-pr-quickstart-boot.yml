@@ -139,13 +139,24 @@ jobs:
         CI_HOME=$(getent passwd "$CI_USER" | cut -d: -f6)
         [ -d "$CI_HOME" ] || { mkdir -p "$CI_HOME"; chown "$UID_WANT" "$CI_HOME"; }
 
-        # The socket's own gid, read off the socket. It is the HOST's gid
-        # passed through the bind mount and has no reason to match any group
-        # in this image, so it may have to be created before it can be
-        # joined.
-        SOCK_GID=$(stat -c %g /var/run/docker.sock)
-        getent group "$SOCK_GID" >/dev/null || groupadd -g "$SOCK_GID" dockersock
-        usermod -aG "$(getent group "$SOCK_GID" | cut -d: -f1)" "$CI_USER"
+        # Two host gids have to be joined, and BOTH are read off the device
+        # rather than assumed: they come from the host through a bind mount
+        # or --device and have no reason to match any group in this image,
+        # so each may have to be created before it can be joined.
+        #
+        # /dev/kvm is the one that is easy to miss. The containers get it
+        # through `group_add: ${CONTAINER_KVM_GID}`, which is handled -- but
+        # quick-start's own PREFLIGHT opens /dev/kvm in this job, as this
+        # user, to check KVM is usable before anything starts. Without the
+        # group that check fails with "Permission denied -- are you in the
+        # kvm group?", which is the right message about the wrong process.
+        join_gid() {
+          gid=$1; fallback=$2
+          getent group "$gid" >/dev/null || groupadd -g "$gid" "$fallback"
+          usermod -aG "$(getent group "$gid" | cut -d: -f1)" "$CI_USER"
+        }
+        join_gid "$(stat -c %g /var/run/docker.sock)" dockersock
+        join_gid "$(stat -c %g /dev/kvm)" kvmdev
 
         # Everything quick-start writes. /var/lib/qemu-tool is bind-mounted
         # from the host and root-owned there -- the same chown the settings
@@ -157,6 +168,28 @@ jobs:
         echo "CIUSER_HOME=$CI_HOME" >> "$GITHUB_ENV"
         echo "CONTAINER_KVM_GID=$(stat -c %g /dev/kvm)" >> "$GITHUB_ENV"
         echo "this job is uid $(id -u); quick-start will run as $CI_USER ($UID_WANT)"
+        echo "groups: $(id -nG "$CI_USER")"
+
+        # Assert the access rather than discovering it two minutes later in
+        # quick-start's preflight. Both of these failed on the first run of
+        # this lane -- /dev/kvm because only the containers' group_add had
+        # been thought about, not the job's own preflight, which opens the
+        # device in THIS process as THIS user.
+        #
+        # A readable/writable test, not the KVM_GET_API_VERSION ioctl:
+        # quick-start's preflight does the ioctl a moment later and would
+        # report it better, and nesting a python -c inside sh -c inside a
+        # YAML block scalar is three levels of quoting for no extra signal.
+        setpriv --reuid "$UID_WANT" --regid "$UID_WANT" --init-groups \
+          test -r /dev/kvm -a -w /dev/kvm \
+          || { echo "::error::uid $UID_WANT cannot open /dev/kvm (gid $(stat -c %g /dev/kvm))"; exit 1; }
+        echo "  /dev/kvm is read-write for $CI_USER"
+        # HOME, or docker reads root's config and warns about a permission
+        # denied that is neither this user's problem nor a failure -- noise
+        # that reads like the error it is not.
+        setpriv --reuid "$UID_WANT" --regid "$UID_WANT" --init-groups \
+          env HOME="$CI_HOME" \
+          docker version --format "  docker reachable: {{.Server.Version}}"
 
 
     - name: Install qemu-tool
