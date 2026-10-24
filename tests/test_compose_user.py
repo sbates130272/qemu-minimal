@@ -41,6 +41,8 @@ Stdlib unittest, like the rest of tests/. Run with:
 from __future__ import annotations
 
 import importlib.util
+import contextlib
+import io
 import os
 import re
 import sys
@@ -408,6 +410,114 @@ class TestCallerIdentity(unittest.TestCase):
                 compose_mod._apply_identity(env, [layer])
         self.assertEqual(env["CONTAINER_USER"],
                          f"{os.getuid()}:{os.getgid()}")
+
+
+class TestTeardown(unittest.TestCase):
+    """Teardown enables every profile, and reports survivors.
+
+    Prompted by a fleet found with prometheus, grafana and the stats exporter
+    still running 41 hours after a `down --remove-orphans` that completed
+    successfully.
+
+    The obvious explanation -- that profile-gated services are filtered out
+    of `down` -- was TESTED and is false: on compose v5.3.1, `up --profile
+    metrics` followed by a plain `down`, `down --remove-orphans` or `stop`
+    removes the gated container every time. So `--profile "*"` here is
+    belt-and-braces rather than the fix, and the survivor check is the part
+    that catches the symptom whatever causes it.
+    """
+
+    def test_teardown_verbs_enable_every_profile(self):
+        for args in (["down"], ["down", "--remove-orphans"], ["stop"]):
+            with mock.patch.dict(os.environ, {}, clear=True):
+                self.assertEqual(
+                    compose_mod._all_profiles_for_teardown(args),
+                    ["--profile", "*"], args)
+
+    def test_other_verbs_are_untouched(self):
+        """`up` must NOT get every profile -- that would start the metrics
+        and lmcache services on a plain `up`, which is the opposite of what
+        profiles are for."""
+        for args in (["up", "-d"], ["ps"], ["logs", "-f"], ["config"]):
+            with mock.patch.dict(os.environ, {}, clear=True):
+                self.assertEqual(
+                    compose_mod._all_profiles_for_teardown(args), [], args)
+
+    def test_an_explicit_profile_is_respected(self):
+        """`down --profile metrics` is someone scoping the teardown
+        deliberately; overriding it would make the flag a lie."""
+        for args in (["--profile", "metrics", "down"],
+                     ["--profile=metrics", "down"]):
+            with mock.patch.dict(os.environ, {}, clear=True):
+                self.assertEqual(
+                    compose_mod._all_profiles_for_teardown(args), [], args)
+
+    def test_compose_profiles_env_counts_as_explicit(self):
+        """It is how compose itself is told, so a tool that ignored it would
+        disagree with a plain `docker compose` run beside it."""
+        with mock.patch.dict(os.environ, {"COMPOSE_PROFILES": "metrics"}):
+            self.assertEqual(
+                compose_mod._all_profiles_for_teardown(["down"]), [])
+
+    def test_survivors_are_reported(self):
+        err = io.StringIO()
+        with mock.patch.object(compose_mod.subprocess, "run") as run, \
+             contextlib.redirect_stderr(err):
+            run.return_value = mock.Mock(stdout="proj-grafana-1\nproj-prometheus-1\n")
+            compose_mod._warn_about_survivors(["docker", "compose"],
+                                              Path("/tmp"), {})
+        self.assertIn("still running", err.getvalue())
+        self.assertIn("proj-grafana-1", err.getvalue())
+        self.assertIn("proj-prometheus-1", err.getvalue())
+
+    def test_a_clean_teardown_says_nothing(self):
+        err = io.StringIO()
+        with mock.patch.object(compose_mod.subprocess, "run") as run, \
+             contextlib.redirect_stderr(err):
+            run.return_value = mock.Mock(stdout="")
+            compose_mod._warn_about_survivors(["docker", "compose"],
+                                              Path("/tmp"), {})
+        self.assertEqual(err.getvalue(), "")
+
+    def test_a_failed_probe_is_not_a_finding(self):
+        """`docker ps` not answering is not evidence of survivors, and a
+        teardown must not start reporting phantoms when the daemon is busy.
+        """
+        err = io.StringIO()
+        with mock.patch.object(compose_mod.subprocess, "run",
+                               side_effect=OSError("no daemon")), \
+             contextlib.redirect_stderr(err):
+            compose_mod._warn_about_survivors(["docker", "compose"],
+                                              Path("/tmp"), {})
+        self.assertEqual(err.getvalue(), "")
+
+
+class TestDataDirs(unittest.TestCase):
+    def test_an_uncreatable_data_dir_names_the_fix(self):
+        """/var/lib/qemu-tool is root-owned on every host that ever ran this
+        as root, so this fires for an operator doing nothing wrong -- and a
+        bare "Permission denied" leaves them to work out the remedy.
+        """
+        err = io.StringIO()
+        with mock.patch.object(compose_mod.Path, "mkdir",
+                               side_effect=PermissionError(13, "Permission denied")), \
+             contextlib.redirect_stderr(err):
+            compose_mod._precreate_data_dirs(
+                {"LOKI_DATA_DIR": "/var/lib/qemu-tool/loki-data"})
+        msg = err.getvalue()
+        self.assertIn("/var/lib/qemu-tool/loki-data", msg)
+        self.assertIn("sudo mkdir -p", msg)
+        self.assertIn(f"sudo chown {os.getuid()}:{os.getgid()}", msg)
+
+    def test_it_degrades_rather_than_failing(self):
+        """The service that needs it may not be in the profiles being
+        started -- loki is not in `metrics` -- so a stack that is otherwise
+        fine must still come up."""
+        with mock.patch.object(compose_mod.Path, "mkdir",
+                               side_effect=PermissionError(13, "nope")), \
+             contextlib.redirect_stderr(io.StringIO()):
+            compose_mod._precreate_data_dirs({"LOKI_DATA_DIR": "/nope"})
+        # no raise
 
 
 class TestRejectedValues(unittest.TestCase):

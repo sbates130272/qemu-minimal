@@ -230,6 +230,30 @@ _DATA_DIR_KEYS = ("PROM_DATA_DIR", "LOKI_DATA_DIR", "GRAFANA_DATA_DIR")
 # checks below would otherwise be in the way.
 _STARTING = frozenset({"up", "start", "run", "create"})
 
+# Subcommands that tear the whole project down. These get every profile
+# enabled, and are checked afterwards for survivors.
+#
+# WHY: a fleet was reported with prometheus, grafana and the stats exporter
+# still running 41 hours after a `down --remove-orphans` that completed
+# successfully.
+#
+# The obvious explanation -- that profile-gated services are filtered out of
+# `down` -- is WRONG, and was tested rather than assumed: on compose v5.3.1,
+# `up --profile metrics` followed by a plain `down`, `down --remove-orphans`
+# or `stop` removes the gated container every time. So that is not the
+# mechanism, and the real one is not established. The likeliest remaining
+# candidate is a project-name mismatch: compose derives the name from the
+# working directory, `compose.run` never passes `-p`, and the stack-directory
+# discovery order (--stack-dir, then $QEMU_TOOL_STACK, then the cwd) can
+# resolve differently between the `up` and the `down` -- in which case the
+# down tears down an empty project and reports success.
+#
+# `--profile "*"` is therefore belt-and-braces, not the fix: it costs nothing,
+# makes `down` unambiguous, and would cover the filtered-out theory if some
+# other compose version does behave that way. The survivor check below is the
+# part that actually catches this, whatever causes it.
+_TEARDOWN = frozenset({"down", "stop"})
+
 
 def _caller_identity() -> dict[str, str]:
     """CONTAINER_USER and CONTAINER_KVM_GID for whoever ran this command.
@@ -369,6 +393,78 @@ def _apply_identity(env: dict[str, str], settings: list[Path]) -> None:
         env[key] = value
 
 
+def _all_profiles_for_teardown(compose_args: list[str]) -> list[str]:
+    """`--profile "*"` when tearing down, unless profiles were named.
+
+    Returns the global flags to insert, which is either that or nothing.
+
+    Respecting an explicit choice matters: `down --profile metrics` is
+    someone scoping the teardown deliberately, and overriding it would make
+    the flag a lie. COMPOSE_PROFILES counts as naming them too, for the same
+    reason -- it is how compose itself is told, and a tool that ignored it
+    would disagree with a plain `docker compose` run beside it.
+
+    Only the project-wide form. `down` and `stop` with service names after
+    them already say exactly what to act on, and widening the profile set
+    there changes nothing.
+    """
+    if not any(a in _TEARDOWN for a in compose_args):
+        return []
+    if any(a == "--profile" or a.startswith("--profile=") for a in compose_args):
+        return []
+    if os.environ.get("COMPOSE_PROFILES", "").strip():
+        return []
+    return ["--profile", "*"]
+
+
+def _warn_about_survivors(globals_: list[str], cdir: Path,
+                          env: dict[str, str]) -> None:
+    """Say so when a teardown reported success and left containers running.
+
+    This is the check that catches the reported failure -- three containers
+    alive 41 hours after a successful `down --remove-orphans` -- WITHOUT
+    needing to know why. A teardown that exits 0 while its own project still
+    has running containers is wrong whatever the cause, and nothing said so.
+
+    Asked through compose with the same global flags the teardown used, so
+    the project name resolves identically. Reimplementing compose's rule
+    (directory basename, lowercased, punctuation stripped) would be a second
+    source of truth and could disagree with the command it is checking --
+    which is the very class of bug this is here to find.
+
+    Never changes the exit status. The teardown did what it was asked; this
+    reports a fact about the result, and a `down` that started failing
+    because of a container somebody else's project left behind would be
+    worse than the problem.
+    """
+    try:
+        listed = subprocess.run(
+            globals_ + ["ps", "--format", "{{.Name}}"],
+            cwd=cdir, env=env, capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return
+    names = [n for n in listed.stdout.split() if n.strip()]
+    if not names:
+        return
+    print(
+        f"\nWarning: the teardown succeeded but {len(names)} container(s) in "
+        "this project are still running:",
+        file=sys.stderr,
+    )
+    for name in names:
+        print(f"           {name}", file=sys.stderr)
+    print(
+        "         A stack brought up from a different directory resolves to a "
+        "different\n"
+        "         compose project, and a teardown of the wrong one reports "
+        "success. Check\n"
+        "         --stack-dir / $QEMU_TOOL_STACK, or remove them by name with "
+        "`docker rm -f`.",
+        file=sys.stderr,
+    )
+
+
 def _warn_about_root_artifacts(env: dict[str, str]) -> None:
     """Name the files an earlier root-era run left behind, before they bite.
 
@@ -440,11 +536,18 @@ def _precreate_data_dirs(env: dict[str, str]) -> None:
         try:
             Path(raw).mkdir(parents=True, exist_ok=True)
         except OSError as exc:
-            # Not fatal: the path may be on a filesystem only root can write,
-            # in which case the operator has already chowned it or is about
-            # to find out. Say so rather than failing the whole command.
+            # Not fatal: the service that needs it may not be in the profiles
+            # being started, and a stack that is otherwise fine should come
+            # up. But say what to run -- the default /var/lib/qemu-tool is
+            # root-owned on every host that ever ran this as root, so this
+            # fires for the ordinary operator doing nothing wrong, and a
+            # bare "Permission denied" leaves them to work out the fix.
             print(
-                f"Warning: could not create {key} at {raw}: {exc}",
+                f"Warning: could not create {key} at {raw}: {exc.strerror}.\n"
+                f"         The service that uses it will fail to start if it "
+                "is in a profile you enable.\n"
+                f"         Fix: sudo mkdir -p {raw} && "
+                f"sudo chown {os.getuid()}:{os.getgid()} {raw}",
                 file=sys.stderr,
             )
 
@@ -541,6 +644,19 @@ def run(
     # services and report success -- the quiet failure, not a visible one.
     if compose_args and compose_args[0] == "--":
         compose_args = compose_args[1:]
+    # After the "--" strip, so a leaked separator cannot hide the verb from
+    # the teardown check, and BEFORE compose_args, because --profile is a
+    # global flag that compose only accepts ahead of the subcommand.
+    teardown = _all_profiles_for_teardown(compose_args)
+    if teardown:
+        # Said out loud. This differs from what a plain `docker compose` in
+        # the same directory would do, and a silent difference between the
+        # wrapper and the thing it wraps is its own trap.
+        print("Tearing down every profile; pass --profile to scope it.",
+              file=sys.stderr)
+        cmd += teardown
     cmd += compose_args
     result = subprocess.run(cmd, cwd=cdir, env=env)
+    if teardown and result.returncode == 0:
+        _warn_about_survivors(cmd[:len(cmd) - len(compose_args)], cdir, env)
     sys.exit(result.returncode)

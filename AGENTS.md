@@ -323,6 +323,35 @@ must cover it (`512G` is the phys-bits ceiling, see the MI355X README), and
 vfio-user P2P DMA needs the fork QEMU image (issue 19) — `qemu/env/overlay-mi100`
 pins it, the golden `env/scale-out` does not.
 
+## Tearing a stack down
+
+**`qemu-tool compose down` and `stop` enable every profile**, which plain
+`docker compose` does not, and say so on stderr. Pass `--profile` (or set
+`COMPOSE_PROFILES`) to scope it deliberately; an explicit choice is respected.
+
+**And a teardown that exits 0 while containers in its own project are still
+running now warns**, naming them. That check is the useful half, because the
+cause is not established. A fleet was found with prometheus, grafana and the
+stats exporter alive **41 hours** after a `down --remove-orphans` that
+reported success.
+
+The obvious explanation — that profile-gated services are filtered out of
+`down` — is **wrong**, and was tested rather than assumed: on compose v5.3.1,
+`up --profile metrics` followed by a plain `down`, `down --remove-orphans` or
+`stop` removes the gated container every time. So `--profile "*"` is
+belt-and-braces; it costs nothing and makes `down` unambiguous, but it is not
+the fix for what was seen.
+
+The likeliest remaining candidate is a **project-name mismatch**. Compose
+derives the project from the working directory, `compose.run` never passes
+`-p`, and the stack-directory discovery order (`--stack-dir`, then
+`$QEMU_TOOL_STACK`, then the cwd) can resolve differently between the `up` and
+the `down` — in which case the down tears down an *empty* project and reports
+success. If this happens again, the thing to capture before cleaning up is
+`docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}'` on
+a survivor, next to the directory the `down` ran from. That one comparison
+settles it.
+
 ## Container privilege
 
 **Nothing in any stack runs as root by default, and nothing holds a

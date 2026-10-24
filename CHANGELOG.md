@@ -67,6 +67,23 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **`compose down`/`stop` enable every profile and report survivors.** A fleet
+  was found with three profile-gated containers still running 41 hours after a
+  `down --remove-orphans` that completed successfully. The obvious explanation
+  — that profiles are filtered out of `down` — was tested and is false on
+  compose v5.3.1, so the cause is not established; `--profile "*"` is
+  belt-and-braces and the survivor warning is the part that catches this
+  whatever causes it. A teardown that exits 0 while its own project still has
+  running containers now names them. It never changes the exit status.
+
+- **An uncreatable metrics data directory says what to run.** The default
+  `/var/lib/qemu-tool` is root-owned on every host that ever ran this as root,
+  so `Warning: could not create LOKI_DATA_DIR ...: Permission denied` fires for
+  an operator doing nothing wrong and left them to work out the remedy. It now
+  prints the `sudo mkdir -p ... && sudo chown` that fixes it, and still
+  degrades rather than failing — the service may not be in the profiles being
+  started.
+
 - **`run-vm` puts `net.ipv4.ip_forward` back.** The TAP path set it
   unconditionally with no matching restore, so running one VM once left the
   host forwarding packets forever. It is now set only if it was off, and
