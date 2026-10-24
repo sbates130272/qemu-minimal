@@ -26,6 +26,7 @@ from .gen_vm import run as gen_vm_run
 from .libvirt_xml import LibvirtXml
 from .inspect import run as inspect_run
 from .inspect import ssh_run as inspect_ssh_run
+from .check_system import run as check_system_run
 from .quick_start import VERBS as _QUICK_START_VERBS, run as quick_start_run
 from .shutdown import run as shutdown_run
 from .list_vms import run as list_vms_run
@@ -122,6 +123,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers()
 
     _add_quick_start(sub)
+    _add_check_system(sub)
     _add_run_vm(sub, shared)
     _add_gen_vm(sub, shared)
     _add_gen_compose(sub)
@@ -650,6 +652,31 @@ def _add_shutdown(sub: argparse._SubParsersAction) -> None:
     p.set_defaults(func=_shutdown_cmd)
 
 
+def _add_check_system(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser(
+        "check-system",
+        help="Check this host has everything the stacks need.",
+        description=(
+            "Ask every host question the stacks depend on, before anything "
+            "has been pulled or written: the tools on PATH, the Docker "
+            "daemon and your access to it, KVM, the uid the containers will "
+            "run as, which settings file is in force, and whether the images "
+            "directory has room. Read-only and needs no sudo. Exits non-zero "
+            "if anything would stop a stack starting; warnings do not fail "
+            "it. This is the same code quick-start runs in its preflight."
+        ),
+    )
+    p.add_argument(
+        "--env-file", type=Path, action="append", metavar="FILE",
+        help=(
+            "Settings file to check against, repeatable, later files winning "
+            "key by key. Without it the usual search path is used, and which "
+            "file that found is itself part of the report."
+        ),
+    )
+    p.set_defaults(func=_check_system_cmd)
+
+
 def _add_man(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
         "man",
@@ -743,6 +770,10 @@ def _run_vm_cmd(args: argparse.Namespace) -> None:
 
     caps = probe_caps(cfg)
     run_vm_run(cfg, caps)
+
+
+def _check_system_cmd(args: argparse.Namespace) -> None:
+    check_system_run(args.env_file)
 
 
 def _quick_start_cmd(args: argparse.Namespace) -> None:

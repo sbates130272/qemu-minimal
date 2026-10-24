@@ -229,6 +229,35 @@ container's `anon` is **not** fleet memory — it was 2.0 GiB across all 32,
 "what can the host not reclaim cheaply", not "how much RAM do the guests
 hold". `qemu-tool list --summary` reports the shmem figure and labels it.
 
+## `qemu-tool check-system`
+
+One command that asks every host question the stacks depend on and prints a
+line per answer: tools on PATH, the Docker daemon and your access to it, KVM
+(the ioctl, not the node), `/dev/net/tun`, the uid the containers will run as,
+which settings file is in force, the vCPU budget against `nproc`, and whether
+`VM_IMAGES_DIR` has room and is owned by you. Read-only, no `sudo`, writes
+nothing — safe on a host nobody has committed to yet.
+
+`FAIL` sets exit 1; `warn` does not. That split is deliberate and worth
+keeping: a checker that failed on a merely tight host would get disabled in
+whatever runs it, and then catch nothing.
+
+**It is the same code `quick-start` runs in its preflight, not a copy.**
+`quick_start` imports `kvm_usable`, `docker_compose_ok` and `free_gb` from
+`check_system`, and `tests/test_check_system.py` asserts *identity* (`assertIs`)
+rather than equality, so a second copy that happens to agree today still fails
+the test. This repo has been bitten by a documented path and its CI equivalent
+drifting apart — it is why `report-for-quickstart` runs `qemu-tool quick-start`
+itself rather than a reimplementation of its steps.
+
+The one thing deliberately **not** shared is the tool list.
+`quick_start._TOOL_HINTS` requires oras, ansible-playbook and ssh outright,
+because the quickstart pulls a published qcow2, provisions the guests and
+reaches them. `check_system` treats those as optional, because a host that
+only runs `qemu-tool compose` against an image it already has needs none of
+them and failing it would be wrong. Two lists because there are two
+requirements; there is a test pinning that too, so nobody "fixes" it.
+
 ## Container privilege
 
 **Nothing in any stack runs as root by default, and nothing holds a

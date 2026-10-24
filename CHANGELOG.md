@@ -85,6 +85,26 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **`qemu-tool check-system`**, one command that asks every host question the
+  stacks depend on and prints a line per answer: tools on PATH, the Docker
+  daemon and your access to it, KVM (the ioctl, not just the node),
+  `/dev/net/tun`, the uid the containers will run as, which settings file is
+  in force, the vCPU budget against `nproc`, and whether `VM_IMAGES_DIR` has
+  room and is owned by you. Read-only, no `sudo`, writes nothing — safe on a
+  host you have not decided to use yet.
+
+  Every failure it reports has been seen in the wild, and most present
+  somewhere other than where they are caused: a missing kvm group looks like
+  slow guests, an absent `/dev/net/tun` looks like an RDMA failure, a
+  `CONTAINER_USER` typo looks like a stack that will not start for reasons the
+  error does not name. `FAIL` exits 1; `warn` does not, because a checker that
+  failed on a merely tight host would get disabled in whatever runs it.
+
+  It is the same code `quick-start` runs in its preflight, not a copy —
+  `quick_start` imports the checks from it, and the test asserts identity
+  rather than equality so a second copy that agrees today still fails.
+
+
 - **`qemu-tool quick-start`**, one command that brings up two guests sized for
   whatever machine it was run on. Each gets an emulated gfx1250, an emulated
   NVMe and an emulated rocm-ernic RDMA NIC; Prometheus and Grafana come up

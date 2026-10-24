@@ -160,8 +160,18 @@ You need KVM, Docker with compose, Ansible, [`oras`](https://oras.land/),
 ```bash
 pipx install -e ./qemu                                     # or the .deb, see below
 ansible-galaxy collection install -r ansible/requirements.yml
+qemu-tool check-system                                     # optional; see below
 qemu-tool quick-start
 ```
+
+`qemu-tool check-system` asks every one of those questions and a few more —
+the Docker daemon and your access to it, the uid the containers will run as,
+which settings file is in force, whether the images directory has room — and
+prints a line per answer. It writes nothing and needs no `sudo`, so it is
+safe on a host you have not decided to use yet, and it exits non-zero if
+anything would stop a stack starting. You do not have to run it: it is the
+same code `quick-start` runs in its own preflight, so skipping it only means
+finding out a few seconds later.
 
 One command, and it sizes the guests for whatever machine you ran it on
 rather than asking you to. It shows you the plan — vCPU, RAM, where the
@@ -694,6 +704,24 @@ created with `--backing-file` inherit them. Ansible is skipped when
 `qemu-tool` is the primary interface. Both subcommands accept `--domain
 <file.xml>` to load a libvirt domain XML as base configuration (CLI
 flags take precedence over XML values).
+
+### check-system flags
+
+Checks the host and prints a report grouped by area — tools, Docker,
+virtualisation, container identity, settings, capacity, images. Every line is
+marked `ok`, `warn`, `FAIL` or `skip`. A `FAIL` stops a stack starting and
+sets the exit status to 1; a `warn` limits what the host can do without
+blocking it, and does not fail the command — a checker that cried wolf would
+stop being run.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--env-file FILE` | (search path) | Settings file to check against, repeatable, later files winning key by key. Which file the search path found is itself part of the report |
+
+The container identity line is printed even when it is fine. "Which uid did
+my fleet run as" used to have a surprising answer — every stack ran as root
+until `CONTAINER_USER` became unconditional — so stating it is the point. See
+[Settings file](#settings-file).
 
 ### Shared flags (run-vm and gen-vm)
 

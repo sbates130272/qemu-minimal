@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import grp
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -263,31 +264,107 @@ def _caller_identity() -> dict[str, str]:
     return ident
 
 
+# Same shape gen_compose enforces on an env file, applied here to whatever
+# value is actually in force -- which may have come from the environment and
+# so have been seen by neither the generator nor the settings file.
+_UID_GID_RE = re.compile(r"[0-9]+:[0-9]+")
+
+
+def _reject_bad_user(value: str, source: str) -> None:
+    """Refuse a CONTAINER_USER that cannot work, naming where it came from.
+
+    Every way of getting this wrong fails a long way from the thing that set
+    it, and one of them does not fail at all:
+
+    * A name ("stebates"). Docker resolves it against the IMAGE's /etc/passwd,
+      which carries no entry for your uid, and dies at container create with
+      "unable to find user".
+    * A bare uid ("1000"). Docker then wants the gid from that uid's passwd
+      entry, which does not exist either.
+    * "${UID}:${GID}", the spelling people try first and the worst of the
+      three. Bash exports neither, so it survives as literal text, compose
+      substitutes empty for both, and `user: ":"` runs as root without
+      erroring.
+
+    gen_compose checks the env file at render time. This checks the value the
+    containers will actually get, which is not the same thing: a stack is
+    rendered once and run many times, and the environment outranks the file.
+    """
+    if _UID_GID_RE.fullmatch(value.strip()):
+        return
+    sys.exit(
+        f"Error: CONTAINER_USER must be numeric <uid>:<gid>, got {value!r}\n"
+        f"       (from {source}).\n"
+        "       A user name does not resolve: the images carry no passwd "
+        "entry for your uid.\n"
+        "       ${UID}:${GID} does not work either -- bash exports neither, "
+        "so it silently becomes root.\n"
+        "       Use the literal ids, e.g. CONTAINER_USER=$(id -u):$(id -g) "
+        "evaluated by your shell,\n"
+        "       or unset it and qemu-tool will fill in your own."
+    )
+
+
+def _declared_in_layers(settings: list[Path]) -> dict[str, str]:
+    if not settings:
+        return {}
+    try:
+        return {k: v for k, v in parse_env_layers(settings).items() if v.strip()}
+    except SystemExit:
+        raise
+    except Exception:
+        # A layer this tool cannot parse is not a reason to refuse to run
+        # docker compose, which may well parse it fine.
+        return {}
+
+
+def resolve_identity(settings: list[Path]) -> tuple[dict[str, str], str]:
+    """The uid:gid the containers will really run as, and where it came from.
+
+    Precedence matches what compose itself does with the same keys, or the
+    tool and the containers disagree about the value -- the failure mode this
+    stack's repeated --env-file handling exists to avoid. Compose resolves a
+    variable from the process environment first and the --env-file layers
+    second, so anything set in either is already a decision.
+
+    Returns the full pair plus a human-readable source for CONTAINER_USER, so
+    a caller can say which of the three answers it got rather than just
+    printing a number.
+    """
+    declared = _declared_in_layers(settings)
+    ident = dict(_caller_identity())
+    source = "this user"
+    for key in ("CONTAINER_USER", "CONTAINER_KVM_GID"):
+        if os.environ.get(key, "").strip():
+            ident[key] = os.environ[key]
+            if key == "CONTAINER_USER":
+                source = "the environment"
+        elif declared.get(key):
+            ident[key] = declared[key]
+            if key == "CONTAINER_USER":
+                names = ", ".join(str(p) for p in settings)
+                source = names
+    _reject_bad_user(ident["CONTAINER_USER"], source)
+    return ident, source
+
+
 def _apply_identity(env: dict[str, str], settings: list[Path]) -> None:
     """Fill in CONTAINER_USER/CONTAINER_KVM_GID, without overriding a choice.
 
-    Precedence has to match what compose itself will do with the same keys,
-    or the tool and the containers disagree about the value -- the failure
-    mode this stack's --env-file handling exists to avoid. Compose resolves a
-    variable from the process environment first and the --env-file layers
-    second, so anything set in either is already a decision and is left alone.
-    Only a key nobody has expressed an opinion about is filled in.
+    Only a key nobody has expressed an opinion about is filled in; the rest is
+    left for compose to resolve exactly as it would have. resolve_identity
+    decides what the answer is and refuses an unusable one -- this only
+    decides whether to write it down.
+
+    Writing a layer's own value back into the environment would reach the same
+    containers, since compose resolves to the same string either way. It is
+    still wrong: the environment outranks the layers, so doing it converts a
+    value the operator can override by editing a file into one they cannot.
     """
-    declared: set[str] = set()
-    if settings:
-        try:
-            declared = {
-                k for k, v in parse_env_layers(settings).items() if v.strip()
-            }
-        except SystemExit:
-            raise
-        except Exception:
-            # A layer this tool cannot parse is not a reason to refuse to run
-            # docker compose, which may well parse it fine. Fall back to
-            # filling in nothing the environment has not already supplied.
-            declared = set()
-    for key, value in _caller_identity().items():
-        if key in os.environ or key in declared:
+    ident, _ = resolve_identity(settings)
+    declared = _declared_in_layers(settings)
+    for key, value in ident.items():
+        if os.environ.get(key, "").strip() or declared.get(key):
             continue
         env[key] = value
 
