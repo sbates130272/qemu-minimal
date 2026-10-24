@@ -158,8 +158,8 @@ You need KVM, Docker with compose, Ansible, [`oras`](https://oras.land/),
 8 cores, 16 GB of RAM and about 30 GB of disk. Then:
 
 ```bash
-pipx install -e ./qemu                                     # or the .deb, see below
-ansible-galaxy collection install -r ansible/requirements.yml
+uv tool install -e ./qemu                                  # or pipx, or the .deb -- see below
+ansible-galaxy collection install -r ansible/requirements.yml  # needs git
 qemu-tool check-system                                     # optional; see below
 qemu-tool quick-start
 ```

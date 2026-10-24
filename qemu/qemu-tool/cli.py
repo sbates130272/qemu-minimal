@@ -221,8 +221,10 @@ def _add_quick_start(sub: argparse._SubParsersAction) -> None:
     )
     p.add_argument(
         "--key-dir", type=Path,
-        default=Path("/var/lib/qemu-tool/quickstart-key"), metavar="DIR",
-        help="Where the guest keypair is pulled to.",
+        default=None, metavar="DIR",
+        help="Where the guest keypair is pulled to. Default: "
+             "/var/lib/qemu-tool/quickstart-key, falling back to "
+             "$XDG_DATA_HOME when that is not writable.",
     )
     p.add_argument(
         "--images", type=Path, default=None, metavar="DIR",
@@ -657,7 +659,7 @@ def _add_shutdown(sub: argparse._SubParsersAction) -> None:
 def _add_check_system(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
         "check-system",
-        help="Check this host has everything the stacks need.",
+        help="Read-only preflight: check this host has everything the stacks need.",
         description=(
             "Ask every host question the stacks depend on, before anything "
             "has been pulled or written: the tools on PATH, the Docker "

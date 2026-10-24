@@ -196,7 +196,10 @@ when that is not writable \(em which on a fresh host it is not.
 .TP
 .BI \-\-key\-dir " DIR"
 Where the guest keypair is pulled to. Default
-.IR /var/lib/qemu\-tool/quickstart\-key .
+.IR /var/lib/qemu\-tool/quickstart\-key ,
+falling back to a directory under
+.B $XDG_DATA_HOME
+when that path is not writable \(em which on a fresh host it is not.
 The keypair ships as an ORAS referrer beside the guest qcow2, not inside it.
 .TP
 .BI \-\-images " DIR"
@@ -1374,7 +1377,9 @@ edit the settings file, not them.
 The package manifests, the compose stacks and
 .I env/example
 are also bundled inside the Python distribution, so
-.B pipx install qemu-tool
+.B "uv tool install qemu-tool"
+(or
+.BR "pipx install qemu-tool" )
 resolves them with no system install present. The
 .I /usr/share/qemu-tool
 copies take precedence whenever they exist.
