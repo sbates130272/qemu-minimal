@@ -91,14 +91,17 @@ LOGS_ENABLE=false
 # ---------------------------------------------------------------------------
 # Run the containers as the operator, not as root
 # ---------------------------------------------------------------------------
-# VM_NVME above makes this matter: run-vm creates each drive qcow2 from INSIDE
-# the qemu container, so without this all 32 land root-owned in an images
-# directory this user otherwise owns, and clearing them needs sudo. Proven on
-# a one-VM probe: same image and command, `-u 0:0` gives a root-owned file
-# and `-u <uid>:<gid>` gives a user-owned one.
+# Nothing to set here any more. This overlay used to pin
+# CONTAINER_USER=244227127:1274200513 and CONTAINER_KVM_GID=136 -- one
+# particular operator on one particular node, which is exactly the thing an
+# overlay should not have to carry. `qemu-tool compose` now resolves both from
+# whoever runs it: the caller's uid:gid, and the gid that owns /dev/kvm.
 #
-# The kvm gid is a property of the host, not of the fleet, so it cannot be
-# defaulted: the qemu service needs it in group_add to open /dev/kvm. 136 is
-# this node's; check with `getent group kvm` before reusing this file.
-CONTAINER_USER=244227127:1274200513
-CONTAINER_KVM_GID=136
+# The reason it mattered is unchanged and still worth knowing: VM_NVME above
+# makes run-vm create each drive qcow2 from INSIDE the qemu container, so as
+# root all 32 land root-owned in an images directory the operator otherwise
+# owns, and clearing them needs sudo. Proven on a one-VM probe: same image and
+# command, `-u 0:0` gives a root-owned file and `-u <uid>:<gid>` gives a
+# user-owned one.
+#
+# Pin them again only to run this fleet as somebody other than yourself.

@@ -8,11 +8,21 @@
 // Not generated: it discovers containers at run time rather than being told
 // VM_COUNT of them, so nothing here changes when the fleet is resized.
 
-// Docker's socket, read-only. Discovery is dynamic, so a container that
+// The Docker API through the read-only proxy, NOT the socket.
+//
+// This container holds no /var/run/docker.sock, and that is deliberate: a
+// mounted socket is root on the host whatever mount flags it carries, because
+// `:ro` applies to the inode and not to the API behind it. The `dockerapi`
+// service in the compose file is an haproxy that answers GET on /containers
+// and refuses POST, so the worst this collector can do with its credential is
+// read what it was already reading.
+//
+// Addressed through DOCKER_HOST rather than hardcoded, because the fleet
+// network prefix is a setting. Discovery stays dynamic, so a container that
 // restarts -- an ernic worker flapping, say -- is picked up again without
 // Alloy being restarted.
 discovery.docker "stack" {
-	host             = "unix:///var/run/docker.sock"
+	host             = coalesce(sys.env("DOCKER_HOST"), "unix:///var/run/docker.sock")
 	refresh_interval = "10s"
 }
 
@@ -51,7 +61,7 @@ discovery.relabel "stack" {
 }
 
 loki.source.docker "stack" {
-	host       = "unix:///var/run/docker.sock"
+	host       = coalesce(sys.env("DOCKER_HOST"), "unix:///var/run/docker.sock")
 	targets    = discovery.relabel.stack.output
 	labels     = {job = "docker"}
 	forward_to = [loki.write.default.receiver]

@@ -26,6 +26,8 @@ from .gen_vm import run as gen_vm_run
 from .libvirt_xml import LibvirtXml
 from .inspect import run as inspect_run
 from .inspect import ssh_run as inspect_ssh_run
+from .check_system import run as check_system_run
+from .down_all import run as down_all_run
 from .quick_start import VERBS as _QUICK_START_VERBS, run as quick_start_run
 from .shutdown import run as shutdown_run
 from .list_vms import run as list_vms_run
@@ -122,6 +124,8 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers()
 
     _add_quick_start(sub)
+    _add_check_system(sub)
+    _add_down_all(sub)
     _add_run_vm(sub, shared)
     _add_gen_vm(sub, shared)
     _add_gen_compose(sub)
@@ -650,6 +654,64 @@ def _add_shutdown(sub: argparse._SubParsersAction) -> None:
     p.set_defaults(func=_shutdown_cmd)
 
 
+def _add_check_system(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser(
+        "check-system",
+        help="Check this host has everything the stacks need.",
+        description=(
+            "Ask every host question the stacks depend on, before anything "
+            "has been pulled or written: the tools on PATH, the Docker "
+            "daemon and your access to it, KVM, the uid the containers will "
+            "run as, which settings file is in force, and whether the images "
+            "directory has room. Read-only and needs no sudo. Exits non-zero "
+            "if anything would stop a stack starting; warnings do not fail "
+            "it. This is the same code quick-start runs in its preflight."
+        ),
+    )
+    p.add_argument(
+        "--env-file", type=Path, action="append", metavar="FILE",
+        help=(
+            "Settings file to check against, repeatable, later files winning "
+            "key by key. Without it the usual search path is used, and which "
+            "file that found is itself part of the report."
+        ),
+    )
+    p.set_defaults(func=_check_system_cmd)
+
+
+def _add_down_all(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser(
+        "down-all",
+        help="Tear down every running qemu-tool stack you own.",
+        description=(
+            "Find every running qemu-tool stack on this host and tear it "
+            "down. A stack is identified by its compose file -- the "
+            "gen-compose provenance header, or one of the directories this "
+            "tool ships -- never by service name, because this removes "
+            "containers. A stack is YOURS if any of its containers runs as "
+            "your uid, which is what CONTAINER_USER put there. Run under "
+            "sudo to take every stack on the system regardless of owner. "
+            "Always asks before removing anything."
+        ),
+    )
+    p.add_argument(
+        "--dry-run", action="store_true",
+        help="List what would be torn down, and the exact commands, without "
+             "stopping anything.",
+    )
+    p.add_argument(
+        "--yes", action="store_true",
+        help="Skip the confirmation. For scripts; the prompt never defaults "
+             "to yes.",
+    )
+    p.add_argument(
+        "--all-users", action="store_true",
+        help="Include stacks owned by other users. Needs root, since their "
+             "containers cannot be stopped without it.",
+    )
+    p.set_defaults(func=_down_all_cmd)
+
+
 def _add_man(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
         "man",
@@ -743,6 +805,15 @@ def _run_vm_cmd(args: argparse.Namespace) -> None:
 
     caps = probe_caps(cfg)
     run_vm_run(cfg, caps)
+
+
+def _down_all_cmd(args: argparse.Namespace) -> None:
+    down_all_run(assume_yes=args.yes, dry_run=args.dry_run,
+                 all_users=args.all_users)
+
+
+def _check_system_cmd(args: argparse.Namespace) -> None:
+    check_system_run(args.env_file)
 
 
 def _quick_start_cmd(args: argparse.Namespace) -> None:

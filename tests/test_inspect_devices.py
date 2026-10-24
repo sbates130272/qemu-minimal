@@ -277,7 +277,7 @@ class Gpus(unittest.TestCase):
             [],
         )
         self.assertEqual(gpus, [{"gfx": "gfx1250", "origin": "emulated",
-                                 "source": "rocjitsu-1.sock"}])
+                                 "source": "rocjitsu-1.sock", "bars": []}])
 
     def test_passthrough_gpu_takes_its_gfx_from_the_guest(self):
         argv = ["qemu-system-x86_64", "-device",
@@ -290,7 +290,7 @@ class Gpus(unittest.TestCase):
                 argv,
             )
         self.assertEqual(gpus, [{"gfx": "gfx1250", "origin": "passthrough",
-                                 "source": "03:00.0"}])
+                                 "source": "03:00.0", "bars": []}])
 
     def test_a_passed_through_nic_is_not_a_gpu(self):
         argv = ["qemu-system-x86_64", "-device", "vfio-pci,host=0000:03:00.0"]
@@ -307,7 +307,7 @@ class Gpus(unittest.TestCase):
             [],
         )
         self.assertEqual(gpus, [{"gfx": "gfx1250", "origin": "unknown",
-                                 "source": "guest"}])
+                                 "source": "guest", "bars": []}])
 
     def test_ambiguous_pairing_leaves_the_real_gpu_without_a_gfx(self):
         """Two real GPUs and one unclaimed gfx: naming either one is a guess."""
@@ -336,6 +336,142 @@ class Gpus(unittest.TestCase):
         self.assertIsNone(inspect_mod._gfx_from_kfd(
             "cpu_cores_count 8\ngfx_target_version 0\n"))
         self.assertIsNone(inspect_mod._gfx_from_kfd("simd_count 0\n"))
+
+
+class Bars(unittest.TestCase):
+    """PCIe BAR sizes on the GPU row.
+
+    The format is a sysfs `resource` file: one line per resource,
+    `0x<start> 0x<end> 0x<flags>`, inclusive bounds. Three things in it are
+    easy to get wrong and all three are silent:
+
+    * The bounds are INCLUSIVE, so size is end - start + 1. Off by one reports
+      every BAR as one byte under a power of two, which looks precise.
+    * A 64-bit BAR occupies TWO slots and the upper one reads as zeros, so a
+      naive enumeration numbers the BARs wrongly from the first 64-bit one on.
+      That is why the index is carried rather than inferred.
+    * Only the first six lines are BARs. The rest are the expansion ROM and
+      bridge windows, and counting them gives a GPU a BAR6 it does not have.
+
+    The fixtures below are real: REAL_MI100 is `cat
+    /sys/bus/pci/devices/0000:63:00.0/resource` from an MI100, whose 32 GiB
+    BAR0 is what a large-BAR card looks like.
+    """
+
+    # MI100 with the large BAR enabled, copied verbatim from
+    # /sys/bus/pci/devices/0000:63:00.0/resource on a host that has one.
+    # BAR0 32 GiB VRAM, BAR2 2 MiB doorbell, BAR5 512 KiB registers -- the
+    # same three apertures rocjitsu emulates, and the same three its schema
+    # names (vram_aperture_bytes, doorbell_aperture_bytes,
+    # register_aperture_bytes). Line 5 is an IO BAR and line 7 is not a BAR
+    # at all, which is why both are here rather than trimmed away.
+    REAL_MI100 = (
+        "0x0000017800000000 0x0000017fffffffff 0x000000000014220c\n"
+        "0x0000000000000000 0x0000000000000000 0x0000000000000000\n"
+        "0x0000018000000000 0x00000180001fffff 0x000000000014220c\n"
+        "0x0000000000000000 0x0000000000000000 0x0000000000000000\n"
+        "0x0000000000005000 0x00000000000050ff 0x0000000000040101\n"
+        "0x00000000cb200000 0x00000000cb27ffff 0x0000000000040200\n"
+        "0x00000000cb280000 0x00000000cb29ffff 0x0000000000046200\n"
+    )
+
+    def test_inclusive_bounds(self):
+        """0x17800000000..0x17fffffffff is 32 GiB, not 32 GiB minus one."""
+        bars = inspect_mod._parse_bars(self.REAL_MI100)
+        self.assertEqual(bars[0]["size"], 32 * 1024 ** 3)
+
+    def test_io_bars_are_not_reported(self):
+        """Line 5 is an IO BAR (flags bit 0 set). A GPU row is about
+        apertures; an IO port range is not one and listing it is noise."""
+        bars = inspect_mod._parse_bars(self.REAL_MI100)
+        self.assertNotIn(4, [b["index"] for b in bars])
+
+    def test_the_rom_line_is_not_a_bar(self):
+        """Line 7 is the expansion ROM. Only the first six lines are BARs."""
+        bars = inspect_mod._parse_bars(self.REAL_MI100)
+        self.assertTrue(all(b["index"] < 6 for b in bars))
+
+    def test_a_64_bit_bar_keeps_its_own_index(self):
+        """It eats two slots and the upper one is zeros. The doorbell here is
+        BAR2, and would be misreported as BAR1 by anything counting results.
+        """
+        text = ("0x00000000e0000000 0x00000000efffffff 0x000000000014220c\n"
+                "0x0000000000000000 0x0000000000000000 0x0000000000000000\n"
+                "0x00000000f0000000 0x00000000f01fffff 0x000000000014220c\n"
+                "0x0000000000000000 0x0000000000000000 0x0000000000000000\n"
+                "0x00000000f1000000 0x00000000f107ffff 0x0000000000040200\n"
+                "0x0000000000000000 0x0000000000000000 0x0000000000000000\n")
+        bars = inspect_mod._parse_bars(text)
+        self.assertEqual([b["index"] for b in bars], [0, 2, 4])
+        self.assertEqual([b["size"] for b in bars],
+                         [256 * 1024 ** 2, 2 * 1024 ** 2, 512 * 1024])
+        self.assertEqual([b["bits"] for b in bars], [64, 64, 32])
+        self.assertEqual([b["prefetchable"] for b in bars],
+                         [True, True, False])
+
+    def test_unmapped_and_malformed_yield_nothing(self):
+        """A powered-off or unconfigured device is all zeros, and a truncated
+        read is not a device with no BARs -- both must be empty, never a
+        bogus entry."""
+        self.assertEqual(inspect_mod._parse_bars("0x0 0x0 0x0\n" * 6), [])
+        self.assertEqual(inspect_mod._parse_bars("not a resource line"), [])
+        self.assertEqual(inspect_mod._parse_bars("0x00000000e0000000 0xeff"), [])
+        self.assertEqual(inspect_mod._parse_bars(""), [])
+
+    def test_sizes_render_as_exact_powers_of_two(self):
+        """Every real BAR is a power of two, so a rounded "33.6 GB" would be
+        the unit conversion lying about a number that is exactly 32 GiB."""
+        self.assertEqual(inspect_mod._human_bytes(512 * 1024), "512 KiB")
+        self.assertEqual(inspect_mod._human_bytes(2 * 1024 ** 2), "2 MiB")
+        self.assertEqual(inspect_mod._human_bytes(256 * 1024 ** 2), "256 MiB")
+        self.assertEqual(inspect_mod._human_bytes(32 * 1024 ** 3), "32 GiB")
+        self.assertEqual(inspect_mod._human_bytes(256 * 1024 ** 3), "256 GiB")
+
+    def test_description_names_the_index_and_the_kind(self):
+        bar = {"index": 0, "size": 32 * 1024 ** 3,
+               "prefetchable": True, "bits": 64}
+        self.assertEqual(inspect_mod._describe_bar(bar),
+                         "BAR0 32 GiB (64-bit prefetchable)")
+
+    def test_a_passthrough_gpu_reads_its_bars_on_the_host(self):
+        """No agent needed: the host owns that device's sysfs, and the guest
+        sees the same apertures."""
+        argv = ["-device", "vfio-pci,host=0000:03:00.0"]
+        with mock.patch.object(inspect_mod, "_pci_class", lambda b: "0x030000"), \
+             mock.patch.object(inspect_mod, "_host_bars",
+                               lambda b: inspect_mod._parse_bars(self.REAL_MI100)):
+            gpus = inspect_mod._gpu_devices(vm(), ga(), argv)
+        self.assertEqual([inspect_mod._describe_bar(b) for b in gpus[0]["bars"]],
+                         ["BAR0 32 GiB (64-bit prefetchable)",
+                          "BAR2 2 MiB (64-bit prefetchable)",
+                          "BAR5 512 KiB (32-bit)"])
+
+    def test_an_emulated_gpu_takes_its_bars_from_the_guest(self):
+        """rocjitsu's vram_aperture_bytes lives in a config file inside the
+        server's container, where inspect cannot reach it -- and the guest is
+        where the resulting BAR actually appears anyway.
+        """
+        res = "/sys/bus/pci/devices/0000:00:06.0/resource"
+        files = {kfd_props(): KFD_GFX1250,
+                 res: ("0x00000000e0000000 0x00000000efffffff "
+                       "0x000000000014220c\n")}
+        with mock.patch.object(
+                inspect_mod, "_rocjitsu_gpus",
+                lambda socks: ["gfx1250"] if any("rocjitsu" in s for s in socks) else []):
+            gpus = inspect_mod._gpu_devices(
+                vm(vfio_user_sockets=["/run/vfu/rocjitsu-1.sock"]),
+                ga(files=files), [])
+        self.assertEqual(gpus[0]["origin"], "emulated")
+        self.assertEqual([inspect_mod._describe_bar(b) for b in gpus[0]["bars"]],
+                         ["BAR0 256 MiB (64-bit prefetchable)"])
+
+    def test_bars_is_always_present(self):
+        """Same record shape whether or not the probe reached the device, so
+        a consumer never has to distinguish a missing key from an empty one.
+        """
+        gpus = inspect_mod._gpu_devices(
+            vm(), ga(files={kfd_props(): KFD_GFX1250}), [])
+        self.assertEqual(gpus[0]["bars"], [])
 
 
 class AStarvedDeviceProbeIsUnknown(unittest.TestCase):
@@ -465,7 +601,8 @@ class RecordShape(unittest.TestCase):
                          vfio_user_sockets=["/run/vfu/rocjitsu-1.sock"])
         json.dumps(r)  # the three new sections must be serialisable
         self.assertEqual(r["gpus"], [{"gfx": "gfx1250", "origin": "emulated",
-                                      "source": "rocjitsu-1.sock"}])
+                                      "source": "rocjitsu-1.sock",
+                                      "bars": []}])
         self.assertEqual(r["ssh_sessions"], [])
         self.assertEqual(
             r["block_devices"],

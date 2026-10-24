@@ -94,6 +94,40 @@ jobs:
         print("KVM usable")
         PY
 
+    # Run the stack as a non-root user, not as the job's root. See the
+    # action: a root caller resolves CONTAINER_USER to 0:0 and proves
+    # root-with-no-capabilities, which is not the configuration an operator
+    # has. The workspace is in the chown list because this lane writes its
+    # report into it and the checkout is root-owned.
+    - name: Run the stack as a non-root user
+      uses: ./.github/actions/nonroot-user
+      with:
+        # The subdirectories too, not just the root: chown -R only
+        # reaches what exists, and a later root step that mkdir -p's
+        # a missing one owns it.
+        chown: >-
+          /var/lib/qemu-tool
+          /var/lib/qemu-tool/images
+          /var/lib/qemu-tool/stacks
+          ${{ github.workspace }}
+
+    # These lanes drive the stack with PLAIN `docker compose` in places --
+    # the `ps` after `up`, and the logs-on-failure path -- and plain compose
+    # cannot resolve CONTAINER_USER from the caller the way qemu-tool does.
+    # Without this the committed stack's `${CONTAINER_USER:?}` refuses
+    # outright, which on the failure path would cost exactly the logs that
+    # explain the failure.
+    #
+    # The value must match the uid the overlays were created as, so it is
+    # derived from the action's rather than written out again.
+    #
+    # pr-quickstart-boot deliberately does NOT do this: it uses qemu-tool
+    # throughout, so leaving the variable unset is what tests that
+    # compose._caller_identity() resolves it.
+    - name: Let plain docker compose see the same uid
+      run: echo "CONTAINER_USER=$CIUSER_UID:$CIUSER_UID" >> "$GITHUB_ENV"
+
+
     # The image build wants ~11 GB and the guest qcow2 another ~16 GB. A
     # stock runner does not have that on / without help.
     - name: Free disk space
@@ -306,9 +340,14 @@ jobs:
         # actually built from. Reading one layer would pick up a pin the
         # other had moved.
         BACKING=$(grep -h '^VM_BACKING_IMAGE=' $ENV_LAYERS | tail -1 | cut -d= -f2-)
-        qemu-tool gen-vm $ENV_ARGS \
+        # As the non-root user: these overlays are what the qemu containers
+        # open READ-WRITE, and one created by root is one they cannot write.
+        # run-vm now refuses that by name rather than letting QEMU fail
+        # obscurely, so getting this wrong fails the lane loudly.
+        RUNAS='setpriv --reuid '"$CIUSER_UID"' --regid '"$CIUSER_UID"' --init-groups env HOME='"$CIUSER_HOME"
+        $RUNAS qemu-tool gen-vm $ENV_ARGS \
           --vm-name lmcache-ci-1 --backing-image "$BACKING"
-        qemu-tool gen-vm $ENV_ARGS \
+        $RUNAS qemu-tool gen-vm $ENV_ARGS \
           --vm-name lmcache-ci-2 \
           --backing-file /var/lib/qemu-tool/images/lmcache-ci-1-backing.qcow2
 

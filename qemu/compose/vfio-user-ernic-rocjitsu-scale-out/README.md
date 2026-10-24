@@ -149,6 +149,72 @@ stale — reloading guest modules does not recover them. The only fix is
 `docker compose down && up` for the whole stack. `restart: on-failure` would
 turn that into a quiet wedge instead of a visible crash. See AGENTS.md issue 7.
 
+## Nothing here runs as root
+
+Every service carries `user: ${CONTAINER_USER:?...}` and `cap_drop: [ALL]`,
+and `qemu-tool compose` supplies the uid from whoever ran it — your own
+`uid:gid`, plus `CONTAINER_KVM_GID` from the gid that owns `/dev/kvm`. You do
+not have to configure anything; set `CONTAINER_USER` only to pin a *different*
+identity, including `0:0` to go back to root deliberately.
+
+A plain `docker compose up` has no caller to ask and refuses rather than
+guessing:
+
+```
+error while interpolating services.qemu-3.user: required variable
+CONTAINER_USER is missing a value: set CONTAINER_USER=<uid>:<gid>
+```
+
+That is the point of the `:?` spelling. `${CONTAINER_USER:-}` interpolates to
+the empty string, `user: ":"` is not an error to Docker, and the fleet runs as
+uid 0 with one warning line as the evidence — measured on compose v5.3.1.
+Supply both and plain compose works:
+
+```bash
+CONTAINER_USER=$(id -u):$(id -g) \
+CONTAINER_KVM_GID=$(stat -c %g /dev/kvm) docker compose up -d
+```
+
+Three services are exempt, each for its own reason:
+
+| Service | Why |
+|---|---|
+| `tapsetup-N` | Cannot. Docker sets no **ambient** capabilities, so a non-root uid holds no effective `NET_ADMIN` and `ip link add` fails with `RTNETLINK answers: Operation not permitted`. Compose cannot express ambient caps. It is short-lived, holds `NET_ADMIN` and nothing else (`cap_drop: [ALL]` first, then that one back — it used to run with Docker's full default set *plus* `NET_ADMIN`), and runs read-only. |
+| `dockerapi` | Speaks to the host Docker socket, which is root's. |
+| `*-stats-exporter` | Pinned to `65534`. They create nothing on the host, so there is no ownership to fix and `nobody` is the stronger position. |
+
+A uid is not a capability set — a container can be uid 1000 and still hold
+`NET_RAW` — so `cap_drop: [ALL]` and `no-new-privileges:true` are on
+everything, independently of who it runs as.
+
+**Migrating a fleet that ran as root.** `qemu-tool compose up` creates
+`PROM_DATA_DIR`, `LOKI_DATA_DIR` and `GRAFANA_DATA_DIR` as you, and names any
+file it finds that an earlier root run left behind. The one it cannot fix is a
+`<vm>-nvmeN.qcow2`: 0644 root-owned, and QEMU opens a drive read-write, so the
+guest will not boot at all rather than merely owning the wrong file. Delete
+them — they are scratch.
+
+## Alloy holds no Docker socket
+
+`:ro` on a socket mount restricts the *inode*, not the API behind it. Anything
+that can `connect()` to `/var/run/docker.sock` can create a privileged
+container and own the host, whatever flags the mount carries — so the old
+`- /var/run/docker.sock:/var/run/docker.sock:ro` on `alloy` was a root
+credential held by the one process in the stack that parses untrusted
+container log content.
+
+The `dockerapi` service is an haproxy in front of that socket with a path
+allowlist: `CONTAINERS`, `EVENTS`, `PING` and `VERSION` on, `POST=0` and
+everything else off. `POST=0` is the line that matters — without it the
+allowlist still permits container create, start and exec. Alloy reaches the
+daemon over the fleet network through `DOCKER_HOST`, holds no socket, and
+therefore takes `CONTAINER_USER` like everything else.
+
+This does not remove the root-equivalent container — anything that speaks to
+the daemon needs the socket — it shrinks it from a log pipeline to a proxy
+whose whole job is saying no. The proxy publishes no port, so it is reachable
+from the fleet network and nowhere else.
+
 ## Guest Ethernet (`ERNIC_TAP`)
 
 Off by default. Turn it on and the guests can talk IP to each other; leave it

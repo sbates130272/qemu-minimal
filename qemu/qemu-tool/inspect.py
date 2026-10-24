@@ -841,6 +841,38 @@ def _ga_run(path, timeout=2.0, budget=8.0):
             gpu_complete = len(partial) == before
             break
         files[node] = text
+
+        # The GPU's BARs, reached through the node's own location_id.
+        #
+        # KFD packs the PCI address as (bus << 8) | (device << 3) | function,
+        # with the domain in a separate field -- verified against real
+        # hardware: location_id 25344 is 0x6300, which is 0000:63:00.0, and
+        # that device is there. Deriving it here rather than enumerating
+        # /sys/bus/pci is deliberate: the agent has no readdir, so a walk is
+        # not available, and the KFD node is the only thing that says WHICH
+        # PCI device is this GPU.
+        #
+        # Cheap enough to sit inside the node loop: one extra read per GPU,
+        # under the same device deadline, and skipped entirely for a node
+        # whose location_id is 0 (the CPU node, and anything that does not
+        # answer).
+        loc = dom = 0
+        for line in text.splitlines():
+            f = line.split()
+            if len(f) == 2 and f[0] == "location_id":
+                try:
+                    loc = int(f[1])
+                except ValueError:
+                    loc = 0
+            elif len(f) == 2 and f[0] == "domain":
+                try:
+                    dom = int(f[1])
+                except ValueError:
+                    dom = 0
+        if loc and time.monotonic() <= device_deadline:
+            bdf = "%04x:%02x:%02x.%d" % (dom, (loc >> 8) & 0xFF,
+                                         (loc >> 3) & 0x1F, loc & 0x7)
+            grab("/sys/bus/pci/devices/%s/resource" % bdf)
     result["gpu_complete"] = gpu_complete
 
     # The NQN only ever refines a disk's origin -- without it _block_origin
@@ -1103,6 +1135,101 @@ def _gfx_from_kfd(text: str) -> str | None:
     return None
 
 
+# Flag bits in a sysfs `resource` line's third column, which is a
+# struct resource's flags, not the raw BAR register.
+_IORESOURCE_IO = 0x00000100
+_IORESOURCE_MEM = 0x00000200
+_IORESOURCE_PREFETCH = 0x00002000
+_IORESOURCE_MEM_64 = 0x00100000
+
+
+def _human_bytes(n: int) -> str:
+    """Powers of two, because a BAR is always one.
+
+    No rounding to one decimal: every real BAR size is an exact power of two,
+    so a figure like "33.6 GB" would be the unit conversion lying about a
+    number that is exactly 32 GiB.
+    """
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if n < 1024 or unit == "TiB":
+            return f"{n} {unit}" if unit == "B" else f"{n:g} {unit}"
+        n /= 1024
+    return f"{n:g} TiB"
+
+
+def _parse_bars(text: str) -> list[dict[str, Any]]:
+    """Mapped memory BARs from a sysfs `resource` file.
+
+    The file is one line per resource, `0x<start> 0x<end> 0x<flags>`, with the
+    first six being BAR0..BAR5 and the rest (expansion ROM, bus windows) not
+    BARs at all -- so only the first six are read.
+
+    An unmapped BAR is all zeros, and so is the upper half of a 64-bit BAR,
+    which occupies two slots. Both are skipped, which is why the index is
+    carried explicitly rather than inferred from position in the result.
+
+    Size is end - start + 1: these are inclusive bounds. Off-by-one here would
+    report every BAR as one byte short of a power of two, which is the kind of
+    wrong that looks precise.
+    """
+    bars: list[dict[str, Any]] = []
+    for index, line in enumerate(text.splitlines()[:6]):
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        try:
+            start, end, flags = (int(p, 16) for p in parts[:3])
+        except ValueError:
+            continue
+        if end <= start or not (flags & _IORESOURCE_MEM):
+            # Zero rows are unmapped BARs and 64-bit upper halves; IO BARs are
+            # not an aperture anyone is asking about on a GPU row.
+            continue
+        bars.append({
+            "index": index,
+            "size": end - start + 1,
+            "prefetchable": bool(flags & _IORESOURCE_PREFETCH),
+            "bits": 64 if flags & _IORESOURCE_MEM_64 else 32,
+        })
+    return bars
+
+
+def _describe_bar(bar: dict[str, Any]) -> str:
+    kind = f"{bar['bits']}-bit"
+    if bar["prefetchable"]:
+        kind += " prefetchable"
+    return f"BAR{bar['index']} {_human_bytes(bar['size'])} ({kind})"
+
+
+def _guest_bars(ga_info: dict[str, Any]) -> list[list[dict[str, Any]]]:
+    """Per-GPU BAR lists, in the order the KFD nodes were read.
+
+    Keyed off the resource files the probe fetched, which it only fetches for
+    a node whose location_id resolved -- so the ordering matches _guest_gfx's,
+    both being driven by the same ascending node walk.
+    """
+    out: list[list[dict[str, Any]]] = []
+    for path, text in sorted((ga_info.get("files") or {}).items()):
+        if not path.startswith("/sys/bus/pci/devices/") or not path.endswith("/resource"):
+            continue
+        out.append(_parse_bars(text))
+    return out
+
+
+def _host_bars(bdf: str) -> list[dict[str, Any]]:
+    """BARs of a passed-through GPU, read on the host.
+
+    Needs no guest and no agent: the host owns this device's sysfs, and for a
+    passthrough the guest sees the same apertures. This is the only GPU case
+    `inspect` can answer with the VM powered off.
+    """
+    try:
+        return _parse_bars(
+            Path(f"/sys/bus/pci/devices/{bdf}/resource").read_text())
+    except OSError:
+        return []
+
+
 def _guest_gfx(ga_info: dict[str, Any]) -> list[str]:
     out: list[str] = []
     for path, text in (ga_info.get("files") or {}).items():
@@ -1135,7 +1262,10 @@ def _passthrough_gpus(argv: list[str]) -> list[dict[str, Any]]:
         cls = _pci_class(bdf)
         if cls is None or not cls.startswith(_GPU_CLASS_PREFIXES):
             continue
-        out.append({"gfx": None, "origin": "passthrough", "source": _short_bdf(bdf)})
+        # Read on the host, where this device really lives. A passthrough GPU
+        # presents the same apertures to the guest, and this needs no agent.
+        out.append({"gfx": None, "origin": "passthrough",
+                    "source": _short_bdf(bdf), "bars": _host_bars(bdf)})
     return out
 
 
@@ -1157,10 +1287,28 @@ def _gpu_devices(vm: dict[str, Any], ga_info: dict[str, Any],
     out: list[dict[str, Any]] = []
     for sock in vm.get("vfio_user_sockets") or []:
         for gfx in _rocjitsu_gpus([sock]):
-            out.append({"gfx": gfx, "origin": "emulated", "source": Path(sock).name})
+            # bars always present, so every GPU record has the same shape
+            # whether or not the probe reached this one. Empty means "not
+            # known", which for an emulated device is the usual answer with
+            # the guest powered off -- the apertures only exist once the
+            # guest has enumerated the bus.
+            out.append({"gfx": gfx, "origin": "emulated",
+                        "source": Path(sock).name, "bars": []})
 
     passthrough = _passthrough_gpus(argv)
     out.extend(passthrough)
+
+    # The guest's own view of each GPU's apertures, which is the only source
+    # for an EMULATED device: rocjitsu's vram_aperture_bytes lives in a config
+    # file inside the server's container, where inspect cannot reach it, and
+    # the guest is where the resulting BAR actually shows up anyway.
+    #
+    # Positional, because both lists come from the same ascending KFD node
+    # walk. A passthrough entry already carries host-read BARs and keeps them.
+    guest_bars = _guest_bars(ga_info)
+    emulated = [e for e in out if e["origin"] == "emulated"]
+    for entry, bars in zip(emulated, guest_bars):
+        entry["bars"] = bars
 
     unclaimed = list(_guest_gfx(ga_info))
     for entry in out:
@@ -1173,7 +1321,10 @@ def _gpu_devices(vm: dict[str, Any], ga_info: dict[str, Any],
         passthrough[0]["gfx"] = unclaimed.pop()
 
     for gfx in unclaimed:
-        out.append({"gfx": gfx, "origin": "unknown", "source": "guest"})
+        # No bars: this entry exists because the guest reported a gfx the
+        # host-side parse could not place, so there is no device to ask.
+        out.append({"gfx": gfx, "origin": "unknown", "source": "guest",
+                    "bars": []})
 
     if not ga_info:
         # No agent to ask, and none needed to say no: the host wrote the
@@ -1581,6 +1732,13 @@ def _print_human(records: list[dict[str, Any]]) -> None:
             gfx = gpu["gfx"] or "unknown gfx"
             source = f", {gpu['source']}" if gpu.get("source") else ""
             print(f"  GPU:       {gfx} ({gpu['origin']}{source})")
+            # Indented under the GPU rather than appended to it: a card can
+            # have several mapped BARs and the line is already long. Printed
+            # only when known -- a silent absence here means the guest probe
+            # did not get to it, and inventing "BAR0 unknown" for every
+            # powered-off VM would be noise on the common case.
+            for bar in gpu.get("bars") or []:
+                print(f"               {_describe_bar(bar)}")
         print(f"  Image:     {r['image'] or '-'}")
         if r["container"]:
             print(f"  Container: {r['container']}")

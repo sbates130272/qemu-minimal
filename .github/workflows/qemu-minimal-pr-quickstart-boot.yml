@@ -101,6 +101,12 @@ jobs:
         test -c /dev/kvm
         python3 -I -c "import fcntl, os; assert fcntl.ioctl(os.open('/dev/kvm', os.O_RDWR), 0xAE00, 0) >= 0; print('KVM usable')"
 
+    # Run everything below as a non-root user. See the action for why the
+    # job container being root was hiding the configuration this branch is
+    # about, and for the /dev/kvm group that is easy to miss.
+    - name: Run as a non-root user
+      uses: ./.github/actions/nonroot-user
+
     - name: Install qemu-tool
       run: |
         set -eu
@@ -160,15 +166,22 @@ jobs:
     # Boot it. `up` stops as soon as the rocm-ernic container is healthy, and
     # --yes makes every prompt take its default (which is also what happens
     # with no terminal -- passed anyway so the choice is visible).
-    - name: Boot one guest
+    # setpriv, not su: it keeps the environment this job already set up
+    # (GITHUB_ENV exports, PATH to the pipx install) without a login shell
+    # re-reading profile scripts. --init-groups is what puts ciuser in the
+    # docker-socket group it was just added to.
+    - name: Boot one guest, as a non-root user
       run: |
-        qemu-tool quick-start up \
-          --env-file qemu/env/quickstart \
-          --env-file "$OVERLAY" \
-          --stack-dir "$STACK_DIR" \
-          --key-dir "$KEY_DIR" \
-          --no-metrics \
-          --yes
+        set -eu
+        setpriv --reuid "$CIUSER_UID" --regid "$CIUSER_UID" --init-groups \
+          env HOME="$CIUSER_HOME" \
+          qemu-tool quick-start up \
+            --env-file qemu/env/quickstart \
+            --env-file "$OVERLAY" \
+            --stack-dir "$STACK_DIR" \
+            --key-dir "$KEY_DIR" \
+            --no-metrics \
+            --yes
 
     # THE ASSERTION THIS LANE EXISTS FOR.
     #
@@ -276,6 +289,69 @@ jobs:
           echo "::error::${IB} is present but its port is not PORT_ACTIVE"; exit 1; }
         echo "RDMA device is PORT_ACTIVE"
 
+    # The privilege posture of the containers that are ACTUALLY RUNNING.
+    #
+    # Gen Compose Check asserts the same thing against `docker compose
+    # config`, which is what Docker was asked for. This asks the kernel what
+    # it granted, which is the only version that matters: a `cap_drop` the
+    # daemon ignored, a `user:` that resolved to empty, or a
+    # `no-new-privileges` that never took would all pass a config check and
+    # fail here.
+    #
+    # /proc/1/status is the measurement. On Docker's defaults a container
+    # reports CapEff 00000000a80425fb -- fourteen capabilities, granted
+    # because nobody said otherwise.
+    #
+    # The uid is compared to the one quick-start RAN AS, not to "not zero".
+    # The property the stack provides is "run as the caller", so the caller's
+    # uid is the right expectation -- and this lane now arranges for that
+    # caller to be a non-root user, which is the configuration an operator
+    # actually has. It is also asserted to be non-zero, so a regression in
+    # the setpriv step fails here rather than quietly going back to proving
+    # the root case twice.
+    #
+    # The capability drop is asserted unconditionally. A uid is not a
+    # capability set -- a container can be uid 1000 and still hold NET_RAW --
+    # so the two are independent and both are measured.
+    - name: The running containers run as the caller and hold no capabilities
+      run: |
+        set -eu
+        # The uid quick-start ran as, NOT this job's: the job is root and the
+        # whole point of the setpriv above is that the containers are not.
+        want_uid="${CIUSER_UID:?}"
+        echo "this job is uid $(id -u); containers should be $want_uid"
+        [ "$want_uid" != "0" ] || {
+          echo "::error::containers would be root -- the non-root setup did not take"
+          exit 1; }
+
+        # By label, not `docker compose ps`: this step runs from the job
+        # container, which has no compose file and no project directory, and
+        # `compose ps -q` there exits 0 with no output -- so a `||` fallback
+        # would never fire and an empty result would read as "all clear".
+        ids=$(docker ps -q --filter "label=com.docker.compose.project=pr-boot")
+        [ -n "$ids" ] || { echo "::error::no running containers to check"; exit 1; }
+
+        rc=0
+        for id in $ids; do
+          name=$(docker inspect -f '{{.Name}}' "$id" | sed 's|^/||')
+          status=$(docker exec "$id" cat /proc/1/status 2>/dev/null) || {
+            echo "::warning::$name: could not read /proc/1/status (exited?)"; continue; }
+          uid=$(echo "$status" | awk '/^Uid:/{print $2}')
+          capeff=$(echo "$status" | awk '/^CapEff:/{print $2}')
+          nnp=$(echo "$status" | awk '/^NoNewPrivs:/{print $2}')
+          echo "  $name: Uid=$uid CapEff=$capeff NoNewPrivs=$nnp"
+
+          [ "$uid" = "$want_uid" ] || {
+            echo "::error::$name runs as uid $uid, not the caller's $want_uid"; rc=1; }
+          # Hex, so any non-zero digit means a capability was granted.
+          case "$capeff" in
+            *[!0]*) echo "::error::$name holds capabilities ($capeff)"; rc=1 ;;
+          esac
+          [ "$nnp" = "1" ] || { echo "::error::$name has no no-new-privileges"; rc=1; }
+        done
+        [ "$rc" -eq 0 ] || exit 1
+        echo "every running container: runs as uid $want_uid, no capabilities, no-new-privileges"
+
     # Named separately from the boot step so a heartbeat eviction reads as
     # itself rather than as a mystery. The mesh manager is single-threaded
     # against a 20 s wall clock; at one guest this should never fire, and if
@@ -304,11 +380,51 @@ jobs:
           --env-file "${GITHUB_WORKSPACE}/qemu/env/quickstart" \
           --env-file "$OVERLAY" logs --tail 100 || true
 
+    # down-all identification, against a REAL rendered stack.
+    #
+    # Its risky property is the identification: it removes containers, and a
+    # service-name match would tear down an unrelated project that happened
+    # to have a service called qemu-1. The check is the compose file -- the
+    # gen-compose provenance header, or one of the shipped stack directories
+    # -- and only a genuinely rendered stack exercises that. A unit test can
+    # synthesise the labels; it cannot prove compose writes the ones the
+    # code reads.
+    #
+    # --dry-run, so this asserts and destroys nothing. The teardown below is
+    # where it is allowed to act.
+    - name: down-all finds this stack
+      run: |
+        set -eu
+        # As ciuser, so this exercises the OWNERSHIP filter: the stack's
+        # containers run as 1000 and the caller is 1000. Run as root it
+        # would match everything regardless, which proves less.
+        out="$(setpriv --reuid "$CIUSER_UID" --regid "$CIUSER_UID" --init-groups \
+                 env HOME="$CIUSER_HOME" qemu-tool down-all --dry-run 2>&1)"
+        echo "$out"
+        echo "$out" | grep -q "pr-boot" || {
+          echo "::error::down-all did not identify the running pr-boot stack"
+          exit 1; }
+        echo "$out" | grep -q "Will tear down" || {
+          echo "::error::down-all found the stack but would not act on it"
+          exit 1; }
+
+    # Torn down BY down-all, so the destructive path runs against a real
+    # stack on every PR rather than only against a synthetic one. The
+    # quick-start teardown stays as the fallback: cleanup must not depend on
+    # the newer code being right, and a runner with containers left on it is
+    # a worse failure than a redundant command.
     - name: Take it down
       if: always()
       run: |
+        setpriv --reuid "$CIUSER_UID" --regid "$CIUSER_UID" --init-groups \
+          env HOME="$CIUSER_HOME" qemu-tool down-all --yes || true
         qemu-tool quick-start down \
           --env-file qemu/env/quickstart \
           --env-file "$OVERLAY" \
           --stack-dir "$STACK_DIR" \
           --yes || true
+        left="$(docker ps -q --filter label=com.docker.compose.project=pr-boot | wc -l)"
+        [ "$left" -eq 0 ] || {
+          echo "::error::$left container(s) survived both teardowns"
+          docker ps --filter label=com.docker.compose.project=pr-boot
+          exit 1; }

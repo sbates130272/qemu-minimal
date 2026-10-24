@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import grp
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 
-from .envfile import find as find_env_file
+from .envfile import find as find_env_file, parse_layers as parse_env_layers
 from .resources import COMPOSE as _COMPOSE_PACKAGE, packaged_path
 
 _STACKS = (
@@ -216,6 +218,340 @@ def _warn_if_stale(
     )
 
 
+# Directories a stack bind-mounts and writes into. Each one belongs to
+# whoever ran the fleet, and each is created by the Docker daemon -- as root,
+# 0755 -- if it does not exist when the service starts. Creating them here
+# first is what makes that moot. Keyed by the settings key that names the path.
+_DATA_DIR_KEYS = ("PROM_DATA_DIR", "LOKI_DATA_DIR", "GRAFANA_DATA_DIR")
+
+# Subcommands that actually start containers. `ps`, `logs` and `down` must
+# keep working against a stack whose artifacts are in any state at all --
+# `down` especially, since recovering from a bad run is exactly when the
+# checks below would otherwise be in the way.
+_STARTING = frozenset({"up", "start", "run", "create"})
+
+# Subcommands that tear the whole project down. These get every profile
+# enabled, and are checked afterwards for survivors.
+#
+# WHY: a fleet was reported with prometheus, grafana and the stats exporter
+# still running 41 hours after a `down --remove-orphans` that completed
+# successfully.
+#
+# The obvious explanation -- that profile-gated services are filtered out of
+# `down` -- is WRONG, and was tested rather than assumed: on compose v5.3.1,
+# `up --profile metrics` followed by a plain `down`, `down --remove-orphans`
+# or `stop` removes the gated container every time. So that is not the
+# mechanism, and the real one is not established. The likeliest remaining
+# candidate is a project-name mismatch: compose derives the name from the
+# working directory, `compose.run` never passes `-p`, and the stack-directory
+# discovery order (--stack-dir, then $QEMU_TOOL_STACK, then the cwd) can
+# resolve differently between the `up` and the `down` -- in which case the
+# down tears down an empty project and reports success.
+#
+# `--profile "*"` is therefore belt-and-braces, not the fix: it costs nothing,
+# makes `down` unambiguous, and would cover the filtered-out theory if some
+# other compose version does behave that way. The survivor check below is the
+# part that actually catches this, whatever causes it.
+_TEARDOWN = frozenset({"down", "stop"})
+
+
+def _caller_identity() -> dict[str, str]:
+    """CONTAINER_USER and CONTAINER_KVM_GID for whoever ran this command.
+
+    The whole point of the setting is that the containers run as the person
+    who started them, and the overwhelmingly common answer to "which uid" is
+    "mine". Requiring that to be typed into an env file made root the
+    practical default for years, because the value cannot be committed (it
+    differs per host) and so there was nowhere obvious to put it.
+
+    getuid()/getgid(), not getlogin() or $USER: those answer "who owns the
+    terminal", which is a different question the moment this runs under sudo,
+    a systemd unit or CI.
+    """
+    ident = {"CONTAINER_USER": f"{os.getuid()}:{os.getgid()}"}
+    # The gid that owns /dev/kvm, asked of the device itself first. The group
+    # is conventionally called "kvm" and conventionally is the owner, but the
+    # question the qemu container actually needs answered is "which gid opens
+    # this node" -- and a host can have the group without the device, or the
+    # device without that name. The name is the fallback, not the source.
+    try:
+        ident["CONTAINER_KVM_GID"] = str(os.stat("/dev/kvm").st_gid)
+    except OSError:
+        try:
+            ident["CONTAINER_KVM_GID"] = str(grp.getgrnam("kvm").gr_gid)
+        except KeyError:
+            # Neither. Left unset, so compose refuses rather than starting a
+            # fleet that silently falls back to TCG and runs ~20x slower --
+            # which presents as "the guests are hanging", not as a missing
+            # group. A host with no /dev/kvm cannot run this stack anyway.
+            pass
+    return ident
+
+
+# Same shape gen_compose enforces on an env file, applied here to whatever
+# value is actually in force -- which may have come from the environment and
+# so have been seen by neither the generator nor the settings file.
+_UID_GID_RE = re.compile(r"[0-9]+:[0-9]+")
+
+
+def _reject_bad_user(value: str, source: str) -> None:
+    """Refuse a CONTAINER_USER that cannot work, naming where it came from.
+
+    Every way of getting this wrong fails a long way from the thing that set
+    it, and one of them does not fail at all:
+
+    * A name ("stebates"). Docker resolves it against the IMAGE's /etc/passwd,
+      which carries no entry for your uid, and dies at container create with
+      "unable to find user".
+    * A bare uid ("1000"). Docker then wants the gid from that uid's passwd
+      entry, which does not exist either.
+    * "${UID}:${GID}", the spelling people try first and the worst of the
+      three. Bash exports neither, so it survives as literal text, compose
+      substitutes empty for both, and `user: ":"` runs as root without
+      erroring.
+
+    gen_compose checks the env file at render time. This checks the value the
+    containers will actually get, which is not the same thing: a stack is
+    rendered once and run many times, and the environment outranks the file.
+    """
+    if _UID_GID_RE.fullmatch(value.strip()):
+        return
+    sys.exit(
+        f"Error: CONTAINER_USER must be numeric <uid>:<gid>, got {value!r}\n"
+        f"       (from {source}).\n"
+        "       A user name does not resolve: the images carry no passwd "
+        "entry for your uid.\n"
+        "       ${UID}:${GID} does not work either -- bash exports neither, "
+        "so it silently becomes root.\n"
+        "       Use the literal ids, e.g. CONTAINER_USER=$(id -u):$(id -g) "
+        "evaluated by your shell,\n"
+        "       or unset it and qemu-tool will fill in your own."
+    )
+
+
+def _declared_in_layers(settings: list[Path]) -> dict[str, str]:
+    if not settings:
+        return {}
+    try:
+        return {k: v for k, v in parse_env_layers(settings).items() if v.strip()}
+    except SystemExit:
+        raise
+    except Exception:
+        # A layer this tool cannot parse is not a reason to refuse to run
+        # docker compose, which may well parse it fine.
+        return {}
+
+
+def resolve_identity(settings: list[Path]) -> tuple[dict[str, str], str]:
+    """The uid:gid the containers will really run as, and where it came from.
+
+    Precedence matches what compose itself does with the same keys, or the
+    tool and the containers disagree about the value -- the failure mode this
+    stack's repeated --env-file handling exists to avoid. Compose resolves a
+    variable from the process environment first and the --env-file layers
+    second, so anything set in either is already a decision.
+
+    Returns the full pair plus a human-readable source for CONTAINER_USER, so
+    a caller can say which of the three answers it got rather than just
+    printing a number.
+    """
+    declared = _declared_in_layers(settings)
+    ident = dict(_caller_identity())
+    source = "this user"
+    for key in ("CONTAINER_USER", "CONTAINER_KVM_GID"):
+        if os.environ.get(key, "").strip():
+            ident[key] = os.environ[key]
+            if key == "CONTAINER_USER":
+                source = "the environment"
+        elif declared.get(key):
+            ident[key] = declared[key]
+            if key == "CONTAINER_USER":
+                names = ", ".join(str(p) for p in settings)
+                source = names
+    _reject_bad_user(ident["CONTAINER_USER"], source)
+    return ident, source
+
+
+def _apply_identity(env: dict[str, str], settings: list[Path]) -> None:
+    """Fill in CONTAINER_USER/CONTAINER_KVM_GID, without overriding a choice.
+
+    Only a key nobody has expressed an opinion about is filled in; the rest is
+    left for compose to resolve exactly as it would have. resolve_identity
+    decides what the answer is and refuses an unusable one -- this only
+    decides whether to write it down.
+
+    Writing a layer's own value back into the environment would reach the same
+    containers, since compose resolves to the same string either way. It is
+    still wrong: the environment outranks the layers, so doing it converts a
+    value the operator can override by editing a file into one they cannot.
+    """
+    ident, _ = resolve_identity(settings)
+    declared = _declared_in_layers(settings)
+    for key, value in ident.items():
+        if os.environ.get(key, "").strip() or declared.get(key):
+            continue
+        env[key] = value
+
+
+def _all_profiles_for_teardown(compose_args: list[str]) -> list[str]:
+    """`--profile "*"` when tearing down, unless profiles were named.
+
+    Returns the global flags to insert, which is either that or nothing.
+
+    Respecting an explicit choice matters: `down --profile metrics` is
+    someone scoping the teardown deliberately, and overriding it would make
+    the flag a lie. COMPOSE_PROFILES counts as naming them too, for the same
+    reason -- it is how compose itself is told, and a tool that ignored it
+    would disagree with a plain `docker compose` run beside it.
+
+    Only the project-wide form. `down` and `stop` with service names after
+    them already say exactly what to act on, and widening the profile set
+    there changes nothing.
+    """
+    if not any(a in _TEARDOWN for a in compose_args):
+        return []
+    if any(a == "--profile" or a.startswith("--profile=") for a in compose_args):
+        return []
+    if os.environ.get("COMPOSE_PROFILES", "").strip():
+        return []
+    return ["--profile", "*"]
+
+
+def _warn_about_survivors(globals_: list[str], cdir: Path,
+                          env: dict[str, str]) -> None:
+    """Say so when a teardown reported success and left containers running.
+
+    This is the check that catches the reported failure -- three containers
+    alive 41 hours after a successful `down --remove-orphans` -- WITHOUT
+    needing to know why. A teardown that exits 0 while its own project still
+    has running containers is wrong whatever the cause, and nothing said so.
+
+    Asked through compose with the same global flags the teardown used, so
+    the project name resolves identically. Reimplementing compose's rule
+    (directory basename, lowercased, punctuation stripped) would be a second
+    source of truth and could disagree with the command it is checking --
+    which is the very class of bug this is here to find.
+
+    Never changes the exit status. The teardown did what it was asked; this
+    reports a fact about the result, and a `down` that started failing
+    because of a container somebody else's project left behind would be
+    worse than the problem.
+    """
+    try:
+        listed = subprocess.run(
+            globals_ + ["ps", "--format", "{{.Name}}"],
+            cwd=cdir, env=env, capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return
+    names = [n for n in listed.stdout.split() if n.strip()]
+    if not names:
+        return
+    print(
+        f"\nWarning: the teardown succeeded but {len(names)} container(s) in "
+        "this project are still running:",
+        file=sys.stderr,
+    )
+    for name in names:
+        print(f"           {name}", file=sys.stderr)
+    print(
+        "         A stack brought up from a different directory resolves to a "
+        "different\n"
+        "         compose project, and a teardown of the wrong one reports "
+        "success. Check\n"
+        "         --stack-dir / $QEMU_TOOL_STACK, or remove them by name with "
+        "`docker rm -f`.",
+        file=sys.stderr,
+    )
+
+
+def _warn_about_root_artifacts(env: dict[str, str]) -> None:
+    """Name the files an earlier root-era run left behind, before they bite.
+
+    This is the migration hazard, and it does not present as a permissions
+    problem. A <vm>-nvmeN.qcow2 created by a root container is 0644
+    root-owned; QEMU opens a drive read-write, so the guest does not boot at
+    all. A PROM_DATA_DIR created by the daemon is 0755 root-owned and
+    Prometheus crash-loops on "mkdir data/: permission denied". Both read as
+    "the fleet is broken" a long way from the cause.
+
+    A warning, never a refusal. Someone may be deliberately running a mixed
+    fleet, and `up` on a stack with one stale file should still bring up the
+    other thirty-one guests.
+    """
+    uid = os.getuid()
+    offenders: list[str] = []
+    images = env.get("VM_IMAGES_DIR")
+    if images:
+        try:
+            # Only the files a container creates. The backing and overlay
+            # qcow2s are made by gen-vm on the host, as the caller, and a
+            # fleet legitimately shares a backing image owned by someone else.
+            for path in sorted(Path(images).glob("*-nvme*.qcow2")):
+                if path.stat().st_uid != uid:
+                    offenders.append(f"{path}  (uid {path.stat().st_uid})")
+        except OSError:
+            pass
+    for key in _DATA_DIR_KEYS:
+        raw = env.get(key)
+        if not raw:
+            continue
+        path = Path(raw)
+        try:
+            if path.is_dir() and path.stat().st_uid != uid:
+                offenders.append(f"{path}  ({key}, uid {path.stat().st_uid})")
+        except OSError:
+            continue
+    if not offenders:
+        return
+    print(
+        f"Warning: these are not owned by uid {uid}, which the containers now "
+        "run as:",
+        file=sys.stderr,
+    )
+    for line in offenders:
+        print(f"           {line}", file=sys.stderr)
+    print(
+        "         They were probably created by a root-era run of this stack.\n"
+        "         An NVMe qcow2 the guest cannot write stops it booting; a data\n"
+        "         directory it cannot write crash-loops the service. Delete the\n"
+        "         qcow2s (they are scratch) and chown the directories.",
+        file=sys.stderr,
+    )
+
+
+def _precreate_data_dirs(env: dict[str, str]) -> None:
+    """Create the bind-mount targets as the caller, not as the daemon.
+
+    Docker creates a missing bind-mount source itself, root-owned, and the
+    service that then cannot write it is the one that reports the problem --
+    several minutes and one confusing stack trace later. Making them here
+    costs nothing and removes the "chown these three directories before your
+    first run" step from the settings file entirely.
+    """
+    for key in _DATA_DIR_KEYS:
+        raw = env.get(key)
+        if not raw:
+            continue
+        try:
+            Path(raw).mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            # Not fatal: the service that needs it may not be in the profiles
+            # being started, and a stack that is otherwise fine should come
+            # up. But say what to run -- the default /var/lib/qemu-tool is
+            # root-owned on every host that ever ran this as root, so this
+            # fires for the ordinary operator doing nothing wrong, and a
+            # bare "Permission denied" leaves them to work out the fix.
+            print(
+                f"Warning: could not create {key} at {raw}: {exc.strerror}.\n"
+                f"         The service that uses it will fail to start if it "
+                "is in a profile you enable.\n"
+                f"         Fix: sudo mkdir -p {raw} && "
+                f"sudo chown {os.getuid()}:{os.getgid()} {raw}",
+                file=sys.stderr,
+            )
+
+
 def run(
     vm_name: str | None,
     images_dir: Path | None,
@@ -287,12 +623,40 @@ def run(
         if rendered or (stack or _DEFAULT_STACK) in _GENERATED_STACKS:
             named = None if rendered else (stack or _DEFAULT_STACK)
             _warn_if_stale(cdir, settings, named, env_file)
+    # Every service carries `user: ${CONTAINER_USER:?...}` now, so this is
+    # what makes the supported path need no configuration: unset means "run
+    # the fleet as me", not "run it as root". Plain `docker compose` against
+    # the same file gets the :? error instead, which says what to set.
+    _apply_identity(env, settings)
+    if any(arg in _STARTING for arg in compose_args):
+        # The settings under the environment, which is the order compose
+        # itself resolves them in. Only for the checks below -- nothing here
+        # is passed on; compose reads the layers itself.
+        paths = dict(parse_env_layers(settings)) if settings else {}
+        for key in ("VM_IMAGES_DIR", *_DATA_DIR_KEYS):
+            if env.get(key):
+                paths[key] = env[key]
+        _precreate_data_dirs(paths)
+        _warn_about_root_artifacts(paths)
     # Belt and braces: cli._split_compose_argv already drops a user-typed "--",
     # but docker compose treats everything after a "--" as positional, so a
     # leaked separator made `-- --profile lmcache up -d` bring up the default
     # services and report success -- the quiet failure, not a visible one.
     if compose_args and compose_args[0] == "--":
         compose_args = compose_args[1:]
+    # After the "--" strip, so a leaked separator cannot hide the verb from
+    # the teardown check, and BEFORE compose_args, because --profile is a
+    # global flag that compose only accepts ahead of the subcommand.
+    teardown = _all_profiles_for_teardown(compose_args)
+    if teardown:
+        # Said out loud. This differs from what a plain `docker compose` in
+        # the same directory would do, and a silent difference between the
+        # wrapper and the thing it wraps is its own trap.
+        print("Tearing down every profile; pass --profile to scope it.",
+              file=sys.stderr)
+        cmd += teardown
     cmd += compose_args
     result = subprocess.run(cmd, cwd=cdir, env=env)
+    if teardown and result.returncode == 0:
+        _warn_about_survivors(cmd[:len(cmd) - len(compose_args)], cdir, env)
     sys.exit(result.returncode)
