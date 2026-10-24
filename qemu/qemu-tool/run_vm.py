@@ -531,6 +531,72 @@ def _mgmt_subnet(port: int) -> str:
     return f"172.16.{octet}"
 
 
+_IP_FORWARD = Path("/proc/sys/net/ipv4/ip_forward")
+
+# Whether THIS process turned ip_forward on. Only then is it ours to turn
+# back off: the setting is global and host-wide, so a run that found it
+# already enabled must leave it that way -- it may be carrying the host's
+# own routing, a libvirt network or someone else's fleet.
+_ip_forward_was_ours = False
+
+
+def _ip_forward_enabled() -> bool:
+    try:
+        return _IP_FORWARD.read_text().strip() == "1"
+    except OSError:
+        # Unreadable means we cannot know, so we must not claim it. Returning
+        # True here makes the caller skip both the set and the restore, which
+        # is the safe direction: at worst the bridge does not route and that
+        # is visible immediately.
+        return True
+
+
+def _enable_ip_forward() -> None:
+    """Turn on ip_forward if it is off, and remember that we did.
+
+    This used to be an unconditional `sysctl -w net.ipv4.ip_forward=1` with no
+    matching restore, so running one VM once left the host forwarding packets
+    forever. It is a global switch with no owner and no reference count, which
+    is why the only safe rule is "put back exactly what you changed".
+    """
+    global _ip_forward_was_ours
+    if _ip_forward_enabled():
+        return
+    subprocess.run(["sudo", "sysctl", "-qw", "net.ipv4.ip_forward=1"], check=True)
+    _ip_forward_was_ours = True
+
+
+def _restore_ip_forward(port: int) -> None:
+    """Turn ip_forward back off, unless something else still needs it.
+
+    The guard is the other qemu-br* bridges: this process may have enabled
+    forwarding for VM A and then a second run-vm, seeing it already on, will
+    not have recorded it as theirs. Switching it off from under them would
+    break a running guest's networking with nothing to connect it to. So the
+    restore happens only when no other management bridge is left.
+    """
+    global _ip_forward_was_ours
+    if not _ip_forward_was_ours:
+        return
+    mine = _mgmt_bridge_name(port)
+    try:
+        others = [
+            p.name for p in Path("/sys/class/net").iterdir()
+            if p.name.startswith("qemu-br") and p.name != mine
+        ]
+    except OSError:
+        others = []
+    if others:
+        print(
+            f"Leaving net.ipv4.ip_forward=1: still in use by {', '.join(others)}",
+            file=sys.stderr,
+        )
+        return
+    subprocess.run(["sudo", "sysctl", "-qw", "net.ipv4.ip_forward=0"],
+                   capture_output=True)
+    _ip_forward_was_ours = False
+
+
 def _nic_mac(port: int, index: int) -> str:
     """Deterministic MAC for NIC `index` of the VM on `port`.
 
@@ -562,9 +628,7 @@ def _ensure_mgmt_bridge(port: int) -> None:
         )
         subprocess.run(["sudo", "ip", "link", "set", br, "up"], check=True)
 
-    subprocess.run(
-        ["sudo", "sysctl", "-qw", "net.ipv4.ip_forward=1"], check=True
-    )
+    _enable_ip_forward()
 
     def _ipt_ensure(table_args: list[str], rule: list[str]) -> None:
         """Add rule only if it doesn't already exist."""
@@ -649,6 +713,9 @@ def _teardown_mgmt_bridge(port: int) -> None:
         capture_output=True,
     )
     subprocess.run(["sudo", "ip", "link", "del", br], capture_output=True)
+    # After the bridge is gone, so the "is anyone else still using it" check
+    # does not count our own.
+    _restore_ip_forward(port)
 
 
 # ---------------------------------------------------------------------------

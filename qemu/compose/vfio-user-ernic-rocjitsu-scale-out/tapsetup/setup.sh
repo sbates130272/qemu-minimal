@@ -68,10 +68,11 @@ echo "tapsetup: bridging $L2 ($(ip -4 -o addr show dev "$L2" | awk '{print $4}')
 
 # TUNSETIFF on a PERSISTENT tap succeeds only for its owner, or for a caller
 # with NET_ADMIN. The ernic has neither capability by design, so the owner has
-# to be the uid the ernic runs as -- 0 unless CONTAINER_USER is set, in which
-# case gen-compose passes that <uid>:<gid> here. Get it wrong and the ernic
-# fails to attach with EPERM, which shows up as a guest with no Ethernet
-# rather than as a permissions error.
+# to be the uid the ernic runs as: gen-compose always passes CONTAINER_USER's
+# <uid>:<gid> here, which qemu-tool compose fills in from the caller. Get it
+# wrong and the ernic fails to attach with EPERM, which shows up as a guest
+# with no Ethernet rather than as a permissions error. The 0 fallback is for a
+# hand-run container only.
 TAP_OWNER=${TAP_OWNER:-0}
 TAP_UID=${TAP_OWNER%%:*}
 TAP_GID=${TAP_OWNER#*:}

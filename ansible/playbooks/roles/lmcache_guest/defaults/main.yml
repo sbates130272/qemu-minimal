@@ -498,15 +498,55 @@ lmcache_guest_require_amdgpu: false
 lmcache_guest_require_rdma: true
 
 # Supplementary groups for the container. Empty by default and that is
-# correct here: the container runs as root, so it needs no group membership
-# to open /dev/kfd or /dev/dri.
+# correct while the container runs as root, which needs no group membership
+# to open /dev/kfd or /dev/dri. Set "video" and "render" alongside
+# lmcache_guest_container_user below, which does.
 #
 # Deliberately NOT "keep-groups", which ROCm's own container docs recommend --
 # that is a PODMAN option. Docker has no such concept, reads it as a literal
 # group name, and dies with
 #   unable to find group keep-groups: no matching entries in group file
-# Use "video" and/or "render" if a non-root container ever needs them.
 lmcache_guest_docker_groups: []
+
+# ── MP server container privilege ────────────────
+# The loosest configuration in the fleet, tightened to what it actually
+# needs. --network host and --ipc host stay: the first is required for P2P
+# (the address this server advertises to its peers has to be one they can
+# dial, and a guest-local Docker bridge is a different 172.17.x.x on every
+# guest), and the second is how the HIP runtime shares memory with the
+# host-side processes.
+#
+# seccomp=unconfined was the one relaxation in the unit with no comment
+# justifying it, which is usually a sign it was copied rather than measured.
+# Docker's default seccomp profile allows every syscall the ROCm runtime and
+# the ionic verbs path use; what it blocks is the long tail (keyctl, bpf,
+# userfaultfd, the mount family). Default to the profile and keep the escape
+# hatch, because an unexplained setting that turns out to be load-bearing
+# should fail loudly and be fixable in one line rather than be unreachable.
+#
+# If the MP server starts failing with EPERM on a syscall after this change,
+# set this true and open an issue saying which syscall -- that is the datum
+# that was missing the first time.
+lmcache_guest_seccomp_unconfined: false
+
+# Capabilities for the MP server container. It is a userspace process that
+# opens /dev/kfd, /dev/dri and /dev/infiniband (all handed to it explicitly
+# by --device), mmaps a lot, and binds two ports above 1024. It needs no
+# capability. Docker grants fourteen by default.
+#
+# IPC_LOCK is NOT needed for --ulimit memlock=-1:-1: the ulimit raises the
+# rlimit the daemon sets on the process, which is a different mechanism from
+# the capability that lets a process exceed it.
+lmcache_guest_cap_drop: ["ALL"]
+lmcache_guest_cap_add: []
+
+# Run the MP server container as a uid instead of root. Empty means root,
+# which is still the default: the image's site-packages, its HOME and the
+# LMCache L2 path are all laid out for uid 0, and this has not been measured
+# against a non-root uid. Set "<uid>:<gid>" plus lmcache_guest_docker_groups
+# ["video", "render"] to try it -- the device nodes are the part that needs
+# the groups.
+lmcache_guest_container_user: ""
 
 # ── Guest log shipping ───────────────────────────
 # An Alloy in the guest, pushing the journal and the in-guest Docker logs to

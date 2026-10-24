@@ -32,6 +32,21 @@ jobs:
   gen-compose-check:
     name: Gen Compose Check
     runs-on: ubuntu-latest
+    # Every service in the rendered stacks carries
+    # `user: ${CONTAINER_USER:?...}`, so a PLAIN `docker compose` -- which is
+    # what most of the steps below run, deliberately, to prove the committed
+    # files work without qemu-tool -- refuses to interpolate without these.
+    # That refusal is the feature: the alternative spelling interpolates to
+    # empty, `user: ":"` is not an error to Docker, and the stack runs as
+    # root. `qemu-tool compose` fills both in from the caller; here there is
+    # no caller to ask, so the runner's own ids are named.
+    #
+    # A literal gid for kvm, because an ubuntu-latest runner has no kvm group
+    # and getent would return nothing. Nothing here starts a container, so the
+    # value only has to parse.
+    env:
+      CONTAINER_USER: "1001:127"
+      CONTAINER_KVM_GID: "108"
     steps:
       - name: Check out code
         uses: actions/checkout@v4.3.1

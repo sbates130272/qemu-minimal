@@ -794,6 +794,15 @@ def _compose(state: _State, *args: str, check: bool = True,
         cmd += ["--profile", "metrics"]
     cmd += list(args)
     full_env = os.environ.copy()
+    # The rendered stack asks for a uid on every service, so this has to
+    # answer -- quick-start builds its own docker compose command rather than
+    # going through compose.run(), and without this every invocation here,
+    # including the `logs` on the failure path, dies on "required variable
+    # CONTAINER_USER is missing a value". Same precedence as there: anything
+    # already in the environment or in a layer is a decision and is kept.
+    from .compose import _apply_identity
+
+    _apply_identity(full_env, list(state.layers))
     full_env.update(env or {})
     result = subprocess.run(cmd, cwd=state.stack_dir, env=full_env)
     if check and result.returncode != 0:

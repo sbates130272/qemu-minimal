@@ -11,10 +11,34 @@
 #   qemu-tool compose --stack vfio-user-ernic-vm up
 #   ssh -p ${VM_SSH_PORT:-2222} ubuntu@localhost
 
+# Every container here runs as the caller, with no capabilities.
+#
+# `qemu-tool compose` fills CONTAINER_USER and CONTAINER_KVM_GID in from your
+# own uid:gid and the host kvm group, so the documented command needs no
+# configuration. Plain `docker compose` against this file is told what to set
+# rather than quietly running the stack as root -- which is what the `:?` form
+# buys and `:-` would not: an unset variable interpolates to empty, `user: ":"`
+# is not an error to Docker, and the container runs as uid 0.
+#
+#   CONTAINER_USER=$(id -u):$(id -g) \
+#   CONTAINER_KVM_GID=$(getent group kvm | cut -d: -f3) docker compose up
+#
+# The kvm group is needed because a container given --user <uid>:<gid> holds no
+# supplementary groups, and /dev/kvm is crw-rw---- root:kvm. You must be in
+# that group on the host too.
 x-gpu-common: &gpu-common
   volumes:
     - vfu-sockets:/run/vfu
   restart: on-failure
+  user: "${CONTAINER_USER:?set CONTAINER_USER=<uid>:<gid>}"
+  # rocm-ernic opens a unix socket on a tmpfs volume (mounted 1777, so an
+  # unprivileged uid creates its socket there with no pre-seeding) and needs no
+  # capability at all. Docker nonetheless grants CHOWN, DAC_OVERRIDE, SETUID,
+  # NET_RAW and ten more by default, which is a default rather than a decision.
+  cap_drop:
+    - ALL
+  security_opt:
+    - "no-new-privileges:true"
 
 services:
   ernic:
@@ -39,6 +63,19 @@ services:
       - "${QEMU_TOOL_SRC:-/tmp}:/qemu-tool-src:ro"
     devices:
       - /dev/kvm
+    # Same uid as the ernic, and not merely for tidiness: a vfio-user socket
+    # is 0755 owned by whoever created it unless the server chmods it, and
+    # connect(2) on a unix socket needs write on the inode. rocm-ernic happens
+    # to chmod its own to 0666; rocjitsu does not. The two must not diverge.
+    user: "${CONTAINER_USER:?set CONTAINER_USER=<uid>:<gid>}"
+    group_add:
+      - "${CONTAINER_KVM_GID:?set CONTAINER_KVM_GID to the host kvm gid}"
+    # QEMU configures no network here (SLIRP is userspace), makes no device
+    # nodes, and binds only 2222.
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
     shm_size: "${VM_SHM_SIZE:-8g}"
     ports:
       - "${VM_SSH_PORT:-2222}:2222"
@@ -48,16 +85,16 @@ services:
       - |
         if [ -f /qemu-tool-src/qemu/pyproject.toml ]; then
           cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
-          PIPX_BIN_DIR=/usr/local/bin pipx install --force /tmp/qemu-tool-build
+          HOME=/tmp PIPX_HOME=/tmp/pipx PIPX_BIN_DIR=/tmp/bin pipx install --force /tmp/qemu-tool-build
         else
-          PIPX_BIN_DIR=/usr/local/bin pipx install --force qemu-tool
+          HOME=/tmp PIPX_HOME=/tmp/pipx PIPX_BIN_DIR=/tmp/bin pipx install --force qemu-tool
         fi
         socks=$(ls /run/vfu/*.sock 2>/dev/null | tr '\n' ',' | sed 's/,$//')
         if [ -z "$$socks" ]; then
           echo "ERROR: no vfio-user sockets found in /run/vfu" >&2
           exit 1
         fi
-        exec qemu-tool run-vm \
+        exec /tmp/bin/qemu-tool run-vm \
           --images "${VM_IMAGES_DIR:-/var/lib/qemu-tool/images}" \
           --vm-name "${VM_NAME:-qemu-minimal}" \
           --vcpus "${VM_VCPUS:-4}" \

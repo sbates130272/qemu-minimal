@@ -1,6 +1,13 @@
-"""Tests for CONTAINER_USER, the switch that takes the stack off root.
+"""Tests for CONTAINER_USER, which is how this stack stays off root.
 
-Two failures are worth a test each, because neither of them looks like a
+The setting used to be opt-in, and in practice that meant root: the value
+cannot be committed (it differs per host), so "set it in an overlay" was the
+only on-ramp and the committed stacks shipped as uid 0. The reference is now
+emitted unconditionally and `qemu-tool compose` supplies the caller's own
+uid:gid -- so the tests below split into "the render always asks" and "the
+tool always answers".
+
+Four failures are worth a test each, because none of them looks like a
 permissions problem when it happens.
 
 The first is a stack that LOOKS configured and is not. The uid never enters
@@ -8,14 +15,23 @@ the generated YAML -- compose resolves it at `up` -- and every cheap spelling
 of that reference degrades to root silently: an unset variable interpolates to
 the empty string, `user: ":"` is not an error to Docker, and the container
 runs as uid 0 with one warning line as the evidence. So the emitted reference
-has to be the :? form, and the value has to be refused here rather than in the
-image.
+has to be the :? form.
 
 The second is a half-migration. rocjitsu does not chmod its vfio-user socket,
 so it stays 0755 owned by its creator and connect(2) needs write on the inode:
 a qemu on a different uid than rocjitsu cannot attach the GPU at all. The
 reverse direction happens to work, because root ignores the mode -- which is
 what makes it a trap rather than an obvious breakage.
+
+The third is the tool quietly overriding a choice. Compose resolves a variable
+from the process environment first and the --env-file layers second; if
+_apply_identity did not follow the same order, qemu-tool and the containers
+would disagree about the value, which is the exact failure this stack's
+repeated --env-file handling exists to prevent.
+
+The fourth is a capability set nobody looked at. A non-root uid is not an
+empty cap set -- a container can be uid 1000 and still hold NET_RAW -- so
+`user:` alone proves nothing about privilege.
 
 Stdlib unittest, like the rest of tests/. Run with:
 
@@ -25,11 +41,13 @@ Stdlib unittest, like the rest of tests/. Run with:
 from __future__ import annotations
 
 import importlib.util
+import os
 import re
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -61,6 +79,7 @@ def _load_package():
 
 
 _load_package()
+from qemu_tool import compose as compose_mod  # noqa: E402
 from qemu_tool import gen_compose  # noqa: E402
 from qemu_tool.envfile import parse_layers as parse_env_layers  # noqa: E402
 
@@ -123,7 +142,7 @@ def _blocks(body: str) -> dict[str, list[str]]:
 # notice when it changes.
 _EXPECTED_USER = {
     "x-ernic-common", "x-qemu-common",
-    "prometheus", "loki", "grafana", "lmcache-coordinator",
+    "prometheus", "loki", "alloy", "grafana", "lmcache-coordinator",
 }
 # ... and who inherits it, from which anchor.
 _INHERITED_USER = {
@@ -131,53 +150,37 @@ _INHERITED_USER = {
     "rocjitsu-1": "ernic-common", "rocjitsu-2": "ernic-common",
     "qemu-1": "qemu-common", "qemu-2": "qemu-common",
 }
-_EXEMPT = {"tapsetup-1", "tapsetup-2", "alloy"}
+# tapsetup cannot (Docker sets no ambient capabilities, so a non-root uid
+# holds no effective NET_ADMIN); dockerapi must not (it speaks to the daemon
+# socket, which is root's).
+_EXEMPT = {"tapsetup-1", "tapsetup-2", "dockerapi"}
 _PINNED_NOBODY = {"ernic-stats-exporter", "lmcache-stats-exporter"}
 
 
-class TestDefaultOff(unittest.TestCase):
-    def test_no_user_key_anywhere_but_the_exporters(self):
-        """Unset must render exactly the stack that is committed today.
+class TestAlwaysEmitted(unittest.TestCase):
+    """The render asks for a uid whatever the env file says.
 
-        The two exporters have pinned 65534 since long before this setting,
-        so they are the only `user:` an unset render may contain.
-        """
-        body = _render()
-        users = [ln for ln in body.splitlines() if ln.strip().startswith("user:")]
-        self.assertEqual(users, ['    user: "65534:65534"'] * 2)
+    This is the whole behaviour change. Gating it on the key being set made
+    root the practical default, because the value cannot be committed and so
+    there was nowhere natural to put it.
+    """
 
-    def test_nothing_else_leaks_in(self):
-        body = _render()
-        self.assertNotIn("group_add", body)
-        self.assertNotIn("CONTAINER_USER", body)
-        self.assertNotIn("TAP_OWNER", body)
-
-    def test_qemu_keeps_the_root_pipx_prefix(self):
-        """The writable-prefix install is part of the opt-in, not a freebie.
-
-        Switching it unconditionally would be harmless at run time and would
-        still change the committed render, which `gen-compose --check`
-        compares byte for byte.
-        """
-        body = _render()
-        self.assertIn("        exec qemu-tool run-vm \\", body)
-        self.assertNotIn("exec /tmp/bin/qemu-tool run-vm", body)
-
-
-class TestEnabled(unittest.TestCase):
     def setUp(self):
-        self.body = _render("CONTAINER_USER=1000:1000\n")
+        self.body = _render()
         self.blocks = _blocks(self.body)
 
-    def test_uid_is_never_baked_into_the_render(self):
-        """The generated stack is committed and checked byte for byte in CI.
-
-        A uid in the YAML fails that check on every machine except the one
-        that ran the generator, which is the exact failure the lane exists to
-        catch. The value reaches compose, not the renderer.
-        """
-        self.assertNotIn("1000:1000", self.body)
+    def test_unset_still_renders_the_reference(self):
         self.assertIn("${CONTAINER_USER:?", self.body)
+
+    def test_pinned_value_renders_the_same_bytes_as_unset(self):
+        """The uid reaches compose, not the renderer.
+
+        `gen-compose --check` compares the committed stack byte for byte in
+        CI, so a uid in the YAML would fail that check on every machine except
+        the one that ran the generator.
+        """
+        self.assertEqual(_render("CONTAINER_USER=1000:1000\n"), self.body)
+        self.assertNotIn("1000:1000", self.body)
 
     def test_emitted_on_exactly_the_expected_services(self):
         got = {
@@ -191,8 +194,9 @@ class TestEnabled(unittest.TestCase):
 
         Measured on compose v5.3.1: an unset variable substitutes empty,
         `user: ":"` is accepted by Docker, and the container runs as root. A
-        fleet that silently ignored this setting would be worse than one that
-        refused to start.
+        stack that silently ignored this would be worse than one that refuses
+        to start -- and refusing is what a plain `docker compose up` against
+        the committed file now does.
         """
         for name in _EXPECTED_USER:
             for line in self.blocks[name]:
@@ -244,7 +248,6 @@ class TestEnabled(unittest.TestCase):
             block = "\n".join(self.blocks[name])
             self.assertNotIn("user:", block)
         self.assertIn("ambient", "\n".join(self.blocks["tapsetup-1"]))
-        self.assertIn("docker group", "\n".join(self.blocks["alloy"]))
 
     def test_tap_is_owned_by_the_uid_that_will_attach_to_it(self):
         """TUNSETIFF on a persistent tap needs a matching owner, and the
@@ -263,6 +266,148 @@ class TestEnabled(unittest.TestCase):
         """
         self.assertIn("        exec /tmp/bin/qemu-tool run-vm \\", self.body)
         self.assertIn("HOME=/tmp PIPX_HOME=/tmp/pipx PIPX_BIN_DIR=/tmp/bin", self.body)
+        self.assertNotIn("PIPX_BIN_DIR=/usr/local/bin", self.body)
+
+
+class TestHardening(unittest.TestCase):
+    """A uid is not a capability set.
+
+    A container can run as uid 1000 and still hold NET_RAW, because Docker's
+    default permitted set is granted independently of the user. These two
+    lines are what make "unprivileged" true rather than approximately true.
+    """
+
+    def setUp(self):
+        self.blocks = _blocks(_render())
+
+    def test_every_service_drops_all_capabilities(self):
+        # Through an anchor for the per-VM services, inline for the rest.
+        for name in ("x-ernic-common", "x-qemu-common", "prometheus", "loki",
+                     "alloy", "grafana", "lmcache-coordinator", "dockerapi",
+                     "tapsetup-1"):
+            block = "\n".join(self.blocks[name])
+            self.assertIn("cap_drop", block, name)
+            self.assertIn("no-new-privileges:true", block, name)
+
+    def test_tapsetup_drops_before_it_adds(self):
+        """cap_add alone leaves Docker's default set underneath it, which is
+        what this ran with: NET_ADMIN was the only capability anyone had
+        thought about and thirteen others came along for free.
+        """
+        block = self.blocks["tapsetup-1"]
+        drop = block.index("    cap_drop: [ALL]")
+        add = block.index("    cap_add: [NET_ADMIN]")
+        self.assertLess(drop, add)
+        self.assertIn("    read_only: true", block)
+
+    def test_nothing_is_privileged(self):
+        body = _render()
+        self.assertNotIn("privileged:", body)
+
+    def test_only_tapsetup_adds_a_capability(self):
+        adders = {
+            name for name, lines in self.blocks.items()
+            if any(ln.strip().startswith("cap_add") for ln in lines)
+        }
+        # dockerapi is haproxy: it drops to its own user and chroots, which
+        # needs SETUID/SETGID/DAC_OVERRIDE back. Everything else holds none.
+        self.assertEqual(adders, {"tapsetup-1", "tapsetup-2", "dockerapi"})
+
+
+class TestDockerSocket(unittest.TestCase):
+    """Item 6: `:ro` on a socket mount restricts the inode, not the API.
+
+    Anything that can connect to /var/run/docker.sock can create a privileged
+    container and own the host, however the mount is flagged. Alloy is a large
+    pipeline that parses untrusted container log content, which makes it the
+    least suitable process in the stack to hold that.
+    """
+
+    def setUp(self):
+        self.body = _render()
+        self.blocks = _blocks(self.body)
+
+    def test_alloy_holds_no_socket(self):
+        block = "\n".join(self.blocks["alloy"])
+        self.assertNotIn("docker.sock", block)
+
+    def test_exactly_one_service_holds_the_socket(self):
+        holders = {
+            name for name, lines in self.blocks.items()
+            if any("docker.sock" in ln for ln in lines)
+        }
+        self.assertEqual(holders, {"dockerapi"})
+
+    def test_the_proxy_refuses_writes(self):
+        """POST=0 is the line that matters: without it the allowlist still
+        permits container create, start and exec, which is the whole exploit.
+        """
+        block = "\n".join(self.blocks["dockerapi"])
+        self.assertIn("- POST=0", block)
+        self.assertIn("- EXEC=0", block)
+        self.assertIn("- CONTAINERS=1", block)
+
+    def test_the_proxy_is_not_published(self):
+        """Reachable from the fleet network and nowhere else. A published
+        read-only Docker API is still a container inventory for anyone who
+        can reach the host's port.
+        """
+        block = "\n".join(self.blocks["dockerapi"])
+        self.assertNotIn("ports:", block)
+
+    def test_alloy_is_pointed_at_the_proxy(self):
+        block = "\n".join(self.blocks["alloy"])
+        self.assertIn("DOCKER_HOST=tcp://", block)
+
+
+class TestCallerIdentity(unittest.TestCase):
+    """The tool answers what the render asks, without overriding a choice."""
+
+    def test_identity_is_the_real_uid_not_the_login_name(self):
+        """getuid(), not getlogin() or $USER -- those answer "who owns the
+        terminal", a different question under sudo, a systemd unit or CI.
+        """
+        ident = compose_mod._caller_identity()
+        self.assertEqual(ident["CONTAINER_USER"],
+                         f"{os.getuid()}:{os.getgid()}")
+
+    def test_unset_is_filled_in(self):
+        env: dict[str, str] = {}
+        with mock.patch.dict(os.environ, {}, clear=True):
+            compose_mod._apply_identity(env, [])
+        self.assertEqual(env["CONTAINER_USER"],
+                         f"{os.getuid()}:{os.getgid()}")
+
+    def test_the_environment_wins(self):
+        """Compose resolves the process environment before any --env-file, so
+        the tool must too, or the two disagree about the value.
+        """
+        env: dict[str, str] = {}
+        with mock.patch.dict(os.environ, {"CONTAINER_USER": "7:7"}, clear=True):
+            compose_mod._apply_identity(env, [])
+        self.assertNotIn("CONTAINER_USER", env)
+
+    def test_an_env_layer_wins(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            layer = Path(tmp) / "overlay"
+            layer.write_text("CONTAINER_USER=9:9\n")
+            env: dict[str, str] = {}
+            with mock.patch.dict(os.environ, {}, clear=True):
+                compose_mod._apply_identity(env, [layer])
+        self.assertNotIn("CONTAINER_USER", env)
+
+    def test_an_empty_env_layer_value_is_not_a_choice(self):
+        """`CONTAINER_USER=` in a settings file is the commented-out default
+        with the comment removed, not someone asking for root.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            layer = Path(tmp) / "overlay"
+            layer.write_text("CONTAINER_USER=\n")
+            env: dict[str, str] = {}
+            with mock.patch.dict(os.environ, {}, clear=True):
+                compose_mod._apply_identity(env, [layer])
+        self.assertEqual(env["CONTAINER_USER"],
+                         f"{os.getuid()}:{os.getgid()}")
 
 
 class TestRejectedValues(unittest.TestCase):
@@ -292,9 +437,8 @@ class TestRejectedValues(unittest.TestCase):
         msg = self._refused("${UID}:${GID}")
         self.assertIn("bash exports neither", msg)
 
-    def test_empty_is_the_default_not_an_error(self):
-        body = _render("CONTAINER_USER=\n")
-        self.assertNotIn("CONTAINER_USER", body)
+    def test_empty_is_accepted_and_means_the_caller(self):
+        self.assertIn("${CONTAINER_USER:?", _render("CONTAINER_USER=\n"))
 
 
 if __name__ == "__main__":

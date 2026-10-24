@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import grp
 import os
 import subprocess
 import sys
 from pathlib import Path
 
-from .envfile import find as find_env_file
+from .envfile import find as find_env_file, parse_layers as parse_env_layers
 from .resources import COMPOSE as _COMPOSE_PACKAGE, packaged_path
 
 _STACKS = (
@@ -216,6 +217,161 @@ def _warn_if_stale(
     )
 
 
+# Directories a stack bind-mounts and writes into. Each one belongs to
+# whoever ran the fleet, and each is created by the Docker daemon -- as root,
+# 0755 -- if it does not exist when the service starts. Creating them here
+# first is what makes that moot. Keyed by the settings key that names the path.
+_DATA_DIR_KEYS = ("PROM_DATA_DIR", "LOKI_DATA_DIR", "GRAFANA_DATA_DIR")
+
+# Subcommands that actually start containers. `ps`, `logs` and `down` must
+# keep working against a stack whose artifacts are in any state at all --
+# `down` especially, since recovering from a bad run is exactly when the
+# checks below would otherwise be in the way.
+_STARTING = frozenset({"up", "start", "run", "create"})
+
+
+def _caller_identity() -> dict[str, str]:
+    """CONTAINER_USER and CONTAINER_KVM_GID for whoever ran this command.
+
+    The whole point of the setting is that the containers run as the person
+    who started them, and the overwhelmingly common answer to "which uid" is
+    "mine". Requiring that to be typed into an env file made root the
+    practical default for years, because the value cannot be committed (it
+    differs per host) and so there was nowhere obvious to put it.
+
+    getuid()/getgid(), not getlogin() or $USER: those answer "who owns the
+    terminal", which is a different question the moment this runs under sudo,
+    a systemd unit or CI.
+    """
+    ident = {"CONTAINER_USER": f"{os.getuid()}:{os.getgid()}"}
+    # The gid that owns /dev/kvm, asked of the device itself first. The group
+    # is conventionally called "kvm" and conventionally is the owner, but the
+    # question the qemu container actually needs answered is "which gid opens
+    # this node" -- and a host can have the group without the device, or the
+    # device without that name. The name is the fallback, not the source.
+    try:
+        ident["CONTAINER_KVM_GID"] = str(os.stat("/dev/kvm").st_gid)
+    except OSError:
+        try:
+            ident["CONTAINER_KVM_GID"] = str(grp.getgrnam("kvm").gr_gid)
+        except KeyError:
+            # Neither. Left unset, so compose refuses rather than starting a
+            # fleet that silently falls back to TCG and runs ~20x slower --
+            # which presents as "the guests are hanging", not as a missing
+            # group. A host with no /dev/kvm cannot run this stack anyway.
+            pass
+    return ident
+
+
+def _apply_identity(env: dict[str, str], settings: list[Path]) -> None:
+    """Fill in CONTAINER_USER/CONTAINER_KVM_GID, without overriding a choice.
+
+    Precedence has to match what compose itself will do with the same keys,
+    or the tool and the containers disagree about the value -- the failure
+    mode this stack's --env-file handling exists to avoid. Compose resolves a
+    variable from the process environment first and the --env-file layers
+    second, so anything set in either is already a decision and is left alone.
+    Only a key nobody has expressed an opinion about is filled in.
+    """
+    declared: set[str] = set()
+    if settings:
+        try:
+            declared = {
+                k for k, v in parse_env_layers(settings).items() if v.strip()
+            }
+        except SystemExit:
+            raise
+        except Exception:
+            # A layer this tool cannot parse is not a reason to refuse to run
+            # docker compose, which may well parse it fine. Fall back to
+            # filling in nothing the environment has not already supplied.
+            declared = set()
+    for key, value in _caller_identity().items():
+        if key in os.environ or key in declared:
+            continue
+        env[key] = value
+
+
+def _warn_about_root_artifacts(env: dict[str, str]) -> None:
+    """Name the files an earlier root-era run left behind, before they bite.
+
+    This is the migration hazard, and it does not present as a permissions
+    problem. A <vm>-nvmeN.qcow2 created by a root container is 0644
+    root-owned; QEMU opens a drive read-write, so the guest does not boot at
+    all. A PROM_DATA_DIR created by the daemon is 0755 root-owned and
+    Prometheus crash-loops on "mkdir data/: permission denied". Both read as
+    "the fleet is broken" a long way from the cause.
+
+    A warning, never a refusal. Someone may be deliberately running a mixed
+    fleet, and `up` on a stack with one stale file should still bring up the
+    other thirty-one guests.
+    """
+    uid = os.getuid()
+    offenders: list[str] = []
+    images = env.get("VM_IMAGES_DIR")
+    if images:
+        try:
+            # Only the files a container creates. The backing and overlay
+            # qcow2s are made by gen-vm on the host, as the caller, and a
+            # fleet legitimately shares a backing image owned by someone else.
+            for path in sorted(Path(images).glob("*-nvme*.qcow2")):
+                if path.stat().st_uid != uid:
+                    offenders.append(f"{path}  (uid {path.stat().st_uid})")
+        except OSError:
+            pass
+    for key in _DATA_DIR_KEYS:
+        raw = env.get(key)
+        if not raw:
+            continue
+        path = Path(raw)
+        try:
+            if path.is_dir() and path.stat().st_uid != uid:
+                offenders.append(f"{path}  ({key}, uid {path.stat().st_uid})")
+        except OSError:
+            continue
+    if not offenders:
+        return
+    print(
+        f"Warning: these are not owned by uid {uid}, which the containers now "
+        "run as:",
+        file=sys.stderr,
+    )
+    for line in offenders:
+        print(f"           {line}", file=sys.stderr)
+    print(
+        "         They were probably created by a root-era run of this stack.\n"
+        "         An NVMe qcow2 the guest cannot write stops it booting; a data\n"
+        "         directory it cannot write crash-loops the service. Delete the\n"
+        "         qcow2s (they are scratch) and chown the directories.",
+        file=sys.stderr,
+    )
+
+
+def _precreate_data_dirs(env: dict[str, str]) -> None:
+    """Create the bind-mount targets as the caller, not as the daemon.
+
+    Docker creates a missing bind-mount source itself, root-owned, and the
+    service that then cannot write it is the one that reports the problem --
+    several minutes and one confusing stack trace later. Making them here
+    costs nothing and removes the "chown these three directories before your
+    first run" step from the settings file entirely.
+    """
+    for key in _DATA_DIR_KEYS:
+        raw = env.get(key)
+        if not raw:
+            continue
+        try:
+            Path(raw).mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            # Not fatal: the path may be on a filesystem only root can write,
+            # in which case the operator has already chowned it or is about
+            # to find out. Say so rather than failing the whole command.
+            print(
+                f"Warning: could not create {key} at {raw}: {exc}",
+                file=sys.stderr,
+            )
+
+
 def run(
     vm_name: str | None,
     images_dir: Path | None,
@@ -287,6 +443,21 @@ def run(
         if rendered or (stack or _DEFAULT_STACK) in _GENERATED_STACKS:
             named = None if rendered else (stack or _DEFAULT_STACK)
             _warn_if_stale(cdir, settings, named, env_file)
+    # Every service carries `user: ${CONTAINER_USER:?...}` now, so this is
+    # what makes the supported path need no configuration: unset means "run
+    # the fleet as me", not "run it as root". Plain `docker compose` against
+    # the same file gets the :? error instead, which says what to set.
+    _apply_identity(env, settings)
+    if any(arg in _STARTING for arg in compose_args):
+        # The settings under the environment, which is the order compose
+        # itself resolves them in. Only for the checks below -- nothing here
+        # is passed on; compose reads the layers itself.
+        paths = dict(parse_env_layers(settings)) if settings else {}
+        for key in ("VM_IMAGES_DIR", *_DATA_DIR_KEYS):
+            if env.get(key):
+                paths[key] = env[key]
+        _precreate_data_dirs(paths)
+        _warn_about_root_artifacts(paths)
     # Belt and braces: cli._split_compose_argv already drops a user-typed "--",
     # but docker compose treats everything after a "--" as positional, so a
     # leaked separator made `-- --profile lmcache up -d` bring up the default

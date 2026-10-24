@@ -85,8 +85,9 @@ VM_EXTRA_HOSTFWD=tcp::9100-:9100
 VM_FILESYSTEM=
 LMCACHE_ENABLE=false
 LOGS_ENABLE=false
-CONTAINER_USER=244227127:1274200513
-CONTAINER_KVM_GID=136
+# CONTAINER_USER/CONTAINER_KVM_GID used to be pinned here to one operator's
+# ids on one node. qemu-tool compose resolves both from the caller now; pin
+# them again only to run as somebody else.
 
 # The sbates-fork flavour, pinned deliberately and not inherited. It is the
 # only one carrying the vfio-user P2P DMA patch (AGENTS.md issue 19), which is

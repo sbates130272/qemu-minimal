@@ -111,6 +111,24 @@ jobs:
     # again. A stock runner does not have that on / without help -- this is
     # where report-for-lmcache ran out of disk, with a bare zstd "No space
     # left on device" that named nothing.
+    # The rendered stacks run every container as the caller, so every service
+    # carries `user: ${CONTAINER_USER:?...}`. `qemu-tool compose` and
+    # `qemu-tool quick-start` fill that in themselves; a PLAIN `docker
+    # compose` -- which several steps below use -- cannot, and refuses to
+    # interpolate rather than silently running the fleet as root. Exported
+    # once here so every later step agrees with what qemu-tool would pick,
+    # including the `logs` on the failure path, which is where an unset
+    # variable would cost the most.
+    #
+    # The gid of /dev/kvm rather than the kvm group by name, for the same
+    # reason compose._caller_identity() asks the device: a container given a
+    # uid holds no supplementary groups, and what it needs is whatever gid
+    # opens that node.
+    - name: Resolve the container identity
+      run: |
+        echo "CONTAINER_USER=$(id -u):$(id -g)" >> "$GITHUB_ENV"
+        echo "CONTAINER_KVM_GID=$(stat -c %g /dev/kvm)" >> "$GITHUB_ENV"
+
     - name: Free disk space
       run: |
         df -h /

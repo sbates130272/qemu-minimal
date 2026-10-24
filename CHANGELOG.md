@@ -4,6 +4,85 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **Every container in every stack now runs as the caller, with no
+  capabilities.** Before this, all six stacks ran every service as uid 0 with
+  Docker's full default capability set. `CONTAINER_USER` existed to fix that
+  and was opt-in, which in practice meant root: the value cannot be committed
+  (it differs per host, and `gen-compose --check` compares the rendered stack
+  byte for byte), so "put it in an overlay" was the only on-ramp and two
+  committed overlays took it, both pinning one operator's ids.
+
+  What the render carries is a *reference*, not a value, and that is exactly
+  what makes it safe to emit unconditionally — the stack stays
+  machine-independent either way. `qemu-tool compose` and `qemu-tool
+  quick-start` answer it from your own `uid:gid`, and `CONTAINER_KVM_GID` from
+  the gid that owns `/dev/kvm`, following the same precedence compose itself
+  uses: the environment first, then the `--env-file` layers, and only an unset
+  key filled in. Set `CONTAINER_USER` now only to pin a *different* identity,
+  including `0:0` to go back to root deliberately.
+
+  A plain `docker compose up` has no caller to ask and refuses with `required
+  variable CONTAINER_USER is missing a value`. That is deliberate: the cheap
+  alternative `${CONTAINER_USER:-}` interpolates to empty, `user: ":"` is not
+  an error to Docker, and the fleet runs as root with one warning line as the
+  evidence.
+
+  Three services are exempt and say so in the render. `tapsetup-N` cannot take
+  a uid at all — Docker sets no ambient capabilities, so a non-root uid holds
+  no effective `NET_ADMIN` — but it dropped from Docker's thirteen defaults
+  plus `NET_ADMIN` to `NET_ADMIN` alone on a read-only rootfs. `dockerapi`
+  holds the host socket. The two stats exporters keep `65534`.
+
+- **`cap_drop: [ALL]` and `no-new-privileges` on everything**, independently of
+  who it runs as. A uid is not a capability set: a container can be uid 1000
+  and still hold `NET_RAW`.
+
+- **Alloy no longer holds the Docker socket.** `:ro` on a socket mount
+  restricts the inode, not the API behind it — anything that can connect to
+  `/var/run/docker.sock` can create a privileged container and own the host —
+  so the stack's log collector, which parses untrusted container log content,
+  held a root credential. A new `dockerapi` service (haproxy, path allowlist,
+  `POST=0`) sits in front of it and Alloy reaches the daemon through
+  `DOCKER_HOST` over the fleet network. The proxy publishes no port. This
+  shrinks the root-equivalent container from a log pipeline to a proxy whose
+  whole job is saying no; it does not remove it, because anything speaking to
+  the daemon needs the socket.
+
+- **The in-guest MP server unit dropped `seccomp=unconfined`.** It was the one
+  relaxation in the fleet with no comment justifying it. Docker's default
+  profile allows every syscall the ROCm runtime and the ionic verbs path use;
+  it blocks the long tail. Now `lmcache_guest_seccomp_unconfined`, default
+  false, beside `--cap-drop ALL` and `--security-opt no-new-privileges`.
+  `--network host` and `--ipc host` stay — the first is required for P2P.
+
+- **`qemu-tool compose up` creates the metrics data directories as you** and
+  warns about artifacts an earlier root-era run left behind. Docker creates a
+  missing bind-mount source root-owned, and the service that then cannot write
+  it is what reports the problem, several minutes and one stack trace later.
+  The one case it cannot fix is a `<vm>-nvmeN.qcow2` from a root run: 0644
+  root-owned, and QEMU opens a drive read-write, so the guest does not boot at
+  all rather than merely owning the wrong file.
+
+### Fixed
+
+- **`run-vm` puts `net.ipv4.ip_forward` back.** The TAP path set it
+  unconditionally with no matching restore, so running one VM once left the
+  host forwarding packets forever. It is now set only if it was off, and
+  restored on teardown only when no other `qemu-br*` bridge is left — a second
+  `run-vm` that found it already on will not have recorded it, and switching it
+  off under them would break a running guest's networking.
+
+- **`tests/test_lmcache_unit_render.py` rendered a unit nobody runs.** It built
+  its own Jinja environment without `trim_blocks`, which Ansible's `template`
+  module defaults to on. Without it a `{% for %}` over an empty list leaves a
+  blank line, and a blank line inside `ExecStart`'s backslash continuation
+  terminates it — systemd reports `Missing '=', ignoring line` and the
+  container starts with some of its arguments. The real render was fine; the
+  test's was broken, which is the forgiving direction and so went unnoticed.
+  There is now a test that the continuation is unbroken.
+
 ### Added
 
 - **`qemu-tool quick-start`**, one command that brings up two guests sized for
