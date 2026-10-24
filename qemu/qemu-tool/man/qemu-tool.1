@@ -4,7 +4,7 @@ qemu\-tool \- run, generate and list QEMU virtual machines
 .SH SYNOPSIS
 .B qemu\-tool
 .RB [ \-\-version ]
-.I {quick\-start,check\-system,run\-vm,gen\-vm,gen\-compose,compose,ernic\-stats,lmcache\-stats,list,inspect,ssh,shutdown,man}
+.I {quick\-start,check\-system,down\-all,run\-vm,gen\-vm,gen\-compose,compose,ernic\-stats,lmcache\-stats,list,inspect,ssh,shutdown,man}
 .RI [ options ]
 .SH DESCRIPTION
 .B qemu\-tool
@@ -32,6 +32,16 @@ Exits non-zero if anything would stop a stack starting; warnings do not fail
 it. The same checks
 .B quick\-start
 runs in its preflight, so the two cannot drift.
+.TP
+.B down\-all
+Find every running qemu-tool stack on this host and tear it down. Identified
+by the compose file \(em the
+.B gen\-compose
+provenance header, or one of the stack directories this tool ships \(em and
+never by service name, because this removes containers. Yours if any of its
+containers runs as your uid. Under
+.BR sudo (8)
+it takes every stack on the system. Always asks first.
 .TP
 .B run\-vm
 Launch an existing VM image created by
@@ -1076,6 +1086,43 @@ part of the report \(em a stale
 .I qemu/.env
 in a checkout outranks the system one, and a fleet then runs with
 half-remembered values.
+.SH DOWN-ALL OPTIONS
+Tears down every running qemu-tool stack you own, asking first.
+.PP
+Two questions are answered from what
+.BR docker\-compose (1)
+records on each container, so neither is a guess. Whether it is a qemu-tool
+stack comes from
+.IR com.docker.compose.project.config_files ,
+which names the compose file: a generated stack carries the
+.B gen\-compose
+provenance header, a committed one sits in a directory this tool ships.
+Matching on service names instead would tear down an unrelated project that
+happened to have a service called
+.IR qemu\-1 .
+Whether it is yours comes from the uid its containers actually run as.
+.PP
+A stack started before the containers ran as the caller has every container
+as root, so to a non-root caller it is root's and is skipped \(em correctly,
+since those containers cannot be stopped without root. Skipped stacks are
+listed with the reason rather than passed over in silence.
+.PP
+The teardown pins the project with an explicit
+.B \-p
+and enables every profile, so a profile-gated service cannot be left behind
+and a teardown cannot resolve to the wrong project.
+.TP
+.B \-\-dry\-run
+List what would be torn down, and the exact commands, without stopping
+anything.
+.TP
+.B \-\-yes
+Skip the confirmation, for scripts. The prompt never defaults to yes and a
+bare Enter always declines, so this is the only way to proceed unattended.
+.TP
+.B \-\-all\-users
+Include stacks owned by other users. Needs root, and is refused without it
+rather than silently doing less than it says.
 .SH MAN OPTIONS
 Opens this page with
 .BR man (1).

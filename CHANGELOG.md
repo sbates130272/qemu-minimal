@@ -102,6 +102,22 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **`qemu-tool down-all`**, which finds every running qemu-tool stack on this
+  host and tears it down, asking first. `sudo qemu-tool down-all` takes every
+  stack on the system regardless of owner.
+
+  Both of its questions are answered from what compose records on each
+  container rather than guessed. A stack is identified by its compose file —
+  the `gen-compose` provenance header, or one of the directories this tool
+  ships — and never by service name, because `qemu-1` is a name anyone might
+  use and this removes containers. It is *yours* if any of its containers runs
+  as your uid, which is what `CONTAINER_USER` put there.
+
+  A stack started before that change has every container as root and so reads
+  as root's to a non-root caller; those are listed as skipped, with the reason,
+  rather than passed over in silence. The teardown pins the project with an
+  explicit `-p`, which the stack-directory discovery order does not guarantee.
+
 - **`run-vm` refuses, by name, when a disk or its directory is not writable
   by the user it runs as.** This is where the root-era migration lands, and
   both ways it landed were unhelpful. QEMU opens a drive read-write even for

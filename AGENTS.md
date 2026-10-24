@@ -325,6 +325,39 @@ pins it, the golden `env/scale-out` does not.
 
 ## Tearing a stack down
 
+**`qemu-tool down-all`** finds every running qemu-tool stack on this host and
+tears it down, asking first. `--dry-run` lists what it would do and the exact
+commands; `--yes` skips the prompt, which never defaults to yes.
+
+Both of its questions are answered from what compose records on each
+container, so neither is a guess:
+
+| Question | Answered by |
+|---|---|
+| Is this a qemu-tool stack? | `com.docker.compose.project.config_files` — the file carries the `gen-compose` provenance header, or sits in one of the six stack directories this tool ships |
+| Is it yours? | `.Config.User`, the uid the containers really run as — which is what the `CONTAINER_USER` work put there |
+
+**Do not "simplify" the first to a service-name match.** `qemu-1` is a name
+anyone might use, and this command removes containers. Verified: an unrelated
+compose project with a service called `qemu-1` is ignored, while a real fleet
+beside it is found.
+
+Ownership is *any* container as your uid, not all — a stack legitimately
+mixes them, since the stats exporters are pinned to 65534 and
+tapsetup/dockerapi stay root. The limitation worth knowing: a stack started
+**before** the containers ran as the caller has every container as root, so a
+non-root caller sees it as root's and skips it. That is correct — you cannot
+stop them without root — and skipped stacks are listed with the reason rather
+than passed over. `sudo qemu-tool down-all` takes everything, which is what
+makes it the system-wide form.
+
+The teardown pins the project with an explicit `-p` and rebuilds the
+invocation from the recorded `working_dir`, `config_files` and
+`environment_file`. That `-p` is the point: the project name is otherwise
+derived from the working directory, which is the leading theory for the
+41-hour survivors below.
+
+
 **`qemu-tool compose down` and `stop` enable every profile**, which plain
 `docker compose` does not, and say so on stderr. Pass `--profile` (or set
 `COMPOSE_PROFILES`) to scope it deliberately; an explicit choice is respected.

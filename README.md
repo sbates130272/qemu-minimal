@@ -723,6 +723,29 @@ my fleet run as" used to have a surprising answer — every stack ran as root
 until `CONTAINER_USER` became unconditional — so stating it is the point. See
 [Settings file](#settings-file).
 
+### down-all flags
+
+Finds every running qemu-tool stack on this host and tears it down, asking
+first. `sudo qemu-tool down-all` takes every stack on the system regardless of
+owner.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--dry-run` | off | List what would be torn down, and the exact commands, without stopping anything |
+| `--yes` | off | Skip the confirmation. The prompt never defaults to yes, so this is the only way to proceed unattended |
+| `--all-users` | off | Include other users' stacks. Needs root, and is refused without it |
+
+Both of its questions come from what compose records on each container, so
+neither is a guess. **Is it a qemu-tool stack?** — the compose file carries the
+`gen-compose` provenance header, or sits in one of the stack directories this
+tool ships. Matching on service names instead would tear down an unrelated
+project that happened to have a service called `qemu-1`. **Is it yours?** — the
+uid its containers actually run as.
+
+A stack started before the containers ran as the caller has every container as
+root, so a non-root run sees it as root's and skips it; those are listed with
+the reason rather than passed over. Run under `sudo` to include them.
+
 ### Shared flags (run-vm and gen-vm)
 
 | Flag | Default | Description |

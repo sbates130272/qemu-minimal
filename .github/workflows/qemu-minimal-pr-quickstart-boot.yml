@@ -380,11 +380,46 @@ jobs:
           --env-file "${GITHUB_WORKSPACE}/qemu/env/quickstart" \
           --env-file "$OVERLAY" logs --tail 100 || true
 
+    # down-all identification, against a REAL rendered stack.
+    #
+    # Its risky property is the identification: it removes containers, and a
+    # service-name match would tear down an unrelated project that happened
+    # to have a service called qemu-1. The check is the compose file -- the
+    # gen-compose provenance header, or one of the shipped stack directories
+    # -- and only a genuinely rendered stack exercises that. A unit test can
+    # synthesise the labels; it cannot prove compose writes the ones the
+    # code reads.
+    #
+    # --dry-run, so this asserts and destroys nothing. The teardown below is
+    # where it is allowed to act.
+    - name: down-all finds this stack
+      run: |
+        set -eu
+        out="$(qemu-tool down-all --dry-run 2>&1)"
+        echo "$out"
+        echo "$out" | grep -q "pr-boot" || {
+          echo "::error::down-all did not identify the running pr-boot stack"
+          exit 1; }
+        echo "$out" | grep -q "Will tear down" || {
+          echo "::error::down-all found the stack but would not act on it"
+          exit 1; }
+
+    # Torn down BY down-all, so the destructive path runs against a real
+    # stack on every PR rather than only against a synthetic one. The
+    # quick-start teardown stays as the fallback: cleanup must not depend on
+    # the newer code being right, and a runner with containers left on it is
+    # a worse failure than a redundant command.
     - name: Take it down
       if: always()
       run: |
+        qemu-tool down-all --yes || true
         qemu-tool quick-start down \
           --env-file qemu/env/quickstart \
           --env-file "$OVERLAY" \
           --stack-dir "$STACK_DIR" \
           --yes || true
+        left="$(docker ps -q --filter label=com.docker.compose.project=pr-boot | wc -l)"
+        [ "$left" -eq 0 ] || {
+          echo "::error::$left container(s) survived both teardowns"
+          docker ps --filter label=com.docker.compose.project=pr-boot
+          exit 1; }
