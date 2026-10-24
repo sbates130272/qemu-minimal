@@ -102,7 +102,14 @@ jobs:
     - name: Run the stack as a non-root user
       uses: ./.github/actions/nonroot-user
       with:
-        chown: /var/lib/qemu-tool ${{ github.workspace }}
+        # The subdirectories too, not just the root: chown -R only
+        # reaches what exists, and a later root step that mkdir -p's
+        # a missing one owns it.
+        chown: >-
+          /var/lib/qemu-tool
+          /var/lib/qemu-tool/images
+          /var/lib/qemu-tool/stacks
+          ${{ github.workspace }}
 
     # These lanes drive the stack with PLAIN `docker compose` in places --
     # the `ps` after `up`, and the logs-on-failure path -- and plain compose

@@ -26,11 +26,23 @@ inputs:
     default: '1000'
   chown:
     description: >-
-      Space-separated directories to hand to that uid. These are bind-mounted
-      from the host and root-owned there, which is the same situation the
-      settings file tells a human to chown on a host that ever ran as root.
+      Space-separated directories to create and hand to that uid. They are
+      bind-mounted from the host and root-owned there, which is the same
+      situation the settings file tells a human to chown on a host that ever
+      ran as root.
+
+      LIST THE SUBDIRECTORIES, not just the root. `chown -R` only reaches
+      what exists when it runs, and a later step running as root will
+      re-create a missing one with `mkdir -p` and own it. That is a real
+      regression this had: dropping images/ and stacks/ from this list left
+      `stacks/` to be created root-owned by the step that writes the overlay,
+      and the non-root stack then died on "cannot create
+      /var/lib/qemu-tool/stacks/pr-boot".
     required: false
-    default: /var/lib/qemu-tool
+    default: >-
+      /var/lib/qemu-tool
+      /var/lib/qemu-tool/images
+      /var/lib/qemu-tool/stacks
 
 runs:
   using: composite
