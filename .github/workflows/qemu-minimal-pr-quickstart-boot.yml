@@ -101,23 +101,63 @@ jobs:
         test -c /dev/kvm
         python3 -I -c "import fcntl, os; assert fcntl.ioctl(os.open('/dev/kvm', os.O_RDWR), 0xAE00, 0) >= 0; print('KVM usable')"
 
-    # The rendered stacks run every container as the caller, so every service
-    # carries `user: ${CONTAINER_USER:?...}`. `qemu-tool compose` and
-    # `qemu-tool quick-start` fill that in themselves; a PLAIN `docker
-    # compose` -- which several steps below use -- cannot, and refuses to
-    # interpolate rather than silently running the fleet as root. Exported
-    # once here so every later step agrees with what qemu-tool would pick,
-    # including the `logs` on the failure path, which is where an unset
-    # variable would cost the most.
+    # Make a non-root user, and run everything below as it.
     #
-    # The gid of /dev/kvm rather than the kvm group by name, for the same
-    # reason compose._caller_identity() asks the device: a container given a
-    # uid holds no supplementary groups, and what it needs is whatever gid
-    # opens that node.
-    - name: Resolve the container identity
+    # The job container is root, like every job container, and that was
+    # hiding the configuration this whole branch is about. With the caller
+    # root, CONTAINER_USER resolved to 0:0 and the lane proved
+    # root-with-no-capabilities -- worth proving, but not the thing an
+    # operator runs. The uid path has its own failure: rocjitsu does not
+    # chmod its vfio-user socket, so it stays 0755 owned by its creator and
+    # connect(2) needs write on the inode. A qemu on a different uid cannot
+    # attach the GPU AT ALL, and root never meets that because it ignores the
+    # mode.
+    #
+    # It has to be the WHOLE quick-start, not just the compose call:
+    # `make_overlays` and `compose up` happen inside one invocation, so an
+    # overlay created by root is one the non-root qemu container cannot write
+    # -- which run-vm now refuses by name, correctly, and which would fail
+    # this lane for the right reason but the wrong test.
+    #
+    # The docker group is the socket's own gid, read off the socket rather
+    # than assumed: it is the host's gid passed through the bind mount and
+    # has no reason to match any group in this image.
+    - name: Create the non-root user this lane runs as
       run: |
-        echo "CONTAINER_USER=$(id -u):$(id -g)" >> "$GITHUB_ENV"
+        set -eu
+        UID_WANT=1000
+        # Reuse the uid rather than insisting on a new name: this image
+        # already has uid 1000 as `ubuntu`, so a bare `useradd -u 1000` fails
+        # and every later `usermod ciuser` fails with it. Create one only
+        # when the uid is genuinely free.
+        if CI_USER=$(id -nu "$UID_WANT" 2>/dev/null); then
+          echo "uid $UID_WANT already exists as $CI_USER"
+        else
+          CI_USER=ciuser
+          useradd -m -u "$UID_WANT" "$CI_USER"
+        fi
+        CI_HOME=$(getent passwd "$CI_USER" | cut -d: -f6)
+        [ -d "$CI_HOME" ] || { mkdir -p "$CI_HOME"; chown "$UID_WANT" "$CI_HOME"; }
+
+        # The socket's own gid, read off the socket. It is the HOST's gid
+        # passed through the bind mount and has no reason to match any group
+        # in this image, so it may have to be created before it can be
+        # joined.
+        SOCK_GID=$(stat -c %g /var/run/docker.sock)
+        getent group "$SOCK_GID" >/dev/null || groupadd -g "$SOCK_GID" dockersock
+        usermod -aG "$(getent group "$SOCK_GID" | cut -d: -f1)" "$CI_USER"
+
+        # Everything quick-start writes. /var/lib/qemu-tool is bind-mounted
+        # from the host and root-owned there -- the same chown the settings
+        # file tells a human to do on a host that ever ran as root.
+        mkdir -p /var/lib/qemu-tool/images /var/lib/qemu-tool/stacks
+        chown -R "$UID_WANT:$UID_WANT" /var/lib/qemu-tool
+
+        echo "CIUSER_UID=$UID_WANT" >> "$GITHUB_ENV"
+        echo "CIUSER_HOME=$CI_HOME" >> "$GITHUB_ENV"
         echo "CONTAINER_KVM_GID=$(stat -c %g /dev/kvm)" >> "$GITHUB_ENV"
+        echo "this job is uid $(id -u); quick-start will run as $CI_USER ($UID_WANT)"
+
 
     - name: Install qemu-tool
       run: |
@@ -178,15 +218,22 @@ jobs:
     # Boot it. `up` stops as soon as the rocm-ernic container is healthy, and
     # --yes makes every prompt take its default (which is also what happens
     # with no terminal -- passed anyway so the choice is visible).
-    - name: Boot one guest
+    # setpriv, not su: it keeps the environment this job already set up
+    # (GITHUB_ENV exports, PATH to the pipx install) without a login shell
+    # re-reading profile scripts. --init-groups is what puts ciuser in the
+    # docker-socket group it was just added to.
+    - name: Boot one guest, as a non-root user
       run: |
-        qemu-tool quick-start up \
-          --env-file qemu/env/quickstart \
-          --env-file "$OVERLAY" \
-          --stack-dir "$STACK_DIR" \
-          --key-dir "$KEY_DIR" \
-          --no-metrics \
-          --yes
+        set -eu
+        setpriv --reuid 1000 --regid 1000 --init-groups \
+          env HOME="$CIUSER_HOME" \
+          qemu-tool quick-start up \
+            --env-file qemu/env/quickstart \
+            --env-file "$OVERLAY" \
+            --stack-dir "$STACK_DIR" \
+            --key-dir "$KEY_DIR" \
+            --no-metrics \
+            --yes
 
     # THE ASSERTION THIS LANE EXISTS FOR.
     #
@@ -307,22 +354,27 @@ jobs:
     # reports CapEff 00000000a80425fb -- fourteen capabilities, granted
     # because nobody said otherwise.
     #
-    # THE UID IS COMPARED TO THIS JOB'S OWN, not to "not zero". The property
-    # the stack provides is "run as the caller", and this lane's caller is
-    # root: the job runs in a container as uid 0, so `id -u` is 0 and
-    # CONTAINER_USER is 0:0. That is the correct answer here, and an
-    # assertion of "non-root" would be testing the environment rather than
-    # the feature -- it failed on exactly that the first time it ran.
+    # The uid is compared to the one quick-start RAN AS, not to "not zero".
+    # The property the stack provides is "run as the caller", so the caller's
+    # uid is the right expectation -- and this lane now arranges for that
+    # caller to be a non-root user, which is the configuration an operator
+    # actually has. It is also asserted to be non-zero, so a regression in
+    # the setpriv step fails here rather than quietly going back to proving
+    # the root case twice.
     #
-    # The capability drop is asserted unconditionally, and at uid 0 it is the
-    # whole point: a uid is not a capability set, so root-with-no-caps is
-    # precisely the configuration the hardening exists for. Measured here,
-    # rather than reasoned about.
+    # The capability drop is asserted unconditionally. A uid is not a
+    # capability set -- a container can be uid 1000 and still hold NET_RAW --
+    # so the two are independent and both are measured.
     - name: The running containers run as the caller and hold no capabilities
       run: |
         set -eu
-        want_uid=$(id -u)
-        echo "this job runs as uid $want_uid; containers should match"
+        # The uid quick-start ran as, NOT this job's: the job is root and the
+        # whole point of the setpriv above is that the containers are not.
+        want_uid="${CIUSER_UID:?}"
+        echo "this job is uid $(id -u); containers should be $want_uid"
+        [ "$want_uid" != "0" ] || {
+          echo "::error::containers would be root -- the non-root setup did not take"
+          exit 1; }
 
         # By label, not `docker compose ps`: this step runs from the job
         # container, which has no compose file and no project directory, and
@@ -395,7 +447,11 @@ jobs:
     - name: down-all finds this stack
       run: |
         set -eu
-        out="$(qemu-tool down-all --dry-run 2>&1)"
+        # As ciuser, so this exercises the OWNERSHIP filter: the stack's
+        # containers run as 1000 and the caller is 1000. Run as root it
+        # would match everything regardless, which proves less.
+        out="$(setpriv --reuid 1000 --regid 1000 --init-groups \
+                 env HOME="$CIUSER_HOME" qemu-tool down-all --dry-run 2>&1)"
         echo "$out"
         echo "$out" | grep -q "pr-boot" || {
           echo "::error::down-all did not identify the running pr-boot stack"
@@ -412,7 +468,8 @@ jobs:
     - name: Take it down
       if: always()
       run: |
-        qemu-tool down-all --yes || true
+        setpriv --reuid 1000 --regid 1000 --init-groups \
+          env HOME="$CIUSER_HOME" qemu-tool down-all --yes || true
         qemu-tool quick-start down \
           --env-file qemu/env/quickstart \
           --env-file "$OVERLAY" \
