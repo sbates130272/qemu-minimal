@@ -422,6 +422,24 @@ anything it finds owned by someone else. The one it cannot fix is a
 read-write, so the guest does not boot **at all** rather than merely owning the
 wrong file. Delete them; they are scratch.
 
+Three layers report this now, at the three moments it can be noticed.
+`qemu-tool check-system` flags a `VM_IMAGES_DIR` that is unwritable or holds
+files owned by someone else, before anything starts. `qemu-tool compose up`
+warns and names them. And `run-vm` **refuses**, because by then it is the
+last chance: it checks the images directory and every drive QEMU will open
+read-write, and prints the owner, the mode and a fix. A backing image is
+deliberately exempt from the write check -- a fleet shares one across every
+guest and QEMU opens it read-only, so demanding write there would reject a
+correct setup.
+
+The wording distinguishes two causes, which is not cosmetic. A file owned by
+someone else wants `chown` (or `rm`, if it is a `-nvmeN.qcow2`, which is
+scratch and recreated -- and needs no sudo, since unlinking depends on the
+directory). A file that is **yours** but mode 0444 wants `chmod`, and the
+earlier wording for it read "owned by uid 1000, not read-write for uid 1000"
+-- a true sentence that looks like a contradiction and names the wrong
+remedy.
+
 **The MP server unit is the loosest thing left, and it is now explained.**
 `lmcache-server.service` kept `--security-opt seccomp=unconfined` with no
 comment beside it — the one relaxation nobody could evaluate. Docker's default

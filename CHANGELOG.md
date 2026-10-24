@@ -85,6 +85,23 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **`run-vm` refuses, by name, when a disk or its directory is not writable
+  by the user it runs as.** This is where the root-era migration lands, and
+  both ways it landed were unhelpful. QEMU opens a drive read-write even for
+  a guest that only reads it, so a 0644 root-owned qcow2 did not degrade --
+  the guest did not boot, and QEMU's own `Could not open '<path>': Permission
+  denied` named neither the owner nor why it changed. An unwritable images
+  directory failed later and elsewhere, as a `CalledProcessError` traceback
+  from `qemu-img`.
+
+  The message names the file, its owner (uid *and* name, since one of them
+  is always the one you can search for), and a fix that works: `rm` for an
+  NVMe drive, which is scratch and recreated; `chown` for a boot disk;
+  `chmod` when the file is already yours and only the mode denies write.
+  That last distinction matters -- the obvious wording produced "owned by
+  uid 1000, not read-write for uid 1000", which reads like a contradiction
+  and sends you to the wrong command.
+
 - **`qemu-tool inspect` reports each GPU's PCIe BARs**, indented under its row:
 
   ```
