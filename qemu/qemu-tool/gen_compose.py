@@ -198,8 +198,11 @@ _DEFAULTS = {
     # ad-hoc exploration do not. Absolute for the same reason as the TSDB.
     "GRAFANA_DATA_DIR": "/var/lib/qemu-tool/grafana-data",
     # ---- Container user ----------------------------------------------------
-    # Empty means "every service keeps its image's own user", which for all of
-    # these is root. See _container_user().
+    # Not a default in the usual sense: the render ALWAYS emits the reference,
+    # and `qemu-tool compose` supplies the invoking user's own uid:gid when
+    # nothing else has. This key exists so an env file can pin a different one,
+    # and so _check_container_user() can refuse the spellings that silently mean
+    # root. Empty here means "whoever runs the stack", not "uid 0".
     "CONTAINER_USER": "",
 }
 
@@ -228,13 +231,29 @@ _TAPSETUP_IMAGE = "qemu-tool/ernic-tapsetup:1"
 # renumbering one silently repoints a scrape or a worker's registration.
 _INFRA_EXPORTER, _INFRA_PROM, _INFRA_LMCACHE, _INFRA_GRAFANA = 10, 11, 12, 13
 _INFRA_LMCACHE_STATS, _INFRA_LOKI, _INFRA_ALLOY = 14, 15, 16
+_INFRA_DOCKERAPI = 17
+# The proxy's listen port. 2375 is the conventional plaintext Docker API port
+# and the image's own default; it is published nowhere, so it is reachable
+# only from the fleet network.
+_DOCKERAPI_PORT = 2375
 
 # CONTAINER_USER reaches the YAML as a compose variable reference, never as
 # the value the generator read. The generated stack is committed and
 # `gen-compose --check` compares it byte for byte in CI, so a uid baked into
 # the render would fail that check on every machine but the one that ran the
-# generator. The key is therefore read here only as a switch: present means
-# "emit the reference", and the uid itself is resolved by compose at `up`.
+# generator. The uid is resolved by compose at `up`.
+#
+# This reference is now emitted UNCONDITIONALLY. It used to be gated on the
+# key being set, which made root the default for anyone who had not read far
+# enough down the settings file -- and since the value cannot be committed
+# (see above), "set it in an overlay" was the only on-ramp and almost nobody
+# took it. Being a reference rather than a value is exactly what lets it be
+# unconditional: the render stays machine-independent either way.
+#
+# `qemu-tool compose` fills it in from the caller's own uid:gid when neither
+# the environment nor any env layer has (see compose._caller_identity), so the
+# supported path needs no configuration at all. Plain `docker compose` against
+# a committed stack hits the :? below and is told what to set.
 #
 # The :? form, not :- , because the silent-failure spelling is the one people
 # reach for. Measured on compose v5.3.1: an unset variable interpolates to the
@@ -250,6 +269,40 @@ _USER_REF = f'"{_USER_VAR}"'
 # distributions), so like the uid it is resolved at `up`, not baked.
 _KVM_GID_REF = '"${CONTAINER_KVM_GID:?set CONTAINER_KVM_GID to the host kvm gid}"'
 _UID_GID_RE = re.compile(r"[0-9]+:[0-9]+")
+
+# Read-only Docker API in front of the socket, so the log collector never
+# holds the socket itself. See the alloy service for why that distinction is
+# the whole point rather than defence in depth.
+_SOCKET_PROXY_IMAGE = "docker.io/tecnativa/docker-socket-proxy:0.3.0"
+
+
+def _hardening(indent: str = "    ") -> list[str]:
+    """cap_drop + no-new-privileges, which every service in this stack takes.
+
+    Nothing here is a daemon that needs a capability. The device servers open
+    a unix socket and (with ERNIC_TAP) an already-created tap; QEMU opens
+    /dev/kvm and binds 2222; Prometheus, Loki, Grafana and the exporters bind
+    a port above 1024 and write one directory. Docker nonetheless starts every
+    container with CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID, NET_RAW,
+    MKNOD and seven more in the permitted set, which is a default rather than
+    a decision.
+
+    Dropping ALL matters even with CONTAINER_USER set, because a uid is not a
+    capability set: a container can be non-root and still hold NET_RAW. And it
+    matters more when CONTAINER_USER has been pointed at 0:0 deliberately,
+    which is the configuration where uid 0 keeps the capabilities and
+    no-new-privileges keeps a setuid binary in the image from restoring
+    anything that was dropped.
+
+    The one exception is tapsetup-N, which adds NET_ADMIN back on top of this
+    drop -- a far smaller set than the default it used to run with.
+    """
+    return [
+        f"{indent}cap_drop:",
+        f"{indent}  - ALL",
+        f"{indent}security_opt:",
+        f'{indent}  - "no-new-privileges:true"',
+    ]
 
 _PROVENANCE = "# env-sha256: "
 _ENV_FILE_LINE = "# env-file: "
@@ -477,12 +530,14 @@ def _check_image_coherence(values: dict[str, str]) -> None:
         )
 
 
-def _container_user(values: dict[str, str]) -> bool:
-    """Whether to emit `user:`, after refusing values that cannot work.
+def _check_container_user(values: dict[str, str]) -> None:
+    """Refuse a CONTAINER_USER that cannot work. Empty is fine and usual.
 
-    The value itself is not used -- see _USER_REF -- but it is checked here,
-    because every way of getting it wrong fails somewhere far from the env
-    file:
+    The value itself never reaches the render -- see _USER_REF -- and an empty
+    one is the normal case, because `qemu-tool compose` supplies the caller's
+    own uid:gid at `up`. This exists for the env file that pins a specific
+    one, because every way of getting it wrong fails somewhere far from the
+    env file:
 
     * A name ("stebates"). The uid running these containers has no passwd
       entry inside the images; only `nobody` does. Docker resolves a name
@@ -497,7 +552,7 @@ def _container_user(values: dict[str, str]) -> bool:
     """
     raw = _get(values, "CONTAINER_USER").strip()
     if not raw:
-        return False
+        return
     if not _UID_GID_RE.fullmatch(raw):
         sys.exit(
             f"Error: CONTAINER_USER must be numeric <uid>:<gid>, got {raw!r}.\n"
@@ -506,13 +561,17 @@ def _container_user(values: dict[str, str]) -> bool:
             "  ${UID}:${GID} does not work either -- bash exports neither, so "
             "it silently becomes root.\n"
             "  Use the literal ids, e.g. CONTAINER_USER=$(id -u):$(id -g) "
-            "evaluated by your shell."
+            "evaluated by your shell.\n"
+            "  Or leave it unset: qemu-tool compose fills in your own uid:gid."
         )
-    return True
 
 
 def plan(values: dict[str, str]) -> dict[str, Any]:
     """Resolve the env file into everything the templates need."""
+    # Early, and not where the value is used, because the value is never used
+    # here at all -- it reaches compose, not the renderer. If it is wrong this
+    # is the only place that can say so with the env file still in hand.
+    _check_container_user(values)
     raw_count = _get(values, "VM_COUNT")
     if not raw_count:
         sys.exit("Error: VM_COUNT is required in the env file for this stack.")
@@ -672,6 +731,8 @@ def plan(values: dict[str, str]) -> dict[str, Any]:
         "lmcache_stats_addr": f"{net}.{_NET_INFRA}.{_INFRA_LMCACHE_STATS}",
         "loki_addr": f"{net}.{_NET_INFRA}.{_INFRA_LOKI}",
         "alloy_addr": f"{net}.{_NET_INFRA}.{_INFRA_ALLOY}",
+        "dockerapi_addr": f"{net}.{_NET_INFRA}.{_INFRA_DOCKERAPI}",
+        "dockerapi_port": _DOCKERAPI_PORT,
         "logs": _flag(values, "LOGS_ENABLE"),
         "loki_image": _get(values, "LOKI_IMAGE"),
         "loki_port": _get(values, "LOKI_PORT"),
@@ -699,7 +760,7 @@ def plan(values: dict[str, str]) -> dict[str, Any]:
         "grafana_image": _get(values, "GRAFANA_IMAGE"),
         "grafana_port": _get(values, "GRAFANA_PORT"),
         "grafana_password": _get(values, "GRAFANA_ADMIN_PASSWORD"),
-        "container_user": _container_user(values),
+        "socket_proxy_image": _SOCKET_PROXY_IMAGE,
         "subnet": subnet,
         "vm_username": _get(values, "VM_USERNAME"),
         "vm_filesystem": _get(values, "VM_FILESYSTEM"),
@@ -853,19 +914,23 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
     # shutdown` is what makes that true -- and a guest still attached has
     # lost its device either way.
     out.append("  stop_signal: SIGKILL")
-    if spec["container_user"]:
-        # Both device servers only write into the two tmpfs volumes, which a
-        # tmpfs mounts 1777, so an unprivileged uid creates its socket and its
-        # stats file there with no pre-seeding and no init container.
-        #
-        # This anchor also carries rocjitsu, and that is not incidental:
-        # rocjitsu does not chmod its vfio-user socket, so it stays 0755 owned
-        # by whoever created it, and connect(2) on a unix socket needs write
-        # on the inode. A qemu on a different uid than rocjitsu therefore
-        # cannot attach the GPU at all. rocm-ernic hides this by chmodding its
-        # own socket to 0666; do not generalise from it. The two anchors must
-        # move together.
-        out.append(f"  user: {_USER_REF}")
+    # Both device servers only write into the two tmpfs volumes, which a
+    # tmpfs mounts 1777, so an unprivileged uid creates its socket and its
+    # stats file there with no pre-seeding and no init container.
+    #
+    # This anchor also carries rocjitsu, and that is not incidental:
+    # rocjitsu does not chmod its vfio-user socket, so it stays 0755 owned
+    # by whoever created it, and connect(2) on a unix socket needs write
+    # on the inode. A qemu on a different uid than rocjitsu therefore
+    # cannot attach the GPU at all. rocm-ernic hides this by chmodding its
+    # own socket to 0666; do not generalise from it. The two anchors must
+    # move together.
+    out.append(f"  user: {_USER_REF}")
+    # rocm-ernic attaches to a tap someone else created and owns; it needs
+    # /dev/net/tun and no capability at all. Measured: an ernic at Docker's
+    # default cap set reports "Ethernet attached to TAP tap0", and so does one
+    # at none of them.
+    out += _hardening("  ")
     # Docker's default soft nofile limit is 1024, and the mesh manager does not
     # close the socket of a node it evicts -- a reconnecting worker gets a new
     # node id and a new fd, and the old one is never reclaimed. At fleet scale
@@ -896,20 +961,24 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
     out.append('    - "${QEMU_TOOL_SRC:-../../..}:/qemu-tool-src:ro"')
     out.append("  devices:")
     out.append("    - /dev/kvm")
-    if spec["container_user"]:
-        # The point of the whole setting: with VM_NVME set, run-vm creates
-        # <VM_IMAGES_DIR>/<vm>-nvmeN.qcow2 from INSIDE this container, into a
-        # directory that belongs to the person who started the fleet. As root
-        # that lands 0644 root-owned in their own images/.
-        #
-        # Which is also the migration hazard: 0644 root-owned is not writable
-        # by the uid, and QEMU opens a drive read-write, so an NVMe qcow2 left
-        # behind by an earlier root run stops the guest booting rather than
-        # merely having the wrong owner. Delete those before the first
-        # non-root run.
-        out.append(f"  user: {_USER_REF}")
-        out.append("  group_add:")
-        out.append(f"    - {_KVM_GID_REF}")
+    # The point of the whole setting: with VM_NVME set, run-vm creates
+    # <VM_IMAGES_DIR>/<vm>-nvmeN.qcow2 from INSIDE this container, into a
+    # directory that belongs to the person who started the fleet. As root
+    # that lands 0644 root-owned in their own images/.
+    #
+    # Which is also the migration hazard from the root era: 0644 root-owned is
+    # not writable by the uid, and QEMU opens a drive read-write, so an NVMe
+    # qcow2 left behind by an earlier root run stops the guest booting rather
+    # than merely having the wrong owner. `qemu-tool compose up` checks for
+    # those and names them rather than letting the guest die at boot.
+    out.append(f"  user: {_USER_REF}")
+    # A container given --user <uid>:<gid> holds no supplementary groups, and
+    # /dev/kvm is crw-rw---- root:kvm, so accel=kvm fails without this.
+    out.append("  group_add:")
+    out.append(f"    - {_KVM_GID_REF}")
+    # QEMU needs no capability here. It does not configure the network (SLIRP
+    # is userspace), does not mknod, and binds only 2222.
+    out += _hardening("  ")
     # Docker's default is 10 s, then SIGKILL. QEMU is PID 1 here (run_vm
     # execs it) and exits on SIGTERM without ACPI-shutting-down the guest, so
     # a stop is a power cut however long the grace period is -- that is what
@@ -1105,20 +1174,16 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
         # resolver drop queries -- measured at 48 VMs, where 12 guests died on
         # "Failed to resolve 'pypi.org'" before QEMU ever started. Retry
         # rather than lose the guest.
-        if spec["container_user"]:
-            # /usr/local/bin is root-owned 0755 and the image's HOME is "/",
-            # also unwritable, so the default install prefix fails before QEMU
-            # ever starts -- and this service is restart: "no", so that is a
-            # lost guest, not a retry. Same writable-prefix path the stats
-            # exporter has always used.
-            out.extend(_pipx_install("/tmp/bin"))
-            # /tmp/bin is not on PATH. Missing this is the easy one: the
-            # install succeeds and the failure is a bare "qemu-tool: not
-            # found" at exec.
-            out.append("        exec /tmp/bin/qemu-tool run-vm \\")
-        else:
-            out.extend(_pipx_install())
-            out.append("        exec qemu-tool run-vm \\")
+        # /usr/local/bin is root-owned 0755 and the image's HOME is "/", also
+        # unwritable, so the default install prefix fails before QEMU ever
+        # starts -- and this service is restart: "no", so that is a lost
+        # guest, not a retry. Same writable-prefix path the stats exporter has
+        # always used. Unconditional now that the uid is: a prefix that works
+        # for both root and a plain uid beats one that works for root only.
+        out.extend(_pipx_install("/tmp/bin"))
+        # /tmp/bin is not on PATH. Missing this is the easy one: the install
+        # succeeds and the failure is a bare "qemu-tool: not found" at exec.
+        out.append("        exec /tmp/bin/qemu-tool run-vm \\")
         out.append('          --images "${VM_IMAGES_DIR}" \\')
         out.append(f'          --vm-name "{vm["name"]}" \\')
         out.append("          --ssh-port 2222 \\")
@@ -1155,15 +1220,12 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
     out.append("      fleet:")
     out.append(f"        ipv4_address: {spec['exporter_addr']}")
     out.append("    devices: []")
-    if spec["container_user"]:
-        # Nulls out the kvm group the qemu anchor adds, beside the devices: []
-        # that nulls out the device it is for. This service never touches
-        # /dev/kvm.
-        out.append("    group_add: []")
+    # Nulls out the kvm group the qemu anchor adds, beside the devices: []
+    # that nulls out the device it is for. This service never touches
+    # /dev/kvm.
+    out.append("    group_add: []")
     # The exporter needs no privilege: it reads world-readable dumps off a
-    # sticky tmpfs and binds an unprivileged port. Every other service in the
-    # stack is root only because its base image declares no USER, which is a
-    # default rather than a decision; this one is cheap to fix, so it is.
+    # sticky tmpfs and binds an unprivileged port.
     #
     # Deliberately NOT CONTAINER_USER, which overrides this line if it is ever
     # emitted after the merge key: nobody is the right answer here. This
@@ -1190,13 +1252,14 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
     out.append("      fleet:")
     out.append(f"        ipv4_address: {spec['prometheus_addr']}")
     out.append("    restart: on-failure")
-    if spec["container_user"]:
-        # This image already defaults to nobody, so the change here is not
-        # root -> unprivileged, it is 65534 -> you: PROM_DATA_DIR is a host
-        # bind mount, and the TSDB of a fleet run should belong to the person
-        # who ran the fleet. It must be chowned to the same uid first, or
-        # Prometheus crash-loops on "mkdir data/: permission denied".
-        out.append(f"    user: {_USER_REF}")
+    # This image already defaults to nobody, so the change here is not
+    # root -> unprivileged, it is 65534 -> you: PROM_DATA_DIR is a host
+    # bind mount, and the TSDB of a fleet run should belong to the person
+    # who ran the fleet. It must be owned by the same uid, which
+    # `qemu-tool compose up` arranges -- without that Prometheus
+    # crash-loops on "mkdir data/: permission denied".
+    out.append(f"    user: {_USER_REF}")
+    out += _hardening()
     out.append("    volumes:")
     out.append("      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro")
     # A bind mount, not a named volume: the TSDB is the record of a fleet run,
@@ -1222,10 +1285,10 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
         out.append("      fleet:")
         out.append(f"        ipv4_address: {spec['loki_addr']}")
         out.append("    restart: on-failure")
-        if spec["container_user"]:
-            # Same as Prometheus: LOKI_DATA_DIR is a host bind mount and has
-            # to be chowned to this uid before the first run.
-            out.append(f"    user: {_USER_REF}")
+        # Same as Prometheus: LOKI_DATA_DIR is a host bind mount and has to
+        # belong to this uid before the first run.
+        out.append(f"    user: {_USER_REF}")
+        out += _hardening()
         out.append("    volumes:")
         out.append("      - ./logging/loki-config.yml:/etc/loki/config.yml:ro")
         # Absolute, for the same reason as the TSDB: a relative path resolves
@@ -1244,20 +1307,93 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
         out.append("      retries: 30")
         out.append("      start_period: 30s")
         out.append("")
+        out.append("  # Read-only Docker API, so the log collector never holds")
+        out.append("  # the socket. Mounting /var/run/docker.sock into Alloy")
+        out.append("  # is root on the host however it is mounted: `:ro`")
+        out.append("  # applies to the inode, not to the API, and anything")
+        out.append("  # that can connect to that socket can create a")
+        out.append("  # privileged container and own the machine. Alloy is a")
+        out.append("  # large pipeline that parses container log content,")
+        out.append("  # which is the least suitable process in the stack to")
+        out.append("  # hand that to.")
+        out.append("  #")
+        out.append("  # This is the standard mitigation: haproxy with a path")
+        out.append("  # allowlist. POST is refused outright, so no container")
+        out.append("  # can be created, started, exec'd or changed through")
+        out.append("  # it; CONTAINERS is what discovery.docker lists and")
+        out.append("  # loki.source.docker reads logs from, and the rest are")
+        out.append("  # the handshake. Everything else the image defaults to")
+        out.append("  # 0, but the ones that would matter are spelled out")
+        out.append("  # below rather than left to a default that could move.")
+        out.append("  #")
+        out.append("  # It still mounts the socket and still runs as root --")
+        out.append("  # that is unavoidable for anything that speaks to the")
+        out.append("  # daemon -- so this does not remove the root-equivalent")
+        out.append("  # container, it shrinks it from a log pipeline to a")
+        out.append("  # proxy whose entire job is saying no.")
+        out.append("  dockerapi:")
+        out.append(f'    image: "{spec["socket_proxy_image"]}"')
+        out.append("    logging: *logging")
+        out.append("    profiles: [metrics]")
+        out.append("    networks:")
+        out.append("      fleet:")
+        out.append(f"        ipv4_address: {spec['dockerapi_addr']}")
+        out.append("    restart: on-failure")
+        out.append("    environment:")
+        out.append("      - CONTAINERS=1")
+        out.append("      - EVENTS=1")
+        out.append("      - PING=1")
+        out.append("      - VERSION=1")
+        out.append("      - POST=0")
+        out.append("      - EXEC=0")
+        out.append("      - IMAGES=0")
+        out.append("      - INFO=0")
+        out.append("      - NETWORKS=0")
+        out.append("      - VOLUMES=0")
+        out.append("      - SERVICES=0")
+        out.append("      - TASKS=0")
+        out.append("      - SWARM=0")
+        out.append("      - NODES=0")
+        out.append("      - SECRETS=0")
+        out.append("      - CONFIGS=0")
+        out.append("      - PLUGINS=0")
+        out.append("      - SYSTEM=0")
+        out.append("      - DISTRIBUTION=0")
+        out.append("      - BUILD=0")
+        out.append("      - COMMIT=0")
+        out.append("      - AUTH=0")
+        out.append("    volumes:")
+        out.append("      - /var/run/docker.sock:/var/run/docker.sock:ro")
+        # Not _hardening(): haproxy drops to its own unprivileged user after
+        # binding, which needs SETUID/SETGID, and chroots, which needs
+        # SYS_CHROOT. Dropping those is an haproxy that will not start.
+        out.append("    cap_drop:")
+        out.append("      - ALL")
+        out.append("    cap_add:")
+        out.append("      - SETUID")
+        out.append("      - SETGID")
+        out.append("      - DAC_OVERRIDE")
+        out.append("    security_opt:")
+        out.append('      - "no-new-privileges:true"')
+        out.append("    healthcheck:")
+        out.append('      test: ["CMD-SHELL", "wget -q -O- '
+                   f'http://127.0.0.1:{spec["dockerapi_port"]}/_ping '
+                   '| grep -q OK"]')
+        out.append("      interval: 10s")
+        out.append("      timeout: 5s")
+        out.append("      retries: 12")
+        out.append("      start_period: 5s")
+        out.append("")
         out.append("  # Ships every stack container's logs. The guests run")
         out.append("  # their own Alloy: a VM's journal is behind QEMU, not")
-        out.append("  # on this Docker socket.")
-        if spec["container_user"]:
-            # Exempt from CONTAINER_USER, and the only one exempted by
-            # judgement rather than by a hard requirement.
-            out.append("  #")
-            out.append("  # Stays root under CONTAINER_USER. It writes no")
-            out.append("  # host state -- its only mount is the Docker")
-            out.append("  # socket, read-only, and --storage.path is /tmp --")
-            out.append("  # so there is no ownership here to fix. Running it")
-            out.append("  # as the invoking user would need that user in the")
-            out.append("  # host docker group, which is root-equivalent on")
-            out.append("  # the host: uniform, not safer.")
+        out.append("  # on this Docker API.")
+        out.append("  #")
+        out.append("  # Holds no Docker socket -- it reaches the daemon only")
+        out.append("  # through the read-only proxy above, over the fleet")
+        out.append("  # network -- so it has no host state, no socket and no")
+        out.append("  # reason to be root. That is what lets it take")
+        out.append("  # CONTAINER_USER like everything else; it used to be")
+        out.append("  # exempt, and the socket was the reason.")
         out.append("  alloy:")
         out.append(f'    image: "{spec["alloy_image"]}"')
         out.append("    logging: *logging")
@@ -1266,19 +1402,27 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
         out.append("      fleet:")
         out.append(f"        ipv4_address: {spec['alloy_addr']}")
         out.append("    restart: on-failure")
+        out.append(f"    user: {_USER_REF}")
+        out += _hardening()
         out.append("    depends_on:")
         out.append("      loki:")
         out.append("        condition: service_healthy")
+        out.append("      dockerapi:")
+        out.append("        condition: service_healthy")
         out.append("    environment:")
         out.append(f"      - LOKI_HOST={spec['loki_addr']}:3100")
+        # The config reads this rather than hardcoding the proxy, because the
+        # third octet of the fleet network is a setting.
+        out.append(
+            f"      - DOCKER_HOST=tcp://{spec['dockerapi_addr']}"
+            f":{spec['dockerapi_port']}")
         out.append("    volumes:")
         out.append("      - ./logging/alloy-host.alloy:/etc/alloy/config.alloy:ro")
-        # Read-only: this collector only ever reads logs and container
-        # metadata. A writable socket here would be root on the host.
-        out.append("      - /var/run/docker.sock:/var/run/docker.sock:ro")
         out.append("    command:")
         out.append("      - run")
         out.append("      - /etc/alloy/config.alloy")
+        # /tmp, not a mount: a non-root uid has no writable HOME in this image
+        # and the WAL here is per-run scratch, not something to keep.
         out.append("      - --storage.path=/tmp/alloy")
 
     if spec["grafana"]:
@@ -1291,12 +1435,13 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
         out.append("      fleet:")
         out.append(f"        ipv4_address: {spec['grafana_addr']}")
         out.append("    restart: on-failure")
-        if spec["container_user"]:
-            # Grafana's image defaults to uid 472 and GRAFANA_DATA_DIR does
-            # not usually exist before the first `up`, so the daemon creates
-            # it root-owned and Grafana cannot write its sqlite. Owning it as
-            # the invoking user is the same fix with a better owner.
-            out.append(f"    user: {_USER_REF}")
+        # Grafana's image defaults to uid 472 and GRAFANA_DATA_DIR does
+        # not usually exist before the first `up`, so the daemon would create
+        # it root-owned and Grafana could not write its sqlite. Owning it as
+        # the invoking user is the same fix with a better owner, and
+        # `qemu-tool compose up` creates it that way.
+        out.append(f"    user: {_USER_REF}")
+        out += _hardening()
         out.append("    depends_on:")
         out.append("      - prometheus")
         out.append("    environment:")
@@ -1344,12 +1489,12 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
         out.append("      fleet:")
         out.append(f"        ipv4_address: {spec['lmcache_addr']}")
         out.append("    restart: on-failure")
-        if spec["container_user"]:
-            # No devices, no mounts, no volumes and an unprivileged port, so
-            # there is nothing here that needs uid 0. Untested against the
-            # real image, which is not on every node: if it turns out to want
-            # a writable HOME for a ~/.cache, that is where it will fail.
-            out.append(f"    user: {_USER_REF}")
+        # No devices, no mounts, no volumes and an unprivileged port, so
+        # there is nothing here that needs uid 0. Untested against the
+        # real image, which is not on every node: if it turns out to want
+        # a writable HOME for a ~/.cache, that is where it will fail.
+        out.append(f"    user: {_USER_REF}")
+        out += _hardening()
         # Reachable from the guests without publishing anything: QEMU's SLIRP
         # NATs guest egress out through the qemu container's own stack, and
         # that container is on this network. So a guest dials the
@@ -1411,8 +1556,7 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
         out.append("      fleet:")
         out.append(f"        ipv4_address: {spec['lmcache_stats_addr']}")
         out.append("    devices: []")
-        if spec["container_user"]:
-            out.append("    group_add: []")
+        out.append("    group_add: []")
         # Same reasoning as the ernic exporter: it only reads an HTTP API and
         # binds an unprivileged port, so it has no business running as root.
         # CONTAINER_USER does not apply, for the same reason -- it owns
@@ -1438,31 +1582,34 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
     if spec["ernic_tap"]:
         out.append("")
         out.append("  # ---- guest Ethernet wiring ----")
-        out.append("  # One short-lived privileged sidecar per ernic. It shares")
-        out.append("  # that ernic's network namespace, creates the tap and the")
-        out.append("  # bridge, and exits. NET_ADMIN lives here and nowhere else.")
-        if spec["container_user"]:
-            # The one service that CANNOT take CONTAINER_USER. Say so here,
-            # because "why is this one still root" is the first question a
-            # reader of the generated file will have.
-            out.append("  #")
-            out.append("  # The one service CONTAINER_USER does not apply to,")
-            out.append("  # and not by choice. cap_add raises only the bounding")
-            out.append("  # and permitted sets; Docker sets no AMBIENT")
-            out.append("  # capabilities, so a non-root uid holds nothing")
-            out.append("  # effective and NET_ADMIN is dropped at the switch to")
-            out.append("  # it. Measured: --user <uid> --cap-add NET_ADMIN gives")
-            out.append("  # 'RTNETLINK answers: Operation not permitted' on the")
-            out.append("  # first `ip` call. Compose cannot express ambient")
-            out.append("  # caps, so there is no fix -- only this container, for")
-            out.append("  # the seconds it takes to wire a bridge.")
-            out.append("  #")
-            out.append("  # TAP_OWNER below is how the ernic stays unprivileged")
-            out.append("  # anyway: the tap is created persistent and owned by")
-            out.append("  # the uid that will attach to it, because TUNSETIFF on")
-            out.append("  # a persistent tap needs a matching owner or")
-            out.append("  # NET_ADMIN. Left at the default of 0 it would hand a")
-            out.append("  # non-root ernic EPERM and a guest with no Ethernet.")
+        out.append("  # One short-lived sidecar per ernic. It shares that")
+        out.append("  # ernic's network namespace, creates the tap and the")
+        out.append("  # bridge, and exits. NET_ADMIN lives here and nowhere")
+        out.append("  # else.")
+        out.append("  #")
+        out.append("  # The one service CONTAINER_USER does not apply to, and")
+        out.append("  # not by choice. cap_add raises only the bounding and")
+        out.append("  # permitted sets; Docker sets no AMBIENT capabilities,")
+        out.append("  # so a non-root uid holds nothing effective and")
+        out.append("  # NET_ADMIN is dropped at the switch to it. Measured:")
+        out.append("  # --user <uid> --cap-add NET_ADMIN gives 'RTNETLINK")
+        out.append("  # answers: Operation not permitted' on the first `ip`")
+        out.append("  # call. Compose cannot express ambient caps, so there is")
+        out.append("  # no fix for the uid.")
+        out.append("  #")
+        out.append("  # What CAN be done is the rest of the cap set. This used")
+        out.append("  # to run at Docker's default -- CHOWN, DAC_OVERRIDE,")
+        out.append("  # FOWNER, SETUID, SETGID, NET_RAW, MKNOD and more -- plus")
+        out.append("  # NET_ADMIN. It now runs at NET_ADMIN and nothing else,")
+        out.append("  # on a read-only root filesystem, for the seconds it")
+        out.append("  # takes to wire a bridge.")
+        out.append("  #")
+        out.append("  # TAP_OWNER below is how the ernic stays unprivileged")
+        out.append("  # anyway: the tap is created persistent and owned by")
+        out.append("  # the uid that will attach to it, because TUNSETIFF on")
+        out.append("  # a persistent tap needs a matching owner or")
+        out.append("  # NET_ADMIN. Left at the default of 0 it would hand a")
+        out.append("  # non-root ernic EPERM and a guest with no Ethernet.")
         for nic in spec["nics"]:
             suffix = _dev_suffix(nic["n"], nic["d"], spec["ernic_per_vm"])
             out.append(f"  tapsetup-{suffix}:")
@@ -1485,7 +1632,17 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
             out.append("    pull_policy: build")
             out.append("    logging: *logging")
             out.append(f'    network_mode: "service:{nic["service"]}"')
+            # Drop first, then add the one back. `cap_add` alone leaves
+            # Docker's default set underneath it, which is what this ran with
+            # before: NET_ADMIN was the only capability anyone had thought
+            # about and thirteen others came along for free.
+            out.append("    cap_drop: [ALL]")
             out.append("    cap_add: [NET_ADMIN]")
+            out.append('    security_opt: ["no-new-privileges:true"]')
+            # setup.sh writes nothing: it calls `ip` and exits. A read-only
+            # rootfs costs this container nothing and takes a writable /usr
+            # away from a NET_ADMIN process.
+            out.append("    read_only: true")
             # The sidecar picks the l2 interface by address, because Docker
             # does not guarantee which network lands on which interface and
             # it genuinely differs between containers in one `up`. Bridging
@@ -1493,8 +1650,7 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
             # looks like a worker bug -- see tapsetup/setup.sh.
             out.append("    environment:")
             out.append(f"      - FLEET_PREFIX={spec['net_prefix']}")
-            if spec["container_user"]:
-                out.append(f'      - "TAP_OWNER={_USER_VAR}"')
+            out.append(f'      - "TAP_OWNER={_USER_VAR}"')
             out.append("    devices:")
             out.append("      - /dev/net/tun")
             out.append('    restart: "no"')

@@ -4,7 +4,7 @@ qemu\-tool \- run, generate and list QEMU virtual machines
 .SH SYNOPSIS
 .B qemu\-tool
 .RB [ \-\-version ]
-.I {quick\-start,run\-vm,gen\-vm,gen\-compose,compose,ernic\-stats,lmcache\-stats,list,inspect,ssh,shutdown,man}
+.I {quick\-start,check\-system,down\-all,run\-vm,gen\-vm,gen\-compose,compose,ernic\-stats,lmcache\-stats,list,inspect,ssh,shutdown,man}
 .RI [ options ]
 .SH DESCRIPTION
 .B qemu\-tool
@@ -18,6 +18,30 @@ from a published image. This is the fastest path to a working stack and the
 one the daily
 .I report\-for\-quickstart
 lane runs.
+.TP
+.B check\-system
+Ask every host question the stacks depend on and report the answers: the
+tools on
+.IR PATH ,
+the Docker daemon and your access to it, KVM, the uid the containers will run
+as, which settings file is in force, and whether the images directory has
+room. Read-only, needs no
+.BR sudo (8),
+and writes nothing, so it is safe on a host you have not decided to use yet.
+Exits non-zero if anything would stop a stack starting; warnings do not fail
+it. The same checks
+.B quick\-start
+runs in its preflight, so the two cannot drift.
+.TP
+.B down\-all
+Find every running qemu-tool stack on this host and tear it down. Identified
+by the compose file \(em the
+.B gen\-compose
+provenance header, or one of the stack directories this tool ships \(em and
+never by service name, because this removes containers. Yours if any of its
+containers runs as your uid. Under
+.BR sudo (8)
+it takes every stack on the system. Always asks first.
 .TP
 .B run\-vm
 Launch an existing VM image created by
@@ -956,6 +980,35 @@ rather than guessing: a device whose origin cannot be decided reads
 .IR unknown ,
 not
 .IR emulated .
+.PP
+Each GPU row carries its PCIe BARs, indented beneath it:
+.PP
+.RS 4
+.EX
+GPU:       gfx1250 (emulated, rocjitsu\-1.sock)
+             BAR0 256 MiB (64\-bit prefetchable)
+             BAR2 2 MiB (64\-bit prefetchable)
+GPU:       gfx908 (passthrough, 63:00.0)
+             BAR0 32 GiB (64\-bit prefetchable)
+             BAR2 2 MiB (64\-bit prefetchable)
+             BAR5 512 KiB (32\-bit)
+.EE
+.RE
+.PP
+BAR0 is the VRAM aperture and is the one to look at for peer\-to\-peer DMA: a
+device whose BAR0 does not cover the memory a peer must reach cannot be the
+target of one. The 256 MiB above is an emulated
+.BR rocjitsu (1)
+GPU at its default
+.IR vram_aperture_bytes ,
+against a real MI100 with a 32 GiB large BAR. BAR2 and BAR5 are the doorbell
+and register apertures and are the same size on both, emulated or not.
+.PP
+A passed\-through GPU's BARs are read from the host's own sysfs, so they are
+reported whether or not the guest agent answers. An emulated one's come from
+the guest, which is the only place they exist \(em so they are absent until
+the guest has booted and enumerated the bus, and an absent list is never a
+claim that the device has no BARs.
 .TP
 .I VM
 Inspect a single VM, named positionally. Equivalent to
@@ -1002,6 +1055,74 @@ is returned only against positive evidence that a complete look happened \(em
 an expired budget, a failed read or a filter that excluded an account all read
 .I unknown
 instead.
+.SH CHECK-SYSTEM OPTIONS
+Checks this host and prints a report grouped by area. Every line is marked
+.BR ok ", " warn ", " FAIL " or " skip .
+A
+.B FAIL
+is something that stops a stack starting and sets the exit status to 1; a
+.B warn
+limits what the host can do without blocking it \(em a missing
+.IR /dev/net/tun ,
+which only an
+.B ERNIC_TAP
+fleet needs, or a vCPU budget past what the mesh manager's untunable 20\~s
+heartbeat tolerates. A
+.B skip
+is a check that did not apply.
+.PP
+The container identity is reported even when it is fine, because
+.I which uid did my fleet run as
+used to have a surprising answer: every stack ran as root until the
+.B CONTAINER_USER
+reference became unconditional. See
+.B SETTINGS FILE
+for that key.
+.TP
+.BI \-\-env\-file " FILE"
+Settings file to check against, repeatable, later files winning key by key.
+Without it the usual search path is used, and which file that found is itself
+part of the report \(em a stale
+.I qemu/.env
+in a checkout outranks the system one, and a fleet then runs with
+half-remembered values.
+.SH DOWN-ALL OPTIONS
+Tears down every running qemu-tool stack you own, asking first.
+.PP
+Two questions are answered from what
+.BR docker\-compose (1)
+records on each container, so neither is a guess. Whether it is a qemu-tool
+stack comes from
+.IR com.docker.compose.project.config_files ,
+which names the compose file: a generated stack carries the
+.B gen\-compose
+provenance header, a committed one sits in a directory this tool ships.
+Matching on service names instead would tear down an unrelated project that
+happened to have a service called
+.IR qemu\-1 .
+Whether it is yours comes from the uid its containers actually run as.
+.PP
+A stack started before the containers ran as the caller has every container
+as root, so to a non-root caller it is root's and is skipped \(em correctly,
+since those containers cannot be stopped without root. Skipped stacks are
+listed with the reason rather than passed over in silence.
+.PP
+The teardown pins the project with an explicit
+.B \-p
+and enables every profile, so a profile-gated service cannot be left behind
+and a teardown cannot resolve to the wrong project.
+.TP
+.B \-\-dry\-run
+List what would be torn down, and the exact commands, without stopping
+anything.
+.TP
+.B \-\-yes
+Skip the confirmation, for scripts. The prompt never defaults to yes and a
+bare Enter always declines, so this is the only way to proceed unattended.
+.TP
+.B \-\-all\-users
+Include stacks owned by other users. Needs root, and is refused without it
+rather than silently doing less than it says.
 .SH MAN OPTIONS
 Opens this page with
 .BR man (1).

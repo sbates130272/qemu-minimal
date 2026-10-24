@@ -55,14 +55,42 @@ def _render(overrides: dict | None = None) -> str:
     env = jinja2.Environment(
         loader=jinja2.FileSystemLoader(str(ROLE / "templates")),
         keep_trailing_newline=True,
+        # Ansible's template module defaults trim_blocks to yes, and this
+        # template depends on it: a `{% for %}` over an empty list otherwise
+        # leaves a blank line, and a blank line inside ExecStart's backslash
+        # continuation TERMINATES it. systemd then reports "Missing '=',
+        # ignoring line" for the remainder and the server starts with half
+        # its arguments. Rendering here without it would test a unit nobody
+        # runs -- and would do it in the forgiving direction, where the test
+        # render is broken and the real one is fine.
+        trim_blocks=True,
     )
     return env.get_template("lmcache-server.service.j2").render(**values)
+
+
+def _exec_start(unit: str) -> str:
+    """Just the ExecStart=docker run directive, continuations joined.
+
+    The surrounding comments explain the flags and therefore quote them, so
+    asking "is this flag in the unit" of the whole file matches the comment
+    that says why it is not. The directive is what docker is handed.
+    """
+    lines = unit.splitlines()
+    start = next(i for i, ln in enumerate(lines)
+                 if ln.startswith("ExecStart=/usr/bin/docker run"))
+    out = []
+    for i in range(start, len(lines)):
+        out.append(lines[i])
+        if not lines[i].rstrip().endswith("\\"):
+            break
+    return "\n".join(out)
 
 
 @unittest.skipIf(jinja2 is None or yaml is None, "jinja2/pyyaml not installed")
 class UnitRender(unittest.TestCase):
     def setUp(self):
         self.unit = _render()
+        self.exec_start = _exec_start(self.unit)
 
     def test_max_workers_is_passed_and_above_one(self):
         self.assertIn("--max-workers", self.unit)
@@ -103,6 +131,72 @@ class UnitRender(unittest.TestCase):
         # Empty disables it, rather than rendering a malformed tunable.
         unit = _render({"lmcache_guest_glibc_hugetlb": ""})
         self.assertNotIn("GLIBC_TUNABLES", unit)
+
+    def test_no_blank_line_breaks_the_execstart_continuation(self):
+        """A blank line inside a backslash continuation ends it.
+
+        Verified against systemd directly, not assumed: a unit with
+
+            ExecStart=/bin/echo one \\
+                two \\
+            <blank>
+                three
+
+        draws "Missing '=', ignoring line" from systemd-analyze and silently
+        loses everything after the blank. Every privilege flag added here sits
+        behind an `{% if %}` or a `{% for %}`, so each one is a chance to
+        introduce exactly that -- and the symptom would be an MP server
+        running with some of its arguments, not a template error.
+        """
+        lines = self.unit.splitlines()
+        start = next(i for i, ln in enumerate(lines)
+                     if ln.startswith("ExecStart=/usr/bin/docker run"))
+        for i in range(start, len(lines)):
+            if not lines[i].rstrip().endswith("\\"):
+                break
+            self.assertTrue(
+                lines[i + 1].strip(),
+                f"blank line at {i + 2} ends the ExecStart continuation",
+            )
+
+    def test_seccomp_profile_is_on_by_default(self):
+        """This was the loosest setting in the fleet and the only one with no
+        comment justifying it, which usually means it was copied rather than
+        measured. Docker's default profile allows every syscall the ROCm
+        runtime and the ionic verbs path use; what it blocks is the long tail.
+        """
+        self.assertNotIn("seccomp", self.exec_start)
+
+    def test_seccomp_can_still_be_turned_off(self):
+        """Kept reachable in one line, because an unexplained setting that
+        turns out to be load-bearing should be fixable rather than gone.
+        """
+        unit = _render({"lmcache_guest_seccomp_unconfined": True})
+        self.assertIn("--security-opt seccomp=unconfined", _exec_start(unit))
+
+    def test_capabilities_are_dropped(self):
+        """It opens three device nodes it was handed explicitly, mmaps, and
+        binds two ports above 1024. Docker grants fourteen capabilities by
+        default; none of them is used.
+        """
+        self.assertIn("--cap-drop ALL", self.unit)
+        self.assertIn("--security-opt no-new-privileges", self.unit)
+
+    def test_memlock_does_not_need_ipc_lock(self):
+        """--ulimit raises the rlimit the daemon sets on the process, which
+        is a different mechanism from the capability that lets a process
+        exceed it. Adding IPC_LOCK here would be cargo cult.
+        """
+        self.assertIn("--ulimit memlock=-1:-1", self.unit)
+        self.assertNotIn("IPC_LOCK", self.unit)
+
+    def test_host_namespaces_are_kept(self):
+        """Neither is incidental: --network host is required for P2P, since
+        the address this server advertises has to be one its peers can dial
+        and a guest-local bridge is a different 172.17.x.x on every guest.
+        """
+        self.assertIn("--network host", self.unit)
+        self.assertIn("--ipc host", self.unit)
 
 
 @unittest.skipIf(jinja2 is None or yaml is None, "jinja2/pyyaml not installed")

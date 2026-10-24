@@ -32,6 +32,21 @@ jobs:
   gen-compose-check:
     name: Gen Compose Check
     runs-on: ubuntu-latest
+    # Every service in the rendered stacks carries
+    # `user: ${CONTAINER_USER:?...}`, so a PLAIN `docker compose` -- which is
+    # what most of the steps below run, deliberately, to prove the committed
+    # files work without qemu-tool -- refuses to interpolate without these.
+    # That refusal is the feature: the alternative spelling interpolates to
+    # empty, `user: ":"` is not an error to Docker, and the stack runs as
+    # root. `qemu-tool compose` fills both in from the caller; here there is
+    # no caller to ask, so the runner's own ids are named.
+    #
+    # A literal gid for kvm, because an ubuntu-latest runner has no kvm group
+    # and getent would return nothing. Nothing here starts a container, so the
+    # value only has to parse.
+    env:
+      CONTAINER_USER: "1001:127"
+      CONTAINER_KVM_GID: "108"
     steps:
       - name: Check out code
         uses: actions/checkout@v4.3.1
@@ -80,6 +95,155 @@ jobs:
         env:
           CI: "true"
         run: python3 -m unittest discover -s tests -v
+
+      # The privilege posture of every committed stack, as compose RESOLVES
+      # it rather than as gen_compose renders it. Those are different
+      # questions and only this one covers the four hand-written stacks,
+      # which no renderer test can reach because nothing generates them --
+      # and which is exactly where the old "everything runs as root" lived
+      # longest, since they had no CONTAINER_USER mechanism at all.
+      #
+      # Resolving also collapses the x- anchors, so this catches a service
+      # that merges the wrong anchor or overrides `user:` back to root after
+      # inheriting it. A unit test reading the YAML text cannot see either.
+      #
+      # Checked against the real failure modes, not a snapshot: a snapshot of
+      # 161 services would be rewritten on every topology change and would
+      # stop being read.
+      - name: No stack runs anything as root
+        run: |
+          python3 - <<'PY'
+          import json, subprocess, sys
+
+          ROOT = "qemu/compose"
+          STACKS = [
+              ("vfio-user-ernic-vm", None, []),
+              ("vfio-user-rocjitsu-vm", None, []),
+              ("vfio-user-ernic-rocjitsu-vm", None, []),
+              ("vfio-user-ernic-2vm", None,
+               ["--profile", "rocjitsu-vm1", "--profile", "rocjitsu-vm2"]),
+              ("vfio-user-ernic-rocjitsu-scale-out", "qemu/env/scale-out",
+               ["--profile", "metrics", "--profile", "lmcache"]),
+              ("vfio-user-mi355x-node", "qemu/env/mi355x-node",
+               ["--profile", "metrics"]),
+          ]
+          # tapsetup cannot take a uid (Docker sets no ambient capabilities,
+          # so a non-root uid holds no effective NET_ADMIN); dockerapi must
+          # not, because it speaks to the host socket, which is root's.
+          # Both are documented in AGENTS.md under "Container privilege".
+          EXEMPT = lambda n: n.startswith("tapsetup-") or n == "dockerapi"
+          ALLOWED = {"tapsetup": {"NET_ADMIN"},
+                     "dockerapi": {"SETUID", "SETGID", "DAC_OVERRIDE"}}
+
+          bad, total = [], 0
+          for stack, env, extra in STACKS:
+              cmd = ["docker", "compose", "--project-directory", f"{ROOT}/{stack}"]
+              if env:
+                  cmd += ["--env-file", env]
+              cmd += extra + ["config", "--format", "json"]
+              r = subprocess.run(cmd, capture_output=True, text=True)
+              if r.returncode != 0:
+                  bad.append(f"{stack}: config failed: {r.stderr.strip()[:200]}")
+                  continue
+              services = json.loads(r.stdout).get("services", {})
+              # A profile typo filters every service away and `config` still
+              # exits 0, so an empty render must be a failure and not a pass.
+              if not services:
+                  bad.append(f"{stack}: resolved to no services at all")
+                  continue
+              total += len(services)
+              for name, svc in sorted(services.items()):
+                  at = f"{stack}/{name}"
+                  if svc.get("privileged"):
+                      bad.append(f"{at}: privileged")
+                  drop = {c.upper() for c in (svc.get("cap_drop") or [])}
+                  if "ALL" not in drop:
+                      bad.append(f"{at}: does not cap_drop ALL (got {sorted(drop)})")
+                  add = {c.upper() for c in (svc.get("cap_add") or [])}
+                  key = "tapsetup" if name.startswith("tapsetup-") else name
+                  if add - ALLOWED.get(key, set()):
+                      bad.append(f"{at}: unexpected cap_add "
+                                 f"{sorted(add - ALLOWED.get(key, set()))}")
+                  user = str(svc.get("user") or "")
+                  if not EXEMPT(name):
+                      if not user:
+                          bad.append(f"{at}: no user, so it runs as the image's (root)")
+                      elif user in ("0", "0:0", "root", "root:root"):
+                          bad.append(f"{at}: pinned to root ({user})")
+                  elif user:
+                      bad.append(f"{at}: exempt but carries user={user}")
+                  if "no-new-privileges:true" not in " ".join(svc.get("security_opt") or []):
+                      bad.append(f"{at}: no no-new-privileges")
+                  # :ro restricts the inode, not the API behind it: anything
+                  # that can connect to this socket can create a privileged
+                  # container. Only the read-only API proxy may hold it.
+                  for vol in svc.get("volumes") or []:
+                      src = vol.get("source") if isinstance(vol, dict) else str(vol)
+                      if src and "docker.sock" in src and name != "dockerapi":
+                          bad.append(f"{at}: holds the Docker socket")
+              print(f"  {stack}: {len(services)} services")
+
+          if bad:
+            print("\n::error::privilege posture regressions:", file=sys.stderr)
+            for b in bad:
+                print(f"  {b}", file=sys.stderr)
+            sys.exit(1)
+          print(f"\n{total} services: non-root (or exempt), cap_drop ALL, "
+                "no-new-privileges, no stray Docker socket.")
+          PY
+
+      # check-system is a command a human is told to run, so the lane runs
+      # the command rather than importing its functions -- the same reason
+      # report-for-quickstart runs `qemu-tool quick-start` itself.
+      #
+      # Its exit status is NOT asserted to be 0: a GitHub runner legitimately
+      # lacks oras and ansible, which it reports as warnings, and asserting
+      # success here would make the lane depend on what a runner image
+      # happens to ship. What is asserted is that it runs, reports every
+      # section, and -- the half that actually guards something -- exits 1 on
+      # a host fact that really would stop a stack.
+      - name: check-system runs and fails on a real problem
+        run: |
+          set -eu
+          out="$(python3 -m qemu_tool check-system 2>&1 || true)"
+          echo "$out"
+          for section in Tools Docker Virtualisation "Container identity" \
+                         Settings Capacity Images; do
+            echo "$out" | grep -q "^$section$" || {
+              echo "::error::check-system printed no '$section' section"; exit 1; }
+          done
+
+          # Below 4 vCPU ionic_rdma never probes, and the only symptom is a
+          # line in a guest log nobody reads. That is the kind of thing this
+          # command exists to catch, so prove it does.
+          printf 'VM_COUNT=2\nVM_VCPUS=2\n' > /tmp/env.toosmall
+          if python3 -m qemu_tool check-system --env-file /tmp/env.toosmall \
+               > /tmp/cs.out 2>&1; then
+            cat /tmp/cs.out
+            echo "::error::check-system exited 0 on a sub-floor VM_VCPUS"; exit 1
+          fi
+          grep -q "VM_VCPUS floor" /tmp/cs.out || {
+            cat /tmp/cs.out
+            echo "::error::check-system failed, but not for the stated reason"; exit 1; }
+          echo "check-system reports its sections and fails on a real problem."
+
+      # down-all on a host with no stacks. Cheap, and it covers the half
+      # pr-quickstart-boot cannot: that lane always has a stack running, so
+      # it never exercises the empty case -- where a command that removes
+      # containers had better say "nothing to do" and exit 0 rather than
+      # find something.
+      #
+      # --dry-run as well as the empty host, because a runner for an
+      # unrelated job could legitimately have containers on it and this step
+      # must not be the thing that removes them.
+      - name: down-all finds nothing to do on a bare host
+        run: |
+          set -eu
+          out="$(python3 -m qemu_tool down-all --dry-run 2>&1)"
+          echo "$out"
+          echo "$out" | grep -q "No running qemu-tool stacks" || {
+            echo "::error::down-all claimed to find stacks on a bare runner"
+            exit 1; }
 
       # The gate itself. --check regenerates into a temporary directory and
       # compares, so it fails on a stale committed stack *and* on a settings

@@ -63,7 +63,140 @@ def build_command(cfg: VMConfig, caps: QemuCaps) -> list[str]:
     return cmd
 
 
+def _owner(path: Path) -> str:
+    """"uid N (name)" for a path, or just the uid when it has no passwd entry.
+
+    The name matters because "uid 0" and "root" are the same fact but only one
+    of them is the word someone will search for; the number matters because an
+    LDAP or container uid often has no name at all on this host.
+    """
+    try:
+        uid = path.stat().st_uid
+    except OSError:
+        return "unknown owner"
+    try:
+        import pwd
+
+        return f"uid {uid} ({pwd.getpwuid(uid).pw_name})"
+    except (KeyError, ImportError):
+        return f"uid {uid}"
+
+
+def _check_image_access(cfg: VMConfig) -> None:
+    """Refuse early, by name, when a disk or its directory is not ours.
+
+    This is the root-era migration landing, and every way it lands is
+    unhelpful on its own:
+
+    * QEMU opens a drive READ-WRITE even for a guest that only reads it, so a
+      0644 root-owned qcow2 left by an earlier root-era run does not degrade
+      -- the guest does not boot at all. QEMU's own message is
+      "Could not open '<path>': Permission denied", buried in a container log
+      among the vfio-user chatter, and it does not say who owns the file or
+      why it changed.
+    * An images directory this uid cannot write fails LATER and somewhere
+      else: `qemu-img create` for an NVMe drive exits non-zero with its
+      stderr captured, so the operator gets a CalledProcessError traceback
+      naming a qemu-img command rather than a permissions problem.
+
+    Both are one check, and both have the same one-line fix, so they are
+    reported together with the owner named. See AGENTS.md, "Container
+    privilege": the containers now run as the caller, so files from before
+    that belong to root and are exactly what this catches.
+    """
+    uid = os.getuid()
+    images = Path(cfg.images)
+
+    if not images.is_dir():
+        # Not a permissions problem, but it arrives at the same moment and
+        # the next thing to fail would be an opaque qemu-img error.
+        sys.exit(f"ERROR: images directory {images} does not exist.")
+
+    # (path, why) per problem. The two causes want different fixes and
+    # conflating them sends people to `chown` for a file they already own:
+    # "owned by uid 1000, not read-write for uid 1000" is a true sentence
+    # that reads like a contradiction and names the wrong remedy.
+    foreign: list[Path] = []   # someone else's -- chown, or delete if scratch
+    unwritable: list[Path] = []  # ours, but the mode says no -- chmod
+
+    def classify(path: Path) -> None:
+        try:
+            mine = path.stat().st_uid == uid
+        except OSError:
+            mine = False
+        (unwritable if mine else foreign).append(path)
+
+    # W_OK|X_OK, not W_OK: creating a file needs write AND search on the
+    # directory, and a directory that is writable but not searchable fails on
+    # the open rather than on the create.
+    if not os.access(images, os.W_OK | os.X_OK):
+        classify(images)
+
+    # Only files QEMU will actually open. A backing image is opened read-only
+    # and is legitimately shared, so it is not checked for write -- demanding
+    # that on a backing file every guest in a fleet shares would reject a
+    # correct setup.
+    disks = [images / f"{cfg.vm_name}.qcow2"]
+    if cfg.nvme and re.match(r"^[0-9]+$", cfg.nvme):
+        disks += [images / f"{cfg.vm_name}-nvme{i}.qcow2"
+                  for i in range(1, int(cfg.nvme) + 1)]
+    for disk in disks:
+        if not disk.exists():
+            continue  # it will be created; the directory check above covers that
+        if not os.access(disk, os.R_OK | os.W_OK):
+            classify(disk)
+
+    if not foreign and not unwritable:
+        return
+
+    lines = [f"ERROR: this VM's storage is not usable by the user it runs as "
+             f"(uid {uid}).", ""]
+    for path in foreign:
+        what = "the images directory" if path == images else "disk image"
+        lines.append(f"  {path}")
+        lines.append(f"      {what}, owned by {_owner(path)} -- not you")
+    for path in unwritable:
+        what = "the images directory" if path == images else "disk image"
+        lines.append(f"  {path}")
+        lines.append(f"      {what}, yours but mode "
+                     f"{oct(path.stat().st_mode & 0o777)[2:]} denies write")
+    lines += [
+        "",
+        "       QEMU opens every drive read-write, so this stops the guest "
+        "booting",
+        "       rather than merely owning the wrong file.",
+        "",
+        "       The fix:",
+    ]
+    # NVMe drives are scratch -- recreated on the next start -- so deleting
+    # one is strictly better advice than chowning it, and does not need sudo.
+    scratch = [p for p in foreign if "-nvme" in p.name]
+    if scratch:
+        lines.append(f"         rm {' '.join(str(p) for p in scratch)}")
+        lines.append("           # NVMe drives are scratch and are recreated")
+    keep = [p for p in foreign if p not in scratch]
+    if keep:
+        lines.append(f"         sudo chown {uid}:{os.getgid()} "
+                     f"{' '.join(str(p) for p in keep)}")
+    if unwritable:
+        lines.append(f"         chmod u+rw {' '.join(str(p) for p in unwritable)}")
+    if foreign:
+        lines += [
+            "",
+            "       Files you do not own here are usually left over from "
+            "before the",
+            "       containers ran as you -- see AGENTS.md, \"Container "
+            "privilege\".",
+        ]
+    sys.exit("\n".join(lines))
+
+
 def run(cfg: VMConfig, caps: QemuCaps) -> None:
+    # Before build_command, which creates the NVMe qcow2s as a side effect and
+    # would hit the same permission wall first -- with qemu-img's stderr
+    # captured, so the operator would see a traceback rather than the cause.
+    if not cfg.dry_run:
+        _check_image_access(cfg)
     cmd = build_command(cfg, caps)
     if cfg.dry_run:
         print(shlex.join(cmd))
@@ -206,12 +339,35 @@ def _nvme_create(
 ) -> list[str]:
     img = Path(cfg.images) / f"{name}.qcow2"
     if cfg.nvme_recreate and img.exists():
-        img.unlink()
+        try:
+            img.unlink()
+        except OSError as exc:
+            # Unlinking needs write on the DIRECTORY, not on the file, so
+            # this fires on a images/ that belongs to someone else even when
+            # the qcow2 itself looks fine.
+            sys.exit(
+                f"ERROR: cannot remove {img} to recreate it: {exc.strerror}.\n"
+                f"       It is owned by {_owner(img)} and "
+                f"{img.parent} by {_owner(img.parent)}; "
+                f"this process is uid {os.getuid()}."
+            )
     if not img.exists():
-        subprocess.run(
+        created = subprocess.run(
             ["qemu-img", "create", "-f", "qcow2", str(img), size],
-            check=True, capture_output=True,
+            capture_output=True, text=True,
         )
+        if created.returncode != 0:
+            # NOT check=True: that raises CalledProcessError with the stderr
+            # inside the exception, so the operator gets a traceback naming a
+            # qemu-img command line and has to go read it to find "Permission
+            # denied". _check_image_access catches the usual cause before we
+            # get here; this is the backstop that still says what happened.
+            sys.exit(
+                f"ERROR: could not create the NVMe image {img}.\n"
+                f"       qemu-img said: {created.stderr.strip()}\n"
+                f"       {img.parent} is owned by {_owner(img.parent)}; "
+                f"this process is uid {os.getuid()}."
+            )
 
     drv = (
         f"file={img},format=qcow2,if=none,id=nvme-{idx}"
@@ -531,6 +687,72 @@ def _mgmt_subnet(port: int) -> str:
     return f"172.16.{octet}"
 
 
+_IP_FORWARD = Path("/proc/sys/net/ipv4/ip_forward")
+
+# Whether THIS process turned ip_forward on. Only then is it ours to turn
+# back off: the setting is global and host-wide, so a run that found it
+# already enabled must leave it that way -- it may be carrying the host's
+# own routing, a libvirt network or someone else's fleet.
+_ip_forward_was_ours = False
+
+
+def _ip_forward_enabled() -> bool:
+    try:
+        return _IP_FORWARD.read_text().strip() == "1"
+    except OSError:
+        # Unreadable means we cannot know, so we must not claim it. Returning
+        # True here makes the caller skip both the set and the restore, which
+        # is the safe direction: at worst the bridge does not route and that
+        # is visible immediately.
+        return True
+
+
+def _enable_ip_forward() -> None:
+    """Turn on ip_forward if it is off, and remember that we did.
+
+    This used to be an unconditional `sysctl -w net.ipv4.ip_forward=1` with no
+    matching restore, so running one VM once left the host forwarding packets
+    forever. It is a global switch with no owner and no reference count, which
+    is why the only safe rule is "put back exactly what you changed".
+    """
+    global _ip_forward_was_ours
+    if _ip_forward_enabled():
+        return
+    subprocess.run(["sudo", "sysctl", "-qw", "net.ipv4.ip_forward=1"], check=True)
+    _ip_forward_was_ours = True
+
+
+def _restore_ip_forward(port: int) -> None:
+    """Turn ip_forward back off, unless something else still needs it.
+
+    The guard is the other qemu-br* bridges: this process may have enabled
+    forwarding for VM A and then a second run-vm, seeing it already on, will
+    not have recorded it as theirs. Switching it off from under them would
+    break a running guest's networking with nothing to connect it to. So the
+    restore happens only when no other management bridge is left.
+    """
+    global _ip_forward_was_ours
+    if not _ip_forward_was_ours:
+        return
+    mine = _mgmt_bridge_name(port)
+    try:
+        others = [
+            p.name for p in Path("/sys/class/net").iterdir()
+            if p.name.startswith("qemu-br") and p.name != mine
+        ]
+    except OSError:
+        others = []
+    if others:
+        print(
+            f"Leaving net.ipv4.ip_forward=1: still in use by {', '.join(others)}",
+            file=sys.stderr,
+        )
+        return
+    subprocess.run(["sudo", "sysctl", "-qw", "net.ipv4.ip_forward=0"],
+                   capture_output=True)
+    _ip_forward_was_ours = False
+
+
 def _nic_mac(port: int, index: int) -> str:
     """Deterministic MAC for NIC `index` of the VM on `port`.
 
@@ -562,9 +784,7 @@ def _ensure_mgmt_bridge(port: int) -> None:
         )
         subprocess.run(["sudo", "ip", "link", "set", br, "up"], check=True)
 
-    subprocess.run(
-        ["sudo", "sysctl", "-qw", "net.ipv4.ip_forward=1"], check=True
-    )
+    _enable_ip_forward()
 
     def _ipt_ensure(table_args: list[str], rule: list[str]) -> None:
         """Add rule only if it doesn't already exist."""
@@ -649,6 +869,9 @@ def _teardown_mgmt_bridge(port: int) -> None:
         capture_output=True,
     )
     subprocess.run(["sudo", "ip", "link", "del", br], capture_output=True)
+    # After the bridge is gone, so the "is anyone else still using it" check
+    # does not count our own.
+    _restore_ip_forward(port)
 
 
 # ---------------------------------------------------------------------------

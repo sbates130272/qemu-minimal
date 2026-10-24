@@ -1,0 +1,99 @@
+name: Run a VM lane as a non-root user
+description: >-
+  Create (or adopt) a non-root user and give it the host gids a qemu-tool lane
+  needs, so the stack's containers run as a real uid instead of root.
+
+  Job containers are root, and that hides the configuration an operator
+  actually has. With the caller root, CONTAINER_USER resolves to 0:0 and a
+  lane proves root-with-no-capabilities -- worth proving, and not the thing
+  anyone runs. The uid path has a failure of its own that root structurally
+  cannot meet: rocjitsu does not chmod its vfio-user socket, so it stays 0755
+  owned by its creator and connect(2) needs write on the inode. A qemu on a
+  different uid cannot attach the GPU at all, and root never sees it because
+  root ignores the mode.
+
+  Exports CIUSER_UID and CIUSER_HOME for later steps. Deliberately does NOT
+  export CONTAINER_USER: the point is that `qemu-tool` resolves it from the
+  caller, so presetting it would test the wrong thing.
+
+inputs:
+  uid:
+    description: >-
+      The uid to run as. Adopted if it already exists -- the CI images carry
+      uid 1000 as `ubuntu`, and a bare `useradd -u 1000` fails against that,
+      taking every later usermod with it.
+    required: false
+    default: '1000'
+  chown:
+    description: >-
+      Space-separated directories to hand to that uid. These are bind-mounted
+      from the host and root-owned there, which is the same situation the
+      settings file tells a human to chown on a host that ever ran as root.
+    required: false
+    default: /var/lib/qemu-tool
+
+runs:
+  using: composite
+  steps:
+    - name: Create the non-root user this lane runs as
+      shell: bash
+      run: |
+        set -eu
+        UID_WANT='${{ inputs.uid }}'
+
+        if CI_USER=$(id -nu "$UID_WANT" 2>/dev/null); then
+          echo "uid $UID_WANT already exists as $CI_USER"
+        else
+          CI_USER=ciuser
+          useradd -m -u "$UID_WANT" "$CI_USER"
+        fi
+        CI_HOME=$(getent passwd "$CI_USER" | cut -d: -f6)
+        [ -d "$CI_HOME" ] || { mkdir -p "$CI_HOME"; chown "$UID_WANT" "$CI_HOME"; }
+
+        # Both host gids, read off the device rather than assumed: they come
+        # from the host through --device or a bind mount and have no reason
+        # to match any group in the image, so each may have to be created
+        # before it can be joined.
+        #
+        # /dev/kvm is the one that is easy to miss. The CONTAINERS get it
+        # through `group_add: ${CONTAINER_KVM_GID}` -- but quick-start's
+        # preflight opens /dev/kvm in the JOB, as this user, before any
+        # container exists. Without the group it fails with "Permission
+        # denied -- are you in the kvm group?", which is the right message
+        # about the wrong process.
+        join_gid() {
+          gid=$1; fallback=$2
+          getent group "$gid" >/dev/null || groupadd -g "$gid" "$fallback"
+          usermod -aG "$(getent group "$gid" | cut -d: -f1)" "$CI_USER"
+        }
+        [ -S /var/run/docker.sock ] && join_gid "$(stat -c %g /var/run/docker.sock)" dockersock
+        [ -c /dev/kvm ] && join_gid "$(stat -c %g /dev/kvm)" kvmdev
+
+        for d in ${{ inputs.chown }}; do
+          mkdir -p "$d"
+          chown -R "$UID_WANT:$UID_WANT" "$d"
+        done
+
+        echo "CIUSER_UID=$UID_WANT" >> "$GITHUB_ENV"
+        echo "CIUSER_HOME=$CI_HOME" >> "$GITHUB_ENV"
+        [ -c /dev/kvm ] && echo "CONTAINER_KVM_GID=$(stat -c %g /dev/kvm)" >> "$GITHUB_ENV"
+
+        echo "this job is uid $(id -u); the stack will run as $CI_USER ($UID_WANT)"
+        echo "groups: $(id -nG "$CI_USER")"
+
+        # Assert the access rather than discovering it later inside a
+        # preflight -- which reports it correctly but about the wrong
+        # process, and only after an image pull. Both of these failed on the
+        # first run of this.
+        if [ -c /dev/kvm ]; then
+          setpriv --reuid "$UID_WANT" --regid "$UID_WANT" --init-groups \
+            test -r /dev/kvm -a -w /dev/kvm \
+            || { echo "::error::uid $UID_WANT cannot open /dev/kvm (gid $(stat -c %g /dev/kvm))"; exit 1; }
+          echo "  /dev/kvm is read-write for $CI_USER"
+        fi
+        # HOME, or docker reads root's config and warns about a permission
+        # denied that is neither this user's problem nor a failure -- noise
+        # that reads like the error it is not.
+        setpriv --reuid "$UID_WANT" --regid "$UID_WANT" --init-groups \
+          env HOME="$CI_HOME" \
+          docker version --format "  docker reachable: {{.Server.Version}}"

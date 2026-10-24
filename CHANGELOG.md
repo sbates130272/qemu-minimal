@@ -4,7 +4,177 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **Every container in every stack now runs as the caller, with no
+  capabilities.** Before this, all six stacks ran every service as uid 0 with
+  Docker's full default capability set. `CONTAINER_USER` existed to fix that
+  and was opt-in, which in practice meant root: the value cannot be committed
+  (it differs per host, and `gen-compose --check` compares the rendered stack
+  byte for byte), so "put it in an overlay" was the only on-ramp and two
+  committed overlays took it, both pinning one operator's ids.
+
+  What the render carries is a *reference*, not a value, and that is exactly
+  what makes it safe to emit unconditionally — the stack stays
+  machine-independent either way. `qemu-tool compose` and `qemu-tool
+  quick-start` answer it from your own `uid:gid`, and `CONTAINER_KVM_GID` from
+  the gid that owns `/dev/kvm`, following the same precedence compose itself
+  uses: the environment first, then the `--env-file` layers, and only an unset
+  key filled in. Set `CONTAINER_USER` now only to pin a *different* identity,
+  including `0:0` to go back to root deliberately.
+
+  A plain `docker compose up` has no caller to ask and refuses with `required
+  variable CONTAINER_USER is missing a value`. That is deliberate: the cheap
+  alternative `${CONTAINER_USER:-}` interpolates to empty, `user: ":"` is not
+  an error to Docker, and the fleet runs as root with one warning line as the
+  evidence.
+
+  Three services are exempt and say so in the render. `tapsetup-N` cannot take
+  a uid at all — Docker sets no ambient capabilities, so a non-root uid holds
+  no effective `NET_ADMIN` — but it dropped from Docker's thirteen defaults
+  plus `NET_ADMIN` to `NET_ADMIN` alone on a read-only rootfs. `dockerapi`
+  holds the host socket. The two stats exporters keep `65534`.
+
+- **`cap_drop: [ALL]` and `no-new-privileges` on everything**, independently of
+  who it runs as. A uid is not a capability set: a container can be uid 1000
+  and still hold `NET_RAW`.
+
+- **Alloy no longer holds the Docker socket.** `:ro` on a socket mount
+  restricts the inode, not the API behind it — anything that can connect to
+  `/var/run/docker.sock` can create a privileged container and own the host —
+  so the stack's log collector, which parses untrusted container log content,
+  held a root credential. A new `dockerapi` service (haproxy, path allowlist,
+  `POST=0`) sits in front of it and Alloy reaches the daemon through
+  `DOCKER_HOST` over the fleet network. The proxy publishes no port. This
+  shrinks the root-equivalent container from a log pipeline to a proxy whose
+  whole job is saying no; it does not remove it, because anything speaking to
+  the daemon needs the socket.
+
+- **The in-guest MP server unit dropped `seccomp=unconfined`.** It was the one
+  relaxation in the fleet with no comment justifying it. Docker's default
+  profile allows every syscall the ROCm runtime and the ionic verbs path use;
+  it blocks the long tail. Now `lmcache_guest_seccomp_unconfined`, default
+  false, beside `--cap-drop ALL` and `--security-opt no-new-privileges`.
+  `--network host` and `--ipc host` stay — the first is required for P2P.
+
+- **`qemu-tool compose up` creates the metrics data directories as you** and
+  warns about artifacts an earlier root-era run left behind. Docker creates a
+  missing bind-mount source root-owned, and the service that then cannot write
+  it is what reports the problem, several minutes and one stack trace later.
+  The one case it cannot fix is a `<vm>-nvmeN.qcow2` from a root run: 0644
+  root-owned, and QEMU opens a drive read-write, so the guest does not boot at
+  all rather than merely owning the wrong file.
+
+### Fixed
+
+- **`compose down`/`stop` enable every profile and report survivors.** A fleet
+  was found with three profile-gated containers still running 41 hours after a
+  `down --remove-orphans` that completed successfully. The obvious explanation
+  — that profiles are filtered out of `down` — was tested and is false on
+  compose v5.3.1, so the cause is not established; `--profile "*"` is
+  belt-and-braces and the survivor warning is the part that catches this
+  whatever causes it. A teardown that exits 0 while its own project still has
+  running containers now names them. It never changes the exit status.
+
+- **An uncreatable metrics data directory says what to run.** The default
+  `/var/lib/qemu-tool` is root-owned on every host that ever ran this as root,
+  so `Warning: could not create LOKI_DATA_DIR ...: Permission denied` fires for
+  an operator doing nothing wrong and left them to work out the remedy. It now
+  prints the `sudo mkdir -p ... && sudo chown` that fixes it, and still
+  degrades rather than failing — the service may not be in the profiles being
+  started.
+
+- **`run-vm` puts `net.ipv4.ip_forward` back.** The TAP path set it
+  unconditionally with no matching restore, so running one VM once left the
+  host forwarding packets forever. It is now set only if it was off, and
+  restored on teardown only when no other `qemu-br*` bridge is left — a second
+  `run-vm` that found it already on will not have recorded it, and switching it
+  off under them would break a running guest's networking.
+
+- **`tests/test_lmcache_unit_render.py` rendered a unit nobody runs.** It built
+  its own Jinja environment without `trim_blocks`, which Ansible's `template`
+  module defaults to on. Without it a `{% for %}` over an empty list leaves a
+  blank line, and a blank line inside `ExecStart`'s backslash continuation
+  terminates it — systemd reports `Missing '=', ignoring line` and the
+  container starts with some of its arguments. The real render was fine; the
+  test's was broken, which is the forgiving direction and so went unnoticed.
+  There is now a test that the continuation is unbroken.
+
 ### Added
+
+- **`qemu-tool down-all`**, which finds every running qemu-tool stack on this
+  host and tears it down, asking first. `sudo qemu-tool down-all` takes every
+  stack on the system regardless of owner.
+
+  Both of its questions are answered from what compose records on each
+  container rather than guessed. A stack is identified by its compose file —
+  the `gen-compose` provenance header, or one of the directories this tool
+  ships — and never by service name, because `qemu-1` is a name anyone might
+  use and this removes containers. It is *yours* if any of its containers runs
+  as your uid, which is what `CONTAINER_USER` put there.
+
+  A stack started before that change has every container as root and so reads
+  as root's to a non-root caller; those are listed as skipped, with the reason,
+  rather than passed over in silence. The teardown pins the project with an
+  explicit `-p`, which the stack-directory discovery order does not guarantee.
+
+- **`run-vm` refuses, by name, when a disk or its directory is not writable
+  by the user it runs as.** This is where the root-era migration lands, and
+  both ways it landed were unhelpful. QEMU opens a drive read-write even for
+  a guest that only reads it, so a 0644 root-owned qcow2 did not degrade --
+  the guest did not boot, and QEMU's own `Could not open '<path>': Permission
+  denied` named neither the owner nor why it changed. An unwritable images
+  directory failed later and elsewhere, as a `CalledProcessError` traceback
+  from `qemu-img`.
+
+  The message names the file, its owner (uid *and* name, since one of them
+  is always the one you can search for), and a fix that works: `rm` for an
+  NVMe drive, which is scratch and recreated; `chown` for a boot disk;
+  `chmod` when the file is already yours and only the mode denies write.
+  That last distinction matters -- the obvious wording produced "owned by
+  uid 1000, not read-write for uid 1000", which reads like a contradiction
+  and sends you to the wrong command.
+
+- **`qemu-tool inspect` reports each GPU's PCIe BARs**, indented under its row:
+
+  ```
+  GPU:       gfx1250 (emulated, rocjitsu-1.sock)
+               BAR0 256 MiB (64-bit prefetchable)
+  GPU:       gfx908 (passthrough, 63:00.0)
+               BAR0 32 GiB (64-bit prefetchable)
+  ```
+
+  BAR0 is the VRAM aperture, which is the figure that decides whether a device
+  can be the target of a peer-to-peer DMA. Two sources, because there is no
+  single one: a passthrough GPU's BARs are read from the host's own sysfs and
+  need no agent, while an emulated one's come from the guest — reached through
+  the KFD node's `location_id`, since the agent has no readdir and rocjitsu's
+  config lives inside a container `inspect` cannot reach.
+
+  The three silent ways to misparse a sysfs `resource` file are each pinned by
+  a test against a verbatim MI100 fixture: inclusive bounds (size is
+  `end - start + 1`), 64-bit BARs occupying two slots with the upper reading as
+  zeros, and only the first six lines being BARs at all.
+
+- **`qemu-tool check-system`**, one command that asks every host question the
+  stacks depend on and prints a line per answer: tools on PATH, the Docker
+  daemon and your access to it, KVM (the ioctl, not just the node),
+  `/dev/net/tun`, the uid the containers will run as, which settings file is
+  in force, the vCPU budget against `nproc`, and whether `VM_IMAGES_DIR` has
+  room and is owned by you. Read-only, no `sudo`, writes nothing — safe on a
+  host you have not decided to use yet.
+
+  Every failure it reports has been seen in the wild, and most present
+  somewhere other than where they are caused: a missing kvm group looks like
+  slow guests, an absent `/dev/net/tun` looks like an RDMA failure, a
+  `CONTAINER_USER` typo looks like a stack that will not start for reasons the
+  error does not name. `FAIL` exits 1; `warn` does not, because a checker that
+  failed on a merely tight host would get disabled in whatever runs it.
+
+  It is the same code `quick-start` runs in its preflight, not a copy —
+  `quick_start` imports the checks from it, and the test asserts identity
+  rather than equality so a second copy that agrees today still fails.
+
 
 - **`qemu-tool quick-start`**, one command that brings up two guests sized for
   whatever machine it was run on. Each gets an emulated gfx1250, an emulated

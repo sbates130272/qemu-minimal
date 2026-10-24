@@ -229,6 +229,312 @@ container's `anon` is **not** fleet memory — it was 2.0 GiB across all 32,
 "what can the host not reclaim cheaply", not "how much RAM do the guests
 hold". `qemu-tool list --summary` reports the shmem figure and labels it.
 
+## `qemu-tool check-system`
+
+One command that asks every host question the stacks depend on and prints a
+line per answer: tools on PATH, the Docker daemon and your access to it, KVM
+(the ioctl, not the node), `/dev/net/tun`, the uid the containers will run as,
+which settings file is in force, the vCPU budget against `nproc`, and whether
+`VM_IMAGES_DIR` has room and is owned by you. Read-only, no `sudo`, writes
+nothing — safe on a host nobody has committed to yet.
+
+`FAIL` sets exit 1; `warn` does not. That split is deliberate and worth
+keeping: a checker that failed on a merely tight host would get disabled in
+whatever runs it, and then catch nothing.
+
+**It is the same code `quick-start` runs in its preflight, not a copy.**
+`quick_start` imports `kvm_usable`, `docker_compose_ok` and `free_gb` from
+`check_system`, and `tests/test_check_system.py` asserts *identity* (`assertIs`)
+rather than equality, so a second copy that happens to agree today still fails
+the test. This repo has been bitten by a documented path and its CI equivalent
+drifting apart — it is why `report-for-quickstart` runs `qemu-tool quick-start`
+itself rather than a reimplementation of its steps.
+
+The one thing deliberately **not** shared is the tool list.
+`quick_start._TOOL_HINTS` requires oras, ansible-playbook and ssh outright,
+because the quickstart pulls a published qcow2, provisions the guests and
+reaches them. `check_system` treats those as optional, because a host that
+only runs `qemu-tool compose` against an image it already has needs none of
+them and failing it would be wrong. Two lists because there are two
+requirements; there is a test pinning that too, so nobody "fixes" it.
+
+## GPU BARs, and rocjitsu's VRAM aperture
+
+`qemu-tool inspect` reports each GPU's PCIe BARs under its row:
+
+```
+GPU:       gfx1250 (emulated, rocjitsu-1.sock)
+             BAR0 256 MiB (64-bit prefetchable)
+             BAR2 2 MiB (64-bit prefetchable)
+GPU:       gfx908 (passthrough, 63:00.0)
+             BAR0 32 GiB (64-bit prefetchable)
+             BAR2 2 MiB (64-bit prefetchable)
+             BAR5 512 KiB (32-bit)
+```
+
+Two sources, because there is no single one. A **passthrough** GPU's BARs come
+off the host's own sysfs and need no agent. An **emulated** one's come from the
+guest, reached through the KFD node's `location_id` — KFD packs the PCI address
+as `(bus << 8) | (device << 3) | function` with `domain` separate, verified
+against real hardware (`location_id 25344` = `0x6300` = `0000:63:00.0`, and
+that device is there). Deriving it is necessary because the guest agent has no
+readdir, so `/sys/bus/pci/devices` cannot be walked. rocjitsu's own config is
+not an option: it lives inside the server's container, where `inspect` cannot
+reach it.
+
+Three things about a sysfs `resource` file are easy to get wrong and all three
+are silent — `tests/test_inspect_devices.py::Bars` pins each, against a
+verbatim MI100 fixture. Bounds are **inclusive**, so size is `end - start + 1`;
+off by one reports every BAR one byte under a power of two, which looks
+precise. A 64-bit BAR occupies **two** slots with the upper reading as zeros,
+so anything inferring the index from position misnumbers every BAR after the
+first 64-bit one. And only the **first six** lines are BARs; the rest are the
+expansion ROM and bridge windows.
+
+**Enabling the large BAR on rocjitsu, for P2P DMA.** It is a config-file field,
+not a CLI flag — `rocjitsu --help` has no knob for it. From the shipped schema
+(`/usr/local/share/rocjitsu/schemas/simulation_config.fbs`):
+
+```
+vram_aperture_bytes: uint64 = 0; // 0 = an implementation-chosen window, <= 256 MiB.
+doorbell_aperture_bytes: uint64 = 2097152;
+register_aperture_bytes: uint64 = 524288;
+```
+
+`gfx1250_mi455x.json` ships `vram_aperture_bytes: 268435456` — 256 MiB, already
+the small-BAR ceiling. That 2 MiB doorbell BAR is the "2 MiB second BAR not
+mapped at all" of `.artifacts/vfio-user-p2p-dma.md`. Set the field to the
+largest power of two **≤ `local_mem_size`**; for that config
+(`local_mem_size: 463856467968`, ~432 GiB) it is **256 GiB = 274877906944**.
+
+Measured against the real binary rather than inferred, by serving each value
+on a vfio-user socket:
+
+| `vram_aperture_bytes` | rocjitsu |
+|---|---|
+| 128 GiB | clean, serves |
+| 256 GiB | clean, serves |
+| 512 GiB | `warn: the video memory aperture is larger than the memory itself` |
+| 300 GiB | `warn: the video memory aperture is ... not a power of two` |
+
+Both are warnings, not refusals — it still serves — so a wrong value here is
+the quiet kind. Two things have to travel with a large BAR: `VM_PCI_HOLE64_SIZE`
+must cover it (`512G` is the phys-bits ceiling, see the MI355X README), and
+vfio-user P2P DMA needs the fork QEMU image (issue 19) — `qemu/env/overlay-mi100`
+pins it, the golden `env/scale-out` does not.
+
+## Tearing a stack down
+
+**`qemu-tool down-all`** finds every running qemu-tool stack on this host and
+tears it down, asking first. `--dry-run` lists what it would do and the exact
+commands; `--yes` skips the prompt, which never defaults to yes.
+
+Both of its questions are answered from what compose records on each
+container, so neither is a guess:
+
+| Question | Answered by |
+|---|---|
+| Is this a qemu-tool stack? | `com.docker.compose.project.config_files` — the file carries the `gen-compose` provenance header, or sits in one of the six stack directories this tool ships |
+| Is it yours? | `.Config.User`, the uid the containers really run as — which is what the `CONTAINER_USER` work put there |
+
+**Do not "simplify" the first to a service-name match.** `qemu-1` is a name
+anyone might use, and this command removes containers. Verified: an unrelated
+compose project with a service called `qemu-1` is ignored, while a real fleet
+beside it is found.
+
+Ownership is *any* container as your uid, not all — a stack legitimately
+mixes them, since the stats exporters are pinned to 65534 and
+tapsetup/dockerapi stay root. The limitation worth knowing: a stack started
+**before** the containers ran as the caller has every container as root, so a
+non-root caller sees it as root's and skips it. That is correct — you cannot
+stop them without root — and skipped stacks are listed with the reason rather
+than passed over. `sudo qemu-tool down-all` takes everything, which is what
+makes it the system-wide form.
+
+The teardown pins the project with an explicit `-p` and rebuilds the
+invocation from the recorded `working_dir`, `config_files` and
+`environment_file`. That `-p` is the point: the project name is otherwise
+derived from the working directory, which is the leading theory for the
+41-hour survivors below.
+
+
+**`qemu-tool compose down` and `stop` enable every profile**, which plain
+`docker compose` does not, and say so on stderr. Pass `--profile` (or set
+`COMPOSE_PROFILES`) to scope it deliberately; an explicit choice is respected.
+
+**And a teardown that exits 0 while containers in its own project are still
+running now warns**, naming them. That check is the useful half, because the
+cause is not established. A fleet was found with prometheus, grafana and the
+stats exporter alive **41 hours** after a `down --remove-orphans` that
+reported success.
+
+The obvious explanation — that profile-gated services are filtered out of
+`down` — is **wrong**, and was tested rather than assumed: on compose v5.3.1,
+`up --profile metrics` followed by a plain `down`, `down --remove-orphans` or
+`stop` removes the gated container every time. So `--profile "*"` is
+belt-and-braces; it costs nothing and makes `down` unambiguous, but it is not
+the fix for what was seen.
+
+The likeliest remaining candidate is a **project-name mismatch**. Compose
+derives the project from the working directory, `compose.run` never passes
+`-p`, and the stack-directory discovery order (`--stack-dir`, then
+`$QEMU_TOOL_STACK`, then the cwd) can resolve differently between the `up` and
+the `down` — in which case the down tears down an *empty* project and reports
+success. If this happens again, the thing to capture before cleaning up is
+`docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}'` on
+a survivor, next to the directory the `down` ran from. That one comparison
+settles it.
+
+## Container privilege
+
+**Nothing in any stack runs as root by default, and nothing holds a
+capability.** This changed on 2026-10-24; before that every service in all six
+stacks ran as uid 0 with Docker's full default capability set, and the
+`CONTAINER_USER` opt-in that existed to fix it was set by exactly two
+committed overlays, both pinning one operator's ids.
+
+The mechanism, and why it was off for so long: the value cannot be committed.
+It differs per host, and `gen-compose --check` compares the rendered stack byte
+for byte in CI, so a uid in the YAML fails that check everywhere but the
+machine that generated it. What the render carries is a *reference* —
+`user: ${CONTAINER_USER:?set CONTAINER_USER=<uid>:<gid>}` — and compose
+resolves it at `up`. That is exactly what makes it safe to emit
+unconditionally, which is the fix: the render stays machine-independent either
+way, and `qemu-tool compose` now answers it from `compose._caller_identity()`
+(`os.getuid()`/`os.getgid()`, and `CONTAINER_KVM_GID` from `stat /dev/kvm`).
+`quick_start._compose` calls the same helper, because it builds its own
+`docker compose` command rather than going through `compose.run`.
+
+Precedence matches compose's own: the process environment first, then the
+`--env-file` layers, and only an unset key is filled in. Get that backwards and
+qemu-tool and the containers disagree about the value, which is the failure the
+repeated-`--env-file` handling exists to prevent.
+
+**`:?` and never `:-`.** Measured on compose v5.3.1: an unset variable
+interpolates to the empty string, `user: ":"` is not an error to Docker, and
+the container runs as root with one warning line as the evidence. A plain
+`docker compose up` against a committed stack therefore *refuses*:
+
+```
+error while interpolating services.qemu-3.user: required variable
+CONTAINER_USER is missing a value: set CONTAINER_USER=<uid>:<gid>
+```
+
+That is the designed behaviour, not a regression. Supply both and it works:
+
+```bash
+CONTAINER_USER=$(id -u):$(id -g) \
+CONTAINER_KVM_GID=$(stat -c %g /dev/kvm) docker compose up -d
+```
+
+`CONTAINER_KVM_GID` is not optional with a uid set: a container given
+`--user <uid>:<gid>` holds **no** supplementary groups, and `/dev/kvm` is
+`crw-rw---- root:kvm`. Without it the guest silently falls back to TCG and runs
+~20x slower, which presents as "the guests are hanging". The gid is read off
+the device rather than from the group *name*, because a host can have the group
+without the device or the device without that name — and what the container
+needs is whichever gid opens that node.
+
+**A uid is not a capability set.** A container can be uid 1000 and still hold
+`NET_RAW`: Docker grants the default permitted set independently of the user.
+So every service also takes `cap_drop: [ALL]` and
+`security_opt: ["no-new-privileges:true"]`, which matters most in the
+configuration where someone has deliberately pinned `CONTAINER_USER=0:0`.
+
+Exemptions, each for its own reason:
+
+| Service | Why |
+|---|---|
+| `tapsetup-N` | **Cannot** take a uid. `cap_add` raises only the bounding and permitted sets; Docker sets no AMBIENT capabilities, so a non-root uid holds nothing effective and `ip link add` dies with `RTNETLINK answers: Operation not permitted`. Compose cannot express ambient caps. What *was* fixable is the rest of the set: it now runs `cap_drop: [ALL]` then `cap_add: [NET_ADMIN]`, read-only rootfs, where it used to carry Docker's thirteen defaults as well. |
+| `dockerapi` | Holds the host Docker socket, which is root's. |
+| `*-stats-exporter` | Pinned `65534`. They create nothing on the host, so there is no ownership to fix and `nobody` beats "you". |
+
+The two pairs that must not diverge: `x-ernic-common` and `x-qemu-common` carry
+the same uid because **rocjitsu does not chmod its vfio-user socket**. It stays
+0755 owned by its creator and `connect(2)` needs write on the inode, so a qemu
+on a different uid cannot attach the GPU at all. rocm-ernic hides this by
+chmodding its own to 0666 — do not generalise from it. And `TAP_OWNER` on the
+tapsetup sidecar must be that same uid: `TUNSETIFF` on a *persistent* tap needs
+a matching owner or `NET_ADMIN`, and the ernic deliberately holds neither.
+
+**`:ro` on a Docker socket mount restricts the inode, not the API.** Anything
+that can `connect()` to `/var/run/docker.sock` can create a privileged
+container and own the host, whatever the mount flags say — so the old
+`alloy` service, a large pipeline that parses untrusted container log content,
+held a root credential. There is now a `dockerapi` service (haproxy,
+`tecnativa/docker-socket-proxy`) with `CONTAINERS`/`EVENTS`/`PING`/`VERSION`
+on and **`POST=0`**; that last is the line that matters, since without it the
+allowlist still permits container create, start and exec. Alloy reaches the
+daemon through `DOCKER_HOST` over the fleet network, holds no socket, and so
+takes `CONTAINER_USER` like everything else. The proxy publishes no port. This
+does not remove the root-equivalent container — anything speaking to the daemon
+needs the socket — it shrinks it from a log pipeline to a proxy whose whole job
+is saying no.
+
+The guest-side Alloy (`lmcache_guest`) still mounts the guest's own socket:
+the blast radius is one disposable VM and a proxy per guest costs more than it
+buys. It takes `--cap-drop ALL --security-opt no-new-privileges`.
+
+**Migrating a fleet that ran as root.** `qemu-tool compose up` creates
+`PROM_DATA_DIR`/`LOKI_DATA_DIR`/`GRAFANA_DATA_DIR` as the caller (Docker would
+otherwise create a missing bind-mount source root-owned, and the service that
+cannot write it reports the problem several minutes later) and warns about
+anything it finds owned by someone else. The one it cannot fix is a
+`<vm>-nvmeN.qcow2` from a root run: 0644 root-owned, and QEMU opens a drive
+read-write, so the guest does not boot **at all** rather than merely owning the
+wrong file. Delete them; they are scratch.
+
+Three layers report this now, at the three moments it can be noticed.
+`qemu-tool check-system` flags a `VM_IMAGES_DIR` that is unwritable or holds
+files owned by someone else, before anything starts. `qemu-tool compose up`
+warns and names them. And `run-vm` **refuses**, because by then it is the
+last chance: it checks the images directory and every drive QEMU will open
+read-write, and prints the owner, the mode and a fix. A backing image is
+deliberately exempt from the write check -- a fleet shares one across every
+guest and QEMU opens it read-only, so demanding write there would reject a
+correct setup.
+
+The wording distinguishes two causes, which is not cosmetic. A file owned by
+someone else wants `chown` (or `rm`, if it is a `-nvmeN.qcow2`, which is
+scratch and recreated -- and needs no sudo, since unlinking depends on the
+directory). A file that is **yours** but mode 0444 wants `chmod`, and the
+earlier wording for it read "owned by uid 1000, not read-write for uid 1000"
+-- a true sentence that looks like a contradiction and names the wrong
+remedy.
+
+**The MP server unit is the loosest thing left, and it is now explained.**
+`lmcache-server.service` kept `--security-opt seccomp=unconfined` with no
+comment beside it — the one relaxation nobody could evaluate. Docker's default
+profile allows every syscall the ROCm runtime and the ionic verbs path use; it
+blocks the long tail. It is now `lmcache_guest_seccomp_unconfined`, default
+**false**, with `--cap-drop ALL` and `--security-opt no-new-privileges`
+alongside. `--network host` and `--ipc host` stay and are not incidental: the
+first is required for P2P, since the address this server advertises has to be
+one its peers can dial and a guest-local bridge is a different 172.17.x.x on
+every guest. `--ulimit memlock=-1:-1` needs no `IPC_LOCK` — the ulimit raises
+the rlimit the daemon sets, which is a different mechanism from the capability
+that lets a process exceed it.
+
+**A blank line inside `ExecStart`'s backslash continuation terminates it**, and
+systemd then reports `Missing '=', ignoring line` for the remainder — so the
+container starts with *some* of its arguments. Every privilege flag in that
+unit sits behind an `{% if %}` or `{% for %}`, each one a chance to introduce
+exactly that. Ansible's `template` module defaults `trim_blocks` to yes, which
+is what keeps the real render clean; `tests/test_lmcache_unit_render.py` had
+been rendering *without* it, so its unit differed from the one that ships — in
+the forgiving direction, where the test render is broken and the real one is
+fine. It now sets `trim_blocks=True` and asserts the continuation is unbroken.
+
+**Host-side `sudo` in `run_vm.py` is unchanged except for one thing.** The TAP
+path still shells out to `sudo` for `ip`, `iptables` and a long-lived
+`dnsmasq`. What changed is `net.ipv4.ip_forward`: it used to be an
+unconditional `sysctl -w ...=1` with no matching restore, so running one VM
+once left the host forwarding packets forever. It is now set only if it was
+off, recorded as ours, and put back on teardown — and only when no other
+`qemu-br*` bridge is left, because a second `run-vm` that found it already on
+will not have recorded it and switching it off under them breaks a running
+guest's networking.
+
 ## rocm-ernic driver and userspace provider (in-VM)
 
 **rocm-ernic is now ionic-based.** Upstream deleted `driver/` and `rdma-core/`

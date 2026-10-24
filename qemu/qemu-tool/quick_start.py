@@ -45,6 +45,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .check_system import docker_compose_ok, free_gb, kvm_usable
+from .compose import _apply_identity, resolve_identity
 from .config import VMConfig
 from .envfile import overrides as env_overrides, parse_layers
 from .gen_compose import run as gen_compose_run
@@ -339,6 +341,12 @@ def _write_layer(state: _State, name: str, body: dict[str, str], why: str) -> No
 # Preflight
 # ---------------------------------------------------------------------------
 
+# Deliberately NOT check_system's list, which splits tools into required and
+# optional. Everything here is required *for the quickstart specifically*: it
+# pulls a published qcow2 (oras), provisions the guests (ansible-playbook) and
+# reaches them (ssh). check-system cannot assume any of that, because a host
+# that only runs `qemu-tool compose` against an image it already has needs
+# none of them. Two lists because there are two requirements, not two copies.
 _TOOL_HINTS = {
     "docker": "install Docker Engine with the compose plugin "
               "(https://docs.docker.com/engine/install/)",
@@ -355,44 +363,12 @@ def _check_tools() -> list[str]:
     return [tool for tool in _TOOL_HINTS if shutil.which(tool) is None]
 
 
-def _kvm_usable() -> tuple[bool, str]:
-    """The ioctl, not the node.
-
-    A device node can exist and still be non-functional, and QEMU falls back
-    to TCG without saying so. Two guests under TCG will not finish inside any
-    timeout worth setting.
-    """
-    if not Path("/dev/kvm").exists():
-        return False, "/dev/kvm is missing"
-    try:
-        import fcntl
-
-        fd = os.open("/dev/kvm", os.O_RDWR)
-    except OSError as exc:
-        return False, f"/dev/kvm cannot be opened ({exc.strerror}) -- are you in the kvm group?"
-    try:
-        fcntl.ioctl(fd, 0xAE00, 0)
-    except OSError as exc:
-        return False, f"/dev/kvm is present but KVM_GET_API_VERSION failed ({exc.strerror})"
-    finally:
-        os.close(fd)
-    return True, ""
-
-
-def _docker_compose_ok() -> bool:
-    try:
-        return subprocess.run(["docker", "compose", "version"],
-                              stdout=subprocess.DEVNULL,
-                              stderr=subprocess.DEVNULL).returncode == 0
-    except OSError:
-        return False
-
-
-def _free_gb(path: Path) -> float:
-    probe = path
-    while not probe.exists() and probe != probe.parent:
-        probe = probe.parent
-    return shutil.disk_usage(probe).free / 1024 ** 3
+# Shared with `qemu-tool check-system`, which is the same checks run on their
+# own. One implementation and two callers, because a documented path and its
+# CI equivalent drifting apart is a failure this repo has had before.
+_kvm_usable = kvm_usable
+_docker_compose_ok = docker_compose_ok
+_free_gb = free_gb
 
 
 def _shm_free_mb() -> int | None:
@@ -474,6 +450,24 @@ def preflight(state: _State) -> None:
     ok, why = _kvm_usable()
     if not ok:
         _die(f"{why}; the guests would run under TCG and never finish")
+
+    # Resolved HERE rather than at `docker compose up`, which is where it is
+    # actually consumed. Every service in the stack carries
+    # `user: ${CONTAINER_USER:?...}`, so an unusable value is a compose
+    # interpolation error -- and by then the quickstart has pulled a 2.5 GB
+    # image and written a stack directory. Checking it beside the other host
+    # facts turns that into a line of preflight output.
+    #
+    # It is also the one host fact a reader is most likely to want stated
+    # outright, because "which uid did my fleet run as" used to have a
+    # surprising answer.
+    ident, source = resolve_identity(list(state.layers))
+    if "CONTAINER_KVM_GID" not in ident:
+        _die("cannot determine the gid that owns /dev/kvm, and a container "
+             "given a uid holds no supplementary groups -- so QEMU could not "
+             "open it. Set CONTAINER_KVM_GID explicitly.")
+    _say(f"Containers will run as {ident['CONTAINER_USER']} (from {source}), "
+         f"with group {ident['CONTAINER_KVM_GID']} for /dev/kvm")
 
     if state.size_from_host:
         sized = _size_for_host(state)
@@ -794,6 +788,15 @@ def _compose(state: _State, *args: str, check: bool = True,
         cmd += ["--profile", "metrics"]
     cmd += list(args)
     full_env = os.environ.copy()
+    # The rendered stack asks for a uid on every service, so this has to
+    # answer -- quick-start builds its own docker compose command rather than
+    # going through compose.run(), and without this every invocation here,
+    # including the `logs` on the failure path, dies on "required variable
+    # CONTAINER_USER is missing a value". Same precedence as there: anything
+    # already in the environment or in a layer is a decision and is kept.
+    # preflight() has already resolved and validated this; re-resolving is
+    # cheap and keeps _compose usable on its own.
+    _apply_identity(full_env, list(state.layers))
     full_env.update(env or {})
     result = subprocess.run(cmd, cwd=state.stack_dir, env=full_env)
     if check and result.returncode != 0:

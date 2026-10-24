@@ -111,6 +111,33 @@ jobs:
     # again. A stock runner does not have that on / without help -- this is
     # where report-for-lmcache ran out of disk, with a bare zstd "No space
     # left on device" that named nothing.
+    # Run the stack as a non-root user, not as the job's root. See the
+    # action: a root caller resolves CONTAINER_USER to 0:0 and proves
+    # root-with-no-capabilities, which is not the configuration an operator
+    # has. The workspace is in the chown list because this lane writes its
+    # report into it and the checkout is root-owned.
+    - name: Run the stack as a non-root user
+      uses: ./.github/actions/nonroot-user
+      with:
+        chown: /var/lib/qemu-tool ${{ github.workspace }}
+
+    # These lanes drive the stack with PLAIN `docker compose` in places --
+    # the `ps` after `up`, and the logs-on-failure path -- and plain compose
+    # cannot resolve CONTAINER_USER from the caller the way qemu-tool does.
+    # Without this the committed stack's `${CONTAINER_USER:?}` refuses
+    # outright, which on the failure path would cost exactly the logs that
+    # explain the failure.
+    #
+    # The value must match the uid the overlays were created as, so it is
+    # derived from the action's rather than written out again.
+    #
+    # pr-quickstart-boot deliberately does NOT do this: it uses qemu-tool
+    # throughout, so leaving the variable unset is what tests that
+    # compose._caller_identity() resolves it.
+    - name: Let plain docker compose see the same uid
+      run: echo "CONTAINER_USER=$CIUSER_UID:$CIUSER_UID" >> "$GITHUB_ENV"
+
+
     - name: Free disk space
       run: |
         df -h /
@@ -151,25 +178,29 @@ jobs:
     # fleet network between the two halves and address the guests on it.
     - name: Fetch the guest image and bring the stack up
       run: |
-        qemu-tool quick-start up \
-          --env-file "$ENV_FILE" \
-          --stack-dir "$STACK_DIR" \
-          --key-dir "$KEY_DIR" \
-          --in-network \
-          --yes
+        setpriv --reuid "$CIUSER_UID" --regid "$CIUSER_UID" --init-groups \
+          env HOME="$CIUSER_HOME" \
+          qemu-tool quick-start up \
+            --env-file "$ENV_FILE" \
+            --stack-dir "$STACK_DIR" \
+            --key-dir "$KEY_DIR" \
+            --in-network \
+            --yes
 
     - name: Join the fleet network
       run: docker network connect quickstart_fleet "$(cat /etc/hostname)"
 
     - name: Configure the guests, run the tests and write the report
       run: |
-        qemu-tool quick-start test \
-          --env-file "$ENV_FILE" \
-          --stack-dir "$STACK_DIR" \
-          --key-dir "$KEY_DIR" \
-          --report-dir site/quickstart \
-          --in-network \
-          --yes
+        setpriv --reuid "$CIUSER_UID" --regid "$CIUSER_UID" --init-groups \
+          env HOME="$CIUSER_HOME" \
+          qemu-tool quick-start test \
+            --env-file "$ENV_FILE" \
+            --stack-dir "$STACK_DIR" \
+            --key-dir "$KEY_DIR" \
+            --report-dir site/quickstart \
+            --in-network \
+            --yes
 
     # Prometheus and Grafana are part of the documented quickstart now, so a
     # lane that never looked at them would publish a green report about a

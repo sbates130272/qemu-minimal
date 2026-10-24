@@ -22,10 +22,20 @@ ExecStartPre=-/usr/bin/docker rm -f {{ lmcache_guest_alloy_container_name }}
 # be using persistent or volatile journald storage, and which one is live is
 # not knowable from here -- mounting only the wrong one yields an Alloy that
 # starts cleanly and ships nothing.
+#
+# This one DOES hold the guest's Docker socket, and `:ro` does not make that
+# safe -- the flag applies to the inode, not to the API behind it, so anything
+# that can connect to it can create a privileged container. The host-side
+# Alloy was moved behind a read-only API proxy for exactly this reason; here
+# there is no proxy because the blast radius is one disposable guest and
+# adding a service to every VM costs more than it buys. The capability drop
+# below is what is cheap enough to be worth doing.
 ExecStart=/usr/bin/docker run \
     --rm \
     --name {{ lmcache_guest_alloy_container_name }} \
     --network host \
+    --security-opt no-new-privileges \
+    --cap-drop ALL \
     -v /var/run/docker.sock:/var/run/docker.sock:ro \
     -v /var/log/journal:/var/log/journal:ro \
     -v /run/log/journal:/run/log/journal:ro \
