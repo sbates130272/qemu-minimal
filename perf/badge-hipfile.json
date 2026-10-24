@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
   "label": "rocjitsu hipFile",
-  "message": "160 MB/s (-6%)",
-  "color": "yellow"
+  "message": "157 MB/s (-3%)",
+  "color": "brightgreen"
 }
