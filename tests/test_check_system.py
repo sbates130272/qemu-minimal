@@ -47,6 +47,7 @@ def _load_package():
 
 _load_package()
 from qemu_tool import check_system as cs  # noqa: E402
+from qemu_tool.check_system import Result  # noqa: E402
 from qemu_tool import quick_start  # noqa: E402
 
 
@@ -62,18 +63,24 @@ def _run(argv_env: list[Path] | None = None) -> tuple[str, int]:
     return buf.getvalue(), code
 
 
+def _groups(*statuses: str) -> list[tuple[str, list[Result]]]:
+    """A synthetic report with exactly the statuses named."""
+    return [("Synthetic", [Result(f"check {n}", s) for n, s in enumerate(statuses)])]
+
+
 class TestExitStatus(unittest.TestCase):
-    """A FAIL fails the command; a warn does not."""
+    """The FAIL/warn -> exit-status policy, against synthetic results.
+
+    Deliberately NOT against this host. The first version of these tests
+    asserted "a clean host exits 0" by running the real checks, which is not
+    a property of this code: a GitHub runner has no usable KVM,
+    check-system correctly calls that blocking, and both tests went red on a
+    PR that had not touched them. What is being tested is the mapping from
+    results to exit status, so the results are supplied.
+    """
 
     def test_a_fail_exits_nonzero(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            layer = Path(tmp) / "env"
-            # Below the floor: under 4 vCPU ionic_rdma never probes.
-            layer.write_text("VM_COUNT=2\nVM_VCPUS=2\n")
-            out, code = _run([layer])
-        self.assertEqual(code, 1)
-        self.assertIn("VM_VCPUS floor", out)
-        self.assertIn("blocking problem", out)
+        self.assertEqual(cs.report(_groups(cs._FAIL)), 1)
 
     def test_a_warning_alone_exits_zero(self):
         """Otherwise the command gets disabled in whatever runs it.
@@ -82,25 +89,51 @@ class TestExitStatus(unittest.TestCase):
         guests to the mesh manager's heartbeat, which is worth saying and not
         worth refusing over.
         """
+        self.assertEqual(cs.report(_groups(cs._WARN, cs._WARN)), 0)
+
+    def test_warnings_do_not_mask_a_failure(self):
+        self.assertEqual(cs.report(_groups(cs._WARN, cs._FAIL, cs._OK)), 1)
+
+    def test_all_clear_exits_zero(self):
+        self.assertEqual(cs.report(_groups(cs._OK, cs._OK, cs._SKIP)), 0)
+
+    def test_the_tally_counts_each_kind(self):
+        groups = _groups(cs._OK, cs._WARN, cs._FAIL, cs._WARN, cs._SKIP)
+        self.assertEqual(cs.tally(groups), (1, 2))
+
+    def test_the_summary_line_says_which(self):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            cs.report(_groups(cs._FAIL, cs._WARN))
+        self.assertIn("1 blocking problem(s), 1 warning(s)", out.getvalue())
+
+
+class TestRealHost(unittest.TestCase):
+    """That `collect()` runs here at all, whatever this host's answers are.
+
+    No assertion on the verdict: on a runner it is a failure (no KVM) and on
+    a workstation it is usually a pass, and neither is a fact about this
+    code.
+    """
+
+    def test_every_section_is_reported(self):
+        titles = [title for title, _ in cs.collect([])]
+        self.assertEqual(titles, ["Tools", "Docker", "Virtualisation",
+                                  "Container identity", "Settings",
+                                  "Capacity", "Images"])
+
+    def test_a_sub_floor_vcpu_count_is_blocking_anywhere(self):
+        """Below 4 vCPU ionic_rdma never probes, and the only symptom is a
+        line in a guest log nobody is reading. Host-independent: this is a
+        settings fact, so it must be a FAIL on any machine.
+        """
         with tempfile.TemporaryDirectory() as tmp:
             layer = Path(tmp) / "env"
-            layer.write_text(f"VM_COUNT={(os.cpu_count() or 1) * 400}\n"
-                             "VM_VCPUS=4\n")
-            out, code = _run([layer])
-        self.assertEqual(code, 0)
-        self.assertIn("vCPU budget", out)
-        self.assertIn("warning", out)
+            layer.write_text("VM_COUNT=2\nVM_VCPUS=2\n")
+            groups = cs.collect([layer])
+        floor = [r for _, rs in groups for r in rs if r.name == "VM_VCPUS floor"]
+        self.assertEqual([r.status for r in floor], [cs._FAIL])
 
-    def test_a_clean_host_says_so(self):
-        out, code = _run([])
-        self.assertEqual(code, 0)
-        # Whatever this host's answers are, the summary line is one of three.
-        self.assertTrue(
-            "can run the stacks" in out
-            or "warning(s)" in out
-            or "blocking problem" in out,
-            out,
-        )
 
 
 class TestIdentity(unittest.TestCase):

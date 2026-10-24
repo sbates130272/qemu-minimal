@@ -351,7 +351,16 @@ def _check_qemu_tool() -> list[Result]:
 # Entry point
 # ---------------------------------------------------------------------------
 
-def run(env_file: list[Path] | None = None) -> None:
+def collect(env_file: list[Path] | None = None) -> list[tuple[str, list[Result]]]:
+    """Every check, grouped by area, with nothing printed and nothing exited.
+
+    Split from run() so the exit-status POLICY can be tested without
+    depending on the machine the tests run on. The first version of the
+    tests asserted "a clean host exits 0" against the real host, which is
+    not a property of this code at all: a GitHub runner has no usable KVM,
+    check-system correctly calls that a blocking failure, and two tests went
+    red on a PR that had not touched them.
+    """
     settings = find_env_file(env_file)
     try:
         values = parse_layers(settings) if settings else {}
@@ -360,7 +369,7 @@ def run(env_file: list[Path] | None = None) -> None:
         # better one than dying halfway through the report.
         values = {}
 
-    groups: list[tuple[str, list[Result]]] = [
+    return [
         ("Tools", _check_tools()),
         ("Docker", _check_docker()),
         ("Virtualisation", _check_kvm() + _check_tun()),
@@ -370,14 +379,24 @@ def run(env_file: list[Path] | None = None) -> None:
         ("Images", _check_images_dir(values)),
     ]
 
-    failed = warned = 0
+
+def tally(groups: list[tuple[str, list[Result]]]) -> tuple[int, int]:
+    """(blocking failures, warnings) across every group."""
+    failed = sum(1 for _, rs in groups for r in rs if r.status == _FAIL)
+    warned = sum(1 for _, rs in groups for r in rs if r.status == _WARN)
+    return failed, warned
+
+
+def report(groups: list[tuple[str, list[Result]]]) -> int:
+    """Print the report and return the exit status.
+
+    A FAIL sets 1; a warning does not. That asymmetry is the whole policy: a
+    checker that failed on a merely tight host would be disabled in whatever
+    runs it, and then catch nothing.
+    """
     for title, results in groups:
         print(f"\n{title}")
         for r in results:
-            if r.status == _FAIL:
-                failed += 1
-            elif r.status == _WARN:
-                warned += 1
             line = f"  [{_MARK[r.status]}] {r.name}"
             if r.detail:
                 line += f": {r.detail}"
@@ -385,14 +404,22 @@ def run(env_file: list[Path] | None = None) -> None:
             if r.hint and r.status in (_FAIL, _WARN):
                 print(f"            {r.hint}")
 
+    failed, warned = tally(groups)
     print()
     if failed:
         print(f"{failed} blocking problem(s), {warned} warning(s). "
               "The stacks will not run until the failures are fixed.")
-        sys.exit(1)
+        return 1
     if warned:
         print(f"No blocking problems, {warned} warning(s). "
               "Everything above marked 'warn' limits what this host can do, "
               "but nothing stops a stack starting.")
-        return
+        return 0
     print("This host can run the stacks.")
+    return 0
+
+
+def run(env_file: list[Path] | None = None) -> None:
+    code = report(collect(env_file))
+    if code:
+        sys.exit(code)

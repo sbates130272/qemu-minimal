@@ -299,23 +299,31 @@ jobs:
     # Gen Compose Check asserts the same thing against `docker compose
     # config`, which is what Docker was asked for. This asks the kernel what
     # it granted, which is the only version that matters: a `cap_drop` the
-    # daemon silently ignored, a `user:` that resolved to empty and became
-    # root, or a `no-new-privileges` that never took would all pass a config
-    # check and fail here.
+    # daemon ignored, a `user:` that resolved to empty, or a
+    # `no-new-privileges` that never took would all pass a config check and
+    # fail here.
     #
     # /proc/1/status is the measurement. On Docker's defaults a container
-    # reports Uid 0 and CapEff 00000000a80425fb -- fourteen capabilities,
-    # granted because nobody said otherwise. What this stack should produce
-    # is a non-zero Uid, CapEff all zero, and NoNewPrivs 1.
+    # reports CapEff 00000000a80425fb -- fourteen capabilities, granted
+    # because nobody said otherwise.
     #
-    # Every container in the project, enumerated rather than named: this lane
-    # runs with ERNIC_TAP=false and --no-metrics, so there is no tapsetup and
-    # no dockerapi -- the two services that legitimately are not covered by
-    # this rule. If a future change to the lane brings either back, this step
-    # should fail and be given the exemption deliberately, not quietly.
-    - name: The running containers are non-root and hold no capabilities
+    # THE UID IS COMPARED TO THIS JOB'S OWN, not to "not zero". The property
+    # the stack provides is "run as the caller", and this lane's caller is
+    # root: the job runs in a container as uid 0, so `id -u` is 0 and
+    # CONTAINER_USER is 0:0. That is the correct answer here, and an
+    # assertion of "non-root" would be testing the environment rather than
+    # the feature -- it failed on exactly that the first time it ran.
+    #
+    # The capability drop is asserted unconditionally, and at uid 0 it is the
+    # whole point: a uid is not a capability set, so root-with-no-caps is
+    # precisely the configuration the hardening exists for. Measured here,
+    # rather than reasoned about.
+    - name: The running containers run as the caller and hold no capabilities
       run: |
         set -eu
+        want_uid=$(id -u)
+        echo "this job runs as uid $want_uid; containers should match"
+
         # By label, not `docker compose ps`: this step runs from the job
         # container, which has no compose file and no project directory, and
         # `compose ps -q` there exits 0 with no output -- so a `||` fallback
@@ -333,7 +341,8 @@ jobs:
           nnp=$(echo "$status" | awk '/^NoNewPrivs:/{print $2}')
           echo "  $name: Uid=$uid CapEff=$capeff NoNewPrivs=$nnp"
 
-          [ "$uid" != "0" ] || { echo "::error::$name runs as root"; rc=1; }
+          [ "$uid" = "$want_uid" ] || {
+            echo "::error::$name runs as uid $uid, not the caller's $want_uid"; rc=1; }
           # Hex, so any non-zero digit means a capability was granted.
           case "$capeff" in
             *[!0]*) echo "::error::$name holds capabilities ($capeff)"; rc=1 ;;
@@ -341,7 +350,7 @@ jobs:
           [ "$nnp" = "1" ] || { echo "::error::$name has no no-new-privileges"; rc=1; }
         done
         [ "$rc" -eq 0 ] || exit 1
-        echo "every running container: non-root, no capabilities, no-new-privileges"
+        echo "every running container: runs as uid $want_uid, no capabilities, no-new-privileges"
 
     # Named separately from the boot step so a heartbeat eviction reads as
     # itself rather than as a mystery. The mesh manager is single-threaded
