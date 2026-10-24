@@ -294,6 +294,55 @@ jobs:
           echo "::error::${IB} is present but its port is not PORT_ACTIVE"; exit 1; }
         echo "RDMA device is PORT_ACTIVE"
 
+    # The privilege posture of the containers that are ACTUALLY RUNNING.
+    #
+    # Gen Compose Check asserts the same thing against `docker compose
+    # config`, which is what Docker was asked for. This asks the kernel what
+    # it granted, which is the only version that matters: a `cap_drop` the
+    # daemon silently ignored, a `user:` that resolved to empty and became
+    # root, or a `no-new-privileges` that never took would all pass a config
+    # check and fail here.
+    #
+    # /proc/1/status is the measurement. On Docker's defaults a container
+    # reports Uid 0 and CapEff 00000000a80425fb -- fourteen capabilities,
+    # granted because nobody said otherwise. What this stack should produce
+    # is a non-zero Uid, CapEff all zero, and NoNewPrivs 1.
+    #
+    # Every container in the project, enumerated rather than named: this lane
+    # runs with ERNIC_TAP=false and --no-metrics, so there is no tapsetup and
+    # no dockerapi -- the two services that legitimately are not covered by
+    # this rule. If a future change to the lane brings either back, this step
+    # should fail and be given the exemption deliberately, not quietly.
+    - name: The running containers are non-root and hold no capabilities
+      run: |
+        set -eu
+        # By label, not `docker compose ps`: this step runs from the job
+        # container, which has no compose file and no project directory, and
+        # `compose ps -q` there exits 0 with no output -- so a `||` fallback
+        # would never fire and an empty result would read as "all clear".
+        ids=$(docker ps -q --filter "label=com.docker.compose.project=pr-boot")
+        [ -n "$ids" ] || { echo "::error::no running containers to check"; exit 1; }
+
+        rc=0
+        for id in $ids; do
+          name=$(docker inspect -f '{{.Name}}' "$id" | sed 's|^/||')
+          status=$(docker exec "$id" cat /proc/1/status 2>/dev/null) || {
+            echo "::warning::$name: could not read /proc/1/status (exited?)"; continue; }
+          uid=$(echo "$status" | awk '/^Uid:/{print $2}')
+          capeff=$(echo "$status" | awk '/^CapEff:/{print $2}')
+          nnp=$(echo "$status" | awk '/^NoNewPrivs:/{print $2}')
+          echo "  $name: Uid=$uid CapEff=$capeff NoNewPrivs=$nnp"
+
+          [ "$uid" != "0" ] || { echo "::error::$name runs as root"; rc=1; }
+          # Hex, so any non-zero digit means a capability was granted.
+          case "$capeff" in
+            *[!0]*) echo "::error::$name holds capabilities ($capeff)"; rc=1 ;;
+          esac
+          [ "$nnp" = "1" ] || { echo "::error::$name has no no-new-privileges"; rc=1; }
+        done
+        [ "$rc" -eq 0 ] || exit 1
+        echo "every running container: non-root, no capabilities, no-new-privileges"
+
     # Named separately from the boot step so a heartbeat eviction reads as
     # itself rather than as a mystery. The mesh manager is single-threaded
     # against a 20 s wall clock; at one guest this should never fire, and if

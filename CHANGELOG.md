@@ -85,6 +85,27 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **`qemu-tool inspect` reports each GPU's PCIe BARs**, indented under its row:
+
+  ```
+  GPU:       gfx1250 (emulated, rocjitsu-1.sock)
+               BAR0 256 MiB (64-bit prefetchable)
+  GPU:       gfx908 (passthrough, 63:00.0)
+               BAR0 32 GiB (64-bit prefetchable)
+  ```
+
+  BAR0 is the VRAM aperture, which is the figure that decides whether a device
+  can be the target of a peer-to-peer DMA. Two sources, because there is no
+  single one: a passthrough GPU's BARs are read from the host's own sysfs and
+  need no agent, while an emulated one's come from the guest — reached through
+  the KFD node's `location_id`, since the agent has no readdir and rocjitsu's
+  config lives inside a container `inspect` cannot reach.
+
+  The three silent ways to misparse a sysfs `resource` file are each pinned by
+  a test against a verbatim MI100 fixture: inclusive bounds (size is
+  `end - start + 1`), 64-bit BARs occupying two slots with the upper reading as
+  zeros, and only the first six lines being BARs at all.
+
 - **`qemu-tool check-system`**, one command that asks every host question the
   stacks depend on and prints a line per answer: tools on PATH, the Docker
   daemon and your access to it, KVM (the ioctl, not just the node),

@@ -258,6 +258,71 @@ only runs `qemu-tool compose` against an image it already has needs none of
 them and failing it would be wrong. Two lists because there are two
 requirements; there is a test pinning that too, so nobody "fixes" it.
 
+## GPU BARs, and rocjitsu's VRAM aperture
+
+`qemu-tool inspect` reports each GPU's PCIe BARs under its row:
+
+```
+GPU:       gfx1250 (emulated, rocjitsu-1.sock)
+             BAR0 256 MiB (64-bit prefetchable)
+             BAR2 2 MiB (64-bit prefetchable)
+GPU:       gfx908 (passthrough, 63:00.0)
+             BAR0 32 GiB (64-bit prefetchable)
+             BAR2 2 MiB (64-bit prefetchable)
+             BAR5 512 KiB (32-bit)
+```
+
+Two sources, because there is no single one. A **passthrough** GPU's BARs come
+off the host's own sysfs and need no agent. An **emulated** one's come from the
+guest, reached through the KFD node's `location_id` — KFD packs the PCI address
+as `(bus << 8) | (device << 3) | function` with `domain` separate, verified
+against real hardware (`location_id 25344` = `0x6300` = `0000:63:00.0`, and
+that device is there). Deriving it is necessary because the guest agent has no
+readdir, so `/sys/bus/pci/devices` cannot be walked. rocjitsu's own config is
+not an option: it lives inside the server's container, where `inspect` cannot
+reach it.
+
+Three things about a sysfs `resource` file are easy to get wrong and all three
+are silent — `tests/test_inspect_devices.py::Bars` pins each, against a
+verbatim MI100 fixture. Bounds are **inclusive**, so size is `end - start + 1`;
+off by one reports every BAR one byte under a power of two, which looks
+precise. A 64-bit BAR occupies **two** slots with the upper reading as zeros,
+so anything inferring the index from position misnumbers every BAR after the
+first 64-bit one. And only the **first six** lines are BARs; the rest are the
+expansion ROM and bridge windows.
+
+**Enabling the large BAR on rocjitsu, for P2P DMA.** It is a config-file field,
+not a CLI flag — `rocjitsu --help` has no knob for it. From the shipped schema
+(`/usr/local/share/rocjitsu/schemas/simulation_config.fbs`):
+
+```
+vram_aperture_bytes: uint64 = 0; // 0 = an implementation-chosen window, <= 256 MiB.
+doorbell_aperture_bytes: uint64 = 2097152;
+register_aperture_bytes: uint64 = 524288;
+```
+
+`gfx1250_mi455x.json` ships `vram_aperture_bytes: 268435456` — 256 MiB, already
+the small-BAR ceiling. That 2 MiB doorbell BAR is the "2 MiB second BAR not
+mapped at all" of `.artifacts/vfio-user-p2p-dma.md`. Set the field to the
+largest power of two **≤ `local_mem_size`**; for that config
+(`local_mem_size: 463856467968`, ~432 GiB) it is **256 GiB = 274877906944**.
+
+Measured against the real binary rather than inferred, by serving each value
+on a vfio-user socket:
+
+| `vram_aperture_bytes` | rocjitsu |
+|---|---|
+| 128 GiB | clean, serves |
+| 256 GiB | clean, serves |
+| 512 GiB | `warn: the video memory aperture is larger than the memory itself` |
+| 300 GiB | `warn: the video memory aperture is ... not a power of two` |
+
+Both are warnings, not refusals — it still serves — so a wrong value here is
+the quiet kind. Two things have to travel with a large BAR: `VM_PCI_HOLE64_SIZE`
+must cover it (`512G` is the phys-bits ceiling, see the MI355X README), and
+vfio-user P2P DMA needs the fork QEMU image (issue 19) — `qemu/env/overlay-mi100`
+pins it, the golden `env/scale-out` does not.
+
 ## Container privilege
 
 **Nothing in any stack runs as root by default, and nothing holds a

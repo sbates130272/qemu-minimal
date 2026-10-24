@@ -970,6 +970,35 @@ rather than guessing: a device whose origin cannot be decided reads
 .IR unknown ,
 not
 .IR emulated .
+.PP
+Each GPU row carries its PCIe BARs, indented beneath it:
+.PP
+.RS 4
+.EX
+GPU:       gfx1250 (emulated, rocjitsu\-1.sock)
+             BAR0 256 MiB (64\-bit prefetchable)
+             BAR2 2 MiB (64\-bit prefetchable)
+GPU:       gfx908 (passthrough, 63:00.0)
+             BAR0 32 GiB (64\-bit prefetchable)
+             BAR2 2 MiB (64\-bit prefetchable)
+             BAR5 512 KiB (32\-bit)
+.EE
+.RE
+.PP
+BAR0 is the VRAM aperture and is the one to look at for peer\-to\-peer DMA: a
+device whose BAR0 does not cover the memory a peer must reach cannot be the
+target of one. The 256 MiB above is an emulated
+.BR rocjitsu (1)
+GPU at its default
+.IR vram_aperture_bytes ,
+against a real MI100 with a 32 GiB large BAR. BAR2 and BAR5 are the doorbell
+and register apertures and are the same size on both, emulated or not.
+.PP
+A passed\-through GPU's BARs are read from the host's own sysfs, so they are
+reported whether or not the guest agent answers. An emulated one's come from
+the guest, which is the only place they exist \(em so they are absent until
+the guest has booted and enumerated the bus, and an absent list is never a
+claim that the device has no BARs.
 .TP
 .I VM
 Inspect a single VM, named positionally. Equivalent to
