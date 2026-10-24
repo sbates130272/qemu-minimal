@@ -101,96 +101,11 @@ jobs:
         test -c /dev/kvm
         python3 -I -c "import fcntl, os; assert fcntl.ioctl(os.open('/dev/kvm', os.O_RDWR), 0xAE00, 0) >= 0; print('KVM usable')"
 
-    # Make a non-root user, and run everything below as it.
-    #
-    # The job container is root, like every job container, and that was
-    # hiding the configuration this whole branch is about. With the caller
-    # root, CONTAINER_USER resolved to 0:0 and the lane proved
-    # root-with-no-capabilities -- worth proving, but not the thing an
-    # operator runs. The uid path has its own failure: rocjitsu does not
-    # chmod its vfio-user socket, so it stays 0755 owned by its creator and
-    # connect(2) needs write on the inode. A qemu on a different uid cannot
-    # attach the GPU AT ALL, and root never meets that because it ignores the
-    # mode.
-    #
-    # It has to be the WHOLE quick-start, not just the compose call:
-    # `make_overlays` and `compose up` happen inside one invocation, so an
-    # overlay created by root is one the non-root qemu container cannot write
-    # -- which run-vm now refuses by name, correctly, and which would fail
-    # this lane for the right reason but the wrong test.
-    #
-    # The docker group is the socket's own gid, read off the socket rather
-    # than assumed: it is the host's gid passed through the bind mount and
-    # has no reason to match any group in this image.
-    - name: Create the non-root user this lane runs as
-      run: |
-        set -eu
-        UID_WANT=1000
-        # Reuse the uid rather than insisting on a new name: this image
-        # already has uid 1000 as `ubuntu`, so a bare `useradd -u 1000` fails
-        # and every later `usermod ciuser` fails with it. Create one only
-        # when the uid is genuinely free.
-        if CI_USER=$(id -nu "$UID_WANT" 2>/dev/null); then
-          echo "uid $UID_WANT already exists as $CI_USER"
-        else
-          CI_USER=ciuser
-          useradd -m -u "$UID_WANT" "$CI_USER"
-        fi
-        CI_HOME=$(getent passwd "$CI_USER" | cut -d: -f6)
-        [ -d "$CI_HOME" ] || { mkdir -p "$CI_HOME"; chown "$UID_WANT" "$CI_HOME"; }
-
-        # Two host gids have to be joined, and BOTH are read off the device
-        # rather than assumed: they come from the host through a bind mount
-        # or --device and have no reason to match any group in this image,
-        # so each may have to be created before it can be joined.
-        #
-        # /dev/kvm is the one that is easy to miss. The containers get it
-        # through `group_add: ${CONTAINER_KVM_GID}`, which is handled -- but
-        # quick-start's own PREFLIGHT opens /dev/kvm in this job, as this
-        # user, to check KVM is usable before anything starts. Without the
-        # group that check fails with "Permission denied -- are you in the
-        # kvm group?", which is the right message about the wrong process.
-        join_gid() {
-          gid=$1; fallback=$2
-          getent group "$gid" >/dev/null || groupadd -g "$gid" "$fallback"
-          usermod -aG "$(getent group "$gid" | cut -d: -f1)" "$CI_USER"
-        }
-        join_gid "$(stat -c %g /var/run/docker.sock)" dockersock
-        join_gid "$(stat -c %g /dev/kvm)" kvmdev
-
-        # Everything quick-start writes. /var/lib/qemu-tool is bind-mounted
-        # from the host and root-owned there -- the same chown the settings
-        # file tells a human to do on a host that ever ran as root.
-        mkdir -p /var/lib/qemu-tool/images /var/lib/qemu-tool/stacks
-        chown -R "$UID_WANT:$UID_WANT" /var/lib/qemu-tool
-
-        echo "CIUSER_UID=$UID_WANT" >> "$GITHUB_ENV"
-        echo "CIUSER_HOME=$CI_HOME" >> "$GITHUB_ENV"
-        echo "CONTAINER_KVM_GID=$(stat -c %g /dev/kvm)" >> "$GITHUB_ENV"
-        echo "this job is uid $(id -u); quick-start will run as $CI_USER ($UID_WANT)"
-        echo "groups: $(id -nG "$CI_USER")"
-
-        # Assert the access rather than discovering it two minutes later in
-        # quick-start's preflight. Both of these failed on the first run of
-        # this lane -- /dev/kvm because only the containers' group_add had
-        # been thought about, not the job's own preflight, which opens the
-        # device in THIS process as THIS user.
-        #
-        # A readable/writable test, not the KVM_GET_API_VERSION ioctl:
-        # quick-start's preflight does the ioctl a moment later and would
-        # report it better, and nesting a python -c inside sh -c inside a
-        # YAML block scalar is three levels of quoting for no extra signal.
-        setpriv --reuid "$UID_WANT" --regid "$UID_WANT" --init-groups \
-          test -r /dev/kvm -a -w /dev/kvm \
-          || { echo "::error::uid $UID_WANT cannot open /dev/kvm (gid $(stat -c %g /dev/kvm))"; exit 1; }
-        echo "  /dev/kvm is read-write for $CI_USER"
-        # HOME, or docker reads root's config and warns about a permission
-        # denied that is neither this user's problem nor a failure -- noise
-        # that reads like the error it is not.
-        setpriv --reuid "$UID_WANT" --regid "$UID_WANT" --init-groups \
-          env HOME="$CI_HOME" \
-          docker version --format "  docker reachable: {{.Server.Version}}"
-
+    # Run everything below as a non-root user. See the action for why the
+    # job container being root was hiding the configuration this branch is
+    # about, and for the /dev/kvm group that is easy to miss.
+    - name: Run as a non-root user
+      uses: ./.github/actions/nonroot-user
 
     - name: Install qemu-tool
       run: |
@@ -258,7 +173,7 @@ jobs:
     - name: Boot one guest, as a non-root user
       run: |
         set -eu
-        setpriv --reuid 1000 --regid 1000 --init-groups \
+        setpriv --reuid "$CIUSER_UID" --regid "$CIUSER_UID" --init-groups \
           env HOME="$CIUSER_HOME" \
           qemu-tool quick-start up \
             --env-file qemu/env/quickstart \
@@ -483,7 +398,7 @@ jobs:
         # As ciuser, so this exercises the OWNERSHIP filter: the stack's
         # containers run as 1000 and the caller is 1000. Run as root it
         # would match everything regardless, which proves less.
-        out="$(setpriv --reuid 1000 --regid 1000 --init-groups \
+        out="$(setpriv --reuid "$CIUSER_UID" --regid "$CIUSER_UID" --init-groups \
                  env HOME="$CIUSER_HOME" qemu-tool down-all --dry-run 2>&1)"
         echo "$out"
         echo "$out" | grep -q "pr-boot" || {
@@ -501,7 +416,7 @@ jobs:
     - name: Take it down
       if: always()
       run: |
-        setpriv --reuid 1000 --regid 1000 --init-groups \
+        setpriv --reuid "$CIUSER_UID" --regid "$CIUSER_UID" --init-groups \
           env HOME="$CIUSER_HOME" qemu-tool down-all --yes || true
         qemu-tool quick-start down \
           --env-file qemu/env/quickstart \
