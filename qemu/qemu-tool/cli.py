@@ -49,6 +49,11 @@ _INSTALLED_COMPOSE_ROOT = Path("/usr/share/qemu-tool/compose")
 
 def main(argv: list[str] | None = None) -> None:
     parser = _build_parser()
+    try:
+        import argcomplete
+        argcomplete.autocomplete(parser)
+    except ImportError:
+        pass
     args = parser.parse_args(_split_compose_argv(argv))
     if not hasattr(args, "func"):
         parser.print_help()

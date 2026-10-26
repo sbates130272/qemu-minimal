@@ -9,7 +9,9 @@ description = "CLI tool for running and generating QEMU VMs"
 requires-python = ">=3.10"
 license = "MIT"
 authors = [{name = "Stephen Bates"}]
-dependencies = []
+dependencies = [
+    "argcomplete>=3",
+]
 keywords = ["qemu", "kvm", "vm", "vfio", "cloud-init", "libvirt", "rocm"]
 classifiers = [
     "Development Status :: 4 - Beta",
