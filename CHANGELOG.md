@@ -102,9 +102,10 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- **`qemu-tool down-all`**, which finds every running qemu-tool stack on this
-  host and tears it down, asking first. `sudo qemu-tool down-all` takes every
-  stack on the system regardless of owner.
+- **`qemu-tool down`**, which gracefully shuts down guests via the QEMU guest
+  agent and, optionally, tears down the containing stack or all owned stacks.
+  `sudo qemu-tool down --all` takes every stack on the system regardless of
+  owner.
 
   Both of its questions are answered from what compose records on each
   container rather than guessed. A stack is identified by its compose file —
@@ -156,7 +157,7 @@ All notable changes to this project will be documented in this file.
   `end - start + 1`), 64-bit BARs occupying two slots with the upper reading as
   zeros, and only the first six lines being BARs at all.
 
-- **`qemu-tool check-system`**, one command that asks every host question the
+- **`qemu-tool check`**, one command that asks every host question the
   stacks depend on and prints a line per answer: tools on PATH, the Docker
   daemon and your access to it, KVM (the ioctl, not just the node),
   `/dev/net/tun`, the uid the containers will run as, which settings file is

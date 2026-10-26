@@ -27,7 +27,7 @@ from .libvirt_xml import LibvirtXml
 from .inspect import run as inspect_run
 from .inspect import ssh_run as inspect_ssh_run
 from .check_system import run as check_system_run
-from .down_all import run as down_all_run
+from .down_all import discover as _discover_stacks, run as down_all_run, teardown_one
 from .quick_start import VERBS as _QUICK_START_VERBS, run as quick_start_run
 from .shutdown import run as shutdown_run
 from .list_vms import run as list_vms_run
@@ -129,8 +129,8 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers()
 
     _add_quick_start(sub)
-    _add_check_system(sub)
-    _add_down_all(sub)
+    _add_check(sub)
+    _add_down(sub)
     _add_run_vm(sub, shared)
     _add_gen_vm(sub, shared)
     _add_gen_compose(sub)
@@ -140,7 +140,6 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_list(sub)
     _add_inspect(sub)
     _add_ssh(sub)
-    _add_shutdown(sub)
     _add_man(sub)
 
     return parser
@@ -632,38 +631,9 @@ def _add_ssh(sub: argparse._SubParsersAction) -> None:
     p.set_defaults(func=_ssh_cmd)
 
 
-def _add_shutdown(sub: argparse._SubParsersAction) -> None:
+def _add_check(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
-        "shutdown",
-        help="Cleanly power off running VMs before stopping their containers.",
-        description=(
-            "Ask each running guest to power off through the QEMU guest "
-            "agent, then wait for it to go. run-vm execs QEMU, so PID 1 in a "
-            "qemu container IS qemu-system-x86_64 -- and QEMU exits on "
-            "SIGTERM rather than ACPI-shutting-down the guest. `docker "
-            "compose down` is therefore a power cut, which leaves guest "
-            "filesystems needing journal replay and has been observed to "
-            "abort one outright. Run this first."
-        ),
-    )
-    p.add_argument(
-        "vm", nargs="?", default=None, metavar="VM",
-        help="One VM to shut down. Default: every running VM.",
-    )
-    p.add_argument(
-        "--timeout", type=int, default=120, metavar="SECONDS",
-        help="How long to wait for guests to power off. Default: 120.",
-    )
-    p.add_argument(
-        "--dry-run", action="store_true",
-        help="List what would be shut down and exit.",
-    )
-    p.set_defaults(func=_shutdown_cmd)
-
-
-def _add_check_system(sub: argparse._SubParsersAction) -> None:
-    p = sub.add_parser(
-        "check-system",
+        "check",
         help="Read-only preflight: check this host has everything the stacks need.",
         description=(
             "Ask every host question the stacks depend on, before anything "
@@ -683,40 +653,52 @@ def _add_check_system(sub: argparse._SubParsersAction) -> None:
             "file that found is itself part of the report."
         ),
     )
-    p.set_defaults(func=_check_system_cmd)
+    p.set_defaults(func=_check_cmd)
 
 
-def _add_down_all(sub: argparse._SubParsersAction) -> None:
+def _add_down(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
-        "down-all",
-        help="Tear down every running qemu-tool stack you own.",
+        "down",
+        help="Gracefully shut down guests and/or tear down stacks.",
         description=(
-            "Find every running qemu-tool stack on this host and tear it "
-            "down. A stack is identified by its compose file -- the "
-            "gen-compose provenance header, or one of the directories this "
-            "tool ships -- never by service name, because this removes "
-            "containers. A stack is YOURS if any of its containers runs as "
-            "your uid, which is what CONTAINER_USER put there. Run under "
-            "sudo to take every stack on the system regardless of owner. "
-            "Always asks before removing anything."
+            "Without a target, cleanly powers off every running guest through "
+            "the QEMU guest agent and waits for them to go. With a VM name, "
+            "powers off that one guest. With a stack name, powers off that "
+            "stack's guests then tears the stack down with `docker compose "
+            "down`. With --all, powers off every guest then tears down every "
+            "qemu-tool stack you own.\n\n"
+            "A stack is identified by its compose project name (the STACK "
+            "column in `qemu-tool list`). run-vm execs QEMU, so `docker "
+            "compose down` is a power cut -- the guest agent path here is "
+            "what keeps guest filesystems clean."
         ),
     )
     p.add_argument(
-        "--dry-run", action="store_true",
-        help="List what would be torn down, and the exact commands, without "
-             "stopping anything.",
+        "target", nargs="?", default=None, metavar="TARGET",
+        help="A VM name to shut down, or a stack name to shut down and tear "
+             "down. Default: every running VM.",
     )
     p.add_argument(
-        "--yes", action="store_true",
-        help="Skip the confirmation. For scripts; the prompt never defaults "
-             "to yes.",
+        "--all", action="store_true",
+        help="Power off all guests then tear down every owned stack.",
     )
     p.add_argument(
         "--all-users", action="store_true",
-        help="Include stacks owned by other users. Needs root, since their "
-             "containers cannot be stopped without it.",
+        help="With --all: include stacks owned by other users. Needs root.",
     )
-    p.set_defaults(func=_down_all_cmd)
+    p.add_argument(
+        "--yes", action="store_true",
+        help="Skip the teardown confirmation prompt.",
+    )
+    p.add_argument(
+        "--timeout", type=int, default=120, metavar="SECONDS",
+        help="How long to wait for guests to power off. Default: 120.",
+    )
+    p.add_argument(
+        "--dry-run", action="store_true",
+        help="Show what would happen without doing it.",
+    )
+    p.set_defaults(func=_down_cmd)
 
 
 def _add_man(sub: argparse._SubParsersAction) -> None:
@@ -814,13 +796,37 @@ def _run_vm_cmd(args: argparse.Namespace) -> None:
     run_vm_run(cfg, caps)
 
 
-def _down_all_cmd(args: argparse.Namespace) -> None:
-    down_all_run(assume_yes=args.yes, dry_run=args.dry_run,
-                 all_users=args.all_users)
-
-
-def _check_system_cmd(args: argparse.Namespace) -> None:
+def _check_cmd(args: argparse.Namespace) -> None:
     check_system_run(args.env_file)
+
+
+def _down_cmd(args: argparse.Namespace) -> None:
+    target = args.target
+    if args.all:
+        # Shut down all guests, then tear down all owned stacks.
+        shutdown_run(None, timeout=args.timeout, dry_run=args.dry_run)
+        if not args.dry_run:
+            down_all_run(assume_yes=args.yes, dry_run=False,
+                         all_users=args.all_users)
+        else:
+            down_all_run(assume_yes=args.yes, dry_run=True,
+                         all_users=args.all_users)
+        return
+    # Resolve target: is it a stack name or a VM name?
+    if target is not None:
+        stacks = _discover_stacks()
+        stack_names = {s.project for s in stacks}
+        if target in stack_names:
+            # Gracefully shut down this stack's guests, then tear it down.
+            shutdown_run(None, timeout=args.timeout, dry_run=args.dry_run,
+                         stack_filter=target)
+            if not args.dry_run:
+                teardown_one(target, dry_run=False, assume_yes=args.yes)
+            else:
+                teardown_one(target, dry_run=True, assume_yes=args.yes)
+            return
+    # VM name (or None for all VMs): graceful shutdown only.
+    shutdown_run(target, timeout=args.timeout, dry_run=args.dry_run)
 
 
 def _quick_start_cmd(args: argparse.Namespace) -> None:

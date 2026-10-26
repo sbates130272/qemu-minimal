@@ -4,7 +4,7 @@ qemu\-tool \- run, generate and list QEMU virtual machines
 .SH SYNOPSIS
 .B qemu\-tool
 .RB [ \-\-version ]
-.I {quick\-start,check\-system,down\-all,run\-vm,gen\-vm,gen\-compose,compose,ernic\-stats,lmcache\-stats,list,inspect,ssh,shutdown,man}
+.I {quick\-start,check,down,run\-vm,gen\-vm,gen\-compose,compose,ernic\-stats,lmcache\-stats,list,inspect,ssh,man}
 .RI [ options ]
 .SH DESCRIPTION
 .B qemu\-tool
@@ -19,7 +19,7 @@ one the daily
 .I report\-for\-quickstart
 lane runs.
 .TP
-.B check\-system
+.B check
 Ask every host question the stacks depend on and report the answers: the
 tools on
 .IR PATH ,
@@ -33,15 +33,18 @@ it. The same checks
 .B quick\-start
 runs in its preflight, so the two cannot drift.
 .TP
-.B down\-all
-Find every running qemu-tool stack on this host and tear it down. Identified
-by the compose file \(em the
-.B gen\-compose
-provenance header, or one of the stack directories this tool ships \(em and
-never by service name, because this removes containers. Yours if any of its
-containers runs as your uid. Under
-.BR sudo (8)
-it takes every stack on the system. Always asks first.
+.B down
+Gracefully shut down guests and, optionally, tear down the containing stack.
+With no arguments, asks every running guest to power off through the QEMU
+guest agent and waits for it to go. With a VM name, shuts down that guest.
+With a stack name (the
+.B STACK
+column in
+.BR list ),
+shuts down that stack's guests then tears the stack down.
+With
+.BR \-\-all ,
+shuts down every guest then tears down every stack you own.
 .TP
 .B run\-vm
 Launch an existing VM image created by
@@ -1058,7 +1061,7 @@ is returned only against positive evidence that a complete look happened \(em
 an expired budget, a failed read or a filter that excluded an account all read
 .I unknown
 instead.
-.SH CHECK-SYSTEM OPTIONS
+.SH CHECK OPTIONS
 Checks this host and prints a report grouped by area. Every line is marked
 .BR ok ", " warn ", " FAIL " or " skip .
 A
@@ -1089,43 +1092,63 @@ part of the report \(em a stale
 .I qemu/.env
 in a checkout outranks the system one, and a fleet then runs with
 half-remembered values.
-.SH DOWN-ALL OPTIONS
-Tears down every running qemu-tool stack you own, asking first.
+.SH DOWN OPTIONS
+Gracefully shuts down guests through the QEMU guest agent, then optionally
+tears down the containing stack or all owned stacks.
 .PP
-Two questions are answered from what
-.BR docker\-compose (1)
-records on each container, so neither is a guess. Whether it is a qemu-tool
-stack comes from
-.IR com.docker.compose.project.config_files ,
-which names the compose file: a generated stack carries the
+This exists because stopping the container does not stop the guest.
+.B run\-vm
+execs QEMU, so PID 1 in a qemu container
+.I is
+.BR qemu\-system\-x86_64 ,
+and QEMU exits on
+.B SIGTERM
+rather than ACPI\-shutting\-down the guest. A
+.B docker compose down
+is therefore a power cut: guest filesystems are left needing journal replay.
+Running
+.B down
+first requests a clean power-off over the guest agent, then tears down the
+stack.
+.PP
+Stack identity and ownership follow the same rules as
+.B down \-\-all :
+identified by the compose file (the
 .B gen\-compose
-provenance header, a committed one sits in a directory this tool ships.
-Matching on service names instead would tear down an unrelated project that
-happened to have a service called
-.IR qemu\-1 .
-Whether it is yours comes from the uid its containers actually run as.
-.PP
-A stack started before the containers ran as the caller has every container
-as root, so to a non-root caller it is root's and is skipped \(em correctly,
-since those containers cannot be stopped without root. Skipped stacks are
-listed with the reason rather than passed over in silence.
-.PP
-The teardown pins the project with an explicit
-.B \-p
-and enables every profile, so a profile-gated service cannot be left behind
-and a teardown cannot resolve to the wrong project.
+provenance header, or a shipped stack directory), never by service name.
+Yours if any container in it runs as your uid.
 .TP
-.B \-\-dry\-run
-List what would be torn down, and the exact commands, without stopping
-anything.
+.I TARGET
+A VM name to shut down, or a stack name (the
+.B STACK
+column in
+.BR list )
+to shut down and then tear down. Default: every running VM.
 .TP
-.B \-\-yes
-Skip the confirmation, for scripts. The prompt never defaults to yes and a
-bare Enter always declines, so this is the only way to proceed unattended.
+.B \-\-all
+Power off every running guest, then tear down every owned stack. Under
+.BR sudo (8),
+combine with
+.B \-\-all\-users
+to take every stack on the system.
 .TP
 .B \-\-all\-users
-Include stacks owned by other users. Needs root, and is refused without it
-rather than silently doing less than it says.
+With
+.BR \-\-all :
+include stacks owned by other users. Needs root.
+.TP
+.B \-\-yes
+Skip the teardown confirmation prompt. The prompt never defaults to yes and a
+bare Enter always declines, so this is the only way to proceed unattended.
+.TP
+.BI \-\-timeout " SECONDS"
+How long to wait for guests to power off. Default: 120. Exceeding it warns and
+names the guests still running rather than failing \(em the caller's next step
+is to stop the containers regardless, and knowing which were not clean is more
+use than a refusal.
+.TP
+.B \-\-dry\-run
+Show what would happen without doing it.
 .SH MAN OPTIONS
 Opens this page with
 .BR man (1).
@@ -1199,43 +1222,6 @@ To run a remote command, separate it with
 .EX
 qemu\-tool ssh stebates\-fleet\-1 \-\- ibv_devinfo \-l
 .EE
-.SH SHUTDOWN OPTIONS
-Asks each running guest to power off through the QEMU guest agent, then waits
-for it to go.
-.PP
-This exists because stopping the container does not stop the guest.
-.B run\-vm
-execs QEMU, so PID 1 in a qemu container
-.I is
-.BR qemu\-system\-x86_64 ,
-and QEMU exits on
-.B SIGTERM
-rather than ACPI\-shutting\-down the guest. A
-.B docker compose down
-is therefore a power cut: guest filesystems are left needing journal replay,
-and on a 32\-guest fleet one came back with an aborted journal and a root
-remounted read\-only. Raising
-.B stop_grace_period
-alone does not help, because nothing has asked the guest to stop \(em it only
-makes Docker wait longer before the kill. Run this first, then
-.BR down .
-.PP
-The guest agent is used rather than QMP because every guest already has one:
-.B run\-vm
-wires a virtserialport unconditionally, while QMP is opt\-in and off by
-default.
-.TP
-.I VM
-One VM to shut down. Default: every running VM.
-.TP
-.BI \-\-timeout " SECONDS"
-How long to wait for guests to power off. Default: 120. Exceeding it warns and
-names the guests still running rather than failing \(em the caller's next step
-is to stop the containers regardless, and knowing which were not clean is more
-use than a refusal.
-.TP
-.B \-\-dry\-run
-List what would be shut down and exit.
 .SH VM IDENTIFICATION
 .B qemu\-tool
 stamps every VM it launches with two generic QEMU options:

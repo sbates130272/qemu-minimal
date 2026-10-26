@@ -160,11 +160,11 @@ You need KVM, Docker with compose, Ansible, [`oras`](https://oras.land/) ≥ 1.3
 ```bash
 uv tool install -e ./qemu                                  # or pipx, or the .deb -- see below
 ansible-galaxy collection install -r ansible/requirements.yml  # needs git
-qemu-tool check-system                                     # optional; see below
+qemu-tool check                                            # optional; see below
 qemu-tool quick-start
 ```
 
-`qemu-tool check-system` asks every one of those questions and a few more —
+`qemu-tool check` asks every one of those questions and a few more —
 the Docker daemon and your access to it, the uid the containers will run as,
 which settings file is in force, whether the images directory has room — and
 prints a line per answer. It writes nothing and needs no `sudo`, so it is
@@ -705,7 +705,7 @@ created with `--backing-file` inherit them. Ansible is skipped when
 <file.xml>` to load a libvirt domain XML as base configuration (CLI
 flags take precedence over XML values).
 
-### check-system flags
+### check flags
 
 Checks the host and prints a report grouped by area — tools, Docker,
 virtualisation, container identity, settings, capacity, images. Every line is
@@ -723,24 +723,24 @@ my fleet run as" used to have a surprising answer — every stack ran as root
 until `CONTAINER_USER` became unconditional — so stating it is the point. See
 [Settings file](#settings-file).
 
-### down-all flags
+### down flags
 
-Finds every running qemu-tool stack on this host and tears it down, asking
-first. `sudo qemu-tool down-all` takes every stack on the system regardless of
-owner.
+Gracefully shuts down guests through the QEMU guest agent, then optionally
+tears down the containing stack. `run-vm` execs QEMU, so `docker compose down`
+is a power cut — `qemu-tool down` is what keeps guest filesystems clean.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--dry-run` | off | List what would be torn down, and the exact commands, without stopping anything |
-| `--yes` | off | Skip the confirmation. The prompt never defaults to yes, so this is the only way to proceed unattended |
-| `--all-users` | off | Include other users' stacks. Needs root, and is refused without it |
+| `--all` | off | Power off all guests then tear down every owned stack. `sudo qemu-tool down --all` takes every stack on the system |
+| `--dry-run` | off | Show what would happen without doing it |
+| `--yes` | off | Skip the teardown confirmation. The prompt never defaults to yes, so this is the only way to proceed unattended |
+| `--all-users` | off | With `--all`: include other users' stacks. Needs root |
+| `--timeout SECONDS` | 120 | How long to wait for guests to power off |
 
-Both of its questions come from what compose records on each container, so
-neither is a guess. **Is it a qemu-tool stack?** — the compose file carries the
-`gen-compose` provenance header, or sits in one of the stack directories this
-tool ships. Matching on service names instead would tear down an unrelated
-project that happened to have a service called `qemu-1`. **Is it yours?** — the
-uid its containers actually run as.
+Stack identity and ownership come from what compose records on each container,
+so neither is a guess. **Is it a qemu-tool stack?** — the compose file carries
+the `gen-compose` provenance header, or sits in one of the stack directories
+this tool ships. **Is it yours?** — the uid its containers actually run as.
 
 A stack started before the containers ran as the caller has every container as
 root, so a non-root run sees it as root's and skips it; those are listed with

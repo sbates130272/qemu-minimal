@@ -229,7 +229,7 @@ container's `anon` is **not** fleet memory — it was 2.0 GiB across all 32,
 "what can the host not reclaim cheaply", not "how much RAM do the guests
 hold". `qemu-tool list --summary` reports the shmem figure and labels it.
 
-## `qemu-tool check-system`
+## `qemu-tool check`
 
 One command that asks every host question the stacks depend on and prints a
 line per answer: tools on PATH, the Docker daemon and your access to it, KVM
@@ -244,7 +244,7 @@ whatever runs it, and then catch nothing.
 
 **It is the same code `quick-start` runs in its preflight, not a copy.**
 `quick_start` imports `kvm_usable`, `docker_compose_ok` and `free_gb` from
-`check_system`, and `tests/test_check_system.py` asserts *identity* (`assertIs`)
+`check_system`, and `tests/test_check_system.py` asserts *identity* (`assertIs`)  
 rather than equality, so a second copy that happens to agree today still fails
 the test. This repo has been bitten by a documented path and its CI equivalent
 drifting apart — it is why `report-for-quickstart` runs `qemu-tool quick-start`
@@ -325,9 +325,13 @@ pins it, the golden `env/scale-out` does not.
 
 ## Tearing a stack down
 
-**`qemu-tool down-all`** finds every running qemu-tool stack on this host and
-tears it down, asking first. `--dry-run` lists what it would do and the exact
-commands; `--yes` skips the prompt, which never defaults to yes.
+**`qemu-tool down`** gracefully shuts down guests via the QEMU guest agent and,
+optionally, tears down the containing stack. With no argument it powers off
+every running guest. With a VM name it powers off that guest. With a stack
+name (the `STACK` column in `qemu-tool list`) it powers off that stack's guests
+then tears it down. With `--all` it powers off everything and tears down every
+owned stack. `--dry-run` lists what it would do and the exact commands; `--yes`
+skips the teardown confirmation prompt, which never defaults to yes.
 
 Both of its questions are answered from what compose records on each
 container, so neither is a guess:
@@ -348,7 +352,7 @@ tapsetup/dockerapi stay root. The limitation worth knowing: a stack started
 **before** the containers ran as the caller has every container as root, so a
 non-root caller sees it as root's and skips it. That is correct — you cannot
 stop them without root — and skipped stacks are listed with the reason rather
-than passed over. `sudo qemu-tool down-all` takes everything, which is what
+than passed over. `sudo qemu-tool down --all` takes everything, which is what
 makes it the system-wide form.
 
 The teardown pins the project with an explicit `-p` and rebuilds the
@@ -485,7 +489,7 @@ read-write, so the guest does not boot **at all** rather than merely owning the
 wrong file. Delete them; they are scratch.
 
 Three layers report this now, at the three moments it can be noticed.
-`qemu-tool check-system` flags a `VM_IMAGES_DIR` that is unwritable or holds
+`qemu-tool check` flags a `VM_IMAGES_DIR` that is unwritable or holds
 files owned by someone else, before anything starts. `qemu-tool compose up`
 warns and names them. And `run-vm` **refuses**, because by then it is the
 last chance: it checks the images directory and every drive QEMU will open
