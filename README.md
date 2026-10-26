@@ -154,7 +154,7 @@ built — the guest comes from a published qcow2 that already carries the
 mainline kernel, the ionic driver, rdma-core, perftest and ROCm 10.1, and the
 device servers come from tagged CI images.
 
-You need KVM, Docker with compose, Ansible, [`oras`](https://oras.land/),
+You need KVM, Docker with compose, Ansible, [`oras`](https://oras.land/) ≥ 1.3.4,
 8 cores, 16 GB of RAM and about 30 GB of disk. Then:
 
 ```bash

@@ -374,7 +374,7 @@ def _write_layer(state: _State, name: str, body: dict[str, str], why: str) -> No
 _TOOL_HINTS = {
     "docker": "install Docker Engine with the compose plugin "
               "(https://docs.docker.com/engine/install/)",
-    "oras": "install oras (https://oras.land/docs/installation) -- it is what "
+    "oras": "install oras ≥ 1.3.4 (https://oras.land/docs/installation) -- it is what "
             "pulls the published guest image",
     "ansible-playbook": "apt install ansible, then (from the repo checkout) "
                         "`ansible-galaxy collection install -r ansible/requirements.yml` "
@@ -681,10 +681,10 @@ def fetch_key(state: _State) -> None:
                                 capture_output=True, text=True)
     if discovered.returncode != 0:
         _die(f"oras discover failed on {backing}:\n{discovered.stderr.strip()}")
-    # Selected by artifactType rather than by position: oras 1.3.4 calls the
-    # list "referrers", and [0] is a guess waiting to break the day a
-    # signature or an SBOM referrer is attached ahead of this one.
-    referrers = json.loads(discovered.stdout).get("referrers", [])
+    # Selected by artifactType rather than by position. oras ≥ 1.3.4 calls the
+    # list "referrers"; earlier versions use "manifests". Accept both.
+    parsed = json.loads(discovered.stdout)
+    referrers = parsed.get("referrers") or parsed.get("manifests", [])
     hits = [r["reference"] for r in referrers
             if r.get("artifactType") == _VM_INFO_TYPE]
     if not hits:
@@ -864,7 +864,7 @@ def wait_for_guests(state: _State) -> None:
     _say("Waiting for the guests")
     for index in range(1, state.vm_count + 1):
         host, port = state.guest_host(index), state.guest_port(index)
-        deadline = time.monotonic() + 600
+        deadline = time.monotonic() + 900
         start = time.monotonic()
         last_dot = start
         print(f"  guest {index} ({host}:{port}) ", end="", flush=True)

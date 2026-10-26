@@ -418,10 +418,12 @@ def _pci_mmio_bridge_args(cfg: VMConfig, caps: QemuCaps) -> list[str]:
 
 def _vfio_user_dev_json(sock: str, bus: str | None) -> str:
     # rombar=0 suppresses the ROM BAR that vfio-user-pci would otherwise
-    # advertise.
+    # advertise. x-msg-timeout raised from the 5000ms default: rocjitsu GPU
+    # init (firmware loading, interrupt ring setup) can exceed 5 s.
     bus_part = f'"bus":"{bus}",' if bus else ""
     return (
         f'{{"driver":"vfio-user-pci",{bus_part}"rombar":0,'
+        f'"x-msg-timeout":60000,'
         f'"socket":{{"path":"{sock}","type":"unix"}}}}'
     )
 

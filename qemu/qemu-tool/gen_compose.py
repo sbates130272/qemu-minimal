@@ -1613,7 +1613,10 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
         for nic in spec["nics"]:
             suffix = _dev_suffix(nic["n"], nic["d"], spec["ernic_per_vm"])
             out.append(f"  tapsetup-{suffix}:")
-            out.append("    build: ./tapsetup")
+            out.append("    build:")
+            out.append("      context: ./tapsetup")
+            out.append("      args:")
+            out.append("        - AMD_CERT")
             out.append(f'    image: "{_TAPSETUP_IMAGE}"')
             # Never try the registry. This image is built here, from the
             # ./tapsetup beside this file, and `qemu-tool/ernic-tapsetup`
