@@ -72,15 +72,15 @@ branch and would otherwise keep reading `pass` indefinitely. The badge above
 shows the last date on which all 6 reports were green at once —
 amber once that date is no longer today.
 
-Last all-green: **2026-10-25** &middot; checked
-2026-10-25 13:12 UTC &middot; currently
-all green.
+Last all-green: **2026-10-23** &middot; checked
+2026-10-26 15:02 UTC &middot; currently
+not all green.
 
 | Report | Generated | Status | Commit | Page |
 | --- | --- | --- | --- | --- |
-| Single VM | 2026-10-25 13:06 UTC | pass | `8ee5531` | [/1vm/](/1vm/) |
+| Single VM | 2026-10-26 15:01 UTC | pass | `8ee5531` | [/1vm/](/1vm/) |
 | rocjitsu | 2026-10-25 13:10 UTC | pass | `8ee5531` | [/rocjitsu/](/rocjitsu/) |
-| ernic VM 1 | 2026-10-24 20:28 UTC | pass | `8ee5531` | [/ernic/](/ernic/) |
-| ernic VM 2 | 2026-10-24 20:28 UTC | pass | `8ee5531` | [/ernic/vm2/](/ernic/vm2/) |
+| ernic VM 1 | 2026-10-25 13:13 UTC | pass | `8ee5531` | [/ernic/](/ernic/) |
+| ernic VM 2 | 2026-10-25 13:13 UTC | pass | `8ee5531` | [/ernic/vm2/](/ernic/vm2/) |
 | hipFile fio | 2026-10-25 13:12 UTC | pass | `8ee5531` | [/hipfile-fio/](/hipfile-fio/) |
 | MI355X node | 2026-10-24 17:02 UTC | pass | ``unknown`` | [/mi355x/](/mi355x/) |
