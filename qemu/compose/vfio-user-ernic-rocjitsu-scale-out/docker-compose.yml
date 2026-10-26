@@ -851,6 +851,7 @@ services:
     devices: []
     group_add: []
     user: "65534:65534"
+    stop_grace_period: 5s
     volumes:
       - ernic-stats:/run/ernic-stats:ro
       - "${QEMU_TOOL_SRC:-/tmp}:/qemu-tool-src:ro"

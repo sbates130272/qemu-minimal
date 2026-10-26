@@ -192,7 +192,7 @@ jobs:
                 "no-new-privileges, no stray Docker socket.")
           PY
 
-      # check-system is a command a human is told to run, so the lane runs
+      # check is a command a human is told to run, so the lane runs
       # the command rather than importing its functions -- the same reason
       # report-for-quickstart runs `qemu-tool quick-start` itself.
       #
@@ -202,32 +202,32 @@ jobs:
       # happens to ship. What is asserted is that it runs, reports every
       # section, and -- the half that actually guards something -- exits 1 on
       # a host fact that really would stop a stack.
-      - name: check-system runs and fails on a real problem
+      - name: check runs and fails on a real problem
         run: |
           set -eu
-          out="$(python3 -m qemu_tool check-system 2>&1 || true)"
+          out="$(python3 -m qemu_tool check 2>&1 || true)"
           echo "$out"
           for section in Tools Docker Virtualisation "Container identity" \
                          Settings Capacity Images; do
             echo "$out" | grep -q "^$section$" || {
-              echo "::error::check-system printed no '$section' section"; exit 1; }
+              echo "::error::check printed no '$section' section"; exit 1; }
           done
 
           # Below 4 vCPU ionic_rdma never probes, and the only symptom is a
           # line in a guest log nobody reads. That is the kind of thing this
           # command exists to catch, so prove it does.
           printf 'VM_COUNT=2\nVM_VCPUS=2\n' > /tmp/env.toosmall
-          if python3 -m qemu_tool check-system --env-file /tmp/env.toosmall \
+          if python3 -m qemu_tool check --env-file /tmp/env.toosmall \
                > /tmp/cs.out 2>&1; then
             cat /tmp/cs.out
-            echo "::error::check-system exited 0 on a sub-floor VM_VCPUS"; exit 1
+            echo "::error::check exited 0 on a sub-floor VM_VCPUS"; exit 1
           fi
           grep -q "VM_VCPUS floor" /tmp/cs.out || {
             cat /tmp/cs.out
-            echo "::error::check-system failed, but not for the stated reason"; exit 1; }
-          echo "check-system reports its sections and fails on a real problem."
+            echo "::error::check failed, but not for the stated reason"; exit 1; }
+          echo "check reports its sections and fails on a real problem."
 
-      # down-all on a host with no stacks. Cheap, and it covers the half
+      # down --all on a host with no stacks. Cheap, and it covers the half
       # pr-quickstart-boot cannot: that lane always has a stack running, so
       # it never exercises the empty case -- where a command that removes
       # containers had better say "nothing to do" and exit 0 rather than
@@ -236,13 +236,13 @@ jobs:
       # --dry-run as well as the empty host, because a runner for an
       # unrelated job could legitimately have containers on it and this step
       # must not be the thing that removes them.
-      - name: down-all finds nothing to do on a bare host
+      - name: down --all finds nothing to do on a bare host
         run: |
           set -eu
-          out="$(python3 -m qemu_tool down-all --dry-run 2>&1)"
+          out="$(python3 -m qemu_tool down --all --dry-run 2>&1)"
           echo "$out"
           echo "$out" | grep -q "No running qemu-tool stacks" || {
-            echo "::error::down-all claimed to find stacks on a bare runner"
+            echo "::error::down --all claimed to find stacks on a bare runner"
             exit 1; }
 
       # The gate itself. --check regenerates into a temporary directory and
