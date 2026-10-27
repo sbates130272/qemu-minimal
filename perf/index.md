@@ -12,7 +12,7 @@ new CI data lands.
 
 ## Latest published snapshot
 
-Generated from `c81997e8` at **2026-10-27 01:36 UTC**.
+Generated from `c81997e8` at **2026-10-27 14:10 UTC**.
 
 ![rocjitsu GEMM](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-gemm.json)
 ![rocjitsu hipFile](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile.json)
@@ -30,9 +30,9 @@ vfio-user and swing hard between runs.
 
 | Metric | Latest value | Baseline (last 5 distinct) | Verdict |
 | --- | --- | --- | --- |
-| rocjitsu GEMM | 464 kFLOP/s | 537 kFLOP/s | watch (-14%) |
-| rocjitsu hipFile | 159 MB/s | 172 MB/s | watch (-8%) |
-| hipFile fio | 144 MB/s | 149 MB/s | within tolerance (-3%) |
+| rocjitsu GEMM | 894 kFLOP/s | 530 kFLOP/s | within tolerance (+69%) |
+| rocjitsu hipFile | 148 MB/s | 172 MB/s | watch (-14%) |
+| hipFile fio | 115 MB/s | 150 MB/s | regressed (-23%) |
 
 ## Trend charts
 
@@ -50,7 +50,6 @@ vfio-user and swing hard between runs.
 
 | Commit | Generated | GEMM | hipFile | hipFile fio |
 | --- | --- | --- | --- | --- |
-| 9ec66ea4 | 2026-10-23 22:01 UTC | 497 kFLOP/s | 162 MB/s | 142 MB/s |
 | 9ec66ea4 | 2026-10-23 22:28 UTC | 496 kFLOP/s | 160 MB/s | 139 MB/s |
 | 8ee55313 | 2026-10-24 20:38 UTC | 496 kFLOP/s | 160 MB/s | 139 MB/s |
 | 8ee55313 | 2026-10-24 21:08 UTC | 496 kFLOP/s | 157 MB/s | 127 MB/s |
@@ -60,6 +59,7 @@ vfio-user and swing hard between runs.
 | 8986530f | 2026-10-27 00:36 UTC | 494 kFLOP/s | 155 MB/s | 128 MB/s |
 | c81997e8 | 2026-10-27 01:01 UTC | 494 kFLOP/s | 155 MB/s | 128 MB/s |
 | c81997e8 | 2026-10-27 01:36 UTC | 464 kFLOP/s | 159 MB/s | 144 MB/s |
+| c81997e8 | 2026-10-27 14:10 UTC | 894 kFLOP/s | 148 MB/s | 115 MB/s |
 
 ## Current report freshness
 
@@ -73,14 +73,14 @@ shows the last date on which all 6 reports were green at once —
 amber once that date is no longer today.
 
 Last all-green: **2026-10-23** &middot; checked
-2026-10-27 01:36 UTC &middot; currently
+2026-10-27 14:10 UTC &middot; currently
 not all green.
 
 | Report | Generated | Status | Commit | Page |
 | --- | --- | --- | --- | --- |
 | Single VM | 2026-10-27 01:05 UTC | pass | `c81997e` | [/1vm/](/1vm/) |
-| rocjitsu | 2026-10-27 01:33 UTC | pass | `c81997e` | [/rocjitsu/](/rocjitsu/) |
+| rocjitsu | 2026-10-27 14:07 UTC | pass | `c81997e` | [/rocjitsu/](/rocjitsu/) |
 | ernic VM 1 | 2026-10-27 01:09 UTC | pass | `c81997e` | [/ernic/](/ernic/) |
 | ernic VM 2 | 2026-10-27 01:09 UTC | pass | `c81997e` | [/ernic/vm2/](/ernic/vm2/) |
-| hipFile fio | 2026-10-27 01:35 UTC | pass | `c81997e` | [/hipfile-fio/](/hipfile-fio/) |
+| hipFile fio | 2026-10-27 14:09 UTC | pass | `c81997e` | [/hipfile-fio/](/hipfile-fio/) |
 | MI355X node | 2026-10-24 17:02 UTC | pass | ``unknown`` | [/mi355x/](/mi355x/) |
