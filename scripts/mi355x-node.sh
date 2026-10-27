@@ -243,7 +243,8 @@ configure() {
   # shellcheck disable=SC2086
   ( cd "${REPO_ROOT}/ansible" && ansible-playbook \
       -i "${STACK_DIR}/fleet-inventory.yml" $extra_inventory \
-      playbooks/fleet-quickstart.yml --private-key "$KEY" )
+      playbooks/fleet-quickstart.yml --private-key "$KEY" \
+      -e ansible_remote_tmp=/tmp/.ansible/tmp )
 }
 
 # The assertions, separate from the report: a report is prose and a reader
