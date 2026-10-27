@@ -155,6 +155,13 @@ ERNIC_NOFILE=65536
 # which a passing ib_send_bw on its own does not.
 ERNIC_STATS_PORT=9840
 
+# Forward node-exporter (9100) and amd-metrics-exporter (9488) from every
+# guest through its QEMU container to the fleet Docker network. Each VM is a
+# separate container (own network namespace) so both VMs can bind the same
+# port without conflict. Prometheus reaches them at the container fleet-net
+# IPs (172.31.3.1, 172.31.3.2, ...); the ports are NOT exposed on the host.
+VM_EXTRA_HOSTFWD=tcp::9100-:9100,tcp::9488-:9488
+
 # ---------------------------------------------------------------------------
 # Observability
 # ---------------------------------------------------------------------------
