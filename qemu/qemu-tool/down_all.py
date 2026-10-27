@@ -157,6 +157,45 @@ def _describe(stack: Stack, uid: int) -> str:
             f"{owner})\n      {where}")
 
 
+def teardown_one(project: str, dry_run: bool = False,
+                 assume_yes: bool = False) -> None:
+    """Tear down one named stack, identified by its compose project name."""
+    stacks = discover()
+    match = next((s for s in stacks if s.project == project), None)
+    if match is None:
+        sys.exit(f"Error: no running qemu-tool stack named {project!r}.")
+    uid = os.getuid()
+    print(f"Will tear down stack:")
+    print(_describe(match, uid))
+    if dry_run:
+        print(f"\n--dry-run: nothing was stopped. The command would be:")
+        print(f"  {' '.join(_teardown_cmd(match))}")
+        return
+    if not assume_yes:
+        total = len(match.containers)
+        try:
+            reply = input(
+                f"\nStop and remove {total} container(s) in "
+                f"{project!r}? [y/N]: ").strip().lower()
+        except EOFError:
+            reply = ""
+        if reply not in ("y", "yes"):
+            print("Nothing was stopped.")
+            return
+    env = os.environ.copy()
+    observed = next((u for u in sorted(match.uids) if u), "")
+    if observed:
+        env.setdefault("CONTAINER_USER", observed)
+    else:
+        ident, _ = resolve_identity([])
+        env.setdefault("CONTAINER_USER", ident["CONTAINER_USER"])
+    env.setdefault("CONTAINER_KVM_GID", "0")
+    result = subprocess.run(_teardown_cmd(match), env=env)
+    if result.returncode != 0:
+        sys.exit(f"Stack {project!r} did not tear down (exit {result.returncode}).")
+    print(f"\nStack {project!r} torn down.")
+
+
 def run(assume_yes: bool = False, dry_run: bool = False,
         all_users: bool = False) -> None:
     uid = os.getuid()

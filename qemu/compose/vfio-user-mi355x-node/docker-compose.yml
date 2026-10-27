@@ -2082,6 +2082,7 @@ services:
     devices: []
     group_add: []
     user: "65534:65534"
+    stop_grace_period: 5s
     volumes:
       - ernic-stats:/run/ernic-stats:ro
       - "${QEMU_TOOL_SRC:-/tmp}:/qemu-tool-src:ro"
@@ -2323,7 +2324,10 @@ services:
   # NET_ADMIN. Left at the default of 0 it would hand a
   # non-root ernic EPERM and a guest with no Ethernet.
   tapsetup-1-1:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -2342,7 +2346,10 @@ services:
       ernic-1-1:
         condition: service_started
   tapsetup-1-2:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -2361,7 +2368,10 @@ services:
       ernic-1-2:
         condition: service_started
   tapsetup-1-3:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -2380,7 +2390,10 @@ services:
       ernic-1-3:
         condition: service_started
   tapsetup-1-4:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -2399,7 +2412,10 @@ services:
       ernic-1-4:
         condition: service_started
   tapsetup-1-5:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -2418,7 +2434,10 @@ services:
       ernic-1-5:
         condition: service_started
   tapsetup-1-6:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -2437,7 +2456,10 @@ services:
       ernic-1-6:
         condition: service_started
   tapsetup-1-7:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -2456,7 +2478,10 @@ services:
       ernic-1-7:
         condition: service_started
   tapsetup-1-8:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -2475,7 +2500,10 @@ services:
       ernic-1-8:
         condition: service_started
   tapsetup-2-1:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -2494,7 +2522,10 @@ services:
       ernic-2-1:
         condition: service_started
   tapsetup-2-2:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -2513,7 +2544,10 @@ services:
       ernic-2-2:
         condition: service_started
   tapsetup-2-3:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -2532,7 +2566,10 @@ services:
       ernic-2-3:
         condition: service_started
   tapsetup-2-4:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -2551,7 +2588,10 @@ services:
       ernic-2-4:
         condition: service_started
   tapsetup-2-5:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -2570,7 +2610,10 @@ services:
       ernic-2-5:
         condition: service_started
   tapsetup-2-6:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -2589,7 +2632,10 @@ services:
       ernic-2-6:
         condition: service_started
   tapsetup-2-7:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -2608,7 +2654,10 @@ services:
       ernic-2-7:
         condition: service_started
   tapsetup-2-8:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -2627,7 +2676,10 @@ services:
       ernic-2-8:
         condition: service_started
   tapsetup-3-1:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -2646,7 +2698,10 @@ services:
       ernic-3-1:
         condition: service_started
   tapsetup-3-2:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -2665,7 +2720,10 @@ services:
       ernic-3-2:
         condition: service_started
   tapsetup-3-3:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -2684,7 +2742,10 @@ services:
       ernic-3-3:
         condition: service_started
   tapsetup-3-4:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -2703,7 +2764,10 @@ services:
       ernic-3-4:
         condition: service_started
   tapsetup-3-5:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -2722,7 +2786,10 @@ services:
       ernic-3-5:
         condition: service_started
   tapsetup-3-6:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -2741,7 +2808,10 @@ services:
       ernic-3-6:
         condition: service_started
   tapsetup-3-7:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -2760,7 +2830,10 @@ services:
       ernic-3-7:
         condition: service_started
   tapsetup-3-8:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -2779,7 +2852,10 @@ services:
       ernic-3-8:
         condition: service_started
   tapsetup-4-1:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -2798,7 +2874,10 @@ services:
       ernic-4-1:
         condition: service_started
   tapsetup-4-2:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -2817,7 +2896,10 @@ services:
       ernic-4-2:
         condition: service_started
   tapsetup-4-3:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -2836,7 +2918,10 @@ services:
       ernic-4-3:
         condition: service_started
   tapsetup-4-4:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -2855,7 +2940,10 @@ services:
       ernic-4-4:
         condition: service_started
   tapsetup-4-5:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -2874,7 +2962,10 @@ services:
       ernic-4-5:
         condition: service_started
   tapsetup-4-6:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -2893,7 +2984,10 @@ services:
       ernic-4-6:
         condition: service_started
   tapsetup-4-7:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -2912,7 +3006,10 @@ services:
       ernic-4-7:
         condition: service_started
   tapsetup-4-8:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging

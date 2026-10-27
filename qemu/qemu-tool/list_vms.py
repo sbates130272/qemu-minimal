@@ -15,6 +15,7 @@ from .identity import match_identity
 _PROC = Path("/proc")
 _CONTAINER_ID_RE = re.compile(r"\b([0-9a-f]{64})\b")
 _HOSTFWD_RE = re.compile(r"hostfwd=tcp::(\d+)-:22")
+_STACK_RE = re.compile(r"-qemu-\d+(?:-\d+)?$")
 _PUBLISHED_RE = re.compile(r":(\d+)->(\d+)/tcp")
 # Any .sock path a device server was told to serve. The socket is what joins a
 # guest's QEMU command line to the server process behind it: both name it, and
@@ -866,6 +867,13 @@ def _fmt_nvme(v: dict[str, Any]) -> str:
     return ",".join(f"{k}*{n}" if n > 1 else k for k, n in counts.items()) or "-"
 
 
+def _stack_name(container: str | None) -> str:
+    if not container:
+        return "-"
+    stripped = _STACK_RE.sub("", container)
+    return stripped or container
+
+
 def _print_table(vms: list[dict[str, Any]], qemu_tool_only: bool = False) -> None:
     if not vms:
         print("No qemu-tool VMs running." if qemu_tool_only
@@ -873,7 +881,7 @@ def _print_table(vms: list[dict[str, Any]], qemu_tool_only: bool = False) -> Non
         return
 
     headers = ["NAME", "PID", "SOURCE", "ARCH", "VCPU", "MEM", "SSH",
-               "KVM", "UPTIME", "CONTAINER", "NETWORK", "GPU", "RDMA",
+               "KVM", "UPTIME", "STACK", "CONTAINER", "NETWORK", "GPU", "RDMA",
                "NVME", "VFIO-USER", "MGMT"]
     show_split = any(v["ssh_port_host"] != v["ssh_port"] for v in vms)
     rows = []
@@ -891,6 +899,7 @@ def _print_table(vms: list[dict[str, Any]], qemu_tool_only: bool = False) -> Non
             _fmt_ssh(v, show_split),
             "yes" if v["kvm"] else "no",
             _fmt_uptime(v["uptime_seconds"]),
+            _stack_name(v["container"]),
             v["container"] or "-",
             ",".join(v["networks"]) or "-",
             ",".join(v["gpus"]) or "-",

@@ -276,7 +276,7 @@ class TestRender(unittest.TestCase):
 
     def test_tap_adds_a_sidecar_per_ernic_and_a_shared_l2(self):
         body = gen_compose.render_compose(_plan("\nERNIC_TAP=true\n"), ["e"], "a")
-        self.assertEqual(body.count("build: ./tapsetup"), 8)
+        self.assertEqual(body.count("      context: ./tapsetup"), 8)
         self.assertIn('network_mode: "service:ernic-8"', body)
         self.assertIn("  l2:\n    driver: bridge", body)
 
@@ -297,9 +297,9 @@ class TestRender(unittest.TestCase):
         compose never attempts the pull again.
         """
         body = gen_compose.render_compose(_plan("\nERNIC_TAP=true\n"), ["e"], "a")
-        self.assertEqual(body.count("build: ./tapsetup"),
-                         body.count("pull_policy: build"))
-        self.assertEqual(body.count("pull_policy: build"), 8)
+        self.assertEqual(body.count("      context: ./tapsetup"),
+                         body.count("    pull_policy: build"))
+        self.assertEqual(body.count("    pull_policy: build"), 8)
 
     def test_tap_keeps_net_admin_out_of_the_long_lived_service(self):
         # rocm-ernic attaches to a pre-created owned tap with only the device
@@ -1328,7 +1328,7 @@ class TestDevicesPerVM(unittest.TestCase):
         body = gen_compose.render_compose(
             _plan(_MI355X + "ERNIC_TAP=true\n"), "e", "d")
         self.assertIn("  tapsetup-4-8:", body)
-        self.assertEqual(body.count("    build: ./tapsetup"), 32)
+        self.assertEqual(body.count("      context: ./tapsetup"), 32)
         # One pull_policy per sidecar, not one for the stack: a count
         # mismatch here means some were emitted without it.
         self.assertEqual(body.count("    pull_policy: build"), 32)
@@ -1405,9 +1405,11 @@ class TestPcieSwitchArgs(unittest.TestCase):
         args = " ".join(self._args())
         for s in range(8):
             self.assertIn(f'"bus":"vfudp{s}.0","rombar":0,'
+                          f'"x-msg-timeout":60000,'
                           f'"socket":{{"path":"/run/vfu/ernic-1-{s + 1}.sock"',
                           args)
             self.assertIn(f'"bus":"vfudp{s}.1","rombar":0,'
+                          f'"x-msg-timeout":60000,'
                           f'"socket":{{"path":"/run/vfu/rocjitsu-1-{s + 1}.sock"',
                           args)
 

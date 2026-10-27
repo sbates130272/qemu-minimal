@@ -116,13 +116,20 @@ def _still_running(names: set[str]) -> set[str]:
         return set()
 
 
-def run(vm_name: str | None, timeout: int = 120, dry_run: bool = False) -> None:
+def run(vm_name: str | None, timeout: int = 120, dry_run: bool = False,
+        stack_filter: str | None = None) -> None:
     try:
         vms = _collect_vms()
     except OSError as exc:
         sys.exit(f"Error: cannot read /proc: {exc}")
 
-    if vm_name is not None:
+    if stack_filter is not None:
+        prefix = f"{stack_filter}-qemu-"
+        vms = [v for v in vms if (v.get("container") or "").startswith(prefix)]
+        if not vms:
+            print(f"No running VMs in stack {stack_filter!r}.")
+            return
+    elif vm_name is not None:
         vms = [v for v in vms if v["name"] == vm_name]
         if not vms:
             sys.exit(f"Error: no running VM named {vm_name!r}")

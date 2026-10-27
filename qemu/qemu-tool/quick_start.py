@@ -291,6 +291,30 @@ def _resolve_stack_dir(requested: Path, explicit: bool) -> Path:
 # Settings layers
 # ---------------------------------------------------------------------------
 
+def _resolve_key_dir(requested: Path, explicit: bool) -> Path:
+    """Where the guest keypair lives, falling back when the default is root-owned.
+
+    /var/lib/qemu-tool/quickstart-key has the same ownership problem as the
+    stack dir on a fresh host, but unlike that dir there was no fallback --
+    so fetch_key's mkdir raised PermissionError with no note and no fix.
+    """
+    try:
+        requested.mkdir(parents=True, exist_ok=True)
+        return requested
+    except OSError:
+        if explicit:
+            _die(f"cannot create {requested}")
+        data_home = os.environ.get("XDG_DATA_HOME")
+        base = Path(data_home).expanduser() if data_home else Path.home() / ".local" / "share"
+        fallback = base / "qemu-tool" / "quickstart-key"
+        try:
+            fallback.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            _die(f"cannot create {requested} or {fallback}")
+        print(f"note: {requested} is not writable, using {fallback}")
+        return fallback
+
+
 def _reload(state: _State) -> None:
     state.values = parse_layers(state.layers)
 
@@ -350,10 +374,13 @@ def _write_layer(state: _State, name: str, body: dict[str, str], why: str) -> No
 _TOOL_HINTS = {
     "docker": "install Docker Engine with the compose plugin "
               "(https://docs.docker.com/engine/install/)",
-    "oras": "install oras (https://oras.land/docs/installation) -- it is what "
+    "oras": "install oras ≥ 1.3.4 (https://oras.land/docs/installation) -- it is what "
             "pulls the published guest image",
-    "ansible-playbook": "apt install ansible, then "
-                        "`ansible-galaxy collection install -r ansible/requirements.yml`",
+    "ansible-playbook": "apt install ansible, then (from the repo checkout) "
+                        "`ansible-galaxy collection install -r ansible/requirements.yml` "
+                        "[needs git: the rocm-ernic collection is a git SHA, not on Galaxy]",
+    "git": "apt install git -- needed by ansible-galaxy to install the "
+           "rocm-ernic collection from its upstream repo",
     "ssh": "apt install openssh-client",
     "qemu-img": "apt install qemu-utils",
 }
@@ -430,7 +457,7 @@ def _size_for_host(state: _State) -> dict[str, str]:
     }
 
 
-def preflight(state: _State) -> None:
+def preflight(state: _State, write_layers: bool = True) -> None:
     _say("Checking this machine")
 
     missing = _check_tools()
@@ -469,7 +496,7 @@ def preflight(state: _State) -> None:
     _say(f"Containers will run as {ident['CONTAINER_USER']} (from {source}), "
          f"with group {ident['CONTAINER_KVM_GID']} for /dev/kvm")
 
-    if state.size_from_host:
+    if state.size_from_host and write_layers:
         sized = _size_for_host(state)
         _write_layer(state, "env.sized", sized,
                      f"Guest size derived from this host "
@@ -654,10 +681,10 @@ def fetch_key(state: _State) -> None:
                                 capture_output=True, text=True)
     if discovered.returncode != 0:
         _die(f"oras discover failed on {backing}:\n{discovered.stderr.strip()}")
-    # Selected by artifactType rather than by position: oras 1.3.4 calls the
-    # list "referrers", and [0] is a guess waiting to break the day a
-    # signature or an SBOM referrer is attached ahead of this one.
-    referrers = json.loads(discovered.stdout).get("referrers", [])
+    # Selected by artifactType rather than by position. oras ≥ 1.3.4 calls the
+    # list "referrers"; earlier versions use "manifests". Accept both.
+    parsed = json.loads(discovered.stdout)
+    referrers = parsed.get("referrers") or parsed.get("manifests", [])
     hits = [r["reference"] for r in referrers
             if r.get("artifactType") == _VM_INFO_TYPE]
     if not hits:
@@ -837,7 +864,10 @@ def wait_for_guests(state: _State) -> None:
     _say("Waiting for the guests")
     for index in range(1, state.vm_count + 1):
         host, port = state.guest_host(index), state.guest_port(index)
-        deadline = time.monotonic() + 600
+        deadline = time.monotonic() + 900
+        start = time.monotonic()
+        last_dot = start
+        print(f"  guest {index} ({host}:{port}) ", end="", flush=True)
         while True:
             probe = subprocess.run(
                 ["ssh", "-o", "StrictHostKeyChecking=no",
@@ -846,12 +876,19 @@ def wait_for_guests(state: _State) -> None:
                  "-p", str(port), f"{state.username}@{host}", "true"],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if probe.returncode == 0:
+                elapsed = int(time.monotonic() - start)
+                print(f" up ({elapsed}s)", flush=True)
                 break
             if time.monotonic() > deadline:
+                print(flush=True)
+                _compose(state, "logs", f"qemu-{index}", check=False)
                 _die(f"guest {index} did not answer SSH at {host}:{port} "
                      f"as {state.username}")
-            time.sleep(5)
-        print(f"guest {index} up at {host}:{port}")
+            now = time.monotonic()
+            if now - last_dot >= 5:
+                print(".", end="", flush=True)
+                last_dot = now
+            time.sleep(1)
 
 
 def _write_network_inventory(state: _State) -> Path:
@@ -996,8 +1033,12 @@ def down(state: _State) -> None:
         except SystemExit as exc:
             print(f"note: {state.vm(index)}: {exc}")
     _compose(state, "down", check=False)
-    print(f"the overlays under {state.images_dir} are left in place; "
-          "delete them to start over")
+    print()
+    print("=" * 70)
+    print(f"  Overlays left at {state.images_dir}.")
+    print("  Delete them to start from scratch, or run `quick-start up` to reuse them.")
+    print("=" * 70)
+    print()
 
 
 # ---------------------------------------------------------------------------
@@ -1052,7 +1093,7 @@ def run(
     verb: str,
     env_file: list[Path] | None,
     stack_dir: Path | None,
-    key_dir: Path,
+    key_dir: Path | None,
     report_dir: Path | None,
     repo_root: Path | None,
     images: Path | None,
@@ -1079,7 +1120,10 @@ def run(
     state = _State(
         env_file=base,
         stack_dir=_resolve_stack_dir(requested.expanduser(), stack_dir is not None),
-        key_dir=key_dir.expanduser().resolve(),
+        key_dir=_resolve_key_dir(
+            (key_dir or Path("/var/lib/qemu-tool/quickstart-key")).expanduser(),
+            explicit=key_dir is not None,
+        ),
         report_dir=report_dir.expanduser().resolve() if report_dir else None,
         repo_root=_repo_root(repo_root),
         in_network=in_network,
@@ -1131,7 +1175,7 @@ def run(
 
     if verb in ("all", "test"):
         if verb == "test":
-            preflight(state)
+            preflight(state, write_layers=False)
         configure_and_test(state)
         report(state)
 

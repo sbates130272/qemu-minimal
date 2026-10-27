@@ -851,6 +851,7 @@ services:
     devices: []
     group_add: []
     user: "65534:65534"
+    stop_grace_period: 5s
     volumes:
       - ernic-stats:/run/ernic-stats:ro
       - "${QEMU_TOOL_SRC:-/tmp}:/qemu-tool-src:ro"
@@ -1184,7 +1185,10 @@ services:
   # NET_ADMIN. Left at the default of 0 it would hand a
   # non-root ernic EPERM and a guest with no Ethernet.
   tapsetup-1:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -1203,7 +1207,10 @@ services:
       ernic-1:
         condition: service_started
   tapsetup-2:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -1222,7 +1229,10 @@ services:
       ernic-2:
         condition: service_started
   tapsetup-3:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -1241,7 +1251,10 @@ services:
       ernic-3:
         condition: service_started
   tapsetup-4:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -1260,7 +1273,10 @@ services:
       ernic-4:
         condition: service_started
   tapsetup-5:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -1279,7 +1295,10 @@ services:
       ernic-5:
         condition: service_started
   tapsetup-6:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -1298,7 +1317,10 @@ services:
       ernic-6:
         condition: service_started
   tapsetup-7:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
@@ -1317,7 +1339,10 @@ services:
       ernic-7:
         condition: service_started
   tapsetup-8:
-    build: ./tapsetup
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
     image: "qemu-tool/ernic-tapsetup:1"
     pull_policy: build
     logging: *logging
