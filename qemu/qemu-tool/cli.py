@@ -30,7 +30,7 @@ from .check_system import run as check_system_run
 from .down_all import discover as _discover_stacks, run as down_all_run, teardown_one
 from .quick_start import VERBS as _QUICK_START_VERBS, run as quick_start_run
 from .shutdown import run as shutdown_run
-from .list_vms import run as list_vms_run
+from .list_vms import run as list_vms_run, collect as _list_vms_collect
 from .run_vm import build_command, run as run_vm_run
 from . import summary
 
@@ -607,7 +607,12 @@ def _add_ssh(sub: argparse._SubParsersAction) -> None:
             "Run a remote command with `qemu-tool ssh vm1 -- uptime`."
         ),
     )
-    p.add_argument("vm", metavar="VM", help="Name of the running VM.")
+    def _complete_vm_name(**_kw: object) -> list[str]:
+        try:
+            return [v["name"] for v in _list_vms_collect() if v.get("name")]
+        except Exception:
+            return []
+    p.add_argument("vm", metavar="VM", help="Name of the running VM.").completer = _complete_vm_name
     p.add_argument(
         "--env-file", action="append", type=Path, default=None, metavar="FILE",
         help="Settings file. Repeatable; later files win.",
