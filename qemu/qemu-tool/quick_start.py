@@ -931,7 +931,8 @@ def configure_and_test(state: _State) -> None:
         cmd += ["-i", str(_write_network_inventory(state))]
     cmd += ["playbooks/fleet-quickstart.yml",
             "--private-key", str(state.key),
-            "-e", f"quickstart_artifacts_dir={state.artifacts}"]
+            "-e", f"quickstart_artifacts_dir={state.artifacts}",
+            "-e", "ansible_remote_tmp=/tmp/.ansible/tmp"]
     result = subprocess.run(cmd, cwd=state.repo_root / "ansible")
     if result.returncode != 0:
         _die("the configure-and-test playbook failed")
