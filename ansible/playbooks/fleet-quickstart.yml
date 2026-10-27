@@ -105,11 +105,19 @@
     # Asked for rather than assumed. The udev rules in the image name it
     # rocm-rdma-ernic0, but a guest prepared for UCX answers to something else
     # (AGENTS.md issue 21), and a wrong -d is a confusing failure.
+    # Retried: ionic_rdma probes over vfio-user and the device registration
+    # races with SSH availability -- ibv_devinfo -l can return empty on a
+    # fresh boot before the IB device is registered. 30 x 2s = 60s ceiling.
     - name: Find the IB device
       ansible.builtin.command:
         cmd: ibv_devinfo -l
       register: quickstart_ibv_list
       changed_when: false
+      until: >-
+        quickstart_ibv_list.stdout_lines[1:]
+        | map('trim') | reject('equalto', '') | list | length > 0
+      retries: 30
+      delay: 2
 
     - name: Record the IB device name
       ansible.builtin.set_fact:

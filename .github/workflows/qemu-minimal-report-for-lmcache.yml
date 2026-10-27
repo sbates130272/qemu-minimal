@@ -196,6 +196,7 @@ jobs:
       run: |
         mkdir -p /var/lib/qemu-tool/share
         docker save "$LMCACHE_IMAGE" -o /var/lib/qemu-tool/share/lmcache-srq.tar
+        chmod a+r /var/lib/qemu-tool/share/lmcache-srq.tar  # docker save is 0600 root; QEMU uid can't read it over 9p
         ls -lh /var/lib/qemu-tool/share/lmcache-srq.tar
 
     # Reclaim before the qcow2 arrives, which is where this lane ran out of
