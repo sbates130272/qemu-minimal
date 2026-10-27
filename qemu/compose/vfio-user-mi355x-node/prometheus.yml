@@ -35,6 +35,53 @@ scrape_configs:
           vm: "4"
           vm_name: "stebates-mi355x-4"
 
+  # AMD GPU metrics exporter inside each guest. Same shape as
+  # fleet-node: the target is the qemu CONTAINER and
+  # VM_EXTRA_HOSTFWD tcp::9488-:9488 forwards the port through
+  # to amd-metrics-exporter running in the guest.
+  - job_name: amd-gpu
+    static_configs:
+      - targets: ["172.31.3.1:9488"]
+        labels:
+          vm: "1"
+          vm_name: "stebates-mi355x-1"
+      - targets: ["172.31.3.2:9488"]
+        labels:
+          vm: "2"
+          vm_name: "stebates-mi355x-2"
+      - targets: ["172.31.3.3:9488"]
+        labels:
+          vm: "3"
+          vm_name: "stebates-mi355x-3"
+      - targets: ["172.31.3.4:9488"]
+        labels:
+          vm: "4"
+          vm_name: "stebates-mi355x-4"
+
+  # RDMA metrics exporter inside each guest (port 9879).
+  # Reads /sys/class/infiniband/*/counters; on ionic_rdma
+  # these are empty today, but the target is wired so that
+  # when the emulated device grows counters it starts reporting
+  # with no further change. Same hostfwd pattern as fleet-node.
+  - job_name: rdma-exporter
+    static_configs:
+      - targets: ["172.31.3.1:9879"]
+        labels:
+          vm: "1"
+          vm_name: "stebates-mi355x-1"
+      - targets: ["172.31.3.2:9879"]
+        labels:
+          vm: "2"
+          vm_name: "stebates-mi355x-2"
+      - targets: ["172.31.3.3:9879"]
+        labels:
+          vm: "3"
+          vm_name: "stebates-mi355x-3"
+      - targets: ["172.31.3.4:9879"]
+        labels:
+          vm: "4"
+          vm_name: "stebates-mi355x-4"
+
   - job_name: ernic-stats
     static_configs:
       - targets: ["172.31.0.10:9840"]

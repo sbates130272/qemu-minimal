@@ -137,10 +137,147 @@
       delay: 2
       changed_when: false
 
+    # Rebuild the CA bundle so HTTPS downloads trust ZScaler. The cert file
+    # was placed by cloud-init (VM_CA_CERT_FILE) but update-ca-certificates
+    # may not have run yet.
+    - name: Rebuild CA trust bundle
+      become: true
+      ansible.builtin.command:
+        cmd: update-ca-certificates
+      changed_when: true
+
+    # amdgpu-exporter: AMD GPU metrics on :9488 from the ROCm apt repo.
+    - name: Download ROCm GPG key
+      become: true
+      ansible.builtin.shell:
+        cmd: |
+          wget -qO- https://repo.radeon.com/rocm/rocm.gpg.key \
+            | gpg --dearmor > /etc/apt/keyrings/rocm.gpg
+        executable: /bin/bash
+        creates: /etc/apt/keyrings/rocm.gpg
+
+    - name: Add device-metrics-exporter apt source
+      become: true
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/device-metrics-exporter.sources
+        content: |
+          Types: deb
+          URIs: https://repo.radeon.com/device-metrics-exporter/apt/1.5.3
+          Suites: noble
+          Components: main
+          Signed-By: /etc/apt/keyrings/rocm.gpg
+        mode: "0644"
+
+    - name: Kill any stale apt-get processes holding the dpkg lock
+      become: true
+      ansible.builtin.shell:
+        cmd: killall apt-get apt 2>/dev/null || true
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Wait for dpkg lock to be free
+      become: true
+      ansible.builtin.shell:
+        cmd: |
+          timeout 30 bash -c 'while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 1; done'
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Install amdgpu-exporter
+      become: true
+      ansible.builtin.apt:
+        name: amdgpu-exporter
+        state: present
+        update_cache: false
+
+    - name: Ensure metrics config directory exists
+      become: true
+      ansible.builtin.file:
+        path: /etc/metrics
+        state: directory
+        mode: "0755"
+
+    - name: Write amdgpu-exporter config (port 9488)
+      become: true
+      ansible.builtin.copy:
+        dest: /etc/metrics/config.json
+        content: '{"ServerPort": 9488}'
+        mode: "0644"
+
+    - name: Disable gpuagent (crashes on emulated gfx1250 — amdsmi returns
+        NOT_SUPPORTED for temp/clock/util; upstream bug)
+      become: true
+      ansible.builtin.systemd:
+        name: gpuagent
+        enabled: false
+        state: stopped
+      failed_when: false
+
+    - name: Start amdgpu-exporter
+      become: true
+      ansible.builtin.systemd:
+        name: amd-metrics-exporter
+        enabled: true
+        state: started
+        daemon_reload: true
+      failed_when: false
+
+    # rdma_exporter: RDMA counters on :9879, binary from GitHub.
+    - name: Get latest rdma_exporter release from GitHub
+      ansible.builtin.uri:
+        url: https://api.github.com/repos/yuuki/rdma_exporter/releases/latest
+        return_content: true
+      register: _rdma_release
+      changed_when: false
+
+    - name: Download rdma_exporter tarball
+      ansible.builtin.get_url:
+        url: >-
+          https://github.com/yuuki/rdma_exporter/releases/download/{{
+          _rdma_release.json.tag_name }}/rdma_exporter_{{
+          _rdma_release.json.tag_name | regex_replace('^v', '') }}_linux_amd64.tar.gz
+        dest: /tmp/rdma_exporter.tar.gz
+        mode: "0644"
+
+    - name: Extract and install rdma_exporter binary
+      become: true
+      ansible.builtin.shell:
+        cmd: |
+          tar -xzf /tmp/rdma_exporter.tar.gz -C /tmp rdma_exporter
+          install -o root -g root -m 0755 /tmp/rdma_exporter /usr/local/bin/rdma_exporter
+          rm -f /tmp/rdma_exporter /tmp/rdma_exporter.tar.gz
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Install rdma_exporter systemd unit
+      become: true
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/rdma_exporter.service
+        content: |
+          [Unit]
+          Description=Prometheus RDMA exporter
+          After=network.target
+
+          [Service]
+          ExecStart=/usr/local/bin/rdma_exporter -listen-address=:9879
+          Restart=on-failure
+
+          [Install]
+          WantedBy=multi-user.target
+        mode: "0644"
+
+    - name: Start rdma_exporter
+      become: true
+      ansible.builtin.systemd:
+        name: rdma_exporter
+        enabled: true
+        state: started
+        daemon_reload: true
+
     - name: Report what each guest has
       ansible.builtin.debug:
         msg: >-
-          {{ inventory_hostname }}: kernel {{ ansible_kernel }},
+          {{ inventory_hostname }}: kernel {{ ansible_facts['kernel'] }},
           ROCm {{ quickstart_rocm }}, IB {{ quickstart_ib_device }}
           ({{ quickstart_port.attempts | default(1) }} attempt(s) to PORT_ACTIVE),
           ernic {{ fleet_guest_ip }}
