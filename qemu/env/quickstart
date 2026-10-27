@@ -160,7 +160,7 @@ ERNIC_STATS_PORT=9840
 # separate container (own network namespace) so both VMs can bind the same
 # port without conflict. Prometheus reaches them at the container fleet-net
 # IPs (172.31.3.1, 172.31.3.2, ...); the ports are NOT exposed on the host.
-VM_EXTRA_HOSTFWD=tcp::9100-:9100,tcp::9488-:9488
+VM_EXTRA_HOSTFWD=tcp::9100-:9100,tcp::9488-:9488,tcp::9879-:9879
 
 # ---------------------------------------------------------------------------
 # Observability

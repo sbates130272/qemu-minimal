@@ -873,7 +873,19 @@ def _ga_run(path, timeout=2.0, budget=8.0):
             bdf = "%04x:%02x:%02x.%d" % (dom, (loc >> 8) & 0xFF,
                                          (loc >> 3) & 0x1F, loc & 0x7)
             grab("/sys/bus/pci/devices/%s/resource" % bdf)
+            # The PCI device's own uevent contains DRIVER=<name> when a driver
+            # is bound; absent or no DRIVER= line means unbound.
+            grab("/sys/bus/pci/devices/%s/uevent" % bdf)
     result["gpu_complete"] = gpu_complete
+
+    # Module load state for the GPU and RDMA NIC drivers.
+    grab("/sys/module/amdgpu/initstate")
+    grab("/sys/module/ionic/initstate")
+    grab("/sys/module/ionic_rdma/initstate")
+    # NIC device uevent: DRIVER=ionic when ionic is bound. Try both the
+    # udev-renamed name and common fallback kernel names.
+    for _nic in ("rocm-ernic0", "rocmernic0", "rocm-ernic1", "rocmernic1"):
+        grab("/sys/class/net/%s/device/uevent" % _nic)
 
     # The NQN only ever refines a disk's origin -- without it _block_origin
     # falls back to the command line and finally to "unknown" -- so a miss
@@ -1658,6 +1670,37 @@ def _vm_argv(pid: int) -> list[str]:
     return [a.decode("utf-8", "replace") for a in raw.split(b"\0") if a]
 
 
+def _driver_state(files: dict[str, str]) -> dict[str, Any]:
+    """Extract driver load/bind state from the GA files dict."""
+    def _init(key: str) -> str | None:
+        v = files.get(key, "").strip()
+        return v if v else None
+
+    amdgpu_init = _init("/sys/module/amdgpu/initstate")
+    ionic_init = _init("/sys/module/ionic/initstate")
+    ionic_rdma_init = _init("/sys/module/ionic_rdma/initstate")
+
+    gpu_uevent = next(
+        (v for k, v in files.items()
+         if "/sys/bus/pci/devices/" in k and k.endswith("/uevent")),
+        None,
+    )
+
+    nic_uevent: dict[str, str] = {}
+    for k, v in files.items():
+        if "/sys/class/net/" in k and k.endswith("/device/uevent"):
+            iface = k.split("/sys/class/net/")[1].split("/")[0]
+            nic_uevent[iface] = v
+
+    return {
+        "amdgpu_loaded": amdgpu_init == "live" if amdgpu_init else None,
+        "amdgpu_bound": "DRIVER=amdgpu" in gpu_uevent if gpu_uevent is not None else None,
+        "ionic_loaded": ionic_init == "live" if ionic_init else None,
+        "ionic_rdma_loaded": ionic_rdma_init == "live" if ionic_rdma_init else None,
+        "nic_bound": {iface: "DRIVER=ionic" in v for iface, v in nic_uevent.items()},
+    }
+
+
 def _record(vm: dict[str, Any], cfg: VMConfig) -> dict[str, Any]:
     info = _read_vm_info(vm["image"])
     username = info.get("username") or cfg.username
@@ -1702,6 +1745,7 @@ def _record(vm: dict[str, Any], cfg: VMConfig) -> dict[str, Any]:
         # The raw sysfs and procfs text is an input to the three collectors
         # above, not an answer: several KiB per VM of it would bury --json,
         # which already takes 60 lines to get through one VM's interfaces.
+        record["driver_state"] = _driver_state(ga_info.get("files", {}))
         ga_info.pop("files", None)
         record["guest"] = ga_info
     return record
@@ -1724,6 +1768,7 @@ def _print_human(records: list[dict[str, Any]]) -> None:
         mem = f"{r['memory_mib']} MiB" if r["memory_mib"] else "-"
         print(f"  Arch:      {r['arch']}  vCPUs: {vcpus}  Memory: {mem}")
         gpus = r.get("gpus")
+        ds = r.get("driver_state", {})
         if gpus is None:
             # Printing nothing here would read as "no GPU" on a line-oriented
             # listing, which is the claim this has no evidence for.
@@ -1739,6 +1784,11 @@ def _print_human(records: list[dict[str, Any]]) -> None:
             # powered-off VM would be noise on the common case.
             for bar in gpu.get("bars") or []:
                 print(f"               {_describe_bar(bar)}")
+            if ds or r.get("ga_available"):
+                def _tri(val: bool | None) -> str:
+                    return "yes" if val is True else "no" if val is False else "unknown"
+                print(f"             amdgpu loaded: {_tri(ds.get('amdgpu_loaded'))}  "
+                      f"bound: {_tri(ds.get('amdgpu_bound'))}")
         print(f"  Image:     {r['image'] or '-'}")
         if r["container"]:
             print(f"  Container: {r['container']}")
@@ -1757,9 +1807,17 @@ def _print_human(records: list[dict[str, Any]]) -> None:
             print(f"  Hostname:  {guest['hostname'].get('host-name', '-')}")
         if guest.get("interfaces"):
             for iface in guest["interfaces"]:
+                name = iface["name"]
+                is_ernic = name.startswith("rocm-ernic") or name.startswith("rocmernic")
                 for addr in iface.get("ip-addresses", []):
                     if addr.get("ip-address-type") == "ipv4":
-                        print(f"  IP:        {addr['ip-address']} ({iface['name']})")
+                        tag = " [rocm-ernic]" if is_ernic else ""
+                        print(f"  IP:        {addr['ip-address']} ({name}{tag})")
+                if is_ernic and (ds or r.get("ga_available")):
+                    bound = ds.get("nic_bound", {}).get(name)
+                    print(f"             ionic loaded: {_tri(ds.get('ionic_loaded'))}  "
+                          f"ionic_rdma loaded: {_tri(ds.get('ionic_rdma_loaded'))}  "
+                          f"bound: {_tri(bound)}")
         devices = r.get("block_devices")
         if devices is None and r.get("ga_socket"):
             # Same rule as the Login line directly below, for the same reason:

@@ -2,14 +2,46 @@
   "__inputs": [],
   "__elements": {},
   "__requires": [
-    {"type": "grafana", "id": "grafana", "name": "Grafana", "version": "10.0.0"},
-    {"type": "datasource", "id": "prometheus", "name": "Prometheus", "version": "1.0.0"},
-    {"type": "panel", "id": "stat", "name": "Stat", "version": ""},
-    {"type": "panel", "id": "timeseries", "name": "Time series", "version": ""},
-    {"type": "panel", "id": "bargauge", "name": "Bar gauge", "version": ""},
-    {"type": "panel", "id": "row", "name": "Row", "version": ""}
+    {
+      "type": "grafana",
+      "id": "grafana",
+      "name": "Grafana",
+      "version": "10.0.0"
+    },
+    {
+      "type": "datasource",
+      "id": "prometheus",
+      "name": "Prometheus",
+      "version": "1.0.0"
+    },
+    {
+      "type": "panel",
+      "id": "stat",
+      "name": "Stat",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "timeseries",
+      "name": "Time series",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "bargauge",
+      "name": "Bar gauge",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "row",
+      "name": "Row",
+      "version": ""
+    }
   ],
-  "annotations": {"list": []},
+  "annotations": {
+    "list": []
+  },
   "description": "Quick Start overview: guests, CPU, memory, GPU and RDMA/TCP mesh at a glance.",
   "editable": false,
   "fiscalYearStartMonth": 0,
@@ -17,572 +49,1812 @@
   "id": null,
   "links": [],
   "panels": [
-
     {
       "collapsed": false,
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
       "id": 1,
       "title": "Fleet",
       "type": "row"
     },
-
     {
-      "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": {"mode": "thresholds"},
-          "thresholds": {"mode": "absolute", "steps": [
-            {"color": "red", "value": null},
-            {"color": "green", "value": 1}
-          ]},
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
           "mappings": [],
           "unit": "none"
         }
       },
-      "gridPos": {"h": 3, "w": 4, "x": 0, "y": 1},
+      "gridPos": {
+        "h": 3,
+        "w": 3,
+        "x": 0,
+        "y": 1
+      },
       "id": 2,
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto", "textMode": "auto", "colorMode": "background", "graphMode": "none"},
-      "title": "Guests up",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "title": "Guests Up",
       "type": "stat",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
           "expr": "count(up{job=\"fleet-node\"} == 1) or vector(0)",
           "legendFormat": "up",
           "refId": "A"
         },
         {
-          "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
           "expr": "count(up{job=\"fleet-node\"}) or vector(0)",
           "legendFormat": "total",
           "refId": "B",
           "hide": true
         }
-      ]
+      ],
+      "description": "Number of VMs where node-exporter is reachable. Requires VM_EXTRA_HOSTFWD=tcp::9100-:9100 and prometheus-node-exporter running in the guest."
     },
-
     {
-      "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": {"mode": "thresholds"},
-          "thresholds": {"mode": "absolute", "steps": [
-            {"color": "red", "value": null},
-            {"color": "green", "value": 1}
-          ]},
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
           "unit": "none"
         }
       },
-      "gridPos": {"h": 3, "w": 4, "x": 4, "y": 1},
+      "gridPos": {
+        "h": 3,
+        "w": 3,
+        "x": 3,
+        "y": 1
+      },
       "id": 3,
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto", "textMode": "auto", "colorMode": "background", "graphMode": "none"},
-      "title": "ernic instances",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "title": "ROCm Ernic Instances",
       "type": "stat",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
           "expr": "ernic_instances",
           "legendFormat": "instances",
           "refId": "A"
         }
-      ]
+      ],
+      "description": "Number of ernic NIC instances registered with the rocm-ernic mesh manager, as reported by the ernic-stats-exporter."
     },
-
     {
-      "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": {"mode": "thresholds"},
-          "thresholds": {"mode": "absolute", "steps": [{"color": "blue", "value": null}]},
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
           "unit": "Bps"
         }
       },
-      "gridPos": {"h": 3, "w": 8, "x": 8, "y": 1},
+      "gridPos": {
+        "h": 3,
+        "w": 6,
+        "x": 6,
+        "y": 1
+      },
       "id": 4,
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto", "textMode": "auto", "colorMode": "background", "graphMode": "area"},
-      "title": "RDMA bytes/s (fleet total)",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "area"
+      },
+      "title": "RDMA Fleet Throughput",
       "type": "stat",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
           "expr": "sum(rate(ernic_rdma_bytes_total[$__rate_interval]))",
           "legendFormat": "RDMA",
           "refId": "A"
         }
-      ]
+      ],
+      "description": "Fleet-total RDMA byte rate broken out by operation type: SEND, RECV, RDMA Read, RDMA Write. From ernic-stats-exporter."
     },
-
     {
-      "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": {"mode": "thresholds"},
-          "thresholds": {"mode": "absolute", "steps": [{"color": "purple", "value": null}]},
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "purple",
+                "value": null
+              }
+            ]
+          },
           "unit": "Bps"
         }
       },
-      "gridPos": {"h": 3, "w": 4, "x": 16, "y": 1},
+      "gridPos": {
+        "h": 3,
+        "w": 4,
+        "x": 12,
+        "y": 1
+      },
       "id": 5,
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto", "textMode": "auto", "colorMode": "background", "graphMode": "area"},
-      "title": "TCP mesh bytes/s (fleet total)",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "area"
+      },
+      "title": "TCP Mesh Fleet Throughput",
       "type": "stat",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
           "expr": "sum(rate(ernic_ip_bytes_total[$__rate_interval]))",
           "legendFormat": "TCP",
           "refId": "A"
         }
-      ]
+      ],
+      "description": "Total TCP/IP bytes per second over the ernic TAP network (fleet total TX + RX). This is the Ethernet layer beneath the RDMA mesh."
     },
-
     {
-      "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": {"mode": "thresholds"},
-          "thresholds": {"mode": "absolute", "steps": [
-            {"color": "green", "value": null},
-            {"color": "yellow", "value": 70},
-            {"color": "red", "value": 90}
-          ]},
-          "unit": "percent",
-          "min": 0, "max": 100
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "green",
+                "value": 2
+              }
+            ]
+          },
+          "unit": "short"
         }
       },
-      "gridPos": {"h": 3, "w": 4, "x": 20, "y": 1},
+      "gridPos": {
+        "h": 3,
+        "w": 4,
+        "x": 16,
+        "y": 1
+      },
       "id": 6,
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto", "textMode": "auto", "colorMode": "background", "graphMode": "area"},
-      "title": "GPU up",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "area"
+      },
+      "title": "GPU Up",
       "type": "stat",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
           "expr": "count(up{job=\"amd-gpu\"} == 1) or vector(0)",
           "legendFormat": "GPUs up",
           "refId": "A"
         }
-      ]
+      ],
+      "description": "Number of VMs where amd-metrics-exporter (:9488) is reachable. Requires the amdgpu driver to be loaded and bound to the gfx1250 device."
     },
-
     {
-      "collapsed": false,
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 4},
-      "id": 10,
-      "title": "Guests — CPU & Memory",
-      "type": "row"
-    },
-
-    {
-      "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": {"mode": "palette-classic"},
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Not bound",
+                  "color": "red",
+                  "index": 0
+                },
+                "1": {
+                  "text": "Bound",
+                  "color": "green",
+                  "index": 1
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "N/A",
+                  "color": "blue",
+                  "index": 2
+                }
+              }
+            }
+          ]
+        }
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 4,
+        "x": 20,
+        "y": 1
+      },
+      "id": 7,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "noValue": "N/A"
+      },
+      "title": "GPU Driver (amdgpu)",
+      "description": "Green = amd-metrics-exporter is up, which requires amdgpu to be loaded and bound to the gfx1250 device.",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "count(up{job=\"amd-gpu\"} == 1) or vector(0)",
+          "legendFormat": "bound",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 4
+      },
+      "id": 10,
+      "title": "Guests \u2014 CPU & Memory",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
           "unit": "percent",
           "min": 0,
-          "custom": {"lineWidth": 1, "fillOpacity": 10}
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
         },
         "overrides": []
       },
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 5},
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 5
+      },
       "id": 11,
-      "options": {"tooltip": {"mode": "multi"}, "legend": {"displayMode": "list", "placement": "bottom"}},
-      "title": "CPU busy % per VM",
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "title": "CPU Busy % Per VM",
       "type": "timeseries",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
           "expr": "100 - (avg by (vm_name) (rate(node_cpu_seconds_total{job=\"fleet-node\",mode=\"idle\",vm_name=~\"$vm\"}[$__rate_interval])) * 100)",
           "legendFormat": "{{vm_name}}",
           "refId": "A"
         }
-      ]
+      ],
+      "description": "CPU busy percentage per VM (100 \u2212 idle%), derived from node_cpu_seconds_total. Averaged across all vCPUs for each VM."
     },
-
     {
-      "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": {"mode": "palette-classic"},
+          "color": {
+            "mode": "palette-classic"
+          },
           "unit": "percent",
-          "min": 0, "max": 100,
-          "thresholds": {"mode": "absolute", "steps": [
-            {"color": "green", "value": null},
-            {"color": "yellow", "value": 70},
-            {"color": "red", "value": 90}
-          ]}
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 70
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          }
         }
       },
-      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 5},
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 5
+      },
       "id": 12,
       "options": {
-        "reduceOptions": {"calcs": ["lastNotNull"]},
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
         "orientation": "horizontal",
         "displayMode": "gradient",
         "valueMode": "color"
       },
-      "title": "Memory used % per VM",
+      "title": "Memory Used % Per VM",
       "type": "bargauge",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
           "expr": "100 * (1 - (node_memory_MemAvailable_bytes{job=\"fleet-node\",vm_name=~\"$vm\"} / node_memory_MemTotal_bytes{job=\"fleet-node\",vm_name=~\"$vm\"}))",
           "legendFormat": "{{vm_name}}",
           "refId": "A"
         }
-      ]
+      ],
+      "description": "Percentage of memory in use per VM: 100 \u00d7 (1 \u2212 MemAvailable / MemTotal). Current snapshot, not a time series."
     },
-
     {
-      "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": {"mode": "palette-classic"},
+          "color": {
+            "mode": "palette-classic"
+          },
           "unit": "none",
-          "custom": {"lineWidth": 1, "fillOpacity": 5}
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "never"
+          }
         }
       },
-      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 5},
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 5
+      },
       "id": 13,
-      "options": {"tooltip": {"mode": "multi"}, "legend": {"displayMode": "list", "placement": "bottom"}},
-      "title": "System load 1m per VM",
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "title": "System Load 1m Per VM",
       "type": "timeseries",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
           "expr": "node_load1{job=\"fleet-node\",vm_name=~\"$vm\"}",
           "legendFormat": "{{vm_name}}",
           "refId": "A"
         }
-      ]
+      ],
+      "description": "1-minute load average (node_load1) per VM. A value above the vCPU count indicates CPU saturation."
     },
-
     {
-      "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": {"mode": "palette-classic"},
+          "color": {
+            "mode": "palette-classic"
+          },
           "unit": "bytes",
-          "custom": {"lineWidth": 1, "fillOpacity": 5}
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "never"
+          }
         }
       },
-      "gridPos": {"h": 4, "w": 12, "x": 12, "y": 9},
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 12,
+        "y": 9
+      },
       "id": 14,
-      "options": {"tooltip": {"mode": "multi"}, "legend": {"displayMode": "list", "placement": "bottom"}},
-      "title": "Memory available per VM",
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "title": "Memory Available Per VM",
       "type": "timeseries",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
           "expr": "node_memory_MemAvailable_bytes{job=\"fleet-node\",vm_name=~\"$vm\"}",
           "legendFormat": "{{vm_name}} avail",
           "refId": "A"
         }
-      ]
+      ],
+      "description": "Bytes of memory available for new allocations (node_memory_MemAvailable_bytes) per VM over time."
     },
-
     {
       "collapsed": false,
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 13},
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 13
+      },
       "id": 20,
-      "title": "GPU (gfx1250 via amd-metrics-exporter)",
+      "title": "GPU \u2014 gfx1250",
       "type": "row"
     },
-
     {
-      "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": {"mode": "palette-classic"},
+          "color": {
+            "mode": "palette-classic"
+          },
           "unit": "percent",
-          "min": 0, "max": 100,
-          "custom": {"lineWidth": 1, "fillOpacity": 10}
+          "min": 0,
+          "max": 100,
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
         }
       },
-      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 14},
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 14
+      },
       "id": 21,
-      "options": {"tooltip": {"mode": "multi"}, "legend": {"displayMode": "list", "placement": "bottom"}},
-      "title": "GPU utilisation % per VM",
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "title": "GPU Utilisation % Per VM",
       "type": "timeseries",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
           "expr": "amd_gpu_utilization_percent{job=\"amd-gpu\",vm_name=~\"$vm\"}",
           "legendFormat": "{{vm_name}} gpu{{gpu_index}}",
           "refId": "A"
         }
-      ]
+      ],
+      "description": "GPU compute utilisation percentage per VM, from amd-metrics-exporter. For emulated gfx1250 this reflects rocjitsu workload activity."
     },
-
     {
-      "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": {"mode": "palette-classic"},
+          "color": {
+            "mode": "palette-classic"
+          },
           "unit": "bytes",
-          "custom": {"lineWidth": 1, "fillOpacity": 10}
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
         }
       },
-      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 14},
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 14
+      },
       "id": 22,
-      "options": {"tooltip": {"mode": "multi"}, "legend": {"displayMode": "list", "placement": "bottom"}},
-      "title": "VRAM used per VM",
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "title": "VRAM Used Per VM",
       "type": "timeseries",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
           "expr": "amd_vram_used_bytes{job=\"amd-gpu\",vm_name=~\"$vm\"}",
           "legendFormat": "{{vm_name}} gpu{{gpu_index}} used",
           "refId": "A"
         },
         {
-          "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
           "expr": "amd_vram_total_bytes{job=\"amd-gpu\",vm_name=~\"$vm\"}",
           "legendFormat": "{{vm_name}} gpu{{gpu_index}} total",
           "refId": "B"
         }
-      ]
+      ],
+      "description": "Video RAM usage per VM. Shows used bytes against total VRAM capacity for the gfx1250 emulated device."
     },
-
     {
-      "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": {"mode": "palette-classic"},
+          "color": {
+            "mode": "palette-classic"
+          },
           "unit": "watt",
-          "custom": {"lineWidth": 1, "fillOpacity": 5}
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "never"
+          }
         }
       },
-      "gridPos": {"h": 4, "w": 8, "x": 16, "y": 14},
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 16,
+        "y": 14
+      },
       "id": 23,
-      "options": {"tooltip": {"mode": "multi"}, "legend": {"displayMode": "list", "placement": "bottom"}},
-      "title": "GPU power per VM",
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "title": "GPU Power Per VM",
       "type": "timeseries",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
           "expr": "amd_gpu_power_watts{job=\"amd-gpu\",vm_name=~\"$vm\"}",
           "legendFormat": "{{vm_name}} gpu{{gpu_index}}",
           "refId": "A"
         }
-      ]
+      ],
+      "description": "GPU power consumption in watts per VM, as reported by amd-metrics-exporter."
     },
-
     {
-      "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": {"mode": "palette-classic"},
+          "color": {
+            "mode": "palette-classic"
+          },
           "unit": "celsius",
-          "custom": {"lineWidth": 1, "fillOpacity": 5}
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "never"
+          }
         }
       },
-      "gridPos": {"h": 4, "w": 8, "x": 16, "y": 18},
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 16,
+        "y": 18
+      },
       "id": 24,
-      "options": {"tooltip": {"mode": "multi"}, "legend": {"displayMode": "list", "placement": "bottom"}},
-      "title": "GPU temperature per VM",
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "title": "GPU Temperature Per VM",
       "type": "timeseries",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
           "expr": "amd_gpu_temperature_celsius{job=\"amd-gpu\",vm_name=~\"$vm\"}",
           "legendFormat": "{{vm_name}} gpu{{gpu_index}}",
           "refId": "A"
         }
-      ]
+      ],
+      "description": "GPU die temperature in Celsius per VM. Emulated gfx1250 values are provided by rocjitsu."
     },
-
     {
       "collapsed": false,
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 22},
-      "id": 30,
-      "title": "RDMA — ernic mesh",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      },
+      "id": 27,
+      "title": "NVMe Storage",
       "type": "row"
     },
-
     {
-      "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": {"mode": "palette-classic"},
+          "color": {
+            "mode": "palette-classic"
+          },
           "unit": "Bps",
-          "custom": {"lineWidth": 1, "fillOpacity": 10}
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
         }
       },
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 23},
-      "id": 31,
-      "options": {"tooltip": {"mode": "multi"}, "legend": {"displayMode": "list", "placement": "bottom"}},
-      "title": "RDMA throughput — fleet total",
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 23
+      },
+      "id": 25,
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "title": "NVMe I/O Per VM",
       "type": "timeseries",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "rate(node_disk_read_bytes_total{job=\"fleet-node\",device=\"nvme0n1\",vm_name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{vm_name}} read",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "rate(node_disk_written_bytes_total{job=\"fleet-node\",device=\"nvme0n1\",vm_name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{vm_name}} write",
+          "refId": "B"
+        }
+      ],
+      "description": "NVMe (nvme0n1) read and write throughput in bytes per second per VM, from node-exporter disk stats."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "iops",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "never"
+          }
+        }
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 23
+      },
+      "id": 26,
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "title": "NVMe IOPS Per VM",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "rate(node_disk_reads_completed_total{job=\"fleet-node\",device=\"nvme0n1\",vm_name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{vm_name}} read IOPS",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "rate(node_disk_writes_completed_total{job=\"fleet-node\",device=\"nvme0n1\",vm_name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{vm_name}} write IOPS",
+          "refId": "B"
+        }
+      ],
+      "description": "NVMe (nvme0n1) read and write I/O operations per second per VM, from node-exporter."
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 29
+      },
+      "id": 38,
+      "title": "Network & Driver Status",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Not found",
+                  "color": "red",
+                  "index": 0
+                },
+                "1": {
+                  "text": "1 bound",
+                  "color": "yellow",
+                  "index": 1
+                },
+                "2": {
+                  "text": "Both bound",
+                  "color": "green",
+                  "index": 2
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "N/A",
+                  "color": "blue",
+                  "index": 3
+                }
+              }
+            }
+          ]
+        }
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 6,
+        "x": 1,
+        "y": 30
+      },
+      "id": 36,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "horizontal",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "noValue": "N/A"
+      },
+      "title": "rocm-ernic0 (ionic)",
+      "description": "Counts VMs where rocm-ernic0 is visible to node-exporter. Present = ionic driver is loaded and bound.",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "count(node_network_info{job=\"fleet-node\",device=\"rocm-ernic0\"}) or vector(0)",
+          "legendFormat": "VMs with rocm-ernic0",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "green",
+                "value": 2
+              }
+            ]
+          },
+          "unit": "short",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Down",
+                  "color": "red",
+                  "index": 0
+                },
+                "1": {
+                  "text": "1 up",
+                  "color": "yellow",
+                  "index": 1
+                },
+                "2": {
+                  "text": "Both up",
+                  "color": "green",
+                  "index": 2
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "N/A",
+                  "color": "blue",
+                  "index": 3
+                }
+              }
+            }
+          ]
+        }
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 6,
+        "x": 7,
+        "y": 30
+      },
+      "id": 37,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "horizontal",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "noValue": "N/A"
+      },
+      "title": "ionic_rdma (RDMA exporter up)",
+      "description": "Counts VMs where rdma-metrics-exporter is reachable. Up = ionic_rdma module is loaded.",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "count(up{job=\"rdma-exporter\"} == 1) or vector(0)",
+          "legendFormat": "VMs with ionic_rdma",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 32
+      },
+      "id": 40,
+      "title": "RDMA Device Counters (rdma_exporter)",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "description": "VMs with IB port in ACTIVE state from rdma_exporter hardware counters.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "green",
+                "value": 2
+              }
+            ]
+          },
+          "unit": "short",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "None",
+                  "color": "red",
+                  "index": 0
+                },
+                "1": {
+                  "text": "1 active",
+                  "color": "yellow",
+                  "index": 1
+                },
+                "2": {
+                  "text": "Both active",
+                  "color": "green",
+                  "index": 2
+                }
+              }
+            }
+          ]
+        }
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 6,
+        "x": 0,
+        "y": 33
+      },
+      "id": 41,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "title": "IB Port Active",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "count(rdma_port_info{job=\"rdma-exporter\",state=\"ACTIVE\"}) or vector(0)",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "description": "RDMA link speed label from rdma_port_info per VM.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 6,
+        "x": 6,
+        "y": 33
+      },
+      "id": 42,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "title": "Link Speed",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "rdma_port_info{job=\"rdma-exporter\"}",
+          "legendFormat": "{{vm_name}} {{link_speed}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "description": "RDMA byte rates from rdma_exporter hardware counters on the ionic device (send/recv/read/write). Device-level, complementing ernic-stats mesh-level counters above.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "Bps",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        }
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 36
+      },
+      "id": 43,
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "title": "RDMA Bytes/s Per Device",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "rate(rdma_total_bytes_sent_total{job=\"rdma-exporter\",vm_name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{vm_name}} send",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "rate(rdma_total_bytes_received_total{job=\"rdma-exporter\",vm_name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{vm_name}} recv",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "rate(rdma_total_bytes_rdma_read_total{job=\"rdma-exporter\",vm_name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{vm_name}} RDMA read",
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "rate(rdma_total_bytes_rdma_write_total{job=\"rdma-exporter\",vm_name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{vm_name}} RDMA write",
+          "refId": "D"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "description": "RDMA command rate per device from rdma_exporter. Admin queue commands to the ionic RDMA device.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "ops",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "never"
+          }
+        }
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 36
+      },
+      "id": 44,
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "title": "RDMA Commands/s Per Device",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "rate(rdma_commands_total{job=\"rdma-exporter\",vm_name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{vm_name}} {{device}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 40
+      },
+      "id": 30,
+      "title": "RDMA \u2014 Ernic Mesh",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "Bps",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 41
+      },
+      "id": 31,
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "title": "RDMA Throughput \u2014 Fleet Total",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
           "expr": "sum(rate(ernic_rdma_bytes_sent_total[$__rate_interval]))",
           "legendFormat": "send",
           "refId": "A"
         },
         {
-          "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
           "expr": "sum(rate(ernic_rdma_bytes_received_total[$__rate_interval]))",
           "legendFormat": "recv",
           "refId": "B"
         },
         {
-          "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
           "expr": "sum(rate(ernic_rdma_bytes_read_total[$__rate_interval]))",
           "legendFormat": "RDMA read",
           "refId": "C"
         },
         {
-          "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
           "expr": "sum(rate(ernic_rdma_bytes_write_total[$__rate_interval]))",
           "legendFormat": "RDMA write",
           "refId": "D"
         }
-      ]
+      ],
+      "description": "Fleet-total RDMA byte rate broken out by operation type: SEND, RECV, RDMA Read, RDMA Write. From ernic-stats-exporter."
     },
-
     {
-      "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": {"mode": "palette-classic"},
+          "color": {
+            "mode": "palette-classic"
+          },
           "unit": "Bps",
           "min": 0,
-          "thresholds": {"mode": "absolute", "steps": [{"color": "blue", "value": null}]}
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
         }
       },
-      "gridPos": {"h": 8, "w": 6, "x": 12, "y": 23},
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 41
+      },
       "id": 32,
       "options": {
-        "reduceOptions": {"calcs": ["lastNotNull"]},
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
         "orientation": "horizontal",
         "displayMode": "gradient",
         "valueMode": "color"
       },
-      "title": "RDMA bytes/s by node",
+      "title": "RDMA By Node",
       "type": "bargauge",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
           "expr": "sum by (ernic_id, role) (rate(ernic_rdma_bytes_total[$__rate_interval]))",
           "legendFormat": "node {{ernic_id}} ({{role}})",
           "refId": "A"
         }
-      ]
+      ],
+      "description": "RDMA bytes per second per ernic node (current snapshot). Shows which nodes are active in the mesh."
     },
-
     {
-      "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": {"mode": "palette-classic"},
+          "color": {
+            "mode": "palette-classic"
+          },
           "unit": "Bps",
-          "custom": {"lineWidth": 1, "fillOpacity": 5}
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "never"
+          }
         }
       },
-      "gridPos": {"h": 8, "w": 6, "x": 18, "y": 23},
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 41
+      },
       "id": 33,
-      "options": {"tooltip": {"mode": "multi"}, "legend": {"displayMode": "list", "placement": "bottom"}},
-      "title": "TCP mesh traffic — fleet total",
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "title": "TCP Mesh Fleet Traffic",
       "type": "timeseries",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
           "expr": "sum(rate(ernic_ip_bytes_tx_total[$__rate_interval]))",
           "legendFormat": "TX",
           "refId": "A"
         },
         {
-          "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
           "expr": "sum(rate(ernic_ip_bytes_rx_total[$__rate_interval]))",
           "legendFormat": "RX",
           "refId": "B"
         }
-      ]
+      ],
+      "description": "TCP/IP bytes per second on the ernic TAP Ethernet network per direction (TX/RX). This carries RDMA signalling and out-of-band exchange."
     },
-
     {
-      "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": {"mode": "palette-classic"},
+          "color": {
+            "mode": "palette-classic"
+          },
           "unit": "ops",
-          "custom": {"lineWidth": 1, "fillOpacity": 5}
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "never"
+          }
         }
       },
-      "gridPos": {"h": 6, "w": 12, "x": 0, "y": 31},
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 49
+      },
       "id": 34,
-      "options": {"tooltip": {"mode": "multi"}, "legend": {"displayMode": "list", "placement": "bottom"}},
-      "title": "Doorbells & completions — fleet total",
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "title": "Doorbells & Completions \u2014 Fleet Total",
       "type": "timeseries",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
           "expr": "sum(rate(ernic_qp_doorbell_send_total[$__rate_interval]))",
           "legendFormat": "doorbell send",
           "refId": "A"
         },
         {
-          "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
           "expr": "sum(rate(ernic_qp_doorbell_recv_total[$__rate_interval]))",
           "legendFormat": "doorbell recv",
           "refId": "B"
         },
         {
-          "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
           "expr": "sum(rate(ernic_qp_cqes_posted_total[$__rate_interval]))",
           "legendFormat": "CQEs posted",
           "refId": "C"
         },
         {
-          "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
           "expr": "sum(rate(ernic_qp_wqes_processed_total[$__rate_interval]))",
           "legendFormat": "WQEs processed",
           "refId": "D"
         }
-      ]
+      ],
+      "description": "RDMA queue pair activity: send/recv doorbells ring when a WQE is posted; CQEs and WQEs track completions. A proxy for RDMA operation rate."
     },
-
     {
-      "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": {"mode": "palette-classic"},
+          "color": {
+            "mode": "palette-classic"
+          },
           "unit": "Bps",
-          "custom": {"lineWidth": 1, "fillOpacity": 5}
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "never"
+          }
         }
       },
-      "gridPos": {"h": 6, "w": 12, "x": 12, "y": 31},
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 49
+      },
       "id": 35,
-      "options": {"tooltip": {"mode": "multi"}, "legend": {"displayMode": "list", "placement": "bottom"}},
-      "title": "RDMA traffic by node",
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "title": "RDMA Traffic By Node",
       "type": "timeseries",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
           "expr": "rate(ernic_rdma_bytes_sent_total[$__rate_interval])",
           "legendFormat": "node {{ernic_id}} send",
           "refId": "A"
         },
         {
-          "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
           "expr": "rate(ernic_rdma_bytes_received_total[$__rate_interval])",
           "legendFormat": "node {{ernic_id}} recv",
           "refId": "B"
         }
-      ]
+      ],
+      "description": "Per-node RDMA send/recv byte rate over time. Useful for spotting asymmetric traffic or stalled nodes."
     }
-
   ],
   "refresh": "30s",
   "schemaVersion": 39,
-  "tags": ["quickstart", "ernic", "gpu"],
+  "tags": [
+    "quickstart",
+    "ernic",
+    "gpu"
+  ],
   "templating": {
     "list": [
       {
-        "current": {"selected": true, "text": "All", "value": "$__all"},
-        "datasource": {"type": "prometheus", "uid": "fleet-prometheus"},
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "fleet-prometheus"
+        },
         "definition": "label_values(up{job=\"fleet-node\"}, vm_name)",
         "hide": 0,
         "includeAll": true,
@@ -601,7 +1873,10 @@
       }
     ]
   },
-  "time": {"from": "now-15m", "to": "now"},
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
   "timepicker": {},
   "timezone": "browser",
   "title": "Quick Start Overview",
