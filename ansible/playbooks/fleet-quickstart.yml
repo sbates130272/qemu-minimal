@@ -140,7 +140,7 @@
     - name: Report what each guest has
       ansible.builtin.debug:
         msg: >-
-          {{ inventory_hostname }}: kernel {{ ansible_kernel }},
+          {{ inventory_hostname }}: kernel {{ ansible_facts['kernel'] }},
           ROCm {{ quickstart_rocm }}, IB {{ quickstart_ib_device }}
           ({{ quickstart_port.attempts | default(1) }} attempt(s) to PORT_ACTIVE),
           ernic {{ fleet_guest_ip }}
