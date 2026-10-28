@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
   "label": "rocjitsu GEMM",
-  "message": "664 kFLOP/s (+4%)",
-  "color": "brightgreen"
+  "message": "464 kFLOP/s (-31%)",
+  "color": "red"
 }
