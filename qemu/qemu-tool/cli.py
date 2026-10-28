@@ -31,6 +31,7 @@ from .down_all import discover as _discover_stacks, run as down_all_run, teardow
 from .quick_start import VERBS as _QUICK_START_VERBS, run as quick_start_run
 from .shutdown import run as shutdown_run
 from .list_vms import run as list_vms_run, collect as _list_vms_collect
+from . import qcow as _qcow
 from .run_vm import build_command, run as run_vm_run
 from . import summary
 
@@ -140,6 +141,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_list(sub)
     _add_inspect(sub)
     _add_ssh(sub)
+    _add_qcow(sub)
     _add_man(sub)
 
     return parser
@@ -634,6 +636,66 @@ def _add_ssh(sub: argparse._SubParsersAction) -> None:
         help="Remaining arguments, passed through to ssh (e.g. a command).",
     )
     p.set_defaults(func=_ssh_cmd)
+
+
+def _add_qcow(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser(
+        "qcow",
+        help="Inspect and manage VM overlay qcow2 state.",
+        description=(
+            "List, inspect or clean VM overlay images and their NVMe scratch disks. "
+            "Images are read from VM_IMAGES_DIR (or --images). "
+            "The VM must be stopped before --clean."
+        ),
+    )
+    group = p.add_mutually_exclusive_group(required=True)
+    group.add_argument(
+        "--list", action="store_true",
+        help="List all VM overlays with virtual size, disk usage and backing file.",
+    )
+    group.add_argument(
+        "--state", metavar="VM",
+        help="Show overlay info (backing, sizes, dirty flag, NVMe disks) for one VM.",
+    )
+    group.add_argument(
+        "--clean", metavar="VM",
+        help=(
+            "Delete the overlay and NVMe scratch for VM, then recreate the "
+            "overlay from the backing image. VM must be stopped."
+        ),
+    )
+    p.add_argument(
+        "--yes", "-y", action="store_true",
+        help="Skip the --clean confirmation prompt.",
+    )
+    p.add_argument(
+        "--images", type=Path, default=None, metavar="DIR",
+        help="VM images directory (overrides VM_IMAGES_DIR).",
+    )
+    p.add_argument(
+        "--env-file", action="append", type=Path, default=None, metavar="FILE",
+        help="Settings file. Repeatable; later files win.",
+    )
+    p.set_defaults(func=_qcow_cmd)
+
+
+def _qcow_cmd(args: argparse.Namespace) -> None:
+    from .config import VMConfig, default_images
+    images: Path
+    if args.images:
+        images = args.images
+    elif args.env_file:
+        cfg = VMConfig.from_env(args.env_file)
+        images = cfg.images
+    else:
+        images = default_images()
+
+    if args.list:
+        _qcow.list_overlays(images)
+    elif args.state:
+        _qcow.state(images, args.state)
+    elif args.clean:
+        _qcow.clean(images, args.clean, yes=args.yes)
 
 
 def _add_check(sub: argparse._SubParsersAction) -> None:
