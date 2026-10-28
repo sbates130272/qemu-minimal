@@ -4,7 +4,7 @@ title: VM Report — VM 2
 
 # VM Report — qemu-minimal — VM 2
 
-Generated: **2026-10-27 21:12 UTC** &middot; Commit: [`65dc3a5`](https://github.com/sbates130272/qemu-minimal/commit/65dc3a5c17c08f1c2b34dd548a804bcb189e7192) &middot; Status: **pass**
+Generated: **2026-10-28 15:07 UTC** &middot; Commit: [`65dc3a5`](https://github.com/sbates130272/qemu-minimal/commit/65dc3a5c17c08f1c2b34dd548a804bcb189e7192) &middot; Status: **pass**
 
 ## Hardware
 
@@ -19,13 +19,13 @@ Generated: **2026-10-27 21:12 UTC** &middot; Commit: [`65dc3a5`](https://github.
 ## Kernel
 
 ```
-7.0.0-38-generic
+7.0.0-42-generic
 ```
 
 <details><summary>Full version string</summary>
 
 ```
-Linux version 7.0.0-38-generic (buildd@lcy02-amd64-070) (x86_64-linux-gnu-gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0, GNU ld (GNU Binutils for Ubuntu) 2.46) #38-Ubuntu SMP PREEMPT_DYNAMIC Fri Sep  4 09:10:14 UTC 2026
+Linux version 7.0.0-42-generic (buildd@lcy02-amd64-049) (x86_64-linux-gnu-gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0, GNU ld (GNU Binutils for Ubuntu) 2.46) #42-Ubuntu SMP PREEMPT_DYNAMIC Thu Oct 15 08:06:44 UTC 2026
 ```
 
 </details>
@@ -46,8 +46,8 @@ vda        8G disk
 
 ```
 Filesystem      Size  Used Avail Use% Mounted on
-/dev/vda1       6.7G  4.3G  2.4G  65% /
-/dev/vda13      989M   98M  824M  11% /boot
+/dev/vda1       6.7G  4.9G  1.8G  73% /
+/dev/vda13      989M  183M  739M  20% /boot
 ```
 
 ### NVMe
