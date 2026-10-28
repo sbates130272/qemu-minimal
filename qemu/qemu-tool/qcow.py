@@ -80,7 +80,7 @@ def list_overlays(images: Path) -> None:
 
     running = {v.get("name") for v in (_running_vms() or [])}
 
-    header = f"{'VM':<30} {'Virtual':>10} {'Disk':>10} {'Backing':<35} {'State'}"
+    header = f"{'Name':<28} {'Path':<45} {'Virtual':>10} {'On Disk':>10} {'Delta':>10} {'State'}"
     print(header)
     print("-" * len(header))
 
@@ -88,13 +88,25 @@ def list_overlays(images: Path) -> None:
         vm_name = p.stem
         info = _qemu_img_info(p)
         vsize = _fmt_bytes(info.get("virtual-size"))
-        dsize = _fmt_bytes(p.stat().st_blocks * 512 if p.exists() else None)
-        backing = info.get("backing-filename", "-")
-        if backing and len(backing) > 34:
-            backing = "…" + backing[-33:]
+        overlay_bytes = p.stat().st_blocks * 512 if p.exists() else 0
+        dsize = _fmt_bytes(overlay_bytes)
+
+        # Delta: how much the overlay has grown beyond a fresh state.
+        # Positive = written N bytes on top of the backing; "fresh" = barely touched.
+        backing_path = _backing_path(images, vm_name)
+        if backing_path.exists() and overlay_bytes:
+            backing_bytes = backing_path.stat().st_blocks * 512
+            diff = overlay_bytes - backing_bytes
+            delta = _fmt_bytes(diff) if diff > 0 else "fresh"
+        else:
+            delta = "-"
+
         dirty = " dirty" if info.get("dirty-flag") else ""
         status = "running" if vm_name in running else "stopped"
-        print(f"{vm_name:<30} {vsize:>10} {dsize:>10} {backing:<35} {status}{dirty}")
+        path_str = str(p)
+        if len(path_str) > 44:
+            path_str = "…" + path_str[-43:]
+        print(f"{vm_name:<28} {path_str:<45} {vsize:>10} {dsize:>10} {delta:>10} {status}{dirty}")
 
     nvme_total = sum(
         p.stat().st_blocks * 512
