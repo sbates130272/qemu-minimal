@@ -1287,7 +1287,7 @@ that Prometheus answers a query, which is not padding: they are part of the
 documented quickstart now, and a lane that only looked at the guests would
 publish a green report about a stack half of which had not started.
 
-**`pr-quickstart-boot` is the PR-time half of that lane, and is not a report
+**`quickstart-boot` is the PR-time half of that lane, and is not a report
 lane.** report-for-quickstart runs on push to main and on a cron, so a broken
 quickstart was found the morning after the merge; `Gen Compose Check` renders
 `qemu/env/quickstart` on every PR but starts nothing. This one boots **one**

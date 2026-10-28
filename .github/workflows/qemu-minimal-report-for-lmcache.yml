@@ -107,7 +107,7 @@ jobs:
     # The value must match the uid the overlays were created as, so it is
     # derived from the action's rather than written out again.
     #
-    # pr-quickstart-boot deliberately does NOT do this: it uses qemu-tool
+    # quickstart-boot deliberately does NOT do this: it uses qemu-tool
     # throughout, so leaving the variable unset is what tests that
     # compose._caller_identity() resolves it.
     - name: Let plain docker compose see the same uid

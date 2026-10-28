@@ -209,7 +209,7 @@ All notable changes to this project will be documented in this file.
   which resolves the port, the account and the key, and the plain `ssh` line
   spelled out beside it — and where to watch it.
 
-- **A PR-time boot check for the quickstart**, `pr-quickstart-boot`. The
+- **A PR-time boot check for the quickstart**, `quickstart-boot`. The
   daily report lane runs on push to main and on a cron, so a broken quickstart
   was found the morning after the merge; `Gen Compose Check` renders the
   settings file on every PR but starts nothing. This boots one guest from the

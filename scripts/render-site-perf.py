@@ -16,7 +16,7 @@ from typing import Dict, List, Optional
 METRICS = (
     {
         "key": "gemm",
-        "label": "rocjitsu GEMM",
+        "label": "Rocjitsu GEMM",
         "badge_file": "badge-gemm.json",
         "source": ("rocjitsu", "badge-gemm.json"),
         "base_unit": "FLOP/s",
@@ -24,7 +24,7 @@ METRICS = (
     },
     {
         "key": "hipfile",
-        "label": "rocjitsu hipFile",
+        "label": "Rocjitsu HipFile",
         "badge_file": "badge-hipfile.json",
         "source": ("rocjitsu", "badge-hipfile.json"),
         "base_unit": "B/s",
@@ -32,7 +32,7 @@ METRICS = (
     },
     {
         "key": "hipfile-fio",
-        "label": "hipFile fio",
+        "label": "HipFile Fio",
         "badge_file": "badge-hipfile-fio.json",
         "source": ("hipfile-fio", "badge-hipfile-fio.json"),
         "base_unit": "B/s",
@@ -455,7 +455,7 @@ def write_green_badge(perf_dir: Path, state: Dict) -> None:
         perf_dir / "badge-all-green.json",
         {
             "schemaVersion": 1,
-            "label": "all reports green",
+            "label": "All Reports Green",
             "message": message,
             "color": color,
         },
