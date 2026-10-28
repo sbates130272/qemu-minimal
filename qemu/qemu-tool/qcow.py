@@ -80,7 +80,7 @@ def list_overlays(images: Path) -> None:
 
     running = {v.get("name") for v in (_running_vms() or [])}
 
-    header = f"{'Name':<28} {'Path':<45} {'Virtual':>10} {'On Disk':>10} {'Delta':>10} {'State'}"
+    header = f"{'Name':<28} {'Path':<40} {'Virtual':>10} {'On Disk':>10} {'Delta':>10} {'Backing':<30} {'State'}"
     print(header)
     print("-" * len(header))
 
@@ -101,12 +101,15 @@ def list_overlays(images: Path) -> None:
         else:
             delta = "-"
 
+        backing_file = info.get("backing-filename", "-")
+        if backing_file and len(backing_file) > 29:
+            backing_file = "…" + backing_file[-28:]
         dirty = " dirty" if info.get("dirty-flag") else ""
         status = "running" if vm_name in running else "stopped"
         path_str = str(p)
-        if len(path_str) > 44:
-            path_str = "…" + path_str[-43:]
-        print(f"{vm_name:<28} {path_str:<45} {vsize:>10} {dsize:>10} {delta:>10} {status}{dirty}")
+        if len(path_str) > 39:
+            path_str = "…" + path_str[-38:]
+        print(f"{vm_name:<28} {path_str:<40} {vsize:>10} {dsize:>10} {delta:>10} {backing_file:<30} {status}{dirty}")
 
     nvme_total = sum(
         p.stat().st_blocks * 512
