@@ -125,12 +125,20 @@
     # DKMS modules but has no modules-load.d entries, so they depend on udev
     # device detection at boot. Making this explicit prevents a race between
     # udev and the ibv_devinfo check below.
-    - name: Load ionic and ionic_rdma modules
-      become: true
-      ansible.builtin.command:
-        cmd: modprobe -a ionic ionic_rdma
+    - name: Log kernel version and ionic module state
+      ansible.builtin.shell:
+        cmd: |
+          echo "kernel: $(uname -r)"
+          echo "ionic_rdma in modules: $(find /lib/modules/$(uname -r) -name 'ionic_rdma*' 2>/dev/null | head -1 || echo MISSING)"
+          modprobe -a ionic ionic_rdma 2>&1 && echo "modprobe: OK" || echo "modprobe: FAILED rc=$?"
+        executable: /bin/bash
+      register: quickstart_ionic_log
       changed_when: false
       failed_when: false
+
+    - name: Show ionic module state
+      ansible.builtin.debug:
+        msg: "{{ quickstart_ionic_log.stdout_lines }}"
 
     # (AGENTS.md issue 21), and a wrong -d is a confusing failure.
     # Retried: ionic_rdma probes over vfio-user and the device registration

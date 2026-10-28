@@ -651,7 +651,7 @@ def _add_qcow(sub: argparse._SubParsersAction) -> None:
     group = p.add_mutually_exclusive_group(required=True)
     group.add_argument(
         "--list", action="store_true",
-        help="List all VM overlays with virtual size, disk usage and backing file.",
+        help="List all VM overlays with virtual size, on-disk usage, delta and backing.",
     )
     group.add_argument(
         "--state", metavar="VM",
@@ -673,6 +673,10 @@ def _add_qcow(sub: argparse._SubParsersAction) -> None:
         help="VM images directory (overrides VM_IMAGES_DIR).",
     )
     p.add_argument(
+        "--nvme", action="store_true",
+        help="With --list: show a separate NVMe scratch disk section.",
+    )
+    p.add_argument(
         "--env-file", action="append", type=Path, default=None, metavar="FILE",
         help="Settings file. Repeatable; later files win.",
     )
@@ -681,21 +685,21 @@ def _add_qcow(sub: argparse._SubParsersAction) -> None:
 
 def _qcow_cmd(args: argparse.Namespace) -> None:
     from .config import VMConfig, default_images
-    images: Path
+    images: Path | None
     if args.images:
         images = args.images
     elif args.env_file:
         cfg = VMConfig.from_env(args.env_file)
         images = cfg.images
     else:
-        images = default_images()
+        images = None  # let list_overlays scan all known dirs
 
     if args.list:
-        _qcow.list_overlays(images)
+        _qcow.list_overlays(images, show_nvme=getattr(args, "nvme", False))
     elif args.state:
-        _qcow.state(images, args.state)
+        _qcow.state(images or default_images(), args.state)
     elif args.clean:
-        _qcow.clean(images, args.clean, yes=args.yes)
+        _qcow.clean(images or default_images(), args.clean, yes=args.yes)
 
 
 def _add_check(sub: argparse._SubParsersAction) -> None:

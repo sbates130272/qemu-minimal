@@ -9,11 +9,17 @@ Subcommand flags:
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from .list_vms import collect as _running_vms
+
+# A freshly created qcow2 overlay has ~200 KiB of header/metadata but no
+# data blocks. Anything at or below this threshold is treated as "0 B" delta.
+_FRESH_QCOW2_BYTES = 256 * 1024
 
 
 # ---------------------------------------------------------------------------
@@ -72,38 +78,144 @@ def _all_overlays(images: Path) -> list[Path]:
 # ---------------------------------------------------------------------------
 # Public commands
 
-def list_overlays(images: Path) -> None:
-    overlays = _all_overlays(images)
-    if not overlays:
-        print(f"No VM overlays found in {images}")
+def _default_image_dirs() -> list[Path]:
+    """Return all image directories to scan when --images is not given.
+
+    Checks (in order, deduplicating):
+      1. System-wide /var/lib/qemu-tool/images/
+      2. User XDG ~/.local/share/qemu-tool/images/
+      3. VM_IMAGES_DIR from any local env files found by the env-file search
+    """
+    from .config import _INSTALLED_IMAGES, _xdg_data_home  # type: ignore[attr-defined]
+    from .envfile import load as _load_env  # type: ignore[attr-defined]
+    seen: set[Path] = set()
+    dirs: list[Path] = []
+
+    def _add(p: Path) -> None:
+        p = p.resolve()
+        if p not in seen and p.is_dir():
+            seen.add(p)
+            dirs.append(p)
+
+    _add(_INSTALLED_IMAGES)
+    _add(_xdg_data_home() / "qemu-tool" / "images")
+
+    # Shell environment variable takes priority for interactive use.
+    env_var = os.environ.get("VM_IMAGES_DIR")
+    if env_var:
+        _add(Path(env_var))
+
+    # Also pick up VM_IMAGES_DIR from any local env file the tool would load.
+    try:
+        env = _load_env([])
+        images_from_env = env.get("VM_IMAGES_DIR")
+        if images_from_env:
+            _add(Path(images_from_env))
+    except Exception:
+        pass
+
+    if not dirs:
+        from .config import default_images  # type: ignore[attr-defined]
+        _add(default_images())
+    return dirs
+
+
+def _age_days(path: Path) -> str:
+    """Return how many days since path was last modified, e.g. '3d' or 'today'."""
+    try:
+        days = int((time.time() - path.stat().st_mtime) / 86400)
+        return "today" if days == 0 else f"{days}d"
+    except OSError:
+        return "-"
+
+
+def _trunc(s: str, n: int) -> str:
+    return s if len(s) <= n else "…" + s[-(n - 1):]
+
+
+def list_overlays(images: Path | None, show_nvme: bool = False) -> None:
+    if images is not None:
+        dirs = [images]
+    else:
+        dirs = _default_image_dirs()
+
+    all_overlays: list[tuple[Path, Path]] = []  # (images_dir, overlay_path)
+    for d in dirs:
+        for p in _all_overlays(d):
+            all_overlays.append((d, p))
+
+    if not all_overlays:
+        print(f"No VM overlays found in: {', '.join(str(d) for d in dirs)}")
         return
 
     running = {v.get("name") for v in (_running_vms() or [])}
 
-    header = f"{'VM':<30} {'Virtual':>10} {'Disk':>10} {'Backing':<35} {'State'}"
-    print(header)
-    print("-" * len(header))
+    hdr = (f"{'Name':<26} {'Path':<55} {'Virtual':>10} {'On Disk':>10} {'Delta':>10} "
+           f"{'Age':>5} {'Backing Age':>11} {'Backing':<28} {'State'}")
+    print(hdr)
+    print("-" * len(hdr))
 
-    for p in overlays:
+    prev_dir: Path | None = None
+    for images_dir, p in all_overlays:
+        if images_dir != prev_dir and len(dirs) > 1:
+            print(f"\n  {images_dir}/")
+            prev_dir = images_dir
+
         vm_name = p.stem
         info = _qemu_img_info(p)
         vsize = _fmt_bytes(info.get("virtual-size"))
-        dsize = _fmt_bytes(p.stat().st_blocks * 512 if p.exists() else None)
-        backing = info.get("backing-filename", "-")
-        if backing and len(backing) > 34:
-            backing = "…" + backing[-33:]
+        overlay_bytes = p.stat().st_blocks * 512 if p.exists() else 0
+        dsize = _fmt_bytes(overlay_bytes)
+
+        # Delta: the overlay's own on-disk footprint is the COW delta — it
+        # only stores blocks that differ from the backing. A fresh overlay
+        # has just qcow2 header/refcount metadata (~200 KiB); treat that as 0.
+        # N/A when there is no backing file (standalone image, not an overlay).
+        has_backing = bool(info.get("backing-filename"))
+        if not has_backing:
+            delta = "N/A"
+        elif overlay_bytes <= _FRESH_QCOW2_BYTES:
+            delta = "0 B"
+        else:
+            delta = _fmt_bytes(overlay_bytes)
+
+        age_overlay = _age_days(p)
+        backing_path = _backing_path(images_dir, vm_name)
+        age_backing = _age_days(backing_path) if backing_path.exists() else "-"
+
+        backing_file = info.get("backing-filename", "-")
+        backing_file = _trunc(backing_file, 28) if backing_file != "-" else "-"
+
         dirty = " dirty" if info.get("dirty-flag") else ""
         status = "running" if vm_name in running else "stopped"
-        print(f"{vm_name:<30} {vsize:>10} {dsize:>10} {backing:<35} {status}{dirty}")
+        path_str = _trunc(str(p), 38)
+        print(f"{vm_name:<26} {path_str:<55} {vsize:>10} {dsize:>10} {delta:>10} "
+              f"{age_overlay:>5} {age_backing:>11} {backing_file:<28} {status}{dirty}")
 
-    nvme_total = sum(
-        p.stat().st_blocks * 512
-        for vm in [o.stem for o in overlays]
-        for p in _nvme_paths(images, vm)
-        if p.exists()
-    )
-    if nvme_total:
-        print(f"\nNVMe scratch: {_fmt_bytes(nvme_total)} across all VMs")
+    if show_nvme:
+        nvme_rows: list[tuple[Path, Path]] = []
+        for images_dir, p in all_overlays:
+            for np in _nvme_paths(images_dir, p.stem):
+                if np.exists():
+                    nvme_rows.append((images_dir, np))
+        if nvme_rows:
+            print(f"\n{'NVMe Images':<40} {'On Disk':>10} {'Age':>5}")
+            print("-" * 60)
+            for images_dir, np in nvme_rows:
+                sz = _fmt_bytes(np.stat().st_blocks * 512)
+                age = _age_days(np)
+                print(f"{_trunc(np.name, 40):<40} {sz:>10} {age:>5}")
+        else:
+            print("\nNVMe Images: none")
+    else:
+        total = sum(
+            np.stat().st_blocks * 512
+            for images_dir, p in all_overlays
+            for np in _nvme_paths(images_dir, p.stem)
+            if np.exists()
+        )
+        if total:
+            print(f"\nNVMe Images: {_fmt_bytes(total)} total  (use --nvme for details)")
 
 
 def state(images: Path, vm_name: str) -> None:
@@ -163,10 +275,10 @@ def clean(images: Path, vm_name: str, yes: bool = False) -> None:
 
     if not yes:
         try:
-            ans = input("Proceed? [y/N] ").strip().lower()
+            reply = input("Proceed? [y/N] ").strip().lower()
         except (EOFError, KeyboardInterrupt):
-            ans = ""
-        if ans != "y":
+            reply = ""
+        if reply != "y":
             print("Aborted.")
             return
 
