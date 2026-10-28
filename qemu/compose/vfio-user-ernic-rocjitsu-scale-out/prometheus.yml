@@ -90,6 +90,44 @@ scrape_configs:
           vm: "8"
           vm_name: "stebates-fleet-8"
 
+  # hsa-snoop: HSA/AQL queue snooper (port 9490). Exposes per-kernel
+  # launch counts, duration histograms and active queue counts via
+  # kprobe on kfd_ioctl_create_queue. Same hostfwd pattern as fleet-node.
+  - job_name: hsa-snoop
+    static_configs:
+      - targets: ["172.31.3.1:9490"]
+        labels:
+          vm: "1"
+          vm_name: "stebates-fleet-1"
+      - targets: ["172.31.3.2:9490"]
+        labels:
+          vm: "2"
+          vm_name: "stebates-fleet-2"
+      - targets: ["172.31.3.3:9490"]
+        labels:
+          vm: "3"
+          vm_name: "stebates-fleet-3"
+      - targets: ["172.31.3.4:9490"]
+        labels:
+          vm: "4"
+          vm_name: "stebates-fleet-4"
+      - targets: ["172.31.3.5:9490"]
+        labels:
+          vm: "5"
+          vm_name: "stebates-fleet-5"
+      - targets: ["172.31.3.6:9490"]
+        labels:
+          vm: "6"
+          vm_name: "stebates-fleet-6"
+      - targets: ["172.31.3.7:9490"]
+        labels:
+          vm: "7"
+          vm_name: "stebates-fleet-7"
+      - targets: ["172.31.3.8:9490"]
+        labels:
+          vm: "8"
+          vm_name: "stebates-fleet-8"
+
   # RDMA metrics exporter inside each guest (port 9879).
   # Reads /sys/class/infiniband/*/counters; on ionic_rdma
   # these are empty today, but the target is wired so that

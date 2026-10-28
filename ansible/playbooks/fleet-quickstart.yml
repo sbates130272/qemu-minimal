@@ -57,6 +57,23 @@
         name: lmcache_guest
         tasks_from: netplan_ernic
 
+    # Disable gpuagent and amd-metrics-exporter before the GPU test.
+    # gpuagent assertion-fails on emulated gfx1250 (amdsmi returns
+    # AMDSMI_STATUS_NOT_SUPPORTED for temp/clock/util) and can wedge the
+    # GPU device for the vector_add that follows. Stopping them here is
+    # idempotent: failed_when: false covers the case where they are not
+    # installed.
+    - name: Stop and disable gpuagent and amd-metrics-exporter
+      become: true
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: stopped
+        enabled: false
+      loop:
+        - gpuagent
+        - amd-metrics-exporter
+      failed_when: false
+
     - name: Check whether KFD is already up
       ansible.builtin.stat:
         path: /dev/kfd
@@ -104,6 +121,17 @@
 
     # Asked for rather than assumed. The udev rules in the image name it
     # rocm-rdma-ernic0, but a guest prepared for UCX answers to something else
+    # Ensure ionic and ionic_rdma are loaded. The backing qcow2 ships the
+    # DKMS modules but has no modules-load.d entries, so they depend on udev
+    # device detection at boot. Making this explicit prevents a race between
+    # udev and the ibv_devinfo check below.
+    - name: Load ionic and ionic_rdma modules
+      become: true
+      ansible.builtin.command:
+        cmd: modprobe -a ionic ionic_rdma
+      changed_when: false
+      failed_when: false
+
     # (AGENTS.md issue 21), and a wrong -d is a confusing failure.
     # Retried: ionic_rdma probes over vfio-user and the device registration
     # races with SSH availability -- ibv_devinfo -l can return empty on a
@@ -140,6 +168,29 @@
     # Rebuild the CA bundle so HTTPS downloads trust ZScaler. The cert file
     # was placed by cloud-init (VM_CA_CERT_FILE) but update-ca-certificates
     # may not have run yet.
+    - name: Report what each guest has
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: kernel {{ ansible_facts['kernel'] }},
+          ROCm {{ quickstart_rocm }}, IB {{ quickstart_ib_device }}
+          ({{ quickstart_port.attempts | default(1) }} attempt(s) to PORT_ACTIVE),
+          ernic {{ fleet_guest_ip }}
+
+
+# ---------------------------------------------------------------------------
+# Optional monitoring stack install (non-fatal)
+# ---------------------------------------------------------------------------
+#
+# amdgpu-exporter, rdma_exporter, hsa-snoop and Alloy. Any failure here
+# is non-fatal: network, repos, or apt locks may be unavailable in CI.
+# any_errors_fatal: false ensures the GPU and RDMA tests below still run.
+- name: Install optional monitoring stack
+  hosts: fleet
+  gather_facts: false
+  any_errors_fatal: false
+  ignore_errors: true
+  become: false
+  tasks:
     - name: Rebuild CA trust bundle
       become: true
       ansible.builtin.command:
@@ -147,82 +198,6 @@
       changed_when: true
 
     # amdgpu-exporter: AMD GPU metrics on :9488 from the ROCm apt repo.
-    - name: Download ROCm GPG key
-      become: true
-      ansible.builtin.shell:
-        cmd: |
-          wget -qO- https://repo.radeon.com/rocm/rocm.gpg.key \
-            | gpg --dearmor > /etc/apt/keyrings/rocm.gpg
-        executable: /bin/bash
-        creates: /etc/apt/keyrings/rocm.gpg
-
-    - name: Add device-metrics-exporter apt source
-      become: true
-      ansible.builtin.copy:
-        dest: /etc/apt/sources.list.d/device-metrics-exporter.sources
-        content: |
-          Types: deb
-          URIs: https://repo.radeon.com/device-metrics-exporter/apt/1.5.3
-          Suites: noble
-          Components: main
-          Signed-By: /etc/apt/keyrings/rocm.gpg
-        mode: "0644"
-
-    - name: Kill any stale apt-get processes holding the dpkg lock
-      become: true
-      ansible.builtin.shell:
-        cmd: killall apt-get apt 2>/dev/null || true
-        executable: /bin/bash
-      changed_when: false
-
-    - name: Wait for dpkg lock to be free
-      become: true
-      ansible.builtin.shell:
-        cmd: |
-          timeout 30 bash -c 'while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 1; done'
-        executable: /bin/bash
-      changed_when: false
-
-    - name: Install amdgpu-exporter
-      become: true
-      ansible.builtin.apt:
-        name: amdgpu-exporter
-        state: present
-        update_cache: false
-
-    - name: Ensure metrics config directory exists
-      become: true
-      ansible.builtin.file:
-        path: /etc/metrics
-        state: directory
-        mode: "0755"
-
-    - name: Write amdgpu-exporter config (port 9488)
-      become: true
-      ansible.builtin.copy:
-        dest: /etc/metrics/config.json
-        content: '{"ServerPort": 9488}'
-        mode: "0644"
-
-    - name: Disable gpuagent (crashes on emulated gfx1250 — amdsmi returns
-        NOT_SUPPORTED for temp/clock/util; upstream bug)
-      become: true
-      ansible.builtin.systemd:
-        name: gpuagent
-        enabled: false
-        state: stopped
-      failed_when: false
-
-    - name: Start amdgpu-exporter
-      become: true
-      ansible.builtin.systemd:
-        name: amd-metrics-exporter
-        enabled: true
-        state: started
-        daemon_reload: true
-      failed_when: false
-
-    # rdma_exporter: RDMA counters on :9879, binary from GitHub.
     - name: Get latest rdma_exporter release from GitHub
       ansible.builtin.uri:
         url: https://api.github.com/repos/yuuki/rdma_exporter/releases/latest
@@ -274,14 +249,9 @@
         state: started
         daemon_reload: true
 
-    - name: Report what each guest has
-      ansible.builtin.debug:
-        msg: >-
-          {{ inventory_hostname }}: kernel {{ ansible_facts['kernel'] }},
-          ROCm {{ quickstart_rocm }}, IB {{ quickstart_ib_device }}
-          ({{ quickstart_port.attempts | default(1) }} attempt(s) to PORT_ACTIVE),
-          ernic {{ fleet_guest_ip }}
-
+    # hsa-snoop: HSA/AQL queue snooper from a pre-built .deb on GitHub.
+    # Installs the binary and a systemd unit; the unit runs with --all
+    # --prometheus on port 9490 (not 9488, which amdgpu-exporter uses).
 # ---------------------------------------------------------------------------
 # GPU test
 # ---------------------------------------------------------------------------
