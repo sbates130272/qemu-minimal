@@ -26,24 +26,10 @@ name: qemu-minimal - Report for lmcache
 # for the image build, and guest memory. Treat a first red run as that, not as
 # a regression in what it tests.
 
+# Disabled: lmcache lane is consistently failing due to infrastructure issues
+# (hostfs permissions, gpuagent crash on emulated gfx1250). Re-enable once
+# the underlying issues are resolved. Run manually via workflow_dispatch only.
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'ansible/playbooks/fleet-lmcache.yml'
-      - 'ansible/playbooks/roles/lmcache_guest/**'
-      - 'ansible/requirements.yml'
-      - 'qemu/docker/lmcache/**'
-      - 'qemu/env/scale-out'
-      - 'qemu/env/overlay-ci'
-      - 'qemu/qemu-tool/gen_compose.py'
-      - '.github/workflows/qemu-minimal-report-for-lmcache.yml'
-      - '.github/workflows/qemu-minimal-publish-pages.yml'
-  # Weekly rather than daily: the other report lanes bake one guest, this one
-  # builds an image and boots two.
-  schedule:
-    - cron: '0 9 * * 0'
   workflow_dispatch:
 
 permissions:

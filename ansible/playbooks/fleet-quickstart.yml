@@ -140,6 +140,29 @@
     # Rebuild the CA bundle so HTTPS downloads trust ZScaler. The cert file
     # was placed by cloud-init (VM_CA_CERT_FILE) but update-ca-certificates
     # may not have run yet.
+    - name: Report what each guest has
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: kernel {{ ansible_facts['kernel'] }},
+          ROCm {{ quickstart_rocm }}, IB {{ quickstart_ib_device }}
+          ({{ quickstart_port.attempts | default(1) }} attempt(s) to PORT_ACTIVE),
+          ernic {{ fleet_guest_ip }}
+
+
+# ---------------------------------------------------------------------------
+# Optional monitoring stack install (non-fatal)
+# ---------------------------------------------------------------------------
+#
+# amdgpu-exporter, rdma_exporter, hsa-snoop and Alloy. Any failure here
+# is non-fatal: network, repos, or apt locks may be unavailable in CI.
+# any_errors_fatal: false ensures the GPU and RDMA tests below still run.
+- name: Install optional monitoring stack
+  hosts: fleet
+  gather_facts: false
+  any_errors_fatal: false
+  ignore_errors: true
+  become: false
+  tasks:
     - name: Rebuild CA trust bundle
       become: true
       ansible.builtin.command:
@@ -388,14 +411,6 @@
         state: started
         daemon_reload: true
       failed_when: false
-
-    - name: Report what each guest has
-      ansible.builtin.debug:
-        msg: >-
-          {{ inventory_hostname }}: kernel {{ ansible_facts['kernel'] }},
-          ROCm {{ quickstart_rocm }}, IB {{ quickstart_ib_device }}
-          ({{ quickstart_port.attempts | default(1) }} attempt(s) to PORT_ACTIVE),
-          ernic {{ fleet_guest_ip }}
 
 # ---------------------------------------------------------------------------
 # GPU test
