@@ -275,10 +275,10 @@ def clean(images: Path, vm_name: str, yes: bool = False) -> None:
 
     if not yes:
         try:
-            ans = input("Proceed? [y/N] ").strip().lower()
+            reply = input("Proceed? [y/N] ").strip().lower()
         except (EOFError, KeyboardInterrupt):
-            ans = ""
-        if ans != "y":
+            reply = ""
+        if reply != "y":
             print("Aborted.")
             return
 

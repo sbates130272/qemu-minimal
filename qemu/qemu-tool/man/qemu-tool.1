@@ -4,7 +4,7 @@ qemu\-tool \- run, generate and list QEMU virtual machines
 .SH SYNOPSIS
 .B qemu\-tool
 .RB [ \-\-version ]
-.I {quick\-start,check,down,run\-vm,gen\-vm,gen\-compose,compose,ernic\-stats,lmcache\-stats,list,inspect,ssh,man}
+.I {quick\-start,check,down,run\-vm,gen\-vm,gen\-compose,compose,ernic\-stats,lmcache\-stats,list,inspect,ssh,qcow,man}
 .RI [ options ]
 .SH DESCRIPTION
 .B qemu\-tool
@@ -86,6 +86,11 @@ Users must be a member of the
 .B kvm
 group to read or write images without
 .BR sudo .
+.TP
+.B qcow
+Inspect and manage VM overlay images. Lists all overlays with their sizes and
+COW delta, shows the full overlay state for one VM, or deletes and recreates a
+stopped VM's overlay from its backing image.
 .SH SHARED OPTIONS
 These options are accepted by both
 .B run\-vm
@@ -1167,6 +1172,55 @@ as a file for exactly that reason.
 Print the path to the bundled page and exit without opening it \(em for
 piping into a pager of your own, or for adding to
 .IR MANPATH .
+.SH QCOW OPTIONS
+Inspect and manage VM overlay qcow2 state. The three modes are mutually
+exclusive; exactly one must be given.
+.TP
+.B \-\-list
+List every VM overlay found under the image directories. Columns: Name, Path,
+Virtual (advertised size), On Disk (actual blocks used), Delta (COW data
+written since the overlay was created; 0\~B for a fresh overlay,
+.B N/A
+when there is no backing file), Age, Backing Age, Backing (backing file name),
+State (running/stopped).
+.TP
+.BI \-\-state " VM"
+Show overlay info for one VM: overlay path, virtual and on-disk sizes,
+whether the image is dirty, run state, and any NVMe scratch disks.
+.TP
+.BI \-\-clean " VM"
+Delete the overlay and all NVMe scratch images for VM, then recreate a fresh
+overlay from the backing image. The VM must be stopped. Prompts for
+confirmation unless
+.B \-\-yes
+is given.
+.TP
+.BR \-\-yes ", " \-y
+Skip the
+.B \-\-clean
+confirmation prompt.
+.TP
+.BI \-\-images " DIR"
+Directory to scan for VM images. Overrides
+.BR VM_IMAGES_DIR .
+When omitted,
+.BR qemu\-tool
+scans the system images directory, the user XDG data directory, and
+.B VM_IMAGES_DIR
+from the environment or a local settings file.
+.TP
+.B \-\-nvme
+With
+.BR \-\-list :
+show a separate NVMe images section listing each scratch disk by name,
+on-disk size and age. Without this flag, only the total NVMe usage is shown.
+.TP
+.BI \-\-env\-file " FILE"
+Settings file. Repeatable; later files win key by key. Used to resolve
+.B VM_IMAGES_DIR
+when
+.B \-\-images
+is not given.
 .SH SSH OPTIONS
 Opens an SSH session to a running VM, resolving the port, username and key
 through exactly the same path
