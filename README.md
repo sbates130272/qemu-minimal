@@ -79,7 +79,7 @@
      is deliberately ahead of both and is not part of this pairing; it boots
      no LMCache and creates no SRQ. -->
 [![Batesste Collection](https://img.shields.io/badge/sbates130272.batesste-3.1.0-9cf?style=flat-square)](https://galaxy.ansible.com/ui/repo/published/sbates130272/batesste/)
-[![Rocm-ernic Collection](https://img.shields.io/badge/sbates130272.rocm__ernic-31d3114-9cf?style=flat-square)](https://github.com/ROCm/rocm-ernic)
+[![Rocm-ernic Collection](https://img.shields.io/badge/sbates130272.rocm__ernic-61b934a-9cf?style=flat-square)](https://github.com/ROCm/rocm-ernic)
 
 <!-- The batesste-ci-images this repo pins. STATIC badges, hand-edited with
      the tags: shields has no endpoint for "what does this repo pin", and a
