@@ -9,11 +9,17 @@ Subcommand flags:
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from .list_vms import collect as _running_vms
+
+# A freshly created qcow2 overlay has ~200 KiB of header/metadata but no
+# data blocks. Anything at or below this threshold is treated as "0 B" delta.
+_FRESH_QCOW2_BYTES = 256 * 1024
 
 
 # ---------------------------------------------------------------------------
@@ -72,53 +78,113 @@ def _all_overlays(images: Path) -> list[Path]:
 # ---------------------------------------------------------------------------
 # Public commands
 
-def list_overlays(images: Path) -> None:
-    overlays = _all_overlays(images)
-    if not overlays:
-        print(f"No VM overlays found in {images}")
+def _default_image_dirs() -> list[Path]:
+    """Return directories to scan when --images is not given: system + user XDG."""
+    from .config import default_images, _INSTALLED_IMAGES, _xdg_data_home  # type: ignore[attr-defined]
+    system = _INSTALLED_IMAGES
+    user = _xdg_data_home() / "qemu-tool" / "images"
+    dirs: list[Path] = []
+    if system.exists():
+        dirs.append(system)
+    if user != system and user.exists():
+        dirs.append(user)
+    if not dirs:
+        dirs.append(default_images())
+    return dirs
+
+
+def _age_days(path: Path) -> str:
+    """Return how many days since path was last modified, e.g. '3d' or 'today'."""
+    try:
+        days = int((time.time() - path.stat().st_mtime) / 86400)
+        return "today" if days == 0 else f"{days}d"
+    except OSError:
+        return "-"
+
+
+def _trunc(s: str, n: int) -> str:
+    return s if len(s) <= n else "…" + s[-(n - 1):]
+
+
+def list_overlays(images: Path | None, show_nvme: bool = False) -> None:
+    if images is not None:
+        dirs = [images]
+    else:
+        dirs = _default_image_dirs()
+
+    all_overlays: list[tuple[Path, Path]] = []  # (images_dir, overlay_path)
+    for d in dirs:
+        for p in _all_overlays(d):
+            all_overlays.append((d, p))
+
+    if not all_overlays:
+        print(f"No VM overlays found in: {', '.join(str(d) for d in dirs)}")
         return
 
     running = {v.get("name") for v in (_running_vms() or [])}
 
-    header = f"{'Name':<28} {'Path':<40} {'Virtual':>10} {'On Disk':>10} {'Delta':>10} {'Backing':<30} {'State'}"
-    print(header)
-    print("-" * len(header))
+    hdr = (f"{'Name':<26} {'Virtual':>10} {'On Disk':>10} {'Delta':>10} "
+           f"{'Mod':>5} {'Backing Mod':>11} {'Backing':<28} {'State'}")
+    print(hdr)
+    print("-" * len(hdr))
 
-    for p in overlays:
+    prev_dir: Path | None = None
+    for images_dir, p in all_overlays:
+        if images_dir != prev_dir and len(dirs) > 1:
+            print(f"\n  {images_dir}/")
+            prev_dir = images_dir
+
         vm_name = p.stem
         info = _qemu_img_info(p)
         vsize = _fmt_bytes(info.get("virtual-size"))
         overlay_bytes = p.stat().st_blocks * 512 if p.exists() else 0
         dsize = _fmt_bytes(overlay_bytes)
 
-        # Delta: how much the overlay has grown beyond a fresh state.
-        # Positive = written N bytes on top of the backing; "fresh" = barely touched.
-        backing_path = _backing_path(images, vm_name)
-        if backing_path.exists() and overlay_bytes:
-            backing_bytes = backing_path.stat().st_blocks * 512
-            diff = overlay_bytes - backing_bytes
-            delta = _fmt_bytes(diff) if diff > 0 else "fresh"
+        # Delta: the overlay's own on-disk footprint is the COW delta — it
+        # only stores blocks that differ from the backing. A fresh overlay
+        # has just qcow2 header/refcount metadata (~200 KiB); treat that as 0.
+        if overlay_bytes <= _FRESH_QCOW2_BYTES:
+            delta = "0 B"
         else:
-            delta = "-"
+            delta = _fmt_bytes(overlay_bytes)
+
+        mod_overlay = _age_days(p)
+        backing_path = _backing_path(images_dir, vm_name)
+        mod_backing = _age_days(backing_path) if backing_path.exists() else "-"
 
         backing_file = info.get("backing-filename", "-")
-        if backing_file and len(backing_file) > 29:
-            backing_file = "…" + backing_file[-28:]
+        backing_file = _trunc(backing_file, 28) if backing_file != "-" else "-"
+
         dirty = " dirty" if info.get("dirty-flag") else ""
         status = "running" if vm_name in running else "stopped"
-        path_str = str(p)
-        if len(path_str) > 39:
-            path_str = "…" + path_str[-38:]
-        print(f"{vm_name:<28} {path_str:<40} {vsize:>10} {dsize:>10} {delta:>10} {backing_file:<30} {status}{dirty}")
+        print(f"{vm_name:<26} {vsize:>10} {dsize:>10} {delta:>10} "
+              f"{mod_overlay:>5} {mod_backing:>11} {backing_file:<28} {status}{dirty}")
 
-    nvme_total = sum(
-        p.stat().st_blocks * 512
-        for vm in [o.stem for o in overlays]
-        for p in _nvme_paths(images, vm)
-        if p.exists()
-    )
-    if nvme_total:
-        print(f"\nNVMe scratch: {_fmt_bytes(nvme_total)} across all VMs")
+    if show_nvme:
+        nvme_rows: list[tuple[Path, Path]] = []
+        for images_dir, p in all_overlays:
+            for np in _nvme_paths(images_dir, p.stem):
+                if np.exists():
+                    nvme_rows.append((images_dir, np))
+        if nvme_rows:
+            print(f"\n{'NVMe scratch'}")
+            print(f"  {'Name':<40} {'On Disk':>10} {'Mod':>5}")
+            print(f"  {'-'*60}")
+            for images_dir, np in nvme_rows:
+                sz = _fmt_bytes(np.stat().st_blocks * 512)
+                mod = _age_days(np)
+                print(f"  {_trunc(np.name, 40):<40} {sz:>10} {mod:>5}")
+        else:
+            print("\nNVMe scratch: none")
+    else:
+        total = sum(
+            np.stat().st_blocks * 512
+            for images_dir, p in all_overlays
+            for np in _nvme_paths(images_dir, p.stem)
+            if np.exists()
+        )
+        if total:
+            print(f"\nNVMe scratch: {_fmt_bytes(total)} total  (use --nvme for details)")
 
 
 def state(images: Path, vm_name: str) -> None:
