@@ -57,6 +57,23 @@
         name: lmcache_guest
         tasks_from: netplan_ernic
 
+    # Disable gpuagent and amd-metrics-exporter before the GPU test.
+    # gpuagent assertion-fails on emulated gfx1250 (amdsmi returns
+    # AMDSMI_STATUS_NOT_SUPPORTED for temp/clock/util) and can wedge the
+    # GPU device for the vector_add that follows. Stopping them here is
+    # idempotent: failed_when: false covers the case where they are not
+    # installed.
+    - name: Stop and disable gpuagent and amd-metrics-exporter
+      become: true
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: stopped
+        enabled: false
+      loop:
+        - gpuagent
+        - amd-metrics-exporter
+      failed_when: false
+
     - name: Check whether KFD is already up
       ansible.builtin.stat:
         path: /dev/kfd
