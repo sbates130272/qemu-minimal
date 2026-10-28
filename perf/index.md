@@ -73,12 +73,12 @@ shows the last date on which all 6 reports were green at once —
 amber once that date is no longer today.
 
 Last all-green: **2026-10-23** &middot; checked
-2026-10-28 19:50 UTC &middot; currently
+2026-10-28 19:56 UTC &middot; currently
 not all green.
 
 | Report | Generated | Status | Commit | Page |
 | --- | --- | --- | --- | --- |
-| Single VM | 2026-10-28 15:09 UTC | pass | `65dc3a5` | [/1vm/](/1vm/) |
+| Single VM | 2026-10-28 19:53 UTC | pass | `2115cee` | [/1vm/](/1vm/) |
 | rocjitsu | 2026-10-28 15:09 UTC | pass | `65dc3a5` | [/rocjitsu/](/rocjitsu/) |
 | ernic VM 1 | 2026-10-28 15:07 UTC | pass | `65dc3a5` | [/ernic/](/ernic/) |
 | ernic VM 2 | 2026-10-28 15:07 UTC | pass | `65dc3a5` | [/ernic/vm2/](/ernic/vm2/) |
