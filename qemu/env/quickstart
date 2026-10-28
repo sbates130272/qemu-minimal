@@ -186,7 +186,7 @@ GRAFANA_ENABLE=true
 # service and its scrape jobs are GENERATED, not merely whether they run, so
 # turning it off keeps the generated stack to what this quickstart boots.
 LMCACHE_ENABLE=false
-LOGS_ENABLE=false
+LOGS_ENABLE=true
 
 # Path to the repo root, resolved relative to the compose stack directory.
 # `qemu-tool quick-start` overrides it with an absolute path, because the

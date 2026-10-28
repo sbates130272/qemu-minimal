@@ -293,12 +293,92 @@
           _hsa_release.json.tag_name | regex_replace('^v', '') }}_amd64.deb
         state: present
 
-    - name: Set hsa-snoop Prometheus port to 9490 in HSA_SNOOP_ARGS
+    - name: Create hsa-snoop log directory
+      become: true
+      ansible.builtin.file:
+        path: /var/log/hsa-snoop
+        state: directory
+        mode: "0755"
+
+    - name: Set hsa-snoop args for emulated GPU compatibility
       become: true
       ansible.builtin.lineinfile:
         path: /etc/default/hsa-snoop
         regexp: '^HSA_SNOOP_ARGS='
-        line: 'HSA_SNOOP_ARGS="--ais-snoop --mem-snoop --xnack-snoop --prometheus-port 9490"'
+        line: >-
+          HSA_SNOOP_ARGS="--mode bpftrace --ais-snoop --xnack-snoop
+          --prometheus-port 9490
+          --log-dispatches /var/log/hsa-snoop/dispatches.ndjson"
+      # --mode bpftrace: uses librocdxg.so to intercept dispatches via the
+      # ROCm runtime instead of process_vm_readv on AQL ring buffers.
+      # process_vm_readv on a vfio-user shared memfd deadlocks GPU dispatch
+      # on emulated gfx1250. bpftrace mode is safe on emulated devices.
+      # --mem-snoop omitted: scans kernarg buffers which may also touch
+      # vfio-user memory; skip on emulated devices.
+      # --log-dispatches: NDJSON per-kernel dispatch log for Alloy → Loki.
+
+    # Install Alloy in the guest to ship hsa-snoop dispatch logs to Loki.
+    # The host-side Alloy only reads Docker container logs; the VM journal
+    # and /var/log/hsa-snoop/ are not reachable from there.
+    - name: Add Grafana apt source for Alloy
+      become: true
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/grafana.sources
+        content: |
+          Types: deb
+          URIs: https://apt.grafana.com
+          Suites: stable
+          Components: main
+          Signed-By: /etc/apt/keyrings/grafana.gpg
+        mode: "0644"
+
+    - name: Download Grafana GPG key
+      become: true
+      ansible.builtin.shell:
+        cmd: wget -qO- https://apt.grafana.com/gpg.key | gpg --dearmor > /etc/apt/keyrings/grafana.gpg
+        executable: /bin/bash
+        creates: /etc/apt/keyrings/grafana.gpg
+
+    - name: Install Alloy
+      become: true
+      ansible.builtin.apt:
+        name: alloy
+        state: present
+        update_cache: true
+
+    - name: Write guest Alloy config for hsa-snoop dispatch log
+      become: true
+      ansible.builtin.copy:
+        dest: /etc/alloy/config.alloy
+        content: |
+          // Ship hsa-snoop NDJSON dispatch log to the fleet Loki instance.
+          local.file_match "hsa_snoop_dispatches" {
+            path_targets = [{"__path__" = "/var/log/hsa-snoop/dispatches.ndjson"}]
+          }
+          loki.source.file "hsa_snoop" {
+            targets    = local.file_match.hsa_snoop_dispatches.targets
+            forward_to = [loki.write.fleet.receiver]
+            labels = {
+              job     = "hsa-snoop",
+              origin  = "guest",
+              host    = "{{ inventory_hostname }}",
+            }
+          }
+          loki.write "fleet" {
+            endpoint {
+              url = "http://172.31.0.15:3100/loki/api/v1/push"
+            }
+          }
+        mode: "0644"
+
+    - name: Enable and start Alloy
+      become: true
+      ansible.builtin.systemd:
+        name: alloy
+        enabled: true
+        state: restarted
+        daemon_reload: true
+      failed_when: false
 
     - name: Start hsa-snoop-prometheus
       become: true

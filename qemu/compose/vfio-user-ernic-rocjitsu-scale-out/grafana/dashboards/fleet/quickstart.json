@@ -1852,7 +1852,7 @@
         "type": "prometheus",
         "uid": "fleet-prometheus"
       },
-      "description": "hsa-snoop is up and snooping HSA/AQL queues via kprobe on kfd_ioctl_create_queue. Green = at least one VM has it running and has seen GPU activity.",
+      "description": "hsa-snoop running and snooping HSA/AQL queues via kprobe on kfd_ioctl_create_queue. Requires CAP_SYS_ADMIN. Note: ring-buffer polling can interfere with GPU dispatch on emulated gfx1250 \u2014 use --no-ring-poll or --poll-us 0 on emulated devices.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1881,7 +1881,7 @@
               "type": "value",
               "options": {
                 "0": {
-                  "text": "None",
+                  "text": "Down",
                   "color": "red",
                   "index": 0
                 },
@@ -1936,7 +1936,7 @@
         "type": "prometheus",
         "uid": "fleet-prometheus"
       },
-      "description": "Number of active HSA AQL queues currently open across all VMs, as seen by hsa-snoop via kprobe.",
+      "description": "Active HSA AQL queue count across all VMs. Each HIP/ROCm application typically opens 2 queues on startup.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1994,7 +1994,61 @@
         "type": "prometheus",
         "uid": "fleet-prometheus"
       },
-      "description": "GPU kernel launch rate per second per VM, from hsa-snoop. Each series is labelled by kernel name. This shows compute activity on the gfx1250 as it happens.",
+      "description": "Name of the most recently observed GPU kernel dispatch, from hsa_last_kernel_launch_info. The label is the AQL packet function pointer address \u2014 hipcc embeds the kernel symbol name in later ROCm versions.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 16,
+        "x": 8,
+        "y": 56
+      },
+      "id": 55,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "title": "Last Kernel Dispatched",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "hsa_last_kernel_launch_info{job=\"hsa-snoop\"}",
+          "legendFormat": "{{vm_name}}  {{kernel_name}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "description": "GPU kernel dispatch rate per second per VM. Each bar/spike corresponds to one or more HIP kernel launches observed in the AQL queue ring buffer.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -2003,7 +2057,7 @@
           "unit": "ops",
           "custom": {
             "lineWidth": 1,
-            "fillOpacity": 10,
+            "fillOpacity": 15,
             "showPoints": "never"
           }
         }
@@ -2043,7 +2097,7 @@
         "type": "prometheus",
         "uid": "fleet-prometheus"
       },
-      "description": "GPU kernel execution duration percentiles (p50 and p95) from hsa-snoop histogram. Measures time from AQL packet enqueue to completion.",
+      "description": "GPU kernel enqueue-to-completion latency percentiles from hsa-snoop. p50 = median, p95 = tail latency. On emulated gfx1250 these are longer than physical hardware.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -2093,6 +2147,44 @@
           "expr": "histogram_quantile(0.95, rate(hsa_kernel_duration_seconds_bucket{job=\"hsa-snoop\",vm_name=~\"$vm\"}[$__rate_interval]))",
           "legendFormat": "{{vm_name}} p95",
           "refId": "B"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "fleet-loki"
+      },
+      "description": "Per-kernel dispatch events from hsa-snoop --log-dispatches, forwarded by Alloy to Loki as NDJSON. Each line contains kernel name, GPU id, duration, pid and RFC3339 timestamp. Only available when LOGS_ENABLE=true. With --mode bpftrace the log is safe on emulated gfx1250.",
+      "fieldConfig": {
+        "defaults": {}
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 67
+      },
+      "id": 56,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "title": "GPU Kernel Dispatch Log (Alloy \u2192 Loki)",
+      "type": "logs",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "fleet-loki"
+          },
+          "expr": "{filename=\"/var/log/hsa-snoop/dispatches.ndjson\"}",
+          "legendFormat": "",
+          "refId": "A"
         }
       ]
     }
