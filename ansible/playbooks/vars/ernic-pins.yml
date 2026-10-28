@@ -9,11 +9,11 @@
 # a point release of IONIC_KERNEL_REF in the collection's
 # cmake/ErnicKernelModule.cmake: driver_ionic.yml compares major.minor and
 # fails the build otherwise.
-ionic_kernel_pin: v7.2.4
+ionic_kernel_pin: v7.2.6
 
 # Commit ernic_source checks out. The role defaults ernic_source_repo_version
 # to "main", which would clone upstream HEAD while requirements.yml installs
 # the collection from a fixed SHA -- the sources and the roles that build them
 # could then come from different trees. Keep this equal to the version: field
 # in ansible/requirements.yml and bump both together.
-ernic_source_pin: 3fb74d11b35e5b0fed1fb0c64003e2dcb023c78c
+ernic_source_pin: 61b934a3d9d8ae54fcf1691dceaa226e84aac19b

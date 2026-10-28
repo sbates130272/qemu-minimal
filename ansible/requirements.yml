@@ -53,7 +53,7 @@ collections:
   # silent fallback qemu/docker/lmcache exists to prevent.
   - name: https://github.com/ROCm/rocm-ernic.git#/ansible/
     type: git
-    version: 31d311417ff74e914f1f4c3b08833c2fe98a2117
+    version: 61b934a3d9d8ae54fcf1691dceaa226e84aac19b
   - name: ansible.posix
     version: ">=2.2.2"
   # Floor from sbates130272.batesste 3.0.0's galaxy.yml. --no-deps means galaxy

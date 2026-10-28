@@ -102,6 +102,11 @@ class VMConfig:
     # has ever booted sees N EPYC sockets rather than one. Set to 1 to look
     # like a single-socket server.
     cpu_sockets: int = 0
+    # Physical address bits for the EPYC CPU. 0 leaves QEMU's default (40 bits,
+    # 1 TiB). Set to 41 when a large 64-bit PCI hole is needed (e.g. a 256 GiB
+    # rocjitsu BAR); must be raised together with pci_hole64_size, since QEMU
+    # refuses a hole larger than the phys-bits address space allows.
+    cpu_phys_bits: int = 0
     # Size of the 64-bit PCI hole, as a QEMU size string ("512G"). None leaves
     # the machine default, which does not fit eight emulated GPUs' BARs.
     #
@@ -109,8 +114,7 @@ class VMConfig:
     # refusal at startup, not a degraded boot:
     #   Address space limit 0xffffffffff < 0x1ffffffffff phys-bits too low (40)
     # -cpu EPYC gives 40 bits (1 TiB). Measured on QEMU 10.2.1: 512G is
-    # accepted, 1T is not. Going above that needs host-phys-bits=on or an
-    # explicit phys-bits= on the -cpu argument.
+    # accepted, 1T is not. Going above that needs cpu_phys_bits=41.
     pci_hole64_size: str | None = None
     nvme: str | None = None
     nvme_trace: str | None = None   # doorbell | all | event-name

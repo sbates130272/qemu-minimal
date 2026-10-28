@@ -63,7 +63,7 @@
     # A release tag, deliberately not the rolling "latest" pre-release: that
     # tag is reassigned on every upstream build, so baking it into an image
     # would mean two rebuilds of the same commit install different bits.
-    vm_rocjitsu_hsa_snoop_version: "{{ vm_hsa_snoop_version | default('1.1.1') }}"
+    vm_rocjitsu_hsa_snoop_version: "{{ vm_hsa_snoop_version | default('1.3.0') }}"
     # Whether to bake RVS and the rocBLAS host library it links against into
     # the image at all. Off, because the only consumer -- the RVS check in the
     # rocjitsu_gpu_test role -- is itself off: the tarball is built only as
@@ -896,6 +896,55 @@
       loop:
         - hsa-snoop.service
         - hsa-snoop-prometheus.service
+
+    # gpuagent assertion-fails on emulated gfx1250: amdsmi returns
+    # AMDSMI_STATUS_NOT_SUPPORTED for temperature/clock/utilisation queries.
+    # Disabled at image-bake time so a freshly booted guest does not wedge the
+    # GPU device before any workload touches it. The failure mode is subtle --
+    # the device appears present and PORT_ACTIVE, but the next process to open
+    # /dev/kfd gets -EBUSY. See Welcome.md for the rationale and how to re-enable.
+    - name: Disable gpuagent on the emulated GPU guest
+      ansible.builtin.systemd_service:
+        name: gpuagent
+        enabled: false
+        state: stopped
+      become: true
+      failed_when: false
+
+    # Shown on every SSH login via PAM's /etc/motd.d/ mechanism. Templated so
+    # it records the system-specific details a user needs when SSHing in:
+    # kernel, ROCm prefix, hsa-snoop version. Explains why hsa-snoop and
+    # gpuagent are disabled so a user who re-enables either knows the risk.
+    - name: Install Welcome message
+      ansible.builtin.copy:
+        dest: /etc/motd.d/qemu-minimal
+        mode: "0644"
+        content: |
+          ============================================================
+          qemu-minimal emulated GPU guest  ({{ ansible_hostname }})
+          ============================================================
+          Kernel:       {{ ansible_kernel }}
+          ROCm prefix:  {{ rocm_setup_therock_prefix | default('unknown') }}
+          hsa-snoop:    v{{ vm_rocjitsu_hsa_snoop_version }}  (installed, services disabled)
+          ============================================================
+
+          Two services are disabled on this guest to prevent GPU lockup:
+
+          hsa-snoop (.service and -prometheus.service)
+            hsa-snoop holds trace_pipe open. On an emulated GPU the
+            scratch segment is served to exactly one process at a time;
+            a background collector wedges the device for every workload
+            that follows. Symptom: dispatch hangs waiting for scratch.
+
+          gpuagent
+            gpuagent calls amdsmi for temperature/clock/utilisation.
+            The emulated gfx1250 returns AMDSMI_STATUS_NOT_SUPPORTED,
+            causing gpuagent to assertion-fail and wedge /dev/kfd.
+            Symptom: next process gets -EBUSY opening /dev/kfd.
+
+          Do not re-enable either service on this guest.
+          ============================================================
+      become: true
 
 # Tagged "never" so it is skipped by a default run, which is what gen-vm does:
 # that play bakes an image inside a build VM with no vfio-user device attached,
