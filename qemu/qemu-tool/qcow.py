@@ -150,7 +150,7 @@ def list_overlays(images: Path | None, show_nvme: bool = False) -> None:
 
     running = {v.get("name") for v in (_running_vms() or [])}
 
-    hdr = (f"{'Name':<26} {'Path':<38} {'Virtual':>10} {'On Disk':>10} {'Delta':>10} "
+    hdr = (f"{'Name':<26} {'Path':<55} {'Virtual':>10} {'On Disk':>10} {'Delta':>10} "
            f"{'Age':>5} {'Backing Age':>11} {'Backing':<28} {'State'}")
     print(hdr)
     print("-" * len(hdr))
@@ -189,7 +189,7 @@ def list_overlays(images: Path | None, show_nvme: bool = False) -> None:
         dirty = " dirty" if info.get("dirty-flag") else ""
         status = "running" if vm_name in running else "stopped"
         path_str = _trunc(str(p), 38)
-        print(f"{vm_name:<26} {path_str:<38} {vsize:>10} {dsize:>10} {delta:>10} "
+        print(f"{vm_name:<26} {path_str:<55} {vsize:>10} {dsize:>10} {delta:>10} "
               f"{age_overlay:>5} {age_backing:>11} {backing_file:<28} {status}{dirty}")
 
     if show_nvme:
