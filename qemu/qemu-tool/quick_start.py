@@ -786,11 +786,16 @@ def generate_stack(state: _State) -> None:
     # would look for them.
     if state.metrics:
         data = {"PROM_DATA_DIR": str(state.stack_dir / "prom-data"),
-                "GRAFANA_DATA_DIR": str(state.stack_dir / "grafana-data")}
+                "GRAFANA_DATA_DIR": str(state.stack_dir / "grafana-data"),
+                # Loki has profiles: [metrics] so it starts with --profile
+                # metrics. Its data dir must be caller-owned before compose
+                # up or Docker creates it root-owned and Loki crash-loops on
+                # "mkdir /loki/rules: permission denied".
+                "LOKI_DATA_DIR": str(state.stack_dir / "loki-data")}
         for path in data.values():
             Path(path).mkdir(parents=True, exist_ok=True)
         _write_layer(state, "env.metrics", data,
-                     "Prometheus and Grafana state, beside the stack.")
+                     "Prometheus, Grafana and Loki state, beside the stack.")
 
     gen_compose_run(list(state.layers), state.stack_dir)
     print(f"wrote {state.stack_dir / 'docker-compose.yml'}")
