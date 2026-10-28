@@ -274,6 +274,41 @@
         state: started
         daemon_reload: true
 
+    # hsa-snoop: HSA/AQL queue snooper from a pre-built .deb on GitHub.
+    # Installs the binary and a systemd unit; the unit runs with --all
+    # --prometheus on port 9490 (not 9488, which amdgpu-exporter uses).
+    - name: Get latest hsa-snoop release from GitHub
+      ansible.builtin.uri:
+        url: https://api.github.com/repos/sbates130272/hsa-snoop/releases/latest
+        return_content: true
+      register: _hsa_release
+      changed_when: false
+
+    - name: Download and install hsa-snoop deb
+      become: true
+      ansible.builtin.apt:
+        deb: >-
+          https://github.com/sbates130272/hsa-snoop/releases/download/{{
+          _hsa_release.json.tag_name }}/hsa-snoop_{{
+          _hsa_release.json.tag_name | regex_replace('^v', '') }}_amd64.deb
+        state: present
+
+    - name: Set hsa-snoop Prometheus port to 9490 in HSA_SNOOP_ARGS
+      become: true
+      ansible.builtin.lineinfile:
+        path: /etc/default/hsa-snoop
+        regexp: '^HSA_SNOOP_ARGS='
+        line: 'HSA_SNOOP_ARGS="--ais-snoop --mem-snoop --xnack-snoop --prometheus-port 9490"'
+
+    - name: Start hsa-snoop-prometheus
+      become: true
+      ansible.builtin.systemd:
+        name: hsa-snoop-prometheus
+        enabled: true
+        state: started
+        daemon_reload: true
+      failed_when: false
+
     - name: Report what each guest has
       ansible.builtin.debug:
         msg: >-
