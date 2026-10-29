@@ -30,11 +30,6 @@ name: qemu-minimal - Report for lmcache
 # (hostfs permissions, gpuagent crash on emulated gfx1250). Re-enable once
 # the underlying issues are resolved. Run manually via workflow_dispatch only.
 on:
-  push:
-    branches:
-      - main
-  schedule:
-    - cron: '0 8 * * *'
   workflow_dispatch:
 
 permissions:
