@@ -82,6 +82,16 @@ _DEFAULTS = {
     "ERNIC_STATS_PORT": "9840",
     "ERNIC_NOFILE": "65536",
     "ERNIC_TAP": "false",
+    # Enable the P4 engine on the ernic server. ERNIC_P4_GUEST_SCOPE controls
+    # which guest commands reach the engine: none (default), read (counters),
+    # write (also table entries), or load (also program replacement). Requires
+    # the server image built with -DERNIC_BUILD_P4=ON and ernic_p4.ko in the
+    # guest.
+    "ERNIC_P4": "false",
+    "ERNIC_P4_GUEST_SCOPE": "none",
+    # Path to a bmv2 JSON program file inside the ernic container. Empty leaves
+    # the engine in pass-through mode (--p4 without --p4-program).
+    "ERNIC_P4_PROGRAM": "",
     "LOG_MAX_SIZE": "50m",
     "LOG_MAX_FILE": "3",
     # Absolute, and deliberately NOT "./prom-data". A relative path resolves
@@ -771,6 +781,9 @@ def plan(values: dict[str, str]) -> dict[str, Any]:
         "stats_port": _get(values, "ERNIC_STATS_PORT"),
         "ernic_nofile": _get(values, "ERNIC_NOFILE"),
         "ernic_tap": _flag(values, "ERNIC_TAP"),
+        "ernic_p4": _flag(values, "ERNIC_P4"),
+        "ernic_p4_guest_scope": _get(values, "ERNIC_P4_GUEST_SCOPE"),
+        "ernic_p4_program": _get(values, "ERNIC_P4_PROGRAM"),
         "stop_grace_period": _get(values, "STOP_GRACE_PERIOD"),
         "log_max_size": _get(values, "LOG_MAX_SIZE"),
         "log_max_file": _get(values, "LOG_MAX_FILE"),
@@ -1047,6 +1060,13 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
         out.append(f"      - ERNIC_TCP_GUEST_GIDS={nic['guest_gids']}")
         argv = ["rocm-ernic", "-s", nic["sock"], "-b", backend,
                 "-m", nic["mac"], "-S", nic["stats_file"]]
+        if spec["ernic_p4"]:
+            argv += ["--p4"]
+            if spec["ernic_p4_program"]:
+                argv += ["--p4-program", spec["ernic_p4_program"]]
+            scope = spec["ernic_p4_guest_scope"]
+            if scope and scope != "none":
+                argv += ["--p4-guest-scope", scope]
         if spec["ernic_tap"]:
             argv += ["-T", _TAP_IF]
             # The sidecar can only run once this container exists, because it
