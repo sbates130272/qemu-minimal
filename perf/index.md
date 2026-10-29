@@ -12,7 +12,7 @@ new CI data lands.
 
 ## Latest published snapshot
 
-Generated from `15a9b834` at **2026-10-29 19:49 UTC**.
+Generated from `ae551b3b` at **2026-10-29 20:53 UTC**.
 
 ![rocjitsu GEMM](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-gemm.json)
 ![rocjitsu hipFile](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile.json)
@@ -33,6 +33,7 @@ vfio-user and swing hard between runs.
 | Rocjitsu GEMM | 470 kFLOP/s | 610 kFLOP/s | regressed (-23%) |
 | Rocjitsu HipFile | 165 MB/s | 187 MB/s | watch (-12%) |
 | HipFile Fio | 137 MB/s | 153 MB/s | watch (-10%) |
+| Ernic P4 FP8 BW | n/a | - | no data |
 
 ## Trend charts
 
@@ -50,7 +51,6 @@ vfio-user and swing hard between runs.
 
 | Commit | Generated | GEMM | hipFile | hipFile fio |
 | --- | --- | --- | --- | --- |
-| e56dcda3 | 2026-10-28 22:49 UTC | 664 kFLOP/s | 247 MB/s | 205 MB/s |
 | e56dcda3 | 2026-10-28 23:19 UTC | 464 kFLOP/s | 170 MB/s | 149 MB/s |
 | 5ee7176b | 2026-10-29 14:26 UTC | 464 kFLOP/s | 170 MB/s | 149 MB/s |
 | 9ed9e68d | 2026-10-29 14:52 UTC | 464 kFLOP/s | 170 MB/s | 149 MB/s |
@@ -60,6 +60,7 @@ vfio-user and swing hard between runs.
 | 656952bd | 2026-10-29 17:34 UTC | 470 kFLOP/s | 165 MB/s | 137 MB/s |
 | 333246f4 | 2026-10-29 18:27 UTC | 470 kFLOP/s | 165 MB/s | 137 MB/s |
 | 15a9b834 | 2026-10-29 19:49 UTC | 470 kFLOP/s | 165 MB/s | 137 MB/s |
+| ae551b3b | 2026-10-29 20:53 UTC | 470 kFLOP/s | 165 MB/s | 137 MB/s |
 
 ## Current report freshness
 
@@ -73,7 +74,7 @@ shows the last date on which all 7 reports were green at once —
 amber once that date is no longer today.
 
 Last all-green: **2026-10-29** &middot; checked
-2026-10-29 20:16 UTC &middot; currently
+2026-10-29 20:53 UTC &middot; currently
 all green.
 
 | Report | Generated | Status | Commit | Page |
