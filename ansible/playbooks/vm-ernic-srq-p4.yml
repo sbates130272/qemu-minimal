@@ -96,6 +96,14 @@
       become: false
       changed_when: true
 
+    - name: Assert the fetch script is present in the source tree
+      ansible.builtin.stat:
+        path: "{{ ernic_source_dir }}/ansible/files/scripts/fetch-ionic-sources.sh"
+      register: ionic_srqp4_fetch_script
+      delegate_to: localhost
+      become: false
+      failed_when: not ionic_srqp4_fetch_script.stat.exists
+
     - name: Build and install ionic with SRQ + P4 patches
       ansible.builtin.include_role:
         name: sbates130272.rocm_ernic.ernic_srq_dkms
@@ -104,7 +112,7 @@
         ernic_srq_dkms_reload: false
         ernic_srq_dkms_fetch_on_controller: true
         ernic_srq_dkms_force_fetch: false
-        ernic_srq_dkms_scripts_dir: "{{ ernic_source_dir }}/scripts"
+        ernic_srq_dkms_scripts_dir: "{{ ernic_source_dir }}/ansible/files/scripts"
         ernic_srq_dkms_patches_dir: "{{ ionic_srqp4_patches_dir }}"
         ernic_srq_dkms_stage_dir: "{{ ionic_srqp4_stage_dir }}"
         ernic_srq_dkms_source_root: "{{ ionic_srqp4_source_root }}"

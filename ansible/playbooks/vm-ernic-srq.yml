@@ -100,6 +100,14 @@
       ansible.builtin.include_role:
         name: sbates130272.rocm_ernic.ernic_source
 
+    - name: Assert the fetch script is present in the source tree
+      ansible.builtin.stat:
+        path: "{{ ernic_source_dir }}/ansible/files/scripts/fetch-ionic-sources.sh"
+      register: ionic_srq_fetch_script
+      delegate_to: localhost
+      become: false
+      failed_when: not ionic_srq_fetch_script.stat.exists
+
     # The kernel half: ionic.ko + ionic_rdma.ko from the pinned ref plus
     # patches/srq, registered and installed as the ionic-ernic DKMS package.
     #
@@ -123,7 +131,7 @@
         # The ref is a pin, so a warm checkout of it is the same checkout, and
         # the discard that force_fetch does first is the only destructive part.
         ernic_srq_dkms_force_fetch: false
-        ernic_srq_dkms_scripts_dir: "{{ ernic_source_dir }}/scripts"
+        ernic_srq_dkms_scripts_dir: "{{ ernic_source_dir }}/ansible/files/scripts"
         ernic_srq_dkms_patches_dir: "{{ ernic_source_dir }}/ansible/files/patches/srq"
         ernic_srq_dkms_stage_dir: "{{ ionic_srq_stage_dir }}"
         ernic_srq_dkms_source_root: "{{ ionic_srq_source_root }}"
