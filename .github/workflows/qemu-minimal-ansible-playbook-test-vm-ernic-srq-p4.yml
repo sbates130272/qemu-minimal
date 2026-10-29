@@ -86,9 +86,7 @@ jobs:
         vm-name: ernic-srq-p4-test
         backing-image: "${{ env.VM_BACKING_IMAGE }}"
         ansible-playbook: ansible/playbooks/vm-ernic-srq-p4.yml
-        extra-args: >-
-          --username ubuntu --password password --packages none
-          --backing-shared false
+        extra-args: --username ubuntu --password password --packages none
 
     - name: Report VM image size
       if: always()
