@@ -120,10 +120,24 @@
           - ref: "{{ ionic_kernel_pin }}"
             repo: https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
 
-    - name: Confirm the installed ionic carries the SRQ verbs
+    # Run depmod before checking modinfo: DKMS install writes the .ko files to
+    # updates/dkms/ but does not guarantee modules.dep is current. Without this,
+    # modinfo still resolves ionic to the in-tree module even though the DKMS
+    # build succeeded.
+    - name: Update modules.dep so modinfo reflects the DKMS installation
+      ansible.builtin.command:
+        cmd: depmod -a
+      changed_when: false
+
+    # ionic_rdma is the right module to check for SRQ: ionic_create_srq is
+    # defined there, not in ionic. The check requires the updates/dkms/ path,
+    # which is the installed DKMS version; the in-tree ionic_rdma (merged in
+    # Linux 6.18) would be at kernel/drivers/infiniband/hw/ionic/ and would
+    # fail this test even if present, so the guard is correct regardless.
+    - name: Confirm the installed ionic_rdma carries the SRQ verbs
       ansible.builtin.shell: |
         set -euo pipefail
-        ko=$(modinfo -n ionic)
+        ko=$(modinfo -n ionic_rdma)
         case "${ko}" in
             */updates/dkms/*) ;;
             *)
@@ -146,10 +160,19 @@
       register: ionic_srqp4_srq_symbols
       failed_when: ionic_srqp4_srq_symbols.stdout | int < 1
 
+    # ionic_adminq_post_wait is exported by ionic (the NIC driver), not
+    # ionic_rdma; ernic_p4.ko imports it from there.
     - name: Confirm the installed ionic carries the P4 symbol
       ansible.builtin.shell: |
         set -euo pipefail
         ko=$(modinfo -n ionic)
+        case "${ko}" in
+            */updates/dkms/*) ;;
+            *)
+                echo "modprobe would load ${ko}, not the DKMS module" >&2
+                exit 1
+                ;;
+        esac
         tmp=$(mktemp -d)
         trap 'rm -rf "${tmp}"' EXIT
         case "${ko}" in
@@ -198,6 +221,14 @@
         ernic_p4_dkms_patches_dirs:
           - "{{ ernic_source_dir }}/ansible/files/patches/srq"
           - "{{ ernic_source_dir }}/ansible/files/patches/p4"
+
+    # ernic_p4_dkms installs after the earlier depmod, so modules.dep does not
+    # know about ernic_p4.ko yet. Run depmod again so callers can find it via
+    # modinfo and modprobe without a reboot.
+    - name: Update modules.dep after ernic_p4.ko installation
+      ansible.builtin.command:
+        cmd: depmod -a
+      changed_when: false
 
     - name: Read the provider base SHA from the series README
       delegate_to: localhost
