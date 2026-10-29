@@ -120,10 +120,23 @@
           - ref: "{{ ionic_kernel_pin }}"
             repo: https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
 
-    - name: Confirm the installed ionic carries the SRQ verbs
+    # Run depmod before checking modinfo: DKMS install writes the .ko files to
+    # updates/dkms/ but does not guarantee modules.dep is current. Without this,
+    # modinfo still resolves ionic to the in-tree module even though the DKMS
+    # build succeeded.
+    - name: Update modules.dep so modinfo reflects the DKMS installation
+      ansible.builtin.command:
+        cmd: depmod -a
+      changed_when: false
+
+    # ionic_rdma is the right module to check for SRQ: ionic_create_srq is
+    # defined there, not in ionic. ionic_rdma has no in-tree counterpart on
+    # mainline so modinfo finds it only if the DKMS module is installed --
+    # which makes it a cleaner gate than ionic, which has an in-tree version.
+    - name: Confirm the installed ionic_rdma carries the SRQ verbs
       ansible.builtin.shell: |
         set -euo pipefail
-        ko=$(modinfo -n ionic)
+        ko=$(modinfo -n ionic_rdma)
         case "${ko}" in
             */updates/dkms/*) ;;
             *)
@@ -146,10 +159,19 @@
       register: ionic_srqp4_srq_symbols
       failed_when: ionic_srqp4_srq_symbols.stdout | int < 1
 
+    # ionic_adminq_post_wait is exported by ionic (the NIC driver), not
+    # ionic_rdma; ernic_p4.ko imports it from there.
     - name: Confirm the installed ionic carries the P4 symbol
       ansible.builtin.shell: |
         set -euo pipefail
         ko=$(modinfo -n ionic)
+        case "${ko}" in
+            */updates/dkms/*) ;;
+            *)
+                echo "modprobe would load ${ko}, not the DKMS module" >&2
+                exit 1
+                ;;
+        esac
         tmp=$(mktemp -d)
         trap 'rm -rf "${tmp}"' EXIT
         case "${ko}" in
