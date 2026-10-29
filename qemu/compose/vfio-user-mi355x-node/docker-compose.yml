@@ -1843,6 +1843,7 @@ services:
           --vfio-user-root-port \
           --vfio-user-switch-width 2 \
           --cpu-sockets 1 \
+          --cpu-phys-bits 41 \
           --pci-hole64-size "512G" \
           --vcpus "8" \
           --vmem "16384" \
@@ -1917,6 +1918,7 @@ services:
           --vfio-user-root-port \
           --vfio-user-switch-width 2 \
           --cpu-sockets 1 \
+          --cpu-phys-bits 41 \
           --pci-hole64-size "512G" \
           --vcpus "8" \
           --vmem "16384" \
@@ -1991,6 +1993,7 @@ services:
           --vfio-user-root-port \
           --vfio-user-switch-width 2 \
           --cpu-sockets 1 \
+          --cpu-phys-bits 41 \
           --pci-hole64-size "512G" \
           --vcpus "8" \
           --vmem "16384" \
@@ -2065,6 +2068,7 @@ services:
           --vfio-user-root-port \
           --vfio-user-switch-width 2 \
           --cpu-sockets 1 \
+          --cpu-phys-bits 41 \
           --pci-hole64-size "512G" \
           --vcpus "8" \
           --vmem "16384" \

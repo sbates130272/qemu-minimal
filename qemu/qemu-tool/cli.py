@@ -320,8 +320,16 @@ def _add_run_vm(
         ),
     )
     p.add_argument(
+        "--cpu-phys-bits", default=_UNSET, metavar="N", type=int,
+        help=(
+            "Physical address bits for the EPYC CPU (default 40 = 1 TiB). "
+            "Set to 41 alongside --pci-hole64-size when a large BAR exceeds "
+            "the default address space; both must move together."
+        ),
+    )
+    p.add_argument(
         "--pci-hole64-size", default=_UNSET, metavar="SIZE",
-        help="Size of the 64-bit PCI hole, e.g. 1T. Needed for many large BARs.",
+        help="Size of the 64-bit PCI hole, e.g. 512G. Needed for many large BARs.",
     )
     p.add_argument("--nvme", default=_UNSET, metavar="VALUE",
                    help="Positive int=count, negative int=null_blk, else literal args.")
@@ -1102,6 +1110,7 @@ def _extract_cli_overrides(
         _take("vfio_user_root_port", "vfio_user_root_port")
         _take("vfio_user_switch_width", "vfio_user_switch_width")
         _take("cpu_sockets", "cpu_sockets")
+        _take("cpu_phys_bits", "cpu_phys_bits")
         _take("pci_hole64_size", "pci_hole64_size")
         _take("nvme", "nvme")
         _take("nvme_trace", "nvme_trace")

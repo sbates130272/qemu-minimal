@@ -122,6 +122,7 @@ _DEFAULTS = {
     # Guest socket count, and the 64-bit PCI hole. Empty leaves both to QEMU,
     # whose -smp inference gives one single-core socket per vCPU.
     "VM_CPU_SOCKETS": "",
+    "VM_CPU_PHYS_BITS": "",
     "VM_PCI_HOLE64_SIZE": "",
     "QEMU_TOOL_SRC": "../../..",
     "FLEET_NET_PREFIX": "172.31",
@@ -722,6 +723,7 @@ def plan(values: dict[str, str]) -> dict[str, Any]:
         "rocjitsu_per_vm": rocjitsu_per_vm,
         "switch_width": int(_get(values, "VM_PCIE_SWITCH_WIDTH") or 0),
         "cpu_sockets": _get(values, "VM_CPU_SOCKETS"),
+        "cpu_phys_bits": _get(values, "VM_CPU_PHYS_BITS"),
         "pci_hole64_size": _get(values, "VM_PCI_HOLE64_SIZE"),
         "net_prefix": net,
         "exporter_addr": f"{net}.{_NET_INFRA}.{_INFRA_EXPORTER}",
@@ -1197,6 +1199,8 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
                 f'          --vfio-user-switch-width {spec["switch_width"]} \\')
         if spec["cpu_sockets"]:
             out.append(f'          --cpu-sockets {spec["cpu_sockets"]} \\')
+        if spec["cpu_phys_bits"]:
+            out.append(f'          --cpu-phys-bits {spec["cpu_phys_bits"]} \\')
         if spec["pci_hole64_size"]:
             out.append(
                 f'          --pci-hole64-size "{spec["pci_hole64_size"]}" \\')
