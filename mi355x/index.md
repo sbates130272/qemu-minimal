@@ -12,7 +12,7 @@ exercises software reading a realistic PCIe tree.
   `99-rocm-ernic.rules` names the Ethernet interface `rocm-ernic%n` and `%n`
   is 0 for every one of them, so a single NIC wins that name and the other
   seven keep kernel names. Only the named one carries an address.
-- Generated: **2026-10-24 17:02 UTC** &middot; Commit: `unknown` &middot; Status: **pass**
+- Generated: **2026-10-29 14:53 UTC** &middot; Commit: `unknown` &middot; Status: **pass**
 
 ## The PCIe tree the guest enumerates
 
@@ -72,43 +72,55 @@ mesh bandwidth figure and must not be read as one.
 ```
 
 == RDMA on guest 1 ==
- remote address: LID 0000 QPN 0x0008 PSN 0x32524d
+ remote address: LID 0000 QPN 0x0002 PSN 0x5ae2d7
  GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:11
 ---------------------------------------------------------------------------------------
  #bytes     #iterations    BW peak[MiB/sec]    BW average[MiB/sec]   MsgRate[Mpps]
- 65536      200              1868.79            1522.76		     0.024364
+ 65536      200              3451.26            3237.52		     0.051800
 ---------------------------------------------------------------------------------------
 ```
 
 ## What qemu-tool reports about the live guest
 
 ```
-VM: mi355x-ci-1  (pid 9766)
+VM: mi355x-ci-1  (pid 9969)
   SSH:       ssh -p 2222 ubuntu@localhost   (the accepted key has no private half here)
   User:      ubuntu
   Key:       SHA256:a56c2mbgJwKvkrLWcQhEoB2EHvcXLJZsVnmMO2nd4vk batesste-ci-images guest key (/var/lib/qemu-tool/images/keys/mi355x_id_rsa.pub, accepted by guest)
   Arch:      amd64  vCPUs: 4  Memory: 6144 MiB
   GPU:       gfx1250 (emulated, rocjitsu-1-1.sock)
+               BAR0 256 MiB (64-bit prefetchable)
+               BAR2 2 MiB (64-bit prefetchable)
+               BAR4 8 KiB (32-bit)
+               BAR5 512 KiB (32-bit)
+             amdgpu loaded: yes  bound: yes
   GPU:       gfx1250 (emulated, rocjitsu-1-2.sock)
+               BAR0 256 MiB (64-bit prefetchable)
+               BAR2 2 MiB (64-bit prefetchable)
+               BAR4 8 KiB (32-bit)
+               BAR5 512 KiB (32-bit)
+             amdgpu loaded: yes  bound: yes
   GPU:       gfx1250 (emulated, rocjitsu-1-3.sock)
+               BAR0 256 MiB (64-bit prefetchable)
+               BAR2 2 MiB (64-bit prefetchable)
+               BAR4 8 KiB (32-bit)
+               BAR5 512 KiB (32-bit)
+             amdgpu loaded: yes  bound: yes
   GPU:       gfx1250 (emulated, rocjitsu-1-4.sock)
+               BAR0 256 MiB (64-bit prefetchable)
+               BAR2 2 MiB (64-bit prefetchable)
+               BAR4 8 KiB (32-bit)
+               BAR5 512 KiB (32-bit)
+             amdgpu loaded: yes  bound: yes
   GPU:       gfx1250 (emulated, rocjitsu-1-5.sock)
+               BAR0 256 MiB (64-bit prefetchable)
+               BAR2 2 MiB (64-bit prefetchable)
+               BAR4 8 KiB (32-bit)
+               BAR5 512 KiB (32-bit)
+             amdgpu loaded: yes  bound: yes
   GPU:       gfx1250 (emulated, rocjitsu-1-6.sock)
-  GPU:       gfx1250 (emulated, rocjitsu-1-7.sock)
-  GPU:       gfx1250 (emulated, rocjitsu-1-8.sock)
-  Image:     /var/lib/qemu-tool/images/mi355x-ci-1.qcow2
-  Container: mi355x-qemu-1-1
-  Uptime:    3m
-  VFIO:      ernic-1-1.sock, rocjitsu-1-1.sock, ernic-1-2.sock, rocjitsu-1-2.sock, ernic-1-3.sock, rocjitsu-1-3.sock, ernic-1-4.sock, rocjitsu-1-4.sock, ernic-1-5.sock, rocjitsu-1-5.sock, ernic-1-6.sock, rocjitsu-1-6.sock, ernic-1-7.sock, rocjitsu-1-7.sock, ernic-1-8.sock, rocjitsu-1-8.sock
-  GA:        /tmp/qga-mi355x-ci-1-2222.sock (available)
-  Hostname:  ubuntu-ci-vm
-  IP:        127.0.0.1 (lo)
-  IP:        10.0.2.15 (enp0s12)
-  IP:        192.168.100.11 (rocm-ernic0)
-  Boot Disk: /dev/vda        512.0 GiB  emulated (virtio)  /boot/efi,/boot,/
-  Disk:      /dev/nvme0n1      1.0 TiB  emulated (nvme)
-  Disk:      /dev/nvme1n1      1.0 TiB  emulated (nvme)
-  Disk:      /dev/sr0       1024.0 MiB  emulated (sata)
-  Login:     ubuntu from 172.31.0.2 (since 17:01, 0m)
-
+               BAR0 256 MiB (64-bit prefetchable)
+               BAR2 2 MiB (64-bit prefetchable)
+               BAR4 8 KiB (32-bit)
+               BAR5 512 KiB (32-bit)
 ```
