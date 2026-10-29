@@ -4,7 +4,7 @@ title: VM Report — rocjitsu VM
 
 # VM Report — qemu-minimal — rocjitsu VM
 
-Generated: **2026-10-28 23:16 UTC** &middot; Commit: [`e56dcda`](https://github.com/sbates130272/qemu-minimal/commit/e56dcda37d8ca2b362c039ab6da907f5ffa608db) &middot; Status: **pass**
+Generated: **2026-10-29 15:07 UTC** &middot; Commit: [`5ee7176`](https://github.com/sbates130272/qemu-minimal/commit/5ee7176beb785c0068c76d0e5dd2b0cdc32546ca) &middot; Status: **pass**
 
 ## Hardware
 
@@ -19,13 +19,13 @@ Generated: **2026-10-28 23:16 UTC** &middot; Commit: [`e56dcda`](https://github.
 ## Kernel
 
 ```
-7.2.4-070204-generic
+7.2.6-070206-generic
 ```
 
 <details><summary>Full version string</summary>
 
 ```
-Linux version 7.2.4-070204-generic (kernel@balboa) (x86_64-linux-gnu-gcc-15 (Ubuntu 15.2.0-12ubuntu1) 15.2.0, GNU ld (GNU Binutils for Ubuntu) 2.46) #202609072054 SMP PREEMPT_DYNAMIC Thu Sep 10 15:53:25 UTC 2026
+Linux version 7.2.6-070206-generic (kernel@balboa) (x86_64-linux-gnu-gcc-15 (Ubuntu 15.2.0-12ubuntu1) 15.2.0, GNU ld (GNU Binutils for Ubuntu) 2.46) #202609141300 SMP PREEMPT_DYNAMIC Mon Sep 14 15:22:52 UTC 2026
 ```
 
 </details>
@@ -146,6 +146,7 @@ ubuntu : ubuntu video users render admin
   cron.service                     loaded active running Regular background program processing daemon
   dbus.service                     loaded active running D-Bus System Message Bus
   getty@tty1.service               loaded active running Getty on tty1
+  gpuagent.service                 loaded active running AMD GPU Metrics Reader Service
   ModemManager.service             loaded active running Modem Manager
   networkd-dispatcher.service      loaded active running Dispatcher daemon for systemd-networkd
   polkit.service                   loaded active running Authorization Manager
@@ -176,8 +177,8 @@ ubuntu : ubuntu video users render admin
 
 | Metric | Value |
 |---|---|
-| GEMM | 464 kFLOP/s |
-| hipFile read throughput | 170 MB/s |
+| GEMM | 596 kFLOP/s |
+| hipFile read throughput | 246 MB/s |
 
 These run inside a QEMU guest with the GPU attached over vfio-user, so the
 absolute numbers sit far below what the same benchmark reports on bare metal —
@@ -193,7 +194,7 @@ sgemm-bench: device=AMD Radeon Graphics arch=gfx1250
 sgemm-bench: private_segment_bytes=0
 sgemm-bench: m=128 n=128 k=128
 sgemm-bench: max_absolute_error=0 failures=0
-sgemm-bench: seconds_per_iter=9.03419952 gflops=0.000464269578
+sgemm-bench: seconds_per_iter=7.03375417 gflops=0.00059631086
 sgemm-bench: PASS
 ```
 
@@ -206,10 +207,10 @@ gemm-hipfile-bench: device=AMD Radeon Graphics arch=gfx1250
 gemm-hipfile-bench: path=/mnt/nvme/gemm-hipfile-bench.bin block_bytes=1048576 blocks=32 iters=4
 gemm-hipfile-bench: private_segment_bytes=0
 gemm-hipfile-bench: compat_requested=self buf_registered=yes
-gemm-hipfile-bench: read_bytes=33554432 seconds_per_pass=0.197950363 read_gbs=0.169509323
+gemm-hipfile-bench: read_bytes=33554432 seconds_per_pass=0.136594198 read_gbs=0.245650493
 gemm-hipfile-bench: m=128 n=128 k=128
 gemm-hipfile-bench: max_absolute_error=0 failures=0
-gemm-hipfile-bench: gemm_seconds_per_iter=8.96919891 gflops=0.000467634182
+gemm-hipfile-bench: gemm_seconds_per_iter=7.13566632 gflops=0.000587794301
 gemm-hipfile-bench: PASS
 ```
 
