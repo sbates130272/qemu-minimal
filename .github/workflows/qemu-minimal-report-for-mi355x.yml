@@ -194,6 +194,7 @@ jobs:
     - name: Configure the guest, check the shape and write the report
       run: |
         mkdir -p site/mi355x
+        chown -R "$CIUSER_UID:$CIUSER_UID" site/mi355x
         setpriv --reuid "$CIUSER_UID" --regid "$CIUSER_UID" --init-groups \
           env HOME="$CIUSER_HOME" \
           scripts/mi355x-node.sh \
