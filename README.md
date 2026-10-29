@@ -1,11 +1,11 @@
 # QEMU and Libvirt Tooling
 
-[![GitHub Stars](https://img.shields.io/github/stars/sbates130272/qemu-minimal?style=flat-square)](https://github.com/sbates130272/qemu-minimal/stargazers)
-[![GitHub Issues](https://img.shields.io/github/issues/sbates130272/qemu-minimal?style=flat-square)](https://github.com/sbates130272/qemu-minimal/issues)
-[![Last Commit](https://img.shields.io/github/last-commit/sbates130272/qemu-minimal?style=flat-square)](https://github.com/sbates130272/qemu-minimal/commits/main)
-[![Platform](https://img.shields.io/badge/platform-x86__64%20%7C%20ARM64%20%7C%20RISC--V-blue?style=flat-square)](https://github.com/sbates130272/qemu-minimal)
+[![GitHub Stars](https://img.shields.io/github/stars/sbates130272/qemu-minimal?label=Stars&style=flat-square)](https://github.com/sbates130272/qemu-minimal/stargazers)
+[![GitHub Issues](https://img.shields.io/github/issues/sbates130272/qemu-minimal?label=Issues&style=flat-square)](https://github.com/sbates130272/qemu-minimal/issues)
+[![Last Commit](https://img.shields.io/github/last-commit/sbates130272/qemu-minimal?label=Last%20Commit&style=flat-square)](https://github.com/sbates130272/qemu-minimal/commits/main)
+[![Platform](https://img.shields.io/badge/Platform-x86__64%20%7C%20ARM64%20%7C%20RISC--V-blue?style=flat-square)](https://github.com/sbates130272/qemu-minimal)
 [![Ubuntu](https://img.shields.io/badge/Ubuntu-Noble%20%7C%20Resolute-orange?style=flat-square&logo=ubuntu)](https://releases.ubuntu.com/noble/)
-[![GitHub Release](https://img.shields.io/github/v/release/sbates130272/qemu-minimal?style=flat-square)](https://github.com/sbates130272/qemu-minimal/releases/latest)
+[![GitHub Release](https://img.shields.io/github/v/release/sbates130272/qemu-minimal?label=Release&style=flat-square)](https://github.com/sbates130272/qemu-minimal/releases/latest)
 
 <!-- Reports. The blank lines around this block and the performance one below
      are load-bearing: a blank line is what makes GitHub start a new paragraph,
@@ -23,13 +23,13 @@
      `pass` and freshly generated. A lane can be red while the site still
      serves its last good report, and that distinction is the whole point --
      see scripts/render-site-perf.py's update_green(). -->
-[![VM Report](https://img.shields.io/badge/VM%20Report-live-blue?style=flat-square)](https://sbates130272.github.io/qemu-minimal/)
-[![basic Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-vm-basic.yml?branch=main&label=report-for-vm-basic&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-vm-basic.yml)
-[![rocjitsu Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-vm-rocjitsu.yml?branch=main&label=report-for-vm-rocjitsu&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-vm-rocjitsu.yml)
-[![ernic Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-vm-ernic.yml?branch=main&label=report-for-vm-ernic&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-vm-ernic.yml)
-[![lmcache Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-lmcache.yml?label=report-for-lmcache&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-lmcache.yml)
-[![quickstart Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-quickstart.yml?branch=main&label=report-for-quickstart&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-quickstart.yml)
-[![mi355x Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-mi355x.yml?branch=main&label=report-for-mi355x&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-mi355x.yml)
+[![VM Reports](https://img.shields.io/badge/VM%20Reports-Live-blue?style=flat-square)](https://sbates130272.github.io/qemu-minimal/)
+[![Basic Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-vm-basic.yml?branch=main&label=report-for-vm-basic&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-vm-basic.yml)
+[![Rocjitsu Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-vm-rocjitsu.yml?branch=main&label=report-for-vm-rocjitsu&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-vm-rocjitsu.yml)
+[![Ernic Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-vm-ernic.yml?branch=main&label=report-for-vm-ernic&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-vm-ernic.yml)
+[![Lmcache Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-lmcache.yml?label=report-for-lmcache&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-lmcache.yml)
+[![Quickstart Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-quickstart.yml?branch=main&label=report-for-quickstart&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-quickstart.yml)
+[![Mi355x Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-mi355x.yml?branch=main&label=report-for-mi355x&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-mi355x.yml)
 [![All Reports Green](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-all-green.json&style=flat-square)](https://sbates130272.github.io/qemu-minimal/perf/)
 
 <!-- Performance. These are shields.io *endpoint* badges: the label, value and
@@ -39,28 +39,28 @@
      below it, red past that, and blue means there is nothing to compare
      against yet. They used to be fixed AMD/NVIDIA/Intel brand colours, which
      meant GEMM rendered red on its best day. -->
-[![rocjitsu GEMM](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-gemm.json&style=flat-square)](https://sbates130272.github.io/qemu-minimal/perf/)
-[![rocjitsu hipFile](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile.json&style=flat-square)](https://sbates130272.github.io/qemu-minimal/perf/)
-[![hipFile fio](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile-fio.json&style=flat-square)](https://sbates130272.github.io/qemu-minimal/perf/)
+[![Rocjitsu GEMM](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-gemm.json&style=flat-square)](https://sbates130272.github.io/qemu-minimal/perf/)
+[![Rocjitsu HipFile](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile.json&style=flat-square)](https://sbates130272.github.io/qemu-minimal/perf/)
+[![HipFile Fio](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile-fio.json&style=flat-square)](https://sbates130272.github.io/qemu-minimal/perf/)
 
-[![qemu-tool Smoke Test](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-smoke-test-qemu-tool.yml?branch=main&label=qemu-tool-smoke&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-smoke-test-qemu-tool.yml)
-<!-- The five PR-only lanes below (pr-quickstart-boot, dry-run, ansible,
+<!-- quickstart-boot and the four other PR-only lanes (dry-run, ansible,
      shell-check, spell-check) carry no ?branch=main: they have no
      push-to-main and no cron trigger, so they have no run on main and
      shields renders "no status" for a pinned badge. The two smoke-test lanes
      in this row do run on main and stay pinned, as do the report lanes in
      their own row above.
 
-     pr-quickstart-boot is the only one of the five that boots a guest. It is
+     quickstart-boot is the only one of the six that boots a guest. It is
      deliberately NOT a report lane -- it publishes nothing and uploads no
      artifact, so publish-pages.yml neither knows nor needs to know about
      it. -->
-[![PR quickstart boot](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-pr-quickstart-boot.yml?label=pr-quickstart-boot&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-pr-quickstart-boot.yml)
+[![Qemu-tool Smoke Test](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-smoke-test-qemu-tool.yml?branch=main&label=qemu-tool-smoke&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-smoke-test-qemu-tool.yml)
+[![Quickstart Boot](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-quickstart-boot.yml?label=quickstart-boot&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-quickstart-boot.yml)
 [![Dry-Run Tests](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-dry-run-qemu-tool.yml?label=dry-run&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-dry-run-qemu-tool.yml)
 [![Ansible Test](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-ansible-setup-test.yml?label=ansible&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-ansible-setup-test.yml)
 [![Shell Check](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-shell-check.yml?label=shell-check&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-shell-check.yml)
 [![Spell Check](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-spell-check.yml?label=spell-check&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-spell-check.yml)
-[![rocm-ernic Smoke Test](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-smoke-test-rocm-ernic.yml?branch=main&label=smoke-test-rocm-ernic&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-smoke-test-rocm-ernic.yml)
+[![Rocm-ernic Smoke Test](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-smoke-test-rocm-ernic.yml?branch=main&label=smoke-test-rocm-ernic&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-smoke-test-rocm-ernic.yml)
 
 <!-- The two Ansible collections ansible/requirements.yml installs. Exact
      pins, both of them, and neither is a range: sbates130272.batesste
@@ -78,8 +78,8 @@
      -- that is where LMCache and therefore SRQ live. The quick-start badge
      is deliberately ahead of both and is not part of this pairing; it boots
      no LMCache and creates no SRQ. -->
-[![batesste collection](https://img.shields.io/badge/sbates130272.batesste-3.1.0-9cf?style=flat-square)](https://galaxy.ansible.com/ui/repo/published/sbates130272/batesste/)
-[![rocm-ernic collection](https://img.shields.io/badge/sbates130272.rocm__ernic-31d3114-9cf?style=flat-square)](https://github.com/ROCm/rocm-ernic)
+[![Batesste Collection](https://img.shields.io/badge/sbates130272.batesste-3.1.0-9cf?style=flat-square)](https://galaxy.ansible.com/ui/repo/published/sbates130272/batesste/)
+[![Rocm-ernic Collection](https://img.shields.io/badge/sbates130272.rocm__ernic-61b934a-9cf?style=flat-square)](https://github.com/ROCm/rocm-ernic)
 
 <!-- The batesste-ci-images this repo pins. STATIC badges, hand-edited with
      the tags: shields has no endpoint for "what does this repo pin", and a
@@ -106,17 +106,17 @@
      by the qemu/env/overlay-mi100 overlay, for vfio-user P2P DMA, and
      carries a QEMU patch the stock image does not. See AGENTS.md issue 19. -->
 [![CI image build](https://img.shields.io/badge/ci--images-20261021.g742e8e2-informational?style=flat-square&logo=docker)](https://hub.docker.com/u/sbates130272)
-[![qemu](https://img.shields.io/badge/qemu-11.1.2-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user/tags)
-[![libvfio-user](https://img.shields.io/badge/libvfio--user-8039244-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user/tags)
-[![rocm-ernic](https://img.shields.io/badge/rocm--ernic-31d3114-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-rocm-ernic/tags)
-[![rocjitsu](https://img.shields.io/badge/rocjitsu-84fb06b-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu/tags)
-[![guest qcow2](https://img.shields.io/badge/guest-resolute%20%7C%20qm.b4eb552-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu/tags)
-[![qemu fork](https://img.shields.io/badge/sbates--fork-qemu.aa4344e-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork/tags)
+[![Qemu](https://img.shields.io/badge/qemu-11.1.2-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user/tags)
+[![Libvfio-user](https://img.shields.io/badge/libvfio--user-8039244-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user/tags)
+[![Rocm-ernic](https://img.shields.io/badge/rocm--ernic-31d3114-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-rocm-ernic/tags)
+[![Rocjitsu](https://img.shields.io/badge/rocjitsu-84fb06b-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu/tags)
+[![Guest Qcow2](https://img.shields.io/badge/guest-resolute%20%7C%20qm.b4eb552-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu/tags)
+[![Qemu Fork](https://img.shields.io/badge/sbates--fork-qemu.aa4344e-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork/tags)
 
 <!-- What `qemu-tool quick-start` boots, from qemu/env/quickstart. One badge,
      carrying that file's own build stamp; the ernic and rocjitsu revisions
      it implies are the ones in that stamp's tags. -->
-[![quick-start build](https://img.shields.io/badge/quick--start-20261022.gc533d98-success?style=flat-square&logo=docker)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu/tags)
+[![Quick-start Build](https://img.shields.io/badge/quick--start-20261022.gc533d98-success?style=flat-square&logo=docker)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu/tags)
 <!-- The LMCache ref qemu/docker/lmcache/Dockerfile builds from. Not a
      batesste-ci-image: this one is built here and referenced by tag, so it
      carries no build stamp and sits outside the coherence check above. It

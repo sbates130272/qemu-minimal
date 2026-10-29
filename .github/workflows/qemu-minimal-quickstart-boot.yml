@@ -55,7 +55,7 @@ on:
       - 'qemu/qemu-tool/run_vm.py'
       - 'qemu/qemu-tool/gen_vm.py'
       - 'qemu/env/quickstart'
-      - '.github/workflows/qemu-minimal-pr-quickstart-boot.yml'
+      - '.github/workflows/qemu-minimal-quickstart-boot.yml'
   workflow_dispatch:
 
 permissions:
@@ -66,7 +66,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  pr-quickstart-boot:
+  quickstart-boot:
     name: PR quickstart boot
     runs-on: ubuntu-latest
     # Roughly 3x a measured run, not the daily lane's 180. A wedged mesh
@@ -144,7 +144,7 @@ jobs:
         # containers different values for the same key, which is the one
         # thing the shared settings file exists to prevent.
         {
-          printf '# Written by qemu-minimal-pr-quickstart-boot.yml.\n'
+          printf '# Written by qemu-minimal-quickstart-boot.yml.\n'
           printf '# Not a settings file anyone runs by hand.\n'
           printf 'VM_COUNT=1\n'
           printf 'VM_NAME_PREFIX=prboot\n'

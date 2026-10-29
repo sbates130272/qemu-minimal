@@ -218,11 +218,12 @@ def run(cfg: VMConfig, caps: QemuCaps) -> None:
 def _arch_args(cfg: VMConfig) -> list[str]:
     kvm_suffix = ",accel=kvm" if cfg.kvm else ""
     if cfg.arch == "amd64":
+        cpu_arg = "EPYC" if not cfg.cpu_phys_bits else f"EPYC,phys-bits={cfg.cpu_phys_bits}"
         # When vfio-user devices are present, _vfio_userdev_args emits its own
         # -machine with the shared memfd bound, so skip the machine arg here.
         if cfg.vfio_userdev:
-            return ["-cpu", "EPYC"]
-        return ["-machine", f"q35{kvm_suffix}", "-cpu", "EPYC"]
+            return ["-cpu", cpu_arg]
+        return ["-machine", f"q35{kvm_suffix}", "-cpu", cpu_arg]
     if cfg.arch == "arm64":
         return [
             "-machine", f"virt,gic-version=max{kvm_suffix}",

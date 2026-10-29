@@ -96,7 +96,7 @@ rocjitsu_gpu_test_vector_add_n: 4096
 # same playbook would install different bits on a rebuild and a failure would
 # not be reproducible. Bump deliberately.
 rocjitsu_gpu_test_hsa_snoop: true
-rocjitsu_gpu_test_hsa_snoop_bin: /usr/local/bin/hsa-snoop
+rocjitsu_gpu_test_hsa_snoop_bin: /usr/bin/hsa-snoop
 
 # Seconds to let hsa-snoop trace the workload before killing it. This is a
 # wall-clock cost, not just a ceiling: hsa-snoop in "-- <app>" mode does not

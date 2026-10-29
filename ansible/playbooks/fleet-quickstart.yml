@@ -154,7 +154,7 @@
       until: >-
         quickstart_ibv_list.stdout_lines[1:]
         | map('trim') | reject('equalto', '') | list | length > 0
-      retries: 60
+      retries: 30
       delay: 2
 
     - name: Record the IB device name

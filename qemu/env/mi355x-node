@@ -59,15 +59,18 @@ VM_PCIE_SWITCH_WIDTH=2
 # socket count or per-socket topology out of the guest.
 VM_CPU_SOCKETS=1
 
-# Eight emulated GPUs' BARs do not fit the default 64-bit hole. Bounded by
-# the CPU's physical address width: -cpu EPYC gives 40 bits (1 TiB), and
-# QEMU refuses outright at startup with
-#   Address space limit 0xffffffffff < 0x1ffffffffff phys-bits too low (40)
-# Measured on QEMU 10.2.1: 512G is accepted, 1T is not.
+# Eight emulated GPUs' BARs do not fit the default 64-bit hole. -cpu EPYC
+# gives 40 physical address bits (1 TiB), and QEMU refuses a hole larger than
+# the phys-bits space allows. Both must move together:
 #
-# TUNE THIS against what the gfx1250 rocjitsu config actually advertises --
-# read the BARs with `lspci -vv` in a guest and multiply by 8. 512G is the
-# ceiling, not a measurement.
+#   VM_CPU_PHYS_BITS=41   raises the address ceiling to 2 TiB
+#   VM_PCI_HOLE64_SIZE=512G  the hole that fits eight 256 MiB BARs (small BAR)
+#                          or eight 256 GiB BARs (large BAR, needs overlay)
+#
+# Measured on QEMU 10.2.1 with phys-bits=41: 512G is accepted, 1T is not.
+# TUNE VM_PCI_HOLE64_SIZE against what the gfx1250 rocjitsu config advertises
+# (lspci -vv in a guest) and multiply by 8.
+VM_CPU_PHYS_BITS=41
 VM_PCI_HOLE64_SIZE=512G
 
 # ---------------------------------------------------------------------------

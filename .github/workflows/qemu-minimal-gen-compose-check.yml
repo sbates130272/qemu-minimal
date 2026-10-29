@@ -228,7 +228,7 @@ jobs:
           echo "check reports its sections and fails on a real problem."
 
       # down --all on a host with no stacks. Cheap, and it covers the half
-      # pr-quickstart-boot cannot: that lane always has a stack running, so
+      # quickstart-boot cannot: that lane always has a stack running, so
       # it never exercises the empty case -- where a command that removes
       # containers had better say "nothing to do" and exit 0 rather than
       # find something.

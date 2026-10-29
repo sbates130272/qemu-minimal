@@ -4,7 +4,56 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **`qemu-tool qcow` subcommand for overlay management.** Lists all qcow2
+  images found across the system path, `$XDG_DATA_HOME`, and `$VM_IMAGES_DIR`,
+  with columns for size, backing file, delta, age, and NVMe scratch images.
+  `--clean` removes overlay-only images (backing files are exempt). The state
+  check (`--state`) reports whether each overlay is consistent with its backing
+  file. A man page section covering all options is included.
+
+- **`vm-ernic-p4.yml` playbook for baking the P4 ionic stack into a guest.**
+  Follows the order required by `docs/p4.rst` (added in rocm-ernic `c828f99`):
+  `ernic_guest_setup` with `patches/p4` first (registers the aux device), then
+  `ernic_p4_dkms` to build `ernic_p4.ko`. Verifies `ionic_adminq_post_wait` is
+  exported. Writes `/etc/ionic-p4.json` stamp. Cleans build trees. No module
+  reload (image-build time, no device attached).
+
+- **`VM_CPU_PHYS_BITS` setting and `cpu_phys_bits` VMConfig field.**
+  When set, `run_vm.py` emits `-cpu EPYC,phys-bits=N`. Required alongside
+  `VM_PCI_HOLE64_SIZE` when the 64-bit PCI hole needs to exceed the EPYC
+  default of 40 bits (1 TiB). `qemu/env/mi355x-node` sets it to 41, raising
+  the ceiling to 2 TiB to accommodate eight large-BAR emulated GPUs.
+
+- **`/etc/motd.d/qemu-minimal` installed on rocjitsu guest images.** Shown on
+  every SSH login via PAM. Templated with hostname, kernel version and ROCm
+  prefix; explains why `hsa-snoop` and `gpuagent` are disabled so a user who
+  re-enables either understands the risk (emulated GPU lockup).
+
 ### Changed
+
+- **rocm-ernic collection and source pins advanced to `61b934a`.** The
+  collection `version:` in `ansible/requirements.yml` and `ernic_source_pin`
+  in `ansible/playbooks/vars/ernic-pins.yml` were already mismatched
+  (`31d3114` vs `3fb74d1`) before this bump; both are now equal and at the
+  new HEAD. `ionic_kernel_pin` advanced from `v7.2.4` to `v7.2.6` to match
+  `IONIC_KERNEL_REF` in the collection's `cmake/ErnicKernelModule.cmake`;
+  `driver_ionic.yml`'s major.minor check had allowed the gap to go unnoticed.
+
+- **hsa-snoop bumped from 1.1.1 to 1.3.0** in `vm-rocjitsu.yml`.
+
+- **`gpuagent` disabled at image-bake time** on rocjitsu guests.
+  `amdsmi` returns `AMDSMI_STATUS_NOT_SUPPORTED` for temperature/clock/
+  utilisation on the emulated gfx1250, causing `gpuagent` to assertion-fail
+  and wedge `/dev/kfd` for subsequent openers (symptom: `-EBUSY` with no
+  mention of gpuagent). Previously only disabled in `fleet-quickstart.yml`
+  before the GPU test; now baked off so a fresh boot is clean.
+
+- **`quickstart-boot` CI lane renamed from `pr-quickstart-boot`.** The `pr-`
+  prefix was misleading — the lane is identified by what it does, not when
+  it triggers. Workflow file, badge, AGENTS.md and comments in three other
+  workflows updated.
 
 - **Every container in every stack now runs as the caller, with no
   capabilities.** Before this, all six stacks ran every service as uid 0 with
@@ -66,6 +115,16 @@ All notable changes to this project will be documented in this file.
   all rather than merely owning the wrong file.
 
 ### Fixed
+
+- **`ionic_rdma` symbol-mismatch logging added before the IB device check** in
+  `fleet-quickstart.yml`. The modprobe task now logs kernel version, whether
+  the DKMS `ionic_rdma` module file exists for the running kernel, and the
+  `modprobe` output. Root cause (initramfs carrying stale in-tree `ionic`) is
+  fixed in `batesste-ci-images`, not here.
+
+- **"Find the IB device" retry window reverted to 30 × 2s.** A prior commit
+  doubled it to 60 × 2s to cover `ionic_rdma` initialisation delays, but the
+  real failure is an initramfs symbol mismatch that retries cannot resolve.
 
 - **`compose down`/`stop` enable every profile and report survivors.** A fleet
   was found with three profile-gated containers still running 41 hours after a
@@ -209,7 +268,7 @@ All notable changes to this project will be documented in this file.
   which resolves the port, the account and the key, and the plain `ssh` line
   spelled out beside it — and where to watch it.
 
-- **A PR-time boot check for the quickstart**, `pr-quickstart-boot`. The
+- **A PR-time boot check for the quickstart**, `quickstart-boot`. The
   daily report lane runs on push to main and on a cron, so a broken quickstart
   was found the morning after the merge; `Gen Compose Check` renders the
   settings file on every PR but starts nothing. This boots one guest from the
