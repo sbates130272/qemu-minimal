@@ -124,7 +124,7 @@
         # the discard that force_fetch does first is the only destructive part.
         ernic_srq_dkms_force_fetch: false
         ernic_srq_dkms_scripts_dir: "{{ ernic_source_dir }}/scripts"
-        ernic_srq_dkms_patches_dir: "{{ ernic_source_dir }}/patches/srq"
+        ernic_srq_dkms_patches_dir: "{{ ernic_source_dir }}/ansible/files/patches/srq"
         ernic_srq_dkms_stage_dir: "{{ ionic_srq_stage_dir }}"
         ernic_srq_dkms_source_root: "{{ ionic_srq_source_root }}"
         ernic_srq_dkms_sources:
@@ -187,7 +187,7 @@
         # the role's own guard then fails with "No *.patch in ...".
         #
         # ernic_srq_provider_readme derives from this, so it follows.
-        ernic_srq_provider_patches_dir: "{{ ernic_source_dir }}/patches/rdma-core"
+        ernic_srq_provider_patches_dir: "{{ ernic_source_dir }}/ansible/files/patches/rdma-core"
 
     # The overlay has to be the one that loads, and loading is not the same as
     # being present: a /usr/local libibverbs that cannot resolve its own
@@ -217,7 +217,7 @@
       ansible.builtin.shell: |
         set -o pipefail
         sed -n 's/^## The base: `\([0-9a-f]\{40\}\)`.*/\1/p' \
-          "{{ ernic_source_dir }}/patches/rdma-core/README.md" | head -1
+          "{{ ernic_source_dir }}/ansible/files/patches/rdma-core/README.md" | head -1
       args:
         executable: /bin/bash
       changed_when: false
@@ -227,7 +227,7 @@
       ansible.builtin.assert:
         that: ionic_srq_provider_base.stdout | trim | length == 40
         fail_msg: >-
-          No base SHA in {{ ernic_source_dir }}/patches/rdma-core/README.md.
+          No base SHA in {{ ernic_source_dir }}/ansible/files/patches/rdma-core/README.md.
           The role that just built the provider reads the same line and would
           have failed first, so this means the README moved -- fix the stamp
           rather than dropping the field.
