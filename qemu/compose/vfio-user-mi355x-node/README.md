@@ -145,6 +145,24 @@ qemu-tool compose --env-file qemu/env/mi355x-node \
     --stack vfio-user-mi355x-node --profile metrics up -d
 ```
 
+**`compose up` alone leaves the GPUs without firmware.** `amdgpu` loads but
+fails to probe every device with `can't load firmware "amdgpu/ip_discovery.bin"`
+because the guest image deliberately omits that file — it is generated from the
+running rocjitsu image and must be installed by Ansible after the stack is up.
+Run `fleet-quickstart.yml` (or the equivalent `amdgpu_firmware` role task)
+before expecting any GPU work:
+
+```bash
+cd ansible/playbooks
+ansible-playbook \
+  -i /var/lib/qemu-tool/stacks/mi355x-node/fleet-inventory.yml \
+  fleet-quickstart.yml \
+  --start-at-task "Install the gfx1250 firmware stubs generated from this stack's rocjitsu"
+```
+
+`scripts/mi355x-node.sh test` does this as part of its normal run, so the
+short path above already has it covered. The manual path does not.
+
 Confirm the topology from inside a guest before anything else — a flat tree
 boots exactly as happily as a switched one:
 

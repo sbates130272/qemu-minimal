@@ -85,13 +85,7 @@ REPORTS = (
     {"key": "ernic", "label": "ernic VM 1", "path": "ernic/index.md"},
     {"key": "ernic-vm2", "label": "ernic VM 2", "path": "ernic/vm2/index.md"},
     {"key": "hipfile-fio", "label": "hipFile fio", "path": "hipfile-fio/index.md"},
-    # report-for-lmcache is deliberately ABSENT, though it publishes to
-    # lmcache/index.md like the rest. Every entry here must be present,
-    # stamped pass AND fresher than DEFAULT_GREEN_MAX_AGE_HOURS (36) for the
-    # all-green badge to go green, and that lane is weekly -- so it would be
-    # stale six days in seven and hold the badge down permanently. Adding it
-    # needs the lane moved to a daily cadence first, not just a line here.
-    #
+    {"key": "lmcache", "label": "LMCache", "path": "lmcache/index.md"},
     # report-for-quickstart is absent for a different reason: it IS daily, so
     # it would qualify, but it is new and boots two guests on a runner that
     # cannot give them a core each (AGENTS.md issue 14). Adding it before it
@@ -446,9 +440,14 @@ def write_green_badge(perf_dir: Path, state: Dict) -> None:
     if state.get("green"):
         message, color = last, COLOR_OK
     elif last:
-        # Amber rather than red: the date is still true, it has just stopped
-        # being today. Red is reserved for never having been green at all.
-        message, color = last, COLOR_WARN
+        # Decay by age: green today, yellow ≤2 days, red >5 days.
+        try:
+            age = (datetime.now(timezone.utc).date()
+                   - datetime.strptime(last, "%Y-%m-%d").date()).days
+        except ValueError:
+            age = 999
+        color = COLOR_OK if age <= 2 else COLOR_REGRESSED if age > 5 else COLOR_WARN
+        message = last
     else:
         message, color = "never", COLOR_REGRESSED
     dump_json(

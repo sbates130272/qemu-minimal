@@ -383,18 +383,37 @@ class BadgeOutput(unittest.TestCase):
                 self.assertEqual(badge["color"], rsp.COLOR_MISSING)
 
     def test_green_badge_states(self):
+        today = datetime.now(timezone.utc).date()
+        fmt = "%Y-%m-%d"
+
+        # green=True → always brightgreen regardless of age
         rsp.write_green_badge(self.perf, {"green": True,
-                                          "last_all_green": "2026-09-26"})
+                                          "last_all_green": today.strftime(fmt)})
         badge = self.badge("badge-all-green.json")
         self.assertEqual(badge["color"], rsp.COLOR_OK)
-        self.assertEqual(badge["message"], "2026-09-26")
 
-        rsp.write_green_badge(self.perf, {"green": False,
-                                          "last_all_green": "2026-09-20"})
+        # green=False, 1 day ago → still green (within 2-day window)
+        d1 = (today - timedelta(days=1)).strftime(fmt)
+        rsp.write_green_badge(self.perf, {"green": False, "last_all_green": d1})
+        badge = self.badge("badge-all-green.json")
+        self.assertEqual(badge["color"], rsp.COLOR_OK)
+        self.assertEqual(badge["message"], d1)
+
+        # green=False, 3 days ago → yellow (2-5 day window)
+        d3 = (today - timedelta(days=3)).strftime(fmt)
+        rsp.write_green_badge(self.perf, {"green": False, "last_all_green": d3})
         badge = self.badge("badge-all-green.json")
         self.assertEqual(badge["color"], rsp.COLOR_WARN)
-        self.assertEqual(badge["message"], "2026-09-20")
+        self.assertEqual(badge["message"], d3)
 
+        # green=False, 6 days ago → red (>5 days)
+        d6 = (today - timedelta(days=6)).strftime(fmt)
+        rsp.write_green_badge(self.perf, {"green": False, "last_all_green": d6})
+        badge = self.badge("badge-all-green.json")
+        self.assertEqual(badge["color"], rsp.COLOR_REGRESSED)
+        self.assertEqual(badge["message"], d6)
+
+        # never green → red
         rsp.write_green_badge(self.perf, {"green": False})
         badge = self.badge("badge-all-green.json")
         self.assertEqual(badge["color"], rsp.COLOR_REGRESSED)

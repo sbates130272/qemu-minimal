@@ -59,7 +59,7 @@ jobs:
           # REPORTS without adding it here fails this step with "freshly
           # generated pass-stamped reports did not read as green", which
           # names the symptom and not this loop.
-          for path in 1vm rocjitsu ernic ernic/vm2 hipfile-fio mi355x; do
+          for path in 1vm rocjitsu ernic ernic/vm2 hipfile-fio lmcache mi355x; do
             scripts/generate-vm-report.sh "${staging}/${path}" 1 nobody >/dev/null
           done
 

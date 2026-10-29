@@ -20,11 +20,12 @@ All notable changes to this project will be documented in this file.
   exported. Writes `/etc/ionic-p4.json` stamp. Cleans build trees. No module
   reload (image-build time, no device attached).
 
-- **`VM_CPU_PHYS_BITS` setting and `cpu_phys_bits` VMConfig field.**
-  When set, `run_vm.py` emits `-cpu EPYC,phys-bits=N`. Required alongside
-  `VM_PCI_HOLE64_SIZE` when the 64-bit PCI hole needs to exceed the EPYC
-  default of 40 bits (1 TiB). `qemu/env/mi355x-node` sets it to 41, raising
-  the ceiling to 2 TiB to accommodate eight large-BAR emulated GPUs.
+- **`--cpu-phys-bits N` on run-vm, `VM_CPU_PHYS_BITS` in env files, and
+  `cpu_phys_bits` VMConfig field.** When set, `run_vm.py` emits
+  `-cpu EPYC,phys-bits=N` and gen-compose passes `--cpu-phys-bits` in the
+  generated `run-vm` command. Required alongside `VM_PCI_HOLE64_SIZE` when
+  the 64-bit PCI hole needs to exceed the EPYC default of 40 bits (1 TiB).
+  `qemu/env/mi355x-node` sets it to 41, raising the ceiling to 2 TiB.
 
 - **`/etc/motd.d/qemu-minimal` installed on rocjitsu guest images.** Shown on
   every SSH login via PAM. Templated with hostname, kernel version and ROCm

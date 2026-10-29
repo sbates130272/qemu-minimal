@@ -781,8 +781,14 @@
             done
 
             if [ ${#mismatch[@]} -eq 0 ]; then
-              echo "amdgpu already loaded with the emulation parameters."
-              exit 0
+              if ls /dev/dri/render* >/dev/null 2>&1; then
+                echo "amdgpu already loaded with the emulation parameters."
+                exit 0
+              fi
+              echo "amdgpu loaded with correct parameters but no render nodes found." >&2
+              echo "Is /lib/firmware/amdgpu/ip_discovery.bin present?" >&2
+              echo "  ls /lib/firmware/amdgpu/ip_discovery.bin" >&2
+              exit 1
             fi
 
             echo "amdgpu is already loaded with the wrong parameters:" >&2

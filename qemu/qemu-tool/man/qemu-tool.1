@@ -329,26 +329,29 @@ Pin the guest socket count. Without it QEMU infers
 so a guest given 8 vCPUs reports eight single\-core sockets. Must divide
 .BR \-\-vcpus .
 .TP
+.BI \-\-cpu\-phys\-bits " N"
+Physical address bits for the EPYC CPU. Default 40 (1\~TiB address space).
+Raise to 41 (2\~TiB) alongside
+.B \-\-pci\-hole64\-size
+when a large BAR would exceed the default space; both must move together.
+QEMU refuses a hole larger than the address space allows at startup rather
+than at boot time.
+.TP
 .BI \-\-pci\-hole64\-size " SIZE"
 Size of the 64\-bit PCI hole as a QEMU size string, e.g.\&
 .IR 512G .
 The machine default does not fit many large BARs at once; eight emulated
 GPUs will not enumerate without this.
 .IP
-Bounded by the CPU's physical address width, and the failure is a refusal at
-startup rather than a degraded boot.
+Bounded by
+.BR \-\-cpu\-phys\-bits :
 .B \-cpu EPYC
-gives 40 bits, so on QEMU 10.2.1
+gives 40 bits (1\~TiB) by default, so on QEMU 10.2.1
 .I 512G
 is accepted and
 .I 1T
-is not; above that needs
-.B host\-phys\-bits=on
-or an explicit
-.B phys\-bits=
-on the
-.B \-cpu
-argument.
+is not without raising
+.BR \-\-cpu\-phys\-bits .
 .TP
 .B \-\-mgmt\-tap
 Use tap+bridge for the management NIC instead of SLIRP.
