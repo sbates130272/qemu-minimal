@@ -46,32 +46,78 @@
     # and pointless here -- matching the existing name makes netplan's
     # set-name a no-op instead of a rename race against udev.
     lmcache_guest_ernic_netplan_name: rocm-ernic0
+    # The published ernic-rocjitsu qcow2 uses networkd-dispatcher rather than
+    # systemd-networkd, so the netplan file would be written but never applied.
+    # The preflight (included below via netplan_ernic) assigns the address
+    # directly with ip-addr regardless, so skipping the netplan write saves
+    # the renderer check round-trip and avoids the "systemd-networkd is absent"
+    # warning that makes the output look like a failure.
+    lmcache_guest_netplan_ernic: false
   tasks:
+    # On AMD corporate network the host exports AMD_CERT (base64 ZScaler CA)
+    # and VM_CA_CERT_FILE (destination path). The published qcow2 has neither,
+    # so HTTPS downloads in later tasks fail without this. If AMD_CERT is unset
+    # (non-corporate host) the task is skipped and validate_certs stays true.
+    - name: Install ZScaler CA cert so HTTPS works in guest
+      become: true
+      ansible.builtin.copy:
+        dest: "{{ lookup('env', 'VM_CA_CERT_FILE') }}"
+        content: "{{ lookup('env', 'AMD_CERT') | b64decode }}"
+        mode: "0644"
+      when: lookup('env', 'AMD_CERT') | length > 0
+
+    - name: Rebuild CA trust bundle
+      become: true
+      ansible.builtin.command:
+        cmd: update-ca-certificates
+      changed_when: true
+      when: lookup('env', 'AMD_CERT') | length > 0
+
     - name: Install the gfx1250 firmware stubs generated from this stack's rocjitsu
       ansible.builtin.include_role:
         name: lmcache_guest
         tasks_from: amdgpu_firmware
 
+    - name: Install rocm-ernic udev naming rules
+      become: true
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../udev/99-rocm-ernic.rules"
+        dest: /etc/udev/rules.d/99-rocm-ernic.rules
+        mode: "0644"
+
+    - name: Reload udev rules
+      become: true
+      ansible.builtin.command:
+        cmd: udevadm control --reload-rules
+      changed_when: false
+
+    - name: Assign ernic Ethernet address
+      become: true
+      ansible.builtin.shell:
+        cmd: |
+          iface=$(ip -br link | awk '/72:6f:63:6d/ {print $1}')
+          [ -n "$iface" ] || { echo "ernic interface not found"; exit 1; }
+          ip link set "$iface" up
+          ip addr add "{{ lmcache_guest_eth_address }}" dev "$iface" 2>/dev/null || true
+          echo "assigned {{ lmcache_guest_eth_address }} to $iface"
+        executable: /bin/bash
+      changed_when: true
+
     - name: Declare the ernic address to netplan
       ansible.builtin.include_role:
         name: lmcache_guest
         tasks_from: netplan_ernic
+      when: lmcache_guest_netplan_ernic | bool
 
-    # Disable gpuagent and amd-metrics-exporter before the GPU test.
-    # gpuagent assertion-fails on emulated gfx1250 (amdsmi returns
-    # AMDSMI_STATUS_NOT_SUPPORTED for temp/clock/util) and can wedge the
-    # GPU device for the vector_add that follows. Stopping them here is
-    # idempotent: failed_when: false covers the case where they are not
-    # installed.
-    - name: Stop and disable gpuagent and amd-metrics-exporter
+    # systemd-networkd-wait-online blocks boot indefinitely: it waits for ALL
+    # networkd-managed interfaces including the ernic, which only appears after
+    # the vfio-user session is established. The published qcow2 does not mask
+    # it, so boot stalls for >90s on every run without this.
+    - name: Mask systemd-networkd-wait-online to prevent ernic boot delay
       become: true
       ansible.builtin.systemd:
-        name: "{{ item }}"
-        state: stopped
-        enabled: false
-      loop:
-        - gpuagent
-        - amd-metrics-exporter
+        name: systemd-networkd-wait-online.service
+        masked: true
       failed_when: false
 
     - name: Check whether KFD is already up
@@ -125,16 +171,30 @@
     # DKMS modules but has no modules-load.d entries, so they depend on udev
     # device detection at boot. Making this explicit prevents a race between
     # udev and the ibv_devinfo check below.
-    - name: Log kernel version and ionic module state
+    - name: Load ionic and ionic_rdma modules
+      become: true
       ansible.builtin.shell:
         cmd: |
           echo "kernel: $(uname -r)"
-          echo "ionic_rdma in modules: $(find /lib/modules/$(uname -r) -name 'ionic_rdma*' 2>/dev/null | head -1 || echo MISSING)"
-          modprobe -a ionic ionic_rdma 2>&1 && echo "modprobe: OK" || echo "modprobe: FAILED rc=$?"
+          DKMS_IONIC=$(modinfo -F srcversion \
+            /lib/modules/$(uname -r)/updates/dkms/ionic.ko.zst 2>/dev/null)
+          LOADED_IONIC=$(cat /sys/module/ionic/srcversion 2>/dev/null || echo NONE)
+          echo "ionic dkms: ${DKMS_IONIC:-MISSING}"
+          echo "ionic loaded: $LOADED_IONIC"
+          # If the running ionic differs from the DKMS ionic (a stale version
+          # from the initramfs), ionic_rdma's symbol CRCs will not match and
+          # modprobe fails with EINVAL. Reload the DKMS version.
+          if [ "$LOADED_IONIC" != "$DKMS_IONIC" ] && [ "$LOADED_IONIC" != "NONE" ]; then
+            echo "ionic mismatch -- reloading DKMS version"
+            ip link set enp1s0np0 down 2>/dev/null || true
+            rmmod ionic
+          fi
+          modprobe ionic 2>&1
+          modprobe ionic_rdma 2>&1 && echo "modprobe: OK" || echo "modprobe: FAILED rc=$?"
         executable: /bin/bash
       register: quickstart_ionic_log
       changed_when: false
-      failed_when: false
+      failed_when: "'modprobe: FAILED' in quickstart_ionic_log.stdout"
 
     - name: Show ionic module state
       ansible.builtin.debug:
@@ -201,11 +261,101 @@
   ignore_errors: true
   become: false
   tasks:
-    - name: Rebuild CA trust bundle
+    - name: Install prometheus-node-exporter
+      become: true
+      ansible.builtin.apt:
+        name: prometheus-node-exporter
+        state: present
+        update_cache: true
+
+    - name: Create textfile collector directory
+      become: true
+      ansible.builtin.file:
+        path: /var/lib/prometheus/node-exporter
+        state: directory
+        mode: "0755"
+
+    - name: Install amdgpu textfile metrics script
+      become: true
+      ansible.builtin.copy:
+        dest: /usr/local/bin/amdgpu-textfile-metrics.sh
+        mode: "0755"
+        content: |
+          #!/bin/sh
+          # Write amdgpu presence metrics for node_exporter textfile collector.
+          # amdgpu-exporter is disabled (broken on emulated gfx1250); this is
+          # the lightweight alternative.
+          out=/var/lib/prometheus/node-exporter/amdgpu.prom
+          kfd=0; [ -e /dev/kfd ] && kfd=1
+          gpus=$(find /sys/bus/pci/drivers/amdgpu/ -maxdepth 1 \
+                      -name '????:??:??.?' 2>/dev/null | wc -l)
+          cat > "${out}.tmp" << EOF
+          # HELP amdgpu_kfd_present Whether /dev/kfd is present (1=yes, 0=no).
+          # TYPE amdgpu_kfd_present gauge
+          amdgpu_kfd_present ${kfd}
+          # HELP amdgpu_devices_total Number of amdgpu DRM render devices.
+          # TYPE amdgpu_devices_total gauge
+          amdgpu_devices_total ${gpus}
+          EOF
+          mv "${out}.tmp" "${out}"
+
+    - name: Install amdgpu metrics systemd timer
+      become: true
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/amdgpu-textfile-metrics.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Write amdgpu textfile metrics for node_exporter
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/bin/amdgpu-textfile-metrics.sh
+
+    - name: Install amdgpu metrics timer unit
+      become: true
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/amdgpu-textfile-metrics.timer
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Run amdgpu textfile metrics every 30s
+
+          [Timer]
+          OnBootSec=5s
+          OnUnitActiveSec=30s
+
+          [Install]
+          WantedBy=timers.target
+
+    - name: Configure node_exporter to use textfile collector
+      become: true
+      ansible.builtin.lineinfile:
+        path: /etc/default/prometheus-node-exporter
+        regexp: '^ARGS='
+        line: 'ARGS="--collector.textfile.directory=/var/lib/prometheus/node-exporter"'
+        create: true
+        mode: "0644"
+
+    - name: Enable and start amdgpu metrics timer
+      become: true
+      ansible.builtin.systemd:
+        name: amdgpu-textfile-metrics.timer
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Run metrics script immediately
       become: true
       ansible.builtin.command:
-        cmd: update-ca-certificates
+        cmd: /usr/local/bin/amdgpu-textfile-metrics.sh
       changed_when: true
+
+    - name: Restart node_exporter to pick up textfile config
+      become: true
+      ansible.builtin.systemd:
+        name: prometheus-node-exporter
+        state: restarted
 
     # amdgpu-exporter: AMD GPU metrics on :9488 from the ROCm apt repo.
     - name: Get latest rdma_exporter release from GitHub
@@ -361,8 +511,11 @@
   become: true
   tasks:
     - name: Clear any unit left by an earlier run
-      ansible.builtin.command:
-        cmd: systemctl reset-failed quickstart-ib-send-bw.service
+      ansible.builtin.shell:
+        cmd: |
+          systemctl stop quickstart-ib-send-bw.service 2>/dev/null || true
+          systemctl reset-failed quickstart-ib-send-bw.service 2>/dev/null || true
+        executable: /bin/bash
       changed_when: false
       failed_when: false
 
@@ -371,7 +524,12 @@
         cmd: >-
           systemd-run --unit=quickstart-ib-send-bw --collect
           /usr/bin/ib_send_bw -d {{ quickstart_ib_device }}
-          --iters 1000 --size 65536
+          {% if quickstart_rdma_duration is defined %}
+          --duration {{ quickstart_rdma_duration }}
+          {% else %}
+          --iters 1000
+          {% endif %}
+          --size 65536
       changed_when: true
 
     # Read the listening socket; do NOT connect to it. `wait_for: port:` was
@@ -401,8 +559,14 @@
     - name: Run ib_send_bw against the peer
       ansible.builtin.command:
         cmd: >-
-          timeout 300 /usr/bin/ib_send_bw -d {{ quickstart_ib_device }}
-          --iters 1000 --size 65536
+          timeout {{ (quickstart_rdma_duration | default(0) | int + 60) if quickstart_rdma_duration is defined else 300 }}
+          /usr/bin/ib_send_bw -d {{ quickstart_ib_device }}
+          {% if quickstart_rdma_duration is defined %}
+          --duration {{ quickstart_rdma_duration }}
+          {% else %}
+          --iters 1000
+          {% endif %}
+          --size 65536
           {{ hostvars[groups['fleet'][-1]].fleet_guest_ip }}
       register: quickstart_ib_send_bw
       changed_when: false
@@ -420,6 +584,71 @@
              | select('search', '^\s*65536\s')
              | list | first | default('') }}
       failed_when: quickstart_bw | length == 0
+
+# ---------------------------------------------------------------------------
+# NVMe I/O test
+# ---------------------------------------------------------------------------
+#
+# Sequential write then read on /dev/nvme0n1 using fio with direct I/O.
+# The device is emulated scratch -- write first, then read back what was
+# written. Both passes run for 10 s. The assertion is non-zero bandwidth:
+# this proves the block device is functional, not that it hits any
+# particular throughput floor (emulated NVMe over qcow2 varies widely).
+- name: Test NVMe I/O on each guest
+  hosts: fleet
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Check /dev/nvme0n1 exists
+      ansible.builtin.stat:
+        path: /dev/nvme0n1
+      register: quickstart_nvme_dev
+      failed_when: not quickstart_nvme_dev.stat.exists
+
+    - name: Run fio sequential write on nvme0n1
+      become: true
+      ansible.builtin.command:
+        cmd: >-
+          fio --name=nvme-write --filename=/dev/nvme0n1
+          --rw=write --bs=128k --direct=1
+          --time_based --runtime={{ quickstart_nvme_duration | default(10) }} --numjobs=1
+          --output-format=json
+      register: quickstart_nvme_write
+      changed_when: false
+
+    - name: Run fio sequential read on nvme0n1
+      become: true
+      ansible.builtin.command:
+        cmd: >-
+          fio --name=nvme-read --filename=/dev/nvme0n1
+          --rw=read --bs=128k --direct=1
+          --time_based --runtime={{ quickstart_nvme_duration | default(10) }} --numjobs=1
+          --output-format=json
+      register: quickstart_nvme_read
+      changed_when: false
+
+    - name: Extract NVMe write and read bandwidth
+      ansible.builtin.set_fact:
+        quickstart_nvme_write_bw: >-
+          {{ (quickstart_nvme_write.stdout | from_json).jobs[0].write.bw_bytes }}
+        quickstart_nvme_read_bw: >-
+          {{ (quickstart_nvme_read.stdout | from_json).jobs[0].read.bw_bytes }}
+
+    - name: Assert non-zero NVMe bandwidth
+      ansible.builtin.assert:
+        that:
+          - quickstart_nvme_write_bw | int > 0
+          - quickstart_nvme_read_bw | int > 0
+        fail_msg: >-
+          NVMe I/O test failed: write={{ quickstart_nvme_write_bw }}
+          read={{ quickstart_nvme_read_bw }} bytes/s
+
+    - name: Show NVMe I/O results
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: NVMe write
+          {{ (quickstart_nvme_write_bw | int / 1048576) | round(0) }} MiB/s,
+          read {{ (quickstart_nvme_read_bw | int / 1048576) | round(0) }} MiB/s
 
 # ---------------------------------------------------------------------------
 # Facts for the report
@@ -480,6 +709,15 @@
           ```
           {{ quickstart_ib_send_bw.stdout }}
           ```
+          {% endif %}
+
+          {% if quickstart_nvme_write_bw is defined %}
+          ### NVMe I/O test
+
+          | Direction | Bandwidth |
+          |-----------|-----------|
+          | write | {{ (quickstart_nvme_write_bw | int / 1048576) | round(0) }} MiB/s |
+          | read  | {{ (quickstart_nvme_read_bw  | int / 1048576) | round(0) }} MiB/s |
           {% endif %}
         dest: "{{ quickstart_artifacts_dir }}/{{ inventory_hostname }}.md"
         mode: "0644"

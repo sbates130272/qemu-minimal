@@ -1122,10 +1122,15 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
             # Fields are hex and space-separated: local_address is $2 as
             # <addr>:<port>, st is $4, and 0A is TCP_LISTEN.
             port_hex = f"{int(spec['tcp_port']):04X}"
+            # Check both /proc/net/tcp (IPv4) and /proc/net/tcp6 (IPv6):
+            # rocm-ernic may bind on :: (IPv6 wildcard) on some hosts,
+            # which appears only in tcp6 and would make an IPv4-only check
+            # always fail. awk accepts multiple files and processes them in
+            # sequence, so passing both costs nothing.
             out.append(
                 '      test: ["CMD", "awk", '
                 f'"$2 ~ /:{port_hex}$/ && $4 == \\"0A\\" {{found=1}} '
-                'END {exit !found}", "/proc/net/tcp"]'
+                'END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]'
             )
         else:
             # Proving the socket exists is not enough to serialise
@@ -1135,7 +1140,7 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
             out.append(
                 '      test: ["CMD", "awk", '
                 f'"$3 ~ /:{port_hex}$/ && $4 == \\"01\\" {{found=1}} '
-                'END {exit !found}", "/proc/net/tcp"]'
+                'END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]'
             )
         out.append("      interval: 2s")
         out.append("      timeout: 5s")
@@ -1332,93 +1337,16 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
         out.append("      retries: 30")
         out.append("      start_period: 30s")
         out.append("")
-        out.append("  # Read-only Docker API, so the log collector never holds")
-        out.append("  # the socket. Mounting /var/run/docker.sock into Alloy")
-        out.append("  # is root on the host however it is mounted: `:ro`")
-        out.append("  # applies to the inode, not to the API, and anything")
-        out.append("  # that can connect to that socket can create a")
-        out.append("  # privileged container and own the machine. Alloy is a")
-        out.append("  # large pipeline that parses container log content,")
-        out.append("  # which is the least suitable process in the stack to")
-        out.append("  # hand that to.")
+        out.append("  # Ships every stack container's logs to Loki. The guests")
+        out.append("  # run their own Alloy: a VM's journal is behind QEMU,")
+        out.append("  # not on this Docker socket.")
         out.append("  #")
-        out.append("  # This is the standard mitigation: haproxy with a path")
-        out.append("  # allowlist. POST is refused outright, so no container")
-        out.append("  # can be created, started, exec'd or changed through")
-        out.append("  # it; CONTAINERS is what discovery.docker lists and")
-        out.append("  # loki.source.docker reads logs from, and the rest are")
-        out.append("  # the handshake. Everything else the image defaults to")
-        out.append("  # 0, but the ones that would matter are spelled out")
-        out.append("  # below rather than left to a default that could move.")
-        out.append("  #")
-        out.append("  # It still mounts the socket and still runs as root --")
-        out.append("  # that is unavoidable for anything that speaks to the")
-        out.append("  # daemon -- so this does not remove the root-equivalent")
-        out.append("  # container, it shrinks it from a log pipeline to a")
-        out.append("  # proxy whose entire job is saying no.")
-        out.append("  dockerapi:")
-        out.append(f'    image: "{spec["socket_proxy_image"]}"')
-        out.append("    logging: *logging")
-        out.append("    profiles: [metrics]")
-        out.append("    networks:")
-        out.append("      fleet:")
-        out.append(f"        ipv4_address: {spec['dockerapi_addr']}")
-        out.append("    restart: on-failure")
-        out.append("    environment:")
-        out.append("      - CONTAINERS=1")
-        out.append("      - EVENTS=1")
-        out.append("      - PING=1")
-        out.append("      - VERSION=1")
-        out.append("      - POST=0")
-        out.append("      - EXEC=0")
-        out.append("      - IMAGES=0")
-        out.append("      - INFO=0")
-        out.append("      - NETWORKS=0")
-        out.append("      - VOLUMES=0")
-        out.append("      - SERVICES=0")
-        out.append("      - TASKS=0")
-        out.append("      - SWARM=0")
-        out.append("      - NODES=0")
-        out.append("      - SECRETS=0")
-        out.append("      - CONFIGS=0")
-        out.append("      - PLUGINS=0")
-        out.append("      - SYSTEM=0")
-        out.append("      - DISTRIBUTION=0")
-        out.append("      - BUILD=0")
-        out.append("      - COMMIT=0")
-        out.append("      - AUTH=0")
-        out.append("    volumes:")
-        out.append("      - /var/run/docker.sock:/var/run/docker.sock:ro")
-        # Not _hardening(): haproxy drops to its own unprivileged user after
-        # binding, which needs SETUID/SETGID, and chroots, which needs
-        # SYS_CHROOT. Dropping those is an haproxy that will not start.
-        out.append("    cap_drop:")
-        out.append("      - ALL")
-        out.append("    cap_add:")
-        out.append("      - SETUID")
-        out.append("      - SETGID")
-        out.append("      - DAC_OVERRIDE")
-        out.append("    security_opt:")
-        out.append('      - "no-new-privileges:true"')
-        out.append("    healthcheck:")
-        out.append('      test: ["CMD-SHELL", "wget -q -O- '
-                   f'http://127.0.0.1:{spec["dockerapi_port"]}/_ping '
-                   '| grep -q OK"]')
-        out.append("      interval: 10s")
-        out.append("      timeout: 5s")
-        out.append("      retries: 12")
-        out.append("      start_period: 5s")
-        out.append("")
-        out.append("  # Ships every stack container's logs. The guests run")
-        out.append("  # their own Alloy: a VM's journal is behind QEMU, not")
-        out.append("  # on this Docker API.")
-        out.append("  #")
-        out.append("  # Holds no Docker socket -- it reaches the daemon only")
-        out.append("  # through the read-only proxy above, over the fleet")
-        out.append("  # network -- so it has no host state, no socket and no")
-        out.append("  # reason to be root. That is what lets it take")
-        out.append("  # CONTAINER_USER like everything else; it used to be")
-        out.append("  # exempt, and the socket was the reason.")
+        out.append("  # Mounts the Docker socket directly. Anything that can")
+        out.append("  # connect to that socket is root on the host, whatever")
+        out.append("  # the mount flags say. Accepted here: this is a lab")
+        out.append("  # stack and the socket is needed for container discovery")
+        out.append("  # and log tailing. The container is otherwise locked")
+        out.append("  # down (cap_drop ALL, no-new-privileges).")
         out.append("  alloy:")
         out.append(f'    image: "{spec["alloy_image"]}"')
         out.append("    logging: *logging")
@@ -1427,21 +1355,20 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
         out.append("      fleet:")
         out.append(f"        ipv4_address: {spec['alloy_addr']}")
         out.append("    restart: on-failure")
-        out.append(f"    user: {_USER_REF}")
-        out += _hardening()
+        # Needs root to open /var/run/docker.sock (owned by root:docker).
+        # The CONTAINER_USER uid is typically not in the docker group inside
+        # the container, so we stay as root rather than failing silently.
+        out.append("    cap_drop:")
+        out.append("      - ALL")
+        out.append("    security_opt:")
+        out.append('      - "no-new-privileges:true"')
         out.append("    depends_on:")
         out.append("      loki:")
         out.append("        condition: service_healthy")
-        out.append("      dockerapi:")
-        out.append("        condition: service_healthy")
         out.append("    environment:")
         out.append(f"      - LOKI_HOST={spec['loki_addr']}:3100")
-        # The config reads this rather than hardcoding the proxy, because the
-        # third octet of the fleet network is a setting.
-        out.append(
-            f"      - DOCKER_HOST=tcp://{spec['dockerapi_addr']}"
-            f":{spec['dockerapi_port']}")
         out.append("    volumes:")
+        out.append("      - /var/run/docker.sock:/var/run/docker.sock:ro")
         out.append("      - ./logging/alloy-host.alloy:/etc/alloy/config.alloy:ro")
         out.append("    command:")
         out.append("      - run")

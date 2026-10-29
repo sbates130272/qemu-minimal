@@ -5,7 +5,7 @@
 #   qemu-tool gen-compose --env-file qemu/env/mi355x-node
 #
 # env-file: qemu/env/mi355x-node
-# env-sha256: d4f4c48305c5cfb3e84e436801fac2025646f5a35c6623d9678271d59a3ef242
+# env-sha256: f50093e79833ba9fe47367530f66d3b04b9b24ec8b65c195d331869e5edba0fa
 
 x-logging: &logging
   driver: json-file
@@ -75,7 +75,7 @@ services:
         done
         exec rocm-ernic '-s' '/run/vfu/ernic-1-1.sock' '-b' 'tcp:manager:listen:6320' '-m' '72:6f:63:6d:00:01' '-S' '/run/ernic-stats/ernic-1-1.stats' '-T' 'tap0'
     healthcheck:
-      test: ["CMD", "awk", "$2 ~ /:18B0$/ && $4 == \"0A\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$2 ~ /:18B0$/ && $4 == \"0A\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -108,7 +108,7 @@ services:
       ernic-1-1:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -141,7 +141,7 @@ services:
       ernic-1-2:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -174,7 +174,7 @@ services:
       ernic-1-3:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -207,7 +207,7 @@ services:
       ernic-1-4:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -240,7 +240,7 @@ services:
       ernic-1-5:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -273,7 +273,7 @@ services:
       ernic-1-6:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -306,7 +306,7 @@ services:
       ernic-1-7:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -339,7 +339,7 @@ services:
       ernic-1-8:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -372,7 +372,7 @@ services:
       ernic-2-1:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -405,7 +405,7 @@ services:
       ernic-2-2:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -438,7 +438,7 @@ services:
       ernic-2-3:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -471,7 +471,7 @@ services:
       ernic-2-4:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -504,7 +504,7 @@ services:
       ernic-2-5:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -537,7 +537,7 @@ services:
       ernic-2-6:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -570,7 +570,7 @@ services:
       ernic-2-7:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -603,7 +603,7 @@ services:
       ernic-2-8:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -636,7 +636,7 @@ services:
       ernic-3-1:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -669,7 +669,7 @@ services:
       ernic-3-2:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -702,7 +702,7 @@ services:
       ernic-3-3:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -735,7 +735,7 @@ services:
       ernic-3-4:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -768,7 +768,7 @@ services:
       ernic-3-5:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -801,7 +801,7 @@ services:
       ernic-3-6:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -834,7 +834,7 @@ services:
       ernic-3-7:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -867,7 +867,7 @@ services:
       ernic-3-8:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -900,7 +900,7 @@ services:
       ernic-4-1:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -933,7 +933,7 @@ services:
       ernic-4-2:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -966,7 +966,7 @@ services:
       ernic-4-3:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -999,7 +999,7 @@ services:
       ernic-4-4:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -1032,7 +1032,7 @@ services:
       ernic-4-5:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -1065,7 +1065,7 @@ services:
       ernic-4-6:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -1098,7 +1098,7 @@ services:
       ernic-4-7:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
