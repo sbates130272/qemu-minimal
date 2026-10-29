@@ -130,9 +130,10 @@
       changed_when: false
 
     # ionic_rdma is the right module to check for SRQ: ionic_create_srq is
-    # defined there, not in ionic. ionic_rdma has no in-tree counterpart on
-    # mainline so modinfo finds it only if the DKMS module is installed --
-    # which makes it a cleaner gate than ionic, which has an in-tree version.
+    # defined there, not in ionic. The check requires the updates/dkms/ path,
+    # which is the installed DKMS version; the in-tree ionic_rdma (merged in
+    # Linux 6.18) would be at kernel/drivers/infiniband/hw/ionic/ and would
+    # fail this test even if present, so the guard is correct regardless.
     - name: Confirm the installed ionic_rdma carries the SRQ verbs
       ansible.builtin.shell: |
         set -euo pipefail
@@ -220,6 +221,14 @@
         ernic_p4_dkms_patches_dirs:
           - "{{ ernic_source_dir }}/ansible/files/patches/srq"
           - "{{ ernic_source_dir }}/ansible/files/patches/p4"
+
+    # ernic_p4_dkms installs after the earlier depmod, so modules.dep does not
+    # know about ernic_p4.ko yet. Run depmod again so callers can find it via
+    # modinfo and modprobe without a reboot.
+    - name: Update modules.dep after ernic_p4.ko installation
+      ansible.builtin.command:
+        cmd: depmod -a
+      changed_when: false
 
     - name: Read the provider base SHA from the series README
       delegate_to: localhost
