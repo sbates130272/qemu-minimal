@@ -351,7 +351,7 @@ class BadgeOutput(unittest.TestCase):
         self.assertEqual(badge["color"], rsp.COLOR_REGRESSED)
         self.assertIn("-50%", badge["message"])
         self.assertEqual(badge["schemaVersion"], 1)
-        self.assertEqual(badge["label"], "rocjitsu GEMM")
+        self.assertEqual(badge["label"], "Rocjitsu GEMM")
 
     def test_improvement_is_green(self):
         history = [
