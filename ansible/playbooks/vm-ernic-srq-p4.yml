@@ -1,0 +1,252 @@
+---
+# Bake the SRQ-capable ionic stack PLUS ernic_p4.ko into an already-provisioned
+# ernic guest.
+#
+# Run against a BOOTED guest, over SSH:
+#
+#   ansible-playbook -i <inventory> vm-ernic-srq-p4.yml
+#
+# and not through "gen-vm --ansible-playbook". Both halves build against the
+# running kernel, and gen-vm's playbook pass happens before the mainline
+# kernel is installed. Run this in a later PROBE_PERSIST boot.
+#
+# WHY A COMBINED PLAYBOOK
+#
+# The two halves share one ionic build: ernic_srq_dkms installs ionic with
+# base+SRQ+P4 patches, and ernic_p4_dkms builds ernic_p4.ko against the same
+# patched tree. Running them from separate playbooks would leave ernic_p4.ko
+# compiled against a different ionic than the one installed -- symbol version
+# mismatch, nothing obvious in the error.
+#
+# The root constraint is that ernic_srq_dkms takes one patches directory, while
+# the underlying fetch-ionic-sources.sh accepts --patches-dir more than once.
+# A staging step merges the two series into one directory so ernic_srq_dkms
+# can install ionic from the combined tree. ernic_p4_dkms uses its native list
+# interface to build ernic_p4.ko against the same tree.
+#
+# NO MODULE RELOAD
+#
+# ernic_srq_dkms_reload stays off. This runs at image-build time with no
+# vfio-user device attached. The modules land in updates/dkms and are what
+# modprobe picks on the guest's next boot.
+#
+# WHERE THE SERIES COME FROM
+#
+# Both patch series live in rocm-ernic -- patches/srq for the kernel half,
+# patches/rdma-core for the provider, patches/p4 for ernic_p4 -- reached
+# through the collection pin in ansible/requirements.yml plus the matching
+# source pin in vars/ernic-pins.yml. Nothing is vendored here.
+
+- name: Build SRQ + P4 ionic stack into the guest
+  hosts: all
+  gather_facts: true
+  become: true
+  vars_files:
+    - vars/ernic-pins.yml
+  vars:
+    ernic_source_repo_version: "{{ ernic_source_pin }}"
+    ionic_srqp4_stamp: /etc/ionic-srq-p4.json
+    ionic_srqp4_stage_dir: /var/tmp/srq-p4
+    ionic_srqp4_source_root: /var/tmp/ionic-srq-p4-src
+    ionic_srqp4_patches_dir: /var/tmp/srq-p4-patches
+    ionic_srqp4_provider_src: /var/tmp/rdma-core-srq-p4
+    ionic_srqp4_provider_prefix: /usr/local
+
+  tasks:
+    - name: Assert the guest kernel matches the pinned ref
+      ansible.builtin.assert:
+        that:
+          - ansible_kernel is version(ionic_kernel_pin | regex_replace('^v', ''), '>=')
+          - (ansible_kernel | regex_replace('^([0-9]+\.[0-9]+).*$', '\1'))
+            == (ionic_kernel_pin | regex_replace('^v', '')
+                | regex_replace('^([0-9]+\.[0-9]+).*$', '\1'))
+        fail_msg: >-
+          This guest runs {{ ansible_kernel }}, but the series are pinned to
+          {{ ionic_kernel_pin }}. Repin the guest image to a matching kernel;
+          do not build across a minor release.
+
+    - name: Resolve the rocm-ernic source checkout on the controller
+      ansible.builtin.include_role:
+        name: sbates130272.rocm_ernic.ernic_source
+
+    # ernic_srq_dkms takes one --patches-dir, but we need base+SRQ+P4 in a
+    # single tree. Stage a combined directory: copy srq/0001-0009 (which is
+    # self-contained, base patch included as 0009), then copy the single p4
+    # patch renumbered 0010 so it applies after the SRQ series.
+    - name: Stage the combined SRQ + P4 ionic patch series on the controller
+      ansible.builtin.shell: |
+        set -euo pipefail
+        rm -rf "{{ ionic_srqp4_patches_dir }}"
+        mkdir -p "{{ ionic_srqp4_patches_dir }}"
+        # SRQ series: 0001-0009 (self-contained, base patch included)
+        cp "{{ ernic_source_dir }}/ansible/files/patches/srq/"*.patch \
+           "{{ ionic_srqp4_patches_dir }}/"
+        # P4 patch: rename numeric prefix from 0001 to 0010 so it follows srq
+        for f in "{{ ernic_source_dir }}/ansible/files/patches/p4/"*.patch; do
+          base=$(basename "$f")
+          num="${base%%[-]*}"
+          rest="${base#*-}"
+          new=$(printf "%04d" "$((10#$num + 9))")-"$rest"
+          cp "$f" "{{ ionic_srqp4_patches_dir }}/$new"
+        done
+        echo "staged $(ls {{ ionic_srqp4_patches_dir }} | wc -l) patches"
+      args:
+        executable: /bin/bash
+      delegate_to: localhost
+      become: false
+      changed_when: true
+
+    - name: Build and install ionic with SRQ + P4 patches
+      ansible.builtin.include_role:
+        name: sbates130272.rocm_ernic.ernic_srq_dkms
+      vars:
+        ernic_srq_dkms_install: true
+        ernic_srq_dkms_reload: false
+        ernic_srq_dkms_fetch_on_controller: true
+        ernic_srq_dkms_force_fetch: false
+        ernic_srq_dkms_scripts_dir: "{{ ernic_source_dir }}/scripts"
+        ernic_srq_dkms_patches_dir: "{{ ionic_srqp4_patches_dir }}"
+        ernic_srq_dkms_stage_dir: "{{ ionic_srqp4_stage_dir }}"
+        ernic_srq_dkms_source_root: "{{ ionic_srqp4_source_root }}"
+        ernic_srq_dkms_sources:
+          - ref: "{{ ionic_kernel_pin }}"
+            repo: https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
+
+    - name: Confirm the installed ionic carries the SRQ verbs
+      ansible.builtin.shell: |
+        set -euo pipefail
+        ko=$(modinfo -n ionic)
+        case "${ko}" in
+            */updates/dkms/*) ;;
+            *)
+                echo "modprobe would load ${ko}, not the DKMS module" >&2
+                exit 1
+                ;;
+        esac
+        tmp=$(mktemp -d)
+        trap 'rm -rf "${tmp}"' EXIT
+        case "${ko}" in
+            *.zst) zstd -qdc "${ko}" > "${tmp}/m.ko" ;;
+            *.xz)  xz -dc "${ko}"    > "${tmp}/m.ko" ;;
+            *.gz)  gzip -dc "${ko}"  > "${tmp}/m.ko" ;;
+            *)     cp "${ko}" "${tmp}/m.ko" ;;
+        esac
+        nm "${tmp}/m.ko" | grep -c ionic_create_srq
+      args:
+        executable: /bin/bash
+      changed_when: false
+      register: ionic_srqp4_srq_symbols
+      failed_when: ionic_srqp4_srq_symbols.stdout | int < 1
+
+    - name: Confirm the installed ionic carries the P4 symbol
+      ansible.builtin.shell: |
+        set -euo pipefail
+        ko=$(modinfo -n ionic)
+        tmp=$(mktemp -d)
+        trap 'rm -rf "${tmp}"' EXIT
+        case "${ko}" in
+            *.zst) zstd -qdc "${ko}" > "${tmp}/m.ko" ;;
+            *.xz)  xz -dc "${ko}"    > "${tmp}/m.ko" ;;
+            *.gz)  gzip -dc "${ko}"  > "${tmp}/m.ko" ;;
+            *)     cp "${ko}" "${tmp}/m.ko" ;;
+        esac
+        nm "${tmp}/m.ko" | grep -c ionic_adminq_post_wait
+      args:
+        executable: /bin/bash
+      changed_when: false
+      register: ionic_srqp4_p4_symbols
+      failed_when: ionic_srqp4_p4_symbols.stdout | int < 1
+
+    - name: Build and install the SRQ-capable ionic provider
+      ansible.builtin.include_role:
+        name: sbates130272.rocm_ernic.ernic_srq_provider
+      vars:
+        ernic_srq_provider_prefix: "{{ ionic_srqp4_provider_prefix }}"
+        ernic_srq_provider_source_dir: "{{ ionic_srqp4_provider_src }}"
+        ernic_srq_provider_patches_dir: "{{ ernic_source_dir }}/ansible/files/patches/rdma-core"
+
+    - name: Confirm the overlay provider is what libibverbs resolves
+      ansible.builtin.shell: |
+        set -euo pipefail
+        ldconfig -p | grep -q '/usr/local/lib/libibverbs\.so'
+        ldd "$(command -v ibv_devinfo)" | grep -q '/usr/local/lib/libibverbs'
+        ls /usr/local/lib/libibverbs/libionic-rdmav*.so
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    # ernic_p4_dkms fetches its own patched ionic sources and builds
+    # ernic_p4.ko against them. Give it the same two patch directories the
+    # staged combined dir was built from, so its sources match the installed
+    # ionic exactly.
+    - name: Build and install ernic_p4.ko
+      ansible.builtin.include_role:
+        name: sbates130272.rocm_ernic.ernic_p4_dkms
+      vars:
+        ernic_p4_dkms_install: true
+        ernic_p4_dkms_reload: false
+        ernic_p4_dkms_fetch_on_controller: true
+        ernic_p4_dkms_force_fetch: false
+        ernic_p4_dkms_patches_dirs:
+          - "{{ ernic_source_dir }}/ansible/files/patches/srq"
+          - "{{ ernic_source_dir }}/ansible/files/patches/p4"
+
+    - name: Read the provider base SHA from the series README
+      delegate_to: localhost
+      become: false
+      ansible.builtin.shell: |
+        set -o pipefail
+        sed -n 's/^## The base: `\([0-9a-f]\{40\}\)`.*/\1/p' \
+          "{{ ernic_source_dir }}/ansible/files/patches/rdma-core/README.md" | head -1
+      args:
+        executable: /bin/bash
+      changed_when: false
+      register: ionic_srqp4_provider_base
+
+    - name: Assert the provider base was readable
+      ansible.builtin.assert:
+        that: ionic_srqp4_provider_base.stdout | trim | length == 40
+        fail_msg: >-
+          No base SHA in
+          {{ ernic_source_dir }}/ansible/files/patches/rdma-core/README.md.
+
+    - name: Record the SRQ + P4 build in the guest
+      ansible.builtin.copy:
+        dest: "{{ ionic_srqp4_stamp }}"
+        mode: "0644"
+        content: |
+          {
+            "kernel_ref": "{{ ionic_kernel_pin }}",
+            "built_for_kernel": "{{ ansible_kernel }}",
+            "rocm_ernic_ref": "{{ ernic_source_pin }}",
+            "kernel_patches": "rocm-ernic patches/srq + patches/p4 (combined)",
+            "dkms_package": "ionic-ernic/{{ ionic_kernel_pin | regex_replace('^v', '') }}",
+            "provider_base": "{{ ionic_srqp4_provider_base.stdout | trim }}",
+            "provider_patches": "rocm-ernic patches/rdma-core",
+            "provider_prefix": "{{ ionic_srqp4_provider_prefix }}",
+            "srq_symbols": {{ ionic_srqp4_srq_symbols.stdout | trim }},
+            "p4_symbols": {{ ionic_srqp4_p4_symbols.stdout | trim }},
+            "modules_reloaded": false,
+            "note": "SRQ and P4 from one ionic build. ernic_p4.ko compiled against the same patched tree as the installed ionic."
+          }
+
+    - name: Remove the build trees
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ ionic_srqp4_patches_dir }}"
+        - "{{ ionic_srqp4_stage_dir }}"
+        - "{{ ionic_srqp4_source_root }}"
+        - "{{ ionic_srqp4_provider_src }}"
+        - "{{ ionic_srqp4_provider_src | dirname }}/rdma-core-patches"
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: >-
+          SRQ + P4 ionic stack installed: ionic with patches/srq + patches/p4
+          ({{ ionic_srqp4_srq_symbols.stdout | trim }} ionic_create_srq,
+          {{ ionic_srqp4_p4_symbols.stdout | trim }} ionic_adminq_post_wait),
+          provider from {{ ionic_srqp4_provider_base.stdout | trim | truncate(12, true, '') }}
+          + patches/rdma-core, ernic_p4.ko built against the same srq+p4 tree.
+          Recorded in {{ ionic_srqp4_stamp }}.
