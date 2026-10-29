@@ -111,6 +111,88 @@ bench_failed() {
   exit 1
 }
 
+# ---------------------------------------------------------------------------
+# Ernic SRQ + P4 helpers
+# ---------------------------------------------------------------------------
+
+# Check the installed ionic_rdma: DKMS path, max_srq from ibv_devinfo.
+# Returns two variables: ERNIC_SRQ_PATH and ERNIC_SRQ_MAX (the max_srq value
+# from ibv_devinfo -v, or "0" if not present).
+collect_ernic_srq() {
+  ERNIC_SRQ_PATH=$(collect "modinfo -n ionic_rdma 2>/dev/null || echo '(not installed)'")
+  local devinfo
+  devinfo=$(collect "ibv_devinfo -v 2>/dev/null | grep max_srq || echo 'max_srq: 0'")
+  ERNIC_SRQ_MAX=$(printf '%s\n' "${devinfo}" | sed -n 's/.*max_srq:\s*\([0-9]*\).*/\1/p' | head -1)
+  ERNIC_SRQ_MAX=${ERNIC_SRQ_MAX:-0}
+}
+
+# Check if ernic_p4.ko is installed at updates/dkms in the guest.
+collect_ernic_p4() {
+  ERNIC_P4_PATH=$(collect "modinfo -n ernic_p4 2>/dev/null || echo '(not installed)'")
+}
+
+# P4 RDMA write bandwidth using fp8_policy.json.
+#
+# Prerequisites (not yet met in the standard two-VM stack):
+#   - ernic_p4.ko installed at updates/dkms
+#   - /dev/ernic-p4 present (server started with --p4 --p4-guest-scope load)
+#   - fp8_policy.json copied into the guest
+#
+# The function returns gracefully with an empty result when any prerequisite
+# is missing rather than failing the report. The badge will show n/a until
+# the P4-enabled stack is wired in.
+run_ernic_p4_rdma_bw() {
+  local vm1_host=$1 vm2_host=$2
+
+  # Prerequisite 1: ernic_p4.ko from DKMS
+  if ! $SSH "modinfo -n ernic_p4 2>/dev/null | grep -q 'updates/dkms'"; then
+    echo "ernic_p4.ko not installed from DKMS -- skipping P4 RDMA benchmark"
+    return 0
+  fi
+
+  # Prerequisite 2: /dev/ernic-p4 device (server must have --p4-guest-scope)
+  if ! $SSH "[ -e /dev/ernic-p4 ]" 2>/dev/null; then
+    echo "/dev/ernic-p4 not present -- ernic server not started with --p4-guest-scope"
+    echo "Set ERNIC_P4=true and ERNIC_P4_GUEST_SCOPE=load in the compose env"
+    return 0
+  fi
+
+  # Copy fp8_policy.json into the guest
+  if ! copy_to_guest "${SCRIPT_DIR}/../ansible/files/p4/fp8_policy.json" /tmp/fp8_policy.json; then
+    echo "fp8_policy.json upload failed"
+    return 0
+  fi
+
+  # Load the P4 program via the ionic guest API and run ib_write_bw.
+  # VM2 is the RDMA server, VM1 the client; we SSH to both via the same
+  # proxy container (joined compose network) but on different hostnames.
+  local ssh2="ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no -p ${PORT} ${USER}@${vm2_host}"
+  {
+    # Start the ib_send_bw server on VM2 as a transient unit
+    $ssh2 "sudo systemd-run --unit=p4-ib-write-bw --collect \
+      /usr/bin/ib_write_bw --iters 5000" 2>/dev/null
+    sleep 2
+    # Load the P4 program and run the client on VM1
+    $SSH "bash -s" <<BENCH
+set -euo pipefail
+# Load fp8_policy.json via the P4 guest API
+python3 - /tmp/fp8_policy.json /dev/ernic-p4 <<'PY'
+import sys, struct, fcntl, json
+
+P4_IOCTL_LOAD = 0xc0087001  # _IOC(_IOC_READ|_IOC_WRITE,'p',1,8)
+prog = open(sys.argv[1], 'rb').read()
+fd = open(sys.argv[2], 'wb')
+buf = struct.pack('QQ', len(prog), 0)
+fcntl.ioctl(fd, P4_IOCTL_LOAD, bytearray(buf + prog))
+print(f"loaded {len(prog)} bytes")
+fd.close()
+PY
+# Run ib_write_bw against VM2
+ib_write_bw -d rocm-rdma-ernic0 --iters 5000 ${vm2_host} 2>/dev/null
+BENCH
+  } 2>&1
+}
+
 run_rocjitsu_gemm() {
   if ! copy_to_guest "${VM_REPORT_BENCH_DIR}/sgemm-bench.hip" /tmp/sgemm-bench.hip; then
     echo "sgemm-bench source upload failed"
@@ -200,6 +282,34 @@ run_hipfile_fio() {
 
   { $SSH "bash /tmp/fio-hipfile-bench.sh"; } 2>&1
 }
+
+# SRQ + P4 status (always collected when the ernic stack is running)
+ERNIC_SRQ_PATH=""
+ERNIC_SRQ_MAX="0"
+ERNIC_P4_PATH=""
+if [ "${REPORT_ERNIC_SRQ_P4:-0}" = "1" ]; then
+  collect_ernic_srq
+  collect_ernic_p4
+fi
+
+# P4 RDMA bandwidth (only when explicitly requested and prerequisites are met)
+ERNIC_P4_BW_OUTPUT=""
+ERNIC_P4_BW_GBS=""
+ERNIC_P4_BW_DISPLAY=""
+if [ "${REPORT_ERNIC_P4_BENCH:-0}" = "1" ]; then
+  P4_VM2_HOST=${ERNIC_P4_VM2_HOST:-localhost}
+  if ! ERNIC_P4_BW_OUTPUT=$(run_ernic_p4_rdma_bw "${HOST}" "${P4_VM2_HOST}"); then
+    bench_failed "ernic P4 FP8 RDMA benchmark" "${ERNIC_P4_BW_OUTPUT}"
+  fi
+  # ib_write_bw output: look for the BW line (65536-byte messages are typical)
+  ERNIC_P4_BW_GBS=$(printf '%s\n' "${ERNIC_P4_BW_OUTPUT}" \
+    | awk '/^[[:space:]]*[0-9]/{bw=$(NF-1)} END{print bw+0}')
+  if [ "${ERNIC_P4_BW_GBS}" != "0" ] && [ -n "${ERNIC_P4_BW_GBS}" ]; then
+    # ib_write_bw reports in MB/s; convert to GiB/s for the badge
+    ERNIC_P4_BW_GBS=$(python3 -c "print(f'{float('${ERNIC_P4_BW_GBS}') / 1024:.3g}')")
+    ERNIC_P4_BW_DISPLAY="${ERNIC_P4_BW_GBS} GiB/s"
+  fi
+fi
 
 KERNEL=$(collect "uname -r")
 PROC_VER=$(collect "cat /proc/version")
@@ -427,6 +537,35 @@ ${ROCJITSU_HIPFILE_OUTPUT:-not run}
 \`\`\`
 ROCJITSU
 fi)
+$(if [ "${REPORT_ERNIC_SRQ_P4:-0}" = "1" ]; then cat <<SRQP4
+
+## Ernic SRQ + P4 Status
+
+| Component | Path | Status |
+|---|---|---|
+| ionic_rdma | ${ERNIC_SRQ_PATH} | max_srq: ${ERNIC_SRQ_MAX} |
+| ernic_p4 | ${ERNIC_P4_PATH} | $([ "${ERNIC_P4_PATH}" = "(not installed)" ] && echo "not installed" || echo "installed") |
+
+$([ "${ERNIC_SRQ_MAX}" -gt 0 ] 2>/dev/null && echo "SRQ is functional (max_srq=${ERNIC_SRQ_MAX}). UCX will use rc_verbs." || echo "SRQ not available (max_srq=0). UCX will fall back to ud_verbs.")
+SRQP4
+fi)
+$(if [ "${REPORT_ERNIC_P4_BENCH:-0}" = "1" ] && [ -n "${ERNIC_P4_BW_OUTPUT}" ]; then cat <<ERNICP4BW
+
+## Ernic P4 FP8 RDMA Benchmark
+
+RDMA write bandwidth with the P4 fp8_policy engine active. The policy
+applies an elementwise FP8 add across three memory regions on each RDMA
+write operation.
+
+| Metric | Value |
+|---|---|
+| RDMA write BW (FP8) | ${ERNIC_P4_BW_DISPLAY:-n/a} |
+
+\`\`\`
+${ERNIC_P4_BW_OUTPUT}
+\`\`\`
+ERNICP4BW
+fi)
 $(if [ "${REPORT_HIPFILE_FIO_BENCH:-0}" = "1" ]; then cat <<HIPFILEFIO
 
 ## hipFile fio Benchmark
@@ -458,6 +597,11 @@ fi
 if [ "${REPORT_HIPFILE_FIO_BENCH:-0}" = "1" ]; then
   write_badge_json "${OUTDIR}/badge-hipfile-fio.json" "hipfile fio" \
     "${HIPFILE_FIO_DISPLAY}" "0071C5"
+fi
+
+if [ "${REPORT_ERNIC_P4_BENCH:-0}" = "1" ]; then
+  write_badge_json "${OUTDIR}/badge-ernic-p4-bw.json" "Ernic P4 FP8 BW" \
+    "${ERNIC_P4_BW_DISPLAY}" "ED6B21"
 fi
 
 echo "Report written to ${OUTDIR}/index.md"

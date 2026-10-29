@@ -1,0 +1,95 @@
+name: qemu-minimal - Ansible Playbook Test - vm-ernic-srq-p4
+
+# Headless bake: boot the published ernic-rocjitsu qcow2 (already carries
+# the mainline kernel and build toolchain), run vm-ernic-srq-p4.yml to
+# install the SRQ+P4 ionic DKMS stack, and verify the modules are present.
+#
+# No compose stack: vm-ernic-srq-p4.yml runs at image-build time with no
+# vfio-user device attached. The verification tasks at the end of the
+# playbook (modinfo + nm) run against the baked image and constitute the
+# pass/fail signal for this lane.
+#
+# Not a required check -- the DKMS build takes ~30 minutes and fires only
+# when the SRQ+P4 playbook or its inputs change.
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'ansible/playbooks/vm-ernic-srq-p4.yml'
+      - 'ansible/playbooks/vm-ernic-srq.yml'
+      - 'ansible/playbooks/vars/ernic-pins.yml'
+      - 'ansible/requirements.yml'
+      - 'ansible/playbooks/roles/**'
+      - '.github/actions/setup-vm-job/action.yml'
+      - '.github/actions/report-image-size/action.yml'
+      - '.github/workflows/qemu-minimal-ansible-playbook-test-vm-ernic-srq-p4.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # QEMU image for the gen-vm container. ERNIC_IMAGE is not needed: the
+  # bake is headless (no vfio-user device), so no ernic server runs.
+  QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261022.gc533d98-qemu11.1.2-vfu.8039244
+  VM_IMAGES_DIR: /var/lib/qemu-tool/images
+  # Published ernic-rocjitsu qcow2: carries mainline 7.2.6 kernel, build
+  # toolchain, ionic DKMS prerequisites, and the ubuntu account. Matches
+  # env/quickstart so they track together.
+  VM_BACKING_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu:20261022.gc533d98-vm.resolute-ernic-rocjitsu-qm.c079195-qcow2
+
+jobs:
+  test-vm-ernic-srq-p4:
+    name: Ansible Playbook Test - vm-ernic-srq-p4
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    container:
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261022.gc533d98-qemu11.1.2-vfu.8039244
+      options: >-
+        --device /dev/kvm
+        -v /var/run/docker.sock:/var/run/docker.sock
+        -v /var/lib/qemu-tool:/var/lib/qemu-tool
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4.3.1
+
+    - name: Set up VM job
+      uses: ./.github/actions/setup-vm-job
+      with:
+        cloud-image-key: ernic-srq-p4
+        stage-src: 'false'
+
+    - name: Pull CI image
+      run: docker pull "$QEMU_IMAGE"
+
+    # Pull the published backing qcow2. gen-vm --backing-image does the oras
+    # pull and decompression; this pre-pull just warms the local registry so
+    # the gen-vm step does not time out on a cold runner.
+    - name: Pull the backing qcow2
+      run: |
+        docker pull \
+          "$(echo "$VM_BACKING_IMAGE" | sed 's/-qcow2$//')" || true
+
+    # The playbook runs at image-build time against the booted backing qcow2.
+    # ernic_source clones rocm-ernic on the controller; the patching,
+    # fetching and DKMS build all happen inside the guest. The verification
+    # tasks at the end (depmod, modinfo, nm) are the pass/fail signal.
+    - name: Bake SRQ + P4 ionic stack into the guest
+      uses: sbates130272/qemu-tool-action@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        operation: gen-vm
+        qemu-tool-source: ./qemu
+        vm-name: ernic-srq-p4-test
+        backing-image: "${{ env.VM_BACKING_IMAGE }}"
+        ansible-playbook: ansible/playbooks/vm-ernic-srq-p4.yml
+        extra-args: --username ubuntu --password password --packages none
+
+    - name: Report VM image size
+      if: always()
+      uses: ./.github/actions/report-image-size
+      with:
+        vm-name: ernic-srq-p4-test

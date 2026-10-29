@@ -38,6 +38,14 @@ METRICS = (
         "base_unit": "B/s",
         "higher_is_better": True,
     },
+    {
+        "key": "ernic-p4-bw",
+        "label": "Ernic P4 FP8 BW",
+        "badge_file": "badge-ernic-p4-bw.json",
+        "source": ("ernic", "badge-ernic-p4-bw.json"),
+        "base_unit": "B/s",
+        "higher_is_better": True,
+    },
 )
 
 PREFIX_SCALE = {
@@ -77,6 +85,7 @@ CHART_COLORS = {
     "gemm": "#d94b52",
     "hipfile": "#198754",
     "hipfile-fio": "#0d6efd",
+    "ernic-p4-bw": "#ed6b21",
 }
 
 REPORTS = (

@@ -51,6 +51,15 @@
     ionic_srqp4_patches_dir: /var/tmp/srq-p4-patches
     ionic_srqp4_provider_src: /var/tmp/rdma-core-srq-p4
     ionic_srqp4_provider_prefix: /usr/local
+    # ernic_p4_dkms checks for module sources on the TARGET (no delegate_to),
+    # so drivers/ernic_p4/ must be staged into the guest before the role runs.
+    # This mirrors the archive→unpack pattern ernic_srq_dkms uses for the
+    # patched ionic sources (see ansible/roles/ernic_srq_dkms/tasks/stage.yml).
+    ionic_p4_guest_module_dir: /var/tmp/ernic-p4-src/drivers/ernic_p4
+    # ernic_p4_dkms runs target-side (no delegate_to in the role) so its
+    # scripts_dir must be a path that exists in the guest.
+    ionic_p4_guest_scripts_dir: /var/tmp/ernic-p4-src/ansible/files/scripts
+    ionic_p4_guest_patches_root: /var/tmp/ernic-p4-src/ansible/files/patches
 
   tasks:
     - name: Assert the guest kernel matches the pinned ref
@@ -210,17 +219,63 @@
     # ernic_p4.ko against them. Give it the same two patch directories the
     # staged combined dir was built from, so its sources match the installed
     # ionic exactly.
+    #
+    # ernic_p4_dkms checks "Check the module sources are on the target" without
+    # delegate_to, so drivers/ernic_p4/ must be present in the guest before the
+    # role runs. Archive it on the controller and unpack it, mirroring the shape
+    # ernic_srq_dkms/tasks/stage.yml uses for the patched ionic tree.
+    - name: Archive the ernic_p4 module sources on the controller
+      delegate_to: localhost
+      become: false
+      ansible.builtin.command:
+        cmd: >-
+          tar -C {{ ernic_source_dir }}
+          --exclude=.git
+          -czf /var/tmp/ernic-p4-src.tar.gz
+          drivers/ernic_p4
+          ansible/files/scripts
+          ansible/files/patches
+      changed_when: true
+
+    - name: Create the ernic_p4 source staging root in the guest
+      become: true
+      ansible.builtin.file:
+        path: /var/tmp/ernic-p4-src
+        state: directory
+        mode: "0755"
+
+    - name: Unpack the ernic_p4 module sources in the guest
+      become: true
+      ansible.builtin.unarchive:
+        src: /var/tmp/ernic-p4-src.tar.gz
+        dest: /var/tmp/ernic-p4-src
+        remote_src: false
+        owner: root
+        group: root
+
     - name: Build and install ernic_p4.ko
       ansible.builtin.include_role:
         name: sbates130272.rocm_ernic.ernic_p4_dkms
       vars:
         ernic_p4_dkms_install: true
         ernic_p4_dkms_reload: false
+        # Do not load the module: no vfio-user device is attached at image-build
+        # time, and touching ionic on the emulated device can hang the guest
+        # (AGENTS.md issue 6). Same rationale as ernic_srq_dkms_reload: false.
+        ernic_p4_dkms_load: false
         ernic_p4_dkms_fetch_on_controller: true
         ernic_p4_dkms_force_fetch: false
+        # Point the role at the staged module sources in the guest.
+        ernic_p4_dkms_module_dir: "{{ ionic_p4_guest_module_dir }}"
+        # Set explicitly so the role does not try to read cmake/ErnicKernelModule.cmake
+        # from the target -- we staged only drivers/ernic_p4/, not the full tree.
+        ernic_p4_dkms_kernel_ref: "{{ ionic_kernel_pin }}"
+        # ernic_p4_dkms runs target-side (no delegate_to), so scripts_dir must
+        # be a guest path. ansible/files/scripts/ was staged alongside drivers/ernic_p4/.
+        ernic_p4_dkms_scripts_dir: "{{ ionic_p4_guest_scripts_dir }}"
         ernic_p4_dkms_patches_dirs:
-          - "{{ ernic_source_dir }}/ansible/files/patches/srq"
-          - "{{ ernic_source_dir }}/ansible/files/patches/p4"
+          - "{{ ionic_p4_guest_patches_root }}/srq"
+          - "{{ ionic_p4_guest_patches_root }}/p4"
 
     # ernic_p4_dkms installs after the earlier depmod, so modules.dep does not
     # know about ernic_p4.ko yet. Run depmod again so callers can find it via
@@ -279,6 +334,8 @@
         - "{{ ionic_srqp4_source_root }}"
         - "{{ ionic_srqp4_provider_src }}"
         - "{{ ionic_srqp4_provider_src | dirname }}/rdma-core-patches"
+        - /var/tmp/ernic-p4-src
+        - /var/tmp/ernic-p4-src.tar.gz
 
     - name: Report
       ansible.builtin.debug:

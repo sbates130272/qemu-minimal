@@ -242,12 +242,21 @@ jobs:
     # unbounded and silent, so an unresponsive guest hangs the step until
     # the job timeout cancels the whole job. See the longer note in
     # qemu-minimal-report-for-vm-rocjitsu.yml.
+    # REPORT_ERNIC_SRQ_P4=1: include the ionic_rdma/ernic_p4 module status and
+    # the ibv_devinfo max_srq value in both VM reports. These will show "not
+    # installed" / max_srq=0 until batesste-ci-images ships images with the
+    # SRQ+P4 DKMS stack baked in (via vm-ernic-srq-p4.yml). The badge and
+    # report section are scaffolded now so nothing needs changing when they land.
     - name: Generate VM 1 report
       timeout-minutes: 15
+      env:
+        REPORT_ERNIC_SRQ_P4: "1"
       run: bash scripts/generate-vm-report.sh site/ernic 2222 ubuntu "VM 1" qemu-1
 
     - name: Generate VM 2 report
       timeout-minutes: 15
+      env:
+        REPORT_ERNIC_SRQ_P4: "1"
       run: >-
         bash scripts/generate-vm-report.sh site/ernic/vm2 2222 ubuntu
         "VM 2" qemu-2
