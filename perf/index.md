@@ -12,7 +12,7 @@ new CI data lands.
 
 ## Latest published snapshot
 
-Generated from `333246f4` at **2026-10-29 18:27 UTC**.
+Generated from `15a9b834` at **2026-10-29 19:49 UTC**.
 
 ![rocjitsu GEMM](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-gemm.json)
 ![rocjitsu hipFile](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile.json)
@@ -50,7 +50,6 @@ vfio-user and swing hard between runs.
 
 | Commit | Generated | GEMM | hipFile | hipFile fio |
 | --- | --- | --- | --- | --- |
-| 17f60519 | 2026-10-28 20:50 UTC | 664 kFLOP/s | 247 MB/s | 205 MB/s |
 | e56dcda3 | 2026-10-28 22:49 UTC | 664 kFLOP/s | 247 MB/s | 205 MB/s |
 | e56dcda3 | 2026-10-28 23:19 UTC | 464 kFLOP/s | 170 MB/s | 149 MB/s |
 | 5ee7176b | 2026-10-29 14:26 UTC | 464 kFLOP/s | 170 MB/s | 149 MB/s |
@@ -60,6 +59,7 @@ vfio-user and swing hard between runs.
 | 9e984d20 | 2026-10-29 17:20 UTC | 470 kFLOP/s | 165 MB/s | 137 MB/s |
 | 656952bd | 2026-10-29 17:34 UTC | 470 kFLOP/s | 165 MB/s | 137 MB/s |
 | 333246f4 | 2026-10-29 18:27 UTC | 470 kFLOP/s | 165 MB/s | 137 MB/s |
+| 15a9b834 | 2026-10-29 19:49 UTC | 470 kFLOP/s | 165 MB/s | 137 MB/s |
 
 ## Current report freshness
 
@@ -73,15 +73,15 @@ shows the last date on which all 7 reports were green at once —
 amber once that date is no longer today.
 
 Last all-green: **2026-10-29** &middot; checked
-2026-10-29 18:27 UTC &middot; currently
-not all green.
+2026-10-29 20:16 UTC &middot; currently
+all green.
 
 | Report | Generated | Status | Commit | Page |
 | --- | --- | --- | --- | --- |
-| Single VM | 2026-10-29 18:26 UTC | pass | `333246f` | [/1vm/](/1vm/) |
+| Single VM | 2026-10-29 19:48 UTC | pass | `15a9b83` | [/1vm/](/1vm/) |
 | rocjitsu | 2026-10-29 17:17 UTC | pass | `9e984d2` | [/rocjitsu/](/rocjitsu/) |
 | ernic VM 1 | 2026-10-29 16:51 UTC | pass | `9e984d2` | [/ernic/](/ernic/) |
 | ernic VM 2 | 2026-10-29 16:51 UTC | pass | `9e984d2` | [/ernic/vm2/](/ernic/vm2/) |
 | hipFile fio | 2026-10-29 17:19 UTC | pass | `9e984d2` | [/hipfile-fio/](/hipfile-fio/) |
-| LMCache | 2026-10-23 06:41 UTC | pass | `c151650` | [/lmcache/](/lmcache/) |
-| MI355X node | 2026-10-29 16:51 UTC | pass | ``unknown`` | [/mi355x/](/mi355x/) |
+| LMCache | 2026-10-29 20:16 UTC | pass | `15a9b83` | [/lmcache/](/lmcache/) |
+| MI355X node | 2026-10-29 19:17 UTC | pass | ``unknown`` | [/mi355x/](/mi355x/) |
