@@ -4,7 +4,7 @@ title: VM Report — VM 1
 
 # VM Report — qemu-minimal — VM 1
 
-Generated: **2026-10-29 16:51 UTC** &middot; Commit: [`9e984d2`](https://github.com/sbates130272/qemu-minimal/commit/9e984d205c6ddbef39012b6bcfa4623c8c8eb806) &middot; Status: **pass**
+Generated: **2026-10-29 21:00 UTC** &middot; Commit: [`ae551b3`](https://github.com/sbates130272/qemu-minimal/commit/ae551b3be320575968f2716e40bd35b59b2e36a8) &middot; Status: **pass**
 
 ## Hardware
 
@@ -46,7 +46,7 @@ vda        8G disk
 
 ```
 Filesystem      Size  Used Avail Use% Mounted on
-/dev/vda1       6.7G  4.9G  1.8G  73% /
+/dev/vda1       6.7G  4.9G  1.8G  74% /
 /dev/vda13      989M  183M  739M  20% /boot
 ```
 
@@ -151,5 +151,15 @@ ubuntu : ubuntu users admin
 ```
 -- No entries --
 ```
+
+
+## Ernic SRQ + P4 Status
+
+| Component | Path | Status |
+|---|---|---|
+| ionic_rdma | /lib/modules/7.0.0-42-generic/kernel/drivers/infiniband/hw/ionic/ionic_rdma.ko.zst | max_srq: 0 |
+| ernic_p4 | (not installed) | not installed |
+
+SRQ not available (max_srq=0). UCX will fall back to ud_verbs.
 
 
