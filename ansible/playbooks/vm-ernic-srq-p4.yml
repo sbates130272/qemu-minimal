@@ -253,6 +253,10 @@
       vars:
         ernic_p4_dkms_install: true
         ernic_p4_dkms_reload: false
+        # Do not load the module: no vfio-user device is attached at image-build
+        # time, and touching ionic on the emulated device can hang the guest
+        # (AGENTS.md issue 6). Same rationale as ernic_srq_dkms_reload: false.
+        ernic_p4_dkms_load: false
         ernic_p4_dkms_fetch_on_controller: true
         ernic_p4_dkms_force_fetch: false
         # Point the role at the staged module sources in the guest.
@@ -260,6 +264,9 @@
         # Set explicitly so the role does not try to read cmake/ErnicKernelModule.cmake
         # from the target -- we staged only drivers/ernic_p4/, not the full tree.
         ernic_p4_dkms_kernel_ref: "{{ ionic_kernel_pin }}"
+        # fetch-ionic-sources.sh lives at ansible/files/scripts/ in the
+        # collection, not at the repo root. Same fix as b166117 for ernic_srq_dkms.
+        ernic_p4_dkms_scripts_dir: "{{ ernic_source_dir }}/ansible/files/scripts"
         ernic_p4_dkms_patches_dirs:
           - "{{ ernic_source_dir }}/ansible/files/patches/srq"
           - "{{ ernic_source_dir }}/ansible/files/patches/p4"
