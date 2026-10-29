@@ -879,23 +879,18 @@
     # Disabled rather than masked -- this is a measurement decision, not a
     # judgement that the unit is wrong.
     #
-    # BOTH units, and hsa-snoop-prometheus is the one that matters: it is the
-    # unit the package enables by default, and its ExecStart is "hsa-snoop --all
-    # --prometheus --ais-snoop". Disabling only hsa-snoop.service left it running
-    # on every boot, holding trace_pipe -- which admits a single reader -- so the
-    # role's own hsa-snoop died with "Device or resource busy" before tracing
-    # anything. It also has Restart=on-failure, so killing the process without
-    # disabling the unit just brings it back five seconds later; that restart is
-    # what earlier looked like an "orphaned" collector surviving its unit.
-    - name: Disable the hsa-snoop collector services
+    # v1.3.0 ships only hsa-snoop-prometheus.service; hsa-snoop.service was
+    # dropped. That is the unit that matters: ExecStart is "hsa-snoop --all
+    # --prometheus --ais-snoop" and it holds trace_pipe, which admits a single
+    # reader. Restart=on-failure means killing the process without disabling
+    # the unit brings it back, which is what looked like an "orphaned"
+    # collector surviving its unit in earlier versions.
+    - name: Disable the hsa-snoop collector service
       ansible.builtin.systemd_service:
-        name: "{{ item }}"
+        name: hsa-snoop-prometheus.service
         enabled: false
         state: stopped
       become: true
-      loop:
-        - hsa-snoop.service
-        - hsa-snoop-prometheus.service
 
     # gpuagent assertion-fails on emulated gfx1250: amdsmi returns
     # AMDSMI_STATUS_NOT_SUPPORTED for temperature/clock/utilisation queries.
