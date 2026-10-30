@@ -77,6 +77,49 @@
         masked: true
       failed_when: false
 
+    # The published qcow2 was baked with MODULES=most which swept the in-tree
+    # ionic.ko into the initramfs before DKMS displaced it on disk. The stale
+    # in-tree ionic loads at boot from the initramfs (before rootfs modules.dep
+    # is consulted), and ionic_rdma (built against the AMD-patched ionic) fails
+    # with a symbol version mismatch. Fix: write an initramfs hook that removes
+    # the in-tree ionic from any future initramfs, regenerate, and reboot.
+    # The reboot is a guest OS reboot -- QEMU keeps running and restarts the
+    # guest, so the vfio-user session survives. We wait for SSH to return.
+    - name: Write ionic-exclude initramfs hook
+      become: true
+      ansible.builtin.copy:
+        dest: /etc/initramfs-tools/hooks/ionic-exclude
+        mode: "0755"
+        content: !unsafe |
+          #!/bin/sh
+          PREREQ=""
+          prereqs() { echo "$PREREQ"; }
+          case "$1" in
+            prereqs) prereqs; exit 0;;
+          esac
+          . /usr/share/initramfs-tools/hook-functions
+          # Remove in-tree ionic from initramfs so the DKMS version loads
+          # at boot. The two have different symbol versions; if the in-tree
+          # one is present it loads first and ionic_rdma (built against the
+          # patched ionic) fails on symver mismatch.
+          find "${DESTDIR}" -name "ionic.ko*" -path "*/kernel/*" -delete
+          find "${DESTDIR}" -name "ionic_rdma.ko*" -path "*/kernel/*" -delete
+
+    - name: Regenerate initramfs to exclude in-tree ionic
+      become: true
+      ansible.builtin.command:
+        cmd: update-initramfs -u
+      changed_when: true
+      register: quickstart_initramfs
+
+    - name: Reboot guest to load DKMS ionic from updated initramfs
+      become: true
+      ansible.builtin.reboot:
+        reboot_timeout: 120
+        connect_timeout: 10
+        post_reboot_delay: 5
+      when: quickstart_initramfs.changed
+
     # Disable gpuagent and amd-metrics-exporter before the GPU test.
     # gpuagent assertion-fails on emulated gfx1250 (amdsmi returns
     # AMDSMI_STATUS_NOT_SUPPORTED for temp/clock/util) and can wedge the
