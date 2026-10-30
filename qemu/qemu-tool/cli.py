@@ -212,6 +212,10 @@ def _add_quick_start(sub: argparse._SubParsersAction) -> None:
         ),
     )
     p.add_argument(
+        "-f", "--follow", action="store_true", default=False,
+        help="Follow log output (only meaningful with the logs verb).",
+    )
+    p.add_argument(
         "--env-file", action="append", type=Path, default=None, metavar="FILE",
         help=(
             "Settings file. Defaults to the bundled qemu/env/quickstart. "
@@ -922,6 +926,7 @@ def _quick_start_cmd(args: argparse.Namespace) -> None:
         metrics=args.metrics,
         size_from_host=args.size_from_host,
         assume_yes=args.yes,
+        follow=args.follow,
     )
 
 

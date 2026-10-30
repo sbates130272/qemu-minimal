@@ -27,8 +27,8 @@
 
 # Used by every compose stack. The three are built against the same
 # libvfio-user revision (vfu.*) and must be moved together.
-QEMU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261029.g020459a-qemu11.1.3-vfu.5b9c722
-ERNIC_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261029.g020459a-ernic.8f35f4a-vfu.5b9c722
+QEMU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261030.gea6b921-qemu11.1.3-vfu.5b9c722
+ERNIC_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261030.gea6b921-ernic.8f35f4a-vfu.5b9c722
 ROCJITSU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261029.g020459a-rocjitsu.73c3cf3
 
 # ---------------------------------------------------------------------------

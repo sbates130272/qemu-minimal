@@ -1107,6 +1107,7 @@ def run(
     metrics: bool,
     size_from_host: bool,
     assume_yes: bool,
+    follow: bool = False,
 ) -> None:
     if env_file:
         layers = [p.expanduser().resolve() for p in env_file]
@@ -1157,7 +1158,8 @@ def run(
     _adopt_login(state)
 
     if verb == "logs":
-        _compose(state, "logs", "--no-log-prefix", check=False)
+        extra = ["-f"] if follow else []
+        _compose(state, "logs", *extra, check=False)
         return
     if verb == "down":
         down(state)

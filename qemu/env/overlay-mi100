@@ -47,8 +47,8 @@ VM_IMAGES_DIR=/var/lib/qemu-tool/images-stebates
 # "could not gather N bytes" -- which is the whole point of this node.
 # Verify a candidate with `-device help | grep pci-mmio-bridge`, present only
 # in fork builds, and /build/qemu-commit.txt.
-QEMU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:20261029.g020459a-qemu.f91f120-vfu.3719c3a
-ERNIC_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic-sbates-fork:20261029.g020459a-ernic.8f35f4a-vfu.3719c3a
+QEMU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:20261030.gea6b921-qemu.f91f120-vfu.3719c3a
+ERNIC_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic-sbates-fork:20261030.gea6b921-ernic.8f35f4a-vfu.3719c3a
 
 # Node-exporter only. The LMCache MP server's HTTP port is not forwarded here;
 # this is a list[str] field, so the value replaces both of the golden's rules

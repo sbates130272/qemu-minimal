@@ -54,6 +54,25 @@
     # warning that makes the output look like a failure.
     lmcache_guest_netplan_ernic: false
   tasks:
+    # On AMD corporate network the host exports AMD_CERT (base64 ZScaler CA)
+    # and VM_CA_CERT_FILE (destination path). The published qcow2 has neither,
+    # so HTTPS downloads in later tasks fail without this. If AMD_CERT is unset
+    # (non-corporate host) the task is skipped and validate_certs stays true.
+    - name: Install ZScaler CA cert so HTTPS works in guest
+      become: true
+      ansible.builtin.copy:
+        dest: "{{ lookup('env', 'VM_CA_CERT_FILE') }}"
+        content: "{{ lookup('env', 'AMD_CERT') | b64decode }}"
+        mode: "0644"
+      when: lookup('env', 'AMD_CERT') | length > 0
+
+    - name: Rebuild CA trust bundle
+      become: true
+      ansible.builtin.command:
+        cmd: update-ca-certificates
+      changed_when: true
+      when: lookup('env', 'AMD_CERT') | length > 0
+
     - name: Install the gfx1250 firmware stubs generated from this stack's rocjitsu
       ansible.builtin.include_role:
         name: lmcache_guest
@@ -264,11 +283,12 @@
   ignore_errors: true
   become: false
   tasks:
-    - name: Rebuild CA trust bundle
+    - name: Install prometheus-node-exporter
       become: true
-      ansible.builtin.command:
-        cmd: update-ca-certificates
-      changed_when: true
+      ansible.builtin.apt:
+        name: prometheus-node-exporter
+        state: present
+        update_cache: true
 
     # amdgpu-exporter: AMD GPU metrics on :9488 from the ROCm apt repo.
     - name: Get latest rdma_exporter release from GitHub

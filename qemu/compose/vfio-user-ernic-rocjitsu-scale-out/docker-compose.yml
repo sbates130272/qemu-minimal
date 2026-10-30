@@ -5,7 +5,7 @@
 #   qemu-tool gen-compose --env-file qemu/env/scale-out
 #
 # env-file: qemu/env/scale-out
-# env-sha256: 6423a66b8b34ba1405a933d5297966d75894fb46ee08323e6892be26f4325dff
+# env-sha256: 843560a5e47f7069dee820550cb71b0cc3a818da27c95483ba5cb5d1ea749ded
 
 x-logging: &logging
   driver: json-file
@@ -967,7 +967,7 @@ services:
       - EXEC=0
       - IMAGES=0
       - INFO=0
-      - NETWORKS=0
+      - NETWORKS=1
       - VOLUMES=0
       - SERVICES=0
       - TASKS=0
