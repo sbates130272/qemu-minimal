@@ -1114,7 +1114,7 @@
         "noValue": "N/A"
       },
       "title": "rocm-ernic0 (ionic)",
-      "description": "Counts VMs where rocm-ernic0 is visible to node-exporter. Present = ionic driver is loaded and bound.",
+      "description": "Counts VMs where the emulated ernic NIC is visible to node_exporter, matched by its MAC prefix (72:6f:63:6d). Present = ionic driver is loaded and bound.",
       "type": "stat",
       "targets": [
         {
@@ -1122,7 +1122,7 @@
             "type": "prometheus",
             "uid": "fleet-prometheus"
           },
-          "expr": "count(node_network_info{job=\"fleet-node\",device=\"rocm-ernic0\"}) or vector(0)",
+          "expr": "count(node_network_info{job=\"fleet-node\",address=~\"72:6f:63:6d:.*\"}) or vector(0)",
           "legendFormat": "VMs with rocm-ernic0",
           "refId": "A"
         }
@@ -1395,10 +1395,10 @@
         }
       },
       "gridPos": {
-        "h": 6,
+        "h": 9,
         "w": 12,
-        "x": 0,
-        "y": 36
+        "x": 12,
+        "y": 33
       },
       "id": 43,
       "options": {
@@ -1473,7 +1473,7 @@
       "gridPos": {
         "h": 6,
         "w": 12,
-        "x": 12,
+        "x": 0,
         "y": 36
       },
       "id": 44,
@@ -2151,38 +2151,49 @@
       ]
     },
     {
+      "id": 58,
+      "title": "Logs (Alloy \u2192 Loki)",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 67
+      }
+    },
+    {
+      "id": 57,
+      "title": "Container Logs",
+      "type": "logs",
+      "description": "Stdout/stderr from every compose-managed container in the stack, shipped by Alloy.",
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 68
+      },
       "datasource": {
         "type": "loki",
         "uid": "fleet-loki"
       },
-      "description": "Per-kernel dispatch events from hsa-snoop --log-dispatches, forwarded by Alloy to Loki as NDJSON. Each line contains kernel name, GPU id, duration, pid and RFC3339 timestamp. Only available when LOGS_ENABLE=true. With --mode bpftrace the log is safe on emulated gfx1250.",
-      "fieldConfig": {
-        "defaults": {}
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 67
-      },
-      "id": 56,
       "options": {
         "dedupStrategy": "none",
         "enableLogDetails": true,
         "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": true,
         "showTime": true,
         "sortOrder": "Descending",
         "wrapLogMessage": true
       },
-      "title": "GPU Kernel Dispatch Log (Alloy \u2192 Loki)",
-      "type": "logs",
       "targets": [
         {
           "datasource": {
             "type": "loki",
             "uid": "fleet-loki"
           },
-          "expr": "{filename=\"/var/log/hsa-snoop/dispatches.ndjson\"}",
+          "expr": "{job=\"docker\"}",
           "legendFormat": "",
           "refId": "A"
         }

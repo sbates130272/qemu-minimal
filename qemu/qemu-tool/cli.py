@@ -292,6 +292,10 @@ def _add_quick_start(sub: argparse._SubParsersAction) -> None:
         ),
     )
     p.add_argument(
+        "--nvme-duration", type=int, default=None, metavar="SECONDS",
+        help="Run each fio NVMe pass for this many seconds (default: 10).",
+    )
+    p.add_argument(
         "--clean-overlays", action="store_true", default=False,
         help=(
             "Delete the guest overlay and NVMe qcow2 files before starting, "
@@ -945,6 +949,7 @@ def _quick_start_cmd(args: argparse.Namespace) -> None:
         follow=args.follow,
         clean_qcow2=args.clean_overlays,
         rdma_duration=args.rdma_duration,
+        nvme_duration=args.nvme_duration,
     )
 
 

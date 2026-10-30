@@ -112,6 +112,7 @@ class _State:
     username: str = ""
     rdma_delta: int | None = None
     rdma_duration: int | None = None
+    nvme_duration: int | None = None
 
     # ---- convenience readers -------------------------------------------
     def get(self, key: str) -> str:
@@ -964,6 +965,8 @@ def configure_and_test(state: _State) -> None:
             "-e", "ansible_remote_tmp=/tmp/.ansible/tmp"]
     if state.rdma_duration is not None:
         cmd += ["-e", f"quickstart_rdma_duration={state.rdma_duration}"]
+    if state.nvme_duration is not None:
+        cmd += ["-e", f"quickstart_nvme_duration={state.nvme_duration}"]
     result = subprocess.run(cmd, cwd=state.repo_root / "ansible")
     if result.returncode != 0:
         _die("the configure-and-test playbook failed")
@@ -1136,6 +1139,7 @@ def run(
     follow: bool = False,
     clean_qcow2: bool = False,
     rdma_duration: int | None = None,
+    nvme_duration: int | None = None,
 ) -> None:
     if env_file:
         layers = [p.expanduser().resolve() for p in env_file]
@@ -1168,6 +1172,7 @@ def run(
         artifacts=Path("/var/tmp/quickstart-artifacts"),
         base_layers=layers,
         rdma_duration=rdma_duration,
+        nvme_duration=nvme_duration,
     )
     # Picks up the overlays an earlier verb left beside the stack, which is
     # what makes `up` then `test` -- two processes, as the CI lane runs them

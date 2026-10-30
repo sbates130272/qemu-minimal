@@ -78,6 +78,19 @@
         name: lmcache_guest
         tasks_from: amdgpu_firmware
 
+    - name: Install rocm-ernic udev naming rules
+      become: true
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../udev/99-rocm-ernic.rules"
+        dest: /etc/udev/rules.d/99-rocm-ernic.rules
+        mode: "0644"
+
+    - name: Reload udev rules
+      become: true
+      ansible.builtin.command:
+        cmd: udevadm control --reload-rules
+      changed_when: false
+
     - name: Assign ernic Ethernet address
       become: true
       ansible.builtin.shell:
@@ -573,6 +586,71 @@
       failed_when: quickstart_bw | length == 0
 
 # ---------------------------------------------------------------------------
+# NVMe I/O test
+# ---------------------------------------------------------------------------
+#
+# Sequential write then read on /dev/nvme0n1 using fio with direct I/O.
+# The device is emulated scratch -- write first, then read back what was
+# written. Both passes run for 10 s. The assertion is non-zero bandwidth:
+# this proves the block device is functional, not that it hits any
+# particular throughput floor (emulated NVMe over qcow2 varies widely).
+- name: Test NVMe I/O on each guest
+  hosts: fleet
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Check /dev/nvme0n1 exists
+      ansible.builtin.stat:
+        path: /dev/nvme0n1
+      register: quickstart_nvme_dev
+      failed_when: not quickstart_nvme_dev.stat.exists
+
+    - name: Run fio sequential write on nvme0n1
+      become: true
+      ansible.builtin.command:
+        cmd: >-
+          fio --name=nvme-write --filename=/dev/nvme0n1
+          --rw=write --bs=128k --direct=1
+          --time_based --runtime={{ quickstart_nvme_duration | default(10) }} --numjobs=1
+          --output-format=json
+      register: quickstart_nvme_write
+      changed_when: false
+
+    - name: Run fio sequential read on nvme0n1
+      become: true
+      ansible.builtin.command:
+        cmd: >-
+          fio --name=nvme-read --filename=/dev/nvme0n1
+          --rw=read --bs=128k --direct=1
+          --time_based --runtime={{ quickstart_nvme_duration | default(10) }} --numjobs=1
+          --output-format=json
+      register: quickstart_nvme_read
+      changed_when: false
+
+    - name: Extract NVMe write and read bandwidth
+      ansible.builtin.set_fact:
+        quickstart_nvme_write_bw: >-
+          {{ (quickstart_nvme_write.stdout | from_json).jobs[0].write.bw_bytes }}
+        quickstart_nvme_read_bw: >-
+          {{ (quickstart_nvme_read.stdout | from_json).jobs[0].read.bw_bytes }}
+
+    - name: Assert non-zero NVMe bandwidth
+      ansible.builtin.assert:
+        that:
+          - quickstart_nvme_write_bw | int > 0
+          - quickstart_nvme_read_bw | int > 0
+        fail_msg: >-
+          NVMe I/O test failed: write={{ quickstart_nvme_write_bw }}
+          read={{ quickstart_nvme_read_bw }} bytes/s
+
+    - name: Show NVMe I/O results
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: NVMe write
+          {{ (quickstart_nvme_write_bw | int / 1048576) | round(0) }} MiB/s,
+          read {{ (quickstart_nvme_read_bw | int / 1048576) | round(0) }} MiB/s
+
+# ---------------------------------------------------------------------------
 # Facts for the report
 # ---------------------------------------------------------------------------
 - name: Collect the facts the report quotes
@@ -631,6 +709,15 @@
           ```
           {{ quickstart_ib_send_bw.stdout }}
           ```
+          {% endif %}
+
+          {% if quickstart_nvme_write_bw is defined %}
+          ### NVMe I/O test
+
+          | Direction | Bandwidth |
+          |-----------|-----------|
+          | write | {{ (quickstart_nvme_write_bw | int / 1048576) | round(0) }} MiB/s |
+          | read  | {{ (quickstart_nvme_read_bw  | int / 1048576) | round(0) }} MiB/s |
           {% endif %}
         dest: "{{ quickstart_artifacts_dir }}/{{ inventory_hostname }}.md"
         mode: "0644"

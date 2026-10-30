@@ -25,13 +25,13 @@ discovery.docker "stack" {
 discovery.relabel "stack" {
 	targets = discovery.docker.stack.targets
 
-	// Drop containers that do not belong to this compose project. Without
-	// this, Alloy ships logs from every container on the host (buildx, other
-	// stacks, etc.) -- and Loki rejects entries whose timestamps fall outside
-	// its ingestion window, flooding the log with "entry too far behind".
+	// Drop containers that are not managed by docker compose (bare Docker
+	// containers like buildx have no compose project label). This avoids
+	// shipping old logs from unrelated containers that Loki rejects as
+	// "entry too far behind".
 	rule {
 		source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
-		regex         = sys.env("COMPOSE_PROJECT_NAME")
+		regex         = ".+"
 		action        = "keep"
 	}
 
