@@ -65,6 +65,18 @@
         tasks_from: netplan_ernic
       when: lmcache_guest_netplan_ernic | bool
 
+    # systemd-networkd-wait-online blocks boot indefinitely waiting for ALL
+    # networkd-managed interfaces, including the ernic which only appears after
+    # the vfio-user session is established. This creates a >90s boot delay.
+    # Mask it so boot proceeds without waiting for the ernic. The address is
+    # assigned by the preflight at unit start, which is sufficient.
+    - name: Mask systemd-networkd-wait-online to prevent ernic boot delay
+      become: true
+      ansible.builtin.systemd:
+        name: systemd-networkd-wait-online.service
+        masked: true
+      failed_when: false
+
     # Disable gpuagent and amd-metrics-exporter before the GPU test.
     # gpuagent assertion-fails on emulated gfx1250 (amdsmi returns
     # AMDSMI_STATUS_NOT_SUPPORTED for temp/clock/util) and can wedge the
