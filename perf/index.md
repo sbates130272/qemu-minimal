@@ -12,7 +12,7 @@ new CI data lands.
 
 ## Latest published snapshot
 
-Generated from `ae551b3b` at **2026-10-29 21:18 UTC**.
+Generated from `e7c0f839` at **2026-10-30 00:02 UTC**.
 
 ![rocjitsu GEMM](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-gemm.json)
 ![rocjitsu hipFile](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile.json)
@@ -51,7 +51,6 @@ vfio-user and swing hard between runs.
 
 | Commit | Generated | GEMM | hipFile | hipFile fio |
 | --- | --- | --- | --- | --- |
-| 5ee7176b | 2026-10-29 14:26 UTC | 464 kFLOP/s | 170 MB/s | 149 MB/s |
 | 9ed9e68d | 2026-10-29 14:52 UTC | 464 kFLOP/s | 170 MB/s | 149 MB/s |
 | 9ed9e68d | 2026-10-29 15:10 UTC | 596 kFLOP/s | 246 MB/s | 188 MB/s |
 | 9e984d20 | 2026-10-29 16:44 UTC | 596 kFLOP/s | 246 MB/s | 188 MB/s |
@@ -61,6 +60,7 @@ vfio-user and swing hard between runs.
 | 15a9b834 | 2026-10-29 19:49 UTC | 470 kFLOP/s | 165 MB/s | 137 MB/s |
 | ae551b3b | 2026-10-29 20:53 UTC | 470 kFLOP/s | 165 MB/s | 137 MB/s |
 | ae551b3b | 2026-10-29 21:18 UTC | 634 kFLOP/s | 250 MB/s | 205 MB/s |
+| e7c0f839 | 2026-10-30 00:02 UTC | 634 kFLOP/s | 250 MB/s | 205 MB/s |
 
 ## Current report freshness
 
@@ -70,11 +70,11 @@ A report counts as green when it carries a `pass` status stamp *and* was
 generated within 36 hours of the publish. Both are needed: a
 lane that fails uploads no artifact at all, so its previous report stays on the
 branch and would otherwise keep reading `pass` indefinitely. The badge above
-shows the last date on which all 7 reports were green at once —
+shows the last date on which all 6 reports were green at once —
 amber once that date is no longer today.
 
-Last all-green: **2026-10-29** &middot; checked
-2026-10-29 21:18 UTC &middot; currently
+Last all-green: **2026-10-30** &middot; checked
+2026-10-30 00:02 UTC &middot; currently
 all green.
 
 | Report | Generated | Status | Commit | Page |
@@ -84,5 +84,4 @@ all green.
 | ernic VM 1 | 2026-10-29 21:00 UTC | pass | `ae551b3` | [/ernic/](/ernic/) |
 | ernic VM 2 | 2026-10-29 21:01 UTC | pass | `ae551b3` | [/ernic/vm2/](/ernic/vm2/) |
 | hipFile fio | 2026-10-29 21:18 UTC | pass | `ae551b3` | [/hipfile-fio/](/hipfile-fio/) |
-| LMCache | 2026-10-29 20:16 UTC | pass | `15a9b83` | [/lmcache/](/lmcache/) |
 | MI355X node | 2026-10-29 21:01 UTC | pass | ``unknown`` | [/mi355x/](/mi355x/) |
