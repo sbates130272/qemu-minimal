@@ -6,6 +6,57 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **Backing image tag tracking in `gen-vm` and `quick-start`.** A sidecar
+  file (`<vm>-backing.qcow2.image-ref`) records the tag last used to pull the
+  backing image. On the next run, if the tag in the settings file differs,
+  the backing is re-pulled and stale overlays are deleted automatically. The
+  same pattern applies to the guest keypair. Previously a tag bump in an env
+  file had no effect until the backing file was deleted by hand.
+
+- **`--clean-overlays` on `qemu-tool quick-start`.** Deletes the guest overlay
+  and NVMe qcow2 files before `make_overlays` runs, so the guests boot from a
+  fresh overlay of the backing image. The backing file is kept.
+
+- **`--rdma-duration SECONDS` and `--nvme-duration SECONDS` on `quick-start`.**
+  Run `ib_send_bw` for the given number of seconds (instead of the default 1000
+  iterations) and each `fio` NVMe pass for the given duration. Useful for
+  longer soak tests.
+
+- **NVMe I/O test added to `fleet-quickstart.yml`.** Sequential fio write then
+  read on `/dev/nvme0n1` (direct I/O, 128K blocks, `--nvme-duration` seconds,
+  default 10 each). Bandwidth reported per guest and included in the artifact
+  markdown table. `qemu-tool quick-start` prints a summary line per VM after
+  the test.
+
+- **Ethernet connectivity added to `vfio-user-ernic-2vm`.** The 2-VM stack was
+  missing the `tapsetup` sidecars and shared `l2` bridge network that the
+  scale-out stack has had since d2d9d62 (2 Oct 2026). Without them the ernic
+  TCP mesh carries only RDMA payload, ARP goes unanswered, and `ib_send_bw`
+  cannot complete its out-of-band exchange. Added: `tapsetup/` directory,
+  `tapsetup-hub`/`tapsetup-worker` sidecar services, `l2` bridge network,
+  `/dev/net/tun` on both ernic services, `-T tap0` entrypoints with a wait
+  loop, `ERNIC_TCP_GUEST_GIDS` per ernic, and `/proc/net/tcp` healthchecks.
+
+- **`vm-ernic-srq-p4.yml` installs `udev/99-rocm-ernic.rules` and
+  `rocm-ernic-netcfg.sh`.** The udev rule gives the emulated NIC a stable
+  `rocm-ernic<n>` name. The netcfg script (rendered from the
+  `ernic_fleet_guest` role template with role defaults) assigns the NIC its IP
+  at boot, deriving the index from the MAC so one image serves every guest. A
+  guard was added to the template for last-octet overflow (`10 + n > 254`).
+
+- **Image tag consistency CI check.** `qemu-minimal-image-tag-consistency.yml`
+  runs on every PR and fails if any `batesste-ci-images` tag in
+  `.github/workflows/` carries a different stamp than `qemu/env/quickstart`,
+  or if the env files themselves disagree.
+
+- **Container logs wired into Alloy → Loki → Grafana.** A "Logs (Alloy →
+  Loki)" section in the quickstart dashboard shows stdout/stderr from every
+  compose-managed container, shipped by Alloy via the Docker socket.
+
+- **`quick-start logs -f` / `--follow`.** Passes `-f` to `docker compose logs`
+  and excludes the `alloy` service (which generates continuous access-log noise
+  from its Docker socket polling).
+
 - **`qemu-tool qcow` subcommand for overlay management.** Lists all qcow2
   images found across the system path, `$XDG_DATA_HOME`, and `$VM_IMAGES_DIR`,
   with columns for size, backing file, delta, age, and NVMe scratch images.
@@ -33,6 +84,35 @@ All notable changes to this project will be documented in this file.
   re-enables either understands the risk (emulated GPU lockup).
 
 ### Changed
+
+- **`dockerapi` socket proxy removed; Alloy mounts `/var/run/docker.sock`
+  directly.** The haproxy proxy's access log produced ~10 lines per container
+  every 5 s, flooding `quick-start logs` output. Alloy runs with `cap_drop:
+  ALL` and `no-new-privileges`; the socket is the accepted tradeoff in a lab
+  stack. The Alloy container discovery keep rule was also fixed: it previously
+  used `sys.env("COMPOSE_PROJECT_NAME")`, which is not set inside the Alloy
+  container, so the empty-string regex matched nothing and no logs were
+  shipped. Changed to `.+` (keep all compose-managed containers, drop bare
+  Docker containers like buildx whose old log entries Loki would reject).
+
+- **GPU panels in the quickstart Grafana dashboard replaced with node_exporter
+  textfile metrics.** `amdgpu-exporter` is disabled on emulated gfx1250.
+  `fleet-quickstart.yml` now installs a small metrics script and systemd timer
+  that write `amdgpu_kfd_present` and `amdgpu_devices_total` to the node
+  exporter textfile directory. The `rocm-ernic0` panel was changed to match
+  by MAC prefix (`72:6f:63:6d:.*`) rather than interface name, so it shows
+  green even when the udev rename has not fired.
+
+- **`fleet-quickstart.yml` quickstart play simplified for current images.**
+  Removed: ionic-exclude initramfs hook + `update-initramfs` + guest reboot
+  (the `20261030.gadc94af` image has a clean initramfs); `gpuagent` /
+  `amd-metrics-exporter` stop/disable tasks (neither package is installed).
+  Added: udev rules install (`udev/99-rocm-ernic.rules`); ernic Ethernet
+  address assignment via MAC prefix; `prometheus-node-exporter` install;
+  ZScaler CA cert install from `AMD_CERT` host env var (no-op on non-AMD
+  hosts). The ionic modprobe task now loads `ionic` and `ionic_rdma`
+  sequentially, checks srcversion to detect a stale initramfs-loaded ionic,
+  and reloads the DKMS version if they differ.
 
 - **rocm-ernic collection and source pins advanced to `61b934a`.** The
   collection `version:` in `ansible/requirements.yml` and `ernic_source_pin`

@@ -337,6 +337,21 @@
         - /var/tmp/ernic-p4-src
         - /var/tmp/ernic-p4-src.tar.gz
 
+    - name: Install 99-rocm-ernic.rules for stable NIC naming
+      ansible.builtin.copy:
+        src: "{{ ernic_source_dir }}/udev/99-rocm-ernic.rules"
+        dest: /etc/udev/rules.d/99-rocm-ernic.rules
+        mode: "0644"
+      notify: Reload udev rules
+
+    - name: Install rocm-ernic-netcfg.sh and its systemd unit
+      ansible.builtin.include_role:
+        name: ernic_fleet_guest
+        tasks_from: network
+      vars:
+        ernic_fleet_networkd_unmanaged: false
+        ernic_fleet_netcfg: true
+
     - name: Report
       ansible.builtin.debug:
         msg: >-

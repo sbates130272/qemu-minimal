@@ -75,16 +75,28 @@ services:
     image: "${ERNIC_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261014.geea0485-ernic.3fb74d1-vfu.8039244}"
     environment:
       - ERNIC_DEBUG_MESH
-    command:
-      - rocm-ernic
-      - -s
-      - /run/vfu/ernic-1.sock
-      - -b
-      - "tcp:manager:listen:${ERNIC_TCP_PORT:-6320}"
-      - -m
-      - "${ERNIC1_MAC:-72:6f:63:6d:00:01}"
+      - "ERNIC_TCP_GUEST_GIDS=${ERNIC1_GUEST_GIDS:-fe80::706f:63ff:fe6d:1,192.168.100.11}"
+    devices:
+      - /dev/net/tun
+    networks:
+      l2: {}
     volumes:
       - vfu-sockets:/run/vfu
+    restart: "no"
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        n=0; until [ -e /sys/class/net/tap0 ]; do
+          n=$$((n+1))
+          [ $$n -gt 10 ] && break
+          sleep 0.5
+        done
+        TAP_ARG=; [ -e /sys/class/net/tap0 ] && TAP_ARG="-T tap0"
+        exec rocm-ernic -s /run/vfu/ernic-1.sock \
+          -b "tcp:manager:listen:${ERNIC_TCP_PORT:-6320}" \
+          -m "${ERNIC1_MAC:-72:6f:63:6d:00:01}" \
+          $$TAP_ARG
     healthcheck:
       test: ["CMD", "sh", "-c", "test -S /run/vfu/ernic-1.sock"]
       interval: 2s
@@ -92,31 +104,86 @@ services:
       retries: 30
       start_period: 5s
 
+  tapsetup-hub:
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
+    image: "qemu-tool/ernic-tapsetup:1"
+    pull_policy: build
+    network_mode: "service:ernic-hub"
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    environment:
+      - FLEET_PREFIX=172.31
+      - "TAP_OWNER=${CONTAINER_USER:?set CONTAINER_USER=<uid>:<gid>}"
+    devices:
+      - /dev/net/tun
+    restart: "no"
+    depends_on:
+      ernic-hub:
+        condition: service_started
+
   # ---- rocm-ernic NIC for VM 2: TCP worker (spoke) ----
   ernic-worker:
     <<: *gpu-common
     image: "${ERNIC_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261014.geea0485-ernic.3fb74d1-vfu.8039244}"
     environment:
       - ERNIC_DEBUG_MESH
-    command:
-      - rocm-ernic
-      - -s
-      - /run/vfu/ernic-2.sock
-      - -b
-      - "tcp:worker:ernic-hub:${ERNIC_TCP_PORT:-6320}"
-      - -m
-      - "${ERNIC2_MAC:-72:6f:63:6d:00:02}"
+      - "ERNIC_TCP_GUEST_GIDS=${ERNIC2_GUEST_GIDS:-fe80::706f:63ff:fe6d:2,192.168.100.12}"
+    devices:
+      - /dev/net/tun
+    networks:
+      l2: {}
     volumes:
       - vfu-sockets:/run/vfu
     depends_on:
       ernic-hub:
         condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        n=0; until [ -e /sys/class/net/tap0 ]; do
+          n=$$((n+1))
+          [ $$n -gt 10 ] && break
+          sleep 0.5
+        done
+        TAP_ARG=; [ -e /sys/class/net/tap0 ] && TAP_ARG="-T tap0"
+        exec rocm-ernic -s /run/vfu/ernic-2.sock \
+          -b "tcp:worker:ernic-hub:${ERNIC_TCP_PORT:-6320}" \
+          -m "${ERNIC2_MAC:-72:6f:63:6d:00:02}" \
+          $$TAP_ARG
     healthcheck:
       test: ["CMD", "sh", "-c", "test -S /run/vfu/ernic-2.sock"]
       interval: 2s
       timeout: 5s
       retries: 30
       start_period: 5s
+
+  tapsetup-worker:
+    build:
+      context: ./tapsetup
+      args:
+        - AMD_CERT
+    image: "qemu-tool/ernic-tapsetup:1"
+    pull_policy: build
+    network_mode: "service:ernic-worker"
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    environment:
+      - FLEET_PREFIX=172.31
+      - "TAP_OWNER=${CONTAINER_USER:?set CONTAINER_USER=<uid>:<gid>}"
+    devices:
+      - /dev/net/tun
+    restart: "no"
+    depends_on:
+      ernic-worker:
+        condition: service_started
 
   # ---- rocjitsu GPU for VM 1 (opt-in: --profile rocjitsu-vm1) ----
   rocjitsu-1:
@@ -224,3 +291,10 @@ volumes:
     driver_opts:
       type: tmpfs
       device: tmpfs
+
+networks:
+  # Shared L2 bridge carrying guest Ethernet. No address is assigned here;
+  # each ernic bridges its tap0 onto it, and the guests address each other
+  # over 192.168.100.0/24 via rocm-ernic-netcfg.
+  l2:
+    driver: bridge

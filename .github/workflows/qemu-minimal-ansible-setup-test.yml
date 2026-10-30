@@ -50,7 +50,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
-    container: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261014.geea0485-qemu11.1.2-vfu.8039244
+    container: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261030.gadc94af-qemu11.1.3-vfu.5b9c722
     # A duplicate key in a task is a WARNING by default and `--syntax-check`
     # still exits 0, so this job read "Found duplicate mapping key 'when'" out
     # loud and passed anyway. Ansible keeps the last value, which means the

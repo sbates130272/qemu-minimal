@@ -52,7 +52,7 @@ from .envfile import overrides as env_overrides, parse_layers
 from .gen_compose import run as gen_compose_run
 from .gen_vm import run as gen_vm_run
 
-VERBS = ("all", "preflight", "up", "test", "report", "down")
+VERBS = ("all", "preflight", "up", "test", "report", "down", "logs")
 
 # The settings file this subcommand is about. Shipped in the wheel, so a pipx
 # install has it without a checkout.
@@ -111,6 +111,8 @@ class _State:
     layers: list[Path] = field(default_factory=list)
     username: str = ""
     rdma_delta: int | None = None
+    rdma_duration: int | None = None
+    nvme_duration: int | None = None
 
     # ---- convenience readers -------------------------------------------
     def get(self, key: str) -> str:
@@ -669,14 +671,18 @@ def fetch_key(state: _State) -> None:
     authenticates as a user that exists with a key that does not.
     """
     _say("Fetching the guest keypair")
+    backing = state.values["VM_BACKING_IMAGE"]
+    ref_file = state.key.parent / "image-ref"
     if state.key.is_file():
-        print(f"already at {state.key}")
-        _adopt_login(state)
-        _publish_keypair(state)
-        return
+        cached_ref = ref_file.read_text().strip() if ref_file.exists() else ""
+        if cached_ref == backing:
+            print(f"already at {state.key}")
+            _adopt_login(state)
+            _publish_keypair(state)
+            return
+        print(f"image tag changed, re-fetching keypair")
 
     state.key_dir.mkdir(parents=True, exist_ok=True)
-    backing = state.values["VM_BACKING_IMAGE"]
     discovered = subprocess.run(["oras", "discover", backing, "--format", "json"],
                                 capture_output=True, text=True)
     if discovered.returncode != 0:
@@ -696,6 +702,7 @@ def fetch_key(state: _State) -> None:
     if not state.key.is_file():
         _die("the referrer carried no id_rsa")
     state.key.chmod(0o600)
+    ref_file.write_text(backing + "\n")
     _adopt_login(state)
     _publish_keypair(state)
 
@@ -737,6 +744,24 @@ def _publish_keypair(state: _State) -> None:
     if not private.is_file():
         shutil.copyfile(state.key, private)
         private.chmod(0o600)
+
+
+def clean_overlays(state: _State) -> None:
+    """Delete guest overlay and NVMe qcow2 files, keeping the backing image.
+
+    The backing file ({vm}-backing.qcow2) is shared and read-only; only the
+    per-VM overlay ({vm}.qcow2) and scratch NVMe files ({vm}-nvme*.qcow2) are
+    removed. make_overlays() then recreates them from scratch.
+    """
+    images = state.images_dir
+    for index in range(1, state.vm_count + 1):
+        name = state.vm(index)
+        for path in sorted(images.glob(f"{name}.qcow2")) + sorted(
+            images.glob(f"{name}-nvme*.qcow2")
+        ):
+            if path.exists():
+                _say(f"Removing {path.name}")
+                path.unlink()
 
 
 def make_overlays(state: _State) -> None:
@@ -938,6 +963,10 @@ def configure_and_test(state: _State) -> None:
             "--private-key", str(state.key),
             "-e", f"quickstart_artifacts_dir={state.artifacts}",
             "-e", "ansible_remote_tmp=/tmp/.ansible/tmp"]
+    if state.rdma_duration is not None:
+        cmd += ["-e", f"quickstart_rdma_duration={state.rdma_duration}"]
+    if state.nvme_duration is not None:
+        cmd += ["-e", f"quickstart_nvme_duration={state.nvme_duration}"]
     result = subprocess.run(cmd, cwd=state.repo_root / "ansible")
     if result.returncode != 0:
         _die("the configure-and-test playbook failed")
@@ -949,6 +978,24 @@ def configure_and_test(state: _State) -> None:
     # unconditionally under -S, so it needs no metrics profile.
     if state.rdma_delta <= 0:
         _die("the ernic byte counter did not move")
+
+    _report_nvme_summary(state)
+
+
+def _report_nvme_summary(state: _State) -> None:
+    """Print per-guest NVMe write/read bandwidth from the artifact files."""
+    import re as _re
+    pat = _re.compile(r"\|\s*write\s*\|\s*([\d.]+)\s*MiB/s")
+    pat_r = _re.compile(r"\|\s*read\s*\|\s*([\d.]+)\s*MiB/s")
+    for index in range(1, state.vm_count + 1):
+        md = state.artifacts / f"{state.vm(index)}.md"
+        if not md.exists():
+            continue
+        text = md.read_text()
+        m_w = pat.search(text)
+        m_r = pat_r.search(text)
+        if m_w and m_r:
+            _say(f"{state.vm(index)}: NVMe write {m_w.group(1)} MiB/s  read {m_r.group(1)} MiB/s")
 
 
 def _ernic_bytes(state: _State, index: int) -> int:
@@ -1107,6 +1154,10 @@ def run(
     metrics: bool,
     size_from_host: bool,
     assume_yes: bool,
+    follow: bool = False,
+    clean_qcow2: bool = False,
+    rdma_duration: int | None = None,
+    nvme_duration: int | None = None,
 ) -> None:
     if env_file:
         layers = [p.expanduser().resolve() for p in env_file]
@@ -1138,6 +1189,8 @@ def run(
         size_from_host=size_from_host,
         artifacts=Path("/var/tmp/quickstart-artifacts"),
         base_layers=layers,
+        rdma_duration=rdma_duration,
+        nvme_duration=nvme_duration,
     )
     # Picks up the overlays an earlier verb left beside the stack, which is
     # what makes `up` then `test` -- two processes, as the CI lane runs them
@@ -1156,6 +1209,18 @@ def run(
     # and a no-op before the first fetch.
     _adopt_login(state)
 
+    if verb == "logs":
+        extra = ["-f"] if follow else []
+        # dockerapi emits one haproxy access-log line per Alloy poll (~every
+        # 5 s per container). Exclude it from interactive log output; it is
+        # still captured by Loki for debugging.
+        ps = subprocess.run(
+            ["docker", "compose", "--project-name", state.stack_name, "ps", "--services"],
+            capture_output=True, text=True, cwd=state.stack_dir,
+        )
+        services = [s for s in ps.stdout.splitlines() if s and s != "dockerapi"]
+        _compose(state, "logs", *extra, *services, check=False)
+        return
     if verb == "down":
         down(state)
         return
@@ -1173,6 +1238,8 @@ def run(
             print("nothing done")
             return
         fetch_key(state)
+        if clean_qcow2:
+            clean_overlays(state)
         make_overlays(state)
         generate_stack(state)
         up(state)
