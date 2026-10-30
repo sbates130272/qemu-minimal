@@ -284,6 +284,15 @@ def _add_quick_start(sub: argparse._SubParsersAction) -> None:
         "--yes", "-y", action="store_true",
         help="Take the default answer to every prompt without asking.",
     )
+    p.add_argument(
+        "--clean-qcow2", action="store_true", default=False,
+        help=(
+            "Delete the guest overlay and NVMe qcow2 files before starting, "
+            "so the guests boot from a fresh overlay of the backing image. "
+            "The backing file itself is kept. Only meaningful with the up or "
+            "all verbs."
+        ),
+    )
     p.set_defaults(func=_quick_start_cmd)
 
 
@@ -927,6 +936,7 @@ def _quick_start_cmd(args: argparse.Namespace) -> None:
         size_from_host=args.size_from_host,
         assume_yes=args.yes,
         follow=args.follow,
+        clean_qcow2=args.clean_qcow2,
     )
 
 

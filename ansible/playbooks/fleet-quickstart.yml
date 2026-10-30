@@ -84,76 +84,15 @@
         tasks_from: netplan_ernic
       when: lmcache_guest_netplan_ernic | bool
 
-    # systemd-networkd-wait-online blocks boot indefinitely waiting for ALL
-    # networkd-managed interfaces, including the ernic which only appears after
-    # the vfio-user session is established. This creates a >90s boot delay.
-    # Mask it so boot proceeds without waiting for the ernic. The address is
-    # assigned by the preflight at unit start, which is sufficient.
+    # systemd-networkd-wait-online blocks boot indefinitely: it waits for ALL
+    # networkd-managed interfaces including the ernic, which only appears after
+    # the vfio-user session is established. The published qcow2 does not mask
+    # it, so boot stalls for >90s on every run without this.
     - name: Mask systemd-networkd-wait-online to prevent ernic boot delay
       become: true
       ansible.builtin.systemd:
         name: systemd-networkd-wait-online.service
         masked: true
-      failed_when: false
-
-    # The published qcow2 was baked with MODULES=most which swept the in-tree
-    # ionic.ko into the initramfs before DKMS displaced it on disk. The stale
-    # in-tree ionic loads at boot from the initramfs (before rootfs modules.dep
-    # is consulted), and ionic_rdma (built against the AMD-patched ionic) fails
-    # with a symbol version mismatch. Fix: write an initramfs hook that removes
-    # the in-tree ionic from any future initramfs, regenerate, and reboot.
-    # The reboot is a guest OS reboot -- QEMU keeps running and restarts the
-    # guest, so the vfio-user session survives. We wait for SSH to return.
-    - name: Write ionic-exclude initramfs hook
-      become: true
-      ansible.builtin.copy:
-        dest: /etc/initramfs-tools/hooks/ionic-exclude
-        mode: "0755"
-        content: !unsafe |
-          #!/bin/sh
-          PREREQ=""
-          prereqs() { echo "$PREREQ"; }
-          case "$1" in
-            prereqs) prereqs; exit 0;;
-          esac
-          . /usr/share/initramfs-tools/hook-functions
-          # Remove in-tree ionic from initramfs so the DKMS version loads
-          # at boot. The two have different symbol versions; if the in-tree
-          # one is present it loads first and ionic_rdma (built against the
-          # patched ionic) fails on symver mismatch.
-          find "${DESTDIR}" -name "ionic.ko*" -path "*/kernel/*" -delete
-          find "${DESTDIR}" -name "ionic_rdma.ko*" -path "*/kernel/*" -delete
-
-    - name: Regenerate initramfs to exclude in-tree ionic
-      become: true
-      ansible.builtin.command:
-        cmd: update-initramfs -u
-      changed_when: true
-      register: quickstart_initramfs
-
-    - name: Reboot guest to load DKMS ionic from updated initramfs
-      become: true
-      ansible.builtin.reboot:
-        reboot_timeout: 120
-        connect_timeout: 10
-        post_reboot_delay: 5
-      when: quickstart_initramfs.changed
-
-    # Disable gpuagent and amd-metrics-exporter before the GPU test.
-    # gpuagent assertion-fails on emulated gfx1250 (amdsmi returns
-    # AMDSMI_STATUS_NOT_SUPPORTED for temp/clock/util) and can wedge the
-    # GPU device for the vector_add that follows. Stopping them here is
-    # idempotent: failed_when: false covers the case where they are not
-    # installed.
-    - name: Stop and disable gpuagent and amd-metrics-exporter
-      become: true
-      ansible.builtin.systemd:
-        name: "{{ item }}"
-        state: stopped
-        enabled: false
-      loop:
-        - gpuagent
-        - amd-metrics-exporter
       failed_when: false
 
     - name: Check whether KFD is already up
@@ -207,16 +146,22 @@
     # DKMS modules but has no modules-load.d entries, so they depend on udev
     # device detection at boot. Making this explicit prevents a race between
     # udev and the ibv_devinfo check below.
-    - name: Log kernel version and ionic module state
+    - name: Load ionic and ionic_rdma modules
+      become: true
       ansible.builtin.shell:
         cmd: |
           echo "kernel: $(uname -r)"
+          echo "ionic in modules: $(modinfo -F filename ionic 2>/dev/null || echo MISSING)"
           echo "ionic_rdma in modules: $(find /lib/modules/$(uname -r) -name 'ionic_rdma*' 2>/dev/null | head -1 || echo MISSING)"
-          modprobe -a ionic ionic_rdma 2>&1 && echo "modprobe: OK" || echo "modprobe: FAILED rc=$?"
+          # Load in two steps: ionic first (udev may have loaded it already),
+          # then ionic_rdma. modprobe -a loads them in parallel and fails if
+          # ionic_rdma probes before ionic is fully initialised.
+          modprobe ionic 2>&1 || true
+          modprobe ionic_rdma 2>&1 && echo "modprobe: OK" || echo "modprobe: FAILED rc=$?"
         executable: /bin/bash
       register: quickstart_ionic_log
       changed_when: false
-      failed_when: false
+      failed_when: "'modprobe: FAILED' in quickstart_ionic_log.stdout"
 
     - name: Show ionic module state
       ansible.builtin.debug:

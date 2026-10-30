@@ -739,6 +739,23 @@ def _publish_keypair(state: _State) -> None:
         private.chmod(0o600)
 
 
+def clean_overlays(state: _State) -> None:
+    """Delete guest overlay and NVMe qcow2 files, keeping the backing image.
+
+    The backing file ({vm}-backing.qcow2) is shared and read-only; only the
+    per-VM overlay ({vm}.qcow2) and scratch NVMe files ({vm}-nvme*.qcow2) are
+    removed. make_overlays() then recreates them from scratch.
+    """
+    images = state.images_dir
+    for index in range(1, state.vm_count + 1):
+        name = state.vm(index)
+        for path in sorted(images.glob(f"{name}.qcow2")) + sorted(
+            images.glob(f"{name}-nvme*.qcow2")
+        ):
+            _say(f"Removing {path.name}")
+            path.unlink()
+
+
 def make_overlays(state: _State) -> None:
     """Two overlays of one backing file. This is the long step: ~2.5 GB
     pulled and unpacked to ~9 GB, once, however many guests there are."""
@@ -1108,6 +1125,7 @@ def run(
     size_from_host: bool,
     assume_yes: bool,
     follow: bool = False,
+    clean_qcow2: bool = False,
 ) -> None:
     if env_file:
         layers = [p.expanduser().resolve() for p in env_file]
@@ -1159,7 +1177,15 @@ def run(
 
     if verb == "logs":
         extra = ["-f"] if follow else []
-        _compose(state, "logs", *extra, check=False)
+        # dockerapi emits one haproxy access-log line per Alloy poll (~every
+        # 5 s per container). Exclude it from interactive log output; it is
+        # still captured by Loki for debugging.
+        ps = subprocess.run(
+            ["docker", "compose", "--project-name", state.stack_name, "ps", "--services"],
+            capture_output=True, text=True, cwd=state.stack_dir,
+        )
+        services = [s for s in ps.stdout.splitlines() if s and s != "dockerapi"]
+        _compose(state, "logs", *extra, *services, check=False)
         return
     if verb == "down":
         down(state)
@@ -1178,6 +1204,8 @@ def run(
             print("nothing done")
             return
         fetch_key(state)
+        if clean_qcow2:
+            clean_overlays(state)
         make_overlays(state)
         generate_stack(state)
         up(state)

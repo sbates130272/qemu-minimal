@@ -8,21 +8,12 @@
 // Not generated: it discovers containers at run time rather than being told
 // VM_COUNT of them, so nothing here changes when the fleet is resized.
 
-// The Docker API through the read-only proxy, NOT the socket.
-//
-// This container holds no /var/run/docker.sock, and that is deliberate: a
-// mounted socket is root on the host whatever mount flags it carries, because
-// `:ro` applies to the inode and not to the API behind it. The `dockerapi`
-// service in the compose file is an haproxy that answers GET on /containers
-// and refuses POST, so the worst this collector can do with its credential is
-// read what it was already reading.
-//
-// Addressed through DOCKER_HOST rather than hardcoded, because the fleet
-// network prefix is a setting. Discovery stays dynamic, so a container that
-// restarts -- an ernic worker flapping, say -- is picked up again without
-// Alloy being restarted.
+// Docker socket mounted directly into this container. Anything that can
+// connect to /var/run/docker.sock is root on the host -- accepted here,
+// this is a lab stack. Discovery stays dynamic: a container that restarts
+// is picked up again without Alloy being restarted.
 discovery.docker "stack" {
-	host             = coalesce(sys.env("DOCKER_HOST"), "unix:///var/run/docker.sock")
+	host             = "unix:///var/run/docker.sock"
 	refresh_interval = "10s"
 }
 
@@ -33,6 +24,16 @@ discovery.docker "stack" {
 // matters.
 discovery.relabel "stack" {
 	targets = discovery.docker.stack.targets
+
+	// Drop containers that do not belong to this compose project. Without
+	// this, Alloy ships logs from every container on the host (buildx, other
+	// stacks, etc.) -- and Loki rejects entries whose timestamps fall outside
+	// its ingestion window, flooding the log with "entry too far behind".
+	rule {
+		source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+		regex         = sys.env("COMPOSE_PROJECT_NAME")
+		action        = "keep"
+	}
 
 	rule {
 		source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
@@ -61,7 +62,7 @@ discovery.relabel "stack" {
 }
 
 loki.source.docker "stack" {
-	host       = coalesce(sys.env("DOCKER_HOST"), "unix:///var/run/docker.sock")
+	host       = "unix:///var/run/docker.sock"
 	targets    = discovery.relabel.stack.output
 	labels     = {job = "docker"}
 	forward_to = [loki.write.default.receiver]

@@ -926,88 +926,16 @@ services:
       retries: 30
       start_period: 30s
 
-  # Read-only Docker API, so the log collector never holds
-  # the socket. Mounting /var/run/docker.sock into Alloy
-  # is root on the host however it is mounted: `:ro`
-  # applies to the inode, not to the API, and anything
-  # that can connect to that socket can create a
-  # privileged container and own the machine. Alloy is a
-  # large pipeline that parses container log content,
-  # which is the least suitable process in the stack to
-  # hand that to.
+  # Ships every stack container's logs to Loki. The guests
+  # run their own Alloy: a VM's journal is behind QEMU,
+  # not on this Docker socket.
   #
-  # This is the standard mitigation: haproxy with a path
-  # allowlist. POST is refused outright, so no container
-  # can be created, started, exec'd or changed through
-  # it; CONTAINERS is what discovery.docker lists and
-  # loki.source.docker reads logs from, and the rest are
-  # the handshake. Everything else the image defaults to
-  # 0, but the ones that would matter are spelled out
-  # below rather than left to a default that could move.
-  #
-  # It still mounts the socket and still runs as root --
-  # that is unavoidable for anything that speaks to the
-  # daemon -- so this does not remove the root-equivalent
-  # container, it shrinks it from a log pipeline to a
-  # proxy whose entire job is saying no.
-  dockerapi:
-    image: "docker.io/tecnativa/docker-socket-proxy:0.3.0"
-    logging: *logging
-    profiles: [metrics]
-    networks:
-      fleet:
-        ipv4_address: 172.31.0.17
-    restart: on-failure
-    environment:
-      - CONTAINERS=1
-      - EVENTS=1
-      - PING=1
-      - VERSION=1
-      - POST=0
-      - EXEC=0
-      - IMAGES=0
-      - INFO=0
-      - NETWORKS=1
-      - VOLUMES=0
-      - SERVICES=0
-      - TASKS=0
-      - SWARM=0
-      - NODES=0
-      - SECRETS=0
-      - CONFIGS=0
-      - PLUGINS=0
-      - SYSTEM=0
-      - DISTRIBUTION=0
-      - BUILD=0
-      - COMMIT=0
-      - AUTH=0
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    cap_drop:
-      - ALL
-    cap_add:
-      - SETUID
-      - SETGID
-      - DAC_OVERRIDE
-    security_opt:
-      - "no-new-privileges:true"
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:2375/_ping | grep -q OK"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 5s
-
-  # Ships every stack container's logs. The guests run
-  # their own Alloy: a VM's journal is behind QEMU, not
-  # on this Docker API.
-  #
-  # Holds no Docker socket -- it reaches the daemon only
-  # through the read-only proxy above, over the fleet
-  # network -- so it has no host state, no socket and no
-  # reason to be root. That is what lets it take
-  # CONTAINER_USER like everything else; it used to be
-  # exempt, and the socket was the reason.
+  # Mounts the Docker socket directly. Anything that can
+  # connect to that socket is root on the host, whatever
+  # the mount flags say. Accepted here: this is a lab
+  # stack and the socket is needed for container discovery
+  # and log tailing. The container is otherwise locked
+  # down (cap_drop ALL, no-new-privileges).
   alloy:
     image: "docker.io/grafana/alloy:v1.5.1"
     logging: *logging
@@ -1016,7 +944,6 @@ services:
       fleet:
         ipv4_address: 172.31.0.16
     restart: on-failure
-    user: "${CONTAINER_USER:?set CONTAINER_USER=<uid>:<gid>}"
     cap_drop:
       - ALL
     security_opt:
@@ -1024,12 +951,10 @@ services:
     depends_on:
       loki:
         condition: service_healthy
-      dockerapi:
-        condition: service_healthy
     environment:
       - LOKI_HOST=172.31.0.15:3100
-      - DOCKER_HOST=tcp://172.31.0.17:2375
     volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./logging/alloy-host.alloy:/etc/alloy/config.alloy:ro
     command:
       - run
