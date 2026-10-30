@@ -5,7 +5,7 @@
 #   qemu-tool gen-compose --env-file qemu/env/mi355x-node
 #
 # env-file: qemu/env/mi355x-node
-# env-sha256: 600b7c8156473dbed0434ad5e759eb15eb3ee02a51c55b9b9ce88da63b2e2cbf
+# env-sha256: f50093e79833ba9fe47367530f66d3b04b9b24ec8b65c195d331869e5edba0fa
 
 x-logging: &logging
   driver: json-file

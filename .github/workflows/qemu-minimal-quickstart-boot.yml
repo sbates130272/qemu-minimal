@@ -73,7 +73,7 @@ jobs:
     # should cost a coffee, not an afternoon -- this gates merges.
     timeout-minutes: 45
     container:
-      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261030.g3080a5b-qemu11.1.3-vfu.5b9c722
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261029.g020459a-qemu11.1.3-vfu.5b9c722
       # Same three as report-for-quickstart, for the same reasons:
       # /var/lib/qemu-tool bind-mounted at the same path so the qcow2 pulled
       # in here is the file the sibling qemu container opens (compose bind
@@ -149,7 +149,7 @@ jobs:
           printf 'VM_COUNT=1\n'
           printf 'VM_NAME_PREFIX=prboot\n'
           printf 'ERNIC_TAP=false\n'
-          printf 'VM_BACKING_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu-slim:20261030.g3080a5b-vm.resolute-ernic-rocjitsu-slim-qm.ae551b3-qcow2\n'
+          printf 'VM_BACKING_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu-slim:20261029.g020459a-vm.resolute-ernic-rocjitsu-slim-qm.ae551b3-qcow2\n'
         } > "$OVERLAY"
         cat "$OVERLAY"
         # The stamp has to match the three container images in
