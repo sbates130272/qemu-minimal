@@ -41,10 +41,14 @@ jobs:
           # different date stamp. Matches lines like:
           #   ...batesste-ci-images-...:20261028.gabcdef-...
           # and flags them if the stamp is not $STAMP.
+          # Only check env-var style assignments (IMAGE=... or IMAGE: ...)
+          # not `container: image:` runner declarations, which are pinned on
+          # a different cadence from the stack images.
           bad=$(grep -rn 'batesste-ci-images[^:]*:[0-9]\{8\}\.g[0-9a-f]*' \
                   .github/workflows/ \
                 | grep -v "${STAMP}" \
-                | grep -v '^Binary')
+                | grep -v '^Binary' \
+                | grep -E '[A-Z_]+=|[A-Z_]+: ')
 
           if [ -n "$bad" ]; then
             echo "::error::Workflow files contain image tags not on stamp ${STAMP}:"

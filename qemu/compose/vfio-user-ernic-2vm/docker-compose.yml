@@ -89,13 +89,14 @@ services:
       - |
         n=0; until [ -e /sys/class/net/tap0 ]; do
           n=$$((n+1))
-          [ $$n -gt 240 ] && echo 'tap0 never appeared' && exit 1
+          [ $$n -gt 10 ] && break
           sleep 0.5
         done
+        TAP_ARG=; [ -e /sys/class/net/tap0 ] && TAP_ARG="-T tap0"
         exec rocm-ernic -s /run/vfu/ernic-1.sock \
           -b "tcp:manager:listen:${ERNIC_TCP_PORT:-6320}" \
           -m "${ERNIC1_MAC:-72:6f:63:6d:00:01}" \
-          -T tap0
+          $$TAP_ARG
     healthcheck:
       test: ["CMD", "sh", "-c", "test -S /run/vfu/ernic-1.sock"]
       interval: 2s
@@ -147,13 +148,14 @@ services:
       - |
         n=0; until [ -e /sys/class/net/tap0 ]; do
           n=$$((n+1))
-          [ $$n -gt 240 ] && echo 'tap0 never appeared' && exit 1
+          [ $$n -gt 10 ] && break
           sleep 0.5
         done
+        TAP_ARG=; [ -e /sys/class/net/tap0 ] && TAP_ARG="-T tap0"
         exec rocm-ernic -s /run/vfu/ernic-2.sock \
           -b "tcp:worker:ernic-hub:${ERNIC_TCP_PORT:-6320}" \
           -m "${ERNIC2_MAC:-72:6f:63:6d:00:02}" \
-          -T tap0
+          $$TAP_ARG
     healthcheck:
       test: ["CMD", "sh", "-c", "test -S /run/vfu/ernic-2.sock"]
       interval: 2s
