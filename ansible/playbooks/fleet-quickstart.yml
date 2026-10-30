@@ -63,6 +63,7 @@
       ansible.builtin.include_role:
         name: lmcache_guest
         tasks_from: netplan_ernic
+      when: lmcache_guest_netplan_ernic | bool
 
     # Disable gpuagent and amd-metrics-exporter before the GPU test.
     # gpuagent assertion-fails on emulated gfx1250 (amdsmi returns
