@@ -95,3 +95,4 @@ LOGS_ENABLE=false
 # two NICs sharing a guest, that is the interesting case. Same build stamp as
 # the golden file's images; _check_image_coherence hard-errors on a mismatch.
 QEMU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:20261029.g020459a-qemu.f91f120-vfu.3719c3a
+ERNIC_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic-sbates-fork:20261029.g020459a-ernic.8f35f4a-vfu.3719c3a
