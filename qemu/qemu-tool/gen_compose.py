@@ -1122,10 +1122,15 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
             # Fields are hex and space-separated: local_address is $2 as
             # <addr>:<port>, st is $4, and 0A is TCP_LISTEN.
             port_hex = f"{int(spec['tcp_port']):04X}"
+            # Check both /proc/net/tcp (IPv4) and /proc/net/tcp6 (IPv6):
+            # rocm-ernic may bind on :: (IPv6 wildcard) on some hosts,
+            # which appears only in tcp6 and would make an IPv4-only check
+            # always fail. awk accepts multiple files and processes them in
+            # sequence, so passing both costs nothing.
             out.append(
                 '      test: ["CMD", "awk", '
                 f'"$2 ~ /:{port_hex}$/ && $4 == \\"0A\\" {{found=1}} '
-                'END {exit !found}", "/proc/net/tcp"]'
+                'END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]'
             )
         else:
             # Proving the socket exists is not enough to serialise
@@ -1135,7 +1140,7 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
             out.append(
                 '      test: ["CMD", "awk", '
                 f'"$3 ~ /:{port_hex}$/ && $4 == \\"01\\" {{found=1}} '
-                'END {exit !found}", "/proc/net/tcp"]'
+                'END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]'
             )
         out.append("      interval: 2s")
         out.append("      timeout: 5s")

@@ -76,7 +76,7 @@ services:
         done
         exec rocm-ernic '-s' '/run/vfu/ernic-1.sock' '-b' 'tcp:manager:listen:6320' '-m' '72:6f:63:6d:00:01' '-S' '/run/ernic-stats/ernic-1.stats' '-T' 'tap0'
     healthcheck:
-      test: ["CMD", "awk", "$2 ~ /:18B0$/ && $4 == \"0A\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$2 ~ /:18B0$/ && $4 == \"0A\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -109,7 +109,7 @@ services:
       ernic-1:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -142,7 +142,7 @@ services:
       ernic-2:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -175,7 +175,7 @@ services:
       ernic-3:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -208,7 +208,7 @@ services:
       ernic-4:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -241,7 +241,7 @@ services:
       ernic-5:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -274,7 +274,7 @@ services:
       ernic-6:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -307,7 +307,7 @@ services:
       ernic-7:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp"]
+      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 30
