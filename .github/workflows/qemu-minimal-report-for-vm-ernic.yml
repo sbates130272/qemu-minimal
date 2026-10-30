@@ -34,9 +34,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  ERNIC_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261022.gc533d98-ernic.151379b-vfu.8039244
-  ROCJITSU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261014.geea0485-rocjitsu.84fb06b
-  QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261014.geea0485-qemu11.1.2-vfu.8039244
+  ERNIC_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261030.g3080a5b-ernic.8f35f4a-vfu.5b9c722
+  ROCJITSU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261030.g3080a5b-rocjitsu.73c3cf3
+  QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261030.g3080a5b-qemu11.1.3-vfu.5b9c722
   VM_IMAGES_DIR: /var/lib/qemu-tool/images
   VM1_NAME: ernic-report-1
   VM2_NAME: ernic-report-2
@@ -46,7 +46,7 @@ jobs:
     name: Report for vm-ernic
     runs-on: ubuntu-latest
     container:
-      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261014.geea0485-qemu11.1.2-vfu.8039244
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261030.g3080a5b-qemu11.1.3-vfu.5b9c722
       # Provides qemu-system-x86_64 and cloud-image-utils. /var/lib/qemu-tool is
       # bind-mounted from the host at the same path so the qcow2 generated here
       # is the same file the sibling qemu containers open: compose bind-mounts

@@ -103,18 +103,18 @@
      sbates-fork is the odd one out in the other direction: it is pinned only
      by the qemu/env/overlay-mi100 overlay, for vfio-user P2P DMA, and
      carries a QEMU patch the stock image does not. See AGENTS.md issue 19. -->
-[![CI image build](https://img.shields.io/badge/ci--images-20261021.g742e8e2-informational?style=flat-square&logo=docker)](https://hub.docker.com/u/sbates130272)
-[![Qemu](https://img.shields.io/badge/qemu-11.1.2-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user/tags)
-[![Libvfio-user](https://img.shields.io/badge/libvfio--user-8039244-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user/tags)
-[![Rocm-ernic](https://img.shields.io/badge/rocm--ernic-31d3114-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-rocm-ernic/tags)
-[![Rocjitsu](https://img.shields.io/badge/rocjitsu-84fb06b-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu/tags)
-[![Guest Qcow2](https://img.shields.io/badge/guest-resolute%20%7C%20qm.b4eb552-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu/tags)
-[![Qemu Fork](https://img.shields.io/badge/sbates--fork-qemu.aa4344e-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork/tags)
+[![CI image build](https://img.shields.io/badge/ci--images-20261030.g3080a5b-informational?style=flat-square&logo=docker)](https://hub.docker.com/u/sbates130272)
+[![Qemu](https://img.shields.io/badge/qemu-11.1.3-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user/tags)
+[![Libvfio-user](https://img.shields.io/badge/libvfio--user-5b9c722-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user/tags)
+[![Rocm-ernic](https://img.shields.io/badge/rocm--ernic-8f35f4a-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-rocm-ernic/tags)
+[![Rocjitsu](https://img.shields.io/badge/rocjitsu-73c3cf3-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu/tags)
+[![Guest Qcow2](https://img.shields.io/badge/guest-resolute%20%7C%20qm.ae551b3-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu/tags)
+[![Qemu Fork](https://img.shields.io/badge/sbates--fork-qemu.f91f120-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork/tags)
 
 <!-- What `qemu-tool quick-start` boots, from qemu/env/quickstart. One badge,
      carrying that file's own build stamp; the ernic and rocjitsu revisions
      it implies are the ones in that stamp's tags. -->
-[![Quick-start Build](https://img.shields.io/badge/quick--start-20261022.gc533d98-success?style=flat-square&logo=docker)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu/tags)
+[![Quick-start Build](https://img.shields.io/badge/quick--start-20261030.g3080a5b-success?style=flat-square&logo=docker)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu/tags)
 <!-- The LMCache ref qemu/docker/lmcache/Dockerfile builds from. Not a
      batesste-ci-image: this one is built here and referenced by tag, so it
      carries no build stamp and sits outside the coherence check above. It
