@@ -149,7 +149,7 @@ jobs:
           printf 'VM_COUNT=1\n'
           printf 'VM_NAME_PREFIX=prboot\n'
           printf 'ERNIC_TAP=false\n'
-          printf 'VM_BACKING_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu-slim:20261029.g020459a-vm.resolute-ernic-rocjitsu-slim-qm.ae551b3-qcow2\n'
+          printf 'VM_BACKING_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu-slim:20261030.gadc94af-vm.resolute-ernic-rocjitsu-slim-qm.ae551b3-qcow2\n'
         } > "$OVERLAY"
         cat "$OVERLAY"
         # The stamp has to match the three container images in

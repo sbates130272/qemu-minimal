@@ -1,0 +1,72 @@
+name: qemu-minimal - Image Tag Consistency Check
+
+# Every image tag in .github/workflows/ must match the stamp in qemu/env/.
+# A tag bump that updates env files but not workflow files ships the wrong
+# image in CI; a workflow update that misses an env file boots a different
+# image than the one the human tested. This check makes both failures visible
+# on the PR rather than silently in a later nightly run.
+#
+# Strategy: extract the canonical stamp from qemu/env/quickstart (the QEMU_IMAGE
+# line, which is always updated by the bump script), then grep every workflow
+# file for any batesste-ci-images tag that does NOT carry that stamp. A hit
+# means the workflow is pinned to a different build than the env files.
+
+on:
+  workflow_dispatch:
+  pull_request:
+
+jobs:
+  image-tag-consistency:
+    name: Image Tag Consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract canonical stamp from qemu/env/quickstart
+        id: stamp
+        run: |
+          stamp=$(sed -n 's|^QEMU_IMAGE=.*:\([0-9]\{8\}\.g[0-9a-f]*\)-.*|\1|p' qemu/env/quickstart | head -1)
+          if [ -z "$stamp" ]; then
+            echo "::error::Could not extract stamp from qemu/env/quickstart"
+            exit 1
+          fi
+          echo "stamp=$stamp" >> "$GITHUB_OUTPUT"
+          echo "Canonical stamp: $stamp"
+
+      - name: Check workflow files for stale stamps
+        env:
+          STAMP: ${{ steps.stamp.outputs.stamp }}
+        run: |
+          # Find any batesste-ci-images tag in workflow files that carries a
+          # different date stamp. Matches lines like:
+          #   ...batesste-ci-images-...:20261028.gabcdef-...
+          # and flags them if the stamp is not $STAMP.
+          bad=$(grep -rn 'batesste-ci-images[^:]*:[0-9]\{8\}\.g[0-9a-f]*' \
+                  .github/workflows/ \
+                | grep -v "${STAMP}" \
+                | grep -v '^Binary')
+
+          if [ -n "$bad" ]; then
+            echo "::error::Workflow files contain image tags not on stamp ${STAMP}:"
+            echo "$bad"
+            echo ""
+            echo "Run: sed -i 's/<old-stamp>/${STAMP}/g' .github/workflows/*.yml"
+            exit 1
+          fi
+          echo "All workflow image tags are on stamp ${STAMP}."
+
+      - name: Check env files are mutually consistent
+        run: |
+          # All env files should share one stamp. Extract every stamp found
+          # across all env files and fail if there is more than one.
+          stamps=$(grep -rh 'batesste-ci-images[^:]*:[0-9]\{8\}\.g[0-9a-f]*' \
+                     qemu/env/ \
+                   | grep -oP '[0-9]{8}\.g[0-9a-f]+' \
+                   | sort -u)
+          count=$(echo "$stamps" | wc -l)
+          if [ "$count" -gt 1 ]; then
+            echo "::error::env files contain multiple stamps (expected 1):"
+            echo "$stamps"
+            exit 1
+          fi
+          echo "Env files all on one stamp: $stamps"

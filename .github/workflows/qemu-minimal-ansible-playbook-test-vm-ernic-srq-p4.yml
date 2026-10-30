@@ -33,12 +33,12 @@ concurrency:
 env:
   # QEMU image for the gen-vm container. ERNIC_IMAGE is not needed: the
   # bake is headless (no vfio-user device), so no ernic server runs.
-  QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261029.g020459a-qemu11.1.3-vfu.5b9c722
+  QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261030.gadc94af-qemu11.1.3-vfu.5b9c722
   VM_IMAGES_DIR: /var/lib/qemu-tool/images
   # Published ernic-rocjitsu qcow2: carries mainline 7.2.6 kernel, build
   # toolchain, ionic DKMS prerequisites, and the ubuntu account. Matches
   # env/quickstart so they track together.
-  VM_BACKING_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu:20261029.g020459a-vm.resolute-ernic-rocjitsu-qm.ae551b3-qcow2
+  VM_BACKING_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu:20261030.gadc94af-vm.resolute-ernic-rocjitsu-qm.ae551b3-qcow2
 
 jobs:
   test-vm-ernic-srq-p4:

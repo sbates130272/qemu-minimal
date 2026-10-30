@@ -97,7 +97,7 @@ services:
           -m "${ERNIC1_MAC:-72:6f:63:6d:00:01}" \
           -T tap0
     healthcheck:
-      test: ["CMD", "awk", "$2 ~ /:18B0$/ && $4 == \"0A\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
+      test: ["CMD", "sh", "-c", "test -S /run/vfu/ernic-1.sock"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -155,7 +155,7 @@ services:
           -m "${ERNIC2_MAC:-72:6f:63:6d:00:02}" \
           -T tap0
     healthcheck:
-      test: ["CMD", "awk", "$3 ~ /:18B0$/ && $4 == \"01\" {found=1} END {exit !found}", "/proc/net/tcp", "/proc/net/tcp6"]
+      test: ["CMD", "sh", "-c", "test -S /run/vfu/ernic-2.sock"]
       interval: 2s
       timeout: 5s
       retries: 30

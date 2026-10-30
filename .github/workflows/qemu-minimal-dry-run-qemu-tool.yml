@@ -21,7 +21,7 @@ jobs:
   dry-run-tests:
     name: Dry Run Tests
     runs-on: ubuntu-latest
-    container: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261029.g020459a-qemu11.1.3-vfu.5b9c722
+    container: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261030.gadc94af-qemu11.1.3-vfu.5b9c722
     steps:
     - name: Check out code
       uses: actions/checkout@v4.3.1

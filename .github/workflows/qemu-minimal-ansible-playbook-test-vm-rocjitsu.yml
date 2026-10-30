@@ -42,8 +42,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  ROCJITSU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261029.g020459a-rocjitsu.73c3cf3
-  QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261029.g020459a-qemu11.1.3-vfu.5b9c722
+  ROCJITSU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261030.gadc94af-rocjitsu.73c3cf3
+  QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261030.gadc94af-qemu11.1.3-vfu.5b9c722
   VM_IMAGES_DIR: /var/lib/qemu-tool/images
   # rocm_setup_skip_system_upgrade turns off the role's "upgrade: safe" +
   # autoremove pass. That pass pulls the whole distro forward -- 28 packages
