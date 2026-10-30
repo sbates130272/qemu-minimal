@@ -124,6 +124,11 @@ while read -r NIC; do
         rc=1
         continue
     fi
+    if [ $(( 10 + n )) -gt 254 ]; then
+        echo "refusing index $n from MAC $mac on $NIC: 10+$n=$((10+n)) overflows the last octet" >&2
+        rc=1
+        continue
+    fi
 
     ip link set "$NIC" up
     addr="$SUBNET.$(( 10 + n ))"

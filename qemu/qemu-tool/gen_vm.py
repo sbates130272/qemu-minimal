@@ -182,9 +182,23 @@ def _fetch_backing_image(cfg: VMConfig, images: Path) -> Path:
     not `docker pull`. Same job as _download_if_needed(), different source.
     """
     backing = images / f"{cfg.vm_name}-backing.qcow2"
+    ref_file = backing.with_suffix(".qcow2.image-ref")
+
     if backing.exists() and not cfg.force:
-        print(f"Backing image already present: {backing} (use --force to refetch)")
-        return backing
+        cached_ref = ref_file.read_text().strip() if ref_file.exists() else ""
+        if cached_ref == cfg.backing_image:
+            print(f"Backing image up to date: {backing}")
+            return backing
+        if cached_ref:
+            print(f"Backing image tag changed ({cached_ref!r} -> {cfg.backing_image!r}), re-pulling")
+        else:
+            print(f"Backing image present but no tag recorded, re-pulling")
+        # Remove overlays built on the old backing so they are recreated fresh.
+        for stale in [images / f"{cfg.vm_name}.qcow2",
+                      *sorted(images.glob(f"{cfg.vm_name}-nvme*.qcow2"))]:
+            if stale.exists():
+                print(f"Removing stale overlay: {stale.name}")
+                stale.unlink()
 
     for tool in ("oras", "zstd"):
         if not _which(tool):
@@ -217,6 +231,7 @@ def _fetch_backing_image(cfg: VMConfig, images: Path) -> Path:
                 f"(pulled: {found})."
             )
 
+    ref_file.write_text(cfg.backing_image + "\n")
     print(f"Backing image ready: {backing}")
     return backing
 

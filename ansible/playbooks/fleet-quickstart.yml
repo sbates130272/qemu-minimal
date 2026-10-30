@@ -78,6 +78,18 @@
         name: lmcache_guest
         tasks_from: amdgpu_firmware
 
+    - name: Assign ernic Ethernet address
+      become: true
+      ansible.builtin.shell:
+        cmd: |
+          iface=$(ip -br link | awk '/72:6f:63:6d/ {print $1}')
+          [ -n "$iface" ] || { echo "ernic interface not found"; exit 1; }
+          ip link set "$iface" up
+          ip addr add "{{ lmcache_guest_eth_address }}" dev "$iface" 2>/dev/null || true
+          echo "assigned {{ lmcache_guest_eth_address }} to $iface"
+        executable: /bin/bash
+      changed_when: true
+
     - name: Declare the ernic address to netplan
       ansible.builtin.include_role:
         name: lmcache_guest
@@ -151,12 +163,20 @@
       ansible.builtin.shell:
         cmd: |
           echo "kernel: $(uname -r)"
-          echo "ionic in modules: $(modinfo -F filename ionic 2>/dev/null || echo MISSING)"
-          echo "ionic_rdma in modules: $(find /lib/modules/$(uname -r) -name 'ionic_rdma*' 2>/dev/null | head -1 || echo MISSING)"
-          # Load in two steps: ionic first (udev may have loaded it already),
-          # then ionic_rdma. modprobe -a loads them in parallel and fails if
-          # ionic_rdma probes before ionic is fully initialised.
-          modprobe ionic 2>&1 || true
+          DKMS_IONIC=$(modinfo -F srcversion \
+            /lib/modules/$(uname -r)/updates/dkms/ionic.ko.zst 2>/dev/null)
+          LOADED_IONIC=$(cat /sys/module/ionic/srcversion 2>/dev/null || echo NONE)
+          echo "ionic dkms: ${DKMS_IONIC:-MISSING}"
+          echo "ionic loaded: $LOADED_IONIC"
+          # If the running ionic differs from the DKMS ionic (a stale version
+          # from the initramfs), ionic_rdma's symbol CRCs will not match and
+          # modprobe fails with EINVAL. Reload the DKMS version.
+          if [ "$LOADED_IONIC" != "$DKMS_IONIC" ] && [ "$LOADED_IONIC" != "NONE" ]; then
+            echo "ionic mismatch -- reloading DKMS version"
+            ip link set enp1s0np0 down 2>/dev/null || true
+            rmmod ionic
+          fi
+          modprobe ionic 2>&1
           modprobe ionic_rdma 2>&1 && echo "modprobe: OK" || echo "modprobe: FAILED rc=$?"
         executable: /bin/bash
       register: quickstart_ionic_log
@@ -234,6 +254,95 @@
         name: prometheus-node-exporter
         state: present
         update_cache: true
+
+    - name: Create textfile collector directory
+      become: true
+      ansible.builtin.file:
+        path: /var/lib/prometheus/node-exporter
+        state: directory
+        mode: "0755"
+
+    - name: Install amdgpu textfile metrics script
+      become: true
+      ansible.builtin.copy:
+        dest: /usr/local/bin/amdgpu-textfile-metrics.sh
+        mode: "0755"
+        content: |
+          #!/bin/sh
+          # Write amdgpu presence metrics for node_exporter textfile collector.
+          # amdgpu-exporter is disabled (broken on emulated gfx1250); this is
+          # the lightweight alternative.
+          out=/var/lib/prometheus/node-exporter/amdgpu.prom
+          kfd=0; [ -e /dev/kfd ] && kfd=1
+          gpus=$(find /sys/bus/pci/drivers/amdgpu/ -maxdepth 1 \
+                      -name '????:??:??.?' 2>/dev/null | wc -l)
+          cat > "${out}.tmp" << EOF
+          # HELP amdgpu_kfd_present Whether /dev/kfd is present (1=yes, 0=no).
+          # TYPE amdgpu_kfd_present gauge
+          amdgpu_kfd_present ${kfd}
+          # HELP amdgpu_devices_total Number of amdgpu DRM render devices.
+          # TYPE amdgpu_devices_total gauge
+          amdgpu_devices_total ${gpus}
+          EOF
+          mv "${out}.tmp" "${out}"
+
+    - name: Install amdgpu metrics systemd timer
+      become: true
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/amdgpu-textfile-metrics.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Write amdgpu textfile metrics for node_exporter
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/bin/amdgpu-textfile-metrics.sh
+
+    - name: Install amdgpu metrics timer unit
+      become: true
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/amdgpu-textfile-metrics.timer
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Run amdgpu textfile metrics every 30s
+
+          [Timer]
+          OnBootSec=5s
+          OnUnitActiveSec=30s
+
+          [Install]
+          WantedBy=timers.target
+
+    - name: Configure node_exporter to use textfile collector
+      become: true
+      ansible.builtin.lineinfile:
+        path: /etc/default/prometheus-node-exporter
+        regexp: '^ARGS='
+        line: 'ARGS="--collector.textfile.directory=/var/lib/prometheus/node-exporter"'
+        create: true
+        mode: "0644"
+
+    - name: Enable and start amdgpu metrics timer
+      become: true
+      ansible.builtin.systemd:
+        name: amdgpu-textfile-metrics.timer
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Run metrics script immediately
+      become: true
+      ansible.builtin.command:
+        cmd: /usr/local/bin/amdgpu-textfile-metrics.sh
+      changed_when: true
+
+    - name: Restart node_exporter to pick up textfile config
+      become: true
+      ansible.builtin.systemd:
+        name: prometheus-node-exporter
+        state: restarted
 
     # amdgpu-exporter: AMD GPU metrics on :9488 from the ROCm apt repo.
     - name: Get latest rdma_exporter release from GitHub
@@ -389,8 +498,11 @@
   become: true
   tasks:
     - name: Clear any unit left by an earlier run
-      ansible.builtin.command:
-        cmd: systemctl reset-failed quickstart-ib-send-bw.service
+      ansible.builtin.shell:
+        cmd: |
+          systemctl stop quickstart-ib-send-bw.service 2>/dev/null || true
+          systemctl reset-failed quickstart-ib-send-bw.service 2>/dev/null || true
+        executable: /bin/bash
       changed_when: false
       failed_when: false
 
@@ -399,7 +511,12 @@
         cmd: >-
           systemd-run --unit=quickstart-ib-send-bw --collect
           /usr/bin/ib_send_bw -d {{ quickstart_ib_device }}
-          --iters 1000 --size 65536
+          {% if quickstart_rdma_duration is defined %}
+          --duration {{ quickstart_rdma_duration }}
+          {% else %}
+          --iters 1000
+          {% endif %}
+          --size 65536
       changed_when: true
 
     # Read the listening socket; do NOT connect to it. `wait_for: port:` was
@@ -429,8 +546,14 @@
     - name: Run ib_send_bw against the peer
       ansible.builtin.command:
         cmd: >-
-          timeout 300 /usr/bin/ib_send_bw -d {{ quickstart_ib_device }}
-          --iters 1000 --size 65536
+          timeout {{ (quickstart_rdma_duration | default(0) | int + 60) if quickstart_rdma_duration is defined else 300 }}
+          /usr/bin/ib_send_bw -d {{ quickstart_ib_device }}
+          {% if quickstart_rdma_duration is defined %}
+          --duration {{ quickstart_rdma_duration }}
+          {% else %}
+          --iters 1000
+          {% endif %}
+          --size 65536
           {{ hostvars[groups['fleet'][-1]].fleet_guest_ip }}
       register: quickstart_ib_send_bw
       changed_when: false

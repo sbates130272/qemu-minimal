@@ -285,7 +285,14 @@ def _add_quick_start(sub: argparse._SubParsersAction) -> None:
         help="Take the default answer to every prompt without asking.",
     )
     p.add_argument(
-        "--clean-qcow2", action="store_true", default=False,
+        "--rdma-duration", type=int, default=None, metavar="SECONDS",
+        help=(
+            "Run ib_send_bw for this many seconds instead of the default "
+            "1000 iterations. Useful for a longer soak test."
+        ),
+    )
+    p.add_argument(
+        "--clean-overlays", action="store_true", default=False,
         help=(
             "Delete the guest overlay and NVMe qcow2 files before starting, "
             "so the guests boot from a fresh overlay of the backing image. "
@@ -936,7 +943,8 @@ def _quick_start_cmd(args: argparse.Namespace) -> None:
         size_from_host=args.size_from_host,
         assume_yes=args.yes,
         follow=args.follow,
-        clean_qcow2=args.clean_qcow2,
+        clean_qcow2=args.clean_overlays,
+        rdma_duration=args.rdma_duration,
     )
 
 

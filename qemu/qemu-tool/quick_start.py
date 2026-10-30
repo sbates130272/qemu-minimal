@@ -111,6 +111,7 @@ class _State:
     layers: list[Path] = field(default_factory=list)
     username: str = ""
     rdma_delta: int | None = None
+    rdma_duration: int | None = None
 
     # ---- convenience readers -------------------------------------------
     def get(self, key: str) -> str:
@@ -669,14 +670,18 @@ def fetch_key(state: _State) -> None:
     authenticates as a user that exists with a key that does not.
     """
     _say("Fetching the guest keypair")
+    backing = state.values["VM_BACKING_IMAGE"]
+    ref_file = state.key.parent / "image-ref"
     if state.key.is_file():
-        print(f"already at {state.key}")
-        _adopt_login(state)
-        _publish_keypair(state)
-        return
+        cached_ref = ref_file.read_text().strip() if ref_file.exists() else ""
+        if cached_ref == backing:
+            print(f"already at {state.key}")
+            _adopt_login(state)
+            _publish_keypair(state)
+            return
+        print(f"image tag changed, re-fetching keypair")
 
     state.key_dir.mkdir(parents=True, exist_ok=True)
-    backing = state.values["VM_BACKING_IMAGE"]
     discovered = subprocess.run(["oras", "discover", backing, "--format", "json"],
                                 capture_output=True, text=True)
     if discovered.returncode != 0:
@@ -696,6 +701,7 @@ def fetch_key(state: _State) -> None:
     if not state.key.is_file():
         _die("the referrer carried no id_rsa")
     state.key.chmod(0o600)
+    ref_file.write_text(backing + "\n")
     _adopt_login(state)
     _publish_keypair(state)
 
@@ -752,8 +758,9 @@ def clean_overlays(state: _State) -> None:
         for path in sorted(images.glob(f"{name}.qcow2")) + sorted(
             images.glob(f"{name}-nvme*.qcow2")
         ):
-            _say(f"Removing {path.name}")
-            path.unlink()
+            if path.exists():
+                _say(f"Removing {path.name}")
+                path.unlink()
 
 
 def make_overlays(state: _State) -> None:
@@ -955,6 +962,8 @@ def configure_and_test(state: _State) -> None:
             "--private-key", str(state.key),
             "-e", f"quickstart_artifacts_dir={state.artifacts}",
             "-e", "ansible_remote_tmp=/tmp/.ansible/tmp"]
+    if state.rdma_duration is not None:
+        cmd += ["-e", f"quickstart_rdma_duration={state.rdma_duration}"]
     result = subprocess.run(cmd, cwd=state.repo_root / "ansible")
     if result.returncode != 0:
         _die("the configure-and-test playbook failed")
@@ -1126,6 +1135,7 @@ def run(
     assume_yes: bool,
     follow: bool = False,
     clean_qcow2: bool = False,
+    rdma_duration: int | None = None,
 ) -> None:
     if env_file:
         layers = [p.expanduser().resolve() for p in env_file]
@@ -1157,6 +1167,7 @@ def run(
         size_from_host=size_from_host,
         artifacts=Path("/var/tmp/quickstart-artifacts"),
         base_layers=layers,
+        rdma_duration=rdma_duration,
     )
     # Picks up the overlays an earlier verb left beside the stack, which is
     # what makes `up` then `test` -- two processes, as the CI lane runs them

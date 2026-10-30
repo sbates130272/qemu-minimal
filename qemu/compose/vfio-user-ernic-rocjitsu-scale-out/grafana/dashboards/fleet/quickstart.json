@@ -356,7 +356,7 @@
             "type": "prometheus",
             "uid": "fleet-prometheus"
           },
-          "expr": "count(up{job=\"amd-gpu\"} == 1) or vector(0)",
+          "expr": "sum(amdgpu_devices_total{job=\"fleet-node\"}) or vector(0)",
           "legendFormat": "GPUs up",
           "refId": "A"
         }
@@ -437,7 +437,7 @@
         "noValue": "N/A"
       },
       "title": "GPU Driver (amdgpu)",
-      "description": "Green = amd-metrics-exporter is up, which requires amdgpu to be loaded and bound to the gfx1250 device.",
+      "description": "Green = amdgpu_kfd_present == 1, which means amdgpu to be loaded and bound to the gfx1250 device.",
       "type": "stat",
       "targets": [
         {
@@ -445,7 +445,7 @@
             "type": "prometheus",
             "uid": "fleet-prometheus"
           },
-          "expr": "count(up{job=\"amd-gpu\"} == 1) or vector(0)",
+          "expr": "clamp_max(sum(amdgpu_kfd_present{job=\"fleet-node\"}), 1) or vector(0)",
           "legendFormat": "bound",
           "refId": "A"
         }
