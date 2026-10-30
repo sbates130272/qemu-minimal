@@ -4,7 +4,7 @@ title: VM Report — VM 1
 
 # VM Report — qemu-minimal — VM 1
 
-Generated: **2026-10-29 21:00 UTC** &middot; Commit: [`ae551b3`](https://github.com/sbates130272/qemu-minimal/commit/ae551b3be320575968f2716e40bd35b59b2e36a8) &middot; Status: **pass**
+Generated: **2026-10-30 15:04 UTC** &middot; Commit: [`e7c0f83`](https://github.com/sbates130272/qemu-minimal/commit/e7c0f839a444ad41e65f68f3d3214f3a910b7883) &middot; Status: **pass**
 
 ## Hardware
 
@@ -46,7 +46,7 @@ vda        8G disk
 
 ```
 Filesystem      Size  Used Avail Use% Mounted on
-/dev/vda1       6.7G  4.9G  1.8G  74% /
+/dev/vda1       6.7G  4.9G  1.8G  73% /
 /dev/vda13      989M  183M  739M  20% /boot
 ```
 
