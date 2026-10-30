@@ -73,7 +73,7 @@ jobs:
     # should cost a coffee, not an afternoon -- this gates merges.
     timeout-minutes: 45
     container:
-      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261029.g020459a-qemu11.1.3-vfu.5b9c722
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261014.geea0485-qemu11.1.2-vfu.8039244
       # Same three as report-for-quickstart, for the same reasons:
       # /var/lib/qemu-tool bind-mounted at the same path so the qcow2 pulled
       # in here is the file the sibling qemu container opens (compose bind

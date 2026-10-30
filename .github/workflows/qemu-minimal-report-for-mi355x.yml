@@ -76,7 +76,7 @@ jobs:
       # needs a patch stock QEMU does not carry (AGENTS.md issue 19). The
       # lane does not yet exercise P2P, but pinning stock here would mean the
       # report describes a machine the stack is not meant to run on.
-      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:20261029.g020459a-qemu.f91f120-vfu.3719c3a
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:20261021.g0f1f43f-qemu.aa4344e-vfu.8039244
       # /var/lib/qemu-tool is bind-mounted from the host at the same path so
       # the qcow2 pulled in here is the file the sibling qemu container
       # opens: compose bind mounts are resolved by the host docker daemon,

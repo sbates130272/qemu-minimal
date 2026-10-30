@@ -70,7 +70,7 @@ jobs:
     # and the fio one builds fio from source in-guest.
     timeout-minutes: 180
     container:
-      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261029.g020459a-qemu11.1.3-vfu.5b9c722
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261014.geea0485-qemu11.1.2-vfu.8039244
       options: >-
         --device /dev/kvm
         -v /var/run/docker.sock:/var/run/docker.sock

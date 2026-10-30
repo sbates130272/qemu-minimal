@@ -47,12 +47,27 @@ _STAMP_EXCEPTIONS: set[str] = set()
 
 
 def _tags_in_file(path: Path) -> list[tuple[str, str]]:
-    """Return [(stamp, suffix)] for every batesste-ci-images tag in *path*."""
+    """Return [(stamp, suffix)] for every batesste-ci-images tag in *path*.
+
+    In CI workflow YAML files the ``container: image:`` entry is the *runner*
+    environment, not an env-var image pin. The runner image needs a specific
+    version of docker CLI; it may legitimately lag behind the QEMU_IMAGE /
+    ERNIC_IMAGE pins. Skip those lines so the consistency check only validates
+    env-var pins that actually travel together.
+    """
     text = path.read_text(errors="replace")
+    # For YAML workflow files, exclude `  image: ...` lines (container runner).
+    if path.suffix in (".yml", ".yaml"):
+        # Strip lines that are the `image:` key under a `container:` block.
+        # These are indented and start with optional spaces then "image:".
+        text = "\n".join(
+            line for line in text.splitlines()
+            if not line.lstrip().startswith("image:")
+        )
     results = []
     for m in TAG_RE.finditer(text):
-        stamp_suffix = m.group(1)  # e.g. 20261022.gc533d98
-        rest = m.group(2)          # e.g. ernic.151379b-vfu.8039244
+        stamp_suffix = m.group(1)
+        rest = m.group(2)
         results.append((stamp_suffix, rest))
     return results
 
