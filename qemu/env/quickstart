@@ -31,26 +31,26 @@ VM_NAME_PREFIX=quickstart
 # Images -- containers AND qcow2, one build stamp across all four
 # ---------------------------------------------------------------------------
 #
-# One build stamp (20261030.gea6b921) with ernic.8f35f4a and rocjitsu.73c3cf3.
+# One build stamp (20261030.gadc94af) with ernic.8f35f4a and rocjitsu.73c3cf3.
 # The generator asserts this: a guest driver and a host rocm-ernic server from
 # different builds do not fail cleanly across the vfio-user/DSR boundary, they
 # wedge. Move all four together.
 #
 # This quickstart deliberately runs AHEAD of qemu/env/scale-out, which is
-# still on 20261030.gea6b921. The fleet file is what a long soak is pinned to
+# still on 20261030.gadc94af. The fleet file is what a long soak is pinned to
 # and what the committed stack is generated from, so it moves on purpose; this
 # one is the shop window and should show the current build. The two are
 # independent -- the stamp check is per settings file, not across them.
-QEMU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261030.gea6b921-qemu11.1.3-vfu.5b9c722
-ERNIC_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261030.gea6b921-ernic.8f35f4a-vfu.5b9c722
-ROCJITSU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261030.gea6b921-rocjitsu.73c3cf3
+QEMU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261030.gadc94af-qemu11.1.3-vfu.5b9c722
+ERNIC_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261030.gadc94af-ernic.8f35f4a-vfu.5b9c722
+ROCJITSU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261030.gadc94af-rocjitsu.73c3cf3
 
 # The published guest, as an OCI artifact -- not a runnable image. `qemu-tool
 # gen-vm --backing-image` does the `oras pull` and the decompression. This is
 # what makes the quickstart quick: the disk already carries the mainline
 # kernel, the ionic-ernic DKMS modules, the udev naming rules, rdma-core,
 # perftest and ROCm 10.1, so nothing is built here.
-VM_BACKING_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu:20261030.gea6b921-vm.resolute-ernic-rocjitsu-qm.ae551b3-qcow2
+VM_BACKING_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu:20261030.gadc94af-vm.resolute-ernic-rocjitsu-qm.ae551b3-qcow2
 
 # The image bakes its own account; it is not a cloud image cloud-init is about
 # to personalise, and gen-vm --backing-image returns before cloud-init

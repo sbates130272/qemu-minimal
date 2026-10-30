@@ -42,8 +42,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  ROCJITSU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261029.g020459a-rocjitsu.73c3cf3
-  QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261029.g020459a-qemu11.1.3-vfu.5b9c722
+  ROCJITSU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261030.gadc94af-rocjitsu.73c3cf3
+  QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261030.gadc94af-qemu11.1.3-vfu.5b9c722
   VM_IMAGES_DIR: /var/lib/qemu-tool/images
   # rocm_setup_skip_system_upgrade turns off the role's "upgrade: safe" +
   # autoremove pass. That pass pulls the whole distro forward -- 28 packages
@@ -97,6 +97,10 @@ jobs:
       uses: sbates130272/qemu-tool-action@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # rocjitsu_firmware_ip_discovery=false prevents baking ip_discovery.bin
+        # into the guest image so the Install ip_discovery.bin step below fires
+        # and provides the timing delay rocjitsu needs before amdgpu-probe runs.
+        ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false,"user_setup_deploy_ssh_key":false,"rocm_setup_skip_system_upgrade":true,"rocjitsu_firmware_ip_discovery":false}'
       with:
         operation: gen-vm
         qemu-tool-source: ./qemu
@@ -171,18 +175,58 @@ jobs:
           "dkms status amdgpu | grep -q installed"
         echo "✓ amdgpu DKMS module installed"
 
+    # ip_discovery.bin was intentionally not baked into the guest image (see
+    # rocjitsu_firmware_ip_discovery=false above) so that this step fires: it
+    # generates the blob from the live rocjitsu container via delegate_to:
+    # localhost (a ~30s docker run), copies it to the guest, and attempts a
+    # re-bind if amdgpu is already loaded. The docker run is the timing
+    # mechanism -- it gives rocjitsu time to finish initialising its vfio-user
+    # socket before amdgpu-probe runs. This mirrors what fleet-quickstart.yml
+    # does and is why the quickstart lane is reliably green here.
+    - name: Install ip_discovery.bin from live rocjitsu
+      run: |
+        ansible-playbook \
+          -i "qemu," \
+          ansible/playbooks/vm-amdgpu-firmware.yml \
+          -e "ansible_host=qemu" \
+          -e "ansible_port=2222" \
+          -e "ansible_user=ubuntu" \
+          -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"' \
+          -e "lmcache_guest_rocjitsu_image=$ROCJITSU_IMAGE"
+
     # This step has hung, wedging the ssh session until the job-level
     # timeout-minutes fired ~125 minutes later with no diagnostic output at all.
     # Bound it at all three layers -- the guest command, the ssh session and the
     # step -- so a hang fails in minutes and the dmesg dump below can be read.
+    #
+    # The rocjitsu healthcheck only verifies the socket file exists (test -S),
+    # not that rocjitsu is accepting vfio-user connections. amdgpu_pci_probe()
+    # can therefore race rocjitsu initialisation and fail silently -- modprobe
+    # returns 0 (module loaded) but no device bound. The Install ip_discovery.bin
+    # step above provides the timing buffer that the quickstart relies on.
     - name: Load amdgpu via amdgpu-probe
-      timeout-minutes: 5
+      timeout-minutes: 10
       run: |
-        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+        SSH="ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
           -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
-          -p 2222 ubuntu@qemu \
-          "sudo timeout 120 /usr/local/bin/amdgpu-probe"
-        echo "✓ amdgpu-probe completed"
+          -p 2222 ubuntu@qemu"
+        for attempt in 1 2 3; do
+          $SSH "sudo timeout 120 /usr/local/bin/amdgpu-probe" || true
+          deadline=$(($(date +%s) + 30))
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            gpus=$($SSH "cat /sys/class/kfd/kfd/topology/nodes/*/name 2>/dev/null | grep -c . || true" 2>/dev/null || echo 0)
+            [ "$gpus" -ge 1 ] && { echo "✓ amdgpu-probe completed, KFD GPU node present"; exit 0; }
+            sleep 3
+          done
+          if [ "$attempt" -lt 3 ]; then
+            echo "KFD GPU node not present after attempt $attempt, reloading amdgpu..." >&2
+            $SSH "sudo rmmod amdgpu" || true
+            sleep 5
+          fi
+        done
+        echo "no GPU KFD node after 3 amdgpu-probe attempts" >&2
+        $SSH "sudo dmesg | grep -i amdgpu | tail -30" >&2
+        exit 1
 
     - name: Dump guest dmesg on failure
       if: failure()

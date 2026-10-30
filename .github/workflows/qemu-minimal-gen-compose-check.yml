@@ -128,12 +128,11 @@ jobs:
                ["--profile", "metrics"]),
           ]
           # tapsetup cannot take a uid (Docker sets no ambient capabilities,
-          # so a non-root uid holds no effective NET_ADMIN); dockerapi must
-          # not, because it speaks to the host socket, which is root's.
-          # Both are documented in AGENTS.md under "Container privilege".
-          EXEMPT = lambda n: n.startswith("tapsetup-") or n == "dockerapi"
-          ALLOWED = {"tapsetup": {"NET_ADMIN"},
-                     "dockerapi": {"SETUID", "SETGID", "DAC_OVERRIDE"}}
+          # so a non-root uid holds no effective NET_ADMIN). alloy must not:
+          # it mounts /var/run/docker.sock to ship container logs, and that
+          # socket is root's. Both documented in AGENTS.md.
+          EXEMPT = lambda n: n.startswith("tapsetup-") or n == "alloy"
+          ALLOWED = {"tapsetup": {"NET_ADMIN"}}
 
           bad, total = [], 0
           for stack, env, extra in STACKS:
@@ -179,7 +178,7 @@ jobs:
                   # container. Only the read-only API proxy may hold it.
                   for vol in svc.get("volumes") or []:
                       src = vol.get("source") if isinstance(vol, dict) else str(vol)
-                      if src and "docker.sock" in src and name != "dockerapi":
+                      if src and "docker.sock" in src and name != "alloy":
                           bad.append(f"{at}: holds the Docker socket")
               print(f"  {stack}: {len(services)} services")
 

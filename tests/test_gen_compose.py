@@ -175,11 +175,11 @@ class TestRender(unittest.TestCase):
 
     def test_every_service_has_a_fixed_address(self):
         # 3 per VM (ernic, rocjitsu, qemu) plus the infra family: the stats
-        # exporter, Prometheus, Grafana, Loki, Alloy and the read-only Docker
-        # API proxy Alloy reads through. LMCache is off in the default env, so
-        # its two services are not emitted here -- see the lmcache tests.
+        # exporter, Prometheus, Grafana, Loki, Alloy. (dockerapi was removed:
+        # Alloy now mounts /var/run/docker.sock directly.) LMCache is off in
+        # the default env -- see the lmcache tests.
         body = gen_compose.render_compose(_plan(), ["env"], "abc")
-        self.assertEqual(body.count("ipv4_address:"), 8 * 3 + 6)
+        self.assertEqual(body.count("ipv4_address:"), 8 * 3 + 5)
         self.assertIn("subnet: 172.31.0.0/16", body)
 
     def test_lmcache_adds_the_coordinator_and_its_exporter(self):
@@ -187,7 +187,7 @@ class TestRender(unittest.TestCase):
         # the event-bus series, so the directory needs its own exporter.
         body = gen_compose.render_compose(
             _plan("\nLMCACHE_ENABLE=true\n"), ["env"], "abc")
-        self.assertEqual(body.count("ipv4_address:"), 8 * 3 + 8)
+        self.assertEqual(body.count("ipv4_address:"), 8 * 3 + 7)
         self.assertIn("ipv4_address: 172.31.0.12", body)
         self.assertIn("ipv4_address: 172.31.0.14", body)
 

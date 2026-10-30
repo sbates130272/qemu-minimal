@@ -141,6 +141,42 @@
         mode: '0644'
       become: true
 
+    # Belt-and-suspenders: the modprobe.d blacklist suppresses alias-based
+    # autoload, but the initramfs image predates it and mkinitramfs may still
+    # pull the module in via MODULES=dep or explicit autodetection. The kernel
+    # cmdline blacklist fires before any userspace modprobe, so it is the
+    # only mechanism that reliably prevents boot-time autoload on this guest.
+    # Mirrors batesste-ci-images/ubuntu-qcow2-gen/provision/rocjitsu.sh.
+    - name: Add amdgpu cmdline blacklist via grub.d
+      ansible.builtin.copy:
+        dest: /etc/default/grub.d/99-amdgpu-blacklist.cfg
+        content: |
+          GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT} modprobe.blacklist=amdgpu"
+        mode: '0644'
+      become: true
+
+    # resolute's mkinitramfs calls apply_add_modules TWICE: once before hooks
+    # and once after, so deleting amdgpu.ko* from $DESTDIR is not enough --
+    # the second pass re-adds it from __MODULES_TO_ADD. Clear both: remove
+    # 'amdgpu' from the pending-modules queue file AND delete any amdgpu.ko*
+    # already staged in $DESTDIR. Mirrors rocjitsu.sh's amdgpu-exclude hook.
+    - name: Install initramfs hook to exclude amdgpu.ko from the image
+      ansible.builtin.copy:
+        dest: /etc/initramfs-tools/hooks/amdgpu-exclude
+        mode: '0755'
+        content: !unsafe |
+          #!/bin/sh
+          PREREQ=""
+          prereqs() { echo "${PREREQ}"; }
+          case "${1}" in prereqs) prereqs; exit 0 ;; esac
+          [ -n "${DESTDIR}" ] || exit 0
+          if [ -n "${__MODULES_TO_ADD:-}" ] && [ -f "${__MODULES_TO_ADD}" ]; then
+              grep -vx 'amdgpu' "${__MODULES_TO_ADD}" > "${__MODULES_TO_ADD}.keep" || true
+              mv "${__MODULES_TO_ADD}.keep" "${__MODULES_TO_ADD}"
+          fi
+          find "${DESTDIR}" -name 'amdgpu.ko*' -delete
+      become: true
+
     # Pre-flight for gap mode: the gap set lands *beside* the packaged blobs
     # rather than replacing them, so those blobs have to be present first
     # (amdgpu-dkms-firmware >=31.60). Detect their absence before generating
@@ -679,12 +715,50 @@
         removes: /usr/sbin/update-initramfs.distrib
       become: true
 
+    # -k all covers every installed kernel, not just the running one. The guest
+    # will boot a different kernel than the one running here (the pinned mainline
+    # from ionic_image_prep); without -k all only that running kernel's initramfs
+    # is rebuilt and the boot kernel keeps amdgpu.ko. Mirrors rocjitsu.sh.
     - name: Regenerate initramfs so the amdgpu blacklist and stubs take effect
       ansible.builtin.command:
-        cmd: update-initramfs -u
+        cmd: update-initramfs -u -k all
       become: true
       when: rocjitsu_update_initramfs | bool
       changed_when: true
+
+    # Belt-and-suspenders: assert amdgpu.ko is absent from every initramfs image.
+    # A missed hook or a mkinitramfs re-run outside Ansible would otherwise
+    # silently leave the module in and the lane would fail with error -22 again.
+    # Mirrors the assertion in rocjitsu.sh lines 578-588.
+    - name: Assert amdgpu.ko absent from all initramfs images
+      ansible.builtin.shell:
+        cmd: |
+          found=0
+          for img in /boot/initrd.img-*; do
+            [ -f "$img" ] || continue
+            if lsinitramfs "$img" 2>/dev/null | grep -q 'amdgpu\.ko'; then
+              echo "ERROR: amdgpu.ko found in $img" >&2
+              found=1
+            fi
+          done
+          exit $found
+      become: true
+      when: rocjitsu_update_initramfs | bool
+      changed_when: false
+
+    - name: Update grub so the cmdline blacklist takes effect at next boot
+      ansible.builtin.command:
+        cmd: update-grub
+      become: true
+      when: rocjitsu_update_initramfs | bool
+      changed_when: true
+
+    - name: Assert modprobe.blacklist=amdgpu present in grub.cfg
+      ansible.builtin.shell:
+        cmd: grep -q 'modprobe.blacklist=amdgpu' /boot/grub/grub.cfg
+      become: true
+      when: rocjitsu_update_initramfs | bool
+      changed_when: false
 
     # amdrocm-blas-dev ships headers and the unversioned librocblas.so symlink
     # and nothing else -- it is 6 MB installed and depends only on libc6, so

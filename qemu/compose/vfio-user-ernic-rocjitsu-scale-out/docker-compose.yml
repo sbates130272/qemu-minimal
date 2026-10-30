@@ -5,7 +5,7 @@
 #   qemu-tool gen-compose --env-file qemu/env/scale-out
 #
 # env-file: qemu/env/scale-out
-# env-sha256: 843560a5e47f7069dee820550cb71b0cc3a818da27c95483ba5cb5d1ea749ded
+# env-sha256: 242f6c4fdc557b435f1464d25cb74ac8697218f006215ce29a75516b6f8624ef
 
 x-logging: &logging
   driver: json-file
@@ -328,7 +328,7 @@ services:
       - --vfio-socket
       - /run/vfu/rocjitsu-1.sock
     healthcheck:
-      test: ["CMD", "sh", "-c", "test -S /run/vfu/rocjitsu-1.sock"]
+      test: ["CMD", "sh", "-c", "grep -qE ' 01 [0-9]+ /run/vfu/rocjitsu-1[.]sock$' /proc/net/unix"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -349,7 +349,7 @@ services:
       - --vfio-socket
       - /run/vfu/rocjitsu-2.sock
     healthcheck:
-      test: ["CMD", "sh", "-c", "test -S /run/vfu/rocjitsu-2.sock"]
+      test: ["CMD", "sh", "-c", "grep -qE ' 01 [0-9]+ /run/vfu/rocjitsu-2[.]sock$' /proc/net/unix"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -370,7 +370,7 @@ services:
       - --vfio-socket
       - /run/vfu/rocjitsu-3.sock
     healthcheck:
-      test: ["CMD", "sh", "-c", "test -S /run/vfu/rocjitsu-3.sock"]
+      test: ["CMD", "sh", "-c", "grep -qE ' 01 [0-9]+ /run/vfu/rocjitsu-3[.]sock$' /proc/net/unix"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -391,7 +391,7 @@ services:
       - --vfio-socket
       - /run/vfu/rocjitsu-4.sock
     healthcheck:
-      test: ["CMD", "sh", "-c", "test -S /run/vfu/rocjitsu-4.sock"]
+      test: ["CMD", "sh", "-c", "grep -qE ' 01 [0-9]+ /run/vfu/rocjitsu-4[.]sock$' /proc/net/unix"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -412,7 +412,7 @@ services:
       - --vfio-socket
       - /run/vfu/rocjitsu-5.sock
     healthcheck:
-      test: ["CMD", "sh", "-c", "test -S /run/vfu/rocjitsu-5.sock"]
+      test: ["CMD", "sh", "-c", "grep -qE ' 01 [0-9]+ /run/vfu/rocjitsu-5[.]sock$' /proc/net/unix"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -433,7 +433,7 @@ services:
       - --vfio-socket
       - /run/vfu/rocjitsu-6.sock
     healthcheck:
-      test: ["CMD", "sh", "-c", "test -S /run/vfu/rocjitsu-6.sock"]
+      test: ["CMD", "sh", "-c", "grep -qE ' 01 [0-9]+ /run/vfu/rocjitsu-6[.]sock$' /proc/net/unix"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -454,7 +454,7 @@ services:
       - --vfio-socket
       - /run/vfu/rocjitsu-7.sock
     healthcheck:
-      test: ["CMD", "sh", "-c", "test -S /run/vfu/rocjitsu-7.sock"]
+      test: ["CMD", "sh", "-c", "grep -qE ' 01 [0-9]+ /run/vfu/rocjitsu-7[.]sock$' /proc/net/unix"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -475,7 +475,7 @@ services:
       - --vfio-socket
       - /run/vfu/rocjitsu-8.sock
     healthcheck:
-      test: ["CMD", "sh", "-c", "test -S /run/vfu/rocjitsu-8.sock"]
+      test: ["CMD", "sh", "-c", "grep -qE ' 01 [0-9]+ /run/vfu/rocjitsu-8[.]sock$' /proc/net/unix"]
       interval: 2s
       timeout: 5s
       retries: 30

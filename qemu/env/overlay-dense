@@ -94,5 +94,5 @@ LOGS_ENABLE=false
 # what lets one vfio-user device DMA into another's BAR -- with two GPUs and
 # two NICs sharing a guest, that is the interesting case. Same build stamp as
 # the golden file's images; _check_image_coherence hard-errors on a mismatch.
-QEMU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:20261030.gea6b921-qemu.f91f120-vfu.3719c3a
-ERNIC_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic-sbates-fork:20261030.gea6b921-ernic.8f35f4a-vfu.3719c3a
+QEMU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:20261030.gadc94af-qemu.f91f120-vfu.3719c3a
+ERNIC_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic-sbates-fork:20261030.gadc94af-ernic.8f35f4a-vfu.3719c3a

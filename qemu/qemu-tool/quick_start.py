@@ -979,6 +979,24 @@ def configure_and_test(state: _State) -> None:
     if state.rdma_delta <= 0:
         _die("the ernic byte counter did not move")
 
+    _report_nvme_summary(state)
+
+
+def _report_nvme_summary(state: _State) -> None:
+    """Print per-guest NVMe write/read bandwidth from the artifact files."""
+    import re as _re
+    pat = _re.compile(r"\|\s*write\s*\|\s*([\d.]+)\s*MiB/s")
+    pat_r = _re.compile(r"\|\s*read\s*\|\s*([\d.]+)\s*MiB/s")
+    for index in range(1, state.vm_count + 1):
+        md = state.artifacts / f"{state.vm(index)}.md"
+        if not md.exists():
+            continue
+        text = md.read_text()
+        m_w = pat.search(text)
+        m_r = pat_r.search(text)
+        if m_w and m_r:
+            _say(f"{state.vm(index)}: NVMe write {m_w.group(1)} MiB/s  read {m_r.group(1)} MiB/s")
+
 
 def _ernic_bytes(state: _State, index: int) -> int:
     """The NIC's own counter, from the dump rocm-ernic writes under -S.

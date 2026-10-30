@@ -55,7 +55,7 @@ services:
       replicas: "${ERNIC_COUNT:-1}"
     command: ["rocm-ernic", "-s", "/run/vfu/ernic-1.sock"]
     healthcheck:
-      test: ["CMD", "sh", "-c", "test -S /run/vfu/ernic-1.sock"]
+      test: ["CMD", "sh", "-c", "grep -qE ' 01 [0-9]+ /run/vfu/ernic-1[.]sock$' /proc/net/unix"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -73,7 +73,7 @@ services:
       - --vfio-socket
       - /run/vfu/rocjitsu-1.sock
     healthcheck:
-      test: ["CMD", "sh", "-c", "test -S /run/vfu/rocjitsu-1.sock"]
+      test: ["CMD", "sh", "-c", "grep -qE ' 01 [0-9]+ /run/vfu/rocjitsu-1[.]sock$' /proc/net/unix"]
       interval: 2s
       timeout: 5s
       retries: 30

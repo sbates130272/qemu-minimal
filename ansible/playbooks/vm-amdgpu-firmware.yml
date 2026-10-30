@@ -1,0 +1,9 @@
+---
+- name: Install ip_discovery.bin from live rocjitsu and re-bind amdgpu
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Include amdgpu firmware tasks from lmcache_guest
+      ansible.builtin.include_role:
+        name: lmcache_guest
+        tasks_from: amdgpu_firmware
