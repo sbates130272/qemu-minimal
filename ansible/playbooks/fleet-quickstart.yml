@@ -46,6 +46,13 @@
     # and pointless here -- matching the existing name makes netplan's
     # set-name a no-op instead of a rename race against udev.
     lmcache_guest_ernic_netplan_name: rocm-ernic0
+    # The published ernic-rocjitsu qcow2 uses networkd-dispatcher rather than
+    # systemd-networkd, so the netplan file would be written but never applied.
+    # The preflight (included below via netplan_ernic) assigns the address
+    # directly with ip-addr regardless, so skipping the netplan write saves
+    # the renderer check round-trip and avoids the "systemd-networkd is absent"
+    # warning that makes the output look like a failure.
+    lmcache_guest_netplan_ernic: false
   tasks:
     - name: Install the gfx1250 firmware stubs generated from this stack's rocjitsu
       ansible.builtin.include_role:
