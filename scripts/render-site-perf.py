@@ -94,7 +94,8 @@ REPORTS = (
     {"key": "ernic", "label": "ernic VM 1", "path": "ernic/index.md"},
     {"key": "ernic-vm2", "label": "ernic VM 2", "path": "ernic/vm2/index.md"},
     {"key": "hipfile-fio", "label": "hipFile fio", "path": "hipfile-fio/index.md"},
-    {"key": "lmcache", "label": "LMCache", "path": "lmcache/index.md"},
+    # report-for-lmcache is absent: the P2P transfer step times out
+    # on the current published images. Re-add once it runs clean for a week.
     # report-for-quickstart is absent for a different reason: it IS daily, so
     # it would qualify, but it is new and boots two guests on a runner that
     # cannot give them a core each (AGENTS.md issue 14). Adding it before it
