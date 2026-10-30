@@ -207,7 +207,8 @@ def _add_quick_start(sub: argparse._SubParsersAction) -> None:
             "all (default) does the lot. preflight checks this machine and "
             "touches nothing, up stops once the guests are booted, test "
             "configures and tests an already-up stack, report rewrites the "
-            "report, down stops it and keeps the overlays."
+            "report, logs shows the compose logs, down stops it and keeps "
+            "the overlays."
         ),
     )
     p.add_argument(

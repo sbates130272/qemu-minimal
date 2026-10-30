@@ -52,7 +52,7 @@ from .envfile import overrides as env_overrides, parse_layers
 from .gen_compose import run as gen_compose_run
 from .gen_vm import run as gen_vm_run
 
-VERBS = ("all", "preflight", "up", "test", "report", "down")
+VERBS = ("all", "preflight", "up", "test", "report", "down", "logs")
 
 # The settings file this subcommand is about. Shipped in the wheel, so a pipx
 # install has it without a checkout.
@@ -1156,6 +1156,9 @@ def run(
     # and a no-op before the first fetch.
     _adopt_login(state)
 
+    if verb == "logs":
+        _compose(state, "logs", "--no-log-prefix", check=False)
+        return
     if verb == "down":
         down(state)
         return
