@@ -12,7 +12,7 @@ exercises software reading a realistic PCIe tree.
   `99-rocm-ernic.rules` names the Ethernet interface `rocm-ernic%n` and `%n`
   is 0 for every one of them, so a single NIC wins that name and the other
   seven keep kernel names. Only the named one carries an address.
-- Generated: **2026-10-31 18:02 UTC** &middot; Commit: `unknown` &middot; Status: **pass**
+- Generated: **2026-11-01 18:39 UTC** &middot; Commit: `unknown` &middot; Status: **pass**
 
 ## The PCIe tree the guest enumerates
 
@@ -72,18 +72,18 @@ mesh bandwidth figure and must not be read as one.
 ```
 
 == RDMA on guest 1 ==
- remote address: LID 0000 QPN 0x0002 PSN 0xae9d1e
+ remote address: LID 0000 QPN 0x0008 PSN 0x82180b
  GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:11
 ---------------------------------------------------------------------------------------
  #bytes     #iterations    BW peak[MiB/sec]    BW average[MiB/sec]   MsgRate[Mpps]
- 65536      200              1666.49            1645.46		     0.026327
+ 65536      200              1301.28            1291.13		     0.020658
 ---------------------------------------------------------------------------------------
 ```
 
 ## What qemu-tool reports about the live guest
 
 ```
-VM: mi355x-ci-1  (pid 10165)
+VM: mi355x-ci-1  (pid 10434)
   SSH:       ssh -p 2222 ubuntu@localhost   (the accepted key has no private half here)
   User:      ubuntu
   Key:       SHA256:a56c2mbgJwKvkrLWcQhEoB2EHvcXLJZsVnmMO2nd4vk batesste-ci-images guest key (/var/lib/qemu-tool/images/keys/mi355x_id_rsa.pub, accepted by guest)
