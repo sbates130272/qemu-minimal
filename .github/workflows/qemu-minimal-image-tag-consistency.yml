@@ -1,77 +1,90 @@
 name: qemu-minimal - Image Tag Consistency Check
 
-# Every image tag in .github/workflows/ must match the stamp in qemu/env/.
-# A tag bump that updates env files but not workflow files ships the wrong
-# image in CI; a workflow update that misses an env file boots a different
-# image than the one the human tested. This check makes both failures visible
-# on the PR rather than silently in a later nightly run.
+# Every batesste-ci-images tag in workflow files, compose stacks, and env
+# files must share the same YYYYMMDD.gHASH stamp. A tag bump that updates
+# env files but forgets a workflow's container.image: (or vice versa) ships
+# a mismatched image in CI; this check makes the failure visible on the PR.
 #
-# Strategy: extract the canonical stamp from qemu/env/quickstart (the QEMU_IMAGE
-# line, which is always updated by the bump script), then grep every workflow
-# file for any batesste-ci-images tag that does NOT carry that stamp. A hit
-# means the workflow is pinned to a different build than the env files.
+# Fork images (sbates-fork) are built on a separate cadence and may carry a
+# different stamp. They are checked for internal consistency separately.
+#
+# What is searched: all files under .github/workflows/, .github/actions/,
+# qemu/compose/ (including generated stacks), and qemu/env/ (extension-less).
+# Markdown files are excluded: docs and CHANGELOG reference old tags by design.
 
 on:
   workflow_dispatch:
   pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
 
 jobs:
   image-tag-consistency:
     name: Image Tag Consistency
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.3.1
 
-      - name: Extract canonical stamp from qemu/env/quickstart
-        id: stamp
+      - name: Check batesste-ci-images stamps are consistent
         run: |
-          stamp=$(sed -n 's|^QEMU_IMAGE=.*:\([0-9]\{8\}\.g[0-9a-f]*\)-.*|\1|p' qemu/env/quickstart | head -1)
-          if [ -z "$stamp" ]; then
-            echo "::error::Could not extract stamp from qemu/env/quickstart"
+          SEARCH_DIRS=".github/workflows/ .github/actions/ qemu/compose/ qemu/env/"
+
+          # Extract all tags (YYYYMMDD.gHASH), split by whether the line
+          # references the fork image or the standard one.
+          all_lines=$(grep -rEh \
+            'batesste-ci-images[^:]*:[0-9]{8}\.g[a-f0-9]+' \
+            $SEARCH_DIRS 2>/dev/null || true)
+
+          nonfork_stamps=$(echo "$all_lines" | grep -v 'sbates-fork' |
+            grep -oE '[0-9]{8}\.g[a-f0-9]+' | sort -u)
+          fork_stamps=$(echo "$all_lines" | grep 'sbates-fork' |
+            grep -oE '[0-9]{8}\.g[a-f0-9]+' | sort -u)
+
+          fail=0
+
+          # --- standard images ---
+          nonfork_count=$(echo "$nonfork_stamps" | grep -c . || true)
+          if [ "$nonfork_count" -eq 0 ]; then
+            echo "::error::No standard batesste-ci-images refs found — search paths may be wrong"
             exit 1
           fi
-          echo "stamp=$stamp" >> "$GITHUB_OUTPUT"
-          echo "Canonical stamp: $stamp"
-
-      - name: Check workflow files for stale stamps
-        env:
-          STAMP: ${{ steps.stamp.outputs.stamp }}
-        run: |
-          # Find any batesste-ci-images tag in workflow files that carries a
-          # different date stamp. Matches lines like:
-          #   ...batesste-ci-images-...:20261028.gabcdef-...
-          # and flags them if the stamp is not $STAMP.
-          # Only check env-var style assignments (IMAGE=... or IMAGE: ...)
-          # not `container: image:` runner declarations, which are pinned on
-          # a different cadence from the stack images.
-          bad=$(grep -rn 'batesste-ci-images[^:]*:[0-9]\{8\}\.g[0-9a-f]*' \
-                  .github/workflows/ \
-                | grep -v "${STAMP}" \
-                | grep -v '^Binary' \
-                | grep -E '[A-Z_]+=|[A-Z_]+: ' \
-                || true)
-
-          if [ -n "$bad" ]; then
-            echo "::error::Workflow files contain image tags not on stamp ${STAMP}:"
-            echo "$bad"
-            echo ""
-            echo "Run: sed -i 's/<old-stamp>/${STAMP}/g' .github/workflows/*.yml"
-            exit 1
+          echo "Standard image stamps ($nonfork_count distinct):"
+          echo "$nonfork_stamps"
+          if [ "$nonfork_count" -gt 1 ]; then
+            echo "" >&2
+            echo "::error::Standard images have $nonfork_count stamps (expected 1). Files per stamp:" >&2
+            echo "$nonfork_stamps" | while IFS= read -r s; do
+              echo "  $s:" >&2
+              grep -rEn 'batesste-ci-images[^:]*:[0-9]{8}\.g[a-f0-9]+' \
+                $SEARCH_DIRS 2>/dev/null |
+                grep "$s" | grep -v 'sbates-fork' |
+                sed 's/^/    /' >&2
+            done
+            fail=1
+          else
+            echo "OK: all standard refs on stamp $nonfork_stamps"
           fi
-          echo "All workflow image tags are on stamp ${STAMP}."
 
-      - name: Check env files are mutually consistent
-        run: |
-          # All env files should share one stamp. Extract every stamp found
-          # across all env files and fail if there is more than one.
-          stamps=$(grep -rh 'batesste-ci-images[^:]*:[0-9]\{8\}\.g[0-9a-f]*' \
-                     qemu/env/ \
-                   | grep -oP '[0-9]{8}\.g[0-9a-f]+' \
-                   | sort -u)
-          count=$(echo "$stamps" | wc -l)
-          if [ "$count" -gt 1 ]; then
-            echo "::error::env files contain multiple stamps (expected 1):"
-            echo "$stamps"
-            exit 1
+          # --- fork images ---
+          fork_count=$(echo "$fork_stamps" | grep -c . || true)
+          if [ "$fork_count" -eq 0 ]; then
+            echo "No fork image refs found — skipping fork check"
+          elif [ "$fork_count" -gt 1 ]; then
+            echo "" >&2
+            echo "::error::Fork images have $fork_count stamps (expected 1). Files per stamp:" >&2
+            echo "$fork_stamps" | while IFS= read -r s; do
+              echo "  $s:" >&2
+              grep -rEn 'batesste-ci-images[^:]*:[0-9]{8}\.g[a-f0-9]+' \
+                $SEARCH_DIRS 2>/dev/null |
+                grep "$s" | grep 'sbates-fork' |
+                sed 's/^/    /' >&2
+            done
+            fail=1
+          else
+            echo "OK: all fork refs on stamp $fork_stamps"
           fi
-          echo "Env files all on one stamp: $stamps"
+
+          exit $fail
