@@ -22,8 +22,11 @@ collections:
   # 10.1. Nothing in it is breaking. Watch the vm-rocm and vm-rocjitsu lanes
   # on the bump -- rocm_setup is what they run, so they are where a surprise
   # would land.
+  #
+  # 3.2.1 is a patch release on 3.2.0. Watch the vm-rocm and vm-rocjitsu lanes
+  # as with any rocm_setup bump.
   - name: sbates130272.batesste
-    version: "3.1.0"
+    version: "3.2.1"
   # Pinned to the upstream git tree rather than Galaxy. Galaxy publishes only
   # 0.1.0, which is the pre-ionic collection: it builds the out-of-tree
   # rocm_ernic_eth/rocm_ernic_rdma modules and reads driver/ and rdma-core/,
