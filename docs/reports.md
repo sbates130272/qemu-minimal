@@ -1,43 +1,41 @@
 ---
-layout: page
 title: Reports
-permalink: /reports/
 ---
 
 <div class="report-grid">
   <div class="report-card">
     <span class="eyebrow">Single guest</span>
-    <h2><a href="{{ '/1vm/' | relative_url }}">Single VM report</a></h2>
+    <h2><a href="../1vm/">Single VM report</a></h2>
     <p>One <code>gen-vm</code> guest with NVMe attached, built and inspected on a GitHub-hosted runner.</p>
   </div>
   <div class="report-card">
     <span class="eyebrow">GPU guest</span>
-    <h2><a href="{{ '/rocjitsu/' | relative_url }}">rocjitsu report</a></h2>
+    <h2><a href="../rocjitsu/">rocjitsu report</a></h2>
     <p>rocjitsu guest inspection plus the current GEMM and hipFile benchmark outputs.</p>
   </div>
   <div class="report-card">
     <span class="eyebrow">Two guests</span>
-    <h2><a href="{{ '/ernic/' | relative_url }}">ernic report</a></h2>
+    <h2><a href="../ernic/">ernic report</a></h2>
     <p>The ernic stack, with VM 1 at the top-level page and VM 2 nested underneath.</p>
   </div>
   <div class="report-card">
     <span class="eyebrow">Two guests</span>
-    <h2><a href="{{ '/lmcache/' | relative_url }}">lmcache report</a></h2>
+    <h2><a href="../lmcache/">lmcache report</a></h2>
     <p>LMCache L1 P2P between two guests: whether the KV bytes crossed the ernic as RDMA rather than falling back to TCP.</p>
   </div>
   <div class="report-card">
     <span class="eyebrow">Two guests</span>
-    <h2><a href="{{ '/quickstart/' | relative_url }}">quickstart report</a></h2>
+    <h2><a href="../quickstart/">quickstart report</a></h2>
     <p>The README's Quick Start, run daily: <code>qemu-tool quick-start</code> brings up two guests from the published image, each with a GPU, an NVMe and an RDMA NIC, plus Prometheus and Grafana, with a GPU test and an inter-guest RDMA test.</p>
   </div>
   <div class="report-card">
     <span class="eyebrow">Node shape</span>
-    <h2><a href="{{ '/mi355x/' | relative_url }}">MI355X node report</a></h2>
+    <h2><a href="../mi355x/">MI355X node report</a></h2>
     <p>An MI355X-shaped PCIe tree: 8 GPUs, 8 RDMA NICs and 8 switches in one guest, one NIC and one GPU below each switch, with the tree the guest actually enumerates.</p>
   </div>
   <div class="report-card">
     <span class="eyebrow">fio lane</span>
-    <h2><a href="{{ '/hipfile-fio/' | relative_url }}">hipFile fio report</a></h2>
+    <h2><a href="../hipfile-fio/">hipFile fio report</a></h2>
     <p>The fio <code>libhipfile</code> benchmark lane, published independently from the rocjitsu report.</p>
   </div>
 </div>
@@ -48,10 +46,10 @@ permalink: /reports/
 | --- | --- | --- |
 | `report-for-vm-basic` | Push to `main`, daily 01:00 MST, manual dispatch | `/1vm/` |
 | `report-for-vm-rocjitsu` | Path-filtered push to `main`, daily 01:00 MST, manual dispatch | `/rocjitsu/` |
-| `report-for-vm-ernic` | Path-filtered push to `main`, daily 01:00 MST, manual dispatch | `/ernic/` and `/ernic/vm2/` (ernic VM 1 / VM 2) |
-| `report-for-lmcache` | Path-filtered push to `main`, weekly Sunday, manual dispatch | `/lmcache/` (LMCache L1 P2P over ernic RDMA) |
-| `report-for-quickstart` | Path-filtered push to `main`, daily 04:17 MST, manual dispatch | `/quickstart/` (`qemu-tool quick-start`, the README's Quick Start, end to end) |
-| `report-for-mi355x` | Path-filtered push to `main`, daily 06:41 MST, manual dispatch | `/mi355x/` (an MI355X-shaped PCIe tree, as the guest enumerates it) |
+| `report-for-vm-ernic` | Path-filtered push to `main`, daily 01:00 MST, manual dispatch | `/ernic/` and `/ernic/vm2/` |
+| `report-for-lmcache` | Path-filtered push to `main`, weekly Sunday, manual dispatch | `/lmcache/` |
+| `report-for-quickstart` | Path-filtered push to `main`, daily 04:17 MST, manual dispatch | `/quickstart/` |
+| `report-for-mi355x` | Path-filtered push to `main`, daily 06:41 MST, manual dispatch | `/mi355x/` |
 | `report-for-hipfile-fio` | Path-filtered push to `main`, daily 01:00 MST, manual dispatch | `/hipfile-fio/` |
 
 ## Why the reports stay separate

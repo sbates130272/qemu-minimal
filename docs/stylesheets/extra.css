@@ -1,7 +1,6 @@
----
----
-
-@import "minima";
+/* Component styles for qemu-minimal Pages.
+   MkDocs Material owns the header, nav and base typography;
+   this file owns the custom page-level components only. */
 
 :root {
   --qm-surface: #f6f8fb;
@@ -9,34 +8,18 @@
   --qm-text: #111827;
   --qm-muted: #4b5563;
   --qm-border: #d9e2f0;
-  --qm-accent: #165dff;
-  --qm-accent-soft: #e8f0ff;
+  --qm-accent: #009688;
+  --qm-accent-soft: #e0f2f1;
   --qm-success: #0f9d58;
 }
 
-.site-header {
-  border-top: 4px solid var(--qm-accent);
-  border-bottom-color: var(--qm-border);
-  background: var(--qm-surface-strong);
-}
-
-.site-title,
-.site-nav .page-link,
-.page-content {
-  color: var(--qm-text);
-}
-
-.page-content {
-  background: var(--qm-surface);
-}
-
-.wrapper {
-  max-width: 1160px;
-}
-
-.post-content,
-.home {
-  color: var(--qm-text);
+[data-md-color-scheme="slate"] {
+  --qm-surface: #1e2029;
+  --qm-surface-strong: #252836;
+  --qm-text: #e2e8f0;
+  --qm-muted: #94a3b8;
+  --qm-border: #374151;
+  --qm-accent-soft: #1a3340;
 }
 
 .hero,
@@ -67,8 +50,7 @@
 .panel p,
 .report-card p,
 .metric-card p,
-.callout p,
-.post-content li {
+.callout p {
   color: var(--qm-muted);
 }
 
@@ -105,8 +87,11 @@
 }
 
 .kicker,
+.eyebrow,
 .panel .eyebrow,
-.doc-section .eyebrow {
+.doc-section .eyebrow,
+.report-card .eyebrow,
+.metric-card .eyebrow {
   display: inline-block;
   margin-bottom: 0.6rem;
   color: var(--qm-accent);
@@ -153,15 +138,6 @@
   font-weight: 700;
   background: #e8f7ef;
   color: var(--qm-success);
-}
-
-.post-content table {
-  background: var(--qm-surface-strong);
-}
-
-.post-content h2,
-.post-content h3 {
-  margin-top: 2rem;
 }
 
 .callout {

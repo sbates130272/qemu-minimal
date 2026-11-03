@@ -28,12 +28,10 @@ collections:
   - name: sbates130272.batesste
     version: "3.2.1"
   # Pinned to the upstream git tree rather than Galaxy. Galaxy publishes only
-  # 0.1.0, which is the pre-ionic collection: it builds the out-of-tree
-  # rocm_ernic_eth/rocm_ernic_rdma modules and reads driver/ and rdma-core/,
-  # both deleted upstream on 2026-09-16. ">=0.1.0" looks like it would pick up
-  # 0.2.0 and never will, because 0.2.0 was never published. The collection
-  # lives in the repo's ansible/ subdirectory, which is what the #/ansible/
-  # fragment selects.
+  # 0.1.0, which is the pre-ionic collection (driver/ and rdma-core/ deleted
+  # upstream on 2026-09-16). ">=0.1.0" looks like it would pick up 0.2.0 and
+  # never will, because 0.2.0 was never published. The collection lives in the
+  # repo's ansible/ subdirectory, which is what the #/ansible/ fragment selects.
   #
   # Pinned to a SHA, not a branch: a git requirement is re-resolved on every
   # ansible-galaxy run (there is no installed version for it to compare

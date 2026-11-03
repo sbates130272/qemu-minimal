@@ -3,7 +3,7 @@
 [![GitHub Stars](https://img.shields.io/github/stars/sbates130272/qemu-minimal?label=Stars&style=flat-square)](https://github.com/sbates130272/qemu-minimal/stargazers)
 [![GitHub Issues](https://img.shields.io/github/issues/sbates130272/qemu-minimal?label=Issues&style=flat-square)](https://github.com/sbates130272/qemu-minimal/issues)
 [![Last Commit](https://img.shields.io/github/last-commit/sbates130272/qemu-minimal?label=Last%20Commit&style=flat-square)](https://github.com/sbates130272/qemu-minimal/commits/main)
-[![Platform](https://img.shields.io/badge/Platform-x86__64%20%7C%20ARM64%20%7C%20RISC--V-blue?style=flat-square)](https://github.com/sbates130272/qemu-minimal)
+[![Platform](https://img.shields.io/badge/Platform-x86__64-blue?style=flat-square)](https://github.com/sbates130272/qemu-minimal)
 [![Ubuntu](https://img.shields.io/badge/Ubuntu-Noble%20%7C%20Resolute-orange?style=flat-square&logo=ubuntu)](https://releases.ubuntu.com/noble/)
 [![GitHub Release](https://img.shields.io/github/v/release/sbates130272/qemu-minimal?label=Release&style=flat-square)](https://github.com/sbates130272/qemu-minimal/releases/latest)
 
@@ -76,7 +76,7 @@
      -- that is where LMCache and therefore SRQ live. The quick-start badge
      is deliberately ahead of both and is not part of this pairing; it boots
      no LMCache and creates no SRQ. -->
-[![Batesste Collection](https://img.shields.io/badge/sbates130272.batesste-3.1.0-9cf?style=flat-square)](https://galaxy.ansible.com/ui/repo/published/sbates130272/batesste/)
+[![Batesste Collection](https://img.shields.io/badge/sbates130272.batesste-3.2.1-9cf?style=flat-square)](https://galaxy.ansible.com/ui/repo/published/sbates130272/batesste/)
 [![Rocm-ernic Collection](https://img.shields.io/badge/sbates130272.rocm__ernic-61b934a-9cf?style=flat-square)](https://github.com/ROCm/rocm-ernic)
 
 <!-- The batesste-ci-images this repo pins. STATIC badges, hand-edited with
@@ -134,7 +134,8 @@ testing.
 **Key Features:**
 - Fast VM creation using Ubuntu cloud images and cloud-init (Noble and Resolute)
 - `qemu-tool` Python CLI with `run-vm`, `gen-vm`, `gen-compose`, `compose`,
-  `ernic-stats` and `list` subcommands
+  `list`, `inspect`, `down`, `check`, `ssh`, `man`, `qcow`,
+  `quick-start`, `lmcache-stats` and `ernic-stats` subcommands
 - Bidirectional libvirt domain XML support (`--domain` input, `--convert-to-libvirt` output)
 - NVMe device emulation with tracing support
 - PCIe device passthrough (VFIO)

@@ -604,9 +604,7 @@ def write_perf_page(site_dir: Path, history: List[Dict], green: Dict,
     latest_generated = latest.get("generated", "unknown") if latest else "unknown"
     latest_sha = latest.get("sha", "unknown") if latest else "unknown"
     body = f"""---
-layout: page
 title: Performance trends
-permalink: /perf/
 ---
 
 This page is generated during the Pages publish from retained benchmark history on

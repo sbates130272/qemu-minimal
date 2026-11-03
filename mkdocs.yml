@@ -1,0 +1,49 @@
+site_name: qemu-minimal
+site_description: >-
+  Documentation, reports, and performance tracking for qemu-minimal — a
+  minimal QEMU compose stack for rocm-ernic and rocjitsu GPU emulation.
+site_url: https://sbates130272.github.io/qemu-minimal/
+repo_url: https://github.com/sbates130272/qemu-minimal
+repo_name: sbates130272/qemu-minimal
+docs_dir: docs
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - toc.follow
+    - content.code.copy
+    - content.action.edit
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: deep orange
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: deep orange
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+extra_css:
+  - stylesheets/extra.css
+
+nav:
+  - Home: index.md
+  - Documentation: documentation.md
+  - Reports: reports.md
+  - Publishing: publishing.md
+  - Performance: perf/index.md
+
+markdown_extensions:
+  - admonition
+  - tables
+  - fenced_code
+  - attr_list
+  - md_in_html

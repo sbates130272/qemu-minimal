@@ -1,7 +1,5 @@
 ---
-layout: page
 title: qemu-minimal
-permalink: /
 ---
 
 <div class="hero">
@@ -13,9 +11,9 @@ permalink: /
     exposes through GitHub Pages.
   </p>
   <div class="cta-row">
-    <a class="button-link primary" href="{{ '/documentation/' | relative_url }}">Read the docs</a>
-    <a class="button-link secondary" href="{{ '/reports/' | relative_url }}">Browse report lanes</a>
-    <a class="button-link secondary" href="{{ '/perf/' | relative_url }}">Open performance trends</a>
+    <a class="button-link primary" href="documentation/">Read the docs</a>
+    <a class="button-link secondary" href="reports/">Browse report lanes</a>
+    <a class="button-link secondary" href="perf/">Open performance trends</a>
   </div>
   <div class="badge-strip">
     <div class="metric-card">
@@ -42,11 +40,11 @@ permalink: /
     <span class="eyebrow">Docs</span>
     <h2>What this site covers</h2>
     <p>
-      The Pages site now mirrors the role of the ROCm/rocm-ernic site more closely:
+      The Pages site mirrors the role of the ROCm/rocm-ernic site more closely:
       docs at the front, live measurements beside them, and report artifacts linked
       from one place.
     </p>
-    <p><a href="{{ '/documentation/' | relative_url }}">Documentation overview →</a></p>
+    <p><a href="documentation/">Documentation overview →</a></p>
   </div>
   <div class="panel">
     <span class="eyebrow">Performance</span>
@@ -56,7 +54,7 @@ permalink: /
       <code>gh-pages</code>, which produces the latest badges and a trend page for
       the site.
     </p>
-    <p><a href="{{ '/perf/' | relative_url }}">Performance trends →</a></p>
+    <p><a href="perf/">Performance trends →</a></p>
   </div>
   <div class="panel">
     <span class="eyebrow">Reports</span>
@@ -65,7 +63,7 @@ permalink: /
       Every report still comes from a real CI boot, so the published output reflects
       the guest that CI actually produced rather than static documentation.
     </p>
-    <p><a href="{{ '/reports/' | relative_url }}">Report index →</a></p>
+    <p><a href="reports/">Report index →</a></p>
   </div>
 </div>
 
