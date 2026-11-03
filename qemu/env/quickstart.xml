@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Fleet descriptor for the two-VM quickstart stack.
+
+  This is what README.md's Quick Start and
+  .github/workflows/qemu-minimal-report-for-quickstart.yml both use,
+  through `qemu-tool quick-start`. Keep it that way: the lane exists so
+  the documented path cannot rot, and that only works while the two run
+  the same thing.
+
+  PROM_DATA_DIR and GRAFANA_DATA_DIR are deliberately NOT set here.
+  quick-start writes both to directories beside the generated stack instead,
+  which needs no root and no chown, and puts the TSDB where somebody would
+  think to look for it.
+-->
+<fleet xmlns="http://qemu-tool/fleet/1.0">
+
+  <!-- ===================================================================
+       Fleet shape
+       =================================================================== -->
+
+  <!-- Two: the smallest fleet that can move a byte between guests. -->
+  <vm-count>2</vm-count>
+  <vm-name-prefix>quickstart</vm-name-prefix>
+
+  <!-- ===================================================================
+       Images — same build stamp as scale-out.xml
+       =================================================================== -->
+
+  <qemu-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261030.gadc94af-qemu11.1.3-vfu.5b9c722</qemu-ref>
+  <ernic-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261030.gadc94af-ernic.8f35f4a-vfu.5b9c722</ernic-ref>
+  <rocjitsu-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261030.gadc94af-rocjitsu.73c3cf3</rocjitsu-ref>
+  <backing-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu:20261030.gadc94af-vm.resolute-ernic-rocjitsu-qm.ae551b3-qcow2</backing-ref>
+
+  <!-- ===================================================================
+       Per-guest resources
+       =================================================================== -->
+
+  <vm-vcpus>4</vm-vcpus>
+  <vm-vmem>4096</vm-vmem>
+  <vm-shm-size>5g</vm-shm-size>
+  <vm-nvme>1</vm-nvme>
+  <vm-vfio-user-root-port>true</vm-vfio-user-root-port>
+
+  <!-- ===================================================================
+       Host paths
+       =================================================================== -->
+
+  <vm-images-dir>/var/lib/qemu-tool/images</vm-images-dir>
+  <vm-backing-shared>true</vm-backing-shared>
+  <vm-username>ubuntu</vm-username>
+  <vm-password>changeme</vm-password>
+  <qemu-tool-src>../../..</qemu-tool-src>
+
+  <!-- ===================================================================
+       Fleet wiring
+       =================================================================== -->
+
+  <ernic-tap>true</ernic-tap>
+
+  <!-- Forward node-exporter (9100), amd-metrics-exporter (9488),
+       amd-smi-exporter (9879), and GPU metrics (9490) from every guest. -->
+  <vm-extra-hostfwd>tcp::9100-:9100,tcp::9488-:9488,tcp::9879-:9879,tcp::9490-:9490</vm-extra-hostfwd>
+
+  <!-- ===================================================================
+       Observability
+       =================================================================== -->
+
+  <!-- Grafana is on so a new user can watch the RDMA test move bytes. -->
+  <grafana-enable>true</grafana-enable>
+
+  <!-- LMCache is off: beside the point for a quickstart. -->
+  <lmcache-enable>false</lmcache-enable>
+  <logs-enable>true</logs-enable>
+
+</fleet>

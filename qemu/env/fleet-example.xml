@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Fleet descriptor for the 8-VM ernic+rocjitsu scale-out stack.
+  This is the example / starting-point settings file.  Copy it and edit to
+  taste; pass it with the fleet-file flag to qemu-tool subcommands.
+
+  Format: each setting is a direct child of <fleet> with its value as text.
+  See qemu/env/scale-out.xml for the golden 8-VM settings and
+  qemu/env/quickstart.xml for a minimal 2-VM quick-start example.
+-->
+<fleet xmlns="http://qemu-tool/fleet/1.0">
+
+  <!-- ── Fleet shape ─────────────────────────────────────────────────── -->
+  <vm-count>8</vm-count>
+  <vm-name-prefix>stebates-fleet</vm-name-prefix>
+  <ssh-port-base>2222</ssh-port-base>
+  <stop-grace-period>120s</stop-grace-period>
+
+  <!-- ── Container images ─────────────────────────────────────────────── -->
+  <!--
+    Each ref is the full OCI reference.  The digest (optional) is the
+    coherence stamp gen-compose uses to detect a stale rendered stack.
+  -->
+  <qemu-ref>ghcr.io/sbates130272/qemu-libvfio-user-sbates-fork:qemu.d757fa6</qemu-ref>
+  <ernic-ref>ghcr.io/rocm-ernic/rocm-ernic:ernic.abc1234</ernic-ref>
+  <rocjitsu-ref>ghcr.io/rocm-ernic/rocjitsu:rocjitsu.def5678</rocjitsu-ref>
+  <backing-ref>ghcr.io/rocm-ernic/ernic-rocjitsu:20261001.g123abc</backing-ref>
+
+  <!-- ── Network ──────────────────────────────────────────────────────── -->
+  <fleet-prefix>172.31</fleet-prefix>
+  <ernic-subnet>192.168.100</ernic-subnet>
+  <ernic-mac-prefix>72:6f:63:6d</ernic-mac-prefix>
+
+  <!-- ── ERNIC mesh ───────────────────────────────────────────────────── -->
+  <ernic-tap>true</ernic-tap>
+  <ernic-tcp-port>6320</ernic-tcp-port>
+  <ernic-stats-port>9840</ernic-stats-port>
+  <ernic-nofile>65536</ernic-nofile>
+
+  <!-- ── LMCache ──────────────────────────────────────────────────────── -->
+  <lmcache-enable>true</lmcache-enable>
+  <lmcache-coord-port>8100</lmcache-coord-port>
+  <!-- chunk size in bytes -->
+  <lmcache-server-chunk-size>524288</lmcache-server-chunk-size>
+  <lmcache-server-hash-algo>sha256</lmcache-server-hash-algo>
+  <lmcache-server-l2-prefetch-policy>retain</lmcache-server-l2-prefetch-policy>
+  <lmcache-server-max-workers>4</lmcache-server-max-workers>
+  <lmcache-guest-seccomp-unconfined>false</lmcache-guest-seccomp-unconfined>
+  <lmcache-guest-ionic-bind-new-id>false</lmcache-guest-ionic-bind-new-id>
+  <lmcache-guest-ib-device-name>rocmernic0</lmcache-guest-ib-device-name>
+  <lmcache-guest-l2-prefetch-policy>retain</lmcache-guest-l2-prefetch-policy>
+
+  <!-- ── Metrics ──────────────────────────────────────────────────────── -->
+  <!--
+    Directories are host paths.  gen-compose bind-mounts them and chowns
+    them to the container user on first up.
+    Uncomment and set to your preferred paths:
+  -->
+  <!-- <prom-data-dir>${HOME}/Projects/qemu-minimal/prom-data</prom-data-dir> -->
+  <!-- <grafana-data-dir>${HOME}/Projects/qemu-minimal/grafana-data</grafana-data-dir> -->
+
+  <!-- ── Logging ──────────────────────────────────────────────────────── -->
+  <log-max-size>50m</log-max-size>
+  <log-max-files>3</log-max-files>
+
+</fleet>

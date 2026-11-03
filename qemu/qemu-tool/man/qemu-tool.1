@@ -4,7 +4,7 @@ qemu\-tool \- run, generate and list QEMU virtual machines
 .SH SYNOPSIS
 .B qemu\-tool
 .RB [ \-\-version ]
-.I {quick\-start,check,down,run\-vm,gen\-vm,gen\-compose,compose,ernic\-stats,lmcache\-stats,list,inspect,ssh,qcow,man}
+.I {quick\-start,check,down,run\-vm,gen\-vm,gen\-compose,compose,ernic\-stats,lmcache\-stats,list,inspect,ssh,qcow,man,fleet\-to\-env}
 .RI [ options ]
 .SH DESCRIPTION
 .B qemu\-tool
@@ -189,9 +189,9 @@ Anything still unknown is asked for on stdin. Every prompt has an answer it
 takes on its own when stdin is not a terminal, so a CI run needs no flags to
 stay non\-interactive \(em and the chosen answer is printed either way.
 .TP
-.BI \-\-env\-file " FILE"
-Settings file. Defaults to the bundled
-.IR qemu/env/quickstart ,
+.BI \-\-fleet\-file " FILE"
+Fleet settings file (XML). Defaults to the bundled
+.IR qemu/env/quickstart.xml ,
 which ships inside the wheel, so this works with no checkout. Repeatable;
 later files override keys set by earlier ones.
 .TP
@@ -579,17 +579,17 @@ lengths. The exception is a key naming a field that is already a list
 where the commas mean several values for
 .I one
 VM and the whole value goes to every VM. See
-.I env/scale\-out
+.I env/scale\-out.xml
 for the full key list.
 .TP
 .BI \-\-stack " NAME"
 Stack to generate. Default:
 .IR vfio\-user\-ernic\-rocjitsu\-scale\-out .
 .TP
-.BI \-\-env\-file " FILE"
-Settings file. Same search path, and the same repeatable last-wins layering,
-as every other subcommand. The generated header records one
-.I "# env\-file:"
+.BI \-\-fleet\-file " FILE"
+Fleet settings file (XML). Repeatable; later files override keys set by earlier
+ones. The generated header records one
+.I "# fleet\-file:"
 line per layer and a single
 .I "# env\-sha256:"
 over all of them concatenated, so an edit to the overlay invalidates the
@@ -1305,6 +1305,18 @@ To run a remote command, separate it with
 .EX
 qemu\-tool ssh stebates\-fleet\-1 \-\- ibv_devinfo \-l
 .EE
+.SH FLEET-TO-ENV OPTIONS
+Reads one or more XML fleet settings files and prints their merged key/value
+pairs to standard output in
+.B KEY=VALUE
+env-file syntax, one per line. Useful for inspecting the effective settings
+after overlay merging, or for feeding them to tools that read env files rather
+than XML.
+.TP
+.BI \-\-fleet\-file " FILE"
+Fleet settings file (XML). Repeatable; later files override keys set by earlier
+ones, in the same last-wins order as every other subcommand that takes
+.BR \-\-fleet\-file .
 .SH VM IDENTIFICATION
 .B qemu\-tool
 stamps every VM it launches with two generic QEMU options:

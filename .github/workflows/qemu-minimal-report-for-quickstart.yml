@@ -45,7 +45,7 @@ on:
     paths:
       - 'qemu/qemu-tool/quick_start.py'
       - 'scripts/check-vm-devices.sh'
-      - 'qemu/env/quickstart'
+      - 'qemu/env/quickstart.xml'
       - 'ansible/playbooks/fleet-quickstart.yml'
       - 'ansible/playbooks/roles/rocjitsu_gpu_test/tasks/amdgpu_firmware.yml'
       - 'ansible/playbooks/roles/lmcache_guest/tasks/netplan_ernic.yml'
@@ -69,7 +69,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  ENV_FILE: qemu/env/quickstart
+  FLEET_FILE: qemu/env/quickstart.xml
   STACK_DIR: /var/lib/qemu-tool/stacks/quickstart
   KEY_DIR: /var/lib/qemu-tool/quickstart-key
 
@@ -175,6 +175,15 @@ jobs:
         esac
         qemu-tool quick-start --help >/dev/null
 
+    # Generate a temp env file from the XML fleet descriptor so that commands
+    # that still require --env-file (docker compose, check-vm-devices.sh,
+    # inspect) have a plain KEY=VALUE file to read. The XML is authoritative.
+    - name: Generate temp env from fleet XML
+      run: |
+        FLEET_ENV=$(mktemp /tmp/quickstart-XXXXXX.env)
+        qemu-tool fleet-to-env --fleet-file "$FLEET_FILE" > "$FLEET_ENV"
+        echo "FLEET_ENV=$FLEET_ENV" >> "$GITHUB_ENV"
+
     - name: Install collections
       run: ansible-galaxy collection install --no-deps -r ansible/requirements.yml
 
@@ -188,7 +197,7 @@ jobs:
         setpriv --reuid "$CIUSER_UID" --regid "$CIUSER_UID" --init-groups \
           env HOME="$CIUSER_HOME" \
           qemu-tool quick-start up \
-            --env-file "$ENV_FILE" \
+            --fleet-file "$FLEET_FILE" \
             --stack-dir "$STACK_DIR" \
             --key-dir "$KEY_DIR" \
             --in-network \
@@ -202,7 +211,7 @@ jobs:
         setpriv --reuid "$CIUSER_UID" --regid "$CIUSER_UID" --init-groups \
           env HOME="$CIUSER_HOME" \
           qemu-tool quick-start test \
-            --env-file "$ENV_FILE" \
+            --fleet-file "$FLEET_FILE" \
             --stack-dir "$STACK_DIR" \
             --key-dir "$KEY_DIR" \
             --report-dir site/quickstart \
@@ -248,8 +257,8 @@ jobs:
     - name: Check the reported devices
       run: |
         set -eu
-        NET=$(sed -n 's/^FLEET_NET_PREFIX=//p' "$ENV_FILE" | tail -1)
-        GUEST_USER=$(sed -n 's/^VM_USERNAME=//p' "$ENV_FILE" | tail -1)
+        NET=$(grep -m1 "^FLEET_NET_PREFIX=" "$FLEET_ENV" | cut -d= -f2-)
+        GUEST_USER=$(grep -m1 "^VM_USERNAME=" "$FLEET_ENV" | cut -d= -f2-)
         # The image beats the settings file on who exists in it, the same way
         # quick-start's _adopt_login does -- it has already pulled
         # vm-info.json here as part of the keypair referrer. Without this the
@@ -258,7 +267,7 @@ jobs:
         FROM_IMAGE=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1])).get("username") or "")' \
             "${KEY_DIR}/vm-info.json" 2>/dev/null || true)
         [ -n "$FROM_IMAGE" ] && GUEST_USER=$FROM_IMAGE
-        PREFIX=$(sed -n 's/^VM_NAME_PREFIX=//p' "$ENV_FILE" | tail -1)
+        PREFIX=$(grep -m1 "^VM_NAME_PREFIX=" "$FLEET_ENV" | cut -d= -f2-)
 
         # Nothing else in this lane holds an SSH session open: Ansible closes
         # its connections and the RDMA test runs as a transient systemd unit,
@@ -301,7 +310,7 @@ jobs:
         # and reported ssh_key_source None, which --strict-key correctly
         # refused. quick-start writes the adopted name to env.image-login
         # beside the stack for exactly this.
-        set -- --env-file "$ENV_FILE"
+        set -- --env-file "$FLEET_ENV"
         [ -f "${STACK_DIR}/env.image-login" ] &&
           set -- "$@" --env-file "${STACK_DIR}/env.image-login"
 
@@ -320,7 +329,7 @@ jobs:
           exit 0
         }
         docker compose --project-name quickstart \
-          --env-file "${GITHUB_WORKSPACE}/${ENV_FILE}" --profile metrics \
+          --env-file "$FLEET_ENV" --profile metrics \
           logs --tail 100 || true
 
     - name: Take the stack down
@@ -328,7 +337,7 @@ jobs:
       run: |
         qemu-tool quick-start down \
           --stack-dir "$STACK_DIR" \
-          --env-file "$ENV_FILE" \
+          --fleet-file "$FLEET_FILE" \
           --yes || true
 
     # Upload only, and on success only. publish-pages.yml is the sole writer

@@ -1,8 +1,8 @@
-"""Read VM settings from the env file shared with docker compose.
+"""Read VM settings from an env-format file for docker compose.
 
-One file (qemu/env/example -> qemu/.env) configures gen-vm, run-vm and the
-compose stacks. The format is the docker compose env-file format, so compose
-consumes the same file verbatim via --env-file.
+The authoritative format is now fleet XML (see qemu/env/fleet-example.xml).
+Env-format files remain for commands that pass --env-file to docker compose;
+use `qemu-tool fleet-to-env` to generate one from an XML fleet config.
 """
 
 from __future__ import annotations

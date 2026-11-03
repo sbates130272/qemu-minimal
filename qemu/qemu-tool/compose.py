@@ -118,7 +118,7 @@ def _resolve_recorded(name: str, cdir: Path) -> Path | None:
     directory gen-compose ran in -- which it does not record. Two bases are
     therefore tried, both of them things the reader can actually know: the
     stack directory, and the cwd (the committed stacks record
-    "qemu/env/scale-out", which resolves from the repo root and nowhere else).
+    "qemu/env/scale-out.xml", which resolves from the repo root and nowhere else).
     Returns None rather than searching further: falling back to
     envfile.find() here is how a 32-VM YAML ends up driven by an ambient
     qemu/.env.

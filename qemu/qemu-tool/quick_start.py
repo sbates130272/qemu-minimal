@@ -56,7 +56,7 @@ VERBS = ("all", "preflight", "up", "test", "report", "down", "logs")
 
 # The settings file this subcommand is about. Shipped in the wheel, so a pipx
 # install has it without a checkout.
-_ENV_NAME = "quickstart"
+_FLEET_NAME = "quickstart.xml"
 
 # Where the guest keypair referrer is pulled to, and what it carries.
 _VM_INFO_TYPE = "application/vnd.batesste.vm-info.v1"
@@ -92,7 +92,7 @@ _VMEM_CEILING_MB = 8192
 
 @dataclass
 class _State:
-    env_file: Path
+    fleet_file: Path
     stack_dir: Path
     key_dir: Path
     report_dir: Path | None
@@ -119,7 +119,7 @@ class _State:
         """A settings value, falling back to the generator's own default.
 
         PROM_PORT, GRAFANA_PORT and PUBLISH_BIND_ADDR are not in
-        qemu/env/quickstart -- they do not need to be, because gen_compose
+        qemu/env/quickstart.xml -- they do not need to be, because gen_compose
         defaults them. Reading them from the file alone meant this printed a
         URL for a port the stack was not publishing, or raised. Taking the
         same dict the generator takes them from is what keeps the two from
@@ -244,14 +244,14 @@ def _repo_root(explicit: Path | None) -> Path | None:
     return None
 
 
-def _packaged_env() -> Path | None:
-    """qemu/env/quickstart, from the checkout or from inside the wheel."""
-    source = Path(__file__).resolve().parent.parent / "env" / _ENV_NAME
+def _packaged_fleet() -> Path | None:
+    """qemu/env/quickstart.xml, from the checkout or from inside the wheel."""
+    source = Path(__file__).resolve().parent.parent / "env" / _FLEET_NAME
     if source.is_file():
         return source
     from .resources import ENV as _ENV_PACKAGE, packaged_path
 
-    packaged = packaged_path(_ENV_PACKAGE, _ENV_NAME)
+    packaged = packaged_path(_ENV_PACKAGE, _FLEET_NAME)
     if packaged is not None and packaged.is_file():
         return packaged
     return None
@@ -318,7 +318,12 @@ def _resolve_key_dir(requested: Path, explicit: bool) -> Path:
 
 
 def _reload(state: _State) -> None:
-    state.values = parse_layers(state.layers)
+    from .fleet_xml import FleetXml
+    from .gen_compose import _fleet_to_env
+    fleet_cfg = FleetXml.parse_layers(state.base_layers)
+    xml_values = _fleet_to_env(fleet_cfg)
+    env_values = parse_layers(state.layers)
+    state.values = {**xml_values, **env_values}
 
 
 # The overlays this subcommand writes beside the stack, in the order they
@@ -338,16 +343,16 @@ _LAYER_ORDER = ("env.sized", "env.images", "env.ports", "env.metrics",
 
 
 def _rescan_layers(state: _State) -> None:
-    """Rebuild state.layers as the base files plus whatever is on disk."""
+    """Rebuild state.layers from generated env overlays, then reload values."""
     generated = [state.stack_dir / name for name in _LAYER_ORDER]
-    state.layers = state.base_layers + [p for p in generated if p.is_file()]
+    state.layers = [p for p in generated if p.is_file()]
     _reload(state)
 
 
 def _write_layer(state: _State, name: str, body: dict[str, str], why: str) -> None:
     """Write (or rewrite) one generated overlay on top of the settings file.
 
-    An overlay rather than an edit of qemu/env/quickstart, for the reason
+    An overlay rather than an edit of qemu/env/quickstart.xml, for the reason
     --env-file is repeatable at all: the committed file stays the thing a
     reader diffs, and a run on a small host does not look like a settings
     change.
@@ -703,7 +708,7 @@ def _adopt_login(state: _State) -> None:
     if not from_image or from_image == state.username:
         return
     _say(f"Guest account is {from_image} per the image, not {state.username} "
-         f"per {state.env_file}; using {from_image}")
+         f"per {state.fleet_file}; using {from_image}")
     state.username = from_image
     # Handed to every qemu-tool call that BAKES the account, not just to the
     # ones that use it: gen-vm records the username in the per-VM sidecar and
@@ -847,7 +852,7 @@ def generate_stack(state: _State) -> None:
     """Render the stack to the scratch directory, never over the committed one.
 
     qemu/compose/vfio-user-ernic-rocjitsu-scale-out/docker-compose.yml is
-    generated from qemu/env/scale-out and `gen-compose --check` compares the
+    generated from qemu/env/scale-out.xml and `gen-compose --check` compares the
     two in CI.
     """
     _say("Generating the stack")
@@ -872,7 +877,26 @@ def generate_stack(state: _State) -> None:
         _write_layer(state, "env.metrics", data,
                      "Prometheus, Grafana and Loki state, beside the stack.")
 
-    gen_compose_run(list(state.layers), state.stack_dir)
+    # Build a runtime XML overlay from values that only exist at run time
+    # (VM_VCPUS, VM_IMAGES_DIR, PROM_DATA_DIR, etc.) so gen-compose can bake
+    # them into the generated docker-compose.yml.
+    _ENV_TO_XML = {
+        "VM_VCPUS": "vm-vcpus", "VM_VMEM": "vm-vmem", "VM_SHM_SIZE": "vm-shm-size",
+        "VM_IMAGES_DIR": "vm-images-dir", "VM_SSH_PORT_BASE": "vm-ssh-port-base",
+        "PROM_DATA_DIR": "prom-data-dir", "GRAFANA_DATA_DIR": "grafana-data-dir",
+        "LOKI_DATA_DIR": "loki-data-dir", "VM_USERNAME": "vm-username",
+        "VM_PASSWORD": "vm-password",
+    }
+    runtime_xml = state.stack_dir / "fleet-runtime.xml"
+    xml_lines = ['<?xml version="1.0" encoding="UTF-8"?>',
+                 '<fleet xmlns="http://qemu-tool/fleet/1.0">']
+    for env_key, xml_key in _ENV_TO_XML.items():
+        if env_key in state.values:
+            xml_lines.append(f"  <{xml_key}>{state.values[env_key]}</{xml_key}>")
+    xml_lines.append('</fleet>')
+    runtime_xml.write_text("\n".join(xml_lines) + "\n")
+    gen_compose_run(None, state.stack_dir,
+                    fleet_file=list(state.base_layers) + [runtime_xml])
     print(f"wrote {state.stack_dir / 'docker-compose.yml'}")
 
     # The stack bind-mounts a qemu-tool source tree into its containers and
@@ -1228,7 +1252,7 @@ def _summary(state: _State) -> None:
 
 def run(
     verb: str,
-    env_file: list[Path] | None,
+    fleet_file: list[Path] | None,
     stack_dir: Path | None,
     key_dir: Path | None,
     report_dir: Path | None,
@@ -1243,23 +1267,23 @@ def run(
     rdma_duration: int | None = None,
     nvme_duration: int | None = None,
 ) -> None:
-    if env_file:
-        layers = [p.expanduser().resolve() for p in env_file]
+    if fleet_file:
+        layers = [p.expanduser().resolve() for p in fleet_file]
         for layer in layers:
             if not layer.is_file():
-                _die(f"settings file not found: {layer}")
+                _die(f"fleet file not found: {layer}")
         base = layers[0]
     else:
-        packaged = _packaged_env()
+        packaged = _packaged_fleet()
         if packaged is None:
-            _die("qemu/env/quickstart is missing from this install; "
-                 "pass --env-file")
+            _die("qemu/env/quickstart.xml is missing from this install; "
+                 "pass --fleet-file")
         layers = [packaged]
         base = packaged
 
     requested = stack_dir or Path("/var/lib/qemu-tool/stacks/quickstart")
     state = _State(
-        env_file=base,
+        fleet_file=base,
         stack_dir=_resolve_stack_dir(requested.expanduser(), stack_dir is not None),
         key_dir=_resolve_key_dir(
             (key_dir or Path("/var/lib/qemu-tool/quickstart-key")).expanduser(),

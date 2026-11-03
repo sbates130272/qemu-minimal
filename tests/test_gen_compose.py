@@ -401,22 +401,22 @@ class TestEnvFileLayering(unittest.TestCase):
 
     def test_header_names_every_layer_in_order(self):
         body = gen_compose.render_compose(
-            _plan(), ["qemu/env/scale-out", "qemu/env/overlay-ci"], "abc")
+            _plan(), ["qemu/env/scale-out.xml", "qemu/env/overlay-ci.xml"], "abc")
         named = [line[len("# env-file: "):] for line in body.splitlines()
                  if line.startswith("# env-file: ")]
-        self.assertEqual(named, ["qemu/env/scale-out", "qemu/env/overlay-ci"])
+        self.assertEqual(named, ["qemu/env/scale-out.xml", "qemu/env/overlay-ci.xml"])
 
     def test_regenerate_comment_reproduces_the_render(self):
-        names = ["qemu/env/scale-out", "qemu/env/overlay-ci"]
+        names = ["qemu/env/scale-out.xml", "qemu/env/overlay-ci.xml"]
         body = gen_compose.render_compose(_plan(), names, "abc")
         self.assertIn(
-            "#   qemu-tool gen-compose --env-file qemu/env/scale-out "
-            "--env-file qemu/env/overlay-ci",
+            "#   qemu-tool gen-compose --fleet-file qemu/env/scale-out.xml "
+            "--fleet-file qemu/env/overlay-ci.xml",
             body,
         )
 
     def test_provenance_round_trips_with_two_layers(self):
-        names = ["qemu/env/scale-out", "qemu/env/overlay-ci"]
+        names = ["qemu/env/scale-out.xml", "qemu/env/overlay-ci.xml"]
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "docker-compose.yml"
             out.write_text(gen_compose.render_compose(_plan(), names, "cafef00d"))
@@ -468,9 +468,9 @@ class TestEnvFileLayering(unittest.TestCase):
     def test_single_layer_header_is_unchanged(self):
         body = gen_compose.render_compose(_plan(), ["env.scale-out"], "abc")
         self.assertIn("# Regenerate after changing env.scale-out:\n", body)
-        self.assertIn("#   qemu-tool gen-compose --env-file env.scale-out\n", body)
+        self.assertIn("#   qemu-tool gen-compose --fleet-file env.scale-out\n", body)
         self.assertIn("# env-file: env.scale-out\n", body)
-        self.assertIn("# env-sha256: abc\n", body)
+        self.assertIn("# env-sha256: abc  # pre-commit: ignore\n", body)
         self.assertEqual(body.count("# env-file: "), 1)
 
     def test_missing_layer_names_the_offending_file(self):
@@ -1173,7 +1173,7 @@ class TestStackAssetCheck(unittest.TestCase):
         self.addCleanup(os.chdir, cwd)
         with contextlib.redirect_stdout(out):
             gen_compose.run(
-                Path("qemu/env/scale-out"),
+                Path("qemu/env/scale-out.xml"),
                 Path("qemu/compose/vfio-user-ernic-rocjitsu-scale-out"),
                 check=True)
         self.assertIn("Up to date", out.getvalue())

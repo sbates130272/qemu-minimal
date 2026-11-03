@@ -12,20 +12,19 @@ file up to date as infrastructure changes.
 - `qemu/compose/vfio-user-rocjitsu-vm/` — single-VM rocjitsu-only compose stack
 - `qemu/compose/vfio-user-ernic-rocjitsu-vm/` — single-VM ernic + rocjitsu compose stack
 - `qemu/compose/vfio-user-ernic-2vm/` — two-VM ernic mesh stack; rocjitsu GPUs opt-in via `--profile rocjitsu-vm1/vm2`
-- `qemu/compose/vfio-user-ernic-rocjitsu-scale-out/` — N-VM fleet, **generated** by `qemu-tool gen-compose` from `qemu/env/scale-out` plus whichever overlay applies; `--profile metrics` adds Prometheus+Grafana, `--profile lmcache` adds the LMCache coordinator
-- `qemu/compose/vfio-user-mi355x-node/` — MI355X-shaped PCIe topology: one EPYC socket, 8 GPUs, 8 NICs and 8 PCIe switches per VM, one NIC + one GPU below each switch. Also **generated**, from `qemu/env/mi355x-node`. 8 ernics per VM means 8 *mesh nodes* per VM, so the fleet caps at 4 VMs, not 40 — see its README
+- `qemu/compose/vfio-user-ernic-rocjitsu-scale-out/` — N-VM fleet, **generated** by `qemu-tool gen-compose` from `qemu/env/scale-out.xml` plus whichever overlay applies; `--profile metrics` adds Prometheus+Grafana, `--profile lmcache` adds the LMCache coordinator
+- `qemu/compose/vfio-user-mi355x-node/` — MI355X-shaped PCIe topology: one EPYC socket, 8 GPUs, 8 NICs and 8 PCIe switches per VM, one NIC + one GPU below each switch. Also **generated**, from `qemu/env/mi355x-node.xml`. 8 ernics per VM means 8 *mesh nodes* per VM, so the fleet caps at 4 VMs, not 40 — see its README
 - `qemu/docker/` — Dockerfiles this repo owns, one directory per image (`lmcache/` so far). Built by hand and referenced by tag, unlike the stack-local `tapsetup/` which compose builds itself
 - `qemu/compose/vfio-user-ernic-rocjitsu-scale-out/` — N-VM ernic mesh + one
-  GPU per VM. **Generated** by `qemu-tool gen-compose` from `qemu/env/scale-out`
+  GPU per VM. **Generated** by `qemu-tool gen-compose` from `qemu/env/scale-out.xml`
   (plus an overlay, see below); do not hand-edit it
-- `qemu/env/` — every settings file, named without the old `env.` prefix the
-  folder now carries. It is a sibling of `qemu/compose/` and `qemu/packages.d/`
+- `qemu/env/` — every settings file (XML fleet configs). It is a sibling of `qemu/compose/` and `qemu/packages.d/`
   and is mapped in place by `package-dir`, for the same reason they are: these
   are data the wheel ships, not Python source, so they do not belong under
   `qemu/qemu-tool/`
-- `qemu/env/scale-out` + `qemu/env/overlay-ci` + `qemu/env/overlay-mi100` — the
+- `qemu/env/scale-out.xml` + `qemu/env/overlay-ci.xml` + `qemu/env/overlay-mi100.xml` — the
   fleet settings: one golden file and the committed overlays that sit on it
-- `qemu/env/quickstart` + `qemu/qemu-tool/quick_start.py` + `ansible/playbooks/fleet-quickstart.yml` — the README's Quick Start, which is now `qemu-tool quick-start`: two guests from the published qcow2, each with a GPU, an NVMe and an ernic, Prometheus and Grafana beside them, plus a GPU test and an inter-guest RDMA test. The `report-for-quickstart` lane runs *that subcommand*, not a copy of its steps, so the documented path cannot rot. It replaced the shell script that used to live under `scripts/`, which is deleted; do not reintroduce a shell wrapper beside it. The guests are sized from the host by default (4 vCPU floor, 8 ceiling), and every prompt it asks takes its default answer when stdin is not a terminal, so CI needs no flag to stay non-interactive. Its settings file runs AHEAD of `qemu/env/scale-out` on purpose — the stamp check is per file, not across them
+- `qemu/env/quickstart.xml` + `qemu/qemu-tool/quick_start.py` + `ansible/playbooks/fleet-quickstart.yml` — the README's Quick Start, which is now `qemu-tool quick-start`: two guests from the published qcow2, each with a GPU, an NVMe and an ernic, Prometheus and Grafana beside them, plus a GPU test and an inter-guest RDMA test. The `report-for-quickstart` lane runs *that subcommand*, not a copy of its steps, so the documented path cannot rot. It replaced the shell script that used to live under `scripts/`, which is deleted; do not reintroduce a shell wrapper beside it. The guests are sized from the host by default (4 vCPU floor, 8 ceiling), and every prompt it asks takes its default answer when stdin is not a terminal, so CI needs no flag to stay non-interactive. Its settings file runs AHEAD of `qemu/env/scale-out.xml` on purpose — the stamp check is per file, not across them
 - `images/` — qcow2 VM disk images (backing + overlay pairs, **not** `/var/lib/qemu-tool/images`)
 - `ansible/` — Ansible playbooks for VM provisioning
 - `rocm-ernic-enablement.md` — running log of rocm-ernic integration status and bugs
@@ -65,14 +64,14 @@ are not available inside the VM.
 ## Two-VM compose stack
 
 ```bash
-cp qemu/env/example qemu/.env
-# Edit qemu/.env: set VM_IMAGES_DIR to the repo images/ absolute path
+cp qemu/env/fleet-example.xml my-fleet.xml
+# Edit my-fleet.xml: set VM_IMAGES_DIR to the repo images/ absolute path
 # Add --profile rocjitsu-vm1 --profile rocjitsu-vm2 to enable GPUs
-qemu-tool compose --stack vfio-user-ernic-2vm \
+qemu-tool compose --fleet-file my-fleet.xml --stack vfio-user-ernic-2vm \
   --profile rocjitsu-vm1 --profile rocjitsu-vm2 up -d
 ```
 
-Key `qemu/.env` values that differ from the example defaults:
+Key fleet XML values that differ from the example defaults:
 
 | Variable       | Correct value                                        |
 |----------------|------------------------------------------------------|
@@ -92,7 +91,7 @@ emulated RDMA NIC and one rocjitsu GPU per VM, VM 1 the mesh manager and 2..N
 workers dialling it.
 
 **Its `docker-compose.yml`, `prometheus.yml` and `fleet-inventory.yml` are
-generated.** Edit `qemu/env/scale-out` and re-run `qemu-tool gen-compose`; a
+generated.** Edit `qemu/env/scale-out.xml` and re-run `qemu-tool gen-compose`; a
 hand edit is lost on the next regeneration and `gen-compose --check` fails in
 CI — the `Gen Compose Check` lane, which also runs `docker compose config`
 against the committed stack, a tap-enabled render, and a
@@ -118,14 +117,14 @@ provenance header records layer paths as typed, and relative ones resolve
 against the stack directory.
 
 ```bash
-qemu-tool gen-vm --env-file qemu/env/scale-out \
+qemu-tool gen-vm --fleet-file qemu/env/scale-out.xml \
     --vm-name stebates-fleet-1 --backing-image "$VM_BACKING_IMAGE"
 for n in $(seq 2 8); do
-  qemu-tool gen-vm --env-file qemu/env/scale-out --vm-name stebates-fleet-$n \
+  qemu-tool gen-vm --fleet-file qemu/env/scale-out.xml --vm-name stebates-fleet-$n \
       --backing-file images/stebates-fleet-1-backing.qcow2
 done
-qemu-tool gen-compose --env-file qemu/env/scale-out
-qemu-tool compose --env-file qemu/env/scale-out \
+qemu-tool gen-compose --fleet-file qemu/env/scale-out.xml
+qemu-tool compose --fleet-file qemu/env/scale-out.xml \
     --stack vfio-user-ernic-rocjitsu-scale-out --profile metrics up -d
 ```
 
@@ -146,17 +145,17 @@ search path, and the digest is still re-hashed, so a stack rendered from an
 edited layer still warns. `compose` does not regenerate and does not edit
 `VM_COUNT`: a re-render stays a typed `gen-compose --output-dir`.
 
-**One golden file plus overlays, not a file per host.** `qemu/env/scale-out` is
+**One golden file plus overlays, not a file per host.** `qemu/env/scale-out.xml` is
 authoritative and is what packaging ships; a CI lane or a particular host adds
 a short committed overlay naming only the keys it changes. `--env-file` is
 repeatable on `gen-vm`, `run-vm`, `gen-compose`, `compose` and `inspect`, and
 later files win key by key, so the overlay goes last:
 
 ```bash
-qemu-tool gen-compose --env-file qemu/env/scale-out --env-file qemu/env/overlay-mi100 \
+qemu-tool gen-compose --fleet-file qemu/env/scale-out.xml --fleet-file qemu/env/overlay-mi100.xml \
     --output-dir /var/lib/qemu-tool/stacks/mi100-fleet
 qemu-tool compose --stack-dir /var/lib/qemu-tool/stacks/mi100-fleet \
-    --env-file qemu/env/scale-out --env-file qemu/env/overlay-mi100 \
+    --fleet-file qemu/env/scale-out.xml --fleet-file qemu/env/overlay-mi100.xml \
     --profile metrics up -d
 ```
 
@@ -320,8 +319,8 @@ on a vfio-user socket:
 Both are warnings, not refusals — it still serves — so a wrong value here is
 the quiet kind. Two things have to travel with a large BAR: `VM_PCI_HOLE64_SIZE`
 must cover it (`512G` is the phys-bits ceiling, see the MI355X README), and
-vfio-user P2P DMA needs the fork QEMU image (issue 19) — `qemu/env/overlay-mi100`
-pins it, the golden `env/scale-out` does not.
+vfio-user P2P DMA needs the fork QEMU image (issue 19) — `qemu/env/overlay-mi100.xml`
+pins it, the golden `env/scale-out.xml` does not.
 
 ## Tearing a stack down
 
@@ -1048,8 +1047,8 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     `...-qemu-libvfio-user-sbates-fork` was built from `qemu.d757fa6`
     (2026-09-22), one commit short, and needed a rebuild. That rebuild has
     happened: the tag reads `qemu.31e3d06`, which is this patch. So the
-    choice is now a real one — the `qemu/env/overlay-mi100` overlay pins the
-    fork and gets P2P DMA; the golden `env/scale-out`, and so everything
+    choice is now a real one — the `qemu/env/overlay-mi100.xml` overlay pins the
+    fork and gets P2P DMA; the golden `env/scale-out.xml`, and so everything
     without that overlay, pins the stock image and does not.
 
     What has NOT changed is that the stock image cannot do it, so a stack
@@ -1290,7 +1289,7 @@ publish a green report about a stack half of which had not started.
 **`quickstart-boot` is the PR-time half of that lane, and is not a report
 lane.** report-for-quickstart runs on push to main and on a cron, so a broken
 quickstart was found the morning after the merge; `Gen Compose Check` renders
-`qemu/env/quickstart` on every PR but starts nothing. This one boots **one**
+`qemu/env/quickstart.xml` on every PR but starts nothing. This one boots **one**
 guest and asserts the emulated NIC is there by its full `1dd8:1002` +
 `1dd8:5400` tuple and that `ibv_devinfo` reports `PORT_ACTIVE`, then stops. It
 publishes nothing and uploads no artifact, so none of the five publish-pages
@@ -1301,7 +1300,7 @@ is real and two guests on a 4-core runner is 2x oversubscribed against the
 mesh manager's untunable 20 s heartbeat (issue 14) — tolerable once a day,
 not on a check that gates merges. At `VM_COUNT=1` the mesh is just the
 manager and `gen_compose` omits the worker branch entirely. **The `-slim`
-guest image**, pinned through an *overlay* so `qemu/env/quickstart` is
+guest image**, pinned through an *overlay* so `qemu/env/quickstart.xml` is
 untouched: slim is 0.75 GB against the fat image's 2.52 GB at the same stamp,
 and it keeps the 7.2.4 kernel, the ionic DKMS modules, rdma-core and perftest
 while dropping every compiler — which is exactly why the GPU test stays in

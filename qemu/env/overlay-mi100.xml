@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  mi100 fleet overlay (32-VM).
+
+  Layers on top of scale-out.xml. Only keys that differ from the golden file
+  are present here; all other settings are inherited from scale-out.xml.
+
+  Uses the fork QEMU/ernic images for P2P DMA support (issue 19).
+
+  Usage: qemu-tool gen-compose
+    fleet-file: qemu/env/scale-out.xml, qemu/env/overlay-mi100.xml
+    output-dir: /var/lib/qemu-tool/stacks/mi100-fleet
+-->
+<fleet xmlns="http://qemu-tool/fleet/1.0">
+
+  <vm-count>32</vm-count>
+  <vm-name-prefix>stebates-mi100</vm-name-prefix>
+  <vm-images-dir>/var/lib/qemu-tool/images-stebates</vm-images-dir>
+
+  <!-- Fork image: carries hw/vfio P2P DMA patch (31e3d06a). -->
+  <qemu-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:20261030.gadc94af-qemu.f91f120-vfu.3719c3a</qemu-ref>
+  <ernic-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic-sbates-fork:20261030.gadc94af-ernic.8f35f4a-vfu.3719c3a</ernic-ref>
+
+  <!-- Only one hostfwd rule (vs scale-out's two). -->
+  <vm-extra-hostfwd>tcp::9100-:9100</vm-extra-hostfwd>
+
+  <prom-data-dir>/var/lib/qemu-tool/stacks/mi100-fleet/prom-data</prom-data-dir>
+  <qemu-tool-src>/home/AMD/stebates/Projects/qemu-minimal</qemu-tool-src>
+
+  <!-- Clear the virtio-fs share path (scale-out sets it non-empty). -->
+  <vm-filesystem></vm-filesystem>
+
+  <lmcache-enable>false</lmcache-enable>
+  <logs-enable>false</logs-enable>
+
+</fleet>

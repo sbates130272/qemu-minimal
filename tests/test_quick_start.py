@@ -169,7 +169,7 @@ class PromptTest(unittest.TestCase):
 
 
 class SettingsFileTest(unittest.TestCase):
-    """The promises qemu/env/quickstart makes to the subcommand."""
+    """The promises qemu/env/quickstart.xml makes to the subcommand."""
 
     def setUp(self):
         self.text = ENV_FILE.read_text()
@@ -224,7 +224,7 @@ class SettingsFileTest(unittest.TestCase):
         # from the checkout, so it was answering a question nobody asked.
         # Measured afterwards on a real `uv tool install ./qemu`:
         # _packaged_env() returned None and `quick-start` exited with
-        # "qemu/env/quickstart is missing from this install".
+        # "qemu/env/quickstart.xml is missing from this install".
         self.assertIn('"quickstart"', _env_package_data(),
                       "quickstart is not in the wheel's env allow-list: "
                       + _env_package_data())
@@ -329,7 +329,7 @@ class LayerTest(unittest.TestCase):
             qs._write_layer(state, "env.image-login", {"VM_USERNAME": "x"}, "t")
             qs._write_layer(state, "env.sized", {"VM_VCPUS": "4"}, "t")
             self.assertEqual(["env.sized", "env.image-login"],
-                             [p.name for p in state.layers[1:]])
+                             [p.name for p in state.layers])
 
     def test_every_layer_the_code_writes_is_in_the_order(self):
         # A layer written under a name not in _LAYER_ORDER would be dropped
@@ -350,7 +350,7 @@ class NoStaleScriptTest(unittest.TestCase):
 
     HAYSTACK = ("README.md", "AGENTS.md", "site/reports.md",
                 ".github/workflows/qemu-minimal-report-for-quickstart.yml",
-                "qemu/env/quickstart",
+                "qemu/env/quickstart.xml",
                 "ansible/playbooks/fleet-quickstart.yml")
 
     def test_the_script_is_gone(self):
