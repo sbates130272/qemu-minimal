@@ -371,5 +371,23 @@ class NoStaleScriptTest(unittest.TestCase):
         self.assertEqual([], stale, f"still names the deleted script: {stale}")
 
 
+class WorkflowWorkspaceTest(unittest.TestCase):
+    def test_report_lanes_chown_the_container_workspace(self):
+        workflows = (
+            ".github/workflows/qemu-minimal-report-for-quickstart.yml",
+            ".github/workflows/qemu-minimal-report-for-lmcache.yml",
+            ".github/workflows/qemu-minimal-report-for-mi355x.yml",
+        )
+        for name in workflows:
+            with self.subTest(workflow=name):
+                text = (REPO_ROOT / name).read_text()
+                match = re.search(
+                    r"(?m)^\s+chown:\s+>-\n((?:[ \t]+.*\n)+)", text)
+                self.assertIsNotNone(match, f"{name} has no chown input")
+                paths = match.group(1)
+                self.assertIn("$GITHUB_WORKSPACE", paths)
+                self.assertNotIn("${{ github.workspace }}", paths)
+
+
 if __name__ == "__main__":
     unittest.main()
