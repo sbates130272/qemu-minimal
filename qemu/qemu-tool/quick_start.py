@@ -407,8 +407,46 @@ def _shm_free_mb() -> int | None:
         return None
 
 
+def _windows_listening_ports() -> frozenset[int]:
+    """Return ports LISTENING on the Windows host, or empty set if not WSL2.
+
+    In WSL2, Docker publishes ports through the Windows port proxy.  A port
+    that appears free in the WSL2 network namespace (via socket.bind) may
+    still be occupied on the Windows side — e.g. VS Code auto-forwarding a
+    port from a previous stack run.  Check once per process and cache.
+    """
+    try:
+        osrelease = Path("/proc/sys/kernel/osrelease").read_text()
+        if "microsoft" not in osrelease.lower():
+            return frozenset()
+        r = subprocess.run(
+            ["cmd.exe", "/c", "netstat", "-ano"],
+            capture_output=True, text=True, timeout=10,
+        )
+        ports: set[int] = set()
+        for line in r.stdout.splitlines():
+            parts = line.split()
+            if len(parts) >= 4 and parts[3] == "LISTENING" and ":" in parts[1]:
+                try:
+                    ports.add(int(parts[1].rsplit(":", 1)[1]))
+                except ValueError:
+                    pass
+        return frozenset(ports)
+    except Exception:
+        return frozenset()
+
+
+_WINDOWS_PORTS: frozenset[int] | None = None
+
+
 def _port_free(port: int) -> bool:
     import socket
+
+    global _WINDOWS_PORTS
+    if _WINDOWS_PORTS is None:
+        _WINDOWS_PORTS = _windows_listening_ports()
+    if port in _WINDOWS_PORTS:
+        return False
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
