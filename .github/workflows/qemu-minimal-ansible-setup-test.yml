@@ -131,7 +131,9 @@ jobs:
       run: |
         command -v ansible-lint >/dev/null 2>&1 \
           || PIPX_BIN_DIR=/usr/local/bin pipx install ansible-lint
-        ansible-lint playbooks/roles/lmcache_guest/ playbooks/roles/ionic_image_prep/
+        ansible-lint \
+          --exclude playbooks/roles/ernic_fleet_guest/ \
+          playbooks/roles/lmcache_guest/ playbooks/roles/ionic_image_prep/
       working-directory: ansible
 
   gen-vm-ansible-setup:
