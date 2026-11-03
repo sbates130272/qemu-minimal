@@ -882,11 +882,25 @@ def _ga_run(path, timeout=2.0, budget=8.0):
     grab("/sys/module/amdgpu/initstate")
     grab("/sys/module/ionic/initstate")
     grab("/sys/module/ionic_rdma/initstate")
-    # NIC device uevent: DRIVER=ionic when ionic is bound. Try both the
-    # udev-renamed name and common fallback kernel names.
+    # NIC device uevent and PCI ID attributes. Try the udev-renamed names first,
+    # then every interface the agent already enumerated -- so a NIC whose udev
+    # rule hasn't run (published qcow2 ships none) is still detected by PCI ID.
+    _probed_nics: set[str] = set()
     for _nic in ("rocm-ernic0", "rocmernic0", "rocm-ernic1", "rocmernic1"):
+        _probed_nics.add(_nic)
         grab("/sys/class/net/%s/device/uevent" % _nic)
         grab("/sys/class/net/%s/device/resource" % _nic)
+    for _iface_rec in result.get("interfaces") or []:
+        _iname = (_iface_rec.get("name") or "") if isinstance(_iface_rec, dict) else ""
+        if not _iname or _iname == "lo" or _iname in _probed_nics:
+            continue
+        _probed_nics.add(_iname)
+        grab("/sys/class/net/%s/device/vendor" % _iname)
+        grab("/sys/class/net/%s/device/device" % _iname)
+        grab("/sys/class/net/%s/device/subsystem_vendor" % _iname)
+        grab("/sys/class/net/%s/device/subsystem_device" % _iname)
+        grab("/sys/class/net/%s/device/uevent" % _iname)
+        grab("/sys/class/net/%s/device/resource" % _iname)
 
     # The NQN only ever refines a disk's origin -- without it _block_origin
     # falls back to the command line and finally to "unknown" -- so a miss
@@ -1306,14 +1320,34 @@ def _describe_bar(bar: dict[str, Any]) -> str:
     return f"BAR{bar['index']} {_human_bytes(bar['size'])} ({kind})"
 
 
+_ERNIC_VID = "0x1dd8"
+_ERNIC_DID = "0x1002"
+_ERNIC_SDID = "0x5400"
+
+
+def _is_ernic_by_pci(files: dict[str, str], iface: str) -> bool:
+    """True when sysfs PCI ID attributes match the rocm-ernic tuple."""
+    base = "/sys/class/net/%s/device/" % iface
+    return (
+        files.get(base + "vendor", "").strip() == _ERNIC_VID
+        and files.get(base + "device", "").strip() == _ERNIC_DID
+        and files.get(base + "subsystem_device", "").strip() == _ERNIC_SDID
+    )
+
+
 def _nic_devices(ga_info: dict[str, Any]) -> list[dict[str, Any]]:
     """rocm-ernic NICs with BARs from guest sysfs resource files."""
+    files = ga_info.get("files") or {}
     out: list[dict[str, Any]] = []
-    for path, text in sorted((ga_info.get("files") or {}).items()):
+    for path, text in sorted(files.items()):
         if "/sys/class/net/" not in path or not path.endswith("/device/resource"):
             continue
         iface = path.split("/sys/class/net/")[1].split("/")[0]
-        if not (iface.startswith("rocm-ernic") or iface.startswith("rocmernic")):
+        if not (
+            iface.startswith("rocm-ernic")
+            or iface.startswith("rocmernic")
+            or _is_ernic_by_pci(files, iface)
+        ):
             continue
         out.append({"name": iface, "bars": _parse_bars(text)})
     return out
