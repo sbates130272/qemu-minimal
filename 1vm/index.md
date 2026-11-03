@@ -4,7 +4,7 @@ title: VM Report
 
 # VM Report — qemu-minimal
 
-Generated: **2026-11-02 18:02 UTC** &middot; Commit: [`e7c0f83`](https://github.com/sbates130272/qemu-minimal/commit/e7c0f839a444ad41e65f68f3d3214f3a910b7883) &middot; Status: **pass**
+Generated: **2026-11-03 13:19 UTC** &middot; Commit: [`c847413`](https://github.com/sbates130272/qemu-minimal/commit/c8474133c5e1100b8d4e59ea84332cbcaa3c0db0) &middot; Status: **pass**
 
 ## Hardware
 
@@ -56,7 +56,7 @@ Filesystem      Size  Used Avail Use% Mounted on
 ```
 Node                  Generic               SN                   Model                                    Namespace  Usage                      Format           FW Rev  
 --------------------- --------------------- -------------------- ---------------------------------------- ---------- -------------------------- ---------------- --------
-/dev/nvme0n1          /dev/ng0n1            vm-report-nvme1      QEMU NVMe Ctrl                           0x1          1.10  TB /   1.10  TB    512   B +  0 B   11.1.2  
+/dev/nvme0n1          /dev/ng0n1            vm-report-nvme1      QEMU NVMe Ctrl                           0x1          1.10  TB /   1.10  TB    512   B +  0 B   11.1.3  
 ```
 
 ## PCI devices
