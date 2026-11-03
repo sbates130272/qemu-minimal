@@ -2130,8 +2130,6 @@ services:
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.retention.time=7d
-    ports:
-      - "0.0.0.0:9090:9090"
 
   # ---- logs (opt-in: --profile metrics) ----
   loki:
@@ -2152,8 +2150,6 @@ services:
       - /var/lib/qemu-tool/loki-data:/loki
     command:
       - -config.file=/etc/loki/config.yml
-    ports:
-      - "0.0.0.0:3100:3100"
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:3100/ready | grep -q ready"]
       interval: 10s

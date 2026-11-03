@@ -85,6 +85,14 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- **Prometheus, Loki and LMCache coordinator ports removed from host network.**
+  Generated stacks (`vfio-user-ernic-rocjitsu-scale-out`, `vfio-user-mi355x-node`)
+  no longer publish `9090`, `3100` or the LMCache coordinator port to the host.
+  Only VM SSH ports and Grafana (`3000` by default, overridable via `GRAFANA_PORT`)
+  remain mapped. Internal-to-stack traffic goes over the compose network without
+  any host port exposure. This eliminates VS Code port-forwarding conflicts on
+  the Prometheus and Loki ports.
+
 - **`dockerapi` socket proxy removed; Alloy mounts `/var/run/docker.sock`
   directly.** The haproxy proxy's access log produced ~10 lines per container
   every 5 s, flooding `quick-start logs` output. Alloy runs with `cap_drop:
