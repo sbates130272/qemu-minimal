@@ -3,7 +3,7 @@
   hosts: all
   gather_facts: false
   tasks:
-    - name: Include amdgpu firmware tasks from lmcache_guest
+    - name: Include amdgpu firmware tasks
       ansible.builtin.include_role:
-        name: lmcache_guest
+        name: rocjitsu_gpu_test
         tasks_from: amdgpu_firmware
