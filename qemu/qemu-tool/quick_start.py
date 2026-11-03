@@ -407,8 +407,58 @@ def _shm_free_mb() -> int | None:
         return None
 
 
+_WINDOWS_CHECK_WARNED: bool = False
+
+
+def _windows_listening_ports() -> frozenset[int]:
+    """Return ports LISTENING on the Windows host, or empty set if not WSL2.
+
+    In WSL2, Docker publishes ports through the Windows port proxy.  A port
+    that appears free in the WSL2 network namespace (via socket.bind) may
+    still be occupied on the Windows side — e.g. VS Code auto-forwarding a
+    port from a previous stack run.  Check once per process and cache.
+    """
+    global _WINDOWS_CHECK_WARNED
+    try:
+        osrelease = Path("/proc/sys/kernel/osrelease").read_text()
+        if "microsoft" not in osrelease.lower():
+            return frozenset()
+        r = subprocess.run(
+            ["cmd.exe", "/c", "netstat", "-ano"],
+            capture_output=True, text=True, timeout=15,
+        )
+        ports: set[int] = set()
+        for line in r.stdout.splitlines():
+            parts = line.split()
+            if len(parts) >= 4 and parts[3] == "LISTENING" and ":" in parts[1]:
+                try:
+                    ports.add(int(parts[1].rsplit(":", 1)[1]))
+                except ValueError:
+                    pass
+        return frozenset(ports)
+    except Exception as exc:
+        if not _WINDOWS_CHECK_WARNED:
+            _WINDOWS_CHECK_WARNED = True
+            print(
+                f"warning: Windows-side port detection failed"
+                f" ({type(exc).__name__}: {exc});"
+                f" port conflicts from Windows processes may not be caught.",
+                file=sys.stderr,
+            )
+        return frozenset()
+
+
+_WINDOWS_PORTS: frozenset[int] | None = None
+
+
 def _port_free(port: int) -> bool:
     import socket
+
+    global _WINDOWS_PORTS
+    if _WINDOWS_PORTS is None:
+        _WINDOWS_PORTS = _windows_listening_ports()
+    if port in _WINDOWS_PORTS:
+        return False
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -602,7 +652,7 @@ def _resolve_ports(state: _State) -> None:
     changed: dict[str, str] = {}
     wanted = []
     if state.metrics:
-        wanted += [("PROM_PORT", "Prometheus"), ("GRAFANA_PORT", "Grafana")]
+        wanted += [("GRAFANA_PORT", "Grafana")]
     for key, label in wanted:
         port = int(state.get(key))
         if _port_free(port):
@@ -863,6 +913,40 @@ def _compose(state: _State, *args: str, check: bool = True,
 
 def up(state: _State) -> None:
     _say("Bringing the stack up")
+    # Containers stuck in "Created" state from a previous failed run have their
+    # port bindings baked in.  docker compose up does not recreate them when the
+    # config changes, so a stale port that _resolve_ports moved away from will
+    # block the new binding.  Remove them here; docker compose up recreates them
+    # fresh.
+    result = subprocess.run(
+        [
+            "docker", "ps", "-a",
+            "--filter", f"label=com.docker.compose.project={state.stack_name}",
+            "--filter", "status=created",
+            "--format", "{{.ID}}",
+        ],
+        capture_output=True, text=True,
+    )
+    stuck = result.stdout.split()
+    if stuck:
+        subprocess.run(["docker", "rm"] + stuck, check=False)
+
+    # Second-chance port check with a fresh Windows netstat call.
+    # _resolve_ports ran earlier but Windows detection can fail silently, and
+    # a new process may have grabbed the port since then.  Fail here with a
+    # clear message rather than letting Docker fail mid-up with a cryptic
+    # "address already in use" buried in compose log output.
+    if state.metrics:
+        fresh_win = _windows_listening_ports()
+        for key, label in [("GRAFANA_PORT", "Grafana")]:
+            port = int(state.get(key))
+            if port in fresh_win:
+                _die(
+                    f"{label} port {port} is held by a Windows process.\n"
+                    f"  Find it: run  netstat -ano | findstr :{port}  in PowerShell,\n"
+                    f"  then close the application or free the port and re-run."
+                )
+
     _compose(state, "up", "--detach",
              env={"QEMU_TOOL_SRC": str(state.stack_dir)})
 

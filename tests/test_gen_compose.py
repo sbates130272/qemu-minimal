@@ -539,7 +539,10 @@ class TestLMCache(unittest.TestCase):
         body = gen_compose.render_compose(
             _plan("\nLMCACHE_ENABLE=true\nLMCACHE_COORD_PORT=9900\n"),
             "env", "abc")
-        self.assertIn('"0.0.0.0:9900:9900"', body)
+        # Coordinator does not publish a host port; the port appears only in
+        # the command args and healthcheck, reachable on the fleet network.
+        self.assertNotIn('"0.0.0.0:9900:9900"', body)
+        self.assertIn('"9900"', body)
 
 
 class TestPublishing(unittest.TestCase):
@@ -559,9 +562,11 @@ class TestPublishing(unittest.TestCase):
     def test_published_ports_carry_the_bind_address(self):
         body = gen_compose.render_compose(
             _plan("\nLMCACHE_ENABLE=true\n"), ["env"], "abc")
-        self.assertIn('"0.0.0.0:9090:9090"', body)
+        # Only Grafana publishes a host port; Prometheus, Loki and LMCache
+        # coordinator are fleet-internal only.
         self.assertIn('"0.0.0.0:3000:3000"', body)
-        self.assertIn('"0.0.0.0:9300:9300"', body)
+        self.assertNotIn('"0.0.0.0:9090:9090"', body)
+        self.assertNotIn('"0.0.0.0:9300:9300"', body)
 
     def test_bind_address_can_be_narrowed(self):
         # Grafana runs with anonymous admin, so this is the only thing

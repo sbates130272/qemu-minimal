@@ -1302,9 +1302,6 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
     out.append("    command:")
     out.append("      - --config.file=/etc/prometheus/prometheus.yml")
     out.append(f"      - --storage.tsdb.retention.time={spec['prom_retention']}")
-    out.append("    ports:")
-    out.append(f'      - "{spec["bind_addr"]}:{spec["prom_port"]}:9090"')
-
     if spec["logs"]:
         out.append("")
         out.append("  # ---- logs (opt-in: --profile metrics) ----")
@@ -1328,8 +1325,6 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
         out.append(f"      - {spec['loki_data_dir']}:/loki")
         out.append("    command:")
         out.append("      - -config.file=/etc/loki/config.yml")
-        out.append("    ports:")
-        out.append(f'      - "{spec["bind_addr"]}:{spec["loki_port"]}:3100"')
         out.append("    healthcheck:")
         out.append('      test: ["CMD-SHELL", "wget -q -O- '
                    'http://127.0.0.1:3100/ready | grep -q ready"]')
@@ -1455,10 +1450,6 @@ def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) 
         # coordinator's fleet address directly. Published anyway, because the
         # REST API is the thing an operator actually queries, and 0.0.0.0 on
         # the coordinator side is what makes both paths work.
-        out.append("    ports:")
-        out.append(
-            f'      - "{spec["bind_addr"]}:{spec["lmcache_coord_port"]}'
-            f':{spec["lmcache_coord_port"]}"')
         out.append("    entrypoint: []")
         out.append("    command:")
         # `lmcache coordinator`, the MP coordinator. NOT lmcache_controller,
