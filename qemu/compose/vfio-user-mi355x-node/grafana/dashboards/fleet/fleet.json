@@ -1,11 +1,10 @@
 {
   "uid": "ernic-fleet",
   "title": "ernic + rocjitsu fleet",
-  "description": "Fleet health, ernic RDMA counters and LMCache. Not generated: every query aggregates or groups by label, so nothing in here mentions a VM by name and VM_COUNT can change under it without an edit. Series colours are the four validated categorical slots for a dark surface; per-VM panels are bar gauges rather than N lines, because a line per VM stops being readable at the fleet sizes this stack supports.",
+  "description": "Fleet health, ernic RDMA counters and per-VM status. Not generated: every query aggregates or groups by label, so nothing in here mentions a VM by name and VM_COUNT can change under it without an edit. Series colours are the four validated categorical slots for a dark surface; per-VM panels are bar gauges rather than N lines, because a line per VM stops being readable at the fleet sizes this stack supports.",
   "tags": [
     "ernic",
     "rocjitsu",
-    "lmcache",
     "fleet"
   ],
   "timezone": "browser",
@@ -148,134 +147,6 @@
     },
     {
       "type": "stat",
-      "title": "LMCache servers up",
-      "description": "Scrape reachability only. A server can be scrapable and still not registered with the coordinator -- a wrong advertise IP registers nothing and errors nowhere. Confirm with: curl -s localhost:9300/instances",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "fleet-prometheus"
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 5,
-        "x": 5,
-        "y": 1
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "count(up{job=\"lmcache-server\"} == 1) or vector(0)",
-          "instant": true
-        }
-      ],
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "value",
-        "colorMode": "value",
-        "graphMode": "none"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "#e66767",
-                "value": null
-              },
-              {
-                "color": "#c98500",
-                "value": 1
-              }
-            ]
-          }
-        },
-        "overrides": []
-      }
-    },
-    {
-      "type": "stat",
-      "title": "Coordinator",
-      "description": "The MP coordinator (`lmcache coordinator`). Membership and the key directory; never in the KV path. Down means --profile lmcache was not selected, or LMCACHE_IMAGE was never built -- there is no published LMCache wheel for gfx1250.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "fleet-prometheus"
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 5,
-        "x": 10,
-        "y": 1
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "max(up{job=\"lmcache-coordinator\"}) or vector(0)",
-          "instant": true
-        }
-      ],
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "value",
-        "colorMode": "background_solid",
-        "graphMode": "none"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "mappings": [
-            {
-              "type": "value",
-              "options": {
-                "0": {
-                  "text": "DOWN",
-                  "index": 0,
-                  "color": "#e66767"
-                },
-                "1": {
-                  "text": "UP",
-                  "index": 1,
-                  "color": "#199e70"
-                }
-              }
-            }
-          ],
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "#e66767",
-                "value": null
-              },
-              {
-                "color": "#199e70",
-                "value": 1
-              }
-            ]
-          }
-        },
-        "overrides": []
-      }
-    },
-    {
-      "type": "stat",
       "title": "ernic instances",
       "description": "rocm-ernic processes writing stats dumps. Should equal VM_COUNT. A number that climbs above it means workers are restarting -- every reconnect takes a fresh mesh node id and never reclaims the old one, against a 64-node ceiling (AGENTS.md issue 13).",
       "datasource": {
@@ -284,8 +155,8 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 9,
-        "x": 15,
+        "w": 19,
+        "x": 5,
         "y": 1
       },
       "targets": [
@@ -715,241 +586,12 @@
     },
     {
       "type": "row",
-      "title": "LMCache (MP mode)",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 22
-      },
-      "collapsed": false,
-      "panels": []
-    },
-    {
-      "type": "timeseries",
-      "title": "L1 usage ratio",
-      "description": "Fraction of each server's L1 slab in use. The fleet's shared cache tier: P2P peers RDMA-read directly out of this memory, so a server at 1.0 is evicting chunks its peers may still want. There is no fleet-wide hit-rate metric in MP mode -- hits are counted per server and the coordinator's key directory is the cross-fleet view.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "fleet-prometheus"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 23
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "max(lmcache_mp_l1_usage_ratio{vm_name=~\"$vm\"})",
-          "legendFormat": "max"
-        },
-        {
-          "refId": "B",
-          "expr": "avg(lmcache_mp_l1_usage_ratio{vm_name=~\"$vm\"})",
-          "legendFormat": "mean"
-        }
-      ],
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true,
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "min": 0,
-          "max": 1,
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "fillOpacity": 0,
-            "showPoints": "never"
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "retrieve"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#3987e5"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "lookup"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#d95926"
-                }
-              }
-            ]
-          }
-        ]
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "P2P and prefetch jobs in flight",
-      "description": "Active peer lookups and prefetches across the fleet. This is the P2P path working: a lookup here is one guest asking a peer to locate a prefix it is about to RDMA-read out of that peer's L1. Flat zero on an idle fleet is correct.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "fleet-prometheus"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 23
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum(lmcache_mp_active_p2p_lookup_jobs{vm_name=~\"$vm\"})",
-          "legendFormat": "p2p lookups"
-        },
-        {
-          "refId": "B",
-          "expr": "sum(lmcache_mp_active_prefetch_jobs{vm_name=~\"$vm\"})",
-          "legendFormat": "prefetches"
-        }
-      ],
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true,
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "min": 0,
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "fillOpacity": 0,
-            "showPoints": "never",
-            "axisSoftMin": 0
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "p2p lookups"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#3987e5"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "prefetches"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#199e70"
-                }
-              }
-            ]
-          }
-        ]
-      }
-    },
-    {
-      "type": "bargauge",
-      "title": "L1 memory in use by VM",
-      "description": "Host memory, per guest. L1 is what P2P peers read out of, so this is the fleet's shared cache tier and not just local bookkeeping. Sized by LMCACHE_L1_SIZE_GB and must fit inside VM_VMEM alongside the guest itself.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "fleet-prometheus"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 31
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (vm_name) (lmcache_mp_l1_memory_usage_bytes{vm_name=~\"$vm\"})",
-          "legendFormat": "{{vm_name}}",
-          "instant": true
-        }
-      ],
-      "options": {
-        "displayMode": "gradient",
-        "orientation": "horizontal",
-        "showUnfilled": true,
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        }
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "bytes",
-          "min": 0,
-          "color": {
-            "mode": "continuous-BlPu"
-          }
-        },
-        "overrides": []
-      }
-    },
-    {
-      "type": "row",
       "title": "Guests",
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 39
+        "y": 22
       },
       "collapsed": false,
       "panels": []
@@ -966,7 +608,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 40
+        "y": 23
       },
       "targets": [
         {
@@ -1029,7 +671,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 40
+        "y": 23
       },
       "targets": [
         {
@@ -1083,7 +725,7 @@
     {
       "type": "table",
       "title": "Per-VM status",
-      "description": "The identity view: which guest, and is each of its two scrape targets answering. A guest up with its worker down is the normal shape after a reboot -- the worker's unit waits on its device preflight, which can take a couple of minutes while rocjitsu probes.",
+      "description": "The identity view: which guest, and is its scrape target answering.",
       "datasource": {
         "type": "prometheus",
         "uid": "fleet-prometheus"
@@ -1092,18 +734,12 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 48
+        "y": 31
       },
       "targets": [
         {
           "refId": "A",
           "expr": "up{job=\"fleet-node\",vm_name=~\"$vm\"}",
-          "instant": true,
-          "format": "table"
-        },
-        {
-          "refId": "B",
-          "expr": "up{job=\"lmcache-server\",vm_name=~\"$vm\"}",
           "instant": true,
           "format": "table"
         }
@@ -1122,25 +758,18 @@
             "excludeByName": {
               "Time": true,
               "Time 1": true,
-              "Time 2": true,
               "__name__": true,
               "__name__ 1": true,
-              "__name__ 2": true,
               "job": true,
               "job 1": true,
-              "job 2": true,
               "instance": true,
               "instance 1": true,
-              "instance 2": true,
               "vm": true,
-              "vm 1": true,
-              "vm 2": true,
-              "lmcache_instance_id": true
+              "vm 1": true
             },
             "renameByName": {
               "vm_name": "VM",
-              "Value #A": "guest",
-              "Value #B": "lmcache server"
+              "Value #A": "guest"
             }
           }
         }
@@ -1159,7 +788,7 @@
           {
             "matcher": {
               "id": "byRegexp",
-              "options": "guest|lmcache server"
+              "options": "guest"
             },
             "properties": [
               {
@@ -1194,7 +823,7 @@
               },
               {
                 "id": "noValue",
-                "value": "\u2014"
+                "value": "—"
               }
             ]
           }
