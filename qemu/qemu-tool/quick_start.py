@@ -901,6 +901,23 @@ def _compose(state: _State, *args: str, check: bool = True,
 
 def up(state: _State) -> None:
     _say("Bringing the stack up")
+    # Containers stuck in "Created" state from a previous failed run have their
+    # port bindings baked in.  docker compose up does not recreate them when the
+    # config changes, so a stale port that _resolve_ports moved away from will
+    # block the new binding.  Remove them here; docker compose up recreates them
+    # fresh.
+    result = subprocess.run(
+        [
+            "docker", "ps", "-a",
+            "--filter", f"label=com.docker.compose.project={state.stack_name}",
+            "--filter", "status=created",
+            "--format", "{{.ID}}",
+        ],
+        capture_output=True, text=True,
+    )
+    stuck = result.stdout.split()
+    if stuck:
+        subprocess.run(["docker", "rm"] + stuck, check=False)
     _compose(state, "up", "--detach",
              env={"QEMU_TOOL_SRC": str(state.stack_dir)})
 
