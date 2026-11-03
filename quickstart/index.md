@@ -7,7 +7,7 @@ by `qemu-tool quick-start`.
 - Guest image: `20261030.gadc94af-vm.resolute-ernic-rocjitsu-qm.ae551b3-qcow2`
 - Guest size: 2 x 4 vCPU, 5993 MiB
 - RDMA bytes across the mesh: 65536000
-- Generated: **2026-11-03 15:31 UTC** &middot; Commit: `6ee149e` &middot; Status: **pass**
+- Generated: **2026-11-03 18:33 UTC** &middot; Commit: `d0b8708` &middot; Status: **pass**
 
 ## quickstart-1
 
@@ -61,13 +61,13 @@ vector-add: PASS
  rdma_cm QPs	 : OFF
  Data ex. method : Ethernet
 ---------------------------------------------------------------------------------------
- local address: LID 0000 QPN 0x0002 PSN 0xc2706a
+ local address: LID 0000 QPN 0x0002 PSN 0x38ea56
  GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:11
- remote address: LID 0000 QPN 0x0002 PSN 0x6ed6a8
+ remote address: LID 0000 QPN 0x0002 PSN 0xcee146
  GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:12
 ---------------------------------------------------------------------------------------
  #bytes     #iterations    BW peak[MiB/sec]    BW average[MiB/sec]   MsgRate[Mpps]
- 65536      1000             702.20             669.29 		     0.010709
+ 65536      1000             1267.17            1263.06		     0.020209
 ---------------------------------------------------------------------------------------
 ```
 
@@ -75,8 +75,8 @@ vector-add: PASS
 
 | Direction | Bandwidth |
 |-----------|-----------|
-| write | 180.0 MiB/s |
-| read  | 198.0 MiB/s |
+| write | 101.0 MiB/s |
+| read  | 543.0 MiB/s |
 
 
 ## quickstart-2
@@ -117,8 +117,8 @@ vector-add: PASS
 
 | Direction | Bandwidth |
 |-----------|-----------|
-| write | 181.0 MiB/s |
-| read  | 205.0 MiB/s |
+| write | 101.0 MiB/s |
+| read  | 513.0 MiB/s |
 
 
 ## ernic counters
