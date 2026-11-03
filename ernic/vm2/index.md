@@ -4,7 +4,7 @@ title: VM Report — VM 2
 
 # VM Report — qemu-minimal — VM 2
 
-Generated: **2026-11-02 18:12 UTC** &middot; Commit: [`e7c0f83`](https://github.com/sbates130272/qemu-minimal/commit/e7c0f839a444ad41e65f68f3d3214f3a910b7883) &middot; Status: **pass**
+Generated: **2026-11-03 13:23 UTC** &middot; Commit: [`c847413`](https://github.com/sbates130272/qemu-minimal/commit/c8474133c5e1100b8d4e59ea84332cbcaa3c0db0) &middot; Status: **pass**
 
 ## Hardware
 
@@ -63,15 +63,13 @@ Node                  Generic               SN                   Model          
 00:00.0 Host bridge [0600]: Intel Corporation 82G33/G31/P35/P31 Express DRAM Controller [8086:29c0]
 00:01.0 VGA compatible controller [0300]: Device [1234:1111] (rev 02)
 00:02.0 PCI bridge [0604]: Red Hat, Inc. QEMU PCIe Root port [1b36:000c]
-00:03.0 PCI bridge [0604]: Red Hat, Inc. QEMU PCIe Root port [1b36:000c]
-00:04.0 Ethernet controller [0200]: Red Hat, Inc. Virtio network device [1af4:1000]
-00:05.0 Communication controller [0780]: Red Hat, Inc. Virtio console [1af4:1003]
-00:06.0 SCSI storage controller [0100]: Red Hat, Inc. Virtio block device [1af4:1001]
+00:03.0 Ethernet controller [0200]: Red Hat, Inc. Virtio network device [1af4:1000]
+00:04.0 Communication controller [0780]: Red Hat, Inc. Virtio console [1af4:1003]
+00:05.0 SCSI storage controller [0100]: Red Hat, Inc. Virtio block device [1af4:1001]
 00:1f.0 ISA bridge [0601]: Intel Corporation 82801IB (ICH9) LPC Interface Controller [8086:2918] (rev 02)
 00:1f.2 SATA controller [0106]: Intel Corporation 82801IR/IO/IH (ICH9R/DO/DH) 6 port SATA Controller [AHCI mode] [8086:2922] (rev 02)
 00:1f.3 SMBus [0c05]: Intel Corporation 82801I (ICH9 Family) SMBus Controller [8086:2930] (rev 02)
-01:00.0 Ethernet controller [0200]: AMD Pensando Systems DSC Ethernet Controller [1dd8:1002]
-02:00.0 Processing accelerators [1200]: Advanced Micro Devices, Inc. [AMD/ATI] Device [1002:75c1]
+01:00.0 Processing accelerators [1200]: Advanced Micro Devices, Inc. [AMD/ATI] Device [1002:75c1]
 ```
 
 ## Debian Packages
