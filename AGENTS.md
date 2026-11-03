@@ -1225,7 +1225,7 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
 
 - Default GitHub account: `sbates130272` (verify with `gh auth status`)
 - GPG signing required on all commits (`-S`), signoff required (`-s`)
-- Main branch: `main`; current work branch: `feat/pypi-package`
+- Main branch: `main`
 - Never use `--no-verify` or `--no-gpg-sign`
 
 ## Cutting a release

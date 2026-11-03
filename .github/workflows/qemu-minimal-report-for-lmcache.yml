@@ -26,10 +26,12 @@ name: qemu-minimal - Report for lmcache
 # for the image build, and guest memory. Treat a first red run as that, not as
 # a regression in what it tests.
 
-# Disabled: lmcache lane is consistently failing due to infrastructure issues
-# (hostfs permissions, gpuagent crash on emulated gfx1250). Re-enable once
-# the underlying issues are resolved. Run manually via workflow_dispatch only.
 on:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: '0 8 * * *'
   workflow_dispatch:
 
 permissions:
@@ -612,7 +614,8 @@ jobs:
       run: |
         set -eu
         SSH="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 -i /tmp/guest-key/id_rsa"
-        BENCH="sudo docker exec lmcache-server lmcache bench server --mode gpu \
+        BENCH="sudo docker exec lmcache-server lmcache bench server --mode cpu \
+          --transfer-mode lmcache_driven \
           --kvcache-shape-spec '(2,32,16,8,128):float16:4' --num-tokens 512 --start 600 --end 602"
         read_counter() {
           docker exec "$(docker ps --filter 'name=ernic-1' --format '{{.Names}}' | head -1)" \

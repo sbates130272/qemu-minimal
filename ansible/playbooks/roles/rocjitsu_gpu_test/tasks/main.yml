@@ -1,7 +1,7 @@
 ---
 - name: Check the emulated GPU is present on the guest PCI bus
   ansible.builtin.shell:
-    cmd: "lspci -nn | grep -i '{{ rocjitsu_gpu_test_pci_id }}'"
+    cmd: "set -o pipefail && lspci -nn | grep -i '{{ rocjitsu_gpu_test_pci_id }}'"
     executable: /bin/bash
   become: true
   register: rocjitsu_gpu_test_lspci
@@ -331,13 +331,12 @@
 # hsa-snoop rather than on a guest that happens not to have run anything
 # tracing-related yet.
 - name: Ensure tracefs is mounted for hsa-snoop's kprobe
-  ansible.builtin.command:
-    cmd: mount -t tracefs tracefs /sys/kernel/tracing
+  ansible.posix.mount:
+    path: /sys/kernel/tracing
+    src: tracefs
+    fstype: tracefs
+    state: ephemeral
   become: true
-  register: rocjitsu_gpu_test_tracefs
-  changed_when: rocjitsu_gpu_test_tracefs.rc == 0
-  # Already mounted exits non-zero; that is the good case, not a failure.
-  failed_when: false
   when: rocjitsu_gpu_test_hsa_snoop | bool
 
 # Run in "-- <app>" mode rather than --all: this asserts that hsa-snoop can

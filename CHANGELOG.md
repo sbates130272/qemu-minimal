@@ -4,6 +4,42 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v1.6.0] - 2026-11-03
+
+### Added
+
+- **MkDocs Material site.** The GitHub Pages site (`docs/`) is now built with
+  MkDocs Material (teal primary, deep-orange accent, light/dark mode toggle,
+  sidebar nav, search). The old Jekyll/minima setup under `site/` is removed.
+  The publish-pages workflow fetches report artifacts into `docs/<dest>/`,
+  runs `mkdocs build --strict`, and pushes the built `site/` HTML to
+  `gh-pages`. `render-site-perf.py` now emits MkDocs frontmatter.
+
+- **`qemu-tool inspect` reports net/block I/O counters and detects the Docker
+  daemon.** Each running container row now shows cumulative Rx/Tx bytes and
+  block read/write bytes (from `docker stats --no-stream`). A one-line "Docker
+  daemon" row appears at the top of the output when the daemon is reachable.
+
+### Changed
+
+- **`refactor(ansible)`: `amdgpu_firmware` and `netplan_ernic` tasks moved out
+  of `lmcache_guest`.** Both tasks now live in their own roles so they can be
+  applied outside the LMCache playbook without pulling in the full LMCache
+  stack.
+
+### Fixed
+
+- **`fix(lmcache)`: re-enabled `report-for-lmcache` workflow.** The lane was
+  accidentally disabled; it now runs again and publishes the LMCache report
+  artifact.
+
+### Chores
+
+- **`chore(deps)`: bump `sbates130272.batesste` to 3.2.1.**
+
+- **`chore(grafana)`: remove LMCache panels from MI355X dashboards.** The MI355X
+  stack does not run LMCache; the stale panels caused misleading empty charts.
+
 ## [v1.5.0] - 2026-11-03
 
 ### Added

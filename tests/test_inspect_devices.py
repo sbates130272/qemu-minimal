@@ -652,5 +652,56 @@ class RecordShape(unittest.TestCase):
         self.assertIn("  Login:     stebates (since", text)
 
 
+class IoCounters(unittest.TestCase):
+    _NET_DEV = """\
+Inter-|   Receive                                                |  Transmit
+ face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
+    lo:  123456       10    0    0    0     0          0         0   123456      10    0    0    0     0       0          0
+enp0s5:  7654321     100    0    0    0     0          0         0  9876543     200    0    0    0     0       0          0
+rocm-ernic0: 0       0    0    0    0     0          0         0        0       0    0    0    0     0       0          0
+"""
+    _BLOCK_STAT_NVME = "1234 5 2468 600 7890 10 15780 400 0 800 1000\n"
+
+    def test_proc_net_dev_parses_rx_tx(self):
+        result = inspect_mod._proc_net_dev(self._NET_DEV)
+        self.assertEqual(result["enp0s5"], (7654321, 9876543))
+        self.assertEqual(result["lo"], (123456, 123456))
+        self.assertIn("rocm-ernic0", result)
+
+    def test_proc_net_dev_none_is_empty(self):
+        self.assertEqual(inspect_mod._proc_net_dev(None), {})
+
+    def test_proc_net_dev_garbage_is_survivable(self):
+        self.assertEqual(inspect_mod._proc_net_dev("not a table"), {})
+
+    def test_block_stat_parses_sectors(self):
+        # fields[2]=2468 sectors_read, fields[6]=15780 sectors_written
+        result = inspect_mod._block_stat(self._BLOCK_STAT_NVME)
+        self.assertEqual(result, (2468, 15780))
+
+    def test_block_stat_none_is_none(self):
+        self.assertIsNone(inspect_mod._block_stat(None))
+
+    def test_block_stat_too_short_is_none(self):
+        self.assertIsNone(inspect_mod._block_stat("1 2 3"))
+
+    def test_docker_running_no_socket(self):
+        self.assertFalse(inspect_mod._docker_running({}, False))
+
+    def test_docker_running_socket_unknown(self):
+        self.assertIsNone(inspect_mod._docker_running({}, None))
+
+    def test_docker_running_socket_present_no_net_unix(self):
+        self.assertIsNone(inspect_mod._docker_running({}, True))
+
+    def test_docker_running_socket_present_in_net_unix(self):
+        net_unix = "0000000000000000: 00000002 00000000 00010000 0001 01 1234 /var/run/docker.sock\n"
+        self.assertTrue(inspect_mod._docker_running({"/proc/net/unix": net_unix}, True))
+
+    def test_docker_running_stale_socket(self):
+        net_unix = "0000000000000000: 00000002 00000000 00010000 0001 01 1234 /var/run/some.sock\n"
+        self.assertFalse(inspect_mod._docker_running({"/proc/net/unix": net_unix}, True))
+
+
 if __name__ == "__main__":
     unittest.main()

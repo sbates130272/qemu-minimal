@@ -37,9 +37,9 @@
   # the guest takes become for itself, as the included roles already do.
   become: false
   vars:
-    # Consumed by the two lmcache_guest task files included below. Reused
-    # rather than reimplemented: both are exactly what a quickstart guest
-    # needs, and a second copy would be a second thing to keep right.
+    # Consumed by the rocjitsu_gpu_test and ernic_fleet_guest task files
+    # included below. Both use lmcache_guest_* variable names since the
+    # variables are generated into the inventory under those names.
     lmcache_guest_eth_address: "{{ fleet_guest_ip }}/{{ fleet_guest_prefix }}"
     # The name the udev rules in the image already give this interface. The
     # role's default renames it to ernic0, which is right for an LMCache guest
@@ -75,7 +75,7 @@
 
     - name: Install the gfx1250 firmware stubs generated from this stack's rocjitsu
       ansible.builtin.include_role:
-        name: lmcache_guest
+        name: rocjitsu_gpu_test
         tasks_from: amdgpu_firmware
 
     - name: Install rocm-ernic udev naming rules
@@ -105,7 +105,7 @@
 
     - name: Declare the ernic address to netplan
       ansible.builtin.include_role:
-        name: lmcache_guest
+        name: ernic_fleet_guest
         tasks_from: netplan_ernic
       when: lmcache_guest_netplan_ernic | bool
 

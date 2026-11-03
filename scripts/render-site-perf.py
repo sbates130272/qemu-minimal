@@ -94,8 +94,7 @@ REPORTS = (
     {"key": "ernic", "label": "ernic VM 1", "path": "ernic/index.md"},
     {"key": "ernic-vm2", "label": "ernic VM 2", "path": "ernic/vm2/index.md"},
     {"key": "hipfile-fio", "label": "hipFile fio", "path": "hipfile-fio/index.md"},
-    # report-for-lmcache is absent: the P2P transfer step times out
-    # on the current published images. Re-add once it runs clean for a week.
+    {"key": "lmcache", "label": "LMCache P2P", "path": "lmcache/index.md"},
     # report-for-quickstart is absent for a different reason: it IS daily, so
     # it would qualify, but it is new and boots two guests on a runner that
     # cannot give them a core each (AGENTS.md issue 14). Adding it before it
@@ -605,9 +604,7 @@ def write_perf_page(site_dir: Path, history: List[Dict], green: Dict,
     latest_generated = latest.get("generated", "unknown") if latest else "unknown"
     latest_sha = latest.get("sha", "unknown") if latest else "unknown"
     body = f"""---
-layout: page
 title: Performance trends
-permalink: /perf/
 ---
 
 This page is generated during the Pages publish from retained benchmark history on

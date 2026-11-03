@@ -13,6 +13,13 @@ name: qemu-minimal - Publish Pages
 # not from the run that triggered this one, so a lane that has not run for a
 # week still contributes its last report and the site is always complete.
 #
+# Flow:
+#   1. Fetch report artifacts into docs/<dest>/ subtrees.
+#   2. Clone gh-pages (for perf history continuity).
+#   3. Run render-site-perf.py to update docs/perf/ with trends and badges.
+#   4. Run mkdocs build to produce site/.
+#   5. Sync site/ onto the gh-pages branch and push.
+#
 # Prerequisite (one-time, requires repo-admin access):
 #   Settings > Pages > Source = "Deploy from a branch", gh-pages / (root)
 
@@ -36,7 +43,8 @@ on:
       - main
     paths:
       - '.github/workflows/qemu-minimal-publish-pages.yml'
-      - 'site/**'
+      - 'docs/**'
+      - 'mkdocs.yml'
       - 'scripts/render-site-perf.py'
   workflow_dispatch:
 
@@ -69,14 +77,6 @@ jobs:
     # storage for a day. That defeated the entire reason the lane was
     # restructured to survive a hang.
     #
-    # Publishing on a failed run cannot publish a stale half-report as clean,
-    # which was the stated fear. `fetch` below resolves each artifact NAME
-    # independently against the newest unexpired upload of that name, and a
-    # half that failed uploaded nothing, so its subtree is simply left as it
-    # already is on the branch. That is the same outcome the by-name fetch
-    # produces for a lane that has not run in a week -- long-accepted, and the
-    # whole point of fetching by name rather than from the triggering run.
-    #
     # `skipped` is still excluded: the triggering workflow did no work at all,
     # so there is nothing new to assemble and no reason to spend a runner.
     if: >-
@@ -87,14 +87,21 @@ jobs:
       - name: Check out code
         uses: actions/checkout@v4.3.1
 
+      - name: Set up Python for MkDocs
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install MkDocs Material
+        run: pip install mkdocs-material
+
       - name: Fetch the latest artifact from every report lane
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mkdir -p staging
 
-          # Lane name -> path under the published site.
+          # Lane name -> path under docs/ (becomes a subtree in the built site).
           fetch() {
             name=$1
             dest=$2
@@ -107,17 +114,18 @@ jobs:
                     --jq '[.artifacts[] | select(.expired == false)][0].archive_download_url // empty' \
                   || true)
             if [ -z "${url}" ]; then
-              echo "::warning::no unexpired '${name}' artifact, leaving ${dest}/ as it is on the branch"
+              echo "::warning::no unexpired '${name}' artifact, leaving docs/${dest}/ as it is"
               return 0
             fi
-            mkdir -p "staging/${dest}"
+            mkdir -p "docs/${dest}"
             curl -sSL -H "Authorization: Bearer ${GH_TOKEN}" "${url}" -o /tmp/"${name}".zip
-            unzip -q /tmp/"${name}".zip -d "staging/${dest}"
-            if [ -d "staging/${dest}/site" ] && [ ! -e "staging/${dest}/index.md" ]; then
-              rsync -a "staging/${dest}/site/" "staging/${dest}/"
-              rm -rf "staging/${dest}/site"
+            unzip -q /tmp/"${name}".zip -d "docs/${dest}"
+            # Some artifacts wrap their content in a site/ subdirectory.
+            if [ -d "docs/${dest}/site" ] && [ ! -e "docs/${dest}/index.md" ]; then
+              rsync -a "docs/${dest}/site/" "docs/${dest}/"
+              rm -rf "docs/${dest}/site"
             fi
-            echo "${name} -> ${dest}/ ($(find "staging/${dest}" -type f | wc -l) files)"
+            echo "${name} -> docs/${dest}/ ($(find "docs/${dest}" -type f | wc -l) files)"
           }
 
           fetch vm-report-1vm 1vm
@@ -128,18 +136,11 @@ jobs:
           fetch vm-report-quickstart quickstart
           fetch vm-report-mi355x mi355x
 
-          # generate-vm-report.sh writes a _config.yml wherever it thinks it is
-          # at a site root. Assembled into subdirectories they are all nested,
-          # and Jekyll reads only the one at the root, so they are dead files
-          # that would just mislead the next person to look.
-          find staging -mindepth 2 -name _config.yml -delete
+          # Nested _config.yml from old Jekyll-based report scripts are dead
+          # weight; MkDocs ignores them but they would just mislead reviewers.
+          find docs -mindepth 2 -name _config.yml -delete
 
-      - name: Stage repository-owned site content
-        run: |
-          set -euo pipefail
-          rsync -a site/ staging/
-
-      - name: Publish to the gh-pages branch
+      - name: Render performance trends
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -147,9 +148,39 @@ jobs:
 
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          # The runner has no key; without this an inherited commit.gpgSign
-          # would fail the commit rather than skip the signature.
           git config --global commit.gpgSign false
+
+          rm -rf gh-pages
+          git init -q gh-pages
+          cd gh-pages
+          git remote add origin \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git fetch -q --depth 1 origin gh-pages 2>/dev/null; then
+            git checkout -q -b gh-pages FETCH_HEAD
+          else
+            echo "gh-pages does not exist yet, starting fresh"
+            git checkout -q -b gh-pages
+          fi
+
+          # green.json is kept apart from history.jsonl because the history
+          # appends only when a benchmark number changes, and the all-green date
+          # has to be able to advance on a publish where nothing did.
+          cd "${GITHUB_WORKSPACE}"
+          python3 scripts/render-site-perf.py \
+            --site-dir docs \
+            --history-in gh-pages/perf/history.jsonl \
+            --history-out docs/perf/history.jsonl \
+            --green-in gh-pages/perf/green.json \
+            --green-out docs/perf/green.json
+
+      - name: Build site with MkDocs
+        run: mkdocs build --strict
+
+      - name: Publish to the gh-pages branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
 
           publish() {
             rm -rf gh-pages
@@ -160,28 +191,8 @@ jobs:
             if git fetch -q --depth 1 origin gh-pages 2>/dev/null; then
               git checkout -q -b gh-pages FETCH_HEAD
             else
-              echo "gh-pages does not exist yet, creating it"
               git checkout -q -b gh-pages
             fi
-
-            # Both --*-in paths are relative to this gh-pages clone, i.e. the
-            # state as published, and both --*-out paths go into staging so the
-            # sync_dir below is what actually writes them back. green.json is
-            # kept apart from history.jsonl because the history appends only
-            # when a benchmark number changes, and the all-green date has to be
-            # able to advance on a publish where nothing did.
-            python3 ../scripts/render-site-perf.py \
-              --site-dir ../staging \
-              --history-in perf/history.jsonl \
-              --history-out ../staging/perf/history.jsonl \
-              --green-in perf/green.json \
-              --green-out ../staging/perf/green.json
-
-            cp ../staging/_config.yml \
-              ../staging/index.md \
-              ../staging/documentation.md \
-              ../staging/reports.md \
-              ../staging/publishing.md .
 
             sync_dir() {
               src=$1
@@ -190,15 +201,10 @@ jobs:
               rsync -a --delete "${src}/" "${dest}/"
             }
 
-            sync_dir ../staging/assets assets
-            sync_dir ../staging/perf perf
-            sync_dir ../staging/1vm 1vm
-            sync_dir ../staging/rocjitsu rocjitsu
-            sync_dir ../staging/ernic ernic
-            sync_dir ../staging/hipfile-fio hipfile-fio
-            sync_dir ../staging/lmcache lmcache
-            sync_dir ../staging/quickstart quickstart
-            sync_dir ../staging/mi355x mi355x
+            # Replace the entire published tree with the built site.
+            # MkDocs adds .nojekyll automatically so GitHub Pages serves
+            # the pre-built HTML rather than running Jekyll over it.
+            rsync -a --delete "../site/" ./
 
             git add -A
             if git diff --cached --quiet; then

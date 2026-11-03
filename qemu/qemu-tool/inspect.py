@@ -882,10 +882,25 @@ def _ga_run(path, timeout=2.0, budget=8.0):
     grab("/sys/module/amdgpu/initstate")
     grab("/sys/module/ionic/initstate")
     grab("/sys/module/ionic_rdma/initstate")
-    # NIC device uevent: DRIVER=ionic when ionic is bound. Try both the
-    # udev-renamed name and common fallback kernel names.
+    # NIC device uevent and PCI ID attributes. Try the udev-renamed names first,
+    # then every interface the agent already enumerated -- so a NIC whose udev
+    # rule hasn't run (published qcow2 ships none) is still detected by PCI ID.
+    _probed_nics: set[str] = set()
     for _nic in ("rocm-ernic0", "rocmernic0", "rocm-ernic1", "rocmernic1"):
+        _probed_nics.add(_nic)
         grab("/sys/class/net/%s/device/uevent" % _nic)
+        grab("/sys/class/net/%s/device/resource" % _nic)
+    for _iface_rec in result.get("interfaces") or []:
+        _iname = (_iface_rec.get("name") or "") if isinstance(_iface_rec, dict) else ""
+        if not _iname or _iname == "lo" or _iname in _probed_nics:
+            continue
+        _probed_nics.add(_iname)
+        grab("/sys/class/net/%s/device/vendor" % _iname)
+        grab("/sys/class/net/%s/device/device" % _iname)
+        grab("/sys/class/net/%s/device/subsystem_vendor" % _iname)
+        grab("/sys/class/net/%s/device/subsystem_device" % _iname)
+        grab("/sys/class/net/%s/device/uevent" % _iname)
+        grab("/sys/class/net/%s/device/resource" % _iname)
 
     # The NQN only ever refines a disk's origin -- without it _block_origin
     # falls back to the command line and finally to "unknown" -- so a miss
@@ -897,6 +912,38 @@ def _ga_run(path, timeout=2.0, budget=8.0):
         if d.get("partition") or not name.startswith("/dev/nvme"):
             continue
         grab("/sys/block/%s/device/subsysnqn" % name.rsplit("/", 1)[-1])
+
+    # Network and block IO counters. /proc/net/dev is cheap; /sys/block/<dev>/stat
+    # is one file per whole disk (not partition). Both are best-effort: a miss
+    # means no IO line, not a wrong one.
+    grab("/proc/net/dev")
+    _all_devs = set()
+    for _line in (files.get("/proc/partitions") or "").splitlines()[1:]:
+        _fields = _line.split()
+        if len(_fields) >= 4:
+            _all_devs.add(_fields[3])
+    for _dev in _all_devs:
+        # A partition name either ends in a pure digit-string whose prefix is
+        # another device (nvme0n1p1 -> nvme0n1) or follows the sdXN pattern.
+        # Whole-disk names like nvme0n1, sda, vda never end in a digit whose
+        # removal yields another name in the table.
+        _bare = _dev.rstrip("0123456789")
+        if _bare != _dev and _bare in _all_devs:
+            continue  # partition: parent exists
+        grab("/sys/block/%s/stat" % _dev)
+
+    # Docker daemon detection. /var/run/docker.sock exists when the daemon is
+    # running; open_file() returns True (exists, is socket/not-a-regular-file),
+    # False (not present) or None (unknown). /proc/net/unix lists all open Unix
+    # sockets including Docker's, which confirms the socket is actually listening
+    # rather than a stale socket file from a dead daemon. Reading /proc/net/unix
+    # is cheap (one file, always available) and keeps the budget well under the
+    # 6 s device-probe window, which has already closed.
+    if time.monotonic() <= deadline:
+        docker_sock = open_file("/var/run/docker.sock")
+        if docker_sock is True:
+            grab("/proc/net/unix")
+        result["docker_sock_present"] = docker_sock
 
     if result.get("users") == [] and time.monotonic() <= deadline:
         # guest-get-users reads utmp and nothing else, and Ubuntu 26.04 has
@@ -1126,6 +1173,66 @@ def _proc_partitions(text: str | None) -> dict[str, int]:
     return out
 
 
+def _proc_net_dev(text: str | None) -> dict[str, tuple[int, int]]:
+    """Interface name -> (rx_bytes, tx_bytes) from /proc/net/dev."""
+    out: dict[str, tuple[int, int]] = {}
+    for line in (text or "").splitlines()[2:]:  # first two lines are headers
+        parts = line.split()
+        if len(parts) < 10:
+            continue
+        iface = parts[0].rstrip(":")
+        try:
+            out[iface] = (int(parts[1]), int(parts[9]))
+        except (ValueError, IndexError):
+            continue
+    return out
+
+
+def _block_stat(text: str | None) -> tuple[int, int] | None:
+    """(sectors_read, sectors_written) from /sys/block/<dev>/stat, or None.
+
+    The kernel stat file has 11 (or 17 on newer kernels) whitespace-separated
+    fields; fields 2 and 6 (0-indexed) are sectors_read and sectors_written.
+    Each sector is 512 bytes regardless of the device's physical sector size.
+    """
+    if not text:
+        return None
+    fields = text.split()
+    if len(fields) < 7:
+        return None
+    try:
+        return (int(fields[2]), int(fields[6]))
+    except (ValueError, IndexError):
+        return None
+
+
+def _docker_running(files: dict[str, str], sock_present: bool | None) -> bool | None:
+    """True if Docker daemon is confirmed listening, False if absent, None if unknown.
+
+    /proc/net/unix lists every open Unix socket, including the Docker daemon's.
+    A present socket file without a matching UNIX entry means the daemon has died
+    and left a stale socket behind — report False rather than misleading the user.
+    None means we could not determine the state (e.g. /proc/net/unix was not read).
+    """
+    if sock_present is False:
+        return False
+    if sock_present is None:
+        return None
+    # sock_present is True: socket file exists. Confirm the daemon is live.
+    net_unix = files.get("/proc/net/unix")
+    if net_unix is None:
+        return None  # did not read it — socket exists, daemon state unknown
+    for line in net_unix.splitlines():
+        if "docker" in line.lower() and line.strip().endswith(".sock"):
+            return True
+        # The path column is the last field; kernel may show /var/run/docker.sock
+        # or the canonical path under /run/docker.sock.
+        parts = line.split()
+        if parts and ("docker.sock" in parts[-1]):
+            return True
+    return False
+
+
 def _gfx_from_kfd(text: str) -> str | None:
     """gfx target of one KFD topology node, or None if it is not a GPU.
 
@@ -1211,6 +1318,39 @@ def _describe_bar(bar: dict[str, Any]) -> str:
     if bar["prefetchable"]:
         kind += " prefetchable"
     return f"BAR{bar['index']} {_human_bytes(bar['size'])} ({kind})"
+
+
+_ERNIC_VID = "0x1dd8"
+_ERNIC_DID = "0x1002"
+_ERNIC_SDID = "0x5400"
+
+
+def _is_ernic_by_pci(files: dict[str, str], iface: str) -> bool:
+    """True when sysfs PCI ID attributes match the rocm-ernic tuple."""
+    base = "/sys/class/net/%s/device/" % iface
+    return (
+        files.get(base + "vendor", "").strip() == _ERNIC_VID
+        and files.get(base + "device", "").strip() == _ERNIC_DID
+        and files.get(base + "subsystem_device", "").strip() == _ERNIC_SDID
+    )
+
+
+def _nic_devices(ga_info: dict[str, Any]) -> list[dict[str, Any]]:
+    """rocm-ernic NICs with BARs from guest sysfs resource files."""
+    files = ga_info.get("files") or {}
+    out: list[dict[str, Any]] = []
+    for path, text in sorted(files.items()):
+        if "/sys/class/net/" not in path or not path.endswith("/device/resource"):
+            continue
+        iface = path.split("/sys/class/net/")[1].split("/")[0]
+        if not (
+            iface.startswith("rocm-ernic")
+            or iface.startswith("rocmernic")
+            or _is_ernic_by_pci(files, iface)
+        ):
+            continue
+        out.append({"name": iface, "bars": _parse_bars(text)})
+    return out
 
 
 def _guest_bars(ga_info: dict[str, Any]) -> list[list[dict[str, Any]]]:
@@ -1745,10 +1885,64 @@ def _record(vm: dict[str, Any], cfg: VMConfig) -> dict[str, Any]:
         # The raw sysfs and procfs text is an input to the three collectors
         # above, not an answer: several KiB per VM of it would bury --json,
         # which already takes 60 lines to get through one VM's interfaces.
-        record["driver_state"] = _driver_state(ga_info.get("files", {}))
+        files = ga_info.get("files", {})
+        record["driver_state"] = _driver_state(files)
+        # Summarise IO counters while files is still available.
+        net_io = _proc_net_dev(files.get("/proc/net/dev"))
+        # Sum rx/tx across all non-loopback interfaces.
+        net_rx = sum(v[0] for k, v in net_io.items() if k != "lo")
+        net_tx = sum(v[1] for k, v in net_io.items() if k != "lo")
+        if net_io:
+            record["net_io_bytes"] = {"rx": net_rx, "tx": net_tx}
+        # Sum read/write sectors across all whole-disk block devices.
+        total_read_sectors = 0
+        total_write_sectors = 0
+        found_block_stat = False
+        for key, text in files.items():
+            if key.startswith("/sys/block/") and key.endswith("/stat"):
+                stat = _block_stat(text)
+                if stat is not None:
+                    total_read_sectors += stat[0]
+                    total_write_sectors += stat[1]
+                    found_block_stat = True
+        if found_block_stat:
+            record["block_io_bytes"] = {
+                "read": total_read_sectors * 512,
+                "write": total_write_sectors * 512,
+            }
+        # Docker daemon detection: pop before files is removed.
+        sock_present = ga_info.pop("docker_sock_present", None)
+        docker = _docker_running(files, sock_present)
+        if docker is not None:
+            record["docker_running"] = docker
+        record["nics"] = _nic_devices(ga_info)
         ga_info.pop("files", None)
         record["guest"] = ga_info
     return record
+
+
+def _qcow2_backing_file(image: str | None) -> str | None:
+    """Return the backing-file path from a qcow2 overlay header, or None.
+
+    QCOW2 header layout: magic(4) version(4) backing_file_offset(8 BE)
+    backing_file_size(4 BE) ...  An offset of zero means no backing file.
+    """
+    if not image:
+        return None
+    try:
+        with open(image, "rb") as f:
+            header = f.read(20)
+        if len(header) < 20 or header[:4] != b"QFI\xfb":
+            return None
+        bf_offset = int.from_bytes(header[8:16], "big")
+        bf_size = int.from_bytes(header[16:20], "big")
+        if bf_offset == 0 or bf_size == 0:
+            return None
+        with open(image, "rb") as f:
+            f.seek(bf_offset)
+            return f.read(bf_size).decode("utf-8", errors="replace")
+    except OSError:
+        return None
 
 
 def _print_human(records: list[dict[str, Any]]) -> None:
@@ -1758,6 +1952,9 @@ def _print_human(records: list[dict[str, Any]]) -> None:
     for r in records:
         name = r["name"] or "-"
         print(f"VM: {name}  (pid {r['pid']})")
+        guest = r.get("guest", {})
+        if guest.get("hostname"):
+            print(f"  Hostname:  {guest['hostname'].get('host-name', '-')}")
         ssh = r["ssh_cmd"] or f"port {r['ssh_port'] or '-'}"
         note = f"   ({r['ssh_key_note']})" if r.get("ssh_key_note") else ""
         print(f"  SSH:       {ssh}{note}")
@@ -1769,6 +1966,10 @@ def _print_human(records: list[dict[str, Any]]) -> None:
         print(f"  Arch:      {r['arch']}  vCPUs: {vcpus}  Memory: {mem}")
         gpus = r.get("gpus")
         ds = r.get("driver_state", {})
+
+        def _tri(val: bool | None) -> str:
+            return "yes" if val is True else "no" if val is False else "unknown"
+
         if gpus is None:
             # Printing nothing here would read as "no GPU" on a line-oriented
             # listing, which is the claim this has no evidence for.
@@ -1785,11 +1986,22 @@ def _print_human(records: list[dict[str, Any]]) -> None:
             for bar in gpu.get("bars") or []:
                 print(f"               {_describe_bar(bar)}")
             if ds or r.get("ga_available"):
-                def _tri(val: bool | None) -> str:
-                    return "yes" if val is True else "no" if val is False else "unknown"
                 print(f"             amdgpu loaded: {_tri(ds.get('amdgpu_loaded'))}  "
                       f"bound: {_tri(ds.get('amdgpu_bound'))}")
-        print(f"  Image:     {r['image'] or '-'}")
+        for nic in r.get("nics") or []:
+            print(f"  RNIC:      {nic['name']}")
+            for bar in nic.get("bars") or []:
+                print(f"               {_describe_bar(bar)}")
+            if ds or r.get("ga_available"):
+                bound = ds.get("nic_bound", {}).get(nic["name"])
+                print(f"             ionic loaded: {_tri(ds.get('ionic_loaded'))}  "
+                      f"ionic_rdma loaded: {_tri(ds.get('ionic_rdma_loaded'))}  "
+                      f"bound: {_tri(bound)}")
+        image = r['image'] or '-'
+        backing = _qcow2_backing_file(r['image'])
+        if backing:
+            image += f"  (backing: {Path(backing).name})"
+        print(f"  Image:     {image}")
         if r["container"]:
             print(f"  Container: {r['container']}")
         print(f"  Uptime:    {_fmt_uptime(r['uptime_seconds'])}")
@@ -1802,9 +2014,6 @@ def _print_human(records: list[dict[str, Any]]) -> None:
         if r.get("ga_socket"):
             avail = " (available)" if r.get("ga_available") else " (unavailable)"
             print(f"  GA:        {r['ga_socket']}{avail}")
-        guest = r.get("guest", {})
-        if guest.get("hostname"):
-            print(f"  Hostname:  {guest['hostname'].get('host-name', '-')}")
         if guest.get("interfaces"):
             for iface in guest["interfaces"]:
                 name = iface["name"]
@@ -1813,11 +2022,9 @@ def _print_human(records: list[dict[str, Any]]) -> None:
                     if addr.get("ip-address-type") == "ipv4":
                         tag = " [rocm-ernic]" if is_ernic else ""
                         print(f"  IP:        {addr['ip-address']} ({name}{tag})")
-                if is_ernic and (ds or r.get("ga_available")):
-                    bound = ds.get("nic_bound", {}).get(name)
-                    print(f"             ionic loaded: {_tri(ds.get('ionic_loaded'))}  "
-                          f"ionic_rdma loaded: {_tri(ds.get('ionic_rdma_loaded'))}  "
-                          f"bound: {_tri(bound)}")
+        net_io = r.get("net_io_bytes")
+        if net_io:
+            print(f"  Net IO:    RX: {_fmt_bytes(net_io['rx'])}  TX: {_fmt_bytes(net_io['tx'])}")
         devices = r.get("block_devices")
         if devices is None and r.get("ga_socket"):
             # Same rule as the Login line directly below, for the same reason:
@@ -1830,6 +2037,13 @@ def _print_human(records: list[dict[str, Any]]) -> None:
             # label uses, so "Boot Disk:" lines up with "Disk:" rather than
             # pushing its value out by five.
             print(f"  {label + ':':<11}{line}")
+        block_io = r.get("block_io_bytes")
+        if block_io:
+            print(f"  Block IO:  Read: {_fmt_bytes(block_io['read'])}  "
+                  f"Write: {_fmt_bytes(block_io['write'])}")
+        docker_running = r.get("docker_running")
+        if docker_running is not None:
+            print(f"  Docker:    {'running' if docker_running else 'not running'}")
         login = _login_line(r)
         if login is not None:
             print(f"  Login:     {login}")

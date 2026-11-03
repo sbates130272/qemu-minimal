@@ -47,7 +47,7 @@ on:
       - 'scripts/check-vm-devices.sh'
       - 'qemu/env/quickstart'
       - 'ansible/playbooks/fleet-quickstart.yml'
-      - 'ansible/playbooks/roles/lmcache_guest/tasks/amdgpu_firmware.yml'
+      - 'ansible/playbooks/roles/rocjitsu_gpu_test/tasks/amdgpu_firmware.yml'
       - 'ansible/playbooks/roles/lmcache_guest/tasks/netplan_ernic.yml'
       - 'ansible/playbooks/roles/rocjitsu_gpu_test/files/vector_add.hip'
       - 'qemu/qemu-tool/**'

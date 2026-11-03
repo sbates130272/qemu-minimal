@@ -171,7 +171,9 @@
     - lmcache_guest_amdgpu_firmware_enable | bool
     - lmcache_guest_rocjitsu_image | length > 0
   tags: [install, configure]
-  ansible.builtin.include_tasks: amdgpu_firmware.yml
+  ansible.builtin.include_role:
+    name: rocjitsu_gpu_test
+    tasks_from: amdgpu_firmware
 
 # Before the MP server block for two reasons. The reload inside it drops the
 # ernic's address and link, and the preflight that block installs is what puts
@@ -193,7 +195,9 @@
     # and the preflight's assignment becomes the fallback rather than the
     # only mechanism.
     - name: Declare the ernic address to networkd
-      ansible.builtin.include_tasks: netplan_ernic.yml
+      ansible.builtin.include_role:
+        name: ernic_fleet_guest
+        tasks_from: netplan_ernic
       when:
         - lmcache_guest_netplan_ernic | bool
         - lmcache_guest_ernic_mac | length > 0

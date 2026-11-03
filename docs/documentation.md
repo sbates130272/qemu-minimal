@@ -1,7 +1,5 @@
 ---
-layout: page
 title: Documentation
-permalink: /documentation/
 ---
 
 <div class="doc-grid">
@@ -38,11 +36,11 @@ permalink: /documentation/
 
 | Section | Purpose |
 | --- | --- |
-| [Home]({{ '/' | relative_url }}) | Landing page with badges, site summary, and entry points. |
-| [Documentation]({{ '/documentation/' | relative_url }}) | High-level explanation of the published site and its moving parts. |
-| [Reports]({{ '/reports/' | relative_url }}) | Directory of the live CI-generated report pages. |
-| [Publishing flow]({{ '/publishing/' | relative_url }}) | How workflow artifacts become the published site and how trend history is retained. |
-| [Performance trends]({{ '/perf/' | relative_url }}) | Generated benchmark history, latest badges, and recent-run tables. |
+| [Home](index.md) | Landing page with badges, site summary, and entry points. |
+| [Documentation](documentation.md) | High-level explanation of the published site and its moving parts. |
+| [Reports](reports.md) | Directory of the live CI-generated report pages. |
+| [Publishing flow](publishing.md) | How workflow artifacts become the published site and how trend history is retained. |
+| [Performance trends](perf/index.md) | Generated benchmark history, latest badges, and recent-run tables. |
 
 ## Report-producing lanes
 
@@ -53,10 +51,13 @@ permalink: /documentation/
 | `report-for-vm-ernic` | `/ernic/` and `/ernic/vm2/` | ernic stack reports for VM 1 and VM 2. |
 | `report-for-hipfile-fio` | `/hipfile-fio/` | fio `libhipfile` benchmark report. |
 | `report-for-lmcache` | `/lmcache/` | LMCache L1 P2P between two guests, with the ernic RDMA byte counters. |
+| `report-for-quickstart` | `/quickstart/` | The README's Quick Start, run end to end. |
+| `report-for-mi355x` | `/mi355x/` | An MI355X-shaped PCIe tree, as the guest enumerates it. |
 
 ## Notes
 
-- The site keeps using GitHub Pages branch builds, so Jekyll renders the Markdown.
+- The site is built from `docs/` using MkDocs Material and pushed as pre-built
+  HTML to the `gh-pages` branch.
 - Live report artifacts remain the source of truth for guest state.
-- Performance history is stored only on <code>gh-pages</code>; it is not committed on
-  <code>main</code>.
+- Performance history is stored only on `gh-pages`; it is not committed on
+  `main`.
