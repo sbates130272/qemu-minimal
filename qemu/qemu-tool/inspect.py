@@ -886,6 +886,7 @@ def _ga_run(path, timeout=2.0, budget=8.0):
     # udev-renamed name and common fallback kernel names.
     for _nic in ("rocm-ernic0", "rocmernic0", "rocm-ernic1", "rocmernic1"):
         grab("/sys/class/net/%s/device/uevent" % _nic)
+        grab("/sys/class/net/%s/device/resource" % _nic)
 
     # The NQN only ever refines a disk's origin -- without it _block_origin
     # falls back to the command line and finally to "unknown" -- so a miss
@@ -1303,6 +1304,19 @@ def _describe_bar(bar: dict[str, Any]) -> str:
     if bar["prefetchable"]:
         kind += " prefetchable"
     return f"BAR{bar['index']} {_human_bytes(bar['size'])} ({kind})"
+
+
+def _nic_devices(ga_info: dict[str, Any]) -> list[dict[str, Any]]:
+    """rocm-ernic NICs with BARs from guest sysfs resource files."""
+    out: list[dict[str, Any]] = []
+    for path, text in sorted((ga_info.get("files") or {}).items()):
+        if "/sys/class/net/" not in path or not path.endswith("/device/resource"):
+            continue
+        iface = path.split("/sys/class/net/")[1].split("/")[0]
+        if not (iface.startswith("rocm-ernic") or iface.startswith("rocmernic")):
+            continue
+        out.append({"name": iface, "bars": _parse_bars(text)})
+    return out
 
 
 def _guest_bars(ga_info: dict[str, Any]) -> list[list[dict[str, Any]]]:
@@ -1867,9 +1881,34 @@ def _record(vm: dict[str, Any], cfg: VMConfig) -> dict[str, Any]:
         docker = _docker_running(files, sock_present)
         if docker is not None:
             record["docker_running"] = docker
+        record["nics"] = _nic_devices(ga_info)
         ga_info.pop("files", None)
         record["guest"] = ga_info
     return record
+
+
+def _qcow2_backing_file(image: str | None) -> str | None:
+    """Return the backing-file path from a qcow2 overlay header, or None.
+
+    QCOW2 header layout: magic(4) version(4) backing_file_offset(8 BE)
+    backing_file_size(4 BE) ...  An offset of zero means no backing file.
+    """
+    if not image:
+        return None
+    try:
+        with open(image, "rb") as f:
+            header = f.read(20)
+        if len(header) < 20 or header[:4] != b"QFI\xfb":
+            return None
+        bf_offset = int.from_bytes(header[8:16], "big")
+        bf_size = int.from_bytes(header[16:20], "big")
+        if bf_offset == 0 or bf_size == 0:
+            return None
+        with open(image, "rb") as f:
+            f.seek(bf_offset)
+            return f.read(bf_size).decode("utf-8", errors="replace")
+    except OSError:
+        return None
 
 
 def _print_human(records: list[dict[str, Any]]) -> None:
@@ -1879,6 +1918,9 @@ def _print_human(records: list[dict[str, Any]]) -> None:
     for r in records:
         name = r["name"] or "-"
         print(f"VM: {name}  (pid {r['pid']})")
+        guest = r.get("guest", {})
+        if guest.get("hostname"):
+            print(f"  Hostname:  {guest['hostname'].get('host-name', '-')}")
         ssh = r["ssh_cmd"] or f"port {r['ssh_port'] or '-'}"
         note = f"   ({r['ssh_key_note']})" if r.get("ssh_key_note") else ""
         print(f"  SSH:       {ssh}{note}")
@@ -1890,6 +1932,10 @@ def _print_human(records: list[dict[str, Any]]) -> None:
         print(f"  Arch:      {r['arch']}  vCPUs: {vcpus}  Memory: {mem}")
         gpus = r.get("gpus")
         ds = r.get("driver_state", {})
+
+        def _tri(val: bool | None) -> str:
+            return "yes" if val is True else "no" if val is False else "unknown"
+
         if gpus is None:
             # Printing nothing here would read as "no GPU" on a line-oriented
             # listing, which is the claim this has no evidence for.
@@ -1906,11 +1952,22 @@ def _print_human(records: list[dict[str, Any]]) -> None:
             for bar in gpu.get("bars") or []:
                 print(f"               {_describe_bar(bar)}")
             if ds or r.get("ga_available"):
-                def _tri(val: bool | None) -> str:
-                    return "yes" if val is True else "no" if val is False else "unknown"
                 print(f"             amdgpu loaded: {_tri(ds.get('amdgpu_loaded'))}  "
                       f"bound: {_tri(ds.get('amdgpu_bound'))}")
-        print(f"  Image:     {r['image'] or '-'}")
+        for nic in r.get("nics") or []:
+            print(f"  RNIC:      {nic['name']}")
+            for bar in nic.get("bars") or []:
+                print(f"               {_describe_bar(bar)}")
+            if ds or r.get("ga_available"):
+                bound = ds.get("nic_bound", {}).get(nic["name"])
+                print(f"             ionic loaded: {_tri(ds.get('ionic_loaded'))}  "
+                      f"ionic_rdma loaded: {_tri(ds.get('ionic_rdma_loaded'))}  "
+                      f"bound: {_tri(bound)}")
+        image = r['image'] or '-'
+        backing = _qcow2_backing_file(r['image'])
+        if backing:
+            image += f"  (backing: {Path(backing).name})"
+        print(f"  Image:     {image}")
         if r["container"]:
             print(f"  Container: {r['container']}")
         print(f"  Uptime:    {_fmt_uptime(r['uptime_seconds'])}")
@@ -1923,9 +1980,6 @@ def _print_human(records: list[dict[str, Any]]) -> None:
         if r.get("ga_socket"):
             avail = " (available)" if r.get("ga_available") else " (unavailable)"
             print(f"  GA:        {r['ga_socket']}{avail}")
-        guest = r.get("guest", {})
-        if guest.get("hostname"):
-            print(f"  Hostname:  {guest['hostname'].get('host-name', '-')}")
         if guest.get("interfaces"):
             for iface in guest["interfaces"]:
                 name = iface["name"]
@@ -1934,14 +1988,9 @@ def _print_human(records: list[dict[str, Any]]) -> None:
                     if addr.get("ip-address-type") == "ipv4":
                         tag = " [rocm-ernic]" if is_ernic else ""
                         print(f"  IP:        {addr['ip-address']} ({name}{tag})")
-                if is_ernic and (ds or r.get("ga_available")):
-                    bound = ds.get("nic_bound", {}).get(name)
-                    print(f"             ionic loaded: {_tri(ds.get('ionic_loaded'))}  "
-                          f"ionic_rdma loaded: {_tri(ds.get('ionic_rdma_loaded'))}  "
-                          f"bound: {_tri(bound)}")
         net_io = r.get("net_io_bytes")
         if net_io:
-            print(f"  Net IO:    rx {_fmt_bytes(net_io['rx'])}  tx {_fmt_bytes(net_io['tx'])}")
+            print(f"  Net IO:    RX: {_fmt_bytes(net_io['rx'])}  TX: {_fmt_bytes(net_io['tx'])}")
         devices = r.get("block_devices")
         if devices is None and r.get("ga_socket"):
             # Same rule as the Login line directly below, for the same reason:
@@ -1956,8 +2005,8 @@ def _print_human(records: list[dict[str, Any]]) -> None:
             print(f"  {label + ':':<11}{line}")
         block_io = r.get("block_io_bytes")
         if block_io:
-            print(f"  Block IO:  read {_fmt_bytes(block_io['read'])}  "
-                  f"write {_fmt_bytes(block_io['write'])}")
+            print(f"  Block IO:  Read: {_fmt_bytes(block_io['read'])}  "
+                  f"Write: {_fmt_bytes(block_io['write'])}")
         docker_running = r.get("docker_running")
         if docker_running is not None:
             print(f"  Docker:    {'running' if docker_running else 'not running'}")
