@@ -2,16 +2,17 @@
 
 Two guests from the published `ernic-rocjitsu` image, each with an
 emulated gfx1250, an emulated NVMe and an emulated RDMA NIC, booted
-by `scripts/quickstart-2vm.sh`.
+by `qemu-tool quick-start`.
 
-- Guest image: `20261021.g0f1f43f-vm.resolute-ernic-rocjitsu-qm.b4eb552-qcow2`
+- Guest image: `20261030.gadc94af-vm.resolute-ernic-rocjitsu-qm.ae551b3-qcow2`
+- Guest size: 2 x 4 vCPU, 5993 MiB
 - RDMA bytes across the mesh: 65536000
-- Generated: **2026-10-23 00:07 UTC** &middot; Commit: `unknown` &middot; Status: **pass**
+- Generated: **2026-11-03 14:03 UTC** &middot; Commit: `5415863` &middot; Status: **pass**
 
 ## quickstart-1
 
 ```
-kernel:  7.2.4-070204-generic
+kernel:  7.2.6-070206-generic
 rocm:    /opt/rocm/core-10.1
 gpu:     gfx1250
 hca_id:	rocep1s0
@@ -30,7 +31,7 @@ nvme0n1    1T disk
 --- addresses
 lo               UNKNOWN        127.0.0.1/8 ::1/128 
 enp0s5           UP             10.0.2.15/24 metric 100 fec0::5054:ff:fe00:8ae/64 fe80::5054:ff:fe00:8ae/64 
-rocm-ernic0      UP             192.168.100.11/24 fe80::706f:63ff:fe6d:1/64 
+enp1s0np0        UP             192.168.100.11/24 fe80::706f:63ff:fe6d:1/64 
 ```
 
 ### GPU test
@@ -60,20 +61,28 @@ vector-add: PASS
  rdma_cm QPs	 : OFF
  Data ex. method : Ethernet
 ---------------------------------------------------------------------------------------
- local address: LID 0000 QPN 0x0002 PSN 0xc4da8f
+ local address: LID 0000 QPN 0x0002 PSN 0xdd1722
  GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:11
- remote address: LID 0000 QPN 0x0002 PSN 0x7abff3
+ remote address: LID 0000 QPN 0x0002 PSN 0x179ba6
  GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:12
 ---------------------------------------------------------------------------------------
  #bytes     #iterations    BW peak[MiB/sec]    BW average[MiB/sec]   MsgRate[Mpps]
- 65536      1000             670.81             655.85 		     0.010494
+ 65536      1000             889.05             871.17 		     0.013939
 ---------------------------------------------------------------------------------------
 ```
+
+### NVMe I/O test
+
+| Direction | Bandwidth |
+|-----------|-----------|
+| write | 97.0 MiB/s |
+| read  | 510.0 MiB/s |
+
 
 ## quickstart-2
 
 ```
-kernel:  7.2.4-070204-generic
+kernel:  7.2.6-070206-generic
 rocm:    /opt/rocm/core-10.1
 gpu:     gfx1250
 hca_id:	rocep1s0
@@ -92,7 +101,7 @@ nvme0n1    1T disk
 --- addresses
 lo               UNKNOWN        127.0.0.1/8 ::1/128 
 enp0s5           UP             10.0.2.15/24 metric 100 fec0::5054:ff:fe00:8ae/64 fe80::5054:ff:fe00:8ae/64 
-rocm-ernic0      UP             192.168.100.12/24 fe80::706f:63ff:fe6d:2/64 
+enp1s0np0        UP             192.168.100.12/24 fe80::706f:63ff:fe6d:2/64 
 ```
 
 ### GPU test
@@ -102,6 +111,14 @@ device=gfx1250 CUs=32 n=4096
 mismatches=0
 vector-add: PASS
 ```
+
+
+### NVMe I/O test
+
+| Direction | Bandwidth |
+|-----------|-----------|
+| write | 95.0 MiB/s |
+| read  | 443.0 MiB/s |
 
 
 ## ernic counters
