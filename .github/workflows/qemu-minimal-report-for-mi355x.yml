@@ -122,7 +122,7 @@ jobs:
           /var/lib/qemu-tool
           /var/lib/qemu-tool/images
           /var/lib/qemu-tool/stacks
-          ${{ github.workspace }}
+          $GITHUB_WORKSPACE
 
     # These lanes drive the stack with PLAIN `docker compose` in places --
     # the `ps` after `up`, and the logs-on-failure path -- and plain compose
