@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v1.5.0] - 2026-11-03
+
 ### Added
 
 - **Backing image tag tracking in `gen-vm` and `quick-start`.** A sidecar
