@@ -142,3 +142,14 @@ ernic_fleet_deb_dir: ""
 # Leave empty to skip.
 ernic_fleet_perftest_dir: ""
 ernic_fleet_perftest_prefix: /usr/local/lib/perftest-rocm
+
+# ── netplan_ernic task file ───────────────────────────────────────────────────
+# These variables are consumed by tasks/netplan_ernic.yml, which was moved here
+# from lmcache_guest. They use the lmcache_guest_ prefix because gen-compose
+# emits them under that name into fleet-inventory.yml.
+lmcache_guest_ernic_mac: ""
+lmcache_guest_eth_address: ""
+# The netplan set-name for the ernic interface. Defaults to ernic0 (the
+# lmcache_guest conventional name); fleet-quickstart.yml overrides to
+# rocm-ernic0 to match the udev rename that is already in place.
+lmcache_guest_ernic_netplan_name: ernic0

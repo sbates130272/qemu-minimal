@@ -136,3 +136,11 @@ rocjitsu_gpu_test_rvs_conf_dir: >-
 rocjitsu_gpu_test_rvs_config_name: gpup_single.conf
 rocjitsu_gpu_test_rvs_timeout: 120
 rocjitsu_gpu_test_timeout_bin: /usr/bin/timeout
+
+# ── amdgpu_firmware task file ─────────────────────────────────────────────────
+# These variables are consumed by tasks/amdgpu_firmware.yml, which was moved
+# here from lmcache_guest. They use the lmcache_guest_ prefix because
+# gen-compose emits lmcache_guest_rocjitsu_image into fleet-inventory.yml.
+lmcache_guest_rocjitsu_image: ""
+lmcache_guest_amdgpu_firmware_generation: gfx1250
+lmcache_guest_amdgpu_firmware_set: gap
