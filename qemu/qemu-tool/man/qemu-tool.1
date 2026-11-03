@@ -175,7 +175,7 @@ CLI flags override values from the XML.
 .SH QUICK-START OPTIONS
 .B quick\-start
 takes one optional verb:
-.BR all " (the default), " preflight ", " up ", " test ", " report " or " down .
+.BR all " (the default), " preflight ", " up ", " test ", " report ", " logs " or " down .
 .B preflight
 checks this machine and touches nothing;
 .B up
@@ -251,6 +251,32 @@ what the CI lane is.
 .TP
 .BR \-\-yes ", " \-y
 Take the default answer to every prompt without asking.
+.TP
+.BR \-f ", " \-\-follow
+Follow log output when running the
+.B logs
+verb (equivalent to
+.BR "docker compose logs \-f" ).
+.TP
+.BI \-\-rdma\-duration " SECONDS"
+Run
+.B ib_send_bw
+for this many seconds instead of the default 1000 iterations. Useful for a
+longer soak test of the RDMA mesh.
+.TP
+.BI \-\-nvme\-duration " SECONDS"
+Run each
+.B fio
+NVMe pass for this many seconds. Default: 10.
+.TP
+.B \-\-clean\-overlays
+Delete the guest overlay and NVMe qcow2 files before starting, so the guests
+boot from a fresh overlay of the backing image. The backing file itself is
+kept. Only meaningful with the
+.B up
+or
+.B all
+verbs.
 .SH RUN-VM OPTIONS
 .TP
 .BI \-\-filesystem " DIR"

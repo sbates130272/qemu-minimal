@@ -87,8 +87,8 @@ VM_PCI_HOLE64_SIZE=512G
 # Verify a candidate with `-device help | grep pci-mmio-bridge`, present only
 # in fork builds, and /build/qemu-commit.txt.
 #
-# All four share the 20261021.g0f1f43f stamp, and the qemu/ernic pair share
-# vfu.8039244 -- gen-compose refuses a set that does not.
+# All four share the 20261030.gadc94af stamp, and the qemu/ernic pair share
+# vfu.5b9c722 -- gen-compose refuses a set that does not.
 #
 # The fork build here is qemu.aa4344e, NOT the qemu.31e3d06 named above, and
 # aa4344e is not a descendant of it -- the branch was rebased, so the two
@@ -96,10 +96,10 @@ VM_PCI_HOLE64_SIZE=512G
 # tag. Checked against the tree instead: the patch is present as 5de56a3,
 # same subject, and `-device help` lists pci-mmio-bridge, which only fork
 # builds have. A future tag needs the same check, not this sentence.
-QEMU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:20261021.g0f1f43f-qemu.aa4344e-vfu.8039244
-ERNIC_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261021.g0f1f43f-ernic.31d3114-vfu.8039244
-ROCJITSU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261021.g0f1f43f-rocjitsu.84fb06b
-VM_BACKING_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu:20261021.g0f1f43f-vm.resolute-ernic-rocjitsu-qm.b4eb552-qcow2
+QEMU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:20261030.gadc94af-qemu.f91f120-vfu.3719c3a
+ERNIC_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic-sbates-fork:20261030.gadc94af-ernic.8f35f4a-vfu.3719c3a
+ROCJITSU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261030.gadc94af-rocjitsu.73c3cf3
+VM_BACKING_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu:20261030.gadc94af-vm.resolute-ernic-rocjitsu-qm.ae551b3-qcow2
 
 # ---------------------------------------------------------------------------
 # Guest login

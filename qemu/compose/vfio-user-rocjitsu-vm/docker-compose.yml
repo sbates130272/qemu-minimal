@@ -43,7 +43,7 @@ x-gpu-common: &gpu-common
 services:
   rocjitsu:
     <<: *gpu-common
-    image: "${ROCJITSU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261014.geea0485-rocjitsu.84fb06b}"
+    image: "${ROCJITSU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261030.gadc94af-rocjitsu.73c3cf3}"
     command:
       - rocjitsu
       - --config
@@ -51,14 +51,14 @@ services:
       - --vfio-socket
       - /run/vfu/rocjitsu-1.sock
     healthcheck:
-      test: ["CMD", "sh", "-c", "test -S /run/vfu/rocjitsu-1.sock"]
+      test: ["CMD", "sh", "-c", "grep -qE ' 01 [0-9]+ /run/vfu/rocjitsu-1[.]sock$' /proc/net/unix"]
       interval: 2s
       timeout: 5s
       retries: 30
       start_period: 5s
 
   qemu:
-    image: "${QEMU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261014.geea0485-qemu11.1.2-vfu.8039244}"
+    image: "${QEMU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261030.gadc94af-qemu11.1.3-vfu.5b9c722}"
     depends_on:
       rocjitsu:
         condition: service_healthy
@@ -111,6 +111,8 @@ services:
           --vcpus "${VM_VCPUS:-4}" \
           --vmem "${VM_VMEM:-8192}" \
           --ssh-port 2222 \
+          --cpu-phys-bits "${VM_CPU_PHYS_BITS:-41}" \
+          --pci-hole64-size "${VM_PCI_HOLE64_SIZE:-512G}" \
           --vfio-userdev "$$socks" \
           $${VM_NVME:+--nvme "$$VM_NVME"}
 

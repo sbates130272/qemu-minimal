@@ -282,7 +282,8 @@ class Gpus(unittest.TestCase):
     def test_passthrough_gpu_takes_its_gfx_from_the_guest(self):
         argv = ["qemu-system-x86_64", "-device",
                 "vfio-pci,id=vfio-host0,bus=pcie.0,host=0000:03:00.0"]
-        with mock.patch.object(inspect_mod, "_pci_class", lambda bdf: "0x120000"):
+        with mock.patch.object(inspect_mod, "_pci_class", lambda bdf: "0x120000"), \
+             mock.patch.object(inspect_mod, "_host_bars", return_value=[]):
             gpus = inspect_mod._gpu_devices(
                 vm(),
                 ga(files={kfd_props():

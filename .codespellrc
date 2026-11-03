@@ -7,8 +7,9 @@
 # spells "Recieved" in a comment. That is upstream's to fix, and correcting it
 # here would both break the apply and hide the drift the two trees are kept
 # in step by, so the directory is skipped rather than the word ignored.
-skip = .git,*.qcow2,*.img,*.deb,./qemu/docker/lmcache/rdma-core-patches
+skip = .git,*.qcow2,*.img,*.deb,./qemu/docker/lmcache/rdma-core-patches,./qemu/compose/vfio-user-ernic-rocjitsu-scale-out/grafana/dashboards/node/node-exporter-full.json
 # hsa: ROCm's Heterogeneous System Architecture, not a typo for "has".
 # blacklist: the literal modprobe/kernel command-line keyword.
-ignore-words-list = hsa,blacklist
+# TRIMed: grafana.com upstream dashboard JSON, not our text.
+ignore-words-list = hsa,blacklist,TRIMed
 check-filenames =

@@ -1,0 +1,90 @@
+name: qemu-minimal - Image Tag Consistency Check
+
+# Every batesste-ci-images tag in workflow files, compose stacks, and env
+# files must share the same YYYYMMDD.gHASH stamp. A tag bump that updates
+# env files but forgets a workflow's container.image: (or vice versa) ships
+# a mismatched image in CI; this check makes the failure visible on the PR.
+#
+# Fork images (sbates-fork) are built on a separate cadence and may carry a
+# different stamp. They are checked for internal consistency separately.
+#
+# What is searched: all files under .github/workflows/, .github/actions/,
+# qemu/compose/ (including generated stacks), and qemu/env/ (extension-less).
+# Markdown files are excluded: docs and CHANGELOG reference old tags by design.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+jobs:
+  image-tag-consistency:
+    name: Image Tag Consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.3.1
+
+      - name: Check batesste-ci-images stamps are consistent
+        run: |
+          SEARCH_DIRS=".github/workflows/ .github/actions/ qemu/compose/ qemu/env/"
+
+          # Extract all tags (YYYYMMDD.gHASH), split by whether the line
+          # references the fork image or the standard one.
+          all_lines=$(grep -rEh \
+            'batesste-ci-images[^:]*:[0-9]{8}\.g[a-f0-9]+' \
+            $SEARCH_DIRS 2>/dev/null || true)
+
+          nonfork_stamps=$(echo "$all_lines" | grep -v 'sbates-fork' |
+            grep -oE '[0-9]{8}\.g[a-f0-9]+' | sort -u)
+          fork_stamps=$(echo "$all_lines" | grep 'sbates-fork' |
+            grep -oE '[0-9]{8}\.g[a-f0-9]+' | sort -u)
+
+          fail=0
+
+          # --- standard images ---
+          nonfork_count=$(echo "$nonfork_stamps" | grep -c . || true)
+          if [ "$nonfork_count" -eq 0 ]; then
+            echo "::error::No standard batesste-ci-images refs found — search paths may be wrong"
+            exit 1
+          fi
+          echo "Standard image stamps ($nonfork_count distinct):"
+          echo "$nonfork_stamps"
+          if [ "$nonfork_count" -gt 1 ]; then
+            echo "" >&2
+            echo "::error::Standard images have $nonfork_count stamps (expected 1). Files per stamp:" >&2
+            echo "$nonfork_stamps" | while IFS= read -r s; do
+              echo "  $s:" >&2
+              grep -rEn 'batesste-ci-images[^:]*:[0-9]{8}\.g[a-f0-9]+' \
+                $SEARCH_DIRS 2>/dev/null |
+                grep "$s" | grep -v 'sbates-fork' |
+                sed 's/^/    /' >&2
+            done
+            fail=1
+          else
+            echo "OK: all standard refs on stamp $nonfork_stamps"
+          fi
+
+          # --- fork images ---
+          fork_count=$(echo "$fork_stamps" | grep -c . || true)
+          if [ "$fork_count" -eq 0 ]; then
+            echo "No fork image refs found — skipping fork check"
+          elif [ "$fork_count" -gt 1 ]; then
+            echo "" >&2
+            echo "::error::Fork images have $fork_count stamps (expected 1). Files per stamp:" >&2
+            echo "$fork_stamps" | while IFS= read -r s; do
+              echo "  $s:" >&2
+              grep -rEn 'batesste-ci-images[^:]*:[0-9]{8}\.g[a-f0-9]+' \
+                $SEARCH_DIRS 2>/dev/null |
+                grep "$s" | grep 'sbates-fork' |
+                sed 's/^/    /' >&2
+            done
+            fail=1
+          else
+            echo "OK: all fork refs on stamp $fork_stamps"
+          fi
+
+          exit $fail

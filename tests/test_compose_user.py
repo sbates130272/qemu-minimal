@@ -144,7 +144,7 @@ def _blocks(body: str) -> dict[str, list[str]]:
 # notice when it changes.
 _EXPECTED_USER = {
     "x-ernic-common", "x-qemu-common",
-    "prometheus", "loki", "alloy", "grafana", "lmcache-coordinator",
+    "prometheus", "loki", "grafana", "lmcache-coordinator",
 }
 # ... and who inherits it, from which anchor.
 _INHERITED_USER = {
@@ -152,10 +152,10 @@ _INHERITED_USER = {
     "rocjitsu-1": "ernic-common", "rocjitsu-2": "ernic-common",
     "qemu-1": "qemu-common", "qemu-2": "qemu-common",
 }
-# tapsetup cannot (Docker sets no ambient capabilities, so a non-root uid
-# holds no effective NET_ADMIN); dockerapi must not (it speaks to the daemon
-# socket, which is root's).
-_EXEMPT = {"tapsetup-1", "tapsetup-2", "dockerapi"}
+# tapsetup cannot take a uid (Docker sets no ambient capabilities, so a
+# non-root uid holds no effective NET_ADMIN). alloy must not: it mounts
+# /var/run/docker.sock to ship container logs, and that socket is root's.
+_EXEMPT = {"tapsetup-1", "tapsetup-2", "alloy"}
 _PINNED_NOBODY = {"ernic-stats-exporter", "lmcache-stats-exporter"}
 
 
@@ -285,7 +285,7 @@ class TestHardening(unittest.TestCase):
     def test_every_service_drops_all_capabilities(self):
         # Through an anchor for the per-VM services, inline for the rest.
         for name in ("x-ernic-common", "x-qemu-common", "prometheus", "loki",
-                     "alloy", "grafana", "lmcache-coordinator", "dockerapi",
+                     "alloy", "grafana", "lmcache-coordinator",
                      "tapsetup-1"):
             block = "\n".join(self.blocks[name])
             self.assertIn("cap_drop", block, name)
@@ -311,55 +311,37 @@ class TestHardening(unittest.TestCase):
             name for name, lines in self.blocks.items()
             if any(ln.strip().startswith("cap_add") for ln in lines)
         }
-        # dockerapi is haproxy: it drops to its own user and chroots, which
-        # needs SETUID/SETGID/DAC_OVERRIDE back. Everything else holds none.
-        self.assertEqual(adders, {"tapsetup-1", "tapsetup-2", "dockerapi"})
+        self.assertEqual(adders, {"tapsetup-1", "tapsetup-2"})
 
 
 class TestDockerSocket(unittest.TestCase):
-    """Item 6: `:ro` on a socket mount restricts the inode, not the API.
+    """Alloy mounts /var/run/docker.sock directly to ship container logs.
 
-    Anything that can connect to /var/run/docker.sock can create a privileged
-    container and own the host, however the mount is flagged. Alloy is a large
-    pipeline that parses untrusted container log content, which makes it the
-    least suitable process in the stack to hold that.
+    Anything that connects to that socket is root on the host. Accepted in
+    this lab stack: the alternative (dockerapi proxy) was removed because its
+    haproxy access log flooded quick-start output at ~10 lines per container
+    per 5 s. Alloy runs with cap_drop: [ALL] and no-new-privileges; it holds
+    no capabilities beyond the socket itself.
     """
 
     def setUp(self):
         self.body = _render()
         self.blocks = _blocks(self.body)
 
-    def test_alloy_holds_no_socket(self):
+    def test_alloy_holds_the_socket(self):
         block = "\n".join(self.blocks["alloy"])
-        self.assertNotIn("docker.sock", block)
+        self.assertIn("docker.sock", block)
 
     def test_exactly_one_service_holds_the_socket(self):
         holders = {
             name for name, lines in self.blocks.items()
             if any("docker.sock" in ln for ln in lines)
         }
-        self.assertEqual(holders, {"dockerapi"})
+        self.assertEqual(holders, {"alloy"})
 
-    def test_the_proxy_refuses_writes(self):
-        """POST=0 is the line that matters: without it the allowlist still
-        permits container create, start and exec, which is the whole exploit.
-        """
-        block = "\n".join(self.blocks["dockerapi"])
-        self.assertIn("- POST=0", block)
-        self.assertIn("- EXEC=0", block)
-        self.assertIn("- CONTAINERS=1", block)
-
-    def test_the_proxy_is_not_published(self):
-        """Reachable from the fleet network and nowhere else. A published
-        read-only Docker API is still a container inventory for anyone who
-        can reach the host's port.
-        """
-        block = "\n".join(self.blocks["dockerapi"])
-        self.assertNotIn("ports:", block)
-
-    def test_alloy_is_pointed_at_the_proxy(self):
+    def test_alloy_uses_unix_socket_not_proxy(self):
         block = "\n".join(self.blocks["alloy"])
-        self.assertIn("DOCKER_HOST=tcp://", block)
+        self.assertNotIn("DOCKER_HOST=tcp://", block)
 
 
 class TestCallerIdentity(unittest.TestCase):

@@ -207,8 +207,13 @@ def _add_quick_start(sub: argparse._SubParsersAction) -> None:
             "all (default) does the lot. preflight checks this machine and "
             "touches nothing, up stops once the guests are booted, test "
             "configures and tests an already-up stack, report rewrites the "
-            "report, down stops it and keeps the overlays."
+            "report, logs shows the compose logs, down stops it and keeps "
+            "the overlays."
         ),
+    )
+    p.add_argument(
+        "-f", "--follow", action="store_true", default=False,
+        help="Follow log output (only meaningful with the logs verb).",
     )
     p.add_argument(
         "--env-file", action="append", type=Path, default=None, metavar="FILE",
@@ -278,6 +283,26 @@ def _add_quick_start(sub: argparse._SubParsersAction) -> None:
     p.add_argument(
         "--yes", "-y", action="store_true",
         help="Take the default answer to every prompt without asking.",
+    )
+    p.add_argument(
+        "--rdma-duration", type=int, default=None, metavar="SECONDS",
+        help=(
+            "Run ib_send_bw for this many seconds instead of the default "
+            "1000 iterations. Useful for a longer soak test."
+        ),
+    )
+    p.add_argument(
+        "--nvme-duration", type=int, default=None, metavar="SECONDS",
+        help="Run each fio NVMe pass for this many seconds (default: 10).",
+    )
+    p.add_argument(
+        "--clean-overlays", action="store_true", default=False,
+        help=(
+            "Delete the guest overlay and NVMe qcow2 files before starting, "
+            "so the guests boot from a fresh overlay of the backing image. "
+            "The backing file itself is kept. Only meaningful with the up or "
+            "all verbs."
+        ),
     )
     p.set_defaults(func=_quick_start_cmd)
 
@@ -921,6 +946,10 @@ def _quick_start_cmd(args: argparse.Namespace) -> None:
         metrics=args.metrics,
         size_from_host=args.size_from_host,
         assume_yes=args.yes,
+        follow=args.follow,
+        clean_qcow2=args.clean_overlays,
+        rdma_duration=args.rdma_duration,
+        nvme_duration=args.nvme_duration,
     )
 
 
