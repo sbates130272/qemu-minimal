@@ -652,7 +652,7 @@ def _resolve_ports(state: _State) -> None:
     changed: dict[str, str] = {}
     wanted = []
     if state.metrics:
-        wanted += [("PROM_PORT", "Prometheus"), ("GRAFANA_PORT", "Grafana")]
+        wanted += [("GRAFANA_PORT", "Grafana")]
     for key, label in wanted:
         port = int(state.get(key))
         if _port_free(port):
@@ -938,7 +938,7 @@ def up(state: _State) -> None:
     # "address already in use" buried in compose log output.
     if state.metrics:
         fresh_win = _windows_listening_ports()
-        for key, label in [("PROM_PORT", "Prometheus"), ("GRAFANA_PORT", "Grafana")]:
+        for key, label in [("GRAFANA_PORT", "Grafana")]:
             port = int(state.get(key))
             if port in fresh_win:
                 _die(
