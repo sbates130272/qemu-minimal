@@ -12,7 +12,7 @@ new CI data lands.
 
 ## Latest published snapshot
 
-Generated from `6ee149eb` at **2026-11-03 15:59 UTC**.
+Generated from `d0b8708f` at **2026-11-03 16:09 UTC**.
 
 ![rocjitsu GEMM](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-gemm.json)
 ![rocjitsu hipFile](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile.json)
@@ -51,7 +51,6 @@ vfio-user and swing hard between runs.
 
 | Commit | Generated | GEMM | hipFile | hipFile fio |
 | --- | --- | --- | --- | --- |
-| e7c0f839 | 2026-10-30 00:30 UTC | 484 kFLOP/s | 195 MB/s | 137 MB/s |
 | e7c0f839 | 2026-10-30 15:14 UTC | 729 kFLOP/s | 134 MB/s | 79.4 MB/s |
 | e7c0f839 | 2026-10-31 14:20 UTC | 650 kFLOP/s | 252 MB/s | 219 MB/s |
 | e7c0f839 | 2026-11-01 15:02 UTC | 1.07 MFLOP/s | 141 MB/s | 118 MB/s |
@@ -61,6 +60,7 @@ vfio-user and swing hard between runs.
 | 54158639 | 2026-11-03 14:03 UTC | 640 kFLOP/s | 23.1 MB/s | 24.6 MB/s |
 | 6ee149eb | 2026-11-03 15:26 UTC | 640 kFLOP/s | 23.1 MB/s | 24.6 MB/s |
 | 6ee149eb | 2026-11-03 15:59 UTC | 1.06 MFLOP/s | 117 MB/s | 110 MB/s |
+| d0b8708f | 2026-11-03 16:09 UTC | 1.06 MFLOP/s | 117 MB/s | 110 MB/s |
 
 ## Current report freshness
 
@@ -74,14 +74,14 @@ shows the last date on which all 6 reports were green at once —
 amber once that date is no longer today.
 
 Last all-green: **2026-11-03** &middot; checked
-2026-11-03 15:59 UTC &middot; currently
+2026-11-03 16:09 UTC &middot; currently
 all green.
 
 | Report | Generated | Status | Commit | Page |
 | --- | --- | --- | --- | --- |
-| Single VM | 2026-11-03 15:30 UTC | pass | `6ee149e` | [/1vm/](/1vm/) |
+| Single VM | 2026-11-03 16:02 UTC | pass | `6ee149e` | [/1vm/](/1vm/) |
 | rocjitsu | 2026-11-03 15:56 UTC | pass | `6ee149e` | [/rocjitsu/](/rocjitsu/) |
-| ernic VM 1 | 2026-11-03 15:34 UTC | pass | `6ee149e` | [/ernic/](/ernic/) |
-| ernic VM 2 | 2026-11-03 15:34 UTC | pass | `6ee149e` | [/ernic/vm2/](/ernic/vm2/) |
+| ernic VM 1 | 2026-11-03 16:09 UTC | pass | `6ee149e` | [/ernic/](/ernic/) |
+| ernic VM 2 | 2026-11-03 16:09 UTC | pass | `6ee149e` | [/ernic/vm2/](/ernic/vm2/) |
 | hipFile fio | 2026-11-03 15:58 UTC | pass | `6ee149e` | [/hipfile-fio/](/hipfile-fio/) |
 | MI355X node | 2026-11-02 22:34 UTC | pass | ``unknown`` | [/mi355x/](/mi355x/) |
