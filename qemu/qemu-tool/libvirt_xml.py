@@ -202,6 +202,14 @@ class LibvirtXml:
             cfg.nvme_lbaf_mask = hints["nvme_lbaf_mask"]
         if "nvme_recreate" in hints:
             cfg.nvme_recreate = hints["nvme_recreate"] == "true"
+        if "nvme_vram_dev" in hints:
+            cfg.nvme_vram_dev = hints["nvme_vram_dev"]
+        if "nvme_vram_bar" in hints:
+            cfg.nvme_vram_bar = int(hints["nvme_vram_bar"])
+        if "nvme_dbbuf_poll_ns" in hints:
+            cfg.nvme_dbbuf_poll_ns = int(hints["nvme_dbbuf_poll_ns"])
+        if "nvme_dbbuf_poll_eventidx" in hints:
+            cfg.nvme_dbbuf_poll_eventidx = hints["nvme_dbbuf_poll_eventidx"]
         if "pci_mmio_bridge" in hints:
             cfg.pci_mmio_bridge = hints["pci_mmio_bridge"] == "true"
         if "vram_dev_index" in hints:
@@ -532,17 +540,14 @@ class LibvirtXml:
                 f"memory-backend-memfd,id=mem-vfio-user,size={cfg.vmem}M,share=on",
                 "-numa", "node,memdev=mem-vfio-user",
             ]
+            from .run_vm import _vfio_user_dev_json
             for j, sock in enumerate(cfg.vfio_userdev, start=1):
                 chassis = chassis_base + j
                 args += [
                     "-device",
                     f"pcie-root-port,id=pcie-vfu.{j},chassis={chassis}",
                 ]
-                dev_json = (
-                    f'{{"driver":"vfio-user-pci","bus":"pcie-vfu.{j}",'
-                    f'"socket":{{"path":"{sock}","type":"unix"}}}}'
-                )
-                args += ["-device", dev_json]
+                args += ["-device", _vfio_user_dev_json(sock, f"pcie-vfu.{j}")]
 
         # mcast NIC
         if cfg.mcast_group:
@@ -605,6 +610,14 @@ class LibvirtXml:
                 dev += ",dbcs=off"
         if cfg.vram_dev_index is not None and caps.has_vram_dev:
             dev += f",vram-dev=vfio-host{cfg.vram_dev_index},vram-bar={cfg.vram_bar}"
+        elif cfg.nvme_vram_dev is not None and caps.has_vram_dev:
+            bar = cfg.nvme_vram_bar if cfg.nvme_vram_bar is not None else 0
+            dev += f",vram-dev={cfg.nvme_vram_dev},vram-bar={bar}"
+        if caps.has_dbbuf_poll:
+            if cfg.nvme_dbbuf_poll_ns is not None:
+                dev += f",dbbuf-poll-ns={cfg.nvme_dbbuf_poll_ns}"
+            if cfg.nvme_dbbuf_poll_eventidx is not None:
+                dev += f",dbbuf-poll-eventidx={cfg.nvme_dbbuf_poll_eventidx}"
         ns = f"nvme-ns,drive=nvme-{idx},bus=nvme-{idx}-dev,nsid=1"
         if cfg.nvme_lbaf_mask and caps.has_lbaf_mask:
             ns += f",lbaf-mask={cfg.nvme_lbaf_mask.lower()}"
@@ -629,6 +642,14 @@ class LibvirtXml:
             hints["nvme_lbaf_mask"] = cfg.nvme_lbaf_mask
         if cfg.nvme_recreate:
             hints["nvme_recreate"] = "true"
+        if cfg.nvme_vram_dev is not None:
+            hints["nvme_vram_dev"] = cfg.nvme_vram_dev
+        if cfg.nvme_vram_bar is not None:
+            hints["nvme_vram_bar"] = str(cfg.nvme_vram_bar)
+        if cfg.nvme_dbbuf_poll_ns is not None:
+            hints["nvme_dbbuf_poll_ns"] = str(cfg.nvme_dbbuf_poll_ns)
+        if cfg.nvme_dbbuf_poll_eventidx is not None:
+            hints["nvme_dbbuf_poll_eventidx"] = cfg.nvme_dbbuf_poll_eventidx
         if cfg.pci_mmio_bridge:
             hints["pci_mmio_bridge"] = "true"
         if cfg.vram_dev_index is not None:
