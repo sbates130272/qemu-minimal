@@ -44,7 +44,7 @@ on:
     paths:
       - '.github/workflows/qemu-minimal-publish-pages.yml'
       - 'docs/**'
-      - 'mkdocs.yml'
+      - '.mkdocs.yml'
       - 'scripts/render-site-perf.py'
   workflow_dispatch:
 
@@ -174,7 +174,7 @@ jobs:
             --green-out docs/perf/green.json
 
       - name: Build site with MkDocs
-        run: mkdocs build --strict
+        run: mkdocs build --config-file .mkdocs.yml --strict
 
       - name: Publish to the gh-pages branch
         env:
