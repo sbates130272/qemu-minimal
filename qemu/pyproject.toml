@@ -109,7 +109,7 @@ packages = [
 # --env-file" before doing anything at all. Unlike an overlay it is a
 # complete, self-contained settings file, which is exactly the property that
 # makes shipping it meaningful.
-"qemu_tool.share.env" = ["example", "scale-out", "mi355x-node", "quickstart"]
+"qemu_tool.share.env" = ["scale-out.xml", "mi355x-node.xml", "quickstart.xml", "fleet-example.xml"]
 # Every file a stack needs to come up, not just the YAML. A stack directory is
 # used verbatim as a `docker compose` working directory, so anything it
 # bind-mounts or builds has to be in the wheel too -- and the failure when it

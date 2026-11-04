@@ -6,7 +6,7 @@ name: qemu-minimal - PR quickstart boot
 # two guests, the full Ansible configure, a GPU test, an inter-guest RDMA test
 # and a published report -- and it runs on push to main and on a daily cron,
 # never on a PR. So the quickstart breaking is found the morning after the
-# merge. Gen Compose Check already renders qemu/env/quickstart on every PR and
+# merge. Gen Compose Check already renders qemu/env/quickstart.xml on every PR and
 # asserts the services are there, which catches a broken settings file or
 # generator; what neither of them does is start QEMU. This lane does only
 # that, and stops.
@@ -28,7 +28,7 @@ name: qemu-minimal - PR quickstart boot
 #     the five edits AGENTS.md lists for adding one.
 #
 # THE IMAGE. This points VM_BACKING_IMAGE at the `-slim` flavour of the same
-# build stamp, through an OVERLAY -- qemu/env/quickstart itself is untouched,
+# build stamp, through an OVERLAY -- qemu/env/quickstart.xml itself is untouched,
 # because report-for-quickstart runs that file and the slim guest would fail
 # its GPU test. Measured on the registry, same stamp: slim is 0.75 GB
 # compressed against the fat image's 2.52 GB, so this is a ~3.4x smaller pull
@@ -54,7 +54,7 @@ on:
       - 'qemu/qemu-tool/gen_compose.py'
       - 'qemu/qemu-tool/run_vm.py'
       - 'qemu/qemu-tool/gen_vm.py'
-      - 'qemu/env/quickstart'
+      - 'qemu/env/quickstart.xml'
       - '.github/workflows/qemu-minimal-quickstart-boot.yml'
   workflow_dispatch:
 
@@ -86,9 +86,10 @@ jobs:
         -v /var/run/docker.sock:/var/run/docker.sock
         -v /var/lib/qemu-tool:/var/lib/qemu-tool
     env:
+      FLEET_FILE: qemu/env/quickstart.xml
       STACK_DIR: /var/lib/qemu-tool/stacks/pr-boot
       KEY_DIR: /var/lib/qemu-tool/pr-boot-key
-      OVERLAY: /var/lib/qemu-tool/stacks/pr-boot.env
+      OVERLAY: /var/lib/qemu-tool/stacks/pr-boot.xml
     steps:
     - name: Check out code
       uses: actions/checkout@v4.3.1
@@ -126,8 +127,18 @@ jobs:
         esac
         qemu-tool quick-start --help >/dev/null
 
+    # Generate a temp env file from the XML fleet descriptor so that commands
+    # that still require --env-file (docker compose, the STAMP grep below) have
+    # a plain KEY=VALUE file. The XML is authoritative; the OVERLAY written
+    # below carries CI-specific overrides on top.
+    - name: Generate temp env from fleet XML
+      run: |
+        FLEET_ENV=$(mktemp /tmp/quickstart-XXXXXX.env)
+        qemu-tool fleet-to-env --fleet-file "$FLEET_FILE" > "$FLEET_ENV"
+        echo "FLEET_ENV=$FLEET_ENV" >> "$GITHUB_ENV"
+
     # One guest, no TAP, and the slim disk. Written as an overlay rather than
-    # an edit: --env-file is repeatable and last wins, so qemu/env/quickstart
+    # an edit: --fleet-file is repeatable and last wins, so qemu/env/quickstart.xml
     # stays the file a reader diffs and the file report-for-quickstart runs.
     #
     # ERNIC_TAP=false is safe HERE and nowhere else: the TAP is the guests'
@@ -138,30 +149,30 @@ jobs:
       run: |
         set -eu
         mkdir -p "$(dirname "$OVERLAY")"
-        # printf, not an indented heredoc. qemu-tool's own parser strips each
-        # line, but `docker compose --env-file` does not, and the overlay is
-        # handed to BOTH -- so leading spaces would give the tool and the
-        # containers different values for the same key, which is the one
-        # thing the shared settings file exists to prevent.
-        {
-          printf '# Written by qemu-minimal-quickstart-boot.yml.\n'
-          printf '# Not a settings file anyone runs by hand.\n'
-          printf 'VM_COUNT=1\n'
-          printf 'VM_NAME_PREFIX=prboot\n'
-          printf 'ERNIC_TAP=false\n'
-          printf 'VM_BACKING_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu-slim:20261030.gadc94af-vm.resolute-ernic-rocjitsu-slim-qm.ae551b3-qcow2\n'
-        } > "$OVERLAY"
+        cat > "$OVERLAY" <<'XML'
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!-- Written by qemu-minimal-quickstart-boot.yml. Not a settings file anyone runs by hand. -->
+        <fleet xmlns="http://qemu-tool/fleet/1.0">
+          <vm-count>1</vm-count>
+          <vm-name-prefix>prboot</vm-name-prefix>
+          <ernic-tap>false</ernic-tap>
+          <backing-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu-slim:20261030.gadc94af-vm.resolute-ernic-rocjitsu-slim-qm.ae551b3-qcow2</backing-ref>
+        </fleet>
+        XML
         cat "$OVERLAY"
         # The stamp has to match the three container images in
-        # qemu/env/quickstart, or the generator's coherence check is being
+        # qemu/env/quickstart.xml, or the generator's coherence check is being
         # satisfied by a tag that is not the one being booted. Asserted here
         # because the overlay is the only place the two can drift.
-        STAMP=$(sed -n 's/^QEMU_IMAGE=.*:\([0-9]\{8\}\.g[0-9a-f]*\)-.*/\1/p' qemu/env/quickstart)
+        STAMP=$(grep -m1 "^QEMU_IMAGE=" "$FLEET_ENV" | sed 's/.*:\([0-9]\{8\}\.g[0-9a-f]*\)-.*/\1/')
         echo "quickstart stamp: $STAMP"
         grep -q "ernic-rocjitsu-slim:${STAMP}-" "$OVERLAY" || {
-          echo "::error::the slim tag in this lane is not on ${STAMP}, the stamp qemu/env/quickstart pins"
+          echo "::error::the slim tag in this lane is not on ${STAMP}, the stamp qemu/env/quickstart.xml pins"
           exit 1
         }
+        # Regenerate FLEET_ENV with both layers merged so docker compose gets
+        # the overlay values (VM_COUNT=1, etc.) without a separate --fleet-file arg.
+        qemu-tool fleet-to-env --fleet-file "$FLEET_FILE" --fleet-file "$OVERLAY" > "$FLEET_ENV"
 
     # Boot it. `up` stops as soon as the rocm-ernic container is healthy, and
     # --yes makes every prompt take its default (which is also what happens
@@ -176,8 +187,8 @@ jobs:
         setpriv --reuid "$CIUSER_UID" --regid "$CIUSER_UID" --init-groups \
           env HOME="$CIUSER_HOME" \
           qemu-tool quick-start up \
-            --env-file qemu/env/quickstart \
-            --env-file "$OVERLAY" \
+            --fleet-file "$FLEET_FILE" \
+            --fleet-file "$OVERLAY" \
             --stack-dir "$STACK_DIR" \
             --key-dir "$KEY_DIR" \
             --no-metrics \
@@ -210,7 +221,7 @@ jobs:
     - name: The guest booted and has its emulated RDMA NIC
       run: |
         set -eu
-        NET=$(sed -n 's/^FLEET_NET_PREFIX=//p' qemu/env/quickstart | tail -1)
+        NET=$(grep -m1 "^FLEET_NET_PREFIX=" "$FLEET_ENV" | cut -d= -f2-)
         # Third octet 3 is the qemu family, fourth is the 1-based VM index.
         # Port 2222 is the guest's own, inside its container's namespace --
         # NOT VM_SSH_PORT_BASE, which is the host-side published port and
@@ -377,8 +388,7 @@ jobs:
           exit 0
         }
         docker compose --project-name pr-boot \
-          --env-file "${GITHUB_WORKSPACE}/qemu/env/quickstart" \
-          --env-file "$OVERLAY" logs --tail 100 || true
+          --env-file "$FLEET_ENV" logs --tail 100 || true
 
     # down --all identification, against a REAL rendered stack.
     #
@@ -419,8 +429,8 @@ jobs:
         setpriv --reuid "$CIUSER_UID" --regid "$CIUSER_UID" --init-groups \
           env HOME="$CIUSER_HOME" qemu-tool down --all --yes || true
         qemu-tool quick-start down \
-          --env-file qemu/env/quickstart \
-          --env-file "$OVERLAY" \
+          --fleet-file "$FLEET_FILE" \
+          --fleet-file "$OVERLAY" \
           --stack-dir "$STACK_DIR" \
           --yes || true
         left="$(docker ps -q --filter label=com.docker.compose.project=pr-boot | wc -l)"

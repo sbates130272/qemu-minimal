@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Fleet descriptor for the MI355X-shaped PCIe topology stack
+  (vfio-user-mi355x-node): one EPYC socket, 8 GPUs, 8 NICs and 8 PCIe
+  switches per VM, one NIC + one GPU below each switch.
+
+  This stack is generated from this file by `qemu-tool gen-compose`.
+  Do not hand-edit docker-compose.yml; run gen-compose instead.
+-->
+<fleet xmlns="http://qemu-tool/fleet/1.0">
+
+  <!-- ===================================================================
+       Fleet shape
+       =================================================================== -->
+
+  <!-- 8 ernics per VM means 8 mesh nodes per VM, so the fleet caps at 4
+       VMs, not 40 — see the MI355X README. -->
+  <vm-count>4</vm-count>
+  <vm-name-prefix>stebates-mi355x</vm-name-prefix>
+
+  <!-- ===================================================================
+       Images — fork QEMU for P2P DMA (issue 19)
+       =================================================================== -->
+
+  <!-- Fork image: carries hw/vfio P2P DMA patch (31e3d06a). -->
+  <qemu-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:20261030.gadc94af-qemu.f91f120-vfu.3719c3a</qemu-ref>
+  <ernic-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic-sbates-fork:20261030.gadc94af-ernic.8f35f4a-vfu.3719c3a</ernic-ref>
+  <rocjitsu-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261030.gadc94af-rocjitsu.73c3cf3</rocjitsu-ref>
+  <backing-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu:20261030.gadc94af-vm.resolute-ernic-rocjitsu-qm.ae551b3-qcow2</backing-ref>
+
+  <!-- ===================================================================
+       Per-guest resources
+       =================================================================== -->
+
+  <vm-vcpus>8</vm-vcpus>
+  <vm-vmem>16384</vm-vmem>
+  <vm-shm-size>16g</vm-shm-size>
+  <vm-nvme>2</vm-nvme>
+  <vm-vfio-user-root-port>true</vm-vfio-user-root-port>
+
+  <!-- MI355X topology: 8 ernics and 8 rocjitsu GPUs per VM, each pair
+       behind a PCIe switch with width=2 (one NIC + one GPU per switch). -->
+  <ernic-per-vm>8</ernic-per-vm>
+  <rocjitsu-per-vm>8</rocjitsu-per-vm>
+  <vm-pcie-switch-width>2</vm-pcie-switch-width>
+  <vm-cpu-sockets>1</vm-cpu-sockets>
+
+  <!-- 41-bit physical address space; 512G PCI hole to accommodate large BARs
+       (see AGENTS.md GPU BARs section). -->
+  <vm-cpu-phys-bits>41</vm-cpu-phys-bits>
+  <vm-pci-hole64-size>512G</vm-pci-hole64-size>
+
+  <!-- ===================================================================
+       Host paths
+       =================================================================== -->
+
+  <vm-images-dir>/var/lib/qemu-tool/images</vm-images-dir>
+  <vm-backing-shared>true</vm-backing-shared>
+  <vm-username>ubuntu</vm-username>
+  <vm-password>ubuntu</vm-password>
+
+  <!-- ===================================================================
+       Fleet wiring
+       =================================================================== -->
+
+  <ernic-tap>true</ernic-tap>
+  <vm-extra-hostfwd>tcp::9100-:9100</vm-extra-hostfwd>
+
+  <!-- ===================================================================
+       Observability
+       =================================================================== -->
+
+  <prom-data-dir>/var/lib/qemu-tool/stacks/mi355x-node/prom-data</prom-data-dir>
+
+  <!-- LMCache off: orthogonal to the topology this stack exists to test,
+       and the guest-side half assumes one ernic per guest. -->
+  <lmcache-enable>false</lmcache-enable>
+
+</fleet>

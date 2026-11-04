@@ -21,7 +21,7 @@ from .compose import (
 from .envfile import load as load_env_file
 from .ernic_stats import run as ernic_stats_run
 from .lmcache_stats import run as lmcache_stats_run
-from .gen_compose import run as gen_compose_run
+from .gen_compose import run as gen_compose_run, _fleet_to_env
 from .gen_vm import run as gen_vm_run
 from .libvirt_xml import LibvirtXml
 from .inspect import run as inspect_run
@@ -135,6 +135,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_run_vm(sub, shared)
     _add_gen_vm(sub, shared)
     _add_gen_compose(sub)
+    _add_fleet_to_env(sub)
     _add_compose(sub)
     _add_ernic_stats(sub)
     _add_lmcache_stats(sub)
@@ -174,7 +175,7 @@ def _shared_parent() -> argparse.ArgumentParser:
         default=None,
         metavar="FILE",
         help=(
-            "Settings file (see qemu/env/example). Overrides the search path. "
+            "Settings file (env-format). Overrides the search path. "
             "Repeatable: later files override keys set by earlier ones."
         ),
     )
@@ -216,9 +217,9 @@ def _add_quick_start(sub: argparse._SubParsersAction) -> None:
         help="Follow log output (only meaningful with the logs verb).",
     )
     p.add_argument(
-        "--env-file", action="append", type=Path, default=None, metavar="FILE",
+        "--fleet-file", action="append", type=Path, default=None, metavar="FILE",
         help=(
-            "Settings file. Defaults to the bundled qemu/env/quickstart. "
+            "Fleet XML file. Defaults to the bundled qemu/env/quickstart.xml. "
             "Repeatable: later files override keys set by earlier ones."
         ),
     )
@@ -443,7 +444,7 @@ def _add_compose(sub: argparse._SubParsersAction) -> None:
     p.add_argument(
         "--env-file", action="append", type=Path, default=None, metavar="FILE",
         help=(
-            "Settings file (see qemu/env/example). Overrides the search path. "
+            "Settings file (env-format). Overrides the search path. "
             "Repeatable: later files override keys set by earlier ones."
         ),
     )
@@ -457,12 +458,11 @@ def _add_compose(sub: argparse._SubParsersAction) -> None:
 def _add_gen_compose(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
         "gen-compose",
-        help="Generate a scale-out compose stack from an env file.",
+        help="Generate a scale-out compose stack from a fleet XML file.",
         description=(
             "Generate docker-compose.yml and prometheus.yml for an N-VM "
-            "rocm-ernic mesh from VM_COUNT and the per-VM lists in the env "
-            "file. Per-VM values are comma-lists, not numbered keys; see "
-            "qemu/env/scale-out."
+            "rocm-ernic mesh from the fleet XML descriptor. Per-VM values are "
+            "comma-lists, not numbered keys; see qemu/env/scale-out.xml."
         ),
     )
     p.add_argument(
@@ -470,9 +470,9 @@ def _add_gen_compose(sub: argparse._SubParsersAction) -> None:
         help=f"Stack to generate. Default: {_DEFAULT_GENERATED_STACK}.",
     )
     p.add_argument(
-        "--env-file", action="append", type=Path, default=None, metavar="FILE",
+        "--fleet-file", action="append", type=Path, default=None, metavar="FILE",
         help=(
-            "Settings file (see qemu/env/scale-out). Overrides the search path. "
+            "Fleet descriptor XML (see qemu/env/scale-out.xml). "
             "Repeatable: later files override keys set by earlier ones."
         ),
     )
@@ -489,6 +489,40 @@ def _add_gen_compose(sub: argparse._SubParsersAction) -> None:
         help="Print the generated files to stdout instead of writing them.",
     )
     p.set_defaults(func=_gen_compose_cmd)
+
+
+def _add_fleet_to_env(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser(
+        "fleet-to-env",
+        help="Dump a fleet XML file as KEY=VALUE env-format pairs.",
+        description=(
+            "Read one or more fleet XML descriptors and print every setting "
+            "as KEY=VALUE lines on stdout. Useful for generating a temporary "
+            "env file for commands that do not yet accept --fleet-file "
+            "(gen-vm, docker compose --env-file, inspect).\n\n"
+            "Example:\n"
+            "  qemu-tool fleet-to-env --fleet-file qemu/env/scale-out.xml \\\n"
+            "    > /tmp/fleet.env\n"
+            "  qemu-tool gen-vm --env-file /tmp/fleet.env ..."
+        ),
+    )
+    p.add_argument(
+        "--fleet-file", action="append", type=Path, default=None, metavar="FILE",
+        help=(
+            "Fleet descriptor XML (see qemu/env/scale-out.xml). "
+            "Repeatable: later files override keys set by earlier ones."
+        ),
+    )
+    p.set_defaults(func=_fleet_to_env_cmd)
+
+
+def _fleet_to_env_cmd(args: argparse.Namespace) -> None:
+    from .fleet_xml import FleetXml
+    fleet_paths = FleetXml.find(args.fleet_file)
+    cfg = FleetXml.parse_layers(fleet_paths)
+    env = _fleet_to_env(cfg)
+    for k, v in sorted(env.items()):
+        print(f"{k}={v}")
 
 
 def _add_lmcache_stats(sub: argparse._SubParsersAction) -> None:
@@ -613,7 +647,7 @@ def _add_inspect(sub: argparse._SubParsersAction) -> None:
     p.add_argument(
         "--env-file", action="append", type=Path, default=None, metavar="FILE",
         help=(
-            "Settings file (see qemu/env/example). Overrides the search path. "
+            "Settings file (env-format). Overrides the search path. "
             "Repeatable: later files override keys set by earlier ones."
         ),
     )
@@ -936,7 +970,7 @@ def _down_cmd(args: argparse.Namespace) -> None:
 def _quick_start_cmd(args: argparse.Namespace) -> None:
     quick_start_run(
         args.verb,
-        args.env_file,
+        args.fleet_file,
         args.stack_dir,
         args.key_dir,
         args.report_dir,
@@ -1058,8 +1092,9 @@ def _gen_compose_cmd(args: argparse.Namespace) -> None:
                 "Pass --output-dir to generate somewhere writable, or name "
                 "that path explicitly if you really mean to modify it."
             )
-    gen_compose_run(args.env_file, output_dir, check=args.check,
-                    dry_run=args.dry_run, stack=args.stack)
+    gen_compose_run(None, output_dir, check=args.check,
+                    dry_run=args.dry_run, stack=args.stack,
+                    fleet_file=args.fleet_file)
 
 
 def _ernic_stats_cmd(args: argparse.Namespace) -> None:

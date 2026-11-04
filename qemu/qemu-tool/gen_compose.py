@@ -38,6 +38,7 @@ from .envfile import (
     find as find_env_file,
     parse_layers as parse_env_layers,
 )
+from .fleet_xml import FleetConfig, FleetXml
 
 # Fields the generated qemu entrypoint forwards to run-vm, in emit order.
 # Everything here is per-VM overridable by the rules above.
@@ -143,7 +144,7 @@ _DEFAULTS = {
     "VM_VFIO_USER_ROOT_PORT": "true",
     # ---- LMCache -----------------------------------------------------------
     # Off by default so an env file that predates this feature regenerates
-    # byte-identical output. qemu/env/scale-out turns it on.
+    # byte-identical output. qemu/env/scale-out.xml turns it on.
     #
     # Two switches, not one, because they answer different questions.
     # LMCACHE_ENABLE decides whether the services and their scrape jobs are
@@ -189,6 +190,12 @@ _DEFAULTS = {
     "LMCACHE_L1_SIZE_GB": "2",
     "LMCACHE_EVICTION_POLICY": "LRU",
     "LMCACHE_STATS_PORT": "9841",
+    "LMCACHE_SERVER_L2_PREFETCH_POLICY": "retain",
+    "LMCACHE_SERVER_MAX_WORKERS": "4",
+    "LMCACHE_GUEST_SECCOMP_UNCONFINED": "false",
+    "LMCACHE_GUEST_IONIC_BIND_NEW_ID": "false",
+    "LMCACHE_GUEST_IB_DEVICE_NAME": "rocmernic0",
+    "LMCACHE_GUEST_L2_PREFETCH_POLICY": "retain",
     # ---- Logs --------------------------------------------------------------
     # Loki plus an Alloy on the host; the guests get their own Alloy from the
     # lmcache_guest role. Rides the `metrics` profile: a log panel beside a
@@ -318,6 +325,8 @@ def _hardening(indent: str = "    ") -> list[str]:
 _PROVENANCE = "# env-sha256: "
 _ENV_FILE_LINE = "# env-file: "
 
+_DEFAULT_SOURCE_STACK = "vfio-user-ernic-rocjitsu-scale-out"
+
 # Lines of header to scan for the digest. Generous because the header now
 # carries one env-file line per layer, and a file whose digest is just past
 # the window reads as "not generated" -- which silences the staleness warning
@@ -351,7 +360,7 @@ def recorded_digest(compose_file: Path) -> str | None:
     try:
         for line in compose_file.read_text().splitlines()[:_PROVENANCE_SCAN_LINES]:
             if line.startswith(_PROVENANCE):
-                return line[len(_PROVENANCE):].strip()
+                return line[len(_PROVENANCE):].split("#")[0].strip()
     except OSError:
         return None
     return None
@@ -369,15 +378,20 @@ def recorded_env_files(compose_file: Path) -> list[str]:
     return names
 
 
-def _env_file_args(env_names: Sequence[str]) -> str:
-    """The --env-file arguments that reproduce this render, in order."""
-    return " ".join(f"--env-file {name}" for name in env_names)
+def _env_file_args(
+    env_names: Sequence[str], stack: str = _DEFAULT_SOURCE_STACK
+) -> str:
+    """The --fleet-file (and optional --stack) arguments that reproduce this render."""
+    parts = [f"--fleet-file {name}" for name in env_names]
+    if stack != _DEFAULT_SOURCE_STACK:
+        parts.append(f"--stack {stack}")
+    return " ".join(parts)
 
 
 def _provenance_lines(env_names: Sequence[str], digest: str) -> list[str]:
     """One env-file line per layer, then the digest over all of them."""
     out = [f"{_ENV_FILE_LINE}{name}" for name in env_names]
-    out.append(f"{_PROVENANCE}{digest}")
+    out.append(f"{_PROVENANCE}{digest}  # pre-commit: ignore")
     return out
 
 
@@ -768,6 +782,12 @@ def plan(values: dict[str, str]) -> dict[str, Any]:
         "lmcache_l1_size_gb": _get(values, "LMCACHE_L1_SIZE_GB"),
         "lmcache_eviction_policy": _get(values, "LMCACHE_EVICTION_POLICY"),
         "lmcache_stats_port": _get(values, "LMCACHE_STATS_PORT"),
+        "lmcache_server_l2_prefetch_policy": _get(values, "LMCACHE_SERVER_L2_PREFETCH_POLICY"),
+        "lmcache_server_max_workers": _get(values, "LMCACHE_SERVER_MAX_WORKERS"),
+        "lmcache_guest_seccomp_unconfined": _flag(values, "LMCACHE_GUEST_SECCOMP_UNCONFINED"),
+        "lmcache_guest_ionic_bind_new_id": _flag(values, "LMCACHE_GUEST_IONIC_BIND_NEW_ID"),
+        "lmcache_guest_ib_device_name": _get(values, "LMCACHE_GUEST_IB_DEVICE_NAME"),
+        "lmcache_guest_l2_prefetch_policy": _get(values, "LMCACHE_GUEST_L2_PREFETCH_POLICY"),
         "grafana": _flag(values, "GRAFANA_ENABLE"),
         "grafana_image": _get(values, "GRAFANA_IMAGE"),
         "grafana_port": _get(values, "GRAFANA_PORT"),
@@ -794,6 +814,127 @@ def plan(values: dict[str, str]) -> dict[str, Any]:
         "prom_interval": _get(values, "PROM_SCRAPE_INTERVAL"),
         "prom_retention": _get(values, "PROM_RETENTION"),
     }
+
+
+def _fleet_to_env(cfg: Any) -> dict[str, str]:  # cfg: FleetConfig
+    """Convert a FleetConfig into a dict[str, str] parallel to an env file."""
+    out: dict[str, str] = {}
+
+    def _set(key: str, val: Any) -> None:
+        if val is None:
+            return
+        if isinstance(val, bool):
+            out[key] = "true" if val else "false"
+        else:
+            out[key] = str(val)
+
+    # Shape
+    _set("VM_COUNT", cfg.count)
+    _set("VM_NAME_PREFIX", cfg.name_prefix)
+    _set("VM_SSH_PORT_BASE", cfg.ssh_port_base)
+    _set("STOP_GRACE_PERIOD", cfg.stop_grace_period)
+    # Images (only emit when non-empty; "" means "inherit from _DEFAULTS")
+    if cfg.qemu_ref:
+        _set("QEMU_IMAGE", cfg.qemu_ref)
+    if cfg.ernic_ref:
+        _set("ERNIC_IMAGE", cfg.ernic_ref)
+    if cfg.rocjitsu_ref:
+        _set("ROCJITSU_IMAGE", cfg.rocjitsu_ref)
+    if cfg.backing_ref:
+        _set("VM_BACKING_IMAGE", cfg.backing_ref)
+    # Network
+    _set("FLEET_NET_PREFIX", cfg.fleet_prefix)
+    _set("ERNIC_GUEST_SUBNET", cfg.ernic_subnet)
+    _set("ERNIC_MAC_PREFIX", cfg.ernic_mac_prefix)
+    # Topology
+    _set("ERNIC_PER_VM", cfg.ernic_per_vm)
+    _set("ROCJITSU_PER_VM", cfg.rocjitsu_per_vm)
+    _set("VM_PCIE_SWITCH_WIDTH", cfg.vm_pcie_switch_width)
+    # ERNIC mesh
+    _set("ERNIC_TAP", cfg.ernic_tap)
+    _set("ERNIC_TCP_PORT", cfg.ernic_tcp_port)
+    _set("ERNIC_STATS_PORT", cfg.ernic_stats_port)
+    _set("ERNIC_NOFILE", cfg.ernic_nofile)
+    _set("ERNIC_P4", cfg.p4_enable)
+    _set("ERNIC_P4_GUEST_SCOPE", cfg.p4_guest_scope)
+    _set("ERNIC_P4_PROGRAM", cfg.p4_program)
+    # VM defaults
+    if cfg.vm_vcpus:
+        _set("VM_VCPUS", cfg.vm_vcpus)
+    if cfg.vm_vmem:
+        _set("VM_VMEM", cfg.vm_vmem)
+    _set("VM_SHM_SIZE", cfg.shm_size)
+    if cfg.vm_nvme:
+        _set("VM_NVME", cfg.vm_nvme)
+    _set("VM_BACKING_SHARED", cfg.vm_backing_shared)
+    _set("VM_USERNAME", cfg.vm_username)
+    if cfg.vm_password:
+        _set("VM_PASSWORD", cfg.vm_password)
+    _set("VM_FILESYSTEM", cfg.vm_filesystem)
+    _set("VM_VFIO_USER_ROOT_PORT", cfg.vm_vfio_user_root_port)
+    if cfg.vm_extra_hostfwd:
+        _set("VM_EXTRA_HOSTFWD", cfg.vm_extra_hostfwd)
+    if cfg.vm_ssh_key_file:
+        _set("VM_SSH_KEY_FILE", cfg.vm_ssh_key_file)
+    _set("VM_IMAGES_DIR", cfg.vm_images_dir)
+    if cfg.vm_cpu_sockets:
+        _set("VM_CPU_SOCKETS", cfg.vm_cpu_sockets)
+    if cfg.vm_cpu_phys_bits:
+        _set("VM_CPU_PHYS_BITS", cfg.vm_cpu_phys_bits)
+    if cfg.vm_pci_hole64_size:
+        _set("VM_PCI_HOLE64_SIZE", cfg.vm_pci_hole64_size)
+    _set("ROCJITSU_CONFIG", cfg.rocjitsu_config)
+    # Misc
+    _set("QEMU_TOOL_SRC", cfg.qemu_tool_src)
+    _set("IMAGE_ALLOW_GUEST_LAG", cfg.image_allow_guest_lag)
+    # LMCache
+    _set("LMCACHE_ENABLE", cfg.lmcache_enable)
+    if cfg.lmcache_image:
+        _set("LMCACHE_IMAGE", cfg.lmcache_image)
+    _set("LMCACHE_COORD_PORT", cfg.lmcache_coord_port)
+    _set("LMCACHE_INSTANCE_TIMEOUT", cfg.lmcache_instance_timeout)
+    _set("LMCACHE_HEALTH_CHECK_INTERVAL", cfg.lmcache_health_check_interval)
+    if cfg.lmcache_server_chunk_size:
+        out["LMCACHE_CHUNK_SIZE"] = str(cfg.lmcache_server_chunk_size // 1024)
+    _set("LMCACHE_HASH_ALGORITHM", cfg.lmcache_server_hash_algo)
+    _set("LMCACHE_SERVER_L2_PREFETCH_POLICY", cfg.lmcache_server_l2_prefetch_policy)
+    _set("LMCACHE_SERVER_MAX_WORKERS", cfg.lmcache_server_max_workers)
+    _set("LMCACHE_SERVER_HTTP_PORT", cfg.lmcache_server_http_port)
+    _set("LMCACHE_SERVER_ZMQ_PORT", cfg.lmcache_server_zmq_port)
+    _set("LMCACHE_P2P_PORT", cfg.lmcache_p2p_port)
+    _set("LMCACHE_P2P_TRANSFER_ENGINE", cfg.lmcache_p2p_transfer_engine)
+    _set("LMCACHE_L1_SIZE_GB", cfg.lmcache_l1_size_gb)
+    _set("LMCACHE_EVICTION_POLICY", cfg.lmcache_eviction_policy)
+    _set("LMCACHE_STATS_PORT", cfg.lmcache_stats_port)
+    _set("LMCACHE_GUEST_SECCOMP_UNCONFINED", cfg.lmcache_guest_seccomp_unconfined)
+    _set("LMCACHE_GUEST_IONIC_BIND_NEW_ID", cfg.lmcache_guest_ionic_bind_new_id)
+    _set("LMCACHE_GUEST_IB_DEVICE_NAME", cfg.lmcache_guest_ib_device_name)
+    _set("LMCACHE_GUEST_L2_PREFETCH_POLICY", cfg.lmcache_guest_l2_prefetch_policy)
+    # Metrics
+    _set("PROM_PORT", cfg.prom_port)
+    _set("PUBLISH_BIND_ADDR", cfg.publish_bind_addr)
+    _set("PROM_SCRAPE_INTERVAL", cfg.prom_scrape_interval)
+    _set("PROM_RETENTION", cfg.prom_retention)
+    if cfg.prometheus_data_dir:
+        _set("PROM_DATA_DIR", cfg.prometheus_data_dir)
+    _set("GRAFANA_ENABLE", cfg.grafana_enable)
+    if cfg.grafana_image:
+        _set("GRAFANA_IMAGE", cfg.grafana_image)
+    _set("GRAFANA_PORT", cfg.grafana_port)
+    _set("GRAFANA_ADMIN_PASSWORD", cfg.grafana_admin_password)
+    if cfg.grafana_data_dir:
+        _set("GRAFANA_DATA_DIR", cfg.grafana_data_dir)
+    # Logging
+    _set("LOG_MAX_SIZE", cfg.log_max_size)
+    _set("LOG_MAX_FILE", cfg.log_max_files)
+    _set("LOGS_ENABLE", cfg.logs_enable)
+    if cfg.loki_image:
+        _set("LOKI_IMAGE", cfg.loki_image)
+    _set("LOKI_PORT", cfg.loki_port)
+    _set("LOKI_DATA_DIR", cfg.loki_data_dir)
+    if cfg.alloy_image:
+        _set("ALLOY_IMAGE", cfg.alloy_image)
+    return out
 
 
 def _positive_int(values: dict[str, str], key: str) -> int:
@@ -889,12 +1030,15 @@ def _pipx_install(bin_dir: str = "/usr/local/bin") -> list[str]:
     ]
 
 
-def render_compose(spec: dict[str, Any], env_names: Sequence[str], digest: str) -> str:
+def render_compose(
+    spec: dict[str, Any], env_names: Sequence[str], digest: str,
+    stack: str = _DEFAULT_SOURCE_STACK,
+) -> str:
     out: list[str] = ["---"]
     out.append("# Generated by `qemu-tool gen-compose`. Do not edit.")
     out.append("#")
     out.append(f"# Regenerate after changing {' or '.join(env_names)}:")
-    out.append(f"#   qemu-tool gen-compose {_env_file_args(env_names)}")
+    out.append(f"#   qemu-tool gen-compose {_env_file_args(env_names, stack)}")
     out.append("#")
     out += _provenance_lines(env_names, digest)
     out.append("")
@@ -1847,9 +1991,6 @@ def render_inventory(spec: dict[str, Any], env_names: Sequence[str], digest: str
 _RELATIVE_REF = re.compile(r"\./([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*)")
 
 
-_DEFAULT_SOURCE_STACK = "vfio-user-ernic-rocjitsu-scale-out"
-
-
 def _stack_source(stack: str = _DEFAULT_SOURCE_STACK) -> Path:
     """This repo's copy of the stack: the authority the mirror copies from.
 
@@ -2153,25 +2294,35 @@ def run(
     check: bool = False,
     dry_run: bool = False,
     stack: str = _DEFAULT_SOURCE_STACK,
+    fleet_file: Path | Sequence[Path] | None = None,
 ) -> None:
-    paths = find_env_file(env_file)
-    if not paths:
-        sys.exit("Error: no env file found. Pass --env-file.")
-    values = parse_env_layers(paths)
+    if env_file is not None:
+        sys.exit(
+            "Error: --env-file is no longer supported by gen-compose; "
+            "use --fleet-file with a fleet XML file instead."
+        )
+    fleet_paths = FleetXml.find(fleet_file)
+    if not fleet_paths:
+        sys.exit("Error: no fleet file found. Pass --fleet-file.")
+    fleet_cfg = FleetXml.parse_layers(fleet_paths)
+    values = _fleet_to_env(fleet_cfg)
+    paths = fleet_paths
     spec = plan(values)
     digest = env_digest(paths)
     # The names as the user wrote them, so the recorded header is a command
     # that can be pasted back. Falls back to the basename of what the search
     # path found, which is what the single-file header always recorded.
-    if env_file is None:
-        env_names = [paths[0].name]
-    elif isinstance(env_file, Path):
-        env_names = [str(env_file)]
+    env_names: list[str] = []
+    if fleet_file is None:
+        if fleet_paths:
+            env_names.append(fleet_paths[0].name)
+    elif isinstance(fleet_file, Path):
+        env_names.append(str(fleet_file))
     else:
-        env_names = [str(layer) for layer in env_file]
+        env_names.extend(str(layer) for layer in fleet_file)
 
     artifacts = {
-        "docker-compose.yml": render_compose(spec, env_names, digest),
+        "docker-compose.yml": render_compose(spec, env_names, digest, stack),
         "prometheus.yml": render_prometheus(spec, env_names, digest),
         # Alongside the other two rather than under ansible/inventory/, so all
         # three carry one env-sha256 and `--check` stays a single comparison

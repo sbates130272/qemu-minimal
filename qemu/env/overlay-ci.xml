@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CI overlay for the LMCache 2-VM fleet.
+
+  Layers on top of scale-out.xml. Only keys that differ from the golden file
+  are present here; all other settings are inherited from scale-out.xml.
+
+  Usage: qemu-tool gen-compose
+    fleet-file: qemu/env/scale-out.xml, qemu/env/overlay-ci.xml
+-->
+<fleet xmlns="http://qemu-tool/fleet/1.0">
+
+  <vm-count>2</vm-count>
+  <vm-name-prefix>lmcache-ci</vm-name-prefix>
+  <vm-images-dir>/var/lib/qemu-tool/images</vm-images-dir>
+  <vm-password>changeme</vm-password>
+
+</fleet>

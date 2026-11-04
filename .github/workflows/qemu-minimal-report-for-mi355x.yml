@@ -35,8 +35,8 @@ on:
       - main
     paths:
       - 'scripts/mi355x-node.sh'
-      - 'qemu/env/mi355x-node'
-      - 'qemu/env/overlay-mi355x-ci'
+      - 'qemu/env/mi355x-node.xml'
+      - 'qemu/env/overlay-mi355x-ci.xml'
       - 'qemu/compose/vfio-user-mi355x-node/**'
       - 'ansible/playbooks/fleet-quickstart.yml'
       - 'qemu/qemu-tool/**'
@@ -59,8 +59,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  ENV_FILE: qemu/env/mi355x-node
-  OVERLAY: qemu/env/overlay-mi355x-ci
+  FLEET_FILE: qemu/env/mi355x-node.xml
+  FLEET_OVERLAY: qemu/env/overlay-mi355x-ci.xml
   STACK_DIR: /var/lib/qemu-tool/stacks/mi355x
   KEY_DIR: /var/lib/qemu-tool/mi355x-key
 
@@ -182,8 +182,8 @@ jobs:
         setpriv --reuid "$CIUSER_UID" --regid "$CIUSER_UID" --init-groups \
           env HOME="$CIUSER_HOME" \
           scripts/mi355x-node.sh \
-            --env-file "$ENV_FILE" \
-            --overlay "$OVERLAY" \
+            --fleet-file "$FLEET_FILE" \
+            --fleet-overlay "$FLEET_OVERLAY" \
             --stack-dir "$STACK_DIR" \
             --key-dir "$KEY_DIR" \
             up
@@ -198,8 +198,8 @@ jobs:
         setpriv --reuid "$CIUSER_UID" --regid "$CIUSER_UID" --init-groups \
           env HOME="$CIUSER_HOME" \
           scripts/mi355x-node.sh \
-            --env-file "$ENV_FILE" \
-            --overlay "$OVERLAY" \
+            --fleet-file "$FLEET_FILE" \
+            --fleet-overlay "$FLEET_OVERLAY" \
             --stack-dir "$STACK_DIR" \
             --key-dir "$KEY_DIR" \
             --report-dir site/mi355x \
@@ -213,15 +213,20 @@ jobs:
           echo "stack directory absent; the run failed before it was created"
           exit 0
         }
+        FLEET_ENV=$(mktemp)
+        qemu-tool fleet-to-env \
+          --fleet-file "${GITHUB_WORKSPACE}/${FLEET_FILE}" \
+          --fleet-file "${GITHUB_WORKSPACE}/${FLEET_OVERLAY}" > "$FLEET_ENV"
         docker compose --project-name mi355x \
-          --env-file "${GITHUB_WORKSPACE}/${ENV_FILE}" \
-          --env-file "${GITHUB_WORKSPACE}/${OVERLAY}" logs --tail 100 || true
+          --env-file "$FLEET_ENV" \
+          logs --tail 100 || true
+        rm -f "$FLEET_ENV"
 
     - name: Take the node down
       if: always()
       run: |
         scripts/mi355x-node.sh --stack-dir "$STACK_DIR" \
-          --env-file "$ENV_FILE" --overlay "$OVERLAY" down || true
+          --fleet-file "$FLEET_FILE" --fleet-overlay "$FLEET_OVERLAY" down || true
 
     # Upload only, and on success only. publish-pages.yml is the sole writer
     # of the site and fetches each lane's latest artifact BY NAME -- it

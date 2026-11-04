@@ -39,6 +39,20 @@ ERNIC_IMAGE=example/ernic:{_STAMP}-ernic.0b48aa1-{_VFU}
 ROCJITSU_IMAGE=example/rocjitsu:{_STAMP}-rocjitsu.c85bb75
 VM_BACKING_IMAGE=example/qcow2:{_STAMP}-vm.resolute-qm.e73a1e6-qcow2
 """
+_BASE_XML = f"""\
+<?xml version="1.0" encoding="UTF-8"?>
+<fleet xmlns="http://qemu-tool/fleet/1.0">
+  <vm-count>8</vm-count>
+  <vm-name-prefix>fleet</vm-name-prefix>
+  <vm-vcpus>4</vm-vcpus>
+  <vm-vmem>8192</vm-vmem>
+  <qemu-ref>example/qemu:{_STAMP}-qemu11.1.1-{_VFU}</qemu-ref>
+  <ernic-ref>example/ernic:{_STAMP}-ernic.0b48aa1-{_VFU}</ernic-ref>
+  <rocjitsu-ref>example/rocjitsu:{_STAMP}-rocjitsu.c85bb75</rocjitsu-ref>
+  <backing-ref>example/qcow2:{_STAMP}-vm.resolute-qm.e73a1e6-qcow2</backing-ref>
+  <ernic-tap>true</ernic-tap>
+</fleet>
+"""
 
 
 def _load_package():
@@ -401,22 +415,22 @@ class TestEnvFileLayering(unittest.TestCase):
 
     def test_header_names_every_layer_in_order(self):
         body = gen_compose.render_compose(
-            _plan(), ["qemu/env/scale-out", "qemu/env/overlay-ci"], "abc")
+            _plan(), ["qemu/env/scale-out.xml", "qemu/env/overlay-ci.xml"], "abc")
         named = [line[len("# env-file: "):] for line in body.splitlines()
                  if line.startswith("# env-file: ")]
-        self.assertEqual(named, ["qemu/env/scale-out", "qemu/env/overlay-ci"])
+        self.assertEqual(named, ["qemu/env/scale-out.xml", "qemu/env/overlay-ci.xml"])
 
     def test_regenerate_comment_reproduces_the_render(self):
-        names = ["qemu/env/scale-out", "qemu/env/overlay-ci"]
+        names = ["qemu/env/scale-out.xml", "qemu/env/overlay-ci.xml"]
         body = gen_compose.render_compose(_plan(), names, "abc")
         self.assertIn(
-            "#   qemu-tool gen-compose --env-file qemu/env/scale-out "
-            "--env-file qemu/env/overlay-ci",
+            "#   qemu-tool gen-compose --fleet-file qemu/env/scale-out.xml "
+            "--fleet-file qemu/env/overlay-ci.xml",
             body,
         )
 
     def test_provenance_round_trips_with_two_layers(self):
-        names = ["qemu/env/scale-out", "qemu/env/overlay-ci"]
+        names = ["qemu/env/scale-out.xml", "qemu/env/overlay-ci.xml"]
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "docker-compose.yml"
             out.write_text(gen_compose.render_compose(_plan(), names, "cafef00d"))
@@ -468,9 +482,9 @@ class TestEnvFileLayering(unittest.TestCase):
     def test_single_layer_header_is_unchanged(self):
         body = gen_compose.render_compose(_plan(), ["env.scale-out"], "abc")
         self.assertIn("# Regenerate after changing env.scale-out:\n", body)
-        self.assertIn("#   qemu-tool gen-compose --env-file env.scale-out\n", body)
+        self.assertIn("#   qemu-tool gen-compose --fleet-file env.scale-out\n", body)
         self.assertIn("# env-file: env.scale-out\n", body)
-        self.assertIn("# env-sha256: abc\n", body)
+        self.assertIn("# env-sha256: abc  # pre-commit: ignore\n", body)
         self.assertEqual(body.count("# env-file: "), 1)
 
     def test_missing_layer_names_the_offending_file(self):
@@ -1113,17 +1127,17 @@ class TestStackAssetCheck(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.tmp)
-        self.env = self.tmp / "env"
-        self.env.write_text(_BASE_ENV + "\nERNIC_TAP=true\n")
+        self.fleet_xml = self.tmp / "fleet.xml"
+        self.fleet_xml.write_text(_BASE_XML)
         self.out = self.tmp / "stack"
         with contextlib.redirect_stdout(io.StringIO()):
-            gen_compose.run(self.env, self.out)
+            gen_compose.run(None, self.out, fleet_file=self.fleet_xml)
 
     def _check(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             try:
-                gen_compose.run(self.env, self.out, check=True)
+                gen_compose.run(None, self.out, check=True, fleet_file=self.fleet_xml)
             except SystemExit as exit:
                 return out.getvalue() + "\n" + str(exit)
         return out.getvalue()
@@ -1173,9 +1187,10 @@ class TestStackAssetCheck(unittest.TestCase):
         self.addCleanup(os.chdir, cwd)
         with contextlib.redirect_stdout(out):
             gen_compose.run(
-                Path("qemu/env/scale-out"),
+                None,
                 Path("qemu/compose/vfio-user-ernic-rocjitsu-scale-out"),
-                check=True)
+                check=True,
+                fleet_file=Path("qemu/env/scale-out.xml"))
         self.assertIn("Up to date", out.getvalue())
 
 

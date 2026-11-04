@@ -4,9 +4,28 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-## [v1.6.0] - 2026-11-03
-
 ### Added
+
+- **XML fleet config format.** Fleet settings files are now XML (`fleet-example.xml`,
+  `scale-out.xml`, `mi355x-node.xml`, `quickstart.xml`, and all overlays). The
+  old flat env-format files are removed. `--fleet-file <file.xml>` replaces
+  `--env-file` on `gen-vm`, `run-vm`, `gen-compose`, `compose`, and `inspect`.
+  A new `fleet_xml.py` module handles parsing; existing tests are updated.
+
+- **`qemu-tool quick-start` WSL2 port-conflict retry.** On WSL2 `socket.bind()`
+  succeeds for ports the Windows proxy holds (separate network namespaces), so
+  `_port_free()` falsely reports a port as free. `quick-start` now retries
+  `docker compose up` with `force_port_remap=True` after any failure, remapping
+  to a fresh SSH-port base regardless of what `_port_free()` says. Port numbers
+  are baked into the generated YAML at `gen-compose` time, so the stack is
+  regenerated inside the remap block after `state.values` is updated.
+
+### Fixed
+
+- **`fix(quick-start)`: wrong XML tag name for `VM_SSH_PORT_BASE`.** `_ENV_TO_XML`
+  mapped `VM_SSH_PORT_BASE` to `"vm-ssh-port-base"` but `fleet_xml.py` reads
+  `"ssh-port-base"`. The unrecognised tag was silently ignored and the default
+  port 2222 was baked in regardless of any remap.
 
 - **MkDocs Material site.** The GitHub Pages site (`docs/`) is now built with
   MkDocs Material (teal primary, deep-orange accent, light/dark mode toggle,

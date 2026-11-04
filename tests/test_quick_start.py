@@ -28,7 +28,7 @@ from pathlib import Path
 from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-ENV_FILE = REPO_ROOT / "qemu" / "env" / "quickstart"
+ENV_FILE = REPO_ROOT / "qemu" / "env" / "quickstart.xml"
 
 
 def _load_package():
@@ -65,7 +65,7 @@ def _env_package_data() -> str:
 
 def _state(**kwargs):
     defaults = dict(
-        env_file=ENV_FILE,
+        fleet_file=ENV_FILE,
         stack_dir=Path("/tmp/does-not-matter"),
         key_dir=Path("/tmp/does-not-matter/key"),
         report_dir=None,
@@ -169,14 +169,13 @@ class PromptTest(unittest.TestCase):
 
 
 class SettingsFileTest(unittest.TestCase):
-    """The promises qemu/env/quickstart makes to the subcommand."""
+    """The promises qemu/env/quickstart.xml makes to the subcommand."""
 
     def setUp(self):
-        self.text = ENV_FILE.read_text()
-        self.values = dict(
-            line.split("=", 1) for line in self.text.splitlines()
-            if line and not line.startswith("#") and "=" in line
-        )
+        state = _state()
+        state.base_layers = [ENV_FILE]
+        qs._reload(state)
+        self.values = state.values
 
     def test_the_four_images_share_one_build_stamp(self):
         # The generator refuses a mixed set, and it is right to: a guest
@@ -224,9 +223,9 @@ class SettingsFileTest(unittest.TestCase):
         # from the checkout, so it was answering a question nobody asked.
         # Measured afterwards on a real `uv tool install ./qemu`:
         # _packaged_env() returned None and `quick-start` exited with
-        # "qemu/env/quickstart is missing from this install".
-        self.assertIn('"quickstart"', _env_package_data(),
-                      "quickstart is not in the wheel's env allow-list: "
+        # "qemu/env/quickstart.xml is missing from this install".
+        self.assertIn('"quickstart.xml"', _env_package_data(),
+                      "quickstart.xml is not in the wheel's env allow-list: "
                       + _env_package_data())
 
     def test_the_overlays_still_do_not_ship(self):
@@ -329,7 +328,7 @@ class LayerTest(unittest.TestCase):
             qs._write_layer(state, "env.image-login", {"VM_USERNAME": "x"}, "t")
             qs._write_layer(state, "env.sized", {"VM_VCPUS": "4"}, "t")
             self.assertEqual(["env.sized", "env.image-login"],
-                             [p.name for p in state.layers[1:]])
+                             [p.name for p in state.layers])
 
     def test_every_layer_the_code_writes_is_in_the_order(self):
         # A layer written under a name not in _LAYER_ORDER would be dropped
@@ -350,7 +349,7 @@ class NoStaleScriptTest(unittest.TestCase):
 
     HAYSTACK = ("README.md", "AGENTS.md", "site/reports.md",
                 ".github/workflows/qemu-minimal-report-for-quickstart.yml",
-                "qemu/env/quickstart",
+                "qemu/env/quickstart.xml",
                 "ansible/playbooks/fleet-quickstart.yml")
 
     def test_the_script_is_gone(self):

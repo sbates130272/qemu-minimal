@@ -12,13 +12,13 @@ stack in this repo gives a guest one NIC and one GPU, both flat, so there was
 nothing here to exercise that against.
 
 **`docker-compose.yml`, `prometheus.yml` and `fleet-inventory.yml` in this
-directory are generated.** Edit [`qemu/env/mi355x-node`](../../env/mi355x-node)
+directory are generated.** Edit [`qemu/env/mi355x-node.xml`](../../env/mi355x-node.xml)
 and regenerate; a hand edit is lost next time and the `Gen Compose Check` CI
 lane fails.
 
 ```bash
 qemu-tool gen-compose --stack vfio-user-mi355x-node \
-  --env-file qemu/env/mi355x-node
+  --fleet-file qemu/env/mi355x-node.xml
 ```
 
 ## Topology
@@ -127,21 +127,21 @@ scripts/mi355x-node.sh test --report-dir /tmp/mi355x-report
 scripts/mi355x-node.sh down
 ```
 
-It defaults to `qemu/env/overlay-mi355x-ci`, which is **one** guest sized for
-a CI runner. Pass `--overlay` with your own delta for a full four-VM lab run,
+It defaults to `qemu/env/overlay-mi355x-ci.xml`, which is **one** guest sized for
+a CI runner. Pass `--fleet-overlay` with your own delta for a full four-VM lab run,
 or drive the steps by hand:
 
 ```bash
-qemu-tool gen-vm --env-file qemu/env/mi355x-node \
+qemu-tool gen-vm --fleet-file qemu/env/mi355x-node.xml \
     --vm-name stebates-mi355x-1 --backing-image "$VM_BACKING_IMAGE"
 for n in 2 3 4; do
-  qemu-tool gen-vm --env-file qemu/env/mi355x-node \
+  qemu-tool gen-vm --fleet-file qemu/env/mi355x-node.xml \
       --vm-name stebates-mi355x-$n \
       --backing-file /var/lib/qemu-tool/images/stebates-mi355x-1-backing.qcow2
 done
 qemu-tool gen-compose --stack vfio-user-mi355x-node \
-  --env-file qemu/env/mi355x-node
-qemu-tool compose --env-file qemu/env/mi355x-node \
+  --fleet-file qemu/env/mi355x-node.xml
+qemu-tool compose --fleet-file qemu/env/mi355x-node.xml \
     --stack vfio-user-mi355x-node --profile metrics up -d
 ```
 

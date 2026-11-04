@@ -118,7 +118,7 @@ def _resolve_recorded(name: str, cdir: Path) -> Path | None:
     directory gen-compose ran in -- which it does not record. Two bases are
     therefore tried, both of them things the reader can actually know: the
     stack directory, and the cwd (the committed stacks record
-    "qemu/env/scale-out", which resolves from the repo root and nowhere else).
+    "qemu/env/scale-out.xml", which resolves from the repo root and nowhere else).
     Returns None rather than searching further: falling back to
     envfile.find() here is how a 32-VM YAML ends up driven by an ambient
     qemu/.env.
@@ -329,11 +329,49 @@ def _reject_bad_user(value: str, source: str) -> None:
     )
 
 
+def _settings_to_env_dict(settings: list[Path]) -> dict[str, str]:
+    """Parse settings files (XML fleet files or KEY=VALUE env files) to a dict.
+
+    XML fleet files cannot be parsed by envfile.parse(), so they are handled
+    via FleetXml.parse_layers() + gen_compose._fleet_to_env() instead.
+    """
+    if not settings:
+        return {}
+    if any(p.suffix == ".xml" for p in settings):
+        from . import gen_compose
+        from .fleet_xml import FleetXml
+
+        cfg = FleetXml.parse_layers(settings)
+        return gen_compose._fleet_to_env(cfg)
+    return dict(parse_env_layers(settings))
+
+
+def _fleet_xml_env_file(settings: list[Path]) -> list[Path]:
+    """Return env file paths suitable for docker compose --env-file args.
+
+    If the settings are XML fleet files, converts them to a single temporary
+    KEY=VALUE file and returns that.  KEY=VALUE files are returned as-is.
+    The temporary file is cleaned up at process exit.
+    """
+    if not settings or not any(p.suffix == ".xml" for p in settings):
+        return settings
+    import atexit
+    import tempfile
+
+    env_dict = _settings_to_env_dict(settings)
+    fd, tmp_path = tempfile.mkstemp(suffix=".env", prefix="qemu-tool-fleet-")
+    atexit.register(lambda p: Path(p).unlink(missing_ok=True), tmp_path)
+    with os.fdopen(fd, "w") as f:
+        for k, v in env_dict.items():
+            f.write(f"{k}={v}\n")
+    return [Path(tmp_path)]
+
+
 def _declared_in_layers(settings: list[Path]) -> dict[str, str]:
     if not settings:
         return {}
     try:
-        return {k: v for k, v in parse_env_layers(settings).items() if v.strip()}
+        return {k: v for k, v in _settings_to_env_dict(settings).items() if v.strip()}
     except SystemExit:
         raise
     except Exception:
@@ -609,7 +647,7 @@ def run(
         # last-wins across the files -- the same rule envfile.merge() uses, so
         # compose and qemu-tool see identical values. Verified on compose
         # v5.3.1 here; do not "simplify" this to a single file.
-        for layer in settings:
+        for layer in _fleet_xml_env_file(settings):
             cmd += ["--env-file", str(layer.resolve())]
         # A --stack-dir is always a rendered tree, and one rendered from a
         # different version of the layers is exactly what that flag makes easy
@@ -632,7 +670,7 @@ def run(
         # The settings under the environment, which is the order compose
         # itself resolves them in. Only for the checks below -- nothing here
         # is passed on; compose reads the layers itself.
-        paths = dict(parse_env_layers(settings)) if settings else {}
+        paths = _settings_to_env_dict(settings) if settings else {}
         for key in ("VM_IMAGES_DIR", *_DATA_DIR_KEYS):
             if env.get(key):
                 paths[key] = env[key]

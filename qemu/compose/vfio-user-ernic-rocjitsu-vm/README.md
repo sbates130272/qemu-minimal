@@ -14,8 +14,8 @@ see `vfio-user-ernic-vm/` and `vfio-user-rocjitsu-vm/`.
 
 ```sh
 # 1. Configure
-cp qemu/env/example qemu/.env
-$EDITOR qemu/.env     # set image tags, VM_IMAGES_DIR, GPU counts
+cp qemu/env/fleet-example.xml my-fleet.xml
+$EDITOR my-fleet.xml     # set image tags, VM_IMAGES_DIR, GPU counts
 
 # 2. Build the VM image (skip if you already have one)
 qemu-tool gen-vm --vm-name qemu-minimal --images /var/lib/qemu-tool/images
@@ -29,8 +29,8 @@ ssh -p 2222 ubuntu@localhost
 
 ## Environment variables
 
-All of these live in `qemu/.env` (copy `qemu/env/example`), the single settings
-file shared by `gen-vm`, `run-vm` and every compose stack.
+All of these live in a fleet XML config (copy `qemu/env/fleet-example.xml`),
+passed via `--fleet-file` to `gen-vm`, `run-vm` and every compose stack.
 
 | Variable | Default | Description |
 |---|---|---|

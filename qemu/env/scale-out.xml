@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Fleet descriptor for the N-VM scale-out ernic mesh (vfio-user-ernic-rocjitsu-scale-out).
+
+  This is the golden file; overlay-*.xml files layer delta keys on top.
+  Edit this file and re-run `qemu-tool gen-compose` to regenerate the
+  committed docker-compose.yml. All keys and their semantics are documented
+  in qemu/env/fleet-example.xml.
+
+  IMPORTANT: this file is what gen-compose reads; the env-file path is gone.
+-->
+<fleet xmlns="http://qemu-tool/fleet/1.0">
+
+  <!-- ===================================================================
+       Fleet shape
+       =================================================================== -->
+
+  <vm-count>8</vm-count>
+  <vm-name-prefix>stebates-fleet</vm-name-prefix>
+
+  <!-- ===================================================================
+       Images — containers AND qcow2, one build stamp across all four.
+
+       Move all four together: a guest driver and a host rocm-ernic server
+       from different builds wedge silently across the vfio-user/DSR boundary.
+       =================================================================== -->
+
+  <qemu-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261030.gadc94af-qemu11.1.3-vfu.5b9c722</qemu-ref>
+  <ernic-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261030.gadc94af-ernic.8f35f4a-vfu.5b9c722</ernic-ref>
+  <rocjitsu-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261030.gadc94af-rocjitsu.73c3cf3</rocjitsu-ref>
+  <backing-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu:20261030.gadc94af-vm.resolute-ernic-rocjitsu-qm.ae551b3-qcow2</backing-ref>
+
+  <!-- ===================================================================
+       Per-guest resources
+       =================================================================== -->
+
+  <vm-vcpus>4</vm-vcpus>
+  <vm-vmem>8192</vm-vmem>
+  <vm-nvme>1</vm-nvme>
+  <vm-vfio-user-root-port>true</vm-vfio-user-root-port>
+
+  <!-- ===================================================================
+       Host paths
+       =================================================================== -->
+
+  <vm-images-dir>${HOME}/Projects/qemu-minimal/images</vm-images-dir>
+  <vm-backing-shared>true</vm-backing-shared>
+  <vm-username>ubuntu</vm-username>
+  <vm-password>ubuntu</vm-password>
+
+  <!-- The repo root is mapped into every container so compose can reach the
+       package source (ernic hub, etc.) without a published image for every
+       dev change. -->
+  <qemu-tool-src>../../..</qemu-tool-src>
+
+  <!-- The share directory for files served to guests via virtio-fs. -->
+  <vm-filesystem>/var/lib/qemu-tool/share</vm-filesystem>
+
+  <!-- ===================================================================
+       Fleet wiring
+       =================================================================== -->
+
+  <!-- ERNIC_TAP is what makes inter-node anything possible.  The TCP mesh
+       carries RDMA payload only; without a TAP the guests have no Ethernet,
+       ARP goes unanswered, and ib_send_bw cannot do its out-of-band exchange.
+       It costs one short-lived privileged sidecar per VM. -->
+  <ernic-tap>true</ernic-tap>
+
+  <!-- Forward node-exporter (9100) and amd-metrics-exporter (9500) from
+       every guest through its QEMU container to the fleet Docker network. -->
+  <vm-extra-hostfwd>tcp::9100-:9100,tcp::9500-:9500</vm-extra-hostfwd>
+
+  <!-- ===================================================================
+       LMCache
+       =================================================================== -->
+
+  <lmcache-enable>true</lmcache-enable>
+  <lmcache-image>qemu-tool/lmcache-rocm:0.5.6-gfx1250-srq</lmcache-image>
+
+</fleet>

@@ -26,8 +26,8 @@
 set -euo pipefail
 
 REPO_ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
-ENV_FILE="${REPO_ROOT}/qemu/env/mi355x-node"
-OVERLAY="${REPO_ROOT}/qemu/env/overlay-mi355x-ci"
+FLEET_FILE="${REPO_ROOT}/qemu/env/mi355x-node.xml"
+FLEET_OVERLAY="${REPO_ROOT}/qemu/env/overlay-mi355x-ci.xml"
 STACK_DIR=/var/lib/qemu-tool/stacks/mi355x
 KEY_DIR=/var/lib/qemu-tool/mi355x-key
 REPORT_DIR=""
@@ -38,8 +38,8 @@ usage() {
   cat <<'EOF'
 Usage: mi355x-node.sh [options] <up|test|down>
 
-  --env-file FILE     golden settings file (default qemu/env/mi355x-node)
-  --overlay FILE      delta layered on it (default qemu/env/overlay-mi355x-ci)
+  --fleet-file FILE   golden fleet XML file (default qemu/env/mi355x-node.xml)
+  --fleet-overlay FILE  delta XML layered on it (default qemu/env/overlay-mi355x-ci.xml)
   --stack-dir DIR     where the stack is rendered
   --key-dir DIR       where the guest keypair is pulled to
   --report-dir DIR    write a markdown report here (test only)
@@ -51,8 +51,8 @@ EOF
 
 while [ $# -gt 0 ]; do
   case $1 in
-    --env-file) ENV_FILE=$2; shift 2 ;;
-    --overlay) OVERLAY=$2; shift 2 ;;
+    --fleet-file) FLEET_FILE=$2; shift 2 ;;
+    --fleet-overlay) FLEET_OVERLAY=$2; shift 2 ;;
     --stack-dir) STACK_DIR=$2; shift 2 ;;
     --key-dir) KEY_DIR=$2; shift 2 ;;
     --report-dir) REPORT_DIR=$2; shift 2 ;;
@@ -67,13 +67,16 @@ done
 say() { printf '\n== %s ==\n' "$1"; }
 die() { echo "error: $1" >&2; exit 1; }
 
-env_get() {
-  # Last assignment wins, overlay over golden, matching envfile layering.
-  val=$(sed -n "s/^$1=//p" "$ENV_FILE" | tail -1)
-  [ -f "$OVERLAY" ] && o=$(sed -n "s/^$1=//p" "$OVERLAY" | tail -1) || o=""
-  [ -n "$o" ] && val=$o
-  printf '%s' "$val"
-}
+# Generate a temporary env file from the XML fleet layers so commands that
+# still require --env-file (gen-vm, inspect, docker compose) have something to
+# read. The XML files are authoritative; this file is throw-away.
+FLEET_ENV=$(mktemp /tmp/mi355x-fleet-XXXXXX.env)
+trap 'rm -f "$FLEET_ENV"' EXIT
+qemu-tool fleet-to-env \
+  --fleet-file "$FLEET_FILE" --fleet-file "$FLEET_OVERLAY" > "$FLEET_ENV"
+
+# shellcheck source=/dev/null
+env_get() { grep -m1 "^$1=" "$FLEET_ENV" | cut -d= -f2-; }
 
 VM_COUNT=$(env_get VM_COUNT)
 VM_IMAGES_DIR=$(env_get VM_IMAGES_DIR)
@@ -100,7 +103,7 @@ guest_port() {
 qt() { qemu-tool "$@"; }
 compose() {
   docker compose --project-directory "$STACK_DIR" \
-    --env-file "$ENV_FILE" --env-file "$OVERLAY" "$@"
+    --env-file "$FLEET_ENV" "$@"
 }
 
 # ---------------------------------------------------------------------------
@@ -135,12 +138,12 @@ make_overlays() {
   say "Creating guest overlays"
   first="${VM_NAME_PREFIX}-1"
   if [ ! -f "${VM_IMAGES_DIR}/${first}-backing.qcow2" ]; then
-    qt gen-vm --env-file "$ENV_FILE" --env-file "$OVERLAY" \
+    qt gen-vm --env-file "$FLEET_ENV" \
       --vm-name "$first" --backing-image "$VM_BACKING_IMAGE"
   fi
   n=2
   while [ "$n" -le "$VM_COUNT" ]; do
-    qt gen-vm --env-file "$ENV_FILE" --env-file "$OVERLAY" \
+    qt gen-vm --env-file "$FLEET_ENV" \
       --vm-name "${VM_NAME_PREFIX}-${n}" \
       --backing-file "${VM_IMAGES_DIR}/${first}-backing.qcow2"
     n=$((n + 1))
@@ -151,7 +154,7 @@ generate_stack() {
   say "Rendering ${STACK} to ${STACK_DIR}"
   mkdir -p "$STACK_DIR"
   qt gen-compose --stack "$STACK" \
-    --env-file "$ENV_FILE" --env-file "$OVERLAY" --output-dir "$STACK_DIR"
+    --fleet-file "$FLEET_FILE" --fleet-file "$FLEET_OVERLAY" --output-dir "$STACK_DIR"
 
   # Copy the repo's qemu package into the stack directory so the QEMU
   # containers can install qemu-tool FROM SOURCE. Two reasons it has to be a
@@ -394,7 +397,7 @@ report() {
     echo "## What qemu-tool reports about the live guest"
     echo
     echo '```'
-    qt inspect --env-file "$ENV_FILE" --env-file "$OVERLAY" \
+    qt inspect --env-file "$FLEET_ENV" \
       --vm-name "${VM_NAME_PREFIX}-1" 2>&1 | head -40
     echo '```'
   } > "${REPORT_DIR}/index.md"
