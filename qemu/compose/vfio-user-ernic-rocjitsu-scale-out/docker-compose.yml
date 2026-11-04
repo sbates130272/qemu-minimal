@@ -501,6 +501,7 @@ services:
       - |
         if [ -f /qemu-tool-src/qemu/pyproject.toml ]; then
           cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
+          rm -rf /tmp/qemu-tool-build/build /tmp/qemu-tool-build/*.egg-info
           python3 -m venv /tmp/qemu-tool-venv
           /tmp/qemu-tool-venv/bin/pip install -q -e /tmp/qemu-tool-build
           mkdir -p /tmp/bin
@@ -545,6 +546,7 @@ services:
       - |
         if [ -f /qemu-tool-src/qemu/pyproject.toml ]; then
           cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
+          rm -rf /tmp/qemu-tool-build/build /tmp/qemu-tool-build/*.egg-info
           python3 -m venv /tmp/qemu-tool-venv
           /tmp/qemu-tool-venv/bin/pip install -q -e /tmp/qemu-tool-build
           mkdir -p /tmp/bin
@@ -589,6 +591,7 @@ services:
       - |
         if [ -f /qemu-tool-src/qemu/pyproject.toml ]; then
           cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
+          rm -rf /tmp/qemu-tool-build/build /tmp/qemu-tool-build/*.egg-info
           python3 -m venv /tmp/qemu-tool-venv
           /tmp/qemu-tool-venv/bin/pip install -q -e /tmp/qemu-tool-build
           mkdir -p /tmp/bin
@@ -633,6 +636,7 @@ services:
       - |
         if [ -f /qemu-tool-src/qemu/pyproject.toml ]; then
           cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
+          rm -rf /tmp/qemu-tool-build/build /tmp/qemu-tool-build/*.egg-info
           python3 -m venv /tmp/qemu-tool-venv
           /tmp/qemu-tool-venv/bin/pip install -q -e /tmp/qemu-tool-build
           mkdir -p /tmp/bin
@@ -677,6 +681,7 @@ services:
       - |
         if [ -f /qemu-tool-src/qemu/pyproject.toml ]; then
           cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
+          rm -rf /tmp/qemu-tool-build/build /tmp/qemu-tool-build/*.egg-info
           python3 -m venv /tmp/qemu-tool-venv
           /tmp/qemu-tool-venv/bin/pip install -q -e /tmp/qemu-tool-build
           mkdir -p /tmp/bin
@@ -721,6 +726,7 @@ services:
       - |
         if [ -f /qemu-tool-src/qemu/pyproject.toml ]; then
           cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
+          rm -rf /tmp/qemu-tool-build/build /tmp/qemu-tool-build/*.egg-info
           python3 -m venv /tmp/qemu-tool-venv
           /tmp/qemu-tool-venv/bin/pip install -q -e /tmp/qemu-tool-build
           mkdir -p /tmp/bin
@@ -765,6 +771,7 @@ services:
       - |
         if [ -f /qemu-tool-src/qemu/pyproject.toml ]; then
           cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
+          rm -rf /tmp/qemu-tool-build/build /tmp/qemu-tool-build/*.egg-info
           python3 -m venv /tmp/qemu-tool-venv
           /tmp/qemu-tool-venv/bin/pip install -q -e /tmp/qemu-tool-build
           mkdir -p /tmp/bin
@@ -809,6 +816,7 @@ services:
       - |
         if [ -f /qemu-tool-src/qemu/pyproject.toml ]; then
           cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
+          rm -rf /tmp/qemu-tool-build/build /tmp/qemu-tool-build/*.egg-info
           python3 -m venv /tmp/qemu-tool-venv
           /tmp/qemu-tool-venv/bin/pip install -q -e /tmp/qemu-tool-build
           mkdir -p /tmp/bin
@@ -853,6 +861,7 @@ services:
       - |
         if [ -f /qemu-tool-src/qemu/pyproject.toml ]; then
           cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
+          rm -rf /tmp/qemu-tool-build/build /tmp/qemu-tool-build/*.egg-info
           python3 -m venv /tmp/qemu-tool-venv
           /tmp/qemu-tool-venv/bin/pip install -q -e /tmp/qemu-tool-build
           mkdir -p /tmp/bin
@@ -1050,6 +1059,7 @@ services:
       - |
         if [ -f /qemu-tool-src/qemu/pyproject.toml ]; then
           cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
+          rm -rf /tmp/qemu-tool-build/build /tmp/qemu-tool-build/*.egg-info
           python3 -m venv /tmp/qemu-tool-venv
           /tmp/qemu-tool-venv/bin/pip install -q -e /tmp/qemu-tool-build
           mkdir -p /tmp/bin
