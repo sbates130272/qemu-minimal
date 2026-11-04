@@ -1,0 +1,25 @@
+---
+# The guest of vfio-user-xio-vm. Values come from qemu/env/xio.
+all:
+  vars:
+    ansible_host: 127.0.0.1
+    ansible_user: ubuntu
+    # The private half of the key gen-vm installed, from the VM's sidecar.
+    ansible_ssh_private_key_file: >-
+      {{ (lookup('ansible.builtin.file', xio_images_dir ~ '/' ~ xio_vm_name ~ '.json')
+          | from_json).ssh_key_file | regex_replace('[.]pub$', '') }}
+    ansible_ssh_common_args: >-
+      -o StrictHostKeyChecking=no
+      -o UserKnownHostsFile=/dev/null
+    xio_settings_file: "{{ inventory_dir }}/../../qemu/env/xio"
+    xio_images_dir: "{{ lookup('ansible.builtin.ini', 'VM_IMAGES_DIR type=properties file=' ~ xio_settings_file) }}"
+    xio_vm_name: "{{ lookup('ansible.builtin.ini', 'VM_NAME type=properties file=' ~ xio_settings_file) }}"
+    xio_rocm_xio_repo: "{{ lookup('ansible.builtin.ini', 'ROCM_XIO_REPO type=properties file=' ~ xio_settings_file) }}"
+    xio_rocm_xio_ref: "{{ lookup('ansible.builtin.ini', 'ROCM_XIO_REF type=properties file=' ~ xio_settings_file) }}"
+    xio_spdk_serial: "{{ lookup('ansible.builtin.ini', 'XIO_SPDK_SERIAL type=properties file=' ~ xio_settings_file) }}"
+
+  children:
+    xio:
+      hosts:
+        xio-1:
+          ansible_port: "{{ lookup('ansible.builtin.ini', 'VM_SSH_PORT type=properties file=' ~ xio_settings_file) }}"

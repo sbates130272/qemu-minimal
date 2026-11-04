@@ -14,6 +14,7 @@ file up to date as infrastructure changes.
 - `qemu/compose/vfio-user-ernic-2vm/` — two-VM ernic mesh stack; rocjitsu GPUs opt-in via `--profile rocjitsu-vm1/vm2`
 - `qemu/compose/vfio-user-ernic-rocjitsu-scale-out/` — N-VM fleet, **generated** by `qemu-tool gen-compose` from `qemu/env/scale-out` plus whichever overlay applies; `--profile metrics` adds Prometheus+Grafana, `--profile lmcache` adds the LMCache coordinator
 - `qemu/compose/vfio-user-mi355x-node/` — MI355X-shaped PCIe topology: one EPYC socket, 8 GPUs, 8 NICs and 8 PCIe switches per VM, one NIC + one GPU below each switch. Also **generated**, from `qemu/env/mi355x-node`. 8 ernics per VM means 8 *mesh nodes* per VM, so the fleet caps at 4 VMs, not 40 — see its README
+- `qemu/compose/vfio-user-xio-vm/` — one guest for rocm-xio development: two rocjitsu GPUs, one ernic, QEMU's own NVMe plus an SPDK NVMe controller (one NVMe-KV namespace, NSID 1), and `pci-mmio-bridge`. Hand-written, **not** generated, and pinned to the `sbates-fork` images; see the section below
 - `qemu/docker/` — Dockerfiles this repo owns, one directory per image (`lmcache/` so far). Built by hand and referenced by tag, unlike the stack-local `tapsetup/` which compose builds itself
 - `qemu/compose/vfio-user-ernic-rocjitsu-scale-out/` — N-VM ernic mesh + one
   GPU per VM. **Generated** by `qemu-tool gen-compose` from `qemu/env/scale-out`
@@ -323,6 +324,42 @@ must cover it (`512G` is the phys-bits ceiling, see the MI355X README), and
 vfio-user P2P DMA needs the fork QEMU image (issue 19) — `qemu/env/overlay-mi100`
 pins it, the golden `env/scale-out` does not.
 
+## The rocm-xio stack
+
+`vfio-user-xio-vm` is the one stack whose point is *which GPU-initiated IO path
+works*: GPU to GPU, to the ernic, to QEMU's NVMe, to the SPDK NVMe. Four facts
+about it are easy to lose and each fails quietly:
+
+- **It reads `XIO_`-prefixed image variables and nothing else.** The other stacks
+  read `QEMU_IMAGE`, `ERNIC_IMAGE` and `ROCJITSU_IMAGE`, and `qemu/env/example`
+  pins those to the *stock* images, which have no `pci-mmio-bridge`. A shared
+  `.env` would otherwise hand this stack the wrong QEMU. `tests/test_xio_stack.py`
+  asserts no stock variable name appears.
+- **The two GPUs are two services, not `replicas: 2`.** Replicas share one
+  command and, here, one socket volume, so they would bind one path. The socket
+  order handed to qemu is also the guest's device order, and the test pins it.
+- **The SPDK controller has one namespace, KV, NSID 1, and must stay that way.**
+  Beside a KV namespace an LBA one is invisible to Linux: the guest kernel logs
+  `Command set not reported for nsid:1` and makes no block device (measured on a
+  booted guest). `kv:mem,lba:malloc:1G` also crashes `nvmf_tgt`; LBA first serves.
+  Values are capped at 128 KiB, and KV Store and Retrieve share opcodes with
+  block Write and Read.
+
+SPDK was run, for the first time here, as the caller's uid with `cap_drop: ALL`
+and `no-new-privileges`, and starts and serves its socket. The four servers were
+brought up from the committed file and reported healthy. A guest boots on it and
+sees both NVMe controllers, and an `xio-tester` KV store has reached the SPDK
+namespace with the GPUs up, the doorbells carried by the rocm-xio kernel module.
+**`xio-tester` crashes intermittently and once hung the guest; the cause is not
+known.** After a stack restart the module, the ernic address and amdgpu are gone
+(`modprobe.blacklist=amdgpu` is on the kernel command line): re-run
+`xio-guest.yml` before testing, or `xio-tester` runs with no KFD.
+
+The guest's login comes from `gen-vm --backing-image`, not from `quick-start`:
+with no `--ssh-key-file` it fetches the image's own key from its `vm-info`
+referrer into `<images>/keys/`, and with one it installs yours in a one-time
+boot. `qemu/env/xio` names no key.
+
 ## Tearing a stack down
 
 **`qemu-tool down`** gracefully shuts down guests via the QEMU guest agent and,
@@ -338,7 +375,7 @@ container, so neither is a guess:
 
 | Question | Answered by |
 |---|---|
-| Is this a qemu-tool stack? | `com.docker.compose.project.config_files` — the file carries the `gen-compose` provenance header, or sits in one of the six stack directories this tool ships |
+| Is this a qemu-tool stack? | `com.docker.compose.project.config_files` — the file carries the `gen-compose` provenance header, or sits in one of the seven stack directories this tool ships |
 | Is it yours? | `.Config.User`, the uid the containers really run as — which is what the `CONTAINER_USER` work put there |
 
 **Do not "simplify" the first to a service-name match.** `qemu-1` is a name

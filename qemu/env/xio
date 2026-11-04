@@ -1,0 +1,35 @@
+# Settings for vfio-user-xio-vm.
+#   qemu-tool gen-vm  --env-file qemu/env/xio
+#   qemu-tool compose --stack vfio-user-xio-vm --env-file qemu/env/xio up -d
+
+# Guest: the published ernic-rocjitsu image (has ROCm and hipcc).
+VM_NAME=xio-1
+VM_BACKING_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu:20261022.gc533d98-vm.resolute-ernic-rocjitsu-qm.c079195-qcow2
+VM_USERNAME=ubuntu
+VM_IMAGES_DIR=/var/lib/qemu-tool/images
+# No key is named, so gen-vm fetches the one the image already accepts (its
+# builder's). Set VM_SSH_KEY_FILE, or pass --ssh-key-file, to install your own
+# instead (that needs a fat image: -slim has cloud-init off).
+
+# At least 4 vCPUs or ionic_rdma never probes. SHM must be >= VMEM.
+VM_VCPUS=4
+VM_VMEM=8192
+VM_SHM_SIZE=12g
+VM_SSH_PORT=2222
+
+# Server images. Must be the sbates-fork builds (QEMU needs pci-mmio-bridge).
+XIO_QEMU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:qemu.f91f120-vfu.3719c3a
+XIO_ROCJITSU_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu-sbates-fork:rocjitsu.3141e64-vfu.3719c3a
+XIO_SPDK_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-spdk-libvfio-user-sbates-fork:spdk.18d1d8d-vfu.3719c3a
+XIO_ERNIC_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261022.gc533d98-ernic.151379b-vfu.8039244
+XIO_ROCJITSU_CONFIG=gfx1250_mi455x.json
+
+# SPDK namespaces: KV only, NSID 1 (an LBA one is invisible to Linux).
+XIO_NVME_NAMESPACES=kv:mem
+# The guest's /dev/xio-kv is the controller with this serial (max 20 chars).
+XIO_SPDK_SERIAL=XIO-KV
+
+# rocm-xio, built in the guest. Not main: its nvme-ep has an s_waitcnt that
+# does not compile for gfx1250.
+ROCM_XIO_REPO=https://github.com/ROCm/rocm-xio.git
+ROCM_XIO_REF=feat/nvme-kv-ernic-rocjitsu

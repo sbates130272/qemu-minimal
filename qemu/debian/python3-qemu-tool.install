@@ -25,3 +25,5 @@ env/mi355x-node usr/share/qemu-tool/env/
 compose/vfio-user-mi355x-node/docker-compose.yml usr/share/qemu-tool/compose/vfio-user-mi355x-node/
 compose/vfio-user-mi355x-node/prometheus.yml usr/share/qemu-tool/compose/vfio-user-mi355x-node/
 compose/vfio-user-mi355x-node/README.md usr/share/qemu-tool/compose/vfio-user-mi355x-node/
+compose/vfio-user-xio-vm/docker-compose.yml usr/share/qemu-tool/compose/vfio-user-xio-vm/
+compose/vfio-user-xio-vm/README.md usr/share/qemu-tool/compose/vfio-user-xio-vm/

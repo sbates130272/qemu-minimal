@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from contextlib import ExitStack
 from pathlib import Path
 
@@ -77,9 +78,18 @@ def run(cfg: VMConfig) -> None:
         return
 
     if cfg.backing_image is not None:
+        # A key given with a published image is installed in the overlay.
+        # Without one, the overlay already accepts the image's builder key, so
+        # that is fetched instead. Either is settled before the overlay is
+        # created, so a failure leaves none behind.
+        key_pub = _key_to_install(cfg) if cfg.ssh_key_file is not None else None
         backing = _fetch_backing_image(cfg, images)
-        _create_overlay(images / f"{cfg.vm_name}.qcow2", backing)
-        _write_vm_info(cfg, images)
+        builder = None if key_pub else _fetch_builder_key(cfg, images, backing)
+        overlay = images / f"{cfg.vm_name}.qcow2"
+        _create_overlay(overlay, backing)
+        if key_pub:
+            _install_ssh_key(cfg, images, overlay, key_pub)
+        _write_vm_info(cfg, images, key=builder)
         return
 
     if cfg.backing_file is not None:
@@ -102,7 +112,7 @@ def run(cfg: VMConfig) -> None:
         ["qemu-img", "resize", str(backing), f"{cfg.size}G"], check=True
     )
 
-    ssh_key = Path(cfg.ssh_key_file).expanduser()
+    ssh_key = cfg.effective_ssh_key_file
     if not ssh_key.exists():
         sys.exit(f"Error: SSH key file {ssh_key} does not exist!")
 
@@ -134,7 +144,7 @@ def run(cfg: VMConfig) -> None:
 # VM info sidecar
 # ---------------------------------------------------------------------------
 
-def _write_vm_info(cfg: VMConfig, images: Path) -> None:
+def _write_vm_info(cfg: VMConfig, images: Path, key: Path | None = None) -> None:
     """Write <vm-name>.json alongside the qcow2 for inspect to read.
 
     Records the username and SSH public key path *this gen-vm run was
@@ -149,7 +159,7 @@ def _write_vm_info(cfg: VMConfig, images: Path) -> None:
     """
     info = {
         "username": cfg.username,
-        "ssh_key_file": str(Path(cfg.ssh_key_file).expanduser()),
+        "ssh_key_file": str(key or cfg.effective_ssh_key_file),
     }
     info_path = images / f"{cfg.vm_name}.json"
     info_path.write_text(json.dumps(info, indent=2) + "\n")
@@ -195,8 +205,9 @@ def _fetch_backing_image(cfg: VMConfig, images: Path) -> Path:
 
     with tempfile.TemporaryDirectory(dir=images) as tmp:
         tmpdir = Path(tmp)
-        print(f"Pulling {cfg.backing_image}")
-        subprocess.run(["oras", "pull", cfg.backing_image, "-o", str(tmpdir)], check=True)
+        pinned = _pin_reference(cfg.backing_image)
+        print(f"Pulling {pinned}")
+        subprocess.run(["oras", "pull", pinned, "-o", str(tmpdir)], check=True)
 
         compressed = sorted(tmpdir.glob("*.qcow2.zst"))
         plain = sorted(tmpdir.glob("*.qcow2"))
@@ -217,8 +228,99 @@ def _fetch_backing_image(cfg: VMConfig, images: Path) -> Path:
                 f"(pulled: {found})."
             )
 
+    _ref_file(backing).write_text(pinned + "\n")
     print(f"Backing image ready: {backing}")
     return backing
+
+
+# The referrer a published image carries: its builder's keypair, which every
+# overlay of that image accepts because it is in the image's authorized_keys.
+_VM_INFO_TYPE = "application/vnd.batesste.vm-info.v1"
+
+
+def _ref_file(backing: Path) -> Path:
+    return backing.with_name(backing.name + ".ref")
+
+
+def _pin_reference(ref: str) -> str:
+    """repo@digest for a tag, so the disk and its key come from one manifest."""
+    if "@" in ref:
+        return ref
+    done = subprocess.run(["oras", "manifest", "fetch", "--descriptor", ref],
+                          capture_output=True, text=True)
+    if done.returncode != 0:
+        sys.exit(f"Error: cannot resolve {ref}:\n{done.stderr.strip()}")
+    digest = json.loads(done.stdout)["digest"]
+    head, _, tail = ref.rpartition("/")
+    name = f"{head}/{tail.split(':')[0]}" if head else tail.split(":")[0]
+    return f"{name}@{digest}"
+
+
+def _fetch_builder_key(cfg: VMConfig, images: Path, backing: Path) -> Path:
+    """Pull the image's builder keypair into <images>/keys/.
+
+    The referrer is looked up by the digest the disk was pulled at, so it is
+    this image's and not a later push of the same tag. The public half must
+    match the fingerprint vm-info.json records and the private half must
+    derive it. Anything else, including no referrer or one with no key in it,
+    is an error rather than a guest that quietly refuses every login.
+    """
+    ref_file = _ref_file(backing)
+    ref = ref_file.read_text().strip() if ref_file.is_file() \
+        else _pin_reference(cfg.backing_image)
+    found = subprocess.run(["oras", "discover", ref, "--format", "json"],
+                           capture_output=True, text=True)
+    if found.returncode != 0:
+        sys.exit(f"Error: oras discover failed on {ref}:\n{found.stderr.strip()}")
+    parsed = json.loads(found.stdout)
+    # oras >= 1.3.4 calls the list "referrers"; earlier versions "manifests".
+    hits = [r["reference"] for r in parsed.get("referrers") or parsed.get("manifests", [])
+            if r.get("artifactType") == _VM_INFO_TYPE]
+    if len(hits) > 1:
+        sys.exit(f"Error: {ref} has {len(hits)} {_VM_INFO_TYPE} referrers, so "
+                 "which key it accepts is ambiguous. Name one with --ssh-key-file.")
+    if not hits:
+        sys.exit(f"Error: {cfg.backing_image} carries no {_VM_INFO_TYPE} "
+                 "referrer, so which key the guest accepts is unknown. Pass "
+                 "--ssh-key-file to install one.")
+
+    keys = images / "keys"
+    keys.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=images) as tmp:
+        got = Path(tmp)
+        subprocess.run(["oras", "pull", hits[0], "-o", str(got)], check=True)
+        private, pub, info = got / "id_rsa", got / "id_rsa.pub", got / "vm-info.json"
+        missing = [p.name for p in (private, pub, info) if not p.is_file()]
+        if missing:
+            sys.exit(f"Error: the referrer on {ref} lacks {', '.join(missing)}. "
+                     "Pass --ssh-key-file to install a key.")
+        want = (json.loads(info.read_text()).get("ssh_keys") or {}).get("fingerprint")
+        printed = subprocess.run(["ssh-keygen", "-lf", str(pub)],
+                                 capture_output=True, text=True)
+        have = printed.stdout.split()[1] if printed.returncode == 0 else None
+        if not want:
+            sys.exit(f"Error: the vm-info.json on {ref} records no key "
+                     "fingerprint. Pass --ssh-key-file to install one.")
+        if have != want:
+            sys.exit(f"Error: the key on {ref} is {have}, but vm-info.json says "
+                     f"{want}. Refusing it; pass --ssh-key-file instead.")
+        private.chmod(0o600)
+        derived = subprocess.run(["ssh-keygen", "-y", "-f", str(private)],
+                                 capture_output=True, text=True)
+        if derived.returncode != 0 or \
+                derived.stdout.split()[:2] != pub.read_text().split()[:2]:
+            sys.exit(f"Error: the private key on {ref} does not match its "
+                     "public half.")
+        theirs = (json.loads(info.read_text()).get("username") or "").strip()
+        if theirs and theirs != cfg.username:
+            print(f"Warning: the image's account is {theirs}, not "
+                  f"{cfg.username}; set VM_USERNAME={theirs}.", file=sys.stderr)
+        dest = keys / f"{cfg.vm_name}_id_rsa"
+        shutil.copyfile(private, dest)
+        dest.chmod(0o600)
+        shutil.copyfile(pub, dest.with_name(dest.name + ".pub"))
+    print(f"Builder key {want} written to {dest}")
+    return dest.with_name(dest.name + ".pub")
 
 
 def _create_overlay(overlay: Path, backing: Path) -> None:
@@ -568,6 +670,128 @@ ethernets:
 """)
 
 
+def _key_to_install(cfg: VMConfig) -> Path:
+    """The public key to install, creating the pair first if there is none.
+
+    A key that exists is used as is, so the guest accepts the key you already
+    ssh with. Naming a path with nothing there asks for a new key at that path.
+    A private half with no .pub beside it gets the public half derived and is
+    never overwritten.
+    """
+    pub = cfg.effective_ssh_key_file
+    if pub.is_file():
+        return pub
+    if not pub.name.endswith(".pub"):
+        sys.exit(f"Error: --ssh-key-file {pub} does not exist, and a new key "
+                 "can only be created at a path ending in .pub.")
+    if not _which("ssh-keygen"):
+        sys.exit("Error: creating a key needs 'ssh-keygen', which is not on "
+                 "PATH. Install openssh-client, or name a key that exists.")
+    private = pub.with_name(pub.name[:-len(".pub")])
+    try:
+        pub.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    except OSError as exc:
+        sys.exit(f"Error: cannot create {pub.parent} for the new key ({exc}). "
+                 "Create it yourself, or point --ssh-key-file elsewhere.")
+    if private.is_file():
+        print(f"Deriving {pub} from {private}")
+        derived = subprocess.run(["ssh-keygen", "-y", "-f", str(private)],
+                                 capture_output=True, text=True)
+        if derived.returncode != 0:
+            sys.exit(f"Error: could not read {private}: {derived.stderr.strip()}")
+        pub.write_text(derived.stdout)
+        return pub
+    # The type follows the name, so id_rsa is not an ed25519 key in disguise.
+    kind = ["-t", "rsa", "-b", "4096"] if "rsa" in private.name else ["-t", "ed25519"]
+    print(f"Generating a new SSH key: {private}")
+    subprocess.run(
+        ["ssh-keygen", "-q", *kind, "-N", "", "-C", f"qemu-tool {cfg.vm_name}",
+         "-f", str(private)],
+        check=True,
+    )
+    private.chmod(0o600)
+    return pub
+
+
+def _write_key_cloud_config(cfg: VMConfig, pub: Path, out: Path) -> None:
+    key_list = "\n".join(
+        f"      - {k}" for k in pub.read_text().splitlines() if k.strip()
+    )
+    # users: names the account the image already has, so cloud-init adds the
+    # key to it rather than creating one. preserve_hostname keeps the image's
+    # own: the seed carries no hostname, and without this cloud-init would
+    # pick one. power_state is what ends the boot -- it runs after the keys.
+    out.write_text(f"""\
+#cloud-config
+preserve_hostname: true
+users:
+  - name: {cfg.username}
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+{key_list}
+power_state:
+  delay: now
+  mode: poweroff
+  message: ssh key installed
+  timeout: 2
+  condition: true
+""")
+
+
+def _install_ssh_key(
+    cfg: VMConfig, images: Path, overlay: Path, pub: Path
+) -> None:
+    """Install the public key `pub` in a published image's overlay.
+
+    Runs when --ssh-key-file is given with --backing-image.
+
+    A published qcow2 has no cloud-init seed of its own, and the one key it
+    accepts is its builder's. So boot the OVERLAY once with a NoCloud seed that
+    names a key for the image's existing account, and let the guest power
+    itself off. The backing image is only read, so every other overlay of it is
+    untouched.
+
+    The instance id is unique each time on purpose. cloud-init decides whether
+    a boot is a new instance by comparing it with the one recorded in the
+    image, and `cloud-localds` defaults to a fixed id -- the same one the
+    image's own build used -- under which the seed would be ignored.
+
+    Needs cloud-init enabled in the image. The fat published images have it;
+    the -slim ones mask it, and then the guest never powers off.
+    """
+    seed = images / f"{cfg.vm_name}-seed.qcow2"
+    print(f"Installing {pub} in {overlay.name} (one boot, about 30 s)")
+    with tempfile.TemporaryDirectory(dir=images) as tmp:
+        user_data = Path(tmp) / "user-data"
+        meta_data = Path(tmp) / "meta-data"
+        _write_key_cloud_config(cfg, pub, user_data)
+        meta_data.write_text(f"instance-id: {cfg.vm_name}-key-{uuid.uuid4().hex[:8]}\n")
+        try:
+            subprocess.run(
+                ["cloud-localds", "-d", "qcow2", str(seed),
+                 str(user_data), str(meta_data)],
+                check=True,
+            )
+            _first_boot(
+                cfg, images, overlay, timeout=_KEY_BOOT_TIMEOUT,
+                timeout_msg=(
+                    "Error: the guest did not power off within {timeout:.0f} s "
+                    "after the key seed was attached, so the key was probably "
+                    "not installed. cloud-init is most likely disabled in this "
+                    "image (the -slim images mask it); use the fat image, or "
+                    "put a key in it another way."
+                ),
+            )
+        finally:
+            seed.unlink(missing_ok=True)
+    print(f"SSH key installed: {pub}")
+
+
+# Generous: the guest boots, runs cloud-init and powers off in about 30 s.
+_KEY_BOOT_TIMEOUT = 300
+
+
 def _create_seed_iso(
     cfg: VMConfig, images: Path, cloud_cfg: Path, net_cfg: Path
 ) -> None:
@@ -583,7 +807,10 @@ def _create_seed_iso(
 # First boot (cloud-init)
 # ---------------------------------------------------------------------------
 
-def _first_boot(cfg: VMConfig, images: Path, backing: Path) -> None:
+def _first_boot(
+    cfg: VMConfig, images: Path, backing: Path,
+    timeout: float | None = None, timeout_msg: str | None = None,
+) -> None:
     kvm = ",accel=kvm" if cfg.kvm else ""
     qarch = _ARCH_MAP[cfg.arch]
     qemu = qemu_binary(cfg)
@@ -606,10 +833,13 @@ def _first_boot(cfg: VMConfig, images: Path, backing: Path) -> None:
     # (growpart + resize2fs) can take 30+ minutes on arm64/riscv64. Cap the
     # wait so a hung guest produces a clear error rather than silently burning
     # the CI job timeout.
-    boot_timeout = None if cfg.kvm else 3300  # 55 min; job ceiling is 60 min
+    boot_timeout = timeout if timeout is not None else (
+        None if cfg.kvm else 3300)  # 55 min; job ceiling is 60 min
     try:
         subprocess.run(cmd, check=True, timeout=boot_timeout)
     except subprocess.TimeoutExpired:
+        if timeout_msg:
+            sys.exit(timeout_msg.format(timeout=boot_timeout))
         sys.exit(
             f"Error: first boot timed out after {boot_timeout}s on "
             f"{cfg.arch} (no KVM). cloud-init did not complete — "
@@ -793,7 +1023,7 @@ def _run_ansible(cfg: VMConfig, images: Path, backing: Path) -> None:
 
 
 def _ssh_identity_args(cfg: VMConfig) -> list[str]:
-    key_pub = Path(cfg.ssh_key_file).expanduser()
+    key_pub = cfg.effective_ssh_key_file
     # Strip .pub to get the private key; fall back to no -i if missing.
     private_key = key_pub.parent / key_pub.stem
     if private_key.exists():
@@ -929,6 +1159,11 @@ def _validate(cfg: VMConfig) -> None:
         sys.exit("Error: --backing-image and --backing-file cannot both be set.")
     if cfg.backing_image is not None and cfg.no_backing:
         sys.exit("Error: --backing-image and --no-backing cannot both be set.")
+    if (cfg.backing_image is not None and cfg.ssh_key_file is not None
+            and not _which("cloud-localds")):
+        sys.exit("Error: installing --ssh-key-file in a --backing-image "
+                 "overlay needs 'cloud-localds' (apt install "
+                 "cloud-image-utils), which is not on PATH.")
     # Warn on unknown releases; XX.YY version strings are always accepted.
     if (
         cfg.backing_file is None

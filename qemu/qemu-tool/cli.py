@@ -812,7 +812,14 @@ def _add_gen_vm(
     p.add_argument("--release", default=_UNSET,
                    metavar="NAME",
                    help="Ubuntu codename (resolute) or version (26.04).")
-    p.add_argument("--ssh-key-file", type=Path, default=_UNSET, metavar="FILE")
+    p.add_argument("--ssh-key-file", type=Path, default=_UNSET, metavar="FILE",
+                   help="Public key for the guest. A fresh build installs it "
+                        "through cloud-init. With --backing-image, the new "
+                        "overlay is booted once to install it, because a "
+                        "published image has no seed of its own; if nothing "
+                        "exists at that path, a new key is created there. "
+                        "Without it, --backing-image fetches the key the "
+                        "image already accepts.")
     p.add_argument("--username", default=_UNSET)
     p.add_argument("--user-id", type=int, default=_UNSET, metavar="UID")
     p.add_argument("--password", default=_UNSET)

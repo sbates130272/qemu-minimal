@@ -1,0 +1,340 @@
+---
+# Make the vfio-user-xio-vm guest ready, and check every device is there.
+# Re-runnable. Run it after the stack is up:
+#
+#   ansible-playbook -i inventory/xio.yml playbooks/xio-guest.yml
+#
+# The corporate CA is installed from $VM_CA_CERT_FILE if it is set, or from
+# -e xio_ca_cert_file=<path>. It is skipped when neither is.
+
+- name: Make the xio guest ready
+  hosts: xio
+  gather_facts: true
+  become: false
+  vars:
+    xio_ca_cert_file: "{{ lookup('ansible.builtin.env', 'VM_CA_CERT_FILE') }}"
+    xio_ernic_address: 192.168.100.11/24
+    # The firmware must come from the rocjitsu build the stack runs.
+    lmcache_guest_rocjitsu_image: >-
+      {{ lookup('ansible.builtin.ini', 'XIO_ROCJITSU_IMAGE type=properties file=' ~ xio_settings_file) }}
+  tasks:
+    - name: Install the extra CA certificate
+      become: true
+      ansible.builtin.copy:
+        src: "{{ xio_ca_cert_file }}"
+        dest: "/usr/local/share/ca-certificates/{{ xio_ca_cert_file | basename }}"
+        mode: "0644"
+      when: xio_ca_cert_file | length > 0
+      register: xio_ca_installed
+
+    - name: Rebuild the CA trust bundle
+      become: true
+      ansible.builtin.command:
+        cmd: update-ca-certificates
+      when: xio_ca_installed is changed
+      changed_when: true
+
+    # The image's initramfs can carry the in-tree ionic, which ionic_rdma
+    # then refuses to link against. Reload so the one on disk is running.
+    - name: Make the running ionic the one on disk
+      become: true
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          [ "$(cat /sys/module/ionic/srcversion 2>/dev/null)" = "$(modinfo -F srcversion ionic)" ] && exit 0
+          rmmod ionic_rdma 2>/dev/null || true
+          rmmod ionic
+          modprobe ionic
+          modprobe ionic_rdma
+          echo reloaded
+        executable: /bin/bash
+      register: xio_ionic_reload
+      changed_when: "'reloaded' in xio_ionic_reload.stdout"
+
+    - name: Install the gfx1250 firmware generated from the stack's rocjitsu
+      ansible.builtin.include_role:
+        name: lmcache_guest
+        tasks_from: amdgpu_firmware
+
+    # The kernel numbers NVMe controllers in probe order, which changes
+    # between boots. Name the two by what they are:
+    #   /dev/xio-kv   the SPDK controller (KV), matched by serial
+    #   /dev/xio-blk  QEMU's NVMe disk, matched by model so it does not depend
+    #                 on VM_NAME. DEVTYPE=disk keeps partitions out.
+    - name: Name the NVMe devices /dev/xio-kv and /dev/xio-blk
+      become: true
+      ansible.builtin.copy:
+        dest: /etc/udev/rules.d/90-xio-nvme.rules
+        content: |
+          SUBSYSTEM=="nvme", ATTR{serial}=="{{ xio_spdk_serial }}", SYMLINK+="xio-kv"
+          SUBSYSTEM=="block", ENV{DEVTYPE}=="disk", KERNEL=="nvme*n[0-9]*", ATTRS{model}=="QEMU NVMe Ctrl*", SYMLINK+="xio-blk"
+        mode: "0644"
+      register: xio_udev_rule
+
+    - name: Apply the rule
+      become: true
+      ansible.builtin.shell:
+        cmd: |
+          udevadm control --reload
+          udevadm trigger --action=add --subsystem-match=nvme --subsystem-match=block --sysname-match='nvme*'
+          udevadm settle
+        executable: /bin/bash
+      when: xio_udev_rule is changed
+      changed_when: true
+
+    # Run-time only, so it is lost on every boot. The guest has no
+    # systemd-networkd, so a netplan file would not be read. The NIC is the
+    # netdev with the 1dd8:1002 + 1dd8:5400 tuple (1dd8:1002 alone is also a
+    # real Pensando card), found that way because its name varies.
+    - name: Give the ernic its address
+      become: true
+      ansible.builtin.shell:
+        cmd: |
+          dev=
+          for d in /sys/class/net/*/device; do
+            [ "$(cat $d/vendor)" = 0x1dd8 ] && [ "$(cat $d/device)" = 0x1002 ] &&
+            [ "$(cat $d/subsystem_vendor)" = 0x1dd8 ] &&
+            [ "$(cat $d/subsystem_device)" = 0x5400 ] &&
+            dev=$(basename "$(dirname "$d")") && break
+          done
+          [ -n "$dev" ] || { echo "no emulated NIC found" >&2; exit 1; }
+          ip link set "$dev" up
+          if ip -4 addr show dev "$dev" | grep -q "{{ xio_ernic_address }}"; then echo already
+          else ip addr add {{ xio_ernic_address }} dev "$dev" && echo added; fi
+        executable: /bin/bash
+      register: xio_ernic_addr
+      changed_when: "'added' in xio_ernic_addr.stdout"
+
+    # gpuagent asserts on the emulated GPU and can wedge it, so keep both off.
+    - name: Stop and disable gpuagent and amd-metrics-exporter
+      become: true
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: stopped
+        enabled: false
+      loop:
+        - gpuagent
+        - amd-metrics-exporter
+      failed_when: false
+
+    - name: Check whether KFD is already up
+      ansible.builtin.stat:
+        path: /dev/kfd
+      register: xio_kfd
+
+    - name: Probe amdgpu with the emulation parameters
+      become: true
+      ansible.builtin.command:
+        cmd: /usr/local/bin/amdgpu-probe
+      when: not xio_kfd.stat.exists
+      changed_when: true
+
+    - name: Wait for the KFD node
+      ansible.builtin.wait_for:
+        path: /dev/kfd
+        timeout: 120
+
+- name: Build rocm-xio in the guest
+  hosts: xio
+  gather_facts: true
+  become: false
+  # Skip with --skip-tags build. Force a rebuild with -e xio_rebuild=true.
+  tags: [build]
+  vars:
+    xio_rebuild: false
+    xio_src: "{{ ansible_user_dir }}/rocm-xio"
+    xio_kmod_src: "{{ ansible_user_dir }}/rocm-xio/kernel/rocm-xio"
+  tasks:
+    - name: Check the build tools and kernel headers are there
+      ansible.builtin.shell:
+        cmd: |
+          for t in git cmake make; do command -v $t >/dev/null || echo "missing: $t"; done
+          [ -f /lib/modules/$(uname -r)/build/Makefile ] || echo "missing: kernel headers for $(uname -r)"
+        executable: /bin/bash
+      register: xio_prereq
+      changed_when: false
+      failed_when: xio_prereq.stdout | length > 0
+
+    # Same prefix the quickstart finds: TheRock installs to a versioned
+    # directory that nothing puts on PATH.
+    - name: Locate the ROCm prefix
+      ansible.builtin.shell:
+        cmd: set -o pipefail; ls -d /opt/rocm/core-* 2>/dev/null | sort -V | tail -1
+        executable: /bin/bash
+      register: xio_rocm_raw
+      changed_when: false
+
+    - name: Record the ROCm prefix
+      ansible.builtin.set_fact:
+        xio_rocm: "{{ xio_rocm_raw.stdout | trim if (xio_rocm_raw.stdout | trim | length > 0) else '/opt/rocm' }}"
+
+    - name: Clone rocm-xio
+      # update: false leaves an existing checkout alone, edits and all.
+      ansible.builtin.git:
+        repo: "{{ xio_rocm_xio_repo }}"
+        dest: "{{ xio_src }}"
+        version: "{{ xio_rocm_xio_ref }}"
+        update: false
+        accept_hostkey: true
+
+    - name: Check whether xio-tester is built
+      ansible.builtin.stat:
+        path: "{{ xio_src }}/build/xio-tester"
+      register: xio_tester
+
+    # RelWithDebInfo: a Debug build is -O0, which never completes a dispatch on
+    # the emulated gfx1250 (rocm-xio commit bc1a96e).
+    - name: Configure rocm-xio
+      ansible.builtin.command:
+        argv:
+          - cmake
+          - -S
+          - "{{ xio_src }}"
+          - -B
+          - "{{ xio_src }}/build"
+          - -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          - -DCMAKE_HIP_COMPILER={{ xio_rocm }}/bin/amdclang++
+          - -DCMAKE_HIP_ARCHITECTURES=gfx1250
+          - -DROCM_PATH={{ xio_rocm }}
+      when: xio_rebuild | bool or not xio_tester.stat.exists
+      changed_when: true
+
+    # Long enough that an idle SSH connection can drop, so run it async.
+    - name: Build xio-tester
+      ansible.builtin.command:
+        argv:
+          - cmake
+          - --build
+          - "{{ xio_src }}/build"
+          - --target
+          - xio-tester
+          - -j{{ [ansible_processor_nproc, 4] | min }}
+      when: xio_rebuild | bool or not xio_tester.stat.exists
+      async: 7200
+      poll: 20
+      changed_when: true
+
+    - name: Check whether the kernel module is built
+      ansible.builtin.stat:
+        path: "{{ xio_kmod_src }}/rocm-xio.ko"
+      register: xio_ko
+
+    - name: Build the rocm-xio kernel module
+      ansible.builtin.command:
+        cmd: make
+        chdir: "{{ xio_kmod_src }}"
+      when: xio_rebuild | bool or not xio_ko.stat.exists
+      changed_when: true
+
+    # Not `make install`: that rebuilds as root and leaves root-owned files in
+    # your source tree. The module is built above; this only installs it.
+    - name: Check whether the module is installed for this kernel
+      ansible.builtin.command:
+        cmd: modinfo -n rocm-xio
+      register: xio_modinfo
+      changed_when: false
+      failed_when: false
+
+    - name: Install the kernel module
+      become: true
+      ansible.builtin.shell:
+        cmd: |
+          make -C /lib/modules/{{ ansible_kernel }}/build M={{ xio_kmod_src }} modules_install
+          depmod -a
+        executable: /bin/bash
+      when: xio_rebuild | bool or xio_modinfo.rc != 0
+      changed_when: true
+
+    # Loaded, not persistent: it is not in modules-load.d on purpose, so it has
+    # to be loaded again after a reboot, which re-running this playbook does.
+    - name: Load the kernel module
+      become: true
+      ansible.builtin.shell:
+        cmd: lsmod | grep -qw rocm_xio && echo already || { modprobe rocm-xio && echo loaded; }
+        executable: /bin/bash
+      register: xio_modprobe
+      changed_when: "'loaded' in xio_modprobe.stdout"
+
+    - name: Check xio-tester and /dev/rocm-xio exist
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ xio_src }}/build/xio-tester"
+        - /dev/rocm-xio
+      register: xio_built
+      failed_when: not xio_built.stat.exists
+
+- name: Check every device is in the guest
+  hosts: xio
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Count the GPUs KFD knows about
+      ansible.builtin.shell:
+        cmd: |
+          n=0
+          for f in /sys/class/kfd/kfd/topology/nodes/*/gpu_id; do
+            [ "$(cat $f)" != 0 ] && n=$((n+1))
+          done
+          echo $n
+        executable: /bin/bash
+      register: xio_gpus
+      changed_when: false
+
+    - name: Count the NVMe controllers
+      ansible.builtin.shell:
+        cmd: ls -d /sys/class/nvme/nvme* | wc -l
+        executable: /bin/bash
+      register: xio_nvme
+      changed_when: false
+
+    - name: Find the IB device
+      ansible.builtin.command:
+        cmd: ibv_devinfo -l
+      register: xio_ibv
+      changed_when: false
+      until: >-
+        xio_ibv.stdout_lines[1:] | map('trim') | reject('equalto', '')
+        | list | length > 0
+      retries: 30
+      delay: 2
+
+    - name: Show what is attached
+      ansible.builtin.shell:
+        cmd: |
+          echo "--- GPUs (KFD): {{ xio_gpus.stdout | trim }}"
+          echo "--- NVMe controllers: {{ xio_nvme.stdout | trim }}"
+          nvme list 2>/dev/null || true
+          echo "--- IB: {{ xio_ibv.stdout_lines[1:] | map('trim') | join(' ') }}"
+          lspci -nn | grep -E '1002:|1dd8:|nvme|Non-Volatile' || true
+        executable: /bin/bash
+      register: xio_summary
+      changed_when: false
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: "{{ xio_summary.stdout_lines }}"
+
+    - name: Check /dev/xio-kv exists
+      ansible.builtin.stat:
+        path: /dev/xio-kv
+      register: xio_kv
+
+    - name: Check /dev/xio-blk exists
+      ansible.builtin.stat:
+        path: /dev/xio-blk
+      register: xio_blk
+
+    - name: Fail unless both GPUs and both NVMe controllers are there
+      ansible.builtin.assert:
+        that:
+          - xio_gpus.stdout | trim | int == 2
+          - xio_nvme.stdout | trim | int == 2
+          - xio_kv.stat.exists
+          - xio_blk.stat.exists
+        fail_msg: >-
+          Expected 2 GPUs, 2 NVMe controllers, /dev/xio-kv and /dev/xio-blk;
+          found {{ xio_gpus.stdout | trim }} GPUs, {{ xio_nvme.stdout | trim }}
+          controllers, /dev/xio-kv {{ 'present' if xio_kv.stat.exists
+          else 'missing (is the SPDK serial ' ~ xio_spdk_serial ~ '? Recreate the stack if the guest was built before it changed)' }}
+          and /dev/xio-blk {{ 'present' if xio_blk.stat.exists else 'missing' }}.

@@ -456,8 +456,35 @@ or version (e.g.\&
 .IR resolute ).
 .TP
 .BI \-\-ssh\-key\-file " FILE"
-Public SSH key to inject into the guest (default:
+Public SSH key to inject into the guest (default for a fresh build:
 .IR ~/.ssh/id_rsa.pub ).
+With
+.BR \-\-backing\-image ,
+giving this option also installs the key: a published image has no cloud-init
+seed of its own, so the new overlay is booted once with a NoCloud seed (about 30
+seconds) and the guest powers itself off. The backing image is only read. If
+nothing exists at the path, a new key is created there first (RSA if the name
+contains "rsa", otherwise ed25519), and a private half with no
+.I .pub
+beside it has its public half derived, never overwritten. The sidecar records the
+key, so
+.B qemu\-tool ssh
+finds it. Needs cloud-init enabled in the image: the fat published images have
+it, the \-slim ones do not, and the guest then never powers off. Without the
+option, a
+.B \-\-backing\-image
+overlay already accepts the key its image was built with, so gen-vm fetches that
+instead: it resolves the tag to a digest, pulls the disk at that digest, and
+pulls the image's
+.I application/vnd.batesste.vm-info.v1
+referrer by the same digest into
+.IR <images>/keys/ .
+The public key must match the fingerprint in the referrer's
+.I vm-info.json
+and the private key must derive it, or gen-vm stops. So does an image with no
+such referrer, or one whose referrer carries no key; pass
+.B \-\-ssh\-key\-file
+for those.
 .TP
 .BI \-\-username " NAME"
 Guest user account name (default:

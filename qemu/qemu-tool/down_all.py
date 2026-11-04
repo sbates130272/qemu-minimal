@@ -6,7 +6,7 @@ compose records the evidence for both on every container it starts:
 * **Is this a qemu-tool stack?** `com.docker.compose.project.config_files`
   names the compose file. A generated stack carries the `gen-compose`
   provenance header; a committed one lives in a directory whose name is one
-  of the six this tool ships. Neither is a guess, and the alternative --
+  of the seven this tool ships. Neither is a guess, and the alternative --
   matching service names like `qemu-1` -- would happily tear down somebody's
   unrelated project that happened to have a service called `qemu-1`.
 

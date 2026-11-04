@@ -1,0 +1,219 @@
+---
+# vfio-user rocm-xio development VM stack
+#
+# One guest with everything rocm-xio's accelerator-initiated IO paths need:
+#
+#   rocjitsu-1, rocjitsu-2  two emulated gfx1250 GPUs (vfio-user)
+#   ernic                   one emulated RDMA NIC     (vfio-user, loopback backend)
+#   spdk-nvme               SPDK NVMe controller      (vfio-user): one
+#                           NVMe-KV namespace (NSID 1)
+#   qemu                    the guest, with QEMU's own NVMe drive and the
+#                           pci-mmio-bridge device
+#
+# That is four ways to reach storage or a NIC from a GPU -- GPU-GPU,
+# GPU-ernic, GPU-QEMU NVMe, GPU-SPDK NVMe -- and which of them works is what
+# this stack is for finding out. Read the README before trusting a result: the
+# SPDK namespace order and the KV value limit are both traps.
+#
+# Usage:
+#   qemu-tool compose --stack vfio-user-xio-vm up -d
+#   ssh -p ${VM_SSH_PORT:-2222} <user>@localhost
+#
+# Every image variable here is XIO_-prefixed on purpose. The other stacks read
+# QEMU_IMAGE, ERNIC_IMAGE and ROCJITSU_IMAGE, and `qemu/env/example` pins those
+# to the STOCK images. A shared .env would therefore hand this stack a QEMU
+# with no pci-mmio-bridge and a rocjitsu/spdk with none of the fork work, and
+# nothing would say so until a test failed.
+#
+# Every image is a dated or component-pinned tag. Do not use :latest here: a
+# silent retag turns a green run red with no diff to point at.
+#
+# Every container runs as the caller, with no capabilities, as in the other
+# stacks. `qemu-tool compose` fills CONTAINER_USER and CONTAINER_KVM_GID in
+# from your uid:gid and the host kvm group; plain `docker compose` is told what
+# to set rather than quietly running as root (`:?`, never `:-`):
+#
+#   CONTAINER_USER=$(id -u):$(id -g) \
+#   CONTAINER_KVM_GID=$(getent group kvm | cut -d: -f3) docker compose up
+x-server-common: &server-common
+  volumes:
+    - vfu-sockets:/run/vfu
+  # Restart on failure so that after the guest disconnects (and a server
+  # exits) compose brings up a fresh one with clean state. qemu depends_on
+  # service_healthy, so it does not start until the sockets exist again.
+  restart: on-failure
+  # ONE uid for every device server and the guest. rocjitsu does not chmod its
+  # vfio-user socket (0755, owned by its creator) and SPDK's is 0755 too, so
+  # connect(2) needs write on the inode and a qemu on a different uid cannot
+  # attach either at all. rocm-ernic hides this by chmodding its own to 0666;
+  # do not generalise from it.
+  user: "${CONTAINER_USER:?set CONTAINER_USER=<uid>:<gid>}"
+  # None of the four servers needs a capability: they open unix sockets on a
+  # tmpfs volume that is mounted 1777. Measured for SPDK, the one nobody had
+  # run this way: it starts, serves, and creates its socket as uid 1000 with
+  # cap_drop ALL and no-new-privileges.
+  cap_drop:
+    - ALL
+  security_opt:
+    - "no-new-privileges:true"
+
+x-rocjitsu-common: &rocjitsu-common
+  <<: *server-common
+  image: "${XIO_ROCJITSU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu-sbates-fork:rocjitsu.3141e64-vfu.3719c3a}"
+
+services:
+  # Two services and not `replicas: 2`. Every replica gets the identical
+  # command, and the sockets live on ONE shared volume, so two replicas would
+  # bind the same path. The names also decide which GPU is which: qemu attaches
+  # sockets in the order it is given them, and the guest sees them in that
+  # order.
+  rocjitsu-1:
+    <<: *rocjitsu-common
+    command:
+      - rocjitsu
+      - --config
+      - "/usr/local/share/rocjitsu/configs/${XIO_ROCJITSU_CONFIG:-gfx1250_mi455x.json}"
+      - --vfio-socket
+      - /run/vfu/rocjitsu-1.sock
+    healthcheck:
+      test: ["CMD", "sh", "-c", "test -S /run/vfu/rocjitsu-1.sock"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
+  rocjitsu-2:
+    <<: *rocjitsu-common
+    command:
+      - rocjitsu
+      - --config
+      - "/usr/local/share/rocjitsu/configs/${XIO_ROCJITSU_CONFIG:-gfx1250_mi455x.json}"
+      - --vfio-socket
+      - /run/vfu/rocjitsu-2.sock
+    healthcheck:
+      test: ["CMD", "sh", "-c", "test -S /run/vfu/rocjitsu-2.sock"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
+  # One NIC, default loopback backend: there is no peer to mesh with. That is
+  # enough for a GPU-to-ernic xio path run as a loopback test, but it proves
+  # the verbs and never the mesh.
+  ernic:
+    <<: *server-common
+    image: "${XIO_ERNIC_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261022.gc533d98-ernic.151379b-vfu.8039244}"
+    command: ["rocm-ernic", "-s", "/run/vfu/ernic-1.sock"]
+    healthcheck:
+      test: ["CMD", "sh", "-c", "test -S /run/vfu/ernic-1.sock"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
+  # The SPDK fork (mmgaggle/spdk, rados-nkv): upstream SPDK has no NVMe-KV
+  # target, so no upstream image could serve the KV namespace.
+  #
+  # KV only. An LBA namespace beside it is not usable in a Linux guest: the
+  # kernel logs "Command set not reported for nsid:1" and makes no block
+  # device. (`kv:mem,lba:malloc:1G` also crashes nvmf_tgt; LBA first serves.)
+  # QEMU's own NVMe is the block device here. The KV namespace is NSID 1.
+  #
+  # The socket is /run/vfu/nvme/cntrl -- a file named `cntrl` in a directory,
+  # not a *.sock -- so qemu below names it explicitly.
+  spdk-nvme:
+    <<: *server-common
+    image: "${XIO_SPDK_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-spdk-libvfio-user-sbates-fork:spdk.18d1d8d-vfu.3719c3a}"
+    environment:
+      NVME_NAMESPACES: "${XIO_NVME_NAMESPACES:-kv:mem}"
+      # What the guest's udev rule matches on to name this controller.
+      SPDK_SERIAL: "${XIO_SPDK_SERIAL:-XIO-KV}"
+      VFIO_USER_SOCKET_DIR: /run/vfu/nvme
+    healthcheck:
+      # The socket appears once nvmf_tgt has finished configuring the
+      # subsystem; it is the predicate the image's own --probe uses.
+      test: ["CMD", "sh", "-c", "test -S /run/vfu/nvme/cntrl"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+      start_period: 10s
+
+  qemu:
+    # The sbates-fork image, not stock: pci-mmio-bridge exists only on the
+    # fork, and it is what lets a GPU kernel reach the emulated NVMe's BAR0
+    # (QEMU's own NVMe has no vfio-user mapping a GPU store could hit).
+    image: "${XIO_QEMU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:qemu.f91f120-vfu.3719c3a}"
+    depends_on:
+      rocjitsu-1:
+        condition: service_healthy
+      rocjitsu-2:
+        condition: service_healthy
+      ernic:
+        condition: service_healthy
+      spdk-nvme:
+        condition: service_healthy
+    volumes:
+      - vfu-sockets:/run/vfu:ro
+      - "${VM_IMAGES_DIR:-/var/lib/qemu-tool/images}:${VM_IMAGES_DIR:-/var/lib/qemu-tool/images}"
+      - "${QEMU_TOOL_SRC:-/tmp}:/qemu-tool-src:ro"
+    devices:
+      - /dev/kvm
+    # Inherits neither anchor, so it repeats the uid the device servers take.
+    # See x-server-common for why the two cannot diverge.
+    user: "${CONTAINER_USER:?set CONTAINER_USER=<uid>:<gid>}"
+    group_add:
+      - "${CONTAINER_KVM_GID:?set CONTAINER_KVM_GID to the host kvm gid}"
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    environment:
+      # Off by default: the doorbell trace writes a line per doorbell to the
+      # container log. VM_NVME_TRACE=doorbell (or all) turns it on.
+      VM_NVME_TRACE: "${VM_NVME_TRACE:-}"
+    # Guest RAM is a shared memfd the vfio-user servers map, so /dev/shm must
+    # hold all of it. It is charged to the container as shmem, never to the
+    # host's /dev/shm.
+    shm_size: "${VM_SHM_SIZE:-12g}"
+    ports:
+      - "${VM_SSH_PORT:-2222}:2222"
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        # The fork image carries qemu-tool, so no pipx install from PyPI at
+        # start (which a host behind a TLS-intercepting proxy cannot do).
+        # Mount a checkout at QEMU_TOOL_SRC to test local qemu-tool changes.
+        if [ -f /qemu-tool-src/qemu/pyproject.toml ]; then
+          cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
+          HOME=/tmp PIPX_HOME=/tmp/pipx PIPX_BIN_DIR=/tmp/bin pipx install --force /tmp/qemu-tool-build
+          QT=/tmp/bin/qemu-tool
+        else
+          QT=qemu-tool
+        fi
+        # ORDER IS THE GUEST'S DEVICE ORDER. rocjitsu-1 is the first GPU,
+        # rocjitsu-2 the second, then the NIC, then the SPDK controller.
+        trace=""
+        [ -n "$$VM_NVME_TRACE" ] && trace="--nvme-trace $$VM_NVME_TRACE"
+        # The guest is $VM_IMAGES_DIR/$VM_NAME.qcow2, made beforehand by
+        # `qemu-tool gen-vm` (see the README). The default is xio-1 and not
+        # qemu-minimal on purpose: qemu-minimal is the name other stacks and a
+        # plain gen-vm use, so it can already exist as a generic image with no
+        # ROCm in it, and this stack would boot it without complaint.
+        exec $$QT run-vm \
+          --images "${VM_IMAGES_DIR:-/var/lib/qemu-tool/images}" \
+          --vm-name "${VM_NAME:-xio-1}" \
+          --vcpus "${VM_VCPUS:-4}" \
+          --vmem "${VM_VMEM:-8192}" \
+          --ssh-port 2222 \
+          --nvme 1 \
+          --pci-mmio-bridge \
+          $$trace \
+          --vfio-userdev /run/vfu/rocjitsu-1.sock,/run/vfu/rocjitsu-2.sock,/run/vfu/ernic-1.sock,/run/vfu/nvme/cntrl
+
+volumes:
+  vfu-sockets:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs

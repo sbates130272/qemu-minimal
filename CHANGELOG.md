@@ -6,6 +6,49 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **`gen-vm --backing-image` now leaves you a key that logs in.** A published
+  qcow2 has no cloud-init seed of its own, so the only key its overlays accept
+  is the one the image was built with. Two ways in, chosen by `--ssh-key-file`
+  (or `VM_SSH_KEY_FILE`; the command line wins):
+  - **Named:** the new overlay is booted once with a NoCloud seed (about 30 s,
+    unique instance id, hostname preserved) that adds the key to the image's
+    account, and the guest powers itself off. The backing image is only read.
+    If nothing exists at that path a key is created there, RSA when the name
+    says `rsa` and ed25519 otherwise; a private key with no `.pub` has its
+    public half derived and is never overwritten.
+  - **Not named:** the key the image already accepts is fetched. The tag is
+    resolved to a digest once, and the disk and the image's `vm-info` referrer
+    are pulled at that digest. The public key must match the fingerprint in
+    `vm-info.json` and the private key must derive it. No referrer, a referrer
+    with no key in it, a fingerprint mismatch or two referrers all stop gen-vm
+    before the overlay is created, naming `--ssh-key-file` as the way out.
+
+  Either way the key lands where `qemu-tool ssh` and the sidecar look for it
+  (`<images>/keys/` for a fetched key) and the sidecar records it. The `-slim`
+  images mask cloud-init, so the named path never powers off there and stops
+  after five minutes with a message saying so. `--backing-file` overlays and
+  fresh builds are unchanged. `VMConfig.ssh_key_file` now defaults to `None` so
+  "given" can be told from "default"; `effective_ssh_key_file` is the path
+  everything else reads.
+
+- **`vfio-user-xio-vm` compose stack for rocm-xio development.** One guest with
+  two rocjitsu GPUs, one rocm-ernic (loopback backend), QEMU's own NVMe drive
+  with `pci-mmio-bridge`, and an SPDK NVMe controller serving one NVMe-KV
+  namespace (NSID 1). Pinned to the `sbates-fork` QEMU, SPDK and rocjitsu images
+  through `XIO_`-prefixed variables, so a shared `.env` cannot hand it the stock
+  images. Every container runs as the caller with no capabilities; SPDK was
+  verified to do so. `ansible/inventory/xio.yml` and `playbooks/xio-guest.yml`
+  ready the guest: CA cert, GPU firmware, amdgpu, udev names for the two NVMe
+  controllers, the ernic address, then clone and build rocm-xio and load its
+  kernel module. `tests/test_xio_stack.py` pins that SPDK serves only a KV
+  namespace, the socket order (which is the guest's device order), and that every
+  socket qemu is given is made by a server it waits for. The `.deb`, the
+  `Gen Compose Check` no-root check and the dry-run lane's `compose config` check
+  all cover it. A guest has booted on it and an `xio-tester` KV store has reached
+  the SPDK namespace with the GPUs up, the doorbells carried by the rocm-xio
+  kernel module. `xio-tester` still crashes intermittently, and once the guest
+  hung after a run; the cause is not known.
+
 - **`qemu-tool qcow` subcommand for overlay management.** Lists all qcow2
   images found across the system path, `$XDG_DATA_HOME`, and `$VM_IMAGES_DIR`,
   with columns for size, backing file, delta, age, and NVMe scratch images.

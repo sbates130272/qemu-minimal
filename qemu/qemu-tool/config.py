@@ -47,6 +47,10 @@ def default_packages() -> str:
     return str(_INSTALLED_PACKAGES)
 
 
+# What a fresh build and `inspect` use when no key was asked for.
+DEFAULT_SSH_KEY_FILE = Path("~/.ssh/id_rsa.pub")
+
+
 @dataclass
 class VMConfig:
     # ---- shared (run-vm + gen-vm) ----
@@ -140,7 +144,10 @@ class VMConfig:
     # ---- gen-vm ----
     size: int = 64
     release: str = "resolute"
-    ssh_key_file: Path = field(default_factory=lambda: Path("~/.ssh/id_rsa.pub"))
+    # None means "not asked for". gen-vm installs the key in a --backing-image
+    # overlay only when this is set; every consumer that just needs a path to
+    # look at (inspect, a fresh build) uses effective_ssh_key_file.
+    ssh_key_file: Path | None = None
     username: str = "ubuntu"
     user_id: int = 1000
     password: str = "password"
@@ -157,3 +164,8 @@ class VMConfig:
     ansible_playbook: Path | None = None
     ca_cert_file: Path | None = None
     ansible_only: bool = False
+
+    @property
+    def effective_ssh_key_file(self) -> Path:
+        """ssh_key_file if one was given, else the usual default; ~ expanded."""
+        return Path(self.ssh_key_file or DEFAULT_SSH_KEY_FILE).expanduser()

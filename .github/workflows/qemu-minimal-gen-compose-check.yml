@@ -126,6 +126,7 @@ jobs:
                ["--profile", "metrics", "--profile", "lmcache"]),
               ("vfio-user-mi355x-node", "qemu/env/mi355x-node",
                ["--profile", "metrics"]),
+              ("vfio-user-xio-vm", "qemu/env/xio", []),
           ]
           # tapsetup cannot take a uid (Docker sets no ambient capabilities,
           # so a non-root uid holds no effective NET_ADMIN); dockerapi must

@@ -247,7 +247,7 @@ def _ssh_key_for_image(
     if image:
         candidates.append(Path(image).with_suffix(".pub"))
 
-    candidates.append(cfg.ssh_key_file.expanduser())
+    candidates.append(cfg.effective_ssh_key_file)
 
     for pub in candidates:
         try:
@@ -510,7 +510,7 @@ def _local_key_candidates(image: str | None, info: dict[str, Any],
     if image:
         add(Path(image).with_suffix(".pub"), named)
 
-    configured = Path(str(cfg.ssh_key_file)).expanduser()
+    configured = cfg.effective_ssh_key_file
     add(configured, named)
     add(Path(str(configured) + ".pub"), named)
 
