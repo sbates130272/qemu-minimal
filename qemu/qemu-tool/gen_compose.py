@@ -1003,8 +1003,12 @@ def _pipx_install(bin_dir: str = "/usr/local/bin") -> list[str]:
     """The entrypoint's install step, as lines of an 8-space block scalar.
 
     bin_dir is a parameter because the stats exporter runs unprivileged and
-    cannot write /usr/local/bin; it installs under /tmp instead. pipx also
-    wants a writable HOME, which nobody does not otherwise have.
+    cannot write /usr/local/bin; it installs under /tmp instead.
+
+    When a source checkout is mounted, installs editable (pip install -e) so
+    there is no build artifact to go stale: Python imports directly from the
+    copied source tree. The binary is symlinked into bin_dir so callers need
+    no path change.
 
     Falls back to 'pipx install qemu-tool' from PyPI when QEMU_TOOL_SRC is
     not set (no source checkout on the node). The volume default of /tmp means
@@ -1016,11 +1020,9 @@ def _pipx_install(bin_dir: str = "/usr/local/bin") -> list[str]:
     return [
         "        if [ -f /qemu-tool-src/qemu/pyproject.toml ]; then",
         "          cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build",
-        "          for i in 1 2 3 4 5; do",
-        f"            {env} pipx install --force \\",
-        "              /tmp/qemu-tool-build && break",
-        "            sleep 10",
-        "          done",
+        "          python3 -m venv /tmp/qemu-tool-venv",
+        "          /tmp/qemu-tool-venv/bin/pip install -q -e /tmp/qemu-tool-build",
+        f"          ln -sf /tmp/qemu-tool-venv/bin/qemu-tool {bin_dir}/qemu-tool",
         "        else",
         "          for i in 1 2 3 4 5; do",
         f"            {env} pipx install --force qemu-tool && break",
@@ -1660,7 +1662,6 @@ def render_compose(
         out.append("      - /bin/sh")
         out.append("      - -c")
         out.append("      - |")
-        out.append("        cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build")
         out.extend(_pipx_install("/tmp/bin"))
         out.append("        exec /tmp/bin/qemu-tool lmcache-stats \\")
         out.append(

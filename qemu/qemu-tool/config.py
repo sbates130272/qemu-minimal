@@ -121,6 +121,10 @@ class VMConfig:
     nvme_trace_file: Path | None = None
     nvme_lbaf_mask: str | None = None
     nvme_recreate: bool = False
+    nvme_dbbuf_poll_ns: int | None = None   # None = do not emit; 0 = disable
+    nvme_dbbuf_poll_eventidx: str | None = None  # "on" | "off" | None
+    nvme_vram_dev: str | None = None  # qdev id of vfio-user device for P2P
+    nvme_vram_bar: int | None = None  # BAR index for vfio-user P2P (None=0)
     pci_testdev: bool = False
     pci_hostdev: list[str] = field(default_factory=list)
     vram_dev_index: int | None = None  # 1-based index into pci_hostdev

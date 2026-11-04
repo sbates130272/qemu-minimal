@@ -30,6 +30,7 @@ class QemuCaps:
     has_dbcs: bool = False
     has_vram_dev: bool = False
     has_lbaf_mask: bool = False
+    has_dbbuf_poll: bool = False
     has_pci_mmio_bridge: bool = False
     aio_mode: str = "threads"   # io_uring | native | threads
     probed: bool = False
@@ -56,6 +57,7 @@ def probe_caps(cfg: VMConfig) -> QemuCaps:
     caps.has_ioeventfd = "ioeventfd=" in nvme_help
     caps.has_dbcs = "dbcs=" in nvme_help
     caps.has_vram_dev = "vram-dev=" in nvme_help
+    caps.has_dbbuf_poll = "dbbuf-poll-ns=" in nvme_help
 
     ns_help = _run(binary, "-device", "nvme-ns,help")
     caps.has_lbaf_mask = "lbaf-mask=" in ns_help

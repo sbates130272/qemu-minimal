@@ -364,6 +364,14 @@ def _add_run_vm(
     p.add_argument("--nvme-trace-file", type=Path, default=_UNSET, metavar="FILE")
     p.add_argument("--nvme-lbaf-mask", default=_UNSET, metavar="HEX")
     p.add_argument("--nvme-recreate", action="store_true", default=_UNSET)
+    p.add_argument("--nvme-dbbuf-poll-ns", type=int, default=_UNSET, metavar="NS",
+                   help="Shadow doorbell poll period in ns (0=off, the default)")
+    p.add_argument("--nvme-dbbuf-poll-eventidx", default=_UNSET,
+                   metavar="{on,off}")
+    p.add_argument("--nvme-vram-dev", default=_UNSET, metavar="ID",
+                   help="qdev id of vfio-user device for NVMe P2P (e.g. rocjitsu-4-1)")
+    p.add_argument("--nvme-vram-bar", type=int, default=_UNSET, metavar="N",
+                   help="BAR index for NVMe vfio-user P2P (default 0)")
     p.add_argument("--pci-testdev", action="store_true", default=_UNSET)
     p.add_argument(
         "--pci-hostdev", action="append", default=None, metavar="BDF[,BDF]",
@@ -1181,6 +1189,10 @@ def _extract_cli_overrides(
         _take("nvme_trace_file", "nvme_trace_file")
         _take("nvme_lbaf_mask", "nvme_lbaf_mask")
         _take("nvme_recreate", "nvme_recreate")
+        _take("nvme_dbbuf_poll_ns", "nvme_dbbuf_poll_ns")
+        _take("nvme_dbbuf_poll_eventidx", "nvme_dbbuf_poll_eventidx")
+        _take("nvme_vram_dev", "nvme_vram_dev")
+        _take("nvme_vram_bar", "nvme_vram_bar")
         _take("pci_testdev", "pci_testdev")
         _take("vram_dev_index", "vram_dev_index")
         _take("vram_bar", "vram_bar")

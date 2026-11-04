@@ -48,9 +48,11 @@ def build_command(cfg: VMConfig, caps: QemuCaps) -> list[str]:
     cmd += ["-nographic"]
     cmd += _pci_testdev_args(cfg)
     cmd += _pci_hostdev_args(cfg)
-    cmd += _nvme_args(cfg, caps)
     cmd += _pci_mmio_bridge_args(cfg, caps)
     cmd += _vfio_userdev_args(cfg)
+    # NVMe after vfio-user: QEMU resolves vram-dev= against already-declared
+    # devices, so the vfio-user devices must come first on the command line.
+    cmd += _nvme_args(cfg, caps)
     cmd += _root_drive_args(cfg)
     cmd += _netdev_args(cfg)
     cmd += _data_nic_args(cfg)
@@ -385,6 +387,14 @@ def _nvme_create(
     if cfg.vram_dev_index is not None and caps.has_vram_dev:
         _validate_vram(cfg)
         dev += f",vram-dev=vfio-host{cfg.vram_dev_index},vram-bar={cfg.vram_bar}"
+    elif cfg.nvme_vram_dev is not None and caps.has_vram_dev:
+        bar = cfg.nvme_vram_bar if cfg.nvme_vram_bar is not None else 0
+        dev += f",vram-dev={cfg.nvme_vram_dev},vram-bar={bar}"
+    if caps.has_dbbuf_poll:
+        if cfg.nvme_dbbuf_poll_ns is not None:
+            dev += f",dbbuf-poll-ns={cfg.nvme_dbbuf_poll_ns}"
+        if cfg.nvme_dbbuf_poll_eventidx is not None:
+            dev += f",dbbuf-poll-eventidx={cfg.nvme_dbbuf_poll_eventidx}"
 
     ns = f"nvme-ns,drive=nvme-{idx},bus=nvme-{idx}-dev,nsid=1"
     if cfg.nvme_lbaf_mask is not None:
@@ -421,9 +431,12 @@ def _vfio_user_dev_json(sock: str, bus: str | None) -> str:
     # rombar=0 suppresses the ROM BAR that vfio-user-pci would otherwise
     # advertise. x-msg-timeout raised from the 5000ms default: rocjitsu GPU
     # init (firmware loading, interrupt ring setup) can exceed 5 s.
+    # id derived from the socket stem so NVMe vram-dev= can reference this
+    # device by qdev id (a link<pci-device> resolves by id, not path).
+    dev_id = re.sub(r"[^A-Za-z0-9_.-]", "-", Path(sock).stem)
     bus_part = f'"bus":"{bus}",' if bus else ""
     return (
-        f'{{"driver":"vfio-user-pci",{bus_part}"rombar":0,'
+        f'{{"driver":"vfio-user-pci","id":"{dev_id}",{bus_part}"rombar":0,'
         f'"x-msg-timeout":60000,'
         f'"socket":{{"path":"{sock}","type":"unix"}}}}'
     )

@@ -404,6 +404,36 @@ Restrict the advertised LBA format mask (hex bitmask).
 .B \-\-nvme\-recreate
 Recreate NVMe image files even if they already exist.
 .TP
+.BI \-\-nvme\-dbbuf\-poll\-ns " NS"
+Shadow-doorbell poll period in nanoseconds.
+When non-zero, the NVMe controller polls the shadow doorbell at this interval
+rather than waiting for a CPU MMIO write, enabling GPU-initiated I/O without
+CPU involvement.
+.B 0
+(the default) keeps the existing event-driven behaviour.
+Only emitted when the QEMU binary supports the property.
+.TP
+.BI \-\-nvme\-dbbuf\-poll\-eventidx " {on,off}"
+Shadow-doorbell event-index mode.
+.B off
+tells the controller it never needs to ring the host doorbell via MMIO,
+removing the last CPU write on the submission path.
+Only emitted when the QEMU binary supports the property.
+.TP
+.BI \-\-nvme\-vram\-dev " ID"
+qdev id of a vfio-user device (e.g.\&
+.IR rocjitsu\-4\-1 )
+to use as the VRAM source for NVMe P2P DMA.
+Applied to the first NVMe controller created by
+.BR \-\-nvme " N" .
+Requires the QEMU binary to support
+.BR vram\-dev= .
+.TP
+.BI \-\-nvme\-vram\-bar " N"
+BAR index on the vfio-user device identified by
+.BR \-\-nvme\-vram\-dev
+(default: 0).
+.TP
 .B \-\-pci\-testdev
 Attach the QEMU
 .B pci-testdev
