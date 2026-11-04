@@ -507,11 +507,11 @@ def _add_fleet_to_env(sub: argparse._SubParsersAction) -> None:
             "Read one or more fleet XML descriptors and print every setting "
             "as KEY=VALUE lines on stdout. Useful for generating a temporary "
             "env file for commands that do not yet accept --fleet-file "
-            "(gen-vm, docker compose --env-file, inspect).\n\n"
+            "(docker compose --env-file, inspect).\n\n"
             "Example:\n"
             "  qemu-tool fleet-to-env --fleet-file qemu/env/scale-out.xml \\\n"
             "    > /tmp/fleet.env\n"
-            "  qemu-tool gen-vm --env-file /tmp/fleet.env ..."
+            "  docker compose --env-file /tmp/fleet.env ..."
         ),
     )
     p.add_argument(
@@ -904,6 +904,14 @@ def _add_gen_vm(
                    help="Skip cloud-init; re-run Ansible against an existing backing image.")
     p.add_argument("--mgmt-tap", action="store_true", default=_UNSET,
                    help="Use tap+bridge for management NIC instead of SLIRP.")
+    p.add_argument(
+        "--fleet-file", action="append", type=Path, default=None, metavar="FILE",
+        help=(
+            "Fleet descriptor XML (see qemu/env/scale-out.xml). "
+            "Repeatable: later files override keys set by earlier ones. "
+            "Takes lower priority than --env-file."
+        ),
+    )
     p.set_defaults(func=_gen_vm_cmd)
 
 
@@ -1133,10 +1141,16 @@ def _build_config(args: argparse.Namespace, subcommand: str) -> VMConfig:
         xml_cfg = VMConfig()
 
     cli_overrides = _extract_cli_overrides(args, subcommand)
-    # Lowest to highest: dataclass defaults, --domain XML, env file, CLI flags.
-    # The env file outranks the XML because it is the user's own standing
-    # configuration, where the XML is a description of somebody else's domain.
-    cfg = _merge(xml_cfg, load_env_file(args.env_file))
+    # Lowest to highest: dataclass defaults, --domain XML, fleet XML,
+    # env file, CLI flags.  Fleet XML is the fleet-wide baseline; env file
+    # overrides individual keys without touching the rest.
+    fleet_env: dict[str, str] = {}
+    fleet_file = getattr(args, "fleet_file", None)
+    if fleet_file:
+        from .fleet_xml import FleetXml
+        fleet_env = _fleet_to_env(FleetXml.parse_layers(FleetXml.find(fleet_file)))
+    cfg = _merge(xml_cfg, fleet_env)
+    cfg = _merge(cfg, load_env_file(args.env_file))
     cfg = _merge(cfg, cli_overrides)
     if "," in cfg.vm_name:
         # A comma terminates a qemu option value, so it corrupts -name, -uuid,
