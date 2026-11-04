@@ -1020,8 +1020,10 @@ def _pipx_install(bin_dir: str = "/usr/local/bin") -> list[str]:
     return [
         "        if [ -f /qemu-tool-src/qemu/pyproject.toml ]; then",
         "          cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build",
+        "          rm -rf /tmp/qemu-tool-build/build /tmp/qemu-tool-build/*.egg-info",
         "          python3 -m venv /tmp/qemu-tool-venv",
         "          /tmp/qemu-tool-venv/bin/pip install -q -e /tmp/qemu-tool-build",
+        f"          mkdir -p {bin_dir}",
         f"          ln -sf /tmp/qemu-tool-venv/bin/qemu-tool {bin_dir}/qemu-tool",
         "        else",
         "          for i in 1 2 3 4 5; do",
