@@ -24,7 +24,7 @@ if [ "$1" = "configure" ]; then
     # The destination is a file, not a directory: envfile._INSTALLED_ENV looks
     # for /etc/qemu-tool/env exactly, so it does not follow the templates'
     # move into a share/qemu-tool/env/ directory.
-    if [ ! -e /etc/qemu-tool/env ]; then
-        cp /usr/share/qemu-tool/env/example /etc/qemu-tool/env
+    if [ ! -e /etc/qemu-tool/env ] && [ -e /usr/share/qemu-tool/env/fleet-example.xml ]; then
+        cp /usr/share/qemu-tool/env/fleet-example.xml /etc/qemu-tool/env
     fi
 fi

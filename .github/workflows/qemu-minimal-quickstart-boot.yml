@@ -89,7 +89,7 @@ jobs:
       FLEET_FILE: qemu/env/quickstart.xml
       STACK_DIR: /var/lib/qemu-tool/stacks/pr-boot
       KEY_DIR: /var/lib/qemu-tool/pr-boot-key
-      OVERLAY: /var/lib/qemu-tool/stacks/pr-boot.env
+      OVERLAY: /var/lib/qemu-tool/stacks/pr-boot.xml
     steps:
     - name: Check out code
       uses: actions/checkout@v4.3.1
@@ -149,19 +149,16 @@ jobs:
       run: |
         set -eu
         mkdir -p "$(dirname "$OVERLAY")"
-        # printf, not an indented heredoc. qemu-tool's own parser strips each
-        # line, but `docker compose --env-file` does not, and the overlay is
-        # handed to BOTH -- so leading spaces would give the tool and the
-        # containers different values for the same key, which is the one
-        # thing the shared settings file exists to prevent.
-        {
-          printf '# Written by qemu-minimal-quickstart-boot.yml.\n'
-          printf '# Not a settings file anyone runs by hand.\n'
-          printf 'VM_COUNT=1\n'
-          printf 'VM_NAME_PREFIX=prboot\n'
-          printf 'ERNIC_TAP=false\n'
-          printf 'VM_BACKING_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu-slim:20261030.gadc94af-vm.resolute-ernic-rocjitsu-slim-qm.ae551b3-qcow2\n'
-        } > "$OVERLAY"
+        cat > "$OVERLAY" <<'XML'
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!-- Written by qemu-minimal-quickstart-boot.yml. Not a settings file anyone runs by hand. -->
+        <fleet xmlns="http://qemu-tool/fleet/1.0">
+          <vm-count>1</vm-count>
+          <vm-name-prefix>prboot</vm-name-prefix>
+          <ernic-tap>false</ernic-tap>
+          <backing-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu-slim:20261030.gadc94af-vm.resolute-ernic-rocjitsu-slim-qm.ae551b3-qcow2</backing-ref>
+        </fleet>
+        XML
         cat "$OVERLAY"
         # The stamp has to match the three container images in
         # qemu/env/quickstart.xml, or the generator's coherence check is being
@@ -173,6 +170,9 @@ jobs:
           echo "::error::the slim tag in this lane is not on ${STAMP}, the stamp qemu/env/quickstart.xml pins"
           exit 1
         }
+        # Regenerate FLEET_ENV with both layers merged so docker compose gets
+        # the overlay values (VM_COUNT=1, etc.) without a separate --fleet-file arg.
+        qemu-tool fleet-to-env --fleet-file "$FLEET_FILE" --fleet-file "$OVERLAY" > "$FLEET_ENV"
 
     # Boot it. `up` stops as soon as the rocm-ernic container is healthy, and
     # --yes makes every prompt take its default (which is also what happens
@@ -188,7 +188,7 @@ jobs:
           env HOME="$CIUSER_HOME" \
           qemu-tool quick-start up \
             --fleet-file "$FLEET_FILE" \
-            --env-file "$OVERLAY" \
+            --fleet-file "$OVERLAY" \
             --stack-dir "$STACK_DIR" \
             --key-dir "$KEY_DIR" \
             --no-metrics \
@@ -388,8 +388,7 @@ jobs:
           exit 0
         }
         docker compose --project-name pr-boot \
-          --env-file "$FLEET_ENV" \
-          --env-file "$OVERLAY" logs --tail 100 || true
+          --env-file "$FLEET_ENV" logs --tail 100 || true
 
     # down --all identification, against a REAL rendered stack.
     #
@@ -431,7 +430,7 @@ jobs:
           env HOME="$CIUSER_HOME" qemu-tool down --all --yes || true
         qemu-tool quick-start down \
           --fleet-file "$FLEET_FILE" \
-          --env-file "$OVERLAY" \
+          --fleet-file "$OVERLAY" \
           --stack-dir "$STACK_DIR" \
           --yes || true
         left="$(docker ps -q --filter label=com.docker.compose.project=pr-boot | wc -l)"

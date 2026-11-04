@@ -39,6 +39,20 @@ ERNIC_IMAGE=example/ernic:{_STAMP}-ernic.0b48aa1-{_VFU}
 ROCJITSU_IMAGE=example/rocjitsu:{_STAMP}-rocjitsu.c85bb75
 VM_BACKING_IMAGE=example/qcow2:{_STAMP}-vm.resolute-qm.e73a1e6-qcow2
 """
+_BASE_XML = f"""\
+<?xml version="1.0" encoding="UTF-8"?>
+<fleet xmlns="http://qemu-tool/fleet/1.0">
+  <vm-count>8</vm-count>
+  <vm-name-prefix>fleet</vm-name-prefix>
+  <vm-vcpus>4</vm-vcpus>
+  <vm-vmem>8192</vm-vmem>
+  <qemu-ref>example/qemu:{_STAMP}-qemu11.1.1-{_VFU}</qemu-ref>
+  <ernic-ref>example/ernic:{_STAMP}-ernic.0b48aa1-{_VFU}</ernic-ref>
+  <rocjitsu-ref>example/rocjitsu:{_STAMP}-rocjitsu.c85bb75</rocjitsu-ref>
+  <backing-ref>example/qcow2:{_STAMP}-vm.resolute-qm.e73a1e6-qcow2</backing-ref>
+  <ernic-tap>true</ernic-tap>
+</fleet>
+"""
 
 
 def _load_package():
@@ -1113,17 +1127,17 @@ class TestStackAssetCheck(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.tmp)
-        self.env = self.tmp / "env"
-        self.env.write_text(_BASE_ENV + "\nERNIC_TAP=true\n")
+        self.fleet_xml = self.tmp / "fleet.xml"
+        self.fleet_xml.write_text(_BASE_XML)
         self.out = self.tmp / "stack"
         with contextlib.redirect_stdout(io.StringIO()):
-            gen_compose.run(self.env, self.out)
+            gen_compose.run(None, self.out, fleet_file=self.fleet_xml)
 
     def _check(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             try:
-                gen_compose.run(self.env, self.out, check=True)
+                gen_compose.run(None, self.out, check=True, fleet_file=self.fleet_xml)
             except SystemExit as exit:
                 return out.getvalue() + "\n" + str(exit)
         return out.getvalue()
@@ -1173,9 +1187,10 @@ class TestStackAssetCheck(unittest.TestCase):
         self.addCleanup(os.chdir, cwd)
         with contextlib.redirect_stdout(out):
             gen_compose.run(
-                Path("qemu/env/scale-out.xml"),
+                None,
                 Path("qemu/compose/vfio-user-ernic-rocjitsu-scale-out"),
-                check=True)
+                check=True,
+                fleet_file=Path("qemu/env/scale-out.xml"))
         self.assertIn("Up to date", out.getvalue())
 
 

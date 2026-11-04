@@ -276,11 +276,19 @@ jobs:
       # A generated file that is in step with its settings can still be
       # invalid YAML or reference an undefined network, which --check cannot
       # see. compose parses and resolves it without starting anything.
+      # The committed docker-compose.yml uses ${QEMU_IMAGE} and friends, which
+      # docker compose resolves from env vars at run time. The fleet-to-env step
+      # derives them from the same scale-out.xml that generated the YAML, so the
+      # pair is always consistent and no image value is baked into the YAML.
       - name: Generated stack is valid compose
         run: |
+          fleet_env="$(mktemp)"
+          python3 -m qemu_tool fleet-to-env --fleet-file qemu/env/scale-out.xml > "$fleet_env"
           CONTAINER_USER=$(id -u):$(id -g) CONTAINER_KVM_GID=$(stat -c %g /dev/kvm) \
             docker compose \
+            --env-file "$fleet_env" \
             --project-directory qemu/compose/vfio-user-ernic-rocjitsu-scale-out config -q
+          rm "$fleet_env"
 
       # Profiles FILTER services out of `config` output, so the step above
       # validates only the default set -- ernic, qemu, rocjitsu, tapsetup.
@@ -293,8 +301,11 @@ jobs:
       # assertion is what stops this silently reverting to checking nothing.
       - name: Profile-gated services also validate
         run: |
+          fleet_env="$(mktemp)"
+          python3 -m qemu_tool fleet-to-env --fleet-file qemu/env/scale-out.xml > "$fleet_env"
           svcs="$(CONTAINER_USER=$(id -u):$(id -g) CONTAINER_KVM_GID=$(stat -c %g /dev/kvm) \
             docker compose \
+            --env-file "$fleet_env" \
             --project-directory qemu/compose/vfio-user-ernic-rocjitsu-scale-out \
             --profile lmcache --profile metrics config --services)"
           for s in prometheus grafana loki alloy lmcache-coordinator \
@@ -304,8 +315,10 @@ jobs:
           done
           CONTAINER_USER=$(id -u):$(id -g) CONTAINER_KVM_GID=$(stat -c %g /dev/kvm) \
             docker compose \
+            --env-file "$fleet_env" \
             --project-directory qemu/compose/vfio-user-ernic-rocjitsu-scale-out \
             --profile lmcache --profile metrics config -q
+          rm "$fleet_env"
 
       # Every lane here runs the golden file alone, so an overlay only gets
       # rendered by the lane that uses it -- report-for-lmcache is weekly, and
@@ -332,8 +345,12 @@ jobs:
             python3 -m qemu_tool gen-compose --stack "$stack" \
               --fleet-file "$golden" --fleet-file "$overlay" \
               --output-dir "$dir"
+            fleet_env="$(mktemp)"
+            python3 -m qemu_tool fleet-to-env \
+              --fleet-file "$golden" --fleet-file "$overlay" > "$fleet_env"
             CONTAINER_USER=$(id -u):$(id -g) CONTAINER_KVM_GID=$(stat -c %g /dev/kvm) \
-              docker compose --project-directory "$dir" config -q
+              docker compose --env-file "$fleet_env" --project-directory "$dir" config -q
+            rm "$fleet_env"
           done
 
       # The MI355X CI overlay exists to shrink the FLEET and the guest, never
@@ -347,17 +364,22 @@ jobs:
           dir=/tmp/stack-overlay-mi355x-ci
           grep -q -- '--vfio-user-switch-width 2' "$dir/docker-compose.yml" \
             || { echo "::error::the CI overlay lost --vfio-user-switch-width"; exit 1; }
+          fleet_env="$(mktemp)"
+          python3 -m qemu_tool fleet-to-env \
+            --fleet-file qemu/env/mi355x-node.xml \
+            --fleet-file qemu/env/overlay-mi355x-ci.xml > "$fleet_env"
           for s in ernic-1-8 rocjitsu-1-8; do
             CONTAINER_USER=$(id -u):$(id -g) CONTAINER_KVM_GID=$(stat -c %g /dev/kvm) \
-              docker compose --project-directory "$dir" config --services \
+              docker compose --env-file "$fleet_env" --project-directory "$dir" config --services \
               | grep -qx "$s" \
               || { echo "::error::$s missing: the overlay reduced the device count"; exit 1; }
           done
           # One VM, though: that part IS meant to shrink.
           CONTAINER_USER=$(id -u):$(id -g) CONTAINER_KVM_GID=$(stat -c %g /dev/kvm) \
-            docker compose --project-directory "$dir" config --services \
+            docker compose --env-file "$fleet_env" --project-directory "$dir" config --services \
             | grep -qx qemu-2 \
             && { echo "::error::the CI overlay rendered more than one VM"; exit 1; }
+          rm "$fleet_env"
           echo "topology intact, fleet reduced to one VM"
 
       # ERNIC_TAP has two shapes and the golden sets it to true, so every
@@ -377,8 +399,12 @@ jobs:
           python3 -m qemu_tool gen-compose \
             --fleet-file qemu/env/scale-out.xml --fleet-file /tmp/fleet.notap.xml \
             --output-dir /tmp/notapstack
+          fleet_env="$(mktemp)"
+          python3 -m qemu_tool fleet-to-env \
+            --fleet-file qemu/env/scale-out.xml --fleet-file /tmp/fleet.notap.xml > "$fleet_env"
           CONTAINER_USER=$(id -u):$(id -g) CONTAINER_KVM_GID=$(stat -c %g /dev/kvm) \
-            docker compose --project-directory /tmp/notapstack config -q
+            docker compose --env-file "$fleet_env" --project-directory /tmp/notapstack config -q
+          rm "$fleet_env"
 
       # qemu/env/quickstart.xml is the settings file README.md's Quick Start and
       # report-for-quickstart both use, through `qemu-tool quick-start`.
@@ -392,14 +418,17 @@ jobs:
           mkdir -p /tmp/qsstack
           python3 -m qemu_tool gen-compose \
             --fleet-file qemu/env/quickstart.xml --output-dir /tmp/qsstack
+          fleet_env="$(mktemp)"
+          python3 -m qemu_tool fleet-to-env --fleet-file qemu/env/quickstart.xml > "$fleet_env"
           svcs="$(CONTAINER_USER=$(id -u):$(id -g) CONTAINER_KVM_GID=$(stat -c %g /dev/kvm) \
-            docker compose --project-directory /tmp/qsstack config --services)"
+            docker compose --env-file "$fleet_env" --project-directory /tmp/qsstack config --services)"
           for s in ernic-1 ernic-2 rocjitsu-1 rocjitsu-2 qemu-1 qemu-2; do
             echo "$svcs" | grep -qx "$s" || {
               echo "::error::$s missing from the quickstart render"; exit 1; }
           done
           CONTAINER_USER=$(id -u):$(id -g) CONTAINER_KVM_GID=$(stat -c %g /dev/kvm) \
-            docker compose --project-directory /tmp/qsstack config -q
+            docker compose --env-file "$fleet_env" --project-directory /tmp/qsstack config -q
+          rm "$fleet_env"
 
       # `qemu-tool compose` inside a rendered directory needs no flags: it
       # reads the layers back out of the provenance header. The failure that
@@ -476,8 +505,11 @@ jobs:
       # end rather than emitting one of each.
       - name: MI355X stack renders and validates
         run: |
+          fleet_env="$(mktemp)"
+          python3 -m qemu_tool fleet-to-env --fleet-file qemu/env/mi355x-node.xml > "$fleet_env"
           svcs="$(CONTAINER_USER=$(id -u):$(id -g) CONTAINER_KVM_GID=$(stat -c %g /dev/kvm) \
             docker compose \
+            --env-file "$fleet_env" \
             --project-directory qemu/compose/vfio-user-mi355x-node \
             --profile metrics config --services)"
           for s in ernic-1-1 ernic-4-8 rocjitsu-1-1 rocjitsu-4-8 \
@@ -487,11 +519,14 @@ jobs:
           done
           CONTAINER_USER=$(id -u):$(id -g) CONTAINER_KVM_GID=$(stat -c %g /dev/kvm) \
             docker compose \
+            --env-file "$fleet_env" \
             --project-directory qemu/compose/vfio-user-mi355x-node config -q
           CONTAINER_USER=$(id -u):$(id -g) CONTAINER_KVM_GID=$(stat -c %g /dev/kvm) \
             docker compose \
+            --env-file "$fleet_env" \
             --project-directory qemu/compose/vfio-user-mi355x-node \
             --profile metrics config -q
+          rm "$fleet_env"
 
       # The topology is the point of the stack, and a flat tree boots just as
       # happily as a switched one -- so assert the guest actually gets the
