@@ -1,3 +1,55 @@
+python3-qemu-tool (1.6.0) unstable; urgency=low
+
+  [ Added ]
+  * **XML fleet config format.** Fleet settings files are now XML
+    (`fleet-example.xml`, `scale-out.xml`, `mi355x-node.xml`, `quickstart.xml`,
+    and all overlays). The old flat env-format files are removed.
+    `--fleet-file <file.xml>` replaces `--env-file` on `gen-vm`, `run-vm`,
+    `gen-compose`, `compose`, and `inspect`. A new `fleet_xml.py` module
+    handles parsing; existing tests are updated.
+  * **`qemu-tool quick-start` WSL2 port-conflict retry.** On WSL2
+    `socket.bind()` succeeds for ports the Windows proxy holds (separate
+    network namespaces), so `_port_free()` falsely reports a port as
+    free. `quick-start` now retries `docker compose up` with
+    `force_port_remap=True` after any failure, remapping to a fresh
+    SSH-port base regardless of what `_port_free()` says. Port numbers
+    are baked into the generated YAML at `gen-compose` time, so the stack
+    is regenerated inside the remap block after `state.values` is updated.
+  [ Fixed ]
+  * **`fix(quick-start)`: wrong XML tag name for `VM_SSH_PORT_BASE`.**
+    `_ENV_TO_XML` mapped `VM_SSH_PORT_BASE` to `"vm-ssh-port-base"` but
+    `fleet_xml.py` reads `"ssh-port-base"`. The unrecognised tag was
+    silently ignored and the default port 2222 was baked in regardless
+    of any remap.
+  * **MkDocs Material site.** The GitHub Pages site (`docs/`) is now built
+    with MkDocs Material (teal primary, deep-orange accent, light/dark
+    mode toggle, sidebar nav, search). The old Jekyll/minima setup
+    under `site/` is removed. The publish-pages workflow fetches report
+    artifacts into `docs/<dest>/`, runs `mkdocs build --strict`, and
+    pushes the built `site/` HTML to `gh-pages`. `render-site-perf.py`
+    now emits MkDocs frontmatter.
+  * **`qemu-tool inspect` reports net/block I/O counters and detects the
+    Docker daemon.** Each running container row now shows cumulative Rx/Tx
+    bytes and block read/write bytes (from `docker stats --no-stream`).
+    A one-line "Docker daemon" row appears at the top of the output when
+    the daemon is reachable.
+  [ Changed ]
+  * **`refactor(ansible)`: `amdgpu_firmware` and `netplan_ernic` tasks
+    moved out of `lmcache_guest`.** Both tasks now live in their own
+    roles so they can be applied outside the LMCache playbook without
+    pulling in the full LMCache stack.
+  [ Fixed ]
+  * **`fix(lmcache)`: re-enabled `report-for-lmcache` workflow.** The
+    lane was accidentally disabled; it now runs again and publishes the
+    LMCache report artifact.
+  [ Chores ]
+  * **`chore(deps)`: bump `sbates130272.batesste` to 3.2.1.**
+  * **`chore(grafana)`: remove LMCache panels from MI355X dashboards.**
+    The MI355X stack does not run LMCache; the stale panels caused
+    misleading empty charts.
+
+ -- Stephen Bates <sbates130272@users.noreply.github.com>  Wed, 04 Nov 2026 15:33:13 +0000
+
 python3-qemu-tool (1.5.0) unstable; urgency=low
 
   [ Added ]

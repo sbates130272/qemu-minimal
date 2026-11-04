@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v1.6.0] - 2026-11-04
+
 ### Added
 
 - **XML fleet config format.** Fleet settings files are now XML (`fleet-example.xml`,
