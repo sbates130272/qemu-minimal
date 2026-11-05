@@ -663,6 +663,14 @@ def _add_inspect(sub: argparse._SubParsersAction) -> None:
         "--json", action="store_true", dest="as_json",
         help="Emit JSON instead of human-readable output.",
     )
+    p.add_argument(
+        "--all-devices", action="store_true", dest="all_devices",
+        help=(
+            "Expand collapsed GPU and RNIC lines. "
+            "By default, more than one GPU or RNIC is shown as a single "
+            "count line; this flag prints every device individually with BARs."
+        ),
+    )
     p.set_defaults(func=_inspect_cmd)
 
 
@@ -1010,7 +1018,11 @@ def _compose_cmd(args: argparse.Namespace) -> None:
 
 
 def _inspect_cmd(args: argparse.Namespace) -> None:
-    inspect_run(_one_vm_name(args), args.env_file, as_json=args.as_json)
+    inspect_run(
+        _one_vm_name(args), args.env_file,
+        as_json=args.as_json,
+        all_devices=args.all_devices,
+    )
 
 
 def _one_vm_name(args: argparse.Namespace) -> str | None:

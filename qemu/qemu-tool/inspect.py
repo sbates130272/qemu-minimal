@@ -83,6 +83,7 @@ def run(
     vm_name: str | None,
     env_file: list[Path] | None,
     as_json: bool = False,
+    all_devices: bool = False,
 ) -> None:
     found = records(vm_name, env_file)
 
@@ -92,7 +93,7 @@ def run(
         else:
             print(json.dumps(found, indent=2))
     else:
-        _print_human(found)
+        _print_human(found, all_devices=all_devices)
 
 
 # Guests built from one backing image all carry the SAME host key, and the
@@ -801,6 +802,34 @@ def _ga_run(path, timeout=2.0, budget=8.0):
             files[path] = text
         return text
 
+    def exec_cmd(path, args=None):
+        # Run a command in the guest via guest-exec and return stdout text, or
+        # None on any failure (command not found, agent too old, timeout).
+        try:
+            r = send_recv("guest-exec", {
+                "path": path,
+                "arg": args or [],
+                "capture-output": True,
+            })
+        except (socket.timeout, ValueError):
+            return None
+        pid = (r.get("return") or {}).get("pid")
+        if not isinstance(pid, int):
+            return None
+        for _ in range(50):
+            time.sleep(0.1)
+            try:
+                rs = send_recv("guest-exec-status", {"pid": pid})
+            except (socket.timeout, ValueError):
+                return None
+            ret = rs.get("return") or {}
+            if ret.get("exited"):
+                b64 = ret.get("out-data", "")
+                if not b64:
+                    return ""
+                return base64.b64decode(b64).decode("utf-8", errors="replace")
+        return None
+
     # One read gives every block device's size; cheaper than N sysfs reads.
     grab("/proc/partitions")
 
@@ -876,6 +905,10 @@ def _ga_run(path, timeout=2.0, budget=8.0):
             # The PCI device's own uevent contains DRIVER=<name> when a driver
             # is bound; absent or no DRIVER= line means unbound.
             grab("/sys/bus/pci/devices/%s/uevent" % bdf)
+            # DRM metrics -- only present when amdgpu is loaded on this device.
+            grab("/sys/bus/pci/devices/%s/gpu_busy_percent" % bdf)
+            grab("/sys/bus/pci/devices/%s/mem_info_vram_used" % bdf)
+            grab("/sys/bus/pci/devices/%s/mem_info_vram_total" % bdf)
     result["gpu_complete"] = gpu_complete
 
     # Module load state for the GPU and RDMA NIC drivers.
@@ -901,6 +934,38 @@ def _ga_run(path, timeout=2.0, budget=8.0):
         grab("/sys/class/net/%s/device/subsystem_device" % _iname)
         grab("/sys/class/net/%s/device/uevent" % _iname)
         grab("/sys/class/net/%s/device/resource" % _iname)
+    # IB counters for every NIC we probed -- only populated when ionic_rdma is
+    # loaded. Values are 32-bit words (4 bytes each), converted to bytes in the
+    # host-side parser _rdma_counters_for_nic().
+    for _nic in sorted(_probed_nics):
+        _ib_ctr = "/sys/class/infiniband/%s/ports/1/counters" % _nic
+        for _ctr in ("port_rcv_data", "port_xmit_data",
+                     "port_rcv_packets", "port_xmit_packets"):
+            grab("%s/%s" % (_ib_ctr, _ctr))
+
+    # SDXI device module state and misc-class sysfs entries.  sdxi_char
+    # registers a misc device per controller; the path is
+    # /sys/class/misc/sdxiN/device so no readdir is needed.
+    grab("/sys/module/sdxi_char/initstate")
+    for _sdxi_n in range(4):
+        _sdxi_base = "/sys/class/misc/sdxi%d/device" % _sdxi_n
+        if grab(_sdxi_base + "/vendor") is None:
+            break
+        grab(_sdxi_base + "/device")
+        grab(_sdxi_base + "/uevent")
+        grab(_sdxi_base + "/resource")
+    # IO stats are ioctl-based so sysfs has nothing; exec sdxi-cli stats for
+    # each device whose sysfs entry we confirmed above.
+    _sdxi_stats = []
+    for _sdxi_n in range(4):
+        if time.monotonic() > deadline:
+            break
+        if files.get("/sys/class/misc/sdxi%d/device/vendor" % _sdxi_n) is None:
+            break
+        out = exec_cmd("/usr/local/bin/sdxi-cli", ["stats", str(_sdxi_n)])
+        _sdxi_stats.append(out or "")
+    if _sdxi_stats:
+        result["sdxi_stats_raw"] = _sdxi_stats
 
     # The NQN only ever refines a disk's origin -- without it _block_origin
     # falls back to the command line and finally to "unknown" -- so a miss
@@ -1349,7 +1414,34 @@ def _nic_devices(ga_info: dict[str, Any]) -> list[dict[str, Any]]:
             or _is_ernic_by_pci(files, iface)
         ):
             continue
-        out.append({"name": iface, "bars": _parse_bars(text)})
+        entry: dict[str, Any] = {"name": iface, "bars": _parse_bars(text)}
+        io = _rdma_counters_for_nic(files, iface)
+        if io:
+            entry["io"] = io
+        out.append(entry)
+    return out
+
+
+_SDXI_VID = "0x1022"
+_SDXI_DID = "0x149f"
+
+
+def _sdxi_devices(ga_info: dict[str, Any]) -> list[dict[str, Any]]:
+    """SDXI controllers with BARs from guest misc-class sysfs resource files."""
+    files = ga_info.get("files") or {}
+    out: list[dict[str, Any]] = []
+    for path, text in sorted(files.items()):
+        if "/sys/class/misc/" not in path or not path.endswith("/device/resource"):
+            continue
+        name = path.split("/sys/class/misc/")[1].split("/")[0]
+        base = "/sys/class/misc/%s/device/" % name
+        vendor = files.get(base + "vendor", "").strip()
+        device = files.get(base + "device", "").strip()
+        if vendor != _SDXI_VID or device != _SDXI_DID:
+            continue
+        uevent = files.get(base + "uevent", "")
+        bound = "DRIVER=" in uevent and "DRIVER=\n" not in uevent
+        out.append({"name": name, "bars": _parse_bars(text), "bound": bound})
     return out
 
 
@@ -1366,6 +1458,71 @@ def _guest_bars(ga_info: dict[str, Any]) -> list[list[dict[str, Any]]]:
             continue
         out.append(_parse_bars(text))
     return out
+
+
+def _guest_gpu_bdfs(ga_info: dict[str, Any]) -> list[str]:
+    """BDF strings for GPU PCI devices, in the same order as _guest_bars()."""
+    out: list[str] = []
+    for path in sorted((ga_info.get("files") or {}).keys()):
+        if not path.startswith("/sys/bus/pci/devices/") or not path.endswith("/resource"):
+            continue
+        bdf = path[len("/sys/bus/pci/devices/"):-len("/resource")]
+        out.append(bdf)
+    return out
+
+
+def _rdma_counters_for_nic(files: dict[str, str],
+                            nic_name: str) -> dict[str, int] | None:
+    """RDMA byte and packet counters for one NIC, or None if not available.
+
+    IB counter files report 32-bit words (4 bytes each); multiply by 4 for bytes.
+    """
+    base = "/sys/class/infiniband/%s/ports/1/counters/" % nic_name
+    if files.get(base + "port_rcv_data") is None and files.get(base + "port_xmit_data") is None:
+        return None
+
+    def _words_to_bytes(key: str) -> int:
+        try:
+            return int(files.get(base + key, "0").strip()) * 4
+        except ValueError:
+            return 0
+
+    def _pkts(key: str) -> int:
+        try:
+            return int(files.get(base + key, "0").strip())
+        except ValueError:
+            return 0
+
+    return {
+        "rcv_bytes": _words_to_bytes("port_rcv_data"),
+        "xmit_bytes": _words_to_bytes("port_xmit_data"),
+        "rcv_packets": _pkts("port_rcv_packets"),
+        "xmit_packets": _pkts("port_xmit_packets"),
+    }
+
+
+def _gpu_drm_metrics(files: dict[str, str], bdf: str) -> dict[str, int | None] | None:
+    """DRM GPU activity metrics for one device, or None if amdgpu is not loaded."""
+    base = "/sys/bus/pci/devices/%s/" % bdf
+    busy = files.get(base + "gpu_busy_percent")
+    vram_used = files.get(base + "mem_info_vram_used")
+    vram_total = files.get(base + "mem_info_vram_total")
+    if busy is None and vram_used is None:
+        return None
+
+    def _int(v: str | None) -> int | None:
+        if v is None:
+            return None
+        try:
+            return int(v.strip())
+        except ValueError:
+            return None
+
+    return {
+        "gpu_busy_pct": _int(busy),
+        "vram_used_bytes": _int(vram_used),
+        "vram_total_bytes": _int(vram_total),
+    }
 
 
 def _host_bars(bdf: str) -> list[dict[str, Any]]:
@@ -1458,9 +1615,14 @@ def _gpu_devices(vm: dict[str, Any], ga_info: dict[str, Any],
     # Positional, because both lists come from the same ascending KFD node
     # walk. A passthrough entry already carries host-read BARs and keeps them.
     guest_bars = _guest_bars(ga_info)
+    guest_bdfs = _guest_gpu_bdfs(ga_info)
+    files = (ga_info.get("files") or {}) if ga_info else {}
     emulated = [e for e in out if e["origin"] == "emulated"]
-    for entry, bars in zip(emulated, guest_bars):
+    for entry, bars, bdf in zip(emulated, guest_bars, guest_bdfs):
         entry["bars"] = bars
+        drm = _gpu_drm_metrics(files, bdf)
+        if drm:
+            entry["drm"] = drm
 
     unclaimed = list(_guest_gfx(ga_info))
     for entry in out:
@@ -1819,6 +1981,7 @@ def _driver_state(files: dict[str, str]) -> dict[str, Any]:
     amdgpu_init = _init("/sys/module/amdgpu/initstate")
     ionic_init = _init("/sys/module/ionic/initstate")
     ionic_rdma_init = _init("/sys/module/ionic_rdma/initstate")
+    sdxi_char_init = _init("/sys/module/sdxi_char/initstate")
 
     gpu_uevent = next(
         (v for k, v in files.items()
@@ -1838,6 +2001,7 @@ def _driver_state(files: dict[str, str]) -> dict[str, Any]:
         "ionic_loaded": ionic_init == "live" if ionic_init else None,
         "ionic_rdma_loaded": ionic_rdma_init == "live" if ionic_rdma_init else None,
         "nic_bound": {iface: "DRIVER=ionic" in v for iface, v in nic_uevent.items()},
+        "sdxi_char_loaded": sdxi_char_init == "live" if sdxi_char_init else None,
     }
 
 
@@ -1916,6 +2080,32 @@ def _record(vm: dict[str, Any], cfg: VMConfig) -> dict[str, Any]:
         if docker is not None:
             record["docker_running"] = docker
         record["nics"] = _nic_devices(ga_info)
+        rdma_rx = rdma_tx = 0
+        found_rdma = False
+        for nic in record["nics"]:
+            io = nic.get("io")
+            if io:
+                rdma_rx += io.get("rcv_bytes", 0)
+                rdma_tx += io.get("xmit_bytes", 0)
+                found_rdma = True
+        if found_rdma:
+            record["rdma_io_bytes"] = {"rx": rdma_rx, "tx": rdma_tx}
+        record["sdxi_devices"] = _sdxi_devices(ga_info)
+        sdxi_stats_raw = ga_info.get("sdxi_stats_raw") or []
+        if sdxi_stats_raw:
+            total_moved = 0
+            found_sdxi_io = False
+            for raw in sdxi_stats_raw:
+                for line in (raw or "").splitlines():
+                    k, _, v = line.partition(":")
+                    if k.strip() == "bytes_moved":
+                        try:
+                            total_moved += int(v.strip())
+                            found_sdxi_io = True
+                        except ValueError:
+                            pass
+            if found_sdxi_io:
+                record["sdxi_io_bytes"] = {"moved": total_moved}
         ga_info.pop("files", None)
         record["guest"] = ga_info
     return record
@@ -1945,7 +2135,7 @@ def _qcow2_backing_file(image: str | None) -> str | None:
         return None
 
 
-def _print_human(records: list[dict[str, Any]]) -> None:
+def _print_human(records: list[dict[str, Any]], all_devices: bool = False) -> None:
     if not records:
         print("No QEMU VMs running.")
         return
@@ -1974,29 +2164,101 @@ def _print_human(records: list[dict[str, Any]]) -> None:
             # Printing nothing here would read as "no GPU" on a line-oriented
             # listing, which is the claim this has no evidence for.
             print("  GPU:       unknown")
-        for gpu in gpus or []:
-            gfx = gpu["gfx"] or "unknown gfx"
-            source = f", {gpu['source']}" if gpu.get("source") else ""
-            print(f"  GPU:       {gfx} ({gpu['origin']}{source})")
-            # Indented under the GPU rather than appended to it: a card can
-            # have several mapped BARs and the line is already long. Printed
-            # only when known -- a silent absence here means the guest probe
-            # did not get to it, and inventing "BAR0 unknown" for every
-            # powered-off VM would be noise on the common case.
-            for bar in gpu.get("bars") or []:
-                print(f"               {_describe_bar(bar)}")
+        elif not all_devices and len(gpus) > 1:
+            # Collapse multiple GPUs to a single count line.  Group by
+            # (gfx, origin) so a mixed fleet shows "2x gfx1250 (emulated) +
+            # 1x gfx908 (passthrough)" rather than a uniform count.
+            from collections import Counter
+            counts: Counter[tuple[str, str]] = Counter(
+                (gpu["gfx"] or "unknown gfx", gpu["origin"]) for gpu in gpus
+            )
+            parts = []
+            for (gfx, origin), n in counts.most_common():
+                parts.append(f"{n}x {gfx} ({origin})")
+            print(f"  GPU ({len(gpus)}):   {' + '.join(parts)}")
             if ds or r.get("ga_available"):
                 print(f"             amdgpu loaded: {_tri(ds.get('amdgpu_loaded'))}  "
                       f"bound: {_tri(ds.get('amdgpu_bound'))}")
-        for nic in r.get("nics") or []:
-            print(f"  RNIC:      {nic['name']}")
-            for bar in nic.get("bars") or []:
-                print(f"               {_describe_bar(bar)}")
+            if any(g.get("drm") for g in gpus):
+                vram_used = sum(
+                    (g.get("drm") or {}).get("vram_used_bytes") or 0 for g in gpus
+                )
+                vram_total = sum(
+                    (g.get("drm") or {}).get("vram_total_bytes") or 0 for g in gpus
+                )
+                print(f"             VRAM used: {_fmt_bytes(vram_used)} / {_fmt_bytes(vram_total)}")
+        else:
+            for gpu in gpus or []:
+                gfx = gpu["gfx"] or "unknown gfx"
+                source = f", {gpu['source']}" if gpu.get("source") else ""
+                print(f"  GPU:       {gfx} ({gpu['origin']}{source})")
+                # Indented under the GPU rather than appended to it: a card can
+                # have several mapped BARs and the line is already long. Printed
+                # only when known -- a silent absence here means the guest probe
+                # did not get to it, and inventing "BAR0 unknown" for every
+                # powered-off VM would be noise on the common case.
+                for bar in gpu.get("bars") or []:
+                    print(f"               {_describe_bar(bar)}")
+                drm = gpu.get("drm")
+                if drm:
+                    busy = drm.get("gpu_busy_pct")
+                    vram_used = drm.get("vram_used_bytes")
+                    vram_total = drm.get("vram_total_bytes")
+                    busy_str = f"{busy}%" if busy is not None else "unknown"
+                    if vram_used is not None and vram_total:
+                        vram_str = f"{_fmt_bytes(vram_used)} / {_fmt_bytes(vram_total)}"
+                    else:
+                        vram_str = "unknown"
+                    print(f"             busy: {busy_str}  VRAM: {vram_str}")
+                if ds or r.get("ga_available"):
+                    print(f"             amdgpu loaded: {_tri(ds.get('amdgpu_loaded'))}  "
+                          f"bound: {_tri(ds.get('amdgpu_bound'))}")
+        nics = r.get("nics") or []
+        if not all_devices and len(nics) > 1:
+            names = "  ".join(nic["name"] for nic in nics)
+            print(f"  RNIC ({len(nics)}):  {names}")
             if ds or r.get("ga_available"):
-                bound = ds.get("nic_bound", {}).get(nic["name"])
+                any_bound = any(
+                    ds.get("nic_bound", {}).get(nic["name"]) for nic in nics
+                )
                 print(f"             ionic loaded: {_tri(ds.get('ionic_loaded'))}  "
                       f"ionic_rdma loaded: {_tri(ds.get('ionic_rdma_loaded'))}  "
-                      f"bound: {_tri(bound)}")
+                      f"any bound: {_tri(any_bound if nics else None)}")
+            rdma_io = r.get("rdma_io_bytes")
+            if rdma_io:
+                print(f"             RDMA IO: RX: {_fmt_bytes(rdma_io['rx'])}  "
+                      f"TX: {_fmt_bytes(rdma_io['tx'])}")
+        else:
+            for nic in nics:
+                print(f"  RNIC:      {nic['name']}")
+                for bar in nic.get("bars") or []:
+                    print(f"               {_describe_bar(bar)}")
+                nic_io = nic.get("io")
+                if nic_io:
+                    print(f"             RDMA IO: RX: {_fmt_bytes(nic_io['rcv_bytes'])}  "
+                          f"TX: {_fmt_bytes(nic_io['xmit_bytes'])}")
+                if ds or r.get("ga_available"):
+                    bound = ds.get("nic_bound", {}).get(nic["name"])
+                    print(f"             ionic loaded: {_tri(ds.get('ionic_loaded'))}  "
+                          f"ionic_rdma loaded: {_tri(ds.get('ionic_rdma_loaded'))}  "
+                          f"bound: {_tri(bound)}")
+        sdxi_devices = r.get("sdxi_devices") or []
+        if not all_devices and len(sdxi_devices) > 1:
+            names = "  ".join(s["name"] for s in sdxi_devices)
+            print(f"  SDXI ({len(sdxi_devices)}): {names}")
+            if ds or r.get("ga_available"):
+                print(f"             sdxi_char loaded: {_tri(ds.get('sdxi_char_loaded'))}")
+        else:
+            for sdxi in sdxi_devices:
+                print(f"  SDXI:      {sdxi['name']}")
+                for bar in sdxi.get("bars") or []:
+                    print(f"               {_describe_bar(bar)}")
+                if ds or r.get("ga_available"):
+                    print(f"             sdxi_char loaded: {_tri(ds.get('sdxi_char_loaded'))}  "
+                          f"bound: {_tri(sdxi.get('bound'))}")
+        sdxi_io = r.get("sdxi_io_bytes")
+        if sdxi_io:
+            print(f"  SDXI IO:   Moved: {_fmt_bytes(sdxi_io['moved'])}")
         image = r['image'] or '-'
         backing = _qcow2_backing_file(r['image'])
         if backing:
@@ -2032,7 +2294,26 @@ def _print_human(records: list[dict[str, Any]]) -> None:
             # unasked, and a blank where the Disk lines go reads as a VM with
             # no disks. A VM with no agent socket at all prints neither line.
             print("  Disk:      unknown")
-        for label, line in _disk_lines(devices):
+        nvme_devs = [d for d in (devices or []) if d.get("bus") == "nvme"]
+        other_devs = [d for d in (devices or []) if d.get("bus") != "nvme"]
+        if not all_devices and len(nvme_devs) > 1:
+            ordered_collapsed = sorted(nvme_devs, key=lambda x: _disk_sort_key(x["dev"]))
+            dev_parts = "  ".join(
+                f"{d['dev'].rsplit('/', 1)[-1]} ({d['size']})"
+                for d in ordered_collapsed
+            )
+            print(f"  NVMe ({len(nvme_devs)}):  {dev_parts}")
+        else:
+            ordered_nvme = sorted(nvme_devs, key=lambda x: _disk_sort_key(x["dev"]))
+            ordered_nvme.sort(key=lambda d: not _is_boot_disk(d))
+            for d in ordered_nvme:
+                origin = d["origin"]
+                if origin == "passthrough" and d.get("host_bdf"):
+                    origin = f"passthrough host:{_short_bdf(d['host_bdf'])}"
+                mounts = "  " + ",".join(d["mountpoints"]) if d.get("mountpoints") else ""
+                label = "Boot NVMe" if _is_boot_disk(d) else "NVMe"
+                print(f"  {label + ':':<11}{d['dev']:<14} {d['size']:>10}  {origin}{mounts}")
+        for label, line in _disk_lines(other_devs):
             # Labels are padded to the same 11 columns every other repeated
             # label uses, so "Boot Disk:" lines up with "Disk:" rather than
             # pushing its value out by five.

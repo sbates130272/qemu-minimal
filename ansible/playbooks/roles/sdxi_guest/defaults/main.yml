@@ -4,15 +4,15 @@
 #
 # Source
 # ------
-# The role clones ROCm/rocm-sdxi from GitHub on the CONTROLLER (run_once,
-# so fleet runs fetch once instead of N times through SLIRP), archives the
-# two relevant subdirectories, copies the tarball to each guest, and builds
-# there against the pinned kernel.
+# The role clones sbates130272/rocm-systems from GitHub on the CONTROLLER
+# (run_once, so fleet runs fetch once instead of N times through SLIRP),
+# archives the two relevant subdirectories from emulation/sdxi/, copies the
+# tarball to each guest, and builds there against the pinned kernel.
 #
 # No default for sdxi_guest_source_ref: a moving-target SHA baked into an
 # image image is worse than a failed play that says why it stopped.
 sdxi_guest_source_ref: ""
-sdxi_guest_source_repo: "https://github.com/ROCm/rocm-sdxi.git"
+sdxi_guest_source_repo: "https://github.com/sbates130272/rocm-systems.git"
 
 # Local directory on the CONTROLLER to clone into.  Shared across all hosts
 # in the play (run_once fetch); the tarball derived from it carries the ref
