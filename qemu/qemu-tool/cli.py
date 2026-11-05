@@ -1269,10 +1269,16 @@ def _extract_cli_overrides(
 
 
 def _merge(base: VMConfig, overrides: dict[str, Any]) -> VMConfig:
-    """Return a new VMConfig with override values applied on top of base."""
+    """Return a new VMConfig with override values applied on top of base.
+
+    Fleet-only keys (VM_COUNT, VM_NAME_PREFIX, …) present in an XML
+    descriptor are silently skipped — they have no VMConfig field.
+    """
     import dataclasses
     d = dataclasses.asdict(base)
     for k, v in overrides.items():
+        if k not in d:
+            continue
         if v is not _UNSET and v is not None or k in (
             # fields that can legitimately be set to None/False
             "filesystem", "nvme", "nvme_trace", "nvme_trace_file",

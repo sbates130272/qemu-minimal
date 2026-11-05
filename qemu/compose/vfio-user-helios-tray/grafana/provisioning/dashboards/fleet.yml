@@ -1,0 +1,21 @@
+---
+apiVersion: 1
+
+providers:
+  - name: fleet
+    orgId: 1
+    type: file
+    # The dashboard directory is mounted read-only, so Grafana cannot write
+    # back. allowUiUpdates would let the UI accept an edit it then silently
+    # fails to persist, which is worse than refusing it.
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      # Subdirectories become Grafana folders: dashboards/fleet/ -> "fleet",
+      # dashboards/lmcache/ -> "lmcache". One provider, but the two concerns
+      # stay separable on disk and in the UI -- which matters because the
+      # LMCache work is opt-in behind --profile lmcache while the fleet
+      # dashboard is not.
+      foldersFromFilesStructure: true

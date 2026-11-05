@@ -79,6 +79,7 @@ def run(cfg: VMConfig) -> None:
     if cfg.backing_image is not None:
         backing = _fetch_backing_image(cfg, images)
         _create_overlay(images / f"{cfg.vm_name}.qcow2", backing)
+        _fetch_backing_keypair(cfg, images)
         _write_vm_info(cfg, images)
         return
 
@@ -234,6 +235,89 @@ def _fetch_backing_image(cfg: VMConfig, images: Path) -> Path:
     ref_file.write_text(cfg.backing_image + "\n")
     print(f"Backing image ready: {backing}")
     return backing
+
+
+_VM_INFO_TYPE = "application/vnd.batesste.vm-info.v1"
+
+
+def _fetch_backing_keypair(cfg: VMConfig, images: Path) -> None:
+    """Pull the guest keypair shipped as an ORAS referrer beside the qcow2.
+
+    The keypair is placed in <images>/keys/ so inspect._local_key_candidates
+    finds it via the glob of img.parent/keys/ and qemu-tool ssh can connect
+    without a password prompt. Both the private and public halves are written:
+    inspect only offers an identity when the private key file exists.
+    """
+    assert cfg.backing_image is not None
+    keys_dir = images / "keys"
+    ref_file = keys_dir / "image-ref"
+
+    if ref_file.exists() and ref_file.read_text().strip() == cfg.backing_image:
+        cached = sorted(keys_dir.glob("*.pub"))
+        if cached:
+            print(f"Guest keypair already at {keys_dir}")
+            return
+    keys_dir.mkdir(parents=True, exist_ok=True)
+
+    if not _which("oras"):
+        print(
+            "Note: 'oras' not on PATH — cannot fetch the guest keypair. "
+            "qemu-tool ssh will prompt for a password."
+        )
+        return
+
+    discovered = subprocess.run(
+        ["oras", "discover", cfg.backing_image, "--format", "json"],
+        capture_output=True, text=True,
+    )
+    if discovered.returncode != 0:
+        print(
+            f"Note: oras discover failed on {cfg.backing_image}; "
+            "qemu-tool ssh will prompt for a password."
+        )
+        return
+
+    parsed = json.loads(discovered.stdout)
+    referrers = parsed.get("referrers") or parsed.get("manifests", [])
+    hits = [r["reference"] for r in referrers
+            if r.get("artifactType") == _VM_INFO_TYPE]
+    if not hits:
+        print(
+            f"Note: no {_VM_INFO_TYPE} referrer found on {cfg.backing_image}; "
+            "qemu-tool ssh will prompt for a password."
+        )
+        return
+
+    with tempfile.TemporaryDirectory(dir=images) as tmp:
+        subprocess.run(["oras", "pull", hits[0], "-o", tmp], check=True)
+        private_src = next(
+            (p for p in sorted(Path(tmp).iterdir()) if p.suffix != ".pub"
+             and not p.name.endswith(".json") and p.stat().st_size > 0),
+            None,
+        )
+        if private_src is None:
+            print("Note: keypair referrer had no private key file; "
+                  "qemu-tool ssh will prompt for a password.")
+            return
+
+        stem = private_src.stem or private_src.name
+        private = keys_dir / stem
+        pub = keys_dir / f"{stem}.pub"
+
+        import shutil
+        shutil.copyfile(private_src, private)
+        private.chmod(0o600)
+
+        if not pub.is_file():
+            derived = subprocess.run(
+                ["ssh-keygen", "-y", "-f", str(private)],
+                capture_output=True, text=True,
+            )
+            if derived.returncode == 0:
+                pub.write_text(derived.stdout)
+
+    ref_file.write_text(cfg.backing_image + "\n")
+    print(f"Guest keypair ready: {keys_dir}")
 
 
 def _create_overlay(overlay: Path, backing: Path) -> None:

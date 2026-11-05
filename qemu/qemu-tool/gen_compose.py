@@ -229,7 +229,7 @@ _DEFAULTS = {
 # names loses workers to "Temporary failure in name resolution" during the
 # start burst, and each restart consumes a fresh mesh node id -- so a 48-VM
 # fleet reached id 61 against a 64-node protocol ceiling. See the stack README.
-_NET_ERNIC, _NET_ROCJITSU, _NET_QEMU, _NET_INFRA = 1, 2, 3, 0
+_NET_ERNIC, _NET_ROCJITSU, _NET_QEMU, _NET_INFRA, _NET_SDXI = 1, 2, 3, 0, 4
 
 # rocm-ernic's topology payload builder caps the mesh here
 # (src/rdma/rdma_backend_tcp.c: `num_nodes < 64`).
@@ -609,6 +609,8 @@ def plan(values: dict[str, str]) -> dict[str, Any]:
 
     ernic_per_vm = _positive_int(values, "ERNIC_PER_VM")
     rocjitsu_per_vm = _positive_int(values, "ROCJITSU_PER_VM")
+    _sdxi_raw = _get(values, "SDXI_PER_VM")
+    sdxi_per_vm = int(_sdxi_raw) if _sdxi_raw else 0
 
     # The mesh counts rocm-ernic PROCESSES, not VMs. At ERNIC_PER_VM > 1 the
     # two differ by that factor, and a message naming only VM_COUNT would
@@ -676,9 +678,21 @@ def plan(values: dict[str, str]) -> dict[str, Any]:
 
     net = _get(values, "FLEET_NET_PREFIX")
 
+    # Compute switch grouping ahead of the per-VM loop. When ernic_per_vm >
+    # rocjitsu_per_vm (e.g. Helios: 2 RNICs per GPU) the vfio_socks list must
+    # place nics_per_switch NICs before each GPU so _vfio_user_switch_args
+    # slices the correct devices into each switch slot.
+    _switch_width = int(_get(values, "VM_PCIE_SWITCH_WIDTH") or 0)
+    _nics_per_switch = (
+        ernic_per_vm // rocjitsu_per_vm
+        if _switch_width > 0 and rocjitsu_per_vm > 0
+        else 1
+    )
+
     vms = []
     nics: list[dict[str, Any]] = []
     gpus: list[dict[str, Any]] = []
+    sdxis: list[dict[str, Any]] = []
     for index in range(count):
         n = index + 1
         vm_nics = []
@@ -706,8 +720,19 @@ def plan(values: dict[str, str]) -> dict[str, Any]:
                 "sock": f"/run/vfu/rocjitsu-{suffix}.sock",
                 "config": extras["ROCJITSU_CONFIG"][index],
             })
+        vm_sdxi = []
+        for d in range(1, sdxi_per_vm + 1):
+            o = index * sdxi_per_vm + d
+            suffix = _dev_suffix(n, d, sdxi_per_vm)
+            vm_sdxi.append({
+                "n": n, "d": d, "o": o,
+                "service": f"sdxi-{suffix}",
+                "addr": f"{net}.{_NET_SDXI}.{o}",
+                "sock": f"/run/vfu/sdxi-{suffix}.sock",
+            })
         nics += vm_nics
         gpus += vm_gpus
+        sdxis += vm_sdxi
         vms.append({
             "n": n,
             "qemu_addr": f"{net}.{_NET_QEMU}.{n}",
@@ -715,13 +740,18 @@ def plan(values: dict[str, str]) -> dict[str, Any]:
             "ssh_port": ports[index],
             "nics": vm_nics,
             "gpus": vm_gpus,
-            # The order the guest sees, and therefore what ends up paired
-            # under each switch. Round-robin so NIC d and GPU d are adjacent:
-            # with VM_PCIE_SWITCH_WIDTH=2 that is one NIC and one GPU per
-            # switch, which is the whole point of the MI355X shape.
-            "vfio_socks": _interleave(
-                [x["sock"] for x in vm_nics], [x["sock"] for x in vm_gpus]
+            "sdxi": vm_sdxi,
+            # The order the guest sees, and therefore what ends up paired under
+            # each switch. When ERNIC_PER_VM == ROCJITSU_PER_VM (e.g. MI355X
+            # with switch_width=2) this is 1:1 round-robin. When there are
+            # more ernics than GPUs (e.g. Helios: 2 RNICs per GPU,
+            # switch_width=3) the groups are nics_per_switch NICs then one GPU.
+            "vfio_socks": _group_socks_for_switches(
+                [x["sock"] for x in vm_nics],
+                [x["sock"] for x in vm_gpus],
+                _nics_per_switch,
             ),
+            "sdxi_socks": [x["sock"] for x in vm_sdxi],
             # Aliases to the first device of each kind. Everything that
             # predates multi-device VMs reads these, and at the default of one
             # each they are the only device there is.
@@ -743,9 +773,11 @@ def plan(values: dict[str, str]) -> dict[str, Any]:
         "vms": vms,
         "nics": nics,
         "gpus": gpus,
+        "sdxis": sdxis,
         "ernic_per_vm": ernic_per_vm,
         "rocjitsu_per_vm": rocjitsu_per_vm,
-        "switch_width": int(_get(values, "VM_PCIE_SWITCH_WIDTH") or 0),
+        "sdxi_per_vm": sdxi_per_vm,
+        "switch_width": _switch_width,
         "cpu_sockets": _get(values, "VM_CPU_SOCKETS"),
         "cpu_phys_bits": _get(values, "VM_CPU_PHYS_BITS"),
         "pci_hole64_size": _get(values, "VM_PCI_HOLE64_SIZE"),
@@ -804,6 +836,7 @@ def plan(values: dict[str, str]) -> dict[str, Any]:
         "ernic_p4": _flag(values, "ERNIC_P4"),
         "ernic_p4_guest_scope": _get(values, "ERNIC_P4_GUEST_SCOPE"),
         "ernic_p4_program": _get(values, "ERNIC_P4_PROGRAM"),
+        "sdxi_image": _get(values, "SDXI_IMAGE"),
         "stop_grace_period": _get(values, "STOP_GRACE_PERIOD"),
         "log_max_size": _get(values, "LOG_MAX_SIZE"),
         "log_max_file": _get(values, "LOG_MAX_FILE"),
@@ -840,6 +873,8 @@ def _fleet_to_env(cfg: Any) -> dict[str, str]:  # cfg: FleetConfig
         _set("ERNIC_IMAGE", cfg.ernic_ref)
     if cfg.rocjitsu_ref:
         _set("ROCJITSU_IMAGE", cfg.rocjitsu_ref)
+    if cfg.sdxi_ref:
+        _set("SDXI_IMAGE", cfg.sdxi_ref)
     if cfg.backing_ref:
         _set("VM_BACKING_IMAGE", cfg.backing_ref)
     # Network
@@ -849,6 +884,8 @@ def _fleet_to_env(cfg: Any) -> dict[str, str]:  # cfg: FleetConfig
     # Topology
     _set("ERNIC_PER_VM", cfg.ernic_per_vm)
     _set("ROCJITSU_PER_VM", cfg.rocjitsu_per_vm)
+    if cfg.sdxi_per_vm:
+        _set("SDXI_PER_VM", cfg.sdxi_per_vm)
     _set("VM_PCIE_SWITCH_WIDTH", cfg.vm_pcie_switch_width)
     # ERNIC mesh
     _set("ERNIC_TAP", cfg.ernic_tap)
@@ -967,6 +1004,26 @@ def _interleave(a: list[str], b: list[str]) -> list[str]:
             out.append(x)
         if y is not None:
             out.append(y)
+    return out
+
+
+def _group_socks_for_switches(
+    nics: list[str], gpus: list[str], nics_per_switch: int
+) -> list[str]:
+    """Order sockets so each PCIe switch slot gets nics_per_switch NICs then one GPU.
+
+    With nics_per_switch=1 this is equivalent to _interleave. Use when
+    ERNIC_PER_VM > ROCJITSU_PER_VM (e.g. Helios: 2 ernics per GPU, so each
+    switch of width 3 receives [nic-A, nic-B, gpu-N]).
+    """
+    if nics_per_switch <= 1:
+        return _interleave(nics, gpus)
+    out: list[str] = []
+    for i, gpu in enumerate(gpus):
+        start = i * nics_per_switch
+        out.extend(nics[start : start + nics_per_switch])
+        out.append(gpu)
+    out.extend(nics[len(gpus) * nics_per_switch :])
     return out
 
 
@@ -1322,6 +1379,30 @@ def render_compose(
         out.append("      retries: 30")
         out.append("      start_period: 5s")
 
+    for sdxi in spec["sdxis"]:
+        n = sdxi["n"]
+        label = f"VM {n} SDXI" if spec["sdxi_per_vm"] == 1 \
+            else f"VM {n} SDXI {sdxi['d']}/{spec['sdxi_per_vm']}"
+        out.append("")
+        out.append(f"  # ---- {label} ----")
+        out.append(f"  {sdxi['service']}:")
+        out.append("    <<: *ernic-common")
+        out.append('    image: "${SDXI_IMAGE}"')
+        out.append("    networks:")
+        out.append("      fleet:")
+        out.append(f"        ipv4_address: {sdxi['addr']}")
+        out.append("    restart: on-failure")
+        out.append("    command:")
+        out.append(f"      - -s")
+        out.append(f"      - {sdxi['sock']}")
+        out.append("    healthcheck:")
+        sock_re = sdxi["sock"].replace(".", "[.]")
+        out.append(f"      test: [\"CMD\", \"sh\", \"-c\", \"grep -qE ' 01 [0-9]+ {sock_re}$' /proc/net/unix\"]")
+        out.append("      interval: 2s")
+        out.append("      timeout: 5s")
+        out.append("      retries: 30")
+        out.append("      start_period: 5s")
+
     for vm in spec["vms"]:
         n = vm["n"]
         out.append("")
@@ -1336,7 +1417,7 @@ def render_compose(
         # Every device this guest attaches, not just the first. QEMU exits if
         # any one vfio-user socket is missing, so a guest that starts while
         # its eighth NIC is still coming up dies outright.
-        for dev in vm["nics"] + vm["gpus"]:
+        for dev in vm["nics"] + vm["gpus"] + vm["sdxi"]:
             out.append(f"      {dev['service']}:")
             out.append("        condition: service_healthy")
         out.append("    ports:")
@@ -1387,7 +1468,8 @@ def render_compose(
         # ORDER MATTERS when switches are on: run-vm groups this list left to
         # right, so the NIC/GPU round-robin is what puts one of each below
         # every switch.
-        out.append(f'          --vfio-userdev "{",".join(vm["vfio_socks"])}"')
+        all_vfio_socks = list(vm["vfio_socks"]) + list(vm["sdxi_socks"])
+        out.append(f'          --vfio-userdev "{",".join(all_vfio_socks)}"')
 
     out.append("")
     out.append("  # ---- metrics (opt-in: --profile metrics) ----")
@@ -1768,7 +1850,7 @@ def render_compose(
     out.append("  # resolution', and because the mesh allocates a NEW node id on")
     out.append("  # every reconnect, the restarts walked the fleet toward the")
     out.append("  # 64-node protocol ceiling. Third octet is the service family:")
-    out.append(f"  #   {_NET_INFRA} infra   {_NET_ERNIC} ernic   {_NET_ROCJITSU} rocjitsu   {_NET_QEMU} qemu")
+    out.append(f"  #   {_NET_INFRA} infra   {_NET_ERNIC} ernic   {_NET_ROCJITSU} rocjitsu   {_NET_QEMU} qemu   {_NET_SDXI} sdxi")
     out.append("  fleet:")
     out.append("    driver: bridge")
     out.append("    ipam:")

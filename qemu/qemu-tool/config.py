@@ -130,6 +130,8 @@ class VMConfig:
     vram_dev_index: int | None = None  # 1-based index into pci_hostdev
     vram_bar: int = 0
     vfio_userdev: list[str] = field(default_factory=list)
+    # Devices placed on plain CPU root ports regardless of switch_width.
+    # Uses chassis 100+ to avoid colliding with switched-device chassis ids.
     pci_mmio_bridge: bool = False
     data_nic_queues: int = 0
     mcast_group: str | None = None

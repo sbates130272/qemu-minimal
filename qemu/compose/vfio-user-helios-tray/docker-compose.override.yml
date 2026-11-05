@@ -1,0 +1,17 @@
+# Override: mount small-BAR (256 MiB) rocjitsu config so GPU BARs fit
+# within the 64G pci-hole64 of the helios-tray stack.  The shipped image has
+# vram_aperture_bytes=256 GiB; that needs phys-bits>=42 and a >=1 TiB PCI
+# hole, which we do not set for initial bring-up.
+services:
+  rocjitsu-1-1:
+    volumes:
+      - /home/stebates/Projects/qemu-minimal/qemu/compose/vfio-user-helios-tray/gfx1250_mi455x_smallbar.json:/usr/local/share/rocjitsu/configs/gfx1250_mi455x.json:ro
+  rocjitsu-1-2:
+    volumes:
+      - /home/stebates/Projects/qemu-minimal/qemu/compose/vfio-user-helios-tray/gfx1250_mi455x_smallbar.json:/usr/local/share/rocjitsu/configs/gfx1250_mi455x.json:ro
+  rocjitsu-1-3:
+    volumes:
+      - /home/stebates/Projects/qemu-minimal/qemu/compose/vfio-user-helios-tray/gfx1250_mi455x_smallbar.json:/usr/local/share/rocjitsu/configs/gfx1250_mi455x.json:ro
+  rocjitsu-1-4:
+    volumes:
+      - /home/stebates/Projects/qemu-minimal/qemu/compose/vfio-user-helios-tray/gfx1250_mi455x_smallbar.json:/usr/local/share/rocjitsu/configs/gfx1250_mi455x.json:ro

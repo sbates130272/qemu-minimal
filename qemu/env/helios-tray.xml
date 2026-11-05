@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Fleet descriptor for the Helios tray topology stack
+  (vfio-user-helios-tray): one EPYC Venice socket, 4 gfx1250 GPUs, 8 ernics
+  (2 per GPU), 4 PCIe switches (1 GPU + 2 RNICs per switch), and 1 SDXI device
+  on a plain CPU root port.
+
+  This stack is generated from this file by `qemu-tool gen-compose`.
+  Do not hand-edit docker-compose.yml; run gen-compose instead.
+
+  NVMe note: the Helios tray topology calls for 2 NVMe on CPU root ports and
+  one NVMe per PCIe switch (4 on switches = 6 total). NVMe-under-switch is not
+  yet implemented; all 6 drives land on CPU root ports for now.
+
+  XGMI note: rocjitsu's FlatHub emulates peer-to-peer GPU coherency over its
+  vfio-user channel; there is no mechanism to present XGMI topology metadata
+  to the guest amdgpu driver through the standard KFD/HSA path. The 4 GPUs
+  appear as independent PCIe devices to the guest.
+
+  UALink note: rocjitsu does not expose a UALink / backside-mesh socket
+  interface at this time. P2P DMA between GPU BARs over the vfio-user ernic
+  path (issue 19) is the available inter-GPU memory transport.
+
+  SDXI: one emulated SNIA Smart Data Accelerator Interface device on a plain
+  CPU root port (chassis 101, via vfio-userdev-cpu). The sdxi container
+  serves a vfio-user socket; the guest needs the driver (rocm-sdxi) to open
+  the device. Build the SDXI image before bringing the stack up:
+    docker build -t qemu-tool/sdxi:latest qemu/docker/sdxi
+-->
+<fleet xmlns="http://qemu-tool/fleet/1.0">
+
+  <!-- ===================================================================
+       Fleet shape
+       =================================================================== -->
+
+  <!-- 8 ernics per VM means 8 mesh nodes per VM, so the fleet caps at 5
+       VMs (40 / 8). Start with 1 VM for bring-up exploration. -->
+  <vm-count>1</vm-count>
+  <vm-name-prefix>stebates-helios</vm-name-prefix>
+
+  <!-- ===================================================================
+       Images — fork QEMU for P2P DMA (issue 19)
+       =================================================================== -->
+
+  <!-- Stock image for initial bring-up; switch to the fork (sbates-fork tag)
+       only when P2P DMA between GPUs is needed (issue 19). -->
+  <qemu-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261030.gadc94af-qemu11.1.3-vfu.5b9c722</qemu-ref>
+  <ernic-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261030.gadc94af-ernic.8f35f4a-vfu.5b9c722</ernic-ref>
+  <rocjitsu-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261030.gadc94af-rocjitsu.73c3cf3</rocjitsu-ref>
+  <backing-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu:20261030.gadc94af-vm.resolute-ernic-rocjitsu-qm.ae551b3-qcow2</backing-ref>
+  <!-- SDXI: build locally with `docker build -t qemu-tool/sdxi:latest qemu/docker/sdxi` -->
+  <sdxi-image>qemu-tool/sdxi:latest</sdxi-image>
+
+  <!-- ===================================================================
+       Per-guest resources
+       =================================================================== -->
+
+  <vm-vcpus>8</vm-vcpus>
+  <vm-vmem>16384</vm-vmem>
+  <vm-shm-size>16g</vm-shm-size>
+
+  <!-- 6 NVMe drives. Helios topology: 2 on CPU RPs + 1 per switch (4 on
+       switches). NVMe-under-switch is not yet supported so all 6 land on
+       CPU root ports. -->
+  <vm-nvme>6</vm-nvme>
+  <vm-vfio-user-root-port>true</vm-vfio-user-root-port>
+
+  <!-- Helios tray: 4 GPUs and 8 ernics per VM, 2 RNICs + 1 GPU per switch.
+       switch-width=3 combined with the 2:1 ernic:GPU ratio causes
+       _group_socks_for_switches (gen_compose.py) to emit
+       [nic-A, nic-B, gpu-N] groups so run_vm correctly places each pair of
+       ernics and their associated GPU under the same PCIe switch. -->
+  <ernic-per-vm>8</ernic-per-vm>
+  <rocjitsu-per-vm>4</rocjitsu-per-vm>
+  <!-- One SDXI device on a plain CPU root port (chassis 101). -->
+  <sdxi-per-vm>1</sdxi-per-vm>
+  <vm-pcie-switch-width>3</vm-pcie-switch-width>
+  <vm-cpu-sockets>1</vm-cpu-sockets>
+
+  <!-- Default phys-bits (host value, 48). The 4 GPU BARs are only 256 MiB
+       each (1 GiB total); no large BAR expansion needed here. -->
+  <vm-pci-hole64-size>64G</vm-pci-hole64-size>
+
+  <!-- ===================================================================
+       Host paths
+       =================================================================== -->
+
+  <vm-images-dir>/home/stebates/Projects/qemu-minimal/images</vm-images-dir>
+  <vm-backing-shared>true</vm-backing-shared>
+  <vm-username>ubuntu</vm-username>
+  <vm-password>ubuntu</vm-password>
+
+  <!-- ===================================================================
+       Fleet wiring
+       =================================================================== -->
+
+  <!-- TAP is required for intra-guest ARP so ib_send_bw loopback works
+       between the 8 ernic interfaces even in a 1-VM fleet. -->
+  <ernic-tap>true</ernic-tap>
+  <ssh-port-base>2322</ssh-port-base>
+  <vm-extra-hostfwd>tcp::9100-:9100</vm-extra-hostfwd>
+
+  <!-- ===================================================================
+       Observability
+       =================================================================== -->
+
+  <prom-data-dir>/var/lib/qemu-tool/stacks/helios-tray/prom-data</prom-data-dir>
+
+  <!-- LMCache off: orthogonal to topology bring-up. -->
+  <lmcache-enable>false</lmcache-enable>
+
+</fleet>
