@@ -42,7 +42,7 @@ import shutil
 import subprocess
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace as dc_replace
 from pathlib import Path
 
 from .check_system import docker_compose_ok, free_gb, kvm_usable
@@ -57,6 +57,14 @@ VERBS = ("all", "preflight", "up", "test", "report", "down", "logs")
 # The settings file this subcommand is about. Shipped in the wheel, so a pipx
 # install has it without a checkout.
 _FLEET_NAME = "quickstart.xml"
+
+# Named quickstart variants: (fleet_xml, stack_stem, key_stem, playbook_or_None).
+# A None playbook means "boot only" -- wait for guests but skip ansible.
+VARIANTS: dict[str, tuple[str, str, str, str | None]] = {
+    "default": ("quickstart.xml",    "quickstart",        "quickstart-key",        "fleet-quickstart.yml"),
+    "mi355x":  ("mi355x-node.xml",   "quickstart-mi355x", "quickstart-mi355x-key", None),
+    "helios":  ("helios-tray.xml",   "quickstart-helios", "quickstart-helios-key", None),
+}
 
 # Where the guest keypair referrer is pulled to, and what it carries.
 _VM_INFO_TYPE = "application/vnd.batesste.vm-info.v1"
@@ -103,6 +111,10 @@ class _State:
     size_from_host: bool
     artifacts: Path
 
+    # Ansible playbook under ansible/playbooks/ to run in configure_and_test.
+    # None means boot-only: wait for guests but skip the ansible step.
+    playbook: str | None = "fleet-quickstart.yml"
+
     # What the user named: the settings file and any --env-file layers. The
     # overlays this subcommand generates are appended to these on every
     # rescan, never folded into them.
@@ -135,6 +147,10 @@ class _State:
     @property
     def vm_count(self) -> int:
         return int(self.values.get("VM_COUNT", "2"))
+
+    @property
+    def ernic_per_vm(self) -> int:
+        return int(self.values.get("ERNIC_PER_VM", "1"))
 
     @property
     def prefix(self) -> str:
@@ -244,14 +260,14 @@ def _repo_root(explicit: Path | None) -> Path | None:
     return None
 
 
-def _packaged_fleet() -> Path | None:
-    """qemu/env/quickstart.xml, from the checkout or from inside the wheel."""
-    source = Path(__file__).resolve().parent.parent / "env" / _FLEET_NAME
+def _packaged_fleet(name: str = _FLEET_NAME) -> Path | None:
+    """qemu/env/<name>, from the checkout or from inside the wheel."""
+    source = Path(__file__).resolve().parent.parent / "env" / name
     if source.is_file():
         return source
     from .resources import ENV as _ENV_PACKAGE, packaged_path
 
-    packaged = packaged_path(_ENV_PACKAGE, _FLEET_NAME)
+    packaged = packaged_path(_ENV_PACKAGE, name)
     if packaged is not None and packaged.is_file():
         return packaged
     return None
@@ -1063,14 +1079,22 @@ def up(state: _State) -> None:
 
     _say("Waiting for the NIC servers")
     deadline = time.monotonic() + 120
+    # For multi-ernic stacks (ERNIC_PER_VM > 1) each VM's manager service is
+    # named ernic-{vm}-1, so Docker appends another -1 replica suffix making
+    # the container ernic-{vm}-1-1.  Single-ernic stacks use ernic-{vm} whose
+    # container is ernic-{vm}-1.
+    if state.ernic_per_vm > 1:
+        containers = [f"{state.stack_name}-ernic-{i}-1-1" for i in range(1, state.vm_count + 1)]
+        svc_names  = [f"ernic-{i}-1" for i in range(1, state.vm_count + 1)]
+    else:
+        containers = [f"{state.stack_name}-ernic-{i}-1" for i in range(1, state.vm_count + 1)]
+        svc_names  = [f"ernic-{i}" for i in range(1, state.vm_count + 1)]
     while True:
-        states = [_health(f"{state.stack_name}-ernic-{i}-1")
-                  for i in range(1, state.vm_count + 1)]
+        states = [_health(c) for c in containers]
         if all(s == "healthy" for s in states):
             break
         if time.monotonic() > deadline:
-            _compose(state, "logs", *[f"ernic-{i}" for i in range(1, state.vm_count + 1)],
-                     check=False)
+            _compose(state, "logs", *svc_names, check=False)
             _die(f"the NIC servers never became healthy (last: {states})")
         time.sleep(2)
     print("NIC servers healthy")
@@ -1137,10 +1161,13 @@ def _write_network_inventory(state: _State) -> Path:
 
 def configure_and_test(state: _State) -> None:
     wait_for_guests(state)
+    if state.playbook is None:
+        _say("No configure-and-test playbook for this variant; guests are up")
+        return
     if state.repo_root is None:
         print("\nnote: no checkout found, so the guests are up but not "
               "configured and no test ran.\n"
-              "      The playbook lives at ansible/playbooks/fleet-quickstart.yml "
+              f"      The playbook lives at ansible/playbooks/{state.playbook} "
               "in the repo;\n"
               "      clone it and re-run `qemu-tool quick-start test`, or pass "
               "--repo-root.", file=sys.stderr)
@@ -1154,7 +1181,7 @@ def configure_and_test(state: _State) -> None:
            "-i", str(state.stack_dir / "fleet-inventory.yml")]
     if state.in_network:
         cmd += ["-i", str(_write_network_inventory(state))]
-    cmd += ["playbooks/fleet-quickstart.yml",
+    cmd += [f"playbooks/{state.playbook}",
             "--private-key", str(state.key),
             "-e", f"quickstart_artifacts_dir={state.artifacts}",
             "-e", "ansible_remote_tmp=/tmp/.ansible/tmp"]
@@ -1353,7 +1380,10 @@ def run(
     clean_qcow2: bool = False,
     rdma_duration: int | None = None,
     nvme_duration: int | None = None,
+    variant: str = "default",
 ) -> None:
+    fleet_stem, stack_stem, key_stem, playbook = VARIANTS[variant]
+
     if fleet_file:
         layers = [p.expanduser().resolve() for p in fleet_file]
         for layer in layers:
@@ -1361,19 +1391,19 @@ def run(
                 _die(f"fleet file not found: {layer}")
         base = layers[0]
     else:
-        packaged = _packaged_fleet()
+        packaged = _packaged_fleet(fleet_stem)
         if packaged is None:
-            _die("qemu/env/quickstart.xml is missing from this install; "
+            _die(f"qemu/env/{fleet_stem} is missing from this install; "
                  "pass --fleet-file")
         layers = [packaged]
         base = packaged
 
-    requested = stack_dir or Path("/var/lib/qemu-tool/stacks/quickstart")
+    requested = stack_dir or Path(f"/var/lib/qemu-tool/stacks/{stack_stem}")
     state = _State(
         fleet_file=base,
         stack_dir=_resolve_stack_dir(requested.expanduser(), stack_dir is not None),
         key_dir=_resolve_key_dir(
-            (key_dir or Path("/var/lib/qemu-tool/quickstart-key")).expanduser(),
+            (key_dir or Path(f"/var/lib/qemu-tool/{key_stem}")).expanduser(),
             explicit=key_dir is not None,
         ),
         report_dir=report_dir.expanduser().resolve() if report_dir else None,
@@ -1382,10 +1412,11 @@ def run(
         metrics=metrics,
         assume_yes=assume_yes,
         size_from_host=size_from_host,
-        artifacts=Path("/var/tmp/quickstart-artifacts"),
+        artifacts=Path(f"/var/tmp/quickstart-artifacts-{stack_stem}"),
         base_layers=layers,
         rdma_duration=rdma_duration,
         nvme_duration=nvme_duration,
+        playbook=playbook,
     )
     # Picks up the overlays an earlier verb left beside the stack, which is
     # what makes `up` then `test` -- two processes, as the CI lane runs them
@@ -1398,7 +1429,7 @@ def run(
     # values into docker-compose.yml does NOT make them available there, so
     # they must land in an env-file that _compose() passes with --env-file.
     _IMAGE_KEYS = ("QEMU_IMAGE", "ERNIC_IMAGE", "ROCJITSU_IMAGE",
-                   "VM_BACKING_IMAGE", "VM_IMAGES_DIR")
+                   "VM_BACKING_IMAGE", "VM_IMAGES_DIR", "SDXI_IMAGE")
     image_data = {k: state.values[k] for k in _IMAGE_KEYS if k in state.values}
     if images is not None:
         image_data["VM_IMAGES_DIR"] = str(images.expanduser().resolve())
@@ -1421,6 +1452,24 @@ def run(
             capture_output=True, text=True, cwd=state.stack_dir,
         )
         services = [s for s in ps.stdout.splitlines() if s and s != "dockerapi"]
+        if not services and stack_dir is None and not fleet_file:
+            # No services found in the default stack dir for this flavor.
+            # Probe the other variants' default dirs for a running project.
+            for _vname, (_fleet, _stem, _key, _play) in VARIANTS.items():
+                _candidate = Path(f"/var/lib/qemu-tool/stacks/{_stem}")
+                if not _candidate.is_dir():
+                    continue
+                _probe = subprocess.run(
+                    ["docker", "compose", "--project-name", _candidate.name,
+                     "ps", "--services"],
+                    capture_output=True, text=True, cwd=_candidate,
+                )
+                _svcs = [s for s in _probe.stdout.splitlines()
+                         if s and s != "dockerapi"]
+                if _svcs:
+                    services = _svcs
+                    state = dc_replace(state, stack_dir=_candidate)
+                    break
         _compose(state, "logs", *extra, *services, check=False)
         return
     if verb == "down":

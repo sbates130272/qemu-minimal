@@ -77,9 +77,13 @@
   <vm-pcie-switch-width>3</vm-pcie-switch-width>
   <vm-cpu-sockets>1</vm-cpu-sockets>
 
-  <!-- Default phys-bits (host value, 48). The 4 GPU BARs are only 256 MiB
-       each (1 GiB total); no large BAR expansion needed here. -->
-  <vm-pci-hole64-size>64G</vm-pci-hole64-size>
+  <!-- rocjitsu gfx1250_mi455x.json ships vram_aperture_bytes=256 GiB; 4 GPUs
+       need 1 TiB of BAR space. phys-bits=42 (4 TiB space) with a 2048G hole
+       gives comfortable headroom for 4 GPU BARs + 8 ernic BARs + SDXI + NVMe.
+       Must move together: QEMU refuses a hole larger than the phys-bits space
+       allows (see config.py comment on pci_hole64_size). -->
+  <vm-cpu-phys-bits>42</vm-cpu-phys-bits>
+  <vm-pci-hole64-size>2048G</vm-pci-hole64-size>
 
   <!-- ===================================================================
        Host paths

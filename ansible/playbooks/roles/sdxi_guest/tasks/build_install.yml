@@ -43,7 +43,7 @@
   when: not sdxi_guest_local_src_dir
 
 - name: Archive the driver and CLI subdirectories on the controller
-  ansible.builtin.command:
+  ansible.builtin.command:  # noqa: command-instead-of-module
     cmd: >-
       tar czf /tmp/sdxi-src-{{ sdxi_guest_source_ref[:12] }}.tar.gz
       -C {{ sdxi_guest_local_src_dir if sdxi_guest_local_src_dir else sdxi_guest_controller_src_dir }}
