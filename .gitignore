@@ -1,20 +1,10 @@
 # personal runbooks — not for version control
 vm-ernic-rocjitsu.md
 
-# image files for virtual machines
-images/*.ISO
-images/*.iso
-images/*.img
-images/*.qcow2
-# gen-vm's per-VM sidecar, next to the qcow2 it describes. Local state, not
-# an artefact: it records the guest account and an absolute path to a key on
-# this machine, and inspect regenerates nothing from it that gen-vm cannot.
-images/*.json
-# Guest keypairs. inspect looks for them beside the image, in keys/, so a
-# VM_IMAGES_DIR pointed at the checkout rather than at /var/lib/qemu-tool
-# puts a private key in the tree. It is the published CI guest key and not a
-# secret, which is exactly why it must not be committed by accident.
-images/keys/
+# image files for virtual machines — the whole directory is local runtime
+# state: qcow2s, NVMe images, keypairs, sidecars, temp dirs. Nothing here
+# belongs in version control.
+images/
 libvirt/focal-*.img
 libvirt/jammy-*.img
 libvirt/noble-*.img

@@ -1,0 +1,70 @@
+---
+# Single-binary Loki for a lab fleet. Not generated: nothing here depends on
+# VM_COUNT.
+#
+# Deliberately minimal. This is a fleet you tear down and rebuild, not a
+# production log estate: filesystem storage, no object store, no clustering,
+# no auth. The one thing it does take seriously is retention, because the
+# fleet's own logs are what fill a disk -- an ernic manager that reaches
+# EMFILE spins with no backoff and wrote 295 GB in two days (AGENTS.md
+# issue 15), and Loki would happily keep all of it.
+
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 0
+  # The fleet's log lines include full QEMU command lines and NIXL/UCX
+  # tracebacks, which are long.
+  grpc_server_max_recv_msg_size: 8388608
+  grpc_server_max_send_msg_size: 8388608
+  log_level: warn
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+limits_config:
+  # A fleet start burst is bursty by nature: VM_COUNT guests boot at once and
+  # every one of them replays its kernel ring buffer. The defaults reject
+  # that as a rate violation and the lines are lost precisely when they are
+  # most wanted.
+  ingestion_rate_mb: 32
+  ingestion_burst_size_mb: 64
+  max_streams_per_user: 0
+  max_line_size: 256kb
+  # Guests boot with whatever clock they came up with, and a VM restored from
+  # a backing image can be well behind. Without this their first lines are
+  # rejected as too old.
+  reject_old_samples: true
+  reject_old_samples_max_age: 168h
+  retention_period: 168h
+
+compactor:
+  working_directory: /loki/compactor
+  delete_request_store: filesystem
+  retention_enabled: true
+  retention_delete_delay: 1h
+
+# Off: this is a lab stack on a private bridge, and the report has nowhere
+# to go that anyone reads.
+analytics:
+  reporting_enabled: false

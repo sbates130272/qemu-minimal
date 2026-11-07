@@ -28,7 +28,7 @@ from .inspect import run as inspect_run
 from .inspect import ssh_run as inspect_ssh_run
 from .check_system import run as check_system_run
 from .down_all import discover as _discover_stacks, run as down_all_run, teardown_one
-from .quick_start import VERBS as _QUICK_START_VERBS, run as quick_start_run
+from .quick_start import VERBS as _QUICK_START_VERBS, VARIANTS as _QUICK_START_VARIANTS, run as quick_start_run
 from .shutdown import run as shutdown_run
 from .list_vms import run as list_vms_run, collect as _list_vms_collect
 from . import qcow as _qcow
@@ -303,6 +303,21 @@ def _add_quick_start(sub: argparse._SubParsersAction) -> None:
             "so the guests boot from a fresh overlay of the backing image. "
             "The backing file itself is kept. Only meaningful with the up or "
             "all verbs."
+        ),
+    )
+    p.add_argument(
+        "--flavor",
+        dest="variant",
+        choices=list(_QUICK_START_VARIANTS),
+        default="default",
+        metavar="NAME",
+        help=(
+            "Quickstart flavor to run. "
+            f"Choices: {', '.join(_QUICK_START_VARIANTS)}. "
+            "default: 2 guests each with an emulated gfx1250, NVMe and rocm-ernic NIC. "
+            "mi355x: 1 VM with 8 GPUs, 8 ernics and 8 PCIe switches. "
+            "helios: 1 VM with 4 gfx1250 GPUs, 8 ernics and an SDXI device. "
+            "(default: %(default)s)"
         ),
     )
     p.set_defaults(func=_quick_start_cmd)
@@ -663,6 +678,14 @@ def _add_inspect(sub: argparse._SubParsersAction) -> None:
         "--json", action="store_true", dest="as_json",
         help="Emit JSON instead of human-readable output.",
     )
+    p.add_argument(
+        "--all-devices", action="store_true", dest="all_devices",
+        help=(
+            "Expand collapsed GPU and RNIC lines. "
+            "By default, more than one GPU or RNIC is shown as a single "
+            "count line; this flag prints every device individually with BARs."
+        ),
+    )
     p.set_defaults(func=_inspect_cmd)
 
 
@@ -1000,6 +1023,7 @@ def _quick_start_cmd(args: argparse.Namespace) -> None:
         clean_qcow2=args.clean_overlays,
         rdma_duration=args.rdma_duration,
         nvme_duration=args.nvme_duration,
+        variant=args.variant,
     )
 
 
@@ -1010,7 +1034,11 @@ def _compose_cmd(args: argparse.Namespace) -> None:
 
 
 def _inspect_cmd(args: argparse.Namespace) -> None:
-    inspect_run(_one_vm_name(args), args.env_file, as_json=args.as_json)
+    inspect_run(
+        _one_vm_name(args), args.env_file,
+        as_json=args.as_json,
+        all_devices=args.all_devices,
+    )
 
 
 def _one_vm_name(args: argparse.Namespace) -> str | None:
@@ -1269,10 +1297,16 @@ def _extract_cli_overrides(
 
 
 def _merge(base: VMConfig, overrides: dict[str, Any]) -> VMConfig:
-    """Return a new VMConfig with override values applied on top of base."""
+    """Return a new VMConfig with override values applied on top of base.
+
+    Fleet-only keys (VM_COUNT, VM_NAME_PREFIX, …) present in an XML
+    descriptor are silently skipped — they have no VMConfig field.
+    """
     import dataclasses
     d = dataclasses.asdict(base)
     for k, v in overrides.items():
+        if k not in d:
+            continue
         if v is not _UNSET and v is not None or k in (
             # fields that can legitimately be set to None/False
             "filesystem", "nvme", "nvme_trace", "nvme_trace_file",

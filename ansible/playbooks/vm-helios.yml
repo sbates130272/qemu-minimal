@@ -1,0 +1,216 @@
+---
+# Install the SDXI driver and CLI into a helios-tray VM image.
+#
+# Run via:
+#   qemu-tool gen-vm --ansible-playbook ansible/playbooks/vm-helios.yml
+#
+# Or against a running guest:
+#   ansible-playbook -i inventory/qemu-minimal-vms.yml vm-helios.yml
+
+- import_playbook: vm-basic.yml
+  vars:
+    vm_install_amd_ca: true
+    user_setup_dotfiles_enable: true
+    image_slim_enable: false
+
+- name: Configure amdgpu for rocjitsu emulation
+  hosts: all
+  gather_facts: true
+  become: true
+  vars:
+    # Regenerate the initramfs after writing the amdgpu blacklist and the
+    # gfx1250 stubs. Without it the blacklist is inert at boot.
+    helios_update_initramfs: "{{ vm_helios_update_initramfs | default(true) }}"
+    # helios-tray uses in-tree amdgpu.ko — no DKMS patches needed. Use
+    # --set full because there is no amdgpu-dkms-firmware package installed
+    # on this guest to complement a gap-mode set.
+    helios_firmware_set: full
+    helios_firmware_generation: gfx1250
+    # Whether to run the rocjitsu container to generate firmware stubs.
+    helios_generate_firmware: "{{ vm_helios_generate_firmware | default(true) }}"
+
+  tasks:
+    - name: Blacklist amdgpu autoload
+      ansible.builtin.copy:
+        dest: /etc/modprobe.d/amdgpu-blacklist.conf
+        content: "blacklist amdgpu\n"
+        mode: '0644'
+
+    - name: Add amdgpu cmdline blacklist via grub.d
+      ansible.builtin.copy:
+        dest: /etc/default/grub.d/99-amdgpu-blacklist.cfg
+        content: |
+          GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT} modprobe.blacklist=amdgpu"
+        mode: '0644'
+
+    - name: Install initramfs hook to exclude amdgpu.ko from the image
+      ansible.builtin.copy:
+        dest: /etc/initramfs-tools/hooks/amdgpu-exclude
+        mode: '0755'
+        content: !unsafe |
+          #!/bin/sh
+          PREREQ=""
+          prereqs() { echo "${PREREQ}"; }
+          case "${1}" in prereqs) prereqs; exit 0 ;; esac
+          [ -n "${DESTDIR}" ] || exit 0
+          if [ -n "${__MODULES_TO_ADD:-}" ] && [ -f "${__MODULES_TO_ADD}" ]; then
+              grep -vx 'amdgpu' "${__MODULES_TO_ADD}" > "${__MODULES_TO_ADD}.keep" || true
+              mv "${__MODULES_TO_ADD}.keep" "${__MODULES_TO_ADD}"
+          fi
+          find "${DESTDIR}" -name 'amdgpu.ko*' -delete
+
+    - name: Generate and install the gfx1250 firmware stubs
+      when: helios_generate_firmware | bool
+      block:
+        - name: Resolve the rocjitsu image for firmware generation
+          ansible.builtin.set_fact:
+            helios_firmware_image: >-
+              {{ lookup('env', 'ROCJITSU_IMAGE')
+                 | default('docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261030.gadc94af-rocjitsu.73c3cf3', true) }}
+
+        - name: Show the rocjitsu image the stubs come from
+          ansible.builtin.debug:
+            msg: "Generating gfx1250 firmware stubs with {{ helios_firmware_image }}"
+
+        - name: Create local temp dir for firmware generation
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: helios_fw_
+          register: helios_fw_tmp
+          delegate_to: localhost
+          become: false
+
+        - name: Generate gfx1250 firmware stubs on controller via rocjitsu container
+          ansible.builtin.shell:
+            cmd: >-
+              set -o pipefail &&
+              docker run --rm --entrypoint /bin/sh
+              {{ helios_firmware_image }}
+              -c 'python3 /usr/local/bin/vfio_guest_firmware.py
+              --generation {{ helios_firmware_generation }}
+              --set {{ helios_firmware_set }} --output /out
+              && tar -cf - -C /out .'
+              | tar -xf - -C {{ helios_fw_tmp.path }}
+            executable: /bin/bash
+          delegate_to: localhost
+          become: false
+
+        - name: Assert the firmware stubs were generated
+          ansible.builtin.stat:
+            path: "{{ helios_fw_tmp.path }}/gc_12_1_0_imu.bin"
+          register: _helios_fw_stat
+          delegate_to: localhost
+          become: false
+          failed_when: not _helios_fw_stat.stat.exists
+
+        - name: Copy firmware stubs to guest /lib/firmware/amdgpu/
+          ansible.builtin.copy:
+            src: "{{ helios_fw_tmp.path }}/"
+            dest: /lib/firmware/amdgpu/
+            mode: '0644'
+
+        - name: Clean up local firmware temp dir
+          ansible.builtin.file:
+            path: "{{ helios_fw_tmp.path }}"
+            state: absent
+          delegate_to: localhost
+          become: false
+
+    - name: Regenerate initramfs so the amdgpu blacklist and stubs take effect
+      ansible.builtin.command:
+        cmd: update-initramfs -u -k all
+      when: helios_update_initramfs | bool
+      changed_when: true
+
+    - name: Assert amdgpu.ko absent from all initramfs images
+      ansible.builtin.shell:
+        cmd: |
+          found=0
+          for img in /boot/initrd.img-*; do
+            [ -f "$img" ] || continue
+            if lsinitramfs "$img" 2>/dev/null | grep -q 'amdgpu\.ko'; then
+              echo "ERROR: amdgpu.ko found in $img" >&2
+              found=1
+            fi
+          done
+          exit $found
+      when: helios_update_initramfs | bool
+      changed_when: false
+
+    - name: Update grub so the cmdline blacklist takes effect at next boot
+      ansible.builtin.command:
+        cmd: update-grub
+      when: helios_update_initramfs | bool
+      changed_when: true
+
+    - name: Assert modprobe.blacklist=amdgpu present in grub.cfg
+      ansible.builtin.shell:
+        cmd: grep -q 'modprobe.blacklist=amdgpu' /boot/grub/grub.cfg
+      when: helios_update_initramfs | bool
+      changed_when: false
+
+    - name: Install amdgpu probe script
+      ansible.builtin.copy:
+        dest: /usr/local/bin/amdgpu-probe
+        mode: '0755'
+        content: !unsafe |
+          #!/bin/bash
+          # Probe amdgpu with gfx1250 emulation parameters.
+          # Run after rocjitsu vfio-user server is ready.
+          set -euo pipefail
+
+          params=(
+            emu_mode=1
+            fw_load_type=0
+            discovery=2
+            ip_block_mask=0x7f
+            vm_update_mode=3
+            gpu_recovery=0
+            vramlimit=1024
+          )
+
+          if [ -d /sys/module/amdgpu ]; then
+            mismatch=()
+            for kv in "${params[@]}"; do
+              name=${kv%%=*}
+              want=${kv#*=}
+              if [ "$want" != "${want#0x}" ]; then
+                want=$((want))
+              fi
+              live=$(cat "/sys/module/amdgpu/parameters/$name" 2>/dev/null) || continue
+              if [ "$live" != "$want" ]; then
+                mismatch+=("$name: want $want, live $live")
+              fi
+            done
+
+            if [ ${#mismatch[@]} -eq 0 ]; then
+              if ls /dev/dri/render* >/dev/null 2>&1; then
+                echo "amdgpu already loaded with the emulation parameters."
+                exit 0
+              fi
+              echo "amdgpu loaded with correct parameters but no render nodes found." >&2
+              echo "Is /lib/firmware/amdgpu/ip_discovery.bin present?" >&2
+              exit 1
+            fi
+
+            echo "amdgpu is already loaded with the wrong parameters:" >&2
+            printf '  %s\n' "${mismatch[@]}" >&2
+            echo "modprobe cannot change these on a resident module. Either" >&2
+            echo "  sudo rmmod amdgpu && sudo $0" >&2
+            echo "or make the boot-time blacklist effective and reboot:" >&2
+            echo "  sudo update-initramfs -u && sudo reboot" >&2
+            exit 1
+          fi
+
+          exec sudo modprobe amdgpu "${params[@]}"
+
+- name: Install SDXI driver into VM image
+  hosts: all
+  gather_facts: true
+  become: true
+  vars_files:
+    - vars/sdxi-pins.yml
+  vars:
+    sdxi_guest_source_ref: "{{ sdxi_source_pin }}"
+  roles:
+    - role: sdxi_guest

@@ -252,6 +252,31 @@ what the CI lane is.
 .BR \-\-yes ", " \-y
 Take the default answer to every prompt without asking.
 .TP
+.BI \-\-flavor " NAME"
+Quickstart flavor to run.
+.RS
+.TP
+.B default
+Two guests each with an emulated gfx1250 GPU, one NVMe and one rocm-ernic NIC,
+driven by the bundled
+.IR qemu/env/quickstart.xml .
+This is the default when
+.B \-\-flavor
+is omitted.
+.TP
+.B mi355x
+One VM with 8 GPUs, 8 ernics and 8 PCIe switches in a switched topology,
+driven by the bundled
+.IR qemu/env/mi355x-node.xml .
+The ansible configure-and-test step does not run for this flavor.
+.TP
+.B helios
+One VM with 4 gfx1250 GPUs, 8 ernics and one SDXI device, driven by the
+bundled
+.IR qemu/env/helios-tray.xml .
+The ansible configure-and-test step does not run for this flavor.
+.RE
+.TP
 .BR \-f ", " \-\-follow
 Follow log output when running the
 .B logs
@@ -1093,6 +1118,13 @@ Inspect a single VM. Default: every running VM.
 .BI \-\-env\-file " FILE"
 Settings file. Overrides the search path, and is repeatable with later files
 winning key by key, as everywhere else.
+.TP
+.B \-\-all\-devices
+Expand collapsed device rows. When more than one GPU, RNIC or SDXI device is
+present,
+.B inspect
+normally shows a single count line for each type; this flag prints every
+device individually with its full BAR list.
 .TP
 .B \-\-json
 Emit JSON instead of the human\-readable report. The JSON carries the same

@@ -48,6 +48,7 @@ class FleetConfig:
     ernic_digest: str = ""
     rocjitsu_ref: str = ""
     rocjitsu_digest: str = ""
+    sdxi_ref: str = ""
     backing_ref: str = ""
     backing_digest: str = ""
 
@@ -59,6 +60,7 @@ class FleetConfig:
     # ---- Topology (devices per VM) ----
     ernic_per_vm: int = 1
     rocjitsu_per_vm: int = 1
+    sdxi_per_vm: int = 0
     vm_pcie_switch_width: int = 0
 
     # ---- ERNIC mesh ----
@@ -263,6 +265,7 @@ class FleetXml:
         _set_str("ernic_digest", "ernic-digest")
         _set_str("rocjitsu_ref", "rocjitsu-ref")
         _set_str("rocjitsu_digest", "rocjitsu-digest")
+        _set_str("sdxi_ref", "sdxi-image")
         _set_str("backing_ref", "backing-ref")
         _set_str("backing_digest", "backing-digest")
 
@@ -274,6 +277,7 @@ class FleetXml:
         # Topology
         _set_int("ernic_per_vm", "ernic-per-vm")
         _set_int("rocjitsu_per_vm", "rocjitsu-per-vm")
+        _set_int("sdxi_per_vm", "sdxi-per-vm")
         _set_int("vm_pcie_switch_width", "vm-pcie-switch-width")
 
         # ERNIC
@@ -391,6 +395,8 @@ class FleetXml:
             _flat("rocjitsu-ref", cfg.rocjitsu_ref)
         if cfg.rocjitsu_digest:
             _flat("rocjitsu-digest", cfg.rocjitsu_digest)
+        if cfg.sdxi_ref:
+            _flat("sdxi-image", cfg.sdxi_ref)
         if cfg.backing_ref:
             _flat("backing-ref", cfg.backing_ref)
         if cfg.backing_digest:
@@ -404,6 +410,8 @@ class FleetXml:
         # Topology
         _flat("ernic-per-vm", str(cfg.ernic_per_vm))
         _flat("rocjitsu-per-vm", str(cfg.rocjitsu_per_vm))
+        if cfg.sdxi_per_vm:
+            _flat("sdxi-per-vm", str(cfg.sdxi_per_vm))
         _flat("vm-pcie-switch-width", str(cfg.vm_pcie_switch_width))
 
         # ERNIC

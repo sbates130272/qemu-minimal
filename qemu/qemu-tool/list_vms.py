@@ -837,6 +837,14 @@ def _short_bdf(bdf: str) -> str:
     return bdf[5:] if bdf.startswith("0000:") else bdf
 
 
+def _fmt_truncated(items: list[str]) -> str:
+    if not items:
+        return "-"
+    if len(items) == 1:
+        return items[0]
+    return f"{items[0]} ({len(items) - 1} more)"
+
+
 def _fmt_nvme(v: dict[str, Any]) -> str:
     """The NVME column.
 
@@ -903,9 +911,9 @@ def _print_table(vms: list[dict[str, Any]], qemu_tool_only: bool = False) -> Non
             v["container"] or "-",
             ",".join(v["networks"]) or "-",
             ",".join(v["gpus"]) or "-",
-            ",".join(v["rdma_devices"]) or "-",
+            _fmt_truncated(v["rdma_devices"]),
             _fmt_nvme(v),
-            ",".join(Path(s).name for s in v["vfio_user_sockets"]) or "-",
+            _fmt_truncated([Path(s).name for s in v["vfio_user_sockets"]]),
             _fmt_mgmt(v),
         ])
 

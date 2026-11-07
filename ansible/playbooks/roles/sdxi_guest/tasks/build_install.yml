@@ -1,0 +1,129 @@
+---
+# Fetch source on the controller once, archive, copy to each guest, build.
+# run_once + delegate_to: localhost prevents N fleet hosts from simultaneously
+# cloning the same directory (races the git index).
+
+- name: Sparse-clone emulation/sdxi from rocm-systems on the controller
+  ansible.builtin.shell:
+    cmd: |
+      set -e
+      DEST="{{ sdxi_guest_controller_src_dir }}"
+      REF="{{ sdxi_guest_source_ref }}"
+      REPO="{{ sdxi_guest_source_repo }}"
+
+      # Fast path: already at the target ref and force not requested.
+      if [ "{{ sdxi_guest_force | bool }}" != "True" ] && [ -d "$DEST/.git" ]; then
+        CURRENT=$(cd "$DEST" && git rev-parse HEAD 2>/dev/null || true)
+        if [ "$CURRENT" = "$REF" ]; then
+          echo "$REF"
+          exit 0
+        fi
+      fi
+
+      if [ "{{ sdxi_guest_force | bool }}" = "True" ] && [ -d "$DEST" ]; then
+        rm -rf "$DEST"
+      fi
+
+      if [ ! -d "$DEST/.git" ]; then
+        git clone --filter=blob:none --sparse --branch develop "$REPO" "$DEST"
+        cd "$DEST"
+        git sparse-checkout set emulation/sdxi
+      else
+        cd "$DEST"
+        git sparse-checkout set emulation/sdxi
+        git fetch origin develop
+      fi
+
+      git checkout "$REF"
+      git rev-parse HEAD
+  delegate_to: localhost
+  run_once: true
+  register: _sdxi_clone
+  changed_when: _sdxi_clone.stdout.strip() != sdxi_guest_source_ref
+  when: not sdxi_guest_local_src_dir
+
+- name: Archive the driver and CLI subdirectories on the controller
+  ansible.builtin.command:  # noqa: command-instead-of-module
+    cmd: >-
+      tar czf /tmp/sdxi-src-{{ sdxi_guest_source_ref[:12] }}.tar.gz
+      -C {{ sdxi_guest_local_src_dir if sdxi_guest_local_src_dir else sdxi_guest_controller_src_dir }}
+      emulation/sdxi/drivers/sdxi_char
+      emulation/sdxi/tools/sdxi-cli
+  delegate_to: localhost
+  run_once: true
+  changed_when: true
+
+- name: Copy the source archive to the guest
+  ansible.builtin.copy:
+    src: "/tmp/sdxi-src-{{ sdxi_guest_source_ref[:12] }}.tar.gz"
+    dest: "/tmp/sdxi-src-{{ sdxi_guest_source_ref[:12] }}.tar.gz"
+    mode: "0644"
+
+- name: Remove stale build tree on the guest
+  ansible.builtin.file:
+    path: /tmp/emulation
+    state: absent
+
+- name: Extract the source archive on the guest
+  ansible.builtin.unarchive:
+    src: "/tmp/sdxi-src-{{ sdxi_guest_source_ref[:12] }}.tar.gz"
+    dest: /tmp
+    remote_src: true
+
+- name: Install build dependencies
+  ansible.builtin.apt:
+    name:
+      - build-essential
+      - "linux-headers-{{ sdxi_guest_kernel_resolved }}"
+    state: present
+    update_cache: false
+
+- name: Build the sdxi_char kernel module
+  community.general.make:
+    chdir: /tmp/emulation/sdxi/drivers/sdxi_char
+    params:
+      KDIR: "/lib/modules/{{ sdxi_guest_kernel_resolved }}/build"
+
+- name: Install the kernel module
+  ansible.builtin.copy:
+    src: /tmp/emulation/sdxi/drivers/sdxi_char/sdxi_char.ko
+    dest: "/{{ sdxi_guest_module_install_dir_prefix }}/{{ sdxi_guest_kernel_resolved }}/extra/sdxi_char.ko"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Run depmod
+
+- name: Remove pre-built sdxi-cli binary so make rebuilds from source
+  ansible.builtin.file:
+    path: /tmp/emulation/sdxi/tools/sdxi-cli/sdxi-cli
+    state: absent
+
+- name: Build the sdxi-cli userspace tool
+  community.general.make:
+    chdir: /tmp/emulation/sdxi/tools/sdxi-cli
+
+- name: Install sdxi-cli
+  ansible.builtin.copy:
+    src: /tmp/emulation/sdxi/tools/sdxi-cli/sdxi-cli
+    dest: "{{ sdxi_guest_cli_install_path }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Flush handlers so depmod runs before modprobe
+  ansible.builtin.meta: flush_handlers
+
+- name: Load the module now
+  community.general.modprobe:
+    name: sdxi_char
+    state: present
+
+- name: Write the installed ref stamp
+  ansible.builtin.copy:
+    dest: /etc/sdxi-guest-ref
+    content: "{{ sdxi_guest_source_ref }}\n"
+    owner: root
+    group: root
+    mode: "0644"

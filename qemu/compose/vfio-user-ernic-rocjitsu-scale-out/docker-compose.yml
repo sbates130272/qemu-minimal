@@ -503,7 +503,8 @@ services:
           cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
           rm -rf /tmp/qemu-tool-build/build /tmp/qemu-tool-build/*.egg-info
           python3 -m venv /tmp/qemu-tool-venv
-          /tmp/qemu-tool-venv/bin/pip install -q -e /tmp/qemu-tool-build
+          /tmp/qemu-tool-venv/bin/pip install -q setuptools wheel
+          /tmp/qemu-tool-venv/bin/pip install -q --no-build-isolation -e /tmp/qemu-tool-build
           mkdir -p /tmp/bin
           ln -sf /tmp/qemu-tool-venv/bin/qemu-tool /tmp/bin/qemu-tool
         else
@@ -548,7 +549,8 @@ services:
           cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
           rm -rf /tmp/qemu-tool-build/build /tmp/qemu-tool-build/*.egg-info
           python3 -m venv /tmp/qemu-tool-venv
-          /tmp/qemu-tool-venv/bin/pip install -q -e /tmp/qemu-tool-build
+          /tmp/qemu-tool-venv/bin/pip install -q setuptools wheel
+          /tmp/qemu-tool-venv/bin/pip install -q --no-build-isolation -e /tmp/qemu-tool-build
           mkdir -p /tmp/bin
           ln -sf /tmp/qemu-tool-venv/bin/qemu-tool /tmp/bin/qemu-tool
         else
@@ -593,7 +595,8 @@ services:
           cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
           rm -rf /tmp/qemu-tool-build/build /tmp/qemu-tool-build/*.egg-info
           python3 -m venv /tmp/qemu-tool-venv
-          /tmp/qemu-tool-venv/bin/pip install -q -e /tmp/qemu-tool-build
+          /tmp/qemu-tool-venv/bin/pip install -q setuptools wheel
+          /tmp/qemu-tool-venv/bin/pip install -q --no-build-isolation -e /tmp/qemu-tool-build
           mkdir -p /tmp/bin
           ln -sf /tmp/qemu-tool-venv/bin/qemu-tool /tmp/bin/qemu-tool
         else
@@ -638,7 +641,8 @@ services:
           cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
           rm -rf /tmp/qemu-tool-build/build /tmp/qemu-tool-build/*.egg-info
           python3 -m venv /tmp/qemu-tool-venv
-          /tmp/qemu-tool-venv/bin/pip install -q -e /tmp/qemu-tool-build
+          /tmp/qemu-tool-venv/bin/pip install -q setuptools wheel
+          /tmp/qemu-tool-venv/bin/pip install -q --no-build-isolation -e /tmp/qemu-tool-build
           mkdir -p /tmp/bin
           ln -sf /tmp/qemu-tool-venv/bin/qemu-tool /tmp/bin/qemu-tool
         else
@@ -683,7 +687,8 @@ services:
           cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
           rm -rf /tmp/qemu-tool-build/build /tmp/qemu-tool-build/*.egg-info
           python3 -m venv /tmp/qemu-tool-venv
-          /tmp/qemu-tool-venv/bin/pip install -q -e /tmp/qemu-tool-build
+          /tmp/qemu-tool-venv/bin/pip install -q setuptools wheel
+          /tmp/qemu-tool-venv/bin/pip install -q --no-build-isolation -e /tmp/qemu-tool-build
           mkdir -p /tmp/bin
           ln -sf /tmp/qemu-tool-venv/bin/qemu-tool /tmp/bin/qemu-tool
         else
@@ -728,7 +733,8 @@ services:
           cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
           rm -rf /tmp/qemu-tool-build/build /tmp/qemu-tool-build/*.egg-info
           python3 -m venv /tmp/qemu-tool-venv
-          /tmp/qemu-tool-venv/bin/pip install -q -e /tmp/qemu-tool-build
+          /tmp/qemu-tool-venv/bin/pip install -q setuptools wheel
+          /tmp/qemu-tool-venv/bin/pip install -q --no-build-isolation -e /tmp/qemu-tool-build
           mkdir -p /tmp/bin
           ln -sf /tmp/qemu-tool-venv/bin/qemu-tool /tmp/bin/qemu-tool
         else
@@ -773,7 +779,8 @@ services:
           cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
           rm -rf /tmp/qemu-tool-build/build /tmp/qemu-tool-build/*.egg-info
           python3 -m venv /tmp/qemu-tool-venv
-          /tmp/qemu-tool-venv/bin/pip install -q -e /tmp/qemu-tool-build
+          /tmp/qemu-tool-venv/bin/pip install -q setuptools wheel
+          /tmp/qemu-tool-venv/bin/pip install -q --no-build-isolation -e /tmp/qemu-tool-build
           mkdir -p /tmp/bin
           ln -sf /tmp/qemu-tool-venv/bin/qemu-tool /tmp/bin/qemu-tool
         else
@@ -818,7 +825,8 @@ services:
           cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
           rm -rf /tmp/qemu-tool-build/build /tmp/qemu-tool-build/*.egg-info
           python3 -m venv /tmp/qemu-tool-venv
-          /tmp/qemu-tool-venv/bin/pip install -q -e /tmp/qemu-tool-build
+          /tmp/qemu-tool-venv/bin/pip install -q setuptools wheel
+          /tmp/qemu-tool-venv/bin/pip install -q --no-build-isolation -e /tmp/qemu-tool-build
           mkdir -p /tmp/bin
           ln -sf /tmp/qemu-tool-venv/bin/qemu-tool /tmp/bin/qemu-tool
         else
@@ -863,7 +871,8 @@ services:
           cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
           rm -rf /tmp/qemu-tool-build/build /tmp/qemu-tool-build/*.egg-info
           python3 -m venv /tmp/qemu-tool-venv
-          /tmp/qemu-tool-venv/bin/pip install -q -e /tmp/qemu-tool-build
+          /tmp/qemu-tool-venv/bin/pip install -q setuptools wheel
+          /tmp/qemu-tool-venv/bin/pip install -q --no-build-isolation -e /tmp/qemu-tool-build
           mkdir -p /tmp/bin
           ln -sf /tmp/qemu-tool-venv/bin/qemu-tool /tmp/bin/qemu-tool
         else
@@ -1061,7 +1070,8 @@ services:
           cp -r /qemu-tool-src/qemu /tmp/qemu-tool-build
           rm -rf /tmp/qemu-tool-build/build /tmp/qemu-tool-build/*.egg-info
           python3 -m venv /tmp/qemu-tool-venv
-          /tmp/qemu-tool-venv/bin/pip install -q -e /tmp/qemu-tool-build
+          /tmp/qemu-tool-venv/bin/pip install -q setuptools wheel
+          /tmp/qemu-tool-venv/bin/pip install -q --no-build-isolation -e /tmp/qemu-tool-build
           mkdir -p /tmp/bin
           ln -sf /tmp/qemu-tool-venv/bin/qemu-tool /tmp/bin/qemu-tool
         else
@@ -1293,7 +1303,7 @@ networks:
   # resolution', and because the mesh allocates a NEW node id on
   # every reconnect, the restarts walked the fleet toward the
   # 64-node protocol ceiling. Third octet is the service family:
-  #   0 infra   1 ernic   2 rocjitsu   3 qemu
+  #   0 infra   1 ernic   2 rocjitsu   3 qemu   4 sdxi
   fleet:
     driver: bridge
     ipam:

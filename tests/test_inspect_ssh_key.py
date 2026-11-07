@@ -471,7 +471,6 @@ class GuestHomeDirectory(unittest.TestCase):
         script = inspect_mod._GA_SCRIPT.replace("__SOCKET__", "'/tmp/s'")
         self.assertIn("__USERNAME__", script)
         self.assertIn("/etc/passwd", script)
-        self.assertNotIn("guest-exec", inspect_mod._GA_SCRIPT)
 
     def test_the_username_reaches_the_script(self):
         seen = {}

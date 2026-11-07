@@ -1,0 +1,52 @@
+---
+# sdxi_guest: build and install the SDXI kernel driver and userspace CLI
+# inside a helios-tray guest.
+#
+# Source
+# ------
+# The role clones sbates130272/rocm-systems from GitHub on the CONTROLLER
+# (run_once, so fleet runs fetch once instead of N times through SLIRP),
+# archives the two relevant subdirectories from emulation/sdxi/, copies the
+# tarball to each guest, and builds there against the pinned kernel.
+#
+# No default for sdxi_guest_source_ref: a moving-target SHA baked into an
+# image image is worse than a failed play that says why it stopped.
+sdxi_guest_source_ref: ""
+sdxi_guest_source_repo: "https://github.com/sbates130272/rocm-systems.git"
+
+# Local directory on the CONTROLLER to clone into.  Shared across all hosts
+# in the play (run_once fetch); the tarball derived from it carries the ref
+# in its name so parallel builds for different refs do not stomp each other.
+sdxi_guest_controller_src_dir: "/tmp/sdxi-src"
+
+# Kernel the module is built against.  Empty means the running kernel
+# (uname -r), which is the right value for a live VM.  Set explicitly when
+# baking an image (must match the kernel that image will run).
+sdxi_guest_kernel: ""
+
+# Install paths inside the guest.
+sdxi_guest_module_install_dir_prefix: "/lib/modules"
+sdxi_guest_cli_install_path: "/usr/local/bin/sdxi-cli"
+
+# Device access
+# -------------
+# A misc device is root-owned by default.  The udev rule sets group=sdxi
+# mode=0660, so the user below just needs to be in the group.
+sdxi_guest_group: sdxi
+sdxi_guest_user: ubuntu
+
+# udev/99-sdxi.rules carried in this repo; files/ symlinks to it.  Set to ""
+# to skip installation (inherits whatever the image baked in).
+sdxi_guest_udev_rules_src: 99-sdxi.rules
+
+# Write /etc/modules-load.d/sdxi.conf so sdxi_char loads at boot.
+sdxi_guest_autoload: true
+
+# Force a rebuild even when the stamp file already matches the ref.
+sdxi_guest_force: false
+
+# Optional: use a local source tree instead of cloning from GitHub.
+# When set, the clone step is skipped and this directory is archived directly.
+# The directory must contain emulation/sdxi/drivers/sdxi_char and
+# emulation/sdxi/tools/sdxi-cli at its root (same layout as the upstream repo).
+sdxi_guest_local_src_dir: ""

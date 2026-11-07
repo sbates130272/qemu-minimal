@@ -454,16 +454,23 @@ def _vfio_user_switch_args(cfg: VMConfig) -> list[str]:
     ORDER IS THE PAIRING. The caller decides what ends up together by the
     order it passes --vfio-userdev; nothing here looks at what a socket
     serves.
+
+    Remainder devices (count % width != 0) are placed on plain root ports
+    instead of under a partial switch, keeping the switch tree uniform.
     """
     width = cfg.vfio_user_switch_width
     socks = cfg.vfio_userdev
+    n_full = (len(socks) // width) * width
+    switch_socks = socks[:n_full]
+    remainder_socks = socks[n_full:]
     args: list[str] = []
     # Unique across every port in the machine, root and downstream alike --
     # NOT per switch. QEMU uses (chassis, slot) to identify a slot, so a
     # repeated pair silently collapses two slots into one and the second
     # device never appears in the guest.
     chassis = 0
-    for s, start in enumerate(range(0, len(socks), width)):
+    num_switches = len(switch_socks) // width
+    for s, start in enumerate(range(0, len(switch_socks), width)):
         chassis += 1
         # hotplug=off on every port is load-bearing, not tidiness. A port
         # that accepts hotplug reserves an MMIO/IO window for the device
@@ -476,7 +483,7 @@ def _vfio_user_switch_args(cfg: VMConfig) -> list[str]:
             f"pcie-root-port,id=vfurp{s},chassis={chassis},slot={s},hotplug=off",
         ]
         args += ["-device", f"x3130-upstream,id=vfusw{s},bus=vfurp{s}"]
-        for k, sock in enumerate(socks[start:start + width]):
+        for k, sock in enumerate(switch_socks[start:start + width]):
             chassis += 1
             port = f"vfudp{s}.{k}"
             args += [
@@ -485,6 +492,15 @@ def _vfio_user_switch_args(cfg: VMConfig) -> list[str]:
                 f",chassis={chassis},slot={k},hotplug=off",
             ]
             args += ["-device", _vfio_user_dev_json(sock, port)]
+    # Remainder devices on plain root ports, numbered after all switch ports.
+    for j, sock in enumerate(remainder_socks):
+        rp_id = num_switches + j
+        chassis += 1
+        args += [
+            "-device",
+            f"pcie-root-port,id=vfurp{rp_id},chassis={chassis},slot={rp_id},hotplug=off",
+        ]
+        args += ["-device", _vfio_user_dev_json(sock, f"vfurp{rp_id}")]
     return args
 
 
@@ -510,7 +526,6 @@ def _vfio_userdev_args(cfg: VMConfig) -> list[str]:
     for sock in cfg.vfio_userdev:
         if not cfg.dry_run and not Path(sock).is_socket():
             sys.exit(f"ERROR: Socket {sock} does not exist.")
-
     if cfg.vfio_user_switch_width < 0:
         # Not silently "off": a negative width is a typo, and treating it as
         # off hands back a flat tree that looks like it worked.
@@ -519,23 +534,24 @@ def _vfio_userdev_args(cfg: VMConfig) -> list[str]:
             f"got {cfg.vfio_user_switch_width}."
         )
     if cfg.vfio_user_switch_width > 0:
-        return args + _vfio_user_switch_args(cfg)
+        args += _vfio_user_switch_args(cfg)
+    else:
+        for j, sock in enumerate(cfg.vfio_userdev, start=1):
+            # On the root complex by default. q35 IS a PCIe machine, but a device
+            # with no bus= lands on pcie.0 as a CONVENTIONAL PCI endpoint, with
+            # no Express capability and therefore no link speed or width -- the
+            # guest's ionic then logs "0.000 Gb/s available PCIe bandwidth
+            # (Unknown x255 link)". A root port gives it real PCIe semantics,
+            # which is what BAR-to-BAR DMA between two vfio-user devices needs.
+            bus = None
+            if cfg.vfio_user_root_port:
+                args += [
+                    "-device",
+                    f"pcie-root-port,id=vfur{j},chassis={j},slot={j}",
+                ]
+                bus = f"vfur{j}"
+            args += ["-device", _vfio_user_dev_json(sock, bus)]
 
-    for j, sock in enumerate(cfg.vfio_userdev, start=1):
-        # On the root complex by default. q35 IS a PCIe machine, but a device
-        # with no bus= lands on pcie.0 as a CONVENTIONAL PCI endpoint, with
-        # no Express capability and therefore no link speed or width -- the
-        # guest's ionic then logs "0.000 Gb/s available PCIe bandwidth
-        # (Unknown x255 link)". A root port gives it real PCIe semantics,
-        # which is what BAR-to-BAR DMA between two vfio-user devices needs.
-        bus = None
-        if cfg.vfio_user_root_port:
-            args += [
-                "-device",
-                f"pcie-root-port,id=vfur{j},chassis={j},slot={j}",
-            ]
-            bus = f"vfur{j}"
-        args += ["-device", _vfio_user_dev_json(sock, bus)]
     return args
 
 
