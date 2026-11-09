@@ -211,6 +211,8 @@
   vars_files:
     - vars/sdxi-pins.yml
   vars:
+    sdxi_guest_source_repo: "https://github.com/ROCm/rocm-systems.git"
+    sdxi_guest_source_branch: "users/stebates/emulation-sdxi"
     sdxi_guest_source_ref: "{{ sdxi_source_pin }}"
   roles:
     - role: sdxi_guest

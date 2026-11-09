@@ -24,14 +24,16 @@
         rm -rf "$DEST"
       fi
 
+      BRANCH="{{ sdxi_guest_source_branch }}"
+
       if [ ! -d "$DEST/.git" ]; then
-        git clone --filter=blob:none --sparse --branch develop "$REPO" "$DEST"
+        git clone --filter=blob:none --sparse --branch "$BRANCH" "$REPO" "$DEST"
         cd "$DEST"
         git sparse-checkout set emulation/sdxi
       else
         cd "$DEST"
         git sparse-checkout set emulation/sdxi
-        git fetch origin develop
+        git fetch origin "$BRANCH"
       fi
 
       git checkout "$REF"
