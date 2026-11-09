@@ -30,25 +30,8 @@ name: qemu-minimal - Report for mi355x
 # a documented path that nothing executes rots.
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'scripts/mi355x-node.sh'
-      - 'qemu/env/mi355x-node.xml'
-      - 'qemu/env/overlay-mi355x-ci.xml'
-      - 'qemu/compose/vfio-user-mi355x-node/**'
-      - 'ansible/playbooks/fleet-quickstart.yml'
-      - 'qemu/qemu-tool/**'
-      - 'qemu/pyproject.toml'
-      - '.github/workflows/qemu-minimal-report-for-mi355x.yml'
-      - '.github/workflows/qemu-minimal-publish-pages.yml'
-  # Daily, and deliberately not in the 08:00 block the four vm-* lanes share
-  # nor on report-for-quickstart's 11:17: this boots 17 device-server
-  # containers and publish-pages should not be assembling it alongside
-  # another fresh report.
-  schedule:
-    - cron: '41 13 * * *'
+  # Disabled: recurring "Configure the guest" failure under investigation.
+  # Re-enable by restoring the push/schedule triggers.
   workflow_dispatch:
 
 permissions:

@@ -399,8 +399,8 @@ jobs:
         # QEMU_TOOL_SRC is what the generated compose bind-mounts as
         # /qemu-tool-src; the entrypoint installs from it when it finds a
         # pyproject.toml there and from PyPI when it does not.
-        QEMU_TOOL_SRC="$STACK_DIR" docker compose --profile lmcache up --detach
-        docker compose --profile lmcache ps
+        QEMU_TOOL_SRC="$STACK_DIR" docker compose --env-file "$FLEET_ENV" --profile lmcache up --detach
+        docker compose --env-file "$FLEET_ENV" --profile lmcache ps
 
     # Both qemu containers publish SSH on the HOST, which this job container
     # cannot reach. Join the compose network and address guests by service
