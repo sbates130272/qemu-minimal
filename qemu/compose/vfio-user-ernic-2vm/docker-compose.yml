@@ -76,6 +76,8 @@ services:
     environment:
       - ERNIC_DEBUG_MESH
       - "ERNIC_TCP_GUEST_GIDS=${ERNIC1_GUEST_GIDS:-fe80::706f:63ff:fe6d:1,192.168.100.11}"
+      - "ERNIC_P4=true"
+      - "ERNIC_P4_GUEST_SCOPE=load"
     devices:
       - /dev/net/tun
     networks:
@@ -93,10 +95,11 @@ services:
           sleep 0.5
         done
         TAP_ARG=; [ -e /sys/class/net/tap0 ] && TAP_ARG="-T tap0"
+        P4_ARG=; [ "$${ERNIC_P4:-false}" = "true" ] && [ "$${ERNIC_P4_GUEST_SCOPE:-none}" != "none" ] && P4_ARG="--p4-guest-scope $$ERNIC_P4_GUEST_SCOPE"
         exec rocm-ernic -s /run/vfu/ernic-1.sock \
           -b "tcp:manager:listen:${ERNIC_TCP_PORT:-6320}" \
           -m "${ERNIC1_MAC:-72:6f:63:6d:00:01}" \
-          $$TAP_ARG
+          $$TAP_ARG $$P4_ARG
     healthcheck:
       test: ["CMD", "sh", "-c", "test -S /run/vfu/ernic-1.sock"]
       interval: 2s
@@ -133,6 +136,8 @@ services:
     environment:
       - ERNIC_DEBUG_MESH
       - "ERNIC_TCP_GUEST_GIDS=${ERNIC2_GUEST_GIDS:-fe80::706f:63ff:fe6d:2,192.168.100.12}"
+      - "ERNIC_P4=true"
+      - "ERNIC_P4_GUEST_SCOPE=load"
     devices:
       - /dev/net/tun
     networks:
@@ -152,10 +157,11 @@ services:
           sleep 0.5
         done
         TAP_ARG=; [ -e /sys/class/net/tap0 ] && TAP_ARG="-T tap0"
+        P4_ARG=; [ "$${ERNIC_P4:-false}" = "true" ] && [ "$${ERNIC_P4_GUEST_SCOPE:-none}" != "none" ] && P4_ARG="--p4-guest-scope $$ERNIC_P4_GUEST_SCOPE"
         exec rocm-ernic -s /run/vfu/ernic-2.sock \
           -b "tcp:worker:ernic-hub:${ERNIC_TCP_PORT:-6320}" \
           -m "${ERNIC2_MAC:-72:6f:63:6d:00:02}" \
-          $$TAP_ARG
+          $$TAP_ARG $$P4_ARG
     healthcheck:
       test: ["CMD", "sh", "-c", "test -S /run/vfu/ernic-2.sock"]
       interval: 2s
