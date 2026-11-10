@@ -1,0 +1,86 @@
+---
+# Make the vfu-doorbell-vm guest ready: install the guest tool and check both
+# devices are there. Re-runnable. Run it after the stack is up:
+#
+#   ansible-playbook -i inventory/vfu-doorbell.yml playbooks/vfu-doorbell-guest.yml
+#
+# The built-in scenarios only run when asked for, because they take a minute;
+# --tags all,selftest runs everything including them:
+#
+#   ansible-playbook ... --tags all,selftest
+#
+# The corporate CA is installed from $VM_CA_CERT_FILE if it is set, or from
+# -e db_ca_cert_file=<path>. It is skipped when neither is. It has to come from
+# here: the guest is an overlay on a published qcow2, which gets no cloud-init
+# seed, so `gen-vm --ca-cert` never reaches it.
+
+- name: Make the doorbell guest ready
+  hosts: doorbell
+  gather_facts: false
+  become: false
+  vars:
+    db_ca_cert_file: "{{ lookup('ansible.builtin.env', 'VM_CA_CERT_FILE') }}"
+  tasks:
+    - name: Install the extra CA certificate
+      become: true
+      ansible.builtin.copy:
+        src: "{{ db_ca_cert_file }}"
+        dest: "/usr/local/share/ca-certificates/{{ db_ca_cert_file | basename }}"
+        mode: "0644"
+      when: db_ca_cert_file | length > 0
+      register: db_ca_installed
+
+    - name: Rebuild the CA trust bundle
+      become: true
+      ansible.builtin.command:
+        cmd: update-ca-certificates
+      when: db_ca_installed is changed
+      changed_when: true
+
+    - name: Install xio-doorbell
+      become: true
+      ansible.builtin.copy:
+        src: "{{ db_bin_dir }}/xio-doorbell"
+        dest: /usr/local/bin/xio-doorbell
+        mode: "0755"
+
+    # The devices are plain PCI functions with vendor 1de0 and no driver; the
+    # tool maps their BARs through sysfs.
+    - name: Find the ringee and the ringer
+      ansible.builtin.command:
+        cmd: "lspci -n -d 1de0:"
+      register: db_lspci
+      changed_when: false
+
+    - name: Fail unless both devices are there
+      ansible.builtin.assert:
+        that:
+          - "'1de0:0001' in db_lspci.stdout"
+          - "'1de0:0002' in db_lspci.stdout"
+        fail_msg: >-
+          Expected the ringee (1de0:0001) and the ringer (1de0:0002); lspci
+          shows: {{ db_lspci.stdout }}
+
+    - name: Show what the tool sees
+      become: true
+      ansible.builtin.command:
+        cmd: /usr/local/bin/xio-doorbell info
+      register: db_info
+      changed_when: false
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: "{{ db_info.stdout_lines }}"
+
+    - name: Run the built-in scenarios
+      become: true
+      ansible.builtin.command:
+        cmd: /usr/local/bin/xio-doorbell selftest
+      register: db_selftest
+      changed_when: false
+      tags: [never, selftest]
+
+    - name: Report the scenarios
+      ansible.builtin.debug:
+        msg: "{{ db_selftest.stdout_lines }}"
+      tags: [never, selftest]

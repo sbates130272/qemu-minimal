@@ -49,6 +49,24 @@ All notable changes to this project will be documented in this file.
   kernel module. `xio-tester` still crashes intermittently, and once the guest
   hung after a run; the cause is not known.
 
+- **`vfu-doorbell-vm` compose stack: a vfio-user doorbell test rig.** Two small
+  vfio-user devices from rocm-xio's `tools/vfu-doorbell` and one guest. The
+  *ringee*'s BAR carries doorbell overlays (`index`, `keyed`, `event`) with
+  per-key counters the guest can read back; the *ringer* writes a programmed
+  pattern of values to any guest physical address through `vfu_mmio_write`,
+  the same call chain a rocjitsu doorbell store takes. Pinned to the
+  `sbates-fork` QEMU and libvfio-user images through `DOORBELL_`-prefixed
+  variables. The guest port is 2223, so it can run beside `vfio-user-xio-vm`.
+  `ansible/inventory/vfu-doorbell.yml` and `playbooks/vfu-doorbell-guest.yml`
+  install the guest tool and check both devices are there;
+  `tests/test_vfu_doorbell_stack.py` pins the socket order, the no-root
+  invariants, and that the settings file agrees with the compose defaults. The
+  `.deb`, the `Gen Compose Check` no-root check and the dry-run lane's
+  `compose config` check all cover it. Run it and the guest tool's
+  `selftest` passes all eight scenarios; `xio-doorbell ring ... --poll-mmio`
+  reproduces the single-socket deadlock between a guest MMIO read and a
+  server-initiated write on purpose.
+
 - **`qemu-tool qcow` subcommand for overlay management.** Lists all qcow2
   images found across the system path, `$XDG_DATA_HOME`, and `$VM_IMAGES_DIR`,
   with columns for size, backing file, delta, age, and NVMe scratch images.

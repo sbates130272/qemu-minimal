@@ -8,3 +8,4 @@ usr/share/qemu-tool/compose/vfio-user-ernic-2vm
 usr/share/qemu-tool/compose/vfio-user-ernic-rocjitsu-scale-out
 usr/share/qemu-tool/compose/vfio-user-mi355x-node
 usr/share/qemu-tool/compose/vfio-user-xio-vm
+usr/share/qemu-tool/compose/vfu-doorbell-vm

@@ -1,0 +1,38 @@
+# Settings for vfu-doorbell-vm.
+#   qemu-tool gen-vm  --env-file qemu/env/vfu-doorbell
+#   qemu-tool compose --stack vfu-doorbell-vm --env-file qemu/env/vfu-doorbell up -d
+
+# Guest: any image with sshd works, the rig needs no ROCm. This is the same
+# published image as the xio stack, so its sshd key is the one gen-vm fetches.
+VM_NAME=doorbell-1
+VM_BACKING_IMAGE=docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu:20261022.gc533d98-vm.resolute-ernic-rocjitsu-qm.c079195-qcow2
+VM_USERNAME=ubuntu
+VM_IMAGES_DIR=/var/lib/qemu-tool/images
+
+VM_VCPUS=4
+VM_VMEM=4096
+# SHM must be >= VMEM.
+VM_SHM_SIZE=6g
+# Not 2222, so this stack can run beside vfio-user-xio-vm.
+VM_SSH_PORT=2223
+
+# The QEMU must be the sbates-fork build whose vfio_user_dma_write dispatches to
+# MMIO (commit c88c83ebe2 and later). The servers run in the libvfio-user fork
+# image: they call vfu_mmio_write.
+DOORBELL_QEMU_IMAGE=batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:qemu.4cb9698-vfu.3719c3a
+DOORBELL_SERVER_IMAGE=batesste-ci-images-ubuntu-libvfio-user-sbates-fork:vfu.3719c3a
+
+# Where tools/vfu-doorbell/build-in-container.sh (in ROCm/rocm-xio) put the
+# vfu-doorbell and xio-doorbell binaries.
+DOORBELL_BIN_DIR=/tmp/vfu-doorbell/bin
+
+# Extra qemu-tool run-vm arguments, word-split. QEMU's own pci-testdev and an
+# NVMe controller are what `xio-doorbell ring --ringee qemu-pci-testdev` and
+# `--ringee qemu-nvme` ring.
+VM_QEMU_ARGS=--pci-testdev --nvme 1
+# To see each write reach them, also trace QEMU's memory-region writes:
+#   VM_QEMU_ARGS=--pci-testdev --nvme 1 --nvme-trace memory_region_ops_write
+# That traces every MMIO write in the VM, mostly PCI config-space access at
+# boot, so it floods the qemu log. Bring the stack up with `up -d` and read the
+# writes you rang with
+#   docker logs vfu-doorbell-vm-qemu-1 2>&1 | grep -E "pci-testdev|'nvme'"

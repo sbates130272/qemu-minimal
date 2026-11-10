@@ -18,6 +18,7 @@ _STACKS = (
     "vfio-user-ernic-rocjitsu-scale-out",
     "vfio-user-mi355x-node",
     "vfio-user-xio-vm",
+    "vfu-doorbell-vm",
 )
 _DEFAULT_STACK = "vfio-user-ernic-rocjitsu-vm"
 

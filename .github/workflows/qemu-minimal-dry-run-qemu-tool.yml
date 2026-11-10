@@ -732,6 +732,11 @@ jobs:
         qemu-tool compose --stack vfio-user-xio-vm config --quiet
         echo "✓ vfio-user-xio-vm compose config valid"
 
+    - name: "Validate: vfu-doorbell-vm compose config"
+      run: |
+        qemu-tool compose --stack vfu-doorbell-vm config --quiet
+        echo "✓ vfu-doorbell-vm compose config valid"
+
     - name: "Smoke: ernic and rocjitsu GPU servers create vfio-user sockets"
       run: |
         qemu-tool compose --stack vfio-user-ernic-rocjitsu-vm up --detach --no-deps ernic rocjitsu

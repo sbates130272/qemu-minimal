@@ -1,0 +1,131 @@
+---
+# vfio-user doorbell test rig: the tools/vfu-doorbell servers from ROCm/rocm-xio
+# and a guest with both attached.
+#
+#   ringee   a vfio-user PCI device whose BAR0 carries doorbell overlays (index,
+#            keyed, event) with readable per-key counters: the thing being rung
+#   ringer   a vfio-user PCI device the guest programs to write a pattern of
+#            values to any guest physical address through vfu_mmio_write: the
+#            thing doing the ringing
+#   qemu     the guest, with the two devices attached in that order
+#
+# There is no GPU, NIC or NVMe model here, which is the point: it exercises the
+# libvfio-user and QEMU delivery chain a rocjitsu doorbell store takes, without
+# the emulator or a driver in the way. Read the README before trusting a result.
+#
+# Usage:
+#   qemu-tool gen-vm  --env-file qemu/env/vfu-doorbell
+#   qemu-tool compose --stack vfu-doorbell-vm --env-file qemu/env/vfu-doorbell up -d
+#
+# Every image variable is DOORBELL_-prefixed on purpose. The other stacks read
+# QEMU_IMAGE, ERNIC_IMAGE and ROCJITSU_IMAGE, and `qemu/env/example` pins those
+# to the STOCK images; a shared .env would hand this stack a QEMU whose
+# vfio_user_dma_write cannot reach MMIO, and every ringer write would fail with
+# ENODEV rather than say why.
+#
+# Every container runs as the caller with no capabilities, as in the other
+# stacks. `qemu-tool compose` fills CONTAINER_USER and CONTAINER_KVM_GID in;
+# plain `docker compose` is told what to set (`:?`, never `:-`):
+#
+#   CONTAINER_USER=$(id -u):$(id -g) \
+#   CONTAINER_KVM_GID=$(getent group kvm | cut -d: -f3) docker compose up
+x-server-common: &server-common
+  image: "${DOORBELL_SERVER_IMAGE:-batesste-ci-images-ubuntu-libvfio-user-sbates-fork:vfu.3719c3a}"
+  volumes:
+    - vfu-sockets:/run/vfu
+    # The binaries are built by ROCm/rocm-xio's tools/vfu-doorbell/
+    # build-in-container.sh. They are mounted, not baked into an image, so a
+    # rebuild does not need a new image; stop the stack first, because a
+    # running binary on a bind mount cannot be overwritten.
+    - "${DOORBELL_BIN_DIR:-/tmp/vfu-doorbell/bin}:/opt/vfu:ro"
+  # After the guest disconnects compose brings up a fresh server with clean
+  # state; qemu depends_on service_healthy, so it waits for the sockets.
+  restart: on-failure
+  # ONE uid for both servers and the guest: a vfio-user socket is created 0755
+  # by its owner, so connect(2) from a qemu on another uid cannot attach.
+  user: "${CONTAINER_USER:?set CONTAINER_USER=<uid>:<gid>}"
+  cap_drop:
+    - ALL
+  security_opt:
+    - "no-new-privileges:true"
+
+services:
+  ringee:
+    <<: *server-common
+    command:
+      - /opt/vfu/vfu-doorbell
+      - --role
+      - ringee
+      - --socket
+      - /run/vfu/ringee.sock
+    healthcheck:
+      test: ["CMD", "sh", "-c", "test -S /run/vfu/ringee.sock"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 3s
+
+  ringer:
+    <<: *server-common
+    command:
+      - /opt/vfu/vfu-doorbell
+      - --role
+      - ringer
+      - --socket
+      - /run/vfu/ringer.sock
+    healthcheck:
+      test: ["CMD", "sh", "-c", "test -S /run/vfu/ringer.sock"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 3s
+
+  qemu:
+    # The sbates-fork image, not stock: its vfio_user_dma_write dispatches to
+    # MMIO regions, which is what lets the ringer's vfu_mmio_write reach the
+    # ringee's BAR.
+    image: "${DOORBELL_QEMU_IMAGE:-batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:qemu.4cb9698-vfu.3719c3a}"
+    depends_on:
+      ringee:
+        condition: service_healthy
+      ringer:
+        condition: service_healthy
+    volumes:
+      - vfu-sockets:/run/vfu:ro
+      - "${VM_IMAGES_DIR:-/var/lib/qemu-tool/images}:${VM_IMAGES_DIR:-/var/lib/qemu-tool/images}"
+    devices:
+      - /dev/kvm
+    user: "${CONTAINER_USER:?set CONTAINER_USER=<uid>:<gid>}"
+    group_add:
+      - "${CONTAINER_KVM_GID:?set CONTAINER_KVM_GID to the host kvm gid}"
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    # Guest RAM is a shared memfd the servers map (the ringer's SHM mode and its
+    # completion word write into it), so /dev/shm must hold all of it.
+    shm_size: "${VM_SHM_SIZE:-6g}"
+    ports:
+      - "${VM_SSH_PORT:-2223}:2222"
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        # ORDER IS THE GUEST'S DEVICE ORDER: the ringee is the first device and
+        # the ringer the second. The guest is $VM_IMAGES_DIR/$VM_NAME.qcow2,
+        # made beforehand by `qemu-tool gen-vm`.
+        exec qemu-tool run-vm \
+          --images "${VM_IMAGES_DIR:-/var/lib/qemu-tool/images}" \
+          --vm-name "${VM_NAME:-doorbell-1}" \
+          --vcpus "${VM_VCPUS:-4}" \
+          --vmem "${VM_VMEM:-4096}" \
+          --ssh-port 2222 \
+          --vfio-userdev /run/vfu/ringee.sock,/run/vfu/ringer.sock \
+          ${VM_QEMU_ARGS:-}
+
+volumes:
+  vfu-sockets:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs

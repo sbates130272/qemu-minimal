@@ -1,0 +1,23 @@
+---
+# The guest of vfu-doorbell-vm. Values come from qemu/env/vfu-doorbell.
+all:
+  vars:
+    ansible_host: 127.0.0.1
+    ansible_user: ubuntu
+    # The private half of the key gen-vm installed, from the VM's sidecar.
+    ansible_ssh_private_key_file: >-
+      {{ (lookup('ansible.builtin.file', db_images_dir ~ '/' ~ db_vm_name ~ '.json')
+          | from_json).ssh_key_file | regex_replace('[.]pub$', '') }}
+    ansible_ssh_common_args: >-
+      -o StrictHostKeyChecking=no
+      -o UserKnownHostsFile=/dev/null
+    db_settings_file: "{{ inventory_dir }}/../../qemu/env/vfu-doorbell"
+    db_images_dir: "{{ lookup('ansible.builtin.ini', 'VM_IMAGES_DIR type=properties file=' ~ db_settings_file) }}"
+    db_vm_name: "{{ lookup('ansible.builtin.ini', 'VM_NAME type=properties file=' ~ db_settings_file) }}"
+    db_bin_dir: "{{ lookup('ansible.builtin.ini', 'DOORBELL_BIN_DIR type=properties file=' ~ db_settings_file) }}"
+
+  children:
+    doorbell:
+      hosts:
+        doorbell-1:
+          ansible_port: "{{ lookup('ansible.builtin.ini', 'VM_SSH_PORT type=properties file=' ~ db_settings_file) }}"
