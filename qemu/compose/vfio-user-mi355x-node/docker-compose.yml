@@ -34,7 +34,7 @@ x-qemu-common: &qemu-common
   logging: *logging
   volumes:
     - vfu-sockets:/run/vfu:ro
-    - "/var/lib/qemu-tool/images:/var/lib/qemu-tool/images"
+    - "${VM_IMAGES_DIR:-/var/lib/qemu-tool/images}:${VM_IMAGES_DIR:-/var/lib/qemu-tool/images}"
     - "${QEMU_TOOL_SRC:-../../..}:/qemu-tool-src:ro"
   devices:
     - /dev/kvm
@@ -1836,7 +1836,7 @@ services:
           done
         fi
         exec /tmp/bin/qemu-tool run-vm \
-          --images "/var/lib/qemu-tool/images" \
+          --images "${VM_IMAGES_DIR:-/var/lib/qemu-tool/images}" \
           --vm-name "stebates-mi355x-1" \
           --ssh-port 2222 \
           --backing-shared \
@@ -1912,7 +1912,7 @@ services:
           done
         fi
         exec /tmp/bin/qemu-tool run-vm \
-          --images "/var/lib/qemu-tool/images" \
+          --images "${VM_IMAGES_DIR:-/var/lib/qemu-tool/images}" \
           --vm-name "stebates-mi355x-2" \
           --ssh-port 2222 \
           --backing-shared \
@@ -1988,7 +1988,7 @@ services:
           done
         fi
         exec /tmp/bin/qemu-tool run-vm \
-          --images "/var/lib/qemu-tool/images" \
+          --images "${VM_IMAGES_DIR:-/var/lib/qemu-tool/images}" \
           --vm-name "stebates-mi355x-3" \
           --ssh-port 2222 \
           --backing-shared \
@@ -2064,7 +2064,7 @@ services:
           done
         fi
         exec /tmp/bin/qemu-tool run-vm \
-          --images "/var/lib/qemu-tool/images" \
+          --images "${VM_IMAGES_DIR:-/var/lib/qemu-tool/images}" \
           --vm-name "stebates-mi355x-4" \
           --ssh-port 2222 \
           --backing-shared \
