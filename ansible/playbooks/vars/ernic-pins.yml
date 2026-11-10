@@ -16,4 +16,4 @@ ionic_kernel_pin: v7.2.6
 # the collection from a fixed SHA -- the sources and the roles that build them
 # could then come from different trees. Keep this equal to the version: field
 # in ansible/requirements.yml and bump both together.
-ernic_source_pin: 67ed8845cb85af6498ad81d12e0a67b3516e09ef
+ernic_source_pin: 90434a237232275fc8002cb3a6b5121ba836c594
