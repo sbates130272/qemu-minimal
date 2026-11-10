@@ -27,6 +27,7 @@
 [![Lmcache Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-lmcache.yml?branch=main&label=report-for-lmcache&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-lmcache.yml)
 [![Quickstart Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-quickstart.yml?branch=main&label=report-for-quickstart&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-quickstart.yml)
 [![Mi355x Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-mi355x.yml?branch=main&label=report-for-mi355x&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-mi355x.yml)
+[![Ernic SRQ+P4 Bake](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-ansible-playbook-test-vm-ernic-srq-p4.yml?branch=main&label=ernic-srq-p4-bake&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-ansible-playbook-test-vm-ernic-srq-p4.yml)
 [![All Reports Green](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-all-green.json&style=flat-square)](https://sbates130272.github.io/qemu-minimal/perf/)
 
 <!-- Performance. These are shields.io *endpoint* badges: the label, value and

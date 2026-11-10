@@ -9,10 +9,24 @@ name: qemu-minimal - Ansible Playbook Test - vm-ernic-srq-p4
 # playbook (modinfo + nm) run against the baked image and constitute the
 # pass/fail signal for this lane.
 #
-# Not a required check -- the DKMS build takes ~30 minutes and fires only
-# when the SRQ+P4 playbook or its inputs change.
+# Not a required check -- the DKMS build takes ~30 minutes. Scheduled weekly
+# and on push to main so the report badge and publish-pages artifact stay fresh.
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '23 11 * * 1'  # weekly Monday 11:23 UTC
+  push:
+    branches:
+      - main
+    paths:
+      - 'ansible/playbooks/vm-ernic-srq-p4.yml'
+      - 'ansible/playbooks/vm-ernic-srq.yml'
+      - 'ansible/playbooks/vars/ernic-pins.yml'
+      - 'ansible/requirements.yml'
+      - 'ansible/playbooks/roles/**'
+      - '.github/actions/setup-vm-job/action.yml'
+      - '.github/actions/report-image-size/action.yml'
+      - '.github/workflows/qemu-minimal-ansible-playbook-test-vm-ernic-srq-p4.yml'
   pull_request:
     branches:
       - main
@@ -104,3 +118,39 @@ jobs:
       uses: ./.github/actions/report-image-size
       with:
         vm-name: ernic-srq-p4-test
+
+    - name: Generate P4 bake report
+      if: always()
+      run: |
+        mkdir -p report
+        STATUS=${{ job.status }}
+        cat > report/index.md <<EOF
+        ---
+        title: Ernic SRQ+P4 Bake Report
+        ---
+
+        # Ernic SRQ+P4 DKMS Bake
+
+        **Status: ${STATUS}**
+
+        | | |
+        |---|---|
+        | Run | [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) |
+        | Triggered by | \`${{ github.event_name }}\` |
+        | QEMU image | \`${QEMU_IMAGE}\` |
+        | Backing image | \`${VM_BACKING_IMAGE}\` |
+        | Generated | $(date -u +%Y-%m-%dT%H:%M:%SZ) |
+
+        The SRQ+P4 ionic DKMS stack is built inside the guest by
+        \`ansible/playbooks/vm-ernic-srq-p4.yml\`. The playbook's own
+        verification tasks (depmod, modinfo, nm on \`ernic_p4.ko\`) are the
+        pass/fail signal for this lane.
+        EOF
+
+    - name: Upload P4 bake report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: vm-report-ernic-p4
+        path: report/
+        retention-days: 90

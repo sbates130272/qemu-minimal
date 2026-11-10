@@ -38,6 +38,11 @@ title: Reports
     <h2><a href="../hipfile-fio/">hipFile fio report</a></h2>
     <p>The fio <code>libhipfile</code> benchmark lane, published independently from the rocjitsu report.</p>
   </div>
+  <div class="report-card">
+    <span class="eyebrow">DKMS bake</span>
+    <h2><a href="../ernic-p4/">Ernic SRQ+P4 bake report</a></h2>
+    <p>Boots the published ernic-rocjitsu qcow2 and bakes the SRQ+P4 ionic DKMS stack in; verifies <code>ernic_p4.ko</code> is present and loadable.</p>
+  </div>
 </div>
 
 ## Lane summary
@@ -51,6 +56,7 @@ title: Reports
 | `report-for-quickstart` | Path-filtered push to `main`, daily 04:17 MST, manual dispatch | `/quickstart/` |
 | `report-for-mi355x` | Path-filtered push to `main`, daily 06:41 MST, manual dispatch | `/mi355x/` |
 | `report-for-hipfile-fio` | Path-filtered push to `main`, daily 01:00 MST, manual dispatch | `/hipfile-fio/` |
+| `vm-ernic-srq-p4` | Weekly Monday 11:23 UTC, path-filtered push to `main`, manual dispatch | `/ernic-p4/` |
 
 ## Why the reports stay separate
 
