@@ -288,6 +288,17 @@ _USER_REF = f'"{_USER_VAR}"'
 _KVM_GID_REF = '"${CONTAINER_KVM_GID:?set CONTAINER_KVM_GID to the host kvm gid}"'
 _UID_GID_RE = re.compile(r"[0-9]+:[0-9]+")
 
+# VM_IMAGES_DIR reaches the YAML as a compose variable reference for the same
+# reason CONTAINER_USER does: its value comes from qemu/xml/scale-out.xml as
+# ${HOME}/..., which expands to a host-specific path. Baking that path into
+# the render would fail `gen-compose --check` in CI (runner home != dev home).
+# The :- default matches the fleet XML default so plain `docker compose up`
+# against the committed stack uses the conventional path; qemu-tool compose
+# supplies the real value from the fleet XML via the caller environment.
+_VM_IMAGES_VAR = "VM_IMAGES_DIR"
+_VM_IMAGES_DEFAULT = "/var/lib/qemu-tool/images"
+_VM_IMAGES_REF = f"${{{_VM_IMAGES_VAR}:-{_VM_IMAGES_DEFAULT}}}"
+
 # Read-only Docker API in front of the socket, so the log collector never
 # holds the socket itself. See the alloy service for why that distinction is
 # the whole point rather than defence in depth.
@@ -1179,7 +1190,7 @@ def render_compose(
     out.append("  logging: *logging")
     out.append("  volumes:")
     out.append("    - vfu-sockets:/run/vfu:ro")
-    out.append(f'    - "{spec["vm_images_dir"]}:{spec["vm_images_dir"]}"')
+    out.append(f'    - "{_VM_IMAGES_REF}:{_VM_IMAGES_REF}"')
     if spec["vm_filesystem"]:
         # Same path inside the container as outside: run-vm passes the path
         # straight to -virtfs, so a remapped mount point would name a
@@ -1448,7 +1459,7 @@ def render_compose(
         # /tmp/bin is not on PATH. Missing this is the easy one: the install
         # succeeds and the failure is a bare "qemu-tool: not found" at exec.
         out.append("        exec /tmp/bin/qemu-tool run-vm \\")
-        out.append(f'          --images "{spec["vm_images_dir"]}" \\')
+        out.append(f'          --images "{_VM_IMAGES_REF}" \\')
         out.append(f'          --vm-name "{vm["name"]}" \\')
         out.append("          --ssh-port 2222 \\")
         out.append("          --backing-shared \\")
