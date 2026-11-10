@@ -4,7 +4,7 @@
 # Regenerate after changing qemu/xml/scale-out.xml:
 #   qemu-tool gen-compose --fleet-file qemu/xml/scale-out.xml
 #
-# env-sha256: 8e4c2238239b43ea9fc63bfe4954fc77a55dcfa7fc32bd69a5059001360b096d  # pre-commit: ignore
+# env-sha256: a919d982c7a833ea7a25ab6305ae4b98e7d7d1be5eeaf43e2165a5719583a7fc  # pre-commit: ignore
 
 x-logging: &logging
   driver: json-file
@@ -13,7 +13,7 @@ x-logging: &logging
     max-file: "3"
 
 x-ernic-common: &ernic-common
-  image: "docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261030.gadc94af-ernic.8f35f4a-vfu.5b9c722"
+  image: "docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261110.g05827f9-ernic.3111d40-vfu.05bb5e5"
   logging: *logging
   stop_signal: SIGKILL
   user: "${CONTAINER_USER:?set CONTAINER_USER=<uid>:<gid>}"
@@ -30,7 +30,7 @@ x-ernic-common: &ernic-common
     - ernic-stats:/run/ernic-stats
 
 x-qemu-common: &qemu-common
-  image: "docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261030.gadc94af-qemu11.1.3-vfu.5b9c722"
+  image: "docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261110.g05827f9-qemu11.1.3-vfu.05bb5e5"
   logging: *logging
   volumes:
     - vfu-sockets:/run/vfu:ro
@@ -315,7 +315,7 @@ services:
   # ---- VM 1 GPU ----
   rocjitsu-1:
     <<: *ernic-common
-    image: "docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261030.gadc94af-rocjitsu.73c3cf3"
+    image: "docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261110.g05827f9-rocjitsu.50be05a"
     networks:
       fleet:
         ipv4_address: 172.31.2.1
@@ -336,7 +336,7 @@ services:
   # ---- VM 2 GPU ----
   rocjitsu-2:
     <<: *ernic-common
-    image: "docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261030.gadc94af-rocjitsu.73c3cf3"
+    image: "docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261110.g05827f9-rocjitsu.50be05a"
     networks:
       fleet:
         ipv4_address: 172.31.2.2
@@ -357,7 +357,7 @@ services:
   # ---- VM 3 GPU ----
   rocjitsu-3:
     <<: *ernic-common
-    image: "docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261030.gadc94af-rocjitsu.73c3cf3"
+    image: "docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261110.g05827f9-rocjitsu.50be05a"
     networks:
       fleet:
         ipv4_address: 172.31.2.3
@@ -378,7 +378,7 @@ services:
   # ---- VM 4 GPU ----
   rocjitsu-4:
     <<: *ernic-common
-    image: "docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261030.gadc94af-rocjitsu.73c3cf3"
+    image: "docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261110.g05827f9-rocjitsu.50be05a"
     networks:
       fleet:
         ipv4_address: 172.31.2.4
@@ -399,7 +399,7 @@ services:
   # ---- VM 5 GPU ----
   rocjitsu-5:
     <<: *ernic-common
-    image: "docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261030.gadc94af-rocjitsu.73c3cf3"
+    image: "docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261110.g05827f9-rocjitsu.50be05a"
     networks:
       fleet:
         ipv4_address: 172.31.2.5
@@ -420,7 +420,7 @@ services:
   # ---- VM 6 GPU ----
   rocjitsu-6:
     <<: *ernic-common
-    image: "docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261030.gadc94af-rocjitsu.73c3cf3"
+    image: "docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261110.g05827f9-rocjitsu.50be05a"
     networks:
       fleet:
         ipv4_address: 172.31.2.6
@@ -441,7 +441,7 @@ services:
   # ---- VM 7 GPU ----
   rocjitsu-7:
     <<: *ernic-common
-    image: "docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261030.gadc94af-rocjitsu.73c3cf3"
+    image: "docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261110.g05827f9-rocjitsu.50be05a"
     networks:
       fleet:
         ipv4_address: 172.31.2.7
@@ -462,7 +462,7 @@ services:
   # ---- VM 8 GPU ----
   rocjitsu-8:
     <<: *ernic-common
-    image: "docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261030.gadc94af-rocjitsu.73c3cf3"
+    image: "docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261110.g05827f9-rocjitsu.50be05a"
     networks:
       fleet:
         ipv4_address: 172.31.2.8

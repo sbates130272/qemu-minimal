@@ -50,7 +50,7 @@ x-gpu-common: &gpu-common
 services:
   ernic:
     <<: *gpu-common
-    image: "${ERNIC_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261030.gadc94af-ernic.8f35f4a-vfu.5b9c722}"
+    image: "${ERNIC_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261110.g05827f9-ernic.3111d40-vfu.05bb5e5}"
     deploy:
       replicas: "${ERNIC_COUNT:-1}"
     command: ["rocm-ernic", "-s", "/run/vfu/ernic-1.sock"]
@@ -63,7 +63,7 @@ services:
 
   rocjitsu:
     <<: *gpu-common
-    image: "${ROCJITSU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261030.gadc94af-rocjitsu.73c3cf3}"
+    image: "${ROCJITSU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261110.g05827f9-rocjitsu.50be05a}"
     deploy:
       replicas: "${ROCJITSU_COUNT:-1}"
     command:
@@ -80,7 +80,7 @@ services:
       start_period: 5s
 
   qemu:
-    image: "${QEMU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261030.gadc94af-qemu11.1.3-vfu.5b9c722}"
+    image: "${QEMU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261110.g05827f9-qemu11.1.3-vfu.05bb5e5}"
     depends_on:
       ernic:
         condition: service_healthy
