@@ -262,7 +262,7 @@ def _repo_root(explicit: Path | None) -> Path | None:
 
 def _packaged_fleet(name: str = _FLEET_NAME) -> Path | None:
     """qemu/xml/<name>, from the checkout or from inside the wheel."""
-    source = Path(__file__).resolve().parent.parent / "env" / name
+    source = Path(__file__).resolve().parent.parent / "xml" / name
     if source.is_file():
         return source
     from .resources import XML as _XML_PACKAGE, packaged_path
