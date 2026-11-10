@@ -5,7 +5,7 @@
   This is the golden file; overlay-*.xml files layer delta keys on top.
   Edit this file and re-run `qemu-tool gen-compose` to regenerate the
   committed docker-compose.yml. All keys and their semantics are documented
-  in qemu/env/fleet-example.xml.
+  in qemu/xml/fleet-example.xml.
 
   IMPORTANT: this file is what gen-compose reads; the env-file path is gone.
 -->

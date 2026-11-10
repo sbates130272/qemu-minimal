@@ -4,7 +4,7 @@ An N-VM rocm-ernic mesh, one emulated RDMA NIC and one rocjitsu GPU per VM.
 Same topology as `vfio-user-ernic-2vm`, sized by a variable instead of by hand.
 
 **`docker-compose.yml`, `prometheus.yml` and `fleet-inventory.yml` in this
-directory are generated.** Edit [`qemu/env/scale-out.xml`](../../env/scale-out.xml)
+directory are generated.** Edit [`qemu/xml/scale-out.xml`](../../env/scale-out.xml)
 and regenerate; do not edit them directly. All three are committed so the
 stack stays reviewable in a diff and usable with plain `docker compose`, but a
 hand edit is lost on the next regeneration and the `Gen Compose Check` CI lane
@@ -14,22 +14,22 @@ will fail.
 every query groups by a label instead of naming a VM.
 
 ```bash
-qemu-tool gen-compose --fleet-file qemu/env/scale-out.xml
+qemu-tool gen-compose --fleet-file qemu/xml/scale-out.xml
 ```
 
 ## One golden file, plus overlays
 
-`qemu/env/scale-out.xml` is the **golden** settings file and the only one that
+`qemu/xml/scale-out.xml` is the **golden** settings file and the only one that
 documents every key. A fleet that differs from it — a CI lane, a particular
 host — states only the keys it differs on, in a small committed overlay named
 after the golden file on the command line:
 
 ```bash
 qemu-tool gen-compose \
-    --fleet-file qemu/env/scale-out.xml --fleet-file qemu/env/overlay-mi100.xml \
+    --fleet-file qemu/xml/scale-out.xml --fleet-file qemu/xml/overlay-mi100.xml \
     --output-dir /var/lib/qemu-tool/stacks/mi100-fleet
 qemu-tool compose --stack-dir /var/lib/qemu-tool/stacks/mi100-fleet \
-    --fleet-file qemu/env/scale-out.xml --fleet-file qemu/env/overlay-mi100.xml \
+    --fleet-file qemu/xml/scale-out.xml --fleet-file qemu/xml/overlay-mi100.xml \
     --profile metrics up -d
 ```
 
@@ -46,8 +46,8 @@ brings up the committed stack and reports success.
 This replaces four full copies of the same file —
 `env.scale-out{,-ci,-mi100,-strix}` — that shared about twenty identical keys
 and were hand-synced. The committed overlays are
-[`qemu/env/overlay-ci.xml`](../../env/overlay-ci.xml) and
-[`qemu/env/overlay-mi100.xml`](../../env/overlay-mi100.xml).
+[`qemu/xml/overlay-ci.xml`](../../env/overlay-ci.xml) and
+[`qemu/xml/overlay-mi100.xml`](../../env/overlay-mi100.xml).
 
 The generated files in this directory come from the golden file alone, so they
 record one `# env-file:` line. A render with an overlay records one line per
@@ -79,15 +79,15 @@ overlay the rest on it — `gen-compose` prints these commands with the names
 filled in:
 
 ```bash
-qemu-tool gen-vm --fleet-file qemu/env/scale-out.xml \
+qemu-tool gen-vm --fleet-file qemu/xml/scale-out.xml \
     --vm-name stebates-fleet-1 --backing-image "$VM_BACKING_IMAGE"
 for n in $(seq 2 8); do
-  qemu-tool gen-vm --fleet-file qemu/env/scale-out.xml \
+  qemu-tool gen-vm --fleet-file qemu/xml/scale-out.xml \
       --vm-name stebates-fleet-$n \
       --backing-file images/stebates-fleet-1-backing.qcow2
 done
 
-qemu-tool compose --fleet-file qemu/env/scale-out.xml \
+qemu-tool compose --fleet-file qemu/xml/scale-out.xml \
     --stack vfio-user-ernic-rocjitsu-scale-out --profile metrics up -d
 ```
 
@@ -95,7 +95,7 @@ One backing file serves the whole fleet, which is why `VM_BACKING_SHARED=true`
 is not optional here: all N VMs open it at once, and that needs
 `backing.file.locking=off`.
 
-For a fleet with an overlay, append `--fleet-file qemu/env/overlay-<name>.xml` to
+For a fleet with an overlay, append `--fleet-file qemu/xml/overlay-<name>.xml` to
 **every** command above — `gen-vm` takes it repeatedly too, and it is where
 `VM_IMAGES_DIR` comes from, so a layer dropped from one of them silently builds
 the overlays in the wrong directory. `VM_NAME_PREFIX` is not a `VMConfig` field
@@ -311,7 +311,7 @@ Opt in with `--profile lmcache`, on top of `--profile metrics`.
 
 ```bash
 docker build -t qemu-tool/lmcache-rocm:0.5.6-gfx1250 ../../docker/lmcache
-qemu-tool compose --fleet-file qemu/env/scale-out.xml \
+qemu-tool compose --fleet-file qemu/xml/scale-out.xml \
     --stack vfio-user-ernic-rocjitsu-scale-out \
     --profile metrics --profile lmcache up -d
 

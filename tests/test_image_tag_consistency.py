@@ -37,7 +37,7 @@ VFU_RE = re.compile(r"-(vfu\.[a-f0-9]+)")
 # Files to check: env files and CI workflow YAMLs.
 # qcow2 OCI tags use the same stamp but have no vfu component, so we
 # include them in the stamp check but skip them for the vfu check.
-ENV_GLOBS = ["qemu/env/*", ".github/workflows/*.yml"]
+ENV_GLOBS = ["qemu/xml/*", ".github/workflows/*.yml"]
 
 # Files deliberately allowed to use a different stamp from their siblings
 # because they are the "shop window" that tracks ahead.  Within each such

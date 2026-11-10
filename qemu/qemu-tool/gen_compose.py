@@ -144,7 +144,7 @@ _DEFAULTS = {
     "VM_VFIO_USER_ROOT_PORT": "true",
     # ---- LMCache -----------------------------------------------------------
     # Off by default so an env file that predates this feature regenerates
-    # byte-identical output. qemu/env/scale-out.xml turns it on.
+    # byte-identical output. qemu/xml/scale-out.xml turns it on.
     #
     # Two switches, not one, because they answer different questions.
     # LMCACHE_ENABLE decides whether the services and their scrape jobs are
@@ -367,7 +367,12 @@ def recorded_digest(compose_file: Path) -> str | None:
 
 
 def recorded_env_files(compose_file: Path) -> list[str]:
-    """The env-file layers a generated file names, in order. [] if none."""
+    """The env-file layers a generated file names, in order. [] if none.
+
+    New-format headers (design-time values inlined) emit no env-file lines;
+    this returns [] for them. Old-format headers still parse so that stacks
+    generated before the inlining change can be torn down without re-rendering.
+    """
     names: list[str] = []
     try:
         for line in compose_file.read_text().splitlines()[:_PROVENANCE_SCAN_LINES]:
@@ -389,10 +394,8 @@ def _env_file_args(
 
 
 def _provenance_lines(env_names: Sequence[str], digest: str) -> list[str]:
-    """One env-file line per layer, then the digest over all of them."""
-    out = [f"{_ENV_FILE_LINE}{name}" for name in env_names]
-    out.append(f"{_PROVENANCE}{digest}  # pre-commit: ignore")
-    return out
+    """The digest over all env layers (design-time values are inlined)."""
+    return [f"{_PROVENANCE}{digest}  # pre-commit: ignore"]
 
 
 def _get(values: dict[str, str], key: str) -> str:
@@ -778,6 +781,9 @@ def plan(values: dict[str, str]) -> dict[str, Any]:
         "rocjitsu_per_vm": rocjitsu_per_vm,
         "sdxi_per_vm": sdxi_per_vm,
         "switch_width": _switch_width,
+        "ernic_image": _get(values, "ERNIC_IMAGE"),
+        "qemu_image": _get(values, "QEMU_IMAGE"),
+        "vm_images_dir": _get(values, "VM_IMAGES_DIR"),
         "cpu_sockets": _get(values, "VM_CPU_SOCKETS"),
         "cpu_phys_bits": _get(values, "VM_CPU_PHYS_BITS"),
         "pci_hole64_size": _get(values, "VM_PCI_HOLE64_SIZE"),
@@ -1116,7 +1122,7 @@ def render_compose(
     out.append(f'    max-file: "{spec["log_max_file"]}"')
     out.append("")
     out.append("x-ernic-common: &ernic-common")
-    out.append('  image: "${ERNIC_IMAGE}"')
+    out.append(f'  image: "{spec["ernic_image"]}"')
     out.append("  logging: *logging")
     # rocm-ernic does not handle SIGTERM: measured, `docker stop` on one takes
     # 12.5 s and the container exits 137, which is the SIGKILL after Docker's
@@ -1169,11 +1175,11 @@ def render_compose(
     out.append("    - ernic-stats:/run/ernic-stats")
     out.append("")
     out.append("x-qemu-common: &qemu-common")
-    out.append('  image: "${QEMU_IMAGE}"')
+    out.append(f'  image: "{spec["qemu_image"]}"')
     out.append("  logging: *logging")
     out.append("  volumes:")
     out.append("    - vfu-sockets:/run/vfu:ro")
-    out.append('    - "${VM_IMAGES_DIR}:${VM_IMAGES_DIR}"')
+    out.append(f'    - "{spec["vm_images_dir"]}:{spec["vm_images_dir"]}"')
     if spec["vm_filesystem"]:
         # Same path inside the container as outside: run-vm passes the path
         # straight to -virtfs, so a remapped mount point would name a
@@ -1361,7 +1367,7 @@ def render_compose(
         out.append(f"  # ---- {label} ----")
         out.append(f"  {gpu['service']}:")
         out.append("    <<: *ernic-common")
-        out.append('    image: "${ROCJITSU_IMAGE}"')
+        out.append(f'    image: "{spec["rocjitsu_image"]}"')
         out.append("    networks:")
         out.append("      fleet:")
         out.append(f"        ipv4_address: {gpu['addr']}")
@@ -1388,7 +1394,7 @@ def render_compose(
         out.append(f"  # ---- {label} ----")
         out.append(f"  {sdxi['service']}:")
         out.append("    <<: *ernic-common")
-        out.append('    image: "${SDXI_IMAGE}"')
+        out.append(f'    image: "{spec["sdxi_image"]}"')
         out.append("    networks:")
         out.append("      fleet:")
         out.append(f"        ipv4_address: {sdxi['addr']}")
@@ -1442,7 +1448,7 @@ def render_compose(
         # /tmp/bin is not on PATH. Missing this is the easy one: the install
         # succeeds and the failure is a bare "qemu-tool: not found" at exec.
         out.append("        exec /tmp/bin/qemu-tool run-vm \\")
-        out.append('          --images "${VM_IMAGES_DIR}" \\')
+        out.append(f'          --images "{spec["vm_images_dir"]}" \\')
         out.append(f'          --vm-name "{vm["name"]}" \\')
         out.append("          --ssh-port 2222 \\")
         out.append("          --backing-shared \\")

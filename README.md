@@ -72,7 +72,7 @@
      ever disagree, the guest cannot create an SRQ at all. See AGENTS.md
      issue 20.
 
-     "The row below" means the FLEET row, the one tracking qemu/env/scale-out.xml
+     "The row below" means the FLEET row, the one tracking qemu/xml/scale-out.xml
      -- that is where LMCache and therefore SRQ live. The quick-start badge
      is deliberately ahead of both and is not part of this pairing; it boots
      no LMCache and creates no SRQ. -->
@@ -85,7 +85,7 @@
      is the opposite of what these are for -- the point is which build the
      stacks are on, not which exists.
 
-     WHICH FILE THESE TRACK: qemu/env/scale-out.xml, the fleet settings. That is
+     WHICH FILE THESE TRACK: qemu/xml/scale-out.xml, the fleet settings. That is
      the pin a long soak runs on and the one the committed stack is generated
      from. Within it the five share one <date>.<ci-sha> stamp by
      construction: gen_compose.py's _check_image_coherence refuses a mixed
@@ -95,13 +95,13 @@
      the component revision that distinguishes the build.
 
      The quick-start badge is separate BECAUSE it is separate. The coherence
-     check is per settings file, not across them, and qemu/env/quickstart.xml
+     check is per settings file, not across them, and qemu/xml/quickstart.xml
      runs ahead of the fleet on purpose -- it is the shop window and should
      show the current build. One badge for it, carrying its own stamp; do not
      try to fold it into the row above, and do not "fix" the two to agree.
 
      sbates-fork is the odd one out in the other direction: it is pinned only
-     by the qemu/env/overlay-mi100.xml overlay, for vfio-user P2P DMA, and
+     by the qemu/xml/overlay-mi100.xml overlay, for vfio-user P2P DMA, and
      carries a QEMU patch the stock image does not. See AGENTS.md issue 19. -->
 [![CI image build](https://img.shields.io/badge/ci--images-20261029.g020459a-informational?style=flat-square&logo=docker)](https://hub.docker.com/u/sbates130272)
 [![Qemu](https://img.shields.io/badge/qemu-11.1.3-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user/tags)
@@ -111,7 +111,7 @@
 [![Guest Qcow2](https://img.shields.io/badge/guest-resolute%20%7C%20qm.ae551b3-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu/tags)
 [![Qemu Fork](https://img.shields.io/badge/sbates--fork-qemu.f91f120-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork/tags)
 
-<!-- What `qemu-tool quick-start` boots, from qemu/env/quickstart.xml. One badge,
+<!-- What `qemu-tool quick-start` boots, from qemu/xml/quickstart.xml. One badge,
      carrying that file's own build stamp; the ernic and rocjitsu revisions
      it implies are the ones in that stamp's tags. -->
 [![Quick-start Build](https://img.shields.io/badge/quick--start-20261029.g020459a-success?style=flat-square&logo=docker)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu/tags)
@@ -191,7 +191,7 @@ every morning. It:
    its SSH keypair, which
    ships beside it as an ORAS referrer;
 3. creates two overlays of one backing file and generates a two-VM stack from
-   [`qemu/env/quickstart.xml`](qemu/env/quickstart.xml);
+   [`qemu/xml/quickstart.xml`](qemu/xml/quickstart.xml);
 4. brings the stack up — per guest a `rocm-ernic` NIC server, a `rocjitsu` GPU
    server and a QEMU container, with the two NICs joined by a TCP mesh, plus
    Prometheus and Grafana;
@@ -465,21 +465,21 @@ NIC and one rocjitsu GPU per VM — from the fleet keys in a settings file. Same
 topology as `vfio-user-ernic-2vm`, sized by a variable rather than by hand.
 
 ```bash
-qemu-tool gen-compose --fleet-file qemu/env/scale-out.xml
-qemu-tool compose --fleet-file qemu/env/scale-out.xml \
+qemu-tool gen-compose --fleet-file qemu/xml/scale-out.xml
+qemu-tool compose --fleet-file qemu/xml/scale-out.xml \
     --stack vfio-user-ernic-rocjitsu-scale-out --profile metrics up -d
 ```
 
-`qemu/env/scale-out.xml` is the one authoritative fleet settings file. A host or a
+`qemu/xml/scale-out.xml` is the one authoritative fleet settings file. A host or a
 CI lane that needs different values adds a small committed overlay on top of it
 rather than a whole fourth copy to hand-sync — `--fleet-file` is repeatable and
 later files win key by key:
 
 ```bash
-qemu-tool gen-compose --fleet-file qemu/env/scale-out.xml --fleet-file qemu/env/overlay-mi100.xml \
+qemu-tool gen-compose --fleet-file qemu/xml/scale-out.xml --fleet-file qemu/xml/overlay-mi100.xml \
     --output-dir /var/lib/qemu-tool/stacks/mi100-fleet
 qemu-tool compose --stack-dir /var/lib/qemu-tool/stacks/mi100-fleet \
-    --fleet-file qemu/env/scale-out.xml --fleet-file qemu/env/overlay-mi100.xml \
+    --fleet-file qemu/xml/scale-out.xml --fleet-file qemu/xml/overlay-mi100.xml \
     --profile metrics up -d
 ```
 
@@ -550,17 +550,17 @@ With `--profile metrics` the stack also brings up Prometheus and
 `qemu-tool ernic-stats`, which serves the per-QP counters each `rocm-ernic -S`
 writes. Full detail in
 [the stack README](qemu/compose/vfio-user-ernic-rocjitsu-scale-out/README.md)
-and [`qemu/env/scale-out.xml`](qemu/env/scale-out.xml), with the committed overlays in
-[`qemu/env/overlay-ci.xml`](qemu/env/overlay-ci.xml) and
-[`qemu/env/overlay-mi100.xml`](qemu/env/overlay-mi100.xml).
+and [`qemu/xml/scale-out.xml`](qemu/xml/scale-out.xml), with the committed overlays in
+[`qemu/xml/overlay-ci.xml`](qemu/xml/overlay-ci.xml) and
+[`qemu/xml/overlay-mi100.xml`](qemu/xml/overlay-mi100.xml).
 
 ### Settings file
 
-`qemu/env/fleet-example.xml` is the XML fleet config template. Copy it and
+`qemu/xml/fleet-example.xml` is the XML fleet config template. Copy it and
 edit; `gen-vm`, `run-vm`, `gen-compose` and `compose` all accept `--fleet-file`.
 
 ```bash
-cp qemu/env/fleet-example.xml my-fleet.xml
+cp qemu/xml/fleet-example.xml my-fleet.xml
 $EDITOR my-fleet.xml
 ```
 
@@ -808,7 +808,7 @@ the reason rather than passed over. Run under `sudo` to include them.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--stack NAME` | `vfio-user-ernic-rocjitsu-scale-out` | Stack to generate |
-| `--env-file FILE` | search path | Settings file (see `qemu/env/scale-out.xml`). Repeatable: later files override keys set by earlier ones |
+| `--env-file FILE` | search path | Settings file (see `qemu/xml/scale-out.xml`). Repeatable: later files override keys set by earlier ones |
 | `--output-dir DIR` | the stack directory | Where to write |
 | `--check` | off | Exit non-zero if regenerating would change anything; writes nothing |
 | `--dry-run` | off | Print the generated files instead of writing them |
@@ -842,7 +842,7 @@ script used to:
   is `gen-compose --output-dir` after editing `VM_COUNT` yourself. Those files
   are tracked and hand-written, with the reasoning for each value in the
   comments above it; a tool that rewrites `VM_COUNT` as a side effect of `up`
-  can write it into `qemu/env/scale-out.xml` and break `Gen Compose Check` from a
+  can write it into `qemu/xml/scale-out.xml` and break `Gen Compose Check` from a
   command that looks like a start.
 - **It is not a command runner.** `ssh`/`each` over a fleet is
 

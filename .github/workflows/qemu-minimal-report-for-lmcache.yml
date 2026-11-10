@@ -47,8 +47,8 @@ env:
   # "Apply the runner-derived sizing". --fleet-file is repeatable in qemu-tool
   # and the last file wins key by key, so every call site below passes
   # $FLEET_ARGS rather than one file.
-  FLEET_GOLDEN: qemu/env/scale-out.xml
-  FLEET_OVERLAY: qemu/env/overlay-ci.xml
+  FLEET_GOLDEN: qemu/xml/scale-out.xml
+  FLEET_OVERLAY: qemu/xml/overlay-ci.xml
   FLEET_SIZING: /tmp/fleet.overlay-sizing.xml
   STACK_DIR: /var/lib/qemu-tool/stacks/lmcache-ci
   LMCACHE_IMAGE: qemu-tool/lmcache-rocm:0.5.6-gfx1250-srq

@@ -219,7 +219,7 @@ def _add_quick_start(sub: argparse._SubParsersAction) -> None:
     p.add_argument(
         "--fleet-file", action="append", type=Path, default=None, metavar="FILE",
         help=(
-            "Fleet XML file. Defaults to the bundled qemu/env/quickstart.xml. "
+            "Fleet XML file. Defaults to the bundled qemu/xml/quickstart.xml. "
             "Repeatable: later files override keys set by earlier ones."
         ),
     )
@@ -485,7 +485,7 @@ def _add_gen_compose(sub: argparse._SubParsersAction) -> None:
         description=(
             "Generate docker-compose.yml and prometheus.yml for an N-VM "
             "rocm-ernic mesh from the fleet XML descriptor. Per-VM values are "
-            "comma-lists, not numbered keys; see qemu/env/scale-out.xml."
+            "comma-lists, not numbered keys; see qemu/xml/scale-out.xml."
         ),
     )
     p.add_argument(
@@ -495,7 +495,7 @@ def _add_gen_compose(sub: argparse._SubParsersAction) -> None:
     p.add_argument(
         "--fleet-file", action="append", type=Path, default=None, metavar="FILE",
         help=(
-            "Fleet descriptor XML (see qemu/env/scale-out.xml). "
+            "Fleet descriptor XML (see qemu/xml/scale-out.xml). "
             "Repeatable: later files override keys set by earlier ones."
         ),
     )
@@ -524,7 +524,7 @@ def _add_fleet_to_env(sub: argparse._SubParsersAction) -> None:
             "env file for commands that do not yet accept --fleet-file "
             "(docker compose --env-file, inspect).\n\n"
             "Example:\n"
-            "  qemu-tool fleet-to-env --fleet-file qemu/env/scale-out.xml \\\n"
+            "  qemu-tool fleet-to-env --fleet-file qemu/xml/scale-out.xml \\\n"
             "    > /tmp/fleet.env\n"
             "  docker compose --env-file /tmp/fleet.env ..."
         ),
@@ -532,7 +532,7 @@ def _add_fleet_to_env(sub: argparse._SubParsersAction) -> None:
     p.add_argument(
         "--fleet-file", action="append", type=Path, default=None, metavar="FILE",
         help=(
-            "Fleet descriptor XML (see qemu/env/scale-out.xml). "
+            "Fleet descriptor XML (see qemu/xml/scale-out.xml). "
             "Repeatable: later files override keys set by earlier ones."
         ),
     )
@@ -930,7 +930,7 @@ def _add_gen_vm(
     p.add_argument(
         "--fleet-file", action="append", type=Path, default=None, metavar="FILE",
         help=(
-            "Fleet descriptor XML (see qemu/env/scale-out.xml). "
+            "Fleet descriptor XML (see qemu/xml/scale-out.xml). "
             "Repeatable: later files override keys set by earlier ones. "
             "Takes lower priority than --env-file."
         ),

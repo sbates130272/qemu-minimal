@@ -15,7 +15,7 @@ driver and userspace CLI against the emulated SDXI device in a
 
 ```bash
 # on the host: start the stack
-qemu-tool compose --fleet-file qemu/env/helios-tray.xml \
+qemu-tool compose --fleet-file qemu/xml/helios-tray.xml \
     --stack vfio-user-helios-tray up -d
 # wait for SSH
 qemu-tool ssh stebates-helios-1 -- hostname

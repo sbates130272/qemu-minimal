@@ -1,6 +1,6 @@
 """Read VM settings from an env-format file for docker compose.
 
-The authoritative format is now fleet XML (see qemu/env/fleet-example.xml).
+The authoritative format is now fleet XML (see qemu/xml/fleet-example.xml).
 Env-format files remain for commands that pass --env-file to docker compose;
 use `qemu-tool fleet-to-env` to generate one from an XML fleet config.
 """

@@ -28,7 +28,7 @@ from pathlib import Path
 from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-ENV_FILE = REPO_ROOT / "qemu" / "env" / "quickstart.xml"
+ENV_FILE = REPO_ROOT / "qemu" / "xml" / "quickstart.xml"
 
 
 def _load_package():
@@ -49,17 +49,17 @@ from qemu_tool import quick_start as qs  # noqa: E402
 
 
 def _env_package_data() -> str:
-    """The wheel's env allow-list, from [tool.setuptools.package-data].
+    """The wheel's xml allow-list, from [tool.setuptools.package-data].
 
     Anchored on the LIST form. The same key appears under package-dir as a
-    bare string ("qemu_tool.share.env" = "env"), and a naive split takes that
+    bare string ("qemu_tool.share.xml" = "xml"), and a naive split takes that
     one -- which is how the first version of this check compared against the
-    string "env" rather than the file list.
+    string "xml" rather than the file list.
     """
     text = (REPO_ROOT / "qemu" / "pyproject.toml").read_text()
-    match = re.search(r'^"qemu_tool\.share\.env"\s*=\s*(\[[^\]]*\])',
+    match = re.search(r'^"qemu_tool\.share\.xml"\s*=\s*(\[[^\]]*\])',
                       text, re.M)
-    assert match, "no package-data list for qemu_tool.share.env"
+    assert match, "no package-data list for qemu_tool.share.xml"
     return match.group(1)
 
 
@@ -169,7 +169,7 @@ class PromptTest(unittest.TestCase):
 
 
 class SettingsFileTest(unittest.TestCase):
-    """The promises qemu/env/quickstart.xml makes to the subcommand."""
+    """The promises qemu/xml/quickstart.xml makes to the subcommand."""
 
     def setUp(self):
         state = _state()
@@ -223,7 +223,7 @@ class SettingsFileTest(unittest.TestCase):
         # from the checkout, so it was answering a question nobody asked.
         # Measured afterwards on a real `uv tool install ./qemu`:
         # _packaged_env() returned None and `quick-start` exited with
-        # "qemu/env/quickstart.xml is missing from this install".
+        # "qemu/xml/quickstart.xml is missing from this install".
         self.assertIn('"quickstart.xml"', _env_package_data(),
                       "quickstart.xml is not in the wheel's env allow-list: "
                       + _env_package_data())
@@ -349,7 +349,7 @@ class NoStaleScriptTest(unittest.TestCase):
 
     HAYSTACK = ("README.md", "AGENTS.md", "site/reports.md",
                 ".github/workflows/qemu-minimal-report-for-quickstart.yml",
-                "qemu/env/quickstart.xml",
+                "qemu/xml/quickstart.xml",
                 "ansible/playbooks/fleet-quickstart.yml")
 
     def test_the_script_is_gone(self):

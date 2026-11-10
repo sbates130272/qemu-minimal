@@ -9,7 +9,7 @@
   stack's 32, so vcpus and vmem are halved, and shm_size returns to default.
 
   Usage: qemu-tool gen-compose
-    fleet-file: qemu/env/mi355x-node.xml, qemu/env/overlay-mi355x-ci.xml
+    fleet-file: qemu/xml/mi355x-node.xml, qemu/xml/overlay-mi355x-ci.xml
     output-dir: /var/lib/qemu-tool/stacks/mi355x-ci
 -->
 <fleet xmlns="http://qemu-tool/fleet/1.0">

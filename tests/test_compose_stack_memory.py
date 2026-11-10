@@ -69,7 +69,7 @@ class TestDiscovery(StackMemoryCase):
         os.chdir(cdir)
         self.assertEqual(self._run(["compose", "ps"]), 0)
         self.assertEqual(Path(self.capture.cwd), cdir)
-        self.assertEqual(self._env_args(), [str(p) for p in layers])
+        self.assertEqual(self._env_args(), [])
 
     def test_a_subdirectory_is_not_a_stack_dir(self):
         """No walk-up: the thing found must be the thing run."""
@@ -112,7 +112,7 @@ class TestDiscovery(StackMemoryCase):
         os.environ[compose._STACK_DIR_ENV] = str(cdir)
         self.assertEqual(self._run(["compose", "ps"]), 0)
         self.assertEqual(Path(self.capture.cwd), cdir)
-        self.assertEqual(self._env_args(), [str(p) for p in layers])
+        self.assertEqual(self._env_args(), [])
 
     def test_env_var_naming_a_non_stack_is_refused_by_name(self):
         empty = self.root / "empty"
@@ -156,30 +156,40 @@ class TestExplicitWins(StackMemoryCase):
 
 class TestHonestResolution(StackMemoryCase):
     def test_relative_layers_resolve_against_the_stack_dir(self):
+        # Uses an old-format header (with # env-file: lines) to exercise the
+        # backward-compat path that resolves relative names against the stack dir.
         cdir = self._stack_dir()
         layer = cdir / "env.golden"
         layer.write_text("VM_COUNT=2\n")
+        digest = gen_compose.env_digest([layer])
         (cdir / "docker-compose.yml").write_text(
-            "\n".join(gen_compose._provenance_lines(
-                ["env.golden"], gen_compose.env_digest([layer])))
-            + f"\n{_MINIMAL_COMPOSE}"
+            f"# env-sha256: {digest}  # pre-commit: ignore\n"
+            f"# env-file: env.golden\n"
+            f"{_MINIMAL_COMPOSE}"
         )
         os.chdir(cdir)
         self.assertEqual(self._run(["compose", "ps"]), 0)
         self.assertEqual(self._env_args(), [str(layer.resolve())])
 
-    def test_a_header_with_no_env_files_asks_for_one(self):
+    def test_a_header_with_no_env_files_is_a_valid_new_format_stack(self):
+        # New-format stacks have no # env-file: lines; values are inlined at
+        # gen-compose time, so no --env-file is needed or expected.
         cdir = self._stack_dir(f"# env-sha256: deadbeef\n{_MINIMAL_COMPOSE}")
         os.chdir(cdir)
-        self._run(["compose", "ps"])
-        self.assertIn("--env-file", self.message)
-        self.assertIn(str(cdir), self.message)
-        # Never the search path: that is how a 32-VM YAML gets an 8-VM env.
-        self.assertIsNone(self.capture.argv)
+        self.assertEqual(self._run(["compose", "ps"]), 0)
+        self.assertEqual(self._env_args(), [])
 
     def test_a_remembered_layer_that_is_gone_names_it_and_where_it_looked(self):
+        # Uses an old-format header (with # env-file: lines) so the missing-layer
+        # error path in _remembered_layers() is exercised.
         layers = self._layers()
-        cdir = self._rendered(layers)
+        digest = gen_compose.env_digest(layers)
+        cdir = self._stack_dir(
+            f"# env-sha256: {digest}  # pre-commit: ignore\n"
+            f"# env-file: {layers[0]}\n"
+            f"# env-file: {layers[1]}\n"
+            f"{_MINIMAL_COMPOSE}"
+        )
         layers[1].unlink()
         os.chdir(cdir)
         self._run(["compose", "ps"])
@@ -191,8 +201,15 @@ class TestHonestResolution(StackMemoryCase):
 class TestStaleness(StackMemoryCase):
     def test_remembered_layers_are_still_hashed(self):
         """Adopting the recorded names must not pass for checking the digest."""
+        # Uses an old-format header so the staleness check path is exercised.
         layers = self._layers()
-        cdir = self._rendered(layers)
+        digest = gen_compose.env_digest(layers)
+        cdir = self._stack_dir(
+            f"# env-sha256: {digest}  # pre-commit: ignore\n"
+            f"# env-file: {layers[0]}\n"
+            f"# env-file: {layers[1]}\n"
+            f"{_MINIMAL_COMPOSE}"
+        )
         layers[1].write_text("VM_COUNT=48\n")
         os.chdir(cdir)
         self.assertEqual(self._run(["compose", "ps"]), 0)
@@ -202,8 +219,15 @@ class TestStaleness(StackMemoryCase):
         self.assertEqual(Path(self.capture.cwd), cdir)
 
     def test_passing_different_layers_is_reported_as_different_layers(self):
+        # Uses an old-format header so the staleness warning path is exercised.
         layers = self._layers()
-        cdir = self._rendered(layers)
+        digest = gen_compose.env_digest(layers)
+        cdir = self._stack_dir(
+            f"# env-sha256: {digest}  # pre-commit: ignore\n"
+            f"# env-file: {layers[0]}\n"
+            f"# env-file: {layers[1]}\n"
+            f"{_MINIMAL_COMPOSE}"
+        )
         other = self.root / "env.other"
         other.write_text("VM_COUNT=4\n")
         os.chdir(cdir)

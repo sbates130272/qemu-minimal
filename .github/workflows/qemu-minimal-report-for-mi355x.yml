@@ -14,7 +14,7 @@ name: qemu-minimal - Report for mi355x
 #
 # SIZING, and why this is one VM where a lab run is four. A GitHub runner has
 # 4 vCPU and 16 GB; four guests would be 32 vCPU and 32 mesh nodes.
-# qemu/env/overlay-mi355x-ci reduces the fleet to one guest at the 4-vCPU
+# qemu/xml/overlay-mi355x-ci reduces the fleet to one guest at the 4-vCPU
 # ionic_rdma floor, and reduces NOTHING about the topology: ERNIC_PER_VM,
 # ROCJITSU_PER_VM and VM_PCIE_SWITCH_WIDTH stay at their golden values,
 # because a lane that quietly halved them would publish a green report about
@@ -42,8 +42,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  FLEET_FILE: qemu/env/mi355x-node.xml
-  FLEET_OVERLAY: qemu/env/overlay-mi355x-ci.xml
+  FLEET_FILE: qemu/xml/mi355x-node.xml
+  FLEET_OVERLAY: qemu/xml/overlay-mi355x-ci.xml
   STACK_DIR: /var/lib/qemu-tool/stacks/mi355x
   KEY_DIR: /var/lib/qemu-tool/mi355x-key
 

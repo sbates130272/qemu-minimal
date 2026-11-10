@@ -9,7 +9,7 @@ name: qemu-minimal - Image Tag Consistency Check
 # different stamp. They are checked for internal consistency separately.
 #
 # What is searched: all files under .github/workflows/, .github/actions/,
-# qemu/compose/ (including generated stacks), and qemu/env/ (extension-less).
+# qemu/compose/ (including generated stacks), and qemu/xml/ (extension-less).
 # Markdown files are excluded: docs and CHANGELOG reference old tags by design.
 
 on:
@@ -30,7 +30,7 @@ jobs:
 
       - name: Check batesste-ci-images stamps are consistent
         run: |
-          SEARCH_DIRS=".github/workflows/ .github/actions/ qemu/compose/ qemu/env/"
+          SEARCH_DIRS=".github/workflows/ .github/actions/ qemu/compose/ qemu/xml/"
 
           # Extract all tags (YYYYMMDD.gHASH), split by whether the line
           # references the fork image or the standard one.

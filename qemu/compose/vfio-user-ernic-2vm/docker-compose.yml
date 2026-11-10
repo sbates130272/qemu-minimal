@@ -7,7 +7,7 @@
 #   --profile rocjitsu-vm2   add GPU to VM 2
 #
 # Usage:
-#   cp qemu/env/fleet-example.xml my-fleet.xml && $EDITOR my-fleet.xml
+#   cp qemu/xml/fleet-example.xml my-fleet.xml && $EDITOR my-fleet.xml
 #   # ernic-only:
 #   qemu-tool compose --stack vfio-user-ernic-2vm --vm-name vm1-name up
 #   # both VMs with GPUs:

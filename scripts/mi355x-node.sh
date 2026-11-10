@@ -26,8 +26,8 @@
 set -euo pipefail
 
 REPO_ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
-FLEET_FILE="${REPO_ROOT}/qemu/env/mi355x-node.xml"
-FLEET_OVERLAY="${REPO_ROOT}/qemu/env/overlay-mi355x-ci.xml"
+FLEET_FILE="${REPO_ROOT}/qemu/xml/mi355x-node.xml"
+FLEET_OVERLAY="${REPO_ROOT}/qemu/xml/overlay-mi355x-ci.xml"
 STACK_DIR=/var/lib/qemu-tool/stacks/mi355x
 KEY_DIR=/var/lib/qemu-tool/mi355x-key
 REPORT_DIR=""
@@ -38,8 +38,8 @@ usage() {
   cat <<'EOF'
 Usage: mi355x-node.sh [options] <up|test|down>
 
-  --fleet-file FILE   golden fleet XML file (default qemu/env/mi355x-node.xml)
-  --fleet-overlay FILE  delta XML layered on it (default qemu/env/overlay-mi355x-ci.xml)
+  --fleet-file FILE   golden fleet XML file (default qemu/xml/mi355x-node.xml)
+  --fleet-overlay FILE  delta XML layered on it (default qemu/xml/overlay-mi355x-ci.xml)
   --stack-dir DIR     where the stack is rendered
   --key-dir DIR       where the guest keypair is pulled to
   --report-dir DIR    write a markdown report here (test only)
