@@ -58,11 +58,8 @@ title: Reports
 | `report-for-hipfile-fio` | Path-filtered push to `main`, daily 01:00 MST, manual dispatch | `/hipfile-fio/` |
 | `vm-ernic-srq-p4` | Weekly Monday 11:23 UTC, path-filtered push to `main`, manual dispatch | `/ernic-p4/` |
 
-## Why the reports stay separate
+## Publishing model
 
-Each lane uploads a named artifact and stops. The Pages publisher assembles the
-latest artifact from each lane so one run cannot erase another lane's content.
-That keeps the site complete even when a lane has not run for days. The four
-crons now fire together, so the publisher sees four completions in quick
-succession; it never cancels a run in progress, so they queue and the site
-settles once the last one drains.
+Each lane uploads a named artifact; the Pages publisher assembles the latest
+artifact from every lane so one run cannot overwrite another's content. The
+site stays complete even when a lane has not run for days.

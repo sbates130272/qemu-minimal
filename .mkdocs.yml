@@ -10,6 +10,7 @@ docs_dir: docs
 theme:
   name: material
   features:
+    - navigation.indexes
     - navigation.sections
     - navigation.top
     - toc.follow
@@ -44,6 +45,11 @@ nav:
 markdown_extensions:
   - admonition
   - tables
-  - fenced_code
   - attr_list
   - md_in_html
+  - toc:
+      permalink: true
+  - pymdownx.superfences
+  - pymdownx.details
+  - pymdownx.tabbed:
+      alternate_style: true

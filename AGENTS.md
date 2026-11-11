@@ -769,16 +769,10 @@ latter defaults to `false`. The DKMS modules are still required, but for SRQ
 See `rocm-ernic-enablement.md` for the full tracking list. Short version:
 
 1. Worker `server_ip` ARP hijack when VM IP = `192.168.100.1` — use `.11`/`.12`
-2. *(was ARP log printf aliasing in `pvrdma_eth.c:483-493` — file is gone
-   with the pre-ionic `driver/` tree deleted 2026-09-16)*
-3. Collection 0.2.0 is not on Galaxy — only 0.1.0 is published, and 0.1.0 is
+2. Collection 0.2.0 is not on Galaxy — only 0.1.0 is published, and 0.1.0 is
    the pre-ionic collection. `requirements.yml` pins the upstream git SHA
    instead; move back to a Galaxy version pin once 0.2.0 ships there
-4. *(fixed upstream — `driver_ionic.yml` fail_msg no longer references the
-   dead `ernic_image_kernel_mainline` variable; resolved in rocm-ernic@1484557)*
-5. *(was an `apply-rocm-ernic-dv.sh` / rdma-core / `docs/testing.rst` bug —
-   all three files are gone with the pre-ionic tree)*
-6. **Killing perftest mid-run breaks VM device context** — killing `ib_send_bw`
+3. **Killing perftest mid-run breaks VM device context** — killing `ib_send_bw`
    or any perftest process mid-operation (SIGTERM/SIGKILL) leaves the guest
    RDMA driver in a broken state. `ibv_devinfo` reports "Failed to open device"
    or "wasn't found". `rmmod`/`modprobe` hangs for 2 min (DSR timeout) and the
@@ -786,7 +780,7 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
    && up`). Avoid killing tests; let them run to completion or use `ib_send_bw
    --iters 100` to keep runs short.
 
-7. **ernic-hub crash requires full stack restart** — if `ernic-hub` crashes and
+4. **ernic-hub crash requires full stack restart** — if `ernic-hub` crashes and
    restarts (visible in `docker compose logs ernic-hub` as a re-initialization
    from the top), the guest driver enters a DSR initialization timeout
    (`-ETIMEDOUT`) on the next `modprobe ionic_rdma`. The vfio-user session
@@ -795,7 +789,7 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
    qemu-1/qemu-2). Restarting only the QEMU containers is insufficient because
    the ernic-worker also needs a fresh TCP mesh connection to the new hub.
 
-8. **perftest server dies if SSH session closes** — `nohup`/`disown` is not
+5. **perftest server dies if SSH session closes** — `nohup`/`disown` is not
    sufficient; the server exits with no output when the parent SSH session ends.
    Workaround: keep the SSH session alive (run server in foreground in a
    background job `&` and let the shell wait) or use `screen`/`tmux` inside
@@ -807,20 +801,17 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
    ssh -p 2222 local-vm "ib_send_bw -d rocm-rdma-ernic0 192.168.100.12"
    ```
 
-9. **`ernic_source_repo_version` defaults to `main`** — so `ernic_source` clones
+6. **`ernic_source_repo_version` defaults to `main`** — so `ernic_source` clones
    upstream HEAD inside the guest even when `requirements.yml` installs the
    collection from a fixed SHA, and the roles can end up building sources from
    a different tree than they came from. Pinned locally in
    [`playbooks/vars/ernic-pins.yml`](ansible/playbooks/vars/ernic-pins.yml);
    the default is still upstream's.
-10. **`ernic_nic_subnet` is now a role default upstream** (rocm-ernic@1484557),
-    but it still has to be repeated at play-var level in `vm-ernic.yml`'s
-    configure play because role defaults are not in scope when play vars are
-    evaluated. The upstream commit documents this explicitly.
-11. *(fixed upstream — `ernic_guest_setup` now includes `preflight.yml` which
-    checks `ansible_processor_nproc >= IONIC_EQ_COUNT_MIN` before any expensive
-    apt/DKMS work and fails with a clear message; resolved in rocm-ernic@1484557)*
-12. **A rebooted ernic guest is device-present but not fully test-ready.**
+7. **`ernic_nic_subnet` is now a role default upstream** (rocm-ernic@1484557),
+   but it still has to be repeated at play-var level in `vm-ernic.yml`'s
+   configure play because role defaults are not in scope when play vars are
+   evaluated. The upstream commit documents this explicitly.
+8. **A rebooted ernic guest is device-present but not fully test-ready.**
     As of rocm-ernic@1484557, `ernic_guest_setup` writes persistent
     `/etc/modules-load.d/` entries for `ionic` and `ionic_rdma` (via
     `modprobe persistent:`), so the RDMA device comes back after a reboot.
@@ -829,7 +820,7 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     the module across a kernel upgrade. The address on `rocm-ernic0`, bringing
     the netdev up and the counters symlink are still run-time only; re-run the
     configure play to restore full test-readiness after a reboot.
-13. **The mesh allocates a new node id on every reconnect and never reclaims
+9. **The mesh allocates a new node id on every reconnect and never reclaims
     the old one.** This is the fact that decides how large a fleet can be. A
     worker that dies and is restarted by Docker does not resume its old id; it
     consumes the next one. The topology payload caps at 64 nodes
@@ -849,7 +840,7 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     a flapping ernic makes compose abort the whole `up` with `dependency failed
     to start: container fleet-ernic-10-1 is unhealthy`, leaving containers in
     `Created` and guests dead with `vfio-user: timed out waiting for reply`.
-14. **The mesh manager's 20 s heartbeat timeout turns CPU oversubscription into
+10. **The mesh manager's 20 s heartbeat timeout turns CPU oversubscription into
     lost VMs, and it is not tunable.** `rocm-ernic --help` exposes no knob. When
     a fleet allocates more vCPU than the host has cores, the manager slips past
     20 s and declares live nodes dead (`Node N failed health check (last
@@ -861,7 +852,7 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     117 s, 44 lose 3, 48 lose 7. Memory is never the constraint (48 VMs used
     107G of 503G). Budget by `VM_VCPUS * VM_COUNT <= nproc` plus about 25%,
     not by RAM, and remember `VM_VCPUS` cannot go below 4 on an ernic stack.
-15. **The manager leaks a file descriptor per evicted node, and Docker's
+11. **The manager leaks a file descriptor per evicted node, and Docker's
     default soft `nofile` is 1024.** This, not CPU directly, is what actually
     kills a large fleet — issues 13 and 14 are the two halves of the mechanism
     and this is where they land.
@@ -906,7 +897,7 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     guests to 24 heartbeat evictions, with the lost guests matching the
     restarted ernics one for one, and load peaked at 417 on 128 cores. Budget
     by issue 14 regardless of what `ERNIC_NOFILE` says.
-16. **Stock in-tree `ionic` drives the emulated device — and since
+12. **Stock in-tree `ionic` drives the emulated device — and since
     rocm-ernic@3fb74d1 it binds with no help at all.** On a mainline kernel
     (verified on 7.2.4) no DKMS build and no AMD patch is needed to bring the
     NIC and the RDMA device up. This used to need the id adding to the
@@ -935,7 +926,7 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     inter-VM `ib_send_bw` does not work; a loopback run on one guest does, and
     is enough to exercise the QPs and light up the counters. Full inter-VM
     testing still needs the `ernic_guest_setup` configure play.
-17. **The mesh saturates at about 40 registered nodes — the 64-node protocol
+13. **The mesh saturates at about 40 registered nodes — the 64-node protocol
     cap is not reachable.** Measured by asking for 64 VMs on a 128-core host.
     It settled at **40 of 64**; the other 24 workers never registered, dying in
     a permanent restart loop on:
@@ -980,7 +971,7 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
       fleet left above the wall will eventually reach EMFILE whatever the
       limit is; the fix is to size the fleet below it.
 
-18. **The TCP backend resolved every GID to the same node — fixed upstream.**
+14. **The TCP backend resolved every GID to the same node — fixed upstream.**
     This is why inter-node RDMA never worked on a fleet larger than two nodes,
     and why `vfio-user-ernic-2vm` was the only stack that ever appeared
     healthy: with a single peer, the wrong answer is also the right one.
@@ -1029,7 +1020,7 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     irrelevant, because the resolver never consulted the id. Serialising
     worker startup costs about 56 s of boot at 32 nodes and fixes nothing.
 
-19. **vfio-user P2P DMA needs a QEMU patch the stock image does not carry.**
+15. **vfio-user P2P DMA needs a QEMU patch the stock image does not carry.**
     Anything that has one vfio-user device DMA into another's BAR — LMCache
     P2P reading GPU memory over the ernic, most obviously — does not work on
     the stock QEMU this repo pins, and does not complain: the BAR window is
@@ -1060,7 +1051,7 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     Untested here. The fork tag carrying the patch is read from the tag name;
     nothing in this repo has yet run a P2P DMA workload against it.
 
-20. **`ernic_guest_setup` does not build SRQ, and without SRQ there is no
+16. **`ernic_guest_setup` does not build SRQ, and without SRQ there is no
     P2P at all.** SRQ ships as two separate upstream roles — `ernic_srq_dkms`
     (kernel) and `ernic_srq_provider` (rdma-core) — driven by a playbook the
     galaxy build of the collection does not package. Nothing in this repo ran
@@ -1085,7 +1076,7 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     server container, so the collection SHA and the `ernic.<sha>` in
     `ERNIC_IMAGE` move together.
 
-21. **UCX cannot open an IB device whose name contains `-` or `_`, so the
+17. **UCX cannot open an IB device whose name contains `-` or `_`, so the
     udev rename silently disables RDMA.** `ernic_guest_setup`'s rule names the
     IB device `rocm-rdma-ernic0`; UCX derives a memory-domain name from it and
     fails to find it:
@@ -1112,7 +1103,7 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     This conflicts with the `ib_send_bw -d rocm-rdma-ernic0` the udev section
     above recommends: a guest set up for UCX will not answer to that name.
 
-22. **A single RDMA READ of 16 MiB tears down the mesh connection.**
+18. **A single RDMA READ of 16 MiB tears down the mesh connection.**
     `TCP_MAX_PAYLOAD_LEN` in `rdma_backend_tcp.c` bounds one wire message at
     16 MiB, and the receiver drops the connection on anything over it. The
     initiator sees `NIXL_ERR_REMOTE_DISCONNECT`, and the responder's log fills
@@ -1129,7 +1120,7 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     Keep per-request payloads under ~15 MiB until this is fixed upstream;
     note the fleet's default KV geometry is far larger.
 
-23. **`--max-workers` defaults to 1, and 1 wedges the MP server.** With one
+19. **`--max-workers` defaults to 1, and 1 wedges the MP server.** With one
     worker slot the `AffinityThreadPool` serialises every client's tasks onto
     one thread and warns that it is doing so. The server then stops processing
     mid-session — register, two stores, then silence, no error and no further
@@ -1145,7 +1136,7 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     `--max-workers 4`, 8 of 8 were clean. `lmcache_guest_max_workers` defaults
     to 4.
 
-24. **LMCache v0.5.6's default prefetch policy doubles the mesh traffic.**
+20. **LMCache v0.5.6's default prefetch policy doubles the mesh traffic.**
     Prefetch controller v2 added a retention policy, and
     `DefaultPrefetchPolicy.plan_l1_retention()` returns `False` for every key
     — literally `return [False] * len(keys)`. A key that is not retained is
@@ -1173,7 +1164,7 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     re-read is cheap. Here L2 is a peer across an emulated RDMA NIC, where it
     is the entire cost. `lmcache_guest_l2_prefetch_policy` defaults to
     `retain` and tests/test_lmcache_unit_render.py pins it.
-25. **The emulated NIC's PCI id moved and the guests' udev rules did not —
+21. **The emulated NIC's PCI id moved and the guests' udev rules did not —
     32 guests sat unusable for 18 hours.** Found 2026-10-20 on `mi100-fleet`.
     The mechanism is worth keeping because every step of it was silent.
 
