@@ -5,8 +5,8 @@
   taste; pass it with the fleet-file flag to qemu-tool subcommands.
 
   Format: each setting is a direct child of <fleet> with its value as text.
-  See qemu/env/scale-out.xml for the golden 8-VM settings and
-  qemu/env/quickstart.xml for a minimal 2-VM quick-start example.
+  See qemu/xml/scale-out.xml for the golden 8-VM settings and
+  qemu/xml/quickstart.xml for a minimal 2-VM quick-start example.
 -->
 <fleet xmlns="http://qemu-tool/fleet/1.0">
 

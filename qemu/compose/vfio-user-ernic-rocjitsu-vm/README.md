@@ -14,7 +14,7 @@ see `vfio-user-ernic-vm/` and `vfio-user-rocjitsu-vm/`.
 
 ```sh
 # 1. Configure
-cp qemu/env/fleet-example.xml my-fleet.xml
+cp qemu/xml/fleet-example.xml my-fleet.xml
 $EDITOR my-fleet.xml     # set image tags, VM_IMAGES_DIR, GPU counts
 
 # 2. Build the VM image (skip if you already have one)
@@ -29,7 +29,7 @@ ssh -p 2222 ubuntu@localhost
 
 ## Environment variables
 
-All of these live in a fleet XML config (copy `qemu/env/fleet-example.xml`),
+All of these live in a fleet XML config (copy `qemu/xml/fleet-example.xml`),
 passed via `--fleet-file` to `gen-vm`, `run-vm` and every compose stack.
 
 | Variable | Default | Description |

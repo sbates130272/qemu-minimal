@@ -1,4 +1,4 @@
 ---
 # Pinned rocm-sdxi commit SHA.  Update when moving to a new upstream ref,
 # then re-run vm-helios.yml against the fleet to rebuild and reinstall.
-sdxi_source_pin: "aa3bcd849f9a4d064e55ff106ef1c797e2c0d90c"
+sdxi_source_pin: "c50f2b9a39c64538039712f6b52510d1a8596c72"

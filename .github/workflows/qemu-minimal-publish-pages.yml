@@ -36,6 +36,7 @@ on:
       - qemu-minimal - Report for lmcache
       - qemu-minimal - Report for quickstart
       - qemu-minimal - Report for mi355x
+      - qemu-minimal - Ansible Playbook Test - vm-ernic-srq-p4
     types:
       - completed
   push:
@@ -135,6 +136,7 @@ jobs:
           fetch vm-report-lmcache lmcache
           fetch vm-report-quickstart quickstart
           fetch vm-report-mi355x mi355x
+          fetch vm-report-ernic-p4 ernic-p4
 
           # Nested _config.yml from old Jekyll-based report scripts are dead
           # weight; MkDocs ignores them but they would just mislead reviewers.

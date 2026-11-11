@@ -2,7 +2,7 @@
 # Make a running two-VM quickstart fleet test-ready, then prove the GPU and
 # the RDMA NIC with one test each.
 #
-#   qemu-tool gen-compose --fleet-file qemu/env/quickstart.xml --output-dir <dir>
+#   qemu-tool gen-compose --fleet-file qemu/xml/quickstart.xml --output-dir <dir>
 #   docker compose --env-file <fleet-env-file> up -d         # from <dir>
 #   ansible-playbook -i <dir>/fleet-inventory.yml \
 #       playbooks/fleet-quickstart.yml --private-key <key>

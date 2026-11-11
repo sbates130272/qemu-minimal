@@ -6,7 +6,7 @@
   are present here; all other settings are inherited from scale-out.xml.
 
   Usage: qemu-tool gen-compose
-    fleet-file: qemu/env/scale-out.xml, qemu/env/overlay-ci.xml
+    fleet-file: qemu/xml/scale-out.xml, qemu/xml/overlay-ci.xml
 -->
 <fleet xmlns="http://qemu-tool/fleet/1.0">
 

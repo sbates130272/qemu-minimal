@@ -66,7 +66,7 @@
           ansible.builtin.set_fact:
             helios_firmware_image: >-
               {{ lookup('env', 'ROCJITSU_IMAGE')
-                 | default('docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261030.gadc94af-rocjitsu.73c3cf3', true) }}
+                 | default('docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261110.g05827f9-rocjitsu.50be05a', true) }}
 
         - name: Show the rocjitsu image the stubs come from
           ansible.builtin.debug:
@@ -211,6 +211,8 @@
   vars_files:
     - vars/sdxi-pins.yml
   vars:
+    sdxi_guest_source_repo: "https://github.com/ROCm/rocm-systems.git"
+    sdxi_guest_source_branch: "users/stebates/emulation-sdxi"
     sdxi_guest_source_ref: "{{ sdxi_source_pin }}"
   roles:
     - role: sdxi_guest

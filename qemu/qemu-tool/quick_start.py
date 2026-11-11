@@ -131,7 +131,7 @@ class _State:
         """A settings value, falling back to the generator's own default.
 
         PROM_PORT, GRAFANA_PORT and PUBLISH_BIND_ADDR are not in
-        qemu/env/quickstart.xml -- they do not need to be, because gen_compose
+        qemu/xml/quickstart.xml -- they do not need to be, because gen_compose
         defaults them. Reading them from the file alone meant this printed a
         URL for a port the stack was not publishing, or raised. Taking the
         same dict the generator takes them from is what keeps the two from
@@ -261,13 +261,13 @@ def _repo_root(explicit: Path | None) -> Path | None:
 
 
 def _packaged_fleet(name: str = _FLEET_NAME) -> Path | None:
-    """qemu/env/<name>, from the checkout or from inside the wheel."""
-    source = Path(__file__).resolve().parent.parent / "env" / name
+    """qemu/xml/<name>, from the checkout or from inside the wheel."""
+    source = Path(__file__).resolve().parent.parent / "xml" / name
     if source.is_file():
         return source
-    from .resources import ENV as _ENV_PACKAGE, packaged_path
+    from .resources import XML as _XML_PACKAGE, packaged_path
 
-    packaged = packaged_path(_ENV_PACKAGE, name)
+    packaged = packaged_path(_XML_PACKAGE, name)
     if packaged is not None and packaged.is_file():
         return packaged
     return None
@@ -368,7 +368,7 @@ def _rescan_layers(state: _State) -> None:
 def _write_layer(state: _State, name: str, body: dict[str, str], why: str) -> None:
     """Write (or rewrite) one generated overlay on top of the settings file.
 
-    An overlay rather than an edit of qemu/env/quickstart.xml, for the reason
+    An overlay rather than an edit of qemu/xml/quickstart.xml, for the reason
     --env-file is repeatable at all: the committed file stays the thing a
     reader diffs, and a run on a small host does not look like a settings
     change.
@@ -906,7 +906,7 @@ def generate_stack(state: _State) -> None:
     """Render the stack to the scratch directory, never over the committed one.
 
     qemu/compose/vfio-user-ernic-rocjitsu-scale-out/docker-compose.yml is
-    generated from qemu/env/scale-out.xml and `gen-compose --check` compares the
+    generated from qemu/xml/scale-out.xml and `gen-compose --check` compares the
     two in CI.
     """
     _say("Generating the stack")
@@ -1393,7 +1393,7 @@ def run(
     else:
         packaged = _packaged_fleet(fleet_stem)
         if packaged is None:
-            _die(f"qemu/env/{fleet_stem} is missing from this install; "
+            _die(f"qemu/xml/{fleet_stem} is missing from this install; "
                  "pass --fleet-file")
         layers = [packaged]
         base = packaged

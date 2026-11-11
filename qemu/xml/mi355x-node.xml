@@ -23,10 +23,10 @@
        =================================================================== -->
 
   <!-- Fork image: carries hw/vfio P2P DMA patch (31e3d06a). -->
-  <qemu-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:20261030.gadc94af-qemu.f91f120-vfu.3719c3a</qemu-ref>
-  <ernic-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic-sbates-fork:20261030.gadc94af-ernic.8f35f4a-vfu.3719c3a</ernic-ref>
-  <rocjitsu-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261030.gadc94af-rocjitsu.73c3cf3</rocjitsu-ref>
-  <backing-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu:20261030.gadc94af-vm.resolute-ernic-rocjitsu-qm.ae551b3-qcow2</backing-ref>
+  <qemu-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:20261110.g05827f9-qemu.4cb9698-vfu.3719c3a</qemu-ref>
+  <ernic-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic-sbates-fork:20261110.g05827f9-ernic.3111d40-vfu.3719c3a</ernic-ref>
+  <rocjitsu-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261110.g05827f9-rocjitsu.50be05a</rocjitsu-ref>
+  <backing-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu:20261110.g05827f9-vm.resolute-ernic-rocjitsu-qm.7ef0ea7-qcow2</backing-ref>
 
   <!-- ===================================================================
        Per-guest resources

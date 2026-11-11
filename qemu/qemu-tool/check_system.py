@@ -328,7 +328,7 @@ def _check_settings(settings: list[Path]) -> list[Result]:
     """
     if not settings:
         return [Result("settings file", _WARN, "none found on the search path",
-                       "cp qemu/env/fleet-example.xml my-fleet.xml, or pass --fleet-file")]
+                       "cp qemu/xml/fleet-example.xml my-fleet.xml, or pass --fleet-file")]
     return [Result("settings file", _OK, str(settings[0]))] + [
         Result("  overlay", _OK, str(p)) for p in settings[1:]]
 

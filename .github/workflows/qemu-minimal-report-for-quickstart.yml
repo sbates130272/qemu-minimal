@@ -4,7 +4,7 @@ name: qemu-minimal - Report for quickstart
 #
 # WHAT THIS LANE IS FOR. It is the only lane that executes the documented
 # fast path end to end: pull the published ernic-rocjitsu qcow2, generate a
-# two-VM stack from qemu/env/quickstart, boot it with Prometheus and Grafana
+# two-VM stack from qemu/xml/quickstart, boot it with Prometheus and Grafana
 # beside it, and prove both emulated devices with one test each. Every other
 # lane here either bakes its own guest with Ansible (the vm-* report lanes,
 # ~50 minutes of gen-vm) or builds an 11 GB container first
@@ -45,7 +45,7 @@ on:
     paths:
       - 'qemu/qemu-tool/quick_start.py'
       - 'scripts/check-vm-devices.sh'
-      - 'qemu/env/quickstart.xml'
+      - 'qemu/xml/quickstart.xml'
       - 'ansible/playbooks/fleet-quickstart.yml'
       - 'ansible/playbooks/roles/rocjitsu_gpu_test/tasks/amdgpu_firmware.yml'
       - 'ansible/playbooks/roles/lmcache_guest/tasks/netplan_ernic.yml'
@@ -69,7 +69,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  FLEET_FILE: qemu/env/quickstart.xml
+  FLEET_FILE: qemu/xml/quickstart.xml
   STACK_DIR: /var/lib/qemu-tool/stacks/quickstart
   KEY_DIR: /var/lib/qemu-tool/quickstart-key
 
@@ -79,7 +79,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     container:
-      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261030.gadc94af-qemu11.1.3-vfu.5b9c722
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261110.g05827f9-qemu11.1.3-vfu.05bb5e5
       # /var/lib/qemu-tool is bind-mounted from the host at the same path so
       # the qcow2 pulled in here is the file the sibling qemu containers open:
       # compose bind mounts are resolved by the host docker daemon, not in

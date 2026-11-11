@@ -7,7 +7,7 @@
 #   --profile rocjitsu-vm2   add GPU to VM 2
 #
 # Usage:
-#   cp qemu/env/fleet-example.xml my-fleet.xml && $EDITOR my-fleet.xml
+#   cp qemu/xml/fleet-example.xml my-fleet.xml && $EDITOR my-fleet.xml
 #   # ernic-only:
 #   qemu-tool compose --stack vfio-user-ernic-2vm --vm-name vm1-name up
 #   # both VMs with GPUs:
@@ -49,7 +49,7 @@ x-gpu-common: &gpu-common
     - "no-new-privileges:true"
 
 x-qemu-common: &qemu-common
-  image: "${QEMU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261030.gadc94af-qemu11.1.3-vfu.5b9c722}"
+  image: "${QEMU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261110.g05827f9-qemu11.1.3-vfu.05bb5e5}"
   volumes:
     - vfu-sockets:/run/vfu:ro
     - "${VM_IMAGES_DIR:-/var/lib/qemu-tool/images}:${VM_IMAGES_DIR:-/var/lib/qemu-tool/images}"
@@ -72,10 +72,12 @@ services:
   # ---- rocm-ernic NIC for VM 1: TCP manager (hub) ----
   ernic-hub:
     <<: *gpu-common
-    image: "${ERNIC_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261030.gadc94af-ernic.8f35f4a-vfu.5b9c722}"
+    image: "${ERNIC_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261110.g05827f9-ernic.3111d40-vfu.05bb5e5}"
     environment:
       - ERNIC_DEBUG_MESH
       - "ERNIC_TCP_GUEST_GIDS=${ERNIC1_GUEST_GIDS:-fe80::706f:63ff:fe6d:1,192.168.100.11}"
+      - "ERNIC_P4=true"
+      - "ERNIC_P4_GUEST_SCOPE=load"
     devices:
       - /dev/net/tun
     networks:
@@ -93,10 +95,11 @@ services:
           sleep 0.5
         done
         TAP_ARG=; [ -e /sys/class/net/tap0 ] && TAP_ARG="-T tap0"
+        P4_ARG=; [ "$${ERNIC_P4:-false}" = "true" ] && [ "$${ERNIC_P4_GUEST_SCOPE:-none}" != "none" ] && P4_ARG="--p4-guest-scope $$ERNIC_P4_GUEST_SCOPE"
         exec rocm-ernic -s /run/vfu/ernic-1.sock \
           -b "tcp:manager:listen:${ERNIC_TCP_PORT:-6320}" \
           -m "${ERNIC1_MAC:-72:6f:63:6d:00:01}" \
-          $$TAP_ARG
+          $$TAP_ARG $$P4_ARG
     healthcheck:
       test: ["CMD", "sh", "-c", "test -S /run/vfu/ernic-1.sock"]
       interval: 2s
@@ -129,10 +132,12 @@ services:
   # ---- rocm-ernic NIC for VM 2: TCP worker (spoke) ----
   ernic-worker:
     <<: *gpu-common
-    image: "${ERNIC_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261030.gadc94af-ernic.8f35f4a-vfu.5b9c722}"
+    image: "${ERNIC_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261110.g05827f9-ernic.3111d40-vfu.05bb5e5}"
     environment:
       - ERNIC_DEBUG_MESH
       - "ERNIC_TCP_GUEST_GIDS=${ERNIC2_GUEST_GIDS:-fe80::706f:63ff:fe6d:2,192.168.100.12}"
+      - "ERNIC_P4=true"
+      - "ERNIC_P4_GUEST_SCOPE=load"
     devices:
       - /dev/net/tun
     networks:
@@ -152,10 +157,11 @@ services:
           sleep 0.5
         done
         TAP_ARG=; [ -e /sys/class/net/tap0 ] && TAP_ARG="-T tap0"
+        P4_ARG=; [ "$${ERNIC_P4:-false}" = "true" ] && [ "$${ERNIC_P4_GUEST_SCOPE:-none}" != "none" ] && P4_ARG="--p4-guest-scope $$ERNIC_P4_GUEST_SCOPE"
         exec rocm-ernic -s /run/vfu/ernic-2.sock \
           -b "tcp:worker:ernic-hub:${ERNIC_TCP_PORT:-6320}" \
           -m "${ERNIC2_MAC:-72:6f:63:6d:00:02}" \
-          $$TAP_ARG
+          $$TAP_ARG $$P4_ARG
     healthcheck:
       test: ["CMD", "sh", "-c", "test -S /run/vfu/ernic-2.sock"]
       interval: 2s
@@ -189,7 +195,7 @@ services:
   rocjitsu-1:
     <<: *gpu-common
     profiles: [rocjitsu-vm1]
-    image: "${ROCJITSU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261030.gadc94af-rocjitsu.73c3cf3}"
+    image: "${ROCJITSU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261110.g05827f9-rocjitsu.50be05a}"
     command:
       - rocjitsu
       - --config
@@ -209,7 +215,7 @@ services:
   rocjitsu-2:
     <<: *gpu-common
     profiles: [rocjitsu-vm2]
-    image: "${ROCJITSU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261030.gadc94af-rocjitsu.73c3cf3}"
+    image: "${ROCJITSU_IMAGE:-docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261110.g05827f9-rocjitsu.50be05a}"
     command:
       - rocjitsu
       - --config

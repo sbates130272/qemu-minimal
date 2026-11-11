@@ -6,7 +6,7 @@ name: qemu-minimal - PR quickstart boot
 # two guests, the full Ansible configure, a GPU test, an inter-guest RDMA test
 # and a published report -- and it runs on push to main and on a daily cron,
 # never on a PR. So the quickstart breaking is found the morning after the
-# merge. Gen Compose Check already renders qemu/env/quickstart.xml on every PR and
+# merge. Gen Compose Check already renders qemu/xml/quickstart.xml on every PR and
 # asserts the services are there, which catches a broken settings file or
 # generator; what neither of them does is start QEMU. This lane does only
 # that, and stops.
@@ -28,7 +28,7 @@ name: qemu-minimal - PR quickstart boot
 #     the five edits AGENTS.md lists for adding one.
 #
 # THE IMAGE. This points VM_BACKING_IMAGE at the `-slim` flavour of the same
-# build stamp, through an OVERLAY -- qemu/env/quickstart.xml itself is untouched,
+# build stamp, through an OVERLAY -- qemu/xml/quickstart.xml itself is untouched,
 # because report-for-quickstart runs that file and the slim guest would fail
 # its GPU test. Measured on the registry, same stamp: slim is 0.75 GB
 # compressed against the fat image's 2.52 GB, so this is a ~3.4x smaller pull
@@ -54,7 +54,7 @@ on:
       - 'qemu/qemu-tool/gen_compose.py'
       - 'qemu/qemu-tool/run_vm.py'
       - 'qemu/qemu-tool/gen_vm.py'
-      - 'qemu/env/quickstart.xml'
+      - 'qemu/xml/quickstart.xml'
       - '.github/workflows/qemu-minimal-quickstart-boot.yml'
   workflow_dispatch:
 
@@ -73,7 +73,7 @@ jobs:
     # should cost a coffee, not an afternoon -- this gates merges.
     timeout-minutes: 45
     container:
-      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261030.gadc94af-qemu11.1.3-vfu.5b9c722
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261110.g05827f9-qemu11.1.3-vfu.05bb5e5
       # Same three as report-for-quickstart, for the same reasons:
       # /var/lib/qemu-tool bind-mounted at the same path so the qcow2 pulled
       # in here is the file the sibling qemu container opens (compose bind
@@ -86,7 +86,7 @@ jobs:
         -v /var/run/docker.sock:/var/run/docker.sock
         -v /var/lib/qemu-tool:/var/lib/qemu-tool
     env:
-      FLEET_FILE: qemu/env/quickstart.xml
+      FLEET_FILE: qemu/xml/quickstart.xml
       STACK_DIR: /var/lib/qemu-tool/stacks/pr-boot
       KEY_DIR: /var/lib/qemu-tool/pr-boot-key
       OVERLAY: /var/lib/qemu-tool/stacks/pr-boot.xml
@@ -138,7 +138,7 @@ jobs:
         echo "FLEET_ENV=$FLEET_ENV" >> "$GITHUB_ENV"
 
     # One guest, no TAP, and the slim disk. Written as an overlay rather than
-    # an edit: --fleet-file is repeatable and last wins, so qemu/env/quickstart.xml
+    # an edit: --fleet-file is repeatable and last wins, so qemu/xml/quickstart.xml
     # stays the file a reader diffs and the file report-for-quickstart runs.
     #
     # ERNIC_TAP=false is safe HERE and nowhere else: the TAP is the guests'
@@ -156,18 +156,18 @@ jobs:
           <vm-count>1</vm-count>
           <vm-name-prefix>prboot</vm-name-prefix>
           <ernic-tap>false</ernic-tap>
-          <backing-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu-slim:20261030.gadc94af-vm.resolute-ernic-rocjitsu-slim-qm.ae551b3-qcow2</backing-ref>
+          <backing-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu-slim:20261110.g05827f9-vm.resolute-ernic-rocjitsu-slim-qm.7ef0ea7-qcow2</backing-ref>
         </fleet>
         XML
         cat "$OVERLAY"
         # The stamp has to match the three container images in
-        # qemu/env/quickstart.xml, or the generator's coherence check is being
+        # qemu/xml/quickstart.xml, or the generator's coherence check is being
         # satisfied by a tag that is not the one being booted. Asserted here
         # because the overlay is the only place the two can drift.
         STAMP=$(grep -m1 "^QEMU_IMAGE=" "$FLEET_ENV" | sed 's/.*:\([0-9]\{8\}\.g[0-9a-f]*\)-.*/\1/')
         echo "quickstart stamp: $STAMP"
         grep -q "ernic-rocjitsu-slim:${STAMP}-" "$OVERLAY" || {
-          echo "::error::the slim tag in this lane is not on ${STAMP}, the stamp qemu/env/quickstart.xml pins"
+          echo "::error::the slim tag in this lane is not on ${STAMP}, the stamp qemu/xml/quickstart.xml pins"
           exit 1
         }
         # Regenerate FLEET_ENV with both layers merged so docker compose gets

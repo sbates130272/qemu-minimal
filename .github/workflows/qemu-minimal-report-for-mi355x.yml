@@ -14,7 +14,7 @@ name: qemu-minimal - Report for mi355x
 #
 # SIZING, and why this is one VM where a lab run is four. A GitHub runner has
 # 4 vCPU and 16 GB; four guests would be 32 vCPU and 32 mesh nodes.
-# qemu/env/overlay-mi355x-ci reduces the fleet to one guest at the 4-vCPU
+# qemu/xml/overlay-mi355x-ci reduces the fleet to one guest at the 4-vCPU
 # ionic_rdma floor, and reduces NOTHING about the topology: ERNIC_PER_VM,
 # ROCJITSU_PER_VM and VM_PCIE_SWITCH_WIDTH stay at their golden values,
 # because a lane that quietly halved them would publish a green report about
@@ -30,25 +30,8 @@ name: qemu-minimal - Report for mi355x
 # a documented path that nothing executes rots.
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'scripts/mi355x-node.sh'
-      - 'qemu/env/mi355x-node.xml'
-      - 'qemu/env/overlay-mi355x-ci.xml'
-      - 'qemu/compose/vfio-user-mi355x-node/**'
-      - 'ansible/playbooks/fleet-quickstart.yml'
-      - 'qemu/qemu-tool/**'
-      - 'qemu/pyproject.toml'
-      - '.github/workflows/qemu-minimal-report-for-mi355x.yml'
-      - '.github/workflows/qemu-minimal-publish-pages.yml'
-  # Daily, and deliberately not in the 08:00 block the four vm-* lanes share
-  # nor on report-for-quickstart's 11:17: this boots 17 device-server
-  # containers and publish-pages should not be assembling it alongside
-  # another fresh report.
-  schedule:
-    - cron: '41 13 * * *'
+  # Disabled: recurring "Configure the guest" failure under investigation.
+  # Re-enable by restoring the push/schedule triggers.
   workflow_dispatch:
 
 permissions:
@@ -59,8 +42,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  FLEET_FILE: qemu/env/mi355x-node.xml
-  FLEET_OVERLAY: qemu/env/overlay-mi355x-ci.xml
+  FLEET_FILE: qemu/xml/mi355x-node.xml
+  FLEET_OVERLAY: qemu/xml/overlay-mi355x-ci.xml
   STACK_DIR: /var/lib/qemu-tool/stacks/mi355x
   KEY_DIR: /var/lib/qemu-tool/mi355x-key
 
@@ -76,7 +59,7 @@ jobs:
       # needs a patch stock QEMU does not carry (AGENTS.md issue 19). The
       # lane does not yet exercise P2P, but pinning stock here would mean the
       # report describes a machine the stack is not meant to run on.
-      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:20261030.gadc94af-qemu.f91f120-vfu.3719c3a
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:20261110.g05827f9-qemu.4cb9698-vfu.3719c3a
       # /var/lib/qemu-tool is bind-mounted from the host at the same path so
       # the qcow2 pulled in here is the file the sibling qemu container
       # opens: compose bind mounts are resolved by the host docker daemon,

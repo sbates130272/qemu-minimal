@@ -8,7 +8,7 @@
   Uses the fork QEMU/ernic images for P2P DMA support (issue 19).
 
   Usage: qemu-tool gen-compose
-    fleet-file: qemu/env/scale-out.xml, qemu/env/overlay-dense.xml
+    fleet-file: qemu/xml/scale-out.xml, qemu/xml/overlay-dense.xml
     output-dir: /var/lib/qemu-tool/stacks/dense-fleet
 -->
 <fleet xmlns="http://qemu-tool/fleet/1.0">
@@ -18,8 +18,8 @@
   <vm-images-dir>/var/lib/qemu-tool/images-stebates</vm-images-dir>
 
   <!-- Fork image: carries hw/vfio P2P DMA patch (31e3d06a). -->
-  <qemu-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:20261030.gadc94af-qemu.f91f120-vfu.3719c3a</qemu-ref>
-  <ernic-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic-sbates-fork:20261030.gadc94af-ernic.8f35f4a-vfu.3719c3a</ernic-ref>
+  <qemu-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:20261110.g05827f9-qemu.4cb9698-vfu.3719c3a</qemu-ref>
+  <ernic-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic-sbates-fork:20261110.g05827f9-ernic.3111d40-vfu.3719c3a</ernic-ref>
 
   <!-- Dense topology: 2 ernics and 2 GPUs per VM. -->
   <ernic-per-vm>2</ernic-per-vm>

@@ -4,6 +4,43 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **`vfio-user-ernic-2vm`: P4 enabled on both ernic services.** `ERNIC_P4=true`
+  and `ERNIC_P4_GUEST_SCOPE=load` are now set on the hub and worker; the
+  entrypoints pass `--p4-guest-scope` to `rocm-ernic` when `ERNIC_P4=true`,
+  creating `/dev/ernic-p4` in both VMs as the runtime prerequisite for the P4
+  benchmark. The DKMS half (`ernic_p4.ko`) comes from the batesste-ci-images
+  qcow2 built with `vm-ernic-srq-p4.yml` as a post-playbook.
+
+- **Image tags bumped to `20261110.g05827f9`; new `ubuntu-rocm-sdxi` image
+  added.** All container and qcow2 references advance together. The SDXI image
+  is now a first-class fleet image referenced in `scale-out.xml` and the
+  generated stacks.
+
+### Changed
+
+- **`qemu/env/` renamed to `qemu/xml/`.** Fleet descriptor files now live in
+  `qemu/xml/`; generated compose stacks inline all XML-sourced values at
+  `gen-compose` time so `docker compose down` requires no `--env-file`. Only
+  `CONTAINER_USER` and `CONTAINER_KVM_GID` remain as runtime references.
+
+- **SDXI: source repo changed to `ROCm/rocm-systems`; pin advanced to `3feb585`
+  (dma-buf).** `sdxi_guest_source_repo` defaults to the upstream repo;
+  `sdxi_guest_source_branch` (default `develop`) lets callers point at
+  non-default branches without hardcoding.
+
+### Fixed
+
+- **SDXI: bump pin to `af06f717` (`MODULE_IMPORT_NS` fix).** The prior pin
+  failed to build on 7.2.x kernels due to a missing `MODULE_IMPORT_NS`
+  declaration.
+
+- **`qemu-tool quick-start` without `--fleet-file` failed with "quickstart.xml
+  is missing".** `_packaged_fleet()` still referenced the old `qemu/env/`
+  source-checkout path after the env→xml rename; it now correctly looks in
+  `qemu/xml/`.
+
 ## [v1.6.0] - 2026-11-04
 
 ### Added
@@ -105,7 +142,7 @@ All notable changes to this project will be documented in this file.
 
 - **Image tag consistency CI check.** `qemu-minimal-image-tag-consistency.yml`
   runs on every PR and fails if any `batesste-ci-images` tag in
-  `.github/workflows/` carries a different stamp than `qemu/env/quickstart`,
+  `.github/workflows/` carries a different stamp than `qemu/xml/quickstart`,
   or if the env files themselves disagree.
 
 - **Container logs wired into Alloy → Loki → Grafana.** A "Logs (Alloy →
@@ -135,7 +172,7 @@ All notable changes to this project will be documented in this file.
   `-cpu EPYC,phys-bits=N` and gen-compose passes `--cpu-phys-bits` in the
   generated `run-vm` command. Required alongside `VM_PCI_HOLE64_SIZE` when
   the 64-bit PCI hole needs to exceed the EPYC default of 40 bits (1 TiB).
-  `qemu/env/mi355x-node` sets it to 41, raising the ceiling to 2 TiB.
+  `qemu/xml/mi355x-node` sets it to 41, raising the ceiling to 2 TiB.
 
 - **`/etc/motd.d/qemu-minimal` installed on rocjitsu guest images.** Shown on
   every SSH login via PAM. Templated with hostname, kernel version and ROCm
@@ -426,7 +463,7 @@ All notable changes to this project will be documented in this file.
   not two, because the 4 vCPU floor is real and two of them on a 4-core runner
   is 2x oversubscribed against a 20 s heartbeat that is not tunable; a daily
   report can absorb that flake and a merge gate cannot. The slim image is
-  pinned through an overlay, leaving `qemu/env/quickstart` alone: slim has no
+  pinned through an overlay, leaving `qemu/xml/quickstart` alone: slim has no
   compiler, so the GPU test cannot build there and stays in the daily lane.
 
 - **`qemu-tool ssh <vm>`**, which reaches a guest through exactly the
@@ -446,7 +483,7 @@ All notable changes to this project will be documented in this file.
   `--vm-name`. Naming it both ways with different values is an error rather
   than a precedence rule nobody can remember.
 
-- **`qemu/env/overlay-dense`**, a 32-VM fleet with two GPUs, two ernics and
+- **`qemu/xml/overlay-dense`**, a 32-VM fleet with two GPUs, two ernics and
   eight NVMe per guest on the sbates-fork QEMU, for exercising
   `ERNIC_PER_VM`/`ROCJITSU_PER_VM` at the 64-node mesh cap.
 
@@ -463,7 +500,7 @@ All notable changes to this project will be documented in this file.
   path that nothing executes rots.
 
   **One VM where the lab stack is four**, via the committed
-  `qemu/env/overlay-mi355x-ci` — a runner has 4 cores against the stack's 32.
+  `qemu/xml/overlay-mi355x-ci` — a runner has 4 cores against the stack's 32.
   The overlay reduces the fleet and the guest's memory and *nothing* about
   the topology: `ERNIC_PER_VM`, `ROCJITSU_PER_VM` and `VM_PCIE_SWITCH_WIDTH`
   keep their golden values, because a lane that quietly halved them would
@@ -606,7 +643,7 @@ All notable changes to this project will be documented in this file.
   Not absorbed, deliberately: `compose` does not regenerate and does not edit
   settings files (resizing a fleet stays an explicit `VM_COUNT` edit plus
   `gen-compose --output-dir`; a tool that rewrote `VM_COUNT` as a side effect
-  of `up` could write it into the tracked `qemu/env/scale-out` and break
+  of `up` could write it into the tracked `qemu/xml/scale-out` and break
   `Gen Compose Check` from a command that looks like a start), and it is not
   a command runner — a whole fleet is `ansible -i <stack>/fleet-inventory.yml
   fleet`, which `gen-compose` already renders, and one guest is the `ssh`
@@ -755,7 +792,7 @@ All notable changes to this project will be documented in this file.
   reusing `lmcache_guest`'s `amdgpu_firmware` and `netplan_ernic` task files
   and `rocjitsu_gpu_test`'s `vector_add.hip` rather than copying them.
 
-  The stack comes from `qemu/env/quickstart`, a two-VM cut of the scale-out
+  The stack comes from `qemu/xml/quickstart`, a two-VM cut of the scale-out
   settings generated to a scratch directory, with `VM_NVME=1` and
   `ERNIC_TAP=true` — the TAP is not optional, since the TCP mesh carries RDMA
   payload only and without Ethernet `ib_send_bw` cannot do its out-of-band
@@ -884,7 +921,7 @@ All notable changes to this project will be documented in this file.
 
   ```bash
   qemu-tool gen-compose \
-      --env-file qemu/env/scale-out --env-file qemu/env/overlay-mi100
+      --env-file qemu/xml/scale-out --env-file qemu/xml/overlay-mi100
   ```
 
   `compose` passes each layer through to `docker compose` as its own
@@ -992,15 +1029,15 @@ All notable changes to this project will be documented in this file.
   is that sizing from the host is the default rather than a CI-only flag, the
   monitoring sidecars come up with it, and it asks.
 
-- **`qemu/env/quickstart` moved to the `20261022.gc533d98` build**, with
+- **`qemu/xml/quickstart` moved to the `20261022.gc533d98` build**, with
   `ernic.151379b` and `rocjitsu.98f6a72`, and switched Grafana on. It now runs
-  deliberately ahead of `qemu/env/scale-out`: the build-stamp coherence check
+  deliberately ahead of `qemu/xml/scale-out`: the build-stamp coherence check
   is per settings file, not across them, and the quickstart is the shop window
   while the fleet file is what a long soak is pinned to. The README carries a
   separate badge for it for that reason — do not fold the two together.
 
 - **Image pins moved to the `20261021.g742e8e2` build** in
-  `qemu/env/scale-out` and `qemu/env/overlay-mi100`. Component SHAs are
+  `qemu/xml/scale-out` and `qemu/xml/overlay-mi100`. Component SHAs are
   unchanged, so this is a CI base-layer refresh; both files move together or
   `_check_image_coherence` errors on the mixed build stamp.
 
@@ -1055,7 +1092,7 @@ All notable changes to this project will be documented in this file.
   only restate the default, which would have made the settings file the only
   way to ask for the old behaviour.
 
-  `qemu/env/overlay-mi100` no longer forces it off. That override was
+  `qemu/xml/overlay-mi100` no longer forces it off. That override was
   deliberate and transitional — it kept the mi100 fleet's enumeration stable
   while NVMe was added — but env files layer, so anything built on
   `scale-out` **plus** that overlay silently inherited a GPU that could not
@@ -1159,27 +1196,27 @@ All notable changes to this project will be documented in this file.
   aside during a repair. That is intended; the `Removed` lines are there so it
   is not the next mystery.
 
-- **The settings files moved into `qemu/env/`, dropping the `env.` prefix.**
-  Five files that were `qemu/env.<name>` are now `qemu/env/<name>`:
+- **The settings files moved into `qemu/xml/`, dropping the `env.` prefix.**
+  Five files that were `qemu/env.<name>` are now `qemu/xml/<name>`:
 
   | Was | Is |
   |-----|----|
-  | `qemu/env.example` | `qemu/env/example` |
-  | `qemu/env.scale-out` | `qemu/env/scale-out` |
-  | `qemu/env.quickstart` | `qemu/env/quickstart` |
-  | `qemu/env.overlay-ci` | `qemu/env/overlay-ci` |
-  | `qemu/env.overlay-mi100` | `qemu/env/overlay-mi100` |
+  | `qemu/env.example` | `qemu/xml/example` |
+  | `qemu/env.scale-out` | `qemu/xml/scale-out` |
+  | `qemu/env.quickstart` | `qemu/xml/quickstart` |
+  | `qemu/env.overlay-ci` | `qemu/xml/overlay-ci` |
+  | `qemu/env.overlay-mi100` | `qemu/xml/overlay-mi100` |
 
   **Every documented command that names a settings file has to change.** The
   flag and the file contents are untouched; only the path moves:
 
   ```bash
   qemu-tool gen-compose \
-      --env-file qemu/env/scale-out --env-file qemu/env/overlay-mi100
+      --env-file qemu/xml/scale-out --env-file qemu/xml/overlay-mi100
   ```
 
   A gitignored local file follows the same rule — `qemu/env.local-*` is now
-  `qemu/env/local-*`. `qemu/.env` and the rest of the search path
+  `qemu/xml/local-*`. `qemu/.env` and the rest of the search path
   (`$QEMU_TOOL_ENV`, `./.env`, `/etc/qemu-tool/env`) are unaffected, so a
   machine that never passes `--env-file` needs no change.
 
@@ -1188,7 +1225,7 @@ All notable changes to this project will be documented in this file.
   `postinst` still seeds `/etc/qemu-tool/env` from it on first install, so an
   upgrade keeps its existing settings.
 
-  `qemu/env/` is a third sibling of `qemu/compose/` and `qemu/packages.d/`,
+  `qemu/xml/` is a third sibling of `qemu/compose/` and `qemu/packages.d/`,
   mapped into the wheel in place for the same reason they are: the files are
   referenced by path from CI and the docs, so there is one copy and no
   working-directory churn. They are data, not Python, so they do not belong
@@ -1201,9 +1238,9 @@ All notable changes to this project will be documented in this file.
   three drifted silently and a reader of one of them had no way to tell a
   deliberate difference from a missed sync.
 
-  `qemu/env/scale-out` is now authoritative. The fleets that differ from it
-  state only their differing keys in `qemu/env/overlay-ci` and
-  `qemu/env/overlay-mi100`, layered over it with a repeated `--env-file`.
+  `qemu/xml/scale-out` is now authoritative. The fleets that differ from it
+  state only their differing keys in `qemu/xml/overlay-ci` and
+  `qemu/xml/overlay-mi100`, layered over it with a repeated `--env-file`.
   `qemu/env.scale-out-strix` is deleted with no
   replacement overlay.
 

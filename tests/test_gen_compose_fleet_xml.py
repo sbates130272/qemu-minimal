@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-_EXAMPLE_XML = REPO_ROOT / "qemu" / "env" / "fleet-example.xml"
+_EXAMPLE_XML = REPO_ROOT / "qemu" / "xml" / "fleet-example.xml"
 _EXAMPLE_ENV = REPO_ROOT / "qemu" / "env" / "scale-out"
 
 
