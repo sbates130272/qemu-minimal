@@ -7,19 +7,7 @@
 [![Ubuntu](https://img.shields.io/badge/Ubuntu-Noble%20%7C%20Resolute-orange?style=flat-square&logo=ubuntu)](https://releases.ubuntu.com/noble/)
 [![GitHub Release](https://img.shields.io/github/v/release/sbates130272/qemu-minimal?label=Release&style=flat-square)](https://github.com/sbates130272/qemu-minimal/releases/latest)
 
-<!-- Reports. The blank lines around this block and the performance one below
-     are load-bearing: a blank line is what makes GitHub start a new paragraph,
-     and therefore a new row of badges. A <br> inside the paragraph does not.
-     The vm-* report lanes run on main (push and a daily 08:00 cron), so they
-     are pinned with ?branch=main. report-for-quickstart and report-for-mi355x are pinned: both are
-     daily and path-filtered on push to main, like the vm-* lanes.
-
-     The date badge is the odd one out: it is not a workflow status. It is
-     computed during the Pages publish from the reports actually on the site,
-     and shows the last date on which every one of them was both stamped
-     `pass` and freshly generated. A lane can be red while the site still
-     serves its last good report, and that distinction is the whole point --
-     see scripts/render-site-perf.py's update_green(). -->
+<!-- Reports (vm-* lanes pinned to main; date badge computed by Pages publish) -->
 [![VM Reports](https://img.shields.io/badge/VM%20Reports-Live-blue?style=flat-square)](https://sbates130272.github.io/qemu-minimal/)
 [![Basic Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-vm-basic.yml?branch=main&label=report-for-vm-basic&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-vm-basic.yml)
 [![Rocjitsu Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-vm-rocjitsu.yml?branch=main&label=report-for-vm-rocjitsu&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-vm-rocjitsu.yml)
@@ -30,29 +18,13 @@
 [![Ernic SRQ+P4 Bake](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-ansible-playbook-test-vm-ernic-srq-p4.yml?branch=main&label=ernic-srq-p4-bake&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-ansible-playbook-test-vm-ernic-srq-p4.yml)
 [![All Reports Green](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-all-green.json&style=flat-square)](https://sbates130272.github.io/qemu-minimal/perf/)
 
-<!-- Performance. These are shields.io *endpoint* badges: the label, value and
-     colour all come from JSON that the Pages publish writes, so the colour is
-     a verdict rather than decoration. Green means the latest reading is within
-     5% of the mean of the previous five distinct readings, amber down to 20%
-     below it, red past that, and blue means there is nothing to compare
-     against yet. They used to be fixed AMD/NVIDIA/Intel brand colours, which
-     meant GEMM rendered red on its best day. -->
+<!-- Performance endpoint badges: colour is a verdict from Pages publish JSON -->
 [![Rocjitsu GEMM](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-gemm.json&style=flat-square)](https://sbates130272.github.io/qemu-minimal/perf/)
 [![Rocjitsu HipFile](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile.json&style=flat-square)](https://sbates130272.github.io/qemu-minimal/perf/)
 [![HipFile Fio](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile-fio.json&style=flat-square)](https://sbates130272.github.io/qemu-minimal/perf/)
 [![Ernic P4 FP8 BW](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-ernic-p4-bw.json&style=flat-square)](https://sbates130272.github.io/qemu-minimal/perf/)
 
-<!-- quickstart-boot and the four other PR-only lanes (dry-run, ansible,
-     shell-check, spell-check) carry no ?branch=main: they have no
-     push-to-main and no cron trigger, so they have no run on main and
-     shields renders "no status" for a pinned badge. The two smoke-test lanes
-     in this row do run on main and stay pinned, as do the report lanes in
-     their own row above.
-
-     quickstart-boot is the only one of the six that boots a guest. It is
-     deliberately NOT a report lane -- it publishes nothing and uploads no
-     artifact, so publish-pages.yml neither knows nor needs to know about
-     it. -->
+<!-- CI lanes: smoke-test lanes pinned to main; PR-only lanes carry no branch pin -->
 [![Qemu-tool Smoke Test](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-smoke-test-qemu-tool.yml?branch=main&label=qemu-tool-smoke&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-smoke-test-qemu-tool.yml)
 [![Quickstart Boot](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-quickstart-boot.yml?label=quickstart-boot&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-quickstart-boot.yml)
 [![Dry-Run Tests](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-dry-run-qemu-tool.yml?label=dry-run&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-dry-run-qemu-tool.yml)
@@ -61,49 +33,11 @@
 [![Spell Check](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-spell-check.yml?label=spell-check&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-spell-check.yml)
 [![Rocm-ernic Smoke Test](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-smoke-test-rocm-ernic.yml?branch=main&label=smoke-test-rocm-ernic&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-smoke-test-rocm-ernic.yml)
 
-<!-- The two Ansible collections ansible/requirements.yml installs. Exact
-     pins, both of them, and neither is a range: sbates130272.batesste
-     follows a breaking 3.x line, and the rocm-ernic one is a git SHA because
-     Galaxy only ever published 0.1.0, which is the pre-ionic collection.
-
-     rocm-ernic's shortrev is load-bearing beyond the collection itself. SRQ
-     ships in two halves -- the device emulation in the ernic server
-     container and the guest-side driver built from this tree -- so this
-     badge and the rocm-ernic one in the row below have to agree. If they
-     ever disagree, the guest cannot create an SRQ at all. See AGENTS.md
-     issue 20.
-
-     "The row below" means the FLEET row, the one tracking qemu/xml/scale-out.xml
-     -- that is where LMCache and therefore SRQ live. The quick-start badge
-     is deliberately ahead of both and is not part of this pairing; it boots
-     no LMCache and creates no SRQ. -->
+<!-- Ansible collections pinned in ansible/requirements.yml -->
 [![Batesste Collection](https://img.shields.io/badge/sbates130272.batesste-3.2.1-9cf?style=flat-square)](https://galaxy.ansible.com/ui/repo/published/sbates130272/batesste/)
 [![Rocm-ernic Collection](https://img.shields.io/badge/sbates130272.rocm__ernic-61b934a-9cf?style=flat-square)](https://github.com/ROCm/rocm-ernic)
 
-<!-- The batesste-ci-images this repo pins. STATIC badges, hand-edited with
-     the tags: shields has no endpoint for "what does this repo pin", and a
-     dynamic Docker Hub badge would report that registry's newest tag, which
-     is the opposite of what these are for -- the point is which build the
-     stacks are on, not which exists.
-
-     WHICH FILE THESE TRACK: qemu/xml/scale-out.xml, the fleet settings. That is
-     the pin a long soak runs on and the one the committed stack is generated
-     from. Within it the five share one <date>.<ci-sha> stamp by
-     construction: gen_compose.py's _check_image_coherence refuses a mixed
-     set, because a guest driver and a host server from different builds
-     wedge at the vfio-user/DSR boundary. So when one moves they all move,
-     and these move with them. The stamp is the first badge; the rest carry
-     the component revision that distinguishes the build.
-
-     The quick-start badge is separate BECAUSE it is separate. The coherence
-     check is per settings file, not across them, and qemu/xml/quickstart.xml
-     runs ahead of the fleet on purpose -- it is the shop window and should
-     show the current build. One badge for it, carrying its own stamp; do not
-     try to fold it into the row above, and do not "fix" the two to agree.
-
-     sbates-fork is the odd one out in the other direction: it is pinned only
-     by the qemu/xml/overlay-mi100.xml overlay, for vfio-user P2P DMA, and
-     carries a QEMU patch the stock image does not. See AGENTS.md issue 19. -->
+<!-- CI images pinned in qemu/env/scale-out.xml; sbates-fork for P2P DMA overlay only -->
 [![CI image build](https://img.shields.io/badge/ci--images-20261029.g020459a-informational?style=flat-square&logo=docker)](https://hub.docker.com/u/sbates130272)
 [![Qemu](https://img.shields.io/badge/qemu-11.1.3-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user/tags)
 [![Libvfio-user](https://img.shields.io/badge/libvfio--user-5b9c722-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user/tags)
@@ -112,15 +46,7 @@
 [![Guest Qcow2](https://img.shields.io/badge/guest-resolute%20%7C%20qm.ae551b3-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu/tags)
 [![Qemu Fork](https://img.shields.io/badge/sbates--fork-qemu.f91f120-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork/tags)
 
-<!-- What `qemu-tool quick-start` boots, from qemu/xml/quickstart.xml. One badge,
-     carrying that file's own build stamp; the ernic and rocjitsu revisions
-     it implies are the ones in that stamp's tags. -->
 [![Quick-start Build](https://img.shields.io/badge/quick--start-20261029.g020459a-success?style=flat-square&logo=docker)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu/tags)
-<!-- The LMCache ref qemu/docker/lmcache/Dockerfile builds from. Not a
-     batesste-ci-image: this one is built here and referenced by tag, so it
-     carries no build stamp and sits outside the coherence check above. It
-     still moves with that row in practice, because the thing it talks to is
-     the ernic. Green rather than blue to say "ours, not theirs". -->
 [![LMCache](https://img.shields.io/badge/LMCache-v0.5.6-success?style=flat-square)](https://github.com/LMCache/LMCache/releases/tag/v0.5.6)
 
 ## Summary
@@ -707,20 +633,13 @@ flags take precedence over XML values).
 ### check flags
 
 Checks the host and prints a report grouped by area — tools, Docker,
-virtualisation, container identity, settings, capacity, images. Every line is
-marked `ok`, `warn`, `FAIL` or `skip`. A `FAIL` stops a stack starting and
-sets the exit status to 1; a `warn` limits what the host can do without
-blocking it, and does not fail the command — a checker that cried wolf would
-stop being run.
+virtualisation, container identity, settings, capacity, images. Lines are
+marked `ok`, `warn`, `FAIL` or `skip`; `FAIL` sets exit 1 and stops a stack
+from starting, `warn` does not.
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--env-file FILE` | (search path) | Settings file to check against, repeatable, later files winning key by key. Which file the search path found is itself part of the report |
-
-The container identity line is printed even when it is fine. "Which uid did
-my fleet run as" used to have a surprising answer — every stack ran as root
-until `CONTAINER_USER` became unconditional — so stating it is the point. See
-[Settings file](#settings-file).
 
 ### down flags
 
@@ -736,14 +655,10 @@ is a power cut — `qemu-tool down` is what keeps guest filesystems clean.
 | `--all-users` | off | With `--all`: include other users' stacks. Needs root |
 | `--timeout SECONDS` | 120 | How long to wait for guests to power off |
 
-Stack identity and ownership come from what compose records on each container,
-so neither is a guess. **Is it a qemu-tool stack?** — the compose file carries
-the `gen-compose` provenance header, or sits in one of the stack directories
-this tool ships. **Is it yours?** — the uid its containers actually run as.
-
-A stack started before the containers ran as the caller has every container as
-root, so a non-root run sees it as root's and skips it; those are listed with
-the reason rather than passed over. Run under `sudo` to include them.
+Stack identity comes from what compose records on each container: a stack is
+yours if its containers run as your uid. Stacks started as root are skipped
+by a non-root caller and listed with the reason; `sudo qemu-tool down --all`
+takes every stack on the system.
 
 ### Shared flags (run-vm and gen-vm)
 
@@ -831,49 +746,20 @@ overwrites the committed fleet and breaks `--check`.
 | `--images DIR` | from settings | Sets `VM_IMAGES_DIR` |
 | `--env-file FILE` | the stack's recorded layers, else the search path | Settings file, passed through to `docker compose --env-file`. Repeatable: later files win |
 
-Everything else on the line goes to `docker compose` in the order typed, so
-`--profile metrics up -d` needs no separator. A `--` before the subcommand is
-still accepted and dropped, because `docker compose` reads one as end-of-options
-and would silently ignore the profile that followed it.
+Everything else on the line goes to `docker compose` in the order typed —
+`--profile metrics up -d` needs no separator.
 
-Two things `compose` deliberately does not do, both of which a fleet wrapper
-script used to:
+`compose` never regenerates or edits a settings file. Resizing a fleet is
+`gen-compose --output-dir` after editing `VM_COUNT` yourself. To run a command
+across all fleet guests use ansible against `gen-compose`'s rendered inventory:
 
-- **It never regenerates, and never edits a settings file.** Resizing a fleet
-  is `gen-compose --output-dir` after editing `VM_COUNT` yourself. Those files
-  are tracked and hand-written, with the reasoning for each value in the
-  comments above it; a tool that rewrites `VM_COUNT` as a side effect of `up`
-  can write it into `qemu/xml/scale-out.xml` and break `Gen Compose Check` from a
-  command that looks like a start.
-- **It is not a command runner.** `ssh`/`each` over a fleet is
-
-  ```bash
-  ansible -i <stack>/fleet-inventory.yml fleet -f <N> -m raw \
-      --private-key <key> -a '…'
-  ```
-
-  `gen-compose` renders that inventory beside the compose file, with every
-  host, port and user, and ansible runs the fleet in parallel with real exit
-  codes. `--private-key` is not optional: the generated inventory carries the
-  host, port and user but deliberately no key path, because the key is not a
-  property of the fleet — without it ansible reports every guest `UNREACHABLE`.
-  For one guest, `qemu-tool inspect --vm-name <name>` prints a complete `ssh`
-  command, with the key it verified the guest actually accepts.
-- **Readiness is partly covered, and the gap is worth knowing.**
-  `qemu-tool inspect --vm-name <name>` reports whether the guest agent answers
-  and lists the guest's addressed interfaces, which is enough to tell a booted
-  guest from a running QEMU. It does **not** identify the ernic: it prints
-  whatever `guest-network-get-interfaces` returns, so the ernic appears only
-  once it has an address, and only under whatever name udev gave it. "RDMA
-  ready" — `rocm-ernic0` present, addressed, and `rocm-rdma-ernic0`
-  `PORT_ACTIVE` — is not something the tool asserts today. The read-only
-  guest-agent boundary is what makes what it does report safe to run against
-  someone else's live fleet.
+```bash
+ansible -i <stack>/fleet-inventory.yml fleet -f <N> -m raw \
+    --private-key <key> -a '…'
+```
 
 `down -v` is worth typing in full: without `-v` a killed run leaves its
-sockets in the shared `/run/vfu` volume and the next `up` dies on
-`cannot serve /run/vfu/rocjitsu-1.sock: Address already in use`, surfacing as
-`dependency failed to start: container … is unhealthy`.
+sockets in `/run/vfu` and the next `up` dies on `Address already in use`.
 
 ### ernic-stats flags
 

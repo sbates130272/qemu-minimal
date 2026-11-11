@@ -11,9 +11,9 @@ title: qemu-minimal
     exposes through GitHub Pages.
   </p>
   <div class="cta-row">
-    <a class="button-link primary" href="documentation/">Read the docs</a>
-    <a class="button-link secondary" href="reports/">Browse report lanes</a>
-    <a class="button-link secondary" href="perf/">Open performance trends</a>
+    <a class="button-link primary" href="reports/">Browse report lanes</a>
+    <a class="button-link secondary" href="perf/">Performance trends</a>
+    <a class="button-link secondary" href="documentation/">Documentation</a>
   </div>
   <div class="badge-strip">
     <div class="metric-card">
@@ -37,33 +37,31 @@ title: qemu-minimal
 
 <div class="card-grid">
   <div class="panel">
-    <span class="eyebrow">Docs</span>
-    <h2>What this site covers</h2>
+    <span class="eyebrow">Reports</span>
+    <h2>Inspect the current guests</h2>
     <p>
-      The Pages site mirrors the role of the ROCm/rocm-ernic site more closely:
-      docs at the front, live measurements beside them, and report artifacts linked
-      from one place.
+      Every report comes from a real CI boot — the published output reflects the guest
+      CI actually produced, not static documentation.
     </p>
-    <p><a href="documentation/">Documentation overview →</a></p>
+    <p><a href="reports/">Report index →</a></p>
   </div>
   <div class="panel">
     <span class="eyebrow">Performance</span>
     <h2>Trend the benchmark lanes</h2>
     <p>
-      The rocjitsu and hipFile report artifacts now feed a retained history on
-      <code>gh-pages</code>, which produces the latest badges and a trend page for
-      the site.
+      rocjitsu and hipFile artifacts feed a retained history on <code>gh-pages</code>,
+      producing the latest badges and a trend page over time.
     </p>
     <p><a href="perf/">Performance trends →</a></p>
   </div>
   <div class="panel">
-    <span class="eyebrow">Reports</span>
-    <h2>Inspect the current guests</h2>
+    <span class="eyebrow">Docs</span>
+    <h2>How the site works</h2>
     <p>
-      Every report still comes from a real CI boot, so the published output reflects
-      the guest that CI actually produced rather than static documentation.
+      Docs at the front, live measurements beside them, and report artifacts linked
+      from one place — the structure behind the published site.
     </p>
-    <p><a href="reports/">Report index →</a></p>
+    <p><a href="documentation/">Documentation overview →</a></p>
   </div>
 </div>
 

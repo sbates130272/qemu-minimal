@@ -4,30 +4,29 @@ title: Documentation
 
 <div class="doc-grid">
   <div class="doc-section">
-    <span class="eyebrow">Overview</span>
-    <h2>Why this site exists</h2>
-    <p>
-      qemu-minimal publishes more than raw VM reports: it now carries the structure
-      around them, including an explanation of the lanes, how the site is assembled,
-      and where the retained benchmark history comes from.
-    </p>
-  </div>
-  <div class="doc-section">
     <span class="eyebrow">Reports</span>
     <h2>What is live</h2>
     <p>
-      The report lanes publish single-VM, rocjitsu, rocm-ernic, and hipFile fio guest
-      inspection pages. Each page is regenerated from CI artifacts and linked from
-      the report index.
+      Seven CI lanes publish guest inspection pages: single-VM, rocjitsu, ernic,
+      lmcache, quickstart, MI355X, and hipFile fio. Each page is regenerated from the
+      latest artifact and linked from the report index.
     </p>
   </div>
   <div class="doc-section">
     <span class="eyebrow">Performance</span>
     <h2>What is retained</h2>
     <p>
-      The benchmark-facing lanes also expose numeric badge JSON. Those snapshots are
-      folded into a history file on <code>gh-pages</code> so the performance page can
-      show trends instead of only the latest report.
+      Benchmark lanes expose numeric badge JSON. Those snapshots accumulate in a
+      history file on <code>gh-pages</code> so the performance page shows trends
+      rather than only the latest reading.
+    </p>
+  </div>
+  <div class="doc-section">
+    <span class="eyebrow">Publishing</span>
+    <h2>How it fits together</h2>
+    <p>
+      The Pages publisher fetches each lane's latest artifact by name and assembles
+      them into one site. No lane can overwrite another's content.
     </p>
   </div>
 </div>
