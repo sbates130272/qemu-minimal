@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v1.7.0] - 2026-11-12
+
 ### Added
 
 - **`vfio-user-ernic-2vm`: P4 enabled on both ernic services.** `ERNIC_P4=true`

@@ -1,3 +1,38 @@
+python3-qemu-tool (1.7.0) unstable; urgency=low
+
+  [ Added ]
+  * **`vfio-user-ernic-2vm`: P4 enabled on both ernic services.**
+    `ERNIC_P4=true` and `ERNIC_P4_GUEST_SCOPE=load` are now set on
+    the hub and worker; the entrypoints pass `--p4-guest-scope` to
+    `rocm-ernic` when `ERNIC_P4=true`, creating `/dev/ernic-p4` in both
+    VMs as the runtime prerequisite for the P4 benchmark. The DKMS half
+    (`ernic_p4.ko`) comes from the batesste-ci-images qcow2 built with
+    `vm-ernic-srq-p4.yml` as a post-playbook.
+  * **Image tags bumped to `20261110.g05827f9`; new `ubuntu-rocm-sdxi`
+    image added.** All container and qcow2 references advance together.
+    The SDXI image is now a first-class fleet image referenced in
+    `scale-out.xml` and the generated stacks.
+  [ Changed ]
+  * **`qemu/env/` renamed to `qemu/xml/`.** Fleet descriptor files now
+    live in `qemu/xml/`; generated compose stacks inline all XML-sourced
+    values at `gen-compose` time so `docker compose down` requires no
+    `--env-file`. Only `CONTAINER_USER` and `CONTAINER_KVM_GID` remain
+    as runtime references.
+  * **SDXI: source repo changed to `ROCm/rocm-systems`; pin advanced
+    to `3feb585` (dma-buf).** `sdxi_guest_source_repo` defaults to the
+    upstream repo; `sdxi_guest_source_branch` (default `develop`) lets
+    callers point at non-default branches without hardcoding.
+  [ Fixed ]
+  * **SDXI: bump pin to `af06f717` (`MODULE_IMPORT_NS` fix).** The prior pin
+    failed to build on 7.2.x kernels due to a missing `MODULE_IMPORT_NS`
+    declaration.
+  * **`qemu-tool quick-start` without `--fleet-file` failed with
+    "quickstart.xml is missing".** `_packaged_fleet()` still referenced
+    the old `qemu/env/` source-checkout path after the env→xml rename;
+    it now correctly looks in `qemu/xml/`.
+
+ -- Stephen Bates <sbates130272@users.noreply.github.com>  Thu, 12 Nov 2026 17:08:52 +0000
+
 python3-qemu-tool (1.6.0) unstable; urgency=low
 
   [ Added ]
