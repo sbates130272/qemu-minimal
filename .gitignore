@@ -31,6 +31,9 @@ venv/
 .DS_Store
 *.bak
 
+# MkDocs build output
+site/
+
 # Build artifacts
 *.o
 *.a
