@@ -87,6 +87,8 @@ jobs:
     steps:
       - name: Check out code
         uses: actions/checkout@v4.3.1
+        with:
+          ref: main
 
       - name: Set up Python for MkDocs
         uses: actions/setup-python@v5
@@ -206,7 +208,10 @@ jobs:
             # Replace the entire published tree with the built site.
             # MkDocs adds .nojekyll automatically so GitHub Pages serves
             # the pre-built HTML rather than running Jekyll over it.
-            rsync -a --delete "../site/" ./
+            # --filter 'protect .git' keeps the clone's .git/ intact;
+            # without it rsync --delete removes it (site/ has no .git/),
+            # causing subsequent git commands to fall back to the workspace git.
+            rsync -a --delete --filter 'protect .git' "../site/" ./
 
             git add -A
             if git diff --cached --quiet; then
