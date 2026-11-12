@@ -33,10 +33,10 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  ERNIC_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261110.g05827f9-ernic.3111d40-vfu.05bb5e5
-  ROCJITSU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261110.g05827f9-rocjitsu.50be05a
-  QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261110.g05827f9-qemu11.1.3-vfu.05bb5e5
-  SDXI_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-sdxi:20261110.g05827f9-sdxi.aa3bcd8
+  ERNIC_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261112.gdca6903-ernic.90434a2-vfu.05bb5e5
+  ROCJITSU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261112.gdca6903-rocjitsu.50be05a
+  QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261112.gdca6903-qemu11.1.3-vfu.05bb5e5
+  SDXI_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-sdxi:20261112.gdca6903-sdxi.c50f2b9
   VM_IMAGES_DIR: /var/lib/qemu-tool/images
   STACK_DIR: /var/lib/qemu-tool/stacks/helios-ci
   FLEET_FILE: qemu/xml/helios-tray.xml
@@ -48,7 +48,7 @@ jobs:
     name: Report for helios
     runs-on: ubuntu-latest
     container:
-      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261110.g05827f9-qemu11.1.3-vfu.05bb5e5
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261112.gdca6903-qemu11.1.3-vfu.05bb5e5
       options: >-
         --device /dev/kvm
         -v /var/run/docker.sock:/var/run/docker.sock

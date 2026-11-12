@@ -52,7 +52,7 @@ env:
   FLEET_SIZING: /tmp/fleet.overlay-sizing.xml
   STACK_DIR: /var/lib/qemu-tool/stacks/lmcache-ci
   LMCACHE_IMAGE: qemu-tool/lmcache-rocm:0.5.6-gfx1250-srq
-  QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261110.g05827f9-qemu11.1.3-vfu.05bb5e5
+  QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261112.gdca6903-qemu11.1.3-vfu.05bb5e5
 
 jobs:
   generate-lmcache-report:
@@ -60,7 +60,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 300
     container:
-      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261110.g05827f9-qemu11.1.3-vfu.05bb5e5
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261112.gdca6903-qemu11.1.3-vfu.05bb5e5
       options: >-
         --device /dev/kvm
         -v /var/run/docker.sock:/var/run/docker.sock
