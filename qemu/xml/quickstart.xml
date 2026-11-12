@@ -27,10 +27,10 @@
        Images — same build stamp as scale-out.xml
        =================================================================== -->
 
-  <qemu-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261110.g05827f9-qemu11.1.3-vfu.05bb5e5</qemu-ref>
-  <ernic-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261110.g05827f9-ernic.3111d40-vfu.05bb5e5</ernic-ref>
-  <rocjitsu-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261110.g05827f9-rocjitsu.50be05a</rocjitsu-ref>
-  <backing-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu:20261110.g05827f9-vm.resolute-ernic-rocjitsu-qm.7ef0ea7-qcow2</backing-ref>
+  <qemu-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261112.gdca6903-qemu11.1.3-vfu.05bb5e5</qemu-ref>
+  <ernic-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261112.gdca6903-ernic.90434a2-vfu.05bb5e5</ernic-ref>
+  <rocjitsu-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261112.gdca6903-rocjitsu.50be05a</rocjitsu-ref>
+  <backing-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu:20261112.gdca6903-vm.resolute-ernic-rocjitsu-qm.096ddfe-qcow2</backing-ref>
 
   <!-- ===================================================================
        Per-guest resources

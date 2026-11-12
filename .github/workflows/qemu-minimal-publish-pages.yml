@@ -37,6 +37,7 @@ on:
       - qemu-minimal - Report for quickstart
       - qemu-minimal - Report for mi355x
       - qemu-minimal - Ansible Playbook Test - vm-ernic-srq-p4
+      - qemu-minimal - Report for helios
     types:
       - completed
   push:
@@ -139,6 +140,7 @@ jobs:
           fetch vm-report-quickstart quickstart
           fetch vm-report-mi355x mi355x
           fetch vm-report-ernic-p4 ernic-p4
+          fetch vm-report-helios helios
 
           # Nested _config.yml from old Jekyll-based report scripts are dead
           # weight; MkDocs ignores them but they would just mislead reviewers.

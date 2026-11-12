@@ -46,6 +46,14 @@ METRICS = (
         "base_unit": "B/s",
         "higher_is_better": True,
     },
+    {
+        "key": "sdxi-bw",
+        "label": "SDXI copy BW",
+        "badge_file": "badge-sdxi-bw.json",
+        "source": ("helios", "badge-sdxi-bw.json"),
+        "base_unit": "B/s",
+        "higher_is_better": True,
+    },
 )
 
 PREFIX_SCALE = {
@@ -86,6 +94,7 @@ CHART_COLORS = {
     "hipfile": "#198754",
     "hipfile-fio": "#0d6efd",
     "ernic-p4-bw": "#ed6b21",
+    "sdxi-bw": "#0071C5",
 }
 
 REPORTS = (
@@ -550,15 +559,16 @@ def history_rows(history: List[Dict]) -> str:
     for row in history[-10:]:
         metrics = row.get("metrics", {})
         rows.append(
-            "| {sha} | {generated} | {gemm} | {hipfile} | {hipfile_fio} |".format(
+            "| {sha} | {generated} | {gemm} | {hipfile} | {hipfile_fio} | {sdxi_bw} |".format(
                 sha=row.get("sha", "?"),
                 generated=row.get("generated", "unknown"),
                 gemm=metrics.get("gemm", {}).get("display", "n/a"),
                 hipfile=metrics.get("hipfile", {}).get("display", "n/a"),
                 hipfile_fio=metrics.get("hipfile-fio", {}).get("display", "n/a"),
+                sdxi_bw=metrics.get("sdxi-bw", {}).get("display", "n/a"),
             )
         )
-    return "\n".join(rows) if rows else "| No retained runs yet | - | - | - | - |"
+    return "\n".join(rows) if rows else "| No retained runs yet | - | - | - | - | - |"
 
 
 def latest_metric_rows(history: List[Dict]) -> str:
@@ -620,6 +630,7 @@ Generated from `{latest_sha}` at **{latest_generated}**.
 ![rocjitsu GEMM](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-gemm.json)
 ![rocjitsu hipFile](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile.json)
 ![hipFile fio](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile-fio.json)
+![SDXI copy BW](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-sdxi-bw.json)
 
 Badge colour is health, not branding. Each latest reading is compared against
 the mean of the previous {BASELINE_WINDOW} *distinct* readings — consecutive
@@ -641,8 +652,8 @@ vfio-user and swing hard between runs.
 
 ## Recent runs
 
-| Commit | Generated | GEMM | hipFile | hipFile fio |
-| --- | --- | --- | --- | --- |
+| Commit | Generated | GEMM | hipFile | hipFile fio | SDXI BW |
+| --- | --- | --- | --- | --- | --- |
 {history_rows(history)}
 
 ## Current report freshness
