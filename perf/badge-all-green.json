@@ -2,5 +2,5 @@
   "schemaVersion": 1,
   "label": "All Reports Green",
   "message": "2026-11-02",
-  "color": "brightgreen"
+  "color": "red"
 }
