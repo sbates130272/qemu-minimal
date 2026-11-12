@@ -660,7 +660,7 @@
 
 
 <h1 id="vm-report-qemu-minimal">VM Report — qemu-minimal<a class="headerlink" href="#vm-report-qemu-minimal" title="Permanent link">&para;</a></h1>
-<p>Generated: <strong>2026-11-11 16:56 UTC</strong> &middot; Commit: <a href="https://github.com/sbates130272/qemu-minimal/commit/c4635e8a8c8318d2834c261018de960fc2185a62"><code>c4635e8</code></a> &middot; Status: <strong>pass</strong></p>
+<p>Generated: <strong>2026-11-12 15:45 UTC</strong> &middot; Commit: <a href="https://github.com/sbates130272/qemu-minimal/commit/64bfc75e44c6b4e9cbd38bba5c2d41dfc5d6c911"><code>64bfc75</code></a> &middot; Status: <strong>pass</strong></p>
 <h2 id="hardware">Hardware<a class="headerlink" href="#hardware" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -693,11 +693,11 @@
 </tbody>
 </table>
 <h2 id="kernel">Kernel<a class="headerlink" href="#kernel" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code>7.0.0-38-generic
+<div class="highlight"><pre><span></span><code>7.0.0-43-generic
 </code></pre></div>
 <details><summary>Full version string</summary>
 
-<div class="highlight"><pre><span></span><code>Linux version 7.0.0-38-generic (buildd@lcy02-amd64-070) (x86_64-linux-gnu-gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0, GNU ld (GNU Binutils for Ubuntu) 2.46) #38-Ubuntu SMP PREEMPT_DYNAMIC Fri Sep  4 09:10:14 UTC 2026
+<div class="highlight"><pre><span></span><code>Linux version 7.0.0-43-generic (buildd@lcy02-amd64-080) (x86_64-linux-gnu-gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0, GNU ld (GNU Binutils for Ubuntu) 2.46) #43-Ubuntu SMP PREEMPT_DYNAMIC Fri Oct 23 13:25:25 UTC 2026
 </code></pre></div>
 
 </details>
@@ -714,11 +714,13 @@ nvme0n1    1T disk
 </code></pre></div>
 <h3 id="disk-usage">Disk usage<a class="headerlink" href="#disk-usage" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code>Filesystem      Size  Used Avail Use% Mounted on
-/dev/vda1       6.7G  2.7G  4.0G  40% /
-/dev/vda13      989M  108M  814M  12% /boot
+/dev/vda1       6.7G  4.9G  1.8G  74% /
+/dev/vda13      989M  183M  739M  20% /boot
 </code></pre></div>
 <h3 id="nvme">NVMe<a class="headerlink" href="#nvme" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>nvme-cli unavailable
+<div class="highlight"><pre><span></span><code>Node                  Generic               SN                   Model                                    Namespace  Usage                      Format           FW Rev  
+--------------------- --------------------- -------------------- ---------------------------------------- ---------- -------------------------- ---------------- --------
+/dev/nvme0n1          /dev/ng0n1            vm-report-nvme1      QEMU NVMe Ctrl                           0x1          1.10  TB /   1.10  TB    512   B +  0 B   11.1.3  
 </code></pre></div>
 <h2 id="pci-devices">PCI devices<a class="headerlink" href="#pci-devices" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>00:00.0 Host bridge [0600]: Intel Corporation 82G33/G31/P35/P31 Express DRAM Controller [8086:29c0]
@@ -733,7 +735,7 @@ nvme0n1    1T disk
 </code></pre></div>
 <h2 id="debian-packages">Debian Packages<a class="headerlink" href="#debian-packages" title="Permanent link">&para;</a></h2>
 <h3 id="nvme-cli">nvme-cli<a class="headerlink" href="#nvme-cli" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>nvme-cli not installed
+<div class="highlight"><pre><span></span><code>nvme-cli    2.16-1
 </code></pre></div>
 <h2 id="rocm">ROCm<a class="headerlink" href="#rocm" title="Permanent link">&para;</a></h2>
 <h3 id="installed-debian-packages">Installed Debian packages<a class="headerlink" href="#installed-debian-packages" title="Permanent link">&para;</a></h3>
@@ -762,6 +764,7 @@ nvme0n1    1T disk
   ModemManager.service        loaded active running Modem Manager
   networkd-dispatcher.service loaded active running Dispatcher daemon for systemd-networkd
   polkit.service              loaded active running Authorization Manager
+  qemu-guest-agent.service    loaded active running QEMU Guest Agent
   rsyslog.service             loaded active running System Logging Service
   serial-getty@ttyS0.service  loaded active running Serial Getty on ttyS0
   ssh.service                 loaded active running OpenBSD Secure Shell server
