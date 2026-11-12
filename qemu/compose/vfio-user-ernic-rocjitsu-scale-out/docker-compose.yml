@@ -4,7 +4,7 @@
 # Regenerate after changing qemu/xml/scale-out.xml:
 #   qemu-tool gen-compose --fleet-file qemu/xml/scale-out.xml
 #
-# env-sha256: a919d982c7a833ea7a25ab6305ae4b98e7d7d1be5eeaf43e2165a5719583a7fc  # pre-commit: ignore
+# env-sha256: 75c0fde138be61bc59064766c265f9d95908403bd5e2828c77dd6f541b52494a  # pre-commit: ignore
 
 x-logging: &logging
   driver: json-file
