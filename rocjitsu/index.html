@@ -699,7 +699,7 @@
 
 
 <h1 id="vm-report-qemu-minimal-rocjitsu-vm">VM Report — qemu-minimal — rocjitsu VM<a class="headerlink" href="#vm-report-qemu-minimal-rocjitsu-vm" title="Permanent link">&para;</a></h1>
-<p>Generated: <strong>2026-11-11 02:42 UTC</strong> &middot; Commit: <a href="https://github.com/sbates130272/qemu-minimal/commit/c4635e8a8c8318d2834c261018de960fc2185a62"><code>c4635e8</code></a> &middot; Status: <strong>pass</strong></p>
+<p>Generated: <strong>2026-11-12 16:11 UTC</strong> &middot; Commit: <a href="https://github.com/sbates130272/qemu-minimal/commit/64bfc75e44c6b4e9cbd38bba5c2d41dfc5d6c911"><code>64bfc75</code></a> &middot; Status: <strong>pass</strong></p>
 <h2 id="hardware">Hardware<a class="headerlink" href="#hardware" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -852,11 +852,11 @@ ubuntu.sources
 <tbody>
 <tr>
 <td>GEMM</td>
-<td>514 kFLOP/s</td>
+<td>487 kFLOP/s</td>
 </tr>
 <tr>
 <td>hipFile read throughput</td>
-<td>25.2 MB/s</td>
+<td>17.2 MB/s</td>
 </tr>
 </tbody>
 </table>
@@ -871,7 +871,7 @@ sgemm-bench: device=AMD Radeon Graphics arch=gfx1250
 sgemm-bench: private_segment_bytes=0
 sgemm-bench: m=128 n=128 k=128
 sgemm-bench: max_absolute_error=0 failures=0
-sgemm-bench: seconds_per_iter=8.1535449 gflops=0.000514414779
+sgemm-bench: seconds_per_iter=8.60989766 gflops=0.000487149112
 sgemm-bench: PASS
 </code></pre></div>
 <h3 id="hipfile-nvme-output">hipFile + NVMe output<a class="headerlink" href="#hipfile-nvme-output" title="Permanent link">&para;</a></h3>
@@ -881,10 +881,10 @@ gemm-hipfile-bench: device=AMD Radeon Graphics arch=gfx1250
 gemm-hipfile-bench: path=/mnt/nvme/gemm-hipfile-bench.bin block_bytes=1048576 blocks=32 iters=4
 gemm-hipfile-bench: private_segment_bytes=0
 gemm-hipfile-bench: compat_requested=self buf_registered=yes
-gemm-hipfile-bench: read_bytes=33554432 seconds_per_pass=1.33406216 read_gbs=0.0251520754
+gemm-hipfile-bench: read_bytes=33554432 seconds_per_pass=1.95261887 read_gbs=0.0171843223
 gemm-hipfile-bench: m=128 n=128 k=128
 gemm-hipfile-bench: max_absolute_error=0 failures=0
-gemm-hipfile-bench: gemm_seconds_per_iter=8.24853781 gflops=0.000508490607
+gemm-hipfile-bench: gemm_seconds_per_iter=8.48075861 gflops=0.000494567078
 gemm-hipfile-bench: PASS
 </code></pre></div>
 
