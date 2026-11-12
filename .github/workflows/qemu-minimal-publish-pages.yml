@@ -87,6 +87,8 @@ jobs:
     steps:
       - name: Check out code
         uses: actions/checkout@v4.3.1
+        with:
+          ref: main
 
       - name: Set up Python for MkDocs
         uses: actions/setup-python@v5
