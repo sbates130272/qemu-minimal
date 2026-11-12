@@ -645,6 +645,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#ernic-p4-fp8-rdma-benchmark" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ernic P4 FP8 RDMA Benchmark
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -671,7 +682,7 @@
 
 
 <h1 id="vm-report-qemu-minimal-vm-1">VM Report — qemu-minimal — VM 1<a class="headerlink" href="#vm-report-qemu-minimal-vm-1" title="Permanent link">&para;</a></h1>
-<p>Generated: <strong>2026-11-12 16:49 UTC</strong> &middot; Commit: <a href="https://github.com/sbates130272/qemu-minimal/commit/64bfc75e44c6b4e9cbd38bba5c2d41dfc5d6c911"><code>64bfc75</code></a> &middot; Status: <strong>pass</strong></p>
+<p>Generated: <strong>2026-11-12 20:25 UTC</strong> &middot; Commit: <a href="https://github.com/sbates130272/qemu-minimal/commit/fad1f5e814812a242fe0d10e86ddd93aff01f1dd"><code>fad1f5e</code></a> &middot; Status: <strong>pass</strong></p>
 <h2 id="hardware">Hardware<a class="headerlink" href="#hardware" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -816,6 +827,26 @@ vda        8G disk
 </tbody>
 </table>
 <p>SRQ not available (max_srq=0). UCX will fall back to ud_verbs.</p>
+<h2 id="ernic-p4-fp8-rdma-benchmark">Ernic P4 FP8 RDMA Benchmark<a class="headerlink" href="#ernic-p4-fp8-rdma-benchmark" title="Permanent link">&para;</a></h2>
+<p>RDMA write bandwidth with the P4 fp8_policy engine active. The policy
+applies an elementwise FP8 add across three memory regions on each RDMA
+write operation.</p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>RDMA write BW (FP8)</td>
+<td>n/a</td>
+</tr>
+</tbody>
+</table>
+<div class="highlight"><pre><span></span><code>ernic_p4.ko not installed from DKMS -- skipping P4 RDMA benchmark
+</code></pre></div>
 
 
 
