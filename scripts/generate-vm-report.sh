@@ -193,6 +193,20 @@ BENCH
   } 2>&1
 }
 
+# Run an sdxi-cli bench copy at 4 MiB and return the throughput in MB/s.
+# Returns gracefully (exit 0, empty output) when the SDXI device is absent.
+run_sdxi_bw() {
+  # Prerequisite: device node
+  if ! $SSH "[ -e /dev/sdxi0 ]" 2>/dev/null; then
+    echo "sdxi0 device not present -- sdxi_char not loaded or device absent"
+    return 0
+  fi
+
+  # sdxi-cli bench copy <size_bytes> <iterations>
+  # Reports: "bench copy: N bytes x M iters, avg X ms, Y MB/s"
+  $SSH "sdxi-cli -d /dev/sdxi0 bench copy 4194304 20" 2>&1
+}
+
 run_rocjitsu_gemm() {
   if ! copy_to_guest "${VM_REPORT_BENCH_DIR}/sgemm-bench.hip" /tmp/sgemm-bench.hip; then
     echo "sgemm-bench source upload failed"
@@ -308,6 +322,22 @@ if [ "${REPORT_ERNIC_P4_BENCH:-0}" = "1" ]; then
     # ib_write_bw reports in MB/s; convert to GiB/s for the badge
     ERNIC_P4_BW_GBS=$(python3 -c "print(f'{float('${ERNIC_P4_BW_GBS}') / 1024:.3g}')")
     ERNIC_P4_BW_DISPLAY="${ERNIC_P4_BW_GBS} GiB/s"
+  fi
+fi
+
+# SDXI copy bandwidth (only when explicitly requested and device is present)
+SDXI_BW_OUTPUT=""
+SDXI_BW_MBS=""
+SDXI_BW_DISPLAY=""
+if [ "${REPORT_SDXI_BENCH:-0}" = "1" ]; then
+  if ! SDXI_BW_OUTPUT=$(run_sdxi_bw); then
+    bench_failed "SDXI copy bandwidth benchmark" "${SDXI_BW_OUTPUT}"
+  fi
+  # sdxi-cli reports: "bench copy: N bytes x M iters, avg X ms, Y MB/s"
+  SDXI_BW_MBS=$(printf '%s\n' "${SDXI_BW_OUTPUT}" \
+    | awk '/bench copy:/{match($0, /([0-9.]+) MB\/s/, a); if (a[1]) print a[1]}')
+  if [ -n "${SDXI_BW_MBS}" ] && [ "${SDXI_BW_MBS}" != "0" ]; then
+    SDXI_BW_DISPLAY="${SDXI_BW_MBS} MB/s"
   fi
 fi
 
@@ -566,6 +596,19 @@ ${ERNIC_P4_BW_OUTPUT}
 \`\`\`
 ERNICP4BW
 fi)
+$(if [ "${REPORT_SDXI_BENCH:-0}" = "1" ] && [ -n "${SDXI_BW_OUTPUT}" ]; then cat <<SDXIBW
+
+## SDXI Copy Bandwidth
+
+| Metric | Value |
+|---|---|
+| Copy BW (4 MiB) | ${SDXI_BW_DISPLAY:-n/a} |
+
+\`\`\`
+${SDXI_BW_OUTPUT}
+\`\`\`
+SDXIBW
+fi)
 $(if [ "${REPORT_HIPFILE_FIO_BENCH:-0}" = "1" ]; then cat <<HIPFILEFIO
 
 ## hipFile fio Benchmark
@@ -602,6 +645,11 @@ fi
 if [ "${REPORT_ERNIC_P4_BENCH:-0}" = "1" ]; then
   write_badge_json "${OUTDIR}/badge-ernic-p4-bw.json" "Ernic P4 FP8 BW" \
     "${ERNIC_P4_BW_DISPLAY}" "ED6B21"
+fi
+
+if [ "${REPORT_SDXI_BENCH:-0}" = "1" ]; then
+  write_badge_json "${OUTDIR}/badge-sdxi-bw.json" "SDXI copy BW" \
+    "${SDXI_BW_DISPLAY}" "0071C5"
 fi
 
 echo "Report written to ${OUTDIR}/index.md"
