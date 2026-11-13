@@ -105,7 +105,7 @@ jobs:
         qemu-tool gen-vm \
           --vm-name "$VM1_NAME" \
           --images "$VM_IMAGES_DIR" \
-          --backing-image docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ionic:20261112.gdca6903-vm.resolute-ionic-qm.096ddfe-qcow2
+          --backing-image docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu:20261112.gdca6903-vm.resolute-ernic-rocjitsu-qm.096ddfe-qcow2
 
     # --backing-image returns before cloud-init runs, so a freshly generated
     # key would never be injected. gen-vm pulls the OCI-referrer keypair into
@@ -244,8 +244,8 @@ jobs:
     # the job timeout cancels the whole job. See the longer note in
     # qemu-minimal-report-for-vm-rocjitsu.yml.
     # REPORT_ERNIC_SRQ_P4=1: include the ionic_rdma/ernic_p4 module status and
-    # the ibv_devinfo max_srq value in both VM reports. The ionic qcow2 backing
-    # image has the SRQ+P4 DKMS stack baked in via vm-ernic-srq-p4.yml.
+    # the ibv_devinfo max_srq value in both VM reports. The ernic-rocjitsu qcow2
+    # has SRQ+P4+SDXI baked in via the unified vm-ernic-rocjitsu.yml build.
     - name: Generate VM 1 report
       timeout-minutes: 15
       env:
