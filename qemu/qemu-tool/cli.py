@@ -1285,7 +1285,7 @@ def _extract_cli_overrides(
         elif ns.get("backing_image", _UNSET) is not _UNSET:
             overrides["backing_file"] = None
         _take("ansible_playbook", "ansible_playbook")
-        _take("ca_cert_file", "ca_cert")
+        _take("ca_cert", "ca_cert_file")
         _take("ansible_only", "ansible_only")
         _take("mgmt_tap", "mgmt_tap")
 
