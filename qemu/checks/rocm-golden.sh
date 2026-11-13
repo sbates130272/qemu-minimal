@@ -317,10 +317,17 @@ grep -q 'vramlimit=1024' /usr/local/bin/amdgpu-probe
 # blacklisted -- silent: a hint that fires with no GPU present would nag every
 # guest at every login.  The installed name has no dot in it because run-parts,
 # which is what pam_motd runs over /etc/update-motd.d, skips files that do.
+#
+# ROCM_GOLDEN_EXPECT_PROBE is for a caller that runs this with the emulated
+# GPU attached, where "ready" is the right answer and the hint is meant to
+# print.
 test -x /etc/update-motd.d/99-amdgpu-probe
 sh -n /etc/update-motd.d/99-amdgpu-probe
-test "$(/usr/local/bin/amdgpu-probe --status)" = absent
-test -z "$(sudo -n /etc/update-motd.d/99-amdgpu-probe)"
+_probe_want=${ROCM_GOLDEN_EXPECT_PROBE:-absent}
+test "$(/usr/local/bin/amdgpu-probe --status)" = "${_probe_want}"
+if [ "${_probe_want}" = absent ]; then
+    test -z "$(sudo -n /etc/update-motd.d/99-amdgpu-probe)"
+fi
 
 # Firmware.  Unlike the rocjitsu flavour, this guest carries the generated gap
 # set as well as the packaged blobs, so there is nothing left that amdgpu opens
@@ -440,8 +447,8 @@ echo "modules-load.d: ionic, ionic_rdma"
 # This runs in the verification boot, which is the only place that sees the
 # final state: the DKMS pair is installed by the post-provision playbook and
 # the kernel trim runs after that, both later than any provision script. The
-# hook that prevents this lives in provision/rocm-golden.sh; this is what proves it
-# took.
+# hook that prevents this is rocm_ernic_setup's files/ionic-exclude, in
+# qemu-minimal's ansible roles; this is what proves it took.
 #
 # Why it matters: a stale in-tree ionic.ko in the initramfs loads before any
 # rootfs modules.dep is consulted, so ionic_rdma -- built against the patched
@@ -488,7 +495,10 @@ echo "sdxi: sdxi_perf blacklisted"
 grep -q '^sdxi_char$' /etc/modules-load.d/sdxi.conf
 echo "sdxi: sdxi_char autoloaded"
 
-test "$(zcat /proc/config.gz 2>/dev/null | grep -c '^CONFIG_IO_URING=y')" = "1"
+# /proc/config.gz exists only with CONFIG_IKCONFIG_PROC built in; Ubuntu's
+# kernels ship the config in /boot instead.
+test "$( (zcat /proc/config.gz 2>/dev/null || cat "/boot/config-$(uname -r)") |
+    grep -c '^CONFIG_IO_URING=y')" = "1"
 echo "sdxi: CONFIG_IO_URING=y"
 
 command -v sdxi-cli > /dev/null

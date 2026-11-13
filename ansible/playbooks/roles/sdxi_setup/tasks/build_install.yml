@@ -10,27 +10,28 @@
       DEST="{{ sdxi_setup_controller_src_dir }}"
       REF="{{ sdxi_setup_source_ref }}"
       REPO="{{ sdxi_setup_source_repo }}"
-      BRANCH="{{ sdxi_setup_source_branch }}"
 
       if [ "{{ sdxi_setup_force | bool }}" = "True" ] && [ -d "$DEST" ]; then
         rm -rf "$DEST"
       fi
 
       if [ ! -d "$DEST/.git" ]; then
-        git clone --depth=1 --filter=blob:none --sparse --branch "$BRANCH" "$REPO" "$DEST"
-        cd "$DEST"
-        git sparse-checkout set emulation/sdxi
-      else
-        CURRENT=$(cd "$DEST" && git rev-parse HEAD 2>/dev/null || true)
-        if [ "$CURRENT" = "$REF" ]; then
-          echo "$REF"
-          exit 0
-        fi
-        cd "$DEST"
-        git fetch --depth=1 origin "$BRANCH"
+        git init -q "$DEST"
+        git -C "$DEST" remote add origin "$REPO"
+        git -C "$DEST" sparse-checkout set emulation/sdxi
+      fi
+      cd "$DEST"
+      if [ "$(git rev-parse HEAD 2>/dev/null || true)" = "$REF" ]; then
+        echo "$REF"
+        exit 0
       fi
 
-      git checkout "$REF"
+      # The commit itself, not a branch that happens to contain it: a shallow
+      # clone of a branch holds only its tip, so the pin stopped resolving as
+      # soon as the branch moved.
+      git fetch -q --depth=1 --filter=blob:none origin "$REF"
+      # -f: the compat patches below leave the tree modified.
+      git checkout -q -f FETCH_HEAD
       git rev-parse HEAD
   register: _sdxi_clone
   changed_when: _sdxi_clone.stdout.strip() != sdxi_setup_source_ref
@@ -120,20 +121,42 @@
     dest: /tmp/sdxi-src
   when: sdxi_setup_force | bool
 
-- name: Build the sdxi_char kernel module
+- name: Build the kernel modules
   community.general.make:
-    chdir: /tmp/sdxi-src/drivers/sdxi_char
+    chdir: "/tmp/sdxi-src/drivers/{{ item }}"
     params:
       KDIR: "/lib/modules/{{ sdxi_setup_kernel_resolved }}/build"
+  loop: "{{ sdxi_setup_modules }}"
 
-- name: Install the kernel module
+# updates/, which depmod ranks ahead of the in-tree tree. Nothing creates it
+# on a kernel no out-of-tree module has been installed for.
+- name: Create the module install directory
+  ansible.builtin.file:
+    path: "{{ sdxi_setup_module_install_dir_prefix }}/{{ sdxi_setup_kernel_resolved }}/updates"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the kernel modules
   ansible.builtin.copy:
-    src: /tmp/sdxi-src/drivers/sdxi_char/sdxi_char.ko
-    dest: "/{{ sdxi_setup_module_install_dir_prefix }}/{{ sdxi_setup_kernel_resolved }}/extra/sdxi_char.ko"
+    src: "/tmp/sdxi-src/drivers/{{ item }}/{{ item }}.ko"
+    dest: "{{ sdxi_setup_module_install_dir_prefix }}/{{ sdxi_setup_kernel_resolved }}/updates/{{ item }}.ko"
     remote_src: true
     owner: root
     group: root
     mode: "0644"
+  loop: "{{ sdxi_setup_modules }}"
+  notify: Run depmod
+
+# A copy left in extra/ by an earlier version of this role would shadow
+# nothing, but two files for one module is a question nobody should have to
+# answer.
+- name: Remove modules installed under extra/ by earlier versions
+  ansible.builtin.file:
+    path: "{{ sdxi_setup_module_install_dir_prefix }}/{{ sdxi_setup_kernel_resolved }}/extra/{{ item }}.ko"
+    state: absent
+  loop: "{{ sdxi_setup_modules }}"
   notify: Run depmod
 
 - name: Install sdxi-cli Python package
@@ -145,10 +168,13 @@
 - name: Flush handlers so depmod runs before modprobe
   ansible.builtin.meta: flush_handlers
 
+# Only when the build kernel is the running one; a bake for another kernel
+# has nothing to load it into.
 - name: Load the module now
   community.general.modprobe:
     name: sdxi_char
     state: present
+  when: sdxi_setup_kernel_resolved == ansible_kernel
 
 - name: Write the installed ref stamp
   ansible.builtin.copy:

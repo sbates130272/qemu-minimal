@@ -4,12 +4,22 @@
 #
 #   bake       qemu-tool gen-vm --ansible-playbook ansible/playbooks/vm-rocm-golden.yml
 #   configure  ansible-playbook -i HOST, vm-rocm-golden.yml --tags configure
+#   firmware   ansible-playbook -i HOST, vm-rocm-golden.yml --tags firmware
 #   test       ansible-playbook -i HOST, vm-rocm-golden.yml --tags test
 #
 # The bake runs inside a build VM with no vfio-user device attached, so
-# nothing in it can touch the NIC or the GPU. "configure" and "test" are the
-# two plays that need them; both are tagged never and run against a live
-# guest behind a compose stack.
+# nothing in it can touch the NIC or the GPU. Every bake play is tagged
+# install, and a bake with no tags runs exactly those. "configure",
+# "firmware" and "test" need a device; all three are tagged never and run
+# against a live guest behind a compose stack.
+#
+# The image is PUBLISHED, so the defaults below are the ones a published
+# image wants: no dotfiles, no SSH private key, no GPG signing, no distro
+# upgrade, and no ip_discovery.bin, which belongs to one rocjitsu build.
+# A local bake that wants any of them passes it with -e.
+#
+# A bake needs no Docker daemon when the caller hands it the firmware
+# generator: -e rocjitsu_firmware_script=/path/to/vfio_guest_firmware.py.
 #
 # Order is load-bearing in three places, each noted where it applies: the
 # mainline kernel before rocm_setup, the amdgpu rebuild after it, and the
@@ -21,7 +31,12 @@
   tags: [install]
   vars:
     vm_install_amd_ca: false
-    user_setup_dotfiles_enable: true
+    # user_setup's defaults clone personal dotfiles and copy the controller's
+    # PRIVATE SSH key into the guest. Neither belongs in a published image,
+    # and a published image must not depend on the caller remembering.
+    user_setup_dotfiles_enable: false
+    user_setup_deploy_ssh_key: false
+    git_setup_enable_gpg_signing: false
     image_slim_enable: false
 
 - name: Install the ernic driver prerequisites
@@ -118,6 +133,11 @@
   become: false
   tags: [install]
   vars:
+    # The therock component line, written once and shared with the rocjitsu
+    # play through the anchor. The suite is versionless but carries several
+    # lines at once, and a bare package name follows whichever is newest, so
+    # an unpinned bake installs a line the guest's ROCM_PATH cannot see.
+    rocm_line_pin: &rocm_line_pin "10.1"
     rocm_setup_user: "{{ vm_username | default('ubuntu') }}"
     rocm_setup_repo_stream: therock
     rocm_setup_minimal: true
@@ -125,10 +145,12 @@
     # standalone package in the therock stream, and both are pinned to
     # never-install below. amdrocm-hipfile-dev is the hipFile SDK the
     # benchmarks build against; amdrocm-runtime-dev does not pull it in.
+    # amdrocm-blas-dev is headers only, and nothing else depends on it.
     rocm_setup_minimal_packages:
       - libstdc++-14-dev
-      - amdrocm-runtime-dev
-      - amdrocm-hipfile-dev
+      - "amdrocm-runtime-dev{{ rocm_line_pin }}"
+      - "amdrocm-hipfile-dev{{ rocm_line_pin }}"
+      - "amdrocm-blas-dev{{ rocm_line_pin }}"
     # QEMU guests, never WSL. Pinned because a non-false wsl mode silently
     # drops the minimal path back to the full amdrocm meta-package.
     rocm_setup_wsl: false
@@ -136,7 +158,11 @@
     rocm_setup_skip_reboot: false
     rocm_setup_run_checks: true
     rocm_setup_run_gpu_checks: false
-    rocm_setup_install_metrics_exporter: true
+    # amd-metrics-exporter polls the GPU every ~15 s, and an emulated device
+    # serves single-threaded, so each poll comes out of the dispatch under
+    # test. Its gpuagent also assertion-fails on gfx1250. Nothing scrapes it:
+    # the stack's GPU panel reads the node_exporter textfile instead.
+    rocm_setup_install_metrics_exporter: false
     # rocm-cli installs by piping an unpinned branch's script to sh; xrocmtop
     # is an interactive UI on a headless image. Nothing here uses either.
     rocm_setup_install_rocm_cli: false
@@ -145,9 +171,10 @@
     # an HWE metapackage nor linux-generic belongs on it.
     rocm_setup_extra_kernel_packages: []
     rocm_setup_install_kernel_meta: false
-    # false keeps a local bake's distro upgrade; CI passes true as an extra
-    # var, which outranks this.
-    rocm_setup_skip_system_upgrade: "{{ vm_rocm_skip_system_upgrade | default(false) }}"
+    # No "upgrade: safe" pass: it re-randomises everything around a pinned
+    # kernel, so two bakes of one commit are not the same guest. Pass
+    # -e vm_rocm_skip_system_upgrade=false to have it.
+    rocm_setup_skip_system_upgrade: "{{ vm_rocm_skip_system_upgrade | default(true) }}"
     # 31.60 is the first driver release with amdgpu-dkms 7.1.9 and the
     # gfx1250 blobs the "gap" firmware set sits beside. If that tree goes
     # missing again, set rocjitsu_setup_firmware_set=full and drop the pin rather
@@ -189,6 +216,9 @@
   gather_facts: true
   become: true
   tags: [install]
+  vars:
+    # Defined on the ROCm play above.
+    rocjitsu_setup_rocm_version: *rocm_line_pin
   roles:
     - role: rocjitsu_setup
 
@@ -222,6 +252,7 @@
   hosts: all
   gather_facts: true
   become: true
+  tags: [install]
   vars:
     # Defined on the first play of this file.
     ionic_kernel_pin: *ionic_kernel_pin
@@ -436,6 +467,14 @@
         cmd: depmod -a
       changed_when: false
 
+    # Every initramfs on disk was generated before this play replaced ionic.
+    # One that still carries the earlier module loads it ahead of the rootfs,
+    # and ionic_rdma and ernic_p4 then fail on a symbol version mismatch.
+    - name: Regenerate every initramfs without the ionic modules
+      ansible.builtin.include_role:
+        name: rocm_ernic_setup
+        tasks_from: initramfs
+
     - name: Read the provider base SHA from the series README
       delegate_to: localhost
       become: false
@@ -525,12 +564,131 @@
   hosts: all
   gather_facts: true
   become: true
+  tags: [install]
   vars:
     # The rocm-sdxi commit this image is built from. The role has no default
     # on purpose: a moving ref baked into an image is not reproducible.
-    sdxi_setup_source_ref: "81cd4f8d117a862c188cc75358c95f7ab2abeb94"
+    #
+    # The server side is the sdxi.<sha> in the fleet files' sdxi-image, and
+    # the two are a pair: a guest at this ref waits for a completion MSI-X
+    # that a server older than it never raises.
+    sdxi_source_pin: &sdxi_source_pin "81cd4f8d117a862c188cc75358c95f7ab2abeb94"
+    sdxi_setup_source_ref: "{{ sdxi_source_pin }}"
+    sdxi_setup_user: "{{ vm_username | default('ubuntu') }}"
   roles:
     - role: sdxi_setup
+
+# Before the slim pass, which removes the apt lists dpkg-query does not need
+# but leaves nothing else to read versions from.
+- name: Record what was baked
+  hosts: all
+  gather_facts: true
+  become: true
+  tags: [install]
+  vars:
+    # Defined on the plays above.
+    ionic_kernel_pin: *ionic_kernel_pin
+    ernic_source_pin: *ernic_source_pin
+    rocm_line_pin: *rocm_line_pin
+    sdxi_source_pin: *sdxi_source_pin
+    golden_user: "{{ vm_username | default('ubuntu') }}"
+    golden_rocm_path: "/opt/rocm/core-{{ rocm_line_pin }}"
+    golden_firmware_dir: /lib/firmware/updates/amdgpu
+  tasks:
+    - name: Read the installed package versions
+      ansible.builtin.shell:
+        cmd: >-
+          dpkg-query -W -f='${Package} ${Version}\n'
+          amdgpu-dkms amdgpu-dkms-firmware rdma-core
+          'amdrocm-runtime-dev{{ rocm_line_pin }}'
+          'linux-image-*{{ ansible_kernel }}' 2>/dev/null || true
+      changed_when: false
+      register: golden_dpkg
+
+    - name: Read the amdgpu DKMS source version
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          ls -d /usr/src/amdgpu-* | sort | tail -1 | sed 's|^/usr/src/amdgpu-||'
+        executable: /bin/bash
+      changed_when: false
+      register: golden_amdgpu_src
+
+    - name: Read the generated firmware manifest
+      ansible.builtin.slurp:
+        src: "{{ golden_firmware_dir }}/rocjitsu-gap-manifest.json"
+      register: golden_fw_manifest
+      failed_when: false
+
+    - name: Read the kernel .deb files the guest was built from
+      ansible.builtin.slurp:
+        src: /etc/rocm-ernic-kernel-debs
+      register: golden_kernel_debs
+      failed_when: false
+
+    - name: Check for a baked discovery blob
+      ansible.builtin.stat:
+        path: /lib/firmware/amdgpu/ip_discovery.bin
+      register: golden_ip_discovery
+
+    - name: Collect the facts for the stamp
+      ansible.builtin.set_fact:
+        golden_pkg: >-
+          {{ dict(golden_dpkg.stdout_lines | map('split', ' ') | map('list')) }}
+        golden_fw_files: >-
+          {{ (golden_fw_manifest.content | b64decode | from_json).files
+             if golden_fw_manifest.content is defined else [] }}
+
+    - name: Write the guest stamp
+      ansible.builtin.copy:
+        dest: /etc/rocm-golden-guest.json
+        mode: "0644"
+        content: "{{ golden_stamp | to_nice_json }}\n"
+      vars:
+        golden_stamp:
+          built_by: qemu-minimal ansible/playbooks/vm-rocm-golden.yml
+          booted_kernel: "{{ ansible_kernel }}"
+          kernel_package: >-
+            {{ golden_pkg | dict2items
+               | selectattr('key', 'match', 'linux-image-')
+               | map(attribute='key') | list }}
+          kernel_debs: >-
+            {{ (golden_kernel_debs.content | b64decode).split()
+               if golden_kernel_debs.content is defined else [] }}
+          ionic_kernel_pin: "{{ ionic_kernel_pin }}"
+          ernic_source_pin: "{{ ernic_source_pin }}"
+          sdxi_source_ref: "{{ sdxi_source_pin }}"
+          rdma_core_version: "{{ golden_pkg['rdma-core'] | default('') }}"
+          amdgpu_dkms_version: "{{ golden_pkg['amdgpu-dkms'] | default('') }}"
+          amdgpu_dkms_module: "{{ golden_amdgpu_src.stdout | trim }}"
+          amdgpu_dkms_firmware_version: "{{ golden_pkg['amdgpu-dkms-firmware'] | default('') }}"
+          # The functions of amdgpu-emu-patches.py, in the order it applies
+          # them. kfd_ptrace_gate changes a KFD security check and is carried
+          # unreviewed.
+          amdgpu_patches: [kfd_atomics, ras_vbios, kfd_ptrace_gate, panel_type]
+          kfd_ptrace_gate_reviewed: false
+          amdgpu_autoload_blacklisted: true
+          amdgpu_probe_helper: /usr/local/bin/amdgpu-probe
+          rocm_stream: therock
+          rocm_line: "{{ rocm_line_pin }}"
+          rocm_path: "{{ golden_rocm_path }}"
+          amdrocm_runtime_dev_version: >-
+            {{ golden_pkg['amdrocm-runtime-dev' ~ rocm_line_pin] | default('') }}
+          gfx1250_firmware: >-
+            {{ 'packaged + generated gap set' if golden_fw_files | length > 0
+               else 'see ' ~ golden_firmware_dir }}
+          gfx1250_firmware_dir: "{{ golden_firmware_dir }}"
+          gfx1250_firmware_generated: "{{ golden_fw_files }}"
+          ip_discovery_bin: "{{ golden_ip_discovery.stat.exists }}"
+          memlock: unlimited
+
+    - name: Write WELCOME.md
+      ansible.builtin.template:
+        src: rocm-golden-WELCOME.md.j2
+        dest: "/home/{{ golden_user }}/WELCOME.md"
+        owner: "{{ golden_user }}"
+        group: "{{ golden_user }}"
+        mode: "0644"
 
 # The one slim pass of the bake, after everything that builds: it removes the
 # apt lists, /tmp and the build trees the plays above still needed.
@@ -585,9 +743,13 @@
         name: rocjitsu_setup
         tasks_from: test
 
+# Needs a Docker daemon on the controller and the rocjitsu vfio-user server
+# running: ip_discovery.bin is per rocjitsu build, so it comes from the image
+# serving this guest and replaces whatever the guest has.
 - name: Install ip_discovery.bin from live rocjitsu and re-bind amdgpu
   hosts: all
   gather_facts: false
+  tags: [firmware, never]
   tasks:
     - name: Install the firmware from the rocjitsu serving this guest
       ansible.builtin.include_role:

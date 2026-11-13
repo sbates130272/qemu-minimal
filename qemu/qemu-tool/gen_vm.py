@@ -13,6 +13,7 @@ import base64
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -857,7 +858,8 @@ def _run_ansible(cfg: VMConfig, images: Path, backing: Path) -> None:
                   "-e", f"vm_root_user={cfg.username}",
                   *private_key_extra]
         if extra_args:
-            ap_cmd += extra_args.split()
+            # shlex, so a quoted value survives: -e 'k="a b"' is one argument.
+            ap_cmd += shlex.split(extra_args)
 
         ansible_env = {
             k: v for k, v in os.environ.items()

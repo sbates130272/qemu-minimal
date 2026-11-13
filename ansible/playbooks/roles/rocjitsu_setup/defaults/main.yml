@@ -7,8 +7,8 @@
 # decides for itself what to generate; a LIVE guest sits behind a running
 # rocjitsu and must end up with a discovery blob from that same build.
 # rocjitsu_setup_firmware_live selects the second: it forces generation and
-# ip_discovery.bin on, leaves a guest that already has the blob alone, and
-# re-binds the device afterwards.
+# ip_discovery.bin on, replaces whatever blob the guest has, and re-binds the
+# device afterwards.
 #
 # It is a switch rather than three overrides because a bake passes
 # rocjitsu_setup_firmware_ip_discovery=false and rocjitsu_generate_firmware=false as
@@ -16,11 +16,25 @@
 # include in the same run could not turn them back on by name.
 rocjitsu_setup_firmware_live: false
 
-# Needs a Docker daemon on the controller. Off for a bake whose controller has
-# only the CLI; the guest then gets no stubs and the caller supplies them.
+# Needs a Docker daemon on the controller. A bake without one sets
+# rocjitsu_setup_firmware_script instead, which takes precedence.
 rocjitsu_setup_firmware_generate: >-
   {{ rocjitsu_generate_firmware
      | default(vm_rocjitsu_generate_firmware | default(true)) }}
+
+# A path ON THE CONTROLLER to rocjitsu's vfio_guest_firmware.py. When set, a
+# bake copies it to the guest and runs it there, so it needs no Docker daemon
+# and no rocjitsu image -- which is the shape of a bake inside a container
+# build. It makes the stubs only: ip_discovery.bin comes from a rocjitsu
+# binary. Ignored by a live run.
+rocjitsu_setup_firmware_script: >-
+  {{ rocjitsu_firmware_script
+     | default(lookup('env', 'ROCJITSU_FIRMWARE_SCRIPT'), true)
+     | default('', true) }}
+
+# Where either generator leaves its output on the guest before it is
+# installed. Removed afterwards.
+rocjitsu_setup_firmware_stage_dir: /var/tmp/rocjitsu-firmware
 
 # Must be the image the stack serves the device from: stubs from another build
 # load and then fail at discovery, which reads as a broken GPU. A generated
@@ -49,12 +63,13 @@ rocjitsu_setup_firmware_set: >-
   {{ rocjitsu_firmware_set
      | default(vm_rocjitsu_firmware_set | default('gap')) }}
 
-# ip_discovery.bin is per rocjitsu build. Bake it into an image that runs
-# against the same pin; leave it out of one that is PUBLISHED, where every
-# consumer on another build would get a wrong copy, and install it live.
+# ip_discovery.bin is per rocjitsu build. Off, because the image this role
+# bakes is PUBLISHED: every consumer on another build would get a wrong copy.
+# It is installed live instead. Turn it on only for an image that will run
+# against the same rocjitsu pin it was baked with.
 rocjitsu_setup_firmware_ip_discovery: >-
   {{ rocjitsu_firmware_ip_discovery
-     | default(vm_rocjitsu_firmware_ip_discovery | default(true)) }}
+     | default(vm_rocjitsu_firmware_ip_discovery | default(false)) }}
 
 # What amdgpu-dkms-firmware ships for gfx1250, and where: under updates/, which
 # the kernel searches first. The authoritative list is the package's own --
@@ -91,6 +106,13 @@ rocjitsu_setup_amdgpu_update_initramfs: >-
   {{ rocjitsu_update_initramfs
      | default(vm_rocjitsu_update_initramfs | default(true)) }}
 
+# ══ ROCm environment ════════════════════════════════════════════
+# The therock component line the guest carries. Its packages install under
+# /opt/rocm/core-<line>, which no shell and no documentation finds unaided.
+# vm-rocm-golden.yml passes the same value it installs ROCm at.
+rocjitsu_setup_rocm_version: "10.1"
+rocjitsu_setup_rocm_path: "/opt/rocm/core-{{ rocjitsu_setup_rocm_version }}"
+
 # ══ Guest tools ═════════════════════════════════════════════════
 # The userspace an emulated-GPU guest carries beyond ROCm itself: amd-smi,
 # hsa-snoop, what the libhipfile fio engine needs to build, and the two
@@ -107,7 +129,9 @@ rocjitsu_setup_tools_hsa_snoop_url: >-
   rocjitsu_setup_tools_hsa_snoop_version }}_amd64.deb
 
 rocjitsu_setup_tools_packages:
-  - amdrocm-amdsmi
+  # Named with the component line: a bare name follows whichever line is
+  # newest and can land outside the prefix ROCM_PATH names.
+  - "amdrocm-amdsmi{{ rocjitsu_setup_rocm_version }}"
   # hsa-snoop plants an ftrace kprobe on the KFD create_queue ioctl.
   - bpftrace
   # The fio-hipfile benchmark builds fio from a pinned master commit in the

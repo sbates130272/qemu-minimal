@@ -13,7 +13,6 @@
 # image image is worse than a failed play that says why it stopped.
 sdxi_setup_source_ref: ""
 sdxi_setup_source_repo: "https://github.com/ROCm/rocm-systems.git"
-sdxi_setup_source_branch: "users/stebates/emulation-sdxi"
 
 # Local directory on the CONTROLLER to clone into.  Shared across all hosts
 # in the play (run_once fetch); the tarball derived from it carries the ref
@@ -25,7 +24,11 @@ sdxi_setup_controller_src_dir: "/tmp/sdxi-src"
 # baking an image (must match the kernel that image will run).
 sdxi_setup_kernel: ""
 
-# Install paths inside the guest.
+# The modules built from drivers/. sdxi_char is the one that is loaded;
+# sdxi_perf is installed and blacklisted.
+sdxi_setup_modules: [sdxi_char, sdxi_perf]
+
+# Install paths inside the guest. Modules go in <prefix>/<kernel>/updates.
 sdxi_setup_module_install_dir_prefix: "/lib/modules"
 sdxi_setup_cli_install_path: "/usr/local/bin/sdxi-cli"
 

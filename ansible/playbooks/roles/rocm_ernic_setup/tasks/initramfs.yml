@@ -1,0 +1,32 @@
+---
+# Run after anything that builds or replaces an ionic module. The hook from
+# image_prep.yml keeps them out; this rebuilds every image so that none
+# generated earlier still carries one, and proves it.
+
+# -k all: a bake can run a different kernel from the one the guest boots.
+- name: Regenerate every initramfs
+  ansible.builtin.command:
+    cmd: update-initramfs -u -k all
+  changed_when: true
+
+# The hook reaches into a mkinitramfs internal, so it is one upstream rename
+# from doing nothing. Listed to a file and searched there: grep -q closing a
+# pipe early would SIGPIPE lsinitramfs.
+- name: Assert no initramfs carries an ionic module
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      list=$(mktemp)
+      trap 'rm -f "$list"' EXIT
+      found=0
+      for img in /boot/initrd.img-*; do
+        [ -f "$img" ] || continue
+        lsinitramfs "$img" > "$list"
+        if grep -E '(^|/)(ionic|ionic_rdma|ernic_p4)\.ko(\.[a-z]+)?$' "$list" >&2; then
+          echo "ERROR: an ionic module is present in $img" >&2
+          found=1
+        fi
+      done
+      exit $found
+    executable: /bin/bash
+  changed_when: false

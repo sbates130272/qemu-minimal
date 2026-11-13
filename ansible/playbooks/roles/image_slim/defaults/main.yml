@@ -99,6 +99,16 @@ image_slim_cloud_init_logs: true
 # pin regresses. Several hundred MB against that. Right for a throwaway CI
 # image, wrong for one a human will debug on.
 image_slim_purge_old_kernels: false
+# Purged with the old kernels. The version globs never name these, and one
+# left behind pulls an archive kernel straight back on the next upgrade --
+# which, sorting higher than a mainline build, grub would then boot.
+image_slim_kernel_metapackages:
+  - linux-generic
+  - linux-virtual
+  - linux-image-generic
+  - linux-image-virtual
+  - linux-headers-generic
+  - linux-headers-virtual
 
 # /usr/src/amdgpu-* is the tree vm-rocm-golden.yml patches and rebuilds. Removing
 # it means the guest can never rebuild amdgpu against a future kernel, which is

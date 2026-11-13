@@ -170,7 +170,8 @@
       dpkg-query -W -f='${Package}\n'
       'linux-image-[0-9]*' 'linux-image-unsigned-[0-9]*'
       'linux-headers-[0-9]*' 'linux-modules-[0-9]*'
-      'linux-modules-extra-[0-9]*' 2>/dev/null || true
+      'linux-modules-extra-[0-9]*'
+      {{ image_slim_kernel_metapackages | join(' ') }} 2>/dev/null || true
   register: image_slim_kernel_pkgs
   changed_when: false
   when: image_slim_purge_old_kernels | bool
@@ -206,6 +207,23 @@
   when:
     - image_slim_purge_old_kernels | bool
     - image_slim_stale_kernel_pkgs | length > 0
+
+# The purge above is the one step here that can leave a guest unable to
+# build a module or unable to boot, and both are silent until much later.
+- name: Check what the kernel purge left
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -euo pipefail
+      test -e '/lib/modules/{{ ansible_kernel }}/build'
+      dpkg-query -W -f='${db:Status-Abbrev}${Package}\n' 'linux-image-*' \
+        | grep -c '^ii ' || true
+  register: image_slim_kernel_left
+  changed_when: false
+  failed_when: >-
+    image_slim_kernel_left.rc != 0
+    or image_slim_kernel_left.stdout_lines | last | int != 1
+  when: image_slim_purge_old_kernels | bool
 
 - name: Find DKMS source trees to purge
   ansible.builtin.find:

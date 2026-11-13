@@ -6,6 +6,61 @@
 # This is the local replacement for sbates130272.rocm_ernic.ernic_image_prep,
 # removed in collection 0.2.0. See defaults/main.yml for what it tracks.
 
+# First, before any apt run: a freshly booted guest starts
+# unattended-upgrades, which holds the dpkg lock for the first minute or so,
+# and in an image it would move packages under a pinned kernel. Purged, with
+# the periodic jobs switched off so that a later install of the package does
+# not bring them back.
+- name: Remove unattended-upgrades
+  when: rocm_ernic_setup_mask_unattended_upgrades | bool
+  block:
+    - name: Switch off the periodic apt jobs
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/99-no-unattended-upgrades
+        content: |
+          APT::Periodic::Update-Package-Lists "0";
+          APT::Periodic::Unattended-Upgrade "0";
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Stop and mask the apt timers
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        masked: true
+        enabled: false
+        state: stopped
+      loop:
+        - unattended-upgrades.service
+        - apt-daily.timer
+        - apt-daily-upgrade.timer
+      failed_when: false
+
+    - name: Purge unattended-upgrades
+      ansible.builtin.apt:
+        name: unattended-upgrades
+        state: absent
+        purge: true
+        lock_timeout: 300
+
+# Before the kernel install, which generates the first initramfs this role
+# is responsible for. See the hook for why.
+- name: Create the initramfs hook directory
+  ansible.builtin.file:
+    path: /etc/initramfs-tools/hooks
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the initramfs hook that excludes the ionic modules
+  ansible.builtin.copy:
+    src: ionic-exclude
+    dest: /etc/initramfs-tools/hooks/ionic-exclude
+    owner: root
+    group: root
+    mode: "0755"
+
 # Packages before the kernel: the mainline .debs depend on linux-base, kmod,
 # initramfs-tools and wireless-regdb, and pre-seeding them makes the kernel
 # install a local dpkg operation instead of a second archive resolution. This
@@ -277,21 +332,6 @@
       when:
         - rocm_ernic_setup_pciids_merge is changed
         - rocm_ernic_setup_pciids_lspci.stat.exists | default(false)
-
-# The collection defends against this with ernic_dpkg_lock_wait: 300 on every
-# guest task. Masking the units in the image is the cheaper half of that.
-- name: Mask unattended-upgrades
-  ansible.builtin.systemd_service:
-    name: "{{ item }}"
-    masked: true
-    enabled: false
-    state: stopped
-  loop:
-    - unattended-upgrades.service
-    - apt-daily.timer
-    - apt-daily-upgrade.timer
-  failed_when: false
-  when: rocm_ernic_setup_mask_unattended_upgrades | bool
 
 - name: Clean the apt cache to shrink the image
   ansible.builtin.apt:

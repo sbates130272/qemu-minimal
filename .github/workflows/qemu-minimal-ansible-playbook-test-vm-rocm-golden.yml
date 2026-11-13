@@ -29,6 +29,9 @@ on:
       - 'ansible/playbooks/vars/**'
       - 'ansible/playbooks/roles/**'
       - 'ansible/requirements.yml'
+      - 'ansible/playbooks/templates/**'
+      - 'qemu/checks/rocm-golden.sh'
+      - 'qemu/packages.d/rocm-golden.txt'
       - 'qemu/compose/vfio-user-ernic-rocjitsu-vm/**'
       - '.github/actions/setup-vm-job/action.yml'
       - '.github/actions/report-image-size/action.yml'
@@ -43,23 +46,10 @@ env:
   ROCJITSU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261112.gdca6903-rocjitsu.50be05a
   QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261112.gdca6903-qemu11.1.3-vfu.05bb5e5
   VM_IMAGES_DIR: /var/lib/qemu-tool/images
-  # rocm_setup_skip_system_upgrade turns off the role's "upgrade: safe" +
-  # autoremove pass. That pass pulls the whole distro forward -- 28 packages
-  # and 18.1 MB on a recent run, perl and netplan and polkit and sudo, none of
-  # them under test here -- and it is the single largest source of flake in
-  # these lanes, because it is what meets the security.ubuntu.com mirror skew
-  # (one stale node in an eight-address pool, which re-running does not
-  # dependably route around). It is also a reproducibility hole: the ernic
-  # side pins the guest kernel via ernic_ionic_kernel_ref and fails the build
-  # on a major.minor mismatch precisely so the guest does not drift, and then
-  # this re-randomises everything around that kernel, so two bakes of the same
-  # playbook against the same cloud image are not the same guest.
-  #
-  # sbates130272.batesste 3.0.0 made true the role default and documents the
-  # knob as "useful in CI", but vm-rocm-golden.yml holds it at false so that a local
-  # bake still upgrades. So this line is a real override again, not a
-  # restatement of the default. Local bakes are unaffected.
-  ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false,"user_setup_deploy_ssh_key":false,"rocm_setup_skip_system_upgrade":true}'
+  # No ANSIBLE_EXTRA_ARGS. The playbook's own defaults are the published
+  # image's -- no dotfiles, no SSH private key, no GPG signing, no distro
+  # upgrade, no ip_discovery.bin -- and this lane bakes with exactly those, so
+  # a default that drifts shows up here.
 
 jobs:
   test-vm-rocm-golden:
@@ -96,11 +86,6 @@ jobs:
       uses: sbates130272/qemu-tool-action@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # rocjitsu_setup_firmware_ip_discovery=false prevents baking ip_discovery.bin
-        # at image-gen time; the live firmware play at the end of
-        # vm-rocm-golden.yml generates it against the live rocjitsu container
-        # and provides the timing delay rocjitsu needs before amdgpu-probe runs.
-        ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false,"user_setup_deploy_ssh_key":false,"rocm_setup_skip_system_upgrade":true,"rocjitsu_firmware_ip_discovery":false}'
       with:
         operation: gen-vm
         qemu-tool-source: ./qemu
@@ -109,7 +94,11 @@ jobs:
         size: '64'
         vcpus: '4'
         ansible-playbook: ansible/playbooks/vm-rocm-golden.yml
-        extra-args: --username ubuntu --password password --packages none
+        # The manifest the published guest is built with, so the check below
+        # sees the guest a consumer gets.
+        extra-args: >-
+          --username ubuntu --password password
+          --packages qemu/packages.d/rocm-golden.txt
 
     - name: Bring up rocm-golden compose stack
       uses: sbates130272/qemu-tool-action@v1
@@ -152,6 +141,21 @@ jobs:
         echo "VM failed to boot in time"
         exit 1
 
+    # The file batesste-ci-images gates the published image on, run here so
+    # this repo gates the same thing. It is written for a boot with no
+    # device; this guest has both attached, so the probe is expected to say
+    # "ready" where a bare boot says "absent". Before the firmware step
+    # below, because it asserts the image carries no ip_discovery.bin.
+    #
+    # Over "bash -s": non-login and non-interactive, which is the session
+    # the check's ROCm PATH assertions are about.
+    - name: Run the rocm-golden guest check
+      run: |
+        { echo 'set -eu'; cat qemu/checks/rocm-golden.sh; } |
+          ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+            -p 2222 ubuntu@qemu "ROCM_GOLDEN_EXPECT_PROBE=ready bash -s"
+        echo "✓ qemu/checks/rocm-golden.sh passed"
+
     - name: Verify amdgpu DKMS module installed
       run: |
         ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
@@ -159,19 +163,13 @@ jobs:
           "dkms status amdgpu | grep -q installed"
         echo "✓ amdgpu DKMS module installed"
 
-    # imu, not rlc_1, and one step each rather than an "&&" pair. Under the
-    # default "gap" firmware set the generator emits only what no driver
-    # release ships, and rlc_1 is not in that list -- it comes from
-    # amdgpu-dkms-firmware, which installs to /lib/firmware/updates/amdgpu/.
-    # So the old assertion named a file that is never written to the path it
-    # looked in, and being one half of an "&&" under "sh -e" it failed with
-    # nothing but "exit code 1", giving no way to tell which half was at
-    # fault. vm-rocm-golden.yml already splits these two.
+    # imu: the gap set holds only what no driver release ships, and it sits
+    # beside the packaged blobs in updates/.
     - name: Verify firmware stubs present
       run: |
         ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
           -p 2222 ubuntu@qemu \
-          "test -f /lib/firmware/amdgpu/gc_12_1_0_imu.bin"
+          "test -f /lib/firmware/updates/amdgpu/gc_12_1_0_imu.bin"
         echo "✓ gfx1250 firmware stubs present"
 
     - name: Verify amdgpu-probe installed
@@ -181,12 +179,15 @@ jobs:
           "test -x /usr/local/bin/amdgpu-probe"
         echo "✓ amdgpu-probe installed"
 
-    - name: Run the ernic configure stage
+    # configure sets up the NIC. firmware installs ip_discovery.bin from the
+    # rocjitsu image serving this guest: the bake carries none, and amdgpu
+    # cannot probe without it.
+    - name: Run the ernic configure and live firmware stages
       run: |
         ansible-playbook \
           -i "qemu," \
           ansible/playbooks/vm-rocm-golden.yml \
-          --tags configure \
+          --tags configure,firmware \
           -e "ansible_host=qemu" \
           -e "ansible_port=2222" \
           -e "ansible_user=ubuntu" \
@@ -211,9 +212,8 @@ jobs:
         echo "✓ RDMA port active"
 
     # This step has hung and only died to the job-level timeout, with no diagnostic output. Bound at all three layers
-    # -- the guest command, the ssh session and the step. The Install
-    # ip_discovery.bin step above provides the timing buffer that the quickstart
-    # relies on.
+    # -- the guest command, the ssh session and the step. It needs the
+    # ip_discovery.bin the firmware stage above installed.
     - name: Load amdgpu via amdgpu-probe
       timeout-minutes: 10
       run: |

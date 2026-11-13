@@ -38,6 +38,7 @@
   when: not (rocm_ernic_setup_kernel_current | bool)
   block:
 
+    # The listing is the request kernel.ubuntu.com answers 503 to.
     - name: Fetch the mainline index for the pinned ref
       ansible.builtin.uri:
         url: >-
@@ -45,13 +46,31 @@
           rocm_ernic_setup_debarch }}/
         return_content: true
       register: rocm_ernic_setup_kernel_index
+      retries: "{{ rocm_ernic_setup_kernel_fetch_retries }}"
+      delay: "{{ rocm_ernic_setup_kernel_fetch_delay }}"
+      until: rocm_ernic_setup_kernel_index is success
+      when: rocm_ernic_setup_kernel_debs_dir | length == 0
+
+    # A caller with the .debs already on the controller -- a build cache --
+    # names the directory and nothing is fetched.
+    - name: List the kernel .deb files the controller already has
+      ansible.builtin.find:
+        paths: "{{ rocm_ernic_setup_kernel_debs_dir }}"
+        patterns: "linux-*.deb"
+      register: rocm_ernic_setup_kernel_local
+      delegate_to: localhost
+      become: false
+      when: rocm_ernic_setup_kernel_debs_dir | length > 0
 
     - name: Select the kernel .deb files
       ansible.builtin.set_fact:
         # -64k is the arm64 64K-page flavour; see the header comment.
         rocm_ernic_setup_kernel_debs: >-
-          {{ rocm_ernic_setup_kernel_index.content
-             | regex_findall('linux-[a-z-]+-[0-9][^"]*\.deb')
+          {{ (rocm_ernic_setup_kernel_local.files | default([])
+              | map(attribute='path') | map('basename') | list
+              if rocm_ernic_setup_kernel_debs_dir | length > 0
+              else rocm_ernic_setup_kernel_index.content
+                   | regex_findall('linux-[a-z-]+-[0-9][^"]*\.deb'))
              | reject('search', '-64k')
              | unique | sort }}
 
@@ -62,8 +81,11 @@
           - rocm_ernic_setup_kernel_debs | select('match', 'linux-headers') | length > 0
           - rocm_ernic_setup_kernel_debs | select('match', 'linux-modules') | length > 0
         fail_msg: >-
-          {{ rocm_ernic_setup_kernel_mirror }}/{{ rocm_ernic_setup_kernel_ref }}/{{
-          rocm_ernic_setup_debarch }}/ does not carry a complete image, headers and
+          {{ rocm_ernic_setup_kernel_debs_dir
+             if rocm_ernic_setup_kernel_debs_dir | length > 0
+             else rocm_ernic_setup_kernel_mirror ~ '/' ~ rocm_ernic_setup_kernel_ref
+                  ~ '/' ~ rocm_ernic_setup_debarch ~ '/' }}
+          does not carry a complete image, headers and
           modules set: {{ rocm_ernic_setup_kernel_debs | join(', ') | default('nothing') }}.
           Mainline builds are pruned over time and can fail for a release --
           check the ref, or move rocm_ernic_setup_kernel_ref and IONIC_KERNEL_REF
@@ -84,9 +106,27 @@
         mode: "0644"
       loop: "{{ rocm_ernic_setup_kernel_debs }}"
       register: rocm_ernic_setup_kernel_dl
-      retries: "{{ rocm_ernic_setup_apt_retries }}"
-      delay: "{{ rocm_ernic_setup_apt_delay }}"
+      retries: "{{ rocm_ernic_setup_kernel_fetch_retries }}"
+      delay: "{{ rocm_ernic_setup_kernel_fetch_delay }}"
       until: rocm_ernic_setup_kernel_dl is success
+      when: rocm_ernic_setup_kernel_debs_dir | length == 0
+
+    - name: Copy the kernel .deb files from the controller
+      ansible.builtin.copy:
+        src: "{{ rocm_ernic_setup_kernel_debs_dir }}/{{ item }}"
+        dest: "{{ rocm_ernic_setup_kernel_payload_dir }}/{{ item }}"
+        mode: "0644"
+      loop: "{{ rocm_ernic_setup_kernel_debs }}"
+      when: rocm_ernic_setup_kernel_debs_dir | length > 0
+
+    # Read back by whoever records what the image was built from.
+    - name: Record the kernel .deb files that were installed
+      ansible.builtin.copy:
+        dest: /etc/rocm-ernic-kernel-debs
+        content: "{{ rocm_ernic_setup_kernel_debs | join('\n') }}\n"
+        owner: root
+        group: root
+        mode: "0644"
 
     # One transaction, apt not dpkg -- see the header comment. The apt module
     # cannot express this: its `deb` argument takes a single path, and looping

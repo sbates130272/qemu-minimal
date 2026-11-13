@@ -76,3 +76,25 @@
     dest: /usr/local/bin/amdgpu-probe
     mode: "0755"
   become: true
+
+# No dot in the installed name: run-parts skips files that have one.
+- name: Install the login hint for the probe step
+  ansible.builtin.copy:
+    src: amdgpu-probe-motd
+    dest: /etc/update-motd.d/99-amdgpu-probe
+    mode: "0755"
+  become: true
+
+# No device and no amdgpu during a bake, so "absent" and silence are the only
+# right answers. Anything else means the detection is wrong, and a hint that
+# fires with no GPU nags every login of every guest.
+- name: Assert the probe reports no device during a bake
+  ansible.builtin.shell:
+    cmd: |
+      set -e
+      test "$(/usr/local/bin/amdgpu-probe --status)" = absent
+      test -z "$(/etc/update-motd.d/99-amdgpu-probe)"
+    executable: /bin/bash
+  become: true
+  changed_when: false
+  when: rocjitsu_setup_amdgpu_update_initramfs | bool

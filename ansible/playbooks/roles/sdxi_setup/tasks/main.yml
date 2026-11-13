@@ -66,6 +66,16 @@
     mode: "0644"
   notify: Reload udev rules
 
+# sdxi_perf is a benchmark that takes the device for itself. Installed so it
+# is there to load by hand, and blacklisted so nothing loads it otherwise.
+- name: Keep sdxi_perf from autoloading
+  ansible.builtin.copy:
+    dest: /etc/modprobe.d/sdxi.conf
+    content: "blacklist sdxi_perf\n"
+    owner: root
+    group: root
+    mode: "0644"
+
 - name: Enable module autoload
   when: sdxi_setup_autoload | bool
   ansible.builtin.copy:

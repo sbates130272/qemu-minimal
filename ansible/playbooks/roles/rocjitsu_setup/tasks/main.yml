@@ -15,5 +15,10 @@
 - name: Install the guest tools
   ansible.builtin.include_tasks: tools.yml
 
+# After the tools: the amdsmi bindings it puts on the import path come from
+# a package tools.yml installs.
+- name: Put ROCm where shells, tools and Python find it
+  ansible.builtin.include_tasks: rocm_env.yml
+
 - name: Install the metrics exporter
   ansible.builtin.include_tasks: metrics.yml

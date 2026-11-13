@@ -1,43 +1,54 @@
 #!/bin/bash
-# Probe amdgpu with gfx1250 emulation parameters.
-# Run after rocjitsu vfio-user server is ready.
+# Probe amdgpu with the gfx1250 emulation parameters, once a rocjitsu
+# vfio-user server is serving the device.
+#
+# Installed at /usr/local/bin/amdgpu-probe by rocjitsu_setup. It is a
+# convenience, not a contract: nothing in the image runs it, amdgpu stays
+# blacklisted either way, and a consumer that wants to own the parameters can
+# ignore this file. It exists because the values below are easy to get wrong
+# in ways that present as something else, and because they belong with the
+# driver build rather than with whoever happens to be calling.
+#
+#   amdgpu-probe            load amdgpu with the emulation parameters
+#   amdgpu-probe --status   print absent, ready, loaded or stranded; change
+#                           nothing and always exit 0
 set -euo pipefail
 
 params=(
   emu_mode=1
   fw_load_type=0
   discovery=2
-  # Upstream's qemu-vfio.md says 0x3f, which is right for its own
-  # driver: there the compute IP blocks enumerate as common, gmc, ih,
-  # gfx, sdma, mes -- indices 0..5. This DKMS build enumerates an
-  # extra ras_v1_0 at index 5, so mes lands at 6 and 0x3f masks it
-  # off. gfx_v12_1 needs MES to bring the command processor up, and
-  # without it the probe oopses in gfx_v12_1_xcc_cp_resume. Count the
-  # "detected ip block number" lines in dmesg before changing this.
+  # Upstream's qemu-vfio.md says 0x3f, which is right for its own driver: there
+  # the compute IP blocks enumerate as common, gmc, ih, gfx, sdma, mes --
+  # indices 0..5.  This DKMS build enumerates an extra ras_v1_0 at index 5, so
+  # mes lands at 6 and 0x3f masks it off.  gfx_v12_1 needs MES to bring the
+  # command processor up, and without it the probe oopses in
+  # gfx_v12_1_xcc_cp_resume.  Count the "detected ip block number" lines in
+  # dmesg before changing this.
   ip_block_mask=0x7f
   vm_update_mode=3
   gpu_recovery=0
-  # 1 GiB, per upstream's qemu-vfio.md. Not a performance knob: it is
-  # the budget ROCr provisions queue scratch from, at the occupancy
-  # the device advertises. A smaller limit runs scratch-free kernels
-  # fine but makes a private-segment dispatch wait forever for an
-  # allocation that never arrives. Unrelated to vram_aperture_bytes in
-  # the rocjitsu config -- that is the BAR window, and upstream leaves
-  # it at 256 MiB alongside this.
+  # 1 GiB, per upstream's corrected qemu-vfio.md.  Not a performance knob: it
+  # is the budget ROCr provisions queue scratch from, at the occupancy the
+  # device advertises.  A smaller limit runs scratch-free kernels fine but
+  # makes a private-segment dispatch wait forever for an allocation that never
+  # arrives.  Unrelated to vram_aperture_bytes in the rocjitsu config -- that
+  # is the BAR window, which the rocjitsu image leaves at the 256 MiB upstream
+  # ships unless a build opts into raising it.  Changing one says nothing about
+  # the other.
   vramlimit=1024
 )
 
-# modprobe is a no-op on a resident module: it returns 0 without
-# re-inserting, so every parameter above is discarded in silence.
-# That is exactly what happens when a stale initramfs loaded amdgpu
-# during boot. Compare what is live against what we asked for and
-# say so, rather than exiting 0 having done nothing.
-if [ -d /sys/module/amdgpu ]; then
+# What is live against what we asked for.  Sets "mismatch" and nothing else, so
+# both the probe below and --status read the same parameter list; the login
+# hint in /etc/update-motd.d calls --status rather than restating any of it,
+# which is the whole reason this is a function.
+collect_mismatch() {
   mismatch=()
   for kv in "${params[@]}"; do
     name=${kv%%=*}
     want=${kv#*=}
-    # The kernel prints these decimal, so normalise 0x3f to 63.
+    # The kernel prints these decimal, so normalise 0x7f to 127.
     if [ "$want" != "${want#0x}" ]; then
       want=$((want))
     fi
@@ -46,6 +57,63 @@ if [ -d /sys/module/amdgpu ]; then
       mismatch+=("$name: want $want, live $live")
     fi
   done
+}
+
+# Is an emulated accelerator actually on the bus?  Read from sysfs rather than
+# lspci, which is a package this guest is not guaranteed to carry.  0x1002 is
+# AMD and 0x1200xx is "processing accelerator", which is the class rocjitsu's
+# PciDeviceInfo defaults to and the one amdgpu's PCI table matches on.
+device_present() {
+  local dev vendor class
+  for dev in /sys/bus/pci/devices/*; do
+    if [ ! -r "${dev}/vendor" ] || [ ! -r "${dev}/class" ]; then
+      continue
+    fi
+    read -r vendor < "${dev}/vendor" || continue
+    [ "${vendor}" = "0x1002" ] || continue
+    read -r class < "${dev}/class" || continue
+    case "${class}" in
+      0x1200*) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+# Report state and do nothing else.  One word on stdout, always exit 0: the
+# caller is a motd script, and a login is not a thing to fail over a GPU.
+#
+#   absent    no emulated accelerator on the bus -- nothing to probe
+#   ready     device present, amdgpu not loaded -- the probe is the next step
+#   loaded    amdgpu loaded with these parameters -- nothing to do
+#   stranded  amdgpu loaded with different ones -- costs a reboot to leave
+if [ "${1:-}" = "--status" ]; then
+  if [ -d /sys/module/amdgpu ]; then
+    collect_mismatch
+    if [ ${#mismatch[@]} -eq 0 ]; then
+      echo loaded
+    else
+      echo stranded
+    fi
+  elif device_present; then
+    echo ready
+  else
+    echo absent
+  fi
+  exit 0
+fi
+
+if [ $# -gt 0 ]; then
+  echo "usage: $0 [--status]" >&2
+  exit 2
+fi
+
+# modprobe is a no-op on a resident module: it returns 0 without re-inserting,
+# so every parameter above is discarded in silence.  That is exactly what
+# happens when a stale initramfs loaded amdgpu during boot.  Compare what is
+# live against what we asked for and say so, rather than exiting 0 having done
+# nothing.
+if [ -d /sys/module/amdgpu ]; then
+  collect_mismatch
 
   if [ ${#mismatch[@]} -eq 0 ]; then
     if ls /dev/dri/render* >/dev/null 2>&1; then

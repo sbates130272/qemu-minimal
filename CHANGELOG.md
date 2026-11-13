@@ -11,6 +11,43 @@ All notable changes to this project will be documented in this file.
   P4 in guest scope and an SDXI device. Every tracked benchmark runs against
   this one stack.
 
+- **`vm-rocm-golden.yml` bakes a publishable guest without a Docker
+  daemon, and that guest passes `qemu/checks/rocm-golden.sh`.** The target is
+  a bake inside a container build, with nothing but `gen-vm
+  --ansible-playbook`. What that took:
+  - Every bake play is tagged `install`. The SRQ + P4 and SDXI plays had no
+    tag, so `--tags install` finished green without them. The live firmware
+    play had none either, so it ran in every bake, needed Docker, and baked
+    an `ip_discovery.bin` the caller had asked not to have. It is now
+    `--tags firmware`, and replaces an existing blob instead of keeping it.
+  - `-e rocjitsu_firmware_script=<path>` copies rocjitsu's
+    `vfio_guest_firmware.py` to the guest and runs it there. The gap set goes
+    beside the packaged blobs in `/lib/firmware/updates/amdgpu` with its
+    manifest, a stub is never written over a packaged blob, and
+    `/lib/firmware/amdgpu` is left empty for a consumer's `ip_discovery.bin`.
+    `rocjitsu_firmware_ip_discovery` now defaults to false.
+  - An `ionic-exclude` initramfs hook, and a regeneration of every initramfs
+    after the SRQ + P4 build, so no image carries an ionic module older than
+    the one `ionic_rdma` and `ernic_p4` were built against.
+  - `sdxi_setup` builds `sdxi_perf` as well as `sdxi_char`, installs both
+    under `updates/`, blacklists `sdxi_perf`, and fetches the pinned commit
+    itself instead of the tip of a branch.
+  - ROCm is pinned to the 10.1 line, with `ROCM_PATH` and `PATH` set for
+    login and non-login shells, `/opt/rocm/bin` and `/opt/rocm/lib` symlinks,
+    importable `amdsmi` bindings and `amdrocm-blas-dev`.
+  - `amdgpu-probe --status` reports `absent`, `ready`, `loaded` or `stranded`
+    instead of loading the driver, and a login hint reads it.
+  - `/etc/rocm-golden-guest.json` and `~/WELCOME.md` record what was baked.
+  - The playbook's defaults are the published image's: no dotfiles, no SSH
+    private key, no GPG signing, no distro upgrade, no device metrics
+    exporter. `unattended-upgrades` is purged before the first apt run.
+  - `rocm_ernic_setup_kernel_debs_dir` installs the kernel from .debs already
+    on the controller, and the mirror fetches retry 8 times.
+  - The playbook-test lane bakes with those defaults and the
+    `rocm-golden.txt` package manifest, then runs the check.
+  - `tests/test_playbook_pins.py` compares the guest pins with the server
+    image tags and asserts every play is a bake play or a live one.
+
 - **The golden image bakes in the metrics exporters and the wait-online
   mask.** node_exporter with its amdgpu textfile collector, `rdma_exporter`
   (pinned to v0.7.5 by tarball checksum; enabled, not started, since a bake

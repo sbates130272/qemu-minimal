@@ -4,7 +4,14 @@
 #
 # ROCm userspace and amdgpu-dkms are *not* here.  They come from third-party
 # apt repositories, which cloud-init's package list cannot add, so they are
-# installed by provision/rocm-golden.sh in a provisioning boot instead.
+# installed by ansible/playbooks/vm-rocm-golden.yml instead.
+#
+# This file owns everything below that no role installs: ccache, the
+# autotools, the extra -dev packages, nvme-cli and rsync. The roles install
+# what they themselves need to build, and nothing for a consumer's
+# convenience, so a bake that wants the published guest passes
+# --packages <this file>. A bake with --packages none still works; its guest
+# is short only these.
 #
 # Nothing here may be kernel-versioned: cloud-init runs before the mainline
 # kernel is installed, and ${KERNEL_VERSION} would expand to the *host* kernel
