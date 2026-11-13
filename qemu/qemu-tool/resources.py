@@ -23,6 +23,7 @@ SHARE = "qemu_tool.share"
 COMPOSE = "qemu_tool.share.compose"
 XML = "qemu_tool.share.xml"
 PACKAGES_D = "qemu_tool.share.packages_d"
+CHECKS_D = "qemu_tool.share.checks_d"
 
 
 def packaged_path(package: str, *parts: str) -> Path | None:
