@@ -88,14 +88,6 @@ jobs:
     - name: Install qemu-tool
       run: pip install --break-system-packages -e ./qemu
 
-    - name: Generate SSH key-pair
-      run: |
-        mkdir -p "$HOME/.ssh" && ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
-        # ssh(1) expands ~ from the passwd entry, not $HOME. A container job
-        # runs as root with HOME=/github/home, so the default identity would be
-        # looked for at /root/.ssh/id_rsa, not found, and never offered.
-        [ "$HOME" = /root ] || { rm -rf /root/.ssh && ln -s "$HOME/.ssh" /root/.ssh; }
-
     - name: Ensure images directory exists
       run: mkdir -p "$VM_IMAGES_DIR" && chmod 777 "$VM_IMAGES_DIR"
 
@@ -114,6 +106,25 @@ jobs:
           --vm-name "$VM1_NAME" \
           --images "$VM_IMAGES_DIR" \
           --backing-image docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ionic:20261112.gdca6903-vm.resolute-ionic-qm.096ddfe-qcow2
+
+    # --backing-image returns before cloud-init runs, so a freshly generated
+    # key would never be injected. gen-vm pulls the OCI-referrer keypair into
+    # $VM_IMAGES_DIR/keys/; install that as the default identity instead.
+    - name: Install guest SSH key from OCI keypair
+      run: |
+        key=$(find "$VM_IMAGES_DIR/keys" -type f ! -name 'image-ref' \
+              ! -name '*.pub' ! -name '*.json' | head -1)
+        if [ -z "$key" ]; then
+          echo "::error::No guest private key found in $VM_IMAGES_DIR/keys/" && exit 1
+        fi
+        mkdir -p "$HOME/.ssh"
+        cp "$key" "$HOME/.ssh/id_rsa"
+        chmod 600 "$HOME/.ssh/id_rsa"
+        # ssh(1) expands ~ from the passwd entry, not $HOME. A container job
+        # runs as root with HOME=/github/home, so the default identity would be
+        # looked for at /root/.ssh/id_rsa, not found, and never offered.
+        [ "$HOME" = /root ] || { rm -rf /root/.ssh && ln -s "$HOME/.ssh" /root/.ssh; }
+        echo "Guest key installed: $key"
 
     - name: Generate VM 2 from shared backing file
       run: |
