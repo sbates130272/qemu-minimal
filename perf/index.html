@@ -654,7 +654,7 @@ It mirrors the same basic model used by the ROCm/rocm-ernic site: badges for the
 latest published numbers, a durable history file, and a trend page regenerated as
 new CI data lands.</p>
 <h2 id="latest-published-snapshot">Latest published snapshot<a class="headerlink" href="#latest-published-snapshot" title="Permanent link">&para;</a></h2>
-<p>Generated from <code>5028fae4</code> at <strong>2026-11-13 15:42 UTC</strong>.</p>
+<p>Generated from <code>5028fae4</code> at <strong>2026-11-13 16:14 UTC</strong>.</p>
 <p><img alt="rocjitsu GEMM" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-gemm.json" />
 <img alt="rocjitsu hipFile" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile.json" />
 <img alt="hipFile fio" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile-fio.json" />
@@ -680,21 +680,21 @@ vfio-user and swing hard between runs.</p>
 <tbody>
 <tr>
 <td>Rocjitsu GEMM</td>
-<td>485 kFLOP/s</td>
-<td>602 kFLOP/s</td>
-<td>watch (-19%)</td>
+<td>509 kFLOP/s</td>
+<td>596 kFLOP/s</td>
+<td>watch (-15%)</td>
 </tr>
 <tr>
 <td>Rocjitsu HipFile</td>
-<td>17.6 MB/s</td>
-<td>36 MB/s</td>
-<td>regressed (-51%)</td>
+<td>13.1 MB/s</td>
+<td>34.4 MB/s</td>
+<td>regressed (-62%)</td>
 </tr>
 <tr>
 <td>HipFile Fio</td>
-<td>16.8 MB/s</td>
-<td>31 MB/s</td>
-<td>regressed (-46%)</td>
+<td>6.88 MB/s</td>
+<td>29.8 MB/s</td>
+<td>regressed (-77%)</td>
 </tr>
 <tr>
 <td>Ernic P4 FP8 BW</td>
@@ -730,14 +730,6 @@ vfio-user and swing hard between runs.</p>
 </tr>
 </thead>
 <tbody>
-<tr>
-<td>64bfc75e</td>
-<td>2026-11-12 16:15 UTC</td>
-<td>487 kFLOP/s</td>
-<td>17.2 MB/s</td>
-<td>17.1 MB/s</td>
-<td>n/a</td>
-</tr>
 <tr>
 <td>64bfc75e</td>
 <td>2026-11-12 16:55 UTC</td>
@@ -810,6 +802,14 @@ vfio-user and swing hard between runs.</p>
 <td>16.8 MB/s</td>
 <td>n/a</td>
 </tr>
+<tr>
+<td>5028fae4</td>
+<td>2026-11-13 16:14 UTC</td>
+<td>509 kFLOP/s</td>
+<td>13.1 MB/s</td>
+<td>6.88 MB/s</td>
+<td>n/a</td>
+</tr>
 </tbody>
 </table>
 <h2 id="current-report-freshness">Current report freshness<a class="headerlink" href="#current-report-freshness" title="Permanent link">&para;</a></h2>
@@ -821,7 +821,7 @@ branch and would otherwise keep reading <code>pass</code> indefinitely. The badg
 shows the last date on which all 7 reports were green at once —
 amber once that date is no longer today.</p>
 <p>Last all-green: <strong>2026-11-02</strong> &middot; checked
-2026-11-13 16:05 UTC &middot; currently
+2026-11-13 16:14 UTC &middot; currently
 not all green.</p>
 <table>
 <thead>
@@ -843,9 +843,9 @@ not all green.</p>
 </tr>
 <tr>
 <td>rocjitsu</td>
-<td>2026-11-13 11:35 UTC</td>
+<td>2026-11-13 16:10 UTC</td>
 <td>pass</td>
-<td><code>3040a58</code></td>
+<td><code>5028fae</code></td>
 <td><a href="/rocjitsu/">/rocjitsu/</a></td>
 </tr>
 <tr>
@@ -864,9 +864,9 @@ not all green.</p>
 </tr>
 <tr>
 <td>hipFile fio</td>
-<td>2026-11-13 11:37 UTC</td>
+<td>2026-11-13 16:13 UTC</td>
 <td>pass</td>
-<td><code>3040a58</code></td>
+<td><code>5028fae</code></td>
 <td><a href="/hipfile-fio/">/hipfile-fio/</a></td>
 </tr>
 <tr>
