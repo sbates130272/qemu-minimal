@@ -4,6 +4,236 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **`qemu/xml/rocm-golden.xml`, the performance-tracking fleet.** Two guests
+  from the published rocm-golden qcow2, each with a GPU, an NVMe, an ernic with
+  P4 in guest scope and an SDXI device. Every tracked benchmark runs against
+  this one stack.
+
+- **This repo publishes the rocm-golden qcow2.** batesste-ci-images stops
+  building guests and pulls this one.
+  - `qemu-tool publish-qcow` converts a baked qcow2 to a standalone image,
+    compresses it with zstd and pushes it with `oras`, with `vm-info.json`
+    and the guest keypair as a referrer. It is the artifact
+    `gen-vm --backing-image` pulls, and the media types both sides use now
+    live in one module, `vm_artifact.py`. An overlay is refused, and
+    `--dry-run` builds everything and pushes nothing.
+  - The `Publish - qcow-rocm-golden` workflow runs on pushes to main that
+    touch the image's inputs, and by dispatch with a dry-run switch. It
+    checks the guest pins against the server images, bakes, runs
+    `qemu/checks/rocm-golden.sh` on a boot with no device, then the
+    configure, firmware and test stages and an SDXI copy behind the
+    single-VM stack,
+    and publishes to `docker.io/sbates130272/qemu-minimal-rocm-golden` as
+    `<YYYYMMDD>.g<sha7>` and `latest`. The published disk is the bake, not
+    the disk that was tested.
+  - The `vfio-user-ernic-rocjitsu-vm` stack gains a rocm-sdxi server, so its
+    guest has an SDXI engine as well. `SDXI_COUNT=0` leaves it out.
+  - `sdxi_source_pin` moves to `dfd76f2`, where upstream `sdxi_char` builds
+    on 7.2 unaided, and the carried io_uring patch is deleted.
+
+- **`vm-rocm-golden.yml` bakes a publishable guest without a Docker
+  daemon, and that guest passes `qemu/checks/rocm-golden.sh`.** The target is
+  a bake inside a container build, with nothing but `gen-vm
+  --ansible-playbook`. What that took:
+  - Every bake play is tagged `install`. The SRQ + P4 and SDXI plays had no
+    tag, so `--tags install` finished green without them. The live firmware
+    play had none either, so it ran in every bake, needed Docker, and baked
+    an `ip_discovery.bin` the caller had asked not to have. It is now
+    `--tags firmware`, and replaces an existing blob instead of keeping it.
+  - `-e rocjitsu_firmware_script=<path>` copies rocjitsu's
+    `vfio_guest_firmware.py` to the guest and runs it there. The gap set goes
+    beside the packaged blobs in `/lib/firmware/updates/amdgpu` with its
+    manifest, a stub is never written over a packaged blob, and
+    `/lib/firmware/amdgpu` is left empty for a consumer's `ip_discovery.bin`.
+    `rocjitsu_firmware_ip_discovery` now defaults to false.
+  - An `ionic-exclude` initramfs hook, and a regeneration of every initramfs
+    after the SRQ + P4 build, so no image carries an ionic module older than
+    the one `ionic_rdma` and `ernic_p4` were built against.
+  - `sdxi_setup` builds `sdxi_perf` as well as `sdxi_char`, installs both
+    under `updates/`, blacklists `sdxi_perf`, and fetches the pinned commit
+    itself instead of the tip of a branch.
+  - ROCm is pinned to the 10.1 line, with `ROCM_PATH` and `PATH` set for
+    login and non-login shells, `/opt/rocm/bin` and `/opt/rocm/lib` symlinks,
+    importable `amdsmi` bindings and `amdrocm-blas-dev`.
+  - `amdgpu-probe --status` reports `absent`, `ready`, `loaded` or `stranded`
+    instead of loading the driver, and a login hint reads it.
+  - `/etc/rocm-golden-guest.json` and `~/WELCOME.md` record what was baked.
+  - The playbook's defaults are the published image's: no dotfiles, no SSH
+    private key, no GPG signing, no distro upgrade, no device metrics
+    exporter. `unattended-upgrades` is purged before the first apt run.
+  - `rocm_ernic_setup_kernel_debs_dir` installs the kernel from .debs already
+    on the controller, and the mirror fetches retry 8 times.
+  - The playbook-test lane bakes with those defaults and the
+    `rocm-golden.txt` package manifest, then runs the check.
+  - `tests/test_playbook_pins.py` compares the guest pins with the server
+    image tags and asserts every play is a bake play or a live one.
+
+- **The golden image bakes in the metrics exporters and the wait-online
+  mask.** node_exporter with its amdgpu textfile collector, `rdma_exporter`
+  (pinned to v0.7.5 by tarball checksum; enabled, not started, since a bake
+  has no RDMA device) and the
+  `systemd-networkd-wait-online` mask are now role tasks that
+  `vm-rocm-golden.yml` runs. `vm-quickstart.yml` calls the same task files,
+  so it loses about 140 inline lines and changes nothing on an image that
+  already has them.
+
+- **Three consolidated roles.** `rocjitsu_setup` (firmware, amdgpu, guest
+  tools, live GPU tests), `rocm_ernic_setup` (image preparation, device naming,
+  boot-time addressing) and `sdxi_setup`. Callers reach the parts with
+  `tasks_from`. All four repo-local roles, `image_slim` included, are now
+  linted at the `production` profile in CI; two were before.
+
+- **Ernic P4 bandwidth on the performance page.** The metric was tracked but
+  missing from the page's badges and its recent-runs table, which are now
+  generated from the metric list rather than written out.
+
+### Changed
+
+- **`report-for-vm-rocm-golden` is the one benchmark workflow.** It replaces
+  `report-for-vm-rocjitsu` and absorbs the ernic P4 and SDXI benchmarks from
+  `report-for-vm-ernic` and `report-for-helios`. It brings the stack up with
+  `qemu-tool quick-start` from `rocm-golden.xml`, carries no settings in its
+  `env:`, and uploads only `badge-*.json`, as `perf-rocjitsu`,
+  `perf-hipfile-fio`, `perf-ernic` and `perf-helios`.
+
+- **The published site carries documentation and performance trends only.**
+  `publish-pages` fetches the four `perf-*` artifacts into a scratch directory
+  and publishes nothing from them but the generated `perf/` page.
+  `render-site-perf.py` takes `--input-dir` and no longer reads report pages.
+
+- **Two image playbooks instead of seven.** `vm-rocm-golden.yml` imports
+  `vm-basic.yml` once and carries the ernic, ROCm and rocjitsu plays itself;
+  `--tags configure` and `--tags test` are its live-guest entry points.
+  `vm-basic.yml` now runs once per bake rather than twice. The slim pass is a
+  play in each playbook rather than an imported file.
+
+- **The rocjitsu play is three role calls.** The four inline amdgpu source
+  patches became one script, `amdgpu-emu-patches.py`, checked byte for byte
+  against the heredocs it replaces. Firmware generation, which was written out
+  in four places, is one task file; a live guest selects it with
+  `rocjitsu_setup_firmware_live`. The names CI and the image bake already pass
+  (`rocjitsu_firmware_ip_discovery`, `rocjitsu_generate_firmware`,
+  `vm_rocjitsu_*`) still work.
+
+- **Fleet inventory variables renamed.** `lmcache_guest_rocjitsu_image` is
+  `fleet_guest_rocjitsu_image` and `lmcache_guest_ernic_mac` is
+  `fleet_guest_ernic_mac`. The committed scale-out, mi355x and helios stacks
+  are regenerated.
+
+- **The ernic pins live in `vm-rocm-golden.yml`.** `ionic_kernel_pin` and
+  `ernic_source_pin` are defined once on its first play and shared with the
+  other two through YAML anchors. The SDXI pin is a variable on the SDXI play.
+
+- **`udev/` is gone.** `99-rocm-ernic.rules` and `99-sdxi.rules` are in their
+  roles' `files/`, replacing the symlinks that pointed at them. The host-side
+  `install-vfio-rules` and `99-qemu-minimal-vfio.rules` are in `scripts/`.
+
+- **`fleet-quickstart.yml` is `vm-quickstart.yml`, and does less.** Checked
+  against a guest booted from the published image, three things it did are
+  already there: the ROCm prefix lookup and the explicit library path (ROCm
+  is on PATH and in the linker cache), and the ionic module load with its
+  version-mismatch reload (the image loads the DKMS pair at boot). The udev
+  rules now come from `rocm_ernic_setup`'s `naming` tasks rather than a second
+  copy of the same steps.
+
+- **Every subcommand takes its settings as `--xml`.** It replaces
+  `--fleet-file` on `quick-start`, `gen-compose`, `fleet-to-env` and `gen-vm`,
+  and `--env-file` on `run-vm`, `compose`, `inspect`, `ssh`, `qcow` and
+  `check`. Neither old spelling is accepted. `inspect`, `ssh`, `qcow`, `check`
+  and `run-vm` could not read fleet XML at all before; one loader now handles
+  both formats, merging XML layers with each other before converting them.
+  `docker compose --env-file` is docker's own flag and is unchanged.
+
+- **The `rocm-ernic` smoke-test workflow is `smoke-test-vm-rocm-golden`**,
+  file, name and job.
+
+- **`overlay-ci.xml` names its guests `fleet-ci`**, not `lmcache-ci`.
+
+### Removed
+
+- **LMCache.** The `lmcache_guest` role, `fleet-lmcache.yml`,
+  `qemu/docker/lmcache/`, the `lmcache-stats` subcommand, the coordinator and
+  exporter services and their scrape jobs, the `<lmcache-*>` fleet XML
+  elements, the LMCache dashboards and the panels for it on the fleet
+  dashboard. A fleet file that still carries the elements parses; they are
+  ignored. Guests no longer ship their journals to Loki, which was the guest
+  Alloy that role installed.
+
+- **Report pages and the "all reports green" badge.** `docs/reports.md`, the
+  report-freshness table and `perf/badge-all-green.json` are gone, with the
+  README badges for them.
+
+- **Workflows:** `report-for-vm-ernic`, `report-for-helios`,
+  `report-for-lmcache`, `report-for-mi355x`, and the `vm-ernic`, `vm-rocjitsu`
+  and `vm-rocm` playbook-test lanes.
+
+- **The KVM verification steps.** Seven copies of an ioctl check on
+  `/dev/kvm`, one in the `setup-vm-job` action and six inline. GitHub-hosted
+  runners have KVM, and `qemu-tool quick-start` checks it in its own
+  preflight.
+
+- **`report-for-quickstart`.** `report-for-vm-rocm-golden` already ran
+  `qemu-tool quick-start up` and `test` daily, so the two lanes were one. Its
+  checks on Prometheus and Grafana and on what `qemu-tool list` and `inspect`
+  report about live guests moved across, and `rocm-golden.xml` now enables
+  Grafana. The daily run no longer uses `quickstart.xml` itself, which CI now
+  boots only in `quickstart-boot`, and it does not start Loki or Alloy.
+
+- **`scripts/mi355x-node.sh` and `qemu/xml/overlay-mi355x-ci.xml`.** No lane
+  ran the script once `report-for-mi355x` was gone, and nothing booted the
+  overlay. The MI355X stack itself, its fleet file and the checks on its
+  switch topology stay.
+
+- **`Site Script Tests`.** It ran the whole of `tests/` on a bare runner,
+  which `Gen Compose Check` already does with `CI=true` and the tools that
+  stop the udev and `lspci` tests from skipping. Its one unique step, a
+  report-format check, went with the report pages. `Gen Compose Check` is now
+  the only workflow that runs the unit tests.
+
+- **Playbooks:** `vm-ernic.yml`, `vm-rocjitsu.yml`, `vm-rocm.yml`,
+  `vm-slim.yml` and `vm-helios.yml`. There is no longer a playbook that bakes
+  a ROCm-only, ernic-only or rocjitsu-only image, or a helios guest on in-tree
+  amdgpu. The `helios` quick-start flavor is unaffected.
+
+- **Roles:** `ionic_image_prep`, `ernic_fleet_guest`, `rocjitsu_gpu_test` and
+  `sdxi_guest`, each folded into one of the three above. The task files of
+  `ernic_fleet_guest` that no playbook reached — login, packages, patched
+  modules, memlock, perftest, netplan — are deleted rather than moved.
+
+- **Settings files:** `overlay-dense.xml` and `overlay-helios-ci.xml`, which
+  nothing read, and `vars/github-api.yml`, `vars/sdxi-pins.yml` and
+  `vars/ernic-pins.yml`.
+
+### Fixed
+
+- **The P4 bandwidth benchmark used one hostname for two networks.**
+  `generate-vm-report.sh` SSHed to guest 2 to start the server and then told
+  guest 1 to dial that same name over RDMA. It now takes the RDMA address
+  separately (`ERNIC_P4_VM2_RDMA_ADDR`) and resolves the IB device name in the
+  guest instead of assuming `rocm-rdma-ernic0`.
+
+- **A GitHub token was offered to hosts that are not GitHub.** The playbooks
+  set an `Authorization` header as a default on every `uri` call. The
+  collection roles already authenticate their own GitHub requests, so the only
+  calls the default reached were a localhost metrics check and the kernel
+  index fetch, which carried an override to keep the token away from
+  kernel.ubuntu.com. The default is removed.
+
+- **`update-initramfs` could be deleted with nothing behind it.** Undoing the
+  deferred amdgpu-dkms build removed the no-op stub unconditionally and then
+  undiverted only if a diversion existed. The removal is now gated on the
+  diversion.
+
+- **`gen-vm --fleet-file` read the file and then ignored it.** The fleet
+  XML was converted to settings keys and merged as though they were field
+  names, so none matched and every value was dropped without a word. A fleet
+  file now sets the guest's vCPUs, memory, images directory and backing image
+  the way an env-format file always did.
+
+- **`tests/test_quick_start.py` named two workflows that no longer exist.**
+
 ## [v1.7.0] - 2026-11-12
 
 ### Added
@@ -785,7 +1015,7 @@ All notable changes to this project will be documented in this file.
   passing `ib_send_bw` proves the verbs worked while only the counter proves
   the bytes crossed the mesh.
 
-  Nothing is built. The guest is the published `ernic-rocjitsu` qcow2, which
+  Nothing is built. The guest is the published `rocm-golden` qcow2, which
   already carries the mainline kernel, the ionic-ernic DKMS modules, the udev
   naming rules, rdma-core, perftest and ROCm 10.1, and the device servers are
   the tagged CI images. What the image does *not* carry is the per-rocjitsu
@@ -1544,7 +1774,7 @@ All notable changes to this project will be documented in this file.
   ROCm keyring cleanup were configuring a role that never ran, and are gone
   with it. `ansible-playbook --list-tasks --tags install` is unchanged for the
   combined lane and changes only as intended for the other two.
-  `vm-ernic-rocjitsu.yml` is untouched.
+  `vm-rocm-golden.yml` is untouched.
 
 - **Every CI lane that bakes a guest now runs `resolute`.** The `vm-rocm`,
   `ansible-setup-test`, `report-for-vm-basic`, `report-for-vm-ernic` and
@@ -1562,7 +1792,7 @@ All notable changes to this project will be documented in this file.
 - **`vm-rocm.yml` stops installing `rocm-cli` and `xrocmtop`.** Both
   `rocm_setup_install_rocm_cli` and `rocm_setup_install_xrocmtop` default to
   true in the role and were set nowhere here, so every ROCm lane — plain
-  rocjitsu and ernic-rocjitsu alike — baked them in by accident. Nothing in
+  rocjitsu and rocm-golden alike — baked them in by accident. Nothing in
   this repo runs either and no lane asserts on them. `rocm-cli` is the bigger
   reason: its installer is an unpinned `curl … rocm-cli/main/install.sh | sh`
   executed at bake time. `xrocmtop` is an interactive terminal UI in a
@@ -1581,7 +1811,7 @@ All notable changes to this project will be documented in this file.
 - `vm-rocjitsu.yml` installs the pinned mainline kernel (`ionic_kernel_pin`,
   currently `v7.2.4`) before it touches DKMS, so the standalone rocjitsu lane
   boots the same kernel as the combined lane and as the published
-  `ernic-rocjitsu` qcow2. It had been booting resolute GA, 7.0.0-34, while
+  `rocm-golden` qcow2. It had been booting resolute GA, 7.0.0-34, while
   carrying two amdgpu patches — the ptrace gate and the `panel_type` probe —
   that are version-gated to >= 7.2 and are therefore deliberate no-ops there.
   The combined lane never had the problem because `vm-ernic.yml` runs first and
@@ -1689,7 +1919,7 @@ All notable changes to this project will be documented in this file.
   most likely to start late, `:00` being the most contended minute on the
   platform.
 
-- `ansible-playbook-test-rocjitsu` and `ansible-playbook-test-ernic-rocjitsu`
+- `ansible-playbook-test-rocjitsu` and `ansible-playbook-test-rocm-golden`
   gate pull requests again. The rocjitsu lane had become dispatch-only while
   still being documented as the PR gate for the emulated GPU, which is how the
   RVS regression in #154 reached `main` and was found an hour later by
@@ -1858,7 +2088,7 @@ All notable changes to this project will be documented in this file.
 
   Where it runs is the subtle part. `import_playbook` splices plays inline and
   does not dedupe, so an ungated import from all five leaves would slim six
-  times on `vm-ernic-rocjitsu.yml` — five of them mid-chain, with real work
+  times on `vm-rocm-golden.yml` — five of them mid-chain, with real work
   still to come. That is a bug, not waste: `vm-rocjitsu.yml` installs rocBLAS
   with `update_cache: false` against lists an earlier pass would have deleted,
   and both DKMS builds read trees the opt-in purges remove. Each importing
@@ -1897,13 +2127,13 @@ All notable changes to this project will be documented in this file.
   | `vm-ernic` | 6.41 GiB | 4.84 GiB | **2.89 GiB** | −55% |
   | `vm-rocm` | 10.5 GiB | 8.42 GiB | **3.44 GiB** | −67% |
   | `vm-rocjitsu` | 10.8 GiB | 8.80 GiB | **3.59 GiB** | −67% |
-  | `vm-ernic-rocjitsu` | 11.2 GiB | 9.15 GiB | **3.90 GiB** | −65% |
+  | `vm-rocm-golden` | 11.2 GiB | 9.15 GiB | **3.90 GiB** | −65% |
 
   The ROCm guests compress at 2.45x against ernic's 1.67x, so the lanes that
   were worst off benefit most. Four images that totalled 38.9 GiB now total
   13.8 GiB.
 
-- **The `vm-rocm` and `vm-ernic-rocjitsu` lanes now trigger on
+- **The `vm-rocm` and `vm-rocm-golden` lanes now trigger on
   `ansible/playbooks/roles/**`.** They did not, and both run roles from there —
   `vm-rocm.yml` includes `ionic_image_prep`'s `kernel.yml` to install the pinned
   mainline kernel it boots, and the new `image_slim` runs last in every bake.
@@ -2157,7 +2387,7 @@ All notable changes to this project will be documented in this file.
   `ionic-ernic` DKMS package and uses stock rdma-core's `providers/ionic`; the
   emulated device moved from `1022:8000` to Pensando `1dd8:100a`.
 - `ansible-playbook-test` split into per-profile workflows (`-rocm`,
-  `-rocjitsu`, `-ernic`, `-ernic-rocjitsu`) sharing a `setup-vm-job` action,
+  `-rocjitsu`, `-ernic`, `-rocm-golden`) sharing a `setup-vm-job` action,
   and every workflow renamed to a consistent `qemu-minimal - <name>` form.
 - `requirements.yml` pins the rocm-ernic collection to an upstream git SHA.
   Galaxy publishes only 0.1.0, which is the pre-ionic collection, so the

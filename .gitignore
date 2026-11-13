@@ -98,3 +98,6 @@ qemu/env/local-*
 
 # Added by ggshield
 .cache_ggshield
+
+# Ansible lock files
+.ansible/.lock

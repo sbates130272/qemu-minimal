@@ -40,7 +40,7 @@ collections:
   # 0.2.0 is published there.
   #
   # ernic_source clones the same repo again inside the guest to build from, and
-  # defaults that checkout to "main". playbooks/vars/ernic-pins.yml pins it to
+  # defaults that checkout to "main". playbooks/vm-rocm-golden.yml pins it to
   # this same SHA so the roles and the sources they build come from one tree --
   # bump both together.
   #
@@ -50,8 +50,7 @@ collections:
   # the server container; the userspace provider is built in-guest from this
   # tree, because no rdma-core release has create_srq in providers/ionic. Run
   # a guest ahead of its server and ibv_create_srq() fails, UCX declines
-  # rc_verbs, and NIXL quietly moves LMCache P2P back onto TCP -- the exact
-  # silent fallback qemu/docker/lmcache exists to prevent.
+  # rc_verbs, and anything built on it quietly falls back to TCP.
   - name: https://github.com/ROCm/rocm-ernic.git#/ansible/
     type: git
     version: 90434a237232275fc8002cb3a6b5121ba836c594

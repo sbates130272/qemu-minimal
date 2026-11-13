@@ -1,0 +1,24 @@
+---
+# The image bake: everything a guest needs to bind an emulated rocjitsu GPU.
+# The live-guest entry points are separate task files -- `firmware` with
+# rocjitsu_setup_firmware_live for a guest behind a running stack, and `test`
+# for the GPU workloads.
+
+# Before amdgpu.yml: it decides gap or full from the packaged blobs, and the
+# stubs should be on disk when the initramfs is regenerated.
+- name: Generate and install the GPU firmware
+  ansible.builtin.include_tasks: firmware.yml
+
+- name: Prepare the amdgpu driver for emulation
+  ansible.builtin.include_tasks: amdgpu.yml
+
+- name: Install the guest tools
+  ansible.builtin.include_tasks: tools.yml
+
+# After the tools: the amdsmi bindings it puts on the import path come from
+# a package tools.yml installs.
+- name: Put ROCm where shells, tools and Python find it
+  ansible.builtin.include_tasks: rocm_env.yml
+
+- name: Install the metrics exporter
+  ansible.builtin.include_tasks: metrics.yml

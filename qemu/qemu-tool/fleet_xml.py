@@ -3,7 +3,7 @@
 fleet.xml is a custom XML format (namespace http://qemu-tool/fleet/1.0) that
 carries fleet/compose-level settings that have no libvirt domain XML equivalent:
 fleet shape, container image refs, network configuration, ERNIC mesh settings,
-LMCache config, metrics directories, and logging bounds.
+metrics directories, and logging bounds.
 
 Per-VM settings (VMConfig fields) live in separate libvirt domain XML files;
 libvirt_xml.py handles those.
@@ -97,27 +97,6 @@ class FleetConfig:
     # ---- Domain file pattern ----
     domain_pattern: str = "{name-prefix}-{n}.xml"
 
-    # ---- LMCache ----
-    lmcache_enable: bool = False
-    lmcache_image: str = "qemu-tool/lmcache-rocm:0.5.6-gfx1250-srq"
-    lmcache_coord_port: int = 9300
-    lmcache_instance_timeout: int = 30
-    lmcache_health_check_interval: int = 10
-    lmcache_server_chunk_size: int = 262144
-    lmcache_server_hash_algo: str = "blake3"
-    lmcache_server_l2_prefetch_policy: str = "retain"
-    lmcache_server_max_workers: int = 4
-    lmcache_server_http_port: int = 9500
-    lmcache_server_zmq_port: int = 5555
-    lmcache_p2p_port: int = 9400
-    lmcache_p2p_transfer_engine: str = "nixl"
-    lmcache_l1_size_gb: int = 2
-    lmcache_eviction_policy: str = "LRU"
-    lmcache_stats_port: int = 9841
-    lmcache_guest_seccomp_unconfined: bool = False
-    lmcache_guest_ionic_bind_new_id: bool = False
-    lmcache_guest_ib_device_name: str = "rocmernic0"
-    lmcache_guest_l2_prefetch_policy: str = "retain"
 
     # ---- Metrics ----
     prom_port: int = 9090
@@ -314,27 +293,6 @@ class FleetXml:
         # Domain files
         _set_str("domain_pattern", "domain-pattern")
 
-        # LMCache
-        _set_bool("lmcache_enable", "lmcache-enable")
-        _set_str("lmcache_image", "lmcache-image")
-        _set_int("lmcache_coord_port", "lmcache-coord-port")
-        _set_int("lmcache_instance_timeout", "lmcache-instance-timeout")
-        _set_int("lmcache_health_check_interval", "lmcache-health-check-interval")
-        _set_int("lmcache_server_chunk_size", "lmcache-server-chunk-size")
-        _set_str("lmcache_server_hash_algo", "lmcache-server-hash-algo")
-        _set_str("lmcache_server_l2_prefetch_policy", "lmcache-server-l2-prefetch-policy")
-        _set_int("lmcache_server_max_workers", "lmcache-server-max-workers")
-        _set_int("lmcache_server_http_port", "lmcache-server-http-port")
-        _set_int("lmcache_server_zmq_port", "lmcache-server-zmq-port")
-        _set_int("lmcache_l1_size_gb", "lmcache-l1-size-gb")
-        _set_str("lmcache_eviction_policy", "lmcache-eviction-policy")
-        _set_int("lmcache_stats_port", "lmcache-stats-port")
-        _set_int("lmcache_p2p_port", "lmcache-p2p-port")
-        _set_str("lmcache_p2p_transfer_engine", "lmcache-p2p-transfer-engine")
-        _set_bool("lmcache_guest_seccomp_unconfined", "lmcache-guest-seccomp-unconfined")
-        _set_bool("lmcache_guest_ionic_bind_new_id", "lmcache-guest-ionic-bind-new-id")
-        _set_str("lmcache_guest_ib_device_name", "lmcache-guest-ib-device-name")
-        _set_str("lmcache_guest_l2_prefetch_policy", "lmcache-guest-l2-prefetch-policy")
 
         # Metrics
         _set_int("prom_port", "prom-port")
@@ -448,27 +406,6 @@ class FleetXml:
         # Domain files
         _flat("domain-pattern", cfg.domain_pattern)
 
-        # LMCache
-        _flat("lmcache-enable", _bool_str(cfg.lmcache_enable))
-        _flat("lmcache-image", cfg.lmcache_image)
-        _flat("lmcache-coord-port", str(cfg.lmcache_coord_port))
-        _flat("lmcache-instance-timeout", str(cfg.lmcache_instance_timeout))
-        _flat("lmcache-health-check-interval", str(cfg.lmcache_health_check_interval))
-        _flat("lmcache-server-chunk-size", str(cfg.lmcache_server_chunk_size))
-        _flat("lmcache-server-hash-algo", cfg.lmcache_server_hash_algo)
-        _flat("lmcache-server-l2-prefetch-policy", cfg.lmcache_server_l2_prefetch_policy)
-        _flat("lmcache-server-max-workers", str(cfg.lmcache_server_max_workers))
-        _flat("lmcache-server-http-port", str(cfg.lmcache_server_http_port))
-        _flat("lmcache-server-zmq-port", str(cfg.lmcache_server_zmq_port))
-        _flat("lmcache-l1-size-gb", str(cfg.lmcache_l1_size_gb))
-        _flat("lmcache-eviction-policy", cfg.lmcache_eviction_policy)
-        _flat("lmcache-stats-port", str(cfg.lmcache_stats_port))
-        _flat("lmcache-p2p-port", str(cfg.lmcache_p2p_port))
-        _flat("lmcache-p2p-transfer-engine", cfg.lmcache_p2p_transfer_engine)
-        _flat("lmcache-guest-seccomp-unconfined", _bool_str(cfg.lmcache_guest_seccomp_unconfined))
-        _flat("lmcache-guest-ionic-bind-new-id", _bool_str(cfg.lmcache_guest_ionic_bind_new_id))
-        _flat("lmcache-guest-ib-device-name", cfg.lmcache_guest_ib_device_name)
-        _flat("lmcache-guest-l2-prefetch-policy", cfg.lmcache_guest_l2_prefetch_policy)
 
         # Metrics
         _flat("prom-port", str(cfg.prom_port))

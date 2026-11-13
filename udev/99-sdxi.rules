@@ -1,9 +1,0 @@
-# SNIA SDXI Controller character device.
-#
-# /dev/sdxi0 is created by sdxi_char as a misc device (class 10), root-owned
-# by default.  This rule hands ownership to the sdxi group so non-root users
-# can reach it without sudo.  Create the group and add users with:
-#   groupadd sdxi
-#   usermod -aG sdxi <user>
-# or let the sdxi_guest Ansible role do it.
-SUBSYSTEM=="misc", KERNEL=="sdxi*", GROUP="sdxi", MODE="0660"

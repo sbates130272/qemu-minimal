@@ -142,7 +142,10 @@ collect_ernic_p4() {
 # is missing rather than failing the report. The badge will show n/a until
 # the P4-enabled stack is wired in.
 run_ernic_p4_rdma_bw() {
-  local vm1_host=$1 vm2_host=$2
+  # vm2_host is where this script reaches VM2 over SSH; vm2_rdma_addr is where
+  # VM1 reaches VM2's ernic. They are different networks, and the second is
+  # the only one ib_write_bw can use.
+  local vm1_host=$1 vm2_host=$2 vm2_rdma_addr=${3:-$2}
 
   # Prerequisite 1: ernic_p4.ko from DKMS
   if ! $SSH "modinfo -n ernic_p4 2>/dev/null | grep -q 'updates/dkms'"; then
@@ -187,8 +190,11 @@ fcntl.ioctl(fd, P4_IOCTL_LOAD, bytearray(buf + prog))
 print(f"loaded {len(prog)} bytes")
 fd.close()
 PY
-# Run ib_write_bw against VM2
-ib_write_bw -d rocm-rdma-ernic0 --iters 5000 ${vm2_host} 2>/dev/null
+# Run ib_write_bw against VM2. The device name is resolved, not assumed: the
+# published image ships no udev rules, so it may still be the kernel name.
+ib=\$(ibv_devinfo -l | sed -n '2p' | tr -d ' \t\r')
+[ -n "\$ib" ] || { echo "no RDMA device in the guest"; exit 1; }
+ib_write_bw -d "\$ib" --iters 5000 ${vm2_rdma_addr} 2>/dev/null
 BENCH
   } 2>&1
 }
@@ -312,7 +318,8 @@ ERNIC_P4_BW_GBS=""
 ERNIC_P4_BW_DISPLAY=""
 if [ "${REPORT_ERNIC_P4_BENCH:-0}" = "1" ]; then
   P4_VM2_HOST=${ERNIC_P4_VM2_HOST:-localhost}
-  if ! ERNIC_P4_BW_OUTPUT=$(run_ernic_p4_rdma_bw "${HOST}" "${P4_VM2_HOST}"); then
+  if ! ERNIC_P4_BW_OUTPUT=$(run_ernic_p4_rdma_bw "${HOST}" "${P4_VM2_HOST}" \
+      "${ERNIC_P4_VM2_RDMA_ADDR:-${P4_VM2_HOST}}"); then
     bench_failed "ernic P4 FP8 RDMA benchmark" "${ERNIC_P4_BW_OUTPUT}"
   fi
   # ib_write_bw output: look for the BW line (65536-byte messages are typical)

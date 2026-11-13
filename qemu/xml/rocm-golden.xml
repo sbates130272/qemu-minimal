@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The performance-tracking fleet: two guests from the published rocm-golden
+  qcow2, each with one emulated GPU, one NVMe, one RDMA NIC with P4 loaded
+  into the guest scope, and one SDXI device.  Every tracked benchmark runs
+  against this one stack -
+  qemu-minimal-report-for-vm-rocm-golden.yml drives it with
+  `qemu-tool quick-start`.
+
+  Two guests because the P4 bandwidth run needs an RDMA peer; everything else
+  is measured on guest 1.  Sized for a 4-core, 16 GB GitHub-hosted runner:
+  four vCPUs each is the ionic_rdma floor, not a preference.
+-->
+<fleet xmlns="http://qemu-tool/fleet/1.0">
+
+  <!-- ── Fleet shape ─────────────────────────────────────────────────── -->
+  <vm-count>2</vm-count>
+  <vm-name-prefix>rocm-golden</vm-name-prefix>
+
+  <!-- ── Container images ─────────────────────────────────────────────── -->
+  <!-- One stamp across all four, as in quickstart.xml. -->
+  <qemu-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261112.gdca6903-qemu11.1.3-vfu.05bb5e5</qemu-ref>
+  <ernic-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261112.gdca6903-ernic.90434a2-vfu.05bb5e5</ernic-ref>
+  <rocjitsu-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261112.gdca6903-rocjitsu.50be05a</rocjitsu-ref>
+  <backing-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu:20261112.gdca6903-vm.resolute-ernic-rocjitsu-qm.096ddfe-qcow2</backing-ref>
+  <!-- A local tag, built from qemu/docker/sdxi before the stack comes up. -->
+  <sdxi-image>qemu-tool/sdxi:latest</sdxi-image>
+
+  <!-- ── Topology (devices per VM) ────────────────────────────────────── -->
+  <ernic-per-vm>1</ernic-per-vm>
+  <rocjitsu-per-vm>1</rocjitsu-per-vm>
+  <sdxi-per-vm>1</sdxi-per-vm>
+
+  <!-- ── Per-VM defaults ──────────────────────────────────────────────── -->
+  <vm-vcpus>4</vm-vcpus>
+  <vm-vmem>4096</vm-vmem>
+  <!-- Must be >= vm-vmem: guest RAM is a shared memfd. -->
+  <vm-shm-size>5g</vm-shm-size>
+  <!-- The hipFile fio benchmark needs a scratch NVMe. -->
+  <vm-nvme>1</vm-nvme>
+  <vm-vfio-user-root-port>true</vm-vfio-user-root-port>
+  <vm-images-dir>/var/lib/qemu-tool/images</vm-images-dir>
+  <vm-backing-shared>true</vm-backing-shared>
+  <vm-username>ubuntu</vm-username>
+  <vm-password>changeme</vm-password>
+  <qemu-tool-src>../../..</qemu-tool-src>
+
+  <!-- ── ERNIC mesh ───────────────────────────────────────────────────── -->
+  <!-- The TAP is the guests' L2 path; without it there is no inter-guest RDMA. -->
+  <ernic-tap>true</ernic-tap>
+  <!-- /dev/ernic-p4 in the guest, which the P4 FP8 bandwidth run loads into. -->
+  <p4-enable>true</p4-enable>
+  <p4-guest-scope>load</p4-guest-scope>
+
+  <!-- ── Observability ────────────────────────────────────────────────── -->
+  <!-- Prometheus and Grafana come up with the stack and CI checks them.
+       Loki and Alloy are left out to keep a 4-core runner's load down. -->
+  <grafana-enable>true</grafana-enable>
+  <logs-enable>false</logs-enable>
+
+</fleet>

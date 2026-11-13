@@ -1,0 +1,115 @@
+# rocm-golden guest
+
+Baked by qemu-minimal's `ansible/playbooks/vm-rocm-golden.yml`. This image
+carries the drivers and userspace for three kinds of emulated device:
+
+- an AMD Pensando ionic RDMA NIC, served by rocm-ernic
+- a gfx1250 GPU, served by rocjitsu
+- an SDXI engine, served by rocm-sdxi
+
+Which of them this VM has, and how many of each, is decided by whoever
+started it, not by the image. Any of the three may be absent, and there may
+be several of one kind. Each section below applies only if the VM has that
+device.
+
+    kernel        {{ ansible_kernel }}  (mainline, pinned to {{ ionic_kernel_pin }})
+    amdgpu-dkms   {{ golden_pkg['amdgpu-dkms'] | default('unknown') }}  (module {{ golden_amdgpu_src.stdout | trim }})
+    ROCm          {{ golden_pkg['amdrocm-runtime-dev' ~ rocm_line_pin] | default('unknown') }} from the therock stream, line {{ rocm_line_pin }}
+    rdma-core     {{ golden_pkg['rdma-core'] | default('unknown') }} from the archive
+    rocm-ernic    {{ ernic_source_pin }}
+    rocm-sdxi     {{ sdxi_source_pin }}
+
+`/etc/rocm-golden-guest.json` has the same facts, machine-readable.
+
+## What this VM has
+
+The devices are attached from outside the guest, by vfio-user servers on the
+host. To see what this VM was given:
+
+    amdgpu-probe --status                  # absent: no emulated GPU
+    lspci -nn | grep -E '1002:|1dd8:1002'  # GPUs and NICs on the bus
+    ibv_devinfo -l                         # RDMA devices
+    ls /dev/sdxi* 2>/dev/null              # SDXI engines
+
+A VM with none of a kind is a normal configuration, not a fault: no
+`/dev/kfd` node for a GPU, `ibv_devinfo` reporting no devices, and no SDXI
+device node are the correct answers there.
+
+## If the VM has emulated GPUs
+
+`amdgpu` is blacklisted, in `/etc/modprobe.d/` and again on the kernel
+command line, so a GPU that is present still needs these steps. One probe
+binds every GPU on the bus.
+
+1. Stage `ip_discovery.bin` into `/lib/firmware/amdgpu/`. Generate it with
+   `rj-ip-discovery gfx1250` from the **same rocjitsu build** that serves the
+   socket. It is the one firmware file this image does not carry, for exactly
+   that reason. From a qemu-minimal checkout,
+   `ansible-playbook vm-rocm-golden.yml --tags firmware` does this step.
+   Everything else, including the generated gap set, is already in
+   `{{ golden_firmware_dir }}`; do not overwrite it.
+2. Load the driver:
+
+       sudo amdgpu-probe
+
+   It wraps `modprobe amdgpu` with the emulation parameters. `amdgpu-probe
+   --status` prints `absent`, `ready`, `loaded` or `stranded` and changes
+   nothing.
+3. Check: a bound device under `/sys/bus/pci/drivers/amdgpu/`, a named node
+   under `/sys/class/kfd/kfd/topology/nodes/`, and no failure in `sudo dmesg`.
+
+## If the VM has rocm-ernic NICs
+
+This image replaces the in-tree `ionic` and `ionic_rdma` with an SRQ-capable
+build: rocm-ernic's `patches/srq` and `patches/p4` on the matching mainline
+tag, installed as the `ionic-ernic` DKMS package, with rocm-ernic's
+`patches/rdma-core` provider in `/usr/local` and the `ernic_p4` module
+alongside. `/etc/ionic-srq-p4.json` records the pins.
+
+Without SRQ, `max_srq` is 0 and UCX declines `rc_verbs`, which leaves
+`ud_verbs` and no one-sided RDMA, with nothing in the failure naming SRQ.
+
+If you rebuild `ionic-ernic` here, pass `--patches-dir` pointing at
+rocm-ernic's `patches/srq`. A stock rebuild installs a driver with no SRQ
+under the same package name.
+
+To see what is loaded use `nm`, not `strings`:
+`nm $(modinfo -n ionic_rdma) | grep ionic_create_srq`.
+
+The Ethernet sides come up as `rocm-ernic0`, `rocm-ernic1` and so on, and
+`rocm-ernic-netcfg.service` addresses each at boot from its own MAC. Resolve
+the IB device names from `ibv_devinfo -l` instead of assuming them.
+
+## If the VM has SDXI engines
+
+`sdxi_char` loads at boot and `sdxi-cli` is on PATH. `sdxi_perf` is
+installed and blacklisted; load it by hand when you want it.
+
+## Things that will waste your time
+
+- **A VM with a rocm-ernic NIC needs at least 4 vCPUs.** `ionic_rdma` fails
+  inside the driver below that, not anywhere obvious.
+- **A warm reboot with an emulated GPU attached does not work.**
+  Cold-boot instead.
+- **`modprobe` on an already-loaded amdgpu discards its parameters** and
+  returns 0. `amdgpu-probe` refuses in that case.
+- **A bare `modprobe amdgpu` costs a reboot.** Without the emulation
+  parameters it binds nothing, and `rmmod amdgpu` has been seen to fault.
+- **Without `ip_discovery.bin` amdgpu cannot probe a GPU.** The failure is
+  `can't load firmware "amdgpu/ip_discovery.bin"` followed by
+  `probe with driver amdgpu failed with error -2`.
+- **Locked memory is unlimited here on purpose.** Past the 8192 KB default
+  every `ibv_reg_mr()` fails with "Cannot allocate memory", reported a long
+  way from the cause.
+- **One amdgpu patch in this image is unreviewed.** `kfd_ptrace_gate` changes
+  a KFD ptrace check so the driver builds on 7.2. The stamp records
+  `"kfd_ptrace_gate_reviewed": false`. Do not put anything here that you
+  would mind a local user reading.
+
+## ROCm
+
+`ROCM_PATH` is `{{ golden_rocm_path }}` and its `bin` is on PATH for login
+and non-login shells alike, so `ssh guest hipcc ...` works. `/opt/rocm/bin`
+and `/opt/rocm/lib` are symlinks into it. `amd-smi` is installed and
+`import amdsmi` works; `rocm-smi` is deprecated upstream and not packaged in
+this stream.

@@ -18,7 +18,7 @@ import json
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timedelta, timezone
+
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -47,7 +47,6 @@ def row(sha: str, **metrics) -> dict:
                   "base_unit": "B/s"}
             for key, value in metrics.items()
         },
-        "reports": {},
     }
 
 
@@ -141,180 +140,6 @@ class ScaleValue(unittest.TestCase):
                 self.assertAlmostEqual(parsed.value / value, 1.0, places=2)
 
 
-class ReportStamps(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.site = Path(self.tmp.name)
-        self.addCleanup(self.tmp.cleanup)
-
-    def write_report(self, rel: str, line: str) -> None:
-        path = self.site / rel
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(f"---\ntitle: VM Report\n---\n\n# VM Report\n\n{line}\n")
-
-    def test_parses_status_and_commit(self):
-        self.write_report(
-            "1vm/index.md",
-            "Generated: **2026-09-26 12:00 UTC** &middot; Commit: "
-            "[`abc1234`](https://github.com/x/y/commit/abc1234) "
-            "&middot; Status: **pass**",
-        )
-        stamp = rsp.parse_report_stamp(self.site, rsp.REPORTS[0])
-        self.assertEqual(stamp.status, "pass")
-        self.assertEqual(stamp.commit, "abc1234")
-        self.assertEqual(stamp.generated, "2026-09-26 12:00 UTC")
-
-    def test_legacy_report_without_a_status_is_unknown(self):
-        # Reports already on gh-pages predate the stamp. They must parse, and
-        # must not be read as passing.
-        self.write_report(
-            "1vm/index.md",
-            "Generated: **2026-09-26 12:00 UTC** &middot; Commit: "
-            "[`abc1234`](https://github.com/x/y/commit/abc1234)",
-        )
-        stamp = rsp.parse_report_stamp(self.site, rsp.REPORTS[0])
-        self.assertEqual(stamp.status, "unknown")
-        self.assertEqual(stamp.commit, "abc1234")
-
-    def test_missing_report_is_none(self):
-        self.assertIsNone(rsp.parse_report_stamp(self.site, rsp.REPORTS[0]))
-
-
-class ReportFreshnessTable(unittest.TestCase):
-    """report_rows must read live reports, never the deduped history tail.
-
-    append_history dedupes on (sha, metrics). A publish whose benchmarks
-    produced identical numbers against an unchanged sha appends no row at
-    all -- so a freshness table sourced from history[-1] prints the previous
-    publish's timestamps directly underneath an all-green badge that main()
-    computes from a live build_reports(). update_green's docstring already
-    describes this hazard for the green stamp; the table reaches it the same
-    way, because report freshness moves independently of benchmark values.
-    """
-
-    def _stamp(self, generated: str) -> dict:
-        key = rsp.REPORTS[0]["key"]
-        return {
-            key: {
-                "label": rsp.REPORTS[0]["label"],
-                "generated": generated,
-                "status": "pass",
-                "commit": "abc1234",
-                "path": rsp.REPORTS[0]["path"],
-            }
-        }
-
-    def test_renders_the_reports_it_is_given(self):
-        out = rsp.report_rows(self._stamp("2026-09-26 12:00 UTC"))
-        self.assertIn("2026-09-26 12:00 UTC", out)
-
-    def test_does_not_take_its_stamps_from_history(self):
-        # The regression: yesterday's publish is the last history row because
-        # today's was deduped away, but today's reports are on disk and fresh.
-        stale = {"sha": "abc1234", "metrics": {}, "reports": self._stamp("2026-09-25 08:00 UTC")}
-        fresh = self._stamp("2026-09-26 08:00 UTC")
-        history = [stale]
-        # Sourcing from history would print the 09-25 stamp; sourcing from the
-        # live reports prints 09-26. Passing the history row's own reports dict
-        # must not be what report_rows does implicitly.
-        out = rsp.report_rows(fresh)
-        self.assertIn("2026-09-26 08:00 UTC", out)
-        self.assertNotIn("2026-09-25 08:00 UTC", out)
-        self.assertEqual(rsp.append_history(history, dict(stale)), history)
-
-    def test_empty_reports_render_a_placeholder_not_an_empty_table(self):
-        # An empty table body renders as a malformed table; the placeholder
-        # row is what keeps the page readable when no report has been fetched.
-        self.assertIn("No report metadata available", rsp.report_rows({}))
-
-
-class GreenEvaluation(unittest.TestCase):
-    NOW = datetime(2026, 9, 26, 12, 0, tzinfo=timezone.utc)
-
-    def entry(self, status="pass", age_hours=1.0):
-        generated = self.NOW - timedelta(hours=age_hours)
-        return {
-            "label": "x",
-            "generated": generated.strftime(rsp.REPORT_TIME_FMT),
-            "commit": "abc1234",
-            "path": "/x/",
-            "status": status,
-        }
-
-    def test_pass_and_fresh_is_green(self):
-        self.assertTrue(rsp.report_green(self.entry(), self.NOW, 36))
-
-    def test_stale_pass_is_not_green(self):
-        # A failing lane uploads nothing, so its last good report stays on the
-        # branch. Without the freshness half it would read pass forever.
-        self.assertFalse(
-            rsp.report_green(self.entry(age_hours=48), self.NOW, 36))
-
-    def test_fresh_without_a_pass_stamp_is_not_green(self):
-        self.assertFalse(
-            rsp.report_green(self.entry(status="unknown"), self.NOW, 36))
-
-    def test_unparseable_timestamp_is_not_green(self):
-        entry = self.entry()
-        entry["generated"] = "some time last Tuesday"
-        self.assertFalse(rsp.report_green(entry, self.NOW, 36))
-
-    def test_all_reports_required(self):
-        full = {meta["key"]: self.entry() for meta in rsp.REPORTS}
-        self.assertTrue(rsp.evaluate_green({"reports": full}, self.NOW, 36))
-
-        partial = dict(full)
-        partial.pop(rsp.REPORTS[-1]["key"])
-        self.assertFalse(rsp.evaluate_green({"reports": partial}, self.NOW, 36))
-
-        one_bad = dict(full)
-        one_bad[rsp.REPORTS[1]["key"]] = self.entry(age_hours=100)
-        self.assertFalse(rsp.evaluate_green({"reports": one_bad}, self.NOW, 36))
-
-    def test_no_record_is_not_green(self):
-        self.assertFalse(rsp.evaluate_green(None, self.NOW, 36))
-
-
-class UpdateGreen(unittest.TestCase):
-    NOW = datetime(2026, 9, 26, 12, 0, tzinfo=timezone.utc)
-
-    def green_record(self):
-        return {
-            "reports": {
-                meta["key"]: {
-                    "label": meta["label"],
-                    "generated": self.NOW.strftime(rsp.REPORT_TIME_FMT),
-                    "commit": "abc1234",
-                    "path": "/x/",
-                    "status": "pass",
-                }
-                for meta in rsp.REPORTS
-            }
-        }
-
-    def test_advances_when_green(self):
-        state = rsp.update_green({}, self.green_record(), self.NOW, 36)
-        self.assertTrue(state["green"])
-        self.assertEqual(state["last_all_green"], "2026-09-26")
-
-    def test_carries_the_date_forward_when_not_green(self):
-        # The date stays true; it has just stopped being today.
-        prior = {"last_all_green": "2026-09-20", "green": True}
-        state = rsp.update_green(prior, None, self.NOW, 36)
-        self.assertFalse(state["green"])
-        self.assertEqual(state["last_all_green"], "2026-09-20")
-
-    def test_never_green_has_no_date(self):
-        state = rsp.update_green({}, None, self.NOW, 36)
-        self.assertFalse(state["green"])
-        self.assertIsNone(state.get("last_all_green"))
-
-    def test_does_not_mutate_the_input(self):
-        prior = {"last_all_green": "2026-09-20"}
-        rsp.update_green(prior, self.green_record(), self.NOW, 36)
-        self.assertEqual(prior, {"last_all_green": "2026-09-20"})
-
-
 class BadgeOutput(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -337,7 +162,6 @@ class BadgeOutput(unittest.TestCase):
                 }
                 for key, value in values.items()
             },
-            "reports": {},
         }
 
     def test_regression_is_red_and_carries_the_delta(self):
@@ -382,63 +206,17 @@ class BadgeOutput(unittest.TestCase):
                 badge = self.badge(meta["badge_file"])
                 self.assertEqual(badge["color"], rsp.COLOR_MISSING)
 
-    def test_green_badge_states(self):
-        today = datetime.now(timezone.utc).date()
-        fmt = "%Y-%m-%d"
-
-        # green=True → always brightgreen regardless of age
-        rsp.write_green_badge(self.perf, {"green": True,
-                                          "last_all_green": today.strftime(fmt)})
-        badge = self.badge("badge-all-green.json")
-        self.assertEqual(badge["color"], rsp.COLOR_OK)
-
-        # green=False, 1 day ago → still green (within 2-day window)
-        d1 = (today - timedelta(days=1)).strftime(fmt)
-        rsp.write_green_badge(self.perf, {"green": False, "last_all_green": d1})
-        badge = self.badge("badge-all-green.json")
-        self.assertEqual(badge["color"], rsp.COLOR_OK)
-        self.assertEqual(badge["message"], d1)
-
-        # green=False, 3 days ago → yellow (2-5 day window)
-        d3 = (today - timedelta(days=3)).strftime(fmt)
-        rsp.write_green_badge(self.perf, {"green": False, "last_all_green": d3})
-        badge = self.badge("badge-all-green.json")
-        self.assertEqual(badge["color"], rsp.COLOR_WARN)
-        self.assertEqual(badge["message"], d3)
-
-        # green=False, 6 days ago → red (>5 days)
-        d6 = (today - timedelta(days=6)).strftime(fmt)
-        rsp.write_green_badge(self.perf, {"green": False, "last_all_green": d6})
-        badge = self.badge("badge-all-green.json")
-        self.assertEqual(badge["color"], rsp.COLOR_REGRESSED)
-        self.assertEqual(badge["message"], d6)
-
-        # never green → red
-        rsp.write_green_badge(self.perf, {"green": False})
-        badge = self.badge("badge-all-green.json")
-        self.assertEqual(badge["color"], rsp.COLOR_REGRESSED)
-        self.assertEqual(badge["message"], "never")
-
 
 class EndToEnd(unittest.TestCase):
     """Drive main() the way publish-pages.yml does."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.site = Path(self.tmp.name) / "staging"
+        self.inputs = Path(self.tmp.name) / "perf-in"
+        self.site = Path(self.tmp.name) / "docs"
         self.addCleanup(self.tmp.cleanup)
-        now = datetime.now(timezone.utc).strftime(rsp.REPORT_TIME_FMT)
-        for meta in rsp.REPORTS:
-            path = self.site / meta["path"]
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(
-                "---\ntitle: VM Report\n---\n\n"
-                f"Generated: **{now}** &middot; Commit: [`abc1234`]"
-                "(https://github.com/x/y/commit/abc1234) "
-                "&middot; Status: **pass**\n"
-            )
         for meta in rsp.METRICS:
-            path = self.site / meta["source"][0] / meta["source"][1]
+            path = self.inputs / meta["source"][0] / meta["source"][1]
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps({
                 "schemaVersion": 1, "label": meta["label"],
@@ -449,9 +227,9 @@ class EndToEnd(unittest.TestCase):
         out = Path(self.tmp.name) / "out"
         argv = [
             "render-site-perf.py",
+            "--input-dir", str(self.inputs),
             "--site-dir", str(self.site),
             "--history-out", str(out / "history.jsonl"),
-            "--green-out", str(out / "green.json"),
             *extra,
         ]
         old = sys.argv
@@ -464,39 +242,49 @@ class EndToEnd(unittest.TestCase):
 
     def test_writes_every_expected_artifact(self):
         out = self.run_main()
-        self.assertTrue((out / "history.jsonl").exists())
-        self.assertTrue((out / "green.json").exists())
+        rows = (out / "history.jsonl").read_text().splitlines()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(
+            set(json.loads(rows[0])["metrics"]),
+            {meta["key"] for meta in rsp.METRICS},
+        )
         perf = self.site / "perf"
         self.assertTrue((perf / "index.md").exists())
-        self.assertTrue((perf / "badge-all-green.json").exists())
         for meta in rsp.METRICS:
             self.assertTrue((perf / meta["badge_file"]).exists())
+            self.assertTrue((perf / f"chart-{meta['key']}.svg").exists())
 
-    def test_perf_page_mentions_the_status_column_and_green_badge(self):
+    def test_only_perf_is_written_to_the_site(self):
+        # The inputs are raw benchmark artifacts; nothing but perf/ publishes.
+        self.run_main()
+        self.assertEqual([p.name for p in self.site.iterdir()], ["perf"])
+
+    def test_perf_page_carries_every_metric(self):
         self.run_main()
         body = (self.site / "perf" / "index.md").read_text()
-        self.assertIn("badge-all-green.json", body)
-        self.assertIn("| Report | Generated | Status | Commit | Page |", body)
-        self.assertIn("Last all-green", body)
+        for meta in rsp.METRICS:
+            with self.subTest(metric=meta["key"]):
+                self.assertIn(meta["badge_file"], body)
+                self.assertIn(f"chart-{meta['key']}.svg", body)
+        # One header cell per metric, plus commit and timestamp.
+        table = [line for line in body.splitlines() if line.startswith("| Commit ")]
+        self.assertEqual(table[0].count("|"), len(rsp.METRICS) + 3)
 
-    def test_green_is_reached_with_fresh_passing_reports(self):
-        out = self.run_main()
-        state = json.loads((out / "green.json").read_text())
-        self.assertTrue(state["green"])
-        self.assertIn("last_all_green", state)
+    def test_missing_history_is_tolerated(self):
+        # First ever publish: the history file is not on the branch yet.
+        missing = Path(self.tmp.name) / "nope" / "history.jsonl"
+        out = self.run_main("--history-in", str(missing))
+        self.assertTrue((out / "history.jsonl").exists())
 
-    def test_missing_state_files_are_tolerated(self):
-        # First ever publish: neither input file exists on the branch yet.
-        missing = Path(self.tmp.name) / "nope"
-        out = self.run_main("--history-in", str(missing / "history.jsonl"),
-                            "--green-in", str(missing / "green.json"))
-        self.assertTrue((out / "green.json").exists())
-
-    def test_corrupt_green_state_does_not_fail_the_publish(self):
-        bad = Path(self.tmp.name) / "bad-green.json"
-        bad.write_text("{not json")
-        out = self.run_main("--green-in", str(bad))
-        self.assertTrue((out / "green.json").exists())
+    def test_no_inputs_still_writes_every_badge(self):
+        # Every artifact expired: the shields must read n/a, not 404.
+        empty = Path(self.tmp.name) / "empty"
+        empty.mkdir()
+        self.inputs = empty
+        self.run_main()
+        for meta in rsp.METRICS:
+            badge = json.loads((self.site / "perf" / meta["badge_file"]).read_text())
+            self.assertEqual(badge["message"], "n/a")
 
 
 class RealHistoryRegression(unittest.TestCase):

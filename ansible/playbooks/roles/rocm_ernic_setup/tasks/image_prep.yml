@@ -1,0 +1,339 @@
+---
+# Prepare a base Ubuntu guest for rocm-ernic's ionic mode. Everything here is
+# expensive and version-stable, so it belongs in the backing image rather than
+# in ernic_guest_setup, which runs per overlay on every test cycle.
+#
+# This is the local replacement for sbates130272.rocm_ernic.ernic_image_prep,
+# removed in collection 0.2.0. See defaults/main.yml for what it tracks.
+
+# First, before any apt run: a freshly booted guest starts
+# unattended-upgrades, which holds the dpkg lock for the first minute or so,
+# and in an image it would move packages under a pinned kernel. Purged, with
+# the periodic jobs switched off so that a later install of the package does
+# not bring them back.
+- name: Remove unattended-upgrades
+  when: rocm_ernic_setup_mask_unattended_upgrades | bool
+  block:
+    - name: Switch off the periodic apt jobs
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/99-no-unattended-upgrades
+        content: |
+          APT::Periodic::Update-Package-Lists "0";
+          APT::Periodic::Unattended-Upgrade "0";
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Stop and mask the apt timers
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        masked: true
+        enabled: false
+        state: stopped
+      loop:
+        - unattended-upgrades.service
+        - apt-daily.timer
+        - apt-daily-upgrade.timer
+      failed_when: false
+
+    - name: Purge unattended-upgrades
+      ansible.builtin.apt:
+        name: unattended-upgrades
+        state: absent
+        purge: true
+        lock_timeout: 300
+
+# Before the kernel install, which generates the first initramfs this role
+# is responsible for. See the hook for why.
+- name: Create the initramfs hook directory
+  ansible.builtin.file:
+    path: /etc/initramfs-tools/hooks
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the initramfs hook that excludes the ionic modules
+  ansible.builtin.copy:
+    src: ionic-exclude
+    dest: /etc/initramfs-tools/hooks/ionic-exclude
+    owner: root
+    group: root
+    mode: "0755"
+
+# Packages before the kernel: the mainline .debs depend on linux-base, kmod,
+# initramfs-tools and wireless-regdb, and pre-seeding them makes the kernel
+# install a local dpkg operation instead of a second archive resolution. This
+# is the same ordering packages/ionic.txt gets by running in cloud-init.
+- name: Install the RDMA userspace and DKMS toolchain
+  ansible.builtin.apt:
+    name: "{{ rocm_ernic_setup_packages }}"
+    state: present
+    update_cache: true
+  register: rocm_ernic_setup_apt_result
+  retries: "{{ rocm_ernic_setup_apt_retries }}"
+  delay: "{{ rocm_ernic_setup_apt_delay }}"
+  until: rocm_ernic_setup_apt_result is success
+  when: rocm_ernic_setup_packages | length > 0
+
+- name: Install the pinned mainline kernel
+  ansible.builtin.include_tasks: kernel.yml
+  when: rocm_ernic_setup_kernel_install | bool
+
+- name: Write the rdma-core provider stamp
+  when: rocm_ernic_setup_provider_stamp | bool
+  block:
+
+    - name: Read the installed rdma-core version
+      ansible.builtin.command:
+        argv:
+          - dpkg-query
+          - -W
+          - -f=${Version}
+          - rdma-core
+      register: rocm_ernic_setup_rdma_core_pkg
+      changed_when: false
+
+    # The role's own verification, run here so a guest missing the provider
+    # fails this image rather than the consumer. The provider carries the ABI
+    # suffix rather than a bare name -- libionic-rdmav59.so at 61.0 -- so this
+    # matches on the prefix.
+    - name: Verify the ionic verbs provider is present
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: ls /usr/lib/*/libibverbs/libionic*.so
+      register: rocm_ernic_setup_provider_ls
+      changed_when: false
+
+    - name: Create the stamp directory
+      ansible.builtin.file:
+        path: "{{ rocm_ernic_setup_stamp_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    # Upstream strips the Debian revision (61.0-2ubuntu3 -> 61.0) because that
+    # is what ernic_rdma_core_version is compared against.
+    - name: Stamp the installed provider
+      ansible.builtin.copy:
+        dest: "{{ rocm_ernic_setup_stamp_dir }}/provider.stamp"
+        content: "{{ rocm_ernic_setup_rdma_core_pkg.stdout | regex_replace('-.*$', '') }}:none\n"
+        owner: root
+        group: root
+        mode: "0644"
+
+- name: Disable KillUserProcesses in logind
+  when: rocm_ernic_setup_logind_keep_processes | bool
+  block:
+
+    # A cloud image does not necessarily ship the drop-in directory, and the
+    # copy below will not create it.
+    - name: Ensure the logind drop-in directory exists
+      ansible.builtin.file:
+        path: /etc/systemd/logind.conf.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Write the KillUserProcesses drop-in
+      ansible.builtin.copy:
+        dest: /etc/systemd/logind.conf.d/99-kill-user-processes.conf
+        content: |
+          [Login]
+          KillUserProcesses=no
+        owner: root
+        group: root
+        mode: "0644"
+
+- name: Enable the ionic modules on boot
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/rocm-ernic-ionic.conf
+    content: "{{ rocm_ernic_setup_modules | join('\n') }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+  when: rocm_ernic_setup_modules_load | bool
+
+- name: Register the emulated NIC in pci.ids
+  when: rocm_ernic_setup_pciids | bool
+  block:
+
+    - name: Find the system pci.ids path
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /usr/share/hwdata/pci.ids
+        - /usr/share/misc/pci.ids
+      register: rocm_ernic_setup_pciids_stat
+
+    - name: Set the pci.ids path fact
+      ansible.builtin.set_fact:
+        rocm_ernic_setup_pciids_path: >-
+          {{ (rocm_ernic_setup_pciids_stat.results
+              | selectattr('stat.exists')
+              | first
+              | default({})).item | default('') }}
+
+    # What identifies the emulated NIC is the four-field tuple, and pci.ids
+    # spells that as a THREE-level entry -- the subsystem line nested under
+    # the device line:
+    #
+    #   1dd8  AMD Pensando Systems
+    #   <tab>1002  DSC Ethernet Controller
+    #   <tab><tab>1dd8 5400  ROCm Emulated RDMA NIC
+    #
+    # 1dd8:1002 is a real Pensando device that hwdata has always carried, so
+    # the device line is not ours to write and a second one would be the
+    # duplicate that makes pciutils refuse the whole file. The subsystem line
+    # is ours. That is also why the presence check below asks for the
+    # subsystem line: a check that stopped at the device would see upstream's
+    # 1002 and skip forever.
+    #
+    # The two awk programs live in files/ so they can be run, and are, by
+    # tests/test_ernic_identity.py -- this role is executed by no CI lane, and
+    # the failure mode of getting pci.ids wrong is not a crash but an lspci
+    # that names nothing on the bus.
+    #
+    # The role does not install pciutils, and a missing binary must not turn
+    # the parse checks into a false pass or a task failure.
+    - name: Look for lspci
+      ansible.builtin.stat:
+        path: /usr/bin/lspci
+      register: rocm_ernic_setup_pciids_lspci
+
+    - name: Make a directory for the pci.ids awk programs
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: pciids
+      register: rocm_ernic_setup_pciids_tmp
+      changed_when: false
+
+    - name: Stage the pci.ids awk programs
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: "{{ rocm_ernic_setup_pciids_tmp.path }}/{{ item }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop:
+        - pciids-scan.awk
+        - pciids-merge.awk
+      changed_when: false
+
+    - name: Scan the vendor block in pci.ids for the emulated NIC
+      ansible.builtin.command:
+        argv:
+          - awk
+          - -f
+          - "{{ rocm_ernic_setup_pciids_tmp.path }}/pciids-scan.awk"
+          - -v
+          - "vend={{ rocm_ernic_setup_pciids_vendor }}"
+          - -v
+          - "dev={{ rocm_ernic_setup_pciids_device }}"
+          - -v
+          - "subv={{ rocm_ernic_setup_pciids_subvendor }}"
+          - -v
+          - "subd={{ rocm_ernic_setup_pciids_subdevice }}"
+          - "{{ rocm_ernic_setup_pciids_path }}"
+      register: rocm_ernic_setup_pciids_scan
+      changed_when: false
+      when: rocm_ernic_setup_pciids_path | length > 0
+
+    # hwdata too old to know the vendor at all. The merge keys off the vendor
+    # line, so it would be a silent no-op -- say so instead.
+    - name: Warn when pci.ids has no block for the vendor
+      ansible.builtin.debug:
+        msg: >-
+          {{ rocm_ernic_setup_pciids_path }} has no vendor block for
+          {{ rocm_ernic_setup_pciids_vendor }}; the emulated NIC cannot be merged
+          into it. Run update-pciids, or accept that lspci will show the device
+          by number.
+      when: rocm_ernic_setup_pciids_scan.stdout | default('') is search('novendor')
+
+    - name: Note that pci.ids already names the emulated NIC
+      ansible.builtin.debug:
+        msg: >-
+          {{ rocm_ernic_setup_pciids_vendor }}:{{ rocm_ernic_setup_pciids_device }}
+          subsystem {{ rocm_ernic_setup_pciids_subvendor }}:{{ rocm_ernic_setup_pciids_subdevice }}
+          is already in {{ rocm_ernic_setup_pciids_path }}; leaving it alone.
+          A second entry at any level would break parsing of the whole file.
+      when: rocm_ernic_setup_pciids_scan.stdout | default('') == 'vendor device subsys'
+
+    - name: Choose what pci.ids is missing
+      ansible.builtin.set_fact:
+        rocm_ernic_setup_pciids_mode: >-
+          {{ {'vendor device nosubsys': 'sub',
+              'vendor nodevice nosubsys': 'dev'}
+             .get(rocm_ernic_setup_pciids_scan.stdout | default('') | trim, '') }}
+
+    # Built beside the real file and parse-checked before it replaces it: a
+    # pci.ids that pciutils refuses is worse than one that is merely missing
+    # the entry, because it costs the names of every device on the bus.
+    - name: Build a merged pci.ids candidate
+      ansible.builtin.shell:
+        cmd: >-
+          awk -f '{{ rocm_ernic_setup_pciids_tmp.path }}/pciids-merge.awk'
+          -v vend='{{ rocm_ernic_setup_pciids_vendor }}'
+          -v dev='{{ rocm_ernic_setup_pciids_device }}'
+          -v mode='{{ rocm_ernic_setup_pciids_mode }}'
+          -v devline='{{ rocm_ernic_setup_pciids_device_entry }}'
+          -v subline='{{ rocm_ernic_setup_pciids_subsystem_entry }}'
+          '{{ rocm_ernic_setup_pciids_path }}'
+          > '{{ rocm_ernic_setup_pciids_path }}.rocm-ernic.new'
+      changed_when: false
+      when: rocm_ernic_setup_pciids_mode | length > 0
+
+    - name: Check that pciutils parses the candidate before installing it
+      ansible.builtin.command:
+        argv:
+          - lspci
+          - -i
+          - "{{ rocm_ernic_setup_pciids_path }}.rocm-ernic.new"
+          - -nn
+      register: rocm_ernic_setup_pciids_precheck
+      changed_when: false
+      failed_when: rocm_ernic_setup_pciids_precheck.rc != 0
+      when:
+        - rocm_ernic_setup_pciids_mode | length > 0
+        - rocm_ernic_setup_pciids_lspci.stat.exists | default(false)
+
+    - name: Merge the emulated NIC into pci.ids
+      ansible.builtin.copy:
+        src: "{{ rocm_ernic_setup_pciids_path }}.rocm-ernic.new"
+        dest: "{{ rocm_ernic_setup_pciids_path }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0644"
+      register: rocm_ernic_setup_pciids_merge
+      when: rocm_ernic_setup_pciids_mode | length > 0
+
+    - name: Remove the candidate and the staged awk programs
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ rocm_ernic_setup_pciids_path }}.rocm-ernic.new"
+        - "{{ rocm_ernic_setup_pciids_tmp.path }}"
+      changed_when: false
+
+    - name: Check that pciutils still parses pci.ids
+      ansible.builtin.command:
+        argv:
+          - lspci
+          - -i
+          - "{{ rocm_ernic_setup_pciids_path }}"
+          - -nn
+      register: rocm_ernic_setup_pciids_parse
+      changed_when: false
+      failed_when: rocm_ernic_setup_pciids_parse.rc != 0
+      when:
+        - rocm_ernic_setup_pciids_merge is changed
+        - rocm_ernic_setup_pciids_lspci.stat.exists | default(false)
+
+- name: Clean the apt cache to shrink the image
+  ansible.builtin.apt:
+    autoclean: true
+  when: rocm_ernic_setup_clean_apt | bool

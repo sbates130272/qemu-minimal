@@ -1,7 +1,8 @@
 # vfio-user ernic + rocjitsu VM — Docker Compose stack
 
-Single VM with both a rocm-ernic RDMA NIC and a rocjitsu GPU attached via
-the `vfio-user-pci` driver. For ernic-only or rocjitsu-only single-VM stacks
+Single VM with a rocm-ernic RDMA NIC, a rocjitsu GPU and a rocm-sdxi SDXI
+engine attached via the `vfio-user-pci` driver. Set `SDXI_COUNT=0` for a guest
+without the SDXI engine. For ernic-only or rocjitsu-only single-VM stacks
 see `vfio-user-ernic-vm/` and `vfio-user-rocjitsu-vm/`.
 
 ## Prerequisites
@@ -30,7 +31,7 @@ ssh -p 2222 ubuntu@localhost
 ## Environment variables
 
 All of these live in a fleet XML config (copy `qemu/xml/fleet-example.xml`),
-passed via `--fleet-file` to `gen-vm`, `run-vm` and every compose stack.
+passed via `--xml` to `gen-vm`, `run-vm` and `qemu-tool compose`.
 
 | Variable | Default | Description |
 |---|---|---|
@@ -39,6 +40,8 @@ passed via `--fleet-file` to `gen-vm`, `run-vm` and every compose stack.
 | `QEMU_IMAGE` | `…-qemu-libvfio-user:20260924.ge1cd640-qemu11.1.1-vfu.8039244` | qemu-system image (must include qemu-tool) |
 | `ERNIC_COUNT` | `1` | Number of ernic GPU replicas |
 | `ROCJITSU_COUNT` | `1` | Number of rocjitsu GPU replicas |
+| `SDXI_IMAGE` | `…-rocm-sdxi:<stamp>-sdxi.<sha>` | rocm-sdxi vfio-user server image |
+| `SDXI_COUNT` | `1` | Number of SDXI engines; `0` leaves it out |
 | `ROCJITSU_CONFIG` | `gfx1250_mi455x.json` | Config filename under `/usr/local/share/rocjitsu/configs/` |
 | `VM_IMAGE` | `/var/lib/qemu-tool/images/qemu-minimal.qcow2` | Absolute path to the qcow2 image |
 | `VM_NAME` | `qemu-minimal` | Must match the qcow2 basename without extension |

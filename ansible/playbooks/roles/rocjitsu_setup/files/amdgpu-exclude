@@ -1,0 +1,15 @@
+#!/bin/sh
+# initramfs-tools hook: keep amdgpu.ko out of the image.
+#
+# resolute's mkinitramfs calls apply_add_modules twice, once before hooks and
+# once after, so deleting amdgpu.ko* from $DESTDIR is not enough -- the second
+# pass re-adds it from __MODULES_TO_ADD. Clear both.
+PREREQ=""
+prereqs() { echo "${PREREQ}"; }
+case "${1}" in prereqs) prereqs; exit 0 ;; esac
+[ -n "${DESTDIR}" ] || exit 0
+if [ -n "${__MODULES_TO_ADD:-}" ] && [ -f "${__MODULES_TO_ADD}" ]; then
+    grep -vx 'amdgpu' "${__MODULES_TO_ADD}" > "${__MODULES_TO_ADD}.keep" || true
+    mv "${__MODULES_TO_ADD}.keep" "${__MODULES_TO_ADD}"
+fi
+find "${DESTDIR}" -name 'amdgpu.ko*' -delete

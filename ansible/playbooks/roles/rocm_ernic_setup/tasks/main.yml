@@ -1,0 +1,20 @@
+---
+# The whole role, in the order a bake needs it. vm-rocm-golden.yml runs the
+# three halves separately with tasks_from, because the SRQ + P4 build sits
+# between the image preparation and the naming and network setup.
+
+- name: Install the pinned mainline kernel and the build toolchain
+  ansible.builtin.include_tasks: image_prep.yml
+
+# Unconditional, both of them. Naming was once gated on a patched-modules
+# directory that is empty by default, so the documented configuration
+# installed no rules at all: 64 NICs on a 32-guest fleet, none renamed, none
+# addressed, and nothing saying why.
+- name: Install the device naming rules and module autoload
+  ansible.builtin.include_tasks: naming.yml
+
+- name: Configure the guest Ethernet
+  ansible.builtin.include_tasks: network.yml
+
+- name: Install the RDMA metrics exporter
+  ansible.builtin.include_tasks: metrics.yml

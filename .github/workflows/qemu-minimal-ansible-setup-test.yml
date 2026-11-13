@@ -80,54 +80,24 @@ jobs:
     - name: Syntax-check vm-basic playbook
       run: ansible-playbook --syntax-check playbooks/vm-basic.yml
       working-directory: ansible
-    - name: Syntax-check vm-rocm playbook
-      run: ansible-playbook --syntax-check playbooks/vm-rocm.yml
+    - name: Syntax-check vm-rocm-golden playbook
+      run: ansible-playbook --syntax-check playbooks/vm-rocm-golden.yml
       working-directory: ansible
-    - name: Syntax-check vm-ernic playbook
-      run: ansible-playbook --syntax-check playbooks/vm-ernic.yml
-      working-directory: ansible
-    - name: Syntax-check vm-rocjitsu playbook
-      run: ansible-playbook --syntax-check playbooks/vm-rocjitsu.yml
-      working-directory: ansible
-    - name: Syntax-check vm-ernic-rocjitsu playbook
-      run: ansible-playbook --syntax-check playbooks/vm-ernic-rocjitsu.yml
-      working-directory: ansible
-    # Reached by import from all five above, so it is already checked
-    # transitively -- but it is also runnable on its own against a baked
-    # guest, and this job checks files by name.
-    - name: Syntax-check vm-slim playbook
-      run: ansible-playbook --syntax-check playbooks/vm-slim.yml
-      working-directory: ansible
-    # Imported by none of the above -- it runs against the generated
-    # fleet-inventory.yml, not a single baked guest -- so it was checked by
-    # nothing at all. Worth having for more than the YAML: the first run of
-    # this step found a duplicate `when` key in lmcache_guest/tasks/main.yml,
-    # where the second silently replaced the first and the archive copy lost
-    # its "only when the 9p share is off" guard. That is a ~2.8 GB write per
-    # guest in the configuration the role exists to avoid, and it parses.
-    - name: Syntax-check fleet-lmcache playbook
-      run: ansible-playbook --syntax-check playbooks/fleet-lmcache.yml
-      working-directory: ansible
-    # Same reasoning as fleet-lmcache above: it runs against the generated
-    # fleet inventory rather than a baked guest, so no other lane parses it
-    # on a PR. report-for-quickstart does execute it, but daily and after the
+    # Imported by none of the above: it runs against the generated fleet
+    # inventory rather than a baked guest, so no other lane parses it on a
+    # PR. report-for-vm-rocm-golden does execute it, but daily and after the
     # merge.
-    - name: Syntax-check fleet-quickstart playbook
-      run: ansible-playbook --syntax-check playbooks/fleet-quickstart.yml
+    - name: Syntax-check vm-quickstart playbook
+      run: ansible-playbook --syntax-check playbooks/vm-quickstart.yml
       working-directory: ansible
 
-    # Scoped to the two repo-local roles that are clean at the `production`
-    # profile, rather than all of ansible/: the rest are not yet, and a gate
-    # that fails on day one gets disabled rather than fixed. lmcache_guest is
-    # the role no lane executes -- fleet-lmcache.yml runs against a generated
-    # fleet inventory, not a baked guest -- so a syntax check is otherwise the
-    # only thing behind it, and a syntax check passes whatever the tasks say.
-    # Widen this list as other roles are cleaned.
+    # Every repo-local role, at the `production` profile. The playbooks
+    # beside them are not clean at that profile yet, so they are not listed.
     # pipx, not pip: the CI image's interpreter is externally managed (PEP
     # 668), so a plain `pip install` exits 1 with "This environment is
     # externally managed" before ansible-lint ever runs. PIPX_BIN_DIR puts
     # the entry point somewhere already on PATH, as the compose lanes do.
-    - name: Lint the lmcache_guest role
+    - name: Lint the roles
       run: |
         command -v ansible-lint >/dev/null 2>&1 \
           || PIPX_BIN_DIR=/usr/local/bin pipx install ansible-lint
@@ -135,8 +105,7 @@ jobs:
         # auto-discovery finds only roles, not the sibling playbooks/*.yml
         # files (which are not yet clean at the production profile).
         ansible-lint \
-          --exclude ernic_fleet_guest/ \
-          lmcache_guest/ ionic_image_prep/
+          image_slim/ rocjitsu_setup/ rocm_ernic_setup/ sdxi_setup/
       working-directory: ansible/playbooks/roles
 
   gen-vm-ansible-setup:

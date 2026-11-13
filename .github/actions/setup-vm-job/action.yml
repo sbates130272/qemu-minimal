@@ -1,8 +1,8 @@
 name: Set up a qemu-tool VM job
 description: >-
-  Shared prologue for the ansible-playbook-test-* workflows: assert KVM is
-  genuinely usable, install qemu-tool and the Ansible collections, and prepare
-  the SSH identity and images directory. Expects the repository to already be
+  Shared prologue for the jobs that bake a guest with Ansible: install
+  qemu-tool and the Ansible collections, and prepare the SSH identity and
+  images directory. Expects the repository to already be
   checked out.
 
 inputs:
@@ -29,19 +29,6 @@ inputs:
 runs:
   using: composite
   steps:
-    # "options: --device /dev/kvm" gets the node into the container, but a
-    # runner without nested virtualisation would still expose a node that only
-    # falls back to TCG. A bind-mounted node can exist and be non-functional,
-    # so the ioctl is the real test -- QEMU would otherwise silently use TCG.
-    - name: Verify KVM is available
-      shell: bash
-      run: |
-        test -c /dev/kvm || { echo "::error::/dev/kvm missing - guest would run under TCG"; exit 1; }
-        test -r /dev/kvm && test -w /dev/kvm || { echo "::error::/dev/kvm not read-write"; exit 1; }
-        python3 -c "import os, fcntl; fcntl.ioctl(os.open('/dev/kvm', os.O_RDWR), 0xAE00, 0)" \
-          || { echo "::error::/dev/kvm present but KVM_GET_API_VERSION failed"; exit 1; }
-        echo "KVM available: $(ls -l /dev/kvm)"
-
     - name: Report disk space
       shell: bash
       run: df -h / "${{ inputs.images-dir }}" 2>/dev/null || df -h /

@@ -13,6 +13,7 @@ import base64
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -21,6 +22,7 @@ import time
 from contextlib import ExitStack
 from pathlib import Path
 
+from .vm_artifact import VM_INFO_ARTIFACT_TYPE
 from .caps import qemu_binary
 from .config import VMConfig
 from .identity import identity_args
@@ -237,7 +239,7 @@ def _fetch_backing_image(cfg: VMConfig, images: Path) -> Path:
     return backing
 
 
-_VM_INFO_TYPE = "application/vnd.batesste.vm-info.v1"
+_VM_INFO_TYPE = VM_INFO_ARTIFACT_TYPE
 
 
 def _fetch_backing_keypair(cfg: VMConfig, images: Path) -> None:
@@ -857,7 +859,8 @@ def _run_ansible(cfg: VMConfig, images: Path, backing: Path) -> None:
                   "-e", f"vm_root_user={cfg.username}",
                   *private_key_extra]
         if extra_args:
-            ap_cmd += extra_args.split()
+            # shlex, so a quoted value survives: -e 'k="a b"' is one argument.
+            ap_cmd += shlex.split(extra_args)
 
         ansible_env = {
             k: v for k, v in os.environ.items()

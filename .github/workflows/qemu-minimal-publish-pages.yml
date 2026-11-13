@@ -1,22 +1,17 @@
 name: qemu-minimal - Publish Pages
 
-# The only workflow that writes the site. Every report lane uploads a named
-# artifact and stops there; this assembles them into one site on the gh-pages
-# branch.
-#
-# It exists because the lanes used to publish themselves: vm-report and
-# vm-report-ernic each called actions/deploy-pages with their own full
-# _site/, and a Pages deploy replaces the whole site. Whichever ran last won
-# and the other lane's report simply vanished, with both workflows green.
+# The only workflow that writes the site: the repository's own docs/ plus a
+# performance page built from the numbers the benchmark jobs upload. No guest
+# report is published any more; the site carries documentation and trends.
 #
 # Artifacts are fetched by name from the most recent run that produced them,
-# not from the run that triggered this one, so a lane that has not run for a
-# week still contributes its last report and the site is always complete.
+# not from the run that triggered this one, so a benchmark that failed today
+# still contributes its last good number.
 #
 # Flow:
-#   1. Fetch report artifacts into docs/<dest>/ subtrees.
+#   1. Fetch the perf-* artifacts into perf-in/ (inputs, never published).
 #   2. Clone gh-pages (for perf history continuity).
-#   3. Run render-site-perf.py to update docs/perf/ with trends and badges.
+#   3. Run render-site-perf.py to write docs/perf/ with trends and badges.
 #   4. Run mkdocs build to produce site/.
 #   5. Sync site/ onto the gh-pages branch and push.
 #
@@ -26,18 +21,9 @@ name: qemu-minimal - Publish Pages
 on:
   workflow_run:
     workflows:
-      # "Report for vm-rocjitsu" produces both the vm-report-rocjitsu and the
-      # vm-report-hipfile-fio artifacts since the two lanes were merged; there
-      # is no separate "Report for hipfile-fio" workflow to wait on any more.
-      # The fetch list below is unchanged and still names both artifacts.
-      - qemu-minimal - Report for vm-basic
-      - qemu-minimal - Report for vm-rocjitsu
-      - qemu-minimal - Report for vm-ernic
-      - qemu-minimal - Report for lmcache
-      - qemu-minimal - Report for quickstart
-      - qemu-minimal - Report for mi355x
-      - qemu-minimal - Ansible Playbook Test - vm-ernic-srq-p4
-      - qemu-minimal - Report for helios
+      # The one workflow that produces perf-* artifacts: perf-rocjitsu,
+      # perf-hipfile-fio, perf-ernic and perf-helios, from three jobs.
+      - qemu-minimal - Report for vm-rocm-golden
     types:
       - completed
   push:
@@ -62,22 +48,12 @@ concurrency:
 jobs:
   publish:
     name: Publish Pages
-    # This used to gate on `conclusion == 'success'`, on the reasoning that a
-    # failed report lane "has nothing worth publishing". That reasoning does not
-    # survive the merge of the two rocjitsu lanes.
-    #
-    # report-for-vm-rocjitsu now runs two benchmarks against one guest, each
-    # continue-on-error with its own upload gated on that step's outcome, and
-    # then fails the job on purpose if either half failed. Since 2026-09-24 the
-    # GEMM half has hung every run and the fio half has passed every run -- so
-    # every run uploads a good, fresh vm-report-hipfile-fio and concludes
-    # `failure`. Under the old gate its own workflow_run always skipped, and
-    # that artifact reached the site only if some unrelated lane happened to
-    # trigger a publish later while it was still unexpired. On 2026-09-26 both
-    # of the day's publishes ran before the artifact existed and the 13:15 run
-    # triggered by the lane itself skipped, so a good report sat in artifact
-    # storage for a day. That defeated the entire reason the lane was
-    # restructured to survive a hang.
+    # Deliberately NOT gated on `conclusion == 'success'`. The benchmark
+    # workflow runs several benchmarks, uploads each one's artifact as soon as
+    # that benchmark succeeds, and then fails on purpose if any of them failed.
+    # A run that concludes `failure` therefore routinely carries good, fresh
+    # numbers, and under a success gate they would sit in artifact storage
+    # until some later run happened to be fully green.
     #
     # `skipped` is still excluded: the triggering workflow did no work at all,
     # so there is nothing new to assemble and no reason to spend a runner.
@@ -99,13 +75,16 @@ jobs:
       - name: Install MkDocs Material
         run: pip install mkdocs-material
 
-      - name: Fetch the latest artifact from every report lane
+      - name: Fetch the latest artifact from every benchmark
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
-          # Lane name -> path under docs/ (becomes a subtree in the built site).
+          # Artifact name -> directory under perf-in/. That tree is an input to
+          # render-site-perf.py and deliberately sits outside docs/, so the raw
+          # artifacts are never published -- only the perf/ page built from
+          # them is.
           fetch() {
             name=$1
             dest=$2
@@ -118,33 +97,22 @@ jobs:
                     --jq '[.artifacts[] | select(.expired == false)][0].archive_download_url // empty' \
                   || true)
             if [ -z "${url}" ]; then
-              echo "::warning::no unexpired '${name}' artifact, leaving docs/${dest}/ as it is"
+              echo "::warning::no unexpired '${name}' artifact, that metric keeps its last recorded value"
               return 0
             fi
-            mkdir -p "docs/${dest}"
+            mkdir -p "perf-in/${dest}"
             curl -sSL -H "Authorization: Bearer ${GH_TOKEN}" "${url}" -o /tmp/"${name}".zip
-            unzip -q /tmp/"${name}".zip -d "docs/${dest}"
-            # Some artifacts wrap their content in a site/ subdirectory.
-            if [ -d "docs/${dest}/site" ] && [ ! -e "docs/${dest}/index.md" ]; then
-              rsync -a "docs/${dest}/site/" "docs/${dest}/"
-              rm -rf "docs/${dest}/site"
-            fi
-            echo "${name} -> docs/${dest}/ ($(find "docs/${dest}" -type f | wc -l) files)"
+            unzip -q /tmp/"${name}".zip -d "perf-in/${dest}"
+            echo "${name} -> perf-in/${dest}/ ($(find "perf-in/${dest}" -type f | wc -l) files)"
           }
 
-          fetch vm-report-1vm 1vm
-          fetch vm-report-rocjitsu rocjitsu
-          fetch vm-report-ernic ernic
-          fetch vm-report-hipfile-fio hipfile-fio
-          fetch vm-report-lmcache lmcache
-          fetch vm-report-quickstart quickstart
-          fetch vm-report-mi355x mi355x
-          fetch vm-report-ernic-p4 ernic-p4
-          fetch vm-report-helios helios
-
-          # Nested _config.yml from old Jekyll-based report scripts are dead
-          # weight; MkDocs ignores them but they would just mislead reviewers.
-          find docs -mindepth 2 -name _config.yml -delete
+          # The directory names are the `source` entries in METRICS in
+          # scripts/render-site-perf.py.
+          mkdir -p perf-in
+          fetch perf-rocjitsu rocjitsu
+          fetch perf-hipfile-fio hipfile-fio
+          fetch perf-ernic ernic
+          fetch perf-helios helios
 
       - name: Render performance trends
         env:
@@ -168,16 +136,12 @@ jobs:
             git checkout -q -b gh-pages
           fi
 
-          # green.json is kept apart from history.jsonl because the history
-          # appends only when a benchmark number changes, and the all-green date
-          # has to be able to advance on a publish where nothing did.
           cd "${GITHUB_WORKSPACE}"
           python3 scripts/render-site-perf.py \
+            --input-dir perf-in \
             --site-dir docs \
             --history-in gh-pages/perf/history.jsonl \
-            --history-out docs/perf/history.jsonl \
-            --green-in gh-pages/perf/green.json \
-            --green-out docs/perf/green.json
+            --history-out docs/perf/history.jsonl
 
       - name: Build site with MkDocs
         run: mkdocs build --config-file .mkdocs.yml --strict

@@ -78,7 +78,7 @@ class TestDiscovery(StackMemoryCase):
         inner = cdir / "logging"
         inner.mkdir()
         os.chdir(inner)
-        self._run(["compose", "--env-file", str(layers[0]), "ps"])
+        self._run(["compose", "--xml", str(layers[0]), "ps"])
         self.assertNotEqual(Path(self.capture.cwd), cdir)
         self.assertEqual(
             Path(self.capture.cwd), compose._compose_dir(compose._DEFAULT_STACK)
@@ -89,7 +89,7 @@ class TestDiscovery(StackMemoryCase):
         elsewhere = self.root / "elsewhere"
         elsewhere.mkdir()
         os.chdir(elsewhere)
-        self._run(["compose", "--env-file", str(self._env_file()), "ps"])
+        self._run(["compose", "--xml", str(self._env_file()), "ps"])
         self.assertEqual(
             Path(self.capture.cwd), compose._compose_dir(compose._DEFAULT_STACK)
         )
@@ -98,7 +98,7 @@ class TestDiscovery(StackMemoryCase):
         """The provenance header is the identity test, not the file name."""
         cdir = self._stack_dir()
         os.chdir(cdir)
-        self._run(["compose", "--env-file", str(self._env_file()), "ps"])
+        self._run(["compose", "--xml", str(self._env_file()), "ps"])
         self.assertEqual(
             Path(self.capture.cwd), compose._compose_dir(compose._DEFAULT_STACK)
         )
@@ -130,7 +130,7 @@ class TestExplicitWins(StackMemoryCase):
         os.chdir(cdir)
         other = self.root / "env.other"
         other.write_text("VM_COUNT=4\n")
-        self._run(["compose", "--env-file", str(other), "ps"])
+        self._run(["compose", "--xml", str(other), "ps"])
         self.assertEqual(self._env_args(), [str(other)])
 
     def test_explicit_stack_dir_overrides_the_cwd(self):
@@ -141,14 +141,14 @@ class TestExplicitWins(StackMemoryCase):
         (other / "docker-compose.yml").write_text(_MINIMAL_COMPOSE)
         os.chdir(cdir)
         self._run(["compose", "--stack-dir", str(other),
-                   "--env-file", str(layers[0]), "ps"])
+                   "--xml", str(layers[0]), "ps"])
         self.assertEqual(Path(self.capture.cwd), other)
 
     def test_a_named_stack_outranks_the_ambient_stack_dir(self):
         cdir = self._rendered(self._layers())
         os.environ[compose._STACK_DIR_ENV] = str(cdir)
         self._run(["compose", "--stack", "vfio-user-ernic-2vm",
-                   "--env-file", str(self._env_file()), "ps"])
+                   "--xml", str(self._env_file()), "ps"])
         self.assertEqual(
             Path(self.capture.cwd), compose._compose_dir("vfio-user-ernic-2vm")
         )
@@ -231,7 +231,7 @@ class TestStaleness(StackMemoryCase):
         other = self.root / "env.other"
         other.write_text("VM_COUNT=4\n")
         os.chdir(cdir)
-        self._run(["compose", "--env-file", str(other), "ps"])
+        self._run(["compose", "--xml", str(other), "ps"])
         self.assertIn("was rendered from", self.stderr)
         self.assertIn(str(layers[0]), self.stderr)
         self.assertIn(str(other), self.stderr)

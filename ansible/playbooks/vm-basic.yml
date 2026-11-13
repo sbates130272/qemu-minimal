@@ -1,7 +1,7 @@
 ---
-# The base for every guest this repo builds. vm-rocm.yml imports it and adds
-# the ROCm stack; vm-ernic.yml imports it and adds the ernic prerequisites.
-# Nothing else should carry a copy of the roles below.
+# The base for every guest this repo builds, and a complete bake on its own.
+# vm-rocm-golden.yml imports it and adds everything else. Nothing else should
+# carry a copy of the roles below.
 - name: Post cloud-init VM setup
   hosts: all
   gather_facts: true
@@ -11,16 +11,11 @@
   # would write to /root/.gitconfig instead of the target user's home.
   become: false
   tags: [install]
-  vars_files:
-    - vars/github-api.yml
-  module_defaults:
-    ansible.builtin.uri:
-      headers: "{{ github_api_headers }}"
   vars:
     username: "{{ vm_username | default('ubuntu') }}"
     root_user: "{{ vm_root_user | default('ubuntu') }}"
     user_setup_motd: true
-    # Importers turn this off: the ernic and rocjitsu guests do not need the
+    # vm-rocm-golden.yml turns this off: a published image does not carry the
     # AMD corporate CA.
     user_setup_install_amd_ca: "{{ vm_install_amd_ca | default(true) }}"
     # sbates130272.batesste 3.0.0's git_setup asserts on both of these whenever
@@ -43,7 +38,7 @@
     # fail; sbates130272.batesste 3.0.0 clones with force: true, which discards
     # exactly that and re-clones cleanly.
 
-    # These two live here, rather than next to the ROCm apt pin in vm-rocm.yml,
+    # These two live here, rather than next to the ROCm apt pin in the golden,
     # because of what they protect: fave_packages below opens with
     # `update_cache: true`, and a mismatched keyring+sources pair fails the
     # whole play before any importer's pre_tasks get a turn. They used to sit
@@ -53,7 +48,7 @@
     #
     # `state: absent` on a guest that never saw ROCm is a no-op, so vm-basic
     # carrying three ROCm-named paths costs nothing on the basic and ernic
-    # lanes. The apt *pin* stays in vm-rocm.yml -- a pin does not affect
+    # lanes. The apt *pin* stays with the ROCm install -- a pin does not affect
     # update_cache, so it has no ordering constraint against this play.
     #
     # Only reachable on --ansible-only re-runs: a bake from the pristine cloud
@@ -81,7 +76,17 @@
     - role: sbates130272.batesste.fave_packages
     - role: sbates130272.batesste.git_setup
 
-# Last line of every leaf. Importers pass image_slim_enable: false so this
-# does not run in the middle of their chain; see vm-slim.yml.
-- import_playbook: vm-slim.yml
+# Delete what the bake left behind and fstrim it back to the qcow2. Last, and
+# only when this playbook is the whole bake: vm-rocm-golden.yml imports this
+# file with image_slim_enable: false, because every play it runs afterwards
+# still needs the apt lists, /tmp and the build trees this removes, and it
+# slims once itself at the end.
+- name: Slim the baked image
+  hosts: all
+  # For ansible_kernel, which the role's opt-in kernel purge filters on.
+  gather_facts: true
+  become: true
   tags: [install]
+  roles:
+    - role: image_slim
+      when: image_slim_enable | default(true) | bool

@@ -71,11 +71,4 @@
        every guest through its QEMU container to the fleet Docker network. -->
   <vm-extra-hostfwd>tcp::9100-:9100,tcp::9500-:9500</vm-extra-hostfwd>
 
-  <!-- ===================================================================
-       LMCache
-       =================================================================== -->
-
-  <lmcache-enable>true</lmcache-enable>
-  <lmcache-image>qemu-tool/lmcache-rocm:0.5.6-gfx1250-srq</lmcache-image>
-
 </fleet>

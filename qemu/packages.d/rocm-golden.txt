@@ -1,0 +1,108 @@
+# cloud-init packages for the "rocm-golden" guest flavour: the union of what
+# the ionic and rocjitsu flavours need, for a guest that carries both an
+# emulated ionic RDMA NIC and an emulated gfx1250.
+#
+# ROCm userspace and amdgpu-dkms are *not* here.  They come from third-party
+# apt repositories, which cloud-init's package list cannot add, so they are
+# installed by ansible/playbooks/vm-rocm-golden.yml instead.
+#
+# This file owns everything below that no role installs: ccache, the
+# autotools, the extra -dev packages, nvme-cli and rsync. The roles install
+# what they themselves need to build, and nothing for a consumer's
+# convenience, so a bake that wants the published guest passes
+# --packages <this file>. A bake with --packages none still works; its guest
+# is short only these.
+#
+# Nothing here may be kernel-versioned: cloud-init runs before the mainline
+# kernel is installed, and ${KERNEL_VERSION} would expand to the *host* kernel
+# in any case.
+build-essential
+cmake
+ninja-build
+pkg-config
+dkms
+
+# ccache, for the amdgpu DKMS build.
+#
+# That build is the most expensive thing in this guest -- ~210s of straight C --
+# and it is recompiled in full whenever anything earlier in the flavour moves,
+# even when the driver source and the kernel headers have not. probe-guest
+# carries a cache in and out of the provisioning boot; this is the package that
+# makes /usr/lib/ccache exist for kbuild's bare "gcc" to resolve through.
+#
+# Harmless when the build is given no cache: dkms_build_cached falls back to a
+# plain dkms call and this is just an unused binary.
+ccache
+git
+# No linux-headers-generic, for ionic.txt's reason: this flavour boots mainline
+# 7.2.4 (kernel_ref in images.yml), not the 7.0 the release ships, so the
+# -generic metapackage would put headers on disk that neither the ionic-ernic
+# DKMS build nor amdgpu-dkms must build against.  The matching
+# linux-headers-<ver>-generic comes with the mainline .debs, as does
+# linux-modules-<ver>-generic, which carries ib_core, ib_uverbs, rdma_ucm and
+# both halves of ionic.
+#
+# Dependencies of those .debs, pre-seeded so the kernel install is a local
+# dpkg operation rather than a second round of archive resolution.
+linux-base
+kmod
+initramfs-tools
+wireless-regdb
+
+# Needed before the provisioning boot can add a signed apt source.
+ca-certificates
+curl
+gnupg
+
+# rdma-core build dependencies (upstream v62 wants all of these).  The distro
+# rdma-core below is what this flavour actually uses -- resolute packages 61.0,
+# past the v61 that first shipped providers/ionic, so libionic comes from the
+# archive -- but the consuming jobs build rdma-core themselves whenever their
+# pin moves past it or they need the GDA patches.
+libnl-3-dev
+libnl-route-3-dev
+libudev-dev
+libsystemd-dev
+python3-docutils
+
+# ibverbs userspace and the provider the ionic half of this flavour turns on.
+rdma-core
+ibverbs-utils
+libibverbs-dev
+
+# perftest with ROCm memory support has to be built in-guest (see the perftest
+# entry below: the archive build carries no --use_rocm).  These are what that
+# build needs on top of the rdma-core dependencies above.  Without
+# libibumad-dev configure hard-errors; the rest fail earlier or less legibly.
+#
+# autoconf and automake are here for the same build -- autogen.sh needs them
+# and nothing else in this flavour pulls them in, so libtool alone would still
+# leave the in-guest build one apt round-trip short.
+autoconf
+automake
+libtool
+libibumad-dev
+librdmacm-dev
+libpci-dev
+
+# ib_send_bw and friends, for jobs that move traffic over the ionic queue
+# pairs rather than only assert the modules built.  Built without ROCm memory
+# support: --use_rocm needs perftest compiled against a ROCm the archive build
+# does not carry.
+perftest
+
+# The GPU half's build and test dependencies, pre-installed because every
+# consumer of an emulated gfx1250 guest wants them and they are free to carry.
+libcli11-dev
+libdrm-dev
+libssl-dev
+nvme-cli
+pciutils
+python3-dev
+rsync
+
+# No fio and no fio build dependencies.  This flavour measures RDMA and HIP,
+# not storage; the rocjitsu flavour is the one that carries a libhipfile fio.
+
+pipx
+python3-venv

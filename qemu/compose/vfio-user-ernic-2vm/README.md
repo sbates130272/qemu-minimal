@@ -53,17 +53,17 @@ ssh -p 2223 ubuntu@localhost   # VM 2
 
 ## Configuring the NIC in each guest
 
-Run `vm-ernic.yml --tags configure` once per guest, and **pass `vm_index`** —
+Run `vm-rocm-golden.yml --tags configure` once per guest, and **pass `vm_index`** —
 it is what decides the address the guest takes on `rocm-ernic0`. The default is
 `1`, so running the play twice unchanged puts both guests on `192.168.200.10`
 and the mesh silently has an address collision rather than a working pair.
 
 ```sh
-ansible-playbook -i "vm1," ansible/playbooks/vm-ernic.yml --tags configure \
+ansible-playbook -i "vm1," ansible/playbooks/vm-rocm-golden.yml --tags configure \
   -e ansible_host=localhost -e ansible_port=2222 -e ansible_user=ubuntu \
   -e vm_index=1     # -> 192.168.200.10
 
-ansible-playbook -i "vm2," ansible/playbooks/vm-ernic.yml --tags configure \
+ansible-playbook -i "vm2," ansible/playbooks/vm-rocm-golden.yml --tags configure \
   -e ansible_host=localhost -e ansible_port=2223 -e ansible_user=ubuntu \
   -e vm_index=2     # -> 192.168.200.20
 ```

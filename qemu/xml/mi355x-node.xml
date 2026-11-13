@@ -72,8 +72,4 @@
 
   <prom-data-dir>/var/lib/qemu-tool/stacks/mi355x-node/prom-data</prom-data-dir>
 
-  <!-- LMCache off: orthogonal to the topology this stack exists to test,
-       and the guest-side half assumes one ernic per guest. -->
-  <lmcache-enable>false</lmcache-enable>
-
 </fleet>

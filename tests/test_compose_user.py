@@ -61,7 +61,6 @@ VM_NAME_PREFIX=fleet
 VM_VCPUS=4
 VM_VMEM=8192
 ERNIC_TAP=true
-LMCACHE_ENABLE=true
 QEMU_IMAGE=example/qemu:{_STAMP}-qemu11.1.1-{_VFU}
 ERNIC_IMAGE=example/ernic:{_STAMP}-ernic.0b48aa1-{_VFU}
 ROCJITSU_IMAGE=example/rocjitsu:{_STAMP}-rocjitsu.c85bb75
@@ -144,7 +143,7 @@ def _blocks(body: str) -> dict[str, list[str]]:
 # notice when it changes.
 _EXPECTED_USER = {
     "x-ernic-common", "x-qemu-common",
-    "prometheus", "loki", "grafana", "lmcache-coordinator",
+    "prometheus", "loki", "grafana",
 }
 # ... and who inherits it, from which anchor.
 _INHERITED_USER = {
@@ -156,7 +155,7 @@ _INHERITED_USER = {
 # non-root uid holds no effective NET_ADMIN). alloy must not: it mounts
 # /var/run/docker.sock to ship container logs, and that socket is root's.
 _EXEMPT = {"tapsetup-1", "tapsetup-2", "alloy"}
-_PINNED_NOBODY = {"ernic-stats-exporter", "lmcache-stats-exporter"}
+_PINNED_NOBODY = {"ernic-stats-exporter"}
 
 
 class TestAlwaysEmitted(unittest.TestCase):
@@ -285,8 +284,7 @@ class TestHardening(unittest.TestCase):
     def test_every_service_drops_all_capabilities(self):
         # Through an anchor for the per-VM services, inline for the rest.
         for name in ("x-ernic-common", "x-qemu-common", "prometheus", "loki",
-                     "alloy", "grafana", "lmcache-coordinator",
-                     "tapsetup-1"):
+                     "alloy", "grafana", "tapsetup-1"):
             block = "\n".join(self.blocks[name])
             self.assertIn("cap_drop", block, name)
             self.assertIn("no-new-privileges:true", block, name)
@@ -418,7 +416,7 @@ class TestTeardown(unittest.TestCase):
 
     def test_other_verbs_are_untouched(self):
         """`up` must NOT get every profile -- that would start the metrics
-        and lmcache services on a plain `up`, which is the opposite of what
+        services on a plain `up`, which is the opposite of what
         profiles are for."""
         for args in (["up", "-d"], ["ps"], ["logs", "-f"], ["config"]):
             with mock.patch.dict(os.environ, {}, clear=True):
