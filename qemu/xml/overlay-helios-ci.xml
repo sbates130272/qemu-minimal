@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   CI overlay for the helios-tray stack.  Keys here override helios-tray.xml
-  when gen-compose and compose are driven with --fleet-file overlay-helios-ci.xml
-  as the second file.  Only CI-specific differences are listed.
+  when gen-compose and compose are driven with the fleet-file flag pointing at
+  overlay-helios-ci.xml as the second file.  Only CI-specific differences are listed.
 -->
 <fleet xmlns="http://qemu-tool/fleet/1.0">
 
