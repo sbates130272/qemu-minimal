@@ -361,3 +361,16 @@
           provider from {{ ionic_srqp4_provider_base.stdout | trim | truncate(12, true, '') }}
           + patches/rdma-core, ernic_p4.ko built against the same srq+p4 tree.
           Recorded in {{ ionic_srqp4_stamp }}.
+
+- name: Install SDXI driver and CLI into guest image
+  hosts: all
+  gather_facts: true
+  become: true
+  vars_files:
+    - vars/sdxi-pins.yml
+  vars:
+    sdxi_guest_source_repo: "https://github.com/ROCm/rocm-systems.git"
+    sdxi_guest_source_branch: "users/stebates/emulation-sdxi"
+    sdxi_guest_source_ref: "{{ sdxi_source_pin }}"
+  roles:
+    - role: sdxi_guest

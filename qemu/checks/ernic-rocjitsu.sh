@@ -462,3 +462,36 @@ for _img in /boot/initrd.img-*; do
     fi
 done
 echo "initramfs: no ionic modules in $(ls -1 /boot/initrd.img-* | wc -l) image(s)"
+
+# ---------------------------------------------------------------------------
+# SDXI driver and CLI
+# ---------------------------------------------------------------------------
+test -f /etc/sdxi-guest-ref
+_sdxi_ref=$(cat /etc/sdxi-guest-ref)
+echo "sdxi: ref=${_sdxi_ref}"
+
+for _m in "sdxi_char:GPL" "sdxi_perf:Dual MIT/GPL"; do
+    _name=${_m%%:*}
+    _lic=${_m#*:}
+    _ko="/lib/modules/$(uname -r)/updates/${_name}.ko"
+    test -f "${_ko}"
+    modinfo "${_ko}" > /dev/null
+    test "$(modinfo -F vermagic "${_ko}" | awk '{print $1}')" = "$(uname -r)"
+    test "$(modinfo -F license "${_ko}")" = "${_lic}"
+    modprobe --dry-run --show-depends "${_name}" > /dev/null
+    echo "sdxi: ${_name} ok (${_lic})"
+done
+
+grep -q '^blacklist sdxi_perf$' /etc/modprobe.d/sdxi.conf
+echo "sdxi: sdxi_perf blacklisted"
+
+grep -q '^sdxi_char$' /etc/modules-load.d/sdxi.conf
+echo "sdxi: sdxi_char autoloaded"
+
+test "$(zcat /proc/config.gz 2>/dev/null | grep -c '^CONFIG_IO_URING=y')" = "1"
+echo "sdxi: CONFIG_IO_URING=y"
+
+command -v sdxi-cli > /dev/null
+sdxi-cli --help > /dev/null
+sdxi-cli --help 2>&1 | grep -q bench
+echo "sdxi: sdxi-cli ok (bench subcommand present)"
