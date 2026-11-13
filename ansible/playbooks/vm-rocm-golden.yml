@@ -354,3 +354,12 @@
   tags: [install]
   roles:
     - role: image_slim
+
+- name: Install ip_discovery.bin from live rocjitsu and re-bind amdgpu
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Include amdgpu firmware tasks
+      ansible.builtin.include_role:
+        name: rocjitsu_gpu_test
+        tasks_from: amdgpu_firmware

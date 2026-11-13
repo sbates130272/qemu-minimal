@@ -7,15 +7,9 @@
 # so the run-time configure stage of sbates130272.rocm_ernic.ernic_guest_setup
 # never happens. Anything a fleet guest needs has to be in the image, or be a
 # boot-time unit the image carries. This role is that list, applied once to
-# the backing image:
+# the backing image via vm-rocm-golden.yml.
 #
-#   qemu-tool gen-vm --ansible-only \
-#     --ansible-playbook ansible/playbooks/vm-ernic-fleet.yml \
-#     --vm-name <name> \
-#     --fleet-file qemu/xml/scale-out.xml --fleet-file qemu/xml/overlay-mi100.xml
-#
-# --env-file is repeatable and last-wins: the golden file plus this fleet's
-# overlay. The login account is covered under Login below.
+# The login account is covered under Login below.
 #
 # It was a pile of virt-customize invocations first. Each item below is there
 # because a fleet failed without it, and the comment says how.

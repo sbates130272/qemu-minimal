@@ -98,8 +98,8 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         # rocjitsu_firmware_ip_discovery=false prevents baking ip_discovery.bin
-        # into the guest image so the Install ip_discovery.bin step below fires
-        # and provides the timing delay rocjitsu needs before amdgpu-probe runs.
+        # at image-gen time; the Install ip_discovery.bin step below generates
+        # it against the live rocjitsu container.
         ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false,"user_setup_deploy_ssh_key":false,"rocm_setup_skip_system_upgrade":true,"rocjitsu_firmware_ip_discovery":false}'
       with:
         operation: gen-vm
@@ -185,9 +185,20 @@ jobs:
     # does and is why the quickstart lane is reliably green here.
     - name: Install ip_discovery.bin from live rocjitsu
       run: |
+        cat > /tmp/amdgpu-firmware-play.yml <<'EOF'
+        ---
+        - name: Install ip_discovery.bin from live rocjitsu and re-bind amdgpu
+          hosts: all
+          gather_facts: false
+          tasks:
+            - name: Include amdgpu firmware tasks
+              ansible.builtin.include_role:
+                name: rocjitsu_gpu_test
+                tasks_from: amdgpu_firmware
+        EOF
         ansible-playbook \
           -i "qemu," \
-          ansible/playbooks/vm-amdgpu-firmware.yml \
+          /tmp/amdgpu-firmware-play.yml \
           -e "ansible_host=qemu" \
           -e "ansible_port=2222" \
           -e "ansible_user=ubuntu" \

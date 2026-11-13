@@ -107,7 +107,8 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         # rocjitsu_firmware_ip_discovery=false prevents baking ip_discovery.bin
-        # into the guest image so the Install ip_discovery.bin step below fires
+        # at image-gen time; the amdgpu_firmware play at the end of
+        # vm-rocm-golden.yml generates it against the live rocjitsu container
         # and provides the timing delay rocjitsu needs before amdgpu-probe runs.
         ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false,"user_setup_deploy_ssh_key":false,"rocm_setup_skip_system_upgrade":true,"rocjitsu_firmware_ip_discovery":false}'
       with:
@@ -221,25 +222,6 @@ jobs:
           -p 2222 ubuntu@qemu "ibv_devinfo" | tee /tmp/ibv_devinfo.txt
         grep -q PORT_ACTIVE /tmp/ibv_devinfo.txt
         echo "✓ RDMA port active"
-
-    # ip_discovery.bin was intentionally not baked into the guest image (see
-    # rocjitsu_firmware_ip_discovery=false above) so that this step fires: it
-    # generates the blob from the live rocjitsu container via delegate_to:
-    # localhost (a ~30s docker run), copies it to the guest, and attempts a
-    # re-bind if amdgpu is already loaded. The docker run is the timing
-    # mechanism -- it gives rocjitsu time to finish initialising its vfio-user
-    # socket before amdgpu-probe runs. This mirrors what fleet-quickstart.yml
-    # does and is why the quickstart lane is reliably green here.
-    - name: Install ip_discovery.bin from live rocjitsu
-      run: |
-        ansible-playbook \
-          -i "qemu," \
-          ansible/playbooks/vm-amdgpu-firmware.yml \
-          -e "ansible_host=qemu" \
-          -e "ansible_port=2222" \
-          -e "ansible_user=ubuntu" \
-          -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"' \
-          -e "lmcache_guest_rocjitsu_image=$ROCJITSU_IMAGE"
 
     # See ansible-playbook-test-vm-rocjitsu.yml: this step has hung and only died to
     # the job-level timeout, with no diagnostic output. Bound at all three layers
