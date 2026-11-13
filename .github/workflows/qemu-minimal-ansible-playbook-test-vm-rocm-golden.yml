@@ -1,6 +1,6 @@
-name: qemu-minimal - Ansible Playbook Test - vm-ernic-rocjitsu
+name: qemu-minimal - Ansible Playbook Test - vm-rocm-golden
 
-# vm-ernic-rocjitsu: combined image, boot with the full single-VM compose stack,
+# vm-rocm-golden: combined image, boot with the full single-VM compose stack,
 # verify both the ernic NIC and the GPU.
 
 # This lane was parked carrying two failures. The ernic DKMS failure against
@@ -22,7 +22,7 @@ on:
     # 'qemu/qemu-tool/**' and 'qemu/pyproject.toml' are deliberately absent --
     # see the note in qemu-minimal-ansible-playbook-test-vm-rocjitsu.yml.
     paths:
-      - 'ansible/playbooks/vm-ernic-rocjitsu.yml'
+      - 'ansible/playbooks/vm-rocm-golden.yml'
       - 'ansible/playbooks/vm-ernic.yml'
       - 'ansible/playbooks/vm-rocjitsu.yml'
       # Both of those import their own bases: vm-ernic.yml -> vm-basic.yml,
@@ -42,7 +42,7 @@ on:
       - 'qemu/compose/vfio-user-ernic-rocjitsu-vm/**'
       - '.github/actions/setup-vm-job/action.yml'
       - '.github/actions/report-image-size/action.yml'
-      - '.github/workflows/qemu-minimal-ansible-playbook-test-vm-ernic-rocjitsu.yml'
+      - '.github/workflows/qemu-minimal-ansible-playbook-test-vm-rocm-golden.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -72,8 +72,8 @@ env:
   ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false,"user_setup_deploy_ssh_key":false,"rocm_setup_skip_system_upgrade":true}'
 
 jobs:
-  test-vm-ernic-rocjitsu:
-    name: Ansible Playbook Test - vm-ernic-rocjitsu
+  test-vm-rocm-golden:
+    name: Ansible Playbook Test - vm-rocm-golden
     runs-on: ubuntu-latest
     timeout-minutes: 120
     container:
@@ -93,7 +93,7 @@ jobs:
     - name: Set up VM job
       uses: ./.github/actions/setup-vm-job
       with:
-        cloud-image-key: ernic-rocjitsu
+        cloud-image-key: rocm-golden
         stage-src: 'true'
 
     - name: Pull CI images
@@ -102,7 +102,7 @@ jobs:
         docker pull "$ROCJITSU_IMAGE"
         docker pull "$QEMU_IMAGE"
 
-    - name: Generate VM with vm-ernic-rocjitsu playbook
+    - name: Generate VM with vm-rocm-golden playbook
       uses: sbates130272/qemu-tool-action@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -113,14 +113,14 @@ jobs:
       with:
         operation: gen-vm
         qemu-tool-source: ./qemu
-        vm-name: ernic-rocjitsu-test
+        vm-name: rocm-golden-test
         release: resolute
         size: '64'
         vcpus: '4'
-        ansible-playbook: ansible/playbooks/vm-ernic-rocjitsu.yml
+        ansible-playbook: ansible/playbooks/vm-rocm-golden.yml
         extra-args: --username ubuntu --password password --packages none
 
-    - name: Bring up ernic-rocjitsu compose stack
+    - name: Bring up rocm-golden compose stack
       uses: sbates130272/qemu-tool-action@v1
       env:
         QEMU_TOOL_SRC: /var/lib/qemu-tool/src
@@ -133,7 +133,7 @@ jobs:
       with:
         operation: compose
         qemu-tool-source: ./qemu
-        vm-name: ernic-rocjitsu-test
+        vm-name: rocm-golden-test
         stack: vfio-user-ernic-rocjitsu-vm
         compose-args: up --detach
         wait-for-healthy: 'true'
@@ -305,7 +305,7 @@ jobs:
       if: always()
       uses: ./.github/actions/report-image-size
       with:
-        vm-name: ernic-rocjitsu-test
+        vm-name: rocm-golden-test
         ssh-host: qemu
 
     - name: Show compose logs on failure

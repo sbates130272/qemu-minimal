@@ -642,7 +642,7 @@ confirmed working in CI — the ionic lane's
 the pre-rename kernel name, and `ibv_devinfo` reports `hca_id: rocm-rdma-ernic0`.
 The IB rename shells out to `/usr/bin/rdma`, which the gen-vm guest has.
 
-**On the published `ernic-rocjitsu` qcow2 only the Ethernet rename happens.**
+**On the published `rocm-golden` qcow2 only the Ethernet rename happens.**
 Measured 2026-10-16 on both guests of a `quickstart` stack from
 `20261014.geea0485`: the netdev comes up as `rocm-ernic0`, and `ibv_devinfo`
 reports `hca_id: rocep1s0` — the kernel name. The rules file is in the image

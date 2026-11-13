@@ -9,7 +9,7 @@
 #
 # It does not replace vm-ernic.yml. That one builds the guest -- mainline
 # kernel, toolchain, DKMS, rdma-core provider -- against a cloud image. This
-# one starts from the published ernic-rocjitsu qcow2, which already has all
+# one starts from the published rocm-golden qcow2, which already has all
 # of that, and adds only what the published disk leaves out. The list is
 # roles/ernic_fleet_guest/defaults/main.yml itself: every item there is there
 # because a fleet failed without it, and its comment says how it was found.

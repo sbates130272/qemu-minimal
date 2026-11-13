@@ -11,7 +11,7 @@
 #
 # import_playbook splices plays inline and does not dedupe, so a leaf that is
 # imported by another leaf contributes its slim play mid-chain: on
-# vm-ernic-rocjitsu.yml, an ungated import of this file from all five leaves
+# vm-rocm-golden.yml, an ungated import of this file from all five leaves
 # expands to six slim passes, only the last of which is actually last. That is
 # not merely wasteful, it is wrong. Everything this play removes is state a
 # later play in the same run still uses:

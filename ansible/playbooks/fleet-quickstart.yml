@@ -12,7 +12,7 @@
 #
 # Unlike the vm-* playbooks this configures a RUNNING fleet rather than baking
 # an image, and it is re-runnable. It is deliberately small: the published
-# ernic-rocjitsu qcow2 already carries the mainline kernel, the ionic-ernic
+# rocm-golden qcow2 already carries the mainline kernel, the ionic-ernic
 # DKMS modules, the udev naming rules, rdma-core, perftest and ROCm 10.1, so
 # only three things are missing from a guest that has just booted.
 #
@@ -46,7 +46,7 @@
     # and pointless here -- matching the existing name makes netplan's
     # set-name a no-op instead of a rename race against udev.
     lmcache_guest_ernic_netplan_name: rocm-ernic0
-    # The published ernic-rocjitsu qcow2 uses networkd-dispatcher rather than
+    # The published rocm-golden qcow2 uses networkd-dispatcher rather than
     # systemd-networkd, so the netplan file would be written but never applied.
     # The preflight (included below via netplan_ernic) assigns the address
     # directly with ip-addr regardless, so skipping the netplan write saves

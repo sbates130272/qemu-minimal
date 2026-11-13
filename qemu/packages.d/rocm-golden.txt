@@ -1,10 +1,10 @@
-# cloud-init packages for the "ernic-rocjitsu" guest flavour: the union of what
+# cloud-init packages for the "rocm-golden" guest flavour: the union of what
 # the ionic and rocjitsu flavours need, for a guest that carries both an
 # emulated ionic RDMA NIC and an emulated gfx1250.
 #
 # ROCm userspace and amdgpu-dkms are *not* here.  They come from third-party
 # apt repositories, which cloud-init's package list cannot add, so they are
-# installed by provision/ernic-rocjitsu.sh in a provisioning boot instead.
+# installed by provision/rocm-golden.sh in a provisioning boot instead.
 #
 # Nothing here may be kernel-versioned: cloud-init runs before the mainline
 # kernel is installed, and ${KERNEL_VERSION} would expand to the *host* kernel

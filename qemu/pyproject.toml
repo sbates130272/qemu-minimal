@@ -133,5 +133,5 @@ packages = [
     # gen_compose._copy_stack_assets.
     "*/logging/*",
 ]
-"qemu_tool.share.packages_d" = ["packages-*", "ernic-rocjitsu.txt"]
-"qemu_tool.share.checks_d" = ["ernic-rocjitsu.sh"]
+"qemu_tool.share.packages_d" = ["packages-*", "rocm-golden.txt"]
+"qemu_tool.share.checks_d" = ["rocm-golden.sh"]

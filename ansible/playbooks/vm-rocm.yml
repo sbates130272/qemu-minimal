@@ -197,7 +197,7 @@
     # no-ops on anything older. resolute GA is 7.0.0-34, so a lane on the distro
     # kernel would carry the 7.2 fixes and then boot a kernel that switches them
     # off. This puts every mainline lane on the same kernel, which is also the
-    # kernel the published ernic-rocjitsu qcow2 boots.
+    # kernel the published rocm-golden qcow2 boots.
     #
     # Position is load-bearing, and now more so than when the diversion was a
     # pre_task here. The kernel .debs run update-initramfs themselves, and

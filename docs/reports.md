@@ -41,7 +41,7 @@ title: Reports
   <div class="report-card">
     <span class="eyebrow">DKMS bake</span>
     <h2><a href="../ernic-p4/">Ernic SRQ+P4 bake report</a></h2>
-    <p>Boots the published ernic-rocjitsu qcow2 and bakes the SRQ+P4 ionic DKMS stack in; verifies <code>ernic_p4.ko</code> is present and loadable.</p>
+    <p>Boots the published rocm-golden qcow2 and bakes the SRQ+P4 ionic DKMS stack in; verifies <code>ernic_p4.ko</code> is present and loadable.</p>
   </div>
 </div>
 

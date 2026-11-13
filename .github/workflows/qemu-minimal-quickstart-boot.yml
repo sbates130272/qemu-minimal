@@ -27,7 +27,7 @@ name: qemu-minimal - PR quickstart boot
 #     this lane uploads none and is not a report lane, so it needs none of
 #     the five edits AGENTS.md lists for adding one.
 #
-# THE IMAGE. Uses the unified ernic-rocjitsu qcow2 (ernic + rocjitsu + SRQ+P4
+# THE IMAGE. Uses the unified rocm-golden qcow2 (ernic + rocjitsu + SRQ+P4
 # + SDXI all baked in) via an OVERLAY so qemu/xml/quickstart.xml itself is
 # untouched and report-for-quickstart keeps running from it unmodified.
 #
@@ -156,8 +156,8 @@ jobs:
         # because the overlay is the only place the two can drift.
         STAMP=$(grep -m1 "^QEMU_IMAGE=" "$FLEET_ENV" | sed 's/.*:\([0-9]\{8\}\.g[0-9a-f]*\)-.*/\1/')
         echo "quickstart stamp: $STAMP"
-        grep -q "ernic-rocjitsu:${STAMP}-" "$OVERLAY" || {
-          echo "::error::the ernic-rocjitsu tag in this lane is not on ${STAMP}, the stamp qemu/xml/quickstart.xml pins"
+        grep -q "rocm-golden:${STAMP}-" "$OVERLAY" || {
+          echo "::error::the rocm-golden tag in this lane is not on ${STAMP}, the stamp qemu/xml/quickstart.xml pins"
           exit 1
         }
         # Regenerate FLEET_ENV with both layers merged so docker compose gets

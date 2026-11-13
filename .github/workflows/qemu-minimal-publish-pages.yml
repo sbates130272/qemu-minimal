@@ -36,7 +36,6 @@ on:
       - qemu-minimal - Report for lmcache
       - qemu-minimal - Report for quickstart
       - qemu-minimal - Report for mi355x
-      - qemu-minimal - Ansible Playbook Test - vm-ernic-srq-p4
       - qemu-minimal - Report for helios
     types:
       - completed

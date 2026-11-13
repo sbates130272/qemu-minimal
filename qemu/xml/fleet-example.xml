@@ -24,7 +24,7 @@
   <qemu-ref>ghcr.io/sbates130272/qemu-libvfio-user-sbates-fork:qemu.d757fa6</qemu-ref>
   <ernic-ref>ghcr.io/rocm-ernic/rocm-ernic:ernic.abc1234</ernic-ref>
   <rocjitsu-ref>ghcr.io/rocm-ernic/rocjitsu:rocjitsu.def5678</rocjitsu-ref>
-  <backing-ref>ghcr.io/rocm-ernic/ernic-rocjitsu:20261001.g123abc</backing-ref>
+  <backing-ref>ghcr.io/rocm-ernic/rocm-golden:20261001.g123abc</backing-ref>
 
   <!-- ── Network ──────────────────────────────────────────────────────── -->
   <fleet-prefix>172.31</fleet-prefix>

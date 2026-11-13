@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 #
-# Assertions run inside the "ernic-rocjitsu" guest during the build's probe
+# Assertions run inside the "rocm-golden" guest during the build's probe
 # boot.  Appended to a "set -eu" bash script, so any failing command fails the
 # build.
 #
@@ -262,7 +262,7 @@ AMDGPU_SRC=$(ls -d /usr/src/amdgpu-* | tail -1)
 # vfio-user PCI capability, and KFD refuses a device without them.
 grep -q 'amdgpu_emu_mode == 1' "${AMDGPU_SRC}/amd/amdkfd/kfd_device.c"
 # 0001, the unreviewed ptrace gate.  See
-# assets/ernic-rocjitsu/patches/amdgpu/README.md.
+# assets/rocm-golden/patches/amdgpu/README.md.
 grep -q 'KERNEL_VERSION(7, 2, 0)' \
     "${AMDGPU_SRC}/amd/amdkfd/kfd_process_queue_manager.c"
 # 0002, the panel_type probes.
@@ -376,7 +376,7 @@ id -nG | tr ' ' '\n' | grep -qx video
 
 # The flavour's own record, for a consumer reading it from inside the guest,
 # and the same facts as prose where someone who has just ssh'd in will see them.
-test -s /etc/ernic-rocjitsu-guest.json
+test -s /etc/rocm-golden-guest.json
 test -s "${HOME}/WELCOME.md"
 
 # Headroom for a kernel tree, rdma-core, the ionic-ernic DKMS build and a
@@ -440,7 +440,7 @@ echo "modules-load.d: ionic, ionic_rdma"
 # This runs in the verification boot, which is the only place that sees the
 # final state: the DKMS pair is installed by the post-provision playbook and
 # the kernel trim runs after that, both later than any provision script. The
-# hook that prevents this lives in provision/ernic-rocjitsu.sh; this is what proves it
+# hook that prevents this lives in provision/rocm-golden.sh; this is what proves it
 # took.
 #
 # Why it matters: a stale in-tree ionic.ko in the initramfs loads before any

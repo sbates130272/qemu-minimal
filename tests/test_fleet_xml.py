@@ -49,7 +49,7 @@ class ParseExample(unittest.TestCase):
         self.assertIn("qemu-libvfio-user-sbates-fork", self.cfg.qemu_ref)
         self.assertIn("rocm-ernic", self.cfg.ernic_ref)
         self.assertIn("rocjitsu", self.cfg.rocjitsu_ref)
-        self.assertIn("ernic-rocjitsu", self.cfg.backing_ref)
+        self.assertIn("rocm-golden", self.cfg.backing_ref)
 
     def test_network(self) -> None:
         self.assertEqual(self.cfg.fleet_prefix, "172.31")

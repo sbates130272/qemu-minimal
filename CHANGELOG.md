@@ -785,7 +785,7 @@ All notable changes to this project will be documented in this file.
   passing `ib_send_bw` proves the verbs worked while only the counter proves
   the bytes crossed the mesh.
 
-  Nothing is built. The guest is the published `ernic-rocjitsu` qcow2, which
+  Nothing is built. The guest is the published `rocm-golden` qcow2, which
   already carries the mainline kernel, the ionic-ernic DKMS modules, the udev
   naming rules, rdma-core, perftest and ROCm 10.1, and the device servers are
   the tagged CI images. What the image does *not* carry is the per-rocjitsu
@@ -1544,7 +1544,7 @@ All notable changes to this project will be documented in this file.
   ROCm keyring cleanup were configuring a role that never ran, and are gone
   with it. `ansible-playbook --list-tasks --tags install` is unchanged for the
   combined lane and changes only as intended for the other two.
-  `vm-ernic-rocjitsu.yml` is untouched.
+  `vm-rocm-golden.yml` is untouched.
 
 - **Every CI lane that bakes a guest now runs `resolute`.** The `vm-rocm`,
   `ansible-setup-test`, `report-for-vm-basic`, `report-for-vm-ernic` and
@@ -1562,7 +1562,7 @@ All notable changes to this project will be documented in this file.
 - **`vm-rocm.yml` stops installing `rocm-cli` and `xrocmtop`.** Both
   `rocm_setup_install_rocm_cli` and `rocm_setup_install_xrocmtop` default to
   true in the role and were set nowhere here, so every ROCm lane — plain
-  rocjitsu and ernic-rocjitsu alike — baked them in by accident. Nothing in
+  rocjitsu and rocm-golden alike — baked them in by accident. Nothing in
   this repo runs either and no lane asserts on them. `rocm-cli` is the bigger
   reason: its installer is an unpinned `curl … rocm-cli/main/install.sh | sh`
   executed at bake time. `xrocmtop` is an interactive terminal UI in a
@@ -1581,7 +1581,7 @@ All notable changes to this project will be documented in this file.
 - `vm-rocjitsu.yml` installs the pinned mainline kernel (`ionic_kernel_pin`,
   currently `v7.2.4`) before it touches DKMS, so the standalone rocjitsu lane
   boots the same kernel as the combined lane and as the published
-  `ernic-rocjitsu` qcow2. It had been booting resolute GA, 7.0.0-34, while
+  `rocm-golden` qcow2. It had been booting resolute GA, 7.0.0-34, while
   carrying two amdgpu patches — the ptrace gate and the `panel_type` probe —
   that are version-gated to >= 7.2 and are therefore deliberate no-ops there.
   The combined lane never had the problem because `vm-ernic.yml` runs first and
@@ -1689,7 +1689,7 @@ All notable changes to this project will be documented in this file.
   most likely to start late, `:00` being the most contended minute on the
   platform.
 
-- `ansible-playbook-test-rocjitsu` and `ansible-playbook-test-ernic-rocjitsu`
+- `ansible-playbook-test-rocjitsu` and `ansible-playbook-test-rocm-golden`
   gate pull requests again. The rocjitsu lane had become dispatch-only while
   still being documented as the PR gate for the emulated GPU, which is how the
   RVS regression in #154 reached `main` and was found an hour later by
@@ -1858,7 +1858,7 @@ All notable changes to this project will be documented in this file.
 
   Where it runs is the subtle part. `import_playbook` splices plays inline and
   does not dedupe, so an ungated import from all five leaves would slim six
-  times on `vm-ernic-rocjitsu.yml` — five of them mid-chain, with real work
+  times on `vm-rocm-golden.yml` — five of them mid-chain, with real work
   still to come. That is a bug, not waste: `vm-rocjitsu.yml` installs rocBLAS
   with `update_cache: false` against lists an earlier pass would have deleted,
   and both DKMS builds read trees the opt-in purges remove. Each importing
@@ -1897,13 +1897,13 @@ All notable changes to this project will be documented in this file.
   | `vm-ernic` | 6.41 GiB | 4.84 GiB | **2.89 GiB** | −55% |
   | `vm-rocm` | 10.5 GiB | 8.42 GiB | **3.44 GiB** | −67% |
   | `vm-rocjitsu` | 10.8 GiB | 8.80 GiB | **3.59 GiB** | −67% |
-  | `vm-ernic-rocjitsu` | 11.2 GiB | 9.15 GiB | **3.90 GiB** | −65% |
+  | `vm-rocm-golden` | 11.2 GiB | 9.15 GiB | **3.90 GiB** | −65% |
 
   The ROCm guests compress at 2.45x against ernic's 1.67x, so the lanes that
   were worst off benefit most. Four images that totalled 38.9 GiB now total
   13.8 GiB.
 
-- **The `vm-rocm` and `vm-ernic-rocjitsu` lanes now trigger on
+- **The `vm-rocm` and `vm-rocm-golden` lanes now trigger on
   `ansible/playbooks/roles/**`.** They did not, and both run roles from there —
   `vm-rocm.yml` includes `ionic_image_prep`'s `kernel.yml` to install the pinned
   mainline kernel it boots, and the new `image_slim` runs last in every bake.
@@ -2157,7 +2157,7 @@ All notable changes to this project will be documented in this file.
   `ionic-ernic` DKMS package and uses stock rdma-core's `providers/ionic`; the
   emulated device moved from `1022:8000` to Pensando `1dd8:100a`.
 - `ansible-playbook-test` split into per-profile workflows (`-rocm`,
-  `-rocjitsu`, `-ernic`, `-ernic-rocjitsu`) sharing a `setup-vm-job` action,
+  `-rocjitsu`, `-ernic`, `-rocm-golden`) sharing a `setup-vm-job` action,
   and every workflow renamed to a consistent `qemu-minimal - <name>` form.
 - `requirements.yml` pins the rocm-ernic collection to an upstream git SHA.
   Galaxy publishes only 0.1.0, which is the pre-ionic collection, so the

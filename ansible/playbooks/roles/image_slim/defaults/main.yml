@@ -14,7 +14,7 @@
 # the middle of a chain. vm-slim.yml is imported as the last line of every
 # leaf playbook, but four of those leaves are themselves imported by another
 # (vm-basic by vm-rocm and vm-ernic, vm-rocm by vm-rocjitsu, both of those by
-# vm-ernic-rocjitsu), so an ungated import would slim up to six times per bake
+# vm-rocm-golden), so an ungated import would slim up to six times per bake
 # with real work still to come after each one. Those parents pass
 # image_slim_enable: false on the import; see the comment in vm-slim.yml for
 # why that is a correctness fix and not an optimisation.

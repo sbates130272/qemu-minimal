@@ -8,7 +8,7 @@
 # every one of those targets sat down. qemu/xml/scale-out claimed the image
 # already carried it ("vm-basic.yml runs fave_packages, whose
 # fave_packages_node_exporter_enable defaults true"), and on the published
-# ernic-rocjitsu qcow2 that is not true: no binary, no unit, no package.
+# rocm-golden qcow2 that is not true: no binary, no unit, no package.
 #
 # Distro package rather than a container or an upstream tarball: it ships a
 # hardened systemd unit, it already defaults to :9100, and it is one apt

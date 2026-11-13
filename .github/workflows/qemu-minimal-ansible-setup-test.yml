@@ -89,8 +89,8 @@ jobs:
     - name: Syntax-check vm-rocjitsu playbook
       run: ansible-playbook --syntax-check playbooks/vm-rocjitsu.yml
       working-directory: ansible
-    - name: Syntax-check vm-ernic-rocjitsu playbook
-      run: ansible-playbook --syntax-check playbooks/vm-ernic-rocjitsu.yml
+    - name: Syntax-check vm-rocm-golden playbook
+      run: ansible-playbook --syntax-check playbooks/vm-rocm-golden.yml
       working-directory: ansible
     # Reached by import from all five above, so it is already checked
     # transitively -- but it is also runnable on its own against a baked

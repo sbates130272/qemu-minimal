@@ -613,7 +613,7 @@ how deep its own chain goes.
 | `vm-rocm.yml` | `vm-basic.yml` | As above, plus the ROCm stack. The base for any ROCm guest |
 | `vm-ernic.yml` | `vm-basic.yml` | [rocm-ernic][rocm-ernic] RDMA NIC prerequisites; `--tags configure` for post-boot NIC setup. Installs no ROCm |
 | `vm-rocjitsu.yml` | `vm-rocm.yml` | ROCm + rocjitsu GPU firmware and driver prerequisites |
-| `vm-ernic-rocjitsu.yml` | both of the above | Both ernic and rocjitsu prerequisites combined |
+| `vm-rocm-golden.yml` | both of the above | Both ernic and rocjitsu prerequisites combined |
 | `vm-slim.yml` | — | Reclaim bake scratch and `fstrim` it back to the qcow2. Imported last by every leaf; also runnable on its own against a baked guest |
 
 ```bash

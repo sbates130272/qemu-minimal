@@ -1,5 +1,5 @@
 ---
-# Everything a compose fleet guest needs that the published ernic-rocjitsu
+# Everything a compose fleet guest needs that the published rocm-golden
 # qcow2 does not provide.
 #
 # Why this is a role and not the collection's configure play: a fleet boots

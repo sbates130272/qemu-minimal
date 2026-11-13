@@ -1,22 +1,26 @@
 ---
-# Bake the SRQ-capable ionic stack PLUS ernic_p4.ko into an already-provisioned
-# ernic guest.
+# Bake ernic, rocjitsu, SRQ+P4 ionic and SDXI into one VM image.
+# Runs vm-ernic then vm-rocjitsu, then the SRQ+P4 ionic stack and SDXI
+# inline. All are idempotent.
 #
-# Run against a BOOTED guest, over SSH:
-#
-#   ansible-playbook -i <inventory> vm-ernic-srq-p4.yml
-#
-# and not through "gen-vm --ansible-playbook". Both halves build against the
-# running kernel, and gen-vm's playbook pass happens before the mainline
-# kernel is installed. Run this in a later PROBE_PERSIST boot.
-#
-# WHY A COMBINED PLAYBOOK
+# Both ernic and rocjitsu imports suppress their own trailing slim play: the
+# only slim pass is the one at the end of this file.
+
+- import_playbook: vm-ernic.yml
+  vars:
+    image_slim_enable: false
+
+- import_playbook: vm-rocjitsu.yml
+  vars:
+    image_slim_enable: false
+
+# WHY A COMBINED PLAY
 #
 # The two halves share one ionic build: ernic_srq_dkms installs ionic with
 # base+SRQ+P4 patches, and ernic_p4_dkms builds ernic_p4.ko against the same
-# patched tree. Running them from separate playbooks would leave ernic_p4.ko
-# compiled against a different ionic than the one installed -- symbol version
-# mismatch, nothing obvious in the error.
+# patched tree. Building them separately leaves ernic_p4.ko compiled against a
+# different ionic than the one installed — symbol version mismatch, nothing
+# obvious in the error.
 #
 # The root constraint is that ernic_srq_dkms takes one patches directory, while
 # the underlying fetch-ionic-sources.sh accepts --patches-dir more than once.
@@ -36,7 +40,6 @@
 # patches/rdma-core for the provider, patches/p4 for ernic_p4 -- reached
 # through the collection pin in ansible/requirements.yml plus the matching
 # source pin in vars/ernic-pins.yml. Nothing is vendored here.
-
 - name: Build SRQ + P4 ionic stack into the guest
   hosts: all
   gather_facts: true
@@ -53,11 +56,7 @@
     ionic_srqp4_provider_prefix: /usr/local
     # ernic_p4_dkms checks for module sources on the TARGET (no delegate_to),
     # so drivers/ernic_p4/ must be staged into the guest before the role runs.
-    # This mirrors the archive→unpack pattern ernic_srq_dkms uses for the
-    # patched ionic sources (see ansible/roles/ernic_srq_dkms/tasks/stage.yml).
     ionic_p4_guest_module_dir: /var/tmp/ernic-p4-src/drivers/ernic_p4
-    # ernic_p4_dkms runs target-side (no delegate_to in the role) so its
-    # scripts_dir must be a path that exists in the guest.
     ionic_p4_guest_scripts_dir: /var/tmp/ernic-p4-src/ansible/files/scripts
     ionic_p4_guest_patches_root: /var/tmp/ernic-p4-src/ansible/files/patches
 
@@ -138,11 +137,6 @@
         cmd: depmod -a
       changed_when: false
 
-    # ionic_rdma is the right module to check for SRQ: ionic_create_srq is
-    # defined there, not in ionic. The check requires the updates/dkms/ path,
-    # which is the installed DKMS version; the in-tree ionic_rdma (merged in
-    # Linux 6.18) would be at kernel/drivers/infiniband/hw/ionic/ and would
-    # fail this test even if present, so the guard is correct regardless.
     - name: Confirm the installed ionic_rdma carries the SRQ verbs
       ansible.builtin.shell: |
         set -euo pipefail
@@ -169,8 +163,6 @@
       register: ionic_srqp4_srq_symbols
       failed_when: ionic_srqp4_srq_symbols.stdout | int < 1
 
-    # ionic_adminq_post_wait is exported by ionic (the NIC driver), not
-    # ionic_rdma; ernic_p4.ko imports it from there.
     - name: Confirm the installed ionic carries the P4 symbol
       ansible.builtin.shell: |
         set -euo pipefail
@@ -215,15 +207,6 @@
         executable: /bin/bash
       changed_when: false
 
-    # ernic_p4_dkms fetches its own patched ionic sources and builds
-    # ernic_p4.ko against them. Give it the same two patch directories the
-    # staged combined dir was built from, so its sources match the installed
-    # ionic exactly.
-    #
-    # ernic_p4_dkms checks "Check the module sources are on the target" without
-    # delegate_to, so drivers/ernic_p4/ must be present in the guest before the
-    # role runs. Archive it on the controller and unpack it, mirroring the shape
-    # ernic_srq_dkms/tasks/stage.yml uses for the patched ionic tree.
     - name: Archive the ernic_p4 module sources on the controller
       delegate_to: localhost
       become: false
@@ -259,27 +242,16 @@
       vars:
         ernic_p4_dkms_install: true
         ernic_p4_dkms_reload: false
-        # Do not load the module: no vfio-user device is attached at image-build
-        # time, and touching ionic on the emulated device can hang the guest
-        # (AGENTS.md issue 6). Same rationale as ernic_srq_dkms_reload: false.
         ernic_p4_dkms_load: false
         ernic_p4_dkms_fetch_on_controller: true
         ernic_p4_dkms_force_fetch: false
-        # Point the role at the staged module sources in the guest.
         ernic_p4_dkms_module_dir: "{{ ionic_p4_guest_module_dir }}"
-        # Set explicitly so the role does not try to read cmake/ErnicKernelModule.cmake
-        # from the target -- we staged only drivers/ernic_p4/, not the full tree.
         ernic_p4_dkms_kernel_ref: "{{ ionic_kernel_pin }}"
-        # ernic_p4_dkms runs target-side (no delegate_to), so scripts_dir must
-        # be a guest path. ansible/files/scripts/ was staged alongside drivers/ernic_p4/.
         ernic_p4_dkms_scripts_dir: "{{ ionic_p4_guest_scripts_dir }}"
         ernic_p4_dkms_patches_dirs:
           - "{{ ionic_p4_guest_patches_root }}/srq"
           - "{{ ionic_p4_guest_patches_root }}/p4"
 
-    # ernic_p4_dkms installs after the earlier depmod, so modules.dep does not
-    # know about ernic_p4.ko yet. Run depmod again so callers can find it via
-    # modinfo and modprobe without a reboot.
     - name: Update modules.dep after ernic_p4.ko installation
       ansible.builtin.command:
         cmd: depmod -a
@@ -374,3 +346,11 @@
     sdxi_guest_source_ref: "{{ sdxi_source_pin }}"
   roles:
     - role: sdxi_guest
+
+- name: Slim the baked image
+  hosts: all
+  gather_facts: true
+  become: true
+  tags: [install]
+  roles:
+    - role: image_slim

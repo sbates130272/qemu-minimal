@@ -1259,7 +1259,7 @@ def report(state: _State) -> None:
     out = [
         "# Two-VM quickstart report",
         "",
-        "Two guests from the published `ernic-rocjitsu` image, each with an",
+        "Two guests from the published `rocm-golden` image, each with an",
         "emulated gfx1250, an emulated NVMe and an emulated RDMA NIC, booted",
         "by `qemu-tool quick-start`.",
         "",

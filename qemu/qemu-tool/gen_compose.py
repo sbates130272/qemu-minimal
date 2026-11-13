@@ -2015,7 +2015,7 @@ def render_inventory(spec: dict[str, Any], env_names: Sequence[str], digest: str
     out.append("    ansible_host: 127.0.0.1")
     # From VM_USERNAME, which is a VMConfig field (config.py) and so already
     # understood by gen-vm and run-vm. The published guest images carry their
-    # own user -- the ernic-rocjitsu qcow2 ships vm-info.json naming
+    # own user -- the rocm-golden qcow2 ships vm-info.json naming
     # "batesste" -- so the ubuntu default is right only for a guest this repo
     # built itself.
     out.append(f"    ansible_user: {spec['vm_username']}")

@@ -3,7 +3,7 @@ name: qemu-minimal - Report for quickstart
 # The README's Quick Start, run daily.
 #
 # WHAT THIS LANE IS FOR. It is the only lane that executes the documented
-# fast path end to end: pull the published ernic-rocjitsu qcow2, generate a
+# fast path end to end: pull the published rocm-golden qcow2, generate a
 # two-VM stack from qemu/xml/quickstart, boot it with Prometheus and Grafana
 # beside it, and prove both emulated devices with one test each. Every other
 # lane here either bakes its own guest with Ansible (the vm-* report lanes,
