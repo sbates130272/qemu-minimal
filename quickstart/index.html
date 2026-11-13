@@ -543,9 +543,9 @@ emulated gfx1250, an emulated NVMe and an emulated RDMA NIC, booted
 by <code>qemu-tool quick-start</code>.</p>
 <ul>
 <li>Guest image: <code>20261112.gdca6903-vm.resolute-ernic-rocjitsu-qm.096ddfe-qcow2</code></li>
-<li>Guest size: 2 x 4 vCPU, 5887 MiB</li>
+<li>Guest size: 2 x 4 vCPU, 5993 MiB</li>
 <li>RDMA bytes across the mesh: 65536000</li>
-<li>Generated: <strong>2026-11-12 20:22 UTC</strong> &middot; Commit: <code>fad1f5e</code> &middot; Status: <strong>pass</strong></li>
+<li>Generated: <strong>2026-11-13 11:12 UTC</strong> &middot; Commit: <code>3040a58</code> &middot; Status: <strong>pass</strong></li>
 </ul>
 <h2 id="quickstart-1">quickstart-1<a class="headerlink" href="#quickstart-1" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>kernel:  7.2.6-070206-generic
@@ -591,13 +591,13 @@ vector-add: PASS
  rdma_cm QPs     : OFF
  Data ex. method : Ethernet
 ---------------------------------------------------------------------------------------
- local address: LID 0000 QPN 0x0002 PSN 0xd68d67
+ local address: LID 0000 QPN 0x0002 PSN 0xa45ddf
  GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:11
- remote address: LID 0000 QPN 0x0002 PSN 0x58d13b
+ remote address: LID 0000 QPN 0x0002 PSN 0x538ec7
  GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:12
 ---------------------------------------------------------------------------------------
  #bytes     #iterations    BW peak[MiB/sec]    BW average[MiB/sec]   MsgRate[Mpps]
- 65536      1000             1098.53            900.10           0.014402
+ 65536      1000             658.97             639.67           0.010235
 ---------------------------------------------------------------------------------------
 </code></pre></div>
 <h3 id="nvme-io-test">NVMe I/O test<a class="headerlink" href="#nvme-io-test" title="Permanent link">&para;</a></h3>
@@ -611,11 +611,11 @@ vector-add: PASS
 <tbody>
 <tr>
 <td>write</td>
-<td>118.0 MiB/s</td>
+<td>180.0 MiB/s</td>
 </tr>
 <tr>
 <td>read</td>
-<td>723.0 MiB/s</td>
+<td>219.0 MiB/s</td>
 </tr>
 </tbody>
 </table>
@@ -657,11 +657,11 @@ vector-add: PASS
 <tbody>
 <tr>
 <td>write</td>
-<td>119.0 MiB/s</td>
+<td>181.0 MiB/s</td>
 </tr>
 <tr>
 <td>read</td>
-<td>763.0 MiB/s</td>
+<td>219.0 MiB/s</td>
 </tr>
 </tbody>
 </table>
