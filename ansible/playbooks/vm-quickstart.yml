@@ -1,31 +1,30 @@
 ---
-# Make a running two-VM quickstart fleet test-ready, then prove the GPU and
-# the RDMA NIC with one test each.
+# Make the guests of a running quickstart stack test-ready, then prove the
+# GPU, the RDMA NIC and the NVMe with one test each.
 #
-#   qemu-tool gen-compose --xml qemu/xml/quickstart.xml --output-dir <dir>
-#   docker compose --env-file <fleet-env-file> up -d         # from <dir>
-#   ansible-playbook -i <dir>/fleet-inventory.yml \
-#       playbooks/fleet-quickstart.yml --private-key <key>
+#   ansible-playbook -i <stack dir>/fleet-inventory.yml \
+#       playbooks/vm-quickstart.yml --private-key <key>
 #
 # Normally reached through `qemu-tool quick-start`, which is also what the
-# daily report-for-vm-rocm-golden lane runs.
+# daily report-for-vm-rocm-golden lane runs. It configures RUNNING guests
+# rather than baking an image, and it is re-runnable.
 #
-# Unlike the vm-* playbooks this configures a RUNNING fleet rather than baking
-# an image, and it is re-runnable. It is deliberately small: the published
-# rocm-golden qcow2 already carries the mainline kernel, the ionic-ernic
-# DKMS modules, the udev naming rules, rdma-core, perftest and ROCm 10.1, so
-# only three things are missing from a guest that has just booted.
+# It is small because the published qcow2 already carries almost everything:
+# the mainline kernel, the ionic DKMS pair and its modules-load.d entry,
+# rdma-core, perftest, fio, ROCm on PATH and in the linker cache, the patched
+# amdgpu module and the amdgpu-probe script. Checked against a guest booted
+# from the image, not assumed. What a freshly booted guest still lacks:
 #
 #   1. /lib/firmware/amdgpu/ip_discovery.bin. Omitted from the published disk
 #      on purpose -- it is per rocjitsu build -- and without it amdgpu probes
-#      -2, no KFD node appears and the guest looks GPU-less (AGENTS.md
-#      ip_discovery note).
-#   2. An address on the ernic. Run-time only state, so a boot does not have
-#      it (AGENTS.md issue 12), and without it ARP goes unanswered and
-#      ib_send_bw cannot do its out-of-band exchange at all.
-#   3. amdgpu loaded. It is blacklisted at boot by design: the device is
+#      -2, no KFD node appears and the guest looks GPU-less.
+#   2. The ernic udev naming rules, which the image does not ship.
+#   3. An address on the ernic. Run-time only state, and without it ARP goes
+#      unanswered and ib_send_bw cannot do its out-of-band exchange at all.
+#   4. amdgpu loaded. It is blacklisted at boot by design: the device is
 #      attached from outside the guest, so the driver must not load before
 #      the rocjitsu server is serving.
+#   5. The metrics exporters the stack's Prometheus scrapes.
 #
 # Everything else here is a test or a fact for the report.
 
@@ -65,18 +64,15 @@
       vars:
         rocjitsu_setup_firmware_live: true
 
-    - name: Install rocm-ernic udev naming rules
-      become: true
-      ansible.builtin.copy:
-        src: roles/rocm_ernic_setup/files/99-rocm-ernic.rules
-        dest: /etc/udev/rules.d/99-rocm-ernic.rules
-        mode: "0644"
-
-    - name: Reload udev rules
-      become: true
-      ansible.builtin.command:
-        cmd: udevadm control --reload-rules
-      changed_when: false
+    # Takes effect at the next device-add, not now: udev will not rename a
+    # live interface. So everything below finds the device by MAC or asks
+    # ibv_devinfo for its name rather than assuming the renamed one.
+    - name: Install the ernic udev naming rules
+      ansible.builtin.include_role:
+        name: rocm_ernic_setup
+        tasks_from: naming
+        apply:
+          become: true
 
     - name: Assign ernic Ethernet address
       become: true
@@ -90,13 +86,12 @@
         executable: /bin/bash
       changed_when: true
 
-    # systemd-networkd-wait-online blocks boot indefinitely: it waits for ALL
-    # networkd-managed interfaces including the ernic, which only appears after
-    # the vfio-user session is established. The published qcow2 does not mask
-    # it, so boot stalls for >90s on every run without this.
+    # For the NEXT boot of this guest; vm-rocm-golden.yml bakes the same mask
+    # in. The published qcow2 predates that, so a reboot stalls for over 90 s
+    # without it.
     - name: Mask systemd-networkd-wait-online to prevent ernic boot delay
       become: true
-      ansible.builtin.systemd:
+      ansible.builtin.systemd_service:
         name: systemd-networkd-wait-online.service
         masked: true
       failed_when: false
@@ -122,66 +117,28 @@
         path: /dev/kfd
         timeout: 120
 
-    # TheRock installs to a versioned prefix that nothing puts on PATH, so
-    # rocminfo is "command not found" on a fresh guest despite being
-    # installed. sort -V, not a lexical sort: that puts core-9.0 above
-    # core-10.0.
-    - name: Locate the ROCm prefix
-      ansible.builtin.shell:
-        cmd: set -o pipefail; ls -d /opt/rocm/core-* 2>/dev/null | sort -V | tail -1
-        executable: /bin/bash
-      register: quickstart_rocm_raw
-      changed_when: false
-
+    # A fact, not a play var: the plays below read it too. /opt/rocm is the
+    # versionless path the image provides; it resolves to the therock
+    # component directory, which is also on PATH and in the linker cache.
     - name: Record the ROCm prefix
       ansible.builtin.set_fact:
-        quickstart_rocm: >-
-          {{ quickstart_rocm_raw.stdout | trim
-             if (quickstart_rocm_raw.stdout | trim | length > 0)
-             else '/opt/rocm' }}
+        quickstart_rocm: /opt/rocm
 
-    - name: Fail with a useful message when the prefix has no hipcc
+    - name: Fail with a useful message when the image has no hipcc
       ansible.builtin.stat:
         path: "{{ quickstart_rocm }}/bin/hipcc"
       register: quickstart_hipcc
       failed_when: not quickstart_hipcc.stat.exists
 
-    # Asked for rather than assumed. The udev rules in the image name it
-    # rocm-rdma-ernic0, but a guest prepared for UCX answers to something else
-    # Ensure ionic and ionic_rdma are loaded. The backing qcow2 ships the
-    # DKMS modules but has no modules-load.d entries, so they depend on udev
-    # device detection at boot. Making this explicit prevents a race between
-    # udev and the ibv_devinfo check below.
-    - name: Load ionic and ionic_rdma modules
-      become: true
-      ansible.builtin.shell:
-        cmd: |
-          echo "kernel: $(uname -r)"
-          DKMS_IONIC=$(modinfo -F srcversion \
-            /lib/modules/$(uname -r)/updates/dkms/ionic.ko.zst 2>/dev/null)
-          LOADED_IONIC=$(cat /sys/module/ionic/srcversion 2>/dev/null || echo NONE)
-          echo "ionic dkms: ${DKMS_IONIC:-MISSING}"
-          echo "ionic loaded: $LOADED_IONIC"
-          # If the running ionic differs from the DKMS ionic (a stale version
-          # from the initramfs), ionic_rdma's symbol CRCs will not match and
-          # modprobe fails with EINVAL. Reload the DKMS version.
-          if [ "$LOADED_IONIC" != "$DKMS_IONIC" ] && [ "$LOADED_IONIC" != "NONE" ]; then
-            echo "ionic mismatch -- reloading DKMS version"
-            ip link set enp1s0np0 down 2>/dev/null || true
-            rmmod ionic
-          fi
-          modprobe ionic 2>&1
-          modprobe ionic_rdma 2>&1 && echo "modprobe: OK" || echo "modprobe: FAILED rc=$?"
-        executable: /bin/bash
-      register: quickstart_ionic_log
-      changed_when: false
-      failed_when: "'modprobe: FAILED' in quickstart_ionic_log.stdout"
-
-    - name: Show ionic module state
-      ansible.builtin.debug:
-        msg: "{{ quickstart_ionic_log.stdout_lines }}"
-
-    # (AGENTS.md issue 21), and a wrong -d is a confusing failure.
+    # No module loading here. The image loads ionic and ionic_rdma at boot from
+    # modules-load.d, and keeps both out of the initramfs so the loaded pair is
+    # the DKMS pair. The retry below covers the time the device takes to
+    # register.
+    #
+    # The IB device name is asked for rather than assumed: without a re-add
+    # the device keeps its kernel name, and a guest prepared for UCX answers
+    # to something else again. A wrong -d is a confusing failure.
+    #
     # Retried: ionic_rdma probes over vfio-user and the device registration
     # races with SSH availability -- ibv_devinfo -l can return empty on a
     # fresh boot before the IB device is registered. 60 x 2s = 120s ceiling
@@ -216,183 +173,41 @@
       delay: 2
       changed_when: false
 
-    # Rebuild the CA bundle so HTTPS downloads trust ZScaler. The cert file
-    # was placed by cloud-init (VM_CA_CERT_FILE) but update-ca-certificates
-    # may not have run yet.
     - name: Report what each guest has
       ansible.builtin.debug:
         msg: >-
           {{ inventory_hostname }}: kernel {{ ansible_facts['kernel'] }},
-          ROCm {{ quickstart_rocm }}, IB {{ quickstart_ib_device }}
+          IB {{ quickstart_ib_device }}
           ({{ quickstart_port.attempts | default(1) }} attempt(s) to PORT_ACTIVE),
           ernic {{ fleet_guest_ip }}
 
 
 # ---------------------------------------------------------------------------
-# Optional monitoring stack install (non-fatal)
+# Metrics exporters (non-fatal)
 # ---------------------------------------------------------------------------
 #
-# amdgpu-exporter, rdma_exporter, hsa-snoop and Alloy. Any failure here
-# is non-fatal: network, repos, or apt locks may be unavailable in CI.
-# any_errors_fatal: false ensures the GPU and RDMA tests below still run.
-- name: Install optional monitoring stack
+# node_exporter with an amdgpu textfile collector, and rdma_exporter, which
+# the stack's Prometheus scrapes. vm-rocm-golden.yml bakes both in from the
+# same task files, so on an image built from it this play changes nothing;
+# it is here for images that predate that. Non-fatal: they come from apt and
+# GitHub at run time, and a failure must not stop the tests below.
+- name: Install the metrics exporters
   hosts: fleet
   gather_facts: false
   any_errors_fatal: false
   ignore_errors: true
   become: false
   tasks:
-    - name: Install prometheus-node-exporter
-      become: true
-      ansible.builtin.apt:
-        name: prometheus-node-exporter
-        state: present
-        update_cache: true
+    - name: Install node_exporter and the amdgpu textfile collector
+      ansible.builtin.include_role:
+        name: rocjitsu_setup
+        tasks_from: metrics
 
-    - name: Create textfile collector directory
-      become: true
-      ansible.builtin.file:
-        path: /var/lib/prometheus/node-exporter
-        state: directory
-        mode: "0755"
+    - name: Install rdma_exporter
+      ansible.builtin.include_role:
+        name: rocm_ernic_setup
+        tasks_from: metrics
 
-    - name: Install amdgpu textfile metrics script
-      become: true
-      ansible.builtin.copy:
-        dest: /usr/local/bin/amdgpu-textfile-metrics.sh
-        mode: "0755"
-        content: |
-          #!/bin/sh
-          # Write amdgpu presence metrics for node_exporter textfile collector.
-          # amdgpu-exporter is disabled (broken on emulated gfx1250); this is
-          # the lightweight alternative.
-          out=/var/lib/prometheus/node-exporter/amdgpu.prom
-          kfd=0; [ -e /dev/kfd ] && kfd=1
-          gpus=$(find /sys/bus/pci/drivers/amdgpu/ -maxdepth 1 \
-                      -name '????:??:??.?' 2>/dev/null | wc -l)
-          cat > "${out}.tmp" << EOF
-          # HELP amdgpu_kfd_present Whether /dev/kfd is present (1=yes, 0=no).
-          # TYPE amdgpu_kfd_present gauge
-          amdgpu_kfd_present ${kfd}
-          # HELP amdgpu_devices_total Number of amdgpu DRM render devices.
-          # TYPE amdgpu_devices_total gauge
-          amdgpu_devices_total ${gpus}
-          EOF
-          mv "${out}.tmp" "${out}"
-
-    - name: Install amdgpu metrics systemd timer
-      become: true
-      ansible.builtin.copy:
-        dest: /etc/systemd/system/amdgpu-textfile-metrics.service
-        mode: "0644"
-        content: |
-          [Unit]
-          Description=Write amdgpu textfile metrics for node_exporter
-
-          [Service]
-          Type=oneshot
-          ExecStart=/usr/local/bin/amdgpu-textfile-metrics.sh
-
-    - name: Install amdgpu metrics timer unit
-      become: true
-      ansible.builtin.copy:
-        dest: /etc/systemd/system/amdgpu-textfile-metrics.timer
-        mode: "0644"
-        content: |
-          [Unit]
-          Description=Run amdgpu textfile metrics every 30s
-
-          [Timer]
-          OnBootSec=5s
-          OnUnitActiveSec=30s
-
-          [Install]
-          WantedBy=timers.target
-
-    - name: Configure node_exporter to use textfile collector
-      become: true
-      ansible.builtin.lineinfile:
-        path: /etc/default/prometheus-node-exporter
-        regexp: '^ARGS='
-        line: 'ARGS="--collector.textfile.directory=/var/lib/prometheus/node-exporter"'
-        create: true
-        mode: "0644"
-
-    - name: Enable and start amdgpu metrics timer
-      become: true
-      ansible.builtin.systemd:
-        name: amdgpu-textfile-metrics.timer
-        enabled: true
-        state: started
-        daemon_reload: true
-
-    - name: Run metrics script immediately
-      become: true
-      ansible.builtin.command:
-        cmd: /usr/local/bin/amdgpu-textfile-metrics.sh
-      changed_when: true
-
-    - name: Restart node_exporter to pick up textfile config
-      become: true
-      ansible.builtin.systemd:
-        name: prometheus-node-exporter
-        state: restarted
-
-    # amdgpu-exporter: AMD GPU metrics on :9488 from the ROCm apt repo.
-    - name: Get latest rdma_exporter release from GitHub
-      ansible.builtin.uri:
-        url: https://api.github.com/repos/yuuki/rdma_exporter/releases/latest
-        return_content: true
-      register: _rdma_release
-      changed_when: false
-
-    - name: Download rdma_exporter tarball
-      ansible.builtin.get_url:
-        url: >-
-          https://github.com/yuuki/rdma_exporter/releases/download/{{
-          _rdma_release.json.tag_name }}/rdma_exporter_{{
-          _rdma_release.json.tag_name | regex_replace('^v', '') }}_linux_amd64.tar.gz
-        dest: /tmp/rdma_exporter.tar.gz
-        mode: "0644"
-
-    - name: Extract and install rdma_exporter binary
-      become: true
-      ansible.builtin.shell:
-        cmd: |
-          tar -xzf /tmp/rdma_exporter.tar.gz -C /tmp rdma_exporter
-          install -o root -g root -m 0755 /tmp/rdma_exporter /usr/local/bin/rdma_exporter
-          rm -f /tmp/rdma_exporter /tmp/rdma_exporter.tar.gz
-        executable: /bin/bash
-      changed_when: true
-
-    - name: Install rdma_exporter systemd unit
-      become: true
-      ansible.builtin.copy:
-        dest: /etc/systemd/system/rdma_exporter.service
-        content: |
-          [Unit]
-          Description=Prometheus RDMA exporter
-          After=network.target
-
-          [Service]
-          ExecStart=/usr/local/bin/rdma_exporter -listen-address=:9879
-          Restart=on-failure
-
-          [Install]
-          WantedBy=multi-user.target
-        mode: "0644"
-
-    - name: Start rdma_exporter
-      become: true
-      ansible.builtin.systemd:
-        name: rdma_exporter
-        enabled: true
-        state: started
-        daemon_reload: true
-
-    # hsa-snoop: HSA/AQL queue snooper from a pre-built .deb on GitHub.
-    # Installs the binary and a systemd unit; the unit runs with --all
-    # --prometheus on port 9490 (not 9488, which amdgpu-exporter uses).
 # ---------------------------------------------------------------------------
 # GPU test
 # ---------------------------------------------------------------------------
@@ -454,18 +269,9 @@
           /var/tmp/quickstart/vector_add.hip
       changed_when: true
 
-    # The runtime dirs named explicitly rather than trusted to ldconfig: the
-    # published image does not put this prefix in the linker cache, and the
-    # symptom is "error while loading shared libraries" rather than anything
-    # about ROCm.
     - name: Run vector_add
       ansible.builtin.command:
         cmd: timeout 600 /var/tmp/quickstart/vector_add 4096
-      environment:
-        ROCM_PATH: "{{ quickstart_rocm }}"
-        LD_LIBRARY_PATH: >-
-          {{ quickstart_rocm }}/lib:{{ quickstart_rocm }}/lib64:{{
-          quickstart_rocm }}/lib/llvm/lib
       register: quickstart_vector_add
       changed_when: false
       failed_when: >-
@@ -482,10 +288,10 @@
 #
 # ib_send_bw from guest 1 to guest 2 over the mesh. The server goes into a
 # transient SYSTEM unit, not a backgrounded SSH command: a perftest server
-# started over SSH exits with the session even when disowned (AGENTS.md
-# issue 8). It is never killed either -- it exits on its own once the client
-# finishes, and killing a perftest mid-run leaves the guest RDMA device
-# broken until the whole stack is recreated (AGENTS.md issue 6).
+# started over SSH exits with the session even when disowned. It is never
+# killed either -- it exits on its own once the client finishes, and killing
+# a perftest mid-run leaves the guest RDMA device broken until the whole
+# stack is recreated.
 - name: Start the RDMA server on the last guest
   hosts: fleet[-1]
   gather_facts: false
@@ -519,9 +325,8 @@
     # the probe for its peer, failed the parameter exchange
     # ("ethernet_read_data: Couldn't read reports") and exited before the
     # real client arrived a second later, which then reported "Couldn't
-    # connect" and looked like a broken L2 segment. Same shape as the ernic
-    # healthcheck in AGENTS.md issue 15: anything that opens this port
-    # changes what it is measuring.
+    # connect" and looked like a broken L2 segment. Anything that opens this
+    # port changes what it is measuring.
     - name: Wait for it to listen
       ansible.builtin.shell:
         cmd: set -o pipefail; ss -ltn 'sport = :18515' | grep -q LISTEN
@@ -652,7 +457,7 @@
           echo
           echo '```'
           echo "kernel:  $(uname -r)"
-          echo "rocm:    {{ quickstart_rocm }}"
+          echo "rocm:    $(dirname "$(readlink -f {{ quickstart_rocm }}/bin)")"
           echo "gpu:     {{ quickstart_arch | default('none') }}"
           ibv_devinfo -d {{ quickstart_ib_device }} | head -8
           echo "--- block devices (nvme0n1 is the emulated NVMe)"

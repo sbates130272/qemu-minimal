@@ -31,7 +31,7 @@ on:
       - main
     paths:
       - 'qemu/xml/rocm-golden.xml'
-      - 'ansible/playbooks/fleet-quickstart.yml'
+      - 'ansible/playbooks/vm-quickstart.yml'
       - 'ansible/playbooks/roles/**'
       - 'ansible/files/p4/**'
       - 'ansible/requirements.yml'

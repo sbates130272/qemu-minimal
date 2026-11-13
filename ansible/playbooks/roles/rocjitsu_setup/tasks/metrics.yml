@@ -1,0 +1,78 @@
+---
+# node_exporter, plus a textfile collector saying whether the GPU is there.
+# The textfile is the lightweight stand-in for amdgpu-exporter, which does not
+# work against an emulated gfx1250.
+- name: Install prometheus-node-exporter
+  ansible.builtin.apt:
+    name: prometheus-node-exporter
+    state: present
+    update_cache: true
+  become: true
+
+- name: Create the textfile collector directory
+  ansible.builtin.file:
+    path: /var/lib/prometheus/node-exporter
+    state: directory
+    mode: "0755"
+  become: true
+
+- name: Install the amdgpu textfile metrics script
+  ansible.builtin.copy:
+    src: amdgpu-textfile-metrics.sh
+    dest: /usr/local/bin/amdgpu-textfile-metrics.sh
+    mode: "0755"
+  become: true
+
+- name: Install the amdgpu metrics service
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/amdgpu-textfile-metrics.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Write amdgpu textfile metrics for node_exporter
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/bin/amdgpu-textfile-metrics.sh
+  become: true
+
+- name: Install the amdgpu metrics timer
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/amdgpu-textfile-metrics.timer
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Run amdgpu textfile metrics every 30s
+
+      [Timer]
+      OnBootSec=5s
+      OnUnitActiveSec=30s
+
+      [Install]
+      WantedBy=timers.target
+  become: true
+
+- name: Point node_exporter at the textfile collector
+  ansible.builtin.lineinfile:
+    path: /etc/default/prometheus-node-exporter
+    regexp: '^ARGS='
+    line: 'ARGS="--collector.textfile.directory=/var/lib/prometheus/node-exporter"'
+    create: true
+    mode: "0644"
+  become: true
+  register: rocjitsu_setup_metrics_args
+
+- name: Enable the amdgpu metrics timer
+  ansible.builtin.systemd_service:
+    name: amdgpu-textfile-metrics.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+  become: true
+
+- name: Enable node_exporter
+  ansible.builtin.systemd_service:
+    name: prometheus-node-exporter
+    enabled: true
+    state: "{{ 'restarted' if rocjitsu_setup_metrics_args is changed else 'started' }}"
+  become: true

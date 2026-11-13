@@ -503,6 +503,14 @@
         rocm_ernic_setup_networkd_unmanaged: false
         rocm_ernic_setup_netcfg: true
 
+    # Enabled, not started: there is no RDMA device during a bake.
+    - name: Install the RDMA metrics exporter
+      ansible.builtin.include_role:
+        name: rocm_ernic_setup
+        tasks_from: metrics
+      vars:
+        rocm_ernic_setup_metrics_start: false
+
     - name: Report
       ansible.builtin.debug:
         msg: >-

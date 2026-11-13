@@ -57,6 +57,21 @@ rocm_ernic_setup_networkd_unmanaged: true
 rocm_ernic_setup_netcfg: true
 rocm_ernic_setup_nic_subnet: "192.168.100"
 
+# ── Metrics ──────────────────────────────────────
+# yuuki/rdma_exporter, pinned by release and by the checksum of its tarball,
+# so two bakes install the same binary and a replaced asset fails the
+# download. Bump both together; the checksum is the asset's digest on the
+# GitHub release page.
+rocm_ernic_setup_rdma_exporter_version: "0.7.5"
+rocm_ernic_setup_rdma_exporter_sha256: 602790a3280d393db5faaffe519f2f0e74e0136d5524619fa4356fcef0774c2a  # pre-commit: ignore
+rocm_ernic_setup_rdma_exporter_url: >-
+  https://github.com/yuuki/rdma_exporter/releases/download/v{{
+  rocm_ernic_setup_rdma_exporter_version }}/rdma_exporter_{{
+  rocm_ernic_setup_rdma_exporter_version }}_linux_amd64.tar.gz
+# Start the exporter as well as enabling it. Off for an image bake, which has
+# no RDMA device.
+rocm_ernic_setup_metrics_start: true
+
 # ── Image preparation ────────────────────────────
 # Everything the sbates130272.rocm_ernic collection stopped doing at 0.2.0,
 # when ernic_image_prep was removed and the collection narrowed to "turn an

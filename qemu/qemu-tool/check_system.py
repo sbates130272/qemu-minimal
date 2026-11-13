@@ -59,7 +59,7 @@ _REQUIRED_TOOLS = {
 _OPTIONAL_TOOLS = {
     "oras": ("pulls the published guest qcow2 for gen-vm and quick-start",
              "https://oras.land/docs/installation"),
-    "ansible-playbook": ("provisions guests (vm-rocm-golden.yml, fleet-quickstart.yml)",
+    "ansible-playbook": ("provisions guests (vm-rocm-golden.yml, vm-quickstart.yml)",
                          "apt install ansible, then ansible-galaxy collection "
                          "install -r ansible/requirements.yml"),
     "ssh": ("reaches guests; qemu-tool ssh and every playbook need it",

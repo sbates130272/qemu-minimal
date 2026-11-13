@@ -23,12 +23,12 @@ file up to date as infrastructure changes.
 - `qemu/xml/scale-out.xml` + `qemu/xml/overlay-ci.xml` + `qemu/xml/overlay-mi100.xml` — the
   fleet settings: one golden file and the committed overlays that sit on it
 - `qemu/xml/rocm-golden.xml` — the performance-tracking fleet: two guests from the published rocm-golden qcow2, each with a GPU, an NVMe, an ernic with P4 in guest scope and an SDXI device. `report-for-vm-rocm-golden` runs every tracked benchmark against it
-- `qemu/xml/quickstart.xml` + `qemu/qemu-tool/quick_start.py` + `ansible/playbooks/fleet-quickstart.yml` — the README's Quick Start, which is now `qemu-tool quick-start`: two guests from the published qcow2, each with a GPU, an NVMe and an ernic, Prometheus and Grafana beside them, plus a GPU test and an inter-guest RDMA test. The daily `report-for-vm-rocm-golden` lane runs *that subcommand*, not a copy of its steps — against `rocm-golden.xml` rather than this file, which CI boots only through `quickstart-boot`, one guest, on pull requests. It replaced the shell script that used to live under `scripts/`, which is deleted; do not reintroduce a shell wrapper beside it. The guests are sized from the host by default (4 vCPU floor, 8 ceiling), and every prompt it asks takes its default answer when stdin is not a terminal, so CI needs no flag to stay non-interactive. Its settings file runs AHEAD of `qemu/xml/scale-out.xml` on purpose — the stamp check is per file, not across them
+- `qemu/xml/quickstart.xml` + `qemu/qemu-tool/quick_start.py` + `ansible/playbooks/vm-quickstart.yml` — the README's Quick Start, which is now `qemu-tool quick-start`: two guests from the published qcow2, each with a GPU, an NVMe and an ernic, Prometheus and Grafana beside them, plus a GPU test and an inter-guest RDMA test. The daily `report-for-vm-rocm-golden` lane runs *that subcommand*, not a copy of its steps — against `rocm-golden.xml` rather than this file, which CI boots only through `quickstart-boot`, one guest, on pull requests. It replaced the shell script that used to live under `scripts/`, which is deleted; do not reintroduce a shell wrapper beside it. The guests are sized from the host by default (4 vCPU floor, 8 ceiling), and every prompt it asks takes its default answer when stdin is not a terminal, so CI needs no flag to stay non-interactive. Its settings file runs AHEAD of `qemu/xml/scale-out.xml` on purpose — the stamp check is per file, not across them
 - `images/` — qcow2 VM disk images (backing + overlay pairs, **not** `/var/lib/qemu-tool/images`)
 - `ansible/playbooks/` — three playbooks and four roles, and nothing else:
   - `vm-basic.yml` — a complete bake on its own, and the base of the golden
   - `vm-rocm-golden.yml` — the one image beyond it: imports `vm-basic.yml`, then the mainline kernel and ernic prerequisites, ROCm, the rocjitsu roles, SRQ + P4, SDXI and one slim pass. `--tags configure` sets up the NIC on a live guest and `--tags test` runs the GPU workloads. The two ernic pins (`ionic_kernel_pin`, `ernic_source_pin`) are defined once on its first play and shared with the others through YAML anchors
-  - `fleet-quickstart.yml` — configures and tests a running fleet; what `qemu-tool quick-start test` runs
+  - `vm-quickstart.yml` — configures and tests a running fleet; what `qemu-tool quick-start test` runs
   - roles `rocm_ernic_setup` (image prep, device naming, boot-time addressing), `rocjitsu_setup` (firmware, amdgpu, tools, live tests), `sdxi_setup` and `image_slim`. Each has task files callers reach with `tasks_from`; all four are linted at the `production` profile in CI
 - `scripts/install-vfio-rules` + `scripts/99-qemu-minimal-vfio.rules` — host-side udev rules for PCI passthrough. There is no top-level `udev/` any more: guest rules live in their role's `files/`
 - `rocm-ernic-enablement.md` — running log of rocm-ernic integration status and bugs
@@ -628,7 +628,7 @@ reports `hca_id: rocep1s0` — the kernel name. The rules file is in the image
 so this is the IB half of it not firing rather than the rules being absent.
 The consequence is practical: anything on a fleet guest that passes
 `-d rocm-rdma-ernic0` fails there, so resolve the name from `ibv_devinfo -l`
-rather than hardcoding it — which is what `fleet-quickstart.yml` does, and
+rather than hardcoding it — which is what `vm-quickstart.yml` does, and
 why its RDMA test works on a guest whose device has either name.
 
 As of rocm-ernic@3fb74d1 the rules match on four attributes, not two —

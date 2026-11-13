@@ -350,7 +350,7 @@ class NoStaleScriptTest(unittest.TestCase):
     HAYSTACK = ("README.md", "AGENTS.md", "site/reports.md",
                 ".github/workflows/qemu-minimal-report-for-vm-rocm-golden.yml",
                 "qemu/xml/quickstart.xml",
-                "ansible/playbooks/fleet-quickstart.yml")
+                "ansible/playbooks/vm-quickstart.yml")
 
     def test_the_script_is_gone(self):
         self.assertFalse((REPO_ROOT / "scripts" / "quickstart-2vm.sh").exists())

@@ -99,6 +99,14 @@
     state: present
     update_cache: false
 
+# unarchive requires its destination to exist. It only ever did on a guest
+# that had been built before; a fresh bake has no /tmp/sdxi-src.
+- name: Create the source directory on the guest
+  ansible.builtin.file:
+    path: /tmp/sdxi-src
+    state: directory
+    mode: "0755"
+
 - name: Extract sdxi source on the guest
   ansible.builtin.unarchive:
     src: "{{ _sdxi_tarball.stdout.strip() }}"

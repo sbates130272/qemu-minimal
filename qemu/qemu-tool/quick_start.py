@@ -61,7 +61,7 @@ _FLEET_NAME = "quickstart.xml"
 # Named quickstart variants: (fleet_xml, stack_stem, key_stem, playbook_or_None).
 # A None playbook means "boot only" -- wait for guests but skip ansible.
 VARIANTS: dict[str, tuple[str, str, str, str | None]] = {
-    "default": ("quickstart.xml",    "quickstart",        "quickstart-key",        "fleet-quickstart.yml"),
+    "default": ("quickstart.xml",    "quickstart",        "quickstart-key",        "vm-quickstart.yml"),
     "mi355x":  ("mi355x-node.xml",   "quickstart-mi355x", "quickstart-mi355x-key", None),
     "helios":  ("helios-tray.xml",   "quickstart-helios", "quickstart-helios-key", None),
 }
@@ -113,7 +113,7 @@ class _State:
 
     # Ansible playbook under ansible/playbooks/ to run in configure_and_test.
     # None means boot-only: wait for guests but skip the ansible step.
-    playbook: str | None = "fleet-quickstart.yml"
+    playbook: str | None = "vm-quickstart.yml"
 
     # What the user named: the settings file and any --env-file layers. The
     # overlays this subcommand generates are appended to these on every
@@ -233,7 +233,7 @@ def _repo_root(explicit: Path | None) -> Path | None:
     """The checkout, or None when this is an installed tool with no source.
 
     Two things still live only in a checkout: ansible/playbooks/
-    fleet-quickstart.yml, which configures the guests and runs the tests, and
+    vm-quickstart.yml, which configures the guests and runs the tests, and
     the qemu/ source tree the stack bind-mounts into its containers. Neither
     ships in the wheel, so this returns None rather than guessing and the
     caller degrades with a named reason.
@@ -248,13 +248,13 @@ def _repo_root(explicit: Path | None) -> Path | None:
     """
     if explicit is not None:
         root = explicit.expanduser().resolve()
-        if not (root / "ansible" / "playbooks" / "fleet-quickstart.yml").is_file():
-            _die(f"--repo-root {root} has no ansible/playbooks/fleet-quickstart.yml")
+        if not (root / "ansible" / "playbooks" / "vm-quickstart.yml").is_file():
+            _die(f"--repo-root {root} has no ansible/playbooks/vm-quickstart.yml")
         return root
     here = Path(__file__).resolve()
     for start in (here, Path.cwd().resolve()):
         for candidate in (start, *start.parents):
-            if (candidate / "ansible" / "playbooks" / "fleet-quickstart.yml").is_file() \
+            if (candidate / "ansible" / "playbooks" / "vm-quickstart.yml").is_file() \
                     and (candidate / "qemu" / "pyproject.toml").is_file():
                 return candidate
     return None

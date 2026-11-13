@@ -253,7 +253,7 @@ def _add_quick_start(sub: argparse._SubParsersAction) -> None:
     p.add_argument(
         "--repo-root", type=Path, default=None, metavar="DIR",
         help=(
-            "The checkout holding ansible/playbooks/fleet-quickstart.yml. "
+            "The checkout holding ansible/playbooks/vm-quickstart.yml. "
             "Found automatically from a source install; an installed tool "
             "with no checkout brings the guests up and skips the tests."
         ),

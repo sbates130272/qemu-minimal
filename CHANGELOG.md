@@ -11,6 +11,15 @@ All notable changes to this project will be documented in this file.
   P4 in guest scope and an SDXI device. Every tracked benchmark runs against
   this one stack.
 
+- **The golden image bakes in the metrics exporters and the wait-online
+  mask.** node_exporter with its amdgpu textfile collector, `rdma_exporter`
+  (pinned to v0.7.5 by tarball checksum; enabled, not started, since a bake
+  has no RDMA device) and the
+  `systemd-networkd-wait-online` mask are now role tasks that
+  `vm-rocm-golden.yml` runs. `vm-quickstart.yml` calls the same task files,
+  so it loses about 140 inline lines and changes nothing on an image that
+  already has them.
+
 - **Three consolidated roles.** `rocjitsu_setup` (firmware, amdgpu, guest
   tools, live GPU tests), `rocm_ernic_setup` (image preparation, device naming,
   boot-time addressing) and `sdxi_setup`. Callers reach the parts with
@@ -61,6 +70,14 @@ All notable changes to this project will be documented in this file.
 - **`udev/` is gone.** `99-rocm-ernic.rules` and `99-sdxi.rules` are in their
   roles' `files/`, replacing the symlinks that pointed at them. The host-side
   `install-vfio-rules` and `99-qemu-minimal-vfio.rules` are in `scripts/`.
+
+- **`fleet-quickstart.yml` is `vm-quickstart.yml`, and does less.** Checked
+  against a guest booted from the published image, three things it did are
+  already there: the ROCm prefix lookup and the explicit library path (ROCm
+  is on PATH and in the linker cache), and the ionic module load with its
+  version-mismatch reload (the image loads the DKMS pair at boot). The udev
+  rules now come from `rocm_ernic_setup`'s `naming` tasks rather than a second
+  copy of the same steps.
 
 - **Every subcommand takes its settings as `--xml`.** It replaces
   `--fleet-file` on `quick-start`, `gen-compose`, `fleet-to-env` and `gen-vm`,

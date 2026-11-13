@@ -15,3 +15,6 @@
 
 - name: Configure the guest Ethernet
   ansible.builtin.include_tasks: network.yml
+
+- name: Install the RDMA metrics exporter
+  ansible.builtin.include_tasks: metrics.yml

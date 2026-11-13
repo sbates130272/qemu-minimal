@@ -137,14 +137,14 @@ qemu-tool compose --xml qemu/xml/mi355x-node.xml \
 fails to probe every device with `can't load firmware "amdgpu/ip_discovery.bin"`
 because the guest image deliberately omits that file — it is generated from the
 running rocjitsu image and must be installed by Ansible after the stack is up.
-Run `fleet-quickstart.yml` (or the `rocjitsu_setup` role's `firmware` tasks with `rocjitsu_setup_firmware_live: true`)
+Run `vm-quickstart.yml` (or the `rocjitsu_setup` role's `firmware` tasks with `rocjitsu_setup_firmware_live: true`)
 before expecting any GPU work:
 
 ```bash
 cd ansible/playbooks
 ansible-playbook \
   -i /var/lib/qemu-tool/stacks/mi355x-node/fleet-inventory.yml \
-  fleet-quickstart.yml \
+  vm-quickstart.yml \
   --start-at-task "Install the gfx1250 firmware stubs generated from this stack's rocjitsu"
 ```
 

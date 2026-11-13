@@ -87,8 +87,8 @@ jobs:
     # inventory rather than a baked guest, so no other lane parses it on a
     # PR. report-for-vm-rocm-golden does execute it, but daily and after the
     # merge.
-    - name: Syntax-check fleet-quickstart playbook
-      run: ansible-playbook --syntax-check playbooks/fleet-quickstart.yml
+    - name: Syntax-check vm-quickstart playbook
+      run: ansible-playbook --syntax-check playbooks/vm-quickstart.yml
       working-directory: ansible
 
     # Every repo-local role, at the `production` profile. The playbooks

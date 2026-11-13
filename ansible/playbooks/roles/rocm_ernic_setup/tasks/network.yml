@@ -55,3 +55,11 @@
     name: rocm-ernic-netcfg
     enabled: true
   when: rocm_ernic_setup_netcfg | bool
+
+# systemd-networkd-wait-online waits for every networkd-managed interface,
+# including the ernic, which only appears once the vfio-user session is up.
+# Unmasked, every boot of a fleet guest stalls for over 90 s.
+- name: Mask systemd-networkd-wait-online
+  ansible.builtin.systemd_service:
+    name: systemd-networkd-wait-online.service
+    masked: true
