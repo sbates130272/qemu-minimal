@@ -52,8 +52,10 @@
   <p4-enable>true</p4-enable>
   <p4-guest-scope>load</p4-guest-scope>
 
-  <!-- ── Not measured here ────────────────────────────────────────────── -->
-  <grafana-enable>false</grafana-enable>
+  <!-- ── Observability ────────────────────────────────────────────────── -->
+  <!-- Prometheus and Grafana come up with the stack and CI checks them.
+       Loki and Alloy are left out to keep a 4-core runner's load down. -->
+  <grafana-enable>true</grafana-enable>
   <logs-enable>false</logs-enable>
 
 </fleet>

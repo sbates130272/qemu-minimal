@@ -2,11 +2,10 @@
 <!--
   Fleet descriptor for the two-VM quickstart stack.
 
-  This is what README.md's Quick Start and
-  .github/workflows/qemu-minimal-report-for-quickstart.yml both use,
-  through `qemu-tool quick-start`. Keep it that way: the lane exists so
-  the documented path cannot rot, and that only works while the two run
-  the same thing.
+  This is what README.md's Quick Start runs, through `qemu-tool
+  quick-start`. CI boots one guest from it on pull requests
+  (quickstart-boot); the daily two-guest run of the same command uses
+  qemu/xml/rocm-golden.xml, which adds an SDXI device and P4.
 
   PROM_DATA_DIR and GRAFANA_DATA_DIR are deliberately NOT set here.
   quick-start writes both to directories beside the generated stack instead,

@@ -10,7 +10,6 @@
 <!-- Reports (vm-* lanes pinned to main; date badge computed by Pages publish) -->
 [![Basic Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-vm-basic.yml?branch=main&label=report-for-vm-basic&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-vm-basic.yml)
 [![Rocm-golden Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-vm-rocm-golden.yml?branch=main&label=report-for-vm-rocm-golden&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-vm-rocm-golden.yml)
-[![Quickstart Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-quickstart.yml?branch=main&label=report-for-quickstart&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-quickstart.yml)
 
 <!-- Performance endpoint badges: colour is a verdict from Pages publish JSON -->
 [![Rocjitsu GEMM](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-gemm.json&style=flat-square)](https://sbates130272.github.io/qemu-minimal/perf/)
@@ -101,9 +100,9 @@ anything; anything it cannot work out on its own it asks for too. Pass
 terminal, so nothing hangs in a script.
 
 The daily
-[report-for-quickstart](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-quickstart.yml)
-lane runs that same command — so what is documented here is what CI proves
-every morning. It:
+[report-for-vm-rocm-golden](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-vm-rocm-golden.yml)
+lane runs that same command every morning, against a fleet file with one more
+device per guest than the default. It:
 
 1. checks this machine: KVM actually usable (the ioctl, not just the device
    node), the tools on `PATH`, a writable images directory, free disk, and

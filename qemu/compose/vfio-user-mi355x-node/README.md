@@ -116,20 +116,8 @@ stack**, not something a 32-core workstation runs.
 
 ## Bringing it up
 
-The short way, which is also what CI runs — `scripts/mi355x-node.sh` fetches
-the guest keypair from the qcow2's OCI referrer, makes the overlays, renders
-the stack and brings it up, then makes the guest test-ready and checks the
-shape:
-
-```bash
-scripts/mi355x-node.sh up
-scripts/mi355x-node.sh test --report-dir /tmp/mi355x-report
-scripts/mi355x-node.sh down
-```
-
-It defaults to `qemu/xml/overlay-mi355x-ci.xml`, which is **one** guest sized for
-a CI runner. Pass `--fleet-overlay` with your own delta for a full four-VM lab run,
-or drive the steps by hand:
+`qemu-tool quick-start --flavor mi355x` boots the stack from the published
+image. By hand:
 
 ```bash
 qemu-tool gen-vm --xml qemu/xml/mi355x-node.xml \
@@ -159,9 +147,6 @@ ansible-playbook \
   fleet-quickstart.yml \
   --start-at-task "Install the gfx1250 firmware stubs generated from this stack's rocjitsu"
 ```
-
-`scripts/mi355x-node.sh test` does this as part of its normal run, so the
-short path above already has it covered. The manual path does not.
 
 Confirm the topology from inside a guest before anything else — a flat tree
 boots exactly as happily as a switched one:

@@ -3,7 +3,7 @@
 This is the path a 558-line shell script under scripts/ used to be, moved
 into the tool so
 that the thing a new user is told to run and the thing the daily
-report-for-quickstart lane runs are the same code -- which was the whole point
+report-for-vm-rocm-golden lane runs are the same code -- which was the whole point
 of that script, and is why it is gone rather than kept beside this.
 
 What moved with it, because every line of it was paid for:

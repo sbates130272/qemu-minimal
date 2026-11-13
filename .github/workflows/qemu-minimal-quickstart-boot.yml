@@ -2,7 +2,7 @@ name: qemu-minimal - PR quickstart boot
 
 # Does `qemu-tool quick-start` still boot a guest? Asked on every PR.
 #
-# WHY THIS EXISTS BESIDE report-for-quickstart. That lane is the real thing --
+# WHY THIS EXISTS BESIDE report-for-vm-rocm-golden. That lane is the real thing --
 # two guests, the full Ansible configure, a GPU test, an inter-guest RDMA test
 # and a published report -- and it runs on push to main and on a daily cron,
 # never on a PR. So the quickstart breaking is found the morning after the
@@ -16,20 +16,20 @@ name: qemu-minimal - PR quickstart boot
 #   * Two guests. ONE. The 4 vCPU floor is real -- below it ionic_rdma never
 #     probes -- and two of them on a 4-core runner is 2x oversubscribed
 #     against the mesh manager's untunable 20 s heartbeat (AGENTS.md issue
-#     14). report-for-quickstart accepts that flake once a day; a lane that
+#     14). report-for-vm-rocm-golden accepts that flake once a day; a lane that
 #     runs on every PR must not. At VM_COUNT=1 the mesh is just the manager,
 #     which gen_compose renders without the worker branch.
 #   * The Ansible play, the GPU test and the RDMA test. Those stay in
-#     report-for-quickstart, which runs the full daily lane.
+#     report-for-vm-rocm-golden, which runs the full daily lane.
 #   * Prometheus and Grafana (--no-metrics). They are covered by
-#     report-for-quickstart.
+#     report-for-vm-rocm-golden.
 #   * Publish anything. publish-pages.yml fetches report artifacts BY NAME;
 #     this lane uploads none and is not a report lane, so it needs none of
 #     the five edits AGENTS.md lists for adding one.
 #
 # THE IMAGE. Uses the unified rocm-golden qcow2 (ernic + rocjitsu + SRQ+P4
 # + SDXI all baked in) via an OVERLAY so qemu/xml/quickstart.xml itself is
-# untouched and report-for-quickstart keeps running from it unmodified.
+# untouched for anyone running the documented quickstart by hand.
 #
 # No udev rules ship in the published image, so the IB device keeps its
 # kernel name and the assertion below resolves it from `ibv_devinfo -l`
@@ -64,7 +64,7 @@ jobs:
     timeout-minutes: 45
     container:
       image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261112.gdca6903-qemu11.1.3-vfu.05bb5e5
-      # Same three as report-for-quickstart, for the same reasons:
+      # Same three as report-for-vm-rocm-golden, for the same reasons:
       # /var/lib/qemu-tool bind-mounted at the same path so the qcow2 pulled
       # in here is the file the sibling qemu container opens (compose bind
       # mounts are resolved by the HOST daemon), the docker socket to drive
@@ -121,7 +121,7 @@ jobs:
 
     # One guest, no TAP. Written as an overlay rather than an edit:
     # --xml is repeatable and last wins, so qemu/xml/quickstart.xml
-    # stays the file a reader diffs and the file report-for-quickstart runs.
+    # stays the file a reader diffs and the file the README's Quick Start runs.
     #
     # ERNIC_TAP=false is safe HERE and nowhere else: the TAP is the guests'
     # L2 path and inter-node RDMA is impossible without it, but this lane

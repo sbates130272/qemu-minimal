@@ -98,8 +98,17 @@ All notable changes to this project will be documented in this file.
   runners have KVM, and `qemu-tool quick-start` checks it in its own
   preflight.
 
-- **The quickstart lane's report output.** `report-for-quickstart` no longer
-  writes or uploads a report; nothing fetched it.
+- **`report-for-quickstart`.** `report-for-vm-rocm-golden` already ran
+  `qemu-tool quick-start up` and `test` daily, so the two lanes were one. Its
+  checks on Prometheus and Grafana and on what `qemu-tool list` and `inspect`
+  report about live guests moved across, and `rocm-golden.xml` now enables
+  Grafana. The daily run no longer uses `quickstart.xml` itself, which CI now
+  boots only in `quickstart-boot`, and it does not start Loki or Alloy.
+
+- **`scripts/mi355x-node.sh` and `qemu/xml/overlay-mi355x-ci.xml`.** No lane
+  ran the script once `report-for-mi355x` was gone, and nothing booted the
+  overlay. The MI355X stack itself, its fleet file and the checks on its
+  switch topology stay.
 
 - **`Site Script Tests`.** It ran the whole of `tests/` on a bare runner,
   which `Gen Compose Check` already does with `CI=true` and the tools that

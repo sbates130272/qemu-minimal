@@ -13,7 +13,7 @@ file up to date as infrastructure changes.
 - `qemu/compose/vfio-user-ernic-rocjitsu-vm/` — single-VM ernic + rocjitsu compose stack
 - `qemu/compose/vfio-user-ernic-2vm/` — two-VM ernic mesh stack; rocjitsu GPUs opt-in via `--profile rocjitsu-vm1/vm2`
 - `qemu/compose/vfio-user-ernic-rocjitsu-scale-out/` — N-VM ernic mesh + one GPU per VM. **Generated** by `qemu-tool gen-compose` from `qemu/xml/scale-out.xml` plus whichever overlay applies; do not hand-edit it. `--profile metrics` adds Prometheus+Grafana
-- `qemu/compose/vfio-user-mi355x-node/` — MI355X-shaped PCIe topology: one EPYC socket, 8 GPUs, 8 NICs and 8 PCIe switches per VM, one NIC + one GPU below each switch. Also **generated**, from `qemu/xml/mi355x-node.xml`. 8 ernics per VM means 8 *mesh nodes* per VM, so the fleet caps at 4 VMs, not 40 — see its README
+- `qemu/compose/vfio-user-mi355x-node/` — MI355X-shaped PCIe topology: one EPYC socket, 8 GPUs, 8 NICs and 8 PCIe switches per VM, one NIC + one GPU below each switch. Also **generated**, from `qemu/xml/mi355x-node.xml`. 8 ernics per VM means 8 *mesh nodes* per VM, so the fleet caps at 4 VMs, not 40 — see its README. Nothing in CI boots it: `Gen Compose Check` renders it and checks the switch topology, and `quick-start --flavor mi355x` is the way to run it
 - `qemu/compose/vfio-user-helios-tray/` — one VM with 4 GPUs, 8 ernics and an SDXI device. **Generated**, from `qemu/xml/helios-tray.xml`, and the stack behind `qemu-tool quick-start --flavor helios`. It needs `--output-dir` to regenerate, because `gen-compose` otherwise writes into the scale-out directory
 - `qemu/docker/` — Dockerfiles this repo owns, one directory per image (`sdxi/` so far). Built by hand and referenced by tag, unlike the stack-local `tapsetup/` which compose builds itself
 - `qemu/xml/` — every settings file (XML fleet configs). It is a sibling of `qemu/compose/` and `qemu/packages.d/`
@@ -23,7 +23,7 @@ file up to date as infrastructure changes.
 - `qemu/xml/scale-out.xml` + `qemu/xml/overlay-ci.xml` + `qemu/xml/overlay-mi100.xml` — the
   fleet settings: one golden file and the committed overlays that sit on it
 - `qemu/xml/rocm-golden.xml` — the performance-tracking fleet: two guests from the published rocm-golden qcow2, each with a GPU, an NVMe, an ernic with P4 in guest scope and an SDXI device. `report-for-vm-rocm-golden` runs every tracked benchmark against it
-- `qemu/xml/quickstart.xml` + `qemu/qemu-tool/quick_start.py` + `ansible/playbooks/fleet-quickstart.yml` — the README's Quick Start, which is now `qemu-tool quick-start`: two guests from the published qcow2, each with a GPU, an NVMe and an ernic, Prometheus and Grafana beside them, plus a GPU test and an inter-guest RDMA test. The `report-for-quickstart` lane runs *that subcommand*, not a copy of its steps, so the documented path cannot rot. It replaced the shell script that used to live under `scripts/`, which is deleted; do not reintroduce a shell wrapper beside it. The guests are sized from the host by default (4 vCPU floor, 8 ceiling), and every prompt it asks takes its default answer when stdin is not a terminal, so CI needs no flag to stay non-interactive. Its settings file runs AHEAD of `qemu/xml/scale-out.xml` on purpose — the stamp check is per file, not across them
+- `qemu/xml/quickstart.xml` + `qemu/qemu-tool/quick_start.py` + `ansible/playbooks/fleet-quickstart.yml` — the README's Quick Start, which is now `qemu-tool quick-start`: two guests from the published qcow2, each with a GPU, an NVMe and an ernic, Prometheus and Grafana beside them, plus a GPU test and an inter-guest RDMA test. The daily `report-for-vm-rocm-golden` lane runs *that subcommand*, not a copy of its steps — against `rocm-golden.xml` rather than this file, which CI boots only through `quickstart-boot`, one guest, on pull requests. It replaced the shell script that used to live under `scripts/`, which is deleted; do not reintroduce a shell wrapper beside it. The guests are sized from the host by default (4 vCPU floor, 8 ceiling), and every prompt it asks takes its default answer when stdin is not a terminal, so CI needs no flag to stay non-interactive. Its settings file runs AHEAD of `qemu/xml/scale-out.xml` on purpose — the stamp check is per file, not across them
 - `images/` — qcow2 VM disk images (backing + overlay pairs, **not** `/var/lib/qemu-tool/images`)
 - `ansible/playbooks/` — three playbooks and four roles, and nothing else:
   - `vm-basic.yml` — a complete bake on its own, and the base of the golden
@@ -255,7 +255,7 @@ whatever runs it, and then catch nothing.
 `check_system`, and `tests/test_check_system.py` asserts *identity* (`assertIs`)  
 rather than equality, so a second copy that happens to agree today still fails
 the test. This repo has been bitten by a documented path and its CI equivalent
-drifting apart — it is why `report-for-quickstart` runs `qemu-tool quick-start`
+drifting apart — it is why `report-for-vm-rocm-golden` runs `qemu-tool quick-start`
 itself rather than a reimplementation of its steps.
 
 The one thing deliberately **not** shared is the tool list.
@@ -1213,20 +1213,24 @@ drives `qemu/xml/rocm-golden.xml` through `qemu-tool quick-start up` and
 `scripts/generate-vm-report.sh`. The markdown report that script writes is
 left on the runner. No settings live in the workflow's `env:`.
 
-`report-for-vm-basic` and `report-for-quickstart` still exist as tests.
-report-for-vm-basic still uploads a report artifact that nothing fetches;
-report-for-quickstart uploads nothing. report-for-quickstart runs `qemu-tool quick-start`, the same command the
-README's Quick Start names, so a change that breaks the documented path turns
-that lane red. It also checks that Prometheus and Grafana are running and that
-Prometheus answers a query: they are part of the documented quickstart, and a
-lane that only looked at the guests would pass with half the stack down.
+The same lane is the daily run of the documented quickstart command. It
+checks that Prometheus and Grafana are running and that Prometheus answers a
+query, and it runs `scripts/check-vm-devices.sh` against both live guests,
+because every field `qemu-tool list` and `inspect` report degrades to a
+plausible placeholder rather than to an error. It replaced a separate
+`report-for-quickstart` lane. What that cost: the daily run no longer uses
+`qemu/xml/quickstart.xml` itself, and Loki and Alloy are not started.
 
-**`quickstart-boot` is the PR-time half of that lane.** report-for-quickstart
-runs on push to main and on a cron, so a broken quickstart was found the
-morning after the merge; `Gen Compose Check` renders `qemu/xml/quickstart.xml`
-on every PR but starts nothing. This one boots **one** guest and asserts the
-emulated NIC is there by its full `1dd8:1002` + `1dd8:5400` tuple and that
-`ibv_devinfo` reports `PORT_ACTIVE`, then stops. It publishes nothing.
+`report-for-vm-basic` still exists as a post-merge test, and still uploads a
+report artifact that nothing fetches.
+
+**`quickstart-boot` is the PR-time half.** The daily lane finds a broken
+quickstart the morning after the merge; `Gen Compose Check` renders
+`qemu/xml/quickstart.xml` on every PR but starts nothing. This one boots
+**one** guest from `quickstart.xml` and asserts the emulated NIC is there by
+its full `1dd8:1002` + `1dd8:5400` tuple and that `ibv_devinfo` reports
+`PORT_ACTIVE`, then stops. It publishes nothing, and it is now the only lane
+that boots `quickstart.xml`.
 
 Three choices in it are load-bearing. **One guest, not two**: the 4 vCPU floor
 is real and two guests on a 4-core runner is 2x oversubscribed against the

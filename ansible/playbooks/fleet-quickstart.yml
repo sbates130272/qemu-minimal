@@ -8,7 +8,7 @@
 #       playbooks/fleet-quickstart.yml --private-key <key>
 #
 # Normally reached through `qemu-tool quick-start`, which is also what the
-# daily report-for-quickstart lane runs.
+# daily report-for-vm-rocm-golden lane runs.
 #
 # Unlike the vm-* playbooks this configures a RUNNING fleet rather than baking
 # an image, and it is re-runnable. It is deliberately small: the published

@@ -85,7 +85,7 @@ jobs:
       working-directory: ansible
     # Imported by none of the above: it runs against the generated fleet
     # inventory rather than a baked guest, so no other lane parses it on a
-    # PR. report-for-quickstart does execute it, but daily and after the
+    # PR. report-for-vm-rocm-golden does execute it, but daily and after the
     # merge.
     - name: Syntax-check fleet-quickstart playbook
       run: ansible-playbook --syntax-check playbooks/fleet-quickstart.yml

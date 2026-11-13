@@ -10,7 +10,7 @@ did not would make it pointless.
 
 The second is that quick-start and this command share one implementation.
 The repo has been bitten by a documented path and its CI equivalent drifting
-apart -- it is why `report-for-quickstart` runs `qemu-tool quick-start`
+apart -- it is why `report-for-vm-rocm-golden` runs `qemu-tool quick-start`
 itself rather than a copy of its steps -- and a preflight that slowly stops
 matching the standalone checker is the same failure in miniature.
 

@@ -9,7 +9,11 @@ name: qemu-minimal - Report for vm-rocm-golden
 # the published rocm-golden qcow2, each with a GPU, an NVMe, an RDMA NIC with
 # P4 in guest scope and an SDXI device. Every setting is in that XML -- there
 # is no settings `env:` in this workflow -- and `qemu-tool quick-start` is
-# what turns it into running guests, the same way the quickstart lanes do.
+# what turns it into running guests. That makes this the daily run of the
+# command the README's Quick Start names, on a fleet with one more device per
+# guest than the default; it replaced a separate report-for-quickstart lane,
+# and carries that lane's checks on the metrics stack and on what qemu-tool
+# reports about live guests.
 #
 #   artifact           metric            measured on
 #   perf-rocjitsu      GEMM, hipFile     guest 1
@@ -35,6 +39,7 @@ on:
       - 'qemu/pyproject.toml'
       - 'qemu/docker/sdxi/**'
       - 'scripts/generate-vm-report.sh'
+      - 'scripts/check-vm-devices.sh'
       - 'scripts/vm-report/**'
       - '.github/actions/nonroot-user/action.yml'
       - '.github/workflows/qemu-minimal-report-for-vm-rocm-golden.yml'
@@ -131,7 +136,6 @@ jobs:
           -t qemu-tool/sdxi:latest qemu/docker/sdxi
         rm -rf "${tmpdir}"
 
-    # --no-metrics: Prometheus and Grafana measure nothing this lane reports.
     - name: Fetch the guest image and bring the stack up
       run: |
         setpriv --reuid "$CIUSER_UID" --regid "$CIUSER_UID" --init-groups \
@@ -141,7 +145,6 @@ jobs:
             --stack-dir "$STACK_DIR" \
             --key-dir "$KEY_DIR" \
             --in-network \
-            --no-metrics \
             --yes
 
     # The guests are published on HOST ports, which this job container cannot
@@ -163,8 +166,32 @@ jobs:
             --stack-dir "$STACK_DIR" \
             --key-dir "$KEY_DIR" \
             --in-network \
-            --no-metrics \
             --yes
+
+    # Prometheus and Grafana are part of what quick-start brings up, so a lane
+    # that never looked at them would pass with half the stack down. Asked of
+    # the containers rather than of compose: `compose ps` reports a service
+    # that exited as absent rather than as failed.
+    - name: Check the monitoring sidecars
+      run: |
+        set -eu
+        for svc in prometheus grafana; do
+          state=$(docker inspect -f '{{.State.Status}}' "rocm-golden-${svc}-1")
+          echo "${svc}: ${state}"
+          [ "$state" = running ] || {
+            echo "::error::${svc} is ${state}, not running"
+            docker logs --tail 50 "rocm-golden-${svc}-1" || true
+            exit 1
+          }
+        done
+        # An up-but-scraping-nothing Prometheus is the quiet version of this
+        # failing.
+        docker exec rocm-golden-prometheus-1 \
+          wget -q -O- 'http://127.0.0.1:9090/api/v1/query?query=up' \
+          | grep -q '"status":"success"' || {
+            echo "::error::Prometheus answered no query"
+            exit 1
+          }
 
     # Everything the benchmark steps need to reach the guests, derived from
     # the fleet XML and from the image rather than written out here.
@@ -196,6 +223,47 @@ jobs:
         cp "${KEY_DIR}/id_rsa" "$HOME/.ssh/id_rsa"
         chmod 600 "$HOME/.ssh/id_rsa"
         [ "$HOME" = /root ] || { rm -rf /root/.ssh && ln -s "$HOME/.ssh" /root/.ssh; }
+
+    # What `qemu-tool list` and `inspect` say about a LIVE guest. Every field
+    # they report degrades to a plausible placeholder rather than to an error
+    # -- "-", no Disk line, "configured default, unverified", "unknown" -- so
+    # the script demands the positive value. Before the benchmarks, so a wedged
+    # GPU cannot take this check with it.
+    - name: Check the reported devices
+      run: |
+        set -eu
+        # These guests have no utmp, so the Login line comes from logind and is
+        # only non-empty while somebody is logged in. Nothing else here holds a
+        # session open, hence this one. -tt, so it gets a pty and is visible to
+        # both sources inspect reads. -p 2222 is the guest's sshd inside its
+        # own container's namespace; port 22 there has nothing listening.
+        ssh -i "${KEY_DIR}/id_rsa" -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 \
+            -p 2222 -tt "${GUEST_USER}@${GUEST1}" "sleep 120" \
+            >/tmp/devcheck-ssh.log 2>&1 &
+        SSH_PID=$!
+        trap 'kill "$SSH_PID" 2>/dev/null || true' EXIT
+        sleep 5
+        kill -0 "$SSH_PID" 2>/dev/null || {
+          echo "::error::the background SSH session to guest 1 did not stay up"
+          echo "--- ssh output ---"
+          cat /tmp/devcheck-ssh.log 2>/dev/null || echo "(no output captured)"
+          exit 1
+        }
+
+        # inspect verifies the key by reading the login user's authorized_keys
+        # and learns the user from the settings layers. quick-start writes the
+        # account the image really has to env.image-login beside the stack.
+        set -- --xml "$FLEET_FILE"
+        [ -f "${STACK_DIR}/env.image-login" ] &&
+          set -- "$@" --xml "${STACK_DIR}/env.image-login"
+
+        scripts/check-vm-devices.sh "$@" \
+          --gpu gfx1250 --strict-key --login "$GUEST_USER" rocm-golden-1
+        # Guest 2 has no session of its own, so its Login check is only
+        # "logind answered" -- see the script.
+        scripts/check-vm-devices.sh "$@" \
+          --gpu gfx1250 --strict-key rocm-golden-2
 
     # Four benchmarks, each continue-on-error with an upload gated on its own
     # outcome, so one failing does not take the other three numbers with it.
