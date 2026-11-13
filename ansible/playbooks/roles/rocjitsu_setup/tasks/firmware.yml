@@ -77,12 +77,16 @@
           -c 'python3 /usr/local/bin/vfio_guest_firmware.py
           --generation {{ rocjitsu_setup_firmware_generation }}
           --set {{ rocjitsu_setup_firmware_set }} --output /out
-          {{ '' if (rocjitsu_setup_firmware_live | bool
-                    or rocjitsu_setup_firmware_ip_discovery | bool)
-             else '--no-ip-discovery' }}
+          {{ _rocjitsu_setup_firmware_discovery_flag }}
           && tar -cf - -C /out .'
           | tar -xf - -C {{ _rocjitsu_setup_firmware_tmp.path }}
         executable: /bin/bash
+      vars:
+        # One line on purpose. A folded scalar keeps the line breaks around
+        # any line indented further than its neighbours, so an expression
+        # wrapped across lines put a newline in the middle of the command.
+        _rocjitsu_setup_firmware_discovery_flag: >-
+          {{ '' if (rocjitsu_setup_firmware_live | bool or rocjitsu_setup_firmware_ip_discovery | bool) else '--no-ip-discovery' }}
       delegate_to: localhost
       run_once: true
       become: false

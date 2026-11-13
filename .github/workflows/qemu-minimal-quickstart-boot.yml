@@ -148,8 +148,8 @@ jobs:
         # because the overlay is the only place the two can drift.
         STAMP=$(grep -m1 "^QEMU_IMAGE=" "$FLEET_ENV" | sed 's/.*:\([0-9]\{8\}\.g[0-9a-f]*\)-.*/\1/')
         echo "quickstart stamp: $STAMP"
-        grep -q "rocm-golden:${STAMP}-" "$OVERLAY" || {
-          echo "::error::the rocm-golden tag in this lane is not on ${STAMP}, the stamp qemu/xml/quickstart.xml pins"
+        grep -q "<backing-ref>[^<]*:${STAMP}-" "$OVERLAY" || {
+          echo "::error::the backing image in this lane is not on ${STAMP}, the stamp qemu/xml/quickstart.xml pins"
           exit 1
         }
         # Regenerate FLEET_ENV with both layers merged so docker compose gets

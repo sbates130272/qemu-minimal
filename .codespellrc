@@ -5,5 +5,6 @@ skip = .git,*.qcow2,*.img,*.deb,./qemu/compose/vfio-user-ernic-rocjitsu-scale-ou
 # hsa: ROCm's Heterogeneous System Architecture, not a typo for "has".
 # blacklist: the literal modprobe/kernel command-line keyword.
 # TRIMed: grafana.com upstream dashboard JSON, not our text.
-ignore-words-list = hsa,blacklist,TRIMed
+# parm: the literal `modinfo -F parm` field name.
+ignore-words-list = hsa,blacklist,TRIMed,parm
 check-filenames =
