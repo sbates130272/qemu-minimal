@@ -10,10 +10,9 @@ name: qemu-minimal - Gen Compose Check
 # edit to the generated tree -- or a settings change without a regenerate --
 # would have shipped undetected. This lane makes the claim true.
 #
-# No push: trigger and no paths: filter, matching site-script-tests and
-# shell-check -- every commit reaches main through a PR, and a path-filtered
-# required check never reports on a PR outside its filter, leaving that PR
-# blocked forever. The job is seconds, so there is nothing to save by
+# No push: trigger and no paths: filter, matching shell-check -- every commit
+# reaches main through a PR, and a path-filtered required check never reports
+# on a PR outside its filter, leaving that PR blocked forever. The job is seconds, so there is nothing to save by
 # filtering it.
 on:
   workflow_dispatch:

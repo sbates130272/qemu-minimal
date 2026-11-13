@@ -93,6 +93,20 @@ All notable changes to this project will be documented in this file.
   `report-for-lmcache`, `report-for-mi355x`, and the `vm-ernic`, `vm-rocjitsu`
   and `vm-rocm` playbook-test lanes.
 
+- **The KVM verification steps.** Seven copies of an ioctl check on
+  `/dev/kvm`, one in the `setup-vm-job` action and six inline. GitHub-hosted
+  runners have KVM, and `qemu-tool quick-start` checks it in its own
+  preflight.
+
+- **The quickstart lane's report output.** `report-for-quickstart` no longer
+  writes or uploads a report; nothing fetched it.
+
+- **`Site Script Tests`.** It ran the whole of `tests/` on a bare runner,
+  which `Gen Compose Check` already does with `CI=true` and the tools that
+  stop the udev and `lspci` tests from skipping. Its one unique step, a
+  report-format check, went with the report pages. `Gen Compose Check` is now
+  the only workflow that runs the unit tests.
+
 - **Playbooks:** `vm-ernic.yml`, `vm-rocjitsu.yml`, `vm-rocm.yml`,
   `vm-slim.yml` and `vm-helios.yml`. There is no longer a playbook that bakes
   a ROCm-only, ernic-only or rocjitsu-only image, or a helios guest on in-tree

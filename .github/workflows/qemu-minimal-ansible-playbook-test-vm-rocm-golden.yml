@@ -115,8 +115,7 @@ jobs:
       uses: sbates130272/qemu-tool-action@v1
       env:
         QEMU_TOOL_SRC: /var/lib/qemu-tool/src
-        # See ansible-playbook-test-vm-ernic.yml: ionic_create_rdma_admin()
-        # hard-fails below 4 online CPUs, so this lane cannot run ionic_rdma
+        # ionic_create_rdma_admin() hard-fails below 4 online CPUs, so this lane cannot run ionic_rdma
         # at 2 either.
         VM_VCPUS: "4"
         VM_VMEM: "4096"
@@ -193,8 +192,7 @@ jobs:
           -e "ansible_user=ubuntu" \
           -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"'
 
-    # Same rename as in ansible-playbook-test-vm-ernic.yml: ionic mode builds
-    # ionic and ionic_rdma, and the rocm_ernic module this named is gone.
+    # ionic mode builds ionic and ionic_rdma; there is no rocm_ernic module.
     - name: Verify ionic modules loaded and NIC visible
       run: |
         ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
@@ -204,8 +202,7 @@ jobs:
           -p 2222 ubuntu@qemu "ip link show | grep -q rocm-ernic0"
         echo "✓ rocm-ernic0 interface present"
 
-    # See ansible-playbook-test-vm-ernic.yml: a device in ibv_devices can still
-    # have its port down, so gate on PORT_ACTIVE the way upstream does.
+    # A device in ibv_devices can still have its port down, so gate on PORT_ACTIVE the way upstream does.
     - name: Verify the RDMA port is active
       run: |
         ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
@@ -213,8 +210,7 @@ jobs:
         grep -q PORT_ACTIVE /tmp/ibv_devinfo.txt
         echo "✓ RDMA port active"
 
-    # See ansible-playbook-test-vm-rocjitsu.yml: this step has hung and only died to
-    # the job-level timeout, with no diagnostic output. Bound at all three layers
+    # This step has hung and only died to the job-level timeout, with no diagnostic output. Bound at all three layers
     # -- the guest command, the ssh session and the step. The Install
     # ip_discovery.bin step above provides the timing buffer that the quickstart
     # relies on.
@@ -250,8 +246,7 @@ jobs:
           -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
           -p 2222 ubuntu@qemu "sudo dmesg | tail -200" || true
 
-    # See ansible-playbook-test-vm-rocjitsu.yml for why /dev/kfd is not a valid
-    # probe assertion: kfd_chardev_init() creates it before amdgpu_init()
+    # /dev/kfd is not a valid probe assertion: kfd_chardev_init() creates it before amdgpu_init()
     # registers the PCI driver, so it exists even when every probe fails.
     # Node 0 is the CPU and has an empty name; a bound GPU adds a named node.
     - name: Verify amdgpu module loaded and a GPU KFD node present

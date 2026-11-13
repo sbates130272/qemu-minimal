@@ -48,17 +48,6 @@ jobs:
     - name: Check out code
       uses: actions/checkout@v4.3.1
 
-    # No udev rule here: this job gets /dev/kvm from "options: --device /dev/kvm"
-    # and runs as root. The ioctl is the real test -- a bind-mounted node can
-    # exist and still be non-functional, and QEMU would silently fall back to TCG.
-    - name: Verify KVM is available
-      run: |
-        test -c /dev/kvm || { echo "::error::/dev/kvm missing - guest would run under TCG"; exit 1; }
-        test -r /dev/kvm && test -w /dev/kvm || { echo "::error::/dev/kvm not read-write"; exit 1; }
-        python3 -c "import os, fcntl; fcntl.ioctl(os.open('/dev/kvm', os.O_RDWR), 0xAE00, 0)" \
-          || { echo "::error::/dev/kvm present but KVM_GET_API_VERSION failed"; exit 1; }
-        echo "KVM available: $(ls -l /dev/kvm)"
-
     # No package installation step here any more: python3-pip was the only gap
     # in the CI image and it closed at 20260924.ge1cd640, the pin above.
 

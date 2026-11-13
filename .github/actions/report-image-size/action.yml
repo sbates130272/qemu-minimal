@@ -71,9 +71,8 @@ runs:
     # lane, or one where a path does not exist, must not fail a lane whose
     # actual subject is the driver under test.
     #
-    # Bounded at all three layers, the same way
-    # qemu-minimal-ansible-playbook-test-vm-rocjitsu.yml already bounds its
-    # amdgpu-probe ssh after that step wedged a job for ~125 minutes.
+    # Bounded at all three layers, the same way the amdgpu-probe ssh is
+    # bounded after that step wedged a job for ~125 minutes.
     # ConnectTimeout only covers the handshake, and || true only rewrites an
     # exit status that a hang never produces -- so a guest wedged mid-du would
     # otherwise block until the caller's job timeout. Callers cannot supply the

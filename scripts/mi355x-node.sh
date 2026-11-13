@@ -14,10 +14,8 @@
 # guest complains. So the report's job is to show the TREE, from inside the
 # guest, not merely that the guest came up.
 #
-# It is also what .github/workflows/qemu-minimal-report-for-mi355x.yml runs,
-# for the reason report-for-quickstart runs `qemu-tool quick-start`: a documented
-# path that nothing executes rots, and a lane that executes something else
-# proves nothing about the documentation.
+# No CI lane runs this any more -- report-for-mi355x did, and is gone -- so
+# treat it as unverified until it has been run by hand.
 #
 # Deliberately NOT a copy of `qemu-tool quick-start`. That one owns fetching a
 # keypair, adopting the image's account and sizing from the host, and all

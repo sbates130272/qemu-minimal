@@ -177,7 +177,7 @@ rocjitsu_setup_test_pci_id: "1002:75c1"
 # device on its second run.
 #
 # "CI runs this play once, so it does not meet it" used to be written here and
-# was wrong. report-for-vm-rocjitsu runs this play and then two benchmarks
+# was wrong. report-for-vm-rocm-golden ran this play and then two benchmarks
 # against the same boot, so the benchmarks were the second consumer and hung;
 # that lane restarts the compose stack between the two for this reason. Local
 # iteration needs the same restart between runs.

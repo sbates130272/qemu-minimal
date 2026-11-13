@@ -84,14 +84,6 @@ jobs:
     - name: Check out code
       uses: actions/checkout@v4.3.1
 
-    # The ioctl, not the node. A device node can exist and still be
-    # non-functional, and QEMU falls back to TCG WITHOUT SAYING SO -- which
-    # would not fail this lane, it would just blow the time budget.
-    - name: Verify KVM is usable
-      run: |
-        test -c /dev/kvm
-        python3 -I -c "import fcntl, os; assert fcntl.ioctl(os.open('/dev/kvm', os.O_RDWR), 0xAE00, 0) >= 0; print('KVM usable')"
-
     # Run everything below as a non-root user. See the action for why the
     # job container being root was hiding the configuration this branch is
     # about, and for the /dev/kvm group that is easy to miss.

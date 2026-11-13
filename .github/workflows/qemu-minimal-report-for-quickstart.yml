@@ -5,10 +5,9 @@ name: qemu-minimal - Report for quickstart
 # WHAT THIS LANE IS FOR. It is the only lane that executes the documented
 # fast path end to end: pull the published rocm-golden qcow2, generate a
 # two-VM stack from qemu/xml/quickstart, boot it with Prometheus and Grafana
-# beside it, and prove both emulated devices with one test each. Every other
-# lane here either bakes its own guest with Ansible (the vm-* report lanes,
-# ~50 minutes of gen-vm) or builds an 11 GB container first
-# (report-for-lmcache), so none of them would notice the quickstart breaking.
+# beside it, and prove both emulated devices with one test each. No other
+# lane runs the default quickstart.xml with its metrics stack, so none of them
+# would notice the documented quickstart breaking.
 #
 # It runs `qemu-tool quick-start`, the same command the README tells a human
 # to run, with the same settings file. That is deliberate and worth keeping:
@@ -98,18 +97,9 @@ jobs:
     - name: Check out code
       uses: actions/checkout@v4.3.1
 
-    # quick-start checks this too, in its preflight. Repeated here so a
-    # runner without working KVM fails in two seconds with a named cause
-    # rather than inside a pull.
-    - name: Verify KVM is available
-      run: |
-        test -c /dev/kvm
-        python3 -I -c "import fcntl, os; assert fcntl.ioctl(os.open('/dev/kvm', os.O_RDWR), 0xAE00, 0) >= 0; print('KVM usable')"
-
     # The guest qcow2 is ~17 GB compressed and decompresses to about the same
-    # again. A stock runner does not have that on / without help -- this is
-    # where report-for-lmcache ran out of disk, with a bare zstd "No space
-    # left on device" that named nothing.
+    # again. A stock runner does not have that on / without help -- running
+    # out presents as a bare zstd "No space left on device" that names nothing.
     # Run the stack as a non-root user, not as the job's root. See the
     # action: a root caller resolves CONTAINER_USER to 0:0 and proves
     # root-with-no-capabilities, which is not the configuration an operator
@@ -205,7 +195,7 @@ jobs:
     - name: Join the fleet network
       run: docker network connect quickstart_fleet "$(cat /etc/hostname)"
 
-    - name: Configure the guests, run the tests and write the report
+    - name: Configure the guests and run the tests
       run: |
         setpriv --reuid "$CIUSER_UID" --regid "$CIUSER_UID" --init-groups \
           env HOME="$CIUSER_HOME" \
@@ -213,7 +203,6 @@ jobs:
             --xml "$FLEET_FILE" \
             --stack-dir "$STACK_DIR" \
             --key-dir "$KEY_DIR" \
-            --report-dir site/quickstart \
             --in-network \
             --yes
 
@@ -288,8 +277,7 @@ jobs:
           # never once run to completion: each guest's sshd is published on
           # 2222 INSIDE its own container's network namespace, so without the
           # flag this connected to port 22 of the qemu container, where
-          # nothing listens. report-for-lmcache learned the same thing and
-          # says so above its own wait loop.
+          # nothing listens.
           #
           # The ssh output is kept rather than sent to /dev/null, because
           # "did not stay up" describes a guest that never booted, a wrong
@@ -338,14 +326,3 @@ jobs:
           --stack-dir "$STACK_DIR" \
           --xml "$FLEET_FILE" \
           --yes || true
-
-    # Upload only, and on success only. publish-pages.yml is the sole writer
-    # of the site, and it fetches each lane's latest artifact BY NAME -- it
-    # cannot tell a failed run's debris from a good report, so a failed run
-    # must upload nothing. Diagnostics belong in the run log above.
-    - name: Upload the report
-      uses: actions/upload-artifact@v4
-      with:
-        name: vm-report-quickstart
-        path: site/quickstart/
-        if-no-files-found: error

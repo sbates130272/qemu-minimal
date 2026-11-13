@@ -107,6 +107,12 @@ the step asserts the seven services are present first. All three files are
 committed so the stack stays reviewable in a diff and usable with plain
 `docker compose`.
 
+**`Gen Compose Check` is the only workflow that runs `tests/`**, on every
+pull request and by manual dispatch — not on push to main, and not on a
+schedule. A second workflow, `Site Script Tests`, ran the same command on a
+bare runner; it is deleted, because this run is a superset of it. The tests
+load the package straight from the checkout, so they need no install.
+
 The same lane is where the two cheap guards live that no guest-booting lane
 can replace. It runs the unit suite with `CI=true` after installing udevadm,
 pciutils, PyYAML and Jinja2, because `tests/test_ernic_identity.py` is the
@@ -1207,9 +1213,9 @@ drives `qemu/xml/rocm-golden.xml` through `qemu-tool quick-start up` and
 `scripts/generate-vm-report.sh`. The markdown report that script writes is
 left on the runner. No settings live in the workflow's `env:`.
 
-`report-for-vm-basic` and `report-for-quickstart` still exist as tests, and
-still upload report artifacts, but nothing fetches them.
-report-for-quickstart runs `qemu-tool quick-start`, the same command the
+`report-for-vm-basic` and `report-for-quickstart` still exist as tests.
+report-for-vm-basic still uploads a report artifact that nothing fetches;
+report-for-quickstart uploads nothing. report-for-quickstart runs `qemu-tool quick-start`, the same command the
 README's Quick Start names, so a change that breaks the documented path turns
 that lane red. It also checks that Prometheus and Grafana are running and that
 Prometheus answers a query: they are part of the documented quickstart, and a

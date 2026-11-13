@@ -27,8 +27,8 @@ def _load_package():
     # Same loader as the other suites: the package directory is "qemu-tool"
     # with a hyphen and is importable as qemu_tool only via pyproject's
     # package-dir. Importing beats shelling out to the installed entry point,
-    # which is what the first version of this file did -- `Site Script Tests`
-    # runs the suite without installing qemu-tool, so the subprocess raised
+    # which is what the first version of this file did -- CI ran the suite
+    # without installing qemu-tool, so the subprocess raised
     # FileNotFoundError and the check errored instead of running.
     pkg = REPO_ROOT / "qemu" / "qemu-tool"
     spec = importlib.util.spec_from_file_location(

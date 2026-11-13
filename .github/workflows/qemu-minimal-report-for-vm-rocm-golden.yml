@@ -81,13 +81,6 @@ jobs:
     - name: Check out code
       uses: actions/checkout@v4.3.1
 
-    # The ioctl, not the node. A device node can exist and still be
-    # non-functional, and QEMU falls back to TCG without saying so.
-    - name: Verify KVM is available
-      run: |
-        test -c /dev/kvm
-        python3 -I -c "import fcntl, os; assert fcntl.ioctl(os.open('/dev/kvm', os.O_RDWR), 0xAE00, 0) >= 0; print('KVM usable')"
-
     # A root caller resolves CONTAINER_USER to 0:0, which is not the
     # configuration an operator has. See the action.
     - name: Run the stack as a non-root user
