@@ -49,13 +49,6 @@ class FleetToEnv(unittest.TestCase):
     def test_ernic_tap_boolean(self) -> None:
         self.assertEqual(self.env["ERNIC_TAP"], "true")
 
-    def test_lmcache_chunk_size_kb(self) -> None:
-        # FleetConfig stores bytes (524288); env key is KB (512)
-        self.assertEqual(self.env["LMCACHE_CHUNK_SIZE"], "512")
-
-    def test_lmcache_enable_boolean(self) -> None:
-        self.assertEqual(self.env["LMCACHE_ENABLE"], "true")
-
     def test_log_max_files_singular_key(self) -> None:
         # env key is LOG_MAX_FILE (singular), not LOG_MAX_FILES
         self.assertIn("LOG_MAX_FILE", self.env)
@@ -65,12 +58,6 @@ class FleetToEnv(unittest.TestCase):
     def test_domain_pattern_absent(self) -> None:
         # domain_pattern has no env key mapping; must not appear
         self.assertNotIn("DOMAIN_PATTERN", self.env)
-
-    def test_lmcache_server_l2_policy(self) -> None:
-        self.assertEqual(self.env["LMCACHE_SERVER_L2_PREFETCH_POLICY"], "retain")
-
-    def test_lmcache_guest_ib_device(self) -> None:
-        self.assertEqual(self.env["LMCACHE_GUEST_IB_DEVICE_NAME"], "rocmernic0")
 
     def test_image_keys_present(self) -> None:
         self.assertIn("QEMU_IMAGE", self.env)
@@ -91,20 +78,6 @@ class FleetToEnv(unittest.TestCase):
         # name_prefix is embedded in per-VM specs, not a top-level spec key
         self.assertIn("vms", spec)
         self.assertEqual(spec["vms"][0]["name"], "stebates-fleet-1")
-
-    def test_plan_lmcache_chunk_size(self) -> None:
-        spec = plan(self.env)
-        # plan stores chunk_size as a string of the KB value
-        self.assertEqual(spec["lmcache_chunk_size"], "512")
-
-    def test_plan_new_lmcache_keys(self) -> None:
-        spec = plan(self.env)
-        self.assertEqual(spec["lmcache_server_l2_prefetch_policy"], "retain")
-        self.assertEqual(spec["lmcache_server_max_workers"], "4")
-        self.assertFalse(spec["lmcache_guest_seccomp_unconfined"])
-        self.assertFalse(spec["lmcache_guest_ionic_bind_new_id"])
-        self.assertEqual(spec["lmcache_guest_ib_device_name"], "rocmernic0")
-        self.assertEqual(spec["lmcache_guest_l2_prefetch_policy"], "retain")
 
 
 class RunWithFleetXml(unittest.TestCase):

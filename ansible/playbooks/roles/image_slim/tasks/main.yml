@@ -7,7 +7,7 @@
 #
 # Every task is idempotent and none of them fails on a path that is not there:
 # a second run finds an already-clean tree and reports zero reclaimed, which is
-# also what the mid-chain case would look like if the gate in vm-slim.yml ever
+# also what the mid-chain case would look like if the gate in the slim play ever
 # fails open.
 
 - name: Measure filesystem usage before slimming
@@ -53,7 +53,7 @@
 # /var/lib/dkms/<module>/<version>/build only. The siblings -- source, which is
 # a symlink into /usr/src, and the per-kernel module/ trees -- are the
 # registration dkms autoinstall needs, and removing those would break the
-# kernel-upgrade rebuild vm-rocjitsu.yml deliberately re-enables.
+# kernel-upgrade rebuild vm-rocm-golden.yml deliberately re-enables.
 - name: Find leftover DKMS build trees
   ansible.builtin.find:
     paths: /var/lib/dkms

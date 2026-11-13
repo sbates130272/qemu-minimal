@@ -20,7 +20,6 @@ from .compose import (
 )
 from .envfile import load as load_env_file
 from .ernic_stats import run as ernic_stats_run
-from .lmcache_stats import run as lmcache_stats_run
 from .gen_compose import run as gen_compose_run, _fleet_to_env
 from .gen_vm import run as gen_vm_run
 from .libvirt_xml import LibvirtXml
@@ -64,7 +63,7 @@ def main(argv: list[str] | None = None) -> None:
 
 # Our own flags on `compose`; everything else on that line is docker's.
 _COMPOSE_OURS = frozenset({
-    "--vm-name", "--vm2-name", "--images", "--stack", "--stack-dir", "--env-file",
+    "--vm-name", "--vm2-name", "--images", "--stack", "--stack-dir", "--xml",
 })
 
 
@@ -138,7 +137,6 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_fleet_to_env(sub)
     _add_compose(sub)
     _add_ernic_stats(sub)
-    _add_lmcache_stats(sub)
     _add_list(sub)
     _add_inspect(sub)
     _add_ssh(sub)
@@ -169,14 +167,16 @@ def _shared_parent() -> argparse.ArgumentParser:
     )
     p.add_argument("--qemu-path", default=_UNSET, metavar="PATH")
     p.add_argument(
-        "--env-file",
+        "--xml",
+        dest="env_file",
         action="append",
         type=Path,
         default=None,
         metavar="FILE",
         help=(
-            "Settings file (env-format). Overrides the search path. "
-            "Repeatable: later files override keys set by earlier ones."
+            "Fleet XML settings file (see qemu/xml/fleet-example.xml). "
+            "Overrides the search path. Repeatable: later files override "
+            "keys set by earlier ones."
         ),
     )
     p.add_argument(
@@ -217,7 +217,7 @@ def _add_quick_start(sub: argparse._SubParsersAction) -> None:
         help="Follow log output (only meaningful with the logs verb).",
     )
     p.add_argument(
-        "--fleet-file", action="append", type=Path, default=None, metavar="FILE",
+        "--xml", dest="fleet_file", action="append", type=Path, default=None, metavar="FILE",
         help=(
             "Fleet XML file. Defaults to the bundled qemu/xml/quickstart.xml. "
             "Repeatable: later files override keys set by earlier ones."
@@ -465,9 +465,9 @@ def _add_compose(sub: argparse._SubParsersAction) -> None:
         ),
     )
     p.add_argument(
-        "--env-file", action="append", type=Path, default=None, metavar="FILE",
+        "--xml", dest="env_file", action="append", type=Path, default=None, metavar="FILE",
         help=(
-            "Settings file (env-format). Overrides the search path. "
+            "Fleet XML settings file. Overrides the search path. "
             "Repeatable: later files override keys set by earlier ones."
         ),
     )
@@ -493,7 +493,7 @@ def _add_gen_compose(sub: argparse._SubParsersAction) -> None:
         help=f"Stack to generate. Default: {_DEFAULT_GENERATED_STACK}.",
     )
     p.add_argument(
-        "--fleet-file", action="append", type=Path, default=None, metavar="FILE",
+        "--xml", dest="fleet_file", action="append", type=Path, default=None, metavar="FILE",
         help=(
             "Fleet descriptor XML (see qemu/xml/scale-out.xml). "
             "Repeatable: later files override keys set by earlier ones."
@@ -521,16 +521,16 @@ def _add_fleet_to_env(sub: argparse._SubParsersAction) -> None:
         description=(
             "Read one or more fleet XML descriptors and print every setting "
             "as KEY=VALUE lines on stdout. Useful for generating a temporary "
-            "env file for commands that do not yet accept --fleet-file "
-            "(docker compose --env-file, inspect).\n\n"
+            "env file for plain docker compose, which reads nothing else "
+            "(docker compose --env-file).\n\n"
             "Example:\n"
-            "  qemu-tool fleet-to-env --fleet-file qemu/xml/scale-out.xml \\\n"
+            "  qemu-tool fleet-to-env --xml qemu/xml/scale-out.xml \\\n"
             "    > /tmp/fleet.env\n"
             "  docker compose --env-file /tmp/fleet.env ..."
         ),
     )
     p.add_argument(
-        "--fleet-file", action="append", type=Path, default=None, metavar="FILE",
+        "--xml", dest="fleet_file", action="append", type=Path, default=None, metavar="FILE",
         help=(
             "Fleet descriptor XML (see qemu/xml/scale-out.xml). "
             "Repeatable: later files override keys set by earlier ones."
@@ -546,43 +546,6 @@ def _fleet_to_env_cmd(args: argparse.Namespace) -> None:
     env = _fleet_to_env(cfg)
     for k, v in sorted(env.items()):
         print(f"{k}={v}")
-
-
-def _add_lmcache_stats(sub: argparse._SubParsersAction) -> None:
-    p = sub.add_parser(
-        "lmcache-stats",
-        help="Serve the LMCache MP coordinator's directory as Prometheus "
-             "metrics.",
-        description=(
-            "Poll the coordinator's HTTP API and republish it on /metrics. "
-            "The coordinator has its own /metrics, but it carries only the "
-            "OpenTelemetry event-bus series -- every directory, membership "
-            "and per-tier usage figure is HTTP-only, which is why this "
-            "exists."
-        ),
-    )
-    p.add_argument(
-        "--coordinator-url", default="http://127.0.0.1:9300", metavar="URL",
-        help="Base URL of the coordinator HTTP API. "
-             "Default: http://127.0.0.1:9300.",
-    )
-    p.add_argument(
-        "--port", type=int, default=9841, metavar="PORT",
-        help="Listen port. Default: 9841, one past the ernic exporter.",
-    )
-    p.add_argument(
-        "--addr", default="0.0.0.0", metavar="ADDR",
-        help="Listen address. Default: 0.0.0.0.",
-    )
-    p.add_argument(
-        "--timeout", type=float, default=5.0, metavar="SECONDS",
-        help="Per-request timeout when polling. Default: 5.",
-    )
-    p.add_argument(
-        "--once", action="store_true",
-        help="Print one scrape to stdout and exit.",
-    )
-    p.set_defaults(func=_lmcache_stats_cmd)
 
 
 def _add_ernic_stats(sub: argparse._SubParsersAction) -> None:
@@ -668,9 +631,9 @@ def _add_inspect(sub: argparse._SubParsersAction) -> None:
         help="Filter to a single VM by name. Default: all running VMs.",
     )
     p.add_argument(
-        "--env-file", action="append", type=Path, default=None, metavar="FILE",
+        "--xml", dest="env_file", action="append", type=Path, default=None, metavar="FILE",
         help=(
-            "Settings file (env-format). Overrides the search path. "
+            "Fleet XML settings file. Overrides the search path. "
             "Repeatable: later files override keys set by earlier ones."
         ),
     )
@@ -714,8 +677,8 @@ def _add_ssh(sub: argparse._SubParsersAction) -> None:
             return []
     p.add_argument("vm", metavar="VM", help="Name of the running VM.").completer = _complete_vm_name
     p.add_argument(
-        "--env-file", action="append", type=Path, default=None, metavar="FILE",
-        help="Settings file. Repeatable; later files win.",
+        "--xml", dest="env_file", action="append", type=Path, default=None, metavar="FILE",
+        help="Fleet XML settings file. Repeatable; later files win.",
     )
     p.add_argument(
         "--strict-host-key", action="store_true",
@@ -775,8 +738,8 @@ def _add_qcow(sub: argparse._SubParsersAction) -> None:
         help="With --list: show a separate NVMe scratch disk section.",
     )
     p.add_argument(
-        "--env-file", action="append", type=Path, default=None, metavar="FILE",
-        help="Settings file. Repeatable; later files win.",
+        "--xml", dest="env_file", action="append", type=Path, default=None, metavar="FILE",
+        help="Fleet XML settings file. Repeatable; later files win.",
     )
     p.set_defaults(func=_qcow_cmd)
 
@@ -815,9 +778,9 @@ def _add_check(sub: argparse._SubParsersAction) -> None:
         ),
     )
     p.add_argument(
-        "--env-file", type=Path, action="append", metavar="FILE",
+        "--xml", dest="env_file", type=Path, action="append", metavar="FILE",
         help=(
-            "Settings file to check against, repeatable, later files winning "
+            "Fleet XML settings file to check against, repeatable, later files winning "
             "key by key. Without it the usual search path is used, and which "
             "file that found is itself part of the report."
         ),
@@ -927,14 +890,6 @@ def _add_gen_vm(
                    help="Skip cloud-init; re-run Ansible against an existing backing image.")
     p.add_argument("--mgmt-tap", action="store_true", default=_UNSET,
                    help="Use tap+bridge for management NIC instead of SLIRP.")
-    p.add_argument(
-        "--fleet-file", action="append", type=Path, default=None, metavar="FILE",
-        help=(
-            "Fleet descriptor XML (see qemu/xml/scale-out.xml). "
-            "Repeatable: later files override keys set by earlier ones. "
-            "Takes lower priority than --env-file."
-        ),
-    )
     p.set_defaults(func=_gen_vm_cmd)
 
 
@@ -1145,14 +1100,6 @@ def _ernic_stats_cmd(args: argparse.Namespace) -> None:
     ernic_stats_run(args.stats_dir, args.port, args.addr)
 
 
-def _lmcache_stats_cmd(args: argparse.Namespace) -> None:
-    if args.once:
-        from .lmcache_stats import collect
-        sys.stdout.write(collect(args.coordinator_url, args.timeout))
-        return
-    lmcache_stats_run(args.coordinator_url, args.port, args.addr, args.timeout)
-
-
 def _gen_vm_cmd(args: argparse.Namespace) -> None:
     cfg = _build_config(args, subcommand="gen-vm")
     gen_vm_run(cfg)
@@ -1169,16 +1116,9 @@ def _build_config(args: argparse.Namespace, subcommand: str) -> VMConfig:
         xml_cfg = VMConfig()
 
     cli_overrides = _extract_cli_overrides(args, subcommand)
-    # Lowest to highest: dataclass defaults, --domain XML, fleet XML,
-    # env file, CLI flags.  Fleet XML is the fleet-wide baseline; env file
-    # overrides individual keys without touching the rest.
-    fleet_env: dict[str, str] = {}
-    fleet_file = getattr(args, "fleet_file", None)
-    if fleet_file:
-        from .fleet_xml import FleetXml
-        fleet_env = _fleet_to_env(FleetXml.parse_layers(FleetXml.find(fleet_file)))
-    cfg = _merge(xml_cfg, fleet_env)
-    cfg = _merge(cfg, load_env_file(args.env_file))
+    # Lowest to highest: dataclass defaults, --domain XML, the fleet XML
+    # settings, CLI flags.
+    cfg = _merge(xml_cfg, load_env_file(args.env_file))
     cfg = _merge(cfg, cli_overrides)
     if "," in cfg.vm_name:
         # A comma terminates a qemu option value, so it corrupts -name, -uuid,

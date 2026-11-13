@@ -1,7 +1,7 @@
 """The man page documents every subcommand and every option.
 
 Nothing checked this, and it drifted exactly as you would expect: `inspect`
-and `lmcache-stats` were absent from the SYNOPSIS and had no OPTIONS section
+and `ernic-stats` were absent from the SYNOPSIS and had no OPTIONS section
 at all, `list --summary` -- the largest addition of the release -- was not
 mentioned, and four older options had never been written up. All of it was
 invisible because the man page is prose that no test read.
@@ -105,7 +105,7 @@ class ManPageTest(unittest.TestCase):
         self.assertEqual([], missing, f"not in SYNOPSIS: {missing}")
 
     def test_every_subcommand_has_an_options_section(self):
-        # inspect and lmcache-stats each had none, so their flags were
+        # inspect and ernic-stats each had none, so their flags were
         # documented nowhere at all.
         missing = [c for c in self.cmds
                    if f".SH {c.upper()} OPTIONS" not in self.man]

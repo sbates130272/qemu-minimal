@@ -61,7 +61,7 @@ python3 -c 'import json; json.load(open("/etc/ionic-srq-p4.json"))'
 # Validating the stamp as JSON was all this used to do, which meant the two
 # version fields inside it were written, shipped and never read. They drifted:
 # a guest built 2026-10-24 records kernel_ref v7.2.4 against built_for_kernel
-# 7.2.6-070206-generic, because qemu-minimal's ernic-pins.yml still pins
+# 7.2.6-070206-generic, because qemu-minimal's vm-rocm-golden.yml still pins
 # ionic_kernel_pin v7.2.4 while this flavour's kernel_ref and rocm-ernic's own
 # IONIC_KERNEL_REF both moved to v7.2.6.
 #
@@ -90,7 +90,7 @@ if src.split("-")[0] != built.split("-")[0]:
     print(
         f"note: ionic sources are v{src} but the kernel is {built} -- same "
         f"series, different point release. Bump ionic_kernel_pin in "
-        f"qemu-minimal's ansible/playbooks/vars/ernic-pins.yml to close it."
+        f"qemu-minimal's ansible/playbooks/vm-rocm-golden.yml to close it."
     )
 print(f"ionic: sources v{src}, built for {built}")
 PY

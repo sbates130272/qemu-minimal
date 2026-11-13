@@ -38,7 +38,6 @@ extra_css:
 nav:
   - Home: index.md
   - Documentation: documentation.md
-  - Reports: reports.md
   - Publishing: publishing.md
   - Performance: perf/index.md
 

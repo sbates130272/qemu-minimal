@@ -4,7 +4,7 @@ name: qemu-minimal - Ansible Playbook Test - vm-rocm-golden
 # verify both the ernic NIC and the GPU.
 
 # This lane was parked carrying two failures. The ernic DKMS failure against
-# the guest's 7.0.0-31-generic kernel is fixed -- ionic_image_prep installs the
+# the guest's 7.0.0-31-generic kernel is fixed -- rocm_ernic_setup installs the
 # pinned mainline kernel, and the ionic lane has been green since b501f18. The
 # parking note also cited a rocjitsu amdgpu-probe hang burning ~50 minutes per
 # run, but the last run (35783675534) failed in 12 minutes inside the playbook
@@ -19,24 +19,14 @@ on:
   pull_request:
     branches:
       - main
-    # 'qemu/qemu-tool/**' and 'qemu/pyproject.toml' are deliberately absent --
-    # see the note in qemu-minimal-ansible-playbook-test-vm-rocjitsu.yml.
+    # 'qemu/qemu-tool/**' and 'qemu/pyproject.toml' are deliberately absent:
+    # this lane tests the playbook, not the tool that runs it.
     paths:
       - 'ansible/playbooks/vm-rocm-golden.yml'
-      - 'ansible/playbooks/vm-ernic.yml'
-      - 'ansible/playbooks/vm-rocjitsu.yml'
-      # Both of those import their own bases: vm-ernic.yml -> vm-basic.yml,
-      # vm-rocjitsu.yml -> vm-rocm.yml -> vm-basic.yml.
-      - 'ansible/playbooks/vm-rocm.yml'
+      # It imports vm-basic.yml and reads vars/, and every role it uses lives
+      # under roles/, so a change to any of them changes this guest.
       - 'ansible/playbooks/vm-basic.yml'
-      # Every one of those ends with vm-slim.yml, and this lane is the one that
-      # runs it last of all. Named explicitly because these filters enumerate
-      # playbooks rather than globbing ansible/playbooks/*.yml.
-      - 'ansible/playbooks/vm-slim.yml'
       - 'ansible/playbooks/vars/**'
-      # Both parents pull roles from here -- ionic_image_prep on either side of
-      # the chain, image_slim from vm-slim.yml -- so a change under roles/
-      # changes this guest. The other three playbook-test lanes already say so.
       - 'ansible/playbooks/roles/**'
       - 'ansible/requirements.yml'
       - 'qemu/compose/vfio-user-ernic-rocjitsu-vm/**'
@@ -66,7 +56,7 @@ env:
   # playbook against the same cloud image are not the same guest.
   #
   # sbates130272.batesste 3.0.0 made true the role default and documents the
-  # knob as "useful in CI", but vm-rocm.yml holds it at false so that a local
+  # knob as "useful in CI", but vm-rocm-golden.yml holds it at false so that a local
   # bake still upgrades. So this line is a real override again, not a
   # restatement of the default. Local bakes are unaffected.
   ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false,"user_setup_deploy_ssh_key":false,"rocm_setup_skip_system_upgrade":true}'
@@ -106,8 +96,8 @@ jobs:
       uses: sbates130272/qemu-tool-action@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # rocjitsu_firmware_ip_discovery=false prevents baking ip_discovery.bin
-        # at image-gen time; the amdgpu_firmware play at the end of
+        # rocjitsu_setup_firmware_ip_discovery=false prevents baking ip_discovery.bin
+        # at image-gen time; the live firmware play at the end of
         # vm-rocm-golden.yml generates it against the live rocjitsu container
         # and provides the timing delay rocjitsu needs before amdgpu-probe runs.
         ANSIBLE_EXTRA_ARGS: '-e {"git_setup_enable_gpg_signing":false,"user_setup_dotfiles_enable":false,"user_setup_install_amd_ca":false,"user_setup_deploy_ssh_key":false,"rocm_setup_skip_system_upgrade":true,"rocjitsu_firmware_ip_discovery":false}'
@@ -177,7 +167,7 @@ jobs:
     # So the old assertion named a file that is never written to the path it
     # looked in, and being one half of an "&&" under "sh -e" it failed with
     # nothing but "exit code 1", giving no way to tell which half was at
-    # fault. vm-rocjitsu.yml already splits these two.
+    # fault. vm-rocm-golden.yml already splits these two.
     - name: Verify firmware stubs present
       run: |
         ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
@@ -192,11 +182,11 @@ jobs:
           "test -x /usr/local/bin/amdgpu-probe"
         echo "✓ amdgpu-probe installed"
 
-    - name: Run vm-ernic configure stage
+    - name: Run the ernic configure stage
       run: |
         ansible-playbook \
           -i "qemu," \
-          ansible/playbooks/vm-ernic.yml \
+          ansible/playbooks/vm-rocm-golden.yml \
           --tags configure \
           -e "ansible_host=qemu" \
           -e "ansible_port=2222" \

@@ -47,9 +47,8 @@ on:
       - 'scripts/check-vm-devices.sh'
       - 'qemu/xml/quickstart.xml'
       - 'ansible/playbooks/fleet-quickstart.yml'
-      - 'ansible/playbooks/roles/rocjitsu_gpu_test/tasks/amdgpu_firmware.yml'
-      - 'ansible/playbooks/roles/lmcache_guest/tasks/netplan_ernic.yml'
-      - 'ansible/playbooks/roles/rocjitsu_gpu_test/files/vector_add.hip'
+      - 'ansible/playbooks/roles/rocjitsu_setup/**'
+      - 'ansible/playbooks/roles/rocm_ernic_setup/**'
       - 'qemu/qemu-tool/**'
       - 'qemu/pyproject.toml'
       - '.github/workflows/qemu-minimal-report-for-quickstart.yml'
@@ -181,7 +180,7 @@ jobs:
     - name: Generate temp env from fleet XML
       run: |
         FLEET_ENV=$(mktemp /tmp/quickstart-XXXXXX.env)
-        qemu-tool fleet-to-env --fleet-file "$FLEET_FILE" > "$FLEET_ENV"
+        qemu-tool fleet-to-env --xml "$FLEET_FILE" > "$FLEET_ENV"
         echo "FLEET_ENV=$FLEET_ENV" >> "$GITHUB_ENV"
 
     - name: Install collections
@@ -197,7 +196,7 @@ jobs:
         setpriv --reuid "$CIUSER_UID" --regid "$CIUSER_UID" --init-groups \
           env HOME="$CIUSER_HOME" \
           qemu-tool quick-start up \
-            --fleet-file "$FLEET_FILE" \
+            --xml "$FLEET_FILE" \
             --stack-dir "$STACK_DIR" \
             --key-dir "$KEY_DIR" \
             --in-network \
@@ -211,7 +210,7 @@ jobs:
         setpriv --reuid "$CIUSER_UID" --regid "$CIUSER_UID" --init-groups \
           env HOME="$CIUSER_HOME" \
           qemu-tool quick-start test \
-            --fleet-file "$FLEET_FILE" \
+            --xml "$FLEET_FILE" \
             --stack-dir "$STACK_DIR" \
             --key-dir "$KEY_DIR" \
             --report-dir site/quickstart \
@@ -310,9 +309,9 @@ jobs:
         # and reported ssh_key_source None, which --strict-key correctly
         # refused. quick-start writes the adopted name to env.image-login
         # beside the stack for exactly this.
-        set -- --env-file "$FLEET_ENV"
+        set -- --xml "$FLEET_ENV"
         [ -f "${STACK_DIR}/env.image-login" ] &&
-          set -- "$@" --env-file "${STACK_DIR}/env.image-login"
+          set -- "$@" --xml "${STACK_DIR}/env.image-login"
 
         scripts/check-vm-devices.sh "$@" \
           --gpu gfx1250 --strict-key --login "$GUEST_USER" "${PREFIX}-1"
@@ -337,7 +336,7 @@ jobs:
       run: |
         qemu-tool quick-start down \
           --stack-dir "$STACK_DIR" \
-          --fleet-file "$FLEET_FILE" \
+          --xml "$FLEET_FILE" \
           --yes || true
 
     # Upload only, and on success only. publish-pages.yml is the sole writer

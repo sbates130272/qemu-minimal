@@ -59,7 +59,7 @@ _REQUIRED_TOOLS = {
 _OPTIONAL_TOOLS = {
     "oras": ("pulls the published guest qcow2 for gen-vm and quick-start",
              "https://oras.land/docs/installation"),
-    "ansible-playbook": ("provisions guests (vm-ernic.yml, fleet-quickstart.yml)",
+    "ansible-playbook": ("provisions guests (vm-rocm-golden.yml, fleet-quickstart.yml)",
                          "apt install ansible, then ansible-galaxy collection "
                          "install -r ansible/requirements.yml"),
     "ssh": ("reaches guests; qemu-tool ssh and every playbook need it",
@@ -328,7 +328,7 @@ def _check_settings(settings: list[Path]) -> list[Result]:
     """
     if not settings:
         return [Result("settings file", _WARN, "none found on the search path",
-                       "cp qemu/xml/fleet-example.xml my-fleet.xml, or pass --fleet-file")]
+                       "cp qemu/xml/fleet-example.xml my-fleet.xml, or pass --xml")]
     return [Result("settings file", _OK, str(settings[0]))] + [
         Result("  overlay", _OK, str(p)) for p in settings[1:]]
 

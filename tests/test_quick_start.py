@@ -374,8 +374,7 @@ class WorkflowWorkspaceTest(unittest.TestCase):
     def test_report_lanes_chown_the_container_workspace(self):
         workflows = (
             ".github/workflows/qemu-minimal-report-for-quickstart.yml",
-            ".github/workflows/qemu-minimal-report-for-lmcache.yml",
-            ".github/workflows/qemu-minimal-report-for-mi355x.yml",
+            ".github/workflows/qemu-minimal-report-for-vm-rocm-golden.yml",
         )
         for name in workflows:
             with self.subTest(workflow=name):

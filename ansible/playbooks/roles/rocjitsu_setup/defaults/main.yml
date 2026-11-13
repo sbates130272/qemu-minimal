@@ -1,0 +1,271 @@
+---
+# ══ Firmware ════════════════════════════════════════════════════
+# The gfx1250 firmware an amdgpu guest needs to bind a rocjitsu device, made
+# by the rocjitsu container that will serve that device and copied in.
+#
+# Two callers, one switch. An image BAKE runs with no device attached and
+# decides for itself what to generate; a LIVE guest sits behind a running
+# rocjitsu and must end up with a discovery blob from that same build.
+# rocjitsu_setup_firmware_live selects the second: it forces generation and
+# ip_discovery.bin on, leaves a guest that already has the blob alone, and
+# re-binds the device afterwards.
+#
+# It is a switch rather than three overrides because a bake passes
+# rocjitsu_setup_firmware_ip_discovery=false and rocjitsu_generate_firmware=false as
+# EXTRA vars, which outrank anything an include_role can set -- so a live
+# include in the same run could not turn them back on by name.
+rocjitsu_setup_firmware_live: false
+
+# Needs a Docker daemon on the controller. Off for a bake whose controller has
+# only the CLI; the guest then gets no stubs and the caller supplies them.
+rocjitsu_setup_firmware_generate: >-
+  {{ rocjitsu_generate_firmware
+     | default(vm_rocjitsu_generate_firmware | default(true)) }}
+
+# Must be the image the stack serves the device from: stubs from another build
+# load and then fail at discovery, which reads as a broken GPU. A generated
+# fleet inventory carries it as fleet_guest_rocjitsu_image; a bake takes it
+# from $ROCJITSU_IMAGE, which gen-vm forwards. default(..., true) throughout,
+# because lookup('env') returns "" for an unset variable.
+rocjitsu_setup_firmware_image: >-
+  {{ rocjitsu_image
+     | default(fleet_guest_rocjitsu_image | default(''), true)
+     | default(lookup('env', 'ROCJITSU_IMAGE'), true)
+     | default('docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261112.gdca6903-rocjitsu.50be05a', true) }}
+
+# --generation rather than --config, so nothing depends on a config file
+# existing inside the rocjitsu container.
+rocjitsu_setup_firmware_generation: >-
+  {{ rocjitsu_firmware_generation
+     | default(vm_rocjitsu_firmware_generation | default('gfx1250')) }}
+
+# "gap" emits only what no driver release ships -- imu, mes, mes1 and
+# ip_discovery -- beside the real blobs from amdgpu-dkms-firmware 31.60+.
+# "full" stubs the whole set: right for a guest with no such package (in-tree
+# amdgpu, or an older driver), wrong otherwise, since a stub mec/rlc is
+# strictly worse than the firmware it stands in for. A gap request against a
+# guest without the packaged blobs falls back to full by itself.
+rocjitsu_setup_firmware_set: >-
+  {{ rocjitsu_firmware_set
+     | default(vm_rocjitsu_firmware_set | default('gap')) }}
+
+# ip_discovery.bin is per rocjitsu build. Bake it into an image that runs
+# against the same pin; leave it out of one that is PUBLISHED, where every
+# consumer on another build would get a wrong copy, and install it live.
+rocjitsu_setup_firmware_ip_discovery: >-
+  {{ rocjitsu_firmware_ip_discovery
+     | default(vm_rocjitsu_firmware_ip_discovery | default(true)) }}
+
+# What amdgpu-dkms-firmware ships for gfx1250, and where: under updates/, which
+# the kernel searches first. The authoritative list is the package's own --
+#   dpkg -L amdgpu-dkms-firmware | grep -E 'gc_12_1_0|sdma_7_1_0'
+rocjitsu_setup_firmware_packaged_dir: /lib/firmware/updates/amdgpu
+rocjitsu_setup_firmware_packaged:
+  - gc_12_1_0_mec.bin
+  - gc_12_1_0_mec_1.bin
+  - gc_12_1_0_rlc.bin
+  - gc_12_1_0_rlc_1.bin
+  - gc_12_1_0_uni_mes.bin
+  - sdma_7_1_0.bin
+
+# ══ amdgpu driver ═══════════════════════════════════════════════
+# Make a guest's amdgpu bind a rocjitsu vfio-user device: keep the driver out
+# of the boot path so it can be loaded with emulation parameters once the
+# server is up, patch and build the DKMS module where there is one, and
+# install the amdgpu-probe script that does the loading.
+
+# Patch /usr/src/amdgpu-* and build it. Off for a guest on in-tree amdgpu,
+# which has no DKMS source to patch.
+#
+# With this on, the caller must have installed amdgpu-dkms with
+# rocm_setup_amdgpu_dkms_defer_build: that leaves the package unbuilt and
+# update-initramfs diverted, and this role is what builds the patched module
+# and undoes both.
+rocjitsu_setup_amdgpu_patch_dkms: true
+
+# Regenerate every initramfs and grub.cfg after writing the blacklist. Without
+# it the blacklist is inert at boot: the image on disk predates it and still
+# carries amdgpu, which loads early, fails for want of firmware, and stays
+# resident so that amdgpu-probe cannot apply its parameters.
+rocjitsu_setup_amdgpu_update_initramfs: >-
+  {{ rocjitsu_update_initramfs
+     | default(vm_rocjitsu_update_initramfs | default(true)) }}
+
+# ══ Guest tools ═════════════════════════════════════════════════
+# The userspace an emulated-GPU guest carries beyond ROCm itself: amd-smi,
+# hsa-snoop, what the libhipfile fio engine needs to build, and the two
+# services that must stay off against an emulator.
+
+# A release tag, deliberately not the rolling "latest" pre-release: that tag
+# is reassigned on every upstream build, so two bakes of one commit would
+# install different bits.
+rocjitsu_setup_tools_hsa_snoop_version: >-
+  {{ vm_rocjitsu_hsa_snoop_version | default(vm_hsa_snoop_version | default('1.3.0')) }}
+rocjitsu_setup_tools_hsa_snoop_url: >-
+  https://github.com/sbates130272/hsa-snoop/releases/download/v{{
+  rocjitsu_setup_tools_hsa_snoop_version }}/hsa-snoop_{{
+  rocjitsu_setup_tools_hsa_snoop_version }}_amd64.deb
+
+rocjitsu_setup_tools_packages:
+  - amdrocm-amdsmi
+  # hsa-snoop plants an ftrace kprobe on the KFD create_queue ioctl.
+  - bpftrace
+  # The fio-hipfile benchmark builds fio from a pinned master commit in the
+  # guest, because the libhipfile ioengine is in no fio release tag.
+  - libaio-dev
+  - libnuma-dev
+  - pkg-config
+  - zlib1g-dev
+
+# RVS and the rocBLAS host library it links against. Off, because the only
+# consumer -- the RVS check in tasks/test.yml -- is itself off: the tarball
+# is built only as amdrocm7 and cannot run `rvs -g` against a ROCm 10 tree.
+# Turn this on in the same change that sets rocjitsu_setup_test_rvs true.
+rocjitsu_setup_tools_install_rvs: >-
+  {{ vm_rocjitsu_install_rvs | default(vm_install_rvs | default(false)) }}
+# RVS is in no apt index, so it comes from AMD's standalone tarball.
+rocjitsu_setup_tools_rvs_version: >-
+  {{ vm_rocjitsu_rvs_version | default(vm_rvs_version | default('1.5.125-620')) }}
+# Its own prefix: the tarball carries bin/, lib/, include/ and share/, which
+# would collide with the apt-owned ROCm tree.
+rocjitsu_setup_tools_rvs_prefix: >-
+  {{ vm_rocjitsu_rvs_prefix | default(vm_rvs_prefix | default('/opt/rvs')) }}
+
+# ══ Live GPU tests ══════════════════════════════════════════════
+# Run against a live VM, not during image build: the tests need the rocjitsu
+# vfio-user server to be serving, which only the compose stack arranges.
+#
+#   qemu-tool compose --xml my-fleet.xml \
+#     --stack vfio-user-rocjitsu-vm up -d
+#   ansible-playbook -i <port>, ansible/playbooks/vm-rocjitsu-test.yml
+
+# The emulated device. lspci reports it as "Processing accelerators"; the role
+# fails early on a clear message rather than letting hipcc succeed and the
+# runtime report no agent.
+rocjitsu_setup_test_pci_id: "1002:75c1"
+
+# Services stopped for the duration of the tests. Each polls the GPU on a
+# timer: amd-metrics-exporter every ~15s, which shows up as a steady drip of
+# "memory partition mode query is not supported" in dmesg, and hsa-snoop's
+# packaged unit scrapes queues for its :9488 exporter. On a real card that is
+# free; here the device is emulated and serves single-threaded, so every poll
+# is taken out of the same thread the dispatch under test is running on.
+# Stopped rather than masked: this is a measurement artifact we are removing,
+# not a service we think is wrong, and a reboot should bring it back.
+#
+# hsa-snoop is still exercised -- see the check below, which runs it in
+# --  <app> mode against a workload it owns, rather than leaving the
+# system-wide collector running underneath every other test.
+#
+# Both hsa-snoop units, not just hsa-snoop.service. The package ships two, and
+# hsa-snoop-prometheus.service -- "hsa-snoop --all --prometheus --ais-snoop" --
+# is the one enabled by default. Nothing here was stopping it, and it holds
+# trace_pipe for its whole life; trace_pipe admits a single reader, so the
+# role's own hsa-snoop died with "Device or resource busy" before tracing
+# anything. It is also why killing the collector by command line appeared not to
+# work: the unit has Restart=on-failure and simply brought it back.
+#
+# It is *not* the cause of the vector_add hangs seen while chasing this, which
+# was the obvious guess and the wrong one -- a run with the unit confirmed
+# stopped hung just the same. That hang is per-boot state, and it is now
+# understood: the emulated GPU serves a private/scratch segment to exactly one
+# process per device lifetime. The second process in the same boot that asks
+# for scratch hangs, and the device is then wedged for every later process --
+# including ones that request no scratch at all, which block on the first call
+# that forces a code object onto them. Measured: sgemm-bench (no scratch) runs
+# twelve times over without trouble, while rocjitsu-scratch-repro wedges the
+# device on its second run.
+#
+# "CI runs this play once, so it does not meet it" used to be written here and
+# was wrong. report-for-vm-rocjitsu runs this play and then two benchmarks
+# against the same boot, so the benchmarks were the second consumer and hung;
+# that lane restarts the compose stack between the two for this reason. Local
+# iteration needs the same restart between runs.
+rocjitsu_setup_test_stop_services:
+  - amd-metrics-exporter.service
+  - prometheus-node-exporter.service
+  - hsa-snoop.service
+  - hsa-snoop-prometheus.service
+
+# Load amdgpu with the gfx1250 emulation parameters before testing. The module
+# is blacklisted at boot by design -- it must load after the vfio-user server
+# is serving -- so something has to do this, and doing it here keeps the role
+# self-contained. Set false if you have already probed by hand.
+rocjitsu_setup_test_probe: true
+
+# Where /usr/local/bin/amdgpu-probe is installed by vm-rocm-golden.yml.
+rocjitsu_setup_test_probe_cmd: /usr/local/bin/amdgpu-probe
+
+# Empty means "ask rocm_agent_enumerator". Pin it only to assert a specific
+# target; a wrong value here produces a code object the device cannot run,
+# which surfaces as a launch failure rather than as a clear error.
+rocjitsu_setup_test_arch: ""
+
+rocjitsu_setup_test_workdir: /var/tmp/rocjitsu-gpu-test
+
+# Emulation is slow, so every run is bounded rather than left to hang the play.
+rocjitsu_setup_test_compile_timeout: 600
+rocjitsu_setup_test_run_timeout: 600
+
+# Seconds the canonical repro's per-kernel watchdog waits before declaring a
+# hang. A scratch-starved dispatch does not fail, it waits, and
+# hipDeviceSynchronize() never returns -- so it cannot be waited on with an
+# ordinary timeout and the program arms its own thread and _exit()s instead.
+# That is the shape of the bug fixed by raising amdgpu.vramlimit to 1 GiB
+# (see amdgpu-probe in vm-rocm-golden.yml); the watchdog stays as the detector
+# that would catch it coming back.
+rocjitsu_setup_test_repro_watchdog: 60
+
+rocjitsu_setup_test_vector_add_n: 4096
+
+# hsa-snoop discovers AQL queues by planting an ftrace kprobe on the KFD's
+# create_queue ioctl, then reads the ring out of the target process with
+# process_vm_readv. Both need root, and the kprobe needs tracefs mounted --
+# neither is a given in a minimal guest, so the check reports what it found
+# rather than assuming.
+#
+# Pinned to a release tag, not the rolling "latest" pre-release: this is baked
+# into a VM image, and "latest" is reassigned on every upstream build, so the
+# same playbook would install different bits on a rebuild and a failure would
+# not be reproducible. Bump deliberately.
+rocjitsu_setup_test_hsa_snoop: true
+rocjitsu_setup_test_hsa_snoop_bin: /usr/bin/hsa-snoop
+
+# Seconds to let hsa-snoop trace the workload before killing it. This is a
+# wall-clock cost, not just a ceiling: hsa-snoop in "-- <app>" mode does not
+# reliably exit when the app does, so on the runs where it does not, the timeout
+# *is* how long the task takes. vector_add returns in under a second on the
+# emulated device once nothing else is polling the queues, so 600 bought nothing
+# and spent ten minutes of every such run. The role tolerates the resulting
+# rc 124 as long as an AQL queue was observed.
+rocjitsu_setup_test_hsa_snoop_timeout: 120
+
+# RVS is a second view of the same live guest that the direct HIP workloads
+# exercise above: it should see the emulated GPU through ROCm and be able to
+# query its properties, but it need not run the longer stress modules here.
+#
+# Off until AMD publishes an amdrocm10 tarball. RVS 1.5.125-620 needs
+# libamd_smi.so.26 and TheRock 10.0 ships soname 27, so `rvs -g` dies in the
+# loader with rc 127 before enumerating anything. Not a missing package --
+# amdrocm-amdsmi is installed and provides libamd_smi.so.27 -- and not
+# fixable by bumping the pin either: repo.amd.com/rocm/rvs/tarball carries
+# four builds, all amdrocm7, and 1.5.125-620 is already the newest. A .26 ->
+# .27 symlink is not the answer; a soname bump is the ABI saying it changed.
+#
+# This is the "recheck if either side bumps a major" caveat in
+# vm-rocm-golden.yml firing. That note lists libamdhip64.so.7,
+# libhsa-runtime64.so.1 and librocblas.so.5; amd_smi was missing from it.
+#
+# Re-enable by setting this true once an amdrocm10 tarball exists. Everything
+# else in the role -- the HIP workloads, hsa-snoop, the KFD checks -- is
+# unaffected and still runs.
+rocjitsu_setup_test_rvs: false
+# Its own prefix, not the ROCm tree: RVS comes from AMD's standalone tarball
+# rather than apt, because TheRock packages no RVS. See vm-rocm-golden.yml.
+rocjitsu_setup_test_rvs_prefix: /opt/rvs
+rocjitsu_setup_test_rvs_bin: "{{ rocjitsu_setup_test_rvs_prefix }}/bin/rvs"
+rocjitsu_setup_test_rvs_conf_dir: >-
+  {{ rocjitsu_setup_test_rvs_prefix }}/share/rocm-validation-suite/conf
+rocjitsu_setup_test_rvs_config_name: gpup_single.conf
+rocjitsu_setup_test_rvs_timeout: 120
+rocjitsu_setup_test_timeout_bin: /usr/bin/timeout

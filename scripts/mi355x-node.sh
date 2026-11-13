@@ -38,7 +38,7 @@ usage() {
   cat <<'EOF'
 Usage: mi355x-node.sh [options] <up|test|down>
 
-  --fleet-file FILE   golden fleet XML file (default qemu/xml/mi355x-node.xml)
+  --xml FILE   golden fleet XML file (default qemu/xml/mi355x-node.xml)
   --fleet-overlay FILE  delta XML layered on it (default qemu/xml/overlay-mi355x-ci.xml)
   --stack-dir DIR     where the stack is rendered
   --key-dir DIR       where the guest keypair is pulled to
@@ -51,7 +51,7 @@ EOF
 
 while [ $# -gt 0 ]; do
   case $1 in
-    --fleet-file) FLEET_FILE=$2; shift 2 ;;
+    --xml) FLEET_FILE=$2; shift 2 ;;
     --fleet-overlay) FLEET_OVERLAY=$2; shift 2 ;;
     --stack-dir) STACK_DIR=$2; shift 2 ;;
     --key-dir) KEY_DIR=$2; shift 2 ;;
@@ -68,12 +68,12 @@ say() { printf '\n== %s ==\n' "$1"; }
 die() { echo "error: $1" >&2; exit 1; }
 
 # Generate a temporary env file from the XML fleet layers so commands that
-# still require --env-file (gen-vm, inspect, docker compose) have something to
+# read env-format only (plain docker compose) have something to
 # read. The XML files are authoritative; this file is throw-away.
 FLEET_ENV=$(mktemp /tmp/mi355x-fleet-XXXXXX.env)
 trap 'rm -f "$FLEET_ENV"' EXIT
 qemu-tool fleet-to-env \
-  --fleet-file "$FLEET_FILE" --fleet-file "$FLEET_OVERLAY" > "$FLEET_ENV"
+  --xml "$FLEET_FILE" --xml "$FLEET_OVERLAY" > "$FLEET_ENV"
 
 # shellcheck source=/dev/null
 env_get() { grep -m1 "^$1=" "$FLEET_ENV" | cut -d= -f2-; }
@@ -138,12 +138,12 @@ make_overlays() {
   say "Creating guest overlays"
   first="${VM_NAME_PREFIX}-1"
   if [ ! -f "${VM_IMAGES_DIR}/${first}-backing.qcow2" ]; then
-    qt gen-vm --env-file "$FLEET_ENV" \
+    qt gen-vm --xml "$FLEET_ENV" \
       --vm-name "$first" --backing-image "$VM_BACKING_IMAGE"
   fi
   n=2
   while [ "$n" -le "$VM_COUNT" ]; do
-    qt gen-vm --env-file "$FLEET_ENV" \
+    qt gen-vm --xml "$FLEET_ENV" \
       --vm-name "${VM_NAME_PREFIX}-${n}" \
       --backing-file "${VM_IMAGES_DIR}/${first}-backing.qcow2"
     n=$((n + 1))
@@ -154,7 +154,7 @@ generate_stack() {
   say "Rendering ${STACK} to ${STACK_DIR}"
   mkdir -p "$STACK_DIR"
   qt gen-compose --stack "$STACK" \
-    --fleet-file "$FLEET_FILE" --fleet-file "$FLEET_OVERLAY" --output-dir "$STACK_DIR"
+    --xml "$FLEET_FILE" --xml "$FLEET_OVERLAY" --output-dir "$STACK_DIR"
 
   # Copy the repo's qemu package into the stack directory so the QEMU
   # containers can install qemu-tool FROM SOURCE. Two reasons it has to be a
@@ -397,7 +397,7 @@ report() {
     echo "## What qemu-tool reports about the live guest"
     echo
     echo '```'
-    qt inspect --env-file "$FLEET_ENV" \
+    qt inspect --xml "$FLEET_ENV" \
       --vm-name "${VM_NAME_PREFIX}-1" 2>&1 | head -40
     echo '```'
   } > "${REPORT_DIR}/index.md"

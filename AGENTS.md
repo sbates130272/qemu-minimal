@@ -12,21 +12,25 @@ file up to date as infrastructure changes.
 - `qemu/compose/vfio-user-rocjitsu-vm/` — single-VM rocjitsu-only compose stack
 - `qemu/compose/vfio-user-ernic-rocjitsu-vm/` — single-VM ernic + rocjitsu compose stack
 - `qemu/compose/vfio-user-ernic-2vm/` — two-VM ernic mesh stack; rocjitsu GPUs opt-in via `--profile rocjitsu-vm1/vm2`
-- `qemu/compose/vfio-user-ernic-rocjitsu-scale-out/` — N-VM fleet, **generated** by `qemu-tool gen-compose` from `qemu/xml/scale-out.xml` plus whichever overlay applies; `--profile metrics` adds Prometheus+Grafana, `--profile lmcache` adds the LMCache coordinator
+- `qemu/compose/vfio-user-ernic-rocjitsu-scale-out/` — N-VM ernic mesh + one GPU per VM. **Generated** by `qemu-tool gen-compose` from `qemu/xml/scale-out.xml` plus whichever overlay applies; do not hand-edit it. `--profile metrics` adds Prometheus+Grafana
 - `qemu/compose/vfio-user-mi355x-node/` — MI355X-shaped PCIe topology: one EPYC socket, 8 GPUs, 8 NICs and 8 PCIe switches per VM, one NIC + one GPU below each switch. Also **generated**, from `qemu/xml/mi355x-node.xml`. 8 ernics per VM means 8 *mesh nodes* per VM, so the fleet caps at 4 VMs, not 40 — see its README
-- `qemu/docker/` — Dockerfiles this repo owns, one directory per image (`lmcache/` so far). Built by hand and referenced by tag, unlike the stack-local `tapsetup/` which compose builds itself
-- `qemu/compose/vfio-user-ernic-rocjitsu-scale-out/` — N-VM ernic mesh + one
-  GPU per VM. **Generated** by `qemu-tool gen-compose` from `qemu/xml/scale-out.xml`
-  (plus an overlay, see below); do not hand-edit it
+- `qemu/compose/vfio-user-helios-tray/` — one VM with 4 GPUs, 8 ernics and an SDXI device. **Generated**, from `qemu/xml/helios-tray.xml`, and the stack behind `qemu-tool quick-start --flavor helios`. It needs `--output-dir` to regenerate, because `gen-compose` otherwise writes into the scale-out directory
+- `qemu/docker/` — Dockerfiles this repo owns, one directory per image (`sdxi/` so far). Built by hand and referenced by tag, unlike the stack-local `tapsetup/` which compose builds itself
 - `qemu/xml/` — every settings file (XML fleet configs). It is a sibling of `qemu/compose/` and `qemu/packages.d/`
   and is mapped in place by `package-dir`, for the same reason they are: these
   are data the wheel ships, not Python source, so they do not belong under
   `qemu/qemu-tool/`
 - `qemu/xml/scale-out.xml` + `qemu/xml/overlay-ci.xml` + `qemu/xml/overlay-mi100.xml` — the
   fleet settings: one golden file and the committed overlays that sit on it
+- `qemu/xml/rocm-golden.xml` — the performance-tracking fleet: two guests from the published rocm-golden qcow2, each with a GPU, an NVMe, an ernic with P4 in guest scope and an SDXI device. `report-for-vm-rocm-golden` runs every tracked benchmark against it
 - `qemu/xml/quickstart.xml` + `qemu/qemu-tool/quick_start.py` + `ansible/playbooks/fleet-quickstart.yml` — the README's Quick Start, which is now `qemu-tool quick-start`: two guests from the published qcow2, each with a GPU, an NVMe and an ernic, Prometheus and Grafana beside them, plus a GPU test and an inter-guest RDMA test. The `report-for-quickstart` lane runs *that subcommand*, not a copy of its steps, so the documented path cannot rot. It replaced the shell script that used to live under `scripts/`, which is deleted; do not reintroduce a shell wrapper beside it. The guests are sized from the host by default (4 vCPU floor, 8 ceiling), and every prompt it asks takes its default answer when stdin is not a terminal, so CI needs no flag to stay non-interactive. Its settings file runs AHEAD of `qemu/xml/scale-out.xml` on purpose — the stamp check is per file, not across them
 - `images/` — qcow2 VM disk images (backing + overlay pairs, **not** `/var/lib/qemu-tool/images`)
-- `ansible/` — Ansible playbooks for VM provisioning
+- `ansible/playbooks/` — three playbooks and four roles, and nothing else:
+  - `vm-basic.yml` — a complete bake on its own, and the base of the golden
+  - `vm-rocm-golden.yml` — the one image beyond it: imports `vm-basic.yml`, then the mainline kernel and ernic prerequisites, ROCm, the rocjitsu roles, SRQ + P4, SDXI and one slim pass. `--tags configure` sets up the NIC on a live guest and `--tags test` runs the GPU workloads. The two ernic pins (`ionic_kernel_pin`, `ernic_source_pin`) are defined once on its first play and shared with the others through YAML anchors
+  - `fleet-quickstart.yml` — configures and tests a running fleet; what `qemu-tool quick-start test` runs
+  - roles `rocm_ernic_setup` (image prep, device naming, boot-time addressing), `rocjitsu_setup` (firmware, amdgpu, tools, live tests), `sdxi_setup` and `image_slim`. Each has task files callers reach with `tasks_from`; all four are linted at the `production` profile in CI
+- `scripts/install-vfio-rules` + `scripts/99-qemu-minimal-vfio.rules` — host-side udev rules for PCI passthrough. There is no top-level `udev/` any more: guest rules live in their role's `files/`
 - `rocm-ernic-enablement.md` — running log of rocm-ernic integration status and bugs
 
 ## VM images
@@ -67,7 +71,7 @@ are not available inside the VM.
 cp qemu/xml/fleet-example.xml my-fleet.xml
 # Edit my-fleet.xml: set VM_IMAGES_DIR to the repo images/ absolute path
 # Add --profile rocjitsu-vm1 --profile rocjitsu-vm2 to enable GPUs
-qemu-tool compose --fleet-file my-fleet.xml --stack vfio-user-ernic-2vm \
+qemu-tool compose --xml my-fleet.xml --stack vfio-user-ernic-2vm \
   --profile rocjitsu-vm1 --profile rocjitsu-vm2 up -d
 ```
 
@@ -95,9 +99,9 @@ generated.** Edit `qemu/xml/scale-out.xml` and re-run `qemu-tool gen-compose`; a
 hand edit is lost on the next regeneration and `gen-compose --check` fails in
 CI — the `Gen Compose Check` lane, which also runs `docker compose config`
 against the committed stack, a tap-enabled render, and a
-`--profile lmcache --profile metrics` render. That last one is not optional
+`--profile metrics` render. That last one is not optional
 polish: profiles *filter* services out of `config` output, so until it existed
-every observability and LMCache service was validated by nothing, and
+every observability service was validated by nothing, and
 `config -q` on a render with all services filtered away still exits 0 — hence
 the step asserts the seven services are present first. All three files are
 committed so the stack stays reviewable in a diff and usable with plain
@@ -106,25 +110,24 @@ committed so the stack stays reviewable in a diff and usable with plain
 The same lane is where the two cheap guards live that no guest-booting lane
 can replace. It runs the unit suite with `CI=true` after installing udevadm,
 pciutils, PyYAML and Jinja2, because `tests/test_ernic_identity.py` is the
-only thing that asks udev to *parse* `udev/99-rocm-ernic.rules` and the only
-thing that reads `ernic_fleet_guest`'s wiring — nothing runs that role against
-a guest — and under `CI=true` those checks fail instead of skipping. And it
+only thing that asks udev to *parse* `99-rocm-ernic.rules` and the only
+thing that reads `rocm_ernic_setup`'s wiring, and under `CI=true` those checks fail instead of skipping. And it
 renders a 3-VM stack to a scratch directory and runs `qemu-tool compose
 config` inside it with no flags, asserting the compose project name (taken
 from the working directory) and the service list, because resolving to the
-*wrong* stack also exits 0. Note the render passes `--env-file` absolute: a
+*wrong* stack also exits 0. Note the render passes `--xml` absolute: a
 provenance header records layer paths as typed, and relative ones resolve
 against the stack directory.
 
 ```bash
-qemu-tool gen-vm --fleet-file qemu/xml/scale-out.xml \
+qemu-tool gen-vm --xml qemu/xml/scale-out.xml \
     --vm-name stebates-fleet-1 --backing-image "$VM_BACKING_IMAGE"
 for n in $(seq 2 8); do
-  qemu-tool gen-vm --fleet-file qemu/xml/scale-out.xml --vm-name stebates-fleet-$n \
+  qemu-tool gen-vm --xml qemu/xml/scale-out.xml --vm-name stebates-fleet-$n \
       --backing-file images/stebates-fleet-1-backing.qcow2
 done
-qemu-tool gen-compose --fleet-file qemu/xml/scale-out.xml
-qemu-tool compose --fleet-file qemu/xml/scale-out.xml \
+qemu-tool gen-compose --xml qemu/xml/scale-out.xml
+qemu-tool compose --xml qemu/xml/scale-out.xml \
     --stack vfio-user-ernic-rocjitsu-scale-out --profile metrics up -d
 ```
 
@@ -139,7 +142,7 @@ export QEMU_TOOL_STACK=/var/lib/qemu-tool/stacks/mi100-fleet   # or, from anywhe
 
 The directory comes from `--stack-dir`, then `$QEMU_TOOL_STACK`, then the cwd
 if it carries that header — no walk-up, because a walk-up from inside this
-checkout lands on the committed 8-VM stack. Explicit `--env-file` still wins,
+checkout lands on the committed 8-VM stack. Explicit `--xml` still wins,
 a recorded layer that has moved is an error rather than a fall-back to the
 search path, and the digest is still re-hashed, so a stack rendered from an
 edited layer still warns. `compose` does not regenerate and does not edit
@@ -147,15 +150,15 @@ edited layer still warns. `compose` does not regenerate and does not edit
 
 **One golden file plus overlays, not a file per host.** `qemu/xml/scale-out.xml` is
 authoritative and is what packaging ships; a CI lane or a particular host adds
-a short committed overlay naming only the keys it changes. `--env-file` is
+a short committed overlay naming only the keys it changes. `--xml` is
 repeatable on `gen-vm`, `run-vm`, `gen-compose`, `compose` and `inspect`, and
 later files win key by key, so the overlay goes last:
 
 ```bash
-qemu-tool gen-compose --fleet-file qemu/xml/scale-out.xml --fleet-file qemu/xml/overlay-mi100.xml \
+qemu-tool gen-compose --xml qemu/xml/scale-out.xml --xml qemu/xml/overlay-mi100.xml \
     --output-dir /var/lib/qemu-tool/stacks/mi100-fleet
 qemu-tool compose --stack-dir /var/lib/qemu-tool/stacks/mi100-fleet \
-    --fleet-file qemu/xml/scale-out.xml --fleet-file qemu/xml/overlay-mi100.xml \
+    --xml qemu/xml/scale-out.xml --xml qemu/xml/overlay-mi100.xml \
     --profile metrics up -d
 ```
 
@@ -474,10 +477,6 @@ does not remove the root-equivalent container — anything speaking to the daemo
 needs the socket — it shrinks it from a log pipeline to a proxy whose whole job
 is saying no.
 
-The guest-side Alloy (`lmcache_guest`) still mounts the guest's own socket:
-the blast radius is one disposable VM and a proxy per guest costs more than it
-buys. It takes `--cap-drop ALL --security-opt no-new-privileges`.
-
 **Migrating a fleet that ran as root.** `qemu-tool compose up` creates
 `PROM_DATA_DIR`/`LOKI_DATA_DIR`/`GRAFANA_DATA_DIR` as the caller (Docker would
 otherwise create a missing bind-mount source root-owned, and the service that
@@ -504,29 +503,6 @@ directory). A file that is **yours** but mode 0444 wants `chmod`, and the
 earlier wording for it read "owned by uid 1000, not read-write for uid 1000"
 -- a true sentence that looks like a contradiction and names the wrong
 remedy.
-
-**The MP server unit is the loosest thing left, and it is now explained.**
-`lmcache-server.service` kept `--security-opt seccomp=unconfined` with no
-comment beside it — the one relaxation nobody could evaluate. Docker's default
-profile allows every syscall the ROCm runtime and the ionic verbs path use; it
-blocks the long tail. It is now `lmcache_guest_seccomp_unconfined`, default
-**false**, with `--cap-drop ALL` and `--security-opt no-new-privileges`
-alongside. `--network host` and `--ipc host` stay and are not incidental: the
-first is required for P2P, since the address this server advertises has to be
-one its peers can dial and a guest-local bridge is a different 172.17.x.x on
-every guest. `--ulimit memlock=-1:-1` needs no `IPC_LOCK` — the ulimit raises
-the rlimit the daemon sets, which is a different mechanism from the capability
-that lets a process exceed it.
-
-**A blank line inside `ExecStart`'s backslash continuation terminates it**, and
-systemd then reports `Missing '=', ignoring line` for the remainder — so the
-container starts with *some* of its arguments. Every privilege flag in that
-unit sits behind an `{% if %}` or `{% for %}`, each one a chance to introduce
-exactly that. Ansible's `template` module defaults `trim_blocks` to yes, which
-is what keeps the real render clean; `tests/test_lmcache_unit_render.py` had
-been rendering *without* it, so its unit differed from the one that ships — in
-the forgiving direction, where the test render is broken and the real one is
-fine. It now sets `trim_blocks=True` and asserts the continuation is unbroken.
 
 **Host-side `sudo` in `run_vm.py` is unchanged except for one thing.** The TAP
 path still shells out to `sudo` for `ip`, `iptables` and a long-lived
@@ -560,22 +536,22 @@ the guest runs a pinned mainline kernel.
 
 None of this is done by hand in this repo. Two pieces of automation own it:
 
-- [`ansible/playbooks/roles/ionic_image_prep/`](ansible/playbooks/roles/ionic_image_prep/)
-  prepares the guest image — installs the pinned mainline kernel from
-  `kernel.ubuntu.com/mainline`, the build toolchain, and
-  `/etc/modules-load.d/rocm-ernic-ionic.conf`. It no longer writes a pci.ids
-  entry — upstream hwdata carries the device, see the PCI ID section.
-  Upstream assumes a
-  guest already prepared this way (their published `ionic` qcow2); this repo
-  builds its own, so it owns the preparation.
+- [`ansible/playbooks/roles/rocm_ernic_setup/`](ansible/playbooks/roles/rocm_ernic_setup/)
+  prepares the guest image. Its `image_prep` tasks install the pinned mainline
+  kernel from `kernel.ubuntu.com/mainline` and the build toolchain; `naming`
+  installs the udev rules and the `modules-load.d` entry; `network` installs
+  the boot-time addressing unit. It writes no pci.ids entry by default —
+  upstream hwdata carries the device, see the PCI ID section. Upstream assumes
+  a guest already prepared this way; this repo builds its own, so it owns the
+  preparation.
 - `sbates130272.rocm_ernic.ernic_guest_setup` from the collection builds and
   installs the DKMS package, the rdma-core provider and the NIC config.
 
-The kernel ref is pinned to `v7.2.4` (via `ionic_kernel_pin` in
-[`playbooks/vars/ernic-pins.yml`](ansible/playbooks/vars/ernic-pins.yml)) as
-`ernic_ionic_kernel_ref` in [`vm-ernic.yml`](ansible/playbooks/vm-ernic.yml),
-which also feeds `ionic_image_kernel_ref` so the sources and the guest kernel
-cannot drift apart — `driver_ionic.yml` fails the build if they disagree on
+The kernel ref is `ionic_kernel_pin`, defined once at the top of
+[`vm-rocm-golden.yml`](ansible/playbooks/vm-rocm-golden.yml) and currently
+`v7.2.6`. It feeds both `ernic_ionic_kernel_ref` and
+`rocm_ernic_setup_kernel_ref`, so the sources and the guest kernel cannot
+drift apart — `driver_ionic.yml` fails the build if they disagree on
 major.minor.
 
 Device names are unchanged: Ethernet `rocm-ernic0`, IB `rocm-rdma-ernic0`, both
@@ -588,30 +564,26 @@ still set by `99-rocm-ernic.rules` (see udev section below), now keyed on
 `99-rocm-ernic.rules` gives the ernic devices stable names: Ethernet interface
 → `rocm-ernic0`, IB device → `rocm-rdma-ernic0`. Use the Ethernet one with
 `ib_send_bw -d ...`; **do not use the IB one with anything built on UCX** —
-see issue 21, and `lmcache_guest` renames it back for exactly that reason.
+see the UCX issue below.
 
-**This repo now carries the rules**, at
-[`udev/99-rocm-ernic.rules`](udev/99-rocm-ernic.rules), and
-`ernic_fleet_guest` installs them —
-`ernic_fleet_udev_rules_src` defaults to the role's `files/` entry, which is a
-symlink to that one file so the two cannot drift. It used to default to `""`
-and no playbook ever set it, so the role installed nothing and every guest
+**This repo carries the rules**, at
+[`99-rocm-ernic.rules`](ansible/playbooks/roles/rocm_ernic_setup/files/99-rocm-ernic.rules),
+and `rocm_ernic_setup`'s `naming` tasks install them.
+`rocm_ernic_setup_udev_rules_src` defaults to that file. It used to default to
+`""` and no playbook ever set it, so the role installed nothing and every guest
 inherited whatever its image baked in; that is how a fleet ended up matching an
-id upstream had retired (issue 25). An empty `src` is still allowed, and now
-says so in the play output instead of skipping silently.
-`tests/test_ernic_identity.py` asserts both stanzas match all four fields.
+id upstream had retired. An empty `src` is still allowed, and says so in the
+play output instead of skipping silently. `tests/test_ernic_identity.py`
+asserts both stanzas match all four fields.
 
-**That "installs them" was false until 2026-10-22, in the configuration
-everyone uses.** The copy task lived in `driver.yml`, which `main.yml`
-includes only `when: ernic_fleet_ionic_modules_dir | length > 0` — and that
-dir is empty by default and *meant* to be, since in-tree `ionic` binds the
-device natively (issue 16). So the documented setup installed no rules and no
-`modules-load.d` entry. Measured on a 32-guest fleet: 64 NICs, none renamed,
-none addressed. The tasks now live in `naming.yml`, included unconditionally;
-`driver.yml` keeps its gate because the patched modules really are optional.
-Every id assertion in `tests/test_ernic_identity.py` stayed green throughout,
-because they read the task and never asked whether it runs — there is now a
-test that the include carries no `when:`.
+**Naming is never conditional.** The copy task once lived in a task file that
+was included only when a patched-modules directory was set, and that directory
+is empty by default — in-tree `ionic` binds the device natively. So the
+documented setup installed no rules and no `modules-load.d` entry: on a
+32-guest fleet, 64 NICs, none renamed, none addressed. Every id assertion in
+the tests stayed green throughout, because they read the task and never asked
+whether it runs; there is now a test that the `naming.yml` include carries no
+`when:`.
 
 **The published qcow2 ships no rules of its own either**, as of
 `20261021.g742e8e2`. Read straight off the image over `qemu-nbd`, not
@@ -673,7 +645,7 @@ matches, not two; check all four before re-copying anything.
 ## PCI ID (in-VM)
 
 **Nothing to do on a current guest: upstream hwdata already names this
-device.** `ionic_image_prep_pciids` defaults to `false` and the entry stays
+device.** `rocm_ernic_setup_pciids` defaults to `false` and the entry stays
 unwritten — not because writing it is unsafe, but because it is already
 there.
 
@@ -699,7 +671,7 @@ inverted: it now delivers it.
 **The entry is three levels deep, and the device line is not ours.** Vendor
 → device (one tab) → subsystem (two tabs), tabs and not spaces. hwdata has
 named `1dd8:1002` for years, so the only line this repo could ever contribute
-is the `1dd8 5400` subsystem line nested under it. `ionic_image_prep` writes
+is the `1dd8 5400` subsystem line nested under it. `rocm_ernic_setup` writes
 exactly that shape, and its presence check asks for the **subsystem** line: a
 check that stopped at the device would see upstream's `1002`, skip forever,
 and never write the one line that is ours.
@@ -719,7 +691,7 @@ property to rely on.** A GitHub runner's `lspci` returned 0 for the duplicate
 case, which turned those three assertions red on a PR that touched none of
 this. The test now probes the local `lspci` and skips the refusal cases,
 naming the version, when it accepts a malformed file — and that skip is worth
-reading, because on such a host `ionic_image_prep`'s "validate the merged
+reading, because on such a host `rocm_ernic_setup`'s "validate the merged
 file with `lspci -i` before installing it" step cannot catch a duplicate. The
 positive row stays asserted everywhere: it is the behaviour this repo
 depends on.
@@ -739,11 +711,11 @@ That is why the role builds the merged file beside the real one, runs `lspci
 the installed file afterwards. The merge `awk` exits 3 rather than succeeding
 if it inserted nothing, because a silent no-op reads as a successful merge.
 
-`ionic_image_prep_pciids` defaults to `false` all the same — on a current
+`rocm_ernic_setup_pciids` defaults to `false` all the same — on a current
 guest hwdata is right and there is nothing to add. The machinery is kept,
 off, because the id has moved twice already (`1022:8000` → `1dd8:100a` →
 `1dd8:1002`). If it moves again to something hwdata does not carry, set
-`ionic_image_prep_pciids` true and the four `ionic_image_prep_pciids_*` ids to
+`rocm_ernic_setup_pciids` true and the four `rocm_ernic_setup_pciids_*` ids to
 the new ones; the role inserts whichever of the device and subsystem lines is
 missing, directly under its parent, since `pci.ids` is parsed sequentially and
 an append at the end of the file lands under the class section and never
@@ -759,10 +731,9 @@ alias: pci:v00001DD8d00001002sv*sd*bc*sc*i*
 alias: pci:v00001DD8d00001003sv*sd*bc*sc*i*
 ```
 
-So the `new_id` workaround below (issue 16) and
-`lmcache_guest_ionic_bind_new_id` are both obsolete on a current image; the
-latter defaults to `false`. The DKMS modules are still required, but for SRQ
-(issue 20) rather than for the device appearing at all.
+So the `new_id` workaround described under known issues is obsolete on a
+current image. The DKMS modules are still required, but for SRQ rather than
+for the device appearing at all.
 
 ## Known issues / open bugs
 
@@ -805,10 +776,10 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
    upstream HEAD inside the guest even when `requirements.yml` installs the
    collection from a fixed SHA, and the roles can end up building sources from
    a different tree than they came from. Pinned locally in
-   [`playbooks/vars/ernic-pins.yml`](ansible/playbooks/vars/ernic-pins.yml);
+   [`vm-rocm-golden.yml`](ansible/playbooks/vm-rocm-golden.yml) as `ernic_source_pin`;
    the default is still upstream's.
 7. **`ernic_nic_subnet` is now a role default upstream** (rocm-ernic@1484557),
-   but it still has to be repeated at play-var level in `vm-ernic.yml`'s
+   but it still has to be repeated at play-var level in `vm-rocm-golden.yml`'s
    configure play because role defaults are not in scope when play vars are
    evaluated. The upstream commit documents this explicitly.
 8. **A rebooted ernic guest is device-present but not fully test-ready.**
@@ -908,9 +879,8 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     ```
 
     The device moved to `1dd8:1002`, which the in-tree table already held
-    (alongside `1dd8:1003`), so it binds natively. `new_id` is now a no-op
-    and `lmcache_guest_ionic_bind_new_id` defaults to `false`. What the DKMS
-    modules are still needed for is SRQ — see issue 20.
+    (alongside `1dd8:1003`), so it binds natively. `new_id` is now a no-op.
+    What the DKMS modules are still needed for is SRQ — see below.
 
     That yields `ionic 0000:00:05.0: FW: rocm-ernic-1.0`, `Link up - 100 Gbps`,
     an `enp0s5np0` netdev and an `ibv_devinfo` reporting `PORT_ACTIVE` over
@@ -1021,8 +991,8 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     worker startup costs about 56 s of boot at 32 nodes and fixes nothing.
 
 15. **vfio-user P2P DMA needs a QEMU patch the stock image does not carry.**
-    Anything that has one vfio-user device DMA into another's BAR — LMCache
-    P2P reading GPU memory over the ernic, most obviously — does not work on
+    Anything that has one vfio-user device DMA into another's BAR — a peer
+    reading GPU memory over the ernic, most obviously — does not work on
     the stock QEMU this repo pins, and does not complain: the BAR window is
     simply never advertised to peer servers.
 
@@ -1052,25 +1022,24 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     nothing in this repo has yet run a P2P DMA workload against it.
 
 16. **`ernic_guest_setup` does not build SRQ, and without SRQ there is no
-    P2P at all.** SRQ ships as two separate upstream roles — `ernic_srq_dkms`
-    (kernel) and `ernic_srq_provider` (rdma-core) — driven by a playbook the
-    galaxy build of the collection does not package. Nothing in this repo ran
-    either until `lmcache_guest`'s `srq_driver.yml`.
+    one-sided RDMA through UCX.** SRQ ships as two separate upstream roles —
+    `ernic_srq_dkms` (kernel) and `ernic_srq_provider` (rdma-core) — driven by
+    a playbook the galaxy build of the collection does not package.
+    `vm-rocm-golden.yml` runs both, together with `ernic_p4_dkms`, in its
+    "Build SRQ + P4 ionic stack" play, so the published image has them.
 
-    The failure names nothing it is about: `max_srq: 0`, so UCX's `rc_verbs`
-    (which is built on a shared receive queue) is declined and only `ud_verbs`
-    is left, which has no one-sided RDMA. NIXL then dies with
-    `NIXL_ERR_BACKEND`, every MP server crash-loops, and the coordinator
-    reports 0 of N registered — with the RDMA device present, `PORT_ACTIVE`
-    and perfectly healthy.
+    The failure on a guest without them names nothing it is about:
+    `max_srq: 0`, so UCX's `rc_verbs` (which is built on a shared receive
+    queue) is declined and only `ud_verbs` is left, which has no one-sided
+    RDMA — with the RDMA device present, `PORT_ACTIVE` and perfectly healthy.
 
-    `ernic_srq_dkms_reload` defaults to **false**, which builds and installs
-    the modules while the running kernel keeps the old ones: indistinguishable
-    from the build never having happened. With the reload, `max_srq` goes to
-    256 and `rc_verbs` appears — and `rc_verbs` appearing is the proof, since
-    that transport requires an SRQ. Note the reload drops the netdev's address
-    and link; the lmcache preflight reassigns both at unit start, which is why
-    the SRQ build must run before the MP server is configured.
+    `ernic_srq_dkms_reload` defaults to **false**, and the bake leaves it
+    there because no device is attached: the modules land in `updates/dkms`
+    and are what the guest loads on its next boot. On a live guest, building
+    without the reload is indistinguishable from the build never having
+    happened. With it, `max_srq` goes to 256 and `rc_verbs` appears — and
+    `rc_verbs` appearing is the proof. The reload drops the netdev's address
+    and link.
 
     Both halves must come from one tree: the device half lives in the ernic
     server container, so the collection SHA and the `ernic.<sha>` in
@@ -1095,10 +1064,8 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     Measured by renaming the same device and re-running `ucx_info -d`:
     `rocm-rdma-ernic0` and `rocm_rdma_ernic0` give no verbs transport;
     `rocmernic0` and `ernic0` give `rc_verbs` + `ud_verbs`. So it is the
-    separators, not the trailing digit. `lmcache_guest` renames it in the
-    preflight (`lmcache_guest_ib_device_name`, default `rocmernic0`) rather
-    than shipping a competing udev rule, because the preflight also runs after
-    every module reload.
+    separators, not the trailing digit. Anything using UCX has to rename the
+    device first; nothing in this repo does so any more.
 
     This conflicts with the `ib_send_bw -d rocm-rdma-ernic0` the udev section
     above recommends: a guest set up for UCX will not answer to that name.
@@ -1120,51 +1087,7 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     Keep per-request payloads under ~15 MiB until this is fixed upstream;
     note the fleet's default KV geometry is far larger.
 
-19. **`--max-workers` defaults to 1, and 1 wedges the MP server.** With one
-    worker slot the `AffinityThreadPool` serialises every client's tasks onto
-    one thread and warns that it is doing so. The server then stops processing
-    mid-session — register, two stores, then silence, no error and no further
-    log line. The client's `UNREGISTER_KV_CACHE` times out (the bench
-    distinguishes success from an RPC timeout only, at 10 s), leaving
-    `instance_id 1000` registered; since every bench client uses that id,
-    **every later client fails `REGISTER_KV_CACHE` until the server is
-    restarted**. One stuck session poisons the server, and the symptom appears
-    later and elsewhere as a clean cache miss.
-
-    Measured on one guest, back-to-back 512-token sessions: at the default the
-    first session failed and the next five could not register; at
-    `--max-workers 4`, 8 of 8 were clean. `lmcache_guest_max_workers` defaults
-    to 4.
-
-20. **LMCache v0.5.6's default prefetch policy doubles the mesh traffic.**
-    Prefetch controller v2 added a retention policy, and
-    `DefaultPrefetchPolicy.plan_l1_retention()` returns `False` for every key
-    — literally `return [False] * len(keys)`. A key that is not retained is
-    marked `is_temporary`, and `L1Manager.finish_read()` frees it the instant
-    the read completes.
-
-    **P2P is an L2 adapter.** So every chunk pulled across the ernic is
-    written into L1, read once and thrown away, and the next request for the
-    same keys pulls it over RDMA again. Measured on a 2-guest fleet, same
-    geometry, freshly restarted servers:
-
-    | | bytes per request |
-    | --- | --- |
-    | v0.5.5 | 8,388,608 |
-    | v0.5.6 `--l2-prefetch-policy default` | 16,777,216 (exactly 2x) |
-    | v0.5.6 `--l2-prefetch-policy retain` | 8,388,608 |
-
-    On `default` the puller's own counters say it plainly — 4 chunks written
-    to L1, 4 evicted, **0** L1 lookup hits, 4 L2 hits — and warm `LOOKUP`
-    goes from 2–3 ms to 54 ms while warm `RETRIEVE` goes from ~3 ms to
-    677 ms, because the warm pass crosses the mesh instead of hitting
-    locally.
-
-    `default` is a reasonable upstream choice when L2 is local disk, where a
-    re-read is cheap. Here L2 is a peer across an emulated RDMA NIC, where it
-    is the entire cost. `lmcache_guest_l2_prefetch_policy` defaults to
-    `retain` and tests/test_lmcache_unit_render.py pins it.
-21. **The emulated NIC's PCI id moved and the guests' udev rules did not —
+19. **The emulated NIC's PCI id moved and the guests' udev rules did not —
     32 guests sat unusable for 18 hours.** Found 2026-10-20 on `mi100-fleet`.
     The mechanism is worth keeping because every step of it was silent.
 
@@ -1189,17 +1112,17 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
 
     What changed in the repo:
 
-    - `udev/99-rocm-ernic.rules` is carried here now, matching all four
-      fields in both stanzas, and `ernic_fleet_guest` installs it rather than
+    - `99-rocm-ernic.rules` is carried here now, matching all four
+      fields in both stanzas, and `rocm_ernic_setup` installs it rather than
       defaulting to `""` and inheriting the image's copy.
     - `rocm-ernic-netcfg.sh` finds the device by tuple and addresses it under
       whatever name it has, warning when the rename is missing. A missed
       rename degrades; it no longer takes the network down.
-    - The `ernic_fleet_guest` module check no longer greps the alias table for
+    - The `rocm_ernic_setup` module check no longer greps the alias table for
       `d0000100A`. That had become a hard failure that aborted provisioning
       before the rules were installed — and it never proved what it claimed:
       in-tree `ionic` advertises `1002` too, so no PCI id distinguishes the
-      patched build. SRQ (issue 20) does.
+      patched build. SRQ does.
     - `scripts/fleet.sh wait` requires the tuple *and* an address, not sshd.
       `fleet.sh check <N>` prints each guest's device and address.
     - `tests/test_ernic_identity.py` pins all of it.
@@ -1242,79 +1165,74 @@ token anywhere in the repo.
 
 <https://sbates130272.github.io/qemu-minimal/> is served from the `gh-pages`
 branch (Settings > Pages > Source = "Deploy from a branch", `gh-pages` /
-(root)), not from a Pages artifact. `.github/workflows/qemu-minimal-publish-pages.yml` is
-the only workflow that writes that branch; report lanes upload a named
-artifact and nothing else.
+(root)), not from a Pages artifact. `.github/workflows/qemu-minimal-publish-pages.yml`
+is the only workflow that writes that branch.
 
-That split is the whole point. `report-for-vm-basic` and `report-for-vm-ernic` each used
-to call `actions/deploy-pages` with their own full `_site/`, and a Pages
-deploy replaces the entire site, so whichever ran last won and the other
-lane's report disappeared — with both workflows green.
+**The site carries documentation and performance trends, and no guest
+reports.** It is built with MkDocs from `docs/`, plus a `perf/` page that
+`scripts/render-site-perf.py` writes from the numbers the benchmark workflow
+uploads. MkDocs adds `.nojekyll` itself.
 
-`publish-pages` fetches each lane's latest artifact *by name*, not from the
-run that triggered it, so a lane that has not run for a week still
-contributes. Each lane's subtree is rsynced with its own scoped `--delete`,
-so an expired artifact leaves that lane's last report in place and anything
-else on the branch (a future `perf/`) survives untouched.
+There are five tracked metrics and four artifacts, all uploaded by
+`report-for-vm-rocm-golden`:
 
-Adding a lane is five edits: upload an artifact under a new name, add a
-`fetch <name> <dir>` line, add the lane's workflow `name:` to
-`on.workflow_run.workflows`, add a row to the landing page, and add a status
-badge to the README's report row. Miss the third and the lane publishes
-nothing until some *other* lane finishes, which looks like the site being
-stale rather than a missing trigger. Miss the fifth and the lane is invisible
-on the front page — which is how report-for-lmcache shipped without one, this
-list having said "four" at the time. There are seven lanes now. Two of them
-run *the thing a human is told to run* rather than a copy of its steps:
+| Artifact | Metric |
+|---|---|
+| `perf-rocjitsu` | rocjitsu GEMM, rocjitsu hipFile |
+| `perf-hipfile-fio` | hipFile fio |
+| `perf-ernic` | Ernic P4 FP8 bandwidth |
+| `perf-helios` | SDXI copy bandwidth |
+
+Each artifact holds nothing but `badge-*.json`. `publish-pages` fetches each
+*by name* from the most recent run that produced it, into a scratch `perf-in/`
+that is never published, so a benchmark that failed today keeps its last good
+number. The renderer appends to `perf/history.jsonl` on the branch and writes
+the endpoint JSON the README's shields read.
+
+`publish-pages` runs on any non-skipped conclusion of the benchmark workflow,
+not only on success. That is deliberate: each benchmark step is
+`continue-on-error` with its own upload, and the job then fails on purpose if
+any of them failed, so a red run routinely carries good numbers.
+
+Adding a benchmark is five edits: upload its `badge-*.json` under a stable
+`perf-<name>` artifact, add a `fetch` line in `publish-pages`, add the
+workflow's `name:` to `on.workflow_run.workflows` if it is a new workflow, add
+the metric to `METRICS` in `render-site-perf.py`, and add the endpoint badge to
+the README. Miss the trigger and the number publishes only when some other
+workflow finishes, which looks like a stale site rather than a missing trigger.
+
+**`report-for-vm-rocm-golden` runs the stack the way a person would.** It
+drives `qemu/xml/rocm-golden.xml` through `qemu-tool quick-start up` and
+`quick-start test`, then runs the four benchmark steps with
+`scripts/generate-vm-report.sh`. The markdown report that script writes is
+left on the runner. No settings live in the workflow's `env:`.
+
+`report-for-vm-basic` and `report-for-quickstart` still exist as tests, and
+still upload report artifacts, but nothing fetches them.
 report-for-quickstart runs `qemu-tool quick-start`, the same command the
-README's Quick Start names, and report-for-mi355x runs
-`scripts/mi355x-node.sh`, the one the MI355X stack's README names. A change
-that breaks either documented path turns that lane red rather than being
-discovered by the next person to follow it.
+README's Quick Start names, so a change that breaks the documented path turns
+that lane red. It also checks that Prometheus and Grafana are running and that
+Prometheus answers a query: they are part of the documented quickstart, and a
+lane that only looked at the guests would pass with half the stack down.
 
-report-for-quickstart also checks that Prometheus and Grafana are running and
-that Prometheus answers a query, which is not padding: they are part of the
-documented quickstart now, and a lane that only looked at the guests would
-publish a green report about a stack half of which had not started.
-
-**`quickstart-boot` is the PR-time half of that lane, and is not a report
-lane.** report-for-quickstart runs on push to main and on a cron, so a broken
-quickstart was found the morning after the merge; `Gen Compose Check` renders
-`qemu/xml/quickstart.xml` on every PR but starts nothing. This one boots **one**
-guest and asserts the emulated NIC is there by its full `1dd8:1002` +
-`1dd8:5400` tuple and that `ibv_devinfo` reports `PORT_ACTIVE`, then stops. It
-publishes nothing and uploads no artifact, so none of the five publish-pages
-edits above apply to it.
+**`quickstart-boot` is the PR-time half of that lane.** report-for-quickstart
+runs on push to main and on a cron, so a broken quickstart was found the
+morning after the merge; `Gen Compose Check` renders `qemu/xml/quickstart.xml`
+on every PR but starts nothing. This one boots **one** guest and asserts the
+emulated NIC is there by its full `1dd8:1002` + `1dd8:5400` tuple and that
+`ibv_devinfo` reports `PORT_ACTIVE`, then stops. It publishes nothing.
 
 Three choices in it are load-bearing. **One guest, not two**: the 4 vCPU floor
 is real and two guests on a 4-core runner is 2x oversubscribed against the
-mesh manager's untunable 20 s heartbeat (issue 14) — tolerable once a day,
-not on a check that gates merges. At `VM_COUNT=1` the mesh is just the
-manager and `gen_compose` omits the worker branch entirely. **The `-slim`
-guest image**, pinned through an *overlay* so `qemu/xml/quickstart.xml` is
-untouched: slim is 0.75 GB against the fat image's 2.52 GB at the same stamp,
-and it keeps the 7.2.4 kernel, the ionic DKMS modules, rdma-core and perftest
-while dropping every compiler — which is exactly why the GPU test stays in
-the daily lane, since `fleet-quickstart.yml` hard-fails on a missing `hipcc`.
-Do not repoint the settings file at slim. **The IB device name is resolved
-from `ibv_devinfo -l`**, never hardcoded: neither published image ships the
-udev rules, so the device keeps its kernel name.
+mesh manager's untunable 20 s heartbeat — tolerable once a day, not on a check
+that gates merges. At `VM_COUNT=1` the mesh is just the manager and
+`gen_compose` omits the worker branch entirely. **Its settings are an
+overlay**, so `qemu/xml/quickstart.xml` stays the file a reader diffs and the
+file the daily lane runs. **The IB device name is resolved from
+`ibv_devinfo -l`**, never hardcoded: the published image ships no udev rules,
+so the device keeps its kernel name.
 
-report-for-mi355x is the only lane whose point is a *shape* rather than a
-result. `gen-compose --check` already proves the render is byte-identical,
-and that says nothing about the tree the guest enumerates — a flat PCIe tree
-boots exactly as happily as a switched one and nothing in the guest
-complains. So the lane asks the guest, and the report publishes its
-`lspci -tv`. It runs ONE VM where the lab stack is four (a runner has 4
-cores against the stack's 32) but reduces nothing about the topology, since
-a lane that quietly halved the devices would publish a green report about a
-shape nobody runs. The corollary is that its RDMA figure is a *loopback*
-run: with one guest there is no second node, so it proves the verbs, never
-the mesh.
-
-A badge for a lane that does NOT run on every push to main wants no
-`?branch=main`: shields pins that query to main's latest run, and a weekly
-or dispatch-only lane can have none for days, which renders as "no status"
-rather than as its real result. Do **not** add
-`.nojekyll` — the reports are markdown that GitHub's Jekyll build renders,
-unlike rocm-ernic's pre-built Sphinx HTML.
+A badge for a workflow that does NOT run on every push to main wants no
+`?branch=main`: shields pins that query to main's latest run, and a weekly or
+dispatch-only workflow can have none for days, which renders as "no status"
+rather than as its real result.

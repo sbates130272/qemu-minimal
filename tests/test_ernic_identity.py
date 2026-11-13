@@ -37,9 +37,10 @@ import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-RULES = REPO_ROOT / "udev" / "99-rocm-ernic.rules"
-FLEET_ROLE = REPO_ROOT / "ansible" / "playbooks" / "roles" / "ernic_fleet_guest"
-PREP_ROLE = REPO_ROOT / "ansible" / "playbooks" / "roles" / "ionic_image_prep"
+RULES = (REPO_ROOT / "ansible" / "playbooks" / "roles" / "rocm_ernic_setup"
+         / "files" / "99-rocm-ernic.rules")
+FLEET_ROLE = REPO_ROOT / "ansible" / "playbooks" / "roles" / "rocm_ernic_setup"
+PREP_ROLE = REPO_ROOT / "ansible" / "playbooks" / "roles" / "rocm_ernic_setup"
 
 VENDOR = "0x1dd8"
 DEVICE = "0x1002"
@@ -293,15 +294,15 @@ class RoleWiringTest(unittest.TestCase):
 
     def test_defaults_agree_with_the_rules_file(self):
         d = _defaults(FLEET_ROLE)
-        self.assertEqual(d["ernic_fleet_pci_vendor"], VENDOR)
-        self.assertEqual(d["ernic_fleet_pci_device"], DEVICE)
-        self.assertEqual(d["ernic_fleet_pci_subsystem_vendor"], SUBSYSTEM_VENDOR)
-        self.assertEqual(d["ernic_fleet_pci_subsystem_device"], SUBSYSTEM_DEVICE)
+        self.assertEqual(d["rocm_ernic_setup_pci_vendor"], VENDOR)
+        self.assertEqual(d["rocm_ernic_setup_pci_device"], DEVICE)
+        self.assertEqual(d["rocm_ernic_setup_pci_subsystem_vendor"], SUBSYSTEM_VENDOR)
+        self.assertEqual(d["rocm_ernic_setup_pci_subsystem_device"], SUBSYSTEM_DEVICE)
 
     def test_udev_rules_src_resolves(self):
         # Was "" and set by no playbook, so the role installed no rules at all
         # and inherited whatever the image baked in.
-        src = _defaults(FLEET_ROLE)["ernic_fleet_udev_rules_src"]
+        src = _defaults(FLEET_ROLE)["rocm_ernic_setup_udev_rules_src"]
         self.assertTrue(src, "an empty src silently leaves the image's own rules in place")
         staged = FLEET_ROLE / "files" / src
         self.assertTrue(staged.is_file(), f"{staged} must resolve for the copy task")
@@ -309,10 +310,10 @@ class RoleWiringTest(unittest.TestCase):
 
     def test_pciids_defaults_describe_the_three_level_entry(self):
         d = _defaults(PREP_ROLE)
-        self.assertEqual(d["ionic_image_prep_pciids_vendor"], VENDOR[2:])
-        self.assertEqual(d["ionic_image_prep_pciids_device"], DEVICE[2:])
-        self.assertEqual(d["ionic_image_prep_pciids_subvendor"], SUBSYSTEM_VENDOR[2:])
-        self.assertEqual(d["ionic_image_prep_pciids_subdevice"], SUBSYSTEM_DEVICE[2:])
+        self.assertEqual(d["rocm_ernic_setup_pciids_vendor"], VENDOR[2:])
+        self.assertEqual(d["rocm_ernic_setup_pciids_device"], DEVICE[2:])
+        self.assertEqual(d["rocm_ernic_setup_pciids_subvendor"], SUBSYSTEM_VENDOR[2:])
+        self.assertEqual(d["rocm_ernic_setup_pciids_subdevice"], SUBSYSTEM_DEVICE[2:])
 
     def test_pciids_entries_have_the_exact_spacing(self):
         _require(jinja2 is not None, "Jinja2")
@@ -322,11 +323,11 @@ class RoleWiringTest(unittest.TestCase):
         d = _defaults(PREP_ROLE)
         env = jinja2.Environment()
         self.assertEqual(
-            env.from_string(d["ionic_image_prep_pciids_device_entry"]).render(**d),
+            env.from_string(d["rocm_ernic_setup_pciids_device_entry"]).render(**d),
             "1002  DSC Ethernet Controller",
         )
         self.assertEqual(
-            env.from_string(d["ionic_image_prep_pciids_subsystem_entry"]).render(**d),
+            env.from_string(d["rocm_ernic_setup_pciids_subsystem_entry"]).render(**d),
             "1dd8 5400  ROCm Emulated RDMA NIC",
         )
 
@@ -336,7 +337,7 @@ class FleetRoleInstallsTheRulesTest(unittest.TestCase):
 
     Checking that the default names a file that exists is not the same as
     checking that the task guarded by it runs: the task is `when:
-    ernic_fleet_udev_rules_src | length > 0`, so a default reverted to "" --
+    rocm_ernic_setup_udev_rules_src | length > 0`, so a default reverted to "" --
     which is what it was, and why the fleet inherited the image's 0x100a
     rules -- leaves every id assertion in this file green while no rules are
     installed at all. No lane runs this role against a guest, so the
@@ -367,7 +368,7 @@ class FleetRoleInstallsTheRulesTest(unittest.TestCase):
         """The regression that put 64 NICs on a fleet with no rules at all.
 
         These tasks lived in driver.yml, which main.yml includes only
-        `when: ernic_fleet_ionic_modules_dir | length > 0`. That dir is empty
+        `when: rocm_ernic_setup_ionic_modules_dir | length > 0`. That dir is empty
         by default and is meant to be -- in-tree ionic binds the emulated
         device natively since rocm-ernic@3fb74d1 -- so the documented
         configuration installed no udev rules and no modules-load.d entry
@@ -382,12 +383,6 @@ class FleetRoleInstallsTheRulesTest(unittest.TestCase):
             "depend on which build of the driver is loaded",
         )
 
-    def test_the_patched_module_install_stays_conditional(self):
-        # The other half: the patched modules ARE optional, so driver.yml
-        # must keep its gate or every fleet needs a DKMS build it has no use
-        # for.
-        self.assertIn("when", self._include_of("driver.yml"))
-
     def _copy_task(self) -> dict:
         found = [
             t for t in self.tasks
@@ -400,7 +395,7 @@ class FleetRoleInstallsTheRulesTest(unittest.TestCase):
         copy = self._copy_task()["ansible.builtin.copy"]
         self.assertEqual(
             jinja2.Environment().from_string(copy["src"]).render(**self.defaults),
-            self.defaults["ernic_fleet_udev_rules_src"],
+            self.defaults["rocm_ernic_setup_udev_rules_src"],
         )
 
     def test_the_condition_is_true_under_the_defaults(self):
@@ -431,7 +426,7 @@ class NetcfgDiscoveryTest(unittest.TestCase):
     def setUpClass(cls):
         _require(jinja2 is not None and yaml is not None, "Jinja2 and PyYAML")
         values = _defaults(FLEET_ROLE)
-        values.setdefault("ernic_fleet_nic_subnet", "192.168.100")
+        values.setdefault("rocm_ernic_setup_nic_subnet", "192.168.100")
         env = jinja2.Environment(
             loader=jinja2.FileSystemLoader(str(FLEET_ROLE / "templates")),
             keep_trailing_newline=True,

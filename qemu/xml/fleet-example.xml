@@ -37,19 +37,6 @@
   <ernic-stats-port>9840</ernic-stats-port>
   <ernic-nofile>65536</ernic-nofile>
 
-  <!-- ── LMCache ──────────────────────────────────────────────────────── -->
-  <lmcache-enable>true</lmcache-enable>
-  <lmcache-coord-port>8100</lmcache-coord-port>
-  <!-- chunk size in bytes -->
-  <lmcache-server-chunk-size>524288</lmcache-server-chunk-size>
-  <lmcache-server-hash-algo>sha256</lmcache-server-hash-algo>
-  <lmcache-server-l2-prefetch-policy>retain</lmcache-server-l2-prefetch-policy>
-  <lmcache-server-max-workers>4</lmcache-server-max-workers>
-  <lmcache-guest-seccomp-unconfined>false</lmcache-guest-seccomp-unconfined>
-  <lmcache-guest-ionic-bind-new-id>false</lmcache-guest-ionic-bind-new-id>
-  <lmcache-guest-ib-device-name>rocmernic0</lmcache-guest-ib-device-name>
-  <lmcache-guest-l2-prefetch-policy>retain</lmcache-guest-l2-prefetch-policy>
-
   <!-- ── Metrics ──────────────────────────────────────────────────────── -->
   <!--
     Directories are host paths.  gen-compose bind-mounts them and chowns

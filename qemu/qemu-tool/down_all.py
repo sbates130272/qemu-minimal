@@ -143,7 +143,7 @@ def _teardown_cmd(stack: Stack) -> list[str]:
         # the kind this command exists to clean up.
         if env_file.is_file():
             cmd += ["--env-file", str(env_file)]
-    # Every profile, or the metrics and lmcache services are filtered out of
+    # Every profile, or the metrics services are filtered out of
     # the teardown on a compose version that does that.
     cmd += ["--profile", "*", "down", "--remove-orphans"]
     return cmd

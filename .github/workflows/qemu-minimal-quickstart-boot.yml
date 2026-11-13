@@ -124,11 +124,11 @@ jobs:
     - name: Generate temp env from fleet XML
       run: |
         FLEET_ENV=$(mktemp /tmp/quickstart-XXXXXX.env)
-        qemu-tool fleet-to-env --fleet-file "$FLEET_FILE" > "$FLEET_ENV"
+        qemu-tool fleet-to-env --xml "$FLEET_FILE" > "$FLEET_ENV"
         echo "FLEET_ENV=$FLEET_ENV" >> "$GITHUB_ENV"
 
     # One guest, no TAP. Written as an overlay rather than an edit:
-    # --fleet-file is repeatable and last wins, so qemu/xml/quickstart.xml
+    # --xml is repeatable and last wins, so qemu/xml/quickstart.xml
     # stays the file a reader diffs and the file report-for-quickstart runs.
     #
     # ERNIC_TAP=false is safe HERE and nowhere else: the TAP is the guests'
@@ -161,8 +161,8 @@ jobs:
           exit 1
         }
         # Regenerate FLEET_ENV with both layers merged so docker compose gets
-        # the overlay values (VM_COUNT=1, etc.) without a separate --fleet-file arg.
-        qemu-tool fleet-to-env --fleet-file "$FLEET_FILE" --fleet-file "$OVERLAY" > "$FLEET_ENV"
+        # the overlay values (VM_COUNT=1, etc.) without a separate --xml arg.
+        qemu-tool fleet-to-env --xml "$FLEET_FILE" --xml "$OVERLAY" > "$FLEET_ENV"
 
     # Boot it. `up` stops as soon as the rocm-ernic container is healthy, and
     # --yes makes every prompt take its default (which is also what happens
@@ -177,8 +177,8 @@ jobs:
         setpriv --reuid "$CIUSER_UID" --regid "$CIUSER_UID" --init-groups \
           env HOME="$CIUSER_HOME" \
           qemu-tool quick-start up \
-            --fleet-file "$FLEET_FILE" \
-            --fleet-file "$OVERLAY" \
+            --xml "$FLEET_FILE" \
+            --xml "$OVERLAY" \
             --stack-dir "$STACK_DIR" \
             --key-dir "$KEY_DIR" \
             --no-metrics \
@@ -268,7 +268,7 @@ jobs:
         g lsmod | grep -E '^ionic' || echo "note: no ionic modules listed"
 
         # Resolve the device name, never hardcode it: the published image
-        # ships no udev/99-rocm-ernic.rules, so the IB device keeps its
+        # ships no 99-rocm-ernic.rules, so the IB device keeps its
         # kernel name (rocep0s5, not rocm-rdma-ernic0).
         IB=$(g ibv_devinfo -l | sed -n '2p' | tr -d ' \t\r')
         [ -n "$IB" ] || {
@@ -416,8 +416,8 @@ jobs:
         setpriv --reuid "$CIUSER_UID" --regid "$CIUSER_UID" --init-groups \
           env HOME="$CIUSER_HOME" qemu-tool down --all --yes || true
         qemu-tool quick-start down \
-          --fleet-file "$FLEET_FILE" \
-          --fleet-file "$OVERLAY" \
+          --xml "$FLEET_FILE" \
+          --xml "$OVERLAY" \
           --stack-dir "$STACK_DIR" \
           --yes || true
         left="$(docker ps -q --filter label=com.docker.compose.project=pr-boot | wc -l)"

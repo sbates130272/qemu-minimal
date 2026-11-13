@@ -1,0 +1,80 @@
+---
+# What each patch is for is in the script, beside the patch.
+- name: Patch the amdgpu DKMS source for emulation
+  ansible.builtin.script:
+    cmd: amdgpu-emu-patches.py
+    executable: python3
+  become: true
+  register: _rocjitsu_setup_amdgpu_patches
+  changed_when: "'patched ' in _rocjitsu_setup_amdgpu_patches.stdout"
+
+- name: Check whether amdgpu DKMS is installed for the running kernel
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      dkms status amdgpu -k "$(uname -r)" 2>/dev/null \
+        | grep -c installed || true
+    executable: /bin/bash
+  become: true
+  register: _rocjitsu_setup_amdgpu_installed
+  changed_when: false
+
+# Nothing else builds amdgpu: the package's postinst was deferred so it would
+# not build the unpatched source. So this cannot be gated on a patch having
+# changed alone -- on a re-run every patch is already applied, and a guest
+# with no module would be left with none.
+#
+# The version comes from the source directory, not from `dkms status`: the
+# deferred postinst never ran `dkms add`, so status prints nothing at all.
+- name: Build and install the patched amdgpu DKMS module
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      SRC=$(ls -d /usr/src/amdgpu-* 2>/dev/null | sort | tail -1) || true
+      VER=${SRC#/usr/src/amdgpu-}
+      if [ -z "$VER" ]; then
+        echo "no amdgpu DKMS source in /usr/src" >&2
+        exit 1
+      fi
+      dkms status amdgpu/"$VER" | grep -q . || dkms add amdgpu/"$VER"
+      dkms build amdgpu/"$VER" -k "$(uname -r)" --force
+      dkms install amdgpu/"$VER" -k "$(uname -r)" --force
+    executable: /bin/bash
+  become: true
+  changed_when: true
+  when: >-
+    _rocjitsu_setup_amdgpu_patches is changed
+    or _rocjitsu_setup_amdgpu_installed.stdout | trim == '0'
+
+# Undoing rocm_setup_amdgpu_dkms_defer_build is the caller's job by the
+# collection's own contract: it sets the marker and the diversion and leaves
+# them for whoever asked to patch and build.
+- name: Restore DKMS autoinstall
+  ansible.builtin.file:
+    path: /etc/dkms/no-autoinstall
+    state: absent
+  become: true
+
+# Only when the diversion is there. Removing the stub first is what makes the
+# --remove a plain rename back; leave it and dpkg-divert refuses to clobber
+# it. Remove it with no diversion behind it and the guest has no
+# update-initramfs at all.
+- name: Check whether update-initramfs is diverted
+  ansible.builtin.stat:
+    path: /usr/sbin/update-initramfs.distrib
+  register: _rocjitsu_setup_amdgpu_diverted
+  become: true
+
+- name: Put the real update-initramfs back
+  when: _rocjitsu_setup_amdgpu_diverted.stat.exists
+  become: true
+  block:
+    - name: Remove the no-op update-initramfs
+      ansible.builtin.file:
+        path: /usr/sbin/update-initramfs
+        state: absent
+
+    - name: Undivert update-initramfs
+      ansible.builtin.command:
+        cmd: dpkg-divert --remove --rename --quiet /usr/sbin/update-initramfs
+        removes: /usr/sbin/update-initramfs.distrib

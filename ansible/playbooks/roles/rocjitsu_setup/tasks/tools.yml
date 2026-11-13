@@ -1,0 +1,59 @@
+---
+- name: Install the emulated-GPU guest packages
+  ansible.builtin.package:
+    name: "{{ rocjitsu_setup_tools_packages }}"
+    state: present
+    update_cache: true
+  become: true
+
+# Downloaded in the guest, not on the controller: the controller can sit
+# behind a TLS-inspecting proxy whose CA it does not trust, where a GitHub
+# release-asset fetch fails and the same fetch from the guest succeeds.
+- name: Install hsa-snoop
+  ansible.builtin.apt:
+    deb: "{{ rocjitsu_setup_tools_hsa_snoop_url }}"
+  become: true
+
+# The package ships a system-wide collector for its :9488 exporter. It holds
+# trace_pipe, which admits one reader, and against a single-threaded emulator
+# it competes with the dispatch under test. Disabled rather than masked: this
+# is a measurement decision, not a judgement that the unit is wrong.
+# hsa-snoop is invoked per workload by test.yml instead.
+- name: Disable the hsa-snoop collector service
+  ansible.builtin.systemd_service:
+    name: hsa-snoop-prometheus.service
+    enabled: false
+    state: stopped
+  become: true
+
+# gpuagent assertion-fails on an emulated gfx1250, where amdsmi answers
+# AMDSMI_STATUS_NOT_SUPPORTED for temperature, clock and utilisation, and
+# wedges the device: the next process to open /dev/kfd gets -EBUSY.
+# Not fatal when the unit does not exist.
+- name: Disable gpuagent
+  ansible.builtin.systemd_service:
+    name: gpuagent
+    enabled: false
+    state: stopped
+  become: true
+  failed_when: false
+
+- name: Install RVS
+  ansible.builtin.include_tasks: rvs.yml
+  when: rocjitsu_setup_tools_install_rvs | bool
+
+- name: Create /etc/motd.d
+  ansible.builtin.file:
+    path: /etc/motd.d
+    state: directory
+    mode: "0755"
+  become: true
+
+# Shown at every SSH login, so that someone who re-enables either service
+# above knows what it costs.
+- name: Install the login message
+  ansible.builtin.template:
+    src: motd.j2
+    dest: /etc/motd.d/qemu-minimal
+    mode: "0644"
+  become: true

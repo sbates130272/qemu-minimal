@@ -1,9 +1,7 @@
 // Alloy on the HOST: ships every stack container's logs to Loki.
 //
-// This is the outside half. The guests run their own Alloy (installed by the
-// lmcache_guest role) because a container log on the host and a systemd unit
-// inside a VM are not reachable by the same collector -- the VM's journal is
-// behind QEMU, not on the Docker socket.
+// Containers only. A guest's journal is behind QEMU, not on the Docker
+// socket, so nothing here sees inside a VM.
 //
 // Not generated: it discovers containers at run time rather than being told
 // VM_COUNT of them, so nothing here changes when the fleet is resized.

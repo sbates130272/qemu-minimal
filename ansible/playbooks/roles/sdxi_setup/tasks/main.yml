@@ -1,0 +1,76 @@
+---
+# sdxi_setup: build and install the SDXI driver in a helios-tray guest.
+#
+# Ordering: source fetch and build first; udev rule and group are independent
+# of the build result and can run after.
+
+- name: Assert the source ref is set
+  ansible.builtin.assert:
+    that: sdxi_setup_source_ref | length > 0
+    fail_msg: >-
+      sdxi_setup_source_ref must be set to a rocm-sdxi commit SHA.
+      vm-rocm-golden.yml sets it; pass -e sdxi_setup_source_ref to override.
+
+- name: Resolve the target kernel name
+  ansible.builtin.set_fact:
+    sdxi_setup_kernel_resolved: >-
+      {{ sdxi_setup_kernel if sdxi_setup_kernel | length > 0
+         else ansible_kernel }}
+
+- name: Check the installed source ref stamp
+  ansible.builtin.slurp:
+    src: /etc/sdxi-guest-ref
+  register: sdxi_setup_installed_ref
+  failed_when: false
+  changed_when: false
+
+- name: Decide whether build and install have to run
+  ansible.builtin.set_fact:
+    sdxi_setup_install_needed: >-
+      {{ sdxi_setup_force | bool
+         or sdxi_setup_installed_ref.failed | default(true) | bool
+         or (sdxi_setup_installed_ref.content | default('') | b64decode | trim)
+            != sdxi_setup_source_ref }}
+
+- name: Note that build/install is being skipped
+  when: not (sdxi_setup_install_needed | bool)
+  ansible.builtin.debug:
+    msg: >-
+      SDXI driver at ref {{ sdxi_setup_source_ref }} is already installed;
+      skipping build. Force with -e sdxi_setup_force=true.
+
+- name: Fetch source, build and install the driver
+  when: sdxi_setup_install_needed | bool
+  ansible.builtin.include_tasks: build_install.yml
+
+- name: Create the sdxi group
+  ansible.builtin.group:
+    name: "{{ sdxi_setup_group }}"
+    state: present
+    system: true
+
+- name: Add the user to the sdxi group
+  ansible.builtin.user:
+    name: "{{ sdxi_setup_user }}"
+    groups: "{{ sdxi_setup_group }}"
+    append: true
+  when: sdxi_setup_user | length > 0
+
+- name: Install the udev rule
+  when: sdxi_setup_udev_rules_src | length > 0
+  ansible.builtin.copy:
+    src: "{{ sdxi_setup_udev_rules_src }}"
+    dest: /etc/udev/rules.d/99-sdxi.rules
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload udev rules
+
+- name: Enable module autoload
+  when: sdxi_setup_autoload | bool
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/sdxi.conf
+    content: "sdxi_char\n"
+    owner: root
+    group: root
+    mode: "0644"

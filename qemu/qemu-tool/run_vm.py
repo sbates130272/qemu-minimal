@@ -677,7 +677,7 @@ def _pci_check(bdf: str, dry_run: bool) -> None:
             sys.exit(
                 f"ERROR: Cannot access {vfio_dev} (IOMMU group for {bdf}).\n"
                 f"       Fix: sudo chmod 660 {vfio_dev}\n"
-                f"       Persistent: ../udev/install-vfio-rules"
+                f"       Persistent: scripts/install-vfio-rules"
             )
 
 

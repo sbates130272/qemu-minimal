@@ -4,6 +4,137 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **`qemu/xml/rocm-golden.xml`, the performance-tracking fleet.** Two guests
+  from the published rocm-golden qcow2, each with a GPU, an NVMe, an ernic with
+  P4 in guest scope and an SDXI device. Every tracked benchmark runs against
+  this one stack.
+
+- **Three consolidated roles.** `rocjitsu_setup` (firmware, amdgpu, guest
+  tools, live GPU tests), `rocm_ernic_setup` (image preparation, device naming,
+  boot-time addressing) and `sdxi_setup`. Callers reach the parts with
+  `tasks_from`. All four repo-local roles, `image_slim` included, are now
+  linted at the `production` profile in CI; two were before.
+
+- **Ernic P4 bandwidth on the performance page.** The metric was tracked but
+  missing from the page's badges and its recent-runs table, which are now
+  generated from the metric list rather than written out.
+
+### Changed
+
+- **`report-for-vm-rocm-golden` is the one benchmark workflow.** It replaces
+  `report-for-vm-rocjitsu` and absorbs the ernic P4 and SDXI benchmarks from
+  `report-for-vm-ernic` and `report-for-helios`. It brings the stack up with
+  `qemu-tool quick-start` from `rocm-golden.xml`, carries no settings in its
+  `env:`, and uploads only `badge-*.json`, as `perf-rocjitsu`,
+  `perf-hipfile-fio`, `perf-ernic` and `perf-helios`.
+
+- **The published site carries documentation and performance trends only.**
+  `publish-pages` fetches the four `perf-*` artifacts into a scratch directory
+  and publishes nothing from them but the generated `perf/` page.
+  `render-site-perf.py` takes `--input-dir` and no longer reads report pages.
+
+- **Two image playbooks instead of seven.** `vm-rocm-golden.yml` imports
+  `vm-basic.yml` once and carries the ernic, ROCm and rocjitsu plays itself;
+  `--tags configure` and `--tags test` are its live-guest entry points.
+  `vm-basic.yml` now runs once per bake rather than twice. The slim pass is a
+  play in each playbook rather than an imported file.
+
+- **The rocjitsu play is three role calls.** The four inline amdgpu source
+  patches became one script, `amdgpu-emu-patches.py`, checked byte for byte
+  against the heredocs it replaces. Firmware generation, which was written out
+  in four places, is one task file; a live guest selects it with
+  `rocjitsu_setup_firmware_live`. The names CI and the image bake already pass
+  (`rocjitsu_firmware_ip_discovery`, `rocjitsu_generate_firmware`,
+  `vm_rocjitsu_*`) still work.
+
+- **Fleet inventory variables renamed.** `lmcache_guest_rocjitsu_image` is
+  `fleet_guest_rocjitsu_image` and `lmcache_guest_ernic_mac` is
+  `fleet_guest_ernic_mac`. The committed scale-out, mi355x and helios stacks
+  are regenerated.
+
+- **The ernic pins live in `vm-rocm-golden.yml`.** `ionic_kernel_pin` and
+  `ernic_source_pin` are defined once on its first play and shared with the
+  other two through YAML anchors. The SDXI pin is a variable on the SDXI play.
+
+- **`udev/` is gone.** `99-rocm-ernic.rules` and `99-sdxi.rules` are in their
+  roles' `files/`, replacing the symlinks that pointed at them. The host-side
+  `install-vfio-rules` and `99-qemu-minimal-vfio.rules` are in `scripts/`.
+
+- **Every subcommand takes its settings as `--xml`.** It replaces
+  `--fleet-file` on `quick-start`, `gen-compose`, `fleet-to-env` and `gen-vm`,
+  and `--env-file` on `run-vm`, `compose`, `inspect`, `ssh`, `qcow` and
+  `check`. Neither old spelling is accepted. `inspect`, `ssh`, `qcow`, `check`
+  and `run-vm` could not read fleet XML at all before; one loader now handles
+  both formats, merging XML layers with each other before converting them.
+  `docker compose --env-file` is docker's own flag and is unchanged.
+
+- **The `rocm-ernic` smoke-test workflow is `smoke-test-vm-rocm-golden`**,
+  file, name and job.
+
+- **`overlay-ci.xml` names its guests `fleet-ci`**, not `lmcache-ci`.
+
+### Removed
+
+- **LMCache.** The `lmcache_guest` role, `fleet-lmcache.yml`,
+  `qemu/docker/lmcache/`, the `lmcache-stats` subcommand, the coordinator and
+  exporter services and their scrape jobs, the `<lmcache-*>` fleet XML
+  elements, the LMCache dashboards and the panels for it on the fleet
+  dashboard. A fleet file that still carries the elements parses; they are
+  ignored. Guests no longer ship their journals to Loki, which was the guest
+  Alloy that role installed.
+
+- **Report pages and the "all reports green" badge.** `docs/reports.md`, the
+  report-freshness table and `perf/badge-all-green.json` are gone, with the
+  README badges for them.
+
+- **Workflows:** `report-for-vm-ernic`, `report-for-helios`,
+  `report-for-lmcache`, `report-for-mi355x`, and the `vm-ernic`, `vm-rocjitsu`
+  and `vm-rocm` playbook-test lanes.
+
+- **Playbooks:** `vm-ernic.yml`, `vm-rocjitsu.yml`, `vm-rocm.yml`,
+  `vm-slim.yml` and `vm-helios.yml`. There is no longer a playbook that bakes
+  a ROCm-only, ernic-only or rocjitsu-only image, or a helios guest on in-tree
+  amdgpu. The `helios` quick-start flavor is unaffected.
+
+- **Roles:** `ionic_image_prep`, `ernic_fleet_guest`, `rocjitsu_gpu_test` and
+  `sdxi_guest`, each folded into one of the three above. The task files of
+  `ernic_fleet_guest` that no playbook reached — login, packages, patched
+  modules, memlock, perftest, netplan — are deleted rather than moved.
+
+- **Settings files:** `overlay-dense.xml` and `overlay-helios-ci.xml`, which
+  nothing read, and `vars/github-api.yml`, `vars/sdxi-pins.yml` and
+  `vars/ernic-pins.yml`.
+
+### Fixed
+
+- **The P4 bandwidth benchmark used one hostname for two networks.**
+  `generate-vm-report.sh` SSHed to guest 2 to start the server and then told
+  guest 1 to dial that same name over RDMA. It now takes the RDMA address
+  separately (`ERNIC_P4_VM2_RDMA_ADDR`) and resolves the IB device name in the
+  guest instead of assuming `rocm-rdma-ernic0`.
+
+- **A GitHub token was offered to hosts that are not GitHub.** The playbooks
+  set an `Authorization` header as a default on every `uri` call. The
+  collection roles already authenticate their own GitHub requests, so the only
+  calls the default reached were a localhost metrics check and the kernel
+  index fetch, which carried an override to keep the token away from
+  kernel.ubuntu.com. The default is removed.
+
+- **`update-initramfs` could be deleted with nothing behind it.** Undoing the
+  deferred amdgpu-dkms build removed the no-op stub unconditionally and then
+  undiverted only if a diversion existed. The removal is now gated on the
+  diversion.
+
+- **`gen-vm --fleet-file` read the file and then ignored it.** The fleet
+  XML was converted to settings keys and merged as though they were field
+  names, so none matched and every value was dropped without a word. A fleet
+  file now sets the guest's vCPUs, memory, images directory and backing image
+  the way an env-format file always did.
+
+- **`tests/test_quick_start.py` named two workflows that no longer exist.**
+
 ## [v1.7.0] - 2026-11-12
 
 ### Added

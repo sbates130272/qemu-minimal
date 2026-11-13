@@ -10,26 +10,24 @@
 # is why this role deletes and trims in one pass rather than leaving the trim
 # to the caller.
 
-# The master switch, and the mechanism that keeps this role from running in
-# the middle of a chain. vm-slim.yml is imported as the last line of every
-# leaf playbook, but four of those leaves are themselves imported by another
-# (vm-basic by vm-rocm and vm-ernic, vm-rocm by vm-rocjitsu, both of those by
-# vm-rocm-golden), so an ungated import would slim up to six times per bake
-# with real work still to come after each one. Those parents pass
-# image_slim_enable: false on the import; see the comment in vm-slim.yml for
-# why that is a correctness fix and not an optimisation.
+# The master switch, and what keeps this role from running in the middle of a
+# bake. vm-basic.yml ends with a slim play, and vm-rocm-golden.yml imports
+# vm-basic.yml with real work still to come: everything this role removes is
+# state those later plays use. So the import passes image_slim_enable: false,
+# and the golden slims once itself, after everything that builds. That is a
+# correctness fix, not an optimisation.
 image_slim_enable: true
 
 # ── apt ──────────────────────────────────────────
 # /var/cache/apt/archives is the single largest reclaimable item on a ROCm
 # guest -- every .deb the ROCm install downloaded is still sitting in it, and
-# nothing in this repo cleaned it (ionic_image_prep does an autoclean, which
+# nothing in this repo cleaned it (rocm_ernic_setup does an autoclean, which
 # only drops packages no longer downloadable, not the ones just installed).
 #
 # The lists are the smaller half and cost a human an `apt-get update` before
 # their next install. No automated step pays that cost: the post-boot configure
-# play installs nothing (ernic_guest_build_deps is false in both vm-ernic.yml
-# plays), rocjitsu_gpu_test installs nothing, and generate-vm-report.sh only
+# play installs nothing (ernic_guest_build_deps is false in both vm-rocm-golden.yml
+# plays), rocjitsu_setup's test tasks install nothing, and generate-vm-report.sh only
 # runs dpkg-query.
 image_slim_apt_clean: true
 image_slim_apt_lists: true
@@ -38,7 +36,7 @@ image_slim_apt_lists: true
 # Only the per-module build/ directories, which dkms itself removes after a
 # successful build and which it recreates on the next one. Deliberately not
 # the source/ and installed state under the same tree: that is what makes
-# dkms autoinstall work on a later kernel upgrade, which vm-rocjitsu.yml
+# dkms autoinstall work on a later kernel upgrade, which vm-rocm-golden.yml
 # restores /etc/dkms/no-autoinstall for on purpose.
 image_slim_dkms_build_trees: true
 
@@ -102,7 +100,7 @@ image_slim_cloud_init_logs: true
 # image, wrong for one a human will debug on.
 image_slim_purge_old_kernels: false
 
-# /usr/src/amdgpu-* is the tree vm-rocjitsu.yml patches and rebuilds. Removing
+# /usr/src/amdgpu-* is the tree vm-rocm-golden.yml patches and rebuilds. Removing
 # it means the guest can never rebuild amdgpu against a future kernel, which is
 # the opposite of what the no-autoinstall restore in that playbook is for.
 # ionic-ernic-* is deliberately not in this list: it is the DKMS source of a
@@ -112,7 +110,7 @@ image_slim_dkms_source_globs:
   - amdgpu-*
 
 # See image_slim_scratch_keep. Off unless the image is published to a consumer
-# who will never run `vm-ernic.yml --tags configure`.
+# who will never run `vm-rocm-golden.yml --tags configure`.
 image_slim_drop_ionic_src: false
 image_slim_ionic_src_dir: /var/tmp/ionic-src
 

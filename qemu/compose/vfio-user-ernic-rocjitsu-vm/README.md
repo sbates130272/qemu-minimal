@@ -30,7 +30,7 @@ ssh -p 2222 ubuntu@localhost
 ## Environment variables
 
 All of these live in a fleet XML config (copy `qemu/xml/fleet-example.xml`),
-passed via `--fleet-file` to `gen-vm`, `run-vm` and every compose stack.
+passed via `--xml` to `gen-vm`, `run-vm` and `qemu-tool compose`.
 
 | Variable | Default | Description |
 |---|---|---|

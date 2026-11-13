@@ -1,18 +1,196 @@
 ---
-# Bake ernic, rocjitsu, SRQ+P4 ionic and SDXI into one VM image.
-# Runs vm-ernic then vm-rocjitsu, then the SRQ+P4 ionic stack and SDXI
-# inline. All are idempotent.
+# The one image this repo bakes beyond the plain vm-basic guest: ROCm, an
+# emulated rocjitsu GPU, the rocm-ernic RDMA NIC with SRQ and P4, and SDXI.
 #
-# Both ernic and rocjitsu imports suppress their own trailing slim play: the
-# only slim pass is the one at the end of this file.
+#   bake       qemu-tool gen-vm --ansible-playbook ansible/playbooks/vm-rocm-golden.yml
+#   configure  ansible-playbook -i HOST, vm-rocm-golden.yml --tags configure
+#   test       ansible-playbook -i HOST, vm-rocm-golden.yml --tags test
+#
+# The bake runs inside a build VM with no vfio-user device attached, so
+# nothing in it can touch the NIC or the GPU. "configure" and "test" are the
+# two plays that need them; both are tagged never and run against a live
+# guest behind a compose stack.
+#
+# Order is load-bearing in three places, each noted where it applies: the
+# mainline kernel before rocm_setup, the amdgpu rebuild after it, and the
+# slim pass after everything that builds.
 
-- import_playbook: vm-ernic.yml
+# No slim pass here: every play below still needs the apt lists, /tmp and the
+# build trees it would remove. The one slim pass is near the end of this file.
+- import_playbook: vm-basic.yml
+  tags: [install]
   vars:
+    vm_install_amd_ca: false
+    user_setup_dotfiles_enable: true
     image_slim_enable: false
 
-- import_playbook: vm-rocjitsu.yml
+- name: Install the ernic driver prerequisites
+  hosts: all
+  gather_facts: true
+  become: true
+  tags: [install]
   vars:
-    image_slim_enable: false
+    # The two ernic pins, written once. Plays cannot share a vars block, so
+    # the other two plays that need them take these through the YAML anchors.
+    #
+    # Mainline kernel ref. drivers/infiniband/hw/ionic merged for 6.18 and
+    # ib_umem_get_va landed after 7.0, so no Ubuntu release ships a kernel
+    # that can build ionic_rdma. Must stay within a point release of
+    # IONIC_KERNEL_REF in the collection's cmake/ErnicKernelModule.cmake:
+    # driver_ionic.yml compares major.minor and fails the build otherwise.
+    ionic_kernel_pin: &ionic_kernel_pin v7.2.6
+    # Commit ernic_source checks out. The role defaults to "main", which would
+    # clone upstream HEAD while requirements.yml installs the collection from
+    # a fixed SHA. Keep this equal to the version: field in
+    # ansible/requirements.yml and bump both together.
+    ernic_source_pin: &ernic_source_pin 90434a237232275fc8002cb3a6b5121ba836c594
+    # No GPU passthrough: the GDA patches are neither wanted nor usable.
+    ernic_gpu_passthrough: false
+    # The collection assumes a build toolchain; rocm_ernic_setup installs it.
+    ernic_guest_build_deps: false
+    # One kernel pin, read by both sides. driver_ionic.yml fails the build
+    # when the sources and the guest kernel disagree on major.minor, and this
+    # repo installs the kernel itself, so it pins both to the same ref.
+    ernic_ionic_kernel_ref: "{{ ionic_kernel_pin }}"
+    rocm_ernic_setup_kernel_ref: "{{ ionic_kernel_pin }}"
+    ernic_source_repo_version: "{{ ernic_source_pin }}"
+  tasks:
+    # The pinned mainline kernel and the build toolchain. Upstream assumes a
+    # guest already prepared this way; this repo builds its own.
+    #
+    # FIRST, and before the ROCm play in particular: the kernel .debs run
+    # update-initramfs, which rocm_setup replaces with a no-op for the whole
+    # amdgpu-dkms install. A kernel installed after that point lands with no
+    # initramfs and the guest does not boot. It also has to precede every
+    # DKMS build, which must target the kernel the guest boots.
+    - name: Install the pinned mainline kernel and the build toolchain
+      ansible.builtin.include_role:
+        name: rocm_ernic_setup
+        tasks_from: image_prep
+
+    # Resolved here rather than inside the rescue below, where a missing or
+    # reshaped source tree would be swallowed and reported as success.
+    - name: Resolve the rocm-ernic source checkout
+      ansible.builtin.include_role:
+        name: sbates130272.rocm_ernic.ernic_source
+
+    # Builds the ionic-ernic DKMS package and the rdma-core provider into the
+    # image. The role ends with checks that need the NIC, which is not there
+    # during a bake; the rescue tolerates exactly those.
+    - name: Install the ionic modules and rdma-core provider (hardware-free build)
+      block:
+        - name: Run ernic_guest_setup without a device
+          ansible.builtin.include_role:
+            name: sbates130272.rocm_ernic.ernic_guest_setup
+          vars:
+            ernic_configure_nic: false
+            ernic_guest_preflight_device: false
+      rescue:
+        # Matched by name, and the list grows as upstream adds hardware
+        # checks. Anything else -- a DKMS build error, a staging failure --
+        # is re-raised rather than reported as an installed module.
+        - name: Re-raise an ernic_guest_setup failure that is not a hardware check
+          vars:
+            ernic_hardware_checks:
+              - 'RDMA device exists'
+              - 'lspci reports the emulated NIC'
+          ansible.builtin.fail:
+            msg: >-
+              ernic_guest_setup failed at
+              "{{ ansible_failed_task.name | default('unknown task') }}":
+              {{ ansible_failed_result.msg | default('no message') }}
+          when: >-
+            ernic_hardware_checks
+            | select('in', ansible_failed_task.name | default(''))
+            | list | length == 0
+
+        - name: Note the expected hardware-free check failure
+          ansible.builtin.debug:
+            msg: >-
+              ernic_guest_setup's device check failed as expected (no ernic
+              NIC during a bake). The DKMS module is installed and binds when
+              the guest boots behind a stack.
+
+- name: Install ROCm
+  hosts: all
+  gather_facts: true
+  # rocm_setup escalates for itself; see vm-basic.yml on why the play does not.
+  become: false
+  tags: [install]
+  vars:
+    rocm_setup_user: "{{ vm_username | default('ubuntu') }}"
+    rocm_setup_repo_stream: therock
+    rocm_setup_minimal: true
+    # Not the role default, which names hipcc and rocminfo: neither is a
+    # standalone package in the therock stream, and both are pinned to
+    # never-install below. amdrocm-hipfile-dev is the hipFile SDK the
+    # benchmarks build against; amdrocm-runtime-dev does not pull it in.
+    rocm_setup_minimal_packages:
+      - libstdc++-14-dev
+      - amdrocm-runtime-dev
+      - amdrocm-hipfile-dev
+    # QEMU guests, never WSL. Pinned because a non-false wsl mode silently
+    # drops the minimal path back to the full amdrocm meta-package.
+    rocm_setup_wsl: false
+    rocm_setup_wsl_install: false
+    rocm_setup_skip_reboot: false
+    rocm_setup_run_checks: true
+    rocm_setup_run_gpu_checks: false
+    rocm_setup_install_metrics_exporter: true
+    # rocm-cli installs by piping an unpinned branch's script to sh; xrocmtop
+    # is an interactive UI on a headless image. Nothing here uses either.
+    rocm_setup_install_rocm_cli: false
+    rocm_setup_install_xrocmtop: false
+    # The guest boots the pinned mainline kernel installed above, so neither
+    # an HWE metapackage nor linux-generic belongs on it.
+    rocm_setup_extra_kernel_packages: []
+    rocm_setup_install_kernel_meta: false
+    # false keeps a local bake's distro upgrade; CI passes true as an extra
+    # var, which outranks this.
+    rocm_setup_skip_system_upgrade: "{{ vm_rocm_skip_system_upgrade | default(false) }}"
+    # 31.60 is the first driver release with amdgpu-dkms 7.1.9 and the
+    # gfx1250 blobs the "gap" firmware set sits beside. If that tree goes
+    # missing again, set rocjitsu_setup_firmware_set=full and drop the pin rather
+    # than falling back to an older driver.
+    rocm_setup_amdgpu_driver_version: "31.60"
+    # Install amdgpu-dkms without building it. rocjitsu_setup
+    # patches the source and builds it once; the postinst build of the
+    # unpatched source took ~25 minutes, was always thrown away, and on this
+    # kernel does not even compile. The role sets /etc/dkms/no-autoinstall
+    # and diverts update-initramfs to a no-op -- the marker alone is not
+    # enough, because the package's own postinst then calls update-initramfs
+    # with a kernel version nothing wrote. rocjitsu_setup undoes both.
+    rocm_setup_amdgpu_dkms_defer_build: true
+  pre_tasks:
+    # Without this apt resolves rocminfo and hipcc from Ubuntu universe during
+    # the ROCm install: stale versions that crash against the newer runtime.
+    # The ROCm meta-package ships the right ones under /opt/rocm/core-*/bin.
+    - name: Pin ROCm-conflicting Ubuntu universe packages to never-install
+      ansible.builtin.copy:
+        dest: /etc/apt/preferences.d/rocm-no-distro-packages
+        content: |
+          {% for package in ['rocminfo', 'hipcc', 'rocm-smi-lib', 'libhsakmt1',
+                             'libhsa-runtime64-1', 'libhsa-runtime-dev',
+                             'libamdhip64-*'] %}
+          Package: {{ package }}
+          Pin: release o=Ubuntu
+          Pin-Priority: -1
+
+          {% endfor %}
+        mode: "0644"
+      become: true
+  roles:
+    - role: sbates130272.batesste.rocm_setup
+
+# What makes that driver bind an emulated GPU. The role's defaults say what
+# it can be told, under the vm_rocjitsu_* names the bake has always taken.
+- name: Prepare the guest for an emulated rocjitsu GPU
+  hosts: all
+  gather_facts: true
+  become: true
+  tags: [install]
+  roles:
+    - role: rocjitsu_setup
 
 # WHY A COMBINED PLAY
 #
@@ -39,14 +217,15 @@
 # Both patch series live in rocm-ernic -- patches/srq for the kernel half,
 # patches/rdma-core for the provider, patches/p4 for ernic_p4 -- reached
 # through the collection pin in ansible/requirements.yml plus the matching
-# source pin in vars/ernic-pins.yml. Nothing is vendored here.
+# source pin at the top of this file. Nothing is vendored here.
 - name: Build SRQ + P4 ionic stack into the guest
   hosts: all
   gather_facts: true
   become: true
-  vars_files:
-    - vars/ernic-pins.yml
   vars:
+    # Defined on the first play of this file.
+    ionic_kernel_pin: *ionic_kernel_pin
+    ernic_source_pin: *ernic_source_pin
     ernic_source_repo_version: "{{ ernic_source_pin }}"
     ionic_srqp4_stamp: /etc/ionic-srq-p4.json
     ionic_srqp4_stage_dir: /var/tmp/srq-p4
@@ -311,18 +490,18 @@
 
     - name: Install the rocm-ernic udev naming rules
       ansible.builtin.include_role:
-        name: ernic_fleet_guest
+        name: rocm_ernic_setup
         tasks_from: naming
       vars:
-        ernic_fleet_udev_rules_src: "{{ ernic_source_dir }}/udev/99-rocm-ernic.rules"
+        rocm_ernic_setup_udev_rules_src: "{{ ernic_source_dir }}/udev/99-rocm-ernic.rules"
 
     - name: Install rocm-ernic-netcfg.sh and its systemd unit
       ansible.builtin.include_role:
-        name: ernic_fleet_guest
+        name: rocm_ernic_setup
         tasks_from: network
       vars:
-        ernic_fleet_networkd_unmanaged: false
-        ernic_fleet_netcfg: true
+        rocm_ernic_setup_networkd_unmanaged: false
+        rocm_ernic_setup_netcfg: true
 
     - name: Report
       ansible.builtin.debug:
@@ -338,15 +517,15 @@
   hosts: all
   gather_facts: true
   become: true
-  vars_files:
-    - vars/sdxi-pins.yml
   vars:
-    sdxi_guest_source_repo: "https://github.com/ROCm/rocm-systems.git"
-    sdxi_guest_source_branch: "users/stebates/emulation-sdxi"
-    sdxi_guest_source_ref: "{{ sdxi_source_pin }}"
+    # The rocm-sdxi commit this image is built from. The role has no default
+    # on purpose: a moving ref baked into an image is not reproducible.
+    sdxi_setup_source_ref: "81cd4f8d117a862c188cc75358c95f7ab2abeb94"
   roles:
-    - role: sdxi_guest
+    - role: sdxi_setup
 
+# The one slim pass of the bake, after everything that builds: it removes the
+# apt lists, /tmp and the build trees the plays above still needed.
 - name: Slim the baked image
   hosts: all
   gather_facts: true
@@ -355,11 +534,56 @@
   roles:
     - role: image_slim
 
+
+# Needs the ernic vfio-user server running, so it is not part of a bake.
+- name: Configure the ernic NIC on a live guest
+  hosts: all
+  gather_facts: true
+  # ernic_guest_setup escalates nowhere itself -- it reloads udev and modprobes
+  # with no become at all -- so the play has to.
+  become: true
+  tags: [configure, never]
+  vars:
+    # Defined on the first play of this file.
+    ionic_kernel_pin: *ionic_kernel_pin
+    ernic_source_pin: *ernic_source_pin
+    ernic_guest_agent: false
+    ernic_guest_build_deps: false
+    ernic_gpu_passthrough: false
+    ernic_ionic_kernel_ref: "{{ ionic_kernel_pin }}"
+    ernic_source_repo_version: "{{ ernic_source_pin }}"
+    # The role asserts ernic_guest_vm_ip is non-empty. Upstream derives it per
+    # guest from an instance manifest as <subnet>.<10 * id>; there is no
+    # manifest here, so do the same arithmetic against an index of 1 and let a
+    # caller override either half with vm_index or vm_ip. The subnet is a role
+    # default upstream, but role defaults are not in scope when play vars are
+    # evaluated, so it is repeated.
+    ernic_nic_subnet: "192.168.200"
+    ernic_guest_vm_index: "{{ vm_index | default(1) }}"
+    ernic_guest_vm_ip: >-
+      {{ vm_ip | default(ernic_nic_subnet ~ '.'
+                         ~ (10 * (vm_index | default(1) | int))) }}
+  roles:
+    - role: sbates130272.rocm_ernic.ernic_guest_setup
+
+# Needs the rocjitsu vfio-user server running, so it is not part of a bake.
+- name: Run GPU workloads on a live guest
+  hosts: all
+  gather_facts: true
+  tags: [test, never]
+  tasks:
+    - name: Run the GPU workloads
+      ansible.builtin.include_role:
+        name: rocjitsu_setup
+        tasks_from: test
+
 - name: Install ip_discovery.bin from live rocjitsu and re-bind amdgpu
   hosts: all
   gather_facts: false
   tasks:
-    - name: Include amdgpu firmware tasks
+    - name: Install the firmware from the rocjitsu serving this guest
       ansible.builtin.include_role:
-        name: rocjitsu_gpu_test
-        tasks_from: amdgpu_firmware
+        name: rocjitsu_setup
+        tasks_from: firmware
+      vars:
+        rocjitsu_setup_firmware_live: true

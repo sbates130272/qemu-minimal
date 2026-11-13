@@ -1,0 +1,18 @@
+---
+galaxy_info:
+  role_name: rocm_ernic_setup
+  author: Stephen Bates
+  description: >-
+    Everything a guest image needs for the emulated rocm-ernic RDMA NIC that
+    the upstream collection does not provide: the pinned mainline kernel and
+    build toolchain, stable device names, module autoload, and an address
+    assigned at boot.
+  license: MIT
+  min_ansible_version: "2.18"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - noble
+        - resolute
+
+dependencies: []

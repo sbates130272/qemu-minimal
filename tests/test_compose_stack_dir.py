@@ -93,7 +93,7 @@ class TestStackDir(ComposeCase):
     def test_runs_docker_compose_in_that_directory(self):
         cdir = self._stack_dir()
         self._run(["compose", "--stack-dir", str(cdir),
-                   "--env-file", str(self._env_file()), "up", "-d"])
+                   "--xml", str(self._env_file()), "up", "-d"])
         self.assertEqual(Path(self.capture.cwd), cdir)
         self.assertEqual(self.capture.argv[-2:], ["up", "-d"])
 
@@ -123,7 +123,7 @@ class TestStackDir(ComposeCase):
         env = self._env_file()
         cdir = self._stack_dir(f"# env-sha256: deadbeef\n{_MINIMAL_COMPOSE}")
         self._run(["compose", "--stack-dir", str(cdir),
-                   "--env-file", str(env), "up", "-d"])
+                   "--xml", str(env), "up", "-d"])
         self.assertIn("generated from a different version", self.stderr)
         self.assertIn(str(env), self.stderr)
         # Warn, never block: `down` against a stale tree is the recovery path.
@@ -134,7 +134,7 @@ class TestStackDir(ComposeCase):
         digest = gen_compose.env_digest([env])
         cdir = self._stack_dir(f"# env-sha256: {digest}\n{_MINIMAL_COMPOSE}")
         self._run(["compose", "--stack-dir", str(cdir),
-                   "--env-file", str(env), "up", "-d"])
+                   "--xml", str(env), "up", "-d"])
         self.assertNotIn("generated from a different version", self.stderr)
 
 
@@ -162,7 +162,7 @@ class TestPassthrough(ComposeCase):
         cdir = self._stack_dir()
         env = self._env_file()
         self._run(["compose", "--stack-dir", str(cdir),
-                   "--env-file", str(env), "--profile", "metrics", "logs"])
+                   "--xml", str(env), "--profile", "metrics", "logs"])
         self.assertNotIn("--stack-dir", self.capture.argv)
         self.assertEqual(self.capture.argv.count("--env-file"), 1)
 
@@ -175,7 +175,7 @@ class TestPassthrough(ComposeCase):
 
 class TestDefaults(ComposeCase):
     def test_neither_flag_runs_the_default_stack(self):
-        self._run(["compose", "--env-file", str(self._env_file()), "ps"])
+        self._run(["compose", "--xml", str(self._env_file()), "ps"])
         self.assertEqual(
             Path(self.capture.cwd), compose._compose_dir(compose._DEFAULT_STACK)
         )
@@ -183,7 +183,7 @@ class TestDefaults(ComposeCase):
 
     def test_named_stack_still_resolves(self):
         self._run(["compose", "--stack", "vfio-user-ernic-2vm",
-                   "--env-file", str(self._env_file()), "ps"])
+                   "--xml", str(self._env_file()), "ps"])
         self.assertEqual(
             Path(self.capture.cwd), compose._compose_dir("vfio-user-ernic-2vm")
         )

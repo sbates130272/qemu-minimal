@@ -4,7 +4,7 @@ qemu\-tool \- run, generate and list QEMU virtual machines
 .SH SYNOPSIS
 .B qemu\-tool
 .RB [ \-\-version ]
-.I {quick\-start,check,down,run\-vm,gen\-vm,gen\-compose,compose,ernic\-stats,lmcache\-stats,list,inspect,ssh,qcow,man,fleet\-to\-env}
+.I {quick\-start,check,down,run\-vm,gen\-vm,gen\-compose,compose,ernic\-stats,list,inspect,ssh,qcow,man,fleet\-to\-env}
 .RI [ options ]
 .SH DESCRIPTION
 .B qemu\-tool
@@ -97,7 +97,7 @@ These options are accepted by both
 and
 .BR gen\-vm .
 .TP
-.BI \-\-env\-file " FILE"
+.BI \-\-xml " FILE"
 Read settings from
 .IR FILE
 instead of searching the default locations.
@@ -189,9 +189,9 @@ Anything still unknown is asked for on stdin. Every prompt has an answer it
 takes on its own when stdin is not a terminal, so a CI run needs no flags to
 stay non\-interactive \(em and the chosen answer is printed either way.
 .TP
-.BI \-\-fleet\-file " FILE"
+.BI \-\-xml " FILE"
 Fleet settings file (XML). Defaults to the bundled
-.IR qemu/env/quickstart.xml ,
+.IR qemu/xml/quickstart.xml ,
 which ships inside the wheel, so this works with no checkout. Repeatable;
 later files override keys set by earlier ones.
 .TP
@@ -259,7 +259,7 @@ Quickstart flavor to run.
 .B default
 Two guests each with an emulated gfx1250 GPU, one NVMe and one rocm-ernic NIC,
 driven by the bundled
-.IR qemu/env/quickstart.xml .
+.IR qemu/xml/quickstart.xml .
 This is the default when
 .B \-\-flavor
 is omitted.
@@ -267,13 +267,13 @@ is omitted.
 .B mi355x
 One VM with 8 GPUs, 8 ernics and 8 PCIe switches in a switched topology,
 driven by the bundled
-.IR qemu/env/mi355x-node.xml .
+.IR qemu/xml/mi355x-node.xml .
 The ansible configure-and-test step does not run for this flavor.
 .TP
 .B helios
 One VM with 4 gfx1250 GPUs, 8 ernics and one SDXI device, driven by the
 bundled
-.IR qemu/env/helios-tray.xml .
+.IR qemu/xml/helios-tray.xml .
 The ansible configure-and-test step does not run for this flavor.
 .RE
 .TP
@@ -641,7 +641,7 @@ for the full key list.
 Stack to generate. Default:
 .IR vfio\-user\-ernic\-rocjitsu\-scale\-out .
 .TP
-.BI \-\-fleet\-file " FILE"
+.BI \-\-xml " FILE"
 Fleet settings file (XML). Repeatable; later files override keys set by earlier
 ones. The generated header records one
 .I "# fleet\-file:"
@@ -745,31 +745,6 @@ Listen port. Default: 9840.
 .TP
 .BI \-\-addr " ADDR"
 Listen address. Default: 0.0.0.0.
-.SH LMCACHE\-STATS OPTIONS
-Serves LMCache coordinator metrics in Prometheus text format, the same shape
-as
-.BR ernic\-stats .
-Where that one reads stats files written by each ernic, this one polls the
-coordinator's HTTP API, so an unreachable coordinator is a scrape that
-reports nothing rather than a crash.
-.TP
-.BI \-\-coordinator\-url " URL"
-Base URL of the coordinator HTTP API. Default:
-.IR http://127.0.0.1:9300 .
-.TP
-.BI \-\-port " PORT"
-Listen port. Default: 9841, one past the ernic exporter so both can run on
-one host.
-.TP
-.BI \-\-addr " ADDR"
-Listen address. Default: 0.0.0.0.
-.TP
-.BI \-\-timeout " SECONDS"
-Per\-request timeout when polling the coordinator. Default: 5.
-.TP
-.B \-\-once
-Print one scrape to stdout and exit, instead of serving. Useful for checking
-what a scrape would contain without standing up Prometheus.
 .SH COMPOSE OPTIONS
 .TP
 .BI \-\-vm2\-name " NAME"
@@ -817,12 +792,10 @@ so an unrelated docker project is never adopted. There is no walk\-up: from
 anywhere in a checkout it would reach the committed stack directory and drive
 an 8\-VM stack under the name of a fleet.
 .TP
-.BI \-\-env\-file " FILE"
+.BI \-\-xml " FILE"
 Settings file handed to
 .BR "docker compose \-\-env\-file" .
-Repeatable, and each layer is passed through as its own
-.B \-\-env\-file
-in the same order:
+Repeatable, and the layers are handed to it in the same order:
 .B "docker compose"
 applies them last-wins too, so compose and
 .B qemu\-tool
@@ -841,7 +814,7 @@ path and where it was looked for, never a fall\-back to the search path: that
 is how a 32\-VM fleet ends up driven by an 8\-VM
 .IR qemu/.env .
 Passing
-.B \-\-env\-file
+.B \-\-xml
 overrides the memory, and layers that differ from the recorded ones are named
 in the staleness warning, which still re\-hashes the files' current bytes.
 .PP
@@ -1115,7 +1088,7 @@ rule nobody can remember.
 .BI \-\-vm\-name " NAME"
 Inspect a single VM. Default: every running VM.
 .TP
-.BI \-\-env\-file " FILE"
+.BI \-\-xml " FILE"
 Settings file. Overrides the search path, and is repeatable with later files
 winning key by key, as everywhere else.
 .TP
@@ -1181,7 +1154,7 @@ reference became unconditional. See
 .B SETTINGS FILE
 for that key.
 .TP
-.BI \-\-env\-file " FILE"
+.BI \-\-xml " FILE"
 Settings file to check against, repeatable, later files winning key by key.
 Without it the usual search path is used, and which file that found is itself
 part of the report \(em a stale
@@ -1306,7 +1279,7 @@ With
 show a separate NVMe images section listing each scratch disk by name,
 on-disk size and age. Without this flag, only the total NVMe usage is shown.
 .TP
-.BI \-\-env\-file " FILE"
+.BI \-\-xml " FILE"
 Settings file. Repeatable; later files win key by key. Used to resolve
 .B VM_IMAGES_DIR
 when
@@ -1336,7 +1309,7 @@ also take.
 .I VM
 Name of the running VM. Required.
 .TP
-.BI \-\-env\-file " FILE"
+.BI \-\-xml " FILE"
 Settings file. Repeatable; later files win.
 .TP
 .B \-\-strict\-host\-key
@@ -1375,10 +1348,10 @@ env-file syntax, one per line. Useful for inspecting the effective settings
 after overlay merging, or for feeding them to tools that read env files rather
 than XML.
 .TP
-.BI \-\-fleet\-file " FILE"
+.BI \-\-xml " FILE"
 Fleet settings file (XML). Repeatable; later files override keys set by earlier
 ones, in the same last-wins order as every other subcommand that takes
-.BR \-\-fleet\-file .
+.BR \-\-xml .
 .SH VM IDENTIFICATION
 .B qemu\-tool
 stamps every VM it launches with two generic QEMU options:
@@ -1452,7 +1425,7 @@ beats the file. One-shot actions
 are deliberately not readable from the file.
 .PP
 The first of these that exists is used:
-.BR \-\-env\-file ,
+.BR \-\-xml ,
 .BR $QEMU_TOOL_ENV ,
 .IR ./.env ,
 .IR qemu/.env ,
@@ -1460,7 +1433,7 @@ The first of these that exists is used:
 .IR /etc/qemu-tool/env .
 .PP
 Only
-.B \-\-env\-file
+.B \-\-xml
 layers. The search path still resolves to exactly one file, so layering is
 something asked for on the command line and never something inherited from
 the ambient environment.
@@ -1505,10 +1478,10 @@ the differing keys in an overlay named after it on the command line, rather
 than forking the whole file. Not seeded into
 .IR /etc ;
 name it with
-.BR \-\-env\-file .
+.BR \-\-xml .
 The overlays themselves
-.RI ( qemu/env/overlay\-ci ,
-.IR qemu/env/overlay\-mi100 )
+.RI ( qemu/xml/overlay\-ci.xml ,
+.IR qemu/xml/overlay\-mi100.xml )
 are not packaged: they name a particular CI lane and a particular host, so
 they are only meaningful beside the repository that describes them.
 .TP
@@ -1574,14 +1547,14 @@ backing image once, overlay the rest on it, generate the stack, start it:
 .PP
 .RS
 .EX
-qemu\-tool gen\-vm \-\-env\-file qemu/env/scale\-out \\
+qemu\-tool gen\-vm \-\-xml qemu/xml/scale\-out.xml \\
     \-\-vm\-name fleet\-1 \-\-backing\-image "$VM_BACKING_IMAGE"
 for n in 2 3 4 5 6 7 8; do
-    qemu\-tool gen\-vm \-\-env\-file qemu/env/scale\-out \\
+    qemu\-tool gen\-vm \-\-xml qemu/xml/scale\-out.xml \\
         \-\-vm\-name fleet\-$n \-\-backing\-file images/fleet\-1\-backing.qcow2
 done
-qemu\-tool gen\-compose \-\-env\-file qemu/env/scale\-out
-qemu\-tool compose \-\-env\-file qemu/env/scale\-out \\
+qemu\-tool gen\-compose \-\-xml qemu/xml/scale\-out.xml
+qemu\-tool compose \-\-xml qemu/xml/scale\-out.xml \\
     \-\-stack vfio\-user\-ernic\-rocjitsu\-scale\-out \-\-profile metrics up \-d
 .EE
 .RE
@@ -1590,7 +1563,7 @@ Confirm the committed stack is in step with the settings file, for CI:
 .PP
 .RS
 .EX
-qemu\-tool gen\-compose \-\-env\-file qemu/env/scale\-out \-\-check
+qemu\-tool gen\-compose \-\-xml qemu/xml/scale\-out.xml \-\-check
 .EE
 .RE
 .PP
@@ -1602,10 +1575,10 @@ everything else still comes from
 .RS
 .EX
 qemu\-tool gen\-compose \\
-    \-\-env\-file qemu/env/scale\-out \-\-env\-file qemu/env/overlay\-mi100 \\
+    \-\-xml qemu/xml/scale\-out.xml \-\-xml qemu/xml/overlay\-mi100.xml \\
     \-\-output\-dir /var/lib/qemu\-tool/stacks/mi100\-fleet
 qemu\-tool compose \-\-stack\-dir /var/lib/qemu\-tool/stacks/mi100\-fleet \\
-    \-\-env\-file qemu/env/scale\-out \-\-env\-file qemu/env/overlay\-mi100 \\
+    \-\-xml qemu/xml/scale\-out.xml \-\-xml qemu/xml/overlay\-mi100.xml \\
     \-\-profile metrics up \-d
 .EE
 .RE

@@ -69,8 +69,6 @@
   <!-- Grafana is on so a new user can watch the RDMA test move bytes. -->
   <grafana-enable>true</grafana-enable>
 
-  <!-- LMCache is off: beside the point for a quickstart. -->
-  <lmcache-enable>false</lmcache-enable>
   <logs-enable>true</logs-enable>
 
 </fleet>

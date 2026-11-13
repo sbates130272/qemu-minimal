@@ -1,8 +1,9 @@
-"""Read VM settings from an env-format file for docker compose.
+"""Read settings files: fleet XML, and the env-format files derived from it.
 
-The authoritative format is now fleet XML (see qemu/xml/fleet-example.xml).
-Env-format files remain for commands that pass --env-file to docker compose;
-use `qemu-tool fleet-to-env` to generate one from an XML fleet config.
+Fleet XML is the authoritative format (see qemu/xml/fleet-example.xml) and
+what every subcommand's --xml takes. Env-format files are what docker compose
+reads; `qemu-tool fleet-to-env` generates one from fleet XML, and parse()
+still reads them so a rendered stack's own layers can be loaded back.
 """
 
 from __future__ import annotations
@@ -73,7 +74,7 @@ def find(explicit: Path | Sequence[Path] | None = None) -> list[Path]:
                 # command line, "env file not found" alone does not say which
                 # of them the shell failed to expand.
                 where = f" (layer {index} of {len(paths)})" if len(paths) > 1 else ""
-                sys.exit(f"Error: env file not found: {path}{where}")
+                sys.exit(f"Error: settings file not found: {path}{where}")
         if paths:
             return paths
     candidates = []
@@ -155,7 +156,22 @@ def merge(layers: Iterable[dict[str, str]]) -> dict[str, str]:
 
 
 def parse_layers(paths: Sequence[Path]) -> dict[str, str]:
-    return merge(parse(path) for path in paths)
+    """Every layer as one {KEY: value} dict, later layers winning.
+
+    Fleet XML layers are merged with each other first and converted once:
+    converting them one at a time would emit each file's defaults for the
+    keys it does not set, and those would then overwrite what an earlier
+    layer said.
+    """
+    xml = [path for path in paths if path.suffix == ".xml"]
+    if not xml:
+        return merge(parse(path) for path in paths)
+    # Imported here: gen_compose imports this module.
+    from . import gen_compose
+    from .fleet_xml import FleetXml
+
+    fleet = gen_compose._fleet_to_env(FleetXml.parse_layers(xml))
+    return merge([fleet] + [parse(path) for path in paths if path.suffix != ".xml"])
 
 
 def load(explicit: Path | Sequence[Path] | None = None) -> dict[str, Any]:

@@ -1394,7 +1394,7 @@ def run(
         packaged = _packaged_fleet(fleet_stem)
         if packaged is None:
             _die(f"qemu/xml/{fleet_stem} is missing from this install; "
-                 "pass --fleet-file")
+                 "pass --xml")
         layers = [packaged]
         base = packaged
 

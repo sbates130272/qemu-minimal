@@ -4,7 +4,7 @@ Copyright (c) 2016-2026 Stephen Bates
 
 Individual files that carry their own copyright notice are held by the
 party named in that notice and are licensed under the same MIT terms
-below; udev/99-qemu-minimal-vfio.rules is copyright Advanced Micro
+below; scripts/99-qemu-minimal-vfio.rules is copyright Advanced Micro
 Devices, Inc.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy

@@ -1837,7 +1837,7 @@ def _logind_session(text: str | None) -> dict[str, Any] | None:
     if not user:
         return None
 
-    # A lingering user manager is not a login. ernic_fleet_guest enables
+    # A lingering user manager is not a login. rocm_ernic_setup enables
     # linger deliberately (AGENTS.md issue 8), so every fleet guest carries
     # one of these per user whether or not anybody is on it, and counting
     # them would leave the line reading "logged in" forever.

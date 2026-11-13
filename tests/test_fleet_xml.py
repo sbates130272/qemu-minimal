@@ -67,15 +67,6 @@ class ParseExample(unittest.TestCase):
         self.assertEqual(self.cfg.shm_size, "8g")
         self.assertEqual(self.cfg.rocjitsu_config, "gfx1250_mi455x.json")
 
-    def test_lmcache(self) -> None:
-        self.assertTrue(self.cfg.lmcache_enable)
-        self.assertEqual(self.cfg.lmcache_coord_port, 8100)
-        self.assertEqual(self.cfg.lmcache_server_chunk_size, 524288)
-        self.assertEqual(self.cfg.lmcache_server_l2_prefetch_policy, "retain")
-        self.assertEqual(self.cfg.lmcache_server_max_workers, 4)
-        self.assertFalse(self.cfg.lmcache_guest_seccomp_unconfined)
-        self.assertEqual(self.cfg.lmcache_guest_ib_device_name, "rocmernic0")
-
     def test_metrics_env_expansion(self) -> None:
         # prom-data-dir and grafana-data-dir are intentionally commented out in
         # fleet-example.xml (they are host-specific); defaults are empty strings.

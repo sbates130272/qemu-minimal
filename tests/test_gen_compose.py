@@ -190,26 +190,10 @@ class TestRender(unittest.TestCase):
     def test_every_service_has_a_fixed_address(self):
         # 3 per VM (ernic, rocjitsu, qemu) plus the infra family: the stats
         # exporter, Prometheus, Grafana, Loki, Alloy. (dockerapi was removed:
-        # Alloy now mounts /var/run/docker.sock directly.) LMCache is off in
-        # the default env -- see the lmcache tests.
+        # Alloy now mounts /var/run/docker.sock directly.)
         body = gen_compose.render_compose(_plan(), ["env"], "abc")
         self.assertEqual(body.count("ipv4_address:"), 8 * 3 + 5)
         self.assertIn("subnet: 172.31.0.0/16", body)
-
-    def test_lmcache_adds_the_coordinator_and_its_exporter(self):
-        # Two services, not one: the coordinator's own /metrics carries only
-        # the event-bus series, so the directory needs its own exporter.
-        body = gen_compose.render_compose(
-            _plan("\nLMCACHE_ENABLE=true\n"), ["env"], "abc")
-        self.assertEqual(body.count("ipv4_address:"), 8 * 3 + 7)
-        self.assertIn("ipv4_address: 172.31.0.12", body)
-        self.assertIn("ipv4_address: 172.31.0.14", body)
-
-    def test_directory_exporter_is_scraped(self):
-        body = gen_compose.render_prometheus(
-            _plan("\nLMCACHE_ENABLE=true\n"), ["env"], "abc")
-        self.assertIn("job_name: lmcache-directory", body)
-        self.assertIn('targets: ["172.31.0.14:9841"]', body)
 
     def test_prometheus_data_is_a_bind_mount_not_a_named_volume(self):
         # A named volume puts the TSDB under /var/lib/docker/volumes as root,
@@ -396,7 +380,7 @@ class TestRender(unittest.TestCase):
 
 
 class TestEnvFileLayering(unittest.TestCase):
-    """--env-file is repeatable, and the provenance header records every layer.
+    """--xml is repeatable, and the provenance header records every layer.
 
     The header is a CI gate (Gen Compose Check), so it has to round-trip
     exactly and it has to invalidate on a change to ANY layer -- an overlay is
@@ -424,8 +408,8 @@ class TestEnvFileLayering(unittest.TestCase):
         names = ["qemu/xml/scale-out.xml", "qemu/xml/overlay-ci.xml"]
         body = gen_compose.render_compose(_plan(), names, "abc")
         self.assertIn(
-            "#   qemu-tool gen-compose --fleet-file qemu/xml/scale-out.xml "
-            "--fleet-file qemu/xml/overlay-ci.xml",
+            "#   qemu-tool gen-compose --xml qemu/xml/scale-out.xml "
+            "--xml qemu/xml/overlay-ci.xml",
             body,
         )
 
@@ -483,7 +467,7 @@ class TestEnvFileLayering(unittest.TestCase):
     def test_single_layer_header_is_unchanged(self):
         body = gen_compose.render_compose(_plan(), ["env.scale-out"], "abc")
         self.assertIn("# Regenerate after changing env.scale-out:\n", body)
-        self.assertIn("#   qemu-tool gen-compose --fleet-file env.scale-out\n", body)
+        self.assertIn("#   qemu-tool gen-compose --xml env.scale-out\n", body)
         self.assertNotIn("# env-file:", body)
         self.assertIn("# env-sha256: abc  # pre-commit: ignore\n", body)
 
@@ -496,67 +480,6 @@ class TestEnvFileLayering(unittest.TestCase):
                 envfile.find([golden, missing])
             self.assertIn("overlay-typo", str(caught.exception))
 
-
-class TestLMCache(unittest.TestCase):
-    """LMCACHE_ENABLE gates EMISSION; --profile lmcache gates RUNNING.
-
-    Both exist because prometheus.yml has no notion of a profile, so a scrape
-    job emitted for a profile nobody selected is a permanently-down target.
-    """
-
-    def test_off_by_default(self):
-        # An env file predating the feature must regenerate unchanged.
-        compose = gen_compose.render_compose(_plan(), ["env"], "abc")
-        prom = gen_compose.render_prometheus(_plan(), ["env"], "abc")
-        self.assertNotIn("lmcache-coordinator", compose)
-        self.assertNotIn("lmcache", prom)
-
-    def test_coordinator_is_behind_its_own_profile(self):
-        body = gen_compose.render_compose(
-            _plan("\nLMCACHE_ENABLE=true\n"), ["env"], "abc")
-        head = body[body.index("  lmcache-coordinator:"):]
-        self.assertIn("profiles: [lmcache]", head)
-        self.assertIn("      - lmcache\n      - coordinator", head)
-
-    def test_runs_the_mp_coordinator_not_the_legacy_controller(self):
-        # lmcache_controller is the in-process mode's controller: it waits on
-        # a ZMQ pull/reply pair for LMCacheWorker registrations an MP server
-        # never sends, so pairing the two leaves every guest registered with
-        # nothing -- and nothing errors.
-        body = gen_compose.render_compose(
-            _plan("\nLMCACHE_ENABLE=true\n"), ["env"], "abc")
-        self.assertIn("      - lmcache\n      - coordinator", body)
-        self.assertNotIn("lmcache_controller", body)
-
-    def test_chunk_size_and_hash_reach_the_coordinator_and_the_guests(self):
-        # Both must match on every side; a mismatch silently stops matching
-        # rather than erroring, so the generator is the only thing keeping
-        # them in step.
-        spec = _plan("\nLMCACHE_ENABLE=true\nLMCACHE_CHUNK_SIZE=512\n")
-        body = gen_compose.render_compose(spec, ["env"], "abc")
-        inventory = gen_compose.render_inventory(spec, ["env"], "abc")
-        self.assertIn("      - --chunk-size\n      - \"512\"", body)
-        self.assertIn("lmcache_guest_chunk_size: 512", inventory)
-
-    def test_scrape_jobs_target_the_containers(self):
-        # Same reason as fleet-node: the worker is inside a guest behind
-        # SLIRP, so the qemu container is the target and hostfwd bridges it.
-        body = gen_compose.render_prometheus(
-            _plan("\nLMCACHE_ENABLE=true\n"), ["env"], "abc")
-        self.assertIn("job_name: lmcache-server", body)
-        self.assertIn('targets: ["172.31.3.1:9500"]', body)
-        self.assertIn('targets: ["172.31.3.8:9500"]', body)
-        self.assertIn("job_name: lmcache-coordinator", body)
-        self.assertIn('targets: ["172.31.0.12:9300"]', body)
-
-    def test_coordinator_port_is_overridable(self):
-        body = gen_compose.render_compose(
-            _plan("\nLMCACHE_ENABLE=true\nLMCACHE_COORD_PORT=9900\n"),
-            "env", "abc")
-        # Coordinator does not publish a host port; the port appears only in
-        # the command args and healthcheck, reachable on the fleet network.
-        self.assertNotIn('"0.0.0.0:9900:9900"', body)
-        self.assertIn('"9900"', body)
 
 
 class TestPublishing(unittest.TestCase):
@@ -575,9 +498,9 @@ class TestPublishing(unittest.TestCase):
 
     def test_published_ports_carry_the_bind_address(self):
         body = gen_compose.render_compose(
-            _plan("\nLMCACHE_ENABLE=true\n"), ["env"], "abc")
-        # Only Grafana publishes a host port; Prometheus, Loki and LMCache
-        # coordinator are fleet-internal only.
+            _plan(), ["env"], "abc")
+        # Only Grafana publishes a host port; Prometheus and Loki are
+        # fleet-internal only.
         self.assertIn('"0.0.0.0:3000:3000"', body)
         self.assertNotIn('"0.0.0.0:9090:9090"', body)
         self.assertNotIn('"0.0.0.0:9300:9300"', body)
@@ -595,7 +518,7 @@ class TestPublishing(unittest.TestCase):
         # its own /16 and fixed addresses, and prometheus.yml scrapes those
         # addresses directly.
         body = gen_compose.render_compose(
-            _plan("\nLMCACHE_ENABLE=true\n"), ["env"], "abc")
+            _plan(), ["env"], "abc")
         services = body.count("\n  ") and body
         self.assertEqual(
             body.count("ipv4_address:"), body.count("      fleet:"))
@@ -640,9 +563,8 @@ class TestStopBehaviour(unittest.TestCase):
 class TestLogs(unittest.TestCase):
     """Loki and a host-side Alloy, in the metrics profile.
 
-    The guests run their own Alloy, installed by the lmcache_guest role: a
-    VM's journal is behind QEMU and is not reachable on the host's Docker
-    socket, so one collector cannot cover both sides.
+    Containers only: a VM's journal is behind QEMU and is not reachable on
+    the host's Docker socket.
     """
 
     def test_loki_and_alloy_ride_the_metrics_profile(self):
@@ -663,13 +585,6 @@ class TestLogs(unittest.TestCase):
         # directory, which for an installed qemu-tool is inside site-packages.
         body = gen_compose.render_compose(_plan(), ["env"], "abc")
         self.assertIn("- /var/lib/qemu-tool/loki-data:/loki", body)
-
-    def test_guests_are_told_where_loki_is(self):
-        # By fleet address: SLIRP NATs guest egress out through the qemu
-        # container, which is on that network.
-        inventory = gen_compose.render_inventory(_plan(), ["env"], "abc")
-        self.assertIn("lmcache_guest_loki_url: http://172.31.0.15:3100",
-                      inventory)
 
     def test_can_be_turned_off(self):
         body = gen_compose.render_compose(
@@ -711,27 +626,6 @@ class TestInventory(unittest.TestCase):
         self.assertIn("          fleet_guest_ip: 192.168.100.18", body)
         self.assertEqual(body.count("ansible_port:"), 8)
 
-    def test_coordinator_is_the_fleet_address_not_the_slirp_gateway(self):
-        # SLIRP NATs guest egress out through the qemu container's own stack,
-        # and that container is on the fleet network -- so the coordinator's
-        # fleet address resolves from inside a guest with nothing published,
-        # and unlike 10.0.2.2 it names the coordinator rather than whatever
-        # else the container happens to serve.
-        body = gen_compose.render_inventory(_plan(), ["env"], "abc")
-        self.assertIn(
-            "lmcache_guest_coordinator_url: http://172.31.0.12:9300", body)
-        self.assertNotIn("10.0.2.2", body)
-
-    def test_instance_id_matches_the_prometheus_label(self):
-        # fleet-lmcache.yml derives lmcache_guest_instance_id from
-        # inventory_hostname, so a Grafana panel can join a scraped series to
-        # a controller query with no lookup table in between.
-        spec = _plan("\nLMCACHE_ENABLE=true\n")
-        inventory = gen_compose.render_inventory(spec, ["env"], "abc")
-        prom = gen_compose.render_prometheus(spec, ["env"], "abc")
-        self.assertIn("        fleet-3:", inventory)
-        self.assertIn('lmcache_instance_id: "fleet-3"', prom)
-
     def test_provenance_round_trips(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "fleet-inventory.yml"
@@ -740,7 +634,7 @@ class TestInventory(unittest.TestCase):
 
 
 class TestNVMe(unittest.TestCase):
-    """VM_NVME, the emulated disk LMCache's L2 tier lives on.
+    """VM_NVME, the emulated disk.
 
     Untested when it landed, and it is one of the keys where "off" has to
     mean *absent*: run-vm's _nvme_create makes a backing qcow2 per device, so

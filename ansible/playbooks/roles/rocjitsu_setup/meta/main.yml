@@ -1,0 +1,18 @@
+---
+galaxy_info:
+  role_name: rocjitsu_setup
+  author: Stephen Bates
+  description: >-
+    Make a ROCm guest bind an emulated rocjitsu gfx1250: generate its
+    firmware, keep amdgpu out of the boot path and build the patched DKMS
+    module, install the guest tools, and run HIP workloads against a live
+    device.
+  license: MIT
+  min_ansible_version: "2.18"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - noble
+        - resolute
+
+dependencies: []

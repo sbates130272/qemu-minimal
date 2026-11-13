@@ -1,0 +1,141 @@
+---
+- name: Check for the driver-packaged gfx1250 firmware
+  ansible.builtin.stat:
+    path: "{{ rocjitsu_setup_firmware_packaged_dir }}/{{ item }}"
+  register: _rocjitsu_setup_firmware_packaged
+  become: true
+  loop: "{{ rocjitsu_setup_firmware_packaged }}"
+  when: rocjitsu_setup_firmware_set == 'gap'
+
+- name: Note which packaged blobs are missing
+  ansible.builtin.set_fact:
+    _rocjitsu_setup_firmware_missing: >-
+      {{ _rocjitsu_setup_firmware_packaged.results | default([])
+         | selectattr('stat', 'defined') | rejectattr('stat.exists')
+         | map(attribute='item') | list }}
+
+- name: Fall back to the full set when the guest has no packaged firmware
+  ansible.builtin.set_fact:
+    rocjitsu_setup_firmware_set: full
+  when:
+    - rocjitsu_setup_firmware_live | bool or rocjitsu_setup_firmware_generate | bool
+    - _rocjitsu_setup_firmware_missing | length > 0
+
+# Only reachable with generation off: nothing can stub what is missing, and
+# the driver would report it as a bare -2 that names no package.
+- name: Fail when the gap set has no packaged firmware to sit beside
+  ansible.builtin.fail:
+    msg: >-
+      {{ _rocjitsu_setup_firmware_missing | join(', ') }} missing from
+      {{ rocjitsu_setup_firmware_packaged_dir }}. These ship in amdgpu-dkms-firmware
+      31.60 and newer, which the "gap" firmware set assumes. Install a 31.60+
+      driver release, or set rocjitsu_setup_firmware_set=full.
+  when:
+    - rocjitsu_setup_firmware_set == 'gap'
+    - _rocjitsu_setup_firmware_missing | length > 0
+
+- name: Check whether the guest already has the discovery blob
+  ansible.builtin.stat:
+    path: /lib/firmware/amdgpu/ip_discovery.bin
+  register: _rocjitsu_setup_firmware_present
+  when: rocjitsu_setup_firmware_live | bool
+
+# Once per play, not per guest: the output is identical for a given image.
+# None of these carries a per-host `when`. A run_once task is pinned to the
+# first host, so if that host skipped it every other host would read a skip
+# record where the staging path should be.
+- name: Generate the firmware on the controller
+  when: rocjitsu_setup_firmware_live | bool or rocjitsu_setup_firmware_generate | bool
+  block:
+    # Said rather than assumed: a wrong pin here is invisible until the guest
+    # fails discovery.
+    - name: Show the rocjitsu image the firmware comes from
+      ansible.builtin.debug:
+        msg: >-
+          Generating {{ rocjitsu_setup_firmware_generation }} firmware
+          ({{ rocjitsu_setup_firmware_set }}) with {{ rocjitsu_setup_firmware_image }}
+      run_once: true
+
+    - name: Make a staging directory on the controller
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: rocjitsu_fw_
+      register: _rocjitsu_setup_firmware_tmp
+      delegate_to: localhost
+      run_once: true
+      become: false
+
+    # Streamed out as a tar rather than bind-mounted. `docker run -v` is
+    # resolved by the daemon, so a controller that is itself a container on
+    # the host's socket -- as in CI -- gets an empty directory on the host and
+    # an exit status of 0.
+    - name: Generate the firmware from the rocjitsu image
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail &&
+          docker run --rm --entrypoint /bin/sh {{ rocjitsu_setup_firmware_image }}
+          -c 'python3 /usr/local/bin/vfio_guest_firmware.py
+          --generation {{ rocjitsu_setup_firmware_generation }}
+          --set {{ rocjitsu_setup_firmware_set }} --output /out
+          {{ '' if (rocjitsu_setup_firmware_live | bool
+                    or rocjitsu_setup_firmware_ip_discovery | bool)
+             else '--no-ip-discovery' }}
+          && tar -cf - -C /out .'
+          | tar -xf - -C {{ _rocjitsu_setup_firmware_tmp.path }}
+        executable: /bin/bash
+      delegate_to: localhost
+      run_once: true
+      become: false
+      changed_when: true
+
+    # Guards the silent-empty-directory failure above. imu, because it is in
+    # both sets and in no package: the driver opens it whenever fw_load_type
+    # is not PSP, which is the fw_load_type=0 these guests boot with.
+    - name: Assert the firmware was produced
+      ansible.builtin.stat:
+        path: "{{ _rocjitsu_setup_firmware_tmp.path }}/gc_12_1_0_imu.bin"
+      register: _rocjitsu_setup_firmware_made
+      delegate_to: localhost
+      run_once: true
+      become: false
+      failed_when: not _rocjitsu_setup_firmware_made.stat.exists
+
+    - name: Install the firmware into the guest
+      ansible.builtin.copy:
+        src: "{{ _rocjitsu_setup_firmware_tmp.path }}/"
+        dest: /lib/firmware/amdgpu/
+        owner: root
+        group: root
+        mode: "0644"
+      register: _rocjitsu_setup_firmware_copied
+      become: true
+      when: not (_rocjitsu_setup_firmware_present.stat.exists | default(false))
+
+    - name: Remove the staging directory
+      ansible.builtin.file:
+        path: "{{ _rocjitsu_setup_firmware_tmp.path }}"
+        state: absent
+      delegate_to: localhost
+      run_once: true
+      become: false
+
+# The driver does not re-probe by itself. Not a handler: a caller that goes on
+# to wait for a KFD node needs the device bound before its next task, not at
+# the end of the play.
+- name: Re-bind any unbound AMD function so the probe re-runs  # noqa: no-handler
+  ansible.builtin.shell:
+    cmd: |
+      set -e
+      drv=/sys/bus/pci/drivers/amdgpu
+      [ -d "$drv" ] || exit 0
+      for dev in /sys/bus/pci/devices/*; do
+        [ "$(cat "$dev/vendor" 2>/dev/null)" = "0x1002" ] || continue
+        [ -e "$dev/driver" ] && continue
+        echo "$(basename "$dev")" > "$drv/bind" || true
+      done
+    executable: /bin/bash
+  become: true
+  changed_when: true
+  when:
+    - rocjitsu_setup_firmware_live | bool
+    - _rocjitsu_setup_firmware_copied is changed

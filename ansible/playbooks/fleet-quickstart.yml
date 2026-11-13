@@ -2,7 +2,7 @@
 # Make a running two-VM quickstart fleet test-ready, then prove the GPU and
 # the RDMA NIC with one test each.
 #
-#   qemu-tool gen-compose --fleet-file qemu/xml/quickstart.xml --output-dir <dir>
+#   qemu-tool gen-compose --xml qemu/xml/quickstart.xml --output-dir <dir>
 #   docker compose --env-file <fleet-env-file> up -d         # from <dir>
 #   ansible-playbook -i <dir>/fleet-inventory.yml \
 #       playbooks/fleet-quickstart.yml --private-key <key>
@@ -37,22 +37,7 @@
   # the guest takes become for itself, as the included roles already do.
   become: false
   vars:
-    # Consumed by the rocjitsu_gpu_test and ernic_fleet_guest task files
-    # included below. Both use lmcache_guest_* variable names since the
-    # variables are generated into the inventory under those names.
-    lmcache_guest_eth_address: "{{ fleet_guest_ip }}/{{ fleet_guest_prefix }}"
-    # The name the udev rules in the image already give this interface. The
-    # role's default renames it to ernic0, which is right for an LMCache guest
-    # and pointless here -- matching the existing name makes netplan's
-    # set-name a no-op instead of a rename race against udev.
-    lmcache_guest_ernic_netplan_name: rocm-ernic0
-    # The published rocm-golden qcow2 uses networkd-dispatcher rather than
-    # systemd-networkd, so the netplan file would be written but never applied.
-    # The preflight (included below via netplan_ernic) assigns the address
-    # directly with ip-addr regardless, so skipping the netplan write saves
-    # the renderer check round-trip and avoids the "systemd-networkd is absent"
-    # warning that makes the output look like a failure.
-    lmcache_guest_netplan_ernic: false
+    fleet_guest_eth_address: "{{ fleet_guest_ip }}/{{ fleet_guest_prefix }}"
   tasks:
     # On AMD corporate network the host exports AMD_CERT (base64 ZScaler CA)
     # and VM_CA_CERT_FILE (destination path). The published qcow2 has neither,
@@ -75,13 +60,15 @@
 
     - name: Install the gfx1250 firmware stubs generated from this stack's rocjitsu
       ansible.builtin.include_role:
-        name: rocjitsu_gpu_test
-        tasks_from: amdgpu_firmware
+        name: rocjitsu_setup
+        tasks_from: firmware
+      vars:
+        rocjitsu_setup_firmware_live: true
 
     - name: Install rocm-ernic udev naming rules
       become: true
       ansible.builtin.copy:
-        src: "{{ playbook_dir }}/../../udev/99-rocm-ernic.rules"
+        src: roles/rocm_ernic_setup/files/99-rocm-ernic.rules
         dest: /etc/udev/rules.d/99-rocm-ernic.rules
         mode: "0644"
 
@@ -98,16 +85,10 @@
           iface=$(ip -br link | awk '/72:6f:63:6d/ {print $1}')
           [ -n "$iface" ] || { echo "ernic interface not found"; exit 1; }
           ip link set "$iface" up
-          ip addr add "{{ lmcache_guest_eth_address }}" dev "$iface" 2>/dev/null || true
-          echo "assigned {{ lmcache_guest_eth_address }} to $iface"
+          ip addr add "{{ fleet_guest_eth_address }}" dev "$iface" 2>/dev/null || true
+          echo "assigned {{ fleet_guest_eth_address }} to $iface"
         executable: /bin/bash
       changed_when: true
-
-    - name: Declare the ernic address to netplan
-      ansible.builtin.include_role:
-        name: ernic_fleet_guest
-        tasks_from: netplan_ernic
-      when: lmcache_guest_netplan_ernic | bool
 
     # systemd-networkd-wait-online blocks boot indefinitely: it waits for ALL
     # networkd-managed interfaces including the ernic, which only appears after
@@ -419,7 +400,7 @@
 # ONE scratch-using process per guest per device lifetime. The emulated GPU
 # serves its private/scratch segment to exactly one process, and the second
 # one in the same boot wedges the device for every later process -- see
-# roles/rocjitsu_gpu_test/defaults/main.yml. So this play runs a single
+# roles/rocjitsu_setup/defaults/main.yml. So this play runs a single
 # workload and nothing else touches the GPU afterwards.
 - name: Prove the GPU
   hosts: fleet
@@ -432,12 +413,12 @@
         state: directory
         mode: "0755"
 
-    # The source rocjitsu_gpu_test already owns, by relative path rather than
+    # The source rocjitsu_setup already owns, by relative path rather than
     # a second copy: it reports the device name and CU count, then checks the
     # result rather than only that the kernel launched.
     - name: Copy the HIP source
       ansible.builtin.copy:
-        src: roles/rocjitsu_gpu_test/files/vector_add.hip
+        src: roles/rocjitsu_setup/files/vector_add.hip
         dest: /var/tmp/quickstart/vector_add.hip
         mode: "0644"
 
