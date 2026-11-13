@@ -22,6 +22,7 @@ import time
 from contextlib import ExitStack
 from pathlib import Path
 
+from .vm_artifact import VM_INFO_ARTIFACT_TYPE
 from .caps import qemu_binary
 from .config import VMConfig
 from .identity import identity_args
@@ -238,7 +239,7 @@ def _fetch_backing_image(cfg: VMConfig, images: Path) -> Path:
     return backing
 
 
-_VM_INFO_TYPE = "application/vnd.batesste.vm-info.v1"
+_VM_INFO_TYPE = VM_INFO_ARTIFACT_TYPE
 
 
 def _fetch_backing_keypair(cfg: VMConfig, images: Path) -> None:

@@ -4,7 +4,7 @@ qemu\-tool \- run, generate and list QEMU virtual machines
 .SH SYNOPSIS
 .B qemu\-tool
 .RB [ \-\-version ]
-.I {quick\-start,check,down,run\-vm,gen\-vm,gen\-compose,compose,ernic\-stats,list,inspect,ssh,qcow,man,fleet\-to\-env}
+.I {quick\-start,check,down,run\-vm,gen\-vm,gen\-compose,compose,ernic\-stats,list,inspect,ssh,qcow,publish\-qcow,man,fleet\-to\-env}
 .RI [ options ]
 .SH DESCRIPTION
 .B qemu\-tool
@@ -1285,6 +1285,91 @@ Settings file. Repeatable; later files win key by key. Used to resolve
 when
 .B \-\-images
 is not given.
+.SH PUBLISH-QCOW OPTIONS
+Publish a baked guest qcow2 as an OCI artifact: the one
+.B gen\-vm \-\-backing\-image
+and
+.B quick\-start
+pull. The image is converted to a standalone qcow2 with no compressed
+clusters, compressed with zstd, and pushed with
+.BR oras (1).
+A referrer attached to the first tag carries
+.BR vm\-info.json ,
+.B id_rsa
+and
+.BR id_rsa.pub .
+What is published is the file given, so test the guest on an overlay.
+.TP
+.BI \-\-image " FILE"
+The baked qcow2. Refused if it has a backing file.
+.TP
+.BI \-\-ref " REPO"
+Registry repository, without a tag.
+.TP
+.BI \-\-tag " TAG"
+Tag to push. Repeatable: one push carries them all and the referrer attaches
+to the first.
+.TP
+.BI \-\-key " FILE"
+Private key the guest authorises;
+.IB FILE .pub
+must sit beside it. The keypair is published, so generate one for the image
+and never pass a personal key.
+.TP
+.BI \-\-vm\-name " NAME"
+Names the qcow2 inside the artifact.
+.TP
+.BI \-\-flavour " NAME"
+Recorded in vm\-info.json and the annotations. Default
+.BR rocm\-golden .
+.TP
+.BI \-\-username " NAME"
+The guest login. Default
+.BR ubuntu .
+.TP
+.BI \-\-password " PASSWORD"
+Recorded in vm\-info.json and never in an annotation.
+.TP
+.BI \-\-release " NAME"
+Ubuntu codename of the guest. Default
+.BR resolute .
+.TP
+.BI \-\-architecture " ARCH"
+Default
+.BR amd64 .
+.TP
+.BI \-\-guest\-stamp " FILE"
+A copy of the guest's
+.BR /etc/rocm\-golden\-guest.json .
+vm\-info.json takes the kernel and the pins from it and carries it whole.
+.TP
+.BI \-\-playbook " NAME"
+The playbook the guest was baked with, for the record.
+.TP
+.BI \-\-commit " SHA"
+The qemu\-minimal commit the guest was baked from.
+.TP
+.BI \-\-source " URL"
+Source repository for the
+.B org.opencontainers.image.source
+annotation.
+.TP
+.BI \-\-work\-dir " DIR"
+Where the copy is made. Default: beside the image. Needs room for the whole
+disk.
+.TP
+.BI \-\-digest\-file " FILE"
+Write the pushed reference, with its digest, to FILE.
+.TP
+.B \-\-dry\-run
+Convert and compress, print what would be pushed, and push nothing. Needs no
+.B oras
+and no credentials.
+.TP
+.BI \-\-keep " DIR"
+With
+.BR \-\-dry\-run :
+keep the compressed image and vm\-info.json in DIR.
 .SH SSH OPTIONS
 Opens an SSH session to a running VM, resolving the port, username and key
 through exactly the same path

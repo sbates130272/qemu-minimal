@@ -141,6 +141,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_inspect(sub)
     _add_ssh(sub)
     _add_qcow(sub)
+    _add_publish_qcow(sub)
     _add_man(sub)
 
     return parser
@@ -761,6 +762,62 @@ def _qcow_cmd(args: argparse.Namespace) -> None:
         _qcow.state(images or default_images(), args.state)
     elif args.clean:
         _qcow.clean(images or default_images(), args.clean, yes=args.yes)
+
+
+def _add_publish_qcow(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser(
+        "publish-qcow",
+        help="Publish a baked guest qcow2 as an OCI artifact.",
+        description=(
+            "Convert a baked qcow2 to a standalone image, compress it with "
+            "zstd and push it with oras, with vm-info.json and the guest "
+            "keypair attached as a referrer. This is the artifact gen-vm "
+            "--backing-image and quick-start pull. The file given is what is "
+            "published; it must not be an overlay."
+        ),
+    )
+    p.add_argument("--image", type=Path, required=True, metavar="FILE",
+                   help="The baked qcow2. Must have no backing file.")
+    p.add_argument("--ref", required=True, metavar="REPO",
+                   help="Registry repository, without a tag.")
+    p.add_argument("--tag", action="append", default=[], metavar="TAG",
+                   help="Tag to push. Repeatable; the referrer attaches to the first.")
+    p.add_argument("--key", type=Path, required=True, metavar="FILE",
+                   help="Private key the guest authorises; FILE.pub must sit "
+                        "beside it. It is PUBLISHED, so generate one for the "
+                        "image and never pass a personal key.")
+    p.add_argument("--vm-name", required=True,
+                   help="Names the qcow2 inside the artifact.")
+    p.add_argument("--flavour", default="rocm-golden")
+    p.add_argument("--username", default="ubuntu")
+    p.add_argument("--password", default="password",
+                   help="Recorded in vm-info.json, never in an annotation.")
+    p.add_argument("--release", default="resolute")
+    p.add_argument("--architecture", default="amd64")
+    p.add_argument("--guest-stamp", type=Path, default=None, metavar="FILE",
+                   help="A copy of the guest's /etc/rocm-golden-guest.json; "
+                        "vm-info.json takes its kernel and pins from it.")
+    p.add_argument("--playbook", default="", metavar="NAME",
+                   help="The playbook the guest was baked with, for the record.")
+    p.add_argument("--commit", default="", metavar="SHA",
+                   help="The qemu-minimal commit the guest was baked from.")
+    p.add_argument("--source", default="https://github.com/sbates130272/qemu-minimal",
+                   metavar="URL")
+    p.add_argument("--work-dir", type=Path, default=None, metavar="DIR",
+                   help="Where the copy is made (default: beside the image). "
+                        "Needs room for the whole disk.")
+    p.add_argument("--digest-file", type=Path, default=None, metavar="FILE",
+                   help="Write the pushed reference, with its digest, here.")
+    p.add_argument("--dry-run", action="store_true",
+                   help="Convert and compress, print what would be pushed, push nothing.")
+    p.add_argument("--keep", type=Path, default=None, metavar="DIR",
+                   help="With --dry-run: keep the compressed image and vm-info.json in DIR.")
+    p.set_defaults(func=_publish_qcow_cmd)
+
+
+def _publish_qcow_cmd(args: argparse.Namespace) -> None:
+    from .publish_qcow import run as publish_qcow_run
+    publish_qcow_run(args)
 
 
 def _add_check(sub: argparse._SubParsersAction) -> None:

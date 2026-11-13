@@ -30,7 +30,6 @@
       # clone of a branch holds only its tip, so the pin stopped resolving as
       # soon as the branch moved.
       git fetch -q --depth=1 --filter=blob:none origin "$REF"
-      # -f: the compat patches below leave the tree modified.
       git checkout -q -f FETCH_HEAD
       git rev-parse HEAD
   register: _sdxi_clone
@@ -53,24 +52,6 @@
   register: _sdxi_sync
   changed_when: _sdxi_sync.stdout | length > 0
   when: sdxi_setup_local_src_dir | length > 0
-  delegate_to: localhost
-  become: false
-  run_once: true
-
-- name: Apply kernel-API compat patches on the controller
-  ansible.builtin.shell:
-    cmd: |
-      pf="{{ role_path }}/files/{{ item | basename }}"
-      cd "{{ sdxi_setup_controller_src_dir }}"
-      if patch --dry-run -R -p1 < "$pf" > /dev/null 2>&1; then
-        echo already-applied
-      else
-        patch -p1 < "$pf"
-      fi
-  register: _patch_result
-  changed_when: "'already-applied' not in _patch_result.stdout"
-  loop:
-    - 0001-fix-io_uring_cmd_complete_in_task-callback-API.patch
   delegate_to: localhost
   become: false
   run_once: true

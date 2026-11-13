@@ -11,6 +11,28 @@ All notable changes to this project will be documented in this file.
   P4 in guest scope and an SDXI device. Every tracked benchmark runs against
   this one stack.
 
+- **This repo publishes the rocm-golden qcow2.** batesste-ci-images stops
+  building guests and pulls this one.
+  - `qemu-tool publish-qcow` converts a baked qcow2 to a standalone image,
+    compresses it with zstd and pushes it with `oras`, with `vm-info.json`
+    and the guest keypair as a referrer. It is the artifact
+    `gen-vm --backing-image` pulls, and the media types both sides use now
+    live in one module, `vm_artifact.py`. An overlay is refused, and
+    `--dry-run` builds everything and pushes nothing.
+  - The `Publish - qcow-rocm-golden` workflow runs on pushes to main that
+    touch the image's inputs, and by dispatch with a dry-run switch. It
+    checks the guest pins against the server images, bakes, runs
+    `qemu/checks/rocm-golden.sh` on a boot with no device, then the
+    configure, firmware and test stages and an SDXI copy behind the
+    single-VM stack,
+    and publishes to `docker.io/sbates130272/qemu-minimal-rocm-golden` as
+    `<YYYYMMDD>.g<sha7>` and `latest`. The published disk is the bake, not
+    the disk that was tested.
+  - The `vfio-user-ernic-rocjitsu-vm` stack gains a rocm-sdxi server, so its
+    guest has an SDXI engine as well. `SDXI_COUNT=0` leaves it out.
+  - `sdxi_source_pin` moves to `dfd76f2`, where upstream `sdxi_char` builds
+    on 7.2 unaided, and the carried io_uring patch is deleted.
+
 - **`vm-rocm-golden.yml` bakes a publishable guest without a Docker
   daemon, and that guest passes `qemu/checks/rocm-golden.sh`.** The target is
   a bake inside a container build, with nothing but `gen-vm

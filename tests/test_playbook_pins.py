@@ -81,10 +81,10 @@ class Pins(unittest.TestCase):
             "requirements.yml installs the collection from one commit and "
             "ernic_source_pin checks the sources out at another")
 
-    # The guest is at 81cd4f8 and the published server image at c50f2b9. That
-    # is known and waiting on a server image built from 81cd4f8; when one is
-    # pinned this passes, unittest reports an unexpected success, and this
-    # decorator comes off.
+    # The guest is at dfd76f2 and the published server image at c50f2b9. That
+    # is known and waiting on a server image built from the guest's commit;
+    # when one is pinned this passes, unittest reports an unexpected success,
+    # and this decorator comes off.
     @unittest.expectedFailure
     def test_sdxi_guest_matches_every_server_image(self):
         pin = _pin("sdxi_source_pin")

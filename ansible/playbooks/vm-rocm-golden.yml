@@ -572,7 +572,7 @@
     # The server side is the sdxi.<sha> in the fleet files' sdxi-image, and
     # the two are a pair: a guest at this ref waits for a completion MSI-X
     # that a server older than it never raises.
-    sdxi_source_pin: &sdxi_source_pin "81cd4f8d117a862c188cc75358c95f7ab2abeb94"
+    sdxi_source_pin: &sdxi_source_pin "dfd76f23f6f10561333fc0a9a9f23e9f3b255c04"
     sdxi_setup_source_ref: "{{ sdxi_source_pin }}"
     sdxi_setup_user: "{{ vm_username | default('ubuntu') }}"
   roles:
