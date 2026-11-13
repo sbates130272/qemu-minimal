@@ -47,8 +47,8 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261112.gdca6903-qemu11.1.3-vfu.05bb5e5
-      # Provides qemu-system-x86_64 and cloud-image-utils. /var/lib/qemu-tool is
-      # bind-mounted from the host at the same path so the qcow2 generated here
+      # Provides qemu-system-x86_64 and oras. /var/lib/qemu-tool is
+      # bind-mounted from the host at the same path so the qcow2 pulled here
       # is the same file the sibling qemu containers open: compose bind-mounts
       # are resolved by the host docker daemon, not in this container.
       options: >-
@@ -96,12 +96,6 @@ jobs:
         # looked for at /root/.ssh/id_rsa, not found, and never offered.
         [ "$HOME" = /root ] || { rm -rf /root/.ssh && ln -s "$HOME/.ssh" /root/.ssh; }
 
-    - name: Cache cloud image
-      uses: actions/cache@v4
-      with:
-        path: ${{ env.VM_IMAGES_DIR }}/*-server-cloudimg-*.img
-        key: cloud-img-amd64-resolute-ernic-report
-
     - name: Ensure images directory exists
       run: mkdir -p "$VM_IMAGES_DIR" && chmod 777 "$VM_IMAGES_DIR"
 
@@ -119,11 +113,7 @@ jobs:
         qemu-tool gen-vm \
           --vm-name "$VM1_NAME" \
           --images "$VM_IMAGES_DIR" \
-          --release resolute \
-          --username ubuntu \
-          --password password \
-          --packages qemu/packages.d/packages-default \
-          --size 8
+          --backing-image docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ionic:20261112.gdca6903-vm.resolute-ionic-qm.096ddfe-qcow2
 
     - name: Generate VM 2 from shared backing file
       run: |
@@ -198,7 +188,7 @@ jobs:
           if ssh -o ConnectTimeout=1 \
                  -o NoHostAuthenticationForLocalhost=yes \
                  -o StrictHostKeyChecking=no \
-                 -p 2222 ubuntu@qemu-1 true 2>/dev/null; then
+                 -p 2222 batesste@qemu-1 true 2>/dev/null; then
             echo "VM 1 ready after ${elapsed}s"
             exit 0
           fi
@@ -210,7 +200,7 @@ jobs:
         ssh -o ConnectTimeout=5 \
             -o NoHostAuthenticationForLocalhost=yes \
             -o StrictHostKeyChecking=no \
-            -vv -p 2222 ubuntu@qemu-1 true 2>&1 | tail -30 || true
+            -vv -p 2222 batesste@qemu-1 true 2>&1 | tail -30 || true
         exit 1
 
     - name: Wait for VM 2 SSH (180s timeout)
@@ -220,7 +210,7 @@ jobs:
           if ssh -o ConnectTimeout=1 \
                  -o NoHostAuthenticationForLocalhost=yes \
                  -o StrictHostKeyChecking=no \
-                 -p 2222 ubuntu@qemu-2 true 2>/dev/null; then
+                 -p 2222 batesste@qemu-2 true 2>/dev/null; then
             echo "VM 2 ready after ${elapsed}s"
             exit 0
           fi
@@ -232,7 +222,7 @@ jobs:
         ssh -o ConnectTimeout=5 \
             -o NoHostAuthenticationForLocalhost=yes \
             -o StrictHostKeyChecking=no \
-            -vv -p 2222 ubuntu@qemu-2 true 2>&1 | tail -30 || true
+            -vv -p 2222 batesste@qemu-2 true 2>&1 | tail -30 || true
         exit 1
 
     # Into site/ernic, not site: the checkout already populated site/ with the
@@ -243,16 +233,14 @@ jobs:
     # the job timeout cancels the whole job. See the longer note in
     # qemu-minimal-report-for-vm-rocjitsu.yml.
     # REPORT_ERNIC_SRQ_P4=1: include the ionic_rdma/ernic_p4 module status and
-    # the ibv_devinfo max_srq value in both VM reports. These will show "not
-    # installed" / max_srq=0 until batesste-ci-images ships images with the
-    # SRQ+P4 DKMS stack baked in (via vm-ernic-srq-p4.yml). The badge and
-    # report section are scaffolded now so nothing needs changing when they land.
+    # the ibv_devinfo max_srq value in both VM reports. The ionic qcow2 backing
+    # image has the SRQ+P4 DKMS stack baked in via vm-ernic-srq-p4.yml.
     - name: Generate VM 1 report
       timeout-minutes: 15
       env:
         REPORT_ERNIC_SRQ_P4: "1"
         REPORT_ERNIC_P4_BENCH: "1"
-      run: bash scripts/generate-vm-report.sh site/ernic 2222 ubuntu "VM 1" qemu-1
+      run: bash scripts/generate-vm-report.sh site/ernic 2222 batesste "VM 1" qemu-1
 
     - name: Generate VM 2 report
       timeout-minutes: 15
@@ -260,7 +248,7 @@ jobs:
         REPORT_ERNIC_SRQ_P4: "1"
         REPORT_ERNIC_P4_BENCH: "1"
       run: >-
-        bash scripts/generate-vm-report.sh site/ernic/vm2 2222 ubuntu
+        bash scripts/generate-vm-report.sh site/ernic/vm2 2222 batesste
         "VM 2" qemu-2
 
     - name: Show compose logs on failure

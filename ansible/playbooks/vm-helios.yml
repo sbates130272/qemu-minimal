@@ -80,18 +80,35 @@
           delegate_to: localhost
           become: false
 
+        - name: Write firmware generation helper
+          ansible.builtin.copy:
+            dest: "{{ helios_fw_tmp.path }}/gen_fw.py"
+            mode: '0755'
+            content: |
+              #!/usr/bin/env python3
+              import subprocess, sys
+              image, generation, fw_set, outdir = sys.argv[1:]
+              docker = subprocess.run(
+                  ['/usr/bin/docker', 'run', '--rm', '--entrypoint', '/bin/sh',
+                   image, '-c',
+                   f'python3 /usr/local/bin/vfio_guest_firmware.py '
+                   f'--generation {generation} --set {fw_set} '
+                   f'--output /out && tar -cf - -C /out .'],
+                  stdout=subprocess.PIPE, check=True)
+              subprocess.run(['tar', '-xf', '-', '-C', outdir],
+                             input=docker.stdout, check=True)
+          delegate_to: localhost
+          become: false
+
         - name: Generate gfx1250 firmware stubs on controller via rocjitsu container
-          ansible.builtin.shell:
-            cmd: >-
-              set -o pipefail &&
-              docker run --rm --entrypoint /bin/sh
-              {{ helios_firmware_image }}
-              -c 'python3 /usr/local/bin/vfio_guest_firmware.py
-              --generation {{ helios_firmware_generation }}
-              --set {{ helios_firmware_set }} --output /out
-              && tar -cf - -C /out .'
-              | tar -xf - -C {{ helios_fw_tmp.path }}
-            executable: /bin/bash
+          ansible.builtin.command:
+            argv:
+              - python3
+              - "{{ helios_fw_tmp.path }}/gen_fw.py"
+              - "{{ helios_firmware_image }}"
+              - "{{ helios_firmware_generation }}"
+              - "{{ helios_firmware_set }}"
+              - "{{ helios_fw_tmp.path }}"
           delegate_to: localhost
           become: false
 
