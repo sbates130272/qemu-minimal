@@ -48,7 +48,9 @@
       if [ "{{ sdxi_guest_force | bool }}" = "True" ] && [ -d "$DEST" ]; then
         rm -rf "$DEST"
       fi
-      rsync -a --delete "$SRC/" "$DEST/"
+      rsync -a --delete --itemize-changes "$SRC/" "$DEST/"
+  register: _sdxi_sync
+  changed_when: _sdxi_sync.stdout | length > 0
   when: sdxi_guest_local_src_dir | length > 0
   delegate_to: localhost
   become: false
