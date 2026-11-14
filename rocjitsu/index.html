@@ -699,7 +699,7 @@
 
 
 <h1 id="vm-report-qemu-minimal-rocjitsu-vm">VM Report — qemu-minimal — rocjitsu VM<a class="headerlink" href="#vm-report-qemu-minimal-rocjitsu-vm" title="Permanent link">&para;</a></h1>
-<p>Generated: <strong>2026-11-13 16:10 UTC</strong> &middot; Commit: <a href="https://github.com/sbates130272/qemu-minimal/commit/5028fae42bb5e8af706112c762ca3414ff1af639"><code>5028fae</code></a> &middot; Status: <strong>pass</strong></p>
+<p>Generated: <strong>2026-11-14 15:04 UTC</strong> &middot; Commit: <a href="https://github.com/sbates130272/qemu-minimal/commit/5028fae42bb5e8af706112c762ca3414ff1af639"><code>5028fae</code></a> &middot; Status: <strong>pass</strong></p>
 <h2 id="hardware">Hardware<a class="headerlink" href="#hardware" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -753,7 +753,7 @@ nvme0n1    1T disk
 </code></pre></div>
 <h3 id="disk-usage">Disk usage<a class="headerlink" href="#disk-usage" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code>Filesystem      Size  Used Avail Use% Mounted on
-/dev/vda1        61G  8.5G   53G  14% /
+/dev/vda1        61G  8.4G   53G  14% /
 /dev/vda13      989M  372M  550M  41% /boot
 </code></pre></div>
 <h3 id="nvme">NVMe<a class="headerlink" href="#nvme" title="Permanent link">&para;</a></h3>
@@ -852,11 +852,11 @@ ubuntu.sources
 <tbody>
 <tr>
 <td>GEMM</td>
-<td>509 kFLOP/s</td>
+<td>470 kFLOP/s</td>
 </tr>
 <tr>
 <td>hipFile read throughput</td>
-<td>13.1 MB/s</td>
+<td>17.4 MB/s</td>
 </tr>
 </tbody>
 </table>
@@ -871,7 +871,7 @@ sgemm-bench: device=AMD Radeon Graphics arch=gfx1250
 sgemm-bench: private_segment_bytes=0
 sgemm-bench: m=128 n=128 k=128
 sgemm-bench: max_absolute_error=0 failures=0
-sgemm-bench: seconds_per_iter=8.2376359 gflops=0.000509163558
+sgemm-bench: seconds_per_iter=8.93125664 gflops=0.000469620812
 sgemm-bench: PASS
 </code></pre></div>
 <h3 id="hipfile-nvme-output">hipFile + NVMe output<a class="headerlink" href="#hipfile-nvme-output" title="Permanent link">&para;</a></h3>
@@ -881,10 +881,10 @@ gemm-hipfile-bench: device=AMD Radeon Graphics arch=gfx1250
 gemm-hipfile-bench: path=/mnt/nvme/gemm-hipfile-bench.bin block_bytes=1048576 blocks=32 iters=4
 gemm-hipfile-bench: private_segment_bytes=0
 gemm-hipfile-bench: compat_requested=self buf_registered=yes
-gemm-hipfile-bench: read_bytes=33554432 seconds_per_pass=2.55172799 read_gbs=0.01314969
+gemm-hipfile-bench: read_bytes=33554432 seconds_per_pass=1.92404373 read_gbs=0.0174395371
 gemm-hipfile-bench: m=128 n=128 k=128
 gemm-hipfile-bench: max_absolute_error=0 failures=0
-gemm-hipfile-bench: gemm_seconds_per_iter=8.38320985 gflops=0.000500321962
+gemm-hipfile-bench: gemm_seconds_per_iter=8.94642515 gflops=0.000468824578
 gemm-hipfile-bench: PASS
 </code></pre></div>
 
