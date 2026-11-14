@@ -545,7 +545,7 @@ by <code>qemu-tool quick-start</code>.</p>
 <li>Guest image: <code>20261112.gdca6903-vm.resolute-ernic-rocjitsu-qm.096ddfe-qcow2</code></li>
 <li>Guest size: 2 x 4 vCPU, 5993 MiB</li>
 <li>RDMA bytes across the mesh: 65536000</li>
-<li>Generated: <strong>2026-11-13 18:41 UTC</strong> &middot; Commit: <code>5028fae</code> &middot; Status: <strong>pass</strong></li>
+<li>Generated: <strong>2026-11-14 17:15 UTC</strong> &middot; Commit: <code>5028fae</code> &middot; Status: <strong>pass</strong></li>
 </ul>
 <h2 id="quickstart-1">quickstart-1<a class="headerlink" href="#quickstart-1" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>kernel:  7.2.6-070206-generic
@@ -591,13 +591,13 @@ vector-add: PASS
  rdma_cm QPs     : OFF
  Data ex. method : Ethernet
 ---------------------------------------------------------------------------------------
- local address: LID 0000 QPN 0x0002 PSN 0x97c83a
+ local address: LID 0000 QPN 0x0002 PSN 0x4ac02
  GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:11
- remote address: LID 0000 QPN 0x0002 PSN 0x6a74fa
+ remote address: LID 0000 QPN 0x0002 PSN 0xc14d20
  GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:12
 ---------------------------------------------------------------------------------------
  #bytes     #iterations    BW peak[MiB/sec]    BW average[MiB/sec]   MsgRate[Mpps]
- 65536      1000             1140.96            1136.59          0.018185
+ 65536      1000             485.56             399.49           0.006392
 ---------------------------------------------------------------------------------------
 </code></pre></div>
 <h3 id="nvme-io-test">NVMe I/O test<a class="headerlink" href="#nvme-io-test" title="Permanent link">&para;</a></h3>
@@ -611,11 +611,11 @@ vector-add: PASS
 <tbody>
 <tr>
 <td>write</td>
-<td>42.0 MiB/s</td>
+<td>188.0 MiB/s</td>
 </tr>
 <tr>
 <td>read</td>
-<td>70.0 MiB/s</td>
+<td>212.0 MiB/s</td>
 </tr>
 </tbody>
 </table>
@@ -657,11 +657,11 @@ vector-add: PASS
 <tbody>
 <tr>
 <td>write</td>
-<td>36.0 MiB/s</td>
+<td>182.0 MiB/s</td>
 </tr>
 <tr>
 <td>read</td>
-<td>130.0 MiB/s</td>
+<td>226.0 MiB/s</td>
 </tr>
 </tbody>
 </table>
