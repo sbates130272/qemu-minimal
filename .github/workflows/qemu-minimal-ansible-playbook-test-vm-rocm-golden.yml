@@ -20,7 +20,9 @@ on:
     branches:
       - main
     # 'qemu/qemu-tool/**' and 'qemu/pyproject.toml' are deliberately absent:
-    # this lane tests the playbook, not the tool that runs it.
+    # this lane tests the playbook, not the tool that runs it. gen_vm.py is
+    # the exception: it turns the package manifest below into cloud-config,
+    # and getting that wrong hangs this bake.
     paths:
       - 'ansible/playbooks/vm-rocm-golden.yml'
       # It imports vm-basic.yml and reads vars/, and every role it uses lives
@@ -32,6 +34,7 @@ on:
       - 'ansible/playbooks/templates/**'
       - 'qemu/checks/rocm-golden.sh'
       - 'qemu/packages.d/rocm-golden.txt'
+      - 'qemu/qemu-tool/gen_vm.py'
       - 'qemu/compose/vfio-user-ernic-rocjitsu-vm/**'
       - '.github/actions/setup-vm-job/action.yml'
       - '.github/actions/report-image-size/action.yml'

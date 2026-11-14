@@ -28,6 +28,13 @@ All notable changes to this project will be documented in this file.
     and publishes to `docker.io/sbates130272/qemu-minimal-rocm-golden` as
     `<YYYYMMDD>.g<sha7>` and `latest`. The published disk is the bake, not
     the disk that was tested.
+  - `gen-vm --packages` takes a manifest of bare names, one per line, as
+    well as the YAML fragment it always took. `rocm-golden.txt` is the first
+    kind, and pasted into the cloud-config unchanged it made the document
+    invalid: cloud-init applied none of it and the bake waited two hours on
+    a guest that would never power off. The generated cloud-config is now
+    parsed before the guest boots, and a first boot under KVM is capped at
+    30 minutes.
   - The `vfio-user-ernic-rocjitsu-vm` stack gains a rocm-sdxi server, so its
     guest has an SDXI engine as well. `SDXI_COUNT=0` leaves it out.
   - `sdxi_source_pin` moves to `dfd76f2`, where upstream `sdxi_char` builds

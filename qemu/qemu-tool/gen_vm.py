@@ -118,6 +118,7 @@ def run(cfg: VMConfig) -> None:
         stack.callback(_cleanup, cloud_cfg_path, net_cfg_path, seed_path)
 
         _write_cloud_config(cfg, packages, ssh_key, cloud_cfg_path)
+        _check_cloud_config(cloud_cfg_path)
         _write_network_config(cfg, net_cfg_path)
         _create_seed_iso(cfg, images, cloud_cfg_path, net_cfg_path)
         _first_boot(cfg, images, backing)
@@ -498,11 +499,51 @@ def _download_if_needed(
 # Cloud-config + seed ISO
 # ---------------------------------------------------------------------------
 
+def _as_yaml_list(manifest: str) -> str:
+    """Normalise a package manifest to the YAML list cloud-config wants.
+
+    Two formats exist. packages-default is already a YAML fragment, one
+    "  - name" per line. rocm-golden.txt is one bare name per line. The text
+    is pasted under "packages:" in the cloud-config, so a bare name there
+    makes the whole document invalid YAML -- and cloud-init then ignores all
+    of it, user and SSH key included, leaving a guest that boots to a login
+    prompt nothing can get past.
+    """
+    out = []
+    for line in manifest.splitlines():
+        text = line.strip()
+        if not text or text.startswith("#") or text.startswith("-"):
+            out.append(line)
+        else:
+            out.append(f"  - {text}")
+    return "\n".join(out)
+
+
+def _check_cloud_config(path: Path) -> None:
+    """Refuse to boot a guest on user-data cloud-init will not parse.
+
+    cloud-init does not fail on invalid YAML; it logs a warning inside the
+    guest and applies none of it, so the bake waits on a guest with no user,
+    no key and no reason to power off. Skipped where PyYAML is missing.
+    """
+    try:
+        import yaml
+    except ImportError:
+        return
+    try:
+        parsed = yaml.safe_load(path.read_text())
+    except yaml.YAMLError as exc:
+        sys.exit(f"Error: the generated cloud-config is not valid YAML: {exc}\n"
+                 "Check the --packages manifest.")
+    if not isinstance(parsed, dict):
+        sys.exit("Error: the generated cloud-config is not a YAML mapping.")
+
+
 def _load_packages(cfg: VMConfig) -> str:
     if cfg.packages is None or cfg.packages == "none":
         pkgs = ""
     elif Path(cfg.packages).exists():
-        pkgs = Path(cfg.packages).read_text()
+        pkgs = _as_yaml_list(Path(cfg.packages).read_text())
     else:
         sys.exit(f"Error: package manifest {cfg.packages} does not exist!")
 
@@ -707,15 +748,20 @@ def _first_boot(cfg: VMConfig, images: Path, backing: Path) -> None:
     # (growpart + resize2fs) can take 30+ minutes on arm64/riscv64. Cap the
     # wait so a hung guest produces a clear error rather than silently burning
     # the CI job timeout.
-    boot_timeout = None if cfg.kvm else 3300  # 55 min; job ceiling is 60 min
+    #
+    # With KVM a first boot takes minutes, and it still gets a ceiling: a
+    # guest whose cloud-init rejected the user-data never powers itself off,
+    # and waiting on it for ever looks exactly like a slow bake.
+    boot_timeout = 1800 if cfg.kvm else 3300  # 55 min; job ceiling is 60 min
     try:
         subprocess.run(cmd, check=True, timeout=boot_timeout)
     except subprocess.TimeoutExpired:
         sys.exit(
             f"Error: first boot timed out after {boot_timeout}s on "
-            f"{cfg.arch} (no KVM). cloud-init did not complete — "
-            f"check rootfs expansion (growpart/resize2fs) in the "
-            f"QEMU console log."
+            f"{cfg.arch} ({'KVM' if cfg.kvm else 'no KVM'}). cloud-init did "
+            f"not complete and power the guest off. Without KVM, check "
+            f"rootfs expansion (growpart/resize2fs) in the QEMU console "
+            f"log; with it, check that cloud-init accepted the user-data."
         )
 
 
