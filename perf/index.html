@@ -314,33 +314,6 @@
   
   
     <li class="md-nav__item">
-      <a href="../reports/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Reports
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-  
-    <li class="md-nav__item">
       <a href="../publishing/" class="md-nav__link">
         
   
@@ -495,17 +468,6 @@
   
 </li>
       
-        <li class="md-nav__item">
-  <a href="#current-report-freshness" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Current report freshness
-      
-    </span>
-  </a>
-  
-</li>
-      
     </ul>
   
 </nav>
@@ -610,17 +572,6 @@
   
 </li>
       
-        <li class="md-nav__item">
-  <a href="#current-report-freshness" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Current report freshness
-      
-    </span>
-  </a>
-  
-</li>
-      
     </ul>
   
 </nav>
@@ -649,21 +600,22 @@
   <h1>Performance</h1>
 
 <p>This page is generated during the Pages publish from retained benchmark history on
-<code>gh-pages</code>, using the latest rocjitsu and hipFile fio report artifacts as inputs.
-It mirrors the same basic model used by the ROCm/rocm-ernic site: badges for the
-latest published numbers, a durable history file, and a trend page regenerated as
-new CI data lands.</p>
+<code>gh-pages</code>, using the badge JSON the benchmark jobs upload as inputs. It mirrors
+the same basic model used by the ROCm/rocm-ernic site: badges for the latest
+published numbers, a durable history file, and a trend page regenerated as new
+CI data lands.</p>
 <h2 id="latest-published-snapshot">Latest published snapshot<a class="headerlink" href="#latest-published-snapshot" title="Permanent link">&para;</a></h2>
 <p>Generated from <code>5028fae4</code> at <strong>2026-11-15 15:32 UTC</strong>.</p>
-<p><img alt="rocjitsu GEMM" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-gemm.json" />
-<img alt="rocjitsu hipFile" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile.json" />
-<img alt="hipFile fio" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile-fio.json" />
+<p><img alt="Rocjitsu GEMM" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-gemm.json" />
+<img alt="Rocjitsu HipFile" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile.json" />
+<img alt="HipFile Fio" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile-fio.json" />
+<img alt="Ernic P4 FP8 BW" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-ernic-p4-bw.json" />
 <img alt="SDXI copy BW" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-sdxi-bw.json" /></p>
 <p>Badge colour is health, not branding. Each latest reading is compared against
 the mean of the previous 5 <em>distinct</em> readings — consecutive
-republishes of an unchanged number are collapsed first, because a publish is
-triggered by any report lane finishing and re-records the other lanes' last
-artifacts untouched. Green is at or above 95% of that
+republishes of an unchanged number are collapsed first, because a publish
+re-records every artifact it finds, including ones no job refreshed. Green is
+at or above 95% of that
 baseline, amber down to 80%, red below it, and blue
 means there is not yet a second distinct reading to compare against. The band
 is wide on purpose: these benchmarks run against an emulated GPU over
@@ -723,10 +675,11 @@ vfio-user and swing hard between runs.</p>
 <tr>
 <th>Commit</th>
 <th>Generated</th>
-<th>GEMM</th>
-<th>hipFile</th>
-<th>hipFile fio</th>
-<th>SDXI BW</th>
+<th>Rocjitsu GEMM</th>
+<th>Rocjitsu HipFile</th>
+<th>HipFile Fio</th>
+<th>Ernic P4 FP8 BW</th>
+<th>SDXI copy BW</th>
 </tr>
 </thead>
 <tbody>
@@ -737,6 +690,7 @@ vfio-user and swing hard between runs.</p>
 <td>18.7 MB/s</td>
 <td>17.9 MB/s</td>
 <td>n/a</td>
+<td>n/a</td>
 </tr>
 <tr>
 <td>1ec7f8d0</td>
@@ -744,6 +698,7 @@ vfio-user and swing hard between runs.</p>
 <td>816 kFLOP/s</td>
 <td>93.6 MB/s</td>
 <td>70.4 MB/s</td>
+<td>n/a</td>
 <td>n/a</td>
 </tr>
 <tr>
@@ -753,6 +708,7 @@ vfio-user and swing hard between runs.</p>
 <td>93.6 MB/s</td>
 <td>70.4 MB/s</td>
 <td>n/a</td>
+<td>n/a</td>
 </tr>
 <tr>
 <td>fad1f5e8</td>
@@ -760,6 +716,7 @@ vfio-user and swing hard between runs.</p>
 <td>710 kFLOP/s</td>
 <td>25.1 MB/s</td>
 <td>26.7 MB/s</td>
+<td>n/a</td>
 <td>n/a</td>
 </tr>
 <tr>
@@ -769,6 +726,7 @@ vfio-user and swing hard between runs.</p>
 <td>25.1 MB/s</td>
 <td>26.7 MB/s</td>
 <td>n/a</td>
+<td>n/a</td>
 </tr>
 <tr>
 <td>3040a58d</td>
@@ -776,6 +734,7 @@ vfio-user and swing hard between runs.</p>
 <td>485 kFLOP/s</td>
 <td>17.6 MB/s</td>
 <td>16.8 MB/s</td>
+<td>n/a</td>
 <td>n/a</td>
 </tr>
 <tr>
@@ -785,6 +744,7 @@ vfio-user and swing hard between runs.</p>
 <td>17.6 MB/s</td>
 <td>16.8 MB/s</td>
 <td>n/a</td>
+<td>n/a</td>
 </tr>
 <tr>
 <td>5028fae4</td>
@@ -792,6 +752,7 @@ vfio-user and swing hard between runs.</p>
 <td>509 kFLOP/s</td>
 <td>13.1 MB/s</td>
 <td>6.88 MB/s</td>
+<td>n/a</td>
 <td>n/a</td>
 </tr>
 <tr>
@@ -801,6 +762,7 @@ vfio-user and swing hard between runs.</p>
 <td>17.4 MB/s</td>
 <td>16.6 MB/s</td>
 <td>n/a</td>
+<td>n/a</td>
 </tr>
 <tr>
 <td>5028fae4</td>
@@ -809,79 +771,7 @@ vfio-user and swing hard between runs.</p>
 <td>16 MB/s</td>
 <td>14.9 MB/s</td>
 <td>n/a</td>
-</tr>
-</tbody>
-</table>
-<h2 id="current-report-freshness">Current report freshness<a class="headerlink" href="#current-report-freshness" title="Permanent link">&para;</a></h2>
-<p><img alt="all reports green" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-all-green.json" /></p>
-<p>A report counts as green when it carries a <code>pass</code> status stamp <em>and</em> was
-generated within 36 hours of the publish. Both are needed: a
-lane that fails uploads no artifact at all, so its previous report stays on the
-branch and would otherwise keep reading <code>pass</code> indefinitely. The badge above
-shows the last date on which all 7 reports were green at once —
-amber once that date is no longer today.</p>
-<p>Last all-green: <strong>2026-11-02</strong> &middot; checked
-2026-11-15 16:03 UTC &middot; currently
-not all green.</p>
-<table>
-<thead>
-<tr>
-<th>Report</th>
-<th>Generated</th>
-<th>Status</th>
-<th>Commit</th>
-<th>Page</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Single VM</td>
-<td>2026-11-15 15:32 UTC</td>
-<td>pass</td>
-<td><code>5028fae</code></td>
-<td><a href="/1vm/">/1vm/</a></td>
-</tr>
-<tr>
-<td>rocjitsu</td>
-<td>2026-11-15 15:28 UTC</td>
-<td>pass</td>
-<td><code>5028fae</code></td>
-<td><a href="/rocjitsu/">/rocjitsu/</a></td>
-</tr>
-<tr>
-<td>ernic VM 1</td>
-<td>2026-11-13 11:12 UTC</td>
-<td>pass</td>
-<td><code>3040a58</code></td>
-<td><a href="/ernic/">/ernic/</a></td>
-</tr>
-<tr>
-<td>ernic VM 2</td>
-<td>2026-11-13 11:12 UTC</td>
-<td>pass</td>
-<td><code>3040a58</code></td>
-<td><a href="/ernic/vm2/">/ernic/vm2/</a></td>
-</tr>
-<tr>
-<td>hipFile fio</td>
-<td>2026-11-15 15:31 UTC</td>
-<td>pass</td>
-<td><code>5028fae</code></td>
-<td><a href="/hipfile-fio/">/hipfile-fio/</a></td>
-</tr>
-<tr>
-<td>LMCache P2P</td>
-<td>2026-10-29 20:16 UTC</td>
-<td>pass</td>
-<td><code>15a9b83</code></td>
-<td><a href="/lmcache/">/lmcache/</a></td>
-</tr>
-<tr>
-<td>MI355X node</td>
-<td>2026-11-02 22:34 UTC</td>
-<td>pass</td>
-<td><code>unknown</code></td>
-<td><a href="/mi355x/">/mi355x/</a></td>
+<td>n/a</td>
 </tr>
 </tbody>
 </table>

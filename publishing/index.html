@@ -13,7 +13,7 @@
         <link rel="canonical" href="https://sbates130272.github.io/qemu-minimal/publishing/">
       
       
-        <link rel="prev" href="../reports/">
+        <link rel="prev" href="../documentation/">
       
       
         <link rel="next" href="../perf/">
@@ -313,33 +313,6 @@
       
   
   
-  
-  
-    <li class="md-nav__item">
-      <a href="../reports/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Reports
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-    
-      
-      
-  
-  
     
   
   
@@ -421,10 +394,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#adding-another-report-lane" class="md-nav__link">
+  <a href="#adding-another-benchmark" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Adding another report lane
+        Adding another benchmark
       
     </span>
   </a>
@@ -524,10 +497,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#adding-another-report-lane" class="md-nav__link">
+  <a href="#adding-another-benchmark" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Adding another report lane
+        Adding another benchmark
       
     </span>
   </a>
@@ -576,30 +549,32 @@
 <p>The published site is built from two sources:</p>
 <ol>
 <li>Repository-owned Pages content under <code>docs/</code>.</li>
-<li>The latest unexpired report artifacts uploaded by the report workflows.</li>
+<li>The latest unexpired <code>perf-*</code> artifacts uploaded by the benchmark jobs.</li>
 </ol>
-<p>The <code>qemu-minimal-publish-pages.yml</code> workflow fetches each report artifact by
-name into the <code>docs/</code> tree, runs <code>mkdocs build</code> to produce <code>site/</code>, and pushes
-the built HTML to the <code>gh-pages</code> branch.</p>
+<p>The <code>qemu-minimal-publish-pages.yml</code> workflow fetches each artifact by name
+into a scratch directory, regenerates <code>docs/perf/</code> from it, runs <code>mkdocs build</code>
+to produce <code>site/</code>, and pushes the built HTML to the <code>gh-pages</code> branch. The
+artifacts themselves are inputs only and are never published.</p>
 <h2 id="performance-tracking-flow">Performance tracking flow<a class="headerlink" href="#performance-tracking-flow" title="Permanent link">&para;</a></h2>
-<p>The rocjitsu and hipFile fio artifacts expose metric badge JSON. The publisher
-reads those badges, appends a new record when metrics change, and regenerates
-the performance page and badge JSON from a history file on <code>gh-pages</code>. That
-keeps <code>main</code> free of CI-written history while retaining trends over time.</p>
-<h2 id="adding-another-report-lane">Adding another report lane<a class="headerlink" href="#adding-another-report-lane" title="Permanent link">&para;</a></h2>
+<p>Each artifact holds the badge JSON for one benchmark. The publisher reads those
+badges, appends a new record when metrics change, and regenerates the
+performance page and badge JSON from a history file on <code>gh-pages</code>. That keeps
+<code>main</code> free of CI-written history while retaining trends over time.</p>
+<h2 id="adding-another-benchmark">Adding another benchmark<a class="headerlink" href="#adding-another-benchmark" title="Permanent link">&para;</a></h2>
 <ol>
-<li>Upload lane output under its own stable artifact name.</li>
-<li>Fetch that artifact into <code>docs/&lt;dest&gt;/</code> in <code>qemu-minimal-publish-pages.yml</code>.</li>
-<li>Add the lane's workflow <code>name:</code> to the <code>workflow_run</code> trigger list — omit
-   this and the lane publishes nothing until another lane finishes.</li>
-<li>Add the lane to the report index and, if it exposes numeric badges, to the
-   performance renderer.</li>
-<li>Add a status badge to the README — omit this and the lane is invisible on the
-   report page.</li>
+<li>Have the job upload its <code>badge-*.json</code> under its own stable <code>perf-&lt;name&gt;</code>
+   artifact name.</li>
+<li>Fetch that artifact in <code>qemu-minimal-publish-pages.yml</code>.</li>
+<li>If the job lives in a new workflow, add its <code>name:</code> to the <code>workflow_run</code>
+   trigger list — omit this and the number publishes only when another
+   workflow finishes.</li>
+<li>Add the metric to <code>METRICS</code> in <code>scripts/render-site-perf.py</code>.</li>
+<li>Add the endpoint badge to the README.</li>
 </ol>
 <h2 id="failure-model">Failure model<a class="headerlink" href="#failure-model" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Missing artifacts leave the last published lane output in place.</li>
+<li>A missing or expired artifact leaves that metric's last recorded value in
+  the history; its badge reads <code>n/a</code> until a new number arrives.</li>
 <li>Retried Pages publishes rebuild from the latest <code>gh-pages</code> tip before pushing.</li>
 <li>Performance history is regenerated from the seeded <code>gh-pages</code> record, so a
   re-run does not truncate the trend page to one point.</li>

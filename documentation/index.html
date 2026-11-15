@@ -16,7 +16,7 @@
         <link rel="prev" href="..">
       
       
-        <link rel="next" href="../reports/">
+        <link rel="next" href="../publishing/">
       
       
         
@@ -356,10 +356,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#report-producing-lanes" class="md-nav__link">
+  <a href="#tracked-benchmarks" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Report-producing lanes
+        Tracked benchmarks
       
     </span>
   </a>
@@ -381,33 +381,6 @@
   
 </nav>
       
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../reports/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Reports
-  
-
-    
-  </span>
-  
-  
-
-      </a>
     </li>
   
 
@@ -502,10 +475,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#report-producing-lanes" class="md-nav__link">
+  <a href="#tracked-benchmarks" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Report-producing lanes
+        Tracked benchmarks
       
     </span>
   </a>
@@ -552,29 +525,20 @@
 
 <div class="doc-grid">
   <div class="doc-section">
-    <span class="eyebrow">Reports</span>
-    <h2>What is live</h2>
-    <p>
-      Seven CI lanes publish guest inspection pages: single-VM, rocjitsu, ernic,
-      lmcache, quickstart, MI355X, and hipFile fio. Each page is regenerated from the
-      latest artifact and linked from the report index.
-    </p>
-  </div>
-  <div class="doc-section">
     <span class="eyebrow">Performance</span>
     <h2>What is retained</h2>
     <p>
-      Benchmark lanes expose numeric badge JSON. Those snapshots accumulate in a
-      history file on <code>gh-pages</code> so the performance page shows trends
-      rather than only the latest reading.
+      Each benchmark job uploads its latest number as badge JSON. Those
+      snapshots accumulate in a history file on <code>gh-pages</code> so the
+      performance page shows trends rather than only the latest reading.
     </p>
   </div>
   <div class="doc-section">
     <span class="eyebrow">Publishing</span>
     <h2>How it fits together</h2>
     <p>
-      The Pages publisher fetches each lane's latest artifact by name and assembles
-      them into one site. No lane can overwrite another's content.
+      The Pages publisher fetches each benchmark's latest artifact by name, so
+      a benchmark that failed today keeps its last good number on the site.
     </p>
   </div>
 </div>
@@ -597,10 +561,6 @@
 <td>High-level explanation of the published site and its moving parts.</td>
 </tr>
 <tr>
-<td><a href="../reports/">Reports</a></td>
-<td>Directory of the live CI-generated report pages.</td>
-</tr>
-<tr>
 <td><a href="../publishing/">Publishing flow</a></td>
 <td>How workflow artifacts become the published site and how trend history is retained.</td>
 </tr>
@@ -610,50 +570,44 @@
 </tr>
 </tbody>
 </table>
-<h2 id="report-producing-lanes">Report-producing lanes<a class="headerlink" href="#report-producing-lanes" title="Permanent link">&para;</a></h2>
+<h2 id="tracked-benchmarks">Tracked benchmarks<a class="headerlink" href="#tracked-benchmarks" title="Permanent link">&para;</a></h2>
+<p>All five are measured by <code>qemu-minimal-report-for-vm-rocm-golden.yml</code> against
+one stack, described by <code>qemu/xml/rocm-golden.xml</code>: two guests from the
+published rocm-golden image, each with a GPU, an NVMe, an RDMA NIC and an SDXI
+device.</p>
 <table>
 <thead>
 <tr>
-<th>Workflow</th>
-<th>Published path</th>
-<th>Notes</th>
+<th>Metric</th>
+<th>Measured on</th>
+<th>Artifact</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>report-for-vm-basic</code></td>
-<td><code>/1vm/</code></td>
-<td>General single-VM guest inspection.</td>
+<td>rocjitsu GEMM</td>
+<td>guest 1</td>
+<td><code>perf-rocjitsu</code></td>
 </tr>
 <tr>
-<td><code>report-for-vm-rocjitsu</code></td>
-<td><code>/rocjitsu/</code></td>
-<td>rocjitsu VM report with GEMM and hipFile benchmark output.</td>
+<td>rocjitsu hipFile</td>
+<td>guest 1</td>
+<td><code>perf-rocjitsu</code></td>
 </tr>
 <tr>
-<td><code>report-for-vm-ernic</code></td>
-<td><code>/ernic/</code> and <code>/ernic/vm2/</code></td>
-<td>ernic stack reports for VM 1 and VM 2.</td>
+<td>hipFile fio</td>
+<td>guest 2</td>
+<td><code>perf-hipfile-fio</code></td>
 </tr>
 <tr>
-<td><code>report-for-hipfile-fio</code></td>
-<td><code>/hipfile-fio/</code></td>
-<td>fio <code>libhipfile</code> benchmark report.</td>
+<td>Ernic P4 FP8 bandwidth</td>
+<td>guest 1 to guest 2</td>
+<td><code>perf-ernic</code></td>
 </tr>
 <tr>
-<td><code>report-for-lmcache</code></td>
-<td><code>/lmcache/</code></td>
-<td>LMCache L1 P2P between two guests, with the ernic RDMA byte counters.</td>
-</tr>
-<tr>
-<td><code>report-for-quickstart</code></td>
-<td><code>/quickstart/</code></td>
-<td>The README's Quick Start, run end to end.</td>
-</tr>
-<tr>
-<td><code>report-for-mi355x</code></td>
-<td><code>/mi355x/</code></td>
-<td>An MI355X-shaped PCIe tree, as the guest enumerates it.</td>
+<td>SDXI copy bandwidth</td>
+<td>guest 1</td>
+<td><code>perf-helios</code></td>
 </tr>
 </tbody>
 </table>
@@ -661,7 +615,8 @@
 <ul>
 <li>The site is built from <code>docs/</code> using MkDocs Material and pushed as pre-built
   HTML to the <code>gh-pages</code> branch.</li>
-<li>Live report artifacts remain the source of truth for guest state.</li>
+<li>No guest inspection report is published. The benchmark jobs upload badge
+  JSON only.</li>
 <li>Performance history is stored only on <code>gh-pages</code>; it is not committed on
   <code>main</code>.</li>
 </ul>
