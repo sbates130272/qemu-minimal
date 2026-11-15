@@ -688,7 +688,7 @@
 
 
 <h1 id="vm-report-qemu-minimal-hipfile-fio-vm">VM Report — qemu-minimal — hipFile fio VM<a class="headerlink" href="#vm-report-qemu-minimal-hipfile-fio-vm" title="Permanent link">&para;</a></h1>
-<p>Generated: <strong>2026-11-14 15:06 UTC</strong> &middot; Commit: <a href="https://github.com/sbates130272/qemu-minimal/commit/5028fae42bb5e8af706112c762ca3414ff1af639"><code>5028fae</code></a> &middot; Status: <strong>pass</strong></p>
+<p>Generated: <strong>2026-11-15 15:31 UTC</strong> &middot; Commit: <a href="https://github.com/sbates130272/qemu-minimal/commit/5028fae42bb5e8af706112c762ca3414ff1af639"><code>5028fae</code></a> &middot; Status: <strong>pass</strong></p>
 <h2 id="hardware">Hardware<a class="headerlink" href="#hardware" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -809,6 +809,7 @@ ubuntu.sources
   cron.service                     loaded active running Regular background program processing daemon
   dbus.service                     loaded active running D-Bus System Message Bus
   getty@tty1.service               loaded active running Getty on tty1
+  gpuagent.service                 loaded active running AMD GPU Metrics Reader Service
   ModemManager.service             loaded active running Modem Manager
   networkd-dispatcher.service      loaded active running Dispatcher daemon for systemd-networkd
   polkit.service                   loaded active running Authorization Manager
@@ -841,7 +842,7 @@ ubuntu.sources
 <tbody>
 <tr>
 <td>fio libhipfile read throughput</td>
-<td>16.6 MB/s</td>
+<td>14.9 MB/s</td>
 </tr>
 </tbody>
 </table>
@@ -855,7 +856,7 @@ vfio-user, so watch the trend between runs rather than the absolute number.</p>
 building fio 6bc57a931f04fa3f50348d8c8f087187f050c6e1
 FIO_VERSION = fio-3.42
 fio: fio-3.42 commit=6bc57a931f04fa3f50348d8c8f087187f050c6e1
-fio-hipfile-bench: read_bytes=67108864 seconds=4.04 read_gbs=0.016611104
+fio-hipfile-bench: read_bytes=67108864 seconds=4.511 read_gbs=0.014876715
 </code></pre></div>
 
 
