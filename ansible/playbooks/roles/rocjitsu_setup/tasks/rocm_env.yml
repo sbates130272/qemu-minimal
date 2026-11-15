@@ -1,0 +1,115 @@
+---
+# The therock packages install under /opt/rocm/core-<line>. rocm_setup puts
+# that on the linker path and on a login shell's PATH, and stops there. These
+# tasks cover the callers that leaves out.
+
+# Asserted, not assumed: the therock stream moves, and a stale line has to
+# fail the bake here instead of baking a dead PATH entry into an image that
+# looks fine until someone logs in.
+- name: Check the pinned ROCm prefix exists
+  ansible.builtin.stat:
+    path: "{{ rocjitsu_setup_rocm_path }}/bin"
+  register: _rocjitsu_setup_rocm_prefix
+  failed_when: not _rocjitsu_setup_rocm_prefix.stat.exists
+
+# Its own file beside rocm_setup's rocm.sh, which exports PATH and
+# LD_LIBRARY_PATH and no ROCM_PATH.
+- name: Export ROCM_PATH to login shells
+  ansible.builtin.copy:
+    dest: /etc/profile.d/rocm-path.sh
+    mode: "0644"
+    content: |
+      export ROCM_PATH={{ rocjitsu_setup_rocm_path }}
+      case ":${PATH}:" in
+        *":${ROCM_PATH}/bin:"*) ;;
+        *) export PATH=${ROCM_PATH}/bin:${PATH} ;;
+      esac
+  become: true
+
+# /etc/profile.d reaches login shells only. `ssh guest hipcc`, an Ansible
+# command task and a systemd unit are none of them one, and each saw a guest
+# with no ROCm in it. /etc/environment is read by pam_env for any SSH
+# session. It is not a shell script, so the whole PATH is written out, built
+# from the line the image already has.
+- name: Put ROCm on PATH for non-login shells
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      rocm='{{ rocjitsu_setup_rocm_path }}'
+      cur=$(sed -n 's/^PATH="\?\([^"]*\)"\?$/\1/p' /etc/environment | head -1)
+      if [ -z "$cur" ]; then
+        echo "/etc/environment has no PATH line to prepend to" >&2
+        exit 1
+      fi
+      rest=$(printf '%s' "$cur" | tr ':' '\n' | grep -v '^/opt/rocm' | paste -sd:)
+      want="PATH=\"${rocm}/bin:${rest}\""
+      if grep -qxF "$want" /etc/environment \
+          && grep -qxF "ROCM_PATH=${rocm}" /etc/environment; then
+        exit 0
+      fi
+      sed -i '/^ROCM_PATH=/d' /etc/environment
+      sed -i "s|^PATH=.*|${want}|" /etc/environment
+      printf 'ROCM_PATH=%s\n' "$rocm" >> /etc/environment
+      echo changed
+    executable: /bin/bash
+  become: true
+  register: _rocjitsu_setup_rocm_environment
+  changed_when: "'changed' in _rocjitsu_setup_rocm_environment.stdout"
+
+# Most ROCm documentation and third-party tooling spell /opt/rocm/bin and
+# /opt/rocm/lib literally, and the therock layout has neither. Only where
+# nothing holds the path: update-alternatives owns some names directly under
+# /opt/rocm, and a symlink over an alternatives slot is a conflict that
+# surfaces at the next ROCm upgrade.
+- name: Link the versionless ROCm paths
+  ansible.builtin.shell:
+    cmd: |
+      set -eu
+      for sub in bin lib; do
+        if [ -e "/opt/rocm/$sub" ] || [ -L "/opt/rocm/$sub" ]; then
+          continue
+        fi
+        if update-alternatives --query "rocm-$sub" > /dev/null 2>&1; then
+          continue
+        fi
+        ln -s '{{ rocjitsu_setup_rocm_path }}'/"$sub" "/opt/rocm/$sub"
+        echo "linked $sub"
+      done
+      test -d /opt/rocm/bin
+      test -d /opt/rocm/lib
+    executable: /bin/bash
+  become: true
+  register: _rocjitsu_setup_rocm_links
+  changed_when: "'linked' in _rocjitsu_setup_rocm_links.stdout"
+
+# The amdsmi bindings install under share/amd_smi and onto no import path. A
+# .pth in the system site directory works however python3 was started, and
+# cannot shadow anything: the directory holds the amdsmi package alone. The
+# site directory is resolved, not spelled -- which sysconfig scheme answers
+# for it has moved between releases.
+- name: Put the amdsmi Python bindings on the import path
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      src='{{ rocjitsu_setup_rocm_path }}/share/amd_smi'
+      if [ ! -d "$src/amdsmi" ]; then
+        echo "no $src/amdsmi: the therock stream has moved the bindings" >&2
+        exit 1
+      fi
+      site=$(python3 -c 'import os, site, sysconfig
+      for d in [sysconfig.get_paths()["purelib"], *site.getsitepackages()]:
+          if os.path.isdir(d):
+              print(d)
+              break')
+      test -n "$site"
+      if [ "$(cat "$site/amdsmi.pth" 2>/dev/null)" != "$src" ]; then
+        printf '%s\n' "$src" > "$site/amdsmi.pth"
+        chmod 0644 "$site/amdsmi.pth"
+        echo changed
+      fi
+      python3 -c 'import amdsmi'
+      test -x '{{ rocjitsu_setup_rocm_path }}/bin/amd-smi'
+    executable: /bin/bash
+  become: true
+  register: _rocjitsu_setup_rocm_amdsmi
+  changed_when: "'changed' in _rocjitsu_setup_rocm_amdsmi.stdout"

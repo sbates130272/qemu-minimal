@@ -18,7 +18,7 @@ lane fails.
 
 ```bash
 qemu-tool gen-compose --stack vfio-user-mi355x-node \
-  --fleet-file qemu/xml/mi355x-node.xml
+  --xml qemu/xml/mi355x-node.xml
 ```
 
 ## Topology
@@ -116,32 +116,20 @@ stack**, not something a 32-core workstation runs.
 
 ## Bringing it up
 
-The short way, which is also what CI runs — `scripts/mi355x-node.sh` fetches
-the guest keypair from the qcow2's OCI referrer, makes the overlays, renders
-the stack and brings it up, then makes the guest test-ready and checks the
-shape:
+`qemu-tool quick-start --flavor mi355x` boots the stack from the published
+image. By hand:
 
 ```bash
-scripts/mi355x-node.sh up
-scripts/mi355x-node.sh test --report-dir /tmp/mi355x-report
-scripts/mi355x-node.sh down
-```
-
-It defaults to `qemu/xml/overlay-mi355x-ci.xml`, which is **one** guest sized for
-a CI runner. Pass `--fleet-overlay` with your own delta for a full four-VM lab run,
-or drive the steps by hand:
-
-```bash
-qemu-tool gen-vm --fleet-file qemu/xml/mi355x-node.xml \
+qemu-tool gen-vm --xml qemu/xml/mi355x-node.xml \
     --vm-name stebates-mi355x-1 --backing-image "$VM_BACKING_IMAGE"
 for n in 2 3 4; do
-  qemu-tool gen-vm --fleet-file qemu/xml/mi355x-node.xml \
+  qemu-tool gen-vm --xml qemu/xml/mi355x-node.xml \
       --vm-name stebates-mi355x-$n \
       --backing-file /var/lib/qemu-tool/images/stebates-mi355x-1-backing.qcow2
 done
 qemu-tool gen-compose --stack vfio-user-mi355x-node \
-  --fleet-file qemu/xml/mi355x-node.xml
-qemu-tool compose --fleet-file qemu/xml/mi355x-node.xml \
+  --xml qemu/xml/mi355x-node.xml
+qemu-tool compose --xml qemu/xml/mi355x-node.xml \
     --stack vfio-user-mi355x-node --profile metrics up -d
 ```
 
@@ -149,19 +137,16 @@ qemu-tool compose --fleet-file qemu/xml/mi355x-node.xml \
 fails to probe every device with `can't load firmware "amdgpu/ip_discovery.bin"`
 because the guest image deliberately omits that file — it is generated from the
 running rocjitsu image and must be installed by Ansible after the stack is up.
-Run `fleet-quickstart.yml` (or the equivalent `amdgpu_firmware` role task)
+Run `vm-quickstart.yml` (or the `rocjitsu_setup` role's `firmware` tasks with `rocjitsu_setup_firmware_live: true`)
 before expecting any GPU work:
 
 ```bash
 cd ansible/playbooks
 ansible-playbook \
   -i /var/lib/qemu-tool/stacks/mi355x-node/fleet-inventory.yml \
-  fleet-quickstart.yml \
+  vm-quickstart.yml \
   --start-at-task "Install the gfx1250 firmware stubs generated from this stack's rocjitsu"
 ```
-
-`scripts/mi355x-node.sh test` does this as part of its normal run, so the
-short path above already has it covered. The manual path does not.
 
 Confirm the topology from inside a guest before anything else — a flat tree
 boots exactly as happily as a switched one:
@@ -200,7 +185,7 @@ fork builds, and `/build/qemu-commit.txt`.
 
 **The guest-side ansible configures one NIC, not eight.**
 `ernic_guest_setup`'s configure play assigns one address to `rocm-ernic0`, and
-`fleet-inventory.yml`'s `fleet_guest_ip`/`lmcache_guest_ernic_mac` are single
+`fleet-inventory.yml`'s `fleet_guest_ip`/`fleet_guest_ernic_mac` are single
 values per host. The generator emits the remaining pairs as
 `fleet_guest_nics` so they are recorded where a role that loops over them
 will look, but **nothing in `ansible/` consumes that yet**.
@@ -211,7 +196,3 @@ eight — needs the roles extending, with two constraints that multiply by
 eight on the way: UCX cannot open an IB device whose name contains `-` or `_`
 (issue 21), and SRQ needs the DKMS build with `ernic_srq_dkms_reload` true
 (issue 20).
-
-LMCache is off (`LMCACHE_ENABLE=false`) for the same reason: its guest-side
-half assumes one ernic per guest, and it is orthogonal to the topology this
-stack exists to test.

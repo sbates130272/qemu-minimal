@@ -348,9 +348,9 @@ class NoStaleScriptTest(unittest.TestCase):
     """
 
     HAYSTACK = ("README.md", "AGENTS.md", "site/reports.md",
-                ".github/workflows/qemu-minimal-report-for-quickstart.yml",
+                ".github/workflows/qemu-minimal-report-for-vm-rocm-golden.yml",
                 "qemu/xml/quickstart.xml",
-                "ansible/playbooks/fleet-quickstart.yml")
+                "ansible/playbooks/vm-quickstart.yml")
 
     def test_the_script_is_gone(self):
         self.assertFalse((REPO_ROOT / "scripts" / "quickstart-2vm.sh").exists())
@@ -373,9 +373,7 @@ class NoStaleScriptTest(unittest.TestCase):
 class WorkflowWorkspaceTest(unittest.TestCase):
     def test_report_lanes_chown_the_container_workspace(self):
         workflows = (
-            ".github/workflows/qemu-minimal-report-for-quickstart.yml",
-            ".github/workflows/qemu-minimal-report-for-lmcache.yml",
-            ".github/workflows/qemu-minimal-report-for-mi355x.yml",
+            ".github/workflows/qemu-minimal-report-for-vm-rocm-golden.yml",
         )
         for name in workflows:
             with self.subTest(workflow=name):

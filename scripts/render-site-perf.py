@@ -97,48 +97,8 @@ CHART_COLORS = {
     "sdxi-bw": "#0071C5",
 }
 
-REPORTS = (
-    {"key": "1vm", "label": "Single VM", "path": "1vm/index.md"},
-    {"key": "rocjitsu", "label": "rocjitsu", "path": "rocjitsu/index.md"},
-    {"key": "ernic", "label": "ernic VM 1", "path": "ernic/index.md"},
-    {"key": "ernic-vm2", "label": "ernic VM 2", "path": "ernic/vm2/index.md"},
-    {"key": "hipfile-fio", "label": "hipFile fio", "path": "hipfile-fio/index.md"},
-    {"key": "lmcache", "label": "LMCache P2P", "path": "lmcache/index.md"},
-    # report-for-quickstart is absent for a different reason: it IS daily, so
-    # it would qualify, but it is new and boots two guests on a runner that
-    # cannot give them a core each (AGENTS.md issue 14). Adding it before it
-    # has a green streak would put the all-green badge at the mercy of a lane
-    # still shaking out runner-sized problems. Add
-    #   {"key": "quickstart", "label": "quickstart", "path": "quickstart/index.md"}
-    # once it has run clean for a week or so.
-    #
-    # report-for-mi355x IS here, deliberately and from day one, unlike the two
-    # above. It is the riskiest lane on a runner -- one guest with seventeen
-    # device-server containers behind it on 4 cores, eight of them ernics
-    # against the mesh manager's untunable 20 s heartbeat (AGENTS.md issue
-    # 14) -- and that is the argument for including it rather than against.
-    # A lane whose flakiness is invisible on the front page is a lane nobody
-    # fixes. Expect the badge to be non-green until its first run lands, and
-    # expect it to be the entry that holds the badge down when it does flake;
-    # that signal is the point.
-    {"key": "mi355x", "label": "MI355X node", "path": "mi355x/index.md"},
-)
-
 BADGE_RE = re.compile(r"^([0-9]+(?:\.[0-9]+)?)\s*([kMGT]?)([A-Za-z/]+)$")
-REPORT_META_RE = re.compile(r"Generated:\s*\*\*(.*?)\*\*\s*&middot;\s*Commit:\s*(.*)")
-COMMIT_RE = re.compile(r"`([0-9a-f]{7,40})`")
-# Optional on purpose: reports already on gh-pages predate the stamp, and a
-# report with no Status is treated as unknown rather than as a pass.
-REPORT_STATUS_RE = re.compile(r"Status:\s*\*\*(.*?)\*\*")
-REPORT_TIME_FMT = "%Y-%m-%d %H:%M UTC"
-
-# How recently a report must have been generated to count towards "all reports
-# green". Every report lane runs on a daily 08:00 cron, so anything inside a
-# day and a half is this cycle's report; anything older means that lane last
-# failed to produce one. Freshness and the pass stamp are both required --
-# the stamp alone would call a month-old success green forever, and freshness
-# alone would call a fresh failure green.
-DEFAULT_GREEN_MAX_AGE_HOURS = 36
+RECORD_TIME_FMT = "%Y-%m-%d %H:%M UTC"
 
 
 @dataclass
@@ -148,16 +108,6 @@ class MetricValue:
     display: str
     value: float
     base_unit: str
-
-
-@dataclass
-class ReportStamp:
-    key: str
-    label: str
-    generated: str
-    commit: str
-    path: str
-    status: str
 
 
 def load_json(path: Path) -> Dict:
@@ -202,49 +152,6 @@ def parse_metric(meta: Dict, badge: Dict) -> Optional[MetricValue]:
     )
 
 
-def parse_report_stamp(site_dir: Path, report: Dict) -> Optional[ReportStamp]:
-    path = site_dir / report["path"]
-    if not path.exists():
-        return None
-    for line in path.read_text().splitlines():
-        match = REPORT_META_RE.search(line)
-        if not match:
-            continue
-        # The status stamp lives on the same line, after another &middot;, so
-        # trim the tail before falling back to the raw text as a commit.
-        tail = match.group(2).split("&middot;")[0]
-        commit_match = COMMIT_RE.search(tail)
-        commit = commit_match.group(1) if commit_match else tail.strip()
-        status_match = REPORT_STATUS_RE.search(line)
-        return ReportStamp(
-            key=report["key"],
-            label=report["label"],
-            generated=match.group(1).strip(),
-            commit=commit,
-            path="/" + report["path"].replace("index.md", ""),
-            status=status_match.group(1).strip() if status_match else "unknown",
-        )
-    return None
-
-
-def parse_report_time(value: str) -> Optional[datetime]:
-    try:
-        return datetime.strptime(value, REPORT_TIME_FMT).replace(tzinfo=timezone.utc)
-    except (ValueError, TypeError):
-        return None
-
-
-def load_green(path: Optional[Path]) -> Dict:
-    if path is None or not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text())
-    except json.JSONDecodeError:
-        # A truncated state file must not fail the publish. Losing the stamp
-        # costs one date; failing here costs the whole site update.
-        return {}
-
-
 def load_history(path: Optional[Path]) -> List[Dict]:
     if path is None or not path.exists():
         return []
@@ -256,24 +163,14 @@ def load_history(path: Optional[Path]) -> List[Dict]:
     return rows
 
 
-def build_reports(site_dir: Path) -> Dict[str, Dict]:
-    return {
-        stamp.key: {
-            "label": stamp.label,
-            "generated": stamp.generated,
-            "commit": stamp.commit,
-            "path": stamp.path,
-            "status": stamp.status,
-        }
-        for stamp in (parse_report_stamp(site_dir, report) for report in REPORTS)
-        if stamp is not None
-    }
+def build_record(input_dir: Path) -> Optional[Dict]:
+    """One history row from the badge JSON the benchmark jobs uploaded.
 
-
-def build_record(site_dir: Path) -> Optional[Dict]:
+    input_dir holds one subdirectory per artifact, named by METRICS' source.
+    """
     metrics: Dict[str, Dict] = {}
     for meta in METRICS:
-        badge_path = site_dir / meta["source"][0] / meta["source"][1]
+        badge_path = input_dir / meta["source"][0] / meta["source"][1]
         if not badge_path.exists():
             continue
         metric = parse_metric(meta, load_json(badge_path))
@@ -288,14 +185,12 @@ def build_record(site_dir: Path) -> Optional[Dict]:
     if not metrics:
         return None
 
-    reports = build_reports(site_dir)
-    now = datetime.now(timezone.utc).strftime(REPORT_TIME_FMT)
+    now = datetime.now(timezone.utc).strftime(RECORD_TIME_FMT)
     sha = os.environ.get("GITHUB_SHA", "")
     return {
         "generated": now,
         "sha": sha[:8] if sha else "unknown",
         "metrics": metrics,
-        "reports": reports,
     }
 
 
@@ -314,9 +209,8 @@ def append_history(history: List[Dict], record: Optional[Dict]) -> List[Dict]:
 def distinct_values(history: List[Dict], key: str) -> List[float]:
     """Readings for one metric, with consecutive repeats collapsed.
 
-    A row in the history is one *publish*, not one benchmark run: any report
-    lane finishing triggers a publish, which re-records the other lanes' last
-    artifacts unchanged. Five rows can therefore be one measurement republished
+    A row in the history is one *publish*, not one benchmark run: a publish
+    re-records every artifact it finds, including ones no job refreshed. Five rows can therefore be one measurement republished
     five times, and averaging them verbatim would weight a wedged value by
     however many unrelated publishes happened to fire while it was stuck.
     Collapsing consecutive repeats makes the window mean "the last N readings
@@ -403,82 +297,6 @@ def write_badges(perf_dir: Path, history: List[Dict]) -> None:
         )
 
 
-def report_green(entry: Dict, now: datetime, max_age_hours: float) -> bool:
-    """Whether one report counts as green at publish time.
-
-    Both halves are required. The pass stamp on its own would call a report
-    that succeeded last month green forever; freshness on its own would call a
-    report that ran today and failed green, because a failing lane uploads
-    nothing and simply leaves its previous report in place. Together they mean
-    "this lane produced a passing report this cycle".
-    """
-    if entry.get("status") != "pass":
-        return False
-    generated = parse_report_time(entry.get("generated", ""))
-    if generated is None:
-        return False
-    return (now - generated).total_seconds() <= max_age_hours * 3600
-
-
-def evaluate_green(record: Optional[Dict], now: datetime, max_age_hours: float) -> bool:
-    """True when every report in REPORTS is present, stamped pass and fresh."""
-    if record is None:
-        return False
-    reports = record.get("reports", {})
-    if len(reports) < len(REPORTS):
-        return False
-    return all(
-        report_green(reports[meta["key"]], now, max_age_hours)
-        for meta in REPORTS
-        if meta["key"] in reports
-    )
-
-
-def update_green(state: Dict, record: Optional[Dict], now: datetime,
-                 max_age_hours: float) -> Dict:
-    """Advance the durable all-green stamp.
-
-    This is kept in its own small file rather than in the history rows because
-    append_history dedupes on (sha, metrics): a publish where the benchmarks
-    produced identical numbers appends no row at all, and a green date carried
-    in the rows could never advance on such a publish. Report freshness moves
-    independently of benchmark values, so it needs a store that moves with it.
-    """
-    green = evaluate_green(record, now, max_age_hours)
-    updated = dict(state)
-    updated["checked"] = now.strftime(REPORT_TIME_FMT)
-    updated["green"] = green
-    if green:
-        updated["last_all_green"] = now.strftime("%Y-%m-%d")
-    return updated
-
-
-def write_green_badge(perf_dir: Path, state: Dict) -> None:
-    last = state.get("last_all_green")
-    if state.get("green"):
-        message, color = last, COLOR_OK
-    elif last:
-        # Decay by age: green today, yellow ≤2 days, red >5 days.
-        try:
-            age = (datetime.now(timezone.utc).date()
-                   - datetime.strptime(last, "%Y-%m-%d").date()).days
-        except ValueError:
-            age = 999
-        color = COLOR_OK if age <= 2 else COLOR_REGRESSED if age > 5 else COLOR_WARN
-        message = last
-    else:
-        message, color = "never", COLOR_REGRESSED
-    dump_json(
-        perf_dir / "badge-all-green.json",
-        {
-            "schemaVersion": 1,
-            "label": "All Reports Green",
-            "message": message,
-            "color": color,
-        },
-    )
-
-
 def _svg_points(values: List[float], width: int, height: int, padding: int) -> str:
     if len(values) == 1:
         return f"{width / 2:.1f},{height / 2:.1f}"
@@ -530,45 +348,17 @@ def write_history(history_path: Path, history: List[Dict]) -> None:
     history_path.write_text("".join(json.dumps(row) + "\n" for row in history))
 
 
-def report_rows(reports: Dict[str, Dict]) -> str:
-    """Render the freshness table from reports read live off disk.
-
-    Deliberately NOT from history[-1]: append_history dedupes on
-    (sha, metrics), so a publish whose benchmarks produced identical numbers
-    against an unchanged sha appends no row, and this table would then print
-    the previous publish's timestamps underneath an all-green badge that
-    main() computes from a live build_reports(). That is the same dedupe
-    hazard update_green's docstring describes, and it reaches this table for
-    the same reason: report freshness moves independently of benchmark values.
-    """
-    latest_reports = reports or {}
-    rows = []
-    for report in REPORTS:
-        item = latest_reports.get(report["key"])
-        if item is None:
-            continue
-        rows.append(
-            f"| {item['label']} | {item['generated']} | {item.get('status', 'unknown')} "
-            f"| `{item['commit']}` | [{item['path']}]({item['path']}) |"
-        )
-    return "\n".join(rows) if rows else "| No report metadata available | - | - | - | - |"
-
-
 def history_rows(history: List[Dict]) -> str:
     rows = []
     for row in history[-10:]:
         metrics = row.get("metrics", {})
-        rows.append(
-            "| {sha} | {generated} | {gemm} | {hipfile} | {hipfile_fio} | {sdxi_bw} |".format(
-                sha=row.get("sha", "?"),
-                generated=row.get("generated", "unknown"),
-                gemm=metrics.get("gemm", {}).get("display", "n/a"),
-                hipfile=metrics.get("hipfile", {}).get("display", "n/a"),
-                hipfile_fio=metrics.get("hipfile-fio", {}).get("display", "n/a"),
-                sdxi_bw=metrics.get("sdxi-bw", {}).get("display", "n/a"),
-            )
-        )
-    return "\n".join(rows) if rows else "| No retained runs yet | - | - | - | - | - |"
+        cells = [row.get("sha", "?"), row.get("generated", "unknown")] + [
+            metrics.get(meta["key"], {}).get("display", "n/a") for meta in METRICS
+        ]
+        rows.append("| " + " | ".join(cells) + " |")
+    if rows:
+        return "\n".join(rows)
+    return "| No retained runs yet | - |" + " - |" * len(METRICS)
 
 
 def latest_metric_rows(history: List[Dict]) -> str:
@@ -598,11 +388,13 @@ def latest_metric_rows(history: List[Dict]) -> str:
     return "\n".join(rows)
 
 
-def write_perf_page(site_dir: Path, history: List[Dict], green: Dict,
-                    green_max_age: float,
-                    reports: Optional[Dict[str, Dict]] = None) -> None:
-    if reports is None:
-        reports = build_reports(site_dir)
+BADGE_URL = (
+    "https://img.shields.io/endpoint?url="
+    "https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2F"
+)
+
+
+def write_perf_page(site_dir: Path, history: List[Dict]) -> None:
     perf_dir = site_dir / "perf"
     perf_dir.mkdir(parents=True, exist_ok=True)
     charts = [meta for meta in METRICS if write_chart(perf_dir, meta, history)]
@@ -613,30 +405,33 @@ def write_perf_page(site_dir: Path, history: List[Dict], green: Dict,
     latest = history[-1] if history else None
     latest_generated = latest.get("generated", "unknown") if latest else "unknown"
     latest_sha = latest.get("sha", "unknown") if latest else "unknown"
+    badges = "\n".join(
+        f"![{meta['label']}]({BADGE_URL}{meta['badge_file']})" for meta in METRICS
+    )
+    history_head = "| Commit | Generated | " + " | ".join(
+        meta["label"] for meta in METRICS
+    ) + " |\n|" + " --- |" * (len(METRICS) + 2)
     body = f"""---
 title: Performance trends
 ---
 
 This page is generated during the Pages publish from retained benchmark history on
-`gh-pages`, using the latest rocjitsu and hipFile fio report artifacts as inputs.
-It mirrors the same basic model used by the ROCm/rocm-ernic site: badges for the
-latest published numbers, a durable history file, and a trend page regenerated as
-new CI data lands.
+`gh-pages`, using the badge JSON the benchmark jobs upload as inputs. It mirrors
+the same basic model used by the ROCm/rocm-ernic site: badges for the latest
+published numbers, a durable history file, and a trend page regenerated as new
+CI data lands.
 
 ## Latest published snapshot
 
 Generated from `{latest_sha}` at **{latest_generated}**.
 
-![rocjitsu GEMM](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-gemm.json)
-![rocjitsu hipFile](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile.json)
-![hipFile fio](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile-fio.json)
-![SDXI copy BW](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-sdxi-bw.json)
+{badges}
 
 Badge colour is health, not branding. Each latest reading is compared against
 the mean of the previous {BASELINE_WINDOW} *distinct* readings — consecutive
-republishes of an unchanged number are collapsed first, because a publish is
-triggered by any report lane finishing and re-records the other lanes' last
-artifacts untouched. Green is at or above {REGRESSION_WARN_RATIO:.0%} of that
+republishes of an unchanged number are collapsed first, because a publish
+re-records every artifact it finds, including ones no job refreshed. Green is
+at or above {REGRESSION_WARN_RATIO:.0%} of that
 baseline, amber down to {REGRESSION_FAIL_RATIO:.0%}, red below it, and blue
 means there is not yet a second distinct reading to compare against. The band
 is wide on purpose: these benchmarks run against an emulated GPU over
@@ -652,69 +447,28 @@ vfio-user and swing hard between runs.
 
 ## Recent runs
 
-| Commit | Generated | GEMM | hipFile | hipFile fio | SDXI BW |
-| --- | --- | --- | --- | --- | --- |
+{history_head}
 {history_rows(history)}
-
-## Current report freshness
-
-![all reports green](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-all-green.json)
-
-A report counts as green when it carries a `pass` status stamp *and* was
-generated within {green_max_age:g} hours of the publish. Both are needed: a
-lane that fails uploads no artifact at all, so its previous report stays on the
-branch and would otherwise keep reading `pass` indefinitely. The badge above
-shows the last date on which all {len(REPORTS)} reports were green at once —
-amber once that date is no longer today.
-
-Last all-green: **{green.get('last_all_green') or 'never'}** &middot; checked
-{green.get('checked', 'unknown')} &middot; currently
-{'all green' if green.get('green') else 'not all green'}.
-
-| Report | Generated | Status | Commit | Page |
-| --- | --- | --- | --- | --- |
-{report_rows(reports)}
 """
     (perf_dir / "index.md").write_text(body)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
+    # Where the benchmark artifacts were unpacked, one subdirectory each.
+    # Separate from --site-dir so the raw inputs are never published.
+    parser.add_argument("--input-dir", required=True, type=Path)
     parser.add_argument("--site-dir", required=True, type=Path)
     parser.add_argument("--history-in", type=Path)
     parser.add_argument("--history-out", required=True, type=Path)
-    # Separate from the history file on purpose; see update_green().
-    parser.add_argument("--green-in", type=Path)
-    parser.add_argument("--green-out", type=Path)
-    parser.add_argument(
-        "--green-max-age-hours",
-        type=float,
-        default=DEFAULT_GREEN_MAX_AGE_HOURS,
-    )
     args = parser.parse_args()
 
-    now = datetime.now(timezone.utc)
     history = load_history(args.history_in)
-    record = build_record(args.site_dir)
-    history = append_history(history, record)
+    history = append_history(history, build_record(args.input_dir))
     write_history(args.history_out, history)
 
-    # Evaluate greenness from the reports on disk rather than from `record`,
-    # which is None when no metric badge is present at all. Report freshness
-    # has nothing to do with whether a benchmark produced a number.
-    green = update_green(
-        load_green(args.green_in),
-        {"reports": build_reports(args.site_dir)},
-        now,
-        args.green_max_age_hours,
-    )
-    if args.green_out:
-        dump_json(args.green_out, green)
-
     write_badges(args.site_dir / "perf", history)
-    write_green_badge(args.site_dir / "perf", green)
-    write_perf_page(args.site_dir, history, green, args.green_max_age_hours,
-                    reports=build_reports(args.site_dir))
+    write_perf_page(args.site_dir, history)
 
 
 if __name__ == "__main__":

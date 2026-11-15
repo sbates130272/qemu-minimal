@@ -73,6 +73,7 @@ packages = [
     "qemu_tool.share.compose",
     "qemu_tool.share.xml",
     "qemu_tool.share.packages_d",
+    "qemu_tool.share.checks_d",
 ]
 
 # The compose stacks and manifests are first-class artifacts used directly
@@ -93,6 +94,7 @@ packages = [
 "qemu_tool.share.compose" = "compose"
 "qemu_tool.share.xml" = "xml"
 "qemu_tool.share.packages_d" = "packages.d"
+"qemu_tool.share.checks_d" = "checks"
 
 [tool.setuptools.package-data]
 "qemu_tool" = ["man/qemu-tool.1", "py.typed"]
@@ -131,4 +133,5 @@ packages = [
     # gen_compose._copy_stack_assets.
     "*/logging/*",
 ]
-"qemu_tool.share.packages_d" = ["packages-*"]
+"qemu_tool.share.packages_d" = ["packages-*", "rocm-golden.txt"]
+"qemu_tool.share.checks_d" = ["rocm-golden.sh"]

@@ -7,7 +7,7 @@
 #
 # Usage:
 #   cp qemu/xml/fleet-example.xml my-fleet.xml && $EDITOR my-fleet.xml
-#   qemu-tool gen-vm --ansible-playbook ansible/playbooks/vm-rocjitsu.yml
+#   qemu-tool gen-vm --ansible-playbook ansible/playbooks/vm-rocm-golden.yml
 #   qemu-tool compose --stack vfio-user-rocjitsu-vm up
 #   ssh -p ${VM_SSH_PORT:-2222} ubuntu@localhost
 

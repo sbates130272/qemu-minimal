@@ -161,7 +161,7 @@ class CompactTests(unittest.TestCase):
 
 class FlagTests(unittest.TestCase):
     def _config(self, argv: list[str], env: str | None = None) -> VMConfig:
-        # Always pass --env-file, even for the no-env cases. Without it
+        # Always pass --xml, even for the no-env cases. Without it
         # envfile.find() walks its ambient candidate list -- $QEMU_TOOL_ENV,
         # ./.env, the checkout's qemu/.env, ~/.config/qemu-tool/env and the
         # .deb's /etc/qemu-tool/env -- and `compact` is not in
@@ -175,7 +175,7 @@ class FlagTests(unittest.TestCase):
         # same code path deterministically.
         path = Path(tempfile.mkdtemp()) / "env"
         path.write_text(env or "")
-        argv = argv + ["--env-file", str(path)]
+        argv = argv + ["--xml", str(path)]
         ns = cli._build_parser().parse_args(argv)
         return cli._build_config(ns, "gen-vm")
 

@@ -1,0 +1,49 @@
+#!/bin/sh
+# Login hint for the amdgpu probe step, installed at
+# /etc/update-motd.d/99-amdgpu-probe by rocjitsu_setup, beside
+# /usr/local/bin/amdgpu-probe.
+#
+# amdgpu does not autoload in these guests and must not: rocjitsu_setup
+# blacklists it three ways over, because a copy that binds the device before
+# the vfio-user server is serving cannot be undone -- modprobe then returns 0
+# without rebinding, and unloading the DKMS module has been seen to GPF in
+# kgd2kfd_device_exit.  So the probe stays a manual step, and the cost of a
+# manual step is that people forget it: the GPU looks broken when the only
+# thing missing is one command.  This says so at the point they would notice.
+#
+# Deliberately not a systemd unit.  What such a unit would have to wait for --
+# a vfio-user server on the *host* -- is not part of guest init at all, so
+# there is no ordering edge that makes it safe; it would load amdgpu with no
+# device or an unserved one and strand the guest exactly as the blacklist
+# exists to prevent.  A login hint cannot do that.
+#
+# Nothing here is allowed to fail a login, so: no set -e, every branch exits 0,
+# and a guest whose helper has been removed prints nothing rather than erroring.
+# The state words come from "amdgpu-probe --status", which reads the same
+# parameter list the probe itself uses -- this file restates none of it.
+
+[ -x /usr/local/bin/amdgpu-probe ] || exit 0
+
+status=$(/usr/local/bin/amdgpu-probe --status 2>/dev/null) || exit 0
+
+case "${status}" in
+ready)
+    printf '\n'
+    printf 'An emulated AMD GPU is on the PCI bus and amdgpu is not loaded.\n'
+    printf 'Load it with the emulation parameters before using the GPU:\n\n'
+    printf '    sudo amdgpu-probe\n\n'
+    printf 'This image never does that for you: a driver that binds before the\n'
+    printf 'vfio-user server is serving cannot be unloaded without a reboot.\n\n'
+    ;;
+stranded)
+    printf '\n'
+    printf 'WARNING: amdgpu is loaded with the wrong parameters, so the GPU\n'
+    printf 'will not work. This cannot be corrected on a resident module --\n'
+    printf 'rmmod is documented to GPF here -- so the guest needs a reboot:\n\n'
+    printf '    sudo reboot\n\n'
+    printf 'then "sudo amdgpu-probe" once it is back. Run\n'
+    printf '"sudo amdgpu-probe" now to see which parameters differ.\n\n'
+    ;;
+esac
+
+exit 0

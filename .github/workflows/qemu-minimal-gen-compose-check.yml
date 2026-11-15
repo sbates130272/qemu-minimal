@@ -10,10 +10,9 @@ name: qemu-minimal - Gen Compose Check
 # edit to the generated tree -- or a settings change without a regenerate --
 # would have shipped undetected. This lane makes the claim true.
 #
-# No push: trigger and no paths: filter, matching site-script-tests and
-# shell-check -- every commit reaches main through a PR, and a path-filtered
-# required check never reports on a PR outside its filter, leaving that PR
-# blocked forever. The job is seconds, so there is nothing to save by
+# No push: trigger and no paths: filter, matching shell-check -- every commit
+# reaches main through a PR, and a path-filtered required check never reports
+# on a PR outside its filter, leaving that PR blocked forever. The job is seconds, so there is nothing to save by
 # filtering it.
 on:
   workflow_dispatch:
@@ -59,7 +58,7 @@ jobs:
 
       # tests/test_ernic_identity.py is the only thing in the repo that asks
       # udev to parse the rules file, and the only thing that reads the fleet
-      # role's wiring -- no lane runs ernic_fleet_guest against a guest. Both
+      # role's wiring -- no lane runs rocm_ernic_setup against a guest. Both
       # used to skip themselves when a tool was absent, which is how an IB
       # rule that udev REJECTED at parse time shipped beside thirty green
       # tests. Belt and braces, because either half alone still fails open:
@@ -123,7 +122,7 @@ jobs:
               ("vfio-user-ernic-2vm", None,
                ["--profile", "rocjitsu-vm1", "--profile", "rocjitsu-vm2"]),
               ("vfio-user-ernic-rocjitsu-scale-out", "qemu/xml/scale-out.xml",
-               ["--profile", "metrics", "--profile", "lmcache"]),
+               ["--profile", "metrics"]),
               ("vfio-user-mi355x-node", "qemu/xml/mi355x-node.xml",
                ["--profile", "metrics"]),
           ]
@@ -141,7 +140,7 @@ jobs:
               cmd = ["docker", "compose", "--project-directory", f"{ROOT}/{stack}"]
               if fleet_xml:
                   r2 = subprocess.run(
-                      ["qemu-tool", "fleet-to-env", "--fleet-file", fleet_xml],
+                      ["qemu-tool", "fleet-to-env", "--xml", fleet_xml],
                       capture_output=True, text=True,
                   )
                   if r2.returncode != 0:
@@ -212,7 +211,7 @@ jobs:
 
       # check is a command a human is told to run, so the lane runs
       # the command rather than importing its functions -- the same reason
-      # report-for-quickstart runs `qemu-tool quick-start` itself.
+      # report-for-vm-rocm-golden runs `qemu-tool quick-start` itself.
       #
       # Its exit status is NOT asserted to be 0: a GitHub runner legitimately
       # lacks oras and ansible, which it reports as warnings, and asserting
@@ -235,7 +234,7 @@ jobs:
           # line in a guest log nobody reads. That is the kind of thing this
           # command exists to catch, so prove it does.
           printf 'VM_COUNT=2\nVM_VCPUS=2\n' > /tmp/env.toosmall
-          if python3 -m qemu_tool check --env-file /tmp/env.toosmall \
+          if python3 -m qemu_tool check --xml /tmp/env.toosmall \
                > /tmp/cs.out 2>&1; then
             cat /tmp/cs.out
             echo "::error::check exited 0 on a sub-floor VM_VCPUS"; exit 1
@@ -269,7 +268,7 @@ jobs:
       - name: Committed stack matches qemu/xml/scale-out.xml
         run: |
           python3 -m qemu_tool gen-compose \
-            --fleet-file qemu/xml/scale-out.xml \
+            --xml qemu/xml/scale-out.xml \
             --output-dir qemu/compose/vfio-user-ernic-rocjitsu-scale-out \
             --check
 
@@ -283,7 +282,7 @@ jobs:
       - name: Generated stack is valid compose
         run: |
           fleet_env="$(mktemp)"
-          python3 -m qemu_tool fleet-to-env --fleet-file qemu/xml/scale-out.xml > "$fleet_env"
+          python3 -m qemu_tool fleet-to-env --xml qemu/xml/scale-out.xml > "$fleet_env"
           CONTAINER_USER=$(id -u):$(id -g) CONTAINER_KVM_GID=$(stat -c %g /dev/kvm) \
             docker compose \
             --env-file "$fleet_env" \
@@ -292,95 +291,56 @@ jobs:
 
       # Profiles FILTER services out of `config` output, so the step above
       # validates only the default set -- ernic, qemu, rocjitsu, tapsetup.
-      # Every observability and LMCache service is profile-gated, so all seven
-      # of them (prometheus, grafana, loki, alloy, lmcache-coordinator and the
-      # two stats exporters) were parsed by nothing: a dangling depends_on or a
-      # bad bind-mount path in any of them shipped green. Enable both profiles
+      # Every observability service is profile-gated, so all five of them
+      # (prometheus, grafana, loki, alloy and the ernic stats exporter) were
+      # parsed by nothing: a dangling depends_on or a
+      # bad bind-mount path in any of them shipped green. Enable the profile
       # and assert the services are actually present, because `config -q` on a
       # file whose services were all filtered away also exits 0 -- the
       # assertion is what stops this silently reverting to checking nothing.
       - name: Profile-gated services also validate
         run: |
           fleet_env="$(mktemp)"
-          python3 -m qemu_tool fleet-to-env --fleet-file qemu/xml/scale-out.xml > "$fleet_env"
+          python3 -m qemu_tool fleet-to-env --xml qemu/xml/scale-out.xml > "$fleet_env"
           svcs="$(CONTAINER_USER=$(id -u):$(id -g) CONTAINER_KVM_GID=$(stat -c %g /dev/kvm) \
             docker compose \
             --env-file "$fleet_env" \
             --project-directory qemu/compose/vfio-user-ernic-rocjitsu-scale-out \
-            --profile lmcache --profile metrics config --services)"
-          for s in prometheus grafana loki alloy lmcache-coordinator \
-                   lmcache-stats-exporter ernic-stats-exporter; do
+            --profile metrics config --services)"
+          for s in prometheus grafana loki alloy ernic-stats-exporter; do
             echo "$svcs" | grep -qx "$s" || {
-              echo "::error::$s missing from the lmcache+metrics render"; exit 1; }
+              echo "::error::$s missing from the metrics render"; exit 1; }
           done
           CONTAINER_USER=$(id -u):$(id -g) CONTAINER_KVM_GID=$(stat -c %g /dev/kvm) \
             docker compose \
             --env-file "$fleet_env" \
             --project-directory qemu/compose/vfio-user-ernic-rocjitsu-scale-out \
-            --profile lmcache --profile metrics config -q
+            --profile metrics config -q
           rm "$fleet_env"
 
-      # Every lane here runs the golden file alone, so an overlay only gets
-      # rendered by the lane that uses it -- report-for-lmcache is weekly, and
-      # the mi100 overlay has no lane at all. A key renamed in the golden
-      # would sit broken in an overlay until someone ran a fleet. Render each
-      # committed overlay on top of the golden and validate the result.
-      #
-      # Each overlay is paired with the golden file it is a delta OF, rather
-      # than every overlay being assumed to sit on scale-out: overlay-mi355x-ci
-      # layers on qemu/xml/mi355x-node.xml, and rendering it against the wrong
-      # golden would validate a stack nobody runs while leaving the real one
-      # unchecked. --stack matters for the same reason it does elsewhere --
-      # it is what the asset mirror reads FROM.
+      # Every lane here runs the golden file alone, and neither overlay has a
+      # lane of its own, so a key renamed in the golden would sit broken in an
+      # overlay until someone ran a fleet. Render each committed overlay on
+      # top of the golden and validate the result.
       - name: Committed overlays render and validate
         run: |
           for pair in \
             vfio-user-ernic-rocjitsu-scale-out:qemu/xml/scale-out.xml:qemu/xml/overlay-ci.xml \
-            vfio-user-ernic-rocjitsu-scale-out:qemu/xml/scale-out.xml:qemu/xml/overlay-mi100.xml \
-            vfio-user-mi355x-node:qemu/xml/mi355x-node.xml:qemu/xml/overlay-mi355x-ci.xml; do
+            vfio-user-ernic-rocjitsu-scale-out:qemu/xml/scale-out.xml:qemu/xml/overlay-mi100.xml; do
             stack=${pair%%:*}; rest=${pair#*:}
             golden=${rest%%:*}; overlay=${rest#*:}
             dir="/tmp/stack-$(basename "$overlay" .xml)"
             mkdir -p "$dir"
             python3 -m qemu_tool gen-compose --stack "$stack" \
-              --fleet-file "$golden" --fleet-file "$overlay" \
+              --xml "$golden" --xml "$overlay" \
               --output-dir "$dir"
             fleet_env="$(mktemp)"
             python3 -m qemu_tool fleet-to-env \
-              --fleet-file "$golden" --fleet-file "$overlay" > "$fleet_env"
+              --xml "$golden" --xml "$overlay" > "$fleet_env"
             CONTAINER_USER=$(id -u):$(id -g) CONTAINER_KVM_GID=$(stat -c %g /dev/kvm) \
               docker compose --env-file "$fleet_env" --project-directory "$dir" config -q
             rm "$fleet_env"
           done
-
-      # The MI355X CI overlay exists to shrink the FLEET and the guest, never
-      # the topology: a lane that quietly halved the devices would publish a
-      # green report about a shape nobody runs. Assert the reduced render
-      # still carries the full switch wiring, because that is exactly the
-      # property a well-meaning "make CI faster" edit would drop.
-      - name: The MI355X CI overlay reduces the fleet, not the topology
-        run: |
-          set -eu
-          dir=/tmp/stack-overlay-mi355x-ci
-          grep -q -- '--vfio-user-switch-width 2' "$dir/docker-compose.yml" \
-            || { echo "::error::the CI overlay lost --vfio-user-switch-width"; exit 1; }
-          fleet_env="$(mktemp)"
-          python3 -m qemu_tool fleet-to-env \
-            --fleet-file qemu/xml/mi355x-node.xml \
-            --fleet-file qemu/xml/overlay-mi355x-ci.xml > "$fleet_env"
-          for s in ernic-1-8 rocjitsu-1-8; do
-            CONTAINER_USER=$(id -u):$(id -g) CONTAINER_KVM_GID=$(stat -c %g /dev/kvm) \
-              docker compose --env-file "$fleet_env" --project-directory "$dir" config --services \
-              | grep -qx "$s" \
-              || { echo "::error::$s missing: the overlay reduced the device count"; exit 1; }
-          done
-          # One VM, though: that part IS meant to shrink.
-          CONTAINER_USER=$(id -u):$(id -g) CONTAINER_KVM_GID=$(stat -c %g /dev/kvm) \
-            docker compose --env-file "$fleet_env" --project-directory "$dir" config --services \
-            | grep -qx qemu-2 \
-            && { echo "::error::the CI overlay rendered more than one VM"; exit 1; }
-          rm "$fleet_env"
-          echo "topology intact, fleet reduced to one VM"
 
       # ERNIC_TAP has two shapes and the golden sets it to true, so every
       # render above covers the tap one: the tap path's extra network,
@@ -389,7 +349,7 @@ jobs:
       # sed ERNIC_TAP=true into a copy of a file that already said true, so
       # it re-checked the committed shape and the other shape shipped
       # unparsed. The override is a one-key scratch overlay rather than a sed
-      # of the golden, which also exercises the repeatable --env-file
+      # of the golden, which also exercises the repeatable --xml
       # layering the overlays depend on.
       - name: Tap-less stack also renders and validates
         run: |
@@ -397,19 +357,18 @@ jobs:
             > /tmp/fleet.notap.xml
           mkdir -p /tmp/notapstack
           python3 -m qemu_tool gen-compose \
-            --fleet-file qemu/xml/scale-out.xml --fleet-file /tmp/fleet.notap.xml \
+            --xml qemu/xml/scale-out.xml --xml /tmp/fleet.notap.xml \
             --output-dir /tmp/notapstack
           fleet_env="$(mktemp)"
           python3 -m qemu_tool fleet-to-env \
-            --fleet-file qemu/xml/scale-out.xml --fleet-file /tmp/fleet.notap.xml > "$fleet_env"
+            --xml qemu/xml/scale-out.xml --xml /tmp/fleet.notap.xml > "$fleet_env"
           CONTAINER_USER=$(id -u):$(id -g) CONTAINER_KVM_GID=$(stat -c %g /dev/kvm) \
             docker compose --env-file "$fleet_env" --project-directory /tmp/notapstack config -q
           rm "$fleet_env"
 
       # qemu/xml/quickstart.xml is the settings file README.md's Quick Start and
-      # report-for-quickstart both use, through `qemu-tool quick-start`.
-      # Nothing else here renders it, and the lane that does runs daily and
-      # after the merge -- so without this a broken quickstart is found the
+      # quickstart-boot both use, through `qemu-tool quick-start`.
+      # Nothing else here renders it, and the lane that boots it is path-filtered -- so without this a broken quickstart is found the
       # next morning rather than on the PR that broke it. The service
       # assertion is the same guard as above: `config -q` on a render with no
       # services also exits 0.
@@ -417,9 +376,9 @@ jobs:
         run: |
           mkdir -p /tmp/qsstack
           python3 -m qemu_tool gen-compose \
-            --fleet-file qemu/xml/quickstart.xml --output-dir /tmp/qsstack
+            --xml qemu/xml/quickstart.xml --output-dir /tmp/qsstack
           fleet_env="$(mktemp)"
-          python3 -m qemu_tool fleet-to-env --fleet-file qemu/xml/quickstart.xml > "$fleet_env"
+          python3 -m qemu_tool fleet-to-env --xml qemu/xml/quickstart.xml > "$fleet_env"
           svcs="$(CONTAINER_USER=$(id -u):$(id -g) CONTAINER_KVM_GID=$(stat -c %g /dev/kvm) \
             docker compose --env-file "$fleet_env" --project-directory /tmp/qsstack config --services)"
           for s in ernic-1 ernic-2 rocjitsu-1 rocjitsu-2 qemu-1 qemu-2; do
@@ -453,7 +412,7 @@ jobs:
           printf '<fleet xmlns="http://qemu-tool/fleet/1.0">\n  <vm-count>3</vm-count>\n</fleet>\n' \
             > /tmp/fleet.probe.xml
           python3 -m qemu_tool gen-compose \
-            --fleet-file "$PWD/qemu/xml/scale-out.xml" --fleet-file /tmp/fleet.probe.xml \
+            --xml "$PWD/qemu/xml/scale-out.xml" --xml /tmp/fleet.probe.xml \
             --output-dir "$probe"
           ( cd "$probe" && python3 -m qemu_tool compose config --format json ) > /tmp/probe.json
           python3 - <<'PY'
@@ -491,7 +450,7 @@ jobs:
         run: |
           python3 -m qemu_tool gen-compose \
             --stack vfio-user-mi355x-node \
-            --fleet-file qemu/xml/mi355x-node.xml \
+            --xml qemu/xml/mi355x-node.xml \
             --output-dir qemu/compose/vfio-user-mi355x-node \
             --check
 
@@ -506,7 +465,7 @@ jobs:
       - name: MI355X stack renders and validates
         run: |
           fleet_env="$(mktemp)"
-          python3 -m qemu_tool fleet-to-env --fleet-file qemu/xml/mi355x-node.xml > "$fleet_env"
+          python3 -m qemu_tool fleet-to-env --xml qemu/xml/mi355x-node.xml > "$fleet_env"
           svcs="$(CONTAINER_USER=$(id -u):$(id -g) CONTAINER_KVM_GID=$(stat -c %g /dev/kvm) \
             docker compose \
             --env-file "$fleet_env" \

@@ -98,12 +98,12 @@ class CaCertTests(_Tmp):
         # nothing is downloaded or created; the config it would have been
         # handed is all that is wanted.
         #
-        # Always pass --env-file, even when empty. Without it envfile.find()
+        # Always pass --xml, even when empty. Without it envfile.find()
         # walks $QEMU_TOOL_ENV, ./.env, ~/.config/qemu-tool/env and the rest,
         # and a developer with VM_CA_CERT_FILE set in any of them would see
         # these tests pass or fail on what their own machine holds.
         env_file = self.write("env", env)
-        argv = ["gen-vm", "--vm-name", "x", "--env-file", str(env_file), *flags]
+        argv = ["gen-vm", "--vm-name", "x", "--xml", str(env_file), *flags]
         with mock.patch.object(cli, "gen_vm_run") as run:
             cli.main(argv)
         run.assert_called_once()
@@ -210,7 +210,7 @@ class MappingTests(unittest.TestCase):
     # other part of cli.py consumes them. A new flag that is neither read nor
     # listed here was never wired up, and is the bug this file exists for.
     _READ_ELSEWHERE = {
-        "gen-vm": {"help", "domain", "env_file", "fleet_file"},
+        "gen-vm": {"help", "domain", "env_file"},
         "run-vm": {"help", "domain", "env_file", "convert_to_libvirt"},
     }
 

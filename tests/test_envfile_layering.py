@@ -123,5 +123,48 @@ class TestFind(_Tmp):
         self.assertNotIn("golden", message)
 
 
+
+class FleetXmlLayers(unittest.TestCase):
+    """--xml reaches every subcommand through parse_layers.
+
+    gen-vm and run-vm once took fleet XML through a flag of their own whose
+    keys were never mapped onto VM settings, so the file was read and then
+    ignored. One loader for both formats is what stops that recurring.
+    """
+
+    XML = REPO_ROOT / "qemu" / "xml"
+
+    def test_fleet_xml_becomes_the_same_keys_an_env_file_has(self):
+        values = envfile.parse_layers([self.XML / "rocm-golden.xml"])
+        self.assertEqual(values["VM_VCPUS"], "4")
+        self.assertEqual(values["VM_COUNT"], "2")
+        self.assertIn("VM_BACKING_IMAGE", values)
+
+    def test_the_values_reach_vm_settings(self):
+        fields = envfile.load([self.XML / "rocm-golden.xml"])
+        self.assertEqual(fields["vcpus"], 4)
+        self.assertEqual(fields["vmem"], 4096)
+        self.assertTrue(fields["backing_image"])
+
+    def test_xml_layers_merge_before_they_are_converted(self):
+        # Converted one at a time, the overlay's defaults for the keys it does
+        # not set would overwrite what the golden file said.
+        golden = envfile.parse_layers([self.XML / "scale-out.xml"])
+        both = envfile.parse_layers(
+            [self.XML / "scale-out.xml", self.XML / "overlay-ci.xml"])
+        self.assertEqual(both["VM_COUNT"], "2")
+        self.assertEqual(both["VM_NAME_PREFIX"], "fleet-ci")
+        self.assertEqual(both["QEMU_IMAGE"], golden["QEMU_IMAGE"])
+        self.assertEqual(both["ERNIC_TAP"], golden["ERNIC_TAP"])
+
+    def test_an_env_file_still_layers_over_xml(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = Path(tmp) / "local.env"
+            env.write_text("VM_VCPUS=6\n")
+            values = envfile.parse_layers([self.XML / "rocm-golden.xml", env])
+        self.assertEqual(values["VM_VCPUS"], "6")
+        self.assertEqual(values["VM_COUNT"], "2")
+
+
 if __name__ == "__main__":
     unittest.main()

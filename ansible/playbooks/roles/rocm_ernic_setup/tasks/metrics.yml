@@ -1,0 +1,52 @@
+---
+# rdma_exporter, serving the ernic's RDMA counters to Prometheus on :9879.
+- name: Download rdma_exporter
+  ansible.builtin.get_url:
+    url: "{{ rocm_ernic_setup_rdma_exporter_url }}"
+    checksum: "sha256:{{ rocm_ernic_setup_rdma_exporter_sha256 }}"
+    dest: /tmp/rdma_exporter.tar.gz
+    mode: "0644"
+
+- name: Install the rdma_exporter binary
+  ansible.builtin.shell:
+    cmd: |
+      set -e
+      tar -xzf /tmp/rdma_exporter.tar.gz -C /tmp rdma_exporter
+      install -o root -g root -m 0755 /tmp/rdma_exporter /usr/local/bin/rdma_exporter
+      rm -f /tmp/rdma_exporter /tmp/rdma_exporter.tar.gz
+    executable: /bin/bash
+  become: true
+  changed_when: true
+
+- name: Install the rdma_exporter unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/rdma_exporter.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Prometheus RDMA exporter
+      After=network.target
+
+      [Service]
+      ExecStart=/usr/local/bin/rdma_exporter -listen-address=:9879
+      Restart=on-failure
+
+      [Install]
+      WantedBy=multi-user.target
+  become: true
+
+# Enabled always; started only where there is a device to read. An image bake
+# has none, and a unit that cannot start must not fail the bake.
+- name: Enable rdma_exporter
+  ansible.builtin.systemd_service:
+    name: rdma_exporter
+    enabled: true
+    daemon_reload: true
+  become: true
+
+- name: Start rdma_exporter
+  ansible.builtin.systemd_service:
+    name: rdma_exporter
+    state: started
+  become: true
+  when: rocm_ernic_setup_metrics_start | bool

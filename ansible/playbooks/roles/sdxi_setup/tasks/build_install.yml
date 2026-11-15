@@ -1,0 +1,166 @@
+---
+# Phase 1: Fetch and prepare on the CONTROLLER (run_once, non-root).
+# The clone runs once regardless of fleet size; SLIRP guests would each need
+# to traverse the host network, so this fetch belongs on the controller.
+
+- name: Clone emulation/sdxi from rocm-systems on the controller
+  ansible.builtin.shell:
+    cmd: |
+      set -e
+      DEST="{{ sdxi_setup_controller_src_dir }}"
+      REF="{{ sdxi_setup_source_ref }}"
+      REPO="{{ sdxi_setup_source_repo }}"
+
+      if [ "{{ sdxi_setup_force | bool }}" = "True" ] && [ -d "$DEST" ]; then
+        rm -rf "$DEST"
+      fi
+
+      if [ ! -d "$DEST/.git" ]; then
+        git init -q "$DEST"
+        git -C "$DEST" remote add origin "$REPO"
+        git -C "$DEST" sparse-checkout set emulation/sdxi
+      fi
+      cd "$DEST"
+      if [ "$(git rev-parse HEAD 2>/dev/null || true)" = "$REF" ]; then
+        echo "$REF"
+        exit 0
+      fi
+
+      # The commit itself, not a branch that happens to contain it: a shallow
+      # clone of a branch holds only its tip, so the pin stopped resolving as
+      # soon as the branch moved.
+      git fetch -q --depth=1 --filter=blob:none origin "$REF"
+      git checkout -q -f FETCH_HEAD
+      git rev-parse HEAD
+  register: _sdxi_clone
+  changed_when: _sdxi_clone.stdout.strip() != sdxi_setup_source_ref
+  when: not (sdxi_setup_local_src_dir | length > 0)
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Sync local source into the controller src dir
+  ansible.builtin.shell:
+    cmd: |
+      set -e
+      SRC="{{ sdxi_setup_local_src_dir }}"
+      DEST="{{ sdxi_setup_controller_src_dir }}"
+      if [ "{{ sdxi_setup_force | bool }}" = "True" ] && [ -d "$DEST" ]; then
+        rm -rf "$DEST"
+      fi
+      rsync -a --delete --itemize-changes "$SRC/" "$DEST/"
+  register: _sdxi_sync
+  changed_when: _sdxi_sync.stdout | length > 0
+  when: sdxi_setup_local_src_dir | length > 0
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Archive emulation/sdxi source on the controller
+  ansible.builtin.shell:
+    cmd: |
+      set -e
+      TARBALL="/tmp/sdxi-src-{{ sdxi_setup_source_ref[:12] }}.tar.gz"
+      tar -czf "$TARBALL" \
+          -C "{{ sdxi_setup_controller_src_dir }}/emulation/sdxi" .
+      echo "$TARBALL"
+  register: _sdxi_tarball
+  changed_when: false
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+# Phase 2: Build and install on each GUEST.
+
+- name: Install build dependencies
+  ansible.builtin.apt:
+    name:
+      - build-essential
+      - "linux-headers-{{ sdxi_setup_kernel_resolved }}"
+      - python3-pip
+    state: present
+    update_cache: false
+
+# unarchive requires its destination to exist. It only ever did on a guest
+# that had been built before; a fresh bake has no /tmp/sdxi-src.
+- name: Create the source directory on the guest
+  ansible.builtin.file:
+    path: /tmp/sdxi-src
+    state: directory
+    mode: "0755"
+
+- name: Extract sdxi source on the guest
+  ansible.builtin.unarchive:
+    src: "{{ _sdxi_tarball.stdout.strip() }}"
+    dest: /tmp/sdxi-src
+    creates: /tmp/sdxi-src/drivers/sdxi_char/sdxi_char.c
+  when: not sdxi_setup_force
+
+- name: Extract sdxi source on the guest (forced)
+  ansible.builtin.unarchive:
+    src: "{{ _sdxi_tarball.stdout.strip() }}"
+    dest: /tmp/sdxi-src
+  when: sdxi_setup_force | bool
+
+- name: Build the kernel modules
+  community.general.make:
+    chdir: "/tmp/sdxi-src/drivers/{{ item }}"
+    params:
+      KDIR: "/lib/modules/{{ sdxi_setup_kernel_resolved }}/build"
+  loop: "{{ sdxi_setup_modules }}"
+
+# updates/, which depmod ranks ahead of the in-tree tree. Nothing creates it
+# on a kernel no out-of-tree module has been installed for.
+- name: Create the module install directory
+  ansible.builtin.file:
+    path: "{{ sdxi_setup_module_install_dir_prefix }}/{{ sdxi_setup_kernel_resolved }}/updates"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the kernel modules
+  ansible.builtin.copy:
+    src: "/tmp/sdxi-src/drivers/{{ item }}/{{ item }}.ko"
+    dest: "{{ sdxi_setup_module_install_dir_prefix }}/{{ sdxi_setup_kernel_resolved }}/updates/{{ item }}.ko"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ sdxi_setup_modules }}"
+  notify: Run depmod
+
+# A copy left in extra/ by an earlier version of this role would shadow
+# nothing, but two files for one module is a question nobody should have to
+# answer.
+- name: Remove modules installed under extra/ by earlier versions
+  ansible.builtin.file:
+    path: "{{ sdxi_setup_module_install_dir_prefix }}/{{ sdxi_setup_kernel_resolved }}/extra/{{ item }}.ko"
+    state: absent
+  loop: "{{ sdxi_setup_modules }}"
+  notify: Run depmod
+
+- name: Install sdxi-cli Python package
+  ansible.builtin.pip:
+    name: /tmp/sdxi-src/tools/sdxi-cli
+    state: present
+    extra_args: --break-system-packages
+
+- name: Flush handlers so depmod runs before modprobe
+  ansible.builtin.meta: flush_handlers
+
+# Only when the build kernel is the running one; a bake for another kernel
+# has nothing to load it into.
+- name: Load the module now
+  community.general.modprobe:
+    name: sdxi_char
+    state: present
+  when: sdxi_setup_kernel_resolved == ansible_kernel
+
+- name: Write the installed ref stamp
+  ansible.builtin.copy:
+    dest: /etc/sdxi-guest-ref
+    content: "{{ sdxi_setup_source_ref }}\n"
+    owner: root
+    group: root
+    mode: "0644"

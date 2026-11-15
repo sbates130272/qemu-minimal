@@ -8,16 +8,8 @@
 [![GitHub Release](https://img.shields.io/github/v/release/sbates130272/qemu-minimal?label=Release&style=flat-square)](https://github.com/sbates130272/qemu-minimal/releases/latest)
 
 <!-- Reports (vm-* lanes pinned to main; date badge computed by Pages publish) -->
-[![VM Reports](https://img.shields.io/badge/VM%20Reports-Live-blue?style=flat-square)](https://sbates130272.github.io/qemu-minimal/)
 [![Basic Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-vm-basic.yml?branch=main&label=report-for-vm-basic&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-vm-basic.yml)
-[![Rocjitsu Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-vm-rocjitsu.yml?branch=main&label=report-for-vm-rocjitsu&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-vm-rocjitsu.yml)
-[![Ernic Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-vm-ernic.yml?branch=main&label=report-for-vm-ernic&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-vm-ernic.yml)
-[![Lmcache Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-lmcache.yml?branch=main&label=report-for-lmcache&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-lmcache.yml)
-[![Quickstart Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-quickstart.yml?branch=main&label=report-for-quickstart&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-quickstart.yml)
-[![Mi355x Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-mi355x.yml?branch=main&label=report-for-mi355x&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-mi355x.yml)
-[![Helios Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-helios.yml?branch=main&label=report-for-helios&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-helios.yml)
-[![Ernic SRQ+P4 Bake](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-ansible-playbook-test-vm-ernic-srq-p4.yml?branch=main&label=ernic-srq-p4-bake&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-ansible-playbook-test-vm-ernic-srq-p4.yml)
-[![All Reports Green](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-all-green.json&style=flat-square)](https://sbates130272.github.io/qemu-minimal/perf/)
+[![Rocm-golden Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-vm-rocm-golden.yml?branch=main&label=report-for-vm-rocm-golden&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-vm-rocm-golden.yml)
 
 <!-- Performance endpoint badges: colour is a verdict from Pages publish JSON -->
 [![Rocjitsu GEMM](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-gemm.json&style=flat-square)](https://sbates130272.github.io/qemu-minimal/perf/)
@@ -33,7 +25,7 @@
 [![Ansible Test](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-ansible-setup-test.yml?label=ansible&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-ansible-setup-test.yml)
 [![Shell Check](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-shell-check.yml?label=shell-check&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-shell-check.yml)
 [![Spell Check](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-spell-check.yml?label=spell-check&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-spell-check.yml)
-[![Rocm-ernic Smoke Test](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-smoke-test-rocm-ernic.yml?branch=main&label=smoke-test-rocm-ernic&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-smoke-test-rocm-ernic.yml)
+[![Vm-rocm-golden Smoke Test](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-smoke-test-vm-rocm-golden.yml?branch=main&label=smoke-test-vm-rocm-golden&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-smoke-test-vm-rocm-golden.yml)
 
 <!-- Ansible collections pinned in ansible/requirements.yml -->
 [![Batesste Collection](https://img.shields.io/badge/sbates130272.batesste-3.2.1-9cf?style=flat-square)](https://galaxy.ansible.com/ui/repo/published/sbates130272/batesste/)
@@ -49,7 +41,6 @@
 [![Qemu Fork](https://img.shields.io/badge/sbates--fork-qemu.f91f120-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork/tags)
 
 [![Quick-start Build](https://img.shields.io/badge/quick--start-20261029.g020459a-success?style=flat-square&logo=docker)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu/tags)
-[![LMCache](https://img.shields.io/badge/LMCache-v0.5.6-success?style=flat-square)](https://github.com/LMCache/LMCache/releases/tag/v0.5.6)
 
 ## Summary
 
@@ -64,7 +55,7 @@ testing.
 - Fast VM creation using Ubuntu cloud images and cloud-init (Noble and Resolute)
 - `qemu-tool` Python CLI with `run-vm`, `gen-vm`, `gen-compose`, `compose`,
   `list`, `inspect`, `down`, `check`, `ssh`, `man`, `qcow`,
-  `quick-start`, `lmcache-stats` and `ernic-stats` subcommands
+  `quick-start` and `ernic-stats` subcommands
 - Bidirectional libvirt domain XML support (`--domain` input, `--convert-to-libvirt` output)
 - NVMe device emulation with tracing support
 - PCIe device passthrough (VFIO)
@@ -109,9 +100,9 @@ anything; anything it cannot work out on its own it asks for too. Pass
 terminal, so nothing hangs in a script.
 
 The daily
-[report-for-quickstart](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-quickstart.yml)
-lane runs that same command — so what is documented here is what CI proves
-every morning. It:
+[report-for-vm-rocm-golden](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-vm-rocm-golden.yml)
+lane runs that same command every morning, against a fleet file with one more
+device per guest than the default. It:
 
 1. checks this machine: KVM actually usable (the ioctl, not just the device
    node), the tools on `PATH`, a writable images directory, free disk, and
@@ -265,7 +256,7 @@ installed, and `qemu-tool man --path` prints where it is.
 A per-user settings file **beats** the system one, as XDG expects: if you
 wrote `$XDG_CONFIG_HOME/qemu-tool/env` under a pipx install and later install
 the `.deb`, your file still wins and edits to `/etc/qemu-tool/env` are
-ignored. Delete the per-user copy, or pass `--env-file`, to hand control back
+ignored. Delete the per-user copy, or pass `--xml`, to hand control back
 to the system file. The images directory works the other way round but has
 its own catch: the system path is preferred only when it is *writable*, so if
 you are not in the `kvm` group you quietly get the per-user path instead of a
@@ -326,9 +317,6 @@ qemu-minimal/
   ansible/
     playbooks/vm-basic.yml  Post cloud-init Ansible playbook
     requirements.yml        Galaxy collection requirements
-  udev/
-    99-qemu-minimal-vfio.rules  VFIO device permissions
-    install-vfio-rules            Install the udev rules
   images/                VM images (created at runtime)
 ```
 
@@ -343,7 +331,7 @@ Install the udev rules once (requires sudo). Your user must
 be in the `kvm` group:
 
 ```bash
-./udev/install-vfio-rules
+./scripts/install-vfio-rules
 ```
 
 Re-login after group changes. `qemu-tool run-vm` checks VFIO access
@@ -394,21 +382,21 @@ NIC and one rocjitsu GPU per VM — from the fleet keys in a settings file. Same
 topology as `vfio-user-ernic-2vm`, sized by a variable rather than by hand.
 
 ```bash
-qemu-tool gen-compose --fleet-file qemu/xml/scale-out.xml
-qemu-tool compose --fleet-file qemu/xml/scale-out.xml \
+qemu-tool gen-compose --xml qemu/xml/scale-out.xml
+qemu-tool compose --xml qemu/xml/scale-out.xml \
     --stack vfio-user-ernic-rocjitsu-scale-out --profile metrics up -d
 ```
 
 `qemu/xml/scale-out.xml` is the one authoritative fleet settings file. A host or a
 CI lane that needs different values adds a small committed overlay on top of it
-rather than a whole fourth copy to hand-sync — `--fleet-file` is repeatable and
+rather than a whole fourth copy to hand-sync — `--xml` is repeatable and
 later files win key by key:
 
 ```bash
-qemu-tool gen-compose --fleet-file qemu/xml/scale-out.xml --fleet-file qemu/xml/overlay-mi100.xml \
+qemu-tool gen-compose --xml qemu/xml/scale-out.xml --xml qemu/xml/overlay-mi100.xml \
     --output-dir /var/lib/qemu-tool/stacks/mi100-fleet
 qemu-tool compose --stack-dir /var/lib/qemu-tool/stacks/mi100-fleet \
-    --fleet-file qemu/xml/scale-out.xml --fleet-file qemu/xml/overlay-mi100.xml \
+    --xml qemu/xml/scale-out.xml --xml qemu/xml/overlay-mi100.xml \
     --profile metrics up -d
 ```
 
@@ -432,7 +420,7 @@ finds is what it runs, whereas here a walk-up from inside this checkout
 reaches `qemu/compose/<default>/` and would drive the committed 8-VM stack
 under the name of a 32-VM fleet.
 
-`--env-file` still wins over the remembered layers, and the layers are
+`--xml` still wins over the remembered layers, and the layers are
 resolved honestly: the header records them as typed, so a relative name is
 tried against the stack directory and the current directory and nothing else.
 A layer that is not at either, or a generated stack whose header names no
@@ -486,7 +474,7 @@ and [`qemu/xml/scale-out.xml`](qemu/xml/scale-out.xml), with the committed overl
 ### Settings file
 
 `qemu/xml/fleet-example.xml` is the XML fleet config template. Copy it and
-edit; `gen-vm`, `run-vm`, `gen-compose` and `compose` all accept `--fleet-file`.
+edit; every subcommand that reads settings takes it as `--xml`.
 
 ```bash
 cp qemu/xml/fleet-example.xml my-fleet.xml
@@ -504,7 +492,7 @@ The file is searched for in this order, first hit wins:
 
 | Location | Used for |
 |---|---|
-| `--env-file FILE` | explicit, per invocation; repeatable, later files win key by key |
+| `--xml FILE` | explicit, per invocation; repeatable, later files win key by key |
 | `$QEMU_TOOL_ENV` | explicit, per shell |
 | `./.env` | a per-project override |
 | `qemu/.env` | a source checkout |
@@ -586,35 +574,20 @@ rocm-ernic publishes its next collection.
 
 ### Available playbooks
 
-The playbooks are layered rather than independent: `vm-basic.yml` is the base
-for every guest, and `vm-rocm.yml` is the base for every guest that needs ROCm.
-Each one imports its parent, so the shared work has exactly one definition.
+There are two image playbooks. `vm-basic.yml` is a complete bake on its own
+and the base of the other; `vm-rocm-golden.yml` imports it and adds everything
+else, so the shared work has exactly one definition.
 
-```text
-vm-basic.yml                 user setup, favourite packages, git config
-  |-- vm-rocm.yml            + apt pins, ROCm stack            [ROCm base]
-  |     `-- vm-rocjitsu.yml  + mainline kernel, amdgpu patches, firmware
-  `-- vm-ernic.yml           + ionic driver and RDMA prerequisites
+| Playbook | Description |
+|---------|-------------|
+| `vm-basic.yml` | User setup, favourite packages, git config |
+| `vm-rocm-golden.yml` | `vm-basic.yml`, plus the pinned mainline kernel, ROCm, the rocjitsu GPU firmware and patched amdgpu driver, the [rocm-ernic][rocm-ernic] RDMA NIC with SRQ and P4, and SDXI. `--tags configure` sets up the NIC on a live guest; `--tags test` runs the GPU workloads |
 
-vm-slim.yml                  imported as the last line of every leaf above
-```
-
-Every leaf ends by importing `vm-slim.yml`, which deletes the scratch the bake
-left behind — the apt cache and package lists, DKMS build trees, archived
-journals, `/tmp` and `/var/tmp` — and then `fstrim`s it back out of the qcow2.
-Every playbook that *imports* another passes `image_slim_enable: false` on that
-import, so exactly one slim pass runs per bake and it is the last play in the
-run. The flag propagates through nested imports, so a leaf never has to know
-how deep its own chain goes.
-
-| Playbook | Imports | Description |
-|---------|---------|-------------|
-| `vm-basic.yml` | — | User setup, favourite packages, git config |
-| `vm-rocm.yml` | `vm-basic.yml` | As above, plus the ROCm stack. The base for any ROCm guest |
-| `vm-ernic.yml` | `vm-basic.yml` | [rocm-ernic][rocm-ernic] RDMA NIC prerequisites; `--tags configure` for post-boot NIC setup. Installs no ROCm |
-| `vm-rocjitsu.yml` | `vm-rocm.yml` | ROCm + rocjitsu GPU firmware and driver prerequisites |
-| `vm-ernic-rocjitsu.yml` | both of the above | Both ernic and rocjitsu prerequisites combined |
-| `vm-slim.yml` | — | Reclaim bake scratch and `fstrim` it back to the qcow2. Imported last by every leaf; also runnable on its own against a baked guest |
+Each bake ends with one slim pass, which deletes the scratch the bake left
+behind — the apt cache and package lists, DKMS build trees, archived journals,
+`/tmp` and `/var/tmp` — and then `fstrim`s it back out of the qcow2.
+`vm-rocm-golden.yml` passes `image_slim_enable: false` when it imports
+`vm-basic.yml`, so the pass runs once, after everything that builds.
 
 ```bash
 qemu-tool gen-vm \
@@ -641,7 +614,7 @@ from starting, `warn` does not.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--env-file FILE` | (search path) | Settings file to check against, repeatable, later files winning key by key. Which file the search path found is itself part of the report |
+| `--xml FILE` | (search path) | Settings file to check against, repeatable, later files winning key by key. Which file the search path found is itself part of the report |
 
 ### down flags
 
@@ -726,7 +699,7 @@ takes every stack on the system.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--stack NAME` | `vfio-user-ernic-rocjitsu-scale-out` | Stack to generate |
-| `--env-file FILE` | search path | Settings file (see `qemu/xml/scale-out.xml`). Repeatable: later files override keys set by earlier ones |
+| `--xml FILE` | search path | Settings file (see `qemu/xml/scale-out.xml`). Repeatable: later files override keys set by earlier ones |
 | `--output-dir DIR` | the stack directory | Where to write |
 | `--check` | off | Exit non-zero if regenerating would change anything; writes nothing |
 | `--dry-run` | off | Print the generated files instead of writing them |
@@ -746,7 +719,7 @@ overwrites the committed fleet and breaks `--check`.
 | `--vm-name NAME` | from settings | Sets `VM_NAME`/`VM1_NAME` |
 | `--vm2-name NAME` | from settings | Sets `VM2_NAME`, for the 2-VM stacks |
 | `--images DIR` | from settings | Sets `VM_IMAGES_DIR` |
-| `--env-file FILE` | the stack's recorded layers, else the search path | Settings file, passed through to `docker compose --env-file`. Repeatable: later files win |
+| `--xml FILE` | the stack's recorded layers, else the search path | Settings file, passed through to `docker compose --env-file`. Repeatable: later files win |
 
 Everything else on the line goes to `docker compose` in the order typed —
 `--profile metrics up -d` needs no separator.

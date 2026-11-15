@@ -110,7 +110,4 @@
 
   <prom-data-dir>/var/lib/qemu-tool/stacks/helios-tray/prom-data</prom-data-dir>
 
-  <!-- LMCache off: orthogonal to topology bring-up. -->
-  <lmcache-enable>false</lmcache-enable>
-
 </fleet>

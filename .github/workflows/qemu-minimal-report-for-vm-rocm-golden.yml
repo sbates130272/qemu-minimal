@@ -1,0 +1,396 @@
+name: qemu-minimal - Report for vm-rocm-golden
+
+# Measures the five tracked performance numbers and uploads them. Nothing else
+# is published: there is no guest report on the site any more, only the
+# performance page publish-pages builds from these artifacts and the endpoint
+# shields on the README that read it.
+#
+# One stack, described by one file: qemu/xml/rocm-golden.xml. Two guests from
+# the published rocm-golden qcow2, each with a GPU, an NVMe, an RDMA NIC with
+# P4 in guest scope and an SDXI device. Every setting is in that XML -- there
+# is no settings `env:` in this workflow -- and `qemu-tool quick-start` is
+# what turns it into running guests. That makes this the daily run of the
+# command the README's Quick Start names, on a fleet with one more device per
+# guest than the default; it replaced a separate report-for-quickstart lane,
+# and carries that lane's checks on the metrics stack and on what qemu-tool
+# reports about live guests.
+#
+#   artifact           metric            measured on
+#   perf-rocjitsu      GEMM, hipFile     guest 1
+#   perf-hipfile-fio   hipFile fio       guest 2
+#   perf-ernic         Ernic P4 FP8 BW   guest 1 -> guest 2
+#   perf-helios        SDXI copy BW      guest 1
+#
+# publish-pages fetches each artifact BY NAME, so all four names must keep
+# being uploaded or that metric silently freezes at its last value. Each holds
+# nothing but badge-*.json: scripts/generate-vm-report.sh still writes a
+# markdown report beside them, and it is left on the runner.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'qemu/xml/rocm-golden.xml'
+      - 'ansible/playbooks/vm-quickstart.yml'
+      - 'ansible/playbooks/roles/**'
+      - 'ansible/files/p4/**'
+      - 'ansible/requirements.yml'
+      - 'qemu/qemu-tool/**'
+      - 'qemu/pyproject.toml'
+      - 'qemu/docker/sdxi/**'
+      - 'scripts/generate-vm-report.sh'
+      - 'scripts/check-vm-devices.sh'
+      - 'scripts/vm-report/**'
+      - '.github/actions/nonroot-user/action.yml'
+      - '.github/workflows/qemu-minimal-report-for-vm-rocm-golden.yml'
+      - '.github/workflows/qemu-minimal-publish-pages.yml'
+  # Daily at 01:00 MST.
+  schedule:
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: perf-rocm-golden
+  cancel-in-progress: true
+
+env:
+  FLEET_FILE: qemu/xml/rocm-golden.xml
+  # The compose project name is this directory's basename: rocm-golden.
+  STACK_DIR: /var/lib/qemu-tool/stacks/rocm-golden
+  KEY_DIR: /var/lib/qemu-tool/rocm-golden-key
+  # Where the rocm-sdxi binary is extracted FROM. Not a fleet setting: the
+  # fleet's sdxi-image is the local tag the build step below produces.
+  SDXI_SOURCE_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-sdxi:20261112.gdca6903-sdxi.c50f2b9
+
+jobs:
+  benchmark:
+    name: Benchmark rocm-golden
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    container:
+      # The one image ref that cannot come from the XML: GitHub resolves it
+      # before any step can read a file. Keep it on the fleet's qemu-ref.
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261112.gdca6903-qemu11.1.3-vfu.05bb5e5
+      # /var/lib/qemu-tool is bind-mounted from the host at the same path so
+      # the qcow2 pulled in here is the file the sibling qemu containers open:
+      # compose bind mounts are resolved by the host docker daemon.
+      options: >-
+        --device /dev/kvm
+        --pid=host
+        -v /var/run/docker.sock:/var/run/docker.sock
+        -v /var/lib/qemu-tool:/var/lib/qemu-tool
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4.3.1
+
+    # A root caller resolves CONTAINER_USER to 0:0, which is not the
+    # configuration an operator has. See the action.
+    - name: Run the stack as a non-root user
+      uses: ./.github/actions/nonroot-user
+      with:
+        chown: >-
+          /var/lib/qemu-tool
+          /var/lib/qemu-tool/images
+          /var/lib/qemu-tool/stacks
+          $GITHUB_WORKSPACE
+
+    # The published qcow2 is large and decompresses to about the same again.
+    - name: Free disk space
+      run: |
+        df -h /
+        rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
+        docker image prune -af || true
+        df -h /
+
+    # --force and PIPX_BIN_DIR, because the CI image already ships a qemu-tool
+    # at /usr/local/bin that wins on PATH. Assert it rather than trust it.
+    - name: Install qemu-tool
+      run: |
+        set -eu
+        PIPX_BIN_DIR=/usr/local/bin pipx install --force ./qemu
+        RESOLVED=$(readlink -f "$(command -v qemu-tool)")
+        echo "qemu-tool resolves to: $RESOLVED"
+        case "$RESOLVED" in
+          /opt/qemu-tool/*)
+            echo "::error::the image's qemu-tool is shadowing the one just installed"
+            exit 1
+            ;;
+        esac
+        qemu-tool quick-start --help >/dev/null
+
+    - name: Install collections
+      run: ansible-galaxy collection install --no-deps -r ansible/requirements.yml
+
+    # The fleet names qemu-tool/sdxi:latest, a local tag. The Dockerfile takes
+    # the rocm-sdxi binary through the sdxi-bin build context.
+    - name: Build the sdxi server image
+      run: |
+        tmpdir=$(mktemp -d)
+        cid=$(docker create "$SDXI_SOURCE_IMAGE")
+        docker cp "${cid}:/usr/local/bin/rocm-sdxi" "${tmpdir}/"
+        docker rm "${cid}"
+        docker build --build-context "sdxi-bin=${tmpdir}" \
+          -t qemu-tool/sdxi:latest qemu/docker/sdxi
+        rm -rf "${tmpdir}"
+
+    - name: Fetch the guest image and bring the stack up
+      run: |
+        setpriv --reuid "$CIUSER_UID" --regid "$CIUSER_UID" --init-groups \
+          env HOME="$CIUSER_HOME" \
+          qemu-tool quick-start up \
+            --xml "$FLEET_FILE" \
+            --stack-dir "$STACK_DIR" \
+            --key-dir "$KEY_DIR" \
+            --in-network \
+            --yes
+
+    # The guests are published on HOST ports, which this job container cannot
+    # reach: the runner puts it on its own bridge and `--network` is not
+    # available in container.options. Join the fleet network and address the
+    # guests on it instead.
+    - name: Join the fleet network
+      run: docker network connect rocm-golden_fleet "$(cat /etc/hostname)"
+
+    # Installs the firmware stubs and udev rules, addresses the ernics, probes
+    # amdgpu, and proves the GPU, inter-guest RDMA and NVMe before anything is
+    # timed. A benchmark number from a guest that failed this means nothing.
+    - name: Configure the guests and run the functional tests
+      run: |
+        setpriv --reuid "$CIUSER_UID" --regid "$CIUSER_UID" --init-groups \
+          env HOME="$CIUSER_HOME" \
+          qemu-tool quick-start test \
+            --xml "$FLEET_FILE" \
+            --stack-dir "$STACK_DIR" \
+            --key-dir "$KEY_DIR" \
+            --in-network \
+            --yes
+
+    # Prometheus and Grafana are part of what quick-start brings up, so a lane
+    # that never looked at them would pass with half the stack down. Asked of
+    # the containers rather than of compose: `compose ps` reports a service
+    # that exited as absent rather than as failed.
+    - name: Check the monitoring sidecars
+      run: |
+        set -eu
+        for svc in prometheus grafana; do
+          state=$(docker inspect -f '{{.State.Status}}' "rocm-golden-${svc}-1")
+          echo "${svc}: ${state}"
+          [ "$state" = running ] || {
+            echo "::error::${svc} is ${state}, not running"
+            docker logs --tail 50 "rocm-golden-${svc}-1" || true
+            exit 1
+          }
+        done
+        # An up-but-scraping-nothing Prometheus is the quiet version of this
+        # failing.
+        docker exec rocm-golden-prometheus-1 \
+          wget -q -O- 'http://127.0.0.1:9090/api/v1/query?query=up' \
+          | grep -q '"status":"success"' || {
+            echo "::error::Prometheus answered no query"
+            exit 1
+          }
+
+    # Everything the benchmark steps need to reach the guests, derived from
+    # the fleet XML and from the image rather than written out here.
+    - name: Work out where the guests are
+      shell: bash
+      run: |
+        set -euo pipefail
+        env_of() { qemu-tool fleet-to-env --xml "$FLEET_FILE" | sed -n "s/^$1=//p"; }
+        net=$(env_of FLEET_NET_PREFIX)
+        rdma=$(env_of ERNIC_GUEST_SUBNET)
+        # The image is the authority on which account exists in it; quick-start
+        # has already pulled vm-info.json as part of the keypair referrer.
+        user=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1])).get("username") or "")' \
+            "${KEY_DIR}/vm-info.json" 2>/dev/null || true)
+        [ -n "$user" ] || user=$(env_of VM_USERNAME)
+        {
+          # Third octet 3 is the qemu family, fourth is the 1-based VM index.
+          echo "GUEST1=${net}.3.1"
+          echo "GUEST2=${net}.3.2"
+          # gen-compose gives VM n's ernic the address .(10+n).
+          echo "GUEST2_RDMA=${rdma}.12"
+          echo "GUEST_USER=${user}"
+        } | tee -a "$GITHUB_ENV"
+
+        # generate-vm-report.sh uses ssh's default identity. ssh(1) expands ~
+        # from the passwd entry, not $HOME, and a container job runs as root
+        # with HOME=/github/home -- hence the symlink.
+        mkdir -p "$HOME/.ssh"
+        cp "${KEY_DIR}/id_rsa" "$HOME/.ssh/id_rsa"
+        chmod 600 "$HOME/.ssh/id_rsa"
+        [ "$HOME" = /root ] || { rm -rf /root/.ssh && ln -s "$HOME/.ssh" /root/.ssh; }
+
+    # What `qemu-tool list` and `inspect` say about a LIVE guest. Every field
+    # they report degrades to a plausible placeholder rather than to an error
+    # -- "-", no Disk line, "configured default, unverified", "unknown" -- so
+    # the script demands the positive value. Before the benchmarks, so a wedged
+    # GPU cannot take this check with it.
+    - name: Check the reported devices
+      run: |
+        set -eu
+        # These guests have no utmp, so the Login line comes from logind and is
+        # only non-empty while somebody is logged in. Nothing else here holds a
+        # session open, hence this one. -tt, so it gets a pty and is visible to
+        # both sources inspect reads. -p 2222 is the guest's sshd inside its
+        # own container's namespace; port 22 there has nothing listening.
+        ssh -i "${KEY_DIR}/id_rsa" -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 \
+            -p 2222 -tt "${GUEST_USER}@${GUEST1}" "sleep 120" \
+            >/tmp/devcheck-ssh.log 2>&1 &
+        SSH_PID=$!
+        trap 'kill "$SSH_PID" 2>/dev/null || true' EXIT
+        sleep 5
+        kill -0 "$SSH_PID" 2>/dev/null || {
+          echo "::error::the background SSH session to guest 1 did not stay up"
+          echo "--- ssh output ---"
+          cat /tmp/devcheck-ssh.log 2>/dev/null || echo "(no output captured)"
+          exit 1
+        }
+
+        # inspect verifies the key by reading the login user's authorized_keys
+        # and learns the user from the settings layers. quick-start writes the
+        # account the image really has to env.image-login beside the stack.
+        set -- --xml "$FLEET_FILE"
+        [ -f "${STACK_DIR}/env.image-login" ] &&
+          set -- "$@" --xml "${STACK_DIR}/env.image-login"
+
+        scripts/check-vm-devices.sh "$@" \
+          --gpu gfx1250 --strict-key --login "$GUEST_USER" rocm-golden-1
+        # Guest 2 has no session of its own, so its Login check is only
+        # "logind answered" -- see the script.
+        scripts/check-vm-devices.sh "$@" \
+          --gpu gfx1250 --strict-key rocm-golden-2
+
+    # Four benchmarks, each continue-on-error with an upload gated on its own
+    # outcome, so one failing does not take the other three numbers with it.
+    # The final step turns any failure back into a red job.
+    #
+    # timeout-minutes on each: generate-vm-report.sh talks to the guest over
+    # ~17 unbounded `ssh` calls, and an unresponsive guest hangs any of them
+    # forever -- silently, since the script prints nothing until the end.
+    # Without a step timeout the only backstop is the job's 180m, which
+    # *cancels* the job: continue-on-error never applies and nothing uploads.
+    #
+    # The GPU benchmarks are split across the guests on purpose. The emulated
+    # GPU serves a private/scratch segment to one process per device lifetime
+    # and wedges for every later process once a second one asks, so the less
+    # each device is asked to do after the functional tests, the better.
+    - name: Run the GEMM and hipFile benchmark
+      id: rocjitsu-bench
+      continue-on-error: true
+      timeout-minutes: 20
+      env:
+        REPORT_ROCJITSU_BENCH: "1"
+      run: bash scripts/generate-vm-report.sh perf-out/rocjitsu 2222 "$GUEST_USER" "guest 1" "$GUEST1"
+
+    - name: Upload the GEMM and hipFile numbers
+      if: always() && steps.rocjitsu-bench.outcome == 'success'
+      uses: actions/upload-artifact@v4
+      with:
+        name: perf-rocjitsu
+        path: perf-out/rocjitsu/badge-*.json
+        if-no-files-found: error
+
+    - name: Run the hipFile fio benchmark
+      id: hipfile-fio-bench
+      continue-on-error: true
+      timeout-minutes: 25
+      env:
+        REPORT_HIPFILE_FIO_BENCH: "1"
+      run: bash scripts/generate-vm-report.sh perf-out/hipfile-fio 2222 "$GUEST_USER" "guest 2" "$GUEST2"
+
+    - name: Upload the hipFile fio number
+      if: always() && steps.hipfile-fio-bench.outcome == 'success'
+      uses: actions/upload-artifact@v4
+      with:
+        name: perf-hipfile-fio
+        path: perf-out/hipfile-fio/badge-*.json
+        if-no-files-found: error
+
+    # Guest 2 is the ib_write_bw server and guest 1 the client. The script
+    # needs guest 2 twice over: where to SSH to start the server, and the
+    # ernic address guest 1 dials. They are different networks.
+    - name: Run the P4 FP8 RDMA bandwidth benchmark
+      id: ernic-p4-bench
+      continue-on-error: true
+      timeout-minutes: 15
+      env:
+        REPORT_ERNIC_P4_BENCH: "1"
+        ERNIC_P4_VM2_HOST: ${{ env.GUEST2 }}
+        ERNIC_P4_VM2_RDMA_ADDR: ${{ env.GUEST2_RDMA }}
+      run: bash scripts/generate-vm-report.sh perf-out/ernic 2222 "$GUEST_USER" "guest 1" "$GUEST1"
+
+    - name: Upload the P4 bandwidth number
+      if: always() && steps.ernic-p4-bench.outcome == 'success'
+      uses: actions/upload-artifact@v4
+      with:
+        name: perf-ernic
+        path: perf-out/ernic/badge-*.json
+        if-no-files-found: error
+
+    - name: Run the SDXI copy bandwidth benchmark
+      id: sdxi-bench
+      continue-on-error: true
+      timeout-minutes: 15
+      env:
+        REPORT_SDXI_BENCH: "1"
+      run: bash scripts/generate-vm-report.sh perf-out/helios 2222 "$GUEST_USER" "guest 1" "$GUEST1"
+
+    - name: Upload the SDXI bandwidth number
+      if: always() && steps.sdxi-bench.outcome == 'success'
+      uses: actions/upload-artifact@v4
+      with:
+        name: perf-helios
+        path: perf-out/helios/badge-*.json
+        if-no-files-found: error
+
+    - name: Show logs on failure
+      if: failure()
+        || steps.rocjitsu-bench.outcome == 'failure'
+        || steps.hipfile-fio-bench.outcome == 'failure'
+        || steps.ernic-p4-bench.outcome == 'failure'
+        || steps.sdxi-bench.outcome == 'failure'
+      run: |
+        qemu-tool compose --stack-dir "$STACK_DIR" logs --tail 200 || true
+
+    - name: Take the stack down
+      if: always()
+      run: |
+        qemu-tool quick-start down \
+          --stack-dir "$STACK_DIR" \
+          --xml "$FLEET_FILE" \
+          --yes || true
+
+    # continue-on-error above keeps the job green, so fail it explicitly when
+    # a benchmark failed -- otherwise a hung GEMM looks like a clean run.
+    # publish-pages runs on any non-skipped conclusion and resolves each
+    # artifact by name, so a red job here does not suppress the numbers that
+    # were measured.
+    #
+    # shell: bash is not decoration. This job runs in the qemu container, where
+    # GitHub resolves the default shell to `sh -e {0}`, and dash rejects
+    # `set -o pipefail` outright.
+    - name: Fail if any benchmark failed
+      if: always()
+      shell: bash
+      run: |
+        set -euo pipefail
+        rc=0
+        for pair in \
+          "gemm-hipfile:${{ steps.rocjitsu-bench.outcome }}" \
+          "hipfile-fio:${{ steps.hipfile-fio-bench.outcome }}" \
+          "ernic-p4:${{ steps.ernic-p4-bench.outcome }}" \
+          "sdxi:${{ steps.sdxi-bench.outcome }}"
+        do
+          name=${pair%%:*}
+          outcome=${pair#*:}
+          if [ "${outcome}" != "success" ]; then
+            echo "::error::${name} benchmark failed (${outcome})"
+            rc=1
+          fi
+        done
+        exit "${rc}"

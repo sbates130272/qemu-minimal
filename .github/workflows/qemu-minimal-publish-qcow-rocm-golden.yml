@@ -1,0 +1,335 @@
+name: qemu-minimal - Publish - qcow-rocm-golden
+
+# Bakes the rocm-golden guest, qualifies it, and publishes the qcow2 that
+# quick-start, the fleet files and the other repos pull.
+#
+# The gate, in order, all of it before anything is pushed:
+#
+#   1. the guest pins agree with the server images (tests/test_playbook_pins.py)
+#   2. bake with the playbook's own defaults
+#   3. boot with NO device attached and run qemu/checks/rocm-golden.sh,
+#      which is how most consumers first meet the image
+#   4. boot behind the compose stack with the ernic, rocjitsu and SDXI
+#      devices, run the configure, firmware and test stages, and copy
+#      through the SDXI engine
+#
+# What is published is the BAKE, not the disk that was tested. Steps 3 and 4
+# load modules, install an ip_discovery.bin and leave test output behind; they
+# run on the overlay gen-vm creates, and the base underneath is what is
+# pushed. The base's mtime is compared across the two boots to prove it.
+#
+# Never from a pull request: this writes to a registry.
+on:
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Run every gate and build the artifact, but push nothing
+        type: boolean
+        default: false
+  push:
+    branches:
+      - main
+    paths:
+      - 'ansible/**'
+      - 'qemu/checks/**'
+      - 'qemu/packages.d/**'
+      - 'qemu/xml/rocm-golden.xml'
+      - '.github/workflows/qemu-minimal-publish-qcow-rocm-golden.yml'
+
+# One publish at a time, and never cancelled part-way through a push.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  ERNIC_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261112.gdca6903-ernic.90434a2-vfu.05bb5e5
+  ROCJITSU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261112.gdca6903-rocjitsu.50be05a
+  QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261112.gdca6903-qemu11.1.3-vfu.05bb5e5
+  SDXI_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-sdxi:20261112.gdca6903-sdxi.c50f2b9
+  VM_IMAGES_DIR: /var/lib/qemu-tool/images
+  VM_NAME: rocm-golden
+  # The published repository. Consumers pin the dated tag; latest rolls.
+  # Docker Hub, pushed with the DOCKERHUB_USERNAME and DOCKERHUB_TOKEN
+  # repository secrets. The token needs read and write on this repository.
+  PUBLISH_REF: docker.io/sbates130272/qemu-minimal-rocm-golden
+  ORAS_VERSION: 1.3.6
+  ORAS_SHA256: 66fb0ad7206f3f6fa77ed5b552049d364ccf4b50b1684554f731f76302b52ca0  # pre-commit: ignore
+  SSH_OPTS: >-
+    -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no
+    -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10
+    -o ServerAliveInterval=15 -o ServerAliveCountMax=4
+
+jobs:
+  publish-qcow-rocm-golden:
+    name: Publish - qcow-rocm-golden
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    container:
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261112.gdca6903-qemu11.1.3-vfu.05bb5e5
+      # /var/lib/qemu-tool is bind-mounted from the host at the same path so
+      # the qcow2 this job bakes is the file the sibling qemu container opens.
+      options: >-
+        --device /dev/kvm
+        -v /var/run/docker.sock:/var/run/docker.sock
+        -v /var/lib/qemu-tool:/var/lib/qemu-tool
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4.3.1
+
+    # The key setup-vm-job generates here is the one the guest authorises and
+    # the one that is published with it. It exists for this run only and is
+    # nobody's personal key.
+    - name: Set up VM job
+      uses: ./.github/actions/setup-vm-job
+      with:
+        cloud-image-key: rocm-golden
+        stage-src: 'true'
+
+    # Before the two-hour bake, not after it.
+    - name: Check the registry credentials are set
+      if: ${{ !inputs.dry-run }}
+      env:
+        REGISTRY_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+        REGISTRY_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      run: |
+        if [ -z "$REGISTRY_USER" ] || [ -z "$REGISTRY_TOKEN" ]; then
+          echo "DOCKERHUB_USERNAME and DOCKERHUB_TOKEN must be set as" \
+               "repository secrets to publish; run with dry-run to skip the push" >&2
+          exit 1
+        fi
+
+    # A guest must never be ahead of the servers it talks to.
+    - name: Check the guest pins against the server images
+      run: python3 tests/test_playbook_pins.py -v
+
+    # The uncompressed qcow2 is about 10 GB and the compressed copy sits
+    # beside it during the push.
+    - name: Check free disk space
+      run: |
+        df -h "$VM_IMAGES_DIR"
+        avail=$(df --output=avail -BG "$VM_IMAGES_DIR" | tail -1 | tr -dc 0-9)
+        if [ "$avail" -lt 45 ]; then
+          echo "only ${avail}G free under $VM_IMAGES_DIR; the bake, the copy" \
+               "and the compressed image need about 45G" >&2
+          exit 1
+        fi
+
+    - name: Install oras
+      run: |
+        if ! command -v oras > /dev/null; then
+          curl -fsSL --retry 5 -o /tmp/oras.tar.gz \
+            "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz"
+          echo "${ORAS_SHA256}  /tmp/oras.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/oras.tar.gz -C /usr/local/bin oras
+          rm -f /tmp/oras.tar.gz
+        fi
+        oras version
+
+    - name: Pull CI images
+      run: |
+        docker pull "$ERNIC_IMAGE"
+        docker pull "$ROCJITSU_IMAGE"
+        docker pull "$QEMU_IMAGE"
+        docker pull "$SDXI_IMAGE"
+
+    # No ANSIBLE_EXTRA_ARGS: the playbook's defaults are the published
+    # image's, and the package manifest is the published guest's.
+    - name: Bake the guest
+      uses: sbates130272/qemu-tool-action@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        operation: gen-vm
+        qemu-tool-source: ./qemu
+        vm-name: ${{ env.VM_NAME }}
+        release: resolute
+        size: '64'
+        vcpus: '4'
+        ansible-playbook: ansible/playbooks/vm-rocm-golden.yml
+        extra-args: >-
+          --username ubuntu --password password
+          --packages qemu/packages.d/rocm-golden.txt
+
+    - name: Record the baked base
+      run: |
+        base="$VM_IMAGES_DIR/${VM_NAME}-backing.qcow2"
+        test -f "$base"
+        qemu-img info "$base"
+        stat -c '%Y %s' "$base" > /tmp/base.stat
+        # The overlay the two boots below write to.
+        qemu-img info "$VM_IMAGES_DIR/${VM_NAME}.qcow2" | grep -q 'backing file:'
+
+    # ── Gate: no device attached ──────────────────────────────────────────
+    - name: Boot with no device attached
+      run: |
+        qemu-tool run-vm --vm-name "$VM_NAME" --vcpus 4 > run-vm.log 2>&1 &
+        elapsed=0
+        while [ $elapsed -lt 240 ]; do
+          if ssh $SSH_OPTS -p 2222 ubuntu@localhost true 2>/dev/null; then
+            echo "guest up after ${elapsed}s"
+            exit 0
+          fi
+          sleep 3; elapsed=$((elapsed + 3))
+        done
+        cat run-vm.log
+        echo "guest did not come up" >&2
+        exit 1
+
+    # Over "bash -s": non-login and non-interactive, the session the check's
+    # ROCm PATH assertions are about. It also asserts the image carries no
+    # ip_discovery.bin, which belongs to one rocjitsu build.
+    - name: Run the rocm-golden guest check
+      run: |
+        { echo 'set -eu'; cat qemu/checks/rocm-golden.sh; } |
+          ssh $SSH_OPTS -p 2222 ubuntu@localhost "bash -s"
+
+    - name: Fetch the guest stamp
+      run: |
+        ssh $SSH_OPTS -p 2222 ubuntu@localhost "cat /etc/rocm-golden-guest.json" \
+          > guest-stamp.json
+        python3 -m json.tool guest-stamp.json
+
+    - name: Power the guest off
+      if: always()
+      run: |
+        ssh $SSH_OPTS -p 2222 ubuntu@localhost "sudo poweroff" || true
+        for _ in $(seq 60); do
+          pgrep -f "qemu-system.*${VM_NAME}" > /dev/null || exit 0
+          sleep 2
+        done
+        echo "guest did not power off; killing it" >&2
+        pkill -f "qemu-system.*${VM_NAME}" || true
+
+    # ── Gate: behind the compose stack, with the devices ──────────────────
+    - name: Bring up the compose stack
+      uses: sbates130272/qemu-tool-action@v1
+      env:
+        QEMU_TOOL_SRC: /var/lib/qemu-tool/src
+        # ionic_rdma needs 4 online CPUs.
+        VM_VCPUS: "4"
+        VM_VMEM: "4096"
+        VM_SHM_SIZE: "5g"
+      with:
+        operation: compose
+        qemu-tool-source: ./qemu
+        vm-name: ${{ env.VM_NAME }}
+        stack: vfio-user-ernic-rocjitsu-vm
+        compose-args: up --detach
+        wait-for-healthy: 'true'
+        wait-timeout: '60'
+
+    # The qemu container publishes 2222 on the HOST, which this job container
+    # cannot reach. Attach to the compose network and use the service name.
+    - name: Join the compose network
+      run: docker network connect vfio-user-ernic-rocjitsu-vm_default "$(cat /etc/hostname)"
+
+    - name: Wait for the guest behind the stack
+      run: |
+        elapsed=0
+        while [ $elapsed -lt 240 ]; do
+          if ssh $SSH_OPTS -p 2222 ubuntu@qemu true 2>/dev/null; then
+            echo "guest up after ${elapsed}s"
+            exit 0
+          fi
+          sleep 3; elapsed=$((elapsed + 3))
+        done
+        echo "guest did not come up behind the stack" >&2
+        exit 1
+
+    - name: Run the configure and live firmware stages
+      run: |
+        ansible-playbook -i "qemu," ansible/playbooks/vm-rocm-golden.yml \
+          --tags configure,firmware \
+          -e "ansible_host=qemu" -e "ansible_port=2222" -e "ansible_user=ubuntu" \
+          -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"'
+
+    - name: Verify the RDMA port is active
+      run: |
+        ssh $SSH_OPTS -p 2222 ubuntu@qemu "ibv_devinfo" | tee /tmp/ibv_devinfo.txt
+        grep -q PORT_ACTIVE /tmp/ibv_devinfo.txt
+
+    # The test stage probes amdgpu itself and runs the GPU workloads.
+    - name: Run the GPU test stage
+      timeout-minutes: 30
+      run: |
+        ansible-playbook -i "qemu," ansible/playbooks/vm-rocm-golden.yml \
+          --tags test \
+          -e "ansible_host=qemu" -e "ansible_port=2222" -e "ansible_user=ubuntu" \
+          -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"'
+
+    # Bounded: a guest driver ahead of its server waits for a completion
+    # interrupt that never arrives, and that must fail the gate, not hang it.
+    - name: Copy through the SDXI engine
+      timeout-minutes: 5
+      run: |
+        ssh $SSH_OPTS -p 2222 ubuntu@qemu "test -e /dev/sdxi0"
+        ssh $SSH_OPTS -p 2222 ubuntu@qemu \
+          "timeout 120 sdxi-cli -d /dev/sdxi0 bench copy 4194304 20"
+
+    - name: Dump guest dmesg on failure
+      if: failure()
+      timeout-minutes: 2
+      run: ssh $SSH_OPTS -p 2222 ubuntu@qemu "sudo dmesg | tail -200" || true
+
+    - name: Show compose logs on failure
+      if: failure()
+      run: qemu-tool compose --stack vfio-user-ernic-rocjitsu-vm logs || true
+
+    - name: Tear the stack down
+      if: always()
+      run: qemu-tool compose --stack vfio-user-ernic-rocjitsu-vm down || true
+
+    # ── Publish ───────────────────────────────────────────────────────────
+    - name: Check the baked base was not written to
+      run: |
+        base="$VM_IMAGES_DIR/${VM_NAME}-backing.qcow2"
+        now=$(stat -c '%Y %s' "$base")
+        if [ "$now" != "$(cat /tmp/base.stat)" ]; then
+          echo "the baked base changed while it was being tested" \
+               "(was $(cat /tmp/base.stat), now $now); not publishing it" >&2
+          exit 1
+        fi
+
+    # The same action and secrets batesste-ci-images pushes with. oras reads
+    # the ~/.docker/config.json it writes.
+    - name: Log in to Docker Hub
+      if: ${{ !inputs.dry-run }}
+      uses: docker/login-action@v4
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    - name: Publish the qcow2
+      env:
+        SOURCE_URL: ${{ github.server_url }}/${{ github.repository }}
+        DRY_RUN: ${{ inputs.dry-run && '--dry-run' || '' }}
+      run: |
+        tag="$(date -u +%Y%m%d).g$(printf '%s' "$GITHUB_SHA" | cut -c1-7)"
+        qemu-tool publish-qcow \
+          --image "$VM_IMAGES_DIR/${VM_NAME}-backing.qcow2" \
+          --ref "$PUBLISH_REF" --tag "$tag" --tag latest \
+          --key "$HOME/.ssh/id_rsa" \
+          --vm-name "$VM_NAME" --flavour rocm-golden \
+          --username ubuntu --password password --release resolute \
+          --guest-stamp guest-stamp.json \
+          --playbook ansible/playbooks/vm-rocm-golden.yml \
+          --commit "$GITHUB_SHA" \
+          --source "$SOURCE_URL" \
+          --digest-file published-ref.txt $DRY_RUN
+
+    - name: Report what was published
+      if: ${{ !inputs.dry-run }}
+      run: |
+        {
+          echo "### Published rocm-golden qcow2"
+          echo
+          echo '```'
+          cat published-ref.txt
+          echo '```'
+          echo
+          echo "Device-less check and with-device stages passed in this run."
+        } >> "$GITHUB_STEP_SUMMARY"
+        oras manifest fetch "$(cat published-ref.txt)" | python3 -m json.tool

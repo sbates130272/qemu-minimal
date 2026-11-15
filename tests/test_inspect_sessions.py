@@ -77,7 +77,7 @@ MONOTONIC=2091866064
 """
 
 # The lingering user manager from the same guest, /run/systemd/sessions/1.
-# ernic_fleet_guest enables linger, so one of these exists per user whether
+# rocm_ernic_setup enables linger, so one of these exists per user whether
 # or not anybody is logged in.
 MANAGER_SESSION = """\
 # This is private data. Do not parse.

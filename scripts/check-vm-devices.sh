@@ -34,7 +34,7 @@ usage() {
   cat <<'EOF'
 Usage: check-vm-devices.sh [options] VM_NAME
 
-  --env-file FILE  settings file passed through to qemu-tool (repeatable)
+  --xml FILE       settings file passed through to qemu-tool (repeatable)
   --gpu GFX        require a GPU reporting this gfx version
   --nvme-bdf       require a guest BDF for the NVMe, not "emul". Only
                    possible when the VM was started with --qmp-socket:
@@ -52,7 +52,7 @@ EOF
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --env-file) ENV_ARGS="${ENV_ARGS} --env-file $2"; shift 2 ;;
+    --xml) ENV_ARGS="${ENV_ARGS} --xml $2"; shift 2 ;;
     --gpu) GPU=$2; shift 2 ;;
     --nvme-bdf) NVME_MODE=bdf; shift ;;
     --strict-key) STRICT_KEY=1; shift ;;

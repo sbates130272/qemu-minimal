@@ -23,7 +23,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # Same TheRock stream ansible/playbooks/vm-rocjitsu.yml gives the guest, so
+  # Same TheRock stream ansible/playbooks/vm-rocm-golden.yml gives the guest, so
   # this lane compiles against the headers the benchmarks actually run against.
   ROCM_REPO: https://stable.repo.amd.com/rocm/core/packages/ubuntu2404
   ROCM_GPG: https://stable.repo.amd.com/rocm/gpg/packages.gpg

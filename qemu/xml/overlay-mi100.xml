@@ -30,7 +30,6 @@
   <!-- Clear the virtio-fs share path (scale-out sets it non-empty). -->
   <vm-filesystem></vm-filesystem>
 
-  <lmcache-enable>false</lmcache-enable>
   <logs-enable>false</logs-enable>
 
 </fleet>

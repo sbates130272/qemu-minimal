@@ -1,0 +1,24 @@
+============================================================
+qemu-minimal emulated GPU guest  ({{ ansible_hostname }})
+============================================================
+Kernel:       {{ ansible_kernel }}
+ROCm prefix:  {{ rocm_setup_therock_prefix | default('unknown') }}
+hsa-snoop:    v{{ rocjitsu_setup_tools_hsa_snoop_version }}  (installed, services disabled)
+============================================================
+
+Two services are disabled on this guest to prevent GPU lockup:
+
+hsa-snoop (.service and -prometheus.service)
+  hsa-snoop holds trace_pipe open. On an emulated GPU the
+  scratch segment is served to exactly one process at a time;
+  a background collector wedges the device for every workload
+  that follows. Symptom: dispatch hangs waiting for scratch.
+
+gpuagent
+  gpuagent calls amdsmi for temperature/clock/utilisation.
+  The emulated gfx1250 returns AMDSMI_STATUS_NOT_SUPPORTED,
+  causing gpuagent to assertion-fail and wedge /dev/kfd.
+  Symptom: next process gets -EBUSY opening /dev/kfd.
+
+Do not re-enable either service on this guest.
+============================================================

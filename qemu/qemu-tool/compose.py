@@ -146,8 +146,8 @@ def _remembered_layers(cdir: Path) -> list[Path]:
         sys.exit(
             f"Error: {compose_file} records no env files, so there is nothing "
             "to remember.\n"
-            "       Pass --env-file, or regenerate the stack with: "
-            f"qemu-tool gen-compose --output-dir {cdir} --env-file <file>"
+            "       Pass --xml, or regenerate the stack with: "
+            f"qemu-tool gen-compose --output-dir {cdir} --xml <file>"
         )
     resolved: list[Path] = []
     for name in names:
@@ -162,7 +162,7 @@ def _remembered_layers(cdir: Path) -> list[Path]:
                 f"Error: {compose_file} was generated from {name}, which is "
                 "not there now.\n"
                 f"       Looked for: {looked}\n"
-                "       Pass --env-file to name the layers explicitly."
+                "       Pass --xml to name the layers explicitly."
             )
         resolved.append(found)
     return resolved
@@ -192,7 +192,7 @@ def _warn_if_stale(
     # printed "gen-compose --output-dir <dir>" with no --env-file at all, and
     # running it verbatim fails for want of a settings file. A regenerate hint
     # that does not regenerate is worth less than no hint.
-    arg = "".join(f" --env-file {p}" for p in settings) if settings else ""
+    arg = "".join(f" --xml {p}" for p in settings) if settings else ""
     names = ", ".join(str(p) for p in settings)
     target = f" --stack {stack}" if stack is not None else f" --output-dir {cdir}"
     # Two different faults, worded differently. Content drift ("same files,
@@ -686,7 +686,7 @@ def run(
         _warn_about_root_artifacts(paths)
     # Belt and braces: cli._split_compose_argv already drops a user-typed "--",
     # but docker compose treats everything after a "--" as positional, so a
-    # leaked separator made `-- --profile lmcache up -d` bring up the default
+    # leaked separator made `-- --profile metrics up -d` bring up the default
     # services and report success -- the quiet failure, not a visible one.
     if compose_args and compose_args[0] == "--":
         compose_args = compose_args[1:]

@@ -49,7 +49,7 @@ class ParseExample(unittest.TestCase):
         self.assertIn("qemu-libvfio-user-sbates-fork", self.cfg.qemu_ref)
         self.assertIn("rocm-ernic", self.cfg.ernic_ref)
         self.assertIn("rocjitsu", self.cfg.rocjitsu_ref)
-        self.assertIn("ernic-rocjitsu", self.cfg.backing_ref)
+        self.assertIn("rocm-golden", self.cfg.backing_ref)
 
     def test_network(self) -> None:
         self.assertEqual(self.cfg.fleet_prefix, "172.31")
@@ -66,15 +66,6 @@ class ParseExample(unittest.TestCase):
     def test_vm_defaults(self) -> None:
         self.assertEqual(self.cfg.shm_size, "8g")
         self.assertEqual(self.cfg.rocjitsu_config, "gfx1250_mi455x.json")
-
-    def test_lmcache(self) -> None:
-        self.assertTrue(self.cfg.lmcache_enable)
-        self.assertEqual(self.cfg.lmcache_coord_port, 8100)
-        self.assertEqual(self.cfg.lmcache_server_chunk_size, 524288)
-        self.assertEqual(self.cfg.lmcache_server_l2_prefetch_policy, "retain")
-        self.assertEqual(self.cfg.lmcache_server_max_workers, 4)
-        self.assertFalse(self.cfg.lmcache_guest_seccomp_unconfined)
-        self.assertEqual(self.cfg.lmcache_guest_ib_device_name, "rocmernic0")
 
     def test_metrics_env_expansion(self) -> None:
         # prom-data-dir and grafana-data-dir are intentionally commented out in

@@ -1,0 +1,100 @@
+---
+# Three mechanisms, because each covers a gap in the others. modprobe.d only
+# suppresses alias-based autoload; the kernel cmdline fires before any
+# userspace modprobe; and the hook keeps the module out of the initramfs,
+# which mkinitramfs would otherwise pull in by autodetection.
+- name: Blacklist amdgpu autoload
+  ansible.builtin.copy:
+    dest: /etc/modprobe.d/amdgpu-blacklist.conf
+    content: "blacklist amdgpu\n"
+    mode: "0644"
+  become: true
+
+- name: Add the amdgpu blacklist to the kernel cmdline
+  ansible.builtin.copy:
+    dest: /etc/default/grub.d/99-amdgpu-blacklist.cfg
+    content: |
+      GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT} modprobe.blacklist=amdgpu"
+    mode: "0644"
+  become: true
+
+- name: Install the initramfs hook that excludes amdgpu.ko
+  ansible.builtin.copy:
+    src: amdgpu-exclude
+    dest: /etc/initramfs-tools/hooks/amdgpu-exclude
+    mode: "0755"
+  become: true
+
+# Before the initramfs is regenerated, so it is built against the patched
+# module and with update-initramfs back in place.
+- name: Patch and build the amdgpu DKMS module
+  ansible.builtin.include_tasks: dkms.yml
+  when: rocjitsu_setup_amdgpu_patch_dkms | bool
+
+- name: Make the blacklist effective at boot
+  when: rocjitsu_setup_amdgpu_update_initramfs | bool
+  become: true
+  block:
+    # -k all: the guest boots a different kernel than the one running during
+    # a bake, and only the running kernel's image is rebuilt without it.
+    - name: Regenerate every initramfs
+      ansible.builtin.command:
+        cmd: update-initramfs -u -k all
+      changed_when: true
+
+    - name: Assert amdgpu.ko is absent from every initramfs
+      ansible.builtin.shell:
+        # No pipe: grep -q closing early would SIGPIPE lsinitramfs, and under
+        # pipefail that reads as "not found".
+        cmd: |
+          found=0
+          for img in /boot/initrd.img-*; do
+            [ -f "$img" ] || continue
+            case "$(lsinitramfs "$img" 2>/dev/null)" in
+              *amdgpu.ko*)
+                echo "ERROR: amdgpu.ko found in $img" >&2
+                found=1
+                ;;
+            esac
+          done
+          exit $found
+      changed_when: false
+
+    - name: Regenerate grub.cfg
+      ansible.builtin.command:
+        cmd: update-grub
+      changed_when: true
+
+    - name: Assert the cmdline blacklist reached grub.cfg
+      ansible.builtin.command:
+        cmd: grep -q 'modprobe.blacklist=amdgpu' /boot/grub/grub.cfg
+      changed_when: false
+
+- name: Install the amdgpu probe script
+  ansible.builtin.copy:
+    src: amdgpu-probe
+    dest: /usr/local/bin/amdgpu-probe
+    mode: "0755"
+  become: true
+
+# No dot in the installed name: run-parts skips files that have one.
+- name: Install the login hint for the probe step
+  ansible.builtin.copy:
+    src: amdgpu-probe-motd
+    dest: /etc/update-motd.d/99-amdgpu-probe
+    mode: "0755"
+  become: true
+
+# No device and no amdgpu during a bake, so "absent" and silence are the only
+# right answers. Anything else means the detection is wrong, and a hint that
+# fires with no GPU nags every login of every guest.
+- name: Assert the probe reports no device during a bake
+  ansible.builtin.shell:
+    cmd: |
+      set -e
+      test "$(/usr/local/bin/amdgpu-probe --status)" = absent
+      test -z "$(/etc/update-motd.d/99-amdgpu-probe)"
+    executable: /bin/bash
+  become: true
+  changed_when: false
+  when: rocjitsu_setup_amdgpu_update_initramfs | bool

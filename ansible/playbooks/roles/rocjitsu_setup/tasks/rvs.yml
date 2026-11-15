@@ -1,0 +1,38 @@
+---
+# amdrocm-blas-dev ships headers and the unversioned librocblas.so symlink and
+# nothing else, so alone it leaves librocblas.so.5 absent and `rvs -g` exits
+# 127. The library is in amdrocm-blas-host<ver>, which nothing else pulls in:
+# the only meta that depends on it also drags in all 26 per-gfx device-library
+# packages at ~66 MB each.
+#
+# The package name carries the ROCm major.minor, taken from the prefix
+# rocm_setup publishes as rocm_setup_therock_prefix. If the role found no
+# core-* that fact is unset and this fails to template, which is the right
+# outcome: a wrong package name would be worse.
+- name: Install rocBLAS
+  ansible.builtin.package:
+    name:
+      - amdrocm-blas-dev
+      - >-
+        amdrocm-blas-host{{ rocm_setup_therock_prefix | basename
+                            | regex_replace('^core-', '') }}
+    state: present
+  become: true
+
+- name: Create the RVS install prefix
+  ansible.builtin.file:
+    path: "{{ rocjitsu_setup_tools_rvs_prefix }}"
+    state: directory
+    mode: "0755"
+  become: true
+
+# The tarballs are only built as "amdrocm7", but every soname RVS needs is
+# what TheRock 10.0 ships. Recheck if either side bumps a major.
+- name: Install ROCm Validation Suite from the AMD tarball
+  ansible.builtin.unarchive:
+    src: >-
+      https://repo.amd.com/rocm/rvs/tarball/amdrocm7-rvs-{{ rocjitsu_setup_tools_rvs_version }}-Linux.tar.gz
+    dest: "{{ rocjitsu_setup_tools_rvs_prefix }}"
+    remote_src: true
+    creates: "{{ rocjitsu_setup_tools_rvs_prefix }}/bin/rvs"
+  become: true
