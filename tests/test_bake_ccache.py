@@ -3,9 +3,9 @@
 The playbook-test lane builds the golden guest's kernel modules through
 ccache and carries the cache between runs; the publish lane builds the same
 guest from source. Both run one playbook, so what separates them is a single
-environment variable, and everything here is about that variable being the
-only switch: off by default, set in exactly one workflow, and leaving nothing
-in the image either way.
+gen-vm flag, --cache-dir, and everything here is about that flag being the
+only switch: off by default, passed in exactly one workflow, never read from
+the environment, and leaving nothing in the image either way.
 
 None of this boots a guest. What is pinned is the structure a bake would
 otherwise be the first thing to find wrong, an hour in.
@@ -15,26 +15,49 @@ otherwise be the first thing to find wrong, an hour in.
 
 from __future__ import annotations
 
+import contextlib
+import importlib.util
+import io
+import json
 import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import yaml
 
 REPO = Path(__file__).parent.parent
+PKG = REPO / "qemu" / "qemu-tool"
+
+_spec = importlib.util.spec_from_file_location(
+    "qemu_tool", PKG / "__init__.py", submodule_search_locations=[str(PKG)])
+sys.modules.setdefault("qemu_tool", importlib.util.module_from_spec(_spec))
+_spec.loader.exec_module(sys.modules["qemu_tool"])
+
+from qemu_tool import cli, gen_vm, settings  # noqa: E402
+from qemu_tool.config import VMConfig  # noqa: E402
+from qemu_tool.fleet_xml import (  # noqa: E402
+    KNOWN_ELEMENTS, FleetConfig, FleetXml)
+
 PLAYBOOK = REPO / "ansible/playbooks/vm-rocm-golden.yml"
 ROLES = REPO / "ansible/playbooks/roles"
 ROLE = ROLES / "bake_ccache"
 WORKFLOWS = REPO / ".github/workflows"
 LANE = WORKFLOWS / "qemu-minimal-ansible-playbook-test-vm-rocm-golden.yml"
 PUBLISH = WORKFLOWS / "qemu-minimal-publish-qcow-rocm-golden.yml"
-VARIABLE = "ROCM_GOLDEN_CCACHE_DIR"
-GATE = "golden_ccache_dir | length > 0"
+FLEET = REPO / "qemu/stacks/rocm-golden.xml"
+# The extra vars gen-vm passes, and the names the playbook reads.
+DIR_VAR = "bake_cache_dir"
+REPLACE_VAR = "bake_cache_replace"
+GATE = "bake_cache_dir | default('') | length > 0"
+# What the cache used to be switched by. Nothing may read them again.
+RETIRED = ("ROCM_GOLDEN_CCACHE_DIR", "ROCM_GOLDEN_CCACHE_REPLACE")
 
 
 def _plays():
@@ -73,13 +96,17 @@ class Playbook(unittest.TestCase):
 
     SAVE = "Save the compiler cache and take ccache out of the guest"
 
-    def test_the_directory_comes_from_the_environment_and_nowhere_else(self):
-        first = _play("Install the ernic driver prerequisites")
-        value = first["vars"]["golden_ccache_dir"]
-        self.assertIn(f"'{VARIABLE}'", value)
-        self.assertIn("lookup(", value)
-        # Unset is the empty string, which is what the gate below tests.
-        self.assertNotIn("default(", value)
+    def test_the_directory_is_an_extra_var_and_never_the_environment(self):
+        text = PLAYBOOK.read_text()
+        self.assertNotIn("lookup('ansible.builtin.env'", text)
+        self.assertNotIn("lookup('env'", text)
+        for name in RETIRED:
+            self.assertNotIn(name, text)
+        # No play defines it: a play var would outrank nothing gen-vm
+        # passes, but it would hide a bake that was handed no directory.
+        for play in _plays():
+            self.assertNotIn(DIR_VAR, play.get("vars", {}), play.get("name"))
+            self.assertNotIn(REPLACE_VAR, play.get("vars", {}), play.get("name"))
 
     def test_restore_is_gated_and_sits_between_the_kernel_and_the_first_build(self):
         tasks = _play("Install the ernic driver prerequisites")["tasks"]
@@ -103,7 +130,7 @@ class Playbook(unittest.TestCase):
     def test_save_is_a_bake_play_that_does_nothing_else(self):
         play = _play(self.SAVE)
         self.assertEqual(play["tags"], ["install"])
-        # With the variable unset all this play does is the removal, which
+        # With no cache directory all this play does is the removal, which
         # needs no facts.
         self.assertIs(play["gather_facts"], False)
         self.assertEqual(len(play["tasks"]), 1)
@@ -114,9 +141,12 @@ class Playbook(unittest.TestCase):
         self.assertEqual(
             task["ansible.builtin.include_role"],
             {"name": "bake_ccache", "tasks_from": "save"})
+        self.assertEqual(task["vars"]["bake_ccache_controller_dir"],
+                         "{{ %s }}" % DIR_VAR)
         self.assertNotIn("roles", play)
+        self.assertNotIn("vars", play)
 
-    def test_the_removal_runs_whatever_the_variable_and_the_save_did(self):
+    def test_the_removal_runs_whatever_the_bake_was_given_and_the_save_did(self):
         """A failed cached bake may be finished by a rerun given no cache."""
         outer = _play(self.SAVE)["tasks"][0]
         self.assertNotIn("when", outer)
@@ -129,15 +159,44 @@ class Playbook(unittest.TestCase):
             remove["ansible.builtin.include_role"],
             {"name": "bake_ccache", "tasks_from": "remove"})
 
-    def test_the_replace_flag_is_a_second_variable_that_defaults_to_false(self):
-        first = _play("Install the ernic driver prerequisites")
-        value = first["vars"]["golden_ccache_replace"]
-        self.assertIn("'ROCM_GOLDEN_CCACHE_REPLACE'", value)
-        # Unset is the empty string, and "" | bool is false.
-        self.assertTrue(value.rstrip(" }\"").endswith("| bool"), value)
+    def test_the_replace_flag_is_a_second_extra_var_that_defaults_to_false(self):
         save = _play(self.SAVE)["tasks"][0]["block"][0]
-        self.assertEqual(save["vars"]["bake_ccache_replace"],
-                         "{{ golden_ccache_replace }}")
+        self.assertEqual(
+            save["vars"]["bake_ccache_replace"],
+            "{{ %s | default(false) | bool }}" % REPLACE_VAR)
+
+    @unittest.skipUnless(shutil.which("ansible-playbook"),
+                         "needs ansible-playbook to evaluate the gate")
+    def test_the_gate_and_the_flag_evaluated_as_gen_vm_passes_them(self):
+        """Undefined, empty and set; a JSON boolean and the string form."""
+        save = _play(self.SAVE)["tasks"][0]["block"][0]
+        play = [{"hosts": "localhost", "gather_facts": False, "tasks": [
+            {"ansible.builtin.debug": {
+                "msg": "on={{ %s }} replace={{ %s }}" % (
+                    GATE, save["vars"]["bake_ccache_replace"][3:-3])}}]}]
+        cases = [
+            ([], "on=False replace=False"),
+            (["-e", json.dumps({DIR_VAR: ""})], "on=False replace=False"),
+            (gen_vm._cache_extra_vars(VMConfig(cache_dir=Path("/c a"))),
+             "on=True replace=False"),
+            (gen_vm._cache_extra_vars(
+                VMConfig(cache_dir=Path("/c"), cache_replace=True)),
+             "on=True replace=True"),
+            (["-e", f"{DIR_VAR}=/c", "-e", f"{REPLACE_VAR}=true"],
+             "on=True replace=True"),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "play.yml").write_text(yaml.safe_dump(play))
+            for extra, want in cases:
+                with self.subTest(extra=extra):
+                    done = subprocess.run(
+                        ["ansible-playbook", "-i", "localhost,", "-c", "local",
+                         "play.yml", *extra], cwd=tmp, capture_output=True,
+                        text=True, env={**os.environ, "ANSIBLE_NOCOLOR": "1",
+                                        "ANSIBLE_STDOUT_CALLBACK": "default"})
+                    self.assertEqual(done.returncode, 0,
+                                     done.stdout + done.stderr)
+                    self.assertIn(f'"msg": "{want}"', done.stdout)
 
     def test_save_follows_every_build_and_precedes_the_stamp_and_the_slim(self):
         names = [p.get("name") for p in _plays()]
@@ -155,6 +214,169 @@ class Playbook(unittest.TestCase):
         self.assertEqual(text.count(GATE), 2)
 
 
+_NS = "http://qemu-tool/fleet/1.0"
+
+
+def _fleet(tmp, body=""):
+    path = Path(tmp) / "fleet.xml"
+    path.write_text(
+        f'<?xml version="1.0"?>\n<fleet xmlns="{_NS}">\n'
+        "  <bake-name>guest</bake-name>\n"
+        f"  <bake-playbook>{PLAYBOOK}</bake-playbook>\n{body}</fleet>\n")
+    return path
+
+
+def _config(*argv):
+    args = cli._build_parser().parse_args(["gen-vm", *argv])
+    return args, cli._build_config(args, subcommand="gen-vm")
+
+
+def _refused(*argv):
+    """What gen-vm says when it stops before doing anything."""
+    args = cli._build_parser().parse_args(["gen-vm", *argv])
+    with mock.patch.object(cli, "gen_vm_run") as ran, \
+            contextlib.redirect_stderr(io.StringIO()):
+        try:
+            cli._gen_vm_cmd(args)
+        except SystemExit as stop:
+            return str(stop.code), ran.called
+    return "", ran.called
+
+
+class Tool(unittest.TestCase):
+    """--cache-dir and <bake-cache-dir>: the only way a cache is named."""
+
+    def test_the_element_is_a_path_read_only_by_a_bake(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict(os.environ, {"CACHE_ROOT": "/srv/cache"}):
+            path = _fleet(
+                tmp, "  <bake-cache-dir>${CACHE_ROOT}/bake</bake-cache-dir>\n")
+            self.assertEqual(
+                FleetXml.parse_layers([path]).bake_cache_dir, "/srv/cache/bake")
+            self.assertEqual(settings.load_bake([path])["cache_dir"],
+                             Path("/srv/cache/bake"))
+            # A plain gen-vm, run-vm and everything else never see it.
+            self.assertNotIn("cache_dir", settings.load([path]))
+            _, plain = _config("--xml", str(path))
+            self.assertIsNone(plain.cache_dir)
+            _, baked = _config("--bake", "--xml", str(path))
+            self.assertEqual(baked.cache_dir, Path("/srv/cache/bake"))
+            self.assertIs(baked.cache_replace, False)
+
+    def test_a_tilde_in_the_element_is_the_callers_home(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _fleet(tmp, "  <bake-cache-dir>~/c</bake-cache-dir>\n")
+            self.assertEqual(settings.load_bake([path])["cache_dir"],
+                             Path.home() / "c")
+
+    def test_the_element_round_trips_and_is_left_out_when_unset(self):
+        self.assertIn("bake-cache-dir", KNOWN_ELEMENTS)
+        self.assertNotIn("bake-cache-dir", FleetXml.emit(FleetConfig()))
+        text = FleetXml.emit(FleetConfig(bake_cache_dir="/srv/cache"))
+        self.assertIn("<bake-cache-dir>/srv/cache</bake-cache-dir>", text)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "f.xml"
+            path.write_text(text)
+            self.assertEqual(
+                FleetXml.parse_layers([path]).bake_cache_dir, "/srv/cache")
+
+    def test_the_flag_beats_the_element(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _fleet(tmp, "  <bake-cache-dir>/from/xml</bake-cache-dir>\n")
+            _, cfg = _config("--bake", "--xml", str(path),
+                             "--cache-dir", "/from/flag", "--cache-replace")
+            self.assertEqual(cfg.cache_dir, Path("/from/flag"))
+            self.assertIs(cfg.cache_replace, True)
+
+    def test_the_shipped_fleet_names_no_cache(self):
+        """A published image is compiled from source."""
+        self.assertEqual(FleetXml.parse_layers([FLEET]).bake_cache_dir, "")
+        self.assertNotIn("cache_dir", settings.load_bake([FLEET]))
+        # Its comment says where one is set instead.
+        self.assertIn("No <bake-cache-dir>", FLEET.read_text())
+
+    def test_nothing_in_the_environment_names_a_cache(self):
+        env = {name: "/from/env" for name in RETIRED}
+        env.update(BAKE_CACHE_DIR="/from/env", QEMU_TOOL_CACHE_DIR="/from/env")
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict(os.environ, env):
+            _, cfg = _config("--bake", "--xml", str(_fleet(tmp)))
+        self.assertIsNone(cfg.cache_dir)
+        self.assertEqual(gen_vm._cache_extra_vars(cfg), [])
+        for path in sorted(PKG.glob("*.py")):
+            for name in RETIRED:
+                self.assertNotIn(name, path.read_text(), path.name)
+
+    def test_without_a_cache_the_playbook_is_handed_nothing(self):
+        self.assertEqual(gen_vm._cache_extra_vars(VMConfig()), [])
+        # Not even the flag: replace without a directory never gets here,
+        # and a stray one must not define a variable the playbook gates on.
+        self.assertEqual(
+            gen_vm._cache_extra_vars(VMConfig(cache_replace=True)), [])
+
+    def test_the_directory_reaches_the_playbook_absolute_and_whole(self):
+        flag, value = gen_vm._cache_extra_vars(
+            VMConfig(cache_dir=Path("rel/with space")))
+        self.assertEqual(flag, "-e")
+        self.assertEqual(json.loads(value), {
+            DIR_VAR: str(Path.cwd() / "rel/with space"),
+            REPLACE_VAR: False})
+        _, value = gen_vm._cache_extra_vars(
+            VMConfig(cache_dir=Path("/c"), cache_replace=True))
+        self.assertIs(json.loads(value)[REPLACE_VAR], True)
+
+    def test_the_bake_command_line_carries_the_cache(self):
+        source = (PKG / "gen_vm.py").read_text()
+        self.assertIn("_key_extra_vars(cfg) + _cache_extra_vars(cfg)", source)
+
+    def test_gen_vm_creates_the_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "a" / "b"
+            gen_vm._prepare_cache_dir(VMConfig(cache_dir=cache))
+            self.assertTrue(cache.is_dir())
+            gen_vm._prepare_cache_dir(VMConfig(cache_dir=cache))
+            gen_vm._prepare_cache_dir(VMConfig())
+            blocker = Path(tmp) / "file"
+            blocker.write_text("")
+            with self.assertRaises(SystemExit) as stop:
+                gen_vm._prepare_cache_dir(VMConfig(cache_dir=blocker / "c"))
+            self.assertIn("--cache-dir and <bake-cache-dir>", str(stop.exception))
+        # Before the guest is booted, not an hour in.
+        source = (PKG / "gen_vm.py").read_text()
+        prepare = source[source.index("def _prepare_ansible("):]
+        self.assertIn("_prepare_cache_dir(cfg)",
+                      prepare[:prepare.index("\ndef ", 1)])
+
+    def test_the_flag_without_a_bake_is_refused(self):
+        said, ran = _refused("--vm-name", "x", "--cache-dir", "/c")
+        self.assertIn("--cache-dir needs --bake", said)
+        self.assertFalse(ran)
+
+    def test_replace_without_a_cache_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            said, ran = _refused("--bake", "--xml", str(_fleet(tmp)),
+                                 "--cache-replace")
+        self.assertIn("--cache-replace needs a cache", said)
+        self.assertFalse(ran)
+
+    def test_a_cache_with_no_playbook_to_hand_it_to_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "fleet.xml"
+            path.write_text(f'<fleet xmlns="{_NS}">'
+                            "<bake-name>guest</bake-name></fleet>\n")
+            said, ran = _refused("--bake", "--xml", str(path),
+                                 "--cache-dir", "/c")
+        self.assertIn("this bake has none", said)
+        self.assertFalse(ran)
+
+    def test_a_bake_with_a_cache_is_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            said, ran = _refused("--bake", "--xml", str(_fleet(tmp)),
+                                 "--cache-dir", str(Path(tmp) / "c"))
+        self.assertEqual(said, "")
+        self.assertTrue(ran)
+
+
 class Role(unittest.TestCase):
 
     def setUp(self):
@@ -166,7 +388,7 @@ class Role(unittest.TestCase):
 
     def test_remove_takes_out_everything_and_needs_nothing_from_the_caller(self):
         always = _tasks("remove.yml")
-        # Run with the cache variable unset, so it may not name the
+        # Run when no cache directory was given, so it may not name the
         # controller directory, and may not depend on restore having run.
         text = (ROLE / "tasks/remove.yml").read_text()
         self.assertNotIn("bake_ccache_controller_dir", text)
@@ -354,41 +576,51 @@ class Workflows(unittest.TestCase):
 
     BAKE = "Generate VM with vm-rocm-golden playbook"
 
-    def test_only_the_playbook_test_lane_sets_the_variable(self):
+    def test_only_the_playbook_test_lane_passes_the_flag(self):
         for path in sorted(WORKFLOWS.glob("*.yml")) + sorted(
                 (REPO / ".github/actions").glob("*/action.yml")):
             with self.subTest(file=path.name):
+                text = path.read_text()
+                # In no workflow, this lane included: the cache is a flag.
+                for name in RETIRED:
+                    self.assertNotIn(name, text)
                 if path == LANE:
                     continue
-                self.assertNotIn(VARIABLE, path.read_text())
-                self.assertNotIn("bake-ccache", path.read_text())
+                self.assertNotIn("--cache-dir", text)
+                self.assertNotIn("--cache-replace", text)
+                self.assertNotIn(DIR_VAR, text)
+                self.assertNotIn("bake-ccache", text)
 
     def test_the_publish_lane_compacts_and_compiles_from_source(self):
         text = PUBLISH.read_text()
         self.assertIn("qemu-tool gen-vm --bake", text)
         self.assertNotIn("--no-compact", text)
         self.assertNotIn("ccache", text)
+        self.assertNotIn("cache-dir", text)
 
     def test_the_lane_bakes_uncompacted_with_the_cache_on(self):
         step = _step(self.BAKE)
         self.assertIn("--no-compact", step["run"])
-        self.assertEqual(step["env"][VARIABLE], "${{ env.BAKE_CCACHE_DIR }}")
-        # True when the restored entry was saved under another prefix, or
-        # nothing was restored: the one signal that a small module's pin
-        # moved, which no miss count can see.
+        self.assertIn('--cache-dir "$BAKE_CCACHE_DIR" $CACHE_REPLACE',
+                      step["run"])
+        # The flag when the restored entry was saved under another prefix,
+        # or nothing was restored: the one signal that a small module's pin
+        # moved, which no miss count can see. Nothing otherwise.
         self.assertEqual(
-            step["env"][VARIABLE.replace("_DIR", "_REPLACE")],
+            step["env"]["CACHE_REPLACE"],
             "${{ !startsWith(steps.bake-ccache.outputs.cache-matched-key, "
-            "steps.ccache-key.outputs.prefix) }}")
+            "steps.ccache-key.outputs.prefix) && '--cache-replace' || '' }}")
+        # gen-vm makes the directory; the step must not need to.
+        self.assertNotIn("BAKE_CCACHE_DIR", step["run"].split("qemu-tool")[0])
         # On the bake step only: the configure run later in the job reads the
-        # same playbook and must not see it.
+        # same playbook and must not be handed a cache.
         workflow = yaml.safe_load(LANE.read_text())
-        self.assertNotIn(VARIABLE, workflow["env"])
         self.assertTrue(
             os.path.isabs(workflow["env"]["BAKE_CCACHE_DIR"]),
             "actions/cache and the container resolve ~ differently")
-        setters = [s["name"] for s in _steps() if VARIABLE in s.get("env", {})]
-        self.assertEqual(setters, [self.BAKE])
+        passers = [s["name"] for s in _steps()
+                   if "--cache-dir" in s.get("run", "")]
+        self.assertEqual(passers, [self.BAKE])
 
     def test_restore_and_save_name_the_directory_the_bake_is_given(self):
         restore = _step("Restore the compiler cache")
@@ -516,7 +748,10 @@ class Workflows(unittest.TestCase):
 
     def test_the_manifest_comment_describes_what_exists(self):
         manifest = (REPO / "qemu/packages.d/rocm-golden.txt").read_text()
-        self.assertIn(VARIABLE, manifest)
+        self.assertIn("--cache-dir", manifest)
+        self.assertIn("<bake-cache-dir>", manifest)
+        for name in RETIRED:
+            self.assertNotIn(name, manifest)
         self.assertIn("bake_ccache", manifest)
         for stale in ("dkms_build_cached", "probe-guest"):
             self.assertNotIn(stale, manifest)

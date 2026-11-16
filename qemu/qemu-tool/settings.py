@@ -114,6 +114,8 @@ def bake_overrides(fleet: FleetConfig) -> dict[str, Any]:
         auto = fleet.bake_ssh_port == "auto"
         out["ssh_port_auto"] = auto
         out["ssh_port"] = DEFAULT_SSH_PORT if auto else int(fleet.bake_ssh_port)
+    if fleet.bake_cache_dir:
+        out["cache_dir"] = Path(fleet.bake_cache_dir).expanduser()
     return out
 
 

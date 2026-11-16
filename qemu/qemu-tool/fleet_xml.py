@@ -138,6 +138,9 @@ class FleetConfig:
     # "" for unset, "auto", or a port number as text: the host port the
     # bake's Ansible boot forwards to the guest's sshd.
     bake_ssh_port: str = ""
+    # A directory on the controller that carries the bake's compiler cache
+    # from one bake to the next. Empty, the default, is a bake from source.
+    bake_cache_dir: str = ""
     # Registry repository, without a tag.
     publish_ref: str = ""
     publish_flavour: str = ""
@@ -249,6 +252,7 @@ _SETTINGS: tuple[_Setting, ...] = (
     _Setting("bake-username", "bake_username", _STR, sparse=True),
     _Setting("bake-password", "bake_password", _STR, sparse=True),
     _Setting("bake-ssh-port", "bake_ssh_port", _PORT, sparse=True),
+    _Setting("bake-cache-dir", "bake_cache_dir", _EXPAND, sparse=True),
     _Setting("publish-ref", "publish_ref", _STR, sparse=True),
     _Setting("publish-flavour", "publish_flavour", _STR, sparse=True),
     # Metrics

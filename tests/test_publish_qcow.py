@@ -282,12 +282,25 @@ class DryRun(unittest.TestCase):
             "--xml", str(REPO / "qemu" / "stacks" / "rocm-golden.xml"),
             "--image", str(base),
             "--tag", "20261116.gabc1234", "--tag", "latest",
+            "--tag", "qm.abc1234",
             "--guest-stamp", str(self.tmp / "stamp.json"),
             "--commit", "abc1234",
             "--source", "https://github.com/sbates130272/qemu-minimal",
             "--digest-file", str(self.tmp / "published-ref.txt"),
             "--dry-run", "--keep", str(self.tmp / "out"))
-        publish_qcow.run(args)
+        said = io.StringIO()
+        with contextlib.redirect_stdout(said):
+            publish_qcow.run(args)
+        # Three names for one manifest, the dated one first: it is the one
+        # the referrer attaches to and the image's recorded version.
+        ref = "docker.io/sbates130272/qemu-tool-rocm-golden"
+        self.assertEqual(
+            [line for line in said.getvalue().splitlines()
+             if line.startswith("Would push")],
+            [f"Would push {ref}:20261116.gabc1234",
+             f"Would push {ref}:latest", f"Would push {ref}:qm.abc1234"])
+        self.assertIn("org.opencontainers.image.version = 20261116.gabc1234",
+                      said.getvalue())
         self.assertEqual(
             args.ref, "docker.io/sbates130272/qemu-tool-rocm-golden")
         info = json.loads((self.tmp / "out" / "vm-info.json").read_text())

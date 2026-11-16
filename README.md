@@ -63,7 +63,7 @@ testing.
 - Fast VM creation using Ubuntu cloud images and cloud-init (Noble and Resolute)
 - `qemu-tool` Python CLI with `run-vm`, `gen-vm`, `gen-compose`, `compose`,
   `list`, `inspect`, `down`, `check`, `ssh`, `man`, `qcow`, `publish-qcow`,
-  `quick-start` and `ernic-stats` subcommands
+  `publish-qcow-prune`, `quick-start` and `ernic-stats` subcommands
 - One settings format: fleet XML, layered with repeated `--xml`
 - Bidirectional libvirt domain XML support (`--domain` input, `--convert-to-libvirt` output)
 - NVMe device emulation with tracing support
@@ -561,8 +561,8 @@ flags — `<vm-vcpus>` is `--vcpus`, `<vm-images-dir>` is `--images`,
 `<backing-ref>` is `--backing-image`. Values are read lowest to highest from
 the built-in defaults, a `--domain` XML, the fleet XML, then explicit CLI
 flags, so a flag always wins over the file. One-shot actions (`--dry-run`,
-`--force`, `--restore-image`, `--ansible-only`, `--nvme-recreate`) are flags
-only. `qemu-tool man` lists every element.
+`--force`, `--restore-image`, `--ansible-only`, `--nvme-recreate`,
+`--cache-replace`) are flags only. `qemu-tool man` lists every element.
 
 With no `--xml`, the first of these that exists is used, alone:
 
@@ -588,7 +588,8 @@ and `compose --stack NAME` fall back to the stack's own file in
 `publish-qcow` reads no settings file unless `--xml` names one.
 
 A `~` in a path element (`<vm-images-dir>`, `<vm-ssh-key-file>`, the data
-directories, `<bake-packages>`, `<bake-playbook>`) is expanded when the file
+directories, `<bake-packages>`, `<bake-playbook>`, `<bake-cache-dir>`) is
+expanded when the file
 is parsed, so every command and `docker compose` see the same path.
 
 ### Baking and publishing the guest image
@@ -619,6 +620,61 @@ match the fingerprint the bake recorded. It also refuses a `--key` that is
 not the one `gen-vm` recorded baking in, a private key that is not its
 `.pub`'s other half, and an image `gen-vm` pulled rather than baked. A bake leaves out the fleet's `<vm-extra-hostfwd>`, because it runs
 QEMU on the host, where a forward whose port is taken stops it starting.
+
+The baked image carries one kernel, the pinned mainline one. The Ubuntu
+release kernel the cloud image came with is purged at the end of the bake —
+about 370 MB, and the entry GRUB would otherwise fall back to, a kernel none
+of the image's modules were built for — and GRUB is told to boot the pinned
+kernel by name (`GRUB_TOP_LEVEL` in
+`/etc/default/grub.d/99-rocm-ernic-kernel.cfg`) rather than because it sorts
+first. `qemu/checks/rocm-golden.sh` asserts both on the booted guest.
+
+**A compiler cache for local bakes.** About fourteen minutes of a bake is the
+plays that build kernel modules, and their sources move only when a pin does.
+`--cache-dir` names a directory that carries a ccache between bakes:
+
+```bash
+qemu-tool gen-vm --bake --xml qemu/stacks/rocm-golden.xml \
+    --cache-dir ~/.cache/qemu-tool/bake
+```
+
+`gen-vm` creates the directory and hands it to the playbook, which unpacks
+`ccache.tar` from it into the guest before the first build, saves it back
+after the last, and leaves nothing of the cache in the image. The same can be
+set once in an overlay of your own as `<bake-cache-dir>`; the flag wins.
+`--cache-replace` says the cache there was saved for other pins and is to be
+saved again however little this bake missed. Nothing in the environment names
+a cache. **Not for an image that is published**: `rocm-golden.xml` sets no
+`<bake-cache-dir>`, the publish workflow passes no `--cache-dir`, and a
+published image is compiled from source.
+
+**What the publish workflow pushes, and what it later deletes.** Each publish
+is one manifest under three tags, in this order:
+
+| Tag | What it is |
+|---|---|
+| `<YYYYMMDD>.g<sha7>` | The dated tag consumers pin. First, because the keypair referrer attaches to the first tag. |
+| `latest` | Rolls to every publish. |
+| `qm.<sha7>` | The qemu-minimal commit alone; rolls when the same commit is published again. |
+
+After a push the workflow runs `qemu-tool publish-qcow-prune --yes`, which
+keeps the 10 newest dated tags and any dated tag pushed within the last 30
+days, and deletes the other dated tags. `latest`, every `qm.*` and any tag
+that is not exactly of the dated form are never deleted. A tag name is all
+that goes: the image it named, and the `vm-info.json` and keypair attached
+to that image, stay in the registry, still reachable by `qm.<sha7>`. Run
+without `--yes` it prints the plan and deletes nothing:
+
+```bash
+qemu-tool publish-qcow-prune --xml qemu/stacks/rocm-golden.xml
+```
+
+It deletes through the Docker Hub API, so it refuses a repository on any
+other registry, and it reads `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` from
+the environment — credentials, not settings, and never flags. The token
+needs delete access as well as read and write. If the prune fails, the
+publish run stays green and carries a warning: the image is already out, and
+re-running a failed publish would bake and push it again.
 
 The bake boots the guest on the host to run its playbook, with a host port
 forwarded to the guest's sshd, and QEMU does not start if that port is held
@@ -802,6 +858,8 @@ takes every stack on the system.
 | `--backing-image OCI_REF` | — | Pull a published backing qcow2 with `oras`, then overlay on it |
 | `--bake` | off | Bake the image the fleet XML describes in its `<bake-*>` elements, from the cloud image, instead of pulling `<backing-ref>` |
 | `--ansible-playbook FILE` | — | Path to an Ansible playbook to run against the VM image after cloud-init |
+| `--cache-dir DIR` | `<bake-cache-dir>`, else none | With `--bake`: carry the bake's compiler cache in this directory between bakes |
+| `--cache-replace` | off | The cache in that directory was saved for other pins: save this bake's over it |
 
 ### run-vm flags
 

@@ -56,9 +56,12 @@ env:
   STACK_DIR: /var/lib/qemu-tool/stacks/publish-gate
   OVERLAY: /var/lib/qemu-tool/stacks/publish-gate.xml
   # The published repository is <publish-ref> in qemu/stacks/rocm-golden.xml.
-  # Consumers pin the dated tag; latest rolls. Docker Hub, pushed with the
-  # DOCKERHUB_USERNAME and DOCKERHUB_TOKEN repository secrets. The token
-  # needs read and write on that repository.
+  # Three tags per publish, all on one manifest: <YYYYMMDD>.g<sha7>, which
+  # consumers pin; latest, which rolls; and qm.<sha7>, the qemu-minimal
+  # commit alone, which rolls when one commit is published again. Docker
+  # Hub, pushed with the DOCKERHUB_USERNAME and DOCKERHUB_TOKEN repository
+  # secrets. The token needs read, write and delete on that repository:
+  # delete is what the retention step at the end uses.
   ORAS_VERSION: 1.3.6
   ORAS_SHA256: 66fb0ad7206f3f6fa77ed5b552049d364ccf4b50b1684554f731f76302b52ca0  # pre-commit: ignore
   # The key gen-vm generates for the image it bakes, which is the one
@@ -377,16 +380,21 @@ jobs:
         SOURCE_URL: ${{ github.server_url }}/${{ github.repository }}
         DRY_RUN: ${{ inputs.dry-run && '--dry-run' || '' }}
       run: |
-        tag="$(date -u +%Y%m%d).g$(printf '%s' "$GITHUB_SHA" | cut -c1-7)"
+        sha=$(printf '%s' "$GITHUB_SHA" | cut -c1-7)
+        tag="$(date -u +%Y%m%d).g$sha"
         # The repository, name, flavour, account, release and playbook are
         # the default fleet's <publish-*> and <bake-*> elements. --image is
         # the file the step above checked. No --key: the bake named none, so
         # gen-vm generated the image's and recorded it beside the image,
         # which is the only key publish-qcow publishes without being told.
+        #
+        # The dated tag FIRST: the keypair referrer attaches to the first
+        # tag and --digest-file reports it. latest and qm.<sha7> are the
+        # same manifest under two more names.
         qemu-tool publish-qcow \
           --xml qemu/stacks/rocm-golden.xml \
           --image "$VM_IMAGES_DIR/${VM_NAME}-backing.qcow2" \
-          --tag "$tag" --tag latest \
+          --tag "$tag" --tag latest --tag "qm.$sha" \
           --guest-stamp guest-stamp.json \
           --commit "$GITHUB_SHA" \
           --source "$SOURCE_URL" \
@@ -405,3 +413,30 @@ jobs:
           echo "Device-less check and with-device stages passed in this run."
         } >> "$GITHUB_STEP_SUMMARY"
         oras manifest fetch "$(cat published-ref.txt)" | python3 -m json.tool
+
+    # Retention, after the push and never on a dry run: the 10 newest dated
+    # tags stay, as does any pushed within 30 days; latest, every qm.<sha7>
+    # and anything not of the dated form are never deleted. Those numbers
+    # are the command's defaults. It prints its plan before it deletes, and
+    # deletes nothing if it cannot list every tag.
+    #
+    # A failure here warns and does not fail the run. The image is out, and
+    # a red run invites "re-run failed jobs", which bakes and publishes it
+    # again. The login, the tag DELETE and the token's delete scope have
+    # also never been exercised against the real Hub.
+    - name: Prune old tags from the registry
+      if: ${{ !inputs.dry-run }}
+      env:
+        DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      run: |
+        if ! qemu-tool publish-qcow-prune \
+            --xml qemu/stacks/rocm-golden.xml --yes; then
+          echo "::warning title=Registry not pruned::publish-qcow-prune" \
+            "failed; the image was published and no tag policy was applied."
+          {
+            echo
+            echo "**The registry was not pruned.** See the step"
+            echo "\"Prune old tags from the registry\"."
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi

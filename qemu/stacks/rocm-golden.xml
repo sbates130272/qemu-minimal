@@ -93,7 +93,12 @@
        it is not <vm-username>/<vm-password>.  No key is named here on
        purpose: the keypair is published with the image, so the bake
        generates one for it and publish-qcow publishes that one, or the one
-       its key flag names; never a key from a settings file. -->
+       its key flag names; never a key from a settings file.
+
+       No <bake-cache-dir> either: it would send the module builds through
+       a compiler cache kept in that directory, and the image published
+       from this file is compiled from source.  A local overlay sets it, or
+       gen-vm is given a cache directory with its cache-dir flag. -->
   <bake-name>rocm-golden</bake-name>
   <bake-release>resolute</bake-release>
   <bake-size>64</bake-size>

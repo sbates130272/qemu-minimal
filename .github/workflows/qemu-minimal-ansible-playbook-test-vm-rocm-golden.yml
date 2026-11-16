@@ -144,24 +144,24 @@ jobs:
     # --vm-name outranks <bake-name>. And the key is the job's own, so that
     # plain ssh reaches the guest; gen-vm would otherwise generate one.
     #
-    # ROCM_GOLDEN_CCACHE_DIR is what turns the compiler cache on; the publish
-    # workflow does not set it, and a published image is compiled from
-    # source. --no-compact because nothing publishes this image: the
-    # recompress was most of the three minutes between the playbook ending
-    # and the image being ready, spent on a file the job throws away.
+    # --cache-dir is what turns the compiler cache on; the publish workflow
+    # does not pass it, and a published image is compiled from source.
+    # gen-vm creates the directory. --no-compact because nothing publishes
+    # this image: the recompress was most of the three minutes between the
+    # playbook ending and the image being ready, spent on a file the job
+    # throws away.
     #
-    # ROCM_GOLDEN_CCACHE_REPLACE is true when the cache restored above was
-    # not saved under this run's prefix, which is to say for other pins (or
-    # when nothing was restored). The bake then saves its cache whatever it
+    # --cache-replace is passed when the cache restored above was not saved
+    # under this run's prefix, which is to say for other pins (or when
+    # nothing was restored). The bake then saves its cache whatever it
     # missed: a bumped ernic or SDXI pin is too few compiles for the role's
     # own miss count to notice, and would otherwise recompile in every run.
     - name: Generate VM with vm-rocm-golden playbook
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        ROCM_GOLDEN_CCACHE_DIR: ${{ env.BAKE_CCACHE_DIR }}
-        ROCM_GOLDEN_CCACHE_REPLACE: ${{ !startsWith(steps.bake-ccache.outputs.cache-matched-key, steps.ccache-key.outputs.prefix) }}
+        CACHE_REPLACE: ${{ !startsWith(steps.bake-ccache.outputs.cache-matched-key, steps.ccache-key.outputs.prefix) && '--cache-replace' || '' }}
       run: |
-        mkdir -p "$VM_IMAGES_DIR" "$ROCM_GOLDEN_CCACHE_DIR"
+        mkdir -p "$VM_IMAGES_DIR"
         # What the report step below compares against: a restored cache is
         # older than this file, one this bake wrote is newer. Outside the
         # cached directory, or it would be restored with the cache and be
@@ -169,7 +169,8 @@ jobs:
         touch "$RUNNER_TEMP/bake-started"
         qemu-tool gen-vm --bake --xml qemu/stacks/rocm-golden.xml \
           --vm-name "$VM_NAME" --images "$VM_IMAGES_DIR" \
-          --ssh-key-file "$HOME/.ssh/id_rsa.pub" --no-compact
+          --ssh-key-file "$HOME/.ssh/id_rsa.pub" --no-compact \
+          --cache-dir "$BAKE_CCACHE_DIR" $CACHE_REPLACE
 
     # always(), because the playbook saves the cache before its last two
     # plays and a bake that failed in one of them still compiled everything.

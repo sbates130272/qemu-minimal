@@ -516,3 +516,183 @@ command -v sdxi-cli > /dev/null
 sdxi-cli --help > /dev/null
 sdxi-cli --help 2>&1 | grep -q bench
 echo "sdxi: sdxi-cli ok (bench subcommand present)"
+
+# ---------------------------------------------------------------------------
+# One kernel, and it is the one grub boots
+# ---------------------------------------------------------------------------
+# The cloud image's release kernel is purged at the end of the bake: no
+# module here was built for it, and a guest that fell back to it would come
+# up with no ionic, no amdgpu and no SDXI and say nothing about why.
+_kver=$(uname -r)
+
+# Installed ("ii"), not merely known to dpkg: a purged package can linger as
+# "rc" or "un" and is not a kernel.
+_kimages=$(dpkg-query -W -f='${db:Status-Abbrev} ${Package}\n' 'linux-image-*' |
+    awk '$1 == "ii" { print $2 }')
+if [ "$(printf '%s\n' "${_kimages}" | grep -c .)" != 1 ]; then
+    echo "ERROR: expected one installed kernel image, found:" >&2
+    printf '%s\n' "${_kimages}" >&2
+    exit 1
+fi
+case "${_kimages}" in
+    *"${_kver}") ;;
+    *)
+        echo "ERROR: the installed kernel image is ${_kimages}, but the" \
+             "guest is running ${_kver}" >&2
+        exit 1
+        ;;
+esac
+
+# A metapackage would bring a release kernel back on the next upgrade.
+_kmeta=$(dpkg-query -W -f='${db:Status-Abbrev} ${Package}\n' \
+    linux-generic linux-virtual linux-image-generic linux-image-virtual \
+    linux-headers-generic linux-headers-virtual 2>/dev/null |
+    awk '$1 == "ii" { print $2 }')
+if [ -n "${_kmeta}" ]; then
+    echo "ERROR: kernel metapackages are installed: ${_kmeta}" >&2
+    exit 1
+fi
+
+# Nothing of another kernel: no module tree, no image in /boot, and no DKMS
+# build.
+if [ "$(ls /lib/modules)" != "${_kver}" ]; then
+    echo "ERROR: /lib/modules holds more than ${_kver}:" >&2
+    ls /lib/modules >&2
+    exit 1
+fi
+if [ "$(ls /boot/vmlinuz-*)" != "/boot/vmlinuz-${_kver}" ]; then
+    echo "ERROR: /boot holds a kernel other than ${_kver}:" >&2
+    ls /boot/vmlinuz-* >&2
+    exit 1
+fi
+test -s "/boot/initrd.img-${_kver}"
+_kdkms=$(find /var/lib/dkms -mindepth 3 -maxdepth 3 -type d -name '[0-9]*' \
+    ! -name "${_kver}")
+if [ -n "${_kdkms}" ]; then
+    echo "ERROR: DKMS builds for another kernel remain:" >&2
+    printf '%s\n' "${_kdkms}" >&2
+    exit 1
+fi
+# "<module>/<version>, <kernel>, <arch>: installed"; a module that is only
+# added has no kernel field.
+_kdkms=$(dkms status | awk -F', ' -v k="${_kver}" 'NF >= 3 && $2 != k')
+if [ -n "${_kdkms}" ]; then
+    echo "ERROR: dkms reports modules for another kernel:" >&2
+    printf '%s\n' "${_kdkms}" >&2
+    exit 1
+fi
+
+# The pin: grub is told which kernel to put first by name, so a newer kernel
+# installed later does not take the boot by sorting above this one.
+grep -qx "GRUB_TOP_LEVEL=\"/boot/vmlinuz-${_kver}\"" \
+    /etc/default/grub.d/99-rocm-ernic-kernel.cfg
+grep -qx 'GRUB_DEFAULT=0' /etc/default/grub.d/99-rocm-ernic-kernel.cfg
+
+# And what that comes to. /etc/default/grub is an input; the configuration
+# grub reads is the generated one, so the default is resolved against its
+# menu the way grub does: the "set default" it would execute, through the
+# environment block if it says saved, down the submenus to one entry, whose
+# every "linux" line must load this kernel. A one-shot next_entry would
+# outrank it for exactly the first boot a consumer makes, so it must be
+# unset.
+_grubcfg=$(mktemp)
+_grubenv=$(mktemp)
+# grub.cfg is root's alone on this release. An unreadable or absent
+# environment block is an empty one, which is what grub makes of it too.
+sudo -n cat /boot/grub/grub.cfg | tee "${_grubcfg}" > /dev/null
+test -s "${_grubcfg}"
+{ sudo -n grub-editenv /boot/grub/grubenv list 2>/dev/null || true; } |
+    tee "${_grubenv}" > /dev/null
+python3 - "${_grubcfg}" "${_grubenv}" "${_kver}" <<'GRUBPY'
+import re
+import sys
+
+cfg_path, env_path, running = sys.argv[1:4]
+text = open(cfg_path).read()
+env = dict(line.split("=", 1) for line in open(env_path).read().splitlines()
+           if "=" in line)
+
+
+def fail(message):
+    sys.exit(f"ERROR: grub: {message}")
+
+
+if env.get("next_entry"):
+    fail(f"a one-shot next_entry is set: {env['next_entry']!r}")
+
+# 00_header writes the one-shot assignment and then the configured one.
+defaults = {value for value in
+            re.findall(r'^\s*set default="([^"]*)"\s*$', text, re.M)
+            if value != "${next_entry}"}
+if len(defaults) != 1:
+    fail(f"expected one configured default, found {sorted(defaults)}")
+spec = defaults.pop()
+if spec == "${saved_entry}":
+    # An unset saved_entry leaves default empty, which grub takes as 0.
+    spec = env.get("saved_entry", "") or "0"
+if "$" in spec:
+    fail(f"the default is not a literal: {spec!r}")
+
+# The menu: every line ending in "{" opens a block, and "}" alone closes
+# one. Only menuentry and submenu blocks are entries.
+root = {"kind": "root", "children": []}
+stack = [root]
+for line in text.splitlines():
+    stripped = line.strip()
+    if stripped == "}":
+        if len(stack) == 1:
+            fail("unbalanced braces in grub.cfg")
+        stack.pop()
+        continue
+    if stripped.endswith("{"):
+        head = re.match(r"(menuentry|submenu)\s+'((?:[^']|'\\'')*)'", stripped)
+        if head is None:
+            stack.append({"kind": "other"})
+            continue
+        ident = re.search(
+            r"(?:\$menuentry_id_option|--id)\s+'?([^'\s]+)'?", stripped)
+        node = {"kind": head.group(1), "title": head.group(2),
+                "id": ident.group(1) if ident else "", "children": [],
+                "linux": []}
+        owner = next(n for n in reversed(stack) if n["kind"] != "other")
+        if owner["kind"] == "menuentry":
+            fail(f"an entry nested inside entry {owner['title']!r}")
+        owner["children"].append(node)
+        stack.append(node)
+        continue
+    loads = re.match(r"linux(?:16|efi)?\s+(\S+)", stripped)
+    if loads:
+        owner = next(n for n in reversed(stack) if n["kind"] != "other")
+        if owner["kind"] == "menuentry":
+            owner["linux"].append(loads.group(1))
+if len(stack) != 1:
+    fail("unbalanced braces in grub.cfg")
+
+node = root
+for part in spec.split(">"):
+    if node["kind"] == "menuentry":
+        fail(f"the default {spec!r} goes below entry {node['title']!r}")
+    entries = node["children"]
+    if part.isdigit():
+        found = entries[int(part)] if int(part) < len(entries) else None
+    else:
+        found = next((e for e in entries
+                      if part in (e["id"], e["title"])), None)
+    if found is None:
+        # grub falls back to the first entry; that is luck, not a default.
+        fail(f"the default {spec!r} names no entry at {part!r}")
+    node = found
+if node["kind"] != "menuentry":
+    fail(f"the default {spec!r} is the submenu {node['title']!r}")
+if not node["linux"]:
+    fail(f"the default entry {node['title']!r} loads no kernel")
+want = f"vmlinuz-{running}"
+wrong = sorted({path for path in node["linux"]
+                if path.rsplit("/", 1)[-1] != want})
+if wrong:
+    fail(f"the default entry {node['title']!r} loads {wrong}, but the "
+         f"guest is running {running}")
+print(f"grub: default {spec!r} is {node['title']!r}, which loads {want}")
+GRUBPY
+rm -f "${_grubcfg}" "${_grubenv}"
+echo "kernel: ${_kver} is the only kernel installed and the one grub boots"

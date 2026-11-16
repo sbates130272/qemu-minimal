@@ -21,6 +21,7 @@ is one of
 .BR ssh ,
 .BR qcow ,
 .BR publish\-qcow ,
+.BR publish\-qcow\-prune ,
 .B ernic\-stats
 or
 .BR man .
@@ -116,6 +117,12 @@ Publish a baked guest qcow2 to a registry as the artifact
 and
 .B quick\-start
 pull.
+.TP
+.B publish\-qcow\-prune
+Delete the dated tags a retention policy no longer keeps from the Docker Hub
+repository
+.B publish\-qcow
+pushes to. A dry run unless told otherwise.
 .TP
 .B ernic\-stats
 Serve the stats files written by
@@ -689,6 +696,38 @@ Inject a CA certificate into the guest trust store.
 .B \-\-ansible\-only
 Skip cloud-init provisioning; only re-run Ansible against an existing backing image.
 .TP
+.BI \-\-cache\-dir " DIR"
+With
+.BR \-\-bake :
+a directory on this host that carries the bake's compiler cache from one
+bake to the next. gen\-vm creates it if it is missing and hands it to the
+playbook as the extra variable
+.BR bake_cache_dir ;
+.I vm\-rocm\-golden.yml
+then builds its kernel modules through
+.BR ccache (1),
+unpacking
+.I DIR/ccache.tar
+into the guest before the first build and saving it back after the last, and
+leaves nothing of the cache in the image. Default:
+.BR <bake\-cache\-dir> ,
+else no cache, which is a bake compiled from source. The cache is named by
+this flag or that element and by nothing in the environment. Refused without
+.BR \-\-bake ,
+and when the bake has no playbook to hand it to. Not for an image that is
+published:
+.I rocm\-golden.xml
+names no cache directory, and the publish workflow passes none.
+.TP
+.B \-\-cache\-replace
+With a cache directory: the cache in it was saved for other source pins, so
+the bake saves its own over it however little it missed. Passed to the
+playbook as
+.BR bake_cache_replace .
+Without it a bake replaces the saved cache only when there was none or when
+it missed a hundred or more compiler invocations. Refused when no cache
+directory is named.
+.TP
 .B \-\-bake
 Bake the image from the cloud image using the fleet XML's
 .BR <bake\-name> ,
@@ -699,9 +738,10 @@ Bake the image from the cloud image using the fleet XML's
 .BR <bake\-username> ,
 .BR <bake\-password> ,
 .BR <bake\-packages> ,
-.B <bake\-playbook>
-and
+.BR <bake\-playbook> ,
 .B <bake\-ssh\-port>
+and
+.B <bake\-cache\-dir>
 elements, ignoring its
 .BR <backing\-ref> ,
 its
@@ -1685,6 +1725,76 @@ and no credentials.
 With
 .BR \-\-dry\-run :
 keep the compressed image and vm\-info.json in DIR.
+.SH PUBLISH-QCOW-PRUNE OPTIONS
+Apply a retention policy to the Docker Hub repository
+.B publish\-qcow
+pushes to. The publish workflow pushes each image under three tags on one
+manifest: a dated one,
+.IR <YYYYMMDD> .g <sha7> ,
+which consumers pin;
+.BR latest ;
+and
+.BI qm. <sha7>\fR,
+the qemu\-minimal commit alone. Only tags of exactly the dated form are ever
+deleted. The newest
+.B \-\-keep
+of them stay, by push time, and so does any pushed within
+.B \-\-days
+days.
+.BR latest ,
+every
+.BI qm. <sha7>
+and every tag of any other shape are always kept.
+.PP
+Deleting a tag removes a name and nothing else. The image manifest it
+named stays, as do vm\-info.json and the guest keypair, which are a referrer
+attached to that manifest: Docker Hub serves the referrers API, so there is
+no
+.BI sha256\- <digest>
+tag holding them to delete. Since every publish also has a
+.BI qm. <sha7>
+tag that is never deleted, an old image stays reachable by it.
+.PP
+Without
+.B \-\-yes
+the plan is printed and nothing is deleted. Nothing is deleted either when
+the tags cannot all be listed. A deletion that fails stops the run and
+reports how many tags had gone. The tag-delete request is Docker Hub's own,
+so a repository on any other registry is refused.
+.TP
+.BI \-\-xml " FILE"
+Fleet XML whose
+.B <publish\-ref>
+names the repository. Repeatable; later files win. As with
+.BR publish\-qcow ,
+there is no search path.
+.TP
+.BI \-\-ref " REPO"
+The repository, as
+.IR docker.io/NAMESPACE/NAME ,
+without a tag. Default with
+.BR \-\-xml :
+.BR <publish\-ref> .
+The registry must be named and must be Docker Hub.
+.TP
+.BI \-\-keep " N"
+Keep the N newest dated tags (default: 10).
+.TP
+.BI \-\-days " N"
+Also keep any dated tag pushed within N days (default: 30).
+.TP
+.B \-\-yes
+Delete what the plan lists. Taken only spelled in full; this subcommand
+accepts no abbreviated option. Needs
+.B DOCKERHUB_USERNAME
+and
+.B DOCKERHUB_TOKEN
+in the environment, and a token with delete access to the repository.
+.TP
+.B \-\-dry\-run
+Print the plan and delete nothing. This is the default; given with
+.BR \-\-yes ,
+it wins. A dry run of a public repository needs no credentials.
 .SH SSH OPTIONS
 Opens an SSH session to a running VM, resolving the port, username and key
 through exactly the same path
@@ -2021,8 +2131,25 @@ since the bake's guest needs no particular port. A
 .B \-\-ssh\-port
 flag wins.
 .TP
+.B <bake\-cache\-dir>
+The
+.B \-\-cache\-dir
+of the bake: a directory that carries the compiler cache between bakes.
+Variables and a leading
+.B ~
+are expanded. Unset, which is what
+.I rocm\-golden.xml
+leaves it, the bake compiles from source; set it in an overlay of your own.
+A
+.B \-\-cache\-dir
+flag wins.
+.TP
 .BR <publish\-ref> ", " <publish\-flavour>
 Registry repository, without a tag, and the flavour recorded with the image.
+.B publish\-qcow\-prune
+reads
+.B <publish\-ref>
+too.
 .SS What is not a fleet XML setting
 .B CONTAINER_USER
 and
@@ -2035,8 +2162,11 @@ One-shot actions
 .BR \-\-force ,
 .BR \-\-restore\-image ,
 .BR \-\-ansible\-only ,
-.BR \-\-nvme\-recreate )
-are flags only.
+.BR \-\-nvme\-recreate ,
+.BR \-\-cache\-replace ,
+.BR \-\-yes )
+are flags only. Registry credentials are not settings either, and are read
+from the environment alone.
 .SH ENVIRONMENT
 .TP
 .B QEMU_TOOL_FLEET
@@ -2068,6 +2198,12 @@ from
 or
 .BR <vm\-images\-dir> ;
 a value already in the environment wins over the fleet XML.
+.TP
+.BR DOCKERHUB_USERNAME ", " DOCKERHUB_TOKEN
+The Docker Hub account
+.B publish\-qcow\-prune
+deletes tags as. Read from the environment and never taken on the command
+line or from a settings file; never printed.
 .TP
 .BR XDG_CONFIG_HOME ", " XDG_DATA_HOME ", " XDG_STATE_HOME
 Where the per-user
@@ -2236,6 +2372,27 @@ publish\-qcow publishes that one:
 qemu\-tool gen\-vm \-\-bake \-\-xml qemu/stacks/rocm\-golden.xml
 qemu\-tool publish\-qcow \-\-xml qemu/stacks/rocm\-golden.xml \\
     \-\-tag 20261116.gabc1234 \-\-dry\-run
+.EE
+.RE
+.PP
+The same bake with its kernel modules compiled through a cache kept between
+bakes, for an image that is not going to be published:
+.PP
+.RS
+.EX
+qemu\-tool gen\-vm \-\-bake \-\-xml qemu/stacks/rocm\-golden.xml \\
+    \-\-cache\-dir ~/.cache/qemu\-tool/bake
+.EE
+.RE
+.PP
+See which dated tags of the published image the retention policy would
+delete; add
+.B \-\-yes
+to delete them:
+.PP
+.RS
+.EX
+qemu\-tool publish\-qcow\-prune \-\-xml qemu/stacks/rocm\-golden.xml
 .EE
 .RE
 .PP

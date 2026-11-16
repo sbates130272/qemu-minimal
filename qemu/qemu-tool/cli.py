@@ -163,6 +163,7 @@ _XML_HELP = (
     f"{_SEARCH_PATH}."
 )
 _STACK_NAMES = ", ".join(_STACKS)
+_HUB_USER, _HUB_TOKEN = "DOCKERHUB_USERNAME", "DOCKERHUB_TOKEN"
 
 
 def _examples(*lines: str) -> str:
@@ -206,6 +207,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_qcow(sub)
     # Everything else.
     _add_publish_qcow(sub)
+    _add_publish_qcow_prune(sub)
     _add_ernic_stats(sub)
     _add_man(sub)
 
@@ -498,6 +500,11 @@ def _add_gen_vm(
             "# elements. gen-vm generates the image's SSH key and says where:",
             "qemu-tool gen-vm --bake --xml qemu/stacks/rocm-golden.xml",
             "",
+            "# The same bake, compiling through a cache kept between bakes.",
+            "# Not for an image that is published:",
+            "qemu-tool gen-vm --bake --xml qemu/stacks/rocm-golden.xml \\",
+            "    --cache-dir ~/.cache/qemu-tool/bake",
+            "",
             "# Authorise a key of your own instead of a generated one:",
             "qemu-tool gen-vm --vm-name myvm --ssh-key-file ~/.ssh/id_rsa.pub",
         ),
@@ -599,6 +606,24 @@ def _add_gen_vm(
     g.add_argument(
         "--ca-cert", type=Path, default=_UNSET, metavar="FILE",
         help="CA certificate to inject into the guest trust store.",
+    )
+    g.add_argument(
+        "--cache-dir", type=Path, default=_UNSET, metavar="DIR",
+        help=(
+            "With --bake: a directory on this host that carries the "
+            "bake's compiler cache from one bake to the next, created if "
+            "missing and handed to the playbook as bake_cache_dir. "
+            "Default: <bake-cache-dir>, else no cache and a bake from "
+            "source."
+        ),
+    )
+    g.add_argument(
+        "--cache-replace", action="store_true", default=_UNSET,
+        help=(
+            "With a cache directory: the cache in it was saved for other "
+            "source pins, so save this bake's over it however little it "
+            "missed."
+        ),
     )
     g.add_argument(
         "--mgmt-tap", action="store_true", default=_UNSET,
@@ -1224,6 +1249,80 @@ def _add_publish_qcow(sub: argparse._SubParsersAction) -> None:
     p.set_defaults(func=_publish_qcow_cmd)
 
 
+def _add_publish_qcow_prune(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser(
+        "publish-qcow-prune",
+        # --y must not delete.
+        allow_abbrev=False,
+        help="Delete old dated tags of the published image on Docker Hub.",
+        description=(
+            "Apply the retention policy to the repository publish-qcow "
+            "pushes to. Only tags of the dated form <YYYYMMDD>.g<sha7> are "
+            "ever deleted: the newest --keep of them stay, as does any "
+            "pushed within --days days. 'latest', every 'qm.<sha7>' and "
+            "every other tag are always kept. Tag names are all it "
+            "removes: the image a deleted tag named, and the vm-info.json "
+            "and keypair attached to it, stay in the registry. Without "
+            "--yes the plan is printed and nothing is deleted, and --yes "
+            "is taken only spelled in full. Docker Hub only. Deleting "
+            f"reads {_HUB_USER} and {_HUB_TOKEN} from the environment; "
+            "they are credentials, not settings, and are never taken on "
+            "the command line."
+        ),
+        epilog=_examples(
+            "# What would go from the default fleet's <publish-ref>:",
+            "qemu-tool publish-qcow-prune --xml qemu/stacks/rocm-golden.xml",
+            "",
+            "# Delete it, as the publish workflow does after a push:",
+            "qemu-tool publish-qcow-prune --xml qemu/stacks/rocm-golden.xml \\",
+            "    --yes",
+            "",
+            "# Another repository, and another policy:",
+            "qemu-tool publish-qcow-prune --ref docker.io/me/my-guest \\",
+            "    --keep 5 --days 14",
+        ),
+    )
+    g = p.add_argument_group("which repository")
+    g.add_argument(
+        "--xml", action="append", type=Path, default=None, metavar="FILE",
+        help=(
+            "Fleet XML whose <publish-ref> names the repository. "
+            "Repeatable; later files win. No search path: without this "
+            "flag no settings file is read."
+        ),
+    )
+    g.add_argument(
+        "--ref", default=None, metavar="REPO",
+        help=(
+            "The repository, docker.io/NAMESPACE/NAME, without a tag. "
+            "Default with --xml: <publish-ref>. One on any other registry "
+            "is refused."
+        ),
+    )
+    g = p.add_argument_group("policy")
+    g.add_argument(
+        "--keep", type=int, default=10, metavar="N",
+        help="Keep the N newest dated tags (default: %(default)s).",
+    )
+    g.add_argument(
+        "--days", type=int, default=30, metavar="N",
+        help=(
+            "Keep any dated tag pushed within N days as well "
+            "(default: %(default)s)."
+        ),
+    )
+    g = p.add_argument_group("how it runs")
+    g.add_argument(
+        "--yes", action="store_true",
+        help="Delete. Without it this is a dry run that prints the plan.",
+    )
+    g.add_argument(
+        "--dry-run", action="store_true",
+        help="Print the plan and delete nothing. The default; beats --yes.",
+    )
+    p.set_defaults(func=_publish_qcow_prune_cmd)
+
+
 def _add_ernic_stats(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
         "ernic-stats",
@@ -1295,6 +1394,11 @@ def _qcow_cmd(args: argparse.Namespace) -> None:
 def _publish_qcow_cmd(args: argparse.Namespace) -> None:
     from .publish_qcow import run as publish_qcow_run
     publish_qcow_run(args)
+
+
+def _publish_qcow_prune_cmd(args: argparse.Namespace) -> None:
+    from .publish_prune import run as publish_prune_run
+    publish_prune_run(args)
 
 
 def _run_vm_cmd(args: argparse.Namespace) -> None:
@@ -1508,9 +1612,26 @@ def _gen_vm_cmd(args: argparse.Namespace) -> None:
                     f"Error: --bake and --{flag.replace('_', '-')} cannot "
                     "both be set: --bake builds the image from the cloud image."
                 )
+    elif args.cache_dir is not _UNSET:
+        # <bake-cache-dir> is read by --bake only, and the flag follows it.
+        sys.exit(
+            "Error: --cache-dir needs --bake: the cache belongs to the "
+            "bake the fleet XML's <bake-*> elements describe."
+        )
     cfg = _build_config(args, subcommand="gen-vm")
     if args.bake:
         _check_bake_memory(cfg)
+    if cfg.cache_replace and cfg.cache_dir is None:
+        sys.exit(
+            "Error: --cache-replace needs a cache to replace: name one "
+            "with --cache-dir or <bake-cache-dir>."
+        )
+    if cfg.cache_dir is not None and cfg.ansible_playbook is None:
+        sys.exit(
+            "Error: a cache directory is handed to the bake's playbook, "
+            "and this bake has none: set <bake-playbook> or "
+            "--ansible-playbook."
+        )
     gen_vm_run(cfg)
 
 
@@ -1659,6 +1780,8 @@ def _extract_cli_overrides(
             overrides["backing_file"] = None
         _take("ansible_playbook", "ansible_playbook")
         _take("ca_cert", "ca_cert_file")
+        _take("cache_dir", "cache_dir")
+        _take("cache_replace", "cache_replace")
         _take("ansible_only", "ansible_only")
         _take("mgmt_tap", "mgmt_tap")
 

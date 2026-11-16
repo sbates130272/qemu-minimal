@@ -21,13 +21,15 @@
 # A bake needs no Docker daemon when the caller hands it the firmware
 # generator: -e rocjitsu_firmware_script=/path/to/vfio_guest_firmware.py.
 #
-# ROCM_GOLDEN_CCACHE_DIR, in the environment of whatever runs the bake, names
-# a directory on the controller that carries a compiler cache from one bake
-# to the next: the plays that build kernel modules are about fourteen minutes
-# of a bake, and the inputs of those modules move only when a pin does. It is
-# unset by default and a published image is never built with it. The
-# bake_ccache role says how. ROCM_GOLDEN_CCACHE_REPLACE=true beside it says
-# the cache handed over was saved for other pins and is to be saved again.
+# bake_cache_dir, an extra var, names a directory on the controller that
+# carries a compiler cache from one bake to the next: the plays that build
+# kernel modules are about fourteen minutes of a bake, and the inputs of
+# those modules move only when a pin does. "qemu-tool gen-vm --bake
+# --cache-dir DIR" passes it, as does a fleet file's <bake-cache-dir>. It is
+# undefined by default and a published image is never built with it. The
+# bake_ccache role says how. bake_cache_replace=true beside it (gen-vm's
+# --cache-replace) says the cache handed over was saved for other pins and is
+# to be saved again.
 #
 # Order is load-bearing in three places, each noted where it applies: the
 # mainline kernel before rocm_setup, the amdgpu rebuild after it, and the
@@ -77,10 +79,6 @@
     ernic_ionic_kernel_ref: "{{ ionic_kernel_pin }}"
     rocm_ernic_setup_kernel_ref: "{{ ionic_kernel_pin }}"
     ernic_source_repo_version: "{{ ernic_source_pin }}"
-    # Empty unless the caller set it; shared with the play that saves the
-    # cache through the anchor.
-    golden_ccache_dir: &golden_ccache_dir "{{ lookup('ansible.builtin.env', 'ROCM_GOLDEN_CCACHE_DIR') }}"
-    golden_ccache_replace: &golden_ccache_replace "{{ lookup('ansible.builtin.env', 'ROCM_GOLDEN_CCACHE_REPLACE') | bool }}"
   tasks:
     # The pinned mainline kernel and the build toolchain. Upstream assumes a
     # guest already prepared this way; this repo builds its own.
@@ -102,8 +100,16 @@
         name: bake_ccache
         tasks_from: restore
       vars:
-        bake_ccache_controller_dir: "{{ golden_ccache_dir }}"
-      when: golden_ccache_dir | length > 0
+        bake_ccache_controller_dir: "{{ bake_cache_dir }}"
+      when: bake_cache_dir | default('') | length > 0
+
+    # ernic_source fetches tags into a clone it keeps on the controller, and
+    # git refuses a tag upstream has moved. The bake reads no tag, so a clone
+    # that can no longer be fetched into is removed and cloned afresh.
+    - name: Take a tag upstream moved into the controller's rocm-ernic clone
+      ansible.builtin.include_role:
+        name: rocm_ernic_setup
+        tasks_from: source_clone
 
     # Resolved here rather than inside the rescue below, where a missing or
     # reshaped source tree would be swallowed and reported as success.
@@ -304,6 +310,13 @@
           This guest runs {{ ansible_kernel }}, but the series are pinned to
           {{ ionic_kernel_pin }}. Repin the guest image to a matching kernel;
           do not build across a minor release.
+
+    # A no-op once the first play has resolved the sources; it does the
+    # work when this play is where a rerun starts.
+    - name: Take a tag upstream moved into the controller's rocm-ernic clone
+      ansible.builtin.include_role:
+        name: rocm_ernic_setup
+        tasks_from: source_clone
 
     - name: Resolve the rocm-ernic source checkout on the controller
       ansible.builtin.include_role:
@@ -610,10 +623,6 @@
   gather_facts: false
   become: true
   tags: [install]
-  vars:
-    # Defined on the first play of this file.
-    golden_ccache_dir: *golden_ccache_dir
-    golden_ccache_replace: *golden_ccache_replace
   tasks:
     # The removal is not gated. A bake that failed with the hook in place can
     # be finished by a rerun that was handed no cache, and that image must
@@ -626,9 +635,9 @@
             name: bake_ccache
             tasks_from: save
           vars:
-            bake_ccache_controller_dir: "{{ golden_ccache_dir }}"
-            bake_ccache_replace: "{{ golden_ccache_replace }}"
-          when: golden_ccache_dir | length > 0
+            bake_ccache_controller_dir: "{{ bake_cache_dir }}"
+            bake_ccache_replace: "{{ bake_cache_replace | default(false) | bool }}"
+          when: bake_cache_dir | default('') | length > 0
       always:
         - name: Take ccache out of the guest
           ansible.builtin.include_role:
@@ -749,11 +758,32 @@
 
 # The one slim pass of the bake, after everything that builds: it removes the
 # apt lists, /tmp and the build trees the plays above still needed.
+#
+# It also purges every kernel but the running one. The cloud image's release
+# kernel is some 370 MB the guest never boots, and worse than dead weight:
+# no module in this image was built for it, and it is what grub would offer
+# next. "The running one" is only the right kernel to keep if it is the
+# pinned one, so that is asserted first; rocm_ernic_setup has already named
+# it as the kernel grub boots, and qemu/checks/rocm-golden.sh asserts both
+# on the booted guest before anything is published.
 - name: Slim the baked image
   hosts: all
   gather_facts: true
   become: true
   tags: [install]
+  vars:
+    # Defined on the first play of this file.
+    ionic_kernel_pin: *ionic_kernel_pin
+    image_slim_purge_old_kernels: true
+  pre_tasks:
+    - name: Assert the guest is running the pinned kernel before the others go
+      ansible.builtin.assert:
+        that:
+          - ansible_kernel.split('-')[0] == ionic_kernel_pin | regex_replace('^v', '')
+        fail_msg: >-
+          This guest runs {{ ansible_kernel }}, not {{ ionic_kernel_pin }}.
+          The slim pass keeps the running kernel and purges the rest, which
+          here would purge the pinned one.
   roles:
     - role: image_slim
 
@@ -786,6 +816,13 @@
     ernic_guest_vm_ip: >-
       {{ vm_ip | default(ernic_nic_subnet ~ '.'
                          ~ (10 * (vm_index | default(1) | int))) }}
+  # ernic_guest_setup starts by including ernic_source, which fetches into
+  # the same clone the bake uses.
+  pre_tasks:
+    - name: Take a tag upstream moved into the controller's rocm-ernic clone
+      ansible.builtin.include_role:
+        name: rocm_ernic_setup
+        tasks_from: source_clone
   roles:
     - role: sbates130272.rocm_ernic.ernic_guest_setup
 

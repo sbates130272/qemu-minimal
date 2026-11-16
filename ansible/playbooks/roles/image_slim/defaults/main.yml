@@ -96,8 +96,16 @@ image_slim_cloud_init_logs: true
 # ── Opt-in, because each one removes a fallback ──
 # The cloud image's GA kernel is dead weight once the guest boots the pinned
 # mainline kernel -- and it is also the only thing left to boot if a mainline
-# pin regresses. Several hundred MB against that. Right for a throwaway CI
-# image, wrong for one a human will debug on.
+# pin regresses. Several hundred MB against that, and against it being the
+# entry grub would fall back to: a kernel none of the image's modules were
+# built for. vm-rocm-golden.yml turns this on; nothing else does.
+#
+# "Old" is every kernel but the RUNNING one, so this is only right once the
+# guest has booted the kernel it is meant to keep. With it on, the role
+# first asks apt what the purge would take (files/kernel-purge-guard.sh) and
+# stops if that is anything but kernels, then clears what the packages leave
+# behind (files/kernel-leftovers.sh) and checks that one bootable kernel is
+# what remains.
 image_slim_purge_old_kernels: false
 # Purged with the old kernels. The version globs never name these, and one
 # left behind pulls an archive kernel straight back on the next upgrade --

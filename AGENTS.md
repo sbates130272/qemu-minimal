@@ -18,7 +18,7 @@ file up to date as infrastructure changes.
 - `images/` — qcow2 VM disk images (backing + overlay pairs, **not** `/var/lib/qemu-tool/images`)
 - `ansible/playbooks/` — three playbooks and five roles, and nothing else:
   - `vm-basic.yml` — a complete bake on its own, and the base of the golden
-  - `vm-rocm-golden.yml` — the one image beyond it: imports `vm-basic.yml`, then the mainline kernel and ernic prerequisites, ROCm, the rocjitsu roles, SRQ + P4, SDXI and one slim pass. Every bake play is tagged `install`; `tests/test_playbook_pins.py` fails a play with no tag, because an untagged play runs in every bake. Three plays need a device and are tagged `never`: `--tags configure` sets up the NIC, `--tags firmware` installs `ip_discovery.bin` from the rocjitsu serving the guest, and `--tags test` runs the GPU workloads. The pins (`ionic_kernel_pin`, `ernic_source_pin`, `rocm_line_pin`, `sdxi_source_pin`) are each defined once and shared between plays through YAML anchors. Its defaults are a published image's, and a bake needs no Docker daemon when given `-e rocjitsu_firmware_script=<path to vfio_guest_firmware.py>`. With `ROCM_GOLDEN_CCACHE_DIR` set in the bake's environment the module builds go through a compiler cache kept in that directory; it is unset by default and only the playbook-test lane sets it — see "The bake's compiler cache". The acceptance test is `qemu/checks/rocm-golden.sh`, which the playbook-test lane runs against the baked guest and batesste-ci-images runs against the published one
+  - `vm-rocm-golden.yml` — the one image beyond it: imports `vm-basic.yml`, then the mainline kernel and ernic prerequisites, ROCm, the rocjitsu roles, SRQ + P4, SDXI and one slim pass. Every bake play is tagged `install`; `tests/test_playbook_pins.py` fails a play with no tag, because an untagged play runs in every bake. Three plays need a device and are tagged `never`: `--tags configure` sets up the NIC, `--tags firmware` installs `ip_discovery.bin` from the rocjitsu serving the guest, and `--tags test` runs the GPU workloads. The pins (`ionic_kernel_pin`, `ernic_source_pin`, `rocm_line_pin`, `sdxi_source_pin`) are each defined once and shared between plays through YAML anchors. Its defaults are a published image's, and a bake needs no Docker daemon when given `-e rocjitsu_firmware_script=<path to vfio_guest_firmware.py>`. Given a cache directory (`gen-vm --bake --cache-dir DIR`, or `<bake-cache-dir>` in a fleet file, which reaches the playbook as the extra var `bake_cache_dir`) the module builds go through a compiler cache kept in that directory; there is none by default and only the playbook-test lane passes one — see "The bake's compiler cache". The slim play also purges every kernel but the running one, after asserting that is the pinned one — see "One kernel in the baked image". The acceptance test is `qemu/checks/rocm-golden.sh`, which the playbook-test lane runs against the baked guest and batesste-ci-images runs against the published one
   - `vm-quickstart.yml` — configures and tests a running fleet; what `qemu-tool quick-start test` runs
   - roles `rocm_ernic_setup` (image prep, device naming, boot-time addressing), `rocjitsu_setup` (firmware, amdgpu, tools, live tests), `sdxi_setup`, `image_slim` and `bake_ccache` (the compiler cache: `restore`, `save` and `remove`, no `main`). Each has task files callers reach with `tasks_from`; all five are linted at the `production` profile in CI
 - `scripts/install-vfio-rules` + `scripts/99-qemu-minimal-vfio.rules` — host-side udev rules for PCI passthrough. There is no top-level `udev/` any more: guest rules live in their role's `files/`
@@ -1440,11 +1440,31 @@ The plays that build kernel modules — amdgpu, ionic-ernic twice, `ernic_p4`,
 SDXI — are about fourteen minutes of a 26-minute `vm-rocm-golden` bake, and
 the sources they compile change only when a pin does. The playbook-test lane
 keeps a ccache directory across runs; **the publish lane does not, and a
-published image is always compiled from source.** One environment variable
-separates them: `ROCM_GOLDEN_CCACHE_DIR`, read by the playbook with
-`lookup('env', ...)`, names a directory on the controller. Unset, the restore
-and the save are skipped and the bake compiles what it always did.
-`tests/test_bake_ccache.py` pins that only the one workflow sets it.
+published image is always compiled from source.** One flag separates them:
+`qemu-tool gen-vm --bake --cache-dir DIR` names a directory on the
+controller, which `gen-vm` creates and hands to the playbook as the extra var
+`bake_cache_dir`. Without it the restore and the save are skipped and the
+bake compiles what it always did. `tests/test_bake_ccache.py` pins that only
+the one workflow passes it.
+
+**The cache is switched by a flag or a fleet element, never by the
+environment.** The owner does not want settings driven by environment
+variables, and an exported variable would reach every `ansible-playbook` in a
+job, where the flag reaches one bake; the playbook has no `lookup('env')`.
+`<bake-cache-dir>` is the element (a path, `~` and
+variables expanded, read by `gen-vm --bake` only, the flag wins);
+**`qemu/stacks/rocm-golden.xml` must not set it**, since the image published
+from that file is compiled from source — a local overlay sets it. `gen-vm`
+refuses `--cache-dir` without `--bake`, because the element is a bake
+element and the flag follows it, and refuses a cache when the bake has no
+playbook to hand it to. The extra var is passed as JSON, not `key=value`,
+which splits a path at its first space. A playbook that does not read
+`bake_cache_dir` ignores it.
+
+`--cache-replace` (extra var `bake_cache_replace`) is the second switch and
+has no element: it is a fact about one run — the cache handed over was saved
+for other pins — not a setting. The tool cannot derive it: what knows is whoever fetched the cache, which in the
+lane is the `actions/cache` key comparison.
 
 **Fourteen minutes is those plays' wall time, not what the cache saves, and
 the saving has not been measured.** ccache removes the compiler and nothing
@@ -1500,7 +1520,7 @@ one of three things holds:
 | Condition | What it catches |
 |---|---|
 | no archive was handed over | the first bake |
-| `bake_ccache_replace`, from `ROCM_GOLDEN_CCACHE_REPLACE=true` | a moved pin: the lane sets it when the entry it restored was not saved under this run's key prefix |
+| `bake_ccache_replace`, from `gen-vm --cache-replace` | a moved pin: the lane sets it when the entry it restored was not saved under this run's key prefix |
 | at least `bake_ccache_save_misses` (100) invocations missed | drift no pin records, such as a new gcc in the archive |
 
 **The count is absolute, not a share, and the second row is not redundant.**
@@ -1524,10 +1544,10 @@ fetched back by a play that sits after SDXI and before the stamp and the slim
 pass. The fetch runs with `become: false` on purpose — with become, `fetch`
 slurps the file as base64 in memory. That play's `always` section then runs
 the role's `remove` tasks, which take out the symlinks, `/etc/ccache.conf`,
-the cache and the tar. **The removal is the one part that is not gated on the
-variable**: a cached bake that fails between the restore and the save leaves
-the hook in the guest, and an `--ansible-only` rerun without the variable
-would otherwise finish an image whose `gcc` is ccache. Every task in it is a
+the cache and the tar. **The removal is the one part that is not gated on a
+cache directory**: a cached bake that fails between the restore and the save
+leaves the hook in the guest, and an `--ansible-only` rerun without
+`--cache-dir` would otherwise finish an image whose `gcc` is ccache. Every task in it is a
 no-op on a guest that never had the hook, so a published bake runs them and
 changes nothing. `qemu/checks/rocm-golden.sh` asserts all four are absent, so
 both the lane and the publish workflow would fail on an image that carried
@@ -1539,7 +1559,7 @@ since an entry is never overwritten; its prefix hashes the kernel, ernic and
 SDXI pins, the amdgpu driver release, `requirements.yml` and
 `amdgpu-emu-patches.py`, with `restore-keys` falling back to any earlier
 cache so a pin bump still starts warm — and, because a restore that fell
-back that far sets `ROCM_GOLDEN_CCACHE_REPLACE`, saves once under the new
+back that far passes `--cache-replace`, saves once under the new
 prefix so the next run is warm for the bumped module too. **The lane has no
 push trigger, so nothing saves a cache on main**, and GitHub only lets a pull
 request read caches saved by itself or by its base branch: each pull
@@ -1604,6 +1624,138 @@ never be reused, so it goes after everything repeatable has succeeded. PyPI
 uses Trusted Publishing against the `pypi` environment, so there is no API
 token anywhere in the repo.
 
+## The controller's rocm-ernic clone
+
+`sbates130272.rocm_ernic.ernic_source` keeps a clone on the **controller** at
+`ernic_source_clone_dir` (default `/var/tmp/rocm-ernic-src`) and updates it
+with `ansible.builtin.git`, which runs `git fetch --tags origin`. Upstream
+moves tags — its `nightly` did — and git then refuses:
+
+```
+ ! [rejected]        nightly    -> nightly  (would clobber existing tag)
+```
+
+That killed a bake after 118 tasks, over a tag the bake never reads: it
+checks out `ernic_source_pin`. So `rocm_ernic_setup`'s `source_clone` tasks
+run immediately before every include of `ernic_source` in
+`vm-rocm-golden.yml` — the first play, the SRQ + P4 play, and as a `pre_task`
+of the configure play, whose `ernic_guest_setup` includes the role itself —
+and take a moved tag with `git fetch --tags --force origin`, after which the
+role's own fetch succeeds. `tests/test_source_clone.py` fails an include with
+no guard in front of it.
+
+**Nothing is removed, by the script or by the tasks.** An earlier version
+deleted the clone and let the role clone afresh. The directory is shared by
+every bake and configure run on the controller, and `vm-rocm-golden.yml`
+reads patches, scripts and udev rules out of it for the length of the SRQ +
+P4 play, so a second run starting after a tag moved would have deleted the
+tree under the first — and taken any uncommitted or unpushed work in it. A
+forced fetch rewrites tags and remote-tracking refs only: the work tree,
+`HEAD`, local branches and uncommitted changes stay as they were, which the
+test checks. The one thing it overwrites is a local tag that has the same
+name as an upstream one.
+
+| State | When | What happens |
+|---|---|---|
+| `healthy` | the fetch succeeded | nothing |
+| `absent` | nothing there, a directory that is not a clone, or a repository with no `origin` | nothing; the role clones or reports |
+| `repaired` | git said `would clobber existing tag` and the forced fetch succeeded | the tags now match upstream; the task reports `changed` |
+| `offline` | the fetch timed out; or it failed and `git ls-remote` of the same URL, run from outside the clone, does not answer either | nothing |
+| `broken` | any other failure: an unreadable clone, a ref lock held by another git, a full disk, permissions, or a forced fetch that failed | nothing; the role's own fetch reports it, or succeeds if the fault was passing |
+
+**A timeout is `offline` whatever the probe says.** A remote slow enough to
+run out the 300 s fetch can still answer a 60 s `ls-remote`, and that is a
+slow network, not a fault in the clone. `offline` and `broken` differ only in
+what the line tells the reader; neither changes anything on disk, and in
+both the clone may already be at the pinned commit, which
+`ansible.builtin.git` checks out without fetching. Corruption that
+`git fetch` does not trip over is not detected at all; neither does the
+role's own fetch.
+
+The guard is skipped when `ernic_source_dir` names a checkout of the
+caller's own, which the role never updates, and once `ernic_source_resolved`
+is set — so the second include in a bake costs nothing, and does the work
+when a rerun starts at that play.
+
+## One kernel in the baked image
+
+The golden image carried two kernels: the pinned mainline one it runs, and
+the Ubuntu release kernel the cloud image came with — about 370 MB, and the
+entry grub offers next. No module in the image is built for that kernel, so
+a guest that fell back to it would boot with no ionic, no amdgpu and no SDXI
+and say nothing about why. The golden slim play now sets
+`image_slim_purge_old_kernels: true`; the role default stays `false`, and
+`vm-basic.yml` does not set it.
+
+**"Old" means every kernel but the RUNNING one**, so the play first asserts
+the guest is running `ionic_kernel_pin`. Without that, a bake that somehow
+reached the slim play on the release kernel would purge the pinned one.
+
+What the role does with the flag on, in order, each step there because the
+one before it is not enough:
+
+| Step | Why |
+|---|---|
+| assert an image and a modules package are installed (`ii`, not merely known to dpkg) for the running kernel | the purge leaves one kernel; it must be a real one |
+| `apt-mark manual` the running kernel's packages | a kernel installed from `.deb` files is manual already; this makes it so however it got there, so no later autoremove can take the only kernel |
+| `files/kernel-purge-guard.sh` | `apt-get --simulate purge` first. apt removes **reverse dependencies** silently, so a package depending on a kernel metapackage would leave with it. Fails unless everything removed is a stale package or is named for a version being purged; fails on any `Inst`, and on anything named for the running kernel |
+| purge, `autoremove: false` | the stale packages, the six metapackages included — a metapackage left behind pulls a release kernel back on the next upgrade, and it would sort above a mainline build |
+| `files/kernel-leftovers.sh`, then remove what it lists | dpkg removes only files a package owns. Left behind: `/lib/modules/<old>` (depmod and DKMS output), `/boot/initrd.img-<old>*`, `/var/lib/dkms/<module>/<version>/<old>` and its `kernel-<old>-<arch>` link. The script lists and deletes nothing; a kernel whose module tree a package still owns is left whole |
+| `update-grub`, then the check | headers present, one `linux-image` installed, one `/lib/modules` tree, the running kernel's image and initramfs in `/boot` and no other, and every `linux` line in `grub.cfg` loading it |
+
+The package hooks do the rest: `/etc/kernel/prerm.d/dkms` runs `dkms
+kernel_prerm` for the kernel being removed, `postrm.d/initramfs-tools` deletes
+its initramfs, and `zz-update-grub` regenerates the menu. The running
+kernel's initramfs is not regenerated — nothing about it changes.
+
+**The boot entry is pinned by name, in `rocm_ernic_setup`'s `kernel.yml`, not
+in the slim play.** That is where the kernel is installed and first booted,
+and every later reboot of the bake relies on it. It writes
+`/etc/default/grub.d/99-rocm-ernic-kernel.cfg`:
+
+```
+GRUB_TOP_LEVEL="/boot/vmlinuz-7.2.6-070206-generic"
+GRUB_DEFAULT=0
+```
+
+`GRUB_TOP_LEVEL` (GRUB 2.12 and later; read from resolute's
+`/etc/grub.d/10_linux`, `grub2-common 2.14-2ubuntu2.1`) moves the named
+kernel to the front of the version-sorted list, so it is the top-level entry
+whatever else is installed, and `GRUB_DEFAULT=0` boots the top-level entry. A
+kernel that is no longer there is ignored and the order falls back to
+version, so the pin cannot produce an unbootable menu. A drop-in sorting
+last, because the cloud image's own `50-cloudimg-settings.cfg` is read after
+`/etc/default/grub` and an edit to that file could be outranked. Not
+`GRUB_DEFAULT=saved`: that puts the answer in `grubenv`, state that outlives
+the bake. The pin sits outside the install block, so a guest already on the
+pinned kernel is pinned too, and ahead of the reboot, so the reboot into the
+new kernel is the pin's first test — `kernel.yml` then asserts what booted.
+
+`qemu/checks/rocm-golden.sh` asserts all of it on the booted guest, in both
+the playbook-test and the publish lane, before anything is pushed: one
+installed kernel image and it is `uname -r`; no kernel metapackage; one
+`/lib/modules` tree; no other `vmlinuz` in `/boot`; no DKMS build or `dkms
+status` line for another kernel; the two lines of the drop-in; and that
+**grub's default resolves to the running kernel**. The last reads the
+generated `grub.cfg` (root-only on resolute, hence `sudo -n`), not
+`/etc/default/grub`: it takes the `set default` grub would execute, goes
+through `grub-editenv` when that is `${saved_entry}`, walks the default down
+the menu by index, id or title, and requires every `linux` line of the entry
+it lands on to load `vmlinuz-$(uname -r)`. A default that names no entry is
+a failure, not a fall-back to entry 0, and a one-shot `next_entry` is a
+failure too — it would outrank the default for exactly the first boot a
+consumer makes.
+
+**None of this has run against a guest.** The purge, the guard and the
+leftovers script are tested against fixtures (`tests/test_kernel_purge.py`),
+and the grub resolver against `grub.cfg` text written out the way resolute's
+templates write it, not against `grub-mkconfig` output. What a bake has to
+show: that the cloud image's packages are the ones the purge list expects
+(the guard fails loudly if apt wants anything else), that `GRUB_TOP_LEVEL`
+is honoured, and that the guest comes back up — which both lanes prove by
+booting the image twice and running the check, and the publish lane does
+before it pushes.
+
 ## The published guest image
 
 **This repo bakes, qualifies and publishes the rocm-golden qcow2**, to
@@ -1624,6 +1776,77 @@ two commands:
 qemu-tool gen-vm --bake --xml qemu/stacks/rocm-golden.xml
 qemu-tool publish-qcow --xml qemu/stacks/rocm-golden.xml --tag <stamp>
 ```
+
+**Three tags per publish, one manifest, the dated one first.** The workflow
+passes `--tag <YYYYMMDD>.g<sha7> --tag latest --tag qm.<sha7>`. Consumers pin
+the dated tag; `latest` rolls; `qm.<sha7>` is the qemu-minimal commit alone
+and rolls only when one commit is published again. The order matters: the
+keypair referrer attaches to the first tag and `--digest-file` reports it.
+
+**Retention is `qemu-tool publish-qcow-prune`, run by the workflow after a
+push and never on a dry run.** The policy the owner approved: keep the 10
+newest dated tags and any dated tag pushed within 30 days; always keep
+`latest` and every `qm.*`; delete the other dated tags. Those numbers are
+the command's defaults (`--keep`, `--days`), stated nowhere else.
+
+- **Only a tag matching `[0-9]{8}\.g[0-9a-f]{7}` exactly is ever deleted.**
+  `latest`, `qm.*`, a `-dirty` build and anything pushed by hand are not of
+  that form.
+- **It is a dry run unless given `--yes`**, and `--dry-run` beats `--yes`.
+  The subparser sets `allow_abbrev=False`, so `--y` is an error rather than
+  a deletion.
+- **Docker Hub only.** The tag delete is the Hub's own API, so the ref must
+  read `docker.io/<namespace>/<repository>`; anything else is refused before
+  a request is made. The registry is never guessed from a bare `me/repo`.
+- **Credentials are `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` from the
+  environment**, the same secrets the push uses, never a flag and never
+  printed. This is not a setting driven by the environment: a credential is
+  not a setting. **The token now needs delete access**, not only read and
+  write.
+- **A listing it cannot complete deletes nothing.** Every page must answer
+  200, the pages must add up to the `count` the API reports, the count must
+  not move between pages, and no tag may appear twice. Page URLs are built
+  by the command; the `next` link in a response is never followed, and the
+  transport refuses every redirect — `urllib` would otherwise follow a 30x
+  on a GET and send the `Authorization` header to the host it names — so
+  the token goes nowhere a response names.
+- **A push time before 2013 is no push time.** Go services write
+  `0001-01-01T00:00:00Z` for a time never set; read as a date it would make
+  the tag the oldest and the first deleted. It is treated like a missing
+  one: the tag is kept and takes none of the `--keep` slots.
+- **A prune failure warns; it does not fail the publish run.** The image is
+  out by then, and "re-run failed jobs" on a red publish bakes and pushes it
+  again. The step prints a `::warning::` and writes the step summary.
+
+**It removes tag names, and nothing else.** `vm-info.json` and the keypair
+are a referrer of the image manifest. Docker Hub serves the OCI referrers
+API — checked anonymously: `GET /v2/<repo>/referrers/<digest>` answers 200
+with an index, and there is no `sha256-<hex>` tag in the listing — so oras
+never creates the fallback tag there, and an earlier version's handling of
+that tag matched nothing on the only registry this command supports. It is
+removed. A deleted dated tag's manifest, its referrer and its blobs all
+stay, and `qm.<sha7>`, on every published manifest and never deleted, keeps
+the image reachable as well. So **this does not reclaim storage, and a
+retired image's published keypair stays fetchable.** Changing either needs
+a manifest delete by digest and a policy that lets old `qm.*` tags go, which
+are decisions for the owner and not something this command does on its own.
+
+The API, checked against Docker's published OpenAPI description and the live
+listing of a public repository: `POST /v2/auth/token` with
+`{identifier, secret}` gives a ten-minute bearer (`/v2/users/login` is
+deprecated); `GET /v2/namespaces/<ns>/repositories/<repo>/tags?page_size=100`
+returns `{count, next, previous, results[]}` with `name`, `tag_last_pushed`
+and `digest` per result, and timestamps with anywhere from zero to nine
+fractional digits. **`DELETE /v2/repositories/<ns>/<repo>/tags/<tag>/` is
+not in that description** — it documents only GET and HEAD for a tag — and
+is the request the Hub's own web interface sends. It has not been sent from
+here: no test and no run of this branch has deleted a tag or logged in. So
+three things are unproven until the first real run: that `/v2/auth/token`
+takes the repository's PAT, that the DELETE works, and that
+`DOCKERHUB_TOKEN` has delete scope. With fewer than 11 dated tags no DELETE
+is sent at all. Before relying on it, run the command once by hand with the
+two variables set and **no** `--yes`: that exercises the login and the
+authenticated listing and deletes nothing.
 
 - **`gen-vm --bake`** builds from the cloud image instead of pulling
   `<backing-ref>`. It takes the fleet's per-VM defaults minus `<backing-ref>`,

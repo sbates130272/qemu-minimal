@@ -141,11 +141,71 @@
         DEBIAN_FRONTEND: noninteractive
       changed_when: true
 
-    - name: Update grub so the new kernel is the default
-      ansible.builtin.command:
-        argv:
-          - update-grub
-      changed_when: true
+# Not inside the block above: a guest already on the pinned kernel is
+# pinned too, so a rerun, or an image that got its kernel another way, ends
+# in the same state.
+#
+# update-grub orders kernels by version and boots the first. That happens to
+# be the pinned one for as long as nothing newer is installed -- an archive
+# kernel that sorts above a mainline build would be booted instead, with no
+# ionic DKMS module built for it. GRUB_TOP_LEVEL names the kernel to put
+# first, whatever else is installed, and GRUB_DEFAULT=0 boots the first; a
+# kernel that is no longer there is ignored, and the order falls back to
+# version. A drop-in named to sort last, because the cloud image's own
+# drop-ins are read after /etc/default/grub and would outrank an edit there.
+- name: Pin the boot entry to the pinned kernel
+  when: rocm_ernic_setup_kernel_grub_pin | bool
+  block:
+    - name: Find the pinned kernel image
+      ansible.builtin.find:
+        paths: /boot
+        patterns: "vmlinuz-{{ rocm_ernic_setup_kver }}-*"
+        file_type: file
+      register: rocm_ernic_setup_kernel_images
+
+    - name: Assert exactly one image of the pinned kernel is installed
+      ansible.builtin.assert:
+        that: rocm_ernic_setup_kernel_images.files | length == 1
+        fail_msg: >-
+          Expected one /boot/vmlinuz-{{ rocm_ernic_setup_kver }}-* and found
+          {{ rocm_ernic_setup_kernel_images.files | map(attribute='path')
+             | join(', ') | default('none', true) }}. The boot entry cannot
+          be pinned to a kernel that is absent or ambiguous.
+
+    - name: Create the grub drop-in directory
+      ansible.builtin.file:
+        path: /etc/default/grub.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Write the grub drop-in that names the pinned kernel
+      ansible.builtin.copy:
+        dest: "{{ rocm_ernic_setup_kernel_grub_dropin }}"
+        content: |
+          # Written by rocm_ernic_setup. The kernel this image is built
+          # around boots first, whatever else is installed.
+          GRUB_TOP_LEVEL="{{ rocm_ernic_setup_kernel_images.files[0].path }}"
+          GRUB_DEFAULT=0
+        owner: root
+        group: root
+        mode: "0644"
+      register: rocm_ernic_setup_kernel_grub_pinned
+
+# Also when nothing was pinned: a kernel was just installed.
+- name: Regenerate the grub configuration
+  ansible.builtin.command:
+    argv:
+      - update-grub
+  changed_when: true
+  when: >-
+    not (rocm_ernic_setup_kernel_current | bool)
+    or rocm_ernic_setup_kernel_grub_pinned is changed
+
+- name: Boot the pinned kernel
+  when: not (rocm_ernic_setup_kernel_current | bool)
+  block:
 
     - name: Remove the kernel payload
       ansible.builtin.file:

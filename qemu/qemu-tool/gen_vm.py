@@ -953,6 +953,7 @@ def _prepare_ansible(cfg: VMConfig) -> None:
     for tool in ("ansible-playbook", "ansible-galaxy"):
         if not _which(tool):
             sys.exit(f"Error: {tool} not found (required for --ansible-playbook)!")
+    _prepare_cache_dir(cfg)
 
 
 def _discover_vm_ip(bridge: str, mac: str, timeout: int = 120) -> str:
@@ -1044,7 +1045,7 @@ def _run_ansible(cfg: VMConfig, images: Path, backing: Path) -> None:
         _restore_blocking_stdio()
         _ensure_jmespath()
 
-        private_key_extra = _key_extra_vars(cfg)
+        private_key_extra = _key_extra_vars(cfg) + _cache_extra_vars(cfg)
         ap_cmd = ["ansible-playbook", "-i", str(inventory), str(playbook),
                   "-e", f"ansible_host={vm_host}",
                   "-e", f"ansible_port={vm_port}",
@@ -1129,6 +1130,36 @@ def _start_qemu(boot: VMConfig, backing: Path, watch: bool) -> subprocess.Popen:
     if watch:
         return _WatchedQemu(cmd, boot.ssh_port)
     return subprocess.Popen(cmd)
+
+
+def _cache_extra_vars(cfg: VMConfig) -> list[str]:
+    """The ansible-playbook -e argument that turns the compiler cache on.
+
+    Nothing at all without a cache directory, so that a bake given none is
+    the bake it was before there was a cache. A playbook reads
+    bake_cache_dir and bake_cache_replace or ignores them.
+    """
+    if cfg.cache_dir is None:
+        return []
+    # Absolute, because ansible-playbook runs from the ansible directory.
+    # JSON, because the key=value form splits a path at its first space.
+    cache = Path(os.path.abspath(Path(cfg.cache_dir).expanduser()))
+    return ["-e", json.dumps({"bake_cache_dir": str(cache),
+                              "bake_cache_replace": bool(cfg.cache_replace)})]
+
+
+def _prepare_cache_dir(cfg: VMConfig) -> None:
+    if cfg.cache_dir is None:
+        return
+    cache = Path(os.path.abspath(Path(cfg.cache_dir).expanduser()))
+    try:
+        cache.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        sys.exit(f"Error: cannot create the cache directory {cache}: {exc}\n"
+                 "       (--cache-dir and <bake-cache-dir>)")
+    if not os.access(cache, os.W_OK | os.X_OK):
+        sys.exit(f"Error: the cache directory {cache} is not writable\n"
+                 "       (--cache-dir and <bake-cache-dir>).")
 
 
 def _key_extra_vars(cfg: VMConfig) -> list[str]:

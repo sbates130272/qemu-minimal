@@ -168,4 +168,8 @@ class VMConfig:
     backing_image: str | None = None
     ansible_playbook: Path | None = None
     ca_cert_file: Path | None = None
+    # Handed to the playbook as bake_cache_dir; None is a bake from source.
+    cache_dir: Path | None = None
+    # The cache in cache_dir was saved for other pins: save it again.
+    cache_replace: bool = False
     ansible_only: bool = False

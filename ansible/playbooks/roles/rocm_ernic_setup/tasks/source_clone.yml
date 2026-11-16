@@ -1,0 +1,49 @@
+---
+# Run immediately before sbates130272.rocm_ernic.ernic_source, on the
+# controller. That role keeps a clone at ernic_source_clone_dir and updates
+# it with "git fetch --tags origin", which git refuses once upstream has
+# moved a tag the clone already holds -- and the bake dies there, after
+# everything that precedes it, over a tag it never reads. The script run
+# here takes the moved tag with a forced fetch, so the role's own fetch
+# then succeeds.
+#
+# Nothing is removed. The directory is shared by every bake and configure
+# run on this controller, and another run may be reading patches and scripts
+# out of it. A clone that is broken some other way is reported and left for
+# the role to fail on; files/source-clone-state.sh says how the states are
+# told apart.
+#
+# The role's own variable names the directory, with the role's default as
+# the fallback: a role default is not in scope until the role is included.
+
+- name: Check the rocm-ernic clone on the controller can still be updated
+  # Not when the caller named a checkout of their own, which the role does
+  # not update, nor once the role has resolved its sources in this run.
+  when:
+    - not (ernic_source_resolved | default(false))
+    - ernic_source_dir | default('') | trim | length == 0
+  vars:
+    rocm_ernic_setup_source_clone_dir: >-
+      {{ ernic_source_clone_dir | default('/var/tmp/rocm-ernic-src') | trim }}
+  block:
+    - name: Fetch into the rocm-ernic clone
+      ansible.builtin.command:
+        argv:
+          - sh
+          - "{{ role_path }}/files/source-clone-state.sh"
+          - "{{ rocm_ernic_setup_source_clone_dir }}"
+      delegate_to: localhost
+      become: false
+      run_once: true
+      register: rocm_ernic_setup_source_clone
+      changed_when: rocm_ernic_setup_source_clone.stdout.startswith('repaired:')
+      failed_when: >-
+        rocm_ernic_setup_source_clone.rc != 0
+        or rocm_ernic_setup_source_clone.stdout_lines | length != 1
+        or rocm_ernic_setup_source_clone.stdout.split(':')[0]
+           not in ['absent', 'healthy', 'repaired', 'offline', 'broken']
+
+    - name: Report the state of the rocm-ernic clone
+      ansible.builtin.debug:
+        msg: "{{ rocm_ernic_setup_source_clone.stdout }}"
+      run_once: true

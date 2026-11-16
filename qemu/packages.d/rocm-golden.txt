@@ -27,12 +27,13 @@ dkms
 # The plays that run those builds -- amdgpu, ionic-ernic twice, ernic_p4 and
 # SDXI -- are about fourteen minutes of a bake, and they compile the same
 # sources whenever no pin has moved. How much of that is compiling has not
-# been measured. A bake run with ROCM_GOLDEN_CCACHE_DIR set carries a ccache
-# directory in before the first of them and out after the last; the
-# bake_ccache role in ansible/playbooks/roles does it, and installs this
-# package itself if a bake was given another manifest.
+# been measured. A bake given a cache directory (gen-vm --cache-dir, or
+# <bake-cache-dir> in a fleet file) carries a ccache directory in before the
+# first of them and out after the last; the bake_ccache role in
+# ansible/playbooks/roles does it, and installs this package itself if a
+# bake was given another manifest.
 #
-# Without that variable nothing calls it: this is an unused binary, and the
+# Without a cache directory nothing calls it: this is an unused binary, and the
 # published image is compiled from source.
 ccache
 git

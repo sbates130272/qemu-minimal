@@ -160,6 +160,47 @@ elements, or a guest you log in to with your own `~/.ssh/id_rsa`.
 
 ### Added
 
+- **`qemu-tool publish-qcow-prune`: retention for the published image's
+  repository.** Keeps the 10 newest dated tags (`<YYYYMMDD>.g<sha7>`) and
+  any pushed within 30 days, always keeps `latest`, every `qm.<sha7>` and
+  every tag of another shape, and deletes the other dated tags; `--keep`
+  and `--days` change the numbers. It prints its plan and deletes nothing
+  unless given `--yes`. Docker Hub only — a repository on another registry
+  is refused — with the repository from `--ref` or an `--xml` layer's
+  `<publish-ref>`, and `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` read from
+  the environment. A listing it cannot complete deletes nothing. The publish
+  workflow runs it after a push, never on a dry run, so **the Docker Hub
+  token now needs delete access**. A prune that fails there is a warning on
+  the run, not a failure: the image is already published.
+  - It removes tag names and nothing else. The image a deleted tag named,
+    and the `vm-info.json` and keypair attached to it as a referrer, stay
+    in the registry; every publish also carries a `qm.<sha7>` tag that is
+    never deleted, so the image stays reachable too. This tidies the tag
+    list and does not reclaim storage.
+  - `--yes` is taken only spelled in full; the subcommand accepts no
+    abbreviated option.
+
+- **`qm.<sha7>`, a third tag on every published image**: the qemu-minimal
+  commit alone, beside the dated tag and `latest`.
+
+- **The golden image carries one kernel.** The Ubuntu release kernel the
+  cloud image ships is purged at the end of the bake — about 370 MB, and the
+  entry GRUB would fall back to, for which the image has no ionic, amdgpu or
+  SDXI module. The slim play asserts the guest is running the pinned kernel
+  first, `image_slim` asks apt what the purge would remove and stops if it
+  is anything but kernels, and what the packages leave in `/lib/modules`,
+  `/boot` and `/var/lib/dkms` is removed too. `image_slim_purge_old_kernels`
+  is still off by default.
+  - GRUB boots the pinned kernel by name: `rocm_ernic_setup` writes
+    `GRUB_TOP_LEVEL` to `/etc/default/grub.d/99-rocm-ernic-kernel.cfg` when
+    it installs the kernel, where the boot used to go to whichever kernel
+    sorted first.
+  - `qemu/checks/rocm-golden.sh` fails an image with a second kernel image,
+    a kernel metapackage, another kernel's module tree or DKMS build, or a
+    GRUB default that does not resolve to the running kernel.
+  - Not yet run against a guest; both lanes boot the baked image and run
+    that check before anything is published.
+
 - **`--ssh-port auto` on `gen-vm` and `run-vm`, and `<bake-ssh-port>` in the
   fleet XML.** The tool no longer has to be told a free host port for the
   guest's SSH forward: `auto` takes the first port from 2222 up (to 2321)
@@ -294,8 +335,10 @@ elements, or a guest you log in to with your own `~/.ssh/id_rsa`.
     configure, firmware and test stages and an SDXI copy as the one guest
     of a rendered default stack, and publishes to
     `docker.io/sbates130272/qemu-tool-rocm-golden` as
-    `<YYYYMMDD>.g<sha7>` and `latest`. The published disk is the bake, not
-    the disk that was tested.
+    `<YYYYMMDD>.g<sha7>`, `latest` and `qm.<sha7>`, three names for one
+    manifest with the dated one first, since the keypair referrer attaches
+    to the first tag. The published disk is the bake, not the disk that was
+    tested.
   - `gen-vm --packages` takes a manifest of bare names, one per line, as
     well as the YAML fragment it always took. `rocm-golden.txt` is the first
     kind, and pasted into the cloud-config unchanged it made the document
@@ -368,21 +411,28 @@ elements, or a guest you log in to with your own `~/.ssh/id_rsa`.
   runs and no longer compacts the image it bakes.** The plays that build
   kernel modules are about fourteen minutes of that bake, and the inputs of
   those modules move only when a pin does; how much of it is compiling, which
-  is all a cache removes, has not been measured. A bake run with `ROCM_GOLDEN_CCACHE_DIR` naming a directory now puts
+  is all a cache removes, has not been measured. A bake given a cache
+  directory — `qemu-tool gen-vm --bake --cache-dir DIR`, or
+  `<bake-cache-dir>` in a fleet file — now puts
   ccache in front of every module build — amdgpu, both ionic-ernic builds,
   `ernic_p4` and SDXI — and carries the cache in and out of the guest as one
   tar file; the new `bake_ccache` role does it, and removes every trace
   before the image is finished. The lane restores and saves that directory
   with `actions/cache` and bakes with `--no-compact`, since nothing
-  publishes its image. The variable is unset by default and the publish
-  workflow does not set it: a published image is compiled from source and
+  publishes its image. There is no cache directory by default,
+  `qemu/stacks/rocm-golden.xml` names none and the publish workflow passes
+  none: a published image is compiled from source and
   compacted, as before. The one thing every bake now runs is the role's
   removal, which is a no-op on a guest that never had the cache: it is what
   cleans up after a cached bake that failed part way, whatever the rerun was
   given. `qemu/checks/rocm-golden.sh` now fails an image that carries a
   ccache configuration, cache or compiler symlink.
+  - The cache is named by the flag or the element and by nothing in the
+    environment. `gen-vm` creates the directory and passes it to the
+    playbook as the extra var `bake_cache_dir`; it refuses `--cache-dir`
+    without `--bake`, and a cache when the bake has no playbook.
   - The saved cache is replaced when the lane restored one saved for other
-    pins, or when a hundred or more ccache invocations missed; otherwise it
+    pins (`gen-vm --cache-replace`), or when a hundred or more ccache invocations missed; otherwise it
     is left, since a cache entry cannot be overwritten.
   - The lane runs on pull requests only, so a pull request's first run is
     still cold unless the workflow has been run by hand on `main`, whose
@@ -526,6 +576,17 @@ elements, or a guest you log in to with your own `~/.ssh/id_rsa`.
   `vars/ernic-pins.yml`.
 
 ### Fixed
+
+- **A tag moved upstream no longer kills a bake.** The rocm-ernic sources
+  come from a clone the collection keeps on the controller and updates with
+  `git fetch --tags`; once upstream moved its `nightly` tag, git refused it
+  ("would clobber existing tag") and the bake died after 118 tasks over a
+  tag it never reads. Before each use the clone is now fetched into, and
+  a moved tag is taken with a forced fetch. Nothing is removed: the clone
+  is shared by every bake and configure run on the controller, and the
+  forced fetch leaves its work tree, branches and uncommitted changes as
+  they were. A fetch that fails any other way is reported and the clone
+  left alone.
 
 - **`gen-compose` refuses a fleet that names no image for a service it
   renders.** An empty `<qemu-ref>`, `<ernic-ref>` or `<rocjitsu-ref>`, or a
