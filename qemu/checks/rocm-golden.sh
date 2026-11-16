@@ -386,6 +386,17 @@ id -nG | tr ' ' '\n' | grep -qx video
 test -s /etc/rocm-golden-guest.json
 test -s "${HOME}/WELCOME.md"
 
+# Nothing of a bake's compiler cache.  The playbook-test lane builds the
+# modules through ccache, by a system configuration file and by symlinks that
+# shadow the compiler in /usr/local/bin; the bake_ccache role removes all of
+# it before the image is finished, and a published image never had it.  A
+# guest shipping either compiles everything through a cache nobody asked for.
+test ! -e /etc/ccache.conf
+test ! -e /var/tmp/bake-ccache
+test ! -e /var/tmp/bake-ccache.tar
+test -z "$(find /usr/local/bin -maxdepth 1 -lname /usr/bin/ccache)"
+test "$(readlink -f "$(command -v gcc)")" != /usr/bin/ccache
+
 # Headroom for a kernel tree, rdma-core, the ionic-ernic DKMS build and a
 # consumer's own build tree.
 test "$(df --output=avail -BG / | tail -1 | tr -dc 0-9)" -ge 20

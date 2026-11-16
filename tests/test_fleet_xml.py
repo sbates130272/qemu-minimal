@@ -106,7 +106,7 @@ class ParseDefault(unittest.TestCase):
             self.cfg.bake_playbook, "ansible/playbooks/vm-rocm-golden.yml")
         self.assertEqual(
             self.cfg.publish_ref,
-            "docker.io/sbates130272/qemu-minimal-rocm-golden")
+            "docker.io/sbates130272/qemu-tool-rocm-golden")
         self.assertEqual(self.cfg.publish_flavour, "rocm-golden")
 
     def test_the_bake_paths_exist_in_a_checkout(self) -> None:

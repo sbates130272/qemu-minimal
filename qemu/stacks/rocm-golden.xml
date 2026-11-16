@@ -105,7 +105,7 @@
   <!-- Only the bake's Ansible boot forwards a host port, and it needs no
        particular one. -->
   <bake-ssh-port>auto</bake-ssh-port>
-  <publish-ref>docker.io/sbates130272/qemu-minimal-rocm-golden</publish-ref>
+  <publish-ref>docker.io/sbates130272/qemu-tool-rocm-golden</publish-ref>
   <publish-flavour>rocm-golden</publish-flavour>
 
 </fleet>

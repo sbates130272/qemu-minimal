@@ -289,7 +289,7 @@ class DryRun(unittest.TestCase):
             "--dry-run", "--keep", str(self.tmp / "out"))
         publish_qcow.run(args)
         self.assertEqual(
-            args.ref, "docker.io/sbates130272/qemu-minimal-rocm-golden")
+            args.ref, "docker.io/sbates130272/qemu-tool-rocm-golden")
         info = json.loads((self.tmp / "out" / "vm-info.json").read_text())
         self.assertTrue((self.tmp / "out" / "rocm-golden.qcow2.zst").is_file())
         self.assertEqual(

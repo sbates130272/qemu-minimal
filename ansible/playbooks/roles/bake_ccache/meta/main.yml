@@ -1,0 +1,18 @@
+---
+galaxy_info:
+  role_name: bake_ccache
+  author: Stephen Bates
+  description: >-
+    Carry a ccache directory into a bake guest ahead of its kernel-module
+    builds and back out after them, so a later bake of the same pins compiles
+    nothing twice. Off unless the caller names a directory on the controller,
+    and it leaves nothing of itself in the image.
+  license: MIT
+  min_ansible_version: "2.18"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - noble
+        - resolute
+
+dependencies: []

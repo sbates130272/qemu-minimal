@@ -21,6 +21,14 @@
 # A bake needs no Docker daemon when the caller hands it the firmware
 # generator: -e rocjitsu_firmware_script=/path/to/vfio_guest_firmware.py.
 #
+# ROCM_GOLDEN_CCACHE_DIR, in the environment of whatever runs the bake, names
+# a directory on the controller that carries a compiler cache from one bake
+# to the next: the plays that build kernel modules are about fourteen minutes
+# of a bake, and the inputs of those modules move only when a pin does. It is
+# unset by default and a published image is never built with it. The
+# bake_ccache role says how. ROCM_GOLDEN_CCACHE_REPLACE=true beside it says
+# the cache handed over was saved for other pins and is to be saved again.
+#
 # Order is load-bearing in three places, each noted where it applies: the
 # mainline kernel before rocm_setup, the amdgpu rebuild after it, and the
 # slim pass after everything that builds.
@@ -69,6 +77,10 @@
     ernic_ionic_kernel_ref: "{{ ionic_kernel_pin }}"
     rocm_ernic_setup_kernel_ref: "{{ ionic_kernel_pin }}"
     ernic_source_repo_version: "{{ ernic_source_pin }}"
+    # Empty unless the caller set it; shared with the play that saves the
+    # cache through the anchor.
+    golden_ccache_dir: &golden_ccache_dir "{{ lookup('ansible.builtin.env', 'ROCM_GOLDEN_CCACHE_DIR') }}"
+    golden_ccache_replace: &golden_ccache_replace "{{ lookup('ansible.builtin.env', 'ROCM_GOLDEN_CCACHE_REPLACE') | bool }}"
   tasks:
     # The pinned mainline kernel and the build toolchain. Upstream assumes a
     # guest already prepared this way; this repo builds its own.
@@ -82,6 +94,16 @@
       ansible.builtin.include_role:
         name: rocm_ernic_setup
         tasks_from: image_prep
+
+    # After the reboot into the pinned kernel and ahead of the first module
+    # build, which is the ionic-ernic DKMS package just below.
+    - name: Put the compiler cache in front of the module builds
+      ansible.builtin.include_role:
+        name: bake_ccache
+        tasks_from: restore
+      vars:
+        bake_ccache_controller_dir: "{{ golden_ccache_dir }}"
+      when: golden_ccache_dir | length > 0
 
     # Resolved here rather than inside the rescue below, where a missing or
     # reshaped source tree would be swallowed and reported as success.
@@ -579,6 +601,39 @@
     sdxi_setup_user: "{{ vm_username | default('ubuntu') }}"
   roles:
     - role: sdxi_setup
+
+# After the last thing that compiles, and before the stamp and the slim pass:
+# a failure in either of those still leaves the cache saved, and nothing of
+# ccache is in the guest by the time the image is described or trimmed.
+- name: Save the compiler cache and take ccache out of the guest
+  hosts: all
+  gather_facts: false
+  become: true
+  tags: [install]
+  vars:
+    # Defined on the first play of this file.
+    golden_ccache_dir: *golden_ccache_dir
+    golden_ccache_replace: *golden_ccache_replace
+  tasks:
+    # The removal is not gated. A bake that failed with the hook in place can
+    # be finished by a rerun that was handed no cache, and that image must
+    # not keep a compiler that is really ccache. On a guest that never had
+    # the hook, which is every published bake, it changes nothing.
+    - name: Save the compiler cache, then take ccache out of the guest
+      block:
+        - name: Save the compiler cache
+          ansible.builtin.include_role:
+            name: bake_ccache
+            tasks_from: save
+          vars:
+            bake_ccache_controller_dir: "{{ golden_ccache_dir }}"
+            bake_ccache_replace: "{{ golden_ccache_replace }}"
+          when: golden_ccache_dir | length > 0
+      always:
+        - name: Take ccache out of the guest
+          ansible.builtin.include_role:
+            name: bake_ccache
+            tasks_from: remove
 
 # Before the slim pass, which removes the apt lists dpkg-query does not need
 # but leaves nothing else to read versions from.

@@ -284,7 +284,8 @@ elements, or a guest you log in to with your own `~/.ssh/id_rsa`.
     checks the guest pins against the server images, bakes, runs
     `qemu/checks/rocm-golden.sh` on a boot with no device, then the
     configure, firmware and test stages and an SDXI copy as the one guest
-    of a rendered default stack, and publishes to `docker.io/sbates130272/qemu-minimal-rocm-golden` as
+    of a rendered default stack, and publishes to
+    `docker.io/sbates130272/qemu-tool-rocm-golden` as
     `<YYYYMMDD>.g<sha7>` and `latest`. The published disk is the bake, not
     the disk that was tested.
   - `gen-vm --packages` takes a manifest of bare names, one per line, as
@@ -354,6 +355,35 @@ elements, or a guest you log in to with your own `~/.ssh/id_rsa`.
   generated from the metric list rather than written out.
 
 ### Changed
+
+- **The `vm-rocm-golden` playbook-test lane keeps a compiler cache between
+  runs and no longer compacts the image it bakes.** The plays that build
+  kernel modules are about fourteen minutes of that bake, and the inputs of
+  those modules move only when a pin does; how much of it is compiling, which
+  is all a cache removes, has not been measured. A bake run with `ROCM_GOLDEN_CCACHE_DIR` naming a directory now puts
+  ccache in front of every module build — amdgpu, both ionic-ernic builds,
+  `ernic_p4` and SDXI — and carries the cache in and out of the guest as one
+  tar file; the new `bake_ccache` role does it, and removes every trace
+  before the image is finished. The lane restores and saves that directory
+  with `actions/cache` and bakes with `--no-compact`, since nothing
+  publishes its image. The variable is unset by default and the publish
+  workflow does not set it: a published image is compiled from source and
+  compacted, as before. The one thing every bake now runs is the role's
+  removal, which is a no-op on a guest that never had the cache: it is what
+  cleans up after a cached bake that failed part way, whatever the rerun was
+  given. `qemu/checks/rocm-golden.sh` now fails an image that carries a
+  ccache configuration, cache or compiler symlink.
+  - The saved cache is replaced when the lane restored one saved for other
+    pins, or when a hundred or more ccache invocations missed; otherwise it
+    is left, since a cache entry cannot be overwritten.
+  - The lane runs on pull requests only, so a pull request's first run is
+    still cold unless the workflow has been run by hand on `main`, whose
+    cache every pull request can read. Do that once after this merges and
+    after each pin bump.
+  - The lane's `Report VM image size` step now reports an uncompacted
+    backing image, 2.3–2.5x the published size.
+  - The comment in `qemu/packages.d/rocm-golden.txt` described cache plumbing
+    (`dkms_build_cached`, `probe-guest`) that this repository never had.
 
 - **`report-for-vm-rocm-golden` is the one benchmark workflow.** It replaces
   `report-for-vm-rocjitsu` and absorbs the ernic P4 and SDXI benchmarks from

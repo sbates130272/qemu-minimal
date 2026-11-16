@@ -16,11 +16,11 @@ file up to date as infrastructure changes.
 - `qemu/qemu-tool/settings.py` — the one loader: fleet XML layers in, a `FleetConfig` (or `VMConfig` overrides) out. See "Settings" below
 - `qemu/qemu-tool/quick_start.py` + `ansible/playbooks/vm-quickstart.yml` — the README's Quick Start, which is `qemu-tool quick-start`: two guests from the published qcow2, Prometheus, Grafana and log collection beside them, plus a GPU test and an inter-guest RDMA test. It runs `qemu/stacks/rocm-golden.xml` unless given `--xml` or `--flavor`; `--flavor default` is that fleet. The daily `report-for-vm-rocm-golden` lane runs *that subcommand*, not a copy of its steps. It replaced the shell script that used to live under `scripts/`, which is deleted; do not reintroduce a shell wrapper beside it. The guests are sized from the host by default (4 vCPU floor, 8 ceiling), and every prompt it asks takes its default answer when stdin is not a terminal, so CI needs no flag to stay non-interactive
 - `images/` — qcow2 VM disk images (backing + overlay pairs, **not** `/var/lib/qemu-tool/images`)
-- `ansible/playbooks/` — three playbooks and four roles, and nothing else:
+- `ansible/playbooks/` — three playbooks and five roles, and nothing else:
   - `vm-basic.yml` — a complete bake on its own, and the base of the golden
-  - `vm-rocm-golden.yml` — the one image beyond it: imports `vm-basic.yml`, then the mainline kernel and ernic prerequisites, ROCm, the rocjitsu roles, SRQ + P4, SDXI and one slim pass. Every bake play is tagged `install`; `tests/test_playbook_pins.py` fails a play with no tag, because an untagged play runs in every bake. Three plays need a device and are tagged `never`: `--tags configure` sets up the NIC, `--tags firmware` installs `ip_discovery.bin` from the rocjitsu serving the guest, and `--tags test` runs the GPU workloads. The pins (`ionic_kernel_pin`, `ernic_source_pin`, `rocm_line_pin`, `sdxi_source_pin`) are each defined once and shared between plays through YAML anchors. Its defaults are a published image's, and a bake needs no Docker daemon when given `-e rocjitsu_firmware_script=<path to vfio_guest_firmware.py>`. The acceptance test is `qemu/checks/rocm-golden.sh`, which the playbook-test lane runs against the baked guest and batesste-ci-images runs against the published one
+  - `vm-rocm-golden.yml` — the one image beyond it: imports `vm-basic.yml`, then the mainline kernel and ernic prerequisites, ROCm, the rocjitsu roles, SRQ + P4, SDXI and one slim pass. Every bake play is tagged `install`; `tests/test_playbook_pins.py` fails a play with no tag, because an untagged play runs in every bake. Three plays need a device and are tagged `never`: `--tags configure` sets up the NIC, `--tags firmware` installs `ip_discovery.bin` from the rocjitsu serving the guest, and `--tags test` runs the GPU workloads. The pins (`ionic_kernel_pin`, `ernic_source_pin`, `rocm_line_pin`, `sdxi_source_pin`) are each defined once and shared between plays through YAML anchors. Its defaults are a published image's, and a bake needs no Docker daemon when given `-e rocjitsu_firmware_script=<path to vfio_guest_firmware.py>`. With `ROCM_GOLDEN_CCACHE_DIR` set in the bake's environment the module builds go through a compiler cache kept in that directory; it is unset by default and only the playbook-test lane sets it — see "The bake's compiler cache". The acceptance test is `qemu/checks/rocm-golden.sh`, which the playbook-test lane runs against the baked guest and batesste-ci-images runs against the published one
   - `vm-quickstart.yml` — configures and tests a running fleet; what `qemu-tool quick-start test` runs
-  - roles `rocm_ernic_setup` (image prep, device naming, boot-time addressing), `rocjitsu_setup` (firmware, amdgpu, tools, live tests), `sdxi_setup` and `image_slim`. Each has task files callers reach with `tasks_from`; all four are linted at the `production` profile in CI
+  - roles `rocm_ernic_setup` (image prep, device naming, boot-time addressing), `rocjitsu_setup` (firmware, amdgpu, tools, live tests), `sdxi_setup`, `image_slim` and `bake_ccache` (the compiler cache: `restore`, `save` and `remove`, no `main`). Each has task files callers reach with `tasks_from`; all five are linted at the `production` profile in CI
 - `scripts/install-vfio-rules` + `scripts/99-qemu-minimal-vfio.rules` — host-side udev rules for PCI passthrough. There is no top-level `udev/` any more: guest rules live in their role's `files/`
 - `rocm-ernic-enablement.md` — running log of rocm-ernic integration status and bugs. Git-ignored: it exists only on a host that keeps one
 
@@ -1434,6 +1434,145 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     only layer that can discriminate, so the tuple discipline belongs there
     and in anything scanning sysfs or `lspci`, not in the driver.
 
+## The bake's compiler cache
+
+The plays that build kernel modules — amdgpu, ionic-ernic twice, `ernic_p4`,
+SDXI — are about fourteen minutes of a 26-minute `vm-rocm-golden` bake, and
+the sources they compile change only when a pin does. The playbook-test lane
+keeps a ccache directory across runs; **the publish lane does not, and a
+published image is always compiled from source.** One environment variable
+separates them: `ROCM_GOLDEN_CCACHE_DIR`, read by the playbook with
+`lookup('env', ...)`, names a directory on the controller. Unset, the restore
+and the save are skipped and the bake compiles what it always did.
+`tests/test_bake_ccache.py` pins that only the one workflow sets it.
+
+**Fourteen minutes is those plays' wall time, not what the cache saves, and
+the saving has not been measured.** ccache removes the compiler and nothing
+else. What stays: amdgpu's `configure`, some 290 separate kbuild invocations
+whose start-up cost is paid hit or miss; objtool on every object
+(`CONFIG_OBJTOOL`); the link, `modpost`, signing and zstd compression of each
+module; and the package installs, clones and the reboot the same plays do.
+The one earlier measurement put amdgpu's straight compile at about 210 s of
+its 7m49s play. Four to six minutes is a defensible expectation; take the
+real figure from the play timings and the statistics of the first two lane
+runs, and replace this paragraph with it.
+
+**The hook is a symlink per compiler name in `/usr/local/bin`, plus
+`/etc/ccache.conf`.** Nothing narrower reaches every build, and this was read
+off the code rather than assumed:
+
+| Candidate | Why not |
+|---|---|
+| `PATH` / `CCACHE_*` in the task environment | the collection's scripts run `sudo dkms`, and sudo resets the environment to its `secure_path` |
+| `/etc/dkms/framework.conf` | dkms 3.2.2 reads it in a subshell and copies out a fixed list of its own variables; an `export PATH=` there is dropped |
+| `CC=` for make | dkms unsets `CC` and exports the first word of `CONFIG_CC_VERSION_TEXT`; kbuild's own `CC = $(CROSS_COMPILE)gcc` then outranks the environment, and amdgpu's top Makefile says `CC := gcc` |
+
+What all of them do is resolve a bare compiler name through `PATH`, and
+`/usr/local/bin` precedes `/usr/bin` in sudo's `secure_path` and in a login
+`PATH`. The role links every name the ccache package wraps in
+`/usr/lib/ccache`, so `gcc`, `cc` and `x86_64-linux-gnu-gcc-15` are all
+covered. SDXI's plain `make` under `become` resolves the same way.
+
+The settings. `hash_dir` and the path behaviour were measured on the dev
+host; the rest follow from ccache's documentation and have not been:
+
+| Setting | Why |
+|---|---|
+| `compiler_check = content` | every bake installs gcc afresh, so the default `mtime` never matches |
+| `hash_dir = false` | ccache hashes the working directory of a `-g` compile. The modules build at fixed paths, but amdgpu's `configure` compiles ~300 feature tests each in a `mktemp -d` directory |
+| `sloppiness = time_macros,include_file_mtime,include_file_ctime` | headers unpacked or generated seconds before the build are "too new" for ccache by default |
+| `umask = 000` | root and the login user both build into the one cache |
+| `max_size = 1G` | ages out a moved pin's objects, and bounds the GitHub cache entry |
+| no `base_dir` | not needed, and the one setting that can store a wrong object |
+
+Two facts about amdgpu-dkms 7.1.9 that decide the hit rate, read from the
+package. It builds with `M=$(mktemp -t amd.XXXXXXXX)`, a **symlink** to the
+DKMS build directory under a random name — harmless, because kbuild
+`realpath`s `M`, and measured so on the dev host: a second build through a
+differently named symlink hit 25 of 25. And its `configure` runs the feature
+tests in parallel, building each test's source from whichever results are in
+so far, so some of those sources differ run to run and **a warm bake still
+misses a little**. A GitHub cache entry cannot be overwritten, and re-saving
+a few hundred MiB per run for throwaway test objects would crowd out the
+repository's other caches, so the role replaces the saved archive only when
+one of three things holds:
+
+| Condition | What it catches |
+|---|---|
+| no archive was handed over | the first bake |
+| `bake_ccache_replace`, from `ROCM_GOLDEN_CCACHE_REPLACE=true` | a moved pin: the lane sets it when the entry it restored was not saved under this run's key prefix |
+| at least `bake_ccache_save_misses` (100) invocations missed | drift no pin records, such as a new gcc in the archive |
+
+**The count is absolute, not a share, and the second row is not redundant.**
+ccache counts invocations, and most of them are not compiles: each kbuild
+`make` probes the compiler about 22 times (a module of 3 sources reports 25
+misses cold and 25 hits warm), and amdgpu's `configure` is some 290 makes.
+Those ~6,400 probes all hit on a warm cache, so against that denominator a
+recompile of the whole of amdgpu is under a fifth, and a bumped ernic or SDXI
+pin a few percent (arithmetic from those counts, not a measured bake) — an
+earlier 25% threshold would have left the archive
+stale after every pin bump, recompiling the changed module in every run. A
+count fixes amdgpu; it cannot fix a module of tens of files, which is what
+the key comparison is for. The count is still a guess. The statistics every
+bake prints, and the lane copies into its step summary, are what to tune it
+against, and their last line says "ccache invocations", not compiles, for
+the same reason.
+
+Transport is one uncompressed tar file, `ccache.tar`, in that directory:
+unpacked into `/var/tmp/bake-ccache` after the reboot into the pinned kernel,
+fetched back by a play that sits after SDXI and before the stamp and the slim
+pass. The fetch runs with `become: false` on purpose — with become, `fetch`
+slurps the file as base64 in memory. That play's `always` section then runs
+the role's `remove` tasks, which take out the symlinks, `/etc/ccache.conf`,
+the cache and the tar. **The removal is the one part that is not gated on the
+variable**: a cached bake that fails between the restore and the save leaves
+the hook in the guest, and an `--ansible-only` rerun without the variable
+would otherwise finish an image whose `gcc` is ccache. Every task in it is a
+no-op on a guest that never had the hook, so a published bake runs them and
+changes nothing. `qemu/checks/rocm-golden.sh` asserts all four are absent, so
+both the lane and the publish workflow would fail on an image that carried
+any of it.
+
+In the lane, `actions/cache/restore` and `actions/cache/save` are separate
+steps so the save sits straight after the bake. The key ends in the run id,
+since an entry is never overwritten; its prefix hashes the kernel, ernic and
+SDXI pins, the amdgpu driver release, `requirements.yml` and
+`amdgpu-emu-patches.py`, with `restore-keys` falling back to any earlier
+cache so a pin bump still starts warm — and, because a restore that fell
+back that far sets `ROCM_GOLDEN_CCACHE_REPLACE`, saves once under the new
+prefix so the next run is warm for the bumped module too. **The lane has no
+push trigger, so nothing saves a cache on main**, and GitHub only lets a pull
+request read caches saved by itself or by its base branch: each pull
+request's first run is cold, and only its later pushes are fast, until
+someone runs the workflow by hand on main (`gh workflow run ... --ref main`),
+which seeds every later pull request. That wants doing once after this
+merges and again after each pin bump; a push trigger would do it unasked at
+the cost of a bake per qualifying merge, and was left out for that reason.
+An entry unused for seven days is evicted, and each pull request's own entry
+is a few hundred MiB of the repository's 10 GiB.
+
+The report step dates what the bake wrote against a marker the bake step
+touches in `$RUNNER_TEMP`. Not in the cached directory: there it is restored
+with the cache, older than the files it is meant to date.
+
+The lane also bakes with `--no-compact`: nothing publishes its image, and the
+recompress was most of the three minutes after the playbook. The backing
+image's "disk size" in its `Report VM image size` step is therefore the
+uncompacted allocation, 2.3–2.5x the published figure and not comparable with
+runs before the flag. The publish lane still compacts.
+
+Not yet seen in CI as of this writing: the role has run against no guest.
+What was exercised is a kbuild module build on the dev host through the same
+symlinks and settings (25 misses, then 25 hits), not dkms itself and not the
+tar round trip. That dkms hands kbuild a `PATH` with `/usr/local/bin` first,
+that the guest's sudo `secure_path` has it first, and that `/etc/ccache.conf`
+is honoured there are all read from code. So on the first lane run read the
+statistics in the step summary: a non-zero miss count means the hook is live,
+and a second run on the same pull request should show direct hits in the
+thousands. **Every counter zero means the hook did not intercept** — the bake
+is correct and no faster — and the role's last line and a workflow warning
+both say so rather than leaving it to be noticed.
+
 ## Git / GitHub
 
 - Default GitHub account: `sbates130272` (verify with `gh auth status`)
@@ -1468,7 +1607,7 @@ token anywhere in the repo.
 ## The published guest image
 
 **This repo bakes, qualifies and publishes the rocm-golden qcow2**, to
-`docker.io/sbates130272/qemu-minimal-rocm-golden` with the
+`docker.io/sbates130272/qemu-tool-rocm-golden` with the
 `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repository secrets;
 batesste-ci-images pulls it and no longer builds guests. The workflow is
 `qemu-minimal-publish-qcow-rocm-golden.yml`, the pusher is `qemu-tool
