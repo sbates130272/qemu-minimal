@@ -40,6 +40,14 @@
 [![Guest Qcow2](https://img.shields.io/badge/guest-resolute%20%7C%20qm.096ddfe-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu/tags)
 [![Qemu Fork](https://img.shields.io/badge/sbates--fork-qemu.4cb9698-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork/tags)
 
+<!-- What the rocm-golden guest is baked with: pins in ansible/playbooks/vm-rocm-golden.yml and <bake-release> in qemu/stacks/rocm-golden.xml -->
+[![Golden Guest OS](https://img.shields.io/badge/rocm--golden-Ubuntu%20resolute-blueviolet?style=flat-square&logo=ubuntu)](qemu/stacks/rocm-golden.xml)
+[![Golden Kernel](https://img.shields.io/badge/kernel-7.2.6%20mainline-blueviolet?style=flat-square&logo=linux)](https://kernel.ubuntu.com/mainline/v7.2.6/)
+[![Golden ROCm](https://img.shields.io/badge/ROCm-10.1-blueviolet?style=flat-square)](ansible/playbooks/vm-rocm-golden.yml)
+[![Golden amdgpu](https://img.shields.io/badge/amdgpu--dkms-31.60-blueviolet?style=flat-square)](ansible/playbooks/vm-rocm-golden.yml)
+[![Golden ernic driver](https://img.shields.io/badge/ionic%20%2B%20SRQ%20%2B%20P4-90434a2-blueviolet?style=flat-square)](https://github.com/ROCm/rocm-ernic/commit/90434a237232275fc8002cb3a6b5121ba836c594)
+[![Golden SDXI driver](https://img.shields.io/badge/sdxi-dfd76f2-blueviolet?style=flat-square)](https://github.com/ROCm/rocm-systems/commit/dfd76f23f6f10561333fc0a9a9f23e9f3b255c04)
+
 [![Quick-start Build](https://img.shields.io/badge/quick--start-20261112.gdca6903-success?style=flat-square&logo=docker)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu/tags)
 
 ## Summary
