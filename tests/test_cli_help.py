@@ -17,8 +17,10 @@ The table below pins the splitter's answers so a later swap has to match them.
 
 import argparse
 import importlib.util
+import os
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -131,6 +133,20 @@ class Help(unittest.TestCase):
         text = cli._build_parser().format_help()
         self.assertIn("COMMAND ...", text)
         self.assertNotIn("{", text)
+
+    def test_help_fits_in_80_columns_on_any_terminal(self):
+        # Examples are printed as typed, so this also holds them to 80.
+        parsers = {"qemu-tool": cli._build_parser(), **_subparsers()}
+        with mock.patch.dict(os.environ, {"COLUMNS": "200"}):
+            for name, parser in parsers.items():
+                with self.subTest(name):
+                    self.assertEqual(
+                        [line for line in parser.format_help().splitlines()
+                         if len(line) > 80], [])
+
+    def test_a_narrow_terminal_still_wraps_to_itself(self):
+        with mock.patch.dict(os.environ, {"COLUMNS": "60"}):
+            self.assertEqual(cli._build_parser()._get_formatter()._width, 58)
 
     def test_xml_has_one_dest_everywhere(self):
         dests = {

@@ -7,10 +7,42 @@ All notable changes to this project will be documented in this file.
 Fleet XML is now the only settings format, and the stacks are renamed. Read
 **Breaking** first if you have settings in an env-format file, a stack
 rendered by an earlier version, a script that names a `vfio-user-*` stack or
-passes `--env-file` or `--fleet-file`, or a fleet file with `<lmcache-*>`
-elements.
+passes `--env-file` or `--fleet-file`, a fleet file with `<lmcache-*>`
+elements, or a guest you log in to with your own `~/.ssh/id_rsa`.
 
 ### Breaking
+
+- **`gen-vm` no longer authorises `~/.ssh/id_rsa.pub` by default.** An image
+  it bakes from the cloud image now gets a keypair generated for it, under
+  `<images>/keys/<vm-name>_id_rsa`, and `gen-vm` prints where. Nothing is
+  read from `~/.ssh` unless you name it, by the playbook either: `gen-vm`
+  passes `user_setup_ssh_key_src_dir` and `user_setup_ssh_key_name` to
+  `ansible-playbook`, so the `user_setup` role authorises the image's key
+  where it used to add the controller's `~/.ssh/id_rsa.pub` whatever key was
+  named. With `vm-basic.yml` run on its own, the private key that role
+  copies into the guest is now the image's as well. The reason is `publish-qcow`: an
+  image's key is published with it, and the default must not be a personal
+  one.
+  - *To log in:* `qemu-tool ssh <vm>`, which finds the key, or
+    `ssh -i <images>/keys/<vm-name>_id_rsa -p <port> <user>@localhost`. A
+    plain `ssh -p 2222 ubuntu@localhost` no longer offers a key the guest
+    accepts.
+  - *To keep the old behaviour:* `gen-vm --ssh-key-file ~/.ssh/id_rsa.pub`,
+    or `<vm-ssh-key-file>~/.ssh/id_rsa.pub</vm-ssh-key-file>` in the fleet
+    file. A key named either way is authorised as before and is never
+    published unless `publish-qcow --key` names it too.
+  - Baking again under the same name generates a new keypair and deletes
+    the old one, whose image has just been overwritten. Naming a key on a
+    re-bake deletes the old generated pair too, and every bake deletes
+    `<images>/<vm-name>.json` when it starts, so a bake that fails leaves
+    no record describing the image it replaced.
+  - Guests that bake nothing are unchanged: an overlay made with
+    `--backing-file` uses the key recorded for its backing image, and a
+    guest on a pulled `--backing-image` uses the keypair pulled with it.
+  - The sidecar `<images>/<vm-name>.json` gains `ssh_key_generated` and
+    `ssh_key_fingerprint`, and its `ssh_key_file` is `null` when no key is known rather than a path under
+    `~/.ssh`.
+  - `publish-qcow --key` is optional: see `gen-vm --bake` under Added.
 
 - **Env-format settings files are no longer read.** There is no `KEY=value`
   parser left: `$QEMU_TOOL_ENV`, `./.env`, `qemu/.env`,
@@ -147,11 +179,18 @@ elements.
   `<vm-username>`/`<vm-password>` because it is published. A missing
   `publish-qcow` argument now exits 1 naming the flag and the element, rather
   than as a usage error.
-  - `publish-qcow` takes the key from `--key` only, never from a default or
-    from `<vm-ssh-key-file>`: the key is published, and that element is a
-    fleet's own login key. It refuses a key that is not the one `gen-vm`
-    recorded baking into the image, so bake with `--ssh-key-file <key>.pub`,
-    and refuses an image `gen-vm` pulled rather than baked.
+  - `publish-qcow` needs no `--key` for an image `gen-vm` baked with a
+    key it generated: it publishes that keypair and prints which one. An
+    image baked with a key you named, or one with no record, needs `--key`,
+    which names the private key that gets published. The key is never taken
+    from `<vm-ssh-key-file>` or from `~/.ssh`. The record is the one beside
+    the image file, not one chosen by `--vm-name`, and it is believed only
+    about `<images>/keys/<name>_id_rsa`: a record naming any other path, a
+    symlink there, a pair that no longer has the fingerprint the bake
+    recorded, or a record with no fingerprint is refused. It refuses a
+    `--key` that is not the one `gen-vm` recorded baking into the image, a
+    private key that is not the other half of its `.pub`, and an image
+    `gen-vm` pulled rather than baked.
   - A bake leaves out the fleet's `<vm-extra-hostfwd>`: it runs QEMU on the
     host, where a forward whose port is taken stops it starting.
   - `<bake-packages>` and `<bake-playbook>` are resolved against the current
@@ -341,8 +380,10 @@ elements.
 
 - **`--help` is reorganised.** Commands are listed by purpose, options are
   grouped, every argument has help text and the main commands have examples.
-  No flag, default or parsing behaviour changed. The man page is rewritten
-  to match.
+  Help wraps at 80 columns however wide the terminal is. The reorganisation
+  itself changes no flag, default or parsing; the defaults that did change
+  in this release are listed under Breaking. The man page is rewritten to
+  match.
 
 - **`scripts/release.sh` stamps the man page.** Its `.TH` line carried a
   version and month nothing updated; the release script now writes both, and

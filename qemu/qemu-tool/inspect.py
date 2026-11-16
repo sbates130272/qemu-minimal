@@ -231,7 +231,8 @@ def _ssh_key_for_image(
 ) -> tuple[list[str], Path | None]:
     """Return (public_key_lines, private_key_path).
 
-    Priority: sidecar ssh_key_file > image-adjacent .pub > config default.
+    Priority: sidecar ssh_key_file > image-adjacent .pub > a key the
+    settings name. There is no default beyond those.
     """
     candidates: list[Path] = []
 
@@ -242,7 +243,8 @@ def _ssh_key_for_image(
     if image:
         candidates.append(Path(image).with_suffix(".pub"))
 
-    candidates.append(cfg.ssh_key_file.expanduser())
+    if cfg.ssh_key_file is not None:
+        candidates.append(cfg.ssh_key_file.expanduser())
 
     for pub in candidates:
         try:
@@ -505,9 +507,10 @@ def _local_key_candidates(image: str | None, info: dict[str, Any],
     if image:
         add(Path(image).with_suffix(".pub"), named)
 
-    configured = Path(str(cfg.ssh_key_file)).expanduser()
-    add(configured, named)
-    add(Path(str(configured) + ".pub"), named)
+    if cfg.ssh_key_file is not None:
+        configured = Path(str(cfg.ssh_key_file)).expanduser()
+        add(configured, named)
+        add(Path(str(configured) + ".pub"), named)
 
     if image:
         img = Path(image)

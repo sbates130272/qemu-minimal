@@ -98,15 +98,17 @@ jobs:
     # Baked exactly as the published guest is, from the default fleet's
     # <bake-*> elements, so the check below sees the guest a consumer gets.
     # A plain run step, not qemu-tool-action: the action always passes
-    # --release, which would outrank <bake-release>. Only the name differs:
-    # --vm-name outranks <bake-name>.
+    # --release, which would outrank <bake-release>. The name differs:
+    # --vm-name outranks <bake-name>. And the key is the job's own, so that
+    # plain ssh reaches the guest; gen-vm would otherwise generate one.
     - name: Generate VM with vm-rocm-golden playbook
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         mkdir -p "$VM_IMAGES_DIR"
         qemu-tool gen-vm --bake --xml qemu/stacks/rocm-golden.xml \
-          --vm-name "$VM_NAME" --images "$VM_IMAGES_DIR"
+          --vm-name "$VM_NAME" --images "$VM_IMAGES_DIR" \
+          --ssh-key-file "$HOME/.ssh/id_rsa.pub"
 
     # One guest of the default fleet: qemu/stacks/rocm-golden.xml plus the few
     # elements this lane changes. Left out are the TAP, which is the L2 path

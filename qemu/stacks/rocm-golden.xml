@@ -91,8 +91,9 @@
 
        The account is the published image's own and is public, which is why
        it is not <vm-username>/<vm-password>.  No key is named here on
-       purpose: the keypair is published with the image, so publish-qcow
-       takes one from its key flag only, never from a settings file. -->
+       purpose: the keypair is published with the image, so the bake
+       generates one for it and publish-qcow publishes that one, or the one
+       its key flag names; never a key from a settings file. -->
   <bake-name>rocm-golden</bake-name>
   <bake-release>resolute</bake-release>
   <bake-size>64</bake-size>

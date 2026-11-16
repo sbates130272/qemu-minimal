@@ -21,6 +21,7 @@ import tempfile
 from pathlib import Path
 
 from .fleet_xml import FleetConfig, FleetXml
+from .gen_vm import generated_key_path, image_sidecars
 from .vm_artifact import (
     VM_ARTIFACT_TYPE,
     VM_INFO_ARTIFACT_TYPE,
@@ -88,24 +89,138 @@ def _key_material(public_key: Path) -> tuple[str, str] | None:
     return (fields[0], fields[1]) if len(fields) >= 2 else None
 
 
+def _derived_key_material(private_key: Path) -> tuple[tuple[str, str] | None, str]:
+    """((type, base64) of the public key *private_key* holds, ssh-keygen's error)."""
+    out = subprocess.run(
+        ["ssh-keygen", "-y", "-P", "", "-f", str(private_key)],
+        capture_output=True, text=True, stdin=subprocess.DEVNULL,
+    )
+    fields = out.stdout.split()
+    if out.returncode != 0 or len(fields) < 2:
+        return None, out.stderr.strip()
+    return (fields[0], fields[1]), ""
+
+
+def _check_pair(private_key: Path, public_key: Path) -> None:
+    """Refuse a private key that is not the other half of *public_key*.
+
+    The guest authorises the public half and the fingerprint published is
+    the public half's; a private key from another pair beside it would be
+    published under both.
+    """
+    derived, why = _derived_key_material(private_key)
+    if derived is not None and derived == _key_material(public_key):
+        return
+    sys.exit(
+        f"Error: {private_key} is not the private half of {public_key}"
+        + (f"\n       (ssh-keygen: {why})" if why else "") + ".\n"
+        "       Nothing is published. A key with a passphrase cannot be "
+        "published either."
+    )
+
+
+def _sidecar(image: Path) -> Path:
+    """The record gen-vm wrote for *image*.
+
+    Found from the image file and never from --vm-name, which is only the
+    name to publish under: another image's record names another image's key.
+    """
+    candidates = image_sidecars(image)
+    return next((c for c in candidates if c.is_file()), candidates[0])
+
+
+def _generated_key(sidecar: Path, image: Path) -> Path:
+    """The private key gen-vm generated for *image*, which *sidecar* describes.
+
+    Only a key the record says gen-vm made is published without being
+    named. One a user chose is usually a personal key, and no record says
+    nothing about whose it is; neither is guessed at, and nothing here
+    looks in ~/.ssh.
+
+    The record is trusted for the claim and not for the path: the key is
+    looked for where gen-vm puts one, and the record has to agree, down to
+    the fingerprint of what was baked in.
+    """
+    try:
+        info = json.loads(sidecar.read_text())
+        recorded = info.get("ssh_key_file")
+        generated = info.get("ssh_key_generated") is True
+        fingerprint = info.get("ssh_key_fingerprint")
+    except (OSError, ValueError, AttributeError):
+        sys.exit(
+            f"Error: no record of the key this image was baked with "
+            f"({sidecar} is missing or unreadable).\n"
+            "       Pass --key with the private key the guest authorises. "
+            "It is PUBLISHED with the image."
+        )
+    if not generated or not isinstance(recorded, str) or not recorded:
+        sys.exit(
+            f"Error: {sidecar} does not record a key gen-vm generated for "
+            f"this image (it names {recorded or 'no key'}).\n"
+            "       A key somebody chose is not published unless it is "
+            "named: pass --key with its\n"
+            "       private half, which is PUBLISHED with the image. To "
+            "publish a key made for\n"
+            "       the image instead, re-bake without --ssh-key-file and "
+            "<vm-ssh-key-file>."
+        )
+
+    def refuse(why: str) -> None:
+        sys.exit(
+            f"Error: {sidecar} says gen-vm generated this image's key, but "
+            f"{why}.\n"
+            "       Nothing is published on that record. Re-bake, or pass "
+            "--key with the private key\n"
+            "       the guest authorises, which is PUBLISHED with the image."
+        )
+
+    private = generated_key_path(image.parent, sidecar.stem)
+    public = private.with_name(private.name + ".pub")
+    for key in (private, public):
+        if key.is_symlink() or key.resolve() != key:
+            refuse(f"{key} is a symbolic link, or is reached through one")
+    if Path(recorded).resolve() != public:
+        refuse(f"it names {recorded}, and gen-vm generates {public}")
+    for key in (private, public):
+        if not key.is_file():
+            refuse(f"{key} does not exist")
+    if not isinstance(fingerprint, str) or not fingerprint:
+        refuse("it records no fingerprint for it")
+    if key_fingerprint(public) != fingerprint:
+        refuse(f"{public} is not the key that was baked in "
+               f"({fingerprint} was)")
+    print(f"Publishing the key gen-vm generated for this image: {private}")
+    return private
+
+
 def _check_baked_key(sidecar: Path, public_key: Path) -> None:
     """Refuse a key that is not the one gen-vm authorised in this image.
 
-    gen-vm records the public key it baked in beside the image. Publishing a
-    different pair ships a private key the guest does not accept, with its
-    fingerprint recorded as the guest's. Nothing recorded means nothing to
-    compare, and is not an error.
+    gen-vm records the public key it baked in beside the image, by
+    fingerprint and by path. Publishing a different pair ships a private key
+    the guest does not accept, with its fingerprint recorded as the guest's.
+    Nothing recorded means nothing to compare, and is not an error.
     """
     try:
-        recorded = json.loads(sidecar.read_text()).get("ssh_key_file")
+        info = json.loads(sidecar.read_text())
+        recorded = info.get("ssh_key_file")
+        fingerprint = info.get("ssh_key_fingerprint")
     except (OSError, ValueError, AttributeError):
         return
-    baked = _key_material(Path(recorded)) if recorded else None
-    if baked is None or baked == _key_material(public_key):
+    if isinstance(fingerprint, str) and fingerprint:
+        matches = key_fingerprint(public_key) == fingerprint
+    else:
+        # A record with a path and no fingerprint: compare with what is at
+        # the path now, which is all there is.
+        baked = (_key_material(Path(recorded))
+                 if isinstance(recorded, str) and recorded else None)
+        matches = baked is None or baked == _key_material(public_key)
+    if matches:
         return
     sys.exit(
         f"Error: {public_key} is not the key this image authorises.\n"
-        f"       {sidecar} records that it was baked with {recorded}.\n"
+        f"       {sidecar} records that it was baked with "
+        f"{recorded or fingerprint}.\n"
         f"       Re-bake with 'gen-vm --bake --ssh-key-file {public_key}', "
         "or pass the --key that matches."
     )
@@ -219,8 +334,9 @@ def resolve(args: argparse.Namespace) -> None:
         # The name gen-vm gives the image it bakes.
         args.image = (Path(fleet.vm_images_dir).expanduser()
                       / f"{args.vm_name}-backing.qcow2")
-    # --key is never filled in. <vm-ssh-key-file> is a fleet's own login
-    # key, usually somebody's ~/.ssh one, and this key is published.
+    # --key is not filled in from a layer. <vm-ssh-key-file> is a fleet's
+    # own login key, usually somebody's ~/.ssh one, and this key is
+    # published; run() takes the image's generated key from its sidecar.
 
     missing = [
         hint for attr, hint in (
@@ -228,8 +344,6 @@ def resolve(args: argparse.Namespace) -> None:
             ("vm_name", "--vm-name, or <bake-name> in an --xml layer"),
             ("image", "--image, or --xml with <bake-name> (or --vm-name) to "
                       "find it under <vm-images-dir>"),
-            ("key", "--key (never taken from a settings file, <vm-ssh-key-file> "
-                    "included: the key is published)"),
         ) if not getattr(args, attr)
     ]
     if missing:
@@ -246,11 +360,6 @@ def run(args: argparse.Namespace) -> None:
     image = args.image.resolve()
     if not image.is_file():
         sys.exit(f"Error: {image} does not exist.")
-    private_key = args.key.resolve()
-    public_key = private_key.with_name(private_key.name + ".pub")
-    for key in (private_key, public_key):
-        if not key.is_file():
-            sys.exit(f"Error: {key} does not exist.")
     pulled = image.with_name(image.name + ".image-ref")
     if pulled.is_file():
         sys.exit(
@@ -259,13 +368,23 @@ def run(args: argparse.Namespace) -> None:
             "       publishing it would republish that image as a new bake. "
             "Bake with 'gen-vm --bake' first."
         )
-    _check_baked_key(image.parent / f"{args.vm_name}.json", public_key)
+    # Before the key is looked for: an overlay shares its backing image's
+    # record, and is refused for what it is.
+    facts = image_facts(image)
+    sidecar = _sidecar(image)
+    private_key = (args.key.resolve() if args.key
+                   else _generated_key(sidecar, image))
+    public_key = private_key.with_name(private_key.name + ".pub")
+    for key in (private_key, public_key):
+        if not key.is_file():
+            sys.exit(f"Error: {key} does not exist.")
+    _check_baked_key(sidecar, public_key)
+    _check_pair(private_key, public_key)
     if args.guest_stamp and not args.guest_stamp.is_file():
         sys.exit(f"Error: {args.guest_stamp} does not exist.")
     if not args.tag:
         sys.exit("Error: at least one --tag is required.")
 
-    facts = image_facts(image)
     created = datetime.datetime.now(datetime.timezone.utc).strftime(
         "%Y-%m-%dT%H:%M:%SZ")
     qcow2_name = f"{args.vm_name}.qcow2"

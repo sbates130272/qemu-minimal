@@ -287,8 +287,19 @@ Generate and run a Noble VM:
 ```bash
 qemu-tool gen-vm --vm-name myvm --release noble
 qemu-tool run-vm --vm-name myvm
-ssh -p 2222 ubuntu@localhost
+qemu-tool ssh myvm                          # from another terminal
 ```
+
+`gen-vm` generates an SSH keypair for each image it bakes, keeps it in
+`<images>/keys/<vm-name>_id_rsa` and prints the path; `qemu-tool ssh` finds
+it. By hand that is `ssh -i <images>/keys/myvm_id_rsa -p 2222
+ubuntu@localhost`. Your own `~/.ssh` keys are not authorised unless you name
+one: `gen-vm --ssh-key-file ~/.ssh/id_rsa.pub`, or `<vm-ssh-key-file>` in a
+fleet file. An `--ansible-playbook` that runs the `user_setup` role is told
+the image's key too, so it does not add `~/.ssh/id_rsa.pub` behind your
+back. Baking again under the same name replaces the generated keypair.
+An overlay made with `--backing-file` uses its backing image's key, and a
+guest on a pulled `--backing-image` the keypair published with that image.
 
 Generate and run a Resolute VM:
 
@@ -581,21 +592,22 @@ root, because `<bake-packages>` and `<bake-playbook>` are resolved against
 the current directory:
 
 ```bash
-ssh-keygen -t rsa -N "" -f ./image-key/id_rsa               # the image's own keypair
-qemu-tool gen-vm --bake --xml qemu/stacks/rocm-golden.xml \
-    --ssh-key-file ./image-key/id_rsa.pub                   # bake it from the cloud image
+qemu-tool gen-vm --bake --xml qemu/stacks/rocm-golden.xml   # bake it from the cloud image
 qemu-tool publish-qcow --xml qemu/stacks/rocm-golden.xml \
-    --tag "$(date +%Y%m%d).g$(git rev-parse --short=7 HEAD)" \
-    --key ./image-key/id_rsa --dry-run
+    --tag "$(date +%Y%m%d).g$(git rev-parse --short=7 HEAD)" --dry-run
 ```
 
-The keypair is published with the image, so generate one for it and never
-pass a personal key. The bake authorises `--ssh-key-file`, whose default is
-your own `~/.ssh/id_rsa.pub`, so it has to be given the public half of the
-key `publish-qcow` gets. `publish-qcow` checks: it takes `--key` from the
-command line only, never from a settings file, and refuses a key that is not
-the one `gen-vm` recorded baking in, or an image `gen-vm` pulled rather than
-baked. A bake leaves out the fleet's `<vm-extra-hostfwd>`, because it runs
+The keypair is published with the image, private half included, so neither
+command takes a key by default: the bake generates one for the image and
+`publish-qcow` publishes that one, saying which. A bake given
+`--ssh-key-file` (or a fleet file with `<vm-ssh-key-file>`) authorises that
+key instead, and `publish-qcow` then stops until `--key` names its private
+half; it never takes one from a settings file or from `~/.ssh`. The record
+it goes by is the one beside the image file, whatever `--vm-name` says, and
+a generated key is only ever taken from `<images>/keys/`, where it has to
+match the fingerprint the bake recorded. It also refuses a `--key` that is
+not the one `gen-vm` recorded baking in, a private key that is not its
+`.pub`'s other half, and an image `gen-vm` pulled rather than baked. A bake leaves out the fleet's `<vm-extra-hostfwd>`, because it runs
 QEMU on the host, where a forward whose port is taken stops it starting.
 
 ## Images Directory
@@ -757,7 +769,7 @@ takes every stack on the system.
 | `--username USER` | `ubuntu` | Guest username |
 | `--password PASS` | `password` | Guest password |
 | `--user-id UID` | `1000` | Guest UID |
-| `--ssh-key-file FILE` | `~/.ssh/id_rsa.pub` | SSH public key to inject |
+| `--ssh-key-file FILE` | a keypair generated for the image | SSH public key to inject instead |
 | `--packages FILE` | `packages.d/packages-default` | Package manifest or `none` |
 | `--force` | off | Force re-download of cloud image |
 | `--compact / --no-compact` | compact | Recompress the backing image after the bake |

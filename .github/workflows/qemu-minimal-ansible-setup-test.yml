@@ -149,6 +149,7 @@ jobs:
           --password password \
           --packages none \
           --size 8 \
+          --ssh-key-file "$HOME/.ssh/id_rsa.pub" \
           --ansible-playbook ansible/playbooks/vm-basic.yml
     - name: Boot VM as background task
       run: |

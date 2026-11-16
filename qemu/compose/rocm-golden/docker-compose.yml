@@ -4,7 +4,7 @@
 # Regenerate after changing qemu/stacks/rocm-golden.xml:
 #   qemu-tool gen-compose --xml qemu/stacks/rocm-golden.xml
 #
-# xml-sha256: 156020d70df1759c801de36451a1337d9848730e951b9509a7a3be32944e3944  # pre-commit: ignore
+# xml-sha256: efc0500b86cab67615665a94e635def40e7d10447c8ee9ccd9f9589456b500c9  # pre-commit: ignore
 
 x-logging: &logging
   driver: json-file

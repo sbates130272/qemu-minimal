@@ -22,7 +22,7 @@ import time
 from contextlib import ExitStack
 from pathlib import Path
 
-from .vm_artifact import VM_INFO_ARTIFACT_TYPE
+from .vm_artifact import VM_INFO_ARTIFACT_TYPE, VM_PUB_NAME
 from .caps import qemu_binary
 from .config import VMConfig
 from .identity import identity_args
@@ -68,6 +68,7 @@ def run(cfg: VMConfig) -> None:
         backing = images / f"{cfg.vm_name}-backing.qcow2"
         if not backing.exists():
             sys.exit(f"Error: --ansible-only requires an existing backing image at {backing}")
+        generated = _inherit_key(cfg, images / f"{cfg.vm_name}.json")
         _run_ansible(cfg, images, backing)
         _compact_backing(cfg, backing)
         overlay = images / f"{cfg.vm_name}.qcow2"
@@ -75,13 +76,15 @@ def run(cfg: VMConfig) -> None:
             backing.rename(overlay)
         else:
             _create_overlay(overlay, backing)
-        _write_vm_info(cfg, images)
+        _write_vm_info(cfg, images, generated)
         return
 
     if cfg.backing_image is not None:
         backing = _fetch_backing_image(cfg, images)
         _create_overlay(images / f"{cfg.vm_name}.qcow2", backing)
-        _fetch_backing_keypair(cfg, images)
+        pulled = _fetch_backing_keypair(cfg, images)
+        if cfg.ssh_key_file is None:
+            cfg.ssh_key_file = pulled
         _write_vm_info(cfg, images)
         return
 
@@ -90,6 +93,8 @@ def run(cfg: VMConfig) -> None:
             images / f"{cfg.vm_name}.qcow2",
             cfg.backing_file,
         )
+        for sidecar in image_sidecars(Path(cfg.backing_file)):
+            _inherit_key(cfg, sidecar)
         _write_vm_info(cfg, images)
         return
 
@@ -102,6 +107,9 @@ def run(cfg: VMConfig) -> None:
     # A marker left by an earlier pull under this name would label the bake
     # as a pulled image, which publish-qcow refuses.
     backing.with_suffix(".qcow2.image-ref").unlink(missing_ok=True)
+    # Nor may the record of an earlier bake outlive the image it described:
+    # publish-qcow would take a key from it that this image does not accept.
+    (images / f"{cfg.vm_name}.json").unlink(missing_ok=True)
     (images / cloud_img_file).rename(backing) if False else None
     subprocess.run(
         ["cp", str(images / cloud_img_file), str(backing)], check=True
@@ -110,9 +118,7 @@ def run(cfg: VMConfig) -> None:
         ["qemu-img", "resize", str(backing), f"{cfg.size}G"], check=True
     )
 
-    ssh_key = Path(cfg.ssh_key_file).expanduser()
-    if not ssh_key.exists():
-        sys.exit(f"Error: SSH key file {ssh_key} does not exist!")
+    ssh_key, generated = image_key(cfg, images)
 
     packages = _load_packages(cfg)
 
@@ -136,14 +142,107 @@ def run(cfg: VMConfig) -> None:
         backing.rename(overlay)
     else:
         _create_overlay(overlay, backing)
-    _write_vm_info(cfg, images)
+    _write_vm_info(cfg, images, generated)
+
+
+# ---------------------------------------------------------------------------
+# The image's SSH key
+# ---------------------------------------------------------------------------
+
+def generated_key_path(images: Path, vm_name: str) -> Path:
+    """Private half of the keypair gen-vm generates for *vm_name*'s image.
+
+    <images>/keys/ is where a pulled image's keypair goes too, and where
+    inspect looks for a guest's key.
+    """
+    return images / "keys" / f"{vm_name}_id_rsa"
+
+
+def image_key(cfg: VMConfig, images: Path) -> tuple[Path, bool]:
+    """(public key a bake authorises, whether gen-vm generated it).
+
+    A key somebody named is used as it is. Otherwise a keypair is generated
+    for this image, replacing the one an earlier bake under the same name
+    left: that bake's image has just been overwritten, so its key opens
+    nothing any more. A named key removes that earlier pair for the same
+    reason. cfg.ssh_key_file is set either way, which is what the Ansible
+    run and the sidecar read.
+    """
+    # Resolved, so that the path the sidecar records means the same thing
+    # from whatever directory publish-qcow is later run in.
+    private = generated_key_path(images.resolve(), cfg.vm_name)
+    made = (private, private.with_name(private.name + ".pub"))
+    if cfg.ssh_key_file is not None:
+        public = Path(cfg.ssh_key_file).expanduser()
+        if not public.exists():
+            sys.exit(f"Error: SSH key file {public} does not exist!")
+        if public.resolve() != made[1]:
+            for stale in made:
+                stale.unlink(missing_ok=True)
+        cfg.ssh_key_file = public
+        return public, False
+
+    public = made[1]
+    private.parent.mkdir(parents=True, exist_ok=True)
+    for stale in made:
+        stale.unlink(missing_ok=True)
+    try:
+        subprocess.run(
+            ["ssh-keygen", "-q", "-t", "rsa", "-N", "",
+             "-C", f"qemu-tool {cfg.vm_name}", "-f", str(private)],
+            check=True, stdin=subprocess.DEVNULL,
+        )
+    except FileNotFoundError:
+        sys.exit("Error: gen-vm needs 'ssh-keygen' to generate the image's "
+                 "key; install it, or name a key with --ssh-key-file.")
+    private.chmod(0o600)
+    cfg.ssh_key_file = public
+    print(f"Generated an SSH key for this image: {private} "
+          f"('qemu-tool ssh {cfg.vm_name}' uses it)")
+    return public, True
+
+
+def image_sidecars(image: Path) -> list[Path]:
+    """Where gen-vm would have recorded the key of the qcow2 *image*."""
+    stem = image.name.removesuffix(".qcow2")
+    return [image.with_name(f"{name}.json")
+            for name in dict.fromkeys((stem.removesuffix("-backing"), stem))]
+
+
+def _fingerprint(public: Path) -> str | None:
+    """SHA256 fingerprint of *public*; None where it cannot be had."""
+    try:
+        out = subprocess.run(["ssh-keygen", "-lf", str(public)],
+                             capture_output=True, text=True)
+    except OSError:
+        return None
+    fields = out.stdout.split()
+    return fields[1] if out.returncode == 0 and len(fields) > 1 else None
+
+
+def _inherit_key(cfg: VMConfig, sidecar: Path) -> bool:
+    """Take the key *sidecar* records, unless one was named; True if generated.
+
+    For a guest that bakes nothing and so accepts whatever its image does.
+    """
+    if cfg.ssh_key_file is not None:
+        return False
+    try:
+        info = json.loads(sidecar.read_text())
+        recorded = info.get("ssh_key_file")
+    except (OSError, ValueError, AttributeError):
+        return False
+    if not recorded:
+        return False
+    cfg.ssh_key_file = Path(recorded)
+    return info.get("ssh_key_generated") is True
 
 
 # ---------------------------------------------------------------------------
 # VM info sidecar
 # ---------------------------------------------------------------------------
 
-def _write_vm_info(cfg: VMConfig, images: Path) -> None:
+def _write_vm_info(cfg: VMConfig, images: Path, generated: bool = False) -> None:
     """Write <vm-name>.json alongside the qcow2 for inspect to read.
 
     Records the username and SSH public key path *this gen-vm run was
@@ -156,9 +255,18 @@ def _write_vm_info(cfg: VMConfig, images: Path) -> None:
     authoritative over this file -- printing this as fact once sent a user into
     three password prompts on a fleet guest that only takes the fleet key.
     """
+    key = (Path(cfg.ssh_key_file).expanduser()
+           if cfg.ssh_key_file is not None else None)
     info = {
         "username": cfg.username,
-        "ssh_key_file": str(Path(cfg.ssh_key_file).expanduser()),
+        "ssh_key_file": str(key) if key is not None else None,
+        # The key itself, not only where it was: publish-qcow refuses a
+        # pair that has been replaced at that path since.
+        "ssh_key_fingerprint": _fingerprint(key) if key is not None else None,
+        # True only on the image this run baked with a key it made itself:
+        # it is what lets publish-qcow publish the key without being told
+        # which. An overlay records false, whatever its backing image says.
+        "ssh_key_generated": generated,
     }
     info_path = images / f"{cfg.vm_name}.json"
     info_path.write_text(json.dumps(info, indent=2) + "\n")
@@ -248,8 +356,10 @@ def _fetch_backing_image(cfg: VMConfig, images: Path) -> Path:
 _VM_INFO_TYPE = VM_INFO_ARTIFACT_TYPE
 
 
-def _fetch_backing_keypair(cfg: VMConfig, images: Path) -> None:
+def _fetch_backing_keypair(cfg: VMConfig, images: Path) -> Path | None:
     """Pull the guest keypair shipped as an ORAS referrer beside the qcow2.
+
+    Returns the public key, or None when there is no keypair to be had.
 
     The keypair is placed in <images>/keys/ so inspect._local_key_candidates
     finds it via the glob of img.parent/keys/ and qemu-tool ssh can connect
@@ -264,7 +374,7 @@ def _fetch_backing_keypair(cfg: VMConfig, images: Path) -> None:
         cached = sorted(keys_dir.glob("*.pub"))
         if cached:
             print(f"Guest keypair already at {keys_dir}")
-            return
+            return _pulled_public_key(keys_dir)
     keys_dir.mkdir(parents=True, exist_ok=True)
 
     if not _which("oras"):
@@ -272,7 +382,7 @@ def _fetch_backing_keypair(cfg: VMConfig, images: Path) -> None:
             "Note: 'oras' not on PATH — cannot fetch the guest keypair. "
             "qemu-tool ssh will prompt for a password."
         )
-        return
+        return None
 
     discovered = subprocess.run(
         ["oras", "discover", cfg.backing_image, "--format", "json"],
@@ -283,7 +393,7 @@ def _fetch_backing_keypair(cfg: VMConfig, images: Path) -> None:
             f"Note: oras discover failed on {cfg.backing_image}; "
             "qemu-tool ssh will prompt for a password."
         )
-        return
+        return None
 
     parsed = json.loads(discovered.stdout)
     referrers = parsed.get("referrers") or parsed.get("manifests", [])
@@ -294,7 +404,7 @@ def _fetch_backing_keypair(cfg: VMConfig, images: Path) -> None:
             f"Note: no {_VM_INFO_TYPE} referrer found on {cfg.backing_image}; "
             "qemu-tool ssh will prompt for a password."
         )
-        return
+        return None
 
     with tempfile.TemporaryDirectory(dir=images) as tmp:
         subprocess.run(["oras", "pull", hits[0], "-o", tmp], check=True)
@@ -306,7 +416,7 @@ def _fetch_backing_keypair(cfg: VMConfig, images: Path) -> None:
         if private_src is None:
             print("Note: keypair referrer had no private key file; "
                   "qemu-tool ssh will prompt for a password.")
-            return
+            return None
 
         stem = private_src.stem or private_src.name
         private = keys_dir / stem
@@ -326,6 +436,12 @@ def _fetch_backing_keypair(cfg: VMConfig, images: Path) -> None:
 
     ref_file.write_text(cfg.backing_image + "\n")
     print(f"Guest keypair ready: {keys_dir}")
+    return pub if pub.is_file() else None
+
+
+def _pulled_public_key(keys_dir: Path) -> Path | None:
+    pub = keys_dir / VM_PUB_NAME
+    return pub if pub.is_file() else None
 
 
 def _create_overlay(overlay: Path, backing: Path) -> None:
@@ -915,11 +1031,7 @@ def _run_ansible(cfg: VMConfig, images: Path, backing: Path) -> None:
         _restore_blocking_stdio()
         _ensure_jmespath()
 
-        id_args = _ssh_identity_args(cfg)
-        private_key_extra = (
-            ["-e", f"ansible_ssh_private_key_file={id_args[1]}"]
-            if id_args else []
-        )
+        private_key_extra = _key_extra_vars(cfg)
         ap_cmd = ["ansible-playbook", "-i", str(inventory), str(playbook),
                   "-e", f"ansible_host={vm_host}",
                   "-e", f"ansible_port={vm_port}",
@@ -964,7 +1076,35 @@ def _run_ansible(cfg: VMConfig, images: Path, backing: Path) -> None:
         raise
 
 
+def _key_extra_vars(cfg: VMConfig) -> list[str]:
+    """The ansible-playbook -e pairs that carry the image's key.
+
+    sbates130272.batesste.user_setup authorises a public key read from the
+    controller, by default ~/.ssh/id_rsa.pub. Left alone that puts the
+    caller's own key in an image baked with another, so it is pointed at
+    the key this bake authorised.
+    """
+    extra: list[str] = []
+    id_args = _ssh_identity_args(cfg)
+    if id_args:
+        extra += ["-e", f"ansible_ssh_private_key_file={id_args[1]}"]
+    if cfg.ssh_key_file is not None:
+        # abspath, not resolve: the private half sits beside the name the
+        # caller gave, not beside whatever that name links to.
+        public = Path(os.path.abspath(Path(cfg.ssh_key_file).expanduser()))
+        if public.suffix == ".pub":
+            extra += ["-e", f"user_setup_ssh_key_src_dir={public.parent}",
+                      "-e", f"user_setup_ssh_key_name={public.stem}"]
+        else:
+            print(f"Note: {public} does not end in .pub, so a playbook that "
+                  "runs user_setup cannot be pointed at it and authorises "
+                  "~/.ssh/id_rsa.pub as well.")
+    return extra
+
+
 def _ssh_identity_args(cfg: VMConfig) -> list[str]:
+    if cfg.ssh_key_file is None:
+        return []
     key_pub = Path(cfg.ssh_key_file).expanduser()
     # Strip .pub to get the private key; fall back to no -i if missing.
     private_key = key_pub.parent / key_pub.stem

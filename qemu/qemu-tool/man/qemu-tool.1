@@ -583,8 +583,27 @@ or version (e.g.\&
 .IR resolute ).
 .TP
 .BI \-\-ssh\-key\-file " FILE"
-Public SSH key to inject into the guest (default:
-.IR ~/.ssh/id_rsa.pub ).
+Public SSH key to inject into the guest, in place of the one gen\-vm
+generates. Default:
+.BR <vm\-ssh\-key\-file> .
+With neither, an image baked from the cloud image gets a keypair generated
+for it at
+.IR <images>/keys/<vm\-name>_id_rsa ,
+which gen\-vm prints and
+.B "qemu\-tool ssh"
+uses; baking again under the same name replaces it. Nothing is read from
+.I ~/.ssh
+unless it is named here or in the fleet file, and a playbook that runs the
+.B user_setup
+role is pointed at the image's key, not at
+.IR ~/.ssh/id_rsa.pub . An overlay made with
+.B \-\-backing\-file
+uses the key recorded for its backing image, and a guest on
+.B \-\-backing\-image
+the keypair pulled with it; neither generates one. Which key it is, its
+fingerprint, and whether gen\-vm generated it, are recorded in
+.IR <images>/<vm\-name>.json ;
+a bake deletes that record when it starts and writes it when it succeeds.
 .TP
 .BI \-\-username " NAME"
 Guest user account name (default:
@@ -659,10 +678,14 @@ and its
 since a bake runs QEMU on the host, where a forward whose port is taken stops
 it starting. Without this flag gen\-vm pulls the fleet file's
 .B <backing\-ref>
-and reads none of the bake elements. The image authorises
-.BR \-\-ssh\-key\-file ,
-which has to be the public half of the key given to
-.BR publish\-qcow . An explicit
+and reads none of the bake elements. The image authorises a keypair gen\-vm
+generates for it, which
+.B publish\-qcow
+then publishes without being told which; with
+.B \-\-ssh\-key\-file
+it authorises that key instead, and
+.B publish\-qcow
+has to be given its private half. An explicit
 flag still outranks an element. Cannot be combined with
 .BR \-\-backing\-image ,
 .B \-\-backing\-file
@@ -1540,15 +1563,28 @@ to the first.
 .BI \-\-key " FILE"
 Private key the guest authorises;
 .IB FILE .pub
-must sit beside it. The keypair is published, so generate one for the image
-and never pass a personal key. Required: it is never taken from a settings
-file, not even from
-.BR <vm\-ssh\-key\-file> ,
-which is a fleet's own login key. Refused when it is not the key
+must sit beside it. The keypair is published, so never pass a personal key.
+Default: the keypair
 .B gen\-vm
-recorded baking into the image; bake with
-.B \-\-ssh\-key\-file
-.IB FILE .pub\fR.
+generated for the image, on the say of the record
+.B gen\-vm
+wrote beside it, and which key that is gets printed. The record is found
+from the image file's name, not from
+.BR \-\-vm\-name ,
+and is believed only about
+.IR <images>/keys/ :
+the pair there must be regular files, the private key the public key's
+other half, and the public key the one whose fingerprint the bake recorded. Only a generated key is taken that way:
+an image baked with a key somebody named, or one with no record, stops with
+a message asking for this flag. The key is never taken from a settings file,
+not even from
+.BR <vm\-ssh\-key\-file> ,
+which is a fleet's own login key, and never from
+.IR ~/.ssh .
+Refused when it is not the key
+.B gen\-vm
+recorded baking into the image, or not the other half of
+.IB FILE .pub .
 .TP
 .BI \-\-vm\-name " NAME"
 Names the qcow2 inside the artifact. Default with
@@ -2144,16 +2180,22 @@ into the generated YAML rather than read from the settings layers at run
 time.
 .PP
 Bake the guest image the default fleet describes, then publish it. The key
-is published with the image, so it is one generated for it, and the bake is
-told to authorise it:
+is published with the image, so gen\-vm generates one for it and
+publish\-qcow publishes that one:
 .PP
 .RS
 .EX
-ssh\-keygen \-t rsa \-N "" \-f ./image\-key/id_rsa
-qemu\-tool gen\-vm \-\-bake \-\-xml qemu/stacks/rocm\-golden.xml \\
-    \-\-ssh\-key\-file ./image\-key/id_rsa.pub
+qemu\-tool gen\-vm \-\-bake \-\-xml qemu/stacks/rocm\-golden.xml
 qemu\-tool publish\-qcow \-\-xml qemu/stacks/rocm\-golden.xml \\
-    \-\-tag 20261116.gabc1234 \-\-key ./image\-key/id_rsa \-\-dry\-run
+    \-\-tag 20261116.gabc1234 \-\-dry\-run
+.EE
+.RE
+.PP
+Create a guest that authorises your own key rather than a generated one:
+.PP
+.RS
+.EX
+qemu\-tool gen\-vm \-\-vm\-name myvm \-\-ssh\-key\-file ~/.ssh/id_rsa.pub
 .EE
 .RE
 .PP

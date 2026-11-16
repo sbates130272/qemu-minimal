@@ -61,7 +61,12 @@ env:
   # needs read and write on that repository.
   ORAS_VERSION: 1.3.6
   ORAS_SHA256: 66fb0ad7206f3f6fa77ed5b552049d364ccf4b50b1684554f731f76302b52ca0  # pre-commit: ignore
+  # The key gen-vm generates for the image it bakes, which is the one
+  # published with it. Named here because plain ssh does not look there.
+  GUEST_KEY: /var/lib/qemu-tool/images/keys/rocm-golden_id_rsa
   SSH_OPTS: >-
+    -i /var/lib/qemu-tool/images/keys/rocm-golden_id_rsa
+    -o IdentitiesOnly=yes
     -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no
     -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10
     -o ServerAliveInterval=15 -o ServerAliveCountMax=4
@@ -83,9 +88,9 @@ jobs:
     - name: Check out code
       uses: actions/checkout@v4.3.1
 
-    # The key setup-vm-job generates here is the one the guest authorises and
-    # the one that is published with it. It exists for this run only and is
-    # nobody's personal key.
+    # setup-vm-job generates a key in $HOME/.ssh. Nothing below uses it: the
+    # bake names no key, so gen-vm generates the image's own, and that is
+    # the one every step logs in with and the one that is published.
     - name: Set up VM job
       uses: ./.github/actions/setup-vm-job
       with:
@@ -147,7 +152,7 @@ jobs:
     # <backing-ref>. A plain run step, not qemu-tool-action: the action always
     # passes --release, which would outrank <bake-release>. Only --vm-name and
     # --images are passed, and both agree with the fleet file: the steps
-    # below find the image by them.
+    # below find the image, and the key gen-vm generates for it, by them.
     - name: Bake the guest
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -155,6 +160,7 @@ jobs:
         mkdir -p "$VM_IMAGES_DIR"
         qemu-tool gen-vm --bake --xml qemu/stacks/rocm-golden.xml \
           --vm-name "$VM_NAME" --images "$VM_IMAGES_DIR"
+        test -f "$GUEST_KEY"
 
     - name: Record the baked base
       run: |
@@ -303,6 +309,7 @@ jobs:
         ansible-playbook -i "qemu-1," ansible/playbooks/vm-rocm-golden.yml \
           --tags configure,firmware \
           -e "ansible_host=qemu-1" -e "ansible_port=2222" -e "ansible_user=ubuntu" \
+          -e "ansible_ssh_private_key_file=$GUEST_KEY" \
           -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"'
 
     - name: Verify the RDMA port is active
@@ -317,6 +324,7 @@ jobs:
         ansible-playbook -i "qemu-1," ansible/playbooks/vm-rocm-golden.yml \
           --tags test \
           -e "ansible_host=qemu-1" -e "ansible_port=2222" -e "ansible_user=ubuntu" \
+          -e "ansible_ssh_private_key_file=$GUEST_KEY" \
           -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"'
 
     # The guest has the Python sdxi-cli, whose `copy` is the polled ioctl
@@ -372,13 +380,13 @@ jobs:
         tag="$(date -u +%Y%m%d).g$(printf '%s' "$GITHUB_SHA" | cut -c1-7)"
         # The repository, name, flavour, account, release and playbook are
         # the default fleet's <publish-*> and <bake-*> elements. --image is
-        # the file the step above checked, and --key the job's own keypair:
-        # the fleet file names no key, so there is none to pick up by default.
+        # the file the step above checked. No --key: the bake named none, so
+        # gen-vm generated the image's and recorded it beside the image,
+        # which is the only key publish-qcow publishes without being told.
         qemu-tool publish-qcow \
           --xml qemu/stacks/rocm-golden.xml \
           --image "$VM_IMAGES_DIR/${VM_NAME}-backing.qcow2" \
           --tag "$tag" --tag latest \
-          --key "$HOME/.ssh/id_rsa" \
           --guest-stamp guest-stamp.json \
           --commit "$GITHUB_SHA" \
           --source "$SOURCE_URL" \

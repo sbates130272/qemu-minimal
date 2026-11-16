@@ -9,7 +9,9 @@ where qemu-img, zstd or ssh-keygen is missing.
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import json
 import shutil
 import subprocess
@@ -168,32 +170,21 @@ class Resolve(unittest.TestCase):
         (home / ".ssh" / "id_rsa").write_text("private")
         (home / ".ssh" / "id_rsa.pub").write_text("public")
         with mock.patch.dict("os.environ", {"HOME": str(home)}):
-            with self.assertRaises(SystemExit) as caught:
-                self._resolved("--xml", self.fleet(_PUBLISHED))
-        message = str(caught.exception)
-        self.assertIn("--key", message)
-        self.assertIn("<vm-ssh-key-file>", message)
-        self.assertNotIn("--ref", message)
+            args = self._resolved("--xml", self.fleet(_PUBLISHED))
+        self.assertIsNone(args.key)
 
     def test_the_shipped_fleet_names_no_key(self):
-        with self.assertRaises(SystemExit) as caught:
-            self._resolved(
-                "--xml", str(REPO / "qemu" / "stacks" / "rocm-golden.xml"))
-        message = str(caught.exception)
-        self.assertIn("--key", message)
-        self.assertNotIn("--ref", message)
-        self.assertNotIn("--image,", message)
+        args = self._resolved(
+            "--xml", str(REPO / "qemu" / "stacks" / "rocm-golden.xml"))
+        self.assertIsNone(args.key)
 
     def test_a_layer_that_names_a_key_does_not_supply_one(self):
         """<vm-ssh-key-file> is a fleet's own login key, usually a personal
         one, and --key is published."""
-        with self.assertRaises(SystemExit) as caught:
-            self._resolved("--xml", self.fleet(
-                _PUBLISHED
-                + "<vm-ssh-key-file>/keys/image_rsa.pub</vm-ssh-key-file>"))
-        message = str(caught.exception)
-        self.assertIn("--key", message)
-        self.assertNotIn("--ref", message)
+        args = self._resolved("--xml", self.fleet(
+            _PUBLISHED
+            + "<vm-ssh-key-file>/keys/image_rsa.pub</vm-ssh-key-file>"))
+        self.assertIsNone(args.key)
 
     def test_the_fleets_own_login_is_never_published(self):
         args = self._resolved(
@@ -282,11 +273,15 @@ class DryRun(unittest.TestCase):
         """What qemu-minimal-publish-qcow-rocm-golden.yml runs, as a dry run."""
         base = self.tmp / "rocm-golden-backing.qcow2"
         (self.tmp / "base.qcow2").rename(base)
+        self._generated(name="rocm-golden")
+        workflow = (REPO / ".github" / "workflows"
+                    / "qemu-minimal-publish-qcow-rocm-golden.yml").read_text()
+        self.assertNotIn("--key ", workflow)
+        self.assertNotIn("--ssh-key-file", workflow)
         args = _parse(
             "--xml", str(REPO / "qemu" / "stacks" / "rocm-golden.xml"),
             "--image", str(base),
             "--tag", "20261116.gabc1234", "--tag", "latest",
-            "--key", str(self.tmp / "id_rsa"),
             "--guest-stamp", str(self.tmp / "stamp.json"),
             "--commit", "abc1234",
             "--source", "https://github.com/sbates130272/qemu-minimal",
@@ -304,9 +299,21 @@ class DryRun(unittest.TestCase):
             ("rocm-golden", "rocm-golden", "ubuntu", "password", "resolute",
              "ansible/playbooks/vm-rocm-golden.yml"))
 
-    def _sidecar(self, key_file: Path) -> None:
-        (self.tmp / "rocm-golden.json").write_text(
-            json.dumps({"username": "ubuntu", "ssh_key_file": str(key_file)}))
+    def _sidecar(self, key_file: Path, **more) -> None:
+        """The record of base.qcow2, which is found from the image's name."""
+        (self.tmp / "base.json").write_text(json.dumps(
+            {"username": "ubuntu", "ssh_key_file": str(key_file), **more}))
+
+    def _keygen(self, name: str) -> Path:
+        subprocess.run(["ssh-keygen", "-q", "-t", "rsa", "-b", "2048", "-N", "",
+                        "-f", str(self.tmp / name)], check=True)
+        return self.tmp / name
+
+    def _refused(self, args) -> str:
+        with self.assertRaises(SystemExit) as caught:
+            publish_qcow.run(args)
+        self.assertFalse((self.tmp / "out").exists())
+        return str(caught.exception)
 
     def test_the_key_the_bake_authorised_is_accepted(self):
         self._sidecar(self.tmp / "id_rsa.pub")
@@ -326,6 +333,191 @@ class DryRun(unittest.TestCase):
     def test_a_sidecar_naming_a_vanished_key_is_not_a_refusal(self):
         self._sidecar(self.tmp / "gone.pub")
         self._dry_run()
+
+    def _no_key(self, *extra: str):
+        argv = ["publish-qcow", "--image", str(self.tmp / "base.qcow2"),
+                "--ref", "ghcr.io/example/rocm-golden", "--tag", "t1",
+                "--vm-name", "rocm-golden", "--dry-run",
+                "--keep", str(self.tmp / "out"), *extra]
+        return cli._build_parser().parse_args(argv)
+
+    def _generated(self, generated=True, name: str = "base") -> Path:
+        """A sidecar as gen-vm writes it, with the key under <images>/keys/."""
+        keys = self.tmp / "keys"
+        keys.mkdir(exist_ok=True)
+        private = gen_vm.generated_key_path(self.tmp, name)
+        for suffix in ("", ".pub"):
+            shutil.copyfile(self.tmp / f"id_rsa{suffix}",
+                            f"{private}{suffix}")
+        private.chmod(0o600)
+        (self.tmp / f"{name}.json").write_text(json.dumps({
+            "username": "ubuntu", "ssh_key_file": f"{private}.pub",
+            "ssh_key_fingerprint": publish_qcow.key_fingerprint(
+                Path(f"{private}.pub")),
+            "ssh_key_generated": generated}))
+        return private
+
+    def _edit_sidecar(self, **changes) -> None:
+        path = self.tmp / "base.json"
+        path.write_text(json.dumps({**json.loads(path.read_text()), **changes}))
+
+    def test_with_no_key_flag_the_generated_key_is_published(self):
+        private = self._generated()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            publish_qcow.run(self._no_key())
+        self.assertIn(
+            f"Publishing the key gen-vm generated for this image: {private}",
+            out.getvalue())
+        info = json.loads((self.tmp / "out" / "vm-info.json").read_text())
+        self.assertEqual(info["ssh_keys"]["fingerprint"],
+                         publish_qcow.key_fingerprint(Path(f"{private}.pub")))
+
+    def test_with_no_key_flag_a_key_somebody_named_is_refused(self):
+        self._generated(generated=False)
+        with self.assertRaises(SystemExit) as caught:
+            publish_qcow.run(self._no_key())
+        message = str(caught.exception)
+        self.assertIn("--key", message)
+        self.assertIn("PUBLISHED", message)
+        self.assertFalse((self.tmp / "out").exists())
+
+    def test_with_no_key_flag_an_unmarked_record_is_refused(self):
+        """A sidecar from before gen-vm recorded who made the key."""
+        self._sidecar(self.tmp / "id_rsa.pub")
+        with self.assertRaises(SystemExit) as caught:
+            publish_qcow.run(self._no_key())
+        self.assertIn("--key", str(caught.exception))
+
+    def test_with_no_key_flag_and_no_record_a_personal_key_is_not_used(self):
+        home = self.tmp / "home"
+        (home / ".ssh").mkdir(parents=True)
+        for suffix in ("", ".pub"):
+            shutil.copyfile(self.tmp / f"id_rsa{suffix}",
+                            home / ".ssh" / f"id_rsa{suffix}")
+        with mock.patch.dict("os.environ", {"HOME": str(home)}):
+            with self.assertRaises(SystemExit) as caught:
+                publish_qcow.run(self._no_key())
+        message = str(caught.exception)
+        self.assertIn("--key", message)
+        self.assertIn("PUBLISHED", message)
+        self.assertNotIn(str(home), message)
+        self.assertFalse((self.tmp / "out").exists())
+
+    def test_the_key_flag_beats_the_generated_key_and_must_match_it(self):
+        self._generated()
+        self._dry_run()
+        subprocess.run(["ssh-keygen", "-q", "-t", "rsa", "-b", "2048", "-N", "",
+                        "-f", str(self.tmp / "other")], check=True)
+        with self.assertRaises(SystemExit) as caught:
+            publish_qcow.run(self._no_key("--key", str(self.tmp / "other")))
+        self.assertIn("is not the key this image authorises",
+                      str(caught.exception))
+
+    def test_the_generated_flag_must_be_the_json_true(self):
+        self._generated()
+        for value in ("true", "false", 1, [True], None):
+            with self.subTest(value=value):
+                self._edit_sidecar(ssh_key_generated=value)
+                self.assertIn("--key", self._refused(self._no_key()))
+
+    def test_a_record_cannot_point_the_generated_key_somewhere_else(self):
+        """A sidecar saying generated is believed about <images>/keys/ only."""
+        self._generated()
+        decoy = self._keygen("decoy")
+        self._edit_sidecar(
+            ssh_key_file=f"{decoy}.pub",
+            ssh_key_fingerprint=publish_qcow.key_fingerprint(
+                Path(f"{decoy}.pub")))
+        message = self._refused(self._no_key())
+        self.assertIn(f"{decoy}.pub", message)
+        self.assertIn("--key", message)
+
+    def test_a_generated_key_that_is_a_symlink_is_refused(self):
+        private = self._generated()
+        decoy = self._keygen("decoy")
+        for suffix in ("", ".pub"):
+            Path(f"{private}{suffix}").unlink()
+            Path(f"{private}{suffix}").symlink_to(f"{decoy}{suffix}")
+        self._edit_sidecar(ssh_key_fingerprint=publish_qcow.key_fingerprint(
+            Path(f"{decoy}.pub")))
+        self.assertIn("symbolic link", self._refused(self._no_key()))
+
+    def test_a_keys_directory_that_is_a_symlink_is_refused(self):
+        self._generated()
+        (self.tmp / "keys").rename(self.tmp / "elsewhere")
+        (self.tmp / "keys").symlink_to(self.tmp / "elsewhere")
+        self.assertIn("symbolic link", self._refused(self._no_key()))
+
+    def test_a_generated_pair_replaced_after_the_bake_is_refused(self):
+        private = self._generated()
+        decoy = self._keygen("decoy")
+        for suffix in ("", ".pub"):
+            shutil.copyfile(f"{decoy}{suffix}", f"{private}{suffix}")
+        self.assertIn("not the key that was baked in",
+                      self._refused(self._no_key()))
+
+    def test_a_generated_record_with_no_fingerprint_is_refused(self):
+        self._generated()
+        self._edit_sidecar(ssh_key_fingerprint=None)
+        self.assertIn("no fingerprint", self._refused(self._no_key()))
+
+    def test_a_private_half_from_another_pair_is_refused(self):
+        private = self._generated()
+        shutil.copyfile(self._keygen("decoy"), private)
+        self.assertIn("is not the private half",
+                      self._refused(self._no_key()))
+
+    def test_a_named_private_key_must_match_its_public_half(self):
+        shutil.copyfile(self._keygen("decoy"), self.tmp / "id_rsa")
+        self.assertIn("is not the private half", self._refused(
+            _args(self.tmp, "--dry-run", "--keep", str(self.tmp / "out"))))
+
+    def test_a_named_key_is_checked_against_the_recorded_fingerprint(self):
+        """Not against whatever sits at the recorded path by now."""
+        other = self._keygen("other")
+        self._sidecar(
+            self.tmp / "id_rsa.pub",
+            ssh_key_fingerprint=publish_qcow.key_fingerprint(
+                Path(f"{other}.pub")))
+        self.assertIn("is not the key this image authorises", self._refused(
+            _args(self.tmp, "--dry-run", "--keep", str(self.tmp / "out"))))
+
+    def test_the_record_is_the_images_not_the_published_names(self):
+        """--vm-name names the artifact; it does not pick whose key ships."""
+        self._generated(name="gen1")
+        named = self._keygen("named")
+        self._sidecar(Path(f"{named}.pub"), ssh_key_generated=False)
+        message = self._refused(self._no_key("--vm-name", "gen1"))
+        self.assertIn("base.json", message)
+        self.assertNotIn("gen1", message)
+        (self.tmp / "base.json").unlink()
+        self.assertIn("base.json",
+                      self._refused(self._no_key("--vm-name", "gen1")))
+
+    def test_a_backing_image_is_described_by_its_guests_record(self):
+        (self.tmp / "base.qcow2").rename(self.tmp / "vm9-backing.qcow2")
+        private = self._generated(name="vm9")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            publish_qcow.run(self._no_key(
+                "--image", str(self.tmp / "vm9-backing.qcow2")))
+        self.assertIn(str(private), out.getvalue())
+
+    def test_an_overlay_is_refused_before_its_key_is_asked_for(self):
+        self._generated()
+        (self.tmp / "base.qcow2").rename(self.tmp / "real.qcow2")
+        subprocess.run(
+            ["qemu-img", "create", "-q", "-f", "qcow2", "-F", "qcow2",
+             "-b", str(self.tmp / "real.qcow2"),
+             str(self.tmp / "base.qcow2")], check=True)
+        self.assertIn("overlay", self._refused(self._no_key()))
+
+    def test_a_pulled_image_is_refused_before_its_key_is_asked_for(self):
+        (self.tmp / "base.qcow2.image-ref").write_text("docker.io/x/guest:1\n")
+        with self.assertRaises(SystemExit) as caught:
+            publish_qcow.run(self._no_key())
+        self.assertIn("docker.io/x/guest:1", str(caught.exception))
 
     def test_an_image_gen_vm_pulled_is_refused(self):
         (self.tmp / "base.qcow2.image-ref").write_text("docker.io/x/guest:1\n")

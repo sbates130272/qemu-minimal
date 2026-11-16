@@ -73,6 +73,7 @@ jobs:
           --username ubuntu \
           --password password \
           --packages none \
+          --ssh-key-file "$HOME/.ssh/id_rsa.pub" \
           --size 8
     - name: Test --restore-image mode
       run: |
@@ -198,8 +199,6 @@ jobs:
           qemu-system-arm qemu-utils cloud-image-utils python3-pip
     - name: Install qemu-tool
       run: pip install --break-system-packages -e ./qemu
-    - name: Generate SSH key-pair
-      run: mkdir -p "$HOME/.ssh" && ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
     - name: Ensure images directory exists
       run: sudo mkdir -p /var/lib/qemu-tool/images && sudo chmod 777 /var/lib/qemu-tool/images
     - name: Cache cloud image
@@ -242,8 +241,6 @@ jobs:
           qemu-system-misc qemu-utils u-boot-qemu cloud-image-utils python3-pip
     - name: Install qemu-tool
       run: pip install --break-system-packages -e ./qemu
-    - name: Generate SSH key-pair
-      run: mkdir -p "$HOME/.ssh" && ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
     - name: Ensure images directory exists
       run: sudo mkdir -p /var/lib/qemu-tool/images && sudo chmod 777 /var/lib/qemu-tool/images
     - name: Cache cloud image

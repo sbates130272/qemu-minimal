@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import shutil
 import sys
 from dataclasses import fields
 from pathlib import Path
@@ -111,11 +112,18 @@ def _split_compose_argv(argv: list[str] | None) -> list[str]:
 # Parser construction
 # ---------------------------------------------------------------------------
 
+_HELP_WIDTH = 80
+
+
 class _HelpFormatter(argparse.HelpFormatter):
     """Wrapped prose that keeps its paragraphs, and examples left as typed."""
 
     def __init__(self, prog: str, **kwargs: Any) -> None:
         kwargs.setdefault("max_help_position", 30)
+        # 80 at most, whatever the terminal: help gets pasted into issues and
+        # docs, and argparse otherwise fills a wide window edge to edge.
+        kwargs.setdefault(
+            "width", min(shutil.get_terminal_size().columns - 2, _HELP_WIDTH))
         super().__init__(prog, **kwargs)
 
     def _fill_text(self, text: str, width: int, indent: str) -> str:
@@ -292,7 +300,8 @@ def _add_quick_start(sub: argparse._SubParsersAction) -> None:
             "qemu-tool quick-start preflight        # check this host, touch nothing",
             "qemu-tool quick-start                  # pull, boot, configure, test",
             "qemu-tool quick-start --flavor helios up",
-            "qemu-tool quick-start --xml qemu/stacks/rocm-golden.xml --xml my-overlay.xml up",
+            "qemu-tool quick-start --xml qemu/stacks/rocm-golden.xml \\",
+            "    --xml my-overlay.xml up",
             "qemu-tool quick-start logs -f",
             "qemu-tool quick-start down",
         ),
@@ -474,11 +483,12 @@ def _add_gen_vm(
             "qemu-tool gen-vm --vm-name myvm --backing-image REPO:TAG",
             "qemu-tool gen-vm --xml qemu/stacks/rocm-golden.xml --vm-name rocm-golden-1",
             "",
-            "# Bake the image the default fleet publishes, from its <bake-*> elements.",
-            "# The key it authorises is the one publish-qcow must be given:",
-            "ssh-keygen -t rsa -N '' -f ./image-key/id_rsa",
-            "qemu-tool gen-vm --bake --xml qemu/stacks/rocm-golden.xml \\",
-            "    --ssh-key-file ./image-key/id_rsa.pub",
+            "# Bake the image the default fleet publishes, from its <bake-*>",
+            "# elements. gen-vm generates the image's SSH key and says where:",
+            "qemu-tool gen-vm --bake --xml qemu/stacks/rocm-golden.xml",
+            "",
+            "# Authorise a key of your own instead of a generated one:",
+            "qemu-tool gen-vm --vm-name myvm --ssh-key-file ~/.ssh/id_rsa.pub",
         ),
     )
 
@@ -551,7 +561,12 @@ def _add_gen_vm(
     )
     g.add_argument(
         "--ssh-key-file", type=Path, default=_UNSET, metavar="FILE",
-        help="Public key the login authorises (default: ~/.ssh/id_rsa.pub).",
+        help=(
+            "Public key the login authorises, in place of the keypair "
+            "gen-vm generates for an image it bakes (kept under "
+            "<images>/keys/, and what 'qemu-tool ssh' uses). Default: "
+            "<vm-ssh-key-file>; never a key from ~/.ssh unless named."
+        ),
     )
 
     g = p.add_argument_group("provisioning")
@@ -1110,13 +1125,17 @@ def _add_publish_qcow(sub: argparse._SubParsersAction) -> None:
             "published; it must not be an overlay."
         ),
         epilog=_examples(
-            "# Publish what 'gen-vm --bake --xml qemu/stacks/rocm-golden.xml' baked.",
-            "# The keypair is published too: it is the one generated for the",
-            "# image and given to that bake as --ssh-key-file ./image-key/id_rsa.pub.",
+            "# Publish what 'gen-vm --bake --xml qemu/stacks/rocm-golden.xml'",
+            "# baked, with the keypair gen-vm generated for that image:",
+            "qemu-tool publish-qcow --xml qemu/stacks/rocm-golden.xml \\",
+            "    --tag 20261116.gabc1234 --dry-run",
+            "",
+            "# An image baked with a key you named: name its private half,",
+            "# which is published too.",
             "qemu-tool publish-qcow --xml qemu/stacks/rocm-golden.xml \\",
             "    --tag 20261116.gabc1234 --key ./image-key/id_rsa --dry-run",
             "",
-            "# The same with nothing read from a file:",
+            "# With nothing read from a file:",
             "qemu-tool publish-qcow --image images/rocm-golden-backing.qcow2 \\",
             "    --ref docker.io/me/my-guest --tag v1 --vm-name rocm-golden \\",
             "    --key ./image-key/id_rsa",
@@ -1143,10 +1162,13 @@ def _add_publish_qcow(sub: argparse._SubParsersAction) -> None:
                    help="Tag to push. Repeatable; the referrer attaches to the first.")
     g.add_argument("--key", type=Path, default=None, metavar="FILE",
                    help="Private key the guest authorises; FILE.pub must sit "
-                        "beside it. It is PUBLISHED, so generate one for the "
-                        "image and never pass a personal key. Required: it "
-                        "is never taken from a settings file. Refused when "
-                        "it is not the key gen-vm baked into the image.")
+                        "beside it. It is PUBLISHED, so never pass a personal "
+                        "key. Default: the keypair gen-vm generated for the "
+                        "image, and only that; an image baked with a key "
+                        "somebody named needs this flag. Never taken from a "
+                        "settings file or from ~/.ssh. Refused when it is "
+                        "not the key gen-vm baked into the image, or not "
+                        "FILE.pub's other half.")
 
     g = p.add_argument_group("recorded in vm-info.json")
     g.add_argument("--vm-name", default=None, metavar="NAME",

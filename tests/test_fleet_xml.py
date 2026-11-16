@@ -276,6 +276,17 @@ class Strict(unittest.TestCase):
         self.assertIn("unknown element <vm-vcpu>", message)
         self.assertIn("did you mean <vm-vcpus>?", message)
 
+    def test_there_is_no_element_naming_a_key_to_publish(self) -> None:
+        """publish-qcow takes the key gen-vm generated, or --key."""
+        self.assertEqual(
+            [s.tag for s in fleet_xml._SETTINGS if "key" in s.tag],
+            ["vm-ssh-key-file"])
+        self.assertEqual(
+            [f for f in vars(FleetConfig()) if "key" in f],
+            ["vm_ssh_key_file"])
+        self.assertIn("unknown element <publish-private-key>", self._error(
+            "<publish-private-key>/k/id_rsa</publish-private-key>"))
+
     def test_an_unknown_element_with_nothing_close_makes_no_guess(self) -> None:
         message = self._error("<zzzzzz>4</zzzzzz>")
         self.assertIn("unknown element <zzzzzz>", message)

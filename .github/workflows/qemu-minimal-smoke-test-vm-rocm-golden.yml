@@ -108,6 +108,7 @@ jobs:
           --username ubuntu \
           --password password \
           --packages none \
+          --ssh-key-file "$HOME/.ssh/id_rsa.pub" \
           --size 8
 
     - name: Generate VM 2 from shared backing file

@@ -146,7 +146,9 @@ class VMConfig:
     # ---- gen-vm ----
     size: int = 64
     release: str = "resolute"
-    ssh_key_file: Path = field(default_factory=lambda: Path("~/.ssh/id_rsa.pub"))
+    # None: gen-vm generates a keypair for the image it bakes. Never a path
+    # under ~/.ssh by default -- an image's key can end up published.
+    ssh_key_file: Path | None = None
     username: str = "ubuntu"
     user_id: int = 1000
     password: str = "password"
