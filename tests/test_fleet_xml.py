@@ -35,7 +35,8 @@ from qemu_tool.fleet_xml import FleetConfig, FleetXml  # noqa: E402
 
 
 _BAKE_FIELDS = (
-    "bake_name", "bake_release", "bake_size", "bake_vcpus", "bake_packages",
+    "bake_name", "bake_release", "bake_size", "bake_vcpus", "bake_vmem",
+    "bake_packages",
     "bake_playbook", "bake_username", "bake_password", "bake_ssh_port",
     "publish_ref", "publish_flavour",
 )
@@ -97,6 +98,7 @@ class ParseDefault(unittest.TestCase):
         self.assertEqual(self.cfg.bake_release, "resolute")
         self.assertEqual(self.cfg.bake_size, 64)
         self.assertEqual(self.cfg.bake_vcpus, 4)
+        self.assertEqual(self.cfg.bake_vmem, 4096)
         self.assertEqual(self.cfg.bake_username, "ubuntu")
         self.assertEqual(self.cfg.bake_password, "password")
         self.assertEqual(self.cfg.bake_ssh_port, "auto")

@@ -127,6 +127,7 @@ class FleetConfig:
     bake_release: str = ""
     bake_size: int = 0
     bake_vcpus: int = 0
+    bake_vmem: int = 0         # MiB
     # A manifest path, or "none".
     bake_packages: str = ""
     bake_playbook: str = ""
@@ -242,6 +243,7 @@ _SETTINGS: tuple[_Setting, ...] = (
     _Setting("bake-release", "bake_release", _STR, sparse=True),
     _Setting("bake-size", "bake_size", _INT, sparse=True),
     _Setting("bake-vcpus", "bake_vcpus", _INT, sparse=True),
+    _Setting("bake-vmem", "bake_vmem", _INT, sparse=True),
     _Setting("bake-packages", "bake_packages", _EXPAND, sparse=True),
     _Setting("bake-playbook", "bake_playbook", _EXPAND, sparse=True),
     _Setting("bake-username", "bake_username", _STR, sparse=True),

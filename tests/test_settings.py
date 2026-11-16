@@ -178,14 +178,15 @@ class BakeOverrides(unittest.TestCase):
     def test_every_bake_element_reaches_its_field(self):
         got = settings.bake_overrides(FleetConfig(
             bake_name="golden", bake_release="noble", bake_size=32,
-            bake_vcpus=6, bake_packages="p.txt", bake_playbook="~/play.yml",
-            bake_username="u", bake_password="p", vm_vcpus=2))
+            bake_vcpus=6, bake_vmem=9000, bake_packages="p.txt",
+            bake_playbook="~/play.yml",
+            bake_username="u", bake_password="p", vm_vcpus=2, vm_vmem=2048))
         self.assertEqual(
-            {k: got[k] for k in ("vm_name", "release", "size", "vcpus",
+            {k: got[k] for k in ("vm_name", "release", "size", "vcpus", "vmem",
                                  "packages", "ansible_playbook", "username",
                                  "password")},
             {"vm_name": "golden", "release": "noble", "size": 32, "vcpus": 6,
-             "packages": "p.txt",
+             "vmem": 9000, "packages": "p.txt",
              "ansible_playbook": Path.home() / "play.yml",
              "username": "u", "password": "p"})
         self.assertLessEqual(set(got), set(VMConfig.__dataclass_fields__))
@@ -203,7 +204,8 @@ class BakeOverrides(unittest.TestCase):
     def test_vm_overrides_reads_no_bake_element(self):
         full = FleetConfig(
             bake_name="golden", bake_release="noble", bake_size=32,
-            bake_vcpus=6, bake_packages="p.txt", bake_playbook="play.yml",
+            bake_vcpus=6, bake_vmem=9000, bake_packages="p.txt",
+            bake_playbook="play.yml",
             bake_username="u", bake_password="p", publish_ref="r",
             publish_flavour="f")
         self.assertEqual(

@@ -200,8 +200,9 @@ elements, or a guest you log in to with your own `~/.ssh/id_rsa`.
 
 - **`gen-vm --bake` and `publish-qcow --xml`.** `rocm-golden.xml` carries the
   rocm-golden image's bake and publish settings in new `<bake-name>`,
-  `<bake-release>`, `<bake-size>`, `<bake-vcpus>`, `<bake-packages>`,
-  `<bake-playbook>`, `<bake-username>`, `<bake-password>`, `<publish-ref>` and
+  `<bake-release>`, `<bake-size>`, `<bake-vcpus>`, `<bake-vmem>`,
+  `<bake-packages>`, `<bake-playbook>`, `<bake-username>`,
+  `<bake-password>`, `<publish-ref>` and
   `<publish-flavour>` elements. `gen-vm --bake --xml qemu/stacks/rocm-golden.xml`
   builds the image from the cloud image instead of pulling `<backing-ref>`,
   and `publish-qcow --xml` takes its ref, name and image path from the same
@@ -227,6 +228,13 @@ elements, or a guest you log in to with your own `~/.ssh/id_rsa`.
     directory. A missing one names the directory, and a missing manifest
     stops the bake before the cloud image is downloaded.
 
+
+- **`gen-vm --bake` refuses a bake short of memory.** The bake's module
+  builds run one compiler per vCPU, so under 1024 MiB per vCPU the guest's
+  OOM killer ends the amdgpu build a quarter of an hour in, with an error
+  that names dkms. The check names both numbers and what to change.
+  `<bake-vmem>` sets a bake's memory beside `<bake-vcpus>`; a bake used to
+  borrow the fleet guests' `<vm-vmem>`.
 - **`qemu-tool compose --stack NAME` reads the stack's own
   `qemu/stacks/NAME.xml`** when no `--xml` is given and no `fleet.xml` is on
   the search path, as `gen-compose` does, so the images directory and the

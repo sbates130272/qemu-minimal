@@ -97,6 +97,8 @@ def bake_overrides(fleet: FleetConfig) -> dict[str, Any]:
         out["size"] = fleet.bake_size
     if fleet.bake_vcpus:
         out["vcpus"] = fleet.bake_vcpus
+    if fleet.bake_vmem:
+        out["vmem"] = fleet.bake_vmem
     if fleet.bake_packages:
         out["packages"] = (
             None if fleet.bake_packages == "none"

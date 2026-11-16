@@ -98,6 +98,7 @@
   <bake-release>resolute</bake-release>
   <bake-size>64</bake-size>
   <bake-vcpus>4</bake-vcpus>
+  <bake-vmem>4096</bake-vmem>
   <bake-username>ubuntu</bake-username>
   <bake-password>password</bake-password>
   <bake-packages>qemu/packages.d/rocm-golden.txt</bake-packages>

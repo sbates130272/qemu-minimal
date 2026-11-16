@@ -1509,7 +1509,28 @@ def _gen_vm_cmd(args: argparse.Namespace) -> None:
                     "both be set: --bake builds the image from the cloud image."
                 )
     cfg = _build_config(args, subcommand="gen-vm")
+    if args.bake:
+        _check_bake_memory(cfg)
     gen_vm_run(cfg)
+
+
+# A bake's module builds run one compiler per vCPU and each takes a few
+# hundred MiB. Short of this the guest's OOM killer ends the build a quarter
+# of an hour in, with an error that names dkms, not memory.
+_BAKE_MIB_PER_VCPU = 1024
+
+
+def _check_bake_memory(cfg: VMConfig) -> None:
+    need = cfg.vcpus * _BAKE_MIB_PER_VCPU
+    if cfg.vmem >= need:
+        return
+    sys.exit(
+        f"Error: --bake with {cfg.vcpus} vCPUs and {cfg.vmem} MiB of memory: "
+        f"the builds run one compiler per vCPU and need about "
+        f"{_BAKE_MIB_PER_VCPU} MiB each.\n"
+        f"       Give it at least {need} MiB (--vmem or <bake-vmem>), or "
+        f"fewer vCPUs (--vcpus or <bake-vcpus>)."
+    )
 
 
 # ---------------------------------------------------------------------------

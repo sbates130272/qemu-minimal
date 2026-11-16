@@ -695,6 +695,7 @@ Bake the image from the cloud image using the fleet XML's
 .BR <bake\-release> ,
 .BR <bake\-size> ,
 .BR <bake\-vcpus> ,
+.BR <bake\-vmem> ,
 .BR <bake\-username> ,
 .BR <bake\-password> ,
 .BR <bake\-packages> ,
@@ -1986,8 +1987,11 @@ they do today.
 Name of the baked guest; the image is
 .IR <vm\-images\-dir>/<bake\-name>\-backing.qcow2 .
 .TP
-.BR <bake\-release> ", " <bake\-size> ", " <bake\-vcpus>
-Ubuntu release, disk size in GB and the vCPUs the bake runs with.
+.BR <bake\-release> ", " <bake\-size> ", " <bake\-vcpus> ", " <bake\-vmem>
+Ubuntu release, disk size in GB, and the vCPUs and memory in MiB the bake
+runs with. The bake's builds run one compiler per vCPU, so
+.B gen\-vm \-\-bake
+refuses less than 1024 MiB per vCPU.
 .TP
 .BR <bake\-packages> ", " <bake\-playbook>
 Package manifest path (or
