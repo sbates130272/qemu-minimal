@@ -113,9 +113,13 @@ jobs:
           exit 1
         fi
 
-    # A guest must never be ahead of the servers it talks to.
+    # A guest must never be ahead of the servers it talks to. The play-tag
+    # test parses the playbook, and this image's python3 has no PyYAML.
     - name: Check the guest pins against the server images
-      run: python3 tests/test_playbook_pins.py -v
+      run: |
+        python3 -c 'import yaml' 2>/dev/null ||
+          pip install --break-system-packages --quiet PyYAML
+        python3 tests/test_playbook_pins.py -v
 
     # The uncompressed qcow2 is about 10 GB and the compressed copy sits
     # beside it during the push.
