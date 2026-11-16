@@ -160,6 +160,36 @@ elements, or a guest you log in to with your own `~/.ssh/id_rsa`.
 
 ### Added
 
+- **`--ssh-port auto` on `gen-vm` and `run-vm`, and `<bake-ssh-port>` in the
+  fleet XML.** The tool no longer has to be told a free host port for the
+  guest's SSH forward: `auto` takes the first port from 2222 up (to 2321)
+  that can be bound on every address and on loopback, immediately before
+  QEMU starts, and prints it. A bake on a WSL2 host died with `Could not set
+  up host forwarding rule 'tcp::2222-:22'` because something on the Windows
+  side held 2222; nothing in WSL listened on it, but a bind fails, which is
+  what the probe does.
+  - `gen-vm` starts QEMU again on the next free port, up to five times, if
+    the probed one is taken before QEMU binds it. `run-vm` becomes QEMU and
+    cannot retry. Only a refusal of the SSH forward itself is retried: a
+    held `--extra-hostfwd` port stops the bake at once with QEMU's message,
+    since no other SSH port would free it. An SSH answer on the port does
+    not count as the guest if QEMU has exited by the time it arrives.
+  - The management NIC MAC is derived from the default port in auto mode,
+    not the chosen one, so every boot of an image presents the same MAC;
+    `--mac` still wins. The guest agent and QMP socket paths follow the
+    chosen port.
+  - `qemu-tool ssh`, `list` and `inspect` already read the port from the
+    running QEMU, so they find an auto port unaided.
+  - `<bake-ssh-port>` (a number or `auto`) is read by `gen-vm --bake` only
+    and loses to an `--ssh-port` flag. `rocm-golden.xml` sets it to `auto`,
+    so `qemu-tool gen-vm --bake --xml qemu/stacks/rocm-golden.xml` no longer
+    depends on 2222 being free.
+  - A number behaves exactly as before, failure message included, except
+    that `--ssh-port` now takes plain ASCII digits in 1-65535 only: `0`, a
+    negative, anything above 65535 and spellings like `+22` are usage
+    errors where they used to reach QEMU. A fleet's
+    `<ssh-port-base>` does not take `auto`: its ports are written into the
+    generated compose file, and `quick-start` already remaps them.
 - `qemu-tool check` reports whether each settings file in force is valid
   fleet XML: one `FAIL` line per problem, naming the file and the element,
   where an unparsable layer used to leave the report with no fleet and no

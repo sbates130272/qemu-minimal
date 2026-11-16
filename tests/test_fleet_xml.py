@@ -36,8 +36,8 @@ from qemu_tool.fleet_xml import FleetConfig, FleetXml  # noqa: E402
 
 _BAKE_FIELDS = (
     "bake_name", "bake_release", "bake_size", "bake_vcpus", "bake_packages",
-    "bake_playbook", "bake_username", "bake_password", "publish_ref",
-    "publish_flavour",
+    "bake_playbook", "bake_username", "bake_password", "bake_ssh_port",
+    "publish_ref", "publish_flavour",
 )
 
 
@@ -99,6 +99,7 @@ class ParseDefault(unittest.TestCase):
         self.assertEqual(self.cfg.bake_vcpus, 4)
         self.assertEqual(self.cfg.bake_username, "ubuntu")
         self.assertEqual(self.cfg.bake_password, "password")
+        self.assertEqual(self.cfg.bake_ssh_port, "auto")
         self.assertEqual(
             self.cfg.bake_packages, "qemu/packages.d/rocm-golden.txt")
         self.assertEqual(
@@ -219,7 +220,7 @@ class SettingsTable(unittest.TestCase):
         self.assertEqual(fleet_xml.KNOWN_ELEMENTS, tuple(tags))
 
     def test_each_kind_matches_its_field_type(self) -> None:
-        want = {int: {"int"}, bool: {"bool"}, str: {"str", "expand"}}
+        want = {int: {"int"}, bool: {"bool"}, str: {"str", "expand", "port"}}
         defaults = FleetConfig()
         for setting in fleet_xml._SETTINGS:
             kind = type(getattr(defaults, setting.field))

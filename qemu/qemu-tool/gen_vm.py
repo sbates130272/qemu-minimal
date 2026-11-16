@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from contextlib import ExitStack
 from pathlib import Path
@@ -26,6 +27,7 @@ from .vm_artifact import VM_INFO_ARTIFACT_TYPE, VM_PUB_NAME
 from .caps import qemu_binary
 from .config import VMConfig
 from .identity import identity_args
+from .ports import AUTO_SSH_PORT_ATTEMPTS, ssh_hostfwd_refused
 from .run_vm import (
     DISCARD_OPTS,
     _effective_mac,
@@ -34,6 +36,7 @@ from .run_vm import (
     _mgmt_tap_name,
     _netdev_args,
     _teardown_mgmt_bridge,
+    resolve_ssh_port,
 )
 
 # Supported Ubuntu release codenames. Other codenames or XX.YY version
@@ -992,41 +995,51 @@ def _run_ansible(cfg: VMConfig, images: Path, backing: Path) -> None:
     _ensure_jmespath()
     _ensure_ansible_collection(ansible_dir)
 
-    if cfg.mgmt_tap:
-        _ensure_mgmt_bridge(cfg.ssh_port)
-
     print(f"Booting {backing} for Ansible setup...")
-    kvm = ",accel=kvm" if cfg.kvm else ""
-    arch_args = _arch_args_for_gen(cfg, kvm)
-    qemu_proc = subprocess.Popen([
-        qemu_binary(cfg),
-        *identity_args("gen-vm", cfg.vm_name),
-        *arch_args,
-        "-smp", f"cpus={cfg.vcpus}",
-        "-m", str(cfg.vmem),
-        "-nographic",
-        "-drive", f"if=virtio,format=qcow2,file={backing}{DISCARD_OPTS}",
-        *_netdev_args(cfg),
-    ])
-
-    try:
-        vm_host = "localhost"
-        vm_port = cfg.ssh_port
-        if cfg.mgmt_tap:
-            vm_ip = _discover_vm_ip(
-                _mgmt_bridge_name(cfg.ssh_port),
-                _effective_mac(cfg),
-                timeout,
-            )
-            vm_host = vm_ip
-            vm_port = 22
-
-        if not _wait_for_ssh(cfg, timeout, host=vm_host, port=vm_port,
-                             proc=qemu_proc):
+    start: int | None = None
+    for attempt in range(1, AUTO_SSH_PORT_ATTEMPTS + 1):
+        # The port this boot really has; cfg itself when it names one.
+        boot = resolve_ssh_port(cfg, start)
+        if boot.mgmt_tap:
+            _ensure_mgmt_bridge(boot.ssh_port)
+        watch = cfg.ssh_port_auto and not cfg.mgmt_tap
+        qemu_proc = _start_qemu(boot, backing, watch)
+        try:
+            vm_host = "localhost"
+            vm_port = boot.ssh_port
+            if boot.mgmt_tap:
+                vm_host = _discover_vm_ip(
+                    _mgmt_bridge_name(boot.ssh_port),
+                    _effective_mac(boot),
+                    timeout,
+                )
+                vm_port = 22
+            ready = _wait_for_ssh(boot, timeout, host=vm_host, port=vm_port,
+                                  proc=qemu_proc)
+        except Exception:
             qemu_proc.kill()
             qemu_proc.wait()
+            if boot.mgmt_tap:
+                _teardown_mgmt_bridge(boot.ssh_port)
+            raise
+        if ready:
+            break
+        qemu_proc.kill()
+        qemu_proc.wait()
+        if not (watch and qemu_proc.hostfwd_refused()):
             sys.exit("Error: VM did not accept SSH in time.")
+        if attempt == AUTO_SSH_PORT_ATTEMPTS:
+            sys.exit(
+                f"Error: --ssh-port auto: QEMU was refused {attempt} ports "
+                f"in a row that had just probed free, the last {vm_port}; "
+                "something is taking them as they are tried. Name a port "
+                "with --ssh-port <number>."
+            )
+        print(f"--ssh-port auto: port {vm_port} was taken before QEMU "
+              "bound it; trying the next free one.", file=sys.stderr)
+        start = vm_port + 1
 
+    try:
         print(f"Running Ansible playbook {playbook}...")
         _restore_blocking_stdio()
         _ensure_jmespath()
@@ -1066,14 +1079,56 @@ def _run_ansible(cfg: VMConfig, images: Path, backing: Path) -> None:
         )
         qemu_proc.wait()
         if cfg.mgmt_tap:
-            _teardown_mgmt_bridge(cfg.ssh_port)
+            _teardown_mgmt_bridge(boot.ssh_port)
         print("Ansible post-setup complete.")
     except Exception:
         qemu_proc.kill()
         qemu_proc.wait()
         if cfg.mgmt_tap:
-            _teardown_mgmt_bridge(cfg.ssh_port)
+            _teardown_mgmt_bridge(boot.ssh_port)
         raise
+
+
+class _WatchedQemu(subprocess.Popen):
+    """QEMU with its stderr passed through and read for a refused SSH port."""
+
+    def __init__(self, cmd: list[str], ssh_port: int, **kw) -> None:
+        super().__init__(cmd, stderr=subprocess.PIPE, **kw)
+        self._refusal = ssh_hostfwd_refused(ssh_port)
+        self._refused = False
+        self._relay = threading.Thread(target=self._pump, daemon=True)
+        self._relay.start()
+
+    def _pump(self) -> None:
+        out = getattr(sys.stderr, "buffer", None)
+        for line in self.stderr:
+            if self._refusal in line:
+                self._refused = True
+            if out is not None:
+                out.write(line)
+                out.flush()
+        self.stderr.close()
+
+    def hostfwd_refused(self) -> bool:
+        """Whether QEMU exited on its SSH hostfwd. Call once it has exited."""
+        self._relay.join(timeout=5)
+        return self._refused
+
+
+def _start_qemu(boot: VMConfig, backing: Path, watch: bool) -> subprocess.Popen:
+    cmd = [
+        qemu_binary(boot),
+        *identity_args("gen-vm", boot.vm_name),
+        *_arch_args_for_gen(boot, ",accel=kvm" if boot.kvm else ""),
+        "-smp", f"cpus={boot.vcpus}",
+        "-m", str(boot.vmem),
+        "-nographic",
+        "-drive", f"if=virtio,format=qcow2,file={backing}{DISCARD_OPTS}",
+        *_netdev_args(boot),
+    ]
+    if watch:
+        return _WatchedQemu(cmd, boot.ssh_port)
+    return subprocess.Popen(cmd)
 
 
 def _key_extra_vars(cfg: VMConfig) -> list[str]:
@@ -1113,6 +1168,23 @@ def _ssh_identity_args(cfg: VMConfig) -> list[str]:
     return []
 
 
+def _qemu_gone(proc: subprocess.Popen | None) -> bool:
+    """Whether QEMU has exited, saying so unless the caller will retry."""
+    if proc is None or proc.poll() is None:
+        return False
+    if isinstance(proc, _WatchedQemu) and proc.hostfwd_refused():
+        # The caller starts it again on another port and says so.
+        return True
+    print(
+        f"Error: QEMU exited with status {proc.returncode} before the "
+        "VM accepted SSH.\n"
+        "       Its message is above; a hostfwd collision on the host "
+        "is the usual cause.",
+        file=sys.stderr,
+    )
+    return True
+
+
 def _wait_for_ssh(
     cfg: VMConfig, timeout: int, host: str = "localhost", port: int | None = None,
     proc: subprocess.Popen | None = None,
@@ -1129,15 +1201,9 @@ def _wait_for_ssh(
         # host where that port may already be a service. Without this check
         # the real error scrolls past and ten minutes later the run fails
         # with "VM did not accept SSH in time", which blames the guest.
-        if proc is not None and proc.poll() is not None:
-            print(
-                f"Error: QEMU exited with status {proc.returncode} before the "
-                "VM accepted SSH.\n"
-                "       Its message is above; a hostfwd collision on the host "
-                "is the usual cause.",
-                file=sys.stderr,
-            )
+        if _qemu_gone(proc):
             return False
+        answered = False
         try:
             r = subprocess.run(
                 ["ssh",
@@ -1151,13 +1217,17 @@ def _wait_for_ssh(
                 capture_output=True,
                 timeout=5,
             )
-            if r.returncode == 0:
-                print(f"VM ready for Ansible after {elapsed} seconds.")
-                return True
+            answered = r.returncode == 0
         except subprocess.TimeoutExpired:
             # SSH connected (ConnectTimeout=1 would have fired otherwise)
             # but background login processes kept the channel open.
             # The VM is up.
+            answered = True
+        if answered:
+            # Whatever answered was not this guest if QEMU died meanwhile:
+            # it was the listener that cost QEMU the port.
+            if _qemu_gone(proc):
+                return False
             print(f"VM ready for Ansible after {elapsed} seconds.")
             return True
         time.sleep(2)

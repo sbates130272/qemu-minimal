@@ -4,6 +4,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .ports import DEFAULT_SSH_PORT
 from .resources import PACKAGES_D as _PACKAGES_D_PACKAGE, packaged_path
 
 # Created by the .deb. A pipx or source install has neither, so both defaults
@@ -55,7 +56,10 @@ class VMConfig:
     vcpus: int = 2
     vmem: int = 4096           # MiB
     images: Path = field(default_factory=default_images)
-    ssh_port: int = 2222
+    ssh_port: int = DEFAULT_SSH_PORT
+    # --ssh-port auto: ssh_port is where the search starts, and each QEMU
+    # start gets a free port from run_vm.resolve_ssh_port.
+    ssh_port_auto: bool = False
     # None means derive from ssh_port; see run_vm._mgmt_mac.
     mac: str | None = None
     kvm: bool = True

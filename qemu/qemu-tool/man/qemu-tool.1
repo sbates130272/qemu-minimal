@@ -182,7 +182,34 @@ Directory where VM image files are stored (default:
 .IR /var/lib/qemu-tool/images ).
 .TP
 .BI \-\-ssh\-port " PORT"
-Host port forwarded to guest SSH (default: 2222).
+Host port forwarded to guest SSH (default: 2222), or
+.B auto
+for the first free port from 2222 up to 2321. An auto port is chosen by
+binding it, on every address and on loopback, immediately before QEMU
+starts, and is printed on standard error;
+.BR "qemu\-tool ssh" ,
+.B list
+and
+.B inspect
+read it from the running QEMU, so nothing has to be told which it was.
+.B gen\-vm
+starts QEMU again on the next free port, up to five times, if the one it
+probed is taken before QEMU binds it;
+.B run\-vm
+becomes QEMU and cannot. Only the SSH forward is retried: QEMU refusing an
+.B \-\-extra\-hostfwd
+rule ends the run. The management NIC MAC,
+unlike the guest agent and QMP socket paths and the data NIC names, does
+not follow an auto port. With
+.B \-\-mgmt\-tap
+no host port is forwarded and auto is the default port.
+.B auto
+is for one guest run on the host: a fleet's
+.B <ssh\-port\-base>
+takes a number only, because a stack's published ports are written into its
+generated compose file, and
+.B quick\-start
+already moves those off a taken port.
 .TP
 .BI \-\-mac " ADDR"
 Management NIC MAC address.
@@ -190,6 +217,10 @@ By default it is derived from
 .BR \-\-ssh\-port
 as
 .IR 52:54:00:00:<hi>:<lo> .
+With
+.B "\-\-ssh\-port auto"
+it is derived from the default port, 2222, whichever port is chosen, so
+every boot of an image presents the same MAC.
 Set it when the guest image pins its netplan to a particular MAC. Images
 built by
 .B gen\-vm
@@ -666,9 +697,10 @@ Bake the image from the cloud image using the fleet XML's
 .BR <bake\-vcpus> ,
 .BR <bake\-username> ,
 .BR <bake\-password> ,
-.B <bake\-packages>
-and
+.BR <bake\-packages> ,
 .B <bake\-playbook>
+and
+.B <bake\-ssh\-port>
 elements, ignoring its
 .BR <backing\-ref> ,
 its
@@ -1972,6 +2004,18 @@ because these are published in
 a fleet's own login never reaches a registry. Unset, they fall to
 .BR ubuntu / password ,
 never to the fleet's login.
+.TP
+.B <bake\-ssh\-port>
+The
+.B \-\-ssh\-port
+of the bake: a port number or
+.BR auto .
+.I rocm\-golden.xml
+sets
+.BR auto ,
+since the bake's guest needs no particular port. A
+.B \-\-ssh\-port
+flag wins.
 .TP
 .BR <publish\-ref> ", " <publish\-flavour>
 Registry repository, without a tag, and the flavour recorded with the image.

@@ -1531,6 +1531,28 @@ qemu-tool publish-qcow --xml qemu/stacks/rocm-golden.xml --tag <stamp>
   key's other half, checked with `ssh-keygen -y`; a passphrase fails that
   check, which is right, since a published key nobody can use is no key.
   The publish workflow passes no `--key` and no `--ssh-key-file`.
+- **`rocm-golden.xml` bakes on `<bake-ssh-port>auto</bake-ssh-port>`**, the
+  bake's `--ssh-port`. Only the bake's second boot forwards a host port (the
+  cloud-init boot has no hostfwd), and on the WSL2 dev host Windows held
+  2222-2225, so QEMU died on `Could not set up host forwarding rule`. `auto`
+  binds to find a free port from 2222 up (`ports.port_bindable`, which
+  `quick_start._port_free` also calls: wildcard and loopback, SO_REUSEADDR,
+  bind and listen, matching what QEMU's hostfwd does) immediately before the
+  start, and `gen-vm` restarts on the next port if QEMU still loses it. The
+  watcher matches the refused rule, `'tcp::<port>-:22'`, not just QEMU's
+  message: a held extra hostfwd prints the same words and no SSH port cures
+  it. `<bake-ssh-port>` is the bake's alone, so a `run-vm` of the baked
+  image still asks for 2222 unless given `--ssh-port auto`.
+  `run-vm --ssh-port auto` probes too but cannot retry: it execs QEMU. The
+  management MAC is derived from 2222 in auto mode, not from the chosen port,
+  so it is the same on every boot; the QGA and QMP socket paths, the data tap
+  name and the data and mcast NIC MACs follow the chosen port, since each
+  must be unique per running QEMU. `list`, `inspect` and `ssh` read the port
+  off the QEMU command line, so they need no telling. The publish workflow's
+  later steps boot with `run-vm` on a plain 2222 and never read the bake's
+  port. **Do not make `<ssh-port-base>` accept `auto`**: those ports are in
+  the generated compose YAML that `gen-compose --check` compares byte for
+  byte, and `quick-start` already remaps them at run time.
 - `<bake-packages>` and `<bake-playbook>` are resolved against the current
   directory, so a bake runs from the checkout root; a missing one says so and
   names the cwd, and a missing manifest stops the bake before the cloud image

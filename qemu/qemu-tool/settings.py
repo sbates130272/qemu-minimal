@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .fleet_xml import FleetConfig, FleetXml
+from .ports import DEFAULT_SSH_PORT
 
 
 def find(explicit: Path | Sequence[Path] | None = None) -> list[Path]:
@@ -107,6 +108,10 @@ def bake_overrides(fleet: FleetConfig) -> dict[str, Any]:
         out["username"] = fleet.bake_username
     if fleet.bake_password:
         out["password"] = fleet.bake_password
+    if fleet.bake_ssh_port:
+        auto = fleet.bake_ssh_port == "auto"
+        out["ssh_port_auto"] = auto
+        out["ssh_port"] = DEFAULT_SSH_PORT if auto else int(fleet.bake_ssh_port)
     return out
 
 

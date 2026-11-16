@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import atexit
+import dataclasses
 import os
 import re
 import shlex
@@ -11,6 +12,7 @@ from pathlib import Path
 from .caps import QemuCaps, qemu_binary
 from .config import VMConfig
 from .identity import identity_args
+from .ports import DEFAULT_SSH_PORT, NoFreePort, pick_free_port
 
 _ARCH_MACHINE = {
     "amd64": "q35",
@@ -193,7 +195,38 @@ def _check_image_access(cfg: VMConfig) -> None:
     sys.exit("\n".join(lines))
 
 
+def resolve_ssh_port(cfg: VMConfig, start: int | None = None) -> VMConfig:
+    """`cfg` with a concrete SSH port for one QEMU start; `cfg` itself if fixed.
+
+    Call it immediately before each start, with `start` one past a port QEMU
+    was just refused. The management MAC is pinned to the one the default
+    port gives, so the guest sees the same NIC whichever port a boot lands
+    on; everything else derived from the port follows the chosen one, because
+    it names something only one running QEMU can hold.
+    """
+    if not cfg.ssh_port_auto:
+        return cfg
+    mac = cfg.mac or _mgmt_mac(DEFAULT_SSH_PORT)
+    if cfg.mgmt_tap:
+        # No host port is forwarded here; the number only names the bridge.
+        port = cfg.ssh_port if start is None else start
+        print(f"--ssh-port auto: --mgmt-tap forwards no host port; using "
+              f"{port} to name the bridge.", file=sys.stderr)
+    else:
+        try:
+            port = pick_free_port(cfg.ssh_port if start is None else start)
+        except NoFreePort as exc:
+            sys.exit(f"Error: --ssh-port auto: {exc}")
+        print(f"--ssh-port auto: forwarding host port {port} to the guest's "
+              f"sshd.", file=sys.stderr)
+    return dataclasses.replace(cfg, ssh_port=port, ssh_port_auto=False, mac=mac)
+
+
 def run(cfg: VMConfig, caps: QemuCaps) -> None:
+    # Before anything reads the port. run-vm becomes QEMU by exec, so it
+    # cannot see QEMU lose the port after the probe and start again on the
+    # next one, the way gen-vm does.
+    cfg = resolve_ssh_port(cfg)
     # Before build_command, which creates the NVMe qcow2s as a side effect and
     # would hit the same permission wall first -- with qemu-img's stderr
     # captured, so the operator would see a traceback rather than the cause.

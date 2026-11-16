@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Any
 import xml.etree.ElementTree as ET
 
+from .ports import parse_ssh_port
+
 NS_FLEET = "http://qemu-tool/fleet/1.0"
 _TAG_FLEET = f"{{{NS_FLEET}}}fleet"
 
@@ -132,6 +134,9 @@ class FleetConfig:
     # vm-info.json; a fleet's own login must never reach a registry.
     bake_username: str = ""
     bake_password: str = ""
+    # "" for unset, "auto", or a port number as text: the host port the
+    # bake's Ansible boot forwards to the guest's sshd.
+    bake_ssh_port: str = ""
     # Registry repository, without a tag.
     publish_ref: str = ""
     publish_flavour: str = ""
@@ -163,7 +168,7 @@ class FleetConfig:
     loki_data_dir: str = "/var/lib/qemu-tool/loki-data"
     alloy_image: str = "docker.io/grafana/alloy:v1.5.1"
 
-_STR, _EXPAND, _INT, _BOOL = "str", "expand", "int", "bool"
+_STR, _EXPAND, _INT, _BOOL, _PORT = "str", "expand", "int", "bool", "port"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -241,6 +246,7 @@ _SETTINGS: tuple[_Setting, ...] = (
     _Setting("bake-playbook", "bake_playbook", _EXPAND, sparse=True),
     _Setting("bake-username", "bake_username", _STR, sparse=True),
     _Setting("bake-password", "bake_password", _STR, sparse=True),
+    _Setting("bake-ssh-port", "bake_ssh_port", _PORT, sparse=True),
     _Setting("publish-ref", "publish_ref", _STR, sparse=True),
     _Setting("publish-flavour", "publish_flavour", _STR, sparse=True),
     # Metrics
@@ -287,6 +293,13 @@ def _convert(setting: _Setting, raw: str) -> Any:
         except ValueError:
             raise ValueError(
                 f"{setting.tag} must be an integer, got {raw!r}") from None
+    if setting.kind == _PORT:
+        try:
+            return str(parse_ssh_port(raw))
+        except ValueError:
+            raise ValueError(
+                f"{setting.tag} must be a port number or auto, got {raw!r}"
+            ) from None
     if setting.kind == _EXPAND:
         # Here, once, so every reader sees the same path.
         return os.path.expanduser(os.path.expandvars(raw))

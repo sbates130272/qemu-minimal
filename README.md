@@ -293,7 +293,9 @@ qemu-tool ssh myvm                          # from another terminal
 `gen-vm` generates an SSH keypair for each image it bakes, keeps it in
 `<images>/keys/<vm-name>_id_rsa` and prints the path; `qemu-tool ssh` finds
 it. By hand that is `ssh -i <images>/keys/myvm_id_rsa -p 2222
-ubuntu@localhost`. Your own `~/.ssh` keys are not authorised unless you name
+ubuntu@localhost`. `run-vm` forwards host port 2222 unless told otherwise,
+and QEMU does not start if that port is held; `run-vm --ssh-port auto` takes
+the first free one and `qemu-tool ssh` finds it. Your own `~/.ssh` keys are not authorised unless you name
 one: `gen-vm --ssh-key-file ~/.ssh/id_rsa.pub`, or `<vm-ssh-key-file>` in a
 fleet file. An `--ansible-playbook` that runs the `user_setup` role is told
 the image's key too, so it does not add `~/.ssh/id_rsa.pub` behind your
@@ -610,6 +612,19 @@ not the one `gen-vm` recorded baking in, a private key that is not its
 `.pub`'s other half, and an image `gen-vm` pulled rather than baked. A bake leaves out the fleet's `<vm-extra-hostfwd>`, because it runs
 QEMU on the host, where a forward whose port is taken stops it starting.
 
+The bake boots the guest on the host to run its playbook, with a host port
+forwarded to the guest's sshd, and QEMU does not start if that port is held
+— by another guest, or on WSL2 by something on the Windows side.
+`rocm-golden.xml` therefore sets `<bake-ssh-port>auto</bake-ssh-port>`, the
+bake's `--ssh-port`: the first port from 2222 up that can actually be bound
+is used and printed, and if it is taken before QEMU binds it the boot is
+started again on the next one. The guest's MAC does not move with the port.
+`--ssh-port <number>` on the command line pins it. `auto` is for a single
+guest run on the host, by `gen-vm` or `run-vm`; a fleet's `<ssh-port-base>`
+takes a number only, because a stack's published ports are written into its
+generated compose file, and `quick-start` already moves them off a taken
+port at run time.
+
 ## Images Directory
 
 When installed system-wide via the `.deb` package, `gen-vm` and `run-vm`
@@ -753,8 +768,8 @@ takes every stack on the system.
 | `--vcpus N` | `2` | vCPU count |
 | `--vmem MiB` | `4096` | Memory in MiB |
 | `--images DIR` | `/var/lib/qemu-tool/images` | Image directory |
-| `--ssh-port PORT` | `2222` | Host port forwarded to guest SSH |
-| `--mac ADDR` | (from `--ssh-port`) | Management NIC MAC; set it for an image that pins its netplan to one, including images this repo built before `3969f07` |
+| `--ssh-port PORT` | `2222` | Host port forwarded to guest SSH, or `auto` for the first free port from 2222 up, picked as QEMU starts and printed; `qemu-tool ssh`, `list` and `inspect` find it |
+| `--mac ADDR` | (from `--ssh-port`; from 2222 when that is `auto`) | Management NIC MAC; set it for an image that pins its netplan to one, including images this repo built before `3969f07` |
 | `--kvm / --no-kvm` | kvm | KVM acceleration |
 | `--qemu-path PATH` | (system) | Directory containing QEMU binaries |
 | `--domain FILE` | — | Libvirt XML base config (`-` for stdin) |

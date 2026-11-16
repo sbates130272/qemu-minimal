@@ -54,6 +54,7 @@ from .config import VMConfig
 from .fleet_xml import NS_FLEET, FleetConfig, FleetXml
 from .gen_compose import run as gen_compose_run
 from .gen_vm import run as gen_vm_run
+from .ports import port_bindable
 from .resources import STACKS as _STACKS_PACKAGE, shipped_path
 
 VERBS = ("all", "preflight", "up", "test", "report", "down", "logs")
@@ -483,21 +484,12 @@ _WINDOWS_PORTS: frozenset[int] | None = None
 
 
 def _port_free(port: int) -> bool:
-    import socket
-
     global _WINDOWS_PORTS
     if _WINDOWS_PORTS is None:
         _WINDOWS_PORTS = _windows_listening_ports()
     if port in _WINDOWS_PORTS:
         return False
-
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            sock.bind(("0.0.0.0", port))
-        except OSError:
-            return False
-    return True
+    return port_bindable(port)
 
 
 def _next_free_port(start: int) -> int:

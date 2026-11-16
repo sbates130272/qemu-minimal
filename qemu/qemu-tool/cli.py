@@ -31,6 +31,7 @@ from .shutdown import run as shutdown_run
 from .list_vms import run as list_vms_run, collect as _list_vms_collect
 from . import qcow as _qcow
 from . import settings
+from .ports import DEFAULT_SSH_PORT, parse_ssh_port
 from .run_vm import run as run_vm_run
 from . import summary
 
@@ -256,17 +257,20 @@ def _shared_parent() -> argparse.ArgumentParser:
         ),
     )
     g.add_argument(
-        "--ssh-port", type=int, default=_UNSET, metavar="PORT",
+        "--ssh-port", type=_ssh_port_arg, default=_UNSET, metavar="PORT",
         help=(
             "Host port forwarded to the guest's sshd "
-            f"(default: {_VM_DEFAULTS['ssh_port']})."
+            f"(default: {_VM_DEFAULTS['ssh_port']}), or 'auto' for the first "
+            f"free port from {_VM_DEFAULTS['ssh_port']} up, chosen as QEMU "
+            "starts and printed. 'qemu-tool ssh' and 'list' find it."
         ),
     )
     g.add_argument(
         "--mac", default=_UNSET, metavar="ADDR",
         help=(
             "Management NIC MAC. Defaults to 52:54:00:00:<hi>:<lo> derived "
-            "from --ssh-port. Set it when the guest image pins its netplan "
+            "from --ssh-port, or from its default when that is 'auto', so "
+            "the MAC does not move with the port. Set it when the guest image pins its netplan "
             "to a specific MAC, as images this repo built before 3969f07 do."
         ),
     )
@@ -279,6 +283,13 @@ def _shared_parent() -> argparse.ArgumentParser:
         help="QEMU binary to run (default: qemu-system-<arch> from PATH).",
     )
     return p
+
+
+def _ssh_port_arg(text: str) -> int | str:
+    try:
+        return parse_ssh_port(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
 
 
 def _add_quick_start(sub: argparse._SubParsersAction) -> None:
@@ -1290,6 +1301,11 @@ def _run_vm_cmd(args: argparse.Namespace) -> None:
     cfg = _build_config(args, subcommand="run-vm")
 
     if args.convert_to_libvirt is not None:
+        if cfg.ssh_port_auto:
+            sys.exit(
+                "Error: --ssh-port auto picks a port as QEMU starts, so a "
+                "libvirt domain cannot carry it; name a port."
+            )
         caps = probe_caps(cfg)
         xml = LibvirtXml.emit(cfg, caps)
         output = args.convert_to_libvirt
@@ -1546,7 +1562,11 @@ def _extract_cli_overrides(
     _take("vcpus", "vcpus")
     _take("vmem", "vmem")
     _take("images", "images")
-    _take("ssh_port", "ssh_port")
+    port = ns.get("ssh_port", _UNSET)
+    if port is not _UNSET:
+        # A number given here also turns off an auto from <bake-ssh-port>.
+        overrides["ssh_port_auto"] = port == "auto"
+        overrides["ssh_port"] = DEFAULT_SSH_PORT if port == "auto" else port
     _take("mac", "mac")
     _take("kvm", "kvm")
     _take("qemu_path", "qemu_path")
