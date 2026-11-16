@@ -4,11 +4,11 @@ Two questions have to be answered soundly before anything is destroyed, and
 compose records the evidence for both on every container it starts:
 
 * **Is this a qemu-tool stack?** `com.docker.compose.project.config_files`
-  names the compose file. A generated stack carries the `gen-compose`
-  provenance header; a committed one lives in a directory whose name is one
-  of the six this tool ships. Neither is a guess, and the alternative --
-  matching service names like `qemu-1` -- would happily tear down somebody's
-  unrelated project that happened to have a service called `qemu-1`.
+  names the compose file, and every stack this tool runs is generated, so
+  that file carries the `gen-compose` provenance header. That is not a
+  guess, and the alternative -- matching service names like `qemu-1` --
+  would happily tear down somebody's unrelated project that happened to
+  have a service called `qemu-1`.
 
 * **Is it yours?** `.Config.User` is the uid the container actually runs as,
   which is exactly what the CONTAINER_USER work put there. A project is
@@ -32,7 +32,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .compose import _STACKS, resolve_identity
+from .compose import resolve_identity
 from .gen_compose import recorded_digest
 
 
@@ -44,12 +44,14 @@ class Stack:
     env_files: list[Path]
     containers: list[str] = field(default_factory=list)
     uids: set[str] = field(default_factory=set)
+    # Another compose project on this host uses the same project name.
+    shared_name: bool = False
 
     def owned_by(self, uid: int) -> bool:
         """Does any container run as this uid?
 
         Any, not all: a stack legitimately mixes uids -- the stats exporters
-        are pinned to 65534 and tapsetup/dockerapi stay root -- so requiring
+        are pinned to 65534 and tapsetup/alloy stay root -- so requiring
         all of them would find nothing.
         """
         return any(u.split(":")[0] == str(uid) for u in self.uids if u)
@@ -76,50 +78,48 @@ def _inspect_running() -> list[dict]:
 
 
 def _is_qemu_tool_stack(config_file: Path | None) -> bool:
-    """A generated stack by its provenance header, a committed one by name.
+    """By the gen-compose provenance header in its compose file.
 
-    Deliberately NOT a service-name match. `qemu-1` is a name anyone might
-    use, and this command removes containers.
+    Deliberately NOT a service-name match, nor a directory-name one. `qemu-1`
+    and a stack directory's basename are names anyone might use, and this command removes
+    containers.
     """
-    if config_file is None:
-        return False
-    try:
-        if recorded_digest(config_file) is not None:
-            return True
-    except OSError:
-        pass
-    # The committed stacks have no provenance header -- they are hand-written
-    # -- so they are recognised by the directory this repo ships them in.
-    return config_file.parent.name in _STACKS
+    return config_file is not None and recorded_digest(config_file) is not None
 
 
 def discover() -> list[Stack]:
     """Every running qemu-tool stack on this host, owned by anyone."""
-    by_project: dict[str, Stack] = {}
+    # Keyed on the compose file as well as the project name: the name is the
+    # directory basename, which any unrelated project can share.
+    by_project: dict[tuple[str, str], Stack] = {}
     for rec in _inspect_running():
         labels = (rec.get("Config") or {}).get("Labels") or {}
         project = labels.get("com.docker.compose.project")
         if not project:
             continue
-        if project not in by_project:
-            raw_cfg = (labels.get("com.docker.compose.project.config_files")
-                       or "").split(",")[0]
+        raw_cfg = (labels.get("com.docker.compose.project.config_files")
+                   or "").split(",")[0]
+        key = (project, raw_cfg)
+        if key not in by_project:
             raw_wd = labels.get("com.docker.compose.project.working_dir") or ""
             raw_env = labels.get(
                 "com.docker.compose.project.environment_file") or ""
-            by_project[project] = Stack(
+            by_project[key] = Stack(
                 project=project,
                 config_file=Path(raw_cfg) if raw_cfg else None,
                 working_dir=Path(raw_wd) if raw_wd else None,
                 env_files=[Path(p) for p in raw_env.split(",") if p],
             )
-        stack = by_project[project]
+        stack = by_project[key]
         stack.containers.append((rec.get("Name") or "").lstrip("/"))
         stack.uids.add((rec.get("Config") or {}).get("User") or "")
 
+    names = [project for project, _ in by_project]
+    for (project, _), stack in by_project.items():
+        stack.shared_name = names.count(project) > 1
     return sorted(
         (s for s in by_project.values() if _is_qemu_tool_stack(s.config_file)),
-        key=lambda s: s.project,
+        key=lambda s: (s.project, str(s.config_file)),
     )
 
 
@@ -137,6 +137,8 @@ def _teardown_cmd(stack: Stack) -> list[str]:
         cmd += ["--project-directory", str(stack.working_dir)]
     if stack.config_file:
         cmd += ["-f", str(stack.config_file)]
+    # Only a stack started by an older qemu-tool records any; this version
+    # passes its settings through the environment and so leaves no label.
     for env_file in stack.env_files:
         # Skip one that has moved: compose refuses outright on a missing
         # --env-file, and a stack whose settings were tidied away is exactly
@@ -145,8 +147,36 @@ def _teardown_cmd(stack: Stack) -> list[str]:
             cmd += ["--env-file", str(env_file)]
     # Every profile, or the metrics services are filtered out of
     # the teardown on a compose version that does that.
-    cmd += ["--profile", "*", "down", "--remove-orphans"]
+    cmd += ["--profile", "*", "down"]
+    # To compose, another project's containers under the same name ARE this
+    # project's orphans, so the flag would remove them.
+    if not stack.shared_name:
+        cmd.append("--remove-orphans")
     return cmd
+
+
+def _teardown_env(stack: Stack) -> dict[str, str]:
+    """The environment `down` needs just to parse the compose file.
+
+    compose interpolates on `down` exactly as on `up`, so every ${VAR:?} in
+    the file has to resolve or nothing is torn down. Those are the two
+    identity variables and nothing else; the rest carry a :- default, and a
+    teardown does not care what a default resolves to.
+
+    The uid is the one the containers actually run as, taken from the
+    containers themselves rather than from this caller: a root-era stack
+    being torn down by root needs 0:0, not the ids of whoever is running the
+    command.
+    """
+    env = os.environ.copy()
+    observed = next((u for u in sorted(stack.uids) if u), "")
+    if observed:
+        env.setdefault("CONTAINER_USER", observed)
+    else:
+        ident, _ = resolve_identity()
+        env.setdefault("CONTAINER_USER", ident["CONTAINER_USER"])
+    env.setdefault("CONTAINER_KVM_GID", "0")
+    return env
 
 
 def _describe(stack: Stack, uid: int) -> str:
@@ -182,15 +212,7 @@ def teardown_one(project: str, dry_run: bool = False,
         if reply not in ("y", "yes"):
             print("Nothing was stopped.")
             return
-    env = os.environ.copy()
-    observed = next((u for u in sorted(match.uids) if u), "")
-    if observed:
-        env.setdefault("CONTAINER_USER", observed)
-    else:
-        ident, _ = resolve_identity([])
-        env.setdefault("CONTAINER_USER", ident["CONTAINER_USER"])
-    env.setdefault("CONTAINER_KVM_GID", "0")
-    result = subprocess.run(_teardown_cmd(match), env=env)
+    result = subprocess.run(_teardown_cmd(match), env=_teardown_env(match))
     if result.returncode != 0:
         sys.exit(f"Stack {project!r} did not tear down (exit {result.returncode}).")
     print(f"\nStack {project!r} torn down.")
@@ -254,20 +276,7 @@ def run(assume_yes: bool = False, dry_run: bool = False,
     failed = 0
     for stack in mine:
         print(f"\n==> {stack.project}")
-        env = os.environ.copy()
-        # The uid the containers actually run as, taken from the containers
-        # themselves rather than from this caller: the compose file
-        # interpolates `user: ${CONTAINER_USER:?...}` even on `down`, and a
-        # root-era stack being torn down by root needs 0:0, not the ids of
-        # whoever is running the command.
-        observed = next((u for u in sorted(stack.uids) if u), "")
-        if observed:
-            env.setdefault("CONTAINER_USER", observed)
-        else:
-            ident, _ = resolve_identity([])
-            env.setdefault("CONTAINER_USER", ident["CONTAINER_USER"])
-        env.setdefault("CONTAINER_KVM_GID", "0")
-        result = subprocess.run(_teardown_cmd(stack), env=env)
+        result = subprocess.run(_teardown_cmd(stack), env=_teardown_env(stack))
         if result.returncode != 0:
             failed += 1
             print(f"    failed (exit {result.returncode}); "

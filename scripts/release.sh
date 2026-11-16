@@ -4,11 +4,12 @@
 #
 # <version> is a bare X.Y.Z with no leading "v"; the tag gets the v.
 #
-# Three files carry the version and all three have to agree, because the
+# Four files carry the version and all four have to agree, because the
 # release workflow refuses to publish a tag that disagrees with them --
 # v1.3.0 shipped untagged precisely because nothing enforced that. The
 # debian/changelog stanza is generated from the CHANGELOG.md [Unreleased]
-# section rather than typed again, so the two cannot drift either.
+# section rather than typed again, so the two cannot drift either. The
+# fourth is the man page, whose .TH line carries the month as well.
 #
 # This never pushes. It prints the push command and stops, because pushing
 # a signed tag is the point of no return.
@@ -35,6 +36,7 @@ cd "${ROOT}"
 PYPROJECT=qemu/pyproject.toml
 DEB_CHANGELOG=qemu/debian/changelog
 CHANGELOG=CHANGELOG.md
+MAN_PAGE=qemu/qemu-tool/man/qemu-tool.1
 TAG="v${VERSION}"
 
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
@@ -57,6 +59,11 @@ CURRENT=$(sed -n 's/^version = "\(.*\)"$/\1/p' "${PYPROJECT}" | head -1)
 [ "${CURRENT}" != "${VERSION}" ] || die "${PYPROJECT} is already at ${VERSION}"
 NEWEST=$(printf '%s\n%s\n' "${CURRENT}" "${VERSION}" | sort -V | tail -1)
 [ "${NEWEST}" = "${VERSION}" ] || die "${VERSION} is older than the current ${CURRENT}"
+
+# The .TH line's fourth and fifth fields: "<Month YYYY>" "qemu-tool <version>".
+MAN_TH_RE='^\(\.TH QEMU\\-TOOL 1 \)"[^"]*" "qemu-tool [^"]*"'
+MAN_CURRENT=$(sed -n '1s/^\.TH QEMU\\-TOOL 1 "[^"]*" "qemu-tool \([^"]*\)".*/\1/p' "${MAN_PAGE}")
+[ -n "${MAN_CURRENT}" ] || die "no '.TH QEMU\-TOOL 1 \"<month>\" \"qemu-tool <version>\"' on line 1 of ${MAN_PAGE}"
 
 grep -q '^## \[Unreleased\]$' "${CHANGELOG}" || die "no '## [Unreleased]' heading in ${CHANGELOG}"
 
@@ -119,6 +126,9 @@ DEB_EMAIL=${DEBEMAIL:-$(printf '%s' "${LAST_TRAILER}" | sed -n 's/^ -- .*<\(.*\)
 
 DEB_DATE=$(date -uR)
 TODAY=$(date -u +%Y-%m-%d)
+# LC_ALL=C: the month is English in the page whatever the releaser's locale.
+MAN_MONTH=$(LC_ALL=C date -u +'%B %Y')
+MAN_TH=$(sed -n "1s/${MAN_TH_RE}/\\1\"${MAN_MONTH}\" \"qemu-tool ${VERSION}\"/p" "${MAN_PAGE}")
 
 STANZA=$(
   printf 'python3-qemu-tool (%s) unstable; urgency=low\n\n' "${VERSION}"
@@ -132,10 +142,12 @@ if [ "${DRY_RUN}" = "--dry-run" ]; then
   echo
   printf '%s\n' "${STANZA}"
   echo "release: would retitle [Unreleased] as [${TAG}] - ${TODAY} in ${CHANGELOG}"
+  echo "release: would stamp line 1 of ${MAN_PAGE} (now qemu-tool ${MAN_CURRENT}) as:"
+  printf '%s\n' "${MAN_TH}"
   exit 0
 fi
 
-# The dirty-tree check above means these three files are the only thing we
+# The dirty-tree check above means these four files are the only thing we
 # can have touched, so restoring them is always safe and never loses work.
 COMMITTED=no
 restore() {
@@ -144,7 +156,7 @@ restore() {
   fi
   # HEAD, not the index: by the time a commit can fail these are staged, and
   # a bare "git checkout --" would restore them from the index it just wrote.
-  git checkout HEAD -- "${PYPROJECT}" "${DEB_CHANGELOG}" "${CHANGELOG}" 2>/dev/null || true
+  git checkout HEAD -- "${PYPROJECT}" "${DEB_CHANGELOG}" "${CHANGELOG}" "${MAN_PAGE}" 2>/dev/null || true
   echo "release: failed, working tree restored" >&2
 }
 trap restore EXIT
@@ -152,6 +164,9 @@ trap restore EXIT
 sed -i "0,/^version = \"${CURRENT}\"$/s//version = \"${VERSION}\"/" "${PYPROJECT}"
 [ "$(sed -n 's/^version = "\(.*\)"$/\1/p' "${PYPROJECT}" | head -1)" = "${VERSION}" ] ||
   die "failed to stamp ${PYPROJECT}"
+
+sed -i "1s/${MAN_TH_RE}/\\1\"${MAN_MONTH}\" \"qemu-tool ${VERSION}\"/" "${MAN_PAGE}"
+[ "$(sed -n 1p "${MAN_PAGE}")" = "${MAN_TH}" ] || die "failed to stamp ${MAN_PAGE}"
 
 # Two newlines, not one: command substitution ate every trailing newline the
 # stanza was built with, so without both the trailer line runs straight into
@@ -178,8 +193,8 @@ awk -v tag="${TAG}" -v today="${TODAY}" '
 ' "${CHANGELOG}" > "${CHANGELOG}.new"
 mv "${CHANGELOG}.new" "${CHANGELOG}"
 
-git add "${PYPROJECT}" "${DEB_CHANGELOG}" "${CHANGELOG}"
-git commit -s -m "chore(release): ${TAG}" -m "Stamp ${VERSION} in ${PYPROJECT}, ${DEB_CHANGELOG} and ${CHANGELOG}."
+git add "${PYPROJECT}" "${DEB_CHANGELOG}" "${CHANGELOG}" "${MAN_PAGE}"
+git commit -s -m "chore(release): ${TAG}" -m "Stamp ${VERSION} in ${PYPROJECT}, ${DEB_CHANGELOG}, ${CHANGELOG} and ${MAN_PAGE}."
 COMMITTED=yes
 
 git tag -s "${TAG}" -m "qemu-minimal ${TAG}"

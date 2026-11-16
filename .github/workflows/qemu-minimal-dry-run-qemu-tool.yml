@@ -9,6 +9,7 @@ on:
       - 'qemu/qemu-tool/**'
       - 'qemu/pyproject.toml'
       - 'qemu/compose/**'
+      - 'qemu/stacks/**'
       - '.github/workflows/qemu-minimal-dry-run-qemu-tool.yml'
 
 concurrency:
@@ -321,7 +322,7 @@ jobs:
 
     - name: "Dry-run: compose subcommand resolves compose dir"
       run: |
-        out=$(qemu-tool compose --vm-name dry-test --images /tmp ps 2>&1 || true)
+        out=$(qemu-tool compose --images /tmp ps 2>&1 || true)
         echo "$out"
         # Should fail because docker is not available in this container,
         # but must not fail with a Python import or compose-dir error.
@@ -712,60 +713,47 @@ jobs:
     - name: Install qemu-tool
       run: python3 -m pip install --break-system-packages -e ./qemu
 
-    - name: "Validate: vfio-user-ernic-vm compose config"
+    # `qemu-tool compose`, not plain `docker compose`: it is what fills in
+    # CONTAINER_USER and CONTAINER_KVM_GID from the caller, and without them
+    # every stack refuses to interpolate.
+    - name: "Validate: every shipped stack's compose config"
       run: |
-        qemu-tool compose --stack vfio-user-ernic-vm config --quiet
-        echo "✓ vfio-user-ernic-vm compose config valid"
-
-    - name: "Validate: vfio-user-rocjitsu-vm compose config"
-      run: |
-        qemu-tool compose --stack vfio-user-rocjitsu-vm config --quiet
-        echo "✓ vfio-user-rocjitsu-vm compose config valid"
-
-    - name: "Validate: vfio-user-ernic-rocjitsu-vm compose config"
-      run: |
-        qemu-tool compose --stack vfio-user-ernic-rocjitsu-vm config --quiet
-        echo "✓ vfio-user-ernic-rocjitsu-vm compose config valid"
-
-    - name: "Smoke: ernic and rocjitsu GPU servers create vfio-user sockets"
-      run: |
-        qemu-tool compose --stack vfio-user-ernic-rocjitsu-vm up --detach --no-deps ernic rocjitsu
-        for i in $(seq 1 30); do
-          ernic_ok=$(qemu-tool compose --stack vfio-user-ernic-rocjitsu-vm ps --format json ernic \
-            | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('Health',''))" \
-            2>/dev/null || true)
-          rocjitsu_ok=$(qemu-tool compose --stack vfio-user-ernic-rocjitsu-vm ps --format json rocjitsu \
-            | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('Health',''))" \
-            2>/dev/null || true)
-          [ "$ernic_ok" = "healthy" ] && [ "$rocjitsu_ok" = "healthy" ] && break
-          sleep 2
+        set -eu
+        for stack in rocm-golden helios-tray mi355x-server; do
+          qemu-tool compose --stack "$stack" config --quiet
+          echo "✓ $stack compose config valid"
         done
-        [ "$ernic_ok" = "healthy" ]    || (qemu-tool compose --stack vfio-user-ernic-rocjitsu-vm logs ernic    && exit 1)
-        [ "$rocjitsu_ok" = "healthy" ] || (qemu-tool compose --stack vfio-user-ernic-rocjitsu-vm logs rocjitsu && exit 1)
-        echo "✓ GPU server sockets healthy"
-        qemu-tool compose --stack vfio-user-ernic-rocjitsu-vm down
 
-    - name: "Validate: vfio-user-ernic-2vm compose config"
+    # The device servers of the default stack, without the guests: the mesh
+    # manager and its worker, both GPUs, both SDXI servers, and the two tap
+    # sidecars -- an ernic waits for the tap its sidecar creates before it
+    # serves anything. No --no-deps, so the worker starts once the manager is
+    # listening, as it does in a full `up`.
+    #
+    # Health is asked of the containers. The compose project is the stack
+    # directory's basename, so they are rocm-golden-<service>-1.
+    - name: "Smoke: the default stack's device servers come up healthy"
       run: |
-        qemu-tool compose --stack vfio-user-ernic-2vm config --quiet
-        echo "✓ two-VM ernic compose config valid"
-
-    - name: "Smoke: two-VM ernic hub and worker create vfio-user sockets"
-      run: |
-        qemu-tool compose --stack vfio-user-ernic-2vm \
-          -- --profile rocjitsu-vm1 --profile rocjitsu-vm2 \
-          up --detach --no-deps ernic-hub ernic-worker rocjitsu-1 rocjitsu-2
-        for i in $(seq 1 30); do
-          hub_ok=$(qemu-tool compose --stack vfio-user-ernic-2vm ps --format json ernic-hub \
-            | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('Health',''))" \
-            2>/dev/null || true)
-          worker_ok=$(qemu-tool compose --stack vfio-user-ernic-2vm ps --format json ernic-worker \
-            | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('Health',''))" \
-            2>/dev/null || true)
-          [ "$hub_ok" = "healthy" ] && [ "$worker_ok" = "healthy" ] && break
-          sleep 2
+        set -eu
+        servers="ernic-1 ernic-2 rocjitsu-1 rocjitsu-2 sdxi-1 sdxi-2"
+        qemu-tool compose --stack rocm-golden up --detach \
+          $servers tapsetup-1 tapsetup-2
+        elapsed=0
+        while true; do
+          bad=""
+          for svc in $servers; do
+            h=$(docker inspect -f '{{.State.Health.Status}}' \
+                  "rocm-golden-${svc}-1" 2>/dev/null || echo missing)
+            if [ "$h" != healthy ]; then bad="$bad ${svc}=${h}"; fi
+          done
+          if [ -z "$bad" ]; then break; fi
+          if [ "$elapsed" -ge 90 ]; then
+            echo "::error::not healthy after ${elapsed}s:${bad}"
+            qemu-tool compose --stack rocm-golden logs || true
+            qemu-tool compose --stack rocm-golden down || true
+            exit 1
+          fi
+          sleep 2; elapsed=$((elapsed + 2))
         done
-        [ "$hub_ok" = "healthy" ]    || (qemu-tool compose --stack vfio-user-ernic-2vm logs ernic-hub    && exit 1)
-        [ "$worker_ok" = "healthy" ] || (qemu-tool compose --stack vfio-user-ernic-2vm logs ernic-worker && exit 1)
-        echo "✓ two-VM ernic hub and worker healthy"
-        qemu-tool compose --stack vfio-user-ernic-2vm down
+        echo "✓ mesh manager, worker, both GPU servers and both SDXI servers healthy"
+        qemu-tool compose --stack rocm-golden down

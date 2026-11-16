@@ -34,7 +34,7 @@ title: Documentation
 ## Tracked benchmarks
 
 All five are measured by `qemu-minimal-report-for-vm-rocm-golden.yml` against
-one stack, described by `qemu/xml/rocm-golden.xml`: two guests from the
+one stack, described by `qemu/stacks/rocm-golden.xml`: two guests from the
 published rocm-golden image, each with a GPU, an NVMe, an RDMA NIC and an SDXI
 device.
 

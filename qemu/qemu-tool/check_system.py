@@ -25,8 +25,9 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import settings
 from .compose import resolve_identity
-from .envfile import find as find_env_file, parse_layers
+from .fleet_xml import FleetConfig, FleetXml
 
 # Exit codes. A WARN does not fail the command: a host that is merely tight
 # still works, and a check-system that cried wolf would stop being run.
@@ -171,7 +172,7 @@ def _check_kvm() -> list[Result]:
                                  "kvm group")]
 
 
-def _check_identity(settings: list[Path]) -> list[Result]:
+def _check_identity() -> list[Result]:
     """Who the containers will run as, stated outright.
 
     Worth a line of its own even when it is fine, because "which uid did my
@@ -180,7 +181,7 @@ def _check_identity(settings: list[Path]) -> list[Result]:
     default visible rather than merely true.
     """
     try:
-        ident, source = resolve_identity(settings)
+        ident, source = resolve_identity()
     except SystemExit as exc:
         return [Result("container identity", _FAIL, str(exc).splitlines()[0],
                        "CONTAINER_USER must be numeric <uid>:<gid>, or unset")]
@@ -197,10 +198,10 @@ def _check_identity(settings: list[Path]) -> list[Result]:
 
 
 def _check_tun() -> list[Result]:
-    """/dev/net/tun, which only an ERNIC_TAP fleet needs.
+    """/dev/net/tun, which only an <ernic-tap> fleet needs.
 
-    A warning and not a failure: the single-VM stacks and any fleet with
-    ERNIC_TAP off never touch it. But without it a tap fleet has no guest
+    A warning and not a failure: a fleet with <ernic-tap> off never
+    touches it. But without it a tap fleet has no guest
     Ethernet at all -- ARP goes unanswered and ib_send_bw cannot do its
     out-of-band exchange -- and that presents as an RDMA failure, nowhere
     near the missing device node.
@@ -208,7 +209,7 @@ def _check_tun() -> list[Result]:
     path = Path("/dev/net/tun")
     if not path.exists():
         return [Result("/dev/net/tun", _WARN, "missing",
-                       "needed only by ERNIC_TAP fleets, which cannot do "
+                       "needed only by <ernic-tap> fleets, which cannot do "
                        "inter-node RDMA without it: modprobe tun")]
     return [Result("/dev/net/tun", _OK, "")]
 
@@ -234,7 +235,7 @@ def free_gb(path: Path) -> float:
     return shutil.disk_usage(probe).free / 1024 ** 3
 
 
-def _check_capacity(values: dict[str, str]) -> list[Result]:
+def _check_capacity(fleet: FleetConfig | None) -> list[Result]:
     cores = os.cpu_count() or 1
     mem_mb = _mem_total_mb()
     out = [Result("cpu", _OK, f"{cores} cores"),
@@ -244,11 +245,8 @@ def _check_capacity(values: dict[str, str]) -> list[Result]:
     # failure: an oversubscribed host still boots, it just loses guests to the
     # mesh manager's untunable 20 s heartbeat, which presents as
     # "vfio-user: timed out waiting for reply" (AGENTS.md issue 14).
-    try:
-        vcpus = int(values.get("VM_VCPUS") or 0)
-        count = int(values.get("VM_COUNT") or 0)
-    except ValueError:
-        vcpus = count = 0
+    vcpus = fleet.vm_vcpus if fleet else 0
+    count = fleet.count if fleet else 0
     if vcpus and count:
         budget = cores * 5 // 4
         over = vcpus * count > budget
@@ -256,15 +254,15 @@ def _check_capacity(values: dict[str, str]) -> list[Result]:
             "vCPU budget", _WARN if over else _OK,
             f"{count} x {vcpus} vCPU = {vcpus * count} against {cores} cores",
             "expect heartbeat evictions and lost guests (AGENTS.md issue 14); "
-            "reduce VM_COUNT or VM_VCPUS" if over else ""))
+            "reduce <vm-count> or <vm-vcpus>" if over else ""))
         if vcpus < 4:
             out.append(Result(
-                "VM_VCPUS floor", _FAIL, f"{vcpus}",
+                "<vm-vcpus> floor", _FAIL, f"{vcpus}",
                 "below 4 vCPU ionic_rdma never probes, and the only symptom "
                 "is a line in a guest log nobody is reading"))
 
     # /dev/shm is NOT where guest RAM is accounted -- a memfd is anonymous and
-    # charged to the cgroup as shmem -- but shm_size must still be >= VM_VMEM
+    # charged to the cgroup as shmem -- but shm_size must still be >= <vm-vmem>
     # or QEMU refuses to allocate the backend, so the mount has to be big
     # enough to cap it.
     try:
@@ -275,16 +273,16 @@ def _check_capacity(values: dict[str, str]) -> list[Result]:
     return out
 
 
-def _check_images_dir(values: dict[str, str]) -> list[Result]:
-    raw = values.get("VM_IMAGES_DIR")
+def _check_images_dir(fleet: FleetConfig | None) -> list[Result]:
+    raw = fleet.vm_images_dir if fleet else ""
     if not raw:
-        return [Result("VM_IMAGES_DIR", _SKIP, "not set in any settings file")]
+        return [Result("<vm-images-dir>", _SKIP, "not set in any settings file")]
     path = Path(raw)
     if not path.is_dir():
-        return [Result("VM_IMAGES_DIR", _WARN, f"{path} does not exist",
-                       "gen-vm will create it, or point VM_IMAGES_DIR "
+        return [Result("<vm-images-dir>", _WARN, f"{path} does not exist",
+                       "gen-vm will create it, or point <vm-images-dir> "
                        "somewhere that exists")]
-    out = [Result("VM_IMAGES_DIR", _OK, str(path))]
+    out = [Result("<vm-images-dir>", _OK, str(path))]
     writable = os.access(path, os.W_OK | os.X_OK)
     out.append(Result("  writable by you", _OK if writable else _FAIL,
                       "" if writable else f"{path} is not writable",
@@ -319,18 +317,33 @@ def _check_images_dir(values: dict[str, str]) -> list[Result]:
     return out
 
 
-def _check_settings(settings: list[Path]) -> list[Result]:
-    """Which settings file qemu-tool would actually read.
+def _check_settings(layers: list[Path]) -> list[Result]:
+    """Which settings file qemu-tool would actually read, and whether it parses.
 
-    Printed because the search path has four entries and the answer surprises
-    people -- a stale qemu/.env in a checkout outranks the system one, and a
-    fleet then runs with half-remembered values.
+    Printed because the search path has five entries and the answer surprises
+    people -- a stale fleet.xml in the working directory outranks the system
+    one, and a fleet then runs with half-remembered values.
+
+    Validity is FleetXml.problems(), the same strict parse every subcommand
+    enforces, so a file this passes is a file they accept. One FAIL line per
+    problem: a misspelt element names itself and its file.
     """
-    if not settings:
+    if not layers:
         return [Result("settings file", _WARN, "none found on the search path",
-                       "cp qemu/xml/fleet-example.xml my-fleet.xml, or pass --xml")]
-    return [Result("settings file", _OK, str(settings[0]))] + [
-        Result("  overlay", _OK, str(p)) for p in settings[1:]]
+                       "cp qemu/stacks/rocm-golden.xml my-fleet.xml, or pass --xml")]
+    out: list[Result] = []
+    for index, path in enumerate(layers):
+        out.append(Result("  overlay" if index else "settings file", _OK,
+                          str(path)))
+        problems = FleetXml.problems(path)
+        if not problems:
+            out.append(Result("  valid fleet XML", _OK, ""))
+        for problem in problems:
+            out.append(Result(
+                "  valid fleet XML", _FAIL, problem,
+                "every subcommand refuses this file until it is fixed; the "
+                "elements are listed in qemu-tool(1) and qemu/stacks/rocm-golden.xml"))
+    return out
 
 
 def _check_qemu_tool() -> list[Result]:
@@ -351,7 +364,7 @@ def _check_qemu_tool() -> list[Result]:
 # Entry point
 # ---------------------------------------------------------------------------
 
-def collect(env_file: list[Path] | None = None) -> list[tuple[str, list[Result]]]:
+def collect(xml: list[Path] | None = None) -> list[tuple[str, list[Result]]]:
     """Every check, grouped by area, with nothing printed and nothing exited.
 
     Split from run() so the exit-status POLICY can be tested without
@@ -361,22 +374,22 @@ def collect(env_file: list[Path] | None = None) -> list[tuple[str, list[Result]]
     check-system correctly calls that a blocking failure, and two tests went
     red on a PR that had not touched them.
     """
-    settings = find_env_file(env_file)
+    layers = settings.find(xml)
     try:
-        values = parse_layers(settings) if settings else {}
+        fleet = settings.load_fleet(layers) if layers else None
     except SystemExit:
-        # A settings file this tool cannot parse is itself the finding, and a
-        # better one than dying halfway through the report.
-        values = {}
+        # A settings file this tool cannot parse is itself the finding, and
+        # _check_settings reports it; better than dying halfway through.
+        fleet = None
 
     return [
         ("Tools", _check_tools()),
         ("Docker", _check_docker()),
         ("Virtualisation", _check_kvm() + _check_tun()),
-        ("Container identity", _check_identity(settings)),
-        ("Settings", _check_settings(settings) + _check_qemu_tool()),
-        ("Capacity", _check_capacity(values)),
-        ("Images", _check_images_dir(values)),
+        ("Container identity", _check_identity()),
+        ("Settings", _check_settings(layers) + _check_qemu_tool()),
+        ("Capacity", _check_capacity(fleet)),
+        ("Images", _check_images_dir(fleet)),
     ]
 
 
@@ -419,7 +432,7 @@ def report(groups: list[tuple[str, list[Result]]]) -> int:
     return 0
 
 
-def run(env_file: list[Path] | None = None) -> None:
-    code = report(collect(env_file))
+def run(xml: list[Path] | None = None) -> None:
+    code = report(collect(xml))
     if code:
         sys.exit(code)

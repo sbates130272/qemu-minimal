@@ -1,7 +1,7 @@
 name: qemu-minimal - Publish - qcow-rocm-golden
 
-# Bakes the rocm-golden guest, qualifies it, and publishes the qcow2 that
-# quick-start, the fleet files and the other repos pull.
+# Bakes the rocm-golden guest, qualifies it, and publishes the qcow2 to
+# <publish-ref> in qemu/stacks/rocm-golden.xml.
 #
 # The gate, in order, all of it before anything is pushed:
 #
@@ -9,13 +9,14 @@ name: qemu-minimal - Publish - qcow-rocm-golden
 #   2. bake with the playbook's own defaults
 #   3. boot with NO device attached and run qemu/checks/rocm-golden.sh,
 #      which is how most consumers first meet the image
-#   4. boot behind the compose stack with the ernic, rocjitsu and SDXI
-#      devices, run the configure, firmware and test stages, and copy
-#      through the SDXI engine
+#   4. boot as one guest of the default fleet, behind a stack rendered from
+#      qemu/stacks/rocm-golden.xml, with the ernic, rocjitsu and SDXI devices,
+#      run the configure, firmware and test stages, and copy through the
+#      SDXI engine
 #
 # What is published is the BAKE, not the disk that was tested. Steps 3 and 4
-# load modules, install an ip_discovery.bin and leave test output behind; they
-# run on the overlay gen-vm creates, and the base underneath is what is
+# load modules, install an ip_discovery.bin and leave test output behind; each
+# runs on an overlay gen-vm creates, and the base underneath is what is
 # pushed. The base's mtime is compared across the two boots to prove it.
 #
 # Never from a pull request: this writes to a registry.
@@ -33,7 +34,7 @@ on:
       - 'ansible/**'
       - 'qemu/checks/**'
       - 'qemu/packages.d/**'
-      - 'qemu/xml/rocm-golden.xml'
+      - 'qemu/stacks/rocm-golden.xml'
       - '.github/workflows/qemu-minimal-publish-qcow-rocm-golden.yml'
 
 # One publish at a time, and never cancelled part-way through a push.
@@ -48,13 +49,16 @@ env:
   ERNIC_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261112.gdca6903-ernic.90434a2-vfu.05bb5e5
   ROCJITSU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261112.gdca6903-rocjitsu.50be05a
   QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261112.gdca6903-qemu11.1.3-vfu.05bb5e5
-  SDXI_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-sdxi:20261112.gdca6903-sdxi.c50f2b9
   VM_IMAGES_DIR: /var/lib/qemu-tool/images
   VM_NAME: rocm-golden
-  # The published repository. Consumers pin the dated tag; latest rolls.
-  # Docker Hub, pushed with the DOCKERHUB_USERNAME and DOCKERHUB_TOKEN
-  # repository secrets. The token needs read and write on this repository.
-  PUBLISH_REF: docker.io/sbates130272/qemu-minimal-rocm-golden
+  # The with-device gate's stack. Under the shared mount, like the images;
+  # the compose project is this directory's basename, publish-gate.
+  STACK_DIR: /var/lib/qemu-tool/stacks/publish-gate
+  OVERLAY: /var/lib/qemu-tool/stacks/publish-gate.xml
+  # The published repository is <publish-ref> in qemu/stacks/rocm-golden.xml.
+  # Consumers pin the dated tag; latest rolls. Docker Hub, pushed with the
+  # DOCKERHUB_USERNAME and DOCKERHUB_TOKEN repository secrets. The token
+  # needs read and write on that repository.
   ORAS_VERSION: 1.3.6
   ORAS_SHA256: 66fb0ad7206f3f6fa77ed5b552049d364ccf4b50b1684554f731f76302b52ca0  # pre-commit: ignore
   SSH_OPTS: >-
@@ -133,25 +137,24 @@ jobs:
         docker pull "$ERNIC_IMAGE"
         docker pull "$ROCJITSU_IMAGE"
         docker pull "$QEMU_IMAGE"
-        docker pull "$SDXI_IMAGE"
+        # Read from the fleet file, which is what the gate stack runs.
+        docker pull "$(sed -n 's|.*<sdxi-image>\(.*\)</sdxi-image>.*|\1|p' qemu/stacks/rocm-golden.xml)"
 
     # No ANSIBLE_EXTRA_ARGS: the playbook's defaults are the published
-    # image's, and the package manifest is the published guest's.
+    # image's. The release, size, vCPUs, account, package manifest and
+    # playbook are the <bake-*> elements of the default fleet; --bake is what
+    # makes gen-vm build from the cloud image instead of pulling the fleet's
+    # <backing-ref>. A plain run step, not qemu-tool-action: the action always
+    # passes --release, which would outrank <bake-release>. Only --vm-name and
+    # --images are passed, and both agree with the fleet file: the steps
+    # below find the image by them.
     - name: Bake the guest
-      uses: sbates130272/qemu-tool-action@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        operation: gen-vm
-        qemu-tool-source: ./qemu
-        vm-name: ${{ env.VM_NAME }}
-        release: resolute
-        size: '64'
-        vcpus: '4'
-        ansible-playbook: ansible/playbooks/vm-rocm-golden.yml
-        extra-args: >-
-          --username ubuntu --password password
-          --packages qemu/packages.d/rocm-golden.txt
+      run: |
+        mkdir -p "$VM_IMAGES_DIR"
+        qemu-tool gen-vm --bake --xml qemu/stacks/rocm-golden.xml \
+          --vm-name "$VM_NAME" --images "$VM_IMAGES_DIR"
 
     - name: Record the baked base
       run: |
@@ -204,33 +207,89 @@ jobs:
         pkill -f "qemu-system.*${VM_NAME}" || true
 
     # ── Gate: behind the compose stack, with the devices ──────────────────
-    - name: Bring up the compose stack
-      uses: sbates130272/qemu-tool-action@v1
-      env:
-        QEMU_TOOL_SRC: /var/lib/qemu-tool/src
-        # ionic_rdma needs 4 online CPUs.
-        VM_VCPUS: "4"
-        VM_VMEM: "4096"
-        VM_SHM_SIZE: "5g"
-      with:
-        operation: compose
-        qemu-tool-source: ./qemu
-        vm-name: ${{ env.VM_NAME }}
-        stack: vfio-user-ernic-rocjitsu-vm
-        compose-args: up --detach
-        wait-for-healthy: 'true'
-        wait-timeout: '60'
+    # One guest of the default fleet, which is how quick-start consumers meet
+    # the image. The fleet names its guests <vm-name-prefix>-N, so the guest
+    # is ${VM_NAME}-1: a second overlay on the bake, made the way a fleet
+    # makes its guests. Everything else is the default fleet's, bar two
+    # things a single guest has no use for -- the TAP, which is the L2 path
+    # to a peer, and P4 in guest scope, which no stage below exercises.
+    #
+    # <qemu-tool-src> is a HOST path: compose bind mounts are resolved by the
+    # host daemon, and the checkout exists only in this container, so
+    # setup-vm-job staged a copy under the shared mount.
+    - name: Render the gate stack
+      run: |
+        set -eu
+        mkdir -p "$(dirname "$OVERLAY")"
+        cat > "$OVERLAY" <<XML
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!-- Written by qemu-minimal-publish-qcow-rocm-golden.yml. Not a settings file anyone runs by hand. -->
+        <fleet xmlns="http://qemu-tool/fleet/1.0">
+          <vm-count>1</vm-count>
+          <vm-name-prefix>${VM_NAME}</vm-name-prefix>
+          <vm-images-dir>${VM_IMAGES_DIR}</vm-images-dir>
+          <qemu-tool-src>/var/lib/qemu-tool/src</qemu-tool-src>
+          <ernic-tap>false</ernic-tap>
+          <p4-enable>false</p4-enable>
+        </fleet>
+        XML
+        cat "$OVERLAY"
+        qemu-tool gen-vm \
+          --vm-name "${VM_NAME}-1" \
+          --images "$VM_IMAGES_DIR" \
+          --backing-file "$VM_IMAGES_DIR/${VM_NAME}-backing.qcow2"
+        qemu-tool gen-compose \
+          --xml qemu/stacks/rocm-golden.xml --xml "$OVERLAY" \
+          --output-dir "$STACK_DIR"
+        # The render is what names the disk the guest boots from. Asserted,
+        # because a guest name that matches no image is a QEMU that exits.
+        grep -q -- "--vm-name \"${VM_NAME}-1\"" "$STACK_DIR/docker-compose.yml"
+        grep -q '^  sdxi-1:' "$STACK_DIR/docker-compose.yml"
+
+    # `up` returns once the guest's container has started, which compose
+    # only does after every device server it depends on reports healthy.
+    - name: Bring up the gate stack
+      run: |
+        qemu-tool compose --stack-dir "$STACK_DIR" \
+          --xml qemu/stacks/rocm-golden.xml --xml "$OVERLAY" \
+          up --detach
+
+    # Asked of the containers rather than of compose: a service that exited
+    # is absent from `compose ps`, not failed.
+    - name: Wait for the device servers
+      run: |
+        set -eu
+        elapsed=0
+        while true; do
+          bad=""
+          for svc in ernic-1 rocjitsu-1 sdxi-1; do
+            h=$(docker inspect -f '{{.State.Health.Status}}' \
+                  "publish-gate-${svc}-1" 2>/dev/null || echo missing)
+            if [ "$h" != healthy ]; then bad="$bad ${svc}=${h}"; fi
+          done
+          q=$(docker inspect -f '{{.State.Status}}' \
+                publish-gate-qemu-1-1 2>/dev/null || echo missing)
+          if [ "$q" != running ]; then bad="$bad qemu-1=${q}"; fi
+          if [ -z "$bad" ]; then break; fi
+          if [ "$elapsed" -ge 60 ]; then
+            echo "the stack is not ready after ${elapsed}s:${bad}" >&2
+            qemu-tool compose --stack-dir "$STACK_DIR" ps --all || true
+            exit 1
+          fi
+          sleep 5; elapsed=$((elapsed + 5))
+        done
+        echo "device servers healthy and the guest's container running after ${elapsed}s"
 
     # The qemu container publishes 2222 on the HOST, which this job container
-    # cannot reach. Attach to the compose network and use the service name.
-    - name: Join the compose network
-      run: docker network connect vfio-user-ernic-rocjitsu-vm_default "$(cat /etc/hostname)"
+    # cannot reach. Attach to the stack's network and use the service name.
+    - name: Join the stack network
+      run: docker network connect publish-gate_fleet "$(cat /etc/hostname)"
 
     - name: Wait for the guest behind the stack
       run: |
         elapsed=0
         while [ $elapsed -lt 240 ]; do
-          if ssh $SSH_OPTS -p 2222 ubuntu@qemu true 2>/dev/null; then
+          if ssh $SSH_OPTS -p 2222 ubuntu@qemu-1 true 2>/dev/null; then
             echo "guest up after ${elapsed}s"
             exit 0
           fi
@@ -241,46 +300,49 @@ jobs:
 
     - name: Run the configure and live firmware stages
       run: |
-        ansible-playbook -i "qemu," ansible/playbooks/vm-rocm-golden.yml \
+        ansible-playbook -i "qemu-1," ansible/playbooks/vm-rocm-golden.yml \
           --tags configure,firmware \
-          -e "ansible_host=qemu" -e "ansible_port=2222" -e "ansible_user=ubuntu" \
+          -e "ansible_host=qemu-1" -e "ansible_port=2222" -e "ansible_user=ubuntu" \
           -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"'
 
     - name: Verify the RDMA port is active
       run: |
-        ssh $SSH_OPTS -p 2222 ubuntu@qemu "ibv_devinfo" | tee /tmp/ibv_devinfo.txt
+        ssh $SSH_OPTS -p 2222 ubuntu@qemu-1 "ibv_devinfo" | tee /tmp/ibv_devinfo.txt
         grep -q PORT_ACTIVE /tmp/ibv_devinfo.txt
 
     # The test stage probes amdgpu itself and runs the GPU workloads.
     - name: Run the GPU test stage
       timeout-minutes: 30
       run: |
-        ansible-playbook -i "qemu," ansible/playbooks/vm-rocm-golden.yml \
+        ansible-playbook -i "qemu-1," ansible/playbooks/vm-rocm-golden.yml \
           --tags test \
-          -e "ansible_host=qemu" -e "ansible_port=2222" -e "ansible_user=ubuntu" \
+          -e "ansible_host=qemu-1" -e "ansible_port=2222" -e "ansible_user=ubuntu" \
           -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"'
 
-    # Bounded: a guest driver ahead of its server waits for a completion
-    # interrupt that never arrives, and that must fail the gate, not hang it.
+    # The guest has the Python sdxi-cli, whose `copy` is the polled ioctl
+    # path; `bench uring` waits for a completion MSI-X that a server older
+    # than the guest pin never raises. Bounded so a hang fails the gate.
     - name: Copy through the SDXI engine
       timeout-minutes: 5
       run: |
-        ssh $SSH_OPTS -p 2222 ubuntu@qemu "test -e /dev/sdxi0"
-        ssh $SSH_OPTS -p 2222 ubuntu@qemu \
-          "timeout 120 sdxi-cli -d /dev/sdxi0 bench copy 4194304 20"
+        ssh $SSH_OPTS -p 2222 ubuntu@qemu-1 "test -e /dev/sdxi0"
+        ssh $SSH_OPTS -p 2222 ubuntu@qemu-1 \
+          "head -c 4194304 /dev/urandom > /tmp/sdxi-src \
+           && timeout 120 sdxi-cli -d /dev/sdxi0 copy /tmp/sdxi-src /tmp/sdxi-dst \
+           && cmp /tmp/sdxi-src /tmp/sdxi-dst"
 
     - name: Dump guest dmesg on failure
       if: failure()
       timeout-minutes: 2
-      run: ssh $SSH_OPTS -p 2222 ubuntu@qemu "sudo dmesg | tail -200" || true
+      run: ssh $SSH_OPTS -p 2222 ubuntu@qemu-1 "sudo dmesg | tail -200" || true
 
     - name: Show compose logs on failure
       if: failure()
-      run: qemu-tool compose --stack vfio-user-ernic-rocjitsu-vm logs || true
+      run: qemu-tool compose --stack-dir "$STACK_DIR" logs || true
 
     - name: Tear the stack down
       if: always()
-      run: qemu-tool compose --stack vfio-user-ernic-rocjitsu-vm down || true
+      run: qemu-tool compose --stack-dir "$STACK_DIR" down || true
 
     # ── Publish ───────────────────────────────────────────────────────────
     - name: Check the baked base was not written to
@@ -308,14 +370,16 @@ jobs:
         DRY_RUN: ${{ inputs.dry-run && '--dry-run' || '' }}
       run: |
         tag="$(date -u +%Y%m%d).g$(printf '%s' "$GITHUB_SHA" | cut -c1-7)"
+        # The repository, name, flavour, account, release and playbook are
+        # the default fleet's <publish-*> and <bake-*> elements. --image is
+        # the file the step above checked, and --key the job's own keypair:
+        # the fleet file names no key, so there is none to pick up by default.
         qemu-tool publish-qcow \
+          --xml qemu/stacks/rocm-golden.xml \
           --image "$VM_IMAGES_DIR/${VM_NAME}-backing.qcow2" \
-          --ref "$PUBLISH_REF" --tag "$tag" --tag latest \
+          --tag "$tag" --tag latest \
           --key "$HOME/.ssh/id_rsa" \
-          --vm-name "$VM_NAME" --flavour rocm-golden \
-          --username ubuntu --password password --release resolute \
           --guest-stamp guest-stamp.json \
-          --playbook ansible/playbooks/vm-rocm-golden.yml \
           --commit "$GITHUB_SHA" \
           --source "$SOURCE_URL" \
           --digest-file published-ref.txt $DRY_RUN

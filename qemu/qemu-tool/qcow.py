@@ -84,10 +84,10 @@ def _default_image_dirs() -> list[Path]:
     Checks (in order, deduplicating):
       1. System-wide /var/lib/qemu-tool/images/
       2. User XDG ~/.local/share/qemu-tool/images/
-      3. VM_IMAGES_DIR from any local env files found by the env-file search
+      3. <vm-images-dir> from the fleet.xml the settings search path finds
     """
     from .config import _INSTALLED_IMAGES, _xdg_data_home  # type: ignore[attr-defined]
-    from .envfile import load as _load_env  # type: ignore[attr-defined]
+    from . import settings
     seen: set[Path] = set()
     dirs: list[Path] = []
 
@@ -100,19 +100,21 @@ def _default_image_dirs() -> list[Path]:
     _add(_INSTALLED_IMAGES)
     _add(_xdg_data_home() / "qemu-tool" / "images")
 
-    # Shell environment variable takes priority for interactive use.
+    # An exported VM_IMAGES_DIR is scanned as well, as one more directory.
     env_var = os.environ.get("VM_IMAGES_DIR")
     if env_var:
         _add(Path(env_var))
 
-    # Also pick up VM_IMAGES_DIR from any local env file the tool would load.
+    # Also pick up the images directory of the fleet.xml the tool would load.
+    # The strict parser reports a bad file with sys.exit(), and a listing
+    # needs no settings, so that must not stop it.
     try:
-        env = _load_env([])
-        images_from_env = env.get("VM_IMAGES_DIR")
-        if images_from_env:
-            _add(Path(images_from_env))
-    except Exception:
-        pass
+        images_from_settings = settings.load().get("images")
+        if images_from_settings:
+            _add(images_from_settings)
+    except (Exception, SystemExit) as exc:
+        reason = str(exc).replace("Error: ", "").replace("\n", "; ")
+        print(f"Warning: ignoring the settings file: {reason}", file=sys.stderr)
 
     if not dirs:
         from .config import default_images  # type: ignore[attr-defined]

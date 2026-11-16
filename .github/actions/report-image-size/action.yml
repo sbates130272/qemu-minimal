@@ -20,7 +20,7 @@ inputs:
   ssh-host:
     description: >-
       Host the guest answers SSH on -- "localhost" for a run-vm lane,
-      "qemu" for a compose lane. Leave empty to skip the in-guest half.
+      "qemu-1" for a compose lane. Leave empty to skip the in-guest half.
     required: false
     default: ''
   ssh-port:

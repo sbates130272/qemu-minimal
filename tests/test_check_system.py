@@ -128,12 +128,101 @@ class TestRealHost(unittest.TestCase):
         settings fact, so it must be a FAIL on any machine.
         """
         with tempfile.TemporaryDirectory() as tmp:
-            layer = Path(tmp) / "env"
-            layer.write_text("VM_COUNT=2\nVM_VCPUS=2\n")
+            layer = Path(tmp) / "fleet.xml"
+            layer.write_text(
+                "<fleet xmlns='http://qemu-tool/fleet/1.0'>"
+                "<vm-count>2</vm-count><vm-vcpus>2</vm-vcpus></fleet>\n")
             groups = cs.collect([layer])
-        floor = [r for _, rs in groups for r in rs if r.name == "VM_VCPUS floor"]
+        floor = [r for _, rs in groups for r in rs if r.name == "<vm-vcpus> floor"]
         self.assertEqual([r.status for r in floor], [cs._FAIL])
 
+
+
+class TestSettingsValidity(unittest.TestCase):
+    """A settings file that is not valid fleet XML is a blocking failure.
+
+    Host-independent for the same reason the vCPU floor is: it is a fact
+    about the file. The report names the file and the element, and still
+    runs to the end rather than dying on the first unparsable layer.
+    """
+
+    NS = "xmlns='http://qemu-tool/fleet/1.0'"
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = Path(tmp.name)
+
+    def _layer(self, name: str, body: str) -> Path:
+        path = self.tmp / name
+        path.write_text(f"<fleet {self.NS}>{body}</fleet>\n")
+        return path
+
+    def _settings(self, layers: list[Path]) -> list[Result]:
+        groups = dict(cs.collect(layers))
+        return [r for r in groups["Settings"] if "valid fleet XML" in r.name]
+
+    def test_a_valid_file_gets_an_ok_line(self):
+        results = self._settings([self._layer("fleet.xml", "<vm-count>2</vm-count>")])
+        self.assertEqual([r.status for r in results], [cs._OK])
+
+    def test_the_committed_default_is_valid(self):
+        default = REPO_ROOT / "qemu" / "stacks" / "rocm-golden.xml"
+        self.assertEqual([r.status for r in self._settings([default])], [cs._OK])
+
+    def test_an_unknown_element_fails_naming_file_and_element(self):
+        layer = self._layer("fleet.xml", "<vm-vcpu>4</vm-vcpu>")
+        (result,) = self._settings([layer])
+        self.assertEqual(result.status, cs._FAIL)
+        self.assertIn(str(layer), result.detail)
+        self.assertIn("unknown element <vm-vcpu>", result.detail)
+        self.assertIn("did you mean <vm-vcpus>?", result.detail)
+
+    def test_a_repeated_element_fails(self):
+        layer = self._layer("fleet.xml",
+                            "<vm-count>2</vm-count><vm-count>3</vm-count>")
+        (result,) = self._settings([layer])
+        self.assertEqual(result.status, cs._FAIL)
+        self.assertIn("<vm-count> appears more than once", result.detail)
+
+    def test_each_layer_is_judged_and_the_bad_one_is_named(self):
+        base = self._layer("fleet.xml", "<vm-count>2</vm-count>")
+        overlay = self._layer("overlay.xml", "<logs-enabled>false</logs-enabled>")
+        results = self._settings([base, overlay])
+        self.assertEqual([r.status for r in results], [cs._OK, cs._FAIL])
+        self.assertIn(str(overlay), results[1].detail)
+        self.assertNotIn(str(base), results[1].detail)
+
+    def test_every_problem_gets_its_own_line(self):
+        layer = self._layer("fleet.xml",
+                            "<vm-vcpu>4</vm-vcpu><vm-count>many</vm-count>")
+        results = self._settings([layer])
+        self.assertEqual([r.status for r in results], [cs._FAIL, cs._FAIL])
+
+    def test_xml_that_is_not_well_formed_fails_and_the_report_finishes(self):
+        layer = self.tmp / "fleet.xml"
+        layer.write_text(f"<fleet {self.NS}><vm-count>2</vm-cout></fleet>")
+        groups = cs.collect([layer])
+        self.assertEqual([title for title, _ in groups][-1], "Images")
+        (result,) = [r for r in dict(groups)["Settings"]
+                     if "valid fleet XML" in r.name]
+        self.assertEqual(result.status, cs._FAIL)
+        self.assertIn("XML parse error", result.detail)
+
+    def test_an_invalid_file_sets_the_exit_status(self):
+        layer = self._layer("fleet.xml", "<vm-vcpu>4</vm-vcpu>")
+        out, code = _run([layer])
+        self.assertEqual(code, 1)
+        self.assertIn("[ FAIL ]   valid fleet XML", out)
+        self.assertIn("unknown element <vm-vcpu>", out)
+
+    def test_the_validity_check_is_the_parser_itself(self):
+        """Identity, as with quick-start's preflight: check must not grow a
+        second opinion about what a valid fleet file is."""
+        from qemu_tool.fleet_xml import FleetXml
+
+        self.assertIs(cs.FleetXml, FleetXml)
+        self.assertIs(quick_start.FleetXml, FleetXml)
 
 
 class TestIdentity(unittest.TestCase):
@@ -208,8 +297,10 @@ class TestReadOnly(unittest.TestCase):
     def test_a_missing_images_dir_is_not_created(self):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "nope"
-            layer = Path(tmp) / "env"
-            layer.write_text(f"VM_IMAGES_DIR={target}\n")
+            layer = Path(tmp) / "fleet.xml"
+            layer.write_text(
+                "<fleet xmlns='http://qemu-tool/fleet/1.0'>"
+                f"<vm-images-dir>{target}</vm-images-dir></fleet>\n")
             out, _ = _run([layer])
             self.assertFalse(target.exists())
         self.assertIn("does not exist", out)

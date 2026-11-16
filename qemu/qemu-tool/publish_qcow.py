@@ -20,6 +20,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+from .fleet_xml import FleetConfig, FleetXml
 from .vm_artifact import (
     VM_ARTIFACT_TYPE,
     VM_INFO_ARTIFACT_TYPE,
@@ -76,6 +77,38 @@ def key_fingerprint(public_key: Path) -> str:
     )
     # "<bits> <fingerprint> <comment> (<type>)"
     return out.stdout.split()[1]
+
+
+def _key_material(public_key: Path) -> tuple[str, str] | None:
+    """(type, base64) of an OpenSSH public key file; None if it has no key."""
+    try:
+        fields = public_key.read_text().split()
+    except OSError:
+        return None
+    return (fields[0], fields[1]) if len(fields) >= 2 else None
+
+
+def _check_baked_key(sidecar: Path, public_key: Path) -> None:
+    """Refuse a key that is not the one gen-vm authorised in this image.
+
+    gen-vm records the public key it baked in beside the image. Publishing a
+    different pair ships a private key the guest does not accept, with its
+    fingerprint recorded as the guest's. Nothing recorded means nothing to
+    compare, and is not an error.
+    """
+    try:
+        recorded = json.loads(sidecar.read_text()).get("ssh_key_file")
+    except (OSError, ValueError, AttributeError):
+        return
+    baked = _key_material(Path(recorded)) if recorded else None
+    if baked is None or baked == _key_material(public_key):
+        return
+    sys.exit(
+        f"Error: {public_key} is not the key this image authorises.\n"
+        f"       {sidecar} records that it was baked with {recorded}.\n"
+        f"       Re-bake with 'gen-vm --bake --ssh-key-file {public_key}', "
+        "or pass the --key that matches."
+    )
 
 
 def build_vm_info(args: argparse.Namespace, facts: dict, qcow2_name: str,
@@ -161,7 +194,50 @@ def _annotation_args(annotations: dict) -> list[str]:
     return [a for k, v in annotations.items() for a in ("--annotation", f"{k}={v}")]
 
 
+def resolve(args: argparse.Namespace) -> None:
+    """Fill the flags left unset from the --xml layers, then the defaults.
+
+    Only an explicit --xml is read. An ambient fleet.xml must not decide
+    what goes to a registry.
+    """
+    fleet = FleetXml.parse_layers(FleetXml.find(args.xml)) if args.xml else None
+    have = fleet or FleetConfig()
+
+    def fill(attr: str, from_xml: str, default: str | None = None) -> None:
+        if getattr(args, attr) is None:
+            setattr(args, attr, from_xml or default)
+
+    fill("ref", have.publish_ref)
+    fill("vm_name", have.bake_name)
+    fill("flavour", have.publish_flavour, "rocm-golden")
+    fill("username", have.bake_username, "ubuntu")
+    fill("password", have.bake_password, "password")
+    fill("release", have.bake_release, "resolute")
+    fill("playbook", have.bake_playbook, "")
+
+    if args.image is None and fleet is not None and args.vm_name:
+        # The name gen-vm gives the image it bakes.
+        args.image = (Path(fleet.vm_images_dir).expanduser()
+                      / f"{args.vm_name}-backing.qcow2")
+    # --key is never filled in. <vm-ssh-key-file> is a fleet's own login
+    # key, usually somebody's ~/.ssh one, and this key is published.
+
+    missing = [
+        hint for attr, hint in (
+            ("ref", "--ref, or <publish-ref> in an --xml layer"),
+            ("vm_name", "--vm-name, or <bake-name> in an --xml layer"),
+            ("image", "--image, or --xml with <bake-name> (or --vm-name) to "
+                      "find it under <vm-images-dir>"),
+            ("key", "--key (never taken from a settings file, <vm-ssh-key-file> "
+                    "included: the key is published)"),
+        ) if not getattr(args, attr)
+    ]
+    if missing:
+        sys.exit("Error: publish-qcow needs:\n  " + "\n  ".join(missing))
+
+
 def run(args: argparse.Namespace) -> None:
+    resolve(args)
     tools = ["qemu-img", "zstd", "ssh-keygen"] + ([] if args.dry_run else ["oras"])
     for tool in tools:
         if shutil.which(tool) is None:
@@ -175,6 +251,15 @@ def run(args: argparse.Namespace) -> None:
     for key in (private_key, public_key):
         if not key.is_file():
             sys.exit(f"Error: {key} does not exist.")
+    pulled = image.with_name(image.name + ".image-ref")
+    if pulled.is_file():
+        sys.exit(
+            f"Error: {image} was pulled from {pulled.read_text().strip()} by "
+            "gen-vm, not baked here;\n"
+            "       publishing it would republish that image as a new bake. "
+            "Bake with 'gen-vm --bake' first."
+        )
+    _check_baked_key(image.parent / f"{args.vm_name}.json", public_key)
     if args.guest_stamp and not args.guest_stamp.is_file():
         sys.exit(f"Error: {args.guest_stamp} does not exist.")
     if not args.tag:

@@ -44,8 +44,8 @@ collections:
   # this same SHA so the roles and the sources they build come from one tree --
   # bump both together.
   #
-  # A THIRD thing moves with them: the ernic.<sha> in env/scale-out's
-  # ERNIC_IMAGE. SRQ is the reason -- the SRQ support merged at 3fb74d1,
+  # A THIRD thing moves with them: the ernic.<sha> in the <ernic-ref> of
+  # qemu/stacks/rocm-golden.xml. SRQ is the reason -- the SRQ support merged at 3fb74d1,
   # and the two halves of SRQ ship separately. The device-side emulation is in
   # the server container; the userspace provider is built in-guest from this
   # tree, because no rdma-core release has create_srq in providers/ionic. Run

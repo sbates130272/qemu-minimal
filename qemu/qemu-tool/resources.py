@@ -3,8 +3,8 @@
 qemu-tool has three install shapes and each puts its data somewhere different:
 the .deb writes /usr/share/qemu-tool, a source checkout has qemu/ alongside
 this file, and `pipx install qemu-tool` has neither -- only the wheel. The
-wheel carries the compose stacks, the package manifests and xml/quickstart.xml
-as package data (see [tool.setuptools.package-dir] in pyproject.toml, which maps
+wheel carries the compose stacks, the package manifests and the fleet files
+in stacks/ as package data (see [tool.setuptools.package-dir] in pyproject.toml, which maps
 them in place rather than duplicating them under the package directory).
 
 Callers use this as the *last* resort, after the system path and the checkout,
@@ -21,9 +21,27 @@ from pathlib import Path
 # hands back its parent directory, which fails silently rather than loudly.
 SHARE = "qemu_tool.share"
 COMPOSE = "qemu_tool.share.compose"
-XML = "qemu_tool.share.xml"
+STACKS = "qemu_tool.share.stacks"
 PACKAGES_D = "qemu_tool.share.packages_d"
 CHECKS_D = "qemu_tool.share.checks_d"
+
+_INSTALLED_SHARE = Path("/usr/share/qemu-tool")
+# qemu/ in a checkout; site-packages in a wheel install, where nothing matches.
+_SOURCE_SHARE = Path(__file__).resolve().parent.parent
+
+
+def shipped_path(directory: str, package: str, *parts: str) -> Path | None:
+    """A data file from the .deb, else the checkout, else the wheel."""
+    for root in (_INSTALLED_SHARE, _SOURCE_SHARE):
+        candidate = root.joinpath(directory, *parts)
+        if candidate.exists():
+            return candidate
+    return packaged_path(package, *parts)
+
+
+def stack_fleet(stack: str) -> Path | None:
+    """The fleet file a shipped stack is generated from: stacks/<stack>.xml."""
+    return shipped_path("stacks", STACKS, f"{stack}.xml")
 
 
 def packaged_path(package: str, *parts: str) -> Path | None:

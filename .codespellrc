@@ -1,7 +1,7 @@
 [codespell]
 # Local scratch notes in .git/info/exclude are not skipped: CI never sees them,
 # but a local run globs the working tree and checking them costs nothing.
-skip = .git,*.qcow2,*.img,*.deb,./qemu/compose/vfio-user-ernic-rocjitsu-scale-out/grafana/dashboards/node/node-exporter-full.json
+skip = .git,*.qcow2,*.img,*.deb,./qemu/compose/*/grafana/dashboards/node/node-exporter-full.json
 # hsa: ROCm's Heterogeneous System Architecture, not a typo for "has".
 # blacklist: the literal modprobe/kernel command-line keyword.
 # TRIMed: grafana.com upstream dashboard JSON, not our text.

@@ -93,10 +93,15 @@ def run(cfg: VMConfig) -> None:
         _write_vm_info(cfg, images)
         return
 
+    # Before the download: a missing manifest should not cost a cloud image.
+    _check_packages_exist(cfg)
     cloud_img_file, cloud_img_url = _resolve_cloud_image(cfg)
     _download_if_needed(cfg, images, cloud_img_file, cloud_img_url)
 
     backing = images / f"{cfg.vm_name}-backing.qcow2"
+    # A marker left by an earlier pull under this name would label the bake
+    # as a pulled image, which publish-qcow refuses.
+    backing.with_suffix(".qcow2.image-ref").unlink(missing_ok=True)
     (images / cloud_img_file).rename(backing) if False else None
     subprocess.run(
         ["cp", str(images / cloud_img_file), str(backing)], check=True
@@ -142,7 +147,7 @@ def _write_vm_info(cfg: VMConfig, images: Path) -> None:
     """Write <vm-name>.json alongside the qcow2 for inspect to read.
 
     Records the username and SSH public key path *this gen-vm run was
-    configured with*, so inspect does not need the env file that was active
+    configured with*, so inspect does not need the settings file that was active
     here. That is not the same as what the image accepts: the restore and
     backing-file paths above write this file without creating any image
     content, and a guest booted from an overlay made by some earlier run, or
@@ -539,13 +544,31 @@ def _check_cloud_config(path: Path) -> None:
         sys.exit("Error: the generated cloud-config is not a YAML mapping.")
 
 
+def _missing(what: str, path: Path, sources: str) -> str:
+    """The error for a file a flag or a fleet element named that is not there."""
+    message = f"Error: {what} {path} does not exist!"
+    if not path.is_absolute():
+        message += (
+            f"\n       It is relative, and {sources} are resolved against "
+            f"the current directory ({Path.cwd()})."
+        )
+    return message
+
+
+def _check_packages_exist(cfg: VMConfig) -> None:
+    if cfg.packages is None or cfg.packages == "none":
+        return
+    if not Path(cfg.packages).exists():
+        sys.exit(_missing("package manifest", Path(cfg.packages),
+                          "--packages and <bake-packages>"))
+
+
 def _load_packages(cfg: VMConfig) -> str:
+    _check_packages_exist(cfg)
     if cfg.packages is None or cfg.packages == "none":
         pkgs = ""
-    elif Path(cfg.packages).exists():
-        pkgs = _as_yaml_list(Path(cfg.packages).read_text())
     else:
-        sys.exit(f"Error: package manifest {cfg.packages} does not exist!")
+        pkgs = _as_yaml_list(Path(cfg.packages).read_text())
 
     if not re.search(r"^\s*-\s*qemu-guest-agent\s*$", pkgs, re.MULTILINE):
         if pkgs:
@@ -806,7 +829,8 @@ def _prepare_ansible(cfg: VMConfig) -> None:
         return
     playbook = Path(cfg.ansible_playbook)
     if not playbook.exists():
-        sys.exit(f"Error: ansible playbook {playbook} does not exist!")
+        sys.exit(_missing("ansible playbook", playbook,
+                          "--ansible-playbook and <bake-playbook>"))
     for tool in ("ansible-playbook", "ansible-galaxy"):
         if not _which(tool):
             sys.exit(f"Error: {tool} not found (required for --ansible-playbook)!")

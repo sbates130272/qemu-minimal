@@ -1,7 +1,7 @@
 """Tests for the SSH port a containerised VM is actually reachable on.
 
 A containerised guest's -hostfwd port is the port inside that container's
-network namespace, and the scale-out stack gives every guest 2222 there. So
+network namespace, and a generated stack gives every guest 2222 there. So
 the QEMU command line -- the only thing `qemu-tool list` used to read -- says
 2222 for all forty VMs, which is true and useless. What a user can ssh to is
 the published mapping, and that is the number the listing has to show.

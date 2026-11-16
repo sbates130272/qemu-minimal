@@ -49,7 +49,7 @@
 # %n is the kernel number -- the trailing digits of the sysname -- and every
 # emulated NIC comes up as "...np0", so %n is 0 for all of them and the second
 # rename fails with the name already in use. Unreachable while a fleet had one
-# NIC per guest; certain at ERNIC_PER_VM > 1.
+# NIC per guest; certain at <ernic-per-vm> above 1.
 #
 # A free-index search ("first rocm-ernicN that does not exist yet") fixes the
 # collision but is ORDER-DEPENDENT: it numbers in udev event order, which is a
@@ -145,7 +145,7 @@ SUBSYSTEM=="net", ACTION=="add", KERNEL!="rocm-ernic*", \
 #
 #   (udev-worker)[456]: ionic_1: Process '/bin/sh -c ... ' failed with exit code 1.
 #
-# Measured on the 32-guest dense-fleet (ERNIC_PER_VM=2, 64 devices): 13 guests
+# Measured on the 32-guest dense-fleet (<ernic-per-vm> 2, 64 devices): 13 guests
 # correct, 13 with the IB index CROSSED against the netdev index, and 6 where
 # the second rename failed outright and left rocep3s0. 19 of 32 wrong.
 #

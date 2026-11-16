@@ -14,12 +14,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+from . import settings
 from .config import VMConfig
-from .envfile import (
-    find as _find_env,
-    overrides as _env_overrides,
-    parse_layers as _parse_env_layers,
-)
 from .list_vms import (
     collect as _collect_vms,
     _device_opts,
@@ -47,7 +43,7 @@ _QEMU_NVME_NQN_PREFIX = "nqn.2019-08.org.qemu:"
 
 def records(
     vm_name: str | None,
-    env_file: list[Path] | None,
+    xml: list[Path] | None,
 ) -> list[dict[str, Any]]:
     """Every running VM's record, or just one named VM's.
 
@@ -68,7 +64,7 @@ def records(
         if not vms:
             sys.exit(f"Error: no running VM named {vm_name!r}")
 
-    cfg = _load_config(env_file)
+    cfg = _load_config(xml)
 
     # One docker exec per VM at ~300 ms, serial, was 10.9 s over the 32-VM
     # fleet before this query grew any commands. executor.map keeps collect()
@@ -81,11 +77,11 @@ def records(
 
 def run(
     vm_name: str | None,
-    env_file: list[Path] | None,
+    xml: list[Path] | None,
     as_json: bool = False,
     all_devices: bool = False,
 ) -> None:
-    found = records(vm_name, env_file)
+    found = records(vm_name, xml)
 
     if as_json:
         if vm_name is not None and len(found) == 1:
@@ -146,12 +142,12 @@ def ssh_argv(
 
 def ssh_run(
     vm_name: str,
-    env_file: list[Path] | None,
+    xml: list[Path] | None,
     strict_host_key: bool = False,
     extra: Sequence[str] | None = None,
     dry_run: bool = False,
 ) -> None:
-    found = records(vm_name, env_file)
+    found = records(vm_name, xml)
     record = found[0]
     argv = ssh_argv(record, strict_host_key=strict_host_key, extra=extra)
 
@@ -181,12 +177,10 @@ def ssh_run(
         sys.exit(f"Error: cannot run ssh: {exc}")
 
 
-def _load_config(env_file: list[Path] | None) -> VMConfig:
-    paths = _find_env(env_file)
-    env_overrides = _env_overrides(_parse_env_layers(paths)) if paths else {}
+def _load_config(xml: list[Path] | None) -> VMConfig:
     import dataclasses
     d = dataclasses.asdict(VMConfig())
-    d.update(env_overrides)
+    d.update(settings.load(xml))
     return VMConfig(**d)
 
 
@@ -1740,7 +1734,7 @@ def _parent_device(dev: str) -> str:
     "nvme0n", and nvme0n1p3 is its third partition. Stripping gave "nvme0n"
     and "nvme0n1p", neither of which names a device, so a mounted NVMe
     matched nothing and inspect showed it with no mountpoint at all. On a
-    fleet guest with VM_NVME=8 that is every data disk on the box.
+    fleet guest with <vm-nvme> 8 that is every data disk on the box.
     """
     part = _P_PART_RE.match(dev)
     if part:
@@ -2360,7 +2354,7 @@ def _disk_sort_key(dev: str) -> list[Any]:
 
     Plain lexicographic order is alphabetical only while every number is the
     same width. A guest with 8 NVMe is fine either way; one with 10+ is not,
-    and VM_NVME has no ceiling.
+    and <vm-nvme> has no ceiling.
     """
     return [
         int(part) if part.isdigit() else part
@@ -2392,7 +2386,7 @@ def _disk_lines(
     The rest follow in natural order. It used to print the first six in
     agent order and then "+N more", which hid a third of the devices behind a
     count and could hide the root disk itself. Truncating a list whose length
-    is a setting (VM_NVME) was the wrong call: it is as long as the operator
+    is a setting (<vm-nvme>) was the wrong call: it is as long as the operator
     asked for.
 
     Nothing at all when the agent could not answer, matching how a failed

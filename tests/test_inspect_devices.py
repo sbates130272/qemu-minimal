@@ -185,7 +185,7 @@ class BlockDevices(unittest.TestCase):
 
     def test_every_disk_is_listed(self):
         # Was capped at six with a "+N more" tail. On a fleet guest with
-        # VM_NVME=8 that hid a third of the devices, and could hide the root
+        # <vm-nvme> 8 that hid a third of the devices, and could hide the root
         # disk -- the one you most want named.
         disks = [dict(ROOT_DISK, name=f"/dev/vd{c}") for c in "abcdefgh"]
         lines = inspect_mod._disk_lines(inspect_mod._block_devices(
@@ -194,7 +194,7 @@ class BlockDevices(unittest.TestCase):
         self.assertFalse([t for _, t in lines if "more" in t])
 
     def test_disks_are_sorted_naturally_not_lexicographically(self):
-        # nvme10n1 after nvme9n1. VM_NVME has no ceiling, so a two-digit
+        # nvme10n1 after nvme9n1. <vm-nvme> has no ceiling, so a two-digit
         # fleet is reachable, and plain sorted() puts nvme10 next to nvme1.
         names = ["/dev/nvme10n1", "/dev/nvme2n1", "/dev/nvme1n1", "/dev/nvme9n1"]
         disks = [dict(ROOT_DISK, name=n, mountpoints=[]) for n in names]

@@ -27,7 +27,7 @@ GPU=""
 NVME_MODE=emul
 STRICT_KEY=0
 LOGIN_USER=""
-ENV_ARGS=""
+XML_ARGS=""
 VM_NAME=""
 
 usage() {
@@ -52,7 +52,7 @@ EOF
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --xml) ENV_ARGS="${ENV_ARGS} --xml $2"; shift 2 ;;
+    --xml) XML_ARGS="${XML_ARGS} --xml $2"; shift 2 ;;
     --gpu) GPU=$2; shift 2 ;;
     --nvme-bdf) NVME_MODE=bdf; shift ;;
     --strict-key) STRICT_KEY=1; shift ;;
@@ -69,9 +69,9 @@ WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
 qt_inspect() {
-  # Unquoted on purpose: an empty ENV_ARGS must expand to no argument at all.
+  # Unquoted on purpose: an empty XML_ARGS must expand to no argument at all.
   # shellcheck disable=SC2086
-  qemu-tool inspect $ENV_ARGS --vm-name "$VM_NAME" "$@"
+  qemu-tool inspect $XML_ARGS --vm-name "$VM_NAME" "$@"
 }
 
 qemu-tool list --json > "${WORK}/list.json"
@@ -138,7 +138,7 @@ if header is not None:
         if line is not None:
             cell = line.split()[idx]
             check(cell != "-",
-                  f"the NVME column reads '-' for {name}, which has VM_NVME set")
+                  f"the NVME column reads '-' for {name}, which has <vm-nvme> set")
             if nvme_mode == "bdf":
                 check(re.fullmatch(r"[0-9a-f]{2}:[0-9a-f]{2}\.[0-9a-f]", cell) is not None,
                       f"the NVME column reads {cell!r}, wanted a guest BDF "

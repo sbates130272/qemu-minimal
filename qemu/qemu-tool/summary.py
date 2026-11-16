@@ -1,6 +1,6 @@
 """Fleet-level aggregate of `list`, plus a measured load picture.
 
-`list` prints one row per VM. On the scale-out stacks that is 32 rows of
+`list` prints one row per VM. On a large fleet that is 32 rows of
 mostly identical text, and the questions an operator actually has -- how much
 of this node is left, is anything on fire, is anyone logged in -- are not
 answerable by reading it. This is the aggregate of the same bytes, with four

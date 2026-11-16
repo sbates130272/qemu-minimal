@@ -12,7 +12,7 @@ inputs:
       profile so a job never restores another profile's base image.
     required: true
   release:
-    description: Ubuntu release the job builds, used in the cloud-image cache key.
+    description: Ubuntu release the job builds, used in the cloud-image cache key. Keep it equal to <bake-release> in qemu/stacks/rocm-golden.xml.
     required: false
     default: resolute
   images-dir:

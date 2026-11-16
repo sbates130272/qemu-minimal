@@ -112,7 +112,7 @@ jobs:
         # without QMP the guest address of an emulated NVMe is unknowable and
         # `qemu-tool list` can only say "emul". This is the only lane that can
         # exercise the BDF path at all -- no compose stack can pass the flag,
-        # since gen_compose._VM_FLAGS has no qmp_socket entry.
+        # since the fleet XML has no element for a QMP socket.
         qemu-tool run-vm \
           --vm-name qemu-tool-smoke-test \
           --nvme 1 \

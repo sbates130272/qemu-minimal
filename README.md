@@ -29,18 +29,18 @@
 
 <!-- Ansible collections pinned in ansible/requirements.yml -->
 [![Batesste Collection](https://img.shields.io/badge/sbates130272.batesste-3.2.1-9cf?style=flat-square)](https://galaxy.ansible.com/ui/repo/published/sbates130272/batesste/)
-[![Rocm-ernic Collection](https://img.shields.io/badge/sbates130272.rocm__ernic-61b934a-9cf?style=flat-square)](https://github.com/ROCm/rocm-ernic)
+[![Rocm-ernic Collection](https://img.shields.io/badge/sbates130272.rocm__ernic-90434a2-9cf?style=flat-square)](https://github.com/ROCm/rocm-ernic)
 
-<!-- CI images pinned in qemu/env/scale-out.xml; sbates-fork for P2P DMA overlay only -->
-[![CI image build](https://img.shields.io/badge/ci--images-20261029.g020459a-informational?style=flat-square&logo=docker)](https://hub.docker.com/u/sbates130272)
+<!-- CI images pinned in qemu/stacks/rocm-golden.xml; sbates-fork is the QEMU qemu/stacks/mi355x-server.xml pins for P2P DMA -->
+[![CI image build](https://img.shields.io/badge/ci--images-20261112.gdca6903-informational?style=flat-square&logo=docker)](https://hub.docker.com/u/sbates130272)
 [![Qemu](https://img.shields.io/badge/qemu-11.1.3-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user/tags)
-[![Libvfio-user](https://img.shields.io/badge/libvfio--user-5b9c722-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user/tags)
-[![Rocm-ernic](https://img.shields.io/badge/rocm--ernic-8f35f4a-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-rocm-ernic/tags)
-[![Rocjitsu](https://img.shields.io/badge/rocjitsu-73c3cf3-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu/tags)
-[![Guest Qcow2](https://img.shields.io/badge/guest-resolute%20%7C%20qm.ae551b3-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu/tags)
-[![Qemu Fork](https://img.shields.io/badge/sbates--fork-qemu.f91f120-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork/tags)
+[![Libvfio-user](https://img.shields.io/badge/libvfio--user-05bb5e5-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user/tags)
+[![Rocm-ernic](https://img.shields.io/badge/rocm--ernic-90434a2-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-rocm-ernic/tags)
+[![Rocjitsu](https://img.shields.io/badge/rocjitsu-50be05a-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu/tags)
+[![Guest Qcow2](https://img.shields.io/badge/guest-resolute%20%7C%20qm.096ddfe-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu/tags)
+[![Qemu Fork](https://img.shields.io/badge/sbates--fork-qemu.4cb9698-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork/tags)
 
-[![Quick-start Build](https://img.shields.io/badge/quick--start-20261029.g020459a-success?style=flat-square&logo=docker)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu/tags)
+[![Quick-start Build](https://img.shields.io/badge/quick--start-20261112.gdca6903-success?style=flat-square&logo=docker)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu/tags)
 
 ## Summary
 
@@ -54,8 +54,9 @@ testing.
 **Key Features:**
 - Fast VM creation using Ubuntu cloud images and cloud-init (Noble and Resolute)
 - `qemu-tool` Python CLI with `run-vm`, `gen-vm`, `gen-compose`, `compose`,
-  `list`, `inspect`, `down`, `check`, `ssh`, `man`, `qcow`,
+  `list`, `inspect`, `down`, `check`, `ssh`, `man`, `qcow`, `publish-qcow`,
   `quick-start` and `ernic-stats` subcommands
+- One settings format: fleet XML, layered with repeated `--xml`
 - Bidirectional libvirt domain XML support (`--domain` input, `--convert-to-libvirt` output)
 - NVMe device emulation with tracing support
 - PCIe device passthrough (VFIO)
@@ -67,11 +68,14 @@ testing.
 ## Quick Start: two GPU + RDMA VMs
 
 The fastest way to something real: two guests, each with an emulated gfx1250,
-an emulated NVMe and an emulated rocm-ernic RDMA NIC, with Prometheus and
-Grafana beside them, plus a GPU test and an RDMA test across them. Nothing is
-built — the guest comes from a published qcow2 that already carries the
-mainline kernel, the ionic driver, rdma-core, perftest and ROCm 10.1, and the
-device servers come from tagged CI images.
+an emulated NVMe, an emulated rocm-ernic RDMA NIC and an emulated SDXI device,
+with Prometheus, Grafana and log collection beside them, plus a GPU test and
+an RDMA test across them. The guest is pulled, not built — it comes from a
+published qcow2 that already carries the mainline kernel, the ionic driver,
+rdma-core, perftest and ROCm 10.1 — and the GPU, NIC and SDXI servers come
+from tagged CI images. Nothing is built on your machine. The published guest
+does not carry the SDXI driver yet, so its SDXI device is present but unbound;
+a guest baked with `gen-vm --bake` has it.
 
 You need KVM, Docker with compose, Ansible, [`oras`](https://oras.land/) ≥ 1.3.4,
 8 cores, 16 GB of RAM and about 30 GB of disk. Then:
@@ -85,7 +89,8 @@ qemu-tool quick-start
 
 `qemu-tool check` asks every one of those questions and a few more —
 the Docker daemon and your access to it, the uid the containers will run as,
-which settings file is in force, whether the images directory has room — and
+which settings file is in force and whether it is valid fleet XML, whether
+the images directory has room — and
 prints a line per answer. It writes nothing and needs no `sudo`, so it is
 safe on a host you have not decided to use yet, and it exits non-zero if
 anything would stop a stack starting. You do not have to run it: it is the
@@ -101,8 +106,7 @@ terminal, so nothing hangs in a script.
 
 The daily
 [report-for-vm-rocm-golden](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-vm-rocm-golden.yml)
-lane runs that same command every morning, against a fleet file with one more
-device per guest than the default. It:
+lane runs that same command every morning, against the same fleet file. It:
 
 1. checks this machine: KVM actually usable (the ioctl, not just the device
    node), the tools on `PATH`, a writable images directory, free disk, and
@@ -111,10 +115,10 @@ device per guest than the default. It:
    its SSH keypair, which
    ships beside it as an ORAS referrer;
 3. creates two overlays of one backing file and generates a two-VM stack from
-   [`qemu/xml/quickstart.xml`](qemu/xml/quickstart.xml);
+   [`qemu/stacks/rocm-golden.xml`](qemu/stacks/rocm-golden.xml);
 4. brings the stack up — per guest a `rocm-ernic` NIC server, a `rocjitsu` GPU
-   server and a QEMU container, with the two NICs joined by a TCP mesh, plus
-   Prometheus and Grafana;
+   server, a `rocm-sdxi` server and a QEMU container, with the two NICs joined
+   by a TCP mesh, plus Prometheus, Grafana, Loki and Alloy;
 5. stages the per-build `ip_discovery.bin`, loads `amdgpu` and gives each guest
    its address on the ernic L2 segment;
 6. runs `vector_add` on each guest's GPU and `ib_send_bw` from guest 1 to
@@ -123,13 +127,14 @@ device per guest than the default. It:
    crossed the mesh.
 
 Measured on a 32-core workstation: **2 m 47 s** end to end once the backing
-image is cached, and a first run is that plus however long pulling ~20 GB
-takes you (about 3 minutes here). When it finishes it prints how to get in,
+image is cached, and a first run is that plus however long pulling the
+~2.5 GB guest image and the container images takes you (about 3 minutes
+here). When it finishes it prints how to get in,
 which is:
 
 ```bash
-qemu-tool ssh quickstart-1                  # port, account and key resolved for you
-qemu-tool ssh quickstart-1 -- ibv_devinfo   # or run one command and come back
+qemu-tool ssh rocm-golden-1                 # port, account and key resolved for you
+qemu-tool ssh rocm-golden-1 -- ibv_devinfo  # or run one command and come back
 
 # the same thing spelled out, if you would rather
 ssh -i /var/lib/qemu-tool/quickstart-key/id_rsa -p 2222 ubuntu@localhost
@@ -157,8 +162,8 @@ Useful variations — `qemu-tool quick-start <verb>`:
 | `down` | power the guests off and stop the stack, keeping the overlays |
 
 `qemu-tool quick-start --help` has the rest, and `qemu-tool man` has all of
-it. For more than two guests see [Scale-out fleet](#scale-out-fleet), which is
-the same stack generator with a larger `VM_COUNT`.
+it. For more than two guests see [A fleet of your own](#a-fleet-of-your-own),
+which is the same stack generator with a larger `<vm-count>`.
 
 ## System-wide Install (Debian/Ubuntu)
 
@@ -214,17 +219,19 @@ pipx ensurepath          # adds ~/.local/bin to PATH; open a new shell after
 pipx install qemu-tool
 ```
 
-That gives you a working `gen-vm` and `run-vm`: both package manifests,
-`env/fleet-example.xml`, the man page and the compose stacks all ship inside the wheel,
-so none of those depend on a checkout.
+That gives you a working `gen-vm` and `run-vm`: both package manifests, the
+three fleet files, the man page and the compose stacks all ship inside the
+wheel, so none of those depend on a checkout.
 
 `qemu-tool compose` is the exception. The stacks are there, but each one
 bind-mounts a qemu-tool source tree into its container and builds the tool
 inside it, and neither a wheel nor the `.deb` is a source tree. To bring a
-stack up, point `QEMU_TOOL_SRC` at a checkout:
+stack up, point `QEMU_TOOL_SRC` at a checkout. It is one of the four variables
+the stacks leave to `docker compose` to interpolate, so it is read from your
+environment (or from `<qemu-tool-src>` in a fleet file):
 
 ```bash
-QEMU_TOOL_SRC=/path/to/qemu-minimal qemu-tool compose --vm-name myvm up
+QEMU_TOOL_SRC=/path/to/qemu-minimal qemu-tool compose --stack rocm-golden up -d
 ```
 
 To work on the tool itself, install the checkout in editable mode instead, so
@@ -235,13 +242,14 @@ pipx install -e ./qemu   # from the repo root
 ```
 
 What a pipx install still does not get is the parts that are install-tree
-artifacts by nature — `/etc/qemu-tool/env`, `/var/lib/qemu-tool/images` and a
+artifacts by nature — `/etc/qemu-tool/fleet.xml`, `/var/lib/qemu-tool/images` and a
 man page on your `MANPATH`. Those defaults fall back to per-user locations
 rather than failing:
 
 | Default | `.deb` | pipx / uv / venv |
 |---|---|---|
-| Settings file | `/etc/qemu-tool/env` | `$XDG_CONFIG_HOME/qemu-tool/env` |
+| Settings file | `/etc/qemu-tool/fleet.xml` | `$XDG_CONFIG_HOME/qemu-tool/fleet.xml` |
+| Fleet files | `/usr/share/qemu-tool/stacks/` | bundled in the wheel |
 | Images directory | `/var/lib/qemu-tool/images` | `$XDG_DATA_HOME/qemu-tool/images` |
 | Package manifest | `/usr/share/qemu-tool/packages-default` | bundled in the wheel |
 | Compose stacks | `/usr/share/qemu-tool/compose/` | bundled in the wheel |
@@ -254,9 +262,9 @@ package data either way — so `man qemu-tool` works only from the `.deb`.
 installed, and `qemu-tool man --path` prints where it is.
 
 A per-user settings file **beats** the system one, as XDG expects: if you
-wrote `$XDG_CONFIG_HOME/qemu-tool/env` under a pipx install and later install
-the `.deb`, your file still wins and edits to `/etc/qemu-tool/env` are
-ignored. Delete the per-user copy, or pass `--xml`, to hand control back
+wrote `$XDG_CONFIG_HOME/qemu-tool/fleet.xml` under a pipx install and later
+install the `.deb`, your file still wins and edits to
+`/etc/qemu-tool/fleet.xml` are ignored. Delete the per-user copy, or pass `--xml`, to hand control back
 to the system file. The images directory works the other way round but has
 its own catch: the system path is preferred only when it is *writable*, so if
 you are not in the `kvm` group you quietly get the per-user path instead of a
@@ -277,7 +285,7 @@ Delete the `qemu/qemu_tool.egg-info` directory as root and retry.
 Generate and run a Noble VM:
 
 ```bash
-qemu-tool gen-vm --vm-name myvm --release resolute
+qemu-tool gen-vm --vm-name myvm --release noble
 qemu-tool run-vm --vm-name myvm
 ssh -p 2222 ubuntu@localhost
 ```
@@ -308,9 +316,10 @@ virsh define myvm.xml && virsh start myvm
 qemu-minimal/
   qemu/
     pyproject.toml  Python package manifest for qemu-tool
-    qemu_tool/      Python package (qemu-tool CLI)
+    qemu-tool/      Python package (qemu-tool CLI, imported as qemu_tool)
     packages.d/     Cloud-init package manifests
-    env/            Settings files -- `example` is the template, copy to qemu/.env
+    stacks/         Fleet XML settings: rocm-golden.xml, helios-tray.xml, mi355x-server.xml
+    compose/        The compose stack generated from each of those, same names
   libvirt/
     virt-install-ubuntu  Create VMs via libvirt
     create-nvme          Generate NVMe XML for libvirt
@@ -323,7 +332,7 @@ qemu-minimal/
 ## VFIO PCI Passthrough
 
 Bind the host device to `vfio-pci`, then pass its PCI address
-to `run-vm` via `PCI_HOSTDEV`. QEMU must be able to open the
+to `run-vm` via `--pci-hostdev`. QEMU must be able to open the
 IOMMU group device under `/dev/vfio/N`; by default those
 nodes are root-only.
 
@@ -337,77 +346,109 @@ be in the `kvm` group:
 Re-login after group changes. `qemu-tool run-vm` checks VFIO access
 and prints this path if permissions are still wrong.
 
-## Docker Compose: vfio-user GPU VM
+## Docker Compose: guests with emulated devices
 
-For testing with emulated AMD GPUs over libvfio-user — specifically
-[rocm-ernic][rocm-ernic] and [rocjitsu][rocjitsu] — Docker Compose
-stacks under `qemu/compose/` start the GPU server containers and the
-`qemu-system` VM in one command. Available stacks:
+For testing with emulated AMD devices over libvfio-user — a
+[rocjitsu][rocjitsu] GPU, a [rocm-ernic][rocm-ernic] RDMA NIC and an SDXI
+device — the Docker Compose stacks under `qemu/compose/` start the device
+server containers and the `qemu-system` guests in one command. This is the
+recommended path when you do not have a physical GPU to pass through but need
+a guest that sees PCIe GPU devices.
 
-| Stack | VMs | ernic | rocjitsu |
+There are three stacks. Each is **generated** by `qemu-tool gen-compose` from
+the fleet XML file of the same name in `qemu/stacks/`, and committed so it
+can be read in a diff and used with plain `docker compose`:
+
+| Stack | Fleet file | Guests | Per guest |
 |---|---|---|---|
-| `vfio-user-ernic-vm/` | 1 | yes | no |
-| `vfio-user-rocjitsu-vm/` | 1 | no | yes |
-| `vfio-user-ernic-rocjitsu-vm/` | 1 | yes | yes |
-| `vfio-user-ernic-2vm/` | 2 | yes (mesh) | opt-in per VM via `--profile` |
-| `vfio-user-ernic-rocjitsu-scale-out/` | N (generated) | yes (mesh) | yes |
+| `rocm-golden` (the default) | [`qemu/stacks/rocm-golden.xml`](qemu/stacks/rocm-golden.xml) | 2 | 1 GPU, 1 NVMe, 1 RDMA NIC (P4 in guest scope), 1 SDXI |
+| `helios-tray` | [`qemu/stacks/helios-tray.xml`](qemu/stacks/helios-tray.xml) | 1 | 4 GPUs, 8 RDMA NICs, 4 PCIe switches, 1 SDXI |
+| `mi355x-server` | [`qemu/stacks/mi355x-server.xml`](qemu/stacks/mi355x-server.xml) | 4 | 8 GPUs, 8 RDMA NICs, 8 PCIe switches |
 
-The first four are hand-written and committed. The last is generated from a
-settings file by `qemu-tool gen-compose` — see [Scale-out fleet](#scale-out-fleet)
-below.
-
-This is the recommended path when you do not have a physical GPU to pass
-through but need a guest that sees PCIe GPU devices.
+`qemu-tool quick-start` is the easy way to run one (`--flavor default`, which
+is the rocm-golden fleet, `helios` or `mi355x`): it pulls the guest image,
+creates the overlays, sizes the guests and tests them. By hand it is:
 
 ```bash
-# build a VM image first if you do not already have one
-qemu-tool gen-vm --vm-name qemu-minimal
+# the guest overlays first: one pull, then overlays on that backing file
+qemu-tool gen-vm --xml qemu/stacks/rocm-golden.xml --vm-name rocm-golden-1
+qemu-tool gen-vm --xml qemu/stacks/rocm-golden.xml --vm-name rocm-golden-2 \
+    --backing-file /var/lib/qemu-tool/images/rocm-golden-1-backing.qcow2
 
-qemu-tool compose --vm-name qemu-minimal up
-ssh -p 2222 ubuntu@localhost
-
-qemu-tool compose --vm-name qemu-minimal down
+qemu-tool compose --stack rocm-golden --profile metrics up -d
+qemu-tool ssh rocm-golden-1
+qemu-tool down rocm-golden
 ```
 
-`qemu-tool compose` is a wrapper around `docker compose` that sets
-`VM_NAME` and `VM_IMAGES_DIR` automatically and locates the compose
-stack whether running from source or an installed `.deb` package.
-Pass any `docker compose` subcommand after the `qemu-tool` flags
-(`up`, `down`, `ps`, `logs ernic`, etc.).
+`qemu-tool compose` is a wrapper around `docker compose`. It locates the
+stack whether running from source, a wheel or the `.deb`, runs the containers
+as you rather than as root, and passes everything else on the line to
+`docker compose` in the order typed (`up`, `down`, `ps`, `logs ernic-1`, …).
 
-### Scale-out fleet
+### Plain `docker compose`
 
-`qemu-tool gen-compose` generates an N-VM rocm-ernic mesh — one emulated RDMA
-NIC and one rocjitsu GPU per VM — from the fleet keys in a settings file. Same
-topology as `vfio-user-ernic-2vm`, sized by a variable rather than by hand.
+A generated stack has its fleet shape baked in at render time. What is left for
+`docker compose` to interpolate is four variables, because they differ per
+host and so cannot be committed:
+
+| Variable | Meaning | If unset |
+|---|---|---|
+| `CONTAINER_USER` | `uid:gid` the containers run as | compose refuses, naming it |
+| `CONTAINER_KVM_GID` | the gid that can open `/dev/kvm` | compose refuses, naming it |
+| `VM_IMAGES_DIR` | directory holding the guest images | `/var/lib/qemu-tool/images` |
+| `QEMU_TOOL_SRC` | qemu-tool source tree mounted into the qemu containers | `../../..` from the stack directory, which in a checkout is the checkout |
+
+`qemu-tool compose` supplies all four through the environment of the
+`docker compose` process it starts — the first two from your own ids, the
+other two from `--images`, `<vm-images-dir>` and `<qemu-tool-src>` — and
+never overrides one you have already exported. It writes no env file and
+passes no `--env-file`. To drive a stack without the wrapper, export them:
 
 ```bash
-qemu-tool gen-compose --xml qemu/xml/scale-out.xml
-qemu-tool compose --xml qemu/xml/scale-out.xml \
-    --stack vfio-user-ernic-rocjitsu-scale-out --profile metrics up -d
+cd qemu/compose/rocm-golden
+CONTAINER_USER=$(id -u):$(id -g) \
+CONTAINER_KVM_GID=$(stat -c %g /dev/kvm) docker compose up -d
 ```
 
-`qemu/xml/scale-out.xml` is the one authoritative fleet settings file. A host or a
-CI lane that needs different values adds a small committed overlay on top of it
-rather than a whole fourth copy to hand-sync — `--xml` is repeatable and
-later files win key by key:
+These are the only settings spelled as environment variables. Everything else
+is a fleet XML element.
+
+### A fleet of your own
+
+`qemu/stacks/rocm-golden.xml` is the template. For a fleet that differs from
+it in a few values, write an overlay — a short fleet XML file naming only the
+elements that change — and layer it with a second `--xml`. `--xml` is
+repeatable and a later file overrides only the elements it sets:
+
+```xml
+<!-- my-fleet.xml -->
+<fleet xmlns="http://qemu-tool/fleet/1.0">
+  <vm-count>8</vm-count>
+  <vm-name-prefix>mine</vm-name-prefix>
+  <vm-nvme>2</vm-nvme>
+</fleet>
+```
 
 ```bash
-qemu-tool gen-compose --xml qemu/xml/scale-out.xml --xml qemu/xml/overlay-mi100.xml \
-    --output-dir /var/lib/qemu-tool/stacks/mi100-fleet
-qemu-tool compose --stack-dir /var/lib/qemu-tool/stacks/mi100-fleet \
-    --xml qemu/xml/scale-out.xml --xml qemu/xml/overlay-mi100.xml \
+qemu-tool gen-compose --xml qemu/stacks/rocm-golden.xml --xml my-fleet.xml \
+    --output-dir /var/lib/qemu-tool/stacks/mine
+qemu-tool compose --stack-dir /var/lib/qemu-tool/stacks/mine \
     --profile metrics up -d
 ```
 
-Every later command against that fleet needs none of those flags. The
-generated `docker-compose.yml` already records the layers it was rendered
-from, so `compose` reads them back:
+No overlay is committed to this repository, and none should be: a fleet for
+one host or one CI lane is a local file (the CI lanes write theirs inline in
+the workflow), and anything every fleet wants belongs in the stack's own
+file.
+
+Every later command against that fleet needs no flags, unless it starts
+the fleet and the fleet's `<vm-images-dir>` or `<qemu-tool-src>` is not the
+default (see below):
 
 ```bash
-cd /var/lib/qemu-tool/stacks/mi100-fleet && qemu-tool compose ps
+cd /var/lib/qemu-tool/stacks/mine && qemu-tool compose ps
 # or, from anywhere:
-export QEMU_TOOL_STACK=/var/lib/qemu-tool/stacks/mi100-fleet
+export QEMU_TOOL_STACK=/var/lib/qemu-tool/stacks/mine
 qemu-tool compose ps
 ```
 
@@ -417,89 +458,145 @@ stack — recognised by the generator's provenance header, not by the presence
 of a `docker-compose.yml`, so an unrelated docker project is never adopted.
 There is deliberately no walk-up: `docker compose` can walk up because what it
 finds is what it runs, whereas here a walk-up from inside this checkout
-reaches `qemu/compose/<default>/` and would drive the committed 8-VM stack
-under the name of a 32-VM fleet.
+reaches `qemu/compose/rocm-golden/` and would drive the committed two-guest stack
+under the name of your fleet.
 
-`--xml` still wins over the remembered layers, and the layers are
-resolved honestly: the header records them as typed, so a relative name is
-tried against the stack directory and the current directory and nothing else.
-A layer that is not at either, or a generated stack whose header names no
-layers at all, is an error naming the path and where it was looked for —
-never a quiet fall-back to the search path, which is how a 32-VM fleet ends up
-driven by an 8-VM `qemu/.env`.
+A rendered stack driven with no `--xml` is driven with no settings at all,
+which is correct for everything baked into it. The one value it does not
+bake in is the images directory: a fleet whose `<vm-images-dir>` is not
+`/var/lib/qemu-tool/images` needs `--xml` (or `--images`, or `VM_IMAGES_DIR`
+exported) on the commands that start it. `QEMU_TOOL_SRC` is the same kind of
+value: unset, it is `../../..` from the stack directory, which is the
+checkout only for `qemu/compose/<stack>/`. For a render anywhere else that is
+an unrelated directory, and the qemu containers then install qemu-tool from
+PyPI rather than from your checkout, so set `<qemu-tool-src>` to an absolute
+path and pass `--xml`, or export `QEMU_TOOL_SRC`. A `.env` in the stack
+directory is read by `docker compose` only when no settings are in force.
 
-Keys the overlay does not mention keep the golden file's value, so the overlay
-is short enough to read in a diff. `compose` passes the same layers through to
-`docker compose --env-file` in the same order, which applies the same last-wins
-rule, so the tool and compose never see different values.
+A named stack is the other way round: `qemu-tool compose --stack NAME` with
+no `--xml` reads the first `fleet.xml` on the search path below, else the
+stack's own `qemu/stacks/NAME.xml`, for those two values, and for the stale
+check when it is the stack's own file. Layers that are not the stack's own
+file are a different fleet; given explicitly they get a warning that points
+at `gen-compose --output-dir` and `compose --stack-dir`.
 
 An overlay render needs both directory flags, and omitting either fails
-quietly. `gen-compose` defaults its output to the committed stack directory, so
-without `--output-dir` the overlay's fleet is written over the golden 8-VM one
-and `Gen Compose Check` fails on the next push. And `VM_COUNT` and the VM names
-are baked into the generated YAML rather than interpolated from the settings
-file at run time, so without `--stack-dir` `compose` brings up that committed
-8-VM stack whatever layers it is given.
+quietly. `gen-compose` defaults its output to the committed stack named by
+the first `--xml` file, so without `--output-dir` the overlay's fleet is
+written over `qemu/compose/rocm-golden` and `Gen Compose Check` fails on the next
+push. And the guest count and names are baked into the generated YAML rather
+than read from the settings at run time, so without `--stack-dir` (or one of
+the other two ways above) `compose` brings up the committed two-guest stack
+whatever layers it is given.
 
-Per-VM values are comma-lists, not numbered variables: `VM1_NAME`/`VM2_NAME`
-does not survive eight VMs, let alone the mesh's sixty-four. A bare value
-broadcasts to every VM, a list of length `VM_COUNT` applies positionally, and
-any other length is an error naming the key and both lengths.
+Three elements take a per-guest comma-list: `<vm-shm-size>`,
+`<rocjitsu-config>` and `<vm-filesystem>`. Each distinct `<vm-filesystem>`
+share is bind-mounted into the qemu containers once. A bare value broadcasts to every guest, a list of length
+`<vm-count>` applies positionally, and any other length is an error naming the
+element and both lengths.
 
-The exception matters, because getting it backwards fails silently: a key
-naming a field that is *already* a list — `VM_PCI_HOSTDEV`, `VM_VFIO_USERDEV`,
-`VM_EXTRA_HOSTFWD` — uses its commas for several values belonging to **one**
-VM, so the whole value goes to **every** VM. `VM_EXTRA_HOSTFWD=a,b` is two
-hostfwd rules per guest, not one rule each for two guests. Which case applies
-is read off `VMConfig`'s own type hints rather than a hand-kept list of names.
+`<vm-extra-hostfwd>` is the exception, and getting it backwards fails
+silently: its commas separate several rules belonging to **one** guest, so
+the whole value goes to **every** guest.
+`<vm-extra-hostfwd>a,b</vm-extra-hostfwd>` is two hostfwd rules per guest,
+not one rule each for two guests.
 
-`VM_VCPUS` must not drop below 4 on an ernic stack. `ionic_lif_size()` derives
-its EQ count from `num_online_cpus()` and `ionic_create_rdma_admin()` rejects
-fewer than `IONIC_EQ_COUNT_MIN`, so `ionic_rdma` never probes; the only symptom
-is "Failed to register ibdev" in the guest log.
+`<vm-vcpus>` must not drop below 4 on a stack with an ernic. `ionic_lif_size()`
+derives its EQ count from `num_online_cpus()` and `ionic_create_rdma_admin()`
+rejects fewer than `IONIC_EQ_COUNT_MIN`, so `ionic_rdma` never probes; the only
+symptom is "Failed to register ibdev" in the guest log.
 
-The generated `docker-compose.yml` records the hash of the settings file it was
-built from, and `qemu-tool compose` warns on stderr when they disagree. It
-never blocks: `down` against a stale tree is how you recover from a bad edit.
-`gen-compose --check` turns the same comparison into a CI gate.
+The generated `docker-compose.yml` records the hash of the fleet XML layers it
+was built from, and `qemu-tool compose --xml ...` warns on stderr when they
+disagree. It never blocks: `down` against a stale tree is how you recover from
+a bad edit. `gen-compose --check` turns the same comparison into a CI gate.
 
 With `--profile metrics` the stack also brings up Prometheus and
 `qemu-tool ernic-stats`, which serves the per-QP counters each `rocm-ernic -S`
-writes. Full detail in
-[the stack README](qemu/compose/vfio-user-ernic-rocjitsu-scale-out/README.md)
-and [`qemu/xml/scale-out.xml`](qemu/xml/scale-out.xml), with the committed overlays in
-[`qemu/xml/overlay-ci.xml`](qemu/xml/overlay-ci.xml) and
-[`qemu/xml/overlay-mi100.xml`](qemu/xml/overlay-mi100.xml).
+writes. Full detail in [the stack README](qemu/compose/rocm-golden/README.md).
 
 ### Settings file
 
-`qemu/xml/fleet-example.xml` is the XML fleet config template. Copy it and
-edit; every subcommand that reads settings takes it as `--xml`.
+Fleet XML is the only settings format: one `<fleet>` element in the namespace
+`http://qemu-tool/fleet/1.0`, whose children each hold one setting.
+[`qemu/stacks/rocm-golden.xml`](qemu/stacks/rocm-golden.xml) is the annotated
+reference; copy it, or layer an overlay on it. Every subcommand that reads
+settings takes it as `--xml`. qemu-tool reads no env-format (`KEY=value`)
+file anywhere.
 
-```bash
-cp qemu/xml/fleet-example.xml my-fleet.xml
-$EDITOR my-fleet.xml
+The parser is strict. A misspelt element, an element given twice in one file,
+an attribute, a nested element or stray text under `<fleet>` is an error
+naming the file and the element, with the closest known name for a typo:
+
+```
+Error: my-fleet.xml: unknown element <vm-vcpu>; did you mean <vm-vcpus>?
 ```
 
-Every `VM_*` key maps to the flag of the same name -- `VM_VCPUS` is `--vcpus`,
-`VM_IMAGES_DIR` is `--images`. Values are read lowest to highest from the
-built-in defaults, a `--domain` XML, this file, then explicit CLI flags, so a
-flag always wins over the file. One-shot actions (`--dry-run`, `--force`,
-`--restore-image`, `--ansible-only`, `--nvme-recreate`) are deliberately not
-readable from it.
+Comments are allowed. `qemu-tool check --xml my-fleet.xml` reports the same
+problems without stopping at the first.
 
-The file is searched for in this order, first hit wins:
+`gen-vm` and `run-vm` take the per-guest elements as the defaults of their
+flags — `<vm-vcpus>` is `--vcpus`, `<vm-images-dir>` is `--images`,
+`<backing-ref>` is `--backing-image`. Values are read lowest to highest from
+the built-in defaults, a `--domain` XML, the fleet XML, then explicit CLI
+flags, so a flag always wins over the file. One-shot actions (`--dry-run`,
+`--force`, `--restore-image`, `--ansible-only`, `--nvme-recreate`) are flags
+only. `qemu-tool man` lists every element.
+
+With no `--xml`, the first of these that exists is used, alone:
 
 | Location | Used for |
 |---|---|
-| `--xml FILE` | explicit, per invocation; repeatable, later files win key by key |
-| `$QEMU_TOOL_ENV` | explicit, per shell |
-| `./.env` | a per-project override |
-| `qemu/.env` | a source checkout |
-| `$XDG_CONFIG_HOME/qemu-tool/env` | a pipx or venv install (`~/.config` by default) |
-| `/etc/qemu-tool/env` | an installed `.deb` |
+| `$QEMU_TOOL_FLEET` | explicit, per shell |
+| `./fleet.xml` | a per-project file |
+| `qemu/stacks/fleet.xml` | a source checkout (git-ignored) |
+| `$XDG_CONFIG_HOME/qemu-tool/fleet.xml` | a pipx or venv install (`~/.config` by default) |
+| `/etc/qemu-tool/fleet.xml` | a site-wide file an admin creates |
 
-The stack `README.md` files document the variables specific to each stack.
+Nothing creates any of these for you. The `.deb` makes `/etc/qemu-tool/` and
+leaves it empty on purpose: a file there is every bare command's settings, so
+a copy of `rocm-golden.xml` would have a plain `gen-vm` pull that fleet's
+`<backing-ref>` instead of baking, and a plain `run-vm` take its NVMe and its
+four fixed port forwards, which a second guest on the host cannot bind. Copy
+`/usr/share/qemu-tool/stacks/rocm-golden.xml` there and trim it if the site wants
+one.
+
+With none, the built-in defaults apply. Four commands differ: `gen-compose`
+and `compose --stack NAME` fall back to the stack's own file in
+`qemu/stacks/`, `quick-start` does not search and uses its flavor's file, and
+`publish-qcow` reads no settings file unless `--xml` names one.
+
+A `~` in a path element (`<vm-images-dir>`, `<vm-ssh-key-file>`, the data
+directories, `<bake-packages>`, `<bake-playbook>`) is expanded when the file
+is parsed, so every command and `docker compose` see the same path.
+
+### Baking and publishing the guest image
+
+`rocm-golden.xml` also says how the image its guests boot from is made, in its
+`<bake-*>` and `<publish-*>` elements. A plain `gen-vm` reads none of them — it
+pulls the image named by `<backing-ref>`, which is not yet the one
+`<publish-ref>` names: the fleet still pins the batesste-ci-images build of
+the guest until a publish from here has been qualified. From the checkout
+root, because `<bake-packages>` and `<bake-playbook>` are resolved against
+the current directory:
+
+```bash
+ssh-keygen -t rsa -N "" -f ./image-key/id_rsa               # the image's own keypair
+qemu-tool gen-vm --bake --xml qemu/stacks/rocm-golden.xml \
+    --ssh-key-file ./image-key/id_rsa.pub                   # bake it from the cloud image
+qemu-tool publish-qcow --xml qemu/stacks/rocm-golden.xml \
+    --tag "$(date +%Y%m%d).g$(git rev-parse --short=7 HEAD)" \
+    --key ./image-key/id_rsa --dry-run
+```
+
+The keypair is published with the image, so generate one for it and never
+pass a personal key. The bake authorises `--ssh-key-file`, whose default is
+your own `~/.ssh/id_rsa.pub`, so it has to be given the public half of the
+key `publish-qcow` gets. `publish-qcow` checks: it takes `--key` from the
+command line only, never from a settings file, and refuses a key that is not
+the one `gen-vm` recorded baking in, or an image `gen-vm` pulled rather than
+baked. A bake leaves out the fleet's `<vm-extra-hostfwd>`, because it runs
+QEMU on the host, where a forward whose port is taken stops it starting.
 
 ## Images Directory
 
@@ -614,7 +711,7 @@ from starting, `warn` does not.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--xml FILE` | (search path) | Settings file to check against, repeatable, later files winning key by key. Which file the search path found is itself part of the report |
+| `--xml FILE` | (search path) | Fleet XML to check against, repeatable, a later file overriding the elements it sets. Which file the search path found is itself part of the report |
 
 ### down flags
 
@@ -649,6 +746,7 @@ takes every stack on the system.
 | `--kvm / --no-kvm` | kvm | KVM acceleration |
 | `--qemu-path PATH` | (system) | Directory containing QEMU binaries |
 | `--domain FILE` | — | Libvirt XML base config (`-` for stdin) |
+| `--xml FILE` | search path | Fleet XML settings; repeatable, a later file overriding the elements it sets. A flag outranks the file |
 
 ### gen-vm flags
 
@@ -667,6 +765,7 @@ takes every stack on the system.
 | `--restore-image` | off | Recreate overlay from existing backing file |
 | `--backing-file FILE` | — | Create overlay on top of this existing qcow2 |
 | `--backing-image OCI_REF` | — | Pull a published backing qcow2 with `oras`, then overlay on it |
+| `--bake` | off | Bake the image the fleet XML describes in its `<bake-*>` elements, from the cloud image, instead of pulling `<backing-ref>` |
 | `--ansible-playbook FILE` | — | Path to an Ansible playbook to run against the VM image after cloud-init |
 
 ### run-vm flags
@@ -698,8 +797,8 @@ takes every stack on the system.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--stack NAME` | `vfio-user-ernic-rocjitsu-scale-out` | Stack to generate |
-| `--xml FILE` | search path | Settings file (see `qemu/xml/scale-out.xml`). Repeatable: later files override keys set by earlier ones |
+| `--xml FILE` | a `fleet.xml` on the search path, else the stack's own file | Fleet XML. Repeatable: a later file overrides the elements it sets |
+| `--stack NAME` | the stack named after the first `--xml` file, else `rocm-golden` | Stack to generate: `rocm-golden`, `helios-tray`, `mi355x-server` |
 | `--output-dir DIR` | the stack directory | Where to write |
 | `--check` | off | Exit non-zero if regenerating would change anything; writes nothing |
 | `--dry-run` | off | Print the generated files instead of writing them |
@@ -708,25 +807,24 @@ takes every stack on the system.
 belongs to the Debian package, so overwriting it has to be asked for by name.
 In a checkout it defaults to the committed stack directory instead, so any
 render that layers an overlay must name an `--output-dir` of its own or it
-overwrites the committed fleet and breaks `--check`.
+overwrites the committed stack and breaks `--check`.
 
 ### compose flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--stack NAME` | `vfio-user-ernic-rocjitsu-vm` | Committed stack to run |
+| `--stack NAME` | `rocm-golden` | Shipped stack to run: `rocm-golden`, `helios-tray`, `mi355x-server` |
 | `--stack-dir DIR` | `$QEMU_TOOL_STACK`, else the cwd if it is a rendered stack | Run a stack rendered by `gen-compose --output-dir DIR`. Mutually exclusive with `--stack` |
-| `--vm-name NAME` | from settings | Sets `VM_NAME`/`VM1_NAME` |
-| `--vm2-name NAME` | from settings | Sets `VM2_NAME`, for the 2-VM stacks |
-| `--images DIR` | from settings | Sets `VM_IMAGES_DIR` |
-| `--xml FILE` | the stack's recorded layers, else the search path | Settings file, passed through to `docker compose --env-file`. Repeatable: later files win |
+| `--images DIR` | `<vm-images-dir>` | Guest images directory, passed to `docker compose` as `VM_IMAGES_DIR` |
+| `--xml FILE` | none for a stack found by its directory, else the search path | Fleet XML. Repeatable: a later file overrides the elements it sets |
 
 Everything else on the line goes to `docker compose` in the order typed —
 `--profile metrics up -d` needs no separator.
 
-`compose` never regenerates or edits a settings file. Resizing a fleet is
-`gen-compose --output-dir` after editing `VM_COUNT` yourself. To run a command
-across all fleet guests use ansible against `gen-compose`'s rendered inventory:
+`compose` never regenerates a stack or edits a settings file. Resizing a fleet
+is `gen-compose --output-dir` after editing `<vm-count>` yourself. To run a
+command across all fleet guests use ansible against `gen-compose`'s rendered
+inventory:
 
 ```bash
 ansible -i <stack>/fleet-inventory.yml fleet -f <N> -m raw \
@@ -762,14 +860,14 @@ and says which ones qemu-tool started:
 ```console
 $ qemu-tool list
 PID    NAME         SOURCE            ARCH   VCPU  MEM    SSH   KVM  UPTIME  CONTAINER                     NVME      VFIO-USER
-37374  rocjitsu-vm  external          amd64  4     8192M  2222  yes  53m     vfio-user-rocjitsu-vm-qemu-1  00:05.0   rocjitsu-1.sock
+37374  rocm-golden-1  external        amd64  4     4096M  2222  yes  53m     rocm-golden-qemu-1-1          00:05.0   rocjitsu-1.sock
 79805  marker-test  qemu-tool/run-vm  amd64  1     1024M  2223  yes  0m      -                             -         -
 ```
 
 #### The NVME column
 
 Every NVMe attached to the VM, emulated or passed through, comma-joined, with
-identical labels collapsed as `label*N` (`VM_NVME=2` is ordinary, and two
+identical labels collapsed as `label*N` (`<vm-nvme>2</vm-nvme>` is ordinary, and two
 identical labels say no more than one plus a count). `-` when the VM has none.
 
 | Entry | Meaning |

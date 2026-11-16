@@ -569,9 +569,11 @@
     # The rocm-sdxi commit this image is built from. The role has no default
     # on purpose: a moving ref baked into an image is not reproducible.
     #
-    # The server side is the sdxi.<sha> in the fleet files' sdxi-image, and
-    # the two are a pair: a guest at this ref waits for a completion MSI-X
-    # that a server older than it never raises.
+    # The server side is the sdxi.<sha7> in the fleet files' <sdxi-image>,
+    # and the two are a pair: a guest at this ref waits for a completion
+    # MSI-X that a server older than it never raises. That image is tied to
+    # this pin rather than to the fleet's build stamp, and
+    # tests/test_playbook_pins.py fails when they differ, so move both.
     sdxi_source_pin: &sdxi_source_pin "dfd76f23f6f10561333fc0a9a9f23e9f3b255c04"
     sdxi_setup_source_ref: "{{ sdxi_source_pin }}"
     sdxi_setup_user: "{{ vm_username | default('ubuntu') }}"

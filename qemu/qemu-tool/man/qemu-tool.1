@@ -1,23 +1,45 @@
-.TH QEMU\-TOOL 1 "September 2026" "qemu-tool 1.3.0" "User Commands"
+.TH QEMU\-TOOL 1 "November 2026" "qemu-tool 1.7.0" "User Commands"
 .SH NAME
-qemu\-tool \- run, generate and list QEMU virtual machines
+qemu\-tool \- generate, run and inspect QEMU guests and their compose stacks
 .SH SYNOPSIS
 .B qemu\-tool
 .RB [ \-\-version ]
-.I {quick\-start,check,down,run\-vm,gen\-vm,gen\-compose,compose,ernic\-stats,list,inspect,ssh,qcow,publish\-qcow,man,fleet\-to\-env}
+.I COMMAND
 .RI [ options ]
+.PP
+.I COMMAND
+is one of
+.BR quick\-start ,
+.BR check ,
+.BR gen\-vm ,
+.BR run\-vm ,
+.BR gen\-compose ,
+.BR compose ,
+.BR down ,
+.BR list ,
+.BR inspect ,
+.BR ssh ,
+.BR qcow ,
+.BR publish\-qcow ,
+.B ernic\-stats
+or
+.BR man .
 .SH DESCRIPTION
 .B qemu\-tool
-provides subcommands for managing QEMU-based virtual machines:
+generates, runs and inspects QEMU guests, and the
+.B docker compose
+stacks that put emulated GPUs, RDMA NICs and SDXI devices behind them.
+Settings come from fleet XML files; see
+.BR "SETTINGS FILE" .
+.SS Start here
 .TP
 .B quick\-start
-Boot two guests \(em each with an emulated GPU, NVMe and RDMA NIC \(em sized
-for this host, bring Prometheus and Grafana up beside them, and run a GPU
-test on each and an RDMA test across them. Nothing is built; the guest comes
-from a published image. This is the fastest path to a working stack and the
-one the daily
-.I report\-for\-quickstart
-lane runs.
+Boot the default stack sized for this host \(em two guests, each with an
+emulated GPU, an NVMe, an RDMA NIC and an SDXI device, with Prometheus,
+Grafana and log collection beside them \(em then run a GPU test on each guest
+and an RDMA test across them. Every image is pulled, the guest's included;
+nothing is built on this host. This is the fastest path to
+a working stack and the command the daily benchmark lane runs.
 .TP
 .B check
 Ask every host question the stacks depend on and report the answers: the
@@ -32,6 +54,27 @@ Exits non-zero if anything would stop a stack starting; warnings do not fail
 it. The same checks
 .B quick\-start
 runs in its preflight, so the two cannot drift.
+.SS One guest
+.TP
+.B gen\-vm
+Create a guest image: bake one from an Ubuntu cloud image with cloud-init, a
+package manifest and optionally an Ansible playbook, or overlay an image that
+already exists or is published in a registry.
+.TP
+.B run\-vm
+Launch a guest created by
+.BR gen\-vm .
+.SS A stack of guests
+.TP
+.B gen\-compose
+Render a compose stack \(em N guests, each with its rocm-ernic NICs, rocjitsu
+GPUs and SDXI devices, and the mesh between them \(em from fleet XML.
+.TP
+.B compose
+Run
+.B docker compose
+against a stack, with the caller's identity and the images directory supplied
+through the environment.
 .TP
 .B down
 Gracefully shut down guests and, optionally, tear down the containing stack.
@@ -45,28 +88,7 @@ shuts down that stack's guests then tears the stack down.
 With
 .BR \-\-all ,
 shuts down every guest then tears down every stack you own.
-.TP
-.B run\-vm
-Launch an existing VM image created by
-.BR gen\-vm .
-.TP
-.B gen\-vm
-Create a new Ubuntu VM image using cloud-init seeding.
-.TP
-.B compose
-Start the vfio-user GPU VM Docker Compose stack (rocm-ernic + rocjitsu),
-wrapping
-.B docker compose
-with VM_NAME and VM_IMAGES_DIR pre-configured.
-.TP
-.B gen\-compose
-Generate a scale-out compose stack \- an N-VM rocm-ernic mesh, one emulated
-RDMA NIC and one rocjitsu GPU per VM \- from the fleet keys in a settings file.
-.TP
-.B ernic\-stats
-Serve the stats files written by
-.B "rocm\-ernic \-S"
-as Prometheus metrics. Runs inside the compose stack; rarely invoked by hand.
+.SS What is running
 .TP
 .B list
 List every QEMU VM running on this node, including VMs inside containers, and
@@ -75,6 +97,33 @@ identify which of them
 started.
 See
 .BR "VM IDENTIFICATION" .
+.TP
+.B inspect
+Report how to log in to a running guest and what devices it has.
+.TP
+.B ssh
+Open an SSH session to a running guest.
+.TP
+.B qcow
+Inspect and manage VM overlay images. Lists all overlays with their sizes and
+COW delta, shows the full overlay state for one VM, or deletes and recreates a
+stopped VM's overlay from its backing image.
+.SS Everything else
+.TP
+.B publish\-qcow
+Publish a baked guest qcow2 to a registry as the artifact
+.B gen\-vm \-\-backing\-image
+and
+.B quick\-start
+pull.
+.TP
+.B ernic\-stats
+Serve the stats files written by
+.B "rocm\-ernic \-S"
+as Prometheus metrics. Runs inside the compose stack; rarely invoked by hand.
+.TP
+.B man
+Show this page.
 .PP
 VM images are stored in
 .I /var/lib/qemu-tool/images
@@ -86,11 +135,6 @@ Users must be a member of the
 .B kvm
 group to read or write images without
 .BR sudo .
-.TP
-.B qcow
-Inspect and manage VM overlay images. Lists all overlays with their sizes and
-COW delta, shows the full overlay state for one VM, or deletes and recreates a
-stopped VM's overlay from its backing image.
 .SH SHARED OPTIONS
 These options are accepted by both
 .B run\-vm
@@ -98,15 +142,15 @@ and
 .BR gen\-vm .
 .TP
 .BI \-\-xml " FILE"
-Read settings from
-.IR FILE
+Read settings from the fleet XML file
+.I FILE
 instead of searching the default locations.
 .B Repeatable:
-give it more than once and the files are layered left to right, a key set by
-a later file overriding the same key in an earlier one and a key absent from
-the later file keeping the earlier value. That is what lets one golden
-settings file carry the ~20 keys every fleet shares while a small committed
-overlay states only the handful that differ. See
+give it more than once and the files are layered left to right, an element
+set by a later file overriding the same element in an earlier one and an
+element absent from the later file keeping the earlier value. That is what
+lets one shipped fleet file carry everything a fleet shares while a small
+overlay states only the handful of elements that differ. See
 .B SETTINGS FILE
 below.
 .TP
@@ -190,10 +234,11 @@ takes on its own when stdin is not a terminal, so a CI run needs no flags to
 stay non\-interactive \(em and the chosen answer is printed either way.
 .TP
 .BI \-\-xml " FILE"
-Fleet settings file (XML). Defaults to the bundled
-.IR qemu/xml/quickstart.xml ,
-which ships inside the wheel, so this works with no checkout. Repeatable;
-later files override keys set by earlier ones.
+Fleet XML settings file. Defaults to the flavor's own file \(em
+.I qemu/stacks/rocm\-golden.xml
+for the default flavor \(em which ships inside the wheel and the Debian
+package, so this works with no checkout. Repeatable; a later file overrides
+the elements it sets.
 .TP
 .BI \-\-stack\-dir " DIR"
 Where the stack is generated. Default
@@ -212,7 +257,7 @@ The keypair ships as an ORAS referrer beside the guest qcow2, not inside it.
 .TP
 .BI \-\-images " DIR"
 Directory for the guest qcow2 files, overriding
-.BR VM_IMAGES_DIR .
+.BR <vm\-images\-dir> .
 Without it an unwritable default is asked about up front rather than failing
 part way into the pull.
 .TP
@@ -221,15 +266,15 @@ Write a markdown report here, and run the report step.
 .TP
 .BI \-\-repo\-root " DIR"
 The checkout holding
-.IR ansible/playbooks/fleet\-quickstart.yml .
+.IR ansible/playbooks/vm\-quickstart.yml .
 Found automatically from a source install. An installed tool with no checkout
 brings the guests up and skips the configuration and the tests, saying so.
 .TP
 .B \-\-size\-from\-host
 Derive
-.BR VM_VCPUS ", " VM_VMEM " and " VM_SHM_SIZE
+.BR <vm\-vcpus> ", " <vm\-vmem> " and " <vm\-shm\-size>
 from this machine, written to an
-.I env.sized
+.I overlay\-sized.xml
 layer beside the stack rather than into the settings file.
 .BR "On by default" ;
 .B \-\-no\-size\-from\-host
@@ -257,23 +302,24 @@ Quickstart flavor to run.
 .RS
 .TP
 .B default
-Two guests each with an emulated gfx1250 GPU, one NVMe and one rocm-ernic NIC,
-driven by the bundled
-.IR qemu/xml/quickstart.xml .
+Two guests each with an emulated gfx1250 GPU, one NVMe, one rocm-ernic NIC
+with P4 in guest scope and one SDXI device, driven by the bundled
+.IR qemu/stacks/rocm\-golden.xml :
+the rocm\-golden fleet. Every image it names is pulled.
 This is the default when
 .B \-\-flavor
 is omitted.
 .TP
 .B mi355x
-One VM with 8 GPUs, 8 ernics and 8 PCIe switches in a switched topology,
+Four VMs, each with 8 GPUs, 8 ernics and 8 PCIe switches in a switched topology,
 driven by the bundled
-.IR qemu/xml/mi355x-node.xml .
+.IR qemu/stacks/mi355x\-server.xml .
 The ansible configure-and-test step does not run for this flavor.
 .TP
 .B helios
 One VM with 4 gfx1250 GPUs, 8 ernics and one SDXI device, driven by the
 bundled
-.IR qemu/xml/helios-tray.xml .
+.IR qemu/stacks/helios\-tray.xml .
 The ansible configure-and-test step does not run for this flavor.
 .RE
 .TP
@@ -312,7 +358,7 @@ Place vfio\-user devices behind a PCIe root port.
 .BR "On by default" ;
 .B \-\-no\-vfio\-user\-root\-port
 asks for the old topology, as does
-.B VM_VFIO_USER_ROOT_PORT=false
+.B <vm\-vfio\-user\-root\-port>false</vm\-vfio\-user\-root\-port>
 in a settings file.
 .IP
 Without a root port the devices land on the root bus as conventional PCI
@@ -526,7 +572,7 @@ is given.
 Use tap+bridge for the management NIC instead of SLIRP.
 .TP
 .BI \-\-size " GB"
-Overlay image size in GB (default: 64).
+Disk size in GB (default: 64).
 .TP
 .BI \-\-release " NAME"
 Ubuntu release codename (e.g.\&
@@ -593,6 +639,36 @@ Inject a CA certificate into the guest trust store.
 .B \-\-ansible\-only
 Skip cloud-init provisioning; only re-run Ansible against an existing backing image.
 .TP
+.B \-\-bake
+Bake the image from the cloud image using the fleet XML's
+.BR <bake\-name> ,
+.BR <bake\-release> ,
+.BR <bake\-size> ,
+.BR <bake\-vcpus> ,
+.BR <bake\-username> ,
+.BR <bake\-password> ,
+.B <bake\-packages>
+and
+.B <bake\-playbook>
+elements, ignoring its
+.BR <backing\-ref> ,
+its
+.BR <vm\-username> / <vm\-password>
+and its
+.BR <vm\-extra\-hostfwd> ,
+since a bake runs QEMU on the host, where a forward whose port is taken stops
+it starting. Without this flag gen\-vm pulls the fleet file's
+.B <backing\-ref>
+and reads none of the bake elements. The image authorises
+.BR \-\-ssh\-key\-file ,
+which has to be the public half of the key given to
+.BR publish\-qcow . An explicit
+flag still outranks an element. Cannot be combined with
+.BR \-\-backing\-image ,
+.B \-\-backing\-file
+or
+.BR \-\-restore\-image .
+.TP
 .BI \-\-backing\-image " OCI_REF"
 Pull a published backing qcow2 from a container registry with
 .BR oras (1),
@@ -614,47 +690,90 @@ Re-running is a no-op unless
 is given.
 .SH GEN-COMPOSE OPTIONS
 .PP
-Generates
-.I docker\-compose.yml
-and
+Renders
+.IR docker\-compose.yml ,
 .I prometheus.yml
-for an N-VM rocm-ernic mesh from the fleet keys in the settings file. VM 1 is
-the mesh manager; VMs 2..N are workers that dial it.
+and
+.I fleet\-inventory.yml
+for the fleet a fleet XML file describes. Each rocm-ernic is one node of a
+TCP mesh; the first is the mesh manager and the rest are workers that dial
+it.
 .PP
-Per-VM values are comma-lists, not numbered variables \-
-.B VM1_NAME
-does not survive eight VMs, let alone the mesh's sixty-four. A bare value
-broadcasts to every VM; a list whose length equals
-.B VM_COUNT
-applies positionally; any other length is an error naming the key and both
-lengths. The exception is a key naming a field that is already a list
-.RB ( VM_PCI_HOSTDEV ,
-.BR VM_VFIO_USERDEV ,
-.BR VM_EXTRA_HOSTFWD ),
-where the commas mean several values for
-.I one
-VM and the whole value goes to every VM. See
-.I env/scale\-out.xml
-for the full key list.
+Three stacks ship, each rendered from the fleet file of the same name:
 .TP
-.BI \-\-stack " NAME"
-Stack to generate. Default:
-.IR vfio\-user\-ernic\-rocjitsu\-scale\-out .
+.B rocm\-golden
+.I qemu/stacks/rocm\-golden.xml
+\(em two guests, each with a GPU, an NVMe, an ernic with P4 in guest scope
+and an SDXI device. The default stack, and what
+.B quick\-start
+runs.
+.TP
+.B helios\-tray
+.I qemu/stacks/helios\-tray.xml
+\(em one guest with 4 GPUs, 8 ernics and an SDXI device.
+.TP
+.B mi355x\-server
+.I qemu/stacks/mi355x\-server.xml
+\(em one guest with 8 GPUs and 8 ernics, one of each below each of 8 PCIe
+switches.
+.PP
+Any other fleet is one of those files plus an overlay, rendered somewhere of
+your own with
+.BR \-\-output\-dir .
+.PP
+Most elements hold one value for the whole fleet. Three take a comma-list
+with one value per guest \(em
+.BR <vm\-shm\-size> ,
+.B <vm\-filesystem>
+and
+.BR <rocjitsu\-config> :
+a bare value applies to every guest, a list whose length equals
+.B <vm\-count>
+applies positionally, and any other length is an error naming the element and
+both lengths. Each distinct
+.B <vm\-filesystem>
+share is bind-mounted into the qemu containers once.
+.B <vm\-extra\-hostfwd>
+is different: its commas separate several rules for
+.I one
+guest, and the whole value goes to every guest.
 .TP
 .BI \-\-xml " FILE"
-Fleet settings file (XML). Repeatable; later files override keys set by earlier
-ones. The generated header records one
-.I "# fleet\-file:"
-line per layer and a single
-.I "# env\-sha256:"
-over all of them concatenated, so an edit to the overlay invalidates the
-render exactly as an edit to the golden file does.
+Fleet XML settings file. Repeatable; a later file overrides the elements it
+sets. Default: a
+.I fleet.xml
+on the search path (see
+.BR "SETTINGS FILE" ),
+else the stack's own file in
+.IR qemu/stacks/ .
+The generated files carry one
+.I "# xml\-sha256:"
+line over all the layers concatenated, so an edit to an overlay invalidates
+the render exactly as an edit to the first file does.
+.TP
+.BI \-\-stack " NAME"
+Stack to generate:
+.BR rocm\-golden ,
+.B helios\-tray
+or
+.BR mi355x\-server .
+It decides which stack's assets (Grafana dashboards, logging configuration,
+the tapsetup image) are mirrored beside the render and, without
+.BR \-\-output\-dir ,
+where the render goes. Default: the stack named after the first
+.B \-\-xml
+file when that is a shipped stack, else
+.BR rocm\-golden .
 .TP
 .BI \-\-output\-dir " DIR"
 Where to write. Defaults to the resolved stack directory, except that
 generating into
 .I /usr/share/qemu\-tool/compose
 must be asked for explicitly: that tree is owned by the Debian package.
+Required for an overlay render: without it the output lands on the committed
+stack named by the first
+.B \-\-xml
+file.
 .TP
 .B \-\-check
 Exit non-zero if regenerating would change anything, and write nothing.
@@ -666,19 +785,18 @@ Print the generated files to standard output instead of writing them.
 The generated
 .I docker\-compose.yml
 carries a
-.B "# env\-sha256:"
-header recording the settings file it was built from.
+.B "# xml\-sha256:"
+header recording the fleet XML it was built from.
 .B compose
-recomputes it and warns on standard error when the two disagree. It never
-refuses to run:
+recomputes it when given
+.B \-\-xml
+and warns on standard error when the two disagree. It never refuses to run:
 .B down
 against a stale tree is exactly how a bad edit is recovered from.
 .PP
-Four settings-file keys shape the generated fleet beyond its size. They live
-in the settings file, not on the command line, because they have to match the
-committed stack the next regeneration produces.
+Some elements shape the generated fleet beyond its size:
 .TP
-.B ERNIC_TAP
+.B <ernic\-tap>
 Give the guests working Ethernet. The rocm-ernic TCP mesh carries RDMA
 payload only; without a TAP the guest driver transmits, the device drops the
 frames, ARP goes unanswered, and
@@ -694,26 +812,51 @@ and exits; the long-running server needs only
 because attaching to a pre-created, owned TAP requires no capability.
 Default: false.
 .TP
-.B PROM_DATA_DIR
-Host path bind-mounted as the Prometheus TSDB, relative to the stack
-directory. A bind mount rather than a named volume so the record of a run is
+.BR <ernic\-per\-vm> ", " <rocjitsu\-per\-vm> ", " <sdxi\-per\-vm>
+Devices per guest. The first two must be at least 1. Each ernic is its own
+mesh node, and the mesh stops registering workers at about 40 nodes, so 8
+ernics per guest caps a fleet near 5 guests. Defaults: 1, 1 and 0.
+.TP
+.B <vm\-pcie\-switch\-width>
+Group each guest's vfio-user devices under PCIe switches, this many per
+switch; see
+.B run\-vm
+.BR \-\-vfio\-user\-switch\-width .
+Default: 0, off.
+.TP
+.BR <p4\-enable> ", " <p4\-guest\-scope> ", " <p4\-program>
+Run the P4 engine on each ernic server, and decide which guest commands
+reach it:
+.BR none ,
+.B read
+(counters),
+.B write
+(also table entries) or
+.B load
+(also program replacement). Defaults: false and
+.BR none .
+.TP
+.BR <prom\-data\-dir> ", " <grafana\-data\-dir> ", " <loki\-data\-dir>
+Host paths bind-mounted as the Prometheus TSDB, Grafana's state and Loki's
+store. Bind mounts rather than named volumes so the record of a run is
 visible to whoever made it, instead of being buried under
 .I /var/lib/docker/volumes
-as root and silently reused by the next fleet of a different size. Create it
-and
-.B "chown 65534:65534"
-before
-.BR up :
-the container runs as
-.IR nobody ,
-and Docker creates a missing bind source as root. Default:
-.IR ./prom\-data .
+as root and silently reused by the next fleet of a different size.
+.B compose
+creates the ones the fleet XML names, as the caller, before
+.BR up .
 .TP
-.B ERNIC_NOFILE
+.BR <grafana\-enable> ", " <logs\-enable>
+Generate Grafana, and Loki with an Alloy tailing the stack's containers.
+Both ride the
+.B metrics
+profile. Defaults: true and true.
+.TP
+.B <ernic\-nofile>
 File-descriptor limit for every ernic service. Docker's default soft limit is
 1024, which a mesh manager can reach inside a single run. Default: 65536.
 .TP
-.BR LOG_MAX_SIZE ", " LOG_MAX_FILE
+.BR <log\-max\-size> ", " <log\-max\-files>
 Rotation for every service's log. Docker's json-file driver is unlimited by
 default, and a wedged server with no backoff on its error path can fill a
 disk. Defaults: 50m and 3.
@@ -746,37 +889,45 @@ Listen port. Default: 9840.
 .BI \-\-addr " ADDR"
 Listen address. Default: 0.0.0.0.
 .SH COMPOSE OPTIONS
-.TP
-.BI \-\-vm2\-name " NAME"
-Second VM's name, for the two\-VM stacks, passed through as VM2_NAME. Ignored
-by a stack that has one guest, and by the generated scale\-out stack, which
-bakes every VM name into its YAML.
-.TP
-.BI \-\-vm\-name " NAME"
-VM name passed to the compose stack as VM_NAME (basename of the qcow2 without
-extension).
-Default:
-.IR qemu-minimal .
-.TP
-.BI \-\-images " DIR"
-Directory containing VM image files, passed as VM_IMAGES_DIR.
-Default:
-.IR /var/lib/qemu-tool/images .
+Runs
+.B docker compose
+against a stack. A generated stack has its fleet's shape baked into the
+YAML; the only things left for
+.B docker compose
+to interpolate are
+.BR CONTAINER_USER ,
+.BR CONTAINER_KVM_GID ,
+.B VM_IMAGES_DIR
+and
+.BR QEMU_TOOL_SRC .
+.B compose
+supplies those through the environment of the
+.B docker compose
+process \(em the caller's uid and gid, the gid that owns
+.IR /dev/kvm ,
+and the two paths from the fleet XML \(em and only where the caller's own
+environment does not already set them. No settings file is written for
+.B docker compose
+or handed to it.
 .TP
 .BI \-\-stack " NAME"
-Committed stack to run. Default:
-.IR vfio\-user\-ernic\-rocjitsu\-vm .
+Shipped stack to run:
+.BR rocm\-golden ,
+.B helios\-tray
+or
+.BR mi355x\-server .
+Default:
+.BR rocm\-golden .
 .TP
 .BI \-\-stack\-dir " DIR"
 Run a stack rendered by
 .B "gen\-compose \-\-output\-dir"
 .I DIR
-instead of a committed one. Mutually exclusive with
+instead of a shipped one. Mutually exclusive with
 .BR \-\-stack ,
-and required for a fleet rendered from an overlay:
-.B VM_COUNT
-and the VM names are baked into the generated YAML, so without it the
-committed stack comes up instead, reporting success.
+and required for a fleet rendered from an overlay: the guest count and the
+guest names are baked into the generated YAML, so without it the shipped
+stack comes up instead, reporting success.
 .IP
 Defaults to
 .BR $QEMU_TOOL_STACK ,
@@ -789,39 +940,64 @@ beside you. A rendered stack is recognised by the generator's provenance
 header, not by the presence of a
 .IR docker\-compose.yml ,
 so an unrelated docker project is never adopted. There is no walk\-up: from
-anywhere in a checkout it would reach the committed stack directory and drive
-an 8\-VM stack under the name of a fleet.
+anywhere in a checkout it would reach a committed stack directory and drive
+it under the name of a fleet.
 .TP
 .BI \-\-xml " FILE"
-Settings file handed to
-.BR "docker compose \-\-env\-file" .
-Repeatable, and the layers are handed to it in the same order:
-.B "docker compose"
-applies them last-wins too, so compose and
-.B qemu\-tool
-resolve every key to the same value. See
+Fleet XML settings file. Repeatable; a later file overrides the elements it
+sets. See
 .B SETTINGS FILE
 below.
 .IP
-Against a rendered stack this is optional: the generated
-.I docker\-compose.yml
-records the layers it was built from and they are read back from it, so a
-fleet needs no flags at all once it exists. The recorded names are resolved
-as typed \(em an absolute name as itself, a relative one against the stack
-directory and then the current directory, and nowhere else. A layer that is
-at neither, or a generated stack naming no layers, is an error giving the
-path and where it was looked for, never a fall\-back to the search path: that
-is how a 32\-VM fleet ends up driven by an 8\-VM
-.IR qemu/.env .
-Passing
+Against a rendered stack found by
+.BR \-\-stack\-dir ,
+.B $QEMU_TOOL_STACK
+or the current directory this is optional, and without it no settings file is
+read at all: the fleet's shape is in its YAML, so inspecting or stopping a
+fleet needs no flags once it exists. Two values are not in the YAML. Give
 .B \-\-xml
-overrides the memory, and layers that differ from the recorded ones are named
-in the staleness warning, which still re\-hashes the files' current bytes.
+to have the images directory and the qemu\-tool source mount taken from the
+fleet XML, and the render checked against the layers' current bytes; without
+it
+.B VM_IMAGES_DIR
+is
+.I /var/lib/qemu\-tool/images
+and
+.B QEMU_TOOL_SRC
+is
+.I ../../..
+from the stack directory, which outside a checkout is an unrelated directory
+and makes the qemu containers install qemu\-tool from PyPI. A
+.I .env
+in the stack directory is read only when no settings are in force. The data
+directories are read from the stack's YAML and created before
+.B up
+either way.
+.IP
+For a stack named by
+.B \-\-stack
+the search path applies when the flag is absent, and failing that the stack's
+own file in
+.IR qemu/stacks/ .
+Layers that are not that file are a different fleet: given with
+.B \-\-xml
+they draw a warning that points at
+.B "gen\-compose \-\-output\-dir"
+and
+.BR "compose \-\-stack\-dir" .
+.TP
+.BI \-\-images " DIR"
+Directory containing the guest images, passed as
+.BR VM_IMAGES_DIR .
+Default:
+.B <vm\-images\-dir>
+from the fleet XML, else the stack's own default,
+.IR /var/lib/qemu-tool/images .
 .PP
 .B compose
 never regenerates and never edits a settings file: resizing a fleet is an
 edit to
-.B VM_COUNT
+.B <vm\-count>
 followed by
 .BR "gen\-compose \-\-output\-dir" ,
 so a re\-render is always a decision rather than a side effect of
@@ -837,6 +1013,16 @@ renders beside the compose file; for one guest,
 prints a complete
 .B ssh
 command, and reports the ernic netdev and its address without a login.
+.PP
+.B down
+and
+.B stop
+enable every profile unless
+.B \-\-profile
+or
+.B COMPOSE_PROFILES
+scopes them, and a teardown that exits 0 while containers of its own project
+are still running warns and names them.
 .PP
 Pass
 .B \-v
@@ -854,12 +1040,29 @@ All remaining arguments are forwarded to
 .B "docker compose"
 in the order typed, options included, so
 .B "\-\-profile metrics up \-d"
-needs no separator. A
+needs no separator. This command's own options are recognised anywhere on
+the line. A
 .B \-\-
-before the subcommand is still accepted and dropped rather than forwarded:
+ends them: everything after it is docker's, and the separator itself is
+dropped rather than forwarded, because
 .B "docker compose"
 reads one as end\-of\-options and silently ignored the profile that followed
 it, bringing up the default services and reporting success.
+.PP
+Plain
+.B docker compose
+against a generated stack refuses until
+.B CONTAINER_USER
+and
+.B CONTAINER_KVM_GID
+are set, which is deliberate: unset would run every container as root.
+.PP
+.RS
+.EX
+CONTAINER_USER=$(id \-u):$(id \-g) \\
+CONTAINER_KVM_GID=$(stat \-c %g /dev/kvm) docker compose up \-d
+.EE
+.RE
 .SH LIST OPTIONS
 .TP
 .B \-\-json
@@ -941,7 +1144,7 @@ The
 column lists every NVMe attached to the VM, emulated or passed through,
 comma-joined, with identical labels collapsed as
 .IR label *N
-.RB ( VM_NVME=2
+.RB ( <vm\-nvme>2</vm\-nvme>
 is ordinary, and two identical labels say no more than one plus a count), or
 .B \-
 when the VM has none. Four forms:
@@ -1089,8 +1292,8 @@ rule nobody can remember.
 Inspect a single VM. Default: every running VM.
 .TP
 .BI \-\-xml " FILE"
-Settings file. Overrides the search path, and is repeatable with later files
-winning key by key, as everywhere else.
+Fleet XML settings file. Overrides the search path, and is repeatable with
+later files winning element by element, as everywhere else.
 .TP
 .B \-\-all\-devices
 Expand collapsed device rows. When more than one GPU, RNIC or SDXI device is
@@ -1140,27 +1343,31 @@ is something that stops a stack starting and sets the exit status to 1; a
 limits what the host can do without blocking it \(em a missing
 .IR /dev/net/tun ,
 which only an
-.B ERNIC_TAP
+.B <ernic\-tap>
 fleet needs, or a vCPU budget past what the mesh manager's untunable 20\~s
 heartbeat tolerates. A
 .B skip
 is a check that did not apply.
 .PP
+Each settings file in force is named and parsed with the same strict parser
+every subcommand uses. A file that is not valid fleet XML is a
+.B FAIL
+with one line per problem, naming the file and the element, and the rest of
+the report still runs.
+.PP
 The container identity is reported even when it is fine, because
 .I which uid did my fleet run as
 used to have a surprising answer: every stack ran as root until the
 .B CONTAINER_USER
-reference became unconditional. See
-.B SETTINGS FILE
-for that key.
+reference became unconditional. It is not a fleet XML setting: it comes from
+the environment when set there, and otherwise is the caller.
 .TP
 .BI \-\-xml " FILE"
-Settings file to check against, repeatable, later files winning key by key.
-Without it the usual search path is used, and which file that found is itself
-part of the report \(em a stale
-.I qemu/.env
-in a checkout outranks the system one, and a fleet then runs with
-half-remembered values.
+Fleet XML settings file to check against, repeatable, later files winning
+element by element. Without it the usual search path is used, and which file
+that found is itself part of the report \(em a forgotten
+.I ./fleet.xml
+outranks the system one, and a fleet then runs with half-remembered values.
 .SH DOWN OPTIONS
 Gracefully shuts down guests through the QEMU guest agent, then optionally
 tears down the containing stack or all owned stacks.
@@ -1182,9 +1389,9 @@ stack.
 .PP
 Stack identity and ownership follow the same rules as
 .B down \-\-all :
-identified by the compose file (the
+identified by the compose file's
 .B gen\-compose
-provenance header, or a shipped stack directory), never by service name.
+provenance header, never by service name or directory name.
 Yours if any container in it runs as your uid.
 .TP
 .I TARGET
@@ -1265,13 +1472,18 @@ Skip the
 confirmation prompt.
 .TP
 .BI \-\-images " DIR"
-Directory to scan for VM images. Overrides
-.BR VM_IMAGES_DIR .
-When omitted,
-.BR qemu\-tool
-scans the system images directory, the user XDG data directory, and
-.B VM_IMAGES_DIR
-from the environment or a local settings file.
+Directory to scan for VM images. When omitted,
+.B \-\-list
+scans the system images directory, the user XDG data directory,
+.B $VM_IMAGES_DIR
+when the environment sets it, and the
+.B <vm\-images\-dir>
+of a
+.I fleet.xml
+on the search path; the other two modes use
+.BR \-\-xml 's
+.B <vm\-images\-dir>
+or the default directory.
 .TP
 .B \-\-nvme
 With
@@ -1280,9 +1492,10 @@ show a separate NVMe images section listing each scratch disk by name,
 on-disk size and age. Without this flag, only the total NVMe usage is shown.
 .TP
 .BI \-\-xml " FILE"
-Settings file. Repeatable; later files win key by key. Used to resolve
-.B VM_IMAGES_DIR
-when
+Fleet XML settings file. Repeatable; later files win element by element.
+Its
+.B <vm\-images\-dir>
+is used when
 .B \-\-images
 is not given.
 .SH PUBLISH-QCOW OPTIONS
@@ -1300,11 +1513,25 @@ and
 .BR id_rsa.pub .
 What is published is the file given, so test the guest on an overlay.
 .TP
+.BI \-\-xml " FILE"
+Fleet XML whose
+.B <publish\-*>
+and
+.B <bake\-*>
+elements become the defaults of the flags below. Repeatable; later files win.
+There is no search path here: without this flag no settings file is read.
+.TP
 .BI \-\-image " FILE"
-The baked qcow2. Refused if it has a backing file.
+The baked qcow2. Refused if it has a backing file, or if
+.B gen\-vm
+pulled it from a registry rather than baking it. Default with
+.BR \-\-xml :
+.IB <vm\-images\-dir> / <bake\-name> \-backing.qcow2\fR.
 .TP
 .BI \-\-ref " REPO"
-Registry repository, without a tag.
+Registry repository, without a tag. Default with
+.BR \-\-xml :
+.BR <publish\-ref> .
 .TP
 .BI \-\-tag " TAG"
 Tag to push. Repeatable: one push carries them all and the referrer attaches
@@ -1314,24 +1541,42 @@ to the first.
 Private key the guest authorises;
 .IB FILE .pub
 must sit beside it. The keypair is published, so generate one for the image
-and never pass a personal key.
+and never pass a personal key. Required: it is never taken from a settings
+file, not even from
+.BR <vm\-ssh\-key\-file> ,
+which is a fleet's own login key. Refused when it is not the key
+.B gen\-vm
+recorded baking into the image; bake with
+.B \-\-ssh\-key\-file
+.IB FILE .pub\fR.
 .TP
 .BI \-\-vm\-name " NAME"
-Names the qcow2 inside the artifact.
+Names the qcow2 inside the artifact. Default with
+.BR \-\-xml :
+.BR <bake\-name> .
 .TP
 .BI \-\-flavour " NAME"
-Recorded in vm\-info.json and the annotations. Default
+Recorded in vm\-info.json and the annotations. Default:
+.BR <publish\-flavour> ,
+else
 .BR rocm\-golden .
 .TP
 .BI \-\-username " NAME"
-The guest login. Default
+The guest login. Default:
+.BR <bake\-username> ,
+else
 .BR ubuntu .
 .TP
 .BI \-\-password " PASSWORD"
-Recorded in vm\-info.json and never in an annotation.
+Recorded in vm\-info.json and never in an annotation. Default:
+.BR <bake\-password> ,
+else
+.BR password .
 .TP
 .BI \-\-release " NAME"
-Ubuntu codename of the guest. Default
+Ubuntu codename of the guest. Default:
+.BR <bake\-release> ,
+else
 .BR resolute .
 .TP
 .BI \-\-architecture " ARCH"
@@ -1344,7 +1589,8 @@ A copy of the guest's
 vm\-info.json takes the kernel and the pins from it and carries it whole.
 .TP
 .BI \-\-playbook " NAME"
-The playbook the guest was baked with, for the record.
+The playbook the guest was baked with, for the record. Default:
+.BR <bake\-playbook> .
 .TP
 .BI \-\-commit " SHA"
 The qemu\-minimal commit the guest was baked from.
@@ -1395,7 +1641,7 @@ also take.
 Name of the running VM. Required.
 .TP
 .BI \-\-xml " FILE"
-Settings file. Repeatable; later files win.
+Fleet XML settings file. Repeatable; later files win.
 .TP
 .B \-\-strict\-host\-key
 Keep
@@ -1423,20 +1669,8 @@ To run a remote command, separate it with
 .BR \-\- :
 .PP
 .EX
-qemu\-tool ssh stebates\-fleet\-1 \-\- ibv_devinfo \-l
+qemu\-tool ssh rocm\-golden\-1 \-\- ibv_devinfo \-l
 .EE
-.SH FLEET-TO-ENV OPTIONS
-Reads one or more XML fleet settings files and prints their merged key/value
-pairs to standard output in
-.B KEY=VALUE
-env-file syntax, one per line. Useful for inspecting the effective settings
-after overlay merging, or for feeding them to tools that read env files rather
-than XML.
-.TP
-.BI \-\-xml " FILE"
-Fleet settings file (XML). Repeatable; later files override keys set by earlier
-ones, in the same last-wins order as every other subcommand that takes
-.BR \-\-xml .
 .SH VM IDENTIFICATION
 .B qemu\-tool
 stamps every VM it launches with two generic QEMU options:
@@ -1481,56 +1715,309 @@ to be identified. Identification is for operator convenience, not a security
 boundary \(em the markers are plain command-line arguments and can be set by
 anyone.
 .SH SETTINGS FILE
-Every
-.B VM_*
-key in the settings file maps to the option of the same name:
-.B VM_VCPUS
-is
-.BR \-\-vcpus ,
-.B VM_IMAGES_DIR
-is
-.BR \-\-images .
-The file uses the docker compose env-file syntax, one
-.I KEY=value
-per line with no shell expansion, because
-.B compose
-hands the same file to
-.BR "docker compose \-\-env\-file" .
-An empty value is ignored.
+Fleet XML is the only settings format. A file is one
+.B <fleet>
+element in the namespace
+.I http://qemu\-tool/fleet/1.0
+whose children each hold one setting:
 .PP
-Values are applied lowest to highest from the built-in defaults, a
+.RS
+.EX
+<fleet xmlns="http://qemu\-tool/fleet/1.0">
+  <vm\-count>2</vm\-count>
+  <vm\-name\-prefix>rocm\-golden</vm\-name\-prefix>
+  <vm\-vcpus>4</vm\-vcpus>
+  <vm\-images\-dir>${HOME}/images</vm\-images\-dir>
+</fleet>
+.EE
+.RE
+.PP
+.I qemu/stacks/rocm\-golden.xml
+is the annotated reference. An element that is absent keeps its default.
+The parser is strict: an element it does not know, an element given twice in
+one file, an attribute, a nested element and text directly under
+.B <fleet>
+are each an error that names the file and the element, and for an unknown
+element the closest known name. XML comments are allowed anywhere. A misspelt
+element is therefore refused, not read as a setting left at its default.
+.B ${VAR}
+is expanded from the environment in the path elements only:
+.BR <vm\-images\-dir> ,
+.BR <vm\-ssh\-key\-file> ,
+.BR <bake\-packages> ,
+.B <bake\-playbook>
+and the three data directories.
+.SS Layers
+.B \-\-xml
+is repeatable. The files are read left to right and a later file overrides
+only the elements it sets, so an overlay is a short file naming what differs:
+.PP
+.RS
+.EX
+qemu\-tool gen\-compose \-\-xml qemu/stacks/rocm\-golden.xml \-\-xml one\-guest.xml \\
+    \-\-output\-dir /var/lib/qemu\-tool/stacks/one\-guest
+.EE
+.RE
+.SS Search path
+With no
+.BR \-\-xml ,
+the first of these that exists is used, alone:
+.BR $QEMU_TOOL_FLEET ,
+.IR ./fleet.xml ,
+.I qemu/stacks/fleet.xml
+in a source checkout,
+.IR $XDG_CONFIG_HOME/qemu\-tool/fleet.xml ,
+.IR /etc/qemu\-tool/fleet.xml .
+None of these is created for you; the Debian package leaves
+.I /etc/qemu\-tool/
+empty, because a file there is the settings of every command given no
+.BR \-\-xml .
+With none, the built-in defaults apply. Only
+.B \-\-xml
+layers: the search path resolves to exactly one file, so layering is
+something asked for on the command line and never something inherited from
+the ambient environment. Four commands differ.
+.B gen\-compose
+and
+.B "compose \-\-stack"
+fall back to the stack's own file in
+.I qemu/stacks/
+when the search finds nothing;
+.B quick\-start
+does not search and uses its flavor's file;
+.B publish\-qcow
+reads no settings file unless
+.B \-\-xml
+names one.
+.SS Per-guest settings
+.B gen\-vm
+and
+.B run\-vm
+take these elements as the defaults of their options. Values are applied
+lowest to highest from the built-in defaults, a
 .B \-\-domain
-XML, the settings file, then explicit command-line options, so an option always
-beats the file. One-shot actions
+XML, the fleet XML, then explicit command-line options, so an option always
+beats the file.
+.PP
+.RS
+.EX
+<vm\-vcpus>                    \-\-vcpus
+<vm\-vmem>                     \-\-vmem
+<vm\-images\-dir>               \-\-images
+<vm\-nvme>                     \-\-nvme
+<vm\-filesystem>               \-\-filesystem
+<vm\-extra\-hostfwd>            \-\-extra\-hostfwd
+<vm\-backing\-shared>           \-\-backing\-shared
+<vm\-vfio\-user\-root\-port>      \-\-vfio\-user\-root\-port
+<vm\-cpu\-sockets>              \-\-cpu\-sockets
+<vm\-cpu\-phys\-bits>            \-\-cpu\-phys\-bits
+<vm\-pci\-hole64\-size>          \-\-pci\-hole64\-size
+<vm\-username>                 \-\-username
+<vm\-password>                 \-\-password
+<vm\-ssh\-key\-file>             \-\-ssh\-key\-file
+<backing\-ref>                 \-\-backing\-image
+.EE
+.RE
+.PP
+Everything else those two commands take is a flag only.
+.SS Fleet settings
+Read by
+.BR gen\-compose ,
+.B compose
+and
+.BR quick\-start .
+.TP
+Shape
+.BR <vm\-count> ,
+.BR <vm\-name\-prefix> ,
+.BR <ssh\-port\-base> ,
+.BR <stop\-grace\-period> ,
+.BR <domain\-pattern> .
+.TP
+Images
+.BR <qemu\-ref> ,
+.BR <ernic\-ref> ,
+.BR <rocjitsu\-ref> ,
+.BR <sdxi\-image> ,
+.BR <backing\-ref> ,
+the optional
+.BR <qemu\-digest> ,
+.BR <ernic\-digest> ,
+.B <rocjitsu\-digest>
+and
+.B <backing\-digest>
+beside the reference each pins, and
+.BR <image\-allow\-guest\-lag> ,
+which excuses
+.B <backing\-ref>
+from the build-stamp check.
+.TP
+Devices
+.BR <ernic\-per\-vm> ,
+.BR <rocjitsu\-per\-vm> ,
+.BR <sdxi\-per\-vm> ,
+.BR <vm\-pcie\-switch\-width> ,
+.BR <rocjitsu\-config> .
+.TP
+Network and mesh
+.BR <fleet\-prefix> ,
+.BR <ernic\-subnet> ,
+.BR <ernic\-mac\-prefix> ,
+.BR <ernic\-tap> ,
+.BR <ernic\-tcp\-port> ,
+.BR <ernic\-stats\-port> ,
+.BR <ernic\-nofile> ,
+.BR <p4\-enable> ,
+.BR <p4\-guest\-scope> ,
+.BR <p4\-program> .
+.TP
+Guests
+the per-guest elements above, and
+.BR <vm\-shm\-size> .
+.TP
+Metrics and logs
+.BR <prom\-port> ,
+.BR <prom\-scrape\-interval> ,
+.BR <prom\-retention> ,
+.BR <prom\-data\-dir> ,
+.BR <publish\-bind\-addr> ,
+.BR <grafana\-enable> ,
+.BR <grafana\-image> ,
+.BR <grafana\-port> ,
+.BR <grafana\-admin\-password> ,
+.BR <grafana\-data\-dir> ,
+.BR <logs\-enable> ,
+.BR <loki\-image> ,
+.BR <loki\-port> ,
+.BR <loki\-data\-dir> ,
+.BR <alloy\-image> ,
+.BR <log\-max\-size> ,
+.BR <log\-max\-files> .
+.TP
+Paths
+.BR <qemu\-tool\-src> ,
+the checkout or install the qemu containers mount.
+.SS Bake and publish settings
+Read only by
+.B "gen\-vm \-\-bake"
+and
+.BR "publish\-qcow \-\-xml" .
+A plain
+.B gen\-vm
+pulls the fleet file's
+.B <backing\-ref>
+and reads none of these.
+.B <backing\-ref>
+and
+.B <publish\-ref>
+may name different repositories; in
+.I rocm\-golden.xml
+they do today.
+.TP
+.B <bake\-name>
+Name of the baked guest; the image is
+.IR <vm\-images\-dir>/<bake\-name>\-backing.qcow2 .
+.TP
+.BR <bake\-release> ", " <bake\-size> ", " <bake\-vcpus>
+Ubuntu release, disk size in GB and the vCPUs the bake runs with.
+.TP
+.BR <bake\-packages> ", " <bake\-playbook>
+Package manifest path (or
+.BR none )
+and Ansible playbook path, relative to the working directory. A
+.B ~
+is expanded.
+.TP
+.BR <bake\-username> ", " <bake\-password>
+The account baked into the image. Separate from
+.BR <vm\-username> / <vm\-password>
+because these are published in
+.IR vm\-info.json ;
+a fleet's own login never reaches a registry. Unset, they fall to
+.BR ubuntu / password ,
+never to the fleet's login.
+.TP
+.BR <publish\-ref> ", " <publish\-flavour>
+Registry repository, without a tag, and the flavour recorded with the image.
+.SS What is not a fleet XML setting
+.B CONTAINER_USER
+and
+.B CONTAINER_KVM_GID
+differ per host and so are never in a file: they come from the environment
+when set there, and otherwise from the caller's ids and the owner of
+.IR /dev/kvm .
+One-shot actions
 .RB ( \-\-dry\-run ,
 .BR \-\-force ,
 .BR \-\-restore\-image ,
 .BR \-\-ansible\-only ,
 .BR \-\-nvme\-recreate )
-are deliberately not readable from the file.
-.PP
-The first of these that exists is used:
-.BR \-\-xml ,
-.BR $QEMU_TOOL_ENV ,
-.IR ./.env ,
-.IR qemu/.env ,
-.IR $XDG_CONFIG_HOME/qemu-tool/env ,
-.IR /etc/qemu-tool/env .
-.PP
-Only
-.B \-\-xml
-layers. The search path still resolves to exactly one file, so layering is
-something asked for on the command line and never something inherited from
-the ambient environment.
+are flags only.
+.SH ENVIRONMENT
+.TP
+.B QEMU_TOOL_FLEET
+A fleet XML file, first on the search path.
+.TP
+.B QEMU_TOOL_STACK
+A rendered stack directory for
+.B compose
+to drive when
+.B \-\-stack\-dir
+is not given.
+.TP
+.BR CONTAINER_USER ", " CONTAINER_KVM_GID
+The
+.I uid:gid
+the containers run as and the gid that opens
+.IR /dev/kvm .
+Set either to override what
+.B compose
+and
+.B quick\-start
+would derive from the caller.
+.TP
+.B VM_IMAGES_DIR
+Interpolated by the generated stacks. Set by
+.B compose
+from
+.B \-\-images
+or
+.BR <vm\-images\-dir> ;
+a value already in the environment wins over the fleet XML.
+.TP
+.BR XDG_CONFIG_HOME ", " XDG_DATA_HOME ", " XDG_STATE_HOME
+Where the per-user
+.IR fleet.xml ,
+the fallback images directory and
+.BR quick\-start 's
+fallback stack directory live.
 .SH FILES
 .TP
-.I /etc/qemu-tool/env
-Site settings file, seeded from
-.I /usr/share/qemu-tool/env/example
-on first install and never overwritten afterwards.
+.I /etc/qemu-tool/fleet.xml
+Site settings file, last on the search path. Nothing creates it: an admin copies
+.I /usr/share/qemu-tool/stacks/rocm\-golden.xml
+there when the site wants one.
 .TP
-.I /usr/share/qemu-tool/env/example
-Settings template, documenting every key.
+.I /usr/share/qemu-tool/stacks/
+The fleet file of each shipped stack:
+.IR rocm\-golden.xml ,
+.I helios\-tray.xml
+and
+.IR mi355x\-server.xml .
+.I rocm\-golden.xml
+documents the elements.
+.TP
+.I /usr/share/qemu-tool/compose/
+The generated stack directories of the same names, used by
+.BR compose .
+Their
+.IR docker\-compose.yml ,
+.I prometheus.yml
+and
+.I fleet\-inventory.yml
+are written by
+.BR gen\-compose ;
+edit the fleet file, not them.
 .TP
 .I /var/lib/qemu-tool/images
 Default directory for VM image files.
@@ -1545,39 +2032,17 @@ Used only when it is writable; otherwise
 .I $XDG_DATA_HOME/qemu-tool/images
 is used instead, so an unprivileged install still has somewhere to write.
 .TP
+.I /var/lib/qemu-tool/stacks/
+Where
+.B quick\-start
+renders its stacks, and a conventional place for your own.
+.TP
 .I /usr/share/qemu-tool/packages-default
 Default package manifest installed into new VMs by
 .BR gen\-vm .
-.TP
-.I /usr/share/qemu-tool/compose/
-Compose stack directories used by
-.BR compose .
-.TP
-.I /usr/share/qemu-tool/env/scale-out
-The golden settings file for the scale-out fleet, documenting
-.B VM_COUNT
-and the rest of the fleet keys
-.B gen\-compose
-reads. It is the authoritative copy: a fleet that differs from it states only
-the differing keys in an overlay named after it on the command line, rather
-than forking the whole file. Not seeded into
-.IR /etc ;
-name it with
-.BR \-\-xml .
-The overlays themselves
-.RI ( qemu/xml/overlay\-ci.xml ,
-.IR qemu/xml/overlay\-mi100.xml )
-are not packaged: they name a particular CI lane and a particular host, so
-they are only meaningful beside the repository that describes them.
-.TP
-.I /usr/share/qemu-tool/compose/vfio-user-ernic-rocjitsu-scale-out/
-The generated fleet stack. Both files in it are written by
-.BR gen\-compose ;
-edit the settings file, not them.
 .PP
-The package manifests, the compose stacks and
-.I env/example
-are also bundled inside the Python distribution, so
+The package manifests, the fleet files and the compose stacks are also
+bundled inside the Python distribution, so
 .B "uv tool install qemu-tool"
 (or
 .BR "pipx install qemu-tool" )
@@ -1619,52 +2084,50 @@ qemu\-tool run\-vm \-\-vm\-name myvm \-\-convert\-to\-libvirt myvm.xml
 .EE
 .RE
 .PP
-Start the vfio-user GPU VM stack:
+Check this host, then bring the default two-guest stack up and test it:
 .PP
 .RS
 .EX
-qemu\-tool compose \-\-vm\-name myvm up
+qemu\-tool quick\-start preflight
+qemu\-tool quick\-start
 .EE
 .RE
 .PP
-Bring up an eight-VM rocm-ernic fleet with metrics. Fetch the published
-backing image once, overlay the rest on it, generate the stack, start it:
+Run the shipped default stack by hand, with metrics. Fetch the published
+backing image once, overlay the second guest on it, start the stack:
 .PP
 .RS
 .EX
-qemu\-tool gen\-vm \-\-xml qemu/xml/scale\-out.xml \\
-    \-\-vm\-name fleet\-1 \-\-backing\-image "$VM_BACKING_IMAGE"
-for n in 2 3 4 5 6 7 8; do
-    qemu\-tool gen\-vm \-\-xml qemu/xml/scale\-out.xml \\
-        \-\-vm\-name fleet\-$n \-\-backing\-file images/fleet\-1\-backing.qcow2
-done
-qemu\-tool gen\-compose \-\-xml qemu/xml/scale\-out.xml
-qemu\-tool compose \-\-xml qemu/xml/scale\-out.xml \\
-    \-\-stack vfio\-user\-ernic\-rocjitsu\-scale\-out \-\-profile metrics up \-d
+qemu\-tool gen\-vm \-\-xml qemu/stacks/rocm\-golden.xml \-\-vm\-name rocm\-golden\-1
+qemu\-tool gen\-vm \-\-xml qemu/stacks/rocm\-golden.xml \-\-vm\-name rocm\-golden\-2 \\
+    \-\-backing\-file /var/lib/qemu\-tool/images/rocm\-golden\-1\-backing.qcow2
+qemu\-tool compose \-\-xml qemu/stacks/rocm\-golden.xml \\
+    \-\-stack rocm\-golden \-\-profile metrics up \-d
 .EE
 .RE
 .PP
-Confirm the committed stack is in step with the settings file, for CI:
+Re-render a shipped stack after editing its fleet file, and confirm the
+committed stack is in step with it, for CI:
 .PP
 .RS
 .EX
-qemu\-tool gen\-compose \-\-xml qemu/xml/scale\-out.xml \-\-check
+qemu\-tool gen\-compose \-\-xml qemu/stacks/rocm\-golden.xml
+qemu\-tool gen\-compose \-\-xml qemu/stacks/rocm\-golden.xml \-\-check
 .EE
 .RE
 .PP
-Render and run the same fleet sized for a particular host, by layering that
-host's overlay over the golden file. Only the keys the overlay states change;
-everything else still comes from
-.IR env/scale\-out :
+Render and run a fleet of your own by layering an overlay over a shipped
+fleet file. Only the elements the overlay states change:
 .PP
 .RS
 .EX
 qemu\-tool gen\-compose \\
-    \-\-xml qemu/xml/scale\-out.xml \-\-xml qemu/xml/overlay\-mi100.xml \\
-    \-\-output\-dir /var/lib/qemu\-tool/stacks/mi100\-fleet
-qemu\-tool compose \-\-stack\-dir /var/lib/qemu\-tool/stacks/mi100\-fleet \\
-    \-\-xml qemu/xml/scale\-out.xml \-\-xml qemu/xml/overlay\-mi100.xml \\
+    \-\-xml qemu/stacks/rocm\-golden.xml \-\-xml my\-overlay.xml \\
+    \-\-output\-dir /var/lib/qemu\-tool/stacks/mine
+qemu\-tool compose \-\-stack\-dir /var/lib/qemu\-tool/stacks/mine \\
+    \-\-xml qemu/stacks/rocm\-golden.xml \-\-xml my\-overlay.xml \\
     \-\-profile metrics up \-d
+cd /var/lib/qemu\-tool/stacks/mine && qemu\-tool compose ps
 .EE
 .RE
 .PP
@@ -1676,10 +2139,23 @@ writes by default and
 .B \-\-check
 compares against; and
 .B \-\-stack\-dir
-is what runs the render, since
-.B VM_COUNT
-and the VM names are baked into the generated YAML rather than read from the
-settings layers at run time.
+is what runs the render, since the guest count and the guest names are baked
+into the generated YAML rather than read from the settings layers at run
+time.
+.PP
+Bake the guest image the default fleet describes, then publish it. The key
+is published with the image, so it is one generated for it, and the bake is
+told to authorise it:
+.PP
+.RS
+.EX
+ssh\-keygen \-t rsa \-N "" \-f ./image\-key/id_rsa
+qemu\-tool gen\-vm \-\-bake \-\-xml qemu/stacks/rocm\-golden.xml \\
+    \-\-ssh\-key\-file ./image\-key/id_rsa.pub
+qemu\-tool publish\-qcow \-\-xml qemu/stacks/rocm\-golden.xml \\
+    \-\-tag 20261116.gabc1234 \-\-key ./image\-key/id_rsa \-\-dry\-run
+.EE
+.RE
 .PP
 List every VM running on this node:
 .PP
@@ -1705,19 +2181,13 @@ qemu\-tool list \-\-json | jq \-r '.[] | select(.name=="myvm") | .pid'
 .EE
 .RE
 .PP
-Check stack status:
+Check stack status, then shut the guests down cleanly and tear the stack
+down:
 .PP
 .RS
 .EX
-qemu\-tool compose \-\-vm\-name myvm ps
-.EE
-.RE
-.PP
-Tear down the stack:
-.PP
-.RS
-.EX
-qemu\-tool compose \-\-vm\-name myvm down
+qemu\-tool compose \-\-stack rocm\-golden ps
+qemu\-tool down rocm\-golden
 .EE
 .RE
 .SH AUTHOR

@@ -24,10 +24,8 @@ reverse direction happens to work, because root ignores the mode -- which is
 what makes it a trap rather than an obvious breakage.
 
 The third is the tool quietly overriding a choice. Compose resolves a variable
-from the process environment first and the --env-file layers second; if
-_apply_identity did not follow the same order, qemu-tool and the containers
-would disagree about the value, which is the exact failure this stack's
-repeated --env-file handling exists to prevent.
+from the process environment before anything else; if _apply_identity wrote
+over a value set there, qemu-tool and the containers would disagree about it.
 
 The fourth is a capability set nobody looked at. A non-root uid is not an
 empty cap set -- a container can be uid 1000 and still hold NET_RAW -- so
@@ -55,16 +53,18 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 _STAMP = "20260925.g12f12f8"
 _VFU = "vfu.8039244"
-_BASE_ENV = f"""
-VM_COUNT=2
-VM_NAME_PREFIX=fleet
-VM_VCPUS=4
-VM_VMEM=8192
-ERNIC_TAP=true
-QEMU_IMAGE=example/qemu:{_STAMP}-qemu11.1.1-{_VFU}
-ERNIC_IMAGE=example/ernic:{_STAMP}-ernic.0b48aa1-{_VFU}
-ROCJITSU_IMAGE=example/rocjitsu:{_STAMP}-rocjitsu.c85bb75
-VM_BACKING_IMAGE=example/qcow2:{_STAMP}-vm.resolute-qm.e73a1e6-qcow2
+_BASE_XML = f"""\
+<fleet xmlns="http://qemu-tool/fleet/1.0">
+  <vm-count>2</vm-count>
+  <vm-name-prefix>fleet</vm-name-prefix>
+  <vm-vcpus>4</vm-vcpus>
+  <vm-vmem>8192</vm-vmem>
+  <ernic-tap>true</ernic-tap>
+  <qemu-ref>example/qemu:{_STAMP}-qemu11.1.1-{_VFU}</qemu-ref>
+  <ernic-ref>example/ernic:{_STAMP}-ernic.0b48aa1-{_VFU}</ernic-ref>
+  <rocjitsu-ref>example/rocjitsu:{_STAMP}-rocjitsu.c85bb75</rocjitsu-ref>
+  <backing-ref>example/qcow2:{_STAMP}-vm.resolute-qm.e73a1e6-qcow2</backing-ref>
+</fleet>
 """
 
 
@@ -82,15 +82,15 @@ def _load_package():
 _load_package()
 from qemu_tool import compose as compose_mod  # noqa: E402
 from qemu_tool import gen_compose  # noqa: E402
-from qemu_tool.envfile import parse_layers as parse_env_layers  # noqa: E402
+from qemu_tool.fleet_xml import FleetXml  # noqa: E402
 
 
-def _render(extra: str = "") -> str:
+def _render() -> str:
     with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "env"
-        path.write_text(_BASE_ENV + extra)
-        spec = gen_compose.plan(parse_env_layers([path]))
-        return gen_compose.render_compose(spec, ["env"], "0" * 64)
+        path = Path(tmp) / "fleet.xml"
+        path.write_text(_BASE_XML)
+        spec = gen_compose.plan(FleetXml.parse(path))
+        return gen_compose.render_compose(spec, ["fleet.xml"], "0" * 64)
 
 
 def _blocks(body: str) -> dict[str, list[str]]:
@@ -159,7 +159,7 @@ _PINNED_NOBODY = {"ernic-stats-exporter"}
 
 
 class TestAlwaysEmitted(unittest.TestCase):
-    """The render asks for a uid whatever the env file says.
+    """The render asks for a uid whatever the fleet XML says.
 
     This is the whole behaviour change. Gating it on the key being set made
     root the practical default, because the value cannot be committed and so
@@ -172,16 +172,6 @@ class TestAlwaysEmitted(unittest.TestCase):
 
     def test_unset_still_renders_the_reference(self):
         self.assertIn("${CONTAINER_USER:?", self.body)
-
-    def test_pinned_value_renders_the_same_bytes_as_unset(self):
-        """The uid reaches compose, not the renderer.
-
-        `gen-compose --check` compares the committed stack byte for byte in
-        CI, so a uid in the YAML would fail that check on every machine except
-        the one that ran the generator.
-        """
-        self.assertEqual(_render("CONTAINER_USER=1000:1000\n"), self.body)
-        self.assertNotIn("1000:1000", self.body)
 
     def test_emitted_on_exactly_the_expected_services(self):
         got = {
@@ -356,38 +346,24 @@ class TestCallerIdentity(unittest.TestCase):
     def test_unset_is_filled_in(self):
         env: dict[str, str] = {}
         with mock.patch.dict(os.environ, {}, clear=True):
-            compose_mod._apply_identity(env, [])
+            compose_mod._apply_identity(env)
         self.assertEqual(env["CONTAINER_USER"],
                          f"{os.getuid()}:{os.getgid()}")
 
     def test_the_environment_wins(self):
-        """Compose resolves the process environment before any --env-file, so
-        the tool must too, or the two disagree about the value.
+        """Compose resolves the process environment first, so the tool must
+        leave it alone, or the two disagree about the value.
         """
         env: dict[str, str] = {}
         with mock.patch.dict(os.environ, {"CONTAINER_USER": "7:7"}, clear=True):
-            compose_mod._apply_identity(env, [])
+            compose_mod._apply_identity(env)
         self.assertNotIn("CONTAINER_USER", env)
 
-    def test_an_env_layer_wins(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            layer = Path(tmp) / "overlay"
-            layer.write_text("CONTAINER_USER=9:9\n")
-            env: dict[str, str] = {}
-            with mock.patch.dict(os.environ, {}, clear=True):
-                compose_mod._apply_identity(env, [layer])
-        self.assertNotIn("CONTAINER_USER", env)
-
-    def test_an_empty_env_layer_value_is_not_a_choice(self):
-        """`CONTAINER_USER=` in a settings file is the commented-out default
-        with the comment removed, not someone asking for root.
-        """
-        with tempfile.TemporaryDirectory() as tmp:
-            layer = Path(tmp) / "overlay"
-            layer.write_text("CONTAINER_USER=\n")
-            env: dict[str, str] = {}
-            with mock.patch.dict(os.environ, {}, clear=True):
-                compose_mod._apply_identity(env, [layer])
+    def test_an_empty_environment_value_is_not_a_choice(self):
+        """`CONTAINER_USER=` exported empty is not someone asking for root."""
+        env: dict[str, str] = {}
+        with mock.patch.dict(os.environ, {"CONTAINER_USER": ""}, clear=True):
+            compose_mod._apply_identity(env)
         self.assertEqual(env["CONTAINER_USER"],
                          f"{os.getuid()}:{os.getgid()}")
 
@@ -473,6 +449,42 @@ class TestTeardown(unittest.TestCase):
 
 
 class TestDataDirs(unittest.TestCase):
+    """The data directories are read back from the rendered stack."""
+
+    def _stack(self, *volumes: str) -> Path:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        cdir = Path(tmp.name)
+        (cdir / "docker-compose.yml").write_text(
+            "services:\n  x:\n    volumes:\n"
+            + "".join(f"      - {v}\n" for v in volumes))
+        return cdir
+
+    _LOKI = "/var/lib/qemu-tool/loki-data:/loki"
+
+    def test_every_shipped_stack_names_all_three(self):
+        """rocm-golden.xml sets neither <prom-data-dir> nor <grafana-data-dir>;
+        the render still mounts a default for each, and Docker creates a
+        missing one root-owned."""
+        for stack in compose_mod._STACKS:
+            with self.subTest(stack=stack):
+                got = dict(compose_mod._data_dirs(compose_mod._compose_dir(stack)))
+                self.assertEqual(
+                    sorted(got),
+                    ["grafana-data-dir", "loki-data-dir", "prom-data-dir"])
+                for path in got.values():
+                    self.assertTrue(path.is_absolute(), path)
+
+    def test_a_read_only_asset_mount_is_not_a_data_dir(self):
+        cdir = self._stack(
+            "./grafana/dashboards:/var/lib/grafana/dashboards:ro",
+            "/srv/g:/var/lib/grafana", "prom-vol:/prometheus")
+        self.assertEqual(compose_mod._data_dirs(cdir),
+                         [("grafana-data-dir", Path("/srv/g"))])
+
+    def test_a_directory_with_no_compose_file_has_none(self):
+        self.assertEqual(compose_mod._data_dirs(Path("/nonexistent-stack")), [])
+
     def test_an_uncreatable_data_dir_names_the_fix(self):
         """/var/lib/qemu-tool is root-owned on every host that ever ran this
         as root, so this fires for an operator doing nothing wrong -- and a
@@ -482,10 +494,9 @@ class TestDataDirs(unittest.TestCase):
         with mock.patch.object(compose_mod.Path, "mkdir",
                                side_effect=PermissionError(13, "Permission denied")), \
              contextlib.redirect_stderr(err):
-            compose_mod._precreate_data_dirs(
-                {"LOKI_DATA_DIR": "/var/lib/qemu-tool/loki-data"})
+            compose_mod._precreate_data_dirs(self._stack(self._LOKI))
         msg = err.getvalue()
-        self.assertIn("/var/lib/qemu-tool/loki-data", msg)
+        self.assertIn("<loki-data-dir> at /var/lib/qemu-tool/loki-data", msg)
         self.assertIn("sudo mkdir -p", msg)
         self.assertIn(f"sudo chown {os.getuid()}:{os.getgid()}", msg)
 
@@ -496,14 +507,29 @@ class TestDataDirs(unittest.TestCase):
         with mock.patch.object(compose_mod.Path, "mkdir",
                                side_effect=PermissionError(13, "nope")), \
              contextlib.redirect_stderr(io.StringIO()):
-            compose_mod._precreate_data_dirs({"LOKI_DATA_DIR": "/nope"})
+            compose_mod._precreate_data_dirs(self._stack("/nope:/loki"))
         # no raise
+
+    def test_a_stack_that_mounts_none_creates_none(self):
+        cdir = self._stack("vfu-sockets:/run/vfu:ro")
+        with mock.patch.object(compose_mod.Path, "mkdir") as mkdir:
+            compose_mod._precreate_data_dirs(cdir)
+        mkdir.assert_not_called()
+
+    def test_a_root_owned_data_dir_is_named(self):
+        cdir = self._stack("/usr:/prometheus")
+        err = io.StringIO()
+        with mock.patch.object(compose_mod.os, "getuid", return_value=54321), \
+             contextlib.redirect_stderr(err):
+            compose_mod._warn_about_root_artifacts(None, cdir)
+        self.assertIn("<prom-data-dir>", err.getvalue())
 
 
 class TestRejectedValues(unittest.TestCase):
     def _refused(self, value: str) -> str:
-        with self.assertRaises(SystemExit) as ctx:
-            _render(f"CONTAINER_USER={value}\n")
+        with mock.patch.dict(os.environ, {"CONTAINER_USER": value}):
+            with self.assertRaises(SystemExit) as ctx:
+                compose_mod.resolve_identity()
         return str(ctx.exception)
 
     def test_user_name_is_refused(self):
@@ -514,21 +540,18 @@ class TestRejectedValues(unittest.TestCase):
         msg = self._refused("stebates")
         self.assertIn("CONTAINER_USER", msg)
         self.assertIn("<uid>:<gid>", msg)
+        self.assertIn("the environment", msg)
 
     def test_bare_uid_is_refused(self):
         self.assertIn("numeric", self._refused("1000"))
 
     def test_shell_variable_spelling_is_refused(self):
-        """The spelling people try first, and the only one that would reach
-        run time: bash exports neither UID nor GID, so envfile's expandvars
-        leaves the text literal and compose turns it into ":", which Docker
-        runs as root.
+        """The spelling people try first: bash exports neither UID nor GID,
+        so a literal that survives to compose becomes ":", which Docker runs
+        as root.
         """
         msg = self._refused("${UID}:${GID}")
         self.assertIn("bash exports neither", msg)
-
-    def test_empty_is_accepted_and_means_the_caller(self):
-        self.assertIn("${CONTAINER_USER:?", _render("CONTAINER_USER=\n"))
 
 
 if __name__ == "__main__":

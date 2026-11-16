@@ -160,21 +160,15 @@ class CompactTests(unittest.TestCase):
 
 
 class FlagTests(unittest.TestCase):
-    def _config(self, argv: list[str], env: str | None = None) -> VMConfig:
-        # Always pass --xml, even for the no-env cases. Without it
-        # envfile.find() walks its ambient candidate list -- $QEMU_TOOL_ENV,
-        # ./.env, the checkout's qemu/.env, ~/.config/qemu-tool/env and the
-        # .deb's /etc/qemu-tool/env -- and `compact` is not in
-        # _NOT_CONFIGURABLE, so any of those files reaches into this unit
-        # test. A developer with VM_COMPACT set turns test_default_on red on
-        # code that is fine, and the inverse is worse: an ambient
-        # VM_COMPACT=true would make it pass even if the default were flipped,
-        # so the test would stop pinning the documented default at all. CI
-        # never sees either, because a hosted runner has none of those files.
-        # An empty file is equivalent to no file for parsing and reaches the
-        # same code path deterministically.
-        path = Path(tempfile.mkdtemp()) / "env"
-        path.write_text(env or "")
+    def _config(self, argv: list[str]) -> VMConfig:
+        # Always pass --xml. Without it FleetXml.find() walks its ambient
+        # candidate list -- $QEMU_TOOL_FLEET, ./fleet.xml, the checkout's
+        # qemu/stacks/fleet.xml, ~/.config/qemu-tool/fleet.xml and the .deb's
+        # /etc/qemu-tool/fleet.xml -- so a file on the developer's machine
+        # reaches into this unit test and CI, which has none of them, never
+        # sees it. An empty fleet reaches the same code path deterministically.
+        path = Path(tempfile.mkdtemp()) / "fleet.xml"
+        path.write_text("<fleet xmlns='http://qemu-tool/fleet/1.0'/>\n")
         argv = argv + ["--xml", str(path)]
         ns = cli._build_parser().parse_args(argv)
         return cli._build_config(ns, "gen-vm")
@@ -185,18 +179,6 @@ class FlagTests(unittest.TestCase):
     def test_no_compact(self):
         self.assertFalse(
             self._config(["gen-vm", "--vm-name", "x", "--no-compact"]).compact
-        )
-
-    def test_env_file(self):
-        self.assertFalse(
-            self._config(["gen-vm", "--vm-name", "x"], env="VM_COMPACT=off\n").compact
-        )
-
-    def test_flag_beats_env_file(self):
-        self.assertTrue(
-            self._config(
-                ["gen-vm", "--vm-name", "x", "--compact"], env="VM_COMPACT=off\n"
-            ).compact
         )
 
 
