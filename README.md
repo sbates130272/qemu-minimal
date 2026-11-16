@@ -28,7 +28,7 @@
 [![Vm-rocm-golden Smoke Test](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-smoke-test-vm-rocm-golden.yml?branch=main&label=smoke-test-vm-rocm-golden&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-smoke-test-vm-rocm-golden.yml)
 
 <!-- Ansible collections pinned in ansible/requirements.yml -->
-[![Batesste Collection](https://img.shields.io/badge/sbates130272.batesste-3.2.1-9cf?style=flat-square)](https://galaxy.ansible.com/ui/repo/published/sbates130272/batesste/)
+[![Batesste Collection](https://img.shields.io/badge/sbates130272.batesste-3.3.1-9cf?style=flat-square)](https://galaxy.ansible.com/ui/repo/published/sbates130272/batesste/)
 [![Rocm-ernic Collection](https://img.shields.io/badge/sbates130272.rocm__ernic-90434a2-9cf?style=flat-square)](https://github.com/ROCm/rocm-ernic)
 
 <!-- CI images pinned in qemu/stacks/rocm-golden.xml; sbates-fork is the QEMU qemu/stacks/mi355x-server.xml pins for P2P DMA -->

@@ -407,6 +407,15 @@ elements, or a guest you log in to with your own `~/.ssh/id_rsa`.
 
 ### Changed
 
+- **`sbates130272.batesste` 3.2.1 to 3.3.1.** Picks up two fixes asked for
+  from here: `check_platform` no longer falls back to top-level fact
+  variables, which printed a deprecation warning for every role and stops
+  working at ansible-core 2.24; and with dotfiles off, `user_setup` and
+  `git_setup` now make `~/.bashrc` source the `~/.bashrc.d` snippets that
+  3.3.0 moved their shell setup into. 3.3.0 also removed `ptop` from
+  `fave_packages`. A baked guest gains `~/.bashrc.d/user_setup.sh` and a
+  sourcing loop in `~/.bashrc`, and no longer has `ptop`.
+
 - **The `vm-rocm-golden` playbook-test lane keeps a compiler cache between
   runs and no longer compacts the image it bakes.** The plays that build
   kernel modules are about fourteen minutes of that bake, and the inputs of

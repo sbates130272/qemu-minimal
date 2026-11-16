@@ -27,6 +27,16 @@ def _badge(alt: str) -> str:
     return match.group(1) + " " + match.group(2)
 
 
+class CollectionRow(unittest.TestCase):
+    def test_the_batesste_badge_is_the_pinned_version(self):
+        requirements = (REPO_ROOT / "ansible" / "requirements.yml").read_text()
+        version = re.search(
+            r'-\s*name:\s*sbates130272\.batesste\s*\n\s*version:\s*"([^"]+)"',
+            requirements).group(1)
+        self.assertIn(f"sbates130272.batesste-{version}-",
+                      _badge("Batesste Collection"))
+
+
 class GoldenRow(unittest.TestCase):
     def test_the_release_is_the_fleet_files(self):
         release = re.search(r"<bake-release>([^<]+)</bake-release>", FLEET).group(1)
