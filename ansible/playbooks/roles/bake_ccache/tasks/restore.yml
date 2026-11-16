@@ -1,0 +1,109 @@
+---
+# Before the first module build of a bake. Nothing here fails the bake over a
+# missing or damaged cache: that is a cold build, which is what a bake without
+# this role is.
+
+- name: Install ccache
+  ansible.builtin.apt:
+    name: ccache
+    state: present
+  become: true
+
+- name: Create the cache directory in the guest
+  ansible.builtin.file:
+    path: "{{ bake_ccache_dir }}"
+    state: directory
+    mode: "0777"
+  become: true
+
+- name: Look for the cache an earlier bake saved
+  ansible.builtin.stat:
+    path: "{{ bake_ccache_controller_dir }}/ccache.tar"
+    get_checksum: false
+  delegate_to: localhost
+  become: false
+  register: bake_ccache_saved
+
+- name: Unpack the saved cache
+  when: bake_ccache_saved.stat.exists
+  block:
+    - name: Unpack the saved cache into the guest
+      ansible.builtin.unarchive:
+        src: "{{ bake_ccache_controller_dir }}/ccache.tar"
+        dest: "{{ bake_ccache_dir }}"
+      become: true
+  rescue:
+    - name: Note that the saved cache could not be used
+      ansible.builtin.debug:
+        msg: >-
+          {{ bake_ccache_controller_dir }}/ccache.tar did not unpack, so this
+          bake starts with an empty cache.
+
+    - name: Discard whatever part of it unpacked
+      ansible.builtin.file:
+        path: "{{ bake_ccache_dir }}"
+        state: absent
+      become: true
+
+    - name: Recreate the cache directory
+      ansible.builtin.file:
+        path: "{{ bake_ccache_dir }}"
+        state: directory
+        mode: "0777"
+      become: true
+
+# The system file rather than CCACHE_* variables, for the reason the wrappers
+# are symlinks: no build here can be handed an environment. Each setting is
+# explained in the file, because that is where it is read when a hit rate
+# needs explaining.
+- name: Write the system ccache configuration
+  ansible.builtin.copy:
+    dest: "{{ bake_ccache_config }}"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Written by the bake_ccache role and removed before the bake ends.
+      cache_dir = {{ bake_ccache_dir }}
+      max_size = {{ bake_ccache_max_size }}
+      # Every bake installs gcc afresh, so its mtime is never the one a
+      # stored result was keyed on; the binary itself is the same.
+      compiler_check = content
+      # Headers unpacked or generated moments before a build are "too new"
+      # for ccache to trust by default. Nothing edits one during a bake.
+      sloppiness = time_macros,include_file_mtime,include_file_ctime
+      # Some builds run as root and some as the login user, into one cache.
+      umask = 000
+      # Do not hash the working directory of a -g compile. The modules build
+      # at fixed paths, but amdgpu's configure compiles each of its ~300
+      # kernel feature tests in a mktemp directory, and those would miss in
+      # every bake. No base_dir: nothing else here needs a path rewritten.
+      hash_dir = false
+  become: true
+
+- name: Put ccache in front of every compiler name
+  ansible.builtin.shell:
+    cmd: |
+      set -eu
+      update-ccache-symlinks
+      for link in /usr/lib/ccache/*; do
+        name=$(basename "$link")
+        target="{{ bake_ccache_wrapper_dir }}/$name"
+        if [ -e "$target" ] || [ -L "$target" ]; then
+          continue
+        fi
+        ln -s /usr/bin/ccache "$target"
+        echo "$name"
+      done
+    executable: /bin/bash
+  become: true
+  register: bake_ccache_wrappers
+  changed_when: bake_ccache_wrappers.stdout | length > 0
+
+# So the numbers the save half prints are this bake's, not the sum of every
+# bake the cache has been through.
+- name: Zero the ccache statistics
+  ansible.builtin.command:
+    cmd: ccache --zero-stats
+  become: true
+  changed_when: false

@@ -21,6 +21,7 @@ service is generated at all.
 
 import importlib.util
 import io
+import os
 import re
 import sys
 import unittest
@@ -28,7 +29,7 @@ from pathlib import Path
 from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-ENV_FILE = REPO_ROOT / "qemu" / "xml" / "quickstart.xml"
+ENV_FILE = REPO_ROOT / "qemu" / "stacks" / "rocm-golden.xml"
 
 
 def _load_package():
@@ -48,18 +49,18 @@ from qemu_tool import quick_start as qs  # noqa: E402
 
 
 
-def _env_package_data() -> str:
-    """The wheel's xml allow-list, from [tool.setuptools.package-data].
+def _fleet_package_data() -> str:
+    """The wheel's fleet-file allow-list, from [tool.setuptools.package-data].
 
     Anchored on the LIST form. The same key appears under package-dir as a
-    bare string ("qemu_tool.share.xml" = "xml"), and a naive split takes that
-    one -- which is how the first version of this check compared against the
-    string "xml" rather than the file list.
+    bare string ("qemu_tool.share.stacks" = "stacks"), and a naive split
+    takes that one -- which is how the first version of this check compared
+    against the directory name rather than the file list.
     """
     text = (REPO_ROOT / "qemu" / "pyproject.toml").read_text()
-    match = re.search(r'^"qemu_tool\.share\.xml"\s*=\s*(\[[^\]]*\])',
+    match = re.search(r'^"qemu_tool\.share\.stacks"\s*=\s*(\[[^\]]*\])',
                       text, re.M)
-    assert match, "no package-data list for qemu_tool.share.xml"
+    assert match, "no package-data list for qemu_tool.share.stacks"
     return match.group(1)
 
 
@@ -78,7 +79,7 @@ def _state(**kwargs):
     )
     defaults.update(kwargs)
     state = qs._State(**defaults)
-    state.values = {"VM_COUNT": "2"}
+    state.fleet = qs.FleetConfig(count=2)
     return state
 
 
@@ -87,7 +88,7 @@ class SizingTest(unittest.TestCase):
 
     def _size(self, cores, mem_mb, count=2):
         state = _state()
-        state.values = {"VM_COUNT": str(count)}
+        state.fleet = qs.FleetConfig(count=count)
         meminfo = f"MemTotal:       {mem_mb * 1024} kB\n"
         with mock.patch.object(qs.os, "cpu_count", return_value=cores), \
              mock.patch.object(Path, "read_text", return_value=meminfo):
@@ -98,36 +99,36 @@ class SizingTest(unittest.TestCase):
         # the guest cannot use and the mesh manager's 20 s heartbeat can be
         # hurt by. The ceiling is a judgement and is meant to bind here.
         sized = self._size(cores=128, mem_mb=512 * 1024)
-        self.assertEqual("8", sized["VM_VCPUS"])
-        self.assertEqual("8192", sized["VM_VMEM"])
+        self.assertEqual("8", sized["vm-vcpus"])
+        self.assertEqual("8192", sized["vm-vmem"])
 
     def test_a_small_runner_gets_the_floor_not_less(self):
         # A 4-core GitHub runner: (4-1)//2 is 1, and 1 vCPU means ionic_rdma
         # never probes. The floor has to win, oversubscription and all.
         sized = self._size(cores=4, mem_mb=16 * 1024)
-        self.assertEqual("4", sized["VM_VCPUS"])
+        self.assertEqual("4", sized["vm-vcpus"])
 
     def test_memory_is_three_quarters_shared_between_the_guests(self):
         sized = self._size(cores=16, mem_mb=16 * 1024)
-        self.assertEqual(str(16 * 1024 * 3 // 4 // 2), sized["VM_VMEM"])
+        self.assertEqual(str(16 * 1024 * 3 // 4 // 2), sized["vm-vmem"])
 
     def test_memory_has_a_floor_a_tiny_host_cannot_undercut(self):
         sized = self._size(cores=8, mem_mb=2 * 1024)
-        self.assertEqual("4096", sized["VM_VMEM"])
+        self.assertEqual("4096", sized["vm-vmem"])
 
     def test_shm_is_vmem_plus_a_gib_never_equal_to_it(self):
-        # Equal is the boundary of the "VM_SHM_SIZE >= VM_VMEM" rule and
+        # Equal is the boundary of the "vm-shm-size >= vm-vmem" rule and
         # leaves the vfio-user memfd backend no slack. shm_size caps a tmpfs
         # rather than reserving it, so the headroom costs nothing unused.
         sized = self._size(cores=16, mem_mb=16 * 1024)
-        self.assertEqual(f"{int(sized['VM_VMEM']) + 1024}m", sized["VM_SHM_SIZE"])
+        self.assertEqual(f"{int(sized['vm-vmem']) + 1024}m", sized["vm-shm-size"])
 
     def test_an_unreadable_meminfo_still_sizes(self):
         state = _state()
         with mock.patch.object(qs.os, "cpu_count", return_value=16), \
              mock.patch.object(Path, "read_text", side_effect=OSError):
             sized = qs._size_for_host(state)
-        self.assertEqual("4096", sized["VM_VMEM"])
+        self.assertEqual("4096", sized["vm-vmem"])
 
 
 class ShmParseTest(unittest.TestCase):
@@ -169,22 +170,22 @@ class PromptTest(unittest.TestCase):
 
 
 class SettingsFileTest(unittest.TestCase):
-    """The promises qemu/xml/quickstart.xml makes to the subcommand."""
+    """The promises qemu/stacks/rocm-golden.xml makes to the subcommand."""
 
     def setUp(self):
         state = _state()
         state.base_layers = [ENV_FILE]
-        qs._reload(state)
-        self.values = state.values
+        qs._rescan_layers(state)
+        self.fleet = state.fleet
 
     def test_the_four_images_share_one_build_stamp(self):
         # The generator refuses a mixed set, and it is right to: a guest
         # driver and a host rocm-ernic server from different builds do not
         # fail cleanly across the vfio-user/DSR boundary, they wedge.
-        keys = ["QEMU_IMAGE", "ERNIC_IMAGE", "ROCJITSU_IMAGE", "VM_BACKING_IMAGE"]
+        keys = ["qemu_ref", "ernic_ref", "rocjitsu_ref", "backing_ref"]
         stamps = {}
         for key in keys:
-            tag = self.values[key].rsplit(":", 1)[1]
+            tag = getattr(self.fleet, key).rsplit(":", 1)[1]
             stamp = tag.split("-", 1)[0]
             self.assertRegex(stamp, r"\d{8}\.g[0-9a-f]+",
                              f"{key} carries no build stamp")
@@ -196,46 +197,90 @@ class SettingsFileTest(unittest.TestCase):
         # --metrics selects the profile; this decides whether the service is
         # GENERATED. Off here and `--profile metrics` brings up Prometheus
         # with nothing to look at it through, which is not a failure anywhere.
-        self.assertEqual("true", self.values.get("GRAFANA_ENABLE"))
+        self.assertTrue(self.fleet.grafana_enable)
 
     def test_the_data_directories_are_left_to_quick_start(self):
         # Their defaults are under /var/lib/qemu-tool, which on a fresh host
         # is root-owned and then wants a chown to uid 65534 and 472.
         # quick-start writes both beside the stack instead; pinning them here
         # would put them back under root.
-        self.assertNotIn("PROM_DATA_DIR", self.values)
-        self.assertNotIn("GRAFANA_DATA_DIR", self.values)
+        self.assertEqual("", self.fleet.prometheus_data_dir)
+        self.assertEqual("", self.fleet.grafana_data_dir)
 
     def test_the_tap_is_on(self):
         # Without it the guests have no Ethernet, ARP goes unanswered and
         # ib_send_bw cannot do its out-of-band exchange -- which is precisely
         # the test this runs.
-        self.assertEqual("true", self.values.get("ERNIC_TAP"))
+        self.assertTrue(self.fleet.ernic_tap)
 
-    def test_it_ships_in_the_wheel(self):
-        # `quick-start` with no --env-file reads this file, and a `uv tool
+    def test_the_guest_exporters_are_forwarded(self):
+        # Prometheus scrapes each guest through its qemu container, and the
+        # home dashboard is built on these four jobs. Without the forwards
+        # every guest panel is empty and nothing errors.
+        rules = self.fleet.vm_extra_hostfwd.split(",")
+        for port in ("9100", "9488", "9879", "9490"):
+            self.assertIn(f"tcp::{port}-:{port}", rules)
+
+    def test_logs_are_on(self):
+        # The home dashboard has a Loki panel.
+        self.assertTrue(self.fleet.logs_enable)
+
+    def test_the_guests_start_at_the_floor(self):
+        # What a run with --no-size-from-host gets, and the ionic_rdma floor.
+        self.assertEqual(self.fleet.vm_vcpus, qs._VCPU_FLOOR)
+        self.assertEqual(self.fleet.vm_vmem, qs._VMEM_FLOOR_MB)
+
+    def test_it_is_what_quick_start_runs_by_default(self):
+        self.assertEqual(qs._packaged_fleet(), ENV_FILE)
+        self.assertEqual(qs.VARIANTS["default"][0], ENV_FILE.name)
+
+    def test_every_flavor_names_a_fleet_that_ships(self):
+        # `quick-start` with no --xml reads one of these, and a `uv tool
         # install` or `pipx install` has no checkout to read it from.
         #
-        # Asserted against the package-data ALLOW-LIST, not against
-        # _packaged_env(). The first version of this test called that
+        # Asserted against the package-data ALLOW-LIST as well as against
+        # _packaged_fleet(). The first version of this test called only the
         # function and passed while the wheel shipped no such file at all:
-        # _packaged_env() checks the source tree first, and the suite runs
-        # from the checkout, so it was answering a question nobody asked.
-        # Measured afterwards on a real `uv tool install ./qemu`:
-        # _packaged_env() returned None and `quick-start` exited with
-        # "qemu/xml/quickstart.xml is missing from this install".
-        self.assertIn('"quickstart.xml"', _env_package_data(),
-                      "quickstart.xml is not in the wheel's env allow-list: "
-                      + _env_package_data())
+        # it checks the source tree first, and the suite runs from the
+        # checkout, so it was answering a question nobody asked.
+        deb = (REPO_ROOT / "qemu" / "debian"
+               / "python3-qemu-tool.install").read_text()
+        for flavor, (fleet, *_rest) in qs.VARIANTS.items():
+            with self.subTest(flavor=flavor):
+                self.assertIsNotNone(qs._packaged_fleet(fleet))
+                self.assertIn(f'"{fleet}"', _fleet_package_data())
+                self.assertIn(f"stacks/{fleet} ", deb)
 
-    def test_the_overlays_still_do_not_ship(self):
-        # They state only the keys one CI lane or one host differs on, so
-        # they are not usable without the checkout that explains them. The
-        # list is enumerated rather than globbed precisely to keep them out,
-        # and a `*` added for convenience would ship them silently.
-        block = _env_package_data()
-        self.assertNotIn("overlay", block)
+    def test_only_the_stack_fleets_ship(self):
+        # Enumerated rather than globbed: a personal fleet.xml sits on the
+        # settings search path in the same directory and must stay out.
+        block = _fleet_package_data()
         self.assertNotIn("*", block)
+        shipped = sorted(re.findall(r'"([^"]+)"', block))
+        on_disk = sorted(p.name for p in ENV_FILE.parent.glob("*.xml")
+                         if p.name != "fleet.xml")
+        self.assertEqual(shipped, on_disk)
+        self.assertEqual(shipped,
+                         ["helios-tray.xml", "mi355x-server.xml", "rocm-golden.xml"])
+
+
+class SdxiImageTest(unittest.TestCase):
+    """Every image a fleet names is pulled; preflight asks for no build."""
+
+    def test_every_fleet_with_the_device_names_the_published_image(self):
+        for fleet_file in sorted(ENV_FILE.parent.glob("*.xml")):
+            fleet = qs.FleetXml.parse(fleet_file)
+            if not fleet.sdxi_per_vm:
+                continue
+            with self.subTest(fleet=fleet_file.name):
+                self.assertRegex(
+                    fleet.sdxi_ref,
+                    r"^docker\.io/sbates130272/batesste-ci-images-ubuntu-"
+                    r"rocm-sdxi:\d{8}\.g[0-9a-f]+-sdxi\.[0-9a-f]+$")
+
+    def test_nothing_is_built_locally(self):
+        self.assertFalse(hasattr(qs, "_check_local_images"))
+        self.assertFalse((REPO_ROOT / "qemu" / "docker").exists())
 
 
 class CliTest(unittest.TestCase):
@@ -266,8 +311,8 @@ class DownTest(unittest.TestCase):
         from qemu_tool import shutdown as sd
 
         state = _state(stack_dir=Path("/tmp/does-not-matter"))
-        state.values = {"VM_COUNT": "2", "VM_NAME_PREFIX": "quickstart",
-                        "VM_IMAGES_DIR": "/tmp/does-not-matter"}
+        state.fleet = qs.FleetConfig(count=2, name_prefix="quickstart",
+                                     vm_images_dir="/tmp/does-not-matter")
         named = []
         with mock.patch.object(sd, "run",
                                side_effect=lambda n, **k: named.append(n)), \
@@ -284,8 +329,8 @@ class DownTest(unittest.TestCase):
         from qemu_tool import shutdown as sd
 
         state = _state(stack_dir=Path("/tmp/does-not-matter"))
-        state.values = {"VM_COUNT": "2", "VM_NAME_PREFIX": "quickstart",
-                        "VM_IMAGES_DIR": "/tmp/does-not-matter"}
+        state.fleet = qs.FleetConfig(count=2, name_prefix="quickstart",
+                                     vm_images_dir="/tmp/does-not-matter")
         composed = []
         with mock.patch.object(sd, "run", side_effect=SystemExit("no such VM")), \
              mock.patch.object(qs, "_compose",
@@ -306,13 +351,14 @@ class LayerTest(unittest.TestCase):
             first = _state(stack_dir=stack)
             first.base_layers = [ENV_FILE]
             qs._rescan_layers(first)
-            qs._write_layer(first, "env.ports", {"VM_SSH_PORT_BASE": "2300"},
-                            "test")
+            qs._write_layer(first, "overlay-ports.xml",
+                            {"ssh-port-base": "2300"}, "test")
 
             second = _state(stack_dir=stack)
             second.base_layers = [ENV_FILE]
             qs._rescan_layers(second)
-            self.assertEqual("2300", second.values["VM_SSH_PORT_BASE"])
+            self.assertEqual(2300, second.fleet.ssh_port_base)
+            self.assertEqual(2301, second.guest_port(2))
             self.assertEqual(first.layers, second.layers)
 
     def test_the_order_is_fixed_not_the_order_they_happened_to_be_written(self):
@@ -323,12 +369,92 @@ class LayerTest(unittest.TestCase):
             state = _state(stack_dir=stack)
             state.base_layers = [ENV_FILE]
             qs._rescan_layers(state)
-            # Written last; must still layer before env.image-login, which is
-            # the one answer that beats everything.
-            qs._write_layer(state, "env.image-login", {"VM_USERNAME": "x"}, "t")
-            qs._write_layer(state, "env.sized", {"VM_VCPUS": "4"}, "t")
-            self.assertEqual(["env.sized", "env.image-login"],
+            # Written last; must still layer before the image login, which
+            # is the one answer that beats everything.
+            qs._write_layer(state, "overlay-image-login.xml",
+                            {"vm-username": "x"}, "t")
+            qs._write_layer(state, "overlay-sized.xml", {"vm-vcpus": "4"}, "t")
+            self.assertEqual(["overlay-sized.xml", "overlay-image-login.xml"],
                              [p.name for p in state.layers])
+
+    def test_a_generated_overlay_beats_the_layers_the_user_passed(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = _state(stack_dir=Path(tmp))
+            state.base_layers = [ENV_FILE]
+            qs._write_layer(state, "overlay-sized.xml",
+                            {"vm-vcpus": "6", "vm-shm-size": "9216m"}, "t")
+            self.assertEqual(6, state.fleet.vm_vcpus)
+            self.assertEqual("9216m", state.fleet.shm_size)
+            # Everything the overlay does not name is still the base file's.
+            self.assertTrue(state.fleet.ernic_tap)
+
+    def test_an_overlay_is_fleet_xml_and_escapes_its_values(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = _state(stack_dir=Path(tmp))
+            state.base_layers = [ENV_FILE]
+            qs._write_layer(state, "overlay-images.xml",
+                            {"vm-images-dir": "/srv/a&b <images>"}, "t")
+            self.assertEqual(Path("/srv/a&b <images>"), state.images_dir)
+
+    def test_a_misspelt_element_is_refused_not_silently_dropped(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = _state(stack_dir=Path(tmp))
+            state.base_layers = [ENV_FILE]
+            with self.assertRaises(SystemExit) as caught:
+                qs._write_layer(state, "overlay-sized.xml", {"vm-vcpu": "4"}, "t")
+            self.assertIn("unknown element <vm-vcpu>", str(caught.exception))
+            self.assertIn("overlay-sized.xml", str(caught.exception))
+
+    def test_the_overlays_go_to_gen_compose_as_layers(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = _state(stack_dir=Path(tmp), metrics=False)
+            state.base_layers = [ENV_FILE]
+            qs._write_layer(state, "overlay-ports.xml",
+                            {"ssh-port-base": "2300"}, "t")
+            seen = []
+            with mock.patch.object(qs, "gen_compose_run",
+                                   lambda layers, out: seen.append(layers)), \
+                 mock.patch.object(sys, "stdout", io.StringIO()):
+                qs.generate_stack(state)
+            self.assertEqual([[ENV_FILE, Path(tmp) / "overlay-ports.xml"]], seen)
+
+
+class ComposeEnvTest(unittest.TestCase):
+    """quick-start hands docker compose its variables, never a file."""
+
+    def _compose(self, state, *args, **kwargs):
+        seen = {}
+
+        def fake(cmd, cwd=None, env=None, **_):
+            seen.update(cmd=cmd, env=env)
+            return qs.subprocess.CompletedProcess(cmd, 0)
+
+        with mock.patch.object(qs.subprocess, "run", fake):
+            qs._compose(state, *args, **kwargs)
+        return seen
+
+    def test_the_images_directory_reaches_compose_through_the_environment(self):
+        state = _state()
+        state.fleet = qs.FleetConfig(vm_images_dir="/srv/images")
+        with mock.patch.dict(os.environ):
+            os.environ.pop("VM_IMAGES_DIR", None)
+            seen = self._compose(state, "ps")
+        self.assertEqual("/srv/images", seen["env"]["VM_IMAGES_DIR"])
+        self.assertNotIn("--env-file", seen["cmd"])
+        self.assertIn("CONTAINER_USER", seen["env"])
+
+    def test_an_explicit_override_beats_the_fleet(self):
+        state = _state()
+        seen = self._compose(state, "up", env={"QEMU_TOOL_SRC": "/stack"})
+        self.assertEqual("/stack", seen["env"]["QEMU_TOOL_SRC"])
 
     def test_every_layer_the_code_writes_is_in_the_order(self):
         # A layer written under a name not in _LAYER_ORDER would be dropped
@@ -349,7 +475,7 @@ class NoStaleScriptTest(unittest.TestCase):
 
     HAYSTACK = ("README.md", "AGENTS.md", "site/reports.md",
                 ".github/workflows/qemu-minimal-report-for-vm-rocm-golden.yml",
-                "qemu/xml/quickstart.xml",
+                "qemu/stacks/rocm-golden.xml",
                 "ansible/playbooks/vm-quickstart.yml")
 
     def test_the_script_is_gone(self):

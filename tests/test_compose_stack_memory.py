@@ -1,13 +1,11 @@
-"""Tests for `qemu-tool compose` remembering which stack and env files to use.
+"""Tests for `qemu-tool compose` finding the stack to drive on its own.
 
-A rendered stack has always recorded its env layers in its provenance header
-and nothing but a test ever read them back, so every invocation had to repeat
-the directory and both layers -- which is why a wrapper script existed. These
-tests pin the discovery rules that replaced it, and in particular the two
-things that must NOT happen: no walk-up out of the cwd (it reaches the
-committed 8-VM stack from anywhere in the checkout) and no fall-back to the
-ambient env search path when the remembered layers cannot be found (that is a
-32-VM fleet driven by someone else's qemu/.env).
+Every invocation used to repeat the stack directory and its settings layers,
+which is why a wrapper script existed. These tests pin the discovery rules
+that replaced it, and in particular the two things that must NOT happen: no
+walk-up out of the cwd (it reaches the committed 8-VM stack from anywhere in
+the checkout) and no settings picked up from the ambient search path for a
+rendered stack, whose values were baked in when it was generated.
 
     python3 -m unittest discover -s tests -v
 """
@@ -40,26 +38,22 @@ class StackMemoryCase(ComposeCase):
         self.message = self.stderr if isinstance(code, int) else str(code)
         return code
 
-    def _rendered(self, layers: list[Path], names: list[str] | None = None) -> Path:
+    def _rendered(self, layers: list[Path]) -> Path:
         """A stack directory with a real gen-compose provenance header."""
         header = "\n".join(
-            gen_compose._provenance_lines(
-                names if names is not None else [str(p) for p in layers],
-                gen_compose.env_digest(layers),
-            )
+            gen_compose._provenance_lines(gen_compose.xml_digest(layers))
         )
         return self._stack_dir(f"{header}\n{_MINIMAL_COMPOSE}")
 
     def _layers(self) -> list[Path]:
-        golden = self.root / "env.golden"
-        golden.write_text("VM_COUNT=2\n")
-        overlay = self.root / "env.overlay"
-        overlay.write_text("VM_COUNT=32\n")
-        return [golden, overlay]
+        return [self._settings(vm_count="2"),
+                self._settings("overlay.xml", vm_count="32")]
 
-    def _env_args(self) -> list[str]:
-        argv = self.capture.argv
-        return [argv[i + 1] for i, a in enumerate(argv) if a == "--env-file"]
+    def _supplied(self) -> dict[str, str]:
+        """What compose.run added to the child's environment from settings."""
+        names = set(compose.interpolation_vars(compose.FleetConfig()))
+        names.add("COMPOSE_DISABLE_ENV_FILE")
+        return {k: v for k, v in self.capture.env.items() if k in names}
 
 
 class TestDiscovery(StackMemoryCase):
@@ -69,7 +63,7 @@ class TestDiscovery(StackMemoryCase):
         os.chdir(cdir)
         self.assertEqual(self._run(["compose", "ps"]), 0)
         self.assertEqual(Path(self.capture.cwd), cdir)
-        self.assertEqual(self._env_args(), [])
+        self.assertEqual(self._supplied(), {})
 
     def test_a_subdirectory_is_not_a_stack_dir(self):
         """No walk-up: the thing found must be the thing run."""
@@ -89,7 +83,7 @@ class TestDiscovery(StackMemoryCase):
         elsewhere = self.root / "elsewhere"
         elsewhere.mkdir()
         os.chdir(elsewhere)
-        self._run(["compose", "--xml", str(self._env_file()), "ps"])
+        self._run(["compose", "--xml", str(self._settings()), "ps"])
         self.assertEqual(
             Path(self.capture.cwd), compose._compose_dir(compose._DEFAULT_STACK)
         )
@@ -98,7 +92,7 @@ class TestDiscovery(StackMemoryCase):
         """The provenance header is the identity test, not the file name."""
         cdir = self._stack_dir()
         os.chdir(cdir)
-        self._run(["compose", "--xml", str(self._env_file()), "ps"])
+        self._run(["compose", "--xml", str(self._settings()), "ps"])
         self.assertEqual(
             Path(self.capture.cwd), compose._compose_dir(compose._DEFAULT_STACK)
         )
@@ -112,7 +106,7 @@ class TestDiscovery(StackMemoryCase):
         os.environ[compose._STACK_DIR_ENV] = str(cdir)
         self.assertEqual(self._run(["compose", "ps"]), 0)
         self.assertEqual(Path(self.capture.cwd), cdir)
-        self.assertEqual(self._env_args(), [])
+        self.assertEqual(self._supplied(), {})
 
     def test_env_var_naming_a_non_stack_is_refused_by_name(self):
         empty = self.root / "empty"
@@ -124,14 +118,13 @@ class TestDiscovery(StackMemoryCase):
 
 
 class TestExplicitWins(StackMemoryCase):
-    def test_explicit_env_file_overrides_the_remembered_layers(self):
+    def test_explicit_xml_is_used_for_a_rendered_stack(self):
         layers = self._layers()
         cdir = self._rendered(layers)
         os.chdir(cdir)
-        other = self.root / "env.other"
-        other.write_text("VM_COUNT=4\n")
+        other = self._settings("other.xml", vm_images_dir="/srv/other")
         self._run(["compose", "--xml", str(other), "ps"])
-        self.assertEqual(self._env_args(), [str(other)])
+        self.assertEqual(self._supplied()["VM_IMAGES_DIR"], "/srv/other")
 
     def test_explicit_stack_dir_overrides_the_cwd(self):
         layers = self._layers()
@@ -147,96 +140,23 @@ class TestExplicitWins(StackMemoryCase):
     def test_a_named_stack_outranks_the_ambient_stack_dir(self):
         cdir = self._rendered(self._layers())
         os.environ[compose._STACK_DIR_ENV] = str(cdir)
-        self._run(["compose", "--stack", "vfio-user-ernic-2vm",
-                   "--xml", str(self._env_file()), "ps"])
+        self._run(["compose", "--stack", "helios-tray",
+                   "--xml", str(self._settings()), "ps"])
         self.assertEqual(
-            Path(self.capture.cwd), compose._compose_dir("vfio-user-ernic-2vm")
+            Path(self.capture.cwd), compose._compose_dir("helios-tray")
         )
 
 
 class TestHonestResolution(StackMemoryCase):
-    def test_relative_layers_resolve_against_the_stack_dir(self):
-        # Uses an old-format header (with # env-file: lines) to exercise the
-        # backward-compat path that resolves relative names against the stack dir.
-        cdir = self._stack_dir()
-        layer = cdir / "env.golden"
-        layer.write_text("VM_COUNT=2\n")
-        digest = gen_compose.env_digest([layer])
-        (cdir / "docker-compose.yml").write_text(
-            f"# env-sha256: {digest}  # pre-commit: ignore\n"
-            f"# env-file: env.golden\n"
-            f"{_MINIMAL_COMPOSE}"
-        )
+    def test_a_rendered_stack_is_driven_with_no_layers(self):
+        cdir = self._stack_dir(f"# xml-sha256: deadbeef\n{_MINIMAL_COMPOSE}")
         os.chdir(cdir)
         self.assertEqual(self._run(["compose", "ps"]), 0)
-        self.assertEqual(self._env_args(), [str(layer.resolve())])
-
-    def test_a_header_with_no_env_files_is_a_valid_new_format_stack(self):
-        # New-format stacks have no # env-file: lines; values are inlined at
-        # gen-compose time, so no --env-file is needed or expected.
-        cdir = self._stack_dir(f"# env-sha256: deadbeef\n{_MINIMAL_COMPOSE}")
-        os.chdir(cdir)
-        self.assertEqual(self._run(["compose", "ps"]), 0)
-        self.assertEqual(self._env_args(), [])
-
-    def test_a_remembered_layer_that_is_gone_names_it_and_where_it_looked(self):
-        # Uses an old-format header (with # env-file: lines) so the missing-layer
-        # error path in _remembered_layers() is exercised.
-        layers = self._layers()
-        digest = gen_compose.env_digest(layers)
-        cdir = self._stack_dir(
-            f"# env-sha256: {digest}  # pre-commit: ignore\n"
-            f"# env-file: {layers[0]}\n"
-            f"# env-file: {layers[1]}\n"
-            f"{_MINIMAL_COMPOSE}"
-        )
-        layers[1].unlink()
-        os.chdir(cdir)
-        self._run(["compose", "ps"])
-        self.assertIn(str(layers[1]), self.message)
-        self.assertIn("Looked for", self.message)
-        self.assertIsNone(self.capture.argv)
+        self.assertEqual(self._supplied(), {})
 
 
 class TestStaleness(StackMemoryCase):
-    def test_remembered_layers_are_still_hashed(self):
-        """Adopting the recorded names must not pass for checking the digest."""
-        # Uses an old-format header so the staleness check path is exercised.
-        layers = self._layers()
-        digest = gen_compose.env_digest(layers)
-        cdir = self._stack_dir(
-            f"# env-sha256: {digest}  # pre-commit: ignore\n"
-            f"# env-file: {layers[0]}\n"
-            f"# env-file: {layers[1]}\n"
-            f"{_MINIMAL_COMPOSE}"
-        )
-        layers[1].write_text("VM_COUNT=48\n")
-        os.chdir(cdir)
-        self.assertEqual(self._run(["compose", "ps"]), 0)
-        self.assertIn("different version", self.stderr)
-        self.assertIn(str(layers[1]), self.stderr)
-        # Warn, never block.
-        self.assertEqual(Path(self.capture.cwd), cdir)
-
-    def test_passing_different_layers_is_reported_as_different_layers(self):
-        # Uses an old-format header so the staleness warning path is exercised.
-        layers = self._layers()
-        digest = gen_compose.env_digest(layers)
-        cdir = self._stack_dir(
-            f"# env-sha256: {digest}  # pre-commit: ignore\n"
-            f"# env-file: {layers[0]}\n"
-            f"# env-file: {layers[1]}\n"
-            f"{_MINIMAL_COMPOSE}"
-        )
-        other = self.root / "env.other"
-        other.write_text("VM_COUNT=4\n")
-        os.chdir(cdir)
-        self._run(["compose", "--xml", str(other), "ps"])
-        self.assertIn("was rendered from", self.stderr)
-        self.assertIn(str(layers[0]), self.stderr)
-        self.assertIn(str(other), self.stderr)
-
-    def test_matching_remembered_layers_are_silent(self):
+    def test_a_rendered_stack_with_no_flags_is_silent(self):
         cdir = self._rendered(self._layers())
         os.chdir(cdir)
         self._run(["compose", "ps"])

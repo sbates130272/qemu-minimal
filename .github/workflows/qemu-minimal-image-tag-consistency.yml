@@ -1,15 +1,21 @@
 name: qemu-minimal - Image Tag Consistency Check
 
-# Every batesste-ci-images tag in workflow files, compose stacks, and env
-# files must share the same YYYYMMDD.gHASH stamp. A tag bump that updates
-# env files but forgets a workflow's container.image: (or vice versa) ships
+# Every batesste-ci-images tag in workflow files, compose stacks and fleet files
+# must share the same YYYYMMDD.gHASH stamp. A tag bump that
+# updates a fleet file but forgets a workflow's container.image: (or vice versa) ships
 # a mismatched image in CI; this check makes the failure visible on the PR.
+#
+# The SDXI server image is the one exception. It follows the guest's
+# sdxi_source_pin by commit (tests/test_playbook_pins.py), not the fleet's
+# stamp, so a ref whose tag carries -sdxi.<sha> is left out of the comparison
+# and checked only for naming one tag everywhere.
 #
 # Fork images (sbates-fork) are built on a separate cadence and may carry a
 # different stamp. They are checked for internal consistency separately.
 #
 # What is searched: all files under .github/workflows/, .github/actions/,
-# qemu/compose/ (including generated stacks), and qemu/xml/ (extension-less).
+# qemu/compose/ (the generated stacks) and qemu/stacks/ (the fleet files they
+# are generated from).
 # Markdown files are excluded: docs and CHANGELOG reference old tags by design.
 
 on:
@@ -30,17 +36,25 @@ jobs:
 
       - name: Check batesste-ci-images stamps are consistent
         run: |
-          SEARCH_DIRS=".github/workflows/ .github/actions/ qemu/compose/ qemu/xml/"
+          SEARCH_DIRS=".github/workflows/ .github/actions/ qemu/compose/ qemu/stacks/"
+          # A directory that has moved would otherwise just stop being
+          # searched: grep's complaint goes to /dev/null below.
+          for dir in $SEARCH_DIRS; do
+            [ -d "$dir" ] || { echo "::error::$dir does not exist"; exit 1; }
+          done
 
-          # Extract all tags (YYYYMMDD.gHASH), split by whether the line
-          # references the fork image or the standard one.
-          all_lines=$(grep -rEh \
-            'batesste-ci-images[^:]*:[0-9]{8}\.g[a-f0-9]+' \
-            $SEARCH_DIRS 2>/dev/null || true)
+          # Extract every ref, then split three ways: the SDXI server (its
+          # tag carries -sdxi.<sha>), the fork images, and the rest.
+          REF_RE='batesste-ci-images[^:]*:[0-9]{8}\.g[a-f0-9]+[A-Za-z0-9._-]*'
+          SDXI_RE='-sdxi\.[a-f0-9]+'
+          all_refs=$(grep -rEoh "$REF_RE" $SEARCH_DIRS 2>/dev/null || true)
 
-          nonfork_stamps=$(echo "$all_lines" | grep -v 'sbates-fork' |
+          sdxi_tags=$(echo "$all_refs" | grep -E -- "$SDXI_RE" |
+            sed 's/^[^:]*://' | sort -u)
+          stamped_refs=$(echo "$all_refs" | grep -vE -- "$SDXI_RE")
+          nonfork_stamps=$(echo "$stamped_refs" | grep -v 'sbates-fork' |
             grep -oE '[0-9]{8}\.g[a-f0-9]+' | sort -u)
-          fork_stamps=$(echo "$all_lines" | grep 'sbates-fork' |
+          fork_stamps=$(echo "$stamped_refs" | grep 'sbates-fork' |
             grep -oE '[0-9]{8}\.g[a-f0-9]+' | sort -u)
 
           fail=0
@@ -58,9 +72,9 @@ jobs:
             echo "::error::Standard images have $nonfork_count stamps (expected 1). Files per stamp:" >&2
             echo "$nonfork_stamps" | while IFS= read -r s; do
               echo "  $s:" >&2
-              grep -rEn 'batesste-ci-images[^:]*:[0-9]{8}\.g[a-f0-9]+' \
-                $SEARCH_DIRS 2>/dev/null |
+              grep -rEn "$REF_RE" $SEARCH_DIRS 2>/dev/null |
                 grep "$s" | grep -v 'sbates-fork' |
+                grep -vE -- "$SDXI_RE" |
                 sed 's/^/    /' >&2
             done
             fail=1
@@ -77,14 +91,28 @@ jobs:
             echo "::error::Fork images have $fork_count stamps (expected 1). Files per stamp:" >&2
             echo "$fork_stamps" | while IFS= read -r s; do
               echo "  $s:" >&2
-              grep -rEn 'batesste-ci-images[^:]*:[0-9]{8}\.g[a-f0-9]+' \
-                $SEARCH_DIRS 2>/dev/null |
+              grep -rEn "$REF_RE" $SEARCH_DIRS 2>/dev/null |
                 grep "$s" | grep 'sbates-fork' |
                 sed 's/^/    /' >&2
             done
             fail=1
           else
             echo "OK: all fork refs on stamp $fork_stamps"
+          fi
+
+          # --- SDXI server image ---
+          sdxi_count=$(echo "$sdxi_tags" | grep -c . || true)
+          if [ "$sdxi_count" -eq 0 ]; then
+            echo "::error::No SDXI server image ref found — the fleet files name one"
+            fail=1
+          elif [ "$sdxi_count" -gt 1 ]; then
+            echo "" >&2
+            echo "::error::SDXI server refs name $sdxi_count tags (expected 1):" >&2
+            grep -rEn "$REF_RE" $SEARCH_DIRS 2>/dev/null |
+              grep -E -- "$SDXI_RE" | sed 's/^/    /' >&2
+            fail=1
+          else
+            echo "OK: all SDXI server refs on tag $sdxi_tags (follows sdxi_source_pin, not the fleet stamp)"
           fi
 
           exit $fail

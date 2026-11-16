@@ -82,6 +82,7 @@ jobs:
           --username ubuntu \
           --password password \
           --packages qemu/packages.d/packages-default \
+          --ssh-key-file "$HOME/.ssh/id_rsa.pub" \
           --size 8
 
     - name: Boot VM

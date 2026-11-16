@@ -1,24 +1,15 @@
-# personal runbooks — not for version control
-vm-ernic-rocjitsu.md
-
 # image files for virtual machines — the whole directory is local runtime
 # state: qcow2s, NVMe images, keypairs, sidecars, temp dirs. Nothing here
 # belongs in version control.
 images/
-libvirt/focal-*.img
-libvirt/jammy-*.img
-libvirt/noble-*.img
+libvirt/*-server-cloudimg-*.img
 
 # emacs backup files
 *~
 
-# temporary hostname files
-libvirt/hostname.tmp
-
 # Python related
 __pycache__/
 *.py[cod]
-*$py.class
 .venv/
 venv/
 *.egg-info/
@@ -34,15 +25,6 @@ venv/
 # MkDocs build output
 site/
 
-# Build artifacts
-*.o
-*.a
-*.so
-*.ko.cmd
-.tmp_versions/
-Module.symvers
-modules.order
-
 # Debian package related
 *.deb
 *.buildinfo
@@ -53,7 +35,6 @@ modules.order
 qemu/.pybuild/
 qemu/build/
 qemu/dist/
-qemu/qemu_tool.egg-info/
 
 # debhelper related
 qemu/debian/python3-qemu-tool/
@@ -63,38 +44,32 @@ qemu/debian/*.substvars
 qemu/debian/debhelper-build-stamp
 qemu/debian/files
 
-# QEMU runtime
-*.pid
+# Run output
 *.log
 
 # Cloud-init generated files
 cloud-config-*
 network-config-*
-*-seed.qcow2
 
 # Temporary files
 *.tmp
 
-# Environment files. .env.* covers per-profile settings files such as
-# .env.rocjitsu, selected with --env-file or $QEMU_TOOL_ENV. The committed
-# settings files live in qemu/env/ with no leading dot, so they stay tracked.
+# Environment files. qemu-tool reads none; these are a shell's or docker
+# compose's own, and carry machine-specific values.
 .env
 .env.*
+
+# A personal fleet.xml on the settings search path. The committed settings
+# files beside it in qemu/stacks/ have other names, so they stay tracked.
+qemu/stacks/fleet.xml
 
 # Scratch output from local fleet runs -- rendered dashboards, captured
 # metrics. Reproducible from a running stack, so it is not worth versioning.
 artifacts/
 
-# Prometheus TSDB, bind-mounted into the metrics profile (PROM_DATA_DIR).
-# Default lands inside the stack directory; it is run output, not source.
+# Prometheus TSDB, bind-mounted into the metrics profile (<prom-data-dir>).
+# quick-start puts it inside the stack directory; it is run output, not source.
 prom-data/
-
-# Ad-hoc env overlays for one machine. qemu/env/scale-out is the committed,
-# authoritative one and qemu/env/overlay-* are the committed deltas layered on
-# it with a second --env-file; these carry machine-specific absolute paths
-# (VM_IMAGES_DIR, VM_FILESYSTEM) and locally built image tags, so they are
-# useful to keep and wrong to share.
-qemu/env/local-*
 
 # Added by ggshield
 .cache_ggshield

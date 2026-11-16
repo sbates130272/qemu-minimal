@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import shutil
 import sys
 from dataclasses import fields
 from pathlib import Path
@@ -12,15 +13,13 @@ from .caps import probe_caps
 from .config import VMConfig
 from .compose import (
     _DEFAULT_STACK,
-    _GENERATED_STACKS,
     _SOURCE_COMPOSE_ROOT,
     _STACKS,
     _compose_dir,
     run as compose_run,
 )
-from .envfile import load as load_env_file
 from .ernic_stats import run as ernic_stats_run
-from .gen_compose import run as gen_compose_run, _fleet_to_env
+from .gen_compose import run as gen_compose_run, stack_for as gen_compose_stack_for
 from .gen_vm import run as gen_vm_run
 from .libvirt_xml import LibvirtXml
 from .inspect import run as inspect_run
@@ -31,12 +30,12 @@ from .quick_start import VERBS as _QUICK_START_VERBS, VARIANTS as _QUICK_START_V
 from .shutdown import run as shutdown_run
 from .list_vms import run as list_vms_run, collect as _list_vms_collect
 from . import qcow as _qcow
-from .run_vm import build_command, run as run_vm_run
+from . import settings
+from .ports import DEFAULT_SSH_PORT, parse_ssh_port
+from .run_vm import run as run_vm_run
 from . import summary
 
 _UNSET = object()  # sentinel for "flag not provided on CLI"
-
-_DEFAULT_GENERATED_STACK = "vfio-user-ernic-rocjitsu-scale-out"
 
 # dpkg owns this tree. Generating into it would leave a package file modified
 # with no record, so it has to be asked for by name.
@@ -63,7 +62,7 @@ def main(argv: list[str] | None = None) -> None:
 
 # Our own flags on `compose`; everything else on that line is docker's.
 _COMPOSE_OURS = frozenset({
-    "--vm-name", "--vm2-name", "--images", "--stack", "--stack-dir", "--xml",
+    "--images", "--stack", "--stack-dir", "--xml",
 })
 
 
@@ -114,34 +113,102 @@ def _split_compose_argv(argv: list[str] | None) -> list[str]:
 # Parser construction
 # ---------------------------------------------------------------------------
 
+_HELP_WIDTH = 80
+
+
+class _HelpFormatter(argparse.HelpFormatter):
+    """Wrapped prose that keeps its paragraphs, and examples left as typed."""
+
+    def __init__(self, prog: str, **kwargs: Any) -> None:
+        kwargs.setdefault("max_help_position", 30)
+        # 80 at most, whatever the terminal: help gets pasted into issues and
+        # docs, and argparse otherwise fills a wide window edge to edge.
+        kwargs.setdefault(
+            "width", min(shutil.get_terminal_size().columns - 2, _HELP_WIDTH))
+        super().__init__(prog, **kwargs)
+
+    def _fill_text(self, text: str, width: int, indent: str) -> str:
+        if text.startswith("examples:"):
+            return "\n".join(indent + line for line in text.splitlines())
+        return "\n\n".join(
+            super(_HelpFormatter, self)._fill_text(paragraph, width, indent)
+            for paragraph in text.split("\n\n")
+        )
+
+    def _format_action(self, action: argparse.Action) -> str:
+        text = super()._format_action(action)
+        if isinstance(action, argparse._SubParsersAction):
+            # Drop the heading row that only repeats the metavar.
+            text = text.split("\n", 1)[1]
+        return text
+
+
+class _Parser(argparse.ArgumentParser):
+    # add_subparsers() builds each subcommand with type(self), so setting the
+    # formatter here reaches every one of them.
+    def __init__(self, **kwargs: Any) -> None:
+        kwargs.setdefault("formatter_class", _HelpFormatter)
+        super().__init__(**kwargs)
+
+
+_VM_DEFAULTS = {f.name: f.default for f in fields(VMConfig)}
+
+_SEARCH_PATH = (
+    "$QEMU_TOOL_FLEET, ./fleet.xml, qemu/stacks/fleet.xml (in a checkout), "
+    "$XDG_CONFIG_HOME/qemu-tool/fleet.xml, /etc/qemu-tool/fleet.xml"
+)
+_LAYERS = "Repeatable: a later file overrides the elements it sets."
+_XML_HELP = (
+    f"Fleet XML settings file. {_LAYERS} Default: the first that exists of "
+    f"{_SEARCH_PATH}."
+)
+_STACK_NAMES = ", ".join(_STACKS)
+_HUB_USER, _HUB_TOKEN = "DOCKERHUB_USERNAME", "DOCKERHUB_TOKEN"
+
+
+def _examples(*lines: str) -> str:
+    return "examples:\n" + "\n".join(f"  {line}".rstrip() for line in lines)
+
+
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = _Parser(
         prog="qemu-tool",
-        description="Run and generate QEMU VMs.",
+        description=(
+            "Generate, run and inspect QEMU guests, and the docker compose "
+            "stacks that put emulated GPUs, RDMA NICs and SDXI devices "
+            "behind them. Settings come from fleet XML files (--xml)."
+        ),
+        epilog=(
+            "Run 'qemu-tool COMMAND --help' for a command's options and "
+            "'qemu-tool man' for the manual."
+        ),
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
 
     shared = _shared_parent()
-    # No metavar: argparse derives the list from what is actually registered.
-    # The hand-written one had already gone stale -- it still read
-    # "...,list,inspect}" after `man` was added, so --help advertised a
-    # command set the tool did not have.
-    sub = parser.add_subparsers()
+    # The metavar is a fixed word, not a list of names: the list below it is
+    # derived from what is registered, so it cannot go stale.
+    sub = parser.add_subparsers(title="commands", metavar="COMMAND")
 
+    # Start here.
     _add_quick_start(sub)
     _add_check(sub)
-    _add_down(sub)
-    _add_run_vm(sub, shared)
+    # One guest.
     _add_gen_vm(sub, shared)
+    _add_run_vm(sub, shared)
+    # A stack of guests and their device servers.
     _add_gen_compose(sub)
-    _add_fleet_to_env(sub)
     _add_compose(sub)
-    _add_ernic_stats(sub)
+    _add_down(sub)
+    # What is running.
     _add_list(sub)
     _add_inspect(sub)
     _add_ssh(sub)
     _add_qcow(sub)
+    # Everything else.
     _add_publish_qcow(sub)
+    _add_publish_qcow_prune(sub)
+    _add_ernic_stats(sub)
     _add_man(sub)
 
     return parser
@@ -149,155 +216,146 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _shared_parent() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(add_help=False)
-    p.add_argument("--vm-name", default=_UNSET, metavar="NAME")
-    p.add_argument("--arch", choices=["amd64", "arm64", "riscv64"], default=_UNSET)
-    p.add_argument("--vcpus", type=int, default=_UNSET, metavar="N")
-    p.add_argument("--vmem", type=int, default=_UNSET, metavar="MiB")
-    p.add_argument("--images", type=Path, default=_UNSET, metavar="DIR")
-    p.add_argument("--ssh-port", type=int, default=_UNSET, metavar="PORT")
-    p.add_argument(
+
+    g = p.add_argument_group("settings")
+    g.add_argument(
+        "--xml", action="append", type=Path, default=None, metavar="FILE",
+        help=_XML_HELP + " A flag on this command line outranks the file.",
+    )
+    g.add_argument(
+        "--domain", default=None, metavar="FILE",
+        help=(
+            "Libvirt domain XML to use as the base configuration ('-' for "
+            "stdin). The fleet XML and the flags apply on top of it."
+        ),
+    )
+
+    g = p.add_argument_group("guest")
+    g.add_argument(
+        "--vm-name", default=_UNSET, metavar="NAME",
+        help=(
+            "Name of the guest; its disk is <images>/NAME.qcow2 "
+            f"(default: {_VM_DEFAULTS['vm_name']})."
+        ),
+    )
+    g.add_argument(
+        "--arch", choices=["amd64", "arm64", "riscv64"], default=_UNSET,
+        help=f"Guest architecture (default: {_VM_DEFAULTS['arch']}).",
+    )
+    g.add_argument(
+        "--vcpus", type=int, default=_UNSET, metavar="N",
+        help=f"Virtual CPUs (default: {_VM_DEFAULTS['vcpus']}).",
+    )
+    g.add_argument(
+        "--vmem", type=int, default=_UNSET, metavar="MiB",
+        help=f"Guest RAM in MiB (default: {_VM_DEFAULTS['vmem']}).",
+    )
+    g.add_argument(
+        "--images", type=Path, default=_UNSET, metavar="DIR",
+        help=(
+            "Directory holding the guest images (default: "
+            "/var/lib/qemu-tool/images when writable, else "
+            "$XDG_DATA_HOME/qemu-tool/images)."
+        ),
+    )
+    g.add_argument(
+        "--ssh-port", type=_ssh_port_arg, default=_UNSET, metavar="PORT",
+        help=(
+            "Host port forwarded to the guest's sshd "
+            f"(default: {_VM_DEFAULTS['ssh_port']}), or 'auto' for the first "
+            f"free port from {_VM_DEFAULTS['ssh_port']} up, chosen as QEMU "
+            "starts and printed. 'qemu-tool ssh' and 'list' find it."
+        ),
+    )
+    g.add_argument(
         "--mac", default=_UNSET, metavar="ADDR",
         help=(
             "Management NIC MAC. Defaults to 52:54:00:00:<hi>:<lo> derived "
-            "from --ssh-port. Set it when the guest image pins its netplan "
+            "from --ssh-port, or from its default when that is 'auto', so "
+            "the MAC does not move with the port. Set it when the guest image pins its netplan "
             "to a specific MAC, as images this repo built before 3969f07 do."
         ),
     )
-    p.add_argument(
-        "--kvm", action=argparse.BooleanOptionalAction, default=_UNSET
+    g.add_argument(
+        "--kvm", action=argparse.BooleanOptionalAction, default=_UNSET,
+        help="Use KVM acceleration (default: on).",
     )
-    p.add_argument("--qemu-path", default=_UNSET, metavar="PATH")
-    p.add_argument(
-        "--xml",
-        dest="env_file",
-        action="append",
-        type=Path,
-        default=None,
-        metavar="FILE",
-        help=(
-            "Fleet XML settings file (see qemu/xml/fleet-example.xml). "
-            "Overrides the search path. Repeatable: later files override "
-            "keys set by earlier ones."
-        ),
-    )
-    p.add_argument(
-        "--domain",
-        default=None,
-        metavar="FILE",
-        help="Libvirt domain XML to use as base config ('-' for stdin).",
+    g.add_argument(
+        "--qemu-path", default=_UNSET, metavar="PATH",
+        help="QEMU binary to run (default: qemu-system-<arch> from PATH).",
     )
     return p
+
+
+def _ssh_port_arg(text: str) -> int | str:
+    try:
+        return parse_ssh_port(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
 
 
 def _add_quick_start(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
         "quick-start",
-        help="Boot two GPU + RDMA guests sized for this host, and test them.",
+        help="Boot the default two-guest stack sized for this host, and test it.",
         description=(
             "Two guests from a published image, each with an emulated "
-            "gfx1250, an emulated NVMe and an emulated rocm-ernic RDMA NIC, "
-            "plus Prometheus and Grafana beside them -- then a GPU test on "
-            "each and an RDMA test across them. Nothing is built. The guests "
-            "are sized from this machine, and anything still unknown is "
-            "asked for on stdin; pass --yes to take every default instead, "
-            "which is also what happens when stdin is not a terminal."
+            "gfx1250 GPU, an NVMe, a rocm-ernic RDMA NIC and an SDXI device, "
+            "with Prometheus, Grafana and log collection beside them -- then "
+            "a GPU test on each and an RDMA test across them.\n\n"
+            "Every image is pulled, the guest's included; nothing is built "
+            "on this host. The guests are sized from this "
+            "machine, and anything still unknown is asked for on stdin; "
+            "pass --yes to take every default instead, which is also what "
+            "happens when stdin is not a terminal."
+        ),
+        epilog=_examples(
+            "qemu-tool quick-start preflight        # check this host, touch nothing",
+            "qemu-tool quick-start                  # pull, boot, configure, test",
+            "qemu-tool quick-start --flavor helios up",
+            "qemu-tool quick-start --xml qemu/stacks/rocm-golden.xml \\",
+            "    --xml my-overlay.xml up",
+            "qemu-tool quick-start logs -f",
+            "qemu-tool quick-start down",
         ),
     )
     p.add_argument(
         "verb", nargs="?", default="all", choices=list(_QUICK_START_VERBS),
+        metavar="VERB",
         help=(
-            "all (default) does the lot. preflight checks this machine and "
-            "touches nothing, up stops once the guests are booted, test "
-            "configures and tests an already-up stack, report rewrites the "
-            "report, logs shows the compose logs, down stops it and keeps "
+            f"One of {', '.join(_QUICK_START_VERBS)} (default: all, which "
+            "does the lot). preflight checks this machine and touches "
+            "nothing, up stops once the guests are booted, test configures "
+            "and tests an already-up stack, report rewrites the report, "
+            "logs shows the compose logs, down stops the stack and keeps "
             "the overlays."
         ),
     )
-    p.add_argument(
-        "-f", "--follow", action="store_true", default=False,
-        help="Follow log output (only meaningful with the logs verb).",
-    )
-    p.add_argument(
-        "--xml", dest="fleet_file", action="append", type=Path, default=None, metavar="FILE",
+
+    g = p.add_argument_group("what to run")
+    g.add_argument(
+        "--flavor",
+        dest="variant",
+        choices=list(_QUICK_START_VARIANTS),
+        default="default",
+        metavar="NAME",
         help=(
-            "Fleet XML file. Defaults to the bundled qemu/xml/quickstart.xml. "
-            "Repeatable: later files override keys set by earlier ones."
+            f"One of {', '.join(_QUICK_START_VARIANTS)} (default: "
+            "%(default)s). default: the rocm-golden fleet, 2 guests, each "
+            "with a gfx1250 GPU, an "
+            "NVMe, a rocm-ernic NIC and an SDXI device. mi355x: 4 guests, "
+            "each with 8 GPUs, 8 ernics and 8 PCIe switches. helios: 1 guest "
+            "with 4 gfx1250 GPUs, 8 ernics and an SDXI device."
         ),
     )
-    p.add_argument(
-        "--stack-dir", type=Path, default=None, metavar="DIR",
+    g.add_argument(
+        "--xml", action="append", type=Path, default=None, metavar="FILE",
         help=(
-            "Where the stack is generated. Default: "
-            "/var/lib/qemu-tool/stacks/quickstart, falling back to "
-            "$XDG_STATE_HOME when that is not writable."
+            f"Fleet XML settings file. {_LAYERS} Default: the flavor's own "
+            "file, qemu/stacks/rocm-golden.xml for the default flavor."
         ),
     )
-    p.add_argument(
-        "--key-dir", type=Path,
-        default=None, metavar="DIR",
-        help="Where the guest keypair is pulled to. Default: "
-             "/var/lib/qemu-tool/quickstart-key, falling back to "
-             "$XDG_DATA_HOME when that is not writable.",
-    )
-    p.add_argument(
-        "--images", type=Path, default=None, metavar="DIR",
-        help=(
-            "Directory for the guest qcow2 files. Overrides VM_IMAGES_DIR; "
-            "without it an unwritable default is asked about rather than "
-            "failing part way into the pull."
-        ),
-    )
-    p.add_argument(
-        "--report-dir", type=Path, default=None, metavar="DIR",
-        help="Write a markdown report here (implies the report step).",
-    )
-    p.add_argument(
-        "--repo-root", type=Path, default=None, metavar="DIR",
-        help=(
-            "The checkout holding ansible/playbooks/vm-quickstart.yml. "
-            "Found automatically from a source install; an installed tool "
-            "with no checkout brings the guests up and skips the tests."
-        ),
-    )
-    p.add_argument(
-        "--size-from-host", action=argparse.BooleanOptionalAction, default=True,
-        help=(
-            "Derive VM_VCPUS, VM_VMEM and VM_SHM_SIZE from this machine. On "
-            "by default; --no-size-from-host uses the settings file as "
-            "written."
-        ),
-    )
-    p.add_argument(
-        "--metrics", action=argparse.BooleanOptionalAction, default=True,
-        help=(
-            "Bring Prometheus and Grafana up with the stack, with their data "
-            "directories beside it. On by default."
-        ),
-    )
-    p.add_argument(
-        "--in-network", action="store_true",
-        help=(
-            "Reach the guests on the compose network rather than on "
-            "published host ports, for a caller that is itself a container "
-            "attached to that network (the CI lane)."
-        ),
-    )
-    p.add_argument(
-        "--yes", "-y", action="store_true",
-        help="Take the default answer to every prompt without asking.",
-    )
-    p.add_argument(
-        "--rdma-duration", type=int, default=None, metavar="SECONDS",
-        help=(
-            "Run ib_send_bw for this many seconds instead of the default "
-            "1000 iterations. Useful for a longer soak test."
-        ),
-    )
-    p.add_argument(
-        "--nvme-duration", type=int, default=None, metavar="SECONDS",
-        help="Run each fio NVMe pass for this many seconds (default: 10).",
-    )
-    p.add_argument(
+    g.add_argument(
         "--clean-overlays", action="store_true", default=False,
         help=(
             "Delete the guest overlay and NVMe qcow2 files before starting, "
@@ -306,22 +364,272 @@ def _add_quick_start(sub: argparse._SubParsersAction) -> None:
             "all verbs."
         ),
     )
-    p.add_argument(
-        "--flavor",
-        dest="variant",
-        choices=list(_QUICK_START_VARIANTS),
-        default="default",
-        metavar="NAME",
+    g.add_argument(
+        "-f", "--follow", action="store_true", default=False,
+        help="Follow log output (only meaningful with the logs verb).",
+    )
+    g.add_argument(
+        "--yes", "-y", action="store_true",
+        help="Take the default answer to every prompt without asking.",
+    )
+
+    g = p.add_argument_group("where things go")
+    g.add_argument(
+        "--stack-dir", type=Path, default=None, metavar="DIR",
         help=(
-            "Quickstart flavor to run. "
-            f"Choices: {', '.join(_QUICK_START_VARIANTS)}. "
-            "default: 2 guests each with an emulated gfx1250, NVMe and rocm-ernic NIC. "
-            "mi355x: 1 VM with 8 GPUs, 8 ernics and 8 PCIe switches. "
-            "helios: 1 VM with 4 gfx1250 GPUs, 8 ernics and an SDXI device. "
-            "(default: %(default)s)"
+            "Where the stack is generated. Default: "
+            "/var/lib/qemu-tool/stacks/quickstart, falling back to "
+            "$XDG_STATE_HOME when that is not writable."
         ),
     )
+    g.add_argument(
+        "--key-dir", type=Path,
+        default=None, metavar="DIR",
+        help="Where the guest keypair is pulled to. Default: "
+             "/var/lib/qemu-tool/quickstart-key, falling back to "
+             "$XDG_DATA_HOME when that is not writable.",
+    )
+    g.add_argument(
+        "--images", type=Path, default=None, metavar="DIR",
+        help=(
+            "Directory for the guest qcow2 files. Overrides <vm-images-dir>; "
+            "without it an unwritable default is asked about rather than "
+            "failing part way into the pull."
+        ),
+    )
+    g.add_argument(
+        "--report-dir", type=Path, default=None, metavar="DIR",
+        help="Write a markdown report here (implies the report step).",
+    )
+    g.add_argument(
+        "--repo-root", type=Path, default=None, metavar="DIR",
+        help=(
+            "The checkout holding ansible/playbooks/vm-quickstart.yml. "
+            "Found automatically from a source install; an installed tool "
+            "with no checkout brings the guests up and skips the tests."
+        ),
+    )
+
+    g = p.add_argument_group("sizing and services")
+    g.add_argument(
+        "--size-from-host", action=argparse.BooleanOptionalAction, default=True,
+        help=(
+            "Derive <vm-vcpus>, <vm-vmem> and <vm-shm-size> from this "
+            "machine. On by default; --no-size-from-host uses the settings "
+            "file as written."
+        ),
+    )
+    g.add_argument(
+        "--metrics", action=argparse.BooleanOptionalAction, default=True,
+        help=(
+            "Bring Prometheus and Grafana up with the stack, with their data "
+            "directories beside it. On by default."
+        ),
+    )
+    g.add_argument(
+        "--in-network", action="store_true",
+        help=(
+            "Reach the guests on the compose network rather than on "
+            "published host ports, for a caller that is itself a container "
+            "attached to that network (the CI lane)."
+        ),
+    )
+
+    g = p.add_argument_group("tests")
+    g.add_argument(
+        "--rdma-duration", type=int, default=None, metavar="SECONDS",
+        help=(
+            "Run ib_send_bw for this many seconds instead of the default "
+            "1000 iterations. Useful for a longer soak test."
+        ),
+    )
+    g.add_argument(
+        "--nvme-duration", type=int, default=None, metavar="SECONDS",
+        help="Run each fio NVMe pass for this many seconds (default: 10).",
+    )
     p.set_defaults(func=_quick_start_cmd)
+
+
+def _add_check(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser(
+        "check",
+        help="Check this host has everything the stacks need. Read-only.",
+        description=(
+            "Ask every host question the stacks depend on, before anything "
+            "has been pulled or written: the tools on PATH, the Docker "
+            "daemon and your access to it, KVM, the uid the containers will "
+            "run as, which settings file is in force, and whether the images "
+            "directory has room. Read-only and needs no sudo. Exits non-zero "
+            "if anything would stop a stack starting; warnings do not fail "
+            "it. This is the same code quick-start runs in its preflight."
+        ),
+    )
+    p.add_argument(
+        "--xml", type=Path, action="append", metavar="FILE",
+        help=(
+            f"Fleet XML settings file to check against. {_LAYERS} Without "
+            f"it the search path is used ({_SEARCH_PATH}), and which file "
+            "that found is itself part of the report."
+        ),
+    )
+    p.set_defaults(func=_check_cmd)
+
+
+def _add_gen_vm(
+    sub: argparse._SubParsersAction, shared: argparse.ArgumentParser
+) -> None:
+    p = sub.add_parser(
+        "gen-vm",
+        parents=[shared],
+        help="Create a guest image: bake one, or overlay a published one.",
+        description=(
+            "Create a guest disk image. By default an Ubuntu cloud image is "
+            "downloaded and provisioned with cloud-init, then optionally "
+            "with a package manifest and an Ansible playbook, giving a "
+            "backing image and an overlay on it. With --backing-image or "
+            "--backing-file nothing is baked: the overlay goes on an image "
+            "that already exists. A settings file that names a "
+            "<backing-ref> counts as --backing-image; --bake overrides it."
+        ),
+        epilog=_examples(
+            "qemu-tool gen-vm --vm-name myvm",
+            "qemu-tool gen-vm --vm-name myvm --backing-image REPO:TAG",
+            "qemu-tool gen-vm --xml qemu/stacks/rocm-golden.xml --vm-name rocm-golden-1",
+            "",
+            "# Bake the image the default fleet publishes, from its <bake-*>",
+            "# elements. gen-vm generates the image's SSH key and says where:",
+            "qemu-tool gen-vm --bake --xml qemu/stacks/rocm-golden.xml",
+            "",
+            "# The same bake, compiling through a cache kept between bakes.",
+            "# Not for an image that is published:",
+            "qemu-tool gen-vm --bake --xml qemu/stacks/rocm-golden.xml \\",
+            "    --cache-dir ~/.cache/qemu-tool/bake",
+            "",
+            "# Authorise a key of your own instead of a generated one:",
+            "qemu-tool gen-vm --vm-name myvm --ssh-key-file ~/.ssh/id_rsa.pub",
+        ),
+    )
+
+    g = p.add_argument_group("image")
+    g.add_argument(
+        "--size", type=int, default=_UNSET, metavar="GB",
+        help=f"Disk size in GB (default: {_VM_DEFAULTS['size']}).",
+    )
+    g.add_argument(
+        "--release", default=_UNSET, metavar="NAME",
+        help=(
+            "Ubuntu codename (resolute) or version (26.04) "
+            f"(default: {_VM_DEFAULTS['release']})."
+        ),
+    )
+    g.add_argument(
+        "--force", action="store_true", default=_UNSET,
+        help="Overwrite an image that already exists.",
+    )
+    g.add_argument(
+        "--compact", action=argparse.BooleanOptionalAction, default=_UNSET,
+        help="Recompress the backing image after the bake (default: on).",
+    )
+    g.add_argument(
+        "--no-backing", action="store_true", default=_UNSET,
+        help="Create one flat image instead of a backing image and an overlay.",
+    )
+
+    g = p.add_argument_group("image source")
+    g.add_argument(
+        "--bake", action="store_true",
+        help=(
+            "Bake from the cloud image using the fleet XML's <bake-*> "
+            "elements, ignoring its <backing-ref>. Without it those "
+            "elements are not read."
+        ),
+    )
+    g.add_argument(
+        "--backing-image", default=_UNSET, metavar="OCI_REF",
+        help=(
+            "Pull a published backing qcow2 with oras, then overlay on it. "
+            "Same job as the cloud-image download, different source; no "
+            "cloud-init and no bake."
+        ),
+    )
+    g.add_argument(
+        "--backing-file", type=Path, default=_UNSET, metavar="FILE",
+        help="Overlay on this existing image instead of downloading one.",
+    )
+    g.add_argument(
+        "--restore-image", action="store_true", default=_UNSET,
+        help=(
+            "Recreate the overlay from its backing image, discarding what "
+            "the guest has written."
+        ),
+    )
+
+    g = p.add_argument_group("guest account")
+    g.add_argument(
+        "--username", default=_UNSET, metavar="NAME",
+        help=f"Login to create (default: {_VM_DEFAULTS['username']}).",
+    )
+    g.add_argument(
+        "--user-id", type=int, default=_UNSET, metavar="UID",
+        help=f"Uid of that login (default: {_VM_DEFAULTS['user_id']}).",
+    )
+    g.add_argument(
+        "--password", default=_UNSET, metavar="PASSWORD",
+        help=f"Its password (default: {_VM_DEFAULTS['password']}).",
+    )
+    g.add_argument(
+        "--ssh-key-file", type=Path, default=_UNSET, metavar="FILE",
+        help=(
+            "Public key the login authorises, in place of the keypair "
+            "gen-vm generates for an image it bakes (kept under "
+            "<images>/keys/, and what 'qemu-tool ssh' uses). Default: "
+            "<vm-ssh-key-file>; never a key from ~/.ssh unless named."
+        ),
+    )
+
+    g = p.add_argument_group("provisioning")
+    g.add_argument(
+        "--packages", default=_UNSET, metavar="FILE",
+        help=(
+            "Package manifest file, or 'none' (default: the shipped "
+            "packages-default)."
+        ),
+    )
+    g.add_argument(
+        "--ansible-playbook", type=Path, default=_UNSET, metavar="FILE",
+        help="Ansible playbook to run against the image after cloud-init.",
+    )
+    g.add_argument(
+        "--ansible-only", action="store_true", default=_UNSET,
+        help="Skip cloud-init; re-run Ansible against an existing backing image.",
+    )
+    g.add_argument(
+        "--ca-cert", type=Path, default=_UNSET, metavar="FILE",
+        help="CA certificate to inject into the guest trust store.",
+    )
+    g.add_argument(
+        "--cache-dir", type=Path, default=_UNSET, metavar="DIR",
+        help=(
+            "With --bake: a directory on this host that carries the "
+            "bake's compiler cache from one bake to the next, created if "
+            "missing and handed to the playbook as bake_cache_dir. "
+            "Default: <bake-cache-dir>, else no cache and a bake from "
+            "source."
+        ),
+    )
+    g.add_argument(
+        "--cache-replace", action="store_true", default=_UNSET,
+        help=(
+            "With a cache directory: the cache in it was saved for other "
+            "source pins, so save this bake's over it however little it "
+            "missed."
+        ),
+    )
+    g.add_argument(
+        "--mgmt-tap", action="store_true", default=_UNSET,
+        help="Use tap+bridge for the management NIC instead of SLIRP.",
+    )
+    p.set_defaults(func=_gen_vm_cmd)
 
 
 def _add_run_vm(
@@ -330,38 +638,28 @@ def _add_run_vm(
     p = sub.add_parser(
         "run-vm",
         parents=[shared],
-        help="Run a QEMU VM.",
-        description="Run a QEMU VM previously created by gen-vm.",
-    )
-    p.add_argument("--filesystem", default=_UNSET, metavar="DIR")
-    # Both halves, because the default is now on: --vfio-user-root-port alone
-    # became a flag that could only restate the default, leaving no way to ask
-    # for the old topology from the command line at all. The settings file has
-    # always been able to; the CLI should not be the weaker of the two.
-    p.add_argument("--vfio-user-root-port", action="store_true",
-                   default=_UNSET,
-                   help="Put each vfio-user device behind its own PCIe root "
-                        "port. On by default; a GPU cannot bind amdgpu "
-                        "without it.")
-    p.add_argument("--no-vfio-user-root-port", action="store_false",
-                   dest="vfio_user_root_port", default=_UNSET,
-                   help="Keep vfio-user devices on the root bus as "
-                        "conventional endpoints. A GPU will not work.")
-    p.add_argument(
-        "--vfio-user-switch-width", type=int, default=_UNSET, metavar="N",
-        help=(
-            "Group vfio-user devices under PCIe switches, N per switch, in "
-            "--vfio-userdev order. 0 (default) is off."
+        help="Run a guest created by gen-vm.",
+        description=(
+            "Run a QEMU guest previously created by gen-vm. This is also "
+            "what each qemu container of a compose stack runs."
+        ),
+        epilog=_examples(
+            "qemu-tool run-vm --vm-name myvm",
+            "qemu-tool run-vm --vm-name myvm --nvme 2 --no-kvm --dry-run",
+            "qemu-tool run-vm --vm-name myvm --vfio-userdev /run/vfu/rocjitsu-1.sock",
+            "qemu-tool run-vm --vm-name myvm --convert-to-libvirt myvm.xml",
         ),
     )
-    p.add_argument(
+
+    g = p.add_argument_group("CPU and PCI topology")
+    g.add_argument(
         "--cpu-sockets", type=int, default=_UNSET, metavar="N",
         help=(
             "Pin the guest socket count. Without it QEMU infers sockets=cpus, "
             "so the guest sees N single-core sockets."
         ),
     )
-    p.add_argument(
+    g.add_argument(
         "--cpu-phys-bits", default=_UNSET, metavar="N", type=int,
         help=(
             "Physical address bits for the EPYC CPU (default 40 = 1 TiB). "
@@ -369,53 +667,136 @@ def _add_run_vm(
             "the default address space; both must move together."
         ),
     )
-    p.add_argument(
+    g.add_argument(
         "--pci-hole64-size", default=_UNSET, metavar="SIZE",
         help="Size of the 64-bit PCI hole, e.g. 512G. Needed for many large BARs.",
     )
-    p.add_argument("--nvme", default=_UNSET, metavar="VALUE",
-                   help="Positive int=count, negative int=null_blk, else literal args.")
-    p.add_argument("--nvme-trace", default=_UNSET,
-                   metavar="{doorbell,all,EVENT}")
-    p.add_argument("--nvme-trace-file", type=Path, default=_UNSET, metavar="FILE")
-    p.add_argument("--nvme-lbaf-mask", default=_UNSET, metavar="HEX")
-    p.add_argument("--nvme-recreate", action="store_true", default=_UNSET)
-    p.add_argument("--nvme-dbbuf-poll-ns", type=int, default=_UNSET, metavar="NS",
-                   help="Shadow doorbell poll period in ns (0=off, the default)")
-    p.add_argument("--nvme-dbbuf-poll-eventidx", default=_UNSET,
-                   metavar="{on,off}")
-    p.add_argument("--nvme-vram-dev", default=_UNSET, metavar="ID",
-                   help="qdev id of vfio-user device for NVMe P2P (e.g. rocjitsu-4-1)")
-    p.add_argument("--nvme-vram-bar", type=int, default=_UNSET, metavar="N",
-                   help="BAR index for NVMe vfio-user P2P (default 0)")
-    p.add_argument("--pci-testdev", action="store_true", default=_UNSET)
-    p.add_argument(
+    # Both halves, because the default is now on: --vfio-user-root-port alone
+    # became a flag that could only restate the default, leaving no way to ask
+    # for the old topology from the command line at all. The settings file has
+    # always been able to; the CLI should not be the weaker of the two.
+    g.add_argument("--vfio-user-root-port", action="store_true",
+                   default=_UNSET,
+                   help="Put each vfio-user device behind its own PCIe root "
+                        "port. On by default; a GPU cannot bind amdgpu "
+                        "without it.")
+    g.add_argument("--no-vfio-user-root-port", action="store_false",
+                   dest="vfio_user_root_port", default=_UNSET,
+                   help="Keep vfio-user devices on the root bus as "
+                        "conventional endpoints. A GPU will not work.")
+    g.add_argument(
+        "--vfio-user-switch-width", type=int, default=_UNSET, metavar="N",
+        help=(
+            "Group vfio-user devices under PCIe switches, N per switch, in "
+            "--vfio-userdev order. 0 (default) is off."
+        ),
+    )
+    g.add_argument(
+        "--pci-mmio-bridge", action="store_true", default=_UNSET,
+        help="Add a PCI-to-PCI bridge for an extended MMIO window.",
+    )
+
+    g = p.add_argument_group("devices")
+    g.add_argument(
+        "--vfio-userdev", action="append", default=None, metavar="SOCK[,SOCK]",
+        help=(
+            "vfio-user device socket to attach. May be repeated or "
+            "comma-separated."
+        ),
+    )
+    g.add_argument(
         "--pci-hostdev", action="append", default=None, metavar="BDF[,BDF]",
         help="PCI BDF(s) for VFIO passthrough. May be repeated or comma-separated.",
     )
-    p.add_argument("--vram-dev-index", type=int, default=_UNSET, metavar="N")
-    p.add_argument("--vram-bar", type=int, default=_UNSET, metavar="N")
-    p.add_argument(
-        "--vfio-userdev", action="append", default=None, metavar="SOCK[,SOCK]"
+    g.add_argument(
+        "--vram-dev-index", type=int, default=_UNSET, metavar="N",
+        help=(
+            "1-based index into --pci-hostdev of the GPU whose VRAM BAR is "
+            "mapped."
+        ),
     )
-    p.add_argument("--pci-mmio-bridge", action="store_true", default=_UNSET)
-    p.add_argument("--data-nic-queues", type=int, default=_UNSET, metavar="N")
-    p.add_argument("--mcast-group", default=_UNSET, metavar="IP:PORT")
-    p.add_argument(
-        "--qmp-socket", nargs="?", const="true", default=_UNSET, metavar="PATH",
-        help="Enable QMP socket. Optional PATH; bare flag uses auto path.",
+    g.add_argument(
+        "--vram-bar", type=int, default=_UNSET, metavar="N",
+        help=f"BAR index of that VRAM (default: {_VM_DEFAULTS['vram_bar']}).",
     )
-    p.add_argument("--no-qemu-guest-agent", action="store_true", default=False)
-    p.add_argument("--backing-shared", action="store_true", default=_UNSET)
-    p.add_argument(
+    g.add_argument(
+        "--pci-testdev", action="store_true", default=_UNSET,
+        help="Attach QEMU's pci-testdev.",
+    )
+    g.add_argument(
+        "--filesystem", default=_UNSET, metavar="DIR",
+        help="Host directory to share with the guest over virtio-9p.",
+    )
+
+    g = p.add_argument_group("NVMe")
+    g.add_argument("--nvme", default=_UNSET, metavar="VALUE",
+                   help="Positive int=count, negative int=null_blk, else literal args.")
+    g.add_argument(
+        "--nvme-recreate", action="store_true", default=_UNSET,
+        help="Recreate the NVMe image files even if they exist.",
+    )
+    g.add_argument(
+        "--nvme-lbaf-mask", default=_UNSET, metavar="HEX",
+        help="Bitmask restricting the LBA formats advertised.",
+    )
+    g.add_argument("--nvme-trace", default=_UNSET,
+                   metavar="{doorbell,all,EVENT}",
+                   help="Enable QEMU's NVMe trace events for this category.")
+    g.add_argument(
+        "--nvme-trace-file", type=Path, default=_UNSET, metavar="FILE",
+        help="Write the NVMe trace here instead of to stderr.",
+    )
+    g.add_argument("--nvme-dbbuf-poll-ns", type=int, default=_UNSET, metavar="NS",
+                   help="Shadow doorbell poll period in ns (0=off, the default)")
+    g.add_argument("--nvme-dbbuf-poll-eventidx", default=_UNSET,
+                   metavar="{on,off}",
+                   help="Shadow doorbell event-index mode; off removes the "
+                        "last host doorbell write on the submission path.")
+    g.add_argument("--nvme-vram-dev", default=_UNSET, metavar="ID",
+                   help="qdev id of vfio-user device for NVMe P2P (e.g. rocjitsu-4-1)")
+    g.add_argument("--nvme-vram-bar", type=int, default=_UNSET, metavar="N",
+                   help="BAR index for NVMe vfio-user P2P (default 0)")
+
+    g = p.add_argument_group("networking")
+    g.add_argument("--mgmt-tap", action="store_true", default=_UNSET,
+                   help="Use tap+bridge for the management NIC instead of SLIRP.")
+    g.add_argument(
         "--extra-hostfwd", action="append", default=None,
         metavar="RULE",
         help="Extra hostfwd rule e.g. tcp::9150-:9100. May be repeated.",
     )
-    p.add_argument("--dry-run", action="store_true", default=_UNSET)
-    p.add_argument("--mgmt-tap", action="store_true", default=_UNSET,
-                   help="Use tap+bridge for management NIC instead of SLIRP.")
-    p.add_argument(
+    g.add_argument(
+        "--data-nic-queues", type=int, default=_UNSET, metavar="N",
+        help=(
+            "virtio-net queues on the data NIC "
+            f"(default: {_VM_DEFAULTS['data_nic_queues']}, single queue)."
+        ),
+    )
+    g.add_argument(
+        "--mcast-group", default=_UNSET, metavar="IP:PORT",
+        help="Attach a second NIC to this UDP multicast group.",
+    )
+
+    g = p.add_argument_group("disk and control")
+    g.add_argument(
+        "--backing-shared", action="store_true", default=_UNSET,
+        help="The backing image is shared with other running guests.",
+    )
+    g.add_argument(
+        "--qmp-socket", nargs="?", const="true", default=_UNSET, metavar="PATH",
+        help="Enable QMP socket. Optional PATH; bare flag uses auto path.",
+    )
+    g.add_argument(
+        "--no-qemu-guest-agent", action="store_true", default=False,
+        help="Leave out the guest agent channel.",
+    )
+
+    g = p.add_argument_group("instead of running")
+    g.add_argument(
+        "--dry-run", action="store_true", default=_UNSET,
+        help="Print the QEMU command and exit.",
+    )
+    g.add_argument(
         "--convert-to-libvirt", nargs="?", const="-", default=None,
         metavar="FILE",
         help=(
@@ -426,78 +807,43 @@ def _add_run_vm(
     p.set_defaults(func=_run_vm_cmd)
 
 
-def _add_compose(sub: argparse._SubParsersAction) -> None:
-    p = sub.add_parser(
-        "compose",
-        help="Run docker compose for a vfio-user VM stack.",
-        description=(
-            "Wrapper around 'docker compose' for vfio-user VM stacks. "
-            "Sets VM_NAME and VM_IMAGES_DIR, then passes remaining arguments "
-            "directly to docker compose. A stack rendered by gen-compose "
-            "names its own env files in its provenance header, so from inside "
-            "such a directory no flags are needed at all."
-        ),
-    )
-    p.add_argument(
-        "--vm-name", default=None, metavar="NAME",
-        help="VM name (sets VM_NAME/VM1_NAME). Omit to use the value in .env.",
-    )
-    p.add_argument(
-        "--vm2-name", default=None, metavar="NAME",
-        help="Second VM name for 2-VM stacks (sets VM2_NAME). Omit to use the value in .env.",
-    )
-    p.add_argument(
-        "--images", type=Path, default=None, metavar="DIR",
-        help="Directory containing VM images (sets VM_IMAGES_DIR). Omit to use the value in .env.",
-    )
-    p.add_argument(
-        "--stack", choices=_STACKS, default=None,
-        help=f"Compose stack to use. Default: {_DEFAULT_STACK}.",
-    )
-    p.add_argument(
-        "--stack-dir", type=Path, default=None, metavar="DIR",
-        help=(
-            "Run a stack rendered by 'gen-compose --output-dir DIR' instead of "
-            "a named one. Required for an overlay fleet: VM_COUNT and the VM "
-            "names are baked into the generated YAML, not read from the env "
-            "file. Mutually exclusive with --stack. Defaults to "
-            "$QEMU_TOOL_STACK, or to the current directory when that is "
-            "itself a rendered stack."
-        ),
-    )
-    p.add_argument(
-        "--xml", dest="env_file", action="append", type=Path, default=None, metavar="FILE",
-        help=(
-            "Fleet XML settings file. Overrides the search path. "
-            "Repeatable: later files override keys set by earlier ones."
-        ),
-    )
-    p.add_argument(
-        "compose_args", nargs=argparse.REMAINDER,
-        help="Arguments forwarded to docker compose (e.g. up, down, ps, logs).",
-    )
-    p.set_defaults(func=_compose_cmd)
-
-
 def _add_gen_compose(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
         "gen-compose",
-        help="Generate a scale-out compose stack from a fleet XML file.",
+        help="Render a compose stack from fleet XML.",
         description=(
-            "Generate docker-compose.yml and prometheus.yml for an N-VM "
-            "rocm-ernic mesh from the fleet XML descriptor. Per-VM values are "
-            "comma-lists, not numbered keys; see qemu/xml/scale-out.xml."
+            "Render docker-compose.yml, prometheus.yml and "
+            "fleet-inventory.yml for the fleet a fleet XML file describes: "
+            "N guests, each with its rocm-ernic NICs, rocjitsu GPUs and "
+            "SDXI devices, and the mesh between them.\n\n"
+            f"The shipped stacks ({_STACK_NAMES}) are each rendered from "
+            "qemu/stacks/<name>.xml into qemu/compose/<name>. An overlay "
+            "render needs --output-dir: without it the output lands on the "
+            "committed stack named by the first --xml file."
+        ),
+        epilog=_examples(
+            "# Re-render a shipped stack after editing its fleet file, and check it:",
+            "qemu-tool gen-compose --xml qemu/stacks/rocm-golden.xml",
+            "qemu-tool gen-compose --xml qemu/stacks/rocm-golden.xml --check",
+            "",
+            "# Render the default fleet with an overlay, somewhere of your own:",
+            "qemu-tool gen-compose --xml qemu/stacks/rocm-golden.xml --xml my-overlay.xml \\",
+            "    --output-dir /var/lib/qemu-tool/stacks/mine",
         ),
     )
     p.add_argument(
-        "--stack", choices=sorted(_GENERATED_STACKS), default=_DEFAULT_GENERATED_STACK,
-        help=f"Stack to generate. Default: {_DEFAULT_GENERATED_STACK}.",
+        "--xml", action="append", type=Path, default=None, metavar="FILE",
+        help=(
+            f"Fleet XML settings file. {_LAYERS} Default: a fleet.xml on the "
+            "search path, else the stack's own file in qemu/stacks/."
+        ),
     )
     p.add_argument(
-        "--xml", dest="fleet_file", action="append", type=Path, default=None, metavar="FILE",
+        "--stack", choices=_STACKS, default=None, metavar="NAME",
         help=(
-            "Fleet descriptor XML (see qemu/xml/scale-out.xml). "
-            "Repeatable: later files override keys set by earlier ones."
+            f"Stack to generate: {_STACK_NAMES}. Default: the one named "
+            "after the first --xml file when that is a shipped stack, else "
+            f"{_DEFAULT_STACK}."
         ),
     )
     p.add_argument(
@@ -515,70 +861,120 @@ def _add_gen_compose(sub: argparse._SubParsersAction) -> None:
     p.set_defaults(func=_gen_compose_cmd)
 
 
-def _add_fleet_to_env(sub: argparse._SubParsersAction) -> None:
+def _add_compose(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
-        "fleet-to-env",
-        help="Dump a fleet XML file as KEY=VALUE env-format pairs.",
+        "compose",
+        help="Run docker compose against a stack, as you.",
         description=(
-            "Read one or more fleet XML descriptors and print every setting "
-            "as KEY=VALUE lines on stdout. Useful for generating a temporary "
-            "env file for plain docker compose, which reads nothing else "
-            "(docker compose --env-file).\n\n"
-            "Example:\n"
-            "  qemu-tool fleet-to-env --xml qemu/xml/scale-out.xml \\\n"
-            "    > /tmp/fleet.env\n"
-            "  docker compose --env-file /tmp/fleet.env ..."
+            "Wrapper around 'docker compose' for a stack rendered by "
+            "gen-compose. It finds the stack directory, supplies the "
+            "variables the stack interpolates (the caller's uid and gid, "
+            "the KVM gid, the images directory) through the environment, "
+            "warns when the stack is stale against its fleet XML, and "
+            "passes everything else on the line to docker compose in the "
+            "order typed.\n\n"
+            "A rendered stack has its fleet shape baked in, so from inside "
+            "its directory no flags are needed to inspect or stop it. The "
+            "images directory and the qemu-tool source mount are not baked "
+            "in: a fleet with a non-default <vm-images-dir> needs --xml, "
+            "--images or VM_IMAGES_DIR on a command that starts it. Flags "
+            "of this command are recognised anywhere on the line; '--' "
+            "ends them."
+        ),
+        epilog=_examples(
+            "qemu-tool compose --stack rocm-golden --profile metrics up -d",
+            "qemu-tool compose --stack-dir /var/lib/qemu-tool/stacks/mine ps",
+            "cd /var/lib/qemu-tool/stacks/mine && qemu-tool compose logs --tail 200",
+            "qemu-tool compose --stack rocm-golden down -v",
         ),
     )
     p.add_argument(
-        "--xml", dest="fleet_file", action="append", type=Path, default=None, metavar="FILE",
+        "--stack", choices=_STACKS, default=None, metavar="NAME",
+        help=f"Shipped stack to use: {_STACK_NAMES} (default: {_DEFAULT_STACK}).",
+    )
+    p.add_argument(
+        "--stack-dir", type=Path, default=None, metavar="DIR",
         help=(
-            "Fleet descriptor XML (see qemu/xml/scale-out.xml). "
-            "Repeatable: later files override keys set by earlier ones."
+            "Run a stack rendered by 'gen-compose --output-dir DIR' instead of "
+            "a named one. Required for an overlay fleet: the guest count and "
+            "names are baked into the generated YAML, not read from the "
+            "settings at run time. Mutually exclusive with --stack. Defaults to "
+            "$QEMU_TOOL_STACK, or to the current directory when that is "
+            "itself a rendered stack."
         ),
     )
-    p.set_defaults(func=_fleet_to_env_cmd)
+    p.add_argument(
+        "--xml", action="append", type=Path, default=None, metavar="FILE",
+        help=(
+            f"Fleet XML settings file. {_LAYERS} Default for a named stack: "
+            f"the first that exists of {_SEARCH_PATH}, else the stack's own "
+            "qemu/stacks/<name>.xml. A stack found by its directory reads "
+            "none."
+        ),
+    )
+    p.add_argument(
+        "--images", type=Path, default=None, metavar="DIR",
+        help=(
+            "Directory containing the guest images, passed to docker compose "
+            "as VM_IMAGES_DIR. Default: <vm-images-dir>."
+        ),
+    )
+    p.add_argument(
+        "compose_args", nargs=argparse.REMAINDER, metavar="...",
+        help="Arguments forwarded to docker compose (e.g. up, down, ps, logs).",
+    )
+    p.set_defaults(func=_compose_cmd)
 
 
-def _fleet_to_env_cmd(args: argparse.Namespace) -> None:
-    from .fleet_xml import FleetXml
-    fleet_paths = FleetXml.find(args.fleet_file)
-    cfg = FleetXml.parse_layers(fleet_paths)
-    env = _fleet_to_env(cfg)
-    for k, v in sorted(env.items()):
-        print(f"{k}={v}")
-
-
-def _add_ernic_stats(sub: argparse._SubParsersAction) -> None:
+def _add_down(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
-        "ernic-stats",
-        help="Serve rocm-ernic stats files as Prometheus metrics.",
+        "down",
+        help="Shut guests down cleanly, and tear down their stack.",
         description=(
-            "Parse the stats dumps written by 'rocm-ernic -S PATH' and serve "
-            "them on /metrics in Prometheus text format. Metric and label "
-            "names match rocm-ernic's own prometheus/ernic-exporter, so "
-            "ernic-dashboard.json works against this endpoint unmodified."
+            "Without a target, cleanly powers off every running guest through "
+            "the QEMU guest agent and waits for them to go. With a VM name, "
+            "powers off that one guest. With a stack name, powers off that "
+            "stack's guests then tears the stack down with `docker compose "
+            "down`. With --all, powers off every guest then tears down every "
+            "qemu-tool stack you own.\n\n"
+            "A stack is identified by its compose project name (the STACK "
+            "column in `qemu-tool list`). run-vm execs QEMU, so `docker "
+            "compose down` is a power cut -- the guest agent path here is "
+            "what keeps guest filesystems clean."
         ),
     )
     p.add_argument(
-        "--stats-dir", type=Path, default=Path("/run/ernic-stats"), metavar="DIR",
-        help="Directory of *.stats files. Default: /run/ernic-stats.",
+        "target", nargs="?", default=None, metavar="TARGET",
+        help="A VM name to shut down, or a stack name to shut down and tear "
+             "down. Default: every running VM.",
     )
     p.add_argument(
-        "--port", type=int, default=9840, metavar="PORT",
-        help="Listen port. Default: 9840 (matches the upstream exporter).",
+        "--all", action="store_true",
+        help="Power off all guests then tear down every owned stack.",
     )
     p.add_argument(
-        "--addr", default="0.0.0.0", metavar="ADDR",
-        help="Listen address. Default: 0.0.0.0.",
+        "--all-users", action="store_true",
+        help="With --all: include stacks owned by other users. Needs root.",
     )
-    p.set_defaults(func=_ernic_stats_cmd)
+    p.add_argument(
+        "--yes", action="store_true",
+        help="Skip the teardown confirmation prompt.",
+    )
+    p.add_argument(
+        "--timeout", type=int, default=120, metavar="SECONDS",
+        help="How long to wait for guests to power off (default: %(default)s).",
+    )
+    p.add_argument(
+        "--dry-run", action="store_true",
+        help="Show what would happen without doing it.",
+    )
+    p.set_defaults(func=_down_cmd)
 
 
 def _add_list(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
         "list",
-        help="List QEMU VMs running on this node.",
+        help="List the QEMU guests running on this host.",
         description=(
             "List every qemu-system process on this node, including those "
             "inside containers, and identify which were started by qemu-tool."
@@ -617,10 +1013,11 @@ def _add_list(sub: argparse._SubParsersAction) -> None:
 def _add_inspect(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
         "inspect",
-        help="Show JSON manifest for running VMs.",
+        help="Report what a running guest has: login, devices, BARs.",
         description=(
-            "Emit a JSON manifest for each running VM: SSH access details, "
-            "username, public key, and hardware summary. Always outputs JSON."
+            "Report, for each running VM, how to log in to it (port, "
+            "username, the key it accepts) and what hardware it has, joining "
+            "the host-side command line to what the guest agent answers."
         ),
     )
     p.add_argument(
@@ -632,11 +1029,8 @@ def _add_inspect(sub: argparse._SubParsersAction) -> None:
         help="Filter to a single VM by name. Default: all running VMs.",
     )
     p.add_argument(
-        "--xml", dest="env_file", action="append", type=Path, default=None, metavar="FILE",
-        help=(
-            "Fleet XML settings file. Overrides the search path. "
-            "Repeatable: later files override keys set by earlier ones."
-        ),
+        "--xml", action="append", type=Path, default=None, metavar="FILE",
+        help=_XML_HELP,
     )
     p.add_argument(
         "--json", action="store_true", dest="as_json",
@@ -656,7 +1050,7 @@ def _add_inspect(sub: argparse._SubParsersAction) -> None:
 def _add_ssh(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
         "ssh",
-        help="SSH into a running VM.",
+        help="SSH into a running guest.",
         description=(
             "Open an SSH session to a running VM, resolving the port, "
             "username and key the same way `inspect` reports them -- the "
@@ -664,11 +1058,15 @@ def _add_ssh(sub: argparse._SubParsersAction) -> None:
             "when the guest accepts a key whose private half is on this "
             "host. Host-key checking is off by default because guests "
             "sharing a backing image share a host key and the fleet reuses "
-            "localhost ports. "
+            "localhost ports.\n\n"
             "Everything after the VM name is passed to ssh, so this tool's "
-            "own options go BEFORE it -- `qemu-tool ssh --dry-run vm1`, the "
-            "same order ssh(1) and docker exec take. "
-            "Run a remote command with `qemu-tool ssh vm1 -- uptime`."
+            "own options go BEFORE it, the same order ssh(1) and docker "
+            "exec take."
+        ),
+        epilog=_examples(
+            "qemu-tool ssh rocm-golden-1",
+            "qemu-tool ssh rocm-golden-1 -- ibv_devinfo -l",
+            "qemu-tool ssh --dry-run rocm-golden-1",
         ),
     )
     def _complete_vm_name(**_kw: object) -> list[str]:
@@ -678,8 +1076,8 @@ def _add_ssh(sub: argparse._SubParsersAction) -> None:
             return []
     p.add_argument("vm", metavar="VM", help="Name of the running VM.").completer = _complete_vm_name
     p.add_argument(
-        "--xml", dest="env_file", action="append", type=Path, default=None, metavar="FILE",
-        help="Fleet XML settings file. Repeatable; later files win.",
+        "--xml", action="append", type=Path, default=None, metavar="FILE",
+        help=_XML_HELP,
     )
     p.add_argument(
         "--strict-host-key", action="store_true",
@@ -703,10 +1101,10 @@ def _add_ssh(sub: argparse._SubParsersAction) -> None:
 def _add_qcow(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
         "qcow",
-        help="Inspect and manage VM overlay qcow2 state.",
+        help="List, inspect or reset guest overlay images.",
         description=(
-            "List, inspect or clean VM overlay images and their NVMe scratch disks. "
-            "Images are read from VM_IMAGES_DIR (or --images). "
+            "List, inspect or clean VM overlay images and their NVMe scratch "
+            "disks. Exactly one of --list, --state and --clean is required. "
             "The VM must be stopped before --clean."
         ),
     )
@@ -731,37 +1129,24 @@ def _add_qcow(sub: argparse._SubParsersAction) -> None:
         help="Skip the --clean confirmation prompt.",
     )
     p.add_argument(
-        "--images", type=Path, default=None, metavar="DIR",
-        help="VM images directory (overrides VM_IMAGES_DIR).",
-    )
-    p.add_argument(
         "--nvme", action="store_true",
         help="With --list: show a separate NVMe scratch disk section.",
     )
     p.add_argument(
-        "--xml", dest="env_file", action="append", type=Path, default=None, metavar="FILE",
-        help="Fleet XML settings file. Repeatable; later files win.",
+        "--images", type=Path, default=None, metavar="DIR",
+        help=(
+            "Images directory. Default: <vm-images-dir> of --xml when given; "
+            "otherwise --list scans every known images directory and the "
+            "other modes use the default one."
+        ),
+    )
+    p.add_argument(
+        "--xml", action="append", type=Path, default=None, metavar="FILE",
+        help=(
+            f"Fleet XML settings file naming the images directory. {_LAYERS}"
+        ),
     )
     p.set_defaults(func=_qcow_cmd)
-
-
-def _qcow_cmd(args: argparse.Namespace) -> None:
-    from .config import VMConfig, default_images
-    images: Path | None
-    if args.images:
-        images = args.images
-    elif args.env_file:
-        cfg = VMConfig.from_env(args.env_file)
-        images = cfg.images
-    else:
-        images = None  # let list_overlays scan all known dirs
-
-    if args.list:
-        _qcow.list_overlays(images, show_nvme=getattr(args, "nvme", False))
-    elif args.state:
-        _qcow.state(images or default_images(), args.state)
-    elif args.clean:
-        _qcow.clean(images or default_images(), args.clean, yes=args.yes)
 
 
 def _add_publish_qcow(sub: argparse._SubParsersAction) -> None:
@@ -775,125 +1160,200 @@ def _add_publish_qcow(sub: argparse._SubParsersAction) -> None:
             "--backing-image and quick-start pull. The file given is what is "
             "published; it must not be an overlay."
         ),
+        epilog=_examples(
+            "# Publish what 'gen-vm --bake --xml qemu/stacks/rocm-golden.xml'",
+            "# baked, with the keypair gen-vm generated for that image:",
+            "qemu-tool publish-qcow --xml qemu/stacks/rocm-golden.xml \\",
+            "    --tag 20261116.gabc1234 --dry-run",
+            "",
+            "# An image baked with a key you named: name its private half,",
+            "# which is published too.",
+            "qemu-tool publish-qcow --xml qemu/stacks/rocm-golden.xml \\",
+            "    --tag 20261116.gabc1234 --key ./image-key/id_rsa --dry-run",
+            "",
+            "# With nothing read from a file:",
+            "qemu-tool publish-qcow --image images/rocm-golden-backing.qcow2 \\",
+            "    --ref docker.io/me/my-guest --tag v1 --vm-name rocm-golden \\",
+            "    --key ./image-key/id_rsa",
+        ),
     )
-    p.add_argument("--image", type=Path, required=True, metavar="FILE",
-                   help="The baked qcow2. Must have no backing file.")
-    p.add_argument("--ref", required=True, metavar="REPO",
-                   help="Registry repository, without a tag.")
-    p.add_argument("--tag", action="append", default=[], metavar="TAG",
+
+    g = p.add_argument_group("what to publish")
+    g.add_argument(
+        "--xml", action="append", type=Path, default=None, metavar="FILE",
+        help=(
+            "Fleet XML naming the image (see qemu/stacks/rocm-golden.xml): its "
+            "<publish-*> and <bake-*> elements become the defaults of the "
+            "flags below. Repeatable; later files win. No search path: "
+            "without this flag no settings file is read."
+        ),
+    )
+    g.add_argument("--image", type=Path, default=None, metavar="FILE",
+                   help="The baked qcow2. Must have no backing file. "
+                        "Default with --xml: <vm-images-dir>/<bake-name>-backing.qcow2.")
+    g.add_argument("--ref", default=None, metavar="REPO",
+                   help="Registry repository, without a tag. "
+                        "Default with --xml: <publish-ref>.")
+    g.add_argument("--tag", action="append", default=[], metavar="TAG",
                    help="Tag to push. Repeatable; the referrer attaches to the first.")
-    p.add_argument("--key", type=Path, required=True, metavar="FILE",
+    g.add_argument("--key", type=Path, default=None, metavar="FILE",
                    help="Private key the guest authorises; FILE.pub must sit "
-                        "beside it. It is PUBLISHED, so generate one for the "
-                        "image and never pass a personal key.")
-    p.add_argument("--vm-name", required=True,
-                   help="Names the qcow2 inside the artifact.")
-    p.add_argument("--flavour", default="rocm-golden")
-    p.add_argument("--username", default="ubuntu")
-    p.add_argument("--password", default="password",
-                   help="Recorded in vm-info.json, never in an annotation.")
-    p.add_argument("--release", default="resolute")
-    p.add_argument("--architecture", default="amd64")
-    p.add_argument("--guest-stamp", type=Path, default=None, metavar="FILE",
+                        "beside it. It is PUBLISHED, so never pass a personal "
+                        "key. Default: the keypair gen-vm generated for the "
+                        "image, and only that; an image baked with a key "
+                        "somebody named needs this flag. Never taken from a "
+                        "settings file or from ~/.ssh. Refused when it is "
+                        "not the key gen-vm baked into the image, or not "
+                        "FILE.pub's other half.")
+
+    g = p.add_argument_group("recorded in vm-info.json")
+    g.add_argument("--vm-name", default=None, metavar="NAME",
+                   help="Names the qcow2 inside the artifact. "
+                        "Default with --xml: <bake-name>.")
+    g.add_argument("--flavour", default=None, metavar="NAME",
+                   help="What kind of guest this is. "
+                        "Default: <publish-flavour>, else rocm-golden.")
+    g.add_argument("--username", default=None, metavar="NAME",
+                   help="The guest login. Default: <bake-username>, else ubuntu.")
+    g.add_argument("--password", default=None, metavar="PASSWORD",
+                   help="Recorded in vm-info.json, never in an annotation. "
+                        "Default: <bake-password>, else password.")
+    g.add_argument("--release", default=None, metavar="NAME",
+                   help="Ubuntu codename of the guest. "
+                        "Default: <bake-release>, else resolute.")
+    g.add_argument("--architecture", default="amd64", metavar="ARCH",
+                   help="Guest architecture (default: %(default)s).")
+    g.add_argument("--guest-stamp", type=Path, default=None, metavar="FILE",
                    help="A copy of the guest's /etc/rocm-golden-guest.json; "
                         "vm-info.json takes its kernel and pins from it.")
-    p.add_argument("--playbook", default="", metavar="NAME",
-                   help="The playbook the guest was baked with, for the record.")
-    p.add_argument("--commit", default="", metavar="SHA",
+    g.add_argument("--playbook", default=None, metavar="NAME",
+                   help="The playbook the guest was baked with, for the "
+                        "record. Default: <bake-playbook>.")
+    g.add_argument("--commit", default="", metavar="SHA",
                    help="The qemu-minimal commit the guest was baked from.")
-    p.add_argument("--source", default="https://github.com/sbates130272/qemu-minimal",
-                   metavar="URL")
-    p.add_argument("--work-dir", type=Path, default=None, metavar="DIR",
+    g.add_argument("--source", default="https://github.com/sbates130272/qemu-minimal",
+                   metavar="URL",
+                   help="Source repository, for the image.source annotation "
+                        "(default: %(default)s).")
+
+    g = p.add_argument_group("how it runs")
+    g.add_argument("--work-dir", type=Path, default=None, metavar="DIR",
                    help="Where the copy is made (default: beside the image). "
                         "Needs room for the whole disk.")
-    p.add_argument("--digest-file", type=Path, default=None, metavar="FILE",
+    g.add_argument("--digest-file", type=Path, default=None, metavar="FILE",
                    help="Write the pushed reference, with its digest, here.")
-    p.add_argument("--dry-run", action="store_true",
+    g.add_argument("--dry-run", action="store_true",
                    help="Convert and compress, print what would be pushed, push nothing.")
-    p.add_argument("--keep", type=Path, default=None, metavar="DIR",
+    g.add_argument("--keep", type=Path, default=None, metavar="DIR",
                    help="With --dry-run: keep the compressed image and vm-info.json in DIR.")
     p.set_defaults(func=_publish_qcow_cmd)
 
 
-def _publish_qcow_cmd(args: argparse.Namespace) -> None:
-    from .publish_qcow import run as publish_qcow_run
-    publish_qcow_run(args)
-
-
-def _add_check(sub: argparse._SubParsersAction) -> None:
+def _add_publish_qcow_prune(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
-        "check",
-        help="Read-only preflight: check this host has everything the stacks need.",
+        "publish-qcow-prune",
+        # --y must not delete.
+        allow_abbrev=False,
+        help="Delete old dated tags of the published image on Docker Hub.",
         description=(
-            "Ask every host question the stacks depend on, before anything "
-            "has been pulled or written: the tools on PATH, the Docker "
-            "daemon and your access to it, KVM, the uid the containers will "
-            "run as, which settings file is in force, and whether the images "
-            "directory has room. Read-only and needs no sudo. Exits non-zero "
-            "if anything would stop a stack starting; warnings do not fail "
-            "it. This is the same code quick-start runs in its preflight."
+            "Apply the retention policy to the repository publish-qcow "
+            "pushes to. Only tags of the dated form <YYYYMMDD>.g<sha7> are "
+            "ever deleted: the newest --keep of them stay, as does any "
+            "pushed within --days days. 'latest', every 'qm.<sha7>' and "
+            "every other tag are always kept. Tag names are all it "
+            "removes: the image a deleted tag named, and the vm-info.json "
+            "and keypair attached to it, stay in the registry. Without "
+            "--yes the plan is printed and nothing is deleted, and --yes "
+            "is taken only spelled in full. Docker Hub only. Deleting "
+            f"reads {_HUB_USER} and {_HUB_TOKEN} from the environment; "
+            "they are credentials, not settings, and are never taken on "
+            "the command line."
+        ),
+        epilog=_examples(
+            "# What would go from the default fleet's <publish-ref>:",
+            "qemu-tool publish-qcow-prune --xml qemu/stacks/rocm-golden.xml",
+            "",
+            "# Delete it, as the publish workflow does after a push:",
+            "qemu-tool publish-qcow-prune --xml qemu/stacks/rocm-golden.xml \\",
+            "    --yes",
+            "",
+            "# Another repository, and another policy:",
+            "qemu-tool publish-qcow-prune --ref docker.io/me/my-guest \\",
+            "    --keep 5 --days 14",
         ),
     )
-    p.add_argument(
-        "--xml", dest="env_file", type=Path, action="append", metavar="FILE",
+    g = p.add_argument_group("which repository")
+    g.add_argument(
+        "--xml", action="append", type=Path, default=None, metavar="FILE",
         help=(
-            "Fleet XML settings file to check against, repeatable, later files winning "
-            "key by key. Without it the usual search path is used, and which "
-            "file that found is itself part of the report."
+            "Fleet XML whose <publish-ref> names the repository. "
+            "Repeatable; later files win. No search path: without this "
+            "flag no settings file is read."
         ),
     )
-    p.set_defaults(func=_check_cmd)
-
-
-def _add_down(sub: argparse._SubParsersAction) -> None:
-    p = sub.add_parser(
-        "down",
-        help="Gracefully shut down guests and/or tear down stacks.",
-        description=(
-            "Without a target, cleanly powers off every running guest through "
-            "the QEMU guest agent and waits for them to go. With a VM name, "
-            "powers off that one guest. With a stack name, powers off that "
-            "stack's guests then tears the stack down with `docker compose "
-            "down`. With --all, powers off every guest then tears down every "
-            "qemu-tool stack you own.\n\n"
-            "A stack is identified by its compose project name (the STACK "
-            "column in `qemu-tool list`). run-vm execs QEMU, so `docker "
-            "compose down` is a power cut -- the guest agent path here is "
-            "what keeps guest filesystems clean."
+    g.add_argument(
+        "--ref", default=None, metavar="REPO",
+        help=(
+            "The repository, docker.io/NAMESPACE/NAME, without a tag. "
+            "Default with --xml: <publish-ref>. One on any other registry "
+            "is refused."
         ),
     )
-    p.add_argument(
-        "target", nargs="?", default=None, metavar="TARGET",
-        help="A VM name to shut down, or a stack name to shut down and tear "
-             "down. Default: every running VM.",
+    g = p.add_argument_group("policy")
+    g.add_argument(
+        "--keep", type=int, default=10, metavar="N",
+        help="Keep the N newest dated tags (default: %(default)s).",
     )
-    p.add_argument(
-        "--all", action="store_true",
-        help="Power off all guests then tear down every owned stack.",
+    g.add_argument(
+        "--days", type=int, default=30, metavar="N",
+        help=(
+            "Keep any dated tag pushed within N days as well "
+            "(default: %(default)s)."
+        ),
     )
-    p.add_argument(
-        "--all-users", action="store_true",
-        help="With --all: include stacks owned by other users. Needs root.",
-    )
-    p.add_argument(
+    g = p.add_argument_group("how it runs")
+    g.add_argument(
         "--yes", action="store_true",
-        help="Skip the teardown confirmation prompt.",
+        help="Delete. Without it this is a dry run that prints the plan.",
     )
-    p.add_argument(
-        "--timeout", type=int, default=120, metavar="SECONDS",
-        help="How long to wait for guests to power off. Default: 120.",
-    )
-    p.add_argument(
+    g.add_argument(
         "--dry-run", action="store_true",
-        help="Show what would happen without doing it.",
+        help="Print the plan and delete nothing. The default; beats --yes.",
     )
-    p.set_defaults(func=_down_cmd)
+    p.set_defaults(func=_publish_qcow_prune_cmd)
+
+
+def _add_ernic_stats(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser(
+        "ernic-stats",
+        help="Serve rocm-ernic stats files as Prometheus metrics.",
+        description=(
+            "Parse the stats dumps written by 'rocm-ernic -S PATH' and serve "
+            "them on /metrics in Prometheus text format. Metric and label "
+            "names match rocm-ernic's own prometheus/ernic-exporter, so "
+            "ernic-dashboard.json works against this endpoint unmodified. "
+            "The generated stacks run this; it is rarely typed by hand."
+        ),
+    )
+    p.add_argument(
+        "--stats-dir", type=Path, default=Path("/run/ernic-stats"), metavar="DIR",
+        help="Directory of *.stats files (default: %(default)s).",
+    )
+    p.add_argument(
+        "--port", type=int, default=9840, metavar="PORT",
+        help="Listen port (default: %(default)s, the upstream exporter's).",
+    )
+    p.add_argument(
+        "--addr", default="0.0.0.0", metavar="ADDR",
+        help="Listen address (default: %(default)s).",
+    )
+    p.set_defaults(func=_ernic_stats_cmd)
 
 
 def _add_man(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
         "man",
-        help="Show this tool's manual page.",
+        help="Show the manual page.",
         description=(
             "Open the bundled manual page with man(1). Only the Debian "
             "package installs it where man finds it on its own: the wheel "
@@ -909,55 +1369,47 @@ def _add_man(sub: argparse._SubParsersAction) -> None:
     p.set_defaults(func=_man_cmd)
 
 
-def _add_gen_vm(
-    sub: argparse._SubParsersAction, shared: argparse.ArgumentParser
-) -> None:
-    p = sub.add_parser(
-        "gen-vm",
-        parents=[shared],
-        help="Generate a new QEMU VM image.",
-        description="Create a Ubuntu VM image using cloud-init.",
-    )
-    p.add_argument("--size", type=int, default=_UNSET, metavar="GB")
-    p.add_argument("--release", default=_UNSET,
-                   metavar="NAME",
-                   help="Ubuntu codename (resolute) or version (26.04).")
-    p.add_argument("--ssh-key-file", type=Path, default=_UNSET, metavar="FILE")
-    p.add_argument("--username", default=_UNSET)
-    p.add_argument("--user-id", type=int, default=_UNSET, metavar="UID")
-    p.add_argument("--password", default=_UNSET)
-    p.add_argument("--packages", default=_UNSET,
-                   metavar="FILE",
-                   help="Package manifest file, or 'none'.")
-    p.add_argument("--force", action="store_true", default=_UNSET)
-    p.add_argument("--compact", action=argparse.BooleanOptionalAction, default=_UNSET,
-                   help="Recompress the backing image after the bake (default: on).")
-    p.add_argument("--no-backing", action="store_true", default=_UNSET)
-    p.add_argument("--restore-image", action="store_true", default=_UNSET)
-    p.add_argument("--backing-file", type=Path, default=_UNSET, metavar="FILE")
-    p.add_argument("--backing-image", default=_UNSET, metavar="OCI_REF",
-                   help="Pull a published backing qcow2 with oras, then overlay "
-                        "on it. Same job as the cloud-image download, different "
-                        "source; no cloud-init and no bake.")
-    p.add_argument("--ansible-playbook", type=Path, default=_UNSET, metavar="FILE",
-                   help="Path to an Ansible playbook to run against the VM image after cloud-init.")
-    p.add_argument("--ca-cert", type=Path, default=_UNSET, metavar="FILE",
-                   help="CA certificate to inject into the guest trust store.")
-    p.add_argument("--ansible-only", action="store_true", default=_UNSET,
-                   help="Skip cloud-init; re-run Ansible against an existing backing image.")
-    p.add_argument("--mgmt-tap", action="store_true", default=_UNSET,
-                   help="Use tap+bridge for management NIC instead of SLIRP.")
-    p.set_defaults(func=_gen_vm_cmd)
-
-
 # ---------------------------------------------------------------------------
 # Subcommand handlers
 # ---------------------------------------------------------------------------
+
+def _qcow_cmd(args: argparse.Namespace) -> None:
+    from .config import default_images
+    images: Path | None
+    if args.images:
+        images = args.images
+    elif args.xml:
+        images = settings.load(args.xml).get("images")
+    else:
+        images = None  # let list_overlays scan all known dirs
+
+    if args.list:
+        _qcow.list_overlays(images, show_nvme=getattr(args, "nvme", False))
+    elif args.state:
+        _qcow.state(images or default_images(), args.state)
+    elif args.clean:
+        _qcow.clean(images or default_images(), args.clean, yes=args.yes)
+
+
+def _publish_qcow_cmd(args: argparse.Namespace) -> None:
+    from .publish_qcow import run as publish_qcow_run
+    publish_qcow_run(args)
+
+
+def _publish_qcow_prune_cmd(args: argparse.Namespace) -> None:
+    from .publish_prune import run as publish_prune_run
+    publish_prune_run(args)
+
 
 def _run_vm_cmd(args: argparse.Namespace) -> None:
     cfg = _build_config(args, subcommand="run-vm")
 
     if args.convert_to_libvirt is not None:
+        if cfg.ssh_port_auto:
+            sys.exit(
+                "Error: --ssh-port auto picks a port as QEMU starts, so a "
+                "libvirt domain cannot carry it; name a port."
+            )
         caps = probe_caps(cfg)
         xml = LibvirtXml.emit(cfg, caps)
         output = args.convert_to_libvirt
@@ -986,7 +1438,7 @@ def _run_vm_cmd(args: argparse.Namespace) -> None:
 
 
 def _check_cmd(args: argparse.Namespace) -> None:
-    check_system_run(args.env_file)
+    check_system_run(args.xml)
 
 
 def _down_cmd(args: argparse.Namespace) -> None:
@@ -1021,7 +1473,7 @@ def _down_cmd(args: argparse.Namespace) -> None:
 def _quick_start_cmd(args: argparse.Namespace) -> None:
     quick_start_run(
         args.verb,
-        args.fleet_file,
+        args.xml,
         args.stack_dir,
         args.key_dir,
         args.report_dir,
@@ -1040,14 +1492,13 @@ def _quick_start_cmd(args: argparse.Namespace) -> None:
 
 
 def _compose_cmd(args: argparse.Namespace) -> None:
-    compose_run(args.vm_name, args.images, args.compose_args,
-                stack=args.stack, vm2_name=args.vm2_name,
-                env_file=args.env_file, stack_dir=args.stack_dir)
+    compose_run(args.images, args.compose_args, stack=args.stack,
+                xml=args.xml, stack_dir=args.stack_dir)
 
 
 def _inspect_cmd(args: argparse.Namespace) -> None:
     inspect_run(
-        _one_vm_name(args), args.env_file,
+        _one_vm_name(args), args.xml,
         as_json=args.as_json,
         all_devices=args.all_devices,
     )
@@ -1080,15 +1531,11 @@ def _ssh_cmd(args: argparse.Namespace) -> None:
     if extra and extra[0] == "--":
         extra = extra[1:]
     inspect_ssh_run(
-        args.vm, args.env_file,
+        args.vm, args.xml,
         strict_host_key=args.strict_host_key,
         extra=extra,
         dry_run=args.dry_run,
     )
-
-
-def _shutdown_cmd(args: argparse.Namespace) -> None:
-    shutdown_run(args.vm, timeout=args.timeout, dry_run=args.dry_run)
 
 
 def _man_cmd(args: argparse.Namespace) -> None:
@@ -1136,21 +1583,21 @@ def _list_cmd(args: argparse.Namespace) -> None:
 
 def _gen_compose_cmd(args: argparse.Namespace) -> None:
     output_dir = args.output_dir
+    stack = args.stack or gen_compose_stack_for(args.xml)
     if output_dir is None:
         try:
-            output_dir = _compose_dir(args.stack)
+            output_dir = _compose_dir(stack)
         except FileNotFoundError:
             # First generation: the stack directory does not exist yet.
-            output_dir = _SOURCE_COMPOSE_ROOT / args.stack
+            output_dir = _SOURCE_COMPOSE_ROOT / stack
         if output_dir.is_relative_to(_INSTALLED_COMPOSE_ROOT):
             sys.exit(
                 f"Error: {output_dir} is owned by the qemu-tool package.\n"
                 "Pass --output-dir to generate somewhere writable, or name "
                 "that path explicitly if you really mean to modify it."
             )
-    gen_compose_run(None, output_dir, check=args.check,
-                    dry_run=args.dry_run, stack=args.stack,
-                    fleet_file=args.fleet_file)
+    gen_compose_run(args.xml, output_dir, check=args.check,
+                    dry_run=args.dry_run, stack=stack)
 
 
 def _ernic_stats_cmd(args: argparse.Namespace) -> None:
@@ -1158,8 +1605,53 @@ def _ernic_stats_cmd(args: argparse.Namespace) -> None:
 
 
 def _gen_vm_cmd(args: argparse.Namespace) -> None:
+    if args.bake:
+        for flag in ("backing_image", "backing_file", "restore_image"):
+            if getattr(args, flag) is not _UNSET:
+                sys.exit(
+                    f"Error: --bake and --{flag.replace('_', '-')} cannot "
+                    "both be set: --bake builds the image from the cloud image."
+                )
+    elif args.cache_dir is not _UNSET:
+        # <bake-cache-dir> is read by --bake only, and the flag follows it.
+        sys.exit(
+            "Error: --cache-dir needs --bake: the cache belongs to the "
+            "bake the fleet XML's <bake-*> elements describe."
+        )
     cfg = _build_config(args, subcommand="gen-vm")
+    if args.bake:
+        _check_bake_memory(cfg)
+    if cfg.cache_replace and cfg.cache_dir is None:
+        sys.exit(
+            "Error: --cache-replace needs a cache to replace: name one "
+            "with --cache-dir or <bake-cache-dir>."
+        )
+    if cfg.cache_dir is not None and cfg.ansible_playbook is None:
+        sys.exit(
+            "Error: a cache directory is handed to the bake's playbook, "
+            "and this bake has none: set <bake-playbook> or "
+            "--ansible-playbook."
+        )
     gen_vm_run(cfg)
+
+
+# A bake's module builds run one compiler per vCPU and each takes a few
+# hundred MiB. Short of this the guest's OOM killer ends the build a quarter
+# of an hour in, with an error that names dkms, not memory.
+_BAKE_MIB_PER_VCPU = 1024
+
+
+def _check_bake_memory(cfg: VMConfig) -> None:
+    need = cfg.vcpus * _BAKE_MIB_PER_VCPU
+    if cfg.vmem >= need:
+        return
+    sys.exit(
+        f"Error: --bake with {cfg.vcpus} vCPUs and {cfg.vmem} MiB of memory: "
+        f"the builds run one compiler per vCPU and need about "
+        f"{_BAKE_MIB_PER_VCPU} MiB each.\n"
+        f"       Give it at least {need} MiB (--vmem or <bake-vmem>), or "
+        f"fewer vCPUs (--vcpus or <bake-vcpus>)."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1175,7 +1667,8 @@ def _build_config(args: argparse.Namespace, subcommand: str) -> VMConfig:
     cli_overrides = _extract_cli_overrides(args, subcommand)
     # Lowest to highest: dataclass defaults, --domain XML, the fleet XML
     # settings, CLI flags.
-    cfg = _merge(xml_cfg, load_env_file(args.env_file))
+    load = settings.load_bake if getattr(args, "bake", False) else settings.load
+    cfg = _merge(xml_cfg, load(args.xml))
     cfg = _merge(cfg, cli_overrides)
     if "," in cfg.vm_name:
         # A comma terminates a qemu option value, so it corrupts -name, -uuid,
@@ -1211,7 +1704,11 @@ def _extract_cli_overrides(
     _take("vcpus", "vcpus")
     _take("vmem", "vmem")
     _take("images", "images")
-    _take("ssh_port", "ssh_port")
+    port = ns.get("ssh_port", _UNSET)
+    if port is not _UNSET:
+        # A number given here also turns off an auto from <bake-ssh-port>.
+        overrides["ssh_port_auto"] = port == "auto"
+        overrides["ssh_port"] = DEFAULT_SSH_PORT if port == "auto" else port
     _take("mac", "mac")
     _take("kvm", "kvm")
     _take("qemu_path", "qemu_path")
@@ -1273,16 +1770,18 @@ def _extract_cli_overrides(
         _take("backing_file", "backing_file")
         _take("backing_image", "backing_image")
         # The two are mutually exclusive, but only within one layer. A fleet's
-        # env file names VM_BACKING_IMAGE for VM 1, and every other VM is then
+        # settings file names <backing-ref> for VM 1, and every other VM is then
         # created with --backing-file against the image that fetched -- so an
         # explicit flag has to clear its partner rather than collide with it,
-        # the same way CLI outranks the env file everywhere else.
+        # the same way CLI outranks the settings file everywhere else.
         if ns.get("backing_file", _UNSET) is not _UNSET:
             overrides["backing_image"] = None
         elif ns.get("backing_image", _UNSET) is not _UNSET:
             overrides["backing_file"] = None
         _take("ansible_playbook", "ansible_playbook")
         _take("ca_cert", "ca_cert_file")
+        _take("cache_dir", "cache_dir")
+        _take("cache_replace", "cache_replace")
         _take("ansible_only", "ansible_only")
         _take("mgmt_tap", "mgmt_tap")
 
@@ -1296,7 +1795,7 @@ def _extract_cli_overrides(
 def _merge(base: VMConfig, overrides: dict[str, Any]) -> VMConfig:
     """Return a new VMConfig with override values applied on top of base.
 
-    Fleet-only keys (VM_COUNT, VM_NAME_PREFIX, …) present in an XML
+    Fleet-only elements (<vm-count>, <vm-name-prefix>, …) present in an XML
     descriptor are silently skipped — they have no VMConfig field.
     """
     import dataclasses

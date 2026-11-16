@@ -18,14 +18,16 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from contextlib import ExitStack
 from pathlib import Path
 
-from .vm_artifact import VM_INFO_ARTIFACT_TYPE
+from .vm_artifact import VM_INFO_ARTIFACT_TYPE, VM_PUB_NAME
 from .caps import qemu_binary
 from .config import VMConfig
 from .identity import identity_args
+from .ports import AUTO_SSH_PORT_ATTEMPTS, ssh_hostfwd_refused
 from .run_vm import (
     DISCARD_OPTS,
     _effective_mac,
@@ -34,6 +36,7 @@ from .run_vm import (
     _mgmt_tap_name,
     _netdev_args,
     _teardown_mgmt_bridge,
+    resolve_ssh_port,
 )
 
 # Supported Ubuntu release codenames. Other codenames or XX.YY version
@@ -68,6 +71,7 @@ def run(cfg: VMConfig) -> None:
         backing = images / f"{cfg.vm_name}-backing.qcow2"
         if not backing.exists():
             sys.exit(f"Error: --ansible-only requires an existing backing image at {backing}")
+        generated = _inherit_key(cfg, images / f"{cfg.vm_name}.json")
         _run_ansible(cfg, images, backing)
         _compact_backing(cfg, backing)
         overlay = images / f"{cfg.vm_name}.qcow2"
@@ -75,13 +79,15 @@ def run(cfg: VMConfig) -> None:
             backing.rename(overlay)
         else:
             _create_overlay(overlay, backing)
-        _write_vm_info(cfg, images)
+        _write_vm_info(cfg, images, generated)
         return
 
     if cfg.backing_image is not None:
         backing = _fetch_backing_image(cfg, images)
         _create_overlay(images / f"{cfg.vm_name}.qcow2", backing)
-        _fetch_backing_keypair(cfg, images)
+        pulled = _fetch_backing_keypair(cfg, images)
+        if cfg.ssh_key_file is None:
+            cfg.ssh_key_file = pulled
         _write_vm_info(cfg, images)
         return
 
@@ -90,13 +96,23 @@ def run(cfg: VMConfig) -> None:
             images / f"{cfg.vm_name}.qcow2",
             cfg.backing_file,
         )
+        for sidecar in image_sidecars(Path(cfg.backing_file)):
+            _inherit_key(cfg, sidecar)
         _write_vm_info(cfg, images)
         return
 
+    # Before the download: a missing manifest should not cost a cloud image.
+    _check_packages_exist(cfg)
     cloud_img_file, cloud_img_url = _resolve_cloud_image(cfg)
     _download_if_needed(cfg, images, cloud_img_file, cloud_img_url)
 
     backing = images / f"{cfg.vm_name}-backing.qcow2"
+    # A marker left by an earlier pull under this name would label the bake
+    # as a pulled image, which publish-qcow refuses.
+    backing.with_suffix(".qcow2.image-ref").unlink(missing_ok=True)
+    # Nor may the record of an earlier bake outlive the image it described:
+    # publish-qcow would take a key from it that this image does not accept.
+    (images / f"{cfg.vm_name}.json").unlink(missing_ok=True)
     (images / cloud_img_file).rename(backing) if False else None
     subprocess.run(
         ["cp", str(images / cloud_img_file), str(backing)], check=True
@@ -105,9 +121,7 @@ def run(cfg: VMConfig) -> None:
         ["qemu-img", "resize", str(backing), f"{cfg.size}G"], check=True
     )
 
-    ssh_key = Path(cfg.ssh_key_file).expanduser()
-    if not ssh_key.exists():
-        sys.exit(f"Error: SSH key file {ssh_key} does not exist!")
+    ssh_key, generated = image_key(cfg, images)
 
     packages = _load_packages(cfg)
 
@@ -131,18 +145,111 @@ def run(cfg: VMConfig) -> None:
         backing.rename(overlay)
     else:
         _create_overlay(overlay, backing)
-    _write_vm_info(cfg, images)
+    _write_vm_info(cfg, images, generated)
+
+
+# ---------------------------------------------------------------------------
+# The image's SSH key
+# ---------------------------------------------------------------------------
+
+def generated_key_path(images: Path, vm_name: str) -> Path:
+    """Private half of the keypair gen-vm generates for *vm_name*'s image.
+
+    <images>/keys/ is where a pulled image's keypair goes too, and where
+    inspect looks for a guest's key.
+    """
+    return images / "keys" / f"{vm_name}_id_rsa"
+
+
+def image_key(cfg: VMConfig, images: Path) -> tuple[Path, bool]:
+    """(public key a bake authorises, whether gen-vm generated it).
+
+    A key somebody named is used as it is. Otherwise a keypair is generated
+    for this image, replacing the one an earlier bake under the same name
+    left: that bake's image has just been overwritten, so its key opens
+    nothing any more. A named key removes that earlier pair for the same
+    reason. cfg.ssh_key_file is set either way, which is what the Ansible
+    run and the sidecar read.
+    """
+    # Resolved, so that the path the sidecar records means the same thing
+    # from whatever directory publish-qcow is later run in.
+    private = generated_key_path(images.resolve(), cfg.vm_name)
+    made = (private, private.with_name(private.name + ".pub"))
+    if cfg.ssh_key_file is not None:
+        public = Path(cfg.ssh_key_file).expanduser()
+        if not public.exists():
+            sys.exit(f"Error: SSH key file {public} does not exist!")
+        if public.resolve() != made[1]:
+            for stale in made:
+                stale.unlink(missing_ok=True)
+        cfg.ssh_key_file = public
+        return public, False
+
+    public = made[1]
+    private.parent.mkdir(parents=True, exist_ok=True)
+    for stale in made:
+        stale.unlink(missing_ok=True)
+    try:
+        subprocess.run(
+            ["ssh-keygen", "-q", "-t", "rsa", "-N", "",
+             "-C", f"qemu-tool {cfg.vm_name}", "-f", str(private)],
+            check=True, stdin=subprocess.DEVNULL,
+        )
+    except FileNotFoundError:
+        sys.exit("Error: gen-vm needs 'ssh-keygen' to generate the image's "
+                 "key; install it, or name a key with --ssh-key-file.")
+    private.chmod(0o600)
+    cfg.ssh_key_file = public
+    print(f"Generated an SSH key for this image: {private} "
+          f"('qemu-tool ssh {cfg.vm_name}' uses it)")
+    return public, True
+
+
+def image_sidecars(image: Path) -> list[Path]:
+    """Where gen-vm would have recorded the key of the qcow2 *image*."""
+    stem = image.name.removesuffix(".qcow2")
+    return [image.with_name(f"{name}.json")
+            for name in dict.fromkeys((stem.removesuffix("-backing"), stem))]
+
+
+def _fingerprint(public: Path) -> str | None:
+    """SHA256 fingerprint of *public*; None where it cannot be had."""
+    try:
+        out = subprocess.run(["ssh-keygen", "-lf", str(public)],
+                             capture_output=True, text=True)
+    except OSError:
+        return None
+    fields = out.stdout.split()
+    return fields[1] if out.returncode == 0 and len(fields) > 1 else None
+
+
+def _inherit_key(cfg: VMConfig, sidecar: Path) -> bool:
+    """Take the key *sidecar* records, unless one was named; True if generated.
+
+    For a guest that bakes nothing and so accepts whatever its image does.
+    """
+    if cfg.ssh_key_file is not None:
+        return False
+    try:
+        info = json.loads(sidecar.read_text())
+        recorded = info.get("ssh_key_file")
+    except (OSError, ValueError, AttributeError):
+        return False
+    if not recorded:
+        return False
+    cfg.ssh_key_file = Path(recorded)
+    return info.get("ssh_key_generated") is True
 
 
 # ---------------------------------------------------------------------------
 # VM info sidecar
 # ---------------------------------------------------------------------------
 
-def _write_vm_info(cfg: VMConfig, images: Path) -> None:
+def _write_vm_info(cfg: VMConfig, images: Path, generated: bool = False) -> None:
     """Write <vm-name>.json alongside the qcow2 for inspect to read.
 
     Records the username and SSH public key path *this gen-vm run was
-    configured with*, so inspect does not need the env file that was active
+    configured with*, so inspect does not need the settings file that was active
     here. That is not the same as what the image accepts: the restore and
     backing-file paths above write this file without creating any image
     content, and a guest booted from an overlay made by some earlier run, or
@@ -151,9 +258,18 @@ def _write_vm_info(cfg: VMConfig, images: Path) -> None:
     authoritative over this file -- printing this as fact once sent a user into
     three password prompts on a fleet guest that only takes the fleet key.
     """
+    key = (Path(cfg.ssh_key_file).expanduser()
+           if cfg.ssh_key_file is not None else None)
     info = {
         "username": cfg.username,
-        "ssh_key_file": str(Path(cfg.ssh_key_file).expanduser()),
+        "ssh_key_file": str(key) if key is not None else None,
+        # The key itself, not only where it was: publish-qcow refuses a
+        # pair that has been replaced at that path since.
+        "ssh_key_fingerprint": _fingerprint(key) if key is not None else None,
+        # True only on the image this run baked with a key it made itself:
+        # it is what lets publish-qcow publish the key without being told
+        # which. An overlay records false, whatever its backing image says.
+        "ssh_key_generated": generated,
     }
     info_path = images / f"{cfg.vm_name}.json"
     info_path.write_text(json.dumps(info, indent=2) + "\n")
@@ -243,8 +359,10 @@ def _fetch_backing_image(cfg: VMConfig, images: Path) -> Path:
 _VM_INFO_TYPE = VM_INFO_ARTIFACT_TYPE
 
 
-def _fetch_backing_keypair(cfg: VMConfig, images: Path) -> None:
+def _fetch_backing_keypair(cfg: VMConfig, images: Path) -> Path | None:
     """Pull the guest keypair shipped as an ORAS referrer beside the qcow2.
+
+    Returns the public key, or None when there is no keypair to be had.
 
     The keypair is placed in <images>/keys/ so inspect._local_key_candidates
     finds it via the glob of img.parent/keys/ and qemu-tool ssh can connect
@@ -259,7 +377,7 @@ def _fetch_backing_keypair(cfg: VMConfig, images: Path) -> None:
         cached = sorted(keys_dir.glob("*.pub"))
         if cached:
             print(f"Guest keypair already at {keys_dir}")
-            return
+            return _pulled_public_key(keys_dir)
     keys_dir.mkdir(parents=True, exist_ok=True)
 
     if not _which("oras"):
@@ -267,7 +385,7 @@ def _fetch_backing_keypair(cfg: VMConfig, images: Path) -> None:
             "Note: 'oras' not on PATH — cannot fetch the guest keypair. "
             "qemu-tool ssh will prompt for a password."
         )
-        return
+        return None
 
     discovered = subprocess.run(
         ["oras", "discover", cfg.backing_image, "--format", "json"],
@@ -278,7 +396,7 @@ def _fetch_backing_keypair(cfg: VMConfig, images: Path) -> None:
             f"Note: oras discover failed on {cfg.backing_image}; "
             "qemu-tool ssh will prompt for a password."
         )
-        return
+        return None
 
     parsed = json.loads(discovered.stdout)
     referrers = parsed.get("referrers") or parsed.get("manifests", [])
@@ -289,7 +407,7 @@ def _fetch_backing_keypair(cfg: VMConfig, images: Path) -> None:
             f"Note: no {_VM_INFO_TYPE} referrer found on {cfg.backing_image}; "
             "qemu-tool ssh will prompt for a password."
         )
-        return
+        return None
 
     with tempfile.TemporaryDirectory(dir=images) as tmp:
         subprocess.run(["oras", "pull", hits[0], "-o", tmp], check=True)
@@ -301,7 +419,7 @@ def _fetch_backing_keypair(cfg: VMConfig, images: Path) -> None:
         if private_src is None:
             print("Note: keypair referrer had no private key file; "
                   "qemu-tool ssh will prompt for a password.")
-            return
+            return None
 
         stem = private_src.stem or private_src.name
         private = keys_dir / stem
@@ -321,6 +439,12 @@ def _fetch_backing_keypair(cfg: VMConfig, images: Path) -> None:
 
     ref_file.write_text(cfg.backing_image + "\n")
     print(f"Guest keypair ready: {keys_dir}")
+    return pub if pub.is_file() else None
+
+
+def _pulled_public_key(keys_dir: Path) -> Path | None:
+    pub = keys_dir / VM_PUB_NAME
+    return pub if pub.is_file() else None
 
 
 def _create_overlay(overlay: Path, backing: Path) -> None:
@@ -539,13 +663,31 @@ def _check_cloud_config(path: Path) -> None:
         sys.exit("Error: the generated cloud-config is not a YAML mapping.")
 
 
+def _missing(what: str, path: Path, sources: str) -> str:
+    """The error for a file a flag or a fleet element named that is not there."""
+    message = f"Error: {what} {path} does not exist!"
+    if not path.is_absolute():
+        message += (
+            f"\n       It is relative, and {sources} are resolved against "
+            f"the current directory ({Path.cwd()})."
+        )
+    return message
+
+
+def _check_packages_exist(cfg: VMConfig) -> None:
+    if cfg.packages is None or cfg.packages == "none":
+        return
+    if not Path(cfg.packages).exists():
+        sys.exit(_missing("package manifest", Path(cfg.packages),
+                          "--packages and <bake-packages>"))
+
+
 def _load_packages(cfg: VMConfig) -> str:
+    _check_packages_exist(cfg)
     if cfg.packages is None or cfg.packages == "none":
         pkgs = ""
-    elif Path(cfg.packages).exists():
-        pkgs = _as_yaml_list(Path(cfg.packages).read_text())
     else:
-        sys.exit(f"Error: package manifest {cfg.packages} does not exist!")
+        pkgs = _as_yaml_list(Path(cfg.packages).read_text())
 
     if not re.search(r"^\s*-\s*qemu-guest-agent\s*$", pkgs, re.MULTILINE):
         if pkgs:
@@ -806,10 +948,12 @@ def _prepare_ansible(cfg: VMConfig) -> None:
         return
     playbook = Path(cfg.ansible_playbook)
     if not playbook.exists():
-        sys.exit(f"Error: ansible playbook {playbook} does not exist!")
+        sys.exit(_missing("ansible playbook", playbook,
+                          "--ansible-playbook and <bake-playbook>"))
     for tool in ("ansible-playbook", "ansible-galaxy"):
         if not _which(tool):
             sys.exit(f"Error: {tool} not found (required for --ansible-playbook)!")
+    _prepare_cache_dir(cfg)
 
 
 def _discover_vm_ip(bridge: str, mac: str, timeout: int = 120) -> str:
@@ -852,50 +996,56 @@ def _run_ansible(cfg: VMConfig, images: Path, backing: Path) -> None:
     _ensure_jmespath()
     _ensure_ansible_collection(ansible_dir)
 
-    if cfg.mgmt_tap:
-        _ensure_mgmt_bridge(cfg.ssh_port)
-
     print(f"Booting {backing} for Ansible setup...")
-    kvm = ",accel=kvm" if cfg.kvm else ""
-    arch_args = _arch_args_for_gen(cfg, kvm)
-    qemu_proc = subprocess.Popen([
-        qemu_binary(cfg),
-        *identity_args("gen-vm", cfg.vm_name),
-        *arch_args,
-        "-smp", f"cpus={cfg.vcpus}",
-        "-m", str(cfg.vmem),
-        "-nographic",
-        "-drive", f"if=virtio,format=qcow2,file={backing}{DISCARD_OPTS}",
-        *_netdev_args(cfg),
-    ])
-
-    try:
-        vm_host = "localhost"
-        vm_port = cfg.ssh_port
-        if cfg.mgmt_tap:
-            vm_ip = _discover_vm_ip(
-                _mgmt_bridge_name(cfg.ssh_port),
-                _effective_mac(cfg),
-                timeout,
-            )
-            vm_host = vm_ip
-            vm_port = 22
-
-        if not _wait_for_ssh(cfg, timeout, host=vm_host, port=vm_port,
-                             proc=qemu_proc):
+    start: int | None = None
+    for attempt in range(1, AUTO_SSH_PORT_ATTEMPTS + 1):
+        # The port this boot really has; cfg itself when it names one.
+        boot = resolve_ssh_port(cfg, start)
+        if boot.mgmt_tap:
+            _ensure_mgmt_bridge(boot.ssh_port)
+        watch = cfg.ssh_port_auto and not cfg.mgmt_tap
+        qemu_proc = _start_qemu(boot, backing, watch)
+        try:
+            vm_host = "localhost"
+            vm_port = boot.ssh_port
+            if boot.mgmt_tap:
+                vm_host = _discover_vm_ip(
+                    _mgmt_bridge_name(boot.ssh_port),
+                    _effective_mac(boot),
+                    timeout,
+                )
+                vm_port = 22
+            ready = _wait_for_ssh(boot, timeout, host=vm_host, port=vm_port,
+                                  proc=qemu_proc)
+        except Exception:
             qemu_proc.kill()
             qemu_proc.wait()
+            if boot.mgmt_tap:
+                _teardown_mgmt_bridge(boot.ssh_port)
+            raise
+        if ready:
+            break
+        qemu_proc.kill()
+        qemu_proc.wait()
+        if not (watch and qemu_proc.hostfwd_refused()):
             sys.exit("Error: VM did not accept SSH in time.")
+        if attempt == AUTO_SSH_PORT_ATTEMPTS:
+            sys.exit(
+                f"Error: --ssh-port auto: QEMU was refused {attempt} ports "
+                f"in a row that had just probed free, the last {vm_port}; "
+                "something is taking them as they are tried. Name a port "
+                "with --ssh-port <number>."
+            )
+        print(f"--ssh-port auto: port {vm_port} was taken before QEMU "
+              "bound it; trying the next free one.", file=sys.stderr)
+        start = vm_port + 1
 
+    try:
         print(f"Running Ansible playbook {playbook}...")
         _restore_blocking_stdio()
         _ensure_jmespath()
 
-        id_args = _ssh_identity_args(cfg)
-        private_key_extra = (
-            ["-e", f"ansible_ssh_private_key_file={id_args[1]}"]
-            if id_args else []
-        )
+        private_key_extra = _key_extra_vars(cfg) + _cache_extra_vars(cfg)
         ap_cmd = ["ansible-playbook", "-i", str(inventory), str(playbook),
                   "-e", f"ansible_host={vm_host}",
                   "-e", f"ansible_port={vm_port}",
@@ -930,23 +1080,140 @@ def _run_ansible(cfg: VMConfig, images: Path, backing: Path) -> None:
         )
         qemu_proc.wait()
         if cfg.mgmt_tap:
-            _teardown_mgmt_bridge(cfg.ssh_port)
+            _teardown_mgmt_bridge(boot.ssh_port)
         print("Ansible post-setup complete.")
     except Exception:
         qemu_proc.kill()
         qemu_proc.wait()
         if cfg.mgmt_tap:
-            _teardown_mgmt_bridge(cfg.ssh_port)
+            _teardown_mgmt_bridge(boot.ssh_port)
         raise
 
 
+class _WatchedQemu(subprocess.Popen):
+    """QEMU with its stderr passed through and read for a refused SSH port."""
+
+    def __init__(self, cmd: list[str], ssh_port: int, **kw) -> None:
+        super().__init__(cmd, stderr=subprocess.PIPE, **kw)
+        self._refusal = ssh_hostfwd_refused(ssh_port)
+        self._refused = False
+        self._relay = threading.Thread(target=self._pump, daemon=True)
+        self._relay.start()
+
+    def _pump(self) -> None:
+        out = getattr(sys.stderr, "buffer", None)
+        for line in self.stderr:
+            if self._refusal in line:
+                self._refused = True
+            if out is not None:
+                out.write(line)
+                out.flush()
+        self.stderr.close()
+
+    def hostfwd_refused(self) -> bool:
+        """Whether QEMU exited on its SSH hostfwd. Call once it has exited."""
+        self._relay.join(timeout=5)
+        return self._refused
+
+
+def _start_qemu(boot: VMConfig, backing: Path, watch: bool) -> subprocess.Popen:
+    cmd = [
+        qemu_binary(boot),
+        *identity_args("gen-vm", boot.vm_name),
+        *_arch_args_for_gen(boot, ",accel=kvm" if boot.kvm else ""),
+        "-smp", f"cpus={boot.vcpus}",
+        "-m", str(boot.vmem),
+        "-nographic",
+        "-drive", f"if=virtio,format=qcow2,file={backing}{DISCARD_OPTS}",
+        *_netdev_args(boot),
+    ]
+    if watch:
+        return _WatchedQemu(cmd, boot.ssh_port)
+    return subprocess.Popen(cmd)
+
+
+def _cache_extra_vars(cfg: VMConfig) -> list[str]:
+    """The ansible-playbook -e argument that turns the compiler cache on.
+
+    Nothing at all without a cache directory, so that a bake given none is
+    the bake it was before there was a cache. A playbook reads
+    bake_cache_dir and bake_cache_replace or ignores them.
+    """
+    if cfg.cache_dir is None:
+        return []
+    # Absolute, because ansible-playbook runs from the ansible directory.
+    # JSON, because the key=value form splits a path at its first space.
+    cache = Path(os.path.abspath(Path(cfg.cache_dir).expanduser()))
+    return ["-e", json.dumps({"bake_cache_dir": str(cache),
+                              "bake_cache_replace": bool(cfg.cache_replace)})]
+
+
+def _prepare_cache_dir(cfg: VMConfig) -> None:
+    if cfg.cache_dir is None:
+        return
+    cache = Path(os.path.abspath(Path(cfg.cache_dir).expanduser()))
+    try:
+        cache.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        sys.exit(f"Error: cannot create the cache directory {cache}: {exc}\n"
+                 "       (--cache-dir and <bake-cache-dir>)")
+    if not os.access(cache, os.W_OK | os.X_OK):
+        sys.exit(f"Error: the cache directory {cache} is not writable\n"
+                 "       (--cache-dir and <bake-cache-dir>).")
+
+
+def _key_extra_vars(cfg: VMConfig) -> list[str]:
+    """The ansible-playbook -e pairs that carry the image's key.
+
+    sbates130272.batesste.user_setup authorises a public key read from the
+    controller, by default ~/.ssh/id_rsa.pub. Left alone that puts the
+    caller's own key in an image baked with another, so it is pointed at
+    the key this bake authorised.
+    """
+    extra: list[str] = []
+    id_args = _ssh_identity_args(cfg)
+    if id_args:
+        extra += ["-e", f"ansible_ssh_private_key_file={id_args[1]}"]
+    if cfg.ssh_key_file is not None:
+        # abspath, not resolve: the private half sits beside the name the
+        # caller gave, not beside whatever that name links to.
+        public = Path(os.path.abspath(Path(cfg.ssh_key_file).expanduser()))
+        if public.suffix == ".pub":
+            extra += ["-e", f"user_setup_ssh_key_src_dir={public.parent}",
+                      "-e", f"user_setup_ssh_key_name={public.stem}"]
+        else:
+            print(f"Note: {public} does not end in .pub, so a playbook that "
+                  "runs user_setup cannot be pointed at it and authorises "
+                  "~/.ssh/id_rsa.pub as well.")
+    return extra
+
+
 def _ssh_identity_args(cfg: VMConfig) -> list[str]:
+    if cfg.ssh_key_file is None:
+        return []
     key_pub = Path(cfg.ssh_key_file).expanduser()
     # Strip .pub to get the private key; fall back to no -i if missing.
     private_key = key_pub.parent / key_pub.stem
     if private_key.exists():
         return ["-i", str(private_key)]
     return []
+
+
+def _qemu_gone(proc: subprocess.Popen | None) -> bool:
+    """Whether QEMU has exited, saying so unless the caller will retry."""
+    if proc is None or proc.poll() is None:
+        return False
+    if isinstance(proc, _WatchedQemu) and proc.hostfwd_refused():
+        # The caller starts it again on another port and says so.
+        return True
+    print(
+        f"Error: QEMU exited with status {proc.returncode} before the "
+        "VM accepted SSH.\n"
+        "       Its message is above; a hostfwd collision on the host "
+        "is the usual cause.",
+        file=sys.stderr,
+    )
+    return True
 
 
 def _wait_for_ssh(
@@ -965,15 +1232,9 @@ def _wait_for_ssh(
         # host where that port may already be a service. Without this check
         # the real error scrolls past and ten minutes later the run fails
         # with "VM did not accept SSH in time", which blames the guest.
-        if proc is not None and proc.poll() is not None:
-            print(
-                f"Error: QEMU exited with status {proc.returncode} before the "
-                "VM accepted SSH.\n"
-                "       Its message is above; a hostfwd collision on the host "
-                "is the usual cause.",
-                file=sys.stderr,
-            )
+        if _qemu_gone(proc):
             return False
+        answered = False
         try:
             r = subprocess.run(
                 ["ssh",
@@ -987,13 +1248,17 @@ def _wait_for_ssh(
                 capture_output=True,
                 timeout=5,
             )
-            if r.returncode == 0:
-                print(f"VM ready for Ansible after {elapsed} seconds.")
-                return True
+            answered = r.returncode == 0
         except subprocess.TimeoutExpired:
             # SSH connected (ConnectTimeout=1 would have fired otherwise)
             # but background login processes kept the channel open.
             # The VM is up.
+            answered = True
+        if answered:
+            # Whatever answered was not this guest if QEMU died meanwhile:
+            # it was the listener that cost QEMU the port.
+            if _qemu_gone(proc):
+                return False
             print(f"VM ready for Ansible after {elapsed} seconds.")
             return True
         time.sleep(2)

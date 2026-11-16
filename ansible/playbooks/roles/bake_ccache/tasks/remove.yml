@@ -1,0 +1,25 @@
+---
+# Takes ccache back out of the guest. Every task is a no-op on a guest that
+# never had it, so the caller runs this in every bake: a bake that failed
+# with the hook in place is then cleaned by its rerun, whether or not that
+# rerun was given a cache.
+
+# Only links to ccache, so a compiler somebody installed there survives.
+- name: Remove the ccache wrappers
+  ansible.builtin.command:
+    cmd: >-
+      find {{ bake_ccache_wrapper_dir }} -maxdepth 1 -type l
+      -lname /usr/bin/ccache -print -delete
+  become: true
+  register: bake_ccache_unwrapped
+  changed_when: bake_ccache_unwrapped.stdout | length > 0
+
+- name: Remove the cache and its configuration from the guest
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  become: true
+  loop:
+    - "{{ bake_ccache_config }}"
+    - "{{ bake_ccache_dir }}"
+    - "{{ bake_ccache_archive }}"

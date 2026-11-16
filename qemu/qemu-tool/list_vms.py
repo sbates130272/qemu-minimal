@@ -378,7 +378,7 @@ def _container_addresses(ids: list[str]) -> dict[str, dict[str, str]]:
     if not ids:
         return {}
     # \x1e starts each record. Line-based parsing is not safe here: an
-    # ernic running with ERNIC_TAP has a multi-line shell script as its
+    # ernic running with <ernic-tap> has a multi-line shell script as its
     # argv, so its record spans lines and the socket -- which appears after
     # the first newline -- was being dropped, leaving the RDMA column empty
     # for exactly the stacks that have RDMA.
@@ -859,7 +859,7 @@ def _fmt_nvme(v: dict[str, Any]) -> str:
       host:03:00.0?  the same, with no sysfs entry on this host to confirm it
                      is an NVMe at all
 
-    Repeats collapse ("emul*2"): VM_NVME=2 is ordinary and two identical
+    Repeats collapse ("emul*2"): <vm-nvme> 2 is ordinary and two identical
     labels say no more than one plus a count.
     """
     labels: list[str] = []

@@ -26,12 +26,10 @@ PLAYBOOK = REPO / "ansible/playbooks/vm-rocm-golden.yml"
 REQUIREMENTS = REPO / "ansible/requirements.yml"
 ROLES = REPO / "ansible/playbooks/roles"
 
-# The files that name a server image. fleet-example.xml is a template with
-# placeholder tags.
+# The files that name a server image.
 IMAGE_FILES = sorted(
-    p for pattern in ("qemu/xml/*.xml", ".github/workflows/*.yml")
+    p for pattern in ("qemu/stacks/*.xml", ".github/workflows/*.yml")
     for p in REPO.glob(pattern)
-    if p.name != "fleet-example.xml"
 )
 
 
@@ -81,26 +79,49 @@ class Pins(unittest.TestCase):
             "requirements.yml installs the collection from one commit and "
             "ernic_source_pin checks the sources out at another")
 
-    # The guest is at dfd76f2 and the published server image at c50f2b9. That
-    # is known and waiting on a server image built from the guest's commit;
-    # when one is pinned this passes, unittest reports an unexpected success,
-    # and this decorator comes off.
-    @unittest.expectedFailure
     def test_sdxi_guest_matches_every_server_image(self):
+        """The SDXI server is tied to the baked guest by commit, not by stamp.
+
+        A guest pulled from <backing-ref> is out of reach here: what it was
+        built from is in the qcow2, not in this checkout.
+        """
         pin = _pin("sdxi_source_pin")
-        images = _image_shas("sdxi")
-        self.assertTrue(images, "no sdxi image tag found to compare against")
-        for path, shas in images.items():
+        self.assertRegex(pin, r"^[0-9a-f]{40}$")
+        fleets = sorted((REPO / "qemu/stacks").glob("*.xml"))
+        served = {}
+        for path in fleets:
+            for ref in re.findall(
+                    r"<sdxi-image>([^<]+)</sdxi-image>", path.read_text()):
+                served[str(path.relative_to(REPO))] = ref
+        self.assertIn("qemu/stacks/rocm-golden.xml", served)
+        self.assertIn("qemu/stacks/helios-tray.xml", served)
+        for path, ref in served.items():
+            with self.subTest(fleet=path):
+                found = re.search(r"-sdxi\.([0-9a-f]{7})$", ref)
+                self.assertIsNotNone(
+                    found, f"{path}: {ref} carries no sdxi.<sha7> component")
+                self.assertEqual(
+                    found.group(1), pin[:7],
+                    f"{path} serves sdxi.{found.group(1)}, but "
+                    f"vm-rocm-golden.yml builds the guest from {pin}. A "
+                    f"guest newer than its server waits for a completion "
+                    f"MSI-X that never comes. Move <sdxi-image> to the "
+                    f"published tag ending -sdxi.{pin[:7]}; if no such tag "
+                    f"exists, move sdxi_source_pin back to a commit that "
+                    f"has one.")
+        # Anything else naming an SDXI image, such as a workflow.
+        for path, shas in _image_shas("sdxi").items():
             for sha in shas:
                 self.assertTrue(
                     pin.startswith(sha),
-                    f"{path} serves sdxi.{sha}, but the guest is built from {pin}")
+                    f"{path} names sdxi.{sha}, but the guest is built from "
+                    f"{pin}; move that reference to -sdxi.{pin[:7]}.")
 
     def test_default_firmware_image_is_the_one_the_golden_fleet_serves(self):
         defaults = (ROLES / "rocjitsu_setup/defaults/main.yml").read_text()
         default = re.search(r"default\('(docker\.io/[^']*rocjitsu[^']*)'", defaults)
         self.assertIsNotNone(default, "no default rocjitsu image in the role")
-        fleet = (REPO / "qemu/xml/rocm-golden.xml").read_text()
+        fleet = (REPO / "qemu/stacks/rocm-golden.xml").read_text()
         served = re.search(r"<rocjitsu-ref>([^<]+)</rocjitsu-ref>", fleet)
         self.assertIsNotNone(served)
         self.assertEqual(default.group(1), served.group(1))

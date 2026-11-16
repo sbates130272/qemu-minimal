@@ -1,6 +1,6 @@
 name: qemu-minimal - Ansible Playbook Test - vm-rocm-golden
 
-# vm-rocm-golden: combined image, boot with the full single-VM compose stack,
+# vm-rocm-golden: combined image, boot as one guest of the default fleet,
 # verify both the ernic NIC and the GPU.
 
 # This lane was parked carrying two failures. The ernic DKMS failure against
@@ -35,7 +35,7 @@ on:
       - 'qemu/checks/rocm-golden.sh'
       - 'qemu/packages.d/rocm-golden.txt'
       - 'qemu/qemu-tool/gen_vm.py'
-      - 'qemu/compose/vfio-user-ernic-rocjitsu-vm/**'
+      - 'qemu/stacks/rocm-golden.xml'
       - '.github/actions/setup-vm-job/action.yml'
       - '.github/actions/report-image-size/action.yml'
       - '.github/workflows/qemu-minimal-ansible-playbook-test-vm-rocm-golden.yml'
@@ -49,10 +49,26 @@ env:
   ROCJITSU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261112.gdca6903-rocjitsu.50be05a
   QEMU_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261112.gdca6903-qemu11.1.3-vfu.05bb5e5
   VM_IMAGES_DIR: /var/lib/qemu-tool/images
+  # The fleet names its guests <vm-name-prefix>-N, so the bake takes the name
+  # of guest 1 and the stack boots the overlay the bake made.
+  VM_PREFIX: rocm-golden-test
+  VM_NAME: rocm-golden-test-1
+  # Under the shared mount, like the images. The compose project is this
+  # directory's basename, playbook-test.
+  STACK_DIR: /var/lib/qemu-tool/stacks/playbook-test
+  OVERLAY: /var/lib/qemu-tool/stacks/playbook-test.xml
+  # Where the bake's compiler cache sits in this job container, between the
+  # actions/cache steps and the Ansible controller gen-vm runs here. Absolute,
+  # for the reason the pip cache path in setup-vm-job is.
+  BAKE_CCACHE_DIR: /var/cache/bake-ccache
   # No ANSIBLE_EXTRA_ARGS. The playbook's own defaults are the published
   # image's -- no dotfiles, no SSH private key, no GPG signing, no distro
   # upgrade, no ip_discovery.bin -- and this lane bakes with exactly those, so
   # a default that drifts shows up here.
+  #
+  # Two things do differ from a published bake, and neither changes what is
+  # installed: the module builds go through a compiler cache, and the image
+  # is not compacted afterwards. Both are on the bake step below.
 
 jobs:
   test-vm-rocm-golden:
@@ -84,49 +100,204 @@ jobs:
         docker pull "$ERNIC_IMAGE"
         docker pull "$ROCJITSU_IMAGE"
         docker pull "$QEMU_IMAGE"
+        # Read from the fleet file, which is what the stack below runs.
+        docker pull "$(sed -n 's|.*<sdxi-image>\(.*\)</sdxi-image>.*|\1|p' qemu/stacks/rocm-golden.xml)"
 
+    # ccache addresses what it stores by content, so the key decides nothing
+    # about correctness. It is housekeeping: the prefix moves when an input
+    # that invalidates most of the cache moves, so a pin bump starts a new
+    # line of entries instead of growing the old one for ever.
+    - name: Name the compiler cache
+      id: ccache-key
+      run: |
+        set -eu
+        playbook=ansible/playbooks/vm-rocm-golden.yml
+        # Where each is defined: the three anchors and the driver release.
+        pins=$(grep -E '^ +((ionic_kernel_pin|ernic_source_pin|sdxi_source_pin): &|rocm_setup_amdgpu_driver_version: )' "$playbook")
+        # All four, or a renamed pin has dropped out of the key unnoticed.
+        test "$(printf '%s\n' "$pins" | wc -l)" -eq 4
+        patches=ansible/playbooks/roles/rocjitsu_setup/files/amdgpu-emu-patches.py
+        test -f ansible/requirements.yml
+        test -f "$patches"
+        digest=$({ printf '%s\n' "$pins"; cat ansible/requirements.yml "$patches"; } |
+                   sha256sum | cut -c1-16)
+        echo "prefix=bake-ccache-v1-${digest}" >> "$GITHUB_OUTPUT"
+
+    # restore and save are separate steps so that the save can sit straight
+    # after the bake and run only when the bake produced something new. The
+    # key is unique to the run because a cache entry cannot be overwritten;
+    # the restore-keys are what find the last one, same pins first.
+    - name: Restore the compiler cache
+      id: bake-ccache
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ env.BAKE_CCACHE_DIR }}
+        key: ${{ steps.ccache-key.outputs.prefix }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: |
+          ${{ steps.ccache-key.outputs.prefix }}-
+          bake-ccache-v1-
+
+    # Baked exactly as the published guest is, from the default fleet's
+    # <bake-*> elements, so the check below sees the guest a consumer gets.
+    # A plain run step, not qemu-tool-action: the action always passes
+    # --release, which would outrank <bake-release>. The name differs:
+    # --vm-name outranks <bake-name>. And the key is the job's own, so that
+    # plain ssh reaches the guest; gen-vm would otherwise generate one.
+    #
+    # --cache-dir is what turns the compiler cache on; the publish workflow
+    # does not pass it, and a published image is compiled from source.
+    # gen-vm creates the directory. --no-compact because nothing publishes
+    # this image: the recompress was most of the three minutes between the
+    # playbook ending and the image being ready, spent on a file the job
+    # throws away.
+    #
+    # --cache-replace is passed when the cache restored above was not saved
+    # under this run's prefix, which is to say for other pins (or when
+    # nothing was restored). The bake then saves its cache whatever it
+    # missed: a bumped ernic or SDXI pin is too few compiles for the role's
+    # own miss count to notice, and would otherwise recompile in every run.
     - name: Generate VM with vm-rocm-golden playbook
-      uses: sbates130272/qemu-tool-action@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        operation: gen-vm
-        qemu-tool-source: ./qemu
-        vm-name: rocm-golden-test
-        release: resolute
-        size: '64'
-        vcpus: '4'
-        ansible-playbook: ansible/playbooks/vm-rocm-golden.yml
-        # The manifest the published guest is built with, so the check below
-        # sees the guest a consumer gets.
-        extra-args: >-
-          --username ubuntu --password password
-          --packages qemu/packages.d/rocm-golden.txt
+        CACHE_REPLACE: ${{ !startsWith(steps.bake-ccache.outputs.cache-matched-key, steps.ccache-key.outputs.prefix) && '--cache-replace' || '' }}
+      run: |
+        mkdir -p "$VM_IMAGES_DIR"
+        # What the report step below compares against: a restored cache is
+        # older than this file, one this bake wrote is newer. Outside the
+        # cached directory, or it would be restored with the cache and be
+        # older than the files it is there to date.
+        touch "$RUNNER_TEMP/bake-started"
+        qemu-tool gen-vm --bake --xml qemu/stacks/rocm-golden.xml \
+          --vm-name "$VM_NAME" --images "$VM_IMAGES_DIR" \
+          --ssh-key-file "$HOME/.ssh/id_rsa.pub" --no-compact \
+          --cache-dir "$BAKE_CCACHE_DIR" $CACHE_REPLACE
 
-    - name: Bring up rocm-golden compose stack
-      uses: sbates130272/qemu-tool-action@v1
-      env:
-        QEMU_TOOL_SRC: /var/lib/qemu-tool/src
-        # ionic_create_rdma_admin() hard-fails below 4 online CPUs, so this lane cannot run ionic_rdma
-        # at 2 either.
-        VM_VCPUS: "4"
-        VM_VMEM: "4096"
-        VM_SHM_SIZE: "5g"
+    # always(), because the playbook saves the cache before its last two
+    # plays and a bake that failed in one of them still compiled everything.
+    # The statistics are the bake's own "ccache --show-stats", with a last
+    # line saying how many ccache invocations missed. A warm run misses a
+    # few -- the amdgpu configure tests are not reproducible -- and the role
+    # leaves the archive alone below a hundred, so most runs save nothing.
+    # That last line is also where a hook that never fired shows: every
+    # counter zero is a bake compiled from source with ccache looking on.
+    #
+    # With no marker the bake step never started, and nothing in the
+    # directory is this run's however new it looks.
+    - name: Report the compiler cache
+      id: ccache-report
+      if: always()
+      run: |
+        dir="$BAKE_CCACHE_DIR"
+        started="$RUNNER_TEMP/bake-started"
+        if [ ! -e "$started" ]; then
+          echo "the bake did not start: nothing to report or save"
+          exit 0
+        fi
+        if [ "$dir/stats.txt" -nt "$started" ]; then
+          cat "$dir/stats.txt"
+          {
+            echo '### Compiler cache'
+            echo '```'
+            cat "$dir/stats.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if grep -q '^ccache saw no compiler invocation' "$dir/stats.txt"; then
+            echo "::warning::the bake's compiler cache saw no compiles: the ccache wrappers did not intercept the module builds"
+          fi
+        else
+          echo "the bake did not get as far as reporting its compiler cache"
+        fi
+        if [ "$dir/ccache.tar" -nt "$started" ]; then
+          ls -l "$dir/ccache.tar"
+          echo "new=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "the bake left the cache as it was restored: nothing to save"
+        fi
+
+    - name: Save the compiler cache
+      if: always() && steps.ccache-report.outputs.new == 'true'
+      uses: actions/cache/save@v4
       with:
-        operation: compose
-        qemu-tool-source: ./qemu
-        vm-name: rocm-golden-test
-        stack: vfio-user-ernic-rocjitsu-vm
-        compose-args: up --detach
-        wait-for-healthy: 'true'
-        wait-timeout: '60'
+        path: ${{ env.BAKE_CCACHE_DIR }}
+        key: ${{ steps.bake-ccache.outputs.cache-primary-key }}
+
+    # One guest of the default fleet: qemu/stacks/rocm-golden.xml plus the few
+    # elements this lane changes. Left out are the TAP, which is the L2 path
+    # to a peer this guest does not have, and P4 in guest scope. The SDXI
+    # device stays: the baked guest autoloads sdxi_char, and qemu-1 waits on
+    # sdxi-1 being healthy. The guest size is the
+    # default fleet's 4 vCPU, which is the ionic_rdma floor:
+    # ionic_create_rdma_admin() hard-fails below 4 online CPUs.
+    #
+    # <qemu-tool-src> is a HOST path: compose bind mounts are resolved by the
+    # host daemon, and the checkout exists only in this container, so
+    # setup-vm-job staged a copy under the shared mount.
+    - name: Render the test stack
+      run: |
+        set -eu
+        mkdir -p "$(dirname "$OVERLAY")"
+        cat > "$OVERLAY" <<XML
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!-- Written by qemu-minimal-ansible-playbook-test-vm-rocm-golden.yml. Not a settings file anyone runs by hand. -->
+        <fleet xmlns="http://qemu-tool/fleet/1.0">
+          <vm-count>1</vm-count>
+          <vm-name-prefix>${VM_PREFIX}</vm-name-prefix>
+          <vm-images-dir>${VM_IMAGES_DIR}</vm-images-dir>
+          <qemu-tool-src>/var/lib/qemu-tool/src</qemu-tool-src>
+          <ernic-tap>false</ernic-tap>
+          <p4-enable>false</p4-enable>
+        </fleet>
+        XML
+        cat "$OVERLAY"
+        qemu-tool gen-compose \
+          --xml qemu/stacks/rocm-golden.xml --xml "$OVERLAY" \
+          --output-dir "$STACK_DIR"
+        # The render is what names the disk the guest boots from. Asserted,
+        # because a guest name that matches no image is a QEMU that exits.
+        grep -q -- "--vm-name \"${VM_NAME}\"" "$STACK_DIR/docker-compose.yml"
+        grep -q '^  sdxi-1:' "$STACK_DIR/docker-compose.yml"
+        test -f "$VM_IMAGES_DIR/${VM_NAME}.qcow2"
+
+    # `up` returns once the guest's container has started, which compose
+    # only does after every device server it depends on reports healthy.
+    - name: Bring up the test stack
+      run: |
+        qemu-tool compose --stack-dir "$STACK_DIR" \
+          --xml qemu/stacks/rocm-golden.xml --xml "$OVERLAY" \
+          up --detach
+
+    # Asked of the containers rather than of compose: a service that exited
+    # is absent from `compose ps`, not failed.
+    - name: Wait for the device servers
+      run: |
+        set -eu
+        elapsed=0
+        while true; do
+          bad=""
+          for svc in ernic-1 rocjitsu-1 sdxi-1; do
+            h=$(docker inspect -f '{{.State.Health.Status}}' \
+                  "playbook-test-${svc}-1" 2>/dev/null || echo missing)
+            if [ "$h" != healthy ]; then bad="$bad ${svc}=${h}"; fi
+          done
+          q=$(docker inspect -f '{{.State.Status}}' \
+                playbook-test-qemu-1-1 2>/dev/null || echo missing)
+          if [ "$q" != running ]; then bad="$bad qemu-1=${q}"; fi
+          if [ -z "$bad" ]; then break; fi
+          if [ "$elapsed" -ge 60 ]; then
+            echo "the stack is not ready after ${elapsed}s:${bad}" >&2
+            qemu-tool compose --stack-dir "$STACK_DIR" ps --all || true
+            exit 1
+          fi
+          sleep 5; elapsed=$((elapsed + 5))
+        done
+        echo "device servers healthy and the guest's container running after ${elapsed}s"
 
     # The qemu container publishes 2222 on the HOST, which this job
     # container cannot reach: the runner puts it on its own bridge network
     # and "--network" is not supported in container.options. Attach to the
-    # compose network instead and address the VM by its service name.
-    - name: Join the compose network
-      run: docker network connect vfio-user-ernic-rocjitsu-vm_default "$(cat /etc/hostname)"
+    # stack's network instead and address the VM by its service name.
+    - name: Join the stack network
+      run: docker network connect playbook-test_fleet "$(cat /etc/hostname)"
 
     - name: Wait for VM SSH (180s timeout)
       run: |
@@ -135,7 +306,7 @@ jobs:
           if ssh -o ConnectTimeout=1 \
                  -o NoHostAuthenticationForLocalhost=yes \
                  -o StrictHostKeyChecking=no \
-                 -p 2222 ubuntu@qemu true 2>/dev/null; then
+                 -p 2222 ubuntu@qemu-1 true 2>/dev/null; then
             echo "VM ready after ${elapsed}s"
             exit 0
           fi
@@ -146,9 +317,11 @@ jobs:
 
     # The file batesste-ci-images gates the published image on, run here so
     # this repo gates the same thing. It is written for a boot with no
-    # device; this guest has both attached, so the probe is expected to say
-    # "ready" where a bare boot says "absent". Before the firmware step
-    # below, because it asserts the image carries no ip_discovery.bin.
+    # device; this guest has the ernic, the GPU and the SDXI device attached,
+    # so the probe is expected to say "ready" where a bare boot says
+    # "absent". Its SDXI section is static and holds either way. Before the
+    # firmware step below, because it asserts the image carries no
+    # ip_discovery.bin.
     #
     # Over "bash -s": non-login and non-interactive, which is the session
     # the check's ROCm PATH assertions are about.
@@ -156,13 +329,21 @@ jobs:
       run: |
         { echo 'set -eu'; cat qemu/checks/rocm-golden.sh; } |
           ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
-            -p 2222 ubuntu@qemu "ROCM_GOLDEN_EXPECT_PROBE=ready bash -s"
+            -p 2222 ubuntu@qemu-1 "ROCM_GOLDEN_EXPECT_PROBE=ready bash -s"
         echo "✓ qemu/checks/rocm-golden.sh passed"
+
+    # The check above cannot ask for the device; this boot has one, and the
+    # baked guest autoloads sdxi_char against it.
+    - name: Verify sdxi_char bound the SDXI device
+      run: |
+        ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+          -p 2222 ubuntu@qemu-1 "test -e /dev/sdxi0"
+        echo "✓ /dev/sdxi0 present"
 
     - name: Verify amdgpu DKMS module installed
       run: |
         ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
-          -p 2222 ubuntu@qemu \
+          -p 2222 ubuntu@qemu-1 \
           "dkms status amdgpu | grep -q installed"
         echo "✓ amdgpu DKMS module installed"
 
@@ -171,14 +352,14 @@ jobs:
     - name: Verify firmware stubs present
       run: |
         ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
-          -p 2222 ubuntu@qemu \
+          -p 2222 ubuntu@qemu-1 \
           "test -f /lib/firmware/updates/amdgpu/gc_12_1_0_imu.bin"
         echo "✓ gfx1250 firmware stubs present"
 
     - name: Verify amdgpu-probe installed
       run: |
         ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
-          -p 2222 ubuntu@qemu \
+          -p 2222 ubuntu@qemu-1 \
           "test -x /usr/local/bin/amdgpu-probe"
         echo "✓ amdgpu-probe installed"
 
@@ -188,10 +369,10 @@ jobs:
     - name: Run the ernic configure and live firmware stages
       run: |
         ansible-playbook \
-          -i "qemu," \
+          -i "qemu-1," \
           ansible/playbooks/vm-rocm-golden.yml \
           --tags configure,firmware \
-          -e "ansible_host=qemu" \
+          -e "ansible_host=qemu-1" \
           -e "ansible_port=2222" \
           -e "ansible_user=ubuntu" \
           -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"'
@@ -200,17 +381,17 @@ jobs:
     - name: Verify ionic modules loaded and NIC visible
       run: |
         ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
-          -p 2222 ubuntu@qemu "lsmod | grep -qE '^ionic\b' && lsmod | grep -qE '^ionic_rdma\b'"
+          -p 2222 ubuntu@qemu-1 "lsmod | grep -qE '^ionic\b' && lsmod | grep -qE '^ionic_rdma\b'"
         echo "✓ ionic and ionic_rdma modules loaded"
         ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
-          -p 2222 ubuntu@qemu "ip link show | grep -q rocm-ernic0"
+          -p 2222 ubuntu@qemu-1 "ip link show | grep -q rocm-ernic0"
         echo "✓ rocm-ernic0 interface present"
 
     # A device in ibv_devices can still have its port down, so gate on PORT_ACTIVE the way upstream does.
     - name: Verify the RDMA port is active
       run: |
         ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
-          -p 2222 ubuntu@qemu "ibv_devinfo" | tee /tmp/ibv_devinfo.txt
+          -p 2222 ubuntu@qemu-1 "ibv_devinfo" | tee /tmp/ibv_devinfo.txt
         grep -q PORT_ACTIVE /tmp/ibv_devinfo.txt
         echo "✓ RDMA port active"
 
@@ -222,7 +403,7 @@ jobs:
       run: |
         SSH="ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
           -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
-          -p 2222 ubuntu@qemu"
+          -p 2222 ubuntu@qemu-1"
         for attempt in 1 2 3; do
           $SSH "sudo timeout 120 /usr/local/bin/amdgpu-probe" || true
           deadline=$(($(date +%s) + 30))
@@ -247,7 +428,7 @@ jobs:
       run: |
         ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
           -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
-          -p 2222 ubuntu@qemu "sudo dmesg | tail -200" || true
+          -p 2222 ubuntu@qemu-1 "sudo dmesg | tail -200" || true
 
     # /dev/kfd is not a valid probe assertion: kfd_chardev_init() creates it before amdgpu_init()
     # registers the PCI driver, so it exists even when every probe fails.
@@ -255,15 +436,15 @@ jobs:
     - name: Verify amdgpu module loaded and a GPU KFD node present
       run: |
         ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
-          -p 2222 ubuntu@qemu "lsmod | grep -q amdgpu"
+          -p 2222 ubuntu@qemu-1 "lsmod | grep -q amdgpu"
         echo "✓ amdgpu module loaded"
         gpus=$(ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
-          -p 2222 ubuntu@qemu \
+          -p 2222 ubuntu@qemu-1 \
           "cat /sys/class/kfd/kfd/topology/nodes/*/name 2>/dev/null | grep -c .")
         if [ "$gpus" -lt 1 ]; then
           echo "no GPU KFD node: amdgpu loaded but never bound the device" >&2
           ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
-            -p 2222 ubuntu@qemu "sudo dmesg | grep -i amdgpu | tail -20" >&2
+            -p 2222 ubuntu@qemu-1 "sudo dmesg | grep -i amdgpu | tail -20" >&2
           exit 1
         fi
         echo "✓ GPU KFD node present ($gpus)"
@@ -271,13 +452,19 @@ jobs:
     # Diagnostic only, and always() so a red lane still reports what it
     # built -- the size question is most interesting exactly when
     # something else went wrong.
+    #
+    # The backing image's "disk size" here is the allocation the slim pass
+    # left, not a compacted one: this lane bakes with --no-compact, so the
+    # figure runs 2.3-2.5x what the published image measures and is not
+    # comparable with runs from before that flag. The in-guest half is
+    # unaffected, and is the half that says where the space went.
     - name: Report VM image size
       if: always()
       uses: ./.github/actions/report-image-size
       with:
-        vm-name: rocm-golden-test
-        ssh-host: qemu
+        vm-name: ${{ env.VM_NAME }}
+        ssh-host: qemu-1
 
     - name: Show compose logs on failure
       if: failure()
-      run: qemu-tool compose --stack vfio-user-ernic-rocjitsu-vm logs
+      run: qemu-tool compose --stack-dir "$STACK_DIR" logs

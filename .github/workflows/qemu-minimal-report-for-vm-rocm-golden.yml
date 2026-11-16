@@ -5,15 +5,16 @@ name: qemu-minimal - Report for vm-rocm-golden
 # performance page publish-pages builds from these artifacts and the endpoint
 # shields on the README that read it.
 #
-# One stack, described by one file: qemu/xml/rocm-golden.xml. Two guests from
+# One stack, described by one file: qemu/stacks/rocm-golden.xml. Two guests from
 # the published rocm-golden qcow2, each with a GPU, an NVMe, an RDMA NIC with
 # P4 in guest scope and an SDXI device. Every setting is in that XML -- there
 # is no settings `env:` in this workflow -- and `qemu-tool quick-start` is
 # what turns it into running guests. That makes this the daily run of the
-# command the README's Quick Start names, on a fleet with one more device per
-# guest than the default; it replaced a separate report-for-quickstart lane,
-# and carries that lane's checks on the metrics stack and on what qemu-tool
-# reports about live guests.
+# command the README's Quick Start names, on the fleet it runs by default; it
+# replaced a separate report-for-quickstart lane, and carries that lane's
+# checks on the metrics stack and on what qemu-tool reports about live
+# guests. The fleet file runs unmodified: the only layers beside it are the
+# ones quick-start writes for itself.
 #
 #   artifact           metric            measured on
 #   perf-rocjitsu      GEMM, hipFile     guest 1
@@ -30,14 +31,13 @@ on:
     branches:
       - main
     paths:
-      - 'qemu/xml/rocm-golden.xml'
+      - 'qemu/stacks/rocm-golden.xml'
       - 'ansible/playbooks/vm-quickstart.yml'
       - 'ansible/playbooks/roles/**'
       - 'ansible/files/p4/**'
       - 'ansible/requirements.yml'
       - 'qemu/qemu-tool/**'
       - 'qemu/pyproject.toml'
-      - 'qemu/docker/sdxi/**'
       - 'scripts/generate-vm-report.sh'
       - 'scripts/check-vm-devices.sh'
       - 'scripts/vm-report/**'
@@ -57,13 +57,10 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  FLEET_FILE: qemu/xml/rocm-golden.xml
+  FLEET_FILE: qemu/stacks/rocm-golden.xml
   # The compose project name is this directory's basename: rocm-golden.
   STACK_DIR: /var/lib/qemu-tool/stacks/rocm-golden
   KEY_DIR: /var/lib/qemu-tool/rocm-golden-key
-  # Where the rocm-sdxi binary is extracted FROM. Not a fleet setting: the
-  # fleet's sdxi-image is the local tag the build step below produces.
-  SDXI_SOURCE_IMAGE: docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-sdxi:20261112.gdca6903-sdxi.c50f2b9
 
 jobs:
   benchmark:
@@ -124,18 +121,6 @@ jobs:
     - name: Install collections
       run: ansible-galaxy collection install --no-deps -r ansible/requirements.yml
 
-    # The fleet names qemu-tool/sdxi:latest, a local tag. The Dockerfile takes
-    # the rocm-sdxi binary through the sdxi-bin build context.
-    - name: Build the sdxi server image
-      run: |
-        tmpdir=$(mktemp -d)
-        cid=$(docker create "$SDXI_SOURCE_IMAGE")
-        docker cp "${cid}:/usr/local/bin/rocm-sdxi" "${tmpdir}/"
-        docker rm "${cid}"
-        docker build --build-context "sdxi-bin=${tmpdir}" \
-          -t qemu-tool/sdxi:latest qemu/docker/sdxi
-        rm -rf "${tmpdir}"
-
     - name: Fetch the guest image and bring the stack up
       run: |
         setpriv --reuid "$CIUSER_UID" --regid "$CIUSER_UID" --init-groups \
@@ -168,14 +153,15 @@ jobs:
             --in-network \
             --yes
 
-    # Prometheus and Grafana are part of what quick-start brings up, so a lane
-    # that never looked at them would pass with half the stack down. Asked of
+    # Prometheus, Grafana, Loki and Alloy are part of what quick-start brings
+    # up, so a lane that never looked at them would pass with half the stack
+    # down. Asked of
     # the containers rather than of compose: `compose ps` reports a service
     # that exited as absent rather than as failed.
     - name: Check the monitoring sidecars
       run: |
         set -eu
-        for svc in prometheus grafana; do
+        for svc in prometheus grafana loki alloy; do
           state=$(docker inspect -f '{{.State.Status}}' "rocm-golden-${svc}-1")
           echo "${svc}: ${state}"
           [ "$state" = running ] || {
@@ -192,27 +178,50 @@ jobs:
             echo "::error::Prometheus answered no query"
             exit 1
           }
+        # Running is not ready: Loki takes its ring a while to settle, and
+        # Alloy starts only once Loki's own healthcheck has passed.
+        health=$(docker inspect -f '{{.State.Health.Status}}' rocm-golden-loki-1)
+        echo "loki health: ${health}"
+        [ "$health" = healthy ] || {
+          echo "::error::Loki is ${health}, not healthy"
+          docker logs --tail 50 rocm-golden-loki-1 || true
+          exit 1
+        }
 
-    # Everything the benchmark steps need to reach the guests, derived from
-    # the fleet XML and from the image rather than written out here.
+    # Everything the benchmark steps need to reach the guests, asked of the
+    # running stack and of the image rather than written out here.
     - name: Work out where the guests are
       shell: bash
       run: |
         set -euo pipefail
-        env_of() { qemu-tool fleet-to-env --xml "$FLEET_FILE" | sed -n "s/^$1=//p"; }
-        net=$(env_of FLEET_NET_PREFIX)
-        rdma=$(env_of ERNIC_GUEST_SUBNET)
+        # The address the generator gave each guest's container, from the
+        # container itself; `fleet` is the only network a guest is on.
+        addr_of() {
+          docker inspect \
+            -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$1"
+        }
+        guest1=$(addr_of rocm-golden-qemu-1-1)
+        guest2=$(addr_of rocm-golden-qemu-2-1)
+        # The inventory gen-compose wrote beside the stack carries each
+        # guest's ernic address and the login the fleet names.
+        inventory="${STACK_DIR}/fleet-inventory.yml"
+        rdma2=$(awk '$1 == "rocm-golden-2:" {found = 1}
+                     found && $1 == "fleet_guest_ip:" {print $2; exit}' "$inventory")
         # The image is the authority on which account exists in it; quick-start
         # has already pulled vm-info.json as part of the keypair referrer.
         user=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1])).get("username") or "")' \
             "${KEY_DIR}/vm-info.json" 2>/dev/null || true)
-        [ -n "$user" ] || user=$(env_of VM_USERNAME)
+        [ -n "$user" ] || user=$(awk '$1 == "ansible_user:" {print $2; exit}' "$inventory")
+        for value in "$guest1" "$guest2" "$rdma2" "$user"; do
+          [ -n "$value" ] || {
+            echo "::error::could not work out where the guests are" \
+                 "(guest1=${guest1} guest2=${guest2} rdma2=${rdma2} user=${user})"
+            exit 1; }
+        done
         {
-          # Third octet 3 is the qemu family, fourth is the 1-based VM index.
-          echo "GUEST1=${net}.3.1"
-          echo "GUEST2=${net}.3.2"
-          # gen-compose gives VM n's ernic the address .(10+n).
-          echo "GUEST2_RDMA=${rdma}.12"
+          echo "GUEST1=${guest1}"
+          echo "GUEST2=${guest2}"
+          echo "GUEST2_RDMA=${rdma2}"
           echo "GUEST_USER=${user}"
         } | tee -a "$GITHUB_ENV"
 
@@ -253,10 +262,11 @@ jobs:
 
         # inspect verifies the key by reading the login user's authorized_keys
         # and learns the user from the settings layers. quick-start writes the
-        # account the image really has to env.image-login beside the stack.
+        # account the image really has to overlay-image-login.xml beside the
+        # stack.
         set -- --xml "$FLEET_FILE"
-        [ -f "${STACK_DIR}/env.image-login" ] &&
-          set -- "$@" --xml "${STACK_DIR}/env.image-login"
+        [ -f "${STACK_DIR}/overlay-image-login.xml" ] &&
+          set -- "$@" --xml "${STACK_DIR}/overlay-image-login.xml"
 
         scripts/check-vm-devices.sh "$@" \
           --gpu gfx1250 --strict-key --login "$GUEST_USER" rocm-golden-1

@@ -1,0 +1,61 @@
+---
+# A compiler cache for the module builds of a bake, carried between bakes as
+# one tar file on the controller. Three entry points, all reached with
+# tasks_from: "restore" before the first build, "save" after the last, and
+# "remove", which takes the hook back out of the guest and is safe to run
+# whether or not the other two did. There is no main.yml on purpose -- a
+# caller that includes this role without saying which part gets an error
+# rather than half a cache.
+
+# Directory on the CONTROLLER holding ccache.tar and stats.txt. The caller
+# sets it; with it empty neither restore nor save should be included at all.
+bake_ccache_controller_dir: ""
+
+# Where the cache lives in the guest for the length of the bake. Under
+# /var/tmp because /tmp does not survive the reboot into the pinned kernel,
+# and because image_slim sweeps /var/tmp, which is a second line behind this
+# role's own removal.
+bake_ccache_dir: /var/tmp/bake-ccache
+bake_ccache_archive: /var/tmp/bake-ccache.tar
+
+# ccache's system file, read by every invocation whatever its environment.
+bake_ccache_config: /etc/ccache.conf
+
+# One bake of the golden guest stores a few hundred MiB. The cap is what ages
+# out the objects of a pin that has since moved; it also bounds the tar file,
+# and so the GitHub cache entry, well inside the 10 GiB a repository gets.
+bake_ccache_max_size: 1G
+
+# How many of this bake's ccache invocations have to have missed before the
+# archive on the controller is replaced. Not zero, because a warm bake still
+# misses a little every time: amdgpu's configure runs its feature tests in
+# parallel and builds each test's source from the results that happen to be
+# in so far, so some of those sources differ from run to run. A cache entry
+# on GitHub cannot be overwritten, only added to, and re-saving several
+# hundred MiB for the sake of some throwaway test objects would crowd the
+# repository's other caches out.
+#
+# A count and not a share of the invocations, because most invocations are
+# not compiles: every kbuild make probes the compiler about 22 times, amdgpu's
+# configure is some 290 makes, and all of those probes hit on a warm cache.
+# Against that denominator a recompile of the whole of amdgpu is under a
+# fifth and a changed ionic or SDXI module a few percent. The figure is a
+# guess; the statistics each bake prints are what to tune it against.
+bake_ccache_save_misses: 100
+
+# Set by a caller that knows the archive it handed over was saved for other
+# pins: this bake then replaces it whatever it missed. The miss count above
+# cannot see a small module changing, and without this a bumped ernic or SDXI
+# pin would recompile in every bake until something larger moved.
+bake_ccache_replace: false
+
+# How ccache gets in front of the compiler. None of the builds can be handed
+# an environment: dkms is run by scripts that call "sudo dkms", sudo resets
+# PATH to its secure_path, and dkms accepts only its own variables from
+# /etc/dkms/framework.conf (it reads the file in a subshell and copies out a
+# fixed list). What every one of them does is resolve a bare compiler name
+# through PATH -- kbuild's "gcc", and the name dkms 3.2 exports as CC from
+# CONFIG_CC_VERSION_TEXT -- and /usr/local/bin precedes /usr/bin both in
+# sudo's secure_path and in a login PATH. So a symlink there, for each name
+# the ccache package wraps in /usr/lib/ccache, is the whole hook.
+bake_ccache_wrapper_dir: /usr/local/bin

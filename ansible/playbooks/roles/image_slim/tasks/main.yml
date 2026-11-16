@@ -163,15 +163,21 @@
 
 # dpkg-query exits 1 and writes to stderr when a pattern matches nothing, which
 # is the normal case for several of these on any given guest.
+#
+# Installed ("ii") only. dpkg-query -W also prints names it merely knows of,
+# not-installed ("un") and removed-with-config ("rc"), and one of those must
+# not be what satisfies the assert below that the running kernel is a package.
 - name: List installed kernel packages
   ansible.builtin.shell:
     executable: /bin/bash
     cmd: >-
-      dpkg-query -W -f='${Package}\n'
+      set -o pipefail;
+      { dpkg-query -W -f='${db:Status-Abbrev} ${Package}\n'
       'linux-image-[0-9]*' 'linux-image-unsigned-[0-9]*'
       'linux-headers-[0-9]*' 'linux-modules-[0-9]*'
       'linux-modules-extra-[0-9]*'
-      {{ image_slim_kernel_metapackages | join(' ') }} 2>/dev/null || true
+      {{ image_slim_kernel_metapackages | join(' ') }} 2>/dev/null || true; }
+      | awk '$1 == "ii" { print $2 }'
   register: image_slim_kernel_pkgs
   changed_when: false
   when: image_slim_purge_old_kernels | bool
@@ -191,31 +197,116 @@
 # the running kernel, and every later DKMS build fails. Matching on the version
 # alone keeps both. It also keeps a different flavour of the same version
 # (-lowlatency), which is the safe direction to err in.
+- name: Sort the kernel packages into stale and running
+  ansible.builtin.set_fact:
+    image_slim_running_kernel_version: >-
+      {{ ansible_kernel | regex_replace('-[a-z][a-z0-9]*$', '') }}
+    image_slim_stale_kernel_pkgs: >-
+      {{ image_slim_kernel_pkgs.stdout_lines | default([])
+         | reject('search', ansible_kernel
+                  | regex_replace('-[a-z][a-z0-9]*$', '') | regex_escape)
+         | list }}
+    image_slim_running_kernel_pkgs: >-
+      {{ image_slim_kernel_pkgs.stdout_lines | default([])
+         | select('search', ansible_kernel
+                  | regex_replace('-[a-z][a-z0-9]*$', '') | regex_escape)
+         | list }}
+  when: image_slim_purge_old_kernels | bool
+
+# Before the purge, not after: once the other kernels are gone the running
+# one is the only way this guest boots.
+- name: Assert the running kernel is installed as a package
+  ansible.builtin.assert:
+    that:
+      - image_slim_running_kernel_pkgs | select('match', 'linux-image-') | length > 0
+      - image_slim_running_kernel_pkgs | select('match', 'linux-modules-') | length > 0
+    fail_msg: >-
+      No linux-image and linux-modules package is installed for the running
+      kernel {{ ansible_kernel }}, so purging the others could leave nothing
+      to boot. Installed: {{ image_slim_kernel_pkgs.stdout_lines | join(', ') }}.
+  when: image_slim_purge_old_kernels | bool
+
+# A kernel installed from .deb files is marked manual already. This makes it
+# so however the running one got there: after the purge it is the only
+# kernel, and an autoremove must never be able to take it.
+- name: Mark the running kernel's packages as manually installed
+  ansible.builtin.command:
+    argv: "{{ ['apt-mark', 'manual'] + image_slim_running_kernel_pkgs }}"
+  register: image_slim_kernel_marked
+  changed_when: "'set to manually installed' in image_slim_kernel_marked.stdout"
+  when: image_slim_purge_old_kernels | bool
+
+# See files/kernel-purge-guard.sh: apt removes reverse dependencies without
+# a word, and this is where a package that should not go is caught.
+- name: Check the kernel purge removes kernels and nothing else
+  ansible.builtin.script:
+    cmd: >-
+      kernel-purge-guard.sh {{ image_slim_running_kernel_version | quote }}
+      {{ image_slim_stale_kernel_pkgs | map('quote') | join(' ') }}
+    executable: /bin/bash
+  changed_when: false
+  when:
+    - image_slim_purge_old_kernels | bool
+    - image_slim_stale_kernel_pkgs | length > 0
+
 - name: Purge kernel packages other than the running one
   ansible.builtin.apt:
     name: "{{ image_slim_stale_kernel_pkgs }}"
     state: absent
     purge: true
     autoremove: false
-  vars:
-    image_slim_running_kernel_version: >-
-      {{ ansible_kernel | regex_replace('-[a-z][a-z0-9]*$', '') }}
-    image_slim_stale_kernel_pkgs: >-
-      {{ image_slim_kernel_pkgs.stdout_lines | default([])
-         | reject('search', image_slim_running_kernel_version | regex_escape)
-         | list }}
   when:
     - image_slim_purge_old_kernels | bool
     - image_slim_stale_kernel_pkgs | length > 0
 
+# See files/kernel-leftovers.sh. Listed by the script and removed here, one
+# path at a time, each checked to be under one of the three trees and not
+# to name the running kernel.
+- name: List what the purged kernels left behind
+  ansible.builtin.script:
+    cmd: kernel-leftovers.sh {{ ansible_kernel | quote }}
+    executable: /bin/sh
+  register: image_slim_kernel_leftovers
+  changed_when: false
+  when: image_slim_purge_old_kernels | bool
+
+- name: Remove what the purged kernels left behind
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ image_slim_kernel_leftovers.stdout_lines | default([]) }}"
+  when:
+    - image_slim_purge_old_kernels | bool
+    - item is match('^/(lib/modules|boot|var/lib/dkms)/[^/]')
+    - "'..' not in item"
+    - ansible_kernel not in item
+
+# The package hooks ran update-grub as each kernel went; this is for the
+# files removed just above, and it is what the check below reads.
+- name: Regenerate the grub configuration without the purged kernels
+  ansible.builtin.command:
+    argv: [update-grub]
+  changed_when: true
+  when: image_slim_purge_old_kernels | bool
+
 # The purge above is the one step here that can leave a guest unable to
 # build a module or unable to boot, and both are silent until much later.
+# So: the headers, one kernel package, its image and initramfs in /boot and
+# no other kernel's, and a grub configuration whose every entry loads it.
 - name: Check what the kernel purge left
   ansible.builtin.shell:
     executable: /bin/bash
     cmd: |
       set -euo pipefail
-      test -e '/lib/modules/{{ ansible_kernel }}/build'
+      running='{{ ansible_kernel }}'
+      test -e "/lib/modules/$running/build"
+      test -s "/boot/vmlinuz-$running"
+      test -s "/boot/initrd.img-$running"
+      test "$(ls -d /lib/modules/*/ | wc -l)" = 1
+      test "$(ls /boot/vmlinuz-* | wc -l)" = 1
+      loads=$(awk '$1 == "linux" { n = split($2, part, "/"); print part[n] }' \
+                /boot/grub/grub.cfg | sort -u)
+      test "$loads" = "vmlinuz-$running"
       dpkg-query -W -f='${db:Status-Abbrev}${Package}\n' 'linux-image-*' \
         | grep -c '^ii ' || true
   register: image_slim_kernel_left

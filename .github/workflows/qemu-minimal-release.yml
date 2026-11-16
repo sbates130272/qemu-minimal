@@ -24,19 +24,22 @@ jobs:
         uses: actions/checkout@v4.3.1
 
       # The tag is the only thing a user sees, but the wheel takes its version
-      # from pyproject.toml and the deb from debian/changelog, so a tag that
-      # disagrees with either ships artifacts labelled with the wrong release.
-      # Fail before anything is built or published rather than after.
-      - name: Check the tag, pyproject.toml and debian/changelog agree
+      # from pyproject.toml, the deb from debian/changelog and `man qemu-tool`
+      # from the page's .TH line, so a tag that disagrees with any of them
+      # ships artifacts labelled with the wrong release. Fail before anything
+      # is built or published rather than after.
+      - name: Check the tag, pyproject.toml, debian/changelog and the man page agree
         run: |
           set -euo pipefail
           TAG_VERSION="${GITHUB_REF_NAME#v}"
           PY_VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' qemu/pyproject.toml | head -1)
           DEB_VERSION=$(sed -n '1s/^[^ ]* (\([^)]*\)).*/\1/p' qemu/debian/changelog)
+          MAN_VERSION=$(sed -n '1s/^\.TH QEMU\\-TOOL 1 "[^"]*" "qemu-tool \([^"]*\)".*/\1/p' qemu/qemu-tool/man/qemu-tool.1)
 
           echo "tag:              ${TAG_VERSION}"
           echo "pyproject.toml:   ${PY_VERSION}"
           echo "debian/changelog: ${DEB_VERSION}"
+          echo "man page:         ${MAN_VERSION}"
 
           rc=0
           if [ "${TAG_VERSION}" != "${PY_VERSION}" ]; then
@@ -47,15 +50,19 @@ jobs:
             echo "::error::tag ${GITHUB_REF_NAME} does not match qemu/debian/changelog ${DEB_VERSION}"
             rc=1
           fi
+          if [ "${TAG_VERSION}" != "${MAN_VERSION}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match qemu/qemu-tool/man/qemu-tool.1 '${MAN_VERSION}'"
+            rc=1
+          fi
           if ! grep -q "^## \[${GITHUB_REF_NAME}\] - " CHANGELOG.md; then
             echo "::error::CHANGELOG.md has no '## [${GITHUB_REF_NAME}] - <date>' heading"
             rc=1
           fi
           if [ "${rc}" -ne 0 ]; then
-            echo "::error::run scripts/release.sh ${TAG_VERSION} to stamp all three"
+            echo "::error::run scripts/release.sh ${TAG_VERSION} to stamp all four"
             exit 1
           fi
-          echo "all three agree on ${TAG_VERSION}"
+          echo "all four agree on ${TAG_VERSION}"
 
   build-python:
     name: Build Python Dists

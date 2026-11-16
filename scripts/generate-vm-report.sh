@@ -199,7 +199,7 @@ BENCH
   } 2>&1
 }
 
-# Run an sdxi-cli bench copy at 4 MiB and return the throughput in MB/s.
+# Time 4 MiB copies through the SDXI engine and report the throughput in MB/s.
 # Returns gracefully (exit 0, empty output) when the SDXI device is absent.
 run_sdxi_bw() {
   # Prerequisite: device node
@@ -208,9 +208,25 @@ run_sdxi_bw() {
     return 0
   fi
 
-  # sdxi-cli bench copy <size_bytes> <iterations>
-  # Reports: "bench copy: N bytes x M iters, avg X ms, Y MB/s"
-  $SSH "sdxi-cli -d /dev/sdxi0 bench copy 4194304 20" 2>&1
+  # The guest's sdxi-cli is the Python one, which has no `bench copy`; time
+  # its ioctl copy directly. Reports "bench copy: N bytes x M iters, ... MB/s".
+  $SSH "timeout 120 python3 -" 2>&1 <<'BENCH'
+import os, time
+from sdxi_cli.ioctl import sdxi_copy
+
+size, iters = 4194304, 20
+data = os.urandom(size)
+fd = os.open("/dev/sdxi0", os.O_RDWR)
+start = time.perf_counter()
+for _ in range(iters):
+    out = sdxi_copy(fd, data)
+elapsed = time.perf_counter() - start
+if out != data:
+    raise SystemExit("bench copy: destination differs from source")
+print(f"bench copy: {size} bytes x {iters} iters, "
+      f"avg {elapsed / iters * 1000:.2f} ms, "
+      f"{size * iters / elapsed / 1e6:.1f} MB/s")
+BENCH
 }
 
 run_rocjitsu_gemm() {
@@ -340,7 +356,6 @@ if [ "${REPORT_SDXI_BENCH:-0}" = "1" ]; then
   if ! SDXI_BW_OUTPUT=$(run_sdxi_bw); then
     bench_failed "SDXI copy bandwidth benchmark" "${SDXI_BW_OUTPUT}"
   fi
-  # sdxi-cli reports: "bench copy: N bytes x M iters, avg X ms, Y MB/s"
   SDXI_BW_MBS=$(printf '%s\n' "${SDXI_BW_OUTPUT}" \
     | awk '/bench copy:/{match($0, /([0-9.]+) MB\/s/, a); if (a[1]) print a[1]}')
   if [ -n "${SDXI_BW_MBS}" ] && [ "${SDXI_BW_MBS}" != "0" ]; then

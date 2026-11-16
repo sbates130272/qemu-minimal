@@ -159,9 +159,9 @@ rocjitsu_setup_tools_rvs_prefix: >-
 # Run against a live VM, not during image build: the tests need the rocjitsu
 # vfio-user server to be serving, which only the compose stack arranges.
 #
-#   qemu-tool compose --xml my-fleet.xml \
-#     --stack vfio-user-rocjitsu-vm up -d
-#   ansible-playbook -i <port>, ansible/playbooks/vm-rocjitsu-test.yml
+#   qemu-tool compose --stack rocm-golden up -d
+#   ansible-playbook -i qemu/compose/rocm-golden/fleet-inventory.yml \
+#     ansible/playbooks/vm-rocm-golden.yml --tags test
 
 # The emulated device. lspci reports it as "Processing accelerators"; the role
 # fails early on a clear message rather than letting hipcc succeed and the

@@ -73,6 +73,7 @@ jobs:
           --username ubuntu \
           --password password \
           --packages none \
+          --ssh-key-file "$HOME/.ssh/id_rsa.pub" \
           --size 8
     - name: Test --restore-image mode
       run: |
@@ -112,7 +113,7 @@ jobs:
         # without QMP the guest address of an emulated NVMe is unknowable and
         # `qemu-tool list` can only say "emul". This is the only lane that can
         # exercise the BDF path at all -- no compose stack can pass the flag,
-        # since gen_compose._VM_FLAGS has no qmp_socket entry.
+        # since the fleet XML has no element for a QMP socket.
         qemu-tool run-vm \
           --vm-name qemu-tool-smoke-test \
           --nvme 1 \
@@ -198,8 +199,6 @@ jobs:
           qemu-system-arm qemu-utils cloud-image-utils python3-pip
     - name: Install qemu-tool
       run: pip install --break-system-packages -e ./qemu
-    - name: Generate SSH key-pair
-      run: mkdir -p "$HOME/.ssh" && ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
     - name: Ensure images directory exists
       run: sudo mkdir -p /var/lib/qemu-tool/images && sudo chmod 777 /var/lib/qemu-tool/images
     - name: Cache cloud image
@@ -242,8 +241,6 @@ jobs:
           qemu-system-misc qemu-utils u-boot-qemu cloud-image-utils python3-pip
     - name: Install qemu-tool
       run: pip install --break-system-packages -e ./qemu
-    - name: Generate SSH key-pair
-      run: mkdir -p "$HOME/.ssh" && ssh-keygen -t rsa -q -f "$HOME/.ssh/id_rsa" -N ""
     - name: Ensure images directory exists
       run: sudo mkdir -p /var/lib/qemu-tool/images && sudo chmod 777 /var/lib/qemu-tool/images
     - name: Cache cloud image

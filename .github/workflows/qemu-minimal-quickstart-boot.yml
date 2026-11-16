@@ -6,10 +6,10 @@ name: qemu-minimal - PR quickstart boot
 # two guests, the full Ansible configure, a GPU test, an inter-guest RDMA test
 # and a published report -- and it runs on push to main and on a daily cron,
 # never on a PR. So the quickstart breaking is found the morning after the
-# merge. Gen Compose Check already renders qemu/xml/quickstart.xml on every PR and
-# asserts the services are there, which catches a broken settings file or
-# generator; what neither of them does is start QEMU. This lane does only
-# that, and stops.
+# merge. Gen Compose Check already validates the stack generated from
+# qemu/stacks/rocm-golden.xml on every PR and asserts the services are there,
+# which catches a broken settings file or generator; what neither of them
+# does is start QEMU. This lane does only that, and stops.
 #
 # WHAT IT DELIBERATELY DOES NOT DO:
 #
@@ -17,8 +17,12 @@ name: qemu-minimal - PR quickstart boot
 #     probes -- and two of them on a 4-core runner is 2x oversubscribed
 #     against the mesh manager's untunable 20 s heartbeat (AGENTS.md issue
 #     14). report-for-vm-rocm-golden accepts that flake once a day; a lane that
-#     runs on every PR must not. At VM_COUNT=1 the mesh is just the manager,
+#     runs on every PR must not. At one guest the mesh is just the manager,
 #     which gen_compose renders without the worker branch.
+#   * Anything through the SDXI device. Its server is part of the fleet and
+#     the guest waits on it being healthy, so a server that cannot start
+#     fails this lane; report-for-vm-rocm-golden benchmarks through the
+#     device daily, and the publish lane gates on a copy through it.
 #   * The Ansible play, the GPU test and the RDMA test. Those stay in
 #     report-for-vm-rocm-golden, which runs the full daily lane.
 #   * Prometheus and Grafana (--no-metrics). They are covered by
@@ -27,9 +31,11 @@ name: qemu-minimal - PR quickstart boot
 #     this lane uploads none and is not a report lane, so it needs none of
 #     the five edits AGENTS.md lists for adding one.
 #
-# THE IMAGE. Uses the unified rocm-golden qcow2 (ernic + rocjitsu + SRQ+P4
-# + SDXI all baked in) via an OVERLAY so qemu/xml/quickstart.xml itself is
-# untouched for anyone running the documented quickstart by hand.
+# THE SETTINGS. qemu/stacks/rocm-golden.xml, the file `qemu-tool quick-start`
+# runs when given no other, plus an OVERLAY this workflow writes, so the
+# default fleet itself is untouched for anyone running the documented
+# quickstart by hand. The guest is the published rocm-golden qcow2 the
+# default fleet names.
 #
 # No udev rules ship in the published image, so the IB device keeps its
 # kernel name and the assertion below resolves it from `ibv_devinfo -l`
@@ -40,11 +46,9 @@ on:
     branches:
       - main
     paths:
-      - 'qemu/qemu-tool/quick_start.py'
-      - 'qemu/qemu-tool/gen_compose.py'
-      - 'qemu/qemu-tool/run_vm.py'
-      - 'qemu/qemu-tool/gen_vm.py'
-      - 'qemu/xml/quickstart.xml'
+      - 'qemu/qemu-tool/**'
+      - 'qemu/stacks/rocm-golden.xml'
+      - 'qemu/compose/rocm-golden/**'
       - '.github/workflows/qemu-minimal-quickstart-boot.yml'
   workflow_dispatch:
 
@@ -76,7 +80,7 @@ jobs:
         -v /var/run/docker.sock:/var/run/docker.sock
         -v /var/lib/qemu-tool:/var/lib/qemu-tool
     env:
-      FLEET_FILE: qemu/xml/quickstart.xml
+      FLEET_FILE: qemu/stacks/rocm-golden.xml
       STACK_DIR: /var/lib/qemu-tool/stacks/pr-boot
       KEY_DIR: /var/lib/qemu-tool/pr-boot-key
       OVERLAY: /var/lib/qemu-tool/stacks/pr-boot.xml
@@ -109,21 +113,12 @@ jobs:
         esac
         qemu-tool quick-start --help >/dev/null
 
-    # Generate a temp env file from the XML fleet descriptor so that commands
-    # that still require --env-file (docker compose, the STAMP grep below) have
-    # a plain KEY=VALUE file. The XML is authoritative; the OVERLAY written
-    # below carries CI-specific overrides on top.
-    - name: Generate temp env from fleet XML
-      run: |
-        FLEET_ENV=$(mktemp /tmp/quickstart-XXXXXX.env)
-        qemu-tool fleet-to-env --xml "$FLEET_FILE" > "$FLEET_ENV"
-        echo "FLEET_ENV=$FLEET_ENV" >> "$GITHUB_ENV"
-
     # One guest, no TAP. Written as an overlay rather than an edit:
-    # --xml is repeatable and last wins, so qemu/xml/quickstart.xml
-    # stays the file a reader diffs and the file the README's Quick Start runs.
+    # --xml is repeatable and last wins, so qemu/stacks/rocm-golden.xml stays the
+    # file a reader diffs and the file the README's Quick Start runs. It
+    # names no image, so there is no stamp here to drift from the fleet's.
     #
-    # ERNIC_TAP=false is safe HERE and nowhere else: the TAP is the guests'
+    # <ernic-tap>false is safe HERE and nowhere else: the TAP is the guests'
     # L2 path and inter-node RDMA is impossible without it, but this lane
     # runs one guest and reaches it over the qemu container's slirp hostfwd,
     # which is a different path entirely.
@@ -138,23 +133,9 @@ jobs:
           <vm-count>1</vm-count>
           <vm-name-prefix>prboot</vm-name-prefix>
           <ernic-tap>false</ernic-tap>
-          <backing-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu:20261112.gdca6903-vm.resolute-ernic-rocjitsu-qm.096ddfe-qcow2</backing-ref>
         </fleet>
         XML
         cat "$OVERLAY"
-        # The stamp has to match the three container images in
-        # qemu/xml/quickstart.xml, or the generator's coherence check is being
-        # satisfied by a tag that is not the one being booted. Asserted here
-        # because the overlay is the only place the two can drift.
-        STAMP=$(grep -m1 "^QEMU_IMAGE=" "$FLEET_ENV" | sed 's/.*:\([0-9]\{8\}\.g[0-9a-f]*\)-.*/\1/')
-        echo "quickstart stamp: $STAMP"
-        grep -q "<backing-ref>[^<]*:${STAMP}-" "$OVERLAY" || {
-          echo "::error::the backing image in this lane is not on ${STAMP}, the stamp qemu/xml/quickstart.xml pins"
-          exit 1
-        }
-        # Regenerate FLEET_ENV with both layers merged so docker compose gets
-        # the overlay values (VM_COUNT=1, etc.) without a separate --xml arg.
-        qemu-tool fleet-to-env --xml "$FLEET_FILE" --xml "$OVERLAY" > "$FLEET_ENV"
 
     # Boot it. `up` stops as soon as the rocm-ernic container is healthy, and
     # --yes makes every prompt take its default (which is also what happens
@@ -193,7 +174,7 @@ jobs:
     #
     # The first cut of this lane skipped the step, reasoning that with one
     # guest and no TAP there was no fleet network to join. That was wrong
-    # twice over: the `fleet` network is always created (ERNIC_TAP controls
+    # twice over: the `fleet` network is always created (<ernic-tap> controls
     # the separate `l2` one), and a host-published port is unreachable from
     # here however many guests there are. The guest booted, sshd listened,
     # and the lane spent ten minutes failing to reach it.
@@ -203,12 +184,17 @@ jobs:
     - name: The guest booted and has its emulated RDMA NIC
       run: |
         set -eu
-        NET=$(grep -m1 "^FLEET_NET_PREFIX=" "$FLEET_ENV" | cut -d= -f2-)
-        # Third octet 3 is the qemu family, fourth is the 1-based VM index.
+        # The address the generator gave the guest's container, asked of the
+        # container itself; `fleet` is the only network it is on.
         # Port 2222 is the guest's own, inside its container's namespace --
-        # NOT VM_SSH_PORT_BASE, which is the host-side published port and
+        # NOT <ssh-port-base>, which is the host-side published port and
         # means nothing on this network.
-        HOST="${NET}.3.1"
+        HOST=$(docker inspect \
+          -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
+          pr-boot-qemu-1-1)
+        [ -n "$HOST" ] || {
+          echo "::error::the guest's container has no address on the stack network"
+          exit 1; }
         PORT=2222
         # The image is the authority on which account exists in it, the same
         # rule quick-start's _adopt_login follows; it has already pulled
@@ -353,7 +339,7 @@ jobs:
         set -eu
         LOG=$(docker logs pr-boot-ernic-1-1 2>&1 || true)
         if echo "$LOG" | grep -qi 'failed health check'; then
-          echo "::error::the mesh manager evicted a node at VM_COUNT=1 -- see AGENTS.md issue 14"
+          echo "::error::the mesh manager evicted a node at one guest -- see AGENTS.md issue 14"
           echo "$LOG" | grep -i 'failed health check' | head -5
           exit 1
         fi
@@ -362,20 +348,19 @@ jobs:
     - name: Show logs on failure
       if: failure()
       run: |
-        cd "$STACK_DIR" 2>/dev/null || {
+        [ -f "$STACK_DIR/docker-compose.yml" ] || {
           echo "stack directory absent; the run failed before it was created"
           exit 0
         }
-        docker compose --project-name pr-boot \
-          --env-file "$FLEET_ENV" logs --tail 100 || true
+        qemu-tool compose --stack-dir "$STACK_DIR" logs --tail 100 || true
 
     # down --all identification, against a REAL rendered stack.
     #
     # Its risky property is the identification: it removes containers, and a
     # service-name match would tear down an unrelated project that happened
-    # to have a service called qemu-1. The check is the compose file -- the
-    # gen-compose provenance header, or one of the shipped stack directories
-    # -- and only a genuinely rendered stack exercises that. A unit test can
+    # to have a service called qemu-1. The check is the compose file's
+    # gen-compose provenance header, and only a genuinely rendered stack
+    # exercises that. A unit test can
     # synthesise the labels; it cannot prove compose writes the ones the
     # code reads.
     #

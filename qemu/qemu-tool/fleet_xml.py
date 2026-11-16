@@ -12,19 +12,22 @@ libvirt_xml.py handles those.
 from __future__ import annotations
 
 import dataclasses
+import difflib
 import os
 import sys
 from pathlib import Path
 from typing import Any
 import xml.etree.ElementTree as ET
 
+from .ports import parse_ssh_port
+
 NS_FLEET = "http://qemu-tool/fleet/1.0"
 _TAG_FLEET = f"{{{NS_FLEET}}}fleet"
 
-# Installed by the .deb; the admin edits this copy.
+# The site-wide file. The .deb creates the directory, the admin the file.
 _INSTALLED_FLEET = Path("/etc/qemu-tool/fleet.xml")
 # Source checkout: this file is qemu/qemu-tool/fleet_xml.py, so qemu/ is two up.
-_SOURCE_FLEET = Path(__file__).parent.parent / "env" / "fleet.xml"
+_SOURCE_FLEET = Path(__file__).parent.parent / "stacks" / "fleet.xml"
 
 
 def _xdg_fleet() -> Path:
@@ -58,9 +61,15 @@ class FleetConfig:
     ernic_mac_prefix: str = "72:6f:63:6d"
 
     # ---- Topology (devices per VM) ----
+    # ernic_per_vm multiplies MESH NODES, not just containers: each rocm-ernic
+    # is its own node, so 8 per VM against the ~40-node registration wall
+    # (AGENTS.md issue 17) caps the fleet near 5 VMs, not 40.
     ernic_per_vm: int = 1
     rocjitsu_per_vm: int = 1
     sdxi_per_vm: int = 0
+    # Group the guest's vfio-user devices under PCIe switches, this many per
+    # switch. 2 with equal ernic/rocjitsu counts gives the MI355X shape: one
+    # NIC and one GPU below each switch. 0 is off.
     vm_pcie_switch_width: int = 0
 
     # ---- ERNIC mesh ----
@@ -68,8 +77,14 @@ class FleetConfig:
     ernic_tcp_port: int = 6320
     ernic_stats_port: int = 9840
     ernic_nofile: int = 65536
+    # The P4 engine on the ernic server. p4_guest_scope controls which guest
+    # commands reach it: none, read (counters), write (also table entries), or
+    # load (also program replacement). Requires the server image built with
+    # -DERNIC_BUILD_P4=ON and ernic_p4.ko in the guest.
     p4_enable: bool = False
     p4_guest_scope: str = "none"
+    # Path to a bmv2 JSON program inside the ernic container. Empty leaves the
+    # engine in pass-through mode (--p4 without --p4-program).
     p4_program: str = ""
 
     # ---- Per-VM defaults ----
@@ -81,25 +96,61 @@ class FleetConfig:
     vm_username: str = "ubuntu"
     vm_password: str = ""
     vm_filesystem: str = ""
+    # True, matching VMConfig: off leaves a GPU with a 16M 32-bit BAR that
+    # amdgpu cannot initialise. See the comment on VMConfig.vfio_user_root_port.
     vm_vfio_user_root_port: bool = True
     vm_extra_hostfwd: str = ""
     vm_ssh_key_file: str = ""
     vm_images_dir: str = "/var/lib/qemu-tool/images"
-    vm_cpu_sockets: str = ""
-    vm_cpu_phys_bits: str = ""
+    # Guest socket count, and the 64-bit PCI hole. 0 or empty leaves them to
+    # QEMU, whose -smp inference gives one single-core socket per vCPU.
+    vm_cpu_sockets: int = 0
+    vm_cpu_phys_bits: int = 0
     vm_pci_hole64_size: str = ""
     rocjitsu_config: str = "gfx1250_mi455x.json"
 
     # ---- Misc ----
     qemu_tool_src: str = "../../.."
+    # Excuses backing_ref from the build-stamp check, and nothing else. Off by
+    # default: the check is the thing that stops a mixed set wedging a fleet
+    # at the vfio-user boundary.
     image_allow_guest_lag: bool = False
 
     # ---- Domain file pattern ----
     domain_pattern: str = "{name-prefix}-{n}.xml"
 
+    # ---- Bake and publish ----
+    # Read only by `gen-vm --bake` and `publish-qcow --xml`. A fleet names the
+    # PUBLISHED image as its backing-ref, so a plain gen-vm pulls rather than
+    # bakes and never looks at these. Empty or 0 leaves the VMConfig default.
+    bake_name: str = ""
+    bake_release: str = ""
+    bake_size: int = 0
+    bake_vcpus: int = 0
+    bake_vmem: int = 0         # MiB
+    # A manifest path, or "none".
+    bake_packages: str = ""
+    bake_playbook: str = ""
+    # Separate from vm_username/vm_password because these are PUBLISHED in
+    # vm-info.json; a fleet's own login must never reach a registry.
+    bake_username: str = ""
+    bake_password: str = ""
+    # "" for unset, "auto", or a port number as text: the host port the
+    # bake's Ansible boot forwards to the guest's sshd.
+    bake_ssh_port: str = ""
+    # A directory on the controller that carries the bake's compiler cache
+    # from one bake to the next. Empty, the default, is a bake from source.
+    bake_cache_dir: str = ""
+    # Registry repository, without a tag.
+    publish_ref: str = ""
+    publish_flavour: str = ""
 
     # ---- Metrics ----
     prom_port: int = 9090
+    # Host interface the published ports bind to. 0.0.0.0 so a fleet running
+    # on a lab box is reachable from a workstation; 127.0.0.1 keeps it local.
+    # Grafana has anonymous admin enabled, so this is the control that decides
+    # who can reach it.
     publish_bind_addr: str = "0.0.0.0"
     prom_scrape_interval: str = "15s"
     prom_retention: str = "7d"
@@ -113,35 +164,204 @@ class FleetConfig:
     # ---- Logging ----
     log_max_size: str = "50m"
     log_max_files: int = 3
+    # Loki plus an Alloy tailing the stack's containers. Rides the `metrics`
+    # profile: a log panel beside a metric panel is the whole point.
     logs_enable: bool = True
     loki_image: str = "docker.io/grafana/loki:3.3.2"
     loki_port: int = 3100
     loki_data_dir: str = "/var/lib/qemu-tool/loki-data"
     alloy_image: str = "docker.io/grafana/alloy:v1.5.1"
 
+_STR, _EXPAND, _INT, _BOOL, _PORT = "str", "expand", "int", "bool", "port"
+
+
+@dataclasses.dataclass(frozen=True)
+class _Setting:
+    tag: str
+    field: str
+    kind: str
+    # Written by emit() only when the value is non-empty / non-zero.
+    sparse: bool = False
+
+
+# The one description of the format: parse, emit and the set of known
+# elements all read this, in this order.
+_SETTINGS: tuple[_Setting, ...] = (
+    # Shape
+    _Setting("vm-count", "count", _INT),
+    _Setting("vm-name-prefix", "name_prefix", _STR),
+    _Setting("ssh-port-base", "ssh_port_base", _INT),
+    _Setting("stop-grace-period", "stop_grace_period", _STR),
+    # Images
+    _Setting("qemu-ref", "qemu_ref", _STR, sparse=True),
+    _Setting("qemu-digest", "qemu_digest", _STR, sparse=True),
+    _Setting("ernic-ref", "ernic_ref", _STR, sparse=True),
+    _Setting("ernic-digest", "ernic_digest", _STR, sparse=True),
+    _Setting("rocjitsu-ref", "rocjitsu_ref", _STR, sparse=True),
+    _Setting("rocjitsu-digest", "rocjitsu_digest", _STR, sparse=True),
+    _Setting("sdxi-image", "sdxi_ref", _STR, sparse=True),
+    _Setting("backing-ref", "backing_ref", _STR, sparse=True),
+    _Setting("backing-digest", "backing_digest", _STR, sparse=True),
+    # Network
+    _Setting("fleet-prefix", "fleet_prefix", _STR),
+    _Setting("ernic-subnet", "ernic_subnet", _STR),
+    _Setting("ernic-mac-prefix", "ernic_mac_prefix", _STR),
+    # Topology
+    _Setting("ernic-per-vm", "ernic_per_vm", _INT),
+    _Setting("rocjitsu-per-vm", "rocjitsu_per_vm", _INT),
+    _Setting("sdxi-per-vm", "sdxi_per_vm", _INT, sparse=True),
+    _Setting("vm-pcie-switch-width", "vm_pcie_switch_width", _INT),
+    # ERNIC
+    _Setting("ernic-tap", "ernic_tap", _BOOL),
+    _Setting("ernic-tcp-port", "ernic_tcp_port", _INT),
+    _Setting("ernic-stats-port", "ernic_stats_port", _INT),
+    _Setting("ernic-nofile", "ernic_nofile", _INT),
+    _Setting("p4-enable", "p4_enable", _BOOL),
+    _Setting("p4-guest-scope", "p4_guest_scope", _STR),
+    _Setting("p4-program", "p4_program", _STR),
+    # VM defaults
+    _Setting("vm-vcpus", "vm_vcpus", _INT),
+    _Setting("vm-vmem", "vm_vmem", _INT),
+    _Setting("vm-shm-size", "shm_size", _STR),
+    _Setting("vm-nvme", "vm_nvme", _INT),
+    _Setting("vm-backing-shared", "vm_backing_shared", _BOOL),
+    _Setting("vm-username", "vm_username", _STR),
+    _Setting("vm-password", "vm_password", _STR),
+    _Setting("vm-filesystem", "vm_filesystem", _STR),
+    _Setting("vm-vfio-user-root-port", "vm_vfio_user_root_port", _BOOL),
+    _Setting("vm-extra-hostfwd", "vm_extra_hostfwd", _STR),
+    _Setting("vm-ssh-key-file", "vm_ssh_key_file", _EXPAND),
+    _Setting("vm-images-dir", "vm_images_dir", _EXPAND),
+    _Setting("vm-cpu-sockets", "vm_cpu_sockets", _INT, sparse=True),
+    _Setting("vm-cpu-phys-bits", "vm_cpu_phys_bits", _INT, sparse=True),
+    _Setting("vm-pci-hole64-size", "vm_pci_hole64_size", _STR),
+    _Setting("rocjitsu-config", "rocjitsu_config", _STR),
+    # Misc
+    _Setting("qemu-tool-src", "qemu_tool_src", _STR),
+    _Setting("image-allow-guest-lag", "image_allow_guest_lag", _BOOL),
+    # Domain files
+    _Setting("domain-pattern", "domain_pattern", _STR),
+    # Bake and publish
+    _Setting("bake-name", "bake_name", _STR, sparse=True),
+    _Setting("bake-release", "bake_release", _STR, sparse=True),
+    _Setting("bake-size", "bake_size", _INT, sparse=True),
+    _Setting("bake-vcpus", "bake_vcpus", _INT, sparse=True),
+    _Setting("bake-vmem", "bake_vmem", _INT, sparse=True),
+    _Setting("bake-packages", "bake_packages", _EXPAND, sparse=True),
+    _Setting("bake-playbook", "bake_playbook", _EXPAND, sparse=True),
+    _Setting("bake-username", "bake_username", _STR, sparse=True),
+    _Setting("bake-password", "bake_password", _STR, sparse=True),
+    _Setting("bake-ssh-port", "bake_ssh_port", _PORT, sparse=True),
+    _Setting("bake-cache-dir", "bake_cache_dir", _EXPAND, sparse=True),
+    _Setting("publish-ref", "publish_ref", _STR, sparse=True),
+    _Setting("publish-flavour", "publish_flavour", _STR, sparse=True),
+    # Metrics
+    _Setting("prom-port", "prom_port", _INT),
+    _Setting("publish-bind-addr", "publish_bind_addr", _STR),
+    _Setting("prom-scrape-interval", "prom_scrape_interval", _STR),
+    _Setting("prom-retention", "prom_retention", _STR),
+    _Setting("prom-data-dir", "prometheus_data_dir", _EXPAND, sparse=True),
+    _Setting("grafana-enable", "grafana_enable", _BOOL),
+    _Setting("grafana-image", "grafana_image", _STR),
+    _Setting("grafana-port", "grafana_port", _INT),
+    _Setting("grafana-admin-password", "grafana_admin_password", _STR),
+    _Setting("grafana-data-dir", "grafana_data_dir", _EXPAND, sparse=True),
+    # Logging
+    _Setting("log-max-size", "log_max_size", _STR),
+    _Setting("log-max-files", "log_max_files", _INT),
+    _Setting("logs-enable", "logs_enable", _BOOL),
+    _Setting("loki-image", "loki_image", _STR),
+    _Setting("loki-port", "loki_port", _INT),
+    _Setting("loki-data-dir", "loki_data_dir", _EXPAND),
+    _Setting("alloy-image", "alloy_image", _STR),
+)
+
+_BY_TAG = {s.tag: s for s in _SETTINGS}
+KNOWN_ELEMENTS: tuple[str, ...] = tuple(_BY_TAG)
+
 
 def _bool_str(value: bool) -> str:
     return "true" if value else "false"
 
 
-def _parse_bool(raw: str, attr: str, path: Path) -> bool:
-    low = raw.lower()
-    if low in ("true", "1", "yes"):
-        return True
-    if low in ("false", "0", "no"):
-        return False
-    sys.exit(f"Error: {path}: {attr} must be a boolean, got {raw!r}")
+def _convert(setting: _Setting, raw: str) -> Any:
+    """The typed value of one element's text; ValueError says what is wrong."""
+    if setting.kind == _BOOL:
+        low = raw.lower()
+        if low in ("true", "1", "yes"):
+            return True
+        if low in ("false", "0", "no"):
+            return False
+        raise ValueError(f"{setting.tag} must be a boolean, got {raw!r}")
+    if setting.kind == _INT:
+        try:
+            return int(raw)
+        except ValueError:
+            raise ValueError(
+                f"{setting.tag} must be an integer, got {raw!r}") from None
+    if setting.kind == _PORT:
+        try:
+            return str(parse_ssh_port(raw))
+        except ValueError:
+            raise ValueError(
+                f"{setting.tag} must be a port number or auto, got {raw!r}"
+            ) from None
+    if setting.kind == _EXPAND:
+        # Here, once, so every reader sees the same path.
+        return os.path.expanduser(os.path.expandvars(raw))
+    return raw
 
 
-def _parse_int(raw: str, attr: str, path: Path) -> int:
-    try:
-        return int(raw)
-    except ValueError:
-        sys.exit(f"Error: {path}: {attr} must be an integer, got {raw!r}")
+def _split_tag(qualified: str) -> tuple[str, str]:
+    """('namespace', 'local-name') of an ElementTree tag."""
+    if qualified.startswith("{"):
+        ns, _, local = qualified[1:].partition("}")
+        return ns, local
+    return "", qualified
 
 
-def _expand(value: str) -> str:
-    return os.path.expandvars(value)
+def _structure_problems(root: ET.Element) -> list[str]:
+    """Everything in the document that is not a known setting, used once.
+
+    The format is flat, so anything else is a mistake that used to be read as
+    "setting absent": a misspelt element, a second copy of one, a value put in
+    an attribute. Comments never reach here; the parser drops them.
+    """
+    problems: list[str] = []
+    if root.attrib:
+        problems.append(
+            f"<fleet> takes no attributes, found {', '.join(sorted(root.attrib))}")
+    stray = [(root.text or "").strip()] + [(c.tail or "").strip() for c in root]
+    for text in filter(None, stray):
+        problems.append(
+            f"text directly under <fleet> is not a setting: {text[:40]!r}")
+    seen: set[str] = set()
+    for child in root:
+        ns, local = _split_tag(child.tag)
+        if ns != NS_FLEET:
+            problems.append(
+                f"<{local}> is in namespace {ns!r}, not the fleet namespace "
+                f"{NS_FLEET!r}")
+            continue
+        if local not in _BY_TAG:
+            close = difflib.get_close_matches(local, KNOWN_ELEMENTS, n=1)
+            hint = f"; did you mean <{close[0]}>?" if close else ""
+            problems.append(f"unknown element <{local}>{hint}")
+            continue
+        if local in seen:
+            problems.append(f"<{local}> appears more than once")
+        seen.add(local)
+        if child.attrib:
+            problems.append(
+                f"<{local}> takes no attributes, found "
+                f"{', '.join(sorted(child.attrib))}; the value is the "
+                "element's text")
+        if len(child):
+            nested = _split_tag(child[0].tag)[1]
+            problems.append(
+                f"<{local}> holds a nested <{nested}>; settings are direct "
+                "children of <fleet>")
+    return problems
 
 
 class FleetXml:
@@ -177,8 +397,8 @@ class FleetXml:
         return []
 
     @classmethod
-    def _parse_with_fields(cls, path: Path) -> tuple[FleetConfig, frozenset[str]]:
-        """Parse a fleet XML file; return config and set of explicitly-set field names.
+    def _read(cls, path: Path) -> tuple[FleetConfig, frozenset[str], list[str]]:
+        """Parse one file; return config, explicitly-set fields and problems.
 
         The file format is flat: each setting is a direct child of <fleet> with
         its value as text content.  Example:
@@ -186,136 +406,53 @@ class FleetXml:
               <vm-count>8</vm-count>
               <qemu-ref>docker.io/...</qemu-ref>
             </fleet>
-        """
-        try:
-            tree = ET.parse(path)
-        except ET.ParseError as exc:
-            sys.exit(f"Error: {path}: XML parse error: {exc}")
-        root = tree.getroot()
-        if root.tag != _TAG_FLEET:
-            sys.exit(
-                f"Error: {path}: expected root element "
-                f"<fleet xmlns='{NS_FLEET}'>, got <{root.tag}>"
-            )
 
+        Strict: an element this parser does not know, a repeated one, an
+        attribute, a nested element and stray text are all problems.
+        """
         cfg = FleetConfig()
         explicit: set[str] = set()
+        try:
+            root = ET.parse(path).getroot()
+        except ET.ParseError as exc:
+            return cfg, frozenset(), [f"XML parse error: {exc}"]
+        except OSError as exc:
+            return cfg, frozenset(), [f"cannot be read: {exc.strerror or exc}"]
+        if root.tag != _TAG_FLEET:
+            return cfg, frozenset(), [
+                f"expected root element <fleet xmlns='{NS_FLEET}'>, "
+                f"got <{root.tag}>"]
 
-        def _text(tag: str) -> str | None:
-            el = root.find(f"{{{NS_FLEET}}}{tag}")
-            if el is None:
-                return None
-            return el.text or ""
+        problems = _structure_problems(root)
+        for child in root:
+            ns, local = _split_tag(child.tag)
+            setting = _BY_TAG.get(local) if ns == NS_FLEET else None
+            # First wins, as it always has; a repeat is reported above.
+            if setting is None or setting.field in explicit:
+                continue
+            try:
+                setattr(cfg, setting.field, _convert(setting, child.text or ""))
+            except ValueError as exc:
+                problems.append(str(exc))
+            explicit.add(setting.field)
+        return cfg, frozenset(explicit), problems
 
-        def _set_str(field: str, tag: str) -> None:
-            v = _text(tag)
-            if v is not None:
-                setattr(cfg, field, v)
-                explicit.add(field)
+    @classmethod
+    def problems(cls, path: Path) -> list[str]:
+        """What is wrong with a fleet XML file, one line each; [] when valid.
 
-        def _set_str_expand(field: str, tag: str) -> None:
-            v = _text(tag)
-            if v is not None:
-                setattr(cfg, field, _expand(v))
-                explicit.add(field)
+        Never exits, so a caller that reports (qemu-tool check) can use the
+        same validation parse() enforces.
+        """
+        return [f"{path}: {problem}" for problem in cls._read(path)[2]]
 
-        def _set_bool(field: str, tag: str) -> None:
-            v = _text(tag)
-            if v is not None:
-                setattr(cfg, field, _parse_bool(v, tag, path))
-                explicit.add(field)
-
-        def _set_int(field: str, tag: str) -> None:
-            v = _text(tag)
-            if v is not None:
-                setattr(cfg, field, _parse_int(v, tag, path))
-                explicit.add(field)
-
-        # Shape
-        _set_int("count", "vm-count")
-        _set_str("name_prefix", "vm-name-prefix")
-        _set_int("ssh_port_base", "ssh-port-base")
-        _set_str("stop_grace_period", "stop-grace-period")
-
-        # Images
-        _set_str("qemu_ref", "qemu-ref")
-        _set_str("qemu_digest", "qemu-digest")
-        _set_str("ernic_ref", "ernic-ref")
-        _set_str("ernic_digest", "ernic-digest")
-        _set_str("rocjitsu_ref", "rocjitsu-ref")
-        _set_str("rocjitsu_digest", "rocjitsu-digest")
-        _set_str("sdxi_ref", "sdxi-image")
-        _set_str("backing_ref", "backing-ref")
-        _set_str("backing_digest", "backing-digest")
-
-        # Network
-        _set_str("fleet_prefix", "fleet-prefix")
-        _set_str("ernic_subnet", "ernic-subnet")
-        _set_str("ernic_mac_prefix", "ernic-mac-prefix")
-
-        # Topology
-        _set_int("ernic_per_vm", "ernic-per-vm")
-        _set_int("rocjitsu_per_vm", "rocjitsu-per-vm")
-        _set_int("sdxi_per_vm", "sdxi-per-vm")
-        _set_int("vm_pcie_switch_width", "vm-pcie-switch-width")
-
-        # ERNIC
-        _set_bool("ernic_tap", "ernic-tap")
-        _set_int("ernic_tcp_port", "ernic-tcp-port")
-        _set_int("ernic_stats_port", "ernic-stats-port")
-        _set_int("ernic_nofile", "ernic-nofile")
-        _set_bool("p4_enable", "p4-enable")
-        _set_str("p4_guest_scope", "p4-guest-scope")
-        _set_str("p4_program", "p4-program")
-
-        # VM defaults
-        _set_int("vm_vcpus", "vm-vcpus")
-        _set_int("vm_vmem", "vm-vmem")
-        _set_str("shm_size", "vm-shm-size")
-        _set_int("vm_nvme", "vm-nvme")
-        _set_bool("vm_backing_shared", "vm-backing-shared")
-        _set_str("vm_username", "vm-username")
-        _set_str("vm_password", "vm-password")
-        _set_str("vm_filesystem", "vm-filesystem")
-        _set_bool("vm_vfio_user_root_port", "vm-vfio-user-root-port")
-        _set_str("vm_extra_hostfwd", "vm-extra-hostfwd")
-        _set_str_expand("vm_ssh_key_file", "vm-ssh-key-file")
-        _set_str_expand("vm_images_dir", "vm-images-dir")
-        _set_str("vm_cpu_sockets", "vm-cpu-sockets")
-        _set_str("vm_cpu_phys_bits", "vm-cpu-phys-bits")
-        _set_str("vm_pci_hole64_size", "vm-pci-hole64-size")
-        _set_str("rocjitsu_config", "rocjitsu-config")
-
-        # Misc
-        _set_str("qemu_tool_src", "qemu-tool-src")
-        _set_bool("image_allow_guest_lag", "image-allow-guest-lag")
-
-        # Domain files
-        _set_str("domain_pattern", "domain-pattern")
-
-
-        # Metrics
-        _set_int("prom_port", "prom-port")
-        _set_str("publish_bind_addr", "publish-bind-addr")
-        _set_str("prom_scrape_interval", "prom-scrape-interval")
-        _set_str("prom_retention", "prom-retention")
-        _set_str_expand("prometheus_data_dir", "prom-data-dir")
-        _set_bool("grafana_enable", "grafana-enable")
-        _set_str("grafana_image", "grafana-image")
-        _set_int("grafana_port", "grafana-port")
-        _set_str("grafana_admin_password", "grafana-admin-password")
-        _set_str_expand("grafana_data_dir", "grafana-data-dir")
-
-        # Logging
-        _set_str("log_max_size", "log-max-size")
-        _set_int("log_max_files", "log-max-files")
-        _set_bool("logs_enable", "logs-enable")
-        _set_str("loki_image", "loki-image")
-        _set_int("loki_port", "loki-port")
-        _set_str_expand("loki_data_dir", "loki-data-dir")
-        _set_str("alloy_image", "alloy-image")
-
-        return cfg, frozenset(explicit)
+    @classmethod
+    def _parse_with_fields(cls, path: Path) -> tuple[FleetConfig, frozenset[str]]:
+        """Parse a fleet XML file strictly; exit naming every problem in it."""
+        cfg, explicit, problems = cls._read(path)
+        if problems:
+            sys.exit("\n".join(f"Error: {path}: {p}" for p in problems))
+        return cfg, explicit
 
     @classmethod
     def parse(cls, path: Path) -> FleetConfig:
@@ -330,105 +467,12 @@ class FleetXml:
 
         root = ET.Element(f"{{{NS_FLEET}}}fleet")
 
-        def _flat(tag: str, value: str) -> None:
-            el = ET.SubElement(root, f"{{{NS_FLEET}}}{tag}")
-            el.text = value
-
-        # Shape
-        _flat("vm-count", str(cfg.count))
-        _flat("vm-name-prefix", cfg.name_prefix)
-        _flat("ssh-port-base", str(cfg.ssh_port_base))
-        _flat("stop-grace-period", cfg.stop_grace_period)
-
-        # Images
-        if cfg.qemu_ref:
-            _flat("qemu-ref", cfg.qemu_ref)
-        if cfg.qemu_digest:
-            _flat("qemu-digest", cfg.qemu_digest)
-        if cfg.ernic_ref:
-            _flat("ernic-ref", cfg.ernic_ref)
-        if cfg.ernic_digest:
-            _flat("ernic-digest", cfg.ernic_digest)
-        if cfg.rocjitsu_ref:
-            _flat("rocjitsu-ref", cfg.rocjitsu_ref)
-        if cfg.rocjitsu_digest:
-            _flat("rocjitsu-digest", cfg.rocjitsu_digest)
-        if cfg.sdxi_ref:
-            _flat("sdxi-image", cfg.sdxi_ref)
-        if cfg.backing_ref:
-            _flat("backing-ref", cfg.backing_ref)
-        if cfg.backing_digest:
-            _flat("backing-digest", cfg.backing_digest)
-
-        # Network
-        _flat("fleet-prefix", cfg.fleet_prefix)
-        _flat("ernic-subnet", cfg.ernic_subnet)
-        _flat("ernic-mac-prefix", cfg.ernic_mac_prefix)
-
-        # Topology
-        _flat("ernic-per-vm", str(cfg.ernic_per_vm))
-        _flat("rocjitsu-per-vm", str(cfg.rocjitsu_per_vm))
-        if cfg.sdxi_per_vm:
-            _flat("sdxi-per-vm", str(cfg.sdxi_per_vm))
-        _flat("vm-pcie-switch-width", str(cfg.vm_pcie_switch_width))
-
-        # ERNIC
-        _flat("ernic-tap", _bool_str(cfg.ernic_tap))
-        _flat("ernic-tcp-port", str(cfg.ernic_tcp_port))
-        _flat("ernic-stats-port", str(cfg.ernic_stats_port))
-        _flat("ernic-nofile", str(cfg.ernic_nofile))
-        _flat("p4-enable", _bool_str(cfg.p4_enable))
-        _flat("p4-guest-scope", cfg.p4_guest_scope)
-        _flat("p4-program", cfg.p4_program)
-
-        # VM defaults
-        _flat("vm-vcpus", str(cfg.vm_vcpus))
-        _flat("vm-vmem", str(cfg.vm_vmem))
-        _flat("vm-shm-size", cfg.shm_size)
-        _flat("vm-nvme", str(cfg.vm_nvme))
-        _flat("vm-backing-shared", _bool_str(cfg.vm_backing_shared))
-        _flat("vm-username", cfg.vm_username)
-        _flat("vm-password", cfg.vm_password)
-        _flat("vm-filesystem", cfg.vm_filesystem)
-        _flat("vm-vfio-user-root-port", _bool_str(cfg.vm_vfio_user_root_port))
-        _flat("vm-extra-hostfwd", cfg.vm_extra_hostfwd)
-        _flat("vm-ssh-key-file", cfg.vm_ssh_key_file)
-        _flat("vm-images-dir", cfg.vm_images_dir)
-        _flat("vm-cpu-sockets", cfg.vm_cpu_sockets)
-        _flat("vm-cpu-phys-bits", cfg.vm_cpu_phys_bits)
-        _flat("vm-pci-hole64-size", cfg.vm_pci_hole64_size)
-        _flat("rocjitsu-config", cfg.rocjitsu_config)
-
-        # Misc
-        _flat("qemu-tool-src", cfg.qemu_tool_src)
-        _flat("image-allow-guest-lag", _bool_str(cfg.image_allow_guest_lag))
-
-        # Domain files
-        _flat("domain-pattern", cfg.domain_pattern)
-
-
-        # Metrics
-        _flat("prom-port", str(cfg.prom_port))
-        _flat("publish-bind-addr", cfg.publish_bind_addr)
-        _flat("prom-scrape-interval", cfg.prom_scrape_interval)
-        _flat("prom-retention", cfg.prom_retention)
-        if cfg.prometheus_data_dir:
-            _flat("prom-data-dir", cfg.prometheus_data_dir)
-        _flat("grafana-enable", _bool_str(cfg.grafana_enable))
-        _flat("grafana-image", cfg.grafana_image)
-        _flat("grafana-port", str(cfg.grafana_port))
-        _flat("grafana-admin-password", cfg.grafana_admin_password)
-        if cfg.grafana_data_dir:
-            _flat("grafana-data-dir", cfg.grafana_data_dir)
-
-        # Logging
-        _flat("log-max-size", cfg.log_max_size)
-        _flat("log-max-files", str(cfg.log_max_files))
-        _flat("logs-enable", _bool_str(cfg.logs_enable))
-        _flat("loki-image", cfg.loki_image)
-        _flat("loki-port", str(cfg.loki_port))
-        _flat("loki-data-dir", cfg.loki_data_dir)
-        _flat("alloy-image", cfg.alloy_image)
+        for setting in _SETTINGS:
+            value = getattr(cfg, setting.field)
+            if setting.sparse and not value:
+                continue
+            el = ET.SubElement(root, f"{{{NS_FLEET}}}{setting.tag}")
+            el.text = _bool_str(value) if setting.kind == _BOOL else str(value)
 
         _indent(root)
         return ET.tostring(root, encoding="unicode", xml_declaration=False)

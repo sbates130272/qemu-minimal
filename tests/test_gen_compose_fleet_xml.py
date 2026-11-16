@@ -1,4 +1,4 @@
-"""Tests for _fleet_to_env() and fleet-XML path through gen_compose.run().
+"""Tests for the FleetConfig path through gen_compose.plan() and run().
 
 Run with:
     python3 -m unittest tests.test_gen_compose_fleet_xml -v
@@ -6,15 +6,18 @@ Run with:
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-_EXAMPLE_XML = REPO_ROOT / "qemu" / "xml" / "fleet-example.xml"
-_EXAMPLE_ENV = REPO_ROOT / "qemu" / "env" / "scale-out"
+_DEFAULT_XML = REPO_ROOT / "qemu" / "stacks" / "rocm-golden.xml"
 
 
 def _load_package() -> None:
@@ -30,125 +33,168 @@ def _load_package() -> None:
 _load_package()
 
 from qemu_tool.fleet_xml import FleetConfig, FleetXml  # noqa: E402
-from qemu_tool.gen_compose import _fleet_to_env, plan  # noqa: E402
+from qemu_tool.gen_compose import plan  # noqa: E402
 
 
-class FleetToEnv(unittest.TestCase):
-    """_fleet_to_env() produces env-key strings that round-trip through plan()."""
+# plan() refuses a fleet that names no image for a service it renders.
+_REFS = {"qemu_ref": "example/qemu:1", "ernic_ref": "example/ernic:1",
+         "rocjitsu_ref": "example/rocjitsu:1"}
 
-    def setUp(self) -> None:
-        self.cfg = FleetXml.parse(_EXAMPLE_XML)
-        self.env = _fleet_to_env(self.cfg)
 
-    def test_count_string(self) -> None:
-        self.assertEqual(self.env["VM_COUNT"], "8")
+def _config(**fields) -> FleetConfig:
+    return FleetConfig(**{**_REFS, **fields})
 
-    def test_name_prefix(self) -> None:
-        self.assertEqual(self.env["VM_NAME_PREFIX"], "stebates-fleet")
 
-    def test_ernic_tap_boolean(self) -> None:
-        self.assertEqual(self.env["ERNIC_TAP"], "true")
+class PlanFromFleetConfig(unittest.TestCase):
+    """plan() reads the parsed FleetConfig, with nothing in between."""
 
-    def test_log_max_files_singular_key(self) -> None:
-        # env key is LOG_MAX_FILE (singular), not LOG_MAX_FILES
-        self.assertIn("LOG_MAX_FILE", self.env)
-        self.assertNotIn("LOG_MAX_FILES", self.env)
-        self.assertEqual(self.env["LOG_MAX_FILE"], "3")
+    def test_plan_accepts_the_default_fleet(self) -> None:
+        spec = plan(FleetXml.parse(_DEFAULT_XML))
+        self.assertEqual(spec["count"], 2)
+        self.assertEqual(spec["vms"][0]["name"], "rocm-golden-1")
+        self.assertTrue(spec["ernic_tap"])
+        self.assertEqual(spec["log_max_file"], "3")
 
-    def test_domain_pattern_absent(self) -> None:
-        # domain_pattern has no env key mapping; must not appear
-        self.assertNotIn("DOMAIN_PATTERN", self.env)
+    def test_plan_accepts_a_config_naming_only_its_images(self) -> None:
+        spec = plan(_config())
+        self.assertEqual(spec["count"], 1)
+        self.assertEqual(spec["vms"][0]["name"], "qemu-fleet-1")
+        self.assertEqual(spec["vms"][0]["flags"], [])
 
-    def test_image_keys_present(self) -> None:
-        self.assertIn("QEMU_IMAGE", self.env)
-        self.assertIn("ERNIC_IMAGE", self.env)
-        self.assertIn("ROCJITSU_IMAGE", self.env)
-        self.assertIn("VM_BACKING_IMAGE", self.env)
+    def test_an_empty_element_means_the_default(self) -> None:
+        spec = plan(_config(name_prefix="", grafana_image="", shm_size=""))
+        self.assertEqual(spec["vms"][0]["name"], "qemu-fleet-1")
+        self.assertEqual(spec["grafana_image"], FleetConfig().grafana_image)
+        self.assertEqual(spec["vms"][0]["shm_size"], "8g")
 
-    def test_defaults_have_no_image_keys(self) -> None:
-        # A default FleetConfig has empty image refs — they must be absent.
-        default_env = _fleet_to_env(FleetConfig())
-        self.assertNotIn("QEMU_IMAGE", default_env)
-        self.assertNotIn("ERNIC_IMAGE", default_env)
+    def test_unset_data_dirs_are_absolute(self) -> None:
+        spec = plan(_config())
+        self.assertEqual(spec["prom_data_dir"], "/var/lib/qemu-tool/prom-data")
+        self.assertEqual(
+            spec["grafana_data_dir"], "/var/lib/qemu-tool/grafana-data")
 
-    def test_plan_accepts_fleet_env(self) -> None:
-        # plan() should not raise when given fleet-derived values.
-        spec = plan(self.env)
-        self.assertEqual(spec["count"], 8)
-        # name_prefix is embedded in per-VM specs, not a top-level spec key
-        self.assertIn("vms", spec)
-        self.assertEqual(spec["vms"][0]["name"], "stebates-fleet-1")
+    def test_integer_settings_reach_the_templates_as_text(self) -> None:
+        spec = plan(_config(ernic_tcp_port=7000, ssh_port_base=3000, count=2))
+        self.assertEqual(spec["tcp_port"], "7000")
+        self.assertEqual([vm["ssh_port"] for vm in spec["vms"]], ["3000", "3001"])
+
+    def test_a_per_vm_filesystem_list_applies_positionally(self) -> None:
+        spec = plan(_config(count=2, vm_filesystem="/srv/a, /srv/b"))
+        got = [dict(vm["flags"])["--filesystem"] for vm in spec["vms"]]
+        self.assertEqual(got, ["/srv/a", "/srv/b"])
+
+    def test_a_per_vm_filesystem_list_mounts_each_share(self) -> None:
+        from qemu_tool.gen_compose import render_compose
+        out = render_compose(
+            plan(_config(count=3, vm_filesystem="/srv/a, /srv/b, /srv/a")),
+            ["e"], "d")
+        self.assertEqual(out.count('"/srv/a:/srv/a:ro"'), 1)
+        self.assertEqual(out.count('"/srv/b:/srv/b:ro"'), 1)
+        volumes = [line for line in out.splitlines()
+                   if line.strip().startswith('- "/srv/')]
+        self.assertEqual(len(volumes), 2)
+        for line in volumes:
+            self.assertNotIn(",", line)
 
 
 class RunWithFleetXml(unittest.TestCase):
-    """gen_compose.run() with fleet_file produces a valid docker-compose.yml."""
+    """gen_compose.run() renders from fleet XML."""
 
-    def test_dry_run_fleet_only(self) -> None:
+    def test_dry_run(self) -> None:
         from qemu_tool.gen_compose import run as gen_compose_run
         import io
         from contextlib import redirect_stdout
 
         with tempfile.TemporaryDirectory() as tmp:
-            output_dir = Path(tmp)
             buf = io.StringIO()
             with redirect_stdout(buf):
-                gen_compose_run(
-                    env_file=None,
-                    output_dir=output_dir,
-                    dry_run=True,
-                    fleet_file=_EXAMPLE_XML,
-                )
+                gen_compose_run(_DEFAULT_XML, Path(tmp), dry_run=True)
             output = buf.getvalue()
         self.assertIn("docker-compose.yml", output)
-        self.assertIn("stebates-fleet", output)
+        self.assertIn("rocm-golden-1", output)
 
-    def test_dry_run_env_plus_fleet(self) -> None:
-        """env file provides base; fleet XML overrides VM_COUNT."""
-        if not _EXAMPLE_ENV.exists():
-            self.skipTest(f"env file not found: {_EXAMPLE_ENV}")
+    def _no_ambient_fleet(self, tmp: Path):
+        from qemu_tool import fleet_xml
 
-        from qemu_tool.gen_compose import run as gen_compose_run
-        import io
-        from contextlib import redirect_stdout
+        stack = contextlib.ExitStack()
+        stack.enter_context(mock.patch.object(fleet_xml, "_SOURCE_FLEET", tmp / "a.xml"))
+        stack.enter_context(mock.patch.object(fleet_xml, "_INSTALLED_FLEET", tmp / "b.xml"))
+        stack.enter_context(mock.patch.object(fleet_xml, "_xdg_fleet", lambda: tmp / "c.xml"))
+        stack.enter_context(mock.patch.object(Path, "cwd", lambda: tmp / "nowhere"))
+        stack.enter_context(mock.patch.dict(os.environ))
+        os.environ.pop("QEMU_TOOL_FLEET", None)
+        return stack
 
-        with tempfile.TemporaryDirectory() as tmp:
-            output_dir = Path(tmp)
+    def test_no_xml_renders_the_stacks_own_fleet(self) -> None:
+        """Nothing named and nothing on the search path: each shipped stack
+        is generated from the fleet file of its own name, and the committed
+        copy is what that produces."""
+        from qemu_tool import compose, gen_compose
+
+        with tempfile.TemporaryDirectory() as tmp, \
+                self._no_ambient_fleet(Path(tmp)):
+            for stack in compose._STACKS:
+                with self.subTest(stack=stack), \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    gen_compose.run(None, compose._compose_dir(stack),
+                                    check=True, stack=stack)
+
+    def test_a_fleet_on_the_search_path_still_wins(self) -> None:
+        from qemu_tool import gen_compose
+
+        with tempfile.TemporaryDirectory() as tmp, \
+                self._no_ambient_fleet(Path(tmp)):
+            mine = Path(tmp) / "fleet.xml"
+            mine.write_text('<fleet xmlns="http://qemu-tool/fleet/1.0">'
+                            "<vm-name-prefix>mine</vm-name-prefix>"
+                            "<qemu-ref>example/qemu:1</qemu-ref>"
+                            "<ernic-ref>example/ernic:1</ernic-ref>"
+                            "<rocjitsu-ref>example/rocjitsu:1</rocjitsu-ref>"
+                            "</fleet>")
+            os.environ["QEMU_TOOL_FLEET"] = str(mine)
             buf = io.StringIO()
-            with redirect_stdout(buf):
-                gen_compose_run(
-                    env_file=_EXAMPLE_ENV,
-                    output_dir=output_dir,
-                    dry_run=True,
-                    fleet_file=_EXAMPLE_XML,
-                )
-            output = buf.getvalue()
-        # Fleet XML count (8) wins over env-file value
-        self.assertIn("stebates-fleet", output)
+            with contextlib.redirect_stdout(buf):
+                gen_compose.run(None, Path(tmp), dry_run=True)
+        self.assertIn("mine-1", buf.getvalue())
 
-    def test_no_env_no_fleet_exits(self) -> None:
-        from qemu_tool.gen_compose import run as gen_compose_run
-        import os
+    def test_no_fleet_anywhere_exits(self) -> None:
+        from qemu_tool import gen_compose
 
-        old = os.environ.pop("QEMU_TOOL_ENV", None)
-        old_fleet = os.environ.pop("QEMU_TOOL_FLEET", None)
-        try:
-            with tempfile.TemporaryDirectory() as tmp:
-                old_cwd = os.getcwd()
-                try:
-                    os.chdir(tmp)
-                    with self.assertRaises(SystemExit):
-                        gen_compose_run(
-                            env_file=None,
-                            output_dir=Path(tmp),
-                            fleet_file=None,
-                        )
-                finally:
-                    os.chdir(old_cwd)
-        finally:
-            if old is not None:
-                os.environ["QEMU_TOOL_ENV"] = old
-            if old_fleet is not None:
-                os.environ["QEMU_TOOL_FLEET"] = old_fleet
+        with tempfile.TemporaryDirectory() as tmp, \
+                self._no_ambient_fleet(Path(tmp)), \
+                mock.patch.object(gen_compose, "stack_fleet", lambda stack: None), \
+                self.assertRaises(SystemExit):
+            gen_compose.run(None, Path(tmp))
+
+
+class StackFor(unittest.TestCase):
+    """A stack directory is named after the fleet file it is generated from."""
+
+    def test_the_first_layer_names_the_stack(self) -> None:
+        from qemu_tool.gen_compose import stack_for
+
+        self.assertEqual(stack_for([Path("qemu/stacks/helios-tray.xml")]),
+                         "helios-tray")
+        self.assertEqual(
+            stack_for([Path("mi355x-server.xml"), Path("/tmp/one.xml")]),
+            "mi355x-server")
+
+    def test_anything_else_is_the_default_stack(self) -> None:
+        from qemu_tool.gen_compose import stack_for
+
+        self.assertEqual(stack_for(None), "rocm-golden")
+        self.assertEqual(stack_for(Path("/etc/qemu-tool/fleet.xml")), "rocm-golden")
+        self.assertEqual(
+            stack_for([Path("/tmp/one.xml"), Path("helios-tray.xml")]), "rocm-golden")
+
+    def test_the_header_names_stack_only_when_the_layers_do_not(self) -> None:
+        from qemu_tool.gen_compose import _xml_args
+
+        self.assertEqual(_xml_args(["qemu/stacks/helios-tray.xml"], "helios-tray"),
+                         "--xml qemu/stacks/helios-tray.xml")
+        self.assertEqual(_xml_args(["mine.xml"], "helios-tray"),
+                         "--xml mine.xml --stack helios-tray")
+        self.assertEqual(_xml_args(["mine.xml"], "rocm-golden"), "--xml mine.xml")
 
 
 if __name__ == "__main__":

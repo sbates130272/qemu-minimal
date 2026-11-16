@@ -98,18 +98,34 @@ jobs:
           contents=$(dpkg -c "${deb}")
           echo "${contents}"
           missing=0
-          for path in \
-            ./usr/bin/qemu-tool \
-            ./etc/qemu-tool/ \
-            ./var/lib/qemu-tool/images/ \
-            ./usr/share/man/man1/qemu-tool.1.gz \
-            ./usr/share/qemu-tool/xml/fleet-example.xml \
-            ./usr/share/qemu-tool/packages-default \
-            ./usr/share/qemu-tool/packages-minimal \
-            ./usr/share/qemu-tool/compose/vfio-user-ernic-vm/docker-compose.yml \
-            ./usr/share/qemu-tool/compose/vfio-user-rocjitsu-vm/docker-compose.yml \
-            ./usr/share/qemu-tool/compose/vfio-user-ernic-rocjitsu-vm/docker-compose.yml \
-            ./usr/share/qemu-tool/compose/vfio-user-ernic-2vm/docker-compose.yml
+          paths="
+            ./usr/bin/qemu-tool
+            ./etc/qemu-tool/
+            ./var/lib/qemu-tool/images/
+            ./usr/share/man/man1/qemu-tool.1.gz
+            ./usr/share/qemu-tool/packages-default
+            ./usr/share/qemu-tool/packages-minimal
+          "
+          # A stack directory is used verbatim as a `docker compose` working
+          # directory, and Docker creates a missing bind-mount source as an
+          # empty directory rather than erroring -- so each stack is checked
+          # for its fleet file and for one file from every directory its
+          # compose file mounts or builds from.
+          for stack in rocm-golden helios-tray mi355x-server; do
+            paths="${paths}
+              ./usr/share/qemu-tool/stacks/${stack}.xml
+              ./usr/share/qemu-tool/compose/${stack}/docker-compose.yml
+              ./usr/share/qemu-tool/compose/${stack}/prometheus.yml
+              ./usr/share/qemu-tool/compose/${stack}/fleet-inventory.yml
+              ./usr/share/qemu-tool/compose/${stack}/grafana/provisioning/datasources/prometheus.yml
+              ./usr/share/qemu-tool/compose/${stack}/grafana/dashboards/fleet/fleet.json
+              ./usr/share/qemu-tool/compose/${stack}/logging/loki-config.yml
+              ./usr/share/qemu-tool/compose/${stack}/logging/alloy-host.alloy
+              ./usr/share/qemu-tool/compose/${stack}/tapsetup/Dockerfile
+              ./usr/share/qemu-tool/compose/${stack}/tapsetup/setup.sh
+            "
+          done
+          for path in ${paths}
           do
             if ! grep -qF " ${path}" <<<"${contents}"; then
               echo "::error::missing from package: ${path}"
@@ -246,10 +262,24 @@ jobs:
       - name: Check the man page source
         run: test -s /usr/share/man/man1/qemu-tool.1.gz || echo "::notice::man page excluded by this image's dpkg path-exclude"
 
-      - name: Check the settings file was seeded
+      # The package creates the directory and nothing in it: a seeded file
+      # would silently become the settings of every command given no --xml.
+      # The admin copies the rocm-golden.xml template there if wanted.
+      - name: Check no site settings file was seeded
         run: |
           set -euo pipefail
-          test -f /etc/qemu-tool/env
+          test -d /etc/qemu-tool
+          test ! -e /etc/qemu-tool/fleet.xml \
+            || { echo "::error::the package seeded /etc/qemu-tool/fleet.xml"; exit 1; }
+          test -s /usr/share/qemu-tool/stacks/rocm-golden.xml
+          cd /tmp
+          env -u QEMU_TOOL_FLEET -u XDG_CONFIG_HOME python3 - <<'PY'
+          from qemu_tool import settings
+          found = [str(p) for p in settings.find()]
+          print(f"settings: {found}")
+          if found != []:
+              raise SystemExit(f"::error::expected no settings file, found {found}")
+          PY
 
       - name: Check the images directory
         run: |
@@ -276,6 +306,7 @@ jobs:
           import sys
           from qemu_tool.compose import _STACKS, _compose_dir
           from qemu_tool.config import default_packages
+          from qemu_tool.resources import stack_fleet
           bad = 0
           pkgs = default_packages()
           if pkgs != "/usr/share/qemu-tool/packages-default":
@@ -287,21 +318,34 @@ jobs:
               if got != want:
                   print(f"::error::{stack} resolved to {got}, expected {want}")
                   bad = 1
+              got = str(stack_fleet(stack))
+              want = f"/usr/share/qemu-tool/stacks/{stack}.xml"
+              if got != want:
+                  print(f"::error::{stack}'s fleet file resolved to {got}, expected {want}")
+                  bad = 1
           sys.exit(bad)
           PY
 
-      # Reinstalling must not clobber the admin's edited copy of the
-      # settings file -- postinst seeds it on first install only.
-      - name: Check reinstall preserves /etc/qemu-tool/env
+      # A settings file the admin created must survive a reinstall -- the
+      # package neither seeds nor owns it.
+      - name: Check reinstall preserves /etc/qemu-tool/fleet.xml
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           set -euo pipefail
-          echo "# edited by the admin" >> /etc/qemu-tool/env
+          cp /usr/share/qemu-tool/stacks/rocm-golden.xml /etc/qemu-tool/fleet.xml
+          echo "<!-- edited by the admin -->" >> /etc/qemu-tool/fleet.xml
+          before=$(sha256sum < /etc/qemu-tool/fleet.xml)
+          (cd /tmp && env -u QEMU_TOOL_FLEET -u XDG_CONFIG_HOME python3 -c '
+          from qemu_tool import settings
+          found = [str(p) for p in settings.find()]
+          if found != ["/etc/qemu-tool/fleet.xml"]:
+              raise SystemExit(f"::error::expected the site file, found {found}")
+          ')
           apt-get install -y --reinstall --no-install-recommends \
             ./python3-qemu-tool_*_all.deb > /dev/null
-          grep -q "edited by the admin" /etc/qemu-tool/env \
-            || { echo "::error::reinstall overwrote /etc/qemu-tool/env"; exit 1; }
+          [ "$(sha256sum < /etc/qemu-tool/fleet.xml)" = "${before}" ] \
+            || { echo "::error::reinstall changed /etc/qemu-tool/fleet.xml"; exit 1; }
 
   build-wheel:
     name: Build Wheel
@@ -419,6 +463,15 @@ jobs:
           import sys
           from qemu_tool.compose import _STACKS, _compose_dir
           bad = 0
+          # One file from every directory a stack's compose file mounts or
+          # builds from: Docker creates a missing bind-mount source as an
+          # empty directory rather than erroring.
+          needed = ('docker-compose.yml', 'prometheus.yml',
+                    'fleet-inventory.yml',
+                    'grafana/provisioning/datasources/prometheus.yml',
+                    'grafana/dashboards/fleet/fleet.json',
+                    'logging/loki-config.yml', 'logging/alloy-host.alloy',
+                    'tapsetup/Dockerfile', 'tapsetup/setup.sh')
           for stack in _STACKS:
               try:
                   found = _compose_dir(stack)
@@ -426,8 +479,9 @@ jobs:
                   print(f'::error::{stack}: {exc}')
                   bad = 1
                   continue
-              if not (found / 'docker-compose.yml').is_file():
-                  print(f'::error::{stack}: no docker-compose.yml under {found}')
+              absent = [n for n in needed if not (found / n).is_file()]
+              if absent:
+                  print(f'::error::{stack}: missing under {found}: {absent}')
                   bad = 1
               else:
                   print(f'  {stack} -> {found}')
@@ -468,27 +522,34 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p /tmp/xdg-config/qemu-tool
-          echo 'VM_NAME=from-xdg' > /tmp/xdg-config/qemu-tool/env
+          printf '<fleet xmlns="http://qemu-tool/fleet/1.0">\n  <vm-username>from-xdg</vm-username>\n</fleet>\n' \
+            > /tmp/xdg-config/qemu-tool/fleet.xml
           cd /tmp
           python - <<'PY'
-          from qemu_tool import envfile
-          found = envfile.find()
+          from qemu_tool import settings
+          found = settings.find()
           print(f'settings: {found}')
           assert found, '::error::no settings file found'
-          values = envfile.overrides(envfile.parse_layers(found))
-          assert values.get('vm_name') == 'from-xdg', f'::error::{values}'
+          values = settings.load()
+          assert values.get('username') == 'from-xdg', f'::error::{values}'
           PY
 
-      - name: Check xml/fleet-example.xml ships with the wheel
+      # The fleet file each stack is generated from, which is also what
+      # quick-start and a bare gen-compose read.
+      - name: Check the fleet files ship with the wheel
         run: |
           set -euo pipefail
           cd /tmp
           python - <<'PY'
-          from qemu_tool.resources import XML, packaged_path
-          path = packaged_path(XML, 'fleet-example.xml')
-          if path is None:
-              raise SystemExit('::error::xml/fleet-example.xml is not bundled in the wheel')
-          print(f'xml/fleet-example.xml: {path}')
+          from qemu_tool.compose import _STACKS
+          from qemu_tool.fleet_xml import FleetXml
+          from qemu_tool.resources import stack_fleet
+          for stack in _STACKS:
+              path = stack_fleet(stack)
+              if path is None:
+                  raise SystemExit(f'::error::stacks/{stack}.xml is not bundled in the wheel')
+              FleetXml.parse_layers([path])
+              print(f'stacks/{stack}.xml: {path}')
           PY
 
       - name: Check the man page ships with the wheel

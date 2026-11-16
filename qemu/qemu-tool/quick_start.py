@@ -9,7 +9,7 @@ of that script, and is why it is gone rather than kept beside this.
 What moved with it, because every line of it was paid for:
 
   * the guest account comes from the IMAGE, not from the settings file
-    (_adopt_login). VM_USERNAME=ubuntu against a qcow2 baked with `batesste`
+    (_adopt_login). <vm-username>ubuntu against a qcow2 baked with `batesste`
     leaves every guest healthy and every login refused, and the error names
     the key, not the account.
   * the keypair ships as an ORAS REFERRER beside the qcow2, selected by
@@ -45,24 +45,29 @@ import time
 from dataclasses import dataclass, field, replace as dc_replace
 from pathlib import Path
 
+from xml.sax.saxutils import escape
+
+from . import settings
 from .check_system import docker_compose_ok, free_gb, kvm_usable
-from .compose import _apply_identity, resolve_identity
+from .compose import _apply_identity, interpolation_env, resolve_identity
 from .config import VMConfig
-from .envfile import overrides as env_overrides, parse_layers
+from .fleet_xml import NS_FLEET, FleetConfig, FleetXml
 from .gen_compose import run as gen_compose_run
 from .gen_vm import run as gen_vm_run
+from .ports import port_bindable
+from .resources import STACKS as _STACKS_PACKAGE, shipped_path
 
 VERBS = ("all", "preflight", "up", "test", "report", "down", "logs")
 
 # The settings file this subcommand is about. Shipped in the wheel, so a pipx
 # install has it without a checkout.
-_FLEET_NAME = "quickstart.xml"
+_FLEET_NAME = "rocm-golden.xml"
 
 # Named quickstart variants: (fleet_xml, stack_stem, key_stem, playbook_or_None).
 # A None playbook means "boot only" -- wait for guests but skip ansible.
 VARIANTS: dict[str, tuple[str, str, str, str | None]] = {
-    "default": ("quickstart.xml",    "quickstart",        "quickstart-key",        "vm-quickstart.yml"),
-    "mi355x":  ("mi355x-node.xml",   "quickstart-mi355x", "quickstart-mi355x-key", None),
+    "default": ("rocm-golden.xml",   "quickstart",        "quickstart-key",        "vm-quickstart.yml"),
+    "mi355x":  ("mi355x-server.xml", "quickstart-mi355x", "quickstart-mi355x-key", None),
     "helios":  ("helios-tray.xml",   "quickstart-helios", "quickstart-helios-key", None),
 }
 
@@ -115,46 +120,35 @@ class _State:
     # None means boot-only: wait for guests but skip the ansible step.
     playbook: str | None = "vm-quickstart.yml"
 
-    # What the user named: the settings file and any --env-file layers. The
-    # overlays this subcommand generates are appended to these on every
-    # rescan, never folded into them.
+    # What the user named: the settings file and any further --xml layers.
+    # The overlays this subcommand generates are layered on top of these on
+    # every rescan, never folded into them.
     base_layers: list[Path] = field(default_factory=list)
-    values: dict[str, str] = field(default_factory=dict)
+    # The generated overlays that exist, in _LAYER_ORDER.
     layers: list[Path] = field(default_factory=list)
+    # base_layers + layers, merged.
+    fleet: FleetConfig = field(default_factory=FleetConfig)
     username: str = ""
     rdma_delta: int | None = None
     rdma_duration: int | None = None
     nvme_duration: int | None = None
 
     # ---- convenience readers -------------------------------------------
-    def get(self, key: str) -> str:
-        """A settings value, falling back to the generator's own default.
-
-        PROM_PORT, GRAFANA_PORT and PUBLISH_BIND_ADDR are not in
-        qemu/xml/quickstart.xml -- they do not need to be, because gen_compose
-        defaults them. Reading them from the file alone meant this printed a
-        URL for a port the stack was not publishing, or raised. Taking the
-        same dict the generator takes them from is what keeps the two from
-        disagreeing.
-        """
-        from .gen_compose import _DEFAULTS
-
-        value = self.values.get(key)
-        if value:
-            return value
-        return _DEFAULTS[key]
+    @property
+    def all_layers(self) -> list[Path]:
+        return list(self.base_layers) + list(self.layers)
 
     @property
     def vm_count(self) -> int:
-        return int(self.values.get("VM_COUNT", "2"))
+        return self.fleet.count
 
     @property
     def ernic_per_vm(self) -> int:
-        return int(self.values.get("ERNIC_PER_VM", "1"))
+        return self.fleet.ernic_per_vm
 
     @property
     def prefix(self) -> str:
-        return self.values.get("VM_NAME_PREFIX", "quickstart")
+        return self.fleet.name_prefix
 
     @property
     def stack_name(self) -> str:
@@ -162,7 +156,7 @@ class _State:
 
     @property
     def images_dir(self) -> Path:
-        return Path(self.values["VM_IMAGES_DIR"]).expanduser()
+        return Path(self.fleet.vm_images_dir).expanduser()
 
     @property
     def key(self) -> Path:
@@ -176,13 +170,13 @@ class _State:
             # Third octet 3 is the qemu family. By address, not by service
             # name: this stack resolves no service names at run time, on
             # purpose (AGENTS.md issue 13).
-            return f"{self.values['FLEET_NET_PREFIX']}.3.{index}"
+            return f"{self.fleet.fleet_prefix}.3.{index}"
         return "localhost"
 
     def guest_port(self, index: int) -> int:
         if self.in_network:
             return 2222
-        return int(self.values["VM_SSH_PORT_BASE"]) + index - 1
+        return self.fleet.ssh_port_base + index - 1
 
 
 # ---------------------------------------------------------------------------
@@ -261,16 +255,9 @@ def _repo_root(explicit: Path | None) -> Path | None:
 
 
 def _packaged_fleet(name: str = _FLEET_NAME) -> Path | None:
-    """qemu/xml/<name>, from the checkout or from inside the wheel."""
-    source = Path(__file__).resolve().parent.parent / "xml" / name
-    if source.is_file():
-        return source
-    from .resources import XML as _XML_PACKAGE, packaged_path
-
-    packaged = packaged_path(_XML_PACKAGE, name)
-    if packaged is not None and packaged.is_file():
-        return packaged
-    return None
+    """qemu/stacks/<name>, from the .deb, the checkout or inside the wheel."""
+    found = shipped_path("stacks", _STACKS_PACKAGE, name)
+    return found if found is not None and found.is_file() else None
 
 
 def _resolve_stack_dir(requested: Path, explicit: bool) -> Path:
@@ -333,19 +320,10 @@ def _resolve_key_dir(requested: Path, explicit: bool) -> Path:
         return fallback
 
 
-def _reload(state: _State) -> None:
-    from .fleet_xml import FleetXml
-    from .gen_compose import _fleet_to_env
-    fleet_cfg = FleetXml.parse_layers(state.base_layers)
-    xml_values = _fleet_to_env(fleet_cfg)
-    env_values = parse_layers(state.layers)
-    state.values = {**xml_values, **env_values}
-
-
 # The overlays this subcommand writes beside the stack, in the order they
 # layer. Last wins, so the account the image reports goes last: it is the one
-# answer that beats everything, including a VM_USERNAME typed into an
-# --env-file.
+# answer that beats everything, including a <vm-username> in a layer the
+# user passed.
 #
 # The ORDER is fixed here rather than taken from the order they happen to be
 # written, because they are not all written in one process. `up` and `test`
@@ -354,33 +332,39 @@ def _reload(state: _State) -> None:
 # had been moved, or whose images directory had been relocated, went back to
 # the original values half way through and waited for SSH on a port no guest
 # was published on.
-_LAYER_ORDER = ("env.sized", "env.images", "env.ports", "env.metrics",
-                "env.image-login")
+_LAYER_ORDER = ("overlay-sized.xml", "overlay-images.xml", "overlay-ports.xml",
+                "overlay-metrics.xml", "overlay-image-login.xml")
 
 
 def _rescan_layers(state: _State) -> None:
-    """Rebuild state.layers from generated env overlays, then reload values."""
+    """Rebuild state.layers from the generated overlays, then re-merge."""
     generated = [state.stack_dir / name for name in _LAYER_ORDER]
     state.layers = [p for p in generated if p.is_file()]
-    _reload(state)
+    state.fleet = FleetXml.parse_layers(state.all_layers)
 
 
 def _write_layer(state: _State, name: str, body: dict[str, str], why: str) -> None:
-    """Write (or rewrite) one generated overlay on top of the settings file.
+    """Write (or rewrite) one generated fleet XML overlay.
 
-    An overlay rather than an edit of qemu/xml/quickstart.xml, for the reason
-    --env-file is repeatable at all: the committed file stays the thing a
-    reader diffs, and a run on a small host does not look like a settings
-    change.
+    `body` maps fleet XML element names to values. An overlay rather than an
+    edit of qemu/stacks/rocm-golden.xml, for the reason --xml is repeatable at
+    all: the committed file stays the thing a reader diffs, and a run on a
+    small host does not look like a settings change.
     """
     if name not in _LAYER_ORDER:
         raise AssertionError(f"{name} is not in _LAYER_ORDER")
     path = state.stack_dir / name
     path.parent.mkdir(parents=True, exist_ok=True)
-    lines = [f"# Written by `qemu-tool quick-start`. {why}",
-             "# Do not edit; it is rewritten on every run."]
-    lines += [f"{key}={value}" for key, value in body.items()]
+    lines = ['<?xml version="1.0" encoding="UTF-8"?>',
+             f"<!-- Written by `qemu-tool quick-start`. {why}",
+             "     Do not edit; it is rewritten on every run. -->",
+             f'<fleet xmlns="{NS_FLEET}">']
+    lines += [f"  <{element}>{escape(str(value))}</{element}>"
+              for element, value in body.items()]
+    lines.append("</fleet>")
     path.write_text("\n".join(lines) + "\n")
+    # _rescan_layers parses strictly, so a misspelt element here is an error
+    # rather than an override that silently never applies.
     _rescan_layers(state)
 
 
@@ -500,21 +484,12 @@ _WINDOWS_PORTS: frozenset[int] | None = None
 
 
 def _port_free(port: int) -> bool:
-    import socket
-
     global _WINDOWS_PORTS
     if _WINDOWS_PORTS is None:
         _WINDOWS_PORTS = _windows_listening_ports()
     if port in _WINDOWS_PORTS:
         return False
-
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            sock.bind(("0.0.0.0", port))
-        except OSError:
-            return False
-    return True
+    return port_bindable(port)
 
 
 def _next_free_port(start: int) -> int:
@@ -525,7 +500,7 @@ def _next_free_port(start: int) -> int:
 
 
 def _size_for_host(state: _State) -> dict[str, str]:
-    """vCPU, RAM and shm per guest, derived from this machine.
+    """vCPU, RAM and shm per guest, derived from this machine, by element.
 
     The script did this only under --size-from-host, for a CI runner. It is
     the default here: a fixed 4 vCPU / 4 GiB is the wrong answer on every
@@ -546,14 +521,14 @@ def _size_for_host(state: _State) -> dict[str, str]:
     vcpus = max(_VCPU_FLOOR, min(_VCPU_CEILING, (cores - 1) // count))
     vmem = _VMEM_FLOOR_MB if not mem_mb else max(
         _VMEM_FLOOR_MB, min(_VMEM_CEILING_MB, mem_mb * 3 // 4 // count))
-    # VM_VMEM plus 1 GiB, not equal to it. The rule is "VM_SHM_SIZE >=
-    # VM_VMEM, per VM", so equal is the boundary and leaves the vfio-user
+    # vm-vmem plus 1 GiB, not equal to it. The rule is "vm-shm-size >=
+    # vm-vmem, per VM", so equal is the boundary and leaves the vfio-user
     # memfd backend no slack. shm_size caps a tmpfs rather than reserving it,
     # so the headroom costs nothing until it is touched.
     return {
-        "VM_VCPUS": str(vcpus),
-        "VM_VMEM": str(vmem),
-        "VM_SHM_SIZE": f"{vmem + 1024}m",
+        "vm-vcpus": str(vcpus),
+        "vm-vmem": str(vmem),
+        "vm-shm-size": f"{vmem + 1024}m",
     }
 
 
@@ -588,7 +563,7 @@ def preflight(state: _State, write_layers: bool = True) -> None:
     # It is also the one host fact a reader is most likely to want stated
     # outright, because "which uid did my fleet run as" used to have a
     # surprising answer.
-    ident, source = resolve_identity(list(state.layers))
+    ident, source = resolve_identity()
     if "CONTAINER_KVM_GID" not in ident:
         _die("cannot determine the gid that owns /dev/kvm, and a container "
              "given a uid holds no supplementary groups -- so QEMU could not "
@@ -598,13 +573,13 @@ def preflight(state: _State, write_layers: bool = True) -> None:
 
     if state.size_from_host and write_layers:
         sized = _size_for_host(state)
-        _write_layer(state, "env.sized", sized,
+        _write_layer(state, "overlay-sized.xml", sized,
                      f"Guest size derived from this host "
                      f"({os.cpu_count()} cores).")
 
-    vcpus = int(state.values["VM_VCPUS"])
-    vmem = int(state.values["VM_VMEM"])
-    shm = state.values["VM_SHM_SIZE"]
+    vcpus = state.fleet.vm_vcpus
+    vmem = state.fleet.vm_vmem
+    shm = state.fleet.shm_size
     count = state.vm_count
     cores = os.cpu_count() or 1
 
@@ -631,14 +606,14 @@ def preflight(state: _State, write_layers: bool = True) -> None:
     _resolve_images_dir(state)
 
     print()
-    print(f"  settings    {' + '.join(str(p) for p in state.layers)}")
+    print(f"  settings    {' + '.join(str(p) for p in state.all_layers)}")
     print(f"  guests      {count} x {vcpus} vCPU, {vmem} MiB RAM, {shm} shm")
     print(f"  images      {state.images_dir}  ({_free_gb(state.images_dir):.0f} GB free)")
     print(f"  stack       {state.stack_dir}")
     if state.metrics:
-        print(f"  monitoring  Prometheus :{state.get('PROM_PORT')}, "
-              f"Grafana :{state.get('GRAFANA_PORT')}")
-    print(f"  guest image {state.values['VM_BACKING_IMAGE'].split(':')[-1]}")
+        print(f"  monitoring  Prometheus :{state.fleet.prom_port}, "
+              f"Grafana :{state.fleet.grafana_port}")
+    print(f"  guest image {state.fleet.backing_ref.split(':')[-1]}")
     print()
 
 
@@ -678,7 +653,8 @@ def _resolve_images_dir(state: _State) -> None:
             path.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
             _die(f"cannot create {path}: {exc.strerror}")
-        _write_layer(state, "env.images", {"VM_IMAGES_DIR": str(path.resolve())},
+        _write_layer(state, "overlay-images.xml",
+                     {"vm-images-dir": str(path.resolve())},
                      "The images directory this run was given.")
         images = state.images_dir
 
@@ -697,31 +673,30 @@ def _resolve_ports(state: _State) -> None:
     machine, and compose does not fail on a clash until `up` -- by which
     point the guests are already booting.
     """
-    # snapshot holds the final value for every monitored port key; changed
-    # tracks which ones actually moved.  When any port changes we write the
-    # whole snapshot so env.ports is always a complete, self-consistent layer
-    # and a later write (e.g. only PROM_PORT remapped) cannot lose a
-    # previously-remapped GRAFANA_PORT by overwriting the file with a dict
-    # that omits it.
+    # snapshot holds the final value for every monitored port; changed says
+    # whether any moved. When one does, the whole snapshot is written, so the
+    # overlay is always complete and a later write (say only Prometheus
+    # remapped) cannot lose a previously remapped Grafana port by rewriting
+    # the file without it.
     snapshot: dict[str, str] = {}
-    changed: dict[str, str] = {}
+    changed = False
     wanted = []
     if state.metrics:
-        wanted += [("PROM_PORT", "Prometheus"), ("GRAFANA_PORT", "Grafana")]
-    for key, label in wanted:
-        port = int(state.get(key))
+        wanted += [("prom-port", state.fleet.prom_port, "Prometheus"),
+                   ("grafana-port", state.fleet.grafana_port, "Grafana")]
+    for element, port, label in wanted:
         if _port_free(port):
-            snapshot[key] = str(port)
+            snapshot[element] = str(port)
             continue
         free = _next_free_port(port + 1)
         answer = _ask(state, f"{label} wants port {port}, which is in use. "
                              f"Use which port instead?", str(free))
-        snapshot[key] = answer
-        changed[key] = answer
+        snapshot[element] = answer
+        changed = True
         print(f"note: {label} will be published on {answer}, not {port}")
 
-    base = int(state.values["VM_SSH_PORT_BASE"])
-    snapshot["VM_SSH_PORT_BASE"] = str(base)
+    base = state.fleet.ssh_port_base
+    snapshot["ssh-port-base"] = str(base)
     taken = [base + i for i in range(state.vm_count) if not _port_free(base + i)]
     if taken and not state.in_network:
         free = _next_free_port(base + state.vm_count)
@@ -729,12 +704,12 @@ def _resolve_ports(state: _State) -> None:
                              f"and {', '.join(str(p) for p in taken)} "
                              f"{'are' if len(taken) > 1 else 'is'} in use. "
                              f"Start the guest ports at?", str(free))
-        snapshot["VM_SSH_PORT_BASE"] = answer
-        changed["VM_SSH_PORT_BASE"] = answer
+        snapshot["ssh-port-base"] = answer
+        changed = True
         print(f"note: guests will answer SSH from port {answer} up")
 
     if changed:
-        _write_layer(state, "env.ports", snapshot,
+        _write_layer(state, "overlay-ports.xml", snapshot,
                      "Ports moved off something already listening here.")
 
 
@@ -746,12 +721,12 @@ def _adopt_login(state: _State) -> None:
     """The image is the authority on which accounts exist in it.
 
     The settings file names only the one we expect, and a wrong guess is
-    expensive: when VM_USERNAME became `ubuntu` against a qcow2 built with
+    expensive: when the account became `ubuntu` against a qcow2 built with
     `batesste`, every guest was healthy and the wait still spent ten minutes
     retrying before dying with "did not answer SSH", which says nothing about
     the account.
     """
-    state.username = state.values.get("VM_USERNAME", "ubuntu")
+    state.username = state.fleet.vm_username
     info = state.key_dir / "vm-info.json"
     if not info.is_file():
         return
@@ -769,7 +744,7 @@ def _adopt_login(state: _State) -> None:
     # `inspect` prefers that sidecar over the settings layers, so an overlay
     # given only to gen-compose left inspect reading /home/ubuntu on a
     # batesste guest and reporting its key as unverified.
-    _write_layer(state, "env.image-login", {"VM_USERNAME": from_image},
+    _write_layer(state, "overlay-image-login.xml", {"vm-username": from_image},
                  "The account the image reports, which beats the settings file.")
 
 
@@ -780,7 +755,7 @@ def fetch_key(state: _State) -> None:
     authenticates as a user that exists with a key that does not.
     """
     _say("Fetching the guest keypair")
-    backing = state.values["VM_BACKING_IMAGE"]
+    backing = state.fleet.backing_ref
     ref_file = state.key.parent / "image-ref"
     if state.key.is_file():
         cached_ref = ref_file.read_text().strip() if ref_file.exists() else ""
@@ -878,7 +853,7 @@ def make_overlays(state: _State) -> None:
     pulled and unpacked to ~9 GB, once, however many guests there are."""
     _say("Creating the guest overlays")
     images = state.images_dir
-    base_cfg = env_overrides(state.values)
+    base_cfg = settings.vm_overrides(state.fleet)
 
     for index in range(1, state.vm_count + 1):
         name = state.vm(index)
@@ -888,11 +863,11 @@ def make_overlays(state: _State) -> None:
         fields = dict(base_cfg)
         fields["vm_name"] = name
         if index == 1:
-            fields["backing_image"] = state.values["VM_BACKING_IMAGE"]
+            fields["backing_image"] = state.fleet.backing_ref
             fields["backing_file"] = None
         else:
             # Every guest after the first overlays the file the first one
-            # fetched, which is what VM_BACKING_SHARED is for.
+            # fetched, which is what <vm-backing-shared> is for.
             fields["backing_image"] = None
             fields["backing_file"] = images / f"{state.vm(1)}-backing.qcow2"
         gen_vm_run(VMConfig(**fields))
@@ -905,9 +880,8 @@ def make_overlays(state: _State) -> None:
 def generate_stack(state: _State) -> None:
     """Render the stack to the scratch directory, never over the committed one.
 
-    qemu/compose/vfio-user-ernic-rocjitsu-scale-out/docker-compose.yml is
-    generated from qemu/xml/scale-out.xml and `gen-compose --check` compares the
-    two in CI.
+    qemu/compose/rocm-golden/docker-compose.yml is generated from
+    qemu/stacks/rocm-golden.xml and `gen-compose --check` compares the two in CI.
     """
     _say("Generating the stack")
     state.stack_dir.mkdir(parents=True, exist_ok=True)
@@ -919,42 +893,22 @@ def generate_stack(state: _State) -> None:
     # they sit beside the stack that produced them, which is also where you
     # would look for them.
     if state.metrics:
-        data = {"PROM_DATA_DIR": str(state.stack_dir / "prom-data"),
-                "GRAFANA_DATA_DIR": str(state.stack_dir / "grafana-data"),
+        data = {"prom-data-dir": str(state.stack_dir / "prom-data"),
+                "grafana-data-dir": str(state.stack_dir / "grafana-data"),
                 # Loki has profiles: [metrics] so it starts with --profile
                 # metrics. Its data dir must be caller-owned before compose
                 # up or Docker creates it root-owned and Loki crash-loops on
                 # "mkdir /loki/rules: permission denied".
-                "LOKI_DATA_DIR": str(state.stack_dir / "loki-data")}
+                "loki-data-dir": str(state.stack_dir / "loki-data")}
         for path in data.values():
             Path(path).mkdir(parents=True, exist_ok=True)
-        _write_layer(state, "env.metrics", data,
+        _write_layer(state, "overlay-metrics.xml", data,
                      "Prometheus, Grafana and Loki state, beside the stack.")
 
-    # Build a runtime XML overlay from values that only exist at run time
-    # (VM_VCPUS, VM_IMAGES_DIR, PROM_DATA_DIR, etc.) so gen-compose can bake
-    # them into the generated docker-compose.yml.
-    _ENV_TO_XML = {
-        "VM_VCPUS": "vm-vcpus", "VM_VMEM": "vm-vmem", "VM_SHM_SIZE": "vm-shm-size",
-        "VM_IMAGES_DIR": "vm-images-dir", "VM_SSH_PORT_BASE": "ssh-port-base",
-        "PROM_DATA_DIR": "prom-data-dir", "GRAFANA_DATA_DIR": "grafana-data-dir",
-        "LOKI_DATA_DIR": "loki-data-dir", "VM_USERNAME": "vm-username",
-        "VM_PASSWORD": "vm-password",
-        # Port numbers are baked into the generated YAML, not read from env-files
-        # at compose-up time, so remapped values from _resolve_ports() must flow
-        # through the runtime XML into gen-compose or the wrong port is hardcoded.
-        "GRAFANA_PORT": "grafana-port", "PROM_PORT": "prom-port",
-    }
-    runtime_xml = state.stack_dir / "fleet-runtime.xml"
-    xml_lines = ['<?xml version="1.0" encoding="UTF-8"?>',
-                 '<fleet xmlns="http://qemu-tool/fleet/1.0">']
-    for env_key, xml_key in _ENV_TO_XML.items():
-        if env_key in state.values:
-            xml_lines.append(f"  <{xml_key}>{state.values[env_key]}</{xml_key}>")
-    xml_lines.append('</fleet>')
-    runtime_xml.write_text("\n".join(xml_lines) + "\n")
-    gen_compose_run(None, state.stack_dir,
-                    fleet_file=list(state.base_layers) + [runtime_xml])
+    # The generated overlays go to gen-compose as layers in their own right:
+    # sizes, ports and data directories are baked into the YAML at render
+    # time, so anything decided at run time has to be in front of it here.
+    gen_compose_run(state.all_layers, state.stack_dir)
     print(f"wrote {state.stack_dir / 'docker-compose.yml'}")
 
     # The stack bind-mounts a qemu-tool source tree into its containers and
@@ -971,22 +925,22 @@ def generate_stack(state: _State) -> None:
 def _compose(state: _State, *args: str, check: bool = True,
              env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
     cmd = ["docker", "compose", "--project-name", state.stack_name]
-    for layer in state.layers:
-        cmd += ["--env-file", str(layer.resolve())]
     if state.metrics:
         cmd += ["--profile", "metrics"]
     cmd += list(args)
     full_env = os.environ.copy()
-    # The rendered stack asks for a uid on every service, so this has to
-    # answer -- quick-start builds its own docker compose command rather than
-    # going through compose.run(), and without this every invocation here,
-    # including the `logs` on the failure path, dies on "required variable
-    # CONTAINER_USER is missing a value". Same precedence as there: anything
-    # already in the environment or in a layer is a decision and is kept.
-    # preflight() has already resolved and validated this; re-resolving is
-    # cheap and keeps _compose usable on its own.
-    _apply_identity(full_env, list(state.layers))
     full_env.update(env or {})
+    # The rendered stack asks for a uid on every service and interpolates
+    # the images directory, so this has to answer both -- quick-start builds
+    # its own docker compose command rather than going through
+    # compose.run(), and without this every invocation here, including the
+    # `logs` on the failure path, dies on "required variable CONTAINER_USER
+    # is missing a value". Same precedence as there: anything already in the
+    # environment is a decision and is kept. preflight() has already resolved
+    # and validated the identity; re-resolving is cheap and keeps _compose
+    # usable on its own.
+    interpolation_env(state.fleet, full_env)
+    _apply_identity(full_env)
     result = subprocess.run(cmd, cwd=state.stack_dir, env=full_env)
     if check and result.returncode != 0:
         _die(f"`docker compose {' '.join(args)}` failed")
@@ -1023,8 +977,7 @@ def up(state: _State) -> None:
         global _WINDOWS_PORTS
         _WINDOWS_PORTS = _windows_listening_ports()
         if state.metrics:
-            for key, label in [("GRAFANA_PORT", "Grafana")]:
-                port = int(state.get(key))
+            for port, label in [(state.fleet.grafana_port, "Grafana")]:
                 if port in _WINDOWS_PORTS:
                     _die(
                         f"{label} port {port} is held by a Windows process.\n"
@@ -1033,7 +986,7 @@ def up(state: _State) -> None:
                     )
 
         if not state.in_network:
-            base = int(state.get("VM_SSH_PORT_BASE"))
+            base = state.fleet.ssh_port_base
             taken = [base + i for i in range(state.vm_count) if not _port_free(base + i)]
             # On WSL2, _port_free uses socket.bind which succeeds for ports that
             # the Windows proxy holds — so after a failed compose up, force a remap
@@ -1046,18 +999,15 @@ def up(state: _State) -> None:
                 else:
                     print(f"note: previous compose up failed; remapping SSH ports "
                           f"from {base} to {free} in case the Windows proxy holds them")
-                snapshot = {"VM_SSH_PORT_BASE": str(free)}
+                snapshot = {"ssh-port-base": str(free)}
                 if state.metrics:
-                    for key in ("PROM_PORT", "GRAFANA_PORT"):
-                        val = state.get(key)
-                        if val:
-                            snapshot[key] = val
-                _write_layer(state, "env.ports", snapshot,
+                    snapshot["prom-port"] = str(state.fleet.prom_port)
+                    snapshot["grafana-port"] = str(state.fleet.grafana_port)
+                _write_layer(state, "overlay-ports.xml", snapshot,
                              "Ports moved off something already listening here.")
-                state.values["VM_SSH_PORT_BASE"] = str(free)
-                # Port numbers are baked into the generated YAML (not read from
-                # env-files at up time), so regenerate now that state.values has
-                # the new base, or the old ports remain hardcoded in the YAML.
+                # Port numbers are baked into the generated YAML, so
+                # regenerate now that the overlay carries the new base, or the
+                # old ports remain hardcoded in it.
                 generate_stack(state)
 
         result = _compose(state, "up", "--detach",
@@ -1079,7 +1029,7 @@ def up(state: _State) -> None:
 
     _say("Waiting for the NIC servers")
     deadline = time.monotonic() + 120
-    # For multi-ernic stacks (ERNIC_PER_VM > 1) each VM's manager service is
+    # For multi-ernic stacks (ernic-per-vm > 1) each VM's manager service is
     # named ernic-{vm}-1, so Docker appends another -1 replica suffix making
     # the container ernic-{vm}-1-1.  Single-ernic stacks use ernic-{vm} whose
     # container is ernic-{vm}-1.
@@ -1263,9 +1213,9 @@ def report(state: _State) -> None:
         "emulated gfx1250, an emulated NVMe and an emulated RDMA NIC, booted",
         "by `qemu-tool quick-start`.",
         "",
-        f"- Guest image: `{state.values['VM_BACKING_IMAGE'].split(':')[-1]}`",
-        f"- Guest size: {state.vm_count} x {state.values['VM_VCPUS']} vCPU, "
-        f"{state.values['VM_VMEM']} MiB",
+        f"- Guest image: `{state.fleet.backing_ref.split(':')[-1]}`",
+        f"- Guest size: {state.vm_count} x {state.fleet.vm_vcpus} vCPU, "
+        f"{state.fleet.vm_vmem} MiB",
         f"- RDMA bytes across the mesh: {state.rdma_delta if state.rdma_delta is not None else 'unknown'}",
         f"- Generated: **{stamp}** &middot; Commit: "
         f"`{commit.stdout.strip() or 'unknown'}` &middot; Status: **{status}**",
@@ -1321,7 +1271,7 @@ def down(state: _State) -> None:
 # ---------------------------------------------------------------------------
 
 def _summary(state: _State) -> None:
-    host = state.get("PUBLISH_BIND_ADDR")
+    host = state.fleet.publish_bind_addr
     shown = "localhost" if host in ("0.0.0.0", "") else host
     print()
     print("=" * 70)
@@ -1344,8 +1294,8 @@ def _summary(state: _State) -> None:
     if state.metrics:
         print("  Monitoring (Grafana has anonymous admin on, so no login):")
         print()
-        print(f"      Prometheus   http://{shown}:{state.get('PROM_PORT')}")
-        print(f"      Grafana      http://{shown}:{state.get('GRAFANA_PORT')}")
+        print(f"      Prometheus   http://{shown}:{state.fleet.prom_port}")
+        print(f"      Grafana      http://{shown}:{state.fleet.grafana_port}")
         print()
         print("  The ernic dashboard is provisioned from files, under")
         print("  Dashboards in the Grafana sidebar. Its data comes from the")
@@ -1393,7 +1343,7 @@ def run(
     else:
         packaged = _packaged_fleet(fleet_stem)
         if packaged is None:
-            _die(f"qemu/xml/{fleet_stem} is missing from this install; "
+            _die(f"qemu/stacks/{fleet_stem} is missing from this install; "
                  "pass --xml")
         layers = [packaged]
         base = packaged
@@ -1423,17 +1373,10 @@ def run(
     # -- agree about the ports, the images directory and the account.
     _rescan_layers(state)
 
-    # Image refs come from the fleet XML, resolved into state.values by
-    # _rescan_layers -> _reload -> _fleet_to_env.  docker compose resolves
-    # ${QEMU_IMAGE} etc. from env-files at runtime; gen-compose baking the
-    # values into docker-compose.yml does NOT make them available there, so
-    # they must land in an env-file that _compose() passes with --env-file.
-    _IMAGE_KEYS = ("QEMU_IMAGE", "ERNIC_IMAGE", "ROCJITSU_IMAGE",
-                   "VM_BACKING_IMAGE", "VM_IMAGES_DIR", "SDXI_IMAGE")
-    image_data = {k: state.values[k] for k in _IMAGE_KEYS if k in state.values}
     if images is not None:
-        image_data["VM_IMAGES_DIR"] = str(images.expanduser().resolve())
-    _write_layer(state, "env.images", image_data, "Image refs from fleet XML.")
+        _write_layer(state, "overlay-images.xml",
+                     {"vm-images-dir": str(images.expanduser().resolve())},
+                     "The images directory this run was given.")
 
     # Every verb, not just the ones that fetch. `up` and `test` are separate
     # processes in CI, so adopting the account inside fetch_key alone died
@@ -1444,14 +1387,11 @@ def run(
 
     if verb == "logs":
         extra = ["-f"] if follow else []
-        # dockerapi emits one haproxy access-log line per Alloy poll (~every
-        # 5 s per container). Exclude it from interactive log output; it is
-        # still captured by Loki for debugging.
         ps = subprocess.run(
             ["docker", "compose", "--project-name", state.stack_name, "ps", "--services"],
             capture_output=True, text=True, cwd=state.stack_dir,
         )
-        services = [s for s in ps.stdout.splitlines() if s and s != "dockerapi"]
+        services = [s for s in ps.stdout.splitlines() if s]
         if not services and stack_dir is None and not fleet_file:
             # No services found in the default stack dir for this flavor.
             # Probe the other variants' default dirs for a running project.
@@ -1464,8 +1404,7 @@ def run(
                      "ps", "--services"],
                     capture_output=True, text=True, cwd=_candidate,
                 )
-                _svcs = [s for s in _probe.stdout.splitlines()
-                         if s and s != "dockerapi"]
+                _svcs = [s for s in _probe.stdout.splitlines() if s]
                 if _svcs:
                     services = _svcs
                     state = dc_replace(state, stack_dir=_candidate)

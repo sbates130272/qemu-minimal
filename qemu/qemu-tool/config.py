@@ -4,6 +4,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .ports import DEFAULT_SSH_PORT
 from .resources import PACKAGES_D as _PACKAGES_D_PACKAGE, packaged_path
 
 # Created by the .deb. A pipx or source install has neither, so both defaults
@@ -55,7 +56,10 @@ class VMConfig:
     vcpus: int = 2
     vmem: int = 4096           # MiB
     images: Path = field(default_factory=default_images)
-    ssh_port: int = 2222
+    ssh_port: int = DEFAULT_SSH_PORT
+    # --ssh-port auto: ssh_port is where the search starts, and each QEMU
+    # start gets a free port from run_vm.resolve_ssh_port.
+    ssh_port_auto: bool = False
     # None means derive from ssh_port; see run_vm._mgmt_mac.
     mac: str | None = None
     kvm: bool = True
@@ -146,7 +150,9 @@ class VMConfig:
     # ---- gen-vm ----
     size: int = 64
     release: str = "resolute"
-    ssh_key_file: Path = field(default_factory=lambda: Path("~/.ssh/id_rsa.pub"))
+    # None: gen-vm generates a keypair for the image it bakes. Never a path
+    # under ~/.ssh by default -- an image's key can end up published.
+    ssh_key_file: Path | None = None
     username: str = "ubuntu"
     user_id: int = 1000
     password: str = "password"
@@ -162,4 +168,8 @@ class VMConfig:
     backing_image: str | None = None
     ansible_playbook: Path | None = None
     ca_cert_file: Path | None = None
+    # Handed to the playbook as bake_cache_dir; None is a bake from source.
+    cache_dir: Path | None = None
+    # The cache in cache_dir was saved for other pins: save it again.
+    cache_replace: bool = False
     ansible_only: bool = False

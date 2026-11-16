@@ -14,6 +14,7 @@ what is missing.
 import argparse
 import importlib.util
 import re
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -118,6 +119,55 @@ class ManPageTest(unittest.TestCase):
             if gone:
                 missing[cmd] = gone
         self.assertEqual({}, missing, f"undocumented options: {missing}")
+
+
+class ManPageVersionTest(unittest.TestCase):
+    """The .TH line is a literal, so only the release tooling keeps it true."""
+
+    RELEASE_SH = REPO_ROOT / "scripts" / "release.sh"
+    RELEASE_YML = (REPO_ROOT / ".github" / "workflows"
+                   / "qemu-minimal-release.yml")
+
+    def _pyproject_version(self) -> str:
+        text = (REPO_ROOT / "qemu" / "pyproject.toml").read_text()
+        return re.search(r'(?m)^version = "(.*)"$', text).group(1)
+
+    def _sed(self, script: str, *flags: str) -> str:
+        return subprocess.run(["sed", *flags, script, str(MAN)], check=True,
+                              capture_output=True, text=True).stdout
+
+    def test_the_th_line_carries_the_package_version(self):
+        first = MAN.read_text().splitlines()[0]
+        self.assertRegex(
+            first,
+            r'^\.TH QEMU\\-TOOL 1 "[A-Z][a-z]+ \d{4}" "qemu-tool '
+            + re.escape(self._pyproject_version()) + r'" "User Commands"$')
+
+    def test_the_release_workflow_reads_that_version(self):
+        # The workflow's own sed, so a .TH line it cannot parse fails here
+        # and not as an empty MAN_VERSION on the day of a release.
+        found = re.search(r"MAN_VERSION=\$\(sed -n '([^']+)' (\S+)\)",
+                          self.RELEASE_YML.read_text())
+        self.assertIsNotNone(found, "Verify Version does not read the man page")
+        self.assertEqual(REPO_ROOT / found.group(2), MAN)
+        self.assertEqual(self._sed(found.group(1), "-n").strip(),
+                         self._pyproject_version())
+        self.assertIn('"${TAG_VERSION}" != "${MAN_VERSION}"',
+                      self.RELEASE_YML.read_text())
+
+    def test_release_sh_stamps_the_version_and_the_month(self):
+        text = self.RELEASE_SH.read_text()
+        pattern = re.search(r"(?m)^MAN_TH_RE='([^']+)'$", text).group(1)
+        self.assertIn('sed -i "1s/${MAN_TH_RE}/', text)
+        self.assertIn('git add "${PYPROJECT}" "${DEB_CHANGELOG}" '
+                      '"${CHANGELOG}" "${MAN_PAGE}"', text)
+        stamped = self._sed(
+            f'1s/{pattern}/\\1"January 2031" "qemu-tool 9.8.7"/')
+        self.assertEqual(
+            stamped.splitlines()[0],
+            '.TH QEMU\\-TOOL 1 "January 2031" "qemu-tool 9.8.7" "User Commands"')
+        self.assertEqual(stamped.splitlines()[1:],
+                         MAN.read_text().splitlines()[1:])
 
 
 if __name__ == "__main__":

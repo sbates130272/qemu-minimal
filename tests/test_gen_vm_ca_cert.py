@@ -92,18 +92,19 @@ class CaCertTests(_Tmp):
         super().setUp()
         self.cert = self.write("corp-root.crt", _CERT)
 
-    def _config(self, *flags: str, env: str = "") -> VMConfig:
+    def _config(self, *flags: str) -> VMConfig:
         # Through cli.main() rather than the private helpers, so the test
         # covers the path a user's command takes. gen_vm.run is replaced, so
         # nothing is downloaded or created; the config it would have been
         # handed is all that is wanted.
         #
-        # Always pass --xml, even when empty. Without it envfile.find()
-        # walks $QEMU_TOOL_ENV, ./.env, ~/.config/qemu-tool/env and the rest,
-        # and a developer with VM_CA_CERT_FILE set in any of them would see
-        # these tests pass or fail on what their own machine holds.
-        env_file = self.write("env", env)
-        argv = ["gen-vm", "--vm-name", "x", "--xml", str(env_file), *flags]
+        # Always pass --xml, even when empty. Without it FleetXml.find()
+        # walks $QEMU_TOOL_FLEET, ./fleet.xml, ~/.config/qemu-tool/fleet.xml
+        # and the rest, and these tests would pass or fail on what the
+        # developer's own machine holds.
+        fleet = self.write(
+            "fleet.xml", "<fleet xmlns='http://qemu-tool/fleet/1.0'/>\n")
+        argv = ["gen-vm", "--vm-name", "x", "--xml", str(fleet), *flags]
         with mock.patch.object(cli, "gen_vm_run") as run:
             cli.main(argv)
         run.assert_called_once()
@@ -121,25 +122,8 @@ class CaCertTests(_Tmp):
         self.assertEqual(cfg.ca_cert_file, self.cert)
 
     def test_default_is_none(self):
-        """With no flag and no settings key, there is no CA."""
+        """With no flag, there is no CA."""
         self.assertIsNone(self._config().ca_cert_file)
-
-    def test_env_file(self):
-        """VM_CA_CERT_FILE in a settings file sets ca_cert_file.
-
-        That route never went through the broken mapping, and was the only one
-        that worked; keep it working.
-        """
-        cfg = self._config(env=f"VM_CA_CERT_FILE={self.cert}\n")
-        self.assertEqual(cfg.ca_cert_file, self.cert)
-
-    def test_flag_beats_env_file(self):
-        """The flag outranks the settings file, as every other flag does."""
-        other = self.write("other.crt", _CERT)
-        cfg = self._config(
-            "--ca-cert", str(self.cert), env=f"VM_CA_CERT_FILE={other}\n"
-        )
-        self.assertEqual(cfg.ca_cert_file, self.cert)
 
     def test_flag_reaches_user_data(self):
         """The cert is written into the guest's trust store and installed.
@@ -210,8 +194,8 @@ class MappingTests(unittest.TestCase):
     # other part of cli.py consumes them. A new flag that is neither read nor
     # listed here was never wired up, and is the bug this file exists for.
     _READ_ELSEWHERE = {
-        "gen-vm": {"help", "domain", "env_file"},
-        "run-vm": {"help", "domain", "env_file", "convert_to_libvirt"},
+        "gen-vm": {"help", "domain", "xml", "bake"},
+        "run-vm": {"help", "domain", "xml", "convert_to_libvirt"},
     }
 
     def _extract(self, subcommand: str) -> tuple[set[str], set[str], dict]:

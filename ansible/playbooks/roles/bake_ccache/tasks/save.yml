@@ -1,0 +1,121 @@
+---
+# After the last module build of a bake. A failed save is reported and costs
+# the next bake its warm start, nothing else. Taking ccache back out of the
+# guest is remove.yml, which the caller runs after this whatever happened
+# here and whether or not this ran at all.
+
+- name: Report and save the compiler cache
+  block:
+    - name: Read the ccache counters
+      ansible.builtin.command:
+        cmd: ccache --print-stats
+      become: true
+      register: bake_ccache_counters
+      changed_when: false
+
+    - name: Read the ccache summary
+      ansible.builtin.command:
+        cmd: ccache --show-stats --verbose
+      become: true
+      register: bake_ccache_summary
+      changed_when: false
+
+    - name: Report what the cache did for this bake
+      ansible.builtin.debug:
+        msg: "{{ bake_ccache_summary.stdout_lines }}"
+
+    - name: Look for the cache an earlier bake saved
+      ansible.builtin.stat:
+        path: "{{ bake_ccache_controller_dir }}/ccache.tar"
+        get_checksum: false
+      delegate_to: localhost
+      become: false
+      register: bake_ccache_saved
+
+    - name: Count this bake's hits and misses
+      ansible.builtin.set_fact:
+        bake_ccache_misses: >-
+          {{ bake_ccache_counters.stdout_lines
+             | select('match', '^cache_miss\s')
+             | map('split') | map('last') | map('int') | sum }}
+        bake_ccache_hits: >-
+          {{ bake_ccache_counters.stdout_lines
+             | select('match', '^(direct|preprocessed)_cache_hit\s')
+             | map('split') | map('last') | map('int') | sum }}
+
+    # See bake_ccache_save_misses for why a few misses do not count, and
+    # bake_ccache_replace for the bump of a small module that they miss.
+    - name: Decide whether this bake added enough to save again
+      ansible.builtin.set_fact:
+        bake_ccache_grew: >-
+          {{ not bake_ccache_saved.stat.exists
+             or bake_ccache_replace | bool
+             or bake_ccache_misses | int >= bake_ccache_save_misses | int }}
+
+    # "Invocations", not compiles: kbuild's compiler probes are counted too.
+    # Nothing at all counted means the wrappers never got in front of a
+    # build, which is the one outcome a reader of the statistics must see.
+    - name: Describe what the cache saw
+      ansible.builtin.set_fact:
+        bake_ccache_seen: >-
+          {{ 'ccache saw no compiler invocation in this bake, so the wrappers did not get in front of the module builds.'
+             if bake_ccache_hits | int + bake_ccache_misses | int == 0
+             else bake_ccache_misses ~ ' of ' ~ (bake_ccache_hits | int + bake_ccache_misses | int)
+                  ~ ' ccache invocations missed, kbuild compiler probes included.' }}
+
+    - name: Describe the decision
+      ansible.builtin.set_fact:
+        bake_ccache_verdict: >-
+          {{ bake_ccache_seen }} The archive on the controller is
+          {{ 'replaced' if bake_ccache_grew | bool else 'left as it is' }}{{
+          ', the one handed over having been saved for other pins'
+          if bake_ccache_saved.stat.exists and bake_ccache_replace | bool else '' }}.
+
+    - name: Report the decision
+      ansible.builtin.debug:
+        msg: "{{ bake_ccache_verdict }}"
+
+    - name: Record the statistics beside the cache on the controller
+      ansible.builtin.copy:
+        dest: "{{ bake_ccache_controller_dir }}/stats.txt"
+        content: "{{ bake_ccache_summary.stdout }}\n{{ bake_ccache_verdict }}\n"
+        mode: "0644"
+      delegate_to: localhost
+      become: false
+
+    # Uncompressed: ccache has already compressed every object in it. tar and
+    # not the archive module, which reads every file through Python.
+    - name: Archive the cache in the guest
+      ansible.builtin.command:  # noqa: command-instead-of-module
+        cmd: >-
+          tar -cf {{ bake_ccache_archive }}
+          -C {{ bake_ccache_dir }} .
+      become: true
+      changed_when: true
+      when: bake_ccache_grew | bool
+
+    - name: Make the archive readable by the login user
+      ansible.builtin.file:
+        path: "{{ bake_ccache_archive }}"
+        mode: "0644"
+      become: true
+      when: bake_ccache_grew | bool
+
+    # As the login user on purpose. With become, fetch reads the file through
+    # slurp -- base64, whole, in memory -- where without it the file is
+    # streamed over the connection.
+    - name: Fetch the archive to the controller
+      ansible.builtin.fetch:
+        src: "{{ bake_ccache_archive }}"
+        dest: "{{ bake_ccache_controller_dir }}/ccache.tar"
+        flat: true
+      become: false
+      when: bake_ccache_grew | bool
+  rescue:
+    - name: Note that the cache was not saved
+      ansible.builtin.debug:
+        msg: >-
+          The compiler cache was not saved:
+          {{ ansible_failed_task.name | default('unknown task') }} failed.
+          The bake is unaffected; the next one starts from the cache already
+          in {{ bake_ccache_controller_dir }}, if there is one.

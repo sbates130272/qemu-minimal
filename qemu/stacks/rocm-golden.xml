@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The rocm-golden fleet, which is the default one, and the template to copy
+  for a fleet of your own: two guests from the published rocm-golden qcow2,
+  each with one emulated GPU, one NVMe, one RDMA NIC with P4 loaded into the
+  guest scope, and one SDXI device.
+
+  `qemu-tool quick-start` runs this file when given no other, the committed
+  stack in qemu/compose/rocm-golden is generated from it, and every tracked
+  benchmark runs against it.
+
+  Two guests because inter-guest RDMA needs a peer.  Four vCPUs each is the
+  ionic_rdma floor, not a preference; quick-start resizes the guests for the
+  host it runs on unless told not to.
+
+  <prom-data-dir> and <grafana-data-dir> are deliberately not set here.
+  quick-start puts both beside the stack it generates, which needs no root
+  and no chown.
+
+  The <bake-*> and <publish-*> elements at the end say how the published
+  image itself is made.  Only gen-vm with its bake flag and publish-qcow
+  given this file read them, and they matter only to someone baking from a
+  checkout: this file ships in the wheel and the playbook they name does
+  not.  The manifest does ship, but is named here by its checkout path.
+-->
+<fleet xmlns="http://qemu-tool/fleet/1.0">
+
+  <!-- ── Fleet shape ─────────────────────────────────────────────────── -->
+  <vm-count>2</vm-count>
+  <vm-name-prefix>rocm-golden</vm-name-prefix>
+
+  <!-- ── Container images ─────────────────────────────────────────────── -->
+  <!-- One stamp across the first four: a guest driver and a host device
+       server from different builds wedge at the vfio-user boundary.
+       <sdxi-image> is the exception. It follows sdxi_source_pin in
+       ansible/playbooks/vm-rocm-golden.yml by commit, sdxi.<sha7> here
+       against that pin, so it may carry another build's stamp.  The pin
+       governs a guest baked from this checkout; the <backing-ref> guest
+       carries no SDXI driver, so its SDXI device stays unbound. -->
+  <qemu-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261112.gdca6903-qemu11.1.3-vfu.05bb5e5</qemu-ref>
+  <ernic-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261112.gdca6903-ernic.90434a2-vfu.05bb5e5</ernic-ref>
+  <rocjitsu-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261112.gdca6903-rocjitsu.50be05a</rocjitsu-ref>
+  <backing-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu:20261112.gdca6903-vm.resolute-ernic-rocjitsu-qm.096ddfe-qcow2</backing-ref>
+  <sdxi-image>docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-sdxi:20261113.g379fbf6-sdxi.dfd76f2</sdxi-image>
+
+  <!-- ── Topology (devices per VM) ────────────────────────────────────── -->
+  <ernic-per-vm>1</ernic-per-vm>
+  <rocjitsu-per-vm>1</rocjitsu-per-vm>
+  <sdxi-per-vm>1</sdxi-per-vm>
+
+  <!-- ── Per-VM defaults ──────────────────────────────────────────────── -->
+  <vm-vcpus>4</vm-vcpus>
+  <vm-vmem>4096</vm-vmem>
+  <!-- Must be >= vm-vmem: guest RAM is a shared memfd. -->
+  <vm-shm-size>5g</vm-shm-size>
+  <!-- The hipFile fio benchmark needs a scratch NVMe. -->
+  <vm-nvme>1</vm-nvme>
+  <vm-vfio-user-root-port>true</vm-vfio-user-root-port>
+  <vm-images-dir>/var/lib/qemu-tool/images</vm-images-dir>
+  <vm-backing-shared>true</vm-backing-shared>
+  <vm-username>ubuntu</vm-username>
+  <vm-password>changeme</vm-password>
+  <qemu-tool-src>../../..</qemu-tool-src>
+
+  <!-- ── ERNIC mesh ───────────────────────────────────────────────────── -->
+  <!-- The TAP is the guests' L2 path; without it there is no inter-guest RDMA. -->
+  <ernic-tap>true</ernic-tap>
+  <!-- /dev/ernic-p4 in the guest, which the P4 FP8 bandwidth run loads into. -->
+  <p4-enable>true</p4-enable>
+  <p4-guest-scope>load</p4-guest-scope>
+
+  <!-- ── Observability ────────────────────────────────────────────────── -->
+  <!-- Forward node-exporter (9100), amd-metrics-exporter (9488),
+       rdma-exporter (9879) and hsa-snoop (9490) from every guest, which
+       is what Prometheus scrapes them through. -->
+  <vm-extra-hostfwd>tcp::9100-:9100,tcp::9488-:9488,tcp::9879-:9879,tcp::9490-:9490</vm-extra-hostfwd>
+  <!-- Grafana is on so a new user can watch the RDMA test move bytes, and
+       Loki and Alloy with it: the home dashboard has a log panel. -->
+  <grafana-enable>true</grafana-enable>
+  <logs-enable>true</logs-enable>
+
+  <!-- ── Baking and publishing the guest image ────────────────────────── -->
+  <!-- A plain gen-vm pulls <backing-ref> above and reads none of these;
+       gen-vm with its bake flag builds the guest from the cloud image
+       instead, and publish-qcow pushes that bake to <publish-ref>.  The two
+       are different repositories today: <backing-ref> still names the
+       batesste-ci-images build of this guest without its SDXI side, and
+       moves to a <publish-ref> tag once one is published and qualified.
+       The paths are relative to the directory gen-vm is run from, so run
+       the bake from the checkout root.
+
+       The account is the published image's own and is public, which is why
+       it is not <vm-username>/<vm-password>.  No key is named here on
+       purpose: the keypair is published with the image, so the bake
+       generates one for it and publish-qcow publishes that one, or the one
+       its key flag names; never a key from a settings file.
+
+       No <bake-cache-dir> either: it would send the module builds through
+       a compiler cache kept in that directory, and the image published
+       from this file is compiled from source.  A local overlay sets it, or
+       gen-vm is given a cache directory with its cache-dir flag. -->
+  <bake-name>rocm-golden</bake-name>
+  <bake-release>resolute</bake-release>
+  <bake-size>64</bake-size>
+  <bake-vcpus>4</bake-vcpus>
+  <bake-vmem>4096</bake-vmem>
+  <bake-username>ubuntu</bake-username>
+  <bake-password>password</bake-password>
+  <bake-packages>qemu/packages.d/rocm-golden.txt</bake-packages>
+  <bake-playbook>ansible/playbooks/vm-rocm-golden.yml</bake-playbook>
+  <!-- Only the bake's Ansible boot forwards a host port, and it needs no
+       particular one. -->
+  <bake-ssh-port>auto</bake-ssh-port>
+  <publish-ref>docker.io/sbates130272/qemu-tool-rocm-golden</publish-ref>
+  <publish-flavour>rocm-golden</publish-flavour>
+
+</fleet>

@@ -105,7 +105,7 @@ jobs:
         # auto-discovery finds only roles, not the sibling playbooks/*.yml
         # files (which are not yet clean at the production profile).
         ansible-lint \
-          image_slim/ rocjitsu_setup/ rocm_ernic_setup/ sdxi_setup/
+          bake_ccache/ image_slim/ rocjitsu_setup/ rocm_ernic_setup/ sdxi_setup/
       working-directory: ansible/playbooks/roles
 
   gen-vm-ansible-setup:
@@ -149,6 +149,7 @@ jobs:
           --password password \
           --packages none \
           --size 8 \
+          --ssh-key-file "$HOME/.ssh/id_rsa.pub" \
           --ansible-playbook ansible/playbooks/vm-basic.yml
     - name: Boot VM as background task
       run: |

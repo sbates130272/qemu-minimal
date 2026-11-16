@@ -4,12 +4,321 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+Fleet XML is now the only settings format, and the stacks are renamed. Read
+**Breaking** first if you have settings in an env-format file, a stack
+rendered by an earlier version, a script that names a `vfio-user-*` stack or
+passes `--env-file` or `--fleet-file`, a fleet file with `<lmcache-*>`
+elements, or a guest you log in to with your own `~/.ssh/id_rsa`.
+
+### Breaking
+
+- **`gen-vm` no longer authorises `~/.ssh/id_rsa.pub` by default.** An image
+  it bakes from the cloud image now gets a keypair generated for it, under
+  `<images>/keys/<vm-name>_id_rsa`, and `gen-vm` prints where. Nothing is
+  read from `~/.ssh` unless you name it, by the playbook either: `gen-vm`
+  passes `user_setup_ssh_key_src_dir` and `user_setup_ssh_key_name` to
+  `ansible-playbook`, so the `user_setup` role authorises the image's key
+  where it used to add the controller's `~/.ssh/id_rsa.pub` whatever key was
+  named. With `vm-basic.yml` run on its own, the private key that role
+  copies into the guest is now the image's as well. The reason is `publish-qcow`: an
+  image's key is published with it, and the default must not be a personal
+  one.
+  - *To log in:* `qemu-tool ssh <vm>`, which finds the key, or
+    `ssh -i <images>/keys/<vm-name>_id_rsa -p <port> <user>@localhost`. A
+    plain `ssh -p 2222 ubuntu@localhost` no longer offers a key the guest
+    accepts.
+  - *To keep the old behaviour:* `gen-vm --ssh-key-file ~/.ssh/id_rsa.pub`,
+    or `<vm-ssh-key-file>~/.ssh/id_rsa.pub</vm-ssh-key-file>` in the fleet
+    file. A key named either way is authorised as before and is never
+    published unless `publish-qcow --key` names it too.
+  - Baking again under the same name generates a new keypair and deletes
+    the old one, whose image has just been overwritten. Naming a key on a
+    re-bake deletes the old generated pair too, and every bake deletes
+    `<images>/<vm-name>.json` when it starts, so a bake that fails leaves
+    no record describing the image it replaced.
+  - Guests that bake nothing are unchanged: an overlay made with
+    `--backing-file` uses the key recorded for its backing image, and a
+    guest on a pulled `--backing-image` uses the keypair pulled with it.
+  - The sidecar `<images>/<vm-name>.json` gains `ssh_key_generated` and
+    `ssh_key_fingerprint`, and its `ssh_key_file` is `null` when no key is known rather than a path under
+    `~/.ssh`.
+  - `publish-qcow --key` is optional: see `gen-vm --bake` under Added.
+
+- **Env-format settings files are no longer read.** There is no `KEY=value`
+  parser left: `$QEMU_TOOL_ENV`, `./.env`, `qemu/.env`,
+  `~/.config/qemu-tool/env` and `/etc/qemu-tool/env` are ignored, and an
+  env-format file given to `--xml` is an XML parse error. Settings are fleet
+  XML elements — `<vm-images-dir>`, not `VM_IMAGES_DIR` — and layers are
+  repeated `--xml`, later files winning element by element. With no `--xml`
+  the search path is `$QEMU_TOOL_FLEET`, `./fleet.xml`,
+  `qemu/stacks/fleet.xml` in a checkout, `$XDG_CONFIG_HOME/qemu-tool/fleet.xml`,
+  `/etc/qemu-tool/fleet.xml`.
+  - *If your settings are in an env file:* rewrite it as fleet XML.
+    `qemu/stacks/rocm-golden.xml` is the annotated template and `qemu-tool man`
+    lists every element; the name is the old key lower-cased with hyphens for
+    most (`VM_VCPUS` is `<vm-vcpus>`), and the image keys became `<qemu-ref>`,
+    `<ernic-ref>`, `<rocjitsu-ref>`, `<backing-ref>` and `<sdxi-image>`.
+  - Keys with no element are flags only now: `VM_COMPACT`, `VM_CA_CERT_FILE`,
+    `VM_PCI_HOSTDEV`, `VM_VFIO_USERDEV`, and the per-VM override lists
+    `VM_NAMES`, `VM_SSH_PORTS`, `ERNIC_MACS` and `ERNIC_GUEST_IPS`, which are
+    always derived.
+  - `CONTAINER_USER` and `CONTAINER_KVM_GID` cannot be pinned in a settings
+    file. Export them, or leave them unset and the caller's ids are used.
+  - The `.deb` no longer installs `/etc/qemu-tool/env`, and seeds nothing in
+    its place: `/etc/qemu-tool/fleet.xml` is a file an admin creates. A file
+    there is the settings of every command given no `--xml`, so a copy of
+    `rocm-golden.xml` would make a plain `gen-vm` pull that fleet's image and a
+    plain `run-vm` take its NVMe and fixed port forwards. An old
+    `/etc/qemu-tool/env` is left in place, unread.
+  - `<vm-cpu-sockets>` and `<vm-cpu-phys-bits>` must be integers, checked
+    when the file is parsed like every other integer element, and a `~` in a
+    path element is expanded then too, so `docker compose` and `check` see
+    the path `gen-vm` and `run-vm` do.
+
+- **Fleet XML is parsed strictly.** An element the parser does not know, an
+  element repeated within one file, an attribute on `<fleet>` or on a
+  setting, a nested element and text directly under `<fleet>` are errors
+  naming the file and the element; an unknown element also names the closest
+  known one (`unknown element <vm-vcpu>; did you mean <vm-vcpus>?`). All of
+  these used to be ignored, so a typo was a setting that silently kept its
+  default, and of a repeated element the first quietly won. Every problem in
+  a file is reported in one go. XML comments are still allowed.
+  - *If a file that used to load is now refused:* the message names what to
+    fix. Nothing that was being applied has changed meaning.
+
+- **`qemu-tool fleet-to-env` is removed**, and qemu-tool no longer writes a
+  temporary env file or passes `--env-file` to `docker compose`. The four
+  variables a generated stack leaves for compose to interpolate —
+  `CONTAINER_USER`, `CONTAINER_KVM_GID`, `VM_IMAGES_DIR`, `QEMU_TOOL_SRC` —
+  are set in the environment of the `docker compose` process, and only where
+  the caller's environment does not already set them. Plain `docker compose`
+  against a stack needs the first two exported.
+
+- **`qemu/xml/` is `qemu/stacks/`, with three files.** `helios-tray.xml` keeps
+  its name, `mi355x-node.xml` is `mi355x-server.xml`, and `quickstart.xml` and
+  `scale-out.xml` are replaced by the new `rocm-golden.xml`, which is what
+  `quick-start` runs and the template to copy. `overlay-ci.xml`,
+  `overlay-mi100.xml` and `fleet-example.xml` are deleted, and no overlay is
+  committed any more.
+
+- **Three stacks, each named after its fleet file.**
+  - `vfio-user-ernic-rocjitsu-scale-out` is `rocm-golden`, now two guests
+    rendered from `rocm-golden.xml`. It is the default stack.
+  - `vfio-user-mi355x-node` is `mi355x-server`.
+  - `vfio-user-helios-tray` is `helios-tray`.
+  - `vfio-user-ernic-vm`, `vfio-user-rocjitsu-vm`,
+    `vfio-user-ernic-rocjitsu-vm` and `vfio-user-ernic-2vm`, the hand-written
+    stacks, are removed.
+
+  `compose --stack` and `gen-compose --stack` accept only the three new
+  names, and `compose` with no `--stack` runs `rocm-golden` — it used to run the
+  hand-written single-VM stack. `compose --vm-name` and `--vm2-name` are
+  gone with the stacks that read them. One guest is `rocm-golden.xml` plus an
+  overlay setting `<vm-count>1`; a NIC-only or GPU-only guest is not
+  expressible.
+  - `gen-compose` infers the stack from the first `--xml` file, so
+    `gen-compose --xml qemu/stacks/mi355x-server.xml` needs no `--stack`, and
+    with no `--xml` and no `fleet.xml` on the search path it renders the
+    stack's own file instead of exiting.
+  - *If you have a stack rendered by an earlier version* (from `scale-out.xml`
+    with or without an overlay, or by an older `quick-start`): re-render it.
+    Its header says `# env-sha256:`, which this version does not recognise, so
+    `qemu-tool down` does not find it and `qemu-tool compose` run from inside
+    its directory falls through to the committed default stack. Put the
+    overlay's values in a fleet XML of your own, run `gen-compose --xml
+    qemu/stacks/rocm-golden.xml --xml yours.xml --output-dir DIR`, and stop
+    containers the old version started with `docker compose -p <project>
+    down`. The default fleet has an SDXI device, P4 and log collection that
+    `scale-out.xml` did not; set `<sdxi-per-vm>0`, `<p4-enable>false` and
+    `<logs-enable>false` in the overlay to keep the old shape.
+  - `quick-start` guests are now `rocm-golden-1` and `-2`, not `quickstart-1`
+    and `-2`, and each also has an SDXI device and P4. `--flavor default` is
+    still the name of that flavor, and the state directories are still
+    `quickstart` and `quickstart-key`. Overlays written by an
+    older `quick-start` are orphaned, and `quick-start up` must be re-run
+    before `quick-start test` against a stack an older version brought up.
+
+- **Generated files carry `# xml-sha256:`**, not `# env-sha256:`, and
+  `qemu-tool down` identifies a stack by that header alone, no longer by its
+  directory name.
+
+- **`--env-file` and `--fleet-file` are `--xml` on every subcommand.** Neither
+  old spelling is accepted; see "Every subcommand takes its settings as
+  `--xml`" under Changed.
+
+- **`qemu-tool lmcache-stats` and the `<lmcache-*>` fleet XML elements are
+  removed** with the rest of LMCache; see Removed. Under strict parsing a
+  leftover `<lmcache-*>` element is an error, not ignored.
+
+- **`helios-tray.xml` no longer carries one host's images directory.** It
+  set `<vm-images-dir>` to a developer's checkout and now uses
+  `/var/lib/qemu-tool/images` like the other two. Keep a local path in a
+  `fleet.xml` of your own. The stack's checkout-only
+  `docker-compose.override.yml` and the small-BAR rocjitsu config it mounted
+  are deleted: a checkout now runs the large BAR the fleet file sizes for,
+  as every other install already did.
+
 ### Added
 
-- **`qemu/xml/rocm-golden.xml`, the performance-tracking fleet.** Two guests
-  from the published rocm-golden qcow2, each with a GPU, an NVMe, an ernic with
-  P4 in guest scope and an SDXI device. Every tracked benchmark runs against
-  this one stack.
+- **`qemu-tool publish-qcow-prune`: retention for the published image's
+  repository.** Keeps the 10 newest dated tags (`<YYYYMMDD>.g<sha7>`) and
+  any pushed within 30 days, always keeps `latest`, every `qm.<sha7>` and
+  every tag of another shape, and deletes the other dated tags; `--keep`
+  and `--days` change the numbers. It prints its plan and deletes nothing
+  unless given `--yes`. Docker Hub only — a repository on another registry
+  is refused — with the repository from `--ref` or an `--xml` layer's
+  `<publish-ref>`, and `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` read from
+  the environment. A listing it cannot complete deletes nothing. The publish
+  workflow runs it after a push, never on a dry run, so **the Docker Hub
+  token now needs delete access**. A prune that fails there is a warning on
+  the run, not a failure: the image is already published.
+  - It removes tag names and nothing else. The image a deleted tag named,
+    and the `vm-info.json` and keypair attached to it as a referrer, stay
+    in the registry; every publish also carries a `qm.<sha7>` tag that is
+    never deleted, so the image stays reachable too. This tidies the tag
+    list and does not reclaim storage.
+  - `--yes` is taken only spelled in full; the subcommand accepts no
+    abbreviated option.
+
+- **`qm.<sha7>`, a third tag on every published image**: the qemu-minimal
+  commit alone, beside the dated tag and `latest`.
+
+- **The golden image carries one kernel.** The Ubuntu release kernel the
+  cloud image ships is purged at the end of the bake — about 370 MB, and the
+  entry GRUB would fall back to, for which the image has no ionic, amdgpu or
+  SDXI module. The slim play asserts the guest is running the pinned kernel
+  first, `image_slim` asks apt what the purge would remove and stops if it
+  is anything but kernels, and what the packages leave in `/lib/modules`,
+  `/boot` and `/var/lib/dkms` is removed too. `image_slim_purge_old_kernels`
+  is still off by default.
+  - GRUB boots the pinned kernel by name: `rocm_ernic_setup` writes
+    `GRUB_TOP_LEVEL` to `/etc/default/grub.d/99-rocm-ernic-kernel.cfg` when
+    it installs the kernel, where the boot used to go to whichever kernel
+    sorted first.
+  - `qemu/checks/rocm-golden.sh` fails an image with a second kernel image,
+    a kernel metapackage, another kernel's module tree or DKMS build, or a
+    GRUB default that does not resolve to the running kernel.
+  - Not yet run against a guest; both lanes boot the baked image and run
+    that check before anything is published.
+
+- **`--ssh-port auto` on `gen-vm` and `run-vm`, and `<bake-ssh-port>` in the
+  fleet XML.** The tool no longer has to be told a free host port for the
+  guest's SSH forward: `auto` takes the first port from 2222 up (to 2321)
+  that can be bound on every address and on loopback, immediately before
+  QEMU starts, and prints it. A bake on a WSL2 host died with `Could not set
+  up host forwarding rule 'tcp::2222-:22'` because something on the Windows
+  side held 2222; nothing in WSL listened on it, but a bind fails, which is
+  what the probe does.
+  - `gen-vm` starts QEMU again on the next free port, up to five times, if
+    the probed one is taken before QEMU binds it. `run-vm` becomes QEMU and
+    cannot retry. Only a refusal of the SSH forward itself is retried: a
+    held `--extra-hostfwd` port stops the bake at once with QEMU's message,
+    since no other SSH port would free it. An SSH answer on the port does
+    not count as the guest if QEMU has exited by the time it arrives.
+  - The management NIC MAC is derived from the default port in auto mode,
+    not the chosen one, so every boot of an image presents the same MAC;
+    `--mac` still wins. The guest agent and QMP socket paths follow the
+    chosen port.
+  - `qemu-tool ssh`, `list` and `inspect` already read the port from the
+    running QEMU, so they find an auto port unaided.
+  - `<bake-ssh-port>` (a number or `auto`) is read by `gen-vm --bake` only
+    and loses to an `--ssh-port` flag. `rocm-golden.xml` sets it to `auto`,
+    so `qemu-tool gen-vm --bake --xml qemu/stacks/rocm-golden.xml` no longer
+    depends on 2222 being free.
+  - A number behaves exactly as before, failure message included, except
+    that `--ssh-port` now takes plain ASCII digits in 1-65535 only: `0`, a
+    negative, anything above 65535 and spellings like `+22` are usage
+    errors where they used to reach QEMU. A fleet's
+    `<ssh-port-base>` does not take `auto`: its ports are written into the
+    generated compose file, and `quick-start` already remaps them.
+- `qemu-tool check` reports whether each settings file in force is valid
+  fleet XML: one `FAIL` line per problem, naming the file and the element,
+  where an unparsable layer used to leave the report with no fleet and no
+  word about why.
+- `tests/test_fleet_files.py` parses every `qemu/stacks/*.xml` and every
+  fleet XML overlay a workflow writes inline, so a typo in either fails
+  `Gen Compose Check` instead of surfacing in a guest boot.
+
+- **`gen-vm --bake` and `publish-qcow --xml`.** `rocm-golden.xml` carries the
+  rocm-golden image's bake and publish settings in new `<bake-name>`,
+  `<bake-release>`, `<bake-size>`, `<bake-vcpus>`, `<bake-vmem>`,
+  `<bake-packages>`, `<bake-playbook>`, `<bake-username>`,
+  `<bake-password>`, `<publish-ref>` and
+  `<publish-flavour>` elements. `gen-vm --bake --xml qemu/stacks/rocm-golden.xml`
+  builds the image from the cloud image instead of pulling `<backing-ref>`,
+  and `publish-qcow --xml` takes its ref, name and image path from the same
+  file. Nothing else reads them. The baked account is separate from
+  `<vm-username>`/`<vm-password>` because it is published. A missing
+  `publish-qcow` argument now exits 1 naming the flag and the element, rather
+  than as a usage error.
+  - `publish-qcow` needs no `--key` for an image `gen-vm` baked with a
+    key it generated: it publishes that keypair and prints which one. An
+    image baked with a key you named, or one with no record, needs `--key`,
+    which names the private key that gets published. The key is never taken
+    from `<vm-ssh-key-file>` or from `~/.ssh`. The record is the one beside
+    the image file, not one chosen by `--vm-name`, and it is believed only
+    about `<images>/keys/<name>_id_rsa`: a record naming any other path, a
+    symlink there, a pair that no longer has the fingerprint the bake
+    recorded, or a record with no fingerprint is refused. It refuses a
+    `--key` that is not the one `gen-vm` recorded baking into the image, a
+    private key that is not the other half of its `.pub`, and an image
+    `gen-vm` pulled rather than baked.
+  - A bake leaves out the fleet's `<vm-extra-hostfwd>`: it runs QEMU on the
+    host, where a forward whose port is taken stops it starting.
+  - `<bake-packages>` and `<bake-playbook>` are resolved against the current
+    directory. A missing one names the directory, and a missing manifest
+    stops the bake before the cloud image is downloaded.
+
+
+- **`gen-vm --bake` refuses a bake short of memory.** The bake's module
+  builds run one compiler per vCPU, so under 1024 MiB per vCPU the guest's
+  OOM killer ends the amdgpu build a quarter of an hour in, with an error
+  that names dkms. The check names both numbers and what to change.
+  `<bake-vmem>` sets a bake's memory beside `<bake-vcpus>`; a bake used to
+  borrow the fleet guests' `<vm-vmem>`.
+- **`qemu-tool compose --stack NAME` reads the stack's own
+  `qemu/stacks/NAME.xml`** when no `--xml` is given and no `fleet.xml` is on
+  the search path, as `gen-compose` does, so the images directory and the
+  stale check have a source.
+
+- **`qemu/stacks/rocm-golden.xml`, the default fleet.** Two guests from the
+  published rocm-golden qcow2, each with a GPU, an NVMe, an ernic with P4 in
+  guest scope and an SDXI device. It is the default stack, what `quick-start`
+  runs, the template for a fleet of your own, and what every tracked
+  benchmark runs against.
+
+- **The SDXI server image is pulled, not built.** `<sdxi-image>` in
+  `rocm-golden.xml` and `helios-tray.xml` names the published
+  `batesste-ci-images-ubuntu-rocm-sdxi` tag. The
+  generated `sdxi-N` services name `rocm-sdxi` as their entrypoint, because
+  that image has none. `qemu/docker/sdxi/` and the `qemu-tool/sdxi:latest`
+  tag are gone, and `quick-start` no longer asks for a build.
+
+- **All images share one build stamp except SDXI, which follows the guest's
+  `sdxi_source_pin`.** `<sdxi-image>` is now
+  `20261113.g379fbf6-sdxi.dfd76f2`, the server built from the commit the
+  guest's driver is built from, while the rest of the fleet stays on
+  `20261112.gdca6903`. `gen-compose` no longer compares the SDXI image's
+  stamp with the fleet's; `tests/test_playbook_pins.py` requires the
+  `sdxi.<sha7>` in every fleet file's `<sdxi-image>` to equal the first seven
+  characters of `sdxi_source_pin`, as a live assertion rather than an
+  expected failure, and the `Image Tag Consistency` workflow exempts
+  `-sdxi.<sha>` refs from its stamp count and requires them to name one tag.
+  A non-zero `<sdxi-per-vm>` with no `<sdxi-image>` is still refused.
+  The pairing holds for a guest baked from this checkout. The qcow2
+  `<backing-ref>` names today, `20261112.gdca6903-...-qm.096ddfe`, was built
+  before the SDXI play existed and carries no SDXI driver or `sdxi-cli` at
+  all, so guests booted from it have the device and nothing bound to it:
+  there is no `/dev/sdxi0`, and the daily report lane's SDXI number is `n/a`
+  until `<backing-ref>` moves to a guest baked at this pin.
+
+- **The playbook-test and smoke-test lanes boot the fleet's SDXI device.**
+  Their inline overlays no longer set `<sdxi-per-vm>0`, so each guest waits
+  on its `sdxi-N` server being healthy. Both lanes pull the SDXI image named
+  in `rocm-golden.xml` and include the SDXI servers in their health waits.
+
+- **The `.deb` ships every stack whole** — `grafana/`, `logging/` and
+  `tapsetup/` as well as the YAML, the helios stack and the fleet files — so `quick-start` works from a package install.
 
 - **This repo publishes the rocm-golden qcow2.** batesste-ci-images stops
   building guests and pulls this one.
@@ -23,11 +332,13 @@ All notable changes to this project will be documented in this file.
     touch the image's inputs, and by dispatch with a dry-run switch. It
     checks the guest pins against the server images, bakes, runs
     `qemu/checks/rocm-golden.sh` on a boot with no device, then the
-    configure, firmware and test stages and an SDXI copy behind the
-    single-VM stack,
-    and publishes to `docker.io/sbates130272/qemu-minimal-rocm-golden` as
-    `<YYYYMMDD>.g<sha7>` and `latest`. The published disk is the bake, not
-    the disk that was tested.
+    configure, firmware and test stages and an SDXI copy as the one guest
+    of a rendered default stack, and publishes to
+    `docker.io/sbates130272/qemu-tool-rocm-golden` as
+    `<YYYYMMDD>.g<sha7>`, `latest` and `qm.<sha7>`, three names for one
+    manifest with the dated one first, since the keypair referrer attaches
+    to the first tag. The published disk is the bake, not the disk that was
+    tested.
   - `gen-vm --packages` takes a manifest of bare names, one per line, as
     well as the YAML fragment it always took. `rocm-golden.txt` is the first
     kind, and pasted into the cloud-config unchanged it made the document
@@ -35,8 +346,6 @@ All notable changes to this project will be documented in this file.
     a guest that would never power off. The generated cloud-config is now
     parsed before the guest boots, and a first boot under KVM is capped at
     30 minutes.
-  - The `vfio-user-ernic-rocjitsu-vm` stack gains a rocm-sdxi server, so its
-    guest has an SDXI engine as well. `SDXI_COUNT=0` leaves it out.
   - `sdxi_source_pin` moves to `dfd76f2`, where upstream `sdxi_char` builds
     on 7.2 unaided, and the carried io_uring patch is deleted.
 
@@ -98,6 +407,51 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- **`sbates130272.batesste` 3.2.1 to 3.3.1.** Picks up two fixes asked for
+  from here: `check_platform` no longer falls back to top-level fact
+  variables, which printed a deprecation warning for every role and stops
+  working at ansible-core 2.24; and with dotfiles off, `user_setup` and
+  `git_setup` now make `~/.bashrc` source the `~/.bashrc.d` snippets that
+  3.3.0 moved their shell setup into. 3.3.0 also removed `ptop` from
+  `fave_packages`. A baked guest gains `~/.bashrc.d/user_setup.sh` and a
+  sourcing loop in `~/.bashrc`, and no longer has `ptop`.
+
+- **The `vm-rocm-golden` playbook-test lane keeps a compiler cache between
+  runs and no longer compacts the image it bakes.** The plays that build
+  kernel modules are about fourteen minutes of that bake, and the inputs of
+  those modules move only when a pin does; how much of it is compiling, which
+  is all a cache removes, has not been measured. A bake given a cache
+  directory — `qemu-tool gen-vm --bake --cache-dir DIR`, or
+  `<bake-cache-dir>` in a fleet file — now puts
+  ccache in front of every module build — amdgpu, both ionic-ernic builds,
+  `ernic_p4` and SDXI — and carries the cache in and out of the guest as one
+  tar file; the new `bake_ccache` role does it, and removes every trace
+  before the image is finished. The lane restores and saves that directory
+  with `actions/cache` and bakes with `--no-compact`, since nothing
+  publishes its image. There is no cache directory by default,
+  `qemu/stacks/rocm-golden.xml` names none and the publish workflow passes
+  none: a published image is compiled from source and
+  compacted, as before. The one thing every bake now runs is the role's
+  removal, which is a no-op on a guest that never had the cache: it is what
+  cleans up after a cached bake that failed part way, whatever the rerun was
+  given. `qemu/checks/rocm-golden.sh` now fails an image that carries a
+  ccache configuration, cache or compiler symlink.
+  - The cache is named by the flag or the element and by nothing in the
+    environment. `gen-vm` creates the directory and passes it to the
+    playbook as the extra var `bake_cache_dir`; it refuses `--cache-dir`
+    without `--bake`, and a cache when the bake has no playbook.
+  - The saved cache is replaced when the lane restored one saved for other
+    pins (`gen-vm --cache-replace`), or when a hundred or more ccache invocations missed; otherwise it
+    is left, since a cache entry cannot be overwritten.
+  - The lane runs on pull requests only, so a pull request's first run is
+    still cold unless the workflow has been run by hand on `main`, whose
+    cache every pull request can read. Do that once after this merges and
+    after each pin bump.
+  - The lane's `Report VM image size` step now reports an uncompacted
+    backing image, 2.3–2.5x the published size.
+  - The comment in `qemu/packages.d/rocm-golden.txt` described cache plumbing
+    (`dkms_build_cached`, `probe-guest`) that this repository never had.
+
 - **`report-for-vm-rocm-golden` is the one benchmark workflow.** It replaces
   `report-for-vm-rocjitsu` and absorbs the ernic P4 and SDXI benchmarks from
   `report-for-vm-ernic` and `report-for-helios`. It brings the stack up with
@@ -126,8 +480,7 @@ All notable changes to this project will be documented in this file.
 
 - **Fleet inventory variables renamed.** `lmcache_guest_rocjitsu_image` is
   `fleet_guest_rocjitsu_image` and `lmcache_guest_ernic_mac` is
-  `fleet_guest_ernic_mac`. The committed scale-out, mi355x and helios stacks
-  are regenerated.
+  `fleet_guest_ernic_mac`. The committed stacks are regenerated.
 
 - **The ernic pins live in `vm-rocm-golden.yml`.** `ionic_kernel_pin` and
   `ernic_source_pin` are defined once on its first play and shared with the
@@ -146,17 +499,37 @@ All notable changes to this project will be documented in this file.
   copy of the same steps.
 
 - **Every subcommand takes its settings as `--xml`.** It replaces
-  `--fleet-file` on `quick-start`, `gen-compose`, `fleet-to-env` and `gen-vm`,
-  and `--env-file` on `run-vm`, `compose`, `inspect`, `ssh`, `qcow` and
-  `check`. Neither old spelling is accepted. `inspect`, `ssh`, `qcow`, `check`
-  and `run-vm` could not read fleet XML at all before; one loader now handles
-  both formats, merging XML layers with each other before converting them.
-  `docker compose --env-file` is docker's own flag and is unchanged.
+  `--fleet-file` on `quick-start`, `gen-compose` and `gen-vm`, and
+  `--env-file` on `run-vm`, `compose`, `inspect`, `ssh`, `qcow` and `check`.
+  Neither old spelling is accepted. `inspect`, `ssh`, `qcow`, `check` and
+  `run-vm` could not read fleet XML at all before; one loader,
+  `settings.py`, now serves them all.
+
+- **`--help` is reorganised.** Commands are listed by purpose, options are
+  grouped, every argument has help text and the main commands have examples.
+  Help wraps at 80 columns however wide the terminal is. The reorganisation
+  itself changes no flag, default or parsing; the defaults that did change
+  in this release are listed under Breaking. The man page is rewritten to
+  match.
+
+- **`scripts/release.sh` stamps the man page.** Its `.TH` line carried a
+  version and month nothing updated; the release script now writes both, and
+  the release workflow's `Verify Version` job refuses a tag the man page
+  disagrees with.
+
+- **gen-compose messages name XML elements**, e.g. `<vm-shm-size> has 2
+  values but <vm-count> is 3`, and the `--check` failure hint now includes
+  `--stack` when the render needs it.
+
+- **CI boots baked guests behind a rendered default stack.** The publish and
+  playbook-test lanes render `rocm-golden.xml` with an inline one-guest overlay
+  instead of using the hand-written single-VM stack, so the guest sees a mesh
+  manager ernic, root ports and an NVMe. `quickstart-boot` and the two-guest smoke test run `rocm-golden.xml` with
+  inline overlays too; the daily report lane runs it with none, Loki and
+  Alloy included.
 
 - **The `rocm-ernic` smoke-test workflow is `smoke-test-vm-rocm-golden`**,
   file, name and job.
-
-- **`overlay-ci.xml` names its guests `fleet-ci`**, not `lmcache-ci`.
 
 ### Removed
 
@@ -164,8 +537,8 @@ All notable changes to this project will be documented in this file.
   `qemu/docker/lmcache/`, the `lmcache-stats` subcommand, the coordinator and
   exporter services and their scrape jobs, the `<lmcache-*>` fleet XML
   elements, the LMCache dashboards and the panels for it on the fleet
-  dashboard. A fleet file that still carries the elements parses; they are
-  ignored. Guests no longer ship their journals to Loki, which was the guest
+  dashboard. A fleet file that still carries the elements is refused as
+  unknown elements (see strict parsing under Breaking); delete them. Guests no longer ship their journals to Loki, which was the guest
   Alloy that role installed.
 
 - **Report pages and the "all reports green" badge.** `docs/reports.md`, the
@@ -184,9 +557,7 @@ All notable changes to this project will be documented in this file.
 - **`report-for-quickstart`.** `report-for-vm-rocm-golden` already ran
   `qemu-tool quick-start up` and `test` daily, so the two lanes were one. Its
   checks on Prometheus and Grafana and on what `qemu-tool list` and `inspect`
-  report about live guests moved across, and `rocm-golden.xml` now enables
-  Grafana. The daily run no longer uses `quickstart.xml` itself, which CI now
-  boots only in `quickstart-boot`, and it does not start Loki or Alloy.
+  report about live guests moved across, and it checks Loki and Alloy too.
 
 - **`scripts/mi355x-node.sh` and `qemu/xml/overlay-mi355x-ci.xml`.** No lane
   ran the script once `report-for-mi355x` was gone, and nothing booted the
@@ -215,6 +586,53 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **A tag moved upstream no longer kills a bake.** The rocm-ernic sources
+  come from a clone the collection keeps on the controller and updates with
+  `git fetch --tags`; once upstream moved its `nightly` tag, git refused it
+  ("would clobber existing tag") and the bake died after 118 tasks over a
+  tag it never reads. Before each use the clone is now fetched into, and
+  a moved tag is taken with a forced fetch. Nothing is removed: the clone
+  is shared by every bake and configure run on the controller, and the
+  forced fetch leaves its work tree, branches and uncommitted changes as
+  they were. A fetch that fails any other way is reported and the clone
+  left alone.
+
+- **`gen-compose` refuses a fleet that names no image for a service it
+  renders.** An empty `<qemu-ref>`, `<ernic-ref>` or `<rocjitsu-ref>`, or a
+  non-zero `<sdxi-per-vm>` with no `<sdxi-image>`, used to render
+  `image: ""` and exit 0, failing only when compose read the stack.
+
+- **The SDXI gate and benchmark run a command the guest has.** The guest
+  carries the Python `sdxi-cli`, which has no `bench copy`; the publish gate
+  now copies a file through the engine and compares it, and
+  `generate-vm-report.sh` times the ioctl copy itself.
+
+- **`qemu-tool down` no longer merges a compose project that merely shares a
+  stack's project name.** A stack's project is its directory name, which an
+  unrelated project can share. Containers are now grouped by project and
+  compose file, so a same-named foreign project is not counted into the fleet, cannot make
+  it read as yours or hide it, and is not removed as the fleet's orphans:
+  a stack whose project name is shared is torn down without
+  `--remove-orphans`.
+- **`qemu-tool compose up` pre-creates the data directories the stack really
+  mounts.** They are read from the rendered `docker-compose.yml`, so the
+  defaults the render supplies for an unset `<prom-data-dir>` or
+  `<grafana-data-dir>` — which is what `rocm-golden.xml` has — are created as the
+  caller, and so are a rendered stack's with no `--xml`. Docker used to
+  create them root-owned and Prometheus and Grafana crash-looped.
+- **A per-VM `<vm-filesystem>` list bind-mounts each share.** It rendered one
+  mount of the unsplit string, `"/a,/b:/a,/b:ro"`, so no guest's share existed
+  in its container.
+- **The stale-stack warning no longer suggests rendering another fleet over a
+  shipped stack.** `compose --stack NAME` given layers that are not the
+  stack's own file points at `gen-compose --output-dir` and `compose
+  --stack-dir` instead, and says nothing about a `fleet.xml` the search path
+  found.
+- **`qemu-tool qcow --list` survives a malformed `fleet.xml` on the search
+  path**, with a warning naming it; the guard there caught `Exception`, and
+  the strict parser exits.
+- `quick-start --flavor` help said mi355x is one guest; it is four.
+
 - **The P4 bandwidth benchmark used one hostname for two networks.**
   `generate-vm-report.sh` SSHed to guest 2 to start the server and then told
   guest 1 to dial that same name over RDMA. It now takes the RDMA address
@@ -233,11 +651,18 @@ All notable changes to this project will be documented in this file.
   undiverted only if a diversion existed. The removal is now gated on the
   diversion.
 
-- **`gen-vm --fleet-file` read the file and then ignored it.** The fleet
-  XML was converted to settings keys and merged as though they were field
-  names, so none matched and every value was dropped without a word. A fleet
-  file now sets the guest's vCPUs, memory, images directory and backing image
-  the way an env-format file always did.
+- **`gen-vm` read a fleet XML file and then ignored it.** The fleet XML was
+  converted to settings keys and merged as though they were field names, so
+  none matched and every value was dropped without a word. A fleet file now
+  sets the guest's vCPUs, memory, images directory and backing image.
+
+- **`qemu-tool qcow --xml` raised `AttributeError`**, and `qcow --list` never
+  scanned the settings file's images directory because it looked the value up
+  under the wrong name. Both work.
+
+- **`tests/test_image_tag_consistency.py` matched nothing.** Its pattern could
+  not match the `g` in a stamp such as `20261112.gdca6903`, so every check in
+  it passed vacuously.
 
 - **`tests/test_quick_start.py` named two workflows that no longer exist.**
 

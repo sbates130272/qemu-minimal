@@ -111,12 +111,12 @@ class UdevRulesTest(unittest.TestCase):
 
         The kernel number is the trailing digits of the sysname, and the
         emulated NICs come up as enp1s0np0 and enp2s0np0 -- measured on
-        dense-fleet guest 1, with ERNIC_PER_VM=2. Both end in 0, so
+        dense-fleet guest 1, with <ernic-per-vm> 2. Both end in 0, so
         NAME="rocm-ernic%n" asks for rocm-ernic0 twice and the second rename
         fails with the name in use.
 
         Unreachable while every fleet had one NIC per guest, which is why it
-        survived until ERNIC_PER_VM existed.
+        survived until <ernic-per-vm> existed.
         """
         (net,) = [s for s in _rule_stanzas() if 'SUBSYSTEM=="net"' in s]
         self.assertNotIn(
@@ -218,7 +218,7 @@ class UdevRulesTest(unittest.TestCase):
         claim rocm-rdma-ernic0. One wins and the loser's device keeps its
         PCI-topology name.
 
-        Measured on the 32-guest dense-fleet at ERNIC_PER_VM=2: 13 guests
+        Measured on the 32-guest dense-fleet at <ernic-per-vm> 2: 13 guests
         correct, 13 with the IB index crossed against the netdev index, 6
         where the second rename failed and left rocep3s0 -- 19 of 32 wrong.
         The crossed ones are the reason this is a test and not a bug report:
@@ -482,7 +482,7 @@ class NetcfgDiscoveryTest(unittest.TestCase):
         self.assertEqual(got.stdout.split(), ["rocm-ernic0", "enp0s6np0"])
 
     def test_every_matching_nic_is_discovered(self):
-        # With ERNIC_PER_VM > 1 a guest has several emulated NICs, each its
+        # With <ernic-per-vm> above 1 a guest has several emulated NICs, each its
         # own mesh node with its own MAC, GID and address. Returning only the
         # first left the second with a link and no address -- a half-working
         # fabric rather than a visibly missing step.

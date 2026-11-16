@@ -7,7 +7,7 @@
 # and the stable names are handled by modules-load.d and 99-rocm-ernic.rules.
 #
 # The guest index comes from the NIC's own MAC rather than being passed in.
-# gen-compose hands VM n the MAC <ERNIC_MAC_PREFIX>:<n>>8>:<n&0xff> and the
+# gen-compose hands VM n the MAC <ernic-mac-prefix>:<n>>8>:<n&0xff> and the
 # address <subnet>.<10+n>, so the MAC already carries n and one image serves
 # every guest in the fleet.
 #
@@ -50,7 +50,7 @@ want_tuple() {
         "$PCI_SUBSYSTEM_VENDOR" "$PCI_SUBSYSTEM_DEVICE"
 }
 
-# EVERY matching device, not just the first: with ERNIC_PER_VM > 1 a guest has
+# EVERY matching device, not just the first: with <ernic-per-vm> above 1 a guest has
 # several emulated NICs and each is its own mesh node with its own MAC, GID and
 # address. Configuring only the first left the second with a link and no
 # address, which looks like a half-working fabric rather than a missing step.

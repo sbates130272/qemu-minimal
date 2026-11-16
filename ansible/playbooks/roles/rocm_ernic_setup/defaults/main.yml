@@ -51,7 +51,7 @@ rocm_ernic_setup_modules: [ionic, ionic_rdma]
 rocm_ernic_setup_networkd_unmanaged: true
 # Addresses the NIC at boot from the NIC's own MAC, so one image serves every
 # guest in the fleet. gen-compose hands VM n the MAC
-# <ERNIC_MAC_PREFIX>:<n>>8>:<n&0xff> and the address <subnet>.<10+n>, so the
+# <ernic-mac-prefix>:<n>>8>:<n&0xff> and the address <subnet>.<10+n>, so the
 # MAC already carries n. This is the run-time half of the configure play --
 # the half AGENTS.md issue 12 says does not survive a reboot.
 rocm_ernic_setup_netcfg: true
@@ -105,6 +105,10 @@ rocm_ernic_setup_kernel_debs_dir: ""
 # Where the .debs land in the guest before the single apt transaction.
 rocm_ernic_setup_kernel_payload_dir: /tmp/mainline-kernel
 rocm_ernic_setup_kernel_reboot_timeout: 600
+# Name the pinned kernel as the one grub boots, rather than leaving it to
+# sort first among whatever is installed. kernel.yml says how.
+rocm_ernic_setup_kernel_grub_pin: true
+rocm_ernic_setup_kernel_grub_dropin: /etc/default/grub.d/99-rocm-ernic-kernel.cfg
 # kernel.yml ends by asserting the installed headers carry ib_umem_get_va, the
 # helper ionic_rdma needs. vm-rocm-golden.yml reuses kernel.yml for the kernel
 # alone and never builds ionic_rdma, so it turns this off rather than failing a

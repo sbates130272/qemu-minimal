@@ -1,24 +1,22 @@
-"""Generate the scale-out compose stack from the env file.
+"""Generate a compose stack from fleet XML.
 
-The 2-VM stack hand-writes every socket path, MAC, SSH port and qcow2 name.
-That does not survive 8 VMs, let alone the mesh's 64, so this derives all of
-them from VM_COUNT and a handful of bases.
+Every socket path, MAC, SSH port and qcow2 name is derived from <vm-count>
+and a handful of bases, so one file describes a fleet of any size.
 
-Per-VM values are comma-lists, not numbered keys. A bare value broadcasts to
-every VM; a list of length VM_COUNT applies positionally; any other length is
-an error naming the key and both lengths.
+A text-valued per-VM setting (<vm-shm-size>, <rocjitsu-config>,
+<vm-filesystem>) may be a comma-list. A bare value broadcasts to every VM; a
+list of length <vm-count> applies positionally; any other length is an error
+naming the element and both lengths.
 
 The exception is the one that silently does the wrong thing if you get it
-backwards: three VMConfig fields are ALREADY list[str] (pci_hostdev,
-vfio_userdev, extra_hostfwd), where the commas mean "several values for ONE
-VM". VM_EXTRA_HOSTFWD=a,b is two hostfwd rules for every guest, not one rule
-each for two guests. Which case applies is read off VMConfig's own type hints
-rather than a hand-kept list of key names, so a scalar field added to VMConfig
-later becomes per-VM-overridable for free.
+backwards: in <vm-extra-hostfwd> the commas mean "several values for ONE VM".
+a,b there is two hostfwd rules for every guest, not one rule each for two
+guests.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import ipaddress
 import itertools
@@ -26,152 +24,30 @@ import os
 import re
 import shutil
 import sys
-import typing
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from .config import VMConfig
-from .envfile import (
-    _coerce,
-    env_key,
-    find as find_env_file,
-    parse_layers as parse_env_layers,
-)
+from .compose import _DEFAULT_STACK, _STACKS
 from .fleet_xml import FleetConfig, FleetXml
+from .resources import stack_fleet
 
-# Fields the generated qemu entrypoint forwards to run-vm, in emit order.
-# Everything here is per-VM overridable by the rules above.
-_VM_FLAGS = [
-    ("vcpus", "--vcpus"),
-    ("vmem", "--vmem"),
-    # Emulated NVMe. run-vm creates the backing qcow2
-    # per device itself (_nvme_create), so unlike the root disk there is no
-    # gen-vm step to pair with this. A bare count ("1") is the common case,
-    # and a negative count for null_blk works too.
-    #
-    # run-vm's --nvme also accepts a literal QEMU argument string, but NOT
-    # through here: this names a str field, so commas are the per-VM split.
-    # "4096,logical_block_size=4096" is two values, which at VM_COUNT=8 is a
-    # loud count mismatch and at VM_COUNT=2 is a silent one -- guest 1 gets
-    # "4096", guest 2 gets "logical_block_size=4096". Pinned by
-    # TestNVMe in tests/test_gen_compose.py.
-    ("nvme", "--nvme"),
-    # A host directory shared into every guest over 9p (mount_tag=hostfs).
-    # This is how a fleet gets a large artifact without copying it per VM: one file on the host,
-    # read by all N guests. At VM_COUNT=8 that is 22 GB of transfer saved,
-    # at 40 it is 112 GB. The directory must be readable by the qemu
-    # container, so it is bind-mounted in below.
-    ("filesystem", "--filesystem"),
-    ("extra_hostfwd", "--extra-hostfwd"),
-]
+# An element present but empty means "the default", not "the empty string".
+_FIELD_DEFAULTS = {f.name: f.default for f in dataclasses.fields(FleetConfig)}
 
-# Per-VM keys that name no VMConfig field, so they need their own split.
-_EXTRA_PER_VM = ["VM_SHM_SIZE", "ROCJITSU_CONFIG"]
-
-# Derived per-VM, each with an optional override list.
-_DEFAULTS = {
-    "VM_NAME_PREFIX": "qemu-fleet",
-    "VM_SSH_PORT_BASE": "2222",
-    "ERNIC_MAC_PREFIX": "72:6f:63:6d",
-    "ERNIC_GUEST_SUBNET": "192.168.100",
-    "ERNIC_TCP_PORT": "6320",
-    # Long enough for a guest asked to power off to finish. See the
-    # comment where it is emitted.
-    "STOP_GRACE_PERIOD": "120s",
-    "ERNIC_STATS_PORT": "9840",
-    "ERNIC_NOFILE": "65536",
-    "ERNIC_TAP": "false",
-    # Enable the P4 engine on the ernic server. ERNIC_P4_GUEST_SCOPE controls
-    # which guest commands reach the engine: none (default), read (counters),
-    # write (also table entries), or load (also program replacement). Requires
-    # the server image built with -DERNIC_BUILD_P4=ON and ernic_p4.ko in the
-    # guest.
-    "ERNIC_P4": "false",
-    "ERNIC_P4_GUEST_SCOPE": "none",
-    # Path to a bmv2 JSON program file inside the ernic container. Empty leaves
-    # the engine in pass-through mode (--p4 without --p4-program).
-    "ERNIC_P4_PROGRAM": "",
-    "LOG_MAX_SIZE": "50m",
-    "LOG_MAX_FILE": "3",
-    # Absolute, and deliberately NOT "./prom-data". A relative path resolves
-    # against the STACK directory, and the stack directory is wherever
-    # qemu-tool found it -- for a pipx or .deb install that is inside
-    # site-packages or /usr/share, so the TSDB a fleet run produced lands
-    # somewhere nobody thinks to look and a reinstall deletes. Measured: a
-    # pipx-installed run put it under
-    # ~/.local/share/pipx/venvs/qemu-tool/.../share/compose/<stack>/prom-data,
-    # root-owned, and Prometheus then crash-looped on "mkdir data/:
-    # permission denied".
-    "PROM_DATA_DIR": "/var/lib/qemu-tool/prom-data",
-    "PROM_PORT": "9090",
-    # Host interface the published ports bind to. 0.0.0.0 so a fleet running
-    # on a lab box is reachable from a workstation; set to 127.0.0.1 to keep
-    # it local. Grafana has anonymous admin enabled, so this is the control
-    # that decides who can reach it.
-    "PUBLISH_BIND_ADDR": "0.0.0.0",
-    "PROM_SCRAPE_INTERVAL": "15s",
-    "PROM_RETENTION": "7d",
-    "VM_SHM_SIZE": "8g",
-    "ROCJITSU_CONFIG": "gfx1250_mi455x.json",
-    "VM_IMAGES_DIR": "/var/lib/qemu-tool/images",
-    # Devices per VM. Both default to 1, which is the shape every stack had
-    # before this existed and what keeps the committed scale-out stack
-    # regenerating byte-identical.
-    #
-    # ERNIC_PER_VM multiplies MESH NODES, not just containers: each rocm-ernic
-    # is its own node, so 8 per VM against the ~40-node registration wall
-    # (AGENTS.md issue 17) caps the fleet near 5 VMs, not 40. plan() refuses
-    # anything past the protocol ceiling and names the product.
-    "ERNIC_PER_VM": "1",
-    "ROCJITSU_PER_VM": "1",
-    # Group the guest's vfio-user devices under PCIe switches, this many per
-    # switch. 2 with equal ernic/rocjitsu counts gives the MI355X shape: one
-    # NIC and one GPU below each switch. 0 is off.
-    "VM_PCIE_SWITCH_WIDTH": "0",
-    # Guest socket count, and the 64-bit PCI hole. Empty leaves both to QEMU,
-    # whose -smp inference gives one single-core socket per vCPU.
-    "VM_CPU_SOCKETS": "",
-    "VM_CPU_PHYS_BITS": "",
-    "VM_PCI_HOLE64_SIZE": "",
-    "QEMU_TOOL_SRC": "../../..",
-    "FLEET_NET_PREFIX": "172.31",
-    "VM_USERNAME": "ubuntu",
-    "VM_FILESYSTEM": "",
-    # True, matching VMConfig: off leaves a GPU with a 16M 32-bit BAR that
-    # amdgpu cannot initialise. See the comment on VMConfig.vfio_user_root_port.
-    "VM_VFIO_USER_ROOT_PORT": "true",
-    # Excuses VM_BACKING_IMAGE from the build-stamp check, and nothing
-    # else. Off by default: the check is the thing that stops a mixed set
-    # wedging a fleet at the vfio-user boundary.
-    "IMAGE_ALLOW_GUEST_LAG": "false",
-    # ---- Logs --------------------------------------------------------------
-    # Loki plus an Alloy on the host, which tails the stack's containers.
-    # Rides the `metrics` profile: a log panel beside a
-    # metric panel is the whole point, and a third switch for "observability
-    # but only half of it" helps nobody.
-    "LOGS_ENABLE": "true",
-    "LOKI_IMAGE": "docker.io/grafana/loki:3.3.2",
-    "LOKI_PORT": "3100",
-    "LOKI_DATA_DIR": "/var/lib/qemu-tool/loki-data",
-    "ALLOY_IMAGE": "docker.io/grafana/alloy:v1.5.1",
-    # ---- Grafana -----------------------------------------------------------
-    "GRAFANA_ENABLE": "true",
-    "GRAFANA_IMAGE": "docker.io/grafana/grafana:latest",
-    "GRAFANA_PORT": "3000",
-    "GRAFANA_ADMIN_PASSWORD": "admin",
-    # Grafana's own sqlite. The dashboards are provisioned from files so they
-    # survive without this, but annotations, starred dashboards and any
-    # ad-hoc exploration do not. Absolute for the same reason as the TSDB.
-    "GRAFANA_DATA_DIR": "/var/lib/qemu-tool/grafana-data",
-    # ---- Container user ----------------------------------------------------
-    # Not a default in the usual sense: the render ALWAYS emits the reference,
-    # and `qemu-tool compose` supplies the invoking user's own uid:gid when
-    # nothing else has. This key exists so an env file can pin a different one,
-    # and so _check_container_user() can refuse the spellings that silently mean
-    # root. Empty here means "whoever runs the stack", not "uid 0".
-    "CONTAINER_USER": "",
-}
+# Absolute, and deliberately NOT "./prom-data". A relative path resolves
+# against the STACK directory, and the stack directory is wherever qemu-tool
+# found it -- for a pipx or .deb install that is inside site-packages or
+# /usr/share, so the TSDB a fleet run produced lands somewhere nobody thinks
+# to look and a reinstall deletes. Measured: a pipx-installed run put it under
+# ~/.local/share/pipx/venvs/qemu-tool/.../share/compose/<stack>/prom-data,
+# root-owned, and Prometheus then crash-looped on "mkdir data/: permission
+# denied".
+_PROM_DATA_DIR = "/var/lib/qemu-tool/prom-data"
+# Grafana's own sqlite. The dashboards are provisioned from files so they
+# survive without this, but annotations, starred dashboards and any ad-hoc
+# exploration do not. Absolute for the same reason as the TSDB.
+_GRAFANA_DATA_DIR = "/var/lib/qemu-tool/grafana-data"
 
 # Third octet per service family. Static addressing keeps Docker's embedded
 # DNS off the critical path: measured at 48 VMs, a fleet that resolves service
@@ -200,11 +76,6 @@ _TAPSETUP_IMAGE = "qemu-tool/ernic-tapsetup:1"
 # rather than renumbering the ones after them.
 _INFRA_EXPORTER, _INFRA_PROM, _INFRA_GRAFANA = 10, 11, 13
 _INFRA_LOKI, _INFRA_ALLOY = 15, 16
-_INFRA_DOCKERAPI = 17
-# The proxy's listen port. 2375 is the conventional plaintext Docker API port
-# and the image's own default; it is published nowhere, so it is reachable
-# only from the fleet network.
-_DOCKERAPI_PORT = 2375
 
 # CONTAINER_USER reaches the YAML as a compose variable reference, never as
 # the value the generator read. The generated stack is committed and
@@ -219,10 +90,10 @@ _DOCKERAPI_PORT = 2375
 # took it. Being a reference rather than a value is exactly what lets it be
 # unconditional: the render stays machine-independent either way.
 #
-# `qemu-tool compose` fills it in from the caller's own uid:gid when neither
-# the environment nor any env layer has (see compose._caller_identity), so the
-# supported path needs no configuration at all. Plain `docker compose` against
-# a committed stack hits the :? below and is told what to set.
+# `qemu-tool compose` fills it in from the caller's own uid:gid when the
+# environment has not (see compose._caller_identity), so the supported path
+# needs no configuration at all. Plain `docker compose` against a committed
+# stack hits the :? below and is told what to set.
 #
 # The :? form, not :- , because the silent-failure spelling is the one people
 # reach for. Measured on compose v5.3.1: an unset variable interpolates to the
@@ -237,11 +108,10 @@ _USER_REF = f'"{_USER_VAR}"'
 # crw-rw---- root:kvm. The gid differs per host (136 here, 108 on other
 # distributions), so like the uid it is resolved at `up`, not baked.
 _KVM_GID_REF = '"${CONTAINER_KVM_GID:?set CONTAINER_KVM_GID to the host kvm gid}"'
-_UID_GID_RE = re.compile(r"[0-9]+:[0-9]+")
 
 # VM_IMAGES_DIR reaches the YAML as a compose variable reference for the same
-# reason CONTAINER_USER does: its value comes from qemu/xml/scale-out.xml as
-# ${HOME}/..., which expands to a host-specific path. Baking that path into
+# reason CONTAINER_USER does: a fleet file may spell it ${HOME}/..., which
+# expands to a host-specific path. Baking that path into
 # the render would fail `gen-compose --check` in CI (runner home != dev home).
 # The :- default matches the fleet XML default so plain `docker compose up`
 # against the committed stack uses the conventional path; qemu-tool compose
@@ -250,17 +120,13 @@ _VM_IMAGES_VAR = "VM_IMAGES_DIR"
 _VM_IMAGES_DEFAULT = "/var/lib/qemu-tool/images"
 _VM_IMAGES_REF = f"${{{_VM_IMAGES_VAR}:-{_VM_IMAGES_DEFAULT}}}"
 
-# Read-only Docker API in front of the socket, so the log collector never
-# holds the socket itself. See the alloy service for why that distinction is
-# the whole point rather than defence in depth.
-_SOCKET_PROXY_IMAGE = "docker.io/tecnativa/docker-socket-proxy:0.3.0"
 
 
 def _hardening(indent: str = "    ") -> list[str]:
     """cap_drop + no-new-privileges, which every service in this stack takes.
 
     Nothing here is a daemon that needs a capability. The device servers open
-    a unix socket and (with ERNIC_TAP) an already-created tap; QEMU opens
+    a unix socket and (with <ernic-tap>) an already-created tap; QEMU opens
     /dev/kvm and binds 2222; Prometheus, Loki, Grafana and the exporters bind
     a port above 1024 and write one directory. Docker nonetheless starts every
     container with CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID, NET_RAW,
@@ -284,26 +150,21 @@ def _hardening(indent: str = "    ") -> list[str]:
         f'{indent}  - "no-new-privileges:true"',
     ]
 
-_PROVENANCE = "# env-sha256: "
-_ENV_FILE_LINE = "# env-file: "
+_PROVENANCE = "# xml-sha256: "
 
-_DEFAULT_SOURCE_STACK = "vfio-user-ernic-rocjitsu-scale-out"
-
-# Lines of header to scan for the digest. Generous because the header now
-# carries one env-file line per layer, and a file whose digest is just past
-# the window reads as "not generated" -- which silences the staleness warning
-# instead of raising it.
+# Lines of header to scan for the digest. Generous, because a file whose
+# digest is just past the window reads as "not generated" -- which silences
+# the staleness warning instead of raising it.
 _PROVENANCE_SCAN_LINES = 40
 
 
-def env_digest(paths: Path | Sequence[Path]) -> str:
-    """One digest over every layer, concatenated in order.
+def xml_digest(paths: Path | Sequence[Path]) -> str:
+    """One digest over every fleet XML layer, concatenated in order.
 
     Not a digest of the last layer or a set of per-file digests: an overlay is
     as much an input to the render as the golden file under it, so a change in
     ANY layer -- or a reordering of them -- has to invalidate the result. A
-    single layer still hashes to the bytes of that file, so stacks generated
-    before layering existed keep their recorded digest.
+    single layer hashes to the bytes of that file.
     """
     layers = [paths] if isinstance(paths, Path) else list(paths)
     digest = hashlib.sha256()
@@ -313,12 +174,7 @@ def env_digest(paths: Path | Sequence[Path]) -> str:
 
 
 def recorded_digest(compose_file: Path) -> str | None:
-    """Return the env hash a generated compose file was built from.
-
-    The digest line is unchanged from the single-file header, so a stack
-    generated by the old code -- /var/lib/qemu-tool/stacks/mi100-fleet was,
-    and _warn_if_stale still reads it -- still parses here.
-    """
+    """Return the fleet XML hash a generated compose file was built from."""
     try:
         for line in compose_file.read_text().splitlines()[:_PROVENANCE_SCAN_LINES]:
             if line.startswith(_PROVENANCE):
@@ -328,85 +184,80 @@ def recorded_digest(compose_file: Path) -> str | None:
     return None
 
 
-def recorded_env_files(compose_file: Path) -> list[str]:
-    """The env-file layers a generated file names, in order. [] if none.
+def stack_for(xml: Path | Sequence[Path] | None) -> str:
+    """The shipped stack a render belongs to when --stack does not say.
 
-    New-format headers (design-time values inlined) emit no env-file lines;
-    this returns [] for them. Old-format headers still parse so that stacks
-    generated before the inlining change can be torn down without re-rendering.
+    A stack directory is named after the fleet file it is generated from, so
+    the first layer names it: qemu/stacks/helios-tray.xml is the helios-tray
+    stack. Anything else -- a fleet of your own, or no --xml at all -- is the
+    default stack.
     """
-    names: list[str] = []
-    try:
-        for line in compose_file.read_text().splitlines()[:_PROVENANCE_SCAN_LINES]:
-            if line.startswith(_ENV_FILE_LINE):
-                names.append(line[len(_ENV_FILE_LINE):].strip())
-    except OSError:
-        return []
-    return names
+    layers = [xml] if isinstance(xml, Path) else list(xml or [])
+    if layers and layers[0].stem in _STACKS:
+        return layers[0].stem
+    return _DEFAULT_STACK
 
 
-def _env_file_args(
-    env_names: Sequence[str], stack: str = _DEFAULT_SOURCE_STACK
-) -> str:
+def _xml_args(layer_names: Sequence[str], stack: str = _DEFAULT_STACK) -> str:
     """The --xml (and optional --stack) arguments that reproduce this render."""
-    parts = [f"--xml {name}" for name in env_names]
-    if stack != _DEFAULT_SOURCE_STACK:
+    parts = [f"--xml {name}" for name in layer_names]
+    if stack != stack_for([Path(name) for name in layer_names]):
         parts.append(f"--stack {stack}")
     return " ".join(parts)
 
 
-def _provenance_lines(env_names: Sequence[str], digest: str) -> list[str]:
-    """The digest over all env layers (design-time values are inlined)."""
+def _provenance_lines(digest: str) -> list[str]:
+    """The digest over all fleet XML layers."""
     return [f"{_PROVENANCE}{digest}  # pre-commit: ignore"]
 
 
-def _get(values: dict[str, str], key: str) -> str:
-    raw = values.get(key, "")
-    return raw if raw else _DEFAULTS.get(key, "")
+def _setting(cfg: FleetConfig, field: str) -> str:
+    return getattr(cfg, field) or _FIELD_DEFAULTS[field]
 
 
-def _flag(values: dict[str, str], key: str) -> bool:
-    return _get(values, key).strip().lower() in ("1", "true", "yes", "on")
-
-
-def _split_per_vm(raw: str, count: int, key: str) -> list[str]:
-    """Broadcast a scalar, or apply a length-VM_COUNT list positionally."""
+def _split_per_vm(raw: str, count: int, element: str) -> list[str]:
+    """Broadcast a scalar, or apply a length-<vm-count> list positionally."""
     items = [p.strip() for p in raw.split(",")]
     if len(items) == 1:
         return items * count
     if len(items) != count:
         sys.exit(
-            f"Error: {key} has {len(items)} values but VM_COUNT is {count}. "
-            f"Give one value to apply to every VM, or exactly {count}."
+            f"Error: {element} has {len(items)} values but <vm-count> is "
+            f"{count}. Give one value to apply to every VM, or exactly {count}."
         )
     return items
 
 
-def _per_vm_flags(values: dict[str, str], count: int) -> list[list[tuple[str, str]]]:
+def _per_vm_flags(cfg: FleetConfig, count: int) -> list[list[tuple[str, str]]]:
     """Resolve the run-vm flags for each VM as (flag, value) pairs."""
-    hints = typing.get_type_hints(VMConfig)
     per_vm: list[list[tuple[str, str]]] = [[] for _ in range(count)]
-    for field, flag in _VM_FLAGS:
-        key = env_key(field)
-        raw = values.get(key, "")
-        if not raw:
-            continue
-        if typing.get_origin(hints[field]) is list:
-            # A list[str] field: the commas are already spoken for. The whole
-            # value goes to every VM, once per element.
-            for item in _coerce(hints[field], raw, key):
-                for vm in per_vm:
-                    vm.append((flag, item))
-            continue
-        for index, item in enumerate(_split_per_vm(raw, count, key)):
-            # Coerce per element so a per-VM value is type-checked exactly as
-            # a broadcast one is.
-            _coerce(hints[field], item, key)
-            per_vm[index].append((flag, item))
+    # <vm-nvme> is a count: run-vm creates the backing qcow2 per device itself
+    # (_nvme_create), so unlike the root disk there is no gen-vm step to pair
+    # with it. A negative count asks for null_blk.
+    for flag, value in (
+        ("--vcpus", cfg.vm_vcpus), ("--vmem", cfg.vm_vmem), ("--nvme", cfg.vm_nvme),
+    ):
+        if value:
+            for vm in per_vm:
+                vm.append((flag, str(value)))
+    # A host directory shared into every guest over 9p (mount_tag=hostfs).
+    # This is how a fleet gets a large artifact without copying it per VM: one
+    # file on the host, read by all N guests. At 8 VMs that is 22 GB of
+    # transfer saved, at 40 it is 112 GB. The directory must be readable by
+    # the qemu container, so it is bind-mounted in below.
+    if cfg.vm_filesystem:
+        shares = _split_per_vm(cfg.vm_filesystem, count, "<vm-filesystem>")
+        for vm, share in zip(per_vm, shares):
+            vm.append(("--filesystem", share))
+    # The commas are already spoken for: every rule goes to every VM.
+    for rule in cfg.vm_extra_hostfwd.split(","):
+        if rule.strip():
+            for vm in per_vm:
+                vm.append(("--extra-hostfwd", rule.strip()))
     return per_vm
 
 
-def _warn_if_gpu_without_root_port(values: dict[str, str]) -> None:
+def _warn_if_gpu_without_root_port(cfg: FleetConfig) -> None:
     """A GPU with no root port cannot bind amdgpu, and says so three layers up.
 
     Every stack this renders attaches a rocjitsu GPU per guest, so the
@@ -423,10 +274,10 @@ def _warn_if_gpu_without_root_port(values: dict[str, str]) -> None:
     keep today's enumeration while something else is being changed, and an
     ernic-only guest loses only its link-speed reporting.
     """
-    if _flag(values, "VM_VFIO_USER_ROOT_PORT"):
+    if cfg.vm_vfio_user_root_port:
         return
     print(
-        "Warning: VM_VFIO_USER_ROOT_PORT is false and this stack gives every "
+        "Warning: <vm-vfio-user-root-port> is false and this stack gives every "
         "guest a rocjitsu GPU.\n"
         "  Without a root port the GPU gets a 16M 32-bit BAR, amdgpu's probe "
         "fails with -22, and\n"
@@ -436,7 +287,7 @@ def _warn_if_gpu_without_root_port(values: dict[str, str]) -> None:
     )
 
 
-def _check_image_coherence(values: dict[str, str]) -> None:
+def _check_image_coherence(cfg: FleetConfig) -> None:
     """Refuse an image set that cannot have been built together.
 
     batesste-ci-images tags carry a shared <date>.<ci-sha> build stamp across
@@ -447,7 +298,7 @@ def _check_image_coherence(values: dict[str, str]) -> None:
     ibdev" symptoms in AGENTS.md. Across a whole fleet that is an expensive
     afternoon.
 
-    IMAGE_ALLOW_GUEST_LAG=true excuses VM_BACKING_IMAGE from the stamp
+    <image-allow-guest-lag> excuses <backing-ref> from the stamp
     comparison, and nothing else. It exists because the qcow2 is published by
     a slower job than the containers, so there are days when the newest
     coherent set does not include the fix you are trying to test -- and the
@@ -457,16 +308,35 @@ def _check_image_coherence(values: dict[str, str]) -> None:
     halves of the RDMA stack are built inside the guest by ernic_guest_setup
     from the collection pin, which is not in this comparison at all.
 
-    The three that genuinely must match are not excusable this way: QEMU and
-    the two device servers speak vfio-user to each other, and that is the
-    boundary the wedge happens at. Set it per node, in that node's env file,
+    The three that genuinely must match are not excusable this way: QEMU,
+    the ernic and rocjitsu speak vfio-user to each other, and that is the
+    boundary the wedge happens at. Set it per node, in that node's overlay,
     with a note saying what you are waiting for.
+
+    <sdxi-image> is not in the stamp comparison. Its pair is the guest's
+    driver, by commit: the sdxi.<sha> in its tag against sdxi_source_pin in
+    vm-rocm-golden.yml. An installed package cannot see that playbook, so
+    tests/test_playbook_pins.py holds that check and this function has none.
     """
-    keys = ["QEMU_IMAGE", "ERNIC_IMAGE", "ROCJITSU_IMAGE", "VM_BACKING_IMAGE"]
-    if _flag(values, "IMAGE_ALLOW_GUEST_LAG"):
-        keys.remove("VM_BACKING_IMAGE")
+    refs = {
+        "<qemu-ref>": cfg.qemu_ref,
+        "<ernic-ref>": cfg.ernic_ref,
+        "<rocjitsu-ref>": cfg.rocjitsu_ref,
+        "<backing-ref>": cfg.backing_ref,
+    }
+    # An empty ref renders `image: ""`, which only compose refuses, later.
+    for key in ("<qemu-ref>", "<ernic-ref>", "<rocjitsu-ref>"):
+        if not refs[key]:
+            sys.exit(f"Error: {key} is empty; every stack runs that image.")
+    if cfg.sdxi_per_vm and not cfg.sdxi_ref:
+        sys.exit(
+            "Error: <sdxi-per-vm> is non-zero but <sdxi-image> is empty; "
+            "name the SDXI server image to run."
+        )
+    if cfg.image_allow_guest_lag:
+        del refs["<backing-ref>"]
         print(
-            "Warning: IMAGE_ALLOW_GUEST_LAG is set -- VM_BACKING_IMAGE is "
+            "Warning: <image-allow-guest-lag> is set -- <backing-ref> is "
             "excluded from the build-stamp check.\n"
             "  The guest image may be older than the device servers. Verify "
             "by hand that it is old in ways you do not care about.",
@@ -475,8 +345,7 @@ def _check_image_coherence(values: dict[str, str]) -> None:
     stamps: dict[str, str] = {}
     vfu: dict[str, str] = {}
     unstamped: list[str] = []
-    for key in keys:
-        ref = values.get(key, "")
+    for key, ref in refs.items():
         if not ref or ":" not in ref:
             continue
         tag = ref.rsplit(":", 1)[1]
@@ -507,7 +376,7 @@ def _check_image_coherence(values: dict[str, str]) -> None:
         detail = "\n".join(f"  {k} -> {v}" for k, v in sorted(stamps.items()))
         sys.exit(
             "Error: image tags do not share one build stamp:\n" + detail +
-            "\nAll four must come from the same batesste-ci-images build."
+            "\nAll of them must come from the same batesste-ci-images build."
         )
 
     distinct_vfu = set(vfu.values())
@@ -520,71 +389,24 @@ def _check_image_coherence(values: dict[str, str]) -> None:
         )
 
 
-def _check_container_user(values: dict[str, str]) -> None:
-    """Refuse a CONTAINER_USER that cannot work. Empty is fine and usual.
-
-    The value itself never reaches the render -- see _USER_REF -- and an empty
-    one is the normal case, because `qemu-tool compose` supplies the caller's
-    own uid:gid at `up`. This exists for the env file that pins a specific
-    one, because every way of getting it wrong fails somewhere far from the
-    env file:
-
-    * A name ("stebates"). The uid running these containers has no passwd
-      entry inside the images; only `nobody` does. Docker resolves a name
-      against the IMAGE's /etc/passwd and fails at container create with
-      "unable to find user".
-    * A bare uid ("1000"). Docker then takes the gid from that uid's passwd
-      entry, which does not exist either.
-    * "${UID}:${GID}", which is the spelling people try first and the worst
-      of the three. Bash exports neither, so envfile's expandvars leaves the
-      text literal, compose substitutes empty for both, and `user: ":"` runs
-      as root without erroring.
-    """
-    raw = _get(values, "CONTAINER_USER").strip()
-    if not raw:
-        return
-    if not _UID_GID_RE.fullmatch(raw):
-        sys.exit(
-            f"Error: CONTAINER_USER must be numeric <uid>:<gid>, got {raw!r}.\n"
-            "  A user name does not resolve: the images carry no passwd entry "
-            "for your uid.\n"
-            "  ${UID}:${GID} does not work either -- bash exports neither, so "
-            "it silently becomes root.\n"
-            "  Use the literal ids, e.g. CONTAINER_USER=$(id -u):$(id -g) "
-            "evaluated by your shell.\n"
-            "  Or leave it unset: qemu-tool compose fills in your own uid:gid."
-        )
-
-
-def plan(values: dict[str, str]) -> dict[str, Any]:
-    """Resolve the env file into everything the templates need."""
-    # Early, and not where the value is used, because the value is never used
-    # here at all -- it reaches compose, not the renderer. If it is wrong this
-    # is the only place that can say so with the env file still in hand.
-    _check_container_user(values)
-    raw_count = _get(values, "VM_COUNT")
-    if not raw_count:
-        sys.exit("Error: VM_COUNT is required in the env file for this stack.")
-    try:
-        count = int(raw_count)
-    except ValueError:
-        sys.exit(f"Error: VM_COUNT must be an integer, got {raw_count!r}")
+def plan(cfg: FleetConfig) -> dict[str, Any]:
+    """Resolve the fleet settings into everything the templates need."""
+    count = cfg.count
     if count < 1:
-        sys.exit(f"Error: VM_COUNT must be at least 1, got {count}")
+        sys.exit(f"Error: <vm-count> must be at least 1, got {count}")
 
-    ernic_per_vm = _positive_int(values, "ERNIC_PER_VM")
-    rocjitsu_per_vm = _positive_int(values, "ROCJITSU_PER_VM")
-    _sdxi_raw = _get(values, "SDXI_PER_VM")
-    sdxi_per_vm = int(_sdxi_raw) if _sdxi_raw else 0
+    ernic_per_vm = _positive(cfg.ernic_per_vm, "<ernic-per-vm>")
+    rocjitsu_per_vm = _positive(cfg.rocjitsu_per_vm, "<rocjitsu-per-vm>")
+    sdxi_per_vm = cfg.sdxi_per_vm
 
-    # The mesh counts rocm-ernic PROCESSES, not VMs. At ERNIC_PER_VM > 1 the
-    # two differ by that factor, and a message naming only VM_COUNT would
+    # The mesh counts rocm-ernic PROCESSES, not VMs. At <ernic-per-vm> > 1 the
+    # two differ by that factor, and a message naming only the VM count would
     # send someone looking at the wrong number.
     nic_count = count * ernic_per_vm
     if nic_count > _MESH_MAX:
         detail = (
             f"{count} VMs x {ernic_per_vm} ernics"
-            if ernic_per_vm > 1 else f"VM_COUNT is {count}"
+            if ernic_per_vm > 1 else f"{count} VMs"
         )
         sys.exit(
             f"Error: {detail} is {nic_count} mesh nodes, above the "
@@ -600,54 +422,43 @@ def plan(values: dict[str, str]) -> dict[str, Any]:
             file=sys.stderr,
         )
 
-    _check_image_coherence(values)
-    _warn_if_gpu_without_root_port(values)
+    _check_image_coherence(cfg)
+    _warn_if_gpu_without_root_port(cfg)
 
-    prefix = _get(values, "VM_NAME_PREFIX")
-    names = _override_list(values, "VM_NAMES", count) or \
-        [f"{prefix}-{n}" for n in range(1, count + 1)]
+    prefix = _setting(cfg, "name_prefix")
+    names = [f"{prefix}-{n}" for n in range(1, count + 1)]
+    ports = [str(cfg.ssh_port_base + n - 1) for n in range(1, count + 1)]
 
-    port_base = int(_get(values, "VM_SSH_PORT_BASE"))
-    ports = _override_list(values, "VM_SSH_PORTS", count) or \
-        [str(port_base + n - 1) for n in range(1, count + 1)]
-
-    # Keyed on the GLOBAL NIC ordinal, not the VM index. At ERNIC_PER_VM=1 the
-    # two are the same number, which is what keeps the existing stack
+    # Keyed on the GLOBAL NIC ordinal, not the VM index. At one ernic per VM
+    # the two are the same number, which is what keeps the existing stack
     # byte-identical; above that, every NIC in the fleet still gets its own
     # MAC, IP and GID.
-    mac_prefix = _get(values, "ERNIC_MAC_PREFIX")
-    macs = _override_list(values, "ERNIC_MACS", nic_count) or \
-        [f"{mac_prefix}:{o >> 8:02x}:{o & 0xff:02x}"
-         for o in range(1, nic_count + 1)]
+    mac_prefix = _setting(cfg, "ernic_mac_prefix")
+    macs = [f"{mac_prefix}:{o >> 8:02x}:{o & 0xff:02x}"
+            for o in range(1, nic_count + 1)]
 
-    subnet = _get(values, "ERNIC_GUEST_SUBNET")
+    subnet = _setting(cfg, "ernic_subnet")
     # Guests start at .11. Avoid .1: the mesh manager claims it as its DHCP
     # server_ip and intercepts ARP for it (AGENTS.md known issue 1).
     #
     # No /24 exhaustion check: the mesh ceiling above caps nic_count at 64,
     # so the highest address this can derive is .74. Anything that raises
     # _MESH_MAX past ~240 needs one.
-    ips = _override_list(values, "ERNIC_GUEST_IPS", nic_count) or \
-        [f"{subnet}.{10 + o}" for o in range(1, nic_count + 1)]
+    ips = [f"{subnet}.{10 + o}" for o in range(1, nic_count + 1)]
 
-    for label, seq in (("VM name", names), ("SSH port", ports), ("ernic MAC", macs)):
-        if len(set(seq)) != len(seq):
-            sys.exit(f"Error: {label} values are not unique across the fleet: {seq}")
+    shm_sizes = _split_per_vm(_setting(cfg, "shm_size"), count, "<vm-shm-size>")
+    rocjitsu_configs = _split_per_vm(
+        _setting(cfg, "rocjitsu_config"), count, "<rocjitsu-config>")
 
-    extras = {
-        key: _split_per_vm(_get(values, key), count, key)
-        for key in _EXTRA_PER_VM
-    }
+    flags = _per_vm_flags(cfg, count)
 
-    flags = _per_vm_flags(values, count)
-
-    net = _get(values, "FLEET_NET_PREFIX")
+    net = _setting(cfg, "fleet_prefix")
 
     # Compute switch grouping ahead of the per-VM loop. When ernic_per_vm >
     # rocjitsu_per_vm (e.g. Helios: 2 RNICs per GPU) the vfio_socks list must
     # place nics_per_switch NICs before each GPU so _vfio_user_switch_args
     # slices the correct devices into each switch slot.
-    _switch_width = int(_get(values, "VM_PCIE_SWITCH_WIDTH") or 0)
+    _switch_width = cfg.vm_pcie_switch_width
     _nics_per_switch = (
         ernic_per_vm // rocjitsu_per_vm
         if _switch_width > 0 and rocjitsu_per_vm > 0
@@ -683,7 +494,7 @@ def plan(values: dict[str, str]) -> dict[str, Any]:
                 "service": f"rocjitsu-{suffix}",
                 "addr": f"{net}.{_NET_ROCJITSU}.{o}",
                 "sock": f"/run/vfu/rocjitsu-{suffix}.sock",
-                "config": extras["ROCJITSU_CONFIG"][index],
+                "config": rocjitsu_configs[index],
             })
         vm_sdxi = []
         for d in range(1, sdxi_per_vm + 1):
@@ -707,7 +518,7 @@ def plan(values: dict[str, str]) -> dict[str, Any]:
             "gpus": vm_gpus,
             "sdxi": vm_sdxi,
             # The order the guest sees, and therefore what ends up paired under
-            # each switch. When ERNIC_PER_VM == ROCJITSU_PER_VM (e.g. MI355X
+            # each switch. When <ernic-per-vm> == <rocjitsu-per-vm> (e.g. MI355X
             # with switch_width=2) this is 1:1 round-robin. When there are
             # more ernics than GPUs (e.g. Helios: 2 RNICs per GPU,
             # switch_width=3) the groups are nics_per_switch NICs then one GPU.
@@ -728,8 +539,8 @@ def plan(values: dict[str, str]) -> dict[str, Any]:
             "ernic_sock": vm_nics[0]["sock"],
             "rocjitsu_sock": vm_gpus[0]["sock"] if vm_gpus else "",
             "stats_file": vm_nics[0]["stats_file"],
-            "shm_size": extras["VM_SHM_SIZE"][index],
-            "rocjitsu_config": extras["ROCJITSU_CONFIG"][index],
+            "shm_size": shm_sizes[index],
+            "rocjitsu_config": rocjitsu_configs[index],
             "flags": flags[index],
         })
 
@@ -743,168 +554,61 @@ def plan(values: dict[str, str]) -> dict[str, Any]:
         "rocjitsu_per_vm": rocjitsu_per_vm,
         "sdxi_per_vm": sdxi_per_vm,
         "switch_width": _switch_width,
-        "ernic_image": _get(values, "ERNIC_IMAGE"),
-        "qemu_image": _get(values, "QEMU_IMAGE"),
-        "vm_images_dir": _get(values, "VM_IMAGES_DIR"),
-        "cpu_sockets": _get(values, "VM_CPU_SOCKETS"),
-        "cpu_phys_bits": _get(values, "VM_CPU_PHYS_BITS"),
-        "pci_hole64_size": _get(values, "VM_PCI_HOLE64_SIZE"),
+        "ernic_image": cfg.ernic_ref,
+        "qemu_image": cfg.qemu_ref,
+        "vm_images_dir": _setting(cfg, "vm_images_dir"),
+        "cpu_sockets": cfg.vm_cpu_sockets,
+        "cpu_phys_bits": cfg.vm_cpu_phys_bits,
+        "pci_hole64_size": cfg.vm_pci_hole64_size,
         "net_prefix": net,
         "exporter_addr": f"{net}.{_NET_INFRA}.{_INFRA_EXPORTER}",
         "prometheus_addr": f"{net}.{_NET_INFRA}.{_INFRA_PROM}",
         "grafana_addr": f"{net}.{_NET_INFRA}.{_INFRA_GRAFANA}",
         "loki_addr": f"{net}.{_NET_INFRA}.{_INFRA_LOKI}",
         "alloy_addr": f"{net}.{_NET_INFRA}.{_INFRA_ALLOY}",
-        "dockerapi_addr": f"{net}.{_NET_INFRA}.{_INFRA_DOCKERAPI}",
-        "dockerapi_port": _DOCKERAPI_PORT,
-        "logs": _flag(values, "LOGS_ENABLE"),
-        "loki_image": _get(values, "LOKI_IMAGE"),
-        "loki_port": _get(values, "LOKI_PORT"),
-        "loki_data_dir": _get(values, "LOKI_DATA_DIR"),
-        "alloy_image": _get(values, "ALLOY_IMAGE"),
+        "logs": cfg.logs_enable,
+        "loki_image": _setting(cfg, "loki_image"),
+        "loki_port": str(cfg.loki_port),
+        "loki_data_dir": _setting(cfg, "loki_data_dir"),
+        "alloy_image": _setting(cfg, "alloy_image"),
         # Carried into the inventory so the guest's ip_discovery.bin is generated
         # from the SAME rocjitsu build that serves the device. A blob from
         # another build does not match it.
-        "rocjitsu_image": _get(values, "ROCJITSU_IMAGE"),
-        "grafana": _flag(values, "GRAFANA_ENABLE"),
-        "grafana_image": _get(values, "GRAFANA_IMAGE"),
-        "grafana_port": _get(values, "GRAFANA_PORT"),
-        "grafana_password": _get(values, "GRAFANA_ADMIN_PASSWORD"),
-        "socket_proxy_image": _SOCKET_PROXY_IMAGE,
+        "rocjitsu_image": cfg.rocjitsu_ref,
+        "grafana": cfg.grafana_enable,
+        "grafana_image": _setting(cfg, "grafana_image"),
+        "grafana_port": str(cfg.grafana_port),
+        "grafana_password": _setting(cfg, "grafana_admin_password"),
         "subnet": subnet,
-        "vm_username": _get(values, "VM_USERNAME"),
-        "vm_filesystem": _get(values, "VM_FILESYSTEM"),
-        "vfio_user_root_port": _flag(values, "VM_VFIO_USER_ROOT_PORT"),
-        "tcp_port": _get(values, "ERNIC_TCP_PORT"),
-        "stats_port": _get(values, "ERNIC_STATS_PORT"),
-        "ernic_nofile": _get(values, "ERNIC_NOFILE"),
-        "ernic_tap": _flag(values, "ERNIC_TAP"),
-        "ernic_p4": _flag(values, "ERNIC_P4"),
-        "ernic_p4_guest_scope": _get(values, "ERNIC_P4_GUEST_SCOPE"),
-        "ernic_p4_program": _get(values, "ERNIC_P4_PROGRAM"),
-        "sdxi_image": _get(values, "SDXI_IMAGE"),
-        "stop_grace_period": _get(values, "STOP_GRACE_PERIOD"),
-        "log_max_size": _get(values, "LOG_MAX_SIZE"),
-        "log_max_file": _get(values, "LOG_MAX_FILE"),
-        "prom_data_dir": _get(values, "PROM_DATA_DIR"),
-        "bind_addr": _get(values, "PUBLISH_BIND_ADDR"),
-        "grafana_data_dir": _get(values, "GRAFANA_DATA_DIR"),
-        "prom_port": _get(values, "PROM_PORT"),
-        "prom_interval": _get(values, "PROM_SCRAPE_INTERVAL"),
-        "prom_retention": _get(values, "PROM_RETENTION"),
+        "vm_username": _setting(cfg, "vm_username"),
+        # Distinct shares, first seen first: one bind mount each.
+        "vm_filesystem": list(dict.fromkeys(
+            _split_per_vm(cfg.vm_filesystem, count, "<vm-filesystem>")
+        )) if cfg.vm_filesystem else [],
+        "vfio_user_root_port": cfg.vm_vfio_user_root_port,
+        "tcp_port": str(cfg.ernic_tcp_port),
+        "stats_port": str(cfg.ernic_stats_port),
+        "ernic_nofile": str(cfg.ernic_nofile),
+        "ernic_tap": cfg.ernic_tap,
+        "ernic_p4": cfg.p4_enable,
+        "ernic_p4_guest_scope": _setting(cfg, "p4_guest_scope"),
+        "ernic_p4_program": cfg.p4_program,
+        "sdxi_image": cfg.sdxi_ref,
+        "stop_grace_period": _setting(cfg, "stop_grace_period"),
+        "log_max_size": _setting(cfg, "log_max_size"),
+        "log_max_file": str(cfg.log_max_files),
+        "prom_data_dir": cfg.prometheus_data_dir or _PROM_DATA_DIR,
+        "bind_addr": _setting(cfg, "publish_bind_addr"),
+        "grafana_data_dir": cfg.grafana_data_dir or _GRAFANA_DATA_DIR,
+        "prom_port": str(cfg.prom_port),
+        "prom_interval": _setting(cfg, "prom_scrape_interval"),
+        "prom_retention": _setting(cfg, "prom_retention"),
     }
 
 
-def _fleet_to_env(cfg: Any) -> dict[str, str]:  # cfg: FleetConfig
-    """Convert a FleetConfig into a dict[str, str] parallel to an env file."""
-    out: dict[str, str] = {}
-
-    def _set(key: str, val: Any) -> None:
-        if val is None:
-            return
-        if isinstance(val, bool):
-            out[key] = "true" if val else "false"
-        else:
-            out[key] = str(val)
-
-    # Shape
-    _set("VM_COUNT", cfg.count)
-    _set("VM_NAME_PREFIX", cfg.name_prefix)
-    _set("VM_SSH_PORT_BASE", cfg.ssh_port_base)
-    _set("STOP_GRACE_PERIOD", cfg.stop_grace_period)
-    # Images (only emit when non-empty; "" means "inherit from _DEFAULTS")
-    if cfg.qemu_ref:
-        _set("QEMU_IMAGE", cfg.qemu_ref)
-    if cfg.ernic_ref:
-        _set("ERNIC_IMAGE", cfg.ernic_ref)
-    if cfg.rocjitsu_ref:
-        _set("ROCJITSU_IMAGE", cfg.rocjitsu_ref)
-    if cfg.sdxi_ref:
-        _set("SDXI_IMAGE", cfg.sdxi_ref)
-    if cfg.backing_ref:
-        _set("VM_BACKING_IMAGE", cfg.backing_ref)
-    # Network
-    _set("FLEET_NET_PREFIX", cfg.fleet_prefix)
-    _set("ERNIC_GUEST_SUBNET", cfg.ernic_subnet)
-    _set("ERNIC_MAC_PREFIX", cfg.ernic_mac_prefix)
-    # Topology
-    _set("ERNIC_PER_VM", cfg.ernic_per_vm)
-    _set("ROCJITSU_PER_VM", cfg.rocjitsu_per_vm)
-    if cfg.sdxi_per_vm:
-        _set("SDXI_PER_VM", cfg.sdxi_per_vm)
-    _set("VM_PCIE_SWITCH_WIDTH", cfg.vm_pcie_switch_width)
-    # ERNIC mesh
-    _set("ERNIC_TAP", cfg.ernic_tap)
-    _set("ERNIC_TCP_PORT", cfg.ernic_tcp_port)
-    _set("ERNIC_STATS_PORT", cfg.ernic_stats_port)
-    _set("ERNIC_NOFILE", cfg.ernic_nofile)
-    _set("ERNIC_P4", cfg.p4_enable)
-    _set("ERNIC_P4_GUEST_SCOPE", cfg.p4_guest_scope)
-    _set("ERNIC_P4_PROGRAM", cfg.p4_program)
-    # VM defaults
-    if cfg.vm_vcpus:
-        _set("VM_VCPUS", cfg.vm_vcpus)
-    if cfg.vm_vmem:
-        _set("VM_VMEM", cfg.vm_vmem)
-    _set("VM_SHM_SIZE", cfg.shm_size)
-    if cfg.vm_nvme:
-        _set("VM_NVME", cfg.vm_nvme)
-    _set("VM_BACKING_SHARED", cfg.vm_backing_shared)
-    _set("VM_USERNAME", cfg.vm_username)
-    if cfg.vm_password:
-        _set("VM_PASSWORD", cfg.vm_password)
-    _set("VM_FILESYSTEM", cfg.vm_filesystem)
-    _set("VM_VFIO_USER_ROOT_PORT", cfg.vm_vfio_user_root_port)
-    if cfg.vm_extra_hostfwd:
-        _set("VM_EXTRA_HOSTFWD", cfg.vm_extra_hostfwd)
-    if cfg.vm_ssh_key_file:
-        _set("VM_SSH_KEY_FILE", cfg.vm_ssh_key_file)
-    _set("VM_IMAGES_DIR", cfg.vm_images_dir)
-    if cfg.vm_cpu_sockets:
-        _set("VM_CPU_SOCKETS", cfg.vm_cpu_sockets)
-    if cfg.vm_cpu_phys_bits:
-        _set("VM_CPU_PHYS_BITS", cfg.vm_cpu_phys_bits)
-    if cfg.vm_pci_hole64_size:
-        _set("VM_PCI_HOLE64_SIZE", cfg.vm_pci_hole64_size)
-    _set("ROCJITSU_CONFIG", cfg.rocjitsu_config)
-    # Misc
-    _set("QEMU_TOOL_SRC", cfg.qemu_tool_src)
-    _set("IMAGE_ALLOW_GUEST_LAG", cfg.image_allow_guest_lag)
-    # Metrics
-    _set("PROM_PORT", cfg.prom_port)
-    _set("PUBLISH_BIND_ADDR", cfg.publish_bind_addr)
-    _set("PROM_SCRAPE_INTERVAL", cfg.prom_scrape_interval)
-    _set("PROM_RETENTION", cfg.prom_retention)
-    if cfg.prometheus_data_dir:
-        _set("PROM_DATA_DIR", cfg.prometheus_data_dir)
-    _set("GRAFANA_ENABLE", cfg.grafana_enable)
-    if cfg.grafana_image:
-        _set("GRAFANA_IMAGE", cfg.grafana_image)
-    _set("GRAFANA_PORT", cfg.grafana_port)
-    _set("GRAFANA_ADMIN_PASSWORD", cfg.grafana_admin_password)
-    if cfg.grafana_data_dir:
-        _set("GRAFANA_DATA_DIR", cfg.grafana_data_dir)
-    # Logging
-    _set("LOG_MAX_SIZE", cfg.log_max_size)
-    _set("LOG_MAX_FILE", cfg.log_max_files)
-    _set("LOGS_ENABLE", cfg.logs_enable)
-    if cfg.loki_image:
-        _set("LOKI_IMAGE", cfg.loki_image)
-    _set("LOKI_PORT", cfg.loki_port)
-    _set("LOKI_DATA_DIR", cfg.loki_data_dir)
-    if cfg.alloy_image:
-        _set("ALLOY_IMAGE", cfg.alloy_image)
-    return out
-
-
-def _positive_int(values: dict[str, str], key: str) -> int:
-    raw = _get(values, key)
-    try:
-        n = int(raw)
-    except ValueError:
-        sys.exit(f"Error: {key} must be an integer, got {raw!r}")
+def _positive(n: int, element: str) -> int:
     if n < 1:
-        sys.exit(f"Error: {key} must be at least 1, got {n}")
+        sys.exit(f"Error: {element} must be at least 1, got {n}")
     return n
 
 
@@ -912,7 +616,7 @@ def _dev_suffix(n: int, d: int, per_vm: int) -> str:
     """Service/socket suffix for device `d` of VM `n`.
 
     Single-device VMs keep the bare VM number. That is not cosmetic: it is
-    what makes the committed scale-out stack regenerate byte-identical, so
+    what makes a one-device-per-VM stack regenerate byte-identical, so
     CI's `gen-compose --check` stays a real gate rather than a diff to
     re-baseline.
     """
@@ -936,7 +640,7 @@ def _group_socks_for_switches(
     """Order sockets so each PCIe switch slot gets nics_per_switch NICs then one GPU.
 
     With nics_per_switch=1 this is equivalent to _interleave. Use when
-    ERNIC_PER_VM > ROCJITSU_PER_VM (e.g. Helios: 2 ernics per GPU, so each
+    <ernic-per-vm> > <rocjitsu-per-vm> (e.g. Helios: 2 ernics per GPU, so each
     switch of width 3 receives [nic-A, nic-B, gpu-N]).
     """
     if nics_per_switch <= 1:
@@ -948,18 +652,6 @@ def _group_socks_for_switches(
         out.append(gpu)
     out.extend(nics[len(gpus) * nics_per_switch :])
     return out
-
-
-def _override_list(values: dict[str, str], key: str, count: int) -> list[str] | None:
-    raw = values.get(key, "")
-    if not raw:
-        return None
-    items = [p.strip() for p in raw.split(",") if p.strip()]
-    if len(items) != count:
-        sys.exit(
-            f"Error: {key} has {len(items)} values but VM_COUNT is {count}."
-        )
-    return items
 
 
 def _link_local_gid(mac: str) -> str:
@@ -1016,16 +708,16 @@ def _pipx_install(bin_dir: str = "/usr/local/bin") -> list[str]:
 
 
 def render_compose(
-    spec: dict[str, Any], env_names: Sequence[str], digest: str,
-    stack: str = _DEFAULT_SOURCE_STACK,
+    spec: dict[str, Any], layer_names: Sequence[str], digest: str,
+    stack: str = _DEFAULT_STACK,
 ) -> str:
     out: list[str] = ["---"]
     out.append("# Generated by `qemu-tool gen-compose`. Do not edit.")
     out.append("#")
-    out.append(f"# Regenerate after changing {' or '.join(env_names)}:")
-    out.append(f"#   qemu-tool gen-compose {_env_file_args(env_names, stack)}")
+    out.append(f"# Regenerate after changing {' or '.join(layer_names)}:")
+    out.append(f"#   qemu-tool gen-compose {_xml_args(layer_names, stack)}")
     out.append("#")
-    out += _provenance_lines(env_names, digest)
+    out += _provenance_lines(digest)
     out.append("")
     # Bound every container's log. Docker's json-file driver is unlimited by
     # default, and an ernic manager that reaches EMFILE spins in an accept()
@@ -1097,16 +789,16 @@ def render_compose(
     out.append("  volumes:")
     out.append("    - vfu-sockets:/run/vfu:ro")
     out.append(f'    - "{_VM_IMAGES_REF}:{_VM_IMAGES_REF}"')
-    if spec["vm_filesystem"]:
+    for share in spec["vm_filesystem"]:
         # Same path inside the container as outside: run-vm passes the path
         # straight to -virtfs, so a remapped mount point would name a
         # directory the guest cannot see.
-        out.append(f'    - "{spec["vm_filesystem"]}:{spec["vm_filesystem"]}:ro"')
+        out.append(f'    - "{share}:{share}:ro"')
     out.append('    - "${QEMU_TOOL_SRC:-../../..}:/qemu-tool-src:ro"')
     out.append("  devices:")
     out.append("    - /dev/kvm")
-    # The point of the whole setting: with VM_NVME set, run-vm creates
-    # <VM_IMAGES_DIR>/<vm>-nvmeN.qcow2 from INSIDE this container, into a
+    # The point of the whole setting: with <vm-nvme> set, run-vm creates
+    # <vm-images-dir>/<vm>-nvmeN.qcow2 from INSIDE this container, into a
     # directory that belongs to the person who started the fleet. As root
     # that lands 0644 root-owned in their own images/.
     #
@@ -1316,8 +1008,11 @@ def render_compose(
         out.append("      fleet:")
         out.append(f"        ipv4_address: {sdxi['addr']}")
         out.append("    restart: on-failure")
+        # The published image has no ENTRYPOINT and a shell CMD serving a
+        # fixed socket name, so the binary has to be named here.
+        out.append('    entrypoint: ["rocm-sdxi"]')
         out.append("    command:")
-        out.append(f"      - -s")
+        out.append("      - -s")
         out.append(f"      - {sdxi['sock']}")
         out.append("    healthcheck:")
         sock_re = sdxi["sock"].replace(".", "[.]")
@@ -1370,7 +1065,7 @@ def render_compose(
         out.append("          --ssh-port 2222 \\")
         out.append("          --backing-shared \\")
         if spec["vfio_user_root_port"]:
-            # A boolean, so it is emitted here rather than through _VM_FLAGS,
+            # A boolean, so it is emitted here rather than through _per_vm_flags,
             # which renders --flag "value" pairs.
             out.append("          --vfio-user-root-port \\")
         if spec["switch_width"]:
@@ -1438,7 +1133,7 @@ def render_compose(
     out.append(f"        ipv4_address: {spec['prometheus_addr']}")
     out.append("    restart: on-failure")
     # This image already defaults to nobody, so the change here is not
-    # root -> unprivileged, it is 65534 -> you: PROM_DATA_DIR is a host
+    # root -> unprivileged, it is 65534 -> you: <prom-data-dir> is a host
     # bind mount, and the TSDB of a fleet run should belong to the person
     # who ran the fleet. It must be owned by the same uid, which
     # `qemu-tool compose up` arranges -- without that Prometheus
@@ -1467,7 +1162,7 @@ def render_compose(
         out.append("      fleet:")
         out.append(f"        ipv4_address: {spec['loki_addr']}")
         out.append("    restart: on-failure")
-        # Same as Prometheus: LOKI_DATA_DIR is a host bind mount and has to
+        # Same as Prometheus: <loki-data-dir> is a host bind mount and has to
         # belong to this uid before the first run.
         out.append(f"    user: {_USER_REF}")
         out += _hardening()
@@ -1537,7 +1232,7 @@ def render_compose(
         out.append("      fleet:")
         out.append(f"        ipv4_address: {spec['grafana_addr']}")
         out.append("    restart: on-failure")
-        # Grafana's image defaults to uid 472 and GRAFANA_DATA_DIR does
+        # Grafana's image defaults to uid 472 and <grafana-data-dir> does
         # not usually exist before the first `up`, so the daemon would create
         # it root-owned and Grafana could not write its sqlite. Owning it as
         # the invoking user is the same fix with a better owner, and
@@ -1558,8 +1253,8 @@ def render_compose(
         out.append("    volumes:")
         # Provisioned from files, not clicked in: a dashboard that exists only
         # in Grafana's own sqlite dies with the container, and the whole point
-        # of the generated stack is that a fleet is reproducible from the env
-        # file. :ro because Grafana must not edit what the generator owns.
+        # of the generated stack is that a fleet is reproducible from its
+        # fleet XML. :ro because Grafana must not edit what the generator owns.
         out.append("      - ./grafana/provisioning:/etc/grafana/provisioning:ro")
         out.append("      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro")
         # Grafana's sqlite, on the host. The dashboards are provisioned from
@@ -1656,7 +1351,7 @@ def render_compose(
     if spec["ernic_tap"]:
         out.append("  # Dumb shared L2 carrying guest Ethernet only. No address")
         out.append("  # is assigned: each ernic bridges its tap onto it, and the")
-        out.append("  # guests address each other over ERNIC_GUEST_SUBNET.")
+        out.append("  # guests address each other over <ernic-subnet>.")
         out.append("  l2:")
         out.append("    driver: bridge")
     out.append("  # Every service has a fixed address and nothing resolves a")
@@ -1683,10 +1378,10 @@ def render_compose(
     return "\n".join(out) + "\n"
 
 
-def render_prometheus(spec: dict[str, Any], env_names: Sequence[str], digest: str) -> str:
+def render_prometheus(spec: dict[str, Any], digest: str) -> str:
     out: list[str] = ["---"]
     out.append("# Generated by `qemu-tool gen-compose`. Do not edit.")
-    out += _provenance_lines(env_names, digest)
+    out += _provenance_lines(digest)
     out.append("")
     out.append("global:")
     out.append(f"  scrape_interval: {spec['prom_interval']}")
@@ -1711,7 +1406,7 @@ def render_prometheus(spec: dict[str, Any], env_names: Sequence[str], digest: st
     out.append("")
     out.append("  # AMD GPU metrics exporter inside each guest. Same shape as")
     out.append("  # fleet-node: the target is the qemu CONTAINER and")
-    out.append("  # VM_EXTRA_HOSTFWD tcp::9488-:9488 forwards the port through")
+    out.append("  # <vm-extra-hostfwd> tcp::9488-:9488 forwards the port through")
     out.append("  # to amd-metrics-exporter running in the guest.")
     out.append("  - job_name: amd-gpu")
     out.append("    static_configs:")
@@ -1752,8 +1447,8 @@ def render_prometheus(spec: dict[str, Any], env_names: Sequence[str], digest: st
     return "\n".join(out) + "\n"
 
 
-def render_inventory(spec: dict[str, Any], env_names: Sequence[str], digest: str) -> str:
-    """The fleet's ansible inventory, derived from the same VM_COUNT.
+def render_inventory(spec: dict[str, Any], digest: str) -> str:
+    """The fleet's ansible inventory, derived from the same <vm-count>.
 
     Generated rather than hand-kept because the failure mode of a stale one is
     quiet: ansible-playbook against an inventory listing six of eight guests
@@ -1762,12 +1457,12 @@ def render_inventory(spec: dict[str, Any], env_names: Sequence[str], digest: str
     """
     out: list[str] = ["---"]
     out.append("# Generated by `qemu-tool gen-compose`. Do not edit.")
-    out += _provenance_lines(env_names, digest)
+    out += _provenance_lines(digest)
     out.append("")
     out.append("all:")
     out.append("  vars:")
     out.append("    ansible_host: 127.0.0.1")
-    # From VM_USERNAME, which is a VMConfig field (config.py) and so already
+    # From <vm-username>, which is a VMConfig field (config.py) and so already
     # understood by gen-vm and run-vm. The published guest images carry their
     # own user -- the rocm-golden qcow2 ships vm-info.json naming
     # "batesste" -- so the ubuntu default is right only for a guest this repo
@@ -1785,7 +1480,7 @@ def render_inventory(spec: dict[str, Any], env_names: Sequence[str], digest: str
     out.append(
         f'        fleet_guest_rocjitsu_image: "{spec["rocjitsu_image"]}"'
     )
-    # /24 is implied by ERNIC_GUEST_SUBNET being three octets; the generator
+    # /24 is implied by <ernic-subnet> being three octets; the generator
     # has no key for a prefix because the ernic L2 segment is flat by
     # construction.
     out.append("        fleet_guest_prefix: 24")
@@ -1822,14 +1517,13 @@ def render_inventory(spec: dict[str, Any], env_names: Sequence[str], digest: str
 _RELATIVE_REF = re.compile(r"\./([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*)")
 
 
-def _stack_source(stack: str = _DEFAULT_SOURCE_STACK) -> Path:
+def _stack_source(stack: str = _DEFAULT_STACK) -> Path:
     """This repo's copy of the stack: the authority the mirror copies from.
 
-    Named, not fixed, because there is now more than one generated stack and
-    each owns its own assets. Rendering mi355x-node while this answered
-    "scale-out" would mirror the scale-out stack's grafana/, logging/ and
-    tapsetup/ over it, authoritatively -- the deletion half of
-    _copy_stack_assets, aimed at the wrong directory.
+    Named, not fixed, because each generated stack owns its own assets.
+    Rendering mi355x-server while this answered "rocm-golden" would mirror
+    that stack's grafana/, logging/ and tapsetup/ over it, authoritatively
+    -- the deletion half of _copy_stack_assets, aimed at the wrong directory.
     """
     from .compose import _compose_dir
 
@@ -1838,7 +1532,7 @@ def _stack_source(stack: str = _DEFAULT_SOURCE_STACK) -> Path:
 
 def _owned_assets(
     compose_body: str, generated: set[str], output_dir: Path,
-    stack: str = _DEFAULT_SOURCE_STACK,
+    stack: str = _DEFAULT_STACK,
 ) -> list[tuple[Path, Path]]:
     """The (source, destination) pairs this generator owns, in copy order.
 
@@ -1880,7 +1574,7 @@ def _protected_paths(
 
     _owned_assets reasons about the first path segment only, which is right
     for deciding what is an asset directory and wrong for deciding what is in
-    it. `LOKI_DATA_DIR=./logging/data` -- Loki's data next to
+    it. `<loki-data-dir>` set to ./logging/data -- Loki's data next to
     logging/loki-config.yml, a natural choice that plan() accepts without
     comment -- marks `logging` owned and contributes nothing to the wanted
     set, so the regeneration deleted the data directory the stack had just
@@ -1990,7 +1684,7 @@ def _asset_diff(
     #
     # A protected path shields its ANCESTORS as well as itself and everything
     # under it, and the deepest-first order is exactly why. With
-    # LOKI_DATA_DIR=./logging/data/sub, `logging/data/sub` is skipped as
+    # <loki-data-dir> at ./logging/data/sub, `logging/data/sub` is skipped as
     # protected and then `logging/data` -- unprotected, unwanted, and holding
     # it -- is rmtree'd with the protected directory still inside. Measured:
     # one line of output, "Removed .../logging/data", and the operator's
@@ -2017,7 +1711,7 @@ def _superseded(
 
 def _copy_stack_assets(
     compose_body: str, generated: set[str], output_dir: Path,
-    stack: str = _DEFAULT_SOURCE_STACK,
+    stack: str = _DEFAULT_STACK,
 ) -> None:
     """Mirror the stack's non-generated assets next to the generated files.
 
@@ -2058,7 +1752,7 @@ def _copy_stack_assets(
     real cause, and the directories are left behind to confuse the next run.
 
     Generating to a scratch directory is the documented workflow
-    (env/overlay-mi100), precisely because writing over the committed stack
+    for an overlay fleet, precisely because writing over the committed stack
     is what `gen-compose --check` exists to catch. The committed stack is
     unaffected: there source and destination are the same directory, and each
     copy is skipped.
@@ -2120,45 +1814,46 @@ def _copy_stack_assets(
 
 
 def run(
-    env_file: Path | Sequence[Path] | None,
+    xml: Path | Sequence[Path] | None,
     output_dir: Path,
     check: bool = False,
     dry_run: bool = False,
-    stack: str = _DEFAULT_SOURCE_STACK,
-    fleet_file: Path | Sequence[Path] | None = None,
+    stack: str | None = None,
 ) -> None:
-    if env_file is not None:
-        sys.exit(
-            "Error: --env-file is no longer supported by gen-compose; "
-            "use --xml with a fleet XML file instead."
-        )
-    fleet_paths = FleetXml.find(fleet_file)
-    if not fleet_paths:
-        sys.exit("Error: no fleet file found. Pass --xml.")
-    fleet_cfg = FleetXml.parse_layers(fleet_paths)
-    values = _fleet_to_env(fleet_cfg)
-    paths = fleet_paths
-    spec = plan(values)
-    digest = env_digest(paths)
+    if stack is None:
+        stack = stack_for(xml)
+    paths = FleetXml.find(xml)
+    shipped = None
+    if not paths:
+        # Nothing named and nothing on the search path: a shipped stack is
+        # generated from the fleet file of its own name.
+        shipped = stack_fleet(stack)
+        if shipped is None:
+            sys.exit("Error: no fleet file found. Pass --xml.")
+        paths = [shipped]
+    cfg = FleetXml.parse_layers(paths)
+    spec = plan(cfg)
+    digest = xml_digest(paths)
     # The names as the user wrote them, so the recorded header is a command
     # that can be pasted back. Falls back to the basename of what the search
-    # path found, which is what the single-file header always recorded.
-    env_names: list[str] = []
-    if fleet_file is None:
-        if fleet_paths:
-            env_names.append(fleet_paths[0].name)
-    elif isinstance(fleet_file, Path):
-        env_names.append(str(fleet_file))
+    # path found, or to the repo's name for the stack's own file -- the one
+    # spelling under which the committed stack regenerates byte-identical.
+    if shipped is not None:
+        layer_names = [f"qemu/stacks/{shipped.name}"]
+    elif xml is None:
+        layer_names = [paths[0].name]
+    elif isinstance(xml, Path):
+        layer_names = [str(xml)]
     else:
-        env_names.extend(str(layer) for layer in fleet_file)
+        layer_names = [str(layer) for layer in xml]
 
     artifacts = {
-        "docker-compose.yml": render_compose(spec, env_names, digest, stack),
-        "prometheus.yml": render_prometheus(spec, env_names, digest),
+        "docker-compose.yml": render_compose(spec, layer_names, digest, stack),
+        "prometheus.yml": render_prometheus(spec, digest),
         # Alongside the other two rather than under ansible/inventory/, so all
-        # three carry one env-sha256 and `--check` stays a single comparison
+        # three carry one xml-sha256 and `--check` stays a single comparison
         # against one directory. Point ansible-playbook at it with -i.
-        "fleet-inventory.yml": render_inventory(spec, env_names, digest),
+        "fleet-inventory.yml": render_inventory(spec, digest),
     }
 
     if dry_run:
@@ -2226,7 +1921,7 @@ def run(
                     "mirrored: " + ", ".join(sorted(drift["unowned"]))
                 )
             message.append(
-                f"Regenerate with: qemu-tool gen-compose {_env_file_args(env_names)}"
+                f"Regenerate with: qemu-tool gen-compose {_xml_args(layer_names, stack)}"
             )
             sys.exit("\n".join(message))
         print(f"Up to date: {output_dir}")
@@ -2241,13 +1936,13 @@ def run(
         artifacts["docker-compose.yml"], set(artifacts), output_dir, stack
     )
 
-    _print_next_steps(spec, values)
+    _print_next_steps(spec, cfg)
 
 
-def _print_next_steps(spec: dict[str, Any], values: dict[str, str]) -> None:
-    backing = values.get("VM_BACKING_IMAGE", "")
+def _print_next_steps(spec: dict[str, Any], cfg: FleetConfig) -> None:
+    backing = cfg.backing_ref
     first = spec["vms"][0]["name"]
-    images = _get(values, "VM_IMAGES_DIR")
+    images = _setting(cfg, "vm_images_dir")
     print()
     print(f"{spec['count']} VMs. If the images do not exist yet:")
     print()
