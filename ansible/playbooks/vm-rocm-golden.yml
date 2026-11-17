@@ -68,7 +68,7 @@
     # clone upstream HEAD while requirements.yml installs the collection from
     # a fixed SHA. Keep this equal to the version: field in
     # ansible/requirements.yml and bump both together.
-    ernic_source_pin: &ernic_source_pin 90434a237232275fc8002cb3a6b5121ba836c594
+    ernic_source_pin: &ernic_source_pin b4fb2ed1338baee6c635448f556d330f36224d52
     # No GPU passthrough: the GDA patches are neither wanted nor usable.
     ernic_gpu_passthrough: false
     # The collection assumes a build toolchain; rocm_ernic_setup installs it.
