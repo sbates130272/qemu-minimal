@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
   "label": "Ernic P4 FP8 BW",
-  "message": "118.3 MB/s (+47%)",
-  "color": "brightgreen"
+  "message": "60.0 MB/s (-40%)",
+  "color": "red"
 }
