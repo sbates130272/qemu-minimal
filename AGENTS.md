@@ -20,7 +20,7 @@ file up to date as infrastructure changes.
   - `vm-basic.yml` — a complete bake on its own, and the base of the golden
   - `vm-rocm-golden.yml` — the one image beyond it: imports `vm-basic.yml`, then the mainline kernel and ernic prerequisites, ROCm, the rocjitsu roles, SRQ + P4, SDXI and one slim pass. Every bake play is tagged `install`; `tests/test_playbook_pins.py` fails a play with no tag, because an untagged play runs in every bake. Three plays need a device and are tagged `never`: `--tags configure` sets up the NIC, `--tags firmware` installs `ip_discovery.bin` from the rocjitsu serving the guest, and `--tags test` runs the GPU workloads. The pins (`ionic_kernel_pin`, `ernic_source_pin`, `rocm_line_pin`, `sdxi_source_pin`) are each defined once and shared between plays through YAML anchors. Its defaults are a published image's, and a bake needs no Docker daemon when given `-e rocjitsu_firmware_script=<path to vfio_guest_firmware.py>`. Given a cache directory (`gen-vm --bake --cache-dir DIR`, or `<bake-cache-dir>` in a fleet file, which reaches the playbook as the extra var `bake_cache_dir`) the module builds go through a compiler cache kept in that directory; there is none by default and only the playbook-test lane passes one — see "The bake's compiler cache". The slim play also purges every kernel but the running one, after asserting that is the pinned one — see "One kernel in the baked image". The acceptance test is `qemu/checks/rocm-golden.sh`, which the playbook-test lane runs against the baked guest and batesste-ci-images runs against the published one
   - `vm-quickstart.yml` — configures and tests a running fleet; what `qemu-tool quick-start test` runs
-  - roles `rocm_ernic_setup` (image prep, device naming, boot-time addressing), `rocjitsu_setup` (firmware, amdgpu, tools, live tests), `sdxi_setup`, `image_slim` and `bake_ccache` (the compiler cache: `restore`, `save` and `remove`, no `main`). Each has task files callers reach with `tasks_from`; all five are linted at the `production` profile in CI
+  - roles `rocm_ernic_setup` (image prep, device naming, boot-time addressing, the P4 client and who may open `/dev/ernic-p4`), `rocjitsu_setup` (firmware, amdgpu, tools, live tests), `sdxi_setup`, `image_slim` and `bake_ccache` (the compiler cache: `restore`, `save` and `remove`, no `main`). Each has task files callers reach with `tasks_from`; all five are linted at the `production` profile in CI
 - `scripts/install-vfio-rules` + `scripts/99-qemu-minimal-vfio.rules` — host-side udev rules for PCI passthrough. There is no top-level `udev/` any more: guest rules live in their role's `files/`
 - `rocm-ernic-enablement.md` — running log of rocm-ernic integration status and bugs. Git-ignored: it exists only on a host that keeps one
 
@@ -284,8 +284,8 @@ side at all. Read off the image rather than inferred: no
 `sdxi-cli`, and nothing but `dkms/` under `updates/`. So `quick-start`,
 `quickstart-boot` and the daily report lane boot guests with an SDXI device
 that no driver binds. Nothing wedges, because nothing talks to the server;
-`generate-vm-report.sh` finds no `/dev/sdxi0`, exits 0 and writes an `n/a`
-badge. The lanes that boot a baked guest — playbook-test and publish — are
+`generate-vm-report.sh` finds no `/dev/sdxi0` and fails the SDXI step saying
+so, where it used to exit 0 with an `n/a` badge. The lanes that boot a baked guest — playbook-test and publish — are
 the only ones that exercise the pair, and both assert `/dev/sdxi0`. This
 ends when `<backing-ref>` moves to a `<publish-ref>` tag baked at
 `sdxi_source_pin`.
@@ -1970,6 +1970,60 @@ There are five tracked metrics and four artifacts, all uploaded by
 | `perf-hipfile-fio` | hipFile fio |
 | `perf-ernic` | Ernic P4 FP8 bandwidth |
 | `perf-helios` | SDXI copy bandwidth |
+
+**The P4 number is the rate of the fp8 reduction, on one guest, with no
+peer.** The reduction is compute inside the NIC: an RDMA WRITE on an RC queue
+pair whose gather list names two equal-length operand regions is turned, by a
+table entry of `fp8_policy.json`, into an elementwise fp8 add written to the
+region the write named as its destination. The device checks all three keys
+against its *own* memory-region table (`ionic_datapath_fp8_map`), so the
+destination is local and nothing crosses the mesh — there is no "guest 1 to
+guest 2" in it, and `ib_write_bw` between two guests measures something else
+entirely: a perftest write has one gather entry, which the engine passes
+through as an ordinary transfer.
+
+Two programs do it, both installed by the golden bake and both run as the
+ordinary guest user. `p4_fp8_client` is rocm-ernic's own
+`tests/p4_fp8_client.c`, built from `ernic_source_pin`, so the ioctl and RPC
+layout it speaks is the pinned device's and is copied nowhere in this repo;
+it loads the program (LOAD_BEGIN, chunked LOAD_CHUNK, LOAD_COMMIT), installs
+the `Ing.policy` → `Ing.reduce_with` entry and checks one 4096-element
+reduction. `p4_fp8_bench`
+([source](ansible/playbooks/roles/rocm_ernic_setup/files/p4_fp8_bench.c)) is
+this repo's: plain verbs, no P4 ABI, 2000 writes of 262144 elements
+(`IONIC_FP8_MAP_MAX`, the most one operation moves), alternating operands and
+checking every result so a device with no entry fails with a remote access
+error instead of timing a plain write. The badge is **result bytes per
+second in MB/s** — one byte an element; the device reads twice that in
+operands. Measured on this host against the 2026-11-16 local bake: about
+210 MB/s at 262144 elements, 134 MB/s at 65536 and 19 MB/s at 4096, so the
+figure is dominated by per-operation cost below the cap and is not comparable
+across element counts.
+
+**`/dev/ernic-p4` is group-accessible in the golden image, and upstream keeps
+it root-only.** `ernic_p4` registers the node mode 0600 with the comment that
+it "is not something to leave open to a group by default", because whoever
+opens it can replace the P4 program. This image is for testing and the
+benchmark should not need sudo, so `rocm_ernic_setup`'s `p4_access` tasks
+install `99-ernic-p4.rules` (`SUBSYSTEM=="misc", KERNEL=="ernic-p4*",
+GROUP="ernic-p4", MODE="0660"` — the driver names its nodes `ernic-p4` and
+`ernic-p4.N`), create the `ernic-p4` group and add the baked account. Never
+widen it to world access. What a member can do is capped by the server's
+`--p4-guest-scope`, which is `<p4-guest-scope>` in the fleet file: `load`
+there is the widest and covers table writes (`write`) as well, which is what
+the benchmark needs — LOAD_* requires `load`, ENTRY_UPDATE requires `write`,
+and the scopes are ordered. Group membership applies to login sessions opened
+after the user was added; an SSH session to a booted image has it.
+
+A guest without the client, the program, the node or group access fails the
+step with a message naming which, and so does an SDXI run with no `/dev/sdxi0`
+or no figure above zero: an `n/a` badge is a green run that measured nothing.
+The SDXI node is tested inside the guest, so a guest ssh cannot reach reports
+ssh's own error rather than a missing device, and its copies are timed for two
+seconds: twenty of them is about 40 ms and swung 30% between runs.
+The program and entry the P4 step loads stay in the device until its server
+restarts. Ordinary transfers are untouched by them; a two-equal-operand RDMA
+WRITE on that NIC is a reduction from then on.
 
 Each artifact holds nothing but `badge-*.json`. `publish-pages` fetches each
 *by name* from the most recent run that produced it, into a scratch `perf-in/`

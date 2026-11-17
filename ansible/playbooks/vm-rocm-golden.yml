@@ -297,6 +297,7 @@
     ionic_p4_guest_module_dir: /var/tmp/ernic-p4-src/drivers/ernic_p4
     ionic_p4_guest_scripts_dir: /var/tmp/ernic-p4-src/ansible/files/scripts
     ionic_p4_guest_patches_root: /var/tmp/ernic-p4-src/ansible/files/patches
+    ionic_p4_guest_source_root: /var/tmp/ernic-p4-src
 
   tasks:
     - name: Assert the guest kernel matches the pinned ref
@@ -452,7 +453,9 @@
         executable: /bin/bash
       changed_when: false
 
-    - name: Archive the ernic_p4 module sources on the controller
+    # The module, and with it what rocm-ernic's guest P4 client is built
+    # from: the client, the headers it includes and the program it loads.
+    - name: Archive the ernic_p4 module and client sources on the controller
       delegate_to: localhost
       become: false
       ansible.builtin.command:
@@ -463,6 +466,12 @@
           drivers/ernic_p4
           ansible/files/scripts
           ansible/files/patches
+          tests/p4_fp8_client.c
+          tests/ernic_device.h
+          tests/data/p4/fp8_policy.json
+          src/parse_int.h
+          src/p4/p4_devcmd.h
+          src/p4/p4_fp8.h
       changed_when: true
 
     - name: Create the ernic_p4 source staging root in the guest
@@ -501,6 +510,15 @@
       ansible.builtin.command:
         cmd: depmod -a
       changed_when: false
+
+    # From the same staged tree as the module, so the client speaks the ABI
+    # of the pinned device. Ahead of "Remove the build trees" below.
+    - name: Build and install the P4 fp8 client and benchmark driver
+      ansible.builtin.include_role:
+        name: rocm_ernic_setup
+        tasks_from: p4_client
+      vars:
+        rocm_ernic_setup_p4_source_dir: "{{ ionic_p4_guest_source_root }}"
 
     # Every initramfs on disk was generated before this play replaced ionic.
     # One that still carries the earlier module loads it ahead of the rootfs,
@@ -545,6 +563,9 @@
             "provider_prefix": "{{ ionic_srqp4_provider_prefix }}",
             "srq_symbols": {{ ionic_srqp4_srq_symbols.stdout | trim }},
             "p4_symbols": {{ ionic_srqp4_p4_symbols.stdout | trim }},
+            "p4_client": "/usr/local/bin/p4_fp8_client",
+            "p4_bench": "/usr/local/bin/p4_fp8_bench",
+            "p4_program": "/usr/local/share/rocm-ernic/fp8_policy.json",
             "modules_reloaded": false,
             "note": "SRQ and P4 from one ionic build. ernic_p4.ko compiled against the same patched tree as the installed ionic."
           }
@@ -559,7 +580,7 @@
         - "{{ ionic_srqp4_source_root }}"
         - "{{ ionic_srqp4_provider_src }}"
         - "{{ ionic_srqp4_provider_src | dirname }}/rdma-core-patches"
-        - /var/tmp/ernic-p4-src
+        - "{{ ionic_p4_guest_source_root }}"
         - /var/tmp/ernic-p4-src.tar.gz
 
     - name: Install the rocm-ernic udev naming rules
@@ -568,6 +589,16 @@
         tasks_from: naming
       vars:
         rocm_ernic_setup_udev_rules_src: "{{ ernic_source_dir }}/udev/99-rocm-ernic.rules"
+
+    # /dev/ernic-p4 is root-only as the driver leaves it. This image opens
+    # it to one group and puts the baked account in it, so the P4 benchmark
+    # runs with no sudo.
+    - name: Open the P4 control device to the ernic-p4 group
+      ansible.builtin.include_role:
+        name: rocm_ernic_setup
+        tasks_from: p4_access
+      vars:
+        rocm_ernic_setup_p4_user: "{{ vm_username | default('ubuntu') }}"
 
     - name: Install rocm-ernic-netcfg.sh and its systemd unit
       ansible.builtin.include_role:
@@ -724,6 +755,10 @@
           ionic_kernel_pin: "{{ ionic_kernel_pin }}"
           ernic_source_pin: "{{ ernic_source_pin }}"
           sdxi_source_ref: "{{ sdxi_source_pin }}"
+          # Built from ernic_source_pin. The device is root-only upstream;
+          # here members of this group may open it.
+          p4_client: /usr/local/bin/p4_fp8_client
+          p4_device_group: ernic-p4
           rdma_core_version: "{{ golden_pkg['rdma-core'] | default('') }}"
           amdgpu_dkms_version: "{{ golden_pkg['amdgpu-dkms'] | default('') }}"
           amdgpu_dkms_module: "{{ golden_amdgpu_src.stdout | trim }}"

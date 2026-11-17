@@ -152,7 +152,8 @@ class PlayTags(unittest.TestCase):
     def test_the_bake_installs_every_device(self):
         text = PLAYBOOK.read_text()
         for needle in ("ernic_srq_dkms", "ernic_p4_dkms", "role: sdxi_setup",
-                       "role: rocjitsu_setup", "role: image_slim"):
+                       "role: rocjitsu_setup", "role: image_slim",
+                       "tasks_from: p4_client", "tasks_from: p4_access"):
             self.assertIn(needle, text)
 
 

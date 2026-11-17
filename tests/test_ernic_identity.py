@@ -415,6 +415,107 @@ class FleetRoleInstallsTheRulesTest(unittest.TestCase):
         self.assertIn("Reload udev rules", [h.get("name") for h in handlers])
 
 
+class P4AccessTest(unittest.TestCase):
+    """Who may open /dev/ernic-p4 in the golden image.
+
+    The driver creates the node mode 0600 and owned by root. The image opens
+    it to one group so the P4 benchmark needs no sudo, and the point of these
+    is that it opens it to that group and to nothing else.
+    """
+
+    P4_RULES = FLEET_ROLE / "files" / "99-ernic-p4.rules"
+    GOLDEN = REPO_ROOT / "ansible" / "playbooks" / "vm-rocm-golden.yml"
+
+    def _rules(self) -> list[str]:
+        return [
+            line for line in self.P4_RULES.read_text().splitlines()
+            if line.strip() and not line.startswith("#")
+        ]
+
+    def test_one_rule_matching_only_the_p4_nodes(self):
+        # ernic_p4 names its nodes ernic-p4 and ernic-p4.N; nothing else in
+        # the misc class starts that way.
+        self.assertEqual(
+            self._rules(),
+            ['SUBSYSTEM=="misc", KERNEL=="ernic-p4*", GROUP="ernic-p4", '
+             'MODE="0660"'],
+        )
+
+    def test_the_mode_grants_nothing_to_others(self):
+        (rule,) = self._rules()
+        mode = rule.split('MODE="')[1].split('"')[0]
+        self.assertEqual(int(mode, 8) & 0o007, 0, "never world access")
+
+    def test_udev_itself_accepts_the_file(self):
+        udevadm = shutil.which("udevadm")
+        _require(udevadm is not None, "udevadm (package: udev)")
+        _require(
+            subprocess.run(
+                [udevadm, "verify", "--help"], capture_output=True
+            ).returncode == 0,
+            "udevadm verify (systemd >= 251)",
+        )
+        # The group exists in the guest, not on the machine running this.
+        proc = subprocess.run(
+            [udevadm, "verify", "--resolve-names=never", str(self.P4_RULES)],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(
+            proc.returncode, 0,
+            f"udev rejected the rules file:\n{proc.stdout}\n{proc.stderr}")
+
+    def test_the_group_default_is_the_one_the_rule_names(self):
+        # The rule names the group literally, so a default that drifted would
+        # create one group and hand the node to another.
+        _require(yaml is not None, "PyYAML")
+        d = _defaults(FLEET_ROLE)
+        self.assertIn(f'GROUP="{d["rocm_ernic_setup_p4_group"]}"', self._rules()[0])
+        self.assertEqual(
+            (FLEET_ROLE / "files" / d["rocm_ernic_setup_p4_udev_rules_src"]).resolve(),
+            self.P4_RULES.resolve(),
+        )
+
+    def test_the_tasks_create_the_group_add_the_user_and_install_the_rule(self):
+        _require(yaml is not None, "PyYAML")
+        tasks = yaml.safe_load((FLEET_ROLE / "tasks" / "p4_access.yml").read_text())
+        group = [t["ansible.builtin.group"] for t in tasks if "ansible.builtin.group" in t]
+        user = [t["ansible.builtin.user"] for t in tasks if "ansible.builtin.user" in t]
+        copy = [t["ansible.builtin.copy"] for t in tasks if "ansible.builtin.copy" in t]
+        self.assertEqual([g["name"] for g in group], ["{{ rocm_ernic_setup_p4_group }}"])
+        self.assertEqual([u["groups"] for u in user], ["{{ rocm_ernic_setup_p4_group }}"])
+        # append, or the account loses sdxi, video and render.
+        self.assertTrue(user[0]["append"])
+        self.assertEqual([c["dest"] for c in copy], ["/etc/udev/rules.d/99-ernic-p4.rules"])
+
+    def test_the_golden_bake_runs_both_p4_task_files(self):
+        _require(yaml is not None, "PyYAML")
+        plays = yaml.safe_load(self.GOLDEN.read_text())
+        (play,) = [p for p in plays if p.get("name") == "Build SRQ + P4 ionic stack into the guest"]
+        includes = {
+            t["ansible.builtin.include_role"].get("tasks_from"): t
+            for t in play["tasks"] if "ansible.builtin.include_role" in t
+            and t["ansible.builtin.include_role"].get("name") == "rocm_ernic_setup"
+        }
+        self.assertIn("p4_client", includes)
+        self.assertIn("p4_access", includes)
+        self.assertNotIn("when", includes["p4_access"])
+        self.assertEqual(
+            includes["p4_access"]["vars"]["rocm_ernic_setup_p4_user"],
+            "{{ vm_username | default('ubuntu') }}",
+            "the baked account is the one that goes in the group",
+        )
+
+    def test_the_client_is_built_before_the_sources_are_removed(self):
+        _require(yaml is not None, "PyYAML")
+        plays = yaml.safe_load(self.GOLDEN.read_text())
+        (play,) = [p for p in plays if p.get("name") == "Build SRQ + P4 ionic stack into the guest"]
+        names = [t.get("name") for t in play["tasks"]]
+        self.assertLess(
+            names.index("Build and install the P4 fp8 client and benchmark driver"),
+            names.index("Remove the build trees"),
+        )
+
+
 class NetcfgDiscoveryTest(unittest.TestCase):
     """The netcfg script must find the device by tuple, not by name.
 

@@ -43,7 +43,7 @@ device.
 | rocjitsu GEMM | guest 1 | `perf-rocjitsu` |
 | rocjitsu hipFile | guest 1 | `perf-rocjitsu` |
 | hipFile fio | guest 2 | `perf-hipfile-fio` |
-| Ernic P4 FP8 bandwidth | guest 1 to guest 2 | `perf-ernic` |
+| Ernic P4 FP8 bandwidth | guest 1 | `perf-ernic` |
 | SDXI copy bandwidth | guest 1 | `perf-helios` |
 
 ## Notes

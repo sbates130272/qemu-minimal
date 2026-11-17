@@ -65,7 +65,10 @@
   <!-- ── ERNIC mesh ───────────────────────────────────────────────────── -->
   <!-- The TAP is the guests' L2 path; without it there is no inter-guest RDMA. -->
   <ernic-tap>true</ernic-tap>
-  <!-- /dev/ernic-p4 in the guest, which the P4 FP8 bandwidth run loads into. -->
+  <!-- /dev/ernic-p4 in the guest, which the P4 FP8 bandwidth run loads into.
+       "load" is the widest scope and includes table writes: whoever can open
+       that node in the guest decides what its own NIC does with every frame
+       and RDMA operation. The run needs it to replace the program. -->
   <p4-enable>true</p4-enable>
   <p4-guest-scope>load</p4-guest-scope>
 

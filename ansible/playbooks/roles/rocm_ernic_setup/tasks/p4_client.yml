@@ -1,0 +1,70 @@
+---
+# The userspace half of the P4 path: rocm-ernic's own guest client, the
+# program it loads, and the timed driver the P4 FP8 bandwidth benchmark runs.
+#
+# The client is built from the rocm-ernic tree the caller staged in the guest
+# at rocm_ernic_setup_p4_source_dir, so the device ABI it speaks is the pinned
+# one and moves with the pin. The tree needs tests/p4_fp8_client.c,
+# tests/ernic_device.h, src/parse_int.h, src/p4/p4_devcmd.h, src/p4/p4_fp8.h,
+# drivers/ernic_p4/uapi/ernic_p4.h and tests/data/p4/fp8_policy.json.
+
+- name: Assert the staged rocm-ernic tree is named
+  ansible.builtin.assert:
+    that: rocm_ernic_setup_p4_source_dir | length > 0
+    fail_msg: >-
+      rocm_ernic_setup_p4_source_dir must name the rocm-ernic tree staged in
+      the guest. vm-rocm-golden.yml sets it.
+
+- name: Copy the timed fp8 driver's source into the guest
+  ansible.builtin.copy:
+    src: p4_fp8_bench.c
+    dest: "{{ rocm_ernic_setup_p4_source_dir }}/p4_fp8_bench.c"
+    owner: root
+    group: root
+    mode: "0644"
+
+# The C standard and feature-test macros are the ones rocm-ernic gives every
+# target, and the ones its own P4 lane builds this client with. pkg-config
+# resolves the libibverbs the guest links everything else against.
+- name: Build the P4 fp8 client and the timed driver
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      read -ra ibv <<< "$(pkg-config --cflags --libs libibverbs)"
+      flags=(-std=c11 -pedantic -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE
+             -O2 -Wall -Wextra)
+      gcc "${flags[@]}" -I tests -I src -I drivers/ernic_p4/uapi \
+        -o p4_fp8_client tests/p4_fp8_client.c "${ibv[@]}"
+      gcc "${flags[@]}" -o p4_fp8_bench p4_fp8_bench.c "${ibv[@]}"
+    chdir: "{{ rocm_ernic_setup_p4_source_dir }}"
+    executable: /bin/bash
+  changed_when: true
+
+- name: Install the P4 fp8 client and the timed driver
+  ansible.builtin.copy:
+    src: "{{ rocm_ernic_setup_p4_source_dir }}/{{ item }}"
+    dest: "{{ rocm_ernic_setup_p4_bin_dir }}/{{ item }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - p4_fp8_client
+    - p4_fp8_bench
+
+- name: Create the P4 program directory
+  ansible.builtin.file:
+    path: "{{ rocm_ernic_setup_p4_program_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the fp8 policy program the client loads
+  ansible.builtin.copy:
+    src: "{{ rocm_ernic_setup_p4_source_dir }}/tests/data/p4/fp8_policy.json"
+    dest: "{{ rocm_ernic_setup_p4_program_dir }}/fp8_policy.json"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0644"

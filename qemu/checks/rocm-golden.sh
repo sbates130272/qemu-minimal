@@ -23,7 +23,8 @@ grep -q ib_umem_get_va /lib/modules/"$(uname -r)"/build/include/rdma/ib_umem.h
 # The toolchain and headers, so both out-of-tree modules can be built here:
 # ionic-ernic, which the consuming jobs build because building it is what they
 # exist to test, and amdgpu, which this image has already built.
-command -v gcc make cmake ninja dkms git
+# One name each: command -v with several succeeds if any one is found.
+for _tool in gcc make cmake ninja dkms git; do command -v "${_tool}"; done
 test -d /lib/modules/"$(uname -r)"/build
 python3 -c 'import docutils'
 pkg-config --exists libnl-3.0 libnl-route-3.0 libudev libsystemd
@@ -144,7 +145,9 @@ test "${STAMP%%:*}" = "${INSTALLED%%-*}"
 # Traffic generators for jobs that exercise the queue pairs.  Name the read and
 # write verbs separately: perftest splits across binaries and a partial install
 # is the failure worth catching here.
-command -v ib_send_bw ib_write_bw ib_read_bw ib_send_lat
+for _tool in ib_send_bw ib_write_bw ib_read_bw ib_send_lat; do
+    command -v "${_tool}"
+done
 
 # Locked memory, which RDMA needs and this release defaults to 8192 KB.
 # Asserted here rather than in provisioning because this is the only boot that
@@ -431,6 +434,27 @@ case "${_P4KO}" in
         exit 1
         ;;
 esac
+
+# The userspace half of the P4 path, which the P4 FP8 bandwidth benchmark runs
+# as the ordinary guest user: rocm-ernic's own guest client built from the
+# pinned sources, the timed driver beside it, and the program they load.
+test -x /usr/local/bin/p4_fp8_client
+test -x /usr/local/bin/p4_fp8_bench
+test -s /usr/local/share/rocm-ernic/fp8_policy.json
+python3 -c 'import json; json.load(open("/usr/local/share/rocm-ernic/fp8_policy.json"))'
+# It links the libibverbs the SRQ provider was installed with, as ibv_devinfo
+# does; against the archive copy it would not find the device.
+ldd /usr/local/bin/p4_fp8_client | grep -q '/usr/local/lib/libibverbs'
+
+# /dev/ernic-p4 is root-only as the driver creates it. This image opens it to
+# the ernic-p4 group and no further, so the benchmark needs no sudo. There is
+# no node on this boot, so what is asserted is everything that decides its
+# mode when there is one: the rule, the group, and the account's membership.
+grep -qx 'SUBSYSTEM=="misc", KERNEL=="ernic-p4\*", GROUP="ernic-p4", MODE="0660"' \
+    /etc/udev/rules.d/99-ernic-p4.rules
+getent group ernic-p4 > /dev/null
+id -nG "$(id -un)" | tr ' ' '\n' | grep -qx ernic-p4
+echo "ernic_p4: client, program and the ernic-p4 group are in place"
 
 # ionic_rdma has no alias udev can act on -- it binds `auxiliary:ionic.rdma`,
 # which exists only after ionic registers it -- so without this file nothing
