@@ -1,0 +1,98 @@
+name: Restore the bake's compiler cache
+description: >-
+  First half of the compiler cache of a "qemu-tool gen-vm --bake" of the
+  golden guest: name the cache, restore the newest entry there is, and mark
+  the moment the bake starts. The step after this one must be the bake, given
+  the directory and the replace flag from the outputs below; the step after
+  the bake must be bake-ccache-save.
+
+  Both workflows that bake the guest -- the playbook-test lane and the
+  publish workflow -- use this action and take no part in naming the cache
+  themselves. That is the point of it: an entry one of them saves is a prefix
+  hit for the other only while they compute one key prefix for one directory,
+  and here there is one copy of each. It has no inputs for the same reason.
+
+  Expects the repository to be checked out: the key is read from files in it.
+
+outputs:
+  dir:
+    description: >-
+      The directory the cache was restored to, for gen-vm's --cache-dir and
+      for bake-ccache-save. Absolute, for the reason the pip cache path in
+      setup-vm-job is: actions/cache and a job container resolve "~"
+      differently. The path is also part of what GitHub matches an entry on,
+      so it is fixed here rather than left to a caller.
+    value: ${{ steps.ccache-key.outputs.dir }}
+  key:
+    description: >-
+      The key to save under, for bake-ccache-save. Unique to the run attempt,
+      because a cache entry cannot be overwritten.
+    value: ${{ steps.bake-ccache.outputs.cache-primary-key }}
+  prefix:
+    description: The key without the run id and attempt.
+    value: ${{ steps.ccache-key.outputs.prefix }}
+  matched-key:
+    description: The key of the entry that was restored; empty when none was.
+    value: ${{ steps.bake-ccache.outputs.cache-matched-key }}
+  replace:
+    description: >-
+      "--cache-replace" when the entry restored was not saved under this
+      run's prefix, which is to say for other pins, or when nothing was
+      restored; empty otherwise. Pass it to gen-vm unquoted. The bake then
+      saves its cache whatever it missed: a bumped ernic or SDXI pin is too
+      few compiles for the role's own miss count to notice, and would
+      otherwise recompile in every run.
+    value: ${{ !startsWith(steps.bake-ccache.outputs.cache-matched-key, steps.ccache-key.outputs.prefix) && '--cache-replace' || '' }}
+
+runs:
+  using: composite
+  steps:
+    # ccache addresses what it stores by content, so the key decides nothing
+    # about correctness. It is housekeeping: the prefix moves when an input
+    # that invalidates most of the cache moves, so a pin bump starts a new
+    # line of entries instead of growing the old one for ever.
+    #
+    # Changing "v1" or the directory starts every reader cold: an entry is
+    # found by its key and by the path it was saved from. On main the
+    # publish workflow saves the first new entry, and it runs on a push that
+    # changes this file for that reason.
+    - name: Name the compiler cache
+      id: ccache-key
+      shell: bash
+      run: |
+        set -eu
+        playbook=ansible/playbooks/vm-rocm-golden.yml
+        # Where each is defined: the three anchors and the driver release.
+        pins=$(grep -E '^ +((ionic_kernel_pin|ernic_source_pin|sdxi_source_pin): &|rocm_setup_amdgpu_driver_version: )' "$playbook")
+        # All four, or a renamed pin has dropped out of the key unnoticed.
+        test "$(printf '%s\n' "$pins" | wc -l)" -eq 4
+        patches=ansible/playbooks/roles/rocjitsu_setup/files/amdgpu-emu-patches.py
+        test -f ansible/requirements.yml
+        test -f "$patches"
+        digest=$({ printf '%s\n' "$pins"; cat ansible/requirements.yml "$patches"; } |
+                   sha256sum | cut -c1-16)
+        echo "prefix=bake-ccache-v1-${digest}" >> "$GITHUB_OUTPUT"
+        echo "dir=/var/cache/bake-ccache" >> "$GITHUB_OUTPUT"
+
+    # restore and save are separate actions so that the save can sit straight
+    # after the bake and run only when the bake produced something new. The
+    # key is unique to the run because a cache entry cannot be overwritten;
+    # the restore-keys are what find the last one, same pins first.
+    - name: Restore the compiler cache
+      id: bake-ccache
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.ccache-key.outputs.dir }}
+        key: ${{ steps.ccache-key.outputs.prefix }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: |
+          ${{ steps.ccache-key.outputs.prefix }}-
+          bake-ccache-v1-
+
+    # What bake-ccache-save compares against: a restored cache is older than
+    # this file, one the bake wrote is newer. After the restore, so nothing
+    # the restore unpacked can be newer than it, and outside the cached
+    # directory, or it would be restored with the cache and be older than the
+    # files it is there to date.
+    - name: Mark the start of the bake
+      shell: bash
+      run: touch "$RUNNER_TEMP/bake-started"

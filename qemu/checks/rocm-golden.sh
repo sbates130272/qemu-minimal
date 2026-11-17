@@ -322,8 +322,10 @@ grep -q 'vramlimit=1024' /usr/local/bin/amdgpu-probe
 # which is what pam_motd runs over /etc/update-motd.d, skips files that do.
 #
 # ROCM_GOLDEN_EXPECT_PROBE is for a caller that runs this with the emulated
-# GPU attached, where "ready" is the right answer and the hint is meant to
-# print.
+# GPU attached.  The right answer there is "nofirmware", not "ready": this
+# file asserts further down that the image carries no ip_discovery.bin, and
+# with a GPU on the bus and no blob the probe must refuse.  The hint is meant
+# to print in that boot, and to send the reader to the host.
 test -x /etc/update-motd.d/99-amdgpu-probe
 sh -n /etc/update-motd.d/99-amdgpu-probe
 _probe_want=${ROCM_GOLDEN_EXPECT_PROBE:-absent}
@@ -331,6 +333,58 @@ test "$(/usr/local/bin/amdgpu-probe --status)" = "${_probe_want}"
 if [ "${_probe_want}" = absent ]; then
     test -z "$(sudo -n /etc/update-motd.d/99-amdgpu-probe)"
 fi
+if [ "${_probe_want}" = nofirmware ]; then
+    sudo -n /etc/update-motd.d/99-amdgpu-probe |
+        grep -q 'qemu-tool quick-start test'
+fi
+
+# The firmware guard, which is what stops a login hint walking a user into a
+# failed probe: with a GPU on the bus and no discovery blob the hint used to
+# say "sudo amdgpu-probe", the probe failed, and amdgpu was left resident
+# with nothing bound and no safe way to unload it.  An image whose probe
+# lacks the guard must not be published, so it is exercised here rather than
+# grepped for.  This boot may have no GPU, so the installed scripts are run
+# against a scratch tree through their own test seam: AMDGPU_PROBE_TEST_ROOT
+# naming a directory that holds the marker file.  Nothing real is read or
+# loaded.  The first assertion is also what makes the second safe -- a copy
+# that ignores the seam answers for the real system, fails here, and never
+# reaches the run that would load a driver -- and sudo and modprobe are
+# stubbed on PATH for that run all the same.
+_pt=$(mktemp -d)
+touch "${_pt}/.amdgpu-probe-test-root"
+mkdir -p "${_pt}/sys/bus/pci/devices/0000:00:01.0" "${_pt}/stub" \
+    "${_pt}/usr/local/bin" "${_pt}/lib/firmware/amdgpu"
+echo 0x1002 > "${_pt}/sys/bus/pci/devices/0000:00:01.0/vendor"
+echo 0x120000 > "${_pt}/sys/bus/pci/devices/0000:00:01.0/class"
+ln -s /usr/local/bin/amdgpu-probe "${_pt}/usr/local/bin/amdgpu-probe"
+printf '#!/bin/sh\necho called >> "%s/called"\n' "${_pt}" > "${_pt}/stub/sudo"
+cp "${_pt}/stub/sudo" "${_pt}/stub/modprobe"
+chmod 0755 "${_pt}/stub/sudo" "${_pt}/stub/modprobe"
+test "$(AMDGPU_PROBE_TEST_ROOT="${_pt}" /usr/local/bin/amdgpu-probe --status)" = nofirmware
+if AMDGPU_PROBE_TEST_ROOT="${_pt}" PATH="${_pt}/stub:${PATH}" \
+        /usr/local/bin/amdgpu-probe > /dev/null 2>&1; then
+    echo "ERROR: amdgpu-probe did not refuse with no discovery blob staged" >&2
+    exit 1
+fi
+test ! -e "${_pt}/called"
+_hint=$(AMDGPU_PROBE_TEST_ROOT="${_pt}" /etc/update-motd.d/99-amdgpu-probe)
+case "${_hint}" in
+    *'qemu-tool quick-start test'*) ;;
+    *)
+        echo "ERROR: the login hint does not send a guest with no" >&2
+        echo "       discovery blob to the host" >&2
+        exit 1
+        ;;
+esac
+case "${_hint}" in
+    *'    sudo amdgpu-probe'*)
+        echo "ERROR: the login hint offers the probe before the firmware" >&2
+        exit 1
+        ;;
+esac
+echo blob > "${_pt}/lib/firmware/amdgpu/ip_discovery.bin"
+test "$(AMDGPU_PROBE_TEST_ROOT="${_pt}" /usr/local/bin/amdgpu-probe --status)" = ready
+rm -rf "${_pt}"
 
 # Firmware.  Unlike the rocjitsu flavour, this guest carries the generated gap
 # set as well as the packaged blobs, so there is nothing left that amdgpu opens
@@ -389,11 +443,14 @@ id -nG | tr ' ' '\n' | grep -qx video
 test -s /etc/rocm-golden-guest.json
 test -s "${HOME}/WELCOME.md"
 
-# Nothing of a bake's compiler cache.  The playbook-test lane builds the
-# modules through ccache, by a system configuration file and by symlinks that
-# shadow the compiler in /usr/local/bin; the bake_ccache role removes all of
-# it before the image is finished, and a published image never had it.  A
-# guest shipping either compiles everything through a cache nobody asked for.
+# Nothing of a bake's compiler cache.  Both workflows that bake this guest,
+# the playbook-test lane and the publish workflow, build the modules through
+# ccache, by a system configuration file and by symlinks that shadow the
+# compiler in /usr/local/bin; the bake_ccache role removes all of it before
+# the image is finished.  These five lines are what stops a published image
+# that still carries any of it: the publish workflow runs this check before
+# it pushes.  A guest shipping either compiles everything through a cache
+# nobody asked for.
 test ! -e /etc/ccache.conf
 test ! -e /var/tmp/bake-ccache
 test ! -e /var/tmp/bake-ccache.tar
@@ -476,6 +533,63 @@ if [ "${_got}" != "${_want}" ]; then
     exit 1
 fi
 echo "modules-load.d: ionic, ionic_rdma"
+
+# The rules that name the NIC are qemu-minimal's, not rocm-ernic's. The two
+# files have one name and one destination, and the image published as
+# 20261117.g80c17f8 carried rocm-ernic's: its Ethernet rule is
+# NAME="rocm-ernic%n", %n is the kernel number, and every emulated NIC comes
+# up as "...np0", so one NIC per guest is renamed however many it has. Its
+# InfiniBand rule takes the first free index, which two udev workers race
+# for. qemu-minimal's rules give each device its position among the matching
+# PCI devices instead, in both stanzas.
+#
+# No device is needed to read a file, so this holds on the boot with no NIC.
+# Comment lines are dropped first: the file explains %n at length.
+#
+# tests/test_ernic_identity.py runs the lines between the two markers against
+# both files, so keep them free of anything but this one path.
+# begin: ernic naming rules
+_rules=/etc/udev/rules.d/99-rocm-ernic.rules
+if [ ! -s "${_rules}" ]; then
+    echo "ERROR: ${_rules} is missing: the ernic devices keep their kernel" \
+         "names" >&2
+    exit 1
+fi
+_rules_live=$(grep -v '^[[:space:]]*#' "${_rules}")
+case "${_rules_live}" in
+    *'rocm-ernic%n'*)
+        echo "ERROR: ${_rules} names the Ethernet device rocm-ernic%n, which" \
+             "is rocm-ernic0 for every NIC. That is rocm-ernic's copy of the" \
+             "rules, not qemu-minimal's" \
+             "roles/rocm_ernic_setup/files/99-rocm-ernic.rules." >&2
+        exit 1
+        ;;
+esac
+case "${_rules_live}" in
+    *'while [ -e /sys/class/infiniband/'*)
+        echo "ERROR: ${_rules} numbers the InfiniBand device by the first" \
+             "free index, which two udev workers race for. That is" \
+             "rocm-ernic's copy of the rules, not qemu-minimal's." >&2
+        exit 1
+        ;;
+esac
+case "${_rules_live}" in
+    *'NAME="%c"'*) ;;
+    *)
+        echo "ERROR: ${_rules} does not name the Ethernet device from the" \
+             "index its PROGRAM computes (NAME=\"%c\")" >&2
+        exit 1
+        ;;
+esac
+# One walk of the PCI devices in each stanza.
+if [ "$(printf '%s\n' "${_rules_live}" |
+        grep -c 'for d in /sys/bus/pci/devices/\*')" != 2 ]; then
+    echo "ERROR: ${_rules} does not index both the Ethernet and the" \
+         "InfiniBand device by PCI position" >&2
+    exit 1
+fi
+echo "udev: 99-rocm-ernic.rules indexes both devices by PCI position"
+# end: ernic naming rules
 
 # No ionic module in any initramfs, asserted against the FINISHED image.
 #
@@ -720,3 +834,45 @@ print(f"grub: default {spec!r} is {node['title']!r}, which loads {want}")
 GRUBPY
 rm -f "${_grubcfg}" "${_grubenv}"
 echo "kernel: ${_kver} is the only kernel installed and the one grub boots"
+
+# ---------------------------------------------------------------------------
+# AppArmor loaded its profiles
+# ---------------------------------------------------------------------------
+# The image published as 20261117.g80c17f8 boots with apparmor.service failed
+# and the system "degraded". The base bake removes snapd without purging it
+# and deletes /var/lib/snapd; the profile snapd leaves in /etc/apparmor.d
+# includes a path under that directory, and the parser stops there:
+#
+#   AppArmor parser error for /etc/apparmor.d in profile
+#   /etc/apparmor.d/usr.lib.snapd.snap-confine.real at line 13: Could not
+#   open '/var/lib/snapd/apparmor/snap-confine'
+#
+# vm-basic.yml now purges the package. The unit and the leftover are both
+# asserted: the unit says what this boot did, the file what the next will.
+#
+# Not "no unit failed". This check also runs on a boot with no device, where
+# rocm-ernic-netcfg.service waits 30 s for a NIC that is not there and exits
+# 1, by design; which other units fail without a device has not been
+# established, so the failed units are printed and only this one is asserted.
+#
+# tests/test_bake_faults.py runs the lines between the two markers with a
+# stub systemctl.
+# begin: apparmor
+if systemctl is-failed --quiet apparmor.service; then
+    echo "ERROR: apparmor.service is failed: a profile in /etc/apparmor.d" \
+         "does not load" >&2
+    systemctl status --no-pager --lines=20 apparmor.service >&2 || true
+    exit 1
+fi
+_aa_profile=/etc/apparmor.d/usr.lib.snapd.snap-confine.real
+_aa_include=/var/lib/snapd/apparmor/snap-confine
+if [ -e "${_aa_profile}" ] && [ ! -e "${_aa_include}" ]; then
+    echo "ERROR: ${_aa_profile} is left over from a snapd that was removed" \
+         "and not purged, and includes ${_aa_include}, which is gone:" \
+         "apparmor.service fails on it at the next boot" >&2
+    exit 1
+fi
+echo "apparmor: apparmor.service is not failed"
+echo "note: units failed on this boot, if any:"
+systemctl --failed --no-legend --plain --no-pager || true
+# end: apparmor

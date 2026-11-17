@@ -38,25 +38,55 @@ device node are the correct answers there.
 ## If the VM has emulated GPUs
 
 `amdgpu` is blacklisted, in `/etc/modprobe.d/` and again on the kernel
-command line, so a GPU that is present still needs these steps. One probe
-binds every GPU on the bus.
+command line, so a GPU that is present still needs these steps, **in this
+order: firmware first, then the probe.** One probe binds every GPU on the
+bus.
 
-1. Stage `ip_discovery.bin` into `/lib/firmware/amdgpu/`. Generate it with
-   `rj-ip-discovery gfx1250` from the **same rocjitsu build** that serves the
-   socket. It is the one firmware file this image does not carry, for exactly
-   that reason. From a qemu-minimal checkout,
-   `ansible-playbook vm-rocm-golden.yml --tags firmware` does this step.
+1. Stage the firmware. `ip_discovery.bin` is the one firmware file this
+   image does not carry, because it has to come from the **same rocjitsu
+   build** that serves the socket. Until it is in `/lib/firmware/amdgpu/`
+   the GPU cannot be probed, and `amdgpu-probe` refuses to try. One of:
+
+   - **on the host**, for a stack `qemu-tool quick-start` started:
+
+         qemu-tool quick-start test
+
+     It installs the blob from the rocjitsu serving this stack and then runs
+     step 2 itself, so there is nothing more to do in here. It runs a
+     playbook out of a qemu-minimal checkout, and says so when it finds none;
+   - on the host, from `ansible/playbooks` in a qemu-minimal checkout,
+     `ansible-playbook -i HOST, vm-rocm-golden.yml --tags firmware`, which
+     installs the blob and stops there;
+   - by hand: copy the output of `rj-ip-discovery gfx1250` to
+     `/lib/firmware/amdgpu/ip_discovery.bin`.
+
    Everything else, including the generated gap set, is already in
    `{{ golden_firmware_dir }}`; do not overwrite it.
-2. Load the driver:
+2. Load the driver, once step 1 is done:
 
        sudo amdgpu-probe
 
-   It wraps `modprobe amdgpu` with the emulation parameters. `amdgpu-probe
-   --status` prints `absent`, `ready`, `loaded` or `stranded` and changes
-   nothing.
+   It wraps `modprobe amdgpu` with the emulation parameters.
 3. Check: a bound device under `/sys/bus/pci/drivers/amdgpu/`, a named node
    under `/sys/class/kfd/kfd/topology/nodes/`, and no failure in `sudo dmesg`.
+
+`amdgpu-probe --status` prints one word and changes nothing. The login hint
+is that word spelled out:
+
+| Word | Means | Next |
+|---|---|---|
+| `absent` | no emulated GPU on the bus | nothing |
+| `nofirmware` | a GPU, no driver loaded, no `ip_discovery.bin` | step 1; the probe refuses |
+| `ready` | a GPU, no driver loaded, the firmware staged | step 2 |
+| `loaded` | amdgpu loaded with the emulation parameters and every GPU bound | nothing |
+| `unbound` | amdgpu loaded with the right parameters, but a GPU has no driver: a probe failed | step 1 if the firmware is missing, then `sudo amdgpu-probe`, which binds the GPU without a reload |
+| `stranded` | amdgpu loaded with other parameters | reboot, then step 2 |
+
+`unbound` is what a probe without the firmware leaves behind: the module
+stays loaded with nothing bound. Do not `rmmod amdgpu` to get out of it, and
+loading it again does nothing. `qemu-tool quick-start test` on the host and
+`--tags firmware` both re-bind the GPU after installing the blob; after
+staging by hand, `sudo amdgpu-probe` does.
 
 ## If the VM has rocm-ernic NICs
 
@@ -104,9 +134,12 @@ installed and blacklisted; load it by hand when you want it.
   returns 0. `amdgpu-probe` refuses in that case.
 - **A bare `modprobe amdgpu` costs a reboot.** Without the emulation
   parameters it binds nothing, and `rmmod amdgpu` has been seen to fault.
-- **Without `ip_discovery.bin` amdgpu cannot probe a GPU.** The failure is
-  `can't load firmware "amdgpu/ip_discovery.bin"` followed by
-  `probe with driver amdgpu failed with error -2`.
+- **Without `ip_discovery.bin` amdgpu cannot probe a GPU.** `amdgpu-probe`
+  refuses to load the driver until it is staged. A `modprobe amdgpu` given
+  the same parameters by hand does not: the failure is `can't load firmware
+  "amdgpu/ip_discovery.bin"` and `probe with driver amdgpu failed`, and
+  amdgpu is left loaded with nothing bound, which is `unbound` above. With
+  no parameters it is `stranded`, the bullet before this one.
 - **Locked memory is unlimited here on purpose.** Past the 8192 KB default
   every `ibv_reg_mr()` fails with "Cannot allocate memory", reported a long
   way from the cause.

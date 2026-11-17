@@ -289,12 +289,13 @@ def _check_images_dir(fleet: FleetConfig | None) -> list[Result]:
                       "" if writable else "gen-vm writes the overlay qcow2s "
                                           "here"))
     gb = free_gb(path)
-    # A backing qcow2 is ~2.5 GB compressed and lands ~16 GB unpacked, plus an
-    # overlay per guest. 30 is a floor for one guest, not a recommendation.
+    # The published backing qcow2 is ~2 GB compressed and ~8.5 GB unpacked
+    # (20261117.g80c17f8: 8,422,096,896 bytes, 7.8 GiB), plus an overlay per
+    # guest. 30 is the figure quick-start warns at, not a recommendation.
     out.append(Result("  free space", _OK if gb >= 30 else _WARN,
                       f"{gb:.0f} GiB free",
                       "" if gb >= 30 else "a published backing image unpacks "
-                                          "to ~16 GiB before any overlay"))
+                                          "to ~8 GiB before any overlay"))
 
     # The root-era artifacts. Same check `qemu-tool compose up` makes, said
     # here before anything has been started: a root-owned NVMe qcow2 is 0644

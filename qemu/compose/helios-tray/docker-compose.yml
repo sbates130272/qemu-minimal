@@ -4,7 +4,7 @@
 # Regenerate after changing qemu/stacks/helios-tray.xml:
 #   qemu-tool gen-compose --xml qemu/stacks/helios-tray.xml
 #
-# xml-sha256: 3ba8d0d3e268843f66eec8de958a29f498109f1a27a97c67e8f39a65793dac51  # pre-commit: ignore
+# xml-sha256: edbff4895e612e495007d43bf60f827949e916fb163d95c829b5e8cb4f83d4bb  # pre-commit: ignore
 
 x-logging: &logging
   driver: json-file
@@ -482,6 +482,7 @@ services:
           --vmem "16384" \
           --nvme "6" \
           --extra-hostfwd "tcp::9100-:9100" \
+          --extra-hostfwd "tcp::9879-:9879" \
           --vfio-userdev "/run/vfu/ernic-1-1.sock,/run/vfu/ernic-1-2.sock,/run/vfu/rocjitsu-1-1.sock,/run/vfu/ernic-1-3.sock,/run/vfu/ernic-1-4.sock,/run/vfu/rocjitsu-1-2.sock,/run/vfu/ernic-1-5.sock,/run/vfu/ernic-1-6.sock,/run/vfu/rocjitsu-1-3.sock,/run/vfu/ernic-1-7.sock,/run/vfu/ernic-1-8.sock,/run/vfu/rocjitsu-1-4.sock,/run/vfu/sdxi-1.sock"
 
   # ---- metrics (opt-in: --profile metrics) ----

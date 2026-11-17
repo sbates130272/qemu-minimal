@@ -9,10 +9,41 @@
 # in ways that present as something else, and because they belong with the
 # driver build rather than with whoever happens to be calling.
 #
-#   amdgpu-probe            load amdgpu with the emulation parameters
-#   amdgpu-probe --status   print absent, ready, loaded or stranded; change
-#                           nothing and always exit 0
+#   amdgpu-probe            load amdgpu with the emulation parameters, or
+#                           bind a GPU an earlier probe left unbound.  Refuses
+#                           while the discovery blob is not staged.
+#   amdgpu-probe --status   print absent, nofirmware, ready, loaded, unbound
+#                           or stranded; change nothing and always exit 0
+#
+# The order is firmware first, then the probe.  ip_discovery.bin is the one
+# firmware file the image does not carry -- it belongs to the rocjitsu build
+# serving the socket -- and discovery=2 below makes the driver read it.  A
+# probe without it fails, and the module stays resident with no device bound:
+# modprobe has returned 0, and rmmod of this module has been seen to GPF.  So
+# this refuses to load anything until the blob is there, and when it finds
+# that state already made it binds the device through sysfs instead of
+# reloading.
 set -euo pipefail
+
+# Test seam, and the only one.  Everything below reads /sys, /lib/firmware and
+# /dev through "${root}", which is empty unless AMDGPU_PROBE_TEST_ROOT names a
+# directory that also holds the marker file .amdgpu-probe-test-root.  Both
+# halves are needed: the variable alone, or pointing anywhere without the
+# marker, is ignored and the real system is read.  Neither reaches a real
+# run by accident -- "sudo amdgpu-probe" resets the environment, and pam_motd
+# runs the login hint without the caller's.  tests/test_amdgpu_probe.py
+# builds such a tree and puts stub sudo, modprobe and tee first on PATH;
+# qemu/checks/rocm-golden.sh uses it to prove the installed copy has the
+# firmware guard.  With a test root the bind write below does not go through
+# sudo, so the seam cannot be used to have root write into a tree the caller
+# chose.  The load at the bottom still does: "ready" in a test tree runs
+# "sudo modprobe" for real unless a stub is first on PATH, which is why every
+# caller of the seam asks --status before it runs the probe.
+root=
+if [ -n "${AMDGPU_PROBE_TEST_ROOT:-}" ] &&
+   [ -e "${AMDGPU_PROBE_TEST_ROOT}/.amdgpu-probe-test-root" ]; then
+  root=${AMDGPU_PROBE_TEST_ROOT}
+fi
 
 params=(
   emu_mode=1
@@ -52,20 +83,25 @@ collect_mismatch() {
     if [ "$want" != "${want#0x}" ]; then
       want=$((want))
     fi
-    live=$(cat "/sys/module/amdgpu/parameters/$name" 2>/dev/null) || continue
+    live=$(cat "${root}/sys/module/amdgpu/parameters/$name" 2>/dev/null) || continue
     if [ "$live" != "$want" ]; then
       mismatch+=("$name: want $want, live $live")
     fi
   done
 }
 
-# Is an emulated accelerator actually on the bus?  Read from sysfs rather than
-# lspci, which is a package this guest is not guaranteed to carry.  0x1002 is
-# AMD and 0x1200xx is "processing accelerator", which is the class rocjitsu's
-# PciDeviceInfo defaults to and the one amdgpu's PCI table matches on.
-device_present() {
+# The emulated accelerators on the bus, and which of them no driver has
+# claimed.  Sets "devices" and "unbound" to lists of sysfs paths.  Read from
+# sysfs rather than lspci, which is a package this guest is not guaranteed to
+# carry.  0x1002 is AMD and 0x1200xx is "processing accelerator", which is the
+# class rocjitsu's PciDeviceInfo defaults to and the one amdgpu's PCI table
+# matches on.  "No driver symlink" is the test rocjitsu_setup's firmware tasks
+# use before they re-bind, and a probe that failed leaves exactly that.
+collect_devices() {
   local dev vendor class
-  for dev in /sys/bus/pci/devices/*; do
+  devices=()
+  unbound=()
+  for dev in "${root}"/sys/bus/pci/devices/*; do
     if [ ! -r "${dev}/vendor" ] || [ ! -r "${dev}/class" ]; then
       continue
     fi
@@ -73,31 +109,109 @@ device_present() {
     [ "${vendor}" = "0x1002" ] || continue
     read -r class < "${dev}/class" || continue
     case "${class}" in
-      0x1200*) return 0 ;;
+      0x1200*) ;;
+      *) continue ;;
     esac
+    devices+=("${dev}")
+    if [ ! -e "${dev}/driver" ]; then
+      unbound+=("${dev}")
+    fi
+  done
+}
+
+# Is the discovery blob where the kernel will find it?  The driver asks the
+# firmware loader for "amdgpu/ip_discovery.bin".  rocjitsu_setup's firmware
+# tasks install it as /lib/firmware/amdgpu/ip_discovery.bin, uncompressed,
+# and that is the name the instructions below give.  The other three names
+# are here because this repo already relies on them for the packaged blobs:
+# those load from /lib/firmware/updates/amdgpu, which the kernel searches
+# first, and ship as .xz.  A .zst name and the per-kernel directories are not
+# checked -- nothing in this repo installs to either, so nothing here
+# establishes that this kernel reads them.  -f and -s, not -e: an empty file
+# is not a blob, and neither is a directory of that name, which -s alone
+# calls non-empty.  -f follows a symlink, so a link to a real blob counts.
+blob=/lib/firmware/amdgpu/ip_discovery.bin
+blob_present() {
+  local dir name
+  for dir in /lib/firmware/updates /lib/firmware; do
+    for name in ip_discovery.bin ip_discovery.bin.xz; do
+      if [ -f "${root}${dir}/amdgpu/${name}" ] &&
+         [ -s "${root}${dir}/amdgpu/${name}" ]; then
+        return 0
+      fi
+    done
   done
   return 1
+}
+
+# Is amdgpu between "modprobe started" and "modprobe returned"?  The module's
+# directory in /sys/module is there for the whole of its init, and the device
+# probe runs inside that init, so for as long as a load takes a GPU has no
+# driver link and there may be no driver directory yet.  That is a load in
+# progress, not a failed probe, and a bind written under it would race the
+# probe it is waiting on.  initstate reads "coming" then, "going" during an
+# unload and "live" otherwise.  A tree with no such file is taken as live.
+# Sets "initstate" and returns 0 when the module is in transit.
+module_in_transit() {
+  initstate=live
+  if [ -r "${root}/sys/module/amdgpu/initstate" ]; then
+    read -r initstate < "${root}/sys/module/amdgpu/initstate" || initstate=live
+  fi
+  [ "${initstate}" != live ]
+}
+
+# How the blob gets there.  Said in one place because two branches below
+# need it.
+say_how_to_stage() {
+  cat >&2 <<EOF
+Stage it first, one of:
+  on the host:    qemu-tool quick-start test
+                  (installs the blob from the rocjitsu serving this stack,
+                  then probes -- nothing more to run here afterwards. It
+                  needs a qemu-minimal checkout and says so if it has none)
+  on the host, from a qemu-minimal checkout, in ansible/playbooks:
+                  ansible-playbook -i HOST, vm-rocm-golden.yml --tags firmware
+  by hand:        copy the output of "rj-ip-discovery gfx1250", from the
+                  same rocjitsu build that serves this guest, to
+                  ${blob}
+EOF
 }
 
 # Report state and do nothing else.  One word on stdout, always exit 0: the
 # caller is a motd script, and a login is not a thing to fail over a GPU.
 #
-#   absent    no emulated accelerator on the bus -- nothing to probe
-#   ready     device present, amdgpu not loaded -- the probe is the next step
-#   loaded    amdgpu loaded with these parameters -- nothing to do
-#   stranded  amdgpu loaded with different ones -- costs a reboot to leave
+#   absent      no emulated accelerator on the bus -- nothing to probe
+#   nofirmware  device present, amdgpu not loaded, no discovery blob -- the
+#               GPU cannot be probed yet, and the probe refuses
+#   ready       device present, amdgpu not loaded, blob staged -- the probe
+#               is the next step
+#   loaded      amdgpu loaded with these parameters and no accelerator left
+#               without a driver -- nothing to do.  Also the answer while a
+#               load with these parameters is still running: there is nothing
+#               for the reader to do then either, and "unbound" would send
+#               them to bind under a probe that has not finished
+#   unbound     amdgpu loaded with these parameters and an accelerator has no
+#               driver: a probe failed.  The probe binds it, without a reload
+#   stranded    amdgpu loaded with different ones -- costs a reboot to leave
 if [ "${1:-}" = "--status" ]; then
-  if [ -d /sys/module/amdgpu ]; then
+  collect_devices
+  if [ -d "${root}/sys/module/amdgpu" ]; then
     collect_mismatch
-    if [ ${#mismatch[@]} -eq 0 ]; then
-      echo loaded
-    else
+    if [ ${#mismatch[@]} -ne 0 ]; then
       echo stranded
+    elif module_in_transit; then
+      echo loaded
+    elif [ ${#unbound[@]} -ne 0 ]; then
+      echo unbound
+    else
+      echo loaded
     fi
-  elif device_present; then
+  elif [ ${#devices[@]} -eq 0 ]; then
+    echo absent
+  elif blob_present; then
     echo ready
   else
-    echo absent
+    echo nofirmware
   fi
   exit 0
 fi
@@ -107,31 +221,124 @@ if [ $# -gt 0 ]; then
   exit 2
 fi
 
+collect_devices
+
 # modprobe is a no-op on a resident module: it returns 0 without re-inserting,
 # so every parameter above is discarded in silence.  That is exactly what
 # happens when a stale initramfs loaded amdgpu during boot.  Compare what is
 # live against what we asked for and say so, rather than exiting 0 having done
 # nothing.
-if [ -d /sys/module/amdgpu ]; then
+if [ -d "${root}/sys/module/amdgpu" ]; then
   collect_mismatch
 
-  if [ ${#mismatch[@]} -eq 0 ]; then
-    if ls /dev/dri/render* >/dev/null 2>&1; then
-      echo "amdgpu already loaded with the emulation parameters."
-      exit 0
-    fi
-    echo "amdgpu loaded with correct parameters but no render nodes found." >&2
-    echo "Is /lib/firmware/amdgpu/ip_discovery.bin present?" >&2
-    echo "  ls /lib/firmware/amdgpu/ip_discovery.bin" >&2
+  if [ ${#mismatch[@]} -ne 0 ]; then
+    echo "amdgpu is already loaded with the wrong parameters:" >&2
+    printf '  %s\n' "${mismatch[@]}" >&2
+    echo "modprobe cannot change these on a resident module, and unloading" >&2
+    echo "this one has been seen to fault, so it costs a reboot:" >&2
+    echo "  sudo reboot" >&2
+    echo "then \"sudo $0\". If amdgpu was loaded during boot and not by" >&2
+    echo "hand, make the boot-time blacklist effective first:" >&2
+    echo "  sudo update-initramfs -u && sudo reboot" >&2
     exit 1
   fi
 
-  echo "amdgpu is already loaded with the wrong parameters:" >&2
-  printf '  %s\n' "${mismatch[@]}" >&2
-  echo "modprobe cannot change these on a resident module. Either" >&2
-  echo "  sudo rmmod amdgpu && sudo $0" >&2
-  echo "or make the boot-time blacklist effective and reboot:" >&2
-  echo "  sudo update-initramfs -u && sudo reboot" >&2
+  # A load that has not returned yet: the probe below it is still running,
+  # so a GPU with no driver is not yet a GPU whose probe failed.
+  if module_in_transit; then
+    echo "amdgpu is not live yet (initstate: ${initstate}): a load or an" >&2
+    echo "unload is still running. Nothing was changed; try again once it" >&2
+    echo "has finished." >&2
+    exit 1
+  fi
+
+  if [ ${#unbound[@]} -eq 0 ]; then
+    echo "amdgpu already loaded with the emulation parameters."
+    if [ ${#devices[@]} -eq 0 ]; then
+      echo "No emulated GPU is on the PCI bus, so nothing is bound."
+    elif ! ls "${root}"/dev/dri/render* >/dev/null 2>&1; then
+      echo "Every GPU has a driver but there is no /dev/dri/render* node;" >&2
+      echo "see: sudo dmesg | grep -i amdgpu" >&2
+    fi
+    exit 0
+  fi
+
+  # Right parameters, and a GPU with no driver: an earlier probe failed and
+  # left the module resident.  Loading again does nothing and unloading is not
+  # safe, so the way out is to have the resident driver probe the device
+  # again, which a write to its sysfs "bind" file does.
+  echo "amdgpu is loaded with the emulation parameters, but its probe failed" >&2
+  echo "and ${#unbound[@]} of ${#devices[@]} emulated GPU(s) have no driver." >&2
+
+  if ! blob_present; then
+    echo "What is missing is the discovery blob, ${blob}." >&2
+    echo "Nothing was changed." >&2
+    say_how_to_stage
+    echo "The first two re-bind the GPU themselves. After staging by hand," >&2
+    echo "run \"sudo $0\" again: it binds the GPU without a reload." >&2
+    echo "Do not rmmod amdgpu; unloading it has been seen to fault." >&2
+    exit 1
+  fi
+
+  # The same write rocjitsu_setup's firmware tasks make after installing the
+  # blob.  It returns once the probe has, and fails when the probe does, so
+  # what decides the outcome is whether the device has a driver afterwards.
+  drv=${root}/sys/bus/pci/drivers/amdgpu
+  if [ ! -d "${drv}" ]; then
+    echo "${drv} does not exist, so there is no driver to bind to." >&2
+    exit 1
+  fi
+  echo "The discovery blob is staged now; binding without a reload." >&2
+  # The one write this script makes as root, so it is given nothing but a PCI
+  # address, and never made through the test seam: with a test root the path
+  # and the text both come from a tree the caller built, and sudo has no
+  # business writing there.  tee is then the caller's own.
+  write_bind=(sudo tee)
+  if [ -n "${root}" ]; then
+    write_bind=(tee)
+  fi
+  failed=0
+  for dev in "${unbound[@]}"; do
+    bdf=${dev##*/}
+    if [[ ! "${bdf}" =~ ^[0-9a-f]{4,}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]$ ]]; then
+      echo "${bdf} is not a PCI address; not written to ${drv}/bind" >&2
+      failed=1
+      continue
+    fi
+    printf '%s\n' "${bdf}" | "${write_bind[@]}" "${drv}/bind" >/dev/null || true
+    if [ -e "${dev}/driver" ]; then
+      echo "bound ${bdf} to amdgpu"
+    else
+      echo "${bdf} did not bind" >&2
+      failed=1
+    fi
+  done
+  if [ "${failed}" -ne 0 ]; then
+    echo "The probe failed again; see: sudo dmesg | grep -i amdgpu" >&2
+    echo "A blob from a different rocjitsu build than the one serving this" >&2
+    echo "guest loads and then fails discovery. Nothing was unloaded." >&2
+    exit 1
+  fi
+  if ls "${root}"/dev/dri/render* >/dev/null 2>&1; then
+    echo "render node present; the GPU is ready."
+  else
+    echo "No /dev/dri/render* node yet; see: sudo dmesg | grep -i amdgpu" >&2
+  fi
+  exit 0
+fi
+
+# Not loaded, and a GPU is there to probe.  Without the blob the probe below
+# cannot succeed, and failing it is not free: the module stays resident with
+# nothing bound.  So refuse before anything is loaded.  With no GPU on the bus
+# there is no probe to fail, and that case is left as it was.
+if [ ${#devices[@]} -ne 0 ] && ! blob_present; then
+  echo "Not loading amdgpu: the discovery blob is not staged." >&2
+  echo "  ${blob}" >&2
+  echo "It is the one firmware file this image does not carry, because it" >&2
+  echo "has to come from the rocjitsu build serving this guest. Without it" >&2
+  echo "the probe fails and leaves amdgpu loaded with no GPU bound." >&2
+  say_how_to_stage
+  echo "After staging by hand, run \"sudo $0\" again. Nothing was changed." >&2
   exit 1
 fi
 

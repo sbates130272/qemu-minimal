@@ -33,8 +33,10 @@ dkms
 # ansible/playbooks/roles does it, and installs this package itself if a
 # bake was given another manifest.
 #
-# Without a cache directory nothing calls it: this is an unused binary, and the
-# published image is compiled from source.
+# Without a cache directory nothing calls it and this is an unused binary,
+# which is what a bake by hand gets. The two workflows that bake this image,
+# the playbook-test lane and the publish workflow, each pass one, so the
+# published image's modules are built through it.
 ccache
 git
 # No linux-headers-generic, for ionic.txt's reason: this flavour boots mainline

@@ -20,20 +20,61 @@
 # Nothing here is allowed to fail a login, so: no set -e, every branch exits 0,
 # and a guest whose helper has been removed prints nothing rather than erroring.
 # The state words come from "amdgpu-probe --status", which reads the same
-# parameter list the probe itself uses -- this file restates none of it.
+# parameter list the probe itself uses -- this file restates none of it, and
+# none of how a GPU, a driver or the firmware is found.
+#
+# The order it has to get across is firmware first, then the probe.  The
+# image carries no ip_discovery.bin, so on a first login the right thing to
+# say is NOT "run the probe": a probe without the blob fails and leaves amdgpu
+# resident with nothing bound.  This used to say exactly that.
 
-[ -x /usr/local/bin/amdgpu-probe ] || exit 0
+# The test seam amdgpu-probe documents, and the same two-part guard: the
+# variable is ignored unless the directory it names holds the marker file.
+# pam_motd does not pass a caller's environment to this script.
+root=
+if [ -n "${AMDGPU_PROBE_TEST_ROOT:-}" ] &&
+   [ -e "${AMDGPU_PROBE_TEST_ROOT}/.amdgpu-probe-test-root" ]; then
+    root=${AMDGPU_PROBE_TEST_ROOT}
+fi
+probe=${root}/usr/local/bin/amdgpu-probe
 
-status=$(/usr/local/bin/amdgpu-probe --status 2>/dev/null) || exit 0
+[ -x "${probe}" ] || exit 0
+
+status=$("${probe}" --status 2>/dev/null) || exit 0
 
 case "${status}" in
+nofirmware)
+    printf '\n'
+    printf 'An emulated AMD GPU is on the PCI bus, but it cannot be probed yet:\n'
+    printf 'this image carries no ip_discovery.bin, which has to come from the\n'
+    printf 'rocjitsu build serving this guest. On the HOST, not in here, run:\n\n'
+    printf '    qemu-tool quick-start test\n\n'
+    printf 'It stages the firmware and then loads amdgpu, so there is nothing\n'
+    printf 'more to do in the guest afterwards; it runs a playbook from a\n'
+    printf 'qemu-minimal checkout. "sudo amdgpu-probe" refuses until the\n'
+    printf 'firmware is there, and lists the other ways to stage it.\n'
+    printf 'WELCOME.md in your home directory has the steps.\n\n'
+    ;;
 ready)
     printf '\n'
-    printf 'An emulated AMD GPU is on the PCI bus and amdgpu is not loaded.\n'
-    printf 'Load it with the emulation parameters before using the GPU:\n\n'
+    printf 'An emulated AMD GPU is on the PCI bus, its firmware is staged, and\n'
+    printf 'amdgpu is not loaded. Load it with the emulation parameters before\n'
+    printf 'using the GPU:\n\n'
     printf '    sudo amdgpu-probe\n\n'
     printf 'This image never does that for you: a driver that binds before the\n'
     printf 'vfio-user server is serving cannot be unloaded without a reboot.\n\n'
+    ;;
+unbound)
+    printf '\n'
+    printf 'WARNING: amdgpu is loaded but an emulated GPU has no driver: its\n'
+    printf 'probe failed, most often because ip_discovery.bin was not staged\n'
+    printf 'when amdgpu was loaded. Do not rmmod amdgpu -- it is documented to\n'
+    printf 'GPF here -- and loading it again does nothing. On the HOST, run:\n\n'
+    printf '    qemu-tool quick-start test\n\n'
+    printf 'which stages the firmware and re-binds the GPU. If the firmware is\n'
+    printf 'already staged, bind the GPU from in here, without a reload:\n\n'
+    printf '    sudo amdgpu-probe\n\n'
+    printf 'It says so, and changes nothing, if the firmware is still missing.\n\n'
     ;;
 stranded)
     printf '\n'

@@ -1,0 +1,85 @@
+name: Save the bake's compiler cache
+description: >-
+  Second half of the compiler cache of a "qemu-tool gen-vm --bake" of the
+  golden guest: put the bake's ccache statistics in the step summary, and
+  save the cache directory if the bake wrote a new archive into it. Use it
+  as the step straight after the bake, with "if: always()", and hand it the
+  dir and key outputs of bake-ccache-restore.
+
+  always(), on the calling step and on both steps here, because the playbook
+  saves the cache before its last two plays and a bake that failed in one of
+  them still compiled everything.
+
+inputs:
+  dir:
+    description: The dir output of bake-ccache-restore.
+    required: true
+  key:
+    description: The key output of bake-ccache-restore.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # The statistics are the bake's own "ccache --show-stats", with a last
+    # line saying how many ccache invocations missed. The role replaces the
+    # archive when there was none, when the bake was told the one it was
+    # handed was saved for other pins, or when a hundred or more invocations
+    # missed; otherwise it leaves it, and this run saves nothing. That last
+    # line is also where a hook that never fired shows: every counter zero is
+    # a bake compiled from source with ccache looking on.
+    #
+    # With no marker bake-ccache-restore never finished, so the bake never
+    # started, and nothing in the directory is this run's however new it
+    # looks.
+    #
+    # With a marker the restore action finished, and it hands back a
+    # directory and a key whenever it does. Either one empty here is an
+    # output reference that resolved to nothing in the calling workflow. The
+    # tests below would then look in "/", find nothing new and say there was
+    # nothing to save, in a green run, so that is an error instead.
+    - name: Report the compiler cache
+      id: ccache-report
+      if: always()
+      shell: bash
+      env:
+        BAKE_CCACHE_DIR: ${{ inputs.dir }}
+        BAKE_CCACHE_KEY: ${{ inputs.key }}
+      run: |
+        dir="$BAKE_CCACHE_DIR"
+        started="$RUNNER_TEMP/bake-started"
+        if [ ! -e "$started" ]; then
+          echo "the bake did not start: nothing to report or save"
+          exit 0
+        fi
+        if [ -z "$dir" ] || [ -z "$BAKE_CCACHE_KEY" ]; then
+          echo "::error::bake-ccache-save was given an empty dir or key, so the bake's compiler cache cannot be reported or saved"
+          exit 1
+        fi
+        if [ "$dir/stats.txt" -nt "$started" ]; then
+          cat "$dir/stats.txt"
+          {
+            echo '### Compiler cache'
+            echo '```'
+            cat "$dir/stats.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if grep -q '^ccache saw no compiler invocation' "$dir/stats.txt"; then
+            echo "::warning::the bake's compiler cache saw no compiles: the ccache wrappers did not intercept the module builds"
+          fi
+        else
+          echo "the bake did not get as far as reporting its compiler cache"
+        fi
+        if [ "$dir/ccache.tar" -nt "$started" ]; then
+          ls -l "$dir/ccache.tar"
+          echo "new=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "the bake left the cache as it was restored: nothing to save"
+        fi
+
+    - name: Save the compiler cache
+      if: always() && steps.ccache-report.outputs.new == 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ inputs.dir }}
+        key: ${{ inputs.key }}

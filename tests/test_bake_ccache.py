@@ -1,11 +1,18 @@
-"""The bake's compiler cache, and the two lanes that must disagree about it.
+"""The bake's compiler cache, and the two lanes that must agree about it.
 
-The playbook-test lane builds the golden guest's kernel modules through
-ccache and carries the cache between runs; the publish lane builds the same
-guest from source. Both run one playbook, so what separates them is a single
-gen-vm flag, --cache-dir, and everything here is about that flag being the
-only switch: off by default, passed in exactly one workflow, never read from
-the environment, and leaving nothing in the image either way.
+The playbook-test lane and the publish workflow both build the golden
+guest's kernel modules through ccache and carry the cache between runs, and
+they share it: an entry the publish workflow saves on main is what a pull
+request's lane run restores. That only works while both compute one key
+prefix for one directory, so the naming, the restore, the report and the
+save live in two composite actions that both workflows use, and the tests
+here read those.
+
+The switch is still a single gen-vm flag, --cache-dir: off by default,
+passed by exactly those two workflows, never read from the environment, and
+leaving nothing in the image either way. A published image is now one of
+the images built with it, so the acceptance check that refuses an image
+carrying ccache has to run before the push, and that is pinned too.
 
 None of this boots a guest. What is pinned is the structure a bake would
 otherwise be the first thing to find wrong, an hour in.
@@ -49,8 +56,19 @@ PLAYBOOK = REPO / "ansible/playbooks/vm-rocm-golden.yml"
 ROLES = REPO / "ansible/playbooks/roles"
 ROLE = ROLES / "bake_ccache"
 WORKFLOWS = REPO / ".github/workflows"
+ACTIONS = REPO / ".github/actions"
 LANE = WORKFLOWS / "qemu-minimal-ansible-playbook-test-vm-rocm-golden.yml"
 PUBLISH = WORKFLOWS / "qemu-minimal-publish-qcow-rocm-golden.yml"
+# The one copy of the cache's key, directory, report and save. Both
+# workflows use both.
+RESTORE = ACTIONS / "bake-ccache-restore/action.yml"
+SAVE = ACTIONS / "bake-ccache-save/action.yml"
+# Each workflow's bake step, and the step that has to follow the save.
+BAKES = {
+    LANE: ("Generate VM with vm-rocm-golden playbook",
+           "Render the test stack"),
+    PUBLISH: ("Bake the guest", "Record the baked base"),
+}
 FLEET = REPO / "qemu/stacks/rocm-golden.xml"
 # The extra vars gen-vm passes, and the names the playbook reads.
 DIR_VAR = "bake_cache_dir"
@@ -79,17 +97,29 @@ def _flatten(tasks):
             yield from _flatten(task.get(section, []))
 
 
-def _steps():
-    job = yaml.safe_load(LANE.read_text())["jobs"]["test-vm-rocm-golden"]
+def _steps(path):
+    """The steps of a workflow's one job, or of a composite action."""
+    doc = yaml.safe_load(path.read_text())
+    if "runs" in doc:
+        return doc["runs"]["steps"]
+    (job,) = doc["jobs"].values()
     return job["steps"]
 
 
-def _step(name):
-    return next(s for s in _steps() if s.get("name") == name)
+def _step(path, name):
+    (step,) = [s for s in _steps(path) if s.get("name") == name]
+    return step
 
 
-def _index(name):
-    return [s.get("name") for s in _steps()].index(name)
+def _index(path, name):
+    return [s.get("name") for s in _steps(path)].index(name)
+
+
+def _bash(script, **kwargs):
+    """Run a composite step's script the way the runner runs `shell: bash`."""
+    return subprocess.run(
+        ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script],
+        capture_output=True, text=True, **kwargs)
 
 
 class Playbook(unittest.TestCase):
@@ -289,7 +319,13 @@ class Tool(unittest.TestCase):
             self.assertIs(cfg.cache_replace, True)
 
     def test_the_shipped_fleet_names_no_cache(self):
-        """A published image is compiled from source."""
+        """The cache is a flag a workflow passes, never a shipped setting.
+
+        The published image is baked with a cache all the same: the publish
+        workflow names the directory with --cache-dir. A directory is a
+        fact about one host, so it does not belong in the fleet file every
+        bake reads.
+        """
         self.assertEqual(FleetXml.parse_layers([FLEET]).bake_cache_dir, "")
         self.assertNotIn("cache_dir", settings.load_bake([FLEET]))
         # Its comment says where one is set instead.
@@ -419,6 +455,9 @@ class Role(unittest.TestCase):
             for module in ("ansible.builtin.file", "ansible.builtin.copy",
                            "ansible.builtin.unarchive"):
                 args = task.get(module, {})
+                # A deletion writes nothing that has to be removed again.
+                if args.get("state") == "absent":
+                    continue
                 for key in ("path", "dest"):
                     if key in args:
                         written.add(args[key])
@@ -429,6 +468,72 @@ class Role(unittest.TestCase):
         script = shell["ansible.builtin.shell"]["cmd"]
         self.assertIn('ln -s /usr/bin/ccache "$target"', script)
         self.assertIn('target="{{ bake_ccache_wrapper_dir }}/$name"', script)
+
+    def test_a_configuration_in_the_archive_is_never_this_bakes(self):
+        """ccache reads <cache_dir>/ccache.conf ahead of the system file.
+
+        The cache directory is set in the system file only, so that is
+        where ccache looks for its second configuration, and what it finds
+        there outranks the role's settings: a compiler_check or a
+        prefix_command in a restored archive would run as root at every
+        compile of a bake that is published. Measured on ccache 4.12.3.
+        """
+        tasks = _tasks("restore.yml")
+        names = [t["name"] for t in tasks]
+        discard = tasks[names.index(
+            "Discard any ccache configuration that came with the cache")]
+        self.assertEqual(discard["ansible.builtin.file"], {
+            "path": "{{ bake_ccache_dir }}/ccache.conf", "state": "absent"})
+        self.assertIs(discard["become"], True)
+        # Whether or not an archive was unpacked, and outside its block: a
+        # rescue that recreated the directory is followed by it too.
+        self.assertNotIn("when", discard)
+        at = names.index(discard["name"])
+        # After everything that can put the file there, and before the
+        # wrappers that make every later compile a ccache invocation.
+        self.assertLess(names.index("Unpack the saved cache"), at)
+        self.assertLess(at, names.index("Put ccache in front of every "
+                                        "compiler name"))
+        self.assertLess(at, names.index("Zero the ccache statistics"))
+        for later in tasks[at + 1:]:
+            self.assertNotIn("ansible.builtin.unarchive", later, later["name"])
+        # The role sets the cache directory in the system file and nowhere
+        # else: a CCACHE_DIR or CCACHE_CONFIGPATH would move where ccache
+        # looks, and this deletion with it.
+        text = (ROLE / "tasks/restore.yml").read_text()
+        self.assertNotIn("CCACHE_CONFIGPATH", text)
+        self.assertNotIn("CCACHE_DIR", text)
+        # Nor does the role write one itself: these are what create it.
+        for path in sorted((ROLE / "tasks").glob("*.yml")):
+            for writer in ("--set-config", "--max-size", "--max-files",
+                           "ccache -M", "ccache -F", "ccache -o"):
+                self.assertNotIn(writer, path.read_text(), path.name)
+
+    def test_the_archive_is_saved_without_a_configuration(self):
+        archive = next(t for t in _flatten(_tasks("save.yml"))
+                       if t.get("name") == "Archive the cache in the guest")
+        cmd = archive["ansible.builtin.command"]["cmd"]
+        self.assertIn("--exclude=./ccache.conf", cmd.split())
+        # Run for real: tar's exclude patterns are unanchored by default,
+        # and the cache's own subdirectories must come through whole.
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "cache"
+            (cache / "0" / "a").mkdir(parents=True)
+            for rel in ("ccache.conf", "0/ccache.conf", "0/a/object",
+                        "CACHEDIR.TAG"):
+                (cache / rel).write_text("x\n")
+            tar = Path(tmp) / "out.tar"
+            argv = cmd.replace("{{ bake_ccache_archive }}", str(tar)).replace(
+                "{{ bake_ccache_dir }}", str(cache)).split()
+            self.assertNotIn("{{", " ".join(argv))
+            subprocess.run(argv, check=True)
+            listed = subprocess.run(
+                ["tar", "-tf", str(tar)], check=True, capture_output=True,
+                text=True).stdout.split()
+        self.assertEqual(
+            sorted(listed),
+            ["./", "./0/", "./0/a/", "./0/a/object", "./0/ccache.conf",
+             "./CACHEDIR.TAG"])
 
     def test_the_slim_pass_would_sweep_the_cache_as_well(self):
         slim = yaml.safe_load(
@@ -570,71 +675,244 @@ class GuestCheck(unittest.TestCase):
         self.assertIn(
             f"find {defaults['bake_ccache_wrapper_dir']} -maxdepth 1 "
             "-lname /usr/bin/ccache", check)
+        # The one that asks the question itself rather than looking for how
+        # the role answers it: a wrapper anywhere on PATH, under any name.
+        self.assertIn(
+            'test "$(readlink -f "$(command -v gcc)")" != /usr/bin/ccache\n',
+            check)
 
 
 class Workflows(unittest.TestCase):
 
-    BAKE = "Generate VM with vm-rocm-golden playbook"
+    MARKER = '"$RUNNER_TEMP/bake-started"'
 
-    def test_only_the_playbook_test_lane_passes_the_flag(self):
-        for path in sorted(WORKFLOWS.glob("*.yml")) + sorted(
-                (REPO / ".github/actions").glob("*/action.yml")):
+    def _everything(self):
+        return sorted(WORKFLOWS.glob("*.yml")) + sorted(
+            ACTIONS.glob("*/action.yml"))
+
+    def test_exactly_the_two_bake_workflows_pass_the_flag(self):
+        passers, users = set(), set()
+        for path in self._everything():
+            text = path.read_text()
             with self.subTest(file=path.name):
-                text = path.read_text()
-                # In no workflow, this lane included: the cache is a flag.
+                # In no workflow, these two included: the cache is a flag.
                 for name in RETIRED:
-                    self.assertNotIn(name, text)
-                if path == LANE:
-                    continue
-                self.assertNotIn("--cache-dir", text)
-                self.assertNotIn("--cache-replace", text)
-                self.assertNotIn(DIR_VAR, text)
-                self.assertNotIn("bake-ccache", text)
+                    self.assertFalse(name in text, name)
+                # The extra var is gen-vm's to pass. A workflow that named
+                # it would be handing a playbook run a cache behind its back.
+                self.assertFalse(DIR_VAR in text, DIR_VAR)
+                self.assertFalse(REPLACE_VAR in text, REPLACE_VAR)
+            if "--cache-dir" in text or "--cache-replace" in text:
+                passers.add(path)
+            if "bake-ccache" in text:
+                users.add(path)
+        self.assertEqual(passers, {LANE, PUBLISH, RESTORE})
+        self.assertEqual(users, {LANE, PUBLISH, RESTORE, SAVE})
+        # The restore action only names the flag it hands back; it runs no
+        # gen-vm. The two workflows are the only files that do.
+        self.assertNotIn("qemu-tool", RESTORE.read_text().replace(
+            '"qemu-tool gen-vm --bake"', ""))
+        for step in _steps(RESTORE) + _steps(SAVE):
+            self.assertNotIn("--cache-dir", step.get("run", ""))
 
-    def test_the_publish_lane_compacts_and_compiles_from_source(self):
+    def test_each_bake_is_handed_the_cache_and_nothing_else_is(self):
+        for path, (bake, _) in BAKES.items():
+            with self.subTest(file=path.name):
+                step = _step(path, bake)
+                self.assertIn("qemu-tool gen-vm --bake", step["run"])
+                self.assertIn('--cache-dir "$BAKE_CCACHE_DIR" $CACHE_REPLACE',
+                              step["run"])
+                # Both from the restore action: the directory it restored
+                # to, and the flag when the entry it restored was saved
+                # under another prefix or nothing was restored.
+                self.assertEqual(
+                    step["env"]["BAKE_CCACHE_DIR"],
+                    "${{ steps.bake-ccache.outputs.dir }}")
+                self.assertEqual(
+                    step["env"]["CACHE_REPLACE"],
+                    "${{ steps.bake-ccache.outputs.replace }}")
+                # gen-vm makes the directory; the step must not need to.
+                before = step["run"].split("qemu-tool")[0]
+                self.assertNotIn("mkdir", " ".join(
+                    line for line in before.splitlines()
+                    if "BAKE_CCACHE_DIR" in line))
+                # On the bake step only. The boots and the configure,
+                # firmware and test runs later in the job read the same
+                # playbook and must not be handed a cache, so the directory
+                # is in that step's environment and not the workflow's.
+                workflow = yaml.safe_load(path.read_text())
+                self.assertNotIn("BAKE_CCACHE_DIR", workflow.get("env", {}))
+                for other in _steps(path):
+                    where = other.get("name")
+                    if where == bake:
+                        continue
+                    self.assertNotIn("--cache-dir", other.get("run", ""), where)
+                    self.assertNotIn("CACHE", other.get("run", ""), where)
+                    self.assertNotIn("BAKE_CCACHE_DIR", other.get("env", {}),
+                                     where)
+                    self.assertNotIn("CACHE_REPLACE", other.get("env", {}),
+                                     where)
+
+    def test_a_bake_handed_no_directory_stops_before_gen_vm(self):
+        """An output that resolved to nothing must not be a quiet green run.
+
+        gen-vm takes --cache-dir "" for the current directory, so the bake
+        would cache into the checkout and the save action would find
+        nothing new where it looked. Run for real, against a stand-in for
+        qemu-tool, under sh: both jobs run in a container, where that is
+        the shell of a run step.
+        """
+        for path, (bake, _) in BAKES.items():
+            script = _step(path, bake)["run"]
+            # First, before anything is created or baked.
+            self.assertTrue(
+                script.lstrip().startswith("#") and
+                'if [ -z "$BAKE_CCACHE_DIR" ]; then' in
+                script.split("mkdir")[0], path.name)
+            for given, baked in (("", False), ("/var/cache/x", True)):
+                with self.subTest(file=path.name, dir=given), \
+                        tempfile.TemporaryDirectory() as tmp:
+                    tmp = Path(tmp)
+                    (tmp / "bin").mkdir()
+                    stub = tmp / "bin" / "qemu-tool"
+                    stub.write_text(
+                        f'#!/bin/sh\nprintf "%s\\n" "$@" > "{tmp}/argv"\n')
+                    stub.chmod(0o755)
+                    key = tmp / "key"
+                    key.write_text("")
+                    done = subprocess.run(
+                        ["sh", "-e", "-c", script], capture_output=True,
+                        text=True, cwd=tmp, env={
+                            "PATH": f"{tmp}/bin:{os.environ['PATH']}",
+                            "HOME": str(tmp), "VM_NAME": "guest",
+                            "VM_IMAGES_DIR": str(tmp / "images"),
+                            "GUEST_KEY": str(key), "CACHE_REPLACE": "",
+                            "BAKE_CCACHE_DIR": given})
+                    ran = (tmp / "argv").exists()
+                    self.assertIs(ran, baked, done.stdout + done.stderr)
+                    if baked:
+                        self.assertEqual(done.returncode, 0, done.stderr)
+                        argv = (tmp / "argv").read_text().splitlines()
+                        at = argv.index("--cache-dir")
+                        self.assertEqual(argv[at + 1], given)
+                    else:
+                        self.assertNotEqual(done.returncode, 0)
+                        self.assertIn("::error::", done.stdout)
+                        self.assertFalse((tmp / "images").exists())
+
+    def test_the_lane_bakes_uncompacted_and_the_publish_workflow_compacts(self):
+        lane = _step(LANE, BAKES[LANE][0])["run"]
+        self.assertIn("--no-compact", lane)
+        self.assertIn("--ssh-key-file", lane)
+        # What is published is compacted, and carries the key gen-vm
+        # generates for it: publish names neither flag, anywhere.
         text = PUBLISH.read_text()
-        self.assertIn("qemu-tool gen-vm --bake", text)
-        self.assertNotIn("--no-compact", text)
-        self.assertNotIn("ccache", text)
-        self.assertNotIn("cache-dir", text)
+        self.assertFalse("--no-compact" in text)
+        self.assertFalse("--ssh-key-file" in text)
+        self.assertIn('test -f "$GUEST_KEY"',
+                      _step(PUBLISH, BAKES[PUBLISH][0])["run"])
 
-    def test_the_lane_bakes_uncompacted_with_the_cache_on(self):
-        step = _step(self.BAKE)
-        self.assertIn("--no-compact", step["run"])
-        self.assertIn('--cache-dir "$BAKE_CCACHE_DIR" $CACHE_REPLACE',
-                      step["run"])
-        # The flag when the restored entry was saved under another prefix,
-        # or nothing was restored: the one signal that a small module's pin
-        # moved, which no miss count can see. Nothing otherwise.
+    def test_both_workflows_restore_before_the_bake_and_save_after_it(self):
+        for path, (bake, after) in BAKES.items():
+            with self.subTest(file=path.name):
+                at = _index(path, bake)
+                restore = _steps(path)[at - 1]
+                save = _steps(path)[at + 1]
+                # Adjacent, not merely ordered: the restore action ends by
+                # marking the start of the bake, and the save has to see the
+                # directory before anything else can write to it.
+                self.assertEqual(restore["name"], "Restore the compiler cache")
+                self.assertEqual(restore["id"], "bake-ccache")
+                self.assertEqual(
+                    restore["uses"], "./.github/actions/bake-ccache-restore")
+                self.assertNotIn("if", restore)
+                self.assertEqual(save["name"], "Save the compiler cache")
+                self.assertEqual(
+                    save["uses"], "./.github/actions/bake-ccache-save")
+                # After a failed bake too: the playbook saves before its
+                # last two plays.
+                self.assertEqual(save["if"], "always()")
+                self.assertEqual(save["with"], {
+                    "dir": "${{ steps.bake-ccache.outputs.dir }}",
+                    "key": "${{ steps.bake-ccache.outputs.key }}"})
+                self.assertLess(at + 1, _index(path, after))
+                # Once each. A second restore would move the marker.
+                uses = [s.get("uses", "") for s in _steps(path)]
+                self.assertEqual(
+                    sum("bake-ccache-restore" in u for u in uses), 1)
+                self.assertEqual(sum("bake-ccache-save" in u for u in uses), 1)
+
+    def test_the_two_workflows_cannot_compute_different_keys(self):
+        """One copy of the prefix, the directory and the save rule.
+
+        An entry is found by its key and by the path it was saved from, so
+        a workflow that named either for itself would stop sharing the
+        cache without anything failing.
+        """
+        for path, _ in BAKES.items():
+            with self.subTest(file=path.name):
+                (restore,) = [s for s in _steps(path)
+                              if "bake-ccache-restore" in s.get("uses", "")]
+                # The action has no inputs, and no caller may grow one.
+                self.assertNotIn("with", restore)
+                text = path.read_text()
+                # None of the cache's own machinery outside the actions.
+                for own in ("actions/cache/restore", "actions/cache/save",
+                            "bake-ccache-v", "cache-matched-key",
+                            "cache-primary-key", "/var/cache/bake-ccache",
+                            "restore-keys", "hashFiles"):
+                    self.assertFalse(own in text, own)
+        self.assertNotIn("inputs", yaml.safe_load(RESTORE.read_text()))
+        for path in self._everything():
+            text = path.read_text()
+            with self.subTest(file=path.name):
+                if path != RESTORE:
+                    self.assertFalse("bake-ccache-v" in text)
+                    self.assertFalse("actions/cache/restore" in text)
+                if path != SAVE:
+                    self.assertFalse("actions/cache/save" in text)
+
+    def test_the_restore_action_hands_back_what_the_bake_and_the_save_need(self):
+        outputs = yaml.safe_load(RESTORE.read_text())["outputs"]
         self.assertEqual(
-            step["env"]["CACHE_REPLACE"],
-            "${{ !startsWith(steps.bake-ccache.outputs.cache-matched-key, "
-            "steps.ccache-key.outputs.prefix) && '--cache-replace' || '' }}")
-        # gen-vm makes the directory; the step must not need to.
-        self.assertNotIn("BAKE_CCACHE_DIR", step["run"].split("qemu-tool")[0])
-        # On the bake step only: the configure run later in the job reads the
-        # same playbook and must not be handed a cache.
-        workflow = yaml.safe_load(LANE.read_text())
-        self.assertTrue(
-            os.path.isabs(workflow["env"]["BAKE_CCACHE_DIR"]),
-            "actions/cache and the container resolve ~ differently")
-        passers = [s["name"] for s in _steps()
-                   if "--cache-dir" in s.get("run", "")]
-        self.assertEqual(passers, [self.BAKE])
+            {name: out["value"] for name, out in outputs.items()}, {
+                "dir": "${{ steps.ccache-key.outputs.dir }}",
+                "key": "${{ steps.bake-ccache.outputs.cache-primary-key }}",
+                "prefix": "${{ steps.ccache-key.outputs.prefix }}",
+                "matched-key":
+                    "${{ steps.bake-ccache.outputs.cache-matched-key }}",
+                # The flag when the restored entry was saved under another
+                # prefix, or nothing was restored: the one signal that a
+                # small module's pin moved, which no miss count can see.
+                # Nothing otherwise.
+                "replace":
+                    "${{ !startsWith(steps.bake-ccache.outputs."
+                    "cache-matched-key, steps.ccache-key.outputs.prefix) "
+                    "&& '--cache-replace' || '' }}",
+            })
+        inputs = yaml.safe_load(SAVE.read_text())["inputs"]
+        self.assertEqual(set(inputs), {"dir", "key"})
+        for name in inputs:
+            self.assertIs(inputs[name]["required"], True)
 
     def test_restore_and_save_name_the_directory_the_bake_is_given(self):
-        restore = _step("Restore the compiler cache")
-        save = _step("Save the compiler cache")
+        restore = _step(RESTORE, "Restore the compiler cache")
+        save = _step(SAVE, "Save the compiler cache")
+        self.assertEqual(restore["id"], "bake-ccache")
         self.assertEqual(restore["uses"], "actions/cache/restore@v4")
         self.assertEqual(save["uses"], "actions/cache/save@v4")
-        for step in (restore, save):
-            self.assertEqual(step["with"]["path"], "${{ env.BAKE_CCACHE_DIR }}")
+        # The directory the key step names, which is the one the action
+        # hands the bake; the save is given it back by the workflow.
+        self.assertEqual(restore["with"]["path"],
+                         "${{ steps.ccache-key.outputs.dir }}")
+        self.assertEqual(save["with"]["path"], "${{ inputs.dir }}")
         # A cache entry cannot be overwritten, so a key that repeats would
         # freeze the first cache saved under it.
-        self.assertIn("${{ github.run_id }}", restore["with"]["key"])
         self.assertEqual(
-            save["with"]["key"],
-            "${{ steps.bake-ccache.outputs.cache-primary-key }}")
+            restore["with"]["key"],
+            "${{ steps.ccache-key.outputs.prefix }}-${{ github.run_id }}-"
+            "${{ github.run_attempt }}")
+        self.assertEqual(save["with"]["key"], "${{ inputs.key }}")
         fallbacks = restore["with"]["restore-keys"].splitlines()
         self.assertEqual(
             fallbacks,
@@ -642,58 +920,149 @@ class Workflows(unittest.TestCase):
 
     def test_the_cache_action_is_the_version_the_other_lanes_pin(self):
         pinned = set()
-        for path in sorted(WORKFLOWS.glob("*.yml")) + sorted(
-                (REPO / ".github/actions").glob("*/action.yml")):
+        for path in self._everything():
             pinned |= set(re.findall(
                 r"uses: actions/cache(?:/\w+)?@(\S+)", path.read_text()))
         self.assertEqual(pinned, {"v4"})
 
     def test_the_steps_run_in_the_order_the_cache_needs(self):
-        order = [_index(n) for n in (
-            "Name the compiler cache", "Restore the compiler cache", self.BAKE,
-            "Report the compiler cache", "Save the compiler cache",
-            "Render the test stack")]
-        self.assertEqual(order, sorted(order))
-        # Both run after a failed bake: the playbook saves before its last
-        # two plays.
-        self.assertEqual(_step("Report the compiler cache")["if"], "always()")
         self.assertEqual(
-            _step("Save the compiler cache")["if"],
+            [s["name"] for s in _steps(RESTORE)],
+            ["Name the compiler cache", "Restore the compiler cache",
+             "Mark the start of the bake"])
+        self.assertEqual(
+            [s["name"] for s in _steps(SAVE)],
+            ["Report the compiler cache", "Save the compiler cache"])
+        self.assertEqual(_step(RESTORE, "Name the compiler cache")["id"],
+                         "ccache-key")
+        for step in _steps(RESTORE):
+            self.assertNotIn("if", step)
+        # Both run after a failed bake: the playbook saves before its last
+        # two plays. Said on the steps as well as on the calling step, so
+        # it holds however a composite action's default condition is read.
+        report = _step(SAVE, "Report the compiler cache")
+        self.assertEqual(report["id"], "ccache-report")
+        self.assertEqual(report["if"], "always()")
+        self.assertEqual(
+            _step(SAVE, "Save the compiler cache")["if"],
             "always() && steps.ccache-report.outputs.new == 'true'")
+        # A composite run step has no default shell.
+        for path in (RESTORE, SAVE):
+            for step in _steps(path):
+                if "run" in step:
+                    self.assertEqual(step["shell"], "bash", step["name"])
+
+    def test_both_workflows_run_when_either_action_changes(self):
+        """The lane to test the change; the publish workflow to save.
+
+        The actions hold the key and the directory. A merge that moves
+        either leaves main with no entry a pull request can find, and only
+        a run on main can save one, so the publish workflow has to follow
+        such a merge unasked.
+        """
+        for workflow, event in ((LANE, "pull_request"), (PUBLISH, "push")):
+            on = yaml.safe_load(workflow.read_text())[True]
+            for path in (RESTORE, SAVE):
+                with self.subTest(workflow=workflow.name, action=path.parent.name):
+                    self.assertIn(str(path.relative_to(REPO)),
+                                  on[event]["paths"])
+        self.assertEqual(
+            yaml.safe_load(PUBLISH.read_text())[True]["push"]["branches"],
+            ["main"])
 
     def test_the_key_step_finds_all_four_pins(self):
         """Run for real: a grep that matches nothing still exits 0 in a pipe."""
+        script = _step(RESTORE, "Name the compiler cache")["run"]
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "output"
-            done = subprocess.run(
-                ["sh", "-c", _step("Name the compiler cache")["run"]],
-                cwd=REPO, env={**os.environ, "GITHUB_OUTPUT": str(out)},
-                capture_output=True, text=True)
+            done = _bash(script, cwd=REPO,
+                         env={**os.environ, "GITHUB_OUTPUT": str(out)})
             self.assertEqual(done.returncode, 0, done.stderr)
-            self.assertRegex(
-                out.read_text(), r"^prefix=bake-ccache-v1-[0-9a-f]{16}\n$")
+            said = dict(line.split("=", 1)
+                        for line in out.read_text().splitlines())
+        self.assertEqual(set(said), {"prefix", "dir"})
+        self.assertRegex(said["prefix"], r"^bake-ccache-v1-[0-9a-f]{16}$")
+        self.assertTrue(
+            os.path.isabs(said["dir"]),
+            "actions/cache and the container resolve ~ differently")
+        # An entry is matched on the path it was saved from as well as on
+        # its key, so moving this starts every reader cold exactly as a
+        # change to "v1" does, and leaves the old entries unreachable.
+        self.assertEqual(said["dir"], "/var/cache/bake-ccache")
+        # Every input of the prefix is named in the script, so the two
+        # workflows hash the same things whatever else differs between them.
+        for source in ("ansible/playbooks/vm-rocm-golden.yml",
+                       "ansible/requirements.yml",
+                       "rocjitsu_setup/files/amdgpu-emu-patches.py",
+                       "ionic_kernel_pin", "ernic_source_pin",
+                       "sdxi_source_pin", "rocm_setup_amdgpu_driver_version"):
+            self.assertIn(source, script)
+        # And nothing that differs between them: no ref, event or workflow.
+        self.assertNotIn("${{", script)
+        self.assertNotIn("GITHUB_REF", script)
+        self.assertNotIn("GITHUB_WORKFLOW", script)
+        self.assertNotIn("GITHUB_EVENT", script)
 
-    def _report(self, tmp, prepare):
+    def test_the_key_step_fails_when_a_pin_has_dropped_out(self):
+        script = _step(RESTORE, "Name the compiler cache")["run"]
+        with tempfile.TemporaryDirectory() as tmp:
+            for rel in ("ansible/playbooks/vm-rocm-golden.yml",
+                        "ansible/requirements.yml",
+                        "ansible/playbooks/roles/rocjitsu_setup/files/"
+                        "amdgpu-emu-patches.py"):
+                dest = Path(tmp) / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                text = (REPO / rel).read_text()
+                dest.write_text(text.replace("sdxi_source_pin: &", "sdxi_pin: &"))
+            out = Path(tmp) / "output"
+            done = _bash(script, cwd=tmp,
+                         env={**os.environ, "GITHUB_OUTPUT": str(out)})
+            self.assertNotEqual(done.returncode, 0)
+            self.assertFalse(out.exists() and "prefix=" in out.read_text())
+
+    def _report(self, tmp, prepare, env=None, status=0):
         cache = Path(tmp) / "cache"
         cache.mkdir()
         out = Path(tmp) / "output"
         runner = Path(tmp) / "runner"
         runner.mkdir()
         prepare(cache, runner / "bake-started")
-        done = subprocess.run(
-            ["sh", "-c", _step("Report the compiler cache")["run"]],
-            env={**os.environ, "BAKE_CCACHE_DIR": str(cache),
+        step = _step(SAVE, "Report the compiler cache")
+        # The directory reaches the script through the step's environment,
+        # from the input, and not by interpolation into the script.
+        self.assertEqual(step["env"], {
+            "BAKE_CCACHE_DIR": "${{ inputs.dir }}",
+            "BAKE_CCACHE_KEY": "${{ inputs.key }}"})
+        self.assertNotIn("${{", step["run"])
+        given = {"BAKE_CCACHE_DIR": str(cache),
+                 "BAKE_CCACHE_KEY": "bake-ccache-v1-0123456789abcdef-1-1"}
+        given.update(env or {})
+        done = _bash(
+            step["run"],
+            env={**os.environ, **given,
                  "RUNNER_TEMP": str(runner),
                  "GITHUB_OUTPUT": str(out),
-                 "GITHUB_STEP_SUMMARY": str(Path(tmp) / "summary")},
-            capture_output=True, text=True)
-        self.assertEqual(done.returncode, 0, done.stderr)
-        return done.stdout, out.read_text() if out.exists() else ""
+                 "GITHUB_STEP_SUMMARY": str(Path(tmp) / "summary")})
+        self.assertEqual(done.returncode, status, done.stdout + done.stderr)
+        summary = Path(tmp) / "summary"
+        return (done.stdout, out.read_text() if out.exists() else "",
+                summary.read_text() if summary.exists() else "")
 
     def test_the_marker_is_outside_the_directory_that_is_cached(self):
-        bake = _step(self.BAKE)["run"]
-        self.assertIn('touch "$RUNNER_TEMP/bake-started"', bake)
-        self.assertNotIn("CCACHE_DIR/.bake-started", LANE.read_text())
+        mark = _steps(RESTORE)[-1]
+        self.assertEqual(mark["name"], "Mark the start of the bake")
+        self.assertEqual(mark["run"].strip(), f"touch {self.MARKER}")
+        # The save action dates the bake's files against the same file.
+        report = _step(SAVE, "Report the compiler cache")["run"]
+        self.assertIn(f"started={self.MARKER}\n", report)
+        for path in (RESTORE, SAVE, LANE, PUBLISH):
+            text = path.read_text()
+            self.assertNotIn("CCACHE_DIR/.bake-started", text)
+            self.assertNotIn("/var/cache/bake-ccache/", text)
+        # Touched in one place. A workflow that touched it again after the
+        # bake would make everything the bake wrote look restored.
+        for path in (LANE, PUBLISH):
+            self.assertNotIn("bake-started", path.read_text())
 
     def test_a_restored_cache_the_bake_did_not_add_to_is_not_saved_again(self):
         def prepare(cache, started):
@@ -703,19 +1072,21 @@ class Workflows(unittest.TestCase):
                 path.write_text("stale statistics\n")
                 os.utime(path, (now - age, now - age))
         with tempfile.TemporaryDirectory() as tmp:
-            stdout, output = self._report(tmp, prepare)
+            stdout, output, summary = self._report(tmp, prepare)
         self.assertEqual(output, "")
         self.assertNotIn("stale statistics", stdout)
+        self.assertEqual(summary, "")
 
     def test_a_restored_cache_is_not_saved_when_the_bake_never_started(self):
-        """Cancelled between the restore and the bake: there is no marker."""
+        """Cancelled before the restore action finished: there is no marker."""
         def prepare(cache, started):
             for name in ("ccache.tar", "stats.txt"):
                 (cache / name).write_text("stale statistics\n")
         with tempfile.TemporaryDirectory() as tmp:
-            stdout, output = self._report(tmp, prepare)
+            stdout, output, summary = self._report(tmp, prepare)
         self.assertEqual(output, "")
         self.assertNotIn("stale statistics", stdout)
+        self.assertEqual(summary, "")
 
     def test_a_cache_the_bake_wrote_is_reported_and_saved(self):
         def prepare(cache, started):
@@ -725,10 +1096,46 @@ class Workflows(unittest.TestCase):
             (cache / "stats.txt").write_text("Hits: 25 / 25\n")
             (cache / "ccache.tar").write_text("objects\n")
         with tempfile.TemporaryDirectory() as tmp:
-            stdout, output = self._report(tmp, prepare)
+            stdout, output, summary = self._report(tmp, prepare)
         self.assertEqual(output, "new=true\n")
         self.assertIn("Hits: 25 / 25", stdout)
         self.assertNotIn("::warning::", stdout)
+        # In the step summary of whichever workflow ran the bake.
+        self.assertIn("### Compiler cache", summary)
+        self.assertIn("Hits: 25 / 25", summary)
+
+    def test_an_empty_directory_or_key_fails_the_save_once_the_bake_ran(self):
+        """A composite action's "required" is not enforced by the runner.
+
+        With the directory empty the script would test /stats.txt and
+        /ccache.tar, find neither newer than the marker and report that
+        there was nothing to save, in a green run.
+        """
+        def baked(cache, started):
+            now = time.time()
+            started.write_text("")
+            os.utime(started, (now - 300, now - 300))
+            (cache / "stats.txt").write_text("Hits: 25 / 25\n")
+            (cache / "ccache.tar").write_text("objects\n")
+        for missing in ("BAKE_CCACHE_DIR", "BAKE_CCACHE_KEY"):
+            with self.subTest(empty=missing), \
+                    tempfile.TemporaryDirectory() as tmp:
+                stdout, output, summary = self._report(
+                    tmp, baked, env={missing: ""}, status=1)
+                self.assertIn("::error::", stdout)
+                self.assertEqual(output, "")
+                self.assertEqual(summary, "")
+                self.assertNotIn("nothing to save", stdout)
+
+        # With no marker the restore action never finished and handed
+        # nothing back: that is a run with nothing to save, not an error.
+        def never(cache, started):
+            pass
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout, output, _ = self._report(
+                tmp, never, env={"BAKE_CCACHE_DIR": "", "BAKE_CCACHE_KEY": ""})
+        self.assertEqual(output, "")
+        self.assertNotIn("::error::", stdout)
 
     def test_a_hook_that_never_fired_is_a_warning_not_a_quiet_zero(self):
         save = (ROLE / "tasks/save.yml").read_text()
@@ -742,9 +1149,53 @@ class Workflows(unittest.TestCase):
             (cache / "stats.txt").write_text(
                 f"Cacheable calls: 0\n{opening} in this bake.\n")
         with tempfile.TemporaryDirectory() as tmp:
-            stdout, output = self._report(tmp, prepare)
+            stdout, output, _ = self._report(tmp, prepare)
         self.assertEqual(output, "")
         self.assertIn("::warning::", stdout)
+
+    def test_the_publish_workflow_checks_the_image_before_it_pushes(self):
+        """The check is what stands between a cached bake and a registry.
+
+        The playbook takes ccache out of the guest; this is the proof that
+        it did, on the booted image, and it has to be able to stop the push.
+        """
+        names = [s.get("name") for s in _steps(PUBLISH)]
+        bake = names.index(BAKES[PUBLISH][0])
+        check = names.index("Run the rocm-golden guest check")
+        push = names.index("Publish the qcow2")
+        self.assertLess(bake, check)
+        self.assertLess(check, names.index("Log in to Docker Hub"))
+        self.assertLess(check, push)
+        step = _steps(PUBLISH)[check]
+        # The whole script, and not merely that it names the check: the
+        # step's status is the remote shell's, which is the check's, and an
+        # "|| true", a "set +e" or a later command would each swallow it
+        # with every other assertion here still holding.
+        self.assertEqual(
+            step["run"].strip(),
+            "{ echo 'set -eu'; cat qemu/checks/rocm-golden.sh; } |\n"
+            '  ssh $SSH_OPTS -p 2222 ubuntu@localhost "bash -s"')
+        self.assertNotIn("shell", step)
+        # Fatal, and not skippable: no condition, no continue-on-error.
+        self.assertNotIn("if", step)
+        self.assertNotIn("continue-on-error", step)
+        # And the push cannot run past a failed step: it has no condition
+        # of its own, so the default, success(), applies. The job has no
+        # continue-on-error either.
+        self.assertNotIn("if", _steps(PUBLISH)[push])
+        self.assertIn("qemu-tool publish-qcow", _steps(PUBLISH)[push]["run"])
+        (job,) = yaml.safe_load(PUBLISH.read_text())["jobs"].values()
+        self.assertNotIn("continue-on-error", job)
+        # No step between the bake and the push is allowed to fail quietly,
+        # the check least of all.
+        for between in _steps(PUBLISH)[bake:push]:
+            self.assertNotIn("continue-on-error", between, between.get("name"))
+        # The image the check booted is an overlay of the one that is
+        # pushed, which the workflow proves was not written to since.
+        self.assertLess(check, names.index(
+            "Check the baked base was not written to"))
+        self.assertLess(names.index(
+            "Check the baked base was not written to"), push)
 
     def test_the_manifest_comment_describes_what_exists(self):
         manifest = (REPO / "qemu/packages.d/rocm-golden.txt").read_text()

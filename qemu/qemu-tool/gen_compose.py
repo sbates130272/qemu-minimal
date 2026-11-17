@@ -31,6 +31,7 @@ from typing import Any
 from .compose import _DEFAULT_STACK, _STACKS
 from .fleet_xml import FleetConfig, FleetXml
 from .resources import stack_fleet
+from .vm_artifact import VM_COMMIT_TAG, VM_DATED_TAG
 
 # An element present but empty means "the default", not "the empty string".
 _FIELD_DEFAULTS = {f.name: f.default for f in dataclasses.fields(FleetConfig)}
@@ -287,31 +288,113 @@ def _warn_if_gpu_without_root_port(cfg: FleetConfig) -> None:
     )
 
 
+# A tag somebody meant as publish-qcow's dated one: digits, ".g", hex. The
+# exact shape is VM_DATED_TAG; this is every near miss of it.
+_NEAR_DATED_TAG = re.compile(r"[0-9]+\.g[0-9a-f]+", re.IGNORECASE)
+
+
+def _image_repository(ref: str) -> str:
+    """`ref` without its tag or digest, and without Docker Hub's default host."""
+    head, sep, name = ref.rpartition("/")
+    name = name.split("@", 1)[0].split(":", 1)[0]
+    repository = f"{head}{sep}{name}"
+    for host in ("docker.io/", "index.docker.io/"):
+        if repository.startswith(host):
+            return repository[len(host):]
+    return repository
+
+
+def _backing_ref_kind(ref: str, publish_ref: str = "") -> str:
+    """How <backing-ref> pins the guest image it names.
+
+    "none"       empty: nothing is pulled.
+    "digest"     name@sha256:..., which cannot move.
+    "rolling"    no tag, "latest" or qm.<sha7>: a name publish-qcow moves.
+    "published"  exactly <YYYYMMDD>.g<sha7>, publish-qcow's dated tag.
+    "malformed"  a tag that can only be a mistake for one of those: a near
+                 miss of the dated tag (a digit short, a hex digit over,
+                 upper case), "latest" in another case, qm. followed by
+                 anything but seven hex digits -- and, when `publish_ref` is
+                 known and names this repository, every tag that is not the
+                 dated one. publish-qcow pushes nothing else there, so a
+                 tag of any other shape in it names no guest a fleet pins.
+    "other"      anything else, a batesste-ci-images qcow2 tag
+                 (<stamp>-vm....-qcow2) and a local build among them.
+
+    Without `publish_ref` a free-form tag ("stable") in the publish
+    repository cannot be told from a local build under test and is "other".
+    Only rocm-golden.xml sets <publish-ref>.
+    """
+    if not ref:
+        return "none"
+    # The last path component: a registry may carry a port.
+    name = ref.rsplit("/", 1)[-1]
+    if "@" in name:
+        return "digest"
+    if ":" not in name:
+        return "rolling"
+    tag = name.rsplit(":", 1)[1]
+    if tag == "latest" or VM_COMMIT_TAG.fullmatch(tag):
+        return "rolling"
+    if VM_DATED_TAG.fullmatch(tag):
+        return "published"
+    low = tag.lower()
+    if low == "latest" or low.startswith("qm.") or _NEAR_DATED_TAG.fullmatch(tag):
+        return "malformed"
+    if publish_ref and _image_repository(ref) == _image_repository(publish_ref):
+        return "malformed"
+    return "other"
+
+
 def _check_image_coherence(cfg: FleetConfig) -> None:
     """Refuse an image set that cannot have been built together.
 
-    batesste-ci-images tags carry a shared <date>.<ci-sha> build stamp across
-    the containers and the qcow2, so this is a string comparison. It is worth
+    batesste-ci-images tags carry a shared <date>.<ci-sha> build stamp, so
+    for the three device-side images this is a string comparison. It is worth
     doing because the failure it prevents does not present as a version
-    problem: a guest driver and a host server from different SHAs wedge at the
-    vfio-user/DSR boundary, surfacing as the -ETIMEDOUT and "Failed to register
-    ibdev" symptoms in AGENTS.md. Across a whole fleet that is an expensive
-    afternoon.
+    problem: QEMU, the ernic and rocjitsu speak vfio-user to each other, and
+    a pair from different builds wedges at the vfio-user/DSR boundary,
+    surfacing as the -ETIMEDOUT and "Failed to register ibdev" symptoms in
+    AGENTS.md. Across a whole fleet that is an expensive afternoon.
+
+    <backing-ref> is held to a different rule, by what its tag says it is
+    (_backing_ref_kind):
+
+    A published guest, tagged exactly <YYYYMMDD>.g<sha7>. qemu-minimal bakes
+    and publishes the guest itself, and that stamp is the qemu-minimal commit
+    it was baked from, on the day it was pushed. It is not a
+    batesste-ci-images build stamp and never equals one, so it is not
+    compared with the servers'. What ties that guest to the servers is the
+    pins in vm-rocm-golden.yml AT that commit, which an installed package
+    cannot read; tests/test_playbook_pins.py reads them out of git and
+    compares them with the server images the fleet files name. What this
+    function can and does hold is that the ref is pinned at all:
+
+    A rolling ref -- no tag, "latest", or qm.<sha7> -- is refused. gen-vm
+    re-pulls a backing image only when the text of the ref changes, so a tag
+    that moves leaves every host on whichever image it happened to pull
+    first, and the pin test above has no commit to read. A digest is
+    accepted: it cannot move.
+
+    A malformed tag is refused too, where the old code warned that the
+    image had "no build stamp" and rendered: a near miss of the dated tag,
+    "latest" in another case, qm. with anything but seven hex digits, and --
+    in the repository <publish-ref> names, when a layer sets it -- any tag
+    but the dated one. Each can only be a mistake for a published guest.
+
+    Any other tag keeps the old rule. A batesste-ci-images qcow2
+    (<stamp>-vm....-qcow2) was built in the same run as the containers, so a
+    local fleet still pinning one must share their stamp, and a tag with no
+    stamp is warned about and left out, like a server image with none.
 
     <image-allow-guest-lag> excuses <backing-ref> from the stamp
-    comparison, and nothing else. It exists because the qcow2 is published by
-    a slower job than the containers, so there are days when the newest
-    coherent set does not include the fix you are trying to test -- and the
-    qcow2 is the one image in the set that provably does not carry the moving
-    parts. ubuntu-qcow2-gen's provision/ionic.sh installs no driver and no
-    rdma-core; it asserts the distro rdma-core version and records it. Both
-    halves of the RDMA stack are built inside the guest by ernic_guest_setup
-    from the collection pin, which is not in this comparison at all.
-
-    The three that genuinely must match are not excusable this way: QEMU,
-    the ernic and rocjitsu speak vfio-user to each other, and that is the
-    boundary the wedge happens at. Set it per node, in that node's overlay,
-    with a note saying what you are waiting for.
+    comparison, and nothing else: not from the rolling-tag refusal or the
+    malformed-tag one, and not
+    the three server images, which genuinely must match. For a published
+    guest there is no stamp comparison to excuse; there it is the waiver
+    tests/test_playbook_pins.py asks for while the fleet's servers have
+    moved to pins no published guest was baked at yet. Either way the render
+    warns, every time, that the guest may be older than its servers.
 
     <sdxi-image> is not in the stamp comparison. Its pair is the guest's
     driver, by commit: the sdxi.<sha> in its tag against sdxi_source_pin in
@@ -322,7 +405,6 @@ def _check_image_coherence(cfg: FleetConfig) -> None:
         "<qemu-ref>": cfg.qemu_ref,
         "<ernic-ref>": cfg.ernic_ref,
         "<rocjitsu-ref>": cfg.rocjitsu_ref,
-        "<backing-ref>": cfg.backing_ref,
     }
     # An empty ref renders `image: ""`, which only compose refuses, later.
     for key in ("<qemu-ref>", "<ernic-ref>", "<rocjitsu-ref>"):
@@ -333,13 +415,43 @@ def _check_image_coherence(cfg: FleetConfig) -> None:
             "Error: <sdxi-per-vm> is non-zero but <sdxi-image> is empty; "
             "name the SDXI server image to run."
         )
+    backing = _backing_ref_kind(cfg.backing_ref, cfg.publish_ref)
+    if backing == "malformed":
+        sys.exit(
+            "Error: <backing-ref> does not name a published guest: "
+            f"{cfg.backing_ref}\n"
+            "  publish-qcow pushes a guest under its dated tag, "
+            "<YYYYMMDD>.g<sha7> -- eight digits,\n"
+            "  \".g\", seven lower-case hex digits and nothing after them "
+            "-- and that is the tag a fleet\n"
+            "  names. This one is not that shape"
+            + (", in the repository <publish-ref> names" if cfg.publish_ref
+               and _image_repository(cfg.backing_ref)
+               == _image_repository(cfg.publish_ref) else "")
+            + ". Name the dated tag,\n"
+            "  or a digest."
+        )
+    if backing == "rolling":
+        sys.exit(
+            f"Error: <backing-ref> names a tag that moves: {cfg.backing_ref}\n"
+            "  A fleet pins the guest image it pulls. gen-vm pulls again "
+            "only when the ref changes,\n"
+            "  so a moved tag leaves each host on whichever image it pulled "
+            "first, and nothing can\n"
+            "  say which commit that guest was baked from. Name the dated "
+            "tag, <YYYYMMDD>.g<sha7>,\n"
+            "  or a digest."
+        )
+    if backing == "other":
+        refs["<backing-ref>"] = cfg.backing_ref
     if cfg.image_allow_guest_lag:
-        del refs["<backing-ref>"]
+        refs.pop("<backing-ref>", None)
         print(
-            "Warning: <image-allow-guest-lag> is set -- <backing-ref> is "
-            "excluded from the build-stamp check.\n"
-            "  The guest image may be older than the device servers. Verify "
-            "by hand that it is old in ways you do not care about.",
+            "Warning: <image-allow-guest-lag> is set -- the guest image "
+            "<backing-ref> names is not held\n"
+            "  to the device servers' build. The guest image may be older "
+            "than the device servers.\n"
+            "  Verify by hand that it is old in ways you do not care about.",
             file=sys.stderr,
         )
     stamps: dict[str, str] = {}
@@ -377,6 +489,12 @@ def _check_image_coherence(cfg: FleetConfig) -> None:
         sys.exit(
             "Error: image tags do not share one build stamp:\n" + detail +
             "\nAll of them must come from the same batesste-ci-images build."
+            + ("\nA guest published by publish-qcow is named by its dated "
+               "tag alone, <YYYYMMDD>.g<sha7>,\nwith nothing after it, and "
+               "is not compared with the servers."
+               if stamps.get("<backing-ref>") not in
+               {v for k, v in stamps.items() if k != "<backing-ref>"}
+               | {None} else "")
         )
 
     distinct_vfu = set(vfu.values())
@@ -1404,29 +1522,17 @@ def render_prometheus(spec: dict[str, Any], digest: str) -> str:
         out.append(f'          vm: "{vm["n"]}"')
         out.append(f'          vm_name: "{vm["name"]}"')
     out.append("")
-    out.append("  # AMD GPU metrics exporter inside each guest. Same shape as")
-    out.append("  # fleet-node: the target is the qemu CONTAINER and")
-    out.append("  # <vm-extra-hostfwd> tcp::9488-:9488 forwards the port through")
-    out.append("  # to amd-metrics-exporter running in the guest.")
-    out.append("  - job_name: amd-gpu")
-    out.append("    static_configs:")
-    for vm in spec["vms"]:
-        out.append(f"      - targets: [\"{vm['qemu_addr']}:9488\"]")
-        out.append("        labels:")
-        out.append(f'          vm: "{vm["n"]}"')
-        out.append(f'          vm_name: "{vm["name"]}"')
-    out.append("")
-    out.append("  # hsa-snoop: HSA/AQL queue snooper (port 9490). Exposes per-kernel")
-    out.append("  # launch counts, duration histograms and active queue counts via")
-    out.append("  # kprobe on kfd_ioctl_create_queue. Same hostfwd pattern as fleet-node.")
-    out.append("  - job_name: hsa-snoop")
-    out.append("    static_configs:")
-    for vm in spec["vms"]:
-        out.append(f"      - targets: [\"{vm['qemu_addr']}:9490\"]")
-        out.append("        labels:")
-        out.append(f'          vm: "{vm["n"]}"')
-        out.append(f'          vm_name: "{vm["name"]}"')
-    out.append("")
+    # No amd-gpu (:9488) and no hsa-snoop (:9490) job. Both were rendered
+    # here for every stack, and both were down in every guest: every GPU this
+    # generator attaches is rocjitsu's, and neither exporter can run against
+    # it. amd-metrics-exporter's gpuagent assertion-fails where amdsmi
+    # answers NOT_SUPPORTED and leaves /dev/kfd busy, so the guest image does
+    # not install it. hsa-snoop's collector reads each queue's ring with
+    # process_vm_readv, which its own packaging says deadlocks GPU dispatch
+    # on a vfio-user device, and it holds trace_pipe for as long as it runs,
+    # so the image disables it. The GPU's presence comes through fleet-node
+    # instead: the guest writes amdgpu_kfd_present and amdgpu_devices_total
+    # for node_exporter's textfile collector.
     out.append("  # RDMA metrics exporter inside each guest (port 9879).")
     out.append("  # Reads /sys/class/infiniband/*/counters; on ionic_rdma")
     out.append("  # these are empty today, but the target is wired so that")

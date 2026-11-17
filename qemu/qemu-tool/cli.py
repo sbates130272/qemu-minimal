@@ -360,8 +360,9 @@ def _add_quick_start(sub: argparse._SubParsersAction) -> None:
         help=(
             "Delete the guest overlay and NVMe qcow2 files before starting, "
             "so the guests boot from a fresh overlay of the backing image. "
-            "The backing file itself is kept. Only meaningful with the up or "
-            "all verbs."
+            "The backing file itself is kept. Refused, with nothing "
+            "removed, while a guest of the stack is running. Only meaningful "
+            "with the up or all verbs."
         ),
     )
     g.add_argument(
@@ -370,7 +371,12 @@ def _add_quick_start(sub: argparse._SubParsersAction) -> None:
     )
     g.add_argument(
         "--yes", "-y", action="store_true",
-        help="Take the default answer to every prompt without asking.",
+        help=(
+            "Take the default answer to every prompt without asking. Every "
+            "default is to go ahead but one: replacing guest disks made on "
+            "an image the settings no longer name defaults to no, and "
+            "--clean-overlays is how to say yes to it."
+        ),
     )
 
     g = p.add_argument_group("where things go")

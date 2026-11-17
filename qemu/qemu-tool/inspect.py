@@ -913,8 +913,10 @@ def _ga_run(path, timeout=2.0, budget=8.0):
     grab("/sys/module/ionic/initstate")
     grab("/sys/module/ionic_rdma/initstate")
     # NIC device uevent and PCI ID attributes. Try the udev-renamed names first,
-    # then every interface the agent already enumerated -- so a NIC whose udev
-    # rule hasn't run (published qcow2 ships none) is still detected by PCI ID.
+    # then every interface the agent already enumerated -- so a NIC the udev
+    # rename did not reach is still detected by PCI ID: a guest with no rules
+    # at all, or the second to eighth NIC under the `NAME="rocm-ernic%n"`
+    # rule the published qcow2 carries, which can name one NIC per guest.
     _probed_nics: set[str] = set()
     for _nic in ("rocm-ernic0", "rocmernic0", "rocm-ernic1", "rocmernic1"):
         _probed_nics.add(_nic)

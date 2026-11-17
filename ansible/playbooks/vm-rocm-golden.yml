@@ -26,10 +26,11 @@
 # kernel modules are about fourteen minutes of a bake, and the inputs of
 # those modules move only when a pin does. "qemu-tool gen-vm --bake
 # --cache-dir DIR" passes it, as does a fleet file's <bake-cache-dir>. It is
-# undefined by default and a published image is never built with it. The
-# bake_ccache role says how. bake_cache_replace=true beside it (gen-vm's
-# --cache-replace) says the cache handed over was saved for other pins and is
-# to be saved again.
+# undefined by default, which is a bake by hand; the two workflows that bake
+# this guest, the playbook-test lane and the publish workflow, both pass it,
+# so a published image is built with it. The bake_ccache role says how.
+# bake_cache_replace=true beside it (gen-vm's --cache-replace) says the cache
+# handed over was saved for other pins and is to be saved again.
 #
 # Order is load-bearing in three places, each noted where it applies: the
 # mainline kernel before rocm_setup, the amdgpu rebuild after it, and the
@@ -583,12 +584,15 @@
         - "{{ ionic_p4_guest_source_root }}"
         - /var/tmp/ernic-p4-src.tar.gz
 
+    # The role's own file, so no rocm_ernic_setup_udev_rules_src here. This
+    # used to name rocm-ernic's copy at ernic_source_pin, whose Ethernet rule
+    # is NAME="rocm-ernic%n": %n is 0 for every emulated NIC, so a guest with
+    # eight of them had one renamed. The play that records the bake checks
+    # that this file is the one the image ends up with.
     - name: Install the rocm-ernic udev naming rules
       ansible.builtin.include_role:
         name: rocm_ernic_setup
         tasks_from: naming
-      vars:
-        rocm_ernic_setup_udev_rules_src: "{{ ernic_source_dir }}/udev/99-rocm-ernic.rules"
 
     # /dev/ernic-p4 is root-only as the driver leaves it. This image opens
     # it to one group and puts the baked account in it, so the P4 benchmark
@@ -658,7 +662,9 @@
     # The removal is not gated. A bake that failed with the hook in place can
     # be finished by a rerun that was handed no cache, and that image must
     # not keep a compiler that is really ccache. On a guest that never had
-    # the hook, which is every published bake, it changes nothing.
+    # the hook, which is a bake given no cache, it changes nothing. A
+    # published bake is given one, and this is what takes the hook back out
+    # of the image before it is pushed.
     - name: Save the compiler cache, then take ccache out of the guest
       block:
         - name: Save the compiler cache
@@ -727,6 +733,13 @@
       ansible.builtin.stat:
         path: /lib/firmware/amdgpu/ip_discovery.bin
       register: golden_ip_discovery
+
+    # After every play that could have written them: ernic_guest_setup copies
+    # rocm-ernic's own rules when it gets as far as loading the driver.
+    - name: Check the ernic naming rules are this repository's
+      ansible.builtin.include_role:
+        name: rocm_ernic_setup
+        tasks_from: naming_check
 
     - name: Collect the facts for the stamp
       ansible.builtin.set_fact:
@@ -860,6 +873,20 @@
         tasks_from: source_clone
   roles:
     - role: sbates130272.rocm_ernic.ernic_guest_setup
+  # The role copies rocm-ernic's own 99-rocm-ernic.rules over the image's,
+  # unconditionally (driver_common.yml), and its Ethernet rule renames one NIC
+  # per guest. On a golden guest that copy renames nothing during the run:
+  # the modules are loaded and the devices named before it starts, and the
+  # role's udevadm trigger sends "change" events, which rules matching
+  # ACTION=="add" ignore. It is what the next boot would read, though, so
+  # this repository's file goes back last. A run that fails inside the role
+  # never gets here; run it again, or vm-quickstart.yml, which installs the
+  # same file.
+  post_tasks:
+    - name: Put this repository's ernic naming rules back
+      ansible.builtin.include_role:
+        name: rocm_ernic_setup
+        tasks_from: naming
 
 # Needs the rocjitsu vfio-user server running, so it is not part of a bake.
 - name: Run GPU workloads on a live guest

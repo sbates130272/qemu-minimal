@@ -46,6 +46,7 @@ import urllib.request
 from collections.abc import Callable, Iterable
 
 from .fleet_xml import FleetXml
+from .vm_artifact import VM_COMMIT_TAG, VM_DATED_TAG
 
 HUB = "https://hub.docker.com"
 HUB_REGISTRIES = ("docker.io", "index.docker.io", "registry-1.docker.io")
@@ -60,8 +61,8 @@ MAX_PAGES = 200
 # publish workflow pushes for each image. "latest", "qm.<sha7>", and anything
 # somebody pushed by hand are not of it, and so are never deleted.
 # [0-9], not \d, which also matches every other script's decimal digits.
-DATED = re.compile(r"[0-9]{8}\.g[0-9a-f]{7}")
-ROLLING = re.compile(r"qm\.[0-9a-f]{7}")
+DATED = VM_DATED_TAG
+ROLLING = VM_COMMIT_TAG
 # Docker Hub opened in 2013. An earlier push time is a placeholder, such as
 # the 0001-01-01 a Go service writes for a time it never set.
 EARLIEST_YEAR = 2013

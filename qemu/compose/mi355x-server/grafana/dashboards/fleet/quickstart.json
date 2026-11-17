@@ -356,12 +356,12 @@
             "type": "prometheus",
             "uid": "fleet-prometheus"
           },
-          "expr": "count(up{job=\"amd-gpu\"} == 1) or vector(0)",
-          "legendFormat": "GPUs up",
+          "expr": "count(amdgpu_devices_total{job=\"fleet-node\"} >= 1) or vector(0)",
+          "legendFormat": "Guests with a GPU bound",
           "refId": "A"
         }
       ],
-      "description": "Number of VMs where amd-metrics-exporter (:9488) is reachable. Requires the amdgpu driver to be loaded and bound to the gfx1250 device."
+      "description": "Number of guests with at least one GPU bound to the amdgpu driver, from amdgpu_devices_total, which each guest writes for node-exporter's textfile collector. 0 until amdgpu has been probed in the guest; `qemu-tool quick-start test` does that."
     },
     {
       "collapsed": false,
@@ -596,225 +596,6 @@
         "x": 0,
         "y": 13
       },
-      "id": 20,
-      "title": "GPU — gfx1250",
-      "type": "row"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "fleet-prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "unit": "percent",
-          "min": 0,
-          "max": 100,
-          "custom": {
-            "lineWidth": 1,
-            "fillOpacity": 10,
-            "showPoints": "never"
-          }
-        }
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 0,
-        "y": 14
-      },
-      "id": 21,
-      "options": {
-        "tooltip": {
-          "mode": "multi"
-        },
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        }
-      },
-      "title": "GPU Utilisation % Per VM",
-      "type": "timeseries",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "fleet-prometheus"
-          },
-          "expr": "amd_gpu_utilization_percent{job=\"amd-gpu\",vm_name=~\"$vm\"}",
-          "legendFormat": "{{vm_name}} gpu{{gpu_index}}",
-          "refId": "A"
-        }
-      ],
-      "description": "GPU compute utilisation percentage per VM, from amd-metrics-exporter. For emulated gfx1250 this reflects rocjitsu workload activity."
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "fleet-prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "unit": "bytes",
-          "custom": {
-            "lineWidth": 1,
-            "fillOpacity": 10,
-            "showPoints": "never"
-          }
-        }
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 14
-      },
-      "id": 22,
-      "options": {
-        "tooltip": {
-          "mode": "multi"
-        },
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        }
-      },
-      "title": "VRAM Used Per VM",
-      "type": "timeseries",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "fleet-prometheus"
-          },
-          "expr": "amd_vram_used_bytes{job=\"amd-gpu\",vm_name=~\"$vm\"}",
-          "legendFormat": "{{vm_name}} gpu{{gpu_index}} used",
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "fleet-prometheus"
-          },
-          "expr": "amd_vram_total_bytes{job=\"amd-gpu\",vm_name=~\"$vm\"}",
-          "legendFormat": "{{vm_name}} gpu{{gpu_index}} total",
-          "refId": "B"
-        }
-      ],
-      "description": "Video RAM usage per VM. Shows used bytes against total VRAM capacity for the gfx1250 emulated device."
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "fleet-prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "unit": "watt",
-          "custom": {
-            "lineWidth": 1,
-            "fillOpacity": 5,
-            "showPoints": "never"
-          }
-        }
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 8,
-        "x": 16,
-        "y": 14
-      },
-      "id": 23,
-      "options": {
-        "tooltip": {
-          "mode": "multi"
-        },
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        }
-      },
-      "title": "GPU Power Per VM",
-      "type": "timeseries",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "fleet-prometheus"
-          },
-          "expr": "amd_gpu_power_watts{job=\"amd-gpu\",vm_name=~\"$vm\"}",
-          "legendFormat": "{{vm_name}} gpu{{gpu_index}}",
-          "refId": "A"
-        }
-      ],
-      "description": "GPU power consumption in watts per VM, as reported by amd-metrics-exporter."
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "fleet-prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "unit": "celsius",
-          "custom": {
-            "lineWidth": 1,
-            "fillOpacity": 5,
-            "showPoints": "never"
-          }
-        }
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 8,
-        "x": 16,
-        "y": 18
-      },
-      "id": 24,
-      "options": {
-        "tooltip": {
-          "mode": "multi"
-        },
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        }
-      },
-      "title": "GPU Temperature Per VM",
-      "type": "timeseries",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "fleet-prometheus"
-          },
-          "expr": "amd_gpu_temperature_celsius{job=\"amd-gpu\",vm_name=~\"$vm\"}",
-          "legendFormat": "{{vm_name}} gpu{{gpu_index}}",
-          "refId": "A"
-        }
-      ],
-      "description": "GPU die temperature in Celsius per VM. Emulated gfx1250 values are provided by rocjitsu."
-    },
-    {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 22
-      },
       "id": 27,
       "title": "NVMe Storage",
       "type": "row"
@@ -841,7 +622,7 @@
         "h": 6,
         "w": 12,
         "x": 0,
-        "y": 23
+        "y": 14
       },
       "id": 25,
       "options": {
@@ -899,7 +680,7 @@
         "h": 6,
         "w": 12,
         "x": 12,
-        "y": 23
+        "y": 14
       },
       "id": 26,
       "options": {
@@ -941,7 +722,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 29
+        "y": 20
       },
       "id": 38,
       "title": "Network & Driver Status",
@@ -1010,7 +791,7 @@
         "h": 3,
         "w": 6,
         "x": 1,
-        "y": 30
+        "y": 21
       },
       "id": 36,
       "options": {
@@ -1107,7 +888,7 @@
         "h": 3,
         "w": 6,
         "x": 7,
-        "y": 30
+        "y": 21
       },
       "id": 37,
       "options": {
@@ -1143,7 +924,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 32
+        "y": 23
       },
       "id": 40,
       "title": "RDMA Device Counters (rdma_exporter)",
@@ -1206,7 +987,7 @@
         "h": 3,
         "w": 6,
         "x": 0,
-        "y": 33
+        "y": 24
       },
       "id": 41,
       "options": {
@@ -1260,7 +1041,7 @@
         "h": 3,
         "w": 6,
         "x": 6,
-        "y": 33
+        "y": 24
       },
       "id": 42,
       "options": {
@@ -1310,7 +1091,7 @@
         "h": 6,
         "w": 12,
         "x": 0,
-        "y": 36
+        "y": 27
       },
       "id": 43,
       "options": {
@@ -1386,7 +1167,7 @@
         "h": 6,
         "w": 12,
         "x": 12,
-        "y": 36
+        "y": 27
       },
       "id": 44,
       "options": {
@@ -1418,7 +1199,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 40
+        "y": 31
       },
       "id": 30,
       "title": "RDMA — Ernic Mesh",
@@ -1446,7 +1227,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 41
+        "y": 32
       },
       "id": 31,
       "options": {
@@ -1527,7 +1308,7 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 41
+        "y": 32
       },
       "id": 32,
       "options": {
@@ -1577,7 +1358,7 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 41
+        "y": 32
       },
       "id": 33,
       "options": {
@@ -1635,7 +1416,7 @@
         "h": 6,
         "w": 12,
         "x": 0,
-        "y": 49
+        "y": 40
       },
       "id": 34,
       "options": {
@@ -1711,7 +1492,7 @@
         "h": 6,
         "w": 12,
         "x": 12,
-        "y": 49
+        "y": 40
       },
       "id": 35,
       "options": {
@@ -1753,321 +1534,18 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 55
+        "y": 46
       },
       "id": 50,
-      "title": "GPU Kernel Activity (hsa-snoop)",
+      "title": "Stack Logs",
       "type": "row"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "fleet-prometheus"
-      },
-      "description": "hsa-snoop running and snooping HSA/AQL queues via kprobe on kfd_ioctl_create_queue. Requires CAP_SYS_ADMIN. Note: ring-buffer polling can interfere with GPU dispatch on emulated gfx1250 — use --no-ring-poll or --poll-us 0 on emulated devices.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 1
-              },
-              {
-                "color": "green",
-                "value": 2
-              }
-            ]
-          },
-          "unit": "short",
-          "mappings": [
-            {
-              "type": "value",
-              "options": {
-                "0": {
-                  "text": "Down",
-                  "color": "red",
-                  "index": 0
-                },
-                "1": {
-                  "text": "1 up",
-                  "color": "yellow",
-                  "index": 1
-                },
-                "2": {
-                  "text": "Both up",
-                  "color": "green",
-                  "index": 2
-                }
-              }
-            }
-          ]
-        }
-      },
-      "gridPos": {
-        "h": 3,
-        "w": 4,
-        "x": 0,
-        "y": 56
-      },
-      "id": 51,
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "textMode": "auto",
-        "colorMode": "background",
-        "graphMode": "none"
-      },
-      "title": "hsa-snoop Up",
-      "type": "stat",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "fleet-prometheus"
-          },
-          "expr": "count(hsa_snoop_up{job=\"hsa-snoop\"} == 1) or vector(0)",
-          "legendFormat": "",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "fleet-prometheus"
-      },
-      "description": "Active HSA AQL queue count across all VMs. Each HIP/ROCm application typically opens 2 queues on startup.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "blue",
-                "value": null
-              },
-              {
-                "color": "green",
-                "value": 1
-              }
-            ]
-          },
-          "unit": "short"
-        }
-      },
-      "gridPos": {
-        "h": 3,
-        "w": 4,
-        "x": 4,
-        "y": 56
-      },
-      "id": 52,
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "textMode": "auto",
-        "colorMode": "background",
-        "graphMode": "none"
-      },
-      "title": "Active HSA Queues",
-      "type": "stat",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "fleet-prometheus"
-          },
-          "expr": "sum(hsa_active_queues{job=\"hsa-snoop\"}) or vector(0)",
-          "legendFormat": "",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "fleet-prometheus"
-      },
-      "description": "Name of the most recently observed GPU kernel dispatch, from hsa_last_kernel_launch_info. The label is the AQL packet function pointer address — hipcc embeds the kernel symbol name in later ROCm versions.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "blue",
-                "value": null
-              }
-            ]
-          },
-          "unit": "short"
-        }
-      },
-      "gridPos": {
-        "h": 3,
-        "w": 16,
-        "x": 8,
-        "y": 56
-      },
-      "id": 55,
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "textMode": "value_and_name",
-        "colorMode": "background",
-        "graphMode": "none"
-      },
-      "title": "Last Kernel Dispatched",
-      "type": "stat",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "fleet-prometheus"
-          },
-          "expr": "hsa_last_kernel_launch_info{job=\"hsa-snoop\"}",
-          "legendFormat": "{{vm_name}}  {{kernel_name}}",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "fleet-prometheus"
-      },
-      "description": "GPU kernel dispatch rate per second per VM. Each bar/spike corresponds to one or more HIP kernel launches observed in the AQL queue ring buffer.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "unit": "ops",
-          "custom": {
-            "lineWidth": 1,
-            "fillOpacity": 15,
-            "showPoints": "never"
-          }
-        }
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 59
-      },
-      "id": 53,
-      "options": {
-        "tooltip": {
-          "mode": "multi"
-        },
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        }
-      },
-      "title": "GPU Kernel Launches/s",
-      "type": "timeseries",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "fleet-prometheus"
-          },
-          "expr": "rate(hsa_kernel_launches_total{job=\"hsa-snoop\",vm_name=~\"$vm\"}[$__rate_interval])",
-          "legendFormat": "{{vm_name}} {{kernel_name}}",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "fleet-prometheus"
-      },
-      "description": "GPU kernel enqueue-to-completion latency percentiles from hsa-snoop. p50 = median, p95 = tail latency. On emulated gfx1250 these are longer than physical hardware.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "unit": "s",
-          "custom": {
-            "lineWidth": 1,
-            "fillOpacity": 5,
-            "showPoints": "never"
-          }
-        }
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 59
-      },
-      "id": 54,
-      "options": {
-        "tooltip": {
-          "mode": "multi"
-        },
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        }
-      },
-      "title": "Kernel Duration (p50 / p95)",
-      "type": "timeseries",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "fleet-prometheus"
-          },
-          "expr": "histogram_quantile(0.50, rate(hsa_kernel_duration_seconds_bucket{job=\"hsa-snoop\",vm_name=~\"$vm\"}[$__rate_interval]))",
-          "legendFormat": "{{vm_name}} p50",
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "fleet-prometheus"
-          },
-          "expr": "histogram_quantile(0.95, rate(hsa_kernel_duration_seconds_bucket{job=\"hsa-snoop\",vm_name=~\"$vm\"}[$__rate_interval]))",
-          "legendFormat": "{{vm_name}} p95",
-          "refId": "B"
-        }
-      ]
     },
     {
       "datasource": {
         "type": "loki",
         "uid": "fleet-loki"
       },
-      "description": "Per-kernel dispatch events from hsa-snoop --log-dispatches, forwarded by Alloy to Loki as NDJSON. Each line contains kernel name, GPU id, duration, pid and RFC3339 timestamp. Only available when LOGS_ENABLE=true. With --mode bpftrace the log is safe on emulated gfx1250.",
+      "description": "Logs of the stack's containers -- the ernic, rocjitsu and SDXI device servers, QEMU, Prometheus and Grafana -- shipped to Loki by Alloy. Only present when <logs-enable> is true. Nothing here comes from inside a guest.",
       "fieldConfig": {
         "defaults": {}
       },
@@ -2075,7 +1553,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 67
+        "y": 47
       },
       "id": 56,
       "options": {
@@ -2086,7 +1564,7 @@
         "sortOrder": "Descending",
         "wrapLogMessage": true
       },
-      "title": "GPU Kernel Dispatch Log (Alloy → Loki)",
+      "title": "Stack Logs (Alloy → Loki)",
       "type": "logs",
       "targets": [
         {
@@ -2094,7 +1572,7 @@
             "type": "loki",
             "uid": "fleet-loki"
           },
-          "expr": "{filename=\"/var/log/hsa-snoop/dispatches.ndjson\"}",
+          "expr": "{job=\"docker\"}",
           "legendFormat": "",
           "refId": "A"
         }

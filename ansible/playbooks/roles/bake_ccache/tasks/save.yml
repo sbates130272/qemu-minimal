@@ -85,10 +85,16 @@
 
     # Uncompressed: ccache has already compressed every object in it. tar and
     # not the archive module, which reads every file through Python.
+    #
+    # Without a ccache.conf at the top of the cache, which ccache would read
+    # in the next bake ahead of the role's own settings. Nothing here writes
+    # one, and restore.yml deletes one it finds; this keeps it out of what
+    # is handed on. The pattern names the top-level file only.
     - name: Archive the cache in the guest
       ansible.builtin.command:  # noqa: command-instead-of-module
         cmd: >-
           tar -cf {{ bake_ccache_archive }}
+          --exclude=./ccache.conf
           -C {{ bake_ccache_dir }} .
       become: true
       changed_when: true

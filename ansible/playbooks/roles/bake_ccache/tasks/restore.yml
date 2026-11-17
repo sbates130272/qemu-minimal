@@ -52,6 +52,20 @@
         mode: "0777"
       become: true
 
+# ccache reads <cache_dir>/ccache.conf after the system file written below,
+# and what that file sets wins. The role keeps no settings in the cache, so
+# one found there came in with the archive, and whatever it says -- another
+# compiler_check, a base_dir, a prefix_command run as root at every compile --
+# would be this bake's configuration. save.yml leaves the file out of the
+# archive; this is for an archive that carries one all the same. Not
+# conditional on an archive having been unpacked, so that a rerun into a
+# directory an earlier attempt left behind is covered too.
+- name: Discard any ccache configuration that came with the cache
+  ansible.builtin.file:
+    path: "{{ bake_ccache_dir }}/ccache.conf"
+    state: absent
+  become: true
+
 # The system file rather than CCACHE_* variables, for the reason the wrappers
 # are symlinks: no build here can be handed an environment. Each setting is
 # explained in the file, because that is where it is read when a hit rate

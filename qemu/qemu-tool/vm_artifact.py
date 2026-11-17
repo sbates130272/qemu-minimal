@@ -10,6 +10,17 @@ fetch credentials without pulling the disk.
 
 from __future__ import annotations
 
+import re
+
+# The tags an image is published under. The dated one, <YYYYMMDD>.g<sha7>, is
+# the day of the publish and the qemu-minimal commit the guest was baked from;
+# it is the one a fleet pins. "latest" and qm.<sha7> are moved onto each new
+# publish. publish-qcow-prune deletes only the dated shape, and gen-compose
+# accepts only that shape from a published <backing-ref>, so both read it
+# from here. [0-9], not \d, which also matches other scripts' digits.
+VM_DATED_TAG = re.compile(r"[0-9]{8}\.g[0-9a-f]{7}")
+VM_COMMIT_TAG = re.compile(r"qm\.[0-9a-f]{7}")
+
 VM_ARTIFACT_TYPE = "application/vnd.batesste.vm-image.v1"
 VM_LAYER_MEDIA_TYPE = "application/vnd.batesste.vm-image.layer.v1+zstd"
 VM_INFO_ARTIFACT_TYPE = "application/vnd.batesste.vm-info.v1"

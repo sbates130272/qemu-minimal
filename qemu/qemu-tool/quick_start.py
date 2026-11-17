@@ -74,9 +74,12 @@ VARIANTS: dict[str, tuple[str, str, str, str | None]] = {
 # Where the guest keypair referrer is pulled to, and what it carries.
 _VM_INFO_TYPE = "application/vnd.batesste.vm-info.v1"
 
-# Rough, and deliberately so. Measured against the pinned tag rather than
-# guessed: the registry reports 2.5 GB compressed and the image's own
-# annotation says 9.2 GB on disk, then each guest takes an overlay that grows
+# Rough, and deliberately so. Measured rather than guessed, on the tag
+# rocm-golden.xml pinned on 2026-11-17 (20261117.g80c17f8): the manifest is
+# 2.08 GB compressed and the pulled layer unpacked to an 8,422,096,896-byte
+# qcow2 (64 GiB virtual). The tag before it was 2.5 GB and 9.2 GB, so this is
+# a figure to re-read when <backing-ref> moves, not a constant. Then each
+# guest takes an overlay that grows
 # as it is written and `--nvme 1` adds another file per guest. 30 leaves room
 # for that without being the ~60 this claimed for years -- a figure inherited
 # from a "17 GB compressed, 17 GB decompressed" reading that was about 7x the
@@ -290,6 +293,20 @@ def _resolve_stack_dir(requested: Path, explicit: bool) -> Path:
             _die(f"cannot create {requested} or {fallback}")
         print(f"note: {requested} is not writable, using {fallback}")
         return fallback
+
+
+def _artifacts_dir(stack_dir: Path) -> Path:
+    """Where the test playbook writes its per-guest summaries: in the stack.
+
+    It was /var/tmp/quickstart-artifacts-<flavor>, a path no flag moved, and
+    `test` empties it before each run. Two stacks of one flavor therefore
+    shared it and each run deleted the other's summaries -- seen when a run
+    given --stack-dir, --key-dir and --images under one scratch directory
+    still wrote into the default stack's. Absolute, because ansible-playbook
+    is started from the checkout's ansible/ directory and would resolve a
+    relative --stack-dir against that.
+    """
+    return stack_dir.resolve() / "artifacts"
 
 
 # ---------------------------------------------------------------------------
@@ -556,7 +573,7 @@ def preflight(state: _State, write_layers: bool = True) -> None:
     # Resolved HERE rather than at `docker compose up`, which is where it is
     # actually consumed. Every service in the stack carries
     # `user: ${CONTAINER_USER:?...}`, so an unusable value is a compose
-    # interpolation error -- and by then the quickstart has pulled a 2.5 GB
+    # interpolation error -- and by then the quickstart has pulled a ~2 GB
     # image and written a stack directory. Checking it beside the other host
     # facts turns that into a line of preflight output.
     #
@@ -661,7 +678,7 @@ def _resolve_images_dir(state: _State) -> None:
     free = _free_gb(images)
     if free < _DISK_NEEDED_GB:
         print(f"warning: {images} has {free:.0f} GB free; this wants about "
-              f"{_DISK_NEEDED_GB} GB (a ~2.5 GB pull that unpacks to ~9 GB, "
+              f"{_DISK_NEEDED_GB} GB (a ~2 GB pull that unpacks to ~8.5 GB, "
               f"plus an overlay and an NVMe image per guest).",
               file=sys.stderr)
 
@@ -764,7 +781,7 @@ def fetch_key(state: _State) -> None:
             _adopt_login(state)
             _publish_keypair(state)
             return
-        print(f"image tag changed, re-fetching keypair")
+        print("image tag changed, re-fetching keypair")
 
     state.key_dir.mkdir(parents=True, exist_ok=True)
     discovered = subprocess.run(["oras", "discover", backing, "--format", "json"],
@@ -788,10 +805,12 @@ def fetch_key(state: _State) -> None:
     state.key.chmod(0o600)
     ref_file.write_text(backing + "\n")
     _adopt_login(state)
-    _publish_keypair(state)
+    # Replacing, not only filling in: a copy published for an earlier image
+    # is that image's key, and no guest of this one accepts it.
+    _publish_keypair(state, replace=True)
 
 
-def _publish_keypair(state: _State) -> None:
+def _publish_keypair(state: _State, replace: bool = False) -> None:
     """Put the keypair where `inspect` and `ssh` look for it.
 
     Those two search <images>/keys/ and ~/.ssh, never the key directory this
@@ -816,7 +835,7 @@ def _publish_keypair(state: _State) -> None:
     pub = state.images_dir / "keys" / "quickstart_id_rsa.pub"
     private = pub.with_suffix("")
     pub.parent.mkdir(parents=True, exist_ok=True)
-    if not pub.is_file():
+    if replace or not pub.is_file():
         derived = subprocess.run(["ssh-keygen", "-y", "-f", str(state.key)],
                                  capture_output=True, text=True)
         if derived.returncode != 0:
@@ -825,9 +844,118 @@ def _publish_keypair(state: _State) -> None:
     # Not gated on the public half existing: an install from before this
     # published the private one has the .pub already, and would otherwise
     # never gain the half that makes it useful.
-    if not private.is_file():
+    if replace or not private.is_file():
         shutil.copyfile(state.key, private)
         private.chmod(0o600)
+
+
+def _running_guests(state: _State) -> list[str] | None:
+    """The stack's qemu services with a running container; None if unknown.
+
+    Only qemu-N holds a guest disk open, so a stack whose guests have exited
+    and whose servers are still up is not in the way. Asked by the project
+    label `quick-start` itself starts the stack under: a stack started from
+    the same images directory under another project name is not seen.
+    """
+    try:
+        result = subprocess.run(
+            ["docker", "ps",
+             "--filter", f"label=com.docker.compose.project={state.stack_name}",
+             "--filter", "status=running",
+             "--format", '{{.Label "com.docker.compose.service"}}'],
+            capture_output=True, text=True)
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    return sorted(name for name in result.stdout.split()
+                  if name.startswith("qemu-"))
+
+
+def _refuse_under_running_guests(state: _State, why: str) -> None:
+    """Never unlink a disk a running QEMU has open.
+
+    The unlink succeeds and the guest carries on, on an inode with no name:
+    the next `up` makes a new file beside it, compose sees nothing to
+    recreate, and the guest that is running is neither the old disk on the
+    old key nor the new one. Everything written to it goes when it stops.
+    """
+    running = _running_guests(state)
+    if running is None:
+        _die(f"{why}, and Docker could not be asked whether the "
+             f"{state.stack_name} stack is running.\n"
+             "       Nothing was removed.")
+    if running:
+        _die(f"{why}, and {len(running)} guest(s) of the {state.stack_name} "
+             f"stack are running on them: {', '.join(running)}.\n"
+             "       Nothing was removed. Take the stack down first "
+             "(`qemu-tool quick-start down` with the same flags) and run "
+             "this again.")
+
+
+def retire_stale_overlays(state: _State, requested: bool = False) -> None:
+    """Guest disks made on an image the fleet no longer names cannot stay.
+
+    make_overlays() leaves an existing overlay alone, which is right while
+    <backing-ref> stands still and wrong once it has moved. fetch_key()
+    replaces the keypair with the new image's; the old disks still carry the
+    old image's authorized_keys; every guest boots, listens, and refuses the
+    login, and the wait reports that as a guest that never answered SSH.
+    gen-vm records the ref a backing file was pulled from beside it, and
+    that record is what is compared here. No record means nothing was pulled
+    under this name, and nothing is touched.
+
+    Nothing here deletes a disk unless somebody said so. The question
+    defaults to NO, which is the answer --yes and a run with no terminal
+    take: every other prompt in this subcommand defaults to going ahead, and
+    this is the one whose yes destroys what is inside the guests. Unattended,
+    the way to say yes is --clean-overlays (`requested`), which removes the
+    disks itself once this returns. A stop happens before the keypair is
+    replaced, so the old guests are still reachable. And nothing is removed
+    from under a running guest, whoever asked.
+    """
+    images = state.images_dir
+    marker = images / f"{state.vm(1)}-backing.qcow2.image-ref"
+    try:
+        pulled = marker.read_text().strip()
+    except OSError:
+        return
+    wanted = state.fleet.backing_ref
+    if not pulled or not wanted or pulled == wanted:
+        return
+    disks = [images / f"{state.vm(index)}.qcow2"
+             for index in range(1, state.vm_count + 1)]
+    disks = [disk for disk in disks if disk.is_file()]
+    if not disks:
+        return
+    _say("The guest image has moved")
+    print(f"these guests were made on  {pulled}")
+    print(f"the settings now name      {wanted}")
+    _refuse_under_running_guests(
+        state, f"{len(disks)} guest disk(s) are on the old image")
+    if requested:
+        print("--clean-overlays replaces them")
+        return
+    if not _confirm(state, f"Replace the {len(disks)} guest disk(s) made on "
+                           "the old image, and their NVMe scratch disks? "
+                           "Anything written inside those guests is lost.",
+                    default=False):
+        _die("the guest disks are on an image the settings no longer name, "
+             "and the new image's key does not log in to them.\n"
+             "       Nothing was removed. Run again with --clean-overlays to "
+             "replace them, or name the old image in an --xml layer.")
+    clean_overlays(state)
+
+
+def _guest_disks(state: _State) -> list[Path]:
+    """Each guest's overlay and NVMe scratch disks; never the backing file."""
+    images = state.images_dir
+    found: list[Path] = []
+    for index in range(1, state.vm_count + 1):
+        name = state.vm(index)
+        found += sorted(images.glob(f"{name}.qcow2"))
+        found += sorted(images.glob(f"{name}-nvme*.qcow2"))
+    return found
 
 
 def clean_overlays(state: _State) -> None:
@@ -837,20 +965,15 @@ def clean_overlays(state: _State) -> None:
     per-VM overlay ({vm}.qcow2) and scratch NVMe files ({vm}-nvme*.qcow2) are
     removed. make_overlays() then recreates them from scratch.
     """
-    images = state.images_dir
-    for index in range(1, state.vm_count + 1):
-        name = state.vm(index)
-        for path in sorted(images.glob(f"{name}.qcow2")) + sorted(
-            images.glob(f"{name}-nvme*.qcow2")
-        ):
-            if path.exists():
-                _say(f"Removing {path.name}")
-                path.unlink()
+    for path in _guest_disks(state):
+        if path.exists():
+            _say(f"Removing {path.name}")
+            path.unlink()
 
 
 def make_overlays(state: _State) -> None:
-    """Two overlays of one backing file. This is the long step: ~2.5 GB
-    pulled and unpacked to ~9 GB, once, however many guests there are."""
+    """Two overlays of one backing file. This is the long step: ~2 GB
+    pulled and unpacked to ~8.5 GB, once, however many guests there are."""
     _say("Creating the guest overlays")
     images = state.images_dir
     base_cfg = settings.vm_overrides(state.fleet)
@@ -1349,9 +1472,11 @@ def run(
         base = packaged
 
     requested = stack_dir or Path(f"/var/lib/qemu-tool/stacks/{stack_stem}")
+    resolved_stack_dir = _resolve_stack_dir(requested.expanduser(),
+                                            stack_dir is not None)
     state = _State(
         fleet_file=base,
-        stack_dir=_resolve_stack_dir(requested.expanduser(), stack_dir is not None),
+        stack_dir=resolved_stack_dir,
         key_dir=_resolve_key_dir(
             (key_dir or Path(f"/var/lib/qemu-tool/{key_stem}")).expanduser(),
             explicit=key_dir is not None,
@@ -1362,7 +1487,7 @@ def run(
         metrics=metrics,
         assume_yes=assume_yes,
         size_from_host=size_from_host,
-        artifacts=Path(f"/var/tmp/quickstart-artifacts-{stack_stem}"),
+        artifacts=_artifacts_dir(resolved_stack_dir),
         base_layers=layers,
         rdma_duration=rdma_duration,
         nvme_duration=nvme_duration,
@@ -1427,6 +1552,10 @@ def run(
         if not _confirm(state, "Bring this up now?"):
             print("nothing done")
             return
+        if clean_qcow2 and _guest_disks(state):
+            _refuse_under_running_guests(
+                state, "--clean-overlays removes the guest disks")
+        retire_stale_overlays(state, requested=clean_qcow2)
         fetch_key(state)
         if clean_qcow2:
             clean_overlays(state)

@@ -39,6 +39,7 @@ on:
       - 'qemu/pyproject.toml'
       - 'scripts/generate-vm-report.sh'
       - 'scripts/check-vm-devices.sh'
+      - 'scripts/check-guest-exporters.py'
       - 'scripts/vm-report/**'
       - '.github/actions/nonroot-user/action.yml'
       - '.github/workflows/qemu-minimal-report-for-vm-rocm-golden.yml'
@@ -228,6 +229,33 @@ jobs:
         cp "${KEY_DIR}/id_rsa" "$HOME/.ssh/id_rsa"
         chmod 600 "$HOME/.ssh/id_rsa"
         [ "$HOME" = /root ] || { rm -rf /root/.ssh && ln -s "$HOME/.ssh" /root/.ssh; }
+
+    # "Prometheus answered a query" passed for weeks with half its guest
+    # targets down: the fleet file forwarded four ports from each guest and
+    # two had nothing listening. So every TCP port the fleet file forwards
+    # with <vm-extra-hostfwd> is asked for by name: a target at the guest's
+    # container address and that port, with up == 1. A forwarded port no
+    # scrape job reads fails too. Retried, because a target is not up until
+    # Prometheus has scraped it once, and the interval is 15 s.
+    - name: Check the guest exporters Prometheus scrapes
+      shell: bash
+      run: |
+        set -uo pipefail
+        for attempt in 1 2 3 4 5 6 7 8; do
+          if out=$(docker exec rocm-golden-prometheus-1 \
+                     wget -q -O- 'http://127.0.0.1:9090/api/v1/query?query=up' |
+                   python3 -I scripts/check-guest-exporters.py \
+                     --xml "$FLEET_FILE" \
+                     --guest "$GUEST1" --guest "$GUEST2" 2>&1); then
+            echo "$out"
+            exit 0
+          fi
+          echo "attempt ${attempt}: $(echo "$out" | tail -1)"
+          sleep 15
+        done
+        echo "$out"
+        echo "::error::$(echo "$out" | tail -1)"
+        exit 1
 
     # What `qemu-tool list` and `inspect` say about a LIVE guest. Every field
     # they report degrades to a plausible placeholder rather than to an error

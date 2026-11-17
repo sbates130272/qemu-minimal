@@ -6,7 +6,9 @@ name: qemu-minimal - Publish - qcow-rocm-golden
 # The gate, in order, all of it before anything is pushed:
 #
 #   1. the guest pins agree with the server images (tests/test_playbook_pins.py)
-#   2. bake with the playbook's own defaults
+#   2. bake with the playbook's own defaults, the kernel modules built
+#      through the compiler cache this workflow shares with the playbook-test
+#      lane
 #   3. boot with NO device attached and run qemu/checks/rocm-golden.sh,
 #      which is how most consumers first meet the image
 #   4. boot as one guest of the default fleet, behind a stack rendered from
@@ -35,6 +37,11 @@ on:
       - 'qemu/checks/**'
       - 'qemu/packages.d/**'
       - 'qemu/stacks/rocm-golden.xml'
+      # The compiler cache of the bake: how it is named, restored and saved.
+      # A change to the key or the directory leaves main with no entry a
+      # pull request can find until a publish has saved one.
+      - '.github/actions/bake-ccache-restore/action.yml'
+      - '.github/actions/bake-ccache-save/action.yml'
       - '.github/workflows/qemu-minimal-publish-qcow-rocm-golden.yml'
 
 # One publish at a time, and never cancelled part-way through a push.
@@ -152,22 +159,68 @@ jobs:
         # Read from the fleet file, which is what the gate stack runs.
         docker pull "$(sed -n 's|.*<sdxi-image>\(.*\)</sdxi-image>.*|\1|p' qemu/stacks/rocm-golden.xml)"
 
+    # The compiler cache of the bake, shared with the playbook-test lane:
+    # both use this action, so both compute one key prefix for one directory.
+    # This workflow runs on pushes to main, so what it saves is in main's
+    # cache scope, which every pull request's lane run can read; the lane
+    # itself runs on pull requests and saves where only that pull request
+    # reads. On main this restores only what an earlier run on main saved. A
+    # dispatch from another branch also reads what dispatched runs on that
+    # branch saved. A dry run bakes, so it restores and saves like any other.
+    # The action also marks the start of the bake, so the bake must be the
+    # next step.
+    - name: Restore the compiler cache
+      id: bake-ccache
+      uses: ./.github/actions/bake-ccache-restore
+
     # No ANSIBLE_EXTRA_ARGS: the playbook's defaults are the published
     # image's. The release, size, vCPUs, account, package manifest and
     # playbook are the <bake-*> elements of the default fleet; --bake is what
     # makes gen-vm build from the cloud image instead of pulling the fleet's
     # <backing-ref>. A plain run step, not qemu-tool-action: the action always
-    # passes --release, which would outrank <bake-release>. Only --vm-name and
-    # --images are passed, and both agree with the fleet file: the steps
-    # below find the image, and the key gen-vm generates for it, by them.
+    # passes --release, which would outrank <bake-release>. --vm-name and
+    # --images agree with the fleet file: the steps below find the image, and
+    # the key gen-vm generates for it, by them. No key is named, so the image
+    # gets the generated one, and the image is compacted, which is the
+    # default.
+    #
+    # --cache-dir sends the kernel-module builds through ccache, so a module
+    # in the published image may be linked from objects an earlier run on
+    # main compiled. ccache reuses an object only for the same compiler,
+    # flags and preprocessed source. The playbook takes ccache, its
+    # configuration and the cache back out of the guest before the image is
+    # finished, and qemu/checks/rocm-golden.sh, run below before anything is
+    # pushed, fails an image that still carries any of them.
+    # --cache-replace is passed when the entry restored above was saved
+    # under another key prefix, or none was restored; the action decides.
     - name: Bake the guest
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        BAKE_CCACHE_DIR: ${{ steps.bake-ccache.outputs.dir }}
+        CACHE_REPLACE: ${{ steps.bake-ccache.outputs.replace }}
       run: |
+        # Empty is not "no cache": gen-vm takes "" for the current
+        # directory, and the save step would look in "/" and find nothing.
+        if [ -z "$BAKE_CCACHE_DIR" ]; then
+          echo "::error::bake-ccache-restore handed back no cache directory"
+          exit 1
+        fi
         mkdir -p "$VM_IMAGES_DIR"
         qemu-tool gen-vm --bake --xml qemu/stacks/rocm-golden.xml \
-          --vm-name "$VM_NAME" --images "$VM_IMAGES_DIR"
+          --vm-name "$VM_NAME" --images "$VM_IMAGES_DIR" \
+          --cache-dir "$BAKE_CCACHE_DIR" $CACHE_REPLACE
         test -f "$GUEST_KEY"
+
+    # always(), because the playbook saves the cache before its last two
+    # plays and a bake that failed in one of them still compiled everything.
+    # The statistics go to the step summary; the directory is saved only if
+    # the bake wrote a new archive into it.
+    - name: Save the compiler cache
+      if: always()
+      uses: ./.github/actions/bake-ccache-save
+      with:
+        dir: ${{ steps.bake-ccache.outputs.dir }}
+        key: ${{ steps.bake-ccache.outputs.key }}
 
     - name: Record the baked base
       run: |
@@ -196,7 +249,11 @@ jobs:
 
     # Over "bash -s": non-login and non-interactive, the session the check's
     # ROCm PATH assertions are about. It also asserts the image carries no
-    # ip_discovery.bin, which belongs to one rocjitsu build.
+    # ip_discovery.bin, which belongs to one rocjitsu build, and nothing of
+    # the bake's compiler cache: no ccache in front of gcc, no
+    # /etc/ccache.conf, no cache and no archive. That last group is what
+    # stands between a cached bake and a published image, so this step must
+    # stay ahead of the push and must stay fatal.
     - name: Run the rocm-golden guest check
       run: |
         { echo 'set -eu'; cat qemu/checks/rocm-golden.sh; } |

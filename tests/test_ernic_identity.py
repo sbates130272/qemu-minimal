@@ -29,6 +29,7 @@ Stdlib unittest, like the rest of tests/. Run with:
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -415,6 +416,325 @@ class FleetRoleInstallsTheRulesTest(unittest.TestCase):
         self.assertIn("Reload udev rules", [h.get("name") for h in handlers])
 
 
+PLAYBOOKS = REPO_ROOT / "ansible" / "playbooks"
+GOLDEN = PLAYBOOKS / "vm-rocm-golden.yml"
+GUEST_CHECK = REPO_ROOT / "qemu" / "checks" / "rocm-golden.sh"
+PLAYBOOK_LANE = (REPO_ROOT / ".github" / "workflows"
+                 / "qemu-minimal-ansible-playbook-test-vm-rocm-golden.yml")
+INSTALLED_RULES = "/etc/udev/rules.d/99-rocm-ernic.rules"
+# Every role of the collection, which is what may copy its own rules.
+COLLECTION = "sbates130272.rocm_ernic."
+COLLECTION_GUEST = COLLECTION + "ernic_guest_setup"
+OURS = {"name": "rocm_ernic_setup", "tasks_from": "naming"}
+OURS_CHECK = {"name": "rocm_ernic_setup", "tasks_from": "naming_check"}
+
+# The two rules of rocm-ernic's own udev/99-rocm-ernic.rules at the commit
+# the image 20261117.g80c17f8 was baked from (90434a2), comments dropped.
+# This is the file that image carried, 2928 bytes of it.
+ROCM_ERNIC_RULES = r'''
+SUBSYSTEM=="net", ACTION=="add", \
+  ATTR{device/vendor}=="0x1dd8", \
+  ATTR{device/device}=="0x1002", \
+  ATTR{device/subsystem_vendor}=="0x1dd8", \
+  ATTR{device/subsystem_device}=="0x5400", \
+  DRIVERS=="ionic", \
+  NAME="rocm-ernic%n"
+
+SUBSYSTEM=="infiniband", ACTION=="add", \
+  DRIVERS=="ionic|ionic_rdma", \
+  ATTRS{vendor}=="0x1dd8", \
+  ATTRS{device}=="0x1002", \
+  ATTRS{subsystem_vendor}=="0x1dd8", \
+  ATTRS{subsystem_device}=="0x5400", \
+  RUN+="/bin/sh -c 'pci=/sys$devpath; pci=${pci%/infiniband/*}; \
+    for ibdev in $pci/infiniband/*; do \
+      [ -d $ibdev ] || continue; \
+      cur=${ibdev##*/}; \
+      case $cur in rocm-rdma-ernic*) continue;; esac; \
+      i=0; \
+      while [ -e /sys/class/infiniband/rocm-rdma-ernic$i ]; do \
+        i=$((i+1)); \
+      done; \
+      /usr/bin/rdma dev set $cur name rocm-rdma-ernic$i; \
+    done'"
+'''
+
+
+def _flatten(tasks):
+    for task in tasks or []:
+        yield task
+        for section in ("block", "rescue", "always"):
+            yield from _flatten(task.get(section))
+
+
+def _includes(task: dict) -> dict:
+    return task.get("ansible.builtin.include_role") or {}
+
+
+def _marked_block(script: Path, name: str) -> str:
+    """The lines of a check script between its two '# <edge>: name' markers."""
+    lines = script.read_text().splitlines()
+    begin = lines.index(f"# begin: {name}")
+    end = lines.index(f"# end: {name}")
+    return "\n".join(lines[begin + 1:end]) + "\n"
+
+
+class GoldenImageKeepsTheRepoRulesTest(unittest.TestCase):
+    """The image ends up with this repository's rules, whatever else runs.
+
+    Two files share the name and the destination. The published image
+    20261117.g80c17f8 carried rocm-ernic's, 2928 bytes, whose Ethernet rule
+    is NAME="rocm-ernic%n" and renames one NIC per guest: the golden
+    playbook's own naming include pointed rocm_ernic_setup_udev_rules_src at
+    it. Every test above stayed green, because they read this repository's
+    file and the role's default and never asked which file a playbook hands
+    the role. The collection's ernic_guest_setup copies its own as well, on
+    the configure path, with no switch to stop it.
+    """
+
+    def setUp(self):
+        _require(yaml is not None, "PyYAML")
+        self.plays = yaml.safe_load(GOLDEN.read_text())
+
+    def _events(self, play: dict) -> list[tuple[str, dict]]:
+        """What touches the rules in one play, in the order it runs."""
+        found = []
+        for task in _flatten(play.get("pre_tasks")):
+            found.append(("task", task))
+        for role in play.get("roles", []):
+            name = role.get("role") if isinstance(role, dict) else role
+            found.append(("role", {"name": name}))
+        for section in ("tasks", "post_tasks"):
+            for task in _flatten(play.get(section)):
+                found.append(("task", task))
+        events = []
+        for kind, item in found:
+            name = (item["name"] if kind == "role"
+                    else _includes(item).get("name", ""))
+            if name == COLLECTION_GUEST:
+                events.append(("collection", item))
+            elif kind == "task" and _includes(item) == OURS:
+                events.append(("ours", item))
+            elif kind == "task" and _includes(item) == OURS_CHECK:
+                events.append(("check", item))
+        return events
+
+    def _bake(self) -> list[dict]:
+        return [p for p in self.plays if "install" in (p.get("tags") or [])
+                and "hosts" in p]
+
+    def test_no_playbook_points_the_install_at_another_file(self):
+        def keys(node):
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    yield key
+                    yield from keys(value)
+            elif isinstance(node, list):
+                for item in node:
+                    yield from keys(item)
+
+        for playbook in sorted(PLAYBOOKS.glob("*.yml")):
+            self.assertNotIn(
+                "rocm_ernic_setup_udev_rules_src",
+                set(keys(yaml.safe_load(playbook.read_text()))),
+                f"{playbook.name} hands the naming tasks a file of its own; "
+                "the role's default is this repository's")
+
+    def test_the_bake_installs_this_repos_rules_after_the_collection_ran(self):
+        order = [kind for play in self._bake()
+                 for kind, _ in self._events(play)]
+        self.assertIn("collection", order)
+        self.assertIn("ours", order)
+        last_collection = max(i for i, k in enumerate(order) if k == "collection")
+        last_ours = max(i for i, k in enumerate(order) if k == "ours")
+        self.assertGreater(last_ours, last_collection, order)
+
+    def test_the_bake_ends_by_checking_which_file_it_has(self):
+        """After every role of the collection, and after the install."""
+        position = 0
+        check_at, last_writer = [], 0
+        for play in self._bake():
+            for task in (list(_flatten(play.get("pre_tasks")))
+                         + list(_flatten(play.get("tasks")))
+                         + list(_flatten(play.get("post_tasks")))):
+                position += 1
+                include = _includes(task)
+                if include == OURS_CHECK:
+                    check_at.append(position)
+                    self.assertNotIn("when", task)
+                elif (include == OURS
+                      or include.get("name", "").startswith(COLLECTION)):
+                    last_writer = position
+        self.assertEqual(len(check_at), 1)
+        self.assertGreater(check_at[0], last_writer)
+
+    def test_the_check_compares_with_the_roles_file_and_changes_nothing(self):
+        tasks = yaml.safe_load(
+            (FLEET_ROLE / "tasks" / "naming_check.yml").read_text())
+        compare, verdict = tasks
+        self.assertIs(compare["check_mode"], True)
+        copy = compare["ansible.builtin.copy"]
+        # The literal name: not a variable a caller can point elsewhere.
+        self.assertEqual(copy["src"], RULES.name)
+        self.assertEqual(copy["dest"], INSTALLED_RULES)
+        # The install's own arguments, or a mode alone reads as a difference.
+        install = next(
+            t["ansible.builtin.copy"] for t in yaml.safe_load(
+                (FLEET_ROLE / "tasks" / "naming.yml").read_text())
+            if t.get("ansible.builtin.copy", {}).get("dest") == INSTALLED_RULES)
+        for key in ("owner", "group", "mode"):
+            self.assertEqual(copy[key], install[key])
+        self.assertEqual(verdict["ansible.builtin.assert"]["that"],
+                         [f"{compare['register']} is not changed"])
+        for task in tasks:
+            self.assertNotIn("when", task)
+            self.assertNotIn("failed_when", task)
+
+    def test_a_live_play_that_runs_the_collection_puts_the_rules_back(self):
+        """ernic_guest_setup's driver_common.yml copies its own, always."""
+        live = [p for p in self.plays if "hosts" in p and p not in self._bake()
+                and any(k == "collection" for k, _ in self._events(p))]
+        self.assertEqual([p["name"] for p in live],
+                         ["Configure the ernic NIC on a live guest"])
+        for play in live:
+            last = (play.get("post_tasks") or [{}])[-1]
+            self.assertEqual(_includes(last), OURS, play["name"])
+            for key in ("when", "vars", "tags"):
+                self.assertNotIn(key, last)
+            # post_tasks run after roles; anything else would run before it.
+            self.assertEqual(self._events(play)[-1][0], "ours")
+
+    def test_quick_start_installs_the_roles_default_too(self):
+        plays = yaml.safe_load((PLAYBOOKS / "vm-quickstart.yml").read_text())
+        installs = [t for play in plays for t in _flatten(play.get("tasks"))
+                    if _includes(t).get("tasks_from") == "naming"]
+        self.assertEqual(len(installs), 1)
+        self.assertNotIn("vars", installs[0])
+
+    # ── the guest acceptance check ───────────────────────────────────────
+
+    def _check(self, rules: str | None) -> subprocess.CompletedProcess:
+        """Run the check's own lines against a scratch rules file."""
+        bash = shutil.which("bash")
+        _require(bash is not None, "bash")
+        block = _marked_block(GUEST_CHECK, "ernic naming rules")
+        self.assertEqual(block.count(INSTALLED_RULES), 1,
+                         "the block must name the installed file once")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "99-rocm-ernic.rules"
+            if rules is not None:
+                path.write_text(rules)
+            return subprocess.run(
+                [bash, "-c", "set -eu\n" + block.replace(INSTALLED_RULES, str(path))],
+                capture_output=True, text=True)
+
+    def test_the_guest_check_passes_this_repos_rules(self):
+        proc = self._check(RULES.read_text())
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("PCI position", proc.stdout)
+
+    def test_the_guest_check_refuses_rocm_ernics_rules(self):
+        proc = self._check(ROCM_ERNIC_RULES)
+        self.assertEqual(proc.returncode, 1, proc.stdout)
+        self.assertIn("rocm-ernic%n", proc.stderr)
+
+    def test_the_guest_check_refuses_a_free_index_search_on_its_own(self):
+        """rocm-ernic's InfiniBand rule under a fixed Ethernet one."""
+        ours = RULES.read_text().replace("\\\n", " ")
+        net = next(line for line in ours.splitlines()
+                   if line.startswith('SUBSYSTEM=="net"'))
+        theirs = ROCM_ERNIC_RULES.split("\n\n")[1]
+        proc = self._check(net + "\n\n" + theirs + "\n")
+        self.assertEqual(proc.returncode, 1, proc.stdout)
+        self.assertIn("first free index", proc.stderr)
+
+    def test_the_guest_check_refuses_one_stanza_without_the_pci_walk(self):
+        ours = RULES.read_text().replace("\\\n", " ")
+        net = next(line for line in ours.splitlines()
+                   if line.startswith('SUBSYSTEM=="net"'))
+        proc = self._check(net + "\n")
+        self.assertEqual(proc.returncode, 1, proc.stdout)
+        self.assertIn("PCI position", proc.stderr)
+
+    def test_the_guest_check_refuses_a_guest_with_no_rules(self):
+        proc = self._check(None)
+        self.assertEqual(proc.returncode, 1, proc.stdout)
+        self.assertIn("is missing", proc.stderr)
+
+    def test_a_comment_about_percent_n_is_not_the_rule(self):
+        """This repository's file explains %n; the check must read rules."""
+        self.assertIn("%n", RULES.read_text())
+        commented = '# NAME="rocm-ernic%n" was the old rule\n' + RULES.read_text()
+        self.assertEqual(self._check(commented).returncode, 0)
+
+    # ── the playbook-test lane ───────────────────────────────────────────
+
+    CONFIGURE_STEP = "Run the ernic configure and live firmware stages"
+    RERUN_STEP = ("Verify the configure stage left this repository's "
+                  "naming rules")
+
+    def _lane_steps(self) -> tuple[list[dict], list]:
+        _require(yaml is not None, "PyYAML")
+        jobs = yaml.safe_load(PLAYBOOK_LANE.read_text())["jobs"]
+        (job,) = jobs.values()
+        steps = job["steps"]
+        return steps, [step.get("name") for step in steps]
+
+    def _rerun(self) -> str:
+        """What the step runs. Its comment is not part of this."""
+        steps, names = self._lane_steps()
+        self.assertEqual(names.count(self.RERUN_STEP), 1)
+        return steps[names.index(self.RERUN_STEP)]["run"]
+
+    def test_the_lane_reruns_the_check_after_the_configure_stage(self):
+        """The one place a real guest has the collection copy its rules."""
+        steps, names = self._lane_steps()
+        configure = names.index(self.CONFIGURE_STEP)
+        self.assertRegex(steps[configure]["run"], r"--tags \S*\bconfigure\b")
+        rerun = names.index(self.RERUN_STEP)
+        self.assertGreater(rerun, configure)
+        # A step that may be skipped or may fail quietly checks nothing.
+        for key in ("if", "continue-on-error"):
+            self.assertNotIn(key, steps[rerun])
+
+    def test_the_rerun_sends_the_checks_own_lines_to_the_guest(self):
+        """Read from the step's command, and run: the range it names has to
+        select the block as the check script stands today."""
+        sed = shutil.which("sed")
+        _require(sed is not None, "sed")
+        run = self._rerun()
+        self.assertIn("qemu/checks/rocm-golden.sh", run)
+        found = re.findall(r"sed -n '([^']+)'", run)
+        self.assertEqual(len(found), 1, "the step runs no sed range")
+        (script,) = found
+        self.assertEqual(
+            script,
+            "/^# begin: ernic naming rules$/,/^# end: ernic naming rules$/p")
+        sent = subprocess.run([sed, "-n", script, str(GUEST_CHECK)],
+                              capture_output=True, text=True, check=True)
+        lines = sent.stdout.splitlines()
+        self.assertEqual("\n".join(lines[1:-1]) + "\n",
+                         _marked_block(GUEST_CHECK, "ernic naming rules"))
+        # In the guest, and stopping at the first assertion that fails.
+        self.assertIn("echo 'set -eu'", run)
+        self.assertRegex(run, r'ssh [^|]*ubuntu@qemu-1 "bash -s"')
+
+    def test_the_rerun_requires_the_line_the_block_ends_on(self):
+        """Markers that moved would send an empty script, which exits 0."""
+        block = _marked_block(GUEST_CHECK, "ernic naming rules")
+        last = block.rstrip("\n").splitlines()[-1]
+        (said,) = re.findall(r'^echo "([^"$`\\]+)"$', last)
+        run = self._rerun()
+        found = re.findall(r"""echo "\$out" \| grep -q '\^([^']+)'""", run)
+        self.assertEqual(len(found), 1,
+                         "the step does not grep its output for that line")
+        (pattern,) = found
+        self.assertTrue(said.startswith(pattern), (said, pattern))
+        # Enough of it that nothing else the block prints can match.
+        self.assertGreaterEqual(len(pattern), 30)
+        self.assertIn("out=$(", run)
+
+
 class P4AccessTest(unittest.TestCase):
     """Who may open /dev/ernic-p4 in the golden image.
 
@@ -514,6 +834,77 @@ class P4AccessTest(unittest.TestCase):
             names.index("Build and install the P4 fp8 client and benchmark driver"),
             names.index("Remove the build trees"),
         )
+
+
+class RdmaExporterInstallTest(unittest.TestCase):
+    """The exporter is installed once, not on every run of the tasks.
+
+    Measured on two guests of the published golden image: `quick-start test`
+    downloaded the tarball from GitHub and reinstalled a binary the bake had
+    already installed, each run, and the playbook's comment called the play a
+    no-op. The tasks now record which tarball they installed.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        _require(jinja2 is not None and yaml is not None, "Jinja2 and PyYAML")
+        cls.defaults = _defaults(FLEET_ROLE)
+        cls.tasks = yaml.safe_load(
+            (FLEET_ROLE / "tasks" / "metrics.yml").read_text())
+        cls.block = next(t for t in cls.tasks if "block" in t)
+
+    def _needs_install(self, binary: bool, record: str | None) -> bool:
+        import base64
+        env = jinja2.Environment()
+        env.filters["b64decode"] = lambda text: base64.b64decode(text).decode()
+        installed = ({} if record is None else
+                     {"content": base64.b64encode(record.encode()).decode()})
+        rendered = env.from_string(
+            "{{ " + " ".join(self.block["when"].split()) + " }}").render(
+            rocm_ernic_setup_rdma_exporter_binary={"stat": {"exists": binary}},
+            rocm_ernic_setup_rdma_exporter_installed=installed,
+            rocm_ernic_setup_rdma_exporter_sha256="pinned")
+        return rendered == "True"
+
+    def test_the_download_and_the_install_are_guarded_together(self):
+        names = [t["name"] for t in self.block["block"]]
+        self.assertEqual(names, ["Download rdma_exporter",
+                                 "Install the rdma_exporter binary",
+                                 "Record which rdma_exporter tarball is "
+                                 "installed"])
+        for task in self.tasks:
+            self.assertNotIn("get_url", " ".join(task), task.get("name"))
+
+    def test_the_record_is_written_last(self):
+        # A failed install leaves no record and is retried.
+        last = self.block["block"][-1]
+        self.assertEqual(last["ansible.builtin.copy"]["dest"],
+                         "{{ rocm_ernic_setup_rdma_exporter_stamp }}")
+        self.assertIn("rocm_ernic_setup_rdma_exporter_sha256",
+                      last["ansible.builtin.copy"]["content"])
+
+    def test_a_missing_record_is_not_a_failure(self):
+        read = next(t for t in self.tasks if "ansible.builtin.slurp" in t)
+        self.assertIs(read["failed_when"], False)
+        self.assertEqual(read["ansible.builtin.slurp"]["src"],
+                         "{{ rocm_ernic_setup_rdma_exporter_stamp }}")
+        self.assertTrue(
+            self.defaults["rocm_ernic_setup_rdma_exporter_stamp"].startswith("/"))
+
+    def test_when_it_installs(self):
+        self.assertTrue(self._needs_install(binary=False, record=None))
+        # The published image: a binary and no record.
+        self.assertTrue(self._needs_install(binary=True, record=None))
+        self.assertTrue(self._needs_install(binary=True, record="older\n"))
+        self.assertTrue(self._needs_install(binary=False, record="pinned\n"))
+        self.assertFalse(self._needs_install(binary=True, record="pinned\n"))
+
+    def test_the_unit_and_the_enable_are_not_guarded(self):
+        # Cheap, idempotent, and what a guest with the binary still needs.
+        outside = [t["name"] for t in self.tasks if "block" not in t]
+        for name in ("Install the rdma_exporter unit", "Enable rdma_exporter",
+                     "Start rdma_exporter"):
+            self.assertIn(name, outside)
 
 
 class NetcfgDiscoveryTest(unittest.TestCase):

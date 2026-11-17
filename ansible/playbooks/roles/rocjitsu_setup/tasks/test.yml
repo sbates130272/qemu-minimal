@@ -58,8 +58,10 @@
 
 # amdgpu-probe is idempotent by design: on a resident module it compares the
 # live parameters against the ones it wants and exits 1 with a diff rather than
-# letting modprobe succeed having changed nothing. Both "loaded it" and
-# "already correct" are rc 0.
+# letting modprobe succeed having changed nothing. "Loaded it", "already
+# correct" and "bound a GPU an earlier probe left without a driver" are rc 0.
+# It exits 1 without loading anything when a GPU is on the bus and
+# ip_discovery.bin is not staged, so the firmware tasks come before this.
 - name: Load amdgpu with the gfx1250 emulation parameters
   ansible.builtin.command:
     cmd: "timeout {{ rocjitsu_setup_test_run_timeout }} {{ rocjitsu_setup_test_probe_cmd }}"

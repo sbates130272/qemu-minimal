@@ -98,3 +98,51 @@
   become: true
   changed_when: false
   when: rocjitsu_setup_amdgpu_update_initramfs | bool
+
+# The bake has no GPU, so the state the login hint used to get wrong -- a GPU
+# on the bus and no ip_discovery.bin -- is made in a scratch tree and the
+# installed scripts are run against it through their own test seam. The probe
+# has to refuse and call nothing, and the hint has to send the reader to the
+# host and not offer the probe. The first test is what makes the second safe:
+# a copy that ignores the seam answers "absent" for the real system and the
+# task fails before the run that would load a driver. sudo and modprobe are
+# stubbed on PATH for that run all the same. qemu/checks/rocm-golden.sh runs
+# the same assertions against the booted image before anything is published.
+- name: Assert the probe refuses without the discovery blob
+  ansible.builtin.shell:
+    cmd: |
+      set -eu
+      pt=$(mktemp -d)
+      trap 'rm -rf "$pt"' EXIT
+      dev="$pt/sys/bus/pci/devices/0000:00:01.0"
+      touch "$pt/.amdgpu-probe-test-root"
+      mkdir -p "$dev" "$pt/stub" "$pt/usr/local/bin" "$pt/lib/firmware/amdgpu"
+      echo 0x1002 > "$dev/vendor"
+      echo 0x120000 > "$dev/class"
+      ln -s /usr/local/bin/amdgpu-probe "$pt/usr/local/bin/amdgpu-probe"
+      printf '#!/bin/sh\necho called >> "%s/called"\n' "$pt" > "$pt/stub/sudo"
+      cp "$pt/stub/sudo" "$pt/stub/modprobe"
+      chmod 0755 "$pt/stub/sudo" "$pt/stub/modprobe"
+      export AMDGPU_PROBE_TEST_ROOT="$pt"
+      test "$(/usr/local/bin/amdgpu-probe --status)" = nofirmware
+      if PATH="$pt/stub:$PATH" /usr/local/bin/amdgpu-probe > /dev/null 2>&1; then
+        echo "amdgpu-probe did not refuse with no discovery blob staged" >&2
+        exit 1
+      fi
+      test ! -e "$pt/called"
+      hint=$(/etc/update-motd.d/99-amdgpu-probe)
+      case "$hint" in
+        *'qemu-tool quick-start test'*) ;;
+        *) echo "the login hint does not name the host command" >&2; exit 1 ;;
+      esac
+      case "$hint" in
+        *'    sudo amdgpu-probe'*)
+          echo "the login hint offers the probe before the firmware" >&2
+          exit 1
+          ;;
+      esac
+      echo blob > "$pt/lib/firmware/amdgpu/ip_discovery.bin"
+      test "$(/usr/local/bin/amdgpu-probe --status)" = ready
+    executable: /bin/bash
+  become: true
+  changed_when: false

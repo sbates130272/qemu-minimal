@@ -37,6 +37,20 @@ class CollectionRow(unittest.TestCase):
                       _badge("Batesste Collection"))
 
 
+class ImageRow(unittest.TestCase):
+    def test_the_guest_badge_is_the_image_the_fleet_pulls(self):
+        ref = re.search(r"<backing-ref>([^<]+)</backing-ref>", FLEET).group(1)
+        repo, _, tag = ref.rpartition(":")
+        badge = _badge("Guest Qcow2")
+        self.assertIn(f"/badge/guest-{tag}-", badge)
+        self.assertIn(
+            "hub.docker.com/r/" + repo.removeprefix("docker.io/") + "/tags",
+            badge)
+
+    def test_no_badge_links_to_the_guest_the_fleet_no_longer_pulls(self):
+        self.assertNotIn("batesste-ci-images-ubuntu-qcow2", README)
+
+
 class GoldenRow(unittest.TestCase):
     def test_the_release_is_the_fleet_files(self):
         release = re.search(r"<bake-release>([^<]+)</bake-release>", FLEET).group(1)

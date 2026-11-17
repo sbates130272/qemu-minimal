@@ -1,0 +1,34 @@
+---
+# Is the guest's 99-rocm-ernic.rules this role's file? Changes nothing.
+#
+# The published image 20261117.g80c17f8 carried rocm-ernic's copy instead,
+# whose Ethernet rule is NAME="rocm-ernic%n". %n is the kernel number, 0 for
+# every emulated NIC, so only one NIC per guest was renamed, and nothing in
+# the bake compared the file it installed with the one it meant to install.
+# The collection's ernic_guest_setup copies its own over this path whenever
+# it gets as far as loading the driver, so a bake asks last, after every
+# play that could have written it.
+#
+# The literal file name and not rocm_ernic_setup_udev_rules_src: the question
+# is whether the image has THIS file, whatever a caller pointed the install
+# at.
+- name: Compare the installed ernic naming rules with this role's
+  ansible.builtin.copy:
+    src: 99-rocm-ernic.rules
+    dest: /etc/udev/rules.d/99-rocm-ernic.rules
+    owner: root
+    group: root
+    mode: "0644"
+  check_mode: true
+  register: rocm_ernic_setup_naming_check
+
+- name: Fail when the guest carries other ernic naming rules
+  ansible.builtin.assert:
+    that:
+      - rocm_ernic_setup_naming_check is not changed
+    fail_msg: >-
+      /etc/udev/rules.d/99-rocm-ernic.rules is not this repository's
+      roles/rocm_ernic_setup/files/99-rocm-ernic.rules. Something installed
+      another copy after the naming tasks ran; rocm-ernic's own renames one
+      NIC per guest.
+    success_msg: The guest's ernic naming rules are this repository's.

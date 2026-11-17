@@ -111,8 +111,10 @@ class FleetConfig:
 
     # ---- Misc ----
     qemu_tool_src: str = "../../.."
-    # Excuses backing_ref from the build-stamp check, and nothing else. Off by
-    # default: the check is the thing that stops a mixed set wedging a fleet
+    # Excuses backing_ref from being held to the device servers' build, and
+    # nothing else: the stamp comparison for a batesste-ci-images qcow2, the
+    # bake-commit pin test (tests/test_playbook_pins.py) for a published one.
+    # Off by default: those checks are what stop a mixed set wedging a fleet
     # at the vfio-user boundary.
     image_allow_guest_lag: bool = False
 

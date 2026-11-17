@@ -4,7 +4,7 @@
 # Regenerate after changing qemu/stacks/rocm-golden.xml:
 #   qemu-tool gen-compose --xml qemu/stacks/rocm-golden.xml
 #
-# xml-sha256: dbacc6accb686ae19570012cf71ae4f7f96f3228f6b2bd4b4dc8bceb1792fd08  # pre-commit: ignore
+# xml-sha256: 2edc7087ad3609c666fe258d3e0e59792feed10b6dd4509d0853e9b107696f31  # pre-commit: ignore
 
 x-logging: &logging
   driver: json-file
@@ -237,9 +237,7 @@ services:
           --vmem "4096" \
           --nvme "1" \
           --extra-hostfwd "tcp::9100-:9100" \
-          --extra-hostfwd "tcp::9488-:9488" \
           --extra-hostfwd "tcp::9879-:9879" \
-          --extra-hostfwd "tcp::9490-:9490" \
           --vfio-userdev "/run/vfu/ernic-1.sock,/run/vfu/rocjitsu-1.sock,/run/vfu/sdxi-1.sock"
 
   # ---- VM 2: guest ernic IP 192.168.100.12 ----
@@ -286,9 +284,7 @@ services:
           --vmem "4096" \
           --nvme "1" \
           --extra-hostfwd "tcp::9100-:9100" \
-          --extra-hostfwd "tcp::9488-:9488" \
           --extra-hostfwd "tcp::9879-:9879" \
-          --extra-hostfwd "tcp::9490-:9490" \
           --vfio-userdev "/run/vfu/ernic-2.sock,/run/vfu/rocjitsu-2.sock,/run/vfu/sdxi-2.sock"
 
   # ---- metrics (opt-in: --profile metrics) ----

@@ -11,19 +11,24 @@ The prompts have to be inert when nobody can answer them. The lane runs this
 with no terminal, so a prompt that blocked would hang a 180-minute job rather
 than fail it.
 
-And the settings file makes two promises the subcommand cannot keep on its
-own: that its four image tags share one build stamp -- the generator rejects
-them otherwise, and a guest driver meeting a server from another build wedges
-rather than failing cleanly -- and that Grafana is switched on, since
+And the settings file makes promises the subcommand cannot keep on its
+own: that its three server image tags share one build stamp -- the generator
+rejects them otherwise, and servers from different builds wedge rather than
+failing cleanly -- that the guest is a dated tag of the image the file itself
+publishes, and that Grafana is switched on, since
 `--metrics` selects the profile but GRAFANA_ENABLE decides whether the
 service is generated at all.
 """
 
+import contextlib
 import importlib.util
 import io
 import os
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -178,11 +183,11 @@ class SettingsFileTest(unittest.TestCase):
         qs._rescan_layers(state)
         self.fleet = state.fleet
 
-    def test_the_four_images_share_one_build_stamp(self):
-        # The generator refuses a mixed set, and it is right to: a guest
-        # driver and a host rocm-ernic server from different builds do not
-        # fail cleanly across the vfio-user/DSR boundary, they wedge.
-        keys = ["qemu_ref", "ernic_ref", "rocjitsu_ref", "backing_ref"]
+    def test_the_three_server_images_share_one_build_stamp(self):
+        # The generator refuses a mixed set, and it is right to: QEMU and
+        # the device servers from different builds do not fail cleanly
+        # across the vfio-user/DSR boundary, they wedge.
+        keys = ["qemu_ref", "ernic_ref", "rocjitsu_ref"]
         stamps = {}
         for key in keys:
             tag = getattr(self.fleet, key).rsplit(":", 1)[1]
@@ -192,6 +197,15 @@ class SettingsFileTest(unittest.TestCase):
             stamps[key] = stamp
         self.assertEqual(1, len(set(stamps.values())),
                          f"mixed build stamps: {stamps}")
+
+    def test_the_guest_is_a_dated_tag_of_the_image_this_file_publishes(self):
+        # Not the servers' stamp: this repo bakes and publishes the guest,
+        # and its tag is that publish's. Never "latest": quick-start caches
+        # the disk and the keypair by the text of the ref, so a tag that
+        # moves would leave a host on whatever it pulled first.
+        repo, _, tag = self.fleet.backing_ref.rpartition(":")
+        self.assertEqual(repo, self.fleet.publish_ref)
+        self.assertRegex(tag, r"^[0-9]{8}\.g[0-9a-f]{7}$")
 
     def test_grafana_is_on(self):
         # --metrics selects the profile; this decides whether the service is
@@ -215,11 +229,17 @@ class SettingsFileTest(unittest.TestCase):
 
     def test_the_guest_exporters_are_forwarded(self):
         # Prometheus scrapes each guest through its qemu container, and the
-        # home dashboard is built on these four jobs. Without the forwards
+        # home dashboard is built on these two jobs. Without the forwards
         # every guest panel is empty and nothing errors.
+        #
+        # Two, not four. 9488 (amd-metrics-exporter) and 9490 (hsa-snoop)
+        # were forwarded too, and both targets were down in every guest:
+        # neither exporter can run against an emulated GPU, so the image runs
+        # neither. tests/test_guest_exporters.py holds the forwards, the
+        # scrape jobs and the dashboards to one another.
         rules = self.fleet.vm_extra_hostfwd.split(",")
-        for port in ("9100", "9488", "9879", "9490"):
-            self.assertIn(f"tcp::{port}-:{port}", rules)
+        self.assertEqual(sorted(rules),
+                         ["tcp::9100-:9100", "tcp::9879-:9879"])
 
     def test_logs_are_on(self):
         # The home dashboard has a Loki panel.
@@ -262,6 +282,223 @@ class SettingsFileTest(unittest.TestCase):
         self.assertEqual(shipped, on_disk)
         self.assertEqual(shipped,
                          ["helios-tray.xml", "mi355x-server.xml", "rocm-golden.xml"])
+
+
+class MovedGuestImageTest(unittest.TestCase):
+    """What a host that already ran quick-start does when <backing-ref> moves.
+
+    make_overlays leaves an existing overlay alone and fetch_key replaces the
+    keypair, so without this the old disks boot and refuse the new key.
+    """
+
+    OLD = "docker.io/x/guest:20261112.gdca6903-vm.resolute-qcow2"
+    NEW = "docker.io/x/qemu-tool-rocm-golden:20261117.g80c17f8"
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.images = Path(tmp.name)
+        self.state = _state(key_dir=self.images / "key")
+        self.state.fleet = qs.FleetConfig(
+            count=2, name_prefix="g", vm_images_dir=str(self.images),
+            backing_ref=self.NEW)
+        self.files = [self.images / name for name in (
+            "g-1.qcow2", "g-1-nvme1.qcow2", "g-2.qcow2", "g-2-nvme1.qcow2")]
+        for path in self.files:
+            path.write_bytes(b"disk")
+        self.backing = self.images / "g-1-backing.qcow2"
+        self.backing.write_bytes(b"backing")
+        self.marker = self.images / "g-1-backing.qcow2.image-ref"
+        # Another fleet's guests in the same directory, which are not ours.
+        self.other = self.images / "h-1.qcow2"
+        self.other.write_bytes(b"disk")
+
+    def _retire(self, running=(), answer=None, **kwargs):
+        """Run it with Docker's answer supplied; `answer` is a typed reply.
+
+        With no `answer` the prompt is the real one, and self.state has
+        assume_yes set, so it takes its default the way --yes and a run with
+        no terminal do.
+        """
+        patches = [
+            mock.patch.object(qs, "_running_guests",
+                              return_value=(None if running is None
+                                            else list(running))),
+            mock.patch.object(sys, "stdout", io.StringIO()),
+        ]
+        if answer is not None:
+            patches.append(
+                mock.patch.object(qs, "_confirm", return_value=answer))
+        with contextlib.ExitStack() as stack:
+            mocks = [stack.enter_context(patch) for patch in patches]
+            qs.retire_stale_overlays(self.state, **kwargs)
+            return mocks[1].getvalue()
+
+    def _left(self):
+        return [p for p in self.files if p.exists()]
+
+    def test_a_typed_yes_replaces_the_disks_on_the_old_image(self):
+        self.marker.write_text(self.OLD + "\n")
+        said = self._retire(answer=True)
+        self.assertEqual(self._left(), [])
+        # The backing file stays: gen-vm re-pulls over it and needs its
+        # record to know that it must.
+        self.assertTrue(self.backing.exists())
+        self.assertTrue(self.marker.exists())
+        self.assertTrue(self.other.exists())
+        self.assertIn(self.OLD, said)
+        self.assertIn(self.NEW, said)
+
+    def test_an_unattended_run_stops_and_removes_nothing(self):
+        # --yes, and equally a run with no terminal: nobody answered, and
+        # these are guest disks. The way to say yes unattended is the flag
+        # the message names.
+        self.marker.write_text(self.OLD + "\n")
+        self.assertTrue(self.state.assume_yes)
+        with self.assertRaises(SystemExit) as ctx:
+            self._retire()
+        self.assertIn("--clean-overlays", str(ctx.exception))
+        self.assertIn("Nothing was removed", str(ctx.exception))
+        self.assertEqual(self._left(), self.files)
+
+    def test_the_question_defaults_to_no(self):
+        self.marker.write_text(self.OLD + "\n")
+        with mock.patch.object(qs, "_confirm", return_value=True) as confirm:
+            self._retire()
+        self.assertIs(confirm.call_args.kwargs.get("default"), False)
+
+    def test_clean_overlays_is_the_answer_and_asks_nothing(self):
+        # The caller removes the disks itself, after the keypair is fetched.
+        self.marker.write_text(self.OLD + "\n")
+        with mock.patch.object(qs, "_confirm") as confirm:
+            said = self._retire(requested=True)
+        confirm.assert_not_called()
+        self.assertIn("--clean-overlays", said)
+        self.assertEqual(self._left(), self.files)
+        with mock.patch.object(sys, "stdout", io.StringIO()):
+            qs.clean_overlays(self.state)
+        self.assertEqual(self._left(), [])
+        self.assertTrue(self.backing.exists())
+        self.assertTrue(self.other.exists())
+
+    def test_nothing_is_removed_under_a_running_guest(self):
+        self.marker.write_text(self.OLD + "\n")
+        for kwargs in ({"answer": True}, {"requested": True}):
+            with self.subTest(**kwargs), \
+                    self.assertRaises(SystemExit) as ctx:
+                self._retire(running=["qemu-1", "qemu-2"], **kwargs)
+            self.assertIn("qemu-1, qemu-2", str(ctx.exception))
+            self.assertIn("quick-start down", str(ctx.exception))
+            self.assertEqual(self._left(), self.files)
+
+    def test_nothing_is_removed_when_docker_cannot_be_asked(self):
+        self.marker.write_text(self.OLD + "\n")
+        with self.assertRaises(SystemExit) as ctx:
+            self._retire(running=None, answer=True)
+        self.assertIn("Nothing was removed", str(ctx.exception))
+        self.assertEqual(self._left(), self.files)
+
+    def test_only_a_running_qemu_service_counts(self):
+        # A guest that has exited leaves its servers up, and they hold no
+        # disk: a rerun after a failed `up` must not be turned away.
+        listing = "ernic-1\nqemu-2\nrocjitsu-1\nprometheus\n"
+        done = subprocess.CompletedProcess([], 0, stdout=listing, stderr="")
+        with mock.patch.object(qs.subprocess, "run", return_value=done) as run:
+            self.assertEqual(qs._running_guests(self.state), ["qemu-2"])
+        argv = run.call_args.args[0]
+        self.assertIn("status=running", argv)
+        self.assertIn(
+            f"label=com.docker.compose.project={self.state.stack_name}", argv)
+        failed = subprocess.CompletedProcess([], 1, stdout="", stderr="no")
+        with mock.patch.object(qs.subprocess, "run", return_value=failed):
+            self.assertIsNone(qs._running_guests(self.state))
+        with mock.patch.object(qs.subprocess, "run",
+                               side_effect=FileNotFoundError("docker")):
+            self.assertIsNone(qs._running_guests(self.state))
+
+    def test_disks_on_the_named_image_are_left_alone(self):
+        self.marker.write_text(self.NEW + "\n")
+        self.assertEqual(self._retire(running=None), "")
+        self.assertEqual(self._left(), self.files)
+
+    def test_an_image_nobody_pulled_is_left_alone(self):
+        # No record: a bake by hand under this name, or a backing file
+        # somebody fetched themselves.
+        self.assertEqual(self._retire(running=None), "")
+        self.assertEqual(self._left(), self.files)
+
+    def test_a_no_stops_before_anything_is_removed(self):
+        self.marker.write_text(self.OLD + "\n")
+        with self.assertRaises(SystemExit) as ctx:
+            self._retire(answer=False)
+        self.assertIn("--clean-overlays", str(ctx.exception))
+        self.assertEqual(self._left(), self.files)
+
+    def test_it_runs_before_the_keypair_is_replaced(self):
+        source = (REPO_ROOT / "qemu/qemu-tool/quick_start.py").read_text()
+        body = source[source.index('if verb in ("all", "up"):'):]
+        self.assertLess(body.index("retire_stale_overlays(state"),
+                        body.index("fetch_key(state)"))
+        self.assertLess(body.index("fetch_key(state)"),
+                        body.index("make_overlays(state)"))
+        # --clean-overlays unlinks the same files, so it is turned away from
+        # a running guest too, and before the keypair moves.
+        self.assertLess(body.index("_refuse_under_running_guests("),
+                        body.index("fetch_key(state)"))
+        self.assertLess(body.index("fetch_key(state)"),
+                        body.index("clean_overlays(state)"))
+
+    @unittest.skipUnless(shutil.which("ssh-keygen"), "needs ssh-keygen")
+    def test_a_refetched_keypair_replaces_the_published_copy(self):
+        def keypair(directory: Path) -> Path:
+            directory.mkdir(parents=True, exist_ok=True)
+            subprocess.run(
+                ["ssh-keygen", "-q", "-t", "ed25519", "-N", "",
+                 "-f", str(directory / "id_rsa")], check=True)
+            return directory / "id_rsa"
+
+        old = keypair(self.images / "old")
+        new = keypair(self.state.key_dir)
+        published = self.images / "keys" / "quickstart_id_rsa"
+        published.parent.mkdir()
+        published.write_bytes(old.read_bytes())
+        published.with_suffix(".pub").write_text(
+            (self.images / "old" / "id_rsa.pub").read_text())
+
+        # Filling in leaves an earlier image's key where it is ...
+        qs._publish_keypair(self.state)
+        self.assertEqual(published.read_bytes(), old.read_bytes())
+        # ... and a re-fetch replaces both halves.
+        qs._publish_keypair(self.state, replace=True)
+        self.assertEqual(published.read_bytes(), new.read_bytes())
+        self.assertEqual(
+            published.with_suffix(".pub").read_text().split()[:2],
+            (self.state.key_dir / "id_rsa.pub").read_text().split()[:2])
+        self.assertEqual(published.stat().st_mode & 0o777, 0o600)
+
+
+class ArtifactsDirTest(unittest.TestCase):
+    """The test summaries live in the stack they describe.
+
+    They used to go to /var/tmp/quickstart-artifacts-<flavor>, which no flag
+    moved and which `test` empties first, so two stacks of one flavor deleted
+    each other's.
+    """
+
+    def test_it_is_inside_the_stack_directory(self):
+        self.assertEqual(qs._artifacts_dir(Path("/srv/stacks/a")),
+                         Path("/srv/stacks/a/artifacts"))
+        self.assertNotEqual(qs._artifacts_dir(Path("/srv/stacks/a")),
+                            qs._artifacts_dir(Path("/srv/stacks/b")))
+
+    def test_it_is_absolute(self):
+        # ansible-playbook runs from the checkout's ansible/ directory.
+        self.assertTrue(qs._artifacts_dir(Path("stacks/a")).is_absolute())
+
+    def test_run_takes_it_from_the_resolved_stack_directory(self):
+        source = (REPO_ROOT / "qemu/qemu-tool/quick_start.py").read_text()
+        self.assertIn("artifacts=_artifacts_dir(resolved_stack_dir)", source)
+        self.assertNotIn('Path(f"/var/tmp/quickstart-artifacts', source)
 
 
 class SdxiImageTest(unittest.TestCase):

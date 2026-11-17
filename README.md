@@ -31,13 +31,13 @@
 [![Batesste Collection](https://img.shields.io/badge/sbates130272.batesste-3.3.1-9cf?style=flat-square)](https://galaxy.ansible.com/ui/repo/published/sbates130272/batesste/)
 [![Rocm-ernic Collection](https://img.shields.io/badge/sbates130272.rocm__ernic-90434a2-9cf?style=flat-square)](https://github.com/ROCm/rocm-ernic)
 
-<!-- CI images pinned in qemu/stacks/rocm-golden.xml; sbates-fork is the QEMU qemu/stacks/mi355x-server.xml pins for P2P DMA -->
+<!-- CI images pinned in qemu/stacks/rocm-golden.xml, and the guest its <backing-ref> pulls, which this repo publishes under its own stamp; sbates-fork is the QEMU qemu/stacks/mi355x-server.xml pins for P2P DMA -->
 [![CI image build](https://img.shields.io/badge/ci--images-20261112.gdca6903-informational?style=flat-square&logo=docker)](https://hub.docker.com/u/sbates130272)
 [![Qemu](https://img.shields.io/badge/qemu-11.1.3-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user/tags)
 [![Libvfio-user](https://img.shields.io/badge/libvfio--user-05bb5e5-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user/tags)
 [![Rocm-ernic](https://img.shields.io/badge/rocm--ernic-90434a2-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-rocm-ernic/tags)
 [![Rocjitsu](https://img.shields.io/badge/rocjitsu-50be05a-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu/tags)
-[![Guest Qcow2](https://img.shields.io/badge/guest-resolute%20%7C%20qm.096ddfe-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu/tags)
+[![Guest Qcow2](https://img.shields.io/badge/guest-20261117.g80c17f8-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/qemu-tool-rocm-golden/tags)
 [![Qemu Fork](https://img.shields.io/badge/sbates--fork-qemu.4cb9698-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork/tags)
 
 <!-- What the rocm-golden guest is baked with: pins in ansible/playbooks/vm-rocm-golden.yml and <bake-release> in qemu/stacks/rocm-golden.xml -->
@@ -48,7 +48,7 @@
 [![Golden ernic driver](https://img.shields.io/badge/ionic%20%2B%20SRQ%20%2B%20P4-90434a2-blueviolet?style=flat-square)](https://github.com/ROCm/rocm-ernic/commit/90434a237232275fc8002cb3a6b5121ba836c594)
 [![Golden SDXI driver](https://img.shields.io/badge/sdxi-dfd76f2-blueviolet?style=flat-square)](https://github.com/ROCm/rocm-systems/commit/dfd76f23f6f10561333fc0a9a9f23e9f3b255c04)
 
-[![Quick-start Build](https://img.shields.io/badge/quick--start-20261112.gdca6903-success?style=flat-square&logo=docker)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu/tags)
+[![Quick-start Build](https://img.shields.io/badge/quick--start-20261112.gdca6903-success?style=flat-square&logo=docker)](https://hub.docker.com/u/sbates130272)
 
 ## Summary
 
@@ -78,12 +78,11 @@ testing.
 The fastest way to something real: two guests, each with an emulated gfx1250,
 an emulated NVMe, an emulated rocm-ernic RDMA NIC and an emulated SDXI device,
 with Prometheus, Grafana and log collection beside them, plus a GPU test and
-an RDMA test across them. The guest is pulled, not built — it comes from a
-published qcow2 that already carries the mainline kernel, the ionic driver,
-rdma-core, perftest and ROCm 10.1 — and the GPU, NIC and SDXI servers come
-from tagged CI images. Nothing is built on your machine. The published guest
-does not carry the SDXI driver yet, so its SDXI device is present but unbound;
-a guest baked with `gen-vm --bake` has it.
+an RDMA test across them. The guest is pulled, not built — it comes from the
+qcow2 this repository bakes and publishes, which already carries the mainline
+kernel, the ionic driver with SRQ and P4, rdma-core, perftest, ROCm 10.1 with
+the hipFile SDK, and the SDXI driver and its CLI — and the GPU, NIC and SDXI
+servers come from tagged CI images. Nothing is built on your machine.
 
 You need KVM, Docker with compose, Ansible, [`oras`](https://oras.land/) ≥ 1.3.4,
 8 cores, 16 GB of RAM and about 30 GB of disk. Then:
@@ -119,7 +118,7 @@ lane runs that same command every morning, against the same fleet file. It:
 1. checks this machine: KVM actually usable (the ioctl, not just the device
    node), the tools on `PATH`, a writable images directory, free disk, and
    nothing already sitting on the ports it wants;
-2. pulls the guest image (~2.5 GB, unpacking to ~9 GB — the long step) and
+2. pulls the guest image (~2 GB, unpacking to ~8.5 GB — the long step) and
    its SSH keypair, which
    ships beside it as an ORAS referrer;
 3. creates two overlays of one backing file and generates a two-VM stack from
@@ -136,7 +135,7 @@ lane runs that same command every morning, against the same fleet file. It:
 
 Measured on a 32-core workstation: **2 m 47 s** end to end once the backing
 image is cached, and a first run is that plus however long pulling the
-~2.5 GB guest image and the container images takes you (about 3 minutes
+~2 GB guest image and the container images takes you (about 3 minutes
 here). When it finishes it prints how to get in,
 which is:
 
@@ -168,6 +167,19 @@ Useful variations — `qemu-tool quick-start <verb>`:
 | `up` | stop once the guests are booted |
 | `test` | configure and test a stack that is already up |
 | `down` | power the guests off and stop the stack, keeping the overlays |
+
+**The GPU needs `test` before it is usable: firmware first, then the
+probe.** The guest image carries no `ip_discovery.bin` — it belongs to the
+rocjitsu build serving the guest — and `amdgpu` cannot probe the GPU without
+it. `quick-start` with no verb, and `quick-start test`, stage it from the
+running rocjitsu and then load the driver. After `quick-start up` alone, or
+on a stack started with `qemu-tool compose`, neither has happened: the
+guest's login message says the GPU cannot be probed yet and names the host
+command, and `sudo amdgpu-probe` in the guest refuses rather than load a
+driver whose probe would fail and leave it resident with nothing bound.
+`amdgpu-probe --status` prints which state a guest is in; `~/WELCOME.md` in
+the guest lists them. That behaviour is in guests baked from this tree — a
+published image older than it still tells you to run the probe first.
 
 `qemu-tool quick-start --help` has the rest, and `qemu-tool man` has all of
 it. For more than two guests see [A fleet of your own](#a-fleet-of-your-own),
@@ -596,11 +608,14 @@ is parsed, so every command and `docker compose` see the same path.
 
 `rocm-golden.xml` also says how the image its guests boot from is made, in its
 `<bake-*>` and `<publish-*>` elements. A plain `gen-vm` reads none of them — it
-pulls the image named by `<backing-ref>`, which is not yet the one
-`<publish-ref>` names: the fleet still pins the batesste-ci-images build of
-the guest until a publish from here has been qualified. From the checkout
-root, because `<bake-packages>` and `<bake-playbook>` are resolved against
-the current directory:
+pulls the image named by `<backing-ref>`, which is a dated tag of the
+repository `<publish-ref>` names: the guest a fleet boots is one those
+elements built and the publish workflow qualified. `<backing-ref>` does not
+follow a publish by itself; it is moved by hand to a newer dated tag, in all
+three fleet files, and `gen-compose` refuses `latest` there because a tag
+that moves would leave each host on whichever image it pulled first. From
+the checkout root, because `<bake-packages>` and `<bake-playbook>` are
+resolved against the current directory:
 
 ```bash
 qemu-tool gen-vm --bake --xml qemu/stacks/rocm-golden.xml   # bake it from the cloud image
@@ -644,9 +659,20 @@ after the last, and leaves nothing of the cache in the image. The same can be
 set once in an overlay of your own as `<bake-cache-dir>`; the flag wins.
 `--cache-replace` says the cache there was saved for other pins and is to be
 saved again however little this bake missed. Nothing in the environment names
-a cache. **Not for an image that is published**: `rocm-golden.xml` sets no
-`<bake-cache-dir>`, the publish workflow passes no `--cache-dir`, and a
-published image is compiled from source.
+a cache. `rocm-golden.xml` sets no `<bake-cache-dir>`: a directory is a fact
+about one host, so it is a flag or an overlay of your own.
+
+**The published image is baked with a cache too.** The publish workflow and
+the playbook-test lane both pass `--cache-dir` and share one cache through
+GitHub's: the publish workflow saves on `main`, and a pull request reads
+what `main` saved. A kernel module in a published image may therefore be
+linked from objects an earlier run on `main` compiled; ccache reuses an
+object only for the same compiler, flags and source. The playbook takes
+ccache back out of the guest, `qemu/checks/rocm-golden.sh` fails an image
+that still carries it, and the publish workflow runs that check before it
+pushes. On one pull request the lane took 27m27s cold and 17m46s on a later
+run; the publish workflow has not yet run with the cache, so what it saves
+there is not measured.
 
 **What the publish workflow pushes, and what it later deletes.** Each publish
 is one manifest under three tags, in this order:

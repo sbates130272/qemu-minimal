@@ -38,6 +38,9 @@ on:
       - 'qemu/stacks/rocm-golden.xml'
       - '.github/actions/setup-vm-job/action.yml'
       - '.github/actions/report-image-size/action.yml'
+      # The compiler cache of the bake: how it is named, restored and saved.
+      - '.github/actions/bake-ccache-restore/action.yml'
+      - '.github/actions/bake-ccache-save/action.yml'
       - '.github/workflows/qemu-minimal-ansible-playbook-test-vm-rocm-golden.yml'
 
 concurrency:
@@ -57,18 +60,16 @@ env:
   # directory's basename, playbook-test.
   STACK_DIR: /var/lib/qemu-tool/stacks/playbook-test
   OVERLAY: /var/lib/qemu-tool/stacks/playbook-test.xml
-  # Where the bake's compiler cache sits in this job container, between the
-  # actions/cache steps and the Ansible controller gen-vm runs here. Absolute,
-  # for the reason the pip cache path in setup-vm-job is.
-  BAKE_CCACHE_DIR: /var/cache/bake-ccache
   # No ANSIBLE_EXTRA_ARGS. The playbook's own defaults are the published
   # image's -- no dotfiles, no SSH private key, no GPG signing, no distro
   # upgrade, no ip_discovery.bin -- and this lane bakes with exactly those, so
   # a default that drifts shows up here.
   #
-  # Two things do differ from a published bake, and neither changes what is
-  # installed: the module builds go through a compiler cache, and the image
-  # is not compacted afterwards. Both are on the bake step below.
+  # The module builds go through a compiler cache, as the published bake's
+  # do: the two workflows share one cache, through the bake-ccache-restore
+  # and bake-ccache-save actions. What differs from a published bake is on
+  # the bake step below, and none of it changes what is installed: the guest
+  # name, the login key, and that the image is not compacted afterwards.
 
 jobs:
   test-vm-rocm-golden:
@@ -103,39 +104,16 @@ jobs:
         # Read from the fleet file, which is what the stack below runs.
         docker pull "$(sed -n 's|.*<sdxi-image>\(.*\)</sdxi-image>.*|\1|p' qemu/stacks/rocm-golden.xml)"
 
-    # ccache addresses what it stores by content, so the key decides nothing
-    # about correctness. It is housekeeping: the prefix moves when an input
-    # that invalidates most of the cache moves, so a pin bump starts a new
-    # line of entries instead of growing the old one for ever.
-    - name: Name the compiler cache
-      id: ccache-key
-      run: |
-        set -eu
-        playbook=ansible/playbooks/vm-rocm-golden.yml
-        # Where each is defined: the three anchors and the driver release.
-        pins=$(grep -E '^ +((ionic_kernel_pin|ernic_source_pin|sdxi_source_pin): &|rocm_setup_amdgpu_driver_version: )' "$playbook")
-        # All four, or a renamed pin has dropped out of the key unnoticed.
-        test "$(printf '%s\n' "$pins" | wc -l)" -eq 4
-        patches=ansible/playbooks/roles/rocjitsu_setup/files/amdgpu-emu-patches.py
-        test -f ansible/requirements.yml
-        test -f "$patches"
-        digest=$({ printf '%s\n' "$pins"; cat ansible/requirements.yml "$patches"; } |
-                   sha256sum | cut -c1-16)
-        echo "prefix=bake-ccache-v1-${digest}" >> "$GITHUB_OUTPUT"
-
-    # restore and save are separate steps so that the save can sit straight
-    # after the bake and run only when the bake produced something new. The
-    # key is unique to the run because a cache entry cannot be overwritten;
-    # the restore-keys are what find the last one, same pins first.
+    # The compiler cache of the bake, shared with the publish workflow: both
+    # use this action, so both compute one key prefix for one directory, and
+    # an entry either saves is a prefix hit for the other. A pull request can
+    # read the entries saved on main, which the publish workflow keeps
+    # current because it runs on every push to main that moves a pin. The
+    # action also marks the start of the bake, so the bake must be the next
+    # step.
     - name: Restore the compiler cache
       id: bake-ccache
-      uses: actions/cache/restore@v4
-      with:
-        path: ${{ env.BAKE_CCACHE_DIR }}
-        key: ${{ steps.ccache-key.outputs.prefix }}-${{ github.run_id }}-${{ github.run_attempt }}
-        restore-keys: |
-          ${{ steps.ccache-key.outputs.prefix }}-
-          bake-ccache-v1-
+      uses: ./.github/actions/bake-ccache-restore
 
     # Baked exactly as the published guest is, from the default fleet's
     # <bake-*> elements, so the check below sees the guest a consumer gets.
@@ -144,29 +122,26 @@ jobs:
     # --vm-name outranks <bake-name>. And the key is the job's own, so that
     # plain ssh reaches the guest; gen-vm would otherwise generate one.
     #
-    # --cache-dir is what turns the compiler cache on; the publish workflow
-    # does not pass it, and a published image is compiled from source.
-    # gen-vm creates the directory. --no-compact because nothing publishes
-    # this image: the recompress was most of the three minutes between the
-    # playbook ending and the image being ready, spent on a file the job
-    # throws away.
-    #
-    # --cache-replace is passed when the cache restored above was not saved
-    # under this run's prefix, which is to say for other pins (or when
-    # nothing was restored). The bake then saves its cache whatever it
-    # missed: a bumped ernic or SDXI pin is too few compiles for the role's
-    # own miss count to notice, and would otherwise recompile in every run.
+    # --cache-dir is what turns the compiler cache on, here and in the
+    # publish workflow; gen-vm creates the directory. --cache-replace is
+    # passed when the entry restored above was saved under another key
+    # prefix, or none was restored; the action decides. --no-compact because
+    # nothing publishes this image: the recompress was most of the three
+    # minutes between the playbook ending and the image being ready, spent
+    # on a file the job throws away.
     - name: Generate VM with vm-rocm-golden playbook
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        CACHE_REPLACE: ${{ !startsWith(steps.bake-ccache.outputs.cache-matched-key, steps.ccache-key.outputs.prefix) && '--cache-replace' || '' }}
+        BAKE_CCACHE_DIR: ${{ steps.bake-ccache.outputs.dir }}
+        CACHE_REPLACE: ${{ steps.bake-ccache.outputs.replace }}
       run: |
+        # Empty is not "no cache": gen-vm takes "" for the current
+        # directory, and the save step would look in "/" and find nothing.
+        if [ -z "$BAKE_CCACHE_DIR" ]; then
+          echo "::error::bake-ccache-restore handed back no cache directory"
+          exit 1
+        fi
         mkdir -p "$VM_IMAGES_DIR"
-        # What the report step below compares against: a restored cache is
-        # older than this file, one this bake wrote is newer. Outside the
-        # cached directory, or it would be restored with the cache and be
-        # older than the files it is there to date.
-        touch "$RUNNER_TEMP/bake-started"
         qemu-tool gen-vm --bake --xml qemu/stacks/rocm-golden.xml \
           --vm-name "$VM_NAME" --images "$VM_IMAGES_DIR" \
           --ssh-key-file "$HOME/.ssh/id_rsa.pub" --no-compact \
@@ -174,52 +149,14 @@ jobs:
 
     # always(), because the playbook saves the cache before its last two
     # plays and a bake that failed in one of them still compiled everything.
-    # The statistics are the bake's own "ccache --show-stats", with a last
-    # line saying how many ccache invocations missed. A warm run misses a
-    # few -- the amdgpu configure tests are not reproducible -- and the role
-    # leaves the archive alone below a hundred, so most runs save nothing.
-    # That last line is also where a hook that never fired shows: every
-    # counter zero is a bake compiled from source with ccache looking on.
-    #
-    # With no marker the bake step never started, and nothing in the
-    # directory is this run's however new it looks.
-    - name: Report the compiler cache
-      id: ccache-report
-      if: always()
-      run: |
-        dir="$BAKE_CCACHE_DIR"
-        started="$RUNNER_TEMP/bake-started"
-        if [ ! -e "$started" ]; then
-          echo "the bake did not start: nothing to report or save"
-          exit 0
-        fi
-        if [ "$dir/stats.txt" -nt "$started" ]; then
-          cat "$dir/stats.txt"
-          {
-            echo '### Compiler cache'
-            echo '```'
-            cat "$dir/stats.txt"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          if grep -q '^ccache saw no compiler invocation' "$dir/stats.txt"; then
-            echo "::warning::the bake's compiler cache saw no compiles: the ccache wrappers did not intercept the module builds"
-          fi
-        else
-          echo "the bake did not get as far as reporting its compiler cache"
-        fi
-        if [ "$dir/ccache.tar" -nt "$started" ]; then
-          ls -l "$dir/ccache.tar"
-          echo "new=true" >> "$GITHUB_OUTPUT"
-        else
-          echo "the bake left the cache as it was restored: nothing to save"
-        fi
-
+    # The statistics go to the step summary; the directory is saved only if
+    # the bake wrote a new archive into it.
     - name: Save the compiler cache
-      if: always() && steps.ccache-report.outputs.new == 'true'
-      uses: actions/cache/save@v4
+      if: always()
+      uses: ./.github/actions/bake-ccache-save
       with:
-        path: ${{ env.BAKE_CCACHE_DIR }}
-        key: ${{ steps.bake-ccache.outputs.cache-primary-key }}
+        dir: ${{ steps.bake-ccache.outputs.dir }}
+        key: ${{ steps.bake-ccache.outputs.key }}
 
     # One guest of the default fleet: qemu/stacks/rocm-golden.xml plus the few
     # elements this lane changes. Left out are the TAP, which is the L2 path
@@ -318,10 +255,11 @@ jobs:
     # The file batesste-ci-images gates the published image on, run here so
     # this repo gates the same thing. It is written for a boot with no
     # device; this guest has the ernic, the GPU and the SDXI device attached,
-    # so the probe is expected to say "ready" where a bare boot says
-    # "absent". Its SDXI section is static and holds either way. Before the
-    # firmware step below, because it asserts the image carries no
-    # ip_discovery.bin.
+    # so the probe is expected to say "nofirmware" where a bare boot says
+    # "absent": a GPU on the bus and no ip_discovery.bin, which is the state
+    # the probe refuses in. Its SDXI section is static and holds either way.
+    # Before the firmware step below, because it asserts the image carries
+    # no ip_discovery.bin.
     #
     # Over "bash -s": non-login and non-interactive, which is the session
     # the check's ROCm PATH assertions are about.
@@ -329,7 +267,7 @@ jobs:
       run: |
         { echo 'set -eu'; cat qemu/checks/rocm-golden.sh; } |
           ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
-            -p 2222 ubuntu@qemu-1 "ROCM_GOLDEN_EXPECT_PROBE=ready bash -s"
+            -p 2222 ubuntu@qemu-1 "ROCM_GOLDEN_EXPECT_PROBE=nofirmware bash -s"
         echo "✓ qemu/checks/rocm-golden.sh passed"
 
     # The check above cannot ask for the device; this boot has one, and the
@@ -377,6 +315,23 @@ jobs:
           -e "ansible_user=ubuntu" \
           -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"'
 
+    # The configure stage runs the collection's ernic_guest_setup, which
+    # copies rocm-ernic's own 99-rocm-ernic.rules over the image's; the play
+    # puts this repository's back afterwards. The guest check asserted the
+    # file before that stage. These are the same lines of it, run again
+    # after: "begin: ernic naming rules" to "end: ernic naming rules".
+    - name: Verify the configure stage left this repository's naming rules
+      run: |
+        out=$({ echo 'set -eu'
+                sed -n '/^# begin: ernic naming rules$/,/^# end: ernic naming rules$/p' \
+                  qemu/checks/rocm-golden.sh; } |
+              ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+                -p 2222 ubuntu@qemu-1 "bash -s")
+        echo "$out"
+        # The line the block ends on: markers that moved would send nothing.
+        echo "$out" | grep -q '^udev: 99-rocm-ernic.rules indexes both devices'
+        echo "✓ 99-rocm-ernic.rules is still this repository's"
+
     # ionic mode builds ionic and ionic_rdma; there is no rocm_ernic module.
     - name: Verify ionic modules loaded and NIC visible
       run: |
@@ -398,6 +353,11 @@ jobs:
     # This step has hung and only died to the job-level timeout, with no diagnostic output. Bound at all three layers
     # -- the guest command, the ssh session and the step. It needs the
     # ip_discovery.bin the firmware stage above installed.
+    #
+    # A retry is amdgpu-probe again, never rmmod: unloading this module has
+    # been seen to fault, and on a resident amdgpu whose GPU has no driver the
+    # probe binds it through sysfs, which is the recovery a guest's own user
+    # is given.
     - name: Load amdgpu via amdgpu-probe
       timeout-minutes: 10
       run: |
@@ -413,8 +373,7 @@ jobs:
             sleep 3
           done
           if [ "$attempt" -lt 3 ]; then
-            echo "KFD GPU node not present after attempt $attempt, reloading amdgpu..." >&2
-            $SSH "sudo rmmod amdgpu" || true
+            echo "KFD GPU node not present after attempt $attempt: $($SSH "/usr/local/bin/amdgpu-probe --status" 2>/dev/null || echo unknown); probing again..." >&2
             sleep 5
           fi
         done

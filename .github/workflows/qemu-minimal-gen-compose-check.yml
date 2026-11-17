@@ -47,8 +47,15 @@ jobs:
       CONTAINER_USER: "1001:127"
       CONTAINER_KVM_GID: "108"
     steps:
+      # All history, not the one commit: tests/test_playbook_pins.py reads
+      # vm-rocm-golden.yml at the commit the fleet's <backing-ref> guest was
+      # baked from, to compare the pins that guest was built at with the
+      # server images the fleet files name. On a shallow checkout that test
+      # skips, and this is the only lane that runs it on a pull request.
       - name: Check out code
         uses: actions/checkout@v4.3.1
+        with:
+          fetch-depth: 0
 
       # qemu-tool is stdlib-only, so an editable install needs no resolver and
       # pulls nothing. Installing it rather than importing from the tree keeps

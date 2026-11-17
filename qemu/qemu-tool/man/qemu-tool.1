@@ -263,7 +263,15 @@ checks this machine and touches nothing;
 .B up
 stops once the guests are booted;
 .B test
-configures and tests a stack that is already up;
+configures and tests a stack that is already up \(em including staging each
+guest's per\-build
+.I ip_discovery.bin
+from the rocjitsu serving it and only then loading
+.IR amdgpu ,
+so a guest logged into before it has run has a GPU that cannot be probed
+yet, says so at login, and has an
+.B amdgpu\-probe
+that refuses until the firmware is staged;
 .B down
 stops it and leaves the overlays in place, so a later run skips the pull.
 .IP
@@ -333,7 +341,11 @@ For a caller that is itself a container attached to that network, which is
 what the CI lane is.
 .TP
 .BR \-\-yes ", " \-y
-Take the default answer to every prompt without asking.
+Take the default answer to every prompt without asking. Every default is to
+go ahead but one: replacing guest disks made on an image the settings no
+longer name defaults to no, and
+.B \-\-clean\-overlays
+is how to say yes to it.
 .TP
 .BI \-\-flavor " NAME"
 Quickstart flavor to run.
@@ -381,7 +393,8 @@ NVMe pass for this many seconds. Default: 10.
 .B \-\-clean\-overlays
 Delete the guest overlay and NVMe qcow2 files before starting, so the guests
 boot from a fresh overlay of the backing image. The backing file itself is
-kept. Only meaningful with the
+kept. Refused, with nothing removed, while a guest of the stack is running:
+take the stack down first. Only meaningful with the
 .B up
 or
 .B all
@@ -714,10 +727,12 @@ leaves nothing of the cache in the image. Default:
 else no cache, which is a bake compiled from source. The cache is named by
 this flag or that element and by nothing in the environment. Refused without
 .BR \-\-bake ,
-and when the bake has no playbook to hand it to. Not for an image that is
-published:
+and when the bake has no playbook to hand it to.
 .I rocm\-golden.xml
-names no cache directory, and the publish workflow passes none.
+names no cache directory, since the directory is a fact about one host. The
+workflow that publishes the rocm\-golden image passes this flag, so a kernel
+module in a published image may be linked from objects an earlier bake
+compiled.
 .TP
 .B \-\-cache\-replace
 With a cache directory: the cache in it was saved for other source pins, so
@@ -2029,7 +2044,23 @@ beside the reference each pins, and
 .BR <image\-allow\-guest\-lag> ,
 which excuses
 .B <backing\-ref>
-from the build-stamp check.
+from being held to the device servers' build.
+.B <backing\-ref>
+names the guest by a tag that does not move: the dated tag
+.B publish\-qcow
+pushes,
+.IR YYYYMMDD .g sha7 ,
+or a digest.
+.B gen\-compose
+refuses
+.BR latest ,
+.BI qm. sha7
+and a reference with no tag, which move, and a tag that can only be a
+mistake for the dated one: a near miss of its shape,
+.B latest
+in another case, and any other tag in the repository
+.B <publish\-ref>
+names.
 .TP
 Devices
 .BR <ernic\-per\-vm> ,
