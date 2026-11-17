@@ -135,10 +135,11 @@ installed and blacklisted; load it by hand when you want it.
 - **A bare `modprobe amdgpu` costs a reboot.** Without the emulation
   parameters it binds nothing, and `rmmod amdgpu` has been seen to fault.
 - **Without `ip_discovery.bin` amdgpu cannot probe a GPU.** `amdgpu-probe`
-  refuses to load the driver until it is staged. A bare `modprobe` does not:
-  the failure is `can't load firmware "amdgpu/ip_discovery.bin"` and
-  `probe with driver amdgpu failed`, and amdgpu is left loaded with nothing
-  bound, which is `unbound` above.
+  refuses to load the driver until it is staged. A `modprobe amdgpu` given
+  the same parameters by hand does not: the failure is `can't load firmware
+  "amdgpu/ip_discovery.bin"` and `probe with driver amdgpu failed`, and
+  amdgpu is left loaded with nothing bound, which is `unbound` above. With
+  no parameters it is `stranded`, the bullet before this one.
 - **Locked memory is unlimited here on purpose.** Past the 8192 KB default
   every `ibv_reg_mr()` fails with "Cannot allocate memory", reported a long
   way from the cause.

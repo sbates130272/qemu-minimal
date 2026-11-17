@@ -168,6 +168,19 @@ Useful variations — `qemu-tool quick-start <verb>`:
 | `test` | configure and test a stack that is already up |
 | `down` | power the guests off and stop the stack, keeping the overlays |
 
+**The GPU needs `test` before it is usable: firmware first, then the
+probe.** The guest image carries no `ip_discovery.bin` — it belongs to the
+rocjitsu build serving the guest — and `amdgpu` cannot probe the GPU without
+it. `quick-start` with no verb, and `quick-start test`, stage it from the
+running rocjitsu and then load the driver. After `quick-start up` alone, or
+on a stack started with `qemu-tool compose`, neither has happened: the
+guest's login message says the GPU cannot be probed yet and names the host
+command, and `sudo amdgpu-probe` in the guest refuses rather than load a
+driver whose probe would fail and leave it resident with nothing bound.
+`amdgpu-probe --status` prints which state a guest is in; `~/WELCOME.md` in
+the guest lists them. That behaviour is in guests baked from this tree — a
+published image older than it still tells you to run the probe first.
+
 `qemu-tool quick-start --help` has the rest, and `qemu-tool man` has all of
 it. For more than two guests see [A fleet of your own](#a-fleet-of-your-own),
 which is the same stack generator with a larger `<vm-count>`.

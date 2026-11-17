@@ -584,12 +584,15 @@
         - "{{ ionic_p4_guest_source_root }}"
         - /var/tmp/ernic-p4-src.tar.gz
 
+    # The role's own file, so no rocm_ernic_setup_udev_rules_src here. This
+    # used to name rocm-ernic's copy at ernic_source_pin, whose Ethernet rule
+    # is NAME="rocm-ernic%n": %n is 0 for every emulated NIC, so a guest with
+    # eight of them had one renamed. The play that records the bake checks
+    # that this file is the one the image ends up with.
     - name: Install the rocm-ernic udev naming rules
       ansible.builtin.include_role:
         name: rocm_ernic_setup
         tasks_from: naming
-      vars:
-        rocm_ernic_setup_udev_rules_src: "{{ ernic_source_dir }}/udev/99-rocm-ernic.rules"
 
     # /dev/ernic-p4 is root-only as the driver leaves it. This image opens
     # it to one group and puts the baked account in it, so the P4 benchmark
@@ -731,6 +734,13 @@
         path: /lib/firmware/amdgpu/ip_discovery.bin
       register: golden_ip_discovery
 
+    # After every play that could have written them: ernic_guest_setup copies
+    # rocm-ernic's own rules when it gets as far as loading the driver.
+    - name: Check the ernic naming rules are this repository's
+      ansible.builtin.include_role:
+        name: rocm_ernic_setup
+        tasks_from: naming_check
+
     - name: Collect the facts for the stamp
       ansible.builtin.set_fact:
         golden_pkg: >-
@@ -863,6 +873,20 @@
         tasks_from: source_clone
   roles:
     - role: sbates130272.rocm_ernic.ernic_guest_setup
+  # The role copies rocm-ernic's own 99-rocm-ernic.rules over the image's,
+  # unconditionally (driver_common.yml), and its Ethernet rule renames one NIC
+  # per guest. On a golden guest that copy renames nothing during the run:
+  # the modules are loaded and the devices named before it starts, and the
+  # role's udevadm trigger sends "change" events, which rules matching
+  # ACTION=="add" ignore. It is what the next boot would read, though, so
+  # this repository's file goes back last. A run that fails inside the role
+  # never gets here; run it again, or vm-quickstart.yml, which installs the
+  # same file.
+  post_tasks:
+    - name: Put this repository's ernic naming rules back
+      ansible.builtin.include_role:
+        name: rocm_ernic_setup
+        tasks_from: naming
 
 # Needs the rocjitsu vfio-user server running, so it is not part of a bake.
 - name: Run GPU workloads on a live guest

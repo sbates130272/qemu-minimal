@@ -585,6 +585,23 @@ class TestRender(unittest.TestCase):
         self.assertIn('targets: ["172.31.3.8:9100"]', body)
         self.assertIn('targets: ["172.31.0.10:9840"]', body)
 
+    def test_prometheus_scrapes_only_exporters_a_guest_can_run(self):
+        """No amd-gpu (:9488) and no hsa-snoop (:9490) job.
+
+        Both were rendered for every stack and both were down in every
+        guest. Every GPU this generator attaches is rocjitsu's:
+        amd-metrics-exporter's gpuagent assertion-fails against it and
+        hsa-snoop's collector deadlocks its dispatch, so the guest image
+        runs neither. A job is a target somebody has to explain.
+        """
+        import re
+        body = gen_compose.render_prometheus(_plan(), "abc")
+        self.assertEqual(
+            re.findall(r"^  - job_name: (\S+)$", body, re.M),
+            ["fleet-node", "rdma-exporter", "ernic-stats"])
+        for port in ("9488", "9490"):
+            self.assertNotIn(f':{port}"]', body)
+
 
 class TestXmlLayering(unittest.TestCase):
     """--xml is repeatable, and the provenance digest covers every layer.

@@ -4,7 +4,7 @@
 # Regenerate after changing qemu/stacks/mi355x-server.xml:
 #   qemu-tool gen-compose --xml qemu/stacks/mi355x-server.xml
 #
-# xml-sha256: 78768d11f6dac9b4da63921bc399e0625d66d5a72ef6564bf2bbc55197ba1551  # pre-commit: ignore
+# xml-sha256: e1ed7131d94da676ef932e935009e839586dc8048a3dd41f94788796dcc669f0  # pre-commit: ignore
 
 x-logging: &logging
   driver: json-file
@@ -1849,6 +1849,7 @@ services:
           --vmem "16384" \
           --nvme "2" \
           --extra-hostfwd "tcp::9100-:9100" \
+          --extra-hostfwd "tcp::9879-:9879" \
           --vfio-userdev "/run/vfu/ernic-1-1.sock,/run/vfu/rocjitsu-1-1.sock,/run/vfu/ernic-1-2.sock,/run/vfu/rocjitsu-1-2.sock,/run/vfu/ernic-1-3.sock,/run/vfu/rocjitsu-1-3.sock,/run/vfu/ernic-1-4.sock,/run/vfu/rocjitsu-1-4.sock,/run/vfu/ernic-1-5.sock,/run/vfu/rocjitsu-1-5.sock,/run/vfu/ernic-1-6.sock,/run/vfu/rocjitsu-1-6.sock,/run/vfu/ernic-1-7.sock,/run/vfu/rocjitsu-1-7.sock,/run/vfu/ernic-1-8.sock,/run/vfu/rocjitsu-1-8.sock"
 
   # ---- VM 2: guest ernic IP 192.168.100.19 ----
@@ -1925,6 +1926,7 @@ services:
           --vmem "16384" \
           --nvme "2" \
           --extra-hostfwd "tcp::9100-:9100" \
+          --extra-hostfwd "tcp::9879-:9879" \
           --vfio-userdev "/run/vfu/ernic-2-1.sock,/run/vfu/rocjitsu-2-1.sock,/run/vfu/ernic-2-2.sock,/run/vfu/rocjitsu-2-2.sock,/run/vfu/ernic-2-3.sock,/run/vfu/rocjitsu-2-3.sock,/run/vfu/ernic-2-4.sock,/run/vfu/rocjitsu-2-4.sock,/run/vfu/ernic-2-5.sock,/run/vfu/rocjitsu-2-5.sock,/run/vfu/ernic-2-6.sock,/run/vfu/rocjitsu-2-6.sock,/run/vfu/ernic-2-7.sock,/run/vfu/rocjitsu-2-7.sock,/run/vfu/ernic-2-8.sock,/run/vfu/rocjitsu-2-8.sock"
 
   # ---- VM 3: guest ernic IP 192.168.100.27 ----
@@ -2001,6 +2003,7 @@ services:
           --vmem "16384" \
           --nvme "2" \
           --extra-hostfwd "tcp::9100-:9100" \
+          --extra-hostfwd "tcp::9879-:9879" \
           --vfio-userdev "/run/vfu/ernic-3-1.sock,/run/vfu/rocjitsu-3-1.sock,/run/vfu/ernic-3-2.sock,/run/vfu/rocjitsu-3-2.sock,/run/vfu/ernic-3-3.sock,/run/vfu/rocjitsu-3-3.sock,/run/vfu/ernic-3-4.sock,/run/vfu/rocjitsu-3-4.sock,/run/vfu/ernic-3-5.sock,/run/vfu/rocjitsu-3-5.sock,/run/vfu/ernic-3-6.sock,/run/vfu/rocjitsu-3-6.sock,/run/vfu/ernic-3-7.sock,/run/vfu/rocjitsu-3-7.sock,/run/vfu/ernic-3-8.sock,/run/vfu/rocjitsu-3-8.sock"
 
   # ---- VM 4: guest ernic IP 192.168.100.35 ----
@@ -2077,6 +2080,7 @@ services:
           --vmem "16384" \
           --nvme "2" \
           --extra-hostfwd "tcp::9100-:9100" \
+          --extra-hostfwd "tcp::9879-:9879" \
           --vfio-userdev "/run/vfu/ernic-4-1.sock,/run/vfu/rocjitsu-4-1.sock,/run/vfu/ernic-4-2.sock,/run/vfu/rocjitsu-4-2.sock,/run/vfu/ernic-4-3.sock,/run/vfu/rocjitsu-4-3.sock,/run/vfu/ernic-4-4.sock,/run/vfu/rocjitsu-4-4.sock,/run/vfu/ernic-4-5.sock,/run/vfu/rocjitsu-4-5.sock,/run/vfu/ernic-4-6.sock,/run/vfu/rocjitsu-4-6.sock,/run/vfu/ernic-4-7.sock,/run/vfu/rocjitsu-4-7.sock,/run/vfu/ernic-4-8.sock,/run/vfu/rocjitsu-4-8.sock"
 
   # ---- metrics (opt-in: --profile metrics) ----

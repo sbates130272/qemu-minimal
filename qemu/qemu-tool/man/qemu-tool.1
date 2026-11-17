@@ -263,7 +263,15 @@ checks this machine and touches nothing;
 .B up
 stops once the guests are booted;
 .B test
-configures and tests a stack that is already up;
+configures and tests a stack that is already up \(em including staging each
+guest's per\-build
+.I ip_discovery.bin
+from the rocjitsu serving it and only then loading
+.IR amdgpu ,
+so a guest logged into before it has run has a GPU that cannot be probed
+yet, says so at login, and has an
+.B amdgpu\-probe
+that refuses until the firmware is staged;
 .B down
 stops it and leaves the overlays in place, so a later run skips the pull.
 .IP

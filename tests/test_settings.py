@@ -172,7 +172,8 @@ class BakeOverrides(unittest.TestCase):
         """A bake runs QEMU on the host, where a forward whose port is taken
         (node_exporter on 9100) stops it starting."""
         shipped = STACKS / "rocm-golden.xml"
-        self.assertEqual(len(settings.load(shipped)["extra_hostfwd"]), 4)
+        # One per exporter the guest image runs: node and rdma.
+        self.assertEqual(len(settings.load(shipped)["extra_hostfwd"]), 2)
         self.assertNotIn("extra_hostfwd", settings.load_bake(shipped))
 
     def test_every_bake_element_reaches_its_field(self):

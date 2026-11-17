@@ -1522,29 +1522,17 @@ def render_prometheus(spec: dict[str, Any], digest: str) -> str:
         out.append(f'          vm: "{vm["n"]}"')
         out.append(f'          vm_name: "{vm["name"]}"')
     out.append("")
-    out.append("  # AMD GPU metrics exporter inside each guest. Same shape as")
-    out.append("  # fleet-node: the target is the qemu CONTAINER and")
-    out.append("  # <vm-extra-hostfwd> tcp::9488-:9488 forwards the port through")
-    out.append("  # to amd-metrics-exporter running in the guest.")
-    out.append("  - job_name: amd-gpu")
-    out.append("    static_configs:")
-    for vm in spec["vms"]:
-        out.append(f"      - targets: [\"{vm['qemu_addr']}:9488\"]")
-        out.append("        labels:")
-        out.append(f'          vm: "{vm["n"]}"')
-        out.append(f'          vm_name: "{vm["name"]}"')
-    out.append("")
-    out.append("  # hsa-snoop: HSA/AQL queue snooper (port 9490). Exposes per-kernel")
-    out.append("  # launch counts, duration histograms and active queue counts via")
-    out.append("  # kprobe on kfd_ioctl_create_queue. Same hostfwd pattern as fleet-node.")
-    out.append("  - job_name: hsa-snoop")
-    out.append("    static_configs:")
-    for vm in spec["vms"]:
-        out.append(f"      - targets: [\"{vm['qemu_addr']}:9490\"]")
-        out.append("        labels:")
-        out.append(f'          vm: "{vm["n"]}"')
-        out.append(f'          vm_name: "{vm["name"]}"')
-    out.append("")
+    # No amd-gpu (:9488) and no hsa-snoop (:9490) job. Both were rendered
+    # here for every stack, and both were down in every guest: every GPU this
+    # generator attaches is rocjitsu's, and neither exporter can run against
+    # it. amd-metrics-exporter's gpuagent assertion-fails where amdsmi
+    # answers NOT_SUPPORTED and leaves /dev/kfd busy, so the guest image does
+    # not install it. hsa-snoop's collector reads each queue's ring with
+    # process_vm_readv, which its own packaging says deadlocks GPU dispatch
+    # on a vfio-user device, and it holds trace_pipe for as long as it runs,
+    # so the image disables it. The GPU's presence comes through fleet-node
+    # instead: the guest writes amdgpu_kfd_present and amdgpu_devices_total
+    # for node_exporter's textfile collector.
     out.append("  # RDMA metrics exporter inside each guest (port 9879).")
     out.append("  # Reads /sys/class/infiniband/*/counters; on ionic_rdma")
     out.append("  # these are empty today, but the target is wired so that")

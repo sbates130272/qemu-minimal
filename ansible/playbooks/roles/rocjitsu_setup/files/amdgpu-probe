@@ -32,9 +32,13 @@ set -euo pipefail
 # marker, is ignored and the real system is read.  Neither reaches a real
 # run by accident -- "sudo amdgpu-probe" resets the environment, and pam_motd
 # runs the login hint without the caller's.  tests/test_amdgpu_probe.py
-# builds such a tree and puts stub sudo and modprobe first on PATH;
+# builds such a tree and puts stub sudo, modprobe and tee first on PATH;
 # qemu/checks/rocm-golden.sh uses it to prove the installed copy has the
-# firmware guard.
+# firmware guard.  With a test root the bind write below does not go through
+# sudo, so the seam cannot be used to have root write into a tree the caller
+# chose.  The load at the bottom still does: "ready" in a test tree runs
+# "sudo modprobe" for real unless a stub is first on PATH, which is why every
+# caller of the seam asks --status before it runs the probe.
 root=
 if [ -n "${AMDGPU_PROBE_TEST_ROOT:-}" ] &&
    [ -e "${AMDGPU_PROBE_TEST_ROOT}/.amdgpu-probe-test-root" ]; then
@@ -123,21 +127,40 @@ collect_devices() {
 # those load from /lib/firmware/updates/amdgpu, which the kernel searches
 # first, and ship as .xz.  A .zst name and the per-kernel directories are not
 # checked -- nothing in this repo installs to either, so nothing here
-# establishes that this kernel reads them.  -s, not -e: an empty file is not
-# a blob.
+# establishes that this kernel reads them.  -f and -s, not -e: an empty file
+# is not a blob, and neither is a directory of that name, which -s alone
+# calls non-empty.  -f follows a symlink, so a link to a real blob counts.
 blob=/lib/firmware/amdgpu/ip_discovery.bin
 blob_present() {
-  local dir
+  local dir name
   for dir in /lib/firmware/updates /lib/firmware; do
-    if [ -s "${root}${dir}/amdgpu/ip_discovery.bin" ] ||
-       [ -s "${root}${dir}/amdgpu/ip_discovery.bin.xz" ]; then
-      return 0
-    fi
+    for name in ip_discovery.bin ip_discovery.bin.xz; do
+      if [ -f "${root}${dir}/amdgpu/${name}" ] &&
+         [ -s "${root}${dir}/amdgpu/${name}" ]; then
+        return 0
+      fi
+    done
   done
   return 1
 }
 
-# How the blob gets there.  Said in one place because three branches below
+# Is amdgpu between "modprobe started" and "modprobe returned"?  The module's
+# directory in /sys/module is there for the whole of its init, and the device
+# probe runs inside that init, so for as long as a load takes a GPU has no
+# driver link and there may be no driver directory yet.  That is a load in
+# progress, not a failed probe, and a bind written under it would race the
+# probe it is waiting on.  initstate reads "coming" then, "going" during an
+# unload and "live" otherwise.  A tree with no such file is taken as live.
+# Sets "initstate" and returns 0 when the module is in transit.
+module_in_transit() {
+  initstate=live
+  if [ -r "${root}/sys/module/amdgpu/initstate" ]; then
+    read -r initstate < "${root}/sys/module/amdgpu/initstate" || initstate=live
+  fi
+  [ "${initstate}" != live ]
+}
+
+# How the blob gets there.  Said in one place because two branches below
 # need it.
 say_how_to_stage() {
   cat >&2 <<EOF
@@ -163,7 +186,10 @@ EOF
 #   ready       device present, amdgpu not loaded, blob staged -- the probe
 #               is the next step
 #   loaded      amdgpu loaded with these parameters and no accelerator left
-#               without a driver -- nothing to do
+#               without a driver -- nothing to do.  Also the answer while a
+#               load with these parameters is still running: there is nothing
+#               for the reader to do then either, and "unbound" would send
+#               them to bind under a probe that has not finished
 #   unbound     amdgpu loaded with these parameters and an accelerator has no
 #               driver: a probe failed.  The probe binds it, without a reload
 #   stranded    amdgpu loaded with different ones -- costs a reboot to leave
@@ -173,6 +199,8 @@ if [ "${1:-}" = "--status" ]; then
     collect_mismatch
     if [ ${#mismatch[@]} -ne 0 ]; then
       echo stranded
+    elif module_in_transit; then
+      echo loaded
     elif [ ${#unbound[@]} -ne 0 ]; then
       echo unbound
     else
@@ -206,10 +234,21 @@ if [ -d "${root}/sys/module/amdgpu" ]; then
   if [ ${#mismatch[@]} -ne 0 ]; then
     echo "amdgpu is already loaded with the wrong parameters:" >&2
     printf '  %s\n' "${mismatch[@]}" >&2
-    echo "modprobe cannot change these on a resident module. Either" >&2
-    echo "  sudo rmmod amdgpu && sudo $0" >&2
-    echo "or make the boot-time blacklist effective and reboot:" >&2
+    echo "modprobe cannot change these on a resident module, and unloading" >&2
+    echo "this one has been seen to fault, so it costs a reboot:" >&2
+    echo "  sudo reboot" >&2
+    echo "then \"sudo $0\". If amdgpu was loaded during boot and not by" >&2
+    echo "hand, make the boot-time blacklist effective first:" >&2
     echo "  sudo update-initramfs -u && sudo reboot" >&2
+    exit 1
+  fi
+
+  # A load that has not returned yet: the probe below it is still running,
+  # so a GPU with no driver is not yet a GPU whose probe failed.
+  if module_in_transit; then
+    echo "amdgpu is not live yet (initstate: ${initstate}): a load or an" >&2
+    echo "unload is still running. Nothing was changed; try again once it" >&2
+    echo "has finished." >&2
     exit 1
   fi
 
@@ -250,10 +289,23 @@ if [ -d "${root}/sys/module/amdgpu" ]; then
     exit 1
   fi
   echo "The discovery blob is staged now; binding without a reload." >&2
+  # The one write this script makes as root, so it is given nothing but a PCI
+  # address, and never made through the test seam: with a test root the path
+  # and the text both come from a tree the caller built, and sudo has no
+  # business writing there.  tee is then the caller's own.
+  write_bind=(sudo tee)
+  if [ -n "${root}" ]; then
+    write_bind=(tee)
+  fi
   failed=0
   for dev in "${unbound[@]}"; do
     bdf=${dev##*/}
-    printf '%s\n' "${bdf}" | sudo tee "${drv}/bind" >/dev/null || true
+    if [[ ! "${bdf}" =~ ^[0-9a-f]{4,}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]$ ]]; then
+      echo "${bdf} is not a PCI address; not written to ${drv}/bind" >&2
+      failed=1
+      continue
+    fi
+    printf '%s\n' "${bdf}" | "${write_bind[@]}" "${drv}/bind" >/dev/null || true
     if [ -e "${dev}/driver" ]; then
       echo "bound ${bdf} to amdgpu"
     else

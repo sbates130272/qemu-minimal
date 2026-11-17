@@ -105,7 +105,11 @@
        between the 8 ernic interfaces even in a 1-VM fleet. -->
   <ernic-tap>true</ernic-tap>
   <ssh-port-base>2322</ssh-port-base>
-  <vm-extra-hostfwd>tcp::9100-:9100</vm-extra-hostfwd>
+  <!-- node-exporter (9100) and rdma-exporter (9879): the two exporters the
+       guest image runs, and the two guest jobs the generator renders. 9879
+       was not forwarded here, so every rdma-exporter target of this stack
+       was down by construction. -->
+  <vm-extra-hostfwd>tcp::9100-:9100,tcp::9879-:9879</vm-extra-hostfwd>
 
   <!-- ===================================================================
        Observability

@@ -534,6 +534,63 @@ if [ "${_got}" != "${_want}" ]; then
 fi
 echo "modules-load.d: ionic, ionic_rdma"
 
+# The rules that name the NIC are qemu-minimal's, not rocm-ernic's. The two
+# files have one name and one destination, and the image published as
+# 20261117.g80c17f8 carried rocm-ernic's: its Ethernet rule is
+# NAME="rocm-ernic%n", %n is the kernel number, and every emulated NIC comes
+# up as "...np0", so one NIC per guest is renamed however many it has. Its
+# InfiniBand rule takes the first free index, which two udev workers race
+# for. qemu-minimal's rules give each device its position among the matching
+# PCI devices instead, in both stanzas.
+#
+# No device is needed to read a file, so this holds on the boot with no NIC.
+# Comment lines are dropped first: the file explains %n at length.
+#
+# tests/test_ernic_identity.py runs the lines between the two markers against
+# both files, so keep them free of anything but this one path.
+# begin: ernic naming rules
+_rules=/etc/udev/rules.d/99-rocm-ernic.rules
+if [ ! -s "${_rules}" ]; then
+    echo "ERROR: ${_rules} is missing: the ernic devices keep their kernel" \
+         "names" >&2
+    exit 1
+fi
+_rules_live=$(grep -v '^[[:space:]]*#' "${_rules}")
+case "${_rules_live}" in
+    *'rocm-ernic%n'*)
+        echo "ERROR: ${_rules} names the Ethernet device rocm-ernic%n, which" \
+             "is rocm-ernic0 for every NIC. That is rocm-ernic's copy of the" \
+             "rules, not qemu-minimal's" \
+             "roles/rocm_ernic_setup/files/99-rocm-ernic.rules." >&2
+        exit 1
+        ;;
+esac
+case "${_rules_live}" in
+    *'while [ -e /sys/class/infiniband/'*)
+        echo "ERROR: ${_rules} numbers the InfiniBand device by the first" \
+             "free index, which two udev workers race for. That is" \
+             "rocm-ernic's copy of the rules, not qemu-minimal's." >&2
+        exit 1
+        ;;
+esac
+case "${_rules_live}" in
+    *'NAME="%c"'*) ;;
+    *)
+        echo "ERROR: ${_rules} does not name the Ethernet device from the" \
+             "index its PROGRAM computes (NAME=\"%c\")" >&2
+        exit 1
+        ;;
+esac
+# One walk of the PCI devices in each stanza.
+if [ "$(printf '%s\n' "${_rules_live}" |
+        grep -c 'for d in /sys/bus/pci/devices/\*')" != 2 ]; then
+    echo "ERROR: ${_rules} does not index both the Ethernet and the" \
+         "InfiniBand device by PCI position" >&2
+    exit 1
+fi
+echo "udev: 99-rocm-ernic.rules indexes both devices by PCI position"
+# end: ernic naming rules
+
 # No ionic module in any initramfs, asserted against the FINISHED image.
 #
 # This runs in the verification boot, which is the only place that sees the
@@ -777,3 +834,45 @@ print(f"grub: default {spec!r} is {node['title']!r}, which loads {want}")
 GRUBPY
 rm -f "${_grubcfg}" "${_grubenv}"
 echo "kernel: ${_kver} is the only kernel installed and the one grub boots"
+
+# ---------------------------------------------------------------------------
+# AppArmor loaded its profiles
+# ---------------------------------------------------------------------------
+# The image published as 20261117.g80c17f8 boots with apparmor.service failed
+# and the system "degraded". The base bake removes snapd without purging it
+# and deletes /var/lib/snapd; the profile snapd leaves in /etc/apparmor.d
+# includes a path under that directory, and the parser stops there:
+#
+#   AppArmor parser error for /etc/apparmor.d in profile
+#   /etc/apparmor.d/usr.lib.snapd.snap-confine.real at line 13: Could not
+#   open '/var/lib/snapd/apparmor/snap-confine'
+#
+# vm-basic.yml now purges the package. The unit and the leftover are both
+# asserted: the unit says what this boot did, the file what the next will.
+#
+# Not "no unit failed". This check also runs on a boot with no device, where
+# rocm-ernic-netcfg.service waits 30 s for a NIC that is not there and exits
+# 1, by design; which other units fail without a device has not been
+# established, so the failed units are printed and only this one is asserted.
+#
+# tests/test_bake_faults.py runs the lines between the two markers with a
+# stub systemctl.
+# begin: apparmor
+if systemctl is-failed --quiet apparmor.service; then
+    echo "ERROR: apparmor.service is failed: a profile in /etc/apparmor.d" \
+         "does not load" >&2
+    systemctl status --no-pager --lines=20 apparmor.service >&2 || true
+    exit 1
+fi
+_aa_profile=/etc/apparmor.d/usr.lib.snapd.snap-confine.real
+_aa_include=/var/lib/snapd/apparmor/snap-confine
+if [ -e "${_aa_profile}" ] && [ ! -e "${_aa_include}" ]; then
+    echo "ERROR: ${_aa_profile} is left over from a snapd that was removed" \
+         "and not purged, and includes ${_aa_include}, which is gone:" \
+         "apparmor.service fails on it at the next boot" >&2
+    exit 1
+fi
+echo "apparmor: apparmor.service is not failed"
+echo "note: units failed on this boot, if any:"
+systemctl --failed --no-legend --plain --no-pager || true
+# end: apparmor

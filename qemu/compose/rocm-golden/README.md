@@ -281,31 +281,35 @@ Opt-in with `--profile metrics`. The sources:
 - **Guest exporters**, scraped at the qemu container's fleet address. The
   guests are behind QEMU SLIRP inside their containers and have no address on
   this network, so the *container* is the target and a `<vm-extra-hostfwd>`
-  rule forwards the port through to the guest. Prometheus is always given
-  four jobs — node-exporter (`:9100`), amd-metrics-exporter (`:9488`),
-  rdma-exporter (`:9879`) and hsa-snoop (`:9490`) — and `rocm-golden.xml`
-  forwards all four; a fleet that forwards fewer shows the rest as down.
-  **Two of the four are down on the published guest whatever is forwarded.**
-  The bake disables `gpuagent` (the `:9488` exporter, which assertion-fails
-  on an emulated gfx1250 and wedges `/dev/kfd`) and
-  `hsa-snoop-prometheus.service` (`:9490`, which holds `trace_pipe`), so
-  nothing listens on either port until somebody starts the unit in a guest.
-  Measured on two guests of `20261117.g80c17f8` after a passing
-  `quick-start test`: `up` was 0 for `amd-gpu` and `hsa-snoop` and 1 for
-  `fleet-node`, `rdma-exporter` and `ernic-stats`. Each container has its own netns, so
-  every VM uses the same ports with no arithmetic and nothing published to the
-  host.
+  rule forwards the port through to the guest. Prometheus is given two
+  jobs for them — `fleet-node` for node-exporter (`:9100`) and
+  `rdma-exporter` (`:9879`) — and `rocm-golden.xml` forwards both; a fleet
+  that forwards fewer shows the rest as down. Those are the two exporters
+  the guest image runs. The GPU's presence comes through the first:
+  each guest writes `amdgpu_kfd_present` and `amdgpu_devices_total` for
+  node-exporter's textfile collector, and the home dashboard's "GPU Up"
+  counts guests with a device bound.
+  **There is no amd-metrics-exporter (`:9488`) and no hsa-snoop (`:9490`)
+  job any more.** Both used to be rendered and forwarded, and both were
+  down: measured on two guests of `20261117.g80c17f8` after a passing
+  `quick-start test`, `up` was 0 for `amd-gpu` and `hsa-snoop` and 1 for
+  `fleet-node`, `rdma-exporter` and `ernic-stats`. Neither can run against
+  an emulated GPU. `gpuagent` assertion-fails on a gfx1250 that answers
+  amdsmi with "not supported" and wedges `/dev/kfd`, so the image does not
+  install it; hsa-snoop's collector deadlocks GPU dispatch on a vfio-user
+  device in its default mode and holds `trace_pipe`, so the image disables
+  it. Each container has its own netns, so every VM uses the same ports with
+  no arithmetic and nothing published to the host.
 - **ernic stats**, from the dumps each `rocm-ernic -S` writes to the shared
   `ernic-stats` tmpfs about once a second: per-QP bytes, doorbells, CQEs, WQEs
   by opcode, MMIO and interrupt counts. `qemu-tool ernic-stats` parses them;
   its metric and label names match rocm-ernic's own exporter, so that project's
   `grafana/ernic-dashboard.json` works here unmodified.
 
-The in-guest GPU exporters are not free: they poll the emulated device, and
-rocjitsu serves single-threaded, so every scrape comes out of the same thread
-as the workload being measured. A fleet that is being benchmarked rather than
-watched can leave `:9488` and `:9490` out of its `<vm-extra-hostfwd>` in an
-overlay.
+`scripts/check-guest-exporters.py` asks Prometheus for exactly these: for
+every guest and every TCP port the fleet file forwards it wants a target
+that is up, and it names the ones that are not. The daily benchmark lane
+runs it after `quick-start test`.
 
 ### Grafana
 

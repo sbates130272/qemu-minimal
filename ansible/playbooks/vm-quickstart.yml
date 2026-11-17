@@ -26,9 +26,10 @@
 # Three steps here repeat what that bake already did -- the naming rules, the
 # ernic address and the exporters -- and are kept: this playbook is also run
 # against guests that did not come from that image, and each is a no-op or a
-# harmless repeat on one that did. One difference is not a no-op: the bake
-# installs rocm-ernic's own copy of the naming rules, from ernic_source_pin,
-# and the step here replaces it with this repository's.
+# harmless repeat on one that did. One is not a no-op on the published image
+# 20261117.g80c17f8: that bake installed rocm-ernic's own copy of the naming
+# rules, from ernic_source_pin, and the step here replaces it with this
+# repository's. A guest baked from this tree already has this repository's.
 #
 # Everything else here is a test or a fact for the report.
 
@@ -100,26 +101,70 @@
         masked: true
       failed_when: false
 
-    - name: Check whether KFD is already up
+    # /dev/kfd says amdgpu is resident and nothing about the GPU: the driver
+    # creates the node before it registers with the PCI bus, so it is there
+    # after a probe that failed and bound nothing.
+    - name: Check whether amdgpu is already resident
       ansible.builtin.stat:
         path: /dev/kfd
       register: quickstart_kfd
+
+    # Which of the two it is. Asked only of a resident module: a wrapper from
+    # before --status existed takes the argument for a plain run, and on a
+    # resident module that loads nothing. "unbound" is a GPU with no driver
+    # under an amdgpu that has the right parameters -- an earlier probe
+    # failed, most often for want of the firmware the tasks above install.
+    # Those tasks re-bind only when they installed something, so a guest
+    # whose blob already matched is still unbound here.
+    - name: Ask the probe what state a resident amdgpu is in
+      ansible.builtin.command:
+        cmd: /usr/local/bin/amdgpu-probe --status
+      register: quickstart_probe_status
+      changed_when: false
+      failed_when: false
+      when: quickstart_kfd.stat.exists
 
     # The image's own wrapper, not a bare modprobe: modprobe on an already
     # resident amdgpu silently discards its parameters and returns 0, and
     # amdgpu-probe refuses in that case. The parameters are not optional --
     # discovery=2 is what makes the driver read ip_discovery.bin at all.
+    # It also refuses while that blob is not staged, so this stays after the
+    # firmware tasks above. On an unbound guest it loads nothing and binds
+    # the GPU through sysfs. A resident amdgpu in any other state is left
+    # alone, as it always was: the wrapper of a published image exits 1 on a
+    # second run when it finds no render node, and a consumer may have
+    # loaded the driver with parameters of their own.
     - name: Probe amdgpu with the emulation parameters
       become: true
       ansible.builtin.command:
         cmd: /usr/local/bin/amdgpu-probe
-      when: not quickstart_kfd.stat.exists
+      when: >-
+        not quickstart_kfd.stat.exists
+        or (quickstart_probe_status.stdout | default('') | trim) == 'unbound'
       changed_when: true
 
-    - name: Wait for the KFD node
-      ansible.builtin.wait_for:
-        path: /dev/kfd
-        timeout: 120
+    # Not a wait for /dev/kfd, for the reason above: that passed on a guest
+    # with no GPU bound, and the tests further down then failed with nothing
+    # naming the cause. Node 0 of the topology is the CPU and has an empty
+    # name; a bound GPU adds a named one.
+    - name: Wait for a GPU in the KFD topology
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          for _ in $(seq 40); do
+            gpus=$(cat /sys/class/kfd/kfd/topology/nodes/*/name 2>/dev/null | grep -c . || true)
+            if [ "${gpus:-0}" -ge 1 ]; then
+              echo "${gpus} GPU node(s)"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "No GPU in the KFD topology after 120 s: amdgpu did not bind one." >&2
+          echo "amdgpu-probe --status: $(/usr/local/bin/amdgpu-probe --status 2>&1 || true)" >&2
+          echo "See: sudo dmesg | grep -i amdgpu" >&2
+          exit 1
+        executable: /bin/bash
+      changed_when: false
 
     # A fact, not a play var: the plays below read it too. /opt/rocm is the
     # versionless path the image provides; it resolves to the therock

@@ -87,14 +87,15 @@
   <p4-guest-scope>load</p4-guest-scope>
 
   <!-- ── Observability ────────────────────────────────────────────────── -->
-  <!-- Forward node-exporter (9100), amd-metrics-exporter (9488),
-       rdma-exporter (9879) and hsa-snoop (9490) from every guest, which
-       is what Prometheus scrapes them through. On the published guest
-       only 9100 and 9879 have a listener: the bake disables gpuagent and
-       the hsa-snoop collector, both of which poll the emulated GPU, so
-       the amd-gpu and hsa-snoop targets read as down until somebody
-       starts those units in a guest. -->
-  <vm-extra-hostfwd>tcp::9100-:9100,tcp::9488-:9488,tcp::9879-:9879,tcp::9490-:9490</vm-extra-hostfwd>
+  <!-- Forward node-exporter (9100) and rdma-exporter (9879) from every
+       guest, which is what Prometheus scrapes them through. Those are the
+       two exporters the guest image runs, and the generator renders a scrape
+       job for each. 9488 (amd-metrics-exporter) and 9490 (hsa-snoop) used
+       to be forwarded as well and had nothing listening: neither exporter
+       can run against an emulated GPU, so the image runs neither, and the
+       generator no longer renders their jobs. The GPU's presence reaches
+       Prometheus through node-exporter's textfile collector. -->
+  <vm-extra-hostfwd>tcp::9100-:9100,tcp::9879-:9879</vm-extra-hostfwd>
   <!-- Grafana is on so a new user can watch the RDMA test move bytes, and
        Loki and Alloy with it: the home dashboard has a log panel. -->
   <grafana-enable>true</grafana-enable>

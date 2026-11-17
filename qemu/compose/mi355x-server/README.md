@@ -130,10 +130,14 @@ The first `gen-vm` pulls `<backing-ref>`. `<prom-data-dir>` in the fleet file
 still names `/var/lib/qemu-tool/stacks/mi355x-node/prom-data`, the stack's
 name before it was renamed, so an existing TSDB keeps being used.
 
-**`compose up` alone leaves the GPUs without firmware.** `amdgpu` loads but
-fails to probe every device with `can't load firmware "amdgpu/ip_discovery.bin"`
-because the guest image deliberately omits that file — it is generated from the
-running rocjitsu image and must be installed by Ansible after the stack is up.
+**`compose up` alone leaves the GPUs without firmware.** The guest image
+deliberately omits `ip_discovery.bin` — it is generated from the running
+rocjitsu image and must be installed by Ansible after the stack is up — and
+without it every probe fails with `can't load firmware
+"amdgpu/ip_discovery.bin"`, leaving `amdgpu` loaded with nothing bound. So
+the order is firmware first, then the probe: a guest baked from this tree
+says so at login, and its `amdgpu-probe` refuses until the blob is staged
+(`amdgpu-probe --status` prints `nofirmware`).
 Run `vm-quickstart.yml` (or the `rocjitsu_setup` role's `firmware` tasks with `rocjitsu_setup_firmware_live: true`)
 before expecting any GPU work:
 

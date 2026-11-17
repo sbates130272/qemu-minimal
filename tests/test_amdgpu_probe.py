@@ -11,9 +11,10 @@ finds that state already made, and reports two more states for the hint.
 
 Both scripts are RUN here, against a scratch tree, through the one seam they
 have: AMDGPU_PROBE_TEST_ROOT naming a directory that holds the marker file
-.amdgpu-probe-test-root. sudo and modprobe are stubs first on PATH that
+.amdgpu-probe-test-root. sudo, modprobe and tee are stubs first on PATH that
 record their arguments, so nothing in this suite can load a driver, and the
-stub sudo plays the kernel's part for a write to the driver's "bind" file.
+stub tee plays the kernel's part for a write to the driver's "bind" file.
+With a test root that write does not go through sudo at all.
 
 No guest and no real amdgpu is involved, so what the kernel does with a
 bind, and which firmware names it really accepts, are not tested here.
@@ -56,19 +57,21 @@ HOST = "    qemu-tool quick-start test"
 
 SUDO = """\
 #!/bin/sh
-# Records the call. A write to a driver's "bind" file is answered the way the
-# kernel would: the device gains a driver when STUB_BIND=ok, and the write
-# fails when it is not. Anything else is run, so "sudo modprobe" reaches the
-# stub modprobe beside this file.
+# Records the call and runs it, so "sudo modprobe" reaches the stub modprobe
+# beside this file.
 echo "sudo $*" >> "$STUB_LOG"
-if [ "$1" = tee ]; then
-    read -r bdf
-    echo "bind $bdf $2" >> "$STUB_LOG"
-    [ "${STUB_BIND:-}" = ok ] || exit 1
-    ln -s ../../drivers/amdgpu "$STUB_ROOT/sys/bus/pci/devices/$bdf/driver"
-    exit 0
-fi
 exec "$@"
+"""
+
+TEE = """\
+#!/bin/sh
+# The write to a driver's "bind" file, answered the way the kernel would:
+# the device gains a driver when STUB_BIND=ok, and the write fails when it
+# is not.
+read -r bdf
+echo "bind $bdf $1" >> "$STUB_LOG"
+[ "${STUB_BIND:-}" = ok ] || exit 1
+ln -s ../../drivers/amdgpu "$STUB_ROOT/sys/bus/pci/devices/$bdf/driver"
 """
 
 MODPROBE = """\
@@ -102,7 +105,8 @@ class Tree(unittest.TestCase):
 
         self.stubs = self.tmp / "stubs"
         self.stubs.mkdir()
-        for name, body in (("sudo", SUDO), ("modprobe", MODPROBE)):
+        for name, body in (("sudo", SUDO), ("modprobe", MODPROBE),
+                           ("tee", TEE)):
             path = self.stubs / name
             path.write_text(body)
             path.chmod(0o755)
@@ -121,7 +125,7 @@ class Tree(unittest.TestCase):
             "STUB_ROOT": str(self.root),
         }
         # Nothing below may reach a real sudo or a real modprobe.
-        for name in ("sudo", "modprobe"):
+        for name in ("sudo", "modprobe", "tee"):
             self.assertEqual(shutil.which(name, path=self.env["PATH"]),
                              str(self.stubs / name))
 
@@ -136,14 +140,23 @@ class Tree(unittest.TestCase):
             (dev / "driver").symlink_to("../../drivers/amdgpu")
         return dev
 
-    def module(self, **wrong):
-        """amdgpu resident, with the script's parameters unless overridden."""
+    def module(self, initstate=None, driver=True, **wrong):
+        """amdgpu resident, with the script's parameters unless overridden.
+
+        initstate is what /sys/module/amdgpu/initstate reads, and no such
+        file when None. driver=False leaves out the PCI driver's directory,
+        which a module early in its init has not registered yet.
+        """
         params = self.root / "sys/module/amdgpu/parameters"
         params.mkdir(parents=True)
         for kv in _params():
             name, value = kv.split("=")
             (params / name).write_text(wrong.get(name, _live(value)) + "\n")
-        (self.root / "sys/bus/pci/drivers/amdgpu").mkdir(parents=True)
+        if initstate is not None:
+            (self.root / "sys/module/amdgpu/initstate").write_text(
+                initstate + "\n")
+        if driver:
+            (self.root / "sys/bus/pci/drivers/amdgpu").mkdir(parents=True)
 
     def blob(self, where="lib/firmware/amdgpu/ip_discovery.bin",
              content=b"discovery"):
@@ -240,6 +253,25 @@ class NotLoadedNoBlob(Tree):
         self.assertEqual(self.probe().returncode, 1)
         self.assertEqual(self.calls(), [])
 
+    # -s alone is true for a directory, which would have let the probe on
+    # to modprobe with nothing the firmware loader can read.
+    def test_a_directory_of_that_name_is_not_a_blob(self):
+        for name in ("ip_discovery.bin", "ip_discovery.bin.xz"):
+            with self.subTest(name=name):
+                shutil.rmtree(self.root / "lib", ignore_errors=True)
+                (self.root / "lib/firmware/amdgpu" / name).mkdir(parents=True)
+                self.assertEqual(self.status(), "nofirmware\n")
+                self.assertEqual(self.probe().returncode, 1)
+                self.assertEqual(self.calls(), [])
+
+    def test_a_dangling_link_is_not_a_blob(self):
+        fw = self.root / "lib/firmware/amdgpu"
+        fw.mkdir(parents=True)
+        (fw / "ip_discovery.bin").symlink_to("not-there.bin")
+        self.assertEqual(self.status(), "nofirmware\n")
+        self.assertEqual(self.probe().returncode, 1)
+        self.assertEqual(self.calls(), [])
+
     def test_the_hint_sends_the_reader_to_the_host_not_to_the_probe(self):
         out = self.hint()
         self.assertIn(HOST + "\n", out)
@@ -268,6 +300,14 @@ class NotLoadedWithBlob(Tree):
                 shutil.rmtree(self.root / "lib", ignore_errors=True)
                 self.blob(where)
                 self.assertEqual(self.status(), "ready\n")
+
+    def test_a_link_to_a_blob_counts(self):
+        self.blob("srv/rocjitsu/ip_discovery.bin")
+        fw = self.root / "lib/firmware/amdgpu"
+        fw.mkdir(parents=True)
+        (fw / "ip_discovery.bin").symlink_to(
+            self.root / "srv/rocjitsu/ip_discovery.bin")
+        self.assertEqual(self.status(), "ready\n")
 
     def test_a_blob_of_another_name_does_not_count(self):
         self.blob("lib/firmware/amdgpu/ip_discovery.bin.zst")
@@ -360,8 +400,8 @@ class UnboundWithBlob(Tree):
         self.render_node()
         result = self.probe(STUB_BIND="ok")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.calls(), [f"sudo tee {self.bind}",
-                                        f"bind {BDF} {self.bind}"])
+        # No "sudo" line: with a test root the write is the caller's own.
+        self.assertEqual(self.calls(), [f"bind {BDF} {self.bind}"])
         self.assertIn(f"bound {BDF} to amdgpu", result.stdout)
         self.assertIn("render node present", result.stdout)
         self.assertTrue((self.dev / "driver").exists())
@@ -378,8 +418,7 @@ class UnboundWithBlob(Tree):
         self.assertEqual(result.returncode, 1)
         self.assertIn(f"{BDF} did not bind", result.stderr)
         self.assertIn("dmesg", result.stderr)
-        self.assertEqual(self.calls(), [f"sudo tee {self.bind}",
-                                        f"bind {BDF} {self.bind}"])
+        self.assertEqual(self.calls(), [f"bind {BDF} {self.bind}"])
         self.assertEqual(self.status(), "unbound\n")
 
     def test_only_the_unbound_gpu_is_bound(self):
@@ -400,6 +439,78 @@ class UnboundWithBlob(Tree):
         self.assertLess(out.index(HOST), out.index(OFFER),
                         "firmware first, then the probe")
         self.assertIn("Do not rmmod", out)
+
+    # Outside the seam the write is root's, and it is the only thing the
+    # script hands sudo besides the load. Read from the text: a run without
+    # the seam reads the real system.
+    def test_the_real_write_is_sudo_tee_and_the_seam_s_is_not(self):
+        text = PROBE.read_text()
+        self.assertIn("write_bind=(sudo tee)", text)
+        self.assertIn('if [ -n "${root}" ]; then\n    write_bind=(tee)', text)
+        runs = [line.strip() for line in text.splitlines()
+                if re.search(r"\bsudo\b", line)
+                and not line.lstrip().startswith(("#", "echo "))]
+        self.assertEqual(runs, ["write_bind=(sudo tee)",
+                                'exec sudo modprobe amdgpu "${params[@]}"'])
+
+    # The address is a directory name in the tree the caller built; only a
+    # PCI address is ever written.
+    def test_a_name_that_is_not_a_pci_address_is_never_written(self):
+        shutil.rmtree(self.dev)
+        odd = self.device("0000:01:00.0 extra")
+        result = self.probe(STUB_BIND="ok")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("is not a PCI address", result.stderr)
+        self.assertEqual(self.calls(), [])
+        self.assertFalse((odd / "driver").exists())
+
+
+class StillLoading(Tree):
+    """modprobe has not returned: the probe is running inside module init.
+
+    The module's directory is there for the whole of it and the GPU has no
+    driver link yet. That is not a failed probe. What the kernel shows for
+    the length of a load is taken from its behaviour and not run here.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.device()
+        self.blob()
+
+    def test_status_is_loaded_and_the_hint_is_silent(self):
+        self.module(initstate="coming", driver=False)
+        self.assertEqual(self.status(), "loaded\n")
+        self.assertEqual(self.hint(), "")
+
+    def test_the_probe_writes_nothing_and_says_try_again(self):
+        self.module(initstate="coming")
+        result = self.probe(STUB_BIND="ok")
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(self.calls(), [], "no bind under a running probe")
+        self.assertIn("not live yet (initstate: coming)", result.stderr)
+        self.assertIn("Nothing was changed", result.stderr)
+        self.assertNotIn("probe failed", result.stderr)
+
+    def test_an_unload_in_progress_is_the_same(self):
+        self.module(initstate="going")
+        self.assertEqual(self.status(), "loaded\n")
+        self.assertEqual(self.probe(STUB_BIND="ok").returncode, 1)
+        self.assertEqual(self.calls(), [])
+
+    def test_live_with_no_driver_is_unbound(self):
+        self.module(initstate="live")
+        self.assertEqual(self.status(), "unbound\n")
+        self.assertEqual(self.probe(STUB_BIND="ok").returncode, 0)
+
+    # The parameters are set before init runs, so wrong ones are wrong
+    # already.
+    def test_wrong_parameters_outrank_a_load_in_progress(self):
+        self.module(initstate="coming", discovery="0")
+        self.assertEqual(self.status(), "stranded\n")
+        result = self.probe()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("discovery: want 2, live 0", result.stderr)
 
 
 class UnboundNoBlob(Tree):
@@ -448,6 +559,15 @@ class Stranded(Tree):
         self.assertIn("discovery: want 2, live 0", result.stderr)
         self.assertEqual(self.calls(), [])
 
+    # The hint for this state says unloading faults and to reboot, and
+    # sends the reader here for the differences. This used to answer with
+    # "sudo rmmod amdgpu".
+    def test_the_probe_says_reboot_and_never_rmmod(self):
+        err = self.probe().stderr
+        self.assertNotIn("rmmod", err)
+        self.assertIn("  sudo reboot\n", err)
+        self.assertIn("  sudo update-initramfs -u && sudo reboot\n", err)
+
     # Wrong parameters outrank an unbound device: a bind would probe with
     # them.
     def test_stranded_outranks_unbound(self):
@@ -476,17 +596,18 @@ class Contract(Tree):
         text = PROBE.read_text()
         block = text[text.index('if [ "${1:-}" = "--status" ]'):
                      text.index("if [ $# -gt 0 ]")]
-        self.assertEqual(sorted(re.findall(r"^\s+echo (\w+)$", block, re.M)),
-                         sorted(STATES))
+        # "loaded" is printed from two branches: bound, and still loading.
+        self.assertEqual(set(re.findall(r"^\s+echo (\w+)$", block, re.M)),
+                         set(STATES))
 
     def test_the_probe_has_no_unload_path_of_its_own(self):
         code = [line for line in PROBE.read_text().splitlines()
                 if not line.lstrip().startswith("#")]
-        # The two that are left are advice printed to the reader: the
-        # stranded message's, which predates this, and "Do not rmmod".
-        for line in code:
-            if "rmmod" in line:
-                self.assertTrue(line.lstrip().startswith("echo "), line)
+        # The one that is left is advice printed to the reader, and the
+        # advice is not to.
+        hits = [line for line in code if "rmmod" in line]
+        self.assertEqual(len(hits), 1, hits)
+        self.assertIn('echo "Do not rmmod amdgpu', hits[0])
 
     def test_a_hint_with_no_helper_is_silent(self):
         self.device()
@@ -566,10 +687,90 @@ class Consumers(unittest.TestCase):
         self.assertLess(text.index("rocjitsu_setup_firmware_live: true"),
                         text.index("cmd: /usr/local/bin/amdgpu-probe"))
 
+    def _quickstart_tasks(self):
+        plays = yaml.safe_load(QUICKSTART.read_text())
+        return {task["name"]: task
+                for play in plays for task in play.get("tasks", [])}
+
+    # /dev/kfd is there whenever amdgpu is resident, bound or not, so a gate
+    # on it alone skipped the probe on exactly the guest that needed the
+    # bind: unbound, with a blob that already matched, which the firmware
+    # tasks do not re-bind for.
+    def test_quickstart_probes_an_unbound_guest(self):
+        tasks = self._quickstart_tasks()
+        status = tasks["Ask the probe what state a resident amdgpu is in"]
+        self.assertEqual(status["ansible.builtin.command"]["cmd"],
+                         "/usr/local/bin/amdgpu-probe --status")
+        self.assertIs(status["changed_when"], False)
+        self.assertEqual(status["when"], "quickstart_kfd.stat.exists")
+        probe = tasks["Probe amdgpu with the emulation parameters"]
+        self.assertEqual(probe["ansible.builtin.command"]["cmd"],
+                         "/usr/local/bin/amdgpu-probe")
+        self.assertEqual(
+            " ".join(probe["when"].split()),
+            "not quickstart_kfd.stat.exists or "
+            "(quickstart_probe_status.stdout | default('') | trim)"
+            " == 'unbound'")
+
+    # ...and a wait for it passed on a guest with nothing bound.
+    def test_quickstart_waits_for_a_gpu_and_not_for_dev_kfd(self):
+        tasks = self._quickstart_tasks()
+        for name, task in tasks.items():
+            self.assertNotIn("ansible.builtin.wait_for", task, name)
+        wait = tasks["Wait for a GPU in the KFD topology"]
+        cmd = wait["ansible.builtin.shell"]["cmd"]
+        self.assertIn("/sys/class/kfd/kfd/topology/nodes/*/name", cmd)
+        self.assertNotIn("when", wait)
+        names = list(tasks)
+        self.assertLess(
+            names.index("Probe amdgpu with the emulation parameters"),
+            names.index("Wait for a GPU in the KFD topology"))
+
+    # The wait itself, run against names a guest could show. Node 0 is the
+    # CPU, with an empty name.
+    def test_the_quickstart_wait_counts_named_nodes(self):
+        cmd = self._quickstart_tasks()[
+            "Wait for a GPU in the KFD topology"]["ansible.builtin.shell"][
+                "cmd"]
+        once = cmd.replace("$(seq 40)", "1").replace("sleep 3", "true")
+        self.assertNotEqual(once, cmd)
+        for names, want in ((["\n", "gfx1250\n"], 0), (["\n"], 1), ([], 1)):
+            with self.subTest(names=names):
+                tmp = Path(tempfile.mkdtemp(prefix="amdgpu-probe-test-"))
+                self.addCleanup(shutil.rmtree, tmp)
+                for index, name in enumerate(names):
+                    node = tmp / "nodes" / str(index)
+                    node.mkdir(parents=True)
+                    (node / "name").write_text(name)
+                script = once.replace(
+                    "/sys/class/kfd/kfd/topology/nodes", str(tmp / "nodes")
+                ).replace("/usr/local/bin/amdgpu-probe", "true")
+                result = subprocess.run(
+                    ["bash", "-c", script], capture_output=True, text=True,
+                    timeout=60, env={"PATH": "/usr/bin:/bin"})
+                self.assertEqual(result.returncode, want, result.stderr)
+                if want:
+                    self.assertIn("did not bind", result.stderr)
+
     def test_the_lanes_stage_firmware_before_they_probe(self):
         text = PLAYBOOK_TEST.read_text()
         self.assertLess(text.index("--tags configure,firmware"),
                         text.index("/usr/local/bin/amdgpu-probe\" || true"))
+
+    # A retry is the probe again, which binds a GPU the first attempt left
+    # without a driver. Unloading is what every message says not to do.
+    def test_no_workflow_unloads_amdgpu(self):
+        for path in sorted(WORKFLOWS.glob("*.yml")):
+            for line in path.read_text().splitlines():
+                if not line.lstrip().startswith("#"):
+                    self.assertNotIn("rmmod amdgpu", line, path.name)
+
+    # Without the emulation parameters the module is "stranded", not
+    # "unbound": the parameters are compared first.
+    def test_the_welcome_file_does_not_call_a_bare_modprobe_unbound(self):
+        text = " ".join(WELCOME.read_text().split())
+        self.assertNotIn("A bare `modprobe` does not", text)
+        self.assertIn("given the same parameters by hand", text)
 
     # The check asserts the image has no blob, so with a GPU attached the
     # only state it can be run in is "nofirmware". "ready" was the word

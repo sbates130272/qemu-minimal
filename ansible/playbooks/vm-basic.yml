@@ -75,6 +75,41 @@
     - role: sbates130272.batesste.user_setup
     - role: sbates130272.batesste.fave_packages
     - role: sbates130272.batesste.git_setup
+  post_tasks:
+    # user_setup removes snapd with state: absent and no purge, then deletes
+    # /var/lib/snapd. dpkg keeps a removed package's conffiles, and one of
+    # snapd's is /etc/apparmor.d/usr.lib.snapd.snap-confine.real, which
+    # includes "/var/lib/snapd/apparmor/snap-confine". apparmor_parser stops
+    # on the missing path, so apparmor.service was failed and the system
+    # degraded at every boot of an image baked here: measured on the
+    # published rocm-golden 20261117.g80c17f8. The purge removes the conffile,
+    # and the package's postrm the profile's cache. The role is the
+    # collection's to change; this is the purge it does not do, under the
+    # role's own two conditions.
+    - name: Purge snapd, which user_setup removed and left configured
+      ansible.builtin.apt:
+        name: snapd
+        state: absent
+        purge: true
+      become: true
+      when:
+        - user_setup_disable_snap | default(true) | bool
+        - not (user_setup_unprivileged | default(false) | bool)
+
+    # The unit's start is "apparmor.systemd reload", which parses every
+    # profile under /etc/apparmor.d and fails on the first that does not
+    # load, so a restart is the step a boot runs. It runs it on the kernel
+    # the guest is on at this point, and in the golden bake that is still
+    # the cloud image's: the pinned kernel is installed by a later play. So
+    # this proves the snapd leftover is gone and that the profiles parse,
+    # and not that each loads on the kernel the image ships. The guest check
+    # (qemu/checks/rocm-golden.sh) asserts that on the booted image.
+    - name: Check AppArmor loads its profiles on the running kernel
+      ansible.builtin.systemd_service:
+        name: apparmor.service
+        state: restarted
+      become: true
+      when: not (user_setup_unprivileged | default(false) | bool)
 
 # Delete what the bake left behind and fstrim it back to the qcow2. Last, and
 # only when this playbook is the whole bake: vm-rocm-golden.yml imports this

@@ -229,11 +229,17 @@ class SettingsFileTest(unittest.TestCase):
 
     def test_the_guest_exporters_are_forwarded(self):
         # Prometheus scrapes each guest through its qemu container, and the
-        # home dashboard is built on these four jobs. Without the forwards
+        # home dashboard is built on these two jobs. Without the forwards
         # every guest panel is empty and nothing errors.
+        #
+        # Two, not four. 9488 (amd-metrics-exporter) and 9490 (hsa-snoop)
+        # were forwarded too, and both targets were down in every guest:
+        # neither exporter can run against an emulated GPU, so the image runs
+        # neither. tests/test_guest_exporters.py holds the forwards, the
+        # scrape jobs and the dashboards to one another.
         rules = self.fleet.vm_extra_hostfwd.split(",")
-        for port in ("9100", "9488", "9879", "9490"):
-            self.assertIn(f"tcp::{port}-:{port}", rules)
+        self.assertEqual(sorted(rules),
+                         ["tcp::9100-:9100", "tcp::9879-:9879"])
 
     def test_logs_are_on(self):
         # The home dashboard has a Loki panel.

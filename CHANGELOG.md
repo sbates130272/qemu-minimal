@@ -160,6 +160,15 @@ elements, or a guest you log in to with your own `~/.ssh/id_rsa`.
 
 ### Added
 
+- **The daily benchmark lane checks that every guest exporter the fleet
+  forwards is up.** `scripts/check-guest-exporters.py` reads the fleet file
+  and Prometheus's answer to `up`, and for each guest and each TCP port in
+  `<vm-extra-hostfwd>` requires a target at the guest's container address
+  and that port with a value of 1. It names every target that is down and
+  every forwarded port no job scrapes, and the lane fails with those names.
+  The lane used to ask only whether Prometheus answered a query, which it
+  did with half its guest targets down.
+
 - **`qemu-tool publish-qcow-prune`: retention for the published image's
   repository.** Keeps the 10 newest dated tags (`<YYYYMMDD>.g<sha7>`) and
   any pushed within 30 days, always keeps `latest`, every `qm.<sha7>` and
@@ -370,8 +379,9 @@ elements, or a guest you log in to with your own `~/.ssh/id_rsa`.
   - ROCm is pinned to the 10.1 line, with `ROCM_PATH` and `PATH` set for
     login and non-login shells, `/opt/rocm/bin` and `/opt/rocm/lib` symlinks,
     importable `amdsmi` bindings and `amdrocm-blas-dev`.
-  - `amdgpu-probe --status` reports `absent`, `ready`, `loaded` or `stranded`
-    instead of loading the driver, and a login hint reads it.
+  - `amdgpu-probe --status` reports `absent`, `nofirmware`, `ready`,
+    `loaded`, `unbound` or `stranded` instead of loading the driver, and a
+    login hint reads it.
   - `/etc/rocm-golden-guest.json` and `~/WELCOME.md` record what was baked.
   - The playbook's defaults are the published image's: no dotfiles, no SSH
     private key, no GPG signing, no distro upgrade, no device metrics
@@ -441,12 +451,14 @@ elements, or a guest you log in to with your own `~/.ssh/id_rsa`.
   - *Known wrong with that image:* `apparmor.service` is failed at boot and
     the system reports `degraded`. snapd is removed without being purged,
     and the profile it leaves in `/etc/apparmor.d` no longer parses.
-    Nothing checks for failed units, so it was published. No lane step
-    depends on it. It needs a bake to fix and is not fixed here.
-  - Prometheus's `amd-gpu` and `hsa-snoop` targets are down for golden
-    guests: the bake disables both exporters, since each polls the
-    emulated GPU. `rocm-golden.xml` still forwards their ports; its
-    comment and the stack README now say so.
+    Nothing checked for failed units, so it was published. No lane step
+    depends on it. The bake is fixed (see Fixed); that image is not, and
+    its guests boot degraded until a newer one is published and
+    `<backing-ref>` moves to it.
+  - Prometheus's `amd-gpu` and `hsa-snoop` targets were down for golden
+    guests: the bake disables both exporters, since neither can run
+    against the emulated GPU. Their scrape jobs, forwards and panels are
+    removed (see Removed), which needs no new image.
   - The image's naming rules are rocm-ernic's copy at the pinned commit
     (2928 bytes in the guest; this repository's file is 9647), whose
     Ethernet stanza names one NIC per guest. Fine for the default fleet,
@@ -454,7 +466,8 @@ elements, or a guest you log in to with your own `~/.ssh/id_rsa`.
     guests should have one renamed Ethernet device and seven under kernel
     names, and nothing replaces the rules there: their `quick-start`
     flavors run no playbook. Read from the rules file, not from a guest.
-    Addresses do not depend on the names.
+    Addresses do not depend on the names. The bake is fixed (see Fixed);
+    those guests get this repository's rules only from a newer image.
   - *On a host that already ran `quick-start`:* the next run sees that the
     guest disks were made on another image, says which, and stops unless
     you answer yes at a terminal or pass `--clean-overlays`. See the
@@ -664,6 +677,30 @@ elements, or a guest you log in to with your own `~/.ssh/id_rsa`.
 
 ### Removed
 
+- **The `amd-gpu` and `hsa-snoop` scrape jobs, their port forwards and
+  their dashboard panels.** `gen-compose` rendered both jobs for every
+  stack and `rocm-golden.xml` forwarded `:9488` and `:9490` for them, but
+  nothing in a guest listens on either: after a successful `quick-start
+  test` both targets were down in every guest and nothing said so. Neither
+  exporter can run against the emulated GPU every generated stack has.
+  amd-metrics-exporter's `gpuagent` assertion-fails on it and leaves
+  `/dev/kfd` busy, and the guest image does not install it; hsa-snoop's
+  collector deadlocks GPU dispatch on a vfio-user device in its default
+  mode, by its own packaging's account, and holds `trace_pipe`, so the
+  image disables it. `rocm-golden.xml` now forwards node-exporter (`:9100`)
+  and rdma-exporter (`:9879`) only.
+  - The home dashboard loses its amd-metrics-exporter row and its hsa-snoop
+    panels. "GPU Up" now counts guests with a GPU bound to `amdgpu`, from
+    the `amdgpu_devices_total` metric each guest already writes for
+    node-exporter, and the log panel shows the stack's own containers; it
+    used to read a file inside a guest, which the log collector never sees.
+  - *If you render stacks of your own:* regenerate, and drop `tcp::9488-:9488`
+    and `tcp::9490-:9490` from a `<vm-extra-hostfwd>` you copied. A stack
+    rendered earlier keeps its two dead targets until then; nothing else
+    about it changes.
+  - `hsa-snoop` itself stays in the image and is still run per workload by
+    `vm-rocm-golden.yml --tags test`.
+
 - **LMCache.** The `lmcache_guest` role, `fleet-lmcache.yml`,
   `qemu/docker/lmcache/`, the `lmcache-stats` subcommand, the coordinator and
   exporter services and their scrape jobs, the `<lmcache-*>` fleet XML
@@ -716,6 +753,97 @@ elements, or a guest you log in to with your own `~/.ssh/id_rsa`.
   `vars/ernic-pins.yml`.
 
 ### Fixed
+
+- **A baked guest no longer boots with `apparmor.service` failed.** Every
+  image baked here did: the base play's `user_setup` role removes snapd
+  without purging it and deletes `/var/lib/snapd`, the profile snapd leaves
+  in `/etc/apparmor.d` includes a path under that directory, and the parser
+  stops on it, so `systemctl is-system-running` said `degraded`.
+  `vm-basic.yml` now purges snapd after the role, then restarts
+  `apparmor.service` so that a profile that does not load fails the bake
+  rather than a guest's boot. The golden image is baked on that play and is
+  fixed with it. `qemu/checks/rocm-golden.sh` asserts on the booted guest
+  that the unit is not failed and that the leftover profile is gone, and
+  prints the failed units; it does not assert that there are none, because
+  it also runs on a boot with no NIC, where `rocm-ernic-netcfg.service`
+  fails by design.
+  - *The published image `20261117.g80c17f8` still has the fault.* Nothing
+    in the tree changes an image already published; a guest pulled from it
+    boots degraded until `<backing-ref>` moves to a newer one.
+  - *Not run:* against a guest or in a bake. The parser error was
+    reproduced on a host of the same release with the same leftover.
+
+- **`helios-tray` and `mi355x-server` forward the RDMA exporter's port.**
+  `gen-compose` renders an `rdma-exporter` scrape job for every stack, on
+  guest port 9879, and those two fleet files forwarded 9100 alone, so every
+  `rdma-exporter` target of theirs was down and the home dashboard's RDMA
+  exporter panels read 0. The guest image has had the listener all along.
+  Both files now carry `tcp::9879-:9879` in `<vm-extra-hostfwd>`, as
+  `rocm-golden.xml` does, and both stacks are regenerated.
+  - *If you layer an overlay on either file* that sets `<vm-extra-hostfwd>`,
+    it replaces the whole value: add the rule there too.
+  - *Not run:* against a guest. `rdma_exporter` was seen up on the one-NIC
+    default fleet, not on a guest with eight NICs.
+
+- **A golden image is baked with this repository's NIC naming rules, and
+  keeps them.** `vm-rocm-golden.yml` handed the naming tasks rocm-ernic's
+  copy of `99-rocm-ernic.rules` instead of the role's own, so the published
+  image names its Ethernet device `rocm-ernic%n`: one NIC per guest, however
+  many it has, and an InfiniBand index two udev workers race for. That is
+  invisible on the default fleet, one NIC a guest, and wrong on the
+  eight-NIC `helios-tray` and `mi355x-server` guests, which no playbook
+  touches after boot. The override is gone. The bake now ends by comparing
+  the installed file with the role's and fails on a difference, and the
+  `--tags configure` play, whose collection role copies rocm-ernic's rules
+  over the image's every time it runs, puts this repository's back
+  afterwards. `qemu/checks/rocm-golden.sh` reads the installed file on the
+  booted guest, and the playbook-test lane reads it again after its
+  configure stage.
+  - *The published image `20261117.g80c17f8` still carries rocm-ernic's
+    rules*, and with that image the acceptance check now fails on them and
+    on `apparmor.service`, here and where batesste-ci-images runs it. On
+    the default fleet `quick-start test` replaces the file, as before.
+  - *A configure run that fails inside the collection's role* does not
+    reach the step that puts the rules back. Run it again.
+  - *Not run:* against a guest or in a bake.
+
+- **The golden guest's login hint no longer tells you to probe a GPU that
+  has no firmware yet, and `amdgpu-probe` refuses to.** The image carries no
+  `ip_discovery.bin`, since that belongs to the rocjitsu build serving the
+  guest, but the hint saw a GPU with no driver and said `sudo amdgpu-probe`.
+  The probe failed in the driver and left `amdgpu` loaded with nothing
+  bound; a second run reported only "no render nodes found", and unloading
+  that module is not safe. Now:
+  - `amdgpu-probe` exits 1 and loads nothing while a GPU is on the bus and
+    the blob is not staged, and prints the three ways to stage it: `qemu-tool
+    quick-start test` on the host, `ansible-playbook vm-rocm-golden.yml
+    --tags firmware`, or a blob from `rj-ip-discovery gfx1250`.
+  - On a guest already in the failed state it binds the GPU through sysfs
+    once the blob is there, without a reload, and says whether it bound; with
+    the blob still missing it says so and changes nothing.
+  - `--status` has two new words, `nofirmware` and `unbound`. `unbound` is
+    amdgpu loaded with the right parameters and a GPU with no driver, which
+    used to read `loaded`. The hint has a message for each and names the host
+    command first. While a load is still running the word is `loaded`, and a
+    plain run says to try again instead of binding under it.
+  - `qemu-tool quick-start test` binds a GPU an earlier probe left without a
+    driver. It skipped the probe whenever `/dev/kfd` existed, which is the
+    case after a probe that bound nothing, and then waited for that same
+    node. It now waits for a GPU in the KFD topology and names
+    `amdgpu-probe --status` when none appears.
+  - The probe's message for amdgpu loaded with other parameters says to
+    reboot. It used to offer `sudo rmmod amdgpu` first, which the hint for
+    the same state says not to do, and the playbook-test lane's retry no
+    longer unloads the module either.
+  - A directory named `ip_discovery.bin` no longer counts as the blob.
+  - The bake and `qemu/checks/rocm-golden.sh` run the installed scripts
+    against a scratch tree and fail an image whose probe does not refuse. A
+    with-device run of that check now passes
+    `ROCM_GOLDEN_EXPECT_PROBE=nofirmware` where it passed `ready`.
+
+  This is in guests baked from here on. The image published as
+  `20261117.g80c17f8` has the old hint; on a guest from it run `qemu-tool
+  quick-start test` on the host before, or instead of, `sudo amdgpu-probe`.
 
 - **`quick-start` no longer boots old guest disks with a new image's key when
   `<backing-ref>` moves.** It left an existing overlay alone whatever image

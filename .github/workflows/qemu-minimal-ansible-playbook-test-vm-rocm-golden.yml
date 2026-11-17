@@ -315,6 +315,23 @@ jobs:
           -e "ansible_user=ubuntu" \
           -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"'
 
+    # The configure stage runs the collection's ernic_guest_setup, which
+    # copies rocm-ernic's own 99-rocm-ernic.rules over the image's; the play
+    # puts this repository's back afterwards. The guest check asserted the
+    # file before that stage. These are the same lines of it, run again
+    # after: "begin: ernic naming rules" to "end: ernic naming rules".
+    - name: Verify the configure stage left this repository's naming rules
+      run: |
+        out=$({ echo 'set -eu'
+                sed -n '/^# begin: ernic naming rules$/,/^# end: ernic naming rules$/p' \
+                  qemu/checks/rocm-golden.sh; } |
+              ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+                -p 2222 ubuntu@qemu-1 "bash -s")
+        echo "$out"
+        # The line the block ends on: markers that moved would send nothing.
+        echo "$out" | grep -q '^udev: 99-rocm-ernic.rules indexes both devices'
+        echo "✓ 99-rocm-ernic.rules is still this repository's"
+
     # ionic mode builds ionic and ionic_rdma; there is no rocm_ernic module.
     - name: Verify ionic modules loaded and NIC visible
       run: |
@@ -336,6 +353,11 @@ jobs:
     # This step has hung and only died to the job-level timeout, with no diagnostic output. Bound at all three layers
     # -- the guest command, the ssh session and the step. It needs the
     # ip_discovery.bin the firmware stage above installed.
+    #
+    # A retry is amdgpu-probe again, never rmmod: unloading this module has
+    # been seen to fault, and on a resident amdgpu whose GPU has no driver the
+    # probe binds it through sysfs, which is the recovery a guest's own user
+    # is given.
     - name: Load amdgpu via amdgpu-probe
       timeout-minutes: 10
       run: |
@@ -351,8 +373,7 @@ jobs:
             sleep 3
           done
           if [ "$attempt" -lt 3 ]; then
-            echo "KFD GPU node not present after attempt $attempt, reloading amdgpu..." >&2
-            $SSH "sudo rmmod amdgpu" || true
+            echo "KFD GPU node not present after attempt $attempt: $($SSH "/usr/local/bin/amdgpu-probe --status" 2>/dev/null || echo unknown); probing again..." >&2
             sleep 5
           fi
         done
