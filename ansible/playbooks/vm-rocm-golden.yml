@@ -735,7 +735,7 @@
           # The functions of amdgpu-emu-patches.py, in the order it applies
           # them. kfd_ptrace_gate changes a KFD security check and is carried
           # unreviewed.
-          amdgpu_patches: [kfd_atomics, ras_vbios, kfd_ptrace_gate, panel_type, amd_vsdb_freesync]
+          amdgpu_patches: [kfd_atomics, ras_vbios, kfd_ptrace_gate, panel_type, amd_vsdb_freesync, ttm_backup_writepage]
           kfd_ptrace_gate_reviewed: false
           amdgpu_autoload_blacklisted: true
           amdgpu_probe_helper: /usr/local/bin/amdgpu-probe

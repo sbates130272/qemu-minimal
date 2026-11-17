@@ -226,6 +226,39 @@ def amd_vsdb_freesync(root):
     return True
 
 
+def ttm_backup_writepage(root):
+    """Replace address_space_operations.writepage with a 7.3+ safe fallback.
+
+    kernel 7.3.0 removed writepage from struct address_space_operations. The
+    #else branch of HAVE_SHMEM_WRITEOUT in ttm_backup.c uses it as the
+    last-resort fallback when shmem_writeout is unavailable (which it always
+    is — not EXPORT_SYMBOL'd). On >= 7.3, returning AOP_WRITEPAGE_ACTIVATE
+    routes the folio through the existing folio_unlock cleanup path; it is
+    semantically a "could not write, please deactivate" response which
+    correctly leaves the folio unlocked without starting async writeback.
+    linux/version.h is added so LINUX_VERSION_CODE is in scope.
+    """
+    path = root + "/ttm/ttm_backup.c"
+    content = read(path)
+    inc_old = "#include <linux/swap.h>"
+    inc_new = "#include <linux/swap.h>\n#include <linux/version.h>"
+    old = ("#else\n"
+           "\t\t\tret = mapping->a_ops->writepage(folio_file_page(to_folio, idx + i), NULL);\n"
+           "#endif")
+    new = ("#elif LINUX_VERSION_CODE < KERNEL_VERSION(7, 3, 0)\n"
+           "\t\t\tret = mapping->a_ops->writepage(folio_file_page(to_folio, idx + i), NULL);\n"
+           "#else\n"
+           "\t\t\tret = AOP_WRITEPAGE_ACTIVATE;\n"
+           "#endif")
+    if inc_new in content and new in content:
+        return False
+    if old not in content or inc_old not in content:
+        raise Missing(f"target string not found in {path}")
+    content = content.replace(inc_old, inc_new, 1).replace(old, new, 1)
+    write(path, content)
+    return True
+
+
 def drm_buddy_kern(root):
     """Skip amddrm_buddy.ko on kernels >= 7.3 that already ship gpu_buddy_* in vmlinux.
 
@@ -265,7 +298,7 @@ def drm_buddy_kern(root):
 
 
 PATCHES = (kfd_atomics, ras_vbios, kfd_ptrace_gate, panel_type, amd_vsdb_freesync,
-           drm_buddy_kern)
+           ttm_backup_writepage, drm_buddy_kern)
 
 
 def main():
