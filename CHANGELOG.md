@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v2.0.0] - 2026-11-17
+
 Fleet XML is now the only settings format, and the stacks are renamed. Read
 **Breaking** first if you have settings in an env-format file, a stack
 rendered by an earlier version, a script that names a `vfio-user-*` stack or
