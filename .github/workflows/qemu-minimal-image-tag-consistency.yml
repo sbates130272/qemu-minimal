@@ -13,6 +13,14 @@ name: qemu-minimal - Image Tag Consistency Check
 # Fork images (sbates-fork) are built on a separate cadence and may carry a
 # different stamp. They are checked for internal consistency separately.
 #
+# The guest image, <backing-ref>, is not a batesste-ci-images ref and is in
+# none of those counts: qemu-minimal publishes it, under its own stamp. Its
+# check is the last one below. Every fleet file names one guest, the same
+# one, in the repository rocm-golden.xml's <publish-ref> names, by the dated
+# tag of one publish; "latest" and qm.<sha7> move, and are refused. Whether
+# that guest matches the servers is a question of pins at its bake commit,
+# which tests/test_playbook_pins.py answers in Gen Compose Check.
+#
 # What is searched: all files under .github/workflows/, .github/actions/,
 # qemu/compose/ (the generated stacks) and qemu/stacks/ (the fleet files they
 # are generated from).
@@ -113,6 +121,51 @@ jobs:
             fail=1
           else
             echo "OK: all SDXI server refs on tag $sdxi_tags (follows sdxi_source_pin, not the fleet stamp)"
+          fi
+
+          # --- guest image ---
+          publish_ref=$(sed -n 's|.*<publish-ref>\([^<]*\)</publish-ref>.*|\1|p' \
+            qemu/stacks/rocm-golden.xml)
+          if [ -z "$publish_ref" ]; then
+            echo "::error::qemu/stacks/rocm-golden.xml names no <publish-ref>"
+            exit 1
+          fi
+          guest_refs=""
+          for fleet in qemu/stacks/*.xml; do
+            refs=$(sed -n 's|.*<backing-ref>\([^<]*\)</backing-ref>.*|\1|p' "$fleet")
+            if [ "$(echo "$refs" | grep -c .)" -ne 1 ]; then
+              echo "::error file=$fleet::expected one <backing-ref>, found: ${refs:-none}"
+              fail=1
+              continue
+            fi
+            guest_refs="$guest_refs$refs"$'\n'
+            case "$refs" in
+              "$publish_ref":*) tag="${refs#"$publish_ref":}" ;;
+              *)
+                echo "::error file=$fleet::<backing-ref> $refs is not a tag of $publish_ref"
+                fail=1
+                continue ;;
+            esac
+            if ! echo "$tag" | grep -qxE '[0-9]{8}\.g[0-9a-f]{7}'; then
+              echo "::error file=$fleet::<backing-ref> tag '$tag' is not a dated tag (YYYYMMDD.g<sha7>); latest and qm.<sha7> move"
+              fail=1
+            fi
+          done
+          guest_count=$(echo "$guest_refs" | sort -u | grep -c . || true)
+          if [ "$guest_count" -gt 1 ]; then
+            echo "::error::The fleet files pull $guest_count different guests (expected 1):" >&2
+            echo "$guest_refs" | sort -u | grep . | sed 's/^/    /' >&2
+            fail=1
+          elif [ "$guest_count" -eq 1 ]; then
+            echo "OK: every fleet file pulls $(echo "$guest_refs" | sort -u | grep .)"
+          fi
+          # The image the fleet files pulled before this repository published
+          # its own. Nothing committed may still name it. The name is put
+          # together here so that this file does not match itself.
+          old_guest='batesste-ci-images-ubuntu-''qcow2'
+          if grep -rn "$old_guest" $SEARCH_DIRS; then
+            echo "::error::A batesste-ci-images guest image is still named above"
+            fail=1
           fi
 
           exit $fail

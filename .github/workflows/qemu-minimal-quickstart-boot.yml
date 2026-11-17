@@ -35,11 +35,15 @@ name: qemu-minimal - PR quickstart boot
 # runs when given no other, plus an OVERLAY this workflow writes, so the
 # default fleet itself is untouched for anyone running the documented
 # quickstart by hand. The guest is the published rocm-golden qcow2 the
-# default fleet names.
+# default fleet names, which is the image this repository bakes and
+# publishes (qemu-minimal-publish-qcow-rocm-golden.yml).
 #
-# No udev rules ship in the published image, so the IB device keeps its
-# kernel name and the assertion below resolves it from `ibv_devinfo -l`
-# instead of hardcoding `rocm-rdma-ernic0`.
+# That bake installs the ernic udev naming rules, so the IB device should
+# come up as `rocm-rdma-ernic0`. The assertion below still resolves the name
+# from `ibv_devinfo -l` rather than hardcoding it: the guest this lane
+# booted before had no rules and kept the kernel name, and a rename that
+# did not happen is worth a warning here, not a failure that hides whether
+# the device works.
 
 on:
   pull_request:
@@ -245,9 +249,10 @@ jobs:
         g sudo modprobe ionic_rdma 2>&1 || echo "note: modprobe ionic_rdma did not succeed"
         g lsmod | grep -E '^ionic' || echo "note: no ionic modules listed"
 
-        # Resolve the device name, never hardcode it: the published image
-        # ships no 99-rocm-ernic.rules, so the IB device keeps its
-        # kernel name (rocep0s5, not rocm-rdma-ernic0).
+        # Resolve the device name, never hardcode it. The image's bake
+        # installs 99-rocm-ernic.rules, so rocm-rdma-ernic0 is expected; a
+        # guest without the rules, or one whose IB rename did not fire,
+        # keeps the kernel name (rocep0s5) and is still a working device.
         IB=$(g ibv_devinfo -l | sed -n '2p' | tr -d ' \t\r')
         [ -n "$IB" ] || {
           echo "::error::ibv_devinfo -l named no device."
@@ -260,6 +265,10 @@ jobs:
           exit 1
         }
         echo "IB device: ${IB}"
+        case "$IB" in
+          rocm-rdma-ernic*) ;;
+          *) echo "::warning::the IB device is ${IB}, not rocm-rdma-ernic0: the udev rename the image bakes in did not happen" ;;
+        esac
         g ibv_devinfo -d "$IB" | tee /tmp/ibv.txt
         grep -q 'PORT_ACTIVE' /tmp/ibv.txt || {
           echo "::error::${IB} is present but its port is not PORT_ACTIVE"; exit 1; }

@@ -241,7 +241,7 @@ class TestIdentity(unittest.TestCase):
     def test_a_bad_value_is_a_blocking_failure(self):
         """And caught HERE, not at `docker compose up`.
 
-        By then the quickstart has pulled a 2.5 GB image and written a stack
+        By then the quickstart has pulled a ~2 GB image and written a stack
         directory, and the error is a compose interpolation message that does
         not name the env var's source.
         """

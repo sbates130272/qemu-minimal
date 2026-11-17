@@ -18,7 +18,7 @@ file up to date as infrastructure changes.
 - `images/` — qcow2 VM disk images (backing + overlay pairs, **not** `/var/lib/qemu-tool/images`)
 - `ansible/playbooks/` — three playbooks and five roles, and nothing else:
   - `vm-basic.yml` — a complete bake on its own, and the base of the golden
-  - `vm-rocm-golden.yml` — the one image beyond it: imports `vm-basic.yml`, then the mainline kernel and ernic prerequisites, ROCm, the rocjitsu roles, SRQ + P4, SDXI and one slim pass. Every bake play is tagged `install`; `tests/test_playbook_pins.py` fails a play with no tag, because an untagged play runs in every bake. Three plays need a device and are tagged `never`: `--tags configure` sets up the NIC, `--tags firmware` installs `ip_discovery.bin` from the rocjitsu serving the guest, and `--tags test` runs the GPU workloads. The pins (`ionic_kernel_pin`, `ernic_source_pin`, `rocm_line_pin`, `sdxi_source_pin`) are each defined once and shared between plays through YAML anchors. Its defaults are a published image's, and a bake needs no Docker daemon when given `-e rocjitsu_firmware_script=<path to vfio_guest_firmware.py>`. Given a cache directory (`gen-vm --bake --cache-dir DIR`, or `<bake-cache-dir>` in a fleet file, which reaches the playbook as the extra var `bake_cache_dir`) the module builds go through a compiler cache kept in that directory; there is none by default and only the playbook-test lane passes one — see "The bake's compiler cache". The slim play also purges every kernel but the running one, after asserting that is the pinned one — see "One kernel in the baked image". The acceptance test is `qemu/checks/rocm-golden.sh`, which the playbook-test lane runs against the baked guest and batesste-ci-images runs against the published one
+  - `vm-rocm-golden.yml` — the one image beyond it: imports `vm-basic.yml`, then the mainline kernel and ernic prerequisites, ROCm, the rocjitsu roles, SRQ + P4, SDXI and one slim pass. Every bake play is tagged `install`; `tests/test_playbook_pins.py` fails a play with no tag, because an untagged play runs in every bake. Three plays need a device and are tagged `never`: `--tags configure` sets up the NIC, `--tags firmware` installs `ip_discovery.bin` from the rocjitsu serving the guest, and `--tags test` runs the GPU workloads. The pins (`ionic_kernel_pin`, `ernic_source_pin`, `rocm_line_pin`, `sdxi_source_pin`) are each defined once and shared between plays through YAML anchors. Its defaults are a published image's, and a bake needs no Docker daemon when given `-e rocjitsu_firmware_script=<path to vfio_guest_firmware.py>`. Given a cache directory (`gen-vm --bake --cache-dir DIR`, or `<bake-cache-dir>` in a fleet file, which reaches the playbook as the extra var `bake_cache_dir`) the module builds go through a compiler cache kept in that directory; there is none by default, and the two workflows that bake the guest, the playbook-test lane and the publish workflow, each pass one and share what it holds — see "The bake's compiler cache". The slim play also purges every kernel but the running one, after asserting that is the pinned one — see "One kernel in the baked image". The acceptance test is `qemu/checks/rocm-golden.sh`, which the playbook-test lane runs against the baked guest and batesste-ci-images runs against the published one
   - `vm-quickstart.yml` — configures and tests a running fleet; what `qemu-tool quick-start test` runs
   - roles `rocm_ernic_setup` (image prep, device naming, boot-time addressing, the P4 client and who may open `/dev/ernic-p4`), `rocjitsu_setup` (firmware, amdgpu, tools, live tests), `sdxi_setup`, `image_slim` and `bake_ccache` (the compiler cache: `restore`, `save` and `remove`, no `main`). Each has task files callers reach with `tasks_from`; all five are linted at the `production` profile in CI
 - `scripts/install-vfio-rules` + `scripts/99-qemu-minimal-vfio.rules` — host-side udev rules for PCI passthrough. There is no top-level `udev/` any more: guest rules live in their role's `files/`
@@ -260,10 +260,12 @@ and its state directories (`/var/lib/qemu-tool/stacks/quickstart`,
 **Every image a fleet names is pulled.** `<sdxi-image>` is a published
 `batesste-ci-images-ubuntu-rocm-sdxi` tag.
 
-**All images share one build stamp except SDXI, which follows the guest's
-`sdxi_source_pin`.** `<qemu-ref>`, `<ernic-ref>`, `<rocjitsu-ref>` and
-`<backing-ref>` must carry one `<date>.<ci-sha>`; `_check_image_coherence`
-refuses a mix at render time. `<sdxi-image>` is exempt from that comparison
+**The three device-side images share one build stamp. The guest and the
+SDXI server are each tied to their pair by commit instead.** `<qemu-ref>`,
+`<ernic-ref>` and `<rocjitsu-ref>` must carry one `<date>.<ci-sha>`, the
+stamp of one batesste-ci-images build; `_check_image_coherence` refuses a mix
+at render time, and a `vfu.<sha>` that differs between QEMU and the ernic.
+`<sdxi-image>` is exempt from that comparison
 and tied to the guest by commit instead: the `sdxi.<sha7>` in its tag must
 equal the first seven characters of `sdxi_source_pin` in `vm-rocm-golden.yml`,
 because a guest driver newer than its server waits for a completion MSI-X
@@ -276,19 +278,285 @@ therefore two edits, the pin and the `<sdxi-image>` in `rocm-golden.xml` and
 it does not need the rest of the fleet to move stamps. `gen-compose` still
 refuses a non-zero `<sdxi-per-vm>` with an empty `<sdxi-image>`.
 
-**That pairing covers a guest baked from this checkout, not the one
-`<backing-ref>` pulls.** The published qcow2 at
-`20261112.gdca6903-...-qm.096ddfe` predates the SDXI play and has no SDXI
-side at all. Read off the image rather than inferred: no
-`/etc/sdxi-guest-ref`, no `sdxi.conf` in `modules-load.d` or `modprobe.d`, no
-`sdxi-cli`, and nothing but `dkms/` under `updates/`. So `quick-start`,
-`quickstart-boot` and the daily report lane boot guests with an SDXI device
-that no driver binds. Nothing wedges, because nothing talks to the server;
-`generate-vm-report.sh` finds no `/dev/sdxi0` and fails the SDXI step saying
-so, where it used to exit 0 with an `n/a` badge. The lanes that boot a baked guest — playbook-test and publish — are
-the only ones that exercise the pair, and both assert `/dev/sdxi0`. This
-ends when `<backing-ref>` moves to a `<publish-ref>` tag baked at
-`sdxi_source_pin`.
+**`<backing-ref>` is the guest this repo publishes, and it is not on the
+servers' stamp.** All three fleet files name
+`docker.io/sbates130272/qemu-tool-rocm-golden:20261117.g80c17f8`, a dated tag
+of `<publish-ref>`. That stamp is the day of the publish and the qemu-minimal
+commit the guest was baked from; it is not a batesste-ci-images build and
+never equals one, so the old rule — four refs, one stamp — would refuse
+every fleet that pulls the guest this repo makes. Until 2026-11-17 the three
+files named a batesste-ci-images qcow2
+(`...-qcow2-gen-ernic-rocjitsu:20261112.gdca6903-...-qm.096ddfe-qcow2`),
+which did share the stamp and had no SDXI driver, no hipFile SDK and no P4
+client; the daily report lane failed all four benchmark steps against it.
+
+What `_check_image_coherence` holds a backing ref to is decided by its tag
+(`gen_compose._backing_ref_kind`) first, because `<publish-ref>` can be
+anyone's, and by its repository only where a layer says which repository
+that is:
+
+| Tag | What it is | Rule |
+|---|---|---|
+| exactly `<YYYYMMDD>.g<sha7>` | `publish-qcow`'s dated tag | accepted, not compared with the servers' stamp |
+| none, `latest`, `qm.<sha7>` | a name `publish-qcow` moves | refused, and `<image-allow-guest-lag>` does not excuse it |
+| `name@sha256:...` | a digest | accepted |
+| a near miss of the dated tag, `latest` in another case, `qm.` plus anything but seven hex digits | a mistake for one of the above | refused ("does not name a published guest"), not excused either |
+| any other tag, in the repository `<publish-ref>` names | not something `publish-qcow` pushes | refused the same way |
+| `<stamp>-...` | a batesste-ci-images qcow2 | the old rule: the servers' stamp, unless `<image-allow-guest-lag>` |
+| anything else | a local build | warned about and left out, like an unstamped server image |
+
+**The two "malformed" rows exist because a typo used to render.** Before
+them only the exact strings `latest` and `qm.<7 hex>` and a missing tag were
+refused; `:2026117.g80c17f8` (a digit short), `:LATEST`, `:stable` and
+`:qm.80c17f8a` in the publish repository each fell through to the last row
+and rendered rc 0 with "image(s) with no build stamp, excluded from the
+coherence check" — a mistyped pin became an image nothing checked. The
+committed files were never exposed, since `tests/test_image_tag_consistency.py`
+holds them; a local overlay and an `--output-dir` render were. The
+repository row needs `<publish-ref>`, which only `rocm-golden.xml` sets: an
+overlay on `helios-tray.xml` or `mi355x-server.xml` naming `:stable` in the
+publish repository is still the last row, because nothing there says whose
+repository it is. And `<stamp>-dirty` outside the publish repository is
+still a stamped tag held to the servers' stamp; the refusal now adds that a
+published guest is named by its dated tag alone.
+
+A moving tag is refused for two reasons, neither of them tidiness. `gen-vm`
+and `quick-start` cache the disk and the keypair by the *text* of the ref, so
+a tag that moves leaves each host on whichever image it pulled first. And a
+moving tag names no commit, which the next check needs. The shape is spelled
+once, `VM_DATED_TAG` in `vm_artifact.py`; `publish-qcow-prune` deletes only
+that shape and `gen-compose` pins only that shape.
+
+**What ties the pulled guest to the servers is the pins at its bake commit,
+and `tests/test_playbook_pins.py` (`PulledGuest`) reads them out of git.**
+The `g<sha7>` in the tag is a commit of this repository. The guest's drivers
+were built at the `ernic_source_pin` and `sdxi_source_pin`
+`vm-rocm-golden.yml` had *at that commit*, so the test runs
+`git show <sha>:ansible/playbooks/vm-rocm-golden.yml` and compares those two
+pins with the `ernic.<sha>` in `<ernic-ref>` and the `sdxi.<sha>` in
+`<sdxi-image>` of each fleet file. For `20261117.g80c17f8` they are
+`90434a2` and `dfd76f2`, which is what the three files serve. This is the
+replacement for the stamp comparison, and it is stricter than the stamp ever
+was: the stamp said "built in one run", this says "built from the commit the
+server was". It needs the commit, so:
+
+- a shallow checkout skips it, with the commit named in the skip. The
+  publish workflow's first step runs the file on a depth-1 checkout and
+  skips this one test;
+- a full checkout that does not hold the commit fails;
+- `Gen Compose Check` checks out with `fetch-depth: 0` for this test alone,
+  and is the only lane that runs it on a pull request.
+
+**A pin bump opens a window this test will not let pass silently.** The
+change that moves `ernic_source_pin` and `<ernic-ref>` (or the SDXI pair)
+leaves the fleet pulling a guest baked before it, and no guest at the new
+pins can exist until that change is on main and published, because the
+publish workflow never runs from a pull request. So that change also sets
+`<image-allow-guest-lag>true` in each fleet file, with a comment saying what
+it waits for. `PulledGuest` accepts a lagging guest only with that element,
+and fails a fleet file that still sets it once the guest matches, so the
+follow-up that moves `<backing-ref>` has to remove it. While it is set every
+render warns that the guest may be older than its servers, and during that
+window the fleet really is a guest and a server from different commits:
+expect `quick-start`, `quickstart-boot` and the daily lane to misbehave
+until the follow-up lands.
+
+**Moving `<backing-ref>` is a change of its own**, made after a publish:
+the same dated tag in `rocm-golden.xml`, `helios-tray.xml` and
+`mi355x-server.xml`, then `qemu-tool gen-compose --xml` for each, since the
+ref is in every stack's digest. `tests/test_image_tag_consistency.py`
+(`GuestImage`) and the `Image Tag Consistency` workflow fail if the three
+disagree, if one names a repository other than `<publish-ref>`, or if one
+names `latest`.
+
+**A host that already ran `quick-start` has guest disks on the old image,
+and `quick-start` stops rather than boot them.** `make_overlays` leaves an
+existing overlay alone, and `fetch_key` re-fetches the keypair when the ref
+changes, so a moved `<backing-ref>` used to boot the old disks and offer
+them the new image's key: healthy guests, refused logins, reported as "did
+not answer SSH". `quick_start.retire_stale_overlays` runs first. It compares
+the ref `gen-vm` recorded in `<vm-1>-backing.qcow2.image-ref` with the
+fleet's, and on a difference:
+
+| Run | What happens |
+|---|---|
+| a qemu service of this stack is running | stops, names the services, removes nothing; `quick-start down` first |
+| Docker cannot be asked | stops, removes nothing |
+| at a terminal | asks, default **no**; a yes replaces the guest disks and their NVMe scratch disks |
+| `--yes`, or no terminal | takes the default, so it stops and removes nothing |
+| `--clean-overlays` | the answer is already yes: no question, and the disks go where that flag always removed them, after the keypair is fetched |
+
+Every stop is before the keypair is touched, so the old guests are still
+reachable. No record means nothing was pulled under that name and nothing
+is removed.
+
+**This is the one `quick-start` prompt whose default is no.** It still
+takes its default when stdin is not a terminal, like every other; the
+default is a stop. The first version defaulted to yes and did not look
+for a running stack: an unattended `up` on a host with a live stack from
+the old image would have unlinked the overlays and NVMe disks under the
+running QEMUs, then fetched the new key — guests still running on deleted
+inodes, refusing the new key, and losing everything written to them when
+they stopped. No CI lane reaches the prompt: a fresh runner has no
+`.image-ref`. A lane on a runner that keeps its images directory would stop
+here after a ref move, and wants `--clean-overlays`.
+
+`--clean-overlays` on its own is turned away from running guests the same
+way, since it unlinks the same files (`_refuse_under_running_guests`); with
+no disks to remove it is not. "Running" is a `qemu-N` service of the compose
+project `quick-start` itself uses, the stack directory's name: servers left
+up after their guests exited do not count, and a stack started from the same
+images directory under another project name is not seen. This host has the
+state the check is for: `images/stebates-helios-1-backing.qcow2.image-ref`
+names a `20261030` image.
+
+A re-fetch also replaces the copy of the keypair published to
+`<images>/keys/quickstart_id_rsa`, which used to be written once and kept.
+Plain `gen-vm` with a changed ref re-pulls and removes that one guest's
+overlay, but not the overlays of other guests made on the same backing file
+with `--backing-file`; delete those by hand.
+
+**What has and has not been seen of `20261117.g80c17f8`.** The publish run
+on main at `80c17f8` baked it, ran `qemu/checks/rocm-golden.sh` against it
+with no devices, then booted an overlay of it as the single guest of a
+rendered default stack and required an active RDMA port, the GPU test stage
+and a copy through `/dev/sdxi0`. That gate ran with `<p4-enable>false`, so
+the P4 client and `/dev/ernic-p4` were not exercised by it. No CI lane has
+yet booted the *published artifact* as a fleet: not `quickstart-boot`, not
+the daily report lane.
+
+**It has been booted as a two-guest fleet once, by hand, on the dev host,
+on 2026-11-17, and every step the daily report lane runs passed.** That is
+one run on one machine, not a lane. How: `qemu-tool quick-start preflight`,
+`up`, `test` and `down` from this working tree (`80c17f8` plus the
+uncommitted `<backing-ref>` move), with `--xml qemu/stacks/rocm-golden.xml`
+and `--stack-dir`, `--key-dir` and `--images` all under one scratch
+directory, so the images directory was fresh and the artifact was pulled.
+The four benchmark steps were then run as the lane runs them:
+`scripts/generate-vm-report.sh` as root in the lane's job image, on the
+stack's `fleet` network, with the image's published key.
+
+What differed from the lane, each of which limits what this shows:
+
+- 32 cores and 46 GB, so `quick-start` sized the guests at 8 vCPU and
+  8192 MiB each; the lane gets the 4 vCPU floor.
+- No `--in-network`; the host is not a job container.
+- Windows held the default ports, so guest SSH was 2226/2227, Prometheus
+  9093 and Grafana 3003.
+- The four server images were already in Docker's cache, so the `up` time
+  below understates a cold runner.
+- This host exports `AMD_CERT`, so `vm-quickstart.yml` installed the
+  corporate CA into the two scratch overlays. The fio step's in-guest
+  `git fetch` from GitHub ran after that and depended on it here. CI has no
+  TLS interception. The overlays are deleted.
+
+Pulled: image manifest `sha256:14f0b5d30e19...`,
+keypair referrer `sha256:8cc3ddd6fba4...`. `rocm-golden.qcow2.zst` unpacked
+to 8,422,096,896 bytes, 64 GiB virtual. `vm-info.json`: username `ubuntu`,
+`kernel_release` `7.2.6-070206-generic`, `qemu_minimal_commit`
+`80c17f805eeb...`. The account matches the fleet file, so `quick-start`
+wrote no `overlay-image-login.xml`. `up` took 2 m 5.3 s, and both guests
+answered SSH with the pulled key on the first probe, about 23 s after it
+returned.
+
+On each guest **before any playbook ran**, identical but for MAC, address
+and hostname:
+
+| What | Measured |
+|---|---|
+| kernel | `7.2.6-070206-generic`, and one kernel image installed |
+| `/dev/ernic-p4` | `crw-rw---- root ernic-p4` |
+| `/dev/sdxi0` | `crw-rw---- root sdxi` |
+| the baked account's groups | `ubuntu`, `video`, `users`, `admin`, `sdxi`, `ernic-p4`, `render` |
+| on `PATH` | `p4_fp8_client`, `p4_fp8_bench`, `sdxi-cli`, all in `/usr/local/bin` |
+| `ibv_devinfo -l` | `rocm-rdma-ernic0`; `PORT_ACTIVE`, Ethernet, `max_srq` 256 |
+| netdev | `rocm-ernic0`, up, MAC `72:6f:63:6d:00:01` / `:02` |
+| address from `rocm-ernic-netcfg` | `192.168.100.11/24` / `.12`, equal to `fleet_guest_ip` in the generated inventory |
+| `/etc/udev/rules.d` | `99-ernic-p4.rules`, `99-sdxi.rules`, and `99-rocm-ernic.rules` at 2928 bytes: rocm-ernic's copy |
+| hipFile SDK | `include/hipfile.h` and `lib/libhipfile.so` under `/opt/rocm/core-10.1` |
+| modules | `ernic_p4`, `ionic`, `ionic_rdma` from `updates/dkms`, `sdxi_char` from `updates/`, all loaded |
+| `/etc/sdxi-guest-ref` | `dfd76f23f6f1...` |
+| `lspci` | `[1dd8:1002]`, `[1002:75c1]`, SDXI `[1022:149f]`, NVMe `[1b36:0010]` |
+| `/dev/kfd` | absent until the playbook's amdgpu probe, as designed |
+| `/opt/fio-hipfile` | absent, so the fio step builds fio in the guest |
+| `systemctl --failed` | `apparmor.service`; `is-system-running` says `degraded` |
+
+So both renames fire on this image at boot, which the paragraph on resolving
+the IB name below had as unrecorded, and the boot unit's address is the one
+`quick-start` assigns.
+
+The lane's steps, all exit 0:
+
+| Step | Time | Result |
+|---|---|---|
+| `quick-start test` | 1 m 37.5 s | `rocm-golden-1` ok=66 changed=21 failed=0; `rocm-golden-2` ok=62 changed=18 failed=0 |
+| sidecars | | prometheus, grafana, loki and alloy running; the `up` query answered; Loki healthy |
+| `check-vm-devices.sh --gpu gfx1250 --strict-key`, both guests | | "device reporting checks passed" |
+| GEMM + hipFile, guest 1 | 135 s | 643 kFLOP/s; 13.3 MB/s |
+| hipFile fio, guest 2 | 59 s | 12.3 MB/s, fio-3.42 built in the guest |
+| P4 FP8, guest 1 | 9 s | 206.7 MB/s: 262144 elements x 2000, avg 1.268 ms |
+| SDXI copy, guest 1 | 8 s | 2523.0 MB/s: 4194304 bytes x 1204, avg 1.66 ms |
+| `quick-start down` | 18.5 s | both guests powered off by name |
+
+Inside `quick-start test`: `vector_add` passed on gfx1250; `ib_send_bw`
+65536 B x 1000 averaged 559.27 MiB/s on `rocm-rdma-ernic0` and ernic 1
+moved 65,536,000 bytes; NVMe write/read was 117.0/287.0 MiB/s on guest 1
+and 119.0/289.0 on guest 2. The P4 step ran with `<p4-enable>true` and
+`<p4-guest-scope>load`, as the guest user, with no sudo, which the publish
+gate had not exercised. No service restarted and ernic, rocjitsu and sdxi
+logged no error line.
+
+**What that run found wrong, none of which failed a step:**
+
+- **`apparmor.service` is failed on a pristine boot of the published
+  image.** The journal: `AppArmor parser error for /etc/apparmor.d in
+  profile /etc/apparmor.d/usr.lib.snapd.snap-confine.real at line 13: Could
+  not open '/var/lib/snapd/apparmor/snap-confine'`.
+  `sbates130272.batesste.user_setup` removes the `snapd` package with
+  `state: absent` and no purge, which leaves that conffile behind. Nothing
+  in the daily lane or `qemu/checks/rocm-golden.sh` looks at failed units,
+  so it went out. Not fixed here: it needs a bake to change and to verify.
+  The fix is to purge snapd (in `user_setup`, which is the collection's, or
+  in this repo's slim pass) and to assert in `rocm-golden.sh` that
+  `apparmor.service` is not failed. A blanket "no failed units" assertion
+  is a different matter: that check boots with no device, and what else
+  fails there has not been looked at.
+- **Prometheus's `amd-gpu` and `hsa-snoop` targets are down for every
+  golden guest.** Only `:9100` and `:9879` have a listener. That is the
+  bake's doing, on purpose: `rocjitsu_setup`'s `tools` tasks disable
+  `gpuagent` and `hsa-snoop-prometheus.service`. `rocm-golden.xml` still
+  forwards all four ports and its comment now says which two are dead.
+  Whether to drop the two scrape jobs and forwards, or to run the
+  exporters, is undecided; whether the old backing image behaved the same
+  was not compared.
+- **The exporter play was not a no-op**: see "the published image carries
+  an `rdma_exporter` with no record" below.
+- **`quick-start down` leaves the two named volumes**, `<stack>_ernic-stats`
+  and `<stack>_vfu-sockets`. Left as it is; nothing is known to go wrong
+  with a stale one.
+
+Not exercised by that run: `helios-tray` and `mi355x-server` were not
+booted; the lane's `--in-network` path and 4 vCPU sizing were not
+reproduced; and `retire_stale_overlays` was not reached, the images
+directory being fresh.
+
+**The published image carries an `rdma_exporter` with no record of which
+one.** `rocm_ernic_setup`'s `metrics` tasks downloaded the tarball and
+reinstalled the binary on every run: `quick-start test` against the golden
+guests reported `Download rdma_exporter` and `Install the rdma_exporter
+binary` changed on both, and the binary's mtime became the time of the
+test. They now record the tarball's checksum in
+`/usr/local/share/rdma_exporter.sha256` and skip the download and the
+install when the record names the pinned one. `20261117.g80c17f8` has the
+binary and no record, so each guest made from it is installed to once more
+by `vm-quickstart.yml`; a guest baked from this tree carries the record and
+the play changes nothing. The condition was run against a scratch file on
+the dev host; the tasks have run against no guest.
+
+**`quick-start test` writes its per-guest summaries into the stack,**
+`<stack-dir>/artifacts`. It was `/var/tmp/quickstart-artifacts-<flavor>`,
+which no flag moved and which `test` empties first: the run above, pointed
+entirely at a scratch directory, still wrote into the default stack's.
 
 The SDXI image has no `ENTRYPOINT` and a shell `CMD`
 serving a fixed socket name, so the generated `sdxi-N` services carry
@@ -876,11 +1144,36 @@ the tests stayed green throughout, because they read the task and never asked
 whether it runs; there is now a test that the `naming.yml` include carries no
 `when:`.
 
-**The published qcow2 ships no rules of its own either**, as of
-`20261021.g742e8e2`. Read straight off the image over `qemu-nbd`, not
-inferred: `/etc/udev/rules.d/` has no `99-rocm-ernic.rules`. The note below
-about the Oct-14 image carrying one no longer holds, so a guest that has had
-no Ansible run against it has no rules from any source.
+**The published image carries rules, and they are rocm-ernic's copy, not
+this repo's.** `vm-rocm-golden.yml`'s SRQ + P4 play includes `naming` with
+`rocm_ernic_setup_udev_rules_src` set to
+`{{ ernic_source_dir }}/udev/99-rocm-ernic.rules`, the file in the rocm-ernic
+checkout at `ernic_source_pin`. At `90434a2` that file matches all four id
+fields, as ours does, but its Ethernet stanza is still `NAME="rocm-ernic%n"`
+— the form the next paragraph explains can name only one NIC per guest.
+Measured on both guests of the default fleet, one ernic each, before any
+playbook ran: the file in `/etc/udev/rules.d` is 2928 bytes (this repo's is
+9647), the netdev is `rocm-ernic0` and the IB device `rocm-rdma-ernic0`.
+After `quick-start test` the file is this repo's, because `vm-quickstart.yml`
+installs it.
+
+**Nothing installs this repo's rules on a `helios-tray` or `mi355x-server`
+guest.** Their `quick-start` flavors run no playbook
+(`quick_start.VARIANTS` has `None` for both: boot only), so an eight-ernic
+guest keeps the `%n` rule the image shipped with, for good, and should have
+`rocm-ernic0` and seven NICs under kernel names. That is read from the
+rules file and from the next paragraph's analysis; no multi-NIC guest has
+been booted from the published image, so the count of renamed NICs is
+unobserved. An earlier version of this section said `vm-quickstart.yml`
+replaces the rules there. It does not run there. The repair is in the bake
+— drop the `rocm_ernic_setup_udev_rules_src` override in
+`vm-rocm-golden.yml`'s SRQ + P4 play so the image gets this repo's rules,
+which search for a free index — and needs a publish and one `helios-tray`
+boot to confirm. Not done. `rocm-ernic-netcfg.sh` addresses every NIC
+by PCI identity under whatever name it has, so a missed rename costs the
+name and not the address. The batesste-ci-images qcow2 the fleet files
+pulled until 2026-11-17 shipped no rules at all, which is why every consumer
+resolves names instead of assuming them, and should go on doing so.
 
 **`NAME="rocm-ernic%n"` could only ever name one NIC per guest.** `%n` is the
 kernel number — the trailing digits of the sysname — and every emulated NIC
@@ -905,16 +1198,19 @@ confirmed working in CI — the ionic lane's
 the pre-rename kernel name, and `ibv_devinfo` reports `hca_id: rocm-rdma-ernic0`.
 The IB rename shells out to `/usr/bin/rdma`, which the gen-vm guest has.
 
-**On the published `rocm-golden` qcow2 only the Ethernet rename happens.**
-Measured 2026-10-16 on both guests of a `quickstart` stack from
-`20261014.geea0485`: the netdev comes up as `rocm-ernic0`, and `ibv_devinfo`
-reports `hca_id: rocep1s0` — the kernel name. The rules file is in the image
-(`/etc/udev/rules.d/99-rocm-ernic.rules`, from the build, not from Ansible),
-so this is the IB half of it not firing rather than the rules being absent.
-The consequence is practical: anything on a fleet guest that passes
-`-d rocm-rdma-ernic0` fails there, so resolve the name from `ibv_devinfo -l`
-rather than hardcoding it — which is what `vm-quickstart.yml` does, and
-why its RDMA test works on a guest whose device has either name.
+**Resolve the IB device name from `ibv_devinfo -l`; never hardcode it.**
+The rule comes from a guest where only half the rename happened: on
+2026-10-16, both guests of a `quickstart` stack from the batesste-ci-images
+qcow2 `20261014.geea0485` had the rules file, came up with the netdev as
+`rocm-ernic0`, and reported `hca_id: rocep1s0` — the kernel name. Anything
+passing `-d rocm-rdma-ernic0` failed there. On the image this repo
+publishes the IB rename does fire: both guests of `20261117.g80c17f8`
+reported `rocm-rdma-ernic0` at boot, before any playbook, in the one local
+run recorded above. That is one image on one host, so the rule stands, and
+`quickstart-boot` prints a warning annotation when the name it resolves is
+not `rocm-rdma-ernic*`.
+`vm-quickstart.yml`, `generate-vm-report.sh` and `quickstart-boot` all
+resolve the name, which is why they work on a guest with either.
 
 As of rocm-ernic@3fb74d1 the rules match on four attributes, not two —
 `0x1dd8`/`0x1002` plus the subsystem pair `0x1dd8`/`0x5400`:
@@ -1438,14 +1734,69 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
 
 The plays that build kernel modules — amdgpu, ionic-ernic twice, `ernic_p4`,
 SDXI — are about fourteen minutes of a 26-minute `vm-rocm-golden` bake, and
-the sources they compile change only when a pin does. The playbook-test lane
-keeps a ccache directory across runs; **the publish lane does not, and a
-published image is always compiled from source.** One flag separates them:
-`qemu-tool gen-vm --bake --cache-dir DIR` names a directory on the
-controller, which `gen-vm` creates and hands to the playbook as the extra var
-`bake_cache_dir`. Without it the restore and the save are skipped and the
-bake compiles what it always did. `tests/test_bake_ccache.py` pins that only
-the one workflow passes it.
+the sources they compile change only when a pin does. **Both workflows that
+bake the guest keep a ccache directory across runs, and it is one cache**:
+the playbook-test lane, and the publish workflow. The publish workflow used
+to bake without it, on the rule that a published image is always compiled
+from source; the owner reversed that, to make the publish bake faster and
+so that main always holds an entry pull requests can read. One flag turns
+the cache on: `qemu-tool gen-vm --bake --cache-dir DIR` names a directory on
+the controller, which `gen-vm` creates and hands to the playbook as the
+extra var `bake_cache_dir`. Without it the restore and the save are skipped
+and the bake compiles everything, which is still what a bake by hand does.
+`tests/test_bake_ccache.py` pins that exactly those two workflows pass it.
+
+**What a published image is built from now.** A kernel module in a published
+image may be linked from objects compiled in an earlier run on main, not in
+the run that published it. That is the trade, and these are its terms:
+
+- ccache returns a stored object only for the same compiler, the same
+  command line and the same source. The compiler is identified by its
+  content (`compiler_check = content`); the source is the file and every
+  header it includes, by content, or else the preprocessed output. What it
+  is told not to look at is in the settings table below: the working
+  directory, header timestamps, and `__DATE__`/`__TIME__`.
+- Those settings are the role's because the archive's are discarded.
+  ccache reads `<cache_dir>/ccache.conf` as well as `/etc/ccache.conf`,
+  and the one in the cache wins: measured on ccache 4.12.3 on the dev host,
+  a `compiler_check` and a `max_size` there replaced the system file's. The
+  cache directory is the restored archive, so a `ccache.conf` at the top of
+  an entry would be the configuration of a published bake, and a
+  `prefix_command` or a command-valued `compiler_check` in it would run as
+  root at every compile. `restore.yml` deletes that file after the unpack
+  and before the wrappers go in, whether or not an archive was unpacked,
+  and `save.yml` leaves it out of the tar. Only the precedence was
+  measured; the deletion has run against no guest. Nothing else in the
+  archive is filtered: it is unpacked as root with the owners and modes it
+  carries, and removed with the rest before the image is finished.
+- Nothing compares a cached object with a fresh compile. A wrong object in
+  the cache would be published. No such object has been seen, and no test
+  here could see one.
+- ccache itself must not reach the image. The playbook removes it, and
+  `qemu/checks/rocm-golden.sh` fails an image that still carries the
+  symlinks, `/etc/ccache.conf`, the cache or the tar. The publish workflow
+  runs that check on the device-less boot, before the push, and
+  `tests/test_bake_ccache.py` fails if the check is moved after the push,
+  given a condition or made `continue-on-error`.
+- Who can write what a publish reads is decided by GitHub's cache scopes,
+  as its documentation states them; none of this was tested here. A run
+  reads entries saved on its own ref and on the default branch. A publish on
+  a push to main therefore reads only entries saved by runs on main. Today
+  those are earlier publishes and either workflow dispatched there, and no
+  other workflow names a `bake-ccache` key. But the restore falls back to
+  the bare `bake-ccache-v1-` prefix and an entry is matched on key and path
+  alone, so **any workflow that runs on main can save what a publish
+  restores**, not only these two. A workflow on main that executed
+  untrusted input (`pull_request_target`, or `workflow_run` on content it
+  fetched) would be able to. **A run on main
+  cannot read an entry saved by a pull request**, whose runs save under the
+  pull request's own merge ref, so a pull request cannot put an object into
+  a published image through the cache. **A publish dispatched by hand from
+  another branch can read that branch's entries** as well as main's: those
+  are what earlier dispatched runs on that branch saved.
+- To publish an image compiled entirely in its own run, delete main's
+  entries first (`gh cache list --key bake-ccache-v1-`, `gh cache delete`).
+  There is no input on the workflow for it.
 
 **The cache is switched by a flag or a fleet element, never by the
 environment.** The owner does not want settings driven by environment
@@ -1453,8 +1804,11 @@ variables, and an exported variable would reach every `ansible-playbook` in a
 job, where the flag reaches one bake; the playbook has no `lookup('env')`.
 `<bake-cache-dir>` is the element (a path, `~` and
 variables expanded, read by `gen-vm --bake` only, the flag wins);
-**`qemu/stacks/rocm-golden.xml` must not set it**, since the image published
-from that file is compiled from source — a local overlay sets it. `gen-vm`
+**`qemu/stacks/rocm-golden.xml` must not set it**: a directory is a fact
+about one host, that file is read by every bake, and a bake by hand would
+start caching into whatever path was committed. The two workflows pass the
+flag, in the bake step's own environment and nowhere else in the job; a
+local overlay sets the element. `gen-vm`
 refuses `--cache-dir` without `--bake`, because the element is a bake
 element and the flag follows it, and refuses a cache when the bake has no
 playbook to hand it to. The extra var is passed as JSON, not `key=value`,
@@ -1463,19 +1817,28 @@ which splits a path at its first space. A playbook that does not read
 
 `--cache-replace` (extra var `bake_cache_replace`) is the second switch and
 has no element: it is a fact about one run — the cache handed over was saved
-for other pins — not a setting. The tool cannot derive it: what knows is whoever fetched the cache, which in the
-lane is the `actions/cache` key comparison.
+for other pins — not a setting. The tool cannot derive it: what knows is
+whoever fetched the cache, which in the two workflows is the key comparison
+the restore action makes.
 
-**Fourteen minutes is those plays' wall time, not what the cache saves, and
-the saving has not been measured.** ccache removes the compiler and nothing
-else. What stays: amdgpu's `configure`, some 290 separate kbuild invocations
-whose start-up cost is paid hit or miss; objtool on every object
-(`CONFIG_OBJTOOL`); the link, `modpost`, signing and zstd compression of each
-module; and the package installs, clones and the reboot the same plays do.
-The one earlier measurement put amdgpu's straight compile at about 210 s of
-its 7m49s play. Four to six minutes is a defensible expectation; take the
-real figure from the play timings and the statistics of the first two lane
-runs, and replace this paragraph with it.
+**What has been measured, and what has not.** Fourteen minutes is those
+plays' wall time, not what the cache saves. On one pull request the lane
+took 27m27s cold and 17m46s on a later run, the amdgpu play going from 7m49s
+to 2m27s. That later run's log shows it restored an entry saved under
+another key prefix, so it was not a clean warm run: ccache reported 1812
+hits and 241 misses of 2053 cacheable calls, and 332 uncacheable ones. A run
+that restored an entry of its own prefix has not been looked at. Runner
+speed moves these figures as much as the cache does: a later cold lane run
+took 35m01s, with the amdgpu play alone at 15m17s. The publish workflow's
+bake step took 24m33s uncached on 2026-11-16. **The publish workflow has not
+yet run with the cache**, so what it saves there is not known; its bake also
+compacts the image, which the lane's does not.
+
+ccache removes the compiler and nothing else. What stays: amdgpu's
+`configure`, some 290 separate kbuild invocations whose start-up cost is
+paid hit or miss; objtool on every object (`CONFIG_OBJTOOL`); the link,
+`modpost`, signing and zstd compression of each module; and the package
+installs, clones and the reboot the same plays do.
 
 **The hook is a symlink per compiler name in `/usr/local/bin`, plus
 `/etc/ccache.conf`.** Nothing narrower reaches every build, and this was read
@@ -1520,7 +1883,7 @@ one of three things holds:
 | Condition | What it catches |
 |---|---|
 | no archive was handed over | the first bake |
-| `bake_ccache_replace`, from `gen-vm --cache-replace` | a moved pin: the lane sets it when the entry it restored was not saved under this run's key prefix |
+| `bake_ccache_replace`, from `gen-vm --cache-replace` | a moved pin: the restore action sets it when the entry it restored was not saved under this run's key prefix, or nothing was restored |
 | at least `bake_ccache_save_misses` (100) invocations missed | drift no pin records, such as a new gcc in the archive |
 
 **The count is absolute, not a share, and the second row is not redundant.**
@@ -1533,10 +1896,13 @@ pin a few percent (arithmetic from those counts, not a measured bake) — an
 earlier 25% threshold would have left the archive
 stale after every pin bump, recompiling the changed module in every run. A
 count fixes amdgpu; it cannot fix a module of tens of files, which is what
-the key comparison is for. The count is still a guess. The statistics every
-bake prints, and the lane copies into its step summary, are what to tune it
-against, and their last line says "ccache invocations", not compiles, for
-the same reason.
+the key comparison is for. The count is still a guess, and the one measured
+run does not bear the estimate out: it counted 2385 calls in all, not
+thousands of probes, and its 241 misses came with a changed key prefix, so
+they say nothing about what an unchanged bake misses. The statistics every
+bake prints, and both workflows copy into their step summary, are what to
+tune it against, and their last line says "ccache invocations", not
+compiles, for the same reason.
 
 Transport is one uncompressed tar file, `ccache.tar`, in that directory:
 unpacked into `/var/tmp/bake-ccache` after the reboot into the pinned kernel,
@@ -1548,50 +1914,108 @@ the cache and the tar. **The removal is the one part that is not gated on a
 cache directory**: a cached bake that fails between the restore and the save
 leaves the hook in the guest, and an `--ansible-only` rerun without
 `--cache-dir` would otherwise finish an image whose `gcc` is ccache. Every task in it is a
-no-op on a guest that never had the hook, so a published bake runs them and
-changes nothing. `qemu/checks/rocm-golden.sh` asserts all four are absent, so
-both the lane and the publish workflow would fail on an image that carried
-any of it.
+no-op on a guest that never had the hook, so a bake given no cache runs them
+and changes nothing. `qemu/checks/rocm-golden.sh` asserts all four are
+absent, so both the lane and the publish workflow fail on an image that
+carries any of it — the publish workflow before it pushes.
 
-In the lane, `actions/cache/restore` and `actions/cache/save` are separate
-steps so the save sits straight after the bake. The key ends in the run id,
-since an entry is never overwritten; its prefix hashes the kernel, ernic and
-SDXI pins, the amdgpu driver release, `requirements.yml` and
-`amdgpu-emu-patches.py`, with `restore-keys` falling back to any earlier
-cache so a pin bump still starts warm — and, because a restore that fell
-back that far passes `--cache-replace`, saves once under the new
-prefix so the next run is warm for the bumped module too. **The lane has no
-push trigger, so nothing saves a cache on main**, and GitHub only lets a pull
-request read caches saved by itself or by its base branch: each pull
-request's first run is cold, and only its later pushes are fast, until
-someone runs the workflow by hand on main (`gh workflow run ... --ref main`),
-which seeds every later pull request. That wants doing once after this
-merges and again after each pin bump; a push trigger would do it unasked at
-the cost of a bake per qualifying merge, and was left out for that reason.
-An entry unused for seven days is evicted, and each pull request's own entry
-is a few hundred MiB of the repository's 10 GiB.
+**The two workflows reach `actions/cache` through two composite actions and
+name nothing themselves.** `.github/actions/bake-ccache-restore` names the
+cache, restores it and marks the start of the bake;
+`.github/actions/bake-ccache-save` reports the statistics and saves. Each
+workflow has three steps in a row: the restore action, its own bake step,
+the save action. An entry is found by its key and by the path it was saved
+from, so two workflows that each spelled a key or a directory would stop
+sharing the cache the first time one was edited, and nothing would fail.
+Hence one copy: the restore action has no inputs, its `dir` output is the
+only place the directory is written, and `tests/test_bake_ccache.py` fails
+a workflow that passes it a `with:`, calls `actions/cache/restore` or
+`save` itself, or spells a key. Both jobs run in the same container image,
+which matters for the same reason: the compression tool `actions/cache`
+finds is part of what it matches on.
 
-The report step dates what the bake wrote against a marker the bake step
-touches in `$RUNNER_TEMP`. Not in the cached directory: there it is restored
-with the cache, older than the files it is meant to date.
+The key ends in the run id and attempt, since an entry is never
+overwritten; its prefix hashes the kernel, ernic and SDXI pins, the amdgpu
+driver release, `requirements.yml` and `amdgpu-emu-patches.py`, with
+`restore-keys` falling back to any earlier cache so a pin bump still starts
+warm — and, because a restore that fell back that far passes
+`--cache-replace`, saves once under the new prefix so the next run is warm
+for the bumped module too. The save action runs under `always()`, on the
+calling step and on its own two steps, and saves only when the bake wrote a
+new archive.
+
+**Main holds an entry because the publish workflow runs there.** It runs on
+every push to main that touches `ansible/**`, and every input of the key
+prefix is under `ansible/`, so a merged pin bump is followed by a publish
+that restores main's last entry through the fallback, bakes with
+`--cache-replace` and saves under the new prefix. It also runs on a push
+that changes either composite action, which is where the `v1` of the key
+and the directory are: a merge that moves one of those is followed by the
+publish that saves the first entry under the new naming, at the cost of one
+publish per such merge. GitHub lets a pull request
+read entries saved by itself or by its base branch, so a pull request's
+first lane run starts from what main's last publish saved. Nobody has to
+dispatch the lane on main any more, after a merge or after a pin bump. What
+that does not cover:
+
+- A pull request that itself moves a pin compiles the moved module on its
+  first run, then saves under its own prefix.
+- Main has no entry until a publish there has got as far as its bake. An
+  entry unread for seven days is evicted, and the next publish is then cold
+  and saves again.
+- A publish with unchanged pins saves nothing unless a hundred invocations
+  missed, so main's entry can be several publishes old. That is the same
+  rule the lane has.
+- GitHub looks for every key in the pull request's own scope before it
+  tries the base branch. A pull request that holds an entry of an old
+  prefix restores that one, not main's newer one; it then saves under the
+  new prefix. From GitHub's documentation, not seen here.
+- A change to the `v1` in the key, or to the directory, starts every reader
+  cold, the publish that follows the merge included. An entry is matched on
+  the path it was saved from, so `tests/test_bake_ccache.py` pins
+  `/var/cache/bake-ccache` as it pins the prefix.
+
+Each entry is a few hundred MiB of the repository's 10 GiB.
+
+The save action dates what the bake wrote against a marker in
+`$RUNNER_TEMP`, which the restore action touches as its last step — the
+reason the bake has to be the step straight after it. Not in the cached
+directory: there it is restored with the cache, older than the files it is
+meant to date.
 
 The lane also bakes with `--no-compact`: nothing publishes its image, and the
 recompress was most of the three minutes after the playbook. The backing
 image's "disk size" in its `Report VM image size` step is therefore the
 uncompacted allocation, 2.3–2.5x the published figure and not comparable with
-runs before the flag. The publish lane still compacts.
+runs before the flag. The publish workflow still compacts, and still bakes
+with the key `gen-vm` generates.
 
-Not yet seen in CI as of this writing: the role has run against no guest.
-What was exercised is a kbuild module build on the dev host through the same
-symlinks and settings (25 misses, then 25 hits), not dkms itself and not the
-tar round trip. That dkms hands kbuild a `PATH` with `/usr/local/bin` first,
-that the guest's sudo `secure_path` has it first, and that `/etc/ccache.conf`
-is honoured there are all read from code. So on the first lane run read the
-statistics in the step summary: a non-zero miss count means the hook is live,
-and a second run on the same pull request should show direct hits in the
-thousands. **Every counter zero means the hook did not intercept** — the bake
-is correct and no faster — and the role's last line and a workflow warning
-both say so rather than leaving it to be noticed.
+**What CI has shown, and what it has not.** The lane has run with the cache
+on one pull request, with the figures above: the hook does get in front of
+dkms and kbuild in the guest, and the tar and `actions/cache` round trips
+work. Not yet seen in any run:
+
+- the publish workflow baking with the cache;
+- the two composite actions. They were cut out of the lane's own steps, and
+  the tests run their scripts, but the outputs passed from the restore
+  action to the bake and to the save action have run in no workflow. An
+  output that resolved to nothing would not have shown: `gen-vm` takes
+  `--cache-dir ""` for the current directory and the save action would have
+  looked in `/` and reported nothing to save. So both bake steps stop on an
+  empty `BAKE_CCACHE_DIR` before anything is created, and the save action
+  fails on an empty directory or key once the marker says the bake ran;
+- the restore deleting a `ccache.conf` from an unpacked cache, and the save
+  leaving one out of the tar;
+- an entry saved by one workflow restored by the other, and a pull request
+  restoring an entry a publish saved on main;
+- a run that restored an entry of its own prefix, which is the case the
+  hundred-miss rule is about.
+
+So read the "Compiler cache" block in the step summary of the first publish
+run, and of the first lane run after it. **Every counter zero means the hook
+did not intercept** — the bake is correct and no faster — and the role's
+last line and a workflow warning both say so rather than leaving it to be
+noticed.
 
 ## Git / GitHub
 
@@ -1746,15 +2170,20 @@ a failure, not a fall-back to entry 0, and a one-shot `next_entry` is a
 failure too — it would outrank the default for exactly the first boot a
 consumer makes.
 
-**None of this has run against a guest.** The purge, the guard and the
-leftovers script are tested against fixtures (`tests/test_kernel_purge.py`),
-and the grub resolver against `grub.cfg` text written out the way resolute's
-templates write it, not against `grub-mkconfig` output. What a bake has to
-show: that the cloud image's packages are the ones the purge list expects
-(the guard fails loudly if apt wants anything else), that `GRUB_TOP_LEVEL`
-is honoured, and that the guest comes back up — which both lanes prove by
-booting the image twice and running the check, and the publish lane does
-before it pushes.
+**It has run against one bake, the one that was published.** The publish
+run on main at `80c17f8` had `image_slim_purge_old_kernels: true` in its
+slim play and ran `qemu/checks/rocm-golden.sh`, these assertions included,
+on the booted guest before it pushed `20261117.g80c17f8`; the push
+happened, so the purge, the guard, the leftovers removal, the `GRUB_TOP_LEVEL`
+pin and the resolver all passed on a real guest and real `grub-mkconfig`
+output. Two guests booted from the published artifact on the dev host then
+reported `7.2.6-070206-generic` and one installed kernel image. What that
+does not cover: the purge, the guard and the leftovers script are otherwise
+tested against fixtures (`tests/test_kernel_purge.py`), and the resolver
+against `grub.cfg` text written out the way resolute's templates write it,
+so a cloud image whose kernel packages differ from that day's, or a
+`grub.cfg` laid out differently, is still first met in a bake — where the
+guard fails loudly if apt wants anything the purge list does not expect.
 
 ## The published guest image
 
@@ -1925,8 +2354,20 @@ authenticated listing and deletes nothing.
   `qemu-tool-action`: the action always passes `--release`, which outranks
   `<bake-release>`. `setup-vm-job`'s `release` input only keys the cloud-image
   cache and has to be kept equal to `<bake-release>` by hand.
-- `<backing-ref>` (what the fleet's guests pull) and `<publish-ref>` (where
-  this repo pushes) are different repositories today.
+- **The publish bake goes through the compiler cache**, as the lane's does:
+  both wrap their bake step in `.github/actions/bake-ccache-restore` and
+  `bake-ccache-save` and pass `--cache-dir`. A published module may
+  therefore be linked from objects an earlier run on main compiled; "The
+  bake's compiler cache" has the terms. Nothing else about the publish bake
+  changed: it still compacts, and still names no key. A dry run bakes, so it
+  restores and saves like any other run. The publish workflow has not yet
+  run with the cache.
+- `<backing-ref>` (what the fleet's guests pull) is a dated tag of
+  `<publish-ref>` (where this repo pushes), since 2026-11-17. It does not
+  follow a publish by itself: a publish pushes a new tag and moves `latest`,
+  and the fleet files go on naming the tag they name until someone moves
+  them. See "The stacks" for the rule a backing ref is held to and for the
+  test that compares that guest's pins with the servers.
 
 Three things about it are deliberate. **It never runs from a pull request**:
 it writes to a registry. **What is published is the bake, not the disk that
@@ -1943,11 +2384,19 @@ The release order between the repos is fixed, because a guest must never be
 ahead of the servers it talks to: batesste-ci-images releases the container
 images, this repo moves its image refs and guest pins to that release and
 publishes, then consumers move their qcow2 pin. `tests/test_playbook_pins.py`
-is the first step of the publish job for that reason.
+is the first step of the publish job for that reason. This repo is one of
+those consumers: its own fleet files move `<backing-ref>` last, in a change
+after the publish, and between the pin change and that one they carry
+`<image-allow-guest-lag>`.
 
 The published name is outside `batesste-ci-images`, so it drops out of the
-Image Tag Consistency check. That is correct: the qcow2 no longer shares a
-build stamp with the containers.
+Image Tag Consistency stamp counts. Read from the code, not assumed: the
+workflow's `REF_RE` and the test's `TAG_RE` both begin `batesste-ci-images`,
+so a `qemu-tool-rocm-golden` ref matches neither. That is correct — the
+qcow2 no longer shares a build stamp with the containers — but it left the
+guest ref checked by nothing, so both now have a guest section of their own:
+one ref across the three fleet files, in `<publish-ref>`'s repository, by a
+dated tag, and no batesste-ci-images qcow2 named anywhere they search.
 
 ## The published site
 
@@ -2079,8 +2528,10 @@ overlay** the workflow writes inline (`<vm-count>1`, `<ernic-tap>false`), so
 daily lane runs. The SDXI server stays in: the guest waits on it being
 healthy, so a server that cannot start fails the lane. `<ernic-tap>false` is safe there and nowhere
 else: one guest has no peer to reach. **The IB device name is resolved from
-`ibv_devinfo -l`**, never hardcoded: the published image ships no udev rules,
-so the device keeps its kernel name.
+`ibv_devinfo -l`**, never hardcoded: the image's bake installs udev rules
+and `rocm-rdma-ernic0` is expected, but a guest whose rename did not fire is
+still a working device, and the lane warns about the name instead of failing
+on it.
 
 A badge for a workflow that does NOT run on every push to main wants no
 `?branch=main`: shields pins that query to main's latest run, and a weekly or

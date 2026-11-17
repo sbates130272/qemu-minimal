@@ -9,22 +9,26 @@
 # daily report-for-vm-rocm-golden lane runs. It configures RUNNING guests
 # rather than baking an image, and it is re-runnable.
 #
-# It is small because the published qcow2 already carries almost everything:
+# It is small because the published qcow2 already carries almost everything.
+# The image is the one vm-rocm-golden.yml bakes, and that playbook installs
 # the mainline kernel, the ionic DKMS pair and its modules-load.d entry,
-# rdma-core, perftest, fio, ROCm on PATH and in the linker cache, the patched
-# amdgpu module and the amdgpu-probe script. Checked against a guest booted
-# from the image, not assumed. What a freshly booted guest still lacks:
+# rdma-core, perftest, fio, ROCm, the patched amdgpu module and the
+# amdgpu-probe script, the ernic udev naming rules, the boot-time addressing
+# unit and the metrics exporters. What a freshly booted guest still lacks:
 #
 #   1. /lib/firmware/amdgpu/ip_discovery.bin. Omitted from the published disk
 #      on purpose -- it is per rocjitsu build -- and without it amdgpu probes
 #      -2, no KFD node appears and the guest looks GPU-less.
-#   2. The ernic udev naming rules, which the image does not ship.
-#   3. An address on the ernic. Run-time only state, and without it ARP goes
-#      unanswered and ib_send_bw cannot do its out-of-band exchange at all.
-#   4. amdgpu loaded. It is blacklisted at boot by design: the device is
+#   2. amdgpu loaded. It is blacklisted at boot by design: the device is
 #      attached from outside the guest, so the driver must not load before
 #      the rocjitsu server is serving.
-#   5. The metrics exporters the stack's Prometheus scrapes.
+#
+# Three steps here repeat what that bake already did -- the naming rules, the
+# ernic address and the exporters -- and are kept: this playbook is also run
+# against guests that did not come from that image, and each is a no-op or a
+# harmless repeat on one that did. One difference is not a no-op: the bake
+# installs rocm-ernic's own copy of the naming rules, from ernic_source_pin,
+# and the step here replaces it with this repository's.
 #
 # Everything else here is a test or a fact for the report.
 
@@ -86,9 +90,9 @@
         executable: /bin/bash
       changed_when: true
 
-    # For the NEXT boot of this guest; vm-rocm-golden.yml bakes the same mask
-    # in. The published qcow2 predates that, so a reboot stalls for over 90 s
-    # without it.
+    # For the NEXT boot of this guest. vm-rocm-golden.yml bakes the same mask
+    # in, so on the published image this changes nothing; it is here for a
+    # guest baked before that, where a reboot stalls for over 90 s without it.
     - name: Mask systemd-networkd-wait-online to prevent ernic boot delay
       become: true
       ansible.builtin.systemd_service:
@@ -188,9 +192,18 @@
 #
 # node_exporter with an amdgpu textfile collector, and rdma_exporter, which
 # the stack's Prometheus scrapes. vm-rocm-golden.yml bakes both in from the
-# same task files, so on an image built from it this play changes nothing;
-# it is here for images that predate that. Non-fatal: they come from apt and
-# GitHub at run time, and a failure must not stop the tests below.
+# same task files; this play is here for images that predate that.
+#
+# It was not a no-op on a golden guest, whatever this comment used to say.
+# Measured against 20261117.g80c17f8: the node_exporter tasks changed
+# nothing, and the rdma_exporter tarball was downloaded from GitHub and the
+# binary reinstalled on every guest on every run. The role now records the
+# tarball it installed and skips both when the record names the pinned one.
+# That image carries no record, so each guest made from it is still
+# installed to once; a guest baked from this tree is not.
+#
+# Non-fatal: they come from apt and GitHub at run time, and a failure must
+# not stop the tests below.
 - name: Install the metrics exporters
   hosts: fleet
   gather_facts: false

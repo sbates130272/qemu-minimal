@@ -284,7 +284,15 @@ Opt-in with `--profile metrics`. The sources:
   rule forwards the port through to the guest. Prometheus is always given
   four jobs — node-exporter (`:9100`), amd-metrics-exporter (`:9488`),
   rdma-exporter (`:9879`) and hsa-snoop (`:9490`) — and `rocm-golden.xml`
-  forwards all four; a fleet that forwards fewer shows the rest as down. Each container has its own netns, so
+  forwards all four; a fleet that forwards fewer shows the rest as down.
+  **Two of the four are down on the published guest whatever is forwarded.**
+  The bake disables `gpuagent` (the `:9488` exporter, which assertion-fails
+  on an emulated gfx1250 and wedges `/dev/kfd`) and
+  `hsa-snoop-prometheus.service` (`:9490`, which holds `trace_pipe`), so
+  nothing listens on either port until somebody starts the unit in a guest.
+  Measured on two guests of `20261117.g80c17f8` after a passing
+  `quick-start test`: `up` was 0 for `amd-gpu` and `hsa-snoop` and 1 for
+  `fleet-node`, `rdma-exporter` and `ernic-stats`. Each container has its own netns, so
   every VM uses the same ports with no arithmetic and nothing published to the
   host.
 - **ernic stats**, from the dumps each `rocm-ernic -S` writes to the shared

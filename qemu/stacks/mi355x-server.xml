@@ -26,7 +26,10 @@
   <qemu-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:20261112.gdca6903-qemu.4cb9698-vfu.3719c3a</qemu-ref>
   <ernic-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic-sbates-fork:20261112.gdca6903-ernic.90434a2-vfu.3719c3a</ernic-ref>
   <rocjitsu-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261112.gdca6903-rocjitsu.50be05a</rocjitsu-ref>
-  <backing-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu:20261112.gdca6903-vm.resolute-ernic-rocjitsu-qm.096ddfe-qcow2</backing-ref>
+  <!-- The guest qemu-minimal publishes (rocm-golden.xml says how it is
+       baked), pinned by its dated tag: the day and the qemu-minimal commit
+       of that publish, not the stamp of the three images above. -->
+  <backing-ref>docker.io/sbates130272/qemu-tool-rocm-golden:20261117.g80c17f8</backing-ref>
 
   <!-- ===================================================================
        Per-guest resources

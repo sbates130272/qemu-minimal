@@ -26,10 +26,11 @@
 # kernel modules are about fourteen minutes of a bake, and the inputs of
 # those modules move only when a pin does. "qemu-tool gen-vm --bake
 # --cache-dir DIR" passes it, as does a fleet file's <bake-cache-dir>. It is
-# undefined by default and a published image is never built with it. The
-# bake_ccache role says how. bake_cache_replace=true beside it (gen-vm's
-# --cache-replace) says the cache handed over was saved for other pins and is
-# to be saved again.
+# undefined by default, which is a bake by hand; the two workflows that bake
+# this guest, the playbook-test lane and the publish workflow, both pass it,
+# so a published image is built with it. The bake_ccache role says how.
+# bake_cache_replace=true beside it (gen-vm's --cache-replace) says the cache
+# handed over was saved for other pins and is to be saved again.
 #
 # Order is load-bearing in three places, each noted where it applies: the
 # mainline kernel before rocm_setup, the amdgpu rebuild after it, and the
@@ -658,7 +659,9 @@
     # The removal is not gated. A bake that failed with the hook in place can
     # be finished by a rerun that was handed no cache, and that image must
     # not keep a compiler that is really ccache. On a guest that never had
-    # the hook, which is every published bake, it changes nothing.
+    # the hook, which is a bake given no cache, it changes nothing. A
+    # published bake is given one, and this is what takes the hook back out
+    # of the image before it is pushed.
     - name: Save the compiler cache, then take ccache out of the guest
       block:
         - name: Save the compiler cache

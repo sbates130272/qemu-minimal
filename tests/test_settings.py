@@ -402,7 +402,10 @@ class Bake(_Tmp):
     def test_the_default_fleet_without_bake_pulls(self):
         argv = ["gen-vm", "--xml", str(STACKS / "rocm-golden.xml")]
         cfg = cli._build_config(cli._build_parser().parse_args(argv), "gen-vm")
-        self.assertIn("qcow2", cfg.backing_image)
+        self.assertTrue(
+            cfg.backing_image.startswith(
+                "docker.io/sbates130272/qemu-tool-rocm-golden:"),
+            cfg.backing_image)
         self.assertIsNone(cfg.ansible_playbook)
 
 

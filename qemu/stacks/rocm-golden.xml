@@ -30,17 +30,26 @@
   <vm-name-prefix>rocm-golden</vm-name-prefix>
 
   <!-- ── Container images ─────────────────────────────────────────────── -->
-  <!-- One stamp across the first four: a guest driver and a host device
-       server from different builds wedge at the vfio-user boundary.
-       <sdxi-image> is the exception. It follows sdxi_source_pin in
-       ansible/playbooks/vm-rocm-golden.yml by commit, sdxi.<sha7> here
-       against that pin, so it may carry another build's stamp.  The pin
-       governs a guest baked from this checkout; the <backing-ref> guest
-       carries no SDXI driver, so its SDXI device stays unbound. -->
+  <!-- One stamp across the first three, which are one batesste-ci-images
+       build: QEMU and the device servers speak vfio-user to each other, and
+       a pair from different builds wedges at that boundary.
+
+       <backing-ref> is the guest, and qemu-minimal publishes it: the image
+       <publish-ref> below names, baked from this file's <bake-*> elements.
+       Its tag is that publish's own, the day and the qemu-minimal commit it
+       was baked from, not the servers' stamp, and it is always the dated
+       tag: gen-compose refuses "latest" and the qm tag, which move.  The
+       guest's drivers were built at the pins vm-rocm-golden.yml had at that
+       commit, and those pins have to be the ones the servers here were
+       built from; tests/test_playbook_pins.py compares them.
+
+       <sdxi-image> follows sdxi_source_pin in that playbook by commit,
+       sdxi.<sha7> here against the pin, so it may carry another build's
+       stamp. -->
   <qemu-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261112.gdca6903-qemu11.1.3-vfu.05bb5e5</qemu-ref>
   <ernic-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261112.gdca6903-ernic.90434a2-vfu.05bb5e5</ernic-ref>
   <rocjitsu-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261112.gdca6903-rocjitsu.50be05a</rocjitsu-ref>
-  <backing-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-gen-ernic-rocjitsu:20261112.gdca6903-vm.resolute-ernic-rocjitsu-qm.096ddfe-qcow2</backing-ref>
+  <backing-ref>docker.io/sbates130272/qemu-tool-rocm-golden:20261117.g80c17f8</backing-ref>
   <sdxi-image>docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-sdxi:20261113.g379fbf6-sdxi.dfd76f2</sdxi-image>
 
   <!-- ── Topology (devices per VM) ────────────────────────────────────── -->
@@ -58,6 +67,11 @@
   <vm-vfio-user-root-port>true</vm-vfio-user-root-port>
   <vm-images-dir>/var/lib/qemu-tool/images</vm-images-dir>
   <vm-backing-shared>true</vm-backing-shared>
+  <!-- The user name has to be the pulled image's own, <bake-username>
+       below: a pulled guest keeps the account it was baked with, and the
+       key published beside it is what logs in.  <vm-password> never reaches
+       a pulled guest; it is the password of one gen-vm creates from the
+       cloud image with this file and no bake flag. -->
   <vm-username>ubuntu</vm-username>
   <vm-password>changeme</vm-password>
   <qemu-tool-src>../../..</qemu-tool-src>
@@ -75,7 +89,11 @@
   <!-- ── Observability ────────────────────────────────────────────────── -->
   <!-- Forward node-exporter (9100), amd-metrics-exporter (9488),
        rdma-exporter (9879) and hsa-snoop (9490) from every guest, which
-       is what Prometheus scrapes them through. -->
+       is what Prometheus scrapes them through. On the published guest
+       only 9100 and 9879 have a listener: the bake disables gpuagent and
+       the hsa-snoop collector, both of which poll the emulated GPU, so
+       the amd-gpu and hsa-snoop targets read as down until somebody
+       starts those units in a guest. -->
   <vm-extra-hostfwd>tcp::9100-:9100,tcp::9488-:9488,tcp::9879-:9879,tcp::9490-:9490</vm-extra-hostfwd>
   <!-- Grafana is on so a new user can watch the RDMA test move bytes, and
        Loki and Alloy with it: the home dashboard has a log panel. -->
@@ -85,10 +103,11 @@
   <!-- ── Baking and publishing the guest image ────────────────────────── -->
   <!-- A plain gen-vm pulls <backing-ref> above and reads none of these;
        gen-vm with its bake flag builds the guest from the cloud image
-       instead, and publish-qcow pushes that bake to <publish-ref>.  The two
-       are different repositories today: <backing-ref> still names the
-       batesste-ci-images build of this guest without its SDXI side, and
-       moves to a <publish-ref> tag once one is published and qualified.
+       instead, and publish-qcow pushes that bake to <publish-ref>.
+       <backing-ref> is a dated tag of that same repository, so the guest a
+       fleet pulls is one these elements built.  It moves by hand, to a tag
+       the publish workflow has qualified and pushed, after any change to
+       the bake that the fleet should pick up.
        The paths are relative to the directory gen-vm is run from, so run
        the bake from the checkout root.
 
@@ -99,9 +118,10 @@
        its key flag names; never a key from a settings file.
 
        No <bake-cache-dir> either: it would send the module builds through
-       a compiler cache kept in that directory, and the image published
-       from this file is compiled from source.  A local overlay sets it, or
-       gen-vm is given a cache directory with its cache-dir flag. -->
+       a compiler cache kept in that directory, and a directory is a fact
+       about one host.  A local overlay sets it, or gen-vm is given a cache
+       directory with its cache-dir flag, which is how the workflows that
+       bake this image, the publish workflow included, name theirs. -->
   <bake-name>rocm-golden</bake-name>
   <bake-release>resolute</bake-release>
   <bake-size>64</bake-size>

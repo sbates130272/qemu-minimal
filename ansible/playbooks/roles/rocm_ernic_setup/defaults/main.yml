@@ -88,6 +88,9 @@ rocm_ernic_setup_rdma_exporter_url: >-
   https://github.com/yuuki/rdma_exporter/releases/download/v{{
   rocm_ernic_setup_rdma_exporter_version }}/rdma_exporter_{{
   rocm_ernic_setup_rdma_exporter_version }}_linux_amd64.tar.gz
+# Where the install records the checksum above. A guest whose record names it
+# is not downloaded to or reinstalled.
+rocm_ernic_setup_rdma_exporter_stamp: /usr/local/share/rdma_exporter.sha256
 # Start the exporter as well as enabling it. Off for an image bake, which has
 # no RDMA device.
 rocm_ernic_setup_metrics_start: true

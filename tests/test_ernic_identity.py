@@ -516,6 +516,77 @@ class P4AccessTest(unittest.TestCase):
         )
 
 
+class RdmaExporterInstallTest(unittest.TestCase):
+    """The exporter is installed once, not on every run of the tasks.
+
+    Measured on two guests of the published golden image: `quick-start test`
+    downloaded the tarball from GitHub and reinstalled a binary the bake had
+    already installed, each run, and the playbook's comment called the play a
+    no-op. The tasks now record which tarball they installed.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        _require(jinja2 is not None and yaml is not None, "Jinja2 and PyYAML")
+        cls.defaults = _defaults(FLEET_ROLE)
+        cls.tasks = yaml.safe_load(
+            (FLEET_ROLE / "tasks" / "metrics.yml").read_text())
+        cls.block = next(t for t in cls.tasks if "block" in t)
+
+    def _needs_install(self, binary: bool, record: str | None) -> bool:
+        import base64
+        env = jinja2.Environment()
+        env.filters["b64decode"] = lambda text: base64.b64decode(text).decode()
+        installed = ({} if record is None else
+                     {"content": base64.b64encode(record.encode()).decode()})
+        rendered = env.from_string(
+            "{{ " + " ".join(self.block["when"].split()) + " }}").render(
+            rocm_ernic_setup_rdma_exporter_binary={"stat": {"exists": binary}},
+            rocm_ernic_setup_rdma_exporter_installed=installed,
+            rocm_ernic_setup_rdma_exporter_sha256="pinned")
+        return rendered == "True"
+
+    def test_the_download_and_the_install_are_guarded_together(self):
+        names = [t["name"] for t in self.block["block"]]
+        self.assertEqual(names, ["Download rdma_exporter",
+                                 "Install the rdma_exporter binary",
+                                 "Record which rdma_exporter tarball is "
+                                 "installed"])
+        for task in self.tasks:
+            self.assertNotIn("get_url", " ".join(task), task.get("name"))
+
+    def test_the_record_is_written_last(self):
+        # A failed install leaves no record and is retried.
+        last = self.block["block"][-1]
+        self.assertEqual(last["ansible.builtin.copy"]["dest"],
+                         "{{ rocm_ernic_setup_rdma_exporter_stamp }}")
+        self.assertIn("rocm_ernic_setup_rdma_exporter_sha256",
+                      last["ansible.builtin.copy"]["content"])
+
+    def test_a_missing_record_is_not_a_failure(self):
+        read = next(t for t in self.tasks if "ansible.builtin.slurp" in t)
+        self.assertIs(read["failed_when"], False)
+        self.assertEqual(read["ansible.builtin.slurp"]["src"],
+                         "{{ rocm_ernic_setup_rdma_exporter_stamp }}")
+        self.assertTrue(
+            self.defaults["rocm_ernic_setup_rdma_exporter_stamp"].startswith("/"))
+
+    def test_when_it_installs(self):
+        self.assertTrue(self._needs_install(binary=False, record=None))
+        # The published image: a binary and no record.
+        self.assertTrue(self._needs_install(binary=True, record=None))
+        self.assertTrue(self._needs_install(binary=True, record="older\n"))
+        self.assertTrue(self._needs_install(binary=False, record="pinned\n"))
+        self.assertFalse(self._needs_install(binary=True, record="pinned\n"))
+
+    def test_the_unit_and_the_enable_are_not_guarded(self):
+        # Cheap, idempotent, and what a guest with the binary still needs.
+        outside = [t["name"] for t in self.tasks if "block" not in t]
+        for name in ("Install the rdma_exporter unit", "Enable rdma_exporter",
+                     "Start rdma_exporter"):
+            self.assertIn(name, outside)
+
+
 class NetcfgDiscoveryTest(unittest.TestCase):
     """The netcfg script must find the device by tuple, not by name.
 

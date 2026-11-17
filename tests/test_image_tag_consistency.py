@@ -10,6 +10,12 @@ Rules:
   2. QEMU_IMAGE and ERNIC_IMAGE within the same file must share the same
      vfu.* revision.  (ROCJITSU_IMAGE has no vfu component.)
 
+  3. The guest image, <backing-ref>, is not a batesste-ci-images tag at all,
+     so rules 1 and 2 never see it: qemu-minimal publishes it. Every fleet
+     file names the same one, in the repository rocm-golden.xml's
+     <publish-ref> names, by the dated tag of one publish and never by
+     "latest" or qm.<sha7>, which move.
+
 These rules are already enforced at stack-generation time by gen_compose.py's
 _check_image_coherence(), but that only covers generated stacks. This test
 covers fleet XML files and CI workflow YAML files directly, catching mismatches
@@ -18,11 +24,30 @@ before any stack is generated.
 
 from __future__ import annotations
 
+import importlib.util
 import re
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 REPO = Path(__file__).parent.parent
+
+
+def _load_package() -> None:
+    pkg = REPO / "qemu" / "qemu-tool"
+    spec = importlib.util.spec_from_file_location(
+        "qemu_tool", pkg / "__init__.py", submodule_search_locations=[str(pkg)]
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["qemu_tool"] = module
+    spec.loader.exec_module(module)
+
+
+_load_package()
+
+from qemu_tool import gen_compose  # noqa: E402
+from qemu_tool.fleet_xml import FleetXml  # noqa: E402
 
 # Pattern: full batesste-ci-images tag
 TAG_RE = re.compile(
@@ -39,9 +64,17 @@ VFU_RE = re.compile(r"-(vfu\.[a-f0-9]+)")
 # The component that marks a tag as the SDXI server's.
 SDXI_RE = re.compile(r"(^|-)sdxi\.[a-f0-9]+")
 
+# The tag publish-qcow pushes for each image and the only one a fleet pins:
+# the day and the qemu-minimal commit. Spelled out here rather than imported,
+# so that a change to the shape the tool accepts has to be made twice.
+DATED_TAG_RE = re.compile(r"[0-9]{8}\.g[0-9a-f]{7}")
+BACKING_RE = re.compile(r"<backing-ref>([^<]*)</backing-ref>")
+PUBLISH_RE = re.compile(r"<publish-ref>([^<]+)</publish-ref>")
+
 # Files to check: fleet XML files and CI workflow YAMLs.
-# qcow2 OCI tags use the same stamp but have no vfu component, so we
-# include them in the stamp check but skip them for the vfu check.
+# A batesste-ci-images qcow2 tag, which no committed file names any more,
+# carries the stamp but no vfu component, so it would be in the stamp check
+# and not in the vfu check.
 ENV_GLOBS = ["qemu/stacks/*", ".github/workflows/*.yml"]
 
 # Files deliberately allowed to use a different stamp from their siblings
@@ -80,6 +113,26 @@ def _tags_in_file(path: Path) -> list[tuple[str, str]]:
 def _stamped_with_the_fleet(tags: list[tuple[str, str]]) -> set[str]:
     """The stamps of every tag but the SDXI server's, which has its own."""
     return {s for s, rest in tags if not SDXI_RE.search(rest)}
+
+
+def _fleet_files() -> list[Path]:
+    """The committed fleet files. fleet.xml is a host's own and git-ignored."""
+    return sorted(p for p in (REPO / "qemu/stacks").glob("*.xml")
+                  if p.name != "fleet.xml")
+
+
+def _backing_ref_problem(ref: str, publish_ref: str) -> str | None:
+    """Why *ref* is not a pinned tag of the published guest; None if it is."""
+    repo, sep, tag = ref.rpartition(":")
+    if not sep or "/" in tag:
+        return f"{ref!r} has no tag, which is \"latest\""
+    if repo != publish_ref:
+        return (f"{ref!r} is not in {publish_ref}, the repository "
+                "rocm-golden.xml publishes the guest to")
+    if not DATED_TAG_RE.fullmatch(tag):
+        return (f"{ref!r} is not pinned by a dated tag, <YYYYMMDD>.g<sha7>; "
+                "\"latest\" and qm.<sha7> move")
+    return None
 
 
 def _vfu_from_suffix(suffix: str) -> str | None:
@@ -163,6 +216,90 @@ class ImageTagConsistency(unittest.TestCase):
         self.assertEqual(len(_stamped_with_the_fleet(fleet + [sdxi])), 1)
         moved = ("20261113.g379fbf6", "qemu11.1.3-vfu.05bb5e5")
         self.assertEqual(len(_stamped_with_the_fleet(fleet + [moved])), 2)
+
+
+class GuestImage(unittest.TestCase):
+    """<backing-ref>: one published guest, pinned, in every fleet file."""
+
+    def _publish_ref(self) -> str:
+        found = PUBLISH_RE.search(
+            (REPO / "qemu/stacks/rocm-golden.xml").read_text())
+        self.assertIsNotNone(found, "rocm-golden.xml names no <publish-ref>")
+        return found.group(1)
+
+    def _backing_refs(self) -> dict[str, list[str]]:
+        return {path.name: BACKING_RE.findall(path.read_text())
+                for path in _fleet_files()}
+
+    def test_every_fleet_file_names_one_guest(self):
+        refs = self._backing_refs()
+        self.assertEqual(
+            sorted(refs),
+            ["helios-tray.xml", "mi355x-server.xml", "rocm-golden.xml"])
+        for name, found in refs.items():
+            with self.subTest(fleet=name):
+                self.assertEqual(len(found), 1, found)
+
+    def test_the_guest_is_a_dated_tag_of_the_published_image(self):
+        publish_ref = self._publish_ref()
+        for name, found in self._backing_refs().items():
+            for ref in found:
+                with self.subTest(fleet=name):
+                    self.assertIsNone(_backing_ref_problem(ref, publish_ref))
+
+    def test_every_fleet_file_names_the_same_guest(self):
+        distinct = {ref for found in self._backing_refs().values()
+                    for ref in found}
+        self.assertEqual(
+            len(distinct), 1,
+            f"the fleet files pull different guests: {sorted(distinct)}")
+
+    def test_no_workflow_or_stack_names_a_ci_images_guest(self):
+        # The image the fleet files pulled before this repo published its
+        # own. A lane that still named it would boot a guest with no SDXI
+        # driver and no P4 client, and say nothing about why.
+        for glob in ENV_GLOBS + ["qemu/compose/*/*.yml", ".github/actions/*/*"]:
+            for path in sorted(REPO.glob(glob)):
+                if not path.is_file() or path.name == "fleet.xml":
+                    continue
+                with self.subTest(file=str(path.relative_to(REPO))):
+                    self.assertNotIn(
+                        "batesste-ci-images-ubuntu-qcow2",
+                        path.read_text(errors="replace"))
+
+    def test_a_ref_that_moves_or_is_elsewhere_is_a_problem(self):
+        repo = "docker.io/sbates130272/qemu-tool-rocm-golden"
+        self.assertIsNone(_backing_ref_problem(f"{repo}:20261117.g80c17f8", repo))
+        for ref in (f"{repo}:latest",
+                    f"{repo}:qm.80c17f8",
+                    repo,
+                    f"{repo}:20261117.g80c17f8-dirty",
+                    f"{repo}:20261117.g80c17f",
+                    "docker.io/sbates130272/batesste-ci-images-ubuntu-qcow2-"
+                    "gen-ernic-rocjitsu:20261112.gdca6903-vm.resolute-qcow2",
+                    "docker.io/someone/qemu-tool-rocm-golden:20261117.g80c17f8"):
+            with self.subTest(ref=ref):
+                self.assertIsNotNone(_backing_ref_problem(ref, repo))
+
+    def test_latest_in_a_fleet_file_fails_the_render_too(self):
+        # The same refusal from the tool's side: gen-compose will not render
+        # a fleet whose guest is "latest", whatever this file's checks say.
+        for path in _fleet_files():
+            text = path.read_text()
+            moved, count = BACKING_RE.subn(
+                f"<backing-ref>{self._publish_ref()}:latest</backing-ref>",
+                text)
+            self.assertEqual(count, 1)
+            with self.subTest(fleet=path.name), \
+                    tempfile.TemporaryDirectory() as tmp:
+                # Unchanged, the committed file renders ...
+                gen_compose.plan(FleetXml.parse_layers([path]))
+                # ... and with nothing changed but the tag it does not.
+                edited = Path(tmp) / path.name
+                edited.write_text(moved)
+                with self.assertRaises(SystemExit) as ctx:
+                    gen_compose.plan(FleetXml.parse_layers([edited]))
+                self.assertIn("<backing-ref>", str(ctx.exception))
 
 
 if __name__ == "__main__":

@@ -168,6 +168,189 @@ class TestImageCoherence(unittest.TestCase):
             _plan(f"<ernic-ref>example/ernic:{_STAMP}-ernic.0b48aa1-vfu.deadbee</ernic-ref>")
         self.assertIn("libvfio-user", str(ctx.exception))
 
+    def test_a_ci_images_guest_from_another_build_is_refused(self):
+        # The old rule, kept for a fleet still pinning a batesste-ci-images
+        # qcow2: it was built in the run that built the containers.
+        with self.assertRaises(SystemExit) as ctx:
+            _plan("<backing-ref>example/qcow2:20260929.g2bdbd16"
+                  "-vm.resolute-qm.e73a1e6-qcow2</backing-ref>")
+        self.assertIn("build stamp", str(ctx.exception))
+        self.assertIn("<backing-ref>", str(ctx.exception))
+
+    def test_guest_lag_excuses_a_ci_images_guest_and_says_so(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            _plan("<backing-ref>example/qcow2:20260929.g2bdbd16"
+                  "-vm.resolute-qm.e73a1e6-qcow2</backing-ref>"
+                  "<image-allow-guest-lag>true</image-allow-guest-lag>")
+        self.assertIn("<image-allow-guest-lag>", err.getvalue())
+
+    def test_guest_lag_does_not_excuse_a_server(self):
+        with self.assertRaises(SystemExit) as ctx, \
+                contextlib.redirect_stderr(io.StringIO()):
+            _plan("<rocjitsu-ref>example/rocjitsu:20260929.g2bdbd16"
+                  "-rocjitsu.c85bb75</rocjitsu-ref>"
+                  "<image-allow-guest-lag>true</image-allow-guest-lag>")
+        self.assertIn("build stamp", str(ctx.exception))
+
+    def test_a_published_guest_carries_its_own_stamp(self):
+        # publish-qcow's dated tag is the qemu-minimal commit the guest was
+        # baked from, not a batesste-ci-images build, so it never equals the
+        # servers' stamp and is not compared with it. Silently: this is the
+        # shape every committed fleet file has.
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            _plan("<backing-ref>docker.io/me/qemu-tool-rocm-golden"
+                  ":20261117.g80c17f8</backing-ref>")
+        self.assertEqual(err.getvalue(), "")
+
+    def test_a_backing_ref_that_moves_is_refused(self):
+        for ref in ("docker.io/me/qemu-tool-rocm-golden:latest",
+                    "docker.io/me/qemu-tool-rocm-golden:qm.80c17f8",
+                    "docker.io/me/qemu-tool-rocm-golden",
+                    "localhost:5000/me/guest",
+                    "example/qcow2:latest"):
+            with self.subTest(ref=ref):
+                with self.assertRaises(SystemExit) as ctx:
+                    _plan(f"<backing-ref>{ref}</backing-ref>")
+                self.assertIn("<backing-ref>", str(ctx.exception))
+                self.assertIn("moves", str(ctx.exception))
+                self.assertIn(ref, str(ctx.exception))
+
+    def test_guest_lag_does_not_excuse_a_backing_ref_that_moves(self):
+        with self.assertRaises(SystemExit) as ctx, \
+                contextlib.redirect_stderr(io.StringIO()):
+            _plan("<backing-ref>docker.io/me/qemu-tool-rocm-golden:latest"
+                  "</backing-ref>"
+                  "<image-allow-guest-lag>true</image-allow-guest-lag>")
+        self.assertIn("moves", str(ctx.exception))
+
+    def test_a_malformed_backing_tag_is_refused(self):
+        # Each of these rendered, with a warning that the image had "no
+        # build stamp": a typo of the pinned tag became an image nobody
+        # checked. A near miss is refused in any repository.
+        for tag in ("2026117.g80c17f8",     # a digit short
+                    "202611170.g80c17f8",   # a digit over
+                    "20261117.g80c17f",     # a hex digit short
+                    "20261117.g80c17f8a",   # a hex digit over
+                    "20261117.G80C17F8",    # upper case
+                    "LATEST", "Latest",
+                    "qm.80c17f8a", "qm.80c17f", "QM.80c17f8", "qm.main"):
+            for repo in ("docker.io/me/qemu-tool-rocm-golden",
+                         "localhost:5000/me/guest"):
+                ref = f"{repo}:{tag}"
+                with self.subTest(ref=ref):
+                    err = io.StringIO()
+                    with self.assertRaises(SystemExit) as ctx, \
+                            contextlib.redirect_stderr(err):
+                        _plan(f"<backing-ref>{ref}</backing-ref>")
+                    self.assertIn("does not name a published guest",
+                                  str(ctx.exception))
+                    self.assertIn("<YYYYMMDD>.g<sha7>", str(ctx.exception))
+                    self.assertIn(ref, str(ctx.exception))
+                    self.assertNotIn("no build stamp", err.getvalue())
+
+    def test_the_publish_repository_takes_only_the_dated_tag(self):
+        # publish-qcow pushes nothing else there, so with <publish-ref> in
+        # force a free-form tag is not a local build under test.
+        publish = ("<publish-ref>docker.io/me/qemu-tool-rocm-golden"
+                   "</publish-ref>")
+        for ref in ("docker.io/me/qemu-tool-rocm-golden:stable",
+                    "me/qemu-tool-rocm-golden:stable",
+                    "docker.io/me/qemu-tool-rocm-golden:20261117.g80c17f8-dirty",
+                    "docker.io/me/qemu-tool-rocm-golden:"
+                    f"{_STAMP}-vm.resolute-qm.096ddfe-qcow2"):
+            with self.subTest(ref=ref):
+                with self.assertRaises(SystemExit) as ctx, \
+                        contextlib.redirect_stderr(io.StringIO()):
+                    _plan(publish + f"<backing-ref>{ref}</backing-ref>")
+                self.assertIn("does not name a published guest",
+                              str(ctx.exception))
+                self.assertIn("<publish-ref>", str(ctx.exception))
+        # The dated tag, a digest and another repository are untouched.
+        with contextlib.redirect_stderr(io.StringIO()):
+            _plan(publish + "<backing-ref>docker.io/me/qemu-tool-rocm-golden"
+                  ":20261117.g80c17f8</backing-ref>")
+            _plan(publish + "<backing-ref>docker.io/me/qemu-tool-rocm-golden"
+                  "@sha256:" + "0" * 64 + "</backing-ref>")
+            _plan(publish + "<backing-ref>localhost:5000/me/guest"
+                  ":fix-under-test</backing-ref>")
+
+    def test_guest_lag_does_not_excuse_a_malformed_backing_tag(self):
+        with self.assertRaises(SystemExit) as ctx, \
+                contextlib.redirect_stderr(io.StringIO()):
+            _plan("<backing-ref>docker.io/me/qemu-tool-rocm-golden"
+                  ":2026117.g80c17f8</backing-ref>"
+                  "<image-allow-guest-lag>true</image-allow-guest-lag>")
+        self.assertIn("does not name a published guest", str(ctx.exception))
+
+    def test_a_dated_tag_with_a_suffix_is_told_what_a_published_tag_is(self):
+        # With no <publish-ref> in force it is a stamped tag and falls to
+        # the old same-stamp rule, whose message alone names the wrong
+        # remedy for a guest published from here.
+        with self.assertRaises(SystemExit) as ctx, \
+                contextlib.redirect_stderr(io.StringIO()):
+            _plan("<backing-ref>docker.io/me/qemu-tool-rocm-golden"
+                  ":20261117.g80c17f8-dirty</backing-ref>")
+        self.assertIn("build stamp", str(ctx.exception))
+        self.assertIn("dated tag alone", str(ctx.exception))
+        # A server mismatch with no <backing-ref> in it says nothing of
+        # guests.
+        with self.assertRaises(SystemExit) as ctx:
+            _plan("<rocjitsu-ref>example/rocjitsu:20260929.g2bdbd16"
+                  "-rocjitsu.c85bb75</rocjitsu-ref>")
+        self.assertNotIn("dated tag alone", str(ctx.exception))
+
+    def test_a_backing_ref_by_digest_is_accepted(self):
+        _plan("<backing-ref>docker.io/me/qemu-tool-rocm-golden@sha256:"
+              + "0" * 64 + "</backing-ref>")
+
+    def test_a_locally_built_guest_is_warned_about_not_refused(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            _plan("<backing-ref>localhost:5000/me/guest:fix-under-test"
+                  "</backing-ref>")
+        self.assertIn("no build stamp", err.getvalue())
+        self.assertIn("<backing-ref>", err.getvalue())
+
+    def test_no_backing_ref_is_accepted(self):
+        _plan("<backing-ref></backing-ref>")
+
+    def test_the_backing_ref_kinds(self):
+        kind = gen_compose._backing_ref_kind
+        self.assertEqual(kind(""), "none")
+        self.assertEqual(kind("r/g:20261117.g80c17f8"), "published")
+        self.assertEqual(kind("host:5000/r/g:20261117.g80c17f8"), "published")
+        # Eight hex digits is a mistake for the tag publish-qcow pushes; a
+        # suffix makes it a stamped tag, which only the publish repository
+        # rules out.
+        self.assertEqual(kind("r/g:20261117.g80c17f8a"), "malformed")
+        self.assertEqual(kind("r/g:2026117.g80c17f8"), "malformed")
+        self.assertEqual(kind("r/g:LATEST"), "malformed")
+        self.assertEqual(kind("r/g:qm.80c17f8a"), "malformed")
+        self.assertEqual(kind("r/g:20261117.g80c17f8-dirty"), "other")
+        self.assertEqual(kind("r/g:20261117.g80c17f8-dirty", "r/g"),
+                         "malformed")
+        self.assertEqual(kind("docker.io/r/g:stable", "r/g:whatever"),
+                         "malformed")
+        self.assertEqual(kind("r/g:stable"), "other")
+        self.assertEqual(kind("r/other:stable", "r/g"), "other")
+        self.assertEqual(kind("r/g:20261117.g80c17f8", "r/g"), "published")
+        self.assertEqual(kind("r/g@sha256:" + "0" * 64, "r/g"), "digest")
+        self.assertEqual(
+            kind("r/g:20261112.gdca6903-vm.resolute-qm.096ddfe-qcow2"), "other")
+        self.assertEqual(kind("r/g:latest"), "rolling")
+        self.assertEqual(kind("r/g:qm.80c17f8"), "rolling")
+        self.assertEqual(kind("host:5000/r/g"), "rolling")
+        self.assertEqual(kind("r/g@sha256:" + "0" * 64), "digest")
+
+    def test_the_dated_tag_is_the_one_the_pruner_deletes(self):
+        # One shape, spelled once: what publish-qcow-prune may delete is
+        # what a fleet may pin.
+        from qemu_tool import publish_prune, vm_artifact
+        self.assertIs(publish_prune.DATED, vm_artifact.VM_DATED_TAG)
+        self.assertIs(publish_prune.ROLLING, vm_artifact.VM_COMMIT_TAG)
+
     def test_an_sdxi_server_from_another_build_is_accepted(self):
         # Its pair is the guest's sdxi_source_pin, not the fleet's stamp;
         # tests/test_playbook_pins.py compares those.

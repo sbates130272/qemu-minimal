@@ -294,8 +294,8 @@ elements, or a guest you log in to with your own `~/.ssh/id_rsa`.
   that image has none. `qemu/docker/sdxi/` and the `qemu-tool/sdxi:latest`
   tag are gone, and `quick-start` no longer asks for a build.
 
-- **All images share one build stamp except SDXI, which follows the guest's
-  `sdxi_source_pin`.** `<sdxi-image>` is now
+- **The device-side images share one build stamp except SDXI, which follows
+  the guest's `sdxi_source_pin`.** `<sdxi-image>` is now
   `20261113.g379fbf6-sdxi.dfd76f2`, the server built from the commit the
   guest's driver is built from, while the rest of the fleet stays on
   `20261112.gdca6903`. `gen-compose` no longer compares the SDXI image's
@@ -305,12 +305,9 @@ elements, or a guest you log in to with your own `~/.ssh/id_rsa`.
   expected failure, and the `Image Tag Consistency` workflow exempts
   `-sdxi.<sha>` refs from its stamp count and requires them to name one tag.
   A non-zero `<sdxi-per-vm>` with no `<sdxi-image>` is still refused.
-  The pairing holds for a guest baked from this checkout. The qcow2
-  `<backing-ref>` names today, `20261112.gdca6903-...-qm.096ddfe`, was built
-  before the SDXI play existed and carries no SDXI driver or `sdxi-cli` at
-  all, so guests booted from it have the device and nothing bound to it:
-  there is no `/dev/sdxi0`, and the daily report lane's SDXI number is `n/a`
-  until `<backing-ref>` moves to a guest baked at this pin.
+  The pairing holds for a guest baked from this checkout, and for the guest
+  `<backing-ref>` pulls: see "The fleet pulls the guest this repository
+  publishes" under Changed.
 
 - **The playbook-test and smoke-test lanes boot the fleet's SDXI device.**
   Their inline overlays no longer set `<sdxi-per-vm>0`, so each guest waits
@@ -407,6 +404,110 @@ elements, or a guest you log in to with your own `~/.ssh/id_rsa`.
 
 ### Changed
 
+- **The fleet pulls the guest this repository publishes.** `<backing-ref>` in
+  `rocm-golden.xml`, `helios-tray.xml` and `mi355x-server.xml` is now
+  `docker.io/sbates130272/qemu-tool-rocm-golden:20261117.g80c17f8`, a dated
+  tag of `<publish-ref>`, in place of the batesste-ci-images qcow2
+  `20261112.gdca6903-...-qm.096ddfe`. That older guest had no SDXI driver or
+  CLI, no hipFile SDK and no P4 client, so the daily report lane failed all
+  four of its benchmark steps against it. The new one was baked from
+  `vm-rocm-golden.yml` at `80c17f8`, which installs all of them, one kernel,
+  the ernic udev naming rules and the boot-time addressing unit, and
+  publishes the image's own generated keypair beside it. Its account is
+  `<bake-username>`, `ubuntu`, which is what the fleet files already log in
+  as; `<vm-password>` never reaches a pulled guest.
+  - *What has been seen:* the publish run baked it, ran
+    `qemu/checks/rocm-golden.sh` against it and booted it behind a
+    one-guest stack with an active RDMA port, the GPU tests and a copy
+    through `/dev/sdxi0`, with P4 off. And one run by hand on the dev host,
+    2026-11-17, from this tree: `quick-start up` and `test` on a fresh
+    images directory, then the daily report lane's steps as the lane runs
+    them. All exited 0. The artifact unpacked to 8,422,096,896 bytes; `up`
+    took 2 m 5 s with the server images already cached and both guests
+    answered SSH with the published key about 23 s later; `test` took
+    1 m 38 s (`ib_send_bw` 559.27 MiB/s at 65536 B, NVMe about 118 MiB/s
+    write and 288 read). Before any playbook each guest had one kernel
+    (7.2.6), `/dev/sdxi0`, `/dev/ernic-p4` open to the `ernic-p4` group
+    with the account in it, the P4 client and benchmark, `sdxi-cli`, the
+    hipFile SDK, `rocm-ernic0` and `rocm-rdma-ernic0` by name, and the
+    address `quick-start` expects. The benchmarks: GEMM 643 kFLOP/s,
+    hipFile 13.3 MB/s, hipFile fio 12.3 MB/s, P4 FP8 206.7 MB/s with P4 on
+    and no sudo, SDXI copy 2523.0 MB/s. Guests were 8 vCPU, not the lane's
+    4, and this host installs a TLS-inspection CA into the guests, which
+    the fio step's fetch from GitHub relied on here.
+    *What has not:* no CI lane has yet booted the published artifact.
+    `quickstart-boot` and the daily report lane will be the first.
+    `helios-tray` and `mi355x-server` have not been booted from it at all.
+  - *Known wrong with that image:* `apparmor.service` is failed at boot and
+    the system reports `degraded`. snapd is removed without being purged,
+    and the profile it leaves in `/etc/apparmor.d` no longer parses.
+    Nothing checks for failed units, so it was published. No lane step
+    depends on it. It needs a bake to fix and is not fixed here.
+  - Prometheus's `amd-gpu` and `hsa-snoop` targets are down for golden
+    guests: the bake disables both exporters, since each polls the
+    emulated GPU. `rocm-golden.xml` still forwards their ports; its
+    comment and the stack README now say so.
+  - The image's naming rules are rocm-ernic's copy at the pinned commit
+    (2928 bytes in the guest; this repository's file is 9647), whose
+    Ethernet stanza names one NIC per guest. Fine for the default fleet,
+    as measured above. The eight-NIC `helios-tray` and `mi355x-server`
+    guests should have one renamed Ethernet device and seven under kernel
+    names, and nothing replaces the rules there: their `quick-start`
+    flavors run no playbook. Read from the rules file, not from a guest.
+    Addresses do not depend on the names.
+  - *On a host that already ran `quick-start`:* the next run sees that the
+    guest disks were made on another image, says which, and stops unless
+    you answer yes at a terminal or pass `--clean-overlays`. See the
+    `quick-start` entry under Fixed.
+
+- **`gen-compose` holds `<backing-ref>` to a rule of its own instead of the
+  servers' build stamp.** The guest is published from here under this
+  repository's stamp, the day and the commit it was baked from, which never
+  equals the `<date>.<ci-sha>` of the batesste-ci-images build the three
+  device-side images share; the old four-way comparison would have refused
+  every fleet pulling it. Now, by the tag of the ref:
+  - exactly `<YYYYMMDD>.g<sha7>`, the dated tag `publish-qcow` pushes: accepted
+    and not compared;
+  - no tag, `latest` or `qm.<sha7>`: **refused**. Those move, `gen-vm` and
+    `quick-start` cache the image by the text of the ref, and a moved tag
+    leaves each host on whatever it pulled first. `<image-allow-guest-lag>`
+    does not excuse this;
+  - a digest: accepted;
+  - a tag that can only be a mistake for one of those: **refused**, where it
+    used to render with a warning about an image with no build stamp. That
+    is a near miss of the dated tag (`2026117.g80c17f8`, an eighth hex
+    digit, upper case), `latest` in another case, `qm.` followed by anything
+    but seven hex digits, and, when a layer sets `<publish-ref>`, any tag
+    but the dated one in that repository, `stable` and `<stamp>-dirty`
+    among them. `<image-allow-guest-lag>` does not excuse it;
+  - `<stamp>-...`, a batesste-ci-images qcow2: the old rule, so a local fleet
+    still pinning one is still checked against the servers' stamp;
+  - anything else: warned about and left out, as before. With no
+    `<publish-ref>` in force, which is every fleet not layered on
+    `rocm-golden.xml`, a free-form tag in the publish repository is still
+    here.
+  `<qemu-ref>`, `<ernic-ref>` and `<rocjitsu-ref>` are compared exactly as
+  they were. *If your fleet file names `latest` as its `<backing-ref>`,
+  `gen-compose` and `quick-start` now stop; name the dated tag.*
+  - What ties the pulled guest to the servers is checked in the test suite,
+    which can see what `gen-compose` cannot: `tests/test_playbook_pins.py`
+    reads `vm-rocm-golden.yml` at the commit the tag names and compares its
+    `ernic_source_pin` and `sdxi_source_pin` with the `ernic.<sha>` and
+    `sdxi.<sha>` each fleet file serves. A change that moves a pin has to
+    set `<image-allow-guest-lag>true` in the fleet files until a guest at
+    the new pin is published and `<backing-ref>` moves, and the test fails
+    a fleet file that keeps the element after that. It needs git history:
+    `Gen Compose Check` now checks out with `fetch-depth: 0`, and a shallow
+    checkout skips it.
+  - `tests/test_image_tag_consistency.py` and the `Image Tag Consistency`
+    workflow gain a guest section: one `<backing-ref>` across the three
+    fleet files, in `<publish-ref>`'s repository, by a dated tag, and no
+    batesste-ci-images qcow2 named in any workflow, stack or fleet file.
+    Their stamp counts never saw the new ref, since both match only
+    `batesste-ci-images` names.
+  - `quickstart-boot` warns, without failing, when the IB device it resolves
+    is not `rocm-rdma-ernic*`.
+
 - **`sbates130272.batesste` 3.2.1 to 3.3.1.** Picks up two fixes asked for
   from here: `check_platform` no longer falls back to top-level fact
   variables, which printed a deprecation warning for every role and stops
@@ -416,37 +517,67 @@ elements, or a guest you log in to with your own `~/.ssh/id_rsa`.
   `fave_packages`. A baked guest gains `~/.bashrc.d/user_setup.sh` and a
   sourcing loop in `~/.bashrc`, and no longer has `ptop`.
 
-- **The `vm-rocm-golden` playbook-test lane keeps a compiler cache between
-  runs and no longer compacts the image it bakes.** The plays that build
-  kernel modules are about fourteen minutes of that bake, and the inputs of
-  those modules move only when a pin does; how much of it is compiling, which
-  is all a cache removes, has not been measured. A bake given a cache
+- **Both workflows that bake the golden guest keep a compiler cache between
+  runs and share it, the publish workflow included; the playbook-test lane
+  no longer compacts the image it bakes.** The plays that build kernel
+  modules are about fourteen minutes of that bake, and the inputs of those
+  modules move only when a pin does. A bake given a cache
   directory — `qemu-tool gen-vm --bake --cache-dir DIR`, or
   `<bake-cache-dir>` in a fleet file — now puts
   ccache in front of every module build — amdgpu, both ionic-ernic builds,
   `ernic_p4` and SDXI — and carries the cache in and out of the guest as one
   tar file; the new `bake_ccache` role does it, and removes every trace
-  before the image is finished. The lane restores and saves that directory
-  with `actions/cache` and bakes with `--no-compact`, since nothing
-  publishes its image. There is no cache directory by default,
-  `qemu/stacks/rocm-golden.xml` names none and the publish workflow passes
-  none: a published image is compiled from source and
-  compacted, as before. The one thing every bake now runs is the role's
-  removal, which is a no-op on a guest that never had the cache: it is what
-  cleans up after a cached bake that failed part way, whatever the rerun was
-  given. `qemu/checks/rocm-golden.sh` now fails an image that carries a
-  ccache configuration, cache or compiler symlink.
+  before the image is finished. The lane and the publish workflow restore
+  and save that directory with `actions/cache`, through two composite
+  actions they share, `.github/actions/bake-ccache-restore` and
+  `bake-ccache-save`, so both compute one key for one directory. The lane
+  bakes with `--no-compact`, since nothing publishes its image; the publish
+  workflow compacts, as before. There is no cache directory by default and
+  `qemu/stacks/rocm-golden.xml` names none: a bake by hand compiles
+  everything unless it is given one. The one thing every bake now runs is
+  the role's removal, which is a no-op on a guest that never had the cache:
+  it is what cleans up after a cached bake that failed part way, whatever
+  the rerun was given. `qemu/checks/rocm-golden.sh` now fails an image that
+  carries a ccache configuration, cache or compiler symlink.
+  - **A kernel module in a published image may now be linked from objects
+    compiled in an earlier run on `main`**, not in the run that published
+    it. ccache reuses an object only for the same compiler, flags and
+    source, and nothing compares a cached object with a fresh compile. The
+    publish workflow runs `qemu/checks/rocm-golden.sh` before it pushes, so
+    an image that still carried ccache would not be published. A run on
+    `main` cannot read a cache a pull request saved; a publish dispatched by
+    hand from another branch can read what dispatched runs on that branch
+    saved.
+  - The configuration a cached bake compiles under is the role's
+    `/etc/ccache.conf` and nothing from the cache. ccache also reads a
+    `ccache.conf` at the top of its cache directory, ahead of the system
+    file, and that directory is the restored archive; the role now deletes
+    one after unpacking and leaves it out of the archive it saves.
+  - Both bake steps stop on an empty cache directory, and the save action
+    fails on an empty directory or key once the bake has run. `gen-vm`
+    takes `--cache-dir ""` for the current directory, so an action output
+    that resolved to nothing was a green run that saved nothing.
+  - The publish workflow also runs on a push to `main` that changes either
+    composite action, so a change to the cache's key or directory is
+    followed by the publish that saves the first entry under it.
+  - Measured on one pull request: the lane took 27m27s cold and 17m46s on a
+    later run, the amdgpu play going from 7m49s to 2m27s; that later run hit
+    1812 of 2053 cacheable ccache calls. A later cold lane run on a slower
+    runner took 35m01s. The publish workflow's bake step took 24m33s
+    uncached. The publish workflow has not yet run with the cache, so what
+    it saves there is not measured.
   - The cache is named by the flag or the element and by nothing in the
     environment. `gen-vm` creates the directory and passes it to the
     playbook as the extra var `bake_cache_dir`; it refuses `--cache-dir`
     without `--bake`, and a cache when the bake has no playbook.
-  - The saved cache is replaced when the lane restored one saved for other
-    pins (`gen-vm --cache-replace`), or when a hundred or more ccache invocations missed; otherwise it
-    is left, since a cache entry cannot be overwritten.
-  - The lane runs on pull requests only, so a pull request's first run is
-    still cold unless the workflow has been run by hand on `main`, whose
-    cache every pull request can read. Do that once after this merges and
-    after each pin bump.
+  - The saved cache is replaced when the entry restored was saved for other
+    pins (`gen-vm --cache-replace`), or when a hundred or more ccache
+    invocations missed; otherwise it is left, since a cache entry cannot be
+    overwritten.
+  - The publish workflow runs on pushes to `main`, so `main` holds a cache
+    that every pull request's lane run can read, and it is replaced when a
+    merged pin bump is published. The lane no longer has to be run by hand
+    on `main` to seed one.
   - The lane's `Report VM image size` step now reports an uncompacted
     backing image, 2.3–2.5x the published size.
   - The comment in `qemu/packages.d/rocm-golden.txt` described cache plumbing
@@ -586,6 +717,48 @@ elements, or a guest you log in to with your own `~/.ssh/id_rsa`.
 
 ### Fixed
 
+- **`quick-start` no longer boots old guest disks with a new image's key when
+  `<backing-ref>` moves.** It left an existing overlay alone whatever image
+  it was made on, while re-fetching the keypair for the new ref, so on a
+  host that had run it before every guest came up on the old image, refused
+  the new key, and was reported as never answering SSH. It now compares the
+  ref `gen-vm` recorded beside the backing file (`<vm>-backing.qcow2.image-ref`)
+  with the one the settings name, before it touches the keypair, and on a
+  difference asks to replace the guest disks. The question defaults to no,
+  the only `quick-start` prompt that does, so `--yes` and a run with no
+  terminal stop there with nothing removed; `--clean-overlays` is how to
+  say yes unattended. A stop leaves the old guests still reachable. It
+  refuses outright, removing nothing, while a guest of the stack is running
+  or Docker cannot be asked: deleting an overlay under a running QEMU
+  leaves the guest on a file with no name. `--clean-overlays` by itself is
+  refused under running guests for the same reason, which it was not
+  before. A backing file with no record is left alone.
+  The copy of the keypair it publishes to `<images>/keys/quickstart_id_rsa`
+  is now replaced on a re-fetch too; it used to keep the first image's key
+  forever. Every earlier move of the tag left the old disks in place the
+  same way; whether the guests then accepted the new key was down to the
+  two images.
+
+- **`vm-quickstart.yml` no longer downloads and reinstalls `rdma_exporter`
+  on a guest that has it.** The role's install had no guard, so every
+  `quick-start test` fetched the tarball from GitHub and replaced the binary
+  on every guest, baked in or not. It now records the checksum of the
+  tarball it installed in `/usr/local/share/rdma_exporter.sha256` and skips
+  both steps when that names the pinned release. The image published as
+  `20261117.g80c17f8` has the binary and no record, so a guest made from it
+  is still installed to once.
+
+- **`quick-start test` keeps its per-guest summaries in the stack
+  directory,** `<stack-dir>/artifacts`, instead of
+  `/var/tmp/quickstart-artifacts-<flavor>`. No flag moved the old path and
+  `test` empties it first, so two stacks of one flavor deleted each other's
+  summaries.
+
+- **The guest image's size in `quick-start`'s disk warning, `check` and the
+  README** is the published image's: about 2 GB to pull and 8.5 GB
+  unpacked. `check` said 16 GiB unpacked and the others 2.5 and 9, figures
+  for images the fleet no longer pulls.
+
 - **The "Ernic P4 FP8 BW" number now measures the P4 FP8 path.** The step
   had never produced a number: it opened `/dev/ernic-p4`, a root-only node,
   as the guest user, issued an ioctl the driver does not have, and would
@@ -607,8 +780,8 @@ elements, or a guest you log in to with your own `~/.ssh/id_rsa`.
     allows, which for `load` is replace the program and write its tables.
   - The step fails, naming what is missing, on a guest without the module,
     the node, the client, the program or group access to the node. All of
-    them come from the golden bake, so the lane's P4 step fails until
-    `<backing-ref>` names an image baked from this tree.
+    them come from the golden bake, and `<backing-ref>` now names an image
+    baked from it.
   - `ansible/files/p4/fp8_policy.json` is removed. It was a hand copy of
     the program; the guest now carries the one from the pinned sources.
 

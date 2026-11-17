@@ -9,6 +9,7 @@ from __future__ import annotations
 import dataclasses
 import importlib.util
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -58,7 +59,11 @@ class ParseDefault(unittest.TestCase):
         self.assertIn("qemu-libvfio-user", self.cfg.qemu_ref)
         self.assertIn("rocm-ernic", self.cfg.ernic_ref)
         self.assertIn("rocjitsu", self.cfg.rocjitsu_ref)
-        self.assertIn("qcow2", self.cfg.backing_ref)
+        # The guest this repo publishes, by the dated tag of one publish.
+        self.assertRegex(
+            self.cfg.backing_ref,
+            r"^" + re.escape(self.cfg.publish_ref)
+            + r":[0-9]{8}\.g[0-9a-f]{7}$")
         self.assertIn("rocm-sdxi", self.cfg.sdxi_ref)
 
     def test_devices(self) -> None:

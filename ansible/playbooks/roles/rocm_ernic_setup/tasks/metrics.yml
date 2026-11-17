@@ -1,22 +1,57 @@
 ---
 # rdma_exporter, serving the ernic's RDMA counters to Prometheus on :9879.
-- name: Download rdma_exporter
-  ansible.builtin.get_url:
-    url: "{{ rocm_ernic_setup_rdma_exporter_url }}"
-    checksum: "sha256:{{ rocm_ernic_setup_rdma_exporter_sha256 }}"
-    dest: /tmp/rdma_exporter.tar.gz
-    mode: "0644"
+#
+# The install records the checksum of the tarball it unpacked, and a guest
+# whose record already names the pinned one is left alone. Without that every
+# run of these tasks against a guest that already had the exporter fetched
+# the tarball from GitHub and reinstalled the same binary: measured on the
+# golden image, `quick-start test` reported both tasks changed on both
+# guests. A guest with the binary and no record -- any image baked before the
+# record existed -- is installed once more, and has the record from then on.
+- name: Look for the rdma_exporter binary
+  ansible.builtin.stat:
+    path: /usr/local/bin/rdma_exporter
+  register: rocm_ernic_setup_rdma_exporter_binary
 
-- name: Install the rdma_exporter binary
-  ansible.builtin.shell:
-    cmd: |
-      set -e
-      tar -xzf /tmp/rdma_exporter.tar.gz -C /tmp rdma_exporter
-      install -o root -g root -m 0755 /tmp/rdma_exporter /usr/local/bin/rdma_exporter
-      rm -f /tmp/rdma_exporter /tmp/rdma_exporter.tar.gz
-    executable: /bin/bash
-  become: true
-  changed_when: true
+- name: Read which rdma_exporter tarball is installed
+  ansible.builtin.slurp:
+    src: "{{ rocm_ernic_setup_rdma_exporter_stamp }}"
+  register: rocm_ernic_setup_rdma_exporter_installed
+  failed_when: false
+
+- name: Install rdma_exporter at the pinned release
+  when: >-
+    not rocm_ernic_setup_rdma_exporter_binary.stat.exists
+    or (rocm_ernic_setup_rdma_exporter_installed.content | default('')
+        | b64decode | trim) != rocm_ernic_setup_rdma_exporter_sha256
+  block:
+    - name: Download rdma_exporter
+      ansible.builtin.get_url:
+        url: "{{ rocm_ernic_setup_rdma_exporter_url }}"
+        checksum: "sha256:{{ rocm_ernic_setup_rdma_exporter_sha256 }}"
+        dest: /tmp/rdma_exporter.tar.gz
+        mode: "0644"
+
+    - name: Install the rdma_exporter binary
+      ansible.builtin.shell:
+        cmd: |
+          set -e
+          tar -xzf /tmp/rdma_exporter.tar.gz -C /tmp rdma_exporter
+          install -o root -g root -m 0755 /tmp/rdma_exporter /usr/local/bin/rdma_exporter
+          rm -f /tmp/rdma_exporter /tmp/rdma_exporter.tar.gz
+        executable: /bin/bash
+      become: true
+      changed_when: true
+
+    # Last, so a failed install leaves no record and is retried.
+    - name: Record which rdma_exporter tarball is installed
+      ansible.builtin.copy:
+        dest: "{{ rocm_ernic_setup_rdma_exporter_stamp }}"
+        content: "{{ rocm_ernic_setup_rdma_exporter_sha256 }}\n"
+        owner: root
+        group: root
+        mode: "0644"
+      become: true
 
 - name: Install the rdma_exporter unit
   ansible.builtin.copy:
