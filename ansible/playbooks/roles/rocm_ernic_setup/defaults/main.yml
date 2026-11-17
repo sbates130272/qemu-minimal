@@ -105,6 +105,14 @@ rocm_ernic_setup_kernel_debs_dir: ""
 # Where the .debs land in the guest before the single apt transaction.
 rocm_ernic_setup_kernel_payload_dir: /tmp/mainline-kernel
 rocm_ernic_setup_kernel_reboot_timeout: 600
+# linux-headers-7.3.x and later were built on Ubuntu 26.10 (stonking) which
+# uses OpenSSL 4.0, so the headers .deb depends on libssl4 -- not shipped with
+# Ubuntu 26.04 (resolute). Downloaded from the Ubuntu archive and dropped into
+# the kernel payload directory so the single apt transaction below picks it up.
+# libssl4's dep on openssl-provider-legacy is unversioned; the resolute package
+# at 3.5.5 (built against OpenSSL 3.x) satisfies it without being replaced.
+# Update the version when the openssl source package moves in Ubuntu 26.10.
+rocm_ernic_setup_kernel_libssl4_deb_version: "4.0.3-1ubuntu1"
 # Name the pinned kernel as the one grub boots, rather than leaving it to
 # sort first among whatever is installed. kernel.yml says how.
 rocm_ernic_setup_kernel_grub_pin: true

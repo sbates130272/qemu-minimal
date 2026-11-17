@@ -128,6 +128,40 @@
         group: root
         mode: "0644"
 
+    # linux-headers-7.3.x depends on libssl4 (OpenSSL 4.0), not shipped with
+    # Ubuntu 26.04 (resolute). Check first so a rerun after a previous partial
+    # install does not re-fetch it. libssl4's dep on openssl-provider-legacy is
+    # unversioned -- the resolute 3.5.5 package satisfies it.
+    - name: Check if libssl4 is already installed
+      ansible.builtin.command:
+        argv:
+          - dpkg-query
+          - -W
+          - -f=${Status}
+          - libssl4
+      register: rocm_ernic_setup_libssl4_query
+      changed_when: false
+      failed_when: false
+
+    - name: Download libssl4 into the kernel payload
+      vars:
+        _libssl4_archive: >-
+          {{ 'https://ports.ubuntu.com' if rocm_ernic_setup_debarch == 'arm64'
+             else 'https://archive.ubuntu.com' }}/ubuntu/pool/main/o/openssl
+      ansible.builtin.get_url:
+        url: >-
+          {{ _libssl4_archive }}/libssl4_{{
+          rocm_ernic_setup_kernel_libssl4_deb_version }}_{{ rocm_ernic_setup_debarch }}.deb
+        dest: "{{ rocm_ernic_setup_kernel_payload_dir }}/libssl4.deb"
+        mode: "0644"
+      retries: "{{ rocm_ernic_setup_kernel_fetch_retries }}"
+      delay: "{{ rocm_ernic_setup_kernel_fetch_delay }}"
+      until: rocm_ernic_setup_libssl4_dl is success
+      register: rocm_ernic_setup_libssl4_dl
+      when: >-
+        rocm_ernic_setup_libssl4_query.rc != 0
+        or 'install ok installed' not in (rocm_ernic_setup_libssl4_query.stdout | default(''))
+
     # One transaction, apt not dpkg -- see the header comment. The apt module
     # cannot express this: its `deb` argument takes a single path, and looping
     # it would install the .debs one at a time, which is the half-configured

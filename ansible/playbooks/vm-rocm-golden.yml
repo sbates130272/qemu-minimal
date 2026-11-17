@@ -63,7 +63,7 @@
     # that can build ionic_rdma. Must stay within a point release of
     # IONIC_KERNEL_REF in the collection's cmake/ErnicKernelModule.cmake:
     # driver_ionic.yml compares major.minor and fails the build otherwise.
-    ionic_kernel_pin: &ionic_kernel_pin v7.2.6
+    ionic_kernel_pin: &ionic_kernel_pin v7.3.4
     # Commit ernic_source checks out. The role defaults to "main", which would
     # clone upstream HEAD while requirements.yml installs the collection from
     # a fixed SHA. Keep this equal to the version: field in
@@ -79,6 +79,7 @@
     ernic_ionic_kernel_ref: "{{ ionic_kernel_pin }}"
     rocm_ernic_setup_kernel_ref: "{{ ionic_kernel_pin }}"
     ernic_source_repo_version: "{{ ernic_source_pin }}"
+    ernic_source_force_clone: true
   tasks:
     # The pinned mainline kernel and the build toolchain. Upstream assumes a
     # guest already prepared this way; this repo builds its own.
@@ -203,11 +204,13 @@
     # kernel, so two bakes of one commit are not the same guest. Pass
     # -e vm_rocm_skip_system_upgrade=false to have it.
     rocm_setup_skip_system_upgrade: "{{ vm_rocm_skip_system_upgrade | default(true) }}"
-    # 31.60 is the first driver release with amdgpu-dkms 7.1.9 and the
-    # gfx1250 blobs the "gap" firmware set sits beside. If that tree goes
+    # 31.70 ships amdgpu-dkms 7.2.3, which carries the dmem_cgroup_register_region
+    # KCL abstraction needed for kernel 7.3.x (the drmm_cgroup_register_region
+    # signature changed to struct dmem_cgroup_init* in 7.3.0). It also carries
+    # the gfx1250 blobs the "gap" firmware set sits beside. If that tree goes
     # missing again, set rocjitsu_setup_firmware_set=full and drop the pin rather
     # than falling back to an older driver.
-    rocm_setup_amdgpu_driver_version: "31.60"
+    rocm_setup_amdgpu_driver_version: "31.70"
     # Install amdgpu-dkms without building it. rocjitsu_setup
     # patches the source and builds it once; the postinst build of the
     # unpatched source took ~25 minutes, was always thrown away, and on this
@@ -286,6 +289,7 @@
     ionic_kernel_pin: *ionic_kernel_pin
     ernic_source_pin: *ernic_source_pin
     ernic_source_repo_version: "{{ ernic_source_pin }}"
+    ernic_source_force_clone: true
     ionic_srqp4_stamp: /etc/ionic-srq-p4.json
     ionic_srqp4_stage_dir: /var/tmp/srq-p4
     ionic_srqp4_source_root: /var/tmp/ionic-srq-p4-src
@@ -731,7 +735,7 @@
           # The functions of amdgpu-emu-patches.py, in the order it applies
           # them. kfd_ptrace_gate changes a KFD security check and is carried
           # unreviewed.
-          amdgpu_patches: [kfd_atomics, ras_vbios, kfd_ptrace_gate, panel_type]
+          amdgpu_patches: [kfd_atomics, ras_vbios, kfd_ptrace_gate, panel_type, amd_vsdb_freesync]
           kfd_ptrace_gate_reviewed: false
           amdgpu_autoload_blacklisted: true
           amdgpu_probe_helper: /usr/local/bin/amdgpu-probe
@@ -805,6 +809,7 @@
     ernic_gpu_passthrough: false
     ernic_ionic_kernel_ref: "{{ ionic_kernel_pin }}"
     ernic_source_repo_version: "{{ ernic_source_pin }}"
+    ernic_source_force_clone: true
     # The role asserts ernic_guest_vm_ip is non-empty. Upstream derives it per
     # guest from an instance manifest as <subnet>.<10 * id>; there is no
     # manifest here, so do the same arithmetic against an index of 1 and let a

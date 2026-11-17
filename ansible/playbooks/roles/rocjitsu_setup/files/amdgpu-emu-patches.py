@@ -82,6 +82,9 @@ def kfd_ptrace_gate(root):
     Require CAP_SYS_PTRACE unconditionally instead, which only ever denies
     what the in-tree check would have allowed. Version-gated, so <= 7.1 keeps
     the upstream logic. From ROCm/hipObject ci/ernic/patches/amdgpu/0001.
+
+    amdgpu-dkms 7.2.3+ handles this via kcl_task_ptrace_dumpable_denied() in
+    its own KCL layer, so no patch is needed there.
     """
     path = root + "/amd/amdkfd/kfd_process_queue_manager.c"
     content = read(path)
@@ -105,6 +108,9 @@ def kfd_ptrace_gate(root):
     if old not in content or inc_old not in content:
         # A driver release that dropped the gate needs no patch.
         if "get_dumpable" not in content and "SUID_DUMP_USER" not in content:
+            return False
+        # 7.2.3+ uses kcl_task_ptrace_dumpable_denied() from its own KCL layer.
+        if "kcl_task_ptrace_dumpable_denied" in content:
             return False
         raise Missing(f"target string not found in {path}")
     write(path, content.replace(inc_old, inc_new, 1).replace(old, new, 1))
@@ -191,7 +197,75 @@ def panel_type(root):
     return True
 
 
-PATCHES = (kfd_atomics, ras_vbios, kfd_ptrace_gate, panel_type)
+def amd_vsdb_freesync(root):
+    """Gate the freesync fields of drm_amd_vsdb_info on kernels < 7.3.0.
+
+    kernel 7.3.0 pruned struct drm_amd_vsdb_info to version, replay_mode,
+    panel_type and two luminance_range fields, removing freesync_supported,
+    min_frame_rate, max_frame_rate and freesync_vcp_code. The emulated GPU has
+    no display so freesync is irrelevant; zero/false defaults are correct.
+    linux/version.h is already included at line 5 of this file.
+    """
+    path = root + "/amd/display/amdgpu_dm/amdgpu_dm_connector.c"
+    content = read(path)
+    old = ("\tvsdb_info->freesync_supported = connector->display_info.amd_vsdb.freesync_supported;\n"
+           "\tvsdb_info->min_refresh_rate_hz = connector->display_info.amd_vsdb.min_frame_rate;\n"
+           "\tvsdb_info->max_refresh_rate_hz = connector->display_info.amd_vsdb.max_frame_rate;\n"
+           "\tvsdb_info->freesync_mccs_vcp_code = connector->display_info.amd_vsdb.freesync_vcp_code;\n")
+    new = ("#if LINUX_VERSION_CODE < KERNEL_VERSION(7, 3, 0)\n"
+           + old +
+           "#else\n"
+           "\tvsdb_info->freesync_supported = false;\n"
+           "\tvsdb_info->min_refresh_rate_hz = 0;\n"
+           "\tvsdb_info->max_refresh_rate_hz = 0;\n"
+           "\tvsdb_info->freesync_mccs_vcp_code = 0;\n"
+           "#endif\n")
+    if new in content:
+        return False
+    write(path, swap(content, old, new, path))
+    return True
+
+
+def drm_buddy_kern(root):
+    """Skip amddrm_buddy.ko on kernels >= 7.3 that already ship gpu_buddy_* in vmlinux.
+
+    amdgpu-dkms 7.2.3 builds buddy.c and exports gpu_buddy_init etc. via
+    EXPORT_SYMBOL. Kernel 7.3+ moved gpu_buddy into vmlinux with the same
+    symbol names; modpost refuses a module that redefines them. KERNEL_VER is
+    defined by Kbuild (amd/dkms/Kbuild line 10) before Makefile.drm_buddy is
+    included at line 98, so it is in scope here.
+    """
+    path = root + "/amd/dkms/Makefile.drm_buddy"
+    content = read(path)
+    old = ("export CONFIG_DRM_BUDDY=m\n"
+           "\n"
+           "subdir-ccflags-y += -DCONFIG_DRM_BUDDY\n"
+           "CFLAGS_drm_buddy.o += -include $(src)/amd/dkms/backport_drm_buddy.h \\\n"
+           "\t\t\t-DHAVE_CONFIG_H\n"
+           "CFLAGS_buddy.o += -include $(src)/amd/dkms/backport_drm_buddy.h \\\n"
+           "\t\t\t-DHAVE_CONFIG_H\n"
+           "amddrm_buddy-y := buddy.o drm_buddy.o\n"
+           "obj-$(CONFIG_DRM_BUDDY) += amddrm_buddy.o\n")
+    new = ("# On kernels >= 7.3 gpu_buddy lives in vmlinux; skip the in-tree copy.\n"
+           "ifneq ($(shell [ $(KERNEL_VER)0 -ge 703000 ] && echo y),y)\n"
+           "export CONFIG_DRM_BUDDY=m\n"
+           "\n"
+           "subdir-ccflags-y += -DCONFIG_DRM_BUDDY\n"
+           "CFLAGS_drm_buddy.o += -include $(src)/amd/dkms/backport_drm_buddy.h \\\n"
+           "\t\t\t-DHAVE_CONFIG_H\n"
+           "CFLAGS_buddy.o += -include $(src)/amd/dkms/backport_drm_buddy.h \\\n"
+           "\t\t\t-DHAVE_CONFIG_H\n"
+           "amddrm_buddy-y := buddy.o drm_buddy.o\n"
+           "obj-$(CONFIG_DRM_BUDDY) += amddrm_buddy.o\n"
+           "endif\n")
+    if new in content:
+        return False
+    write(path, swap(content, old, new, path))
+    return True
+
+
+PATCHES = (kfd_atomics, ras_vbios, kfd_ptrace_gate, panel_type, amd_vsdb_freesync,
+           drm_buddy_kern)
 
 
 def main():

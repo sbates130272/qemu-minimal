@@ -27,21 +27,45 @@
 # The version comes from the source directory, not from `dkms status`: the
 # deferred postinst never ran `dkms add`, so status prints nothing at all.
 - name: Build and install the patched amdgpu DKMS module
-  ansible.builtin.shell:
-    cmd: |
-      set -euo pipefail
-      SRC=$(ls -d /usr/src/amdgpu-* 2>/dev/null | sort | tail -1) || true
-      VER=${SRC#/usr/src/amdgpu-}
-      if [ -z "$VER" ]; then
-        echo "no amdgpu DKMS source in /usr/src" >&2
-        exit 1
-      fi
-      dkms status amdgpu/"$VER" | grep -q . || dkms add amdgpu/"$VER"
-      dkms build amdgpu/"$VER" -k "$(uname -r)" --force
-      dkms install amdgpu/"$VER" -k "$(uname -r)" --force
-    executable: /bin/bash
-  become: true
-  changed_when: true
+  block:
+    - name: Run the amdgpu DKMS build
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          SRC=$(ls -d /usr/src/amdgpu-* 2>/dev/null | sort | tail -1) || true
+          VER=${SRC#/usr/src/amdgpu-}
+          if [ -z "$VER" ]; then
+            echo "no amdgpu DKMS source in /usr/src" >&2
+            exit 1
+          fi
+          dkms status amdgpu/"$VER" | grep -q . || dkms add amdgpu/"$VER"
+          dkms build amdgpu/"$VER" -k "$(uname -r)" --force
+          dkms install amdgpu/"$VER" -k "$(uname -r)" --force
+        executable: /bin/bash
+      become: true
+      changed_when: true
+  rescue:
+    - name: Capture the amdgpu DKMS make.log
+      ansible.builtin.shell:
+        cmd: |
+          log=$(ls /var/lib/dkms/amdgpu/*/build/make.log 2>/dev/null | sort | tail -1)
+          if [ ! -f "$log" ]; then echo "make.log not found"; exit 0; fi
+          grep -ni "error:\|undefined reference\|cannot find\|No such file" "$log" | head -60 || true
+          echo "--- last 30 lines ---"
+          tail -30 "$log"
+        executable: /bin/bash
+      become: true
+      register: _rocjitsu_setup_amdgpu_makelog
+      changed_when: false
+      failed_when: false
+
+    - name: Show the amdgpu DKMS make.log tail
+      ansible.builtin.debug:
+        msg: "{{ _rocjitsu_setup_amdgpu_makelog.stdout_lines }}"
+
+    - name: Fail the play after surfacing the make.log
+      ansible.builtin.fail:
+        msg: "amdgpu DKMS build failed — see make.log above"
   when: >-
     _rocjitsu_setup_amdgpu_patches is changed
     or _rocjitsu_setup_amdgpu_installed.stdout | trim == '0'
