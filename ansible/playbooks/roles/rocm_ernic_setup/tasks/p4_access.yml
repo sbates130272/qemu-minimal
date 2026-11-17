@@ -1,0 +1,40 @@
+---
+# Who may open /dev/ernic-p4 without sudo. The driver leaves the node
+# root-only; files/99-ernic-p4.rules says why this image widens it to one
+# group and no further.
+
+- name: Create the P4 device group
+  ansible.builtin.group:
+    name: "{{ rocm_ernic_setup_p4_group }}"
+    state: present
+    system: true
+
+# Takes effect in login sessions opened after this.
+- name: Add the guest user to the P4 device group
+  ansible.builtin.user:
+    name: "{{ rocm_ernic_setup_p4_user }}"
+    groups: "{{ rocm_ernic_setup_p4_group }}"
+    append: true
+  when: rocm_ernic_setup_p4_user | length > 0
+
+- name: Install the P4 device udev rule
+  ansible.builtin.copy:
+    src: "{{ rocm_ernic_setup_p4_udev_rules_src }}"
+    dest: /etc/udev/rules.d/99-ernic-p4.rules
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload udev rules
+
+- name: Reload udev before applying the rule
+  ansible.builtin.meta: flush_handlers
+
+# Unlike a netdev rename, a mode change applies to a node that already
+# exists, so a live guest picks it up here. A bake has no node and this
+# matches nothing.
+- name: Apply the rule to a P4 node that already exists
+  ansible.builtin.command:
+    cmd: >-
+      udevadm trigger --action=change
+      --subsystem-match=misc --sysname-match=ernic-p4*
+  changed_when: false

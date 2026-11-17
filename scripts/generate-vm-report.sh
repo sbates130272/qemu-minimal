@@ -131,102 +131,120 @@ collect_ernic_p4() {
   ERNIC_P4_PATH=$(collect "modinfo -n ernic_p4 2>/dev/null || echo '(not installed)'")
 }
 
-# P4 RDMA write bandwidth using fp8_policy.json.
+# P4 FP8 reduction bandwidth, measured on one guest.
 #
-# Prerequisites (not yet met in the standard two-VM stack):
-#   - ernic_p4.ko installed at updates/dkms
-#   - /dev/ernic-p4 present (server started with --p4 --p4-guest-scope load)
-#   - fp8_policy.json copied into the guest
+# The reduction is in-NIC compute: an RDMA WRITE whose gather list names two
+# equal-length operand regions is turned, by a table entry of the P4 program,
+# into an elementwise fp8 add whose result lands in the region the write named
+# as its destination. All three regions belong to the same device, so there is
+# no peer guest in this and nothing crosses the mesh.
 #
-# The function returns gracefully with an empty result when any prerequisite
-# is missing rather than failing the report. The badge will show n/a until
-# the P4-enabled stack is wired in.
-run_ernic_p4_rdma_bw() {
-  # vm2_host is where this script reaches VM2 over SSH; vm2_rdma_addr is where
-  # VM1 reaches VM2's ernic. They are different networks, and the second is
-  # the only one ib_write_bw can use.
-  local vm1_host=$1 vm2_host=$2 vm2_rdma_addr=${3:-$2}
-
-  # Prerequisite 1: ernic_p4.ko from DKMS
-  if ! $SSH "modinfo -n ernic_p4 2>/dev/null | grep -q 'updates/dkms'"; then
-    echo "ernic_p4.ko not installed from DKMS -- skipping P4 RDMA benchmark"
-    return 0
-  fi
-
-  # Prerequisite 2: /dev/ernic-p4 device (server must have --p4-guest-scope)
-  if ! $SSH "[ -e /dev/ernic-p4 ]" 2>/dev/null; then
-    echo "/dev/ernic-p4 not present -- ernic server not started with --p4-guest-scope"
-    echo "Set ERNIC_P4=true and ERNIC_P4_GUEST_SCOPE=load in the compose env"
-    return 0
-  fi
-
-  # Copy fp8_policy.json into the guest
-  if ! copy_to_guest "${SCRIPT_DIR}/../ansible/files/p4/fp8_policy.json" /tmp/fp8_policy.json; then
-    echo "fp8_policy.json upload failed"
-    return 0
-  fi
-
-  # Load the P4 program via the ionic guest API and run ib_write_bw.
-  # VM2 is the RDMA server, VM1 the client; we SSH to both via the same
-  # proxy container (joined compose network) but on different hostnames.
-  local ssh2="ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no -p ${PORT} ${USER}@${vm2_host}"
-  {
-    # Start the ib_send_bw server on VM2 as a transient unit
-    $ssh2 "sudo systemd-run --unit=p4-ib-write-bw --collect \
-      /usr/bin/ib_write_bw --iters 5000" 2>/dev/null
-    sleep 2
-    # Load the P4 program and run the client on VM1
-    $SSH "bash -s" <<BENCH
+# Two programs the golden bake installs do the work, both as the ordinary guest
+# user. p4_fp8_client is rocm-ernic's own guest test, built from the pinned
+# sources: it loads fp8_policy.json through /dev/ernic-p4, installs the reduce
+# entry and checks one reduction. p4_fp8_bench then repeats that work request
+# and checks every result, so a device that did not reduce fails rather than
+# timing a plain RDMA WRITE.
+#
+# The number is fp8 result bytes per second, one byte an element: each
+# iteration reads 2 x ELEMENTS operand bytes and writes ELEMENTS. 262144 is
+# the most the device moves in one operation (IONIC_FP8_MAP_MAX).
+#
+# A missing module, node, client or program is a failure, and so is a node the
+# guest user cannot open: every one of them is the golden bake's to provide.
+# The program and its entry stay loaded until the ernic server restarts; an
+# ordinary transfer is not a two-equal-operand write and is left alone.
+ERNIC_P4_FP8_ELEMENTS=${ERNIC_P4_FP8_ELEMENTS:-262144}
+ERNIC_P4_FP8_ITERS=${ERNIC_P4_FP8_ITERS:-2000}
+run_ernic_p4_fp8_bw() {
+  $SSH "ELEMENTS='${ERNIC_P4_FP8_ELEMENTS}' ITERS='${ERNIC_P4_FP8_ITERS}' bash -s" 2>&1 <<'BENCH'
 set -euo pipefail
-# Load fp8_policy.json via the P4 guest API
-python3 - /tmp/fp8_policy.json /dev/ernic-p4 <<'PY'
-import sys, struct, fcntl, json
+node=/dev/ernic-p4
+program=/usr/local/share/rocm-ernic/fp8_policy.json
+golden="the guest image must be the golden bake (ansible/playbooks/vm-rocm-golden.yml)"
+missing() { echo "$1: ${golden}"; exit 1; }
 
-P4_IOCTL_LOAD = 0xc0087001  # _IOC(_IOC_READ|_IOC_WRITE,'p',1,8)
-prog = open(sys.argv[1], 'rb').read()
-fd = open(sys.argv[2], 'wb')
-buf = struct.pack('QQ', len(prog), 0)
-fcntl.ioctl(fd, P4_IOCTL_LOAD, bytearray(buf + prog))
-print(f"loaded {len(prog)} bytes")
-fd.close()
-PY
-# Run ib_write_bw against VM2. The device name is resolved, not assumed: the
-# published image ships no udev rules, so it may still be the kernel name.
-ib=\$(ibv_devinfo -l | sed -n '2p' | tr -d ' \t\r')
-[ -n "\$ib" ] || { echo "no RDMA device in the guest"; exit 1; }
-ib_write_bw -d "\$ib" --iters 5000 ${vm2_rdma_addr} 2>/dev/null
+modinfo -n ernic_p4 >/dev/null 2>&1 || missing "the ernic_p4 module is not installed"
+for tool in p4_fp8_client p4_fp8_bench; do
+  command -v "${tool}" >/dev/null || missing "${tool} is not installed"
+done
+[ -r "${program}" ] || missing "${program} is not installed"
+if [ ! -e "${node}" ]; then
+  echo "${node} is absent: ernic_p4 is not loaded, or the ernic server was" \
+       "started without a P4 guest scope (<p4-enable> and <p4-guest-scope>" \
+       "in the fleet file)"
+  exit 1
+fi
+if [ ! -r "${node}" ] || [ ! -w "${node}" ]; then
+  echo "${node} is $(stat -c '%U:%G mode %a' "${node}") and $(id -un) is in" \
+       "groups: $(id -Gn)"
+  echo "the guest user is not in the ernic-p4 group or the udev rule is" \
+       "missing: ${golden}"
+  exit 1
+fi
+
+# Resolved, not assumed: the IB device keeps its kernel name on a guest whose
+# rename did not fire.
+ib=$(ibv_devinfo -l | sed -n '2p' | tr -d ' \t\r')
+[ -n "${ib}" ] || { echo "no RDMA device in the guest"; exit 1; }
+
+# RDMA_DEVICE makes an absent device exit 1; 77 is then only "no P4 node".
+rc=0
+RDMA_DEVICE="${ib}" timeout 60 p4_fp8_client "${program}" || rc=$?
+if [ "${rc}" -ne 0 ]; then
+  echo "p4_fp8_client exited ${rc}: the program was not loaded or the" \
+       "reduction was wrong"
+  exit 1
+fi
+timeout 300 p4_fp8_bench "${ib}" "${ELEMENTS}" "${ITERS}"
 BENCH
-  } 2>&1
 }
 
 # Time 4 MiB copies through the SDXI engine and report the throughput in MB/s.
-# Returns gracefully (exit 0, empty output) when the SDXI device is absent.
+# An absent device is a failure: the fleet this runs against has one. The node
+# is tested in the guest, so an ssh failure is not reported as a missing device.
+# Timed for two seconds: twenty copies is about 40 ms and swung 30% run to run.
 run_sdxi_bw() {
-  # Prerequisite: device node
-  if ! $SSH "[ -e /dev/sdxi0 ]" 2>/dev/null; then
-    echo "sdxi0 device not present -- sdxi_char not loaded or device absent"
-    return 0
-  fi
-
-  # The guest's sdxi-cli is the Python one, which has no `bench copy`; time
-  # its ioctl copy directly. Reports "bench copy: N bytes x M iters, ... MB/s".
+  # Times the copy ioctl directly, through the module sdxi-cli is built on.
+  # Reports "bench copy: N bytes x M iters, avg X ms, Y MB/s".
   $SSH "timeout 120 python3 -" 2>&1 <<'BENCH'
 import os, time
+
+if not os.path.exists("/dev/sdxi0"):
+    raise SystemExit("/dev/sdxi0 is absent: sdxi_char is not loaded, or the "
+                     "fleet has no SDXI device (<sdxi-per-vm>)")
+
 from sdxi_cli.ioctl import sdxi_copy
 
-size, iters = 4194304, 20
+size, seconds = 4194304, 2.0
 data = os.urandom(size)
 fd = os.open("/dev/sdxi0", os.O_RDWR)
+iters = 0
 start = time.perf_counter()
-for _ in range(iters):
+while True:
     out = sdxi_copy(fd, data)
-elapsed = time.perf_counter() - start
+    iters += 1
+    elapsed = time.perf_counter() - start
+    if elapsed >= seconds:
+        break
 if out != data:
     raise SystemExit("bench copy: destination differs from source")
 print(f"bench copy: {size} bytes x {iters} iters, "
       f"avg {elapsed / iters * 1000:.2f} ms, "
       f"{size * iters / elapsed / 1e6:.1f} MB/s")
 BENCH
+}
+
+# The number in front of "MB/s" on the last line carrying $1, if it is above
+# zero. POSIX awk: the job container's awk is mawk, which has no three-argument
+# match().
+parse_mbs() {
+  awk -v tag="$1" '
+    index($0, tag) {
+      for (i = 2; i <= NF; i++)
+        if ($i == "MB/s" && $(i - 1) ~ /^[0-9]+(\.[0-9]+)?$/) v = $(i - 1)
+    }
+    END { if (v + 0 > 0) print v }'
 }
 
 run_rocjitsu_gemm() {
@@ -328,27 +346,24 @@ if [ "${REPORT_ERNIC_SRQ_P4:-0}" = "1" ]; then
   collect_ernic_p4
 fi
 
-# P4 RDMA bandwidth (only when explicitly requested and prerequisites are met)
+# P4 FP8 bandwidth (only when explicitly requested). No number is a failure,
+# not an n/a badge: a badge that reads n/a is a green run that measured nothing.
 ERNIC_P4_BW_OUTPUT=""
-ERNIC_P4_BW_GBS=""
+ERNIC_P4_BW_MBS=""
 ERNIC_P4_BW_DISPLAY=""
 if [ "${REPORT_ERNIC_P4_BENCH:-0}" = "1" ]; then
-  P4_VM2_HOST=${ERNIC_P4_VM2_HOST:-localhost}
-  if ! ERNIC_P4_BW_OUTPUT=$(run_ernic_p4_rdma_bw "${HOST}" "${P4_VM2_HOST}" \
-      "${ERNIC_P4_VM2_RDMA_ADDR:-${P4_VM2_HOST}}"); then
-    bench_failed "ernic P4 FP8 RDMA benchmark" "${ERNIC_P4_BW_OUTPUT}"
+  if ! ERNIC_P4_BW_OUTPUT=$(run_ernic_p4_fp8_bw); then
+    bench_failed "ernic P4 FP8 bandwidth benchmark" "${ERNIC_P4_BW_OUTPUT}"
   fi
-  # ib_write_bw output: look for the BW line (65536-byte messages are typical)
-  ERNIC_P4_BW_GBS=$(printf '%s\n' "${ERNIC_P4_BW_OUTPUT}" \
-    | awk '/^[[:space:]]*[0-9]/{bw=$(NF-1)} END{print bw+0}')
-  if [ "${ERNIC_P4_BW_GBS}" != "0" ] && [ -n "${ERNIC_P4_BW_GBS}" ]; then
-    # ib_write_bw reports in MB/s; convert to GiB/s for the badge
-    ERNIC_P4_BW_GBS=$(python3 -c "print(f'{float('${ERNIC_P4_BW_GBS}') / 1024:.3g}')")
-    ERNIC_P4_BW_DISPLAY="${ERNIC_P4_BW_GBS} GiB/s"
+  ERNIC_P4_BW_MBS=$(printf '%s\n' "${ERNIC_P4_BW_OUTPUT}" | parse_mbs "p4 fp8 bench:")
+  if [ -z "${ERNIC_P4_BW_MBS}" ]; then
+    bench_failed "ernic P4 FP8 bandwidth benchmark (no MB/s figure above zero in its output)" \
+      "${ERNIC_P4_BW_OUTPUT}"
   fi
+  ERNIC_P4_BW_DISPLAY="${ERNIC_P4_BW_MBS} MB/s"
 fi
 
-# SDXI copy bandwidth (only when explicitly requested and device is present)
+# SDXI copy bandwidth (only when explicitly requested), held to the same rule.
 SDXI_BW_OUTPUT=""
 SDXI_BW_MBS=""
 SDXI_BW_DISPLAY=""
@@ -356,11 +371,12 @@ if [ "${REPORT_SDXI_BENCH:-0}" = "1" ]; then
   if ! SDXI_BW_OUTPUT=$(run_sdxi_bw); then
     bench_failed "SDXI copy bandwidth benchmark" "${SDXI_BW_OUTPUT}"
   fi
-  SDXI_BW_MBS=$(printf '%s\n' "${SDXI_BW_OUTPUT}" \
-    | awk '/bench copy:/{match($0, /([0-9.]+) MB\/s/, a); if (a[1]) print a[1]}')
-  if [ -n "${SDXI_BW_MBS}" ] && [ "${SDXI_BW_MBS}" != "0" ]; then
-    SDXI_BW_DISPLAY="${SDXI_BW_MBS} MB/s"
+  SDXI_BW_MBS=$(printf '%s\n' "${SDXI_BW_OUTPUT}" | parse_mbs "bench copy:")
+  if [ -z "${SDXI_BW_MBS}" ]; then
+    bench_failed "SDXI copy bandwidth benchmark (no MB/s figure above zero in its output)" \
+      "${SDXI_BW_OUTPUT}"
   fi
+  SDXI_BW_DISPLAY="${SDXI_BW_MBS} MB/s"
 fi
 
 KERNEL=$(collect "uname -r")
@@ -603,15 +619,18 @@ SRQP4
 fi)
 $(if [ "${REPORT_ERNIC_P4_BENCH:-0}" = "1" ] && [ -n "${ERNIC_P4_BW_OUTPUT}" ]; then cat <<ERNICP4BW
 
-## Ernic P4 FP8 RDMA Benchmark
+## Ernic P4 FP8 Bandwidth
 
-RDMA write bandwidth with the P4 fp8_policy engine active. The policy
-applies an elementwise FP8 add across three memory regions on each RDMA
-write operation.
+The rate at which the emulated NIC's P4 pipeline reduces fp8 data. Each
+iteration is one RDMA WRITE on an RC queue pair naming two
+${ERNIC_P4_FP8_ELEMENTS}-element operand regions, which the fp8_policy
+program's table entry turns into an elementwise fp8 add written to a third
+region of the same device. The figure counts result bytes, one an element;
+the device reads twice that in operands. Nothing crosses the mesh.
 
 | Metric | Value |
 |---|---|
-| RDMA write BW (FP8) | ${ERNIC_P4_BW_DISPLAY:-n/a} |
+| FP8 reduction BW | ${ERNIC_P4_BW_DISPLAY:-n/a} |
 
 \`\`\`
 ${ERNIC_P4_BW_OUTPUT}

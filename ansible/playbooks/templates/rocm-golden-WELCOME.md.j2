@@ -76,6 +76,15 @@ under the same package name.
 To see what is loaded use `nm`, not `strings`:
 `nm $(modinfo -n ionic_rdma) | grep ionic_create_srq`.
 
+`/dev/ernic-p4` exists when the NIC's server grants a P4 guest scope. The
+driver leaves it root-only; this image opens it to the `ernic-p4` group, which
+your account is in, so `p4_fp8_client` and `p4_fp8_bench` run with no sudo.
+Opening it is how the P4 program and its tables are replaced, up to the scope
+the server granted.
+
+    p4_fp8_client /usr/local/share/rocm-ernic/fp8_policy.json
+    p4_fp8_bench "$(ibv_devinfo -l | sed -n 2p | tr -d ' \t')"
+
 The Ethernet sides come up as `rocm-ernic0`, `rocm-ernic1` and so on, and
 `rocm-ernic-netcfg.service` addresses each at boot from its own MAC. Resolve
 the IB device names from `ibv_devinfo -l` instead of assuming them.

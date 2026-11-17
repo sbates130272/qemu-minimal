@@ -586,6 +586,47 @@ elements, or a guest you log in to with your own `~/.ssh/id_rsa`.
 
 ### Fixed
 
+- **The "Ernic P4 FP8 BW" number now measures the P4 FP8 path.** The step
+  had never produced a number: it opened `/dev/ernic-p4`, a root-only node,
+  as the guest user, issued an ioctl the driver does not have, and would
+  then have timed plain `ib_write_bw` against a program whose table was
+  empty. It now runs two programs the golden bake installs.
+  `p4_fp8_client` is rocm-ernic's own guest test, built from the pinned
+  sources, and loads `fp8_policy.json` and installs the entry that turns a
+  two-operand RDMA WRITE into an elementwise fp8 add. `p4_fp8_bench`
+  repeats that work request 2000 times at 262144 elements, the most the
+  device moves in one operation, and checks every result. The badge is fp8
+  result bytes per second in MB/s, one byte an element; the device reads
+  twice that in operands. It is measured on guest 1 alone: the reduction is
+  compute inside one NIC and nothing crosses the mesh, so the old
+  "guest 1 to guest 2" description was wrong as well.
+  - `/dev/ernic-p4` stays mode 0600 and root-owned upstream. The golden
+    image opens it to a new `ernic-p4` group, mode 0660, through
+    `99-ernic-p4.rules`, and adds the baked account, so the benchmark runs
+    with no sudo. A member can do what the fleet's `<p4-guest-scope>`
+    allows, which for `load` is replace the program and write its tables.
+  - The step fails, naming what is missing, on a guest without the module,
+    the node, the client, the program or group access to the node. All of
+    them come from the golden bake, so the lane's P4 step fails until
+    `<backing-ref>` names an image baked from this tree.
+  - `ansible/files/p4/fp8_policy.json` is removed. It was a hand copy of
+    the program; the guest now carries the one from the pinned sources.
+
+- **The SDXI benchmark no longer dies in `awk`.** Its parser used gawk's
+  three-argument `match()` and the job container's awk is mawk, so the step
+  ended in `awk: line 1: syntax error at or near ,`. It is POSIX awk now.
+  With the benchmark requested, an absent `/dev/sdxi0` or output with no
+  MB/s figure above zero fails the step; both used to write an `n/a` badge
+  and exit 0. The P4 step follows the same rule. The copies are now timed
+  for two seconds rather than twenty iterations, which was about 40 ms and
+  swung 30% from run to run.
+  - `qemu/stacks/rocm-golden.xml` changed in a comment only, which still
+    moves its digest: a `rocm-golden` stack rendered before this warns as
+    stale until it is rendered again.
+  - `qemu/checks/rocm-golden.sh` asked for several tools with one
+    `command -v`, which succeeds when any one of them is found. Each is now
+    asserted by itself.
+
 - **A tag moved upstream no longer kills a bake.** The rocm-ernic sources
   come from a clone the collection keeps on the controller and updates with
   `git fetch --tags`; once upstream moved its `nightly` tag, git refused it

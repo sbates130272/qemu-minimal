@@ -1,0 +1,14 @@
+# rocm-ernic P4 control surface.
+#
+# ernic_p4 registers one misc device per emulated NIC -- /dev/ernic-p4 for the
+# first, /dev/ernic-p4.N after it -- mode 0600 and owned by root, because
+# whoever can open it can replace the P4 program and so decide what the NIC
+# does with every frame and every RDMA operation.
+#
+# This image opens it to one group so a P4 test or benchmark needs no sudo.
+# That is a choice for a test image, and it stays this narrow on purpose: a
+# dedicated group, never world access. What a member can do is still bounded
+# by the scope the operator gave the server (--p4-guest-scope).
+#
+# The rocm_ernic_setup role creates the group and adds the guest user.
+SUBSYSTEM=="misc", KERNEL=="ernic-p4*", GROUP="ernic-p4", MODE="0660"

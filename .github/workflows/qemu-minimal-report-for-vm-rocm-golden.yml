@@ -19,7 +19,7 @@ name: qemu-minimal - Report for vm-rocm-golden
 #   artifact           metric            measured on
 #   perf-rocjitsu      GEMM, hipFile     guest 1
 #   perf-hipfile-fio   hipFile fio       guest 2
-#   perf-ernic         Ernic P4 FP8 BW   guest 1 -> guest 2
+#   perf-ernic         Ernic P4 FP8 BW   guest 1
 #   perf-helios        SDXI copy BW      guest 1
 #
 # publish-pages fetches each artifact BY NAME, so all four names must keep
@@ -34,7 +34,6 @@ on:
       - 'qemu/stacks/rocm-golden.xml'
       - 'ansible/playbooks/vm-quickstart.yml'
       - 'ansible/playbooks/roles/**'
-      - 'ansible/files/p4/**'
       - 'ansible/requirements.yml'
       - 'qemu/qemu-tool/**'
       - 'qemu/pyproject.toml'
@@ -202,26 +201,23 @@ jobs:
         }
         guest1=$(addr_of rocm-golden-qemu-1-1)
         guest2=$(addr_of rocm-golden-qemu-2-1)
-        # The inventory gen-compose wrote beside the stack carries each
-        # guest's ernic address and the login the fleet names.
+        # The inventory gen-compose wrote beside the stack carries the login
+        # the fleet names.
         inventory="${STACK_DIR}/fleet-inventory.yml"
-        rdma2=$(awk '$1 == "rocm-golden-2:" {found = 1}
-                     found && $1 == "fleet_guest_ip:" {print $2; exit}' "$inventory")
         # The image is the authority on which account exists in it; quick-start
         # has already pulled vm-info.json as part of the keypair referrer.
         user=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1])).get("username") or "")' \
             "${KEY_DIR}/vm-info.json" 2>/dev/null || true)
         [ -n "$user" ] || user=$(awk '$1 == "ansible_user:" {print $2; exit}' "$inventory")
-        for value in "$guest1" "$guest2" "$rdma2" "$user"; do
+        for value in "$guest1" "$guest2" "$user"; do
           [ -n "$value" ] || {
             echo "::error::could not work out where the guests are" \
-                 "(guest1=${guest1} guest2=${guest2} rdma2=${rdma2} user=${user})"
+                 "(guest1=${guest1} guest2=${guest2} user=${user})"
             exit 1; }
         done
         {
           echo "GUEST1=${guest1}"
           echo "GUEST2=${guest2}"
-          echo "GUEST2_RDMA=${rdma2}"
           echo "GUEST_USER=${user}"
         } | tee -a "$GITHUB_ENV"
 
@@ -321,17 +317,19 @@ jobs:
         path: perf-out/hipfile-fio/badge-*.json
         if-no-files-found: error
 
-    # Guest 2 is the ib_write_bw server and guest 1 the client. The script
-    # needs guest 2 twice over: where to SSH to start the server, and the
-    # ernic address guest 1 dials. They are different networks.
-    - name: Run the P4 FP8 RDMA bandwidth benchmark
+    # One guest and no peer: the reduction is compute inside the NIC, between
+    # three memory regions of the same device. The guest user loads the P4
+    # program and installs the reduce entry with rocm-ernic's own client, then
+    # times two-operand RDMA WRITEs the entry turns into fp8 adds. No sudo:
+    # the golden bake puts the user in the ernic-p4 group, and a guest that
+    # lacks the client, the program or that access fails this step rather
+    # than uploading an n/a badge.
+    - name: Run the P4 FP8 bandwidth benchmark
       id: ernic-p4-bench
       continue-on-error: true
       timeout-minutes: 15
       env:
         REPORT_ERNIC_P4_BENCH: "1"
-        ERNIC_P4_VM2_HOST: ${{ env.GUEST2 }}
-        ERNIC_P4_VM2_RDMA_ADDR: ${{ env.GUEST2_RDMA }}
       run: bash scripts/generate-vm-report.sh perf-out/ernic 2222 "$GUEST_USER" "guest 1" "$GUEST1"
 
     - name: Upload the P4 bandwidth number
