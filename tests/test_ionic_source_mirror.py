@@ -164,11 +164,17 @@ class NoKernelOrgFetch(unittest.TestCase):
     HOST = re.compile(r"(?<![\w.-])((?:[\w-]+\.)*kernel\.org)\b")
     ALLOWED_HOSTS = {"docs.kernel.org"}
     MATCH_SIDE = (DEFAULTS, "rocm_ernic_setup_ionic_upstream: ")
+    # Release notes, not a bake path: scripts/release.sh writes each stanza
+    # from CHANGELOG.md, which is free to say where the sources used to
+    # come from. Without this the v2.0.0 stanza failed the scan.
+    PROSE = {REPO / "qemu" / "debian" / "changelog"}
 
     def _hits(self):
         for root in self.ROOTS:
             for path in sorted((REPO / root).rglob("*")):
                 if not path.is_file() or "__pycache__" in path.parts:
+                    continue
+                if path in self.PROSE:
                     continue
                 try:
                     text = path.read_text()
