@@ -171,8 +171,9 @@ Stage it first, one of:
                   needs a qemu-minimal checkout and says so if it has none)
   on the host, from a qemu-minimal checkout, in ansible/playbooks:
                   ansible-playbook -i HOST, vm-rocm-golden.yml --tags firmware
-  by hand:        copy the output of "rj-ip-discovery gfx1250", from the
-                  same rocjitsu build that serves this guest, to
+  by hand:        in the rocjitsu container serving this guest, run
+                  "rj-ip-discovery gfx1250 FILE" (it writes FILE and
+                  prints nothing to copy), then copy FILE to
                   ${blob}
 EOF
 }

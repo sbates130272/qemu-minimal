@@ -49,7 +49,8 @@ from xml.sax.saxutils import escape
 
 from . import settings
 from .check_system import docker_compose_ok, free_gb, kvm_usable
-from .compose import _apply_identity, interpolation_env, resolve_identity
+from .compose import (_apply_identity, _precreate_data_dirs,
+                      interpolation_env, resolve_identity)
 from .config import VMConfig
 from .fleet_xml import NS_FLEET, FleetConfig, FleetXml
 from .gen_compose import run as gen_compose_run
@@ -78,8 +79,10 @@ _VM_INFO_TYPE = "application/vnd.batesste.vm-info.v1"
 # rocm-golden.xml pinned on 2026-11-17 (20261117.g80c17f8): the manifest is
 # 2.08 GB compressed and the pulled layer unpacked to an 8,422,096,896-byte
 # qcow2 (64 GiB virtual). The tag before it was 2.5 GB and 9.2 GB, so this is
-# a figure to re-read when <backing-ref> moves, not a constant. Then each
-# guest takes an overlay that grows
+# a figure to re-read when <backing-ref> moves, not a constant. Re-read for
+# 20261117.g481c892: a 2,075,684,547-byte layer by its manifest, and a pull
+# unpacked to 8,379,301,888 bytes, which is what its annotation says. Then
+# each guest takes an overlay that grows
 # as it is written and `--nvme 1` adds another file per guest. 30 leaves room
 # for that without being the ~60 this claimed for years -- a figure inherited
 # from a "17 GB compressed, 17 GB decompressed" reading that was about 7x the
@@ -628,8 +631,8 @@ def preflight(state: _State, write_layers: bool = True) -> None:
     print(f"  images      {state.images_dir}  ({_free_gb(state.images_dir):.0f} GB free)")
     print(f"  stack       {state.stack_dir}")
     if state.metrics:
-        print(f"  monitoring  Prometheus :{state.fleet.prom_port}, "
-              f"Grafana :{state.fleet.grafana_port}")
+        print(f"  monitoring  Grafana :{state.fleet.grafana_port}; "
+              f"Prometheus has no host port")
     print(f"  guest image {state.fleet.backing_ref.split(':')[-1]}")
     print()
 
@@ -684,23 +687,27 @@ def _resolve_images_dir(state: _State) -> None:
 
 
 def _resolve_ports(state: _State) -> None:
-    """Move Prometheus, Grafana and the guest SSH ports off anything in use.
+    """Move Grafana and the guest SSH ports off anything in use.
 
-    9090 and 3000 are the two most commonly occupied ports on a developer's
-    machine, and compose does not fail on a clash until `up` -- by which
-    point the guests are already booting.
+    3000 is among the most commonly occupied ports on a developer's machine,
+    and compose does not fail on a clash until `up` -- by which point the
+    guests are already booting.
+
+    Prometheus is not here because the stack publishes no host port for it:
+    it is reached through Grafana, or from inside its own container. Asking
+    about 9090 moved a port nothing listens on and then told the user
+    Prometheus was "published" there.
     """
     # snapshot holds the final value for every monitored port; changed says
     # whether any moved. When one does, the whole snapshot is written, so the
-    # overlay is always complete and a later write (say only Prometheus
-    # remapped) cannot lose a previously remapped Grafana port by rewriting
-    # the file without it.
+    # overlay is always complete and a later write (say only the guest SSH
+    # ports remapped) cannot lose a previously remapped Grafana port by
+    # rewriting the file without it.
     snapshot: dict[str, str] = {}
     changed = False
     wanted = []
     if state.metrics:
-        wanted += [("prom-port", state.fleet.prom_port, "Prometheus"),
-                   ("grafana-port", state.fleet.grafana_port, "Grafana")]
+        wanted += [("grafana-port", state.fleet.grafana_port, "Grafana")]
     for element, port, label in wanted:
         if _port_free(port):
             snapshot[element] = str(port)
@@ -1033,6 +1040,11 @@ def generate_stack(state: _State) -> None:
     # time, so anything decided at run time has to be in front of it here.
     gen_compose_run(state.all_layers, state.stack_dir)
     print(f"wrote {state.stack_dir / 'docker-compose.yml'}")
+    # The data directories exist by now; this is for a mount point INSIDE
+    # one, Grafana's dashboards, which the container runtime would otherwise
+    # create as root in a directory that is ours. Read back from the render,
+    # as `qemu-tool compose up` does, since this path never goes through it.
+    _precreate_data_dirs(state.stack_dir)
 
     # The stack bind-mounts a qemu-tool source tree into its containers and
     # builds the tool inside it. Copied here rather than mounted from the
@@ -1124,7 +1136,6 @@ def up(state: _State) -> None:
                           f"from {base} to {free} in case the Windows proxy holds them")
                 snapshot = {"ssh-port-base": str(free)}
                 if state.metrics:
-                    snapshot["prom-port"] = str(state.fleet.prom_port)
                     snapshot["grafana-port"] = str(state.fleet.grafana_port)
                 _write_layer(state, "overlay-ports.xml", snapshot,
                              "Ports moved off something already listening here.")
@@ -1417,8 +1428,13 @@ def _summary(state: _State) -> None:
     if state.metrics:
         print("  Monitoring (Grafana has anonymous admin on, so no login):")
         print()
-        print(f"      Prometheus   http://{shown}:{state.fleet.prom_port}")
         print(f"      Grafana      http://{shown}:{state.fleet.grafana_port}")
+        print()
+        print("  Prometheus has no host port. Ask it through Grafana's Explore,")
+        print("  or from inside its container:")
+        print()
+        print(f"      docker exec {state.stack_name}-prometheus-1 wget -q -O- \\")
+        print("          'http://127.0.0.1:9090/api/v1/query?query=up'")
         print()
         print("  The ernic dashboard is provisioned from files, under")
         print("  Dashboards in the Grafana sidebar. Its data comes from the")

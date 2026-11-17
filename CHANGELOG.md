@@ -415,10 +415,12 @@ elements, or a guest you log in to with your own `~/.ssh/id_rsa`.
 ### Changed
 
 - **The fleet pulls the guest this repository publishes.** `<backing-ref>` in
-  `rocm-golden.xml`, `helios-tray.xml` and `mi355x-server.xml` is now
+  `rocm-golden.xml`, `helios-tray.xml` and `mi355x-server.xml` became
   `docker.io/sbates130272/qemu-tool-rocm-golden:20261117.g80c17f8`, a dated
   tag of `<publish-ref>`, in place of the batesste-ci-images qcow2
-  `20261112.gdca6903-...-qm.096ddfe`. That older guest had no SDXI driver or
+  `20261112.gdca6903-...-qm.096ddfe`; it has since moved again, to
+  `20261117.g481c892`, which is the next entry, and what follows here is
+  about the first of the two. That older guest had no SDXI driver or
   CLI, no hipFile SDK and no P4 client, so the daily report lane failed all
   four of its benchmark steps against it. The new one was baked from
   `vm-rocm-golden.yml` at `80c17f8`, which installs all of them, one kernel,
@@ -445,16 +447,18 @@ elements, or a guest you log in to with your own `~/.ssh/id_rsa`.
     and no sudo, SDXI copy 2523.0 MB/s. Guests were 8 vCPU, not the lane's
     4, and this host installs a TLS-inspection CA into the guests, which
     the fio step's fetch from GitHub relied on here.
-    *What has not:* no CI lane has yet booted the published artifact.
-    `quickstart-boot` and the daily report lane will be the first.
-    `helios-tray` and `mi355x-server` have not been booted from it at all.
+    *Since, in CI:* `quickstart-boot` passed on the pull request that
+    pinned it, and the daily report lane passed against it on `main`, its
+    first pass on an image published from here; the figures are in the next
+    entry. `helios-tray` and `mi355x-server` have not been booted from it
+    at all.
   - *Known wrong with that image:* `apparmor.service` is failed at boot and
     the system reports `degraded`. snapd is removed without being purged,
     and the profile it leaves in `/etc/apparmor.d` no longer parses.
     Nothing checked for failed units, so it was published. No lane step
     depends on it. The bake is fixed (see Fixed); that image is not, and
-    its guests boot degraded until a newer one is published and
-    `<backing-ref>` moves to it.
+    its guests boot degraded. `20261117.g481c892`, which the fleet files
+    now pull, was baked with the fix.
   - Prometheus's `amd-gpu` and `hsa-snoop` targets were down for golden
     guests: the bake disables both exporters, since neither can run
     against the emulated GPU. Their scrape jobs, forwards and panels are
@@ -466,12 +470,74 @@ elements, or a guest you log in to with your own `~/.ssh/id_rsa`.
     guests should have one renamed Ethernet device and seven under kernel
     names, and nothing replaces the rules there: their `quick-start`
     flavors run no playbook. Read from the rules file, not from a guest.
-    Addresses do not depend on the names. The bake is fixed (see Fixed);
-    those guests get this repository's rules only from a newer image.
+    Addresses do not depend on the names. The bake is fixed (see Fixed),
+    and those guests get this repository's rules from `20261117.g481c892`.
   - *On a host that already ran `quick-start`:* the next run sees that the
     guest disks were made on another image, says which, and stops unless
     you answer yes at a terminal or pass `--clean-overlays`. See the
     `quick-start` entry under Fixed.
+
+- **`<backing-ref>` is `20261117.g481c892` in all three fleet files**, the
+  image the publish workflow baked on `main` at `481c892` and pushed after
+  its guest check and its one-guest gate passed (manifest
+  `sha256:72a0aa0c1ad4...`, 2.08 GB to pull, 8.38 GB unpacked by its
+  annotation). It is the first published image with the bake fixes listed
+  under Fixed: snapd purged so `apparmor.service` starts, this repository's
+  NIC naming rules, the `amdgpu-probe` firmware guard with its `nofirmware`
+  and `unbound` status words, and a record of which `rdma_exporter` is
+  installed. The pins it was baked at are the ones `20261117.g80c17f8` had,
+  so the server images do not move. All three stacks are regenerated.
+  - *Seen, in that publish run:* the purge and the AppArmor restart in the
+    bake; the bake's comparison of the installed naming rules with this
+    repository's; both of the bake's probe assertions; and on the boot with
+    no device, `apparmor: apparmor.service is not failed`, the naming-rules
+    assertions and the probe's refusal against a scratch tree.
+  - *Pulled and booted by hand, on the dev host, in one session:* the two-guest
+    default fleet, `quick-start preflight`, `up`, `test` and `down` from
+    this tree into a scratch directory, guests of 8 vCPU on 32 cores. The
+    pull was the manifest the publish pushed and unpacked to 8,379,301,888
+    bytes. On both guests before any playbook: no failed unit,
+    `systemctl is-system-running` reading `running`, snapd gone and
+    `apparmor.service` active; `amdgpu-probe --status` reading
+    `nofirmware`, the login hint naming the host command at a real login,
+    and `sudo amdgpu-probe` refusing with nothing loaded; the installed
+    naming rules equal to this repository's file and the NIC and the IB
+    device renamed; listeners on 9100 and 9879 only. `quick-start test`
+    passed in 1m38s (ok=65 changed=17 and ok=61 changed=14, where
+    `20261117.g80c17f8` gave 66/21 and 62/18): it left the naming rules
+    and `rdma_exporter` alone, `vector_add` passed on both guests,
+    `ib_send_bw` averaged 515.38 MiB/s, and NVMe write/read was 140/234 and
+    143/215 MiB/s. Prometheus had all five targets up and no `amd-gpu` or
+    `hsa-snoop` job. On guest 1, as the guest user, `p4_fp8_bench` gave
+    208.0 MB/s and a timed SDXI copy 2702.0 MB/s. The recovery from a real
+    failed probe was run both ways on fresh overlays, through `quick-start
+    test` and through `sudo amdgpu-probe` after a blob staged by hand, and
+    bound the GPU each time with no reload.
+  - *Not seen:* any CI lane on the pulled image; `quickstart-boot` and the
+    daily report lane will be the first. `helios-tray` and `mi355x-server`
+    were not booted, so eight renamed NICs in one guest are expected and
+    unobserved, and the lane's GEMM, hipFile and fio steps, `--in-network`
+    and 4 vCPU guests were not run against this image.
+  - *The daily report lane's first pass on a published image*, on `main`
+    against `20261117.g80c17f8`, two guests of 4 vCPU on a 4-core GitHub
+    runner: GEMM 484 kFLOP/s, hipFile 45.5 MB/s, hipFile fio 36.2 MB/s, P4
+    FP8 80.3 MB/s, SDXI copy 737.7 MB/s, and its check that every forwarded
+    exporter is up passed. Not comparable with the dev-host figures above,
+    which were 8 vCPU guests on 32 cores.
+  - *The compiler cache, measured:* the publish bake step took 18m25s with
+    the cache against 25m08s without it the same morning, 1788 of 2053
+    cacheable ccache calls hitting; a pull request's lane run starting from
+    the entry `main` held baked in 13m26s against 30m42s cold, 1818 of 2053
+    hitting.
+  - *A warm bake no longer saves its cache again.* The role's threshold,
+    `bake_ccache_save_misses`, was 100, and every warm bake seen missed
+    235, 241 or 265 calls, so each saved another entry of about 390 MiB;
+    six were stored in two days. It is now 500. A cold bake, or a new
+    compiler in the archive, misses 1833 and still saves; a moved pin still
+    saves through `--cache-replace`, whatever it missed.
+  - *On a host that already ran `quick-start`:* as for the move before it,
+    the next run stops and asks before it replaces the guest disks; pass
+    `--clean-overlays` to say yes unattended.
 
 - **`gen-compose` holds `<backing-ref>` to a rule of its own instead of the
   servers' build stamp.** The guest is published from here under this
@@ -577,14 +643,14 @@ elements, or a guest you log in to with your own `~/.ssh/id_rsa`.
     later run, the amdgpu play going from 7m49s to 2m27s; that later run hit
     1812 of 2053 cacheable ccache calls. A later cold lane run on a slower
     runner took 35m01s. The publish workflow's bake step took 24m33s
-    uncached. The publish workflow has not yet run with the cache, so what
-    it saves there is not measured.
+    uncached. Its first run with the cache is in the `20261117.g481c892`
+    entry above.
   - The cache is named by the flag or the element and by nothing in the
     environment. `gen-vm` creates the directory and passes it to the
     playbook as the extra var `bake_cache_dir`; it refuses `--cache-dir`
     without `--bake`, and a cache when the bake has no playbook.
   - The saved cache is replaced when the entry restored was saved for other
-    pins (`gen-vm --cache-replace`), or when a hundred or more ccache
+    pins (`gen-vm --cache-replace`), or when five hundred or more ccache
     invocations missed; otherwise it is left, since a cache entry cannot be
     overwritten.
   - The publish workflow runs on pushes to `main`, so `main` holds a cache
@@ -674,6 +740,54 @@ elements, or a guest you log in to with your own `~/.ssh/id_rsa`.
 
 - **The `rocm-ernic` smoke-test workflow is `smoke-test-vm-rocm-golden`**,
   file, name and job.
+
+- **A golden bake fetches the ionic kernel sources from a GitHub mirror of
+  the stable tree, and checks what it fetched.** rocm-ernic's
+  `fetch-ionic-sources.sh` defaults to `git.kernel.org`, which a GitHub
+  runner could not connect to twice in two days while GitHub answered in the
+  same job; each time the playbook-test lane lost twelve minutes to connect
+  timeouts and failed. `vm-rocm-golden.yml` now names a mirror,
+  `ionic_kernel_mirror` (`https://github.com/gregkh/linux.git`), and the
+  commit the pinned tag peels to, `ionic_kernel_pin_commit`, beside
+  `ionic_kernel_pin`. Measured from the dev host for the script's own fetch
+  of `v7.2.6`: about 58 s and 292 MB from `git.kernel.org`, which ignores
+  the partial-clone filter, against 12 to 14 s and 15 MB from the mirror.
+  Nothing here has run on a GitHub runner yet, so whether the lane's
+  failure is gone is not known.
+  - All four runs of the script are redirected: the controller-side fetch
+    of `ernic_srq_dkms` and the in-guest fetch of `ernic_p4_dkms` are given
+    the mirror as `--repo` (the second one used the script's default until
+    now), and the in-guest fetch of `ernic_guest_setup`, which takes no
+    repository, runs under a `url.<mirror>.insteadOf` rule in the guest's
+    `/etc/gitconfig`, in the bake and in `--tags configure`. The rule is
+    removed in an `always` section when the role has run, and
+    `qemu/checks/rocm-golden.sh` fails a baked guest that still has any URL
+    rewrite at system scope. Nothing is written to the controller's git
+    configuration.
+  - After each fetch the bake fails unless the tree is patched on top of
+    `ionic_kernel_pin_commit` and its origin resolves to the mirror, with a
+    message naming the commit found, the commit expected and the
+    repository. A mirror whose tag points somewhere else fails the bake.
+    The check runs after the role that fetched, so it does not stop that
+    role building from a wrong tree; it stops the bake.
+  - **Moving `ionic_kernel_pin` now means moving `ionic_kernel_pin_commit`
+    and the tag named in the comment on its line.** The commit is what
+    `git ls-remote <the stable tree> 'refs/tags/<tag>^{}'` prints; without
+    the `^{}` it prints the tag object, which is not it.
+    `tests/test_playbook_pins.py` fails on a comment naming another tag.
+  - The configure play includes `ernic_guest_setup` from a block in its
+    `tasks:` where it was a `roles:` entry, so that the rule can be removed
+    when the role fails. The playbook-test lane runs the guest check's
+    URL-rewrite lines again after that stage.
+  - `Gen Compose Check` installs the rocm-ernic collection, from the entry
+    in `ansible/requirements.yml`, before the unit suite. The tests that
+    compare this change with the collection's fetch script and roles read
+    the installed copy and skipped without it; under `CI=true` they now
+    fail instead.
+  - In a baked image `/var/tmp/ionic-src` and `/usr/src/ionic-ernic-p4`
+    are partial clones of about 18 MB each where they were about 296 MB,
+    going by the same fetches run on the dev host; no image has been baked
+    with this change.
 
 ### Removed
 
@@ -768,10 +882,14 @@ elements, or a guest you log in to with your own `~/.ssh/id_rsa`.
   it also runs on a boot with no NIC, where `rocm-ernic-netcfg.service`
   fails by design.
   - *The published image `20261117.g80c17f8` still has the fault.* Nothing
-    in the tree changes an image already published; a guest pulled from it
-    boots degraded until `<backing-ref>` moves to a newer one.
-  - *Not run:* against a guest or in a bake. The parser error was
-    reproduced on a host of the same release with the same leftover.
+    in the tree changes an image already published, and a guest pulled from
+    it boots degraded. `20261117.g481c892`, which the fleet files now pull,
+    does not have it.
+  - *Run:* in the bake of `20261117.g481c892`, where the purge changed the
+    guest and the restart passed, and on that bake's boot with no device,
+    where the check passed. And on two guests pulled from the registry with
+    their devices attached, by hand: no failed unit, and `systemctl
+    is-system-running` reading `running`.
 
 - **`helios-tray` and `mi355x-server` forward the RDMA exporter's port.**
   `gen-compose` renders an `rdma-exporter` scrape job for every stack, on
@@ -803,9 +921,16 @@ elements, or a guest you log in to with your own `~/.ssh/id_rsa`.
     rules*, and with that image the acceptance check now fails on them and
     on `apparmor.service`, here and where batesste-ci-images runs it. On
     the default fleet `quick-start test` replaces the file, as before.
+    `20261117.g481c892`, which the fleet files now pull, carries this
+    repository's.
   - *A configure run that fails inside the collection's role* does not
     reach the step that puts the rules back. Run it again.
-  - *Not run:* against a guest or in a bake.
+  - *Run:* in the publish run of `20261117.g481c892`: the bake's
+    comparison, the configure stage putting the rules back after the
+    collection's copy, and the check on the booted guest. On two pulled
+    guests the installed file was this repository's byte for byte and
+    `quick-start test` left it alone. Not on a guest with more than one
+    NIC.
 
 - **The golden guest's login hint no longer tells you to probe a GPU that
   has no firmware yet, and `amdgpu-probe` refuses to.** The image carries no
@@ -817,7 +942,8 @@ elements, or a guest you log in to with your own `~/.ssh/id_rsa`.
   - `amdgpu-probe` exits 1 and loads nothing while a GPU is on the bus and
     the blob is not staged, and prints the three ways to stage it: `qemu-tool
     quick-start test` on the host, `ansible-playbook vm-rocm-golden.yml
-    --tags firmware`, or a blob from `rj-ip-discovery gfx1250`.
+    --tags firmware`, or a blob written by `rj-ip-discovery gfx1250 FILE`
+    in the rocjitsu container serving the guest.
   - On a guest already in the failed state it binds the GPU through sysfs
     once the blob is there, without a reload, and says whether it bound; with
     the blob still missing it says so and changes nothing.
@@ -841,9 +967,47 @@ elements, or a guest you log in to with your own `~/.ssh/id_rsa`.
     with-device run of that check now passes
     `ROCM_GOLDEN_EXPECT_PROBE=nofirmware` where it passed `ready`.
 
-  This is in guests baked from here on. The image published as
-  `20261117.g80c17f8` has the old hint; on a guest from it run `qemu-tool
-  quick-start test` on the host before, or instead of, `sudo amdgpu-probe`.
+  This is in `20261117.g481c892`, which the fleet files now pull, and in
+  guests baked since. The image published as `20261117.g80c17f8` has the
+  old hint; on a guest from it run `qemu-tool quick-start test` on the host
+  before, or instead of, `sudo amdgpu-probe`. On pulled guests of the new
+  image the refusal, the hint at a real login and both recoveries from a
+  real failed probe were run by hand and behaved as described.
+
+- **The by-hand way to stage `ip_discovery.bin` names a command that
+  works.** The probe's refusal, the guest's `WELCOME.md` and
+  `/lib/firmware/amdgpu/README` said to copy "the output of
+  `rj-ip-discovery gfx1250`". That command takes an output path and prints
+  nothing to copy; without one it exits 1 on `Required arguments:
+  <generation> <output-path>`. They now say `rj-ip-discovery gfx1250 FILE`,
+  run in the rocjitsu container serving the guest, then copy `FILE`.
+  - *Run:* by hand against the rocjitsu image the fleet files pin; a blob
+    made that way let `sudo amdgpu-probe` bind the GPU on a pulled guest.
+  - *`20261117.g481c892` and every earlier image keep the old sentence*:
+    all three are files the bake installs. The next published image has
+    the new one.
+
+- **`quick-start` no longer says Prometheus is published on a host port.**
+  The generated stacks have given Prometheus no host port since 2026-11-03;
+  only Grafana and guest SSH reach the host. `quick-start` still printed
+  `Prometheus :9090` in its preflight, asked where to move 9090 when it was
+  busy and said "Prometheus will be published on" the answer, wrote
+  `<prom-port>` to its port overlay, and gave `http://localhost:9090` in
+  its summary; the README listed the same URL. Nothing listened there. It
+  now handles Grafana's port and the guest SSH ports only, and the summary
+  and the README give what works: Grafana's Explore, or `docker exec
+  <stack>-prometheus-1 wget -q -O- 'http://127.0.0.1:9090/...'`, which is
+  how the daily lane asks. `<prom-port>` is still accepted in a fleet file
+  and still does nothing.
+
+- **No root-owned directory is left in the Grafana data directory.** The
+  dashboards are mounted at `/var/lib/grafana/dashboards`, inside the
+  `<grafana-data-dir>` mount, and the container runtime created that mount
+  point itself: `<grafana-data-dir>/dashboards`, root-owned, in a directory
+  `quick-start` and `qemu-tool compose up` otherwise create as the caller.
+  Both now create it first.
+  - *Not run:* the unit tests create the directory; no stack has been
+    started since to show Docker leaving it alone.
 
 - **`quick-start` no longer boots old guest disks with a new image's key when
   `<backing-ref>` moves.** It left an existing overlay alone whatever image
@@ -874,7 +1038,9 @@ elements, or a guest you log in to with your own `~/.ssh/id_rsa`.
   tarball it installed in `/usr/local/share/rdma_exporter.sha256` and skips
   both steps when that names the pinned release. The image published as
   `20261117.g80c17f8` has the binary and no record, so a guest made from it
-  is still installed to once.
+  is still installed to once. The bake of `20261117.g481c892` wrote the
+  record, and `quick-start test` against two pulled guests of it skipped
+  the download, the install and the record on both.
 
 - **`quick-start test` keeps its per-guest summaries in the stack
   directory,** `<stack-dir>/artifacts`, instead of

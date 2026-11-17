@@ -332,6 +332,25 @@ jobs:
         echo "$out" | grep -q '^udev: 99-rocm-ernic.rules indexes both devices'
         echo "✓ 99-rocm-ernic.rules is still this repository's"
 
+    # The configure stage also sends any fetch of the ionic kernel sources to
+    # the mirror, with a url.*.insteadOf rule in this guest's /etc/gitconfig
+    # that the play takes out again in an always section. The guest check
+    # asserted no rewrite before that stage, so it has not seen what the
+    # stage leaves. The same lines of it again, "begin: git url rewrites" to
+    # "end: git url rewrites": a rule left behind sends this guest's git
+    # somewhere other than the URL it was given.
+    - name: Verify the configure stage left no git URL rewrite
+      run: |
+        out=$({ echo 'set -eu'
+                sed -n '/^# begin: git url rewrites$/,/^# end: git url rewrites$/p' \
+                  qemu/checks/rocm-golden.sh; } |
+              ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+                -p 2222 ubuntu@qemu-1 "bash -s")
+        echo "$out"
+        # The line the block ends on: markers that moved would send nothing.
+        echo "$out" | grep -q '^git: no URL rewrite at system scope$'
+        echo "✓ no git URL rewrite left in the guest"
+
     # ionic mode builds ionic and ionic_rdma; there is no rocm_ernic module.
     - name: Verify ionic modules loaded and NIC visible
       run: |

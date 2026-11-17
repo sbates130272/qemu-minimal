@@ -1,0 +1,96 @@
+---
+# Run straight after anything that runs rocm-ernic's fetch-ionic-sources.sh,
+# against the tree it left: is that tree the pinned commit, from the mirror?
+#
+# The sources come from a mirror of the stable kernel tree, and a mirror
+# that has diverged serves a tag of the same name. So the commit the pinned
+# tag peels to is written down beside the pin, and a tree patched on top of
+# any other commit fails the bake here, naming both commits and the
+# repository. files/ionic-source-base.sh says how the commit under the
+# patches is found; HEAD is the last patch, not the tag.
+#
+# The caller says where the tree is and which host it is on:
+#
+#   rocm_ernic_setup_ionic_source_dir     the --source-dir the script was given
+#   rocm_ernic_setup_ionic_on_controller  true for a tree the controller fetched
+#
+# and the play supplies rocm_ernic_setup_ionic_ref, _commit and _mirror. A
+# guest's tree is read as root, which is who fetched it. For a guest whose
+# fetch was redirected by ionic_mirror.yml this has to run while the rule
+# is still installed: the origin is compared as git resolves it.
+#
+# It also runs when the script found its sentinel and fetched nothing. That
+# is deliberate: what is compared is the tree the build is about to use.
+
+- name: Assert the ionic source check was told what to expect
+  ansible.builtin.assert:
+    that:
+      - rocm_ernic_setup_ionic_source_dir | trim is match('^/')
+      - rocm_ernic_setup_ionic_ref | trim | length > 0
+      - rocm_ernic_setup_ionic_commit | trim is match('^[0-9a-f]{40}$')
+      - rocm_ernic_setup_ionic_mirror | trim is match('^https://\S+$')
+    fail_msg: >-
+      The ionic source check needs an absolute source directory
+      ("{{ rocm_ernic_setup_ionic_source_dir }}"), a kernel ref
+      ("{{ rocm_ernic_setup_ionic_ref }}"), the 40-character commit that
+      ref peels to ("{{ rocm_ernic_setup_ionic_commit }}") and the mirror
+      ("{{ rocm_ernic_setup_ionic_mirror }}").
+
+- name: Read which commit the guest's ionic sources are patched on
+  when: not (rocm_ernic_setup_ionic_on_controller | bool)
+  ansible.builtin.script:
+    cmd: >-
+      ionic-source-base.sh
+      {{ rocm_ernic_setup_ionic_source_dir | trim | quote }}
+      {{ rocm_ernic_setup_ionic_commit | trim | quote }}
+      {{ rocm_ernic_setup_ionic_ref | trim | quote }}
+      {{ rocm_ernic_setup_ionic_mirror | trim | quote }}
+    executable: /bin/sh
+  become: true
+  register: rocm_ernic_setup_ionic_base_guest
+  changed_when: false
+  failed_when: false
+
+- name: Read which commit the controller's ionic sources are patched on
+  when: rocm_ernic_setup_ionic_on_controller | bool
+  ansible.builtin.command:
+    argv:
+      - sh
+      - "{{ role_path }}/files/ionic-source-base.sh"
+      - "{{ rocm_ernic_setup_ionic_source_dir | trim }}"
+      - "{{ rocm_ernic_setup_ionic_commit | trim }}"
+      - "{{ rocm_ernic_setup_ionic_ref | trim }}"
+      - "{{ rocm_ernic_setup_ionic_mirror | trim }}"
+  delegate_to: localhost
+  become: false
+  register: rocm_ernic_setup_ionic_base_controller
+  changed_when: false
+  failed_when: false
+
+# The script's own line is the message: it names the commit found, the
+# commit expected and the repository.
+- name: Fail when the ionic sources are not the pinned commit
+  vars:
+    rocm_ernic_setup_ionic_base: >-
+      {{ rocm_ernic_setup_ionic_base_controller
+         if rocm_ernic_setup_ionic_on_controller | bool
+         else rocm_ernic_setup_ionic_base_guest }}
+    rocm_ernic_setup_ionic_verdict: >-
+      {{ rocm_ernic_setup_ionic_base.stdout_lines | default([])
+         | map('trim') | select('match', '(ok|FAIL): ') | list }}
+  ansible.builtin.assert:
+    that:
+      - rocm_ernic_setup_ionic_base.rc | default(1) == 0
+      - rocm_ernic_setup_ionic_verdict | length == 1
+      - rocm_ernic_setup_ionic_verdict[0] is match('ok:')
+    fail_msg: >-
+      {{ rocm_ernic_setup_ionic_verdict | join(' ')
+         | default('ionic-source-base.sh printed no verdict: '
+                   ~ (rocm_ernic_setup_ionic_base.stdout | default(''))
+                   ~ (rocm_ernic_setup_ionic_base.stderr | default(''))
+                   ~ (rocm_ernic_setup_ionic_base.msg | default('')), true) }}
+      The pinned ref and its commit move together: ionic_kernel_pin and
+      ionic_kernel_pin_commit in vm-rocm-golden.yml, where the commit is
+      what "git ls-remote {{ rocm_ernic_setup_ionic_upstream }}
+      'refs/tags/{{ rocm_ernic_setup_ionic_ref | trim }}^{}'" prints.
+    success_msg: "{{ rocm_ernic_setup_ionic_verdict | join(' ') }}"

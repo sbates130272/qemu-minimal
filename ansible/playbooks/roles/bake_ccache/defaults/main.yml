@@ -28,20 +28,39 @@ bake_ccache_max_size: 1G
 
 # How many of this bake's ccache invocations have to have missed before the
 # archive on the controller is replaced. Not zero, because a warm bake still
-# misses a little every time: amdgpu's configure runs its feature tests in
-# parallel and builds each test's source from the results that happen to be
-# in so far, so some of those sources differ from run to run. A cache entry
-# on GitHub cannot be overwritten, only added to, and re-saving several
-# hundred MiB for the sake of some throwaway test objects would crowd the
+# misses every time: amdgpu's configure runs its feature tests in parallel
+# and builds each test's source from the results that happen to be in so
+# far, so some of those sources differ from run to run. A cache entry on
+# GitHub cannot be overwritten, only added to, and re-saving several hundred
+# MiB for the sake of some throwaway test objects would crowd the
 # repository's other caches out.
 #
-# A count and not a share of the invocations, because most invocations are
-# not compiles: every kbuild make probes the compiler about 22 times, amdgpu's
-# configure is some 290 makes, and all of those probes hit on a warm cache.
-# Against that denominator a recompile of the whole of amdgpu is under a
-# fifth and a changed ionic or SDXI module a few percent. The figure is a
-# guess; the statistics each bake prints are what to tune it against.
-bake_ccache_save_misses: 100
+# Measured on GitHub's runners, 2026-11-16 and 17. A bake makes 2053
+# cacheable calls. The three warm bakes seen missed 235, 241 and 265 of
+# them, each starting from an entry a cold bake had saved, and a cold bake
+# misses 1833. This was 100 until then, a guess made before any of those
+# runs, and at 100 every warm bake saved again: an entry of about 390 MiB
+# each time, 14 MiB more than the 376 it had restored.
+#
+# 500 is nearly twice the most a warm bake has missed and under a third of
+# a cold one. What it has to catch is a change that no pin records, and the
+# one known is far above it: a new gcc in the archive misses everything a
+# cold bake misses, because compiler_check is "content". A repackaged
+# amdgpu-dkms would recompile the largest of the five builds; how many of
+# the 1833 are amdgpu's has not been counted. What stays below it is the
+# warm figure, with room to wander, three runs being no distribution; and
+# the recompile of one small module, which no count can tell from a warm
+# bake, the 30 between warm bakes being the size of such a module. A moved
+# pin is bake_ccache_replace's to catch, below, not this figure's.
+#
+# Not yet seen: a warm bake that starts from an entry a warm bake saved. If
+# it misses far fewer than 235, the misses above were a cold entry's and
+# not noise; this figure is right either way, since such a bake has nothing
+# worth saving.
+#
+# A count and not a share of the calls: the rule is about how much this
+# bake compiled that the archive did not have.
+bake_ccache_save_misses: 500
 
 # Set by a caller that knows the archive it handed over was saved for other
 # pins: this bake then replaces it whatever it missed. The miss count above

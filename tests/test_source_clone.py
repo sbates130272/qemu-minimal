@@ -81,11 +81,30 @@ class Playbook(unittest.TestCase):
         self.assertEqual(text.count(f"name: {SOURCE}"), found)
 
     def test_the_play_that_reaches_the_role_through_another_is_guarded(self):
-        """ernic_guest_setup's main.yml starts by including ernic_source."""
-        users = [p for p in self.plays if any(
-            (r.get("role") if isinstance(r, dict) else r)
-            == "sbates130272.rocm_ernic.ernic_guest_setup"
-            for r in p.get("roles", []))]
+        """ernic_guest_setup's main.yml starts by including ernic_source.
+
+        The configure play includes ernic_guest_setup from a block in its
+        tasks, so that the block's always section can undo the git rewrite
+        the fetch of the ionic sources runs under. It used to be a "roles:"
+        entry. Either way the play never includes ernic_source itself, so
+        the guard is the first of its pre_tasks, which run before both.
+        """
+        guest_setup = "sbates130272.rocm_ernic.ernic_guest_setup"
+
+        def reaches(play):
+            in_roles = any(
+                (r.get("role") if isinstance(r, dict) else r) == guest_setup
+                for r in play.get("roles", []))
+            return in_roles or any(
+                _includes(t, guest_setup)
+                for t in _flatten(play.get("tasks", [])))
+
+        def direct(play):
+            return any(_includes(t, SOURCE)
+                       for t in _flatten(play.get("tasks", [])))
+
+        users = [p for p in self.plays
+                 if "hosts" in p and reaches(p) and not direct(p)]
         self.assertEqual([p["name"] for p in users],
                          ["Configure the ernic NIC on a live guest"])
         pre = users[0]["pre_tasks"]

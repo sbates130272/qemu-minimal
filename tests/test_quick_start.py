@@ -664,6 +664,78 @@ class LayerTest(unittest.TestCase):
             self.assertEqual([[ENV_FILE, Path(tmp) / "overlay-ports.xml"]], seen)
 
 
+class PrometheusHasNoHostPortTest(unittest.TestCase):
+    """The stack publishes Grafana and nothing else; quick-start says so.
+
+    It used to ask about 9090, write `<prom-port>` and print "Prometheus
+    will be published on 9093", and the summary gave a Prometheus URL. No
+    rendered stack has carried a host port for it since the generator
+    dropped one: on a boot of 20261117.g481c892 `curl localhost:9093` got
+    connection refused while Grafana on its moved port answered 200.
+    """
+
+    def _resolve(self, busy):
+        asked = []
+
+        def ask(_state, question, default):
+            asked.append(question)
+            return default
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = _state(stack_dir=Path(tmp))
+            state.base_layers = [ENV_FILE]
+            qs._rescan_layers(state)
+            out = io.StringIO()
+            with mock.patch.object(qs, "_port_free",
+                                   lambda port: port not in busy), \
+                 mock.patch.object(qs, "_ask", ask), \
+                 mock.patch.object(sys, "stdout", out):
+                qs._resolve_ports(state)
+            overlay = Path(tmp) / "overlay-ports.xml"
+            written = overlay.read_text() if overlay.exists() else None
+        return asked, out.getvalue(), written
+
+    def test_the_default_stack_publishes_grafana_and_not_prometheus(self):
+        body = (REPO_ROOT / "qemu/compose/rocm-golden/docker-compose.yml"
+                ).read_text()
+        services = re.split(r"(?m)^  (?=[a-z][a-z0-9-]*:$)", body)
+        prometheus = next(s for s in services if s.startswith("prometheus:"))
+        grafana = next(s for s in services if s.startswith("grafana:"))
+        self.assertNotIn("ports:", prometheus)
+        self.assertIn("ports:", grafana)
+
+    def test_a_busy_9090_is_nobodys_business(self):
+        asked, said, written = self._resolve({qs.FleetConfig().prom_port})
+        self.assertEqual([], asked)
+        self.assertEqual("", said)
+        self.assertIsNone(written)
+
+    def test_a_busy_grafana_port_is_still_moved(self):
+        asked, said, written = self._resolve({3000})
+        self.assertEqual(1, len(asked), asked)
+        self.assertIn("Grafana wants port 3000", asked[0])
+        self.assertNotIn("Prometheus", said)
+        self.assertIn("<grafana-port>", written)
+        self.assertIn("<ssh-port-base>", written)
+        self.assertNotIn("prom-port", written)
+
+    def test_the_summary_gives_no_prometheus_url(self):
+        state = _state(stack_dir=Path("/tmp/does-not-matter/mystack"))
+        out = io.StringIO()
+        with mock.patch.object(sys, "stdout", out):
+            qs._summary(state)
+        said = out.getvalue()
+        self.assertIn(f"http://localhost:{state.fleet.grafana_port}", said)
+        self.assertNotIn(f":{state.fleet.prom_port}\n", said)
+        self.assertNotIn("Prometheus   http", said)
+        self.assertIn("Prometheus has no host port", said)
+        self.assertIn("docker exec mystack-prometheus-1 wget", said)
+
+    def test_the_readme_gives_no_prometheus_url(self):
+        readme = (REPO_ROOT / "README.md").read_text()
+        self.assertNotIn("localhost:9090", readme)
+
+
 class ComposeEnvTest(unittest.TestCase):
     """quick-start hands docker compose its variables, never a file."""
 

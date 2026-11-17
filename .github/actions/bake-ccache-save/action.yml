@@ -24,8 +24,9 @@ runs:
     # The statistics are the bake's own "ccache --show-stats", with a last
     # line saying how many ccache invocations missed. The role replaces the
     # archive when there was none, when the bake was told the one it was
-    # handed was saved for other pins, or when a hundred or more invocations
-    # missed; otherwise it leaves it, and this run saves nothing. That last
+    # handed was saved for other pins, or when five hundred or more
+    # invocations missed, which a warm bake's 235 to 265 are not; otherwise
+    # it leaves it, and this run saves nothing. That last
     # line is also where a hook that never fired shows: every counter zero is
     # a bake compiled from source with ccache looking on.
     #

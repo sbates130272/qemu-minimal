@@ -61,6 +61,31 @@ rocm_ernic_setup_p4_source_dir: ""
 rocm_ernic_setup_p4_bin_dir: /usr/local/bin
 rocm_ernic_setup_p4_program_dir: /usr/local/share/rocm-ernic
 
+# ── ionic kernel sources ─────────────────────────
+# rocm-ernic's fetch-ionic-sources.sh gets three directories of the stable
+# kernel tree at the pinned ref. This repository has every such fetch come
+# from a mirror, and checks that what came is the commit the pinned tag
+# peels to: ionic_mirror.yml and ionic_mirror_remove.yml redirect the one
+# fetch that takes no repository, ionic_source_check.yml checks a tree.
+#
+# The mirror, the ref and the commit have no default, for the reason
+# rocm_ernic_setup_kernel_ref has none: vm-rocm-golden.yml defines them once
+# beside ionic_kernel_pin, and a copy here would win whenever a caller forgot
+# to pass one. The tasks assert instead.
+rocm_ernic_setup_ionic_mirror: ""
+rocm_ernic_setup_ionic_ref: ""
+rocm_ernic_setup_ionic_commit: ""
+# The script's own default repository, and so the URL the url.*.insteadOf
+# rule has to match: the one place this repository names it, and never as
+# somewhere to fetch from. tests/test_ionic_source_mirror.py compares it with
+# the KERNEL_REPO of the installed collection's script, since a rule that
+# matches another URL redirects nothing and says nothing.
+rocm_ernic_setup_ionic_upstream: https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
+# Per call of ionic_source_check.yml: the tree to check, and whether the
+# controller fetched it rather than the guest.
+rocm_ernic_setup_ionic_source_dir: ""
+rocm_ernic_setup_ionic_on_controller: false
+
 # ── Guest Ethernet ───────────────────────────────
 # The image's netplan is `match: name: "en*"`, and udev's rename leaves
 # enp0s5np0 behind as an altname, which that glob matches -- so networkd

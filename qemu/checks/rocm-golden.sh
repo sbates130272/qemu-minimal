@@ -457,6 +457,37 @@ test ! -e /var/tmp/bake-ccache.tar
 test -z "$(find /usr/local/bin -maxdepth 1 -lname /usr/bin/ccache)"
 test "$(readlink -f "$(command -v gcc)")" != /usr/bin/ccache
 
+# Nor anything of its git redirection.  The bake fetches the ionic kernel
+# sources from a mirror of the stable tree, and for the one fetch that takes
+# no repository it does that with a url.*.insteadOf rule in git's system
+# configuration, taken out again when the play that needed it ends.  A rule
+# left in the image sends a consumer's git somewhere other than the URL they
+# typed, and says nothing.  So: no rewrite of any URL at system scope, for
+# fetch or for push.  git exits 1 when nothing matches, which includes an
+# image with no /etc/gitconfig at all; any other failure is a failure here.
+#
+# The lines between the two markers are run on their own as well: by
+# tests/test_ionic_source_mirror.py against a scratch configuration, and by
+# the playbook-test lane after its configure stage, which installs the rule
+# in the live guest and removes it again.  Keep them free of anything else,
+# and keep the line they end on: the lane looks for it.
+# begin: git url rewrites
+_git_rewrites=$(git config --system --get-regexp \
+    '^url\..*\.(insteadof|pushinsteadof)$') && _git_rc=0 || _git_rc=$?
+if [ "${_git_rc}" -gt 1 ]; then
+    echo "ERROR: git could not read its system configuration" \
+         "(exit ${_git_rc})" >&2
+    exit 1
+fi
+if [ -n "${_git_rewrites}" ]; then
+    echo "ERROR: git's system configuration rewrites URLs; the bake's" \
+         "mirror rule was not removed:" >&2
+    echo "${_git_rewrites}" >&2
+    exit 1
+fi
+echo "git: no URL rewrite at system scope"
+# end: git url rewrites
+
 # Headroom for a kernel tree, rdma-core, the ionic-ernic DKMS build and a
 # consumer's own build tree.
 test "$(df --output=avail -BG / | tail -1 | tr -dc 0-9)" -ge 20

@@ -29,7 +29,8 @@
 # harmless repeat on one that did. One is not a no-op on the published image
 # 20261117.g80c17f8: that bake installed rocm-ernic's own copy of the naming
 # rules, from ernic_source_pin, and the step here replaces it with this
-# repository's. A guest baked from this tree already has this repository's.
+# repository's. The image published after it, 20261117.g481c892, which the
+# fleet files pull, already has this repository's.
 #
 # Everything else here is a test or a fact for the report.
 
@@ -245,7 +246,10 @@
 # binary reinstalled on every guest on every run. The role now records the
 # tarball it installed and skips both when the record names the pinned one.
 # That image carries no record, so each guest made from it is still
-# installed to once; a guest baked from this tree is not.
+# installed to once. The bake of 20261117.g481c892, which the fleet files
+# pull, wrote the record, and its guests are not: on two guests pulled from
+# the registry this play skipped the download, the install and the record,
+# and the binary kept the bake's mtime.
 #
 # Non-fatal: they come from apt and GitHub at run time, and a failure must
 # not stop the tests below.

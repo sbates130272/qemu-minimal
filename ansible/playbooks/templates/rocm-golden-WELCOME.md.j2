@@ -57,8 +57,9 @@ bus.
    - on the host, from `ansible/playbooks` in a qemu-minimal checkout,
      `ansible-playbook -i HOST, vm-rocm-golden.yml --tags firmware`, which
      installs the blob and stops there;
-   - by hand: copy the output of `rj-ip-discovery gfx1250` to
-     `/lib/firmware/amdgpu/ip_discovery.bin`.
+   - by hand: in the rocjitsu container serving this guest, run
+     `rj-ip-discovery gfx1250 FILE`, which writes `FILE`, and copy that
+     file to `/lib/firmware/amdgpu/ip_discovery.bin`.
 
    Everything else, including the generated gap set, is already in
    `{{ golden_firmware_dir }}`; do not overwrite it.

@@ -1,0 +1,26 @@
+---
+# Takes back out what ionic_mirror.yml put in. The caller runs it in the
+# always section of the block that installed the rule, so a run that failed
+# between the two does not leave a guest whose git quietly fetches the
+# kernel from somewhere other than where it was asked to.
+#
+# Never gated, and needs no mirror: every rule rewriting
+# rocm_ernic_setup_ionic_upstream goes, whichever mirror it names, and an
+# /etc/gitconfig left empty goes with it. On a guest with no such rule, or
+# with no git, it changes nothing. qemu/checks/rocm-golden.sh asserts a
+# baked image carries no rewrite at all.
+
+- name: Take the ionic source mirror rewrite out of the guest
+  ansible.builtin.script:
+    cmd: >-
+      ionic-source-mirror.sh remove
+      {{ rocm_ernic_setup_ionic_upstream | trim | quote }}
+    executable: /bin/sh
+  become: true
+  register: rocm_ernic_setup_ionic_mirror_unset
+  changed_when: >-
+    rocm_ernic_setup_ionic_mirror_unset.stdout is search('(?m)^removed: ')
+  failed_when: >-
+    rocm_ernic_setup_ionic_mirror_unset.rc != 0
+    or rocm_ernic_setup_ionic_mirror_unset.stdout
+       is not search('(?m)^(removed|absent): ')

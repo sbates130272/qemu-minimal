@@ -58,6 +58,17 @@ ROLE = ROLES / "bake_ccache"
 WORKFLOWS = REPO / ".github/workflows"
 ACTIONS = REPO / ".github/actions"
 LANE = WORKFLOWS / "qemu-minimal-ansible-playbook-test-vm-rocm-golden.yml"
+
+# What bakes on GitHub's runners reported, 2026-11-16 and 17, as (hits,
+# misses) of the 2053 cacheable ccache calls a bake makes. The warm three
+# each started from an entry a cold bake had saved: a pull request's lane
+# run, the lane warm from main's entry, and the publish workflow.
+WARM_BAKES = ((1812, 241), (1818, 235), (1788, 265))
+# Both halves read from one run's statistics, not one derived from the
+# other: the lane dispatched on main at 80c17f8 (run 44106616336), which
+# found no entry to restore, printed "Hits: 220 / 2053" (219 direct, one
+# preprocessed) and "Misses: 1833 / 2053".
+COLD_BAKE = (220, 1833)
 PUBLISH = WORKFLOWS / "qemu-minimal-publish-qcow-rocm-golden.yml"
 # The one copy of the cache's key, directory, report and save. Both
 # workflows use both.
@@ -576,8 +587,16 @@ class Role(unittest.TestCase):
         self.assertEqual(fetch["when"], "bake_ccache_grew | bool")
 
     def test_a_warm_bake_does_not_save_the_cache_again(self):
-        """A GitHub cache entry is never overwritten, only added to."""
-        self.assertGreater(self.defaults["bake_ccache_save_misses"], 0)
+        """A GitHub cache entry is never overwritten, only added to.
+
+        The threshold sits between what warm bakes have missed and what a
+        cold one does. At 100 it was under all three warm counts, and every
+        warm bake saved an entry of some 390 MiB.
+        """
+        threshold = self.defaults["bake_ccache_save_misses"]
+        for _, misses in WARM_BAKES:
+            self.assertGreater(threshold, misses)
+        self.assertLessEqual(threshold, COLD_BAKE[1])
         self.assertIs(self.defaults["bake_ccache_replace"], False)
         decide = next(
             t for t in _flatten(_tasks("save.yml"))
@@ -586,8 +605,8 @@ class Role(unittest.TestCase):
         self.assertIn("not bake_ccache_saved.stat.exists", rule)
         self.assertIn("bake_ccache_replace | bool", rule)
         self.assertIn("bake_ccache_save_misses", rule)
-        # Not a share of the invocations: kbuild's compiler probes are most
-        # of them and all hit, which hides a recompile of any one module.
+        # A count of what this bake compiled that the archive did not have,
+        # not a share of its invocations.
         self.assertNotIn("bake_ccache_hits", rule)
         for task in _flatten(_tasks("save.yml")):
             if "ansible.builtin.fetch" in task or \
@@ -605,13 +624,24 @@ class Role(unittest.TestCase):
         tasks = [t for t in _flatten(_tasks("save.yml"))
                  if t.get("name") in wanted]
         self.assertEqual([t["name"] for t in tasks], list(wanted))
+        threshold = self.defaults["bake_ccache_save_misses"]
+        total = sum(COLD_BAKE)
         cases = [
             # hits, misses, archive handed over, replace -> saved
             (0, 0, True, False, False),         # the hook never fired
-            (8000, 60, True, False, False),     # warm: configure noise only
-            (8000, 60, True, True, True),       # an ernic or SDXI pin moved
-            (6400, 1500, True, False, True),    # amdgpu recompiled: 19%
-            (0, 8000, False, False, True),      # the first bake
+            # Warm, as measured: configure noise only, and not saved again.
+            *((h, m, True, False, False) for h, m in WARM_BAKES),
+            # The same bake told its archive was saved for other pins.
+            (*WARM_BAKES[1], True, True, True),
+            # Cold counts with an archive handed over: a new gcc in it.
+            (*COLD_BAKE, True, False, True),
+            (*COLD_BAKE, False, False, True),   # the first bake
+            # No archive handed over and misses under the threshold: only
+            # the "nothing was restored" clause can save this one.
+            (*WARM_BAKES[0], False, False, True),
+            # Either side of the threshold.
+            (total - threshold + 1, threshold - 1, True, False, False),
+            (total - threshold, threshold, True, False, True),
         ]
         play = [{
             "hosts": "localhost", "gather_facts": False,
