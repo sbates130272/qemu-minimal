@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **`sbates130272.batesste` is pinned at 3.4.0** (was 3.3.1). It is a
+  provisioning-speed release: `rocm_setup` looks up every version with one
+  `rocm-latest` call, `user_setup` writes its SSH client settings as one
+  block, and `fave_packages` skips the `uv` install instead of failing the
+  play when GitHub rate-limits the version lookup. `user_setup` still
+  removes snapd without purging it, so `vm-basic.yml` keeps its purge.
+  Read from the two release tarballs; the first bake on it is the
+  playbook-test run of the bump.
+
 ## [v2.0.0] - 2026-11-17
 
 Fleet XML is now the only settings format, and the stacks are renamed. Read

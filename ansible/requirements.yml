@@ -29,8 +29,17 @@ collections:
   # into. 3.3.0 also removed ptop from fave_packages. The golden bake has
   # dotfiles off, so its guest gains ~/.bashrc.d/user_setup.sh and a sourcing
   # loop in ~/.bashrc; nothing else in the image changes.
+  #
+  # 3.4.0 is a provisioning-speed release. What reaches a golden bake:
+  # rocm_setup asks rocm-latest for every version in one call instead of
+  # five, user_setup writes its SSH client settings as one block and no
+  # longer fails when a snap data directory cannot be removed, and
+  # fave_packages skips the uv install instead of failing the play when
+  # GitHub rate-limits the version lookup. user_setup still removes snapd
+  # without purging it, so the purge in vm-basic.yml stays. The rdma_setup
+  # default changes do not apply: no playbook here runs that role.
   - name: sbates130272.batesste
-    version: "3.3.1"
+    version: "3.4.0"
   # Pinned to the upstream git tree rather than Galaxy. Galaxy publishes only
   # 0.1.0, which is the pre-ionic collection (driver/ and rdma-core/ deleted
   # upstream on 2026-09-16). ">=0.1.0" looks like it would pick up 0.2.0 and
