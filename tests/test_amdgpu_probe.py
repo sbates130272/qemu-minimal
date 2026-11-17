@@ -241,7 +241,10 @@ class NotLoadedNoBlob(Tree):
         err = self.probe().stderr
         for needle in ("qemu-tool quick-start test",
                        "vm-rocm-golden.yml --tags firmware",
-                       'rj-ip-discovery gfx1250',
+                       # With its output path: the command writes a file
+                       # and, given the generation alone, exits 1 on
+                       # "Required arguments: <generation> <output-path>".
+                       '"rj-ip-discovery gfx1250 FILE"',
                        "/lib/firmware/amdgpu/ip_discovery.bin",
                        "Nothing was changed"):
             self.assertIn(needle, err)
@@ -676,6 +679,20 @@ class Consumers(unittest.TestCase):
         text = WELCOME.read_text()
         for state in STATES:
             self.assertIn(f"`{state}`", text)
+
+    def test_the_by_hand_step_names_an_output_path_everywhere(self):
+        """`rj-ip-discovery gfx1250` has no output to copy; it wants a path.
+
+        Read off the rocjitsu image the fleet pins: the bare form printed
+        its usage and exited 1, `rj-ip-discovery gfx1250 /tmp/x` wrote 848
+        bytes. Three files a guest carries told the reader to copy "the
+        output of" the bare form.
+        """
+        for path in (PROBE, WELCOME, ROLE / "tasks/firmware.yml"):
+            with self.subTest(file=path.name):
+                text = path.read_text()
+                self.assertIn("rj-ip-discovery gfx1250 FILE", text)
+                self.assertNotIn("output of", text)
 
     def test_the_welcome_file_puts_firmware_before_the_probe(self):
         text = WELCOME.read_text()

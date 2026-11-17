@@ -516,6 +516,38 @@ class TestDataDirs(unittest.TestCase):
             compose_mod._precreate_data_dirs(cdir)
         mkdir.assert_not_called()
 
+    def test_a_mount_inside_a_data_dir_gets_its_mount_point(self):
+        """Seen on a quick-start stack: `grafana-data/dashboards`, root:root
+        0755, because the runtime makes a missing mount point itself and the
+        dashboards are mounted inside the Grafana data directory."""
+        with tempfile.TemporaryDirectory() as tmp:
+            data = Path(tmp) / "grafana-data"
+            cdir = self._stack(
+                "./grafana/provisioning:/etc/grafana/provisioning:ro",
+                "./grafana/dashboards:/var/lib/grafana/dashboards:ro",
+                f"{data}:/var/lib/grafana")
+            self.assertEqual(compose_mod._nested_mount_points(cdir),
+                             [data / "dashboards"])
+            compose_mod._precreate_data_dirs(cdir)
+            self.assertTrue((data / "dashboards").is_dir())
+            self.assertEqual((data / "dashboards").stat().st_uid, os.getuid())
+
+    def test_every_shipped_stack_has_that_one_nested_mount(self):
+        for stack in compose_mod._STACKS:
+            with self.subTest(stack=stack):
+                cdir = compose_mod._compose_dir(stack)
+                grafana = dict(compose_mod._data_dirs(cdir))["grafana-data-dir"]
+                self.assertEqual(compose_mod._nested_mount_points(cdir),
+                                 [grafana / "dashboards"])
+
+    def test_quick_start_makes_it_too(self):
+        """quick-start builds its own `docker compose` command and never
+        goes through compose.run, so it has to make the call itself."""
+        source = (REPO_ROOT / "qemu/qemu-tool/quick_start.py").read_text()
+        body = source.split("def generate_stack(", 1)[1].split("\ndef ", 1)[0]
+        self.assertLess(body.index("gen_compose_run("),
+                        body.index("_precreate_data_dirs(state.stack_dir)"))
+
     def test_a_root_owned_data_dir_is_named(self):
         cdir = self._stack("/usr:/prometheus")
         err = io.StringIO()

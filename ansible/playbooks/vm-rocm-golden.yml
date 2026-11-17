@@ -56,8 +56,8 @@
   become: true
   tags: [install]
   vars:
-    # The two ernic pins, written once. Plays cannot share a vars block, so
-    # the other two plays that need them take these through the YAML anchors.
+    # The ernic pins, written once. Plays cannot share a vars block, so the
+    # other plays that need them take these through the YAML anchors.
     #
     # Mainline kernel ref. drivers/infiniband/hw/ionic merged for 6.18 and
     # ib_umem_get_va landed after 7.0, so no Ubuntu release ships a kernel
@@ -65,6 +65,24 @@
     # IONIC_KERNEL_REF in the collection's cmake/ErnicKernelModule.cmake:
     # driver_ionic.yml compares major.minor and fails the build otherwise.
     ionic_kernel_pin: &ionic_kernel_pin v7.2.6
+    # The commit that tag peels to, and the other half of the pin: what
+    #   git ls-remote <the stable tree> 'refs/tags/v7.2.6^{}'
+    # prints. The line WITH ^{}; the one without is the tag object, and no
+    # fetched tree is patched on that. Every fetch of the ionic sources is
+    # checked against it, so a mirror serving anything else under the tag
+    # fails the bake. Moving ionic_kernel_pin means moving this and the tag
+    # in the comment that ends the line: tests/test_playbook_pins.py fails
+    # when the comment names another tag, and the bake fails at its first
+    # fetch when the commit is the old one.
+    ionic_kernel_pin_commit: &ionic_kernel_pin_commit 500df175a7f9e6bc1a9c328590ca5150f84f9ff0  # v7.2.6^{}
+    # Where the ionic sources are fetched from: Greg Kroah-Hartman's GitHub
+    # mirror of the stable tree, not git.kernel.org. GitHub runners could not
+    # reach git.kernel.org twice in two days, while GitHub answered in the
+    # same job; the mirror also honours the script's partial fetch, which
+    # kernel.org ignores. AGENTS.md has the measurements. Passed as --repo
+    # where a role takes one and through a url.*.insteadOf rule in the guest
+    # where the role takes none.
+    ionic_kernel_mirror: &ionic_kernel_mirror https://github.com/gregkh/linux.git
     # Commit ernic_source checks out. The role defaults to "main", which would
     # clone upstream HEAD while requirements.yml installs the collection from
     # a fixed SHA. Keep this equal to the version: field in
@@ -80,6 +98,14 @@
     ernic_ionic_kernel_ref: "{{ ionic_kernel_pin }}"
     rocm_ernic_setup_kernel_ref: "{{ ionic_kernel_pin }}"
     ernic_source_repo_version: "{{ ernic_source_pin }}"
+    # What rocm_ernic_setup's ionic_mirror and ionic_source_check tasks read.
+    rocm_ernic_setup_ionic_ref: "{{ ionic_kernel_pin }}"
+    rocm_ernic_setup_ionic_commit: "{{ ionic_kernel_pin_commit }}"
+    rocm_ernic_setup_ionic_mirror: "{{ ionic_kernel_mirror }}"
+    # Where ernic_guest_setup fetches the ionic sources in the guest. The
+    # role's own default, written here so the check below reads the
+    # directory the role was given. image_slim keeps it in the image.
+    ernic_ionic_source_dir: /var/tmp/ionic-src
   tasks:
     # The pinned mainline kernel and the build toolchain. Upstream assumes a
     # guest already prepared this way; this repo builds its own.
@@ -121,39 +147,67 @@
     # Builds the ionic-ernic DKMS package and the rdma-core provider into the
     # image. The role ends with checks that need the NIC, which is not there
     # during a bake; the rescue tolerates exactly those.
+    #
+    # The role fetches the ionic sources IN THE GUEST, with the script's own
+    # default repository and no variable for another. So a git rewrite sends
+    # that fetch to the mirror for as long as the role runs, the tree it left
+    # is checked against the pinned commit, and the always section takes the
+    # rewrite out again whether or not any of that succeeded: it must not be
+    # in the image.
     - name: Install the ionic modules and rdma-core provider (hardware-free build)
       block:
-        - name: Run ernic_guest_setup without a device
+        - name: Send the guest's fetch of the ionic sources to the mirror
           ansible.builtin.include_role:
-            name: sbates130272.rocm_ernic.ernic_guest_setup
-          vars:
-            ernic_configure_nic: false
-            ernic_guest_preflight_device: false
-      rescue:
-        # Matched by name, and the list grows as upstream adds hardware
-        # checks. Anything else -- a DKMS build error, a staging failure --
-        # is re-raised rather than reported as an installed module.
-        - name: Re-raise an ernic_guest_setup failure that is not a hardware check
-          vars:
-            ernic_hardware_checks:
-              - 'RDMA device exists'
-              - 'lspci reports the emulated NIC'
-          ansible.builtin.fail:
-            msg: >-
-              ernic_guest_setup failed at
-              "{{ ansible_failed_task.name | default('unknown task') }}":
-              {{ ansible_failed_result.msg | default('no message') }}
-          when: >-
-            ernic_hardware_checks
-            | select('in', ansible_failed_task.name | default(''))
-            | list | length == 0
+            name: rocm_ernic_setup
+            tasks_from: ionic_mirror
 
-        - name: Note the expected hardware-free check failure
-          ansible.builtin.debug:
-            msg: >-
-              ernic_guest_setup's device check failed as expected (no ernic
-              NIC during a bake). The DKMS module is installed and binds when
-              the guest boots behind a stack.
+        - name: Run ernic_guest_setup without a device
+          block:
+            - name: Build the ionic modules and the rdma-core provider
+              ansible.builtin.include_role:
+                name: sbates130272.rocm_ernic.ernic_guest_setup
+              vars:
+                ernic_configure_nic: false
+                ernic_guest_preflight_device: false
+          rescue:
+            # Matched by name, and the list grows as upstream adds hardware
+            # checks. Anything else -- a DKMS build error, a staging failure
+            # -- is re-raised rather than reported as an installed module.
+            - name: Re-raise an ernic_guest_setup failure that is not a hardware check
+              vars:
+                ernic_hardware_checks:
+                  - 'RDMA device exists'
+                  - 'lspci reports the emulated NIC'
+              ansible.builtin.fail:
+                msg: >-
+                  ernic_guest_setup failed at
+                  "{{ ansible_failed_task.name | default('unknown task') }}":
+                  {{ ansible_failed_result.msg | default('no message') }}
+              when: >-
+                ernic_hardware_checks
+                | select('in', ansible_failed_task.name | default(''))
+                | list | length == 0
+
+            - name: Note the expected hardware-free check failure
+              ansible.builtin.debug:
+                msg: >-
+                  ernic_guest_setup's device check failed as expected (no
+                  ernic NIC during a bake). The DKMS module is installed and
+                  binds when the guest boots behind a stack.
+
+        # After the rescue, which is where a bake's run of the role ends, and
+        # before the always section: the origin is read as git resolves it.
+        - name: Check the guest's ionic sources are the pinned commit
+          ansible.builtin.include_role:
+            name: rocm_ernic_setup
+            tasks_from: ionic_source_check
+          vars:
+            rocm_ernic_setup_ionic_source_dir: "{{ ernic_ionic_source_dir }}"
+      always:
+        - name: Take the mirror rewrite back out of the guest
+          ansible.builtin.include_role:
+            name: rocm_ernic_setup
+            tasks_from: ionic_mirror_remove
 
 - name: Install ROCm
   hosts: all
@@ -285,11 +339,22 @@
   vars:
     # Defined on the first play of this file.
     ionic_kernel_pin: *ionic_kernel_pin
+    ionic_kernel_pin_commit: *ionic_kernel_pin_commit
+    ionic_kernel_mirror: *ionic_kernel_mirror
     ernic_source_pin: *ernic_source_pin
     ernic_source_repo_version: "{{ ernic_source_pin }}"
+    rocm_ernic_setup_ionic_ref: "{{ ionic_kernel_pin }}"
+    rocm_ernic_setup_ionic_commit: "{{ ionic_kernel_pin_commit }}"
+    rocm_ernic_setup_ionic_mirror: "{{ ionic_kernel_mirror }}"
     ionic_srqp4_stamp: /etc/ionic-srq-p4.json
     ionic_srqp4_stage_dir: /var/tmp/srq-p4
     ionic_srqp4_source_root: /var/tmp/ionic-srq-p4-src
+    # Where ernic_srq_dkms fetches and patches ON THE CONTROLLER, and where
+    # ernic_p4_dkms does IN THE GUEST. Both are the roles' own defaults,
+    # written here so the check after each role reads the tree that role was
+    # told to make.
+    ionic_srqp4_controller_root: /tmp/ionic-srq-src-controller
+    ionic_p4_guest_ionic_dir: /usr/src/ionic-ernic-p4
     ionic_srqp4_patches_dir: /var/tmp/srq-p4-patches
     ionic_srqp4_provider_src: /var/tmp/rdma-core-srq-p4
     ionic_srqp4_provider_prefix: /usr/local
@@ -371,9 +436,22 @@
         ernic_srq_dkms_patches_dir: "{{ ionic_srqp4_patches_dir }}"
         ernic_srq_dkms_stage_dir: "{{ ionic_srqp4_stage_dir }}"
         ernic_srq_dkms_source_root: "{{ ionic_srqp4_source_root }}"
+        ernic_srq_dkms_controller_root: "{{ ionic_srqp4_controller_root }}"
+        # Fetched on the controller, so the mirror is passed and nothing in
+        # the controller's git configuration is touched.
         ernic_srq_dkms_sources:
           - ref: "{{ ionic_kernel_pin }}"
-            repo: https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
+            repo: "{{ ionic_kernel_mirror }}"
+
+    # The role fetches into <controller root>/<ref> and ships the tree to the
+    # guest without its .git, so the controller's copy is the one to read.
+    - name: Check the controller's ionic sources are the pinned commit
+      ansible.builtin.include_role:
+        name: rocm_ernic_setup
+        tasks_from: ionic_source_check
+      vars:
+        rocm_ernic_setup_ionic_source_dir: "{{ ionic_srqp4_controller_root }}/{{ ionic_kernel_pin }}"
+        rocm_ernic_setup_ionic_on_controller: true
 
     # Run depmod before checking modinfo: DKMS install writes the .ko files to
     # updates/dkms/ but does not guarantee modules.dep is current. Without this,
@@ -502,10 +580,22 @@
         ernic_p4_dkms_force_fetch: false
         ernic_p4_dkms_module_dir: "{{ ionic_p4_guest_module_dir }}"
         ernic_p4_dkms_kernel_ref: "{{ ionic_kernel_pin }}"
+        # This role fetches the ionic sources a second time, IN THE GUEST,
+        # whatever ernic_p4_dkms_fetch_on_controller above suggests: it has
+        # no such switch. Left empty, the repository is the script's default.
+        ernic_p4_dkms_kernel_repo: "{{ ionic_kernel_mirror }}"
+        ernic_p4_dkms_source_dir: "{{ ionic_p4_guest_ionic_dir }}"
         ernic_p4_dkms_scripts_dir: "{{ ionic_p4_guest_scripts_dir }}"
         ernic_p4_dkms_patches_dirs:
           - "{{ ionic_p4_guest_patches_root }}/srq"
           - "{{ ionic_p4_guest_patches_root }}/p4"
+
+    - name: Check the ionic sources ernic_p4 was built against are the pinned commit
+      ansible.builtin.include_role:
+        name: rocm_ernic_setup
+        tasks_from: ionic_source_check
+      vars:
+        rocm_ernic_setup_ionic_source_dir: "{{ ionic_p4_guest_ionic_dir }}"
 
     - name: Update modules.dep after ernic_p4.ko installation
       ansible.builtin.command:
@@ -847,12 +937,19 @@
   vars:
     # Defined on the first play of this file.
     ionic_kernel_pin: *ionic_kernel_pin
+    ionic_kernel_pin_commit: *ionic_kernel_pin_commit
+    ionic_kernel_mirror: *ionic_kernel_mirror
     ernic_source_pin: *ernic_source_pin
     ernic_guest_agent: false
     ernic_guest_build_deps: false
     ernic_gpu_passthrough: false
     ernic_ionic_kernel_ref: "{{ ionic_kernel_pin }}"
     ernic_source_repo_version: "{{ ernic_source_pin }}"
+    rocm_ernic_setup_ionic_ref: "{{ ionic_kernel_pin }}"
+    rocm_ernic_setup_ionic_commit: "{{ ionic_kernel_pin_commit }}"
+    rocm_ernic_setup_ionic_mirror: "{{ ionic_kernel_mirror }}"
+    # As on the first play: the role's own default, for the check to read.
+    ernic_ionic_source_dir: /var/tmp/ionic-src
     # The role asserts ernic_guest_vm_ip is non-empty. Upstream derives it per
     # guest from an instance manifest as <subnet>.<10 * id>; there is no
     # manifest here, so do the same arithmetic against an index of 1 and let a
@@ -871,8 +968,37 @@
       ansible.builtin.include_role:
         name: rocm_ernic_setup
         tasks_from: source_clone
-  roles:
-    - role: sbates130272.rocm_ernic.ernic_guest_setup
+  # The role runs fetch-ionic-sources.sh in the guest again. On a guest baked
+  # from this checkout the script finds its sentinel in /var/tmp/ionic-src and
+  # fetches nothing; it does fetch when the series the collection ships is not
+  # the one the image was baked with, when the pin has moved, or when the
+  # image was slimmed of that tree. So the fetch is sent to the mirror here
+  # as it is in the bake, the tree the role built from is checked either way,
+  # and the rewrite is taken out again whatever happened. An included role
+  # and not a "roles:" entry, because only a block has an always section.
+  tasks:
+    - name: Configure the NIC, with any fetch of the ionic sources sent to the mirror
+      block:
+        - name: Send the guest's fetch of the ionic sources to the mirror
+          ansible.builtin.include_role:
+            name: rocm_ernic_setup
+            tasks_from: ionic_mirror
+
+        - name: Build, load and configure the ernic driver
+          ansible.builtin.include_role:
+            name: sbates130272.rocm_ernic.ernic_guest_setup
+
+        - name: Check the guest's ionic sources are the pinned commit
+          ansible.builtin.include_role:
+            name: rocm_ernic_setup
+            tasks_from: ionic_source_check
+          vars:
+            rocm_ernic_setup_ionic_source_dir: "{{ ernic_ionic_source_dir }}"
+      always:
+        - name: Take the mirror rewrite back out of the guest
+          ansible.builtin.include_role:
+            name: rocm_ernic_setup
+            tasks_from: ionic_mirror_remove
   # The role copies rocm-ernic's own 99-rocm-ernic.rules over the image's,
   # unconditionally (driver_common.yml), and its Ethernet rule renames one NIC
   # per guest. On a golden guest that copy renames nothing during the run:
@@ -881,7 +1007,8 @@
   # ACTION=="add" ignore. It is what the next boot would read, though, so
   # this repository's file goes back last. A run that fails inside the role
   # never gets here; run it again, or vm-quickstart.yml, which installs the
-  # same file.
+  # same file. post_tasks, so it still follows the role now that the role is
+  # included from tasks.
   post_tasks:
     - name: Put this repository's ernic naming rules back
       ansible.builtin.include_role:

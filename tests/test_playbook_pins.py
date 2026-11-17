@@ -40,8 +40,9 @@ IMAGE_FILES = sorted(
 
 
 def _pin_in(text: str, name: str, where: object = PLAYBOOK) -> str:
+    # A comment may end the line: ionic_kernel_pin_commit carries one.
     found = re.search(
-        rf"^\s+{name}: &{name} \"?([0-9a-zA-Z.]+)\"?$", text, re.M)
+        rf"^\s+{name}: &{name} \"?([0-9a-zA-Z.]+)\"?(?:\s+#.*)?$", text, re.M)
     if not found:
         raise AssertionError(f"{name} is not defined as an anchor in {where}")
     return found.group(1)
@@ -146,6 +147,96 @@ class Pins(unittest.TestCase):
         served = re.search(r"<rocjitsu-ref>([^<]+)</rocjitsu-ref>", fleet)
         self.assertIsNotNone(served)
         self.assertEqual(default.group(1), served.group(1))
+
+
+class IonicKernelPin(unittest.TestCase):
+    """The kernel tag the ionic sources are fetched at, and its commit.
+
+    The bake fetches those sources from a mirror, ionic_kernel_mirror, and
+    checks every fetched tree against ionic_kernel_pin_commit, the commit
+    the tag in ionic_kernel_pin peels to. The two are one pin in two parts:
+    a tag moved without its commit fails a bake at its first fetch, twenty
+    minutes in. Nothing here can ask a server what a tag peels to, so what
+    is held is everything short of that: the forms, that the three values
+    are each written once and reach the other plays by alias, and that the
+    commit's line names the tag it was read for.
+    """
+
+    NAMES = ("ionic_kernel_pin", "ionic_kernel_pin_commit",
+             "ionic_kernel_mirror")
+
+    def setUp(self):
+        self.text = PLAYBOOK.read_text()
+
+    def _lines(self, name: str) -> list[str]:
+        """What each play's vars give NAME: four spaces in, a play variable.
+        The stamp the bake writes has a key of the same name further in."""
+        return re.findall(rf"^    {name}: (.*)$", self.text, re.M)
+
+    def test_the_pin_is_a_tag_and_its_commit_is_a_commit(self):
+        self.assertRegex(_pin("ionic_kernel_pin"),
+                         r"^v[0-9]+\.[0-9]+(\.[0-9]+)?(-rc[0-9]+)?$")
+        commit = _pin("ionic_kernel_pin_commit")
+        self.assertRegex(
+            commit, r"^[0-9a-f]{40}$",
+            "ionic_kernel_pin_commit is the full id of the commit the tag "
+            "peels to, not a tag and not an abbreviation")
+
+    def test_the_commit_line_names_the_tag_it_was_read_for(self):
+        """Fails when ionic_kernel_pin moves and this line is left alone."""
+        pin = _pin("ionic_kernel_pin")
+        line, = [value for value in self._lines("ionic_kernel_pin_commit")
+                 if value.startswith("&")]
+        found = re.search(r"\s+# (\S+)\^\{\}$", line)
+        self.assertIsNotNone(
+            found, "the line defining ionic_kernel_pin_commit ends with a "
+            "comment naming its tag, as '# <tag>^{}'")
+        self.assertEqual(
+            found.group(1), pin,
+            f"ionic_kernel_pin is {pin}, and ionic_kernel_pin_commit says "
+            f"it is the commit of {found.group(1)}. Move both: the commit is "
+            f"what git ls-remote <the stable tree> 'refs/tags/{pin}^{{}}' "
+            "prints, and the comment names the tag.")
+
+    def test_the_mirror_is_an_https_url_and_not_the_tree_it_mirrors(self):
+        mirror, = [value for value in self._lines("ionic_kernel_mirror")
+                   if value.startswith("&")]
+        url = mirror.split()[1]
+        self.assertRegex(url, r"^https://[\w.-]+/\S+\.git$")
+        self.assertNotIn("kernel.org", url)
+
+    def test_each_is_written_once_and_shared_by_alias(self):
+        """A literal in a second play is a value changed in one play and
+        not another, waiting to happen."""
+        for name in self.NAMES:
+            with self.subTest(name=name):
+                values = self._lines(name)
+                anchors = [v for v in values if v.startswith(f"&{name} ")]
+                self.assertEqual(len(anchors), 1, values)
+                self.assertTrue(values[0].startswith("&"), "defined first")
+                for value in values[1:]:
+                    self.assertEqual(value, f"*{name}")
+                # No play reaches for the value any other way.
+                self.assertEqual(self.text.count(f"&{name} "), 1)
+
+    def test_every_play_holds_the_same_three_or_none(self):
+        import yaml
+        plays = [p for p in yaml.safe_load(self.text) if "hosts" in p]
+        first = plays[0]["vars"]
+        holders = 0
+        for play in plays:
+            given = play.get("vars") or {}
+            held = [name for name in self.NAMES if name in given]
+            if held == ["ionic_kernel_pin"]:
+                # The slim and stamp plays read the tag alone.
+                continue
+            with self.subTest(play=play["name"]):
+                if held:
+                    holders += 1
+                    self.assertEqual(held, list(self.NAMES))
+                for name in held:
+                    self.assertEqual(given[name], first[name])
+        self.assertEqual(holders, 3)
 
 
 class PulledGuest(unittest.TestCase):

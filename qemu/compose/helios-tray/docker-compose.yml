@@ -4,7 +4,7 @@
 # Regenerate after changing qemu/stacks/helios-tray.xml:
 #   qemu-tool gen-compose --xml qemu/stacks/helios-tray.xml
 #
-# xml-sha256: edbff4895e612e495007d43bf60f827949e916fb163d95c829b5e8cb4f83d4bb  # pre-commit: ignore
+# xml-sha256: fdcacce5b4e653081195d40043593cc57240a2b357625fff7149d30162b8f021  # pre-commit: ignore
 
 x-logging: &logging
   driver: json-file

@@ -29,7 +29,7 @@
   <!-- The guest qemu-minimal publishes (rocm-golden.xml says how it is
        baked), pinned by its dated tag: the day and the qemu-minimal commit
        of that publish, not the stamp of the three images above. -->
-  <backing-ref>docker.io/sbates130272/qemu-tool-rocm-golden:20261117.g80c17f8</backing-ref>
+  <backing-ref>docker.io/sbates130272/qemu-tool-rocm-golden:20261117.g481c892</backing-ref>
 
   <!-- ===================================================================
        Per-guest resources

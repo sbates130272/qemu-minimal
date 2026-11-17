@@ -94,6 +94,43 @@ jobs:
             echo "::error::udevadm has no verify subcommand"; exit 1; }
           python3 -c "import yaml, jinja2"
 
+      # tests/test_ionic_source_mirror.py holds the golden bake's fetch of
+      # the ionic kernel sources to the collection it drives: the fetch
+      # script's default repository, which roles run it, the variables they
+      # read, and the script itself run against a local mirror. Those tests
+      # read the INSTALLED collection and skipped without it, and this lane
+      # never installed it, so a requirements.yml bump that renamed any of
+      # them passed here and surfaced in a bake. The same two halves as the
+      # step above: the collection is installed here, and under CI=true the
+      # tests fail where they used to skip. The same file runs the role's
+      # tasks through ansible-playbook, which the runner image ships.
+      #
+      # Only the rocm-ernic entry of ansible/requirements.yml, at the commit
+      # that file pins, so there is no second copy of the pin: one git clone
+      # from GitHub. The other collections come from Galaxy, and nothing in
+      # tests/ reads them.
+      - name: The rocm-ernic collection the mirror tests must not skip for
+        run: |
+          python3 - > "$RUNNER_TEMP/rocm-ernic-collection.yml" <<'PY'
+          import yaml
+
+          wanted = [c for c in
+                    yaml.safe_load(open("ansible/requirements.yml"))["collections"]
+                    if "rocm-ernic" in c["name"]]
+          assert len(wanted) == 1 and wanted[0].get("type") == "git", wanted
+          print(yaml.safe_dump({"collections": wanted}))
+          PY
+          cat "$RUNNER_TEMP/rocm-ernic-collection.yml"
+          for t in ansible-galaxy ansible-playbook git; do
+            command -v "$t" >/dev/null || {
+              echo "::error::$t is unavailable and the mirror tests need it"; exit 1; }
+          done
+          ansible-galaxy collection install --no-deps \
+            -r "$RUNNER_TEMP/rocm-ernic-collection.yml"
+          script="$HOME/.ansible/collections/ansible_collections/sbates130272/rocm_ernic/files/scripts/fetch-ionic-sources.sh"
+          test -f "$script" || {
+            echo "::error::the rocm_ernic collection did not install $script"; exit 1; }
+
       # CI=true is set by GitHub on every runner; the tests key on it to
       # refuse to skip. Set explicitly so the behaviour is visible here and
       # survives a local `act` run.

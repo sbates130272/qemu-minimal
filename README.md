@@ -37,7 +37,7 @@
 [![Libvfio-user](https://img.shields.io/badge/libvfio--user-05bb5e5-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user/tags)
 [![Rocm-ernic](https://img.shields.io/badge/rocm--ernic-90434a2-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-rocm-ernic/tags)
 [![Rocjitsu](https://img.shields.io/badge/rocjitsu-50be05a-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu/tags)
-[![Guest Qcow2](https://img.shields.io/badge/guest-20261117.g80c17f8-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/qemu-tool-rocm-golden/tags)
+[![Guest Qcow2](https://img.shields.io/badge/guest-20261117.g481c892-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/qemu-tool-rocm-golden/tags)
 [![Qemu Fork](https://img.shields.io/badge/sbates--fork-qemu.4cb9698-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork/tags)
 
 <!-- What the rocm-golden guest is baked with: pins in ansible/playbooks/vm-rocm-golden.yml and <bake-release> in qemu/stacks/rocm-golden.xml -->
@@ -151,13 +151,14 @@ and where to watch it:
 
 | Service | Where |
 |---|---|
-| Prometheus | <http://localhost:9090> |
 | Grafana | <http://localhost:3000> — anonymous admin, so no login |
+| Prometheus | no host port: Grafana's Explore, or `docker exec quickstart-prometheus-1 wget -q -O- 'http://127.0.0.1:9090/api/v1/query?query=up'` |
 
 The ernic dashboard is provisioned from files and is under **Dashboards** in
 the Grafana sidebar; its data is the stats dump each `rocm-ernic` writes,
-scraped by the exporter. Both ports move automatically if something on your
-machine already has them. `--no-metrics` leaves the pair out.
+scraped by the exporter. Grafana's port moves automatically if something on
+your machine already has it, and `quick-start` prints the one it chose.
+`--no-metrics` leaves the pair out.
 
 Useful variations — `qemu-tool quick-start <verb>`:
 
@@ -178,8 +179,9 @@ guest's login message says the GPU cannot be probed yet and names the host
 command, and `sudo amdgpu-probe` in the guest refuses rather than load a
 driver whose probe would fail and leave it resident with nothing bound.
 `amdgpu-probe --status` prints which state a guest is in; `~/WELCOME.md` in
-the guest lists them. That behaviour is in guests baked from this tree — a
-published image older than it still tells you to run the probe first.
+the guest lists them. That behaviour is in the image the fleet files pull,
+`20261117.g481c892`, and in any baked since — the one published before it,
+`20261117.g80c17f8`, still tells you to run the probe first.
 
 `qemu-tool quick-start --help` has the rest, and `qemu-tool man` has all of
 it. For more than two guests see [A fleet of your own](#a-fleet-of-your-own),
@@ -670,9 +672,12 @@ linked from objects an earlier run on `main` compiled; ccache reuses an
 object only for the same compiler, flags and source. The playbook takes
 ccache back out of the guest, `qemu/checks/rocm-golden.sh` fails an image
 that still carries it, and the publish workflow runs that check before it
-pushes. On one pull request the lane took 27m27s cold and 17m46s on a later
-run; the publish workflow has not yet run with the cache, so what it saves
-there is not measured.
+pushes. Measured on GitHub's runners, 2026-11-17: the publish workflow's
+bake step took 18m25s with the cache against 25m08s without it that morning,
+and a pull request's lane run starting from the entry `main` held baked in
+13m26s against 30m42s cold. Every warm bake so far has still missed 235 to
+265 of its 2053 cacheable compiler calls, and a bake does not save the cache
+again for that few.
 
 **What the publish workflow pushes, and what it later deletes.** Each publish
 is one manifest under three tags, in this order:

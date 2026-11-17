@@ -1,0 +1,48 @@
+---
+# Run in the guest, before the collection's ernic_guest_setup, inside a
+# block whose always section includes ionic_mirror_remove.yml.
+#
+# That role runs rocm-ernic's fetch-ionic-sources.sh in the guest with no
+# --repo and no variable for one, so the script fetches from its own
+# default, rocm_ernic_setup_ionic_upstream. This writes a url.*.insteadOf
+# rule into git's system configuration that sends that one URL to the
+# mirror. The script's sentinel records the URL it was given, not the one
+# git used, so a tree fetched with the rule is the tree a run without it
+# finds "already there", and the other way about: nothing is fetched twice
+# for the rule's sake.
+#
+# System scope, because the fetch runs as root under become and /etc/gitconfig
+# is read whichever user runs git. files/ionic-source-mirror.sh says what is
+# written. Nothing here is for the controller: a fetch there is given the
+# mirror with --repo.
+
+- name: Assert the ionic source mirror is named
+  ansible.builtin.assert:
+    that:
+      - rocm_ernic_setup_ionic_mirror | trim is match('^https://\S+$')
+      - rocm_ernic_setup_ionic_upstream | trim is match('^https://\S+$')
+    fail_msg: >-
+      rocm_ernic_setup_ionic_mirror is
+      "{{ rocm_ernic_setup_ionic_mirror }}". It has to be the https URL of a
+      mirror of {{ rocm_ernic_setup_ionic_upstream }}; vm-rocm-golden.yml
+      defines one beside ionic_kernel_pin.
+
+- name: Send git fetches of the stable kernel tree to the mirror
+  ansible.builtin.script:
+    cmd: >-
+      ionic-source-mirror.sh install
+      {{ rocm_ernic_setup_ionic_mirror | trim | quote }}
+      {{ rocm_ernic_setup_ionic_upstream | trim | quote }}
+    executable: /bin/sh
+  become: true
+  register: rocm_ernic_setup_ionic_mirror_set
+  changed_when: >-
+    rocm_ernic_setup_ionic_mirror_set.stdout is search('(?m)^installed: ')
+  failed_when: >-
+    rocm_ernic_setup_ionic_mirror_set.rc != 0
+    or rocm_ernic_setup_ionic_mirror_set.stdout
+       is not search('(?m)^(installed|unchanged): ')
+
+- name: Report where the ionic sources will be fetched from
+  ansible.builtin.debug:
+    msg: "{{ rocm_ernic_setup_ionic_mirror_set.stdout | trim }}"

@@ -60,9 +60,11 @@ image_slim_scratch_dirs:
 #
 # /var/tmp/ionic-src is the one that must not go, and the reason this sweep is
 # not a blanket rm. It is the guest-side sparse kernel checkout
-# fetch-ionic-sources.sh makes from git.kernel.org, and driver_ionic.yml re-runs
-# setup-ionic-dkms.sh --source-dir against it unconditionally on every
-# `--tags configure` run -- which is exactly what the two ernic CI lanes do
+# fetch-ionic-sources.sh makes of the stable kernel tree (from the mirror
+# vm-rocm-golden.yml names, checked against the pinned commit), and
+# driver_ionic.yml re-runs setup-ionic-dkms.sh --source-dir against it
+# unconditionally on every `--tags configure` run -- which is exactly what
+# the two ernic CI lanes do
 # against the booted guest after this bake. Delete it and every ernic lane
 # re-clones a kernel from inside the VM. Drop it only for an image whose
 # consumer will never run the configure play; see image_slim_drop_ionic_src.

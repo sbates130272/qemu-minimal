@@ -175,6 +175,12 @@ _DATA_DIR_RE = re.compile(
     r'^\s*-\s+"?(/[^:"]+):(' + "|".join(map(re.escape, _DATA_DIRS)) + r')"?\s*$'
 )
 
+# Any bind mount: host side, container side. Used to find a mount that lands
+# INSIDE one of the data directories above.
+_VOLUME_RE = re.compile(
+    r'^\s*-\s+"?([^:"\s]+):(/[^:"\s]+)(?::[a-z,]+)?"?\s*$'
+)
+
 # Subcommands that actually start containers. `ps`, `logs` and `down` must
 # keep working against a stack whose artifacts are in any state at all --
 # `down` especially, since recovering from a bad run is exactly when the
@@ -437,6 +443,40 @@ def _data_dirs(cdir: Path) -> list[tuple[str, Path]]:
     return list(found.items())
 
 
+def _nested_mount_points(cdir: Path) -> list[Path]:
+    """Host directories the runtime would create inside a data directory.
+
+    Grafana's dashboards are mounted at /var/lib/grafana/dashboards, which is
+    inside the <grafana-data-dir> bind mount. The container runtime makes a
+    missing mount point itself, as root, and through the bind mount that
+    directory appears on the host: `grafana-data/dashboards`, root:root 0755,
+    in a directory this file otherwise promises is the caller's. It stopped
+    nothing, but it is a root-owned path in a stack that needs no root, and
+    one a non-empty copy of would need sudo to remove.
+    """
+    try:
+        lines = (cdir / "docker-compose.yml").read_text().splitlines()
+    except OSError:
+        return []
+    hosts: dict[str, Path] = {}
+    for line in lines:
+        match = _DATA_DIR_RE.match(line)
+        if match:
+            hosts.setdefault(match.group(2), Path(match.group(1)))
+    found: list[Path] = []
+    for line in lines:
+        match = _VOLUME_RE.match(line)
+        if not match:
+            continue
+        inside = match.group(2)
+        for target, host in hosts.items():
+            if inside.startswith(target + "/"):
+                point = host / inside[len(target) + 1:]
+                if point not in found:
+                    found.append(point)
+    return found
+
+
 def _warn_about_root_artifacts(images: str | None, cdir: Path) -> None:
     """Name the files an earlier root-era run left behind, before they bite.
 
@@ -516,6 +556,13 @@ def _precreate_data_dirs(cdir: Path) -> None:
                 f"sudo chown {os.getuid()}:{os.getgid()} {path}",
                 file=sys.stderr,
             )
+    for point in _nested_mount_points(cdir):
+        try:
+            point.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            # The data directory above it has already been reported, or is
+            # someone else's; the runtime then makes this one, as before.
+            pass
 
 
 def run(

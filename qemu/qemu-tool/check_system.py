@@ -290,7 +290,8 @@ def _check_images_dir(fleet: FleetConfig | None) -> list[Result]:
                                           "here"))
     gb = free_gb(path)
     # The published backing qcow2 is ~2 GB compressed and ~8.5 GB unpacked
-    # (20261117.g80c17f8: 8,422,096,896 bytes, 7.8 GiB), plus an overlay per
+    # (20261117.g481c892: 8,379,301,888 bytes, 7.8 GiB, pulled;
+    # 20261117.g80c17f8 unpacked to 8,422,096,896), plus an overlay per
     # guest. 30 is the figure quick-start warns at, not a recommendation.
     out.append(Result("  free space", _OK if gb >= 30 else _WARN,
                       f"{gb:.0f} GiB free",
