@@ -92,6 +92,7 @@ class FleetConfig:
     vm_vmem: int = 0
     shm_size: str = "8g"
     vm_nvme: int = 0
+    vm_nvme_vram: bool = False
     vm_backing_shared: bool = False
     vm_username: str = "ubuntu"
     vm_password: str = ""
@@ -230,6 +231,7 @@ _SETTINGS: tuple[_Setting, ...] = (
     _Setting("vm-vmem", "vm_vmem", _INT),
     _Setting("vm-shm-size", "shm_size", _STR),
     _Setting("vm-nvme", "vm_nvme", _INT),
+    _Setting("vm-nvme-vram", "vm_nvme_vram", _BOOL, sparse=True),
     _Setting("vm-backing-shared", "vm_backing_shared", _BOOL),
     _Setting("vm-username", "vm_username", _STR),
     _Setting("vm-password", "vm_password", _STR),

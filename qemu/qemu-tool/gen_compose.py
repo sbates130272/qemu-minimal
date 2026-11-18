@@ -272,6 +272,56 @@ def _per_vm_flags(cfg: FleetConfig, count: int) -> list[list[tuple[str, str]]]:
     return per_vm
 
 
+# What marks a batesste-ci-images QEMU or NIC server image as the fork's:
+# the repository name ends in it.
+FORK_MARK = "-sbates-fork"
+
+
+def pins_fork_qemu(ref: str) -> bool:
+    """True when an image ref names the fork QEMU, by its repository."""
+    repo = ref.rsplit("@", 1)[0]
+    if ":" in repo.rsplit("/", 1)[-1]:
+        repo = repo.rsplit(":", 1)[0]
+    return repo.endswith(FORK_MARK)
+
+
+def _check_nvme_vram(cfg: FleetConfig) -> None:
+    """<vm-nvme-vram>: each guest's NVMe devices may DMA into its first GPU.
+
+    QEMU's own NVMe reaches a vfio-user GPU's BAR through a 4 KiB bounce
+    buffer unless the device is told which BAR to map (the fork QEMU's
+    vram-dev property). hipFile's direct path measured 11 to 13 MB/s without
+    it; with it, 831 and 959 MB/s on the default stack, one run each
+    (2026-11-18). The bounce buffer as the cause is inferred, not profiled.
+
+    Refused without an NVMe, since there is nothing to point. A QEMU that is
+    not the fork only gets a warning: run-vm asks the binary whether its NVMe
+    has the property and leaves it off when it has not, and a locally built
+    QEMU may have it under any image name.
+    """
+    if not cfg.vm_nvme_vram:
+        return
+    if cfg.vm_nvme <= 0:
+        sys.exit(
+            "Error: <vm-nvme-vram> is true and <vm-nvme> is "
+            f"{cfg.vm_nvme}. It points each guest's emulated NVMe devices at "
+            "the guest's first GPU, so it needs <vm-nvme> of at least 1 "
+            "(null_blk devices, a negative count, cannot take it). Give the "
+            "fleet an NVMe, or set <vm-nvme-vram>false in the layer that "
+            "removes it."
+        )
+    if not pins_fork_qemu(cfg.qemu_ref):
+        print(
+            "Warning: <vm-nvme-vram> is true and <qemu-ref> is "
+            f"{cfg.qemu_ref}, which is not the fork QEMU image.\n"
+            "  Only the fork's NVMe device has the vram-dev property. On a "
+            "QEMU without it run-vm leaves\n"
+            "  the option off and hipFile's direct path runs at its slow "
+            "rate, with no error.",
+            file=sys.stderr,
+        )
+
+
 def _warn_if_gpu_without_root_port(cfg: FleetConfig) -> None:
     """A GPU with no root port cannot bind amdgpu, and says so three layers up.
 
@@ -555,6 +605,7 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
         )
 
     _check_image_coherence(cfg)
+    _check_nvme_vram(cfg)
     _warn_if_gpu_without_root_port(cfg)
 
     prefix = _setting(cfg, "name_prefix")
@@ -686,6 +737,7 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
         "rocjitsu_per_vm": rocjitsu_per_vm,
         "sdxi_per_vm": sdxi_per_vm,
         "switch_width": _switch_width,
+        "nvme_vram": cfg.vm_nvme_vram,
         "ernic_image": cfg.ernic_ref,
         "qemu_image": cfg.qemu_ref,
         "vm_images_dir": _setting(cfg, "vm_images_dir"),
@@ -1217,6 +1269,10 @@ def render_compose(
                 f'          --pci-hole64-size "{spec["pci_hole64_size"]}" \\')
         for flag, value in vm["flags"]:
             out.append(f'          {flag} "{value}" \\')
+        if spec["nvme_vram"]:
+            # run-vm gives each vfio-user device its socket's stem as qdev id.
+            out.append(
+                f'          --nvme-vram-dev "{Path(vm["gpus"][0]["sock"]).stem}" \\')
         # Sockets are passed explicitly rather than globbed: with a fleet's
         # worth of sockets on one shared tmpfs, the single-VM stack's
         # `ls /run/vfu/*.sock` would attach every device to every VM.

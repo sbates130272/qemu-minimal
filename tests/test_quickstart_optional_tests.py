@@ -56,6 +56,10 @@ except ImportError:  # pragma: no cover - depends on the host
 REPO = Path(__file__).resolve().parent.parent
 QUICKSTART = REPO / "ansible/playbooks/vm-quickstart.yml"
 GOLDEN_FLEET = REPO / "qemu/stacks/rocm-golden.xml"
+# The QEMU the shipped fleet files pinned until 2026-11-18, and what a fleet
+# of someone's own may still pin: no P2P DMA between vfio-user devices.
+STOCK_QEMU = ("docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-"
+              "libvfio-user:20261112.gdca6903-qemu11.1.3-vfu.05bb5e5")
 REPORT_SCRIPT = REPO / "scripts/generate-vm-report.sh"
 
 NVME_PLAY = "Test NVMe I/O on each guest"
@@ -241,9 +245,9 @@ class Switches(unittest.TestCase):
         self.assertIsNone(kwargs["rocm_rdma_mode"])
 
     def test_the_rocm_rdma_help_says_which_modes_fail_and_why(self):
-        """The default is the one mode that passes on the shipped stacks,
-        and the two that reach for VRAM say they are expected to fail, where
-        and for what reason (measured, AGENTS.md)."""
+        """The default passes on any QEMU, dmabuf passes on the fork the
+        shipped stacks pin and says where it is expected to fail, and vram
+        says it is expected to fail everywhere (measured, AGENTS.md)."""
         parser = _quick_start_parser()
         by_flag = {a.option_strings[0]: a for a in parser._actions
                    if a.option_strings}
@@ -257,8 +261,9 @@ class Switches(unittest.TestCase):
                 "host-alloc: host memory the GPU can address "
                 "(PERFTEST_ROCM_HOST_ALLOC=1), not VRAM: passes.",
                 "dmabuf: VRAM registered as a dma-buf (--use_rocm_dmabuf): "
-                "expected to FAIL on a stack that pins stock QEMU, which "
-                "the default fleet does.",
+                "passes on the shipped stacks, which pin the fork QEMU. "
+                "Expected to FAIL on a stack whose <qemu-ref> names stock "
+                "QEMU:",
                 "cannot read the GPU's memory",
                 "remote access error",
                 "vram: VRAM registered by address (--use_rocm alone): "
@@ -271,12 +276,20 @@ class Switches(unittest.TestCase):
         test = by_flag["--rocm-rdma-test"].help
         for needle in ("ib_write_bw --use_rocm --data_validation",
                        "host memory the GPU can address",
-                       "the one form that passes on the shipped stacks",
+                       "the form that passes on any QEMU",
                        "Needs two guests", "/etc/perftest-rocm.json",
                        "an image published before the role has none"):
             self.assertIn(needle, test)
-        # The default fleet is the one the help calls stock QEMU.
-        self.assertNotIn("fork", qs.FleetXml.parse(GOLDEN_FLEET).qemu_ref)
+        # No shipped fleet is the stack the help says dmabuf fails on, and
+        # the default mode is still the one that needs no particular QEMU.
+        self.assertNotIn("the one form", test)
+        for fleet in sorted((REPO / "qemu/stacks").glob("*.xml")):
+            if fleet.name == "fleet.xml":
+                continue
+            with self.subTest(fleet=fleet.name):
+                self.assertTrue(
+                    qs._pins_fork_qemu(qs.FleetXml.parse(fleet)),
+                    qs.FleetXml.parse(fleet).qemu_ref)
         with contextlib.redirect_stderr(io.StringIO()) as err, \
              self.assertRaises(SystemExit):
             self._parse("--rocm-rdma-test", "--rocm-rdma-mode", "gpu")
@@ -451,24 +464,88 @@ class Refusals(unittest.TestCase):
             self.assertIn("--rocm-rdma-mode", said)
             self.assertIn("add --rocm-rdma-test", said)
 
+    def _stock_state(self, tmp, **flags):
+        """The default fleet under an overlay that pins stock QEMU."""
+        overlay = Path(tmp) / "stock.xml"
+        overlay.write_text(
+            f'<fleet xmlns="{qs.NS_FLEET}">\n'
+            f"  <qemu-ref>{STOCK_QEMU}</qemu-ref>\n</fleet>\n")
+        layers = [GOLDEN_FLEET, overlay]
+        return overlay, _state(base_layers=layers,
+                               fleet=qs.FleetXml.parse_layers(layers), **flags)
+
     def test_a_mode_that_is_expected_to_fail_is_announced_first(self):
         """Not refused: the owner asked for it. Said on stderr before the
-        boot and the tests in front of it, with the reason."""
-        for mode, needles in (
-                ("dmabuf", ("expected to FAIL on a stack that pins stock QEMU",
-                            "remote access error")),
-                ("vram", ("expected to FAIL on every stack", "(error=14)"))):
-            with self.subTest(mode), \
-                 contextlib.redirect_stderr(io.StringIO()) as err:
-                qs._check_optional_tests(_state(rocm_rdma_test=True,
-                                                rocm_rdma_mode=mode))
+        boot and the tests in front of it, with the reason. vram on any
+        fleet; dmabuf only on one that does not pin the fork QEMU."""
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            qs._check_optional_tests(_state(rocm_rdma_test=True,
+                                            rocm_rdma_mode="vram"))
+        said = err.getvalue()
+        self.assertTrue(said.startswith("note: --rocm-rdma-mode vram: "), said)
+        for needle in ("expected to FAIL on every stack", "(error=14)",
+                       "reported as the known limitation",
+                       "still exits non-zero"):
+            self.assertIn(needle, said)
+        self.assertEqual(said.count("\n"), 1)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            overlay, state = self._stock_state(
+                tmp, rocm_rdma_test=True, rocm_rdma_mode="dmabuf")
+            with contextlib.redirect_stderr(io.StringIO()) as err:
+                qs._check_optional_tests(state)
             said = err.getvalue()
-            self.assertTrue(said.startswith(f"note: --rocm-rdma-mode {mode}: "),
-                            said)
-            for needle in (*needles, "reported as the known limitation",
-                           "still exits non-zero"):
+            self.assertTrue(said.startswith(
+                f"note: --rocm-rdma-mode dmabuf: <qemu-ref> is {STOCK_QEMU} "
+                f"in {overlay}, which is not the fork QEMU"), said)
+            for needle in ("Expected to FAIL", "remote access error",
+                           "reported as the known limitation",
+                           "still exits non-zero",
+                           "Pin the fork <qemu-ref> and <ernic-ref>"):
                 self.assertIn(needle, said)
             self.assertEqual(said.count("\n"), 1)
+            # vram is announced on the stock fleet as on any other, once.
+            state.rocm_rdma_mode = "vram"
+            with contextlib.redirect_stderr(io.StringIO()) as err:
+                qs._check_optional_tests(state)
+            self.assertEqual(err.getvalue().count("note: "), 1)
+
+    def test_dmabuf_on_the_shipped_fleets_is_expected_to_pass(self):
+        """Every shipped fleet pins the fork QEMU, on which the NIC's server
+        reaches the GPU's memory: nothing is announced, and the default mode
+        says nothing on either QEMU."""
+        for fleet in sorted((REPO / "qemu/stacks").glob("*.xml")):
+            if fleet.name == "fleet.xml":
+                continue
+            cfg = qs.FleetXml.parse(fleet)
+            cfg.count = max(cfg.count, 2)
+            with self.subTest(fleet=fleet.name), \
+                 contextlib.redirect_stderr(io.StringIO()) as err:
+                qs._check_optional_tests(_state(
+                    base_layers=[fleet], fleet=cfg, rocm_rdma_test=True,
+                    rocm_rdma_mode="dmabuf"))
+                self.assertEqual(err.getvalue(), "")
+        with tempfile.TemporaryDirectory() as tmp:
+            _, state = self._stock_state(tmp, rocm_rdma_test=True)
+            with contextlib.redirect_stderr(io.StringIO()) as err:
+                qs._check_optional_tests(state)
+            self.assertEqual(err.getvalue(), "")
+
+    def test_the_fork_is_told_by_the_repository_and_nothing_else(self):
+        fork = qs.FleetXml.parse(GOLDEN_FLEET).qemu_ref
+        repo = fork.rsplit(":", 1)[0]
+        for ref, want in ((fork, True),
+                          (repo, True),
+                          (repo + "@sha256:" + "0" * 12, True),
+                          ("localhost:5000/x/qemu-sbates-fork", True),
+                          (STOCK_QEMU, False),
+                          # A tag is not a repository.
+                          (STOCK_QEMU + "-sbates-fork", False),
+                          ("example/qemu-sbates-fork-old:1", False),
+                          ("", False)):
+            with self.subTest(ref=ref):
+                self.assertIs(
+                    qs._pins_fork_qemu(qs.FleetConfig(qemu_ref=ref)), want)
 
     def test_nothing_is_checked_when_nothing_was_asked_for(self):
         bare = qs.FleetConfig(count=2)
@@ -1096,7 +1173,11 @@ class Summary(unittest.TestCase):
     def test_a_failed_playbook_is_explained_when_the_rdma_test_is_why(self):
         """Its play writes its result before it asserts it, so a failed
         playbook with a result that is not a pass failed there."""
-        known = self._failure(self._rdma_file(self.RDMA_KNOWN),
+        # On a fleet that pins stock QEMU the access error is the mode's
+        # known limitation ...
+        stock = qs.FleetXml.parse(GOLDEN_FLEET)
+        stock.qemu_ref = STOCK_QEMU
+        known = self._failure(self._rdma_file(self.RDMA_KNOWN), fleet=stock,
                               rocm_rdma_test=True, rocm_rdma_mode="dmabuf")
         self.assertIn("--rocm-rdma-test in mode dmabuf ended in the known "
                       "limitation of that mode, not in a broken test "
@@ -1104,6 +1185,23 @@ class Summary(unittest.TestCase):
                       "registers", known)
         self.assertIn("It said: Failed status-remote access error (10): "
                       "wr_id 0 syndrom 0x9.", known)
+        # ... and on the shipped fleet, which pins the fork, it is a
+        # failure, and is not called anything else.
+        broken = self._failure(self._rdma_file(self.RDMA_KNOWN),
+                               rocm_rdma_test=True, rocm_rdma_mode="dmabuf")
+        self.assertIn("--rocm-rdma-test in mode dmabuf FAILED with the "
+                      "access error that is the known limitation of stock "
+                      "QEMU, and <qemu-ref> here is the fork (", broken)
+        self.assertIn("-sbates-fork:", broken)
+        self.assertIn("a failure and not the limitation (rocm-golden-1 -> "
+                      "rocm-golden-2): the buffer registers", broken)
+        self.assertNotIn("not in a broken test", broken)
+        # vram's limitation is every QEMU's.
+        vram = self._failure(
+            self._rdma_file(self.RDMA_KNOWN.replace("dmabuf", "vram")),
+            rocm_rdma_test=True, rocm_rdma_mode="vram")
+        self.assertIn("in mode vram ended in the known limitation of that "
+                      "mode, not in a broken test", vram)
         self.assertIn("rocm-rdma.md", known)
         for verdict, what in (("fail", "failed"),
                               ("no verdict", "produced no verdict"),
@@ -1144,7 +1242,12 @@ class Summary(unittest.TestCase):
                      self.assertRaises(SystemExit) as caught:
                     qs.configure_and_test(state)
                 return str(caught.exception)
+        stock = qs.FleetXml.parse(GOLDEN_FLEET)
+        stock.qemu_ref = STOCK_QEMU
         self.assertIn("the known limitation of that mode",
+                      run(self._rdma_file(self.RDMA_KNOWN), fleet=stock,
+                          rocm_rdma_test=True, rocm_rdma_mode="dmabuf"))
+        self.assertIn("a failure and not the limitation",
                       run(self._rdma_file(self.RDMA_KNOWN),
                           rocm_rdma_test=True, rocm_rdma_mode="dmabuf"))
         # Without the switch, and with it when the test itself passed.
@@ -1518,7 +1621,9 @@ class Docs(unittest.TestCase):
                     self.assertIn(needle, text)
         for needle in ("qemu-tool quick-start test --rocm-rdma-test",
                        "`--rocm-rdma-mode dmabuf`", "`--rocm-rdma-mode vram`",
-                       "the one form that passes on the shipped stacks",
+                       "the form that passes on any QEMU",
+                       "The fork QEMU every shipped stack pins",
+                       "on a stack whose `<qemu-ref>` names it",
                        "which the image the fleet files pull does not",
                        "ib_write_bw with ROCm buffers (host-alloc)",
                        # Do we do that already: a play, and no switch.
@@ -1526,8 +1631,15 @@ class Docs(unittest.TestCase):
                        "quickstart_rocm_rdma=true` reached"):
             self.assertIn(needle, section)
         for needle in ("stock QEMU", "/etc/perftest-rocm.json",
-                       "Expected to fail", "Refused without"):
+                       "Expected to fail", "Refused without",
+                       "which pin the fork QEMU", "<qemu-ref>"):
             self.assertIn(needle, pages["man"])
+        # dmabuf was "expected to fail on the default fleet" until the
+        # shipped fleets moved to the fork QEMU.
+        for name, text in pages.items():
+            with self.subTest(page=name):
+                self.assertNotIn("which the default fleet does", text)
+                self.assertNotIn("has not been tried", text)
         # Everything after v2.0.0, as the entry is under a version's heading
         # once scripts/release.sh has retitled [Unreleased].
         changelog = (REPO / "CHANGELOG.md").read_text()

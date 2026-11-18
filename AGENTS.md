@@ -247,7 +247,9 @@ or GPU-only guest is not expressible; `<sdxi-per-vm>0`, `<p4-enable>false`,
    `<vm-extra-hostfwd>` rules the home dashboard needs (node-exporter on
    9100, rdma-exporter on 9879; see "Guest exporters" below), TAP on, and
    `<prom-data-dir>`/`<grafana-data-dir>` deliberately unset so `quick-start`
-   puts them beside the stack with no root and no chown.
+   puts them beside the stack with no root and no chown. And
+   `<vm-nvme-vram>true`, which is what the two hipFile metrics of the daily
+   lane measure from the first run after it is on main.
 3. **The template** for a fleet of your own: copy it, or layer an overlay on
    it. It replaced `fleet-example.xml`.
 4. **The bake and publish settings of the rocm-golden image**, in its
@@ -338,6 +340,110 @@ therefore two edits, the pin and the `<sdxi-image>` in `rocm-golden.xml` and
 `helios-tray.xml`, and needs a published server image built from that commit;
 it does not need the rest of the fleet to move stamps. `gen-compose` still
 refuses a non-zero `<sdxi-per-vm>` with an empty `<sdxi-image>`.
+
+**QEMU and the ernic server are the fork pair, in every stack and every
+workflow, since 2026-11-18.** All three fleet files pin
+`...-qemu-libvfio-user-sbates-fork:20261112.gdca6903-qemu.4cb9698-vfu.3719c3a`
+and `...-rocm-ernic-sbates-fork:20261112.gdca6903-ernic.90434a2-vfu.3719c3a`;
+until then only `mi355x-server.xml` did, and `rocm-golden.xml` and
+`helios-tray.xml` pinned the stock pair (`qemu11.1.3`, `vfu.05bb5e5`). The
+fork QEMU hands each vfio-user server the other devices' memory, which is
+what lets the emulated NIC read and write GPU memory; known issue 15 has the
+mechanism and "perftest with ROCm memory support" what was measured on each.
+The owner's decision, and what follows from it:
+
+- **The two move together.** They are built against one libvfio-user, the
+  `vfu.<sha>` both tags end in, and `_check_image_coherence` refuses a QEMU
+  and an ernic whose `vfu` differ. The ernic server is the same rocm-ernic
+  commit as the stock one, so `ernic_source_pin` did not move.
+- **The workflows moved too**: `QEMU_IMAGE` and `ERNIC_IMAGE` in the three
+  that set them, and the job container of the nine whose jobs run inside the
+  QEMU image, where `gen-vm` bakes and `run-vm` boots on the container's
+  `qemu-system-x86_64`. So the published guest is baked and qualified on the
+  fork QEMU, and the daily benchmarks, which run `rocm-golden.xml`
+  unmodified, are measured on it.
+- **The two QEMU images were compared before the containers moved**, by
+  `docker run --rm` of each: the same 263 packages at the same versions, the
+  same files under `/opt/qemu`, `/usr/local`, `/build` and the pipx venvs,
+  the same tools (`qemu-img`, `python3` 3.12.3, `pipx`, ansible-core 2.21.4,
+  `oras` 1.3.4, `zstd`, docker CLI 29.9.3, `ssh`, `git`, `cloud-localds`),
+  the same entrypoint and environment, and both report QEMU 11.1.3. Two
+  differences: the fork's `--version` has no `(v11.1.3)` suffix, and it has
+  the `pci-mmio-bridge` device. Neither image has `uv`, `sudo`, `ip` or
+  `lspci`, as before.
+- **Nothing committed may name the stock pair.**
+  `tests/test_image_tag_consistency.py` (`ForkImages`) and the `Image Tag
+  Consistency` workflow fail on a stock QEMU or ernic ref in a fleet file, a
+  generated stack, a workflow (job containers included) or an action, and
+  on fleet files that disagree on the pair. The workflow used to count the
+  fork's stamps apart from the others'; it is one count now, since
+  `gen-compose` already holds a fleet's QEMU, ernic and rocjitsu to one.
+- **A fleet of your own may still pin stock**, and nothing refuses it.
+  What it loses is one vfio-user device reaching another's memory:
+  `quick-start --rocm-rdma-mode dmabuf` says so before it starts
+  (`quick_start._pins_fork_qemu`, by the repository name ending
+  `-sbates-fork`).
+- **The move itself added no element to `rocm-golden.xml`.** Its one
+  256 GiB GPU BAR a guest fits the machine's default 64-bit PCI hole: the
+  default stack booted, bound amdgpu and passed `quick-start test` on both
+  QEMUs with no `<vm-pci-hole64-size>` and no `<vm-cpu-phys-bits>`.
+  `helios-tray.xml` and `mi355x-server.xml` set both for four and eight
+  GPUs, as they did. The one element the file has gained since is
+  `<vm-nvme-vram>`, which needs the fork; next paragraph.
+- **Not run:** no CI lane has run on the fork images, as a job container or
+  as a stack. The two-guest default stack on the fork was booted by hand on
+  the dev host (below); `helios-tray` and `mi355x-server` were not booted.
+
+**`<vm-nvme-vram>` points a guest's emulated NVMe at its first GPU's BAR,
+and only `rocm-golden.xml` sets it.** A sparse boolean, default false
+(`vm_nvme_vram`, one row of `_SETTINGS`). It is what makes hipFile's direct
+NVMe-to-VRAM path fast; known issue 15 has the figures.
+
+- **What it renders.** Each `qemu-N` service's `run-vm` gains
+  `--nvme-vram-dev "<stem>"`, the file name of that guest's first rocjitsu
+  socket without `.sock`: `rocjitsu-1` for guest 1 of the default stack,
+  `rocjitsu-2` for guest 2. That is the qdev id `run-vm` gives the
+  vfio-user device, and `run_vm._nvme_args` turns it into
+  `vram-dev=<id>,vram-bar=0` on every `-device nvme`. Nothing renders
+  `--nvme-vram-bar`; BAR 0 is `run-vm`'s default and is the VRAM aperture.
+  The render's spec carries it as `nvme_vram`.
+- **The refusal.** `gen_compose._check_nvme_vram` exits when the element is
+  true and `<vm-nvme>` is 0 or negative: there is no NVMe to point, and the
+  null_blk devices a negative count means cannot take it. Since
+  `rocm-golden.xml` sets the element, an overlay on it that removes the
+  NVMe (`<vm-nvme>0`) is refused where it rendered before; the message
+  says to set `<vm-nvme-vram>false` in that layer. No committed overlay
+  and no workflow's inline one does that.
+- **The warning, and why it is not a refusal.** A `<qemu-ref>` whose
+  repository does not end `-sbates-fork` (`gen_compose.pins_fork_qemu`,
+  the one spelling of that rule; `quick_start._pins_fork_qemu` calls it)
+  gets a warning on stderr and the
+  render goes ahead. Only the fork's NVMe has the property, but a locally
+  built QEMU may have it under any image name, and `run-vm` asks the binary
+  (`caps.has_vram_dev`) and leaves the option off, silently, when it has
+  not. So on a stock QEMU the element costs nothing and gains nothing:
+  hipFile's direct path runs at its slow rate with no error.
+- **Why the other two fleets do not set it.** `helios-tray.xml` and
+  `mi355x-server.xml` put the GPU below a PCIe switch, and the element has
+  not been run there, nor with more than one NVMe a guest. Setting it in
+  either is one line and a regeneration, after a boot that shows it works.
+- **A `run-vm` outside a stack does not get it from a fleet file.**
+  `settings.vm_overrides` does not map the element: the value `run-vm`
+  needs is a device id, which only the generator knows, since it names the
+  sockets. Pass `--nvme-vram-dev ID` by hand there.
+- **Adding it changed the digest of `qemu/compose/rocm-golden`**, like any
+  edit to the file, and the two `qemu-N` commands; the stack was
+  regenerated. `TestNVMeVram` in `tests/test_gen_compose.py` holds the
+  render, the refusal, the warning and the committed stack's two
+  occurrences, and with two GPUs a guest, on root ports and below a
+  switch, that the id is the first GPU's and the one `run-vm` gives it.
+- **The CI lanes that boot a single guest inherit it**, since their inline
+  overlays set `<vm-count>1` on `rocm-golden.xml` and leave `<vm-nvme>`
+  alone. None has run with it.
+- **Measured on one boot of the default stack**, 2026-11-18, by hand: the
+  option on both QEMU command lines, `quick-start test` passing, and the
+  two hipFile benches at 831 and 959 MB/s (issue 15). Not run: guests at
+  4 vCPU, the daily lane, and either other fleet with or without it.
 
 **`<backing-ref>` is the guest this repo publishes, and it is not on the
 servers' stamp.** All three fleet files name
@@ -696,7 +802,8 @@ the same on this image: kernel and the one kernel image, `/dev/ernic-p4`,
 
 The installed `amdgpu-probe` was the role's file as of `481c892`, by
 sha256. The role's copy has since changed by one sentence, the
-`rj-ip-discovery` step below, so the two no longer compare equal.
+`rj-ip-discovery` step below, and by one comment (the BAR window is
+256 GiB, not 256 MiB), so the two no longer compare equal.
 
 `quick-start test`, exit 0, 1 m 38.1 s: `rocm-golden-1` ok=65 changed=17
 failed=0, `rocm-golden-2` ok=61 changed=14 failed=0, against 66/21 and
@@ -874,8 +981,10 @@ and the report carry their results; the GPU-memory RDMA play stays last.
   then had it failed on every stack this repository ships. It is perftest
   with ROCm buffers and `--data_validation` from the first guest to the
   last, `--rocm-rdma-mode {host-alloc,dmabuf,vram}` says where the buffers
-  are, and the default, `host-alloc`, is the one mode that passes on those
-  stacks. Three ways it differs from the two above. Its play is still the
+  are, and the default, `host-alloc`, passes on any QEMU; `dmabuf` passes
+  on the fork QEMU the shipped stacks now pin, and has passed there
+  through the switch. Three ways it differs from the two above. Its play
+  is still the
   last, after the facts play, so it writes a file of its own,
   `<artifacts>/rocm-rdma.md`, before it asserts anything, and `quick-start`
   reads that (`_rocm_rdma_recorded`) on a pass and on a failed playbook
@@ -1086,7 +1195,7 @@ this version does not recognise as a rendered stack at all — `qemu-tool down`
 will not identify it and `cd <dir> && qemu-tool compose` falls through to the
 committed default stack. Write the overlay's values into a local file (it set
 `<vm-count>32`, `<vm-name-prefix>`, `<vm-images-dir>`, the fork
-`<qemu-ref>`/`<ernic-ref>` that `mi355x-server.xml` now pins, one
+`<qemu-ref>`/`<ernic-ref>` that every shipped fleet file now pins, one
 node-exporter `<vm-extra-hostfwd>`, `<prom-data-dir>`, `<qemu-tool-src>` and
 `<logs-enable>false`; `git show <old commit>:qemu/xml/overlay-mi100.xml` has
 the text), layer it on `rocm-golden.xml` with `<sdxi-per-vm>0` and
@@ -1236,7 +1345,7 @@ requirements; there is a test pinning that too, so nobody "fixes" it.
 
 ```
 GPU:       gfx1250 (emulated, rocjitsu-1.sock)
-             BAR0 256 MiB (64-bit prefetchable)
+             BAR0 256 GiB (64-bit prefetchable)
              BAR2 2 MiB (64-bit prefetchable)
 GPU:       gfx908 (passthrough, 63:00.0)
              BAR0 32 GiB (64-bit prefetchable)
@@ -1273,11 +1382,19 @@ doorbell_aperture_bytes: uint64 = 2097152;
 register_aperture_bytes: uint64 = 524288;
 ```
 
-`gfx1250_mi455x.json` ships `vram_aperture_bytes: 268435456` — 256 MiB, already
-the small-BAR ceiling. That 2 MiB doorbell BAR is the "2 MiB second BAR not
-mapped at all" of `.artifacts/vfio-user-p2p-dma.md`. Set the field to the
-largest power of two **≤ `local_mem_size`**; for that config
-(`local_mem_size: 463856467968`, ~432 GiB) it is **256 GiB = 274877906944**.
+**The pinned rocjitsu image already serves the large BAR.** Read out of
+`...-rocm-rocjitsu:20261112.gdca6903-rocjitsu.50be05a` on 2026-11-18:
+`gfx1250_mi455x.json`, in `configs/` beside the schema, has
+`vram_aperture_bytes: 274877906944`, 256 GiB, and `local_mem_size:
+463856467968`. A guest of the default stack sees BAR0 as 256 GiB, and on
+the fork QEMU the NIC's server maps it as one 262144 MiB
+`/memfd:rocjitsu-vram` region. This section used to say the config shipped
+`268435456`, 256 MiB, the small-BAR ceiling; that was an older image, and
+the example above showed that BAR. The 2 MiB doorbell BAR is the "2 MiB
+second BAR not mapped at all" of `.artifacts/vfio-user-p2p-dma.md`. For a
+config of your own, set the field to the largest power of two **≤
+`local_mem_size`**; for that `local_mem_size` (~432 GiB) it is **256 GiB**,
+which is what ships.
 
 Measured against the real binary rather than inferred, by serving each value
 on a vfio-user socket:
@@ -1290,10 +1407,16 @@ on a vfio-user socket:
 | 300 GiB | `warn: the video memory aperture is ... not a power of two` |
 
 Both are warnings, not refusals — it still serves — so a wrong value here is
-the quiet kind. Two things have to travel with a large BAR: `<vm-pci-hole64-size>`
-must cover it (`512G` is the phys-bits ceiling, see the MI355X README), and
-vfio-user P2P DMA needs the fork QEMU image (issue 19) — `qemu/stacks/mi355x-server.xml`
-pins it and sets the hole size, `qemu/stacks/rocm-golden.xml` does neither.
+the quiet kind. Two things have to travel with large BARs. The 64-bit PCI
+hole must cover them: one 256 GiB BAR a guest fits the machine default, which
+is how `rocm-golden.xml` runs; `helios-tray.xml` and `mi355x-server.xml`, with
+four and eight, set `<vm-pci-hole64-size>` and `<vm-cpu-phys-bits>` (`512G` is
+the ceiling at the default phys-bits, see the MI355X README). And vfio-user
+P2P DMA needs the fork QEMU image (issue 15), which all three fleet files pin.
+
+The emulated NVMe reaching that BAR is a separate switch: `<vm-nvme-vram>`
+in a fleet file, `--nvme-vram-dev` on `run-vm`, fork QEMU only. "The
+stacks" describes the element and issue 15 what it measured.
 
 ## Tearing a stack down
 
@@ -1761,9 +1884,10 @@ and P4 fetches still run the script from the checkout, the older one.
 between the two commits.** The split holds only while the newer roles still
 drive the older scripts and series the way those expect. Moving
 `ernic_source_pin` is the bigger change: it needs server images at that
-commit (stock and fork), the three `<ernic-ref>`s and the `ERNIC_IMAGE`
-lines, and a live boot. **This host is the one place the rename can pass by
-accident**: a role still named the old way resolves here for as long as the
+commit (the fork one, which is what every fleet and workflow now names),
+the three `<ernic-ref>`s and the `ERNIC_IMAGE` lines, and a live boot.
+**This host is the one place the rename can pass by accident**: a role
+still named the old way resolves here for as long as the
 old collection is installed, to the old roles, with no error.
 `CollectionName` in `tests/test_playbook_pins.py` fails any tracked file but
 `CHANGELOG.md` and `qemu/debian/changelog` that carries the old name.
@@ -2665,15 +2789,19 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     irrelevant, because the resolver never consulted the id. Serialising
     worker startup costs about 56 s of boot at 32 nodes and fixes nothing.
 
-15. **vfio-user P2P DMA needs a QEMU patch the stock image does not carry.**
+15. **vfio-user P2P DMA needs a QEMU patch the stock image does not carry,
+    and every shipped stack now pins the fork that has it.**
     Anything that has one vfio-user device DMA into another's BAR — a peer
     reading GPU memory over the ernic, most obviously — does not work on
-    the stock QEMU this repo pins, and does not complain: the BAR window is
+    the stock QEMU image, and does not complain: the BAR window is
     simply never advertised to peer servers.
 
-    The fix is `31e3d06a` on `sbates130272/qemu`, branch
+    The fix is `a2ee87e` on `sbates130272/qemu`, branch
     `dev/stephen/pci-mmio-bridge-submit`: *"hw/vfio: assign region fd to
-    RAMBlock for vfio-user P2P DMA"* (`hw/vfio/region.c`, +17).
+    RAMBlock for vfio-user P2P DMA"* (`hw/vfio/region.c`, +17). This entry
+    named it `31e3d06a` until 2026-11-18, and that id was wrong: `a2ee87e`
+    is the commit with that subject, and it is an ancestor of the
+    `qemu.4cb9698` the pinned image is built from.
     `vfio_user_dma_map` skips the fd in DMA_MAP when
     `memory_region_get_fd()` returns -1, and for vfio-user mmap regions the
     fd arrives from GET_REGION_INFO into `vbasedev->region_fds[]` but is
@@ -2682,23 +2810,102 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     **The fork image now carries it.** This used to say that every tag of
     `...-qemu-libvfio-user-sbates-fork` was built from `qemu.d757fa6`
     (2026-09-22), one commit short, and needed a rebuild. That rebuild has
-    happened: the tag read `qemu.31e3d06`, which is this patch, and the fork
-    has been rebuilt on later tips since. So the choice is now a real one —
-    `qemu/stacks/mi355x-server.xml` pins the fork and gets P2P DMA;
-    `qemu/stacks/rocm-golden.xml` and `helios-tray.xml` pin the stock image and do
-    not. (`overlay-mi100.xml`, which used to carry the fork pin for the 32-VM
-    fleet, is deleted; a local overlay for that fleet names the fork itself.)
+    happened, and the fork has been rebuilt on later tips since. (It also
+    said the rebuilt tag "read `qemu.31e3d06`, which is this patch"; the
+    patch is `a2ee87e`, as above, so do not read a tag's `qemu.<sha>` as the
+    patch's id.) Until 2026-11-18
+    `qemu/stacks/mi355x-server.xml` alone pinned the fork, and
+    `rocm-golden.xml` and `helios-tray.xml` the stock image. **All three pin
+    the fork now**, with the ernic server built against its libvfio-user,
+    and so does every workflow; "The stacks" has the rule and its tests.
+    (`overlay-mi100.xml`, which used to carry the fork pin for the 32-VM
+    fleet, is deleted; a local overlay on a shipped fleet file inherits it.)
 
-    What has NOT changed is that the stock image cannot do it, so a stack
-    that needs one vfio-user device to DMA into another's BAR must pin the
-    fork deliberately. Do not be misled by `pci-mmio-bridge`, which the fork
+    The stock image still cannot do it, so a fleet of your own that names it
+    has no P2P DMA. Do not be misled by `pci-mmio-bridge`, which the fork
     images *also* have and stock does not — it is a different mechanism in
     the same branch, not the one P2P DMA needs.
 
-    Untested here. That the fork tag carries the patch was read from the tag
-    name, and for the tag pinned today from the comment beside it in
-    `mi355x-server.xml`; nothing in this repo has yet run a P2P DMA workload
-    against it.
+    **Measured, 2026-11-18, on the dev host**: the default fleet, two
+    guests of `20261117.g481c892`, booted once on the stock pair and once
+    with only `<qemu-ref>` and `<ernic-ref>` changed to the fork pair.
+
+    | | Stock pair | Fork pair |
+    |---|---|---|
+    | what `ernic-1` has mapped, from its `/proc/<pid>/maps` | guest RAM only (`memfd:memory-backend-memfd`) | guest RAM and one 262144 MiB `/memfd:rocjitsu-vram` region |
+    | `ib_write_bw --use_rocm=0 --use_rocm_dmabuf` between the guests | first work request fails, `remote access error (10)`; `ernic-1` logged `could not gather` 100 times | 548.89 MiB/s, exit 0; no `could not gather` line in the boot |
+    | `quick-start test` | passes; `ib_send_bw` 514.35 MiB/s | passes, ok=75 and ok=71, failed=0; `ib_send_bw` 453.12 MiB/s |
+
+    "perftest with ROCm memory support" has the rest of the fork's runs.
+    That is the NIC reaching GPU memory with each device on its own root
+    port. Not run: the same across a PCIe switch (`mi355x-server`,
+    `helios-tray`), and GPU to GPU.
+
+    **hipFile's direct path, the NVMe reaching GPU memory, is not this
+    mechanism. It works on both QEMUs, is slower than the copy it avoids
+    unless the NVMe is told which BAR to map, and is fast when it is.** The
+    NVMe is QEMU's own device, not a vfio-user server, so the region-fd
+    patch does nothing for it. What does is the fork QEMU's `vram-dev`
+    property on the NVMe device, which `run-vm --nvme-vram-dev` sets and
+    `<vm-nvme-vram>` renders into a stack; see "`<vm-nvme-vram>`" under
+    "The stacks". All figures 2026-11-18, dev host, by hand, guests of
+    `20261117.g481c892` at 8 vCPU, the scratch NVMe mounted at `/mnt/nvme`
+    (ext4):
+
+    | QEMU, NVMe | GEMM bench's hipFile read | fio through hipFile |
+    |---|---|---|
+    | stock, no `vram-dev` | 13.2 MB/s, 160 AIS ioctls all returning 0 | 12.6 MiB/s, 64 AIS ioctls and no `pread64` of the data |
+    | fork, no `vram-dev` | 11.4 to 12.8 MB/s | 12.4 to 13.2 MB/s before the element; which QEMU each of those runs was on is not recorded here |
+    | fork, `run-vm --nvme-vram-dev`, an earlier boot | 919 to 1002 MB/s between the two benches, not split here | |
+    | fork, the default stack with `<vm-nvme-vram>true` | 831 MB/s: `read_bytes=33554432 seconds_per_pass=0.0404 read_gbs=0.831`, `buf_registered=yes`, `max_absolute_error=0 failures=0` | 959 MB/s: fio-3.42, `read_bytes=67108864 seconds=0.07 read_gbs=0.959` |
+
+    The last row is one boot of `rocm-golden.xml` as committed plus an
+    overlay setting only `<vm-name-prefix>`: each QEMU's command line
+    carried `-device nvme,...,vram-dev=rocjitsu-1,vram-bar=0` (guest 2:
+    `rocjitsu-2`), `quick-start test` passed first (ok=76 and ok=72,
+    failed=0, in 2 m 11 s; NVMe write/read 154.0/211.0 and 161.0/193.0
+    MiB/s), the GEMM bench ran on guest 1 and the fio bench on guest 2, and
+    dmesg on both said `AIS: registered 1024MB device memory` with no
+    virtio or oops line. Each figure is one run. The fio bench's first
+    attempt failed in its own in-guest `git fetch` of fio from GitHub
+    (`Connection timed out after 300010 milliseconds`, exit 128: this
+    host's network); the figure is the second attempt, minutes later. The
+    guest scripts were sent over ssh by hand with the image's published
+    key, not through the lane's `generate-vm-report.sh` invocation.
+
+    For scale, on the stock boot: forcing the copy path
+    (`HIPFILE_FORCE_COMPAT_MODE=true`) read the fio file at 77.5 and 79.3
+    MiB/s in 64 `pread64` calls of 1 MiB with no AIS ioctl, and the GEMM
+    read at 103.7 MB/s; `HIPFILE_ALLOW_COMPAT_MODE=false` gave 11.8 MiB/s;
+    a plain O_DIRECT read of the file into host memory was 955 MiB/s. So
+    without `vram-dev` the direct path is taken, returns success, and runs
+    at about a sixth of the compat rate; with it, it is about seventy
+    times faster than without. The daily lane's hipFile figures were the
+    slow path until this change.
+
+    **Why the slow path is slow is inferred, not profiled**: DMA to a
+    vfio-user BAR lands on a `ram_device` region, which QEMU's NVMe reaches
+    through its 4 KiB bounce buffer, one page a round trip. Nothing was
+    traced to confirm it; what is measured is that naming the BAR removes
+    it.
+
+    **A hipFile direct read of a file that is not on an NVMe namespace can
+    hang the guest for good.** AIS accepts any PCI block device, and a
+    virtio disk cannot DMA to a GPU BAR address. Seen once, on the fork
+    boot before the element existed: no NVMe volume was mounted
+    (`hipFile-capable volume : False`), a direct-only fio read was aimed at
+    the virtio root disk, the guest logged `virtio: bogus descriptor or out
+    of resources` and never answered again. Nothing about the fork should
+    be read from that: it was the volume. Both hipFile benches now refuse
+    it, between the markers `# begin: hipfile target is on nvme` and
+    `# end: ...` in the `run_rocjitsu_hipfile` heredoc of
+    `scripts/generate-vm-report.sh` and in
+    `scripts/vm-report/fio-hipfile-bench.sh`: `findmnt -n -o SOURCE` of the
+    target has to be `/dev/nvme<N>n<M>`, else one line naming what it is on
+    and exit 1. `HipfileTargetTest` in `tests/test_vm_report_bench.py` runs
+    the lines against a stand-in `findmnt`. On the boot above the check
+    passed in both benches (`/dev/nvme0n1`); the refusal has not been
+    triggered on a guest.
 
 16. **`ernic_guest_setup` does not build SRQ, without SRQ there is no
     one-sided RDMA through UCX, and run after the bake the role takes SRQ and
@@ -4684,17 +4891,23 @@ default.** It opens the last play of `vm-quickstart.yml`, which runs
 last. "Do we do that already" has an exact answer: the play existed, gated
 by the extra var `quickstart_rocm_rdma`, and nothing but a hand-typed
 `ansible-playbook -e quickstart_rocm_rdma=true` reached it, because in the
-form it had it failed on every stack this repository ships. The switch
+form it had it failed on every stack this repository then shipped. The switch
 passes that extra var; no workflow and no script does, so no lane runs it.
 
 **Where the buffers are is `--rocm-rdma-mode`, and the default is the one
-that passes.** Each mode is a row of the table below, and the play's
-`quickstart_rocm_rdma_modes` holds what each adds to both command lines:
+that passes on any QEMU.** Each mode is a row of the table below, and the
+play's `quickstart_rocm_rdma_modes` holds what each adds to both command
+lines. The shipped stacks pin the fork QEMU since 2026-11-18, and `dmabuf`
+passes on the default one, by hand with perftest's own command lines and
+twice through this switch. **`host-alloc` is still the default, and
+changing that is the owner's call**: it is the one mode that passes on a
+fleet that pins stock QEMU, and `dmabuf` has not run on `helios-tray` or
+`mi355x-server`, at 4 vCPU or in a lane.
 
 | Mode | Both sides run | On the default stack |
 |---|---|---|
 | `host-alloc`, the default | `PERFTEST_ROCM_HOST_ALLOC=1 PERFTEST_ROCM_VALIDATION=staged ib_write_bw --use_rocm=0 -F --data_validation -t 128 -n 1000 -s 65536` | passes. 2026-11-18, through the switch, three runs in one boot: 580.63, 554.96 and 602.63 MiB/s, each `VALIDATION: PASSED - 7 chunks, 58720256 bytes`. Without `-F`, 2026-11-17: 642 MiB/s |
-| `dmabuf` | the same with `--use_rocm_dmabuf` and no `PERFTEST_ROCM_HOST_ALLOC` | registers, then the first work request fails with `remote access error`: the NIC's server cannot read the GPU's memory on stock QEMU |
+| `dmabuf` | the same with `--use_rocm_dmabuf` and no `PERFTEST_ROCM_HOST_ALLOC` | **passes on the fork QEMU, which the stack now pins**. 2026-11-18, through the switch, two runs in one boot: 486.26 and 460.21 MiB/s, host-staged, each `VALIDATION: PASSED - 7 chunks, 58720256 bytes`. By hand the same day: 535.35 MiB/s host-staged and 515.71 MiB/s with the live kernel. On a stack that pins stock QEMU it registers, then the first work request fails with `remote access error`: the NIC's server cannot read the GPU's memory |
 | `vram` | the same with neither | refused at registration, `Couldn't allocate MR with error=14`, on any QEMU |
 
 `host-alloc` is `hipHostMalloc`: host memory the GPU can address, not VRAM.
@@ -4707,7 +4920,19 @@ way the play fails and `quick-start` exits non-zero. There is no flag that
 turns a known limitation into a pass: an exit status that says a transfer
 into VRAM worked when it did not is worth less than a red run that says
 why. `quick-start` prints a `note:` naming the expected failure before it
-starts anything.
+starts anything: for `vram` always, and for `dmabuf` only when the fleet's
+`<qemu-ref>` is not the fork, with the ref and the layer that set it.
+
+**The play cannot see which QEMU a stack pins; `quick-start` can.** So the
+play calls a `dmabuf` access error the known limitation `on a stack that
+pins stock QEMU` (the mode's `where`), and tells the reader to look at
+`<qemu-ref>`. `quick_start._rocm_rdma_failure` then says, when the fleet it
+read pins the fork, that the run FAILED with stock QEMU's access error and
+that this is a failure and not the limitation. It reads the settings this
+invocation names, like every other check there, so a stack rendered from
+other settings is the one case it gets wrong, and it says so. The stand-in
+`ib_write_bw` of `tests/test_perftest_setup.py` passes a dma-buf, and fails
+it the stock way under `FAKE_ROCM_STOCK_QEMU`.
 
 It is `ib_write_bw` and not `ib_send_bw`: validation is for the WRITE and
 READ verbs, bandwidth tests, RC only, with `-t` and `-n` of at least 32;
@@ -4817,7 +5042,8 @@ run that left it failed telling the reader to recreate the stack, and the
 stock RDMA test makes the same stop.
 
 **Two things the live run found in the server's side of the result**, both
-changed after it and so far run against stand-ins only:
+changed after it. The fork boot's two passing dmabuf runs went through
+both; no failing run has:
 
 - The unit has one name, so its journal holds every run of the boot, and
   `journalctl -n 40` put the `status=1/FAILURE` of the two failed modes
@@ -4826,7 +5052,8 @@ changed after it and so far run against stand-ins only:
   ends with `date +%s.%6N` on the server's guest, and the journal is read
   with `--since @<that>`; a stdout that is not a number reads it unbounded,
   as before. `journalctl` took a fractional `@` time on the dev host
-  (systemd 259); not yet on a guest.
+  (systemd 259), and the fork boot's passing runs read the journal that
+  way on a guest; what it returned was not inspected.
 - `/var/tmp/quickstart-rocm-rdma-server.log` stayed on the last guest,
   root's, after every run, until the next run cleared it. It is now removed
   once it has been read, unless the unit is still `active`: a server that
@@ -4861,10 +5088,12 @@ and both sides printed `Use ROCm memory : ON` and
 `PERFTEST_ROCM_HOST_ALLOC: host-mapped GPU buffer`. A P4 program loaded
 earlier in the boot was still in the first NIC for every one of these and
 changed nothing. Not covered: the failed calibration under `-F`, guests at
-the fleet file's 4 vCPU, and the fork QEMU image for `dmabuf`.
+the fleet file's 4 vCPU, and, by that boot, the switch on the fork QEMU,
+which a later boot the same day ran; see "The switch on the fork" below.
 
-**What a live default stack measured**, 2026-11-17: `rocm-golden.xml`
-unmodified (stock QEMU), two guests of 8 vCPUs from the published image
+**What a live default stack measured on stock QEMU**, 2026-11-17:
+`rocm-golden.xml` as it then was (stock QEMU), two guests of 8 vCPUs from
+the published image
 `20261117.g481c892`, the role applied to both by a scratch playbook with
 the `LDFLAGS` above, perftest 6.31 against the archive's 6.24. Guest 2 was
 the server and guest 1 the client, the device `rocm-rdma-ernic0` as
@@ -4884,7 +5113,8 @@ port stayed `PORT_ACTIVE` and amdgpu `loaded` throughout.
 | `PERFTEST_ROCM_HOST_ALLOC=1 PERFTEST_ROCM_VALIDATION=staged ib_write_bw --use_rocm=0 --data_validation ...` | 642.09 MiB/s, `[DATA_VALIDATION] rocm: host-staged validation`, `VALIDATION: PASSED - 7 chunks, 58720256 bytes` |
 | the same without `staged` | 440.58 MiB/s, `[DATA_VALIDATION] rocm: live GPU validation`, `VALIDATION: PASSED - 7 chunks, 58720256 bytes` |
 
-So, on the default stack:
+So, on the default stack with stock QEMU; the fork's results follow the
+list:
 
 - **Does `--use_rocm` move data from VRAM? No, and it fails in two
   different places.** Plain `--use_rocm` gets as far as HIP coming up and
@@ -4921,12 +5151,8 @@ So, on the default stack:
   9`. In loopback on one guest it is `local access error (8) ... syndrom
   0x7` and `RDMA write rkey=0x10e va=... moved 0 of 65536 bytes`. The NIC's
   server cannot read the GPU's memory: one vfio-user server reaching into
-  another's BAR, on a QEMU that does not hand it the region. **Whether the
-  fork QEMU makes this pass has not been tried**: `mi355x-server.xml` pins
-  the fork as two refs (`<qemu-ref>` and `<ernic-ref>`), neither image was
-  on the host, and there is no one-element overlay that swaps them into
-  `rocm-golden.xml`. That is the experiment worth running next, and it is
-  this form, not the plain one.
+  another's BAR, on a QEMU that does not hand it the region. **The fork
+  QEMU makes this pass**; see the table after this list.
 - **Does `--data_validation` pass with `--use_rocm`? Not reached for VRAM**:
   the transfer fails first. It passes on plain host memory, which also
   shows the emulated NIC does the atomics validation signals with, and it
@@ -4948,10 +5174,60 @@ So, on the default stack:
 - The guest's GPU has a 256 GiB BAR0 at `0x4000000000`, the kernel is
   7.2.6 with `CONFIG_PCI_P2PDMA=y`.
 
+**The same stack on the fork pair, 2026-11-18**, by hand on the dev host:
+two guests of `20261117.g481c892` at 8 vCPU, `rocm-golden.xml` with only
+`<qemu-ref>` and `<ernic-ref>` changed to the fork images, the
+`perftest_setup` role applied to both guests, guest 2 the server. Every
+line is perftest's own command, not the play. Stock was booted again
+first, the same day, as the control.
+
+| Run, `-s 65536` | Stock pair | Fork pair |
+|---|---|---|
+| `ib_write_bw --use_rocm=0 --use_rocm_dmabuf`, 100 iterations | fails at the first work request, `remote access error (10)`, `scnt=100, ccnt=0`, client exit 1 | **548.89 MiB/s**, exit 0 |
+| the same with `--data_validation`, 1000 iterations, host-staged | not run: the transfer fails first | **535.35 MiB/s**, `VALIDATION: PASSED - 7 chunks, 58720256 bytes` |
+| the same with the live kernel on the GPU | not run | **515.71 MiB/s**, the same verdict line |
+| `ib_read_bw --use_rocm=0 --use_rocm_dmabuf --data_validation` | not run | **483.70 MiB/s**, validated on the GPU, the same verdict line |
+| `ib_send_bw --use_rocm=0 --use_rocm_dmabuf`, 100 iterations | not run this boot; failed on 2026-11-17 | **490.13 MiB/s**, exit 0 |
+| `ib_write_bw --use_rocm=0`, no dma-buf | `Couldn't allocate MR with error=14`, both sides | the same refusal |
+| `quick-start test` | passes | passes: ok=75 and ok=71, failed=0 |
+
+Every side printed `Use ROCm memory : ON` and `using DMA-BUF for GPU buffer
+address`. On the fork `ernic-1` maps a 262144 MiB `/memfd:rocjitsu-vram`
+region beside the guest's RAM and logged no `could not gather` line; on
+stock it has no such mapping and logged 100. So `ib_read_bw` and the
+dma-buf SEND, both listed as not run above, have run on the fork. Each
+figure is one run; the spread between runs of this stack is tens of
+MiB/s, so they do not rank the verbs.
+
+**The switch on the fork, 2026-11-18**, a later boot the same day:
+`rocm-golden.xml` as committed (fork pair, `<vm-nvme-vram>true`) plus an
+overlay setting only `<vm-name-prefix>qmfork`, two pulled guests of
+`20261117.g481c892` at 8 vCPU and 8192 MiB, scratch `--stack-dir`,
+`--key-dir` and `--images`, every step through `quick-start` but the role.
+
+| Step | Exit | What it said |
+|---|---|---|
+| `test` | 0 | 2 m 11 s; `qmfork-1` ok=76 changed=21 failed=0, `qmfork-2` ok=72 changed=18 failed=0 |
+| the three-line `perftest_setup` playbook, `perftest_setup_rdma_core: local` | 0 | ok=29 changed=4 failed=0 on each guest |
+| `test --rocm-rdma-test --rocm-rdma-mode dmabuf` | 0 | `rocm rdma: pass, mode dmabuf, ib_write_bw qmfork-1 -> qmfork-2, 486.26 MiB/s, VALIDATION: PASSED - 7 chunks, 58720256 bytes`; recap ok=94 and ok=71, failed=0; `quick-start` printed `ib_write_bw with ROCm buffers (dmabuf), 486.26 MiB/s, 58720256 bytes in 7 chunks validated` |
+| the same again | 0 | 460.21 MiB/s, the same verdict line |
+
+Each side ran `PERFTEST_ROCM_VALIDATION=staged ib_write_bw --use_rocm=0
+--use_rocm_dmabuf -F --data_validation -t 128 -n 1000 -s 65536`, so the
+validation was host-staged. No `note:` about an expected failure was
+printed, the fleet pinning the fork, and `ernic-1` logged no `could not
+gather` line. The two rates are below the by-hand 535.35 MiB/s; they are
+single runs on another boot, and the difference is inside the spread this
+stack shows between runs.
+
+Not run on the fork: `dmabuf` through the switch with live validation,
+`host-alloc` and `vram` through the switch, guests at 4 vCPU, a stack with
+a PCIe switch, and exporting a host-mapped buffer as a dma-buf.
+
 The play as it was before these results (plain `--use_rocm`) failed as the
 table says, rc 2 with both sides shown; with `PERFTEST_ROCM_HOST_ALLOC=1`
-added to its environment it passed. That is the one run of the play on
-guests. It then passed `--use_rocm_dmabuf` by default
+added to its environment it passed. That was the one run of the play on
+guests in that form, on 2026-11-17. It then passed `--use_rocm_dmabuf` by default
 (`quickstart_rocm_rdma_dmabuf`, a variable that is gone: the mode replaced
 it), and now defaults to the form that passed, with the other two as
 modes.
@@ -4979,13 +5255,15 @@ instead.
   against a scratch root holding the stamp and a copy of
   `/etc/rocm-golden-guest.json` with the pin added (the role alone does not
   write that key), before the block compared the stamp's `libibverbs`.
-- **The fork QEMU**, as above.
-- **The dma-buf export of a host-mapped buffer**, and READ
-  (`ib_read_bw`), which nothing ran.
-- **`quick-start --rocm-rdma-test` on guests.** The play in its present
-  form, `-F`, the result file and what `quick-start` prints from it have
-  run against stand-ins only. The command lines of `host-alloc` are the
-  measured ones plus `-F`.
+- **The dma-buf mode anywhere but the default stack at 8 vCPU.** Through
+  the play it has passed twice there on the fork QEMU, host-staged; not
+  with live validation, not behind a PCIe switch, and in no lane.
+- **The dma-buf export of a host-mapped buffer.**
+- **A failed calibration under `-F`**, and the two edits made to the play
+  after its first run on guests (the server's journal read from this
+  run's start, and its log removed once read): the fork boot's passing
+  runs went through both, what they left in the guest was not inspected,
+  and no failing run has gone through either.
 
 To repeat the measurements on two guests of a running stack, each line on
 the server first and then on the client with the server's ernic address
@@ -4996,7 +5274,7 @@ appended (`DEV` from `ibv_devinfo -l`):
 ib_write_bw -d DEV -n 1000                                           # the ROCm build, host memory
 ib_write_bw -d DEV -n 1000 -t 128 --data_validation                  # the NIC's atomics
 ib_write_bw -d DEV -n 1000 --use_rocm=0                              # error=14 at registration, any QEMU
-ib_write_bw -d DEV -n 1000 --use_rocm=0 --use_rocm_dmabuf            # the NIC reaching VRAM: issue 15
+ib_write_bw -d DEV -n 1000 --use_rocm=0 --use_rocm_dmabuf            # the NIC reaching VRAM: passes on the fork QEMU, issue 15
 PERFTEST_ROCM_HOST_ALLOC=1 ib_write_bw -d DEV -n 1000 -t 128 --use_rocm=0 --data_validation   # the control
 ```
 
@@ -5329,6 +5607,37 @@ There are five tracked metrics and four artifacts, all uploaded by
 | `perf-hipfile-fio` | hipFile fio |
 | `perf-ernic` | Ernic P4 FP8 bandwidth |
 | `perf-helios` | SDXI copy bandwidth |
+
+**The two hipFile metrics measure the direct path with the NVMe mapped
+onto the GPU's BAR, since 2026-11-18.** `rocm-golden.xml` sets
+`<vm-nvme-vram>`, the lane runs that file unmodified, and so both read
+hundreds of MB/s where they read 12 to 13 on the dev host and 36 to 46 in
+the lane's one recorded run: by hand, 831 MB/s for the GEMM bench's read
+and 959 MB/s for fio, about seventy times the dev host's earlier figures
+(known issue 15). **That step is the setting, not a change in the code
+under test**, and the badges' verdict against their rolling baseline will
+call the first runs after it an improvement. The lane itself has not run
+with it.
+
+- **The perf page says so.** `scripts/render-site-perf.py` has `NOTES`, a
+  tuple of `(date, metrics, change)` newest first, rendered as the table
+  "Changes to what is measured" between the charts and "Recent runs". A
+  change to what a metric measures is one tuple there;
+  `tests/test_render_site_perf.py` holds the table to the tuple. The move
+  to the fork QEMU is the other note it has.
+- **Both hipFile benches refuse a target that is not on an NVMe
+  namespace**, with a message and exit 1, because a direct read aimed at a
+  virtio disk has hung a guest for good; issue 15 has the check and what
+  was seen.
+- **The benches leave `/mnt/nvme` mounted, and `quick-start test` after
+  them fails until it is unmounted.** The NVMe test writes
+  `/dev/nvme0n1` raw; with the filesystem mounted it measured a write
+  rate of 0 and the play failed at "Assert non-zero NVMe bandwidth", on
+  both guests, exit 1. After `umount /mnt/nvme` on both the same test
+  passed (ok=75 and ok=71; 169.0/163.0 and 162.0/163.0 MiB/s). Seen
+  2026-11-18; it predates this change and is not fixed. The daily lane
+  runs `test` before the benches and does not meet it; a person running
+  the report script by hand and then `test` does.
 
 **The P4 number is the rate of the fp8 reduction, on one guest, with no
 peer.** The reduction is compute inside the NIC: an RDMA WRITE on an RC queue

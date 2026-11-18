@@ -460,7 +460,7 @@ on port 18516, from the first guest to the last, with its buffers allocated
 through HIP on both sides and every byte checked on arrival.
 .BR "Off by default" .
 In the default mode the buffers are host memory the GPU can address, not
-VRAM, which is the one form that passes on the stacks qemu\-tool ships; see
+VRAM, which is the form that passes on any QEMU; see
 .BR \-\-rocm\-rdma\-mode .
 Refused before anything is started on a fleet with one guest, naming
 .BR <vm\-count> ,
@@ -503,11 +503,15 @@ the validator: everything but the NIC reaching the GPU's own memory.
 .B dmabuf
 VRAM registered as a dma\-buf
 .RB ( \-\-use_rocm_dmabuf ).
+Passes on the stacks qemu\-tool ships, which pin the fork QEMU: it hands
+the NIC's server the GPU's memory.
 .B Expected to fail
-on a stack that pins stock QEMU, which the default fleet does: the buffer
-registers, the NIC's server then cannot read the GPU's memory, and the first
-work request ends in a remote access error. The fork QEMU image carries the
-patch for it and has not been tried.
+on a stack whose
+.B <qemu\-ref>
+names stock QEMU: the buffer registers, the NIC's server then cannot read
+the GPU's memory, and the first work request ends in a remote access error.
+.B quick\-start
+says so before it starts anything when the fleet does not pin the fork.
 .TP
 .B vram
 VRAM registered by address
@@ -677,12 +681,21 @@ Only emitted when the QEMU binary supports the property.
 .TP
 .BI \-\-nvme\-vram\-dev " ID"
 qdev id of a vfio-user device (e.g.\&
-.IR rocjitsu\-4\-1 )
+.IR rocjitsu\-1 ,
+its socket's file name without
+.IR .sock )
 to use as the VRAM source for NVMe P2P DMA.
-Applied to the first NVMe controller created by
-.BR \-\-nvme " N" .
-Requires the QEMU binary to support
-.BR vram\-dev= .
+Applied to every NVMe controller created by
+.BR \-\-nvme " N" ,
+not to null_blk devices or a literal
+.B \-\-nvme
+argument. Left off, with no message, when the QEMU binary has no
+.B vram\-dev=
+property; only the fork QEMU has it. In a generated stack it is set for
+each guest by
+.BR <vm\-nvme\-vram> ;
+.B run\-vm
+outside a stack does not take it from a fleet file.
 .TP
 .BI \-\-nvme\-vram\-bar " N"
 BAR index on the vfio-user device identified by
@@ -1067,6 +1080,24 @@ switch; see
 .B run\-vm
 .BR \-\-vfio\-user\-switch\-width .
 Default: 0, off.
+.TP
+.B <vm\-nvme\-vram>
+Boolean. Point every emulated NVMe of a guest at BAR 0 of that guest's
+first rocjitsu device: each
+.B qemu\-N
+service runs
+.B run\-vm
+with
+.B \-\-nvme\-vram\-dev
+naming it. Needs
+.B <vm\-nvme>
+of at least 1, and a layer that removes the NVMe has to set this false as
+well.
+.B gen\-compose
+warns when
+.B <qemu\-ref>
+is not the fork QEMU, on which the option is left off with no error.
+Read by the generator only. Default: false.
 .TP
 .BR <p4\-enable> ", " <p4\-guest\-scope> ", " <p4\-program>
 Run the P4 engine on each ernic server, and decide which guest commands
@@ -1521,7 +1552,7 @@ Each GPU row carries its PCIe BARs, indented beneath it:
 .RS 4
 .EX
 GPU:       gfx1250 (emulated, rocjitsu\-1.sock)
-             BAR0 256 MiB (64\-bit prefetchable)
+             BAR0 256 GiB (64\-bit prefetchable)
              BAR2 2 MiB (64\-bit prefetchable)
 GPU:       gfx908 (passthrough, 63:00.0)
              BAR0 32 GiB (64\-bit prefetchable)
@@ -1532,10 +1563,11 @@ GPU:       gfx908 (passthrough, 63:00.0)
 .PP
 BAR0 is the VRAM aperture and is the one to look at for peer\-to\-peer DMA: a
 device whose BAR0 does not cover the memory a peer must reach cannot be the
-target of one. The 256 MiB above is an emulated
+target of one. The 256 GiB above is an emulated
 .BR rocjitsu (1)
-GPU at its default
-.IR vram_aperture_bytes ,
+GPU with the
+.I vram_aperture_bytes
+of the configuration the shipped stacks serve,
 against a real MI100 with a 32 GiB large BAR. BAR2 and BAR5 are the doorbell
 and register apertures and are the same size on both, emulated or not.
 .PP
@@ -2229,6 +2261,7 @@ Devices
 .BR <rocjitsu\-per\-vm> ,
 .BR <sdxi\-per\-vm> ,
 .BR <vm\-pcie\-switch\-width> ,
+.BR <vm\-nvme\-vram> ,
 .BR <rocjitsu\-config> .
 .TP
 Network and mesh

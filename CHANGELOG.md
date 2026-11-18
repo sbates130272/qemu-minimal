@@ -11,9 +11,13 @@ the one running the stack, and the first entry under **Fixed** if you have
 run `vm-rocm-golden.yml --tags configure` on a guest. The rest is two
 optional `quick-start` tests and changes to the golden guest: a perftest
 built with ROCm memory support, SDXI counters in Prometheus, one rdma-core to
-build against, and the hostname the host gives it. The guest changes are in
-the bake, which has passed once in CI, and the fleet files still pull an
-image baked before them; the last entry under **Changed** says what was run
+build against, and the hostname the host gives it. Every shipped stack and
+every workflow now runs the fork QEMU, which is the first entry under
+**Changed**, and the default stack points its NVMe at the guest's GPU
+(`<vm-nvme-vram>`, under **Added**), which moves the two hipFile badges by
+about seventy times at the next daily run. The guest changes are in the
+bake, which has passed once in CI, and the fleet files still pull an image
+baked before them; the last entry under **Changed** says what was run
 and what that leaves unproven.
 
 ### Breaking
@@ -297,12 +301,17 @@ and what that leaves unproven.
   `ansible-playbook -e quickstart_rocm_rdma=true`; this is its switch.
   - `--rocm-rdma-mode {host-alloc,dmabuf,vram}` says where the buffers are.
     The default, `host-alloc`, is host memory the GPU can address
-    (`PERFTEST_ROCM_HOST_ALLOC=1`), not VRAM, and is the one that passes on
-    the shipped stacks. `dmabuf` and `vram` put them in VRAM and are
-    expected to fail there: `remote access error` on the first work request
-    on stock QEMU, and `Couldn't allocate MR with error=14` on any. Such a
-    failure is reported as the known limitation of the mode and the run
-    still exits non-zero.
+    (`PERFTEST_ROCM_HOST_ALLOC=1`), not VRAM, and passes on any QEMU.
+    `dmabuf` and `vram` put them in VRAM. `dmabuf` passes on the fork QEMU
+    the shipped stacks now pin (the first entry under **Changed**) and is
+    expected to fail on a stack whose `<qemu-ref>` names stock QEMU, with
+    `remote access error` on the first work request; `quick-start` says so
+    before it starts when the fleet does not pin the fork. `vram` is
+    expected to fail on any QEMU, with `Couldn't allocate MR with
+    error=14`. Such a failure is reported as the known limitation of the
+    mode and the run still exits non-zero. An access error in `dmabuf` on a
+    fleet that pins the fork is reported as a failure, not as the
+    limitation.
   - It needs a guest image with the ROCm perftest
     (`/etc/perftest-rocm.json`). The image the fleet files pull predates
     it, and on those guests the test stops at its first check and says so.
@@ -319,12 +328,104 @@ and what that leaves unproven.
     passed three times through the switch (580.63, 554.96 and 602.63
     MiB/s, each `VALIDATION: PASSED - 7 chunks, 58720256 bytes`) and once
     with live validation (490.11 MiB/s); `dmabuf` and `vram` ended in
-    their known limitations and a plain `test` passed after each. *Not
+    their known limitations and a plain `test` passed after each. That
+    stack pinned stock QEMU, as the shipped fleet files then did. *Not
     seen:* a failed calibration under `-F`, and two edits made after that
     run: the server's journal read from this run's start only, and its log
     removed from the guest once read.
+  - *On the fork QEMU, a later boot the same day:* `--rocm-rdma-mode
+    dmabuf` passed twice through the switch on the default fleet, 486.26
+    and 460.21 MiB/s, each `VALIDATION: PASSED - 7 chunks, 58720256 bytes`,
+    host-staged, with no `note:` printed and no `could not gather` line
+    from the NIC's server. `host-alloc` is still the default; `dmabuf`
+    has not run with live validation through the switch, on the other two
+    fleets, at 4 vCPU or in a lane.
+
+- **`<vm-nvme-vram>`: a fleet's emulated NVMe may read and write the
+  guest's GPU memory directly.** A new boolean fleet element, default
+  false. With it, `gen-compose` gives each guest's `run-vm`
+  `--nvme-vram-dev` naming that guest's first GPU (`rocjitsu-1` for guest
+  1), which the fork QEMU turns into `vram-dev=` on the NVMe device.
+  `qemu/stacks/rocm-golden.xml` sets it; `helios-tray.xml` and
+  `mi355x-server.xml` do not, since it has not been run behind a PCIe
+  switch.
+  - *What it gives:* hipFile's direct NVMe-to-VRAM read stops going through
+    QEMU's 4 KiB bounce buffer. That cause is inferred, not profiled; the
+    rates are measured. On the default stack, two guests of the published
+    image at 8 vCPU, 2026-11-18, by hand, one run each: the GEMM bench's
+    hipFile read 831 MB/s and fio through hipFile 959 MB/s, where the same
+    reads were 11.4 to 13.2 MB/s without it on either QEMU.
+  - *Who is affected:* anyone reading the **Rocjitsu HipFile** and
+    **HipFile Fio** badges or their trend lines. Both jump by roughly
+    seventy times at the first daily run after this merges. That is this
+    setting, not faster code, and the badges' comparison with their
+    baseline will report it as an improvement. The perf page gains a
+    "Changes to what is measured" table that dates it
+    (`NOTES` in `scripts/render-site-perf.py`).
+  - Refused at render time when `<vm-nvme>` is 0 or negative. An overlay
+    on `rocm-golden.xml` that removes the NVMe therefore has to set
+    `<vm-nvme-vram>false` as well, where it rendered before. A
+    `<qemu-ref>` that is not the fork image gets a warning and renders:
+    `run-vm` leaves the option off on a QEMU whose NVMe lacks the property,
+    with no error, and the direct path then runs at its slow rate.
+  - A `run-vm` outside a stack does not take it from a fleet file; pass
+    `--nvme-vram-dev ID` there. The README's `run-vm` table now lists
+    `--nvme-vram-dev` and `--nvme-vram-bar`, which already existed.
+  - *Not run:* the daily lane or any CI lane with it, guests at 4 vCPU,
+    more than one NVMe a guest, and `helios-tray` or `mi355x-server` with
+    or without it. The guest scripts were sent by hand, not through the
+    lane's own invocation of `generate-vm-report.sh`.
 
 ### Changed
+
+- **Every shipped stack, and every workflow, runs the fork QEMU and the
+  ernic server built with it.** `qemu/stacks/rocm-golden.xml` and
+  `helios-tray.xml` now pin the `-sbates-fork` images `mi355x-server.xml`
+  already pinned, as `<qemu-ref>` and `<ernic-ref>`; rocjitsu, the SDXI
+  server and the guest image are unchanged. The fork QEMU hands each
+  vfio-user server the other devices' memory, so the emulated NIC can read
+  and write GPU memory.
+  - *What it gives:* RDMA on a GPU buffer exported as a dma-buf works
+    between guests. Measured by hand on the default fleet, two guests of
+    the published image, 2026-11-18, with only those two refs changed:
+    `ib_write_bw --use_rocm_dmabuf` 548.89 MiB/s; with `--data_validation`
+    535.35 MiB/s host-staged and 515.71 MiB/s with the live GPU kernel,
+    each `VALIDATION: PASSED - 7 chunks, 58720256 bytes`; `ib_read_bw`
+    483.70 MiB/s validated; `ib_send_bw` 490.13 MiB/s. The NIC's server
+    maps a 256 GiB `rocjitsu-vram` region there. On the stock pair, booted
+    the same day, the same command failed at the first work request
+    (`remote access error`), with no such mapping. A plain `quick-start test` passed on the fork stack.
+  - *What it does not change:* plain `--use_rocm`, a GPU buffer registered
+    by address, is refused at registration on both QEMUs. And
+    `--rocm-rdma-test` still defaults to `host-alloc`.
+  - *Who is affected:* anyone running a shipped stack pulls two new images
+    on the next `up`. A fleet file of your own that names the stock images
+    keeps working as it did, and `--rocm-rdma-mode dmabuf` still fails
+    there. Both QEMU images are QEMU 11.1.3, with the same packages and
+    tools; the fork adds the `pci-mmio-bridge` device and the P2P DMA patch.
+  - The two travel as a pair: they are built against one libvfio-user
+    (`vfu.3719c3a`), and `gen-compose` refuses a QEMU and an ernic server
+    whose `vfu.<sha>` differ.
+  - The move added no element to `rocm-golden.xml`. Its one 256 GiB GPU
+    BAR per guest fits the machine's default 64-bit PCI hole, on either QEMU;
+    `helios-tray.xml` and `mi355x-server.xml` already set
+    `<vm-pci-hole64-size>` for their four and eight.
+  - The workflows that boot a stack name the pair in `ERNIC_IMAGE` and
+    `QEMU_IMAGE`, and the nine workflows whose jobs run inside the QEMU
+    image, where `gen-vm` bakes and `run-vm` boots on its
+    `qemu-system-x86_64`, now run inside the fork image. So the published
+    guest is baked and qualified on the fork QEMU, and the tracked
+    benchmarks, which run `rocm-golden.xml` unmodified, are measured on it
+    from the next daily run: expect a step in the trend lines.
+  - `Image Tag Consistency` and `tests/test_image_tag_consistency.py` now
+    fail on any reference to the stock QEMU or ernic image in a fleet file,
+    a generated stack, a workflow or an action, and hold the fork images to
+    the one stamp the others share, where they had a count of their own.
+  - *Not run:* no CI lane has run on the fork images, as a job container or
+    as a stack, and `helios-tray` and `mi355x-server` were not booted.
+    `quick-start --rocm-rdma-mode dmabuf` has since passed on the fork, and
+    hipFile's direct path has been measured there; both are under
+    **Added**.
 
 - **A guest's hostname is the name the host calls it by.** A stack's guests
   were `rocm-golden-1` and `rocm-golden-2` in `qemu-tool list`, in the
@@ -608,6 +709,27 @@ and what that leaves unproven.
   `fleet.json`'s panels gained ids.
   `tests/test_quickstart_dashboard.py` fails on an overlap, a short band,
   a gap or a duplicate id.
+
+- **The hipFile benchmarks refuse a target that is not on an NVMe
+  namespace.** A hipFile direct read of a file on a virtio disk can hang
+  the guest for good: AIS accepts any PCI block device, and a virtio disk
+  cannot DMA to a GPU BAR address. Seen once, by hand, with no NVMe volume
+  mounted and the read aimed at the root disk: `virtio: bogus descriptor
+  or out of resources`, and the guest never answered again. Both benches,
+  the GEMM + hipFile step of `scripts/generate-vm-report.sh` and
+  `scripts/vm-report/fio-hipfile-bench.sh`, now ask `findmnt` what the
+  target is on and exit 1 with a message unless it is `/dev/nvme<N>n<M>`.
+  - *Who is affected:* nobody running the daily lane, whose target is the
+    scratch NVMe. A by-hand run against a guest with no NVMe, or with it
+    unmounted, now stops with a reason where it could hang the guest.
+  - *Run:* the check passed in both benches on two guests of the default
+    stack (`/dev/nvme0n1`). *Not run:* the refusal on a guest; it is
+    tested against a stand-in `findmnt`.
+  - *Not fixed, and older than this:* the benches leave `/mnt/nvme`
+    mounted, and a `quick-start test` run after them fails at "Assert
+    non-zero NVMe bandwidth" (write 0) until it is unmounted on each
+    guest, since that test writes the device raw. The daily lane runs
+    `test` first.
 
 ## [v2.0.0] - 2026-11-17
 

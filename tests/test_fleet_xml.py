@@ -56,8 +56,10 @@ class ParseDefault(unittest.TestCase):
         self.assertEqual(self.cfg.stop_grace_period, "120s")
 
     def test_images(self) -> None:
-        self.assertIn("qemu-libvfio-user", self.cfg.qemu_ref)
-        self.assertIn("rocm-ernic", self.cfg.ernic_ref)
+        # The fork pair: QEMU that hands a vfio-user server the other
+        # devices' memory, and the NIC server built against its libvfio-user.
+        self.assertIn("qemu-libvfio-user-sbates-fork:", self.cfg.qemu_ref)
+        self.assertIn("rocm-ernic-sbates-fork:", self.cfg.ernic_ref)
         self.assertIn("rocjitsu", self.cfg.rocjitsu_ref)
         # The guest this repo publishes, by the dated tag of one publish.
         self.assertRegex(

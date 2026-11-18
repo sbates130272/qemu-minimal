@@ -8,7 +8,8 @@
 #
 # Missing prerequisites print a reason and exit 0. The caller turns "no
 # read_gbs" into a hard failure, so a silent skip still fails the lane loudly
-# rather than publishing a stale badge.
+# rather than publishing a stale badge. A target that is not on an NVMe
+# namespace exits 1.
 set -euo pipefail
 
 # libhipfile landed on fio master (67256d4e, 2026-05-08) and is in no release
@@ -47,6 +48,19 @@ if ! mountpoint -q "${MNT}"; then
   sudo -n mount -o noatime "${dev}" "${MNT}"
 fi
 sudo -n chmod 1777 "${MNT}"
+# begin: hipfile target is on nvme
+# A hipFile direct read of a file that is not on an NVMe namespace can hang
+# the guest for good: AIS takes any PCI block device, and a virtio disk
+# cannot DMA to a GPU BAR address (seen on the root disk: "virtio: bogus
+# descriptor or out of resources", and the guest never answered again).
+src=$(findmnt -n -o SOURCE --target "${MNT}" 2>/dev/null || true)
+# A namespace or a partition of one, with btrfs's "[/subvolume]" allowed.
+nvme_re='^/dev/nvme[0-9]+n[0-9]+(p[0-9]+)?(\[.*\])?$'
+if ! [[ "${src}" =~ ${nvme_re} ]]; then
+  echo "${MNT} is on '${src:-no filesystem}', not an NVMe namespace: refusing a hipFile direct read there"
+  exit 1
+fi
+# end: hipfile target is on nvme
 
 echo "rocm: ${rocm}"
 

@@ -54,6 +54,7 @@ from .compose import (_apply_identity, _precreate_data_dirs,
                       interpolation_env, resolve_identity)
 from .config import VMConfig
 from .fleet_xml import NS_FLEET, FleetConfig, FleetXml
+from .gen_compose import FORK_MARK as _FORK_MARK, pins_fork_qemu
 from .gen_compose import run as gen_compose_run
 from .gen_vm import run as gen_vm_run
 from .ports import is_loopback, port_bindable, reach_name
@@ -112,23 +113,34 @@ _VMEM_CEILING_MB = 8192
 # the guest has no /dev/ernic-p4 at all.
 _P4_SCOPE_NEEDED = "load"
 
-# Where --rocm-rdma-test puts perftest's buffers, and what each mode does on
-# the stacks this repository ships. Measured on the default stack, stock
-# QEMU, 2026-11-17 (AGENTS.md, "perftest with ROCm memory support"): only
-# the first passes there. The play of vm-quickstart.yml has the same three
-# keys, and what it adds to the command line for each.
+# Where --rocm-rdma-test puts perftest's buffers, and what each mode does.
+# Measured on the default fleet with stock QEMU and with the fork QEMU every
+# shipped fleet file now pins, 2026-11-17 and 18 (AGENTS.md, "perftest with
+# ROCm memory support"): the first passes on both, the second on the fork
+# only, the third on neither. The play of vm-quickstart.yml has the same
+# three keys, and what it adds to the command line for each.
 ROCM_RDMA_MODES = {
     "host-alloc": "host memory the GPU can address (PERFTEST_ROCM_HOST_ALLOC=1), "
                   "not VRAM: passes",
-    "dmabuf": "VRAM registered as a dma-buf (--use_rocm_dmabuf): expected to "
-              "FAIL on a stack that pins stock QEMU, which the default fleet "
-              "does. The NIC's server cannot read the GPU's memory, so the "
-              "first work request ends in a remote access error",
+    "dmabuf": "VRAM registered as a dma-buf (--use_rocm_dmabuf): passes on "
+              "the shipped stacks, which pin the fork QEMU. Expected to FAIL "
+              "on a stack whose <qemu-ref> names stock QEMU: there the NIC's "
+              "server cannot read the GPU's memory, so the first work request "
+              "ends in a remote access error",
     "vram": "VRAM registered by address (--use_rocm alone): expected to FAIL "
             "on every stack. The guest's kernel refuses the registration "
             "(error=14) before the NIC is asked, whichever QEMU is pinned",
 }
 _ROCM_RDMA_DEFAULT = "host-alloc"
+
+# What marks a batesste-ci-images QEMU or NIC server image as the fork's:
+# the repository name ends in it. The fork QEMU hands each vfio-user server
+# the other devices' memory, which the dmabuf mode needs.
+
+
+def _pins_fork_qemu(fleet: FleetConfig) -> bool:
+    """True when <qemu-ref> names the fork QEMU image, by its repository."""
+    return pins_fork_qemu(fleet.qemu_ref)
 
 
 # ---------------------------------------------------------------------------
@@ -1377,12 +1389,25 @@ def _check_optional_tests(state: _State) -> None:
              f"{state.vm_count} {_where_set(state, 'count')}. Set "
              f"<vm-count>2</vm-count>, {again}; or drop --rocm-rdma-test.")
     mode = state.rocm_rdma_mode or _ROCM_RDMA_DEFAULT
-    if state.rocm_rdma_test and mode != _ROCM_RDMA_DEFAULT:
-        # Said before the boot and the tests in front of it, so a red run
-        # ten minutes later is the one that was announced.
+    # Said before the boot and the tests in front of it, so a red run ten
+    # minutes later is the one that was announced. dmabuf is expected to
+    # pass on the fork QEMU, so there is nothing to announce for it there.
+    if state.rocm_rdma_test and mode == "vram":
         print(f"note: --rocm-rdma-mode {mode}: {ROCM_RDMA_MODES[mode]}. A "
               "failure for that reason is reported as the known limitation "
               "and the run still exits non-zero.", file=sys.stderr)
+    if (state.rocm_rdma_test and mode == "dmabuf"
+            and not _pins_fork_qemu(state.fleet)):
+        print(f"note: --rocm-rdma-mode dmabuf: <qemu-ref> is "
+              f"{state.fleet.qemu_ref} {_where_set(state, 'qemu_ref')}, "
+              "which is not the fork QEMU the shipped fleet files pin "
+              f"(its repository does not end in {_FORK_MARK}). Expected to "
+              "FAIL: on stock QEMU the NIC's server cannot read the GPU's "
+              "memory, so the first work request ends in a remote access "
+              "error. A failure for that reason is reported as the known "
+              "limitation and the run still exits non-zero. Pin the fork "
+              "<qemu-ref> and <ernic-ref> of qemu/stacks/rocm-golden.xml to "
+              "run this mode.", file=sys.stderr)
 
 
 def _playbook_command(state: _State) -> list[str]:
@@ -1501,9 +1526,19 @@ def _rocm_rdma_failure(state: _State) -> str | None:
     verdict, mode, _tool, client, server, rest = found.groups()
     if verdict == "pass":
         return None
+    limited = "ended in the known limitation of that mode, not in a broken test"
+    if (verdict == "known limitation" and mode == "dmabuf"
+            and _pins_fork_qemu(state.fleet)):
+        # The access error is stock QEMU's limitation, and this fleet does
+        # not pin stock QEMU: it is a failure here.
+        limited = ("FAILED with the access error that is the known "
+                   "limitation of stock QEMU, and <qemu-ref> here is the "
+                   f"fork ({state.fleet.qemu_ref}), where this mode is "
+                   "expected to pass. Unless the running stack was rendered "
+                   "from other settings than this command read, that is a "
+                   "failure and not the limitation")
     what = {
-        "known limitation": "ended in the known limitation of that mode, "
-                            "not in a broken test",
+        "known limitation": limited,
         "no verdict": "produced no verdict",
         "no server": "never started",
     }.get(verdict, "failed")

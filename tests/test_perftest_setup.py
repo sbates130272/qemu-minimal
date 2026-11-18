@@ -2116,8 +2116,10 @@ VERDICTS = (
 
 # Stand-ins for what the play runs in a guest. ib_write_bw behaves as the
 # ROCm build did on the default stack: a buffer from hipHostMalloc works, a
-# dma-buf registers and fails at the first work request, a GPU address is
-# refused at registration. It appends how it was called to FAKE_ROCM_LOG.
+# GPU address is refused at registration, and a dma-buf works as it did on
+# the fork QEMU the shipped stacks pin. With FAKE_ROCM_STOCK_QEMU set it
+# behaves as it did on stock QEMU: the dma-buf registers and fails at the
+# first work request. It appends how it was called to FAKE_ROCM_LOG.
 ROCM_FAKES = {
     "ib_write_bw": r"""
 if [ "$1" = --help ]; then
@@ -2141,11 +2143,13 @@ case "${how}" in
         echo " Couldn't create IB resources" >&2
         exit 1 ;;
   dmabuf)
-        if [ "${role}" = client ]; then
-          echo " Completion with error at client" >&2
-          echo " Failed status-remote access error (10): wr_id 0 syndrom 0x9" >&2
-        fi
-        exit 1 ;;
+        if [ -n "${FAKE_ROCM_STOCK_QEMU:-}" ]; then
+          if [ "${role}" = client ]; then
+            echo " Completion with error at client" >&2
+            echo " Failed status-remote access error (10): wr_id 0 syndrom 0x9" >&2
+          fi
+          exit 1
+        fi ;;
 esac
 echo " #bytes     #iterations    BW peak[MiB/sec]    BW average[MiB/sec]   MsgRate[Mpps]"
 printf ' %-7lu    %-10d       %-7.2f            %-7.2f\t\t     %-7.6f\n' 65536 1000 655.20 642.09 0.010273
@@ -2322,9 +2326,9 @@ class Quickstart(unittest.TestCase):
             self.assertIn(needle, comment)
 
     def test_each_mode_is_the_command_line_that_was_measured(self):
-        """host-alloc is the row that passed on the default stack, dmabuf
-        the one that registers and fails at the first work request, vram
-        the one refused at registration (AGENTS.md)."""
+        """host-alloc is the row that passed on either QEMU, dmabuf the one
+        that passes on the fork and fails at the first work request on
+        stock, vram the one refused at registration (AGENTS.md)."""
         v = self.vars
         self.assertEqual(v["quickstart_rocm_rdma_mode"], "host-alloc")
         modes = v["quickstart_rocm_rdma_modes"]
@@ -2347,9 +2351,29 @@ class Quickstart(unittest.TestCase):
         self.assertEqual(modes["vram"]["known"],
                          "Couldn't allocate MR with error=14")
         self.assertEqual(modes["dmabuf"]["known"], "access error")
-        self.assertIn("stock QEMU", modes["dmabuf"]["limitation"])
-        self.assertIn("has not been tried", modes["dmabuf"]["limitation"])
+        # dmabuf's failure is stock QEMU's, and the text sends the reader
+        # to the element that says which QEMU a stack has. Every shipped
+        # fleet pins the fork, on which the mode passed.
+        limitation = " ".join(modes["dmabuf"]["limitation"].split())
+        for needle in ("<qemu-ref> and <ernic-ref> name the stock QEMU",
+                       "which every shipped fleet file pins",
+                       "this mode passed on it",
+                       "if it names the fork, this is a failure and not "
+                       "that limitation"):
+            self.assertIn(needle, limitation)
+        self.assertNotIn("has not been tried", limitation)
+        self.assertNotIn("rocm-golden.xml does", limitation)
+        self.assertEqual(modes["dmabuf"]["where"],
+                         "on a stack that pins stock QEMU")
         self.assertIn("every stack", modes["vram"]["limitation"])
+        self.assertEqual(modes["vram"]["where"], "on every stack")
+        self.assertNotIn("where", modes["host-alloc"])
+        for fleet in sorted((REPO / "qemu/stacks").glob("*.xml")):
+            if fleet.name != "fleet.xml":
+                self.assertRegex(
+                    fleet.read_text(),
+                    r"<qemu-ref>[^<:]*-sbates-fork:[^<]+</qemu-ref>",
+                    fleet.name)
         # A run on host-mapped memory does not say it moved GPU memory.
         self.assertIn("not VRAM", modes["host-alloc"]["buffers"])
         verdict = self.tasks["Assert the transfer ran and every byte validated"]
@@ -2740,20 +2764,46 @@ class QuickstartRun(unittest.TestCase):
             if not call.startswith("systemctl"):
                 self.assertIn("HOST_ALLOC=1 VALIDATION=unset EXTRA=yes", call)
 
+    def test_dmabuf_passes_where_the_nic_reaches_the_gpu(self):
+        """The fork QEMU of the shipped stacks: VRAM on both sides, as a
+        dma-buf, and the result says so."""
+        proc, art, calls = self._run(
+            *self.ON, "-e", "quickstart_rocm_rdma_mode=dmabuf")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        for call in calls:
+            if call.startswith("systemctl"):
+                continue
+            self.assertIn("HOST_ALLOC=unset VALIDATION=staged", call)
+            self.assertIn(
+                f" -p 18516 --use_rocm=0 --use_rocm_dmabuf {self.OPTIONS}",
+                call)
+        result = (art / "rocm-rdma.md").read_text()
+        self.assertRegex(
+            result,
+            r"\nrocm rdma: pass, mode dmabuf, ib_write_bw g1 -> g2, 642\.09 "
+            r"MiB/s, VALIDATION: PASSED - 7 chunks, 58720256 bytes\n")
+        self.assertIn("The buffers were GPU memory registered as a dma-buf.",
+                      result)
+        self.assertNotIn("known limitation", result)
+
     def test_the_gpu_memory_modes_fail_as_the_known_limitation(self):
-        for mode, memory, said in (
+        """dmabuf on a stack that pins stock QEMU, and vram on any."""
+        for mode, memory, said, where in (
                 ("dmabuf", "--use_rocm=0 --use_rocm_dmabuf",
-                 "Failed status-remote access error (10): wr_id 0 syndrom 0x9"),
+                 "Failed status-remote access error (10): wr_id 0 syndrom 0x9",
+                 "on a stack that pins stock QEMU"),
                 ("vram", "--use_rocm=0",
-                 "Couldn't allocate MR with error=14")):
+                 "Couldn't allocate MR with error=14", "on every stack")):
             with self.subTest(mode):
                 proc, art, calls = self._run(
-                    *self.ON, "-e", f"quickstart_rocm_rdma_mode={mode}")
+                    *self.ON, "-e", f"quickstart_rocm_rdma_mode={mode}",
+                    env={"FAKE_ROCM_STOCK_QEMU": "1"})
                 self.assertNotEqual(proc.returncode, 0, proc.stdout)
                 text = " ".join((proc.stdout + proc.stderr).split())
                 self.assertIn(
-                    "KNOWN LIMITATION, not a broken test. rocm rdma: known "
-                    f"limitation, mode {mode}, ib_write_bw g1 -> g2: ", text)
+                    f"KNOWN LIMITATION {where}, not a broken test. rocm "
+                    f"rdma: known limitation, mode {mode}, ib_write_bw g1 "
+                    "-> g2: ", text)
                 self.assertIn(f"It said: {said}", text)
                 # VRAM on both sides: no host allocation in the environment.
                 for call in calls:

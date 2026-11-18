@@ -170,8 +170,9 @@ dmesg | grep -i ionic     # a real link speed, not "Unknown x255"
 
 ## Why the fork QEMU image
 
-`<qemu-ref>` pins the `-sbates-fork` variant deliberately. It carries
-`31e3d06a` *"hw/vfio: assign region fd to RAMBlock for vfio-user P2P DMA"*;
+`<qemu-ref>` pins the `-sbates-fork` variant, as every shipped stack does
+since 2026-11-18. It carries
+`a2ee87e` *"hw/vfio: assign region fd to RAMBlock for vfio-user P2P DMA"*;
 without it a peer device's BAR is DMA_MAP-ed with no fd, arrives as
 `vaddr=(nil)`, and every WQE touching GPU memory dies in `vfu_sgl_get()` as
 `could not gather N bytes`. Pairing a GPU with a NIC under one switch and
@@ -187,9 +188,12 @@ fork builds, and `/build/qemu-commit.txt`.
   multiply by 8. If eight gfx1250 BAR sets need more than 512G, the fix is
   `host-phys-bits=on` or an explicit `phys-bits=` on `-cpu`, not a larger
   value here — QEMU will simply refuse.
-- **P2P DMA across the switch is untested.** AGENTS.md issue 19 records the
-  fork tag as carrying the patch, read from the image name; nothing in this
-  repo has yet run a P2P workload against it.
+- **P2P DMA across the switch is untested.** The fork pair has been
+  measured on the default stack, where the NIC and the GPU each sit on a
+  root port: `ib_write_bw --use_rocm_dmabuf` between two guests passes with
+  every byte validated (AGENTS.md, "perftest with ROCm memory support").
+  Nothing has run a P2P workload on this stack, with a switch between the
+  two.
 
 ## What this stack does NOT do
 

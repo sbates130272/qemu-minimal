@@ -70,7 +70,7 @@ jobs:
     container:
       # The one image ref that cannot come from the XML: GitHub resolves it
       # before any step can read a file. Keep it on the fleet's qemu-ref.
-      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261112.gdca6903-qemu11.1.3-vfu.05bb5e5
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:20261112.gdca6903-qemu.4cb9698-vfu.3719c3a
       # /var/lib/qemu-tool is bind-mounted from the host at the same path so
       # the qcow2 pulled in here is the file the sibling qemu containers open:
       # compose bind mounts are resolved by the host docker daemon.

@@ -31,14 +31,13 @@
 [![Batesste Collection](https://img.shields.io/badge/sbates130272.batesste-3.4.0-9cf?style=flat-square)](https://galaxy.ansible.com/ui/repo/published/sbates130272/batesste/)
 [![Rocm-ernic Collection](https://img.shields.io/badge/rocm.ernic-bd90234-9cf?style=flat-square)](https://github.com/ROCm/rocm-ernic/tree/bd902345b0f8f3863f535a0a09da9f21ce744737/ansible)
 
-<!-- CI images pinned in qemu/stacks/rocm-golden.xml, and the guest its <backing-ref> pulls, which this repo publishes under its own stamp; sbates-fork is the QEMU qemu/stacks/mi355x-server.xml pins for P2P DMA -->
+<!-- CI images pinned in qemu/stacks/rocm-golden.xml, and the guest its <backing-ref> pulls, which this repo publishes under its own stamp; QEMU and the ernic server are the sbates-fork pair in every shipped stack and every workflow, for P2P DMA between vfio-user devices -->
 [![CI image build](https://img.shields.io/badge/ci--images-20261112.gdca6903-informational?style=flat-square&logo=docker)](https://hub.docker.com/u/sbates130272)
-[![Qemu](https://img.shields.io/badge/qemu-11.1.3-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user/tags)
-[![Libvfio-user](https://img.shields.io/badge/libvfio--user-05bb5e5-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user/tags)
-[![Rocm-ernic](https://img.shields.io/badge/rocm--ernic-90434a2-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-rocm-ernic/tags)
+[![Qemu](https://img.shields.io/badge/qemu-11.1.3%20sbates--fork%20qemu.4cb9698-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork/tags)
+[![Libvfio-user](https://img.shields.io/badge/libvfio--user-3719c3a-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork/tags)
+[![Rocm-ernic](https://img.shields.io/badge/rocm--ernic-90434a2-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-rocm-ernic-sbates-fork/tags)
 [![Rocjitsu](https://img.shields.io/badge/rocjitsu-50be05a-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu/tags)
 [![Guest Qcow2](https://img.shields.io/badge/guest-20261117.g481c892-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/qemu-tool-rocm-golden/tags)
-[![Qemu Fork](https://img.shields.io/badge/sbates--fork-qemu.4cb9698-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork/tags)
 
 <!-- What the rocm-golden guest is baked with: pins in ansible/playbooks/vm-rocm-golden.yml and <bake-release> in qemu/stacks/rocm-golden.xml -->
 [![Golden Guest OS](https://img.shields.io/badge/rocm--golden-Ubuntu%20resolute-blueviolet?style=flat-square&logo=ubuntu)](qemu/stacks/rocm-golden.xml)
@@ -306,19 +305,23 @@ qemu-tool quick-start test --rocm-rdma-test
 ```
 
 By default the buffers are host memory the GPU can address
-(`PERFTEST_ROCM_HOST_ALLOC=1`), not VRAM, because that is the one form that
-passes on the shipped stacks: it proves HIP, the registration, the transfer
-and the validator, everything but the NIC reaching the GPU's own memory.
-`--rocm-rdma-mode dmabuf` and `--rocm-rdma-mode vram` put the buffers in
-VRAM and are expected to fail there, each for a measured reason. With both
-devices emulated, the NIC reading GPU memory is one vfio-user server
-reaching into another's BAR, which stock QEMU does not pass on, so `dmabuf`
-registers the buffer and the first work request ends in `remote access
-error`; `vram` is refused at registration inside the guest (`Couldn't
-allocate MR with error=14`) whichever QEMU is pinned. Either is reported as
-the known limitation of its mode, with that line, and the run still exits
-non-zero. **It needs a guest image that has the ROCm perftest, which the
-image the fleet files pull does not**: on those guests the test stops at
+(`PERFTEST_ROCM_HOST_ALLOC=1`), not VRAM, the form that passes on any QEMU:
+it proves HIP, the registration, the transfer and the validator, everything
+but the NIC reaching the GPU's own memory. `--rocm-rdma-mode dmabuf` and
+`--rocm-rdma-mode vram` put the buffers in VRAM. With both devices
+emulated, the NIC reading GPU memory is one vfio-user server reaching into
+another's BAR. The fork QEMU every shipped stack pins hands the NIC's
+server that memory, so `dmabuf` passes there (measured on the default
+fleet: 486 and 460 MiB/s through this switch, 535 MiB/s by hand, every
+byte validated). Stock QEMU does not pass
+it on: on a stack whose `<qemu-ref>` names it, `dmabuf` registers the
+buffer and the first work request ends in `remote access error`, and
+`quick-start` says so before it starts. `vram` is refused at registration
+inside the guest (`Couldn't allocate MR with error=14`) whichever QEMU is
+pinned. Either failure is reported as the known limitation of its mode,
+with that line, and the run still exits non-zero. **It needs a guest
+image that has the ROCm perftest, which the image the fleet files pull
+does not**: on those guests the test stops at
 its first check and says so. The result and both sides' output are in
 `artifacts/rocm-rdma.md` under the stack and in the report. A fleet with
 one guest is refused before anything is started. A run that is timed out
@@ -658,6 +661,17 @@ No overlay is committed to this repository, and none should be: a fleet for
 one host or one CI lane is a local file (the CI lanes write theirs inline in
 the workflow), and anything every fleet wants belongs in the stack's own
 file.
+
+`<vm-nvme-vram>true</vm-nvme-vram>` points every emulated NVMe of a guest at
+the BAR of that guest's first GPU, which is what makes hipFile's direct
+NVMe-to-VRAM path fast: on the default fleet that path measured 11 to
+13 MB/s without it and 831 and 959 MB/s with it, one run each. The likely
+cause of the slow rate, inferred and not profiled, is QEMU copying each
+read through a 4 KiB bounce buffer. It needs `<vm-nvme>` of at least 1 and
+the fork QEMU; `rocm-golden.xml` sets it, and the other two shipped fleets
+do not, since it has not been run behind a PCIe switch. An overlay on
+`rocm-golden.xml` that removes the NVMe (`<vm-nvme>0`) is refused unless it
+also sets `<vm-nvme-vram>false`.
 
 Every later command against that fleet needs no flags, unless it starts
 the fleet and the fleet's `<vm-images-dir>` or `<qemu-tool-src>` is not the
@@ -1118,6 +1132,8 @@ takes every stack on the system.
 | `--nvme-trace-file FILE` | — | Redirect trace output to file |
 | `--nvme-lbaf-mask HEX` | — | 16-bit hex LBA format mask (e.g. `0x1f`) |
 | `--nvme-recreate` | off | Delete and recreate NVMe qcow2 files on start |
+| `--nvme-vram-dev ID` | — | Let the emulated NVMe DMA into the BAR of the vfio-user device with this qdev id (its socket's file name without `.sock`); fork QEMU only. `<vm-nvme-vram>` in a fleet file |
+| `--nvme-vram-bar N` | 0 | Which BAR of that device |
 | `--filesystem DIR` | — | Host directory to share via 9p/VirtFS |
 | `--pci-testdev` | off | Enable `pci-testdev` |
 | `--pci-hostdev BDF[,BDF]` | — | VFIO PCI passthrough (repeatable or comma-sep) |

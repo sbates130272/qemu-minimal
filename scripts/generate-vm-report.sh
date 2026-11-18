@@ -314,13 +314,27 @@ if ! mountpoint -q /mnt/nvme; then
   sudo -n mount -o noatime "${dev}" /mnt/nvme
 fi
 sudo -n chmod 1777 /mnt/nvme
+MNT=/mnt/nvme
+# begin: hipfile target is on nvme
+# A hipFile direct read of a file that is not on an NVMe namespace can hang
+# the guest for good: AIS takes any PCI block device, and a virtio disk
+# cannot DMA to a GPU BAR address (seen on the root disk: "virtio: bogus
+# descriptor or out of resources", and the guest never answered again).
+src=$(findmnt -n -o SOURCE --target "${MNT}" 2>/dev/null || true)
+# A namespace or a partition of one, with btrfs's "[/subvolume]" allowed.
+nvme_re='^/dev/nvme[0-9]+n[0-9]+(p[0-9]+)?(\[.*\])?$'
+if ! [[ "${src}" =~ ${nvme_re} ]]; then
+  echo "${MNT} is on '${src:-no filesystem}', not an NVMe namespace: refusing a hipFile direct read there"
+  exit 1
+fi
+# end: hipfile target is on nvme
 echo "hipcc: ${hipcc}"
 echo "rocm: ${rocm}"
 "${hipcc}" -O2 --offload-arch=gfx1250 \
   -I"${rocm}/include" -I"${rocm}/include/hipfile" \
   -o /tmp/gemm-hipfile-bench /tmp/gemm-hipfile-bench.hip \
   -L"${rocm}/lib" -lhipfile -Wl,-rpath,"${rocm}/lib"
-/tmp/gemm-hipfile-bench /mnt/nvme 4
+/tmp/gemm-hipfile-bench "${MNT}" 4
 EOF
   } 2>&1
 }

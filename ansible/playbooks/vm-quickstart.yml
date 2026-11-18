@@ -1044,9 +1044,11 @@
 #       playbooks/vm-quickstart.yml --private-key <key> \
 #       -e quickstart_rocm_rdma=true
 #
-# WHERE THE BUFFERS ARE is quickstart_rocm_rdma_mode (--rocm-rdma-mode), and
-# only the default passes on the stacks this repository ships. Measured on
-# the default stack (stock QEMU, 2026-11-17, two guests):
+# WHERE THE BUFFERS ARE is quickstart_rocm_rdma_mode (--rocm-rdma-mode).
+# host-alloc and dmabuf pass on the stacks this repository ships, which pin
+# the fork QEMU; vram passes nowhere. Measured on the default fleet, two
+# guests, with stock QEMU on 2026-11-17 and again on 2026-11-18, and with
+# the fork QEMU and its NIC server on 2026-11-18:
 #
 #   host-alloc  PERFTEST_ROCM_HOST_ALLOC=1 with --use_rocm: hipHostMalloc,
 #               host memory the GPU can address. PASSES: 642 MiB/s with the
@@ -1057,12 +1059,17 @@
 #               the transfer and the validator, everything but the NIC
 #               reaching the GPU's own memory. The default.
 #   dmabuf      --use_rocm --use_rocm_dmabuf: hipMalloc, registered as a
-#               dma-buf. Registers; the first work request FAILS, "Failed
-#               status-remote access error (10): wr_id 0 syndrom 0x9", and
-#               the sender's NIC server logs "could not gather 65536 bytes".
-#               The NIC's server cannot read the GPU's memory: one vfio-user
-#               server DMA-ing into another's BAR, which needs a QEMU patch
-#               only the fork image carries. Untried there.
+#               dma-buf. PASSES on the fork QEMU, by hand and not through
+#               this play: 535 MiB/s host-staged and 516 MiB/s with the
+#               live kernel, "VALIDATION: PASSED - 7 chunks, 58720256
+#               bytes" both times, and the NIC's server maps a 256 GiB
+#               rocjitsu-vram region. On STOCK QEMU it registers and the
+#               first work request FAILS, "Failed status-remote access
+#               error (10): wr_id 0 syndrom 0x9", and the sender's NIC
+#               server logs "could not gather 65536 bytes": that server has
+#               no mapping of the GPU's BAR, which only the fork QEMU hands
+#               it. So a stack whose <qemu-ref> and <ernic-ref> name the
+#               stock images still fails here.
 #   vram        --use_rocm alone: hipMalloc, registered by address.
 #               ibv_reg_mr is refused in the guest on both sides, "Couldn't
 #               allocate MR with error=14". FAILS on any stack: the NIC's
@@ -1070,7 +1077,11 @@
 #
 # A failure in dmabuf or vram that shows its line above is reported as the
 # known limitation, with that line, and the play still fails: the result is
-# the true one. AGENTS.md, "perftest with ROCm memory support", has the rest.
+# the true one. This play cannot see which QEMU the stack pins, so for
+# dmabuf the limitation says it is stock QEMU's and to read <qemu-ref>;
+# quick-start, which can, says outright when the fleet pins the fork and
+# the access error is therefore a failure. AGENTS.md, "perftest with ROCm
+# memory support", has the rest.
 #
 # It needs the perftest the golden bake builds with the perftest_setup role:
 # the stamp /etc/perftest-rocm.json and the tools in /usr/local/bin. The
@@ -1118,8 +1129,9 @@
     # Where the buffers are: a key of quickstart_rocm_rdma_modes.
     quickstart_rocm_rdma_mode: host-alloc
     # flags and env are what the mode adds to both command lines. `known` is
-    # the text a failure for the measured reason carries, and `limitation`
-    # what that reason is. host-alloc has neither: it has no known failure.
+    # the text a failure for the measured reason carries, `limitation` what
+    # that reason is, and `where` the stacks it is the expected result on.
+    # host-alloc has none of the three: it has no known failure.
     quickstart_rocm_rdma_modes:
       host-alloc:
         flags: []
@@ -1133,17 +1145,22 @@
         env: {}
         buffers: GPU memory registered as a dma-buf
         known: access error
+        where: on a stack that pins stock QEMU
         limitation: >-
           the buffer registers, and the NIC's server then cannot read the
           GPU's memory: one vfio-user server reaching into another's BAR.
-          That is the result on a stack that pins stock QEMU, which
-          rocm-golden.xml does. The fork QEMU image carries the patch for
-          it and has not been tried
+          That is the expected result only on a stack whose <qemu-ref> and
+          <ernic-ref> name the stock QEMU and NIC server images. The fork
+          pair, which every shipped fleet file pins, hands the NIC's server
+          the GPU's memory, and this mode passed on it. Read <qemu-ref> in
+          the fleet file this stack was rendered from: if it names the
+          fork, this is a failure and not that limitation
       vram:
         flags: []
         env: {}
         buffers: GPU memory registered by address
         known: "Couldn't allocate MR with error=14"
+        where: on every stack
         limitation: >-
           the guest's kernel refuses to register a GPU address (errno 14,
           EFAULT) before the NIC is asked, so this fails on every stack,
@@ -1629,7 +1646,8 @@
       ansible.builtin.assert:
         that: quickstart_rocm_rdma_verdict == 'pass'
         fail_msg: >-
-          {{ 'KNOWN LIMITATION, not a broken test. '
+          {{ ('KNOWN LIMITATION ' ~ quickstart_rocm_rdma_how.where
+              ~ ', not a broken test. ')
              if quickstart_rocm_rdma_verdict == 'known limitation' else '' }}{{
              quickstart_rocm_rdma_line }}.
           Each side ran {{ quickstart_rocm_rdma_ran }}; both sides' output
