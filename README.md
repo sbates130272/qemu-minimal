@@ -28,17 +28,16 @@
 [![Vm-rocm-golden Smoke Test](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-smoke-test-vm-rocm-golden.yml?branch=main&label=smoke-test-vm-rocm-golden&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-smoke-test-vm-rocm-golden.yml)
 
 <!-- Ansible collections pinned in ansible/requirements.yml -->
-[![Batesste Collection](https://img.shields.io/badge/sbates130272.batesste-3.3.1-9cf?style=flat-square)](https://galaxy.ansible.com/ui/repo/published/sbates130272/batesste/)
-[![Rocm-ernic Collection](https://img.shields.io/badge/sbates130272.rocm__ernic-90434a2-9cf?style=flat-square)](https://github.com/ROCm/rocm-ernic)
+[![Batesste Collection](https://img.shields.io/badge/sbates130272.batesste-3.4.0-9cf?style=flat-square)](https://galaxy.ansible.com/ui/repo/published/sbates130272/batesste/)
+[![Rocm-ernic Collection](https://img.shields.io/badge/rocm.ernic-bd90234-9cf?style=flat-square)](https://github.com/ROCm/rocm-ernic/tree/bd902345b0f8f3863f535a0a09da9f21ce744737/ansible)
 
-<!-- CI images pinned in qemu/stacks/rocm-golden.xml, and the guest its <backing-ref> pulls, which this repo publishes under its own stamp; sbates-fork is the QEMU qemu/stacks/mi355x-server.xml pins for P2P DMA -->
+<!-- CI images pinned in qemu/stacks/rocm-golden.xml, and the guest its <backing-ref> pulls, which this repo publishes under its own stamp; QEMU and the ernic server are the sbates-fork pair in every shipped stack and every workflow, for P2P DMA between vfio-user devices -->
 [![CI image build](https://img.shields.io/badge/ci--images-20261112.gdca6903-informational?style=flat-square&logo=docker)](https://hub.docker.com/u/sbates130272)
-[![Qemu](https://img.shields.io/badge/qemu-11.1.3-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user/tags)
-[![Libvfio-user](https://img.shields.io/badge/libvfio--user-05bb5e5-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user/tags)
-[![Rocm-ernic](https://img.shields.io/badge/rocm--ernic-90434a2-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-rocm-ernic/tags)
+[![Qemu](https://img.shields.io/badge/qemu-11.1.3%20sbates--fork%20qemu.4cb9698-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork/tags)
+[![Libvfio-user](https://img.shields.io/badge/libvfio--user-3719c3a-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork/tags)
+[![Rocm-ernic](https://img.shields.io/badge/rocm--ernic-90434a2-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-rocm-ernic-sbates-fork/tags)
 [![Rocjitsu](https://img.shields.io/badge/rocjitsu-50be05a-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu/tags)
 [![Guest Qcow2](https://img.shields.io/badge/guest-20261117.g481c892-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/qemu-tool-rocm-golden/tags)
-[![Qemu Fork](https://img.shields.io/badge/sbates--fork-qemu.4cb9698-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork/tags)
 
 <!-- What the rocm-golden guest is baked with: pins in ansible/playbooks/vm-rocm-golden.yml and <bake-release> in qemu/stacks/rocm-golden.xml -->
 [![Golden Guest OS](https://img.shields.io/badge/rocm--golden-Ubuntu%20resolute-blueviolet?style=flat-square&logo=ubuntu)](qemu/stacks/rocm-golden.xml)
@@ -47,6 +46,7 @@
 [![Golden amdgpu](https://img.shields.io/badge/amdgpu--dkms-31.60-blueviolet?style=flat-square)](ansible/playbooks/vm-rocm-golden.yml)
 [![Golden ernic driver](https://img.shields.io/badge/ionic%20%2B%20SRQ%20%2B%20P4-90434a2-blueviolet?style=flat-square)](https://github.com/ROCm/rocm-ernic/commit/90434a237232275fc8002cb3a6b5121ba836c594)
 [![Golden SDXI driver](https://img.shields.io/badge/sdxi-dfd76f2-blueviolet?style=flat-square)](https://github.com/ROCm/rocm-systems/commit/dfd76f23f6f10561333fc0a9a9f23e9f3b255c04)
+[![Golden perftest](https://img.shields.io/badge/perftest%20%2B%20ROCm-e68c74e-blueviolet?style=flat-square)](https://github.com/sbates130272/perftest/commit/e68c74e910451682ba1dc91b96602fbc7afaa372)
 
 [![Quick-start Build](https://img.shields.io/badge/quick--start-20261112.gdca6903-success?style=flat-square&logo=docker)](https://hub.docker.com/u/sbates130272)
 
@@ -160,6 +160,57 @@ scraped by the exporter. Grafana's port moves automatically if something on
 your machine already has it, and `quick-start` prints the one it chose.
 `--no-metrics` leaves the pair out.
 
+The home dashboard's **SDXI** row is each guest's SDXI device counters, and
+the same numbers answer without Grafana — copy throughput per guest, in
+bytes per second, is
+`sum by (vm_name) (rate(sdxi_bytes_moved_total{context="1"}[2m]))` in place
+of `up` in the Prometheus query above (URL-encode it, or paste it into
+Explore).
+
+Those panels are live counters, so they read zero while nothing is copying.
+The two optional tests are over in seconds and leave nothing a counter
+shows, so each records its own result in the guest and the home dashboard
+shows the last one that passed: the **P4** row is what `quick-start test --p4-test`
+last measured on the first guest (`quickstart_p4_fp8_bytes_per_second`, the
+fp8 result bytes per second, with the time per reduction, the size of the
+run and how long ago it was), and the SDXI row's "SDXI Copy Verified" tile
+is how long ago `--sdxi-test` last copied data through each guest's device
+and found it identical (`quickstart_sdxi_copy_timestamp_seconds`). Both
+read "no test run" until the test has passed once, and a later run that
+fails leaves the last pass on the tiles: its growing age is the only sign.
+
+**The guests' SSH ports and Grafana answer on this machine only.** Every port
+a stack publishes is bound to `<publish-bind-addr>`, which is `127.0.0.1`
+unless a fleet file says otherwise. That holds on Docker Engine 28.0 and
+later: earlier engines let a machine on the same network segment reach a
+port published on loopback, and `qemu-tool check` warns when it finds one.
+To use them from another machine, tunnel
+in — `ssh -L 3000:localhost:3000 -L 2222:localhost:2222 <host>` — or put the
+stack on the network with a one-element overlay:
+
+```bash
+cat > lan.xml <<'XML'
+<fleet xmlns="http://qemu-tool/fleet/1.0">
+  <publish-bind-addr>0.0.0.0</publish-bind-addr>
+</fleet>
+XML
+qemu-tool quick-start --xml qemu/stacks/rocm-golden.xml --xml lan.xml
+```
+
+Know what that publishes first. The guest image is public, and so are both
+ways into it: its SSH key ships beside it, and the password of its `ubuntu`
+account is in the image's `vm-info.json`; the guest's sshd accepts either,
+and the account has sudo. Grafana has anonymous admin. On `0.0.0.0`, anyone
+who can reach the host has root in every guest and Grafana's admin. One
+address of the host in place of `0.0.0.0` limits it to that network.
+
+On WSL2 a Windows browser still reaches `http://localhost:3000`: Windows
+connects to a listener on WSL's loopback, which was checked in mirrored
+networking mode with a plain listener and is what `localhostForwarding`
+does in NAT mode. A running stack has been checked from inside WSL, where
+Grafana answers on `127.0.0.1` and on no other address of the host; it has
+not been checked from a Windows browser.
+
 Useful variations — `qemu-tool quick-start <verb>`:
 
 | Verb | What it does |
@@ -183,9 +234,132 @@ the guest lists them. That behaviour is in the image the fleet files pull,
 `20261117.g481c892`, and in any baked since — the one published before it,
 `20261117.g80c17f8`, still tells you to run the probe first.
 
+Two more tests are behind switches. Both are off by default, run with
+`test` or with no verb, and run in the guest as its login user with no
+sudo:
+
+| Switch | What it runs | A pass prints |
+|---|---|---|
+| `--sdxi-test` | on every guest, 4 MiB of random data copied through `/dev/sdxi0` with `sdxi-cli` and compared with its source | `rocm-golden-1: SDXI copy of 4194304 bytes verified`, one line a guest |
+| `--p4-test` | on the first guest only, `p4_fp8_client` loads the fp8 P4 program into its NIC and checks one reduction, then `p4_fp8_bench` times 2000 of them (`--p4-iters` for another count) | `rocm-golden-1: P4 FP8 reduction <rate> MB/s (262144 elements x 2000 iterations)` |
+
+```bash
+qemu-tool quick-start test --sdxi-test --p4-test
+```
+
+Each result is also in its guest's summary under the stack's `artifacts/`
+and in the report. A fleet that cannot run one is refused before anything
+is started, naming the element to change: `--sdxi-test` needs
+`<sdxi-per-vm>` of at least 1, and `--p4-test` needs `<p4-enable>true` and
+`<p4-guest-scope>load`, the scope that lets a guest replace the program and
+write a table entry. `rocm-golden.xml` has all three. The SDXI test is a
+functional check with no figure. The P4 figure is the rate of the reduction
+inside one NIC, in fp8 result bytes per second, with no peer guest and
+nothing crossing the mesh; the development host measured about 195 MB/s
+with 8-vCPU guests.
+**The P4 program and its table entry stay in that NIC until its ernic
+server restarts.** From then on an RDMA WRITE on it with two equal-length
+operands is a reduction; ordinary transfers, which have one, are untouched.
+A third switch, `--rocm-rdma-test`, is under
+[RDMA with GPU memory](#rdma-with-gpu-memory) below: it needs a newer guest
+image than the fleet files pull.
+
 `qemu-tool quick-start --help` has the rest, and `qemu-tool man` has all of
 it. For more than two guests see [A fleet of your own](#a-fleet-of-your-own),
 which is the same stack generator with a larger `<vm-count>`.
+
+### RDMA with GPU memory
+
+Ubuntu's `perftest` is built without ROCm, so its `ib_send_bw` has no
+`--use_rocm`. The golden bake builds perftest from source against the
+guest's ROCm and installs it in `/usr/local/bin`, where it is what a bare
+`ib_send_bw` runs; the archive's build stays in `/usr/bin`, and is what the
+RDMA test above keeps running. The source is
+[sbates130272/perftest](https://github.com/sbates130272/perftest) at a
+pinned commit of `feat/rocm-data-validation-legacy`, which also gives
+`ib_write_bw` and `ib_read_bw` `--data_validation` for GPU memory. The
+repository, the ref and the commit are `perftest_source_repo`,
+`perftest_source_ref` and `perftest_source_pin` in
+[`vm-rocm-golden.yml`](ansible/playbooks/vm-rocm-golden.yml), and the
+[`perftest_setup`](ansible/playbooks/roles/perftest_setup/defaults/main.yml)
+role's defaults say what else can be set.
+
+**That is in an image baked from this checkout, not yet in the one the
+fleet files pull**, which was published before it: there `ib_send_bw` is the
+archive's. `cat /etc/perftest-rocm.json` in a guest says which it has.
+
+**`quick-start --rocm-rdma-test` runs it between the two guests, with every
+byte checked.** Off by default, like the two switches above; before it
+there was a play for this in `vm-quickstart.yml` that only a hand-typed
+`ansible-playbook -e quickstart_rocm_rdma=true` reached. It runs
+`ib_write_bw --use_rocm=0 --data_validation` from the first guest to the
+last, with the buffers allocated through HIP on both sides, and passes when
+the receiving side prints `VALIDATION: PASSED`:
+
+```bash
+qemu-tool quick-start test --rocm-rdma-test
+```
+
+```
+==> rocm-golden-1 -> rocm-golden-2: ib_write_bw with ROCm buffers (host-alloc), <rate> MiB/s, 58720256 bytes in 7 chunks validated
+```
+
+By default the buffers are host memory the GPU can address
+(`PERFTEST_ROCM_HOST_ALLOC=1`), not VRAM, the form that passes on any QEMU:
+it proves HIP, the registration, the transfer and the validator, everything
+but the NIC reaching the GPU's own memory. `--rocm-rdma-mode dmabuf` and
+`--rocm-rdma-mode vram` put the buffers in VRAM. With both devices
+emulated, the NIC reading GPU memory is one vfio-user server reaching into
+another's BAR. The fork QEMU every shipped stack pins hands the NIC's
+server that memory, so `dmabuf` passes there (measured on the default
+fleet: 486 and 460 MiB/s through this switch, 535 MiB/s by hand, every
+byte validated). Stock QEMU does not pass
+it on: on a stack whose `<qemu-ref>` names it, `dmabuf` registers the
+buffer and the first work request ends in `remote access error`, and
+`quick-start` says so before it starts. `vram` is refused at registration
+inside the guest (`Couldn't allocate MR with error=14`) whichever QEMU is
+pinned. Either failure is reported as the known limitation of its mode,
+with that line, and the run still exits non-zero. **It needs a guest
+image that has the ROCm perftest, which the image the fleet files pull
+does not**: on those guests the test stops at
+its first check and says so. The result and both sides' output are in
+`artifacts/rocm-rdma.md` under the stack and in the report. A fleet with
+one guest is refused before anything is started. A run that is timed out
+leaves the guests' RDMA devices needing the stack recreated. `AGENTS.md`
+has what each run measured and what each failure means.
+
+### Building against RDMA in the guest
+
+The golden guest has two rdma-cores and one to build against. Ubuntu's
+rdma-core 61 is there as a runtime under `/usr`: its udev rules and units,
+and the libraries the archive's own tools are linked to.
+[rocm-ernic][rocm-ernic]'s rdma-core 66, with the SRQ-capable ionic
+provider, is installed from source under `/usr/local`; it is what every
+tool loads, and it is the only one with headers and link libraries. So a
+build takes no flags:
+
+```bash
+gcc prog.c -libverbs                     # headers, link and load: /usr/local
+pkg-config --cflags --libs libibverbs    # -I/usr/local/include -L/usr/local/lib -libverbs
+```
+
+`libibverbs-dev`, `librdmacm-dev` and `libibumad-dev` are deliberately not
+in the image, and the bake purges them from a base that has them. **Do not
+install them in a golden guest.** With them the compiler reads the headers
+in `/usr/local/include` and the linker takes the archive's library, which
+is how perftest failed to link there (`undefined reference to
+ibv_alloc_buf`). `libnl-3-dev` and `libnl-route-3-dev` stay. What went with
+the three is the verbs API man pages and static linking against rdma-core.
+`/etc/rocm-golden-guest.json` records both versions, as
+`rdma_core_archive_version` and `rdma_core_local_version`, and
+`qemu/checks/rocm-golden.sh` fails an image with a second rdma-core to
+build against. A `vm-basic.yml` guest has no rdma-core in `/usr/local`;
+there the archive's `-dev` packages are the right ones to install.
+
+**This too is in an image baked from this checkout, not in the one the
+fleet files pull**, which still has the three packages. It was measured by
+purging them on a guest of that image and rebuilding everything that
+compiles against verbs; no bake has run with the change.
 
 ## System-wide Install (Debian/Ubuntu)
 
@@ -311,6 +485,18 @@ qemu-tool gen-vm --vm-name myvm --release noble
 qemu-tool run-vm --vm-name myvm
 qemu-tool ssh myvm                          # from another terminal
 ```
+
+On x86, `run-vm` also tells the guest its name: the VM name goes in the
+SMBIOS system serial number (`sudo cat /sys/class/dmi/id/product_serial`),
+and a guest made from the rocm-golden image sets its hostname from it at
+boot, so `rocm-golden-1` on the host is `rocm-golden-1` inside. It takes
+both halves. The guest half is in the image, from the next one published
+after `20261117.g481c892`; a guest of an image without it names itself as
+before. The host half is this `run-vm`, and in a stack the `run-vm` is the
+one inside each qemu container: built from the source tree `QEMU_TOOL_SRC`
+names when there is one, and otherwise installed from PyPI, where `2.0.0`
+passes no name. So a stack run without a checkout needs the first qemu-tool
+release after `2.0.0` as well as the new image.
 
 `gen-vm` generates an SSH keypair for each image it bakes, keeps it in
 `<images>/keys/<vm-name>_id_rsa` and prints the path; `qemu-tool ssh` finds
@@ -475,6 +661,17 @@ No overlay is committed to this repository, and none should be: a fleet for
 one host or one CI lane is a local file (the CI lanes write theirs inline in
 the workflow), and anything every fleet wants belongs in the stack's own
 file.
+
+`<vm-nvme-vram>true</vm-nvme-vram>` points every emulated NVMe of a guest at
+the BAR of that guest's first GPU, which is what makes hipFile's direct
+NVMe-to-VRAM path fast: on the default fleet that path measured 11 to
+13 MB/s without it and 831 and 959 MB/s with it, one run each. The likely
+cause of the slow rate, inferred and not profiled, is QEMU copying each
+read through a 4 KiB bounce buffer. It needs `<vm-nvme>` of at least 1 and
+the fork QEMU; `rocm-golden.xml` sets it, and the other two shipped fleets
+do not, since it has not been run behind a PCIe switch. An overlay on
+`rocm-golden.xml` that removes the NVMe (`<vm-nvme>0`) is refused unless it
+also sets `<vm-nvme-vram>false`.
 
 Every later command against that fleet needs no flags, unless it starts
 the fleet and the fleet's `<vm-images-dir>` or `<qemu-tool-src>` is not the
@@ -785,11 +982,12 @@ The host must have `ansible`, `ansible-galaxy`, and the Python
 ones that would otherwise arrive as transitive dependencies, so `--no-deps`
 skips roughly 10 MiB of collections this repository never uses.
 
-One exception, temporary: `sbates130272.rocm_ernic` is pulled from the
-upstream [rocm-ernic][rocm-ernic] git tree at a pinned SHA rather than from
-Galaxy. Galaxy publishes only 0.1.0, the pre-ionic collection, and the ionic
-work needs 0.2.0. This reverts to a normal Galaxy version pin as soon as
-rocm-ernic publishes its next collection.
+One exception: `rocm.ernic` is installed from the upstream
+[rocm-ernic][rocm-ernic] git tree at a pinned SHA, not from Galaxy, where
+upstream no longer publishes it. That pin is the roles. The sources the
+guest's half of the NIC is built from are a second pin, `ernic_source_pin` in
+`vm-rocm-golden.yml`, which moves with the `ernic.<sha>` of the server images
+and need not be the same commit; the badges above show both.
 
 ### Available playbooks
 
@@ -800,7 +998,7 @@ else, so the shared work has exactly one definition.
 | Playbook | Description |
 |---------|-------------|
 | `vm-basic.yml` | User setup, favourite packages, git config |
-| `vm-rocm-golden.yml` | `vm-basic.yml`, plus the pinned mainline kernel, ROCm, the rocjitsu GPU firmware and patched amdgpu driver, the [rocm-ernic][rocm-ernic] RDMA NIC with SRQ and P4, and SDXI. `--tags configure` sets up the NIC on a live guest; `--tags test` runs the GPU workloads |
+| `vm-rocm-golden.yml` | `vm-basic.yml`, plus the pinned mainline kernel, ROCm, the rocjitsu GPU firmware and patched amdgpu driver, the [rocm-ernic][rocm-ernic] RDMA NIC with SRQ and P4, SDXI, and perftest built with ROCm memory support. `--tags configure` sets up the NIC on a live guest and `--tags test` runs the GPU workloads; see [the live stages](#the-live-stages) |
 
 Each bake ends with one slim pass, which deletes the scratch the bake left
 behind — the apt cache and package lists, DKMS build trees, archived journals,
@@ -817,6 +1015,39 @@ qemu-tool gen-vm \
 Ansible changes are written into the backing qcow2, so overlays
 created with `--backing-file` inherit them. Ansible is skipped when
 `--restore-image` or `--backing-file` is set.
+
+#### The live stages
+
+A bake has no device attached, so three plays of `vm-rocm-golden.yml` are
+left for a guest that is running behind a stack. Each is tagged `never` and
+runs only when named:
+
+```bash
+ansible-playbook -i HOST, ansible/playbooks/vm-rocm-golden.yml \
+  --tags configure -e ansible_port=2222 -e ansible_user=ubuntu
+```
+
+| Tag | What it does |
+|-----|--------------|
+| `configure` | Loads the baked ionic modules if they are not loaded, brings the emulated NICs up, and gives `rocm-ernic0` the address `192.168.200.<10 * vm_index>` (`-e vm_index=N` or `-e vm_ip=ADDR`) |
+| `firmware` | Installs `ip_discovery.bin` from the rocjitsu image serving the guest, which amdgpu needs to probe |
+| `test` | Runs the GPU workloads |
+
+**`--tags configure` builds no driver, and only works on a guest this
+playbook baked.** The image carries `ionic-ernic` built with rocm-ernic's
+SRQ and P4 patch series. Up to 2.0.0 this stage built the driver again from
+the base series alone and reloaded it, which replaced the image's driver in
+that guest. Measured on a guest from the published image: behind a stack
+that offers it no P4 the stage finished green and left `max_srq` 0, without
+a word; behind the default stack, which offers P4, the stage failed at
+`modprobe ionic_rdma` and left no RDMA device at all. The stage now starts
+and ends by checking that the driver is the baked one, and fails if it is
+not: the loaded modules are the build the bake recorded in
+`/etc/ionic-srq-p4.json`, and every emulated NIC reports `max_srq` above
+zero in `ibv_devinfo -v`. A guest that an earlier version configured still
+has the base driver in its overlay; make a new overlay on the baked image,
+which was never changed. A fleet guest needs none of this: the image loads
+the modules and addresses its NICs at boot.
 
 ## qemu-tool CLI Reference
 
@@ -901,6 +1132,8 @@ takes every stack on the system.
 | `--nvme-trace-file FILE` | — | Redirect trace output to file |
 | `--nvme-lbaf-mask HEX` | — | 16-bit hex LBA format mask (e.g. `0x1f`) |
 | `--nvme-recreate` | off | Delete and recreate NVMe qcow2 files on start |
+| `--nvme-vram-dev ID` | — | Let the emulated NVMe DMA into the BAR of the vfio-user device with this qdev id (its socket's file name without `.sock`); fork QEMU only. `<vm-nvme-vram>` in a fleet file |
+| `--nvme-vram-bar N` | 0 | Which BAR of that device |
 | `--filesystem DIR` | — | Host directory to share via 9p/VirtFS |
 | `--pci-testdev` | off | Enable `pci-testdev` |
 | `--pci-hostdev BDF[,BDF]` | — | VFIO PCI passthrough (repeatable or comma-sep) |

@@ -4,7 +4,7 @@
 # Regenerate after changing qemu/stacks/rocm-golden.xml:
 #   qemu-tool gen-compose --xml qemu/stacks/rocm-golden.xml
 #
-# xml-sha256: 182d28e95322c167195f9db662f5e4b248928997a405dcfb2d61f829e3ddb7df  # pre-commit: ignore
+# xml-sha256: dcce5a87c406ee97aaef3db05a8d29fee6263c419f4b68e9419af6b9019df927  # pre-commit: ignore
 
 x-logging: &logging
   driver: json-file
@@ -13,7 +13,7 @@ x-logging: &logging
     max-file: "3"
 
 x-ernic-common: &ernic-common
-  image: "docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic:20261112.gdca6903-ernic.90434a2-vfu.05bb5e5"
+  image: "docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic-sbates-fork:20261112.gdca6903-ernic.90434a2-vfu.3719c3a"
   logging: *logging
   stop_signal: SIGKILL
   user: "${CONTAINER_USER:?set CONTAINER_USER=<uid>:<gid>}"
@@ -30,7 +30,7 @@ x-ernic-common: &ernic-common
     - ernic-stats:/run/ernic-stats
 
 x-qemu-common: &qemu-common
-  image: "docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user:20261112.gdca6903-qemu11.1.3-vfu.05bb5e5"
+  image: "docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:20261112.gdca6903-qemu.4cb9698-vfu.3719c3a"
   logging: *logging
   volumes:
     - vfu-sockets:/run/vfu:ro
@@ -208,7 +208,7 @@ services:
       sdxi-1:
         condition: service_healthy
     ports:
-      - "2222:2222"
+      - "127.0.0.1:2222:2222"
     entrypoint:
       - /bin/sh
       - -c
@@ -238,6 +238,7 @@ services:
           --nvme "1" \
           --extra-hostfwd "tcp::9100-:9100" \
           --extra-hostfwd "tcp::9879-:9879" \
+          --nvme-vram-dev "rocjitsu-1" \
           --vfio-userdev "/run/vfu/ernic-1.sock,/run/vfu/rocjitsu-1.sock,/run/vfu/sdxi-1.sock"
 
   # ---- VM 2: guest ernic IP 192.168.100.12 ----
@@ -255,7 +256,7 @@ services:
       sdxi-2:
         condition: service_healthy
     ports:
-      - "2223:2222"
+      - "127.0.0.1:2223:2222"
     entrypoint:
       - /bin/sh
       - -c
@@ -285,6 +286,7 @@ services:
           --nvme "1" \
           --extra-hostfwd "tcp::9100-:9100" \
           --extra-hostfwd "tcp::9879-:9879" \
+          --nvme-vram-dev "rocjitsu-2" \
           --vfio-userdev "/run/vfu/ernic-2.sock,/run/vfu/rocjitsu-2.sock,/run/vfu/sdxi-2.sock"
 
   # ---- metrics (opt-in: --profile metrics) ----
@@ -430,7 +432,7 @@ services:
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
       - /var/lib/qemu-tool/grafana-data:/var/lib/grafana
     ports:
-      - "0.0.0.0:3000:3000"
+      - "127.0.0.1:3000:3000"
 
   # ---- guest Ethernet wiring ----
   # One short-lived sidecar per ernic. It shares that

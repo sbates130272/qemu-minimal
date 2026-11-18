@@ -1,0 +1,84 @@
+---
+# Is the ionic driver this guest has, or runs, the SRQ + P4 build its image
+# was baked with? files/ernic-driver-check.sh asks and says what it found;
+# it changes nothing. The live stage loads ernic_p4 to ask whether it can be
+# loaded, and unloads it again unless ionic made a P4 device for it.
+#
+# Why it is asked. The bake's "Build SRQ + P4 ionic stack" play installs
+# ionic-ernic with rocm-ernic's SRQ and P4 series. The collection's
+# ernic_guest_setup, with its driver build on, builds the same DKMS package
+# name and version from the BASE series and reloads the modules. The
+# configure stage of vm-rocm-golden.yml did that until this check existed,
+# in both lanes that gate the image and for anyone following the README.
+# Measured on a guest booted from the published image (2026-11-17):
+#
+#   stack offers no P4 (both lanes)   the stage is green and the guest has
+#                                     max_srq 0 and an ernic_p4 that no
+#                                     longer loads, with nothing said
+#   stack offers P4 (rocm-golden.xml) the stage fails: ernic_p4 holds ionic,
+#                                     so only ionic_rdma is unloaded, and the
+#                                     rebuilt one does not load against the
+#                                     baked ionic. No RDMA device is left
+#
+# Two stages. A bake asks "installed", against what it has just recorded in
+# /etc/ionic-srq-p4.json. The configure stage asks "installed" before it
+# touches the guest and "live" as its last task, and the two lanes that run
+# that stage send the same script over ssh afterwards.
+#
+# rocm_ernic_setup_driver_check_p4 is whether the device serving the guest
+# offers it the P4 engine; "auto" asks for /dev/ernic-p4 when ionic created
+# its P4 auxiliary device. rocm_ernic_setup_driver_check_blame is a sentence
+# the caller adds to a failure, for the one caller that knows who did it. It
+# is added only when the script's verdict is that the driver was replaced: a
+# device that offers no SRQ fails the check too, and is nobody's rebuild.
+
+- name: Assert the driver check was told a stage and what to expect of P4
+  ansible.builtin.assert:
+    that:
+      - rocm_ernic_setup_driver_check_stage in ['installed', 'live']
+      - rocm_ernic_setup_driver_check_p4 in ['device', 'nodevice', 'auto']
+    fail_msg: >-
+      rocm_ernic_setup_driver_check_stage is
+      "{{ rocm_ernic_setup_driver_check_stage }}" (installed or live) and
+      rocm_ernic_setup_driver_check_p4 is
+      "{{ rocm_ernic_setup_driver_check_p4 }}" (device, nodevice or auto).
+
+- name: Ask which ionic driver the guest has
+  ansible.builtin.script:
+    cmd: ernic-driver-check.sh
+    executable: /bin/bash
+  environment:
+    ERNIC_DRIVER_CHECK_STAGE: "{{ rocm_ernic_setup_driver_check_stage }}"
+    ERNIC_DRIVER_EXPECT_P4: "{{ rocm_ernic_setup_driver_check_p4 }}"
+  become: true
+  register: rocm_ernic_setup_driver_check
+  changed_when: false
+  failed_when: false
+
+# The script's own lines are the message. Never gated and never softened: a
+# guest that fails this has lost SRQ and P4 and would otherwise go on to be
+# tested, or used, as if it had them.
+- name: Fail when the guest's ionic driver is not the baked SRQ + P4 build
+  vars:
+    rocm_ernic_setup_driver_check_lines: >-
+      {{ rocm_ernic_setup_driver_check.stdout_lines | default([])
+         | map('trim') | select('match', '(ok|note|FAIL): ') | list }}
+  ansible.builtin.assert:
+    that:
+      - rocm_ernic_setup_driver_check.rc | default(1) == 0
+      - rocm_ernic_setup_driver_check_lines | select('match', 'FAIL:') | list | length == 0
+      - rocm_ernic_setup_driver_check_lines | select('match', 'ok:') | list | length > 0
+    fail_msg: >-
+      {{ rocm_ernic_setup_driver_check_lines | select('match', 'FAIL:')
+         | join(' ')
+         | default('ernic-driver-check.sh printed no verdict: '
+                   ~ (rocm_ernic_setup_driver_check.stdout | default(''))
+                   ~ (rocm_ernic_setup_driver_check.stderr | default(''))
+                   ~ (rocm_ernic_setup_driver_check.msg | default('')), true) }}
+      {{ rocm_ernic_setup_driver_check_blame
+         if rocm_ernic_setup_driver_check_lines
+            | select('search', 'has been replaced') | list | length > 0
+         else '' }}
+      A baked image is not changed by what happens to a guest booted from
+      an overlay on it: a new overlay carries the SRQ + P4 driver again.
+    success_msg: "{{ rocm_ernic_setup_driver_check_lines | join(' ') }}"

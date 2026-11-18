@@ -29,35 +29,59 @@ collections:
   # into. 3.3.0 also removed ptop from fave_packages. The golden bake has
   # dotfiles off, so its guest gains ~/.bashrc.d/user_setup.sh and a sourcing
   # loop in ~/.bashrc; nothing else in the image changes.
+  #
+  # 3.4.0 is a provisioning-speed release. What reaches a golden bake:
+  # rocm_setup asks rocm-latest for every version in one call instead of
+  # five, user_setup writes its SSH client settings as one block and no
+  # longer fails when a snap data directory cannot be removed, and
+  # fave_packages skips the uv install instead of failing the play when
+  # GitHub rate-limits the version lookup. user_setup still removes snapd
+  # without purging it, so the purge in vm-basic.yml stays. The rdma_setup
+  # default changes do not apply: no playbook here runs that role.
   - name: sbates130272.batesste
-    version: "3.3.1"
-  # Pinned to the upstream git tree rather than Galaxy. Galaxy publishes only
-  # 0.1.0, which is the pre-ionic collection (driver/ and rdma-core/ deleted
-  # upstream on 2026-09-16). ">=0.1.0" looks like it would pick up 0.2.0 and
-  # never will, because 0.2.0 was never published. The collection lives in the
-  # repo's ansible/ subdirectory, which is what the #/ansible/ fragment selects.
+    version: "3.4.0"
+  # rocm-ernic's collection, installed from the upstream git tree. Upstream
+  # does not publish it to Galaxy. It did once, at 0.1.0 only and under
+  # another namespace, and renamed it rocm.ernic when it stopped; CHANGELOG.md
+  # has the old name. It installs as rocm.ernic 0.3.0, under
+  # ansible_collections/rocm/ernic, and the playbooks name its roles
+  # rocm.ernic.<role>. The collection lives in the repo's ansible/
+  # subdirectory, which is what the #/ansible/ fragment selects. Upstream
+  # means to attach a built collection to a GitHub release tagged
+  # ernic-ansible-v<version>; no such tag exists yet, so a commit is the only
+  # pin there is.
   #
   # Pinned to a SHA, not a branch: a git requirement is re-resolved on every
   # ansible-galaxy run (there is no installed version for it to compare
   # against), so a branch would silently move the collection under us
-  # mid-series. Bump this deliberately. Move back to a Galaxy version pin once
-  # 0.2.0 is published there.
+  # mid-series. Bump this deliberately.
   #
-  # ernic_source clones the same repo again inside the guest to build from, and
-  # defaults that checkout to "main". playbooks/vm-rocm-golden.yml pins it to
-  # this same SHA so the roles and the sources they build come from one tree --
-  # bump both together.
+  # THIS PIN IS THE ROLES, and only the roles: the task files, the role
+  # defaults, and the base ionic series and the two scripts that
+  # ernic_guest_setup stages from the collection's own files/.
   #
-  # A THIRD thing moves with them: the ernic.<sha> in the <ernic-ref> of
-  # qemu/stacks/rocm-golden.xml. SRQ is the reason -- the SRQ support merged at 3fb74d1,
-  # and the two halves of SRQ ship separately. The device-side emulation is in
-  # the server container; the userspace provider is built in-guest from this
-  # tree, because no rdma-core release has create_srq in providers/ionic. Run
-  # a guest ahead of its server and ibv_create_srq() fails, UCX declines
+  # The SOURCES are a second pin, ernic_source_pin in
+  # playbooks/vm-rocm-golden.yml: the commit ernic_source checks out on the
+  # controller. Everything with a half in the device server is built from
+  # that checkout, not from this collection -- the SRQ and P4 patch series,
+  # the scripts that fetch and build them, the rdma-core provider series, the
+  # ernic_p4 module and the P4 client and its headers. The playbook hands
+  # those paths to the roles, and tests/test_playbook_pins.py holds it to
+  # that. So ernic_source_pin moves with the ernic.<sha> in every <ernic-ref>
+  # and ERNIC_IMAGE, and this pin does not have to: run a guest built from
+  # sources ahead of its server and ibv_create_srq() fails, UCX declines
   # rc_verbs, and anything built on it quietly falls back to TCP.
+  #
+  # The two pins differ today (ernic_source_pin is 90434a2), and that is
+  # deliberate. Moving this one alone is safe only while the roles here
+  # still drive the scripts and series at ernic_source_pin the way those
+  # expect, so compare ansible/roles and ansible/files between the two
+  # commits on every bump of either. At bd90234 against 90434a2 no .patch
+  # file under ansible/files/patches differs, and neither does
+  # setup-ionic-dkms.sh.
   - name: https://github.com/ROCm/rocm-ernic.git#/ansible/
     type: git
-    version: 90434a237232275fc8002cb3a6b5121ba836c594
+    version: bd902345b0f8f3863f535a0a09da9f21ce744737
   - name: ansible.posix
     version: ">=2.2.2"
   # Floor from sbates130272.batesste 3.0.0's galaxy.yml. --no-deps means galaxy

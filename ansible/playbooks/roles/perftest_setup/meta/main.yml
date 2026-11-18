@@ -1,0 +1,19 @@
+---
+galaxy_info:
+  role_name: perftest_setup
+  author: Stephen Bates
+  description: >-
+    Build perftest from a pinned commit with ROCm memory support and install
+    it under a prefix ahead of the archive's package, so ib_send_bw and
+    friends take --use_rocm and ib_write_bw and ib_read_bw take
+    --data_validation with it. Needs ROCm and the rdma-core headers in the
+    guest, and no device.
+  license: MIT
+  min_ansible_version: "2.18"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - noble
+        - resolute
+
+dependencies: []

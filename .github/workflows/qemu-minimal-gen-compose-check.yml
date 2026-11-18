@@ -127,9 +127,9 @@ jobs:
           done
           ansible-galaxy collection install --no-deps \
             -r "$RUNNER_TEMP/rocm-ernic-collection.yml"
-          script="$HOME/.ansible/collections/ansible_collections/sbates130272/rocm_ernic/files/scripts/fetch-ionic-sources.sh"
+          script="$HOME/.ansible/collections/ansible_collections/rocm/ernic/files/scripts/fetch-ionic-sources.sh"
           test -f "$script" || {
-            echo "::error::the rocm_ernic collection did not install $script"; exit 1; }
+            echo "::error::the rocm.ernic collection did not install $script"; exit 1; }
 
       # CI=true is set by GitHub on every runner; the tests key on it to
       # refuse to skip. Set explicitly so the behaviour is visible here and

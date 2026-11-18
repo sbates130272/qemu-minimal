@@ -56,6 +56,22 @@ METRICS = (
     },
 )
 
+# Changes to what a metric measures, newest first. The date is the day the
+# change was made; the chart steps at the first daily run after it reached
+# main. That step is the change and not a regression or a win in the code
+# under test.
+NOTES = (
+    ("2026-11-18", "Rocjitsu HipFile, HipFile Fio",
+     "The stack's NVMe is pointed at the guest's GPU BAR "
+     "(`<vm-nvme-vram>`), so hipFile's direct path maps GPU memory, where "
+     "it most likely went through QEMU's 4 KiB bounce buffer before "
+     "(inferred, not profiled). Measured by hand before the change: 11 to "
+     "13 MB/s without; 831 and 959 MB/s with, one run each."),
+    ("2026-11-18", "all",
+     "Every stack and workflow moved from stock QEMU to the fork QEMU and "
+     "the ernic server built against its libvfio-user."),
+)
+
 PREFIX_SCALE = {
     "": 1.0,
     "k": 1e3,
@@ -394,6 +410,10 @@ BADGE_URL = (
 )
 
 
+def notes_rows() -> str:
+    return "\n".join(f"| {date} | {what} | {text} |" for date, what, text in NOTES)
+
+
 def write_perf_page(site_dir: Path, history: List[Dict]) -> None:
     perf_dir = site_dir / "perf"
     perf_dir.mkdir(parents=True, exist_ok=True)
@@ -444,6 +464,15 @@ vfio-user and swing hard between runs.
 ## Trend charts
 
 {chart_blocks if chart_blocks else 'No retained benchmark history yet.'}
+
+## Changes to what is measured
+
+A step in a chart on or after one of these dates, at the first daily run
+after the change reached main, is the change named here.
+
+| Date | Metrics | Change |
+| --- | --- | --- |
+{notes_rows()}
 
 ## Recent runs
 

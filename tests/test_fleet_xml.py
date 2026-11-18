@@ -56,8 +56,10 @@ class ParseDefault(unittest.TestCase):
         self.assertEqual(self.cfg.stop_grace_period, "120s")
 
     def test_images(self) -> None:
-        self.assertIn("qemu-libvfio-user", self.cfg.qemu_ref)
-        self.assertIn("rocm-ernic", self.cfg.ernic_ref)
+        # The fork pair: QEMU that hands a vfio-user server the other
+        # devices' memory, and the NIC server built against its libvfio-user.
+        self.assertIn("qemu-libvfio-user-sbates-fork:", self.cfg.qemu_ref)
+        self.assertIn("rocm-ernic-sbates-fork:", self.cfg.ernic_ref)
         self.assertIn("rocjitsu", self.cfg.rocjitsu_ref)
         # The guest this repo publishes, by the dated tag of one publish.
         self.assertRegex(
@@ -227,7 +229,8 @@ class SettingsTable(unittest.TestCase):
         self.assertEqual(fleet_xml.KNOWN_ELEMENTS, tuple(tags))
 
     def test_each_kind_matches_its_field_type(self) -> None:
-        want = {int: {"int"}, bool: {"bool"}, str: {"str", "expand", "port"}}
+        want = {int: {"int"}, bool: {"bool"},
+                str: {"str", "expand", "port", "addr"}}
         defaults = FleetConfig()
         for setting in fleet_xml._SETTINGS:
             kind = type(getattr(defaults, setting.field))

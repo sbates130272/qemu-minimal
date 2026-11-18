@@ -270,6 +270,18 @@ class EndToEnd(unittest.TestCase):
         table = [line for line in body.splitlines() if line.startswith("| Commit ")]
         self.assertEqual(table[0].count("|"), len(rsp.METRICS) + 3)
 
+    def test_perf_page_says_what_changed_under_a_metric(self):
+        self.run_main()
+        body = (self.site / "perf" / "index.md").read_text()
+        self.assertIn("## Changes to what is measured", body)
+        for date, what, _ in rsp.NOTES:
+            with self.subTest(date=date, what=what):
+                self.assertIn(f"| {date} | {what} |", body)
+        labels = {meta["label"] for meta in rsp.METRICS}
+        for _, what, _ in rsp.NOTES:
+            for name in what.split(", "):
+                self.assertTrue(name == "all" or name in labels, name)
+
     def test_missing_history_is_tolerated(self):
         # First ever publish: the history file is not on the branch yet.
         missing = Path(self.tmp.name) / "nope" / "history.jsonl"

@@ -54,3 +54,42 @@ sdxi_setup_force: false
 # The directory must contain emulation/sdxi/drivers/sdxi_char and
 # emulation/sdxi/tools/sdxi-cli at its root (same layout as the upstream repo).
 sdxi_setup_local_src_dir: ""
+
+# Metrics
+# -------
+# tasks/metrics.yml installs sdxi-textfile-metrics.py and a timer that runs
+# it, writing the device's counters to sdxi.prom for node_exporter's textfile
+# collector. A guest with no node_exporter is skipped with a message, and so
+# is one where this is false.
+sdxi_setup_metrics: true
+
+# The contexts whose 14 counters are written. sdxi_char uses two: 0 is its
+# admin ring and 1 carries every client operation. An id is 0 to 127; the
+# driver masks it to seven bits.
+sdxi_setup_metrics_contexts: [0, 1]
+
+# Seconds between samples. Half the amdgpu textfile timer's 30 s, which is
+# the stacks' scrape interval: the owner's choice, so the panels answer
+# within a minute, not two, at twice the samples. Each sample
+# holds the driver's one lock for 28 register accesses per context, each a
+# round trip to the SDXI server, and a data-path ioctl waits for it.
+#
+# The home dashboard's SDXI rate panels take their rate over a fixed 2
+# minutes, eight of these intervals, and tests/test_sdxi_metrics.py holds
+# the two together: raise this and the window in the dashboard follows by
+# hand. Worked through Prometheus's rate() arithmetic, not measured on a
+# guest: with this interval and that window a steady workload reads 0.87 to
+# 1.02 of its true rate (30 s reads 0.86 to 1.15). Sampling at the scrape
+# interval is not a cure on its own: the timer drifts across the scrape, and
+# over $__rate_interval (one minute) the rate dips by a third each time it
+# does. The window has to stay at least four intervals; the test fails
+# otherwise.
+sdxi_setup_metrics_interval: 15
+
+# node_exporter's textfile collector directory. rocjitsu_setup's metrics
+# tasks create the same path and point node_exporter at it; this role
+# creates it too when it is not there, so neither has to run first.
+sdxi_setup_metrics_textfile_dir: /var/lib/prometheus/node-exporter
+
+# How the tasks tell whether node_exporter is installed.
+sdxi_setup_metrics_node_exporter: /usr/bin/prometheus-node-exporter

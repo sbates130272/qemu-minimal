@@ -907,3 +907,702 @@ echo "apparmor: apparmor.service is not failed"
 echo "note: units failed on this boot, if any:"
 systemctl --failed --no-legend --plain --no-pager || true
 # end: apparmor
+
+# ---------------------------------------------------------------------------
+# One rdma-core to build against
+# ---------------------------------------------------------------------------
+# The image has two rdma-cores. The archive's, under /usr, is a runtime: the
+# rdma-core package's udev rules and systemd units, ibv_devinfo, and the
+# libraries the archive's perftest, fio and libpcap are linked against.
+# rocm-ernic's, built from source into /usr/local with the SRQ-capable ionic
+# provider, is the one the loader gives every tool, and the only one with
+# headers and link libraries.
+#
+# It was not the only one. The image carried libibverbs-dev, librdmacm-dev
+# and libibumad-dev as well, and the toolchain does not pick one rdma-core:
+# gcc reads /usr/local/include ahead of /usr/include, ld searches
+# /usr/lib/<multiarch> ahead of /usr/local/lib, and the loader has
+# /usr/local/lib first. A build with no flags compiled against one, linked
+# the other and ran against the first, and perftest failed to link that way.
+# The bake installs none of the three now and purges them from a base that
+# has them; this is what says an image is in that state.
+#
+# Nothing here needs a device: three small programs are compiled and linked,
+# and none of them is run. The same lines are
+# ansible/playbooks/roles/rocm_ernic_setup/files/rdma-core-check.sh, which
+# the bake runs as its last check; tests/test_rdma_dev_packages.py holds the
+# two equal and runs them against stand-ins. RDMA_CHECK_ROOT is for that: it
+# is prefixed to every path below, and is empty on a guest.
+# begin: rdma-core
+_rc_root=${RDMA_CHECK_ROOT:-}
+_rc_local="${_rc_root}/usr/local"
+_rc_tmp=''
+_rc_fail() {
+    echo "ERROR: rdma-core: $*" >&2
+    [ -z "${_rc_tmp}" ] || rm -rf "${_rc_tmp}"
+    exit 1
+}
+
+# The three packages. Anything but "never installed" and "removed" counts:
+# a half-installed package still has its files on disk.
+for _rc_pkg in libibverbs-dev librdmacm-dev libibumad-dev; do
+    _rc_state=$(dpkg-query -W -f='${db:Status-Status}\n' "${_rc_pkg}" \
+                    2> /dev/null || true)
+    if printf '%s\n' "${_rc_state}" |
+            grep -qvx -e '' -e not-installed -e config-files; then
+        _rc_fail "${_rc_pkg} is in this image" \
+                 "($(printf '%s' "${_rc_state}" | tr '\n' ' ')). With the" \
+                 "archive's rdma-core development packages installed a" \
+                 "build reads the headers in /usr/local and links the" \
+                 "archive's library"
+    fi
+done
+
+# What stays: the archive's rdma-core as a runtime. Other packages are
+# linked against these libraries, rdma-core carries the udev rules and the
+# systemd units, and a purge that took one of them took too much.
+for _rc_pkg in rdma-core ibverbs-utils ibverbs-providers libibverbs1 \
+               libibumad3 'librdmacm1*'; do
+    _rc_state=$(dpkg-query -W -f='${db:Status-Status}\n' "${_rc_pkg}" \
+                    2> /dev/null || true)
+    if ! printf '%s\n' "${_rc_state}" | grep -qx installed; then
+        _rc_fail "${_rc_pkg} is not installed: the archive's rdma-core" \
+                 "runtime, which stays in this image, has lost a package"
+    fi
+done
+
+# Nothing of an rdma-core for a compiler or a linker outside /usr/local: no
+# header set, and for each library no link without a version, no archive and
+# no pkg-config file where the toolchain looks by itself.
+for _rc_path in /usr/include/infiniband /usr/include/rdma/rdma_cma.h; do
+    if [ -e "${_rc_root}${_rc_path}" ] || [ -L "${_rc_root}${_rc_path}" ]; then
+        _rc_fail "${_rc_path} exists: rdma-core headers outside /usr/local"
+    fi
+done
+# The kernel's own uapi headers are not rdma-core's and have to stay: the
+# verbs.h in /usr/local includes them.
+if [ ! -f "${_rc_root}/usr/include/rdma/ib_user_verbs.h" ]; then
+    _rc_fail "no /usr/include/rdma/ib_user_verbs.h: the kernel's uapi" \
+             "headers, from linux-libc-dev, which rdma-core's verbs.h" \
+             "includes"
+fi
+_rc_ma=$(gcc -print-multiarch)
+for _rc_lib in libibverbs librdmacm libibumad; do
+    for _rc_path in "/usr/lib/${_rc_ma}/${_rc_lib}.so" \
+                    "/usr/lib/${_rc_ma}/${_rc_lib}.a" \
+                    "/usr/lib/${_rc_ma}/pkgconfig/${_rc_lib}.pc" \
+                    "/usr/lib/${_rc_lib}.so" "/usr/lib/${_rc_lib}.a" \
+                    "/usr/lib/pkgconfig/${_rc_lib}.pc" \
+                    "/usr/lib64/${_rc_lib}.so" "/usr/lib64/${_rc_lib}.a" \
+                    "/usr/share/pkgconfig/${_rc_lib}.pc"; do
+        if [ -e "${_rc_root}${_rc_path}" ] ||
+                [ -L "${_rc_root}${_rc_path}" ]; then
+            _rc_fail "${_rc_path} exists: a second ${_rc_lib} to build" \
+                     "against, outside /usr/local"
+        fi
+    done
+    if [ ! -e "${_rc_local}/lib/${_rc_lib}.so" ]; then
+        _rc_fail "no /usr/local/lib/${_rc_lib}.so: there is no ${_rc_lib}" \
+                 "to link against at all"
+    fi
+    for _rc_var in libdir:lib includedir:include; do
+        _rc_got=$(pkg-config --variable="${_rc_var%%:*}" "${_rc_lib}" \
+                      2> /dev/null || true)
+        if [ "${_rc_got}" != "${_rc_local}/${_rc_var##*:}" ]; then
+            _rc_fail "pkg-config gives ${_rc_lib} the ${_rc_var%%:*}" \
+                     "'${_rc_got}', not /usr/local/${_rc_var##*:}"
+        fi
+    done
+done
+
+# And what a build does: a program for each library, compiled and linked
+# with no flag but -l, never run. The header the compiler reads, the library
+# the linker takes and the one the loader gives the result have to be one
+# rdma-core, in /usr/local.
+_rc_tmp=$(mktemp -d)
+_rc_verbs=''
+for _rc_case in 'infiniband/verbs.h:ibv_get_device_list(0):ibverbs' \
+                'rdma/rdma_cma.h:rdma_create_event_channel():rdmacm' \
+                'infiniband/umad.h:umad_init():ibumad'; do
+    _rc_hdr=${_rc_case%%:*}
+    _rc_lib=${_rc_case##*:}
+    _rc_call=${_rc_case#*:}
+    _rc_call=${_rc_call%:*}
+    printf '#include <%s>\nint main(void) { return %s == 0; }\n' \
+        "${_rc_hdr}" "${_rc_call}" > "${_rc_tmp}/t.c"
+    # Nothing here may read stdin: over "bash -s" that is this script.
+    _rc_out=$(gcc -H -fsyntax-only "${_rc_tmp}/t.c" 2>&1 < /dev/null) ||
+        _rc_fail "a program that includes <${_rc_hdr}> does not compile:" \
+                 "$(printf '%s\n' "${_rc_out}" | tail -3 | tr '\n' ' ')"
+    _rc_read=$(printf '%s\n' "${_rc_out}" |
+        sed -n "s|^\. \(.*/${_rc_hdr}\)\$|\1|p" | sed -n 1p)
+    if [ "${_rc_read}" != "${_rc_local}/include/${_rc_hdr}" ]; then
+        _rc_fail "a build with no flags reads <${_rc_hdr}> from" \
+                 "'${_rc_read}', not from /usr/local/include"
+    fi
+    # --trace has the linker name every file it takes.
+    _rc_out=$(gcc -o "${_rc_tmp}/t" "${_rc_tmp}/t.c" "-l${_rc_lib}" \
+                  -Wl,--trace 2>&1 < /dev/null) ||
+        _rc_fail "a program does not link with -l${_rc_lib} and no other" \
+                 "flag: $(printf '%s\n' "${_rc_out}" | tail -3 | tr '\n' ' ')"
+    # shellcheck disable=SC2020
+    _rc_link=$(printf '%s\n' "${_rc_out}" | tr ' ()' '\n\n\n' |
+        sed -n "\|/lib${_rc_lib}\.so|p" | sed -n 1p)
+    [ -n "${_rc_link}" ] ||
+        _rc_fail "the linker did not say which lib${_rc_lib}.so it took"
+    _rc_link=$(readlink -f "${_rc_link}")
+    _rc_load=$(ldd "${_rc_tmp}/t" 2> /dev/null < /dev/null |
+        awk -v n="lib${_rc_lib}.so" 'index($1, n) == 1 { print $3 }' |
+        sed -n 1p)
+    case "${_rc_load}" in
+        /*) _rc_load=$(readlink -f "${_rc_load}") ;;
+        *) _rc_fail "the loader cannot find the lib${_rc_lib} that" \
+                    "${_rc_link} was linked as" ;;
+    esac
+    if [ "${_rc_link}" != "${_rc_load}" ]; then
+        _rc_fail "a build with no flags links ${_rc_link} and loads" \
+                 "${_rc_load}: two rdma-cores"
+    fi
+    case "${_rc_load}" in
+        "${_rc_local}/lib/"*) ;;
+        *) _rc_fail "a build with no flags links and loads ${_rc_load}," \
+                    "which is not in /usr/local/lib" ;;
+    esac
+    if [ "${_rc_lib}" = ibverbs ]; then
+        _rc_verbs=${_rc_load}
+    fi
+done
+rm -rf "${_rc_tmp}"
+_rc_tmp=''
+
+# The image's own record names both rdma-cores, and has to name these two:
+# the archive package dpkg reports, and the libibverbs just linked and
+# loaded, whose file name ends in its rdma-core's version.
+_rc_archive=$(dpkg-query -W -f='${Version}' rdma-core)
+_rc_version=$(python3 - "${_rc_root}/etc/rocm-golden-guest.json" \
+                  "${_rc_archive}" "${_rc_verbs}" <<'RCPY'
+import json
+import os
+import re
+import sys
+
+
+def fail(msg):
+    print(f"ERROR: rdma-core: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+path, archive, loaded = sys.argv[1:4]
+try:
+    with open(path) as handle:
+        stamp = json.load(handle)
+except (OSError, ValueError) as exc:
+    fail(f"{path} is not readable JSON: {exc}")
+for key in ("rdma_core_version", "rdma_core_archive_version",
+            "rdma_core_local_version", "rdma_core_local_libibverbs"):
+    if not stamp.get(key):
+        fail(f"{path} has no \"{key}\"")
+# rdma_core_version is the archive's too: the name earlier images used.
+for key in ("rdma_core_archive_version", "rdma_core_version"):
+    if stamp[key] != archive:
+        fail(f"{path} records {key} {stamp[key]!r}, and the rdma-core "
+             f"package installed is {archive}")
+if stamp["rdma_core_local_libibverbs"] != loaded:
+    fail(f"{path} records rdma_core_local_libibverbs "
+         f"{stamp['rdma_core_local_libibverbs']!r}, and a build links and "
+         f"loads {loaded}")
+named = re.fullmatch(r"libibverbs\.so\.\d+\.\d+\.(\d+(?:\.\d+)*)",
+                     os.path.basename(loaded))
+if not named or named.group(1) != stamp["rdma_core_local_version"]:
+    fail(f"{path} records rdma_core_local_version "
+         f"{stamp['rdma_core_local_version']!r}, which is not the version "
+         f"{loaded} is named for")
+print(stamp["rdma_core_local_version"])
+RCPY
+)
+echo "rdma-core: ${_rc_version} in /usr/local is the one a build finds," \
+     "links and loads; the archive's ${_rc_archive} is a runtime only"
+# end: rdma-core
+
+# ---------------------------------------------------------------------------
+# perftest built with ROCm memory support
+# ---------------------------------------------------------------------------
+# The archive's perftest has no --use_rocm, so the bake builds the tools from
+# a pinned commit against the image's ROCm and installs them under a prefix
+# ahead of /usr/bin. The package stays, in /usr/bin, so there are two of each
+# tool; what is asserted first is which one a bare name runs, in the three
+# shells that have a PATH of their own: this one, which is pam_env's
+# /etc/environment, a login shell, and sudo's secure_path.
+#
+# Nothing here needs a device, and this runs on a boot that has none. The
+# tools are asked for their help and for nothing else: perftest prints its
+# usage while it is still parsing arguments, before it opens an RDMA device,
+# and a binary that carries a HIP kernel registers it at load without
+# touching the GPU.
+#
+# No pin is spelled in this file. The bake wrote what it built to
+# /etc/perftest-rocm.json and the pin it was given to
+# /etc/rocm-golden-guest.json, and the two are compared.
+#
+# One thing is spelled here, because it is a rule about the image and not a
+# pin: the SIMD level of the host-memory validator, the only code in the
+# tools compiled for more than baseline x86-64. perftest's configure takes
+# it from the CPU of the machine that builds unless told, and an image must
+# not be whatever its bake machine was: the first bake with this build
+# stopped because that CPU, QEMU's default model, had no level at all, and
+# a build on a guest with the EPYC model came out AVX2. So the stamp has to
+# say the role named the level and that it is sse4.2, which every CPU a
+# fleet runs on has, and the binary has to agree.
+#
+# tests/test_perftest_setup.py runs the lines between the two markers
+# against stand-ins. PERFTEST_CHECK_ROOT is for that: it is prefixed to the
+# two /etc paths and to /usr/bin/ib_send_bw, and is empty on a guest.
+# begin: perftest
+_pt_root=${PERFTEST_CHECK_ROOT:-}
+_pt_stamp="${_pt_root}/etc/perftest-rocm.json"
+_pt_golden="${_pt_root}/etc/rocm-golden-guest.json"
+if [ ! -s "${_pt_stamp}" ]; then
+    echo "ERROR: perftest: no ${_pt_stamp}: the bake did not build perftest" \
+         "with ROCm support" >&2
+    exit 1
+fi
+# Eight lines: the prefix, the commit, the ROCm tree, whether the build has
+# device code and the dma-buf option, the libibverbs it was linked against,
+# the SIMD level of the host-memory validator and whether the build needed
+# the _mm_pause workaround. A stamp that does not hold together prints its
+# reason and stops the check.
+_pt_facts=$(python3 - "${_pt_stamp}" "${_pt_golden}" <<'PTPY'
+import json
+import re
+import sys
+
+
+def fail(msg):
+    print(f"ERROR: perftest: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+stamp_path, golden_path = sys.argv[1:3]
+try:
+    with open(stamp_path) as handle:
+        stamp = json.load(handle)
+except (OSError, ValueError) as exc:
+    fail(f"{stamp_path} is not readable JSON: {exc}")
+for key in ("repo", "ref", "commit", "commit_required", "prefix",
+            "rocm_path", "configure", "device_code", "dmabuf",
+            "libibverbs", "simd", "simd_forced", "mm_pause_workaround"):
+    if key not in stamp:
+        fail(f"{stamp_path} has no \"{key}\"")
+commit = stamp["commit"]
+if not re.fullmatch(r"[0-9a-f]{40}", str(commit)):
+    fail(f"{stamp_path} records commit {commit!r}, which is not a commit id")
+# An image is built from a commit somebody chose, not from wherever a
+# branch was that day: the role only skips its check when given no commit.
+if stamp["commit_required"] != commit:
+    fail(f"perftest was built at {commit} with "
+         f"{stamp['commit_required']!r} required: the commit check was off, "
+         "or the stamp is not the one this build wrote")
+try:
+    with open(golden_path) as handle:
+        golden = json.load(handle)
+except (OSError, ValueError) as exc:
+    fail(f"{golden_path} is not readable JSON: {exc}")
+if golden.get("perftest_source_pin") != commit:
+    fail(f"{golden_path} says the image was baked with perftest_source_pin "
+         f"{golden.get('perftest_source_pin')!r}, and {stamp_path} says "
+         f"perftest was built at {commit}")
+if "--enable-rocm" not in stamp["configure"].split():
+    fail(f"the recorded configure line has no --enable-rocm: "
+         f"{stamp['configure']}")
+for key in ("prefix", "rocm_path", "libibverbs"):
+    if not str(stamp[key]).startswith("/"):
+        fail(f"{stamp_path} records {key} {stamp[key]!r}")
+for key in ("device_code", "dmabuf", "simd_forced", "mm_pause_workaround"):
+    if not isinstance(stamp[key], bool):
+        fail(f"{stamp_path} records {key} {stamp[key]!r}, not true or false")
+# The level the role named, not the one configure found on the bake
+# machine's CPU, and the one every fleet's CPUs have.
+if not stamp["simd_forced"]:
+    fail(f"{stamp_path} says the SIMD level of the host-memory validator, "
+         f"{stamp['simd']!r}, was left to the CPU of the machine that "
+         "baked the image: perftest_setup_simd was empty")
+if stamp["simd"] != "sse4.2":
+    fail(f"the host-memory validator was built for {stamp['simd']!r}, and "
+         "a published image is built for 'sse4.2': on a CPU without that "
+         "level the tools refuse --data_validation on host memory")
+print(stamp["prefix"])
+print(commit)
+print(stamp["rocm_path"])
+print("true" if stamp["device_code"] else "false")
+print("true" if stamp["dmabuf"] else "false")
+print(stamp["libibverbs"])
+print(stamp["simd"])
+print("true" if stamp["mm_pause_workaround"] else "false")
+PTPY
+)
+{
+    read -r _pt_prefix
+    read -r _pt_commit
+    read -r _pt_rocm
+    read -r _pt_device_code
+    read -r _pt_dmabuf
+    read -r _pt_linked
+    read -r _pt_simd
+    read -r _pt_mm_pause
+} <<PTFACTS
+${_pt_facts}
+PTFACTS
+
+# Which copy a bare name runs. /usr/bin still has the archive's.
+for _pt_tool in ib_send_bw ib_send_lat ib_write_bw ib_write_lat \
+                ib_read_bw ib_read_lat; do
+    _pt_want="${_pt_prefix}/bin/${_pt_tool}"
+    if [ ! -x "${_pt_want}" ]; then
+        echo "ERROR: perftest: ${_pt_want} is missing" >&2
+        exit 1
+    fi
+    _pt_here=$(command -v "${_pt_tool}" || true)
+    _pt_login=$(bash -lc "command -v ${_pt_tool}" < /dev/null || true)
+    _pt_sudo=$(sudo -n sh -c "command -v ${_pt_tool}" < /dev/null || true)
+    for _pt_got in "this shell:${_pt_here}" "a login shell:${_pt_login}" \
+                   "sudo:${_pt_sudo}"; do
+        if [ "${_pt_got#*:}" != "${_pt_want}" ]; then
+            echo "ERROR: perftest: ${_pt_tool} resolves to" \
+                 "'${_pt_got#*:}' in ${_pt_got%%:*}, not ${_pt_want}: the" \
+                 "ROCm build is not the one a bare name runs" >&2
+            exit 1
+        fi
+    done
+done
+
+# And the archive's copy is still there: vm-quickstart.yml's RDMA test runs
+# /usr/bin/ib_send_bw by that path, so the stock build keeps doing what it
+# did whatever the one above turns out to do.
+if [ ! -x "${_pt_root}/usr/bin/ib_send_bw" ]; then
+    echo "ERROR: perftest: no /usr/bin/ib_send_bw: the archive's perftest," \
+         "which the quickstart RDMA test runs by path, is gone" >&2
+    exit 1
+fi
+
+# The flags the build exists for, by the text usage() prints. The help exits
+# non-zero by design, so the output is what is tested.
+_pt_offers() {
+    _pt_help=$("${_pt_prefix}/bin/$1" --help < /dev/null 2>&1 || true)
+    case "${_pt_help}" in
+        *"$2"*) ;;
+        *)
+            echo "ERROR: perftest: ${_pt_prefix}/bin/$1 --help does not" \
+                 "offer $2" >&2
+            printf '%s\n' "${_pt_help}" | tail -5 >&2
+            exit 1
+            ;;
+    esac
+}
+for _pt_tool in ib_send_bw ib_write_bw ib_read_bw; do
+    _pt_offers "${_pt_tool}" '--use_rocm=<rocm device id>'
+    _pt_offers "${_pt_tool}" '--data_validation '
+    if [ "${_pt_dmabuf}" = true ]; then
+        _pt_offers "${_pt_tool}" '--use_rocm_dmabuf'
+    fi
+done
+
+# Linked against the image's ROCm, every library found, and libibverbs the
+# SRQ-capable build in /usr/local that ibv_devinfo loads too.
+_pt_libs=$(ldd "${_pt_prefix}/bin/ib_write_bw")
+case "${_pt_libs}" in
+    *'not found'*)
+        echo "ERROR: perftest: ib_write_bw has a library the loader cannot" \
+             "find:" >&2
+        printf '%s\n' "${_pt_libs}" >&2
+        exit 1
+        ;;
+esac
+_pt_hip=$(printf '%s\n' "${_pt_libs}" |
+    awk '$1 ~ /^libamdhip64\.so/ { print $3 }')
+if [ -z "${_pt_hip}" ]; then
+    echo "ERROR: perftest: ib_write_bw is not linked against libamdhip64" >&2
+    exit 1
+fi
+case "$(readlink -f "${_pt_hip}")" in
+    "$(readlink -f "${_pt_rocm}")"/*) ;;
+    *)
+        echo "ERROR: perftest: ib_write_bw loads ${_pt_hip}, which is not" \
+             "under ${_pt_rocm}" >&2
+        exit 1
+        ;;
+esac
+case "${_pt_libs}" in
+    *'=> /usr/local/lib/libibverbs.so'*) ;;
+    *)
+        echo "ERROR: perftest: ib_write_bw does not load libibverbs from" \
+             "/usr/local/lib, where the SRQ-capable provider is" >&2
+        printf '%s\n' "${_pt_libs}" >&2
+        exit 1
+        ;;
+esac
+# And it is the file the tools were linked against. The block above says
+# the image has one rdma-core to build against; this says these tools were
+# built against it, which a guest that had the archive's link libraries when
+# perftest was compiled would not show there.
+_pt_loaded=$(printf '%s\n' "${_pt_libs}" |
+    awk '$1 ~ /^libibverbs\.so/ { print $3 }')
+if [ "$(readlink -f "${_pt_loaded}")" != "${_pt_linked}" ]; then
+    echo "ERROR: perftest: ib_write_bw loads $(readlink -f "${_pt_loaded}")" \
+         "and ${_pt_stamp} says it was linked against ${_pt_linked}" >&2
+    exit 1
+fi
+
+# Device code is in the binary exactly when it registers a fat binary with
+# the HIP runtime at load, and the stamp has to say the same.
+_pt_syms=$(nm -D --undefined-only "${_pt_prefix}/bin/ib_write_bw")
+case "${_pt_syms}" in
+    *__hipRegisterFatBinary*) _pt_has_kernels=true ;;
+    *) _pt_has_kernels=false ;;
+esac
+if [ "${_pt_has_kernels}" != "${_pt_device_code}" ]; then
+    echo "ERROR: perftest: ${_pt_stamp} says device_code is" \
+         "${_pt_device_code}, and ib_write_bw says ${_pt_has_kernels}" >&2
+    exit 1
+fi
+
+# The stamp says sse4.2; this is the binary's word for it. AVX2 and AVX-512
+# are the levels that use the 256- and 512-bit registers, and nothing else
+# in the tools is compiled for them, so a build at the level of the image
+# has no instruction that names one. One tool is disassembled, which takes
+# some tens of milliseconds; objdump is in binutils, with the nm above. The
+# disassembly is taken first and counted after: grep exits 1 on none.
+_pt_code=$(objdump -d --no-show-raw-insn "${_pt_prefix}/bin/ib_write_bw")
+_pt_wide=$(printf '%s\n' "${_pt_code}" | grep -c -E '%[yz]mm[0-9]' || true)
+if [ "${_pt_wide}" != 0 ]; then
+    echo "ERROR: perftest: ${_pt_stamp} says the host-memory validator was" \
+         "built for ${_pt_simd}, and ib_write_bw has ${_pt_wide}" \
+         "instructions on ymm or zmm registers: it was compiled for AVX2" \
+         "or AVX-512" >&2
+    exit 1
+fi
+echo "perftest: ${_pt_commit} with ROCm in ${_pt_prefix}/bin," \
+     "device code ${_pt_device_code}, ahead of the archive's on PATH"
+echo "perftest: host-memory validator built for ${_pt_simd}, and no wider" \
+     "instruction in ib_write_bw; _mm_pause workaround ${_pt_mm_pause}"
+# end: perftest
+
+# ---------------------------------------------------------------------------
+# The SDXI counters, exported through node_exporter
+# ---------------------------------------------------------------------------
+# sdxi_setup's metrics tasks install sdxi-textfile-metrics.py and a timer
+# that runs it; node_exporter's textfile collector serves the sdxi.prom it
+# writes, and the home dashboard's SDXI row reads that. Nothing here needs a
+# device: a boot with none is the case where the script has to write
+# "sdxi_up 0", exit 0 and say nothing, and behind a stack the same lines ask
+# for "sdxi_up 1" and every counter. The same lines are
+# ansible/playbooks/roles/sdxi_setup/files/sdxi-metrics-check.sh, which the
+# role runs last; tests/test_sdxi_metrics.py holds the two equal and runs
+# them against a scratch tree. SDXI_METRICS_CHECK_ROOT is for that: it is
+# prefixed to every path below, and is empty on a guest.
+# begin: sdxi metrics
+_sm_root=${SDXI_METRICS_CHECK_ROOT:-}
+_sm_script="${_sm_root}/usr/local/bin/sdxi-textfile-metrics.py"
+_sm_written="${_sm_root}/var/lib/prometheus/node-exporter/sdxi.prom"
+_sm_dev="${_sm_root}/dev/sdxi0"
+_sm_timer=sdxi-textfile-metrics.timer
+_sm_service=sdxi-textfile-metrics.service
+_sm_tmp=''
+_sm_fail() {
+    echo "ERROR: sdxi metrics: $*" >&2
+    [ -z "${_sm_tmp}" ] || rm -rf "${_sm_tmp}"
+    exit 1
+}
+
+[ -x "${_sm_script}" ] || _sm_fail "${_sm_script} is not installed"
+_sm_tmp=$(mktemp -d)
+# Compiled into the scratch directory: nothing is written beside the script.
+python3 -c 'import py_compile, sys
+py_compile.compile(sys.argv[1], cfile=sys.argv[2], doraise=True)' \
+    "${_sm_script}" "${_sm_tmp}/compiled.pyc" 2> "${_sm_tmp}/err" ||
+    _sm_fail "${_sm_script} does not compile: $(tail -n 3 "${_sm_tmp}/err")"
+
+systemctl is-enabled --quiet "${_sm_timer}" ||
+    _sm_fail "${_sm_timer} is not enabled, so nothing refreshes" \
+             "${_sm_written} after a reboot"
+systemctl is-active --quiet "${_sm_timer}" ||
+    _sm_fail "${_sm_timer} is enabled and not running"
+
+# The file is in the image: the bake's own run of the unit wrote it and
+# nothing sweeps it, so that it is there says nothing about this boot.
+# systemd does. The monotonic time the service's last run ended is 0 until a
+# run has ended since boot, and the script exits 0 only once it has replaced
+# the file.
+_sm_ended() {
+    _sm_at=$(systemctl show -P ExecMainExitTimestampMonotonic \
+                 "${_sm_service}" 2> /dev/null) || _sm_at=0
+    case "${_sm_at}" in '' | *[!0-9]*) _sm_at=0 ;; esac
+    [ "${_sm_at}" -gt 0 ]
+}
+_sm_waited=0
+until _sm_ended; do
+    [ "${_sm_waited}" -lt "${SDXI_METRICS_CHECK_WAIT:-60}" ] ||
+        _sm_fail "${_sm_timer} is running and ${_sm_service} has not" \
+                 "finished a run since boot after ${_sm_waited}s:" \
+                 "${_sm_written} is not from this boot"
+    sleep 1
+    _sm_waited=$((_sm_waited + 1))
+done
+_sm_result=$(systemctl show -P Result "${_sm_service}") || _sm_result=unknown
+[ "${_sm_result}" = success ] ||
+    _sm_fail "${_sm_service} last ended with result '${_sm_result}':" \
+             "journalctl -b -u ${_sm_service} says why"
+# Only that it is there and whole: its sdxi_up is from a run up to one
+# interval old, which on a guest still booting may predate the device.
+[ -s "${_sm_written}" ] ||
+    _sm_fail "${_sm_service} ran and ${_sm_written} is not there"
+grep -qxE 'sdxi_up [01]' "${_sm_written}" ||
+    _sm_fail "${_sm_written} has no sdxi_up line"
+
+# One run of its own, into the scratch directory, by the script's own
+# interpreter line as the unit runs it.
+_sm_out="${_sm_tmp}/sdxi.prom"
+"${_sm_script}" --device "${_sm_dev}" --output "${_sm_out}" \
+    2> "${_sm_tmp}/err" ||
+    _sm_fail "${_sm_script} exited $?: $(tail -n 3 "${_sm_tmp}/err")"
+if [ -e "${_sm_dev}" ]; then
+    grep -qx 'sdxi_up 1' "${_sm_out}" ||
+        _sm_fail "${_sm_dev} is there and the script could not read it:" \
+                 "$(tail -n 3 "${_sm_tmp}/err")"
+    for _sm_stat in bytes_moved num_copy num_errors num_intr num_cxt_start \
+                    num_cxt_stop num_nop num_sync bytes_compressed \
+                    bytes_decompressed num_compress num_decompress \
+                    num_elemwise bytes_elemwise; do
+        for _sm_cid in 0 1; do
+            grep -qxE "sdxi_${_sm_stat}_total\{context=\"${_sm_cid}\"\} [0-9]+" \
+                "${_sm_out}" ||
+                _sm_fail "no sdxi_${_sm_stat}_total for context ${_sm_cid}:" \
+                         "the dashboard's SDXI row reads these names"
+        done
+    done
+    echo "sdxi metrics: ${_sm_dev} read, 14 counters each for contexts 0" \
+         "and 1; ${_sm_timer} enabled"
+else
+    grep -qx 'sdxi_up 0' "${_sm_out}" ||
+        _sm_fail "no ${_sm_dev} and the script did not write sdxi_up 0"
+    if grep -q '_total' "${_sm_out}"; then
+        _sm_fail "no ${_sm_dev} and the script wrote counter series"
+    fi
+    [ ! -s "${_sm_tmp}/err" ] ||
+        _sm_fail "no ${_sm_dev}, which is a normal guest, and the script" \
+                 "complained: $(tail -n 3 "${_sm_tmp}/err")"
+    echo "sdxi metrics: no ${_sm_dev}; sdxi_up 0, exit 0 and silent;" \
+         "${_sm_timer} enabled"
+fi
+rm -rf "${_sm_tmp}"
+_sm_tmp=''
+# end: sdxi metrics
+
+# --- the guest's name ----------------------------------------------------
+
+# The guest answers to the name the host calls it by. `qemu-tool run-vm`
+# passes the VM name in the SMBIOS system serial number, and
+# qemu-tool-hostname.service makes it the hostname at boot. Until
+# 2026-11-18 a stack's guests were rocm-golden-1 and rocm-golden-2 to the
+# host and ernic-vm-1 and ernic-vm-2 to themselves, named from the index in
+# their NIC's MAC, and the configure stage then made them rocm-ernic-vm-1.
+#
+# What is asked depends on what the host passed:
+#
+#   a serial on a QEMU machine that is already a hostname   it is the
+#       hostname, compared here without the unit's script, so a script that
+#       wrongly said "no name" does not pass. Every boot of both lanes is
+#       this case: rocm-golden-test-1 behind the playbook-test stack,
+#       rocm-golden in the publish workflow's boot with no device, and
+#       rocm-golden-1 behind its gate stack. Only the last is a guest
+#       started under a name that is not the bake's, so only there does a
+#       pass show the unit renamed anything: /etc/hostname in the image
+#       already holds the bake's name.
+#   any other serial the script accepts   the hostname is what the script
+#       makes of it.
+#   none   noted, and nothing compared: a boot by something other than
+#       run-vm.
+#
+# A VM name that is one of the words firmware writes for a serial nobody
+# set -- none, null, empty, unknown, invalid, oem, na, 0 or all zeros, four
+# or more of one character (aaaa, 1111), 123456789 -- is the first case and
+# FAILS it: the script takes it for a placeholder and the unit leaves the
+# hostname alone, so the guest does not answer to the name the host calls
+# it by. The error carries the script's reason. No stack makes such a name
+# (<vm-name-prefix>-<n>); a `run-vm --vm-name none` does.
+#
+# ROCM_GOLDEN_EXPECT_HOSTNAME is for a caller that knows the name it gave:
+# the hostname has to be that, whatever the guest reads.
+#
+# tests/test_guest_hostname.py runs the lines between the two markers
+# against fabricated trees, so keep the three paths on the lines that name
+# them.
+# begin: guest hostname
+_hn_script=/usr/local/sbin/qemu-tool-hostname.sh
+_hn_etc=/etc
+_hn_dmi=/sys/class/dmi/id
+_hn_unit=qemu-tool-hostname.service
+if [ ! -x "${_hn_script}" ]; then
+    echo "ERROR: hostname: ${_hn_script} is missing: nothing gives this" \
+         "guest the name the host calls it by" >&2
+    exit 1
+fi
+if [ "$(systemctl is-enabled "${_hn_unit}" 2>/dev/null || true)" != enabled ]; then
+    echo "ERROR: hostname: ${_hn_unit} is not enabled" >&2
+    exit 1
+fi
+# A oneshot that stays active once it has succeeded.
+if [ "$(systemctl is-active "${_hn_unit}" 2>/dev/null || true)" != active ]; then
+    echo "ERROR: hostname: ${_hn_unit} did not run to the end on this boot" >&2
+    exit 1
+fi
+_hn_is=$(hostname)
+_hn_serial=$(sudo -n cat "${_hn_dmi}/product_serial" 2>/dev/null || true)
+_hn_vendor=$(cat "${_hn_dmi}/sys_vendor" 2>/dev/null || true)
+# The script's reason when it gives no name, for the two errors below.
+_hn_why=""
+if ! _hn_want=$(sudo -n "${_hn_script}" name 2>/dev/null); then
+    _hn_want=""
+    _hn_why=$(sudo -n "${_hn_script}" name 2>&1 >/dev/null || true)
+fi
+case "${_hn_serial}" in
+    ""|-*|*-|*[!a-z0-9-]*) _hn_plain=false ;;
+    *) _hn_plain=true ;;
+esac
+if [ "${#_hn_serial}" -gt 63 ] || [ "${_hn_vendor}" != QEMU ]; then
+    _hn_plain=false
+fi
+if [ "${_hn_plain}" = true ] && [ "${_hn_want}" != "${_hn_serial}" ]; then
+    echo "ERROR: hostname: the host calls this guest ${_hn_serial}, and" \
+         "${_hn_script} makes of that '${_hn_want}'${_hn_why:+: ${_hn_why}}" >&2
+    exit 1
+fi
+if [ -n "${ROCM_GOLDEN_EXPECT_HOSTNAME:-}" ] &&
+        [ "${_hn_want}" != "${ROCM_GOLDEN_EXPECT_HOSTNAME}" ]; then
+    echo "ERROR: hostname: this guest was started as" \
+         "${ROCM_GOLDEN_EXPECT_HOSTNAME} and reads '${_hn_want}' from the" \
+         "SMBIOS serial number '${_hn_serial}'${_hn_why:+: ${_hn_why}}" >&2
+    exit 1
+fi
+if [ -z "${_hn_want}" ]; then
+    echo "hostname: the host passed this guest no name (SMBIOS serial" \
+         "'${_hn_serial}'), so ${_hn_is} is not compared with one"
+else
+    if [ "${_hn_is}" != "${_hn_want}" ]; then
+        echo "ERROR: hostname: the host calls this guest ${_hn_want} and" \
+             "its hostname is ${_hn_is}" >&2
+        exit 1
+    fi
+    if [ "$(cat "${_hn_etc}/hostname")" != "${_hn_want}" ]; then
+        echo "ERROR: hostname: ${_hn_etc}/hostname is" \
+             "$(cat "${_hn_etc}/hostname"), not ${_hn_want}" >&2
+        exit 1
+    fi
+    # One line for the name, and none for a name it had before.
+    if [ "$(grep '^127\.0\.1\.1[[:space:]]' "${_hn_etc}/hosts")" != "127.0.1.1 ${_hn_want}" ]; then
+        echo "ERROR: hostname: ${_hn_etc}/hosts does not map 127.0.1.1 to" \
+             "${_hn_want} and to nothing else" >&2
+        exit 1
+    fi
+    echo "hostname: ${_hn_want} is what the host calls this guest"
+fi
+# end: guest hostname

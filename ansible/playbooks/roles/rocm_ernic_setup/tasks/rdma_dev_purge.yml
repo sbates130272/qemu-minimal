@@ -1,0 +1,111 @@
+---
+# Take the archive's rdma-core development packages out of the guest, so
+# that a build in it finds one rdma-core: the one under
+# rocm_ernic_setup_rdma_dev_prefix. defaults/main.yml says why, and what
+# stays.
+#
+# A bake installs none of them, so on its own guest every task here but the
+# first is skipped. This is for the guest that has them anyway: a bake given
+# another package manifest, a rerun against a guest baked before they were
+# dropped, or a role that put one back. It leaves that guest as a bake's.
+#
+# The purge is the one step here that can take something a guest needs, and
+# apt says nothing when it does. So, in this order: there has to be an
+# rdma-core to build against once these are gone; apt is asked what the
+# purge would remove, and it must be these and nothing else
+# (files/rdma-dev-purge-guard.sh); and nothing is autoremoved, which on the
+# published image would take eleven unrelated packages that were already
+# marked automatic.
+
+# Anything but "not-installed" and "config-files" (removed, configuration
+# left) counts: a half-installed package still has files on disk.
+# dpkg-query exits 1 for a name it has never heard of, which is the normal
+# case here.
+- name: List the archive's rdma-core development packages that are installed
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: >-
+      set -o pipefail;
+      { dpkg-query -W -f='${db:Status-Status} ${Package}\n'
+      {{ rocm_ernic_setup_rdma_dev_packages | map('quote') | join(' ') }}
+      2>/dev/null || true; }
+      | awk '$1 != "not-installed" && $1 != "config-files" { print $2 }'
+      | sort -u
+  register: rocm_ernic_setup_rdma_dev_installed
+  changed_when: false
+
+# A header and a link library for each of the three, not for libibverbs
+# alone: the purge takes librdmacm-dev and libibumad-dev too, and a prefix
+# with only libibverbs would otherwise be refused by files/rdma-core-check.sh
+# at the end of the bake, after the packages had gone.
+- name: Look for the rdma-core that replaces them
+  ansible.builtin.stat:
+    path: "{{ rocm_ernic_setup_rdma_dev_prefix }}/{{ item }}"
+    get_checksum: false
+  loop:
+    - include/infiniband/verbs.h
+    - include/rdma/rdma_cma.h
+    - include/infiniband/umad.h
+    - lib/libibverbs.so
+    - lib/librdmacm.so
+    - lib/libibumad.so
+  register: rocm_ernic_setup_rdma_dev_replacement
+  when: rocm_ernic_setup_rdma_dev_installed.stdout_lines | length > 0
+
+# Before the purge, not after: on a guest with only the archive's rdma-core
+# these packages are the only verbs headers there are.
+- name: Assert there is an rdma-core to build against without them
+  ansible.builtin.assert:
+    that:
+      - >-
+        rocm_ernic_setup_rdma_dev_replacement.results
+        | rejectattr('stat.exists') | list | length == 0
+    fail_msg: >-
+      {{ rocm_ernic_setup_rdma_dev_installed.stdout_lines | join(', ') }}
+      would be purged, and {{ rocm_ernic_setup_rdma_dev_prefix }} has no
+      {{ rocm_ernic_setup_rdma_dev_replacement.results
+         | rejectattr('stat.exists') | map(attribute='item') | join(' and no ') }}:
+      the guest would be left with no rdma-core to build against. The purge
+      belongs after the collection's ernic_srq_provider, which installs one
+      there.
+  when: rocm_ernic_setup_rdma_dev_installed.stdout_lines | length > 0
+
+# See files/rdma-dev-purge-guard.sh: apt removes reverse dependencies
+# without a word, and this is where a package that should stay is caught.
+- name: Check the purge removes the development packages and nothing else
+  ansible.builtin.script:
+    cmd: >-
+      rdma-dev-purge-guard.sh
+      {{ rocm_ernic_setup_rdma_dev_installed.stdout_lines
+         | map('quote') | join(' ') }}
+    executable: /bin/bash
+  changed_when: false
+  when: rocm_ernic_setup_rdma_dev_installed.stdout_lines | length > 0
+
+- name: Purge the archive's rdma-core development packages
+  ansible.builtin.apt:
+    name: "{{ rocm_ernic_setup_rdma_dev_installed.stdout_lines }}"
+    state: absent
+    purge: true
+    autoremove: false
+  when: rocm_ernic_setup_rdma_dev_installed.stdout_lines | length > 0
+
+# The packages' own triggers left the loader cache naming the link libraries
+# that had just been removed, until ldconfig was run by hand (measured on the
+# same guest). No build reads the cache, but "ldconfig -p" is what a person
+# asks.
+- name: Refresh the loader cache after the purge
+  ansible.builtin.command:
+    argv: [ldconfig]
+  changed_when: true
+  when: rocm_ernic_setup_rdma_dev_installed.stdout_lines | length > 0
+
+- name: Report
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'Purged ' ~ (rocm_ernic_setup_rdma_dev_installed.stdout_lines | join(', '))
+         ~ ': the rdma-core under ' ~ rocm_ernic_setup_rdma_dev_prefix
+         ~ ' is the one a build finds.'
+         if rocm_ernic_setup_rdma_dev_installed.stdout_lines | length > 0
+         else 'None of ' ~ (rocm_ernic_setup_rdma_dev_packages | join(', '))
+              ~ ' is installed; nothing to purge.' }}

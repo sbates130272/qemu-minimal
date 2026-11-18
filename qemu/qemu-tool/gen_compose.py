@@ -30,6 +30,7 @@ from typing import Any
 
 from .compose import _DEFAULT_STACK, _STACKS
 from .fleet_xml import FleetConfig, FleetXml
+from .ports import publish_address, publish_mapping, reach_address
 from .resources import stack_fleet
 from .vm_artifact import VM_COMMIT_TAG, VM_DATED_TAG
 
@@ -216,6 +217,19 @@ def _setting(cfg: FleetConfig, field: str) -> str:
     return getattr(cfg, field) or _FIELD_DEFAULTS[field]
 
 
+def _bind_addr(cfg: FleetConfig) -> str:
+    """<publish-bind-addr>, checked: the host address of every `ports:` entry.
+
+    The parser has already checked a value that came from a file; this is for
+    a FleetConfig built in code, so that nothing reaches compose that would
+    publish a port on an address nobody chose.
+    """
+    try:
+        return publish_address(_setting(cfg, "publish_bind_addr"))
+    except ValueError as exc:
+        sys.exit(f"Error: <publish-bind-addr>: {exc}")
+
+
 def _split_per_vm(raw: str, count: int, element: str) -> list[str]:
     """Broadcast a scalar, or apply a length-<vm-count> list positionally."""
     items = [p.strip() for p in raw.split(",")]
@@ -256,6 +270,56 @@ def _per_vm_flags(cfg: FleetConfig, count: int) -> list[list[tuple[str, str]]]:
             for vm in per_vm:
                 vm.append(("--extra-hostfwd", rule.strip()))
     return per_vm
+
+
+# What marks a batesste-ci-images QEMU or NIC server image as the fork's:
+# the repository name ends in it.
+FORK_MARK = "-sbates-fork"
+
+
+def pins_fork_qemu(ref: str) -> bool:
+    """True when an image ref names the fork QEMU, by its repository."""
+    repo = ref.rsplit("@", 1)[0]
+    if ":" in repo.rsplit("/", 1)[-1]:
+        repo = repo.rsplit(":", 1)[0]
+    return repo.endswith(FORK_MARK)
+
+
+def _check_nvme_vram(cfg: FleetConfig) -> None:
+    """<vm-nvme-vram>: each guest's NVMe devices may DMA into its first GPU.
+
+    QEMU's own NVMe reaches a vfio-user GPU's BAR through a 4 KiB bounce
+    buffer unless the device is told which BAR to map (the fork QEMU's
+    vram-dev property). hipFile's direct path measured 11 to 13 MB/s without
+    it; with it, 831 and 959 MB/s on the default stack, one run each
+    (2026-11-18). The bounce buffer as the cause is inferred, not profiled.
+
+    Refused without an NVMe, since there is nothing to point. A QEMU that is
+    not the fork only gets a warning: run-vm asks the binary whether its NVMe
+    has the property and leaves it off when it has not, and a locally built
+    QEMU may have it under any image name.
+    """
+    if not cfg.vm_nvme_vram:
+        return
+    if cfg.vm_nvme <= 0:
+        sys.exit(
+            "Error: <vm-nvme-vram> is true and <vm-nvme> is "
+            f"{cfg.vm_nvme}. It points each guest's emulated NVMe devices at "
+            "the guest's first GPU, so it needs <vm-nvme> of at least 1 "
+            "(null_blk devices, a negative count, cannot take it). Give the "
+            "fleet an NVMe, or set <vm-nvme-vram>false in the layer that "
+            "removes it."
+        )
+    if not pins_fork_qemu(cfg.qemu_ref):
+        print(
+            "Warning: <vm-nvme-vram> is true and <qemu-ref> is "
+            f"{cfg.qemu_ref}, which is not the fork QEMU image.\n"
+            "  Only the fork's NVMe device has the vram-dev property. On a "
+            "QEMU without it run-vm leaves\n"
+            "  the option off and hipFile's direct path runs at its slow "
+            "rate, with no error.",
+            file=sys.stderr,
+        )
 
 
 def _warn_if_gpu_without_root_port(cfg: FleetConfig) -> None:
@@ -541,6 +605,7 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
         )
 
     _check_image_coherence(cfg)
+    _check_nvme_vram(cfg)
     _warn_if_gpu_without_root_port(cfg)
 
     prefix = _setting(cfg, "name_prefix")
@@ -672,6 +737,7 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
         "rocjitsu_per_vm": rocjitsu_per_vm,
         "sdxi_per_vm": sdxi_per_vm,
         "switch_width": _switch_width,
+        "nvme_vram": cfg.vm_nvme_vram,
         "ernic_image": cfg.ernic_ref,
         "qemu_image": cfg.qemu_ref,
         "vm_images_dir": _setting(cfg, "vm_images_dir"),
@@ -716,7 +782,7 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
         "log_max_size": _setting(cfg, "log_max_size"),
         "log_max_file": str(cfg.log_max_files),
         "prom_data_dir": cfg.prometheus_data_dir or _PROM_DATA_DIR,
-        "bind_addr": _setting(cfg, "publish_bind_addr"),
+        "bind_addr": _bind_addr(cfg),
         "grafana_data_dir": cfg.grafana_data_dir or _GRAFANA_DATA_DIR,
         "prom_port": str(cfg.prom_port),
         "prom_interval": _setting(cfg, "prom_scrape_interval"),
@@ -1157,8 +1223,13 @@ def render_compose(
         for dev in vm["nics"] + vm["gpus"] + vm["sdxi"]:
             out.append(f"      {dev['service']}:")
             out.append("        condition: service_healthy")
+        # Bound to <publish-bind-addr>, loopback unless the fleet says
+        # otherwise. With no address docker publishes on every interface,
+        # and a guest from the published image takes a key and a password
+        # that are both public, as a user with sudo.
         out.append("    ports:")
-        out.append(f'      - "{vm["ssh_port"]}:2222"')
+        out.append(
+            f'      - "{publish_mapping(spec["bind_addr"], vm["ssh_port"], 2222)}"')
         out.append("    entrypoint:")
         out.append("      - /bin/sh")
         out.append("      - -c")
@@ -1198,6 +1269,10 @@ def render_compose(
                 f'          --pci-hole64-size "{spec["pci_hole64_size"]}" \\')
         for flag, value in vm["flags"]:
             out.append(f'          {flag} "{value}" \\')
+        if spec["nvme_vram"]:
+            # run-vm gives each vfio-user device its socket's stem as qdev id.
+            out.append(
+                f'          --nvme-vram-dev "{Path(vm["gpus"][0]["sock"]).stem}" \\')
         # Sockets are passed explicitly rather than globbed: with a fleet's
         # worth of sockets on one shared tmpfs, the single-VM stack's
         # `ls /run/vfu/*.sock` would attach every device to every VM.
@@ -1363,7 +1438,8 @@ def render_compose(
         out.append(f"      - GF_SECURITY_ADMIN_PASSWORD={spec['grafana_password']}")
         # The fleet is a disposable lab behind a host port, and a login prompt
         # between the operator and the only dashboard is pure friction. It is
-        # still a published port, so do not point this at anything shared.
+        # still a published port: <publish-bind-addr> decides who can reach
+        # it, and anything but loopback hands them Grafana's admin.
         out.append("      - GF_AUTH_ANONYMOUS_ENABLED=true")
         out.append("      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin")
         out.append("      - GF_USERS_DEFAULT_THEME=dark")
@@ -1380,7 +1456,8 @@ def render_compose(
         # ad hoc do not.
         out.append(f"      - {spec['grafana_data_dir']}:/var/lib/grafana")
         out.append("    ports:")
-        out.append(f'      - "{spec["bind_addr"]}:{spec["grafana_port"]}:3000"')
+        out.append(
+            f'      - "{publish_mapping(spec["bind_addr"], spec["grafana_port"], 3000)}"')
 
     if spec["ernic_tap"]:
         out.append("")
@@ -1567,7 +1644,11 @@ def render_inventory(spec: dict[str, Any], digest: str) -> str:
     out.append("")
     out.append("all:")
     out.append("  vars:")
-    out.append("    ansible_host: 127.0.0.1")
+    # Where a guest's published SSH port answers from this host: loopback,
+    # unless <publish-bind-addr> names one particular address.
+    host = reach_address(spec["bind_addr"])
+    out.append(f"    ansible_host: {host}" if ":" not in host
+               else f'    ansible_host: "{host}"')
     # From <vm-username>, which is a VMConfig field (config.py) and so already
     # understood by gen-vm and run-vm. The published guest images carry their
     # own user -- the rocm-golden qcow2 ships vm-info.json naming

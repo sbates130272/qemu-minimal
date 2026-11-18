@@ -6,5 +6,6 @@ skip = .git,*.qcow2,*.img,*.deb,./qemu/compose/*/grafana/dashboards/node/node-ex
 # blacklist: the literal modprobe/kernel command-line keyword.
 # TRIMed: grafana.com upstream dashboard JSON, not our text.
 # parm: the literal `modinfo -F parm` field name.
-ignore-words-list = hsa,blacklist,TRIMed,parm
+# syndrom: perftest's own spelling, in the completion error it prints.
+ignore-words-list = hsa,blacklist,TRIMed,parm,syndrom
 check-filenames =

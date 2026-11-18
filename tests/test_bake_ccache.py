@@ -244,7 +244,8 @@ class Playbook(unittest.TestCase):
         at = names.index(self.SAVE)
         for builder in ("Prepare the guest for an emulated rocjitsu GPU",
                         "Build SRQ + P4 ionic stack into the guest",
-                        "Install SDXI driver and CLI into guest image"):
+                        "Install SDXI driver and CLI into guest image",
+                        "Build perftest with ROCm memory support into the guest"):
             self.assertLess(names.index(builder), at, builder)
         self.assertLess(at, names.index("Record what was baked"))
         self.assertLess(at, names.index("Slim the baked image"))
@@ -1000,7 +1001,7 @@ class Workflows(unittest.TestCase):
             yaml.safe_load(PUBLISH.read_text())[True]["push"]["branches"],
             ["main"])
 
-    def test_the_key_step_finds_all_four_pins(self):
+    def test_the_key_step_finds_all_five_pins(self):
         """Run for real: a grep that matches nothing still exits 0 in a pipe."""
         script = _step(RESTORE, "Name the compiler cache")["run"]
         with tempfile.TemporaryDirectory() as tmp:
@@ -1025,7 +1026,8 @@ class Workflows(unittest.TestCase):
                        "ansible/requirements.yml",
                        "rocjitsu_setup/files/amdgpu-emu-patches.py",
                        "ionic_kernel_pin", "ernic_source_pin",
-                       "sdxi_source_pin", "rocm_setup_amdgpu_driver_version"):
+                       "sdxi_source_pin", "perftest_source_pin",
+                       "rocm_setup_amdgpu_driver_version"):
             self.assertIn(source, script)
         # And nothing that differs between them: no ref, event or workflow.
         self.assertNotIn("${{", script)
@@ -1035,20 +1037,21 @@ class Workflows(unittest.TestCase):
 
     def test_the_key_step_fails_when_a_pin_has_dropped_out(self):
         script = _step(RESTORE, "Name the compiler cache")["run"]
-        with tempfile.TemporaryDirectory() as tmp:
-            for rel in ("ansible/playbooks/vm-rocm-golden.yml",
-                        "ansible/requirements.yml",
-                        "ansible/playbooks/roles/rocjitsu_setup/files/"
-                        "amdgpu-emu-patches.py"):
-                dest = Path(tmp) / rel
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                text = (REPO / rel).read_text()
-                dest.write_text(text.replace("sdxi_source_pin: &", "sdxi_pin: &"))
-            out = Path(tmp) / "output"
-            done = _bash(script, cwd=tmp,
-                         env={**os.environ, "GITHUB_OUTPUT": str(out)})
-            self.assertNotEqual(done.returncode, 0)
-            self.assertFalse(out.exists() and "prefix=" in out.read_text())
+        for pin in ("sdxi_source_pin", "perftest_source_pin"):
+            with self.subTest(pin=pin), tempfile.TemporaryDirectory() as tmp:
+                for rel in ("ansible/playbooks/vm-rocm-golden.yml",
+                            "ansible/requirements.yml",
+                            "ansible/playbooks/roles/rocjitsu_setup/files/"
+                            "amdgpu-emu-patches.py"):
+                    dest = Path(tmp) / rel
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    text = (REPO / rel).read_text()
+                    dest.write_text(text.replace(f"{pin}: &", "renamed: &"))
+                out = Path(tmp) / "output"
+                done = _bash(script, cwd=tmp,
+                             env={**os.environ, "GITHUB_OUTPUT": str(out)})
+                self.assertNotEqual(done.returncode, 0)
+                self.assertFalse(out.exists() and "prefix=" in out.read_text())
 
     def _report(self, tmp, prepare, env=None, status=0):
         cache = Path(tmp) / "cache"

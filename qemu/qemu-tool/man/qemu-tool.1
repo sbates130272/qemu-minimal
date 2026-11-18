@@ -338,7 +338,10 @@ leaves both out.
 .B \-\-in\-network
 Reach the guests on the compose network rather than on published host ports.
 For a caller that is itself a container attached to that network, which is
-what the CI lane is.
+what the CI lane is. The published ports are bound to
+.B <publish\-bind\-addr>
+on the docker host, loopback by default, which such a caller could not reach
+in any case.
 .TP
 .BR \-\-yes ", " \-y
 Take the default answer to every prompt without asking. Every default is to
@@ -389,6 +392,140 @@ longer soak test of the RDMA mesh.
 Run each
 .B fio
 NVMe pass for this many seconds. Default: 10.
+.TP
+.B \-\-sdxi\-test
+Also run the SDXI test: on every guest, as its login user with no sudo,
+copy 4 MiB of random data through
+.I /dev/sdxi0
+with
+.B sdxi\-cli
+and compare the copy with its source.
+.BR "Off by default" .
+A functional check, not a benchmark. Refused before anything is started on a
+fleet whose
+.B <sdxi\-per\-vm>
+is 0, naming the element. A pass prints one line a guest,
+.RI \(dq name ": SDXI copy of 4194304 bytes verified\(dq,"
+and the same result is in that guest's summary and in the report. Only
+meaningful with the
+.B test
+or
+.B all
+verbs.
+.TP
+.B \-\-p4\-test
+Also run the P4 fp8 test: on the first guest only, as its login user with no
+sudo,
+.B p4_fp8_client
+loads the fp8 P4 program into that guest's NIC through
+.IR /dev/ernic\-p4 ,
+installs the table entry and checks one reduction, and
+.B p4_fp8_bench
+then times it. The reduction is compute inside one NIC, so there is no peer
+guest and nothing crosses the mesh; the RDMA device name is asked of the
+guest.
+.BR "Off by default" .
+Refused before anything is started unless the fleet has
+.B <p4\-enable>true
+and
+.BR <p4\-guest\-scope>load ,
+which is the scope that lets a guest replace the program and write a table
+entry. A pass prints
+.RI \(dq name ": P4 FP8 reduction " rate " MB/s (262144 elements x 2000 iterations)\(dq,"
+in fp8 result bytes per second. The program and its table entry stay in
+that NIC until its server restarts: a two\-equal\-operand RDMA WRITE on it
+is a reduction from then on, and ordinary transfers are untouched. Only
+meaningful with the
+.B test
+or
+.B all
+verbs.
+.TP
+.BI \-\-p4\-iters " N"
+How many reductions
+.B \-\-p4\-test
+times. Default: 2000, about 3 seconds. Each is 262144 fp8 elements, the most
+the device moves in one operation. Refused without
+.BR \-\-p4\-test .
+Only meaningful with the
+.B test
+or
+.B all
+verbs; any other verb ignores all three switches and says so.
+.TP
+.B \-\-rocm\-rdma\-test
+Also run the ROCm\-memory RDMA test: the perftest built with ROCm,
+.B ib_write_bw \-\-use_rocm \-\-data_validation
+on port 18516, from the first guest to the last, with its buffers allocated
+through HIP on both sides and every byte checked on arrival.
+.BR "Off by default" .
+In the default mode the buffers are host memory the GPU can address, not
+VRAM, which is the form that passes on any QEMU; see
+.BR \-\-rocm\-rdma\-mode .
+Refused before anything is started on a fleet with one guest, naming
+.BR <vm\-count> ,
+and for a flavor that runs no playbook. It needs a guest image that has that
+perftest: the
+.B perftest_setup
+role of the golden bake installs it in
+.I /usr/local/bin
+and records it in
+.IR /etc/perftest\-rocm.json .
+An image published before the role has neither, and the test says so from
+inside the guest before it starts anything. A pass prints
+.RI \(dq first " \-> " last ": ib_write_bw with ROCm buffers (" mode "), " rate " MiB/s, " bytes " bytes in " chunks " chunks validated\(dq,"
+and the result and both sides' output are in
+.I rocm\-rdma.md
+in the stack's artifacts directory and in the report. The rate is absent,
+and the line says so, when perftest's CPU\-frequency calibration failed: the
+test passes
+.B \-F
+so that such a run is still validated. Only meaningful with the
+.B test
+or
+.B all
+verbs; any other verb ignores it and says so.
+.TP
+.BI \-\-rocm\-rdma\-mode " MODE"
+Where
+.B \-\-rocm\-rdma\-test
+puts the buffers. Default:
+.BR host\-alloc .
+.RS
+.TP
+.B host\-alloc
+Host memory mapped for the GPU
+.RB ( PERFTEST_ROCM_HOST_ALLOC=1 ,
+.BR hipHostMalloc ),
+not VRAM. Passes. It proves HIP, the memory registration, the transfer and
+the validator: everything but the NIC reaching the GPU's own memory.
+.TP
+.B dmabuf
+VRAM registered as a dma\-buf
+.RB ( \-\-use_rocm_dmabuf ).
+Passes on the stacks qemu\-tool ships, which pin the fork QEMU: it hands
+the NIC's server the GPU's memory.
+.B Expected to fail
+on a stack whose
+.B <qemu\-ref>
+names stock QEMU: the buffer registers, the NIC's server then cannot read
+the GPU's memory, and the first work request ends in a remote access error.
+.B quick\-start
+says so before it starts anything when the fleet does not pin the fork.
+.TP
+.B vram
+VRAM registered by address
+.RB ( \-\-use_rocm
+alone).
+.B Expected to fail
+on every stack: the guest's kernel refuses the registration (error=14)
+before the NIC is asked, whichever QEMU is pinned.
+.RE
+.IP
+A failure for the reason given is reported as the known limitation of the
+mode, with the line perftest printed, and the run still exits non\-zero.
+Refused without
+.BR \-\-rocm\-rdma\-test .
 .TP
 .B \-\-clean\-overlays
 Delete the guest overlay and NVMe qcow2 files before starting, so the guests
@@ -544,12 +681,21 @@ Only emitted when the QEMU binary supports the property.
 .TP
 .BI \-\-nvme\-vram\-dev " ID"
 qdev id of a vfio-user device (e.g.\&
-.IR rocjitsu\-4\-1 )
+.IR rocjitsu\-1 ,
+its socket's file name without
+.IR .sock )
 to use as the VRAM source for NVMe P2P DMA.
-Applied to the first NVMe controller created by
-.BR \-\-nvme " N" .
-Requires the QEMU binary to support
-.BR vram\-dev= .
+Applied to every NVMe controller created by
+.BR \-\-nvme " N" ,
+not to null_blk devices or a literal
+.B \-\-nvme
+argument. Left off, with no message, when the QEMU binary has no
+.B vram\-dev=
+property; only the fork QEMU has it. In a generated stack it is set for
+each guest by
+.BR <vm\-nvme\-vram> ;
+.B run\-vm
+outside a stack does not take it from a fleet file.
 .TP
 .BI \-\-nvme\-vram\-bar " N"
 BAR index on the vfio-user device identified by
@@ -935,6 +1081,24 @@ switch; see
 .BR \-\-vfio\-user\-switch\-width .
 Default: 0, off.
 .TP
+.B <vm\-nvme\-vram>
+Boolean. Point every emulated NVMe of a guest at BAR 0 of that guest's
+first rocjitsu device: each
+.B qemu\-N
+service runs
+.B run\-vm
+with
+.B \-\-nvme\-vram\-dev
+naming it. Needs
+.B <vm\-nvme>
+of at least 1, and a layer that removes the NVMe has to set this false as
+well.
+.B gen\-compose
+warns when
+.B <qemu\-ref>
+is not the fork QEMU, on which the option is left off with no error.
+Read by the generator only. Default: false.
+.TP
 .BR <p4\-enable> ", " <p4\-guest\-scope> ", " <p4\-program>
 Run the P4 engine on each ernic server, and decide which guest commands
 reach it:
@@ -956,6 +1120,26 @@ as root and silently reused by the next fleet of a different size.
 .B compose
 creates the ones the fleet XML names, as the caller, before
 .BR up .
+.TP
+.B <publish\-bind\-addr>
+The host address every published port binds to: each guest's SSH port and
+Grafana's. An IPv4 or IPv6 literal, not a host name. Default:
+.BR 127.0.0.1 ,
+so a stack answers on the host it runs on and nowhere else. That is the
+Docker Engine's doing from 28.0 up; an earlier engine lets a machine on the
+host's network segment reach a port published on loopback, and
+.B check
+warns about one.
+.B 0.0.0.0
+publishes on every interface, and one address of the host on that
+address alone. Anything but loopback lets other machines in, and a guest
+from the published image accepts a key and a password that are both public,
+as a user with sudo, while Grafana has anonymous admin on; reach a loopback
+stack from another machine through an SSH tunnel instead.
+.B compose
+warns when the stack it starts is not on loopback, and
+.B check
+reports the address in force.
 .TP
 .BR <grafana\-enable> ", " <logs\-enable>
 Generate Grafana, and Loki with an Alloy tailing the stack's containers.
@@ -1368,7 +1552,7 @@ Each GPU row carries its PCIe BARs, indented beneath it:
 .RS 4
 .EX
 GPU:       gfx1250 (emulated, rocjitsu\-1.sock)
-             BAR0 256 MiB (64\-bit prefetchable)
+             BAR0 256 GiB (64\-bit prefetchable)
              BAR2 2 MiB (64\-bit prefetchable)
 GPU:       gfx908 (passthrough, 63:00.0)
              BAR0 32 GiB (64\-bit prefetchable)
@@ -1379,10 +1563,11 @@ GPU:       gfx908 (passthrough, 63:00.0)
 .PP
 BAR0 is the VRAM aperture and is the one to look at for peer\-to\-peer DMA: a
 device whose BAR0 does not cover the memory a peer must reach cannot be the
-target of one. The 256 MiB above is an emulated
+target of one. The 256 GiB above is an emulated
 .BR rocjitsu (1)
-GPU at its default
-.IR vram_aperture_bytes ,
+GPU with the
+.I vram_aperture_bytes
+of the configuration the shipped stacks serve,
 against a real MI100 with a 32 GiB large BAR. BAR2 and BAR5 are the doorbell
 and register apertures and are the same size on both, emulated or not.
 .PP
@@ -1465,6 +1650,15 @@ every subcommand uses. A file that is not valid fleet XML is a
 .B FAIL
 with one line per problem, naming the file and the element, and the rest of
 the report still runs.
+.PP
+.B <publish\-bind\-addr>
+is reported too: the host address the guests' SSH ports and Grafana are
+published on. Loopback is
+.BR ok ;
+any other address is a
+.BR warn ,
+because other machines can then reach guests whose key and password are
+public.
 .PP
 The container identity is reported even when it is fine, because
 .I which uid did my fleet run as
@@ -2067,6 +2261,7 @@ Devices
 .BR <rocjitsu\-per\-vm> ,
 .BR <sdxi\-per\-vm> ,
 .BR <vm\-pcie\-switch\-width> ,
+.BR <vm\-nvme\-vram> ,
 .BR <rocjitsu\-config> .
 .TP
 Network and mesh

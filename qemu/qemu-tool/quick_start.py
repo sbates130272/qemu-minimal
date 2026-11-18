@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -53,9 +54,10 @@ from .compose import (_apply_identity, _precreate_data_dirs,
                       interpolation_env, resolve_identity)
 from .config import VMConfig
 from .fleet_xml import NS_FLEET, FleetConfig, FleetXml
+from .gen_compose import FORK_MARK as _FORK_MARK, pins_fork_qemu
 from .gen_compose import run as gen_compose_run
 from .gen_vm import run as gen_vm_run
-from .ports import port_bindable
+from .ports import is_loopback, port_bindable, reach_name
 from .resources import STACKS as _STACKS_PACKAGE, shipped_path
 
 VERBS = ("all", "preflight", "up", "test", "report", "down", "logs")
@@ -104,6 +106,42 @@ _VCPU_CEILING = 8
 _VMEM_FLOOR_MB = 4096
 _VMEM_CEILING_MB = 8192
 
+# What --p4-test needs of <p4-guest-scope>. The server's scopes are ordered
+# none < read < write < load, and p4_fp8_client uses the top two: it replaces
+# the P4 program (LOAD_BEGIN, LOAD_CHUNK, LOAD_COMMIT, which need load) and
+# installs the reduce entry (ENTRY_UPDATE, which needs write). With `none`
+# the guest has no /dev/ernic-p4 at all.
+_P4_SCOPE_NEEDED = "load"
+
+# Where --rocm-rdma-test puts perftest's buffers, and what each mode does.
+# Measured on the default fleet with stock QEMU and with the fork QEMU every
+# shipped fleet file now pins, 2026-11-17 and 18 (AGENTS.md, "perftest with
+# ROCm memory support"): the first passes on both, the second on the fork
+# only, the third on neither. The play of vm-quickstart.yml has the same
+# three keys, and what it adds to the command line for each.
+ROCM_RDMA_MODES = {
+    "host-alloc": "host memory the GPU can address (PERFTEST_ROCM_HOST_ALLOC=1), "
+                  "not VRAM: passes",
+    "dmabuf": "VRAM registered as a dma-buf (--use_rocm_dmabuf): passes on "
+              "the shipped stacks, which pin the fork QEMU. Expected to FAIL "
+              "on a stack whose <qemu-ref> names stock QEMU: there the NIC's "
+              "server cannot read the GPU's memory, so the first work request "
+              "ends in a remote access error",
+    "vram": "VRAM registered by address (--use_rocm alone): expected to FAIL "
+            "on every stack. The guest's kernel refuses the registration "
+            "(error=14) before the NIC is asked, whichever QEMU is pinned",
+}
+_ROCM_RDMA_DEFAULT = "host-alloc"
+
+# What marks a batesste-ci-images QEMU or NIC server image as the fork's:
+# the repository name ends in it. The fork QEMU hands each vfio-user server
+# the other devices' memory, which the dmabuf mode needs.
+
+
+def _pins_fork_qemu(fleet: FleetConfig) -> bool:
+    """True when <qemu-ref> names the fork QEMU image, by its repository."""
+    return pins_fork_qemu(fleet.qemu_ref)
+
 
 # ---------------------------------------------------------------------------
 # Resolved state
@@ -138,6 +176,17 @@ class _State:
     rdma_delta: int | None = None
     rdma_duration: int | None = None
     nvme_duration: int | None = None
+    # The optional tests, each a play of the playbook that is off unless its
+    # extra var is passed. p4_iters sizes the second and is None for the
+    # playbook's own default.
+    sdxi_test: bool = False
+    p4_test: bool = False
+    p4_iters: int | None = None
+    # The third: perftest with ROCm buffers and data validation between the
+    # first guest and the last. The mode is None for the playbook's own
+    # default, host-alloc.
+    rocm_rdma_test: bool = False
+    rocm_rdma_mode: str | None = None
 
     # ---- convenience readers -------------------------------------------
     @property
@@ -171,13 +220,25 @@ class _State:
     def vm(self, index: int) -> str:
         return f"{self.prefix}-{index}"
 
+    @property
+    def bind_addr(self) -> str:
+        """The host address the stack's ports are published on."""
+        return self.fleet.publish_bind_addr or FleetConfig.publish_bind_addr
+
+    @property
+    def published_host(self) -> str:
+        """Where this host reaches a published port: localhost, unless
+        <publish-bind-addr> names one particular address."""
+        return reach_name(self.bind_addr)
+
     def guest_host(self, index: int) -> str:
         if self.in_network:
             # Third octet 3 is the qemu family. By address, not by service
             # name: this stack resolves no service names at run time, on
-            # purpose (AGENTS.md issue 13).
+            # purpose (AGENTS.md issue 13). The published port and the
+            # address it is bound to play no part here.
             return f"{self.fleet.fleet_prefix}.3.{index}"
-        return "localhost"
+        return self.published_host
 
     def guest_port(self, index: int) -> int:
         if self.in_network:
@@ -633,8 +694,18 @@ def preflight(state: _State, write_layers: bool = True) -> None:
     if state.metrics:
         print(f"  monitoring  Grafana :{state.fleet.grafana_port}; "
               f"Prometheus has no host port")
+    print(f"  published   {_exposure(state)}")
     print(f"  guest image {state.fleet.backing_ref.split(':')[-1]}")
     print()
+
+
+def _exposure(state: _State) -> str:
+    """One line on who can reach the guests' SSH ports and Grafana."""
+    addr = state.bind_addr
+    if is_loopback(addr):
+        return f"on {addr}: this host only"
+    return (f"on {addr}: REACHABLE FROM OTHER MACHINES "
+            f"(<publish-bind-addr>)")
 
 
 def _shm_mb(value: str) -> int:
@@ -1243,6 +1314,135 @@ def _write_network_inventory(state: _State) -> Path:
     return path
 
 
+def _where_set(state: _State, field_name: str) -> str:
+    """Where the merged value of one fleet setting came from, for a refusal.
+
+    Later layers win element by element, so it is the last layer that names
+    the element and no other: a message that listed every layer would pin
+    the value on files that set a different one, or none.
+    """
+    for layer in reversed(state.all_layers):
+        if field_name in FleetXml.fields_set(layer):
+            return f"in {layer}"
+    named = ", ".join(str(layer) for layer in state.all_layers)
+    return f"by default (set in none of: {named})"
+
+
+def _check_optional_tests(state: _State) -> None:
+    """Refuse an optional test this fleet cannot run, before anything starts.
+
+    The alternative is the same answer minutes later from inside a guest,
+    after the pull, the boot and the tests in front of it. Read from the
+    merged settings: the SDXI servers and the ernic servers' P4 flags are
+    both rendered into the stack from them.
+    """
+    asked = [flag for flag, on in (("--sdxi-test", state.sdxi_test),
+                                   ("--p4-test", state.p4_test),
+                                   ("--rocm-rdma-test", state.rocm_rdma_test))
+             if on]
+    if state.p4_iters is not None and not state.p4_test:
+        _die("--p4-iters sizes the P4 test and does nothing without it: "
+             "add --p4-test")
+    if state.rocm_rdma_mode is not None and not state.rocm_rdma_test:
+        _die("--rocm-rdma-mode says where the ROCm-memory RDMA test puts its "
+             "buffers and does nothing without it: add --rocm-rdma-test")
+    if not asked:
+        return
+    if state.playbook is None:
+        _die(f"{' and '.join(asked)}: this flavor has no configure-and-test "
+             "playbook, so quick-start boots its guests and runs no test on "
+             "them. The optional tests are plays of vm-quickstart.yml, which "
+             "the default flavor runs.")
+    again = ("then run `qemu-tool quick-start up` again, because the setting "
+             "is rendered into the stack and an edit does not reach a "
+             "running one")
+    if state.sdxi_test and state.fleet.sdxi_per_vm < 1:
+        _die("--sdxi-test: this fleet gives its guests no SDXI device: "
+             f"<sdxi-per-vm> is {state.fleet.sdxi_per_vm} "
+             f"{_where_set(state, 'sdxi_per_vm')}, so there is no /dev/sdxi0 "
+             "to copy through. Set <sdxi-per-vm>1</sdxi-per-vm>, and "
+             f"<sdxi-image> if the fleet names none, {again}; or drop "
+             "--sdxi-test.")
+    if state.p4_test and not state.fleet.p4_enable:
+        _die("--p4-test: this fleet's ernic servers run no P4 engine: "
+             f"<p4-enable> is false {_where_set(state, 'p4_enable')}, so "
+             "the guests have no /dev/ernic-p4. Set "
+             "<p4-enable>true</p4-enable> and "
+             f"<p4-guest-scope>{_P4_SCOPE_NEEDED}</p4-guest-scope>, "
+             f"{again}; or drop --p4-test.")
+    scope = (state.fleet.p4_guest_scope or "none").strip()
+    if state.p4_test and scope != _P4_SCOPE_NEEDED:
+        what = {
+            "none": "the guests have no /dev/ernic-p4 at all",
+            "read": "the device refuses both",
+            "write": "the device refuses the program",
+        }.get(scope, "the ernic server will not start")
+        _die(f"--p4-test: <p4-guest-scope> is {scope} "
+             f"{_where_set(state, 'p4_guest_scope')}, and the test needs "
+             f"{_P4_SCOPE_NEEDED}: it replaces the P4 program and installs "
+             f"a table entry, and with {scope} {what}. Set "
+             f"<p4-guest-scope>{_P4_SCOPE_NEEDED}</p4-guest-scope>, {again}; "
+             "or drop --p4-test.")
+    if state.rocm_rdma_test and state.vm_count < 2:
+        _die("--rocm-rdma-test: the test moves data from the first guest to "
+             f"the last, and this fleet has one: <vm-count> is "
+             f"{state.vm_count} {_where_set(state, 'count')}. Set "
+             f"<vm-count>2</vm-count>, {again}; or drop --rocm-rdma-test.")
+    mode = state.rocm_rdma_mode or _ROCM_RDMA_DEFAULT
+    # Said before the boot and the tests in front of it, so a red run ten
+    # minutes later is the one that was announced. dmabuf is expected to
+    # pass on the fork QEMU, so there is nothing to announce for it there.
+    if state.rocm_rdma_test and mode == "vram":
+        print(f"note: --rocm-rdma-mode {mode}: {ROCM_RDMA_MODES[mode]}. A "
+              "failure for that reason is reported as the known limitation "
+              "and the run still exits non-zero.", file=sys.stderr)
+    if (state.rocm_rdma_test and mode == "dmabuf"
+            and not _pins_fork_qemu(state.fleet)):
+        print(f"note: --rocm-rdma-mode dmabuf: <qemu-ref> is "
+              f"{state.fleet.qemu_ref} {_where_set(state, 'qemu_ref')}, "
+              "which is not the fork QEMU the shipped fleet files pin "
+              f"(its repository does not end in {_FORK_MARK}). Expected to "
+              "FAIL: on stock QEMU the NIC's server cannot read the GPU's "
+              "memory, so the first work request ends in a remote access "
+              "error. A failure for that reason is reported as the known "
+              "limitation and the run still exits non-zero. Pin the fork "
+              "<qemu-ref> and <ernic-ref> of qemu/stacks/rocm-golden.xml to "
+              "run this mode.", file=sys.stderr)
+
+
+def _playbook_command(state: _State) -> list[str]:
+    """The ansible-playbook command line for the configure-and-test step.
+
+    A function so a test can read it: with no test flag it is what it was
+    before the optional tests existed, argument for argument.
+    """
+    cmd = ["ansible-playbook",
+           "-i", str(state.stack_dir / "fleet-inventory.yml")]
+    if state.in_network:
+        cmd += ["-i", str(_write_network_inventory(state))]
+    cmd += [f"playbooks/{state.playbook}",
+            "--private-key", str(state.key),
+            "-e", f"quickstart_artifacts_dir={state.artifacts}",
+            "-e", "ansible_remote_tmp=/tmp/.ansible/tmp"]
+    if state.rdma_duration is not None:
+        cmd += ["-e", f"quickstart_rdma_duration={state.rdma_duration}"]
+    if state.nvme_duration is not None:
+        cmd += ["-e", f"quickstart_nvme_duration={state.nvme_duration}"]
+    # Each is the gate of one play, which a run without it ends at its first
+    # task. Passed only when asked for: the playbook's default is off.
+    if state.sdxi_test:
+        cmd += ["-e", "quickstart_sdxi_test=true"]
+    if state.p4_test:
+        cmd += ["-e", "quickstart_p4_test=true"]
+        if state.p4_iters is not None:
+            cmd += ["-e", f"quickstart_p4_iters={state.p4_iters}"]
+    if state.rocm_rdma_test:
+        cmd += ["-e", "quickstart_rocm_rdma=true"]
+        if state.rocm_rdma_mode is not None:
+            cmd += ["-e", f"quickstart_rocm_rdma_mode={state.rocm_rdma_mode}"]
+    return cmd
+
+
 def configure_and_test(state: _State) -> None:
     wait_for_guests(state)
     if state.playbook is None:
@@ -1261,21 +1461,11 @@ def configure_and_test(state: _State) -> None:
     shutil.rmtree(state.artifacts, ignore_errors=True)
     before = _ernic_bytes(state, 1)
 
-    cmd = ["ansible-playbook",
-           "-i", str(state.stack_dir / "fleet-inventory.yml")]
-    if state.in_network:
-        cmd += ["-i", str(_write_network_inventory(state))]
-    cmd += [f"playbooks/{state.playbook}",
-            "--private-key", str(state.key),
-            "-e", f"quickstart_artifacts_dir={state.artifacts}",
-            "-e", "ansible_remote_tmp=/tmp/.ansible/tmp"]
-    if state.rdma_duration is not None:
-        cmd += ["-e", f"quickstart_rdma_duration={state.rdma_duration}"]
-    if state.nvme_duration is not None:
-        cmd += ["-e", f"quickstart_nvme_duration={state.nvme_duration}"]
-    result = subprocess.run(cmd, cwd=state.repo_root / "ansible")
+    result = subprocess.run(_playbook_command(state),
+                            cwd=state.repo_root / "ansible")
     if result.returncode != 0:
-        _die("the configure-and-test playbook failed")
+        _die(_rocm_rdma_failure(state)
+             or "the configure-and-test playbook failed")
 
     state.rdma_delta = _ernic_bytes(state, 1) - before
     _say(f"ernic 1 moved {state.rdma_delta} bytes")
@@ -1286,6 +1476,125 @@ def configure_and_test(state: _State) -> None:
         _die("the ernic byte counter did not move")
 
     _report_nvme_summary(state)
+    _report_optional_tests(state)
+
+
+# The line each optional test leaves in its guest's artifact file. The same
+# text is in the report, which is made of those files.
+_SDXI_RESULT = re.compile(
+    r"^sdxi copy: (\d+) bytes through \S+, source and destination identical",
+    re.M)
+_P4_RESULT = re.compile(
+    r"^p4 fp8 bench: (\d+) elements x (\d+) iters, avg [\d.]+ ms, "
+    r"([\d.]+) MB/s", re.M)
+# The ROCm-memory RDMA play's, in a file of its own: it is between two
+# guests, and its play runs after the per-guest files are written. The
+# verdict, the mode, the tool, the two guests, and whatever follows.
+_ROCM_RDMA_FILE = "rocm-rdma.md"
+_ROCM_RDMA_RESULT = re.compile(
+    r"^rocm rdma: (pass|no verdict|known limitation|no server|fail), "
+    r"mode (\S+), (\S+) (\S+) -> ([^\s,:]+)(.*)$", re.M)
+_ROCM_RDMA_RATE = re.compile(r", ([\d.]+) MiB/s")
+_ROCM_RDMA_VALIDATED = re.compile(
+    r"VALIDATION: PASSED(?: \([A-Z]+\))? - (\d+) chunks, (\d+) bytes")
+
+
+def _rocm_rdma_recorded(state: _State):
+    """The result line the ROCm-memory RDMA play wrote, or None."""
+    path = state.artifacts / _ROCM_RDMA_FILE
+    if not path.exists():
+        return None
+    return _ROCM_RDMA_RESULT.search(path.read_text())
+
+
+def _rocm_rdma_failure(state: _State) -> str | None:
+    """Why the playbook failed, when the ROCm-memory RDMA test is why.
+
+    The play writes its result before it asserts it, so a failed playbook
+    with a result that is not a pass failed there. None when the test was
+    not asked for, or when it passed and something else failed.
+    """
+    if not state.rocm_rdma_test:
+        return None
+    found = _rocm_rdma_recorded(state)
+    if found is None:
+        return ("the configure-and-test playbook failed before "
+                "--rocm-rdma-test recorded a result: the failed task above "
+                "says why. A guest image with no perftest built with ROCm "
+                "(no /etc/perftest-rocm.json) is refused there, and the "
+                "image the fleet files pull may predate the build.")
+    verdict, mode, _tool, client, server, rest = found.groups()
+    if verdict == "pass":
+        return None
+    limited = "ended in the known limitation of that mode, not in a broken test"
+    if (verdict == "known limitation" and mode == "dmabuf"
+            and _pins_fork_qemu(state.fleet)):
+        # The access error is stock QEMU's limitation, and this fleet does
+        # not pin stock QEMU: it is a failure here.
+        limited = ("FAILED with the access error that is the known "
+                   "limitation of stock QEMU, and <qemu-ref> here is the "
+                   f"fork ({state.fleet.qemu_ref}), where this mode is "
+                   "expected to pass. Unless the running stack was rendered "
+                   "from other settings than this command read, that is a "
+                   "failure and not the limitation")
+    what = {
+        "known limitation": limited,
+        "no verdict": "produced no verdict",
+        "no server": "never started",
+    }.get(verdict, "failed")
+    return (f"--rocm-rdma-test in mode {mode} {what} ({client} -> {server})"
+            f"{rest}. Both sides' output is in "
+            f"{state.artifacts / _ROCM_RDMA_FILE}; the tests before it are "
+            "above.")
+
+
+def _report_optional_tests(state: _State) -> None:
+    """Print what --sdxi-test, --p4-test and --rocm-rdma-test recorded.
+
+    A test that was asked for and left no result is a failure, not a line
+    missing from the output: the playbook passing says its plays did not
+    fail, and a play that was skipped did not fail either.
+    """
+    if not (state.sdxi_test or state.p4_test or state.rocm_rdma_test):
+        return
+
+    def recorded(index: int) -> str:
+        md = state.artifacts / f"{state.vm(index)}.md"
+        return md.read_text() if md.exists() else ""
+
+    if state.sdxi_test:
+        for index in range(1, state.vm_count + 1):
+            found = _SDXI_RESULT.search(recorded(index))
+            if not found:
+                _die(f"--sdxi-test was asked for and {state.vm(index)} "
+                     "recorded no SDXI copy")
+            _say(f"{state.vm(index)}: SDXI copy of {found.group(1)} bytes "
+                 "verified")
+    if state.p4_test:
+        # The first guest only: the reduction is inside one NIC, no peer.
+        found = _P4_RESULT.search(recorded(1))
+        if not found or float(found.group(3)) <= 0:
+            _die(f"--p4-test was asked for and {state.vm(1)} recorded no "
+                 "P4 FP8 rate above zero")
+        _say(f"{state.vm(1)}: P4 FP8 reduction {found.group(3)} MB/s "
+             f"({found.group(1)} elements x {found.group(2)} iterations)")
+    if state.rocm_rdma_test:
+        found = _rocm_rdma_recorded(state)
+        validated = _ROCM_RDMA_VALIDATED.search(found.group(6)) if found else None
+        if not found or found.group(1) != "pass" or not validated:
+            _die("--rocm-rdma-test was asked for and recorded no validated "
+                 f"transfer in {state.artifacts / _ROCM_RDMA_FILE}")
+        mode = found.group(2)
+        rate = _ROCM_RDMA_RATE.search(found.group(6))
+        # No rate is perftest's CPU-frequency calibration having failed: -F
+        # lets the run finish and be validated, with 0.00 in the report.
+        speed = (f"{rate.group(1)} MiB/s" if rate else
+                 "rate not measured (perftest's CPU-frequency calibration "
+                 "failed; the transfer and the validation are not affected)")
+        _say(f"{found.group(4)} -> {found.group(5)}: {found.group(3)} with "
+             f"ROCm buffers ({mode}), {speed}, {validated.group(2)} bytes in "
+             f"{validated.group(1)} chunks validated")
+        print(f"    {mode}: {ROCM_RDMA_MODES.get(mode, mode)}")
 
 
 def _report_nvme_summary(state: _State) -> None:
@@ -1404,9 +1713,36 @@ def down(state: _State) -> None:
 # What a new user is actually here for
 # ---------------------------------------------------------------------------
 
+def _exposure_note(state: _State) -> list[str]:
+    """Who can reach what was just printed, and how to change it."""
+    addr = state.bind_addr
+    what = "guest SSH ports" + (" and Grafana" if state.metrics else "")
+    if is_loopback(addr):
+        return [
+            f"The {what} are bound to {addr}:",
+            "they answer on this host only. From another machine, tunnel in",
+            "over SSH, or set <publish-bind-addr>0.0.0.0</publish-bind-addr>",
+            "in a fleet XML overlay. That lets anyone who can reach this host",
+            "log in to the guests: the image's key and password are public.",
+        ]
+    note = [
+        f"WARNING: the {what} are bound to {addr}",
+        "(<publish-bind-addr>), so other machines can reach them. The",
+        "image's key and password are both public and its account has",
+        "sudo: anyone who can reach this host has root in every guest",
+    ]
+    if state.metrics:
+        note[-1] += ","
+        note.append("and Grafana's admin without a login.")
+    else:
+        note[-1] += "."
+    return note
+
+
 def _summary(state: _State) -> None:
-    host = state.fleet.publish_bind_addr
-    shown = "localhost" if host in ("0.0.0.0", "") else host
+    shown = state.published_host
+    # An IPv6 literal needs brackets in a URL and none after user@.
+    url_host = f"[{shown}]" if ":" in shown else shown
     print()
     print("=" * 70)
     print(f"  {state.vm_count} guests are up, each with a GPU, an NVMe and an RDMA NIC.")
@@ -1428,7 +1764,7 @@ def _summary(state: _State) -> None:
     if state.metrics:
         print("  Monitoring (Grafana has anonymous admin on, so no login):")
         print()
-        print(f"      Grafana      http://{shown}:{state.fleet.grafana_port}")
+        print(f"      Grafana      http://{url_host}:{state.fleet.grafana_port}")
         print()
         print("  Prometheus has no host port. Ask it through Grafana's Explore,")
         print("  or from inside its container:")
@@ -1440,11 +1776,21 @@ def _summary(state: _State) -> None:
         print("  Dashboards in the Grafana sidebar. Its data comes from the")
         print("  stats dump each rocm-ernic writes, scraped by the exporter.")
         print()
+    for line in _exposure_note(state):
+        print(f"  {line}")
+    print()
     print("  What else is here:")
     print()
     print("      qemu-tool list --summary          # what the fleet is doing")
     print(f"      qemu-tool inspect {state.vm(1)}")
     print("      qemu-tool quick-start test        # re-run the GPU and RDMA tests")
+    optional = [flag for flag, offered in (
+        ("--sdxi-test", state.fleet.sdxi_per_vm >= 1),
+        ("--p4-test", state.fleet.p4_enable
+         and state.fleet.p4_guest_scope == _P4_SCOPE_NEEDED)) if offered]
+    if optional:
+        print(f"      qemu-tool quick-start test {' '.join(optional)}")
+        print("                                        # and the optional ones")
     print("      qemu-tool quick-start down        # stop it, keep the overlays")
     print()
 
@@ -1470,6 +1816,11 @@ def run(
     rdma_duration: int | None = None,
     nvme_duration: int | None = None,
     variant: str = "default",
+    sdxi_test: bool = False,
+    p4_test: bool = False,
+    p4_iters: int | None = None,
+    rocm_rdma_test: bool = False,
+    rocm_rdma_mode: str | None = None,
 ) -> None:
     fleet_stem, stack_stem, key_stem, playbook = VARIANTS[variant]
 
@@ -1507,6 +1858,11 @@ def run(
         base_layers=layers,
         rdma_duration=rdma_duration,
         nvme_duration=nvme_duration,
+        sdxi_test=sdxi_test,
+        p4_test=p4_test,
+        p4_iters=p4_iters,
+        rocm_rdma_test=rocm_rdma_test,
+        rocm_rdma_mode=rocm_rdma_mode,
         playbook=playbook,
     )
     # Picks up the overlays an earlier verb left beside the stack, which is
@@ -1525,6 +1881,22 @@ def run(
     # name. The referrer is already on disk by then, so this is a local read
     # and a no-op before the first fetch.
     _adopt_login(state)
+
+    # Before the preflight, the pull and the boot: a test this fleet cannot
+    # run is refused now. The other verbs run no test, so they ignore the
+    # switches, and say so: silence there reads as the test having been run.
+    if verb in ("all", "test"):
+        _check_optional_tests(state)
+    else:
+        given = [flag for flag, on in (
+            ("--sdxi-test", sdxi_test),
+            ("--p4-test", p4_test),
+            ("--p4-iters", p4_iters is not None),
+            ("--rocm-rdma-test", rocm_rdma_test),
+            ("--rocm-rdma-mode", rocm_rdma_mode is not None)) if on]
+        if given:
+            print(f"note: {', '.join(given)} ignored: `{verb}` runs no test. "
+                  "The test and all verbs read them.", file=sys.stderr)
 
     if verb == "logs":
         extra = ["-f"] if follow else []

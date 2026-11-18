@@ -16,7 +16,13 @@ Rules:
      <publish-ref> names, by the dated tag of one publish and never by
      "latest" or qm.<sha7>, which move.
 
-These rules are already enforced at stack-generation time by gen_compose.py's
+  4. QEMU and the ernic server are the fork pair (sbates-fork) everywhere:
+     in every fleet file, generated stack, workflow env value and job
+     container. The fork QEMU is what lets one vfio-user device DMA into
+     another's BAR; a lane left on the stock image tests a QEMU no stack
+     runs. Every fleet file names the same pair.
+
+Rules 1 to 3 are already enforced at stack-generation time by gen_compose.py's
 _check_image_coherence(), but that only covers generated stacks. This test
 covers fleet XML files and CI workflow YAML files directly, catching mismatches
 before any stack is generated.
@@ -70,6 +76,18 @@ SDXI_RE = re.compile(r"(^|-)sdxi\.[a-f0-9]+")
 DATED_TAG_RE = re.compile(r"[0-9]{8}\.g[0-9a-f]{7}")
 BACKING_RE = re.compile(r"<backing-ref>([^<]*)</backing-ref>")
 PUBLISH_RE = re.compile(r"<publish-ref>([^<]+)</publish-ref>")
+
+# QEMU and the ernic server by repository: the stock images, which nothing
+# committed names any more, and the fork images, which everything does. The
+# stock name is the repository's whole last component, so the fork's own
+# name, which continues with -sbates-fork, is not a match for it.
+SERVER_REPO = r"batesste-ci-images-ubuntu-(?:qemu-libvfio-user|rocm-ernic)"
+STOCK_RE = re.compile(SERVER_REPO + r":[^\s\"'<]+")
+FORK_RE = re.compile(SERVER_REPO + r"-sbates-fork:[^\s\"'<]+")
+# Where an image ref can be: the fleet files, the stacks generated from
+# them, the workflows (env values and job containers) and the actions.
+REF_GLOBS = ["qemu/stacks/*.xml", "qemu/compose/*/*.yml",
+             ".github/workflows/*.yml", ".github/actions/*/*"]
 
 # Files to check: fleet XML files and CI workflow YAMLs.
 # A batesste-ci-images qcow2 tag, which no committed file names any more,
@@ -216,6 +234,95 @@ class ImageTagConsistency(unittest.TestCase):
         self.assertEqual(len(_stamped_with_the_fleet(fleet + [sdxi])), 1)
         moved = ("20261113.g379fbf6", "qemu11.1.3-vfu.05bb5e5")
         self.assertEqual(len(_stamped_with_the_fleet(fleet + [moved])), 2)
+
+
+class ForkImages(unittest.TestCase):
+    """QEMU and the ernic server are the fork pair, everywhere."""
+
+    def _files(self) -> list[Path]:
+        return sorted(p for glob in REF_GLOBS for p in REPO.glob(glob)
+                      if p.is_file() and p.name != "fleet.xml")
+
+    def test_nothing_names_a_stock_qemu_or_ernic_image(self):
+        # Job containers included: gen-vm bakes and run-vm guests run on
+        # the container's own qemu-system-x86_64.
+        for path in self._files():
+            with self.subTest(file=str(path.relative_to(REPO))):
+                self.assertEqual(
+                    STOCK_RE.findall(path.read_text(errors="replace")), [])
+
+    def test_every_fleet_file_pins_the_same_fork_pair(self):
+        pairs = {}
+        for path in _fleet_files():
+            text = path.read_text()
+            pair = []
+            for element in ("qemu-ref", "ernic-ref"):
+                found = re.findall(rf"<{element}>([^<]*)</{element}>", text)
+                with self.subTest(fleet=path.name, element=element):
+                    self.assertEqual(len(found), 1, found)
+                    self.assertIsNotNone(
+                        FORK_RE.search(found[0]),
+                        f"<{element}> {found[0]} is not the sbates-fork "
+                        "image")
+                pair += found
+            pairs[path.name] = tuple(pair)
+        self.assertEqual(
+            sorted(pairs),
+            ["helios-tray.xml", "mi355x-server.xml", "rocm-golden.xml"])
+        self.assertEqual(len(set(pairs.values())), 1, pairs)
+
+    def test_stacks_workflows_and_containers_name_that_pair(self):
+        fleet = set(FORK_RE.findall(
+            (REPO / "qemu/stacks/rocm-golden.xml").read_text()))
+        self.assertEqual(len(fleet), 2, fleet)
+        named = 0
+        for path in self._files():
+            found = set(FORK_RE.findall(path.read_text(errors="replace")))
+            named += bool(found)
+            with self.subTest(file=str(path.relative_to(REPO))):
+                self.assertLessEqual(found, fleet)
+        # Three fleet files, three stacks and the nine workflows whose jobs
+        # run in the QEMU image: a glob that stopped matching would pass.
+        self.assertGreaterEqual(named, 15)
+        for stack in ("rocm-golden", "helios-tray", "mi355x-server"):
+            text = (REPO / "qemu/compose" / stack
+                    / "docker-compose.yml").read_text()
+            with self.subTest(stack=stack):
+                self.assertEqual(set(FORK_RE.findall(text)), fleet)
+
+    def test_the_patterns_tell_the_two_apart(self):
+        stock = ("docker.io/sbates130272/batesste-ci-images-ubuntu-"
+                 "qemu-libvfio-user:20261112.gdca6903-qemu11.1.3-vfu.05bb5e5",
+                 "docker.io/sbates130272/batesste-ci-images-ubuntu-"
+                 "rocm-ernic:20261112.gdca6903-ernic.90434a2-vfu.05bb5e5")
+        for ref in stock:
+            with self.subTest(ref=ref):
+                self.assertIsNotNone(STOCK_RE.search(ref))
+                self.assertIsNone(FORK_RE.search(ref))
+                fork = ref.replace(":2026", "-sbates-fork:2026")
+                self.assertIsNone(STOCK_RE.search(fork))
+                self.assertIsNotNone(FORK_RE.search(fork))
+        # rocjitsu and the SDXI server have no fork and are neither.
+        for ref in ("batesste-ci-images-ubuntu-rocm-rocjitsu:20261112.gdca6903"
+                    "-rocjitsu.50be05a",
+                    "batesste-ci-images-ubuntu-rocm-sdxi:20261113.g379fbf6"
+                    "-sdxi.dfd76f2"):
+            self.assertIsNone(STOCK_RE.search(ref))
+            self.assertIsNone(FORK_RE.search(ref))
+
+    def test_the_workflow_holds_the_same_rule(self):
+        text = (REPO / ".github/workflows"
+                / "qemu-minimal-image-tag-consistency.yml").read_text()
+        for needle in ("STOCK_RE='batesste-ci-images-ubuntu-"
+                       "(qemu-libvfio-user|rocm-ernic):'",
+                       "FORK_RE='batesste-ci-images-ubuntu-"
+                       "(qemu-libvfio-user|rocm-ernic)-sbates-fork:'",
+                       'if grep -rEn "$STOCK_RE" $SEARCH_DIRS; then',
+                       'if [ "$fork_count" -ne 2 ]; then',
+                       "does not name the sbates-fork image"):
+            self.assertIn(needle, text)
+        # One stamp for every ref but the SDXI server's, the fork's too.
+        self.assertNotIn("grep -v 'sbates-fork'", text)
 
 
 class GuestImage(unittest.TestCase):

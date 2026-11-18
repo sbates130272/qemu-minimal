@@ -36,6 +36,18 @@ PREFIX=24
 # without a guest; see tests/test_ernic_identity.py.
 SYSFS=${ERNIC_SYSFS_ROOT:-/sys}
 
+# The guest's name is the host's to give. qemu-tool-hostname.sh, in its own
+# unit ordered before this one, makes the VM name `qemu-tool run-vm` passed
+# the hostname; "name" asks it whether there was one and changes nothing.
+# Asked rather than read from a marker that unit leaves, so that an image
+# without the script, or a guest started by something that passes no name,
+# is named from its NIC as before.
+HOSTNAME_HELPER=${ERNIC_HOSTNAME_HELPER:-/usr/local/sbin/qemu-tool-hostname.sh}
+
+host_named_guest() {
+    [ -x "$HOSTNAME_HELPER" ] && "$HOSTNAME_HELPER" name > /dev/null 2>&1
+}
+
 attr() { cat "$1" 2>/dev/null; }
 
 ernic_tuple() {
@@ -98,9 +110,9 @@ for _ in $(seq 1 30); do
 done
 [ -n "${NICS:-}" ] || { report_no_match; exit 1; }
 
-# The hostname comes from the FIRST NIC only -- it names the guest, not the
-# device, and a guest with two NICs would otherwise be renamed twice and keep
-# whichever ran last.
+# ernic-vm-<n> is the name of a guest the host did not name, and it comes
+# from the FIRST NIC only -- it names the guest, not the device, and a guest
+# with two NICs would otherwise be renamed twice and keep whichever ran last.
 first=1
 rc=0
 
@@ -146,7 +158,12 @@ while read -r NIC; do
     done
 
     if [ "$first" = 1 ]; then
-        hostnamectl set-hostname "ernic-vm-$n" 2>/dev/null || true
+        if host_named_guest; then
+            echo "hostname left as $(uname -n): the host named this guest"
+        else
+            hostnamectl set-hostname "ernic-vm-$n" 2>/dev/null || true
+            echo "hostname set to ernic-vm-$n: the host passed no name"
+        fi
         first=0
     fi
     echo "configured $NIC as $addr (index $n)"

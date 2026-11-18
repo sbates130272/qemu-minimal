@@ -136,6 +136,38 @@ Derived per VM `n`, with no element to override any of them: name
 as its DHCP `server_ip` and intercepts ARP for it, so a VM placed there is
 unreachable in a way that looks like a driver fault.
 
+**Published ports.** Two kinds of service publish a host port: each `qemu-N`
+its guest's SSH port, and `grafana`. Both bind `<publish-bind-addr>`, which
+is `127.0.0.1` unless the fleet file says otherwise, so by hand a guest is
+
+```bash
+ssh -i <vm-images-dir>/keys/id_rsa -p 2222 ubuntu@localhost   # guest 1; 2223 is guest 2
+```
+
+from the host the stack runs on, and from nowhere else; `qemu-tool ssh
+<vm-name>` resolves the same thing. Inside, the guest's hostname is that
+`<vm-name>` (`rocm-golden-1`, `rocm-golden-2`): `run-vm` passes it in the
+SMBIOS serial number and the image sets it at boot. Both halves have to be
+there, or the guests are `ernic-vm-1`, `ernic-vm-2` as before: an image
+published after `20261117.g481c892`, and a `run-vm` in the qemu containers
+that passes the name. The containers build qemu-tool from the tree
+`QEMU_TOOL_SRC` (or `<qemu-tool-src>`) names, and with none there they
+install it from PyPI, where `2.0.0` does not pass one; a stack run without
+a checkout needs the first release after it. `sudo cat
+/sys/class/dmi/id/product_serial` in a guest says which half is missing:
+empty, and the host passed no name. Nothing else is published: the
+`<vm-extra-hostfwd>` rules listen inside each qemu container and Prometheus
+scrapes them over the stack's own network.
+
+`<publish-bind-addr>0.0.0.0` puts the stack on every interface of the host.
+That is root in every guest for whoever can reach it: the published image's
+key ships beside it, the password of its account is in its `vm-info.json`,
+the guest's sshd accepts either, and the account has sudo. Grafana has
+anonymous admin as well. Prefer `ssh -L` from the other machine, or one
+address of the host in place of `0.0.0.0`. A stack rendered before the SSH
+ports took the bind address still publishes them everywhere; `qemu-tool
+compose up` warns about one, and re-rendering it is the fix.
+
 ## Addressing
 
 Every service has a fixed address on the `fleet` network —
@@ -289,6 +321,19 @@ Opt-in with `--profile metrics`. The sources:
   each guest writes `amdgpu_kfd_present` and `amdgpu_devices_total` for
   node-exporter's textfile collector, and the home dashboard's "GPU Up"
   counts guests with a device bound.
+  The SDXI device's counters come the same way: `sdxi_up` and
+  `sdxi_<counter>_total{context="N"}`, written every 15 s, which the home
+  dashboard's "SDXI" row reads. Client work is counted in context 1.
+  What the two optional tests of `quick-start test` measured comes the
+  same way, written once by the test and not by a timer:
+  `quickstart_p4_fp8_bytes_per_second`, `quickstart_p4_fp8_operation_seconds`,
+  `quickstart_p4_fp8_elements`, `quickstart_p4_fp8_iterations` and
+  `quickstart_p4_fp8_timestamp_seconds` after `--p4-test`, on the first
+  guest, which the home dashboard's "P4" row reads, and
+  `quickstart_sdxi_copy_bytes` and `quickstart_sdxi_copy_timestamp_seconds`
+  after `--sdxi-test`, on every guest. A guest no test has passed on has
+  neither, and the tiles say "no test run"; a test that fails writes
+  nothing, so the tiles keep the last pass.
   **There is no amd-metrics-exporter (`:9488`) and no hsa-snoop (`:9490`)
   job any more.** Both used to be rendered and forwarded, and both were
   down: measured on two guests of `20261117.g80c17f8` after a passing
@@ -314,7 +359,9 @@ runs it after `quick-start test`.
 ### Grafana
 
 Rides the same `metrics` profile — Grafana without Prometheus is an empty
-page, so it does not get a third switch. `:3000`, anonymous admin, dark.
+page, so it does not get a third switch. `:3000`, anonymous admin, dark,
+and bound to `<publish-bind-addr>`: loopback by default, because whoever can
+reach the port is an admin.
 
 Datasource and dashboard are provisioned from `grafana/` rather than clicked
 in: a dashboard that exists only in Grafana's own sqlite dies with the
@@ -324,13 +371,21 @@ off, because a UI that accepts an edit it then silently fails to persist is
 worse than one that refuses it. Edit the JSON and `docker compose restart
 grafana`.
 
-Two shape rules in the dashboard are worth keeping if you extend it:
+Three shape rules in the dashboard are worth keeping if you extend it:
 
 - **Per-VM panels are bar gauges, not one line per VM.** A line per VM stops
   being readable long before this stack's ~40-node ceiling, and a palette that
   cycles hues past eight makes two VMs the same colour.
 - **No panel has two y-axes.** Where two measures do not share a unit they get
   two panels.
+- **Every band fills the page.** Under each row heading the panels sit in
+  bands: one `y`, one height, and widths that run from column 0 to 24 with
+  no gap; each band starts where the one above ends. Grafana does not
+  refuse an overlap, it pushes panels down until there is none, so a file
+  that breaks this draws as something other than what it says.
+  `tests/test_quickstart_dashboard.py` fails on an overlap, a short band, a
+  gap, a panel above its row and a duplicate or missing `id`, for
+  `fleet.json` and `quickstart.json` in every stack.
 
 ## What a regeneration owns in the output directory
 

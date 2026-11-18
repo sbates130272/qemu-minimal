@@ -150,7 +150,10 @@ fi
 # The dirty-tree check above means these four files are the only thing we
 # can have touched, so restoring them is always safe and never loses work.
 COMMITTED=no
+TEST_LOG=$(mktemp "${TMPDIR:-/tmp}/qemu-minimal-release-tests.XXXXXX")
 restore() {
+  # Kept only when it has something to say, which is a failed suite.
+  [ -s "${TEST_LOG}" ] || rm -f "${TEST_LOG}"
   if [ "${COMMITTED}" = yes ]; then
     return
   fi
@@ -192,6 +195,21 @@ awk -v tag="${TAG}" -v today="${TODAY}" '
   { print }
 ' "${CHANGELOG}" > "${CHANGELOG}.new"
 mv "${CHANGELOG}.new" "${CHANGELOG}"
+
+# The stamped tree, not the one before it: the stanza and the retitled
+# section are new text, and tests read both. v2.0.0 went out with a failing
+# test because its own debian/changelog stanza tripped a scan, and nothing
+# ran tests/ between the stamp and the tag. Gen Compose Check is the only
+# workflow that runs the suite and it runs on pull requests, which a release
+# commit is not. A failure leaves through the EXIT trap, which restores the
+# four files, so there is no commit and no tag to take back.
+echo "release: running the unit suite on the stamped tree..."
+( cd "${ROOT}" && python3 -m unittest discover -s tests ) > "${TEST_LOG}" 2>&1 || {
+  tail -n 40 "${TEST_LOG}" >&2
+  die "the unit suite fails on the stamped tree (full log: ${TEST_LOG}); nothing was committed or tagged"
+}
+tail -n 3 "${TEST_LOG}"
+rm -f "${TEST_LOG}"
 
 git add "${PYPROJECT}" "${DEB_CHANGELOG}" "${CHANGELOG}" "${MAN_PAGE}"
 git commit -s -m "chore(release): ${TAG}" -m "Stamp ${VERSION} in ${PYPROJECT}, ${DEB_CHANGELOG}, ${CHANGELOG} and ${MAN_PAGE}."

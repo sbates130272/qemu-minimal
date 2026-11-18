@@ -10,8 +10,14 @@ name: qemu-minimal - Image Tag Consistency Check
 # stamp, so a ref whose tag carries -sdxi.<sha> is left out of the comparison
 # and checked only for naming one tag everywhere.
 #
-# Fork images (sbates-fork) are built on a separate cadence and may carry a
-# different stamp. They are checked for internal consistency separately.
+# QEMU and the ernic server are the fork images (sbates-fork) everywhere:
+# every fleet file, every generated stack, every workflow's QEMU_IMAGE and
+# ERNIC_IMAGE and every job container. The fork QEMU is what lets one
+# vfio-user device DMA into another's BAR. They are in the fleet files beside
+# rocjitsu, which gen-compose holds to one stamp with them, so there is one
+# stamp to check and not a second for the fork. A ref to the stock QEMU or
+# ernic image (the same repository names without -sbates-fork) is an error:
+# a lane left on it tests a QEMU no stack runs.
 #
 # The guest image, <backing-ref>, is not a batesste-ci-images ref and is in
 # none of those counts: qemu-minimal publishes it, under its own stamp. Its
@@ -51,8 +57,8 @@ jobs:
             [ -d "$dir" ] || { echo "::error::$dir does not exist"; exit 1; }
           done
 
-          # Extract every ref, then split three ways: the SDXI server (its
-          # tag carries -sdxi.<sha>), the fork images, and the rest.
+          # Extract every ref, then split two ways: the SDXI server (its
+          # tag carries -sdxi.<sha>) and the rest, fork images included.
           REF_RE='batesste-ci-images[^:]*:[0-9]{8}\.g[a-f0-9]+[A-Za-z0-9._-]*'
           SDXI_RE='-sdxi\.[a-f0-9]+'
           all_refs=$(grep -rEoh "$REF_RE" $SEARCH_DIRS 2>/dev/null || true)
@@ -60,53 +66,61 @@ jobs:
           sdxi_tags=$(echo "$all_refs" | grep -E -- "$SDXI_RE" |
             sed 's/^[^:]*://' | sort -u)
           stamped_refs=$(echo "$all_refs" | grep -vE -- "$SDXI_RE")
-          nonfork_stamps=$(echo "$stamped_refs" | grep -v 'sbates-fork' |
-            grep -oE '[0-9]{8}\.g[a-f0-9]+' | sort -u)
-          fork_stamps=$(echo "$stamped_refs" | grep 'sbates-fork' |
+          stamps=$(echo "$stamped_refs" |
             grep -oE '[0-9]{8}\.g[a-f0-9]+' | sort -u)
 
           fail=0
 
-          # --- standard images ---
-          nonfork_count=$(echo "$nonfork_stamps" | grep -c . || true)
-          if [ "$nonfork_count" -eq 0 ]; then
-            echo "::error::No standard batesste-ci-images refs found — search paths may be wrong"
+          # --- one stamp ---
+          stamp_count=$(echo "$stamps" | grep -c . || true)
+          if [ "$stamp_count" -eq 0 ]; then
+            echo "::error::No batesste-ci-images refs found — search paths may be wrong"
             exit 1
           fi
-          echo "Standard image stamps ($nonfork_count distinct):"
-          echo "$nonfork_stamps"
-          if [ "$nonfork_count" -gt 1 ]; then
+          echo "Image stamps ($stamp_count distinct):"
+          echo "$stamps"
+          if [ "$stamp_count" -gt 1 ]; then
             echo "" >&2
-            echo "::error::Standard images have $nonfork_count stamps (expected 1). Files per stamp:" >&2
-            echo "$nonfork_stamps" | while IFS= read -r s; do
+            echo "::error::Images have $stamp_count stamps (expected 1). Files per stamp:" >&2
+            echo "$stamps" | while IFS= read -r s; do
               echo "  $s:" >&2
               grep -rEn "$REF_RE" $SEARCH_DIRS 2>/dev/null |
-                grep "$s" | grep -v 'sbates-fork' |
+                grep "$s" |
                 grep -vE -- "$SDXI_RE" |
                 sed 's/^/    /' >&2
             done
             fail=1
           else
-            echo "OK: all standard refs on stamp $nonfork_stamps"
+            echo "OK: all refs on stamp $stamps"
           fi
 
-          # --- fork images ---
-          fork_count=$(echo "$fork_stamps" | grep -c . || true)
-          if [ "$fork_count" -eq 0 ]; then
-            echo "No fork image refs found — skipping fork check"
-          elif [ "$fork_count" -gt 1 ]; then
-            echo "" >&2
-            echo "::error::Fork images have $fork_count stamps (expected 1). Files per stamp:" >&2
-            echo "$fork_stamps" | while IFS= read -r s; do
-              echo "  $s:" >&2
-              grep -rEn "$REF_RE" $SEARCH_DIRS 2>/dev/null |
-                grep "$s" | grep 'sbates-fork' |
-                sed 's/^/    /' >&2
-            done
+          # --- QEMU and the ernic server are the fork's ---
+          # The name is the repository's whole last component, so the fork's
+          # own name, which continues with -sbates-fork, does not match.
+          STOCK_RE='batesste-ci-images-ubuntu-(qemu-libvfio-user|rocm-ernic):'
+          FORK_RE='batesste-ci-images-ubuntu-(qemu-libvfio-user|rocm-ernic)-sbates-fork:'
+          if grep -rEn "$STOCK_RE" $SEARCH_DIRS; then
+            echo "::error::A stock QEMU or ernic image is named above; every stack, workflow and job container uses the sbates-fork pair"
+            fail=1
+          fi
+          fork_refs=$(grep -rEoh "${FORK_RE}[A-Za-z0-9._-]+" $SEARCH_DIRS | sort -u)
+          fork_count=$(echo "$fork_refs" | grep -c . || true)
+          if [ "$fork_count" -ne 2 ]; then
+            echo "::error::Expected one fork QEMU tag and one fork ernic tag everywhere, found $fork_count:" >&2
+            echo "$fork_refs" | sed 's/^/    /' >&2
             fail=1
           else
-            echo "OK: all fork refs on stamp $fork_stamps"
+            echo "OK: QEMU and the ernic server are the fork pair everywhere:"
+            echo "$fork_refs" | sed 's/^/    /'
           fi
+          for fleet in qemu/stacks/*.xml; do
+            for element in qemu-ref ernic-ref; do
+              if ! grep -qE "<$element>[^<]*${FORK_RE}[^<]+</$element>" "$fleet"; then
+                echo "::error file=$fleet::<$element> does not name the sbates-fork image"
+                fail=1
+              fi
+            done
+          done
 
           # --- SDXI server image ---
           sdxi_count=$(echo "$sdxi_tags" | grep -c . || true)

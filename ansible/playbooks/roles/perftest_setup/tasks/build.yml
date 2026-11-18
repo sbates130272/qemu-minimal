@@ -1,0 +1,261 @@
+---
+# Fetch the pinned commit, build it against the guest's ROCm, install it.
+# Included by main.yml when the stamp does not already describe this build.
+
+# "archive" installs the archive's rdma-core development packages, and on
+# a guest that already has an rdma-core built from source that is a second
+# set of headers and link libraries: the compiler takes one rdma-core's
+# headers and the linker the other's library. A golden guest is that guest,
+# and the bake purges those packages from it. So this is asked before
+# anything is installed, not left to the probe below, which would say the
+# same thing with the packages already back.
+- name: Look for an rdma-core built from source
+  ansible.builtin.stat:
+    path: "{{ perftest_setup_rdma_lib_dir | trim }}/libibverbs.so"
+    get_checksum: false
+  register: perftest_setup_rdma_local
+  when:
+    - perftest_setup_rdma_core == 'archive'
+    - perftest_setup_rdma_lib_dir | trim | length > 0
+
+- name: Refuse to put the archive's rdma-core headers beside another rdma-core
+  ansible.builtin.assert:
+    that:
+      - not perftest_setup_rdma_local.stat.exists
+    fail_msg: >-
+      perftest_setup_rdma_core is "archive", which installs
+      {{ perftest_setup_rdma_dev_packages | join(', ') }}, and this guest
+      has {{ perftest_setup_rdma_lib_dir | trim }}/libibverbs.so: an
+      rdma-core built from source, which is the one to build against. Set
+      perftest_setup_rdma_core to "local", as vm-rocm-golden.yml does.
+      Nothing was installed.
+  when:
+    - perftest_setup_rdma_core == 'archive'
+    - perftest_setup_rdma_lib_dir | trim | length > 0
+
+# With "local" no rdma-core package is in this list, whatever the guest has:
+# the rdma-core to build against is already there, and the archive's
+# development packages beside it are what the golden bake removes.
+- name: Install what the perftest build needs
+  vars:
+    perftest_setup_build_packages: >-
+      {{ perftest_setup_packages
+         + (perftest_setup_rdma_dev_packages
+            if perftest_setup_rdma_core == 'archive' else []) }}
+  ansible.builtin.apt:
+    name: "{{ perftest_setup_build_packages }}"
+    state: present
+    update_cache: false
+  register: perftest_setup_apt_result
+  retries: "{{ perftest_setup_apt_retries }}"
+  delay: "{{ perftest_setup_apt_delay }}"
+  until: perftest_setup_apt_result is success
+  when: perftest_setup_build_packages | length > 0
+
+- name: Create the directory the source is fetched into
+  ansible.builtin.file:
+    path: "{{ perftest_setup_source_dir | trim | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# In the guest, as the ionic sources are. The script exits 2 for a fetch that
+# did not complete and 1 for an answer a retry will not change, so only the
+# first is tried again.
+- name: Fetch perftest at the pinned ref
+  ansible.builtin.script:
+    cmd: >-
+      perftest-fetch.sh
+      {{ perftest_setup_repo | trim | quote }}
+      {{ perftest_setup_ref | trim | quote }}
+      {{ perftest_setup_commit | trim | quote }}
+      {{ perftest_setup_source_dir | trim | quote }}
+    executable: /bin/sh
+  register: perftest_setup_fetch
+  retries: 3
+  delay: 10
+  until: perftest_setup_fetch.rc | default(2) != 2
+  changed_when: false
+  failed_when: false
+
+# Before anything is compiled. The script's own line is the message: it
+# names the commit the ref is at, the commit the pin requires and the
+# repository.
+- name: Fail when the fetched commit is not the pinned one
+  vars:
+    perftest_setup_verdict: >-
+      {{ perftest_setup_fetch.stdout_lines | default([])
+         | map('trim') | select('match', '(ok|FAIL): ') | list }}
+  ansible.builtin.assert:
+    that:
+      - perftest_setup_fetch.rc | default(1) == 0
+      - perftest_setup_verdict | length == 1
+      - "perftest_setup_verdict[0] is match('ok: [0-9a-f]{40} ')"
+    fail_msg: >-
+      {{ perftest_setup_verdict | join(' ')
+         | default('perftest-fetch.sh printed no verdict: '
+                   ~ (perftest_setup_fetch.stdout | default(''))
+                   ~ (perftest_setup_fetch.stderr | default(''))
+                   ~ (perftest_setup_fetch.msg | default('')), true) }}
+      The ref and its commit move together: perftest_setup_ref and
+      perftest_setup_commit, which vm-rocm-golden.yml sets from
+      perftest_source_ref and perftest_source_pin. The commit is what
+      "git ls-remote {{ perftest_setup_repo | trim }}
+      {{ perftest_setup_ref | trim }}" prints. To keep building a commit its
+      branch has moved past, name that commit as the ref too.
+    success_msg: "{{ perftest_setup_verdict | join(' ') }}"
+
+- name: Record the commit that was fetched
+  ansible.builtin.set_fact:
+    perftest_setup_built_commit: >-
+      {{ (perftest_setup_fetch.stdout_lines | map('trim')
+          | select('match', 'ok: ') | first).split()[1] }}
+
+# With the configure arguments the build is about to be given, and before
+# it: which infiniband/verbs.h the compiler reads, which libibverbs.so the
+# linker takes and which libibverbs.so.1 the loader gives the result. On a
+# guest with one rdma-core to build against the three agree, which is what a
+# golden bake leaves. A guest that has the archive's development packages
+# beside an rdma-core under /usr/local gets three different answers unless
+# the configure line says otherwise, and the script's own header says what
+# that costs. With "local" the script is also told the directory, and the
+# library linked has to be in it. Its verdict line is the message.
+- name: Probe which rdma-core the build compiles, links and loads
+  ansible.builtin.script:
+    cmd: >-
+      perftest-rdma-probe.sh
+      {{ perftest_setup_configure_args | map('quote') | join(' ') }}
+    executable: /bin/sh
+  environment:
+    PERFTEST_RDMA_LIB_DIR: >-
+      {{ perftest_setup_rdma_lib_dir | trim
+         if perftest_setup_rdma_core == 'local' else '' }}
+  register: perftest_setup_rdma_probe
+  changed_when: false
+  failed_when: false
+
+- name: Fail unless the build uses one rdma-core throughout
+  vars:
+    perftest_setup_rdma_verdict: >-
+      {{ perftest_setup_rdma_probe.stdout_lines | default([])
+         | map('trim') | select('match', '(ok|FAIL): ') | list }}
+  ansible.builtin.assert:
+    that:
+      - perftest_setup_rdma_probe.rc | default(1) == 0
+      - perftest_setup_rdma_verdict | length == 1
+      - "perftest_setup_rdma_verdict[0] is match('ok: ')"
+    fail_msg: >-
+      {{ perftest_setup_rdma_verdict | join(' ')
+         | default('perftest-rdma-probe.sh printed no verdict: '
+                   ~ (perftest_setup_rdma_probe.stdout | default(''))
+                   ~ (perftest_setup_rdma_probe.stderr | default(''))
+                   ~ (perftest_setup_rdma_probe.msg | default('')), true) }}
+      perftest_setup_rdma_core is "{{ perftest_setup_rdma_core }}":
+      {{ 'the rdma-core to build against is the one whose libraries are in "'
+         ~ (perftest_setup_rdma_lib_dir | trim)
+         ~ '", and the role installs no rdma-core development package. On a'
+         ~ ' guest that has only the rdma-core of the archive, set it to'
+         ~ ' "archive".'
+         if perftest_setup_rdma_core == 'local'
+         else 'the role installed ' ~ (perftest_setup_rdma_dev_packages | join(', '))
+              ~ ' to build against.' }}
+    success_msg: "{{ perftest_setup_rdma_verdict | join(' ') }}"
+
+- name: Record the rdma-core the build uses
+  vars:
+    perftest_setup_rdma_said: >-
+      {{ perftest_setup_rdma_probe.stdout_lines | map('trim') | list }}
+  ansible.builtin.set_fact:
+    perftest_setup_rdma_headers: >-
+      {{ (perftest_setup_rdma_said | select('match', 'headers=') | first)
+         | regex_replace('^headers=', '') }}
+    perftest_setup_rdma_libibverbs: >-
+      {{ (perftest_setup_rdma_said | select('match', 'link=') | first)
+         | regex_replace('^link=', '') }}
+
+# The recipe of the repository's own ROCm workflow: autogen.sh, configure
+# with --enable-rocm and the ROCm tree, make, make install. Four
+# differences. Two are because this runs with no GPU: hipcc is named by its
+# path, not looked for on PATH, so the build either has device code or says
+# HIPCC=no; and the GPU is passed with --with-rocm-arch, because configure
+# would otherwise ask rocm_agent_enumerator, which answers nothing here. The
+# third is LDFLAGS=-L<perftest_setup_rdma_lib_dir>, when the rdma-core to
+# build against is one built from source.
+#
+# A fourth is the SIMD level of the host-memory validator, which the
+# repository's workflow leaves to the CPU of its runner and this names:
+# cross_compiling=yes, SIMD_CFLAGS= and the macro in CPPFLAGS. That is why
+# configure prints "no" for both "runtime CPU support" lines whatever the
+# level is: it ran neither program.
+#
+# In two tasks, so that what configure made of those arguments is read back
+# before anything is compiled.
+#
+# No PATH is set: gcc is whatever the caller's PATH resolves, which is
+# ccache when the bake put one in front of it. hipcc runs its own clang by
+# path, so that one compile is never cached.
+- name: Configure perftest
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      export ROCM_PATH={{ perftest_setup_rocm_resolved | quote }}
+      export HIP_PATH={{ perftest_setup_rocm_resolved | quote }}
+      ./autogen.sh
+      ./configure {{ perftest_setup_configure_args | map('quote') | join(' ') }}
+    chdir: "{{ perftest_setup_source_dir | trim }}"
+    executable: /bin/bash
+  changed_when: true
+
+# From config.h and the Makefile, which are what the compiler is about to be
+# given: the level the validator would be compiled for, with every flag
+# make puts on that object's line and not CPPFLAGS alone, and whether this
+# tree compiles with no level at all. The script's header has the rest, and
+# its verdict line is the message.
+- name: Read back the SIMD level configure settled on
+  ansible.builtin.script:
+    cmd: >-
+      perftest-simd-check.sh
+      {{ perftest_setup_source_dir | trim | quote }}
+      {{ perftest_setup_simd | trim | quote }}
+      {{ perftest_setup_mm_pause_workaround | bool | string | lower }}
+    executable: /bin/sh
+  register: perftest_setup_simd_check
+  changed_when: false
+  failed_when: false
+
+- name: Fail unless the build is for the SIMD level that was asked for
+  vars:
+    perftest_setup_simd_verdict: >-
+      {{ perftest_setup_simd_check.stdout_lines | default([])
+         | map('trim') | select('match', '(ok|FAIL): ') | list }}
+  ansible.builtin.assert:
+    that:
+      - perftest_setup_simd_check.rc | default(1) == 0
+      - perftest_setup_simd_verdict | length == 1
+      - "perftest_setup_simd_verdict[0] is match('ok: ')"
+    fail_msg: >-
+      {{ perftest_setup_simd_verdict | join(' ')
+         | default('perftest-simd-check.sh printed no verdict: '
+                   ~ (perftest_setup_simd_check.stdout | default(''))
+                   ~ (perftest_setup_simd_check.stderr | default(''))
+                   ~ (perftest_setup_simd_check.msg | default('')), true) }}
+    success_msg: "{{ perftest_setup_simd_verdict | join(' ') }}"
+
+- name: Record the SIMD level the build is for
+  ansible.builtin.set_fact:
+    perftest_setup_simd_built: >-
+      {{ (perftest_setup_simd_check.stdout_lines | map('trim')
+          | select('match', 'simd=') | first) | regex_replace('^simd=', '') }}
+
+- name: Build and install perftest
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      export ROCM_PATH={{ perftest_setup_rocm_resolved | quote }}
+      export HIP_PATH={{ perftest_setup_rocm_resolved | quote }}
+      make -j"$(nproc)"
+      make install
+    chdir: "{{ perftest_setup_source_dir | trim }}"
+    executable: /bin/bash
+  changed_when: true

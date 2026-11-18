@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 import xml.etree.ElementTree as ET
 
-from .ports import parse_ssh_port
+from .ports import parse_ssh_port, publish_address
 
 NS_FLEET = "http://qemu-tool/fleet/1.0"
 _TAG_FLEET = f"{{{NS_FLEET}}}fleet"
@@ -92,6 +92,7 @@ class FleetConfig:
     vm_vmem: int = 0
     shm_size: str = "8g"
     vm_nvme: int = 0
+    vm_nvme_vram: bool = False
     vm_backing_shared: bool = False
     vm_username: str = "ubuntu"
     vm_password: str = ""
@@ -149,11 +150,14 @@ class FleetConfig:
 
     # ---- Metrics ----
     prom_port: int = 9090
-    # Host interface the published ports bind to. 0.0.0.0 so a fleet running
-    # on a lab box is reachable from a workstation; 127.0.0.1 keeps it local.
-    # Grafana has anonymous admin enabled, so this is the control that decides
-    # who can reach it.
-    publish_bind_addr: str = "0.0.0.0"
+    # Host address every published port binds to: each guest's SSH port and
+    # Grafana's. Loopback, so a stack is reachable from this host and from
+    # nowhere else until someone says otherwise. 0.0.0.0 puts it on every
+    # interface, and that is a decision, not a convenience: a guest from the
+    # published image accepts a key and a password that are both public, as
+    # a user with sudo, and Grafana has anonymous admin on. This is the one
+    # control over who can reach either.
+    publish_bind_addr: str = "127.0.0.1"
     prom_scrape_interval: str = "15s"
     prom_retention: str = "7d"
     prometheus_data_dir: str = ""
@@ -174,7 +178,8 @@ class FleetConfig:
     loki_data_dir: str = "/var/lib/qemu-tool/loki-data"
     alloy_image: str = "docker.io/grafana/alloy:v1.5.1"
 
-_STR, _EXPAND, _INT, _BOOL, _PORT = "str", "expand", "int", "bool", "port"
+_STR, _EXPAND, _INT, _BOOL, _PORT, _ADDR = (
+    "str", "expand", "int", "bool", "port", "addr")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -226,6 +231,7 @@ _SETTINGS: tuple[_Setting, ...] = (
     _Setting("vm-vmem", "vm_vmem", _INT),
     _Setting("vm-shm-size", "shm_size", _STR),
     _Setting("vm-nvme", "vm_nvme", _INT),
+    _Setting("vm-nvme-vram", "vm_nvme_vram", _BOOL, sparse=True),
     _Setting("vm-backing-shared", "vm_backing_shared", _BOOL),
     _Setting("vm-username", "vm_username", _STR),
     _Setting("vm-password", "vm_password", _STR),
@@ -259,7 +265,7 @@ _SETTINGS: tuple[_Setting, ...] = (
     _Setting("publish-flavour", "publish_flavour", _STR, sparse=True),
     # Metrics
     _Setting("prom-port", "prom_port", _INT),
-    _Setting("publish-bind-addr", "publish_bind_addr", _STR),
+    _Setting("publish-bind-addr", "publish_bind_addr", _ADDR),
     _Setting("prom-scrape-interval", "prom_scrape_interval", _STR),
     _Setting("prom-retention", "prom_retention", _STR),
     _Setting("prom-data-dir", "prometheus_data_dir", _EXPAND, sparse=True),
@@ -308,6 +314,21 @@ def _convert(setting: _Setting, raw: str) -> Any:
             raise ValueError(
                 f"{setting.tag} must be a port number or auto, got {raw!r}"
             ) from None
+    if setting.kind == _ADDR:
+        # Here, once, so the generator, quick-start and check all see one
+        # spelling: no brackets, and no form docker refuses to parse (a host
+        # name, an IPv6 zone). An address this host does not have still
+        # fails at `up`, when docker tries to bind it.
+        # Empty is the default, as it is for every element the generator
+        # reads, and the default is loopback.
+        if not raw.strip():
+            return FleetConfig.publish_bind_addr
+        try:
+            return publish_address(raw)
+        except ValueError:
+            raise ValueError(
+                f"{setting.tag} must be an IPv4 or IPv6 address with no "
+                f"zone, got {raw!r}") from None
     if setting.kind == _EXPAND:
         # Here, once, so every reader sees the same path.
         return os.path.expanduser(os.path.expandvars(raw))
@@ -455,6 +476,15 @@ class FleetXml:
         if problems:
             sys.exit("\n".join(f"Error: {path}: {p}" for p in problems))
         return cfg, explicit
+
+    @classmethod
+    def fields_set(cls, path: Path) -> frozenset[str]:
+        """The FleetConfig fields PATH itself sets, as against defaults.
+
+        What says which layer a merged value came from: the last one that
+        names the field.
+        """
+        return cls._parse_with_fields(path)[1]
 
     @classmethod
     def parse(cls, path: Path) -> FleetConfig:

@@ -2011,9 +2011,12 @@ def _record(vm: dict[str, Any], cfg: VMConfig) -> dict[str, Any]:
     ssh = _ssh_identity(vm["image"], info, cfg, ga_info)
 
     port = vm["ssh_port_host"]
+    # localhost, unless the stack published the port on one particular
+    # address (<publish-bind-addr>), which is then the only one that answers.
+    host = vm.get("ssh_host") or "localhost"
     identity = f" -i {ssh['key_file']}" if ssh["key_file"] else ""
     ssh_cmd = (
-        f"ssh{identity} -p {port} {username}@localhost"
+        f"ssh{identity} -p {port} {username}@{host}"
         if port is not None
         else None
     )
@@ -2024,7 +2027,7 @@ def _record(vm: dict[str, Any], cfg: VMConfig) -> dict[str, Any]:
         "arch": vm["arch"],
         "vcpus": vm["vcpus"],
         "memory_mib": vm["memory_mib"],
-        "ssh_host": "localhost",
+        "ssh_host": host,
         "ssh_port": port,
         "username": username,
         "ssh_keys": ssh["keys"],

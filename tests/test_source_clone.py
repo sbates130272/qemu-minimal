@@ -1,16 +1,21 @@
 """The controller's rocm-ernic clone, and the tag upstream moved under it.
 
-sbates130272.rocm_ernic.ernic_source keeps a clone on the controller and
-updates it with "git fetch --tags origin". Upstream moved its "nightly" tag,
-git answered "would clobber existing tag", and a bake died after 118 tasks
-over a tag it never reads. rocm_ernic_setup's source_clone tasks now run
-ahead of every include of that role and take the moved tag with a forced
-fetch. They remove nothing: the clone is shared by every run on the
-controller.
+rocm.ernic.ernic_source keeps a clone on the controller. When it updated
+that clone with ansible.builtin.git, which runs "git fetch --tags origin",
+upstream moved its "nightly" tag, git answered "would clobber existing tag",
+and a bake died after 118 tasks over a tag it never reads. rocm_ernic_setup's
+source_clone tasks run ahead of every include of that role and take the moved
+tag with a forced fetch. They remove nothing: the clone is shared by every
+run on the controller.
 
-Two things are tested: that the tasks sit where they have to, and what the
+The role now fetches the commit it is given by name, with no tags, and that
+path cannot meet a moved tag. Its fallback, taken when that fetch fails, is
+still an unforced fetch of every tag, which is why the guard stays.
+
+Three things are tested: that the tasks sit where they have to; what the
 script they run decides, against real repositories built in a temporary
-directory -- the moved tag included.
+directory -- the moved tag included; and, against the installed collection,
+that the role's clone is still the one the guard was kept for.
 
     python3 -m unittest discover -s tests -v
 """
@@ -18,8 +23,10 @@ directory -- the moved tag included.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -31,10 +38,11 @@ PLAYBOOK = REPO / "ansible/playbooks/vm-rocm-golden.yml"
 ROLE = REPO / "ansible/playbooks/roles/rocm_ernic_setup"
 TASKS = ROLE / "tasks/source_clone.yml"
 SCRIPT = ROLE / "files/source-clone-state.sh"
-COLLECTION_DEFAULTS = (
-    Path.home() / ".ansible/collections/ansible_collections/sbates130272"
-    / "rocm_ernic/roles/ernic_source/defaults/main.yml")
-SOURCE = "sbates130272.rocm_ernic.ernic_source"
+COLLECTION_ROLE = (
+    Path.home() / ".ansible/collections/ansible_collections/rocm/ernic"
+    / "roles/ernic_source")
+COLLECTION_DEFAULTS = COLLECTION_ROLE / "defaults/main.yml"
+SOURCE = "rocm.ernic.ernic_source"
 GUARD = {"name": "rocm_ernic_setup", "tasks_from": "source_clone"}
 
 GIT_ENV = {
@@ -42,6 +50,29 @@ GIT_ENV = {
     "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
     "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com",
 }
+
+
+# GitHub sets CI=true on every runner, and Gen Compose Check, the one
+# workflow that runs tests/, installs the collection and sets it as well.
+IN_CI = os.environ.get("CI", "").lower() == "true"
+
+
+def _require_collection() -> None:
+    """Skip on a host without the collection; fail in CI.
+
+    As tests/test_ionic_source_mirror.py does, and for its reason: skipped,
+    a requirements.yml bump that changes how the role clones passes here.
+    """
+    if (COLLECTION_ROLE / "tasks/main.yml").is_file():
+        return
+    if IN_CI:
+        raise AssertionError(
+            "the rocm.ernic collection is missing in CI. These tests must "
+            "not be skipped here: install it in the workflow that runs "
+            "tests/, or delete the test deliberately.")
+    print("SKIP: the rocm.ernic collection is not installed; this check is "
+          "NOT running", file=sys.stderr)
+    raise unittest.SkipTest("the rocm.ernic collection is not installed")
 
 
 def _flatten(tasks):
@@ -83,13 +114,14 @@ class Playbook(unittest.TestCase):
     def test_the_play_that_reaches_the_role_through_another_is_guarded(self):
         """ernic_guest_setup's main.yml starts by including ernic_source.
 
-        The configure play includes ernic_guest_setup from a block in its
-        tasks, so that the block's always section can undo the git rewrite
-        the fetch of the ionic sources runs under. It used to be a "roles:"
-        entry. Either way the play never includes ernic_source itself, so
-        the guard is the first of its pre_tasks, which run before both.
+        The configure play includes ernic_guest_setup from its tasks, with
+        the driver build off; it was a "roles:" entry once, and then sat in
+        a block whose always section undid a git rewrite. The role still
+        starts with ernic_source whatever is switched off in it, and the
+        play never includes ernic_source itself, so the guard is the first
+        of its pre_tasks, which run before any of that.
         """
-        guest_setup = "sbates130272.rocm_ernic.ernic_guest_setup"
+        guest_setup = "rocm.ernic.ernic_guest_setup"
 
         def reaches(play):
             in_roles = any(
@@ -177,6 +209,121 @@ class Tasks(unittest.TestCase):
         self.assertIn("startswith('repaired:')", check["changed_when"])
 
 
+class Role(unittest.TestCase):
+    """The clone the guard runs ahead of, as the installed collection has it.
+
+    The guard was written against ansible.builtin.git, which fetched every
+    tag on every run. The role has its own git commands now, and what they
+    do decides whether the guard is still needed and whether it can do harm.
+    Read, not run: nothing here executes the role's shell.
+    """
+
+    def setUp(self):
+        _require_collection()
+        self.tasks = list(_flatten(yaml.safe_load(
+            (COLLECTION_ROLE / "tasks/main.yml").read_text())))
+        clone = [t for t in self.tasks
+                 if t.get("name") == "Clone rocm-ernic on the controller"]
+        self.assertEqual(len(clone), 1, "the role's clone task was renamed")
+        self.clone = clone[0]
+        self.cmd = self.clone["ansible.builtin.shell"]["cmd"]
+        # One line per command: the script continues lines with a backslash.
+        self.fetches = re.findall(
+            r"git fetch[^\n]*", re.sub(r"\\\n\s*", " ", self.cmd))
+
+    def test_the_clone_is_made_by_this_one_task(self):
+        """Another task that fetched would escape everything below."""
+        for task in self.tasks:
+            self.assertNotIn("ansible.builtin.git", task, task.get("name"))
+        fetching = [t.get("name") for t in self.tasks
+                    if "block" not in t
+                    and ("git fetch" in str(t) or "git clone" in str(t))]
+        self.assertEqual(fetching, [self.clone["name"]])
+        self.assertEqual(self.clone["delegate_to"], "localhost")
+        self.assertIs(self.clone["become"], False)
+
+    def test_the_pinned_commit_is_fetched_by_name_and_with_no_tags(self):
+        """The path a bake takes: a full commit id, which GitHub serves.
+        No tag is fetched on it, so a moved tag cannot fail it."""
+        self.assertEqual(len(self.fetches), 2, self.fetches)
+        first = self.fetches[0]
+        self.assertIn("--no-tags", first)
+        self.assertIn('"${ERNIC_VERSION}"', first)
+        self.assertIn("ernic_source_repo_version",
+                      self.clone["environment"]["ERNIC_VERSION"])
+
+    def test_the_fallback_is_still_an_unforced_fetch_of_every_tag(self):
+        """Why the guard stays. When the fetch by name fails, for any reason
+        and with its error discarded, the role fetches every branch and tag,
+        and git refuses a tag upstream has moved. Script, below, shows that
+        refusal and the forced fetch that clears it.
+
+        If this fails because the fallback forces its tags, or fetches none,
+        a moved tag can no longer fail the role: retire the guard, its
+        script and this file together.
+        """
+        second = self.fetches[1]
+        self.assertIn("--tags", second)
+        self.assertNotIn("--no-tags", second)
+        for forced in ("--force", " -f ", "+refs/tags/"):
+            self.assertNotIn(forced, second + " ")
+
+    def test_the_guard_stands_aside_exactly_where_the_role_does_not_clone(self):
+        """The role skips its clone for a checkout the caller named, and
+        the whole block once it has resolved its sources in this run; the
+        guard's two conditions are those two."""
+        self.assertEqual(self.clone["when"],
+                         "not (ernic_source_dir | trim | length > 0)")
+        block = [t for t in self.tasks
+                 if self.clone in t.get("block", [])]
+        self.assertEqual(len(block), 1)
+        self.assertEqual(block[0]["when"],
+                         "not (ernic_source_resolved | default(false))")
+        self.assertIn("ernic_source_clone_dir",
+                      self.clone["environment"]["ERNIC_CLONE_DIR"])
+
+    def test_what_the_roles_read_out_of_the_checkout_is_these_three(self):
+        """The collection is installed from one commit of rocm-ernic and
+        this checkout is another, ernic_source_pin, which stays with the
+        device servers. So a path the roles read out of the checkout has to
+        exist at the OLDER commit. These three do. The day this list grows,
+        look for the new path at ernic_source_pin before bumping the
+        collection: the role fails a checkout that lacks it.
+        """
+        probe, = [t for t in self.tasks
+                  if t.get("name") == "Verify the source tree looks like rocm-ernic"]
+        self.assertEqual(probe["loop"], [
+            "udev/99-rocm-ernic.rules", "scripts/find-rdma-device.sh",
+            "cmake/ErnicKernelModule.cmake"])
+        # And nothing else in the roles a bake runs reaches into it.
+        read = set()
+        for role in ("ernic_source", "ernic_guest_setup", "ernic_srq_dkms",
+                     "ernic_srq_provider", "ernic_p4_dkms"):
+            for path in (COLLECTION_ROLE.parent / role).rglob("*.yml"):
+                read |= set(re.findall(
+                    r"\{\{ ernic_source_dir(?: \| expanduser)? \}\}/([\w./-]+)",
+                    "\n".join(line for line in path.read_text().splitlines()
+                              if not line.lstrip().startswith("#"))))
+        self.assertEqual(read, set(probe["loop"]))
+
+    def test_local_changes_fail_the_role_and_nothing_here_discards_them(self):
+        """A clone with changes to tracked files fails the role unless
+        ernic_source_force_clone is set, which discards them. The clone is
+        shared by every run on the controller, so nothing in this repository
+        may set it: the guard changes no file, and a failure is the answer.
+        """
+        self.assertIn("git status --porcelain --untracked-files=no", self.cmd)
+        self.assertIn("has local changes", self.cmd)
+        self.assertIn("ernic_source_force_clone",
+                      self.clone["environment"]["ERNIC_FORCE"])
+        for path in sorted((REPO / "ansible").rglob("*.yml")):
+            code = [line for line in path.read_text().splitlines()
+                    if not line.lstrip().startswith("#")]
+            self.assertFalse(
+                [line for line in code if "ernic_source_force_clone" in line],
+                path.relative_to(REPO))
+
+
 @unittest.skipUnless(shutil.which("git") and shutil.which("timeout"),
                      "needs git and timeout")
 class Script(unittest.TestCase):
@@ -224,7 +371,8 @@ class Script(unittest.TestCase):
     def test_a_moved_tag_is_what_git_rejects_and_the_script_repairs(self):
         self._commit("two")
         self._git("-C", str(self.up), "tag", "-f", "nightly")
-        # What ansible.builtin.git runs, and how it dies.
+        # What ansible.builtin.git ran, and the role's fallback still runs
+        # in substance: an unforced fetch of every tag. How it dies.
         raw = self._git("-C", str(self.clone), "fetch", "--tags", "origin",
                         check=False)
         self.assertNotEqual(raw.returncode, 0)

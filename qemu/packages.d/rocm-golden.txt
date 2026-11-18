@@ -59,26 +59,38 @@ ca-certificates
 curl
 gnupg
 
-# rdma-core build dependencies (upstream v62 wants all of these).  The distro
-# rdma-core below is what this flavour actually uses -- resolute packages 61.0,
-# past the v61 that first shipped providers/ionic, so libionic comes from the
-# archive -- but the consuming jobs build rdma-core themselves whenever their
-# pin moves past it or they need the GDA patches.
+# rdma-core build dependencies (upstream v62 wants all of these).  The bake
+# builds rocm-ernic's rdma-core from source into /usr/local, with the
+# SRQ-capable ionic provider, and that build needs these and no rdma-core
+# header: it was run on a guest with none anywhere.  libnl-3-dev and
+# libnl-route-3-dev were also what libibverbs-dev used to bring in; they are
+# named here so they stay now that it is gone, for that build and for
+# anything a consumer links with -lnl-3.
 libnl-3-dev
 libnl-route-3-dev
 libudev-dev
 libsystemd-dev
 python3-docutils
 
-# ibverbs userspace and the provider the ionic half of this flavour turns on.
+# The archive's rdma-core, as a RUNTIME only: the udev rules and systemd
+# units of the rdma-core package, ibv_devinfo, and the libraries the archive's
+# perftest, fio and libpcap are linked against.
+#
+# Its development packages -- libibverbs-dev, librdmacm-dev, libibumad-dev --
+# are deliberately NOT here, and the bake purges them from a base that has
+# them.  The headers and link libraries a build in this guest finds are the
+# ones in /usr/local, of the rdma-core every tool on the image loads.  With
+# the archive's beside them the compiler read one rdma-core's headers and the
+# linker took the other's library.  Adding one of the three back restores
+# that; qemu/checks/rocm-golden.sh fails an image that has any of them.
 rdma-core
 ibverbs-utils
-libibverbs-dev
 
-# perftest with ROCm memory support has to be built in-guest (see the perftest
-# entry below: the archive build carries no --use_rocm).  These are what that
-# build needs on top of the rdma-core dependencies above.  Without
-# libibumad-dev configure hard-errors; the rest fail earlier or less legibly.
+# perftest with ROCm memory support is built in the guest, by the bake: the
+# perftest_setup role, from a pinned commit, into /usr/local/bin (see the
+# perftest entry below: the archive build carries no --use_rocm).  These are
+# what that build needs on top of the rdma-core in /usr/local, whose
+# libibverbs, librdmacm and libibumad it compiles and links against.
 #
 # autoconf and automake are here for the same build -- autogen.sh needs them
 # and nothing else in this flavour pulls them in, so libtool alone would still
@@ -86,14 +98,15 @@ libibverbs-dev
 autoconf
 automake
 libtool
-libibumad-dev
-librdmacm-dev
 libpci-dev
 
 # ib_send_bw and friends, for jobs that move traffic over the ionic queue
 # pairs rather than only assert the modules built.  Built without ROCm memory
 # support: --use_rocm needs perftest compiled against a ROCm the archive build
-# does not carry.
+# does not carry.  It stays beside the ROCm build the bake adds, as the stock
+# tools in /usr/bin: /usr/local/bin precedes it on PATH, so a bare ib_send_bw
+# is the ROCm build, and vm-quickstart.yml's RDMA test names
+# /usr/bin/ib_send_bw to keep running this one.
 perftest
 
 # The GPU half's build and test dependencies, pre-installed because every

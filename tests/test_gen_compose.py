@@ -698,19 +698,21 @@ class TestPublishing(unittest.TestCase):
     def test_published_ports_carry_the_bind_address(self):
         body = gen_compose.render_compose(
             _plan(), ["fleet.xml"], "abc")
-        # Only Grafana publishes a host port; Prometheus and Loki are
-        # fleet-internal only.
-        self.assertIn('"0.0.0.0:3000:3000"', body)
-        self.assertNotIn('"0.0.0.0:9090:9090"', body)
-        self.assertNotIn('"0.0.0.0:9300:9300"', body)
-
-    def test_bind_address_can_be_narrowed(self):
-        # Grafana runs with anonymous admin, so this is the only thing
-        # deciding who can reach it on a shared host.
-        body = gen_compose.render_compose(
-            _plan("<publish-bind-addr>127.0.0.1</publish-bind-addr>"), ["fleet.xml"], "abc")
+        # Grafana and each guest's SSH port are published, on loopback by
+        # default; Prometheus and Loki are fleet-internal only. The rest of
+        # this is in tests/test_publish_bind.py.
         self.assertIn('"127.0.0.1:3000:3000"', body)
+        self.assertNotIn(':9090:9090"', body)
+        self.assertNotIn(':9300:9300"', body)
         self.assertNotIn('"0.0.0.0:', body)
+
+    def test_bind_address_can_be_widened(self):
+        # Grafana runs with anonymous admin and the guests take a published
+        # key, so this is the only thing deciding who can reach either.
+        body = gen_compose.render_compose(
+            _plan("<publish-bind-addr>0.0.0.0</publish-bind-addr>"), ["fleet.xml"], "abc")
+        self.assertIn('"0.0.0.0:3000:3000"', body)
+        self.assertNotIn('"127.0.0.1:', body)
 
     def test_every_service_is_on_the_fleet_network_only(self):
         # No service may fall back to Docker's default bridge: the fleet gets
@@ -851,6 +853,85 @@ class TestNVMe(unittest.TestCase):
     def test_every_vm_gets_one(self):
         out = gen_compose.render_compose(_plan("<vm-nvme>1</vm-nvme>"), ["e"], "d")
         self.assertEqual(out.count('--nvme "1"'), 8)
+
+
+class TestNVMeVram(unittest.TestCase):
+    """<vm-nvme-vram>: each guest's NVMe is pointed at that guest's first GPU."""
+
+    _FORK = (f"<qemu-ref>example/qemu-sbates-fork:{_STAMP}-qemu11.1.1-{_VFU}"
+             "</qemu-ref>")
+
+    def _render(self, extra: str) -> tuple[str, str]:
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            out = gen_compose.render_compose(_plan(extra), ["e"], "d")
+        return out, err.getvalue()
+
+    def test_absent_by_default(self):
+        out, _ = self._render("<vm-nvme>1</vm-nvme>")
+        self.assertNotIn("--nvme-vram-dev", out)
+
+    def test_each_guest_names_its_own_first_gpu(self):
+        out, _ = self._render(
+            "<vm-nvme>1</vm-nvme><vm-nvme-vram>true</vm-nvme-vram>")
+        for n in range(1, 9):
+            self.assertEqual(out.count(f'--nvme-vram-dev "rocjitsu-{n}" '), 1)
+
+    def test_the_id_is_the_one_run_vm_gives_the_device(self):
+        import json
+        import re as _re
+        out, _ = self._render(
+            "<vm-nvme>1</vm-nvme><vm-nvme-vram>true</vm-nvme-vram>")
+        self._assert_ids_are_first_gpus(out, 8)
+
+    def _assert_ids_are_first_gpus(self, out: str, guests: int) -> None:
+        import json
+        import re as _re
+        names = _re.findall(r'--nvme-vram-dev "([^"]+)"', out)
+        socks = _re.findall(r'--vfio-userdev "([^"]+)"', out)
+        self.assertEqual(len(names), guests)
+        self.assertEqual(len(socks), guests)
+        for name, sock in zip(names, socks):
+            first = next(s for s in sock.split(",")
+                         if Path(s).name.startswith("rocjitsu-"))
+            self.assertEqual(
+                name, json.loads(run_vm._vfio_user_dev_json(first, None))["id"])
+
+    def test_with_several_gpus_it_is_the_first_of_each_guest(self):
+        base = ("<vm-count>2</vm-count><rocjitsu-per-vm>2</rocjitsu-per-vm>"
+                "<ernic-per-vm>2</ernic-per-vm>"
+                "<vm-nvme>1</vm-nvme><vm-nvme-vram>true</vm-nvme-vram>")
+        for switch in ("", "<vm-pcie-switch-width>2</vm-pcie-switch-width>"):
+            with self.subTest(switch=switch):
+                out, _ = self._render(base + switch)
+                self.assertEqual(out.count('--nvme-vram-dev "rocjitsu-1-1" '), 1)
+                self.assertEqual(out.count('--nvme-vram-dev "rocjitsu-2-1" '), 1)
+                self.assertEqual(out.count("--nvme-vram-dev"), 2)
+                self._assert_ids_are_first_gpus(out, 2)
+
+    def test_refused_without_an_nvme(self):
+        for nvme in ("", "<vm-nvme>-1</vm-nvme>"):
+            with self.subTest(nvme=nvme), self.assertRaises(SystemExit) as ctx, \
+                    contextlib.redirect_stderr(io.StringIO()):
+                _plan(nvme + "<vm-nvme-vram>true</vm-nvme-vram>")
+            self.assertIn("<vm-nvme-vram>", str(ctx.exception))
+            # The way out for an overlay that removes the NVMe.
+            self.assertIn("<vm-nvme-vram>false", str(ctx.exception))
+
+    def test_a_qemu_that_is_not_the_fork_is_warned_about(self):
+        extra = "<vm-nvme>1</vm-nvme><vm-nvme-vram>true</vm-nvme-vram>"
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            _plan(extra)
+        self.assertIn("<vm-nvme-vram>", err.getvalue())
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            _plan(extra + self._FORK)
+        self.assertNotIn("<vm-nvme-vram>", err.getvalue())
+
+    def test_the_default_fleet_sets_it(self):
+        text = (REPO_ROOT / "qemu/compose/rocm-golden/docker-compose.yml").read_text()
+        self.assertEqual(text.count("--nvme-vram-dev"), 2)
 
 
 class TestHostShare(unittest.TestCase):

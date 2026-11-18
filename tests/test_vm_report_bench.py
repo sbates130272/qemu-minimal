@@ -239,5 +239,68 @@ class GuestSideTest(unittest.TestCase):
         self.assertNotRegex(self.text, r"match\([^)]*,[^)]*,[^)]*\)")
 
 
+
+class HipfileTargetTest(unittest.TestCase):
+    """Both hipFile benches refuse a target that is not on an NVMe.
+
+    A direct read of a file on the virtio root disk hung a guest for good,
+    which happened when /mnt/nvme was not mounted.
+    """
+
+    BEGIN = "# begin: hipfile target is on nvme\n"
+    END = "# end: hipfile target is on nvme\n"
+    FIO = SCRIPT.parent / "vm-report" / "fio-hipfile-bench.sh"
+
+    def _block(self, path: Path) -> str:
+        text = path.read_text()
+        start = text.index(self.BEGIN)
+        return text[start:text.index(self.END, start) + len(self.END)]
+
+    def _run(self, source: str) -> subprocess.CompletedProcess:
+        tmp = Path(tempfile.mkdtemp(prefix="hipfile-target-"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        fake = tmp / "findmnt"
+        fake.write_text(f"#!/bin/sh\n[ -n '{source}' ] || exit 1\necho '{source}'\n")
+        fake.chmod(0o755)
+        env = dict(os.environ, PATH=f"{tmp}:{os.environ['PATH']}")
+        script = ("set -euo pipefail\nMNT=/mnt/nvme\n" + self._block(self.FIO)
+                  + "echo reached-the-read\n")
+        self.assertEqual(self._block(SCRIPT), self._block(self.FIO))
+        return subprocess.run(["bash", "-c", script], capture_output=True,
+                              text=True, env=env)
+
+    def test_both_benches_carry_the_same_check(self):
+        self.assertEqual(self._block(SCRIPT), self._block(self.FIO))
+
+    def test_the_check_is_before_the_read_in_each(self):
+        report = SCRIPT.read_text()
+        # The report's guest script runs under set -u: it names the
+        # directory once, straight before the check, and reads that one.
+        self.assertIn("\nMNT=/mnt/nvme\n" + self.BEGIN, report)
+        self.assertNotIn("/tmp/gemm-hipfile-bench /mnt/nvme", report)
+        self.assertLess(report.index(self.BEGIN),
+                        report.index('/tmp/gemm-hipfile-bench "${MNT}" 4'))
+        fio = self.FIO.read_text()
+        self.assertLess(fio.index(self.BEGIN), fio.index("--ioengine=libhipfile"))
+
+    def test_an_nvme_namespace_passes(self):
+        # A partition is still NVMe, and btrfs reports "[/subvolume]".
+        for source in ("/dev/nvme0n1", "/dev/nvme10n12", "/dev/nvme0n1p1",
+                       "/dev/nvme0n1[/sub]"):
+            with self.subTest(source=source):
+                proc = self._run(source)
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                self.assertIn("reached-the-read", proc.stdout)
+
+    def test_the_root_disk_and_no_mount_are_refused(self):
+        for source in ("/dev/vda1", "/dev/sda2", "tmpfs", "", "/dev/nvme0",
+                       "/dev/nvme0xn1", "/dev/mapper/vg-nvme0n1"):
+            with self.subTest(source=source):
+                proc = self._run(source)
+                self.assertEqual(proc.returncode, 1)
+                self.assertNotIn("reached-the-read", proc.stdout)
+                self.assertIn("not an NVMe namespace", proc.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

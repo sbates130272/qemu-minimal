@@ -5,8 +5,8 @@
 #
 # Why this is a role and not the collection's configure play: a fleet boots
 # from a backing image through `qemu-tool compose` and runs no Ansible at all,
-# so the run-time configure stage of sbates130272.rocm_ernic.ernic_guest_setup
-# never happens. Anything a fleet guest needs has to be in the image, or be a
+# so the run-time configure stage of rocm.ernic.ernic_guest_setup never
+# happens. Anything a fleet guest needs has to be in the image, or be a
 # boot-time unit the image carries. vm-rocm-golden.yml applies this to the
 # image, one task file at a time.
 
@@ -86,6 +86,18 @@ rocm_ernic_setup_ionic_upstream: https://git.kernel.org/pub/scm/linux/kernel/git
 rocm_ernic_setup_ionic_source_dir: ""
 rocm_ernic_setup_ionic_on_controller: false
 
+# ── Driver check ─────────────────────────────────
+# driver_check.yml asks whether the guest's ionic driver is the SRQ + P4
+# build the image was baked with. "installed" reads what is on disk and
+# needs no device; "live" also reads the loaded modules and max_srq.
+rocm_ernic_setup_driver_check_stage: live
+# Whether the device serving the guest offers it the P4 engine, which only
+# the caller can know: "device", "nodevice", or "auto" to ask for
+# /dev/ernic-p4 when ionic created its P4 auxiliary device.
+rocm_ernic_setup_driver_check_p4: auto
+# A sentence added to the failure message, for a caller that knows the cause.
+rocm_ernic_setup_driver_check_blame: ""
+
 # ── Guest Ethernet ───────────────────────────────
 # The image's netplan is `match: name: "en*"`, and udev's rename leaves
 # enp0s5np0 behind as an altname, which that glob matches -- so networkd
@@ -101,6 +113,12 @@ rocm_ernic_setup_networkd_unmanaged: true
 # the half AGENTS.md issue 12 says does not survive a reboot.
 rocm_ernic_setup_netcfg: true
 rocm_ernic_setup_nic_subnet: "192.168.100"
+# Sets the hostname at boot to the name the host calls the guest by, which
+# `qemu-tool run-vm` passes in the SMBIOS system serial number; see
+# tasks/hostname.yml. On, the netcfg script's ernic-vm-<n> is what a guest
+# gets only when the host passed no name. Off, the guest is ernic-vm-<n>
+# whenever it has an emulated NIC, as it was before 2026-11-18.
+rocm_ernic_setup_hostname: true
 
 # ── Metrics ──────────────────────────────────────
 # yuuki/rdma_exporter, pinned by release and by the checksum of its tarball,
@@ -121,13 +139,14 @@ rocm_ernic_setup_rdma_exporter_stamp: /usr/local/share/rdma_exporter.sha256
 rocm_ernic_setup_metrics_start: true
 
 # ── Image preparation ────────────────────────────
-# Everything the sbates130272.rocm_ernic collection stopped doing at 0.2.0,
+# Everything the rocm-ernic collection (rocm.ernic now) stopped doing at 0.2.0,
 # when ernic_image_prep was removed and the collection narrowed to "turn an
-# already-prepared guest into an RDMA node". Upstream's prepared guest is the
-# published `ionic` qcow2 from batesste-ci-images; this repo builds its own
+# already-prepared guest into an RDMA node". Upstream's prepared guest was the
+# published `ionic` qcow2 from batesste-ci-images, and is now an image
+# rocm-ernic builds itself (ci/images/guest/ there); this repo builds its own
 # guest with gen-vm, so this role is that image's provisioning expressed as
-# Ansible. Keep it aligned with ubuntu-qcow2-gen/{build-vm.sh,provision/ionic.sh}
-# and packages/ionic.txt in that repo.
+# Ansible. It was written against ubuntu-qcow2-gen/{build-vm.sh,
+# provision/ionic.sh} and packages/ionic.txt in batesste-ci-images.
 
 # ── Mainline kernel ──────────────────────────────
 # The reason this role exists. drivers/infiniband/hw/ionic merged for 6.18, so
@@ -189,20 +208,53 @@ rocm_ernic_setup_packages:
   - libudev-dev
   - libsystemd-dev
   - python3-docutils
-  # The verbs userspace itself. On resolute this is 61.0, past the v61 that
-  # first shipped providers/ionic upstream, so ibverbs-providers already
-  # carries libionic-rdmav59.so and nothing has to be built to get it.
+  # The verbs userspace itself, as a runtime. On resolute this is 61.0, past
+  # the v61 that first shipped providers/ionic upstream, so ibverbs-providers
+  # already carries libionic-rdmav59.so and nothing has to be built to get
+  # it. No libibverbs-dev: nothing this role or ernic_guest_setup builds reads
+  # a verbs header, and see rocm_ernic_setup_rdma_dev_packages below.
   - rdma-core
   - ibverbs-utils
-  - libibverbs-dev
   # ib_send_bw and friends, for lanes that move traffic rather than only
-  # assert the modules built.
+  # assert the modules built. The archive's build, in /usr/bin, with no ROCm
+  # memory support; perftest_setup adds one that has it, in /usr/local/bin.
   - perftest
   # Not in ionic.txt, and the reason ernic_guest_build_deps exists upstream:
   # iperf3 is what the TCP performance checks measure with.
   - iperf3
 rocm_ernic_setup_apt_retries: 3
 rocm_ernic_setup_apt_delay: 10
+
+# ── The archive's rdma-core development packages ─
+# What tasks/rdma_dev_purge.yml takes out of a guest, and what
+# files/rdma-core-check.sh requires to be absent.
+#
+# A golden guest has two rdma-cores: the archive's under /usr, and
+# rocm-ernic's, built from source under the prefix below by the collection's
+# ernic_srq_provider, which is the one every tool on the image loads. Both
+# shipped headers and link libraries, and the toolchain did not pick one: gcc
+# reads <prefix>/include ahead of /usr/include, ld searches
+# /usr/lib/<multiarch> ahead of <prefix>/lib. A build with no flags compiled
+# against one and linked the other. With these three gone the archive is a
+# runtime only and the prefix holds the one rdma-core there is to build
+# against. Measured on a guest of the published image (2026-11-17): the
+# purge removes these three and nothing else, and rocm-ernic's rdma-core,
+# perftest, the P4 client, fio and the ionic DKMS package all still build.
+#
+# The runtime packages are not in this list and must not be: perftest, fio,
+# librados2 and libpcap0.8t64 depend on libibverbs1, the rdma-core package
+# carries the udev rules and systemd units, and vm-quickstart.yml's RDMA test
+# runs /usr/bin/ib_send_bw by path.
+rocm_ernic_setup_rdma_dev_packages:
+  - libibverbs-dev
+  - librdmacm-dev
+  - libibumad-dev
+# Where the rdma-core that replaces them is. The purge is refused unless
+# the prefix has a header and a link library for each of libibverbs,
+# librdmacm and libibumad (include/infiniband/verbs.h, include/rdma/rdma_cma.h,
+# include/infiniband/umad.h and lib/<library>.so): on a guest with only the
+# archive's rdma-core these packages are the only verbs headers there are.
+rocm_ernic_setup_rdma_dev_prefix: /usr/local
 
 # ── rdma-core provider stamp ─────────────────────
 # ernic_guest_setup's rdma_core.yml reads this before deciding whether to

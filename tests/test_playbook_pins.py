@@ -6,9 +6,14 @@ commit; the server side is a container image named in the fleet files and the
 workflows. The two halves of a pair live in different files, and nothing else
 compares them:
 
-  rocm-ernic  ernic_source_pin  vs  the ernic.<sha> in every ernic image tag,
-                                    and the collection pin in requirements.yml
+  rocm-ernic  ernic_source_pin  vs  the ernic.<sha> in every ernic image tag
   rocm-sdxi   sdxi_source_pin   vs  the sdxi.<sha> in every sdxi image tag
+
+rocm-ernic has a second pin, the commit requirements.yml installs its Ansible
+collection from. That one is the roles, and is free to differ from
+ernic_source_pin: what is held instead is that it is a commit, and that the
+playbook gives the roles the sources' own scripts and series, so that nothing
+with a half in the server is built from the collection's commit.
 
 Those compare the playbook in this checkout, which is what a bake from it
 builds. The guest a fleet PULLS was baked earlier, from the commit its
@@ -89,16 +94,25 @@ class Pins(unittest.TestCase):
                     f"the guest from {pin}. SRQ ships in two halves, one in "
                     f"each; move them together.")
 
-    def test_ernic_guest_matches_the_collection(self):
-        pin = _pin("ernic_source_pin")
+    def test_the_ernic_collection_is_pinned_to_a_commit(self):
+        """The roles. Not required to be ernic_source_pin: see ErnicSources.
+
+        A branch or a tag would move the roles under a bake, since a git
+        requirement is resolved again on every install; an abbreviation is
+        whatever upstream's next colliding object makes of it.
+        """
         found = re.search(
             r"rocm-ernic\.git#/ansible/\s*\n\s+type: git\s*\n\s+version: (\S+)",
             REQUIREMENTS.read_text())
         self.assertIsNotNone(found, "no rocm-ernic git pin in requirements.yml")
-        self.assertEqual(
-            found.group(1), pin,
-            "requirements.yml installs the collection from one commit and "
-            "ernic_source_pin checks the sources out at another")
+        self.assertRegex(
+            found.group(1), r"^[0-9a-f]{40}$",
+            "requirements.yml pins the rocm-ernic collection to a full "
+            "commit id, not a branch, a tag or an abbreviation")
+        self.assertRegex(
+            _pin("ernic_source_pin"), r"^[0-9a-f]{40}$",
+            "ernic_source_pin is a full commit id: the role fetches it by "
+            "name, and a remote cannot resolve an abbreviation")
 
     def test_sdxi_guest_matches_every_server_image(self):
         """The SDXI server is tied to the baked guest by commit, not by stamp.
@@ -147,6 +161,210 @@ class Pins(unittest.TestCase):
         served = re.search(r"<rocjitsu-ref>([^<]+)</rocjitsu-ref>", fleet)
         self.assertIsNotNone(served)
         self.assertEqual(default.group(1), served.group(1))
+
+
+class ErnicSources(unittest.TestCase):
+    """What has a half in the device server is built from ernic_source_pin.
+
+    Two commits of rocm-ernic reach a bake. requirements.yml installs the
+    collection, the ROLES, from one. ernic_source_pin is the other: the
+    checkout ernic_source makes on the controller, which is what
+    test_ernic_guest_matches_every_server_image ties to the servers. They
+    were required to be equal, and are not any more, so that the roles can
+    move without a new set of server images.
+
+    That is only sound while nothing server-facing comes out of the
+    collection's own files/, which sit at the collection's commit. The SRQ
+    and provider roles default their scripts and series to exactly there
+    ({{ role_path }}/../../files), so each path is handed to them, from
+    ernic_source_dir. A variable dropped from one of these includes would
+    build that half from the collection's commit and say nothing; this is
+    what says it.
+
+    What the collection does supply is the first play's build: the base
+    series and the two scripts ernic_guest_setup stages. The SRQ + P4 play
+    replaces that build, and tests/test_configure_keeps_baked_driver.py
+    holds the configure stage to not making it again.
+    """
+
+    SOURCE = "{{ ernic_source_dir }}"
+    PLAY = "Build SRQ + P4 ionic stack into the guest"
+
+    def setUp(self):
+        import yaml
+        self.plays = [p for p in yaml.safe_load(PLAYBOOK.read_text())
+                      if "hosts" in p]
+        self.play, = [p for p in self.plays if p["name"] == self.PLAY]
+
+    def _flat(self, tasks):
+        for task in tasks or []:
+            yield task
+            for section in ("block", "rescue", "always"):
+                yield from self._flat(task.get(section))
+
+    def _tasks(self, play):
+        return list(self._flat((play.get("pre_tasks") or [])
+                               + (play.get("tasks") or [])))
+
+    def _include(self, role: str) -> dict:
+        found = [t for t in self._tasks(self.play)
+                 if (t.get("ansible.builtin.include_role") or {}).get("name")
+                 == f"rocm.ernic.{role}"]
+        self.assertEqual(len(found), 1, role)
+        return found[0]["vars"]
+
+    def test_every_play_that_runs_a_role_checks_out_the_source_pin(self):
+        """The role has no default for the version, and a play that named
+        another would build against a tree no server image was built from."""
+        users = 0
+        for play in self.plays:
+            if not any(
+                    (t.get("ansible.builtin.include_role") or {})
+                    .get("name", "").startswith("rocm.ernic.")
+                    for t in self._tasks(play)):
+                continue
+            users += 1
+            with self.subTest(play=play["name"]):
+                self.assertEqual(play["vars"]["ernic_source_repo_version"],
+                                 "{{ ernic_source_pin }}")
+                self.assertNotIn("ernic_source_dir", play["vars"])
+        self.assertEqual(users, 3)
+        # One anchor, and every other play takes it by alias.
+        text = PLAYBOOK.read_text()
+        self.assertEqual(text.count("&ernic_source_pin "), 1)
+        self.assertNotRegex(
+            text, r"(?m)^\s+ernic_source_repo_version: "
+            r"(?!\"\{\{ ernic_source_pin \}\}\"$)")
+
+    def test_the_kernel_half_is_built_with_the_sources_scripts_and_series(self):
+        given = self._include("ernic_srq_dkms")
+        self.assertEqual(given["ernic_srq_dkms_scripts_dir"],
+                         f"{self.SOURCE}/ansible/files/scripts")
+        # One directory, staged from the two series in the checkout.
+        self.assertEqual(given["ernic_srq_dkms_patches_dir"],
+                         "{{ ionic_srqp4_patches_dir }}")
+        stage, = [t for t in self._tasks(self.play) if t["name"].startswith(
+            "Stage the combined SRQ + P4 ionic patch series")]
+        script = stage["ansible.builtin.shell"]
+        self.assertEqual(stage["delegate_to"], "localhost")
+        self.assertIn('rm -rf "{{ ionic_srqp4_patches_dir }}"', script)
+        copied = re.findall(r'"(\{\{ \w+ \}\}/[\w/.-]+/)"\*\.patch', script)
+        self.assertEqual(copied, [
+            f"{self.SOURCE}/ansible/files/patches/srq/",
+            f"{self.SOURCE}/ansible/files/patches/p4/"])
+
+    def test_the_provider_is_built_from_the_sources_series(self):
+        given = self._include("ernic_srq_provider")
+        self.assertEqual(given["ernic_srq_provider_patches_dir"],
+                         f"{self.SOURCE}/ansible/files/patches/rdma-core")
+
+    def test_the_p4_module_and_client_are_built_from_the_sources(self):
+        given = self._include("ernic_p4_dkms")
+        names = ("ernic_p4_dkms_module_dir", "ernic_p4_dkms_scripts_dir")
+        staged = [given[name] for name in names] + list(
+            given["ernic_p4_dkms_patches_dirs"])
+        self.assertEqual(len(staged), 4)
+        # Each is a play variable naming a path in the tree unpacked in the
+        # guest, and that tree is an archive of the checkout.
+        root = self.play["vars"]["ionic_p4_guest_source_root"]
+        for value in staged:
+            name = re.fullmatch(r"\{\{ (\w+) \}\}(/\w+)?", value)
+            self.assertIsNotNone(name, value)
+            self.assertTrue(
+                self.play["vars"][name.group(1)].startswith(root + "/"),
+                value)
+        archive, = [t for t in self._tasks(self.play) if t["name"].startswith(
+            "Archive the ernic_p4 module and client sources")]
+        cmd = archive["ansible.builtin.command"]["cmd"]
+        self.assertEqual(archive["delegate_to"], "localhost")
+        self.assertIn(f"tar -C {self.SOURCE} ", cmd)
+        for path in ("drivers/ernic_p4", "ansible/files/scripts",
+                     "ansible/files/patches", "tests/p4_fp8_client.c"):
+            self.assertIn(f" {path}", cmd)
+        unpack, = [t for t in self._tasks(self.play) if t["name"].startswith(
+            "Unpack the ernic_p4 module sources")]
+        self.assertEqual(unpack["ansible.builtin.unarchive"]["dest"], root)
+        client = [t for t in self._tasks(self.play)
+                  if t.get("ansible.builtin.include_role")
+                  == {"name": "rocm_ernic_setup", "tasks_from": "p4_client"}]
+        self.assertEqual(len(client), 1)
+        self.assertEqual(
+            client[0]["vars"]["rocm_ernic_setup_p4_source_dir"],
+            "{{ ionic_p4_guest_source_root }}")
+
+    def test_nothing_handed_to_those_roles_points_into_the_collection(self):
+        for role in ("ernic_srq_dkms", "ernic_srq_provider", "ernic_p4_dkms"):
+            for name, value in self._include(role).items():
+                with self.subTest(role=role, name=name):
+                    self.assertNotRegex(
+                        str(value), r"role_path|ansible_collections")
+
+    def test_the_guest_is_recorded_at_the_source_pin(self):
+        """What a published guest says it was built from, and what
+        PulledGuest later reads back out of git for the same commit."""
+        text = PLAYBOOK.read_text()
+        self.assertIn('"rocm_ernic_ref": "{{ ernic_source_pin }}"', text)
+        self.assertIn('ernic_source_pin: "{{ ernic_source_pin }}"', text)
+
+
+class CollectionName(unittest.TestCase):
+    """The collection is rocm.ernic, and nothing live says otherwise.
+
+    Upstream renamed it. A role still named the old way resolves on any
+    host that has the old collection installed, to the old roles, with no
+    error: the very host a rename is done on. A path to the old install
+    directory reads the old tree the same way. So no tracked file carries
+    the old name in any of its three spellings, release history apart.
+    """
+
+    # Built up, so that this file is not a match for itself.
+    OLD_NAMESPACE, OLD_NAME = "sbates" + "130272", "rocm" + "_ernic"
+    OLD = (f"{OLD_NAMESPACE}.{OLD_NAME}",      # a role or the collection
+           f"{OLD_NAMESPACE}/{OLD_NAME}",      # its install directory
+           f"{OLD_NAMESPACE}.rocm" + "__ernic")  # a shields.io badge
+    # What was released under the old name stays as it was written.
+    HISTORY = {"CHANGELOG.md", "qemu/debian/changelog"}
+
+    def test_no_tracked_file_names_the_collection_the_old_way(self):
+        status, listed = _git("ls-files", "-z")
+        if status != 0:
+            self.skipTest("not a git checkout, so there is no list of "
+                          "tracked files to read")
+        files = [name for name in listed.split("\0") if name]
+        self.assertGreater(len(files), 100, "git listed too few files")
+        hits = []
+        for name in files:
+            if name in self.HISTORY:
+                continue
+            try:
+                text = (REPO / name).read_text()
+            except (UnicodeDecodeError, OSError):
+                continue
+            for number, line in enumerate(text.splitlines(), 1):
+                if any(old in line for old in self.OLD):
+                    hits.append(f"{name}:{number}: {line.strip()}")
+        self.assertEqual(
+            hits, [],
+            "the rocm-ernic collection is rocm.ernic and installs under "
+            "ansible_collections/rocm/ernic:\n  " + "\n  ".join(hits))
+
+    def test_the_history_files_are_the_ones_meant(self):
+        for name in self.HISTORY:
+            self.assertTrue((REPO / name).is_file(), name)
+
+    def test_every_role_of_the_collection_the_playbooks_run_is_rocm_ernic(self):
+        """And none of them is reached by a short name, which would resolve
+        against roles/ beside the playbook or not at all."""
+        roles = set()
+        for path in sorted((REPO / "ansible/playbooks").glob("*.yml")):
+            roles |= set(re.findall(
+                r"(?m)^\s+(?:- role|name): ([\w.]*\bernic_(?:source|guest_setup"
+                r"|host_setup|srq_dkms|srq_provider|p4_dkms))\s*$",
+                path.read_text()))
+        self.assertEqual(roles, {
+            "rocm.ernic.ernic_source", "rocm.ernic.ernic_guest_setup",
+            "rocm.ernic.ernic_srq_dkms", "rocm.ernic.ernic_srq_provider",
+            "rocm.ernic.ernic_p4_dkms"})
 
 
 class IonicKernelPin(unittest.TestCase):
@@ -228,7 +446,9 @@ class IonicKernelPin(unittest.TestCase):
             given = play.get("vars") or {}
             held = [name for name in self.NAMES if name in given]
             if held == ["ionic_kernel_pin"]:
-                # The slim and stamp plays read the tag alone.
+                # The slim and stamp plays read the tag alone, and so does
+                # the configure play, which fetches no ionic sources now
+                # that it builds no driver.
                 continue
             with self.subTest(play=play["name"]):
                 if held:
@@ -236,7 +456,7 @@ class IonicKernelPin(unittest.TestCase):
                     self.assertEqual(held, list(self.NAMES))
                 for name in held:
                     self.assertEqual(given[name], first[name])
-        self.assertEqual(holders, 3)
+        self.assertEqual(holders, 2)
 
 
 class PulledGuest(unittest.TestCase):

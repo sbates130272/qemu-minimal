@@ -423,7 +423,7 @@ PLAYBOOK_LANE = (REPO_ROOT / ".github" / "workflows"
                  / "qemu-minimal-ansible-playbook-test-vm-rocm-golden.yml")
 INSTALLED_RULES = "/etc/udev/rules.d/99-rocm-ernic.rules"
 # Every role of the collection, which is what may copy its own rules.
-COLLECTION = "sbates130272.rocm_ernic."
+COLLECTION = "rocm.ernic."
 COLLECTION_GUEST = COLLECTION + "ernic_guest_setup"
 OURS = {"name": "rocm_ernic_setup", "tasks_from": "naming"}
 OURS_CHECK = {"name": "rocm_ernic_setup", "tasks_from": "naming_check"}
@@ -489,7 +489,9 @@ class GoldenImageKeepsTheRepoRulesTest(unittest.TestCase):
     it. Every test above stayed green, because they read this repository's
     file and the role's default and never asked which file a playbook hands
     the role. The collection's ernic_guest_setup copies its own as well, on
-    the configure path, with no switch to stop it.
+    its driver path, with no switch of its own to stop it. The configure
+    stage runs that role with the driver path off, so the copy no longer
+    happens there; a caller can still turn it on with -e.
     """
 
     def setUp(self):
@@ -591,18 +593,51 @@ class GoldenImageKeepsTheRepoRulesTest(unittest.TestCase):
             self.assertNotIn("failed_when", task)
 
     def test_a_live_play_that_runs_the_collection_puts_the_rules_back(self):
-        """ernic_guest_setup's driver_common.yml copies its own, always."""
+        """ernic_guest_setup's driver_common.yml copies its own whenever its
+        driver path runs. The configure stage turns that path off, and a
+        caller's -e turns it back on, so the file still goes back."""
         live = [p for p in self.plays if "hosts" in p and p not in self._bake()
                 and any(k == "collection" for k, _ in self._events(p))]
         self.assertEqual([p["name"] for p in live],
                          ["Configure the ernic NIC on a live guest"])
         for play in live:
-            last = (play.get("post_tasks") or [{}])[-1]
-            self.assertEqual(_includes(last), OURS, play["name"])
+            # In the always section of the block that runs the collection's
+            # role: after it, and when it fails too. With the driver build
+            # turned back on against a stack that offers P4 the role fails
+            # at its own modprobe, and a put-back in post_tasks never ran.
+            self.assertNotIn("post_tasks", play)
+            (block,) = [t for t in play["tasks"] if "block" in t]
+            self.assertEqual(
+                [_includes(t).get("name") for t in block["block"]],
+                [COLLECTION_GUEST])
+            self.assertNotIn("rescue", block)
+            post = block["always"]
+            puts_back = [t for t in post if _includes(t) == OURS]
+            self.assertEqual(len(puts_back), 1, play["name"])
             for key in ("when", "vars", "tags"):
-                self.assertNotIn(key, last)
-            # post_tasks run after roles; anything else would run before it.
+                self.assertNotIn(key, puts_back[0])
             self.assertEqual(self._events(play)[-1][0], "ours")
+            # Only the driver check follows it, which writes no rules: it
+            # is the stage's last word on which driver is loaded.
+            after = post[post.index(puts_back[0]) + 1:]
+            self.assertEqual(
+                [_includes(t) for t in after],
+                [{"name": "rocm_ernic_setup", "tasks_from": "driver_check"}])
+
+    def test_the_copy_the_put_back_answers_is_on_the_roles_driver_path(self):
+        """Where the collection's copy lives, read from the collection: the
+        day it moves off the driver path, the configure stage copies it
+        again with the path off, and the put-back stops being a precaution."""
+        collection = (Path.home() / ".ansible/collections/ansible_collections"
+                      / "rocm/ernic/roles/ernic_guest_setup/tasks")
+        _require(collection.is_dir(), "the rocm.ernic collection")
+        copies = sorted(
+            path.name for path in collection.glob("*.yml")
+            if f"dest: {INSTALLED_RULES}" in path.read_text())
+        self.assertEqual(copies, ["driver_common.yml"])
+        driver = yaml.safe_load((collection / "driver.yml").read_text())
+        self.assertIn("driver_common.yml",
+                      [t.get("ansible.builtin.include_tasks") for t in driver])
 
     def test_quick_start_installs_the_roles_default_too(self):
         plays = yaml.safe_load((PLAYBOOKS / "vm-quickstart.yml").read_text())

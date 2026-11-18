@@ -3,8 +3,9 @@
 # expensive and version-stable, so it belongs in the backing image rather than
 # in ernic_guest_setup, which runs per overlay on every test cycle.
 #
-# This is the local replacement for sbates130272.rocm_ernic.ernic_image_prep,
-# removed in collection 0.2.0. See defaults/main.yml for what it tracks.
+# This is the local replacement for the rocm-ernic collection's
+# ernic_image_prep role, removed in its 0.2.0. See defaults/main.yml for what
+# it tracks.
 
 # First, before any apt run: a freshly booted guest starts
 # unattended-upgrades, which holds the dpkg lock for the first minute or so,

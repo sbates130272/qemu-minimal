@@ -1,0 +1,257 @@
+---
+# perftest_setup: perftest from source, with ROCm memory support, under a
+# prefix ahead of the archive's package.
+#
+# Nothing here needs a device, so the role runs in a bake. What it builds is
+# recorded in a stamp, and a run that finds the stamp describing the build it
+# was asked for compiles nothing; the installed tools are checked either way.
+
+- name: Assert the perftest build is fully named
+  ansible.builtin.assert:
+    that:
+      - perftest_setup_repo | trim | length > 0
+      - perftest_setup_ref | trim | length > 0
+      - >-
+        perftest_setup_commit | trim | length == 0
+        or perftest_setup_commit | trim is match('^[0-9a-f]{40}$')
+      - perftest_setup_prefix | trim is match('^/')
+      - perftest_setup_source_dir | trim is match('^/.')
+      - perftest_setup_rocm_path | trim is match('^/')
+      - perftest_setup_rdma_core in ['archive', 'local']
+      - >-
+        perftest_setup_rdma_lib_dir | trim | length == 0
+        or perftest_setup_rdma_lib_dir | trim is match('^/')
+      - >-
+        not (perftest_setup_rocm_kernels | bool)
+        or perftest_setup_rocm_arch | trim | length > 0
+      - perftest_setup_simd | trim in ['avx2', 'sse4.2', 'none', '']
+      - >-
+        perftest_setup_configure_extra
+        | select('match', 'CPPFLAGS=') | list | length == 0
+    fail_msg: >-
+      perftest_setup needs a repository ("{{ perftest_setup_repo }}"), a ref
+      ("{{ perftest_setup_ref }}"), a commit that is 40 hex characters or
+      empty ("{{ perftest_setup_commit }}"), absolute paths for the prefix,
+      the source directory and ROCm, an rdma-core that is "archive" or
+      "local" ("{{ perftest_setup_rdma_core }}"), an rdma-core library
+      directory that is
+      absolute or empty ("{{ perftest_setup_rdma_lib_dir }}"), and, when the
+      HIP kernels are built, the
+      GPU they are built for ("{{ perftest_setup_rocm_arch }}"): a bake has no
+      device to ask, and hipcc's own default is not the GPU the fleets serve.
+      The SIMD level of the host-memory validator is "avx2", "sse4.2", "none"
+      or empty ("{{ perftest_setup_simd }}"). And
+      perftest_setup_configure_extra carries no CPPFLAGS=, because the role
+      writes the one configure keeps: preprocessor flags go in
+      perftest_setup_cppflags.
+
+- name: Note that the commit check is off
+  ansible.builtin.debug:
+    msg: >-
+      perftest_setup_commit is empty, so {{ perftest_setup_ref }} of
+      {{ perftest_setup_repo }} is built at whatever commit it names today.
+      The commit is recorded in {{ perftest_setup_stamp }}.
+  when: perftest_setup_commit | trim | length == 0
+
+- name: Note that the SIMD level is left to the build machine
+  ansible.builtin.debug:
+    msg: >-
+      perftest_setup_simd is empty, so configure compiles the host-memory
+      validator for whatever the CPU of this machine has, and the tools
+      refuse host-memory --data_validation on a CPU that lacks it. The level
+      it chose is recorded in {{ perftest_setup_stamp }}.
+  when: perftest_setup_simd | trim | length == 0
+
+# The path given, or the tree its bin/ links into: the therock layout has
+# /opt/rocm/bin and /opt/rocm/lib and no /opt/rocm/include.
+- name: Find the ROCm tree that has the HIP headers
+  ansible.builtin.shell:
+    cmd: |
+      set -eu
+      given={{ perftest_setup_rocm_path | trim | quote }}
+      for root in "$given" "$(dirname "$(readlink -f "$given/bin")")"; do
+        if [ -f "$root/include/hip/hip_runtime_api.h" ] &&
+           [ -f "$root/include/hsa/hsa_ext_amd.h" ]; then
+          {% if perftest_setup_rocm_kernels | bool %}
+          if [ ! -x "$root/bin/hipcc" ]; then
+            echo "no hipcc in $root/bin, and perftest_setup_rocm_kernels is on" >&2
+            exit 1
+          fi
+          {% endif %}
+          echo "$root"
+          exit 0
+        fi
+      done
+      echo "no hip/hip_runtime_api.h and hsa/hsa_ext_amd.h under $given" \
+           "or under the tree its bin/ links into" >&2
+      exit 1
+    executable: /bin/sh
+  register: perftest_setup_rocm_found
+  changed_when: false
+
+# The last items are the SIMD level, named and not left to the CPU of the
+# machine that builds; defaults/main.yml says why and how. They are on the
+# line and so in the stamp, and a level that changes is a rebuild.
+- name: Record the ROCm tree and the configure line
+  vars:
+    # One CPPFLAGS=, because configure keeps the last: the level's macro,
+    # the header that declares _mm_pause, and the caller's own.
+    perftest_setup_cppflags_all: >-
+      {{ ({'avx2': ['-DHAVE_AVX2=1'], 'sse4.2': ['-DHAVE_SSE42=1']}
+          .get(perftest_setup_simd | trim, []))
+         + (['-include', 'xmmintrin.h']
+            if perftest_setup_mm_pause_workaround | bool else [])
+         + perftest_setup_cppflags }}
+  ansible.builtin.set_fact:
+    perftest_setup_rocm_resolved: "{{ perftest_setup_rocm_found.stdout | trim }}"
+    perftest_setup_configure_args: >-
+      {{ ['--prefix=' ~ (perftest_setup_prefix | trim), '--enable-rocm']
+         + (['--enable-rocm-dmabuf'] if perftest_setup_rocm_dmabuf | bool else [])
+         + ['--with-rocm=' ~ (perftest_setup_rocm_found.stdout | trim)]
+         + (['--with-rocm-arch=' ~ (perftest_setup_rocm_arch | trim)]
+            if perftest_setup_rocm_arch | trim | length > 0 else [])
+         + (['HIPCC=' ~ (perftest_setup_rocm_found.stdout | trim) ~ '/bin/hipcc']
+            if perftest_setup_rocm_kernels | bool else ['HIPCC=no'])
+         + (['LDFLAGS=-L' ~ (perftest_setup_rdma_lib_dir | trim)]
+            if perftest_setup_rdma_core == 'local'
+               and perftest_setup_rdma_lib_dir | trim | length > 0 else [])
+         + perftest_setup_configure_extra
+         + (['cross_compiling=yes',
+             'SIMD_CFLAGS=' ~ ({'avx2': '-mavx2', 'sse4.2': '-msse4.2'}
+                               .get(perftest_setup_simd | trim, ''))]
+            if perftest_setup_simd | trim | length > 0 else [])
+         + (['CPPFLAGS=' ~ (perftest_setup_cppflags_all | join(' '))]
+            if perftest_setup_cppflags_all | length > 0 else []) }}
+
+- name: Read the stamp of an earlier build
+  ansible.builtin.slurp:
+    src: "{{ perftest_setup_stamp }}"
+  register: perftest_setup_stamp_file
+  failed_when: false
+  changed_when: false
+
+- name: Look for the installed tools
+  ansible.builtin.stat:
+    path: "{{ perftest_setup_prefix | trim }}/bin/{{ item }}"
+    get_checksum: false
+  loop: "{{ perftest_setup_tools }}"
+  register: perftest_setup_installed
+
+# Rebuilt when anything the build was made from has changed: the repository,
+# the ref, the required commit or the configure line, which carries the
+# prefix, the ROCm tree, the GPU, whether hipcc is used, the SIMD level, the
+# _mm_pause workaround and, for an
+# rdma-core built from source, its library directory. With the commit check
+# off the stamp cannot say whether
+# the ref has moved, so that case rebuilds only when forced. An rdma-core
+# replaced under an unchanged directory does not rebuild either; the stamp
+# records the libibverbs the tools were linked against, and
+# qemu/checks/rocm-golden.sh compares it with the one they load.
+- name: Decide whether perftest has to be built
+  vars:
+    perftest_setup_recorded: >-
+      {{ (perftest_setup_stamp_file.content | b64decode | from_json)
+         if perftest_setup_stamp_file.content is defined else {} }}
+  ansible.builtin.set_fact:
+    perftest_setup_build_needed: >-
+      {{ perftest_setup_force | bool
+         or perftest_setup_recorded.get('repo') != perftest_setup_repo | trim
+         or perftest_setup_recorded.get('ref') != perftest_setup_ref | trim
+         or perftest_setup_recorded.get('commit_required')
+            != perftest_setup_commit | trim
+         or (perftest_setup_commit | trim | length > 0
+             and perftest_setup_recorded.get('commit')
+                 != perftest_setup_commit | trim)
+         or perftest_setup_recorded.get('configure')
+            != perftest_setup_configure_args | join(' ')
+         or perftest_setup_installed.results
+            | rejectattr('stat.exists') | list | length > 0 }}
+
+- name: Note that the build is being skipped
+  ansible.builtin.debug:
+    msg: >-
+      perftest at {{ perftest_setup_ref }} of {{ perftest_setup_repo }} is
+      already installed under {{ perftest_setup_prefix }}, as
+      {{ perftest_setup_stamp }} records; nothing is compiled. Force with
+      -e perftest_setup_force=true.
+  when: not (perftest_setup_build_needed | bool)
+
+- name: Fetch, build and install perftest
+  ansible.builtin.include_tasks: build.yml
+  when: perftest_setup_build_needed | bool
+
+# Whether or not anything was built: what a rerun skipped is still what the
+# image carries.
+- name: Check the installed tools
+  ansible.builtin.include_tasks: verify.yml
+
+# perftest-simd-check.sh said which SIMD level the configured tree would be
+# compiled for; this is the same question asked of the tool that was built.
+# AVX2 and AVX-512 are the levels that use the wide registers, and nothing
+# else in the tools is compiled for them.
+- name: Assert the tools carry the SIMD level they were configured for
+  ansible.builtin.assert:
+    that:
+      - >-
+        (perftest_setup_wide_registers | int > 0)
+        == (perftest_setup_simd_built in ['avx2', 'avx512'])
+    fail_msg: >-
+      {{ perftest_setup_prefix | trim }}/bin/ib_write_bw has
+      {{ perftest_setup_wide_registers }} instructions on ymm or zmm
+      registers, and the build was configured for
+      "{{ perftest_setup_simd_built }}".
+  when: perftest_setup_build_needed | bool
+
+# The probe in build.yml said which libibverbs a program built with these
+# flags links; this is the same question asked of the tool that was built.
+- name: Assert the tools load the libibverbs they were linked against
+  ansible.builtin.assert:
+    that:
+      - perftest_setup_loaded_libibverbs == perftest_setup_rdma_libibverbs
+    fail_msg: >-
+      {{ perftest_setup_prefix | trim }}/bin/ib_write_bw loads
+      {{ perftest_setup_loaded_libibverbs }}, and the build was linked
+      against {{ perftest_setup_rdma_libibverbs }}.
+  when: perftest_setup_build_needed | bool
+
+# After the checks, so the stamp only ever describes a build that passed
+# them.
+- name: Record the build
+  ansible.builtin.copy:
+    dest: "{{ perftest_setup_stamp }}"
+    owner: root
+    group: root
+    mode: "0644"
+    content: "{{ perftest_setup_record | to_nice_json }}\n"
+  vars:
+    perftest_setup_record:
+      built_by: qemu-minimal ansible/playbooks/roles/perftest_setup
+      repo: "{{ perftest_setup_repo | trim }}"
+      ref: "{{ perftest_setup_ref | trim }}"
+      commit: "{{ perftest_setup_built_commit }}"
+      commit_required: "{{ perftest_setup_commit | trim }}"
+      prefix: "{{ perftest_setup_prefix | trim }}"
+      rocm_path: "{{ perftest_setup_rocm_resolved }}"
+      rocm_arch: "{{ perftest_setup_rocm_arch | trim }}"
+      rdma_headers: "{{ perftest_setup_rdma_headers }}"
+      libibverbs: "{{ perftest_setup_rdma_libibverbs }}"
+      device_code: "{{ perftest_setup_device_code | bool }}"
+      dmabuf: "{{ perftest_setup_rocm_dmabuf | bool }}"
+      simd: "{{ perftest_setup_simd_built }}"
+      simd_forced: "{{ perftest_setup_simd | trim | length > 0 }}"
+      mm_pause_workaround: "{{ perftest_setup_mm_pause_workaround | bool }}"
+      configure: "{{ perftest_setup_configure_args | join(' ') }}"
+      tools: "{{ perftest_setup_tools }}"
+  when: perftest_setup_build_needed | bool
+
+# Only what this run fetched. A run that built nothing fetched nothing, and
+# perftest-fetch.sh, which refuses to replace a directory that is not a
+# checkout, never looked at this one: removing it then would delete whatever
+# a caller's perftest_setup_source_dir happens to name.
+- name: Remove the source tree
+  ansible.builtin.file:
+    path: "{{ perftest_setup_source_dir | trim }}"
+    state: absent
+  when:
+    - perftest_setup_build_needed | bool
+    - not (perftest_setup_keep_source | bool)

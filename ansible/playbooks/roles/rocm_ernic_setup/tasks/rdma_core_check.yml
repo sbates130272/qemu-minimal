@@ -1,0 +1,46 @@
+---
+# Does the guest have one rdma-core to build against, in /usr/local?
+# files/rdma-core-check.sh asks and says what it found; it changes nothing
+# and needs no device.
+#
+# A bake asks last, after the guest stamp is written, because the script
+# also compares the stamp's two rdma-core versions with the guest. The same
+# lines are in qemu/checks/rocm-golden.sh, which the lanes run on the booted
+# image, so a bake that would fail there fails here first.
+
+- name: Ask which rdma-core a build in the guest finds
+  ansible.builtin.script:
+    cmd: rdma-core-check.sh
+    executable: /bin/bash
+  register: rocm_ernic_setup_rdma_core_check
+  changed_when: false
+  failed_when: false
+
+# The script's own line is the message. Never gated: a guest that fails this
+# compiles against one rdma-core and links another, or has none to build
+# against at all.
+- name: Fail unless the guest has one rdma-core to build against
+  vars:
+    rocm_ernic_setup_rdma_core_verdict: >-
+      {{ rocm_ernic_setup_rdma_core_check.stdout_lines | default([])
+         | map('trim') | select('match', 'rdma-core: ') | list }}
+    # Over ssh the script module runs under a pty, which has no stderr of
+    # its own, so the script's error line arrives on either stream.
+    rocm_ernic_setup_rdma_core_errors: >-
+      {{ ((rocm_ernic_setup_rdma_core_check.stdout_lines | default([]))
+          + (rocm_ernic_setup_rdma_core_check.stderr_lines | default([])))
+         | map('trim') | select('match', 'ERROR: rdma-core: ') | list }}
+  ansible.builtin.assert:
+    that:
+      - rocm_ernic_setup_rdma_core_check.rc | default(1) == 0
+      - rocm_ernic_setup_rdma_core_verdict | length == 1
+    fail_msg: >-
+      {{ rocm_ernic_setup_rdma_core_errors | join(' ')
+         | default('rdma-core-check.sh printed no verdict: '
+                   ~ (rocm_ernic_setup_rdma_core_check.stdout | default(''))
+                   ~ (rocm_ernic_setup_rdma_core_check.stderr | default(''))
+                   ~ (rocm_ernic_setup_rdma_core_check.msg | default('')), true) }}
+      The archive's rdma-core development packages are
+      {{ rocm_ernic_setup_rdma_dev_packages | join(', ') }}; nothing in a
+      bake may install one, and tasks/rdma_dev_purge.yml removes them.
+    success_msg: "{{ rocm_ernic_setup_rdma_core_verdict | join(' ') }}"

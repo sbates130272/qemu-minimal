@@ -1,0 +1,281 @@
+---
+# perftest_setup: build perftest from source with ROCm memory support and
+# install it beside the archive's package.
+#
+# Ubuntu's perftest is built without ROCm, so its ib_send_bw has no
+# --use_rocm. This role builds the tools from a named repository at a named
+# ref, against the ROCm already in the guest, and installs them under a
+# prefix that precedes /usr/bin on PATH. The archive package is left alone:
+# /usr/bin/ib_send_bw stays the stock build, and vm-quickstart.yml's RDMA
+# test names it by that path.
+#
+# The build needs no device. configure compiles and links its ROCm probes
+# and runs none of them. hipcc is handed its target instead of asking the
+# device for it, and the one thing the role runs afterwards is "--help",
+# which returns before perftest opens anything. So it belongs in a bake,
+# where there is neither a NIC nor a GPU.
+#
+# Nor does the build depend on the CPU of the machine it runs on. Left to
+# itself configure runs two programs that ask that CPU whether it has AVX2
+# or SSE4.2, and compiles the host-memory validator for whichever it finds;
+# the role names the level instead (perftest_setup_simd below), because an
+# image is built on one machine and run on others.
+
+# ── What is built ────────────────────────────────
+# The repository and the ref fetched from it. The ref is a branch or a tag
+# name, or a full commit id, which GitHub serves for any commit it still
+# holds.
+perftest_setup_repo: "https://github.com/sbates130272/perftest.git"
+perftest_setup_ref: "feat/rocm-data-validation-legacy"
+
+# The commit that ref has to resolve to. The fetch is at depth 1 and what it
+# brought is compared with this before anything is compiled, so a branch that
+# has moved fails the bake instead of changing the image without a word.
+# Moving the ref means moving this with it:
+#
+#   git ls-remote <perftest_setup_repo> <perftest_setup_ref>
+#
+# Empty turns the check off, and that is the only way to turn it off: the
+# role then builds whatever the ref names today and records the commit it
+# found. Not for an image that is published.
+perftest_setup_commit: "e68c74e910451682ba1dc91b96602fbc7afaa372"
+
+# ── ROCm ─────────────────────────────────────────
+# Where ROCm is. Either the tree itself or a path whose bin/ is a link into
+# it: the therock packages install under /opt/rocm/core-<line> and the image
+# links /opt/rocm/bin and /opt/rocm/lib there, with no /opt/rocm/include, so
+# the role follows bin/ to the tree that has the headers. The resolved path
+# is what configure is given, and its lib/ is the rpath of the tools.
+perftest_setup_rocm_path: "/opt/rocm"
+
+# Compile src/rocm_kernels.hip with hipcc and link it in. That is the live
+# half of --data_validation for --use_rocm: a kernel resident on the GPU that
+# checks each cycle as it lands. Without it the tools still validate, by
+# copying the buffer back to the host once the run is over, which is the
+# path PERFTEST_ROCM_VALIDATION=staged selects in a build that has both.
+perftest_setup_rocm_kernels: true
+
+# The GPU the kernels are compiled for. Required when they are built, because
+# a bake cannot ask: with no device rocm_agent_enumerator prints nothing,
+# configure leaves the choice to hipcc, and hipcc 10.1 then targets gfx906
+# (measured in a container with no GPU). A kernel built for another GPU
+# fails at launch, long after a clean build, and the tools fall back to the
+# host-staged compare. Every fleet in this repository serves gfx1250.
+perftest_setup_rocm_arch: "gfx1250"
+
+# --enable-rocm-dmabuf, which adds --use_rocm_dmabuf: registration through
+# ibv_reg_dmabuf_mr of a dma-buf the HSA runtime exports. It needs rdma-core
+# with dma-buf registration and hsa_amd_portable_export_dmabuf, both of which
+# the image has. Building the option says nothing about whether a NIC's
+# driver can import the buffer; ionic_rdma on the emulated NIC does, and it
+# is the only form of --use_rocm whose registration the guest accepts.
+perftest_setup_rocm_dmabuf: true
+
+# ── rdma-core ────────────────────────────────────
+# Which rdma-core the tools are built against. It decides what the role
+# installs to build against it and where the linker is sent, and there are
+# two answers because there are two kinds of guest:
+#
+#   archive  The distribution's, under /usr, and nothing else. Its
+#            development packages (perftest_setup_rdma_dev_packages) are
+#            installed with the other build dependencies: on such a guest
+#            they are the only verbs headers there are. Nothing is added to
+#            the configure line.
+#   local    One built from source, whose libraries are in
+#            perftest_setup_rdma_lib_dir. No rdma-core development package
+#            is installed, configure is given LDFLAGS=-L<that directory>,
+#            and the build is refused unless the libibverbs it links is in
+#            it.
+#
+# A golden guest is the second kind, and vm-rocm-golden.yml says so. It has
+# the archive's rdma-core 61 as a runtime only, and the whole of rocm-ernic's
+# patched 66 under /usr/local (headers, libraries and providers, from
+# ernic_srq_provider), which every tool on the image loads and which is the
+# one rdma-core there is to build against. The archive's development
+# packages are not in that image and the bake purges them, so this role must
+# not put them back: that is what "local" is for. With them installed, gcc
+# read 66's headers (/usr/local/include is searched ahead of /usr/include)
+# and ld took 61's library (/usr/lib/<multiarch> ahead of /usr/local/lib),
+# and the link failed on ibv_alloc_buf, which only 66 has. That is what this
+# role did on two guests of the published image, which had the packages,
+# before it gave the linker the directory.
+#
+# So "archive" is refused on a guest that has a libibverbs.so in
+# perftest_setup_rdma_lib_dir, before anything is installed: it would add a
+# second set of headers and link libraries beside the first. The default is
+# "archive" because a guest with ROCm and nothing else is what the role
+# meets when nobody has said.
+#
+# Whichever it is, files/perftest-rdma-probe.sh compiles, links and resolves
+# one small program with the configure line's flags before anything is
+# built, and the role stops unless the headers, the library linked and the
+# library loaded are one rdma-core. A guest baked before the packages were
+# dropped still has two to choose from, and so does one where somebody ran
+# "apt install libibverbs-dev". Headers somewhere gcc does not already look
+# go in perftest_setup_cppflags as -I<dir>; the probe reads that too.
+perftest_setup_rdma_core: "archive"
+
+# With "local": the directory of the libibverbs, librdmacm and libibumad
+# the tools are linked against, given to configure as LDFLAGS=-L<dir>. Once
+# the archive's development packages are gone the linker finds /usr/local/lib
+# by itself (measured: the probe passes with and without it), so on a
+# golden guest this is belt and braces; it is what makes the build right on
+# a guest that still has them. Empty adds nothing to the configure line and
+# skips the check that the library linked is in it.
+#
+# With "archive": where to look for an rdma-core that must not be there.
+perftest_setup_rdma_lib_dir: "/usr/local/lib"
+
+# With "archive": the packages that are the archive's rdma-core to build
+# against. configure stops without libibumad-dev. Never installed with
+# "local".
+perftest_setup_rdma_dev_packages:
+  - libibverbs-dev
+  - librdmacm-dev
+  - libibumad-dev
+
+# Arguments added to the end of the configure line, one per item. A
+# CFLAGS= or LDFLAGS= here replaces the one before it on the line, as
+# configure has it, so an LDFLAGS= replaces the directory above. No
+# CPPFLAGS= belongs here: the role writes that one itself, with the SIMD
+# level in it, and refuses a second. Preprocessor flags of the caller's go
+# in perftest_setup_cppflags. A CFLAGS= is not the way round that: the
+# level is read back from every flag the validator is compiled with, so a
+# -DHAVE_AVX2 written there stops the build before it compiles, and an
+# -mavx2 or -march= there, which lets AVX into the other objects, stops it
+# after, when the tool is asked what it carries.
+perftest_setup_configure_extra: []
+
+# Preprocessor flags added to the role's CPPFLAGS=, one per item: -I<dir>
+# for rdma-core headers somewhere gcc does not already look, for one.
+perftest_setup_cppflags: []
+
+# ── The CPU the tools are built for ──────────────
+# The SIMD level of the host-memory validator, which is what
+# --data_validation runs when the buffer is ordinary memory. It is the only
+# code in the tools compiled for more than baseline x86-64, and
+# Makefile.am gives the flag to that one object.
+#
+#   sse4.2  x86-64-v2: 16 bytes a compare. Every CPU that can run a fleet
+#           has it, and so does QEMU's EPYC model, which every stack and
+#           run-vm give a guest. The default, and the level an image is
+#           published with.
+#   avx2    x86-64-v3: 32 bytes a compare. A CPU without AVX2 cannot use
+#           the validator at all: the tools check at start and refuse
+#           --data_validation on host memory there.
+#   none    No validator: --data_validation on host memory is refused
+#           everywhere. --use_rocm validation is unaffected at any level.
+#   ""      Whatever configure finds on the CPU of the machine that builds,
+#           which is what the tree does when nobody says. Not for an image
+#           that is published, and qemu/checks/rocm-golden.sh refuses it.
+#
+# Why it is named and not found: configure decides with AC_RUN_IFELSE, a
+# program compiled and run during the build, and has no switch. On a guest
+# with QEMU's EPYC model that picked AVX2. A bake boots its guest with
+# QEMU's default model, qemu64, which has neither AVX2 nor SSE4.2, so there
+# it picked nothing, and the first golden bake with this role stopped in
+# the compiler (the workaround below). Either way the image carried what
+# the bake machine's CPU happened to be.
+#
+# How it is named, with no change to the tree: cross_compiling=yes on the
+# configure line, which is autoconf's word for "the machine that builds is
+# not the one that runs" and stops configure running anything, so both of
+# its answers are "no"; then -DHAVE_SSE42=1 (or -DHAVE_AVX2=1) in CPPFLAGS
+# and SIMD_CFLAGS=-msse4.2 (or -mavx2). files/perftest-simd-check.sh reads
+# the result back before anything is compiled, from config.h and the flags
+# the Makefile gives that object (DEFS, CPPFLAGS, CFLAGS and SIMD_CFLAGS),
+# and stops the build when it is another level; verify.yml then asks the
+# binary.
+#
+# Whatever the level, the tools ask the CPU they are started on and refuse
+# host-memory --data_validation where it lacks the level, with a message
+# and not an illegal instruction (src/perftest_parameters.c). A guest
+# without sse4.2 in its CPUID, which is what QEMU's default model is, gets
+# that refusal from an sse4.2 build.
+perftest_setup_simd: "sse4.2"
+
+# WORKAROUND for a bug in the pinned tree, to be turned off when the pin
+# moves to a commit that has the fix. src/host_validation.c defines
+# cpu_relax() as _mm_pause() for every x86 build and includes a header that
+# declares it only under HAVE_AVX512, HAVE_AVX2 or HAVE_SSE42. With no SIMD
+# level nothing declares it, and gcc 14 and later make an implicit
+# declaration an error:
+#
+#   src/host_validation.c:33:23: error: implicit declaration of function
+#   '_mm_pause'
+#
+# gcc 13 and earlier warn and then fail in the linker, on an undefined
+# reference to a function that only ever exists inline.
+#
+# True adds "-include xmmintrin.h" to CPPFLAGS, the header that declares it,
+# which every x86-64 compiler has. With sse4.2 or avx2 the tree compiles
+# without it, since the SIMD header brings the declaration in; it is on at
+# every level so that the level can be changed without tripping over this.
+#
+# False is for a tree that has the fix, and is checked: the role compiles
+# the file with no SIMD level before the build, with the implicit
+# declaration made an error whatever the compiler's default is, and a tree
+# that still has the bug fails there with the reason. A tree that no longer
+# has it says so in the play output while this is still true.
+perftest_setup_mm_pause_workaround: true
+
+# ── Where it goes ────────────────────────────────
+# The install prefix. /usr/local, so that <prefix>/bin precedes /usr/bin in
+# a login PATH, in /etc/environment and in sudo's secure_path, and the build
+# is what a bare "ib_send_bw" runs while the package's copy stays in
+# /usr/bin.
+perftest_setup_prefix: "/usr/local"
+
+# Where the source is fetched and built, and whether it stays. Removed by
+# default: the image carries the tools and the stamp, and the tree is a
+# clone anyone can make again. Under /usr/local/src and not /var/tmp so that
+# a kept tree survives image_slim's sweep. The role removes the directory
+# only in a run that fetched into it, and the fetch refuses to replace one
+# that is neither empty nor a git checkout, so naming a directory that holds
+# something else costs a failed build and not the directory.
+perftest_setup_source_dir: "/usr/local/src/perftest"
+perftest_setup_keep_source: false
+
+# What the build is recorded in: the repository, the ref, the commit that
+# was built and the one that was required, the configure line, the rdma-core
+# headers and libibverbs it was built against, whether device code is in
+# the binaries, the SIMD level of the host-memory validator and whether the
+# role named it, and whether the _mm_pause workaround was applied. A rerun
+# that finds this file describing
+# the build it was asked for, and the tools in place, compiles nothing.
+perftest_setup_stamp: "/etc/perftest-rocm.json"
+
+# Build even when the stamp says there is nothing to do.
+perftest_setup_force: false
+
+# ── Inputs of the build ──────────────────────────
+# What autogen.sh, configure and make need, apart from an rdma-core to
+# build against: that is perftest_setup_rdma_core above, and no rdma-core
+# package belongs in this list. The golden guest's package manifest already
+# installs all of these; they are named here so the role stands on its own.
+perftest_setup_packages:
+  - build-essential
+  - autoconf
+  - automake
+  - libtool
+  - pkg-config
+  - git
+  - libpci-dev
+perftest_setup_apt_retries: 3
+perftest_setup_apt_delay: 10
+
+# The tools "make install" has to have left in <prefix>/bin. It leaves more
+# than these: raw_ethernet_bw, raw_ethernet_lat, raw_ethernet_burst_lat and
+# raw_ethernet_fs_rate, the scripts run_perftest_loopback and
+# run_perftest_multi_devices, and 13 man pages under
+# <prefix>/share/man/man1. Those shadow the archive's copies the same way and
+# are not checked. No library and no header is installed.
+perftest_setup_tools:
+  - ib_send_bw
+  - ib_send_lat
+  - ib_write_bw
+  - ib_write_lat
+  - ib_read_bw
+  - ib_read_lat
+  - ib_atomic_bw
+  - ib_atomic_lat

@@ -15,9 +15,11 @@ device.
     kernel        {{ ansible_kernel }}  (mainline, pinned to {{ ionic_kernel_pin }})
     amdgpu-dkms   {{ golden_pkg['amdgpu-dkms'] | default('unknown') }}  (module {{ golden_amdgpu_src.stdout | trim }})
     ROCm          {{ golden_pkg['amdrocm-runtime-dev' ~ rocm_line_pin] | default('unknown') }} from the therock stream, line {{ rocm_line_pin }}
-    rdma-core     {{ golden_pkg['rdma-core'] | default('unknown') }} from the archive
+    rdma-core     {{ golden_rdma_local_version }} in /usr/local, with rocm-ernic's ionic provider: what the tools load
+                  {{ golden_pkg['rdma-core'] | default('unknown') }} from the archive, as a runtime only
     rocm-ernic    {{ ernic_source_pin }}
     rocm-sdxi     {{ sdxi_source_pin }}
+    perftest      {{ golden_perftest.commit }}  ({{ golden_perftest.ref }}, built with ROCm, in {{ golden_perftest.prefix }}/bin)
 
 `/etc/rocm-golden-guest.json` has the same facts, machine-readable.
 
@@ -120,10 +122,88 @@ The Ethernet sides come up as `rocm-ernic0`, `rocm-ernic1` and so on, and
 `rocm-ernic-netcfg.service` addresses each at boot from its own MAC. Resolve
 the IB device names from `ibv_devinfo -l` instead of assuming them.
 
+## Building against RDMA
+
+There are two rdma-cores here and one to build against. The archive's is a
+runtime under `/usr`: its udev rules and units, and the libraries the
+archive's own tools are linked to. The one in `/usr/local` is what
+`ibv_devinfo`, perftest and everything else loads, and it is the only one
+with headers and link libraries, so a build needs no flags:
+
+    gcc prog.c -libverbs                     # /usr/local, all the way
+    pkg-config --cflags --libs libibverbs    # -I/usr/local/include -L/usr/local/lib -libverbs
+
+**Do not `apt install libibverbs-dev`, `librdmacm-dev` or `libibumad-dev`.**
+They are left out on purpose. With them the compiler reads the headers in
+`/usr/local/include` and the linker takes the archive's library in
+`/usr/lib`, and the result either fails to link or silently loses what the
+newer library has. `/etc/rocm-golden-guest.json` records both versions.
+
+## RDMA with GPU memory
+
+`ib_send_bw` and the other perftest tools on PATH are built from source with
+ROCm memory support, from `{{ golden_perftest.ref }}` of
+{{ golden_perftest.repo }}. They live in `{{ golden_perftest.prefix }}/bin`,
+ahead of the archive's perftest, which is still in `/usr/bin` and has no
+`--use_rocm`. `/etc/perftest-rocm.json` records the build.
+
+    ib_write_bw --help | grep -E 'use_rocm|data_validation'
+
+`--use_rocm=0` puts the test buffer in the memory of GPU 0 and registers it
+with the RDMA device; `--data_validation` checks every byte that arrives.
+Validation is for `ib_write_bw` and `ib_read_bw` on an RC connection, with
+`-t` of at least 32 and the same on both sides. `ib_send_bw` lists the flag
+and refuses it. For a WRITE the server prints the verdict, for a READ the
+client, and the line to look for is `VALIDATION: PASSED`.
+
+    ib_write_bw -d DEV --use_rocm=0 --use_rocm_dmabuf --data_validation -t 128            # one VM
+    ib_write_bw -d DEV --use_rocm=0 --use_rocm_dmabuf --data_validation -t 128 PEER_IP    # the other
+
+{% if golden_perftest.device_code %}
+The check runs on the GPU by default, in a kernel built for
+{{ golden_perftest.rocm_arch }}. `PERFTEST_ROCM_VALIDATION=staged` copies the
+buffer back and compares it on the host after the run instead, and
+`PERFTEST_ROCM_VALIDATION_BLOCKS` and `PERFTEST_ROCM_VALIDATION_THREADS`
+shrink the kernel's launch.
+{% else %}
+This build has no GPU kernel, so the check copies the buffer back and
+compares it on the host after the run.
+{% endif %}
+
+Both need a VM with a NIC and a GPU, the GPU bound as above.
+`--use_rocm_dmabuf` registers the GPU buffer as a dma-buf. Without it, on
+the emulated devices this was measured on, the registration is refused in
+the guest before the NIC is asked (`Couldn't allocate MR with error=14`).
+
+Whether the transfer then works depends on the NIC being able to reach the
+GPU's memory. On emulated devices that is one vfio-user device addressing
+another's BAR, which stock QEMU does not pass on: there the buffer
+registers and the first work request fails with `remote access error`.
+`PERFTEST_ROCM_HOST_ALLOC=1`, with `--use_rocm` and without
+`--use_rocm_dmabuf`, allocates the buffer in host memory the GPU can
+address; a transfer that passes only with it set has a NIC that cannot
+reach VRAM and is otherwise sound.
+
 ## If the VM has SDXI engines
 
 `sdxi_char` loads at boot and `sdxi-cli` is on PATH. `sdxi_perf` is
 installed and blacklisted; load it by hand when you want it.
+
+The device's counters are exported to Prometheus: `sdxi-textfile-metrics.timer`
+reads them every 15 s and node_exporter serves them on `:9100` as `sdxi_up`
+and `sdxi_<counter>_total{context="N"}`, for example
+`sdxi_bytes_moved_total`. Context 0 is the driver's admin ring; everything
+you run is counted in context 1. They start again from zero when the SDXI
+server restarts. `sdxi-cli stats 1` prints the same numbers.
+
+Each reading takes the driver's lock for a moment, so an operation that
+arrives during one waits for it. To time something with nothing else
+touching the device:
+
+    sudo systemctl stop sdxi-textfile-metrics.timer     # until the next boot, or "start"
+
+The counters are not read through `sdxi_perf`: it is a second driver for the
+same device and cannot bind while `sdxi_char` has it.
 
 ## Things that will waste your time
 
