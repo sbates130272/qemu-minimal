@@ -54,11 +54,11 @@ PLAYBOOK_LANE = (WORKFLOWS
                  / "qemu-minimal-ansible-playbook-test-vm-rocm-golden.yml")
 PUBLISH_LANE = WORKFLOWS / "qemu-minimal-publish-qcow-rocm-golden.yml"
 COLLECTION = (Path.home() / ".ansible/collections/ansible_collections"
-              / "sbates130272/rocm_ernic")
+              / "rocm/ernic")
 
-GUEST_SETUP = "sbates130272.rocm_ernic.ernic_guest_setup"
-SRQ_DKMS = "sbates130272.rocm_ernic.ernic_srq_dkms"
-P4_DKMS = "sbates130272.rocm_ernic.ernic_p4_dkms"
+GUEST_SETUP = "rocm.ernic.ernic_guest_setup"
+SRQ_DKMS = "rocm.ernic.ernic_srq_dkms"
+P4_DKMS = "rocm.ernic.ernic_p4_dkms"
 CONFIGURE = "Configure the ernic NIC on a live guest"
 BAKE = "Build SRQ + P4 ionic stack into the guest"
 CHECK = {"name": "rocm_ernic_setup", "tasks_from": "driver_check"}
@@ -129,7 +129,7 @@ class Collection(unittest.TestCase):
 
     def setUp(self):
         _require((COLLECTION / "roles/ernic_guest_setup").is_dir(),
-                 "the rocm_ernic collection")
+                 "the rocm.ernic collection")
         self.role = COLLECTION / "roles/ernic_guest_setup"
 
     def _tasks(self, name: str) -> list[dict]:
@@ -199,6 +199,26 @@ class Collection(unittest.TestCase):
                     if t["name"] == "Load the guest kernel modules")
         self.assertEqual(load["community.general.modprobe"]["state"],
                          "present")
+
+    def test_the_bakes_rescue_names_tasks_the_role_still_has(self):
+        """The bake's first play runs the role with no device and tolerates
+        the two checks that need one, MATCHED BY TASK NAME. A check upstream
+        renamed would be re-raised and fail every bake, which is loud; one it
+        split or added is the same. What would be quiet is a name here that
+        matches nothing: dead weight that reads as a tolerated failure."""
+        text = PLAYBOOK.read_text()
+        listed = re.search(
+            r"ernic_hardware_checks:\n((?:\s+- '[^']+'\n)+)", text)
+        self.assertIsNotNone(listed, "no ernic_hardware_checks in the rescue")
+        wanted = re.findall(r"- '([^']+)'", listed.group(1))
+        self.assertEqual(len(wanted), 2)
+        names = [t["name"] for t in self._tasks("driver_common.yml")
+                 if "name" in t]
+        for fragment in wanted:
+            with self.subTest(check=fragment):
+                self.assertEqual(
+                    len([n for n in names if fragment in n]), 1,
+                    f"'{fragment}' names no one task of driver_common.yml")
 
     def test_the_srq_role_builds_the_same_package(self):
         """Which is why the bake's second build replaces its first, and why
@@ -1023,13 +1043,19 @@ class Script(unittest.TestCase):
     def test_the_markers_are_what_the_series_add(self):
         """The script's two markers, against the series the collection
         ships: a renamed function or a reworded warning would make every
-        guest fail, or worse, with a looser match, none."""
+        guest fail, or worse, with a looser match, none.
+
+        The series a bake applies are read out of the checkout at
+        ernic_source_pin, which is another commit than the collection's and
+        is not on a runner. The collection's copy stands in for it: it is
+        the same series for as long as no .patch differs between the two
+        commits, which is what a bump of either pin has to look at."""
         text = SCRIPT.read_text()
         symbol = re.search(r"^SRQ_SYMBOL=(\w+)$", text, re.M).group(1)
         string = re.search(r"^P4_STRING='([^']+)'$", text, re.M).group(1)
         self.assertEqual(string.encode(), P4_STRING.strip(b"\x00")[:len(string)])
         _require((COLLECTION / "files/patches").is_dir(),
-                 "the rocm_ernic collection")
+                 "the rocm.ernic collection")
         patches = COLLECTION / "files/patches"
         srq = "".join(p.read_text() for p in sorted((patches / "srq").glob("*.patch")))
         self.assertRegex(srq, rf"(?m)^\+int {symbol}\(")

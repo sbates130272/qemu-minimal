@@ -5,8 +5,8 @@
 #
 # Why this is a role and not the collection's configure play: a fleet boots
 # from a backing image through `qemu-tool compose` and runs no Ansible at all,
-# so the run-time configure stage of sbates130272.rocm_ernic.ernic_guest_setup
-# never happens. Anything a fleet guest needs has to be in the image, or be a
+# so the run-time configure stage of rocm.ernic.ernic_guest_setup never
+# happens. Anything a fleet guest needs has to be in the image, or be a
 # boot-time unit the image carries. vm-rocm-golden.yml applies this to the
 # image, one task file at a time.
 
@@ -133,13 +133,14 @@ rocm_ernic_setup_rdma_exporter_stamp: /usr/local/share/rdma_exporter.sha256
 rocm_ernic_setup_metrics_start: true
 
 # ── Image preparation ────────────────────────────
-# Everything the sbates130272.rocm_ernic collection stopped doing at 0.2.0,
+# Everything the rocm-ernic collection (rocm.ernic now) stopped doing at 0.2.0,
 # when ernic_image_prep was removed and the collection narrowed to "turn an
-# already-prepared guest into an RDMA node". Upstream's prepared guest is the
-# published `ionic` qcow2 from batesste-ci-images; this repo builds its own
+# already-prepared guest into an RDMA node". Upstream's prepared guest was the
+# published `ionic` qcow2 from batesste-ci-images, and is now an image
+# rocm-ernic builds itself (ci/images/guest/ there); this repo builds its own
 # guest with gen-vm, so this role is that image's provisioning expressed as
-# Ansible. Keep it aligned with ubuntu-qcow2-gen/{build-vm.sh,provision/ionic.sh}
-# and packages/ionic.txt in that repo.
+# Ansible. It was written against ubuntu-qcow2-gen/{build-vm.sh,
+# provision/ionic.sh} and packages/ionic.txt in batesste-ci-images.
 
 # ── Mainline kernel ──────────────────────────────
 # The reason this role exists. drivers/infiniband/hw/ionic merged for 6.18, so

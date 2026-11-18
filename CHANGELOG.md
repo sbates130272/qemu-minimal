@@ -143,6 +143,64 @@ All notable changes to this project will be documented in this file.
   removes snapd without purging it, so `vm-basic.yml` keeps its purge.
   Read from the two release tarballs; the first bake on it is the
   playbook-test run of the bump.
+- **The rocm-ernic Ansible collection is `rocm.ernic` now, and its pin no
+  longer has to be the commit the guest's driver is built from.** Upstream
+  renamed `sbates130272.rocm_ernic` to `rocm.ernic` and stopped publishing it
+  to Galaxy. `ansible/requirements.yml` installs it from upstream commit
+  `bd90234` (was `90434a2`); it lands under
+  `ansible_collections/rocm/ernic`, at 0.3.0, and every role reference,
+  test and the `Gen Compose Check` install step name it that way. A test
+  fails any tracked file but the two changelogs that still carries the old
+  name: on a host with the old collection installed, an un-renamed role
+  resolves to the old roles and says nothing.
+  - *Two pins where there was one.* The collection pin is the **roles**.
+    `ernic_source_pin` in `vm-rocm-golden.yml` is the **sources**: the
+    checkout the SRQ and P4 series, the scripts that fetch and build them,
+    the rdma-core provider series, the `ernic_p4` module and the P4 client
+    are read out of. The two were required to be one commit. Now
+    `ernic_source_pin` alone has to match the `ernic.<sha>` of every server
+    image, and `tests/test_playbook_pins.py` holds the playbook to handing
+    the SRQ, provider and P4 roles paths under that checkout, where it used
+    to compare the two commits.
+  - *Not moved:* `ernic_source_pin` stays at `90434a2`, and so does every
+    `<ernic-ref>` and `ERNIC_IMAGE` (`ernic.90434a2`). The image a bake
+    produces is built from the same sources against the same servers as
+    before, and records the same `ernic_source_pin`. No fleet file or
+    generated stack changes.
+  - *Why the collection could move alone:* between the two commits no
+    `.patch` file under the collection's `ansible/files/patches` differs,
+    `setup-ionic-dkms.sh` is identical, and the SRQ, provider and P4 roles
+    differ only in how they spell a fact (`ansible_facts['kernel']`).
+  - *What does change in a bake:* `ernic_source` clones the sources with git
+    commands of its own, blob-less and with no tags on the path a pinned
+    commit takes, and converts the clone an earlier bake left on the
+    controller; the first play's fetch of the ionic sources runs the newer
+    `fetch-ionic-sources.sh`, which asks whether the repository answers
+    before each fetch and, when a `git.kernel.org` repository never does,
+    goes on to `kernel.googlesource.com`. A bake reaches its GitHub mirror
+    through a git rewrite of the first URL only, so with that mirror down
+    the fetch now succeeds from Google; the bake's commit check fails it on
+    the origin, as a test now shows with the real script. The check also
+    removes a guest's tree it fails. The script's sentinel records the URL
+    it was given, not the host that answered, so that tree left in place
+    was one every rerun on the guest (`gen-vm --ansible-only`) would find
+    "already there", fetch nothing over and fail on again. A controller's
+    tree is not removed; the failure says to.
+  - Three variables the playbook passed to `ernic_p4_dkms`
+    (`ernic_p4_dkms_install`, `ernic_p4_dkms_reload`,
+    `ernic_p4_dkms_fetch_on_controller`) are gone: no role read them at
+    either commit. Every local workaround stays: the mirror rewrite, the
+    commit check, the guard on the controller's clone and the naming rules.
+  - The bake's compiler cache starts under a new key: its prefix hashes
+    `requirements.yml`. The first bake after this restores an earlier
+    entry through the fallback and saves once under the new prefix.
+  - Read from the two commits in a clone of upstream, and tested against
+    the collection installed from this pin. **No bake has run on the new
+    roles**; the first is the playbook-test run of this change. A host that
+    bakes by hand installs the collection on its next `gen-vm`; a bare
+    `ansible-playbook` run needs `ansible-galaxy collection install
+    --no-deps -r ansible/requirements.yml` first. The old collection's
+    directory is not removed by either.
 
 ### Fixed
 

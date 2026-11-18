@@ -36,6 +36,17 @@ class CollectionRow(unittest.TestCase):
         self.assertIn(f"sbates130272.batesste-{version}-",
                       _badge("Batesste Collection"))
 
+    def test_the_rocm_ernic_badge_is_the_commit_the_roles_are_installed_from(self):
+        """Not ernic_source_pin, which has a badge of its own in the golden
+        row: the two are different commits of rocm-ernic."""
+        requirements = (REPO_ROOT / "ansible" / "requirements.yml").read_text()
+        commit = re.search(
+            r"rocm-ernic\.git#/ansible/\s*\n\s+type: git\s*\n"
+            r"\s+version: ([0-9a-f]{40})\s", requirements).group(1)
+        badge = _badge("Rocm-ernic Collection")
+        self.assertIn(f"/badge/rocm.ernic-{commit[:7]}-", badge)
+        self.assertIn(f"/tree/{commit}/ansible", badge)
+
 
 class ImageRow(unittest.TestCase):
     def test_the_guest_badge_is_the_image_the_fleet_pulls(self):

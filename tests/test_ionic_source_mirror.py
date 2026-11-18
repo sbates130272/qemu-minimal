@@ -21,9 +21,11 @@ Five things are tested here:
   ansible-playbook on this host with a scratch file as git's system
   configuration;
   and, against the installed rocm-ernic collection, that the real fetch
-  script with no --repo does go where the rewrite sends it. That one uses a
-  local repository as the mirror and forbids git every other transport, so
-  it needs no network and cannot pass by reaching kernel.org.
+  script with no --repo does go where the rewrite sends it -- and that when
+  the mirror never answers and the script goes to another host on its own,
+  the commit check fails the tree. Those use local repositories and forbid
+  git every other transport, so they need no network and cannot pass by
+  reaching kernel.org.
 
 The last two need ansible-playbook and the collection. A host without them
 skips those tests; under CI=true they fail instead, because the one workflow
@@ -56,18 +58,22 @@ MIRROR_SCRIPT = ROLE / "files/ionic-source-mirror.sh"
 BASE_SCRIPT = ROLE / "files/ionic-source-base.sh"
 GUEST_CHECK = REPO / "qemu/checks/rocm-golden.sh"
 COLLECTION = (Path.home() / ".ansible/collections/ansible_collections"
-              / "sbates130272/rocm_ernic")
+              / "rocm/ernic")
 FETCH_SCRIPT = COLLECTION / "files/scripts/fetch-ionic-sources.sh"
 
-GUEST_SETUP = "sbates130272.rocm_ernic.ernic_guest_setup"
-SRQ_DKMS = "sbates130272.rocm_ernic.ernic_srq_dkms"
-P4_DKMS = "sbates130272.rocm_ernic.ernic_p4_dkms"
+GUEST_SETUP = "rocm.ernic.ernic_guest_setup"
+SRQ_DKMS = "rocm.ernic.ernic_srq_dkms"
+P4_DKMS = "rocm.ernic.ernic_p4_dkms"
 INSTALL = {"name": "rocm_ernic_setup", "tasks_from": "ionic_mirror"}
 REMOVE = {"name": "rocm_ernic_setup", "tasks_from": "ionic_mirror_remove"}
 CHECK = {"name": "rocm_ernic_setup", "tasks_from": "ionic_source_check"}
 
 UPSTREAM = "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git"
 MIRROR = "https://github.com/gregkh/linux.git"
+# Where the fetch script goes by itself when a git.kernel.org repository
+# never answers: the same path on Google's mirror, without the .git.
+SCRIPT_FALLBACK = (
+    "https://kernel.googlesource.com/pub/scm/linux/kernel/git/stable/linux")
 # What fetch-ionic-sources.sh commits its patches as.
 BUILD = ("rocm-ernic build", "rocm-ernic@localhost")
 # The three directories the script's sparse checkout names.
@@ -104,7 +110,7 @@ def _require(available: bool, what: str) -> None:
 
 def _require_collection() -> None:
     _require(FETCH_SCRIPT.is_file() and (COLLECTION / "roles").is_dir(),
-             "the rocm_ernic collection")
+             "the rocm.ernic collection")
 
 
 def _flatten(tasks):
@@ -130,9 +136,10 @@ def _play_tasks(play: dict) -> list[dict]:
 def _fetches(task: dict) -> bool:
     """Does this include of a role run fetch-ionic-sources.sh?
 
-    ernic_guest_setup runs it from driver_ionic.yml and nowhere else, and
-    reaches that file only with ernic_install_driver on, which is its
-    default. The configure stage turns it off on the include, because the
+    ernic_guest_setup runs it from driver_ionic.yml, or from
+    ionic_fetch_controller.yml which that file includes, and nowhere else;
+    it reaches driver_ionic.yml only with ernic_install_driver on, which is
+    its default. The configure stage turns it off on the include, because the
     build that follows the fetch replaces the baked SRQ + P4 driver;
     tests/test_configure_keeps_baked_driver.py holds that, and holds the
     gate against the installed collection.
@@ -286,7 +293,7 @@ class Playbook(unittest.TestCase):
         """Another role of the collection that ran the fetch script would
         escape everything below."""
         text = PLAYBOOK.read_text()
-        named = set(re.findall(r"sbates130272\.rocm_ernic\.(\w+)", text))
+        named = set(re.findall(r"rocm\.ernic\.(\w+)", text))
         self.assertEqual(named, {"ernic_source", "ernic_guest_setup",
                                  "ernic_srq_dkms", "ernic_srq_provider",
                                  "ernic_p4_dkms"})
@@ -391,6 +398,22 @@ class Playbook(unittest.TestCase):
                        line for line in path.read_text().splitlines()
                        if not line.lstrip().startswith("#"))]
         self.assertEqual(reached, ["driver.yml"])
+        # The role's other fetch, on the controller, hangs off the same
+        # file; stage_sources.yml names the script only to copy it.
+        code = {
+            path.name: "\n".join(
+                line for line in path.read_text().splitlines()
+                if not line.lstrip().startswith("#"))
+            for path in
+            (COLLECTION / "roles/ernic_guest_setup/tasks").glob("*.yml")}
+        self.assertEqual(
+            sorted(name for name, text in code.items()
+                   if re.search(r"bash .*/fetch-ionic-sources\.sh", text)),
+            ["driver_ionic.yml", "ionic_fetch_controller.yml"])
+        self.assertEqual(
+            [name for name, text in code.items()
+             if "ionic_fetch_controller.yml" in text],
+            ["driver_ionic.yml"])
 
     def test_no_other_playbook_runs_a_role_that_fetches(self):
         """Everything above reads vm-rocm-golden.yml. A second playbook that
@@ -515,6 +538,20 @@ class Playbook(unittest.TestCase):
             (roles / "ernic_guest_setup/defaults/main.yml").read_text())
         self.assertEqual(defaults["ernic_ionic_source_dir"],
                          "/var/tmp/ionic-src")
+        # The role can make that fetch on the controller instead and ship
+        # the tree to the guest. It has no --repo either, and nothing here
+        # rewrites the controller's git, so it would fetch from the script's
+        # default; the tree arrives with no .git, which the commit check
+        # refuses. Off by default, and no playbook turns it on.
+        controller = (roles / "ernic_guest_setup/tasks"
+                      / "ionic_fetch_controller.yml").read_text()
+        self.assertNotIn("--repo", controller)
+        self.assertIs(defaults["ernic_guest_ionic_fetch_on_controller"], False)
+        self.assertIn(
+            "when: not (ernic_guest_ionic_fetch_on_controller | bool)", guest)
+        for playbook in sorted(PLAYBOOKS.glob("*.yml")):
+            self.assertNotIn("ernic_guest_ionic_fetch_on_controller",
+                             playbook.read_text(), playbook.name)
         p4_defaults = yaml.safe_load(
             (roles / "ernic_p4_dkms/defaults/main.yml").read_text())
         self.assertEqual(p4_defaults["ernic_p4_dkms_source_dir"],
@@ -566,7 +603,8 @@ class Tasks(unittest.TestCase):
         self.assertIn("rc != 0", remove["failed_when"])
 
     def test_the_check_reads_the_tree_where_it_is_and_fails_on_the_verdict(self):
-        guard, guest, controller, verdict = self._tasks("ionic_source_check")
+        guard, guest, controller, discard, verdict = self._tasks(
+            "ionic_source_check")
         self.assertIn("ansible.builtin.assert", guard)
         self.assertEqual(
             guest["when"], "not (rocm_ernic_setup_ionic_on_controller | bool)")
@@ -618,6 +656,53 @@ class Tasks(unittest.TestCase):
         self.assertIn("rocm_ernic_setup_ionic_verdict", check["fail_msg"])
         for key in ("when", "ignore_errors", "failed_when"):
             self.assertNotIn(key, verdict)
+        # A failed tree goes before the play fails, and the message says
+        # which of the two happened.
+        self.assertEqual(discard["vars"], verdict["vars"])
+        self.assertEqual(discard["register"],
+                         "rocm_ernic_setup_ionic_discarded")
+        self.assertIn("rocm_ernic_setup_ionic_discarded is not skipped",
+                      check["fail_msg"])
+
+    def test_only_a_guests_failed_tree_is_removed(self):
+        """The removal is a delete as root, so everything that narrows it
+        is held: the guest only, the script's own FAIL line only, and the
+        directory the check was given and nothing derived from it."""
+        *_, discard, verdict = self._tasks("ionic_source_check")
+        self.assertEqual(discard["when"], [
+            "not (rocm_ernic_setup_ionic_on_controller | bool)",
+            "rocm_ernic_setup_ionic_verdict | length == 1",
+            "rocm_ernic_setup_ionic_verdict[0] is match('FAIL:')",
+            "rocm_ernic_setup_ionic_source_dir | trim is match('/[^/]+/[^/]')"])
+        self.assertEqual(discard["ansible.builtin.file"], {
+            "path": "{{ rocm_ernic_setup_ionic_source_dir | trim }}",
+            "state": "absent"})
+        self.assertIs(discard["become"], True)
+        for key in ("delegate_to", "ignore_errors", "failed_when"):
+            self.assertNotIn(key, discard)
+        # The path test, as Ansible applies it: anchored at the start.
+        deep = re.compile("/[^/]+/[^/]")
+        for path, removable in (("/var/tmp/ionic-src", True),
+                                ("/usr/src/ionic-ernic-p4", True),
+                                ("/", False), ("/var", False),
+                                ("/var/", False), ("//var", False)):
+            self.assertEqual(bool(deep.match(path)), removable, path)
+
+    def test_neither_guest_fetch_can_be_forced_so_the_sentinel_decides(self):
+        """Why the removal exists: with no --force a tree with a sentinel
+        in it is never fetched again, and the first play's role has no
+        switch for one at all."""
+        _require_collection()
+        guest = (COLLECTION / "roles/ernic_guest_setup/tasks"
+                 / "driver_ionic.yml").read_text()
+        self.assertNotIn("--force", guest)
+        script = FETCH_SCRIPT.read_text()
+        self.assertIn('if [ -f "${SENTINEL}" ] && ! ${FORCE}; then', script)
+        self.assertIn('rm -rf "${SOURCE_DIR}"', script)
+        p4, = [t for play in yaml.safe_load(PLAYBOOK.read_text())
+               for t in _flatten(_play_tasks(play))
+               if _include(t).get("name") == P4_DKMS]
+        self.assertIs(p4["vars"]["ernic_p4_dkms_force_fetch"], False)
 
     def test_the_scripts_are_plain_sh(self):
         for script in (MIRROR_SCRIPT, BASE_SCRIPT):
@@ -1095,6 +1180,45 @@ class RoleTasks(_Trees):
             out.index("FAILED!"),
             out.index("Take the ionic source mirror rewrite out of the guest"))
         self.assertFalse(self.system.exists(), out)
+        # And the tree went before it, so a rerun fetches.
+        self.assertIn(f"The tree that failed, {tree}, has been removed from "
+                      "the guest", failure)
+        self.assertFalse(tree.exists())
+
+    def test_a_guest_tree_from_another_host_is_removed_and_the_play_fails(self):
+        """What the collection's script leaves when the mirror never
+        answers: the pinned commit, patched, with its sentinel, from
+        kernel.googlesource.com. Left in the guest it is the tree every
+        later run finds and none fetches over."""
+        tree = self.tree("ionic-src", SCRIPT_FALLBACK)
+        (tree / ".patches-applied-v9.9.9-0123456789abcdef").touch()
+        other = self.tmp / "ionic-src-kept"
+        other.mkdir()
+        rc, out = self.play(self.guest_block(tree))
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn(
+            "TASK [rocm_ernic_setup : Remove ionic sources in the guest that "
+            "failed the check]", out)
+        failure = out[out.index("fatal: [localhost]: FAILED!"):]
+        self.assertIn(
+            f"FAIL: the origin of the ionic sources in {tree} is "
+            f"{SCRIPT_FALLBACK}, not the mirror {MIRROR}", failure)
+        self.assertIn(f"The tree that failed, {tree}, has been removed from "
+                      "the guest, so the next run fetches the sources again.",
+                      failure)
+        self.assertNotIn("is left as it is", failure)
+        self.assertFalse(tree.exists())
+        # That directory and nothing beside it.
+        self.assertTrue(other.is_dir())
+        self.assertTrue(self.upstream.is_dir())
+        self.assertFalse(self.system.exists(), out)
+
+    def test_a_guest_tree_that_passes_is_left_alone(self):
+        tree = self.tree("ionic-src", UPSTREAM)
+        rc, out = self.play(self.guest_block(tree))
+        self.assertEqual(rc, 0, out)
+        self.assertTrue((tree / ".git").is_dir())
+        self.assertNotIn("has been removed", out)
 
     def test_a_controller_tree_is_read_here_and_needs_its_origin_to_be_the_mirror(self):
         """ernic_srq_dkms is given the mirror with --repo: no rule, and the
@@ -1119,8 +1243,13 @@ class RoleTasks(_Trees):
                       f"is {UPSTREAM}, not the mirror {MIRROR}", failure)
         # Nothing was written to git's configuration on the way.
         self.assertFalse(self.system.exists())
-        # The guest's read was skipped both times, the controller's ran.
-        self.assertRegex(out, r"skipped=2\b")
+        # The controller's tree is not this play's to delete: it stays, and
+        # the message says so.
+        self.assertTrue((default / ".git").is_dir())
+        self.assertIn(f"{default} is left as it is", failure)
+        self.assertNotIn("has been removed", out)
+        # Skipped: the guest's read both times, and the removal both times.
+        self.assertRegex(out, r"skipped=4\b")
 
 
 class RealFetchScript(_Trees):
@@ -1184,6 +1313,65 @@ class RealFetchScript(_Trees):
         rc, verdict, _ = self.base(self.tree, mirror=f"file://{diverged}")
         self.assertEqual(rc, 1, verdict)
         self.assertIn(self.commit, verdict)
+
+    def test_a_mirror_that_never_answers_sends_the_script_elsewhere_and_fails_the_check(self):
+        """Given no --repo the script takes its default, a git.kernel.org
+        URL, to be mirrored at the same path on kernel.googlesource.com, and
+        goes there by itself once the first has failed to answer four times.
+        The bake's rewrite covers the first URL and not that one. So with
+        the mirror down the guest fetches from a host nobody named, cleanly,
+        and the commit may well be the pinned one: what fails the bake is
+        the origin, which the check compares with the mirror.
+
+        A second rewrite stands in for Google here, since git is allowed no
+        network; the mirror is a path with nothing at it; and the waits
+        between the script's attempts, seventy seconds in all, are skipped.
+        """
+        gone = f"file://{self.tmp}/no-such-mirror"
+        rc, _, err = self.run_script(MIRROR_SCRIPT, "install", gone, UPSTREAM)
+        self.assertEqual(rc, 0, err)
+        _git("config", "--system", "--add",
+             f"url.file://{self.upstream}.insteadOf", SCRIPT_FALLBACK,
+             env=self.env)
+        quick = self.tmp / "bin"
+        quick.mkdir()
+        (quick / "sleep").write_text("#!/bin/sh\nexit 0\n")
+        (quick / "sleep").chmod(0o755)
+        self.env = dict(self.env,
+                        PATH=f"{quick}{os.pathsep}{self.env['PATH']}")
+
+        rc, out = self.script()
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"{UPSTREAM} never answered", out)
+        self.assertIn(f"trying the mirror {SCRIPT_FALLBACK}", out)
+        self.assertIn("ionic sources ready", out)
+        self.assertEqual(
+            _git("config", "remote.origin.url", cwd=self.tree),
+            SCRIPT_FALLBACK)
+        # The right commit, from the wrong place.
+        rc, verdict, _ = self.base(self.tree, mirror=gone)
+        self.assertEqual(rc, 1, verdict)
+        self.assertIn("is not redirected", verdict)
+        self.assertIn(SCRIPT_FALLBACK, verdict)
+        # The sentinel names the URL the script was GIVEN, so a later run
+        # takes this tree for the one it would have fetched, mirror back up
+        # or not. Nothing but the check tells them apart.
+        self.assertIn("nothing to do", self.script()[1])
+        rc, verdict, _ = self.base(self.tree, mirror=gone)
+        self.assertEqual(rc, 1, verdict)
+        # Which is why ionic_source_check removes a guest's tree it fails
+        # (RoleTasks runs that). With the tree gone and the mirror back, the
+        # same command fetches again, from the mirror this time.
+        shutil.rmtree(self.tree)
+        rc, _, err = self.run_script(
+            MIRROR_SCRIPT, "install", self.mirror, UPSTREAM)
+        self.assertEqual(rc, 0, err)
+        rc, out = self.script()
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("nothing to do", out)
+        self.assertNotIn("trying the mirror", out)
+        rc, verdict, _ = self.base(self.tree, mirror=self.mirror)
+        self.assertEqual(rc, 0, verdict)
 
 
 # ── the lane that runs these tests ────────────────────────────────────────

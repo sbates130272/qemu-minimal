@@ -1,11 +1,20 @@
 ---
-# Run immediately before sbates130272.rocm_ernic.ernic_source, on the
-# controller. That role keeps a clone at ernic_source_clone_dir and updates
-# it with "git fetch --tags origin", which git refuses once upstream has
-# moved a tag the clone already holds -- and the bake dies there, after
-# everything that precedes it, over a tag it never reads. The script run
-# here takes the moved tag with a forced fetch, so the role's own fetch
-# then succeeds.
+# Run immediately before rocm.ernic.ernic_source, on the controller. That
+# role keeps a clone at ernic_source_clone_dir. It used to update it with
+# ansible.builtin.git, which runs "git fetch --tags origin", and git refuses
+# that once upstream has moved a tag the clone already holds -- so the bake
+# died there, after everything that precedes it, over a tag it never reads.
+# The script run here takes the moved tag with a forced fetch.
+#
+# The role now runs git itself. It fetches the commit it was given by name,
+# with --no-tags, and a moved tag cannot fail that. Only when that fetch
+# fails, for whatever reason, does it fetch every branch and tag, and that
+# fetch is still unforced: this is what the guard is kept for, and
+# tests/test_source_clone.py reads the installed role to say when it can go.
+#
+# The role also fails on a clone with local changes to tracked files, as
+# ansible.builtin.git did. That is left to fail: ernic_source_force_clone
+# would discard them, and nothing here sets it.
 #
 # Nothing is removed. The directory is shared by every bake and configure
 # run on this controller, and another run may be reading patches and scripts

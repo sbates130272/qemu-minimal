@@ -841,11 +841,16 @@ replace:
   that asks udev to *parse* `99-rocm-ernic.rules` and the only thing that
   reads `rocm_ernic_setup`'s wiring, and under `CI=true` those checks fail
   instead of skipping.
-- It installs the rocm-ernic collection first, for the same reason. Seven
-  tests in `tests/test_ionic_source_mirror.py` read the installed collection
+- It installs the rocm-ernic collection first, for the same reason. Tests
+  in `tests/test_ionic_source_mirror.py` read the installed collection
   (the fetch script's default repository, which roles run it, the variables
   they read, and the script itself against a local mirror) and skipped
-  without it, which in this lane was always. The step takes the one
+  without it, which in this lane was always; so do tests in
+  `test_configure_keeps_baked_driver.py`, `test_ernic_identity.py` and
+  `test_source_clone.py`. They look under
+  `~/.ansible/collections/ansible_collections/rocm/ernic`, where a default
+  `ansible-galaxy` install puts it; to run them against another install,
+  set `HOME` to a directory holding one. The step takes the one
   rocm-ernic entry out of `ansible/requirements.yml`, so the pin has no
   second copy, and installs it with `ansible-galaxy --no-deps`: a git clone
   from GitHub, nothing from Galaxy. Under `CI=true` those tests, and the
@@ -1520,7 +1525,7 @@ None of this is done by hand in this repo. Two pieces of automation own it:
   upstream hwdata carries the device, see the PCI ID section. Upstream assumes
   a guest already prepared this way; this repo builds its own, so it owns the
   preparation.
-- `sbates130272.rocm_ernic.ernic_guest_setup` from the collection builds and
+- `rocm.ernic.ernic_guest_setup` from the collection builds and
   installs the DKMS package, the rdma-core provider and the NIC config. Its
   DKMS package is `ionic-ernic` with the **base** patch series, and the bake
   runs it once, in the first play. The "Build SRQ + P4 ionic stack" play then
@@ -1528,6 +1533,72 @@ None of this is done by hand in this repo. Two pieces of automation own it:
   that build is the one the image keeps. The configure stage runs the role
   for the NIC config alone, with `ernic_install_driver: false`: see known
   issue 16.
+
+### Two pins of rocm-ernic: the roles and the sources
+
+Two commits of rocm-ernic reach a bake, and they are not required to be the
+same one. They were until 2026-11-17, when the collection moved alone.
+
+| Pin | Where | What it is | Moves with |
+|---|---|---|---|
+| the collection | `version:` of the rocm-ernic entry in `ansible/requirements.yml`, now `bd90234` | the **roles**: `rocm.ernic.*` task files and defaults, plus the base ionic series and the two scripts `ernic_guest_setup` stages from the collection's own `files/` | nothing; bump it when the role logic is wanted |
+| `ernic_source_pin` | top of `vm-rocm-golden.yml`, now `90434a2` | the **sources**: the checkout `ernic_source` makes on the controller, which the SRQ and P4 series, the scripts that fetch and build them, the rdma-core provider series, the `ernic_p4` module and the P4 client and headers are all read out of | the `ernic.<sha>` in every `<ernic-ref>` and `ERNIC_IMAGE`, and only with it |
+
+**The rule: `ernic_source_pin` is the device's guest half and moves with the
+server images; the collection pin is role logic and does not.** A guest
+built from sources ahead of its server fails quietly (`ibv_create_srq()`
+fails, UCX declines `rc_verbs`, traffic falls back to TCP), so
+`tests/test_playbook_pins.py` still requires `ernic_source_pin` to begin
+with every `ernic.<sha>` the fleet files and workflows name, with no waiver.
+What it no longer requires is that the collection be that commit. In its
+place: the collection pin is a 40-hex commit under `type: git` (`Pins`);
+every play that runs a `rocm.ernic` role checks the sources out at
+`ernic_source_pin`, and the playbook hands the SRQ, provider and P4 roles
+paths under `ernic_source_dir` (`ErnicSources`). That last part is the
+load-bearing one. The SRQ and provider roles default their scripts and
+series to the collection's own `files/`
+(`{{ role_path }}/../../files/...`), so an include that lost
+`ernic_srq_dkms_scripts_dir` or `ernic_srq_provider_patches_dir` would build
+that half from the collection's commit and say nothing.
+
+Why moving the collection alone was safe on 2026-11-17, checked between
+`90434a2` and `bd90234` in a clone of upstream:
+
+- **No `.patch` file differs** anywhere under `ansible/files/patches`. The
+  one file there that does is `srq/README.md`, a path in prose. So the base
+  series the collection supplies to the first play is the one the sources
+  have, and `setup-ionic-dkms.sh` is byte-identical too.
+- **The roles that drive the sources' scripts changed in spelling only.**
+  `ernic_srq_dkms`, `ernic_srq_provider` and `ernic_p4_dkms` differ in the
+  form of fact references (`ansible_facts['kernel']` for `ansible_kernel`)
+  and an author field, so they pass the scripts at `90434a2` the flags those
+  scripts take. Every play that runs them gathers facts.
+- **Every variable this repo sets is still read**, and the three paths the
+  roles read out of the checkout (`udev/99-rocm-ernic.rules`,
+  `scripts/find-rdma-device.sh`, `cmake/ErnicKernelModule.cmake`) exist at
+  the older commit. `tests/test_source_clone.py` pins that list against the
+  installed collection: a role that starts reading a fourth path needs it to
+  exist at `ernic_source_pin`.
+- **A mismatch between the two that matters fails loudly.**
+  `ernic_srq_provider` takes the rdma-core base commit from its own defaults
+  (the collection) and asserts it against the `README.md` beside the series
+  it was given (the sources); the two agree today, on `bd3282a`.
+
+What did change, and is from the collection's commit: `fetch-ionic-sources.sh`
+for the first play's fetch (see "Where the ionic kernel sources come from")
+and `ernic_source`'s clone (see "The controller's rocm-ernic clone"). The SRQ
+and P4 fetches still run the script from the checkout, the older one.
+
+**On every bump of either pin, compare `ansible/roles` and `ansible/files`
+between the two commits.** The split holds only while the newer roles still
+drive the older scripts and series the way those expect. Moving
+`ernic_source_pin` is the bigger change: it needs server images at that
+commit (stock and fork), the three `<ernic-ref>`s and the `ERNIC_IMAGE`
+lines, and a live boot. **This host is the one place the rename can pass by
+accident**: a role still named the old way resolves here for as long as the
+old collection is installed, to the old roles, with no error.
+`CollectionName` in `tests/test_playbook_pins.py` fails any tracked file but
+`CHANGELOG.md` and `qemu/debian/changelog` that carries the old name.
 
 The kernel ref is `ionic_kernel_pin`, defined once at the top of
 [`vm-rocm-golden.yml`](ansible/playbooks/vm-rocm-golden.yml) and currently
@@ -1594,7 +1665,7 @@ repo's both reported changed, and the third on the boot with no device:
 | Where | What |
 |---|---|
 | the bake | `rocm_ernic_setup`'s `naming_check` tasks, included by the play that records the bake, after every play that could have written the file. They run the install's own `copy` with `check_mode: true` and fail if it would change anything. The idiom was run on the dev host against two scratch files: it passes on this repo's rules, fails on rocm-ernic's, and leaves the file as it was |
-| `--tags configure` | `sbates130272.rocm_ernic.ernic_guest_setup` copies rocm-ernic's rules over the image's whenever its driver path runs (`driver_common.yml`, "Copy the rocm-ernic udev rules"), with no variable of its own to stop it. The configure play now turns that whole path off (`ernic_install_driver: false`, known issue 16), so the copy no longer happens there; the `always` section of the block that runs the role still installs this repo's file, for the caller who turns the path back on with `-e`. In a bake the role never gets that far: it fails at its `lspci` check, which the play's rescue expects, 40 lines earlier |
+| `--tags configure` | `rocm.ernic.ernic_guest_setup` copies rocm-ernic's rules over the image's whenever its driver path runs (`driver_common.yml`, "Copy the rocm-ernic udev rules"), with no variable of its own to stop it. The configure play now turns that whole path off (`ernic_install_driver: false`, known issue 16), so the copy no longer happens there; the `always` section of the block that runs the role still installs this repo's file, for the caller who turns the path back on with `-e`. In a bake the role never gets that far: it fails at its `lspci` check, which the play's rescue expects, 40 lines earlier |
 | the booted guest | `qemu/checks/rocm-golden.sh` reads the installed file between its `ernic naming rules` markers: no `rocm-ernic%n`, no free-index `while`, `NAME="%c"`, and one walk of the PCI devices in each stanza. The playbook-test lane runs the whole check before its configure stage and those lines again after it |
 
 `tests/test_ernic_identity.py` fails a playbook that sets
@@ -1959,9 +2030,12 @@ state on a real guest.
 See `rocm-ernic-enablement.md` for the full tracking list. Short version:
 
 1. Worker `server_ip` ARP hijack when VM IP = `192.168.100.1` — use `.11`/`.12`
-2. Collection 0.2.0 is not on Galaxy — only 0.1.0 is published, and 0.1.0 is
-   the pre-ionic collection. `requirements.yml` pins the upstream git SHA
-   instead; move back to a Galaxy version pin once 0.2.0 ships there
+2. The collection is not on Galaxy and will not be — upstream renamed it
+   `rocm.ernic` (0.3.0) and stopped publishing; what Galaxy still has is
+   0.1.0 under the old name, the pre-ionic collection. `requirements.yml`
+   pins an upstream git SHA. Upstream means to attach a built collection to
+   a GitHub release tagged `ernic-ansible-v<version>`; no such tag exists
+   yet, so there is nothing but a commit to pin
 3. **Killing perftest mid-run breaks VM device context** — killing `ib_send_bw`
    or any perftest process mid-operation (SIGTERM/SIGKILL) leaves the guest
    RDMA driver in a broken state. `ibv_devinfo` reports "Failed to open device"
@@ -1992,12 +2066,14 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
    ssh -p 2222 local-vm "ib_send_bw -d rocm-rdma-ernic0 192.168.100.12"
    ```
 
-6. **`ernic_source_repo_version` defaults to `main`** — so `ernic_source` clones
-   upstream HEAD inside the guest even when `requirements.yml` installs the
-   collection from a fixed SHA, and the roles can end up building sources from
-   a different tree than they came from. Pinned locally in
-   [`vm-rocm-golden.yml`](ansible/playbooks/vm-rocm-golden.yml) as `ernic_source_pin`;
-   the default is still upstream's.
+6. **Pinning the collection does not pin the sources** — `ernic_source`
+   clones rocm-ernic again on the controller, at `ernic_source_repo_version`,
+   which has no default: the role fails when it is unset. Every play that
+   runs a `rocm.ernic` role sets it to
+   `ernic_source_pin`, in
+   [`vm-rocm-golden.yml`](ansible/playbooks/vm-rocm-golden.yml). That is on
+   purpose a different commit from the collection's; see "Two pins of
+   rocm-ernic".
 7. **`ernic_nic_subnet` is now a role default upstream** (rocm-ernic@1484557),
    but it still has to be repeated at play-var level in `vm-rocm-golden.yml`'s
    configure play because role defaults are not in scope when play vars are
@@ -2279,15 +2355,20 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     **Three things must come from one tree, and "both halves" undercounted
     them.** The kernel half is `ionic-ernic` with `patches/srq` and
     `patches/p4`; the provider half is `patches/rdma-core`, installed under
-    `/usr/local`; and the device half lives in the ernic server container. So
-    the collection SHA, `ernic_source_pin` and the `ernic.<sha>` in
-    `<ernic-ref>` move together. `ernic_p4` hangs off the first: it is built
+    `/usr/local`; and the device half lives in the ernic server container. The
+    first two are built from the checkout at `ernic_source_pin`, so that pin
+    and the `ernic.<sha>` in `<ernic-ref>` move together. The collection SHA
+    is not one of the three: it is the roles that run those builds, and moved
+    alone on 2026-11-17 (see "Two pins of rocm-ernic"). `ernic_p4` hangs off
+    the first: it is built
     against that ionic and the kernel compares symbol versions when it loads
     (`CONFIG_MODVERSIONS=y`, read from the `.config` in the 7.2.6-070206
     mainline headers `.deb`, as is `CONFIG_MODULE_SRCVERSION_ALL=y` below).
 
     **The configure stage replaced the baked kernel half on every run, until
-    2026-11-17, and nothing said so.** Read from the collection at `90434a2`:
+    2026-11-17, and nothing said so.** Read from the collection at `90434a2`,
+    and all of it still so at `bd90234`, where
+    `tests/test_configure_keeps_baked_driver.py` now reads it:
 
     - `ernic_guest_setup`'s `main.yml` includes `driver.yml` when
       `ernic_install_driver` is set, which is its default, and `driver.yml`
@@ -2986,9 +3067,10 @@ token anywhere in the repo.
 
 ## The controller's rocm-ernic clone
 
-`sbates130272.rocm_ernic.ernic_source` keeps a clone on the **controller** at
-`ernic_source_clone_dir` (default `/var/tmp/rocm-ernic-src`) and updates it
-with `ansible.builtin.git`, which runs `git fetch --tags origin`. Upstream
+`rocm.ernic.ernic_source` keeps a clone on the **controller** at
+`ernic_source_clone_dir` (default `/var/tmp/rocm-ernic-src`). Until the
+collection moved to `bd90234` it updated that clone with
+`ansible.builtin.git`, which runs `git fetch --tags origin`. Upstream
 moves tags — its `nightly` did — and git then refuses:
 
 ```
@@ -2996,7 +3078,42 @@ moves tags — its `nightly` did — and git then refuses:
 ```
 
 That killed a bake after 118 tasks, over a tag the bake never reads: it
-checks out `ernic_source_pin`. So `rocm_ernic_setup`'s `source_clone` tasks
+checks out `ernic_source_pin`.
+
+**The role runs git itself now, and the guard is kept for its fallback.**
+Read from the role at `bd90234`, not run: an experiment against scratch
+repositories was not possible in the session that made the bump.
+
+| Step | What the role does | A moved tag |
+|---|---|---|
+| main path | `git fetch --no-tags --filter=blob:none origin -- <version>`, then a detached checkout of what it fetched | cannot fail it: no tag is fetched. A bake takes this path, since `ernic_source_pin` is a full commit id and GitHub serves a reachable commit by id |
+| fallback | when that fetch fails for any reason, with its error discarded: `git fetch --tags --filter=blob:none origin '+refs/heads/*:refs/remotes/origin/*'`, then resolve the version locally | fails it, as before: the tags are fetched unforced |
+
+So the guard is redundant on the path a bake takes and still needed on the
+other, which is reached on an abbreviated version, on a remote that will not
+serve a commit by id, and on a failure of the first fetch that the second
+survives. `Role` in `tests/test_source_clone.py` reads the installed
+collection and fails when the fallback stops being an unforced fetch of
+every tag, which is the day the guard, its script and that file can go.
+
+Three more things about the new clone:
+
+- **It is blob-less, and an existing clone is converted.** The first run
+  against the full clone an earlier bake left records a `blob:none` filter
+  for `origin` and makes it a partial clone; the checkout stays where it
+  was. The guard's own `git fetch --tags origin` names no filter and takes
+  the recorded one. `/var/tmp/rocm-ernic-src` on this host had not been
+  converted when the bump was made.
+- **It checks out `ernic_source_pin`, not the collection's commit**, so the
+  shared clone does not move under another worktree's bake.
+- **A clone with local changes to tracked files fails the role**, unless
+  `ernic_source_force_clone` is set, which discards them. That is not new:
+  `ansible.builtin.git` failed the same clone with "Local modifications
+  exist". Nothing in this repo sets the variable, and the same test fails a
+  playbook or role that does. The answer to that failure is to look at the
+  changes, not to force.
+
+So `rocm_ernic_setup`'s `source_clone` tasks
 run immediately before every include of `ernic_source` in
 `vm-rocm-golden.yml` — the first play, the SRQ + P4 play, and as a `pre_task`
 of the configure play, whose `ernic_guest_setup` includes the role itself
@@ -3027,9 +3144,10 @@ name as an upstream one.
 **A timeout is `offline` whatever the probe says.** A remote slow enough to
 run out the 300 s fetch can still answer a 60 s `ls-remote`, and that is a
 slow network, not a fault in the clone. `offline` and `broken` differ only in
-what the line tells the reader; neither changes anything on disk, and in
-both the clone may already be at the pinned commit, which
-`ansible.builtin.git` checks out without fetching. Corruption that
+what the line tells the reader; neither changes anything on disk. The role
+then makes its own fetch and fails if that fails too, a clone already at the
+pinned commit included: it fetches before it looks at what the clone holds,
+as `ansible.builtin.git` did. Corruption that
 `git fetch` does not trip over is not detected at all; neither does the
 role's own fetch.
 
@@ -3070,19 +3188,53 @@ line, `500df175a7f9e6bc1a9c328590ca5150f84f9ff0`, the same from all three
 that day. A tree patched on anything else fails the bake, naming both commits
 and the repository.
 
-| Fetch | Runs | Reaches the mirror by | Tree checked |
-|---|---|---|---|
-| `ernic_guest_setup`, first play | guest, root | `url.*.insteadOf` rule | `/var/tmp/ionic-src` |
-| `ernic_srq_dkms` | **controller** | `--repo`, via `ernic_srq_dkms_sources` | `/tmp/ionic-srq-src-controller/<ref>` |
-| `ernic_p4_dkms` | guest, root | `--repo`, via `ernic_p4_dkms_kernel_repo` | `/usr/src/ionic-ernic-p4` |
+| Fetch | Runs | Script from | Reaches the mirror by | Tree checked |
+|---|---|---|---|---|
+| `ernic_guest_setup`, first play | guest, root | the collection (`bd90234`) | `url.*.insteadOf` rule | `/var/tmp/ionic-src` |
+| `ernic_srq_dkms` | **controller** | the checkout at `ernic_source_pin` | `--repo`, via `ernic_srq_dkms_sources` | `/tmp/ionic-srq-src-controller/<ref>` |
+| `ernic_p4_dkms` | guest, root | the checkout at `ernic_source_pin` | `--repo`, via `ernic_p4_dkms_kernel_repo` | `/usr/src/ionic-ernic-p4` |
 
 The configure stage was a fourth row, the same fetch as the first. It builds
 no driver now (known issue 16), so it runs the role with the driver path off
 and fetches nothing.
 
-`ernic_p4_dkms` fetches in the guest whatever the
-`ernic_p4_dkms_fetch_on_controller: true` beside it suggests; the role has no
-such variable, and until this change that fetch used the script's default.
+`ernic_p4_dkms` fetches in the guest and has no switch for anything else.
+The playbook used to pass it `ernic_p4_dkms_fetch_on_controller: true`,
+with `ernic_p4_dkms_install` and `ernic_p4_dkms_reload`; no role read any of
+the three at `90434a2` or at `bd90234`, and they are gone.
+`ernic_p4_dkms_kernel_repo` is the control that is real.
+
+**The collection's script has a second host of its own now, and only the
+first play's fetch runs that script.** Since `bd90234` it asks whether the
+repository answers before each fetch (`git ls-remote`, 30 s), and a
+`git.kernel.org` repository that has not answered in four tries (up to
+about three minutes, where an unreachable host used to cost thirteen) is
+followed by the
+same path on `kernel.googlesource.com`, with `origin` repointed there. That
+list is built from the URL the script was *given*, so:
+
+- under the rewrite, the first play's fetch probes and fetches the mirror
+  as before (the probe's URL is rewritten like any other);
+- **with the mirror down, that fetch succeeds from Google**, which the
+  rewrite does not cover and nobody chose. The sentinel is the one a fetch
+  from the mirror leaves, so a later run says `nothing to do`.
+  `ionic_source_check` fails it on the origin, and the bake with it. That is
+  deliberate: a loud failure is what choosing one mirror means. The check
+  removes the tree before it fails (see "The check" below), or a rerun on
+  that guest would find the sentinel, fetch nothing and fail the same way
+  with the mirror long back. `test_a_mirror_that_never_answers_...` in
+  `tests/test_ionic_source_mirror.py` runs the real script through exactly
+  this, with local repositories standing in for both hosts;
+- a fetch given `--repo`, which is the other two, has no second host, and
+  those two run the older script anyway.
+
+The role also has `ernic_guest_ionic_fetch_on_controller` now, off by
+default: the controller fetches and ships the tree to the guest without its
+`.git`. It takes no repository either, and nothing rewrites the controller's
+git, so turned on it would fetch from kernel.org, and the commit check would
+then refuse a tree with no `.git`. No playbook sets it and a test fails one
+that does. Adopting it in place of the rewrite is an open question, not
+something to do in passing: it has not run in a bake.
 
 **The rewrite.** `ernic_guest_setup` runs the script with no `--repo` and no
 variable for one, so `rocm_ernic_setup`'s `ionic_mirror` tasks write
@@ -3128,6 +3280,24 @@ as well, as git resolves it, so a role that stopped passing the repository
 on fails instead of fetching from kernel.org; the guest check therefore sits
 inside the block, while the rule is installed. It runs after the role, so a
 wrong tree has been built by then; the bake fails and nothing is published.
+
+**A guest's tree that fails the check is removed; a controller's is not.**
+The script names its sentinel after the ref, the series and the repository
+it was *given*, and neither guest fetch is run with `--force`
+(`ernic_guest_setup` has no switch for it; `ernic_p4_dkms_force_fetch` is
+false). So a failed tree left in the guest is the tree
+`gen-vm --ansible-only` finds "already there": it fetches nothing and fails
+the check again, whatever was put right in between. The removal runs only
+on the script's own `FAIL:` line, never when the script printed no verdict,
+and deletes the directory the check was told to read, which is the script's
+`--source-dir` and which the script itself deletes whenever it fetches. The
+rerun then fetches again, and `setup-ionic-dkms.sh` removes and rebuilds the
+DKMS package from what it fetched, so the driver built from the failed tree
+does not survive it either. The controller's tree under
+`/tmp/ionic-srq-src-controller` stays, because it is on the host running
+the bake, where another run may be reading it; the failure names it and
+says to remove it. Run by Ansible against scratch
+trees in `tests/test_ionic_source_mirror.py` (`RoleTasks`), not on a guest.
 
 **A pin bump moves `ionic_kernel_pin` and, on the next line,
 `ionic_kernel_pin_commit` and the `# <tag>^{}` comment that ends it.** The

@@ -11,6 +11,17 @@
 # finds "already there", and the other way about: nothing is fetched twice
 # for the rule's sake.
 #
+# The rule covers that one URL. The script now asks whether a repository
+# answers before each fetch (git ls-remote, 30 s), and when a git.kernel.org
+# repository has not answered in four tries, some three minutes, it goes on
+# by itself to the same path on kernel.googlesource.com, which nothing here
+# rewrites. So with the mirror down the guest's fetch succeeds, from a host
+# this repository did not choose, and leaves the sentinel a fetch from the
+# mirror would have left. ionic_source_check.yml is what fails it: it
+# compares the origin with the mirror, and removes the tree, which the next
+# run would otherwise find by that sentinel and not fetch again. A fetch
+# given --repo has no such second host.
+#
 # System scope, because the fetch runs as root under become and /etc/gitconfig
 # is read whichever user runs git. files/ionic-source-mirror.sh says what is
 # written. Nothing here is for the controller: a fetch there is given the

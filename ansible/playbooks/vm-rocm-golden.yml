@@ -62,8 +62,10 @@
     # Mainline kernel ref. drivers/infiniband/hw/ionic merged for 6.18 and
     # ib_umem_get_va landed after 7.0, so no Ubuntu release ships a kernel
     # that can build ionic_rdma. Must stay within a point release of
-    # IONIC_KERNEL_REF in the collection's cmake/ErnicKernelModule.cmake:
-    # driver_ionic.yml compares major.minor and fails the build otherwise.
+    # IONIC_KERNEL_REF in rocm-ernic's cmake/ErnicKernelModule.cmake, at
+    # ernic_source_pin: the series there are written against that kernel,
+    # and driver_ionic.yml fails the build when the guest's kernel and the
+    # ref it is given disagree on major.minor.
     ionic_kernel_pin: &ionic_kernel_pin v7.2.6
     # The commit that tag peels to, and the other half of the pin: what
     #   git ls-remote <the stable tree> 'refs/tags/v7.2.6^{}'
@@ -83,10 +85,22 @@
     # where a role takes one and through a url.*.insteadOf rule in the guest
     # where the role takes none.
     ionic_kernel_mirror: &ionic_kernel_mirror https://github.com/gregkh/linux.git
-    # Commit ernic_source checks out. The role defaults to "main", which would
-    # clone upstream HEAD while requirements.yml installs the collection from
-    # a fixed SHA. Keep this equal to the version: field in
-    # ansible/requirements.yml and bump both together.
+    # The commit of rocm-ernic the guest's half of the device is BUILT FROM:
+    # ernic_source checks it out on the controller (the role has no default
+    # for it), and the SRQ and P4 series, the scripts that fetch and build
+    # them, the rdma-core provider series, the ernic_p4 module and the P4
+    # client all come out of that checkout. The other half is the device
+    # server, so this moves with the ernic.<sha> in every <ernic-ref> and
+    # ERNIC_IMAGE, and only with it; tests/test_playbook_pins.py fails when
+    # they differ.
+    #
+    # It is NOT the collection pin. The version: field of the rocm-ernic
+    # entry in ansible/requirements.yml is the commit the ROLES are installed
+    # from, and may be ahead of this one: the roles are told where the
+    # scripts and series are, and take them from this checkout. What the
+    # collection supplies itself is the base series and the two scripts
+    # ernic_guest_setup stages for the first play's build, which the SRQ + P4
+    # play then replaces.
     ernic_source_pin: &ernic_source_pin 90434a237232275fc8002cb3a6b5121ba836c594
     # No GPU passthrough: the GDA patches are neither wanted nor usable.
     ernic_gpu_passthrough: false
@@ -130,9 +144,11 @@
         bake_ccache_controller_dir: "{{ bake_cache_dir }}"
       when: bake_cache_dir | default('') | length > 0
 
-    # ernic_source fetches tags into a clone it keeps on the controller, and
-    # git refuses a tag upstream has moved. The bake reads no tag, so a clone
-    # that can no longer be fetched into is removed and cloned afresh.
+    # ernic_source keeps a clone on the controller. It fetches the pinned
+    # commit by name, with no tags, and only when that fails does it fetch
+    # every branch and tag -- unforced, which git refuses once upstream has
+    # moved a tag the clone holds. The bake reads no tag, so the moved tag is
+    # taken here with a forced fetch first. Nothing is removed.
     - name: Take a tag upstream moved into the controller's rocm-ernic clone
       ansible.builtin.include_role:
         name: rocm_ernic_setup
@@ -142,7 +158,7 @@
     # reshaped source tree would be swallowed and reported as success.
     - name: Resolve the rocm-ernic source checkout
       ansible.builtin.include_role:
-        name: sbates130272.rocm_ernic.ernic_source
+        name: rocm.ernic.ernic_source
 
     # Builds the ionic-ernic DKMS package and the rdma-core provider into the
     # image. The role ends with checks that need the NIC, which is not there
@@ -165,7 +181,7 @@
           block:
             - name: Build the ionic modules and the rdma-core provider
               ansible.builtin.include_role:
-                name: sbates130272.rocm_ernic.ernic_guest_setup
+                name: rocm.ernic.ernic_guest_setup
               vars:
                 ernic_configure_nic: false
                 ernic_guest_preflight_device: false
@@ -327,10 +343,13 @@
 #
 # WHERE THE SERIES COME FROM
 #
-# Both patch series live in rocm-ernic -- patches/srq for the kernel half,
-# patches/rdma-core for the provider, patches/p4 for ernic_p4 -- reached
-# through the collection pin in ansible/requirements.yml plus the matching
-# source pin at the top of this file. Nothing is vendored here.
+# All three patch series live in rocm-ernic -- patches/srq for the kernel
+# half, patches/rdma-core for the provider, patches/p4 for ernic_p4 -- and
+# are read out of the checkout at ernic_source_pin, at the top of this file,
+# as are the scripts that fetch and build them. The roles that drive those
+# scripts come from the collection pin in ansible/requirements.yml, which is
+# another commit; every path handed to them below is under ernic_source_dir
+# for that reason. Nothing is vendored here.
 - name: Build SRQ + P4 ionic stack into the guest
   hosts: all
   gather_facts: true
@@ -387,7 +406,7 @@
 
     - name: Resolve the rocm-ernic source checkout on the controller
       ansible.builtin.include_role:
-        name: sbates130272.rocm_ernic.ernic_source
+        name: rocm.ernic.ernic_source
 
     # ernic_srq_dkms takes one --patches-dir, but we need base+SRQ+P4 in a
     # single tree. Stage a combined directory: copy srq/0001-0009 (which is
@@ -426,7 +445,7 @@
 
     - name: Build and install ionic with SRQ + P4 patches
       ansible.builtin.include_role:
-        name: sbates130272.rocm_ernic.ernic_srq_dkms
+        name: rocm.ernic.ernic_srq_dkms
       vars:
         ernic_srq_dkms_install: true
         ernic_srq_dkms_reload: false
@@ -519,7 +538,7 @@
 
     - name: Build and install the SRQ-capable ionic provider
       ansible.builtin.include_role:
-        name: sbates130272.rocm_ernic.ernic_srq_provider
+        name: rocm.ernic.ernic_srq_provider
       vars:
         ernic_srq_provider_prefix: "{{ ionic_srqp4_provider_prefix }}"
         ernic_srq_provider_source_dir: "{{ ionic_srqp4_provider_src }}"
@@ -574,18 +593,16 @@
 
     - name: Build and install ernic_p4.ko
       ansible.builtin.include_role:
-        name: sbates130272.rocm_ernic.ernic_p4_dkms
+        name: rocm.ernic.ernic_p4_dkms
       vars:
-        ernic_p4_dkms_install: true
-        ernic_p4_dkms_reload: false
+        # The role always installs, and has no switch for a fetch on the
+        # controller: ernic_p4_dkms_load is its one switch over the module.
         ernic_p4_dkms_load: false
-        ernic_p4_dkms_fetch_on_controller: true
         ernic_p4_dkms_force_fetch: false
         ernic_p4_dkms_module_dir: "{{ ionic_p4_guest_module_dir }}"
         ernic_p4_dkms_kernel_ref: "{{ ionic_kernel_pin }}"
-        # This role fetches the ionic sources a second time, IN THE GUEST,
-        # whatever ernic_p4_dkms_fetch_on_controller above suggests: it has
-        # no such switch. Left empty, the repository is the script's default.
+        # This role fetches the ionic sources a second time, IN THE GUEST.
+        # Left empty, the repository is the script's default.
         ernic_p4_dkms_kernel_repo: "{{ ionic_kernel_mirror }}"
         ernic_p4_dkms_source_dir: "{{ ionic_p4_guest_ionic_dir }}"
         ernic_p4_dkms_scripts_dir: "{{ ionic_p4_guest_scripts_dir }}"
@@ -1121,7 +1138,7 @@
       block:
         - name: Configure the NIC, building no driver
           ansible.builtin.include_role:
-            name: sbates130272.rocm_ernic.ernic_guest_setup
+            name: rocm.ernic.ernic_guest_setup
           vars:
             ernic_install_driver: false
       always:

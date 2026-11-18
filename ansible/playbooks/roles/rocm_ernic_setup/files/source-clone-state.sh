@@ -3,10 +3,15 @@
 #
 #   source-clone-state.sh DIR
 #
-# ernic_source updates the clone with ansible.builtin.git, which runs
-# "git fetch --tags origin". Upstream moves tags, and git refuses a moved tag
-# ("would clobber existing tag"), which fails the role an hour into a bake
-# over a tag the bake never reads: it checks out a pinned commit.
+# ernic_source fetches the pinned commit by name and, when that fails,
+# every branch and tag, unforced; it used to run ansible.builtin.git, which
+# fetched every tag on every run. Upstream moves tags, and git refuses a
+# moved tag ("would clobber existing tag"), which fails the role an hour
+# into a bake over a tag the bake never reads: it checks out a pinned
+# commit.
+#
+# The fetch here names no filter. In a clone the role has made or converted
+# to a blob-less one, git applies the filter recorded for origin.
 #
 # Nothing is deleted, here or in tasks/source_clone.yml: the directory is
 # shared by every bake and configure run on the controller, and one of them

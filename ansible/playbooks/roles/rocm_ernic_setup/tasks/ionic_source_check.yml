@@ -21,6 +21,19 @@
 #
 # It also runs when the script found its sentinel and fetched nothing. That
 # is deliberate: what is compared is the tree the build is about to use.
+#
+# A guest's tree that fails is removed before the play fails. The script
+# names its sentinel after the ref, the series and the repository it was
+# GIVEN, not where the fetch went or what came, and neither guest fetch is
+# run with --force. So a failed tree left in place is the tree the next run
+# finds "already there": that run fetches nothing and fails here again,
+# whatever has been put right since. The case that needs it is the one
+# ionic_mirror.yml describes, the mirror down and the collection's script
+# fetching from kernel.googlesource.com instead. The directory is the
+# script's --source-dir, which the script itself deletes whenever it does
+# fetch. A controller's tree is left where it is: that directory is on the
+# host running the bake, where another run may be reading it, and the
+# message says what to do.
 
 - name: Assert the ionic source check was told what to expect
   ansible.builtin.assert:
@@ -67,10 +80,9 @@
   changed_when: false
   failed_when: false
 
-# The script's own line is the message: it names the commit found, the
-# commit expected and the repository.
-- name: Fail when the ionic sources are not the pinned commit
-  vars:
+# One set of variables for the two tasks that act on the verdict.
+- name: Remove ionic sources in the guest that failed the check
+  vars: &rocm_ernic_setup_ionic_verdict_vars
     rocm_ernic_setup_ionic_base: >-
       {{ rocm_ernic_setup_ionic_base_controller
          if rocm_ernic_setup_ionic_on_controller | bool
@@ -78,6 +90,23 @@
     rocm_ernic_setup_ionic_verdict: >-
       {{ rocm_ernic_setup_ionic_base.stdout_lines | default([])
          | map('trim') | select('match', '(ok|FAIL): ') | list }}
+  # Only on the script's own FAIL line, so a script that never ran removes
+  # nothing, and only a path of at least two components.
+  when:
+    - not (rocm_ernic_setup_ionic_on_controller | bool)
+    - rocm_ernic_setup_ionic_verdict | length == 1
+    - rocm_ernic_setup_ionic_verdict[0] is match('FAIL:')
+    - rocm_ernic_setup_ionic_source_dir | trim is match('/[^/]+/[^/]')
+  ansible.builtin.file:
+    path: "{{ rocm_ernic_setup_ionic_source_dir | trim }}"
+    state: absent
+  become: true
+  register: rocm_ernic_setup_ionic_discarded
+
+# The script's own line is the message: it names the commit found, the
+# commit expected and the repository.
+- name: Fail when the ionic sources are not the pinned commit
+  vars: *rocm_ernic_setup_ionic_verdict_vars
   ansible.builtin.assert:
     that:
       - rocm_ernic_setup_ionic_base.rc | default(1) == 0
@@ -93,4 +122,14 @@
       ionic_kernel_pin_commit in vm-rocm-golden.yml, where the commit is
       what "git ls-remote {{ rocm_ernic_setup_ionic_upstream }}
       'refs/tags/{{ rocm_ernic_setup_ionic_ref | trim }}^{}'" prints.
+      {{ ('The tree that failed, ' ~ (rocm_ernic_setup_ionic_source_dir | trim)
+          ~ ', has been removed from the guest, so the next run fetches the'
+          ~ ' sources again.')
+         if rocm_ernic_setup_ionic_discarded is not skipped
+         else ((rocm_ernic_setup_ionic_source_dir | trim)
+               ~ ' is left as it is, and the fetch script takes a tree it'
+               ~ ' finds there for the one it would fetch: remove it before'
+               ~ ' the next run.')
+         if rocm_ernic_setup_ionic_verdict | length == 1
+         else '' }}
     success_msg: "{{ rocm_ernic_setup_ionic_verdict | join(' ') }}"

@@ -29,7 +29,7 @@
 
 <!-- Ansible collections pinned in ansible/requirements.yml -->
 [![Batesste Collection](https://img.shields.io/badge/sbates130272.batesste-3.4.0-9cf?style=flat-square)](https://galaxy.ansible.com/ui/repo/published/sbates130272/batesste/)
-[![Rocm-ernic Collection](https://img.shields.io/badge/sbates130272.rocm__ernic-90434a2-9cf?style=flat-square)](https://github.com/ROCm/rocm-ernic)
+[![Rocm-ernic Collection](https://img.shields.io/badge/rocm.ernic-bd90234-9cf?style=flat-square)](https://github.com/ROCm/rocm-ernic/tree/bd902345b0f8f3863f535a0a09da9f21ce744737/ansible)
 
 <!-- CI images pinned in qemu/stacks/rocm-golden.xml, and the guest its <backing-ref> pulls, which this repo publishes under its own stamp; sbates-fork is the QEMU qemu/stacks/mi355x-server.xml pins for P2P DMA -->
 [![CI image build](https://img.shields.io/badge/ci--images-20261112.gdca6903-informational?style=flat-square&logo=docker)](https://hub.docker.com/u/sbates130272)
@@ -862,11 +862,12 @@ The host must have `ansible`, `ansible-galaxy`, and the Python
 ones that would otherwise arrive as transitive dependencies, so `--no-deps`
 skips roughly 10 MiB of collections this repository never uses.
 
-One exception, temporary: `sbates130272.rocm_ernic` is pulled from the
-upstream [rocm-ernic][rocm-ernic] git tree at a pinned SHA rather than from
-Galaxy. Galaxy publishes only 0.1.0, the pre-ionic collection, and the ionic
-work needs 0.2.0. This reverts to a normal Galaxy version pin as soon as
-rocm-ernic publishes its next collection.
+One exception: `rocm.ernic` is installed from the upstream
+[rocm-ernic][rocm-ernic] git tree at a pinned SHA, not from Galaxy, where
+upstream no longer publishes it. That pin is the roles. The sources the
+guest's half of the NIC is built from are a second pin, `ernic_source_pin` in
+`vm-rocm-golden.yml`, which moves with the `ernic.<sha>` of the server images
+and need not be the same commit; the badges above show both.
 
 ### Available playbooks
 

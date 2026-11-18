@@ -423,7 +423,7 @@ PLAYBOOK_LANE = (REPO_ROOT / ".github" / "workflows"
                  / "qemu-minimal-ansible-playbook-test-vm-rocm-golden.yml")
 INSTALLED_RULES = "/etc/udev/rules.d/99-rocm-ernic.rules"
 # Every role of the collection, which is what may copy its own rules.
-COLLECTION = "sbates130272.rocm_ernic."
+COLLECTION = "rocm.ernic."
 COLLECTION_GUEST = COLLECTION + "ernic_guest_setup"
 OURS = {"name": "rocm_ernic_setup", "tasks_from": "naming"}
 OURS_CHECK = {"name": "rocm_ernic_setup", "tasks_from": "naming_check"}
@@ -629,8 +629,8 @@ class GoldenImageKeepsTheRepoRulesTest(unittest.TestCase):
         day it moves off the driver path, the configure stage copies it
         again with the path off, and the put-back stops being a precaution."""
         collection = (Path.home() / ".ansible/collections/ansible_collections"
-                      / "sbates130272/rocm_ernic/roles/ernic_guest_setup/tasks")
-        _require(collection.is_dir(), "the rocm_ernic collection")
+                      / "rocm/ernic/roles/ernic_guest_setup/tasks")
+        _require(collection.is_dir(), "the rocm.ernic collection")
         copies = sorted(
             path.name for path in collection.glob("*.yml")
             if f"dest: {INSTALLED_RULES}" in path.read_text())
