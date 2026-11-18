@@ -3120,15 +3120,18 @@ scrape, one hour), not measured on a guest:
 | Guest writes every | Rate window | A steady workload reads |
 |---|---|---|
 | 30 s | 60 s (`$__rate_interval`) | 0.67 to 1.34, alternating: a sawtooth |
-| 30 s | 2 m (what the panels use) | 0.86 to 1.15 |
+| 30 s | 2 m | 0.86 to 1.15 |
 | 30 s | 5 m | 0.95 to 1.06 |
 | 15 s | 60 s | 1.00 while the timer stays in phase with the scrape; 0.68 to 1.01 once it drifts |
+| 15 s | 2 m (what the role and the panels use) | 0.87 to 1.02 |
 | 5 s | 60 s | 0.92 to 1.04 |
 
-The mean is right in every row, and no window is ever empty. So a steady
-workload still ripples by about 15%, and a short burst shows as its bytes
-spread over two minutes. **Sampling every 15 s is not the cure it looks
-like**: `OnUnitActiveSec` counts from the previous activation, so the real
+The mean is right in every row, and no window is ever empty. The role
+samples every 15 s, the owner's choice on 2026-11-18 (it was 30), and the
+panels keep the two-minute window: a steady workload then reads up to 13%
+low and never high, and a short burst shows as its bytes spread over two
+minutes. **Sampling every 15 s is not a cure on its own**, over the
+one-minute `$__rate_interval`: `OnUnitActiveSec` counts from the previous activation, so the real
 period is 15 s plus the run time, it beats against the 15 s scrape, and
 every time a scrape sees one value twice the window reads a third low. The
 steady options are a longer window or a period well under the scrape

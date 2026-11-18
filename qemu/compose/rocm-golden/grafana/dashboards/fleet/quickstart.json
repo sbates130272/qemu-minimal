@@ -416,7 +416,7 @@
           "refId": "A"
         }
       ],
-      "description": "Fleet-total bytes per second copied by the guests' SDXI devices, from sdxi_bytes_moved_total, which each guest writes for node-exporter's textfile collector. The rate is taken over 2 minutes, four of the guests' 30 s writes. No data on a fleet with no SDXI device."
+      "description": "Fleet-total bytes per second copied by the guests' SDXI devices, from sdxi_bytes_moved_total, which each guest writes for node-exporter's textfile collector. The rate is taken over 2 minutes, eight of the guests' 15 s writes. No data on a fleet with no SDXI device."
     },
     {
       "collapsed": false,
@@ -964,7 +964,7 @@
           "refId": "A"
         }
       ],
-      "description": "Bytes per second copied by each guest's SDXI device, from sdxi_bytes_moved_total of context 1, the context every client operation runs in. Each guest writes the counters for node-exporter's textfile collector every 30 s and the rate is taken over 2 minutes, four of those: a steady workload reads within about 15% of its rate, and a short burst shows as its bytes spread over 2 minutes."
+      "description": "Bytes per second copied by each guest's SDXI device, from sdxi_bytes_moved_total of context 1, the context every client operation runs in. Each guest writes the counters for node-exporter's textfile collector every 15 s and the rate is taken over 2 minutes, eight of those: a steady workload reads within about 13% of its rate, and a short burst shows as its bytes spread over 2 minutes."
     },
     {
       "datasource": {
@@ -1013,7 +1013,7 @@
           "refId": "A"
         }
       ],
-      "description": "Copy operations per second completed by each guest's SDXI device, from sdxi_num_copy_total of context 1. Each guest writes the counters for node-exporter's textfile collector every 30 s and the rate is taken over 2 minutes, four of those: a steady workload reads within about 15% of its rate, and a short burst shows as its bytes spread over 2 minutes."
+      "description": "Copy operations per second completed by each guest's SDXI device, from sdxi_num_copy_total of context 1. Each guest writes the counters for node-exporter's textfile collector every 15 s and the rate is taken over 2 minutes, eight of those: a steady workload reads within about 13% of its rate, and a short burst shows as its bytes spread over 2 minutes."
     },
     {
       "datasource": {
@@ -1071,7 +1071,7 @@
           "refId": "B"
         }
       ],
-      "description": "Uncompressed bytes per second through each guest's SDXI device: the input of compress operations and the output of decompress operations, which is what the two counters count. Each guest writes the counters for node-exporter's textfile collector every 30 s and the rate is taken over 2 minutes, four of those: a steady workload reads within about 15% of its rate, and a short burst shows as its bytes spread over 2 minutes."
+      "description": "Uncompressed bytes per second through each guest's SDXI device: the input of compress operations and the output of decompress operations, which is what the two counters count. Each guest writes the counters for node-exporter's textfile collector every 15 s and the rate is taken over 2 minutes, eight of those: a steady workload reads within about 13% of its rate, and a short burst shows as its bytes spread over 2 minutes."
     },
     {
       "datasource": {
@@ -1129,7 +1129,7 @@
           "refId": "B"
         }
       ],
-      "description": "Compress and decompress operations per second completed by each guest's SDXI device. Each guest writes the counters for node-exporter's textfile collector every 30 s and the rate is taken over 2 minutes, four of those: a steady workload reads within about 15% of its rate, and a short burst shows as its bytes spread over 2 minutes."
+      "description": "Compress and decompress operations per second completed by each guest's SDXI device. Each guest writes the counters for node-exporter's textfile collector every 15 s and the rate is taken over 2 minutes, eight of those: a steady workload reads within about 13% of its rate, and a short burst shows as its bytes spread over 2 minutes."
     },
     {
       "collapsed": false,

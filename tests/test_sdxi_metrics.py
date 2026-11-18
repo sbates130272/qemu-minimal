@@ -481,7 +481,7 @@ class Role(unittest.TestCase):
     def test_the_defaults(self):
         self.assertIs(self.defaults["sdxi_setup_metrics"], True)
         self.assertEqual(self.defaults["sdxi_setup_metrics_contexts"], [0, 1])
-        self.assertEqual(self.defaults["sdxi_setup_metrics_interval"], 30)
+        self.assertEqual(self.defaults["sdxi_setup_metrics_interval"], 15)
         module = _load_script()
         self.assertEqual(
             self.defaults["sdxi_setup_metrics_textfile_dir"] + "/sdxi.prom",
@@ -515,10 +515,10 @@ class Role(unittest.TestCase):
                       content)
         timer = _unit(_render(content))["Timer"]
         self.assertEqual(dict(timer), {"OnBootSec": "5s",
-                                       "OnUnitActiveSec": "30s",
+                                       "OnUnitActiveSec": "15s",
                                        "AccuracySec": "1s"})
-        again = _unit(_render(content, sdxi_setup_metrics_interval=15))
-        self.assertEqual(again["Timer"]["OnUnitActiveSec"], "15s")
+        again = _unit(_render(content, sdxi_setup_metrics_interval=45))
+        self.assertEqual(again["Timer"]["OnUnitActiveSec"], "45s")
 
     def test_the_timer_has_the_amdgpu_timer_s_shape(self):
         """And one line more: a timer's default accuracy is a minute, which
@@ -529,7 +529,12 @@ class Role(unittest.TestCase):
         self.assertEqual(dict(ours["Install"]), dict(theirs["Install"]))
         mine = dict(ours["Timer"])
         self.assertEqual(mine.pop("AccuracySec"), "1s")
-        self.assertEqual(mine, dict(theirs["Timer"]))
+        # Twice as often as the amdgpu timer: the rate panels need the
+        # samples, a presence gauge does not.
+        theirs_timer = dict(theirs["Timer"])
+        self.assertEqual(theirs_timer.pop("OnUnitActiveSec"), "30s")
+        self.assertEqual(mine.pop("OnUnitActiveSec"), "15s")
+        self.assertEqual(mine, theirs_timer)
 
     def test_the_contexts_are_a_variable(self):
         copy = self.service["ansible.builtin.copy"]

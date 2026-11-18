@@ -88,7 +88,7 @@
       become: true
 
     # AccuracySec because a timer's default is one minute: systemd may then
-    # fire a 30 s timer anywhere up to 90 s after the last run, and a rate()
+    # fire a 15 s timer anywhere up to 75 s after the last run, and a rate()
     # over a counter sampled that unevenly is gaps and spikes.
     - name: Install the SDXI metrics timer
       ansible.builtin.copy:

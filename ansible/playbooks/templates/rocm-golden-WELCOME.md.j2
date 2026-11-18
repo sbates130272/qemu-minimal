@@ -190,7 +190,7 @@ reach VRAM and is otherwise sound.
 installed and blacklisted; load it by hand when you want it.
 
 The device's counters are exported to Prometheus: `sdxi-textfile-metrics.timer`
-reads them every 30 s and node_exporter serves them on `:9100` as `sdxi_up`
+reads them every 15 s and node_exporter serves them on `:9100` as `sdxi_up`
 and `sdxi_<counter>_total{context="N"}`, for example
 `sdxi_bytes_moved_total`. Context 0 is the driver's admin ring; everything
 you run is counted in context 1. They start again from zero when the SDXI
