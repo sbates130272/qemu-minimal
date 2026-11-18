@@ -202,12 +202,13 @@ rocm_ernic_setup_packages:
   - libudev-dev
   - libsystemd-dev
   - python3-docutils
-  # The verbs userspace itself. On resolute this is 61.0, past the v61 that
-  # first shipped providers/ionic upstream, so ibverbs-providers already
-  # carries libionic-rdmav59.so and nothing has to be built to get it.
+  # The verbs userspace itself, as a runtime. On resolute this is 61.0, past
+  # the v61 that first shipped providers/ionic upstream, so ibverbs-providers
+  # already carries libionic-rdmav59.so and nothing has to be built to get
+  # it. No libibverbs-dev: nothing this role or ernic_guest_setup builds reads
+  # a verbs header, and see rocm_ernic_setup_rdma_dev_packages below.
   - rdma-core
   - ibverbs-utils
-  - libibverbs-dev
   # ib_send_bw and friends, for lanes that move traffic rather than only
   # assert the modules built. The archive's build, in /usr/bin, with no ROCm
   # memory support; perftest_setup adds one that has it, in /usr/local/bin.
@@ -217,6 +218,37 @@ rocm_ernic_setup_packages:
   - iperf3
 rocm_ernic_setup_apt_retries: 3
 rocm_ernic_setup_apt_delay: 10
+
+# ── The archive's rdma-core development packages ─
+# What tasks/rdma_dev_purge.yml takes out of a guest, and what
+# files/rdma-core-check.sh requires to be absent.
+#
+# A golden guest has two rdma-cores: the archive's under /usr, and
+# rocm-ernic's, built from source under the prefix below by the collection's
+# ernic_srq_provider, which is the one every tool on the image loads. Both
+# shipped headers and link libraries, and the toolchain did not pick one: gcc
+# reads <prefix>/include ahead of /usr/include, ld searches
+# /usr/lib/<multiarch> ahead of <prefix>/lib. A build with no flags compiled
+# against one and linked the other. With these three gone the archive is a
+# runtime only and the prefix holds the one rdma-core there is to build
+# against. Measured on a guest of the published image (2026-11-17): the
+# purge removes these three and nothing else, and rocm-ernic's rdma-core,
+# perftest, the P4 client, fio and the ionic DKMS package all still build.
+#
+# The runtime packages are not in this list and must not be: perftest, fio,
+# librados2 and libpcap0.8t64 depend on libibverbs1, the rdma-core package
+# carries the udev rules and systemd units, and vm-quickstart.yml's RDMA test
+# runs /usr/bin/ib_send_bw by path.
+rocm_ernic_setup_rdma_dev_packages:
+  - libibverbs-dev
+  - librdmacm-dev
+  - libibumad-dev
+# Where the rdma-core that replaces them is. The purge is refused unless
+# the prefix has a header and a link library for each of libibverbs,
+# librdmacm and libibumad (include/infiniband/verbs.h, include/rdma/rdma_cma.h,
+# include/infiniband/umad.h and lib/<library>.so): on a guest with only the
+# archive's rdma-core these packages are the only verbs headers there are.
+rocm_ernic_setup_rdma_dev_prefix: /usr/local
 
 # ── rdma-core provider stamp ─────────────────────
 # ernic_guest_setup's rdma_core.yml reads this before deciding whether to

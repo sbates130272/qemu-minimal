@@ -17,6 +17,7 @@
       - perftest_setup_prefix | trim is match('^/')
       - perftest_setup_source_dir | trim is match('^/.')
       - perftest_setup_rocm_path | trim is match('^/')
+      - perftest_setup_rdma_core in ['archive', 'local']
       - >-
         perftest_setup_rdma_lib_dir | trim | length == 0
         or perftest_setup_rdma_lib_dir | trim is match('^/')
@@ -27,7 +28,9 @@
       perftest_setup needs a repository ("{{ perftest_setup_repo }}"), a ref
       ("{{ perftest_setup_ref }}"), a commit that is 40 hex characters or
       empty ("{{ perftest_setup_commit }}"), absolute paths for the prefix,
-      the source directory and ROCm, an rdma-core library directory that is
+      the source directory and ROCm, an rdma-core that is "archive" or
+      "local" ("{{ perftest_setup_rdma_core }}"), an rdma-core library
+      directory that is
       absolute or empty ("{{ perftest_setup_rdma_lib_dir }}"), and, when the
       HIP kernels are built, the
       GPU they are built for ("{{ perftest_setup_rocm_arch }}"): a bake has no
@@ -80,7 +83,8 @@
          + (['HIPCC=' ~ (perftest_setup_rocm_found.stdout | trim) ~ '/bin/hipcc']
             if perftest_setup_rocm_kernels | bool else ['HIPCC=no'])
          + (['LDFLAGS=-L' ~ (perftest_setup_rdma_lib_dir | trim)]
-            if perftest_setup_rdma_lib_dir | trim | length > 0 else [])
+            if perftest_setup_rdma_core == 'local'
+               and perftest_setup_rdma_lib_dir | trim | length > 0 else [])
          + perftest_setup_configure_extra }}
 
 - name: Read the stamp of an earlier build
@@ -99,8 +103,9 @@
 
 # Rebuilt when anything the build was made from has changed: the repository,
 # the ref, the required commit or the configure line, which carries the
-# prefix, the ROCm tree, the GPU, whether hipcc is used and the rdma-core
-# library directory. With the commit check off the stamp cannot say whether
+# prefix, the ROCm tree, the GPU, whether hipcc is used and, for an
+# rdma-core built from source, its library directory. With the commit check
+# off the stamp cannot say whether
 # the ref has moved, so that case rebuilds only when forced. An rdma-core
 # replaced under an unchanged directory does not rebuild either; the stamp
 # records the libibverbs the tools were linked against, and

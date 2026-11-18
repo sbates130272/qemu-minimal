@@ -3419,6 +3419,152 @@ so a cloud image whose kernel packages differ from that day's, or a
 `grub.cfg` laid out differently, is still first met in a bake — where the
 guard fails loudly if apt wants anything the purge list does not expect.
 
+## Two rdma-cores, one to build against
+
+**The golden image has two rdma-cores. One runs, and only that one can be
+built against.**
+
+| | Where | What is there | Why it is there |
+|---|---|---|---|
+| the archive's 61 (`61.0-2ubuntu3`) | `/usr` | the runtime packages: `rdma-core`, `ibverbs-utils`, `ibverbs-providers`, `libibverbs1`, `librdmacm1t64`, `libibumad3`. **No headers, no `lib*.so` link, no `.a`, no `.pc`** | see "what stays" below |
+| rocm-ernic's 66 | `/usr/local` | a whole install from source, by the collection's `ernic_srq_provider`: 30 headers in `include/infiniband` and four in `include/rdma`, `libibverbs`, `librdmacm`, `libibumad` with their unversioned links, the pkg-config files, the providers with the SRQ-capable ionic one, `ibv_devinfo` and the rest | it is the provider the emulated NIC needs for SRQ |
+
+**66 is what runs.** `/etc/ld.so.conf.d/libc.conf` has `/usr/local/lib`
+ahead of the multiarch directory, so the loader gives every program the
+`/usr/local` libraries, and `/usr/local/bin` is ahead of `/usr/bin` on every
+PATH the image has.
+
+**The archive's development packages are gone:** `libibverbs-dev`,
+`librdmacm-dev` and `libibumad-dev`. With them the image had two rdma-cores
+to *build* against and the toolchain did not pick one: gcc reads
+`/usr/local/include` ahead of `/usr/include` (66), ld searches
+`/usr/lib/x86_64-linux-gnu` ahead of `/usr/local/lib` (61), and the loader
+gives 66. A program built with no flags compiled against 66, linked 61 and
+ran against 66. That is what broke the perftest link (`undefined reference
+to ibv_alloc_buf`, which only 66 has; see the next section), and where it
+does not fail it silently compiles out what the newer library has. Without
+them all three answers are `/usr/local`, with no flag.
+
+**What stays, and why.** The runtime packages: `libibverbs1` is depended on
+by `perftest`, `fio`, `librados2`, `libpcap0.8t64`, `ibverbs-utils`,
+`librdmacm1t64` and `ibverbs-providers`; the `rdma-core` package carries the
+udev rules and `rdma-hw.target`, `rdma-load-modules@.service` and
+`rdma-ndd.service`; `vm-quickstart.yml`'s RDMA test runs
+`/usr/bin/ib_send_bw` by path; and `provider.stamp` and
+`rocm-golden.sh`'s provider checks read the archive's `libionic` and the
+package version. Also `libnl-3-dev` and `libnl-route-3-dev`, which
+`libibverbs-dev` used to pull in: the rdma-core 66 build needs them, fio's
+configure links them, and the check's `pkg-config --exists` reads them, so
+both are named in the manifest and in `rocm_ernic_setup_packages`. And the
+29 kernel uapi headers in `/usr/include/rdma` (`ib_user_verbs.h` and so on),
+which are `linux-libc-dev`'s and which 66's `verbs.h` includes.
+
+**How the image gets there.** Nothing installs the three, and a purge makes
+it true for a guest that has them anyway:
+
+| Piece | Where |
+|---|---|
+| not installed | gone from `qemu/packages.d/rocm-golden.txt`, from `rocm_ernic_setup_packages`, and from `perftest_setup_packages` |
+| the purge | the play "Take the archive's rdma-core development packages out of the guest", after everything that compiles and after the compiler cache is saved, before the stamp. `rocm_ernic_setup`'s `rdma_dev_purge` tasks |
+| the guard | `files/rdma-dev-purge-guard.sh` asks `apt-get --simulate purge` first and fails unless what goes is exactly the packages asked for. No companion is allowed: there is none. Before that, the purge is refused unless `/usr/local` has a header and a link library for each of libibverbs, librdmacm and libibumad (`include/infiniband/verbs.h`, `include/rdma/rdma_cma.h`, `include/infiniband/umad.h`, `lib/<library>.so`) |
+| never `autoremove` | on the published image it would take eleven unrelated packages that were already marked automatic (`hwdata`, `pnp.ids`, the `linux-tools-7.0.0-43` set and others) |
+| the check | the `# begin: rdma-core` block of `qemu/checks/rocm-golden.sh`, and the same lines as `rocm_ernic_setup/files/rdma-core-check.sh`, which is the last task of the stamp play |
+
+On this bake's own guest the purge finds nothing and says so. It is there
+for a bake given another manifest, an `--ansible-only` rerun against a guest
+baked before this, or a role that puts one back; all end in the same state.
+
+**The check needs no device.** The three packages are not installed and the
+runtime ones are; no `/usr/include/infiniband`, no `/usr/include/rdma/rdma_cma.h`,
+and for each of the three libraries no `.so`, `.a` or `.pc` under
+`/usr/lib/<multiarch>`, `/usr/lib`, `/usr/lib64` or `/usr/share/pkgconfig`;
+pkg-config's `libdir` and `includedir` for each are `/usr/local/lib` and
+`/usr/local/include`; a three-line program per library, compiled and linked
+with no flag but `-l` and never run, reads its header from
+`/usr/local/include`, links and loads one file, and that file is under
+`/usr/local/lib`; and the stamp names both rdma-cores as they are. It tests
+files, not `ldconfig -p`, which went on listing the removed links after the
+purge until `ldconfig` was run (the purge tasks run it).
+`tests/test_rdma_dev_packages.py` holds the block and the script byte for
+byte equal and runs them against stand-ins and against the host's real
+toolchain.
+
+**The stamp records both.** `/etc/rocm-golden-guest.json` had one field,
+`rdma_core_version`, which is the archive package's version, although 66 is
+what runs. It now has `rdma_core_archive_version` (`61.0-2ubuntu3`),
+`rdma_core_local_version` (`66.0`) and `rdma_core_local_libibverbs`
+(`/usr/local/lib/libibverbs.so.1.18.66.0`). The local two are read off
+`ibv_devinfo`: the file its `libibverbs.so.1` resolves to, whose name ends
+in its rdma-core's version. `rdma_core_version` is kept, still the
+archive's, because the record is published in `vm-info.json` under `guest`
+and its names are added to and not renamed; nothing in this repository
+reads it, and a code search of the owner's other repositories found no
+reader.
+`publish_qcow.py` carries the stamp whole and names none of these, so it
+did not change.
+
+**What a consumer building against verbs in the guest must know.**
+
+- Use no flags: `gcc prog.c -libverbs`, or `pkg-config --cflags --libs
+  libibverbs` (`-I/usr/local/include -L/usr/local/lib -libverbs`). Both
+  give 66 all the way.
+- **Do not `apt install libibverbs-dev`** (or the other two). It installs
+  cleanly and restores the mix. rocm-ernic's own
+  `ansible/playbooks/s3-tests.yml` installs it in a guest, and so do
+  `sbates130272.batesste`'s `rdma_setup` and `nfs_rdma_setup`; run against a
+  golden guest, each puts it back. `qemu/checks/rocm-golden.sh` then fails.
+- `perftest_setup` has `perftest_setup_rdma_core`. `local`, which the
+  golden playbook sets, installs no rdma-core package and sends the linker
+  to `perftest_setup_rdma_lib_dir`. `archive`, the role's default, installs
+  the three, for a guest whose only rdma-core is the archive's; it is
+  refused, before anything is installed, on a guest that has
+  `<lib dir>/libibverbs.so`.
+- Two things went with the packages: the verbs API man pages (the 66 build
+  is `-DNO_MAN_PAGES=1`, so `man ibv_reg_mr` finds nothing) and static
+  linking against rdma-core (no `.a` in `/usr/local`). The saving is 3.1 MB.
+- The P4 client and benchmark were never on the 61 link path: they are
+  built through pkg-config, which resolved to `/usr/local` with the packages
+  present too. fio, which `scripts/vm-report/fio-hipfile-bench.sh` builds in
+  the guest, probes verbs by itself with bare `-l` flags and so was the mix
+  on the old image; on this one it is 66.
+
+**A `vm-basic.yml` image is not touched.** It has no rdma-core in
+`/usr/local`, and its manifests (`packages-default`, `packages-minimal`)
+name no rdma package, so there is nothing to purge. A basic guest that
+wants to build against verbs installs the archive's `-dev` packages, and
+there they are the only rdma-core and correct.
+
+**Measured on a live guest, not in a bake.** On one guest from the
+published image `20261117.g481c892` (2026-11-17, kernel
+`7.2.6-070206-generic`, gcc 15.2.0, binutils 2.46, the emulated NIC
+attached): `apt-get purge` of the three removed those three and nothing
+else, 482 paths, and the autoremove list was the same eleven packages
+before and after. Then, with them gone: perftest built through the role
+(`ok=23 changed=3 failed=0`, the probe printing `ok: one rdma-core: headers
+/usr/local/include/infiniband/verbs.h, library
+/usr/local/lib/libibverbs.so.1.18.66.0` with and without the `LDFLAGS`) and
+moved 1000 iterations of `ib_send_bw` over the NIC from both
+`/usr/local/bin` and `/usr/bin`; the P4 client and benchmark rebuilt
+byte-identical to the image's and ran; rocm-ernic's rdma-core 66 built in a
+mount namespace with no rdma-core header, link or `.pc` anywhere (360 of
+360 ninja steps), so nothing before it in a bake needs the packages; the
+`ionic-ernic` DKMS package built; fio configured with `libverbs yes`,
+`rdmacm yes`; and an earlier form of the check block passed there.
+
+**What has not run:** a bake with any of this. The purge tasks and the
+guard have run against stand-ins and, for the no-op and the two refusals,
+through `ansible-playbook` on the dev host; the check as it is now has run
+against stand-ins and the dev host's toolchain, not on a guest (the form
+that ran on the guest had the same compile, link and load steps and no
+error messages, no stamp comparison and fewer directories). The stamp's new
+fields have been evaluated by Ansible with made-up facts. The first
+playbook-test bake is the proof: read the purge play's report, which should
+say there was nothing to purge, and the last task of the stamp play.
+
+**The guest check now refuses the published image**, which has the three
+packages and the one-field stamp, as it already refuses it for want of
+`/etc/perftest-rocm.json`. Only the lanes that bake run the check here.
+
 ## perftest with ROCm memory support
 
 Ubuntu's `perftest` is built without ROCm, so its `ib_send_bw` has no
@@ -3474,17 +3620,20 @@ gfx1250) and `configure.ac`:
 make -j"$(nproc)" && make install
 ```
 
-**`LDFLAGS=-L/usr/local/lib` is not optional on the golden guest, and the
-first version of the role, which lacked it, failed there.** The image has
-two rdma-cores: the archive's 61 under `/usr` (`libibverbs-dev
-61.0-2ubuntu3`), and the whole of rocm-ernic's patched rdma-core **66**
-under `/usr/local` — headers in `/usr/local/include/infiniband`,
-`libibverbs.so.1.18.66.0`, `librdmacm`, `libibumad` and the providers in
-`/usr/local/lib` — which `ernic_srq_provider` installs and every tool on
-the image loads. "rdma-core 61 plus a patched provider" undersells it, and
-`rdma_core_version` in `/etc/rocm-golden-guest.json` is the archive
-package's version, not the loaded library's. Three search orders then
-disagree:
+**`LDFLAGS=-L/usr/local/lib` was not optional on the golden guest as it
+was published, and the first version of the role, which lacked it, failed
+there.** What follows is that image, which had the archive's rdma-core
+development packages; "Two rdma-cores, one to build against" above is what
+replaced it, and on an image without them the linker finds `/usr/local/lib`
+by itself. The flag stays on the configure line for the guest that still
+has them. That image had two rdma-cores to build against: the archive's 61
+under `/usr` (`libibverbs-dev 61.0-2ubuntu3`), and the whole of rocm-ernic's
+patched rdma-core **66** under `/usr/local` — headers in
+`/usr/local/include/infiniband`, `libibverbs.so.1.18.66.0`, `librdmacm`,
+`libibumad` and the providers in `/usr/local/lib` — which
+`ernic_srq_provider` installs and every tool on the image loads. "rdma-core
+61 plus a patched provider" undersells it. Three search orders then
+disagreed:
 
 | | searches first | so it uses |
 |---|---|---|
@@ -3514,16 +3663,19 @@ without a word: under the same mix `configure` printed `checking for
 ibv_dm_export_dmabuf_fd in -libverbs... no`, and with the `-L` it printed
 `yes` and the tools gained `--use_ib_dm_dmabuf`.
 
-So the role has `perftest_setup_rdma_lib_dir` (`/usr/local/lib`), which
-becomes that `LDFLAGS`, and `files/perftest-rdma-probe.sh`, which runs
+So the role has `perftest_setup_rdma_core`, which the golden playbook
+sets to `local`, and `perftest_setup_rdma_lib_dir` (`/usr/local/lib`), which
+then becomes that `LDFLAGS`, and `files/perftest-rdma-probe.sh`, which runs
 before the build with the arguments `configure` is about to get. It
 compiles, links and resolves one two-line program and prints the
 `infiniband/verbs.h` the compiler read, the `libibverbs.so` the linker took
 and the `libibverbs.so.1` the loader gives; the role stops unless link and
 load are one file and the headers are from the same prefix, in seconds and
-with a sentence instead of sixty undefined references. A directory with no
-libibverbs in it is passed over by the linker, so the default is right on a
-guest with only the archive's rdma-core. After the build the role compares
+with a sentence instead of sixty undefined references. With `local` the
+library linked also has to be in that directory, so a guest that has only
+the archive's rdma-core is refused and told to say `archive`, which installs
+the archive's development packages and adds no `LDFLAGS`. After the build
+the role compares
 what `ib_write_bw` loads with what the probe linked, records both the
 headers and the library in the stamp, and `qemu/checks/rocm-golden.sh`
 compares the stamp's library with the one the booted image loads.
@@ -3541,6 +3693,14 @@ the pinned commit failed at the same two source lines as on the guest and
 the role stopped at the probe; with it the role built, recorded
 `libibverbs.so.1.18.66.0`, and a rerun compiled nothing. The first
 playbook-test bake is still the proof; read the probe's `ok:` line in it.
+
+Since then the role as it stood at `5f2dd6b` has run end to end on a guest,
+with the archive's development packages purged and its package list given
+without them (see the section above): the probe, the post-build comparison
+and the stamp all ran there. What has run nowhere but against stand-ins and
+`ansible-playbook` on the dev host is what was added for that change:
+`perftest_setup_rdma_core`, the refusal of `archive` beside another
+rdma-core, and the probe's check that the library is in the directory named.
 
 `--with-rocm=DIR` adds `DIR/include` and `DIR/include/hsa` to the include
 path and `DIR/lib64` and `DIR/lib` to the link line and to the tools'

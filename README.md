@@ -240,6 +240,39 @@ role's defaults say what else can be set.
 fleet files pull**, which was published before it: there `ib_send_bw` is the
 archive's. `cat /etc/perftest-rocm.json` in a guest says which it has.
 
+### Building against RDMA in the guest
+
+The golden guest has two rdma-cores and one to build against. Ubuntu's
+rdma-core 61 is there as a runtime under `/usr`: its udev rules and units,
+and the libraries the archive's own tools are linked to.
+[rocm-ernic][rocm-ernic]'s rdma-core 66, with the SRQ-capable ionic
+provider, is installed from source under `/usr/local`; it is what every
+tool loads, and it is the only one with headers and link libraries. So a
+build takes no flags:
+
+```bash
+gcc prog.c -libverbs                     # headers, link and load: /usr/local
+pkg-config --cflags --libs libibverbs    # -I/usr/local/include -L/usr/local/lib -libverbs
+```
+
+`libibverbs-dev`, `librdmacm-dev` and `libibumad-dev` are deliberately not
+in the image, and the bake purges them from a base that has them. **Do not
+install them in a golden guest.** With them the compiler reads the headers
+in `/usr/local/include` and the linker takes the archive's library, which
+is how perftest failed to link there (`undefined reference to
+ibv_alloc_buf`). `libnl-3-dev` and `libnl-route-3-dev` stay. What went with
+the three is the verbs API man pages and static linking against rdma-core.
+`/etc/rocm-golden-guest.json` records both versions, as
+`rdma_core_archive_version` and `rdma_core_local_version`, and
+`qemu/checks/rocm-golden.sh` fails an image with a second rdma-core to
+build against. A `vm-basic.yml` guest has no rdma-core in `/usr/local`;
+there the archive's `-dev` packages are the right ones to install.
+
+**This too is in an image baked from this checkout, not in the one the
+fleet files pull**, which still has the three packages. It was measured by
+purging them on a guest of that image and rebuilding everything that
+compiles against verbs; no bake has run with the change.
+
 There is a test of it, off by default because on the default stack it
 fails. `--use_rocm` has the NIC address GPU memory, and with both devices
 emulated that is one vfio-user server reaching into another's BAR, which

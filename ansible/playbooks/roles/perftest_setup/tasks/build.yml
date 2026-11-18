@@ -2,16 +2,55 @@
 # Fetch the pinned commit, build it against the guest's ROCm, install it.
 # Included by main.yml when the stamp does not already describe this build.
 
+# "archive" installs the archive's rdma-core development packages, and on
+# a guest that already has an rdma-core built from source that is a second
+# set of headers and link libraries: the compiler takes one rdma-core's
+# headers and the linker the other's library. A golden guest is that guest,
+# and the bake purges those packages from it. So this is asked before
+# anything is installed, not left to the probe below, which would say the
+# same thing with the packages already back.
+- name: Look for an rdma-core built from source
+  ansible.builtin.stat:
+    path: "{{ perftest_setup_rdma_lib_dir | trim }}/libibverbs.so"
+    get_checksum: false
+  register: perftest_setup_rdma_local
+  when:
+    - perftest_setup_rdma_core == 'archive'
+    - perftest_setup_rdma_lib_dir | trim | length > 0
+
+- name: Refuse to put the archive's rdma-core headers beside another rdma-core
+  ansible.builtin.assert:
+    that:
+      - not perftest_setup_rdma_local.stat.exists
+    fail_msg: >-
+      perftest_setup_rdma_core is "archive", which installs
+      {{ perftest_setup_rdma_dev_packages | join(', ') }}, and this guest
+      has {{ perftest_setup_rdma_lib_dir | trim }}/libibverbs.so: an
+      rdma-core built from source, which is the one to build against. Set
+      perftest_setup_rdma_core to "local", as vm-rocm-golden.yml does.
+      Nothing was installed.
+  when:
+    - perftest_setup_rdma_core == 'archive'
+    - perftest_setup_rdma_lib_dir | trim | length > 0
+
+# With "local" no rdma-core package is in this list, whatever the guest has:
+# the rdma-core to build against is already there, and the archive's
+# development packages beside it are what the golden bake removes.
 - name: Install what the perftest build needs
+  vars:
+    perftest_setup_build_packages: >-
+      {{ perftest_setup_packages
+         + (perftest_setup_rdma_dev_packages
+            if perftest_setup_rdma_core == 'archive' else []) }}
   ansible.builtin.apt:
-    name: "{{ perftest_setup_packages }}"
+    name: "{{ perftest_setup_build_packages }}"
     state: present
     update_cache: false
   register: perftest_setup_apt_result
   retries: "{{ perftest_setup_apt_retries }}"
   delay: "{{ perftest_setup_apt_delay }}"
   until: perftest_setup_apt_result is success
-  when: perftest_setup_packages | length > 0
+  when: perftest_setup_build_packages | length > 0
 
 - name: Create the directory the source is fetched into
   ansible.builtin.file:
@@ -75,16 +114,23 @@
 
 # With the configure arguments the build is about to be given, and before
 # it: which infiniband/verbs.h the compiler reads, which libibverbs.so the
-# linker takes and which libibverbs.so.1 the loader gives the result. A
-# guest with a second rdma-core under /usr/local gets three different
-# answers unless the configure line says otherwise, and the script's own
-# header says what that costs. Its verdict line is the message.
+# linker takes and which libibverbs.so.1 the loader gives the result. On a
+# guest with one rdma-core to build against the three agree, which is what a
+# golden bake leaves. A guest that has the archive's development packages
+# beside an rdma-core under /usr/local gets three different answers unless
+# the configure line says otherwise, and the script's own header says what
+# that costs. With "local" the script is also told the directory, and the
+# library linked has to be in it. Its verdict line is the message.
 - name: Probe which rdma-core the build compiles, links and loads
   ansible.builtin.script:
     cmd: >-
       perftest-rdma-probe.sh
       {{ perftest_setup_configure_args | map('quote') | join(' ') }}
     executable: /bin/sh
+  environment:
+    PERFTEST_RDMA_LIB_DIR: >-
+      {{ perftest_setup_rdma_lib_dir | trim
+         if perftest_setup_rdma_core == 'local' else '' }}
   register: perftest_setup_rdma_probe
   changed_when: false
   failed_when: false
@@ -105,6 +151,15 @@
                    ~ (perftest_setup_rdma_probe.stdout | default(''))
                    ~ (perftest_setup_rdma_probe.stderr | default(''))
                    ~ (perftest_setup_rdma_probe.msg | default('')), true) }}
+      perftest_setup_rdma_core is "{{ perftest_setup_rdma_core }}":
+      {{ 'the rdma-core to build against is the one whose libraries are in "'
+         ~ (perftest_setup_rdma_lib_dir | trim)
+         ~ '", and the role installs no rdma-core development package. On a'
+         ~ ' guest that has only the rdma-core of the archive, set it to'
+         ~ ' "archive".'
+         if perftest_setup_rdma_core == 'local'
+         else 'the role installed ' ~ (perftest_setup_rdma_dev_packages | join(', '))
+              ~ ' to build against.' }}
     success_msg: "{{ perftest_setup_rdma_verdict | join(' ') }}"
 
 - name: Record the rdma-core the build uses
@@ -125,8 +180,8 @@
 # path, not looked for on PATH, so the build either has device code or says
 # HIPCC=no; and the GPU is passed with --with-rocm-arch, because configure
 # would otherwise ask rocm_agent_enumerator, which answers nothing here. The
-# third is LDFLAGS=-L<perftest_setup_rdma_lib_dir>, for the guest's second
-# rdma-core.
+# third is LDFLAGS=-L<perftest_setup_rdma_lib_dir>, when the rdma-core to
+# build against is one built from source.
 #
 # No PATH is set: gcc is whatever the caller's PATH resolves, which is
 # ccache when the bake put one in front of it. hipcc runs its own clang by

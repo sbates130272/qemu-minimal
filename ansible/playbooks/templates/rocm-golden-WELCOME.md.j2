@@ -15,7 +15,8 @@ device.
     kernel        {{ ansible_kernel }}  (mainline, pinned to {{ ionic_kernel_pin }})
     amdgpu-dkms   {{ golden_pkg['amdgpu-dkms'] | default('unknown') }}  (module {{ golden_amdgpu_src.stdout | trim }})
     ROCm          {{ golden_pkg['amdrocm-runtime-dev' ~ rocm_line_pin] | default('unknown') }} from the therock stream, line {{ rocm_line_pin }}
-    rdma-core     {{ golden_pkg['rdma-core'] | default('unknown') }} from the archive
+    rdma-core     {{ golden_rdma_local_version }} in /usr/local, with rocm-ernic's ionic provider: what the tools load
+                  {{ golden_pkg['rdma-core'] | default('unknown') }} from the archive, as a runtime only
     rocm-ernic    {{ ernic_source_pin }}
     rocm-sdxi     {{ sdxi_source_pin }}
     perftest      {{ golden_perftest.commit }}  ({{ golden_perftest.ref }}, built with ROCm, in {{ golden_perftest.prefix }}/bin)
@@ -120,6 +121,23 @@ the server granted.
 The Ethernet sides come up as `rocm-ernic0`, `rocm-ernic1` and so on, and
 `rocm-ernic-netcfg.service` addresses each at boot from its own MAC. Resolve
 the IB device names from `ibv_devinfo -l` instead of assuming them.
+
+## Building against RDMA
+
+There are two rdma-cores here and one to build against. The archive's is a
+runtime under `/usr`: its udev rules and units, and the libraries the
+archive's own tools are linked to. The one in `/usr/local` is what
+`ibv_devinfo`, perftest and everything else loads, and it is the only one
+with headers and link libraries, so a build needs no flags:
+
+    gcc prog.c -libverbs                     # /usr/local, all the way
+    pkg-config --cflags --libs libibverbs    # -I/usr/local/include -L/usr/local/lib -libverbs
+
+**Do not `apt install libibverbs-dev`, `librdmacm-dev` or `libibumad-dev`.**
+They are left out on purpose. With them the compiler reads the headers in
+`/usr/local/include` and the linker takes the archive's library in
+`/usr/lib`, and the result either fails to link or silently loses what the
+newer library has. `/etc/rocm-golden-guest.json` records both versions.
 
 ## RDMA with GPU memory
 

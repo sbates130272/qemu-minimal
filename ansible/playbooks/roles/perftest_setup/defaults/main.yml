@@ -67,29 +67,68 @@ perftest_setup_rocm_arch: "gfx1250"
 perftest_setup_rocm_dmabuf: true
 
 # ── rdma-core ────────────────────────────────────
-# The directory of the libibverbs, librdmacm and libibumad the tools are
-# linked against, given to configure as LDFLAGS=-L<dir>. Empty adds nothing.
+# Which rdma-core the tools are built against. It decides what the role
+# installs to build against it and where the linker is sent, and there are
+# two answers because there are two kinds of guest:
 #
-# It is here because the golden guest has two rdma-cores: the archive's 61
-# under /usr, and the whole of rocm-ernic's patched 66 under /usr/local
-# (headers, libraries and providers, from ernic_srq_provider), which is the
-# one every tool on the image loads. gcc searches /usr/local/include ahead
-# of /usr/include, ld searches /usr/lib/<multiarch> ahead of /usr/local/lib,
-# and perftest's configure finds libibverbs with AC_CHECK_LIB and no -L. Left
-# to itself the build therefore compiles against 66 and links against 61,
-# and fails: the 66 headers turn on ibv_alloc_buf and ibv_free_buf, which 61
-# does not have. That is what the role did on two guests of the published
-# image before this variable existed, and what it stopped doing with this
-# value. A directory with no libibverbs in it is passed over by the linker,
-# so the default is also right on a guest that has only the archive's.
+#   archive  The distribution's, under /usr, and nothing else. Its
+#            development packages (perftest_setup_rdma_dev_packages) are
+#            installed with the other build dependencies: on such a guest
+#            they are the only verbs headers there are. Nothing is added to
+#            the configure line.
+#   local    One built from source, whose libraries are in
+#            perftest_setup_rdma_lib_dir. No rdma-core development package
+#            is installed, configure is given LDFLAGS=-L<that directory>,
+#            and the build is refused unless the libibverbs it links is in
+#            it.
 #
-# Whatever is given, files/perftest-rdma-probe.sh compiles, links and
-# resolves one small program with the same flags before anything is built,
-# and the role stops unless the headers, the library linked and the library
-# loaded are one rdma-core. Headers somewhere gcc does not already look go
-# in perftest_setup_configure_extra as CPPFLAGS=-I<dir>; the probe reads
+# A golden guest is the second kind, and vm-rocm-golden.yml says so. It has
+# the archive's rdma-core 61 as a runtime only, and the whole of rocm-ernic's
+# patched 66 under /usr/local (headers, libraries and providers, from
+# ernic_srq_provider), which every tool on the image loads and which is the
+# one rdma-core there is to build against. The archive's development
+# packages are not in that image and the bake purges them, so this role must
+# not put them back: that is what "local" is for. With them installed, gcc
+# read 66's headers (/usr/local/include is searched ahead of /usr/include)
+# and ld took 61's library (/usr/lib/<multiarch> ahead of /usr/local/lib),
+# and the link failed on ibv_alloc_buf, which only 66 has. That is what this
+# role did on two guests of the published image, which had the packages,
+# before it gave the linker the directory.
+#
+# So "archive" is refused on a guest that has a libibverbs.so in
+# perftest_setup_rdma_lib_dir, before anything is installed: it would add a
+# second set of headers and link libraries beside the first. The default is
+# "archive" because a guest with ROCm and nothing else is what the role
+# meets when nobody has said.
+#
+# Whichever it is, files/perftest-rdma-probe.sh compiles, links and resolves
+# one small program with the configure line's flags before anything is
+# built, and the role stops unless the headers, the library linked and the
+# library loaded are one rdma-core. A guest baked before the packages were
+# dropped still has two to choose from, and so does one where somebody ran
+# "apt install libibverbs-dev". Headers somewhere gcc does not already look
+# go in perftest_setup_configure_extra as CPPFLAGS=-I<dir>; the probe reads
 # that too.
+perftest_setup_rdma_core: "archive"
+
+# With "local": the directory of the libibverbs, librdmacm and libibumad
+# the tools are linked against, given to configure as LDFLAGS=-L<dir>. Once
+# the archive's development packages are gone the linker finds /usr/local/lib
+# by itself (measured: the probe passes with and without it), so on a
+# golden guest this is belt and braces; it is what makes the build right on
+# a guest that still has them. Empty adds nothing to the configure line and
+# skips the check that the library linked is in it.
+#
+# With "archive": where to look for an rdma-core that must not be there.
 perftest_setup_rdma_lib_dir: "/usr/local/lib"
+
+# With "archive": the packages that are the archive's rdma-core to build
+# against. configure stops without libibumad-dev. Never installed with
+# "local".
+perftest_setup_rdma_dev_packages:
+  - libibverbs-dev
+  - librdmacm-dev
+  - libibumad-dev
 
 # Arguments added to the end of the configure line, one per item. A
 # CPPFLAGS=, CFLAGS= or LDFLAGS= here replaces the one before it on the
@@ -124,10 +163,10 @@ perftest_setup_stamp: "/etc/perftest-rocm.json"
 perftest_setup_force: false
 
 # ── Inputs of the build ──────────────────────────
-# What autogen.sh, configure and make need. The golden guest's package
-# manifest already installs all of these; they are named here so the role
-# stands on its own. libibumad-dev is not optional: configure stops without
-# it.
+# What autogen.sh, configure and make need, apart from an rdma-core to
+# build against: that is perftest_setup_rdma_core above, and no rdma-core
+# package belongs in this list. The golden guest's package manifest already
+# installs all of these; they are named here so the role stands on its own.
 perftest_setup_packages:
   - build-essential
   - autoconf
@@ -135,9 +174,6 @@ perftest_setup_packages:
   - libtool
   - pkg-config
   - git
-  - libibverbs-dev
-  - librdmacm-dev
-  - libibumad-dev
   - libpci-dev
 perftest_setup_apt_retries: 3
 perftest_setup_apt_delay: 10

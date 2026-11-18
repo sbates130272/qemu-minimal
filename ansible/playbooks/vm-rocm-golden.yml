@@ -798,8 +798,9 @@
 #
 # After ROCm and after the SRQ provider, whose rdma-core in /usr/local is
 # the one these tools are compiled against, linked against and load; the
-# role checks all three are that one before it builds, because left alone
-# the linker takes the archive's. Ahead of the play below so that the C
+# role checks all three are that one before it builds, because on a guest
+# that had the archive's development packages the linker took the archive's
+# library. Ahead of the play below so that the C
 # sources go through the bake's compiler cache when it has one. The role
 # needs no device: its defaults say why, and what each variable is.
 - name: Build perftest with ROCm memory support into the guest
@@ -829,6 +830,15 @@
     perftest_setup_commit: "{{ perftest_source_pin }}"
     # The tree itself: the versionless /opt/rocm has bin/ and lib/ only.
     perftest_setup_rocm_path: "/opt/rocm/core-{{ rocm_line_pin }}"
+    # The rdma-core to build against is rocm-ernic's, which the SRQ + P4
+    # play installed under /usr/local, and not the archive's: "local", so
+    # the role installs no rdma-core development package and refuses a
+    # libibverbs from anywhere else. The role's default is "archive", which
+    # would put libibverbs-dev, librdmacm-dev and libibumad-dev back into an
+    # image that must not have them; it refuses that on this guest, and
+    # tests/test_rdma_dev_packages.py fails if this line goes.
+    perftest_setup_rdma_core: local
+    perftest_setup_rdma_lib_dir: /usr/local/lib
   roles:
     - role: perftest_setup
 
@@ -862,6 +872,34 @@
           ansible.builtin.include_role:
             name: bake_ccache
             tasks_from: remove
+
+# The image has two rdma-cores and one of them to build against. The
+# archive's stays as a runtime: other packages are linked against its
+# libraries, the rdma-core package carries the udev rules and systemd units,
+# and vm-quickstart.yml's RDMA test runs /usr/bin/ib_send_bw by path. Its
+# development packages do not stay. With them a build in the guest read
+# the headers of the rdma-core in /usr/local and linked the archive's
+# library, which is how perftest failed to link on the published image.
+#
+# No play above installs them and the package manifest does not name them,
+# so on this bake's own guest there is nothing to purge and the tasks say
+# so. They are here for the guest that has them anyway -- a bake given
+# another manifest, an --ansible-only rerun against a guest baked before
+# they were dropped, a role that put one back -- so that every bake ends in
+# the same state. After everything that compiles and after the compiler
+# cache is saved, so a refusal here costs neither; before the stamp, whose
+# play ends by checking that state. apt is asked first what the purge would
+# take, and anything but these packages stops the bake: see the role.
+- name: Take the archive's rdma-core development packages out of the guest
+  hosts: all
+  gather_facts: false
+  become: true
+  tags: [install]
+  tasks:
+    - name: Purge the archive's rdma-core development packages
+      ansible.builtin.include_role:
+        name: rocm_ernic_setup
+        tasks_from: rdma_dev_purge
 
 # Before the slim pass, which removes the apt lists dpkg-query does not need
 # but leaves nothing else to read versions from.
@@ -946,8 +984,37 @@
           "{{ golden_perftest_built.commit_required }}" required, and
           perftest_source_pin is "{{ perftest_source_pin }}".
 
+    # The rdma-core that runs is not the package dpkg reports above: the
+    # loader gives every tool the one under /usr/local. Read off a tool, as
+    # the file its libibverbs.so.1 resolves to, which rdma-core names
+    # libibverbs.so.<abi>.<minor>.<rdma-core version>.
+    - name: Read the libibverbs the image's tools load
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          lib=$(ldd "$(command -v ibv_devinfo)" |
+                awk '$1 ~ /^libibverbs\.so/ { print $3 }')
+          readlink -f "$lib"
+        executable: /bin/bash
+      changed_when: false
+      register: golden_rdma_loaded
+
+    - name: Assert the tools load an rdma-core that names its version
+      ansible.builtin.assert:
+        that:
+          - >-
+            golden_rdma_loaded.stdout | trim | basename
+            is match('^libibverbs[.]so[.][0-9]+[.][0-9]+[.][0-9]+([.][0-9]+)*$')
+        fail_msg: >-
+          ibv_devinfo loads "{{ golden_rdma_loaded.stdout | trim }}", whose
+          name does not end in an rdma-core version.
+
     - name: Collect the facts for the stamp
       ansible.builtin.set_fact:
+        golden_rdma_local_libibverbs: "{{ golden_rdma_loaded.stdout | trim }}"
+        golden_rdma_local_version: >-
+          {{ golden_rdma_loaded.stdout | trim | basename
+             | regex_replace('^libibverbs[.]so[.][0-9]+[.][0-9]+[.]', '') }}
         golden_perftest: "{{ golden_perftest_file.content | b64decode | from_json }}"
         golden_pkg: >-
           {{ dict(golden_dpkg.stdout_lines | map('split', ' ') | map('list')) }}
@@ -982,6 +1049,16 @@
           # here members of this group may open it.
           p4_client: /usr/local/bin/p4_fp8_client
           p4_device_group: ernic-p4
+          # Two rdma-cores, named for where they are. The archive's
+          # packages are a runtime under /usr, with no development
+          # packages. The one built from rocm-ernic's series under
+          # /usr/local is what the tools load and what a build in the guest
+          # finds; its version is read off the libibverbs a tool loads.
+          # rdma_core_version is the name earlier images used for the
+          # archive's, kept for whoever reads it.
+          rdma_core_archive_version: "{{ golden_pkg['rdma-core'] | default('') }}"
+          rdma_core_local_version: "{{ golden_rdma_local_version }}"
+          rdma_core_local_libibverbs: "{{ golden_rdma_local_libibverbs }}"
           rdma_core_version: "{{ golden_pkg['rdma-core'] | default('') }}"
           amdgpu_dkms_version: "{{ golden_pkg['amdgpu-dkms'] | default('') }}"
           amdgpu_dkms_module: "{{ golden_amdgpu_src.stdout | trim }}"
@@ -1013,6 +1090,15 @@
         owner: "{{ golden_user }}"
         group: "{{ golden_user }}"
         mode: "0644"
+
+    # Last, and after the stamp, which it reads: the image has one rdma-core
+    # to build against, in /usr/local, and the stamp names both as they are.
+    # The lines qemu/checks/rocm-golden.sh runs on the booted image, so a
+    # bake that would fail there fails here.
+    - name: Check the image has one rdma-core to build against
+      ansible.builtin.include_role:
+        name: rocm_ernic_setup
+        tasks_from: rdma_core_check
 
 # The one slim pass of the bake, after everything that builds: it removes the
 # apt lists, /tmp and the build trees the plays above still needed.

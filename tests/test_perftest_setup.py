@@ -13,10 +13,14 @@ What is held here, none of it by booting anything:
   the role     its defaults are the variables a caller sets, the commit is
                verified before anything is compiled, nothing in it needs a
                device, and it records what it built
-  rdma-core    the configure line names the directory of the libibverbs the
-               guest loads, and perftest-rdma-probe.sh refuses a build that
-               would compile against one rdma-core and link another; run
-               against a stand-in compiler and, where there is one, the real
+  rdma-core    which rdma-core the tools are built against is a variable:
+               the golden playbook says "local", so the role installs no
+               rdma-core development package and the configure line names
+               the directory of the libibverbs the guest loads; "archive"
+               installs the archive's and is refused beside another.
+               perftest-rdma-probe.sh refuses a build that would compile
+               against one rdma-core and link another; run against a
+               stand-in compiler and, where there is one, the real
   the fetch    perftest-fetch.sh, run against real repositories made in a
                temporary directory, the branch that moved included
   the check    the block of qemu/checks/rocm-golden.sh between its two
@@ -97,9 +101,11 @@ def _require(available: bool, what: str) -> None:
     raise unittest.SkipTest(f"{what} is not installed")
 
 
-# The configure line the role's defaults give on a golden guest. This exact
-# line built on both guests of the published image on 2026-11-17; the one
-# without its last argument failed to link there.
+# The configure line the role gives on a golden guest, where the playbook
+# sets perftest_setup_rdma_core to "local". This exact line built on both
+# guests of the published image on 2026-11-17, which still had the archive's
+# rdma-core development packages; the one without its last argument failed
+# to link there. With those packages gone it built with and without it.
 GOLDEN_CONFIGURE = (
     "--prefix=/usr/local --enable-rocm --enable-rocm-dmabuf "
     "--with-rocm=/opt/rocm/core-10.1 --with-rocm-arch=gfx1250 "
@@ -297,10 +303,27 @@ class Wiring(unittest.TestCase):
     def test_the_manifest_carries_what_the_build_needs(self):
         names = {line.strip() for line in MANIFEST.read_text().splitlines()
                  if line.strip() and not line.lstrip().startswith("#")}
-        for package in ("autoconf", "automake", "libtool", "libibumad-dev",
-                        "librdmacm-dev", "libpci-dev", "libibverbs-dev"):
+        for package in ("autoconf", "automake", "libtool", "libpci-dev"):
             self.assertIn(package, names)
             self.assertIn(package, _defaults()["perftest_setup_packages"])
+
+    def test_no_rdma_core_to_build_against_comes_from_a_package(self):
+        """The rdma-core these tools are built against is in /usr/local.
+
+        The archive's development packages gave the guest a second one, and
+        the build compiled against one and linked the other. They are in
+        neither list; tests/test_rdma_dev_packages.py holds the rest.
+        """
+        names = {line.strip() for line in MANIFEST.read_text().splitlines()
+                 if line.strip() and not line.lstrip().startswith("#")}
+        defaults = _defaults()
+        for package in ("libibverbs-dev", "librdmacm-dev", "libibumad-dev"):
+            self.assertNotIn(package, names)
+            self.assertNotIn(package, defaults["perftest_setup_packages"])
+        self.assertEqual(defaults["perftest_setup_rdma_dev_packages"],
+                         ["libibverbs-dev", "librdmacm-dev", "libibumad-dev"])
+        self.assertEqual(_play(BUILD_PLAY)["vars"]["perftest_setup_rdma_core"],
+                         "local")
 
     def test_the_role_is_linted_with_the_others(self):
         self.assertIn("perftest_setup/", LINT.read_text())
@@ -339,6 +362,7 @@ class Role(unittest.TestCase):
             "perftest_setup_rocm_kernels": True,
             "perftest_setup_rocm_arch": "gfx1250",
             "perftest_setup_rocm_dmabuf": True,
+            "perftest_setup_rdma_core": "archive",
             "perftest_setup_rdma_lib_dir": "/usr/local/lib",
             "perftest_setup_configure_extra": [],
             "perftest_setup_keep_source": False,
@@ -439,20 +463,33 @@ class Role(unittest.TestCase):
         values["perftest_setup_rocm_found"] = {"stdout": "/opt/rocm/core-10.1\n"}
         return " ".join(env.compile_expression(text[2:-2].strip())(**values))
 
-    def test_the_default_configure_line_is_the_one_that_built_on_a_guest(self):
-        """The golden guest has two rdma-cores, and the linker's default is
-        not the one the compiler's headers and the loader agree on.
+    def test_the_golden_configure_line_is_the_one_that_built_on_a_guest(self):
+        """With the rdma-core in /usr/local named, the linker is sent there.
 
-        Without the last argument the build compiled against rdma-core 66's
-        headers in /usr/local/include, linked the archive's 61 and failed on
-        ibv_alloc_buf. With it, it built: 18.76 s on an 8 vCPU guest.
+        On the published image, which still had the archive's development
+        packages, the build without the last argument compiled against
+        rdma-core 66's headers in /usr/local/include, linked the archive's
+        61 and failed on ibv_alloc_buf. With it, it built: 18.76 s on an
+        8 vCPU guest. The playbook's two variables give that line.
         """
-        self.assertEqual(self._configure_line(), GOLDEN_CONFIGURE)
+        golden = {name: _play(BUILD_PLAY)["vars"][name]
+                  for name in ("perftest_setup_rdma_core",
+                               "perftest_setup_rdma_lib_dir")}
+        self.assertEqual(golden, {"perftest_setup_rdma_core": "local",
+                                  "perftest_setup_rdma_lib_dir": "/usr/local/lib"})
+        self.assertEqual(self._configure_line(**golden), GOLDEN_CONFIGURE)
+        # The role's default is the archive's rdma-core, which the linker
+        # finds by itself: nothing is added.
         self.assertEqual(
-            self._configure_line(perftest_setup_rdma_lib_dir=""),
+            self._configure_line(),
             GOLDEN_CONFIGURE.replace(" LDFLAGS=-L/usr/local/lib", ""))
         self.assertEqual(
-            self._configure_line(perftest_setup_rocm_kernels=False,
+            self._configure_line(perftest_setup_rdma_core="local",
+                                 perftest_setup_rdma_lib_dir=""),
+            GOLDEN_CONFIGURE.replace(" LDFLAGS=-L/usr/local/lib", ""))
+        self.assertEqual(
+            self._configure_line(perftest_setup_rdma_core="local",
+                                 perftest_setup_rocm_kernels=False,
                                  perftest_setup_rocm_dmabuf=False,
                                  perftest_setup_configure_extra=["CFLAGS=-O0"]),
             "--prefix=/usr/local --enable-rocm "
@@ -461,6 +498,73 @@ class Role(unittest.TestCase):
         that = " ".join(self.main[0]["ansible.builtin.assert"]["that"])
         self.assertIn("perftest_setup_rdma_lib_dir | trim | length == 0", that)
         self.assertIn("perftest_setup_rdma_lib_dir | trim is match('^/')", that)
+        self.assertIn("perftest_setup_rdma_core in ['archive', 'local']", that)
+
+    def _build_packages(self, **given):
+        """What the role's apt task installs, evaluated with its defaults."""
+        _require(jinja2 is not None, "Jinja2")
+        install = next(t for t in self.build
+                       if t["name"] == "Install what the perftest build needs")
+        self.assertEqual(install["ansible.builtin.apt"]["name"],
+                         "{{ perftest_setup_build_packages }}")
+        self.assertEqual(install["ansible.builtin.apt"]["state"], "present")
+        text = install["vars"]["perftest_setup_build_packages"].strip()
+        self.assertTrue(text.startswith("{{") and text.endswith("}}"))
+        return jinja2.Environment().compile_expression(text[2:-2].strip())(
+            **dict(self.defaults, **given))
+
+    def test_only_the_archive_case_installs_rdma_core_to_build_against(self):
+        """The golden bake purges these packages; the role must not put
+        them back, and on a guest with no other rdma-core it must."""
+        dev = ["libibverbs-dev", "librdmacm-dev", "libibumad-dev"]
+        local = self._build_packages(perftest_setup_rdma_core="local")
+        self.assertEqual(local, self.defaults["perftest_setup_packages"])
+        for package in dev:
+            self.assertNotIn(package, local)
+        archive = self._build_packages(perftest_setup_rdma_core="archive")
+        self.assertEqual(archive,
+                         self.defaults["perftest_setup_packages"] + dev)
+        self.assertEqual(self._build_packages(), archive)
+        # Nothing else in the role installs a package.
+        installs = [t["name"] for t in _flatten(
+            self.main + self.build + self.verify)
+            if "ansible.builtin.apt" in t or "ansible.builtin.package" in t]
+        self.assertEqual(installs, ["Install what the perftest build needs"])
+        self.assertNotIn("apt-get", _text(self.main + self.build + self.verify))
+
+    def test_the_archive_case_is_refused_beside_another_rdma_core(self):
+        """Asked before anything is installed: the probe would say the same
+        with the development packages already back in the guest."""
+        names = [t["name"] for t in self.build]
+        look = names.index("Look for an rdma-core built from source")
+        refuse = names.index("Refuse to put the archive's rdma-core headers "
+                             "beside another rdma-core")
+        install = names.index("Install what the perftest build needs")
+        self.assertEqual([look, refuse, install], [0, 1, 2])
+        when = ["perftest_setup_rdma_core == 'archive'",
+                "perftest_setup_rdma_lib_dir | trim | length > 0"]
+        self.assertEqual(self.build[look]["when"], when)
+        self.assertEqual(self.build[refuse]["when"], when)
+        self.assertEqual(
+            self.build[look]["ansible.builtin.stat"]["path"],
+            "{{ perftest_setup_rdma_lib_dir | trim }}/libibverbs.so")
+        check = self.build[refuse]["ansible.builtin.assert"]
+        self.assertEqual(check["that"],
+                         ["not perftest_setup_rdma_local.stat.exists"])
+        self.assertIn('"local"', check["fail_msg"])
+
+    def test_the_local_case_tells_the_probe_where_the_library_has_to_be(self):
+        probe = next(
+            t for t in self.build if t["name"] ==
+            "Probe which rdma-core the build compiles, links and loads")
+        _require(jinja2 is not None, "Jinja2")
+        text = probe["environment"]["PERFTEST_RDMA_LIB_DIR"].strip()
+        self.assertTrue(text.startswith("{{") and text.endswith("}}"))
+        value = jinja2.Environment().compile_expression(text[2:-2].strip())
+        self.assertEqual(value(**dict(self.defaults,
+                                      perftest_setup_rdma_core="local")),
+                         "/usr/local/lib")
+        self.assertEqual(value(**self.defaults), "")
 
     def test_the_rdma_core_is_probed_before_the_build_and_compared_after(self):
         """One rdma-core for the headers, the link and the load."""
@@ -868,7 +972,7 @@ class RdmaProbe(unittest.TestCase):
             f"ok: one rdma-core: headers {self.local['headers']}, "
             f"library {self.local['real']}"])
 
-    def test_a_guest_with_only_the_archive_passes_with_the_default(self):
+    def test_a_guest_with_only_the_archive_passes(self):
         """A directory with no libibverbs in it is passed over."""
         code, out = self._probe(
             f"LDFLAGS=-L{self.tmp}/usr/local/absent",
@@ -876,6 +980,42 @@ class RdmaProbe(unittest.TestCase):
             load=self.archive["soname"])
         self.assertEqual(code, 0, out)
         self.assertIn(f"link={self.archive['real']}", out)
+
+    def test_a_golden_guest_without_the_development_packages_has_one(self):
+        """What the bake leaves: 66 at compile, link and load, flag or no
+        flag. Both printed this line on a purged guest (2026-11-17)."""
+        for args in ((f"LDFLAGS=-L{self.local['dir']}",), ()):
+            for more in ({}, {"PERFTEST_RDMA_LIB_DIR": self.local["dir"]}):
+                with self.subTest(args=args, more=more):
+                    code, out = self._probe(
+                        *args, headers=self.local["headers"],
+                        link=self.local["so"], load=self.local["soname"],
+                        **more)
+                    self.assertEqual(code, 0, out)
+                    self.assertEqual(
+                        out.splitlines()[-1],
+                        f"ok: one rdma-core: headers {self.local['headers']}, "
+                        f"library {self.local['real']}")
+
+    def test_one_rdma_core_that_is_not_the_one_named_is_refused(self):
+        """perftest_setup_rdma_core "local" on a guest that has only the
+        archive's: one rdma-core, and not the one the caller asked for."""
+        absent = f"{self.tmp}/usr/local/absent"
+        code, out = self._probe(
+            f"LDFLAGS=-L{absent}",
+            headers=self.archive["headers"], link=self.archive["so"],
+            load=self.archive["soname"], PERFTEST_RDMA_LIB_DIR=absent)
+        self.assertEqual(code, 1, out)
+        last = out.splitlines()[-1]
+        self.assertTrue(last.startswith("FAIL: "), out)
+        self.assertIn(f"which is not in {absent}", last)
+        self.assertIn('"archive"', last)
+        # Unset or empty, the directory is not asked about.
+        for more in ({}, {"PERFTEST_RDMA_LIB_DIR": ""}):
+            code, out = self._probe(
+                headers=self.archive["headers"], link=self.archive["so"],
+                load=self.archive["soname"], **more)
+            self.assertEqual(code, 0, out)
 
     def test_the_last_flags_on_the_line_are_the_ones_used(self):
         """As configure has it: a later LDFLAGS= replaces the role's."""

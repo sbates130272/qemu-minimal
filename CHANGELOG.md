@@ -135,6 +135,58 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- **The golden guest no longer carries Ubuntu's rdma-core development
+  packages**: `libibverbs-dev`, `librdmacm-dev` and `libibumad-dev`. The
+  image has two rdma-cores, the archive's 61 under `/usr` and rocm-ernic's
+  66, built from source under `/usr/local`, which every tool loads. Both had
+  headers and link libraries, and the toolchain took the headers from one
+  and the library from the other (the perftest entry above is that image).
+  The archive's is now a runtime only, and a build in the guest finds one
+  rdma-core with no flags: `gcc prog.c -libverbs` compiles against, links
+  and loads the one in `/usr/local`.
+  - *Not installed, and purged if present.* The three are out of
+    `qemu/packages.d/rocm-golden.txt`, `rocm_ernic_setup_packages` and the
+    perftest role's build dependencies. A new play, after everything that
+    compiles and before the stamp, purges them from a guest that has them
+    anyway (another manifest, an `--ansible-only` rerun on an older guest);
+    it first asks apt what the purge would remove and stops unless it is
+    those packages and nothing else, refuses when `/usr/local` has no
+    rdma-core to take their place, and never autoremoves.
+  - *The runtime stays*: `rdma-core`, `ibverbs-utils`, `ibverbs-providers`,
+    `libibverbs1`, `librdmacm1t64`, `libibumad3`. Other packages are linked
+    against them, `rdma-core` has the udev rules and units, and the
+    quickstart RDMA test runs `/usr/bin/ib_send_bw` by path. `libnl-3-dev`
+    and `libnl-route-3-dev` stay too.
+  - *`perftest_setup` has `perftest_setup_rdma_core`.* `local`, which
+    `vm-rocm-golden.yml` sets, installs no rdma-core package and sends the
+    linker to `perftest_setup_rdma_lib_dir`; `archive`, the default,
+    installs the three for a guest whose only rdma-core is the archive's,
+    and is refused before it installs anything on a guest that has one in
+    that directory. The probe stays, for the guest that still has both.
+  - *`/etc/rocm-golden-guest.json` names both rdma-cores.*
+    `rdma_core_version` was the archive package's version, though 66 is
+    what runs. It is kept, and beside it are `rdma_core_archive_version`,
+    `rdma_core_local_version` (`66.0`) and `rdma_core_local_libibverbs`, the
+    last two read off the libibverbs `ibv_devinfo` loads. `~/WELCOME.md`
+    names both and says how to build against RDMA.
+  - *`qemu/checks/rocm-golden.sh` has a block for it*, which the bake also
+    runs as its last check: none of the three is installed, no rdma-core
+    header set, link library or pkg-config file is outside `/usr/local`,
+    pkg-config resolves there, and a program built with no flags reads,
+    links and loads the `/usr/local` copy. **It fails the image the fleet
+    files pull**, which has the packages; only the lanes that bake run it
+    here.
+  - *What a guest loses*: the verbs API man pages and static linking against
+    rdma-core, for 3.1 MB. *What to avoid*: `apt install libibverbs-dev` in
+    a golden guest restores the mix. A `vm-basic.yml` guest is unchanged.
+  - *Measured on a guest, not in a bake.* On a guest of
+    `20261117.g481c892` the purge removed the three and nothing else, and
+    with them gone perftest, the P4 client and benchmark, rocm-ernic's
+    rdma-core itself, the `ionic-ernic` DKMS package and fio all built;
+    perftest and the P4 pair ran against the NIC. No bake has run with the
+    change, and the check block in its final form has run against stand-ins
+    and the dev host's toolchain only.
+
 - **`sbates130272.batesste` is pinned at 3.4.0** (was 3.3.1). It is a
   provisioning-speed release: `rocm_setup` looks up every version with one
   `rocm-latest` call, `user_setup` writes its SSH client settings as one
