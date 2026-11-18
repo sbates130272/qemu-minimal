@@ -113,6 +113,12 @@ rocm_ernic_setup_networkd_unmanaged: true
 # the half AGENTS.md issue 12 says does not survive a reboot.
 rocm_ernic_setup_netcfg: true
 rocm_ernic_setup_nic_subnet: "192.168.100"
+# Sets the hostname at boot to the name the host calls the guest by, which
+# `qemu-tool run-vm` passes in the SMBIOS system serial number; see
+# tasks/hostname.yml. On, the netcfg script's ernic-vm-<n> is what a guest
+# gets only when the host passed no name. Off, the guest is ernic-vm-<n>
+# whenever it has an emulated NIC, as it was before 2026-11-18.
+rocm_ernic_setup_hostname: true
 
 # ── Metrics ──────────────────────────────────────
 # yuuki/rdma_exporter, pinned by release and by the checksum of its tarball,

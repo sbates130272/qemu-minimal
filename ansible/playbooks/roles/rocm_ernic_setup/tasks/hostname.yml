@@ -1,0 +1,66 @@
+---
+# The guest's hostname is the name the host calls it by. `qemu-tool run-vm`
+# passes the VM name in the SMBIOS system serial number, and this unit makes
+# it the hostname on every boot; files/qemu-tool-hostname.sh says what counts
+# as a name and what happens without one.
+#
+# Its own unit rather than a step of rocm-ernic-netcfg.sh, which waits for an
+# emulated NIC and exits when there is none: a guest with no NIC has a name
+# too. Ordered into sysinit.target, after the root filesystem is writable and
+# before the network and every service that reads the hostname when it
+# starts (sshd, rsyslog, the exporters, a DHCP client). And before
+# cloud-init, which reads the preserve_hostname file the script writes; the
+# script says when that matters.
+
+- name: Install the script that names the guest what the host calls it
+  ansible.builtin.copy:
+    src: qemu-tool-hostname.sh
+    dest: /usr/local/sbin/qemu-tool-hostname.sh
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the guest hostname unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/qemu-tool-hostname.service
+    content: |
+      [Unit]
+      Description=Name the guest what the host calls it
+      DefaultDependencies=no
+      After=local-fs.target systemd-remount-fs.service
+      Before=sysinit.target network-pre.target shutdown.target
+      Before=cloud-init-main.service cloud-init-local.service
+      Before=rocm-ernic-netcfg.service
+      Wants=network-pre.target
+      Conflicts=shutdown.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/local/sbin/qemu-tool-hostname.sh
+      StandardOutput=journal
+      StandardError=journal
+
+      [Install]
+      WantedBy=sysinit.target
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Enable the guest hostname unit
+  ansible.builtin.systemd_service:
+    name: qemu-tool-hostname
+    enabled: true
+    daemon_reload: true
+
+# Now as well as at the next boot, so that a bake runs the script against the
+# name gen-vm passed it and fails here if it cannot write what it means to.
+- name: Name the guest what the host calls it
+  ansible.builtin.command:
+    cmd: /usr/local/sbin/qemu-tool-hostname.sh
+  register: rocm_ernic_setup_hostname_run
+  changed_when: "'hostname set to' in rocm_ernic_setup_hostname_run.stdout"
+
+- name: Report the guest's name
+  ansible.builtin.debug:
+    msg: "{{ rocm_ernic_setup_hostname_run.stdout | trim }}"

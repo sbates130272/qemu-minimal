@@ -11,7 +11,7 @@ from pathlib import Path
 
 from .caps import QemuCaps, qemu_binary
 from .config import VMConfig
-from .identity import identity_args
+from .identity import guest_name_args, identity_args
 from .ports import DEFAULT_SSH_PORT, NoFreePort, pick_free_port
 
 _ARCH_MACHINE = {
@@ -64,6 +64,8 @@ def build_command(cfg: VMConfig, caps: QemuCaps) -> list[str]:
     # Last: qemu and the listing parser both take the last -name/-uuid, so
     # stamping here stops literal --nvme passthrough from un-identifying the VM.
     cmd += identity_args("run-vm", cfg.vm_name)
+    # After them for the same reason: the last serial= QEMU is given wins.
+    cmd += guest_name_args(cfg.arch, cfg.vm_name)
     return cmd
 
 

@@ -44,6 +44,9 @@ jobs:
         echo "$out" | grep -q "virtio-serial-pci,id=virtio-serial0"
         echo "$out" | grep -q "virtserialport,chardev=qga0"
         echo "$out" | grep -q "org.qemu.guest_agent.0"
+        # The VM name, where the guest can read it: the rocm-golden image's
+        # hostname unit makes the SMBIOS serial number the hostname.
+        echo "$out" | grep -q -- "-smbios type=1,serial=dry-test"
         echo "✓ x86 defaults passed"
 
     - name: "Dry-run: x86 with --nvme 2"
@@ -92,6 +95,11 @@ jobs:
         echo "$out"
         echo "$out" | grep -q "qemu-system-aarch64"
         echo "$out" | grep -q "\-machine virt"
+        # amd64 only: no arm64 or riscv64 image reads the field. An if, not
+        # "! grep": bash -e does not exit on a status that was inverted.
+        if echo "$out" | grep -q -- "-smbios"; then
+          echo "arm64 was given -smbios" >&2; exit 1
+        fi
         echo "✓ arm64 passed"
 
     - name: "Dry-run: riscv64 defaults"
@@ -100,6 +108,9 @@ jobs:
         echo "$out"
         echo "$out" | grep -q "qemu-system-riscv64"
         echo "$out" | grep -q "\-machine virt"
+        if echo "$out" | grep -q -- "-smbios"; then
+          echo "riscv64 was given -smbios" >&2; exit 1
+        fi
         echo "✓ riscv64 passed"
 
     # The default MAC is derived from the SSH port, so a guest image that pins

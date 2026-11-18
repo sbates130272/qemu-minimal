@@ -13,8 +13,9 @@ name: qemu-minimal - Publish - qcow-rocm-golden
 #      which is how most consumers first meet the image
 #   4. boot as one guest of the default fleet, behind a stack rendered from
 #      qemu/stacks/rocm-golden.xml, with the ernic, rocjitsu and SDXI devices,
-#      run the configure, firmware and test stages, and copy through the
-#      SDXI engine
+#      run the configure, firmware and test stages, check the guest's
+#      hostname is the name the stack started it as and not the bake's, and
+#      copy through the SDXI engine
 #
 # What is published is the BAKE, not the disk that was tested. Steps 3 and 4
 # load modules, install an ip_discovery.bin and leave test output behind; each
@@ -407,6 +408,31 @@ jobs:
           exit 1
         fi
         echo "✓ the baked SRQ + P4 ionic driver is loaded, max_srq above zero (P4: $p4)"
+
+    # The one boot in this workflow where the hostname has to CHANGE. The
+    # image is baked as ${VM_NAME}, which is the name in its /etc/hostname,
+    # and the boot with no device above ran it under that same name, so the
+    # guest check passed there on what the bake wrote. This guest is
+    # ${VM_NAME}-1, an overlay of the bake started under another name with a
+    # NIC attached, which is every guest of every stack: run-vm passes the
+    # name in the SMBIOS serial number and the image's qemu-tool-hostname
+    # unit has to make it the hostname, rocm-ernic-netcfg has to leave it
+    # (it used to say ernic-vm-1), and so has the configure stage above
+    # (rocm-ernic-vm-1). The "begin: guest hostname" to "end: guest
+    # hostname" lines of the guest check, told the name the stack gave.
+    # Ahead of the push, and fatal: an image whose guests do not take their
+    # stack's name is not published.
+    - name: Verify the guest took the name the stack gave it
+      run: |
+        out=$({ echo 'set -eu'
+                sed -n '/^# begin: guest hostname$/,/^# end: guest hostname$/p' \
+                  qemu/checks/rocm-golden.sh; } |
+              ssh $SSH_OPTS -p 2222 ubuntu@qemu-1 \
+                "ROCM_GOLDEN_EXPECT_HOSTNAME=${VM_NAME}-1 bash -s")
+        echo "$out"
+        # The line the block ends on: markers that moved would send nothing.
+        echo "$out" | grep -q "^hostname: ${VM_NAME}-1 is what the host calls this guest$"
+        echo "✓ the guest baked as ${VM_NAME} answers to ${VM_NAME}-1"
 
     - name: Verify the RDMA port is active
       run: |

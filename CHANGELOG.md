@@ -277,6 +277,48 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- **A guest's hostname is the name the host calls it by.** A stack's guests
+  were `rocm-golden-1` and `rocm-golden-2` in `qemu-tool list`, in the
+  compose services and in Prometheus's `vm_name`, and `ernic-vm-1` and
+  `ernic-vm-2` inside, named from the index in their NIC's MAC; the
+  configure stage then made them `rocm-ernic-vm-1`.
+  - `run-vm` passes the VM name to the guest in the SMBIOS system serial
+    number (`-smbios type=1,serial=<name>`), on amd64, and `gen-vm --bake`
+    passes the bake's name the same way. `--dry-run` shows it.
+  - The rocm-golden image has a new boot unit, `qemu-tool-hostname.service`,
+    that makes that name the hostname: lower case, anything outside
+    `[a-z0-9-]` a hyphen, the last 63 characters of a longer one. It writes
+    `/etc/hostname` and one `127.0.1.1 <name>` line in `/etc/hosts`, and
+    tells cloud-init to leave the hostname alone while the host gives one.
+  - `ernic-vm-<n>` is now only the name of a guest the host passed no name:
+    one started by something other than `run-vm`, that has an emulated NIC.
+  - `vm-rocm-golden.yml --tags configure` no longer renames the guest or
+    rewrites `/etc/hosts` (`ernic_set_hostname: false`).
+  - *Who is affected:* anything that expects `ernic-vm-<n>` or
+    `rocm-ernic-vm-<n>` as a guest's hostname. **Not yet anyone:** the guest
+    half is in the image and arrives with the next one published; with
+    `20261117.g481c892` guests keep the old names.
+  - **A stack needs both halves.** Its `run-vm` is the one inside each qemu
+    container: built from the tree `QEMU_TOOL_SRC` names (`quick-start` from
+    a checkout stages its own), and installed from PyPI when there is none.
+    `2.0.0`, which is what PyPI serves, passes no name, so a stack run from
+    an installed tool with no checkout keeps `ernic-vm-<n>` on the new image
+    until this release is on PyPI. Either half without the other changes
+    nothing, so the order they ship in does not matter.
+  - A VM name that is itself a firmware placeholder is not passed through:
+    `none`, `null`, `empty`, `unknown`, `invalid`, `oem`, `na`, all zeros,
+    four or more of one character, `123456789`. The guest keeps the name it
+    had, and `qemu/checks/rocm-golden.sh` fails it and says why. No stack
+    makes such a name.
+  - The publish workflow checks the rename before it pushes: its gate guest
+    is `rocm-golden-1`, an overlay of an image baked as `rocm-golden`, and
+    the hostname has to be the first. Not yet run.
+  - Measured on one guest of the published image with the unit installed
+    and no device attached: started as `Mixed_Case-Name-7` it was
+    `mixed-case-name-7`, started again as `Second.Guest_02` it was
+    `second-guest-02`, and with the argument removed it kept the name it
+    had. Not run: a bake, or a stack with two guests and their NICs.
+
 - **The golden guest no longer carries Ubuntu's rdma-core development
   packages**: `libibverbs-dev`, `librdmacm-dev` and `libibumad-dev`. The
   image has two rdma-cores, the archive's 61 under `/usr` and rocm-ernic's

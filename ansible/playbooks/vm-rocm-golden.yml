@@ -745,6 +745,8 @@
       vars:
         rocm_ernic_setup_p4_user: "{{ vm_username | default('ubuntu') }}"
 
+    # And, first, the unit that names the guest what run-vm calls it:
+    # netcfg's ernic-vm-<n> is for a guest the host passed no name.
     - name: Install rocm-ernic-netcfg.sh and its systemd unit
       ansible.builtin.include_role:
         name: rocm_ernic_setup
@@ -752,6 +754,7 @@
       vars:
         rocm_ernic_setup_networkd_unmanaged: false
         rocm_ernic_setup_netcfg: true
+        rocm_ernic_setup_hostname: true
 
     # Enabled, not started: there is no RDMA device during a bake.
     - name: Install the RDMA metrics exporter
@@ -1175,6 +1178,10 @@
     ernic_guest_agent: false
     ernic_guest_build_deps: false
     ernic_gpu_passthrough: false
+    # The guest's name is the one the host calls it by, which the image's
+    # qemu-tool-hostname unit set at boot from what run-vm passed. The role
+    # would rename it rocm-ernic-vm-<index> and write that to /etc/hosts.
+    ernic_set_hostname: false
     ernic_ionic_kernel_ref: "{{ ionic_kernel_pin }}"
     ernic_source_repo_version: "{{ ernic_source_pin }}"
     # The role asserts ernic_guest_vm_ip is non-empty. Upstream derives it per

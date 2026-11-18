@@ -145,7 +145,17 @@ ssh -i <vm-images-dir>/keys/id_rsa -p 2222 ubuntu@localhost   # guest 1; 2223 is
 ```
 
 from the host the stack runs on, and from nowhere else; `qemu-tool ssh
-<vm-name>` resolves the same thing. Nothing else is published: the
+<vm-name>` resolves the same thing. Inside, the guest's hostname is that
+`<vm-name>` (`rocm-golden-1`, `rocm-golden-2`): `run-vm` passes it in the
+SMBIOS serial number and the image sets it at boot. Both halves have to be
+there, or the guests are `ernic-vm-1`, `ernic-vm-2` as before: an image
+published after `20261117.g481c892`, and a `run-vm` in the qemu containers
+that passes the name. The containers build qemu-tool from the tree
+`QEMU_TOOL_SRC` (or `<qemu-tool-src>`) names, and with none there they
+install it from PyPI, where `2.0.0` does not pass one; a stack run without
+a checkout needs the first release after it. `sudo cat
+/sys/class/dmi/id/product_serial` in a guest says which half is missing:
+empty, and the host passed no name. Nothing else is published: the
 `<vm-extra-hostfwd>` rules listen inside each qemu container and Prometheus
 scrapes them over the stack's own network.
 

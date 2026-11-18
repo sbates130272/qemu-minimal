@@ -26,7 +26,7 @@ from pathlib import Path
 from .vm_artifact import VM_INFO_ARTIFACT_TYPE, VM_PUB_NAME
 from .caps import qemu_binary
 from .config import VMConfig
-from .identity import identity_args
+from .identity import guest_name_args, identity_args
 from .ports import AUTO_SSH_PORT_ATTEMPTS, ssh_hostfwd_refused
 from .run_vm import (
     DISCARD_OPTS,
@@ -885,6 +885,9 @@ def _first_boot(cfg: VMConfig, images: Path, backing: Path) -> None:
         "-drive", f"if=virtio,format=qcow2,file={seed}",
         "-netdev", "user,id=net0",
         "-device", f"virtio-net-pci,netdev=net0,mac={_effective_mac(cfg)}",
+        # The same name the cloud-config's hostname line gives. cloud-init
+        # finds its seed by the cidata label, not by this field.
+        *guest_name_args(cfg.arch, cfg.vm_name),
     ]
     # Without KVM, emulation is slow enough that cloud-init's rootfs expand
     # (growpart + resize2fs) can take 30+ minutes on arm64/riscv64. Cap the
@@ -1120,6 +1123,9 @@ def _start_qemu(boot: VMConfig, backing: Path, watch: bool) -> subprocess.Popen:
     cmd = [
         qemu_binary(boot),
         *identity_args("gen-vm", boot.vm_name),
+        # The bake's name, the way run-vm passes a guest's: the image's
+        # hostname unit runs on the name it will be published under.
+        *guest_name_args(boot.arch, boot.vm_name),
         *_arch_args_for_gen(boot, ",accel=kvm" if boot.kvm else ""),
         "-smp", f"cpus={boot.vcpus}",
         "-m", str(boot.vmem),

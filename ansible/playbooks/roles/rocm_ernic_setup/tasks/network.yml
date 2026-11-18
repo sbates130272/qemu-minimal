@@ -1,4 +1,11 @@
 ---
+# First, and not gated on rocm_ernic_setup_netcfg: the script below asks
+# this one whether the host named the guest before it falls back to
+# ernic-vm-<n>, and a guest with no emulated NIC has a name too.
+- name: Install the unit that names the guest what the host calls it
+  ansible.builtin.include_tasks: hostname.yml
+  when: rocm_ernic_setup_hostname | bool
+
 - name: Keep systemd-networkd off the emulated ernic
   # The image's netplan is `match: name: "en*"` and udev leaves enp0s5np0 as
   # an altname, which that glob matches -- so networkd adopts rocm-ernic0,

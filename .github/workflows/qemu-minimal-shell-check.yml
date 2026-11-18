@@ -31,7 +31,8 @@ jobs:
             libvirt/virt-install-ubuntu \
             scripts/*.sh \
             scripts/vm-report/*.sh \
-            qemu/compose/*/tapsetup/*.sh
+            qemu/compose/*/tapsetup/*.sh \
+            ansible/playbooks/roles/rocm_ernic_setup/files/qemu-tool-hostname.sh
 
       # The sidecar scripts under qemu/compose/ were outside the list above
       # until they had already shipped a bug this would have caught: setup.sh

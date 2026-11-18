@@ -1496,3 +1496,113 @@ fi
 rm -rf "${_sm_tmp}"
 _sm_tmp=''
 # end: sdxi metrics
+
+# --- the guest's name ----------------------------------------------------
+
+# The guest answers to the name the host calls it by. `qemu-tool run-vm`
+# passes the VM name in the SMBIOS system serial number, and
+# qemu-tool-hostname.service makes it the hostname at boot. Until
+# 2026-11-18 a stack's guests were rocm-golden-1 and rocm-golden-2 to the
+# host and ernic-vm-1 and ernic-vm-2 to themselves, named from the index in
+# their NIC's MAC, and the configure stage then made them rocm-ernic-vm-1.
+#
+# What is asked depends on what the host passed:
+#
+#   a serial on a QEMU machine that is already a hostname   it is the
+#       hostname, compared here without the unit's script, so a script that
+#       wrongly said "no name" does not pass. Every boot of both lanes is
+#       this case: rocm-golden-test-1 behind the playbook-test stack,
+#       rocm-golden in the publish workflow's boot with no device, and
+#       rocm-golden-1 behind its gate stack. Only the last is a guest
+#       started under a name that is not the bake's, so only there does a
+#       pass show the unit renamed anything: /etc/hostname in the image
+#       already holds the bake's name.
+#   any other serial the script accepts   the hostname is what the script
+#       makes of it.
+#   none   noted, and nothing compared: a boot by something other than
+#       run-vm.
+#
+# A VM name that is one of the words firmware writes for a serial nobody
+# set -- none, null, empty, unknown, invalid, oem, na, 0 or all zeros, four
+# or more of one character (aaaa, 1111), 123456789 -- is the first case and
+# FAILS it: the script takes it for a placeholder and the unit leaves the
+# hostname alone, so the guest does not answer to the name the host calls
+# it by. The error carries the script's reason. No stack makes such a name
+# (<vm-name-prefix>-<n>); a `run-vm --vm-name none` does.
+#
+# ROCM_GOLDEN_EXPECT_HOSTNAME is for a caller that knows the name it gave:
+# the hostname has to be that, whatever the guest reads.
+#
+# tests/test_guest_hostname.py runs the lines between the two markers
+# against fabricated trees, so keep the three paths on the lines that name
+# them.
+# begin: guest hostname
+_hn_script=/usr/local/sbin/qemu-tool-hostname.sh
+_hn_etc=/etc
+_hn_dmi=/sys/class/dmi/id
+_hn_unit=qemu-tool-hostname.service
+if [ ! -x "${_hn_script}" ]; then
+    echo "ERROR: hostname: ${_hn_script} is missing: nothing gives this" \
+         "guest the name the host calls it by" >&2
+    exit 1
+fi
+if [ "$(systemctl is-enabled "${_hn_unit}" 2>/dev/null || true)" != enabled ]; then
+    echo "ERROR: hostname: ${_hn_unit} is not enabled" >&2
+    exit 1
+fi
+# A oneshot that stays active once it has succeeded.
+if [ "$(systemctl is-active "${_hn_unit}" 2>/dev/null || true)" != active ]; then
+    echo "ERROR: hostname: ${_hn_unit} did not run to the end on this boot" >&2
+    exit 1
+fi
+_hn_is=$(hostname)
+_hn_serial=$(sudo -n cat "${_hn_dmi}/product_serial" 2>/dev/null || true)
+_hn_vendor=$(cat "${_hn_dmi}/sys_vendor" 2>/dev/null || true)
+# The script's reason when it gives no name, for the two errors below.
+_hn_why=""
+if ! _hn_want=$(sudo -n "${_hn_script}" name 2>/dev/null); then
+    _hn_want=""
+    _hn_why=$(sudo -n "${_hn_script}" name 2>&1 >/dev/null || true)
+fi
+case "${_hn_serial}" in
+    ""|-*|*-|*[!a-z0-9-]*) _hn_plain=false ;;
+    *) _hn_plain=true ;;
+esac
+if [ "${#_hn_serial}" -gt 63 ] || [ "${_hn_vendor}" != QEMU ]; then
+    _hn_plain=false
+fi
+if [ "${_hn_plain}" = true ] && [ "${_hn_want}" != "${_hn_serial}" ]; then
+    echo "ERROR: hostname: the host calls this guest ${_hn_serial}, and" \
+         "${_hn_script} makes of that '${_hn_want}'${_hn_why:+: ${_hn_why}}" >&2
+    exit 1
+fi
+if [ -n "${ROCM_GOLDEN_EXPECT_HOSTNAME:-}" ] &&
+        [ "${_hn_want}" != "${ROCM_GOLDEN_EXPECT_HOSTNAME}" ]; then
+    echo "ERROR: hostname: this guest was started as" \
+         "${ROCM_GOLDEN_EXPECT_HOSTNAME} and reads '${_hn_want}' from the" \
+         "SMBIOS serial number '${_hn_serial}'${_hn_why:+: ${_hn_why}}" >&2
+    exit 1
+fi
+if [ -z "${_hn_want}" ]; then
+    echo "hostname: the host passed this guest no name (SMBIOS serial" \
+         "'${_hn_serial}'), so ${_hn_is} is not compared with one"
+else
+    if [ "${_hn_is}" != "${_hn_want}" ]; then
+        echo "ERROR: hostname: the host calls this guest ${_hn_want} and" \
+             "its hostname is ${_hn_is}" >&2
+        exit 1
+    fi
+    if [ "$(cat "${_hn_etc}/hostname")" != "${_hn_want}" ]; then
+        echo "ERROR: hostname: ${_hn_etc}/hostname is" \
+             "$(cat "${_hn_etc}/hostname"), not ${_hn_want}" >&2
+        exit 1
+    fi
+    # One line for the name, and none for a name it had before.
+    if [ "$(grep '^127\.0\.1\.1[[:space:]]' "${_hn_etc}/hosts")" != "127.0.1.1 ${_hn_want}" ]; then
+        echo "ERROR: hostname: ${_hn_etc}/hosts does not map 127.0.1.1 to" \
+             "${_hn_want} and to nothing else" >&2
+        exit 1
+    fi
+    echo "hostname: ${_hn_want} is what the host calls this guest"
+fi
+# end: guest hostname

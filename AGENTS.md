@@ -1880,8 +1880,9 @@ links down first.
 **`rocm-ernic-netcfg.sh` configures every matching NIC**, not just the first.
 It walks all of them and derives each address from that NIC's own MAC, which
 matches `gen-compose` keying MACs and IPs on the global NIC ordinal — so VM
-*n*'s devices land on consecutive addresses from `.11` up. The hostname still
-comes from the first NIC only: it names the guest, not the device.
+*n*'s devices land on consecutive addresses from `.11` up. It no longer names
+the guest unless the host passed no name, and then from the first NIC only;
+see "The guest's hostname".
 
 `ernic_guest_setup` ships its own copy and reloads udev on its driver path —
 which is why the configure play, though it now leaves that path off, still
@@ -1926,6 +1927,206 @@ The subsystem pair is what distinguishes this device from a real Pensando
 NIC, because `1dd8:1002` is a real one's id — see the PCI ID section. So a
 guest that comes up with kernel names has a device that failed one of four
 matches, not two; check all four before re-copying anything.
+
+## The guest's hostname (in-VM)
+
+**A guest's hostname is the name the host calls it by**, and the host tells
+it. A stack's guests are `rocm-golden-1` and `rocm-golden-2` to the host:
+`<vm-name-prefix>` plus an index, which is the name in `qemu-tool list`, the
+`--vm-name` each `qemu-N` service gives `run-vm`, and the `vm_name` label in
+Prometheus. Until 2026-11-18 they were `ernic-vm-1` and `ernic-vm-2` to
+themselves. Every guest boots an overlay of one image, so nothing inside one
+says which it is; `rocm-ernic-netcfg.sh` took an index from the first
+emulated NIC's MAC and ran `hostnamectl set-hostname ernic-vm-<n>`, and the
+configure stage's `ernic_guest_setup` then made it `rocm-ernic-vm-<n>`.
+
+**With today's published image, `20261117.g481c892`, nothing a user sees
+changes.** The guest half is in the image, and reaches guests with the next
+one published: `vm-quickstart.yml` installs none of it, and should not start
+to. Until then `run-vm` passes a name that nothing in the guest reads, and a
+stack's guests are still `ernic-vm-<n>`.
+
+**A stack needs both halves, and the host half is not the `qemu-tool` on the
+host.** The `run-vm` that starts a stack's guest is the one inside its qemu
+container. `gen_compose._pipx_install` builds it from
+`/qemu-tool-src/qemu` when that mount holds a `pyproject.toml`, and
+otherwise runs `pipx install qemu-tool`. The mount is `QEMU_TOOL_SRC`,
+`../../..` by default, which is a checkout only for `qemu/compose/<stack>/`;
+`quick-start` from a checkout stages its own `qemu/` into the stack
+directory, and from an installed tool with no checkout stages nothing. PyPI
+serves `2.0.0` (asked 2026-11-18), the version string this tree still
+carries, and that `run-vm` passes no `-smbios`. So such a stack keeps
+`ernic-vm-<n>` on a new image until the first release after `2.0.0` is on
+PyPI. Either half without the other changes nothing a user sees — the new
+image under an old `run-vm` reads an empty serial and falls back — so the
+release and the `<backing-ref>` move can go in either order; the fix shows
+when both are in. In a guest, `sudo cat /sys/class/dmi/id/product_serial`
+says which half is missing: empty is the host half, and no
+`/usr/local/sbin/qemu-tool-hostname.sh` is the image.
+
+**The host half is one argument.** `identity.guest_name_args()` returns
+`-smbios type=1,serial=<vm-name>`, and three things add it: `run-vm`, last
+on the command line so that a serial in a literal `--nvme` passthrough does
+not outrank it, and both of `gen-vm`'s bake boots, so the image's unit meets
+a name during the bake. The generated stacks do not change, since the name
+was already `run-vm --vm-name`. Read off a guest (QEMU 10.2.1, q35):
+
+| What | Measured |
+|---|---|
+| `sudo cat /sys/class/dmi/id/product_serial` | the VM name, as typed; mode 0400, root only |
+| `sudo dmidecode -s system-serial-number` | the same |
+| `sys_vendor`, `product_name` | still `QEMU` and `Standard PC (Q35 + ICH9, 2009)`: only the serial is named |
+| `product_uuid` | still the value `-uuid` gave |
+| with no `-smbios` | `product_serial` empty, `dmidecode` says `Not Specified` |
+
+- **The system serial number, not `fw_cfg`.** The DMI attributes are in
+  sysfs from the first instant with no module; `fw_cfg` would need
+  `qemu_fw_cfg`, which is a module on the pinned kernel (it is loaded in the
+  guest, so that route works too, it just has one more thing to lose).
+- **amd64 only** (`identity.GUEST_NAME_ARCHES`). The one image that reads
+  the field is amd64. `qemu-system-riscv64` 10.2.1 on the dev host accepts
+  `-smbios` on its `virt` machine; older releases did not (QEMU 9.0 is where
+  it arrived, from memory and not checked here), and whether a riscv64 guest
+  under U-Boot then sees the table was not tried. No `qemu-system-aarch64`
+  is on the dev host to ask. `identity_args()` stays the pair every target
+  takes.
+- **A comma is doubled**, which is QEMU's escape: `serial=a,b` is refused as
+  `Invalid parameter 'b'`. The CLI already refuses a comma in `--vm-name`,
+  so this is for a caller that builds a `VMConfig` itself. Spaces and `=` go
+  through as they are.
+- **cloud-init reads the same field.** `ds-identify` looks at
+  `DMI_PRODUCT_SERIAL` for three things: ` ds=nocloud` after a space, a
+  serial ending `.brightbox.com`, and one starting `GoogleCloud-`. A VM name
+  of one of those shapes turns a datasource on. Any other is ignored:
+  measured with the serial set and no seed, `No ds found`, and cloud-init
+  disabled by its generator exactly as before; with a NoCloud seed attached,
+  `Found single datasource: NoCloud`, by the `cidata` label. The bake's
+  first boot is that second case.
+
+**The guest half is `qemu-tool-hostname.service`**, a oneshot that runs
+`/usr/local/sbin/qemu-tool-hostname.sh`
+([source](ansible/playbooks/roles/rocm_ernic_setup/files/qemu-tool-hostname.sh)).
+`rocm_ernic_setup`'s `hostname` tasks install and enable it and run it once,
+so a bake fails there if the script cannot write; `network.yml` includes them
+first, behind `rocm_ernic_setup_hostname` (on by default) and not behind the
+netcfg switch.
+
+- **Its own unit, not a step of netcfg**, which waits thirty seconds for an
+  emulated NIC and exits 1 without one: a guest with no NIC has a name too.
+  `DefaultDependencies=no`, after `local-fs.target`, wanted by and before
+  `sysinit.target`, before `network-pre.target`, cloud-init and
+  `rocm-ernic-netcfg.service`. So sshd, the exporters and a DHCP client all
+  start under the new name. It ran 1.5 s after systemd started, 6 s into the
+  boot.
+- **What counts as a name.** Not a placeholder (empty, `Not Specified`,
+  `To be filled by O.E.M.`, `0`, all zeros, four or more of one character,
+  and the like). On a machine whose `sys_vendor` is `QEMU`: QEMU sets no
+  serial of its own, so one that is there was given by whoever started it,
+  where a real machine's serial number or a cloud's instance id is not a
+  name anyone chose. Then made a hostname by rule: lower case, every
+  character outside `[a-z0-9-]` a hyphen, no hyphen at either end, and the
+  **last** 63 characters of a longer one, because a fleet's guests differ at
+  the end. `Mixed_Case-Name-7` is `mixed-case-name-7`; a name that is
+  already a hostname is unchanged.
+- **A VM name that is itself a placeholder word is not passed through.**
+  `none`, `null`, `empty`, `unknown`, `invalid`, `oem`, `na`, `0` or all
+  zeros, four or more of one character (`aaaa`, `1111`) and `123456789` are
+  hostnames, and the script cannot tell `run-vm --vm-name none` from a
+  serial nobody set. The unit leaves the hostname alone, and the guest
+  check fails such a guest, with the script's reason in the error, since it
+  does not answer to the name the host calls it by. No stack makes one: its
+  guests are `<vm-name-prefix>-<n>`. Run with the worktree script against
+  fabricated trees, not on a guest.
+- **Written directly**, to `/etc/hostname` and `/proc/sys/kernel/hostname`,
+  not through `hostnamectl`: D-Bus is not up that early. `/etc/hosts` gets
+  one `127.0.1.1 <name>` line, replacing any that is there. The image had
+  none (its hostname resolved through systemd-resolved, and `sudo` did not
+  warn either way); the line makes the name resolve without resolved and
+  takes out the `127.0.1.1 rocm-ernic-vm-<n>` the collection used to write.
+- **Every boot, and the name is kept.** An overlay booted under another
+  `--vm-name` follows. A boot with no name leaves the hostname alone, so it
+  is whatever `/etc/hostname` holds: the bake's name on a fresh overlay, the
+  last name the host gave on a used one.
+- **cloud-init is kept off the hostname while the host names the guest.**
+  The script writes `/etc/cloud/cloud.cfg.d/99-qemu-tool-hostname.cfg`,
+  `preserve_hostname: true`, and removes it on a boot with no name. Usually
+  there is nothing to keep off: with no datasource cloud-init is disabled by
+  its generator, and for the instance it already knows, `update_hostname`
+  logs "assuming user maintained hostname" and changes nothing. A **new**
+  instance is the case: its `set_hostname` wrote the datasource's name over
+  the host's when forced to run without the file, and did nothing with it.
+  Booted for real with a NoCloud seed saying `hostname: from-the-seed`: the
+  guest stayed `seeded-guest` with `-smbios`, and became `from-the-seed`
+  without.
+
+**`ernic-vm-<n>` is now the name of a guest the host did not name.**
+`rocm-ernic-netcfg.sh` asks the script (`qemu-tool-hostname.sh name`, which
+changes nothing) before it renames, so a guest started by something that
+passes no name, or an image without the script, is named from its first NIC
+as before. And **the configure stage no longer renames the guest**:
+`ernic_set_hostname: false` in that play's vars, which is the `when:` of
+both tasks in the collection's `nic.yml` that touch the name.
+
+What a guest gets from each way of starting it:
+
+| Started by | Hostname |
+|---|---|
+| `run-vm`, a stack, `quick-start` | the VM name, made a hostname |
+| `gen-vm --bake` | the bake's name, which cloud-init had already set |
+| plain `qemu-system-x86_64` | what `/etc/hostname` holds, then `ernic-vm-<n>` if it has an emulated NIC |
+| a libvirt domain, one from `--convert-to-libvirt` included: the XML it writes carries no serial | the same, by reading; not run |
+| any of those with `-smbios type=1,serial=<name>` added by hand | that name |
+
+`qemu/checks/rocm-golden.sh` asks in its `guest hostname` block: the script
+is there, the unit is enabled and ran, and the hostname, `/etc/hostname` and
+the one `127.0.1.1` line are the name. A serial that is already a hostname
+is compared without the script, so a script that wrongly answered "no name"
+does not pass as a boot nobody named; a boot with no name is noted and
+passes. `ROCM_GOLDEN_EXPECT_HOSTNAME` is for a caller that knows the name:
+the playbook-test lane runs the block again after the configure stage with
+`$VM_NAME`, which is where the rename used to happen.
+
+**Only the publish lane boots a baked image under a name that is not the
+bake's**, and that is the boot that shows the unit renaming anything. The
+image's `/etc/hostname` holds the bake's name, so a guest started under that
+same name passes the check on what the bake wrote:
+
+| Boot | Baked as | Started as | Shows |
+|---|---|---|---|
+| playbook-test, behind its stack | `rocm-golden-test-1` | `rocm-golden-test-1` | netcfg and the configure stage leave the name alone; not that the unit set it |
+| publish, no device | `rocm-golden` | `rocm-golden` | the unit ran and the name agrees; not that it set it |
+| publish, the gate stack, with a NIC | `rocm-golden` | `rocm-golden-1` | the rename, with netcfg and the configure stage after it |
+
+The gate stack's step, "Verify the guest took the name the stack gave it",
+runs the block with `ROCM_GOLDEN_EXPECT_HOSTNAME=${VM_NAME}-1` after the
+configure stage and ahead of the push, so an image whose guests keep the
+bake's name, or take `ernic-vm-1`, is not published. Its qemu container
+builds qemu-tool from the staged checkout (`<qemu-tool-src>`), not from
+PyPI. The lane never runs from a pull request, so before a merge the rename
+is covered by `tests/test_guest_hostname.py` alone; making the playbook-test
+lane boot a second overlay under another name would close that, and was not
+done. Neither step has run.
+
+Three things to know:
+
+- **The first boot under a new name logs its first seconds under the old
+  one.** systemd sets the hostname from `/etc/hostname` before any unit
+  runs, so kernel and early-boot lines in that boot's journal carry the
+  previous name (715 lines, up to the 6 s mark, on the measured guest).
+  Later boots are right from the first line.
+- **Two guests can have one name.** A scratch `run-vm --vm-name
+  rocm-golden-1` beside a stack shows twice in `qemu-tool list`, and
+  `inspect` takes one of them.
+- **Proven on one guest with no device**, an overlay of
+  `20261117.g481c892` with the role's network tasks applied, booted nine
+  times: by `run-vm`, or by hand from its `--dry-run` command line where an
+  argument had to change. The name set, followed under a second and third
+  `--vm-name`, left alone with the argument removed, with a placeholder and
+  under another vendor, and the two seeded boots above. Not run: a bake, a
+  stack with two guests and
+  NICs, the netcfg path with a NIC (its tests run the script against a
+  fabricated sysfs with `ip` and `hostnamectl` stubbed), and
+  `ansible-lint`, which does not start on the dev host.
 
 ## PCI ID (in-VM)
 
@@ -2727,8 +2928,9 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
       the guest.
 
     The role with its driver path off still stages `/tmp/ionic` in the guest
-    (patches and two scripts) though nothing is built from it, and sets the
-    hostname to `rocm-ernic-vm-<index>`. And `/var/tmp/ionic-src` has no
+    (patches and two scripts) though nothing is built from it. It no longer
+    sets the hostname to `rocm-ernic-vm-<index>`: the play turns that off
+    (`ernic_set_hostname`), see "The guest's hostname". And `/var/tmp/ionic-src` has no
     reader left once the bake is over; `image_slim` still keeps it, so the
     published image does not change shape with this fix. Dropping it
     (`image_slim_drop_ionic_src`) is a decision about the image.

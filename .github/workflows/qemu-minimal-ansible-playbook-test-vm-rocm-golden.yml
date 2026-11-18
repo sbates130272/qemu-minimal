@@ -386,6 +386,25 @@ jobs:
         echo "$out" | grep -q '^git: no URL rewrite at system scope$'
         echo "✓ no git URL rewrite left in the guest"
 
+    # The guest's hostname is the name the stack started it as: run-vm
+    # passes --vm-name in the SMBIOS serial number and the image's
+    # qemu-tool-hostname unit sets it at boot. The configure stage's role
+    # used to rename the guest rocm-ernic-vm-1 and write that to /etc/hosts;
+    # the play now turns that off (ernic_set_hostname). The guest check
+    # asked before that stage. The same lines of it again, "begin: guest
+    # hostname" to "end: guest hostname", told the name this lane gave.
+    - name: Verify the configure stage left the guest its name
+      run: |
+        out=$({ echo 'set -eu'
+                sed -n '/^# begin: guest hostname$/,/^# end: guest hostname$/p' \
+                  qemu/checks/rocm-golden.sh; } |
+              ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no \
+                -p 2222 ubuntu@qemu-1 "ROCM_GOLDEN_EXPECT_HOSTNAME=$VM_NAME bash -s")
+        echo "$out"
+        # The line the block ends on: markers that moved would send nothing.
+        echo "$out" | grep -q "^hostname: ${VM_NAME} is what the host calls this guest$"
+        echo "✓ the guest still answers to ${VM_NAME}"
+
     # The baked ionic and ionic_rdma; there is no rocm_ernic module.
     - name: Verify ionic modules loaded and NIC visible
       run: |

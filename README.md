@@ -456,6 +456,18 @@ qemu-tool run-vm --vm-name myvm
 qemu-tool ssh myvm                          # from another terminal
 ```
 
+On x86, `run-vm` also tells the guest its name: the VM name goes in the
+SMBIOS system serial number (`sudo cat /sys/class/dmi/id/product_serial`),
+and a guest made from the rocm-golden image sets its hostname from it at
+boot, so `rocm-golden-1` on the host is `rocm-golden-1` inside. It takes
+both halves. The guest half is in the image, from the next one published
+after `20261117.g481c892`; a guest of an image without it names itself as
+before. The host half is this `run-vm`, and in a stack the `run-vm` is the
+one inside each qemu container: built from the source tree `QEMU_TOOL_SRC`
+names when there is one, and otherwise installed from PyPI, where `2.0.0`
+passes no name. So a stack run without a checkout needs the first qemu-tool
+release after `2.0.0` as well as the new image.
+
 `gen-vm` generates an SSH keypair for each image it bakes, keeps it in
 `<images>/keys/<vm-name>_id_rsa` and prints the path; `qemu-tool ssh` finds
 it. By hand that is `ssh -i <images>/keys/myvm_id_rsa -p 2222
