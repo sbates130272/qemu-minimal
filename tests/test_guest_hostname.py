@@ -381,7 +381,7 @@ class GuestHostnameScript(unittest.TestCase):
                 ("-lead-and-trail-", "lead-and-trail"),
                 ("a,b c.d", "a-b-c-d"),
                 ("  rocm-golden-2  ", "rocm-golden-2"),
-                ("café", "caf"),
+                ("zoë", "zo"),
         ):
             got = self.name(serial)
             self.assertEqual((got.returncode, got.stdout), (0, want + "\n"),

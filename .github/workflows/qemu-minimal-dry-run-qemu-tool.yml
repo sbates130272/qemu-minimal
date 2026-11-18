@@ -348,9 +348,14 @@ jobs:
           echo "$out"
           echo "$out" | grep -q -- "-name guest=dry-test,debug-threads=on"
           echo "$out" | grep -q -- "-uuid 26941056-3b06-5a48-a11d-948bcf877581"
-          # -smbios was rejected as the marker: riscv64 virt has no SMBIOS.
-          if echo "$out" | grep -q -- "-smbios"; then
-            echo "$arch must not be stamped with -smbios"
+          # -smbios is not the identity marker (riscv64 virt has no SMBIOS),
+          # but on amd64 it carries the VM name to the guest, which makes it
+          # the hostname. The other two get none.
+          if [ "$arch" = amd64 ]; then
+            echo "$out" | grep -q -- "-smbios type=1,serial=dry-test" || {
+              echo "amd64 was not given the guest's name in -smbios"; exit 1; }
+          elif echo "$out" | grep -q -- "-smbios"; then
+            echo "$arch must not be given -smbios"
             exit 1
           fi
         done
