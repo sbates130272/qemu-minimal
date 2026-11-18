@@ -488,6 +488,9 @@
       register: ionic_srqp4_srq_symbols
       failed_when: ionic_srqp4_srq_symbols.stdout | int < 1
 
+    # The symbol ernic_p4 calls. The base driver exports it too, so this says
+    # ernic_p4 can link, not that the P4 series was applied: the driver check
+    # after the record is written asks that.
     - name: Confirm the installed ionic carries the P4 symbol
       ansible.builtin.shell: |
         set -euo pipefail
@@ -638,6 +641,22 @@
           No base SHA in
           {{ ernic_source_dir }}/ansible/files/patches/rdma-core/README.md.
 
+    # What the image will load, by the one identity a guest can read back
+    # from a LOADED module: /sys/module/<name>/srcversion. The record below
+    # carries all three, and that is how a live guest is asked, later,
+    # whether the driver it runs is still this build: the configure stage
+    # used to build ionic-ernic again from the base series and nothing said
+    # so. After the last depmod, so modinfo reads the files in updates/dkms.
+    - name: Read the srcversion of each module the image will load
+      ansible.builtin.command:
+        cmd: "modinfo -F srcversion {{ item }}"
+      loop: [ionic, ionic_rdma, ernic_p4]
+      register: ionic_srqp4_srcversions
+      changed_when: false
+      failed_when: >-
+        ionic_srqp4_srcversions.rc != 0
+        or ionic_srqp4_srcversions.stdout | trim | length == 0
+
     - name: Record the SRQ + P4 build in the guest
       ansible.builtin.copy:
         dest: "{{ ionic_srqp4_stamp }}"
@@ -654,12 +673,27 @@
             "provider_prefix": "{{ ionic_srqp4_provider_prefix }}",
             "srq_symbols": {{ ionic_srqp4_srq_symbols.stdout | trim }},
             "p4_symbols": {{ ionic_srqp4_p4_symbols.stdout | trim }},
+            "ionic_srcversion": "{{ ionic_srqp4_srcversions.results[0].stdout | trim }}",
+            "ionic_rdma_srcversion": "{{ ionic_srqp4_srcversions.results[1].stdout | trim }}",
+            "ernic_p4_srcversion": "{{ ionic_srqp4_srcversions.results[2].stdout | trim }}",
             "p4_client": "/usr/local/bin/p4_fp8_client",
             "p4_bench": "/usr/local/bin/p4_fp8_bench",
             "p4_program": "/usr/local/share/rocm-ernic/fp8_policy.json",
             "modules_reloaded": false,
             "note": "SRQ and P4 from one ionic build. ernic_p4.ko compiled against the same patched tree as the installed ionic."
           }
+
+    # The record against the modules it describes, with the script a live
+    # guest is asked with: the installed pair is the DKMS build, ionic_rdma
+    # defines the SRQ verbs, ionic registers a P4 auxiliary device, and the
+    # three srcversions just written are the installed files'. No device is
+    # needed for any of it.
+    - name: Check the installed ionic driver is the SRQ + P4 build just recorded
+      ansible.builtin.include_role:
+        name: rocm_ernic_setup
+        tasks_from: driver_check
+      vars:
+        rocm_ernic_setup_driver_check_stage: installed
 
     - name: Remove the build trees
       ansible.builtin.file:
@@ -927,29 +961,47 @@
 
 
 # Needs the ernic vfio-user server running, so it is not part of a bake.
+#
+# THIS STAGE BUILDS NO DRIVER, and must not. The image carries ionic-ernic
+# built from rocm-ernic's SRQ and P4 series, by the "Build SRQ + P4 ionic
+# stack" play above. ernic_guest_setup's driver path (driver_ionic.yml)
+# fetches the sources with the BASE series only -- the tree the first play of
+# this file left in /var/tmp/ionic-src, whose sentinel it finds -- and runs
+# setup-ionic-dkms.sh, which removes ionic-ernic/<kernel ref> and builds it
+# again under that same name and version; the role then unloads and reloads
+# the modules. This stage ran all of that until 2026-11-17: two CI runs show
+# "Install the ionic-ernic DKMS package" reporting changed in it, 19 s in the
+# playbook-test lane and 48 s in the publish workflow, and every with-device
+# test after it ran on that driver, not the image's. Nothing read max_srq.
+#
+# What that left, measured the same day on a guest booted from the published
+# image (max_srq 256 at boot). On a stack that offers no P4, which is what
+# both lanes render: the stage is green, max_srq is 0 with the port still
+# ACTIVE, and ernic_p4 no longer loads. On a stack that offers P4, which
+# rocm-golden.xml does: the stage FAILS at the role's modprobe of ionic_rdma
+# and the guest has no RDMA device at all (see the block below for why).
+#
+# So the role is included with ernic_install_driver off, which leaves its
+# preflight, the memlock limit and the NIC address; driver_load is the
+# load-and-verify half of the path that went with it; and the stage begins
+# and ends by asking whether the driver is the baked one. A guest this
+# playbook did not bake fails the first of those: there is no driver for
+# this stage to configure.
 - name: Configure the ernic NIC on a live guest
   hosts: all
   gather_facts: true
-  # ernic_guest_setup escalates nowhere itself -- it reloads udev and modprobes
-  # with no become at all -- so the play has to.
+  # ernic_guest_setup escalates nowhere itself, so the play has to.
   become: true
   tags: [configure, never]
   vars:
     # Defined on the first play of this file.
     ionic_kernel_pin: *ionic_kernel_pin
-    ionic_kernel_pin_commit: *ionic_kernel_pin_commit
-    ionic_kernel_mirror: *ionic_kernel_mirror
     ernic_source_pin: *ernic_source_pin
     ernic_guest_agent: false
     ernic_guest_build_deps: false
     ernic_gpu_passthrough: false
     ernic_ionic_kernel_ref: "{{ ionic_kernel_pin }}"
     ernic_source_repo_version: "{{ ernic_source_pin }}"
-    rocm_ernic_setup_ionic_ref: "{{ ionic_kernel_pin }}"
-    rocm_ernic_setup_ionic_commit: "{{ ionic_kernel_pin_commit }}"
-    rocm_ernic_setup_ionic_mirror: "{{ ionic_kernel_mirror }}"
-    # As on the first play: the role's own default, for the check to read.
-    ernic_ionic_source_dir: /var/tmp/ionic-src
     # The role asserts ernic_guest_vm_ip is non-empty. Upstream derives it per
     # guest from an instance manifest as <subnet>.<10 * id>; there is no
     # manifest here, so do the same arithmetic against an index of 1 and let a
@@ -968,52 +1020,69 @@
       ansible.builtin.include_role:
         name: rocm_ernic_setup
         tasks_from: source_clone
-  # The role runs fetch-ionic-sources.sh in the guest again. On a guest baked
-  # from this checkout the script finds its sentinel in /var/tmp/ionic-src and
-  # fetches nothing; it does fetch when the series the collection ships is not
-  # the one the image was baked with, when the pin has moved, or when the
-  # image was slimmed of that tree. So the fetch is sent to the mirror here
-  # as it is in the bake, the tree the role built from is checked either way,
-  # and the rewrite is taken out again whatever happened. An included role
-  # and not a "roles:" entry, because only a block has an always section.
   tasks:
-    - name: Configure the NIC, with any fetch of the ionic sources sent to the mirror
-      block:
-        - name: Send the guest's fetch of the ionic sources to the mirror
-          ansible.builtin.include_role:
-            name: rocm_ernic_setup
-            tasks_from: ionic_mirror
-
-        - name: Build, load and configure the ernic driver
-          ansible.builtin.include_role:
-            name: sbates130272.rocm_ernic.ernic_guest_setup
-
-        - name: Check the guest's ionic sources are the pinned commit
-          ansible.builtin.include_role:
-            name: rocm_ernic_setup
-            tasks_from: ionic_source_check
-          vars:
-            rocm_ernic_setup_ionic_source_dir: "{{ ernic_ionic_source_dir }}"
-      always:
-        - name: Take the mirror rewrite back out of the guest
-          ansible.builtin.include_role:
-            name: rocm_ernic_setup
-            tasks_from: ionic_mirror_remove
-  # The role copies rocm-ernic's own 99-rocm-ernic.rules over the image's,
-  # unconditionally (driver_common.yml), and its Ethernet rule renames one NIC
-  # per guest. On a golden guest that copy renames nothing during the run:
-  # the modules are loaded and the devices named before it starts, and the
-  # role's udevadm trigger sends "change" events, which rules matching
-  # ACTION=="add" ignore. It is what the next boot would read, though, so
-  # this repository's file goes back last. A run that fails inside the role
-  # never gets here; run it again, or vm-quickstart.yml, which installs the
-  # same file. post_tasks, so it still follows the role now that the role is
-  # included from tasks.
-  post_tasks:
-    - name: Put this repository's ernic naming rules back
+    # Before anything is touched: the modules on disk are the DKMS pair, they
+    # carry SRQ and P4, and they are the build the bake recorded.
+    - name: Check the guest carries the baked SRQ + P4 ionic driver
       ansible.builtin.include_role:
         name: rocm_ernic_setup
-        tasks_from: naming
+        tasks_from: driver_check
+      vars:
+        rocm_ernic_setup_driver_check_stage: installed
+
+    - name: Load the baked ionic modules and bring the emulated NICs up
+      ansible.builtin.include_role:
+        name: rocm_ernic_setup
+        tasks_from: driver_load
+
+    # ernic_install_driver is the role's one switch over driver.yml, which is
+    # both the build and the reload. Off, nothing here fetches the ionic
+    # sources, so there is no git rewrite to install and no tree to check.
+    #
+    # A block, for its always section: both tasks there have to run when the
+    # role FAILS, and tasks after a failed one do not. That is not a corner.
+    # With the driver build turned back on (-e ernic_install_driver=true)
+    # against a stack that offers P4, which rocm-golden.xml does, the role
+    # fails at its own modprobe: ernic_p4 holds ionic, so the role unloads
+    # ionic_rdma alone and the rebuilt one does not load against the baked
+    # ionic (dmesg: "disagrees about version of symbol", six of them).
+    # Measured 2026-11-17 with these two as post_tasks: neither ran, and the
+    # guest was left with rocm-ernic's naming rules and no word on why.
+    - name: Configure the NIC and say what the stage left
+      block:
+        - name: Configure the NIC, building no driver
+          ansible.builtin.include_role:
+            name: sbates130272.rocm_ernic.ernic_guest_setup
+          vars:
+            ernic_install_driver: false
+      always:
+        # The role copies rocm-ernic's own 99-rocm-ernic.rules over the
+        # image's on its driver path (driver_common.yml), and that path is
+        # off above. A caller who turns it back on with -e gets that copy,
+        # whose Ethernet rule renames one NIC per guest, so this
+        # repository's file still goes back.
+        - name: Put this repository's ernic naming rules back
+          ansible.builtin.include_role:
+            name: rocm_ernic_setup
+            tasks_from: naming
+
+        # Last, the question this stage exists to keep answered: the driver
+        # that is LOADED is the baked SRQ + P4 build, and every emulated NIC
+        # reports max_srq above zero. Never gated: a run that rebuilt the
+        # driver, by -e or by a change to the include above, fails here and
+        # says why, whether or not the role got to its end. The blame is
+        # added only when the script's own verdict is that the driver was
+        # replaced; a device that offers no SRQ is not this stage's doing.
+        - name: Check the configure stage left the baked SRQ + P4 ionic driver loaded
+          ansible.builtin.include_role:
+            name: rocm_ernic_setup
+            tasks_from: driver_check
+          vars:
+            rocm_ernic_setup_driver_check_stage: live
+            rocm_ernic_setup_driver_check_blame: >-
+              The same check passed when this stage began, so the configure
+              stage replaced the baked SRQ + P4 driver: something in it built
+              ionic-ernic. ernic_install_driver must stay off here.
 
 # Needs the rocjitsu vfio-user server running, so it is not part of a bake.
 - name: Run GPU workloads on a live guest

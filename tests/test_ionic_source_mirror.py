@@ -13,7 +13,8 @@ Five things are tested here:
   that no bake path names kernel.org as somewhere to fetch from;
   that every fetch in vm-rocm-golden.yml is redirected, and followed by the
   commit check, with the git rewrite one of them needs removed in an always
-  section;
+  section -- and that the configure stage, which builds no driver, makes no
+  fetch at all;
   what the two scripts decide, against real repositories built in a
   temporary directory, a mirror whose tag names another commit included;
   what the role's three task files do with those scripts, run by
@@ -124,6 +125,21 @@ def _plays() -> list[dict]:
 def _play_tasks(play: dict) -> list[dict]:
     return (list(play.get("pre_tasks") or []) + list(play.get("tasks") or [])
             + list(play.get("post_tasks") or []))
+
+
+def _fetches(task: dict) -> bool:
+    """Does this include of a role run fetch-ionic-sources.sh?
+
+    ernic_guest_setup runs it from driver_ionic.yml and nowhere else, and
+    reaches that file only with ernic_install_driver on, which is its
+    default. The configure stage turns it off on the include, because the
+    build that follows the fetch replaces the baked SRQ + P4 driver;
+    tests/test_configure_keeps_baked_driver.py holds that, and holds the
+    gate against the installed collection.
+    """
+    if _include(task).get("name") != GUEST_SETUP:
+        return True
+    return (task.get("vars") or {}).get("ernic_install_driver") is not False
 
 
 def _env(**extra: str) -> dict:
@@ -248,7 +264,7 @@ class Playbook(unittest.TestCase):
 
         def walk(play, tasks):
             for at, task in enumerate(tasks or []):
-                if _include(task).get("name") == role:
+                if _include(task).get("name") == role and _fetches(task):
                     found.append((play, tasks, at))
                 for section in ("block", "rescue", "always"):
                     walk(play, task.get(section))
@@ -290,8 +306,7 @@ class Playbook(unittest.TestCase):
         users = self._fetching(GUEST_SETUP)
         self.assertEqual(
             [play["name"] for play, _, _ in users],
-            ["Install the ernic driver prerequisites",
-             "Configure the ernic NIC on a live guest"])
+            ["Install the ernic driver prerequisites"])
         for play, _, _ in users:
             with self.subTest(play=play["name"]):
                 outer = [t for t in _play_tasks(play)
@@ -336,10 +351,46 @@ class Playbook(unittest.TestCase):
             for task in _play_tasks(play):
                 # Never at the top level of a play, where nothing undoes it.
                 self.assertNotEqual(_include(task), INSTALL, play["name"])
-        self.assertEqual((installs, removals), (2, 2))
+        # The bake's first play. The configure play had the second, around a
+        # driver build it no longer runs.
+        self.assertEqual((installs, removals), (1, 1))
         for other in sorted(PLAYBOOKS.glob("*.yml")):
             if other != PLAYBOOK:
                 self.assertNotIn("ionic_mirror", other.read_text(), other.name)
+
+    def test_the_configure_stage_runs_the_role_and_fetches_nothing(self):
+        """It includes ernic_guest_setup, the one fetching role that takes
+        no repository, with the driver path off. Were that include to fetch
+        again it would do so with no rewrite and no check: the play carries
+        neither now, and this is what says it needs neither."""
+        play, = [p for p in self.plays
+                 if p["name"] == "Configure the ernic NIC on a live guest"]
+        flat = list(_flatten(_play_tasks(play)))
+        includes = [t for t in flat if _include(t).get("name") == GUEST_SETUP]
+        self.assertEqual(len(includes), 1)
+        self.assertFalse(
+            _fetches(includes[0]),
+            "the configure stage runs ernic_guest_setup with its driver "
+            "path on: that fetches the ionic sources from the script's "
+            "default repository, with no rewrite to the mirror and no check "
+            "of the tree, and then replaces the baked SRQ + P4 driver")
+        self.assertEqual(includes[0]["vars"], {"ernic_install_driver": False})
+        for task in flat:
+            self.assertNotIn(_include(task), (INSTALL, REMOVE, CHECK))
+            self.assertNotIn(_include(task).get("name"), (SRQ_DKMS, P4_DKMS))
+        _require_collection()
+        main = yaml.safe_load(
+            (COLLECTION / "roles/ernic_guest_setup/tasks/main.yml").read_text())
+        gate, = [t["when"] for t in main
+                 if t.get("ansible.builtin.include_tasks") == "driver.yml"]
+        self.assertEqual(gate, "ernic_install_driver | bool")
+        # And driver_ionic.yml is reached through driver.yml alone.
+        reached = [path.name for path in
+                   (COLLECTION / "roles/ernic_guest_setup/tasks").glob("*.yml")
+                   if "driver_ionic.yml" in "\n".join(
+                       line for line in path.read_text().splitlines()
+                       if not line.lstrip().startswith("#"))]
+        self.assertEqual(reached, ["driver.yml"])
 
     def test_no_other_playbook_runs_a_role_that_fetches(self):
         """Everything above reads vm-rocm-golden.yml. A second playbook that
@@ -404,7 +455,9 @@ class Playbook(unittest.TestCase):
         checks = sum(_include(t) == CHECK
                      for play in self.plays
                      for t in _flatten(_play_tasks(play)))
-        self.assertEqual((fetches, checks), (4, 4))
+        # Three in the bake: the guest's base tree, the controller's SRQ +
+        # P4 tree and the guest's tree for ernic_p4.
+        self.assertEqual((fetches, checks), (3, 3))
 
     def test_the_guest_check_reads_the_directory_the_role_fetches_into(self):
         for play, _, _ in self._fetching(GUEST_SETUP):
@@ -1213,10 +1266,13 @@ class GuestCheck(_Scratch):
             self.assertIn("cat qemu/checks/rocm-golden.sh; } |", text, name)
 
     def test_the_playbook_lane_asks_again_after_the_configure_stage(self):
-        """The configure stage writes the rule into the live guest and takes
-        it out again, after the whole check has already run. The lane sends
-        the lines between the two markers a second time, and looks for the
-        line they end on, since markers that moved would send nothing."""
+        """The configure stage wrote the rule into the live guest and took
+        it out again, after the whole check had already run, for as long as
+        it built a driver. It fetches nothing now and writes no rule; the
+        lane still asks, since a driver build that came back would bring
+        the rule with it. It sends the lines between the two markers a
+        second time, and looks for the line they end on, since markers that
+        moved would send nothing."""
         self.assertIn("no URL rewrite at system scope", self.block())
         text = (REPO / ".github/workflows"
                 / "qemu-minimal-ansible-playbook-test-vm-rocm-golden.yml"

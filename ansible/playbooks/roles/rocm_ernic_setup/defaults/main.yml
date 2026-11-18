@@ -86,6 +86,18 @@ rocm_ernic_setup_ionic_upstream: https://git.kernel.org/pub/scm/linux/kernel/git
 rocm_ernic_setup_ionic_source_dir: ""
 rocm_ernic_setup_ionic_on_controller: false
 
+# ── Driver check ─────────────────────────────────
+# driver_check.yml asks whether the guest's ionic driver is the SRQ + P4
+# build the image was baked with. "installed" reads what is on disk and
+# needs no device; "live" also reads the loaded modules and max_srq.
+rocm_ernic_setup_driver_check_stage: live
+# Whether the device serving the guest offers it the P4 engine, which only
+# the caller can know: "device", "nodevice", or "auto" to ask for
+# /dev/ernic-p4 when ionic created its P4 auxiliary device.
+rocm_ernic_setup_driver_check_p4: auto
+# A sentence added to the failure message, for a caller that knows the cause.
+rocm_ernic_setup_driver_check_blame: ""
+
 # ── Guest Ethernet ───────────────────────────────
 # The image's netplan is `match: name: "en*"`, and udev's rename leaves
 # enp0s5np0 behind as an altname, which that glob matches -- so networkd

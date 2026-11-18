@@ -18,9 +18,9 @@ file up to date as infrastructure changes.
 - `images/` — qcow2 VM disk images (backing + overlay pairs, **not** `/var/lib/qemu-tool/images`)
 - `ansible/playbooks/` — three playbooks and five roles, and nothing else:
   - `vm-basic.yml` — a complete bake on its own, and the base of the golden
-  - `vm-rocm-golden.yml` — the one image beyond it: imports `vm-basic.yml`, then the mainline kernel and ernic prerequisites, ROCm, the rocjitsu roles, SRQ + P4, SDXI and one slim pass. Every bake play is tagged `install`; `tests/test_playbook_pins.py` fails a play with no tag, because an untagged play runs in every bake. Three plays need a device and are tagged `never`: `--tags configure` sets up the NIC, `--tags firmware` installs `ip_discovery.bin` from the rocjitsu serving the guest, and `--tags test` runs the GPU workloads. The pins (`ionic_kernel_pin` with `ionic_kernel_pin_commit` and `ionic_kernel_mirror`, `ernic_source_pin`, `rocm_line_pin`, `sdxi_source_pin`) are each defined once and shared between plays through YAML anchors; see "Where the ionic kernel sources come from" for the first three. Its defaults are a published image's, and a bake needs no Docker daemon when given `-e rocjitsu_firmware_script=<path to vfio_guest_firmware.py>`. Given a cache directory (`gen-vm --bake --cache-dir DIR`, or `<bake-cache-dir>` in a fleet file, which reaches the playbook as the extra var `bake_cache_dir`) the module builds go through a compiler cache kept in that directory; there is none by default, and the two workflows that bake the guest, the playbook-test lane and the publish workflow, each pass one and share what it holds — see "The bake's compiler cache". The slim play also purges every kernel but the running one, after asserting that is the pinned one — see "One kernel in the baked image". The acceptance test is `qemu/checks/rocm-golden.sh`, which the playbook-test lane runs against the baked guest and batesste-ci-images runs against the published one
+  - `vm-rocm-golden.yml` — the one image beyond it: imports `vm-basic.yml`, then the mainline kernel and ernic prerequisites, ROCm, the rocjitsu roles, SRQ + P4, SDXI and one slim pass. Every bake play is tagged `install`; `tests/test_playbook_pins.py` fails a play with no tag, because an untagged play runs in every bake. Three plays need a device and are tagged `never`: `--tags configure` sets up the NIC and builds no driver (known issue 16 says why it must not), `--tags firmware` installs `ip_discovery.bin` from the rocjitsu serving the guest, and `--tags test` runs the GPU workloads. The pins (`ionic_kernel_pin` with `ionic_kernel_pin_commit` and `ionic_kernel_mirror`, `ernic_source_pin`, `rocm_line_pin`, `sdxi_source_pin`) are each defined once and shared between plays through YAML anchors; see "Where the ionic kernel sources come from" for the first three. Its defaults are a published image's, and a bake needs no Docker daemon when given `-e rocjitsu_firmware_script=<path to vfio_guest_firmware.py>`. Given a cache directory (`gen-vm --bake --cache-dir DIR`, or `<bake-cache-dir>` in a fleet file, which reaches the playbook as the extra var `bake_cache_dir`) the module builds go through a compiler cache kept in that directory; there is none by default, and the two workflows that bake the guest, the playbook-test lane and the publish workflow, each pass one and share what it holds — see "The bake's compiler cache". The slim play also purges every kernel but the running one, after asserting that is the pinned one — see "One kernel in the baked image". The acceptance test is `qemu/checks/rocm-golden.sh`, which the playbook-test lane runs against the baked guest and batesste-ci-images runs against the published one
   - `vm-quickstart.yml` — configures and tests a running fleet; what `qemu-tool quick-start test` runs
-  - roles `rocm_ernic_setup` (image prep, device naming, boot-time addressing, the P4 client and who may open `/dev/ernic-p4`, and the mirror and commit check for the ionic kernel sources), `rocjitsu_setup` (firmware, amdgpu, tools, live tests), `sdxi_setup`, `image_slim` and `bake_ccache` (the compiler cache: `restore`, `save` and `remove`, no `main`). Each has task files callers reach with `tasks_from`; all five are linted at the `production` profile in CI
+  - roles `rocm_ernic_setup` (image prep, device naming, boot-time addressing, the P4 client and who may open `/dev/ernic-p4`, the mirror and commit check for the ionic kernel sources, and `driver_check`, which asks a guest whether its ionic driver is still the baked SRQ + P4 build), `rocjitsu_setup` (firmware, amdgpu, tools, live tests), `sdxi_setup`, `image_slim` and `bake_ccache` (the compiler cache: `restore`, `save` and `remove`, no `main`). Each has task files callers reach with `tasks_from`; all five are linted at the `production` profile in CI
 - `scripts/install-vfio-rules` + `scripts/99-qemu-minimal-vfio.rules` — host-side udev rules for PCI passthrough. There is no top-level `udev/` any more: guest rules live in their role's `files/`
 - `rocm-ernic-enablement.md` — running log of rocm-ernic integration status and bugs. Git-ignored: it exists only on a host that keeps one
 
@@ -1379,7 +1379,13 @@ None of this is done by hand in this repo. Two pieces of automation own it:
   a guest already prepared this way; this repo builds its own, so it owns the
   preparation.
 - `sbates130272.rocm_ernic.ernic_guest_setup` from the collection builds and
-  installs the DKMS package, the rdma-core provider and the NIC config.
+  installs the DKMS package, the rdma-core provider and the NIC config. Its
+  DKMS package is `ionic-ernic` with the **base** patch series, and the bake
+  runs it once, in the first play. The "Build SRQ + P4 ionic stack" play then
+  builds the same package name and version with the SRQ and P4 series, and
+  that build is the one the image keeps. The configure stage runs the role
+  for the NIC config alone, with `ernic_install_driver: false`: see known
+  issue 16.
 
 The kernel ref is `ionic_kernel_pin`, defined once at the top of
 [`vm-rocm-golden.yml`](ansible/playbooks/vm-rocm-golden.yml) and currently
@@ -1446,7 +1452,7 @@ repo's both reported changed, and the third on the boot with no device:
 | Where | What |
 |---|---|
 | the bake | `rocm_ernic_setup`'s `naming_check` tasks, included by the play that records the bake, after every play that could have written the file. They run the install's own `copy` with `check_mode: true` and fail if it would change anything. The idiom was run on the dev host against two scratch files: it passes on this repo's rules, fails on rocm-ernic's, and leaves the file as it was |
-| `--tags configure` | `sbates130272.rocm_ernic.ernic_guest_setup` copies rocm-ernic's rules over the image's every time it runs (`driver_common.yml`, "Copy the rocm-ernic udev rules"), with no variable to stop it, so the configure play ends with `post_tasks` that install this repo's again. In a bake the role never gets that far: it fails at its `lspci` check, which the play's rescue expects, 40 lines earlier |
+| `--tags configure` | `sbates130272.rocm_ernic.ernic_guest_setup` copies rocm-ernic's rules over the image's whenever its driver path runs (`driver_common.yml`, "Copy the rocm-ernic udev rules"), with no variable of its own to stop it. The configure play now turns that whole path off (`ernic_install_driver: false`, known issue 16), so the copy no longer happens there; the `always` section of the block that runs the role still installs this repo's file, for the caller who turns the path back on with `-e`. In a bake the role never gets that far: it fails at its `lspci` check, which the play's rescue expects, 40 lines earlier |
 | the booted guest | `qemu/checks/rocm-golden.sh` reads the installed file between its `ernic naming rules` markers: no `rocm-ernic%n`, no free-index `while`, `NAME="%c"`, and one walk of the PCI devices in each stanza. The playbook-test lane runs the whole check before its configure stage and those lines again after it |
 
 `tests/test_ernic_identity.py` fails a playbook that sets
@@ -1455,13 +1461,16 @@ file is the collection, a live play that runs the collection's role and does
 not end by putting the rules back, and it runs the check's own lines against
 both files.
 
-**What the configure play cannot promise.** `post_tasks` do not run when the
-role fails, so a configure run that dies after the role's copy leaves
-rocm-ernic's rules on disk until the next successful run or the next
-`vm-quickstart.yml`. And that copy does not rename anything while the play
-runs on a golden guest: the modules are loaded and the devices named before
-it starts, and the role's `udevadm trigger` sends `change` events, which
-rules matching `ACTION=="add"` ignore.
+**What the configure play cannot promise**, for a run that turned the role's
+driver path back on; with it off, as the play has it, the role copies
+nothing. The put-back was in `post_tasks`, which do not run when the role
+fails, and such a run does fail on a stack that offers P4 (known issue 16):
+measured, it left rocm-ernic's rules on disk, 2928 bytes where this repo's
+file is 9647. It is in the block's `always` section now, so it runs
+either way; that has not itself been run against a guest. And that copy does not
+rename anything while the play runs on a golden guest: the modules are
+loaded and the devices named before it starts, and the role's `udevadm
+trigger` sends `change` events, which rules matching `ACTION=="add"` ignore.
 
 **batesste-ci-images runs the same check against the published image**, and
 `20261117.g80c17f8` fails two assertions of it: these rules, and
@@ -1513,8 +1522,9 @@ matches `gen-compose` keying MACs and IPs on the global NIC ordinal — so VM
 *n*'s devices land on consecutive addresses from `.11` up. The hostname still
 comes from the first NIC only: it names the guest, not the device.
 
-`ernic_guest_setup` ships its own copy and reloads udev — which is why the
-configure play puts this repo's back after it, see above — and both renames
+`ernic_guest_setup` ships its own copy and reloads udev on its driver path —
+which is why the configure play, though it now leaves that path off, still
+puts this repo's back after the role, see above — and both renames
 are confirmed working in CI — the ionic lane's
 `Show NIC details` reports `rocm-ernic0` carrying `altname enp0s5np0`, which is
 the pre-rename kernel name, and `ibv_devinfo` reports `hca_id: rocm-rdma-ernic0`.
@@ -1859,6 +1869,12 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     the module across a kernel upgrade. The address on `rocm-ernic0`, bringing
     the netdev up and the counters symlink are still run-time only; re-run the
     configure play to restore full test-readiness after a reboot.
+
+    That is the collection's role on its driver path, which the configure
+    stage here no longer runs (issue 16). A guest baked by this repo gets the
+    same from the image at every boot: `rocm_ernic_setup`'s `naming` tasks
+    write the `modules-load.d` entry and its `network` tasks the unit that
+    brings each NIC up and addresses it.
 9. **The mesh allocates a new node id on every reconnect and never reclaims
     the old one.** This is the fact that decides how large a fleet can be. A
     worker that dies and is restarted by Docker does not resume its old id; it
@@ -1964,7 +1980,9 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     unanswered and ping gets 100% loss even with static neighbours seeded. So
     inter-VM `ib_send_bw` does not work; a loopback run on one guest does, and
     is enough to exercise the QPs and light up the counters. Full inter-VM
-    testing still needs the `ernic_guest_setup` configure play.
+    testing still needed the `ernic_guest_setup` configure play, which built
+    the driver in those days. It builds none now, and refuses a guest this
+    repo did not bake (issue 16).
 13. **The mesh saturates at about 40 registered nodes — the 64-node protocol
     cap is not reachable.** Measured by asking for 64 VMs on a 128-core host.
     It settled at **40 of 64**; the other 24 workers never registered, dying in
@@ -2095,8 +2113,9 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     `mi355x-server.xml`; nothing in this repo has yet run a P2P DMA workload
     against it.
 
-16. **`ernic_guest_setup` does not build SRQ, and without SRQ there is no
-    one-sided RDMA through UCX.** SRQ ships as two separate upstream roles —
+16. **`ernic_guest_setup` does not build SRQ, without SRQ there is no
+    one-sided RDMA through UCX, and run after the bake the role takes SRQ and
+    P4 away.** SRQ ships as two separate upstream roles —
     `ernic_srq_dkms` (kernel) and `ernic_srq_provider` (rdma-core) — driven by
     a playbook the galaxy build of the collection does not package.
     `vm-rocm-golden.yml` runs both, together with `ernic_p4_dkms`, in its
@@ -2115,9 +2134,233 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     `rc_verbs` appearing is the proof. The reload drops the netdev's address
     and link.
 
-    Both halves must come from one tree: the device half lives in the ernic
-    server container, so the collection SHA and the `ernic.<sha>` in
-    `<ernic-ref>` move together.
+    **Three things must come from one tree, and "both halves" undercounted
+    them.** The kernel half is `ionic-ernic` with `patches/srq` and
+    `patches/p4`; the provider half is `patches/rdma-core`, installed under
+    `/usr/local`; and the device half lives in the ernic server container. So
+    the collection SHA, `ernic_source_pin` and the `ernic.<sha>` in
+    `<ernic-ref>` move together. `ernic_p4` hangs off the first: it is built
+    against that ionic and the kernel compares symbol versions when it loads
+    (`CONFIG_MODVERSIONS=y`, read from the `.config` in the 7.2.6-070206
+    mainline headers `.deb`, as is `CONFIG_MODULE_SRCVERSION_ALL=y` below).
+
+    **The configure stage replaced the baked kernel half on every run, until
+    2026-11-17, and nothing said so.** Read from the collection at `90434a2`:
+
+    - `ernic_guest_setup`'s `main.yml` includes `driver.yml` when
+      `ernic_install_driver` is set, which is its default, and `driver.yml`
+      is `driver_ionic.yml` then `driver_common.yml` with no switch between:
+      the build and the reload come as one.
+    - `driver_ionic.yml` runs `fetch-ionic-sources.sh` with `--patches-dir
+      /tmp/ionic/patches` plus `ernic_guest_ionic_extra_patches`, which
+      defaults to `[]`: the base series, one patch. The tree is
+      `/var/tmp/ionic-src`, the **base** tree the bake's first play left and
+      `image_slim` keeps, and its sentinel names the repository and that same
+      series, so the script says `nothing to do`. The SRQ + P4 tree was never
+      in the guest under that path: `ernic_srq_dkms` fetches it on the
+      controller and stages it under `/var/tmp/srq-p4`, which the play
+      removes.
+    - It then runs `setup-ionic-dkms.sh`, whose package is `ionic-ernic` at a
+      version taken from the kernel ref, `7.2.6`. That is the package the SRQ
+      + P4 play installed. The script removes the registration (`dkms remove
+      ionic-ernic/7.2.6 --all`), deletes `/usr/src/ionic-ernic-7.2.6`, stages
+      the base tree there, and builds and installs it.
+    - It unloads `ionic_rdma` and `ionic`, and `driver_common.yml` loads them
+      again: the base build.
+
+    Two CI runs of 2026-11-17 show it, the playbook-test run 44188004072 (at
+    `6ad9599`) and the publish run 44191151977 (at `25bb72b`). In the
+    configure stage of each: "Fetch and patch the upstream ionic sources" is
+    `ok`, "Install the ionic-ernic DKMS package" is `changed` and takes 19 s
+    and 48 s, "Unload any running in-tree ionic modules" is `changed` for
+    `ionic_rdma`, and "Load the guest kernel modules" is `changed` for
+    `ionic`. `changed` alone would prove little, since the install task is
+    `changed_when: true`; the seconds are a build. **Neither log contains
+    `max_srq`.** The role prints `ibv_devinfo | head -20` with no `-v`, and
+    the lanes' own step looked for `PORT_ACTIVE`.
+
+    **What the guest was left with, measured 2026-11-17.** `max_srq` had
+    never been read after a configure stage before this change. It was read
+    then, on one guest booted from the pulled `20261117.g481c892` (kernel
+    7.2.6-070206-generic), a fresh overlay for every run, with the old
+    playbook taken from a `git archive` of `aff9955` and the lanes' own
+    invocation (`--tags configure,firmware`). At boot, every time: `max_srq`
+    256, `PORT_ACTIVE`, all three modules under `updates/dkms`, file and
+    loaded `srcversion` equal (`ionic` `44164456D34C01FB438D570`,
+    `ionic_rdma` `24E57766CB83B79E273C7B0`, `ernic_p4`
+    `66D2E2195859E80AE848D07`). **The answer depends on whether the stack
+    offers the guest P4**, which the sources did not suggest:
+
+    | Stack | Old stage | `max_srq` after | Driver after |
+    |---|---|---|---|
+    | no P4 (`<p4-enable>false`: both lanes) | green, rc 0, 92 s | **0**, port still `ACTIVE` | `ionic` `87C1704273B10896BAA6924` and `ionic_rdma` `58788FA0F3A54BD064AC464`, on disk and loaded; no `ionic_create_srq`; no P4 text in `ionic.ko`; `modprobe ernic_p4` fails, `Invalid argument` (dmesg: `disagrees about version of symbol ionic_adminq_post_wait`) |
+    | P4 offered (`rocm-golden.xml` as shipped) | **fails**, rc 2, 63 s, at the role's "Load the guest kernel modules": `could not insert 'ionic_rdma': Invalid argument` | `No IB devices found` | the base build on disk; the baked `ionic` still loaded, `ionic_rdma` not loaded at all; `/dev/ernic-p4` and `ionic.p4.1` still there; rocm-ernic's naming rules left in place |
+
+    The second row is the mechanism the first hides. With P4 offered,
+    `ernic_p4` is loaded and holds `ionic`, so the role's unload removes
+    `ionic_rdma` alone, and the rebuilt base `ionic_rdma` then fails symbol
+    versions against the baked `ionic` that is still loaded. With no P4
+    nothing holds `ionic`, both modules are swapped, and the stage is green
+    on a guest with no shared receive queue.
+
+    So in the lanes the inference held exactly: every with-device step of
+    both lanes after the configure stage ran on a driver the image does not
+    carry, with `max_srq` 0, and said nothing. Someone following the README's
+    `--tags configure` against the default stack got a failed play and a
+    guest with no RDMA device instead, which is at least loud. `dkms status`
+    shows none of it: its three lines (`amdgpu`, `ernic-p4/0.2.0`,
+    `ionic-ernic/7.2.6`) were identical before and after every run. The
+    published qcow2 was not touched: what is published is the bake, and the
+    stage runs on an overlay.
+
+    The new stage, same guest, same invocation: rc 0 in 82 s with P4 and
+    52 s without, no "Install the ionic-ernic DKMS package" task, `max_srq`
+    256 and `PORT_ACTIVE` after, file and loaded `srcversion` unchanged,
+    `rocm-ernic0` holding both `192.168.100.11/24` from the boot unit and
+    `192.168.200.10/24` from the role. Both lanes' assertion steps, run as
+    written after it in each shape, passed; the same driver step after the
+    old stage in the lane shape failed with four `FAIL` lines. With
+    `-e ernic_install_driver=true` the new stage fails as it should: at the
+    last check, with the blame, on a stack with no P4 (123 s, `max_srq` 0),
+    and inside the role at `modprobe ionic_rdma` on a stack with P4 (70 s).
+    That last run is why the put-back and the last check are in an `always`
+    section; see below.
+
+    What changed:
+
+    - The configure play includes `ernic_guest_setup` with
+      `ernic_install_driver: false`. That leaves the role's preflight, the
+      memlock limit and the NIC address. Nothing in the stage fetches the
+      ionic sources any more, so its git rewrite, the removal and the commit
+      check are gone from that play; the bake keeps all three.
+    - `rocm_ernic_setup`'s `driver_load` tasks are the half of the driver
+      path a live guest still wants: `modprobe` of what is not loaded, every
+      emulated NIC up, every RDMA port active. No rocm-ernic udev rules, no
+      `update-pciids`, nothing unloaded.
+    - `driver_check` tasks run `files/ernic-driver-check.sh` in the guest.
+      The stage runs them first with `installed` and last with `live`; a
+      failure of the last one whose verdict is "has been replaced" says the
+      stage replaced the baked SRQ + P4 driver, and a device that offers no
+      SRQ is not blamed on the stage. A guest this repo did not bake fails
+      the first: there is no driver for the stage to configure, and it
+      builds none.
+    - The role runs in a block, and the naming put-back and the last check
+      are that block's `always` section, not `post_tasks`. They were
+      `post_tasks` first, and the run with the driver build turned back on
+      against a stack that offers P4 showed why that is wrong: the role
+      fails at its own `modprobe`, tasks after a failed one do not run, and
+      the guest was left with rocm-ernic's naming rules and no word about
+      the driver. The move to `always` is pinned by tests and has not been
+      run against a guest.
+    - The bake records `ionic_srcversion`, `ionic_rdma_srcversion` and
+      `ernic_p4_srcversion` in `/etc/ionic-srq-p4.json`, and runs the
+      `installed` stage against what it has just written.
+    - Both lanes run the step "Verify the configure stage left the baked SRQ
+      + P4 ionic driver loaded" straight after their configure step, the
+      publish workflow well ahead of its push. It sends the same script over
+      ssh.
+
+    What the script asks, and why each is asked that way. Nothing here needs
+    a debug tool the image lacks; `nm` and `zstd` are what the guest check
+    already uses.
+
+    | Question | How | Why not something simpler |
+    |---|---|---|
+    | is the installed module the DKMS one | `modinfo -n` is under `updates/dkms` | |
+    | is it the build the bake made | `modinfo -F srcversion` equals the record | `CONFIG_MODULE_SRCVERSION_ALL=y`, so every module carries one, DKMS builds included. A rebuild from the same sources has the same value, which is the right answer: it is the same driver |
+    | is that what is loaded | `/sys/module/<m>/srcversion` equals the file's | a stale module, from an initramfs or from before a rebuild, passes every check of the file |
+    | SRQ | `nm` shows `ionic_create_srq`, the whole name | `strings \| grep -i srq` hits BTF names on a module with no SRQ; see `qemu/checks/rocm-golden.sh` |
+    | P4 in ionic | the module holds the text `Failed to add p4 aux device` | ionic exports nothing new for P4. `ionic_adminq_post_wait`, which the bake's "P4 symbol" task counts, is in the base driver too: that task says `ernic_p4` can link, not that the series was applied |
+    | `ernic_p4` | `modprobe ernic_p4` succeeds | symbol versions are compared at load and nowhere else. It binds nothing unless ionic made a P4 device, and the script unloads it again when it loaded it and there is none: left in, it holds `ionic` (measured: `ionic 233472 2 ernic_p4,ionic_rdma` after the check, `1 ionic_rdma` before), on exactly the stacks where nothing else loads it |
+    | the device | every emulated NIC, by the four-field tuple, reports `max_srq` above 0 in `ibv_devinfo -v` | |
+
+    `max_srq` 0 with the driver intact is reported as the device's doing,
+    with `<ernic-ref>` named, not as a rebuild. `/dev/ernic-p4` is asked for
+    only when the device offers the guest the P4 engine, which rocm-ernic
+    does exactly when given `--p4-guest-scope` (`ionic_device_attach_p4`
+    registers the handler the capability bit is keyed on). The lanes read
+    that off the stack they rendered; a by-hand run takes the script's
+    `auto`, which asks for the node when ionic created the auxiliary device.
+    **Both lanes render `<p4-enable>false`, so no lane asserts
+    `/dev/ernic-p4` after a configure stage.** The step would start to, with
+    no other edit, the day an overlay stops turning P4 off.
+
+    Not chosen: handing the role the SRQ and P4 series through
+    `ernic_guest_ionic_extra_patches` so that a rebuild comes out the same.
+    The base series is always applied first and is the same patch as
+    `srq/0009`, so `git am` would meet it twice; the sentinel would differ,
+    so every configure run would fetch; and a rebuild is a second definition
+    of the driver that can drift from the bake's, at 19 to 48 s a run.
+
+    Left as it was: the bake's first play still builds the base `ionic-ernic`
+    that the SRQ + P4 play replaces a few plays later. That is one wasted
+    build per bake and harms nothing. Turning it off there is a larger
+    change than here: that play's mirror rewrite, its source check of
+    `/var/tmp/ionic-src` and its rescue are all written around the role's
+    fetch, build and failed device check.
+
+    A guest an earlier configure stage already ran on still carries the base
+    driver in its overlay. The check fails it and says so; a new overlay on
+    the baked image carries the SRQ + P4 driver again.
+
+    **`vm-quickstart.yml` never had the fault.** What `qemu-tool quick-start
+    test` runs on pulled guests includes no role of the collection, builds
+    nothing with DKMS and unloads no module: of the ernic it installs the
+    naming rules, an address and the exporter, and it says of the modules
+    "No module loading here". `tests/test_ionic_source_mirror.py` fails any
+    playbook but the golden one that names `ernic_guest_setup`,
+    `ernic_srq_dkms` or `ernic_p4_dkms`. It does not ask the driver check
+    either, so a pulled guest's `max_srq` is still read by nothing in CI.
+
+    `tests/test_configure_keeps_baked_driver.py` holds the collection facts
+    above against the installed collection, the shape of the play, the
+    script against a fabricated guest (a baked one, the rebuilt one, a stale
+    module, a device with no SRQ), and the lane step, which it also runs
+    with a stand-in `ssh`. Restoring the old play, turning the switch back
+    on, dropping or softening either lane's step each turn it red; that was
+    tried on a scratch copy.
+
+    **What has run against a guest, and what has not.** The by-hand runs
+    above settled what the first version of this note listed as unproven:
+    the baked modules carry a `srcversion` and sysfs shows the same one;
+    `ionic.ko` holds the P4 warning text; `nm` lists `ionic_create_srq`;
+    `modprobe ernic_p4` succeeds with no P4 device; the role with its driver
+    path off leaves `rocm-ernic0` addressed and the port active; and
+    **`max_srq` is 256 after the configure stage**. The script passed on the
+    fresh guest with `ERNIC_DRIVER_EXPECT_P4=device`, printing three
+    `records no srcversion` notes, since that image predates the record. The
+    recorded-srcversion path was exercised with a record carrying the baked
+    values on a rebuilt guest: `the installed DKMS build has srcversion
+    58788...; the bake recorded 24E57.... It was built again after the bake`.
+
+    Still unproven:
+
+    - **The bake side.** No bake has run from this change, so nothing has
+      written the three `*_srcversion` fields or run the `installed` check
+      straight after. If the P4 text is not found there the bake fails at
+      that check, which is the cheap place to find out.
+    - **What changed after the guest runs**, all of it covered by unit tests
+      against a fabricated guest only: the `always` section; the blame made
+      conditional; the unload of `ernic_p4`; the record read off one line
+      (a controller on ansible-core 2.16 writes `/etc/ionic-srq-p4.json`
+      as a single line, where 2.21 writes it as the playbook has it, both
+      measured with the task's own `copy` shape; the first `recorded()`
+      read it by line, so every srcversion came back empty and the
+      comparison with the bake fell away to a note; CI's controller is
+      newer); `nm` missing reported as that and not as a rebuilt driver; and
+      `driver_load` saying what it looked for when a guest has no emulated
+      NIC, which the collection's preflight used to say and now comes too
+      late to.
+    - No CI lane has run it, one guest only, so no mesh worker and no
+      inter-guest RDMA, and `rc_verbs` was not read: `ucx_info` is not in
+      the guest.
+
+    The role with its driver path off still stages `/tmp/ionic` in the guest
+    (patches and two scripts) though nothing is built from it, and sets the
+    hostname to `rocm-ernic-vm-<index>`. And `/var/tmp/ionic-src` has no
+    reader left once the bake is over; `image_slim` still keeps it, so the
+    published image does not change shape with this fix. Dropping it
+    (`image_slim_drop_ionic_src`) is a decision about the image.
 
 17. **UCX cannot open an IB device whose name contains `-` or `_`, so the
     udev rename silently disables RDMA.** `ernic_guest_setup`'s rule names the
@@ -2614,7 +2857,8 @@ That killed a bake after 118 tasks, over a tag the bake never reads: it
 checks out `ernic_source_pin`. So `rocm_ernic_setup`'s `source_clone` tasks
 run immediately before every include of `ernic_source` in
 `vm-rocm-golden.yml` — the first play, the SRQ + P4 play, and as a `pre_task`
-of the configure play, whose `ernic_guest_setup` includes the role itself —
+of the configure play, whose `ernic_guest_setup` includes the role itself
+whatever else is switched off in it —
 and take a moved tag with `git fetch --tags --force origin`, after which the
 role's own fetch succeeds. `tests/test_source_clone.py` fails an include with
 no guard in front of it.
@@ -2689,7 +2933,10 @@ and the repository.
 | `ernic_guest_setup`, first play | guest, root | `url.*.insteadOf` rule | `/var/tmp/ionic-src` |
 | `ernic_srq_dkms` | **controller** | `--repo`, via `ernic_srq_dkms_sources` | `/tmp/ionic-srq-src-controller/<ref>` |
 | `ernic_p4_dkms` | guest, root | `--repo`, via `ernic_p4_dkms_kernel_repo` | `/usr/src/ionic-ernic-p4` |
-| `ernic_guest_setup`, `--tags configure` | guest, root | `url.*.insteadOf` rule | `/var/tmp/ionic-src` |
+
+The configure stage was a fourth row, the same fetch as the first. It builds
+no driver now (known issue 16), so it runs the role with the driver path off
+and fetches nothing.
 
 `ernic_p4_dkms` fetches in the guest whatever the
 `ernic_p4_dkms_fetch_on_controller: true` beside it suggests; the role has no
@@ -2702,17 +2949,17 @@ role, and `ionic_mirror_remove` takes it out in the `always` section of the
 same block, with the file if that leaves it empty. System scope, because the
 fetch runs as root under become; nothing is written on the controller.
 `qemu/checks/rocm-golden.sh` fails a baked guest with any URL rewrite at
-system scope. The configure play includes the role from a block in `tasks:`
-for this, where it was a `roles:` entry: only a block has an `always`.
+system scope. The first play includes the role from a block in `tasks:` for
+this: only a block has an `always`.
 
 - **The script does not know.** Its sentinel and its messages carry the URL
   it was *given*, so under the rule it still prints `already at v7.2.6 from
   https://git.kernel.org/...`. The check's line says where the tree is from.
 - **So the rule causes no refetch and is not needed to skip one**: fetch with
   it, rerun with it, remove it, rerun, and both reruns say `nothing to do`
-  (run against the pinned script). The configure stage on a guest baked from
-  the same checkout therefore fetches nothing; it fetches when the
-  collection's series, or the pin, is not what the image was baked with.
+  (run against the pinned script). That is what the configure stage used to
+  meet on a guest baked from the same checkout: `nothing to do`, on the base
+  tree, and then a build of it.
 - **The match side is the script's own default**,
   `rocm_ernic_setup_ionic_upstream`, the only non-comment line in a bake path
   that names kernel.org. A rule matching another URL redirects nothing and
@@ -2720,15 +2967,16 @@ for this, where it was a `roles:` entry: only a block has an `always`.
   against the installed collection's script, so only where one is installed.
   `Gen Compose Check` installs it and those tests fail there rather than
   skip.
-- **`--tags configure` leaves a live guest as it found it**, by the same
-  `always`. The full guest check runs before that stage in both lanes, so
-  the playbook-test lane sends the check's lines between `# begin: git url
-  rewrites` and `# end: git url rewrites` again after it. The publish
-  workflow does not: what it publishes is the bake, which the full check has
-  already passed, not the overlay the configure stage ran on.
+- **`--tags configure` writes no rule**, since it no longer fetches. The
+  full guest check runs before that stage in both lanes, and the
+  playbook-test lane still sends the check's lines between `# begin: git url
+  rewrites` and `# end: git url rewrites` again after it: a driver build
+  that came back would bring the rule with it. The publish workflow does
+  not: what it publishes is the bake, which the full check has already
+  passed, not the overlay the configure stage ran on.
 
 **The check**, `ionic_source_check` (`files/ionic-source-base.sh`), follows
-each of the four, also when the script fetched nothing. HEAD is no use: the
+each of the three, also when the script fetched nothing. HEAD is no use: the
 script applies the series with `git am`, so HEAD is the last patch. After the
 depth-1 fetch the base is the one line of `.git/shallow`, since such a fetch
 brings exactly one commit; after the script's fallback fetch of every tag it

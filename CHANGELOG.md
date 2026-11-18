@@ -15,6 +15,67 @@ All notable changes to this project will be documented in this file.
   Read from the two release tarballs; the first bake on it is the
   playbook-test run of the bump.
 
+### Fixed
+
+- **`vm-rocm-golden.yml --tags configure` no longer replaces the image's
+  SRQ + P4 ionic driver.** The golden bake builds `ionic-ernic` from the
+  kernel's ionic sources plus rocm-ernic's SRQ and P4 series. The configure
+  stage, which the README gives for a live guest and which the playbook-test
+  lane and the publish workflow both run, ran the collection's
+  `ernic_guest_setup` with its driver build on. That build applies the base
+  series only, and `setup-ionic-dkms.sh` removes and rebuilds
+  `ionic-ernic/<kernel ref>` under the same name and version, after which
+  the role reloads the modules. Two CI runs show the rebuild in that stage
+  (19 s and 48 s), and nothing read `max_srq` after it. Measured since, on a
+  guest booted from `20261117.g481c892`, which has `max_srq` 256 at boot:
+  - *On a stack that offers the guest no P4*, which is what both lanes
+    render, the old stage was green and left `max_srq` 0 with the port still
+    active, so no shared receive queue and no `rc_verbs` through UCX, and an
+    `ernic_p4` that no longer loads. Every with-device step after it ran on
+    that driver.
+  - *On a stack that offers P4*, which `rocm-golden.xml` does, the old stage
+    failed: `ernic_p4` holds `ionic`, so only `ionic_rdma` was unloaded, and
+    the rebuilt one does not load against the baked `ionic`. The guest was
+    left with no RDMA device at all.
+  - The stage as it is now, on the same guest in both shapes: green, no
+    DKMS build, `max_srq` 256 and the port active afterwards, the loaded
+    modules still the baked ones.
+
+  The published qcow2 was not affected: the stage runs on an overlay of it.
+  - The stage now runs the role with `ernic_install_driver: false`, so it
+    builds nothing, fetches no kernel sources and reloads nothing. It loads
+    the baked modules if they are not loaded, brings the emulated NICs up
+    and assigns the address as before.
+  - It begins and ends by asking the guest whether its ionic driver is the
+    baked one (`rocm_ernic_setup`'s `driver_check` tasks, which run
+    `files/ernic-driver-check.sh`): the loaded `ionic` and `ionic_rdma` are
+    the DKMS build the bake recorded, `ionic_rdma` defines the SRQ verbs,
+    `ionic` registers a P4 auxiliary device, `ernic_p4` loads against it,
+    and every emulated NIC reports `max_srq` above zero. A failure names
+    the cause. The last check runs when the role fails too, and loads
+    nothing it does not unload again.
+  - Both lanes send the same script to the guest straight after the stage,
+    the publish workflow before it pushes. `/dev/ernic-p4` is asked for when
+    the stack offers the guest the P4 engine; both lanes' stacks turn P4
+    off, so neither asserts it.
+  - The bake records the `srcversion` of `ionic`, `ionic_rdma` and
+    `ernic_p4` in `/etc/ionic-srq-p4.json` and checks the record against the
+    modules it installed, the P4 series included: the bake's earlier "P4
+    symbol" check counted a symbol the base driver also exports.
+  - *Behaviour change:* `--tags configure` now fails, at its first task, on
+    a guest `vm-rocm-golden.yml` did not bake. It used to build a base
+    driver into one that had the pinned kernel and a toolchain.
+  - *If you ran `--tags configure` before this:* that guest's overlay holds
+    the base driver. Make a new overlay on the baked image, which was not
+    changed.
+  - Run by hand against one live guest, as above, with both lanes'
+    assertion steps passing after the new stage and the driver step failing
+    after the old one. Not yet run: a bake from this change, so the
+    recorded `srcversion` and the bake's own check of it have met no real
+    module; any CI lane; and the changes made after those runs (the check
+    running when the role fails, its unload of `ernic_p4`, a record written
+    on one line), which the unit suite covers against a fabricated guest.
+
 ## [v2.0.0] - 2026-11-17
 
 Fleet XML is now the only settings format, and the stacks are renamed. Read

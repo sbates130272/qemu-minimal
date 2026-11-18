@@ -83,11 +83,12 @@ class Playbook(unittest.TestCase):
     def test_the_play_that_reaches_the_role_through_another_is_guarded(self):
         """ernic_guest_setup's main.yml starts by including ernic_source.
 
-        The configure play includes ernic_guest_setup from a block in its
-        tasks, so that the block's always section can undo the git rewrite
-        the fetch of the ionic sources runs under. It used to be a "roles:"
-        entry. Either way the play never includes ernic_source itself, so
-        the guard is the first of its pre_tasks, which run before both.
+        The configure play includes ernic_guest_setup from its tasks, with
+        the driver build off; it was a "roles:" entry once, and then sat in
+        a block whose always section undid a git rewrite. The role still
+        starts with ernic_source whatever is switched off in it, and the
+        play never includes ernic_source itself, so the guard is the first
+        of its pre_tasks, which run before any of that.
         """
         guest_setup = "sbates130272.rocm_ernic.ernic_guest_setup"
 

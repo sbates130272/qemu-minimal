@@ -376,6 +376,38 @@ jobs:
           -e "ansible_ssh_private_key_file=$GUEST_KEY" \
           -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"'
 
+    # The image is baked with ionic-ernic built from rocm-ernic's SRQ and P4
+    # series. The configure stage used to run ernic_guest_setup's driver
+    # build, which replaces that DKMS package with one from the base series
+    # and reloads it: every with-device step after it ran on a driver the
+    # image does not carry, and no step read max_srq. The stage builds no
+    # driver now, and this is the step that would say if it did. In the
+    # guest: the loaded ionic and ionic_rdma are the DKMS build the bake
+    # recorded, ionic_rdma defines the SRQ verbs, ionic registers a P4
+    # auxiliary device, ernic_p4 loads against it, and every emulated NIC
+    # reports max_srq above zero.
+    #
+    # /dev/ernic-p4 is asked for when this stack's ernic offers the guest
+    # the P4 engine, which is read from the rendered stack: rocm-ernic
+    # advertises P4 to a guest exactly when it is given --p4-guest-scope.
+    # The playbook asks the same of the guest as the stage's last task, with
+    # the same script. Ahead of the push, and fatal: the stages below gate
+    # the image on the driver it carries only while this holds.
+    - name: Verify the configure stage left the baked SRQ + P4 ionic driver loaded
+      run: |
+        if grep -q -- '--p4-guest-scope' "$STACK_DIR/docker-compose.yml"; then
+          p4=device
+        else
+          p4=nodevice
+        fi
+        if ! ssh $SSH_OPTS -p 2222 ubuntu@qemu-1 \
+               "ERNIC_DRIVER_EXPECT_P4=$p4 bash -s" \
+               < ansible/playbooks/roles/rocm_ernic_setup/files/ernic-driver-check.sh; then
+          echo "the configure stage replaced the baked SRQ + P4 driver: see the FAIL lines above" >&2
+          exit 1
+        fi
+        echo "✓ the baked SRQ + P4 ionic driver is loaded, max_srq above zero (P4: $p4)"
+
     - name: Verify the RDMA port is active
       run: |
         ssh $SSH_OPTS -p 2222 ubuntu@qemu-1 "ibv_devinfo" | tee /tmp/ibv_devinfo.txt

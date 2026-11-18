@@ -228,7 +228,9 @@ class IonicKernelPin(unittest.TestCase):
             given = play.get("vars") or {}
             held = [name for name in self.NAMES if name in given]
             if held == ["ionic_kernel_pin"]:
-                # The slim and stamp plays read the tag alone.
+                # The slim and stamp plays read the tag alone, and so does
+                # the configure play, which fetches no ionic sources now
+                # that it builds no driver.
                 continue
             with self.subTest(play=play["name"]):
                 if held:
@@ -236,7 +238,7 @@ class IonicKernelPin(unittest.TestCase):
                     self.assertEqual(held, list(self.NAMES))
                 for name in held:
                     self.assertEqual(given[name], first[name])
-        self.assertEqual(holders, 3)
+        self.assertEqual(holders, 2)
 
 
 class PulledGuest(unittest.TestCase):

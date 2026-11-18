@@ -800,7 +800,7 @@ else, so the shared work has exactly one definition.
 | Playbook | Description |
 |---------|-------------|
 | `vm-basic.yml` | User setup, favourite packages, git config |
-| `vm-rocm-golden.yml` | `vm-basic.yml`, plus the pinned mainline kernel, ROCm, the rocjitsu GPU firmware and patched amdgpu driver, the [rocm-ernic][rocm-ernic] RDMA NIC with SRQ and P4, and SDXI. `--tags configure` sets up the NIC on a live guest; `--tags test` runs the GPU workloads |
+| `vm-rocm-golden.yml` | `vm-basic.yml`, plus the pinned mainline kernel, ROCm, the rocjitsu GPU firmware and patched amdgpu driver, the [rocm-ernic][rocm-ernic] RDMA NIC with SRQ and P4, and SDXI. `--tags configure` sets up the NIC on a live guest and `--tags test` runs the GPU workloads; see [the live stages](#the-live-stages) |
 
 Each bake ends with one slim pass, which deletes the scratch the bake left
 behind — the apt cache and package lists, DKMS build trees, archived journals,
@@ -817,6 +817,39 @@ qemu-tool gen-vm \
 Ansible changes are written into the backing qcow2, so overlays
 created with `--backing-file` inherit them. Ansible is skipped when
 `--restore-image` or `--backing-file` is set.
+
+#### The live stages
+
+A bake has no device attached, so three plays of `vm-rocm-golden.yml` are
+left for a guest that is running behind a stack. Each is tagged `never` and
+runs only when named:
+
+```bash
+ansible-playbook -i HOST, ansible/playbooks/vm-rocm-golden.yml \
+  --tags configure -e ansible_port=2222 -e ansible_user=ubuntu
+```
+
+| Tag | What it does |
+|-----|--------------|
+| `configure` | Loads the baked ionic modules if they are not loaded, brings the emulated NICs up, and gives `rocm-ernic0` the address `192.168.200.<10 * vm_index>` (`-e vm_index=N` or `-e vm_ip=ADDR`) |
+| `firmware` | Installs `ip_discovery.bin` from the rocjitsu image serving the guest, which amdgpu needs to probe |
+| `test` | Runs the GPU workloads |
+
+**`--tags configure` builds no driver, and only works on a guest this
+playbook baked.** The image carries `ionic-ernic` built with rocm-ernic's
+SRQ and P4 patch series. Up to 2.0.0 this stage built the driver again from
+the base series alone and reloaded it, which replaced the image's driver in
+that guest. Measured on a guest from the published image: behind a stack
+that offers it no P4 the stage finished green and left `max_srq` 0, without
+a word; behind the default stack, which offers P4, the stage failed at
+`modprobe ionic_rdma` and left no RDMA device at all. The stage now starts
+and ends by checking that the driver is the baked one, and fails if it is
+not: the loaded modules are the build the bake recorded in
+`/etc/ionic-srq-p4.json`, and every emulated NIC reports `max_srq` above
+zero in `ibv_devinfo -v`. A guest that an earlier version configured still
+has the base driver in its overlay; make a new overlay on the baked image,
+which was never changed. A fleet guest needs none of this: the image loads
+the modules and addresses its NICs at boot.
 
 ## qemu-tool CLI Reference
 

@@ -58,16 +58,20 @@ image_slim_scratch_dirs:
 
 # Anchored regexes, matched against the full path of each candidate.
 #
-# /var/tmp/ionic-src is the one that must not go, and the reason this sweep is
-# not a blanket rm. It is the guest-side sparse kernel checkout
+# /var/tmp/ionic-src is the one kept, and the reason this sweep is not a
+# blanket rm. It is the guest-side sparse kernel checkout
 # fetch-ionic-sources.sh makes of the stable kernel tree (from the mirror
-# vm-rocm-golden.yml names, checked against the pinned commit), and
-# driver_ionic.yml re-runs setup-ionic-dkms.sh --source-dir against it
-# unconditionally on every `--tags configure` run -- which is exactly what
-# the two ernic CI lanes do
-# against the booted guest after this bake. Delete it and every ernic lane
-# re-clones a kernel from inside the VM. Drop it only for an image whose
-# consumer will never run the configure play; see image_slim_drop_ionic_src.
+# vm-rocm-golden.yml names, checked against the pinned commit), for the base
+# ionic-ernic build of the bake's first play.
+#
+# It was kept because the configure stage of vm-rocm-golden.yml rebuilt the
+# driver against it on every run. That stage builds nothing now -- the
+# rebuild replaced the baked SRQ + P4 driver -- so once the bake is over
+# nothing in this repository reads the tree. Its one reader left is a caller
+# who hands the configure stage -e ernic_install_driver=true, and that
+# stage's last check then fails. It is still kept, so that this change does
+# not alter what the published image contains; dropping it is
+# image_slim_drop_ionic_src, and a decision about the image.
 #
 # systemd's PrivateTmp and snapd's per-snap bind mounts own their directories
 # for as long as the units are running; removing them underneath a live service
@@ -129,8 +133,8 @@ image_slim_purge_dkms_sources: false
 image_slim_dkms_source_globs:
   - amdgpu-*
 
-# See image_slim_scratch_keep. Off unless the image is published to a consumer
-# who will never run `vm-rocm-golden.yml --tags configure`.
+# See image_slim_scratch_keep. Nothing reads the tree after the bake unless
+# the configure stage is run with its driver build turned back on.
 image_slim_drop_ionic_src: false
 image_slim_ionic_src_dir: /var/tmp/ionic-src
 

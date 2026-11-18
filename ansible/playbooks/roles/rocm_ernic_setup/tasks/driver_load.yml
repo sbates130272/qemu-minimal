@@ -1,0 +1,103 @@
+---
+# What the collection's driver path did for a live guest that a baked guest
+# still wants, with the build left out: the ionic modules loaded, the
+# emulated NICs up and their RDMA ports active.
+#
+# The configure stage of vm-rocm-golden.yml runs ernic_guest_setup with
+# ernic_install_driver off, because that role's driver path replaces the
+# baked SRQ + P4 build; tasks/driver_check.yml has the account. Turning the
+# path off drops its load-and-verify half with it, so this is that half.
+#
+# On a guest booted from the baked image all of it has already happened:
+# modules-load.d loaded the modules and rocm-ernic-netcfg brought the links
+# up. It is here for the guest where one of those did not, which would
+# otherwise fail further on with "NIC rocm-ernic0 not found".
+#
+# Not here, on purpose: rocm-ernic's own udev rules, which driver_common.yml
+# copies over this role's; update-pciids, which reaches the network for an
+# entry hwdata already carries; and anything that unloads a module.
+
+- name: Load the ionic modules the image carries
+  ansible.builtin.command:
+    cmd: "modprobe {{ item }}"
+    creates: "/sys/module/{{ item }}"
+  loop: "{{ rocm_ernic_setup_modules }}"
+  become: true
+
+# The IB port state follows the netdev, and nothing else is certain to have
+# brought it up: no netplan entry matches it. Every emulated NIC, found by
+# the full PCI tuple and not by a name udev may not have given it.
+- name: Bring every emulated NIC up
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -euo pipefail
+      shopt -s nullglob
+      want={{ (rocm_ernic_setup_pci_vendor ~ ':' ~ rocm_ernic_setup_pci_device
+               ~ ':' ~ rocm_ernic_setup_pci_subsystem_vendor ~ ':'
+               ~ rocm_ernic_setup_pci_subsystem_device) | quote }}
+      # A device with no such attribute reads as empty and does not match:
+      # the guest's virtio NIC has a vendor and a device and no subsystem.
+      attr() { cat "$1" 2>/dev/null || true; }
+      found=0
+      for net in /sys/class/net/*; do
+        pci=$net/device
+        have="$(attr "$pci/vendor"):$(attr "$pci/device")"
+        have="$have:$(attr "$pci/subsystem_vendor"):$(attr "$pci/subsystem_device")"
+        [ "$have" = "$want" ] || continue
+        ip link set "${net##*/}" up
+        found=$((found + 1))
+      done
+      echo "$found emulated NIC(s) up"
+      if [ "$found" -eq 0 ]; then
+        # This runs ahead of the collection's preflight, which is what used
+        # to say so; a bare non-zero status says nothing.
+        {
+          echo "No network device with the emulated NIC's PCI identity ($want)."
+          echo "This guest has:"
+          for net in /sys/class/net/*; do
+            echo "  ${net##*/} $(attr "$net/device/vendor"):$(attr "$net/device/device")"
+          done
+          echo "Check the rocm-ernic server serving this guest (<ernic-ref>)" \
+               "and that the stack attached its vfio-user device; a guest" \
+               "booted with no device has nothing to configure."
+        } >&2
+        exit 1
+      fi
+  become: true
+  register: rocm_ernic_setup_driver_links
+  changed_when: false
+
+- name: Wait for every emulated NIC's RDMA port to be active
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -euo pipefail
+      shopt -s nullglob
+      want={{ (rocm_ernic_setup_pci_vendor ~ ':' ~ rocm_ernic_setup_pci_device
+               ~ ':' ~ rocm_ernic_setup_pci_subsystem_vendor ~ ':'
+               ~ rocm_ernic_setup_pci_subsystem_device) | quote }}
+      attr() { cat "$1" 2>/dev/null || true; }
+      found=0
+      down=0
+      for ib in /sys/class/infiniband/*; do
+        pci=$ib/device
+        have="$(attr "$pci/vendor"):$(attr "$pci/device")"
+        have="$have:$(attr "$pci/subsystem_vendor"):$(attr "$pci/subsystem_device")"
+        [ "$have" = "$want" ] || continue
+        found=$((found + 1))
+        state=$(awk '{print $2}' "$ib/ports/1/state" 2>/dev/null || true)
+        echo "${ib##*/}: ${state:-no port state}"
+        [ "$state" = ACTIVE ] || down=$((down + 1))
+      done
+      echo "$found emulated NIC(s), $down not active"
+      if [ "$found" -eq 0 ]; then
+        echo "No RDMA device with the emulated NIC's PCI identity ($want):" \
+             "ionic_rdma has registered none." >&2
+      fi
+      [ "$found" -gt 0 ] && [ "$down" -eq 0 ]
+  register: rocm_ernic_setup_driver_ports
+  until: rocm_ernic_setup_driver_ports.rc == 0
+  retries: 30
+  delay: 2
+  changed_when: false
