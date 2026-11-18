@@ -574,7 +574,15 @@
 <p>All five are measured by <code>qemu-minimal-report-for-vm-rocm-golden.yml</code> against
 one stack, described by <code>qemu/stacks/rocm-golden.xml</code>: two guests from the
 published rocm-golden image, each with a GPU, an NVMe, an RDMA NIC and an SDXI
-device.</p>
+device. The lane runs that file unmodified, so the numbers come from the QEMU
+it pins: the <code>sbates-fork</code> build since 2026-11-18, and the stock build of the
+same QEMU release before that, which is a step to expect in the trend lines.
+The two hipFile metrics step much further on the same date, by about seventy
+times: that file now points the guest's NVMe at its GPU's memory
+(<code>&lt;vm-nvme-vram&gt;</code>), so hipFile's direct read maps that memory where, most
+likely, it went through QEMU a page at a time before (inferred, not
+profiled). That is the setting and not faster code. The performance page
+lists such changes, with their dates, under "Changes to what is measured".</p>
 <table>
 <thead>
 <tr>

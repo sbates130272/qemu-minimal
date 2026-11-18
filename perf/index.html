@@ -480,6 +480,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#changes-to-what-is-measured" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changes to what is measured
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#recent-runs" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -606,6 +617,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#changes-to-what-is-measured" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changes to what is measured
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#recent-runs" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -649,7 +671,7 @@ the same basic model used by the ROCm/rocm-ernic site: badges for the latest
 published numbers, a durable history file, and a trend page regenerated as new
 CI data lands.</p>
 <h2 id="latest-published-snapshot">Latest published snapshot<a class="headerlink" href="#latest-published-snapshot" title="Permanent link">&para;</a></h2>
-<p>Generated from <code>45941a37</code> at <strong>2026-11-18 17:08 UTC</strong>.</p>
+<p>Generated from <code>bcfcebb9</code> at <strong>2026-11-18 23:10 UTC</strong>.</p>
 <p><img alt="Rocjitsu GEMM" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-gemm.json" />
 <img alt="Rocjitsu HipFile" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile.json" />
 <img alt="HipFile Fio" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile-fio.json" />
@@ -717,6 +739,30 @@ vfio-user and swing hard between runs.</p>
 <p><img alt="Ernic P4 FP8 BW trend" src="chart-ernic-p4-bw.svg" /></p>
 <h3 id="sdxi-copy-bw">SDXI copy BW<a class="headerlink" href="#sdxi-copy-bw" title="Permanent link">&para;</a></h3>
 <p><img alt="SDXI copy BW trend" src="chart-sdxi-bw.svg" /></p>
+<h2 id="changes-to-what-is-measured">Changes to what is measured<a class="headerlink" href="#changes-to-what-is-measured" title="Permanent link">&para;</a></h2>
+<p>A step in a chart on or after one of these dates, at the first daily run
+after the change reached main, is the change named here.</p>
+<table>
+<thead>
+<tr>
+<th>Date</th>
+<th>Metrics</th>
+<th>Change</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2026-11-18</td>
+<td>Rocjitsu HipFile, HipFile Fio</td>
+<td>The stack's NVMe is pointed at the guest's GPU BAR (<code>&lt;vm-nvme-vram&gt;</code>), so hipFile's direct path maps GPU memory, where it most likely went through QEMU's 4 KiB bounce buffer before (inferred, not profiled). Measured by hand before the change: 11 to 13 MB/s without; 831 and 959 MB/s with, one run each.</td>
+</tr>
+<tr>
+<td>2026-11-18</td>
+<td>all</td>
+<td>Every stack and workflow moved from stock QEMU to the fork QEMU and the ernic server built against its libvfio-user.</td>
+</tr>
+</tbody>
+</table>
 <h2 id="recent-runs">Recent runs<a class="headerlink" href="#recent-runs" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -731,15 +777,6 @@ vfio-user and swing hard between runs.</p>
 </tr>
 </thead>
 <tbody>
-<tr>
-<td>3040a58d</td>
-<td>2026-11-13 11:07 UTC</td>
-<td>710 kFLOP/s</td>
-<td>25.1 MB/s</td>
-<td>26.7 MB/s</td>
-<td>n/a</td>
-<td>n/a</td>
-</tr>
 <tr>
 <td>3040a58d</td>
 <td>2026-11-13 11:39 UTC</td>
@@ -815,6 +852,15 @@ vfio-user and swing hard between runs.</p>
 <tr>
 <td>45941a37</td>
 <td>2026-11-18 17:08 UTC</td>
+<td>338 kFLOP/s</td>
+<td>11.5 MB/s</td>
+<td>9.97 MB/s</td>
+<td>79.6 MB/s</td>
+<td>2428.3 MB/s</td>
+</tr>
+<tr>
+<td>bcfcebb9</td>
+<td>2026-11-18 23:10 UTC</td>
 <td>338 kFLOP/s</td>
 <td>11.5 MB/s</td>
 <td>9.97 MB/s</td>
