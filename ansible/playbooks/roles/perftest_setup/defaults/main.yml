@@ -10,11 +10,16 @@
 # test names it by that path.
 #
 # The build needs no device. configure compiles and links its ROCm probes
-# and runs none of them; the two programs it does run ask the CPU whether it
-# has AVX2 or SSE4.2, for the host-memory validator. hipcc is handed its
-# target instead of asking the device for it, and the one thing the role
-# runs afterwards is "--help", which returns before perftest opens anything.
-# So it belongs in a bake, where there is neither a NIC nor a GPU.
+# and runs none of them. hipcc is handed its target instead of asking the
+# device for it, and the one thing the role runs afterwards is "--help",
+# which returns before perftest opens anything. So it belongs in a bake,
+# where there is neither a NIC nor a GPU.
+#
+# Nor does the build depend on the CPU of the machine it runs on. Left to
+# itself configure runs two programs that ask that CPU whether it has AVX2
+# or SSE4.2, and compiles the host-memory validator for whichever it finds;
+# the role names the level instead (perftest_setup_simd below), because an
+# image is built on one machine and run on others.
 
 # ── What is built ────────────────────────────────
 # The repository and the ref fetched from it. The ref is a branch or a tag
@@ -107,8 +112,7 @@ perftest_setup_rocm_dmabuf: true
 # library loaded are one rdma-core. A guest baked before the packages were
 # dropped still has two to choose from, and so does one where somebody ran
 # "apt install libibverbs-dev". Headers somewhere gcc does not already look
-# go in perftest_setup_configure_extra as CPPFLAGS=-I<dir>; the probe reads
-# that too.
+# go in perftest_setup_cppflags as -I<dir>; the probe reads that too.
 perftest_setup_rdma_core: "archive"
 
 # With "local": the directory of the libibverbs, librdmacm and libibumad
@@ -131,9 +135,89 @@ perftest_setup_rdma_dev_packages:
   - libibumad-dev
 
 # Arguments added to the end of the configure line, one per item. A
-# CPPFLAGS=, CFLAGS= or LDFLAGS= here replaces the one before it on the
-# line, as configure has it, so an LDFLAGS= replaces the directory above.
+# CFLAGS= or LDFLAGS= here replaces the one before it on the line, as
+# configure has it, so an LDFLAGS= replaces the directory above. No
+# CPPFLAGS= belongs here: the role writes that one itself, with the SIMD
+# level in it, and refuses a second. Preprocessor flags of the caller's go
+# in perftest_setup_cppflags. A CFLAGS= is not the way round that: the
+# level is read back from every flag the validator is compiled with, so a
+# -DHAVE_AVX2 written there stops the build before it compiles, and an
+# -mavx2 or -march= there, which lets AVX into the other objects, stops it
+# after, when the tool is asked what it carries.
 perftest_setup_configure_extra: []
+
+# Preprocessor flags added to the role's CPPFLAGS=, one per item: -I<dir>
+# for rdma-core headers somewhere gcc does not already look, for one.
+perftest_setup_cppflags: []
+
+# ── The CPU the tools are built for ──────────────
+# The SIMD level of the host-memory validator, which is what
+# --data_validation runs when the buffer is ordinary memory. It is the only
+# code in the tools compiled for more than baseline x86-64, and
+# Makefile.am gives the flag to that one object.
+#
+#   sse4.2  x86-64-v2: 16 bytes a compare. Every CPU that can run a fleet
+#           has it, and so does QEMU's EPYC model, which every stack and
+#           run-vm give a guest. The default, and the level an image is
+#           published with.
+#   avx2    x86-64-v3: 32 bytes a compare. A CPU without AVX2 cannot use
+#           the validator at all: the tools check at start and refuse
+#           --data_validation on host memory there.
+#   none    No validator: --data_validation on host memory is refused
+#           everywhere. --use_rocm validation is unaffected at any level.
+#   ""      Whatever configure finds on the CPU of the machine that builds,
+#           which is what the tree does when nobody says. Not for an image
+#           that is published, and qemu/checks/rocm-golden.sh refuses it.
+#
+# Why it is named and not found: configure decides with AC_RUN_IFELSE, a
+# program compiled and run during the build, and has no switch. On a guest
+# with QEMU's EPYC model that picked AVX2. A bake boots its guest with
+# QEMU's default model, qemu64, which has neither AVX2 nor SSE4.2, so there
+# it picked nothing, and the first golden bake with this role stopped in
+# the compiler (the workaround below). Either way the image carried what
+# the bake machine's CPU happened to be.
+#
+# How it is named, with no change to the tree: cross_compiling=yes on the
+# configure line, which is autoconf's word for "the machine that builds is
+# not the one that runs" and stops configure running anything, so both of
+# its answers are "no"; then -DHAVE_SSE42=1 (or -DHAVE_AVX2=1) in CPPFLAGS
+# and SIMD_CFLAGS=-msse4.2 (or -mavx2). files/perftest-simd-check.sh reads
+# the result back before anything is compiled, from config.h and the flags
+# the Makefile gives that object (DEFS, CPPFLAGS, CFLAGS and SIMD_CFLAGS),
+# and stops the build when it is another level; verify.yml then asks the
+# binary.
+#
+# Whatever the level, the tools ask the CPU they are started on and refuse
+# host-memory --data_validation where it lacks the level, with a message
+# and not an illegal instruction (src/perftest_parameters.c). A guest
+# without sse4.2 in its CPUID, which is what QEMU's default model is, gets
+# that refusal from an sse4.2 build.
+perftest_setup_simd: "sse4.2"
+
+# WORKAROUND for a bug in the pinned tree, to be turned off when the pin
+# moves to a commit that has the fix. src/host_validation.c defines
+# cpu_relax() as _mm_pause() for every x86 build and includes a header that
+# declares it only under HAVE_AVX512, HAVE_AVX2 or HAVE_SSE42. With no SIMD
+# level nothing declares it, and gcc 14 and later make an implicit
+# declaration an error:
+#
+#   src/host_validation.c:33:23: error: implicit declaration of function
+#   '_mm_pause'
+#
+# gcc 13 and earlier warn and then fail in the linker, on an undefined
+# reference to a function that only ever exists inline.
+#
+# True adds "-include xmmintrin.h" to CPPFLAGS, the header that declares it,
+# which every x86-64 compiler has. With sse4.2 or avx2 the tree compiles
+# without it, since the SIMD header brings the declaration in; it is on at
+# every level so that the level can be changed without tripping over this.
+#
+# False is for a tree that has the fix, and is checked: the role compiles
+# the file with no SIMD level before the build, with the implicit
+# declaration made an error whatever the compiler's default is, and a tree
+# that still has the bug fails there with the reason. A tree that no longer
+# has it says so in the play output while this is still true.
+perftest_setup_mm_pause_workaround: true
 
 # ── Where it goes ────────────────────────────────
 # The install prefix. /usr/local, so that <prefix>/bin precedes /usr/bin in
@@ -154,8 +238,10 @@ perftest_setup_keep_source: false
 
 # What the build is recorded in: the repository, the ref, the commit that
 # was built and the one that was required, the configure line, the rdma-core
-# headers and libibverbs it was built against, and whether device code is in
-# the binaries. A rerun that finds this file describing
+# headers and libibverbs it was built against, whether device code is in
+# the binaries, the SIMD level of the host-memory validator and whether the
+# role named it, and whether the _mm_pause workaround was applied. A rerun
+# that finds this file describing
 # the build it was asked for, and the tools in place, compiles nothing.
 perftest_setup_stamp: "/etc/perftest-rocm.json"
 

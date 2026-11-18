@@ -3616,9 +3616,16 @@ gfx1250) and `configure.ac`:
 ./autogen.sh
 ./configure --prefix=/usr/local --enable-rocm --enable-rocm-dmabuf \
     --with-rocm=/opt/rocm/core-10.1 --with-rocm-arch=gfx1250 \
-    HIPCC=/opt/rocm/core-10.1/bin/hipcc LDFLAGS=-L/usr/local/lib
+    HIPCC=/opt/rocm/core-10.1/bin/hipcc LDFLAGS=-L/usr/local/lib \
+    cross_compiling=yes SIMD_CFLAGS=-msse4.2 \
+    'CPPFLAGS=-DHAVE_SSE42=1 -include xmmintrin.h'
 make -j"$(nproc)" && make install
 ```
+
+The last two lines are not in the repository's workflow. They name the SIMD
+level of the host-memory validator, which `configure` otherwise takes from
+the CPU of the machine that builds; see "The CPU the tools are built for"
+below.
 
 **`LDFLAGS=-L/usr/local/lib` was not optional on the golden guest as it
 was published, and the first version of the role, which lacked it, failed
@@ -3730,7 +3737,10 @@ live GPU validation` or `... host-staged validation`.
 | `perftest_setup_rocm_arch` | `gfx1250` | the GPU it is built for; required with the line above |
 | `perftest_setup_rocm_dmabuf` | `true` | `--enable-rocm-dmabuf`, which adds `--use_rocm_dmabuf` |
 | `perftest_setup_rdma_lib_dir` | `/usr/local/lib` | the directory of the libibverbs the tools link, as `LDFLAGS=-L<dir>`; empty adds nothing |
-| `perftest_setup_configure_extra` | `[]` | arguments appended to the configure line; a `CPPFLAGS=`, `CFLAGS=` or `LDFLAGS=` here replaces the one before it, and the probe reads all three |
+| `perftest_setup_configure_extra` | `[]` | arguments added to the configure line; a `CFLAGS=` or `LDFLAGS=` here replaces the one before it. A `CPPFLAGS=` is refused: the role writes that one |
+| `perftest_setup_cppflags` | `[]` | preprocessor flags added to the role's `CPPFLAGS=`, `-I<dir>` for one; the rdma-core probe reads them |
+| `perftest_setup_simd` | `sse4.2` | the SIMD level of the host-memory validator: `sse4.2`, `avx2`, `none`, or empty to leave it to `configure` and the build machine's CPU |
+| `perftest_setup_mm_pause_workaround` | `true` | add `-include xmmintrin.h`, for a bug in the pinned tree; cannot be turned off while the tree has it |
 | `perftest_setup_keep_source` | `false` | keep `/usr/local/src/perftest` (`perftest_setup_source_dir`); the role removes the tree only in a run that fetched it |
 | `perftest_setup_force` | `false` | build even when the stamp says there is nothing to do |
 
@@ -3738,8 +3748,11 @@ It records the build in `/etc/perftest-rocm.json` — repository, ref, the
 commit built and the commit required, the configure line, the ROCm tree,
 the rdma-core headers and the libibverbs it was built against
 (`rdma_headers`, `libibverbs`, real paths, so the library's version is in
-the name), and whether the binaries carry device code, read off the binary
-with `nm` and not copied from the request. A rerun that finds the stamp describing
+the name), whether the binaries carry device code, read off the binary
+with `nm` and not copied from the request, the SIMD level the validator was
+configured for and whether the role named it (`simd`, `simd_forced`), and
+whether the `_mm_pause` workaround was applied (`mm_pause_workaround`). A
+rerun that finds the stamp describing
 the build it was asked for, and the tools in place, compiles nothing; the
 tools are checked either way.
 
@@ -3773,8 +3786,8 @@ check off.
 
 **No device is needed, and each part of that was established**, not
 assumed. The ROCm probes in `configure` compile and link and run nothing;
-the two programs it does run ask the CPU about AVX2 and SSE4.2, which fixes
-the host-memory validator's SIMD level at the build VM's CPU. hipcc
+the two programs it would run ask the CPU about AVX2 and SSE4.2, and the
+role stops it running them (next section). hipcc
 compiles for the GPU it is told. The role runs each tool with `--help` and
 nothing else; perftest prints its usage while parsing arguments, and a
 binary carrying a HIP kernel registers it at load without touching the GPU.
@@ -3784,6 +3797,165 @@ took 23 s, a rerun compiled nothing, a pin the branch was not at failed
 before the build and left no tree, and the check's block passed. That
 container had no rdma-core in `/usr/local`, which is why it did not see the
 link failure above.
+
+### The CPU the tools are built for
+
+**The first golden bake with this role failed in the compiler**, in the
+playbook-test lane of pull request #240 (run 44329944669), eleven minutes
+in:
+
+```
+checking for AVX2 runtime CPU support... no
+checking for SSE4.2 runtime CPU support... no
+src/host_validation.c:33:23: error: implicit declaration of function '_mm_pause'
+```
+
+Two things, and neither is the build machine being short of anything:
+
+- **A bake's guest has QEMU's default CPU model.** `gen-vm` boots the image
+  it bakes with `-machine q35,accel=kvm` and no `-cpu`
+  (`gen_vm._arch_args_for_gen`), which under KVM is still `qemu64`: the
+  guest's kernel prints `AMD QEMU Virtual CPU version 2.5+ (family: 0xf,
+  model: 0x6b)` and `x87 FPU will use FXSAVE`, and of `ssse3 sse4_1 sse4_2
+  popcnt avx avx2 xsave` its `/proc/cpuinfo` has none, only `pni`.
+  `run-vm`, and so every stack, passes `-cpu EPYC`, which has `sse4_2` and
+  `avx2`. So anything in a bake that asks the CPU what it has is told
+  "x86-64 baseline", whatever the host is.
+- **perftest's `configure` asks.** `configure.ac` decides `HAVE_AVX2` and
+  `HAVE_SSE42` with `AC_RUN_IFELSE`: it compiles a program that returns
+  `__builtin_cpu_supports("avx2")` and runs it, with no switch and no
+  cache variable. Makefile.am then gives `-mavx2` or `-msse4.2` to
+  `host_validation.o` alone. On the bake's CPU both programs exit 1
+  (`config.log`: the link succeeds, `./conftest`, `$? = 1`), neither macro
+  is defined, and the tree then does not compile at all: `cpu_relax()` is
+  `_mm_pause()` for every x86 build, and the header that declares it is
+  included only under `HAVE_AVX512`, `HAVE_AVX2` or `HAVE_SSE42`. gcc 14 and
+  later make an implicit declaration an error; gcc 13 only warns and the
+  build then stops in the linker, on an undefined reference to `_mm_pause`.
+
+Measured on 2026-11-18 on one scratch guest of the published image, no
+device attached, booted both ways. The same test program, built by hand
+with and without the ROCm libraries on its link line, exits 1 on the
+default model and 0 on EPYC, so it is the CPU and nothing about ROCm or a
+missing `/dev/kfd`. The role as it was at `40eb051` fails there exactly as
+the lane did, and on the EPYC boot it builds and installs **AVX2** code:
+`#define HAVE_AVX2 1`, and 29 instructions on `ymm` registers in
+`ib_write_bw`. That is why it had built on two live guests and in a
+container the day before, and it is the other half of the problem: an image
+carried whatever its bake machine's CPU was.
+
+**An AVX2 build on a CPU without AVX2 does not crash; it refuses.**
+`host_validation_runtime_supported()` in `src/perftest_parameters.c` asks
+the CPU it is started on for the level it was compiled for, and
+`--data_validation` on host memory then exits 1 with `--data_validation
+requires host CPU SIMD support (AVX2/SSE4.2/NEON)` before a device is
+looked for. Seen with the AVX2 build on the default model. `--use_rocm`
+validation does not go through it. So the cost of a level the CPU lacks is
+a missing feature, with a message.
+
+**The level is `perftest_setup_simd`, and the image's is `sse4.2`.**
+
+| Level | Needs | Where host-memory `--data_validation` is refused |
+|---|---|---|
+| `sse4.2` | x86-64-v2 | a CPU whose CPUID has no `sse4_2`: QEMU's default model, and hardware older than 2008 (Intel) or 2011 (AMD) |
+| `avx2` | x86-64-v3 | any CPU or CPU model without AVX2, Intel before Haswell and QEMU models older than that included |
+| `none` | nothing | everywhere: there is no validator |
+| empty | the build machine's | wherever the CPU lacks what the build machine had |
+
+`sse4.2` because it is the lowest level the tree has a validator for, every
+CPU a fleet can run on has it, QEMU's EPYC model has it, and a host without
+AVX2 runs the same code as one with it. What it costs is the rate of
+host-memory validation and nothing else: 16 bytes a compare where AVX2 does
+32. `none` would give the feature up to save nothing. The validator's
+instructions at this level are `movdqu`, `pcmpeqb`, `pmovmskb` and one
+`pshufb`, read off the binary.
+
+**How the level is named, without touching the tree.** No patch: the stamp
+says the tools are the pinned commit, and they are.
+
+| On the configure line | What it does |
+|---|---|
+| `cross_compiling=yes` | autoconf's word for "the machine that builds is not the one that runs". `AC_RUN_IFELSE` then runs nothing and takes its cross-compiling answer, which `configure.ac` gives as "no" for both. That is why both `runtime CPU support` lines read `no` in the output at any level |
+| `SIMD_CFLAGS=-msse4.2` | `configure.ac` sets the variable only when a probe says yes, so the value given survives to `AC_SUBST` and to the one object |
+| `CPPFLAGS=-DHAVE_SSE42=1 ...` | the macro `config.h` would have defined. One `CPPFLAGS=`, written by the role, which is why `perftest_setup_configure_extra` may not carry another |
+
+None of the three is an interface the tree promises, so
+`files/perftest-simd-check.sh` reads the result back between `configure`
+and `make`: the `HAVE_` macros a file that includes `config.h` sees with
+the flags make gives `host_validation.o`, taken in the order
+`host_validation.c` takes them, and the Makefile's `SIMD_CFLAGS`. The flags
+are the Makefile's `DEFS`, `CPPFLAGS`, `CFLAGS` and `SIMD_CFLAGS`, in
+automake's order, and not `CPPFLAGS` alone: the role refuses a `CPPFLAGS=`
+in `perftest_setup_configure_extra` but still takes a `CFLAGS=`, and with
+only `CPPFLAGS` read a `CFLAGS=-DHAVE_AVX2=1 -mavx2` there was reported as
+`sse4.2` while the compile line built AVX2: `host_validation.o` compiled
+with those flags from the pinned source has 29 instructions on `ymm`
+registers, and none with the role's own line (the object alone, with gcc
+15.2 on the dev host; no build was run that way, so that the register
+count below then fails it is by construction and not something seen). A
+level other than the one asked for stops the build before it compiles,
+with the reason. What the script cannot see is a `CFLAGS=-mavx2` or
+`-march=` with no macro, which leaves the validator at its level and lets
+the compiler use AVX in the other objects (`ymm` instructions in four of
+the seven other sources that compile on the dev host); that one is the
+register count's. After the build,
+`verify.yml` counts instructions on `ymm` and `zmm` registers in
+`ib_write_bw`, which are there exactly when the level is AVX2 or AVX-512,
+and the role fails when that disagrees with the level. The guest check
+then requires `simd` to be `sse4.2` and `simd_forced` to be true, and
+counts the same instructions itself. That one rule is spelled in the check
+on purpose: a level passed in from the playbook would pass whatever it was.
+
+`cross_compiling=yes` also makes `configure` warn `using cross tools not
+prefixed with host triplet`; the compiler is still `gcc`. A function-like
+`-D__builtin_cpu_supports(x)=...` to answer the probes was not usable: the
+tools call the builtin at run time for the refusal above.
+
+**The `_mm_pause` workaround is `perftest_setup_mm_pause_workaround`**, on
+by default: `-include xmmintrin.h` in `CPPFLAGS`, the header that declares
+it. At `sse4.2` and `avx2` the tree compiles without it, because the SIMD
+header brings the declaration in, so it only decides whether `none` and an
+empty level on a CPU with neither can build. It is on at every level so
+that changing the level does not trip over it. **Turn it off when the pin
+moves to a commit with the fix.** The check script compiles
+`src/host_validation.c` with no SIMD macro and no forced include, and a
+tree that still has the bug with the variable off fails the bake there, in
+words; a tree that no longer has it says so in the play output while the
+variable is still on. That compile carries
+`-Werror=implicit-function-declaration`, so the answer is the tree's and
+not the compiler's default: without it gcc 13 compiled the pinned file
+with a warning, the script reported no bug and said the workaround could
+go, and a build that believed it would have failed at link (run with
+gcc 13, 14 and 15 against the pinned source and against the source with
+the fix; all three now agree both ways). The fix in the fork is one line, `#include
+<immintrin.h>` where `cpu_relax()` is defined, and a `--with-simd=LEVEL`
+switch in place of the run-time probe would turn the three arguments above
+into one. Both were built on the scratch guest as patches against
+`e68c74e`, at every level, and written up for the owner; nothing was pushed
+to the fork.
+
+What ran, on 2026-11-18, on that scratch guest with the fix: on the default
+model, the role built `sse4.2` (`validate_sse42` in the symbol table, no
+`ymm`), a rerun compiled nothing, the workaround turned off was refused
+before the compile, and `avx2`, `none` and empty each built what they name;
+on the EPYC model, where the unfixed role had built AVX2, it built
+`sse4.2` again, and `ib_write_bw --data_validation` got past the SIMD
+refusal to `Unable to find the Infiniband/RoCE device`. The `ib_write_bw`
+of the two builds is the same file, byte for byte. The perftest block of
+the guest check passed against that build, refused an `avx2` build by its
+stamp, and refused the same binary under a stamp edited to say `sse4.2`
+(`29 instructions on ymm or zmm registers`). The rest of the guest check
+was not run there: the guest was the published image, which it refuses for
+other reasons. **No bake has run with it**,
+and no `--data_validation` transfer has: the runs recorded for 2026-11-17
+were on builds made with the probes saying yes, which is AVX2. The ROCm
+ones do not use the host validator. The host-memory ones do, and at
+`sse4.2` they compare half as many bytes at a time.
+
+**`gen-vm` was left alone.** A bake on QEMU's default model is the
+portable direction: whatever compiles for "this CPU" there compiles for
+baseline x86-64. Giving the bake boots `-cpu EPYC` would have made this
+role build, and published AVX2 tools.
 
 **Why `perftest_setup_rocm_arch` is required.** Without `--with-rocm-arch`,
 `configure` asks `rocm_agent_enumerator`, which prints nothing with no

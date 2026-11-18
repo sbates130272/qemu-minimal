@@ -175,7 +175,7 @@
          | regex_replace('^link=', '') }}
 
 # The recipe of the repository's own ROCm workflow: autogen.sh, configure
-# with --enable-rocm and the ROCm tree, make, make install. Three
+# with --enable-rocm and the ROCm tree, make, make install. Four
 # differences. Two are because this runs with no GPU: hipcc is named by its
 # path, not looked for on PATH, so the build either has device code or says
 # HIPCC=no; and the GPU is passed with --with-rocm-arch, because configure
@@ -183,10 +183,19 @@
 # third is LDFLAGS=-L<perftest_setup_rdma_lib_dir>, when the rdma-core to
 # build against is one built from source.
 #
+# A fourth is the SIMD level of the host-memory validator, which the
+# repository's workflow leaves to the CPU of its runner and this names:
+# cross_compiling=yes, SIMD_CFLAGS= and the macro in CPPFLAGS. That is why
+# configure prints "no" for both "runtime CPU support" lines whatever the
+# level is: it ran neither program.
+#
+# In two tasks, so that what configure made of those arguments is read back
+# before anything is compiled.
+#
 # No PATH is set: gcc is whatever the caller's PATH resolves, which is
 # ccache when the bake put one in front of it. hipcc runs its own clang by
 # path, so that one compile is never cached.
-- name: Build and install perftest
+- name: Configure perftest
   ansible.builtin.shell:
     cmd: |
       set -euo pipefail
@@ -194,6 +203,57 @@
       export HIP_PATH={{ perftest_setup_rocm_resolved | quote }}
       ./autogen.sh
       ./configure {{ perftest_setup_configure_args | map('quote') | join(' ') }}
+    chdir: "{{ perftest_setup_source_dir | trim }}"
+    executable: /bin/bash
+  changed_when: true
+
+# From config.h and the Makefile, which are what the compiler is about to be
+# given: the level the validator would be compiled for, with every flag
+# make puts on that object's line and not CPPFLAGS alone, and whether this
+# tree compiles with no level at all. The script's header has the rest, and
+# its verdict line is the message.
+- name: Read back the SIMD level configure settled on
+  ansible.builtin.script:
+    cmd: >-
+      perftest-simd-check.sh
+      {{ perftest_setup_source_dir | trim | quote }}
+      {{ perftest_setup_simd | trim | quote }}
+      {{ perftest_setup_mm_pause_workaround | bool | string | lower }}
+    executable: /bin/sh
+  register: perftest_setup_simd_check
+  changed_when: false
+  failed_when: false
+
+- name: Fail unless the build is for the SIMD level that was asked for
+  vars:
+    perftest_setup_simd_verdict: >-
+      {{ perftest_setup_simd_check.stdout_lines | default([])
+         | map('trim') | select('match', '(ok|FAIL): ') | list }}
+  ansible.builtin.assert:
+    that:
+      - perftest_setup_simd_check.rc | default(1) == 0
+      - perftest_setup_simd_verdict | length == 1
+      - "perftest_setup_simd_verdict[0] is match('ok: ')"
+    fail_msg: >-
+      {{ perftest_setup_simd_verdict | join(' ')
+         | default('perftest-simd-check.sh printed no verdict: '
+                   ~ (perftest_setup_simd_check.stdout | default(''))
+                   ~ (perftest_setup_simd_check.stderr | default(''))
+                   ~ (perftest_setup_simd_check.msg | default('')), true) }}
+    success_msg: "{{ perftest_setup_simd_verdict | join(' ') }}"
+
+- name: Record the SIMD level the build is for
+  ansible.builtin.set_fact:
+    perftest_setup_simd_built: >-
+      {{ (perftest_setup_simd_check.stdout_lines | map('trim')
+          | select('match', 'simd=') | first) | regex_replace('^simd=', '') }}
+
+- name: Build and install perftest
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      export ROCM_PATH={{ perftest_setup_rocm_resolved | quote }}
+      export HIP_PATH={{ perftest_setup_rocm_resolved | quote }}
       make -j"$(nproc)"
       make install
     chdir: "{{ perftest_setup_source_dir | trim }}"

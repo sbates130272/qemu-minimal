@@ -107,7 +107,7 @@ case "$link" in
     "$prefix"/lib/libibverbs.so* | "$prefix"/lib64/libibverbs.so* | \
     "$prefix"/lib/*/libibverbs.so*) ;;
     *)
-        fail "the tools would be compiled against $headers and linked against $link, which is another rdma-core. Give configure the headers of the library it links, with CPPFLAGS=-I<dir> in perftest_setup_configure_extra."
+        fail "the tools would be compiled against $headers and linked against $link, which is another rdma-core. Give configure the headers of the library it links, with -I<dir> in perftest_setup_cppflags, which the role puts in CPPFLAGS=."
         ;;
 esac
 want=${PERFTEST_RDMA_LIB_DIR:-}

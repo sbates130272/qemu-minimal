@@ -23,6 +23,13 @@ What is held here, none of it by booting anything:
                stand-in compiler and, where there is one, the real
   the fetch    perftest-fetch.sh, run against real repositories made in a
                temporary directory, the branch that moved included
+  the cpu      the SIMD level of the host-memory validator is a variable and
+               not the CPU of the machine that bakes: the configure line
+               names it, perftest-simd-check.sh reads it back from a
+               configured tree before anything is compiled, run here
+               against trees made in a temporary directory, and the
+               workaround for the tree's missing _mm_pause declaration is a
+               variable that cannot be turned off while the tree has the bug
   the check    the block of qemu/checks/rocm-golden.sh between its two
                markers, run against stand-ins for the tools
   quickstart   the play that moves validated traffic between GPU memory is
@@ -66,6 +73,7 @@ LINT = REPO / ".github/workflows/qemu-minimal-ansible-setup-test.yml"
 
 BUILD_PLAY = "Build perftest with ROCm memory support into the guest"
 STAMP_PLAY = "Record what was baked"
+SIMD = ROLE / "files/perftest-simd-check.sh"
 SAVE_PLAY = "Save the compiler cache and take ccache out of the guest"
 RDMA_PLAY = "Move validated RDMA traffic between GPU memory on two guests"
 STAMP = "/etc/perftest-rocm.json"
@@ -102,14 +110,25 @@ def _require(available: bool, what: str) -> None:
 
 
 # The configure line the role gives on a golden guest, where the playbook
-# sets perftest_setup_rdma_core to "local". This exact line built on both
-# guests of the published image on 2026-11-17, which still had the archive's
-# rdma-core development packages; the one without its last argument failed
-# to link there. With those packages gone it built with and without it.
+# sets perftest_setup_rdma_core to "local". Up to and including LDFLAGS it
+# is the line that built on both guests of the published image on
+# 2026-11-17, which still had the archive's rdma-core development packages;
+# the one without LDFLAGS failed to link there. With those packages gone it
+# built with and without it.
+#
+# The last three arguments name the SIMD level of the host-memory validator
+# (SIMD_LEVEL below). Without them the first golden bake stopped in the
+# compiler: its guest has QEMU's default CPU model, which has neither AVX2
+# nor SSE4.2, and the tree does not compile with no level. With them the
+# line built on 2026-11-18 on a guest with that model and on one with the
+# EPYC model, to the same level both times.
+SIMD_LEVEL = ("cross_compiling=yes SIMD_CFLAGS=-msse4.2 "
+              "CPPFLAGS=-DHAVE_SSE42=1 -include xmmintrin.h")
 GOLDEN_CONFIGURE = (
     "--prefix=/usr/local --enable-rocm --enable-rocm-dmabuf "
     "--with-rocm=/opt/rocm/core-10.1 --with-rocm-arch=gfx1250 "
-    "HIPCC=/opt/rocm/core-10.1/bin/hipcc LDFLAGS=-L/usr/local/lib")
+    "HIPCC=/opt/rocm/core-10.1/bin/hipcc LDFLAGS=-L/usr/local/lib "
+    + SIMD_LEVEL)
 
 
 def _plays(path=PLAYBOOK):
@@ -325,6 +344,50 @@ class Wiring(unittest.TestCase):
         self.assertEqual(_play(BUILD_PLAY)["vars"]["perftest_setup_rdma_core"],
                          "local")
 
+    def test_the_level_and_the_workaround_are_the_role_s_and_not_the_play_s(self):
+        """The image's SIMD level is the role's default, and nothing above
+        the role says otherwise.
+
+        A play variable outranks a role default. With perftest_setup_simd
+        set to "" or avx2 in the play, or the workaround turned off there,
+        every other test here still passed, and the first thing to notice
+        was qemu/checks/rocm-golden.sh on the booted guest, at the end of a
+        bake. So what the play may set is listed, and the four variables
+        that decide what the compiler is given are written nowhere a bake
+        reads: not in the playbook, not in the inventory and not in a
+        workflow's extra vars.
+        """
+        mine = {name for name in self.play["vars"]
+                if name.startswith("perftest_setup_")}
+        self.assertEqual(mine, {
+            "perftest_setup_repo", "perftest_setup_ref",
+            "perftest_setup_commit", "perftest_setup_rocm_path",
+            "perftest_setup_rdma_core", "perftest_setup_rdma_lib_dir"},
+            "a perftest_setup variable set in the play is one the role's "
+            "defaults no longer decide: add it here on purpose, and never "
+            "the SIMD level, the _mm_pause workaround or a flag list")
+        decides = ("perftest_setup_simd", "perftest_setup_mm_pause_workaround",
+                   "perftest_setup_cppflags", "perftest_setup_configure_extra")
+        defaults = _defaults()
+        for name in decides:
+            self.assertIn(name, defaults)
+        self.assertEqual(defaults["perftest_setup_simd"], "sse4.2")
+        readers = [PLAYBOOK, QUICKSTART, PLAYBOOKS / "vm-basic.yml",
+                   *sorted((REPO / "ansible/inventory").rglob("*")),
+                   *sorted((REPO / ".github").rglob("*.yml")),
+                   *sorted((REPO / "qemu/stacks").glob("*.xml"))]
+        self.assertGreater(len(readers), 6)
+        for path in readers:
+            if not path.is_file():
+                continue
+            text = path.read_text()
+            for name in decides:
+                with self.subTest(path=str(path.relative_to(REPO)), name=name):
+                    self.assertNotIn(
+                        name, text, f"{name} is named outside the role: "
+                        "the published image is built with the role's "
+                        "default, sse4.2 with the workaround on")
+
     def test_the_role_is_linted_with_the_others(self):
         self.assertIn("perftest_setup/", LINT.read_text())
 
@@ -365,6 +428,9 @@ class Role(unittest.TestCase):
             "perftest_setup_rdma_core": "archive",
             "perftest_setup_rdma_lib_dir": "/usr/local/lib",
             "perftest_setup_configure_extra": [],
+            "perftest_setup_cppflags": [],
+            "perftest_setup_simd": "sse4.2",
+            "perftest_setup_mm_pause_workaround": True,
             "perftest_setup_keep_source": False,
             "perftest_setup_stamp": STAMP,
             "perftest_setup_force": False,
@@ -393,7 +459,7 @@ class Role(unittest.TestCase):
         names = [t["name"] for t in self.build]
         fetch = names.index("Fetch perftest at the pinned ref")
         verdict = names.index("Fail when the fetched commit is not the pinned one")
-        build = names.index("Build and install perftest")
+        build = names.index("Configure perftest")
         self.assertLess(fetch, verdict)
         self.assertLess(verdict, build)
         task = self.build[fetch]
@@ -416,23 +482,36 @@ class Role(unittest.TestCase):
             if re.search(r"^\s*(make\b|\./configure\b|\./autogen\.sh)",
                          t.get("ansible.builtin.shell", {}).get("cmd", ""),
                          re.M)]
-        self.assertEqual(compiles, ["Build and install perftest"])
+        self.assertEqual(compiles, ["Configure perftest",
+                                    "Build and install perftest"])
 
     def test_the_build_is_the_recipe_with_the_gpu_and_hipcc_named(self):
-        task = next(t for t in self.build
-                    if t["name"] == "Build and install perftest")
-        cmd = task["ansible.builtin.shell"]["cmd"]
-        steps = [line.strip() for line in cmd.splitlines()]
+        # Two tasks, with the SIMD check between them: what configure made
+        # of its arguments is read back before anything is compiled.
+        names = [t["name"] for t in self.build]
+        configure = names.index("Configure perftest")
+        make = names.index("Build and install perftest")
+        self.assertLess(configure, make)
+        steps = []
+        for index in (configure, make):
+            cmd = self.build[index]["ansible.builtin.shell"]["cmd"]
+            mine = [line.strip() for line in cmd.splitlines()]
+            self.assertIn("set -euo pipefail", mine)
+            # No PATH of its own: gcc is the caller's, which is ccache in a
+            # bake that has one.
+            self.assertNotIn("PATH=", cmd.replace("ROCM_PATH=", "").replace(
+                "HIP_PATH=", ""))
+            self.assertEqual(self.build[index]["ansible.builtin.shell"]["chdir"],
+                             "{{ perftest_setup_source_dir | trim }}")
+            steps += mine
         order = [steps.index(s) for s in ("./autogen.sh",) ] + [
             next(i for i, s in enumerate(steps) if s.startswith("./configure ")),
             next(i for i, s in enumerate(steps) if s.startswith("make -j")),
             steps.index("make install")]
         self.assertEqual(order, sorted(order))
-        self.assertIn("set -euo pipefail", steps)
-        # No PATH of its own: gcc is the caller's, which is ccache in a bake
-        # that has one.
-        self.assertNotIn("PATH=", cmd.replace("ROCM_PATH=", "").replace(
-            "HIP_PATH=", ""))
+        self.assertNotIn("make", self.build[configure]["ansible.builtin.shell"]["cmd"])
+        self.assertNotIn("./configure",
+                         self.build[make]["ansible.builtin.shell"]["cmd"])
         args = next(t for t in self.main
                     if t["name"] == "Record the ROCm tree and the configure line")
         line = args["ansible.builtin.set_fact"]["perftest_setup_configure_args"]
@@ -442,10 +521,13 @@ class Role(unittest.TestCase):
                        "'LDFLAGS=-L' ~ (perftest_setup_rdma_lib_dir | trim)",
                        "perftest_setup_configure_extra"):
             self.assertIn(needle, line)
-        # The caller's arguments come last, so a CPPFLAGS= or LDFLAGS= of
-        # theirs is the one configure keeps.
+        # The caller's arguments follow the role's LDFLAGS=, so an LDFLAGS=
+        # of theirs is the one configure keeps. The SIMD level follows the
+        # caller's: nothing of theirs replaces it.
         self.assertLess(line.index("'LDFLAGS=-L'"),
                         line.index("perftest_setup_configure_extra"))
+        self.assertLess(line.index("perftest_setup_configure_extra"),
+                        line.index("'cross_compiling=yes'"))
 
     def _configure_line(self, **given):
         """The role's configure arguments, evaluated with its defaults."""
@@ -461,6 +543,12 @@ class Role(unittest.TestCase):
             else str(value).strip().lower() in ("true", "yes", "1", "on"))
         values = dict(self.defaults, **given)
         values["perftest_setup_rocm_found"] = {"stdout": "/opt/rocm/core-10.1\n"}
+        # The task's own variables, which Ansible evaluates when they are
+        # used: here, before the expression that uses them.
+        for name, value in args.get("vars", {}).items():
+            value = value.strip()
+            self.assertTrue(value.startswith("{{") and value.endswith("}}"))
+            values[name] = env.compile_expression(value[2:-2].strip())(**values)
         return " ".join(env.compile_expression(text[2:-2].strip())(**values))
 
     def test_the_golden_configure_line_is_the_one_that_built_on_a_guest(self):
@@ -472,9 +560,14 @@ class Role(unittest.TestCase):
         61 and failed on ibv_alloc_buf. With it, it built: 18.76 s on an
         8 vCPU guest. The playbook's two variables give that line.
         """
-        golden = {name: _play(BUILD_PLAY)["vars"][name]
-                  for name in ("perftest_setup_rdma_core",
-                               "perftest_setup_rdma_lib_dir")}
+        # Every perftest_setup variable the play sets to a literal, so a
+        # level or a flag list added there changes this line and fails
+        # here. The other four are templates of the pin and the ROCm line,
+        # which Pin holds.
+        golden = {name: value
+                  for name, value in _play(BUILD_PLAY)["vars"].items()
+                  if name.startswith("perftest_setup_")
+                  and "{{" not in str(value)}
         self.assertEqual(golden, {"perftest_setup_rdma_core": "local",
                                   "perftest_setup_rdma_lib_dir": "/usr/local/lib"})
         self.assertEqual(self._configure_line(**golden), GOLDEN_CONFIGURE)
@@ -494,11 +587,120 @@ class Role(unittest.TestCase):
                                  perftest_setup_configure_extra=["CFLAGS=-O0"]),
             "--prefix=/usr/local --enable-rocm "
             "--with-rocm=/opt/rocm/core-10.1 --with-rocm-arch=gfx1250 "
-            "HIPCC=no LDFLAGS=-L/usr/local/lib CFLAGS=-O0")
+            "HIPCC=no LDFLAGS=-L/usr/local/lib CFLAGS=-O0 " + SIMD_LEVEL)
         that = " ".join(self.main[0]["ansible.builtin.assert"]["that"])
         self.assertIn("perftest_setup_rdma_lib_dir | trim | length == 0", that)
         self.assertIn("perftest_setup_rdma_lib_dir | trim is match('^/')", that)
         self.assertIn("perftest_setup_rdma_core in ['archive', 'local']", that)
+
+    def test_the_simd_level_is_named_on_the_configure_line(self):
+        """Not found on the CPU of the machine that bakes.
+
+        configure runs a program to ask that CPU and has no switch. A bake's
+        guest has QEMU's default model, with neither level, and the same
+        build on a guest with the EPYC model came out AVX2.
+        """
+        def tail(**given):
+            return self._configure_line(**given).split(
+                "HIPCC=/opt/rocm/core-10.1/bin/hipcc ")[1]
+
+        self.assertEqual(tail(), SIMD_LEVEL)
+        self.assertEqual(
+            tail(perftest_setup_simd="avx2"),
+            "cross_compiling=yes SIMD_CFLAGS=-mavx2 "
+            "CPPFLAGS=-DHAVE_AVX2=1 -include xmmintrin.h")
+        # No level is still a level the role names: configure runs nothing,
+        # and SIMD_CFLAGS is given empty so that one in the environment of
+        # the build is not picked up.
+        self.assertEqual(
+            tail(perftest_setup_simd="none"),
+            "cross_compiling=yes SIMD_CFLAGS= CPPFLAGS=-include xmmintrin.h")
+        # Empty leaves it to configure, which is the tree's own behaviour.
+        self.assertEqual(tail(perftest_setup_simd=""),
+                         "CPPFLAGS=-include xmmintrin.h")
+        self.assertEqual(
+            self._configure_line(perftest_setup_simd="",
+                                 perftest_setup_mm_pause_workaround=False),
+            GOLDEN_CONFIGURE.replace(" LDFLAGS=-L/usr/local/lib", "")
+            .replace(" " + SIMD_LEVEL, ""))
+        # One CPPFLAGS=, with the caller's flags in it: configure keeps the
+        # last one it is given.
+        line = self._configure_line(
+            perftest_setup_cppflags=["-I/opt/rdma/include"],
+            perftest_setup_mm_pause_workaround=False)
+        self.assertEqual(line.count("CPPFLAGS="), 1)
+        self.assertTrue(line.endswith(
+            "SIMD_CFLAGS=-msse4.2 CPPFLAGS=-DHAVE_SSE42=1 -I/opt/rdma/include"))
+        that = self.main[0]["ansible.builtin.assert"]["that"]
+        self.assertIn(
+            "perftest_setup_simd | trim in ['avx2', 'sse4.2', 'none', '']",
+            that)
+        # And none of the caller's own, which would replace it.
+        self.assertIn(
+            "perftest_setup_configure_extra | select('match', 'CPPFLAGS=') "
+            "| list | length == 0", [" ".join(t.split()) for t in that])
+        note = next(t for t in self.main if t["name"] ==
+                    "Note that the SIMD level is left to the build machine")
+        self.assertEqual(note["when"],
+                         "perftest_setup_simd | trim | length == 0")
+
+    def test_the_level_is_read_back_before_anything_is_compiled(self):
+        names = [t["name"] for t in self.build]
+        configure = names.index("Configure perftest")
+        check = names.index("Read back the SIMD level configure settled on")
+        verdict = names.index(
+            "Fail unless the build is for the SIMD level that was asked for")
+        record = names.index("Record the SIMD level the build is for")
+        make = names.index("Build and install perftest")
+        self.assertEqual([configure, check, verdict, record, make],
+                         sorted([configure, check, verdict, record, make]))
+        task = self.build[check]
+        cmd = task["ansible.builtin.script"]["cmd"]
+        self.assertIn("perftest-simd-check.sh", cmd)
+        self.assertTrue(SIMD.is_file())
+        for name in ("perftest_setup_source_dir", "perftest_setup_simd",
+                     "perftest_setup_mm_pause_workaround"):
+            self.assertIn(name, cmd)
+        self.assertIs(task["changed_when"], False)
+        that = self.build[verdict]["ansible.builtin.assert"]["that"]
+        self.assertIn("perftest_setup_simd_check.rc | default(1) == 0", that)
+        self.assertIn("perftest_setup_simd_verdict[0] is match('ok: ')", that)
+        self.assertNotIn("when", self.build[verdict])
+        self.assertIn("'simd='", self.build[record]["ansible.builtin.set_fact"][
+            "perftest_setup_simd_built"])
+
+    def test_the_binary_is_asked_what_it_was_compiled_for(self):
+        """The stamp's level is configure's word; this is the tool's."""
+        check = next(t for t in self.verify
+                     if t["name"] == "Check the installed perftest tools")
+        cmd = check["ansible.builtin.shell"]["cmd"]
+        self.assertIn('objdump -d --no-show-raw-insn "$bin/ib_write_bw"', cmd)
+        self.assertIn("grep -c -E '%[yz]mm[0-9]' || true", cmd)
+        self.assertIn('echo "wide_registers=$wide"', cmd)
+        names = [t["name"] for t in self.main]
+        after = names.index(
+            "Assert the tools carry the SIMD level they were configured for")
+        self.assertLess(names.index("Check the installed tools"), after)
+        self.assertLess(after, names.index("Record the build"))
+        task = self.main[after]
+        self.assertEqual(
+            [" ".join(t.split()) for t in task["ansible.builtin.assert"]["that"]],
+            ["(perftest_setup_wide_registers | int > 0) == "
+             "(perftest_setup_simd_built in ['avx2', 'avx512'])"])
+        self.assertEqual(task["when"], "perftest_setup_build_needed | bool")
+
+    def test_the_workaround_is_marked_and_can_be_turned_off(self):
+        text = (ROLE / "defaults/main.yml").read_text()
+        at = text.index("perftest_setup_mm_pause_workaround: true")
+        comment = text[text.rindex("\n\n", 0, at):at]
+        self.assertIn("WORKAROUND", comment)
+        self.assertIn("_mm_pause", comment)
+        self.assertIn("to be turned off when the pin", comment)
+        # Off, the configure line is without the include.
+        self.assertNotIn(
+            "-include", self._configure_line(
+                perftest_setup_mm_pause_workaround=False))
+        self.assertIn("-include xmmintrin.h", self._configure_line())
 
     def _build_packages(self, **given):
         """What the role's apt task installs, evaluated with its defaults."""
@@ -574,7 +776,7 @@ class Role(unittest.TestCase):
         verdict = names.index(
             "Fail unless the build uses one rdma-core throughout")
         record = names.index("Record the rdma-core the build uses")
-        build = names.index("Build and install perftest")
+        build = names.index("Configure perftest")
         self.assertEqual([probe, verdict, record, build],
                          sorted([probe, verdict, record, build]))
         cmd = self.build[probe]["ansible.builtin.script"]["cmd"]
@@ -659,7 +861,16 @@ class Role(unittest.TestCase):
             set(task["vars"]["perftest_setup_record"]),
             {"built_by", "repo", "ref", "commit", "commit_required", "prefix",
              "rocm_path", "rocm_arch", "rdma_headers", "libibverbs",
-             "device_code", "dmabuf", "configure", "tools"})
+             "device_code", "dmabuf", "simd", "simd_forced",
+             "mm_pause_workaround", "configure", "tools"})
+        record = task["vars"]["perftest_setup_record"]
+        # The level the tree was configured for, read back from it, and not
+        # the one that was asked for.
+        self.assertEqual(record["simd"], "{{ perftest_setup_simd_built }}")
+        self.assertEqual(record["simd_forced"],
+                         "{{ perftest_setup_simd | trim | length > 0 }}")
+        self.assertEqual(record["mm_pause_workaround"],
+                         "{{ perftest_setup_mm_pause_workaround | bool }}")
 
     def test_a_rerun_builds_only_when_what_it_was_made_from_changed(self):
         decide = next(t for t in self.main
@@ -1035,7 +1246,7 @@ class RdmaProbe(unittest.TestCase):
             load=self.local["soname"])
         self.assertEqual(code, 1, out)
         self.assertIn("which is another rdma-core", out)
-        self.assertIn("CPPFLAGS=-I", out)
+        self.assertIn("-I<dir> in perftest_setup_cppflags", out)
         # And CPPFLAGS on the line is read, so naming the headers fixes it.
         code, out = self._probe(
             f"CPPFLAGS=-I{self.tmp}/usr/local/include",
@@ -1095,6 +1306,417 @@ class RdmaProbe(unittest.TestCase):
         self.assertTrue(lines[3].startswith("ok: one rdma-core: "))
 
 
+STUB_SIMD_CC = """#!/bin/sh
+# A compiler for perftest-simd-check.sh. Asked to preprocess, it prints the
+# HAVE_ macros a file that includes config.h sees: the ones config.h in an
+# -I directory defines and the ones -D gives. Asked for a syntax check, it
+# answers as gcc does for src/host_validation.c: STUB_BUG=true is the tree
+# at the pinned commit on gcc 14 and later, =warns the same tree on gcc 13
+# and earlier, where an implicit declaration is an error only when asked
+# for by name, =other a file that fails for another reason, anything else
+# a tree that compiles.
+mode= seen= strict=
+for arg; do
+    case "$arg" in
+        -E) mode=cpp ;;
+        -fsyntax-only) mode=syntax ;;
+        -Werror=implicit-function-declaration) strict=1 ;;
+        -D*) name=${arg#-D}; seen="$seen ${name%%=*}" ;;
+        -I*) [ -f "${arg#-I}/config.h" ] && config=${arg#-I}/config.h ;;
+    esac
+done
+if [ "$mode" = cpp ]; then
+    [ -z "$STUB_CPP_FAIL" ] || { echo "cc1: fatal error: no such header" >&2; exit 1; }
+    [ -z "$config" ] || sed -n 's/^#define \\(HAVE_[A-Z0-9_]*\\).*/#define \\1 1/p' "$config"
+    for name in $seen; do echo "#define $name 1"; done
+    echo "#define __x86_64__ 1"
+    exit 0
+fi
+case "$STUB_BUG" in
+    true)
+        echo "src/host_validation.c:33:23: error: implicit declaration of function '_mm_pause' [-Wimplicit-function-declaration]" >&2
+        exit 1 ;;
+    warns)
+        if [ -n "$strict" ]; then
+            echo "src/host_validation.c:33:23: error: implicit declaration of function '_mm_pause' [-Werror=implicit-function-declaration]" >&2
+            echo "cc1: some warnings being treated as errors" >&2
+            exit 1
+        fi
+        echo "src/host_validation.c:33:23: warning: implicit declaration of function '_mm_pause' [-Wimplicit-function-declaration]" >&2
+        exit 0 ;;
+    other)
+        echo "src/host_validation.c:12:10: fatal error: host_memory.h: No such file or directory" >&2
+        exit 1 ;;
+esac
+exit 0
+"""
+
+# src/host_validation.c at the pinned commit, as far as the bug goes: the
+# header that declares _mm_pause is included only with a SIMD level, and
+# cpu_relax() uses it at every level.
+BUGGY_SOURCE = """\
+#ifdef HAVE_CONFIG_H
+#include <config.h>
+#endif
+#ifdef HAVE_AVX2
+#include <immintrin.h>
+#endif
+#ifdef HAVE_SSE42
+#include <nmmintrin.h>
+#endif
+#define cpu_relax() _mm_pause()
+void spin(void) { cpu_relax(); }
+"""
+
+
+class SimdCheck(unittest.TestCase):
+    """perftest-simd-check.sh: the level a configured tree is built for.
+
+    The first golden bake with this role stopped in the compiler. Its guest
+    is booted with QEMU's default CPU model, which has neither AVX2 nor
+    SSE4.2; configure asks the CPU by running a program, found no level,
+    and the tree does not compile without one. The same build on a guest
+    with the EPYC model found AVX2. Here the tree is a config.h, a Makefile
+    and a source file in a temporary directory, with a stand-in compiler.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="perftest-simd-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.tree = self.tmp / "tree"
+        (self.tree / "src").mkdir(parents=True)
+        (self.tree / "src/host_validation.c").write_text(BUGGY_SOURCE)
+        self.cc = self.tmp / "stubs/cc"
+        self.cc.parent.mkdir()
+        self.cc.write_text(STUB_SIMD_CC)
+        self.cc.chmod(self.cc.stat().st_mode | stat.S_IXUSR)
+
+    def _configured(self, cppflags="-DHAVE_SSE42=1 -include xmmintrin.h",
+                    simd_cflags="-msse4.2", config=(), cc=None, cflags="",
+                    defs="-DHAVE_CONFIG_H"):
+        """What ./configure leaves: config.h and the Makefile's variables.
+
+        CFLAGS is configure.ac's "-g -Wall -D_GNU_SOURCE -O3 $CFLAGS", and
+        cflags is what a CFLAGS= on the configure line puts where autoconf's
+        own "-g -O2" would be.
+        """
+        (self.tree / "config.h").write_text(
+            "/* config.h.  Generated from config.h.in by configure.  */\n"
+            + "".join(f"#define {name} 1\n" if name in config
+                      else f"/* #undef {name} */\n"
+                      for name in ("HAVE_AVX2", "HAVE_SSE42", "HAVE_ROCM")))
+        (self.tree / "Makefile").write_text(
+            f"CC = {cc or self.cc}\n"
+            "AM_CFLAGS =\n"
+            f"DEFS = {defs}\n".replace(" \n", "\n")
+            + f"CFLAGS = -g -Wall -D_GNU_SOURCE -O3 {cflags or '-g -O2'}\n"
+            "CPPFLAGS = -I/opt/rocm/core-10.1/include "
+            f"-I/opt/rocm/core-10.1/include/hsa {cppflags}\n".replace(" \n", "\n")
+            + f"SIMD_CFLAGS = {simd_cflags}\n".replace(" \n", "\n")
+            + f"src/host_validation.$(OBJEXT): CFLAGS += {simd_cflags}\n")
+
+    def _check(self, level="sse4.2", workaround="true", bug="true", **more):
+        env = {"PATH": "/usr/bin:/bin", "TMPDIR": str(self.tmp),
+               "STUB_BUG": bug, **more}
+        done = subprocess.run(
+            ["/bin/sh", str(SIMD), str(self.tree), level, workaround],
+            env=env, capture_output=True, text=True)
+        said = dict(line.split("=", 1) for line in done.stdout.splitlines()
+                    if re.match(r"\w+=", line))
+        verdict = [line for line in done.stdout.splitlines()
+                   if re.match(r"(ok|FAIL): ", line)]
+        self.assertEqual(len(verdict), 1, done.stdout + done.stderr)
+        self.assertEqual(done.returncode, 0 if verdict[0].startswith("ok") else 1)
+        return verdict[0], said
+
+    def test_the_golden_build_is_sse42_whatever_configure_found(self):
+        """cross_compiling=yes: config.h has no level, the flags have one."""
+        self._configured()
+        verdict, said = self._check()
+        self.assertEqual(verdict,
+                         "ok: the validator is compiled for sse4.2, as asked")
+        self.assertEqual(said, {"simd": "sse4.2", "simd_cflags": "-msse4.2",
+                                "mm_pause_bug": "true"})
+
+    def test_a_level_from_the_bake_machine_is_refused(self):
+        """A configure that ran its probes anyway, on a CPU with AVX2.
+
+        config.h then defines HAVE_AVX2, and host_validation.c takes AVX2
+        ahead of the SSE4.2 the flags name.
+        """
+        self._configured(config=("HAVE_AVX2",), simd_cflags="-mavx2")
+        verdict, said = self._check()
+        self.assertTrue(verdict.startswith("FAIL: "), verdict)
+        self.assertIn("would be compiled for avx2", verdict)
+        self.assertIn("perftest_setup_simd asks for sse4.2", verdict)
+        self.assertIn("Nothing was compiled", verdict)
+        self.assertEqual(said["simd"], "avx2")
+
+    def test_the_first_bake_is_refused_in_words(self):
+        """No level at all, which is what QEMU's default CPU model gave."""
+        self._configured(cppflags="", simd_cflags="")
+        verdict, said = self._check()
+        self.assertIn("would be compiled for none", verdict)
+        self.assertEqual(said["simd"], "none")
+        # The same tree is what "none" asks for, with the include.
+        self._configured(cppflags="-include xmmintrin.h", simd_cflags="")
+        verdict, said = self._check(level="none")
+        self.assertEqual(verdict,
+                         "ok: the validator is compiled for none, as asked")
+
+    def test_the_compiler_flag_has_to_be_the_level_s(self):
+        """HAVE_SSE42 without -msse4.2: a configure that dropped
+        SIMD_CFLAGS, or reset it."""
+        self._configured(simd_cflags="")
+        verdict, _ = self._check()
+        self.assertIn("did not keep the SIMD_CFLAGS", verdict)
+        self._configured(simd_cflags="-mavx2")
+        verdict, _ = self._check()
+        self.assertIn("built with '-msse4.2'", verdict)
+
+    def test_a_level_written_anywhere_on_the_compile_line_is_seen(self):
+        """Not in CPPFLAGS alone.
+
+        The role refuses a CPPFLAGS= in perftest_setup_configure_extra and
+        still takes a CFLAGS=. make gives host_validation.o the Makefile's
+        DEFS, CPPFLAGS and CFLAGS, and a -D is a macro in any of them: with
+        only CPPFLAGS read, CFLAGS=-DHAVE_AVX2=1 -mavx2 was reported as
+        sse4.2 and built AVX2, which the register count caught after the
+        build and this is meant to catch before it.
+        """
+        self._configured(cflags="-DHAVE_AVX2=1 -mavx2")
+        verdict, said = self._check()
+        self.assertTrue(verdict.startswith("FAIL: "), verdict)
+        self.assertIn("would be compiled for avx2", verdict)
+        self.assertIn("CFLAGS= in perftest_setup_configure_extra", verdict)
+        self.assertIn("Nothing was compiled", verdict)
+        self.assertEqual(said["simd"], "avx2")
+        # Left to configure it is still what is reported.
+        self.assertEqual(self._check(level="")[1]["simd"], "avx2")
+        self._configured(defs="-DHAVE_CONFIG_H -DHAVE_AVX512=1")
+        self.assertEqual(self._check(level="")[1]["simd"], "avx512")
+        self._configured(simd_cflags="-msse4.2 -DHAVE_AVX2=1")
+        verdict, said = self._check()
+        self.assertEqual(said["simd"], "avx2")
+        self.assertTrue(verdict.startswith("FAIL: "), verdict)
+        # The flags of the object's compile line, in automake's order:
+        # $(DEFS) -I. $(CPPFLAGS) $(CFLAGS), then what Makefile.am adds.
+        code = " ".join(SIMD.read_text().split())
+        self.assertIn('$cc $defs -I"$dir" $cppflags $cflags $simd_cflags '
+                      '-E -dM', code)
+        for name in ("CC", "DEFS", "CPPFLAGS", "CFLAGS", "SIMD_CFLAGS"):
+            self.assertIn(f"$(setting {name})", code)
+        # A line with nothing after the "=", and a name that ends another.
+        (self.tree / "Makefile").write_text(
+            (self.tree / "Makefile").read_text()
+            .replace("AM_CFLAGS =\n", "AM_CFLAGS = -DHAVE_AVX512=1\n")
+            .replace("SIMD_CFLAGS = -msse4.2 -DHAVE_AVX2=1\n",
+                     "SIMD_CFLAGS =\n"))
+        self.assertIn("AM_CFLAGS = -DHAVE_AVX512=1",
+                      (self.tree / "Makefile").read_text())
+        _, said = self._check(level="")
+        self.assertEqual(said, {"simd": "sse4.2", "simd_cflags": "",
+                                "mm_pause_bug": "true"})
+
+    def test_each_level_is_the_macro_host_validation_takes_first(self):
+        for config, cppflags, cflags, level in (
+                ((), "-DHAVE_AVX2=1", "-mavx2", "avx2"),
+                ((), "-DHAVE_AVX512=1 -DHAVE_AVX2=1", "-mavx2", "avx512"),
+                (("HAVE_SSE42",), "-DHAVE_AVX2=1", "-mavx2", "avx2"),
+                ((), "-DHAVE_NEON=1", "", "neon")):
+            with self.subTest(level=level, config=config):
+                self._configured(cppflags=cppflags, simd_cflags=cflags,
+                                 config=config)
+                _, said = self._check(level="")
+                self.assertEqual(said["simd"], level)
+        self._configured(cppflags="-DHAVE_AVX2=1", simd_cflags="-mavx2")
+        self.assertEqual(self._check(level="avx2")[0],
+                         "ok: the validator is compiled for avx2, as asked")
+
+    def test_left_to_configure_it_reports_and_refuses_nothing(self):
+        self._configured(cppflags="", simd_cflags="-mavx2",
+                         config=("HAVE_AVX2",))
+        verdict, said = self._check(level="")
+        self.assertEqual(
+            verdict, "ok: the validator is compiled for avx2, which "
+            "configure chose from the CPU of this machine")
+        self.assertEqual(said["simd"], "avx2")
+
+    def test_the_workaround_cannot_be_off_while_the_tree_has_the_bug(self):
+        self._configured(cppflags="-DHAVE_SSE42=1")
+        verdict, said = self._check(workaround="false")
+        self.assertTrue(verdict.startswith("FAIL: "), verdict)
+        self.assertIn("_mm_pause()", verdict)
+        self.assertIn("perftest_setup_mm_pause_workaround is off", verdict)
+        self.assertIn("Nothing was compiled", verdict)
+        self.assertEqual(said["mm_pause_bug"], "true")
+        # A tree with the fix: off is right, and on says it can go.
+        verdict, said = self._check(workaround="false", bug="false")
+        self.assertEqual(verdict,
+                         "ok: the validator is compiled for sse4.2, as asked")
+        self.assertEqual(said["mm_pause_bug"], "false")
+        self._configured()
+        verdict, _ = self._check(workaround="true", bug="false")
+        self.assertIn("perftest_setup_mm_pause_workaround can be turned off",
+                      verdict)
+        self.assertTrue(verdict.startswith("ok: "))
+
+    def test_a_compiler_that_only_warns_gives_the_same_answer(self):
+        """gcc 13 and earlier warn about an implicit declaration, compile
+        the call and stop in the linker.
+
+        Left to that default the script found no bug in the pinned tree,
+        passed it with the workaround off and, with it on, said it could be
+        turned off. The probe asks for the error by name.
+        """
+        self._configured(cppflags="-DHAVE_SSE42=1")
+        verdict, said = self._check(workaround="false", bug="warns")
+        self.assertEqual(said["mm_pause_bug"], "true")
+        self.assertTrue(verdict.startswith("FAIL: "), verdict)
+        self.assertIn("perftest_setup_mm_pause_workaround is off", verdict)
+        self.assertIn("earlier ones cannot link", verdict)
+        self._configured()
+        verdict, said = self._check(workaround="true", bug="warns")
+        self.assertEqual(verdict,
+                         "ok: the validator is compiled for sse4.2, as asked")
+        self.assertNotIn("can be turned off", verdict)
+        text = SIMD.read_text()
+        probe = text[text.index("-fsyntax-only"):text.index("bug=false")]
+        self.assertIn("-Werror=implicit-function-declaration", probe)
+
+    def test_a_file_that_fails_for_another_reason_decides_nothing(self):
+        """Then make says what is wrong with it, as it would have."""
+        self._configured(cppflags="-DHAVE_SSE42=1")
+        verdict, said = self._check(workaround="false", bug="other")
+        self.assertTrue(verdict.startswith("ok: "), verdict)
+        self.assertEqual(said["mm_pause_bug"], "unknown")
+
+    def test_the_bug_is_asked_of_the_tree_and_not_of_the_flags(self):
+        """No config.h, no SIMD macro and no forced include in that
+        compile: with any of them the header is there and the bug hides."""
+        text = SIMD.read_text()
+        probe = text[text.index("-fsyntax-only"):text.index("bug=false")]
+        self.assertIn("-D_GNU_SOURCE -I. -Isrc", probe)
+        for hidden in ("$cppflags", "$cflags", "$defs", "$simd_cflags",
+                       "HAVE_CONFIG_H", "-include", "-DHAVE_"):
+            self.assertNotIn(hidden, probe)
+
+    def test_what_it_is_given_has_to_make_sense(self):
+        self._configured()
+        self.assertIn("is not a SIMD level", self._check(level="sse2")[0])
+        self.assertIn("is not true or false", self._check(workaround="yes")[0])
+        (self.tree / "config.h").unlink()
+        self.assertIn("has not been configured", self._check()[0])
+        self._configured()
+        self.assertIn("cannot preprocess config.h",
+                      self._check(STUB_CPP_FAIL="1")[0])
+        done = subprocess.run(["/bin/sh", str(SIMD), str(self.tree)],
+                              capture_output=True, text=True)
+        self.assertEqual(done.returncode, 1)
+        self.assertTrue(done.stdout.startswith("FAIL: usage: "))
+
+    def test_it_leaves_nothing_behind_and_changes_nothing(self):
+        self._configured()
+        before = sorted(p.name for p in self.tree.rglob("*"))
+        self._check()
+        self._check(workaround="false")
+        self.assertEqual(sorted(p.name for p in self.tree.rglob("*")), before)
+        self.assertEqual(sorted(p.name for p in self.tmp.iterdir()),
+                         ["stubs", "tree"])
+
+    def test_it_runs_nothing_it_compiles(self):
+        """The answer must not depend on the CPU it is asked on."""
+        code = "\n".join(line for line in SIMD.read_text().splitlines()
+                         if not line.lstrip().startswith("#"))
+        self.assertNotIn("__builtin_cpu_supports", code)
+        self.assertNotIn("/proc/cpuinfo", code)
+        self.assertNotIn(" -o ", code)
+        self.assertEqual(code.count("-fsyntax-only"), 1)
+        self.assertEqual(code.count("-E -dM"), 1)
+
+    def test_the_real_compilers_agree(self):
+        """With every gcc for x86-64 this host has: the tree's bug, and the
+        level.
+
+        gcc 14 and later refuse an implicit declaration and earlier ones
+        warn; the answer has to be the same from both, so this runs on
+        whichever "gcc" is and on any versioned one beside it. The runner
+        of the lane that runs tests/ has had a gcc that only warns.
+        """
+        if os.uname().machine != "x86_64":
+            self.skipTest("needs x86-64")
+        # One of each version. By what the compiler says it is and not by
+        # where its name leads: behind a ccache every name is one file.
+        found = {}
+        for name in ("gcc", "gcc-12", "gcc-13", "gcc-14", "gcc-15"):
+            path = shutil.which(name, path="/usr/bin:/bin") or shutil.which(name)
+            if not path:
+                continue
+            version = subprocess.run(
+                [path, "-dumpfullversion", "-dumpversion"],
+                capture_output=True, text=True).stdout.strip()
+            if version:
+                found.setdefault(version, path)
+        _require(bool(found), "gcc")
+        for version, gcc in found.items():
+            with self.subTest(gcc=gcc, version=version):
+                self._real_compiler(gcc)
+
+    def _real_compiler(self, gcc):
+        def configured(**given):
+            self._configured(cc=gcc, **given)
+            (self.tree / "Makefile").write_text(
+                (self.tree / "Makefile").read_text().replace(
+                    "-I/opt/rocm/core-10.1/include "
+                    "-I/opt/rocm/core-10.1/include/hsa ", "")
+                .replace("-I/opt/rocm/core-10.1/include "
+                         "-I/opt/rocm/core-10.1/include/hsa\n", "\n"))
+
+        (self.tree / "src/host_validation.c").write_text(BUGGY_SOURCE)
+        configured(cppflags="-DHAVE_SSE42=1 -include xmmintrin.h")
+        verdict, said = self._check()
+        self.assertEqual(verdict,
+                         "ok: the validator is compiled for sse4.2, as asked")
+        self.assertEqual(said, {"simd": "sse4.2", "simd_cflags": "-msse4.2",
+                                "mm_pause_bug": "true"})
+        self.assertIn("perftest_setup_mm_pause_workaround is off",
+                      self._check(workaround="false")[0])
+        # A level in CFLAGS is the level the compiler builds, and a -U
+        # there takes back the one CPPFLAGS gave.
+        configured(cflags="-DHAVE_AVX2=1 -mavx2")
+        verdict, said = self._check()
+        self.assertEqual(said["simd"], "avx2")
+        self.assertIn("would be compiled for avx2", verdict)
+        configured(cflags="-O2 -UHAVE_SSE42")
+        verdict, said = self._check()
+        self.assertEqual(said["simd"], "none")
+        self.assertIn("would be compiled for none", verdict)
+        # No level, which is the build that hit the bug: "none" with the
+        # include passes, and without it is refused.
+        configured(cppflags="-include xmmintrin.h", simd_cflags="")
+        self.assertEqual(self._check(level="none")[0],
+                         "ok: the validator is compiled for none, as asked")
+        configured(cppflags="", simd_cflags="")
+        self.assertIn("perftest_setup_mm_pause_workaround is off",
+                      self._check(level="none", workaround="false")[0])
+        # The fix the fork needs: the header, whatever the SIMD level.
+        configured(cppflags="-DHAVE_SSE42=1 -include xmmintrin.h")
+        (self.tree / "src/host_validation.c").write_text(
+            BUGGY_SOURCE.replace("#define cpu_relax()",
+                                 "#include <immintrin.h>\n#define cpu_relax()"))
+        verdict, said = self._check(workaround="false")
+        self.assertTrue(verdict.startswith("ok: "), verdict)
+        self.assertEqual(said["mm_pause_bug"], "false")
+        self.assertIn("can be turned off", self._check(workaround="true")[0])
+        # And the workaround is that same header, given from outside.
+        (self.tree / "src/host_validation.c").write_text(BUGGY_SOURCE)
+        done = subprocess.run(
+            [gcc, "-fsyntax-only", "-Werror=implicit-function-declaration",
+             "-include", "xmmintrin.h", "src/host_validation.c"],
+            cwd=self.tree, capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stderr)
+
+
 def _marked_block() -> str:
     lines = CHECK.read_text().splitlines()
     begin = lines.index("# begin: perftest")
@@ -1151,7 +1773,14 @@ class GuestCheck(unittest.TestCase):
             # What the role's probe recorded as linked: a real path, which
             # on a guest ends in the library's version.
             "libibverbs": os.path.realpath("/usr/local/lib/libibverbs.so.1"),
+            "simd": "sse4.2", "simd_forced": True,
+            "mm_pause_workaround": True,
         }
+        # What objdump prints for a tool whose validator is SSE4.2.
+        self.objdump = (
+            "   37db0:\tmovdqu (%rdi,%rax,1),%xmm1\n"
+            "   37db5:\tpcmpeqb %xmm0,%xmm1\n"
+            "   37db9:\tpmovmskb %xmm1,%edx\n")
         self.golden = {"perftest_source_pin": COMMIT}
         # A login shell and sudo each have a PATH of their own on a guest.
         # Here they are given this one, unless a test says otherwise.
@@ -1176,6 +1805,8 @@ class GuestCheck(unittest.TestCase):
         (self.tmp / "nm.out").write_text(self.nm)
         self._stub("ldd", f"cat '{self.tmp}/ldd.out'\n")
         self._stub("nm", f"cat '{self.tmp}/nm.out'\n")
+        (self.tmp / "objdump.out").write_text(self.objdump)
+        self._stub("objdump", f"cat '{self.tmp}/objdump.out'\n")
         path = f"{self.prefix}/bin:{self.tmp}/usr/bin:/usr/bin:/bin"
 
         def shell(name, own):
@@ -1200,9 +1831,11 @@ class GuestCheck(unittest.TestCase):
         done = self._run()
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(
-            done.stdout.strip(),
-            f"perftest: {COMMIT} with ROCm in {self.prefix}/bin, device code "
-            "true, ahead of the archive's on PATH")
+            done.stdout.strip().splitlines(),
+            [f"perftest: {COMMIT} with ROCm in {self.prefix}/bin, device code "
+             "true, ahead of the archive's on PATH",
+             "perftest: host-memory validator built for sse4.2, and no wider "
+             "instruction in ib_write_bw; _mm_pause workaround true"])
 
     def test_a_build_with_no_device_code_passes_when_it_says_so(self):
         self.stamp["device_code"] = False
@@ -1305,6 +1938,46 @@ class GuestCheck(unittest.TestCase):
     def test_the_stamp_and_the_binary_have_to_agree_about_device_code(self):
         self.nm = "                 U hipFree\n"
         self._fails("says device_code is true, and ib_write_bw says false")
+
+    def test_the_validator_is_the_level_of_the_image_and_was_named(self):
+        """Not what the CPU of the bake machine happened to have."""
+        self.stamp["simd"] = "avx2"
+        self._fails("was built for 'avx2', and a published image is built "
+                    "for 'sse4.2'")
+        # What the first bake would have left, had the tree compiled.
+        self.stamp["simd"] = "none"
+        self._fails("was built for 'none'")
+        # The right level by luck: found on the bake machine, not named.
+        self.stamp["simd"] = "sse4.2"
+        self.stamp["simd_forced"] = False
+        self._fails("was left to the CPU of the machine that baked the image")
+        self.stamp["simd_forced"] = "yes"
+        self._fails("records simd_forced 'yes', not true or false")
+        self.stamp["simd_forced"] = True
+        for key in ("simd", "simd_forced", "mm_pause_workaround"):
+            with self.subTest(key=key):
+                kept = self.stamp.pop(key)
+                self._fails(f'has no "{key}"')
+                self.stamp[key] = kept
+        self.assertEqual(self._run().returncode, 0)
+
+    def test_the_binary_has_to_agree_about_the_level(self):
+        """A stamp that says sse4.2 over a tool compiled for AVX2."""
+        self.objdump += ("   37dc0:\tvmovdqu (%rdi,%rax,1),%ymm1\n"
+                         "   37dc5:\tvpcmpeqb %ymm0,%ymm1,%ymm1\n")
+        self._fails("ib_write_bw has 2 instructions on ymm or zmm registers")
+        self.objdump = "   37dc0:\tvmovdqu64 (%rdi),%zmm1\n"
+        self._fails("ib_write_bw has 1 instructions on ymm or zmm registers")
+        # No instruction at all on a vector register is a build with no
+        # validator, which the stamp has already refused; the count is 0.
+        self.objdump = "   1000:\tret\n"
+        self.assertEqual(self._run().returncode, 0)
+
+    def test_the_workaround_is_reported_either_way(self):
+        self.stamp["mm_pause_workaround"] = False
+        done = self._run()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("_mm_pause workaround false", done.stdout)
 
     def test_nothing_in_the_block_needs_a_device(self):
         """It runs on a boot with no NIC and no GPU."""

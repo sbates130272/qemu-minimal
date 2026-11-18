@@ -82,6 +82,39 @@ All notable changes to this project will be documented in this file.
   - *It needs no device*, so it runs in the bake: hipcc is told its GPU
     (`perftest_setup_rocm_arch`, `gfx1250`) because a bake cannot ask one,
     and left to itself hipcc 10.1 compiles for gfx906.
+  - *It does not take its CPU from the bake machine either.* perftest's
+    `configure` runs a program to ask the CPU for AVX2 and SSE4.2 and
+    compiles the host-memory validator for what it finds, with no switch.
+    **The first bake with this role failed on that**: a bake's guest has
+    QEMU's default CPU model, which has neither, and with no level the
+    pinned tree does not compile (`implicit declaration of function
+    '_mm_pause'`: `src/host_validation.c` includes the header that declares
+    it only with a SIMD level). The same build on a guest with the EPYC
+    model, which is what every stack runs, had come out AVX2. So the role
+    names the level, `perftest_setup_simd`, default `sse4.2`, which every
+    CPU a fleet runs on has: `cross_compiling=yes` on the configure line
+    stops the probes, and `SIMD_CFLAGS=` and `-DHAVE_SSE42=1` in `CPPFLAGS`
+    give the level. Nothing in the tree is patched.
+    `perftest-simd-check.sh` reads the level back from `config.h` and the
+    flags the Makefile gives that object (`DEFS`, `CPPFLAGS`, `CFLAGS` and
+    `SIMD_CFLAGS`, so a level written into a `CFLAGS=` is seen too) before
+    anything is compiled and stops a build at another one,
+    and the role then counts AVX instructions in the tool it built. The
+    tools check the CPU they start on and refuse `--data_validation` on
+    host memory where it lacks the level; an `sse4.2` build is refused only
+    where the CPUID has no `sse4_2`, QEMU's default model included.
+    `--use_rocm` validation is unaffected. What `sse4.2` costs against
+    AVX2 is the rate of host-memory validation: 16 bytes a compare, not 32.
+  - *`perftest_setup_mm_pause_workaround`*, on by default, adds `-include
+    xmmintrin.h` so the tree compiles at any level, `none` included. It is
+    a workaround for the pinned commit and is to be turned off when the
+    pin moves to one with the fix; turned off while the tree still has the
+    bug, the bake stops before the compile and says so, on a compiler that
+    only warns about an implicit declaration as well as on one that
+    refuses it.
+    `perftest_setup_configure_extra` no longer takes a `CPPFLAGS=`, which
+    the role now writes; flags of the caller's go in
+    `perftest_setup_cppflags`.
   - *It is linked against the rdma-core the guest loads*, which has to be
     said: the image has the archive's rdma-core 61 under `/usr` and
     rocm-ernic's 66 under `/usr/local`, the compiler reads the second one's
@@ -100,15 +133,22 @@ All notable changes to this project will be documented in this file.
     runs in a non-login shell, a login shell and under sudo, that the help
     offers `--use_rocm` and `--data_validation`, that the tools link the
     image's ROCm, and that the libibverbs they load is the one they were
-    linked against. `perftest_source_pin` joins the bake's compiler-cache
-    key.
+    linked against. The stamp also records the SIMD level, whether the role
+    named it and whether the workaround was applied (`simd`, `simd_forced`,
+    `mm_pause_workaround`), and the check refuses an image whose level is
+    not `sse4.2`, or was left to the bake machine, or whose `ib_write_bw`
+    has an instruction on a `ymm` or `zmm` register.
+    `perftest_source_pin` joins the bake's compiler-cache key.
   - **The guest check now fails an image baked before this**, for want of
     `/etc/perftest-rocm.json`. The lanes here run it against a fresh bake;
     batesste-ci-images runs it against the published image and has to take
     this version of the check together with an image that has the build.
-  - *Not yet run in a bake.* It is not in the image the fleet files pull
-    until one is published from a commit that has it and `<backing-ref>`
-    moves.
+  - *No bake has completed with it.* The one that ran stopped in this
+    role, as above. With the level named, the role built on a guest of the
+    published image booted the way a bake boots it, with QEMU's default
+    CPU model and no device, and built the same level on the EPYC model.
+    It is not in the image the fleet files pull until one is published
+    from a commit that has it and `<backing-ref>` moves.
 - **An optional test of RDMA with GPU memory**, the last play of
   `vm-quickstart.yml`: `ib_write_bw --use_rocm=0 --use_rocm_dmabuf
   --data_validation` between the first and last guest. Off unless
@@ -129,6 +169,9 @@ All notable changes to this project will be documented in this file.
     passes on host memory, and with `PERFTEST_ROCM_HOST_ALLOC=1` (a buffer
     in host memory the GPU can address) both host-staged and with the live
     kernel on the GPU: `VALIDATION: PASSED - 7 chunks, 58720256 bytes`.
+    Those runs were on a build whose host-memory validator was AVX2, the
+    level `configure` found on those guests; the validator a bake now
+    builds is SSE4.2, and no transfer has been validated with it.
 
   The play passes `--use_rocm_dmabuf` because that is the form that reaches
   the NIC; in that form it has not been run.

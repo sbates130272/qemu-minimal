@@ -24,6 +24,10 @@
       - >-
         not (perftest_setup_rocm_kernels | bool)
         or perftest_setup_rocm_arch | trim | length > 0
+      - perftest_setup_simd | trim in ['avx2', 'sse4.2', 'none', '']
+      - >-
+        perftest_setup_configure_extra
+        | select('match', 'CPPFLAGS=') | list | length == 0
     fail_msg: >-
       perftest_setup needs a repository ("{{ perftest_setup_repo }}"), a ref
       ("{{ perftest_setup_ref }}"), a commit that is 40 hex characters or
@@ -35,6 +39,11 @@
       HIP kernels are built, the
       GPU they are built for ("{{ perftest_setup_rocm_arch }}"): a bake has no
       device to ask, and hipcc's own default is not the GPU the fleets serve.
+      The SIMD level of the host-memory validator is "avx2", "sse4.2", "none"
+      or empty ("{{ perftest_setup_simd }}"). And
+      perftest_setup_configure_extra carries no CPPFLAGS=, because the role
+      writes the one configure keeps: preprocessor flags go in
+      perftest_setup_cppflags.
 
 - name: Note that the commit check is off
   ansible.builtin.debug:
@@ -43,6 +52,15 @@
       {{ perftest_setup_repo }} is built at whatever commit it names today.
       The commit is recorded in {{ perftest_setup_stamp }}.
   when: perftest_setup_commit | trim | length == 0
+
+- name: Note that the SIMD level is left to the build machine
+  ansible.builtin.debug:
+    msg: >-
+      perftest_setup_simd is empty, so configure compiles the host-memory
+      validator for whatever the CPU of this machine has, and the tools
+      refuse host-memory --data_validation on a CPU that lacks it. The level
+      it chose is recorded in {{ perftest_setup_stamp }}.
+  when: perftest_setup_simd | trim | length == 0
 
 # The path given, or the tree its bin/ links into: the therock layout has
 # /opt/rocm/bin and /opt/rocm/lib and no /opt/rocm/include.
@@ -71,7 +89,19 @@
   register: perftest_setup_rocm_found
   changed_when: false
 
+# The last items are the SIMD level, named and not left to the CPU of the
+# machine that builds; defaults/main.yml says why and how. They are on the
+# line and so in the stamp, and a level that changes is a rebuild.
 - name: Record the ROCm tree and the configure line
+  vars:
+    # One CPPFLAGS=, because configure keeps the last: the level's macro,
+    # the header that declares _mm_pause, and the caller's own.
+    perftest_setup_cppflags_all: >-
+      {{ ({'avx2': ['-DHAVE_AVX2=1'], 'sse4.2': ['-DHAVE_SSE42=1']}
+          .get(perftest_setup_simd | trim, []))
+         + (['-include', 'xmmintrin.h']
+            if perftest_setup_mm_pause_workaround | bool else [])
+         + perftest_setup_cppflags }}
   ansible.builtin.set_fact:
     perftest_setup_rocm_resolved: "{{ perftest_setup_rocm_found.stdout | trim }}"
     perftest_setup_configure_args: >-
@@ -85,7 +115,13 @@
          + (['LDFLAGS=-L' ~ (perftest_setup_rdma_lib_dir | trim)]
             if perftest_setup_rdma_core == 'local'
                and perftest_setup_rdma_lib_dir | trim | length > 0 else [])
-         + perftest_setup_configure_extra }}
+         + perftest_setup_configure_extra
+         + (['cross_compiling=yes',
+             'SIMD_CFLAGS=' ~ ({'avx2': '-mavx2', 'sse4.2': '-msse4.2'}
+                               .get(perftest_setup_simd | trim, ''))]
+            if perftest_setup_simd | trim | length > 0 else [])
+         + (['CPPFLAGS=' ~ (perftest_setup_cppflags_all | join(' '))]
+            if perftest_setup_cppflags_all | length > 0 else []) }}
 
 - name: Read the stamp of an earlier build
   ansible.builtin.slurp:
@@ -103,7 +139,8 @@
 
 # Rebuilt when anything the build was made from has changed: the repository,
 # the ref, the required commit or the configure line, which carries the
-# prefix, the ROCm tree, the GPU, whether hipcc is used and, for an
+# prefix, the ROCm tree, the GPU, whether hipcc is used, the SIMD level, the
+# _mm_pause workaround and, for an
 # rdma-core built from source, its library directory. With the commit check
 # off the stamp cannot say whether
 # the ref has moved, so that case rebuilds only when forced. An rdma-core
@@ -148,6 +185,23 @@
 - name: Check the installed tools
   ansible.builtin.include_tasks: verify.yml
 
+# perftest-simd-check.sh said which SIMD level the configured tree would be
+# compiled for; this is the same question asked of the tool that was built.
+# AVX2 and AVX-512 are the levels that use the wide registers, and nothing
+# else in the tools is compiled for them.
+- name: Assert the tools carry the SIMD level they were configured for
+  ansible.builtin.assert:
+    that:
+      - >-
+        (perftest_setup_wide_registers | int > 0)
+        == (perftest_setup_simd_built in ['avx2', 'avx512'])
+    fail_msg: >-
+      {{ perftest_setup_prefix | trim }}/bin/ib_write_bw has
+      {{ perftest_setup_wide_registers }} instructions on ymm or zmm
+      registers, and the build was configured for
+      "{{ perftest_setup_simd_built }}".
+  when: perftest_setup_build_needed | bool
+
 # The probe in build.yml said which libibverbs a program built with these
 # flags links; this is the same question asked of the tool that was built.
 - name: Assert the tools load the libibverbs they were linked against
@@ -183,6 +237,9 @@
       libibverbs: "{{ perftest_setup_rdma_libibverbs }}"
       device_code: "{{ perftest_setup_device_code | bool }}"
       dmabuf: "{{ perftest_setup_rocm_dmabuf | bool }}"
+      simd: "{{ perftest_setup_simd_built }}"
+      simd_forced: "{{ perftest_setup_simd | trim | length > 0 }}"
+      mm_pause_workaround: "{{ perftest_setup_mm_pause_workaround | bool }}"
       configure: "{{ perftest_setup_configure_args | join(' ') }}"
       tools: "{{ perftest_setup_tools }}"
   when: perftest_setup_build_needed | bool

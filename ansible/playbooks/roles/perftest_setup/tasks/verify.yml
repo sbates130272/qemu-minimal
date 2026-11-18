@@ -86,6 +86,14 @@
         *__hipRegisterFatBinary*) echo "device_code=true" ;;
         *) echo "device_code=false" ;;
       esac
+
+      # Instructions on the 256- and 512-bit registers. Only the host-memory
+      # validator is compiled for more than baseline x86-64, so there are
+      # some exactly when it was built for AVX2 or AVX-512. The disassembly
+      # is taken first and counted after: grep exits 1 on a count of none.
+      code=$(objdump -d --no-show-raw-insn "$bin/ib_write_bw")
+      wide=$(printf '%s\n' "$code" | grep -c -E '%[yz]mm[0-9]' || true)
+      echo "wide_registers=$wide"
     executable: /bin/bash
   register: perftest_setup_check
   changed_when: false
@@ -97,6 +105,9 @@
     perftest_setup_loaded_libibverbs: >-
       {{ (perftest_setup_check.stdout_lines | select('match', 'libibverbs=')
           | first) | regex_replace('^libibverbs=', '') }}
+    perftest_setup_wide_registers: >-
+      {{ (perftest_setup_check.stdout_lines | select('match', 'wide_registers=')
+          | first) | regex_replace('^wide_registers=', '') }}
 
 - name: Assert the tools carry device code exactly when it was asked for
   ansible.builtin.assert:

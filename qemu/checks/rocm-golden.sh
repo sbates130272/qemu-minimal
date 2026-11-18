@@ -1144,6 +1144,16 @@ echo "rdma-core: ${_rc_version} in /usr/local is the one a build finds," \
 # /etc/perftest-rocm.json and the pin it was given to
 # /etc/rocm-golden-guest.json, and the two are compared.
 #
+# One thing is spelled here, because it is a rule about the image and not a
+# pin: the SIMD level of the host-memory validator, the only code in the
+# tools compiled for more than baseline x86-64. perftest's configure takes
+# it from the CPU of the machine that builds unless told, and an image must
+# not be whatever its bake machine was: the first bake with this build
+# stopped because that CPU, QEMU's default model, had no level at all, and
+# a build on a guest with the EPYC model came out AVX2. So the stamp has to
+# say the role named the level and that it is sse4.2, which every CPU a
+# fleet runs on has, and the binary has to agree.
+#
 # tests/test_perftest_setup.py runs the lines between the two markers
 # against stand-ins. PERFTEST_CHECK_ROOT is for that: it is prefixed to the
 # two /etc paths and to /usr/bin/ib_send_bw, and is empty on a guest.
@@ -1156,10 +1166,11 @@ if [ ! -s "${_pt_stamp}" ]; then
          "with ROCm support" >&2
     exit 1
 fi
-# Six lines: the prefix, the commit, the ROCm tree, whether the build has
-# device code and the dma-buf option, and the libibverbs it was linked
-# against. A stamp that does not hold together prints its reason and stops
-# the check.
+# Eight lines: the prefix, the commit, the ROCm tree, whether the build has
+# device code and the dma-buf option, the libibverbs it was linked against,
+# the SIMD level of the host-memory validator and whether the build needed
+# the _mm_pause workaround. A stamp that does not hold together prints its
+# reason and stops the check.
 _pt_facts=$(python3 - "${_pt_stamp}" "${_pt_golden}" <<'PTPY'
 import json
 import re
@@ -1179,7 +1190,7 @@ except (OSError, ValueError) as exc:
     fail(f"{stamp_path} is not readable JSON: {exc}")
 for key in ("repo", "ref", "commit", "commit_required", "prefix",
             "rocm_path", "configure", "device_code", "dmabuf",
-            "libibverbs"):
+            "libibverbs", "simd", "simd_forced", "mm_pause_workaround"):
     if key not in stamp:
         fail(f"{stamp_path} has no \"{key}\"")
 commit = stamp["commit"]
@@ -1206,15 +1217,27 @@ if "--enable-rocm" not in stamp["configure"].split():
 for key in ("prefix", "rocm_path", "libibverbs"):
     if not str(stamp[key]).startswith("/"):
         fail(f"{stamp_path} records {key} {stamp[key]!r}")
-for key in ("device_code", "dmabuf"):
+for key in ("device_code", "dmabuf", "simd_forced", "mm_pause_workaround"):
     if not isinstance(stamp[key], bool):
         fail(f"{stamp_path} records {key} {stamp[key]!r}, not true or false")
+# The level the role named, not the one configure found on the bake
+# machine's CPU, and the one every fleet's CPUs have.
+if not stamp["simd_forced"]:
+    fail(f"{stamp_path} says the SIMD level of the host-memory validator, "
+         f"{stamp['simd']!r}, was left to the CPU of the machine that "
+         "baked the image: perftest_setup_simd was empty")
+if stamp["simd"] != "sse4.2":
+    fail(f"the host-memory validator was built for {stamp['simd']!r}, and "
+         "a published image is built for 'sse4.2': on a CPU without that "
+         "level the tools refuse --data_validation on host memory")
 print(stamp["prefix"])
 print(commit)
 print(stamp["rocm_path"])
 print("true" if stamp["device_code"] else "false")
 print("true" if stamp["dmabuf"] else "false")
 print(stamp["libibverbs"])
+print(stamp["simd"])
+print("true" if stamp["mm_pause_workaround"] else "false")
 PTPY
 )
 {
@@ -1224,6 +1247,8 @@ PTPY
     read -r _pt_device_code
     read -r _pt_dmabuf
     read -r _pt_linked
+    read -r _pt_simd
+    read -r _pt_mm_pause
 } <<PTFACTS
 ${_pt_facts}
 PTFACTS
@@ -1339,6 +1364,24 @@ if [ "${_pt_has_kernels}" != "${_pt_device_code}" ]; then
          "${_pt_device_code}, and ib_write_bw says ${_pt_has_kernels}" >&2
     exit 1
 fi
+
+# The stamp says sse4.2; this is the binary's word for it. AVX2 and AVX-512
+# are the levels that use the 256- and 512-bit registers, and nothing else
+# in the tools is compiled for them, so a build at the level of the image
+# has no instruction that names one. One tool is disassembled, which takes
+# some tens of milliseconds; objdump is in binutils, with the nm above. The
+# disassembly is taken first and counted after: grep exits 1 on none.
+_pt_code=$(objdump -d --no-show-raw-insn "${_pt_prefix}/bin/ib_write_bw")
+_pt_wide=$(printf '%s\n' "${_pt_code}" | grep -c -E '%[yz]mm[0-9]' || true)
+if [ "${_pt_wide}" != 0 ]; then
+    echo "ERROR: perftest: ${_pt_stamp} says the host-memory validator was" \
+         "built for ${_pt_simd}, and ib_write_bw has ${_pt_wide}" \
+         "instructions on ymm or zmm registers: it was compiled for AVX2" \
+         "or AVX-512" >&2
+    exit 1
+fi
 echo "perftest: ${_pt_commit} with ROCm in ${_pt_prefix}/bin," \
      "device code ${_pt_device_code}, ahead of the archive's on PATH"
+echo "perftest: host-memory validator built for ${_pt_simd}, and no wider" \
+     "instruction in ib_write_bw; _mm_pause workaround ${_pt_mm_pause}"
 # end: perftest
