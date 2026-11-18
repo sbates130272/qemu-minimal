@@ -161,6 +161,13 @@ scraped by the exporter. Grafana's port moves automatically if something on
 your machine already has it, and `quick-start` prints the one it chose.
 `--no-metrics` leaves the pair out.
 
+The home dashboard's **SDXI** row is each guest's SDXI device counters, and
+the same numbers answer without Grafana — copy throughput per guest, in
+bytes per second, is
+`sum by (vm_name) (rate(sdxi_bytes_moved_total{context="1"}[2m]))` in place
+of `up` in the Prometheus query above (URL-encode it, or paste it into
+Explore).
+
 **The guests' SSH ports and Grafana answer on this machine only.** Every port
 a stack publishes is bound to `<publish-bind-addr>`, which is `127.0.0.1`
 unless a fleet file says otherwise. That holds on Docker Engine 28.0 and

@@ -1,0 +1,163 @@
+---
+# The SDXI device's counters, for node_exporter's textfile collector.
+#
+# files/sdxi-textfile-metrics.py reads them through sdxi_char's STATS ioctl
+# and replaces sdxi.prom in the collector directory; a timer runs it. Not
+# sdxi_perf, which serves the same registers through debugfs: it is a second
+# PCI driver for the device and cannot bind while sdxi_char holds it.
+#
+# The unit runs as root. The collector directory is root's, mode 0755, as
+# the package and rocjitsu_setup leave it, and replacing a file in it needs
+# write on the directory: the sdxi group would open the device and could not
+# write the result. amdgpu-textfile-metrics.service is root for the same
+# reason.
+#
+# Reachable on its own (tasks_from: metrics) against a guest that already
+# has the driver and sdxi-cli. Every task that changes the guest carries its
+# own become for that, and so does the check: vm-quickstart.yml's play has
+# become off, and the check has to read the device as the unit does, as
+# root, not as a login user who may not be in the sdxi group.
+
+- name: Look for node_exporter
+  ansible.builtin.stat:
+    path: "{{ sdxi_setup_metrics_node_exporter }}"
+  register: sdxi_setup_metrics_exporter
+
+- name: Note that the SDXI metrics are being skipped
+  when: not sdxi_setup_metrics_exporter.stat.exists
+  ansible.builtin.debug:
+    msg: >-
+      {{ sdxi_setup_metrics_node_exporter }} is not installed, so nothing
+      would serve the SDXI counters and they are not being exported. Install
+      prometheus-node-exporter (rocjitsu_setup's metrics tasks do) and run
+      these tasks again.
+
+- name: Export the SDXI counters through node_exporter
+  when: sdxi_setup_metrics_exporter.stat.exists
+  block:
+    - name: Check the metrics settings
+      ansible.builtin.assert:
+        that:
+          - sdxi_setup_metrics_contexts is iterable
+          - sdxi_setup_metrics_contexts is not string
+          - sdxi_setup_metrics_contexts | length > 0
+          - sdxi_setup_metrics_contexts | map('int', -1) | list
+            == sdxi_setup_metrics_contexts
+          - sdxi_setup_metrics_contexts | min >= 0
+          - sdxi_setup_metrics_contexts | max <= 127
+          - sdxi_setup_metrics_interval | int(0) >= 1
+        fail_msg: >-
+          sdxi_setup_metrics_contexts must be a list of context ids from 0
+          to 127 (got {{ sdxi_setup_metrics_contexts }}) and
+          sdxi_setup_metrics_interval a number of seconds, 1 or more (got
+          {{ sdxi_setup_metrics_interval }}).
+
+    # The same task as rocjitsu_setup's, so whichever role runs first makes
+    # it and the other changes nothing.
+    - name: Create the textfile collector directory
+      ansible.builtin.file:
+        path: "{{ sdxi_setup_metrics_textfile_dir }}"
+        state: directory
+        mode: "0755"
+      become: true
+
+    - name: Install the SDXI textfile metrics script
+      ansible.builtin.copy:
+        src: sdxi-textfile-metrics.py
+        dest: /usr/local/bin/sdxi-textfile-metrics.py
+        owner: root
+        group: root
+        mode: "0755"
+      become: true
+
+    - name: Install the SDXI metrics service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/sdxi-textfile-metrics.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Write SDXI textfile metrics for node_exporter
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/bin/sdxi-textfile-metrics.py \
+              --output {{ sdxi_setup_metrics_textfile_dir }}/sdxi.prom \
+              --context {{ sdxi_setup_metrics_contexts | join(' ') }}
+      become: true
+
+    # AccuracySec because a timer's default is one minute: systemd may then
+    # fire a 30 s timer anywhere up to 90 s after the last run, and a rate()
+    # over a counter sampled that unevenly is gaps and spikes.
+    - name: Install the SDXI metrics timer
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/sdxi-textfile-metrics.timer
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Run SDXI textfile metrics every {{ sdxi_setup_metrics_interval }}s
+
+          [Timer]
+          OnBootSec=5s
+          OnUnitActiveSec={{ sdxi_setup_metrics_interval }}s
+          AccuracySec=1s
+
+          [Install]
+          WantedBy=timers.target
+      become: true
+      register: sdxi_setup_metrics_timer
+
+    # Restarted when the timer file changed: a running timer keeps the
+    # interval it was started with.
+    - name: Enable the SDXI metrics timer
+      ansible.builtin.systemd_service:
+        name: sdxi-textfile-metrics.timer
+        enabled: true
+        state: "{{ 'restarted' if sdxi_setup_metrics_timer is changed else 'started' }}"
+        daemon_reload: true
+      become: true
+
+    # Once, now, so a unit that cannot run fails here with its status
+    # instead of every interval in a journal nobody reads. A bake has no
+    # device: the script writes "sdxi_up 0" and exits 0. The file stays in
+    # the image, which is why the check asks systemd, not the file, whether
+    # the unit has run since boot.
+    - name: Write the first sample
+      ansible.builtin.systemd_service:
+        name: sdxi-textfile-metrics.service
+        state: started
+      become: true
+      changed_when: false
+
+    # The same lines as the "sdxi metrics" block of
+    # qemu/checks/rocm-golden.sh, which the lanes run on the booted image.
+    - name: Ask whether the guest is exporting the SDXI counters
+      ansible.builtin.script:
+        cmd: sdxi-metrics-check.sh
+        executable: /bin/bash
+      become: true
+      register: sdxi_setup_metrics_check
+      changed_when: false
+      failed_when: false
+
+    - name: Fail unless the guest is exporting the SDXI counters
+      vars:
+        # Over ssh the script module runs under a pty, which has no stderr
+        # of its own, so the script's error line arrives on either stream.
+        sdxi_setup_metrics_check_lines: >-
+          {{ ((sdxi_setup_metrics_check.stdout_lines | default([]))
+              + (sdxi_setup_metrics_check.stderr_lines | default([])))
+             | map('trim') | select('search', 'sdxi metrics: ') | list }}
+      ansible.builtin.assert:
+        that:
+          - sdxi_setup_metrics_check.rc | default(1) == 0
+        fail_msg: >-
+          {{ sdxi_setup_metrics_check_lines | join(' ')
+             | default('sdxi-metrics-check.sh printed no verdict: '
+                       ~ (sdxi_setup_metrics_check.stdout | default(''))
+                       ~ (sdxi_setup_metrics_check.stderr | default(''))
+                       ~ (sdxi_setup_metrics_check.msg | default('')), true) }}
+        success_msg: "{{ sdxi_setup_metrics_check_lines | join(' ') }}"

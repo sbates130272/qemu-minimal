@@ -236,6 +236,45 @@ All notable changes to this project will be documented in this file.
   The play passes `--use_rocm_dmabuf` because that is the form that reaches
   the NIC; in that form it has not been run.
 
+- **The SDXI device's counters reach Prometheus, and the home dashboard has
+  an SDXI row.** The golden guest now exports them through node_exporter's
+  textfile collector, as it does the GPU presence metrics:
+  `sdxi_setup`'s new `metrics` tasks install
+  `/usr/local/bin/sdxi-textfile-metrics.py` and
+  `sdxi-textfile-metrics.timer`, which every 30 s writes `sdxi_up` and
+  `sdxi_<counter>_total{context="N"}` for the device's 14 counters to
+  `/var/lib/prometheus/node-exporter/sdxi.prom`. The existing `fleet-node`
+  job scrapes it; no port, scrape job or fleet setting changes.
+  - The dashboard row, in all three stacks: device up per VM, errors over
+    the dashboard's range, copy throughput and copies/s, compress and
+    decompress bytes/s and ops/s, and a fleet-total copy throughput beside
+    "GPU Up". The rates are taken over a fixed 2 minutes, four of the
+    guest's 30 s writes; over Grafana's usual window a steady workload
+    would draw as a sawtooth. Without Grafana:
+    `sum by (vm_name) (rate(sdxi_bytes_moved_total{context="1"}[2m]))`.
+  - Context 0 is the driver's admin ring and context 1 carries every client
+    operation. `bytes_compressed` counts compress input and
+    `bytes_decompressed` decompress output. The counters restart from zero
+    with the SDXI server.
+  - Role variables `sdxi_setup_metrics` (true),
+    `sdxi_setup_metrics_contexts` (`[0, 1]`) and
+    `sdxi_setup_metrics_interval` (30). A guest with no node_exporter is
+    skipped with a message. A guest with no SDXI device reports `sdxi_up 0`,
+    which the row shows as a blue "no counters" tile, not a red one.
+  - `qemu-tool quick-start test` installs the same on a guest whose image
+    was baked before this, so the row fills in on today's published image
+    after it has run once.
+  - Each sample takes `sdxi_char`'s one lock for 28 register accesses per
+    context, so an operation that arrives during one waits for it.
+    `sudo systemctl stop sdxi-textfile-metrics.timer` in the guest stops
+    the sampling.
+  - `qemu/checks/rocm-golden.sh` asserts it on the booted guest, with or
+    without a device, and asks systemd whether the unit has run since boot
+    and succeeded: the file itself is in the image from the bake. *Not yet
+    run on a guest:* the script's read path was
+    proven by hand on a live guest; the role, the timer and the panels have
+    run against stand-ins only.
+
 ### Changed
 
 - **The golden guest no longer carries Ubuntu's rdma-core development

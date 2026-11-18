@@ -270,6 +270,13 @@
         name: rocm_ernic_setup
         tasks_from: metrics
 
+    # After node_exporter, which serves the file this writes. A guest with
+    # no SDXI device gets the timer too and reports sdxi_up 0.
+    - name: Install the SDXI textfile collector
+      ansible.builtin.include_role:
+        name: sdxi_setup
+        tasks_from: metrics
+
 # ---------------------------------------------------------------------------
 # GPU test
 # ---------------------------------------------------------------------------

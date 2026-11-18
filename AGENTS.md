@@ -2824,6 +2824,167 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     only layer that can discriminate, so the tuple discipline belongs there
     and in anything scanning sysfs or `lspci`, not in the driver.
 
+## SDXI metrics
+
+Each golden guest exports its SDXI device's counters to Prometheus through
+node_exporter's textfile collector, the way the GPU presence metrics get
+there. `roles/sdxi_setup/tasks/metrics.yml` installs
+`/usr/local/bin/sdxi-textfile-metrics.py`, a oneshot service and
+`sdxi-textfile-metrics.timer`; the script writes
+`/var/lib/prometheus/node-exporter/sdxi.prom`, the `fleet-node` job scrapes
+it, and the **SDXI** row of the home dashboard reads it.
+
+| Series | Meaning |
+|---|---|
+| `sdxi_up` | 1 when every configured context was read, else 0. Always written |
+| `sdxi_<stat>_total{context="N"}` | the 14 counters of `sdxi_cli.ioctl.STAT_NAMES`, per context; absent when `sdxi_up` is 0 |
+
+29 series with the default contexts. Two role variables:
+`sdxi_setup_metrics_contexts` (`[0, 1]`) and `sdxi_setup_metrics_interval`
+(30, seconds; the amdgpu timer's). `sdxi_setup_metrics: false` leaves it all
+out, and a guest with no node_exporter is skipped with a message.
+
+What the numbers mean, measured on a live golden guest by the owner on
+2026-11-18, not read off the SDXI repo:
+
+- **Context 0 is the driver's admin ring; every client operation — copy,
+  compress, decompress, elementwise — is counted in context 1.** The
+  dashboard's throughput panels select `context="1"` for that reason.
+  `num_cxt_start` is counted on context 0, which issues it.
+- **`bytes_compressed` counts the INPUT of compress and `bytes_decompressed`
+  the OUTPUT of decompress**, so both are uncompressed bytes. The counter
+  table in the SDXI repo's own AGENTS.md says input for both and is wrong
+  for decompress: its `src/sdxi_regs.h` says output and
+  `src/sdxi_engine.c` adds `out`.
+- A failed operation increments `num_errors`.
+- **The counters live in the SDXI server and restart from zero with it**,
+  so across a stack restart a series goes backwards. `rate()` and
+  `increase()` treat that as a counter reset; a graph of the raw value
+  steps down.
+
+**The counters are not read through `sdxi_perf`.** That module serves the
+same two registers through debugfs, but it is a second PCI driver for the
+same device and cannot bind while `sdxi_char` holds it, it knows 12 of the
+14 counters, and it reads the select/value register pair under no lock
+`sdxi_char` shares. It stays installed and blacklisted.
+
+**The unit runs as root**, as `amdgpu-textfile-metrics.service` does. The
+collector directory is root's, mode 0755, as the package and
+`rocjitsu_setup` leave it, and an atomic replace needs write on the
+directory, not on the file. A user in the `sdxi` group could open the
+device and could not write the result without loosening a directory this
+role does not own.
+
+**Sampling takes the driver's one lock.** Read from
+`drivers/sdxi_char/sdxi_char.c` at `sdxi_source_pin`:
+
+- `open()` and `close()` do nothing to the device. `sdxi_char_fops`
+  (line 1118) has no `.open` and no `.release`; both contexts are set up
+  once, in `sdxi_hw_init()` at probe (line 1217 submits the one
+  `CXT_START`). A sample starts and stops no context.
+- The STATS ioctl takes `sdev->lock` (line 600), the mutex every ioctl
+  takes and a data-path ioctl holds for its whole operation, `poll_csb()`
+  included (line 159, up to `CSB_TIMEOUT_MS`, 5 s). So a sample waits for a
+  running copy and the next copy waits for the sample: `handle_stats()`
+  (line 483) is 14 register writes and 14 reads per context, each trapped
+  and forwarded to the server. Nothing is corrupted; one operation per
+  sample is delayed by that long. How long was not measured.
+- The io_uring path submits under `mutex_trylock()` (line 753) and returns
+  `-EAGAIN` when a sample holds the lock. What io_uring then does was not
+  verified here; from memory it retries once from a worker thread and a
+  second collision completes the request with `-EAGAIN`. `sdxi-cli`'s
+  ioctl commands and `generate-vm-report.sh`'s SDXI step use the ioctl
+  path, which blocks instead.
+- The server is one thread (`vfu_run_ctx` then `sdxi_engine_poll`), so a
+  counter read is whole; the 14 values of a context are read one after
+  another, so `bytes_moved` and `num_copy` of one sample can differ by an
+  operation that completed between them.
+
+So a sample can add its own duration to one operation of a benchmark. The
+two-second SDXI benchmark has about a 1 in 15 chance of meeting one. To
+rule it out, in the guest:
+`sudo systemctl stop sdxi-textfile-metrics.timer` (back at the next boot,
+or `start`). node_exporter then keeps serving the last file, so the panels
+go flat rather than empty; `node_textfile_mtime_seconds` says how old it is.
+
+**The SDXI rate panels use a fixed `[2m]` window, not `$__rate_interval`,
+and the window is tied to the interval.** `$__rate_interval` is four
+*scrapes*, 60 s at the stacks' 15 s, but the counter only moves when the
+guest rewrites the file: node_exporter re-serves the last file on every
+scrape, so a 60 s window holds two real updates. Worked through
+Prometheus's `rate()` extrapolation in a simulation (true rate 1.0, 15 s
+scrape, one hour), not measured on a guest:
+
+| Guest writes every | Rate window | A steady workload reads |
+|---|---|---|
+| 30 s | 60 s (`$__rate_interval`) | 0.67 to 1.34, alternating: a sawtooth |
+| 30 s | 2 m (what the panels use) | 0.86 to 1.15 |
+| 30 s | 5 m | 0.95 to 1.06 |
+| 15 s | 60 s | 1.00 while the timer stays in phase with the scrape; 0.68 to 1.01 once it drifts |
+| 5 s | 60 s | 0.92 to 1.04 |
+
+The mean is right in every row, and no window is ever empty. So a steady
+workload still ripples by about 15%, and a short burst shows as its bytes
+spread over two minutes. **Sampling every 15 s is not the cure it looks
+like**: `OnUnitActiveSec` counts from the previous activation, so the real
+period is 15 s plus the run time, it beats against the 15 s scrape, and
+every time a scrape sees one value twice the window reads a third low. The
+steady options are a longer window or a period well under the scrape
+interval, and the second is that many more samples against the lock.
+`tests/test_sdxi_metrics.py` fails if the window is less than four times
+the default `sdxi_setup_metrics_interval`, so raising the interval means
+widening the window in the three dashboards, the README query and that
+test. A fixed window does not grow when the dashboard is zoomed out: past a
+range where Grafana's step exceeds two minutes (a day or more, depending
+on the panel's width), work between the steps is not drawn. The timer sets
+`AccuracySec=1s`, because a timer's default accuracy is a minute.
+
+**The home dashboard is three committed copies, not a generated file.**
+`qemu/compose/<stack>/grafana/dashboards/fleet/quickstart.json` is the same
+file in each stack; `gen-compose` only mirrors a stack's `grafana/` into an
+`--output-dir` render. `tests/test_guest_exporters.py` holds the three
+equal, so an edit goes to all three. On a fleet with `<sdxi-per-vm>0`
+(`mi355x-server.xml` sets none) the row is still there: "SDXI Device Up"
+reads "no counters" per guest, in blue, and the other panels read "No
+data". The tile is blue and not red because `sdxi_up 0` is the right
+answer there, and it does not say "no device" because the exporter writes
+the same 0 for a device it could not read (no permission, no `sdxi_cli`,
+an ioctl error); `journalctl -u sdxi-textfile-metrics.service` in the
+guest has the one line saying which.
+
+**A guest of today's `<backing-ref>` has no exporter until
+`qemu-tool quick-start test` runs**: `vm-quickstart.yml` includes the same
+task file (`tasks_from: metrics`) for images baked before it, as it does
+for the other two exporters.
+
+The guest check is the "sdxi metrics" block of `qemu/checks/rocm-golden.sh`
+and, the same lines, `roles/sdxi_setup/files/sdxi-metrics-check.sh`, which
+the role runs last, as root, since that is who the unit is. It needs no
+device: with none it asks for `sdxi_up 0`, exit 0 and silence, and with
+one for all 14 counters of contexts 0 and 1.
+`tests/test_sdxi_metrics.py` runs the script against a stand-in `sdxi_cli`
+and the block against a scratch tree.
+
+**That `sdxi.prom` exists proves nothing on a booted image, so the check
+asks systemd.** The bake's own run of the unit writes the file and
+`image_slim` sweeps only `/tmp` and `/var/tmp`, so every guest boots with
+the bake's `sdxi_up 0` already in place; and a timer is `active` whether
+or not its service ever succeeds. The check therefore waits (60 s) for
+`systemctl show -P ExecMainExitTimestampMonotonic
+sdxi-textfile-metrics.service` to be non-zero — it is 0 until a run has
+ended since boot — and then requires `-P Result` to be `success`. The
+script exits 0 only after replacing the file, so those two together mean
+the file is this boot's. Read off systemd 259 on the dev host, for timer-run
+oneshot units: one that has run reports a non-zero time and `success`; one
+that has not run since boot reports `0` and `success` too, which is why
+`Result` alone would not do.
+
+**Not run on a guest as of this writing.** The script's read path is the
+owner's, proven by hand on a live guest; the role, the units, the timer
+firing, the check block (its `systemctl show` answers included, which the
+tests stub) and the panels against live series have run only against
+stand-ins.
+
 ## The bake's compiler cache
 
 The plays that build kernel modules — amdgpu, ionic-ernic twice, `ernic_p4`,

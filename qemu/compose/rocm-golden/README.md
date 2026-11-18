@@ -311,6 +311,9 @@ Opt-in with `--profile metrics`. The sources:
   each guest writes `amdgpu_kfd_present` and `amdgpu_devices_total` for
   node-exporter's textfile collector, and the home dashboard's "GPU Up"
   counts guests with a device bound.
+  The SDXI device's counters come the same way: `sdxi_up` and
+  `sdxi_<counter>_total{context="N"}`, written every 30 s, which the home
+  dashboard's "SDXI" row reads. Client work is counted in context 1.
   **There is no amd-metrics-exporter (`:9488`) and no hsa-snoop (`:9490`)
   job any more.** Both used to be rendered and forwarded, and both were
   down: measured on two guests of `20261117.g80c17f8` after a passing

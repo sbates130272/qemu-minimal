@@ -84,3 +84,8 @@
     owner: root
     group: root
     mode: "0644"
+
+# Last: the script imports the sdxi_cli the build above installs.
+- name: Export the device's counters to node_exporter
+  when: sdxi_setup_metrics | bool
+  ansible.builtin.include_tasks: metrics.yml
