@@ -16,11 +16,12 @@ file up to date as infrastructure changes.
 - `qemu/qemu-tool/settings.py` — the one loader: fleet XML layers in, a `FleetConfig` (or `VMConfig` overrides) out. See "Settings" below
 - `qemu/qemu-tool/quick_start.py` + `ansible/playbooks/vm-quickstart.yml` — the README's Quick Start, which is `qemu-tool quick-start`: two guests from the published qcow2, Prometheus, Grafana and log collection beside them, plus a GPU test and an inter-guest RDMA test. It runs `qemu/stacks/rocm-golden.xml` unless given `--xml` or `--flavor`; `--flavor default` is that fleet. The daily `report-for-vm-rocm-golden` lane runs *that subcommand*, not a copy of its steps. It replaced the shell script that used to live under `scripts/`, which is deleted; do not reintroduce a shell wrapper beside it. The guests are sized from the host by default (4 vCPU floor, 8 ceiling), and every prompt it asks takes its default answer when stdin is not a terminal, so CI needs no flag to stay non-interactive
 - `images/` — qcow2 VM disk images (backing + overlay pairs, **not** `/var/lib/qemu-tool/images`)
-- `ansible/playbooks/` — three playbooks and five roles, and nothing else:
+- `ansible/playbooks/` — three playbooks and six roles, and nothing else:
   - `vm-basic.yml` — a complete bake on its own, and the base of the golden
   - `vm-rocm-golden.yml` — the one image beyond it: imports `vm-basic.yml`, then the mainline kernel and ernic prerequisites, ROCm, the rocjitsu roles, SRQ + P4, SDXI and one slim pass. Every bake play is tagged `install`; `tests/test_playbook_pins.py` fails a play with no tag, because an untagged play runs in every bake. Three plays need a device and are tagged `never`: `--tags configure` sets up the NIC and builds no driver (known issue 16 says why it must not), `--tags firmware` installs `ip_discovery.bin` from the rocjitsu serving the guest, and `--tags test` runs the GPU workloads. The pins (`ionic_kernel_pin` with `ionic_kernel_pin_commit` and `ionic_kernel_mirror`, `ernic_source_pin`, `rocm_line_pin`, `sdxi_source_pin`) are each defined once and shared between plays through YAML anchors; see "Where the ionic kernel sources come from" for the first three. Its defaults are a published image's, and a bake needs no Docker daemon when given `-e rocjitsu_firmware_script=<path to vfio_guest_firmware.py>`. Given a cache directory (`gen-vm --bake --cache-dir DIR`, or `<bake-cache-dir>` in a fleet file, which reaches the playbook as the extra var `bake_cache_dir`) the module builds go through a compiler cache kept in that directory; there is none by default, and the two workflows that bake the guest, the playbook-test lane and the publish workflow, each pass one and share what it holds — see "The bake's compiler cache". The slim play also purges every kernel but the running one, after asserting that is the pinned one — see "One kernel in the baked image". The acceptance test is `qemu/checks/rocm-golden.sh`, which the playbook-test lane runs against the baked guest and batesste-ci-images runs against the published one
   - `vm-quickstart.yml` — configures and tests a running fleet; what `qemu-tool quick-start test` runs
   - roles `rocm_ernic_setup` (image prep, device naming, boot-time addressing, the P4 client and who may open `/dev/ernic-p4`, the mirror and commit check for the ionic kernel sources, and `driver_check`, which asks a guest whether its ionic driver is still the baked SRQ + P4 build), `rocjitsu_setup` (firmware, amdgpu, tools, live tests), `sdxi_setup`, `image_slim` and `bake_ccache` (the compiler cache: `restore`, `save` and `remove`, no `main`). Each has task files callers reach with `tasks_from`; all five are linted at the `production` profile in CI
+  - role `perftest_setup` — perftest built from a pinned commit with ROCm memory support, installed in `/usr/local/bin` ahead of the archive's package; linted with the other five. See "perftest with ROCm memory support"
 - `scripts/install-vfio-rules` + `scripts/99-qemu-minimal-vfio.rules` — host-side udev rules for PCI passthrough. There is no top-level `udev/` any more: guest rules live in their role's `files/`
 - `rocm-ernic-enablement.md` — running log of rocm-ernic integration status and bugs. Git-ignored: it exists only on a host that keeps one
 
@@ -2830,8 +2831,8 @@ a warm bake's entry, the one main holds, and its miss count says which.
 
 Transport is one uncompressed tar file, `ccache.tar`, in that directory:
 unpacked into `/var/tmp/bake-ccache` after the reboot into the pinned kernel,
-fetched back by a play that sits after SDXI and before the stamp and the slim
-pass. The fetch runs with `become: false` on purpose — with become, `fetch`
+fetched back by a play that sits after SDXI and the perftest build and before
+the stamp and the slim pass. The fetch runs with `become: false` on purpose — with become, `fetch`
 slurps the file as base64 in memory. That play's `always` section then runs
 the role's `remove` tasks, which take out the symlinks, `/etc/ccache.conf`,
 the cache and the tar. **The removal is the one part that is not gated on a
@@ -2859,8 +2860,8 @@ which matters for the same reason: the compression tool `actions/cache`
 finds is part of what it matches on.
 
 The key ends in the run id and attempt, since an entry is never
-overwritten; its prefix hashes the kernel, ernic and SDXI pins, the amdgpu
-driver release, `requirements.yml` and `amdgpu-emu-patches.py`, with
+overwritten; its prefix hashes the kernel, ernic, SDXI and perftest pins, the
+amdgpu driver release, `requirements.yml` and `amdgpu-emu-patches.py`, with
 `restore-keys` falling back to any earlier cache so a pin bump still starts
 warm — and, because a restore that fell back that far passes
 `--cache-replace`, saves once under the new prefix so the next run is warm
@@ -3247,6 +3248,388 @@ against `grub.cfg` text written out the way resolute's templates write it,
 so a cloud image whose kernel packages differ from that day's, or a
 `grub.cfg` laid out differently, is still first met in a bake — where the
 guard fails loudly if apt wants anything the purge list does not expect.
+
+## perftest with ROCm memory support
+
+Ubuntu's `perftest` is built without ROCm, so its `ib_send_bw` has no
+`--use_rocm`. The golden bake builds the tools from source with the
+`perftest_setup` role and installs them in `/usr/local/bin`. What it builds
+by default is the owner's fork, <https://github.com/sbates130272/perftest>,
+branch `feat/rocm-data-validation-legacy` at
+`e68c74e910451682ba1dc91b96602fbc7afaa372` — the head of the open upstream
+pull request linux-rdma/perftest#419, which adds `--data_validation` for
+`--use_rocm`. `--enable-rocm` itself is upstream (#418).
+
+**Both builds are in the image, and which one runs is by path.** The
+archive's package stays, in `/usr/bin`; the ROCm build is in
+`/usr/local/bin`. A bare `ib_send_bw` is the ROCm build in every shell that
+has a PATH of its own, and `qemu/checks/rocm-golden.sh` asserts each: the
+non-login SSH session (`/etc/environment` through pam_env, which
+`rocjitsu_setup` writes as `<rocm>/bin:` plus the cloud image's line), a
+login shell, and sudo's `secure_path`. All three have `/usr/local/bin` ahead
+of `/usr/bin` (seen on a guest of the published image: `command -v
+ib_send_bw` gave `/usr/local/bin/ib_send_bw` in each); it is the same fact
+the bake's ccache hook rests on. The
+package was kept on purpose: `vm-quickstart.yml`'s RDMA test names
+`/usr/bin/ib_send_bw`, so `quick-start test` and the daily lane run the
+stock build exactly as before, and it is the baseline to compare a
+work-in-progress branch against. The check fails an image that has lost
+either copy. The stock build prints its help in 5 ms and the ROCm one in
+32 ms (measured on a guest): it loads libamdhip64 and, through it, LLVM.
+
+`make install` puts more under the prefix than the eight `ib_*` tools the
+role checks: `raw_ethernet_bw`, `raw_ethernet_lat`, `raw_ethernet_burst_lat`
+and `raw_ethernet_fs_rate`, the scripts `run_perftest_loopback` and
+`run_perftest_multi_devices`, and 13 man pages in
+`/usr/local/share/man/man1`. They shadow the archive's copies the same way,
+and nothing asserts them. No library and no header is installed.
+
+**The guest check now refuses an image baked before this.** Its first
+assertion is that `/etc/perftest-rocm.json` exists, and the image
+`<backing-ref>` pulls today has none. Inside this repository the check runs
+only against a fresh bake (the playbook-test and publish lanes), so nothing
+here turns red; batesste-ci-images runs the same file against the
+*published* image, and has to move to an image baked from a commit that has
+this before it takes this version of the check.
+
+**The recipe**, from the repository's own ROCm workflow
+(`.github/workflows/ubuntu24_04_rocm7_2.yaml`, green on #419 for gfx950 and
+gfx1250) and `configure.ac`:
+
+```
+./autogen.sh
+./configure --prefix=/usr/local --enable-rocm --enable-rocm-dmabuf \
+    --with-rocm=/opt/rocm/core-10.1 --with-rocm-arch=gfx1250 \
+    HIPCC=/opt/rocm/core-10.1/bin/hipcc LDFLAGS=-L/usr/local/lib
+make -j"$(nproc)" && make install
+```
+
+**`LDFLAGS=-L/usr/local/lib` is not optional on the golden guest, and the
+first version of the role, which lacked it, failed there.** The image has
+two rdma-cores: the archive's 61 under `/usr` (`libibverbs-dev
+61.0-2ubuntu3`), and the whole of rocm-ernic's patched rdma-core **66**
+under `/usr/local` — headers in `/usr/local/include/infiniband`,
+`libibverbs.so.1.18.66.0`, `librdmacm`, `libibumad` and the providers in
+`/usr/local/lib` — which `ernic_srq_provider` installs and every tool on
+the image loads. "rdma-core 61 plus a patched provider" undersells it, and
+`rdma_core_version` in `/etc/rocm-golden-guest.json` is the archive
+package's version, not the loaded library's. Three search orders then
+disagree:
+
+| | searches first | so it uses |
+|---|---|---|
+| gcc, for `<infiniband/verbs.h>` | `/usr/local/include` | 66 |
+| ld, for `-libverbs` (perftest's `configure` uses `AC_CHECK_LIB`, no `-L`, no pkg-config) | `/usr/lib/x86_64-linux-gnu` | 61 |
+| the loader (`ld.so.conf`) | `/usr/local/lib` | 66 |
+
+Measured on both guests of a stack from the published image
+`20261117.g481c892` on 2026-11-17, with the role's defaults as they then
+were: `configure` succeeded, defined `HAVE_CC_UNPROTECTED_ALLOC` from the
+66 headers, and the link of all eight tools failed after 18.94 s with
+
+```
+perftest_resources.c:2370: undefined reference to `ibv_alloc_buf'
+perftest_resources.c:2402: undefined reference to `ibv_free_buf'
+collect2: error: ld returned 1 exit status
+```
+
+because 61 has neither function. With `LDFLAGS=-L/usr/local/lib` and
+nothing else changed the same guests built it: `ok=19 changed=3 failed=0`
+on both, 18.76 s for the build task on 8 vCPUs with no compiler cache,
+5.10 s for the fetch, `libibverbs.so.1 => /usr/local/lib/libibverbs.so.1`,
+and a rerun compiled nothing (`ok=12 changed=0`). The loud failure is the
+lucky case. Where the newer headers declare nothing the older library
+lacks, the mix links, and a feature the loaded library has is compiled out
+without a word: under the same mix `configure` printed `checking for
+ibv_dm_export_dmabuf_fd in -libverbs... no`, and with the `-L` it printed
+`yes` and the tools gained `--use_ib_dm_dmabuf`.
+
+So the role has `perftest_setup_rdma_lib_dir` (`/usr/local/lib`), which
+becomes that `LDFLAGS`, and `files/perftest-rdma-probe.sh`, which runs
+before the build with the arguments `configure` is about to get. It
+compiles, links and resolves one two-line program and prints the
+`infiniband/verbs.h` the compiler read, the `libibverbs.so` the linker took
+and the `libibverbs.so.1` the loader gives; the role stops unless link and
+load are one file and the headers are from the same prefix, in seconds and
+with a sentence instead of sixty undefined references. A directory with no
+libibverbs in it is passed over by the linker, so the default is right on a
+guest with only the archive's rdma-core. After the build the role compares
+what `ib_write_bw` loads with what the probe linked, records both the
+headers and the library in the stamp, and `qemu/checks/rocm-golden.sh`
+compares the stamp's library with the one the booted image loads.
+
+**That fix ran on a live guest only as the configure line**
+(`-e '{"perftest_setup_configure_extra":["LDFLAGS=-L/usr/local/lib"]}'`,
+which gives the byte-identical line the role now builds itself, and
+`tests/test_perftest_setup.py` holds it to that line). The variable, the
+probe, the post-build comparison and the new stamp fields have not run on a
+guest or in a bake. What they ran on is the dev host, the image's Ubuntu
+release with the same `libibverbs-dev 61.0-2ubuntu3` (gcc 15.2, binutils
+2.46), with an rdma-core 66 tree put ahead of the archive's by
+`C_INCLUDE_PATH` and `LD_LIBRARY_PATH`: without the directory
+the pinned commit failed at the same two source lines as on the guest and
+the role stopped at the probe; with it the role built, recorded
+`libibverbs.so.1.18.66.0`, and a rerun compiled nothing. The first
+playbook-test bake is still the proof; read the probe's `ok:` line in it.
+
+`--with-rocm=DIR` adds `DIR/include` and `DIR/include/hsa` to the include
+path and `DIR/lib64` and `DIR/lib` to the link line and to the tools'
+RUNPATH. With `--enable-rocm`, `configure` looks for `hipcc`
+(`AC_CHECK_TOOL`), and what it finds decides which of two builds results:
+
+| | with hipcc | `HIPCC=no`, or none found |
+|---|---|---|
+| `src/rocm_kernels.hip` | compiled for one GPU and linked into every tool (`HAVE_ROCM_KERNELS`) | not built |
+| `--data_validation` with `--use_rocm` | a kernel resident on the GPU checks each cycle as it lands; falls back to the other column when the kernel will not launch | the buffer is copied to the host once, after the run, and compared there |
+| the stamp's `device_code` | `true` | `false` |
+
+`PERFTEST_ROCM_VALIDATION=staged` selects the right-hand behaviour in a
+build that has both. Which path ran is printed: `[DATA_VALIDATION] rocm:
+live GPU validation` or `... host-staged validation`.
+
+**The role's variables** (`roles/perftest_setup/defaults/main.yml`):
+
+| Variable | Default | |
+|---|---|---|
+| `perftest_setup_repo` | `https://github.com/sbates130272/perftest.git` | the repository |
+| `perftest_setup_ref` | `feat/rocm-data-validation-legacy` | what is fetched, at depth 1: a branch, a tag or a full commit id |
+| `perftest_setup_commit` | `e68c74e9…a372` | the commit that ref has to be. Compared before anything is compiled. Empty turns the check off, and nothing else does |
+| `perftest_setup_rocm_path` | `/opt/rocm` | the ROCm tree, or a path whose `bin/` links into it; the bake passes `/opt/rocm/core-<line>` |
+| `perftest_setup_prefix` | `/usr/local` | install prefix |
+| `perftest_setup_rocm_kernels` | `true` | build the HIP device code |
+| `perftest_setup_rocm_arch` | `gfx1250` | the GPU it is built for; required with the line above |
+| `perftest_setup_rocm_dmabuf` | `true` | `--enable-rocm-dmabuf`, which adds `--use_rocm_dmabuf` |
+| `perftest_setup_rdma_lib_dir` | `/usr/local/lib` | the directory of the libibverbs the tools link, as `LDFLAGS=-L<dir>`; empty adds nothing |
+| `perftest_setup_configure_extra` | `[]` | arguments appended to the configure line; a `CPPFLAGS=`, `CFLAGS=` or `LDFLAGS=` here replaces the one before it, and the probe reads all three |
+| `perftest_setup_keep_source` | `false` | keep `/usr/local/src/perftest` (`perftest_setup_source_dir`); the role removes the tree only in a run that fetched it |
+| `perftest_setup_force` | `false` | build even when the stamp says there is nothing to do |
+
+It records the build in `/etc/perftest-rocm.json` — repository, ref, the
+commit built and the commit required, the configure line, the ROCm tree,
+the rdma-core headers and the libibverbs it was built against
+(`rdma_headers`, `libibverbs`, real paths, so the library's version is in
+the name), and whether the binaries carry device code, read off the binary
+with `nm` and not copied from the request. A rerun that finds the stamp describing
+the build it was asked for, and the tools in place, compiles nothing; the
+tools are checked either way.
+
+**The pin is `perftest_source_pin` in `vm-rocm-golden.yml`**, an anchor on
+the perftest play beside `perftest_source_repo` and `perftest_source_ref`,
+and the stamp play reads it by alias. A branch is a name for whatever was
+pushed last, so `files/perftest-fetch.sh` compares what the fetch brought
+with the pin and a moved branch **fails the bake**, naming both commits,
+before a line is compiled. That will happen: this branch is the head of an
+open pull request. Three ways on, in order of preference:
+
+- move the pin to the new head: `git ls-remote <repo> <ref>` prints it. The
+  comment that ends the pin's line names the ref and
+  `tests/test_perftest_setup.py` fails when the two disagree. The role's
+  defaults and the README's "Golden perftest" badge are held equal to the
+  playbook's values by the same test, so a move is the playbook's lines,
+  the two defaults and the badge, and the test names whichever was missed;
+- keep building the old commit: set `perftest_source_ref` to the commit id
+  as well. GitHub serves a commit by id for as long as it holds it, which
+  for one a force-push orphaned is not for ever. A tag in the fork would
+  make a pin durable;
+- another branch, `feat/rocm-data-validation` at
+  `9ed580b03bfd4a9c6855b0f2d604a4515635d906` for one: the same three lines,
+  or for one bake `-e perftest_source_ref=... -e perftest_source_pin=...`
+  (`ANSIBLE_EXTRA_ARGS` with `gen-vm`), which reaches both plays.
+
+`qemu/checks/rocm-golden.sh` spells no pin. It compares
+`/etc/perftest-rocm.json` with the `perftest_source_pin` the bake wrote to
+`/etc/rocm-golden-guest.json`, and refuses a build made with the commit
+check off.
+
+**No device is needed, and each part of that was established**, not
+assumed. The ROCm probes in `configure` compile and link and run nothing;
+the two programs it does run ask the CPU about AVX2 and SSE4.2, which fixes
+the host-memory validator's SIMD level at the build VM's CPU. hipcc
+compiles for the GPU it is told. The role runs each tool with `--help` and
+nothing else; perftest prints its usage while parsing arguments, and a
+binary carrying a HIP kernel registers it at load without touching the GPU.
+Run end to end in an `ubuntu:26.04` container with the ROCm 10.1 tree
+mounted and no `/dev/kfd`, `/dev/dri` or `/dev/infiniband`: the pinned build
+took 23 s, a rerun compiled nothing, a pin the branch was not at failed
+before the build and left no tree, and the check's block passed. That
+container had no rdma-core in `/usr/local`, which is why it did not see the
+link failure above.
+
+**Why `perftest_setup_rocm_arch` is required.** Without `--with-rocm-arch`,
+`configure` asks `rocm_agent_enumerator`, which prints nothing with no
+device, and leaves the target to hipcc; hipcc 10.1 with no target and no
+device compiles for **gfx906** (measured). A kernel for the wrong GPU builds
+cleanly and fails at launch. Every fleet here serves gfx1250.
+`--with-rocm-arch` takes one GPU: `configure` tests the value unquoted, so
+a list is not expressible through it.
+
+**The compiler cache covers the C sources and not the HIP one.** `gcc` is
+resolved through PATH, so it is ccache when the bake put one there; hipcc
+runs its own clang by path (`<rocm>/lib/llvm/bin`), which no symlink in
+`/usr/local/bin` shadows. Measured with the hook in place: 164 ccache calls
+a build, 70 of them cacheable; a cold build missed 63 and took 39 s, a warm
+one hit 69 of 70 and took 22 s. So it adds 70 calls to a bake's 2053 and
+about one miss to a warm bake. `perftest_source_pin` is in the cache key
+(`bake-ccache-restore`) for the reason the ernic and SDXI pins are: 63
+misses is below what the save's miss count notices, and without the key a
+moved pin would recompile in every bake.
+
+**The test on a live stack is optional and off, because on the stacks this
+repository ships it fails.** The last play of `vm-quickstart.yml` runs
+`ib_write_bw --use_rocm=0 --use_rocm_dmabuf --data_validation` between the
+first and last guest when `quickstart_rocm_rdma` is true. It is
+`ib_write_bw` and not `ib_send_bw`: validation is for the WRITE and READ
+verbs, bandwidth tests, RC only, with `-t` and `-n` of at least 32;
+`ib_send_bw` lists the flag in its help and exits 1 with `--data_validation
+is only supported with WRITE or READ verb` (seen on a guest). For a WRITE
+the **server** validates and prints the verdict, and does not fail its exit
+status on a failed one, so the play reads the server's output from a file
+and asserts `VALIDATION: PASSED` from either side and no other verdict from
+both. It waits for the server for as long as the client was allowed, since
+the verdict is written when the server exits. The server runs as root in a
+transient unit and the client as the login user. `qemu-tool quick-start` has
+no flag for it and no workflow sets it.
+
+```bash
+cd ansible && ansible-playbook -i <stack dir>/fleet-inventory.yml \
+    playbooks/vm-quickstart.yml --private-key <key> \
+    -e quickstart_rocm_rdma=true
+```
+
+**What a live default stack measured**, 2026-11-17: `rocm-golden.xml`
+unmodified (stock QEMU), two guests of 8 vCPUs from the published image
+`20261117.g481c892`, the role applied to both by a scratch playbook with
+the `LDFLAGS` above, perftest 6.31 against the archive's 6.24. Guest 2 was
+the server and guest 1 the client, the device `rocm-rdma-ernic0` as
+`ibv_devinfo -l` gave it, every process left to exit on its own. The RDMA
+port stayed `PORT_ACTIVE` and amdgpu `loaded` throughout.
+
+| Run | Result |
+|---|---|
+| `/usr/bin/ib_send_bw --iters 1000 --size 65536` | 484.27 MiB/s, exits 0/0 |
+| `ib_send_bw`, the ROCm build, host memory | 525.30 MiB/s, `Use ROCm memory : OFF`, exits 0/0 |
+| `ib_write_bw --data_validation -t 128 -n 1000 -s 65536`, host memory | 466.12 MiB/s, `VALIDATION: PASSED - 896 chunks, 58720256 bytes`, exits 0/0 |
+| `ib_send_bw --use_rocm=0`, between guests and in loopback | **fails at registration**, both sides, exit 1 |
+| `ib_write_bw --use_rocm=0 --data_validation`, live and `PERFTEST_ROCM_VALIDATION=staged` | **fails at registration**, the same way |
+| `ib_send_bw --use_rocm=0 --use_rocm_dmabuf` | registers; **first work request fails**, client exit 17; the server exits 17 after perftest's own 120 s wait |
+| `ib_write_bw --use_rocm=0 --use_rocm_dmabuf --data_validation` (staged) | registers; **first work request fails**, both exit 1 within seconds |
+| `PERFTEST_ROCM_HOST_ALLOC=1 ib_send_bw --use_rocm=0` | 552.44 MiB/s, `Use ROCm memory : ON`, exits 0/0 |
+| `PERFTEST_ROCM_HOST_ALLOC=1 PERFTEST_ROCM_VALIDATION=staged ib_write_bw --use_rocm=0 --data_validation ...` | 642.09 MiB/s, `[DATA_VALIDATION] rocm: host-staged validation`, `VALIDATION: PASSED - 7 chunks, 58720256 bytes` |
+| the same without `staged` | 440.58 MiB/s, `[DATA_VALIDATION] rocm: live GPU validation`, `VALIDATION: PASSED - 7 chunks, 58720256 bytes` |
+
+So, on the default stack:
+
+- **Does `--use_rocm` move data from VRAM? No, and it fails in two
+  different places.** Plain `--use_rocm` gets as far as HIP coming up and
+  `hipMalloc` succeeding (`Using ROCm Device with ID: 0, Name: AMD Radeon
+  Graphics, PCI Bus ID: 0x2, GCN Arch: gfx1250`, `allocated 131072 bytes of
+  GPU buffer at 0x...`), and then `ibv_reg_mr` of that address is refused:
+
+  ```
+  Couldn't allocate MR with error=14
+  failed to create mr
+  Failed to create MR
+   Couldn't create IB resources
+  ```
+
+  Errno 14 is EFAULT, it comes back inside the guest, and the NIC's server
+  logs nothing, so the device is never asked. That is the guest kernel
+  declining to pin a GPU mapping for an ordinary memory registration, which
+  makes this form **independent of which QEMU is pinned**: the fork image
+  cannot change it. (The cause is read from where the error comes from, not
+  from a trace of the kernel.)
+- **`--use_rocm_dmabuf` is the form that reaches the NIC**, and the one
+  issue 15 is about. `ionic_rdma` imports the dma-buf (`Calling
+  ibv_reg_mr_ex with dmabuf(offset=0, size=131072, ...)`), the queue pairs
+  connect, and the first work request fails:
+
+  ```
+   Completion with error at client
+   Failed status-remote access error (10): wr_id 0 syndrom 0x9
+   scnt=128, ccnt=0
+  ```
+
+  while the sender's `ernic-N` logs `WARN: ionic_datapath: QP 2 could not
+  gather 65536 bytes`, 128 times, and `CQ 5 completing QP 2 in error: status
+  9`. In loopback on one guest it is `local access error (8) ... syndrom
+  0x7` and `RDMA write rkey=0x10e va=... moved 0 of 65536 bytes`. The NIC's
+  server cannot read the GPU's memory: one vfio-user server reaching into
+  another's BAR, on a QEMU that does not hand it the region. **Whether the
+  fork QEMU makes this pass has not been tried**: `mi355x-server.xml` pins
+  the fork as two refs (`<qemu-ref>` and `<ernic-ref>`), neither image was
+  on the host, and there is no one-element overlay that swaps them into
+  `rocm-golden.xml`. That is the experiment worth running next, and it is
+  this form, not the plain one.
+- **Does `--data_validation` pass with `--use_rocm`? Not reached for VRAM**:
+  the transfer fails first. It passes on plain host memory, which also
+  shows the emulated NIC does the atomics validation signals with, and it
+  passes with `PERFTEST_ROCM_HOST_ALLOC=1`, both host-staged and with the
+  live kernel on the GPU, so rocjitsu launches and retires the gfx1250
+  validation kernel.
+- **`PERFTEST_ROCM_HOST_ALLOC=1` is the control.** It allocates with
+  `hipHostMalloc`, host memory the GPU can address, and with it everything
+  works: HIP, the registration, the transfer, both validation paths. A stack
+  that passes only with it set has a NIC that cannot reach VRAM and is
+  otherwise sound, which is this one. It was run with `--use_rocm` alone;
+  exporting a host-mapped buffer as a dma-buf has not been tried, so pair it
+  with `quickstart_rocm_rdma_dmabuf=false`.
+- **Further GPU processes in one boot are fine.** After `quick-start`'s
+  `vector_add`, about a dozen more HIP processes ran on each guest, two at
+  once in loopback, with no hang, and `amdgpu-probe --status` stayed
+  `loaded`. The only new kernel lines were `amdgpu 0000:02:00.0: query gpu
+  clock counter is not supported`.
+- The guest's GPU has a 256 GiB BAR0 at `0x4000000000`, the kernel is
+  7.2.6 with `CONFIG_PCI_P2PDMA=y`.
+
+The play as it was before these results (plain `--use_rocm`) failed as the
+table says, rc 2 with both sides shown; with `PERFTEST_ROCM_HOST_ALLOC=1`
+added to its environment it passed. It now passes `--use_rocm_dmabuf` by
+default (`quickstart_rocm_rdma_dmabuf`), so that turning it on tests the
+layer that can change, and its verdict says when the buffers were
+host-mapped memory and not VRAM. **In that form the play has not run**: its
+command lines, retry count and messages were rendered locally, no more.
+
+**perftest can exit 1 after a transfer that completed.** The first
+`quick-start test` of that run failed at the *existing* stock RDMA step,
+before any of this was applied: `Correlation coefficient r^2: 0.457788 <
+0.9` / `Can't produce a report`, rc 1; the same command two minutes later
+gave 484 MiB/s and exit 0. That is perftest's CPU-frequency calibration on a
+busy host, not the transfer. It is not fixed here; the default RDMA test
+and the optional play both assert the client's exit status and can both go
+red on it.
+
+**Still unproven:**
+
+- **The role in a bake.** It ran on live guests of the published image
+  (device present, amdgpu loaded, no compiler cache) and not through
+  `gen-vm --bake`; and in the form that is committed, with the probe and
+  the variable, only on the dev host. The first playbook-test run is the
+  proof.
+- **The guest check on a baked image.** Its block passed on a live guest
+  against a scratch root holding the stamp and a copy of
+  `/etc/rocm-golden-guest.json` with the pin added (the role alone does not
+  write that key), before the block compared the stamp's `libibverbs`.
+- **The fork QEMU**, as above.
+- **The dma-buf export of a host-mapped buffer**, and READ
+  (`ib_read_bw`), which nothing ran.
+
+To repeat the measurements on two guests of a running stack, each line on
+the server first and then on the client with the server's ernic address
+appended (`DEV` from `ibv_devinfo -l`):
+
+```bash
+/usr/bin/ib_write_bw -d DEV -n 1000                                  # the stock build, as a baseline
+ib_write_bw -d DEV -n 1000                                           # the ROCm build, host memory
+ib_write_bw -d DEV -n 1000 -t 128 --data_validation                  # the NIC's atomics
+ib_write_bw -d DEV -n 1000 --use_rocm=0                              # error=14 at registration, any QEMU
+ib_write_bw -d DEV -n 1000 --use_rocm=0 --use_rocm_dmabuf            # the NIC reaching VRAM: issue 15
+PERFTEST_ROCM_HOST_ALLOC=1 ib_write_bw -d DEV -n 1000 -t 128 --use_rocm=0 --data_validation   # the control
+```
+
+Let each run finish. A perftest killed mid-run leaves the guest's RDMA
+device broken until the stack is recreated (issue 3). Every failure above
+ended on its own; the slowest was the `ib_send_bw` server, which waits 120 s
+for a message before it gives up.
 
 ## AppArmor and the snapd leftover
 

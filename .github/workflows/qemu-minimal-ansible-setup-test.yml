@@ -105,7 +105,8 @@ jobs:
         # auto-discovery finds only roles, not the sibling playbooks/*.yml
         # files (which are not yet clean at the production profile).
         ansible-lint \
-          bake_ccache/ image_slim/ rocjitsu_setup/ rocm_ernic_setup/ sdxi_setup/
+          bake_ccache/ image_slim/ perftest_setup/ rocjitsu_setup/ \
+          rocm_ernic_setup/ sdxi_setup/
       working-directory: ansible/playbooks/roles
 
   gen-vm-ansible-setup:

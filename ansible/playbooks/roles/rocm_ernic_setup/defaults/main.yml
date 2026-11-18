@@ -208,7 +208,8 @@ rocm_ernic_setup_packages:
   - ibverbs-utils
   - libibverbs-dev
   # ib_send_bw and friends, for lanes that move traffic rather than only
-  # assert the modules built.
+  # assert the modules built. The archive's build, in /usr/bin, with no ROCm
+  # memory support; perftest_setup adds one that has it, in /usr/local/bin.
   - perftest
   # Not in ionic.txt, and the reason ernic_guest_build_deps exists upstream:
   # iperf3 is what the TCP performance checks measure with.

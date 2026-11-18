@@ -907,3 +907,222 @@ echo "apparmor: apparmor.service is not failed"
 echo "note: units failed on this boot, if any:"
 systemctl --failed --no-legend --plain --no-pager || true
 # end: apparmor
+
+# ---------------------------------------------------------------------------
+# perftest built with ROCm memory support
+# ---------------------------------------------------------------------------
+# The archive's perftest has no --use_rocm, so the bake builds the tools from
+# a pinned commit against the image's ROCm and installs them under a prefix
+# ahead of /usr/bin. The package stays, in /usr/bin, so there are two of each
+# tool; what is asserted first is which one a bare name runs, in the three
+# shells that have a PATH of their own: this one, which is pam_env's
+# /etc/environment, a login shell, and sudo's secure_path.
+#
+# Nothing here needs a device, and this runs on a boot that has none. The
+# tools are asked for their help and for nothing else: perftest prints its
+# usage while it is still parsing arguments, before it opens an RDMA device,
+# and a binary that carries a HIP kernel registers it at load without
+# touching the GPU.
+#
+# No pin is spelled in this file. The bake wrote what it built to
+# /etc/perftest-rocm.json and the pin it was given to
+# /etc/rocm-golden-guest.json, and the two are compared.
+#
+# tests/test_perftest_setup.py runs the lines between the two markers
+# against stand-ins. PERFTEST_CHECK_ROOT is for that: it is prefixed to the
+# two /etc paths and to /usr/bin/ib_send_bw, and is empty on a guest.
+# begin: perftest
+_pt_root=${PERFTEST_CHECK_ROOT:-}
+_pt_stamp="${_pt_root}/etc/perftest-rocm.json"
+_pt_golden="${_pt_root}/etc/rocm-golden-guest.json"
+if [ ! -s "${_pt_stamp}" ]; then
+    echo "ERROR: perftest: no ${_pt_stamp}: the bake did not build perftest" \
+         "with ROCm support" >&2
+    exit 1
+fi
+# Six lines: the prefix, the commit, the ROCm tree, whether the build has
+# device code and the dma-buf option, and the libibverbs it was linked
+# against. A stamp that does not hold together prints its reason and stops
+# the check.
+_pt_facts=$(python3 - "${_pt_stamp}" "${_pt_golden}" <<'PTPY'
+import json
+import re
+import sys
+
+
+def fail(msg):
+    print(f"ERROR: perftest: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+stamp_path, golden_path = sys.argv[1:3]
+try:
+    with open(stamp_path) as handle:
+        stamp = json.load(handle)
+except (OSError, ValueError) as exc:
+    fail(f"{stamp_path} is not readable JSON: {exc}")
+for key in ("repo", "ref", "commit", "commit_required", "prefix",
+            "rocm_path", "configure", "device_code", "dmabuf",
+            "libibverbs"):
+    if key not in stamp:
+        fail(f"{stamp_path} has no \"{key}\"")
+commit = stamp["commit"]
+if not re.fullmatch(r"[0-9a-f]{40}", str(commit)):
+    fail(f"{stamp_path} records commit {commit!r}, which is not a commit id")
+# An image is built from a commit somebody chose, not from wherever a
+# branch was that day: the role only skips its check when given no commit.
+if stamp["commit_required"] != commit:
+    fail(f"perftest was built at {commit} with "
+         f"{stamp['commit_required']!r} required: the commit check was off, "
+         "or the stamp is not the one this build wrote")
+try:
+    with open(golden_path) as handle:
+        golden = json.load(handle)
+except (OSError, ValueError) as exc:
+    fail(f"{golden_path} is not readable JSON: {exc}")
+if golden.get("perftest_source_pin") != commit:
+    fail(f"{golden_path} says the image was baked with perftest_source_pin "
+         f"{golden.get('perftest_source_pin')!r}, and {stamp_path} says "
+         f"perftest was built at {commit}")
+if "--enable-rocm" not in stamp["configure"].split():
+    fail(f"the recorded configure line has no --enable-rocm: "
+         f"{stamp['configure']}")
+for key in ("prefix", "rocm_path", "libibverbs"):
+    if not str(stamp[key]).startswith("/"):
+        fail(f"{stamp_path} records {key} {stamp[key]!r}")
+for key in ("device_code", "dmabuf"):
+    if not isinstance(stamp[key], bool):
+        fail(f"{stamp_path} records {key} {stamp[key]!r}, not true or false")
+print(stamp["prefix"])
+print(commit)
+print(stamp["rocm_path"])
+print("true" if stamp["device_code"] else "false")
+print("true" if stamp["dmabuf"] else "false")
+print(stamp["libibverbs"])
+PTPY
+)
+{
+    read -r _pt_prefix
+    read -r _pt_commit
+    read -r _pt_rocm
+    read -r _pt_device_code
+    read -r _pt_dmabuf
+    read -r _pt_linked
+} <<PTFACTS
+${_pt_facts}
+PTFACTS
+
+# Which copy a bare name runs. /usr/bin still has the archive's.
+for _pt_tool in ib_send_bw ib_send_lat ib_write_bw ib_write_lat \
+                ib_read_bw ib_read_lat; do
+    _pt_want="${_pt_prefix}/bin/${_pt_tool}"
+    if [ ! -x "${_pt_want}" ]; then
+        echo "ERROR: perftest: ${_pt_want} is missing" >&2
+        exit 1
+    fi
+    _pt_here=$(command -v "${_pt_tool}" || true)
+    _pt_login=$(bash -lc "command -v ${_pt_tool}" < /dev/null || true)
+    _pt_sudo=$(sudo -n sh -c "command -v ${_pt_tool}" < /dev/null || true)
+    for _pt_got in "this shell:${_pt_here}" "a login shell:${_pt_login}" \
+                   "sudo:${_pt_sudo}"; do
+        if [ "${_pt_got#*:}" != "${_pt_want}" ]; then
+            echo "ERROR: perftest: ${_pt_tool} resolves to" \
+                 "'${_pt_got#*:}' in ${_pt_got%%:*}, not ${_pt_want}: the" \
+                 "ROCm build is not the one a bare name runs" >&2
+            exit 1
+        fi
+    done
+done
+
+# And the archive's copy is still there: vm-quickstart.yml's RDMA test runs
+# /usr/bin/ib_send_bw by that path, so the stock build keeps doing what it
+# did whatever the one above turns out to do.
+if [ ! -x "${_pt_root}/usr/bin/ib_send_bw" ]; then
+    echo "ERROR: perftest: no /usr/bin/ib_send_bw: the archive's perftest," \
+         "which the quickstart RDMA test runs by path, is gone" >&2
+    exit 1
+fi
+
+# The flags the build exists for, by the text usage() prints. The help exits
+# non-zero by design, so the output is what is tested.
+_pt_offers() {
+    _pt_help=$("${_pt_prefix}/bin/$1" --help < /dev/null 2>&1 || true)
+    case "${_pt_help}" in
+        *"$2"*) ;;
+        *)
+            echo "ERROR: perftest: ${_pt_prefix}/bin/$1 --help does not" \
+                 "offer $2" >&2
+            printf '%s\n' "${_pt_help}" | tail -5 >&2
+            exit 1
+            ;;
+    esac
+}
+for _pt_tool in ib_send_bw ib_write_bw ib_read_bw; do
+    _pt_offers "${_pt_tool}" '--use_rocm=<rocm device id>'
+    _pt_offers "${_pt_tool}" '--data_validation '
+    if [ "${_pt_dmabuf}" = true ]; then
+        _pt_offers "${_pt_tool}" '--use_rocm_dmabuf'
+    fi
+done
+
+# Linked against the image's ROCm, every library found, and libibverbs the
+# SRQ-capable build in /usr/local that ibv_devinfo loads too.
+_pt_libs=$(ldd "${_pt_prefix}/bin/ib_write_bw")
+case "${_pt_libs}" in
+    *'not found'*)
+        echo "ERROR: perftest: ib_write_bw has a library the loader cannot" \
+             "find:" >&2
+        printf '%s\n' "${_pt_libs}" >&2
+        exit 1
+        ;;
+esac
+_pt_hip=$(printf '%s\n' "${_pt_libs}" |
+    awk '$1 ~ /^libamdhip64\.so/ { print $3 }')
+if [ -z "${_pt_hip}" ]; then
+    echo "ERROR: perftest: ib_write_bw is not linked against libamdhip64" >&2
+    exit 1
+fi
+case "$(readlink -f "${_pt_hip}")" in
+    "$(readlink -f "${_pt_rocm}")"/*) ;;
+    *)
+        echo "ERROR: perftest: ib_write_bw loads ${_pt_hip}, which is not" \
+             "under ${_pt_rocm}" >&2
+        exit 1
+        ;;
+esac
+case "${_pt_libs}" in
+    *'=> /usr/local/lib/libibverbs.so'*) ;;
+    *)
+        echo "ERROR: perftest: ib_write_bw does not load libibverbs from" \
+             "/usr/local/lib, where the SRQ-capable provider is" >&2
+        printf '%s\n' "${_pt_libs}" >&2
+        exit 1
+        ;;
+esac
+# And it is the file the tools were linked against. The image has the
+# archive's rdma-core under /usr as well, which is what the linker takes
+# unless it is told; a build linked against that one and run against this
+# one has the features of the older library and none of the newer's.
+_pt_loaded=$(printf '%s\n' "${_pt_libs}" |
+    awk '$1 ~ /^libibverbs\.so/ { print $3 }')
+if [ "$(readlink -f "${_pt_loaded}")" != "${_pt_linked}" ]; then
+    echo "ERROR: perftest: ib_write_bw loads $(readlink -f "${_pt_loaded}")" \
+         "and ${_pt_stamp} says it was linked against ${_pt_linked}" >&2
+    exit 1
+fi
+
+# Device code is in the binary exactly when it registers a fat binary with
+# the HIP runtime at load, and the stamp has to say the same.
+_pt_syms=$(nm -D --undefined-only "${_pt_prefix}/bin/ib_write_bw")
+case "${_pt_syms}" in
+    *__hipRegisterFatBinary*) _pt_has_kernels=true ;;
+    *) _pt_has_kernels=false ;;
+esac
+if [ "${_pt_has_kernels}" != "${_pt_device_code}" ]; then
+    echo "ERROR: perftest: ${_pt_stamp} says device_code is" \
+         "${_pt_device_code}, and ib_write_bw says ${_pt_has_kernels}" >&2
+    exit 1
+fi
+echo "perftest: ${_pt_commit} with ROCm in ${_pt_prefix}/bin," \
+     "device code ${_pt_device_code}, ahead of the archive's on PATH"
+# end: perftest

@@ -1,0 +1,146 @@
+---
+# Fetch the pinned commit, build it against the guest's ROCm, install it.
+# Included by main.yml when the stamp does not already describe this build.
+
+- name: Install what the perftest build needs
+  ansible.builtin.apt:
+    name: "{{ perftest_setup_packages }}"
+    state: present
+    update_cache: false
+  register: perftest_setup_apt_result
+  retries: "{{ perftest_setup_apt_retries }}"
+  delay: "{{ perftest_setup_apt_delay }}"
+  until: perftest_setup_apt_result is success
+  when: perftest_setup_packages | length > 0
+
+- name: Create the directory the source is fetched into
+  ansible.builtin.file:
+    path: "{{ perftest_setup_source_dir | trim | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# In the guest, as the ionic sources are. The script exits 2 for a fetch that
+# did not complete and 1 for an answer a retry will not change, so only the
+# first is tried again.
+- name: Fetch perftest at the pinned ref
+  ansible.builtin.script:
+    cmd: >-
+      perftest-fetch.sh
+      {{ perftest_setup_repo | trim | quote }}
+      {{ perftest_setup_ref | trim | quote }}
+      {{ perftest_setup_commit | trim | quote }}
+      {{ perftest_setup_source_dir | trim | quote }}
+    executable: /bin/sh
+  register: perftest_setup_fetch
+  retries: 3
+  delay: 10
+  until: perftest_setup_fetch.rc | default(2) != 2
+  changed_when: false
+  failed_when: false
+
+# Before anything is compiled. The script's own line is the message: it
+# names the commit the ref is at, the commit the pin requires and the
+# repository.
+- name: Fail when the fetched commit is not the pinned one
+  vars:
+    perftest_setup_verdict: >-
+      {{ perftest_setup_fetch.stdout_lines | default([])
+         | map('trim') | select('match', '(ok|FAIL): ') | list }}
+  ansible.builtin.assert:
+    that:
+      - perftest_setup_fetch.rc | default(1) == 0
+      - perftest_setup_verdict | length == 1
+      - "perftest_setup_verdict[0] is match('ok: [0-9a-f]{40} ')"
+    fail_msg: >-
+      {{ perftest_setup_verdict | join(' ')
+         | default('perftest-fetch.sh printed no verdict: '
+                   ~ (perftest_setup_fetch.stdout | default(''))
+                   ~ (perftest_setup_fetch.stderr | default(''))
+                   ~ (perftest_setup_fetch.msg | default('')), true) }}
+      The ref and its commit move together: perftest_setup_ref and
+      perftest_setup_commit, which vm-rocm-golden.yml sets from
+      perftest_source_ref and perftest_source_pin. The commit is what
+      "git ls-remote {{ perftest_setup_repo | trim }}
+      {{ perftest_setup_ref | trim }}" prints. To keep building a commit its
+      branch has moved past, name that commit as the ref too.
+    success_msg: "{{ perftest_setup_verdict | join(' ') }}"
+
+- name: Record the commit that was fetched
+  ansible.builtin.set_fact:
+    perftest_setup_built_commit: >-
+      {{ (perftest_setup_fetch.stdout_lines | map('trim')
+          | select('match', 'ok: ') | first).split()[1] }}
+
+# With the configure arguments the build is about to be given, and before
+# it: which infiniband/verbs.h the compiler reads, which libibverbs.so the
+# linker takes and which libibverbs.so.1 the loader gives the result. A
+# guest with a second rdma-core under /usr/local gets three different
+# answers unless the configure line says otherwise, and the script's own
+# header says what that costs. Its verdict line is the message.
+- name: Probe which rdma-core the build compiles, links and loads
+  ansible.builtin.script:
+    cmd: >-
+      perftest-rdma-probe.sh
+      {{ perftest_setup_configure_args | map('quote') | join(' ') }}
+    executable: /bin/sh
+  register: perftest_setup_rdma_probe
+  changed_when: false
+  failed_when: false
+
+- name: Fail unless the build uses one rdma-core throughout
+  vars:
+    perftest_setup_rdma_verdict: >-
+      {{ perftest_setup_rdma_probe.stdout_lines | default([])
+         | map('trim') | select('match', '(ok|FAIL): ') | list }}
+  ansible.builtin.assert:
+    that:
+      - perftest_setup_rdma_probe.rc | default(1) == 0
+      - perftest_setup_rdma_verdict | length == 1
+      - "perftest_setup_rdma_verdict[0] is match('ok: ')"
+    fail_msg: >-
+      {{ perftest_setup_rdma_verdict | join(' ')
+         | default('perftest-rdma-probe.sh printed no verdict: '
+                   ~ (perftest_setup_rdma_probe.stdout | default(''))
+                   ~ (perftest_setup_rdma_probe.stderr | default(''))
+                   ~ (perftest_setup_rdma_probe.msg | default('')), true) }}
+    success_msg: "{{ perftest_setup_rdma_verdict | join(' ') }}"
+
+- name: Record the rdma-core the build uses
+  vars:
+    perftest_setup_rdma_said: >-
+      {{ perftest_setup_rdma_probe.stdout_lines | map('trim') | list }}
+  ansible.builtin.set_fact:
+    perftest_setup_rdma_headers: >-
+      {{ (perftest_setup_rdma_said | select('match', 'headers=') | first)
+         | regex_replace('^headers=', '') }}
+    perftest_setup_rdma_libibverbs: >-
+      {{ (perftest_setup_rdma_said | select('match', 'link=') | first)
+         | regex_replace('^link=', '') }}
+
+# The recipe of the repository's own ROCm workflow: autogen.sh, configure
+# with --enable-rocm and the ROCm tree, make, make install. Three
+# differences. Two are because this runs with no GPU: hipcc is named by its
+# path, not looked for on PATH, so the build either has device code or says
+# HIPCC=no; and the GPU is passed with --with-rocm-arch, because configure
+# would otherwise ask rocm_agent_enumerator, which answers nothing here. The
+# third is LDFLAGS=-L<perftest_setup_rdma_lib_dir>, for the guest's second
+# rdma-core.
+#
+# No PATH is set: gcc is whatever the caller's PATH resolves, which is
+# ccache when the bake put one in front of it. hipcc runs its own clang by
+# path, so that one compile is never cached.
+- name: Build and install perftest
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      export ROCM_PATH={{ perftest_setup_rocm_resolved | quote }}
+      export HIP_PATH={{ perftest_setup_rocm_resolved | quote }}
+      ./autogen.sh
+      ./configure {{ perftest_setup_configure_args | map('quote') | join(' ') }}
+      make -j"$(nproc)"
+      make install
+    chdir: "{{ perftest_setup_source_dir | trim }}"
+    executable: /bin/bash
+  changed_when: true

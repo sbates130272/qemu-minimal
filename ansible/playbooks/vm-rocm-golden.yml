@@ -774,6 +774,47 @@
   roles:
     - role: sdxi_setup
 
+# The archive's perftest is built without ROCm, so its ib_send_bw has no
+# --use_rocm. This builds the tools from source against the ROCm installed
+# above and puts them in /usr/local/bin, ahead of the package's copies in
+# /usr/bin, which stay: vm-quickstart.yml's RDMA test names /usr/bin/ib_send_bw.
+#
+# After ROCm and after the SRQ provider, whose rdma-core in /usr/local is
+# the one these tools are compiled against, linked against and load; the
+# role checks all three are that one before it builds, because left alone
+# the linker takes the archive's. Ahead of the play below so that the C
+# sources go through the bake's compiler cache when it has one. The role
+# needs no device: its defaults say why, and what each variable is.
+- name: Build perftest with ROCm memory support into the guest
+  hosts: all
+  gather_facts: false
+  become: true
+  tags: [install]
+  vars:
+    # Defined on the ROCm play above.
+    rocm_line_pin: *rocm_line_pin
+    # What is built: a repository, a ref in it, and the commit that ref has
+    # to be. The ref is a branch, which its owner can move, so the fetch is
+    # compared with the commit before anything is compiled and a bake fails
+    # when they differ. Moving to another branch means moving all of it:
+    #
+    #   git ls-remote <perftest_source_repo> <perftest_source_ref>
+    #
+    # prints the commit, and the comment that ends its line names the ref it
+    # was read for; tests/test_perftest_setup.py fails when that comment
+    # names another. An empty pin builds the ref unchecked, which
+    # qemu/checks/rocm-golden.sh then refuses.
+    perftest_source_repo: https://github.com/sbates130272/perftest.git
+    perftest_source_ref: feat/rocm-data-validation-legacy
+    perftest_source_pin: &perftest_source_pin "e68c74e910451682ba1dc91b96602fbc7afaa372"  # feat/rocm-data-validation-legacy
+    perftest_setup_repo: "{{ perftest_source_repo }}"
+    perftest_setup_ref: "{{ perftest_source_ref }}"
+    perftest_setup_commit: "{{ perftest_source_pin }}"
+    # The tree itself: the versionless /opt/rocm has bin/ and lib/ only.
+    perftest_setup_rocm_path: "/opt/rocm/core-{{ rocm_line_pin }}"
+  roles:
+    - role: perftest_setup
+
 # After the last thing that compiles, and before the stamp and the slim pass:
 # a failure in either of those still leaves the cache saved, and nothing of
 # ccache is in the guest by the time the image is described or trimmed.
@@ -818,6 +859,7 @@
     ernic_source_pin: *ernic_source_pin
     rocm_line_pin: *rocm_line_pin
     sdxi_source_pin: *sdxi_source_pin
+    perftest_source_pin: *perftest_source_pin
     golden_user: "{{ vm_username | default('ubuntu') }}"
     golden_rocm_path: "/opt/rocm/core-{{ rocm_line_pin }}"
     golden_firmware_dir: /lib/firmware/updates/amdgpu
@@ -865,8 +907,31 @@
         name: rocm_ernic_setup
         tasks_from: naming_check
 
+    # perftest_setup's own record. Compared with the pin here because this
+    # play runs in every bake, the reruns that built nothing included.
+    - name: Read what perftest was built from
+      ansible.builtin.slurp:
+        src: /etc/perftest-rocm.json
+      register: golden_perftest_file
+
+    - name: Check perftest was built at the pinned commit
+      vars:
+        golden_perftest_built: "{{ golden_perftest_file.content | b64decode | from_json }}"
+      ansible.builtin.assert:
+        that:
+          - golden_perftest_built.commit_required == perftest_source_pin
+          - >-
+            perftest_source_pin | length == 0
+            or golden_perftest_built.commit == perftest_source_pin
+        fail_msg: >-
+          /etc/perftest-rocm.json records perftest built at
+          {{ golden_perftest_built.commit }} with
+          "{{ golden_perftest_built.commit_required }}" required, and
+          perftest_source_pin is "{{ perftest_source_pin }}".
+
     - name: Collect the facts for the stamp
       ansible.builtin.set_fact:
+        golden_perftest: "{{ golden_perftest_file.content | b64decode | from_json }}"
         golden_pkg: >-
           {{ dict(golden_dpkg.stdout_lines | map('split', ' ') | map('list')) }}
         golden_fw_files: >-
@@ -892,6 +957,10 @@
           ionic_kernel_pin: "{{ ionic_kernel_pin }}"
           ernic_source_pin: "{{ ernic_source_pin }}"
           sdxi_source_ref: "{{ sdxi_source_pin }}"
+          # Built from source with ROCm memory support, ahead of the
+          # archive's perftest on PATH. The file has the rest.
+          perftest_source_pin: "{{ perftest_source_pin }}"
+          perftest_stamp: /etc/perftest-rocm.json
           # Built from ernic_source_pin. The device is root-only upstream;
           # here members of this group may open it.
           p4_client: /usr/local/bin/p4_fp8_client

@@ -60,6 +60,79 @@ All notable changes to this project will be documented in this file.
     password and passwordless sudo. This release keeps other machines away
     from the port; closing the login needs a bake change and a new image.
 
+### Added
+
+- **The golden guest carries a perftest built with ROCm memory support.**
+  Ubuntu's `perftest` is built without ROCm, so its `ib_send_bw` has no
+  `--use_rocm`. A new role, `perftest_setup`, builds the tools from source
+  against the guest's ROCm and installs them in `/usr/local/bin`, where a
+  bare `ib_send_bw` finds them first; the archive's package stays in
+  `/usr/bin`, and `vm-quickstart.yml`'s RDMA test, which names
+  `/usr/bin/ib_send_bw`, runs what it always ran. The source is
+  `sbates130272/perftest`, branch `feat/rocm-data-validation-legacy`, at
+  `e68c74e`: the head of linux-rdma/perftest#419, which adds
+  `--data_validation` for GPU memory to `ib_write_bw` and `ib_read_bw`.
+  - *The repository, the ref and the commit are variables*
+    (`perftest_setup_repo`, `_ref`, `_commit`), set by `vm-rocm-golden.yml`
+    from `perftest_source_repo`, `perftest_source_ref` and
+    `perftest_source_pin`. The fetch is compared with the commit before
+    anything is compiled, so **a bake fails when the branch has moved**,
+    naming both commits. An empty commit turns the check off, and the
+    guest check then refuses the image.
+  - *It needs no device*, so it runs in the bake: hipcc is told its GPU
+    (`perftest_setup_rocm_arch`, `gfx1250`) because a bake cannot ask one,
+    and left to itself hipcc 10.1 compiles for gfx906.
+  - *It is linked against the rdma-core the guest loads*, which has to be
+    said: the image has the archive's rdma-core 61 under `/usr` and
+    rocm-ernic's 66 under `/usr/local`, the compiler reads the second one's
+    headers and the linker's default is the first one's library. On two
+    guests of the published image the build without it failed to link
+    (``undefined reference to `ibv_alloc_buf'``); with
+    `LDFLAGS=-L/usr/local/lib` it built in 18.76 s on 8 vCPUs. The role
+    adds that from `perftest_setup_rdma_lib_dir`, and
+    `perftest-rdma-probe.sh` stops the build beforehand unless the headers,
+    the library linked and the library loaded are one rdma-core. The
+    configure line is the one that built on the guests; the variable and
+    the probe around it have run on the dev host against an rdma-core 66
+    tree, not yet on a guest.
+  - `/etc/perftest-rocm.json` records the build, `~/WELCOME.md` describes
+    it, and `qemu/checks/rocm-golden.sh` asserts which copy a bare name
+    runs in a non-login shell, a login shell and under sudo, that the help
+    offers `--use_rocm` and `--data_validation`, that the tools link the
+    image's ROCm, and that the libibverbs they load is the one they were
+    linked against. `perftest_source_pin` joins the bake's compiler-cache
+    key.
+  - **The guest check now fails an image baked before this**, for want of
+    `/etc/perftest-rocm.json`. The lanes here run it against a fresh bake;
+    batesste-ci-images runs it against the published image and has to take
+    this version of the check together with an image that has the build.
+  - *Not yet run in a bake.* It is not in the image the fleet files pull
+    until one is published from a commit that has it and `<backing-ref>`
+    moves.
+- **An optional test of RDMA with GPU memory**, the last play of
+  `vm-quickstart.yml`: `ib_write_bw --use_rocm=0 --use_rocm_dmabuf
+  --data_validation` between the first and last guest. Off unless
+  `-e quickstart_rocm_rdma=true`; `qemu-tool quick-start` has no flag for
+  it and no workflow sets it. `ib_write_bw` because `--data_validation` is
+  for the WRITE and READ verbs; `ib_send_bw` lists the flag and refuses it.
+  It is off because **on the default stack the transfer does not work**,
+  measured on two guests on 2026-11-17:
+  - `--use_rocm` alone fails at registration, in the guest and on both
+    sides: `Couldn't allocate MR with error=14`. The NIC's server is never
+    asked, so no QEMU image changes it.
+  - `--use_rocm --use_rocm_dmabuf` registers, and the first work request
+    fails: `Failed status-remote access error (10): wr_id 0 syndrom 0x9`,
+    with `could not gather 65536 bytes` in the NIC server's log. The NIC
+    cannot read the GPU's memory, which is one vfio-user device reaching
+    another's BAR on stock QEMU. Not tried on the fork QEMU image.
+  - `--data_validation` with GPU memory is therefore not reached. It
+    passes on host memory, and with `PERFTEST_ROCM_HOST_ALLOC=1` (a buffer
+    in host memory the GPU can address) both host-staged and with the live
+    kernel on the GPU: `VALIDATION: PASSED - 7 chunks, 58720256 bytes`.
+
+  The play passes `--use_rocm_dmabuf` because that is the form that reaches
+  the NIC; in that form it has not been run.
+
 ### Changed
 
 - **`sbates130272.batesste` is pinned at 3.4.0** (was 3.3.1). It is a

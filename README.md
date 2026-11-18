@@ -47,6 +47,7 @@
 [![Golden amdgpu](https://img.shields.io/badge/amdgpu--dkms-31.60-blueviolet?style=flat-square)](ansible/playbooks/vm-rocm-golden.yml)
 [![Golden ernic driver](https://img.shields.io/badge/ionic%20%2B%20SRQ%20%2B%20P4-90434a2-blueviolet?style=flat-square)](https://github.com/ROCm/rocm-ernic/commit/90434a237232275fc8002cb3a6b5121ba836c594)
 [![Golden SDXI driver](https://img.shields.io/badge/sdxi-dfd76f2-blueviolet?style=flat-square)](https://github.com/ROCm/rocm-systems/commit/dfd76f23f6f10561333fc0a9a9f23e9f3b255c04)
+[![Golden perftest](https://img.shields.io/badge/perftest%20%2B%20ROCm-e68c74e-blueviolet?style=flat-square)](https://github.com/sbates130272/perftest/commit/e68c74e910451682ba1dc91b96602fbc7afaa372)
 
 [![Quick-start Build](https://img.shields.io/badge/quick--start-20261112.gdca6903-success?style=flat-square&logo=docker)](https://hub.docker.com/u/sbates130272)
 
@@ -218,6 +219,50 @@ the guest lists them. That behaviour is in the image the fleet files pull,
 `qemu-tool quick-start --help` has the rest, and `qemu-tool man` has all of
 it. For more than two guests see [A fleet of your own](#a-fleet-of-your-own),
 which is the same stack generator with a larger `<vm-count>`.
+
+### RDMA with GPU memory
+
+Ubuntu's `perftest` is built without ROCm, so its `ib_send_bw` has no
+`--use_rocm`. The golden bake builds perftest from source against the
+guest's ROCm and installs it in `/usr/local/bin`, where it is what a bare
+`ib_send_bw` runs; the archive's build stays in `/usr/bin`, and is what the
+RDMA test above keeps running. The source is
+[sbates130272/perftest](https://github.com/sbates130272/perftest) at a
+pinned commit of `feat/rocm-data-validation-legacy`, which also gives
+`ib_write_bw` and `ib_read_bw` `--data_validation` for GPU memory. The
+repository, the ref and the commit are `perftest_source_repo`,
+`perftest_source_ref` and `perftest_source_pin` in
+[`vm-rocm-golden.yml`](ansible/playbooks/vm-rocm-golden.yml), and the
+[`perftest_setup`](ansible/playbooks/roles/perftest_setup/defaults/main.yml)
+role's defaults say what else can be set.
+
+**That is in an image baked from this checkout, not yet in the one the
+fleet files pull**, which was published before it: there `ib_send_bw` is the
+archive's. `cat /etc/perftest-rocm.json` in a guest says which it has.
+
+There is a test of it, off by default because on the default stack it
+fails. `--use_rocm` has the NIC address GPU memory, and with both devices
+emulated that is one vfio-user server reaching into another's BAR, which
+stock QEMU does not pass on: measured on two guests, `--use_rocm
+--use_rocm_dmabuf` registers the buffer and the first work request ends in
+`remote access error`, and `--use_rocm` alone is refused at registration
+(`Couldn't allocate MR with error=14`). With `PERFTEST_ROCM_HOST_ALLOC=1`,
+which puts the buffer in host memory the GPU can address, the transfer and
+the validation pass. To run `ib_write_bw --use_rocm=0 --use_rocm_dmabuf
+--data_validation` between the two guests of a stack `quick-start` brought
+up and tested:
+
+```bash
+cd ansible && ansible-playbook \
+    -i /var/lib/qemu-tool/stacks/quickstart/fleet-inventory.yml \
+    playbooks/vm-quickstart.yml \
+    --private-key /var/lib/qemu-tool/quickstart-key/id_rsa \
+    -e quickstart_rocm_rdma=true
+```
+
+It passes when one side prints `VALIDATION: PASSED`. A run that is timed
+out leaves the guests' RDMA devices needing the stack recreated. `AGENTS.md`
+has what each run measured and what each failure means.
 
 ## System-wide Install (Debian/Ubuntu)
 
@@ -832,7 +877,7 @@ else, so the shared work has exactly one definition.
 | Playbook | Description |
 |---------|-------------|
 | `vm-basic.yml` | User setup, favourite packages, git config |
-| `vm-rocm-golden.yml` | `vm-basic.yml`, plus the pinned mainline kernel, ROCm, the rocjitsu GPU firmware and patched amdgpu driver, the [rocm-ernic][rocm-ernic] RDMA NIC with SRQ and P4, and SDXI. `--tags configure` sets up the NIC on a live guest and `--tags test` runs the GPU workloads; see [the live stages](#the-live-stages) |
+| `vm-rocm-golden.yml` | `vm-basic.yml`, plus the pinned mainline kernel, ROCm, the rocjitsu GPU firmware and patched amdgpu driver, the [rocm-ernic][rocm-ernic] RDMA NIC with SRQ and P4, SDXI, and perftest built with ROCm memory support. `--tags configure` sets up the NIC on a live guest and `--tags test` runs the GPU workloads; see [the live stages](#the-live-stages) |
 
 Each bake ends with one slim pass, which deletes the scratch the bake left
 behind — the apt cache and package lists, DKMS build trees, archived journals,

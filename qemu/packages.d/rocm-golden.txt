@@ -75,9 +75,10 @@ rdma-core
 ibverbs-utils
 libibverbs-dev
 
-# perftest with ROCm memory support has to be built in-guest (see the perftest
-# entry below: the archive build carries no --use_rocm).  These are what that
-# build needs on top of the rdma-core dependencies above.  Without
+# perftest with ROCm memory support is built in the guest, by the bake: the
+# perftest_setup role, from a pinned commit, into /usr/local/bin (see the
+# perftest entry below: the archive build carries no --use_rocm).  These are
+# what that build needs on top of the rdma-core dependencies above.  Without
 # libibumad-dev configure hard-errors; the rest fail earlier or less legibly.
 #
 # autoconf and automake are here for the same build -- autogen.sh needs them
@@ -93,7 +94,10 @@ libpci-dev
 # ib_send_bw and friends, for jobs that move traffic over the ionic queue
 # pairs rather than only assert the modules built.  Built without ROCm memory
 # support: --use_rocm needs perftest compiled against a ROCm the archive build
-# does not carry.
+# does not carry.  It stays beside the ROCm build the bake adds, as the stock
+# tools in /usr/bin: /usr/local/bin precedes it on PATH, so a bare ib_send_bw
+# is the ROCm build, and vm-quickstart.yml's RDMA test names
+# /usr/bin/ib_send_bw to keep running this one.
 perftest
 
 # The GPU half's build and test dependencies, pre-installed because every

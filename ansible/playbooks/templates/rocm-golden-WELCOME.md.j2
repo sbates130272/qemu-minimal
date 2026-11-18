@@ -18,6 +18,7 @@ device.
     rdma-core     {{ golden_pkg['rdma-core'] | default('unknown') }} from the archive
     rocm-ernic    {{ ernic_source_pin }}
     rocm-sdxi     {{ sdxi_source_pin }}
+    perftest      {{ golden_perftest.commit }}  ({{ golden_perftest.ref }}, built with ROCm, in {{ golden_perftest.prefix }}/bin)
 
 `/etc/rocm-golden-guest.json` has the same facts, machine-readable.
 
@@ -119,6 +120,51 @@ the server granted.
 The Ethernet sides come up as `rocm-ernic0`, `rocm-ernic1` and so on, and
 `rocm-ernic-netcfg.service` addresses each at boot from its own MAC. Resolve
 the IB device names from `ibv_devinfo -l` instead of assuming them.
+
+## RDMA with GPU memory
+
+`ib_send_bw` and the other perftest tools on PATH are built from source with
+ROCm memory support, from `{{ golden_perftest.ref }}` of
+{{ golden_perftest.repo }}. They live in `{{ golden_perftest.prefix }}/bin`,
+ahead of the archive's perftest, which is still in `/usr/bin` and has no
+`--use_rocm`. `/etc/perftest-rocm.json` records the build.
+
+    ib_write_bw --help | grep -E 'use_rocm|data_validation'
+
+`--use_rocm=0` puts the test buffer in the memory of GPU 0 and registers it
+with the RDMA device; `--data_validation` checks every byte that arrives.
+Validation is for `ib_write_bw` and `ib_read_bw` on an RC connection, with
+`-t` of at least 32 and the same on both sides. `ib_send_bw` lists the flag
+and refuses it. For a WRITE the server prints the verdict, for a READ the
+client, and the line to look for is `VALIDATION: PASSED`.
+
+    ib_write_bw -d DEV --use_rocm=0 --use_rocm_dmabuf --data_validation -t 128            # one VM
+    ib_write_bw -d DEV --use_rocm=0 --use_rocm_dmabuf --data_validation -t 128 PEER_IP    # the other
+
+{% if golden_perftest.device_code %}
+The check runs on the GPU by default, in a kernel built for
+{{ golden_perftest.rocm_arch }}. `PERFTEST_ROCM_VALIDATION=staged` copies the
+buffer back and compares it on the host after the run instead, and
+`PERFTEST_ROCM_VALIDATION_BLOCKS` and `PERFTEST_ROCM_VALIDATION_THREADS`
+shrink the kernel's launch.
+{% else %}
+This build has no GPU kernel, so the check copies the buffer back and
+compares it on the host after the run.
+{% endif %}
+
+Both need a VM with a NIC and a GPU, the GPU bound as above.
+`--use_rocm_dmabuf` registers the GPU buffer as a dma-buf. Without it, on
+the emulated devices this was measured on, the registration is refused in
+the guest before the NIC is asked (`Couldn't allocate MR with error=14`).
+
+Whether the transfer then works depends on the NIC being able to reach the
+GPU's memory. On emulated devices that is one vfio-user device addressing
+another's BAR, which stock QEMU does not pass on: there the buffer
+registers and the first work request fails with `remote access error`.
+`PERFTEST_ROCM_HOST_ALLOC=1`, with `--use_rocm` and without
+`--use_rocm_dmabuf`, allocates the buffer in host memory the GPU can
+address; a transfer that passes only with it set has a NIC that cannot
+reach VRAM and is otherwise sound.
 
 ## If the VM has SDXI engines
 

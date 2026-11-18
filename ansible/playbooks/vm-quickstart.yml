@@ -570,3 +570,335 @@
         dest: "{{ quickstart_artifacts_dir }}/{{ inventory_hostname }}.md"
         mode: "0644"
       delegate_to: localhost
+
+# ---------------------------------------------------------------------------
+# RDMA with GPU memory (optional, off by default)
+# ---------------------------------------------------------------------------
+#
+# ib_write_bw from guest 1 to the last guest with the buffers in GPU memory
+# on both sides (--use_rocm, registered as a dma-buf with --use_rocm_dmabuf)
+# and every byte checked on arrival (--data_validation). OFF unless
+# quickstart_rocm_rdma is true, and last in the file, so a default run does
+# exactly what it did and the facts above are written before this can fail:
+#
+#   ansible-playbook -i <stack dir>/fleet-inventory.yml \
+#       playbooks/vm-quickstart.yml --private-key <key> \
+#       -e quickstart_rocm_rdma=true
+#
+# It is off because on the stacks this repository ships it FAILS, and how
+# was measured on the default stack (stock QEMU, 2026-11-17, two guests):
+#
+#   --use_rocm alone             ibv_reg_mr of the hipMalloc'd buffer is
+#                                refused in the guest, on both sides,
+#                                "Couldn't allocate MR with error=14". The
+#                                NIC's server is never asked, so no QEMU
+#                                image changes this one.
+#   --use_rocm --use_rocm_dmabuf registers; the first work request fails,
+#                                "Failed status-remote access error (10):
+#                                wr_id 0 syndrom 0x9", and the sender's NIC
+#                                server logs "could not gather 65536 bytes".
+#                                This is the NIC failing to reach the GPU's
+#                                memory: one vfio-user server DMA-ing into
+#                                another's BAR, which needs a QEMU patch
+#                                only the fork image carries. Untried there.
+#   PERFTEST_ROCM_HOST_ALLOC=1   with --use_rocm alone: passes, staged and
+#                                live. The buffer is host memory the GPU can
+#                                address, not VRAM, so it shows everything
+#                                but the NIC reaching the GPU works.
+#
+# So the play runs the dma-buf form, the one that reaches the NIC. On a
+# stack that pins stock QEMU a red result with the lines above is the known
+# one. AGENTS.md, "perftest with ROCm memory support", has the rest. The
+# run that passes is the last row:
+#
+#   -e '{"quickstart_rocm_rdma": true, "quickstart_rocm_rdma_dmabuf": false,
+#        "quickstart_rocm_rdma_env": {"PERFTEST_ROCM_HOST_ALLOC": "1",
+#                                     "PERFTEST_ROCM_VALIDATION": "staged"}}'
+#
+# Those command lines passed through this play before it had the dma-buf
+# variable; the play has not run since. Its verdict now says the buffers
+# were host memory. Exporting a host-mapped buffer as a dma-buf has not been
+# tried, hence the second variable.
+#
+# It needs the perftest the golden bake builds, in /usr/local/bin; the
+# archive's in /usr/bin has no --use_rocm, and the play says so instead of
+# running it. It needs the GPU bound on both guests, which the first play of
+# this file does. Further HIP processes in the same boot as that play's
+# vector_add are fine: a dozen ran on each guest, two at once, with no hang.
+#
+# Four things to know before turning it on:
+#
+#   - The server runs as root in a transient system unit with only the
+#     environment given here, and the client as the login user over SSH. A
+#     HIP failure on one side only is read with that in mind.
+#   - The client runs under timeout(1). A perftest that is killed mid-run
+#     leaves the guest's RDMA device broken until the stack is recreated
+#     (docker compose down and up), so a run that times out costs a restart.
+#     Every failure above ended on its own within seconds.
+#   - Validation is host-staged by default (PERFTEST_ROCM_VALIDATION=staged):
+#     the buffer is copied back once and compared on the host. That is a
+#     choice, not a need: the live path, a kernel resident on the GPU,
+#     passed on rocjitsu too. Set quickstart_rocm_rdma_env to {} for it.
+#   - perftest exits 1 after a transfer that completed when its CPU-frequency
+#     calibration is noisy ("Can't produce a report"). That is not a failed
+#     transfer, and a rerun usually passes.
+- name: Move validated RDMA traffic between GPU memory on two guests
+  hosts: fleet[0]
+  gather_facts: false
+  become: false
+  tags: [rocm_rdma]
+  vars:
+    # The gate. Everything below is read only when it is true.
+    quickstart_rocm_rdma: false
+    # ib_write_bw or ib_read_bw: the two verbs --data_validation supports.
+    # For a WRITE the server validates and prints the verdict; for a READ
+    # the client does.
+    quickstart_rocm_rdma_tool: ib_write_bw
+    quickstart_rocm_rdma_bin_dir: /usr/local/bin
+    # The ROCm device id handed to --use_rocm.
+    quickstart_rocm_rdma_gpu: 0
+    # Register the GPU buffer as a dma-buf (--use_rocm_dmabuf). Without it
+    # the registration is a plain ibv_reg_mr of a GPU address, which the
+    # guest's kernel refuses before the NIC is involved.
+    quickstart_rocm_rdma_dmabuf: true
+    # -t has to be at least 32 and the same on both sides, and -n at least
+    # 32. 64 KiB a message is far below the 16 MiB at which the mesh drops a
+    # connection.
+    quickstart_rocm_rdma_options: "--data_validation -t 128 -n 1000 -s 65536"
+    quickstart_rocm_rdma_env:
+      PERFTEST_ROCM_VALIDATION: staged
+    # Not perftest's default 18515, which the RDMA test above listens on.
+    quickstart_rocm_rdma_port: 18516
+    quickstart_rocm_rdma_timeout: 600
+    quickstart_rocm_rdma_server: "{{ groups['fleet'][-1] }}"
+    quickstart_rocm_rdma_unit: quickstart-rocm-rdma
+    quickstart_rocm_rdma_log: /var/tmp/quickstart-rocm-rdma-server.log
+    quickstart_rocm_rdma_exe: >-
+      {{ quickstart_rocm_rdma_bin_dir }}/{{ quickstart_rocm_rdma_tool }}
+    quickstart_rocm_rdma_memory: >-
+      {{ ['--use_rocm=' ~ quickstart_rocm_rdma_gpu]
+         + (['--use_rocm_dmabuf'] if quickstart_rocm_rdma_dmabuf | bool else []) }}
+    # What the buffers really were, for the verdict: with
+    # PERFTEST_ROCM_HOST_ALLOC set they are host memory, not VRAM.
+    quickstart_rocm_rdma_where: >-
+      {{ 'host memory mapped for the GPU (PERFTEST_ROCM_HOST_ALLOC is set), not VRAM,'
+         if 'PERFTEST_ROCM_HOST_ALLOC' in quickstart_rocm_rdma_env
+         else 'GPU memory' }}
+    quickstart_rocm_rdma_setenv: >-
+      {{ quickstart_rocm_rdma_env | dict2items
+         | map(attribute='key') | zip(quickstart_rocm_rdma_env | dict2items
+                                      | map(attribute='value'))
+         | map('join', '=') | list }}
+  tasks:
+    - name: Skip the GPU-memory RDMA test unless it was asked for
+      ansible.builtin.meta: end_play
+      when: not (quickstart_rocm_rdma | bool)
+
+    - name: Assert the test was given something it can run
+      ansible.builtin.assert:
+        that:
+          - groups['fleet'] | length >= 2
+          - quickstart_rocm_rdma_tool in ['ib_write_bw', 'ib_read_bw']
+        fail_msg: >-
+          The GPU-memory RDMA test needs two guests (this fleet has
+          {{ groups['fleet'] | length }}) and ib_write_bw or ib_read_bw, the
+          verbs --data_validation supports (asked for
+          {{ quickstart_rocm_rdma_tool }}).
+
+    # The help text, which needs no device. The archive's perftest has
+    # neither flag, and a guest baked before the golden image built its own
+    # has only that one.
+    - name: Check both guests have a perftest built with ROCm
+      ansible.builtin.shell:
+        cmd: |
+          exe={{ quickstart_rocm_rdma_exe | quote }}
+          if [ ! -x "$exe" ]; then
+            echo "$exe is not there: this guest has no perftest built with ROCm" >&2
+            exit 1
+          fi
+          help=$("$exe" --help 2>&1 || true)
+          for flag in '--use_rocm=<rocm device id>' '--data_validation ' {{
+              quickstart_rocm_rdma_dmabuf | bool | ternary("'--use_rocm_dmabuf'", '') }}; do
+            case "$help" in
+              *"$flag"*) ;;
+              *) echo "$exe does not offer $flag" >&2; exit 1 ;;
+            esac
+          done
+        executable: /bin/bash
+      delegate_to: "{{ item }}"
+      loop: "{{ [inventory_hostname, quickstart_rocm_rdma_server] }}"
+      changed_when: false
+
+    # "loaded" is amdgpu resident with the emulation parameters and every
+    # GPU bound. Anything else and hipGetDeviceCount finds nothing.
+    - name: Check the GPU is bound on both guests
+      ansible.builtin.command:
+        cmd: /usr/local/bin/amdgpu-probe --status
+      delegate_to: "{{ item }}"
+      loop: "{{ [inventory_hostname, quickstart_rocm_rdma_server] }}"
+      register: quickstart_rocm_rdma_probe
+      changed_when: false
+      failed_when: quickstart_rocm_rdma_probe.stdout | trim != 'loaded'
+
+    # Asked of each guest, as the first play does: the name is not assumed.
+    - name: Find the IB device on both guests
+      ansible.builtin.command:
+        cmd: ibv_devinfo -l
+      delegate_to: "{{ item }}"
+      loop: "{{ [inventory_hostname, quickstart_rocm_rdma_server] }}"
+      register: quickstart_rocm_rdma_ibv
+      changed_when: false
+      failed_when: >-
+        quickstart_rocm_rdma_ibv.stdout_lines[1:]
+        | map('trim') | reject('equalto', '') | list | length == 0
+
+    - name: Record the IB device names
+      ansible.builtin.set_fact:
+        quickstart_rocm_rdma_client_dev: >-
+          {{ quickstart_rocm_rdma_ibv.results[0].stdout_lines[1:]
+             | map('trim') | reject('equalto', '') | list | first }}
+        quickstart_rocm_rdma_server_dev: >-
+          {{ quickstart_rocm_rdma_ibv.results[1].stdout_lines[1:]
+             | map('trim') | reject('equalto', '') | list | first }}
+
+    - name: Clear any server unit left by an earlier run
+      become: true
+      ansible.builtin.shell:
+        cmd: |
+          systemctl stop {{ quickstart_rocm_rdma_unit }}.service 2>/dev/null || true
+          systemctl reset-failed {{ quickstart_rocm_rdma_unit }}.service 2>/dev/null || true
+          rm -f {{ quickstart_rocm_rdma_log | quote }}
+        executable: /bin/bash
+      delegate_to: "{{ quickstart_rocm_rdma_server }}"
+      changed_when: false
+      failed_when: false
+
+    # A transient system unit, for the reason the RDMA test above gives: a
+    # perftest server started over SSH exits with the session. Its output
+    # goes to a file, because for a WRITE the server is the side that prints
+    # the verdict.
+    - name: Start the server as a transient unit
+      become: true
+      ansible.builtin.command:
+        argv: >-
+          {{ ['systemd-run', '--unit=' ~ quickstart_rocm_rdma_unit, '--collect',
+              '--property=StandardOutput=file:' ~ quickstart_rocm_rdma_log,
+              '--property=StandardError=inherit']
+             + (quickstart_rocm_rdma_setenv | map('regex_replace', '^', '--setenv=') | list)
+             + [quickstart_rocm_rdma_exe, '-d', quickstart_rocm_rdma_server_dev,
+                '-p', quickstart_rocm_rdma_port | string]
+             + quickstart_rocm_rdma_memory
+             + (quickstart_rocm_rdma_options | split) }}
+      delegate_to: "{{ quickstart_rocm_rdma_server }}"
+      changed_when: true
+
+    # Read the listening socket; do not connect to it. See the RDMA test.
+    - name: Wait for the server to listen
+      become: true
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail;
+          ss -ltn 'sport = :{{ quickstart_rocm_rdma_port }}' | grep LISTEN
+        executable: /bin/bash
+      delegate_to: "{{ quickstart_rocm_rdma_server }}"
+      register: quickstart_rocm_rdma_listening
+      until: quickstart_rocm_rdma_listening.rc == 0
+      retries: 60
+      delay: 2
+      changed_when: false
+      failed_when: false
+
+    # Not failed here whatever it returns: the server's side of the story
+    # is read first, and the verdict is given once, below.
+    - name: Run the client against the peer
+      ansible.builtin.command:
+        argv: >-
+          {{ ['timeout', quickstart_rocm_rdma_timeout | string, 'env']
+             + quickstart_rocm_rdma_setenv
+             + [quickstart_rocm_rdma_exe, '-d', quickstart_rocm_rdma_client_dev,
+                '-p', quickstart_rocm_rdma_port | string]
+             + quickstart_rocm_rdma_memory
+             + (quickstart_rocm_rdma_options | split)
+             + [hostvars[quickstart_rocm_rdma_server].fleet_guest_ip] }}
+      register: quickstart_rocm_rdma_client
+      changed_when: false
+      failed_when: false
+      when: quickstart_rocm_rdma_listening.rc == 0
+
+    # It exits on its own once the client has finished. It is not stopped:
+    # stopping a perftest mid-run is what breaks the RDMA device. Waited for
+    # as long as the client was allowed: the verdict goes to a file, which
+    # is written when the server exits, and for a WRITE the server copies
+    # the buffer back from the GPU and compares it after the client is done.
+    # A server no client reached is given one look and left.
+    - name: Wait for the server to finish
+      become: true
+      ansible.builtin.command:
+        cmd: systemctl is-active {{ quickstart_rocm_rdma_unit }}.service
+      delegate_to: "{{ quickstart_rocm_rdma_server }}"
+      register: quickstart_rocm_rdma_active
+      until: quickstart_rocm_rdma_active.stdout | trim not in ['active', 'activating']
+      retries: >-
+        {{ (quickstart_rocm_rdma_timeout | int // 2)
+           if quickstart_rocm_rdma_listening.rc == 0 else 1 }}
+      delay: 2
+      changed_when: false
+      failed_when: false
+
+    - name: Read what the server printed
+      become: true
+      ansible.builtin.shell:
+        cmd: |
+          cat {{ quickstart_rocm_rdma_log | quote }} 2>/dev/null || true
+          echo "--- journal"
+          journalctl --no-pager -n 40 -u {{ quickstart_rocm_rdma_unit }}.service 2>/dev/null || true
+        executable: /bin/bash
+      delegate_to: "{{ quickstart_rocm_rdma_server }}"
+      register: quickstart_rocm_rdma_server_out
+      changed_when: false
+      failed_when: false
+
+    - name: Show both sides
+      ansible.builtin.debug:
+        msg:
+          server: "{{ quickstart_rocm_rdma_server_out.stdout_lines | default([]) }}"
+          client: >-
+            {{ (quickstart_rocm_rdma_client.stdout_lines | default([]))
+               + (quickstart_rocm_rdma_client.stderr_lines | default([])) }}
+          client_rc: "{{ quickstart_rocm_rdma_client.rc | default('not run') }}"
+
+    # The VALIDATION line, not the exit status: perftest's server does not
+    # fail its exit code on a failed validation. PASSED has to be there, from
+    # whichever side validates, and no other verdict from either.
+    - name: Assert the transfer ran and every byte validated
+      vars:
+        quickstart_rocm_rdma_said: >-
+          {{ (quickstart_rocm_rdma_server_out.stdout | default(''))
+             ~ "\n" ~ (quickstart_rocm_rdma_client.stdout | default(''))
+             ~ "\n" ~ (quickstart_rocm_rdma_client.stderr | default('')) }}
+      ansible.builtin.assert:
+        that:
+          - quickstart_rocm_rdma_listening.rc == 0
+          - quickstart_rocm_rdma_client.rc | default(1) == 0
+          - "'VALIDATION: PASSED' in quickstart_rocm_rdma_said"
+          - "quickstart_rocm_rdma_said is not search('VALIDATION: (FAILED|WARNING|ERROR)')"
+        fail_msg: >-
+          {{ quickstart_rocm_rdma_tool }} with
+          {{ quickstart_rocm_rdma_memory | join(' ') }} and
+          --data_validation did not pass between
+          {{ inventory_hostname }} and {{ quickstart_rocm_rdma_server }}
+          (server listening: {{ quickstart_rocm_rdma_listening.rc == 0 }},
+          client exit: {{ quickstart_rocm_rdma_client.rc | default('not run') }}).
+          Both sides' output is in the task above. "Couldn't allocate MR
+          with error=14" is the guest refusing to register a GPU address
+          (--use_rocm without --use_rocm_dmabuf); "remote access error" on
+          the first work request is the NIC failing to reach the GPU's
+          memory, the known result on a stack that pins stock QEMU; "Can't
+          produce a report" is perftest's calibration, not the transfer. If
+          the client was timed out or killed, recreate the stack before
+          anything else uses the RDMA device. AGENTS.md, "perftest with ROCm
+          memory support", has what was measured.
+        success_msg: >-
+          {{ quickstart_rocm_rdma_tool }} moved validated data between
+          {{ quickstart_rocm_rdma_where }} on {{ inventory_hostname }} and
+          {{ quickstart_rocm_rdma_server }}.

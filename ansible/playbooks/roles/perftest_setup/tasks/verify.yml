@@ -1,0 +1,109 @@
+---
+# What the installed tools are, read off the tools. Needs no device: nothing
+# here opens a NIC or a GPU.
+#
+# "--help" is the one thing that is run. perftest prints its usage and
+# returns while it is still parsing arguments, before it looks for an RDMA
+# device, and a program that carries a HIP kernel registers it at load
+# without touching the GPU (measured with ROCm 10.1 in a container that had
+# no device node). So a tool that cannot print its help in a bake cannot
+# start on a guest with no GPU either, and that is worth failing a bake
+# over: the same binaries are what a guest with only a NIC runs.
+
+- name: Check the installed perftest tools
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      bin={{ (perftest_setup_prefix | trim ~ '/bin') | quote }}
+      rocm={{ perftest_setup_rocm_resolved | quote }}
+      for tool in {{ perftest_setup_tools | map('quote') | join(' ') }}; do
+        if [ ! -x "$bin/$tool" ]; then
+          echo "$bin/$tool is missing: make install did not put it there" >&2
+          exit 1
+        fi
+      done
+
+      # The flags the build exists for, by the text usage() prints.
+      offers() {
+        help=$("$bin/$1" --help 2>&1 || true)
+        case "$help" in
+          *"$2"*) ;;
+          *)
+            echo "$bin/$1 --help does not offer $2" >&2
+            printf '%s\n' "$help" | tail -5 >&2
+            exit 1
+            ;;
+        esac
+      }
+      for tool in ib_send_bw ib_write_bw ib_read_bw; do
+        offers "$tool" '--use_rocm=<rocm device id>'
+        {% if perftest_setup_rocm_dmabuf | bool %}
+        offers "$tool" '--use_rocm_dmabuf'
+        {% endif %}
+      done
+      # Listed by every bandwidth tool; honoured by these two.
+      offers ib_write_bw '--data_validation '
+      offers ib_read_bw '--data_validation '
+
+      # Linked against the guest's ROCm, and every library found.
+      # No "grep -q" at the end of a pipe in this script: under pipefail a
+      # reader that leaves early turns a match into a failure.
+      libs=$(ldd "$bin/ib_write_bw")
+      case "$libs" in
+        *'not found'*)
+          echo "$bin/ib_write_bw has a library the loader cannot find:" >&2
+          printf '%s\n' "$libs" >&2
+          exit 1
+          ;;
+      esac
+      hip=$(printf '%s\n' "$libs" | awk '$1 ~ /^libamdhip64\.so/ { print $3 }')
+      if [ -z "$hip" ]; then
+        echo "$bin/ib_write_bw is not linked against libamdhip64" >&2
+        exit 1
+      fi
+      case "$(readlink -f "$hip")" in
+        "$(readlink -f "$rocm")"/*) ;;
+        *)
+          echo "$bin/ib_write_bw loads $hip, which is not under $rocm" >&2
+          exit 1
+          ;;
+      esac
+
+      # Which libibverbs the loader gives the tool, as a real path.
+      verbs=$(printf '%s\n' "$libs" | awk '$1 ~ /^libibverbs\.so/ { print $3 }')
+      case "$verbs" in
+        /*) echo "libibverbs=$(readlink -f "$verbs")" ;;
+        *)
+          echo "$bin/ib_write_bw is not linked against libibverbs" >&2
+          exit 1
+          ;;
+      esac
+
+      # Device code is in the binary exactly when it registers a fat binary
+      # with the HIP runtime at load.
+      syms=$(nm -D --undefined-only "$bin/ib_write_bw")
+      case "$syms" in
+        *__hipRegisterFatBinary*) echo "device_code=true" ;;
+        *) echo "device_code=false" ;;
+      esac
+    executable: /bin/bash
+  register: perftest_setup_check
+  changed_when: false
+
+- name: Record whether the tools carry device code and what they load
+  ansible.builtin.set_fact:
+    perftest_setup_device_code: >-
+      {{ 'device_code=true' in perftest_setup_check.stdout_lines }}
+    perftest_setup_loaded_libibverbs: >-
+      {{ (perftest_setup_check.stdout_lines | select('match', 'libibverbs=')
+          | first) | regex_replace('^libibverbs=', '') }}
+
+- name: Assert the tools carry device code exactly when it was asked for
+  ansible.builtin.assert:
+    that:
+      - perftest_setup_device_code | bool == perftest_setup_rocm_kernels | bool
+    fail_msg: >-
+      perftest_setup_rocm_kernels is {{ perftest_setup_rocm_kernels | bool }},
+      and the installed ib_write_bw
+      {{ 'carries' if perftest_setup_device_code | bool else 'does not carry' }}
+      HIP device code. The build did not do what its configure line asked.
