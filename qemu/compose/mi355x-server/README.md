@@ -130,6 +130,14 @@ The first `gen-vm` pulls `<backing-ref>`. `<prom-data-dir>` in the fleet file
 still names `/var/lib/qemu-tool/stacks/mi355x-node/prom-data`, the stack's
 name before it was renamed, so an existing TSDB keeps being used.
 
+The guests' SSH ports (2222 to 2225) and Grafana are published on
+`127.0.0.1`: `qemu-tool ssh stebates-mi355x-1` and the inventory below work
+on the lab node itself, and nothing answers from a workstation. Tunnel in
+(`ssh -L 3000:localhost:3000 <node>`), or set `<publish-bind-addr>` in an
+overlay after reading what that exposes in the
+[default stack's README](../rocm-golden/README.md): on `0.0.0.0` it is root
+in every guest for anyone who can reach the node.
+
 **`compose up` alone leaves the GPUs without firmware.** The guest image
 deliberately omits `ip_discovery.bin` — it is generated from the running
 rocjitsu image and must be installed by Ansible after the stack is up — and

@@ -4,7 +4,7 @@
 # Regenerate after changing qemu/stacks/mi355x-server.xml:
 #   qemu-tool gen-compose --xml qemu/stacks/mi355x-server.xml
 #
-# xml-sha256: 1ab220704b687c7ba5f416d5191d782b864dabd93a28422871c8b9ec59b97861  # pre-commit: ignore
+# xml-sha256: 54a59649c252658f0a258dcca4b0291b67106faa7e2ba76097698b886e2b41ed  # pre-commit: ignore
 
 x-logging: &logging
   driver: json-file
@@ -1816,7 +1816,7 @@ services:
       rocjitsu-1-8:
         condition: service_healthy
     ports:
-      - "2222:2222"
+      - "127.0.0.1:2222:2222"
     entrypoint:
       - /bin/sh
       - -c
@@ -1893,7 +1893,7 @@ services:
       rocjitsu-2-8:
         condition: service_healthy
     ports:
-      - "2223:2222"
+      - "127.0.0.1:2223:2222"
     entrypoint:
       - /bin/sh
       - -c
@@ -1970,7 +1970,7 @@ services:
       rocjitsu-3-8:
         condition: service_healthy
     ports:
-      - "2224:2222"
+      - "127.0.0.1:2224:2222"
     entrypoint:
       - /bin/sh
       - -c
@@ -2047,7 +2047,7 @@ services:
       rocjitsu-4-8:
         condition: service_healthy
     ports:
-      - "2225:2222"
+      - "127.0.0.1:2225:2222"
     entrypoint:
       - /bin/sh
       - -c
@@ -2226,7 +2226,7 @@ services:
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
       - /var/lib/qemu-tool/grafana-data:/var/lib/grafana
     ports:
-      - "0.0.0.0:3000:3000"
+      - "127.0.0.1:3000:3000"
 
   # ---- guest Ethernet wiring ----
   # One short-lived sidecar per ernic. It shares that

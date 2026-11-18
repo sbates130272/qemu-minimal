@@ -227,7 +227,8 @@ class SettingsTable(unittest.TestCase):
         self.assertEqual(fleet_xml.KNOWN_ELEMENTS, tuple(tags))
 
     def test_each_kind_matches_its_field_type(self) -> None:
-        want = {int: {"int"}, bool: {"bool"}, str: {"str", "expand", "port"}}
+        want = {int: {"int"}, bool: {"bool"},
+                str: {"str", "expand", "port", "addr"}}
         defaults = FleetConfig()
         for setting in fleet_xml._SETTINGS:
             kind = type(getattr(defaults, setting.field))

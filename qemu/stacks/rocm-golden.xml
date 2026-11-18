@@ -29,6 +29,25 @@
   <vm-count>2</vm-count>
   <vm-name-prefix>rocm-golden</vm-name-prefix>
 
+  <!-- ── Who can reach the stack ──────────────────────────────────────── -->
+  <!-- The host address every published port binds to: each guest's SSH
+       port and Grafana's.  Loopback, which is also the default, so the
+       stack answers on this host and nowhere else.  To reach it from
+       another machine, tunnel in over SSH, or put it on the LAN from an
+       overlay of your own:
+
+           <publish-bind-addr>0.0.0.0</publish-bind-addr>
+
+       That exposes more than a dashboard.  The guests come from a published
+       image, and both ways into it are public: the key that logs in is
+       published beside the image, and so is the password of its account
+       (<bake-username> and <bake-password> below), which the guest's sshd
+       accepts.  That account has sudo.  Grafana has anonymous admin on.
+       So on 0.0.0.0 anyone who can reach this host has root in every guest
+       and Grafana's admin; one address of this host, in place of 0.0.0.0,
+       limits it to the network that address is on. -->
+  <publish-bind-addr>127.0.0.1</publish-bind-addr>
+
   <!-- ── Container images ─────────────────────────────────────────────── -->
   <!-- One stamp across the first three, which are one batesste-ci-images
        build: QEMU and the device servers speak vfio-user to each other, and

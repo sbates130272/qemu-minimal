@@ -160,6 +160,38 @@ scraped by the exporter. Grafana's port moves automatically if something on
 your machine already has it, and `quick-start` prints the one it chose.
 `--no-metrics` leaves the pair out.
 
+**The guests' SSH ports and Grafana answer on this machine only.** Every port
+a stack publishes is bound to `<publish-bind-addr>`, which is `127.0.0.1`
+unless a fleet file says otherwise. That holds on Docker Engine 28.0 and
+later: earlier engines let a machine on the same network segment reach a
+port published on loopback, and `qemu-tool check` warns when it finds one.
+To use them from another machine, tunnel
+in — `ssh -L 3000:localhost:3000 -L 2222:localhost:2222 <host>` — or put the
+stack on the network with a one-element overlay:
+
+```bash
+cat > lan.xml <<'XML'
+<fleet xmlns="http://qemu-tool/fleet/1.0">
+  <publish-bind-addr>0.0.0.0</publish-bind-addr>
+</fleet>
+XML
+qemu-tool quick-start --xml qemu/stacks/rocm-golden.xml --xml lan.xml
+```
+
+Know what that publishes first. The guest image is public, and so are both
+ways into it: its SSH key ships beside it, and the password of its `ubuntu`
+account is in the image's `vm-info.json`; the guest's sshd accepts either,
+and the account has sudo. Grafana has anonymous admin. On `0.0.0.0`, anyone
+who can reach the host has root in every guest and Grafana's admin. One
+address of the host in place of `0.0.0.0` limits it to that network.
+
+On WSL2 a Windows browser still reaches `http://localhost:3000`: Windows
+connects to a listener on WSL's loopback, which was checked in mirrored
+networking mode with a plain listener and is what `localhostForwarding`
+does in NAT mode. A running stack has been checked from inside WSL, where
+Grafana answers on `127.0.0.1` and on no other address of the host; it has
+not been checked from a Windows browser.
+
 Useful variations — `qemu-tool quick-start <verb>`:
 
 | Verb | What it does |

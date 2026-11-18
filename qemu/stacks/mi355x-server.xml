@@ -67,6 +67,14 @@
        =================================================================== -->
 
   <ernic-tap>true</ernic-tap>
+  <!-- The host address the guests' SSH ports and Grafana are published on.
+       Loopback, which is also the default: this host only.
+       <publish-bind-addr>0.0.0.0</publish-bind-addr>, in an overlay of your
+       own, puts the stack on the LAN, and with it root in every guest and
+       Grafana's admin: the image's key and its account's password are both
+       published, sshd accepts either, the account has sudo, and Grafana
+       has anonymous admin on.  See qemu/stacks/rocm-golden.xml. -->
+  <publish-bind-addr>127.0.0.1</publish-bind-addr>
   <!-- node-exporter (9100) and rdma-exporter (9879): the two exporters the
        guest image runs, and the two guest jobs the generator renders. 9879
        was not forwarded here, so every rdma-exporter target of this stack

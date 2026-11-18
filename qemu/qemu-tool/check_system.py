@@ -28,6 +28,7 @@ from pathlib import Path
 from . import settings
 from .compose import resolve_identity
 from .fleet_xml import FleetConfig, FleetXml
+from .ports import is_loopback
 
 # Exit codes. A WARN does not fail the command: a host that is merely tight
 # still works, and a check-system that cried wolf would stop being run.
@@ -101,6 +102,53 @@ def docker_compose_ok() -> bool:
         return False
 
 
+# The first Docker Engine that keeps a port published on a loopback address
+# to this host. Before it a machine on the same L2 segment could reach one,
+# and could route straight to a container's bridge address (the 28.0.0
+# release notes, moby/moby#49325). <publish-bind-addr>127.0.0.1 is only
+# "this host only" from here up.
+LOOPBACK_SAFE_ENGINE = (28, 0)
+
+
+def loopback_publish_is_local(version: str) -> bool | None:
+    """Whether Docker Engine `version` keeps a loopback publish to this host.
+
+    None when the text does not start with major.minor: a daemon that could
+    not be asked, or a version string this does not know how to read.
+    """
+    parts = version.strip().split(".")
+    try:
+        return (int(parts[0]), int(parts[1])) >= LOOPBACK_SAFE_ENGINE
+    except (ValueError, IndexError):
+        return None
+
+
+def _engine_version() -> str:
+    try:
+        return subprocess.run(
+            ["docker", "version", "--format", "{{.Server.Version}}"],
+            capture_output=True, text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def engine_result(version: str) -> Result:
+    """The `docker engine` line: the version, and what it means for loopback."""
+    local = loopback_publish_is_local(version)
+    if local is None:
+        return Result("docker engine", _SKIP,
+                      "the daemon did not report a version")
+    if local:
+        return Result("docker engine", _OK, version)
+    floor = ".".join(str(n) for n in LOOPBACK_SAFE_ENGINE)
+    return Result(
+        "docker engine", _WARN,
+        f"{version}: a port published on 127.0.0.1 is reachable from "
+        f"machines on this host's network segment",
+        f"Docker Engine {floor} is the first to keep a loopback publish to "
+        f"the host; upgrade, or firewall the stack's SSH and Grafana ports")
+
+
 def _check_docker() -> list[Result]:
     if shutil.which("docker") is None:
         return [Result("docker compose plugin", _SKIP, "docker not on PATH")]
@@ -130,6 +178,7 @@ def _check_docker() -> list[Result]:
         # is also unreachable -- which the check above already said.
         out.append(Result("docker group membership", _SKIP,
                           "no docker group on this host"))
+    out.append(engine_result(_engine_version()))
     return out
 
 
@@ -348,6 +397,35 @@ def _check_settings(layers: list[Path]) -> list[Result]:
     return out
 
 
+def _check_exposure(fleet: FleetConfig | None) -> list[Result]:
+    """Which host address a stack's ports are published on, and who that lets in.
+
+    Every guest's SSH port and Grafana's bind to <publish-bind-addr>. A guest
+    from the published image accepts a key and a password that are both
+    public, as a user with sudo, and Grafana has anonymous admin on, so any
+    address but loopback is a root shell in every guest for whoever can reach
+    this host. A warning and not a failure: on a lab network it is sometimes
+    exactly what is wanted, and it stops nothing starting.
+    """
+    addr = ((fleet.publish_bind_addr if fleet else "")
+            or FleetConfig.publish_bind_addr)
+    try:
+        local = is_loopback(addr)
+    except ValueError:
+        # Only a FleetConfig built in code can hold this; the parser refuses it.
+        return [Result("<publish-bind-addr>", _FAIL, f"{addr!r}",
+                       "not an IPv4 or IPv6 address")]
+    if local:
+        return [Result("<publish-bind-addr>", _OK,
+                       f"{addr}: guest SSH and Grafana answer on this host only")]
+    return [Result(
+        "<publish-bind-addr>", _WARN,
+        f"{addr}: guest SSH and Grafana are reachable from other machines",
+        "a guest from the published image takes a public key and password "
+        "as a user with sudo, and Grafana has anonymous admin; "
+        "127.0.0.1 keeps both to this host")]
+
+
 def _check_qemu_tool() -> list[Result]:
     """Which qemu-tool is on PATH, which is not always this one.
 
@@ -389,7 +467,8 @@ def collect(xml: list[Path] | None = None) -> list[tuple[str, list[Result]]]:
         ("Docker", _check_docker()),
         ("Virtualisation", _check_kvm() + _check_tun()),
         ("Container identity", _check_identity()),
-        ("Settings", _check_settings(layers) + _check_qemu_tool()),
+        ("Settings", _check_settings(layers) + _check_exposure(fleet)
+         + _check_qemu_tool()),
         ("Capacity", _check_capacity(fleet)),
         ("Images", _check_images_dir(fleet)),
     ]

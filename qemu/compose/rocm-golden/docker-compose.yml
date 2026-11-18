@@ -4,7 +4,7 @@
 # Regenerate after changing qemu/stacks/rocm-golden.xml:
 #   qemu-tool gen-compose --xml qemu/stacks/rocm-golden.xml
 #
-# xml-sha256: 182d28e95322c167195f9db662f5e4b248928997a405dcfb2d61f829e3ddb7df  # pre-commit: ignore
+# xml-sha256: 6bd19aecb37d084f0c6968c71a36b60fb1f1139563b1b961f641bdec1a13f900  # pre-commit: ignore
 
 x-logging: &logging
   driver: json-file
@@ -208,7 +208,7 @@ services:
       sdxi-1:
         condition: service_healthy
     ports:
-      - "2222:2222"
+      - "127.0.0.1:2222:2222"
     entrypoint:
       - /bin/sh
       - -c
@@ -255,7 +255,7 @@ services:
       sdxi-2:
         condition: service_healthy
     ports:
-      - "2223:2222"
+      - "127.0.0.1:2223:2222"
     entrypoint:
       - /bin/sh
       - -c
@@ -430,7 +430,7 @@ services:
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
       - /var/lib/qemu-tool/grafana-data:/var/lib/grafana
     ports:
-      - "0.0.0.0:3000:3000"
+      - "127.0.0.1:3000:3000"
 
   # ---- guest Ethernet wiring ----
   # One short-lived sidecar per ernic. It shares that

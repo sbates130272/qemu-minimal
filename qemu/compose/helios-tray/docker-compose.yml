@@ -4,7 +4,7 @@
 # Regenerate after changing qemu/stacks/helios-tray.xml:
 #   qemu-tool gen-compose --xml qemu/stacks/helios-tray.xml
 #
-# xml-sha256: fdcacce5b4e653081195d40043593cc57240a2b357625fff7149d30162b8f021  # pre-commit: ignore
+# xml-sha256: edb64fd60d80de748039f9f6e931bc9851c701e853f3f737a69dd8fd917076cd  # pre-commit: ignore
 
 x-logging: &logging
   driver: json-file
@@ -449,7 +449,7 @@ services:
       sdxi-1:
         condition: service_healthy
     ports:
-      - "2322:2222"
+      - "127.0.0.1:2322:2222"
     entrypoint:
       - /bin/sh
       - -c
@@ -628,7 +628,7 @@ services:
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
       - /var/lib/qemu-tool/grafana-data:/var/lib/grafana
     ports:
-      - "0.0.0.0:3000:3000"
+      - "127.0.0.1:3000:3000"
 
   # ---- guest Ethernet wiring ----
   # One short-lived sidecar per ernic. It shares that

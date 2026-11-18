@@ -698,19 +698,21 @@ class TestPublishing(unittest.TestCase):
     def test_published_ports_carry_the_bind_address(self):
         body = gen_compose.render_compose(
             _plan(), ["fleet.xml"], "abc")
-        # Only Grafana publishes a host port; Prometheus and Loki are
-        # fleet-internal only.
-        self.assertIn('"0.0.0.0:3000:3000"', body)
-        self.assertNotIn('"0.0.0.0:9090:9090"', body)
-        self.assertNotIn('"0.0.0.0:9300:9300"', body)
-
-    def test_bind_address_can_be_narrowed(self):
-        # Grafana runs with anonymous admin, so this is the only thing
-        # deciding who can reach it on a shared host.
-        body = gen_compose.render_compose(
-            _plan("<publish-bind-addr>127.0.0.1</publish-bind-addr>"), ["fleet.xml"], "abc")
+        # Grafana and each guest's SSH port are published, on loopback by
+        # default; Prometheus and Loki are fleet-internal only. The rest of
+        # this is in tests/test_publish_bind.py.
         self.assertIn('"127.0.0.1:3000:3000"', body)
+        self.assertNotIn(':9090:9090"', body)
+        self.assertNotIn(':9300:9300"', body)
         self.assertNotIn('"0.0.0.0:', body)
+
+    def test_bind_address_can_be_widened(self):
+        # Grafana runs with anonymous admin and the guests take a published
+        # key, so this is the only thing deciding who can reach either.
+        body = gen_compose.render_compose(
+            _plan("<publish-bind-addr>0.0.0.0</publish-bind-addr>"), ["fleet.xml"], "abc")
+        self.assertIn('"0.0.0.0:3000:3000"', body)
+        self.assertNotIn('"127.0.0.1:', body)
 
     def test_every_service_is_on_the_fleet_network_only(self):
         # No service may fall back to Docker's default bridge: the fleet gets

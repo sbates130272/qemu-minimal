@@ -338,7 +338,10 @@ leaves both out.
 .B \-\-in\-network
 Reach the guests on the compose network rather than on published host ports.
 For a caller that is itself a container attached to that network, which is
-what the CI lane is.
+what the CI lane is. The published ports are bound to
+.B <publish\-bind\-addr>
+on the docker host, loopback by default, which such a caller could not reach
+in any case.
 .TP
 .BR \-\-yes ", " \-y
 Take the default answer to every prompt without asking. Every default is to
@@ -957,6 +960,26 @@ as root and silently reused by the next fleet of a different size.
 creates the ones the fleet XML names, as the caller, before
 .BR up .
 .TP
+.B <publish\-bind\-addr>
+The host address every published port binds to: each guest's SSH port and
+Grafana's. An IPv4 or IPv6 literal, not a host name. Default:
+.BR 127.0.0.1 ,
+so a stack answers on the host it runs on and nowhere else. That is the
+Docker Engine's doing from 28.0 up; an earlier engine lets a machine on the
+host's network segment reach a port published on loopback, and
+.B check
+warns about one.
+.B 0.0.0.0
+publishes on every interface, and one address of the host on that
+address alone. Anything but loopback lets other machines in, and a guest
+from the published image accepts a key and a password that are both public,
+as a user with sudo, while Grafana has anonymous admin on; reach a loopback
+stack from another machine through an SSH tunnel instead.
+.B compose
+warns when the stack it starts is not on loopback, and
+.B check
+reports the address in force.
+.TP
 .BR <grafana\-enable> ", " <logs\-enable>
 Generate Grafana, and Loki with an Alloy tailing the stack's containers.
 Both ride the
@@ -1465,6 +1488,15 @@ every subcommand uses. A file that is not valid fleet XML is a
 .B FAIL
 with one line per problem, naming the file and the element, and the rest of
 the report still runs.
+.PP
+.B <publish\-bind\-addr>
+is reported too: the host address the guests' SSH ports and Grafana are
+published on. Loopback is
+.BR ok ;
+any other address is a
+.BR warn ,
+because other machines can then reach guests whose key and password are
+public.
 .PP
 The container identity is reported even when it is fine, because
 .I which uid did my fleet run as

@@ -11,12 +11,16 @@ from pathlib import Path
 from typing import Any
 
 from .identity import match_identity
+from .ports import reach_name
 
 _PROC = Path("/proc")
 _CONTAINER_ID_RE = re.compile(r"\b([0-9a-f]{64})\b")
 _HOSTFWD_RE = re.compile(r"hostfwd=tcp::(\d+)-:22")
 _STACK_RE = re.compile(r"-qemu-\d+(?:-\d+)?$")
 _PUBLISHED_RE = re.compile(r":(\d+)->(\d+)/tcp")
+# The same entry with the host address docker bound it to in front:
+# "127.0.0.1:2231->2222/tcp", "[::1]:2231->2222/tcp".
+_PUBLISHED_ADDR_RE = re.compile(r"(\[[^\]]+\]|[0-9.]+):\d+->(\d+)/tcp")
 # Any .sock path a device server was told to serve. The socket is what joins a
 # guest's QEMU command line to the server process behind it: both name it, and
 # nothing else they say is in common.
@@ -109,13 +113,21 @@ def _describe(pid: int, argv: list[str], containers: dict[str, str]) -> dict[str
     machine = _opt(argv, "-machine") or ""
     ssh = _HOSTFWD_RE.search(" ".join(argv))
     guest_port = int(ssh.group(1)) if ssh else None
-    container_name, published, networks = containers.get(
-        _container_id(pid) or "", (None, {}, []))
+    container_name, published, networks, bound = containers.get(
+        _container_id(pid) or "", (None, {}, [], {}))
     # Uncontainerised, the guest's hostfwd port *is* the host port. Inside a
     # container it is only the port in that netns, and the fleet stacks give
     # every guest 2222 there -- what a user can actually ssh to is whatever
     # docker published it as.
     host_port = published.get(guest_port) if container_name else guest_port
+    # And the address to reach it on: a stack publishes on
+    # <publish-bind-addr>, and one particular address answers nowhere else.
+    ssh_host = "localhost"
+    if container_name and bound.get(guest_port):
+        try:
+            ssh_host = reach_name(bound[guest_port])
+        except ValueError:
+            pass
     qmp_sock = _qmp_socket(argv)
     ga_sock = _ga_socket(argv)
     return {
@@ -128,6 +140,7 @@ def _describe(pid: int, argv: list[str], containers: dict[str, str]) -> dict[str
         "memory_mib": _memory(argv),
         "ssh_port": guest_port,
         "ssh_port_host": host_port,
+        "ssh_host": ssh_host,
         "kvm": "accel=kvm" in machine,
         "image": image,
         "vfio_user_sockets": _vfio_sockets(argv),
@@ -335,7 +348,7 @@ def _container_names() -> dict[str, tuple[str, dict[int, int], list[str]]]:
         return {}
     if out.returncode != 0:
         return {}
-    names: dict[str, tuple[str, dict[int, int], list[str]]] = {}
+    names: dict[str, tuple[str, dict[int, int], list[str], dict[int, str]]] = {}
     ids: list[str] = []
     raw: dict[str, tuple[str, str, str]] = {}
     for line in out.stdout.splitlines():
@@ -352,7 +365,8 @@ def _container_names() -> dict[str, tuple[str, dict[int, int], list[str]]]:
             f"{_short_net(n)}={found[n]}" if found.get(n) else _short_net(n)
             for n in (p.strip() for p in nets.split(",")) if n
         ]
-        names[cid] = (name, _published_ports(ports), joined)
+        names[cid] = (name, _published_ports(ports), joined,
+                      _published_addrs(ports))
     return names
 
 
@@ -433,6 +447,18 @@ def _published_ports(ports: str) -> dict[int, int]:
     for m in _PUBLISHED_RE.finditer(ports):
         published[int(m.group(2))] = int(m.group(1))
     return published
+
+
+def _published_addrs(ports: str) -> dict[int, str]:
+    """Parse docker's Ports column into {container port: host address}.
+
+    First wins, which for a container published on both stacks is the IPv4
+    wildcard; an entry with no address in front is left out.
+    """
+    bound: dict[int, str] = {}
+    for m in _PUBLISHED_ADDR_RE.finditer(ports):
+        bound.setdefault(int(m.group(2)), m.group(1))
+    return bound
 
 
 def _device_servers() -> dict[str, str]:

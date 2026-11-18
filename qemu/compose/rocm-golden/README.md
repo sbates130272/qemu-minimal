@@ -136,6 +136,28 @@ Derived per VM `n`, with no element to override any of them: name
 as its DHCP `server_ip` and intercepts ARP for it, so a VM placed there is
 unreachable in a way that looks like a driver fault.
 
+**Published ports.** Two kinds of service publish a host port: each `qemu-N`
+its guest's SSH port, and `grafana`. Both bind `<publish-bind-addr>`, which
+is `127.0.0.1` unless the fleet file says otherwise, so by hand a guest is
+
+```bash
+ssh -i <vm-images-dir>/keys/id_rsa -p 2222 ubuntu@localhost   # guest 1; 2223 is guest 2
+```
+
+from the host the stack runs on, and from nowhere else; `qemu-tool ssh
+<vm-name>` resolves the same thing. Nothing else is published: the
+`<vm-extra-hostfwd>` rules listen inside each qemu container and Prometheus
+scrapes them over the stack's own network.
+
+`<publish-bind-addr>0.0.0.0` puts the stack on every interface of the host.
+That is root in every guest for whoever can reach it: the published image's
+key ships beside it, the password of its account is in its `vm-info.json`,
+the guest's sshd accepts either, and the account has sudo. Grafana has
+anonymous admin as well. Prefer `ssh -L` from the other machine, or one
+address of the host in place of `0.0.0.0`. A stack rendered before the SSH
+ports took the bind address still publishes them everywhere; `qemu-tool
+compose up` warns about one, and re-rendering it is the fix.
+
 ## Addressing
 
 Every service has a fixed address on the `fleet` network —
@@ -314,7 +336,9 @@ runs it after `quick-start test`.
 ### Grafana
 
 Rides the same `metrics` profile — Grafana without Prometheus is an empty
-page, so it does not get a third switch. `:3000`, anonymous admin, dark.
+page, so it does not get a third switch. `:3000`, anonymous admin, dark,
+and bound to `<publish-bind-addr>`: loopback by default, because whoever can
+reach the port is an admin.
 
 Datasource and dashboard are provisioned from `grafana/` rather than clicked
 in: a dashboard that exists only in Grafana's own sqlite dies with the

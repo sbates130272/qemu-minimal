@@ -1207,6 +1207,147 @@ success. If this happens again, the thing to capture before cleaning up is
 a survivor, next to the directory the `down` ran from. That one comparison
 settles it.
 
+## Published ports, and who can reach a stack
+
+**Every port a stack publishes is bound to `<publish-bind-addr>`, and the
+default is `127.0.0.1`.** The generator writes exactly two kinds of `ports:`
+entry, both through `ports.publish_mapping()`:
+
+| Service | Mapping | What it is |
+|---|---|---|
+| `qemu-N` | `<addr>:<ssh-port-base + N - 1>:2222` | the guest's sshd |
+| `grafana` | `<addr>:<grafana-port>:3000` | Grafana, anonymous admin |
+
+Nothing else is published. Prometheus, Loki and the exporters have no host
+port, and a `<vm-extra-hostfwd>` rule is a QEMU forward inside the qemu
+container, scraped over the stack's own network.
+
+**"This host only" is Docker Engine's doing, from 28.0.0 up.** The compose
+mapping is the only host-facing listener, but QEMU's forward listens on the
+qemu container's wildcard at a fixed bridge address (`172.31.3.N`), and
+what keeps other machines off both is the engine. Its 28.0.0 release notes
+list two fixes (moby/moby#49325): "allowing neighbor hosts to connect to
+ports mapped on a loopback address", and "allowing remote hosts to connect
+directly to a container on its published ports". On an older engine a
+machine on the host's own network segment can reach a port published on
+`127.0.0.1`. This host runs 29.1.3. `qemu-tool check` has a `docker engine`
+line under Docker for it: `ok` from 28.0, `warn` below, `skip` when the
+daemon reports no version, never `FAIL`
+(`check_system.loopback_publish_is_local`).
+
+**Measured on a running stack**, 2026-11-17, one guest from
+`20261117.g481c892` under `quick-start`, which had moved the ports to 2226
+and 3003 because Windows held 2222 and 3000:
+
+| Asked | Answer |
+|---|---|
+| rendered mappings | `"127.0.0.1:2226:2222"`, `"127.0.0.1:3003:3000"` |
+| `docker ps` | qemu `127.0.0.1:2226->2222/tcp`, grafana `127.0.0.1:3003->3000/tcp`; loki and prometheus unpublished |
+| `ss -ltn` | `127.0.0.1:2226` and `127.0.0.1:3003`, nothing else on those ports; both `docker-proxy` with `-host-ip 127.0.0.1` |
+| `nc -z` from the host | open on `127.0.0.1`; refused on the host's other addresses (`10.0.0.107`, `10.255.255.254`, `172.17.0.1`), both ports |
+| Grafana `/api/health` | 200 on `127.0.0.1:3003`, no answer on `10.0.0.107:3003` |
+| `qemu-tool list`, `inspect`, `ssh`, the inventory | reach the guest on `localhost`/`127.0.0.1` port 2226 |
+
+All from inside WSL. Nothing was tried from another machine or from
+Windows.
+
+Until this was fixed (after v2.0.0) the SSH mapping had no address at all,
+`"2222:2222"`, which docker publishes on every interface, and
+`<publish-bind-addr>` reached Grafana alone and defaulted to `0.0.0.0`.
+What that exposed, read off the published image rather than inferred
+(`20261117.g80c17f8`, its root filesystem read without booting it, and the
+`vm-info.json` of `20261117.g481c892`):
+
+- the key that logs in is published beside the image, as a referrer;
+- `vm-info.json` there carries `username: ubuntu` and the account's
+  password, which is `<bake-password>`;
+- the guest's sshd accepts that password: `gen_vm.py`'s cloud-config has
+  `ssh_pwauth: true` and `lock_passwd: false`, so the image holds
+  `/etc/ssh/sshd_config.d/50-cloud-init.conf` saying `PasswordAuthentication
+  yes`, which sshd reads before the cloud image's own
+  `60-cloudimg-settings.conf` saying `no`, and `ubuntu` has a usable hash in
+  `/etc/shadow`. No play changes any of it;
+- the account has `NOPASSWD` sudo.
+
+So anything but loopback is root in every guest for whoever can reach the
+host. `<vm-password>` plays no part: it never reaches a pulled guest.
+
+The same was then asked of a booted `20261117.g481c892` guest, with no
+password submitted: `ssh -v` with public keys off stops at `Authentications
+that can continue: publickey,password`; `sshd -T` says
+`passwordauthentication yes`; `passwd -S ubuntu` says `P`, a usable
+password. **The image is what is open; loopback only keeps people away from
+it.** Closing it is a bake change and a republish, not done here: end the
+golden bake with password authentication off (a `sshd_config.d` drop-in
+that sorts before `50-cloud-init.conf`, or the account's password locked)
+and assert it in `qemu/checks/rocm-golden.sh`. Until then a wider
+`<publish-bind-addr>`, a stack rendered before this fix and a guest run on
+the host (below) all expose that login.
+
+The rules that follow:
+
+- **Never write a `ports:` entry without `publish_mapping()`**, and never
+  default the address back to a wildcard. `tests/test_publish_bind.py` fails
+  a committed stack with a mapping that has no address or a non-loopback
+  one, and a shipped fleet file that does not state
+  `<publish-bind-addr>127.0.0.1` itself.
+- **The element is an address, validated at parse time** (the `addr` kind in
+  `fleet_xml.py`): an IPv4 or IPv6 literal, brackets optional and dropped. A
+  host name is a problem naming the element, and so is an IPv6 zone
+  (`fe80::1%eth0`): Python's `ipaddress` parses one, the render came out as
+  `"[fe80::1%eth0]:2222:2222"`, and `docker compose config` then said
+  `invalid IP address`. An empty element is the
+  default, loopback, never "every interface". IPv6 is written in brackets,
+  `"[::1]:2222:2222"`; `docker compose config -q` accepts `::1`, `::`, a
+  ULA and a plain IPv4 address in that position (v5.2.0, checked by
+  rendering each).
+- **The ports are baked into the rendered YAML.** A stack rendered before
+  this change publishes on every interface until it is rendered again,
+  whatever its fleet file now says. `compose.exposed_ports()` reads the
+  rendered file and `qemu-tool compose up` warns, naming the services; it
+  does not refuse.
+- **What follows the address.** `quick_start._State.published_host` is where
+  quick-start waits for and prints its guests (`localhost` for loopback and
+  for a wildcard, the address itself otherwise); `--in-network` is
+  untouched, since it uses each qemu container's own address and port 2222.
+  The generated inventory's `ansible_host` is `ports.reach_address()` of the
+  same value. `list_vms` reads the bound address out of docker's Ports
+  column into `ssh_host`, and `inspect` and `ssh` use it. `qemu-tool check`
+  has a `<publish-bind-addr>` line under Settings: `ok` for loopback, `warn`
+  otherwise, never `FAIL`.
+- **quick-start's port probe did not change.** `ports.port_bindable()` asks
+  the wildcard and loopback. A listener on any address of a port fails the
+  wildcard bind, so a port it calls free is free for a loopback publish.
+
+**No CI lane reaches a published port, and none may start to.** Every lane
+that boots a stack runs in a job container, where the docker host's loopback
+is not the job's own, so a port on `127.0.0.1` is out of reach and a port on
+`0.0.0.0` was reachable only by an address no lane used. Each joins the
+stack's network instead and uses the qemu container on port 2222:
+playbook-test, publish (its second boot), `quickstart-boot`,
+`report-for-vm-rocm-golden` (`--in-network`) and the two-guest smoke lane.
+The lanes that say `ubuntu@localhost -p 2222` (`ansible-setup-test`,
+`smoke-test-qemu-tool`, `report-for-vm-basic`, publish's first boot) run
+`run-vm` inside the job container, where the port is QEMU's own forward and
+no docker publish is involved. `compose-tests` starts device servers only.
+
+**Not covered: a guest run on the host.** `run-vm` forwards with
+`hostfwd=tcp::<port>-:22`, which binds every interface, and `gen-vm --bake`
+boots its guest that way for Ansible: a bake on this host was seen listening
+on `0.0.0.0:2226`, with the same public password. Inside a stack that
+wildcard is required, since docker forwards to the qemu container's own
+address, so narrowing it needs a `run-vm` option the generator does not
+pass. Not done.
+
+**WSL2.** The owner reaches Grafana from a Windows browser. Checked on this
+host (mirrored networking): a plain listener on WSL's `127.0.0.1` answers
+`http://localhost:<port>` and `http://127.0.0.1:<port>` from Windows. A
+docker publish on loopback is `docker-proxy` listening the same way
+(`userland-proxy` is at its default here; the running stack above showed
+it), and NAT mode's `localhostForwarding` is documented to cover a port
+bound to localhost. **A Windows browser against a running stack is still
+untried**: the stack above was reached from inside WSL only.
+
 ## Container privilege
 
 **Nothing in any stack runs as root by default except the two exemptions

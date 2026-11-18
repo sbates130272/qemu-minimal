@@ -4,6 +4,62 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Security
+
+- **A stack's guests and Grafana now answer on the host it runs on, and
+  nowhere else, unless you say otherwise.** Every generated stack published
+  each guest's SSH port on all of the host's interfaces: the mapping was
+  written with no address (`"2222:2222"`), and `<publish-bind-addr>`, the
+  setting described as deciding who can reach a stack, was applied to
+  Grafana's port alone and defaulted to `0.0.0.0`. A guest made from the
+  published image can be logged in to by anyone: its SSH key is published
+  beside the image, the password of its `ubuntu` account is in the image's
+  `vm-info.json` and the guest's sshd accepts it, and that account has sudo.
+  So on a host other machines can reach, 2.0.0 gave them a root shell in
+  every guest, beside a Grafana with anonymous admin.
+  - `gen-compose` now binds every port it publishes, the guests' SSH ports
+    and Grafana's, to `<publish-bind-addr>`, and the default is `127.0.0.1`.
+    The three shipped fleet files state it. The element takes an IPv4 or
+    IPv6 address and nothing else; a host name or an IPv6 zone
+    (`fe80::1%eth0`, which docker refuses) is an error naming the element,
+    and an empty element is the default, not every interface.
+  - **Loopback means "this host only" on Docker Engine 28.0 and later.**
+    Earlier engines let a machine on the host's network segment reach a
+    port published on `127.0.0.1`; the 28.0.0 release notes list the fix.
+    `qemu-tool check` reports the engine version and warns below 28.0.
+  - Measured on a running stack (one guest, Docker 29.1.3, from inside
+    WSL): docker published guest SSH and Grafana on `127.0.0.1` alone, both
+    answered there, and both were refused on the host's other addresses.
+    Prometheus and Loki had no host port. Not tried from another machine.
+  - *Who is affected:* anyone who reached a guest over SSH, or Grafana, from
+    a machine other than the one running the stack. After this change those
+    connections are refused.
+  - *The way back:* `<publish-bind-addr>0.0.0.0</publish-bind-addr>` in a
+    fleet XML overlay, then render the stack again (`quick-start` does so on
+    every `up`). Read the README's Quick Start first for what that exposes;
+    an SSH tunnel, or one address of the host in place of `0.0.0.0`,
+    exposes less.
+  - **A stack rendered by an earlier version keeps publishing on every
+    interface until it is rendered again**, whatever the fleet file says:
+    the ports are written into its `docker-compose.yml`. `qemu-tool compose
+    up` now warns when the stack it starts publishes a port past loopback
+    and names the services.
+  - `qemu-tool check` reports the address in force and warns when it is not
+    loopback. `quick-start` prints who can reach the stack in its plan and
+    its summary. `qemu-tool list`, `inspect` and `ssh`, and the generated
+    Ansible inventory, reach a guest on the address its port is bound to,
+    so a stack published on one particular address still works.
+  - Not changed: a guest run on the host by `run-vm`, and so the boot
+    `gen-vm --bake` hands to Ansible, still forwards its SSH port on every
+    interface (`hostfwd=tcp::<port>-:22`), and a baked image's account has
+    the same public password.
+  - Not changed either: **the published image still accepts that
+    password.** Confirmed on a booted guest of `20261117.g481c892` without
+    submitting it: sshd offers `publickey,password`, `sshd -T` reports
+    `passwordauthentication yes`, and the `ubuntu` account has a usable
+    password and passwordless sudo. This release keeps other machines away
+    from the port; closing the login needs a bake change and a new image.
+
 ### Changed
 
 - **`sbates130272.batesste` is pinned at 3.4.0** (was 3.3.1). It is a

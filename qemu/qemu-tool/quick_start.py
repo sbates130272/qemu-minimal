@@ -55,7 +55,7 @@ from .config import VMConfig
 from .fleet_xml import NS_FLEET, FleetConfig, FleetXml
 from .gen_compose import run as gen_compose_run
 from .gen_vm import run as gen_vm_run
-from .ports import port_bindable
+from .ports import is_loopback, port_bindable, reach_name
 from .resources import STACKS as _STACKS_PACKAGE, shipped_path
 
 VERBS = ("all", "preflight", "up", "test", "report", "down", "logs")
@@ -171,13 +171,25 @@ class _State:
     def vm(self, index: int) -> str:
         return f"{self.prefix}-{index}"
 
+    @property
+    def bind_addr(self) -> str:
+        """The host address the stack's ports are published on."""
+        return self.fleet.publish_bind_addr or FleetConfig.publish_bind_addr
+
+    @property
+    def published_host(self) -> str:
+        """Where this host reaches a published port: localhost, unless
+        <publish-bind-addr> names one particular address."""
+        return reach_name(self.bind_addr)
+
     def guest_host(self, index: int) -> str:
         if self.in_network:
             # Third octet 3 is the qemu family. By address, not by service
             # name: this stack resolves no service names at run time, on
-            # purpose (AGENTS.md issue 13).
+            # purpose (AGENTS.md issue 13). The published port and the
+            # address it is bound to play no part here.
             return f"{self.fleet.fleet_prefix}.3.{index}"
-        return "localhost"
+        return self.published_host
 
     def guest_port(self, index: int) -> int:
         if self.in_network:
@@ -633,8 +645,18 @@ def preflight(state: _State, write_layers: bool = True) -> None:
     if state.metrics:
         print(f"  monitoring  Grafana :{state.fleet.grafana_port}; "
               f"Prometheus has no host port")
+    print(f"  published   {_exposure(state)}")
     print(f"  guest image {state.fleet.backing_ref.split(':')[-1]}")
     print()
+
+
+def _exposure(state: _State) -> str:
+    """One line on who can reach the guests' SSH ports and Grafana."""
+    addr = state.bind_addr
+    if is_loopback(addr):
+        return f"on {addr}: this host only"
+    return (f"on {addr}: REACHABLE FROM OTHER MACHINES "
+            f"(<publish-bind-addr>)")
 
 
 def _shm_mb(value: str) -> int:
@@ -1404,9 +1426,36 @@ def down(state: _State) -> None:
 # What a new user is actually here for
 # ---------------------------------------------------------------------------
 
+def _exposure_note(state: _State) -> list[str]:
+    """Who can reach what was just printed, and how to change it."""
+    addr = state.bind_addr
+    what = "guest SSH ports" + (" and Grafana" if state.metrics else "")
+    if is_loopback(addr):
+        return [
+            f"The {what} are bound to {addr}:",
+            "they answer on this host only. From another machine, tunnel in",
+            "over SSH, or set <publish-bind-addr>0.0.0.0</publish-bind-addr>",
+            "in a fleet XML overlay. That lets anyone who can reach this host",
+            "log in to the guests: the image's key and password are public.",
+        ]
+    note = [
+        f"WARNING: the {what} are bound to {addr}",
+        "(<publish-bind-addr>), so other machines can reach them. The",
+        "image's key and password are both public and its account has",
+        "sudo: anyone who can reach this host has root in every guest",
+    ]
+    if state.metrics:
+        note[-1] += ","
+        note.append("and Grafana's admin without a login.")
+    else:
+        note[-1] += "."
+    return note
+
+
 def _summary(state: _State) -> None:
-    host = state.fleet.publish_bind_addr
-    shown = "localhost" if host in ("0.0.0.0", "") else host
+    shown = state.published_host
+    # An IPv6 literal needs brackets in a URL and none after user@.
+    url_host = f"[{shown}]" if ":" in shown else shown
     print()
     print("=" * 70)
     print(f"  {state.vm_count} guests are up, each with a GPU, an NVMe and an RDMA NIC.")
@@ -1428,7 +1477,7 @@ def _summary(state: _State) -> None:
     if state.metrics:
         print("  Monitoring (Grafana has anonymous admin on, so no login):")
         print()
-        print(f"      Grafana      http://{shown}:{state.fleet.grafana_port}")
+        print(f"      Grafana      http://{url_host}:{state.fleet.grafana_port}")
         print()
         print("  Prometheus has no host port. Ask it through Grafana's Explore,")
         print("  or from inside its container:")
@@ -1440,6 +1489,9 @@ def _summary(state: _State) -> None:
         print("  Dashboards in the Grafana sidebar. Its data comes from the")
         print("  stats dump each rocm-ernic writes, scraped by the exporter.")
         print()
+    for line in _exposure_note(state):
+        print(f"  {line}")
+    print()
     print("  What else is here:")
     print()
     print("      qemu-tool list --summary          # what the fleet is doing")
