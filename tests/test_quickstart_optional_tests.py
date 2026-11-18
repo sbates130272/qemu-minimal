@@ -1128,11 +1128,13 @@ class Docs(unittest.TestCase):
         self.assertIn("until its server restarts", section)
 
     def test_the_changelog_and_agents_say_so(self):
+        # Everything after v2.0.0, not [Unreleased] alone: scripts/release.sh
+        # retitles that section and runs this suite on the result before it
+        # tags, and the entry is then under the new version's heading.
         changelog = (REPO / "CHANGELOG.md").read_text()
-        unreleased = changelog[changelog.index("## [Unreleased]"):
-                               changelog.index("\n## [v")]
-        self.assertIn("--sdxi-test", unreleased)
-        self.assertIn("--p4-test", unreleased)
+        since = changelog[:changelog.index("\n## [v2.0.0]")]
+        self.assertIn("--sdxi-test", since)
+        self.assertIn("--p4-test", since)
         agents = (REPO / "AGENTS.md").read_text()
         for needle in ("--sdxi-test", "--p4-test", "quickstart_sdxi_test",
                        "quickstart_p4_test"):

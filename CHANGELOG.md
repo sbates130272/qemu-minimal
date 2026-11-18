@@ -4,33 +4,24 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### Security
+A stack now publishes its guests' SSH ports and Grafana on the host's
+loopback address, where 2.0.0 published them on every interface. Read
+**Breaking** first if you reach a guest or Grafana from a machine other than
+the one running the stack, and the first entry under **Fixed** if you have
+run `vm-rocm-golden.yml --tags configure` on a guest. The rest is two
+optional `quick-start` tests and changes to the golden guest: a perftest
+built with ROCm memory support, SDXI counters in Prometheus, one rdma-core to
+build against, and the hostname the host gives it. The guest changes are in
+the bake, which has passed once in CI, and the fleet files still pull an
+image baked before them; the last entry under **Changed** says what was run
+and what that leaves unproven.
 
-- **A stack's guests and Grafana now answer on the host it runs on, and
-  nowhere else, unless you say otherwise.** Every generated stack published
-  each guest's SSH port on all of the host's interfaces: the mapping was
-  written with no address (`"2222:2222"`), and `<publish-bind-addr>`, the
-  setting described as deciding who can reach a stack, was applied to
-  Grafana's port alone and defaulted to `0.0.0.0`. A guest made from the
-  published image can be logged in to by anyone: its SSH key is published
-  beside the image, the password of its `ubuntu` account is in the image's
-  `vm-info.json` and the guest's sshd accepts it, and that account has sudo.
-  So on a host other machines can reach, 2.0.0 gave them a root shell in
-  every guest, beside a Grafana with anonymous admin.
-  - `gen-compose` now binds every port it publishes, the guests' SSH ports
-    and Grafana's, to `<publish-bind-addr>`, and the default is `127.0.0.1`.
-    The three shipped fleet files state it. The element takes an IPv4 or
-    IPv6 address and nothing else; a host name or an IPv6 zone
-    (`fe80::1%eth0`, which docker refuses) is an error naming the element,
-    and an empty element is the default, not every interface.
-  - **Loopback means "this host only" on Docker Engine 28.0 and later.**
-    Earlier engines let a machine on the host's network segment reach a
-    port published on `127.0.0.1`; the 28.0.0 release notes list the fix.
-    `qemu-tool check` reports the engine version and warns below 28.0.
-  - Measured on a running stack (one guest, Docker 29.1.3, from inside
-    WSL): docker published guest SSH and Grafana on `127.0.0.1` alone, both
-    answered there, and both were refused on the host's other addresses.
-    Prometheus and Loki had no host port. Not tried from another machine.
+### Breaking
+
+- **A stack's guest SSH ports and Grafana are published on `127.0.0.1`
+  unless `<publish-bind-addr>` says otherwise.** 2.0.0 published each
+  guest's SSH port on every interface of the host, and by default Grafana's
+  too. **Security**, below, says what that exposed.
   - *Who is affected:* anyone who reached a guest over SSH, or Grafana, from
     a machine other than the one running the stack. After this change those
     connections are refused.
@@ -44,43 +35,75 @@ All notable changes to this project will be documented in this file.
     the ports are written into its `docker-compose.yml`. `qemu-tool compose
     up` now warns when the stack it starts publishes a port past loopback
     and names the services.
+  - `gen-compose` binds every port it publishes, the guests' SSH ports and
+    Grafana's, to `<publish-bind-addr>`, and the default is `127.0.0.1`.
+    The three shipped fleet files state it. The element takes an IPv4 or
+    IPv6 address and nothing else; a host name or an IPv6 zone
+    (`fe80::1%eth0`, which docker refuses) is an error naming the element,
+    and an empty element is the default, not every interface.
+  - **Loopback means "this host only" on Docker Engine 28.0 and later.**
+    Earlier engines let a machine on the host's network segment reach a
+    port published on `127.0.0.1`; the 28.0.0 release notes list the fix.
+    `qemu-tool check` reports the engine version and warns below 28.0.
   - `qemu-tool check` reports the address in force and warns when it is not
     loopback. `quick-start` prints who can reach the stack in its plan and
     its summary. `qemu-tool list`, `inspect` and `ssh`, and the generated
     Ansible inventory, reach a guest on the address its port is bound to,
     so a stack published on one particular address still works.
-  - Not changed: a guest run on the host by `run-vm`, and so the boot
-    `gen-vm --bake` hands to Ansible, still forwards its SSH port on every
-    interface (`hostfwd=tcp::<port>-:22`), and a baked image's account has
-    the same public password.
-  - Not changed either: **the published image still accepts that
-    password.** Confirmed on a booted guest of `20261117.g481c892` without
-    submitting it: sshd offers `publickey,password`, `sshd -T` reports
+  - *Measured on a running stack* on 2026-11-17 (one guest, Docker 29.1.3,
+    from inside WSL): docker published guest SSH and Grafana on `127.0.0.1`
+    alone, both answered there, and both were refused on the host's other
+    addresses. Prometheus and Loki had no host port. Not tried from another
+    machine.
+
+### Security
+
+- **On a host other machines can reach, 2.0.0 gave them a root shell in
+  every guest of a stack, beside a Grafana with anonymous admin.** Every
+  generated stack published each guest's SSH port on all of the host's
+  interfaces: the mapping was written with no address (`"2222:2222"`), and
+  `<publish-bind-addr>`, the setting described as deciding who can reach a
+  stack, was applied to Grafana's port alone and defaulted to `0.0.0.0`. And
+  a guest made from the published image can be logged in to by anyone: its
+  SSH key is published beside the image, the password of its `ubuntu`
+  account is in the image's `vm-info.json` and the guest's sshd accepts it,
+  and that account has sudo. The loopback default under **Breaking** keeps
+  other machines away from those ports; it does not close the login.
+  - **Not changed: the published image still accepts that password.**
+    Confirmed on a booted guest of `20261117.g481c892` without submitting
+    it: sshd offers `publickey,password`, `sshd -T` reports
     `passwordauthentication yes`, and the `ubuntu` account has a usable
-    password and passwordless sudo. This release keeps other machines away
-    from the port; closing the login needs a bake change and a new image.
+    password and passwordless sudo. Closing the login needs a bake change
+    and a new image.
+  - *Not changed: `run-vm` outside a stack.* A guest run on the host by
+    `run-vm`, and so the boot `gen-vm --bake` hands to Ansible, still
+    forwards its SSH port on every interface (`hostfwd=tcp::<port>-:22`),
+    and a baked image's account has the same public password.
 
 ### Added
 
 - **`quick-start` can test the SDXI device and the NIC's P4 engine:
   `--sdxi-test` and `--p4-test`.** Both are off by default, both run with
   the `test` and `all` verbs, and both run in the guest as its login user
-  with no sudo. They are two new plays of `vm-quickstart.yml`, each ended
-  at its first task unless its extra var is true (`quickstart_sdxi_test`,
-  `quickstart_p4_test`), so a run without the switches executes nothing new
-  in a guest and `ansible-playbook` is handed the arguments it always was.
-  - `--sdxi-test`: on every guest, 4 MiB of random data is copied through
+  with no sudo. Each is a play of `vm-quickstart.yml` that ends at its first
+  task unless its extra var is true (`quickstart_sdxi_test`,
+  `quickstart_p4_test`), so without the switches `ansible-playbook` is
+  handed the arguments it always was.
+  - *`--sdxi-test`:* on every guest, 4 MiB of random data is copied through
     `/dev/sdxi0` with `sdxi-cli` and compared with its source. A pass
     prints `<guest>: SDXI copy of 4194304 bytes verified`. It is a
     functional check and reports no rate; the daily lane's SDXI figure is a
     different measurement.
-  - `--p4-test`: on the first guest only, `p4_fp8_client` loads the fp8 P4
+  - *`--p4-test`:* on the first guest only, `p4_fp8_client` loads the fp8 P4
     program into that guest's NIC and checks one reduction, and
     `p4_fp8_bench` times 2000 reductions of 262144 elements. A pass prints
     `<guest>: P4 FP8 reduction <rate> MB/s (262144 elements x 2000
     iterations)`. `--p4-iters N` times another count. One guest because
     the reduction is compute inside one NIC: no peer, nothing across the
     mesh. The RDMA device name is asked of the guest.
+  - *The P4 program and its table entry stay in that NIC until its ernic
+    server restarts.* A two-equal-operand RDMA WRITE on it is a reduction
+    from then on; ordinary transfers are untouched.
   - *A fleet that cannot run one is refused before anything is started*,
     naming the element and the one settings file that set it:
     `<sdxi-per-vm>` of 0 for the first; `<p4-enable>` not true, or a
@@ -89,30 +112,23 @@ All notable changes to this project will be documented in this file.
     settings is caught in the guest instead, which says whether it is the
     device, the driver or the group that is missing.
   - A verb that runs no test (`up`, `preflight`, `report`, `logs`, `down`)
-    ignores the three switches and says so on stderr.
-  - The closing summary of a full run names the switches the fleet can
-    run.
-  - *The P4 program and its table entry stay in that NIC until its ernic
-    server restarts.* A two-equal-operand RDMA WRITE on it is a reduction
-    from then on; ordinary transfers are untouched.
-  - Both results are in the per-guest summary under the stack's
-    `artifacts/` and in the report, and a test that was asked for and left
-    no result fails the run.
-  - *Run against real guests on 2026-11-18*: two pulled guests of
-    `20261117.g481c892` on the development host, one boot, each guest
-    sized by `quick-start` to 8 vCPU and 8192 MiB. Five `quick-start test`
-    runs, all exit 0:
-    - plain, before either switch: both new plays ran their skip task and
-      nothing else; `ib_send_bw` averaged 595.15 MiB/s.
-    - `--sdxi-test --p4-test`: the SDXI copy verified on both guests; the
-      P4 rate on the first was 194.1 MB/s (1.351 ms a reduction).
-    - the same again in that boot: both copies verified, and the program
-      loaded over the one already in the NIC, 195.0 MB/s.
-    - `--p4-test --p4-iters 200`: 194.5 MB/s, reported as 200 iterations;
-      the SDXI play ran its skip task only.
-    - plain again, the program left in the first guest's NIC: `ib_send_bw`
-      between the guests passed at 572.93 MiB/s, and neither guest's
-      summary has an SDXI or a P4 section.
+    ignores the three switches and says so on stderr. The closing summary
+    of a full run names the switches the fleet can run. Both results are in
+    the per-guest summary under the stack's `artifacts/` and in the report,
+    and a test that was asked for and left no result fails the run.
+  - *Measured on 2026-11-18* on the development host: two pulled guests of
+    `20261117.g481c892`, one boot, each guest sized by `quick-start` to
+    8 vCPU and 8192 MiB, five `quick-start test` runs, all exit 0. With
+    `--sdxi-test --p4-test` the SDXI copy verified on both guests and the P4
+    rate on the first was 194.1 MB/s (1.351 ms a reduction). The same again
+    in that boot verified both copies and loaded the program over the one
+    already in the NIC, 195.0 MB/s. `--p4-test --p4-iters 200` gave
+    194.5 MB/s, reported as 200 iterations, with the SDXI play running its
+    skip task only. A plain run before either switch ran both plays' skip
+    task and nothing else, and `ib_send_bw` averaged 595.15 MiB/s; a plain
+    run afterwards, the program left in the first guest's NIC, passed
+    `ib_send_bw` between the guests at 572.93 MiB/s, and neither guest's
+    summary had an SDXI or a P4 section.
   - *Not run:* the `all` verb with a switch, so the closing summary line
     naming the switches has not been seen live; the in-guest refusals,
     through the play, for a missing device, a driver that is not loaded or
@@ -121,6 +137,47 @@ All notable changes to this project will be documented in this file.
     in under 0.2 s, before the preflight). The suite,
     `tests/test_quickstart_optional_tests.py`, runs both plays against
     stand-ins for the guest's tools.
+
+- **The SDXI device's counters reach Prometheus, and the home dashboard has
+  an SDXI row.** The golden guest exports them through node_exporter's
+  textfile collector, as it does the GPU presence metrics: `sdxi_setup`'s
+  new `metrics` tasks install `/usr/local/bin/sdxi-textfile-metrics.py` and
+  `sdxi-textfile-metrics.timer`, which every 15 s writes `sdxi_up` and
+  `sdxi_<counter>_total{context="N"}` for the device's 14 counters to
+  `/var/lib/prometheus/node-exporter/sdxi.prom`. The existing `fleet-node`
+  job scrapes it; no port, scrape job or fleet setting changes.
+  - *On today's published image:* `qemu-tool quick-start test` installs the
+    same on a guest whose image was baked before this, so the row fills in
+    after it has run once.
+  - *The dashboard row*, in all three stacks: device up per VM, errors over
+    the dashboard's range, copy throughput and copies/s, compress and
+    decompress bytes/s and ops/s, and a fleet-total copy throughput beside
+    "GPU Up". The rates are taken over a fixed 2 minutes, eight of the
+    guest's 15 s writes. Worked through Prometheus's `rate()` arithmetic in
+    a simulation and not measured on a guest: a steady workload then reads
+    between 13% low and 2% high, where over Grafana's usual one-minute
+    window the rate dips by a third each time the timer drifts across the
+    scrape. Without Grafana:
+    `sum by (vm_name) (rate(sdxi_bytes_moved_total{context="1"}[2m]))`.
+  - *What the counters mean:* context 0 is the driver's admin ring and
+    context 1 carries every client operation. `bytes_compressed` counts
+    compress input and `bytes_decompressed` decompress output. The counters
+    restart from zero with the SDXI server.
+  - *Sampling takes the device's lock.* Each sample takes `sdxi_char`'s one
+    lock for 28 register accesses per context, so an operation that arrives
+    during one waits for it. `sudo systemctl stop
+    sdxi-textfile-metrics.timer` in the guest stops the sampling.
+  - Role variables `sdxi_setup_metrics` (true),
+    `sdxi_setup_metrics_contexts` (`[0, 1]`) and
+    `sdxi_setup_metrics_interval` (15). A guest with no node_exporter is
+    skipped with a message. A guest with no SDXI device reports `sdxi_up 0`,
+    which the row shows as a blue "no counters" tile, not a red one.
+  - `qemu/checks/rocm-golden.sh` asserts it on the booted guest, with or
+    without a device, and asks systemd whether the unit has run since boot
+    and succeeded: the file itself is in the image from the bake.
+  - *Not yet run on a guest:* the script's read path was proven by hand on
+    a live guest; the role, the timer and the panels have run against
+    stand-ins only.
 
 - **The golden guest carries a perftest built with ROCm memory support.**
   Ubuntu's `perftest` is built without ROCm, so its `ib_send_bw` has no
@@ -138,77 +195,76 @@ All notable changes to this project will be documented in this file.
     `perftest_source_pin`. The fetch is compared with the commit before
     anything is compiled, so **a bake fails when the branch has moved**,
     naming both commits. An empty commit turns the check off, and the
-    guest check then refuses the image.
-  - *It needs no device*, so it runs in the bake: hipcc is told its GPU
-    (`perftest_setup_rocm_arch`, `gfx1250`) because a bake cannot ask one,
-    and left to itself hipcc 10.1 compiles for gfx906.
-  - *It does not take its CPU from the bake machine either.* perftest's
-    `configure` runs a program to ask the CPU for AVX2 and SSE4.2 and
-    compiles the host-memory validator for what it finds, with no switch.
-    **The first bake with this role failed on that**: a bake's guest has
-    QEMU's default CPU model, which has neither, and with no level the
-    pinned tree does not compile (`implicit declaration of function
-    '_mm_pause'`: `src/host_validation.c` includes the header that declares
-    it only with a SIMD level). The same build on a guest with the EPYC
-    model, which is what every stack runs, had come out AVX2. So the role
-    names the level, `perftest_setup_simd`, default `sse4.2`, which every
-    CPU a fleet runs on has: `cross_compiling=yes` on the configure line
-    stops the probes, and `SIMD_CFLAGS=` and `-DHAVE_SSE42=1` in `CPPFLAGS`
-    give the level. Nothing in the tree is patched.
-    `perftest-simd-check.sh` reads the level back from `config.h` and the
-    flags the Makefile gives that object (`DEFS`, `CPPFLAGS`, `CFLAGS` and
+    guest check then refuses the image. `perftest_source_pin` joins the
+    bake's compiler-cache key.
+  - *The tools are built for a GPU and a CPU the role names, not for the
+    bake machine's.* A bake has no GPU to ask, and left to itself hipcc
+    10.1 compiles for gfx906, so hipcc is told `gfx1250`
+    (`perftest_setup_rocm_arch`). perftest's `configure` runs a program to
+    ask the CPU for AVX2 and SSE4.2 and compiles the host-memory validator
+    for what it finds, with no switch; a bake's guest has QEMU's default
+    CPU model, which has neither, and the EPYC model every stack runs has
+    both. So the role names the level, `perftest_setup_simd`, default
+    `sse4.2`, which every CPU a fleet runs on has: `cross_compiling=yes` on
+    the configure line stops the probes, and `SIMD_CFLAGS=` and
+    `-DHAVE_SSE42=1` in `CPPFLAGS` give the level. Nothing in the tree is
+    patched.
+  - *What `sse4.2` costs against AVX2* is the rate of host-memory
+    validation: 16 bytes a compare, not 32. The tools check the CPU they
+    start on and refuse `--data_validation` on host memory where it lacks
+    the level; an `sse4.2` build is refused only where the CPUID has no
+    `sse4_2`, QEMU's default model included. `--use_rocm` validation is
+    unaffected.
+  - *The level is read back before and after the build.*
+    `perftest-simd-check.sh` reads it from `config.h` and the flags the
+    Makefile gives that object (`DEFS`, `CPPFLAGS`, `CFLAGS` and
     `SIMD_CFLAGS`, so a level written into a `CFLAGS=` is seen too) before
-    anything is compiled and stops a build at another one,
-    and the role then counts AVX instructions in the tool it built. The
-    tools check the CPU they start on and refuse `--data_validation` on
-    host memory where it lacks the level; an `sse4.2` build is refused only
-    where the CPUID has no `sse4_2`, QEMU's default model included.
-    `--use_rocm` validation is unaffected. What `sse4.2` costs against
-    AVX2 is the rate of host-memory validation: 16 bytes a compare, not 32.
+    anything is compiled and stops a build at another one, and the role
+    then counts AVX instructions in the tool it built.
+    `perftest_setup_configure_extra` takes no `CPPFLAGS=`, which the role
+    writes; flags of the caller's go in `perftest_setup_cppflags`.
   - *`perftest_setup_mm_pause_workaround`*, on by default, adds `-include
-    xmmintrin.h` so the tree compiles at any level, `none` included. It is
-    a workaround for the pinned commit and is to be turned off when the
-    pin moves to one with the fix; turned off while the tree still has the
-    bug, the bake stops before the compile and says so, on a compiler that
-    only warns about an implicit declaration as well as on one that
-    refuses it.
-    `perftest_setup_configure_extra` no longer takes a `CPPFLAGS=`, which
-    the role now writes; flags of the caller's go in
-    `perftest_setup_cppflags`.
-  - *It is linked against the rdma-core the guest loads*, which has to be
-    said: the image has the archive's rdma-core 61 under `/usr` and
-    rocm-ernic's 66 under `/usr/local`, the compiler reads the second one's
-    headers and the linker's default is the first one's library. On two
-    guests of the published image the build without it failed to link
-    (``undefined reference to `ibv_alloc_buf'``); with
-    `LDFLAGS=-L/usr/local/lib` it built in 18.76 s on 8 vCPUs. The role
-    adds that from `perftest_setup_rdma_lib_dir`, and
+    xmmintrin.h` so the tree compiles at any level, `none` included: with no
+    level the pinned tree does not compile (`implicit declaration of
+    function '_mm_pause'`: `src/host_validation.c` includes the header that
+    declares it only with a SIMD level). It is a workaround for the pinned
+    commit and is to be turned off when the pin moves to one with the fix;
+    turned off while the tree still has the bug, the bake stops before the
+    compile and says so, on a compiler that only warns about an implicit
+    declaration as well as on one that refuses it.
+  - *It is linked against the rdma-core the guest loads.* The published
+    image has the archive's rdma-core 61 under `/usr` and rocm-ernic's 66
+    under `/usr/local`; there the compiler reads the second one's headers
+    and the linker's default is the first one's library. On two guests of
+    that image, on 2026-11-17, the build with no library directory named
+    failed to link (``undefined reference to `ibv_alloc_buf'``); with
+    `LDFLAGS=-L/usr/local/lib` it built in 18.76 s on 8 vCPUs.
     `perftest-rdma-probe.sh` stops the build beforehand unless the headers,
-    the library linked and the library loaded are one rdma-core. The
-    configure line is the one that built on the guests; the variable and
-    the probe around it have run on the dev host against an rdma-core 66
-    tree, not yet on a guest.
-  - `/etc/perftest-rocm.json` records the build, `~/WELCOME.md` describes
-    it, and `qemu/checks/rocm-golden.sh` asserts which copy a bare name
-    runs in a non-login shell, a login shell and under sudo, that the help
-    offers `--use_rocm` and `--data_validation`, that the tools link the
-    image's ROCm, and that the libibverbs they load is the one they were
-    linked against. The stamp also records the SIMD level, whether the role
-    named it and whether the workaround was applied (`simd`, `simd_forced`,
-    `mm_pause_workaround`), and the check refuses an image whose level is
-    not `sse4.2`, or was left to the bake machine, or whose `ib_write_bw`
-    has an instruction on a `ymm` or `zmm` register.
-    `perftest_source_pin` joins the bake's compiler-cache key.
-  - **The guest check now fails an image baked before this**, for want of
-    `/etc/perftest-rocm.json`. The lanes here run it against a fresh bake;
-    batesste-ci-images runs it against the published image and has to take
-    this version of the check together with an image that has the build.
-  - *No bake has completed with it.* The one that ran stopped in this
-    role, as above. With the level named, the role built on a guest of the
-    published image booted the way a bake boots it, with QEMU's default
-    CPU model and no device, and built the same level on the EPYC model.
-    It is not in the image the fleet files pull until one is published
-    from a commit that has it and `<backing-ref>` moves.
+    the library linked and the library loaded are one rdma-core.
+  - *`perftest_setup_rdma_core` says which rdma-core that is.* `local`,
+    which `vm-rocm-golden.yml` sets, installs no rdma-core package and sends
+    the linker to `perftest_setup_rdma_lib_dir`; `archive`, the default,
+    installs the archive's three development packages for a guest whose
+    only rdma-core is the archive's, and is refused before it installs
+    anything on a guest that has one in that directory.
+  - `/etc/perftest-rocm.json` records the build, the SIMD level, whether
+    the role named it and whether the workaround was applied (`simd`,
+    `simd_forced`, `mm_pause_workaround`), and `~/WELCOME.md` describes it.
+    `qemu/checks/rocm-golden.sh` asserts which copy a bare name runs in a
+    non-login shell, a login shell and under sudo, that the help offers
+    `--use_rocm` and `--data_validation`, that the tools link the image's
+    ROCm, and that the libibverbs they load is the one they were linked
+    against; it refuses an image whose level is not `sse4.2`, or was left
+    to the bake machine, or whose `ib_write_bw` has an instruction on a
+    `ymm` or `zmm` register.
+  - *Measured on a guest and then in a bake*, on 2026-11-18. With the
+    level named, the role built on a guest of the published image booted
+    the way a bake boots it, with QEMU's default CPU model and no device,
+    and built the same level on the EPYC model. The bake at `40eb051` ran
+    this role before the level was named and stopped in the compiler; the
+    bake at `a7b33fe` built it for `sse4.2` and passed. See the last entry
+    under **Changed**.
+
 - **An optional test of RDMA with GPU memory**, the last play of
   `vm-quickstart.yml`: `ib_write_bw --use_rocm=0 --use_rocm_dmabuf
   --data_validation` between the first and last guest. Off unless
@@ -232,48 +288,8 @@ All notable changes to this project will be documented in this file.
     Those runs were on a build whose host-memory validator was AVX2, the
     level `configure` found on those guests; the validator a bake now
     builds is SSE4.2, and no transfer has been validated with it.
-
-  The play passes `--use_rocm_dmabuf` because that is the form that reaches
-  the NIC; in that form it has not been run.
-
-- **The SDXI device's counters reach Prometheus, and the home dashboard has
-  an SDXI row.** The golden guest now exports them through node_exporter's
-  textfile collector, as it does the GPU presence metrics:
-  `sdxi_setup`'s new `metrics` tasks install
-  `/usr/local/bin/sdxi-textfile-metrics.py` and
-  `sdxi-textfile-metrics.timer`, which every 30 s writes `sdxi_up` and
-  `sdxi_<counter>_total{context="N"}` for the device's 14 counters to
-  `/var/lib/prometheus/node-exporter/sdxi.prom`. The existing `fleet-node`
-  job scrapes it; no port, scrape job or fleet setting changes.
-  - The dashboard row, in all three stacks: device up per VM, errors over
-    the dashboard's range, copy throughput and copies/s, compress and
-    decompress bytes/s and ops/s, and a fleet-total copy throughput beside
-    "GPU Up". The rates are taken over a fixed 2 minutes, four of the
-    guest's 30 s writes; over Grafana's usual window a steady workload
-    would draw as a sawtooth. Without Grafana:
-    `sum by (vm_name) (rate(sdxi_bytes_moved_total{context="1"}[2m]))`.
-  - Context 0 is the driver's admin ring and context 1 carries every client
-    operation. `bytes_compressed` counts compress input and
-    `bytes_decompressed` decompress output. The counters restart from zero
-    with the SDXI server.
-  - Role variables `sdxi_setup_metrics` (true),
-    `sdxi_setup_metrics_contexts` (`[0, 1]`) and
-    `sdxi_setup_metrics_interval` (30). A guest with no node_exporter is
-    skipped with a message. A guest with no SDXI device reports `sdxi_up 0`,
-    which the row shows as a blue "no counters" tile, not a red one.
-  - `qemu-tool quick-start test` installs the same on a guest whose image
-    was baked before this, so the row fills in on today's published image
-    after it has run once.
-  - Each sample takes `sdxi_char`'s one lock for 28 register accesses per
-    context, so an operation that arrives during one waits for it.
-    `sudo systemctl stop sdxi-textfile-metrics.timer` in the guest stops
-    the sampling.
-  - `qemu/checks/rocm-golden.sh` asserts it on the booted guest, with or
-    without a device, and asks systemd whether the unit has run since boot
-    and succeeded: the file itself is in the image from the bake. *Not yet
-    run on a guest:* the script's read path was
-    proven by hand on a live guest; the role, the timer and the panels have
-    run against stand-ins only.
+  - The play passes `--use_rocm_dmabuf` because that is the form that
+    reaches the NIC; in that form it has not been run.
 
 ### Changed
 
@@ -282,22 +298,23 @@ All notable changes to this project will be documented in this file.
   compose services and in Prometheus's `vm_name`, and `ernic-vm-1` and
   `ernic-vm-2` inside, named from the index in their NIC's MAC; the
   configure stage then made them `rocm-ernic-vm-1`.
-  - `run-vm` passes the VM name to the guest in the SMBIOS system serial
-    number (`-smbios type=1,serial=<name>`), on amd64, and `gen-vm --bake`
-    passes the bake's name the same way. `--dry-run` shows it.
-  - The rocm-golden image has a new boot unit, `qemu-tool-hostname.service`,
-    that makes that name the hostname: lower case, anything outside
-    `[a-z0-9-]` a hyphen, the last 63 characters of a longer one. It writes
-    `/etc/hostname` and one `127.0.1.1 <name>` line in `/etc/hosts`, and
-    tells cloud-init to leave the hostname alone while the host gives one.
-  - `ernic-vm-<n>` is now only the name of a guest the host passed no name:
-    one started by something other than `run-vm`, that has an emulated NIC.
-  - `vm-rocm-golden.yml --tags configure` no longer renames the guest or
-    rewrites `/etc/hosts` (`ernic_set_hostname: false`).
   - *Who is affected:* anything that expects `ernic-vm-<n>` or
-    `rocm-ernic-vm-<n>` as a guest's hostname. **Not yet anyone:** the guest
-    half is in the image and arrives with the next one published; with
-    `20261117.g481c892` guests keep the old names.
+    `rocm-ernic-vm-<n>` as a guest's hostname. The second goes with this
+    release: `--tags configure` no longer renames a guest, on today's image
+    too. **The first is not yet anyone's problem:** the guest half is in the
+    image and arrives with the next one published; with `20261117.g481c892`
+    a guest is still `ernic-vm-<n>` inside.
+  - *The host half:* `run-vm` passes the VM name to the guest in the SMBIOS
+    system serial number (`-smbios type=1,serial=<name>`), on amd64, and
+    `gen-vm --bake` passes the bake's name the same way. `--dry-run` shows
+    it, and the dry-run workflow holds amd64 to it and arm64 and riscv64 to
+    no `-smbios` at all.
+  - *The guest half:* the rocm-golden image has a new boot unit,
+    `qemu-tool-hostname.service`, that makes that name the hostname: lower
+    case, anything outside `[a-z0-9-]` a hyphen, the last 63 characters of
+    a longer one. It writes `/etc/hostname` and one `127.0.1.1 <name>` line
+    in `/etc/hosts`, and tells cloud-init to leave the hostname alone while
+    the host gives one.
   - **A stack needs both halves.** Its `run-vm` is the one inside each qemu
     container: built from the tree `QEMU_TOOL_SRC` names (`quick-start` from
     a checkout stages its own), and installed from PyPI when there is none.
@@ -305,6 +322,10 @@ All notable changes to this project will be documented in this file.
     an installed tool with no checkout keeps `ernic-vm-<n>` on the new image
     until this release is on PyPI. Either half without the other changes
     nothing, so the order they ship in does not matter.
+  - `ernic-vm-<n>` is now only the name of a guest the host passed no name:
+    one started by something other than `run-vm`, that has an emulated NIC.
+    `vm-rocm-golden.yml --tags configure` no longer renames the guest or
+    rewrites `/etc/hosts` (`ernic_set_hostname: false`).
   - A VM name that is itself a firmware placeholder is not passed through:
     `none`, `null`, `empty`, `unknown`, `invalid`, `oem`, `na`, all zeros,
     four or more of one character, `123456789`. The guest keeps the name it
@@ -312,22 +333,26 @@ All notable changes to this project will be documented in this file.
     makes such a name.
   - The publish workflow checks the rename before it pushes: its gate guest
     is `rocm-golden-1`, an overlay of an image baked as `rocm-golden`, and
-    the hostname has to be the first. Not yet run.
-  - Measured on one guest of the published image with the unit installed
+    the hostname has to be the first.
+  - *Measured* on one guest of the published image with the unit installed
     and no device attached: started as `Mixed_Case-Name-7` it was
     `mixed-case-name-7`, started again as `Second.Guest_02` it was
     `second-guest-02`, and with the argument removed it kept the name it
-    had. Not run: a bake, or a stack with two guests and their NICs.
+    had. *Not run:* a stack with two guests and their NICs, and the publish
+    workflow's check.
 
 - **The golden guest no longer carries Ubuntu's rdma-core development
   packages**: `libibverbs-dev`, `librdmacm-dev` and `libibumad-dev`. The
   image has two rdma-cores, the archive's 61 under `/usr` and rocm-ernic's
   66, built from source under `/usr/local`, which every tool loads. Both had
   headers and link libraries, and the toolchain took the headers from one
-  and the library from the other (the perftest entry above is that image).
-  The archive's is now a runtime only, and a build in the guest finds one
-  rdma-core with no flags: `gcc prog.c -libverbs` compiles against, links
-  and loads the one in `/usr/local`.
+  and the library from the other, which is what failed the perftest link
+  under Added. The archive's is now a runtime only, and a build in the guest
+  finds one rdma-core with no flags: `gcc prog.c -libverbs` compiles
+  against, links and loads the one in `/usr/local`.
+  - *What a guest loses*: the verbs API man pages and static linking against
+    rdma-core, for 3.1 MB. *What to avoid*: `apt install libibverbs-dev` in
+    a golden guest restores the mix. A `vm-basic.yml` guest is unchanged.
   - *Not installed, and purged if present.* The three are out of
     `qemu/packages.d/rocm-golden.txt`, `rocm_ernic_setup_packages` and the
     perftest role's build dependencies. A new play, after everything that
@@ -341,12 +366,6 @@ All notable changes to this project will be documented in this file.
     against them, `rdma-core` has the udev rules and units, and the
     quickstart RDMA test runs `/usr/bin/ib_send_bw` by path. `libnl-3-dev`
     and `libnl-route-3-dev` stay too.
-  - *`perftest_setup` has `perftest_setup_rdma_core`.* `local`, which
-    `vm-rocm-golden.yml` sets, installs no rdma-core package and sends the
-    linker to `perftest_setup_rdma_lib_dir`; `archive`, the default,
-    installs the three for a guest whose only rdma-core is the archive's,
-    and is refused before it installs anything on a guest that has one in
-    that directory. The probe stays, for the guest that still has both.
   - *`/etc/rocm-golden-guest.json` names both rdma-cores.*
     `rdma_core_version` was the archive package's version, though 66 is
     what runs. It is kept, and beside it are `rdma_core_archive_version`,
@@ -357,28 +376,25 @@ All notable changes to this project will be documented in this file.
     runs as its last check: none of the three is installed, no rdma-core
     header set, link library or pkg-config file is outside `/usr/local`,
     pkg-config resolves there, and a program built with no flags reads,
-    links and loads the `/usr/local` copy. **It fails the image the fleet
-    files pull**, which has the packages; only the lanes that bake run it
-    here.
-  - *What a guest loses*: the verbs API man pages and static linking against
-    rdma-core, for 3.1 MB. *What to avoid*: `apt install libibverbs-dev` in
-    a golden guest restores the mix. A `vm-basic.yml` guest is unchanged.
+    links and loads the `/usr/local` copy.
   - *Measured on a guest, not in a bake.* On a guest of
     `20261117.g481c892` the purge removed the three and nothing else, and
     with them gone perftest, the P4 client and benchmark, rocm-ernic's
     rdma-core itself, the `ionic-ernic` DKMS package and fio all built;
-    perftest and the P4 pair ran against the NIC. No bake has run with the
-    change, and the check block in its final form has run against stand-ins
-    and the dev host's toolchain only.
+    perftest and the P4 pair ran against the NIC. The check block in its
+    final form has run against stand-ins and the dev host's toolchain only.
 
-- **`sbates130272.batesste` is pinned at 3.4.0** (was 3.3.1). It is a
-  provisioning-speed release: `rocm_setup` looks up every version with one
-  `rocm-latest` call, `user_setup` writes its SSH client settings as one
-  block, and `fave_packages` skips the `uv` install instead of failing the
-  play when GitHub rate-limits the version lookup. `user_setup` still
-  removes snapd without purging it, so `vm-basic.yml` keeps its purge.
-  Read from the two release tarballs; the first bake on it is the
-  playbook-test run of the bump.
+- **`qemu/checks/rocm-golden.sh` refuses an image baked before this
+  release**, the one the fleet files pull included. The check stops on any
+  of four things about such an image: it has the three rdma-core
+  development packages, and it has no ROCm perftest
+  (`/etc/perftest-rocm.json`), no SDXI exporter
+  (`sdxi-textfile-metrics.timer`) and no hostname unit
+  (`qemu-tool-hostname.service`). Only the lanes that bake run the check
+  here, against a fresh bake. *Who is affected:* batesste-ci-images, which
+  runs it against the published image and has to take this version of the
+  check together with an image baked from this release.
+
 - **The rocm-ernic Ansible collection is `rocm.ernic` now, and its pin no
   longer has to be the commit the guest's driver is built from.** Upstream
   renamed `sbates130272.rocm_ernic` to `rocm.ernic` and stopped publishing it
@@ -389,6 +405,10 @@ All notable changes to this project will be documented in this file.
   fails any tracked file but the two changelogs that still carries the old
   name: on a host with the old collection installed, an un-renamed role
   resolves to the old roles and says nothing.
+  - *If you bake by hand:* `gen-vm` installs the collection on its next
+    run; a bare `ansible-playbook` run needs `ansible-galaxy collection
+    install --no-deps -r ansible/requirements.yml` first. The old
+    collection's directory is not removed by either.
   - *Two pins where there was one.* The collection pin is the **roles**.
     `ernic_source_pin` in `vm-rocm-golden.yml` is the **sources**: the
     checkout the SRQ and P4 series, the scripts that fetch and build them,
@@ -406,37 +426,69 @@ All notable changes to this project will be documented in this file.
   - *Why the collection could move alone:* between the two commits no
     `.patch` file under the collection's `ansible/files/patches` differs,
     `setup-ionic-dkms.sh` is identical, and the SRQ, provider and P4 roles
-    differ only in how they spell a fact (`ansible_facts['kernel']`).
-  - *What does change in a bake:* `ernic_source` clones the sources with git
+    differ only in how they spell a fact (`ansible_facts['kernel']`). Read
+    from the two commits in a clone of upstream, and tested against the
+    collection installed from this pin.
+  - *What changes in a bake:* `ernic_source` clones the sources with git
     commands of its own, blob-less and with no tags on the path a pinned
     commit takes, and converts the clone an earlier bake left on the
     controller; the first play's fetch of the ionic sources runs the newer
     `fetch-ionic-sources.sh`, which asks whether the repository answers
     before each fetch and, when a `git.kernel.org` repository never does,
-    goes on to `kernel.googlesource.com`. A bake reaches its GitHub mirror
-    through a git rewrite of the first URL only, so with that mirror down
-    the fetch now succeeds from Google; the bake's commit check fails it on
-    the origin, as a test now shows with the real script. The check also
-    removes a guest's tree it fails. The script's sentinel records the URL
-    it was given, not the host that answered, so that tree left in place
-    was one every rerun on the guest (`gen-vm --ansible-only`) would find
-    "already there", fetch nothing over and fail on again. A controller's
-    tree is not removed; the failure says to.
+    goes on to `kernel.googlesource.com`.
+  - *The bake's commit check still holds the ionic sources to the GitHub
+    mirror.* A bake reaches that mirror through a git rewrite of the first
+    URL only, so with the mirror down the fetch now succeeds from Google;
+    the commit check fails it on the origin, as a test now shows with the
+    real script. It also removes a guest's tree it fails, which every rerun
+    on the guest (`gen-vm --ansible-only`) would otherwise find "already
+    there", fetch nothing over and fail on again. A controller's tree is
+    not removed; the failure says to.
   - Three variables the playbook passed to `ernic_p4_dkms`
     (`ernic_p4_dkms_install`, `ernic_p4_dkms_reload`,
     `ernic_p4_dkms_fetch_on_controller`) are gone: no role read them at
     either commit. Every local workaround stays: the mirror rewrite, the
     commit check, the guard on the controller's clone and the naming rules.
   - The bake's compiler cache starts under a new key: its prefix hashes
-    `requirements.yml`. The first bake after this restores an earlier
-    entry through the fallback and saves once under the new prefix.
-  - Read from the two commits in a clone of upstream, and tested against
-    the collection installed from this pin. **No bake has run on the new
-    roles**; the first is the playbook-test run of this change. A host that
-    bakes by hand installs the collection on its next `gen-vm`; a bare
-    `ansible-playbook` run needs `ansible-galaxy collection install
-    --no-deps -r ansible/requirements.yml` first. The old collection's
-    directory is not removed by either.
+    `requirements.yml`. The first bake under it restores an earlier entry
+    through the fallback and saves once under the new prefix.
+
+- **`sbates130272.batesste` is pinned at 3.4.0** (was 3.3.1). It is a
+  provisioning-speed release: `rocm_setup` looks up every version with one
+  `rocm-latest` call, `user_setup` writes its SSH client settings as one
+  block, and `fave_packages` skips the `uv` install instead of failing the
+  play when GitHub rate-limits the version lookup. `user_setup` still
+  removes snapd without purging it, so `vm-basic.yml` keeps its purge.
+  Read from the two release tarballs; the playbook-test run at `aff9955`,
+  started on 2026-11-17, baked on it and passed.
+
+- **Every change to the golden guest here has been through one complete
+  bake in CI, and no published image has any of them yet.**
+  - **The bake.** Pull request #240's playbook-test run at `a7b33fe` on
+    2026-11-18 (run 44363648365) baked with all of it and passed: bake
+    recap `ok=557 failed=0` in 13m29s on a warm compiler cache (1911 of
+    2125 ccache invocations hit). `qemu/checks/rocm-golden.sh` then
+    passed on the baked guest and reported, among the rest: one rdma-core
+    to build against, with none of the three development packages to
+    purge; perftest at the pinned commit, its host-memory validator built
+    for `sse4.2` with no wider instruction in `ib_write_bw`;
+    `apparmor.service` not failed; `sdxi-textfile-metrics.timer` enabled,
+    with `sdxi_up 0` on the boot with no device and 14 counters for each
+    of contexts 0 and 1 behind a stack; and the hostname the host passed.
+    The configure stage ran after it and the lane's steps confirmed the
+    baked SRQ + P4 driver still loaded and this repository's naming rules
+    still installed. An earlier run, at `40eb051`, had stopped in the
+    perftest build, before the role named a SIMD level.
+  - **The fleet files still pull `20261117.g481c892`, which was baked
+    before all of it.** Until an image is published from this release and
+    `<backing-ref>` moves, a fleet's guests have no ROCm perftest, have the
+    rdma-core development packages, are `ernic-vm-<n>` inside, and export
+    SDXI counters only once `quick-start test` has run on them.
+  - **Still unproven:** the publish workflow, which bakes without the
+    lane's key and checks the hostname before it pushes, never runs from a
+    pull request; no guest with eight NICs has been booted from any
+    published image; and the SDXI row has been seen in Grafana with live
+    series only on the development host.
 
 ### Fixed
 
@@ -448,29 +500,33 @@ All notable changes to this project will be documented in this file.
   `ernic_guest_setup` with its driver build on. That build applies the base
   series only, and `setup-ionic-dkms.sh` removes and rebuilds
   `ionic-ernic/<kernel ref>` under the same name and version, after which
-  the role reloads the modules. Two CI runs show the rebuild in that stage
-  (19 s and 48 s), and nothing read `max_srq` after it. Measured since, on a
-  guest booted from `20261117.g481c892`, which has `max_srq` 256 at boot:
-  - *On a stack that offers the guest no P4*, which is what both lanes
-    render, the old stage was green and left `max_srq` 0 with the port still
-    active, so no shared receive queue and no `rc_verbs` through UCX, and an
-    `ernic_p4` that no longer loads. Every with-device step after it ran on
-    that driver.
-  - *On a stack that offers P4*, which `rocm-golden.xml` does, the old stage
-    failed: `ernic_p4` holds `ionic`, so only `ionic_rdma` was unloaded, and
-    the rebuilt one does not load against the baked `ionic`. The guest was
-    left with no RDMA device at all.
-  - The stage as it is now, on the same guest in both shapes: green, no
+  the role reloads the modules. The published qcow2 was not affected: the
+  stage runs on an overlay of it.
+  - *If you ran `--tags configure` before this:* that guest's overlay holds
+    the base driver. Make a new overlay on the baked image, which was not
+    changed.
+  - *Behaviour change:* `--tags configure` now fails, at its first task, on
+    a guest `vm-rocm-golden.yml` did not bake. It used to build a base
+    driver into one that had the pinned kernel and a toolchain.
+  - *What the old stage left*, measured on 2026-11-17 on a guest booted
+    from `20261117.g481c892`, which has `max_srq` 256 at boot. On a stack
+    that offers the guest no P4, which is what both lanes render, it was
+    green and left `max_srq` 0 with the port still active, so no shared
+    receive queue and no `rc_verbs` through UCX, and an `ernic_p4` that no
+    longer loads; every with-device step after it ran on that driver. On a
+    stack that offers P4, which `rocm-golden.xml` does, it failed:
+    `ernic_p4` holds `ionic`, so only `ionic_rdma` was unloaded, and the
+    rebuilt one does not load against the baked `ionic`, which left the
+    guest with no RDMA device at all. Two CI runs show the rebuild in that
+    stage (19 s and 48 s), and nothing read `max_srq` after it.
+  - *The stage as it is now*, on the same guest in both shapes: green, no
     DKMS build, `max_srq` 256 and the port active afterwards, the loaded
-    modules still the baked ones.
-
-  The published qcow2 was not affected: the stage runs on an overlay of it.
-  - The stage now runs the role with `ernic_install_driver: false`, so it
-    builds nothing, fetches no kernel sources and reloads nothing. It loads
-    the baked modules if they are not loaded, brings the emulated NICs up
-    and assigns the address as before.
-  - It begins and ends by asking the guest whether its ionic driver is the
-    baked one (`rocm_ernic_setup`'s `driver_check` tasks, which run
+    modules still the baked ones. It runs the role with
+    `ernic_install_driver: false`, so it builds nothing, fetches no kernel
+    sources and reloads nothing. It loads the baked modules if they are not
+    loaded, brings the emulated NICs up and assigns the address as before.
+  - *It begins and ends by asking the guest whether its ionic driver is the
+    baked one* (`rocm_ernic_setup`'s `driver_check` tasks, which run
     `files/ernic-driver-check.sh`): the loaded `ionic` and `ionic_rdma` are
     the DKMS build the bake recorded, `ionic_rdma` defines the SRQ verbs,
     `ionic` registers a P4 auxiliary device, `ernic_p4` loads against it,
@@ -485,19 +541,30 @@ All notable changes to this project will be documented in this file.
     `ernic_p4` in `/etc/ionic-srq-p4.json` and checks the record against the
     modules it installed, the P4 series included: the bake's earlier "P4
     symbol" check counted a symbol the base driver also exports.
-  - *Behaviour change:* `--tags configure` now fails, at its first task, on
-    a guest `vm-rocm-golden.yml` did not bake. It used to build a base
-    driver into one that had the pinned kernel and a toolchain.
-  - *If you ran `--tags configure` before this:* that guest's overlay holds
-    the base driver. Make a new overlay on the baked image, which was not
-    changed.
-  - Run by hand against one live guest, as above, with both lanes'
+  - *Run by hand against one live guest*, as above, with both lanes'
     assertion steps passing after the new stage and the driver step failing
-    after the old one. Not yet run: a bake from this change, so the
-    recorded `srcversion` and the bake's own check of it have met no real
-    module; any CI lane; and the changes made after those runs (the check
-    running when the role fails, its unload of `ernic_p4`, a record written
-    on one line), which the unit suite covers against a fabricated guest.
+    after the old one. The changes made after those runs (the check running
+    when the role fails, its unload of `ernic_p4`, a record written on one
+    line) are covered by the unit suite against a fabricated guest only.
+
+- **`scripts/release.sh` runs the unit suite on the stamped tree before it
+  commits and tags.** v2.0.0 was tagged and published with one failing
+  test. The release commit writes new text, the `qemu/debian/changelog`
+  stanza and the retitled changelog section, and nothing ran `tests/` on
+  it: the only workflow that does runs on pull requests, and a release
+  commit is pushed straight to main. The script now runs `python3 -m
+  unittest discover -s tests` after it stamps the four files; a failure
+  prints the tail of the output, keeps the full log, restores the four
+  files and makes no commit and no tag. A dry run runs nothing, as before.
+  - The test that failed scans `qemu/` for a kernel.org URL outside a
+    comment, and the 2.0.0 stanza says where the ionic sources used to come
+    from. The scan now passes over `qemu/debian/changelog`, which is
+    release notes and not a bake path.
+  - `tests/test_release_sh.py` runs the real script in a throwaway
+    repository with a stand-in for the suite: a failing suite stops the
+    release and leaves the tree clean, the suite sees the stamped versions,
+    and a dry run changes and runs nothing. *Not run there:* the passing
+    path, which ends in a signed tag and needs the releaser's key.
 
 ## [v2.0.0] - 2026-11-17
 
