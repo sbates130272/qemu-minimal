@@ -393,6 +393,66 @@ Run each
 .B fio
 NVMe pass for this many seconds. Default: 10.
 .TP
+.B \-\-sdxi\-test
+Also run the SDXI test: on every guest, as its login user with no sudo,
+copy 4 MiB of random data through
+.I /dev/sdxi0
+with
+.B sdxi\-cli
+and compare the copy with its source.
+.BR "Off by default" .
+A functional check, not a benchmark. Refused before anything is started on a
+fleet whose
+.B <sdxi\-per\-vm>
+is 0, naming the element. A pass prints one line a guest,
+.RI \(dq name ": SDXI copy of 4194304 bytes verified\(dq,"
+and the same result is in that guest's summary and in the report. Only
+meaningful with the
+.B test
+or
+.B all
+verbs.
+.TP
+.B \-\-p4\-test
+Also run the P4 fp8 test: on the first guest only, as its login user with no
+sudo,
+.B p4_fp8_client
+loads the fp8 P4 program into that guest's NIC through
+.IR /dev/ernic\-p4 ,
+installs the table entry and checks one reduction, and
+.B p4_fp8_bench
+then times it. The reduction is compute inside one NIC, so there is no peer
+guest and nothing crosses the mesh; the RDMA device name is asked of the
+guest.
+.BR "Off by default" .
+Refused before anything is started unless the fleet has
+.B <p4\-enable>true
+and
+.BR <p4\-guest\-scope>load ,
+which is the scope that lets a guest replace the program and write a table
+entry. A pass prints
+.RI \(dq name ": P4 FP8 reduction " rate " MB/s (262144 elements x 2000 iterations)\(dq,"
+in fp8 result bytes per second. The program and its table entry stay in
+that NIC until its server restarts: a two\-equal\-operand RDMA WRITE on it
+is a reduction from then on, and ordinary transfers are untouched. Only
+meaningful with the
+.B test
+or
+.B all
+verbs.
+.TP
+.BI \-\-p4\-iters " N"
+How many reductions
+.B \-\-p4\-test
+times. Default: 2000, about 3 seconds. Each is 262144 fp8 elements, the most
+the device moves in one operation. Refused without
+.BR \-\-p4\-test .
+Only meaningful with the
+.B test
+or
+.B all
+verbs; any other verb ignores all three switches and says so.
+.TP
 .B \-\-clean\-overlays
 Delete the guest overlay and NVMe qcow2 files before starting, so the guests
 boot from a fresh overlay of the backing image. The backing file itself is

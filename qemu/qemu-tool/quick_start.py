@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -104,6 +105,13 @@ _VCPU_CEILING = 8
 _VMEM_FLOOR_MB = 4096
 _VMEM_CEILING_MB = 8192
 
+# What --p4-test needs of <p4-guest-scope>. The server's scopes are ordered
+# none < read < write < load, and p4_fp8_client uses the top two: it replaces
+# the P4 program (LOAD_BEGIN, LOAD_CHUNK, LOAD_COMMIT, which need load) and
+# installs the reduce entry (ENTRY_UPDATE, which needs write). With `none`
+# the guest has no /dev/ernic-p4 at all.
+_P4_SCOPE_NEEDED = "load"
+
 
 # ---------------------------------------------------------------------------
 # Resolved state
@@ -138,6 +146,12 @@ class _State:
     rdma_delta: int | None = None
     rdma_duration: int | None = None
     nvme_duration: int | None = None
+    # The optional tests, each a play of the playbook that is off unless its
+    # extra var is passed. p4_iters sizes the second and is None for the
+    # playbook's own default.
+    sdxi_test: bool = False
+    p4_test: bool = False
+    p4_iters: int | None = None
 
     # ---- convenience readers -------------------------------------------
     @property
@@ -1265,6 +1279,101 @@ def _write_network_inventory(state: _State) -> Path:
     return path
 
 
+def _where_set(state: _State, field_name: str) -> str:
+    """Where the merged value of one fleet setting came from, for a refusal.
+
+    Later layers win element by element, so it is the last layer that names
+    the element and no other: a message that listed every layer would pin
+    the value on files that set a different one, or none.
+    """
+    for layer in reversed(state.all_layers):
+        if field_name in FleetXml.fields_set(layer):
+            return f"in {layer}"
+    named = ", ".join(str(layer) for layer in state.all_layers)
+    return f"by default (set in none of: {named})"
+
+
+def _check_optional_tests(state: _State) -> None:
+    """Refuse an optional test this fleet cannot run, before anything starts.
+
+    The alternative is the same answer minutes later from inside a guest,
+    after the pull, the boot and the tests in front of it. Read from the
+    merged settings: the SDXI servers and the ernic servers' P4 flags are
+    both rendered into the stack from them.
+    """
+    asked = [flag for flag, on in (("--sdxi-test", state.sdxi_test),
+                                   ("--p4-test", state.p4_test)) if on]
+    if state.p4_iters is not None and not state.p4_test:
+        _die("--p4-iters sizes the P4 test and does nothing without it: "
+             "add --p4-test")
+    if not asked:
+        return
+    if state.playbook is None:
+        _die(f"{' and '.join(asked)}: this flavor has no configure-and-test "
+             "playbook, so quick-start boots its guests and runs no test on "
+             "them. The optional tests are plays of vm-quickstart.yml, which "
+             "the default flavor runs.")
+    again = ("then run `qemu-tool quick-start up` again, because the setting "
+             "is rendered into the stack and an edit does not reach a "
+             "running one")
+    if state.sdxi_test and state.fleet.sdxi_per_vm < 1:
+        _die("--sdxi-test: this fleet gives its guests no SDXI device: "
+             f"<sdxi-per-vm> is {state.fleet.sdxi_per_vm} "
+             f"{_where_set(state, 'sdxi_per_vm')}, so there is no /dev/sdxi0 "
+             "to copy through. Set <sdxi-per-vm>1</sdxi-per-vm>, and "
+             f"<sdxi-image> if the fleet names none, {again}; or drop "
+             "--sdxi-test.")
+    if state.p4_test and not state.fleet.p4_enable:
+        _die("--p4-test: this fleet's ernic servers run no P4 engine: "
+             f"<p4-enable> is false {_where_set(state, 'p4_enable')}, so "
+             "the guests have no /dev/ernic-p4. Set "
+             "<p4-enable>true</p4-enable> and "
+             f"<p4-guest-scope>{_P4_SCOPE_NEEDED}</p4-guest-scope>, "
+             f"{again}; or drop --p4-test.")
+    scope = (state.fleet.p4_guest_scope or "none").strip()
+    if state.p4_test and scope != _P4_SCOPE_NEEDED:
+        what = {
+            "none": "the guests have no /dev/ernic-p4 at all",
+            "read": "the device refuses both",
+            "write": "the device refuses the program",
+        }.get(scope, "the ernic server will not start")
+        _die(f"--p4-test: <p4-guest-scope> is {scope} "
+             f"{_where_set(state, 'p4_guest_scope')}, and the test needs "
+             f"{_P4_SCOPE_NEEDED}: it replaces the P4 program and installs "
+             f"a table entry, and with {scope} {what}. Set "
+             f"<p4-guest-scope>{_P4_SCOPE_NEEDED}</p4-guest-scope>, {again}; "
+             "or drop --p4-test.")
+
+
+def _playbook_command(state: _State) -> list[str]:
+    """The ansible-playbook command line for the configure-and-test step.
+
+    A function so a test can read it: with no test flag it is what it was
+    before the optional tests existed, argument for argument.
+    """
+    cmd = ["ansible-playbook",
+           "-i", str(state.stack_dir / "fleet-inventory.yml")]
+    if state.in_network:
+        cmd += ["-i", str(_write_network_inventory(state))]
+    cmd += [f"playbooks/{state.playbook}",
+            "--private-key", str(state.key),
+            "-e", f"quickstart_artifacts_dir={state.artifacts}",
+            "-e", "ansible_remote_tmp=/tmp/.ansible/tmp"]
+    if state.rdma_duration is not None:
+        cmd += ["-e", f"quickstart_rdma_duration={state.rdma_duration}"]
+    if state.nvme_duration is not None:
+        cmd += ["-e", f"quickstart_nvme_duration={state.nvme_duration}"]
+    # Each is the gate of one play, which a run without it ends at its first
+    # task. Passed only when asked for: the playbook's default is off.
+    if state.sdxi_test:
+        cmd += ["-e", "quickstart_sdxi_test=true"]
+    if state.p4_test:
+        cmd += ["-e", "quickstart_p4_test=true"]
+        if state.p4_iters is not None:
+            cmd += ["-e", f"quickstart_p4_iters={state.p4_iters}"]
+    return cmd
+
+
 def configure_and_test(state: _State) -> None:
     wait_for_guests(state)
     if state.playbook is None:
@@ -1283,19 +1392,8 @@ def configure_and_test(state: _State) -> None:
     shutil.rmtree(state.artifacts, ignore_errors=True)
     before = _ernic_bytes(state, 1)
 
-    cmd = ["ansible-playbook",
-           "-i", str(state.stack_dir / "fleet-inventory.yml")]
-    if state.in_network:
-        cmd += ["-i", str(_write_network_inventory(state))]
-    cmd += [f"playbooks/{state.playbook}",
-            "--private-key", str(state.key),
-            "-e", f"quickstart_artifacts_dir={state.artifacts}",
-            "-e", "ansible_remote_tmp=/tmp/.ansible/tmp"]
-    if state.rdma_duration is not None:
-        cmd += ["-e", f"quickstart_rdma_duration={state.rdma_duration}"]
-    if state.nvme_duration is not None:
-        cmd += ["-e", f"quickstart_nvme_duration={state.nvme_duration}"]
-    result = subprocess.run(cmd, cwd=state.repo_root / "ansible")
+    result = subprocess.run(_playbook_command(state),
+                            cwd=state.repo_root / "ansible")
     if result.returncode != 0:
         _die("the configure-and-test playbook failed")
 
@@ -1308,6 +1406,49 @@ def configure_and_test(state: _State) -> None:
         _die("the ernic byte counter did not move")
 
     _report_nvme_summary(state)
+    _report_optional_tests(state)
+
+
+# The line each optional test leaves in its guest's artifact file. The same
+# text is in the report, which is made of those files.
+_SDXI_RESULT = re.compile(
+    r"^sdxi copy: (\d+) bytes through \S+, source and destination identical",
+    re.M)
+_P4_RESULT = re.compile(
+    r"^p4 fp8 bench: (\d+) elements x (\d+) iters, avg [\d.]+ ms, "
+    r"([\d.]+) MB/s", re.M)
+
+
+def _report_optional_tests(state: _State) -> None:
+    """Print what --sdxi-test and --p4-test recorded.
+
+    A test that was asked for and left no result is a failure, not a line
+    missing from the output: the playbook passing says its plays did not
+    fail, and a play that was skipped did not fail either.
+    """
+    if not (state.sdxi_test or state.p4_test):
+        return
+
+    def recorded(index: int) -> str:
+        md = state.artifacts / f"{state.vm(index)}.md"
+        return md.read_text() if md.exists() else ""
+
+    if state.sdxi_test:
+        for index in range(1, state.vm_count + 1):
+            found = _SDXI_RESULT.search(recorded(index))
+            if not found:
+                _die(f"--sdxi-test was asked for and {state.vm(index)} "
+                     "recorded no SDXI copy")
+            _say(f"{state.vm(index)}: SDXI copy of {found.group(1)} bytes "
+                 "verified")
+    if state.p4_test:
+        # The first guest only: the reduction is inside one NIC, no peer.
+        found = _P4_RESULT.search(recorded(1))
+        if not found or float(found.group(3)) <= 0:
+            _die(f"--p4-test was asked for and {state.vm(1)} recorded no "
+                 "P4 FP8 rate above zero")
+        _say(f"{state.vm(1)}: P4 FP8 reduction {found.group(3)} MB/s "
+             f"({found.group(1)} elements x {found.group(2)} iterations)")
 
 
 def _report_nvme_summary(state: _State) -> None:
@@ -1497,6 +1638,13 @@ def _summary(state: _State) -> None:
     print("      qemu-tool list --summary          # what the fleet is doing")
     print(f"      qemu-tool inspect {state.vm(1)}")
     print("      qemu-tool quick-start test        # re-run the GPU and RDMA tests")
+    optional = [flag for flag, offered in (
+        ("--sdxi-test", state.fleet.sdxi_per_vm >= 1),
+        ("--p4-test", state.fleet.p4_enable
+         and state.fleet.p4_guest_scope == _P4_SCOPE_NEEDED)) if offered]
+    if optional:
+        print(f"      qemu-tool quick-start test {' '.join(optional)}")
+        print("                                        # and the optional ones")
     print("      qemu-tool quick-start down        # stop it, keep the overlays")
     print()
 
@@ -1522,6 +1670,9 @@ def run(
     rdma_duration: int | None = None,
     nvme_duration: int | None = None,
     variant: str = "default",
+    sdxi_test: bool = False,
+    p4_test: bool = False,
+    p4_iters: int | None = None,
 ) -> None:
     fleet_stem, stack_stem, key_stem, playbook = VARIANTS[variant]
 
@@ -1559,6 +1710,9 @@ def run(
         base_layers=layers,
         rdma_duration=rdma_duration,
         nvme_duration=nvme_duration,
+        sdxi_test=sdxi_test,
+        p4_test=p4_test,
+        p4_iters=p4_iters,
         playbook=playbook,
     )
     # Picks up the overlays an earlier verb left beside the stack, which is
@@ -1577,6 +1731,20 @@ def run(
     # name. The referrer is already on disk by then, so this is a local read
     # and a no-op before the first fetch.
     _adopt_login(state)
+
+    # Before the preflight, the pull and the boot: a test this fleet cannot
+    # run is refused now. The other verbs run no test, so they ignore the
+    # switches, and say so: silence there reads as the test having been run.
+    if verb in ("all", "test"):
+        _check_optional_tests(state)
+    else:
+        given = [flag for flag, on in (("--sdxi-test", sdxi_test),
+                                       ("--p4-test", p4_test),
+                                       ("--p4-iters", p4_iters is not None))
+                 if on]
+        if given:
+            print(f"note: {', '.join(given)} ignored: `{verb}` runs no test. "
+                  "The test and all verbs read them.", file=sys.stderr)
 
     if verb == "logs":
         extra = ["-f"] if follow else []

@@ -216,6 +216,33 @@ the guest lists them. That behaviour is in the image the fleet files pull,
 `20261117.g481c892`, and in any baked since — the one published before it,
 `20261117.g80c17f8`, still tells you to run the probe first.
 
+Two more tests are behind switches. Both are off by default, run with
+`test` or with no verb, and run in the guest as its login user with no
+sudo:
+
+| Switch | What it runs | A pass prints |
+|---|---|---|
+| `--sdxi-test` | on every guest, 4 MiB of random data copied through `/dev/sdxi0` with `sdxi-cli` and compared with its source | `rocm-golden-1: SDXI copy of 4194304 bytes verified`, one line a guest |
+| `--p4-test` | on the first guest only, `p4_fp8_client` loads the fp8 P4 program into its NIC and checks one reduction, then `p4_fp8_bench` times 2000 of them (`--p4-iters` for another count) | `rocm-golden-1: P4 FP8 reduction <rate> MB/s (262144 elements x 2000 iterations)` |
+
+```bash
+qemu-tool quick-start test --sdxi-test --p4-test
+```
+
+Each result is also in its guest's summary under the stack's `artifacts/`
+and in the report. A fleet that cannot run one is refused before anything
+is started, naming the element to change: `--sdxi-test` needs
+`<sdxi-per-vm>` of at least 1, and `--p4-test` needs `<p4-enable>true` and
+`<p4-guest-scope>load`, the scope that lets a guest replace the program and
+write a table entry. `rocm-golden.xml` has all three. The SDXI test is a
+functional check with no figure. The P4 figure is the rate of the reduction
+inside one NIC, in fp8 result bytes per second, with no peer guest and
+nothing crossing the mesh; the development host measured about 195 MB/s
+with 8-vCPU guests.
+**The P4 program and its table entry stay in that NIC until its ernic
+server restarts.** From then on an RDMA WRITE on it with two equal-length
+operands is a reduction; ordinary transfers, which have one, are untouched.
+
 `qemu-tool quick-start --help` has the rest, and `qemu-tool man` has all of
 it. For more than two guests see [A fleet of your own](#a-fleet-of-your-own),
 which is the same stack generator with a larger `<vm-count>`.

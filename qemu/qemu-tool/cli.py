@@ -294,6 +294,17 @@ def _ssh_port_arg(text: str) -> int | str:
         raise argparse.ArgumentTypeError(str(exc)) from None
 
 
+def _positive_int(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        value = 0
+    if value < 1:
+        raise argparse.ArgumentTypeError(
+            f"must be a whole number of at least 1, not {text!r}")
+    return value
+
+
 def _add_quick_start(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
         "quick-start",
@@ -315,6 +326,7 @@ def _add_quick_start(sub: argparse._SubParsersAction) -> None:
             "qemu-tool quick-start --flavor helios up",
             "qemu-tool quick-start --xml qemu/stacks/rocm-golden.xml \\",
             "    --xml my-overlay.xml up",
+            "qemu-tool quick-start --sdxi-test --p4-test test",
             "qemu-tool quick-start logs -f",
             "qemu-tool quick-start down",
         ),
@@ -452,6 +464,37 @@ def _add_quick_start(sub: argparse._SubParsersAction) -> None:
     g.add_argument(
         "--nvme-duration", type=int, default=None, metavar="SECONDS",
         help="Run each fio NVMe pass for this many seconds (default: 10).",
+    )
+    g.add_argument(
+        "--sdxi-test", action="store_true", default=False,
+        help=(
+            "Also copy 4 MiB of random data through /dev/sdxi0 with "
+            "sdxi-cli on every guest and compare it with its source. Off by "
+            "default. Refused before anything runs on a fleet whose "
+            "<sdxi-per-vm> is 0. Only meaningful with the test or all verbs."
+        ),
+    )
+    g.add_argument(
+        "--p4-test", action="store_true", default=False,
+        help=(
+            "Also load the fp8 P4 program into the first guest's NIC and "
+            "time the reduction it does there: p4_fp8_client, then "
+            "p4_fp8_bench. One guest, no peer. Off by default. Refused "
+            "before anything runs unless the fleet has <p4-enable>true and "
+            "<p4-guest-scope>load. The program stays in that NIC until its "
+            "server restarts, and a two-equal-operand RDMA WRITE on it is a "
+            "reduction from then on; ordinary transfers are untouched. Only "
+            "meaningful with the test or all verbs."
+        ),
+    )
+    g.add_argument(
+        "--p4-iters", type=_positive_int, default=None, metavar="N",
+        help=(
+            "How many reductions --p4-test times (default: 2000, about "
+            "3 s). Each is 262144 fp8 elements, the most one operation "
+            "moves. Refused without --p4-test. Only meaningful with the "
+            "test or all verbs."
+        ),
     )
     p.set_defaults(func=_quick_start_cmd)
 
@@ -1493,6 +1536,9 @@ def _quick_start_cmd(args: argparse.Namespace) -> None:
         clean_qcow2=args.clean_overlays,
         rdma_duration=args.rdma_duration,
         nvme_duration=args.nvme_duration,
+        sdxi_test=args.sdxi_test,
+        p4_test=args.p4_test,
+        p4_iters=args.p4_iters,
         variant=args.variant,
     )
 

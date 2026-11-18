@@ -476,6 +476,15 @@ class FleetXml:
         return cfg, explicit
 
     @classmethod
+    def fields_set(cls, path: Path) -> frozenset[str]:
+        """The FleetConfig fields PATH itself sets, as against defaults.
+
+        What says which layer a merged value came from: the last one that
+        names the field.
+        """
+        return cls._parse_with_fields(path)[1]
+
+    @classmethod
     def parse(cls, path: Path) -> FleetConfig:
         """Parse a fleet XML file into a FleetConfig."""
         cfg, _ = cls._parse_with_fields(path)

@@ -19,7 +19,7 @@ file up to date as infrastructure changes.
 - `ansible/playbooks/` — three playbooks and six roles, and nothing else:
   - `vm-basic.yml` — a complete bake on its own, and the base of the golden
   - `vm-rocm-golden.yml` — the one image beyond it: imports `vm-basic.yml`, then the mainline kernel and ernic prerequisites, ROCm, the rocjitsu roles, SRQ + P4, SDXI and one slim pass. Every bake play is tagged `install`; `tests/test_playbook_pins.py` fails a play with no tag, because an untagged play runs in every bake. Three plays need a device and are tagged `never`: `--tags configure` sets up the NIC and builds no driver (known issue 16 says why it must not), `--tags firmware` installs `ip_discovery.bin` from the rocjitsu serving the guest, and `--tags test` runs the GPU workloads. The pins (`ionic_kernel_pin` with `ionic_kernel_pin_commit` and `ionic_kernel_mirror`, `ernic_source_pin`, `rocm_line_pin`, `sdxi_source_pin`) are each defined once and shared between plays through YAML anchors; see "Where the ionic kernel sources come from" for the first three. Its defaults are a published image's, and a bake needs no Docker daemon when given `-e rocjitsu_firmware_script=<path to vfio_guest_firmware.py>`. Given a cache directory (`gen-vm --bake --cache-dir DIR`, or `<bake-cache-dir>` in a fleet file, which reaches the playbook as the extra var `bake_cache_dir`) the module builds go through a compiler cache kept in that directory; there is none by default, and the two workflows that bake the guest, the playbook-test lane and the publish workflow, each pass one and share what it holds — see "The bake's compiler cache". The slim play also purges every kernel but the running one, after asserting that is the pinned one — see "One kernel in the baked image". The acceptance test is `qemu/checks/rocm-golden.sh`, which the playbook-test lane runs against the baked guest and batesste-ci-images runs against the published one
-  - `vm-quickstart.yml` — configures and tests a running fleet; what `qemu-tool quick-start test` runs
+  - `vm-quickstart.yml` — configures and tests a running fleet; what `qemu-tool quick-start test` runs. Three of its plays are optional and off by default: the SDXI test (`--sdxi-test`), the P4 fp8 test (`--p4-test`) and the GPU-memory RDMA test, which has no switch
   - roles `rocm_ernic_setup` (image prep, device naming, boot-time addressing, the P4 client and who may open `/dev/ernic-p4`, the mirror and commit check for the ionic kernel sources, and `driver_check`, which asks a guest whether its ionic driver is still the baked SRQ + P4 build), `rocjitsu_setup` (firmware, amdgpu, tools, live tests), `sdxi_setup`, `image_slim` and `bake_ccache` (the compiler cache: `restore`, `save` and `remove`, no `main`). Each has task files callers reach with `tasks_from`; all five are linted at the `production` profile in CI
   - role `perftest_setup` — perftest built from a pinned commit with ROCm memory support, installed in `/usr/local/bin` ahead of the archive's package; linted with the other five. See "perftest with ROCm memory support"
 - `scripts/install-vfio-rules` + `scripts/99-qemu-minimal-vfio.rules` — host-side udev rules for PCI passthrough. There is no top-level `udev/` any more: guest rules live in their role's `files/`
@@ -807,6 +807,154 @@ look for the record.
 `<stack-dir>/artifacts`. It was `/var/tmp/quickstart-artifacts-<flavor>`,
 which no flag moved and which `test` empties first: the run above, pointed
 entirely at a scratch directory, still wrote into the default stack's.
+
+**`quick-start` has two optional tests, `--sdxi-test` and `--p4-test`, both
+off by default.** Each is a play of `vm-quickstart.yml` gated the way the
+GPU-memory RDMA play is: a play var that is `false`
+(`quickstart_sdxi_test`, `quickstart_p4_test`) and a first task that ends
+the play, so a run without the switch executes nothing of it in a guest and
+`quick_start._playbook_command` passes the command line it always did. They
+sit after the NVMe test and before the facts play, so the per-guest summary
+and the report carry their results; the GPU-memory RDMA play stays last.
+
+| Switch | Hosts | What runs, as the login user with no `become` |
+|---|---|---|
+| `--sdxi-test` | every guest | 4 MiB of `/dev/urandom` through `sdxi-cli -d /dev/sdxi0 copy`, then `cmp` |
+| `--p4-test` | `fleet[0]` only | `p4_fp8_client` with the installed `fp8_policy.json`, then `p4_fp8_bench <ib> 262144 2000` |
+
+- **A fleet that cannot run one is refused before anything is started**
+  (`quick_start._check_optional_tests`, on the `test` and `all` verbs, from
+  the merged settings): `<sdxi-per-vm>` of 0, `<p4-enable>` not true, or a
+  `<p4-guest-scope>` other than `load`. The client loads a program
+  (LOAD_*, which needs `load`) and installs an entry (ENTRY_UPDATE, which
+  needs `write`), and `load` is the widest scope. A flavor with no playbook
+  is refused too, and so is `--p4-iters` without `--p4-test`. The message
+  pins the value on the one layer that set it — the last that names the
+  element, `quick_start._where_set` reading `FleetXml.fields_set` — or
+  calls it the default when none does; it used to list every layer, which
+  blamed `rocm-golden.xml` for an overlay's `<sdxi-per-vm>0`.
+- **The check reads the settings this invocation names, not the stack that
+  is running**, as `test` does for the guest count and the name prefix:
+  `up --xml overlay.xml` followed by `test --p4-test` with no `--xml`
+  checks the packaged file and passes whatever the overlay turned off. That
+  stack, and one rendered before an edit to the fleet file, is caught in
+  the guest by the play's own check, which names the same elements — after
+  the default tests have run, not before. Reading the P4 flags and SDXI
+  services back from the rendered `docker-compose.yml` would close that,
+  and would be the only setting `quick-start` reads from there.
+- **Any other verb ignores the three switches and says so on stderr**
+  (``note: --sdxi-test ignored: `up` runs no test``), exit status
+  unchanged. `--rdma-duration` and `--nvme-duration` are still ignored in
+  silence there.
+- **P4 is one guest because the reduction is inside one NIC**; see "The P4
+  number is the rate of the fp8 reduction" below. The play asks that guest
+  for its IB device with `ibv_devinfo -l` and does not read the fact the
+  first play recorded. `--p4-iters N` is the one sizing switch; the element
+  count stays a play var, since the rate is not comparable across counts.
+- **The P4 program and its entry stay in that NIC until its ernic server
+  restarts.** Nothing unloads them. A two-equal-operand RDMA WRITE on that
+  NIC is a reduction from then on; a write with one gather entry, which is
+  everything else the playbook sends, is untouched.
+- **The SDXI play is a functional check and reports no rate.** The daily
+  lane's SDXI figure times the copy ioctl for two seconds from a program
+  inside `scripts/generate-vm-report.sh`; sharing it means moving it out of
+  that script, and a second timer here would publish a number that cannot
+  be compared with the lane's.
+- **A test that was asked for and left no result fails the run**
+  (`quick_start._report_optional_tests`): the playbook exiting 0 says no
+  play failed, and a skipped play did not fail.
+- **A guest that fails an optional test writes no summary for that run**,
+  the same as one that fails the GPU, RDMA or NVMe test: Ansible drops a
+  failed host from the plays after it, and the facts play is after both.
+  `quick-start` stops at "the configure-and-test playbook failed" before
+  the report, so nothing is published from it.
+- **There is no `--all-tests` and no switch for the GPU-memory RDMA play.**
+  The second fails on every stack this repository ships, and
+  `tests/test_perftest_setup.py` pins that `quick_start.py` and `cli.py` do
+  not name its gate; the first would have to leave it out, and would change
+  meaning with each test added.
+
+`tests/test_quickstart_optional_tests.py` holds all of it, and runs both
+plays on the test host against stand-ins for the guest's tools. The SDXI
+play makes its scratch directory under `${TMPDIR:-/tmp}`, which is `/tmp`
+in a guest and the test's own directory in the suite, so two copies of the
+suite do not see each other's files.
+
+**Both plays have run against real guests: 2026-11-18, the development
+host, two pulled guests of `20261117.g481c892`.** One boot throughout, on a
+scratch stack beside nothing else (`--stack-dir`, `--key-dir`, `--images`
+and an overlay setting only `<vm-name-prefix>qslive`). `quick-start` sized
+the guests from the 32-core host to 8 vCPU and 8192 MiB each, not the fleet
+file's 4 vCPU and 4096 MiB, so every figure below is at that size; nothing
+was measured at 4 vCPU. Five `test` runs, in this order, all exit 0:
+
+| Run | Wall | Recap, guest 1 / guest 2 | SDXI | P4, guest 1 | `ib_send_bw` average |
+|---|---|---|---|---|---|
+| `test` | 112 s, the first after boot | ok=65 / ok=61, failed=0 | skip task only | skip task only | 595.15 MiB/s |
+| `test --sdxi-test --p4-test` | 74 s | ok=78 / ok=64, failed=0 | verified on both | 194.1 MB/s, avg 1.351 ms | 615.02 MiB/s |
+| the same again | 69 s | ok=78 / ok=64, failed=0 | verified on both | 195.0 MB/s, avg 1.344 ms | 512.97 MiB/s |
+| `test --p4-test --p4-iters 200` | 68 s | ok=74 / ok=60, failed=0 | skip task only | 194.5 MB/s, avg 1.348 ms, "x 200 iterations" | 623.53 MiB/s |
+| `test` | 66 s | ok=64 / ok=60, failed=0 | skip task only | skip task only | 572.93 MiB/s |
+
+What that settles, row by row of what was open:
+
+- **A default run is unaffected.** In the first and the last run each new
+  play printed its `PLAY` line and its one skip task and nothing else, and
+  neither guest's summary has an SDXI or a P4 section. The switches add
+  four `ok` tasks a guest for SDXI and ten on guest 1 for P4 over the last
+  row, and nothing to a run without them.
+- **`--sdxi-test` passes on both guests**, in two runs: `sdxi copy: 4194304
+  bytes through /dev/sdxi0, source and destination identical`, and the
+  summary line `<guest>: SDXI copy of 4194304 bytes verified`. No scratch
+  directory was left in either guest's `/tmp`.
+- **`--p4-test` passes on guest 1 and the rate is 194 to 195 MB/s** at
+  262144 elements, three runs within 0.5%. The client reported `abi=1
+  scope=3 max_program=4194304`, loaded `fp8_policy.json` (7047 bytes) and
+  checked its one 4096-element reduction each time. That is below the "about
+  210 MB/s" of "The P4 number is the rate of the fp8 reduction" below,
+  which was the 2026-11-16 local bake and another guest size; the two were
+  not measured side by side, so the difference is not attributed.
+- **A second load in one boot works.** Three loads of the program over the
+  one already there, the rate unchanged, and the `ernic-1` server log
+  carries no error or failure line afterwards.
+- **`ib_send_bw` between the guests still passes with the program left in
+  `ernic-1`**: the last row, 572.93 MiB/s against 595.15 before any load,
+  and `ernic 1 moved 65536000 bytes` in all five. The five averages run
+  from 513 to 624 MiB/s with the low one in the middle, which is the
+  run-to-run spread issue 14 describes and no trend.
+- **The summary and the report carry the results.** Guest 1's summary
+  gained `### SDXI test` and `### P4 FP8 test`, guest 2's `### SDXI test`
+  alone, and `quick-start report` wrote both into `index.md`. Run as its
+  own verb, `report` heads that file `RDMA bytes across the mesh: unknown`
+  and `Status: **unknown**`; that is `report`'s and predates the switches.
+- **The programs resolve from a non-login session**, by `ansible -m shell`
+  through the stack's inventory, on both guests: `sdxi-cli`,
+  `p4_fp8_client` and `p4_fp8_bench` are found in `/usr/local/bin`. The
+  plays' own checks printed `/dev/sdxi0 is root:sdxi mode 660, usable by
+  ubuntu` on both guests and `/dev/ernic-p4 is root:ernic-p4 mode 660,
+  usable by ubuntu` on guest 1.
+- `report --sdxi-test --p4-test --p4-iters 5` exits 0 with the note on
+  stderr, and `test --p4-iters 5` exits 1 in under a second.
+
+Still not run:
+
+| | |
+|---|---|
+| the `all` verb with a switch | not run, so the closing summary line that names the switches, which only `all` prints, has not been seen live |
+| the in-guest refusal for a missing device or a driver that is not loaded | read, not triggered |
+| the in-guest refusal for a user outside the group | not triggered through the play. The run reported, and its kept logs do not hold, that `test -r -a -w` on `/dev/sdxi0` and on `/dev/ernic-p4` as `nobody` returns 1 and that the play's condition evaluated as `nobody` selects the group message. No membership was changed to make the play itself fail |
+| either test at the fleet file's 4 vCPU guests | not run |
+
+The refusals before anything starts were measured the same day through the
+CLI against a scratch stack directory: `<sdxi-per-vm>0`,
+`<p4-enable>false` and `<p4-guest-scope>read` each exit 1 in under 0.2 s,
+before the preflight; `--p4-iters 0` exits 2 and a switch on `--flavor
+helios` exits 1. `ansible-playbook --list-tasks` shows ten plays, SDXI
+seventh and P4 eighth, the GPU-memory RDMA play still last.
+
+That host has `AMD_CERT` set, so each `quick-start test` there installs the
+corporate CA in the guests it configures. It went into the two scratch
+overlays and into nothing tracked or published.
 
 The SDXI image has no `ENTRYPOINT` and a shell `CMD`
 serving a fixed socket name, so the generated `sdxi-N` services carry

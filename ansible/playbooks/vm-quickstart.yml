@@ -499,6 +499,356 @@
           read {{ (quickstart_nvme_read_bw | int / 1048576) | round(0) }} MiB/s
 
 # ---------------------------------------------------------------------------
+# SDXI test (optional, off by default)
+# ---------------------------------------------------------------------------
+#
+# 4 MiB of random data copied through /dev/sdxi0 with sdxi-cli on EVERY
+# guest, and the copy compared with its source, as the login user with no
+# sudo. OFF unless quickstart_sdxi_test is true, which is what
+# `qemu-tool quick-start --sdxi-test` passes: a run without it reaches the
+# one task that ends the play and nothing in a guest.
+#
+#   ansible-playbook -i <stack dir>/fleet-inventory.yml \
+#       playbooks/vm-quickstart.yml --private-key <key> \
+#       -e quickstart_sdxi_test=true
+#
+# It needs a fleet with <sdxi-per-vm> of at least 1, which quick-start checks
+# before it starts anything, and the golden image's sdxi_char module, sdxi-cli
+# and sdxi group. A guest with no device, no driver or no group membership is
+# told which it is, because from outside they are one symptom: no /dev/sdxi0,
+# or one that cannot be opened.
+#
+# A functional check and not a benchmark. The daily lane's SDXI figure times
+# the copy ioctl for two seconds from a program that lives inside
+# scripts/generate-vm-report.sh; one sdxi-cli run is mostly Python start-up
+# and file I/O, and a second, different timer here would publish a number
+# that cannot be compared with that one.
+- name: Copy data through the SDXI device on each guest
+  hosts: fleet
+  gather_facts: false
+  become: false
+  vars:
+    # The gate. Everything below is read only when it is true.
+    quickstart_sdxi_test: false
+    quickstart_sdxi_device: /dev/sdxi0
+    quickstart_sdxi_bytes: 4194304
+    quickstart_sdxi_timeout: 120
+  tasks:
+    - name: Skip the SDXI test unless it was asked for
+      ansible.builtin.meta: end_play
+      when: not (quickstart_sdxi_test | bool)
+
+    # Says which of the three it is, on stdout, for the task after it. The
+    # node is tested for this user rather than read off its mode: what
+    # matters is whether this login can open it.
+    - name: Find out whether this guest can use the SDXI device
+      ansible.builtin.shell:
+        cmd: |
+          dev={{ quickstart_sdxi_device | quote }}
+          golden="the guest image must be the golden bake (ansible/playbooks/vm-rocm-golden.yml)"
+          if ! command -v sdxi-cli >/dev/null; then
+            echo "sdxi-cli is not installed: ${golden}"
+            exit 1
+          fi
+          if [ ! -e "${dev}" ]; then
+            if [ -d /sys/module/sdxi_char ]; then
+              echo "${dev} is absent with sdxi_char loaded: no device. The" \
+                   "driver found nothing to bind, so this guest was given no" \
+                   "SDXI device (<sdxi-per-vm> in the fleet file) or its" \
+                   "server is not serving one"
+            elif modinfo -n sdxi_char >/dev/null 2>&1; then
+              echo "${dev} is absent and sdxi_char is not loaded: no driver." \
+                   "The module is installed, so it was unloaded or its" \
+                   "modules-load.d entry is gone (sudo modprobe sdxi_char)"
+            else
+              echo "${dev} is absent and sdxi_char is not installed: no" \
+                   "driver. ${golden}"
+            fi
+            exit 1
+          fi
+          if [ ! -r "${dev}" ] || [ ! -w "${dev}" ]; then
+            echo "${dev} is $(stat -c '%U:%G mode %a' "${dev}") and $(id -un)" \
+                 "is in groups: $(id -Gn). The user is not in the sdxi group," \
+                 "or the udev rule that hands the node to it is missing:" \
+                 "${golden}. Group membership reaches sessions opened after" \
+                 "the user was added"
+            exit 1
+          fi
+          echo "${dev} is $(stat -c '%U:%G mode %a' "${dev}"), usable by $(id -un)"
+        executable: /bin/bash
+      register: quickstart_sdxi_node
+      changed_when: false
+      failed_when: false
+
+    - name: Fail with the reason when it cannot
+      ansible.builtin.assert:
+        that: quickstart_sdxi_node.rc == 0
+        fail_msg: >-
+          {{ inventory_hostname }}: the SDXI test cannot run.
+          {{ quickstart_sdxi_node.stdout | default('', true) | trim }}
+          {{ quickstart_sdxi_node.stderr | default('', true) | trim }}
+        success_msg: "{{ quickstart_sdxi_node.stdout | trim }}"
+
+    # cmp is the test: sdxi-cli's exit status says the ioctl returned, not
+    # what it wrote. Under timeout(1), so a device that never completes fails
+    # here instead of holding the play. The scratch files go either way.
+    - name: Copy random data through the device and compare it
+      ansible.builtin.shell:
+        cmd: |
+          set -uo pipefail
+          dev={{ quickstart_sdxi_device | quote }}
+          work=$(mktemp -d "${TMPDIR:-/tmp}/quickstart-sdxi.XXXXXX") || exit 1
+          trap 'rm -rf "${work}"' EXIT
+          head -c {{ quickstart_sdxi_bytes | int }} /dev/urandom > "${work}/src" || exit 1
+          rc=0
+          timeout {{ quickstart_sdxi_timeout | int }} \
+            sdxi-cli -d "${dev}" copy "${work}/src" "${work}/dst" || rc=$?
+          if [ "${rc}" -ne 0 ]; then
+            echo "sdxi-cli copy exited ${rc}: the device did not do the copy" \
+                 "(124 is the {{ quickstart_sdxi_timeout | int }} s timeout)"
+            exit 1
+          fi
+          if ! cmp "${work}/src" "${work}/dst"; then
+            echo "the copy differs from its source: ${dev} returned the wrong data"
+            exit 1
+          fi
+          echo "sdxi copy: $(stat -c %s "${work}/dst") bytes through ${dev}," \
+               "source and destination identical"
+        executable: /bin/bash
+      register: quickstart_sdxi_copy
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the copy came back identical
+      ansible.builtin.assert:
+        that:
+          - quickstart_sdxi_copy.rc == 0
+          - "'sdxi copy: ' in quickstart_sdxi_copy.stdout"
+        fail_msg: >-
+          {{ inventory_hostname }}: the SDXI copy failed.
+          {{ quickstart_sdxi_copy.stdout | default('', true) | trim }}
+          {{ quickstart_sdxi_copy.stderr | default('', true) | trim }}
+        success_msg: >-
+          {{ inventory_hostname }}: {{ quickstart_sdxi_copy.stdout | trim }}
+
+# ---------------------------------------------------------------------------
+# P4 fp8 test (optional, off by default)
+# ---------------------------------------------------------------------------
+#
+# The fp8 reduction is compute inside the NIC: once a P4 program and one table
+# entry are loaded, an RDMA WRITE whose gather list names two equal-length
+# operand regions is turned into an elementwise fp8 add, written to the
+# region the write named as its destination. All three regions belong to one
+# device, so this runs on the FIRST guest alone and nothing crosses the mesh
+# to a peer. OFF unless quickstart_p4_test is true, which is what
+# `qemu-tool quick-start --p4-test` passes:
+#
+#   ansible-playbook -i <stack dir>/fleet-inventory.yml \
+#       playbooks/vm-quickstart.yml --private-key <key> \
+#       -e quickstart_p4_test=true
+#
+# Two programs of the golden image do it, as the login user with no sudo.
+# p4_fp8_client is rocm-ernic's own guest test: it loads fp8_policy.json
+# through /dev/ernic-p4, installs the reduce entry and checks one reduction.
+# p4_fp8_bench then repeats that work request, checks every result and
+# prints the rate, in fp8 result bytes per second.
+#
+# It needs the stack to offer the guest P4: <p4-enable>true and
+# <p4-guest-scope>load in the fleet file, which quick-start checks before it
+# starts anything. Loading the program needs the load scope and the table
+# entry the write scope, and load is the wider of the two.
+#
+# WHAT IT LEAVES BEHIND: the program and the entry stay in that NIC until its
+# ernic server restarts: nothing here unloads them. From then on a
+# two-equal-operand RDMA WRITE on that NIC is a reduction. Ordinary transfers
+# are untouched: one with a single gather entry, which is everything else
+# this file sends, passes through as it did. A second run loads the program
+# over the first, which is what the load scope allows. Run from this play on
+# 2026-11-18: three loads in one boot, each passing, the rate unchanged at
+# 194 to 195 MB/s, and ib_send_bw between the guests passing afterwards.
+#
+# Both programs run under timeout(1). One that is killed mid-run may leave
+# the guest's RDMA device needing the stack recreated, as a killed perftest
+# does, so the bench is given far longer than it takes: about 3 s on the
+# development host for the defaults, against 300.
+- name: Run the P4 fp8 reduction in the first guest's NIC
+  hosts: fleet[0]
+  gather_facts: false
+  become: false
+  vars:
+    # The gate. Everything below is read only when it is true.
+    quickstart_p4_test: false
+    quickstart_p4_node: /dev/ernic-p4
+    quickstart_p4_program: /usr/local/share/rocm-ernic/fp8_policy.json
+    # 262144 is the most the device moves in one operation
+    # (IONIC_FP8_MAP_MAX), and the rate is not comparable across counts.
+    quickstart_p4_elements: 262144
+    quickstart_p4_iters: 2000
+    quickstart_p4_client_timeout: 60
+    # 50 ms a reduction, some forty times what one takes on the development
+    # host, and never under five minutes.
+    quickstart_p4_bench_timeout: >-
+      {{ [300, (quickstart_p4_iters | int) // 20] | max }}
+  tasks:
+    - name: Skip the P4 test unless it was asked for
+      ansible.builtin.meta: end_play
+      when: not (quickstart_p4_test | bool)
+
+    - name: Find out whether this guest can use the P4 node
+      ansible.builtin.shell:
+        cmd: |
+          node={{ quickstart_p4_node | quote }}
+          program={{ quickstart_p4_program | quote }}
+          golden="the guest image must be the golden bake (ansible/playbooks/vm-rocm-golden.yml)"
+          if ! modinfo -n ernic_p4 >/dev/null 2>&1; then
+            echo "the ernic_p4 module is not installed: ${golden}"
+            exit 1
+          fi
+          for tool in p4_fp8_client p4_fp8_bench; do
+            if ! command -v "${tool}" >/dev/null; then
+              echo "${tool} is not installed: ${golden}"
+              exit 1
+            fi
+          done
+          if [ ! -r "${program}" ]; then
+            echo "${program} is not installed: ${golden}"
+            exit 1
+          fi
+          if [ ! -e "${node}" ]; then
+            echo "${node} is absent: ernic_p4 is not loaded, or the ernic" \
+                 "server was started without a P4 guest scope" \
+                 "(<p4-enable>true and <p4-guest-scope>load in the fleet" \
+                 "file, then bring the stack up again)"
+            exit 1
+          fi
+          if [ ! -r "${node}" ] || [ ! -w "${node}" ]; then
+            echo "${node} is $(stat -c '%U:%G mode %a' "${node}") and $(id -un)" \
+                 "is in groups: $(id -Gn). The user is not in the ernic-p4" \
+                 "group, or the udev rule that hands the node to it is" \
+                 "missing: ${golden}. Group membership reaches sessions" \
+                 "opened after the user was added"
+            exit 1
+          fi
+          echo "${node} is $(stat -c '%U:%G mode %a' "${node}"), usable by $(id -un)"
+        executable: /bin/bash
+      register: quickstart_p4_node_state
+      changed_when: false
+      failed_when: false
+
+    - name: Fail with the reason when it cannot
+      ansible.builtin.assert:
+        that: quickstart_p4_node_state.rc == 0
+        fail_msg: >-
+          {{ inventory_hostname }}: the P4 test cannot run.
+          {{ quickstart_p4_node_state.stdout | default('', true) | trim }}
+          {{ quickstart_p4_node_state.stderr | default('', true) | trim }}
+        success_msg: "{{ quickstart_p4_node_state.stdout | trim }}"
+
+    # Asked of the guest, as the first play does: the device keeps its
+    # kernel name on a guest whose rename did not fire, and a wrong name is
+    # a confusing failure.
+    - name: Find the IB device
+      ansible.builtin.command:
+        cmd: ibv_devinfo -l
+      register: quickstart_p4_ibv
+      changed_when: false
+      failed_when: >-
+        quickstart_p4_ibv.rc != 0
+        or quickstart_p4_ibv.stdout_lines[1:]
+           | map('trim') | reject('equalto', '') | list | length == 0
+
+    - name: Record the IB device name
+      ansible.builtin.set_fact:
+        quickstart_p4_ib_device: >-
+          {{ quickstart_p4_ibv.stdout_lines[1:]
+             | map('trim') | reject('equalto', '') | list | first }}
+
+    # RDMA_DEVICE pins the device, so a name that is not there exits 1. The
+    # client's 77 is "nothing to run against", a skip to the client and a
+    # failure here: this play runs only when the test was asked for.
+    # changed: this is the step that leaves the program in the NIC.
+    - name: Load the fp8 program and check one reduction
+      ansible.builtin.command:
+        argv:
+          - timeout
+          - "{{ quickstart_p4_client_timeout | string }}"
+          - p4_fp8_client
+          - "{{ quickstart_p4_program }}"
+      environment:
+        RDMA_DEVICE: "{{ quickstart_p4_ib_device }}"
+      register: quickstart_p4_client
+      changed_when: quickstart_p4_client.rc == 0
+      failed_when: false
+
+    - name: Fail when the program did not load or the reduction was wrong
+      ansible.builtin.assert:
+        that: quickstart_p4_client.rc == 0
+        fail_msg: >-
+          p4_fp8_client exited {{ quickstart_p4_client.rc }} on
+          {{ inventory_hostname }} ({{ quickstart_p4_ib_device }}): the
+          program was not loaded or the reduction was wrong. 77 is the
+          client finding no P4 node, 124 the
+          {{ quickstart_p4_client_timeout }} s timeout; a refused load is
+          the server's guest scope, which has to be load
+          (<p4-guest-scope> in the fleet file). It said:
+          {{ (quickstart_p4_client.stdout_lines | default([]))
+             + (quickstart_p4_client.stderr_lines | default([])) }}
+
+    - name: Time the reduction
+      ansible.builtin.command:
+        argv:
+          - timeout
+          - "{{ quickstart_p4_bench_timeout | string | trim }}"
+          - p4_fp8_bench
+          - "{{ quickstart_p4_ib_device }}"
+          - "{{ quickstart_p4_elements | string }}"
+          - "{{ quickstart_p4_iters | string }}"
+      register: quickstart_p4_bench
+      changed_when: false
+      failed_when: false
+
+    # The line the report quotes. Not set at all when the bench printed
+    # none, so the facts play does not record a test that did not finish.
+    - name: Record the rate
+      ansible.builtin.set_fact:
+        quickstart_p4_bw: >-
+          {{ quickstart_p4_bench.stdout_lines
+             | select('match', 'p4 fp8 bench: ') | list | last }}
+      when: >-
+        quickstart_p4_bench.stdout_lines | default([])
+        | select('match', 'p4 fp8 bench: ') | list | length > 0
+
+    # The figure, not only the exit status: a run that timed nothing is not
+    # a measurement.
+    - name: Assert the reduction ran and reported a rate above zero
+      ansible.builtin.assert:
+        that:
+          - quickstart_p4_bench.rc == 0
+          - quickstart_p4_bw is defined
+          - >-
+            (quickstart_p4_bw
+             | regex_replace('^.*, ([0-9.]+) MB/s\\s*$', '\\1')
+             | float(0)) > 0
+        fail_msg: >-
+          p4_fp8_bench exited {{ quickstart_p4_bench.rc }} on
+          {{ inventory_hostname }} ({{ quickstart_p4_ib_device }}) with no
+          rate above zero. 124 is the {{ quickstart_p4_bench_timeout | trim }}
+          s timeout, and a run killed there can leave the RDMA device
+          needing the stack recreated. It said:
+          {{ (quickstart_p4_bench.stdout_lines | default([]))
+             + (quickstart_p4_bench.stderr_lines | default([])) }}
+        success_msg: >-
+          {{ inventory_hostname }}: {{ quickstart_p4_bw | default('') }}.
+          The program and its entry stay in this NIC until its ernic server
+          restarts.
+
+    - name: Show the P4 test output
+      ansible.builtin.debug:
+        msg: >-
+          {{ quickstart_p4_client.stdout_lines
+             + quickstart_p4_bench.stdout_lines }}
+
+# ---------------------------------------------------------------------------
 # Facts for the report
 # ---------------------------------------------------------------------------
 - name: Collect the facts the report quotes
@@ -566,6 +916,26 @@
           |-----------|-----------|
           | write | {{ (quickstart_nvme_write_bw | int / 1048576) | round(0) }} MiB/s |
           | read  | {{ (quickstart_nvme_read_bw  | int / 1048576) | round(0) }} MiB/s |
+          {% endif %}
+          {% if quickstart_sdxi_copy is defined %}
+
+          ### SDXI test
+
+          ```
+          {{ quickstart_sdxi_copy.stdout | trim }}
+          ```
+          {% endif %}
+          {% if quickstart_p4_bw is defined %}
+
+          ### P4 FP8 test
+
+          ```
+          {{ quickstart_p4_client.stdout | trim }}
+          {{ quickstart_p4_bench.stdout | trim }}
+          ```
+
+          The program and its table entry stay in this guest's NIC until its
+          ernic server restarts.
           {% endif %}
         dest: "{{ quickstart_artifacts_dir }}/{{ inventory_hostname }}.md"
         mode: "0644"

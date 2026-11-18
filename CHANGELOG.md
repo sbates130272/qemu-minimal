@@ -62,6 +62,66 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **`quick-start` can test the SDXI device and the NIC's P4 engine:
+  `--sdxi-test` and `--p4-test`.** Both are off by default, both run with
+  the `test` and `all` verbs, and both run in the guest as its login user
+  with no sudo. They are two new plays of `vm-quickstart.yml`, each ended
+  at its first task unless its extra var is true (`quickstart_sdxi_test`,
+  `quickstart_p4_test`), so a run without the switches executes nothing new
+  in a guest and `ansible-playbook` is handed the arguments it always was.
+  - `--sdxi-test`: on every guest, 4 MiB of random data is copied through
+    `/dev/sdxi0` with `sdxi-cli` and compared with its source. A pass
+    prints `<guest>: SDXI copy of 4194304 bytes verified`. It is a
+    functional check and reports no rate; the daily lane's SDXI figure is a
+    different measurement.
+  - `--p4-test`: on the first guest only, `p4_fp8_client` loads the fp8 P4
+    program into that guest's NIC and checks one reduction, and
+    `p4_fp8_bench` times 2000 reductions of 262144 elements. A pass prints
+    `<guest>: P4 FP8 reduction <rate> MB/s (262144 elements x 2000
+    iterations)`. `--p4-iters N` times another count. One guest because
+    the reduction is compute inside one NIC: no peer, nothing across the
+    mesh. The RDMA device name is asked of the guest.
+  - *A fleet that cannot run one is refused before anything is started*,
+    naming the element and the one settings file that set it:
+    `<sdxi-per-vm>` of 0 for the first; `<p4-enable>` not true, or a
+    `<p4-guest-scope>` other than `load`, for the second. The check reads
+    the settings the command names, so a stack brought up from other
+    settings is caught in the guest instead, which says whether it is the
+    device, the driver or the group that is missing.
+  - A verb that runs no test (`up`, `preflight`, `report`, `logs`, `down`)
+    ignores the three switches and says so on stderr.
+  - The closing summary of a full run names the switches the fleet can
+    run.
+  - *The P4 program and its table entry stay in that NIC until its ernic
+    server restarts.* A two-equal-operand RDMA WRITE on it is a reduction
+    from then on; ordinary transfers are untouched.
+  - Both results are in the per-guest summary under the stack's
+    `artifacts/` and in the report, and a test that was asked for and left
+    no result fails the run.
+  - *Run against real guests on 2026-11-18*: two pulled guests of
+    `20261117.g481c892` on the development host, one boot, each guest
+    sized by `quick-start` to 8 vCPU and 8192 MiB. Five `quick-start test`
+    runs, all exit 0:
+    - plain, before either switch: both new plays ran their skip task and
+      nothing else; `ib_send_bw` averaged 595.15 MiB/s.
+    - `--sdxi-test --p4-test`: the SDXI copy verified on both guests; the
+      P4 rate on the first was 194.1 MB/s (1.351 ms a reduction).
+    - the same again in that boot: both copies verified, and the program
+      loaded over the one already in the NIC, 195.0 MB/s.
+    - `--p4-test --p4-iters 200`: 194.5 MB/s, reported as 200 iterations;
+      the SDXI play ran its skip task only.
+    - plain again, the program left in the first guest's NIC: `ib_send_bw`
+      between the guests passed at 572.93 MiB/s, and neither guest's
+      summary has an SDXI or a P4 section.
+  - *Not run:* the `all` verb with a switch, so the closing summary line
+    naming the switches has not been seen live; the in-guest refusals,
+    through the play, for a missing device, a driver that is not loaded or
+    a user outside the group; and either test on 4 vCPU guests. The
+    refusals before anything starts were measured through the CLI (exit 1
+    in under 0.2 s, before the preflight). The suite,
+    `tests/test_quickstart_optional_tests.py`, runs both plays against
+    stand-ins for the guest's tools.
+
 - **The golden guest carries a perftest built with ROCm memory support.**
   Ubuntu's `perftest` is built without ROCm, so its `ib_send_bw` has no
   `--use_rocm`. A new role, `perftest_setup`, builds the tools from source
