@@ -970,6 +970,7 @@ class Dashboard(_Scratch):
 
     HOME = COMPOSE / "rocm-golden" / DASHBOARD
     ROW = ["SDXI Device Up", "SDXI Errors (dashboard range)",
+           "SDXI Copy Verified (time since last pass)",
            "SDXI Copy Throughput Per VM", "SDXI Copies/s Per VM",
            "SDXI Compress / Decompress Bytes/s Per VM",
            "SDXI Compress / Decompress Ops/s Per VM"]
@@ -1001,11 +1002,13 @@ class Dashboard(_Scratch):
                                  self.ROW)
         self.assertEqual(len(texts), 1)
 
-    def test_the_row_sits_between_nvme_and_the_network(self):
+    def test_the_row_sits_between_nvme_and_p4(self):
+        """The devices a guest is given, then the network they share."""
         rows = [p["title"] for p in _panels(self.HOME) if p["type"] == "row"]
         at = rows.index("SDXI")
         self.assertEqual(rows[at - 1], "NVMe Storage")
-        self.assertEqual(rows[at + 1], "Network & Driver Status")
+        self.assertEqual(rows[at + 1:at + 3], [
+            "P4 \u2014 FP8 Reduction In The NIC", "Network & Driver Status"])
 
     def test_every_sdxi_series_a_panel_reads_is_one_the_script_writes(self):
         written = self.written()
@@ -1182,7 +1185,7 @@ class Dashboard(_Scratch):
         panels = _panels(self.HOME)
         new = self.row() + [p for p in panels
                             if p["title"] == "SDXI Copy Throughput"]
-        self.assertEqual(len(new), 7)
+        self.assertEqual(len(new), 8)
         for panel in new:
             for other in panels:
                 if other["id"] != panel["id"]:

@@ -168,6 +168,18 @@ bytes per second, is
 of `up` in the Prometheus query above (URL-encode it, or paste it into
 Explore).
 
+Those panels are live counters, so they read zero while nothing is copying.
+The two optional tests are over in seconds and leave nothing a counter
+shows, so each records its own result in the guest and the home dashboard
+shows the last one that passed: the **P4** row is what `quick-start test --p4-test`
+last measured on the first guest (`quickstart_p4_fp8_bytes_per_second`, the
+fp8 result bytes per second, with the time per reduction, the size of the
+run and how long ago it was), and the SDXI row's "SDXI Copy Verified" tile
+is how long ago `--sdxi-test` last copied data through each guest's device
+and found it identical (`quickstart_sdxi_copy_timestamp_seconds`). Both
+read "no test run" until the test has passed once, and a later run that
+fails leaves the last pass on the tiles: its growing age is the only sign.
+
 **The guests' SSH ports and Grafana answer on this machine only.** Every port
 a stack publishes is bound to `<publish-bind-addr>`, which is `127.0.0.1`
 unless a fleet file says otherwise. That holds on Docker Engine 28.0 and
@@ -249,6 +261,9 @@ with 8-vCPU guests.
 **The P4 program and its table entry stay in that NIC until its ernic
 server restarts.** From then on an RDMA WRITE on it with two equal-length
 operands is a reduction; ordinary transfers, which have one, are untouched.
+A third switch, `--rocm-rdma-test`, is under
+[RDMA with GPU memory](#rdma-with-gpu-memory) below: it needs a newer guest
+image than the fleet files pull.
 
 `qemu-tool quick-start --help` has the rest, and `qemu-tool man` has all of
 it. For more than two guests see [A fleet of your own](#a-fleet-of-your-own),
@@ -273,6 +288,42 @@ role's defaults say what else can be set.
 **That is in an image baked from this checkout, not yet in the one the
 fleet files pull**, which was published before it: there `ib_send_bw` is the
 archive's. `cat /etc/perftest-rocm.json` in a guest says which it has.
+
+**`quick-start --rocm-rdma-test` runs it between the two guests, with every
+byte checked.** Off by default, like the two switches above; before it
+there was a play for this in `vm-quickstart.yml` that only a hand-typed
+`ansible-playbook -e quickstart_rocm_rdma=true` reached. It runs
+`ib_write_bw --use_rocm=0 --data_validation` from the first guest to the
+last, with the buffers allocated through HIP on both sides, and passes when
+the receiving side prints `VALIDATION: PASSED`:
+
+```bash
+qemu-tool quick-start test --rocm-rdma-test
+```
+
+```
+==> rocm-golden-1 -> rocm-golden-2: ib_write_bw with ROCm buffers (host-alloc), <rate> MiB/s, 58720256 bytes in 7 chunks validated
+```
+
+By default the buffers are host memory the GPU can address
+(`PERFTEST_ROCM_HOST_ALLOC=1`), not VRAM, because that is the one form that
+passes on the shipped stacks: it proves HIP, the registration, the transfer
+and the validator, everything but the NIC reaching the GPU's own memory.
+`--rocm-rdma-mode dmabuf` and `--rocm-rdma-mode vram` put the buffers in
+VRAM and are expected to fail there, each for a measured reason. With both
+devices emulated, the NIC reading GPU memory is one vfio-user server
+reaching into another's BAR, which stock QEMU does not pass on, so `dmabuf`
+registers the buffer and the first work request ends in `remote access
+error`; `vram` is refused at registration inside the guest (`Couldn't
+allocate MR with error=14`) whichever QEMU is pinned. Either is reported as
+the known limitation of its mode, with that line, and the run still exits
+non-zero. **It needs a guest image that has the ROCm perftest, which the
+image the fleet files pull does not**: on those guests the test stops at
+its first check and says so. The result and both sides' output are in
+`artifacts/rocm-rdma.md` under the stack and in the report. A fleet with
+one guest is refused before anything is started. A run that is timed out
+leaves the guests' RDMA devices needing the stack recreated. `AGENTS.md`
+has what each run measured and what each failure means.
 
 ### Building against RDMA in the guest
 
@@ -306,30 +357,6 @@ there the archive's `-dev` packages are the right ones to install.
 fleet files pull**, which still has the three packages. It was measured by
 purging them on a guest of that image and rebuilding everything that
 compiles against verbs; no bake has run with the change.
-
-There is a test of it, off by default because on the default stack it
-fails. `--use_rocm` has the NIC address GPU memory, and with both devices
-emulated that is one vfio-user server reaching into another's BAR, which
-stock QEMU does not pass on: measured on two guests, `--use_rocm
---use_rocm_dmabuf` registers the buffer and the first work request ends in
-`remote access error`, and `--use_rocm` alone is refused at registration
-(`Couldn't allocate MR with error=14`). With `PERFTEST_ROCM_HOST_ALLOC=1`,
-which puts the buffer in host memory the GPU can address, the transfer and
-the validation pass. To run `ib_write_bw --use_rocm=0 --use_rocm_dmabuf
---data_validation` between the two guests of a stack `quick-start` brought
-up and tested:
-
-```bash
-cd ansible && ansible-playbook \
-    -i /var/lib/qemu-tool/stacks/quickstart/fleet-inventory.yml \
-    playbooks/vm-quickstart.yml \
-    --private-key /var/lib/qemu-tool/quickstart-key/id_rsa \
-    -e quickstart_rocm_rdma=true
-```
-
-It passes when one side prints `VALIDATION: PASSED`. A run that is timed
-out leaves the guests' RDMA devices needing the stack recreated. `AGENTS.md`
-has what each run measured and what each failure means.
 
 ## System-wide Install (Debian/Ubuntu)
 

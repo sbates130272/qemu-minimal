@@ -453,6 +453,76 @@ or
 .B all
 verbs; any other verb ignores all three switches and says so.
 .TP
+.B \-\-rocm\-rdma\-test
+Also run the ROCm\-memory RDMA test: the perftest built with ROCm,
+.B ib_write_bw \-\-use_rocm \-\-data_validation
+on port 18516, from the first guest to the last, with its buffers allocated
+through HIP on both sides and every byte checked on arrival.
+.BR "Off by default" .
+In the default mode the buffers are host memory the GPU can address, not
+VRAM, which is the one form that passes on the stacks qemu\-tool ships; see
+.BR \-\-rocm\-rdma\-mode .
+Refused before anything is started on a fleet with one guest, naming
+.BR <vm\-count> ,
+and for a flavor that runs no playbook. It needs a guest image that has that
+perftest: the
+.B perftest_setup
+role of the golden bake installs it in
+.I /usr/local/bin
+and records it in
+.IR /etc/perftest\-rocm.json .
+An image published before the role has neither, and the test says so from
+inside the guest before it starts anything. A pass prints
+.RI \(dq first " \-> " last ": ib_write_bw with ROCm buffers (" mode "), " rate " MiB/s, " bytes " bytes in " chunks " chunks validated\(dq,"
+and the result and both sides' output are in
+.I rocm\-rdma.md
+in the stack's artifacts directory and in the report. The rate is absent,
+and the line says so, when perftest's CPU\-frequency calibration failed: the
+test passes
+.B \-F
+so that such a run is still validated. Only meaningful with the
+.B test
+or
+.B all
+verbs; any other verb ignores it and says so.
+.TP
+.BI \-\-rocm\-rdma\-mode " MODE"
+Where
+.B \-\-rocm\-rdma\-test
+puts the buffers. Default:
+.BR host\-alloc .
+.RS
+.TP
+.B host\-alloc
+Host memory mapped for the GPU
+.RB ( PERFTEST_ROCM_HOST_ALLOC=1 ,
+.BR hipHostMalloc ),
+not VRAM. Passes. It proves HIP, the memory registration, the transfer and
+the validator: everything but the NIC reaching the GPU's own memory.
+.TP
+.B dmabuf
+VRAM registered as a dma\-buf
+.RB ( \-\-use_rocm_dmabuf ).
+.B Expected to fail
+on a stack that pins stock QEMU, which the default fleet does: the buffer
+registers, the NIC's server then cannot read the GPU's memory, and the first
+work request ends in a remote access error. The fork QEMU image carries the
+patch for it and has not been tried.
+.TP
+.B vram
+VRAM registered by address
+.RB ( \-\-use_rocm
+alone).
+.B Expected to fail
+on every stack: the guest's kernel refuses the registration (error=14)
+before the NIC is asked, whichever QEMU is pinned.
+.RE
+.IP
+A failure for the reason given is reported as the known limitation of the
+mode, with the line perftest printed, and the run still exits non\-zero.
+Refused without
+.BR \-\-rocm\-rdma\-test .
+.TP
 .B \-\-clean\-overlays
 Delete the guest overlay and NVMe qcow2 files before starting, so the guests
 boot from a fresh overlay of the backing image. The backing file itself is

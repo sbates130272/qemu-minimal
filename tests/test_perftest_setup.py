@@ -32,8 +32,15 @@ What is held here, none of it by booting anything:
                variable that cannot be turned off while the tree has the bug
   the check    the block of qemu/checks/rocm-golden.sh between its two
                markers, run against stand-ins for the tools
-  quickstart   the play that moves validated traffic between GPU memory is
-               off unless asked for, and is the last play in the file
+  quickstart   the play that moves validated traffic between ROCm memory on
+               two guests is off unless `quick-start --rocm-rdma-test` asks
+               for it, which nothing in CI does, and is the last play in the
+               file. Its three modes are the command lines that were
+               measured, a guest image without the build is told so before
+               anything starts, and its verdict is decided from what both
+               sides printed: the table of outputs is run through the real
+               tasks, and the play itself against stand-ins for a guest's
+               tools
 
     python3 -m unittest discover -s tests -v
 """
@@ -48,6 +55,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -2005,15 +2013,211 @@ class GuestCheck(unittest.TestCase):
         self.assertEqual(CHECK.read_text().count("# end: perftest"), 1)
 
 
+# What the ROCm build of ib_write_bw printed on two guests of the default
+# stack on 2026-11-17 (AGENTS.md, "perftest with ROCm memory support"), and
+# the lines of src/ at the pinned commit that no run there produced. HEADER
+# is ctx_print_test_info()'s line; REPORT is RESULT_FMT and REPORT_FMT of
+# src/perftest_parameters.h with the measured rate in it.
+ROCM_ON = " Use ROCm memory : ON\n"
+REPORT = (" #bytes     #iterations    BW peak[MiB/sec]    BW average[MiB/sec]"
+          "   MsgRate[Mpps]\n"
+          " 65536      1000             655.20             642.09 \t\t"
+          "     0.010273\n")
+# The same line when the calibration failed and -F kept the report going:
+# cycles_to_units is 0, so every rate is.
+REPORT_ZERO = REPORT.replace("655.20", "0.00   ").replace(
+    "642.09", "0.00  ").replace("0.010273", "0.000000")
+PASSED = ("[DATA_VALIDATION] rocm: host-staged validation\n"
+          "VALIDATION: PASSED - 7 chunks, 58720256 bytes\n")
+# src/get_clock.c and print_report_bw() in src/perftest_parameters.c; the
+# first line is the one the stock test printed on 2026-11-17.
+NOISY = "Correlation coefficient r^2: 0.457788 < 0.9\n"
+NO_REPORT = NOISY + "Can't produce a report\n"
+# src/write_bw.c: what the server's ctx_hand_shake() failing prints.
+NO_HANDSHAKE = " Failed to exchange data between server and clients\n"
+ERROR_14 = ("Couldn't allocate MR with error=14\nfailed to create mr\n"
+            "Failed to create MR\n Couldn't create IB resources\n")
+ACCESS_ERROR = (" Completion with error at client\n"
+                " Failed status-remote access error (10): wr_id 0 syndrom"
+                " 0x9\n scnt=128, ccnt=0\n")
+# data_validation_stop_and_report() in src/perftest_resources.c.
+CORRUPT = ("VALIDATION: FAILED - 3 error(s), first at QP 0, Chunk 1, Offset "
+           "4096 (expected 0x01, got 0xfe)\n")
+NOTHING = "VALIDATION: WARNING - no data validated (0 chunks, 0 bytes)\n"
+
+# (what it is, mode, the server listened, client exit, client stdout, client
+#  stderr, server output) -> (verdict, what the result line has to say)
+VERDICTS = (
+    ("the measured pass", "host-alloc", True, 0, ROCM_ON + REPORT, "",
+     ROCM_ON + REPORT + PASSED,
+     "pass", ", 642.09 MiB/s, VALIDATION: PASSED - 7 chunks, 58720256 bytes"),
+    ("the calibration failed and -F kept the run going",
+     "host-alloc", True, 0, ROCM_ON + REPORT_ZERO, NOISY,
+     ROCM_ON + REPORT_ZERO + PASSED,
+     "pass", ", rate not measured, VALIDATION: PASSED - 7 chunks"),
+    ("the calibration failed without -F: the client left before the "
+     "handshake, so the server printed no verdict",
+     "host-alloc", True, 1, ROCM_ON, NO_REPORT, ROCM_ON + NO_HANDSHAKE,
+     "no verdict", "Not a failed transfer and not a pass"),
+    # Not reachable at the pinned commit, where the report precedes the
+    # verdict on both verbs. If a later perftest reorders them, an exit 1 is
+    # still not a pass.
+    ("a verdict and then the report's exit 1", "host-alloc", True, 1,
+     ROCM_ON, NO_REPORT, ROCM_ON + PASSED,
+     "no verdict", "Not a failed transfer and not a pass"),
+    ("vram, as measured", "vram", True, 1, ROCM_ON, ERROR_14,
+     ROCM_ON + ERROR_14,
+     "known limitation", "It said: Couldn't allocate MR with error=14"),
+    ("dmabuf, as measured", "dmabuf", True, 1, ROCM_ON, ACCESS_ERROR, ROCM_ON,
+     "known limitation",
+     "It said: Failed status-remote access error (10): wr_id 0 syndrom 0x9"),
+    ("dmabuf on a stack whose NIC reaches the GPU", "dmabuf", True, 0,
+     ROCM_ON + REPORT, "", ROCM_ON + REPORT + PASSED,
+     "pass", ", 642.09 MiB/s, VALIDATION: PASSED"),
+    # A mode's known failure is that mode's alone.
+    ("an access error in the mode that has no known failure", "host-alloc",
+     True, 1, ROCM_ON, ACCESS_ERROR, ROCM_ON,
+     "fail", ": client exit 1, Completion with error at client"),
+    ("error=14 in dmabuf, which registers a dma-buf", "dmabuf", True, 1,
+     ROCM_ON, ERROR_14, ROCM_ON + ERROR_14,
+     "fail", ": client exit 1, Couldn't allocate MR with error=14"),
+    ("vram failing some other way", "vram", True, 1, ROCM_ON,
+     " Unable to init the socket connection\n", ROCM_ON,
+     "fail", ": client exit 1, Unable to init the socket connection"),
+    # The server's exit status does not carry a failed validation.
+    ("the bytes differ", "host-alloc", True, 0, ROCM_ON + REPORT, "",
+     ROCM_ON + REPORT + CORRUPT,
+     "fail", ", VALIDATION: FAILED - 3 error(s)"),
+    ("nothing was validated", "host-alloc", True, 0, ROCM_ON + REPORT, "",
+     ROCM_ON + REPORT + NOTHING,
+     "fail", ", VALIDATION: WARNING - no data validated"),
+    ("both a pass and a failure are printed", "host-alloc", True, 0,
+     ROCM_ON + REPORT, "", ROCM_ON + REPORT + PASSED + CORRUPT,
+     "fail", ": client exit 0"),
+    ("no verdict at all", "host-alloc", True, 0, ROCM_ON + REPORT, "",
+     ROCM_ON + REPORT,
+     "fail", ": client exit 0"),
+    ("validated, and the tools did not say ROCm memory was in use",
+     "host-alloc", True, 0, REPORT, "", REPORT + PASSED,
+     "fail", ": client exit 0"),
+    # perftest prints the line once a side. One side alone is not the test.
+    ("validated, and only the client said ROCm memory was in use",
+     "host-alloc", True, 0, ROCM_ON + REPORT, "", REPORT + PASSED,
+     "fail", ": client exit 0"),
+    ("validated, and only the server said ROCm memory was in use",
+     "host-alloc", True, 0, REPORT, "", ROCM_ON + REPORT + PASSED,
+     "fail", ": client exit 0"),
+    ("the client was timed out", "host-alloc", True, 124, ROCM_ON, "",
+     ROCM_ON,
+     "fail", ": client exit 124"),
+    ("the server never listened", "host-alloc", False, None, "", "", "",
+     "no server", ": the server never listened on port 18516 of g2"),
+)
+
+# Stand-ins for what the play runs in a guest. ib_write_bw behaves as the
+# ROCm build did on the default stack: a buffer from hipHostMalloc works, a
+# dma-buf registers and fails at the first work request, a GPU address is
+# refused at registration. It appends how it was called to FAKE_ROCM_LOG.
+ROCM_FAKES = {
+    "ib_write_bw": r"""
+if [ "$1" = --help ]; then
+  [ -n "${FAKE_ROCM_STOCK:-}" ] || echo "      --use_rocm=<rocm device id> Use selected ROCm device for GPUDirect RDMA testing"
+  [ -n "${FAKE_ROCM_STOCK:-}${FAKE_ROCM_NO_DMABUF:-}" ] || echo "      --use_rocm_dmabuf Use ROCm DMA-BUF for GPUDirect RDMA testing"
+  echo "      --data_validation  Enable data validation"
+  exit 1
+fi
+last="${*: -1}"
+role=server
+[[ "${last}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && role=client
+echo "${role}: HOST_ALLOC=${PERFTEST_ROCM_HOST_ALLOC-unset} VALIDATION=${PERFTEST_ROCM_VALIDATION-unset} EXTRA=${FAKE_EXTRA-unset} argv: $*" >> "${FAKE_ROCM_LOG}"
+args=" $* "
+echo " Use ROCm memory : ON"
+how=vram
+[[ "${args}" == *" --use_rocm_dmabuf "* ]] && how=dmabuf
+[ -n "${PERFTEST_ROCM_HOST_ALLOC+set}" ] && how=host
+case "${how}" in
+  host) echo "PERFTEST_ROCM_HOST_ALLOC: host-mapped GPU buffer" ;;
+  vram) echo "Couldn't allocate MR with error=14" >&2
+        echo " Couldn't create IB resources" >&2
+        exit 1 ;;
+  dmabuf)
+        if [ "${role}" = client ]; then
+          echo " Completion with error at client" >&2
+          echo " Failed status-remote access error (10): wr_id 0 syndrom 0x9" >&2
+        fi
+        exit 1 ;;
+esac
+echo " #bytes     #iterations    BW peak[MiB/sec]    BW average[MiB/sec]   MsgRate[Mpps]"
+printf ' %-7lu    %-10d       %-7.2f            %-7.2f\t\t     %-7.6f\n' 65536 1000 655.20 642.09 0.010273
+if [ "${role}" = server ]; then
+  if [ "${PERFTEST_ROCM_VALIDATION-}" = staged ]; then
+    echo "[DATA_VALIDATION] rocm: host-staged validation"
+  else
+    echo "[DATA_VALIDATION] rocm: live GPU validation"
+  fi
+  echo "VALIDATION: PASSED - 7 chunks, 58720256 bytes"
+fi
+""",
+    # Runs the unit's command at once, to the file its output is sent to,
+    # with the environment --setenv gives it.
+    "systemd-run": r"""
+log=/dev/null
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --property=StandardOutput=file:*) log="${1#--property=StandardOutput=file:}" ;;
+    --setenv=*) export "${1#--setenv=}" ;;
+    --*) ;;
+    *) break ;;
+  esac
+  shift
+done
+"$@" > "${log}" 2>&1
+echo "Running as unit: quickstart-rocm-rdma.service"
+""",
+    # FAKE_ROCM_BUSY=<n>: the unit is still running for the first n asks.
+    "systemctl": r"""
+echo "systemctl $*" >> "${FAKE_ROCM_LOG}"
+if [ "$1" = is-active ]; then
+  asked=$(grep -c '^systemctl is-active' "${FAKE_ROCM_LOG}")
+  if [ "${asked}" -le "${FAKE_ROCM_BUSY:-0}" ]; then echo active; exit 0; fi
+  echo inactive; exit 3
+fi
+exit 0
+""",
+    "ss": 'echo "LISTEN 0      128          0.0.0.0:18516      0.0.0.0:*"\n',
+    # The unit's journal holds every run of the boot. Asked from a time, it
+    # answers with this run's lines; asked for the last 40, with an earlier
+    # run's as well. How it was called goes to FAKE_ROCM_JOURNAL.
+    "journalctl": r"""
+echo "$*" >> "${FAKE_ROCM_JOURNAL}"
+case " $* " in
+  *" --since @"*) ;;
+  *) echo "systemd[1]: quickstart-rocm-rdma.service: Main process exited, code=exited, status=1/FAILURE" ;;
+esac
+echo "systemd[1]: Started quickstart-rocm-rdma.service - this run."
+""",
+    "amdgpu-probe": 'echo "${FAKE_ROCM_PROBE:-loaded}"\n',
+    "ibv_devinfo": r"""
+if [ "$1" = -l ]; then printf '1 HCA found:\n\tfake-ib-7\n\n'; else echo "hca_id: $2"; fi
+""",
+    # become is switched off for the run. Anything that still reaches for
+    # root fails here instead of asking this host for a password.
+    "sudo": 'echo "sudo was called: $*" >&2\nexit 97\n',
+}
+
+
 class Quickstart(unittest.TestCase):
-    """The optional test of the feature on a live stack."""
+    """The optional test of the feature on a live stack, read."""
 
     def setUp(self):
         self.plays = _plays(QUICKSTART)
         self.play = _play(RDMA_PLAY, QUICKSTART)
+        self.vars = self.play["vars"]
+        self.tasks = {t["name"]: t for t in self.play["tasks"]}
+        self.names = [t["name"] for t in self.play["tasks"]]
 
     def test_it_is_off_by_default(self):
-        self.assertIs(self.play["vars"]["quickstart_rocm_rdma"], False)
+        self.assertIs(self.vars["quickstart_rocm_rdma"], False)
         first = self.play["tasks"][0]
         self.assertEqual(first["ansible.builtin.meta"], "end_play")
         self.assertEqual(first["when"], "not (quickstart_rocm_rdma | bool)")
@@ -2035,86 +2239,151 @@ class Quickstart(unittest.TestCase):
             self.assertNotIn("quickstart_rocm_rdma", _text(play), play["name"])
             self.assertNotIn("tags", play, play["name"])
 
-    def test_quick_start_does_not_turn_it_on(self):
-        for source in ("quick_start.py", "cli.py"):
-            self.assertNotIn(
-                "quickstart_rocm_rdma",
-                (REPO / "qemu/qemu-tool" / source).read_text())
-        for workflow in (REPO / ".github/workflows").glob("*.yml"):
-            self.assertNotIn("quickstart_rocm_rdma", workflow.read_text(),
-                             workflow.name)
+    def test_only_the_switch_turns_it_on(self):
+        """`qemu-tool quick-start --rocm-rdma-test` passes the gate, the
+        switch is off unless typed, and nothing types it: no workflow, no
+        action and no script, so neither CI nor the daily lane runs a test
+        that needs a guest image no fleet file pulls yet."""
+        source = (REPO / "qemu/qemu-tool/quick_start.py").read_text()
+        self.assertEqual(source.count("quickstart_rocm_rdma=true"), 1)
+        self.assertRegex(
+            source,
+            r'    if state\.rocm_rdma_test:\n'
+            r'        cmd \+= \["-e", "quickstart_rocm_rdma=true"\]\n')
+        # Off in the state, off in the entry point, off on the command line.
+        self.assertEqual(source.count("rocm_rdma_test: bool = False"), 2)
+        cli = (REPO / "qemu/qemu-tool/cli.py").read_text()
+        self.assertIn(
+            '"--rocm-rdma-test", action="store_true", default=False', cli)
+        self.assertNotIn("quickstart_rocm_rdma", cli)
+        typed = [p for p in sorted((REPO / ".github").rglob("*"))
+                 + sorted((REPO / "scripts").rglob("*"))
+                 if p.is_file()]
+        self.assertGreater(len(typed), 10)
+        for path in typed:
+            text = path.read_text(errors="replace")
+            # The device a guest names rocm-rdma-ernic0 is not the switch.
+            for needle in ("quickstart_rocm_rdma", "--rocm-rdma-",
+                           "rocm_rdma"):
+                self.assertFalse(needle in text,
+                                 f"{path.relative_to(REPO)} names {needle}")
 
-    def test_it_runs_the_built_tool_with_both_flags(self):
-        v = self.play["vars"]
+    def test_it_runs_the_built_tool_with_validation(self):
+        v = self.vars
         self.assertEqual(v["quickstart_rocm_rdma_bin_dir"], "/usr/local/bin")
         # --data_validation is for WRITE and READ only; ib_send_bw refuses it.
         self.assertEqual(v["quickstart_rocm_rdma_tool"], "ib_write_bw")
-        self.assertIn("--data_validation", v["quickstart_rocm_rdma_options"])
-        depth = re.search(r"-t (\d+)", v["quickstart_rocm_rdma_options"])
-        self.assertGreaterEqual(int(depth.group(1)), 32)
-        iters = re.search(r"-n (\d+)", v["quickstart_rocm_rdma_options"])
-        self.assertGreaterEqual(int(iters.group(1)), 32)
-        size = re.search(r"-s (\d+)", v["quickstart_rocm_rdma_options"])
-        self.assertLess(int(size.group(1)), 15 * 1024 * 1024)
+        options = v["quickstart_rocm_rdma_options"].split()
+        self.assertIn("--data_validation", options)
+        depth = options[options.index("-t") + 1]
+        self.assertGreaterEqual(int(depth), 32)
+        iters = options[options.index("-n") + 1]
+        self.assertGreaterEqual(int(iters), 32)
+        size = options[options.index("-s") + 1]
+        self.assertLess(int(size), 15 * 1024 * 1024)
         self.assertNotEqual(v["quickstart_rocm_rdma_port"], 18515)
-        tasks = {t["name"]: t for t in self.play["tasks"]}
         for name in ("Start the server as a transient unit",
                      "Run the client against the peer"):
-            argv = tasks[name]["ansible.builtin.command"]["argv"]
+            argv = self.tasks[name]["ansible.builtin.command"]["argv"]
             self.assertIn("+ quickstart_rocm_rdma_memory", argv)
             self.assertIn("quickstart_rocm_rdma_options | split", argv)
             self.assertIn("quickstart_rocm_rdma_exe", argv)
+            self.assertIn("quickstart_rocm_rdma_setenv", argv)
         self.assertIn("'systemd-run'",
-                      tasks["Start the server as a transient unit"]
+                      self.tasks["Start the server as a transient unit"]
                       ["ansible.builtin.command"]["argv"])
 
-    def test_the_buffer_is_registered_as_a_dma_buf(self):
-        """The form that reaches the NIC.
+    def test_the_report_is_told_not_to_exit_on_a_failed_calibration(self):
+        """-F, on both sides.
 
-        Measured on the default stack: with --use_rocm alone ibv_reg_mr of
-        the GPU address fails in the guest (error=14) on both sides and the
-        NIC's server is never asked. With --use_rocm_dmabuf the registration
-        succeeds and the first work request is where it stops.
+        Read from the pinned commit. print_report_bw() calls get_cpu_mhz(),
+        which returns 0 when its regression's r^2 is under 0.9, and then
+        prints "Can't produce a report" and exit(1)s unless cpu_freq_f is
+        set, which is what -F does. In write_bw.c and read_bw.c that call
+        is after the transfer and before the handshake after which the
+        validating side prints its verdict, so without -F a noisy
+        calibration leaves a run that says nothing.
         """
-        v = self.play["vars"]
-        self.assertIs(v["quickstart_rocm_rdma_dmabuf"], True)
-        memory = v["quickstart_rocm_rdma_memory"]
-        self.assertIn("'--use_rocm=' ~ quickstart_rocm_rdma_gpu", memory)
-        self.assertIn(
-            "['--use_rocm_dmabuf'] if quickstart_rocm_rdma_dmabuf | bool",
-            memory)
-        tasks = {t["name"]: t for t in self.play["tasks"]}
-        check = tasks["Check both guests have a perftest built with ROCm"]
-        self.assertIn("'--use_rocm_dmabuf'",
-                      check["ansible.builtin.shell"]["cmd"])
+        self.assertIn("-F", self.vars["quickstart_rocm_rdma_options"].split())
+        source = QUICKSTART.read_text()
+        start = source.index("# RDMA with ROCm memory and data validation")
+        comment = " ".join(
+            line.lstrip("# ") for line in
+            source[start:source.index(f"- name: {RDMA_PLAY}")].splitlines())
+        for needle in ("-F is in the options on purpose",
+                       "Can't produce a report",
+                       "BEFORE the handshake",
+                       # -F has run on guests; a calibration failing
+                       # under it has not.
+                       "-F ran on guests on 2026-11-18 and every run "
+                       "calibrated, so the 0.00 has not been seen",
+                       "A pass whose rate is 0.00 says the rate was not "
+                       "measured"):
+            self.assertIn(needle, comment)
+
+    def test_each_mode_is_the_command_line_that_was_measured(self):
+        """host-alloc is the row that passed on the default stack, dmabuf
+        the one that registers and fails at the first work request, vram
+        the one refused at registration (AGENTS.md)."""
+        v = self.vars
+        self.assertEqual(v["quickstart_rocm_rdma_mode"], "host-alloc")
+        modes = v["quickstart_rocm_rdma_modes"]
+        self.assertEqual(list(modes), ["host-alloc", "dmabuf", "vram"])
+        self.assertEqual(modes["host-alloc"]["flags"], [])
+        self.assertEqual(modes["host-alloc"]["env"],
+                         {"PERFTEST_ROCM_HOST_ALLOC": "1"})
+        self.assertEqual(modes["dmabuf"]["flags"], ["--use_rocm_dmabuf"])
+        self.assertEqual(modes["dmabuf"]["env"], {})
+        self.assertEqual(modes["vram"]["flags"], [])
+        self.assertEqual(modes["vram"]["env"], {})
+        # Every mode is ROCm memory: the device id is on both command lines.
+        self.assertIn("['--use_rocm=' ~ quickstart_rocm_rdma_gpu]",
+                      v["quickstart_rocm_rdma_memory"])
+        self.assertIn("+ quickstart_rocm_rdma_how.flags",
+                      v["quickstart_rocm_rdma_memory"])
+        # The default has no known failure; the other two name theirs, in
+        # the words perftest printed.
+        self.assertNotIn("known", modes["host-alloc"])
+        self.assertEqual(modes["vram"]["known"],
+                         "Couldn't allocate MR with error=14")
+        self.assertEqual(modes["dmabuf"]["known"], "access error")
+        self.assertIn("stock QEMU", modes["dmabuf"]["limitation"])
+        self.assertIn("has not been tried", modes["dmabuf"]["limitation"])
+        self.assertIn("every stack", modes["vram"]["limitation"])
         # A run on host-mapped memory does not say it moved GPU memory.
-        where = v["quickstart_rocm_rdma_where"]
-        self.assertIn("'PERFTEST_ROCM_HOST_ALLOC' in quickstart_rocm_rdma_env",
-                      where)
-        self.assertIn("not VRAM", where)
-        verdict = tasks["Assert the transfer ran and every byte validated"]
-        self.assertIn("quickstart_rocm_rdma_where",
+        self.assertIn("not VRAM", modes["host-alloc"]["buffers"])
+        verdict = self.tasks["Assert the transfer ran and every byte validated"]
+        self.assertIn("quickstart_rocm_rdma_how.buffers",
                       verdict["ansible.builtin.assert"]["success_msg"])
+        # The same three, with the same words for what to expect, are what
+        # quick-start offers.
+        source = (REPO / "qemu/qemu-tool/quick_start.py").read_text()
+        for mode in modes:
+            self.assertIn(f'    "{mode}": ', source)
+        self.assertEqual(v["quickstart_rocm_rdma_validation"], "staged")
+        self.assertIn("{'PERFTEST_ROCM_VALIDATION': 'staged'}",
+                      v["quickstart_rocm_rdma_all_env"])
 
     def test_each_side_is_given_the_ib_device_it_reported(self):
         """The name is asked of each guest and never assumed: the published
         image's device keeps its kernel name, a baked one's is renamed."""
-        tasks = {t["name"]: t for t in self.play["tasks"]}
-        find = tasks["Find the IB device on both guests"]
+        find = self.tasks["Find the IB device on both guests"]
         self.assertEqual(find["ansible.builtin.command"]["cmd"],
                          "ibv_devinfo -l")
+        self.assertEqual(find["loop"], "{{ quickstart_rocm_rdma_pair }}")
+        # The client's guest first, the server's second.
         self.assertEqual(
-            find["loop"],
+            " ".join(self.vars["quickstart_rocm_rdma_pair"].split()),
             "{{ [inventory_hostname, quickstart_rocm_rdma_server] }}")
         self.assertEqual(find["register"], "quickstart_rocm_rdma_ibv")
-        facts = tasks["Record the IB device names"]["ansible.builtin.set_fact"]
-        # In the loop's order: the client's guest first, the server's second.
+        facts = self.tasks["Record the IB device names"][
+            "ansible.builtin.set_fact"]
         self.assertIn("quickstart_rocm_rdma_ibv.results[0].stdout_lines[1:]",
                       facts["quickstart_rocm_rdma_client_dev"])
         self.assertIn("quickstart_rocm_rdma_ibv.results[1].stdout_lines[1:]",
                       facts["quickstart_rocm_rdma_server_dev"])
-        server = tasks["Start the server as a transient unit"]
-        client = tasks["Run the client against the peer"]
+        server = self.tasks["Start the server as a transient unit"]
+        client = self.tasks["Run the client against the peer"]
         self.assertIn("'-d', quickstart_rocm_rdma_server_dev,",
                       server["ansible.builtin.command"]["argv"])
         self.assertNotIn("quickstart_rocm_rdma_client_dev",
@@ -2131,48 +2400,119 @@ class Quickstart(unittest.TestCase):
         for literal in ("rocm-rdma-ernic", "rocep", "ernic0"):
             self.assertNotIn(literal, text)
 
-    def test_the_server_is_waited_for_as_long_as_the_client_was_allowed(self):
+    def test_the_server_is_waited_for_and_never_stopped_mid_run(self):
         """Its verdict is written when it exits, and for a WRITE it copies
         the buffer back from the GPU and compares it after the client is
         done: a wait shorter than the run reads an empty file."""
-        tasks = {t["name"]: t for t in self.play["tasks"]}
-        wait = tasks["Wait for the server to finish"]
+        wait = self.tasks["Wait for the server to finish"]
         self.assertEqual(wait["delay"], 2)
-        self.assertIn("quickstart_rocm_rdma_timeout | int // 2",
-                      wait["retries"])
-        # A server no client reached is not waited on for ten minutes.
+        # What it waits for. With `until: true` here every other test in
+        # this file passed: the stand-in server has exited before it is
+        # asked.
+        self.assertEqual(
+            wait["until"],
+            "quickstart_rocm_rdma_active.stdout | trim "
+            "not in ['active', 'activating']")
+        self.assertEqual(wait["ansible.builtin.command"]["cmd"],
+                         "systemctl is-active "
+                         "{{ quickstart_rocm_rdma_unit }}.service")
+        retries = " ".join(wait["retries"].split())
+        self.assertIn("(quickstart_rocm_rdma_timeout | int // 2) if "
+                      "quickstart_rocm_rdma_client.rc | default(1) == 0",
+                      retries)
+        # After a client that failed there is nothing to validate: it is
+        # given perftest's own 120 s wait for a message and a little more.
+        self.assertIn("quickstart_rocm_rdma_failed_wait | int // 2", retries)
+        self.assertGreater(self.vars["quickstart_rocm_rdma_failed_wait"], 120)
+        # A server no client reached is not waited on at all.
         self.assertIn("if quickstart_rocm_rdma_listening.rc == 0 else 1",
-                      wait["retries"])
+                      retries)
         self.assertIs(wait["failed_when"], False)
-
-    def test_the_verdict_is_the_validation_line_from_either_side(self):
-        tasks = {t["name"]: t for t in self.play["tasks"]}
-        verdict = tasks["Assert the transfer ran and every byte validated"]
-        that = verdict["ansible.builtin.assert"]["that"]
-        self.assertIn("'VALIDATION: PASSED' in quickstart_rocm_rdma_said", that)
-        self.assertIn(
-            "quickstart_rocm_rdma_said is not search("
-            "'VALIDATION: (FAILED|WARNING|ERROR)')", that)
-        said = verdict["vars"]["quickstart_rocm_rdma_said"]
-        self.assertIn("quickstart_rocm_rdma_server_out.stdout", said)
-        self.assertIn("quickstart_rocm_rdma_client.stdout", said)
-        # The server is never stopped mid-run: that breaks the RDMA device.
-        for name, task in tasks.items():
+        # Its listening socket is read, never connected to: a connection is
+        # the client as far as perftest is concerned.
+        listen = self.tasks["Wait for the server to listen"]
+        self.assertIn("ss -ltn", listen["ansible.builtin.shell"]["cmd"])
+        self.assertNotIn("wait_for", _text(self.play))
+        # The one stop is of a unit an earlier run left, before this run's
+        # server exists. A perftest stopped mid-transfer breaks the device.
+        for name, task in self.tasks.items():
             if name == "Clear any server unit left by an earlier run":
                 continue
             self.assertNotIn("systemctl stop", _text(task), name)
             self.assertNotIn("kill", _text(task).replace("killed", ""), name)
+        self.assertLess(
+            self.names.index("Clear any server unit left by an earlier run"),
+            self.names.index("Start the server as a transient unit"))
+        # The client alone is under timeout(1).
+        self.assertIn("['timeout', quickstart_rocm_rdma_timeout | string,",
+                      self.tasks["Run the client against the peer"]
+                      ["ansible.builtin.command"]["argv"])
+
+    def test_the_verdict_is_the_validation_line_from_either_side(self):
+        work = self.tasks["Work out the verdict"]
+        said = work["vars"]["quickstart_rocm_rdma_said"]
+        self.assertIn("quickstart_rocm_rdma_server_out.stdout", said)
+        self.assertIn("quickstart_rocm_rdma_client_said", said)
+        validated = " ".join(
+            work["vars"]["quickstart_rocm_rdma_validated"].split())
+        self.assertIn("'VALIDATION: PASSED' in quickstart_rocm_rdma_said",
+                      validated)
+        self.assertIn("quickstart_rocm_rdma_said is not search("
+                      "'VALIDATION: (FAILED|WARNING|ERROR)')", validated)
+        # ROCm memory in use is each side's own line, not either's.
+        both = " ".join(work["vars"]["quickstart_rocm_rdma_both_rocm"].split())
+        self.assertEqual(
+            both,
+            "{{ 'Use ROCm memory : ON' in quickstart_rocm_rdma_client_said "
+            "and 'Use ROCm memory : ON' in "
+            "(quickstart_rocm_rdma_server_out.stdout | default('')) }}")
+        self.assertIn(
+            "and quickstart_rocm_rdma_both_rocm | bool)",
+            work["ansible.builtin.set_fact"]["quickstart_rocm_rdma_verdict"])
+        self.assertNotIn(
+            "'Use ROCm memory : ON' in quickstart_rocm_rdma_said",
+            _text(work))
+        verdict = self.tasks["Assert the transfer ran and every byte validated"]
+        self.assertEqual(verdict["ansible.builtin.assert"]["that"],
+                         "quickstart_rocm_rdma_verdict == 'pass'")
+        # The result is on the controller before the play can fail on it.
+        self.assertLess(self.names.index("Write the result to the controller"),
+                        self.names.index(verdict["name"]))
+        write = self.tasks["Write the result to the controller"]
+        self.assertEqual(write["ansible.builtin.copy"]["dest"],
+                         "{{ quickstart_artifacts_dir }}/rocm-rdma.md")
+        self.assertEqual(write["delegate_to"], "localhost")
 
     def test_it_says_when_the_guest_has_no_rocm_perftest_or_no_gpu(self):
-        names = [t["name"] for t in self.play["tasks"]]
-        tool = names.index("Check both guests have a perftest built with ROCm")
-        gpu = names.index("Check the GPU is bound on both guests")
-        start = names.index("Start the server as a transient unit")
-        self.assertLess(tool, start)
+        tool = self.names.index(
+            "Find out whether both guests have a perftest built with ROCm")
+        gpu = self.names.index("Ask both guests whether the GPU is bound")
+        start = self.names.index("Start the server as a transient unit")
+        self.assertLess(tool, gpu)
         self.assertLess(gpu, start)
+        for index in (tool, gpu):
+            task = self.play["tasks"][index]
+            self.assertEqual(task["loop"], "{{ quickstart_rocm_rdma_pair }}")
+            self.assertEqual(task["delegate_to"], "{{ item }}")
+            # The task after each one is what fails, with the reason.
+            self.assertIs(task["failed_when"], False)
+            self.assertIn("ansible.builtin.assert", self.play["tasks"][index + 1])
+        # What the role writes once its build passed its own check.
+        self.assertEqual(self.vars["quickstart_rocm_rdma_stamp"], STAMP)
+        self.assertEqual(_defaults()["perftest_setup_stamp"], STAMP)
+        cmd = self.play["tasks"][tool]["ansible.builtin.shell"]["cmd"]
+        self.assertLess(cmd.index('[ ! -r "${stamp}" ]'),
+                        cmd.index('"${exe}" --help'))
+        for needle in ("predates the perftest_setup role",
+                       "baked from this checkout",
+                       "apply the role to",
+                       "quickstart_rocm_rdma_how.flags"):
+            self.assertIn(needle, cmd)
         self.assertEqual(
-            self.play["tasks"][gpu]["failed_when"],
-            "quickstart_rocm_rdma_probe.stdout | trim != 'loaded'")
+            self.play["tasks"][gpu]["ansible.builtin.command"]["argv"],
+            ["{{ quickstart_rocm_rdma_probe_exe }}", "--status"])
+        self.assertIn("reject('equalto', 'loaded')",
+                      self.play["tasks"][gpu + 1]["ansible.builtin.assert"]["that"])
 
     def test_the_gate_evaluated(self):
         """Off: one task, and it ends the play. On: the play begins.
@@ -2195,7 +2535,9 @@ class Quickstart(unittest.TestCase):
                     cwd=tmp, capture_output=True, text=True,
                     env={**os.environ, "ANSIBLE_NOCOLOR": "1",
                          "ANSIBLE_STDOUT_CALLBACK": "default"})
-            for extra in ((), ("-e", "quickstart_rocm_rdma=false")):
+            for extra in ((), ("-e", "quickstart_rocm_rdma=false"),
+                          # The mode alone does not open the play.
+                          ("-e", "quickstart_rocm_rdma_mode=dmabuf")):
                 with self.subTest(extra=extra):
                     off = run(*extra)
                     self.assertEqual(off.returncode, 0, off.stdout + off.stderr)
@@ -2207,6 +2549,343 @@ class Quickstart(unittest.TestCase):
             self.assertNotEqual(on.returncode, 0)
             self.assertIn("needs two guests", on.stdout + on.stderr)
             self.assertEqual(on.stdout.count("TASK ["), 2, on.stdout)
+
+
+class QuickstartRun(unittest.TestCase):
+    """The play, run on this host against stand-ins for a guest's tools."""
+
+    @classmethod
+    def setUpClass(cls):
+        _require(shutil.which("ansible-playbook") is not None,
+                 "ansible-playbook")
+        cls.tmp = Path(tempfile.mkdtemp(prefix="quickstart-rocm-rdma-"))
+        cls.addClassCleanup(shutil.rmtree, cls.tmp, ignore_errors=True)
+        cls.play = _play(RDMA_PLAY, QUICKSTART)
+        (cls.tmp / "play.yml").write_text(
+            yaml.safe_dump([cls.play], sort_keys=False))
+        host = {"ansible_connection": "local",
+                "ansible_python_interpreter": sys.executable}
+        (cls.tmp / "inv.yml").write_text(yaml.safe_dump({"fleet": {"hosts": {
+            "g1": dict(host, fleet_guest_ip="192.0.2.11"),
+            "g2": dict(host, fleet_guest_ip="192.0.2.12")}}}))
+        bindir = cls.tmp / "bin"
+        bindir.mkdir()
+        for name, body in ROCM_FAKES.items():
+            path = bindir / name
+            path.write_text("#!/bin/bash\n" + body.lstrip("\n"))
+            path.chmod(0o755)
+        (cls.tmp / "perftest-rocm.json").write_text('{"commit": "x"}\n')
+        cls.runs = 0
+
+    def _run(self, *extra, playbook="play.yml", env=None, **override):
+        type(self).runs += 1
+        art = self.tmp / f"artifacts-{self.runs}"
+        log = self.tmp / f"calls-{self.runs}.log"
+        log.write_text("")
+        values = {
+            # The server and its file are root's in a guest. Here nothing
+            # is: the stand-ins need no privilege and sudo is a failure.
+            "ansible_become": "false",
+            "quickstart_artifacts_dir": str(art),
+            "quickstart_rocm_rdma_bin_dir": str(self.tmp / "bin"),
+            "quickstart_rocm_rdma_stamp": str(self.tmp / "perftest-rocm.json"),
+            "quickstart_rocm_rdma_probe_exe": str(self.tmp / "bin/amdgpu-probe"),
+            "quickstart_rocm_rdma_log": str(self.tmp / f"server-{self.runs}.log"),
+        }
+        values.update(override)
+        cmd = ["ansible-playbook", "-i", "inv.yml", playbook]
+        for key, value in values.items():
+            cmd += ["-e", f"{key}={value}"]
+        cmd += list(extra)
+        full = {**os.environ, "ANSIBLE_NOCOLOR": "1",
+                "ANSIBLE_STDOUT_CALLBACK": "default",
+                "PATH": f"{self.tmp / 'bin'}:{os.environ['PATH']}",
+                "FAKE_ROCM_LOG": str(log),
+                "FAKE_ROCM_JOURNAL": str(self.tmp / f"journal-{self.runs}.log"),
+                **(env or {})}
+        proc = subprocess.run(cmd, cwd=self.tmp, capture_output=True,
+                              text=True, env=full)
+        self.server_log = Path(values["quickstart_rocm_rdma_log"])
+        journal = Path(full["FAKE_ROCM_JOURNAL"])
+        self.journal = (journal.read_text().splitlines()
+                        if journal.exists() else [])
+        return proc, art, log.read_text().splitlines()
+
+    @staticmethod
+    def _tasks(stdout: str) -> list[str]:
+        return re.findall(r"^TASK \[(.+?)\] \*", stdout, re.M)
+
+    ON = ("-e", "quickstart_rocm_rdma=true")
+    OPTIONS = "-F --data_validation -t 128 -n 1000 -s 65536"
+
+    def test_the_default_mode_passes_and_records_what_it_measured(self):
+        proc, art, calls = self._run(*self.ON)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertNotIn("sudo was called", proc.stdout + proc.stderr)
+        # Host-mapped buffers and the host-staged compare, on both sides,
+        # each with the device its own guest reported.
+        common = (f"HOST_ALLOC=1 VALIDATION=staged EXTRA=unset argv: -d "
+                  f"fake-ib-7 -p 18516 --use_rocm=0 {self.OPTIONS}")
+        self.assertEqual([c for c in calls if not c.startswith("systemctl")],
+                         [f"server: {common}",
+                          f"client: {common} 192.0.2.12"])
+        result = (art / "rocm-rdma.md").read_text()
+        self.assertIn(
+            "\nrocm rdma: pass, mode host-alloc, ib_write_bw g1 -> g2, "
+            "642.09 MiB/s, VALIDATION: PASSED - 7 chunks, 58720256 bytes\n",
+            result)
+        self.assertIn("## ROCm-memory RDMA test: g1 -> g2", result)
+        self.assertIn("not VRAM", result)
+        self.assertIn("`PERFTEST_ROCM_HOST_ALLOC=1 PERFTEST_ROCM_VALIDATION="
+                      f"staged ib_write_bw --use_rocm=0 {self.OPTIONS}`",
+                      result)
+        self.assertIn("### Client (g1, exit 0)", result)
+        self.assertIn("### Server (g2)", result)
+        self.assertIn("[DATA_VALIDATION] rocm: host-staged validation", result)
+        # Nothing is stopped but the unit an earlier run might have left,
+        # and that before the server is started.
+        self.assertEqual(
+            [c for c in calls if c.startswith("systemctl")],
+            ["systemctl stop quickstart-rocm-rdma.service",
+             "systemctl reset-failed quickstart-rocm-rdma.service",
+             "systemctl is-active quickstart-rocm-rdma.service"])
+        self.assertLess(calls.index("systemctl stop quickstart-rocm-rdma.service"),
+                        calls.index(f"server: {common}"))
+        recap = proc.stdout.split("PLAY RECAP")[1]
+        self.assertRegex(recap, r"g1\s+: ok=19 .*failed=0")
+        self.assertNotIn("g2 ", recap)
+
+    def test_the_journal_is_this_runs_and_the_log_is_not_left(self):
+        """Seen on guests on 2026-11-18: a passing run's result carried the
+        "status=1/FAILURE" of the two failed runs before it in the boot,
+        because the unit's journal was read for its last 40 lines; and the
+        server's log stayed in /var/tmp on the last guest after every run."""
+        before = time.time()
+        proc, art, _ = self._run(*self.ON)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        (asked,) = self.journal
+        found = re.fullmatch(
+            r"--no-pager -n 40 --since @(\d+\.\d{6}) "
+            r"-u quickstart-rocm-rdma\.service", asked)
+        self.assertIsNotNone(found, asked)
+        # The time is taken on the server's guest before its unit exists.
+        self.assertLessEqual(before - 1, float(found.group(1)))
+        self.assertLessEqual(float(found.group(1)), time.time())
+        clear = _text(self.play["tasks"][[t["name"] for t in self.play["tasks"]]
+                      .index("Clear any server unit left by an earlier run")])
+        self.assertIn("date +%s.%6N", clear)
+        result = (art / "rocm-rdma.md").read_text()
+        self.assertIn("--- journal", result)
+        self.assertIn("Started quickstart-rocm-rdma.service - this run.",
+                      result)
+        self.assertNotIn("status=1/FAILURE", result)
+        # What the file held is in the result; the file is gone.
+        self.assertIn("VALIDATION: PASSED - 7 chunks", result)
+        self.assertFalse(self.server_log.exists())
+
+    def test_a_time_that_is_not_one_reads_the_journal_as_it_did(self):
+        """The clear task is failed_when: false. If it gave no time, the
+        journal is still read, unbounded, and nothing is handed to
+        journalctl that came from somewhere else."""
+        tasks = [dict(t) for t in self.play["tasks"]]
+        (clear,) = [t for t in tasks
+                    if t["name"] == "Clear any server unit left by an earlier run"]
+        shell = dict(clear["ansible.builtin.shell"])
+        shell["cmd"] = shell["cmd"].replace("date +%s.%6N", "echo '; id'")
+        clear["ansible.builtin.shell"] = shell
+        (self.tmp / "notime.yml").write_text(yaml.safe_dump(
+            [{**self.play, "tasks": tasks}], sort_keys=False))
+        proc, art, _ = self._run(*self.ON, playbook="notime.yml")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(
+            self.journal,
+            ["--no-pager -n 40 -u quickstart-rocm-rdma.service"])
+        self.assertNotIn("uid=", (art / "rocm-rdma.md").read_text())
+
+    def test_the_server_is_waited_for_until_it_has_exited(self):
+        """A server still comparing when it is first asked is asked again:
+        its verdict is in the file only once it has exited."""
+        proc, art, calls = self._run(*self.ON, env={"FAKE_ROCM_BUSY": "1"})
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(
+            [c for c in calls if c.startswith("systemctl is-active")],
+            ["systemctl is-active quickstart-rocm-rdma.service"] * 2)
+        self.assertIn("rocm rdma: pass, mode host-alloc",
+                      (art / "rocm-rdma.md").read_text())
+        self.assertFalse(self.server_log.exists())
+
+    def test_a_server_still_running_keeps_its_log(self):
+        """One that outlasts its wait is never stopped, and is still
+        writing the file: it is left for whoever looks, and the next run
+        clears it."""
+        proc, _, calls = self._run(
+            *self.ON, "-e", "quickstart_rocm_rdma_timeout=4",
+            env={"FAKE_ROCM_BUSY": "99"})
+        asks = [c for c in calls if c.startswith("systemctl is-active")]
+        self.assertGreaterEqual(len(asks), 2)
+        self.assertEqual(
+            [c for c in calls if c.startswith("systemctl")
+             and "is-active" not in c],
+            ["systemctl stop quickstart-rocm-rdma.service",
+             "systemctl reset-failed quickstart-rocm-rdma.service"])
+        self.assertTrue(self.server_log.exists())
+        self.assertIn("VALIDATION: PASSED", self.server_log.read_text())
+
+    def test_the_live_compare_and_more_environment_are_variables(self):
+        proc, _, calls = self._run(
+            *self.ON, "-e", "quickstart_rocm_rdma_validation=live",
+            "-e", '{"quickstart_rocm_rdma_env": {"FAKE_EXTRA": "yes"}}')
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        for call in calls:
+            if not call.startswith("systemctl"):
+                self.assertIn("HOST_ALLOC=1 VALIDATION=unset EXTRA=yes", call)
+
+    def test_the_gpu_memory_modes_fail_as_the_known_limitation(self):
+        for mode, memory, said in (
+                ("dmabuf", "--use_rocm=0 --use_rocm_dmabuf",
+                 "Failed status-remote access error (10): wr_id 0 syndrom 0x9"),
+                ("vram", "--use_rocm=0",
+                 "Couldn't allocate MR with error=14")):
+            with self.subTest(mode):
+                proc, art, calls = self._run(
+                    *self.ON, "-e", f"quickstart_rocm_rdma_mode={mode}")
+                self.assertNotEqual(proc.returncode, 0, proc.stdout)
+                text = " ".join((proc.stdout + proc.stderr).split())
+                self.assertIn(
+                    "KNOWN LIMITATION, not a broken test. rocm rdma: known "
+                    f"limitation, mode {mode}, ib_write_bw g1 -> g2: ", text)
+                self.assertIn(f"It said: {said}", text)
+                # VRAM on both sides: no host allocation in the environment.
+                for call in calls:
+                    if call.startswith("systemctl"):
+                        continue
+                    self.assertIn("HOST_ALLOC=unset VALIDATION=staged", call)
+                    self.assertIn(f" -p 18516 {memory} {self.OPTIONS}", call)
+                # The result is there to be read although the play failed.
+                self.assertRegex(
+                    (art / "rocm-rdma.md").read_text(),
+                    rf"\nrocm rdma: known limitation, mode {mode}, .* It "
+                    rf"said: {re.escape(said)}\n")
+                self.assertEqual(self._tasks(proc.stdout)[-1],
+                                 "Assert the transfer ran and every byte "
+                                 "validated")
+
+    def _stops_before_the_server(self, needle, *extra, env=None, **override):
+        proc, art, calls = self._run(*self.ON, *extra, env=env, **override)
+        self.assertNotEqual(proc.returncode, 0, proc.stdout)
+        self.assertIn(needle, " ".join((proc.stdout + proc.stderr).split()))
+        # Before anything was started or stopped anywhere.
+        self.assertEqual(calls, [])
+        self.assertNotIn("Start the server as a transient unit",
+                         self._tasks(proc.stdout))
+        self.assertFalse((art / "rocm-rdma.md").exists())
+        return proc
+
+    def test_a_guest_image_without_the_rocm_perftest_is_told_so(self):
+        absent = str(self.tmp / "absent.json")
+        proc = self._stops_before_the_server(
+            f"g1: {absent} is absent: no perftest built with ROCm. This "
+            "guest's image predates the perftest_setup role",
+            quickstart_rocm_rdma_stamp=absent)
+        said = " ".join((proc.stdout + proc.stderr).split())
+        self.assertIn("The ROCm-memory RDMA test cannot run.", said)
+        self.assertIn(f"g2: {absent} is absent", said)
+        self.assertIn("guests baked from this checkout", said)
+        self.assertIn("a published image baked after the role", said)
+        self.assertEqual(self._tasks(proc.stdout)[-1],
+                         "Fail with the reason when one does not")
+        # A stamp and the archive's tool, which has no --use_rocm.
+        self._stops_before_the_server(
+            "ib_write_bw does not offer --use_rocm: it was built without it",
+            env={"FAKE_ROCM_STOCK": "1"})
+        # A stamp and no tool under the prefix.
+        self._stops_before_the_server(
+            "ib_read_bw is absent though", "-e",
+            "quickstart_rocm_rdma_tool=ib_read_bw")
+        # The dma-buf flag is asked for only by the mode that passes it.
+        self._stops_before_the_server(
+            "ib_write_bw does not offer --use_rocm_dmabuf", "-e",
+            "quickstart_rocm_rdma_mode=dmabuf",
+            env={"FAKE_ROCM_NO_DMABUF": "1"})
+        proc, _, _ = self._run(*self.ON, env={"FAKE_ROCM_NO_DMABUF": "1"})
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+    def test_a_gpu_that_is_not_bound_is_told_so(self):
+        proc = self._stops_before_the_server(
+            'g2: amdgpu-probe --status says "unbound".',
+            env={"FAKE_ROCM_PROBE": "unbound"})
+        self.assertIn("so HIP would find no device",
+                      " ".join((proc.stdout + proc.stderr).split()))
+
+    def test_what_it_is_given_has_to_make_sense(self):
+        for extra, needle in (
+                (("-e", "quickstart_rocm_rdma_mode=gpu"),
+                 "one of host-alloc, dmabuf, vram (asked for gpu)"),
+                (("-e", "quickstart_rocm_rdma_tool=ib_send_bw"),
+                 "the verbs --data_validation supports (asked for ib_send_bw)"),
+                (("-e", "quickstart_rocm_rdma_validation=none"),
+                 "staged or live validation (asked for none)")):
+            with self.subTest(extra=extra):
+                proc = self._stops_before_the_server(needle, *extra)
+                self.assertEqual(self._tasks(proc.stdout)[-1],
+                                 "Assert the test was given something it "
+                                 "can run")
+
+    def test_the_verdict_for_each_way_a_run_can_end(self):
+        """The two tasks that decide, given what each side printed.
+
+        One play made of the real tasks, once a case, so the table costs
+        one ansible-playbook run and not nineteen.
+        """
+        tasks = {t["name"]: t for t in self.play["tasks"]}
+        body = []
+        for index, (_, mode, listened, rc, out, err, server, _, _) in \
+                enumerate(VERDICTS):
+            client = ({"rc": rc, "stdout": out, "stderr": err}
+                      if listened else {"skipped": True, "changed": False})
+            body += [
+                {"name": f"Case {index}",
+                 "ansible.builtin.set_fact": {
+                     "quickstart_rocm_rdma_mode": mode,
+                     "quickstart_rocm_rdma_listening":
+                         {"rc": 0 if listened else 1},
+                     "quickstart_rocm_rdma_client": client,
+                     "quickstart_rocm_rdma_server_out": {"stdout": server}}},
+                tasks["Work out the verdict"],
+                tasks["Put the result in one line"],
+                {"name": f"Keep {index}",
+                 "ansible.builtin.set_fact": {"kept": (
+                     "{{ kept | default([]) + [[quickstart_rocm_rdma_verdict,"
+                     " quickstart_rocm_rdma_line]] }}")}},
+            ]
+        body.append({"name": "Write them down",
+                     "ansible.builtin.copy": {
+                         "content": "{{ kept | to_json }}",
+                         "dest": str(self.tmp / "verdicts.json"),
+                         "mode": "0644"}})
+        (self.tmp / "verdicts.yml").write_text(yaml.safe_dump(
+            [{**{k: v for k, v in self.play.items() if k != "tags"},
+              "tasks": body}], sort_keys=False))
+        proc, _, _ = self._run(playbook="verdicts.yml")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        kept = json.loads((self.tmp / "verdicts.json").read_text())
+        self.assertEqual(len(kept), len(VERDICTS))
+        for (what, mode, *_, verdict, needle), (got, line) in \
+                zip(VERDICTS, kept):
+            with self.subTest(what):
+                self.assertEqual(got, verdict, line)
+                self.assertTrue(line.startswith(
+                    f"rocm rdma: {verdict}, mode {mode}, ib_write_bw g1 -> "
+                    "g2"), line)
+                self.assertIn(needle, line)
+                self.assertNotIn("\n", line)
+                # Only a pass carries a rate, and a rate of zero is not one.
+                self.assertEqual("MiB/s" in line or "rate not measured" in line,
+                                 verdict == "pass", line)
+        # Every verdict the play can give is in the table.
+        self.assertEqual(
+            {v[7] for v in VERDICTS},
+            {"pass", "no verdict", "known limitation", "no server", "fail"})
 
 
 if __name__ == "__main__":

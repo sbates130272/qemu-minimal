@@ -27,6 +27,7 @@ from .inspect import ssh_run as inspect_ssh_run
 from .check_system import run as check_system_run
 from .down_all import discover as _discover_stacks, run as down_all_run, teardown_one
 from .quick_start import VERBS as _QUICK_START_VERBS, VARIANTS as _QUICK_START_VARIANTS, run as quick_start_run
+from .quick_start import ROCM_RDMA_MODES as _ROCM_RDMA_MODES
 from .shutdown import run as shutdown_run
 from .list_vms import run as list_vms_run, collect as _list_vms_collect
 from . import qcow as _qcow
@@ -327,6 +328,7 @@ def _add_quick_start(sub: argparse._SubParsersAction) -> None:
             "qemu-tool quick-start --xml qemu/stacks/rocm-golden.xml \\",
             "    --xml my-overlay.xml up",
             "qemu-tool quick-start --sdxi-test --p4-test test",
+            "qemu-tool quick-start --rocm-rdma-test test",
             "qemu-tool quick-start logs -f",
             "qemu-tool quick-start down",
         ),
@@ -494,6 +496,36 @@ def _add_quick_start(sub: argparse._SubParsersAction) -> None:
             "3 s). Each is 262144 fp8 elements, the most one operation "
             "moves. Refused without --p4-test. Only meaningful with the "
             "test or all verbs."
+        ),
+    )
+    g.add_argument(
+        "--rocm-rdma-test", action="store_true", default=False,
+        help=(
+            "Also run the perftest built with ROCm from the first guest to "
+            "the last, with its buffers allocated through HIP and every "
+            "byte checked on arrival: ib_write_bw --use_rocm "
+            "--data_validation. Off by default. Reports the rate and how "
+            "many bytes were validated. By default the buffers are host "
+            "memory the GPU can address, the one form that passes on the "
+            "shipped stacks; --rocm-rdma-mode moves them into VRAM. Needs "
+            "two guests, and is refused before anything runs on a fleet "
+            "with one. Needs a guest image that has that perftest "
+            "(/etc/perftest-rocm.json, from the perftest_setup role of the "
+            "golden bake); a guest without it is told so by the test "
+            "itself, and an image published before the role has none. Only "
+            "meaningful with the test or all verbs."
+        ),
+    )
+    g.add_argument(
+        "--rocm-rdma-mode", choices=list(_ROCM_RDMA_MODES), default=None,
+        metavar="MODE",
+        help=(
+            "Where --rocm-rdma-test puts the buffers (default: host-alloc). "
+            + " ".join(f"{mode}: {what}." for mode, what
+                       in _ROCM_RDMA_MODES.items())
+            + " A failure for the reason given is reported as the known "
+            "limitation, and the run still exits non-zero. Refused without "
+            "--rocm-rdma-test. Only meaningful with the test or all verbs."
         ),
     )
     p.set_defaults(func=_quick_start_cmd)
@@ -1539,6 +1571,8 @@ def _quick_start_cmd(args: argparse.Namespace) -> None:
         sdxi_test=args.sdxi_test,
         p4_test=args.p4_test,
         p4_iters=args.p4_iters,
+        rocm_rdma_test=args.rocm_rdma_test,
+        rocm_rdma_mode=args.rocm_rdma_mode,
         variant=args.variant,
     )
 

@@ -324,6 +324,16 @@ Opt-in with `--profile metrics`. The sources:
   The SDXI device's counters come the same way: `sdxi_up` and
   `sdxi_<counter>_total{context="N"}`, written every 15 s, which the home
   dashboard's "SDXI" row reads. Client work is counted in context 1.
+  What the two optional tests of `quick-start test` measured comes the
+  same way, written once by the test and not by a timer:
+  `quickstart_p4_fp8_bytes_per_second`, `quickstart_p4_fp8_operation_seconds`,
+  `quickstart_p4_fp8_elements`, `quickstart_p4_fp8_iterations` and
+  `quickstart_p4_fp8_timestamp_seconds` after `--p4-test`, on the first
+  guest, which the home dashboard's "P4" row reads, and
+  `quickstart_sdxi_copy_bytes` and `quickstart_sdxi_copy_timestamp_seconds`
+  after `--sdxi-test`, on every guest. A guest no test has passed on has
+  neither, and the tiles say "no test run"; a test that fails writes
+  nothing, so the tiles keep the last pass.
   **There is no amd-metrics-exporter (`:9488`) and no hsa-snoop (`:9490`)
   job any more.** Both used to be rendered and forwarded, and both were
   down: measured on two guests of `20261117.g80c17f8` after a passing
@@ -361,13 +371,21 @@ off, because a UI that accepts an edit it then silently fails to persist is
 worse than one that refuses it. Edit the JSON and `docker compose restart
 grafana`.
 
-Two shape rules in the dashboard are worth keeping if you extend it:
+Three shape rules in the dashboard are worth keeping if you extend it:
 
 - **Per-VM panels are bar gauges, not one line per VM.** A line per VM stops
   being readable long before this stack's ~40-node ceiling, and a palette that
   cycles hues past eight makes two VMs the same colour.
 - **No panel has two y-axes.** Where two measures do not share a unit they get
   two panels.
+- **Every band fills the page.** Under each row heading the panels sit in
+  bands: one `y`, one height, and widths that run from column 0 to 24 with
+  no gap; each band starts where the one above ends. Grafana does not
+  refuse an overlap, it pushes panels down until there is none, so a file
+  that breaks this draws as something other than what it says.
+  `tests/test_quickstart_dashboard.py` fails on an overlap, a short band, a
+  gap, a panel above its row and a duplicate or missing `id`, for
+  `fleet.json` and `quickstart.json` in every stack.
 
 ## What a regeneration owns in the output directory
 

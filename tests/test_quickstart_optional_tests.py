@@ -1,6 +1,6 @@
-"""`qemu-tool quick-start --sdxi-test` and `--p4-test`.
+"""`qemu-tool quick-start --sdxi-test`, `--p4-test` and `--rocm-rdma-test`.
 
-Two optional tests behind two switches, and five things have to hold for
+Three optional tests behind three switches, and five things have to hold for
 them to be worth having:
 
   the switches   exist, are off, and reach ansible-playbook as the extra
@@ -19,6 +19,11 @@ them to be worth having:
                  test that was asked for and left none is a failure.
   the plays run  against stand-ins for the guest's tools, on this host:
                  what passes, and what each failure says.
+
+The third, perftest with ROCm buffers and data validation between two
+guests, has its switch, its extra vars, its refusals and what quick-start
+prints held here. Its play, which is the last in the file and writes a
+result file of its own, is held and run in tests/test_perftest_setup.py.
 
     python3 -m unittest discover -s tests -v
 """
@@ -146,6 +151,8 @@ class Switches(unittest.TestCase):
         self.assertIs(args.sdxi_test, False)
         self.assertIs(args.p4_test, False)
         self.assertIsNone(args.p4_iters)
+        self.assertIs(args.rocm_rdma_test, False)
+        self.assertIsNone(args.rocm_rdma_mode)
 
     def test_each_is_its_own_switch(self):
         only_sdxi = self._parse("--sdxi-test", "test")
@@ -156,20 +163,31 @@ class Switches(unittest.TestCase):
         self.assertIs(only_p4.p4_test, True)
         self.assertEqual(only_p4.p4_iters, 500)
         self.assertEqual(only_p4.verb, "test")
+        self.assertIs(only_p4.rocm_rdma_test, False)
+        only_rdma = self._parse("test", "--rocm-rdma-test")
+        self.assertIs(only_rdma.rocm_rdma_test, True)
+        self.assertIsNone(only_rdma.rocm_rdma_mode)
+        self.assertIs(only_rdma.sdxi_test, False)
+        self.assertIs(only_rdma.p4_test, False)
+        for mode in ("host-alloc", "dmabuf", "vram"):
+            args = self._parse("--rocm-rdma-test", "--rocm-rdma-mode", mode)
+            self.assertEqual(args.rocm_rdma_mode, mode)
 
     def test_they_are_in_the_tests_group_with_help(self):
         parser = _quick_start_parser()
         group = next(g for g in parser._action_groups if g.title == "tests")
         flags = {o for a in group._group_actions for o in a.option_strings}
         self.assertEqual(flags, {"--rdma-duration", "--nvme-duration",
-                                 "--sdxi-test", "--p4-test", "--p4-iters"})
+                                 "--sdxi-test", "--p4-test", "--p4-iters",
+                                 "--rocm-rdma-test", "--rocm-rdma-mode"})
         by_flag = {a.option_strings[0]: a for a in group._group_actions}
-        for flag in ("--sdxi-test", "--p4-test"):
+        for flag in ("--sdxi-test", "--p4-test", "--rocm-rdma-test"):
             with self.subTest(flag):
                 self.assertIn("Off by default", by_flag[flag].help)
-        # All three, the sizing switch included: its "Refused without
-        # --p4-test" holds on those two verbs and no other.
-        for flag in ("--sdxi-test", "--p4-test", "--p4-iters"):
+        # All of them, the sizing switch and the mode included: their
+        # "Refused without" holds on those two verbs and no other.
+        for flag in ("--sdxi-test", "--p4-test", "--p4-iters",
+                     "--rocm-rdma-test", "--rocm-rdma-mode"):
             with self.subTest(flag):
                 self.assertIn("test or all verbs", by_flag[flag].help)
         self.assertIn("<sdxi-per-vm>", by_flag["--sdxi-test"].help)
@@ -182,7 +200,8 @@ class Switches(unittest.TestCase):
         with mock.patch.dict(os.environ, {"COLUMNS": "200"}):
             text = _quick_start_parser().format_help()
         self.assertEqual([l for l in text.splitlines() if len(l) > 80], [])
-        for flag in ("--sdxi-test", "--p4-test", "--p4-iters N"):
+        for flag in ("--sdxi-test", "--p4-test", "--p4-iters N",
+                     "--rocm-rdma-test", "--rocm-rdma-mode MODE"):
             self.assertIn(flag, text)
 
     def test_the_iteration_count_has_to_be_a_positive_whole_number(self):
@@ -202,6 +221,15 @@ class Switches(unittest.TestCase):
         self.assertIs(kwargs["sdxi_test"], True)
         self.assertIs(kwargs["p4_test"], True)
         self.assertEqual(kwargs["p4_iters"], 64)
+        self.assertIs(kwargs["rocm_rdma_test"], False)
+        self.assertIsNone(kwargs["rocm_rdma_mode"])
+        with mock.patch.object(cli_mod, "quick_start_run") as run:
+            args = self._parse("test", "--rocm-rdma-test",
+                               "--rocm-rdma-mode", "dmabuf")
+            args.func(args)
+        kwargs = run.call_args.kwargs
+        self.assertIs(kwargs["rocm_rdma_test"], True)
+        self.assertEqual(kwargs["rocm_rdma_mode"], "dmabuf")
         with mock.patch.object(cli_mod, "quick_start_run") as run:
             args = self._parse("test")
             args.func(args)
@@ -209,14 +237,59 @@ class Switches(unittest.TestCase):
         self.assertIs(kwargs["sdxi_test"], False)
         self.assertIs(kwargs["p4_test"], False)
         self.assertIsNone(kwargs["p4_iters"])
+        self.assertIs(kwargs["rocm_rdma_test"], False)
+        self.assertIsNone(kwargs["rocm_rdma_mode"])
 
-    def test_there_is_no_switch_for_the_gpu_memory_rdma_play(self):
-        """That play fails on every stack this repository ships, so it stays
-        an extra var typed on purpose (tests/test_perftest_setup.py)."""
+    def test_the_rocm_rdma_help_says_which_modes_fail_and_why(self):
+        """The default is the one mode that passes on the shipped stacks,
+        and the two that reach for VRAM say they are expected to fail, where
+        and for what reason (measured, AGENTS.md)."""
+        parser = _quick_start_parser()
+        by_flag = {a.option_strings[0]: a for a in parser._actions
+                   if a.option_strings}
+        mode = by_flag["--rocm-rdma-mode"]
+        self.assertEqual(list(mode.choices), ["host-alloc", "dmabuf", "vram"])
+        self.assertEqual(list(qs.ROCM_RDMA_MODES), list(mode.choices))
+        self.assertEqual(qs._ROCM_RDMA_DEFAULT, "host-alloc")
+        self.assertIsNone(mode.default)
+        self.assertIn("(default: host-alloc)", mode.help)
+        for needle in (
+                "host-alloc: host memory the GPU can address "
+                "(PERFTEST_ROCM_HOST_ALLOC=1), not VRAM: passes.",
+                "dmabuf: VRAM registered as a dma-buf (--use_rocm_dmabuf): "
+                "expected to FAIL on a stack that pins stock QEMU, which "
+                "the default fleet does.",
+                "cannot read the GPU's memory",
+                "remote access error",
+                "vram: VRAM registered by address (--use_rocm alone): "
+                "expected to FAIL on every stack.",
+                "(error=14)", "whichever QEMU is pinned",
+                "reported as the known limitation",
+                "still exits non-zero",
+                "Refused without --rocm-rdma-test"):
+            self.assertIn(needle, mode.help)
+        test = by_flag["--rocm-rdma-test"].help
+        for needle in ("ib_write_bw --use_rocm --data_validation",
+                       "host memory the GPU can address",
+                       "the one form that passes on the shipped stacks",
+                       "Needs two guests", "/etc/perftest-rocm.json",
+                       "an image published before the role has none"):
+            self.assertIn(needle, test)
+        # The default fleet is the one the help calls stock QEMU.
+        self.assertNotIn("fork", qs.FleetXml.parse(GOLDEN_FLEET).qemu_ref)
+        with contextlib.redirect_stderr(io.StringIO()) as err, \
+             self.assertRaises(SystemExit):
+            self._parse("--rocm-rdma-test", "--rocm-rdma-mode", "gpu")
+        self.assertIn("invalid choice: 'gpu'", err.getvalue())
+
+    def test_there_is_no_switch_that_means_every_test(self):
+        """It would change meaning with each test added, and would have to
+        decide whether a test that needs a newer guest image is in it."""
         flags = {o for a in _quick_start_parser()._actions
                  for o in a.option_strings}
-        self.assertFalse({f for f in flags if "rocm" in f}, flags)
         self.assertNotIn("--all-tests", flags)
+        self.assertEqual({f for f in flags if "rocm" in f},
+                         {"--rocm-rdma-test", "--rocm-rdma-mode"})
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +325,42 @@ class ExtraVars(unittest.TestCase):
             self.BASE + ["-e", "quickstart_sdxi_test=true",
                          "-e", "quickstart_p4_test=true",
                          "-e", "quickstart_p4_iters=64"])
+
+    def test_the_rocm_rdma_switch_adds_its_gate_and_the_mode_when_named(self):
+        gate = ["-e", "quickstart_rocm_rdma=true"]
+        # No mode typed: the playbook's own default, host-alloc, decides.
+        self.assertEqual(qs._playbook_command(_state(rocm_rdma_test=True)),
+                         self.BASE + gate)
+        for mode in qs.ROCM_RDMA_MODES:
+            self.assertEqual(
+                qs._playbook_command(_state(rocm_rdma_test=True,
+                                            rocm_rdma_mode=mode)),
+                self.BASE + gate + ["-e", f"quickstart_rocm_rdma_mode={mode}"])
+        # Last, after the other two, as its play is.
+        self.assertEqual(
+            qs._playbook_command(_state(sdxi_test=True, p4_test=True,
+                                        rocm_rdma_test=True))[-6:],
+            ["-e", "quickstart_sdxi_test=true",
+             "-e", "quickstart_p4_test=true"] + gate)
+        # A mode with no test opens nothing. (It is refused before this.)
+        self.assertEqual(
+            qs._playbook_command(_state(rocm_rdma_mode="dmabuf")), self.BASE)
+
+    def test_the_rocm_rdma_names_are_the_ones_its_play_reads(self):
+        play = _play(RDMA_PLAY)
+        self.assertEqual(play["tasks"][0]["when"],
+                         "not (quickstart_rocm_rdma | bool)")
+        self.assertIs(play["vars"]["quickstart_rocm_rdma"], False)
+        # The same modes, in the same order, and the same default.
+        self.assertEqual(list(play["vars"]["quickstart_rocm_rdma_modes"]),
+                         list(qs.ROCM_RDMA_MODES))
+        self.assertEqual(play["vars"]["quickstart_rocm_rdma_mode"],
+                         qs._ROCM_RDMA_DEFAULT)
+        cmd = qs._playbook_command(_state(rocm_rdma_test=True,
+                                          rocm_rdma_mode="vram"))
+        for extra in cmd[cmd.index("quickstart_rocm_rdma=true"):]:
+            if extra != "-e":
+                self.assertIn(extra.split("=")[0], play["vars"])
 
     def test_the_gates_are_the_names_the_plays_read(self):
         sdxi = _play(SDXI_PLAY)["tasks"][0]["when"]
@@ -307,6 +416,59 @@ class Refusals(unittest.TestCase):
     def test_the_golden_fleet_can_run_both(self):
         qs._check_optional_tests(_state(sdxi_test=True, p4_test=True,
                                         p4_iters=10))
+
+    def test_the_golden_fleet_has_the_two_guests_the_rdma_test_needs(self):
+        """Whether its guests' image has the ROCm perftest is not a setting,
+        so that question is the play's, asked in the guest."""
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            qs._check_optional_tests(_state(rocm_rdma_test=True))
+            qs._check_optional_tests(_state(rocm_rdma_test=True,
+                                            rocm_rdma_mode="host-alloc"))
+        self.assertEqual(err.getvalue(), "")
+
+    def test_the_rdma_test_on_a_fleet_with_one_guest(self):
+        state, overlay = self._layered("<vm-count>1</vm-count>",
+                                       rocm_rdma_test=True)
+        said = self._refused(state)
+        self.assertIn("--rocm-rdma-test", said)
+        self.assertIn("from the first guest to the last", said)
+        self.assertIn(f"<vm-count> is 1 in {overlay}.", said)
+        self.assertIn("<vm-count>2</vm-count>", said)
+        self.assertIn("quick-start up", said)
+        self.assertNotIn(str(GOLDEN_FLEET), said)
+        # The other two do not need a second guest.
+        state.rocm_rdma_test, state.sdxi_test, state.p4_test = False, True, True
+        qs._check_optional_tests(state)
+        # The helios fleet is one guest by its own file.
+        helios = REPO / "qemu/stacks/helios-tray.xml"
+        state = _state(base_layers=[helios], fleet=qs.FleetXml.parse(helios),
+                       rocm_rdma_test=True)
+        self.assertIn(f"<vm-count> is 1 in {helios}.", self._refused(state))
+
+    def test_the_mode_without_the_test_it_belongs_to(self):
+        for mode in qs.ROCM_RDMA_MODES:
+            said = self._refused(_state(rocm_rdma_mode=mode))
+            self.assertIn("--rocm-rdma-mode", said)
+            self.assertIn("add --rocm-rdma-test", said)
+
+    def test_a_mode_that_is_expected_to_fail_is_announced_first(self):
+        """Not refused: the owner asked for it. Said on stderr before the
+        boot and the tests in front of it, with the reason."""
+        for mode, needles in (
+                ("dmabuf", ("expected to FAIL on a stack that pins stock QEMU",
+                            "remote access error")),
+                ("vram", ("expected to FAIL on every stack", "(error=14)"))):
+            with self.subTest(mode), \
+                 contextlib.redirect_stderr(io.StringIO()) as err:
+                qs._check_optional_tests(_state(rocm_rdma_test=True,
+                                                rocm_rdma_mode=mode))
+            said = err.getvalue()
+            self.assertTrue(said.startswith(f"note: --rocm-rdma-mode {mode}: "),
+                            said)
+            for needle in (*needles, "reported as the known limitation",
+                           "still exits non-zero"):
+                self.assertIn(needle, said)
+            self.assertEqual(said.count("\n"), 1)
 
     def test_nothing_is_checked_when_nothing_was_asked_for(self):
         bare = qs.FleetConfig(count=2)
@@ -416,10 +578,17 @@ class Refusals(unittest.TestCase):
         self.assertIn("p4_fp8_client", _text(_play(P4_PLAY)))
 
     def test_a_flavor_that_runs_no_playbook(self):
-        for flags in ({"sdxi_test": True}, {"p4_test": True}):
+        for flags in ({"sdxi_test": True}, {"p4_test": True},
+                      {"rocm_rdma_test": True}):
             with self.subTest(flags=flags):
                 said = self._refused(_state(playbook=None, **flags))
                 self.assertIn("no configure-and-test playbook", said)
+        said = self._refused(_state(playbook=None, rocm_rdma_test=True,
+                                    rocm_rdma_mode="vram"))
+        self.assertIn("--rocm-rdma-test: this flavor", said)
+        # The two flavors that boot more than a default fleet run none.
+        self.assertEqual({name for name, variant in qs.VARIANTS.items()
+                          if variant[3] is None}, {"mi355x", "helios"})
 
     def test_iterations_without_the_test_they_size(self):
         said = self._refused(_state(p4_iters=10))
@@ -446,7 +615,9 @@ class Refusals(unittest.TestCase):
                     ("<p4-enable>false</p4-enable>", {"p4_test": True},
                      "<p4-enable> is false"),
                     ("<p4-guest-scope>read</p4-guest-scope>",
-                     {"p4_test": True}, "<p4-guest-scope> is read")):
+                     {"p4_test": True}, "<p4-guest-scope> is read"),
+                    ("<vm-count>1</vm-count>", {"rocm_rdma_test": True},
+                     "<vm-count> is 1")):
                 with self.subTest(verb=verb, body=body), \
                      mock.patch.object(qs, "preflight", side_effect=ran), \
                      mock.patch.object(qs, "configure_and_test",
@@ -469,7 +640,14 @@ class Refusals(unittest.TestCase):
                 ({"sdxi_test": True, "p4_test": True},
                  "note: --sdxi-test, --p4-test ignored: `preflight` runs no "
                  "test."),
-                ({"p4_iters": 5}, "note: --p4-iters ignored: `preflight`")):
+                ({"p4_iters": 5}, "note: --p4-iters ignored: `preflight`"),
+                ({"rocm_rdma_test": True, "rocm_rdma_mode": "vram"},
+                 "note: --rocm-rdma-test, --rocm-rdma-mode ignored: "
+                 "`preflight` runs no test."),
+                # The mode alone is refused on test and all; here it is
+                # ignored like the rest.
+                ({"rocm_rdma_mode": "dmabuf"},
+                 "note: --rocm-rdma-mode ignored: `preflight`")):
             with self.subTest(flags=flags), \
                  mock.patch.object(qs, "preflight") as preflight, \
                  contextlib.redirect_stdout(io.StringIO()) as out, \
@@ -496,6 +674,17 @@ class Refusals(unittest.TestCase):
         self.assertIs(state.sdxi_test, True)
         self.assertIs(state.p4_test, True)
         self.assertEqual(state.p4_iters, 3)
+        self.assertIs(state.rocm_rdma_test, False)
+        self.assertIsNone(state.rocm_rdma_mode)
+        with mock.patch.object(qs, "preflight"), \
+             mock.patch.object(qs, "report"), \
+             mock.patch.object(qs, "configure_and_test") as test, \
+             contextlib.redirect_stdout(io.StringIO()), \
+             contextlib.redirect_stderr(io.StringIO()):
+            self._run("test", "", rocm_rdma_test=True, rocm_rdma_mode="vram")
+        (state,), _ = test.call_args
+        self.assertIs(state.rocm_rdma_test, True)
+        self.assertEqual(state.rocm_rdma_mode, "vram")
 
 
 # ---------------------------------------------------------------------------
@@ -844,6 +1033,166 @@ class Summary(unittest.TestCase):
         self.assertEqual(qs._P4_RESULT.search(self.P4_LINE).groups(),
                          ("262144", "2000", "210.3"))
 
+    # What the last play writes to <artifacts>/rocm-rdma.md, first line of
+    # its block: tests/test_perftest_setup.py runs the play that writes it.
+    RDMA_PASS = ("rocm rdma: pass, mode host-alloc, ib_write_bw "
+                 "rocm-golden-1 -> rocm-golden-2, 642.09 MiB/s, VALIDATION: "
+                 "PASSED - 7 chunks, 58720256 bytes\n")
+    RDMA_KNOWN = ("rocm rdma: known limitation, mode dmabuf, ib_write_bw "
+                  "rocm-golden-1 -> rocm-golden-2: the buffer registers, and "
+                  "the NIC's server then cannot read the GPU's memory. It "
+                  "said: Failed status-remote access error (10): wr_id 0 "
+                  "syndrom 0x9\n")
+
+    def _rdma_file(self, line):
+        return {"rocm-rdma": "## ROCm-memory RDMA test: rocm-golden-1 -> "
+                             "rocm-golden-2\n\n```\n" + line + "```\n"}
+
+    def test_quick_start_prints_what_the_rdma_test_recorded(self):
+        said = self._report(self._rdma_file(self.RDMA_PASS),
+                            rocm_rdma_test=True)
+        self.assertIn(
+            "==> rocm-golden-1 -> rocm-golden-2: ib_write_bw with ROCm "
+            "buffers (host-alloc), 642.09 MiB/s, 58720256 bytes in 7 chunks "
+            "validated\n", said)
+        # What the mode's buffers were, in the words the help uses.
+        self.assertIn("    host-alloc: host memory the GPU can address "
+                      "(PERFTEST_ROCM_HOST_ALLOC=1), not VRAM: passes\n", said)
+        # A run perftest could not time is a pass that says so.
+        said = self._report(
+            self._rdma_file(self.RDMA_PASS.replace("642.09 MiB/s",
+                                                   "rate not measured")),
+            rocm_rdma_test=True)
+        self.assertIn("(host-alloc), rate not measured (perftest's "
+                      "CPU-frequency calibration failed; the transfer and "
+                      "the validation are not affected), 58720256 bytes in "
+                      "7 chunks validated", said)
+        self.assertNotIn("MiB/s", said)
+        # Nothing of it without the switch, whatever is on disk.
+        self.assertEqual(self._report(self._rdma_file(self.RDMA_PASS)), "")
+
+    def test_an_rdma_test_that_left_no_validated_transfer_is_a_failure(self):
+        needle = "--rocm-rdma-test was asked for and recorded no validated"
+        for texts in (
+                {},
+                {"rocm-golden-1": self.RDMA_PASS},
+                self._rdma_file("nothing\n"),
+                self._rdma_file(self.RDMA_KNOWN),
+                self._rdma_file(self.RDMA_PASS.replace("pass", "fail")),
+                # A pass has a VALIDATION: PASSED line with its counts.
+                self._rdma_file(self.RDMA_PASS.split(", VALIDATION")[0] + "\n"),
+                self._rdma_file(self.RDMA_PASS.replace("PASSED", "FAILED"))):
+            with self.subTest(texts=texts), \
+                 self.assertRaises(SystemExit) as caught:
+                self._report(texts, rocm_rdma_test=True)
+            self.assertIn(needle, str(caught.exception))
+            self.assertIn("rocm-rdma.md", str(caught.exception))
+
+    def _failure(self, texts, **flags):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = _state(artifacts=self._artifacts(tmp, texts), **flags)
+            return qs._rocm_rdma_failure(state)
+
+    def test_a_failed_playbook_is_explained_when_the_rdma_test_is_why(self):
+        """Its play writes its result before it asserts it, so a failed
+        playbook with a result that is not a pass failed there."""
+        known = self._failure(self._rdma_file(self.RDMA_KNOWN),
+                              rocm_rdma_test=True, rocm_rdma_mode="dmabuf")
+        self.assertIn("--rocm-rdma-test in mode dmabuf ended in the known "
+                      "limitation of that mode, not in a broken test "
+                      "(rocm-golden-1 -> rocm-golden-2): the buffer "
+                      "registers", known)
+        self.assertIn("It said: Failed status-remote access error (10): "
+                      "wr_id 0 syndrom 0x9.", known)
+        self.assertIn("rocm-rdma.md", known)
+        for verdict, what in (("fail", "failed"),
+                              ("no verdict", "produced no verdict"),
+                              ("no server", "never started")):
+            line = self.RDMA_PASS.split(", 642.09")[0].replace(
+                "pass", verdict) + ": why\n"
+            said = self._failure(self._rdma_file(line), rocm_rdma_test=True)
+            self.assertIn(f"--rocm-rdma-test in mode host-alloc {what} "
+                          "(rocm-golden-1 -> rocm-golden-2): why.", said)
+        # It passed, so something else failed: not this function's to say.
+        self.assertIsNone(self._failure(self._rdma_file(self.RDMA_PASS),
+                                        rocm_rdma_test=True))
+        # No result: its play stopped at a check, or never began.
+        said = self._failure({}, rocm_rdma_test=True)
+        self.assertIn("before --rocm-rdma-test recorded a result", said)
+        self.assertIn("/etc/perftest-rocm.json", said)
+        # Not asked for: the message every other run gets.
+        self.assertIsNone(self._failure(self._rdma_file(self.RDMA_KNOWN)))
+        self.assertIsNone(self._failure({}))
+
+    def test_the_failure_is_what_a_failed_playbook_dies_with(self):
+        def run(texts, **flags):
+            with tempfile.TemporaryDirectory() as tmp:
+                art = self._artifacts(tmp, texts)
+                state = _state(artifacts=art, repo_root=Path(tmp), **flags)
+
+                def playbook(cmd, **_):
+                    # The play writes its file while the playbook runs.
+                    art.mkdir(exist_ok=True)
+                    for name, text in texts.items():
+                        (art / f"{name}.md").write_text(text)
+                    return mock.Mock(returncode=2)
+                with mock.patch.object(qs, "wait_for_guests"), \
+                     mock.patch.object(qs, "_ernic_bytes", return_value=1), \
+                     mock.patch.object(qs.subprocess, "run",
+                                       side_effect=playbook), \
+                     contextlib.redirect_stdout(io.StringIO()), \
+                     self.assertRaises(SystemExit) as caught:
+                    qs.configure_and_test(state)
+                return str(caught.exception)
+        self.assertIn("the known limitation of that mode",
+                      run(self._rdma_file(self.RDMA_KNOWN),
+                          rocm_rdma_test=True, rocm_rdma_mode="dmabuf"))
+        # Without the switch, and with it when the test itself passed.
+        for flags in ({}, {"rocm_rdma_test": True}):
+            said = run(self._rdma_file(self.RDMA_PASS), **flags)
+            self.assertIn("the configure-and-test playbook failed", said)
+            self.assertNotIn("rocm", said)
+
+    def test_the_line_it_reads_is_the_line_the_play_writes(self):
+        play = _play(RDMA_PLAY)
+        tasks = {t["name"]: t for t in play["tasks"]}
+        line = " ".join(tasks["Put the result in one line"][
+            "ansible.builtin.set_fact"]["quickstart_rocm_rdma_line"].split())
+        self.assertTrue(line.startswith(
+            "rocm rdma: {{ quickstart_rocm_rdma_verdict }}, mode {{ "
+            "quickstart_rocm_rdma_mode }}, {{ quickstart_rocm_rdma_tool }} "
+            "{{ inventory_hostname }} -> {{ quickstart_rocm_rdma_server }}"),
+            line)
+        self.assertIn("~ ' MiB/s'", line)
+        self.assertIn("', rate not measured'", line)
+        write = tasks["Write the result to the controller"]
+        self.assertEqual(write["ansible.builtin.copy"]["dest"],
+                         "{{ quickstart_artifacts_dir }}/" + qs._ROCM_RDMA_FILE)
+        self.assertIn("\n{{ quickstart_rocm_rdma_line }}\n",
+                      write["ansible.builtin.copy"]["content"])
+        self.assertEqual(
+            qs._ROCM_RDMA_RESULT.search(self.RDMA_PASS).groups()[:5],
+            ("pass", "host-alloc", "ib_write_bw", "rocm-golden-1",
+             "rocm-golden-2"))
+        self.assertEqual(
+            qs._ROCM_RDMA_VALIDATED.search(self.RDMA_PASS).groups(),
+            ("7", "58720256"))
+        # perftest names the role in a bidirectional run; counted the same.
+        self.assertEqual(qs._ROCM_RDMA_VALIDATED.search(
+            "VALIDATION: PASSED (SERVER) - 3 chunks, 9 bytes").groups(),
+            ("3", "9"))
+        # Every verdict the play gives is one the reader knows.
+        verdict = " ".join(tasks["Work out the verdict"][
+            "ansible.builtin.set_fact"]["quickstart_rocm_rdma_verdict"].split())
+        for name in ("pass", "no verdict", "known limitation", "no server",
+                     "fail"):
+            self.assertIn(f"'{name}'", verdict)
+            self.assertIsNotNone(qs._ROCM_RDMA_RESULT.search(
+                f"rocm rdma: {name}, mode vram, ib_read_bw a -> b: x"), name)
+        # The report is every .md in the directory, so the result is in it.
+        source = (REPO / "qemu/qemu-tool/quick_start.py").read_text()
+        self.assertIn('sorted(state.artifacts.glob("*.md"))', source)
+
     def test_the_closing_summary_offers_only_what_the_fleet_can_run(self):
         def said(fleet):
             out = io.StringIO()
@@ -858,6 +1207,10 @@ class Summary(unittest.TestCase):
         self.assertIn("qemu-tool quick-start test --sdxi-test\n", text)
         self.assertNotIn("--p4-test", text)
         self.assertNotIn("-test", said(qs.FleetConfig(count=2)))
+        # Never the ROCm-memory RDMA test: whether the guests' image has
+        # the perftest it needs is not something a fleet file says, and the
+        # image the fleet files pull today does not.
+        self.assertNotIn("rocm-rdma", said(qs.FleetXml.parse(GOLDEN_FLEET)))
 
 
 # ---------------------------------------------------------------------------
@@ -1139,6 +1492,69 @@ class Docs(unittest.TestCase):
         for needle in ("--sdxi-test", "--p4-test", "quickstart_sdxi_test",
                        "quickstart_p4_test"):
             self.assertIn(needle, agents)
+
+    def test_the_rocm_rdma_switch_is_written_down(self):
+        """What it tests, the default mode and why, which modes fail and
+        why, and that it needs a newer guest image than the fleets pull."""
+        readme = (REPO / "README.md").read_text()
+        start = readme.index("## Quick Start")
+        section = " ".join(
+            readme[start:readme.index("\n## ", start + 1)].split())
+        man = (REPO / "qemu/qemu-tool/man/qemu-tool.1").read_text()
+        start = man.index(".SH QUICK-START OPTIONS")
+        options = man[start:man.index("\n.SH ", start + 1)]
+        self.assertIn(r".B \-\-rocm\-rdma\-test", options)
+        self.assertIn(r'.BI \-\-rocm\-rdma\-mode " MODE"', options)
+        for mode in qs.ROCM_RDMA_MODES:
+            self.assertIn(".B " + mode.replace("-", r"\-") + "\n", options)
+        pages = {"README": section,
+                 "man": " ".join(options.replace(r"\-", "-").split())}
+        for name, text in pages.items():
+            for needle in ("PERFTEST_ROCM_HOST_ALLOC=1", "not VRAM",
+                           "remote access error", "error=14",
+                           "known limitation", "non-zero",
+                           "rocm-rdma.md"):
+                with self.subTest(page=name, needle=needle):
+                    self.assertIn(needle, text)
+        for needle in ("qemu-tool quick-start test --rocm-rdma-test",
+                       "`--rocm-rdma-mode dmabuf`", "`--rocm-rdma-mode vram`",
+                       "the one form that passes on the shipped stacks",
+                       "which the image the fleet files pull does not",
+                       "ib_write_bw with ROCm buffers (host-alloc)",
+                       # Do we do that already: a play, and no switch.
+                       "that only a hand-typed `ansible-playbook -e "
+                       "quickstart_rocm_rdma=true` reached"):
+            self.assertIn(needle, section)
+        for needle in ("stock QEMU", "/etc/perftest-rocm.json",
+                       "Expected to fail", "Refused without"):
+            self.assertIn(needle, pages["man"])
+        # Everything after v2.0.0, as the entry is under a version's heading
+        # once scripts/release.sh has retitled [Unreleased].
+        changelog = (REPO / "CHANGELOG.md").read_text()
+        since = changelog[:changelog.index("\n## [v2.0.0]")]
+        for needle in ("--rocm-rdma-test",
+                       "--rocm-rdma-mode {host-alloc,dmabuf,vram}",
+                       "already in `vm-quickstart.yml`",
+                       # What ran on guests, dated, and what did not.
+                       "*On two pulled guests, 2026-11-18:* refused on the "
+                       "image as pulled",
+                       "a failed calibration under `-F`"):
+            self.assertIn(needle, " ".join(since.split()))
+        agents = " ".join((REPO / "AGENTS.md").read_text().split())
+        for needle in ("`quick-start --rocm-rdma-test`",
+                       "`--rocm-rdma-mode`", "quickstart_rocm_rdma_modes",
+                       "`known limitation`", "`no verdict`",
+                       "why `-F` is in the options",
+                       "**The switch on guests, 2026-11-18.**",
+                       "Not covered: the failed calibration under `-F`",
+                       "It is off in every lane",
+                       "perftest_setup_rdma_core: local}"):
+            self.assertIn(needle, agents)
+        # What AGENTS.md says the old play did is no longer said of this one.
+        self.assertNotIn("quickstart_rocm_rdma_dmabuf=false", agents)
+        self.assertNotIn("has no flag for it", agents)
+        # Said before 2026-11-18's run, and no longer true.
+        self.assertNotIn("The play has not run against a guest", agents)
 
 
 if __name__ == "__main__":

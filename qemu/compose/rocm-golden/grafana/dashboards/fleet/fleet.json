@@ -40,6 +40,7 @@
   },
   "panels": [
     {
+      "id": 1,
       "type": "row",
       "title": "Fleet",
       "gridPos": {
@@ -52,6 +53,7 @@
       "panels": []
     },
     {
+      "id": 2,
       "type": "stat",
       "title": "Guests up",
       "description": "node-exporter responding, which means the guest booted and QEMU's hostfwd reached it. A guest that died with its ernic (AGENTS.md issue 7) drops out here first.",
@@ -146,6 +148,7 @@
       }
     },
     {
+      "id": 3,
       "type": "stat",
       "title": "ernic instances",
       "description": "rocm-ernic processes writing stats dumps. Should equal <vm-count>. A number that climbs above it means workers are restarting -- every reconnect takes a fresh mesh node id and never reclaims the old one, against a 64-node ceiling (AGENTS.md issue 13).",
@@ -190,6 +193,7 @@
       }
     },
     {
+      "id": 4,
       "type": "row",
       "title": "ernic RDMA",
       "gridPos": {
@@ -202,6 +206,7 @@
       "panels": []
     },
     {
+      "id": 5,
       "type": "timeseries",
       "title": "RDMA throughput, fleet total",
       "description": "Four operations on one byte/sec axis. Summed across the fleet deliberately: a line per VM stops being readable well before this stack's ~40-node ceiling, and per-VM detail is the bar gauge below.",
@@ -328,6 +333,7 @@
       }
     },
     {
+      "id": 6,
       "type": "timeseries",
       "title": "Guest Ethernet through the TAP, fleet total",
       "description": "Only moves when <ernic-tap> is on. The TCP mesh carries RDMA payload only, so with no TAP attached the guest driver transmits, the device drops, and this stays flat at zero while ethtool -S still counts the packets.",
@@ -414,6 +420,7 @@
       }
     },
     {
+      "id": 7,
       "type": "bargauge",
       "title": "RDMA bytes/sec by node",
       "description": "Per-ernic, so an idle node in a fleet that should be symmetric is visible at a glance. One hue: this is magnitude, not identity.",
@@ -459,6 +466,7 @@
       }
     },
     {
+      "id": 8,
       "type": "timeseries",
       "title": "Doorbells and completions, fleet total",
       "description": "Doorbell rings are MMIO into the emulated device and completions come back out of it, so this is the closest thing the stack has to a measure of how hard rocm-ernic's single thread is being worked.",
@@ -585,6 +593,7 @@
       }
     },
     {
+      "id": 9,
       "type": "row",
       "title": "Guests",
       "gridPos": {
@@ -597,6 +606,7 @@
       "panels": []
     },
     {
+      "id": 10,
       "type": "bargauge",
       "title": "CPU busy by VM",
       "description": "Each guest has <vm-vcpus> cores and the fleet is sized so <vm-vcpus> x <vm-count> is at or under the host's. Sustained high values here are the shape that precedes the mesh manager's untunable 20s heartbeat timeout firing on live nodes.",
@@ -660,6 +670,7 @@
       }
     },
     {
+      "id": 11,
       "type": "bargauge",
       "title": "Memory used by VM",
       "description": "Memory is not what the fleet runs out of -- 48 VMs used 107G of 503G on the measured host -- so this is here to confirm that, not to watch it.",
@@ -723,6 +734,7 @@
       }
     },
     {
+      "id": 12,
       "type": "table",
       "title": "Per-VM status",
       "description": "The identity view: which guest, and is each of its two scrape targets answering. A guest up with its worker down is the normal shape after a reboot -- the worker's unit waits on its device preflight, which can take a couple of minutes while rocjitsu probes.",

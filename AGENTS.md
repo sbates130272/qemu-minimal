@@ -868,11 +868,31 @@ and the report carry their results; the GPU-memory RDMA play stays last.
   failed host from the plays after it, and the facts play is after both.
   `quick-start` stops at "the configure-and-test playbook failed" before
   the report, so nothing is published from it.
-- **There is no `--all-tests` and no switch for the GPU-memory RDMA play.**
-  The second fails on every stack this repository ships, and
-  `tests/test_perftest_setup.py` pins that `quick_start.py` and `cli.py` do
-  not name its gate; the first would have to leave it out, and would change
-  meaning with each test added.
+- **A third switch, `--rocm-rdma-test`, opens the GPU-memory RDMA play**,
+  which had none: until it, the play ran only for a hand-typed
+  `ansible-playbook -e quickstart_rocm_rdma=true`, because in the form it
+  then had it failed on every stack this repository ships. It is perftest
+  with ROCm buffers and `--data_validation` from the first guest to the
+  last, `--rocm-rdma-mode {host-alloc,dmabuf,vram}` says where the buffers
+  are, and the default, `host-alloc`, is the one mode that passes on those
+  stacks. Three ways it differs from the two above. Its play is still the
+  last, after the facts play, so it writes a file of its own,
+  `<artifacts>/rocm-rdma.md`, before it asserts anything, and `quick-start`
+  reads that (`_rocm_rdma_recorded`) on a pass and on a failed playbook
+  alike (`_rocm_rdma_failure`). Its server runs as root in a transient
+  unit. And what it needs of the guest is not a fleet setting: the refusal
+  before anything starts is for a fleet with one guest and a flavor with no
+  playbook, and the guest image is checked in the guest. **It is off in
+  every lane**: `tests/test_perftest_setup.py` pins that nothing under
+  `.github/` or `scripts/` names the switch or its gate, and that
+  `quick_start.py` passes the gate only under `state.rocm_rdma_test`. See
+  "perftest with ROCm memory support".
+- **There is no `--all-tests`.** It would change meaning with each test
+  added, and would have to decide whether a test that needs a newer guest
+  image than the fleet files pull is in it. The closing summary of
+  `quick-start` does not offer `--rocm-rdma-test` for the same reason:
+  whether the guests have the ROCm perftest is not something a fleet file
+  says.
 
 `tests/test_quickstart_optional_tests.py` holds all of it, and runs both
 plays on the test host against stand-ins for the guest's tools. The SDXI
@@ -3148,7 +3168,10 @@ on the panel's width), work between the steps is not drawn. The timer sets
 `qemu/compose/<stack>/grafana/dashboards/fleet/quickstart.json` is the same
 file in each stack; `gen-compose` only mirrors a stack's `grafana/` into an
 `--output-dir` render. `tests/test_guest_exporters.py` holds the three
-equal, so an edit goes to all three. On a fleet with `<sdxi-per-vm>0`
+equal, so an edit goes to all three. `fleet.json` is three copies
+too, and `tests/test_quickstart_dashboard.py` holds those equal and both
+dashboards to the layout rule in "Test results on the home dashboard". On
+a fleet with `<sdxi-per-vm>0`
 (`mi355x-server.xml` sets none) the row is still there: "SDXI Device Up"
 reads "no counters" per guest, in blue, and the other panels read "No
 data". The tile is blue and not red because `sdxi_up 0` is the right
@@ -3189,6 +3212,171 @@ owner's, proven by hand on a live guest; the role, the units, the timer
 firing, the check block (its `systemctl show` answers included, which the
 tests stub) and the panels against live series have run only against
 stand-ins.
+
+## Test results on the home dashboard
+
+The home dashboard has a **P4** row and, in its SDXI row, an "SDXI Copy
+Verified" tile. Neither reads a counter: each reads a figure the optional
+test itself left in the guest. The owner ran
+`quick-start test --sdxi-test --p4-test` on 2026-11-18, both passed, and
+Grafana showed neither.
+
+| Series, job `fleet-node` | Written by | Meaning |
+|---|---|---|
+| `quickstart_p4_fp8_bytes_per_second{device}` | `--p4-test`, first guest | fp8 result bytes per second, the bench's MB/s times 1e6 |
+| `quickstart_p4_fp8_operation_seconds{device}` | | average time of one reduction |
+| `quickstart_p4_fp8_elements{device}`, `quickstart_p4_fp8_iterations{device}` | | the size of the run |
+| `quickstart_p4_fp8_timestamp_seconds{device}` | | the guest's clock when it was recorded |
+| `quickstart_sdxi_copy_bytes`, `quickstart_sdxi_copy_timestamp_seconds` | `--sdxi-test`, every guest | bytes copied and compared equal, and when |
+
+`device` is the IB device the bench ran on. The tiles read "no test run"
+when the series is absent, in blue: a test nobody ran is not a failure.
+
+**A tile is the last run that PASSED, and its title says so** ("(last
+pass)", "(time since last pass)"). A run that fails stops at the test's
+assert, before the record play, so the file is the previous pass's: put
+through the real tasks against stand-ins, a pass at 201.0 MB/s followed by
+four kinds of failing run left the 201.0 and its timestamp in place. Only
+the growing age shows that no newer run has passed. A failure is not on the
+dashboard at all; showing one means recording every attempt (a 0/1 gauge
+and its time, written for a failed guest too, from plays that must stay
+without `become`), which is the owner's call and is not done. The two age
+tiles are `clamp_min(time() - <timestamp>, 0)`: the timestamp is the
+guest's clock and `time()` is Prometheus's, so a guest that runs ahead
+reads 0 s and not a negative age. One that runs behind still reads too
+old; nothing bounds that.
+
+**Why a recorded figure and not a live one.** A reduction moves no byte
+counter, read from the server at `ernic_source_pin` and then seen on a
+stack:
+
+- `process_sq_wqe()` (`src/ionic/ionic_datapath.c`) calls
+  `ionic_dp_p4_policy()` before it dispatches a work request anywhere. When
+  the program's extern did the operation, the policy sets `done` and the
+  WQE is completed there. `ionic_dp_rdma_bytes(..., ERNIC_STAT_RDMA_WRITE,
+  ...)` is called only on the transfer paths after it, and
+  `ionic_datapath_fp8_map()` calls no stats function. So
+  `total_bytes_rdma_write`, and with it `ernic_rdma_bytes_write_total` and
+  the guest's `rdma_total_bytes_rdma_write_total`, do not move.
+- The P4 engine's own counters (`struct p4_stats`, readable through
+  `P4_EP_STATS`) count frames; `p4_engine_process_rdma()` touches none.
+- What does move is the work request count, taken before the pipeline:
+  `ernic_qp_wqes_by_opcode_total{opcode="RDMA_WRITE"}`. A reduction is one
+  such request and so is an ordinary RDMA WRITE, so it cannot tell them
+  apart; and per-QP statistics go when the queue pair is destroyed
+  (`ernic_stats_qp_forget()`), about three seconds after the bench creates
+  it, against a 15 s scrape. One sample at most, and a rate needs two.
+- On the owner's running default stack, ten minutes after that passing
+  test (`p4 fp8 bench: 262144 elements x 2000 iters, avg 1.355 ms, 193.5
+  MB/s` in guest 1's summary): `total_bytes_rdma_write : 0` in
+  `ernic-1.stats`, and
+  `max_over_time(ernic_rdma_bytes_write_total[2d])` 0 for both NICs, while
+  the same two days held one sample of
+  `ernic_qp_wqes_by_opcode_total{ernic_id="1",opcode="RDMA_WRITE",qp="2"}`
+  at 1933, a bench caught part-way.
+
+So no panel shows "RDMA WRITE throughput" beside the P4 figure: it would
+read zero during a reduction and say so with a straight face.
+
+**The SDXI test is a blip, not a load.** The same stack had
+`sdxi_num_copy_total{context="1"}` at 1 and `sdxi_bytes_moved_total` at
+4194304 on each guest, and the most
+`rate(sdxi_bytes_moved_total{context="1"}[2m])` ever read was 37.9 and
+35.9 kB/s: 4 MiB over the 120 s window is 35 kB/s, for two minutes. Every
+SDXI query returned series; the row was neither collapsed nor filtered out
+by `$vm`. The throughput panels are right to read zero and their
+descriptions now say why. The test stays a check and not a benchmark, for
+the reason in its play's comment, so what is recorded is that a copy was
+verified, how big and when, not a rate.
+
+**How it gets there.** `vm-quickstart.yml` has an eleventh play, "Record
+what the optional tests measured for the dashboard", after the facts play
+and before the GPU-memory RDMA play, which stays last. It runs
+`roles/rocjitsu_setup/files/quickstart-test-metrics.py` in the guest with
+`ansible.builtin.script`, handing it the line the test printed
+(`quickstart_p4_bw`, and the `sdxi copy: ` line of `quickstart_sdxi_copy`);
+the script parses the line, and replaces `quickstart_p4_fp8.prom` or
+`quickstart_sdxi_copy.prom` in node_exporter's textfile directory by a
+rename. Nothing is installed and no image changes.
+
+- **A play of its own because it is the one step that needs root.** The
+  collector directory is `root:root` 0755, as `rocjitsu_setup` makes it,
+  and replacing a file needs write on the directory. The two test plays
+  run as the login user with no `become`, which
+  `tests/test_quickstart_optional_tests.py` holds; the two record tasks
+  carry `become: true` themselves.
+- A run with neither switch skips both tasks and reaches no guest. A guest
+  whose test failed left the run at the assert, so only a passing result is
+  recorded. A record that cannot be written is `ignore_errors`: shown, and
+  the run still passes.
+- A guest with no collector directory has no node_exporter: the script says
+  so, exits 0 and does not make the directory.
+- **The files outlive the boot.** `quick-start` keeps a guest's overlay
+  across `down` and `up`, so after a restart the tiles show a figure from
+  before it, while the program is no longer in the NIC. The "time since"
+  tiles are how a reader tells; `--clean-overlays` removes the files with
+  the disk.
+- A play var outranks an inventory host var, so a test that wants the
+  script to write somewhere else passes `quickstart_record_dir` as an extra
+  var. Run with it as a host var, the play went for the real
+  `/var/lib/prometheus/node-exporter` of the machine running the tests.
+
+**The layout rule.** `quickstart.json` placed panels by hand and three
+bands were wrong: two status tiles started at `x=1` and ran into the next
+row's heading, the two tiles under that heading filled 12 of 24 columns,
+and two graphs ran into the row after and the panels under it. Grafana
+does not refuse an overlap, it pushes panels down, so what was drawn was
+not what the file said. Every dashboard under `grafana/dashboards/fleet/`
+is now rows of bands: one `y`, one height, widths from column 0 to 24, each
+band starting where the one above ends. `layout_faults()` in
+`tests/test_quickstart_dashboard.py` is the rule, for `quickstart.json` and
+`fleet.json` in all three stacks, and it also fails a duplicate or missing
+panel `id` and a collapsed row. The Fleet tiles are six of width 4 (they
+were 3, 3, 6, 4, 4, 4); "IB Port Active" and "Link Speed" moved up beside
+the other two status tiles under "Network & Driver Status"; the CPU and
+memory row is two bands of two. No id, title or query changed.
+`fleet.json` was already sound; its panels had no `id` at all and now have
+1 to 12. Both files are what
+`json.dumps(indent=2, ensure_ascii=False)` writes, so an edit is best made
+by loading, changing and dumping.
+
+**"No query changed" is held by the text of every query**, `HOME_QUERIES`
+and `FLEET_QUERIES` in the same test file: the 46 expressions
+`quickstart.json` had at a7b33fe and `fleet.json`'s 17, by panel id. It was
+first held by their number, and a count passes a metric renamed in all
+three copies: `node_network_info`, `rdma_port_info`,
+`ernic_rdma_bytes_total`, `node_load1` and `fleet.json`'s
+`ernic_instances`, each misspelt by a text swap, went through the whole
+suite. A query changed on purpose is changed in the table in the same
+commit.
+
+**Seen on guests on 2026-11-18, not in a browser.** A scratch two-guest
+stack of the pulled image `20261117.g481c892` (`rocm-golden.xml` plus an
+overlay setting only `<vm-name-prefix>`, guests sized to 8 vCPU and
+8192 MiB, this branch's tool), `quick-start test --sdxi-test --p4-test`:
+
+| What | Measured |
+|---|---|
+| the bench | `p4 fp8 bench: 262144 elements x 2000 iters, avg 1.373 ms, 191.0 MB/s`; a second run 191.9 MB/s, avg 1.366 ms |
+| the record play, over SSH with `become` | `changed` on "Record the verified SDXI copy" for both guests and on "Record the P4 fp8 rate" for guest 1, guest 2 skipping; `ignored=0` |
+| Prometheus, 45 s later | nine `quickstart_*` series: the five P4 ones on guest 1 (191000000, 0.001373, 262144, 2000 and the time), and the two SDXI ones on each guest (4194304 and the time) |
+| `node_textfile_scrape_error` | 0 on both guests; the files are root's, 0644 |
+| the second run | replaced the values: 191900000, 0.001366 and a new time |
+| a plain `quick-start test` | both record tasks `skipping` on both guests |
+| `ernic_rdma_bytes_write_total` after the reductions | still 0 on both NICs, which is the reason the figure is recorded |
+| Grafana 13.2.4 | provisioned the 44 panels as the file has them; every Prometheus query answered through its datasource proxy with no error, before the tests, after them and at the end; the five new tiles returned no series before the tests |
+
+What that run did not cover:
+
+- **Nobody has looked at the tiles.** What they show ("191 MB/s",
+  "1.37 ms", an age, "no test run" in blue) is read from each panel's unit
+  and the value its query returned.
+- **Four edits were made after it** and have run against stand-ins only:
+  the "(last pass)" titles and their sentence, `clamp_min` in the two age
+  expressions, the scratch file made with `mkstemp` instead of a fixed
+  `<file>.tmp`, and the pinned query text. `promtool` is not on the dev
+  host, so the `clamp_min` expressions were not parsed by Prometheus.
+- A guest whose clock differs from the host's.
 
 ## The bake's compiler cache
 
@@ -4490,27 +4678,190 @@ about one miss to a warm bake. `perftest_source_pin` is in the cache key
 misses is below what the save's miss count notices, and without the key a
 moved pin would recompile in every bake.
 
-**The test on a live stack is optional and off, because on the stacks this
-repository ships it fails.** The last play of `vm-quickstart.yml` runs
-`ib_write_bw --use_rocm=0 --use_rocm_dmabuf --data_validation` between the
-first and last guest when `quickstart_rocm_rdma` is true. It is
-`ib_write_bw` and not `ib_send_bw`: validation is for the WRITE and READ
-verbs, bandwidth tests, RC only, with `-t` and `-n` of at least 32;
+**The test on a live stack is `quick-start --rocm-rdma-test`, off by
+default.** It opens the last play of `vm-quickstart.yml`, which runs
+`ib_write_bw --use_rocm=0 --data_validation` from the first guest to the
+last. "Do we do that already" has an exact answer: the play existed, gated
+by the extra var `quickstart_rocm_rdma`, and nothing but a hand-typed
+`ansible-playbook -e quickstart_rocm_rdma=true` reached it, because in the
+form it had it failed on every stack this repository ships. The switch
+passes that extra var; no workflow and no script does, so no lane runs it.
+
+**Where the buffers are is `--rocm-rdma-mode`, and the default is the one
+that passes.** Each mode is a row of the table below, and the play's
+`quickstart_rocm_rdma_modes` holds what each adds to both command lines:
+
+| Mode | Both sides run | On the default stack |
+|---|---|---|
+| `host-alloc`, the default | `PERFTEST_ROCM_HOST_ALLOC=1 PERFTEST_ROCM_VALIDATION=staged ib_write_bw --use_rocm=0 -F --data_validation -t 128 -n 1000 -s 65536` | passes. 2026-11-18, through the switch, three runs in one boot: 580.63, 554.96 and 602.63 MiB/s, each `VALIDATION: PASSED - 7 chunks, 58720256 bytes`. Without `-F`, 2026-11-17: 642 MiB/s |
+| `dmabuf` | the same with `--use_rocm_dmabuf` and no `PERFTEST_ROCM_HOST_ALLOC` | registers, then the first work request fails with `remote access error`: the NIC's server cannot read the GPU's memory on stock QEMU |
+| `vram` | the same with neither | refused at registration, `Couldn't allocate MR with error=14`, on any QEMU |
+
+`host-alloc` is `hipHostMalloc`: host memory the GPU can address, not VRAM.
+It proves HIP, the registration, the transfer and the validator, everything
+but the NIC reaching the GPU's own memory, and the result says "not VRAM" in
+as many words. A failure in `dmabuf` or `vram` that carries its line above
+(`quickstart_rocm_rdma_modes.<mode>.known`) is the verdict `known
+limitation`, reported with that line; anything else there is `fail`. Either
+way the play fails and `quick-start` exits non-zero. There is no flag that
+turns a known limitation into a pass: an exit status that says a transfer
+into VRAM worked when it did not is worth less than a red run that says
+why. `quick-start` prints a `note:` naming the expected failure before it
+starts anything.
+
+It is `ib_write_bw` and not `ib_send_bw`: validation is for the WRITE and
+READ verbs, bandwidth tests, RC only, with `-t` and `-n` of at least 32;
 `ib_send_bw` lists the flag in its help and exits 1 with `--data_validation
 is only supported with WRITE or READ verb` (seen on a guest). For a WRITE
 the **server** validates and prints the verdict, and does not fail its exit
 status on a failed one, so the play reads the server's output from a file
-and asserts `VALIDATION: PASSED` from either side and no other verdict from
-both. It waits for the server for as long as the client was allowed, since
-the verdict is written when the server exits. The server runs as root in a
-transient unit and the client as the login user. `qemu-tool quick-start` has
-no flag for it and no workflow sets it.
+and takes `VALIDATION: PASSED` from either side and no other verdict from
+both. The server runs as root in a transient unit and the client as the
+login user. Validation is host-staged (`quickstart_rocm_rdma_validation`,
+`live` for the kernel on the GPU; both passed), a play variable and not a
+switch.
+
+**What has to be true before it starts, and who checks it:**
+
+| What | Checked by | When it is not |
+|---|---|---|
+| two guests | `quick_start._check_optional_tests`, from `<vm-count>` | refused before anything starts, naming the layer that set it |
+| a flavor with a playbook | the same | refused: `mi355x` and `helios` run none |
+| `--rocm-rdma-mode` only with the test | the same | refused |
+| the ROCm perftest in both guests: `/etc/perftest-rocm.json`, the tool under `/usr/local/bin`, and `--use_rocm`, `--data_validation` (and `--use_rocm_dmabuf` in that mode) in its `--help` | the play, in the guest | fails at its fourth task, before a server is started: "This guest's image predates the perftest_setup role" and how to get one |
+| amdgpu bound on both (`amdgpu-probe --status` is `loaded`) | the play | fails, naming the guest and what the probe said |
+
+The image check cannot be a pre-check: nothing in a fleet file says what
+its guests' image contains. **The image `<backing-ref>` pulls,
+`20261117.g481c892`, was baked before the role**, so on today's fleet
+guests the test stops there. To put the build on two scratch guests of that
+image, apply the role, as on 2026-11-17 (the configure line was given by
+hand then; `perftest_setup_rdma_core: local` now writes the same one):
+
+```yaml
+- hosts: fleet
+  become: true
+  roles:
+    - {role: perftest_setup, perftest_setup_rocm_path: /opt/rocm/core-10.1, perftest_setup_rdma_core: local}
+```
 
 ```bash
-cd ansible && ansible-playbook -i <stack dir>/fleet-inventory.yml \
-    playbooks/vm-quickstart.yml --private-key <key> \
-    -e quickstart_rocm_rdma=true
+cd ansible && ANSIBLE_ROLES_PATH=playbooks/roles ansible-playbook \
+    -i <stack dir>/fleet-inventory.yml --private-key <key> /tmp/perftest.yml
 ```
+
+**The verdict is one of five, worked out by two tasks from what both sides
+printed and the client's exit status:**
+
+| Verdict | When |
+|---|---|
+| `pass` | the client exited 0, a `VALIDATION: PASSED` line is there, no `VALIDATION: FAILED`, `WARNING` or `ERROR` is, and **each** side printed `Use ROCm memory : ON`, which perftest prints once a side |
+| `no verdict` | the client printed `Can't produce a report` (below) |
+| `known limitation` | the mode's measured failure, by its text |
+| `no server` | the server never listened on port 18516 |
+| `fail` | anything else: a failed or missing validation, a client that was timed out, an access error in `host-alloc` |
+
+The result is one line, `rocm rdma: <verdict>, mode <mode>, ib_write_bw
+<first> -> <last>` and then the rate and the validation line or the reason.
+The play writes it, with both sides' output, to `<artifacts>/rocm-rdma.md`
+**before** it asserts it: its play is after the facts play, so the per-guest
+summaries cannot carry it, and a file written first is there to be read
+when the play fails. `report()` takes every `.md` in that directory, so it
+is in the report. On a pass `quick-start` prints
+`<first> -> <last>: ib_write_bw with ROCm buffers (host-alloc), <rate>
+MiB/s, 58720256 bytes in 7 chunks validated`; on a failed playbook it dies
+with the verdict and the reason instead of "the configure-and-test playbook
+failed" (`_rocm_rdma_failure`), and a run that was asked for the test and
+has no validated transfer on file fails even if the playbook exited 0.
+
+**The calibration flake, and why `-F` is in the options.** Read from the
+pinned commit. `-F` itself ran on guests on 2026-11-18 and every run
+calibrated, so the failed calibration under it (`rate not measured`) has
+still not been seen:
+
+- `print_report_bw()` (`src/perftest_parameters.c`) calls `get_cpu_mhz()`,
+  whose regression returns 0 when its r² is under 0.9
+  (`src/get_clock.c`, `Correlation coefficient r^2: ... < 0.9`). On 0 it
+  prints `Can't produce a report` and calls `exit(1)`, **unless
+  `cpu_freq_f` is set, which is what `-F` does**; then the rates are
+  computed from 0 and the report line reads `0.00`.
+- In `src/write_bw.c` and `src/read_bw.c` that call is after the transfer
+  and **before** the handshake after which the validating side prints its
+  verdict. So without `-F` a noisy calibration ends the client first, the
+  server's `ctx_hand_shake()` fails, and nobody prints `VALIDATION:`
+  anything. "The transfer completed and validated, and then perftest
+  exited 1" is therefore not an outcome this perftest has: the exit 1 comes
+  with no verdict, and treating it as a pass would pass a run nobody
+  checked.
+- So the play passes `-F` on both sides. A noisy calibration then gives an
+  exit 0, a verdict, and a rate of 0.00, which is `pass` with `rate not
+  measured` in the line and in what `quick-start` prints. A run without
+  `-F` (an overridden `quickstart_rocm_rdma_options`) that ends in `Can't
+  produce a report` is `no verdict`: a failure that says the transfer was
+  not what failed and to run it again.
+
+**The server is started and reaped as the stock RDMA test's is**, with
+three differences. Its output goes to a file (`StandardOutput=file:`),
+since it prints the verdict. It is waited for after the client: as long as
+the client was allowed when the client exited 0, since a WRITE's server
+copies the buffer back and compares it after the client is done; 150 s
+when the client failed, which is perftest's own 120 s wait for a message
+and a little more (it was the full ten minutes); one look when it never
+listened. And it is never stopped: the one `systemctl stop` is of a unit an
+earlier run left, before this run's server exists. One no client reached
+is waiting in `accept()` with no queue pair or memory region made
+(`src/write_bw.c` opens the device, then waits, then creates them), and
+stopping it interrupts nothing. One left by a client that was timed out or
+killed, or still running when its wait ran out, does hold a queue pair; the
+run that left it failed telling the reader to recreate the stack, and the
+stock RDMA test makes the same stop.
+
+**Two things the live run found in the server's side of the result**, both
+changed after it and so far run against stand-ins only:
+
+- The unit has one name, so its journal holds every run of the boot, and
+  `journalctl -n 40` put the `status=1/FAILURE` of the two failed modes
+  into the passing run after them, in `rocm-rdma.md` and in the report.
+  The verdict was not affected. The task that clears a leftover unit now
+  ends with `date +%s.%6N` on the server's guest, and the journal is read
+  with `--since @<that>`; a stdout that is not a number reads it unbounded,
+  as before. `journalctl` took a fractional `@` time on the dev host
+  (systemd 259); not yet on a guest.
+- `/var/tmp/quickstart-rocm-rdma-server.log` stayed on the last guest,
+  root's, after every run, until the next run cleared it. It is now removed
+  once it has been read, unless the unit is still `active`: a server that
+  outlasted its wait is still writing it, and it is left for whoever looks.
+
+`tests/test_perftest_setup.py` holds the play: its gate, its mode table,
+the checks, and the play run on the test host against stand-ins for a
+guest's tools (`ib_write_bw` standing in for the default stack: a
+host-mapped buffer works, a dma-buf fails at the first work request, a GPU
+address at registration), and the verdict for nineteen ways a run can end,
+each put through the two real tasks.
+`tests/test_quickstart_optional_tests.py` holds the switch, the extra vars,
+the refusals and what `quick-start` prints.
+
+**The switch on guests, 2026-11-18.** The same scratch stack as "Test
+results on the home dashboard": two pulled guests of `20261117.g481c892` at
+8 vCPU, stock QEMU, this branch's tool, every step through `quick-start`
+unless it says otherwise.
+
+| Step | Exit | What it said |
+|---|---|---|
+| `test --rocm-rdma-test` on the pulled image | 1 | stopped at the fourth task, "Fail with the reason when one does not": `/etc/perftest-rocm.json is absent: no perftest built with ROCm`, for both guests; no unit, process or log left |
+| the three-line playbook above, `perftest_setup_rdma_core: local` | 0 | 40 s, `ok=29 changed=4` on each guest. It built with the archive's `libibverbs-dev`, `librdmacm-dev` and `libibumad-dev` 61.0-2ubuntu3 still installed, which had not been tried; the stamp records `/usr/local/lib/libibverbs.so.1.18.66.0` |
+| `test --rocm-rdma-test` | 0 | `rocm rdma: pass, mode host-alloc, ib_write_bw qmdash-1 -> qmdash-2, 580.63 MiB/s, VALIDATION: PASSED - 7 chunks, 58720256 bytes`; again in the same boot 554.96 MiB/s; a third time after both failing modes, with `--sdxi-test --p4-test`, 602.63 MiB/s |
+| `ansible-playbook -e quickstart_rocm_rdma=true -e quickstart_rocm_rdma_validation=live` | 0 | `[DATA_VALIDATION] rocm: live GPU validation`, the same verdict line, 490.11 MiB/s |
+| `--rocm-rdma-mode dmabuf` | 1 | the `note:` first, then the known limitation with `Failed status-remote access error (10): wr_id 0 syndrom 0x9`; `ernic-1` logged `could not gather 65536 bytes` 128 times |
+| `--rocm-rdma-mode vram` | 1 | the known limitation with `Couldn't allocate MR with error=14`, from both sides |
+| a plain `test` after each failing mode | 0 | `ib_send_bw` at 557.92 and 698.42 MiB/s; `PORT_ACTIVE` and `max_srq` 256 on both guests, no restart of any container in the boot |
+
+Only the server (the last guest) prints a `VALIDATION:` line for a WRITE,
+and both sides printed `Use ROCm memory : ON` and
+`PERFTEST_ROCM_HOST_ALLOC: host-mapped GPU buffer`. A P4 program loaded
+earlier in the boot was still in the first NIC for every one of these and
+changed nothing. Not covered: the failed calibration under `-F`, guests at
+the fleet file's 4 vCPU, and the fork QEMU image for `dmabuf`.
 
 **What a live default stack measured**, 2026-11-17: `rocm-golden.xml`
 unmodified (stock QEMU), two guests of 8 vCPUs from the published image
@@ -4587,8 +4938,8 @@ So, on the default stack:
   works: HIP, the registration, the transfer, both validation paths. A stack
   that passes only with it set has a NIC that cannot reach VRAM and is
   otherwise sound, which is this one. It was run with `--use_rocm` alone;
-  exporting a host-mapped buffer as a dma-buf has not been tried, so pair it
-  with `quickstart_rocm_rdma_dmabuf=false`.
+  exporting a host-mapped buffer as a dma-buf has not been tried, which is
+  why the `host-alloc` mode passes no `--use_rocm_dmabuf`.
 - **Further GPU processes in one boot are fine.** After `quick-start`'s
   `vector_add`, about a dozen more HIP processes ran on each guest, two at
   once in loopback, with no hang, and `amdgpu-probe --status` stayed
@@ -4599,20 +4950,23 @@ So, on the default stack:
 
 The play as it was before these results (plain `--use_rocm`) failed as the
 table says, rc 2 with both sides shown; with `PERFTEST_ROCM_HOST_ALLOC=1`
-added to its environment it passed. It now passes `--use_rocm_dmabuf` by
-default (`quickstart_rocm_rdma_dmabuf`), so that turning it on tests the
-layer that can change, and its verdict says when the buffers were
-host-mapped memory and not VRAM. **In that form the play has not run**: its
-command lines, retry count and messages were rendered locally, no more.
+added to its environment it passed. That is the one run of the play on
+guests. It then passed `--use_rocm_dmabuf` by default
+(`quickstart_rocm_rdma_dmabuf`, a variable that is gone: the mode replaced
+it), and now defaults to the form that passed, with the other two as
+modes.
 
 **perftest can exit 1 after a transfer that completed.** The first
 `quick-start test` of that run failed at the *existing* stock RDMA step,
 before any of this was applied: `Correlation coefficient r^2: 0.457788 <
 0.9` / `Can't produce a report`, rc 1; the same command two minutes later
 gave 484 MiB/s and exit 0. That is perftest's CPU-frequency calibration on a
-busy host, not the transfer. It is not fixed here; the default RDMA test
-and the optional play both assert the client's exit status and can both go
-red on it.
+busy host, not the transfer. The optional play passes `-F`, which keeps the
+report from exiting (above). **The default RDMA test does not, and can
+still go red on it**: its plays run `/usr/bin/ib_send_bw` with no `-F` and
+assert a non-zero rate, which under `-F` and a failed calibration would be
+0.00, so adding the flag there means deciding what that test asserts
+instead.
 
 **Still unproven:**
 
@@ -4628,6 +4982,10 @@ red on it.
 - **The fork QEMU**, as above.
 - **The dma-buf export of a host-mapped buffer**, and READ
   (`ib_read_bw`), which nothing ran.
+- **`quick-start --rocm-rdma-test` on guests.** The play in its present
+  form, `-F`, the result file and what `quick-start` prints from it have
+  run against stand-ins only. The command lines of `host-alloc` are the
+  measured ones plus `-F`.
 
 To repeat the measurements on two guests of a running stack, each line on
 the server first and then on the client with the server's ernic address
@@ -5025,6 +5383,11 @@ seconds: twenty of them is about 40 ms and swung 30% between runs.
 The program and entry the P4 step loads stay in the device until its server
 restarts. Ordinary transfers are untouched by them; a two-equal-operand RDMA
 WRITE on that NIC is a reduction from then on.
+
+**A reduction moves no RDMA byte counter**, in the server's statistics or
+the guest's, so nothing in Prometheus shows one running. `quick-start test
+--p4-test` records the bench's figure in the guest instead, and the home
+dashboard's P4 row reads it; see "Test results on the home dashboard".
 
 Each artifact holds nothing but `badge-*.json`. `publish-pages` fetches each
 *by name* from the most recent run that produced it, into a scratch `perf-in/`

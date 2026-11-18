@@ -112,6 +112,24 @@ _VMEM_CEILING_MB = 8192
 # the guest has no /dev/ernic-p4 at all.
 _P4_SCOPE_NEEDED = "load"
 
+# Where --rocm-rdma-test puts perftest's buffers, and what each mode does on
+# the stacks this repository ships. Measured on the default stack, stock
+# QEMU, 2026-11-17 (AGENTS.md, "perftest with ROCm memory support"): only
+# the first passes there. The play of vm-quickstart.yml has the same three
+# keys, and what it adds to the command line for each.
+ROCM_RDMA_MODES = {
+    "host-alloc": "host memory the GPU can address (PERFTEST_ROCM_HOST_ALLOC=1), "
+                  "not VRAM: passes",
+    "dmabuf": "VRAM registered as a dma-buf (--use_rocm_dmabuf): expected to "
+              "FAIL on a stack that pins stock QEMU, which the default fleet "
+              "does. The NIC's server cannot read the GPU's memory, so the "
+              "first work request ends in a remote access error",
+    "vram": "VRAM registered by address (--use_rocm alone): expected to FAIL "
+            "on every stack. The guest's kernel refuses the registration "
+            "(error=14) before the NIC is asked, whichever QEMU is pinned",
+}
+_ROCM_RDMA_DEFAULT = "host-alloc"
+
 
 # ---------------------------------------------------------------------------
 # Resolved state
@@ -152,6 +170,11 @@ class _State:
     sdxi_test: bool = False
     p4_test: bool = False
     p4_iters: int | None = None
+    # The third: perftest with ROCm buffers and data validation between the
+    # first guest and the last. The mode is None for the playbook's own
+    # default, host-alloc.
+    rocm_rdma_test: bool = False
+    rocm_rdma_mode: str | None = None
 
     # ---- convenience readers -------------------------------------------
     @property
@@ -1302,10 +1325,15 @@ def _check_optional_tests(state: _State) -> None:
     both rendered into the stack from them.
     """
     asked = [flag for flag, on in (("--sdxi-test", state.sdxi_test),
-                                   ("--p4-test", state.p4_test)) if on]
+                                   ("--p4-test", state.p4_test),
+                                   ("--rocm-rdma-test", state.rocm_rdma_test))
+             if on]
     if state.p4_iters is not None and not state.p4_test:
         _die("--p4-iters sizes the P4 test and does nothing without it: "
              "add --p4-test")
+    if state.rocm_rdma_mode is not None and not state.rocm_rdma_test:
+        _die("--rocm-rdma-mode says where the ROCm-memory RDMA test puts its "
+             "buffers and does nothing without it: add --rocm-rdma-test")
     if not asked:
         return
     if state.playbook is None:
@@ -1343,6 +1371,18 @@ def _check_optional_tests(state: _State) -> None:
              f"a table entry, and with {scope} {what}. Set "
              f"<p4-guest-scope>{_P4_SCOPE_NEEDED}</p4-guest-scope>, {again}; "
              "or drop --p4-test.")
+    if state.rocm_rdma_test and state.vm_count < 2:
+        _die("--rocm-rdma-test: the test moves data from the first guest to "
+             f"the last, and this fleet has one: <vm-count> is "
+             f"{state.vm_count} {_where_set(state, 'count')}. Set "
+             f"<vm-count>2</vm-count>, {again}; or drop --rocm-rdma-test.")
+    mode = state.rocm_rdma_mode or _ROCM_RDMA_DEFAULT
+    if state.rocm_rdma_test and mode != _ROCM_RDMA_DEFAULT:
+        # Said before the boot and the tests in front of it, so a red run
+        # ten minutes later is the one that was announced.
+        print(f"note: --rocm-rdma-mode {mode}: {ROCM_RDMA_MODES[mode]}. A "
+              "failure for that reason is reported as the known limitation "
+              "and the run still exits non-zero.", file=sys.stderr)
 
 
 def _playbook_command(state: _State) -> list[str]:
@@ -1371,6 +1411,10 @@ def _playbook_command(state: _State) -> list[str]:
         cmd += ["-e", "quickstart_p4_test=true"]
         if state.p4_iters is not None:
             cmd += ["-e", f"quickstart_p4_iters={state.p4_iters}"]
+    if state.rocm_rdma_test:
+        cmd += ["-e", "quickstart_rocm_rdma=true"]
+        if state.rocm_rdma_mode is not None:
+            cmd += ["-e", f"quickstart_rocm_rdma_mode={state.rocm_rdma_mode}"]
     return cmd
 
 
@@ -1395,7 +1439,8 @@ def configure_and_test(state: _State) -> None:
     result = subprocess.run(_playbook_command(state),
                             cwd=state.repo_root / "ansible")
     if result.returncode != 0:
-        _die("the configure-and-test playbook failed")
+        _die(_rocm_rdma_failure(state)
+             or "the configure-and-test playbook failed")
 
     state.rdma_delta = _ernic_bytes(state, 1) - before
     _say(f"ernic 1 moved {state.rdma_delta} bytes")
@@ -1417,16 +1462,65 @@ _SDXI_RESULT = re.compile(
 _P4_RESULT = re.compile(
     r"^p4 fp8 bench: (\d+) elements x (\d+) iters, avg [\d.]+ ms, "
     r"([\d.]+) MB/s", re.M)
+# The ROCm-memory RDMA play's, in a file of its own: it is between two
+# guests, and its play runs after the per-guest files are written. The
+# verdict, the mode, the tool, the two guests, and whatever follows.
+_ROCM_RDMA_FILE = "rocm-rdma.md"
+_ROCM_RDMA_RESULT = re.compile(
+    r"^rocm rdma: (pass|no verdict|known limitation|no server|fail), "
+    r"mode (\S+), (\S+) (\S+) -> ([^\s,:]+)(.*)$", re.M)
+_ROCM_RDMA_RATE = re.compile(r", ([\d.]+) MiB/s")
+_ROCM_RDMA_VALIDATED = re.compile(
+    r"VALIDATION: PASSED(?: \([A-Z]+\))? - (\d+) chunks, (\d+) bytes")
+
+
+def _rocm_rdma_recorded(state: _State):
+    """The result line the ROCm-memory RDMA play wrote, or None."""
+    path = state.artifacts / _ROCM_RDMA_FILE
+    if not path.exists():
+        return None
+    return _ROCM_RDMA_RESULT.search(path.read_text())
+
+
+def _rocm_rdma_failure(state: _State) -> str | None:
+    """Why the playbook failed, when the ROCm-memory RDMA test is why.
+
+    The play writes its result before it asserts it, so a failed playbook
+    with a result that is not a pass failed there. None when the test was
+    not asked for, or when it passed and something else failed.
+    """
+    if not state.rocm_rdma_test:
+        return None
+    found = _rocm_rdma_recorded(state)
+    if found is None:
+        return ("the configure-and-test playbook failed before "
+                "--rocm-rdma-test recorded a result: the failed task above "
+                "says why. A guest image with no perftest built with ROCm "
+                "(no /etc/perftest-rocm.json) is refused there, and the "
+                "image the fleet files pull may predate the build.")
+    verdict, mode, _tool, client, server, rest = found.groups()
+    if verdict == "pass":
+        return None
+    what = {
+        "known limitation": "ended in the known limitation of that mode, "
+                            "not in a broken test",
+        "no verdict": "produced no verdict",
+        "no server": "never started",
+    }.get(verdict, "failed")
+    return (f"--rocm-rdma-test in mode {mode} {what} ({client} -> {server})"
+            f"{rest}. Both sides' output is in "
+            f"{state.artifacts / _ROCM_RDMA_FILE}; the tests before it are "
+            "above.")
 
 
 def _report_optional_tests(state: _State) -> None:
-    """Print what --sdxi-test and --p4-test recorded.
+    """Print what --sdxi-test, --p4-test and --rocm-rdma-test recorded.
 
     A test that was asked for and left no result is a failure, not a line
     missing from the output: the playbook passing says its plays did not
     fail, and a play that was skipped did not fail either.
     """
-    if not (state.sdxi_test or state.p4_test):
+    if not (state.sdxi_test or state.p4_test or state.rocm_rdma_test):
         return
 
     def recorded(index: int) -> str:
@@ -1449,6 +1543,23 @@ def _report_optional_tests(state: _State) -> None:
                  "P4 FP8 rate above zero")
         _say(f"{state.vm(1)}: P4 FP8 reduction {found.group(3)} MB/s "
              f"({found.group(1)} elements x {found.group(2)} iterations)")
+    if state.rocm_rdma_test:
+        found = _rocm_rdma_recorded(state)
+        validated = _ROCM_RDMA_VALIDATED.search(found.group(6)) if found else None
+        if not found or found.group(1) != "pass" or not validated:
+            _die("--rocm-rdma-test was asked for and recorded no validated "
+                 f"transfer in {state.artifacts / _ROCM_RDMA_FILE}")
+        mode = found.group(2)
+        rate = _ROCM_RDMA_RATE.search(found.group(6))
+        # No rate is perftest's CPU-frequency calibration having failed: -F
+        # lets the run finish and be validated, with 0.00 in the report.
+        speed = (f"{rate.group(1)} MiB/s" if rate else
+                 "rate not measured (perftest's CPU-frequency calibration "
+                 "failed; the transfer and the validation are not affected)")
+        _say(f"{found.group(4)} -> {found.group(5)}: {found.group(3)} with "
+             f"ROCm buffers ({mode}), {speed}, {validated.group(2)} bytes in "
+             f"{validated.group(1)} chunks validated")
+        print(f"    {mode}: {ROCM_RDMA_MODES.get(mode, mode)}")
 
 
 def _report_nvme_summary(state: _State) -> None:
@@ -1673,6 +1784,8 @@ def run(
     sdxi_test: bool = False,
     p4_test: bool = False,
     p4_iters: int | None = None,
+    rocm_rdma_test: bool = False,
+    rocm_rdma_mode: str | None = None,
 ) -> None:
     fleet_stem, stack_stem, key_stem, playbook = VARIANTS[variant]
 
@@ -1713,6 +1826,8 @@ def run(
         sdxi_test=sdxi_test,
         p4_test=p4_test,
         p4_iters=p4_iters,
+        rocm_rdma_test=rocm_rdma_test,
+        rocm_rdma_mode=rocm_rdma_mode,
         playbook=playbook,
     )
     # Picks up the overlays an earlier verb left beside the stack, which is
@@ -1738,10 +1853,12 @@ def run(
     if verb in ("all", "test"):
         _check_optional_tests(state)
     else:
-        given = [flag for flag, on in (("--sdxi-test", sdxi_test),
-                                       ("--p4-test", p4_test),
-                                       ("--p4-iters", p4_iters is not None))
-                 if on]
+        given = [flag for flag, on in (
+            ("--sdxi-test", sdxi_test),
+            ("--p4-test", p4_test),
+            ("--p4-iters", p4_iters is not None),
+            ("--rocm-rdma-test", rocm_rdma_test),
+            ("--rocm-rdma-mode", rocm_rdma_mode is not None)) if on]
         if given:
             print(f"note: {', '.join(given)} ignored: `{verb}` runs no test. "
                   "The test and all verbs read them.", file=sys.stderr)

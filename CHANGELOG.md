@@ -265,31 +265,64 @@ and what that leaves unproven.
     bake at `a7b33fe` built it for `sse4.2` and passed. See the last entry
     under **Changed**.
 
-- **An optional test of RDMA with GPU memory**, the last play of
-  `vm-quickstart.yml`: `ib_write_bw --use_rocm=0 --use_rocm_dmabuf
-  --data_validation` between the first and last guest. Off unless
-  `-e quickstart_rocm_rdma=true`; `qemu-tool quick-start` has no flag for
-  it and no workflow sets it. `ib_write_bw` because `--data_validation` is
-  for the WRITE and READ verbs; `ib_send_bw` lists the flag and refuses it.
-  It is off because **on the default stack the transfer does not work**,
-  measured on two guests on 2026-11-17:
-  - `--use_rocm` alone fails at registration, in the guest and on both
-    sides: `Couldn't allocate MR with error=14`. The NIC's server is never
-    asked, so no QEMU image changes it.
-  - `--use_rocm --use_rocm_dmabuf` registers, and the first work request
-    fails: `Failed status-remote access error (10): wr_id 0 syndrom 0x9`,
-    with `could not gather 65536 bytes` in the NIC server's log. The NIC
-    cannot read the GPU's memory, which is one vfio-user device reaching
-    another's BAR on stock QEMU. Not tried on the fork QEMU image.
-  - `--data_validation` with GPU memory is therefore not reached. It
-    passes on host memory, and with `PERFTEST_ROCM_HOST_ALLOC=1` (a buffer
-    in host memory the GPU can address) both host-staged and with the live
-    kernel on the GPU: `VALIDATION: PASSED - 7 chunks, 58720256 bytes`.
-    Those runs were on a build whose host-memory validator was AVX2, the
-    level `configure` found on those guests; the validator a bake now
-    builds is SSE4.2, and no transfer has been validated with it.
-  - The play passes `--use_rocm_dmabuf` because that is the form that
-    reaches the NIC; in that form it has not been run.
+- **The home dashboard shows what `quick-start test --p4-test` and
+  `--sdxi-test` last measured.** A new **P4** row has the fp8 rate, the time
+  per reduction, the size of the run and how long ago it was; the SDXI row
+  gains "SDXI Copy Verified", the time since a copy was last compared
+  equal. Neither test leaves anything a counter shows: the NIC's server
+  counts no bytes for a reduction, and one 4 MiB copy reads as about
+  35 kB/s for two minutes. So a new play of `vm-quickstart.yml`
+  leaves each result in the guest for node_exporter's textfile collector,
+  as `quickstart_p4_fp8_bytes_per_second`,
+  `quickstart_p4_fp8_operation_seconds`, `quickstart_p4_fp8_elements`,
+  `quickstart_p4_fp8_iterations`, `quickstart_p4_fp8_timestamp_seconds`,
+  `quickstart_sdxi_copy_bytes` and `quickstart_sdxi_copy_timestamp_seconds`.
+  The tiles read "no test run" until a test has passed, and are titled
+  "(last pass)": a run that fails leaves the last pass's figure, and only
+  its age shows it. The record stays on the guest's disk, so after a stack
+  restart it can be older than the boot. *On two pulled guests,
+  2026-11-18:* `p4 fp8 bench: 262144 elements x 2000 iters, avg 1.373 ms,
+  191.0 MB/s`, nine `quickstart_*` series in Prometheus 45 s later with
+  `node_textfile_scrape_error` 0, and Grafana 13.2.4 serving the panels
+  as the file has them. *Not seen:* the tiles in a browser, and four edits
+  made after that run (the titles, `clamp_min` on the two ages, the
+  script's scratch file, the pinned query text).
+
+- **`qemu-tool quick-start --rocm-rdma-test`: perftest with ROCm buffers and
+  data validation between the two guests.** Off by default. It runs
+  `ib_write_bw --use_rocm=0 --data_validation` from the first guest to the
+  last and prints the rate and how many bytes were validated; the result and
+  both sides' output are in `artifacts/rocm-rdma.md` and in the report. A
+  play for this was already in `vm-quickstart.yml`, reachable only with
+  `ansible-playbook -e quickstart_rocm_rdma=true`; this is its switch.
+  - `--rocm-rdma-mode {host-alloc,dmabuf,vram}` says where the buffers are.
+    The default, `host-alloc`, is host memory the GPU can address
+    (`PERFTEST_ROCM_HOST_ALLOC=1`), not VRAM, and is the one that passes on
+    the shipped stacks. `dmabuf` and `vram` put them in VRAM and are
+    expected to fail there: `remote access error` on the first work request
+    on stock QEMU, and `Couldn't allocate MR with error=14` on any. Such a
+    failure is reported as the known limitation of the mode and the run
+    still exits non-zero.
+  - It needs a guest image with the ROCm perftest
+    (`/etc/perftest-rocm.json`). The image the fleet files pull predates
+    it, and on those guests the test stops at its first check and says so.
+  - Refused before anything starts on a fleet with one guest, for a flavor
+    with no playbook, and for `--rocm-rdma-mode` without the test.
+  - The bare extra var now runs `host-alloc`, where it ran the dma-buf
+    form. The play variable `quickstart_rocm_rdma_dmabuf` is gone;
+    `quickstart_rocm_rdma_mode=dmabuf` is that run.
+  - The play passes `-F`, so a failed CPU-frequency calibration in
+    perftest's report gives a validated run with no rate instead of an
+    exit 1 with no verdict.
+  - *On two pulled guests, 2026-11-18:* refused on the image as pulled;
+    after the `perftest_setup` role was applied to both, `host-alloc`
+    passed three times through the switch (580.63, 554.96 and 602.63
+    MiB/s, each `VALIDATION: PASSED - 7 chunks, 58720256 bytes`) and once
+    with live validation (490.11 MiB/s); `dmabuf` and `vram` ended in
+    their known limitations and a plain `test` passed after each. *Not
+    seen:* a failed calibration under `-F`, and two edits made after that
+    run: the server's journal read from this run's start only, and its log
+    removed from the guest once read.
 
 ### Changed
 
@@ -565,6 +598,16 @@ and what that leaves unproven.
     release and leaves the tree clean, the suite sees the stamped versions,
     and a dry run changes and runs nothing. *Not run there:* the passing
     path, which ends in a signed tag and needs the releaser's key.
+
+- **The home dashboard's panels line up.** Three bands of
+  `quickstart.json` overlapped a row heading or the panels below, or
+  filled half the width, and Grafana drew them pushed down. Every band of
+  `quickstart.json` and `fleet.json` now fills the 24 columns at one
+  height with no gap, the Fleet tiles are one width, and the four NIC
+  status tiles share a line. No panel, title or query was removed;
+  `fleet.json`'s panels gained ids.
+  `tests/test_quickstart_dashboard.py` fails on an overlap, a short band,
+  a gap or a duplicate id.
 
 ## [v2.0.0] - 2026-11-17
 
