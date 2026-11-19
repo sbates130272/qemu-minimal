@@ -51,7 +51,7 @@
   <!-- The guest qemu-minimal publishes (rocm-golden.xml says how it is
        baked), pinned by its dated tag: the day and the qemu-minimal commit
        of that publish, not the stamp of the three images above. -->
-  <backing-ref>docker.io/sbates130272/qemu-tool-rocm-golden:20261117.g481c892</backing-ref>
+  <backing-ref>docker.io/sbates130272/qemu-tool-rocm-golden:20261119.g2aea67d</backing-ref>
   <!-- Not on the servers' stamp either: it follows sdxi_source_pin in
        ansible/playbooks/vm-rocm-golden.yml, sdxi.<sha7> against that pin. -->
   <sdxi-image>docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-sdxi:20261113.g379fbf6-sdxi.dfd76f2</sdxi-image>

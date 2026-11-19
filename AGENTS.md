@@ -452,8 +452,11 @@ NVMe-to-VRAM path fast; known issue 15 has the figures.
 
 **`<backing-ref>` is the guest this repo publishes, and it is not on the
 servers' stamp.** All three fleet files name
-`docker.io/sbates130272/qemu-tool-rocm-golden:20261117.g481c892`, a dated tag
-of `<publish-ref>`. That stamp is the day of the publish and the qemu-minimal
+`docker.io/sbates130272/qemu-tool-rocm-golden:20261119.g2aea67d`, a dated tag
+of `<publish-ref>`, since 2026-11-19; from 2026-11-17 until then it was
+`20261117.g481c892`, and most of what this file records as "the image the
+fleet files pull" was measured on that one and names it. See
+"`20261119.g2aea67d`, the image the fleet files pull" below. That stamp is the day of the publish and the qemu-minimal
 commit the guest was baked from; it is not a batesste-ci-images build and
 never equals one, so the old rule — four refs, one stamp — would refuse
 every fleet that pulls the guest this repo makes. Until 2026-11-17 the three
@@ -592,8 +595,28 @@ Plain `gen-vm` with a changed ref re-pulls and removes that one guest's
 overlay, but not the overlays of other guests made on the same backing file
 with `--backing-file`; delete those by hand.
 
+**`20261119.g2aea67d`, the image the fleet files pull.** The publish
+workflow pushed it from main at `2aea67d` on 2026-11-19 (run 44610066558,
+31 minutes): manifest `sha256:14b3785bee88...`, a 1,546,691,156-byte layer,
+7,993,294,848 bytes unpacked, also `qm.2aea67d` and `latest`. It is the
+first published image with ROCm 10.2 and amdgpu-dkms 7.2.3, the ROCm
+perftest, the baked fio, one rdma-core to build against, the SDXI exporter
+and the hostname unit. In that run: the bake's recap was `ok=585
+failed=0` with the compiler cache at 554 of 2286 hits, the same as PR
+#241's bake, so the amdgpu compile was cold again (a run on main cannot
+read a pull request's cache entry); the guest check passed on the boot
+with no device, printing `hostname: rocm-golden is what the host calls
+this guest`; and the gate stack's guest printed `hostname: rocm-golden-1`,
+which is the rename, by a baked image, under a name that is not the
+bake's. **Nothing has pulled the published artifact**: no lane and no hand
+run. `quickstart-boot` on the pull request that moved `<backing-ref>` is
+the first. The guests booted by hand under "ROCm 10.2 and amdgpu-dkms
+7.2.3" were of an image baked on the dev host at the same pins, not this
+one. A host that ran `quick-start` before the move has guest disks on the
+old image and wants `--clean-overlays`.
+
 **What has and has not been seen of `20261117.g481c892`, the image the
-fleet files pull.** The publish run on main at `481c892` baked it (476 tasks
+fleet files pulled until 2026-11-19.** The publish run on main at `481c892` baked it (476 tasks
 ok, none failed), ran `qemu/checks/rocm-golden.sh` against it with no
 devices, then booted an overlay of it as the single guest of a rendered
 default stack and required an active RDMA port, the GPU test stage and a
@@ -1039,9 +1062,9 @@ and the report carry their results; the GPU-memory RDMA play stays last.
     `tests/test_vm_report_bench.py`.
   - **fio is run when the image has it and is never built here.** The
     golden bake installs it (see "fio with the libhipfile engine"); the
-    image the fleet files pull today, `20261117.g481c892`, has none, so on
-    today's guests the result is `hipfile fio: not in this image` and the
-    test passes on the bench alone. The golden image owns guest setup, and
+    image the fleet files pulled until 2026-11-19, `20261117.g481c892`,
+    has none, so on a guest of it the result is `hipfile fio: not in this
+    image` and the test passes on the bench alone. The golden image owns guest setup, and
     a two-minute build inside a test would be the in-guest fetch from
     GitHub that timed out on 2026-11-18.
   - **The refusal before anything starts is `<vm-nvme>` below 1**, pinned
@@ -1079,12 +1102,12 @@ and the report carry their results; the GPU-memory RDMA play stays last.
   is then killed by the timeout, or prints a verdict its own failure count
   contradicts, a fio that fails or reports nothing, and an unmount that
   fails. mkfs, mount, umount, hipcc, the bench and fio are all
-  stand-ins there. **Nothing of this play has run on a guest**: not the
-  mkfs and mount under `become`, not the compile, not either read. The
-  bench source and its compile line are the ones the daily lane has run,
-  and the fio invocation is the one of
-  `scripts/vm-report/fio-hipfile-bench.sh`; what is new is every task
-  around them.
+  stand-ins there. **The play has run on guests once**, by hand on
+  2026-11-19: two guests of a hand-baked ROCm 10.2 image, four runs in one
+  boot, each passing both reads on both guests, the baked fio included.
+  "ROCm 10.2 and amdgpu-dkms 7.2.3" has the figures. Not run: on a guest
+  of an image without the baked fio, which is every published image until
+  the fleet's `<backing-ref>` moves; none of the refusals; and no lane.
 - **There is no `--all-tests`.** It would change meaning with each test
   added, and would have to decide whether a test that needs a newer guest
   image than the fleet files pull is in it. The closing summary of
@@ -1159,7 +1182,7 @@ Still not run:
 | | |
 |---|---|
 | the `all` verb with a switch | not run, so the closing summary line that names the switches, which only `all` prints, has not been seen live |
-| `--hipfile-test`, any of it | not run on a guest: stand-ins only. Needs a hand run of `qemu-tool quick-start test --hipfile-test` on a stack |
+| `--hipfile-test` | run by hand on 2026-11-19, on two guests of a hand-baked ROCm 10.2 image; see "ROCm 10.2 and amdgpu-dkms 7.2.3". Its refusals and a guest without the baked fio: not run |
 | the in-guest refusal for a missing device or a driver that is not loaded | read, not triggered |
 | the in-guest refusal for a user outside the group | not triggered through the play. The run reported, and its kept logs do not hold, that `test -r -a -w` on `/dev/sdxi0` and on `/dev/ernic-p4` as `nobody` returns 1 and that the play's condition evaluated as `nobody` selects the group message. No membership was changed to make the play itself fail |
 | either test at the fleet file's 4 vCPU guests | not run |
@@ -2654,8 +2677,8 @@ bake that stopped:
   `not_needed`) and the stamp's `amdgpu_patches` and
   `amdgpu_patches_not_needed` are read from it. The list used to be typed
   into the playbook, and on the first 7.2.3 image it named four patches,
-  one of which had applied nothing, and left out the fifth. **The record
-  and the stamp fields have not been through a bake.**
+  one of which had applied nothing, and left out the fifth. The record
+  and the stamp fields were first written by the CI bake below.
 - **A patch whose target is gone prints the source it found**
   (`near()` in the script), and a failed `dkms build` prints the errors of
   `make.log` and its last 30 lines. The guest is gone by the time a bake's
@@ -2743,9 +2766,21 @@ pair, 8 vCPU and 8192 MiB each, one boot, every run exit 0:**
   pull the published image's key over it, and the guests then refuse the
   login.
 
-Not run: a clean bake from the cloud image at these pins, any CI lane,
-`helios-tray` and `mi355x-server`, guests at 4 vCPU, the guest check
-whole and unmodified on a 7.2.3 image, and the report benches.
+**A clean bake at these pins has passed in CI once**: PR #241's playbook-test run at `67259e3` on 2026-11-19 (run 44602137682),
+from the cloud image, in 34 m 31 s for the job. The bake's recap was
+`ok=585 changed=211 failed=0`; the guest check passed whole and unmodified
+on the amdgpu-dkms 7.2.3 guest; the configure and firmware stages passed
+and the lane's steps after them found the baked SRQ + P4 driver still
+loaded, this repository's naming rules, no git URL rewrite and the guest's
+name; and amdgpu loaded with a KFD node behind the stack. The compiler
+cache hit 554 of 2286 calls and missed 1732: the driver release is in the
+key, so amdgpu compiled cold and the bake saved a new entry. That lane
+renders `<p4-enable>false` and runs none of the optional `quick-start`
+tests, so P4, hipFile and the GPU-memory RDMA test on a 10.2 guest are
+still the by-hand boot above alone.
+
+Not run: `helios-tray` and `mi355x-server`, guests at 4 vCPU, and the
+report benches on a 10.2 guest.
 
 **`gen-vm --ansible-only` after a failed bake logs in with the generated
 key.** A bake writes the sidecar only on success, so the image a failed one
@@ -5578,10 +5613,13 @@ Until this role the engine was built in the guest by
 from a fetch of a master commit from GitHub. That fetch timed out once on
 2026-11-18 (five minutes, then exit 128).
 
-**Nothing in this section has run in a bake or on a guest.** It was written
-on 2026-11-18 against fio's source at the tag, read through GitHub, and
-run against stand-ins. The first playbook-test lane run on the pull request
-is the proof of the bake side; read the role's tasks in it.
+**The role has baked twice, both on 2026-11-19**: once by hand on the dev
+host and once in CI, in PR #241's playbook-test run at `67259e3` on 2026-11-19 (run 44602137682),
+where the guest check's fio block passed on the booted image. A guest of
+the hand-baked image read through the engine at 340 to 520 MB/s
+(`quick-start test --hipfile-test`; "ROCm 10.2 and amdgpu-dkms 7.2.3").
+What follows was written on 2026-11-18 against fio's source at the tag,
+before either, and says where something is read and not run.
 
 **Both fios are in the image, and a bare `fio` is the archive's.** That is
 the opposite of perftest, and deliberate:
@@ -5757,17 +5795,18 @@ bake run the check here. batesste-ci-images runs the same file against the
 *published* image and has to move to an image baked from a commit that has
 this before it takes this version of the check.
 
-**What reaches fleet guests, and when.** The image the fleet files pull
-has no `/opt/fio-hipfile`. Until an image baked from this change is
-published and `<backing-ref>` moves:
+**What reaches fleet guests, and when.** `20261119.g2aea67d`, which the
+fleet files pull since 2026-11-19, is the first published image with
+`/opt/fio-hipfile`. On a guest of an older image:
 
 - `fio-hipfile-bench.sh` builds fio in the guest as before, now at the
   `fio-3.43` commit, which GitHub serves by id; and
 - `quick-start test --hipfile-test` reports `hipfile fio: not in this
   image` and passes on the bench alone.
 
-After it, the daily lane's fio step finds the stamp and skips the build,
-and the hipFile test runs both reads.
+On a guest of the new one the daily lane's fio step finds the stamp and
+skips the build, and the hipFile test runs both reads. The lane has not
+run since the move.
 
 **The compiler cache covers it.** fio's configure picks `gcc`, resolved
 through PATH, which is ccache when the bake put one there, so its about
