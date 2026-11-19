@@ -1027,6 +1027,7 @@ class Workflows(unittest.TestCase):
                        "rocjitsu_setup/files/amdgpu-emu-patches.py",
                        "ionic_kernel_pin", "ernic_source_pin",
                        "sdxi_source_pin", "perftest_source_pin",
+                       "fio_source_pin",
                        "rocm_setup_amdgpu_driver_version"):
             self.assertIn(source, script)
         # And nothing that differs between them: no ref, event or workflow.
@@ -1037,7 +1038,8 @@ class Workflows(unittest.TestCase):
 
     def test_the_key_step_fails_when_a_pin_has_dropped_out(self):
         script = _step(RESTORE, "Name the compiler cache")["run"]
-        for pin in ("sdxi_source_pin", "perftest_source_pin"):
+        for pin in ("sdxi_source_pin", "perftest_source_pin",
+                    "fio_source_pin"):
             with self.subTest(pin=pin), tempfile.TemporaryDirectory() as tmp:
                 for rel in ("ansible/playbooks/vm-rocm-golden.yml",
                             "ansible/requirements.yml",

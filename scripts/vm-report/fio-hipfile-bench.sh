@@ -12,11 +12,16 @@
 # namespace exits 1.
 set -euo pipefail
 
-# libhipfile landed on fio master (67256d4e, 2026-05-08) and is in no release
-# tag, so this has to be a master commit. Kept in step with FIO_COMMIT in
-# batesste-ci-images/ubuntu-cuda-rocm-fio/Dockerfile: the point of this lane is
-# to measure the same engine that image ships.
-FIO_COMMIT=${FIO_COMMIT:-6bc57a931f04fa3f50348d8c8f087187f050c6e1}
+# The commit the fio-3.43 tag peels to: the first fio release that has
+# engines/libhipfile.c. It is fio_source_pin in
+# ansible/playbooks/vm-rocm-golden.yml, which bakes this fio into the golden
+# image under ${PREFIX} and writes this commit to the stamp below, so a
+# guest of such an image skips the build here and goes straight to the run.
+# tests/test_fio_hipfile_setup.py holds the two equal. A guest whose image
+# predates the baked fio has no stamp, and builds it here as before.
+# FIO_COMMIT in batesste-ci-images/ubuntu-cuda-rocm-fio/Dockerfile is the
+# same engine in a container image, and wants moving to this commit too.
+FIO_COMMIT=${FIO_COMMIT:-d2dcd7e053d1902d2420f151c83990e6acdd9f8c}
 FIO_REPO=${FIO_REPO:-https://github.com/axboe/fio.git}
 PREFIX=${PREFIX:-/opt/fio-hipfile}
 MNT=${MNT:-/mnt/nvme}
@@ -39,6 +44,11 @@ export ROCM_PATH="${rocm}"
 
 dev=$(lsblk -dpno NAME,TYPE | awk '$2=="disk" && $1 ~ /^\/dev\/nvme[0-9]+n[0-9]+$/ { print $1; exit }')
 [ -n "${dev}" ] || { echo "No NVMe namespace present"; exit 0; }
+# begin: hipfile mount
+# Mounted for this run and unmounted on the way out, whatever the exit.
+# vm-quickstart.yml's NVMe test writes the namespace raw, and with a
+# filesystem left mounted on it that test fails (write=0) until someone
+# unmounts it. A mount that was already there is somebody else's and stays.
 sudo -n mkdir -p "${MNT}"
 if ! mountpoint -q "${MNT}"; then
   fstype=$(sudo -n blkid -o value -s TYPE "${dev}" 2>/dev/null || true)
@@ -46,8 +56,10 @@ if ! mountpoint -q "${MNT}"; then
     sudo -n mkfs.ext4 -q -F "${dev}"
   fi
   sudo -n mount -o noatime "${dev}" "${MNT}"
+  trap 'sudo -n umount "${MNT}" || echo "could not unmount ${MNT}" >&2' EXIT
 fi
 sudo -n chmod 1777 "${MNT}"
+# end: hipfile mount
 # begin: hipfile target is on nvme
 # A hipFile direct read of a file that is not on an NVMe namespace can hang
 # the guest for good: AIS takes any PCI block device, and a virtio disk
@@ -64,8 +76,9 @@ fi
 
 echo "rocm: ${rocm}"
 
-# Rebuilt only when absent or built from a different commit, so a baked image
-# or a second report pass in the same guest skips straight to the run.
+# Rebuilt only when absent or built from a different commit, so the golden
+# image, which bakes it, or a second report pass in the same guest skips
+# straight to the run.
 stamp="${PREFIX}/share/fio-commit.txt"
 if [ ! -x "${PREFIX}/bin/fio" ] || [ "$(cat "${stamp}" 2>/dev/null || true)" != "${FIO_COMMIT}" ]; then
   echo "building fio ${FIO_COMMIT}"

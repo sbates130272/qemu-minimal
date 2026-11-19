@@ -8,17 +8,25 @@ A stack now publishes its guests' SSH ports and Grafana on the host's
 loopback address, where 2.0.0 published them on every interface. Read
 **Breaking** first if you reach a guest or Grafana from a machine other than
 the one running the stack, and the first entry under **Fixed** if you have
-run `vm-rocm-golden.yml --tags configure` on a guest. The rest is two
-optional `quick-start` tests and changes to the golden guest: a perftest
-built with ROCm memory support, SDXI counters in Prometheus, one rdma-core to
-build against, and the hostname the host gives it. Every shipped stack and
+run `vm-rocm-golden.yml --tags configure` on a guest. The rest is optional
+`quick-start` tests, one of which reads from the NVMe into GPU memory
+through hipFile (`--hipfile-test`), and changes to the golden guest:
+a perftest built with ROCm memory support, fio with the `libhipfile` engine,
+SDXI counters in Prometheus, one rdma-core to build against, and the
+hostname the host gives it. Every shipped stack and
 every workflow now runs the fork QEMU, which is the first entry under
 **Changed**, and the default stack points its NVMe at the guest's GPU
 (`<vm-nvme-vram>`, under **Added**), which moves the two hipFile badges by
-about seventy times at the next daily run. The guest changes are in the
-bake, which has passed once in CI, and the fleet files still pull an image
-baked before them; the last entry under **Changed** says what was run
-and what that leaves unproven.
+about seventy times at the next daily run. The golden bake moves to ROCm
+10.2 and amdgpu driver release 31.70, and nothing in a generated stack
+restarts by itself any more, so a stack left up over a host reboot no
+longer comes back half-started; both are under **Changed**. The guest
+changes are in the bake, which has passed once in CI with all of them but
+the fio build and the ROCm and driver move, and the fleet files still
+pull an image baked before them; the last entry under **Changed** says
+what that CI bake covered and what it leaves unproven. The fio build,
+`--hipfile-test` and the ROCm 10.2 guest have since passed on one image
+baked by hand on the development host, which the ROCm entry describes.
 
 ### Breaking
 
@@ -116,7 +124,7 @@ and what that leaves unproven.
     settings is caught in the guest instead, which says whether it is the
     device, the driver or the group that is missing.
   - A verb that runs no test (`up`, `preflight`, `report`, `logs`, `down`)
-    ignores the three switches and says so on stderr. The closing summary
+    ignores these switches and says so on stderr. The closing summary
     of a full run names the switches the fleet can run. Both results are in
     the per-guest summary under the stack's `artifacts/` and in the report,
     and a test that was asked for and left no result fails the run.
@@ -341,6 +349,92 @@ and what that leaves unproven.
     has not run with live validation through the switch, on the other two
     fleets, at 4 vCPU or in a lane.
 
+- **The golden guest carries fio with the `libhipfile` ioengine.** Ubuntu's
+  fio has no such engine, and until now the one that has it was built in
+  the guest by the daily lane's fio step, on every run, from a fetch that
+  timed out once on 2026-11-18. The bake builds fio 3.43, the first
+  release with the engine, with the new `fio_hipfile_setup` role and
+  installs it as `/opt/fio-hipfile/bin/fio`.
+  - *A bare `fio` is still Ubuntu's.* The build is under a prefix of its
+    own and on no PATH, so `vm-quickstart.yml`'s NVMe test and anyone who
+    types `fio` run `/usr/bin/fio` as before. The role refuses `/usr` and
+    `/usr/local` as a prefix, and the guest check asserts what a bare name
+    resolves to in a non-login session, a login shell and under sudo.
+  - *The pin:* `fio_source_repo`, `fio_source_ref` (`fio-3.43`) and
+    `fio_source_pin`, the commit the tag peels to, in
+    `vm-rocm-golden.yml`. The fetch is compared with the commit before
+    anything is compiled, so a moved tag fails the bake naming both
+    commits. The role's defaults, `FIO_COMMIT` in
+    `scripts/vm-report/fio-hipfile-bench.sh` and a README badge follow the
+    pin, and a test names whichever was missed.
+  - *The build:* `./configure --prefix=/opt/fio-hipfile --disable-native
+    --enable-libhipfile` with `ROCM_PATH` set to the image's ROCm tree,
+    then `make` and `make install`. No CUDA. The role reads
+    `config-host.mak` back before it compiles and stops unless the engine
+    is on and `-march=native` is off. No package was added to the image
+    for it: what the build needs was already there.
+  - *What records it:* `/etc/fio-hipfile.json`, and the commit alone in
+    `/opt/fio-hipfile/share/fio-commit.txt`, which is the file the
+    benchmark script has always read to decide whether to build. The pin
+    is also in `/etc/rocm-golden-guest.json` and in the compiler-cache key.
+  - **Not run in a bake or on a guest.** The role was run through
+    `ansible-playbook` against a local repository standing in for fio's;
+    no compiler ran, and fio's own configure and Makefile were read, not
+    exercised. That the built binary prints its version and its engine
+    list with no GPU is read from the engine's source. The first
+    playbook-test run on the pull request is the proof.
+  - *Who is affected:* batesste-ci-images, whose `ubuntu-cuda-rocm-fio`
+    image pins the master commit this repository built until now and wants
+    the same move; and whoever runs the guest check against a published
+    image, which the entry under **Changed** covers.
+
+- **`qemu-tool quick-start --hipfile-test`: a file on each guest's NVMe
+  read into GPU memory through hipFile, and checked.** Off by default, on
+  the `test` and `all` verbs, on every guest. A play of `vm-quickstart.yml`
+  that ends at its first task unless `quickstart_hipfile_test` is true, so
+  without the switch `ansible-playbook` is handed the arguments it always
+  was.
+  - *Two reads.* The GEMM hipFile bench the daily lane runs, compiled in
+    the guest with the image's `hipcc`: 32 MiB read through hipFile, a GEMM
+    on the GPU over what was read, and the product compared with the
+    host's. Then fio's `libhipfile` engine on a 64 MiB file, when the guest
+    image has `/opt/fio-hipfile/bin/fio`; a guest without it reports
+    `hipfile fio: not in this image`, and nothing is built in the guest. A
+    pass prints `<guest>: hipFile read <rate> MB/s (<bytes> bytes,
+    verified); fio <rate> MB/s`.
+  - *The NVMe namespace is scratch.* The test makes a new filesystem on
+    `/dev/nvme0n1` every run, mounts it on a mount point of its own
+    (`/mnt/quickstart-hipfile`) and unmounts it in an `always` section. A
+    namespace that is already mounted is refused, not formatted. The file
+    is checked to be on an NVMe namespace before either read, by the check
+    the report benches make.
+  - *It takes root for five tasks:* the mkfs, the mount, the page cache
+    drop, fio and the unmount. The bench runs as the login user. The SDXI
+    and P4 tests still take none.
+  - *Refused before anything is started* on a fleet whose `<vm-nvme>` is
+    below 1, naming the settings file that set it, and for a flavor with no
+    playbook. *Announced, not refused:* a fleet without
+    `<vm-nvme-vram>true`, or whose `<qemu-ref>` is not the fork, where the
+    read works at 11 to 13 MB/s as measured and not at hundreds. The test
+    asserts a verified read at a rate above zero. A verb that runs no test
+    ignores the switch and says so on stderr, like the others, and the
+    closing summary offers no optional test on a flavor with no playbook,
+    where each is refused.
+  - *On the dashboard:* a **hipFile** row under the NVMe panels, three
+    tiles a guest: the bench's rate, fio's rate and how long ago
+    (`quickstart_hipfile_read_bytes_per_second`,
+    `quickstart_hipfile_read_bytes`,
+    `quickstart_hipfile_fio_bytes_per_second`,
+    `quickstart_hipfile_timestamp_seconds`). Last pass, like the P4 and
+    SDXI tiles. The fio tile reads "no fio result" on a guest whose image
+    has no such fio.
+  - *On today's fleet guests*, whose image predates the baked fio, the test
+    runs the bench and reports fio as not in the image.
+  - **Not run on a guest.** The play was run through `ansible-playbook` on
+    the development host against stand-ins for mkfs, mount, umount, hipcc,
+    the bench and fio, nineteen ways. It needs a hand run of `qemu-tool
+    quick-start test --hipfile-test` on a stack.
+
 - **`<vm-nvme-vram>`: a fleet's emulated NVMe may read and write the
   guest's GPU memory directly.** A new boolean fleet element, default
   false. With it, `gen-compose` gives each guest's `run-vm`
@@ -426,6 +520,73 @@ and what that leaves unproven.
     `quick-start --rocm-rdma-mode dmabuf` has since passed on the fork, and
     hipFile's direct path has been measured there; both are under
     **Added**.
+
+- **The golden bake installs ROCm 10.2 and amdgpu driver release 31.70.**
+  `rocm_line_pin` in `vm-rocm-golden.yml` is `10.2` (was `10.1`), so the
+  ROCm tree in the guest is `/opt/rocm/core-10.2`, and
+  `rocm_setup_amdgpu_driver_version` is `31.70` (was `31.60`), which is
+  amdgpu-dkms 7.2.3 where 31.60 was 7.1.9. Both are in the package
+  repositories as of 2026-11-19. The two pins are independent; they move
+  together here by the owner's choice.
+  - *The amdgpu patches* (`amdgpu-emu-patches.py`) are five now. 7.2.3
+    carries its own port of the KFD ptrace gate, so `kfd_ptrace_gate` is
+    not needed there and is skipped. A new one, `amd_vsdb_freesync`, guards
+    four FreeSync fields the driver reads from a struct that has none of
+    them on a mainline kernel; without it the driver does not compile. The
+    image's stamp now lists the patches the source really carries
+    (`amdgpu_patches`) and the ones the release has no use for
+    (`amdgpu_patches_not_needed`), where it carried a list typed into the
+    playbook.
+  - *The guest check* accepts either the ptrace patch or the driver's own
+    helper, and says so when it finds neither; that assertion used to fail
+    the whole check with no message.
+  - *A failed patch or driver build says why.* A patch whose target is gone
+    prints the source it found, and a failed `dkms build` prints the
+    compiler's errors from its log.
+  - *The compiler cache:* the driver release is in its key, so the first
+    bake after this compiles amdgpu from cold and saves a new entry.
+  - *Who is affected:* nothing a fleet pulls changes until an image baked
+    from this is published and `<backing-ref>` moves. The pinned rocjitsu
+    server image and the published guests are still ROCm 10.1.
+  - **Baked once, by hand, and not in one pass.** On the development host
+    on 2026-11-19: a full bake that stopped at the ptrace patch, then
+    reruns from the GPU play until it finished. Two guests of that image
+    under `quick-start` on the default fleet passed `test`, `test
+    --sdxi-test --p4-test --hipfile-test` and `test --rocm-rdma-test
+    --rocm-rdma-mode dmabuf`: `vector_add` on the pinned rocjitsu server,
+    `ib_send_bw` 568.98 MiB/s, P4 fp8 202.5 MB/s, hipFile 297.6 and
+    307.5 MB/s with fio at 340.7 and 338.9 MB/s, and 656.57 MiB/s of
+    validated RDMA on GPU memory. Those hipFile rates are with both
+    guests reading at once; taken one guest at a time on the same boot
+    they are 450 to 535 MB/s, and fio 439 to 520 MB/s. That is still
+    below the 831 and 959 MB/s measured on ROCm 10.1, one guest at a
+    time, and the difference is not explained.
+  - *Not run:* a clean bake from the cloud image at these pins, any CI
+    lane, the other two fleets, and the stamp's new fields.
+
+- **Nothing in a generated stack restarts by itself.** The device servers
+  (mesh workers, rocjitsu, SDXI) and Prometheus, Grafana, Loki and Alloy
+  were `restart: on-failure`; every service is `restart: "no"` now, as the
+  guests and the mesh manager already were. Docker applies `on-failure`
+  when its daemon starts to any container that exited non-zero, and a host
+  shutdown kills most of them, so a stack left up over a reboot came back
+  as servers with no manager and no guests. Seen on the development host.
+  - *What it gives up:* a server that crashes stays down, shown as exited,
+    where it used to be started again. For a mesh worker that retry served
+    nobody: its guest does not restart, and each retry took a mesh node id
+    and a descriptor at the manager.
+  - *Who is affected:* a stack already running keeps the policy its
+    containers were created with until `down` and `up`; `docker update
+    --restart no <container>` changes one in place. The three shipped
+    stacks are regenerated.
+  - *Not run:* no stack has been started from the new render. The render
+    and the committed stacks are held to it by a test.
+
+- **Every Grafana dashboard refreshes on `auto`.** The home and fleet
+  dashboards refreshed every 30 seconds and the node-exporter dashboard
+  every minute, whatever time range was shown. All three now set
+  `"refresh": "auto"`, in each stack. A stack already rendered keeps its
+  copy until it is rendered again. Not seen in a browser.
 
 - **A guest's hostname is the name the host calls it by.** A stack's guests
   were `rocm-golden-1` and `rocm-golden-2` in `qemu-tool list`, in the
@@ -520,9 +681,10 @@ and what that leaves unproven.
 
 - **`qemu/checks/rocm-golden.sh` refuses an image baked before this
   release**, the one the fleet files pull included. The check stops on any
-  of four things about such an image: it has the three rdma-core
+  of five things about such an image: it has the three rdma-core
   development packages, and it has no ROCm perftest
-  (`/etc/perftest-rocm.json`), no SDXI exporter
+  (`/etc/perftest-rocm.json`), no fio with the `libhipfile` engine
+  (`/etc/fio-hipfile.json`), no SDXI exporter
   (`sdxi-textfile-metrics.timer`) and no hostname unit
   (`qemu-tool-hostname.service`). Only the lanes that bake run the check
   here, against a fresh bake. *Who is affected:* batesste-ci-images, which
@@ -596,8 +758,27 @@ and what that leaves unproven.
   Read from the two release tarballs; the playbook-test run at `aff9955`,
   started on 2026-11-17, baked on it and passed.
 
-- **Every change to the golden guest here has been through one complete
-  bake in CI, and no published image has any of them yet.**
+- **The daily lane's fio metric is fio 3.43, and its bench source moved.**
+  `FIO_COMMIT` in `scripts/vm-report/fio-hipfile-bench.sh` is the commit of
+  the `fio-3.43` tag, where it was a master commit between 3.42 and 3.43,
+  six commits earlier. On a guest whose image has the baked fio the script
+  finds its stamp and builds nothing; on one whose image predates it, which
+  is every fleet guest today, it builds that commit in the guest as before.
+  The perf page's "Changes to what is measured" has the move. No figure
+  has been taken with 3.43.
+  - `gemm-hipfile-bench.hip` moved from `scripts/vm-report/` to
+    `ansible/playbooks/roles/rocjitsu_setup/files/`, where the hipFile play
+    finds it beside the playbook. `scripts/generate-vm-report.sh` and the
+    `rocm-gemm-benchmark-compile` workflow read it from there.
+  - `fio_source_pin` is in the compiler-cache key, so the first bake after
+    this starts a new line of cache entries: it restores the last entry
+    through the fallback and saves once under the new prefix.
+
+- **Every change to the golden guest here but two has been through one
+  complete bake in CI, and no published image has any of them yet.** The
+  two are the fio build and the move to ROCm 10.2 and driver release
+  31.70, both made after that bake; their own entries say what each has
+  run against.
   - **The bake.** Pull request #240's playbook-test run at `a7b33fe` on
     2026-11-18 (run 44363648365) baked with all of it and passed: bake
     recap `ok=557 failed=0` in 13m29s on a warm compiler cache (1911 of
@@ -625,6 +806,20 @@ and what that leaves unproven.
     series only on the development host.
 
 ### Fixed
+
+- **`gen-vm --ansible-only` works after a failed bake.** A bake writes its
+  sidecar only when it succeeds, and `--ansible-only` read the login key
+  from the sidecar, so a rerun against the image a failed bake left offered
+  the guest no key and waited ten minutes before blaming the guest. It now
+  falls back to the keypair `gen-vm` generated for that image.
+
+- **`gen-vm` no longer reinstalls the rocm-ernic collection on every run.**
+  `ansible-galaxy` re-clones a git requirement each time, 37 seconds
+  measured. `gen-vm` records the digest of `requirements.yml` after an
+  install and skips galaxy while the file is unchanged; a moved pin
+  installs again. Delete
+  `~/.ansible/collections/ansible_collections/.qemu-tool-requirements.sha256`
+  to force an install. It does not notice a collection changed by hand.
 
 - **`vm-rocm-golden.yml --tags configure` no longer replaces the image's
   SRQ + P4 ionic driver.** The golden bake builds `ionic-ernic` from the
@@ -725,11 +920,21 @@ and what that leaves unproven.
   - *Run:* the check passed in both benches on two guests of the default
     stack (`/dev/nvme0n1`). *Not run:* the refusal on a guest; it is
     tested against a stand-in `findmnt`.
-  - *Not fixed, and older than this:* the benches leave `/mnt/nvme`
-    mounted, and a `quick-start test` run after them fails at "Assert
-    non-zero NVMe bandwidth" (write 0) until it is unmounted on each
-    guest, since that test writes the device raw. The daily lane runs
-    `test` first.
+
+- **The hipFile benchmarks unmount what they mounted.** Both left
+  `/mnt/nvme` mounted, and a `quick-start test` run after them failed at
+  "Assert non-zero NVMe bandwidth" (write 0) until it was unmounted on
+  each guest, since that test writes the device raw. Seen on 2026-11-18;
+  the daily lane runs `test` first and did not meet it. Each bench now
+  unmounts on any exit, from a trap set straight after its own `mount`; a
+  mount that was already there when it started is left alone.
+  - *Who is affected:* anyone running `scripts/generate-vm-report.sh`'s
+    hipFile steps by hand and then `quick-start test`. A guest where an
+    earlier checkout's bench already left `/mnt/nvme` mounted still needs
+    `sudo umount /mnt/nvme` once.
+  - *Not run on a guest:* tested against stand-ins for `mount`, `umount`
+    and the rest, for a passing bench, a failing one, a mount that was
+    already there and an unmount that fails.
 
 ## [v2.0.0] - 2026-11-17
 

@@ -119,8 +119,15 @@ pciutils
 python3-dev
 rsync
 
-# No fio and no fio build dependencies.  This flavour measures RDMA and HIP,
-# not storage; the rocjitsu flavour is the one that carries a libhipfile fio.
+# fio with the libhipfile ioengine is built in the guest, by the bake: the
+# fio_hipfile_setup role, from a pinned release, into /opt/fio-hipfile and on
+# no PATH.  Nothing is listed here for it.  build-essential, git and
+# pkg-config are above, and libaio-dev, libnuma-dev and zlib1g-dev are
+# installed by the bake's rocjitsu_setup role (rocjitsu_setup_tools_packages),
+# ahead of that build.  The archive's fio, which a bare "fio" runs and
+# vm-quickstart.yml's NVMe test uses, is not named in this manifest either:
+# sbates130272.batesste.fave_packages installs it, which vm-basic.yml runs,
+# and the guest check fails an image without /usr/bin/fio.
 
 pipx
 python3-venv

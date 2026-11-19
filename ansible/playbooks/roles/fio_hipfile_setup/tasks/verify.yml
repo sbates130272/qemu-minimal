@@ -1,0 +1,104 @@
+---
+# What the installed fio is, read off the binary. Needs no device: nothing
+# here opens a GPU or a block device.
+#
+# "--version" and "--enghelp" are the two things that are run. Both return
+# while fio is still parsing its arguments. The libhipfile engine is linked
+# in and registers itself from a constructor that calls register_ioengine()
+# and nothing of HIP or hipFile; the hipFile driver is opened in the
+# engine's init, which only a job reaches. That is read from
+# engines/libhipfile.c at the pinned release, and was seen once, on the
+# dev host with no /dev/kfd; not in a bake.
+
+- name: Check the installed fio
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      fio={{ fio_hipfile_setup_binary | quote }}
+      rocm={{ fio_hipfile_setup_rocm_resolved | quote }}
+      if [ ! -x "$fio" ]; then
+        echo "$fio is missing: make install did not put it there" >&2
+        exit 1
+      fi
+
+      # Either of the two exiting non-zero is a binary that cannot start
+      # with no GPU, and what it printed is the reason.
+      if ! version=$("$fio" --version < /dev/null 2>&1); then
+        echo "$fio --version failed: $version" >&2
+        exit 1
+      fi
+      case "$version" in
+        fio-[0-9]*) echo "version=$version" ;;
+        *)
+          echo "$fio --version printed '$version', not a fio version" >&2
+          exit 1
+          ;;
+      esac
+
+      # The engine the build exists for, by the name --enghelp lists. No
+      # "grep -q" at the end of a pipe in this script: under pipefail a
+      # reader that leaves early turns a match into a failure.
+      if ! engines=$("$fio" --enghelp < /dev/null 2>&1); then
+        echo "$fio --enghelp failed:" >&2
+        printf '%s\n' "$engines" | tail -5 >&2
+        exit 1
+      fi
+      if ! printf '%s\n' "$engines" | grep -E '^[[:space:]]*libhipfile$' > /dev/null; then
+        echo "$fio --enghelp does not list libhipfile:" >&2
+        printf '%s\n' "$engines" | tail -5 >&2
+        exit 1
+      fi
+
+      # Linked against the guest's hipFile, and every library found.
+      libs=$(ldd "$fio")
+      case "$libs" in
+        *'not found'*)
+          echo "$fio has a library the loader cannot find:" >&2
+          printf '%s\n' "$libs" >&2
+          exit 1
+          ;;
+      esac
+      hipfile=$(printf '%s\n' "$libs" | awk '$1 ~ /^libhipfile\.so/ { print $3 }')
+      if [ -z "$hipfile" ]; then
+        echo "$fio is not linked against libhipfile" >&2
+        exit 1
+      fi
+      case "$(readlink -f "$hipfile")" in
+        "$(readlink -f "$rocm")"/*) echo "libhipfile=$(readlink -f "$hipfile")" ;;
+        *)
+          echo "$fio loads $hipfile, which is not under $rocm" >&2
+          exit 1
+          ;;
+      esac
+      case "$libs" in
+        *libcuda*|*libcufile*)
+          echo "$fio is linked against a CUDA library:" >&2
+          printf '%s\n' "$libs" >&2
+          exit 1
+          ;;
+      esac
+    executable: /bin/bash
+  register: fio_hipfile_setup_check
+  changed_when: false
+
+- name: Record what the installed fio says of itself
+  ansible.builtin.set_fact:
+    fio_hipfile_setup_version: >-
+      {{ (fio_hipfile_setup_check.stdout_lines | select('match', 'version=')
+          | first) | regex_replace('^version=', '') }}
+    fio_hipfile_setup_loaded_libhipfile: >-
+      {{ (fio_hipfile_setup_check.stdout_lines | select('match', 'libhipfile=')
+          | first) | regex_replace('^libhipfile=', '') }}
+
+# A release tag is named for the version it builds: fio-3.43 prints
+# "fio-3.43". A ref that is not a release tag (a commit id, a branch)
+# decides nothing here.
+- name: Assert a release tag built the release it names
+  ansible.builtin.assert:
+    that:
+      - fio_hipfile_setup_version is match(fio_hipfile_setup_ref | trim | regex_escape)
+    fail_msg: >-
+      {{ fio_hipfile_setup_binary }} --version prints
+      "{{ fio_hipfile_setup_version }}", and the ref that was built is the
+      release tag {{ fio_hipfile_setup_ref | trim }}.
+  when: fio_hipfile_setup_ref | trim is match('^fio-[0-9]+[.][0-9]+$')

@@ -1,0 +1,18 @@
+---
+galaxy_info:
+  role_name: fio_hipfile_setup
+  author: Stephen Bates
+  description: >-
+    Build fio from a pinned release with the libhipfile ioengine, against
+    the ROCm and hipFile SDK already in the guest, and install it under a
+    prefix of its own so the archive's fio stays what a bare "fio" runs.
+    Needs no device.
+  license: MIT
+  min_ansible_version: "2.18"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - noble
+        - resolute
+
+dependencies: []

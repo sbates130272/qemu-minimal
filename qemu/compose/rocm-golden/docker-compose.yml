@@ -90,7 +90,7 @@ services:
       l2: {}
       fleet:
         ipv4_address: 172.31.1.2
-    restart: on-failure
+    restart: "no"
     environment:
       - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:2,192.168.100.12
     entrypoint:
@@ -120,7 +120,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.2.1
-    restart: on-failure
+    restart: "no"
     command:
       - rocjitsu
       - --config
@@ -141,7 +141,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.2.2
-    restart: on-failure
+    restart: "no"
     command:
       - rocjitsu
       - --config
@@ -162,7 +162,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.4.1
-    restart: on-failure
+    restart: "no"
     entrypoint: ["rocm-sdxi"]
     command:
       - -s
@@ -181,7 +181,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.4.2
-    restart: on-failure
+    restart: "no"
     entrypoint: ["rocm-sdxi"]
     command:
       - -s
@@ -332,7 +332,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.0.11
-    restart: on-failure
+    restart: "no"
     user: "${CONTAINER_USER:?set CONTAINER_USER=<uid>:<gid>}"
     cap_drop:
       - ALL
@@ -353,7 +353,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.0.15
-    restart: on-failure
+    restart: "no"
     user: "${CONTAINER_USER:?set CONTAINER_USER=<uid>:<gid>}"
     cap_drop:
       - ALL
@@ -388,7 +388,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.0.16
-    restart: on-failure
+    restart: "no"
     cap_drop:
       - ALL
     security_opt:
@@ -413,7 +413,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.0.13
-    restart: on-failure
+    restart: "no"
     user: "${CONTAINER_USER:?set CONTAINER_USER=<uid>:<gid>}"
     cap_drop:
       - ALL

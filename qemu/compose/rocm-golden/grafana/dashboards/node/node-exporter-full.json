@@ -15404,7 +15404,7 @@
       "type": "row"
     }
   ],
-  "refresh": "1m",
+  "refresh": "auto",
   "schemaVersion": 41,
   "tags": [
     "linux"

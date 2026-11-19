@@ -110,7 +110,7 @@ rocjitsu_setup_amdgpu_update_initramfs: >-
 # The therock component line the guest carries. Its packages install under
 # /opt/rocm/core-<line>, which no shell and no documentation finds unaided.
 # vm-rocm-golden.yml passes the same value it installs ROCm at.
-rocjitsu_setup_rocm_version: "10.1"
+rocjitsu_setup_rocm_version: "10.2"
 rocjitsu_setup_rocm_path: "/opt/rocm/core-{{ rocjitsu_setup_rocm_version }}"
 
 # ══ Guest tools ═════════════════════════════════════════════════
@@ -134,8 +134,9 @@ rocjitsu_setup_tools_packages:
   - "amdrocm-amdsmi{{ rocjitsu_setup_rocm_version }}"
   # hsa-snoop plants an ftrace kprobe on the KFD create_queue ioctl.
   - bpftrace
-  # The fio-hipfile benchmark builds fio from a pinned master commit in the
-  # guest, because the libhipfile ioengine is in no fio release tag.
+  # What a fio with the libhipfile ioengine is built against. The bake's
+  # fio_hipfile_setup role builds it, after this role, and the fio-hipfile
+  # benchmark still builds it in a guest whose image predates that.
   - libaio-dev
   - libnuma-dev
   - pkg-config

@@ -133,6 +133,10 @@ ROCM_RDMA_MODES = {
 }
 _ROCM_RDMA_DEFAULT = "host-alloc"
 
+# What hipFile's direct path was measured at where the emulated NVMe does
+# not map the GPU's BAR: no <vm-nvme-vram>, or a QEMU without the property.
+_HIPFILE_SLOW = "11 to 13 MB/s measured, against hundreds with it"
+
 # What marks a batesste-ci-images QEMU or NIC server image as the fork's:
 # the repository name ends in it. The fork QEMU hands each vfio-user server
 # the other devices' memory, which the dmabuf mode needs.
@@ -187,6 +191,9 @@ class _State:
     # default, host-alloc.
     rocm_rdma_test: bool = False
     rocm_rdma_mode: str | None = None
+    # The fourth: a file on each guest's NVMe namespace read into GPU memory
+    # through hipFile, and what arrived checked.
+    hipfile_test: bool = False
 
     # ---- convenience readers -------------------------------------------
     @property
@@ -1338,6 +1345,7 @@ def _check_optional_tests(state: _State) -> None:
     """
     asked = [flag for flag, on in (("--sdxi-test", state.sdxi_test),
                                    ("--p4-test", state.p4_test),
+                                   ("--hipfile-test", state.hipfile_test),
                                    ("--rocm-rdma-test", state.rocm_rdma_test))
              if on]
     if state.p4_iters is not None and not state.p4_test:
@@ -1383,6 +1391,41 @@ def _check_optional_tests(state: _State) -> None:
              f"a table entry, and with {scope} {what}. Set "
              f"<p4-guest-scope>{_P4_SCOPE_NEEDED}</p4-guest-scope>, {again}; "
              "or drop --p4-test.")
+    if state.hipfile_test and state.fleet.vm_nvme < 0:
+        # A negative count is run-vm's --nvme -N: devices backed by the
+        # host's /dev/nullbN, which the play would make a filesystem on.
+        _die("--hipfile-test: <vm-nvme> is "
+             f"{state.fleet.vm_nvme} {_where_set(state, 'vm_nvme')}, which "
+             "gives the guests NVMe devices backed by the host's null_blk "
+             "devices. The test makes a filesystem on the namespace and "
+             "reads a file back from it, so it needs one backed by a qcow2 "
+             f"file: set <vm-nvme>1</vm-nvme>, {again}; or drop "
+             "--hipfile-test.")
+    if state.hipfile_test and state.fleet.vm_nvme < 1:
+        _die("--hipfile-test: this fleet gives its guests no NVMe namespace "
+             f"to read from: <vm-nvme> is {state.fleet.vm_nvme} "
+             f"{_where_set(state, 'vm_nvme')}, so there is no /dev/nvme0n1. "
+             f"Set <vm-nvme>1</vm-nvme>, {again}; or drop --hipfile-test.")
+    # Not refusals: the read works either way, and what differs is its
+    # rate. Said before the boot, so a figure a hundredth of the one in the
+    # README is the one that was announced.
+    if state.hipfile_test and not state.fleet.vm_nvme_vram:
+        print("note: --hipfile-test: <vm-nvme-vram> is false "
+              f"{_where_set(state, 'vm_nvme_vram')}, so the emulated NVMe is "
+              "not told which GPU BAR to map and hipFile's direct path runs "
+              f"at its slow rate ({_HIPFILE_SLOW}). The test still passes: "
+              "it asserts a verified read at a rate above zero. Set "
+              "<vm-nvme-vram>true</vm-nvme-vram>, which needs the fork "
+              f"QEMU, {again}.", file=sys.stderr)
+    elif state.hipfile_test and not _pins_fork_qemu(state.fleet):
+        print("note: --hipfile-test: <qemu-ref> is "
+              f"{state.fleet.qemu_ref} {_where_set(state, 'qemu_ref')}, "
+              "which is not the fork QEMU the shipped fleet files pin (its "
+              f"repository does not end in {_FORK_MARK}). Only the fork's "
+              "NVMe can map a GPU BAR, so <vm-nvme-vram> has no effect here "
+              "and hipFile's direct path runs at its slow rate "
+              f"({_HIPFILE_SLOW}). The test still passes: it asserts a "
+              "verified read at a rate above zero.", file=sys.stderr)
     if state.rocm_rdma_test and state.vm_count < 2:
         _die("--rocm-rdma-test: the test moves data from the first guest to "
              f"the last, and this fleet has one: <vm-count> is "
@@ -1436,6 +1479,8 @@ def _playbook_command(state: _State) -> list[str]:
         cmd += ["-e", "quickstart_p4_test=true"]
         if state.p4_iters is not None:
             cmd += ["-e", f"quickstart_p4_iters={state.p4_iters}"]
+    if state.hipfile_test:
+        cmd += ["-e", "quickstart_hipfile_test=true"]
     if state.rocm_rdma_test:
         cmd += ["-e", "quickstart_rocm_rdma=true"]
         if state.rocm_rdma_mode is not None:
@@ -1487,6 +1532,12 @@ _SDXI_RESULT = re.compile(
 _P4_RESULT = re.compile(
     r"^p4 fp8 bench: (\d+) elements x (\d+) iters, avg [\d.]+ ms, "
     r"([\d.]+) MB/s", re.M)
+# The hipFile play's two lines. The second is a rate, or the words for a
+# guest image that has no fio with the libhipfile engine.
+_HIPFILE_RESULT = re.compile(
+    r"^hipfile: read ([\d.]+) MB/s, (\d+) bytes, verified$", re.M)
+_HIPFILE_FIO_RESULT = re.compile(
+    r"^hipfile fio: (?:([\d.]+) MB/s|(not in this image))$", re.M)
 # The ROCm-memory RDMA play's, in a file of its own: it is between two
 # guests, and its play runs after the per-guest files are written. The
 # verdict, the mode, the tool, the two guests, and whatever follows.
@@ -1549,13 +1600,14 @@ def _rocm_rdma_failure(state: _State) -> str | None:
 
 
 def _report_optional_tests(state: _State) -> None:
-    """Print what --sdxi-test, --p4-test and --rocm-rdma-test recorded.
+    """Print what the optional tests that were asked for recorded.
 
     A test that was asked for and left no result is a failure, not a line
     missing from the output: the playbook passing says its plays did not
     fail, and a play that was skipped did not fail either.
     """
-    if not (state.sdxi_test or state.p4_test or state.rocm_rdma_test):
+    if not (state.sdxi_test or state.p4_test or state.hipfile_test
+            or state.rocm_rdma_test):
         return
 
     def recorded(index: int) -> str:
@@ -1578,6 +1630,23 @@ def _report_optional_tests(state: _State) -> None:
                  "P4 FP8 rate above zero")
         _say(f"{state.vm(1)}: P4 FP8 reduction {found.group(3)} MB/s "
              f"({found.group(1)} elements x {found.group(2)} iterations)")
+    if state.hipfile_test:
+        for index in range(1, state.vm_count + 1):
+            text = recorded(index)
+            found = _HIPFILE_RESULT.search(text)
+            if not found or float(found.group(1)) <= 0:
+                _die(f"--hipfile-test was asked for and {state.vm(index)} "
+                     "recorded no verified hipFile read at a rate above zero")
+            fio = _HIPFILE_FIO_RESULT.search(text)
+            if not fio or (fio.group(1) is not None
+                           and float(fio.group(1)) <= 0):
+                _die(f"--hipfile-test was asked for and {state.vm(index)} "
+                     "recorded no fio result: neither a rate above zero nor "
+                     "that its image has no fio with the libhipfile engine")
+            with_fio = (f"fio {fio.group(1)} MB/s" if fio.group(1) is not None
+                        else "fio: not in this image")
+            _say(f"{state.vm(index)}: hipFile read {found.group(1)} MB/s "
+                 f"({found.group(2)} bytes, verified); {with_fio}")
     if state.rocm_rdma_test:
         found = _rocm_rdma_recorded(state)
         validated = _ROCM_RDMA_VALIDATED.search(found.group(6)) if found else None
@@ -1784,10 +1853,14 @@ def _summary(state: _State) -> None:
     print("      qemu-tool list --summary          # what the fleet is doing")
     print(f"      qemu-tool inspect {state.vm(1)}")
     print("      qemu-tool quick-start test        # re-run the GPU and RDMA tests")
+    # None on a flavor with no playbook: _check_optional_tests refuses
+    # every one of them there.
     optional = [flag for flag, offered in (
         ("--sdxi-test", state.fleet.sdxi_per_vm >= 1),
         ("--p4-test", state.fleet.p4_enable
-         and state.fleet.p4_guest_scope == _P4_SCOPE_NEEDED)) if offered]
+         and state.fleet.p4_guest_scope == _P4_SCOPE_NEEDED),
+        ("--hipfile-test", state.fleet.vm_nvme >= 1))
+        if offered and state.playbook is not None]
     if optional:
         print(f"      qemu-tool quick-start test {' '.join(optional)}")
         print("                                        # and the optional ones")
@@ -1821,6 +1894,7 @@ def run(
     p4_iters: int | None = None,
     rocm_rdma_test: bool = False,
     rocm_rdma_mode: str | None = None,
+    hipfile_test: bool = False,
 ) -> None:
     fleet_stem, stack_stem, key_stem, playbook = VARIANTS[variant]
 
@@ -1863,6 +1937,7 @@ def run(
         p4_iters=p4_iters,
         rocm_rdma_test=rocm_rdma_test,
         rocm_rdma_mode=rocm_rdma_mode,
+        hipfile_test=hipfile_test,
         playbook=playbook,
     )
     # Picks up the overlays an earlier verb left beside the stack, which is
@@ -1892,6 +1967,7 @@ def run(
             ("--sdxi-test", sdxi_test),
             ("--p4-test", p4_test),
             ("--p4-iters", p4_iters is not None),
+            ("--hipfile-test", hipfile_test),
             ("--rocm-rdma-test", rocm_rdma_test),
             ("--rocm-rdma-mode", rocm_rdma_mode is not None)) if on]
         if given:

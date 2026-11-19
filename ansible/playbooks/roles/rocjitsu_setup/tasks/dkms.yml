@@ -8,6 +8,31 @@
   register: _rocjitsu_setup_amdgpu_patches
   changed_when: "'patched ' in _rocjitsu_setup_amdgpu_patches.stdout"
 
+# For the image's stamp, which used to carry a list typed into the playbook:
+# on amdgpu-dkms 7.2.3 that list named a patch the driver no longer needs
+# and left out one it does. A rerun reports the same two sets, since a patch
+# in place is "already applied".
+- name: Record which patches the amdgpu source carries
+  ansible.builtin.copy:
+    dest: /etc/amdgpu-emu-patches.json
+    owner: root
+    group: root
+    mode: "0644"
+    content: "{{ _rocjitsu_setup_amdgpu_patch_record | to_nice_json }}\n"
+  become: true
+  vars:
+    _rocjitsu_setup_amdgpu_patch_lines: >-
+      {{ _rocjitsu_setup_amdgpu_patches.stdout_lines | map('trim') | list }}
+    _rocjitsu_setup_amdgpu_patch_record:
+      carried: >-
+        {{ _rocjitsu_setup_amdgpu_patch_lines
+           | select('match', '^(patched|already applied) ')
+           | map('regex_replace', '^(patched|already applied) ', '') | list }}
+      not_needed: >-
+        {{ _rocjitsu_setup_amdgpu_patch_lines
+           | select('match', '^not needed ')
+           | map('regex_replace', '^not needed ', '') | list }}
+
 - name: Check whether amdgpu DKMS is installed for the running kernel
   ansible.builtin.shell:
     cmd: |
@@ -37,7 +62,19 @@
         exit 1
       fi
       dkms status amdgpu/"$VER" | grep -q . || dkms add amdgpu/"$VER"
-      dkms build amdgpu/"$VER" -k "$(uname -r)" --force
+      # dkms names its log and prints none of it, and the guest is gone by
+      # the time a bake's failure is read. Say what the compiler said.
+      if ! dkms build amdgpu/"$VER" -k "$(uname -r)" --force; then
+        log=/var/lib/dkms/amdgpu/"$VER"/build/make.log
+        {
+          echo "--- the errors in $log:"
+          grep -nE -B3 -A6 'error:|undefined!|No such file|\*\*\* ' "$log" \
+            | head -150 || echo "(no line there says error)"
+          echo "--- its last 30 lines:"
+          tail -30 "$log"
+        } >&2 || true
+        exit 10
+      fi
       dkms install amdgpu/"$VER" -k "$(uname -r)" --force
     executable: /bin/bash
   become: true

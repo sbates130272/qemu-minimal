@@ -65,6 +65,8 @@ DOCS = (REPO / "README.md", REPO / "AGENTS.md",
 
 SDXI_PLAY = "Copy data through the SDXI device on each guest"
 P4_PLAY = "Run the P4 fp8 reduction in the first guest's NIC"
+HIPFILE_PLAY = ("Read from the NVMe into GPU memory through hipFile on "
+                "each guest")
 FACTS_PLAY = "Collect the facts the report quotes"
 RECORD_PLAY = "Record what the optional tests measured for the dashboard"
 
@@ -76,6 +78,15 @@ P4_SERIES = {"quickstart_p4_fp8_bytes_per_second",
              "quickstart_p4_fp8_timestamp_seconds"}
 SDXI_SERIES = {"quickstart_sdxi_copy_bytes",
                "quickstart_sdxi_copy_timestamp_seconds"}
+HIPFILE_ROW = "hipFile — NVMe To GPU Memory"
+HIPFILE_SERIES = {"quickstart_hipfile_read_bytes_per_second",
+                  "quickstart_hipfile_read_bytes",
+                  "quickstart_hipfile_fio_bytes_per_second",
+                  "quickstart_hipfile_timestamp_seconds"}
+# The two lines the hipFile play records, and its other fio line.
+HIPFILE_READ_LINE = "hipfile: read 831.0 MB/s, 33554432 bytes, verified"
+HIPFILE_FIO_LINE = "hipfile fio: 959.0 MB/s"
+HIPFILE_NO_FIO_LINE = "hipfile fio: not in this image"
 
 COLUMNS = 24
 
@@ -193,6 +204,21 @@ HOME_QUERIES = {
     66: [
         ('A', 'rate(sdxi_num_compress_total{job="fleet-node",context="1",vm_name=~"$vm"}[2m])'),
         ('B', 'rate(sdxi_num_decompress_total{job="fleet-node",context="1",vm_name=~"$vm"}[2m])'),
+    ],
+}
+
+# The hipFile row's, which the dashboard did not have at a7b33fe: pinned by
+# their text for the same reason, in a table of their own because
+# HOME_QUERIES is what that commit had and nothing else.
+HIPFILE_QUERIES = {
+    81: [
+        ('A', 'quickstart_hipfile_read_bytes_per_second{job="fleet-node",vm_name=~"$vm"}'),
+    ],
+    82: [
+        ('A', 'quickstart_hipfile_fio_bytes_per_second{job="fleet-node",vm_name=~"$vm"}'),
+    ],
+    83: [
+        ('A', 'clamp_min(time() - quickstart_hipfile_timestamp_seconds{job="fleet-node",vm_name=~"$vm"}, 0)'),
     ],
 }
 
@@ -588,9 +614,23 @@ class Layout(unittest.TestCase):
         home = json.loads((COMPOSE / "rocm-golden" / HOME).read_text())
         now = {p["id"]: p["title"] for p in home["panels"]}
         self.assertEqual({k: now.get(k) for k in had}, had)
-        self.assertEqual(set(now) - set(had), {67, 70, 71, 72, 73, 74})
+        self.assertEqual(set(now) - set(had),
+                         {67, 70, 71, 72, 73, 74, 80, 81, 82, 83})
         self.assertEqual(_queries(home, had), HOME_QUERIES)
         self.assertEqual(sum(map(len, HOME_QUERIES.values())), 46)
+
+    def test_the_hipfile_queries_are_pinned_by_their_text(self):
+        for stack in NAMES:
+            with self.subTest(stack=stack):
+                home = json.loads((COMPOSE / stack / HOME).read_text())
+                self.assertEqual(_queries(home, HIPFILE_QUERIES),
+                                 HIPFILE_QUERIES)
+        # And a renamed series is found, as for the table above.
+        text = (COMPOSE / "rocm-golden" / HOME).read_text()
+        swapped = json.loads(text.replace("quickstart_hipfile_read_bytes",
+                                          "quickstart_hipfile_read_byte"))
+        self.assertNotEqual(_queries(swapped, HIPFILE_QUERIES),
+                            HIPFILE_QUERIES)
 
     def test_no_query_of_the_fleet_dashboard_was_lost(self):
         """fleet.json was given ids and nothing else."""
@@ -705,6 +745,7 @@ class _Scratch(unittest.TestCase):
         self.dir.mkdir()
         self.p4 = self.dir / "quickstart_p4_fp8.prom"
         self.sdxi = self.dir / "quickstart_sdxi_copy.prom"
+        self.hipfile = self.dir / "quickstart_hipfile.prom"
 
     def run_script(self, *args, directory=None):
         return subprocess.run(
@@ -721,12 +762,19 @@ class _Scratch(unittest.TestCase):
         return self.run_script("sdxi-copy", "--line",
                                sdxi_line() if line is None else line, **kwargs)
 
+    def record_hipfile(self, line=HIPFILE_READ_LINE, fio=HIPFILE_FIO_LINE,
+                       **kwargs):
+        return self.run_script("hipfile", "--line", line, "--fio-line", fio,
+                               **kwargs)
+
     def written(self) -> set[str]:
-        """Every series name the script writes, for both tests."""
+        """Every series name the script writes, for all three tests."""
         self.assertEqual(self.record_p4().returncode, 0)
         self.assertEqual(self.record_sdxi().returncode, 0)
+        self.assertEqual(self.record_hipfile().returncode, 0)
         return (set(parse_exposition(self.p4.read_text()))
-                | set(parse_exposition(self.sdxi.read_text())))
+                | set(parse_exposition(self.sdxi.read_text()))
+                | set(parse_exposition(self.hipfile.read_text())))
 
 
 class Script(_Scratch):
@@ -786,19 +834,22 @@ class Script(_Scratch):
         self.assertEqual(labels, {})
         self.assertGreaterEqual(stamp, before)
 
-    def test_the_two_records_are_two_files(self):
-        """One test run again does not take the other's result with it."""
+    def test_each_record_is_a_file_of_its_own(self):
+        """One test run again does not take another's result with it."""
         self.written()
         first = self.sdxi.read_text()
+        third = self.hipfile.read_text()
         self.assertEqual(self.record_p4(bench_line(iters=200)).returncode, 0)
         self.assertEqual(self.sdxi.read_text(), first)
+        self.assertEqual(self.hipfile.read_text(), third)
         self.assertEqual(sorted(p.name for p in self.dir.iterdir()),
-                         ["quickstart_p4_fp8.prom", "quickstart_sdxi_copy.prom"])
+                         ["quickstart_hipfile.prom", "quickstart_p4_fp8.prom",
+                          "quickstart_sdxi_copy.prom"])
 
-    def test_node_exporter_reads_both(self):
+    def test_node_exporter_reads_them_all(self):
         """It reads *.prom in its textfile directory, as its own user."""
         self.written()
-        for path in (self.p4, self.sdxi):
+        for path in (self.p4, self.sdxi, self.hipfile):
             self.assertEqual(path.suffix, ".prom")
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o644)
 
@@ -871,6 +922,81 @@ class Script(_Scratch):
                 self.assertFalse(self.sdxi.exists())
         self.assertEqual(sorted(p.name for p in self.dir.iterdir()),
                          ["quickstart_p4_fp8.prom"])
+
+    def test_a_hipfile_result_becomes_four_gauges_or_three(self):
+        before = int(time.time())
+        done = self.record_hipfile()
+        self.assertEqual((done.returncode, done.stderr), (0, ""))
+        self.assertEqual(done.stdout.strip(),
+                         f"quickstart-test-metrics: recorded {self.hipfile}")
+        families = parse_exposition(self.hipfile.read_text())
+        self.assertEqual(set(families), HIPFILE_SERIES)
+        values = {}
+        for name, family in families.items():
+            ((labels, value),) = family["samples"]
+            self.assertEqual(labels, {}, name)
+            values[name.removeprefix("quickstart_hipfile_")] = value
+        stamp = values.pop("timestamp_seconds")
+        # The bench's MB is a million bytes, as the P4 figure's is.
+        self.assertEqual(values, {"read_bytes_per_second": 831000000.0,
+                                  "read_bytes": 33554432.0,
+                                  "fio_bytes_per_second": 959000000.0})
+        self.assertGreaterEqual(stamp, before)
+        self.assertLessEqual(stamp, time.time() + 1)
+        self.assertEqual(sorted(p.name for p in self.dir.iterdir()),
+                         ["quickstart_hipfile.prom"])
+        # An image with no fio that has the engine: the read is recorded
+        # and no fio series is, so its tile is empty and not a zero. The
+        # file is replaced, so an earlier fio figure does not linger.
+        done = self.record_hipfile(fio=HIPFILE_NO_FIO_LINE)
+        self.assertEqual((done.returncode, done.stderr), (0, ""))
+        families = parse_exposition(self.hipfile.read_text())
+        self.assertEqual(set(families), HIPFILE_SERIES
+                         - {"quickstart_hipfile_fio_bytes_per_second"})
+
+    def test_the_hipfile_lines_are_the_ones_the_play_and_quick_start_use(self):
+        play = _play(HIPFILE_PLAY)
+        tasks = {t["name"]: t for t in play["tasks"]}
+        read = tasks["Record what the bench measured"][
+            "ansible.builtin.set_fact"]["quickstart_hipfile_read"]
+        self.assertEqual(
+            " ".join(read.split()),
+            "hipfile: read {{ '%.1f' | format(quickstart_hipfile_measured[1] "
+            "| float * 1000) }} MB/s, {{ quickstart_hipfile_measured[0] }} "
+            "bytes, verified")
+        fio = tasks["Record what fio measured"][
+            "ansible.builtin.set_fact"]["quickstart_hipfile_fio"]
+        self.assertEqual(
+            fio, "hipfile fio: {{ '%.1f' | format(quickstart_hipfile_fio_bw "
+                 "| float / 1000000) }} MB/s")
+        none = tasks["Record that this image has no fio with the engine"][
+            "ansible.builtin.set_fact"]["quickstart_hipfile_fio"]
+        self.assertEqual(none, HIPFILE_NO_FIO_LINE)
+        # One line each: a fact with a newline in it is not a result line,
+        # and a folded scalar keeps one after a more-indented line.
+        self.assertNotIn("\n", read.strip())
+        self.assertNotIn("\n", fio.strip())
+
+    def test_a_hipfile_line_that_is_not_a_result_writes_nothing(self):
+        cases = (
+            ("", HIPFILE_FIO_LINE),
+            ("hipfile: read 831.0 MB/s, 33554432 bytes", HIPFILE_FIO_LINE),
+            (HIPFILE_READ_LINE.replace("831.0", "0.0"), HIPFILE_FIO_LINE),
+            (HIPFILE_READ_LINE.replace("33554432", "0"), HIPFILE_FIO_LINE),
+            (HIPFILE_READ_LINE + " and more", HIPFILE_FIO_LINE),
+            (HIPFILE_READ_LINE.replace("MB/s", "MiB/s"), HIPFILE_FIO_LINE),
+            (HIPFILE_READ_LINE, ""),
+            (HIPFILE_READ_LINE, "hipfile fio: 0.0 MB/s"),
+            (HIPFILE_READ_LINE, "hipfile fio: not run"),
+            (HIPFILE_READ_LINE, "hipfile fio: 959.0 MiB/s"),
+            (bench_line(), HIPFILE_FIO_LINE),
+        )
+        for line, fio in cases:
+            with self.subTest(line=line, fio=fio):
+                done = self.record_hipfile(line, fio)
+                self.assertEqual(done.returncode, 2, done.stdout)
+                self.assertIn("not a verified hipFile read", done.stderr)
+                self.assertFalse(self.hipfile.exists())
 
     def test_a_device_name_that_would_break_the_label_is_refused(self):
         for device in ('a"b', "a b", "a\\b", "", "a\nb", "a{b}"):
@@ -961,19 +1087,23 @@ class Play(unittest.TestCase):
         self.assertEqual(names[at - 1], FACTS_PLAY)
         # One play after it: the optional RDMA one, which stays last.
         self.assertEqual(len(names[at + 1:]), 1)
-        self.assertEqual(names[at - 3:at - 1], [SDXI_PLAY, P4_PLAY])
+        self.assertEqual(names[at - 4:at - 1],
+                         [SDXI_PLAY, P4_PLAY, HIPFILE_PLAY])
 
     def test_it_is_every_guest_with_no_facts_and_no_tags(self):
         self.assertEqual(self.play["hosts"], "fleet")
         self.assertIs(self.play["gather_facts"], False)
         self.assertNotIn("tags", self.play)
 
-    def test_root_is_taken_by_these_two_tasks_and_nowhere_in_the_tests(self):
+    def test_root_is_taken_by_these_tasks_and_nowhere_in_those_two_tests(self):
         """The collector directory is root's, 0755, as rocjitsu_setup
-        makes it. The two test plays stay the login user's."""
+        makes it. The SDXI and P4 test plays stay the login user's. (The
+        hipFile play takes root for a filesystem and a mount, task by
+        task: tests/test_quickstart_optional_tests.py holds which.)"""
         self.assertIs(self.play["become"], False)
         self.assertEqual(list(self.tasks), ["Record the verified SDXI copy",
-                                            "Record the P4 fp8 rate"])
+                                            "Record the P4 fp8 rate",
+                                            "Record the hipFile read"])
         for task in self.play["tasks"]:
             self.assertIs(task["become"], True, task["name"])
         for name in (SDXI_PLAY, P4_PLAY):
@@ -995,7 +1125,11 @@ class Play(unittest.TestCase):
                          "/var/lib/prometheus/node-exporter")
         sdxi = self.tasks["Record the verified SDXI copy"]
         p4 = self.tasks["Record the P4 fp8 rate"]
-        for task in (sdxi, p4):
+        hipfile = self.tasks["Record the hipFile read"]
+        self.assertTrue(hipfile["ansible.builtin.script"]["cmd"].endswith(
+            "hipfile --line {{ quickstart_hipfile_read | quote }} "
+            "--fio-line {{ quickstart_hipfile_fio | quote }}"))
+        for task in (sdxi, p4, hipfile):
             script = task["ansible.builtin.script"]
             self.assertEqual(script["executable"], "/usr/bin/python3")
             self.assertTrue(script["cmd"].startswith(
@@ -1022,8 +1156,18 @@ class Play(unittest.TestCase):
                           "ansible.builtin.set_fact"])
         # set_fact and register outlive their play; a play var does not,
         # so nothing here reads one of the test plays' own.
+        hipfile = {t["name"]: t for t in _play(HIPFILE_PLAY)["tasks"]}
+        self.assertIn("quickstart_hipfile_read",
+                      hipfile["Record what the bench measured"][
+                          "ansible.builtin.set_fact"])
+        for name in ("Record what fio measured",
+                     "Record that this image has no fio with the engine"):
+            self.assertIn("quickstart_hipfile_fio",
+                          hipfile[name]["ansible.builtin.set_fact"])
         text = yaml.safe_dump(self.play, width=10_000)
-        for name in list(_play(SDXI_PLAY)["vars"]) + list(_play(P4_PLAY)["vars"]):
+        for name in (list(_play(SDXI_PLAY)["vars"])
+                     + list(_play(P4_PLAY)["vars"])
+                     + list(_play(HIPFILE_PLAY)["vars"])):
             self.assertNotIn(name, text)
 
     def test_a_run_with_neither_switch_reaches_no_guest(self):
@@ -1036,6 +1180,9 @@ class Play(unittest.TestCase):
         self.assertEqual(self.tasks["Record the P4 fp8 rate"]["when"],
                          ["quickstart_p4_bw is defined",
                           "quickstart_p4_ib_device is defined"])
+        self.assertEqual(self.tasks["Record the hipFile read"]["when"],
+                         ["quickstart_hipfile_read is defined",
+                          "quickstart_hipfile_fio is defined"])
 
     def test_a_record_that_cannot_be_written_does_not_fail_the_run(self):
         for task in self.play["tasks"]:
@@ -1073,6 +1220,12 @@ class EndToEnd(unittest.TestCase):
                         "quickstart_p4_ib_device": "rocep1s0"},
             # A run with neither switch.
             "guest-5": {},
+            # The hipFile test alone, on an image with the baked fio.
+            "guest-6": {"quickstart_hipfile_read": HIPFILE_READ_LINE,
+                        "quickstart_hipfile_fio": HIPFILE_FIO_LINE},
+            # And on the image the fleets pull today, which has none.
+            "guest-7": {"quickstart_hipfile_read": HIPFILE_READ_LINE,
+                        "quickstart_hipfile_fio": HIPFILE_NO_FIO_LINE},
         }
         for name in hosts:
             if name != "guest-3":
@@ -1115,7 +1268,7 @@ class EndToEnd(unittest.TestCase):
     def test_the_first_guest_gets_both_records(self):
         self.assertEqual(self.recap("guest-1"),
                          {"ok": 2, "changed": 2, "unreachable": 0, "failed": 0,
-                          "skipped": 0, "rescued": 0, "ignored": 0})
+                          "skipped": 1, "rescued": 0, "ignored": 0})
         self.assertEqual(self.files("guest-1"), ["quickstart_p4_fp8.prom",
                                                  "quickstart_sdxi_copy.prom"])
         p4 = parse_exposition(
@@ -1131,7 +1284,7 @@ class EndToEnd(unittest.TestCase):
     def test_a_guest_that_ran_the_sdxi_test_alone_gets_that_record(self):
         recap = self.recap("guest-2")
         self.assertEqual((recap["ok"], recap["changed"], recap["skipped"]),
-                         (1, 1, 1))
+                         (1, 1, 2))
         self.assertEqual(self.files("guest-2"), ["quickstart_sdxi_copy.prom"])
 
     def test_a_guest_with_no_collector_directory_is_ok_and_unchanged(self):
@@ -1147,11 +1300,29 @@ class EndToEnd(unittest.TestCase):
         self.assertIn("not a p4_fp8_bench result", self.done.stdout)
         self.assertIn("...ignoring", self.done.stdout)
 
-    def test_a_run_with_neither_switch_skips_both_tasks(self):
+    def test_a_run_with_no_switch_skips_every_task(self):
         self.assertEqual(self.recap("guest-5"),
                          {"ok": 0, "changed": 0, "unreachable": 0, "failed": 0,
-                          "skipped": 2, "rescued": 0, "ignored": 0})
+                          "skipped": 3, "rescued": 0, "ignored": 0})
         self.assertEqual(self.files("guest-5"), [])
+
+    def test_a_guest_that_ran_the_hipfile_test_gets_that_record(self):
+        for guest, series in (
+                ("guest-6", HIPFILE_SERIES),
+                ("guest-7", HIPFILE_SERIES
+                 - {"quickstart_hipfile_fio_bytes_per_second"})):
+            with self.subTest(guest=guest):
+                recap = self.recap(guest)
+                self.assertEqual((recap["ok"], recap["changed"],
+                                  recap["skipped"], recap["failed"],
+                                  recap["ignored"]), (1, 1, 2, 0, 0))
+                self.assertEqual(self.files(guest), ["quickstart_hipfile.prom"])
+                written = parse_exposition(
+                    (self.tmp / guest / "quickstart_hipfile.prom").read_text())
+                self.assertEqual(set(written), series)
+                self.assertEqual(
+                    written["quickstart_hipfile_read_bytes_per_second"][
+                        "samples"], [({}, 831000000.0)])
 
 
 # ---------------------------------------------------------------------------
@@ -1204,14 +1375,15 @@ class Dashboard(_Scratch):
         rows = [p["title"] for p in _panels(COMPOSE / "rocm-golden" / HOME)
                 if p["type"] == "row"]
         self.assertEqual(rows, [
-            "Fleet", "Guests — CPU & Memory", "NVMe Storage", "SDXI",
+            "Fleet", "Guests — CPU & Memory", "NVMe Storage", HIPFILE_ROW,
+            "SDXI",
             P4_ROW, "Network & Driver Status",
             "RDMA Device Counters (rdma_exporter)", "RDMA — Ernic Mesh",
             "Stack Logs"])
 
     def test_every_recorded_series_a_panel_reads_is_one_the_play_writes(self):
         written = self.written()
-        self.assertEqual(written, P4_SERIES | SDXI_SERIES)
+        self.assertEqual(written, P4_SERIES | SDXI_SERIES | HIPFILE_SERIES)
         read = set()
         for stack in NAMES:
             for path in _fleet_dashboards(stack):
@@ -1222,8 +1394,11 @@ class Dashboard(_Scratch):
                         found, written,
                         f"{path.relative_to(REPO)}: {panel.get('title')!r}")
                     read |= found
+        # Two are written and drawn by no panel: how many bytes the SDXI
+        # test copied and how many each pass of the hipFile bench read.
         self.assertEqual(read, P4_SERIES | {
-            "quickstart_sdxi_copy_timestamp_seconds"})
+            "quickstart_sdxi_copy_timestamp_seconds"} | (HIPFILE_SERIES - {
+                "quickstart_hipfile_read_bytes"}))
 
     def test_the_four_p4_tiles_read_the_five_series(self):
         by_title = {p["title"]: p for p in self.row()}
@@ -1354,6 +1529,100 @@ class Dashboard(_Scratch):
     def test_the_dashboard_says_it_has_p4(self):
         home = json.loads((COMPOSE / "rocm-golden" / HOME).read_text())
         self.assertIn("P4", home["description"])
+        self.assertIn("hipFile", home["description"])
+
+
+class HipfileDashboard(_Scratch):
+    """The hipFile row, in every stack's copy."""
+
+    ROW = ["hipFile Read Rate (last pass)",
+           "hipFile fio Read Rate (last pass)",
+           "hipFile Measured (time since last pass)"]
+    SELECT = Dashboard.SELECT
+
+    def row(self, stack: str = "rocm-golden") -> list[dict]:
+        panels = _panels(COMPOSE / stack / HOME)
+        at = [p["title"] for p in panels].index(HIPFILE_ROW)
+        self.assertEqual(panels[at]["type"], "row")
+        self.assertEqual(panels[at]["id"], 80)
+        rest = panels[at + 1:]
+        return rest[:next(i for i, p in enumerate(rest) if p["type"] == "row")]
+
+    def test_every_copy_has_the_row_under_the_nvme_panels(self):
+        for stack in NAMES:
+            with self.subTest(stack=stack):
+                row = self.row(stack)
+                self.assertEqual([p["title"] for p in row], self.ROW)
+                self.assertEqual([p["id"] for p in row], [81, 82, 83])
+                # One band, the width of the dashboard.
+                self.assertEqual([_grid(p) for p in row],
+                                 [(0, row[0]["gridPos"]["y"], 8, 4),
+                                  (8, row[0]["gridPos"]["y"], 8, 4),
+                                  (16, row[0]["gridPos"]["y"], 8, 4)])
+                self.assertEqual(layout_faults(json.loads(
+                    (COMPOSE / stack / HOME).read_text())), [])
+
+    def test_the_three_tiles_read_three_series_as_values(self):
+        read, fio, age = self.row()
+        self.assertEqual(
+            _exprs(read), [f"quickstart_hipfile_read_bytes_per_second{self.SELECT}"])
+        self.assertEqual(
+            _exprs(fio), [f"quickstart_hipfile_fio_bytes_per_second{self.SELECT}"])
+        self.assertEqual(
+            _exprs(age), ["clamp_min(time() - quickstart_hipfile_timestamp_"
+                          f"seconds{self.SELECT}, 0)"])
+        self.assertEqual([p["fieldConfig"]["defaults"]["unit"]
+                          for p in (read, fio, age)], ["Bps", "Bps", "s"])
+        for panel in (read, fio, age):
+            for expr in _exprs(panel):
+                self.assertNotRegex(expr, r"\b(rate|irate|increase|sum)\(")
+
+    def test_every_tile_is_per_vm_blue_and_says_when_there_is_nothing(self):
+        read, fio, age = self.row()
+        for panel in (read, fio, age):
+            with self.subTest(panel=panel["title"]):
+                self.assertEqual(panel["type"], "stat")
+                self.assertEqual(panel["datasource"],
+                                 {"type": "prometheus",
+                                  "uid": "fleet-prometheus"})
+                (target,) = panel["targets"]
+                self.assertEqual(target["datasource"], panel["datasource"])
+                self.assertEqual(target["legendFormat"], "{{vm_name}}")
+                self.assertEqual(target["refId"], "A")
+                defaults = panel["fieldConfig"]["defaults"]
+                self.assertEqual(defaults["thresholds"]["steps"],
+                                 [{"color": "blue", "value": None}])
+                self.assertNotIn('"red"', json.dumps(panel))
+                self.assertEqual(panel["options"]["textMode"],
+                                 "value_and_name")
+                self.assertEqual(panel["options"]["graphMode"], "none")
+                self.assertRegex(panel["title"], r"last pass\)$")
+                text = panel["description"]
+                self.assertIn("--hipfile-test", text)
+                self.assertIn("older than this boot", text)
+                self.assertIn("A later run that fails changes nothing here",
+                              text)
+        self.assertEqual(read["fieldConfig"]["defaults"]["noValue"],
+                         "no test run")
+        self.assertEqual(age["fieldConfig"]["defaults"]["noValue"],
+                         "no test run")
+        # An empty fio tile has two causes, and "no test run" names one.
+        self.assertEqual(fio["fieldConfig"]["defaults"]["noValue"],
+                         "no fio result")
+        self.assertIn("/opt/fio-hipfile/bin/fio", fio["description"])
+        self.assertIn("not in this image", fio["description"])
+        self.assertIn("not a live rate", read["description"])
+        self.assertIn("<vm-nvme-vram>", read["description"])
+        self.assertIn("11 to 13 MB/s", read["description"])
+        self.assertIn("reads as 0 s", age["description"])
+
+    def test_the_play_that_records_them_follows_the_test_that_measures(self):
+        names = [play["name"] for play in yaml.safe_load(QUICKSTART.read_text())]
+        self.assertLess(names.index(HIPFILE_PLAY), names.index(RECORD_PLAY))
+        # A failing read fails its guest, before the record play: the two
+        # reads' tasks do not fail, and their verdicts are asserts.
+        play = _play(HIPFILE_PLAY)
+        self.assertNotIn("ignore_errors", json.dumps(play))
 
 
 class Docs(_Scratch):
@@ -1367,6 +1636,11 @@ class Docs(_Scratch):
                                 path.read_text())
                      # A prefix, as in quickstart_p4_fp8_*.
                      if not name.endswith("_")}
+            # The hipFile play's own variables share the prefix, so its
+            # series are told from them by how a series name ends.
+            found |= set(re.findall(
+                r"\bquickstart_hipfile_[a-z0-9_]*(?:_per_second|_bytes|"
+                r"_seconds)\b", path.read_text()))
             self.assertLessEqual(found, written, path.name)
             named |= found
         self.assertEqual(named, written)

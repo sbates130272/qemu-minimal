@@ -1,0 +1,133 @@
+---
+# Fetch the pinned release, build it against the guest's ROCm, install it.
+# Included by main.yml when the stamp does not already describe this build.
+
+- name: Install what the fio build needs
+  ansible.builtin.apt:
+    name: "{{ fio_hipfile_setup_packages }}"
+    state: present
+    update_cache: false
+  register: fio_hipfile_setup_apt_result
+  retries: "{{ fio_hipfile_setup_apt_retries }}"
+  delay: "{{ fio_hipfile_setup_apt_delay }}"
+  until: fio_hipfile_setup_apt_result is success
+  when: fio_hipfile_setup_packages | length > 0
+
+- name: Create the directory the source is fetched into
+  ansible.builtin.file:
+    path: "{{ fio_hipfile_setup_source_dir | trim | dirname }}"
+    state: directory
+    mode: "0755"
+
+# In the guest, as perftest is. The script is perftest_setup's, under this
+# role's name; tests/test_fio_hipfile_setup.py holds the two equal. It exits
+# 2 for a fetch that did not complete and 1 for an answer a retry will not
+# change, so only the first is tried again.
+- name: Fetch fio at the pinned ref
+  ansible.builtin.script:
+    cmd: >-
+      fio-fetch.sh
+      {{ fio_hipfile_setup_repo | trim | quote }}
+      {{ fio_hipfile_setup_ref | trim | quote }}
+      {{ fio_hipfile_setup_commit | trim | quote }}
+      {{ fio_hipfile_setup_source_dir | trim | quote }}
+    executable: /bin/sh
+  register: fio_hipfile_setup_fetch
+  retries: 3
+  delay: 10
+  until: fio_hipfile_setup_fetch.rc | default(2) != 2
+  changed_when: false
+  failed_when: false
+
+# Before anything is compiled. The script's own line is the message: it
+# names the commit the ref is at, the commit the pin requires and the
+# repository.
+- name: Fail when the fetched commit is not the pinned one
+  vars:
+    fio_hipfile_setup_verdict: >-
+      {{ fio_hipfile_setup_fetch.stdout_lines | default([])
+         | map('trim') | select('match', '(ok|FAIL): ') | list }}
+  ansible.builtin.assert:
+    that:
+      - fio_hipfile_setup_fetch.rc | default(1) == 0
+      - fio_hipfile_setup_verdict | length == 1
+      - "fio_hipfile_setup_verdict[0] is match('ok: [0-9a-f]{40} ')"
+    fail_msg: >-
+      {{ fio_hipfile_setup_verdict | join(' ')
+         | default('fio-fetch.sh printed no verdict: '
+                   ~ (fio_hipfile_setup_fetch.stdout | default(''))
+                   ~ (fio_hipfile_setup_fetch.stderr | default(''))
+                   ~ (fio_hipfile_setup_fetch.msg | default('')), true) }}
+      The ref and its commit move together: fio_hipfile_setup_ref and
+      fio_hipfile_setup_commit, which vm-rocm-golden.yml sets from
+      fio_source_ref and fio_source_pin. For a release tag the commit is
+      the "^{}" line of "git ls-remote {{ fio_hipfile_setup_repo | trim }}
+      'refs/tags/{{ fio_hipfile_setup_ref | trim }}*'".
+    success_msg: "{{ fio_hipfile_setup_verdict | join(' ') }}"
+
+- name: Record the commit that was fetched
+  ansible.builtin.set_fact:
+    fio_hipfile_setup_built_commit: >-
+      {{ (fio_hipfile_setup_fetch.stdout_lines | map('trim')
+          | select('match', 'ok: ') | first).split()[1] }}
+
+# The recipe scripts/vm-report/fio-hipfile-bench.sh has always used in the
+# guest, with the prefix given to configure as well as to "make install".
+# configure reads ROCM_PATH for its libhipfile probe, which compiles and
+# links and runs nothing. Its output is kept: the line that says whether
+# the engine is in is the first thing to read when the next task fails.
+#
+# No PATH is set: fio's configure picks gcc, resolved through the caller's
+# PATH, which is ccache when the bake put one in front of it.
+- name: Configure fio
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      export ROCM_PATH={{ fio_hipfile_setup_rocm_resolved | quote }}
+      ./configure {{ fio_hipfile_setup_configure_args | map('quote') | join(' ') }}
+    chdir: "{{ fio_hipfile_setup_source_dir | trim }}"
+    executable: /bin/bash
+  changed_when: true
+
+# From the file make is about to read, before anything is compiled:
+# CONFIG_LIBHIPFILE is what puts engines/libhipfile.c into the build, and
+# CONFIG_BUILD_NATIVE, which is how configure asks the Makefile for
+# -march=native, is what --disable-native exists to keep out.
+- name: Read back what configure settled on
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      mak=config-host.mak
+      if [ ! -f "$mak" ]; then
+        echo "configure wrote no $mak" >&2
+        exit 1
+      fi
+      if ! grep -Eq '^CONFIG_LIBHIPFILE=y$' "$mak"; then
+        echo "configure did not turn the libhipfile engine on: no" \
+             "CONFIG_LIBHIPFILE=y in $mak" >&2
+        exit 1
+      fi
+      if grep -Eq -- '^CONFIG_BUILD_NATIVE=y$|-march=native' "$mak"; then
+        echo "$mak turns -march=native on: the binary would be built for" \
+             "the CPU of this machine" >&2
+        exit 1
+      fi
+      if grep -Eq '^CONFIG_(CUDA|LIBCUFILE)=y$' "$mak"; then
+        echo "$mak turns a CUDA engine on, and this build has none" >&2
+        exit 1
+      fi
+      echo "libhipfile engine on, no -march=native, no CUDA"
+    chdir: "{{ fio_hipfile_setup_source_dir | trim }}"
+    executable: /bin/bash
+  changed_when: false
+
+- name: Build and install fio
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      export ROCM_PATH={{ fio_hipfile_setup_rocm_resolved | quote }}
+      make -j"$(nproc)"
+      make install prefix={{ fio_hipfile_setup_prefix | trim | quote }}
+    chdir: "{{ fio_hipfile_setup_source_dir | trim }}"
+    executable: /bin/bash
+  changed_when: true

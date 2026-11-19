@@ -20,6 +20,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import shutil
 import stat
 import subprocess
@@ -402,6 +403,30 @@ class Inherited(Fixture):
             gen_vm._inherit_key(cfg, self.images / "vm1.json"))
         self.assertEqual(cfg.ssh_key_file, Path("/img/keys/vm1_id_rsa.pub"))
 
+    def test_ansible_only_after_a_failed_bake_uses_the_generated_key(self):
+        """A bake writes the sidecar only on success. The image a failed one
+        left has none, and a rerun that offered no key waited out its
+        timeout against a guest that was up."""
+        private = gen_vm.generated_key_path(self.images, "vm1")
+        private.parent.mkdir(parents=True, exist_ok=True)
+        private.write_text("private")
+        public = private.with_name(private.name + ".pub")
+        public.write_text("public")
+        cfg = self.cfg()
+        self.assertTrue(
+            gen_vm._inherit_key(cfg, self.images / "vm1.json"))
+        self.assertEqual(cfg.ssh_key_file, public)
+        self.assertEqual(gen_vm._ssh_identity_args(cfg), ["-i", str(private)])
+
+    def test_ansible_only_with_no_record_and_half_a_pair_takes_nothing(self):
+        private = gen_vm.generated_key_path(self.images, "vm1")
+        private.parent.mkdir(parents=True, exist_ok=True)
+        private.write_text("private")
+        cfg = self.cfg()
+        self.assertFalse(
+            gen_vm._inherit_key(cfg, self.images / "vm1.json"))
+        self.assertIsNone(cfg.ssh_key_file)
+
     def test_with_no_key_anywhere_no_identity_is_offered(self):
         self.assertEqual(gen_vm._ssh_identity_args(self.cfg()), [])
 
@@ -471,3 +496,56 @@ class Resolution(Fixture):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CollectionsStamp(unittest.TestCase):
+    """A git requirement is reinstalled by ansible-galaxy on every run, so
+    gen-vm skips galaxy when requirements.yml is the one it last installed."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = Path(tmp.name)
+        self.ansible = self.tmp / "ansible"
+        self.ansible.mkdir()
+        (self.ansible / "requirements.yml").write_text("collections: []\n")
+        self.root = self.tmp / "collections"
+        env = mock.patch.dict(
+            os.environ, {"ANSIBLE_COLLECTIONS_PATH": f"{self.root}:/elsewhere"})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def _ensure(self):
+        with mock.patch.object(gen_vm.subprocess, "run") as run, \
+             mock.patch.object(gen_vm, "_restore_blocking_stdio"), \
+             contextlib.redirect_stdout(io.StringIO()):
+            gen_vm._ensure_ansible_collection(self.ansible)
+        return run.call_count
+
+    def test_the_stamp_is_in_the_directory_galaxy_installs_into(self):
+        self.assertEqual(
+            gen_vm._collections_stamp(),
+            self.root / "ansible_collections/.qemu-tool-requirements.sha256")
+
+    def test_an_unchanged_file_installs_once(self):
+        (self.root / "ansible_collections").mkdir(parents=True)
+        self.assertEqual(self._ensure(), 1)
+        self.assertEqual(self._ensure(), 0)
+
+    def test_a_changed_file_installs_again(self):
+        (self.root / "ansible_collections").mkdir(parents=True)
+        self._ensure()
+        (self.ansible / "requirements.yml").write_text("collections: [x]\n")
+        self.assertEqual(self._ensure(), 1)
+        self.assertEqual(self._ensure(), 0)
+
+    def test_a_removed_collections_directory_installs_again(self):
+        (self.root / "ansible_collections").mkdir(parents=True)
+        self._ensure()
+        shutil.rmtree(self.root)
+        self.assertEqual(self._ensure(), 1)
+
+    def test_no_directory_to_stamp_means_every_run_installs(self):
+        self.assertEqual(self._ensure(), 1)
+        self.assertEqual(self._ensure(), 1)
+        self.assertFalse(gen_vm._collections_stamp().exists())

@@ -192,6 +192,11 @@ stale — reloading guest modules does not recover them. The only fix is
 `docker compose down && up` for the whole stack. `restart: on-failure` would
 turn that into a quiet wedge instead of a visible crash. See AGENTS.md issue 7.
 
+Every other service is `restart: "no"` as well. Docker applies `on-failure`
+when its daemon starts, so a stack left up over a host reboot used to come
+back as device servers with no manager and no guests. A server that exits
+stays down; bring the stack back with `down` and `up`.
+
 ## Nothing here runs as root
 
 Every service carries `user: ${CONTAINER_USER:?...}` and `cap_drop: [ALL]`,
@@ -324,16 +329,22 @@ Opt-in with `--profile metrics`. The sources:
   The SDXI device's counters come the same way: `sdxi_up` and
   `sdxi_<counter>_total{context="N"}`, written every 15 s, which the home
   dashboard's "SDXI" row reads. Client work is counted in context 1.
-  What the two optional tests of `quick-start test` measured comes the
+  What the optional tests of `quick-start test` measured comes the
   same way, written once by the test and not by a timer:
   `quickstart_p4_fp8_bytes_per_second`, `quickstart_p4_fp8_operation_seconds`,
   `quickstart_p4_fp8_elements`, `quickstart_p4_fp8_iterations` and
   `quickstart_p4_fp8_timestamp_seconds` after `--p4-test`, on the first
   guest, which the home dashboard's "P4" row reads, and
   `quickstart_sdxi_copy_bytes` and `quickstart_sdxi_copy_timestamp_seconds`
-  after `--sdxi-test`, on every guest. A guest no test has passed on has
-  neither, and the tiles say "no test run"; a test that fails writes
-  nothing, so the tiles keep the last pass.
+  after `--sdxi-test`, on every guest, and
+  `quickstart_hipfile_read_bytes_per_second`,
+  `quickstart_hipfile_read_bytes`, `quickstart_hipfile_timestamp_seconds`
+  and, on a guest whose image has the fio with the `libhipfile` engine,
+  `quickstart_hipfile_fio_bytes_per_second` after `--hipfile-test`, on
+  every guest, which the "hipFile" row reads. A guest no test has passed
+  on has none of them, and the tiles say "no test run" ("no fio result"
+  for fio); a test that fails
+  writes nothing, so the tiles keep the last pass.
   **There is no amd-metrics-exporter (`:9488`) and no hsa-snoop (`:9490`)
   job any more.** Both used to be rendered and forwarded, and both were
   down: measured on two guests of `20261117.g80c17f8` after a passing
@@ -615,10 +626,12 @@ climbs with the mesh until registration stops completing.
 The 64-node topology cap never came into it: **max node id reached 30**. Plan
 around ~40, expect it to move with host speed, and note two consequences:
 
-- **A stuck worker retries forever; its guest gets one chance.** `ernic` is
-  `restart: on-failure`, `qemu` is `restart: "no"`. By the time a worker on its
-  fifteenth attempt registers, the VM it exists to serve has been dead for ten
-  minutes. The 24 stuck workers matched the 24 dead guests exactly.
+- **A stuck worker retried forever; its guest got one chance.** When this was
+  measured `ernic` was `restart: on-failure` and `qemu` `restart: "no"`. By
+  the time a worker on its fifteenth attempt registered, the VM it existed to
+  serve had been dead for ten minutes. The 24 stuck workers matched the 24
+  dead guests exactly. Workers are `restart: "no"` now: one that fails to
+  register exits and stays down.
 - **Failed registrations leak manager fds too, and faster than evictions do.**
   Measured over a six-hour run parked above the wall: 8006 worker restarts and
   50 fds/min at the manager, reaching 18164 open descriptors. That is Docker's

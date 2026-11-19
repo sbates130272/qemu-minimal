@@ -42,11 +42,12 @@
 <!-- What the rocm-golden guest is baked with: pins in ansible/playbooks/vm-rocm-golden.yml and <bake-release> in qemu/stacks/rocm-golden.xml -->
 [![Golden Guest OS](https://img.shields.io/badge/rocm--golden-Ubuntu%20resolute-blueviolet?style=flat-square&logo=ubuntu)](qemu/stacks/rocm-golden.xml)
 [![Golden Kernel](https://img.shields.io/badge/kernel-7.2.6%20mainline-blueviolet?style=flat-square&logo=linux)](https://kernel.ubuntu.com/mainline/v7.2.6/)
-[![Golden ROCm](https://img.shields.io/badge/ROCm-10.1-blueviolet?style=flat-square)](ansible/playbooks/vm-rocm-golden.yml)
-[![Golden amdgpu](https://img.shields.io/badge/amdgpu--dkms-31.60-blueviolet?style=flat-square)](ansible/playbooks/vm-rocm-golden.yml)
+[![Golden ROCm](https://img.shields.io/badge/ROCm-10.2-blueviolet?style=flat-square)](ansible/playbooks/vm-rocm-golden.yml)
+[![Golden amdgpu](https://img.shields.io/badge/amdgpu--dkms-31.70-blueviolet?style=flat-square)](ansible/playbooks/vm-rocm-golden.yml)
 [![Golden ernic driver](https://img.shields.io/badge/ionic%20%2B%20SRQ%20%2B%20P4-90434a2-blueviolet?style=flat-square)](https://github.com/ROCm/rocm-ernic/commit/90434a237232275fc8002cb3a6b5121ba836c594)
 [![Golden SDXI driver](https://img.shields.io/badge/sdxi-dfd76f2-blueviolet?style=flat-square)](https://github.com/ROCm/rocm-systems/commit/dfd76f23f6f10561333fc0a9a9f23e9f3b255c04)
 [![Golden perftest](https://img.shields.io/badge/perftest%20%2B%20ROCm-e68c74e-blueviolet?style=flat-square)](https://github.com/sbates130272/perftest/commit/e68c74e910451682ba1dc91b96602fbc7afaa372)
+[![Golden fio](https://img.shields.io/badge/fio--3.43%20%2B%20hipFile-d2dcd7e-blueviolet?style=flat-square)](https://github.com/axboe/fio/commit/d2dcd7e053d1902d2420f151c83990e6acdd9f8c)
 
 [![Quick-start Build](https://img.shields.io/badge/quick--start-20261112.gdca6903-success?style=flat-square&logo=docker)](https://hub.docker.com/u/sbates130272)
 
@@ -80,7 +81,7 @@ an emulated NVMe, an emulated rocm-ernic RDMA NIC and an emulated SDXI device,
 with Prometheus, Grafana and log collection beside them, plus a GPU test and
 an RDMA test across them. The guest is pulled, not built — it comes from the
 qcow2 this repository bakes and publishes, which already carries the mainline
-kernel, the ionic driver with SRQ and P4, rdma-core, perftest, ROCm 10.1 with
+kernel, the ionic driver with SRQ and P4, rdma-core, perftest, ROCm 10.2 with
 the hipFile SDK, and the SDXI driver and its CLI — and the GPU, NIC and SDXI
 servers come from tagged CI images. Nothing is built on your machine.
 
@@ -168,7 +169,7 @@ of `up` in the Prometheus query above (URL-encode it, or paste it into
 Explore).
 
 Those panels are live counters, so they read zero while nothing is copying.
-The two optional tests are over in seconds and leave nothing a counter
+The optional tests are over in seconds and leave nothing a counter
 shows, so each records its own result in the guest and the home dashboard
 shows the last one that passed: the **P4** row is what `quick-start test --p4-test`
 last measured on the first guest (`quickstart_p4_fp8_bytes_per_second`, the
@@ -178,6 +179,13 @@ is how long ago `--sdxi-test` last copied data through each guest's device
 and found it identical (`quickstart_sdxi_copy_timestamp_seconds`). Both
 read "no test run" until the test has passed once, and a later run that
 fails leaves the last pass on the tiles: its growing age is the only sign.
+The **hipFile** row, under the NVMe panels, is the same for
+`quick-start test --hipfile-test`, per guest: the rate of the verified read
+from the NVMe into GPU memory (`quickstart_hipfile_read_bytes_per_second`,
+over `quickstart_hipfile_read_bytes` a pass), the rate of fio's `libhipfile`
+engine (`quickstart_hipfile_fio_bytes_per_second`, "no fio result" on a
+guest whose image has no such fio), and how long ago
+(`quickstart_hipfile_timestamp_seconds`).
 
 **The guests' SSH ports and Grafana answer on this machine only.** Every port
 a stack publishes is bound to `<publish-bind-addr>`, which is `127.0.0.1`
@@ -262,11 +270,69 @@ server restarts.** From then on an RDMA WRITE on it with two equal-length
 operands is a reduction; ordinary transfers, which have one, are untouched.
 A third switch, `--rocm-rdma-test`, is under
 [RDMA with GPU memory](#rdma-with-gpu-memory) below: it needs a newer guest
-image than the fleet files pull.
+image than the fleet files pull. A fourth, `--hipfile-test`, is under
+[NVMe to GPU memory](#nvme-to-gpu-memory): it runs on the image the fleet
+files pull, and does more on a newer one.
 
 `qemu-tool quick-start --help` has the rest, and `qemu-tool man` has all of
 it. For more than two guests see [A fleet of your own](#a-fleet-of-your-own),
 which is the same stack generator with a larger `<vm-count>`.
+
+### NVMe to GPU memory
+
+hipFile reads a file on an NVMe namespace straight into GPU memory.
+`quick-start --hipfile-test` does that on every guest and checks what
+arrived. It is off by default:
+
+```bash
+qemu-tool quick-start test --hipfile-test
+```
+
+Two reads. A bench the test compiles in the guest with the image's `hipcc`
+reads 32 MiB through hipFile, multiplies the two matrices in it on the GPU
+and compares the product with one computed on the host. Then fio's
+`libhipfile` engine reads a 64 MiB file. A pass prints one line a guest:
+
+```
+rocm-golden-1: hipFile read <rate> MB/s (33554432 bytes, verified); fio <rate> MB/s
+```
+
+- **fio is the one the golden image carries**, `/opt/fio-hipfile/bin/fio`:
+  fio 3.43, the first release with the engine, built by the bake from a
+  pinned commit (`fio_source_ref` and `fio_source_pin` in
+  [`vm-rocm-golden.yml`](ansible/playbooks/vm-rocm-golden.yml), the
+  [`fio_hipfile_setup`](ansible/playbooks/roles/fio_hipfile_setup/defaults/main.yml)
+  role). It is on no PATH: a bare `fio` in a guest is still Ubuntu's, which
+  has no such engine and is what the NVMe test above runs.
+  **That is in an image baked from this checkout, not yet in the one the
+  fleet files pull.** On a guest without it the line ends
+  `fio: not in this image` and the test passes on the bench alone; nothing
+  is built in the guest. `cat /etc/fio-hipfile.json` in a guest says
+  whether it has it.
+- **The NVMe namespace is scratch.** The test makes a new filesystem on
+  `/dev/nvme0n1` every run, mounts it on a mount point of its own and
+  unmounts it again whatever happens, so the NVMe test of the next run
+  finds it free. A namespace that is already mounted is refused, not
+  formatted. Root is taken for the filesystem, the mount and fio; the
+  bench runs as the login user.
+- **How fast depends on the stack.** `rocm-golden.xml` sets
+  `<vm-nvme-vram>true`, which on the fork QEMU lets the emulated NVMe map
+  the GPU's memory: measured by hand on the development host, 831 MB/s for
+  the bench and 959 MB/s for fio. (fio's figure is from the build the
+  benchmark script made in the guest, six commits before 3.43; none has
+  been taken with 3.43.) Without the element, or on a QEMU that is
+  not the fork, the read still works and passes, at 11 to 13 MB/s, and
+  `quick-start` says so before it starts anything. The test asserts a
+  verified read at a rate above zero, not a floor.
+- A fleet with no NVMe (`<vm-nvme>0`) is refused before anything is
+  started, and so is a flavor that runs no playbook. A guest with no bound
+  GPU, no hipFile SDK or no `hipcc` is told which, by the test.
+- Each result is in its guest's summary under the stack's `artifacts/`, in
+  the report, and on the home dashboard's **hipFile** row.
+
+**This test has not yet run on a guest**: it was written against stand-ins
+for a guest's tools. The bench and the fio command line are the ones the
+daily benchmark lane runs.
 
 ### RDMA with GPU memory
 

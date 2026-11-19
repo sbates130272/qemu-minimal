@@ -88,5 +88,6 @@ jobs:
           "${{ steps.rocm.outputs.hipcc }}" -O2 -Wall -Wextra \
             --offload-arch="${OFFLOAD_ARCH}" \
             -I"${rocm}/include" -I"${rocm}/include/hipfile" \
-            -o /tmp/gemm-hipfile-bench scripts/vm-report/gemm-hipfile-bench.hip \
+            -o /tmp/gemm-hipfile-bench \
+            ansible/playbooks/roles/rocjitsu_setup/files/gemm-hipfile-bench.hip \
             -L"${rocm}/lib" -lhipfile -Wl,-rpath,"${rocm}/lib"

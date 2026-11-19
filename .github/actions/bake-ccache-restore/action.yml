@@ -62,13 +62,15 @@ runs:
       run: |
         set -eu
         playbook=ansible/playbooks/vm-rocm-golden.yml
-        # Where each is defined: the four anchors and the driver release.
-        # perftest is some thirty C files, too few for the save's miss count
-        # to notice, so its pin is here for the reason the ernic and SDXI
-        # pins are: without it a moved pin recompiles in every bake.
-        pins=$(grep -E '^ +((ionic_kernel_pin|ernic_source_pin|sdxi_source_pin|perftest_source_pin): &|rocm_setup_amdgpu_driver_version: )' "$playbook")
-        # All five, or a renamed pin has dropped out of the key unnoticed.
-        test "$(printf '%s\n' "$pins" | wc -l)" -eq 5
+        # Where each is defined: the five anchors and the driver release.
+        # perftest is some thirty C files and fio about 140 (137 counted
+        # in a build on the dev host), both too few for the save's miss
+        # count to notice, so their pins are here
+        # for the reason the ernic and SDXI pins are: without it a moved
+        # pin recompiles in every bake.
+        pins=$(grep -E '^ +((ionic_kernel_pin|ernic_source_pin|sdxi_source_pin|perftest_source_pin|fio_source_pin): &|rocm_setup_amdgpu_driver_version: )' "$playbook")
+        # All six, or a renamed pin has dropped out of the key unnoticed.
+        test "$(printf '%s\n' "$pins" | wc -l)" -eq 6
         patches=ansible/playbooks/roles/rocjitsu_setup/files/amdgpu-emu-patches.py
         test -f ansible/requirements.yml
         test -f "$patches"

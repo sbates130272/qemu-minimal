@@ -1,6 +1,7 @@
-"""`qemu-tool quick-start --sdxi-test`, `--p4-test` and `--rocm-rdma-test`.
+"""`qemu-tool quick-start --sdxi-test`, `--p4-test`, `--hipfile-test` and
+`--rocm-rdma-test`.
 
-Three optional tests behind three switches, and five things have to hold for
+Four optional tests behind four switches, and five things have to hold for
 them to be worth having:
 
   the switches   exist, are off, and reach ansible-playbook as the extra
@@ -20,7 +21,12 @@ them to be worth having:
   the plays run  against stand-ins for the guest's tools, on this host:
                  what passes, and what each failure says.
 
-The third, perftest with ROCm buffers and data validation between two
+The hipFile test, a file on each guest's NVMe namespace read into GPU memory
+and checked, is every guest like SDXI and differs from the first two in one
+way that is held here: it needs root for a filesystem and a mount, and takes
+it task by task, with the unmount in an always section.
+
+The last, perftest with ROCm buffers and data validation between two
 guests, has its switch, its extra vars, its refusals and what quick-start
 prints held here. Its play, which is the last in the file and writes a
 result file of its own, is held and run in tests/test_perftest_setup.py.
@@ -36,6 +42,7 @@ import argparse
 import contextlib
 import importlib.util
 import io
+import json
 import os
 import re
 import shutil
@@ -65,6 +72,12 @@ REPORT_SCRIPT = REPO / "scripts/generate-vm-report.sh"
 NVME_PLAY = "Test NVMe I/O on each guest"
 SDXI_PLAY = "Copy data through the SDXI device on each guest"
 P4_PLAY = "Run the P4 fp8 reduction in the first guest's NIC"
+HIPFILE_PLAY = ("Read from the NVMe into GPU memory through hipFile on "
+                "each guest")
+BENCH_SOURCE = REPO / ("ansible/playbooks/roles/rocjitsu_setup/files/"
+                       "gemm-hipfile-bench.hip")
+TARGET_CHECK = REPO / ("ansible/playbooks/roles/rocjitsu_setup/files/"
+                       "hipfile-target-check.sh")
 FACTS_PLAY = "Collect the facts the report quotes"
 RDMA_PLAY = "Move validated RDMA traffic between GPU memory on two guests"
 
@@ -157,6 +170,7 @@ class Switches(unittest.TestCase):
         self.assertIsNone(args.p4_iters)
         self.assertIs(args.rocm_rdma_test, False)
         self.assertIsNone(args.rocm_rdma_mode)
+        self.assertIs(args.hipfile_test, False)
 
     def test_each_is_its_own_switch(self):
         only_sdxi = self._parse("--sdxi-test", "test")
@@ -176,6 +190,12 @@ class Switches(unittest.TestCase):
         for mode in ("host-alloc", "dmabuf", "vram"):
             args = self._parse("--rocm-rdma-test", "--rocm-rdma-mode", mode)
             self.assertEqual(args.rocm_rdma_mode, mode)
+            self.assertIs(args.hipfile_test, False)
+        only_hipfile = self._parse("test", "--hipfile-test")
+        self.assertIs(only_hipfile.hipfile_test, True)
+        self.assertIs(only_hipfile.sdxi_test, False)
+        self.assertIs(only_hipfile.p4_test, False)
+        self.assertIs(only_hipfile.rocm_rdma_test, False)
 
     def test_they_are_in_the_tests_group_with_help(self):
         parser = _quick_start_parser()
@@ -183,17 +203,27 @@ class Switches(unittest.TestCase):
         flags = {o for a in group._group_actions for o in a.option_strings}
         self.assertEqual(flags, {"--rdma-duration", "--nvme-duration",
                                  "--sdxi-test", "--p4-test", "--p4-iters",
+                                 "--hipfile-test",
                                  "--rocm-rdma-test", "--rocm-rdma-mode"})
         by_flag = {a.option_strings[0]: a for a in group._group_actions}
-        for flag in ("--sdxi-test", "--p4-test", "--rocm-rdma-test"):
+        for flag in ("--sdxi-test", "--p4-test", "--hipfile-test",
+                     "--rocm-rdma-test"):
             with self.subTest(flag):
                 self.assertIn("Off by default", by_flag[flag].help)
         # All of them, the sizing switch and the mode included: their
         # "Refused without" holds on those two verbs and no other.
         for flag in ("--sdxi-test", "--p4-test", "--p4-iters",
+                     "--hipfile-test",
                      "--rocm-rdma-test", "--rocm-rdma-mode"):
             with self.subTest(flag):
                 self.assertIn("test or all verbs", by_flag[flag].help)
+        for needle in ("<vm-nvme> is 0", "<vm-nvme-vram>true",
+                       "on every guest", "/opt/fio-hipfile/bin/fio",
+                       '"not in this image"', "nothing is built",
+                       "Makes a new filesystem on /dev/nvme0n1 each run",
+                       "unmounts it afterwards", "11 to 13 MB/s",
+                       "a note says so"):
+            self.assertIn(needle, by_flag["--hipfile-test"].help)
         self.assertIn("<sdxi-per-vm>", by_flag["--sdxi-test"].help)
         for needle in ("<p4-enable>true", "<p4-guest-scope>load",
                        "until its server restarts",
@@ -205,6 +235,7 @@ class Switches(unittest.TestCase):
             text = _quick_start_parser().format_help()
         self.assertEqual([l for l in text.splitlines() if len(l) > 80], [])
         for flag in ("--sdxi-test", "--p4-test", "--p4-iters N",
+                     "--hipfile-test",
                      "--rocm-rdma-test", "--rocm-rdma-mode MODE"):
             self.assertIn(flag, text)
 
@@ -227,6 +258,13 @@ class Switches(unittest.TestCase):
         self.assertEqual(kwargs["p4_iters"], 64)
         self.assertIs(kwargs["rocm_rdma_test"], False)
         self.assertIsNone(kwargs["rocm_rdma_mode"])
+        self.assertIs(kwargs["hipfile_test"], False)
+        with mock.patch.object(cli_mod, "quick_start_run") as run:
+            args = self._parse("test", "--hipfile-test")
+            args.func(args)
+        kwargs = run.call_args.kwargs
+        self.assertIs(kwargs["hipfile_test"], True)
+        self.assertIs(kwargs["sdxi_test"], False)
         with mock.patch.object(cli_mod, "quick_start_run") as run:
             args = self._parse("test", "--rocm-rdma-test",
                                "--rocm-rdma-mode", "dmabuf")
@@ -243,6 +281,7 @@ class Switches(unittest.TestCase):
         self.assertIsNone(kwargs["p4_iters"])
         self.assertIs(kwargs["rocm_rdma_test"], False)
         self.assertIsNone(kwargs["rocm_rdma_mode"])
+        self.assertIs(kwargs["hipfile_test"], False)
 
     def test_the_rocm_rdma_help_says_which_modes_fail_and_why(self):
         """The default passes on any QEMU, dmabuf passes on the fork the
@@ -338,6 +377,24 @@ class ExtraVars(unittest.TestCase):
             self.BASE + ["-e", "quickstart_sdxi_test=true",
                          "-e", "quickstart_p4_test=true",
                          "-e", "quickstart_p4_iters=64"])
+
+    def test_the_hipfile_switch_adds_its_gate_between_p4_and_rdma(self):
+        gate = ["-e", "quickstart_hipfile_test=true"]
+        self.assertEqual(qs._playbook_command(_state(hipfile_test=True)),
+                         self.BASE + gate)
+        # In the order of the plays: after P4, ahead of the RDMA play's.
+        self.assertEqual(
+            qs._playbook_command(_state(sdxi_test=True, p4_test=True,
+                                        hipfile_test=True,
+                                        rocm_rdma_test=True))[-8:],
+            ["-e", "quickstart_sdxi_test=true",
+             "-e", "quickstart_p4_test=true"] + gate
+            + ["-e", "quickstart_rocm_rdma=true"])
+        # The name is the one the play's gate reads, and no other play's.
+        play = _play(HIPFILE_PLAY)
+        self.assertIs(play["vars"]["quickstart_hipfile_test"], False)
+        self.assertEqual(play["tasks"][0]["when"],
+                         "not (quickstart_hipfile_test | bool)")
 
     def test_the_rocm_rdma_switch_adds_its_gate_and_the_mode_when_named(self):
         gate = ["-e", "quickstart_rocm_rdma=true"]
@@ -791,11 +848,13 @@ class Plays(unittest.TestCase):
 
     def test_they_sit_after_the_nvme_test_and_before_the_rdma_play(self):
         order = [self.names.index(n) for n in
-                 (NVME_PLAY, SDXI_PLAY, P4_PLAY, FACTS_PLAY, RDMA_PLAY)]
+                 (NVME_PLAY, SDXI_PLAY, P4_PLAY, HIPFILE_PLAY, FACTS_PLAY,
+                  RDMA_PLAY)]
         self.assertEqual(order, sorted(order))
         self.assertEqual(order[1], order[0] + 1)
         self.assertEqual(order[2], order[1] + 1)
         self.assertEqual(order[3], order[2] + 1)
+        self.assertEqual(order[4], order[3] + 1)
         self.assertEqual(self.names[-1], RDMA_PLAY)
 
     def test_no_other_play_reads_either_gate(self):
@@ -805,6 +864,9 @@ class Plays(unittest.TestCase):
                 self.assertNotIn("quickstart_sdxi_test", text, play["name"])
             if play["name"] != P4_PLAY:
                 self.assertNotIn("quickstart_p4_test", text, play["name"])
+            if play["name"] != HIPFILE_PLAY:
+                self.assertNotIn("quickstart_hipfile_test", text,
+                                 play["name"])
 
     def test_nothing_before_them_changed(self):
         """The plays a default run executes are the ones it always had."""
@@ -1303,13 +1365,31 @@ class Summary(unittest.TestCase):
                 qs._summary(_state(fleet=fleet))
             return out.getvalue()
         golden = qs.FleetXml.parse(GOLDEN_FLEET)
-        self.assertIn("qemu-tool quick-start test --sdxi-test --p4-test",
-                      said(golden))
+        self.assertIn("qemu-tool quick-start test --sdxi-test --p4-test "
+                      "--hipfile-test\n", said(golden))
         golden.p4_guest_scope = "read"
         text = said(golden)
-        self.assertIn("qemu-tool quick-start test --sdxi-test\n", text)
+        self.assertIn("qemu-tool quick-start test --sdxi-test "
+                      "--hipfile-test\n", text)
         self.assertNotIn("--p4-test", text)
+        # The hipFile test is offered to a fleet with an NVMe namespace:
+        # the image the fleets pull has the SDK and hipcc it needs, and a
+        # guest with no baked fio still passes.
+        golden.vm_nvme = 0
+        text = said(golden)
+        self.assertIn("qemu-tool quick-start test --sdxi-test\n", text)
+        self.assertNotIn("--hipfile-test", text)
         self.assertNotIn("-test", said(qs.FleetConfig(count=2)))
+        # A flavor that runs no playbook is offered none: the command would
+        # be refused. helios-tray has an SDXI device and NVMe namespaces.
+        helios = qs.FleetXml.parse(REPO / "qemu/stacks/helios-tray.xml")
+        self.assertGreaterEqual(helios.sdxi_per_vm, 1)
+        self.assertGreaterEqual(helios.vm_nvme, 1)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            qs._summary(_state(fleet=helios, playbook=None))
+        self.assertNotIn("-test", out.getvalue())
+        self.assertNotIn("the optional ones", out.getvalue())
         # Never the ROCm-memory RDMA test: whether the guests' image has
         # the perftest it needs is not something a fleet file says, and the
         # image the fleet files pull today does not.
@@ -1558,6 +1638,957 @@ class PlaysRun(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# The hipFile test
+# ---------------------------------------------------------------------------
+
+HIPFILE_READ_LINE = "hipfile: read 831.0 MB/s, 33554432 bytes, verified\n"
+HIPFILE_FIO_LINE = "hipfile fio: 959.0 MB/s\n"
+HIPFILE_NO_FIO_LINE = "hipfile fio: not in this image\n"
+
+# The tasks of the hipFile play that take root, and no other does.
+HIPFILE_ROOT_TASKS = {
+    "Make a new filesystem on the NVMe namespace",
+    "Mount it on the test's own mount point",
+    "Drop the page cache",
+    "Read the file with fio's libhipfile engine",
+    "Unmount the test's filesystem",
+}
+
+
+def _hipfile_tasks(play=None):
+    """Every task of the hipFile play by name, the block's included."""
+    play = play or _play(HIPFILE_PLAY)
+    found = {}
+    for task in play["tasks"]:
+        if "block" in task:
+            for inner in task["block"] + task.get("always", []):
+                found[inner["name"]] = inner
+        found[task["name"]] = task
+    return found
+
+
+class Hipfile(unittest.TestCase):
+    """The refusals and notes, the play as written, and what is reported."""
+
+    _layered = Refusals._layered
+    _refused = Refusals._refused
+    _run = Refusals._run
+
+    # ---- before anything starts ---------------------------------------
+
+    def test_the_golden_fleet_can_run_it_and_is_told_nothing(self):
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            qs._check_optional_tests(_state(hipfile_test=True))
+        self.assertEqual(err.getvalue(), "")
+        golden = qs.FleetXml.parse(GOLDEN_FLEET)
+        self.assertGreaterEqual(golden.vm_nvme, 1)
+        self.assertIs(golden.vm_nvme_vram, True)
+
+    def test_a_fleet_with_no_nvme_namespace_is_refused(self):
+        # <vm-nvme-vram> goes with it: gen-compose refuses the one without
+        # the other, and the refusal here has to come first either way.
+        state, overlay = self._layered(
+            "<vm-nvme>0</vm-nvme><vm-nvme-vram>false</vm-nvme-vram>",
+            hipfile_test=True)
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            said = self._refused(state)
+        self.assertIn("--hipfile-test", said)
+        self.assertIn(f"<vm-nvme> is 0 in {overlay},", said)
+        self.assertIn("no /dev/nvme0n1", said)
+        self.assertIn("<vm-nvme>1</vm-nvme>", said)
+        self.assertIn("quick-start up", said)
+        self.assertNotIn(str(GOLDEN_FLEET), said)
+        # Refused, so the note about the rate is not printed as well.
+        self.assertEqual(err.getvalue(), "")
+        # A fleet that names no NVMe at all has none, by default.
+        base = overlay.with_name("bare.xml")
+        base.write_text(f'<fleet xmlns="{qs.NS_FLEET}">'
+                        "<vm-count>2</vm-count></fleet>\n")
+        bare = _state(base_layers=[base], fleet=qs.FleetXml.parse(base),
+                      hipfile_test=True)
+        self.assertIn("<vm-nvme> is 0 by default (set in none of: "
+                      f"{base})", self._refused(bare))
+        # A negative count is a setting the parser takes: NVMe devices on
+        # the host's null_blk devices. Refused, and for that reason, not
+        # for a namespace that is absent.
+        nullb = overlay.with_name("nullb.xml")
+        nullb.write_text(f'<fleet xmlns="{qs.NS_FLEET}"><vm-count>2'
+                         "</vm-count><vm-nvme>-2</vm-nvme></fleet>\n")
+        parsed = qs.FleetXml.parse(nullb)
+        self.assertEqual(parsed.vm_nvme, -2)
+        said = self._refused(_state(base_layers=[nullb], fleet=parsed,
+                                    hipfile_test=True))
+        self.assertIn(f"--hipfile-test: <vm-nvme> is -2 in {nullb}, which "
+                      "gives the guests NVMe devices backed by the host's "
+                      "null_blk devices", said)
+        self.assertIn("<vm-nvme>1</vm-nvme>", said)
+        self.assertNotIn("no /dev/nvme0n1", said)
+        # The other tests do not need one.
+        state.hipfile_test, state.sdxi_test, state.p4_test = False, True, True
+        qs._check_optional_tests(state)
+
+    def test_a_flavor_that_runs_no_playbook_is_refused(self):
+        said = self._refused(_state(playbook=None, hipfile_test=True))
+        self.assertIn("--hipfile-test: this flavor has no configure-and-test "
+                      "playbook", said)
+
+    def test_a_slow_stack_is_announced_and_not_refused(self):
+        """Without <vm-nvme-vram>, or on a QEMU that is not the fork, the
+        read works and is slow. A note on stderr, before anything starts."""
+        state, overlay = self._layered(
+            "<vm-nvme-vram>false</vm-nvme-vram>", hipfile_test=True)
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            qs._check_optional_tests(state)
+        said = " ".join(err.getvalue().split())
+        self.assertTrue(said.startswith("note: --hipfile-test: "), said)
+        for needle in (f"<vm-nvme-vram> is false in {overlay},",
+                       "slow rate (11 to 13 MB/s measured",
+                       "The test still passes",
+                       "<vm-nvme-vram>true</vm-nvme-vram>",
+                       "needs the fork QEMU", "quick-start up"):
+            self.assertIn(needle, said)
+        self.assertEqual(err.getvalue().count("note:"), 1)
+
+        # The element on, on stock QEMU: it has no effect there.
+        state, overlay = self._layered(
+            f"<qemu-ref>{STOCK_QEMU}</qemu-ref>", hipfile_test=True)
+        self.assertIs(state.fleet.vm_nvme_vram, True)
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            qs._check_optional_tests(state)
+        said = " ".join(err.getvalue().split())
+        self.assertTrue(said.startswith("note: --hipfile-test: <qemu-ref> "
+                                        f"is {STOCK_QEMU} in {overlay},"),
+                        said)
+        for needle in ("not the fork QEMU", "-sbates-fork",
+                       "<vm-nvme-vram> has no effect here",
+                       "11 to 13 MB/s", "The test still passes"):
+            self.assertIn(needle, said)
+        self.assertEqual(err.getvalue().count("note:"), 1)
+
+        # Said only when the test was asked for.
+        state.hipfile_test, state.sdxi_test = False, True
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            qs._check_optional_tests(state)
+        self.assertEqual(err.getvalue(), "")
+
+    def test_the_refusal_comes_before_anything_is_started(self):
+        ran = AssertionError("the run went past the refusal")
+        body = "<vm-nvme>0</vm-nvme><vm-nvme-vram>false</vm-nvme-vram>"
+        for verb in ("all", "test"):
+            with self.subTest(verb=verb), \
+                 mock.patch.object(qs, "preflight", side_effect=ran), \
+                 mock.patch.object(qs, "configure_and_test",
+                                   side_effect=ran), \
+                 mock.patch.object(qs, "wait_for_guests", side_effect=ran), \
+                 mock.patch.object(qs.subprocess, "run", side_effect=ran), \
+                 contextlib.redirect_stdout(io.StringIO()), \
+                 self.assertRaises(SystemExit) as caught:
+                self._run(verb, body, hipfile_test=True)
+            self.assertIn("<vm-nvme> is 0", str(caught.exception))
+            self.assertIn("overlay.xml", str(caught.exception))
+
+    def test_a_verb_that_runs_no_test_ignores_it_and_says_so(self):
+        with mock.patch.object(qs, "preflight") as preflight, \
+             contextlib.redirect_stdout(io.StringIO()), \
+             contextlib.redirect_stderr(io.StringIO()) as err:
+            self._run("preflight",
+                      "<vm-nvme>0</vm-nvme><vm-nvme-vram>false</vm-nvme-vram>",
+                      hipfile_test=True)
+        preflight.assert_called_once()
+        self.assertIn("note: --hipfile-test ignored: `preflight` runs no "
+                      "test.", err.getvalue())
+        # Ignored whole: no note about the rate either.
+        self.assertEqual(err.getvalue().count("note:"), 1)
+
+    def test_it_goes_on_to_the_tests(self):
+        with mock.patch.object(qs, "preflight"), \
+             mock.patch.object(qs, "report"), \
+             mock.patch.object(qs, "configure_and_test") as test, \
+             contextlib.redirect_stdout(io.StringIO()):
+            self._run("test", "", hipfile_test=True)
+        (state,), _ = test.call_args
+        self.assertIs(state.hipfile_test, True)
+        self.assertIs(state.sdxi_test, False)
+
+    # ---- the play, read -----------------------------------------------
+
+    def setUp(self):
+        self.play = _play(HIPFILE_PLAY)
+        self.tasks = _hipfile_tasks(self.play)
+
+    def test_it_is_gated_like_the_others_and_is_every_guest(self):
+        rdma = _play(RDMA_PLAY)
+        self.assertIs(self.play["vars"]["quickstart_hipfile_test"], False)
+        first = self.play["tasks"][0]
+        self.assertEqual(first["ansible.builtin.meta"], "end_play")
+        self.assertEqual(first["when"], "not (quickstart_hipfile_test | bool)")
+        self.assertEqual(set(first) - {"name"},
+                         set(rdma["tasks"][0]) - {"name"})
+        self.assertEqual(self.play["hosts"], "fleet")
+        self.assertIs(self.play["gather_facts"], False)
+        self.assertNotIn("tags", self.play)
+
+    def test_root_is_taken_task_by_task_and_not_by_the_bench(self):
+        """The filesystem, the mount and fio need root; the play does not
+        take it, and the bench runs as the login user. The SDXI and P4
+        plays stay without it altogether."""
+        self.assertIs(self.play["become"], False)
+        rooted = {name for name, task in self.tasks.items()
+                  if task.get("become")}
+        self.assertEqual(rooted, HIPFILE_ROOT_TASKS)
+        for name in rooted:
+            self.assertIs(self.tasks[name]["become"], True, name)
+        for name in ("Compile the bench",
+                     "Read the payload through hipFile and check what arrived",
+                     "Refuse a target that is not on an NVMe namespace",
+                     "Find out whether this guest can run the hipFile test"):
+            self.assertNotIn("become", self.tasks[name], name)
+        for other in (SDXI_PLAY, P4_PLAY):
+            for task in _play(other)["tasks"]:
+                self.assertNotIn("become", task, task["name"])
+
+    def test_the_filesystem_is_new_each_run_on_a_mount_point_of_its_own(self):
+        (block,) = [t for t in self.play["tasks"] if "block" in t]
+        order = [t["name"] for t in block["block"]]
+        mkfs = self.tasks["Make a new filesystem on the NVMe namespace"]
+        self.assertEqual(mkfs["ansible.builtin.command"]["argv"],
+                         ["mkfs.ext4", "-q", "-F",
+                          "{{ quickstart_hipfile_device }}"])
+        self.assertNotIn("when", mkfs)
+        self.assertNotIn("blkid", _text(self.play))
+        self.assertLess(order.index(mkfs["name"]),
+                        order.index("Mount it on the test's own mount point"))
+        self.assertEqual(self.play["vars"]["quickstart_hipfile_device"],
+                         "/dev/nvme0n1")
+        mount = self.play["vars"]["quickstart_hipfile_mount"]
+        self.assertNotEqual(mount, "/mnt/nvme")
+        self.assertTrue(mount.startswith("/mnt/"))
+        # The report benches' mount point is theirs.
+        self.assertNotIn("/mnt/nvme", _text(self.play))
+        # A namespace that is mounted is refused, before the mkfs.
+        ready = self.tasks[
+            "Find out whether this guest can run the hipFile test"][
+                "ansible.builtin.shell"]["cmd"]
+        self.assertIn('findmnt -n -o TARGET --source "${dev}"', ready)
+        self.assertIn("will not do that under a", ready)
+        names = [t["name"] for t in self.play["tasks"]]
+        self.assertLess(names.index("Fail with the reason when it cannot"),
+                        names.index(block["name"]))
+
+    def test_the_unmount_is_in_an_always_section(self):
+        (block,) = [t for t in self.play["tasks"] if "block" in t]
+        inside = [t["name"] for t in block["block"]]
+        after = [t["name"] for t in block["always"]]
+        self.assertIn("Mount it on the test's own mount point", inside)
+        # The unmount is last: it is the one that can fail, and a failed
+        # task ends the section for that guest.
+        self.assertEqual(after, ["Remove the scratch directory",
+                                 "Unmount the test's filesystem"])
+        umount = self.tasks["Unmount the test's filesystem"][
+            "ansible.builtin.shell"]["cmd"]
+        self.assertIn('mountpoint -q "${mnt}"', umount)
+        self.assertIn('umount "${mnt}" || exit 1', umount)
+        self.assertNotIn("when", self.tasks["Unmount the test's filesystem"])
+        # Neither read can fail its task and skip what follows it; they
+        # are judged after the block, which is after the unmount.
+        for name in ("Read the payload through hipFile and check what arrived",
+                     "Read the file with fio's libhipfile engine"):
+            self.assertIs(self.tasks[name]["failed_when"], False, name)
+            self.assertIn(name, inside)
+        names = [t["name"] for t in self.play["tasks"]]
+        for verdict in ("Assert the read was verified and reported a rate "
+                        "above zero", "Assert fio read the file",
+                        "Assert fio reported a rate above zero"):
+            self.assertLess(names.index(block["name"]), names.index(verdict))
+
+    def test_the_nvme_target_is_checked_before_either_read(self):
+        (block,) = [t for t in self.play["tasks"] if "block" in t]
+        order = [t["name"] for t in block["block"]]
+        check = "Refuse a target that is not on an NVMe namespace"
+        self.assertLess(order.index("Mount it on the test's own mount point"),
+                        order.index(check))
+        for read in ("Read the payload through hipFile and check what arrived",
+                     "Write the file fio reads",
+                     "Read the file with fio's libhipfile engine"):
+            self.assertLess(order.index(check), order.index(read))
+        self.assertNotIn("failed_when", self.tasks[check])
+        self.assertEqual(
+            self.tasks[check]["ansible.builtin.script"]["cmd"],
+            "{{ quickstart_hipfile_target_check }} "
+            "{{ quickstart_hipfile_mount | quote }}")
+        # The file the play runs is the one in the checkout, beside the
+        # playbook, and carries the report benches' check.
+        rel = self.play["vars"]["quickstart_hipfile_target_check"]
+        self.assertEqual(QUICKSTART.parent / rel, TARGET_CHECK)
+        self.assertIn("# begin: hipfile target is on nvme\n",
+                      TARGET_CHECK.read_text())
+
+    def test_the_bench_is_the_report_scripts_file_compiled_as_it_was_measured(self):
+        rel = self.play["vars"]["quickstart_hipfile_bench_source"]
+        self.assertEqual(QUICKSTART.parent / rel, BENCH_SOURCE)
+        self.assertTrue(BENCH_SOURCE.is_file())
+        # One file: the report script reads this one, and no copy is left
+        # where it used to be.
+        report = REPORT_SCRIPT.read_text()
+        self.assertIn("ansible/playbooks/roles/rocjitsu_setup/files/"
+                      "gemm-hipfile-bench.hip", report)
+        self.assertFalse(
+            (REPO / "scripts/vm-report/gemm-hipfile-bench.hip").exists())
+        argv = self.tasks["Compile the bench"]["ansible.builtin.command"]["argv"]
+        self.assertEqual(argv[:2], ["timeout",
+                                    "{{ quickstart_hipfile_timeout | string }}"])
+        self.assertEqual(argv[2], "{{ quickstart_hipfile_rocm_tree }}/bin/hipcc")
+        self.assertIn("-O2", argv)
+        self.assertIn("--offload-arch={{ quickstart_hipfile_arch }}", argv)
+        self.assertIn("-lhipfile", argv)
+        self.assertIn("gfx1250", self.play["vars"]["quickstart_hipfile_arch"])
+        # The flags of the report script's compile line, which is the one
+        # the figures were measured with.
+        for flag in ("-O2", "--offload-arch=gfx1250", "-lhipfile"):
+            self.assertIn(flag, report)
+        run = self.tasks[
+            "Read the payload through hipFile and check what arrived"][
+                "ansible.builtin.command"]["argv"]
+        self.assertEqual(run[0], "timeout")
+        self.assertEqual(run[-2:], ["{{ quickstart_hipfile_mount }}",
+                                    "{{ quickstart_hipfile_iters | string }}"])
+        self.assertEqual(self.play["vars"]["quickstart_hipfile_iters"], 4)
+        self.assertIn('/tmp/gemm-hipfile-bench "${MNT}" 4', report)
+
+    def test_fio_is_run_by_its_path_when_it_is_there_and_never_built(self):
+        self.assertEqual(self.play["vars"]["quickstart_hipfile_fio_exe"],
+                         "/opt/fio-hipfile/bin/fio")
+        fio = self.tasks["Read the file with fio's libhipfile engine"]
+        argv = fio["ansible.builtin.command"]["argv"]
+        self.assertEqual(argv[0], "timeout")
+        self.assertEqual(argv[2], "{{ quickstart_hipfile_fio_exe }}")
+        # The invocation of scripts/vm-report/fio-hipfile-bench.sh.
+        bench = (REPO / "scripts/vm-report/fio-hipfile-bench.sh").read_text()
+        for flag in ("--name=hipfile-read", "--ioengine=libhipfile",
+                     "--rocm_io=hipfile", "--rw=read", "--iodepth=1",
+                     "--direct=1", "--group_reporting",
+                     "--output-format=json"):
+            self.assertIn(flag, argv)
+            self.assertIn(flag, bench)
+        self.assertIn("--bs=1M", argv)
+        self.assertIn("BS=${BS:-1M}", bench)
+        self.assertEqual(self.play["vars"]["quickstart_hipfile_fio_mb"], 64)
+        self.assertIn("SIZE_MB=${SIZE_MB:-64}", bench)
+        self.assertIn("oflag=direct",
+                      self.tasks["Write the file fio reads"][
+                          "ansible.builtin.shell"]["cmd"])
+        present = "quickstart_hipfile_fio_found.stdout | trim == 'present'"
+        for name in ("Write the file fio reads", "Drop the page cache",
+                     "Read the file with fio's libhipfile engine"):
+            self.assertIn(present, self.tasks[name]["when"], name)
+        # Between the write and the read, or fio reads the page cache.
+        drop = self.tasks["Drop the page cache"]
+        self.assertEqual(drop["ansible.builtin.command"],
+                         {"cmd": "sysctl -q -w vm.drop_caches=3"})
+        self.assertIs(drop["become"], True)
+        (block,) = [t for t in self.play["tasks"] if "block" in t]
+        inside = [t["name"] for t in block["block"]]
+        self.assertLess(inside.index("Write the file fio reads"),
+                        inside.index("Drop the page cache"))
+        self.assertLess(inside.index("Drop the page cache"),
+                        inside.index(
+                            "Read the file with fio's libhipfile engine"))
+        absent = self.tasks["Record that this image has no fio with the engine"]
+        self.assertEqual(absent["ansible.builtin.set_fact"],
+                         {"quickstart_hipfile_fio":
+                          "hipfile fio: not in this image"})
+        # Nothing in the play fetches or builds anything but the bench.
+        commands = "\n".join(
+            _text(task.get("ansible.builtin.shell")
+                  or task.get("ansible.builtin.command") or "")
+            for task in self.tasks.values())
+        for word in ("git clone", "git fetch", "git -C", "make -j",
+                     "make install", "./configure", "apt-get", "apt install",
+                     "curl ", "wget "):
+            self.assertNotIn(word, commands, word)
+
+    def test_the_default_nvme_test_still_runs_the_archive_fio(self):
+        nvme = _text(_play(NVME_PLAY))
+        self.assertIn("fio --name=nvme-write --filename=/dev/nvme0n1", nvme)
+        self.assertIn("fio --name=nvme-read --filename=/dev/nvme0n1", nvme)
+        self.assertNotIn("/opt/fio-hipfile", nvme)
+        self.assertNotIn("hipfile", nvme)
+
+    def test_each_missing_prerequisite_has_its_own_reason(self):
+        ready = self.tasks[
+            "Find out whether this guest can run the hipFile test"][
+                "ansible.builtin.shell"]["cmd"]
+        for needle in ("this guest has no NVMe namespace",
+                       "<vm-nvme>1</vm-nvme>",
+                       "is mounted on ${mounted}",
+                       "is not installed: ${golden}",
+                       'amdgpu-probe --status says \\"${state}\\", not '
+                       '\\"loaded\\"',
+                       "no hipFile SDK", "amdrocm-hipfile-dev",
+                       "no hipcc in ${rocm}/bin"):
+            self.assertIn(needle, ready)
+        self.assertIn("the guest image must be the golden bake", ready)
+        self.assertEqual(self.play["vars"]["quickstart_hipfile_probe_exe"],
+                         "/usr/local/bin/amdgpu-probe")
+
+    # ---- what is reported ---------------------------------------------
+
+    _content = Summary._content
+    _artifacts = Summary._artifacts
+    _report = Summary._report
+
+    def test_the_summary_has_a_section_only_when_the_test_ran(self):
+        _require(jinja2 is not None, "Jinja2")
+        content = self._content()
+        self.assertIn("{% if quickstart_hipfile_read is defined %}", content)
+        self.assertLess(content.index("### P4 FP8 test"),
+                        content.index("### hipFile test"))
+        env = jinja2.Environment(trim_blocks=True, keep_trailing_newline=True)
+        values = dict(
+            quickstart_summary={"stdout": "## g1\n\nkernel: x"},
+            quickstart_vector_add={"stdout": "vector-add: PASS"})
+        self.assertNotIn("hipFile", env.from_string(content).render(**values))
+        ran = env.from_string(content).render(
+            quickstart_hipfile_read=HIPFILE_READ_LINE.strip(),
+            quickstart_hipfile_fio=HIPFILE_NO_FIO_LINE.strip(),
+            quickstart_hipfile_bench={"stdout": "gemm-hipfile-bench: PASS\n"},
+            **values)
+        self.assertIn("### hipFile test\n\n```\n" + HIPFILE_READ_LINE
+                      + HIPFILE_NO_FIO_LINE + "gemm-hipfile-bench: PASS\n```\n",
+                      ran)
+        # The two lines are at the start of a line, where quick-start
+        # looks for them.
+        self.assertTrue(qs._HIPFILE_RESULT.search(ran))
+        self.assertTrue(qs._HIPFILE_FIO_RESULT.search(ran))
+
+    def test_quick_start_prints_what_each_guest_recorded(self):
+        said = self._report(
+            {"rocm-golden-1": "### hipFile test\n\n```\n" + HIPFILE_READ_LINE
+                              + HIPFILE_FIO_LINE + "```\n",
+             "rocm-golden-2": "### hipFile test\n\n```\n"
+                              + HIPFILE_READ_LINE.replace("831.0", "12.6")
+                              + HIPFILE_NO_FIO_LINE + "```\n"},
+            hipfile_test=True)
+        self.assertIn("rocm-golden-1: hipFile read 831.0 MB/s (33554432 "
+                      "bytes, verified); fio 959.0 MB/s", said)
+        self.assertIn("rocm-golden-2: hipFile read 12.6 MB/s (33554432 "
+                      "bytes, verified); fio: not in this image", said)
+        # And nothing when it was not asked for.
+        self.assertEqual(self._report(
+            {"rocm-golden-1": HIPFILE_READ_LINE + HIPFILE_FIO_LINE}), "")
+
+    def test_a_guest_that_left_no_result_is_a_failure(self):
+        both = HIPFILE_READ_LINE + HIPFILE_FIO_LINE
+        cases = (
+            ({"rocm-golden-1": both}, "rocm-golden-2 recorded no verified "
+                                      "hipFile read"),
+            ({}, "rocm-golden-1 recorded no verified hipFile read"),
+            ({"rocm-golden-1": both.replace("831.0", "0.0"),
+              "rocm-golden-2": both},
+             "rocm-golden-1 recorded no verified hipFile read at a rate "
+             "above zero"),
+            # Not verified is not a result.
+            ({"rocm-golden-1": "hipfile: read 831.0 MB/s, 33554432 bytes\n"
+                               + HIPFILE_FIO_LINE, "rocm-golden-2": both},
+             "rocm-golden-1 recorded no verified hipFile read"),
+            ({"rocm-golden-1": HIPFILE_READ_LINE, "rocm-golden-2": both},
+             "rocm-golden-1 recorded no fio result"),
+            ({"rocm-golden-1": HIPFILE_READ_LINE + "hipfile fio: 0.0 MB/s\n",
+              "rocm-golden-2": both}, "rocm-golden-1 recorded no fio result"),
+            ({"rocm-golden-1": HIPFILE_READ_LINE + "hipfile fio: not run\n",
+              "rocm-golden-2": both}, "rocm-golden-1 recorded no fio result"),
+        )
+        for texts, needle in cases:
+            with self.subTest(needle=needle, texts=sorted(texts)), \
+                 self.assertRaises(SystemExit) as caught:
+                self._report(texts, hipfile_test=True)
+            self.assertIn("--hipfile-test was asked for", str(caught.exception))
+            self.assertIn(needle, str(caught.exception))
+
+
+# Stand-ins for what the hipFile play runs in a guest. Each finds its guest
+# from a path it is given: every guest's device, mount point, probe and fio
+# are under <tmp>/hosts/<guest>/, and what it is to do is a file there.
+# Nothing is mounted and nothing is deleted: "mounted" is one more line in
+# mount.log than in umount.log.
+_IS_MOUNTED = r"""
+is_mounted() {
+  [ "$(cat "$1/mount.log" 2>/dev/null | wc -l)" -gt \
+    "$(cat "$1/umount.log" 2>/dev/null | wc -l)" ]
+}
+"""
+HIPFILE_FAKES = {
+    "findmnt": _IS_MOUNTED + r"""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --source) cfg=$(dirname "$2")
+              [ -e "$cfg/premounted" ] && cat "$cfg/premounted"
+              exit 0 ;;
+    --target) cfg=$(dirname "$2")
+              is_mounted "$cfg" || exit 1
+              if [ -e "$cfg/findmnt_source" ]; then cat "$cfg/findmnt_source"
+              else echo /dev/nvme0n1; fi
+              exit 0 ;;
+  esac
+  shift
+done
+exit 1
+""",
+    "mkfs.ext4": r"""
+for last; do :; done
+echo "$*" >> "$(dirname "$last")/mkfs.log"
+""",
+    "mount": r"""
+for last; do :; done
+echo "$*" >> "$(dirname "$last")/mount.log"
+""",
+    "mountpoint": _IS_MOUNTED + r"""
+for last; do :; done
+is_mounted "$(dirname "$last")"
+""",
+    # A guest with umount_rc has a target that stays busy: nothing is
+    # logged, so it stays mounted.
+    "umount": r"""
+cfg=$(dirname "$1")
+if [ -e "$cfg/umount_rc" ]; then
+  echo "umount: $1: target is busy." >&2
+  exit "$(cat "$cfg/umount_rc")"
+fi
+echo "$1" >> "$cfg/umount.log"
+""",
+    # Beside the mount point and not in it: nothing here unmounts, so a
+    # file written under the mount point would still be there for rmdir.
+    "dd": r"""
+for arg; do case "$arg" in of=*) out=${arg#of=} ;; esac; done
+echo "$*" >> "$(dirname "$(dirname "$out")")/dd.log"
+""",
+    "sysctl": 'echo "$*" >> "${FAKE_STATE}/sysctl.log"\n',
+    "sync": "exit 0\n",
+}
+
+# What the stand-in hipcc leaves as the compiled bench. It prints the lines
+# of gemm-hipfile-bench.hip, with the rate and the verdict its guest's
+# directory asks for.
+FAKE_BENCH = "#!/bin/bash\n" + _IS_MOUNTED + r"""
+cfg=$(dirname "$1")
+gbs=$(cat "$cfg/bench_gbs" 2>/dev/null || echo 0.831)
+mode=$(cat "$cfg/bench_mode" 2>/dev/null || echo pass)
+if is_mounted "$cfg"; then echo mounted; else echo unmounted; fi > "$cfg/bench.ran"
+echo "gemm-hipfile-bench: device=AMD Radeon Graphics arch=gfx1250"
+echo "gemm-hipfile-bench: path=$1/gemm-hipfile-bench.bin block_bytes=1048576 blocks=32 iters=$2"
+echo "gemm-hipfile-bench: hipcc @HIPCC_ARGS@"
+echo "gemm-hipfile-bench: compat_requested=self buf_registered=yes"
+echo "gemm-hipfile-bench: read_bytes=33554432 seconds_per_pass=0.0404 read_gbs=$gbs"
+echo "gemm-hipfile-bench: m=128 n=128 k=128"
+if [ "$mode" = fail ]; then
+  echo "gemm-hipfile-bench: max_absolute_error=5 failures=12"
+  echo "gemm-hipfile-bench: FAIL"
+  exit 3
+fi
+if [ "$mode" = passbad ]; then
+  # Not something the bench does: a verdict its own count contradicts.
+  echo "gemm-hipfile-bench: max_absolute_error=5 failures=12"
+else
+  echo "gemm-hipfile-bench: max_absolute_error=0 failures=0"
+fi
+echo "gemm-hipfile-bench: gemm_seconds_per_iter=0.0101 gflops=0.000415"
+[ "$mode" = nopass ] || echo "gemm-hipfile-bench: PASS"
+# Everything a pass prints, and then killed by timeout in teardown.
+[ "$mode" != killed ] || exit 124
+"""
+
+FAKE_HIPCC = r"""#!/bin/bash
+args="$*"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out=$2; shift ;;
+    *.hip) src=$1 ;;
+  esac
+  shift
+done
+cmp -s "$src" "$FAKE_BENCH_SOURCE" || { echo "not the bench source: $src" >&2; exit 1; }
+sed "s|@HIPCC_ARGS@|${args//|/ }|" "$FAKE_STATE/fake-bench" > "$out"
+chmod 755 "$out"
+"""
+
+FAKE_FIO = r"""#!/bin/bash
+here=$(dirname "$0")
+if [ "$1" = --enghelp ]; then
+  printf 'Available IO engines:\n\tcpuio\n\tsync\n'
+  [ -e "$here/fio_no_engine" ] || printf '\tlibhipfile\n'
+  exit 0
+fi
+echo "$*" >> "$here/fio.args"
+[ -e "$here/fio_noise" ] && echo "a line a library printed"
+bw=$(cat "$here/fio_bw" 2>/dev/null || echo 959000000)
+cat <<JSON
+{
+  "fio version" : "fio-3.43",
+  "jobs" : [
+    {
+      "jobname" : "hipfile-read",
+      "read" : { "io_bytes" : 67108864, "bw_bytes" : $bw, "runtime" : 70 }
+    }
+  ]
+}
+JSON
+exit "$(cat "$here/fio_rc" 2>/dev/null || echo 0)"
+"""
+
+
+class HipfileRun(unittest.TestCase):
+    """The hipFile play and the facts play, run by Ansible on this host.
+
+    One run, with a 'guest' for each way it can go. Nothing here is a
+    device, a filesystem or a mount: mkfs, mount, umount and the rest are
+    stand-ins that write down what they were asked.
+    """
+
+    GUESTS = {
+        # The image has the baked fio.
+        "with-fio": {},
+        # The image the fleets pull today: no /opt/fio-hipfile.
+        "no-fio": {"no_fio": True},
+        "fio-no-engine": {"files": {"fio_no_engine": ""}},
+        # A line on stdout ahead of fio's JSON, and a GPU the first play
+        # named.
+        "fio-noise": {"files": {"fio_noise": ""},
+                      "vars": {"quickstart_arch": "gfx9999"}},
+        "slow": {"files": {"bench_gbs": "0.0126", "fio_bw": "13200000"}},
+        "no-device": {"no_device": True},
+        "mounted": {"files": {"premounted": "/mnt/nvme\n"}},
+        "unbound": {"probe": "unbound"},
+        "no-sdk": {"rocm": "rocm-nosdk"},
+        "no-hipcc": {"rocm": "rocm-nohipcc"},
+        "not-nvme": {"files": {"findmnt_source": "/dev/vda1\n"}},
+        "bench-fail": {"files": {"bench_mode": "fail"}},
+        "bench-zero": {"files": {"bench_gbs": "0"}},
+        "bench-nopass": {"files": {"bench_mode": "nopass"}},
+        "bench-killed": {"files": {"bench_mode": "killed"}},
+        "bench-passbad": {"files": {"bench_mode": "passbad"}},
+        "umount-busy": {"files": {"umount_rc": "32"}},
+        "fio-fail": {"files": {"fio_rc": "1"}},
+        "fio-zero": {"files": {"fio_bw": "0"}},
+    }
+    PASSING = ("with-fio", "no-fio", "fio-no-engine", "fio-noise", "slow")
+
+    @classmethod
+    def setUpClass(cls):
+        _require(shutil.which("ansible-playbook") is not None,
+                 "ansible-playbook")
+        cls.tmp = Path(tempfile.mkdtemp(prefix="quickstart-hipfile-"))
+        cls.addClassCleanup(shutil.rmtree, cls.tmp, ignore_errors=True)
+        plays = [_play(HIPFILE_PLAY), _play(FACTS_PLAY)]
+        (cls.tmp / "play.yml").write_text(yaml.safe_dump(plays, sort_keys=False))
+        bindir = cls.tmp / "bin"
+        bindir.mkdir()
+        for name, body in {**FAKES, **HIPFILE_FAKES}.items():
+            path = bindir / name
+            path.write_text("#!/bin/bash\n" + body.lstrip("\n"))
+            path.chmod(0o755)
+        (cls.tmp / "fake-bench").write_text(FAKE_BENCH)
+        # Three ROCm trees: the golden one, reached through a versionless
+        # path whose bin/ is a link, as /opt/rocm is; one with no hipFile
+        # SDK; one with no hipcc.
+        for tree, sdk, hipcc in (("rocm/core", True, True),
+                                 ("rocm-nosdk", False, True),
+                                 ("rocm-nohipcc", True, False)):
+            root = cls.tmp / tree
+            for sub in ("include", "lib", "bin"):
+                (root / sub).mkdir(parents=True)
+            if sdk:
+                (root / "include/hipfile.h").write_text("")
+                (root / "lib/libhipfile.so").write_text("")
+            if hipcc:
+                (root / "bin/hipcc").write_text(FAKE_HIPCC)
+                (root / "bin/hipcc").chmod(0o755)
+        (cls.tmp / "rocm/versionless").mkdir()
+        (cls.tmp / "rocm/versionless/bin").symlink_to("../core/bin")
+        hosts = {}
+        for guest, what in cls.GUESTS.items():
+            home = cls.tmp / "hosts" / guest
+            home.mkdir(parents=True)
+            if not what.get("no_device"):
+                (home / "nvme0n1").write_text("")
+            for name, text in what.get("files", {}).items():
+                (home / name).write_text(text)
+            probe = home / "amdgpu-probe"
+            probe.write_text("#!/bin/sh\n[ \"$1\" = --status ] || exit 2\n"
+                             f"echo {what.get('probe', 'loaded')}\n")
+            probe.chmod(0o755)
+            if not what.get("no_fio"):
+                (home / "fio").write_text(FAKE_FIO)
+                (home / "fio").chmod(0o755)
+            hosts[guest] = {
+                "ansible_connection": "local",
+                "ansible_python_interpreter": sys.executable,
+                "quickstart_rocm": "/opt/rocm",
+                "quickstart_ib_device": "from-the-first-play",
+                "hip_rocm": str(cls.tmp / what.get("rocm", "rocm/versionless")),
+                **what.get("vars", {})}
+        (cls.tmp / "inv.yml").write_text(
+            yaml.safe_dump({"fleet": {"hosts": hosts}}))
+        cls.scratch = cls.tmp / "scratch"
+        cls.scratch.mkdir()
+        home = str(cls.tmp) + "/hosts/{{ inventory_hostname }}"
+        # Extra vars, because the play sets each of these and a play var
+        # outranks anything an inventory says. ansible_become, because the
+        # stand-ins are this user's own files and a test must not ask for
+        # sudo: which tasks take root is held by Hipfile above.
+        cls.extra = {
+            "ansible_become": False,
+            "quickstart_hipfile_device": home + "/nvme0n1",
+            "quickstart_hipfile_mount": home + "/mnt",
+            "quickstart_hipfile_probe_exe": home + "/amdgpu-probe",
+            "quickstart_hipfile_fio_exe": home + "/fio",
+            "quickstart_hipfile_rocm": "{{ hip_rocm }}",
+            "quickstart_hipfile_bench_source": str(BENCH_SOURCE),
+            "quickstart_hipfile_target_check": str(TARGET_CHECK),
+        }
+        cls.runs = 0
+        cls.on, cls.on_art = cls._play_it({"quickstart_hipfile_test": True})
+        cls.said = " ".join(cls.on.stdout.split())
+
+    @classmethod
+    def _play_it(cls, more):
+        cls.runs += 1
+        art = cls.tmp / f"artifacts-{cls.runs}"
+        extra = cls.tmp / f"extra-{cls.runs}.json"
+        extra.write_text(json.dumps(
+            {**cls.extra, "quickstart_artifacts_dir": str(art), **more}))
+        env = {**os.environ, "ANSIBLE_NOCOLOR": "1",
+               "ANSIBLE_STDOUT_CALLBACK": "default",
+               "PATH": f"{cls.tmp / 'bin'}:{os.environ['PATH']}",
+               "TMPDIR": str(cls.scratch),
+               "FAKE_STATE": str(cls.tmp),
+               "FAKE_BENCH_SOURCE": str(BENCH_SOURCE)}
+        done = subprocess.run(
+            ["ansible-playbook", "-i", "inv.yml", "-e", f"@{extra}",
+             "play.yml"], cwd=cls.tmp, capture_output=True, text=True,
+            env=env, timeout=600)
+        return done, art
+
+    def home(self, guest: str) -> Path:
+        return self.tmp / "hosts" / guest
+
+    def log(self, guest: str, name: str) -> list[str]:
+        path = self.home(guest) / name
+        return path.read_text().splitlines() if path.exists() else []
+
+    def recap(self, guest: str) -> dict[str, int]:
+        (line,) = re.findall(rf"(?m)^{guest}\s+: (.*)$", self.on.stdout)
+        return {k: int(v) for k, v in re.findall(r"(\w+)=(\d+)", line)}
+
+    def fatal(self, guest: str) -> str:
+        """What Ansible said of the one task that failed this guest: the
+        result, which is one line or a block that ends at a brace."""
+        found = re.findall(
+            rf"(?ms)^fatal: \[{guest}\]: FAILED! => (\{{\n.*?^\}}$|.*?$)",
+            self.on.stdout)
+        self.assertEqual(len(found), 1, self.on.stdout[-3000:])
+        return " ".join(found[0].replace("\\n", " ").split())
+
+    def summary(self, guest: str) -> str:
+        return (self.on_art / f"{guest}.md").read_text()
+
+    def assert_cleaned_up(self, guest: str, formatted: bool = True):
+        """Unmounted whatever happened, and the mount point is gone."""
+        with self.subTest(guest=guest):
+            self.assertEqual(len(self.log(guest, "mkfs.log")),
+                             1 if formatted else 0)
+            self.assertEqual(len(self.log(guest, "mount.log")),
+                             1 if formatted else 0)
+            self.assertEqual(self.log(guest, "umount.log"),
+                             [str(self.home(guest) / "mnt")]
+                             if formatted else [])
+            self.assertFalse((self.home(guest) / "mnt").exists())
+
+    def test_off_nothing_of_the_play_runs(self):
+        done, art = self._play_it({})
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(PlaysRun._tasks(done.stdout), [
+            "Skip the hipFile test unless it was asked for",
+            "Gather a summary in the guest",
+            "Make the artifacts directory on the controller",
+            "Write this guest's summary to the controller"])
+        for guest in self.GUESTS:
+            self.assertNotIn("hipFile", (art / f"{guest}.md").read_text())
+
+    def test_the_guests_that_can_pass_do_and_the_others_fail(self):
+        # Non-zero, because some guests failed; none was unreachable.
+        self.assertEqual(self.on.returncode, 2, self.on.stdout[-3000:]
+                         + self.on.stderr)
+        for guest in self.GUESTS:
+            with self.subTest(guest=guest):
+                recap = self.recap(guest)
+                self.assertEqual(recap["unreachable"], 0)
+                self.assertEqual(recap["failed"],
+                                 0 if guest in self.PASSING else 1)
+                self.assertEqual((self.on_art / f"{guest}.md").exists(),
+                                 guest in self.PASSING)
+
+    def test_a_guest_with_the_baked_fio_records_both_reads(self):
+        text = self.summary("with-fio")
+        self.assertIn("### hipFile test", text)
+        self.assertEqual(qs._HIPFILE_RESULT.search(text).groups(),
+                         ("831.0", "33554432"))
+        self.assertEqual(qs._HIPFILE_FIO_RESULT.search(text).group(1), "959.0")
+        self.assertIn("gemm-hipfile-bench: PASS", text)
+        self.assert_cleaned_up("with-fio")
+        home = self.home("with-fio")
+        self.assertEqual(self.log("with-fio", "mkfs.log"),
+                         [f"-q -F {home}/nvme0n1"])
+        self.assertEqual(self.log("with-fio", "mount.log"),
+                         [f"-o noatime {home}/nvme0n1 {home}/mnt"])
+        # The bench ran on the mounted filesystem, on the test's mount
+        # point, for the play's four passes, built from the real source
+        # with the flags the figures were measured with.
+        self.assertEqual(self.log("with-fio", "bench.ran"), ["mounted"])
+        self.assertIn(f"path={home}/mnt/gemm-hipfile-bench.bin", text)
+        self.assertIn("iters=4", text)
+        (hipcc,) = re.findall(r"gemm-hipfile-bench: hipcc (.*)", text)
+        core = self.tmp / "rocm/core"
+        self.assertIn("-O2 --offload-arch=gfx1250 ", hipcc)
+        self.assertIn(f"-I{core}/include -I{core}/include/hipfile", hipcc)
+        self.assertIn(f"-L{core}/lib -lhipfile -Wl,-rpath,{core}/lib", hipcc)
+        (args,) = self.log("with-fio", "fio.args")
+        self.assertEqual(
+            args, "--name=hipfile-read --ioengine=libhipfile "
+            f"--rocm_io=hipfile --filename={home}/mnt/fio-hipfile.dat "
+            "--rw=read --bs=1M --size=64M --iodepth=1 --direct=1 "
+            "--group_reporting --output-format=json")
+        (dd,) = self.log("with-fio", "dd.log")
+        self.assertIn(f"of={home}/mnt/fio-hipfile.dat bs=1M count=64 "
+                      "oflag=direct", dd)
+
+    def test_a_guest_with_no_baked_fio_passes_and_says_so(self):
+        for guest in ("no-fio", "fio-no-engine"):
+            with self.subTest(guest=guest):
+                text = self.summary(guest)
+                self.assertTrue(qs._HIPFILE_RESULT.search(text))
+                found = qs._HIPFILE_FIO_RESULT.search(text)
+                self.assertEqual(found.groups(), (None, "not in this image"))
+                # Nothing was written for fio to read, and fio was not run.
+                self.assertEqual(self.log(guest, "dd.log"), [])
+                self.assertEqual(self.log(guest, "fio.args"), [])
+                self.assert_cleaned_up(guest)
+        self.assertIn("Nothing is built here: the golden bake installs it",
+                      self.said)
+
+    def test_a_line_ahead_of_fios_json_and_a_named_gpu(self):
+        text = self.summary("fio-noise")
+        self.assertEqual(qs._HIPFILE_FIO_RESULT.search(text).group(1), "959.0")
+        (hipcc,) = re.findall(r"gemm-hipfile-bench: hipcc (.*)", text)
+        self.assertIn("--offload-arch=gfx9999 ", hipcc)
+
+    def test_a_slow_read_is_still_a_pass(self):
+        text = self.summary("slow")
+        self.assertEqual(qs._HIPFILE_RESULT.search(text).group(1), "12.6")
+        self.assertEqual(qs._HIPFILE_FIO_RESULT.search(text).group(1), "13.2")
+
+    def test_quick_start_reads_what_the_play_wrote(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            art = Path(tmp) / "artifacts"
+            art.mkdir()
+            shutil.copy(self.on_art / "with-fio.md", art / "rocm-golden-1.md")
+            shutil.copy(self.on_art / "no-fio.md", art / "rocm-golden-2.md")
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                qs._report_optional_tests(_state(artifacts=art,
+                                                 hipfile_test=True))
+        self.assertIn("rocm-golden-1: hipFile read 831.0 MB/s (33554432 "
+                      "bytes, verified); fio 959.0 MB/s", out.getvalue())
+        self.assertIn("rocm-golden-2: hipFile read 831.0 MB/s (33554432 "
+                      "bytes, verified); fio: not in this image",
+                      out.getvalue())
+
+    def test_a_guest_that_cannot_run_it_is_told_why_and_nothing_is_touched(self):
+        cases = {
+            "no-device": "nvme0n1 is absent: this guest has no NVMe namespace",
+            "mounted": "nvme0n1 is mounted on /mnt/nvme: the test makes a "
+                       "new filesystem on the namespace and will not do "
+                       "that under a mount",
+            "unbound": 'amdgpu-probe --status says \\"unbound\\", not '
+                       '\\"loaded\\"',
+            "no-sdk": "no hipFile SDK (hipfile.h and lib/libhipfile.so) "
+                      f"under {self.tmp}/rocm-nosdk",
+            "no-hipcc": f"no hipcc in {self.tmp}/rocm-nohipcc/bin",
+        }
+        for guest, needle in cases.items():
+            with self.subTest(guest=guest):
+                said = self.fatal(guest)
+                self.assertIn(f"{guest}: the hipFile test cannot run.", said)
+                self.assertIn(needle, said)
+                self.assert_cleaned_up(guest, formatted=False)
+                self.assertEqual(self.log(guest, "bench.ran"), [])
+
+    def test_a_target_that_is_not_nvme_is_refused_before_either_read(self):
+        said = self.fatal("not-nvme")
+        self.assertIn("is on '/dev/vda1', not an NVMe namespace: refusing a "
+                      "hipFile direct read there", said)
+        self.assertEqual(self.log("not-nvme", "bench.ran"), [])
+        self.assertEqual(self.log("not-nvme", "fio.args"), [])
+        self.assert_cleaned_up("not-nvme")
+
+    def test_a_read_that_is_wrong_or_measures_nothing_fails(self):
+        for guest in ("bench-fail", "bench-zero", "bench-nopass",
+                      "bench-killed", "bench-passbad"):
+            with self.subTest(guest=guest):
+                said = self.fatal(guest)
+                self.assertIn(f"on {guest} with no verified read at a rate "
+                              "above zero", said)
+                self.assert_cleaned_up(guest)
+        # fio is not run after a bench that exited non-zero.
+        self.assertEqual(self.log("bench-fail", "fio.args"), [])
+        self.assertIn("gemm-hipfile-bench exited 3 on bench-fail",
+                      self.fatal("bench-fail"))
+        self.assertIn("failures=12", self.fatal("bench-fail"))
+        # A bench that printed a whole pass and was then killed is not a
+        # pass, and fio is not run after it either.
+        self.assertIn("gemm-hipfile-bench exited 124 on bench-killed",
+                      self.fatal("bench-killed"))
+        self.assertIn("gemm-hipfile-bench: PASS", self.fatal("bench-killed"))
+        self.assertEqual(self.log("bench-killed", "fio.args"), [])
+
+    def test_the_page_cache_is_dropped_before_each_fio_read(self):
+        """Once for each guest whose fio ran, and for no other.
+
+        fio runs wherever the bench exited 0 and the image has it, which
+        includes a bench that exited 0 and was then judged not a pass.
+        """
+        ran = [g for g in self.GUESTS if self.log(g, "fio.args")]
+        self.assertEqual(sorted(ran), [
+            "bench-nopass", "bench-passbad", "bench-zero", "fio-fail",
+            "fio-noise", "fio-zero", "slow", "umount-busy", "with-fio"])
+        self.assertEqual(
+            (self.tmp / "sysctl.log").read_text().splitlines(),
+            ["-q -w vm.drop_caches=3"] * len(ran))
+
+    def test_an_unmount_that_fails_fails_the_guest_and_leaves_no_scratch(self):
+        said = self.fatal("umount-busy")
+        self.assertIn("target is busy", said)
+        # Both reads had passed; the guest still writes no summary.
+        self.assertEqual(self.log("umount-busy", "bench.ran"), ["mounted"])
+        self.assertFalse((self.on_art / "umount-busy.md").exists())
+        # Still mounted, which nothing here can help; the scratch
+        # directory with the compiled bench is gone all the same
+        # (test_no_scratch_directory_is_left).
+        self.assertEqual(self.log("umount-busy", "umount.log"), [])
+
+    def test_a_fio_that_fails_or_measures_nothing_fails(self):
+        said = self.fatal("fio-fail")
+        self.assertIn("/hosts/fio-fail/fio exited 1 on fio-fail", said)
+        said = self.fatal("fio-zero")
+        self.assertIn("exited 0 on fio-zero and reported no read rate above "
+                      "zero (hipfile fio: 0.0 MB/s)", said)
+        for guest in ("fio-fail", "fio-zero"):
+            self.assert_cleaned_up(guest)
+
+    def test_no_scratch_directory_is_left(self):
+        self.assertEqual(sorted(p.name for p in self.scratch.iterdir()), [])
+
+
+# ---------------------------------------------------------------------------
 # What is written down
 # ---------------------------------------------------------------------------
 
@@ -1595,6 +2626,62 @@ class Docs(unittest.TestCase):
         for needle in ("--sdxi-test", "--p4-test", "quickstart_sdxi_test",
                        "quickstart_p4_test"):
             self.assertIn(needle, agents)
+
+    def test_the_hipfile_switch_is_written_down(self):
+        """What it reads, that fio is the image's or nothing, what it does
+        to the namespace, the two rates, and that it has not run."""
+        readme = (REPO / "README.md").read_text()
+        start = readme.index("## Quick Start")
+        section = " ".join(
+            readme[start:readme.index("\n## ", start + 1)].split())
+        for needle in ("### NVMe to GPU memory",
+                       "qemu-tool quick-start test --hipfile-test",
+                       "hipFile read <rate> MB/s (33554432 bytes, verified); "
+                       "fio <rate> MB/s",
+                       "`/opt/fio-hipfile/bin/fio`",
+                       "`fio: not in this image`",
+                       "nothing is built in the guest",
+                       "makes a new filesystem on `/dev/nvme0n1` every run",
+                       "unmounts it again whatever happens",
+                       "refused, not formatted",
+                       "`<vm-nvme-vram>true`", "11 to 13 MB/s",
+                       "`<vm-nvme>0`",
+                       "a bare `fio` in a guest is still Ubuntu's",
+                       "**This test has not yet run on a guest**"):
+            self.assertIn(needle, section)
+        man = (REPO / "qemu/qemu-tool/man/qemu-tool.1").read_text()
+        start = man.index(".SH QUICK-START OPTIONS")
+        options = man[start:man.index("\n.SH ", start + 1)]
+        self.assertIn(r".B \-\-hipfile\-test", options)
+        said = " ".join(options.replace(r"\-", "-").replace("\\(dq", '"')
+                        .split())
+        for needle in ("/opt/fio-hipfile/bin/fio", '"not in this image"',
+                       "nothing is built in the guest", "/dev/nvme0n1",
+                       "is refused, not formatted", "<vm-nvme>",
+                       "<vm-nvme-vram>true", "11 to 13 MB/s",
+                       "Off by default"):
+            self.assertIn(needle, said)
+        # Everything after v2.0.0, as for the other switches.
+        changelog = (REPO / "CHANGELOG.md").read_text()
+        since = " ".join(changelog[:changelog.index("\n## [v2.0.0]")].split())
+        for needle in ("`qemu-tool quick-start --hipfile-test`",
+                       "`quickstart_hipfile_test`",
+                       "`hipfile fio: not in this image`",
+                       "**Not run on a guest.**",
+                       "**The hipFile benchmarks unmount what they "
+                       "mounted.**"):
+            self.assertIn(needle, since)
+        agents = " ".join((REPO / "AGENTS.md").read_text().split())
+        for needle in ("`--hipfile-test`", "quickstart_hipfile_test",
+                       "`HIPFILE_ROOT_TASKS`",
+                       "**unmounted in an `always` section**",
+                       "**Nothing of this play has run on a guest**",
+                       "hipfile-target-check.sh",
+                       "`--hipfile-test`, any of it | not run on a guest"):
+            self.assertIn(needle, agents)
+        # The ordering hazard is no longer described as open.
+        self.assertNotIn("it predates this change and is not fixed", agents)
+        self.assertNotIn("Not fixed, and older than this", since)
 
     def test_the_rocm_rdma_switch_is_written_down(self):
         """What it tests, the default mode and why, which modes fail and

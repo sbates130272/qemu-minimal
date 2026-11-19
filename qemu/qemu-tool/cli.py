@@ -328,6 +328,7 @@ def _add_quick_start(sub: argparse._SubParsersAction) -> None:
             "qemu-tool quick-start --xml qemu/stacks/rocm-golden.xml \\",
             "    --xml my-overlay.xml up",
             "qemu-tool quick-start --sdxi-test --p4-test test",
+            "qemu-tool quick-start --hipfile-test test",
             "qemu-tool quick-start --rocm-rdma-test test",
             "qemu-tool quick-start logs -f",
             "qemu-tool quick-start down",
@@ -496,6 +497,23 @@ def _add_quick_start(sub: argparse._SubParsersAction) -> None:
             "3 s). Each is 262144 fp8 elements, the most one operation "
             "moves. Refused without --p4-test. Only meaningful with the "
             "test or all verbs."
+        ),
+    )
+    g.add_argument(
+        "--hipfile-test", action="store_true", default=False,
+        help=(
+            "Also read a file on each guest's NVMe namespace straight into "
+            "GPU memory through hipFile and check what arrived, on every "
+            "guest: a bench compiled in the guest with hipcc, and fio's "
+            "libhipfile engine when the guest image has it "
+            "(/opt/fio-hipfile/bin/fio, from the golden bake; a guest "
+            "without it reports \"not in this image\" and nothing is "
+            "built). Off by default. Reports both rates. Makes a new "
+            "filesystem on /dev/nvme0n1 each run and unmounts it "
+            "afterwards. Refused before anything runs on a fleet whose "
+            "<vm-nvme> is 0. Without <vm-nvme-vram>true on the fork QEMU "
+            "the read runs at its slow rate, 11 to 13 MB/s, and a note "
+            "says so. Only meaningful with the test or all verbs."
         ),
     )
     g.add_argument(
@@ -1573,6 +1591,7 @@ def _quick_start_cmd(args: argparse.Namespace) -> None:
         p4_iters=args.p4_iters,
         rocm_rdma_test=args.rocm_rdma_test,
         rocm_rdma_mode=args.rocm_rdma_mode,
+        hipfile_test=args.hipfile_test,
         variant=args.variant,
     )
 

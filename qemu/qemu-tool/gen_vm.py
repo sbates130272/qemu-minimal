@@ -10,6 +10,7 @@ cloud-init.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import re
@@ -234,11 +235,20 @@ def _inherit_key(cfg: VMConfig, sidecar: Path) -> bool:
         info = json.loads(sidecar.read_text())
         recorded = info.get("ssh_key_file")
     except (OSError, ValueError, AttributeError):
-        return False
-    if not recorded:
-        return False
-    cfg.ssh_key_file = Path(recorded)
-    return info.get("ssh_key_generated") is True
+        info, recorded = {}, None
+    if recorded:
+        cfg.ssh_key_file = Path(recorded)
+        return info.get("ssh_key_generated") is True
+    # No record. A bake writes the sidecar only when it succeeds, so the
+    # image a failed bake left has none, and that is the image --ansible-only
+    # is for. The pair gen-vm generated for it is still where it put it;
+    # without it the rerun offers the guest no key and waits out its timeout.
+    private = generated_key_path(sidecar.parent, sidecar.stem)
+    public = private.with_name(private.name + ".pub")
+    if private.is_file() and public.is_file():
+        cfg.ssh_key_file = public
+        return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -1272,8 +1282,40 @@ def _wait_for_ssh(
     return False
 
 
+def _collections_stamp() -> Path:
+    """Where the digest of the last requirements.yml installed is kept.
+
+    Inside the directory ansible-galaxy installs into, so a collections
+    directory that is removed takes the record with it. That directory is the
+    first entry of ANSIBLE_COLLECTIONS_PATH when it is set and galaxy's
+    default otherwise; gen-vm runs galaxy from the caller's directory, so an
+    ansible.cfg beside the playbooks is not what decides it.
+    """
+    configured = (os.environ.get("ANSIBLE_COLLECTIONS_PATH")
+                  or os.environ.get("ANSIBLE_COLLECTIONS_PATHS") or "")
+    first = configured.split(os.pathsep)[0]
+    root = Path(first).expanduser() if first else Path.home() / ".ansible/collections"
+    return root / "ansible_collections" / ".qemu-tool-requirements.sha256"
+
+
 def _ensure_ansible_collection(ansible_dir: Path) -> None:
     _restore_blocking_stdio()
+    requirements = ansible_dir / "requirements.yml"
+    # A git requirement has no installed version for galaxy to compare with,
+    # so galaxy clones and reinstalls it on every run: 37 s measured for the
+    # rocm-ernic entry, with every other collection "already installed,
+    # skipping". The file names that entry by commit, so the same file means
+    # the same collections; a pin that moves changes the digest and installs.
+    digest = hashlib.sha256(requirements.read_bytes()).hexdigest()
+    stamp = _collections_stamp()
+    try:
+        recorded = stamp.read_text().strip()
+    except OSError:
+        recorded = ""
+    if recorded == digest:
+        print("Ansible collections already installed for this "
+              f"requirements.yml; remove {stamp} to install them again.")
+        return
     print("Installing Ansible collections from requirements.yml...")
     subprocess.run(
         # --no-deps: requirements.yml names every collection the playbooks
@@ -1289,9 +1331,16 @@ def _ensure_ansible_collection(ansible_dir: Path) -> None:
         # installs a matching version. Bump the floors in requirements.yml to
         # pull a newer collection, or run ansible-galaxy --upgrade by hand.
         ["ansible-galaxy", "collection", "install", "--pre",
-         "--no-deps", "-r", str(ansible_dir / "requirements.yml")],
+         "--no-deps", "-r", str(requirements)],
         check=True,
     )
+    # Only where galaxy really installed: with a collections path set some
+    # other way there is no directory here, and the next run installs again.
+    if stamp.parent.is_dir():
+        try:
+            stamp.write_text(digest + "\n")
+        except OSError:
+            pass
 
 
 def _ensure_jmespath() -> None:

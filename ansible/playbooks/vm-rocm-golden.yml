@@ -236,7 +236,7 @@
     # play through the anchor. The suite is versionless but carries several
     # lines at once, and a bare package name follows whichever is newest, so
     # an unpinned bake installs a line the guest's ROCM_PATH cannot see.
-    rocm_line_pin: &rocm_line_pin "10.1"
+    rocm_line_pin: &rocm_line_pin "10.2"
     rocm_setup_user: "{{ vm_username | default('ubuntu') }}"
     rocm_setup_repo_stream: therock
     rocm_setup_minimal: true
@@ -274,11 +274,14 @@
     # kernel, so two bakes of one commit are not the same guest. Pass
     # -e vm_rocm_skip_system_upgrade=false to have it.
     rocm_setup_skip_system_upgrade: "{{ vm_rocm_skip_system_upgrade | default(true) }}"
-    # 31.60 is the first driver release with amdgpu-dkms 7.1.9 and the
-    # gfx1250 blobs the "gap" firmware set sits beside. If that tree goes
-    # missing again, set rocjitsu_setup_firmware_set=full and drop the pin rather
-    # than falling back to an older driver.
-    rocm_setup_amdgpu_driver_version: "31.60"
+    # 31.70 carries amdgpu-dkms 7.2.3; 31.60, the pin until 2026-11-19, was
+    # the first release with 7.1.9 and with the gfx1250 blobs the "gap"
+    # firmware set sits beside. If that tree goes missing again, set
+    # rocjitsu_setup_firmware_set=full and drop the pin rather than falling
+    # back to an older driver. rocjitsu_setup patches this source by exact
+    # string (amdgpu-emu-patches.py), so a driver bump is where a patch whose
+    # target moved fails the bake.
+    rocm_setup_amdgpu_driver_version: "31.70"
     # Install amdgpu-dkms without building it. rocjitsu_setup
     # patches the source and builds it once; the postinst build of the
     # unpatched source took ~25 minutes, was always thrown away, and on this
@@ -848,6 +851,52 @@
   roles:
     - role: perftest_setup
 
+# The archive's fio has no libhipfile ioengine, the one that reads from an
+# NVMe namespace straight into GPU memory through hipFile. This builds fio
+# from a pinned release against the ROCm and hipFile SDK installed above and
+# puts it under /opt/fio-hipfile. Not under /usr/local, whose bin/ is ahead
+# of /usr/bin on PATH: a bare "fio" has to stay the archive's, which is what
+# vm-quickstart.yml's NVMe test runs. The build is reached by its path, by
+# scripts/vm-report/fio-hipfile-bench.sh, which used to build it in the
+# guest on every run, and by the hipFile play of vm-quickstart.yml.
+#
+# After ROCm, whose amdrocm-hipfile-dev is the SDK configure probes for,
+# and ahead of the play below so that its C sources go through the bake's
+# compiler cache when it has one. The role needs no device: its defaults
+# say why, and what each variable is.
+- name: Build fio with the libhipfile engine into the guest
+  hosts: all
+  gather_facts: false
+  become: true
+  tags: [install]
+  vars:
+    # Defined on the ROCm play above.
+    rocm_line_pin: *rocm_line_pin
+    # What is built: a repository, a release tag in it, and the commit that
+    # tag has to peel to. fio-3.43 is the first release with the engine. A
+    # tag can be moved, so the fetch is compared with the commit before
+    # anything is compiled and a bake fails when they differ. Moving to
+    # another release means moving both:
+    #
+    #   git ls-remote <fio_source_repo> 'refs/tags/<fio_source_ref>*'
+    #
+    # prints the tag object and then, on the "^{}" line, the commit, and
+    # the comment that ends the pin's line names the tag it was read for;
+    # tests/test_fio_hipfile_setup.py fails when that comment names
+    # another. FIO_COMMIT in scripts/vm-report/fio-hipfile-bench.sh moves
+    # with it, and the same test holds the two equal. An empty pin builds
+    # the ref unchecked, which qemu/checks/rocm-golden.sh then refuses.
+    fio_source_repo: https://github.com/axboe/fio.git
+    fio_source_ref: fio-3.43
+    fio_source_pin: &fio_source_pin "d2dcd7e053d1902d2420f151c83990e6acdd9f8c"  # fio-3.43
+    fio_hipfile_setup_repo: "{{ fio_source_repo }}"
+    fio_hipfile_setup_ref: "{{ fio_source_ref }}"
+    fio_hipfile_setup_commit: "{{ fio_source_pin }}"
+    # The tree itself: the versionless /opt/rocm has bin/ and lib/ only.
+    fio_hipfile_setup_rocm_path: "/opt/rocm/core-{{ rocm_line_pin }}"
+  roles:
+    - role: fio_hipfile_setup
+
 # After the last thing that compiles, and before the stamp and the slim pass:
 # a failure in either of those still leaves the cache saved, and nothing of
 # ccache is in the guest by the time the image is described or trimmed.
@@ -921,6 +970,7 @@
     rocm_line_pin: *rocm_line_pin
     sdxi_source_pin: *sdxi_source_pin
     perftest_source_pin: *perftest_source_pin
+    fio_source_pin: *fio_source_pin
     golden_user: "{{ vm_username | default('ubuntu') }}"
     golden_rocm_path: "/opt/rocm/core-{{ rocm_line_pin }}"
     golden_firmware_dir: /lib/firmware/updates/amdgpu
@@ -943,6 +993,11 @@
         executable: /bin/bash
       changed_when: false
       register: golden_amdgpu_src
+
+    - name: Read which patches the amdgpu source carries
+      ansible.builtin.slurp:
+        src: /etc/amdgpu-emu-patches.json
+      register: golden_amdgpu_patches
 
     - name: Read the generated firmware manifest
       ansible.builtin.slurp:
@@ -990,6 +1045,28 @@
           "{{ golden_perftest_built.commit_required }}" required, and
           perftest_source_pin is "{{ perftest_source_pin }}".
 
+    # fio_hipfile_setup's own record, compared with the pin for the same
+    # reason.
+    - name: Read what fio was built from
+      ansible.builtin.slurp:
+        src: /etc/fio-hipfile.json
+      register: golden_fio_file
+
+    - name: Check fio was built at the pinned commit
+      vars:
+        golden_fio_built: "{{ golden_fio_file.content | b64decode | from_json }}"
+      ansible.builtin.assert:
+        that:
+          - golden_fio_built.commit_required == fio_source_pin
+          - >-
+            fio_source_pin | length == 0
+            or golden_fio_built.commit == fio_source_pin
+        fail_msg: >-
+          /etc/fio-hipfile.json records fio built at
+          {{ golden_fio_built.commit }} with
+          "{{ golden_fio_built.commit_required }}" required, and
+          fio_source_pin is "{{ fio_source_pin }}".
+
     # The rdma-core that runs is not the package dpkg reports above: the
     # loader gives every tool the one under /usr/local. Read off a tool, as
     # the file its libibverbs.so.1 resolves to, which rdma-core names
@@ -1022,6 +1099,7 @@
           {{ golden_rdma_loaded.stdout | trim | basename
              | regex_replace('^libibverbs[.]so[.][0-9]+[.][0-9]+[.]', '') }}
         golden_perftest: "{{ golden_perftest_file.content | b64decode | from_json }}"
+        golden_fio: "{{ golden_fio_file.content | b64decode | from_json }}"
         golden_pkg: >-
           {{ dict(golden_dpkg.stdout_lines | map('split', ' ') | map('list')) }}
         golden_fw_files: >-
@@ -1051,6 +1129,12 @@
           # archive's perftest on PATH. The file has the rest.
           perftest_source_pin: "{{ perftest_source_pin }}"
           perftest_stamp: /etc/perftest-rocm.json
+          # fio with the libhipfile ioengine, built from a pinned release
+          # under a prefix of its own. The archive's fio is still what a
+          # bare "fio" runs. The file has the rest.
+          fio_source_pin: "{{ fio_source_pin }}"
+          fio_hipfile: "{{ golden_fio.binary }}"
+          fio_hipfile_stamp: /etc/fio-hipfile.json
           # Built from ernic_source_pin. The device is root-only upstream;
           # here members of this group may open it.
           p4_client: /usr/local/bin/p4_fp8_client
@@ -1069,10 +1153,16 @@
           amdgpu_dkms_version: "{{ golden_pkg['amdgpu-dkms'] | default('') }}"
           amdgpu_dkms_module: "{{ golden_amdgpu_src.stdout | trim }}"
           amdgpu_dkms_firmware_version: "{{ golden_pkg['amdgpu-dkms-firmware'] | default('') }}"
-          # The functions of amdgpu-emu-patches.py, in the order it applies
-          # them. kfd_ptrace_gate changes a KFD security check and is carried
-          # unreviewed.
-          amdgpu_patches: [kfd_atomics, ras_vbios, kfd_ptrace_gate, panel_type]
+          # What amdgpu-emu-patches.py reported for this driver release, as
+          # rocjitsu_setup recorded it: the patches the source carries, and
+          # the ones the release has no use for. kfd_ptrace_gate changes a
+          # KFD security check and is unreviewed; it is carried on
+          # amdgpu-dkms 7.1.9 and not needed from 7.2.3, whose own
+          # compatibility layer has the gate.
+          amdgpu_patches: >-
+            {{ (golden_amdgpu_patches.content | b64decode | from_json).carried }}
+          amdgpu_patches_not_needed: >-
+            {{ (golden_amdgpu_patches.content | b64decode | from_json).not_needed }}
           kfd_ptrace_gate_reviewed: false
           amdgpu_autoload_blacklisted: true
           amdgpu_probe_helper: /usr/local/bin/amdgpu-probe
