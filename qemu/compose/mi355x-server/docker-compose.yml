@@ -4,7 +4,7 @@
 # Regenerate after changing qemu/stacks/mi355x-server.xml:
 #   qemu-tool gen-compose --xml qemu/stacks/mi355x-server.xml
 #
-# xml-sha256: 98af06e4df46e7393c1f753e00627fa0064f9a0bbb83a819aae067b5b74e6ff7  # pre-commit: ignore
+# xml-sha256: 31abbc2c3594822db1a91232d2ba0e6d95fd7f23ec9cb8cbe4c0927142644e94  # pre-commit: ignore
 
 x-logging: &logging
   driver: json-file

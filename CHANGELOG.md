@@ -21,12 +21,9 @@ about seventy times at the next daily run. The golden bake moves to ROCm
 10.2 and amdgpu driver release 31.70, and nothing in a generated stack
 restarts by itself any more, so a stack left up over a host reboot no
 longer comes back half-started; both are under **Changed**. The guest
-changes are in the bake, which has passed once in CI with all of them but
-the fio build and the ROCm and driver move, and the fleet files still
-pull an image baked before them; the last entry under **Changed** says
-what that CI bake covered and what it leaves unproven. The fio build,
-`--hipfile-test` and the ROCm 10.2 guest have since passed on one image
-baked by hand on the development host, which the ROCm entry describes.
+changes are in the image the fleet files now pull, `20261119.g2aea67d`,
+published from main after all of them; the entry on `<backing-ref>` under
+**Changed** says what that image is and what has been run on it.
 
 ### Breaking
 
@@ -321,8 +318,9 @@ baked by hand on the development host, which the ROCm entry describes.
     fleet that pins the fork is reported as a failure, not as the
     limitation.
   - It needs a guest image with the ROCm perftest
-    (`/etc/perftest-rocm.json`). The image the fleet files pull predates
-    it, and on those guests the test stops at its first check and says so.
+    (`/etc/perftest-rocm.json`). `20261119.g2aea67d`, which the fleet files
+    pull, is the first published image with it; on a guest of an older
+    image the test stops at its first check and says so.
   - Refused before anything starts on a fleet with one guest, for a flavor
     with no playbook, and for `--rocm-rdma-mode` without the test.
   - The bare extra var now runs `host-alloc`, where it ran the dma-buf
@@ -377,12 +375,10 @@ baked by hand on the development host, which the ROCm entry describes.
     `/opt/fio-hipfile/share/fio-commit.txt`, which is the file the
     benchmark script has always read to decide whether to build. The pin
     is also in `/etc/rocm-golden-guest.json` and in the compiler-cache key.
-  - **Not run in a bake or on a guest.** The role was run through
-    `ansible-playbook` against a local repository standing in for fio's;
-    no compiler ran, and fio's own configure and Makefile were read, not
-    exercised. That the built binary prints its version and its engine
-    list with no GPU is read from the engine's source. The first
-    playbook-test run on the pull request is the proof.
+  - *Run:* the role baked in pull request #241's playbook-test lane and
+    the guest check's fio block passed on that image. On a guest of an
+    image baked by hand the engine read 340 to 520 MB/s through
+    `quick-start test --hipfile-test`.
   - *Who is affected:* batesste-ci-images, whose `ubuntu-cuda-rocm-fio`
     image pins the master commit this repository built until now and wants
     the same move; and whoever runs the guest check against a published
@@ -430,10 +426,10 @@ baked by hand on the development host, which the ROCm entry describes.
     has no such fio.
   - *On today's fleet guests*, whose image predates the baked fio, the test
     runs the bench and reports fio as not in the image.
-  - **Not run on a guest.** The play was run through `ansible-playbook` on
-    the development host against stand-ins for mkfs, mount, umount, hipcc,
-    the bench and fio, nineteen ways. It needs a hand run of `qemu-tool
-    quick-start test --hipfile-test` on a stack.
+  - *Run:* by hand on two guests of a ROCm 10.2 image baked on the
+    development host, four times in one boot, every run passing both
+    reads on both guests; the entry on ROCm 10.2 under **Changed** has the
+    rates. *Not run:* any of the refusals on a guest, and no CI lane.
 
 - **`<vm-nvme-vram>`: a fleet's emulated NVMe may read and write the
   guest's GPU memory directly.** A new boolean fleet element, default
@@ -561,8 +557,13 @@ baked by hand on the development host, which the ROCm entry describes.
     they are 450 to 535 MB/s, and fio 439 to 520 MB/s. That is still
     below the 831 and 959 MB/s measured on ROCm 10.1, one guest at a
     time, and the difference is not explained.
-  - *Not run:* a clean bake from the cloud image at these pins, any CI
-    lane, the other two fleets, and the stamp's new fields.
+  - **Then baked clean in CI.** Pull request #241's playbook-test lane
+    baked from the cloud image at these pins (`ok=585 failed=0`), the
+    guest check passed whole on the 7.2.3 image, and the configure,
+    firmware and GPU stages passed behind a stack. The stamp's new fields
+    were written there for the first time.
+  - *Not run:* the other two fleets, guests at 4 vCPU, and the daily
+    benchmarks on a 10.2 guest.
 
 - **Nothing in a generated stack restarts by itself.** The device servers
   (mesh workers, rocjitsu, SDXI) and Prometheus, Grafana, Loki and Alloy
@@ -680,7 +681,7 @@ baked by hand on the development host, which the ROCm entry describes.
     final form has run against stand-ins and the dev host's toolchain only.
 
 - **`qemu/checks/rocm-golden.sh` refuses an image baked before this
-  release**, the one the fleet files pull included. The check stops on any
+  release**: every published image before `20261119.g2aea67d`. The check stops on any
   of five things about such an image: it has the three rdma-core
   development packages, and it has no ROCm perftest
   (`/etc/perftest-rocm.json`), no fio with the `libhipfile` engine
@@ -794,16 +795,40 @@ baked by hand on the development host, which the ROCm entry describes.
     baked SRQ + P4 driver still loaded and this repository's naming rules
     still installed. An earlier run, at `40eb051`, had stopped in the
     perftest build, before the role named a SIMD level.
-  - **The fleet files still pull `20261117.g481c892`, which was baked
-    before all of it.** Until an image is published from this release and
-    `<backing-ref>` moves, a fleet's guests have no ROCm perftest, have the
-    rdma-core development packages, are `ernic-vm-<n>` inside, and export
-    SDXI counters only once `quick-start test` has run on them.
-  - **Still unproven:** the publish workflow, which bakes without the
-    lane's key and checks the hostname before it pushes, never runs from a
-    pull request; no guest with eight NICs has been booted from any
-    published image; and the SDXI row has been seen in Grafana with live
+  - **The fleet files pulled `20261117.g481c892`, baked before all of
+    it, until `<backing-ref>` moved**; the next entry is that move.
+  - **Still unproven:** no guest with eight NICs has been booted from any
+    published image, and the SDXI row has been seen in Grafana with live
     series only on the development host.
+
+- **`<backing-ref>` is `20261119.g2aea67d` in all three fleet files**, the
+  image the publish workflow pushed from main at `2aea67d` on 2026-11-19.
+  It is the first published image with everything this release changes
+  in the guest: ROCm 10.2 and amdgpu-dkms 7.2.3, the ROCm perftest, fio
+  with the `libhipfile` engine, one rdma-core to build against, the SDXI
+  exporter and the hostname unit. The three stacks are regenerated and the
+  README's guest badge follows.
+  - *The image:* manifest `sha256:14b3785bee88...`, a 1,546,691,156-byte
+    layer that unpacks to 7,993,294,848 bytes; `20261117.g481c892` was
+    2,075,684,547 and 8,379,301,888.
+  - *Run before the push,* in that publish run: the bake
+    (`ok=585 failed=0`), the guest check on a boot with no device, and an
+    overlay booted as the one guest of a rendered default stack, which
+    took the name the stack gave it (`rocm-golden-1`) and passed the
+    configure, GPU and SDXI gate.
+  - *Who is affected:* a host that already ran `quick-start` has guest
+    disks on the old image. `quick-start` stops and says so; run it with
+    `--clean-overlays` to replace them. After that, `--rocm-rdma-test`
+    runs with no role applied by hand and `--hipfile-test` runs fio as
+    well as the bench. A guest is named by its stack inside only when the
+    stack's qemu containers run a `qemu-tool` newer than 2.0.0, which a
+    checkout gives them and PyPI does not until this release is there.
+  - **Nothing has pulled it yet.** No lane and no hand run has booted the
+    published artifact; `quickstart-boot` on the pull request that makes
+    this move is the first. The daily benchmarks will read ROCm 10.2
+    guests from their next run, and the hipFile figures there are expected
+    lower than on 10.1: about 450 to 535 MB/s was measured by hand with
+    one guest at a time.
 
 ### Fixed
 

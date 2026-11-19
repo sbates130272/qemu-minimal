@@ -37,7 +37,7 @@
 [![Libvfio-user](https://img.shields.io/badge/libvfio--user-3719c3a-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork/tags)
 [![Rocm-ernic](https://img.shields.io/badge/rocm--ernic-90434a2-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-rocm-ernic-sbates-fork/tags)
 [![Rocjitsu](https://img.shields.io/badge/rocjitsu-50be05a-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu/tags)
-[![Guest Qcow2](https://img.shields.io/badge/guest-20261117.g481c892-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/qemu-tool-rocm-golden/tags)
+[![Guest Qcow2](https://img.shields.io/badge/guest-20261119.g2aea67d-blue?style=flat-square)](https://hub.docker.com/r/sbates130272/qemu-tool-rocm-golden/tags)
 
 <!-- What the rocm-golden guest is baked with: pins in ansible/playbooks/vm-rocm-golden.yml and <bake-release> in qemu/stacks/rocm-golden.xml -->
 [![Golden Guest OS](https://img.shields.io/badge/rocm--golden-Ubuntu%20resolute-blueviolet?style=flat-square&logo=ubuntu)](qemu/stacks/rocm-golden.xml)
@@ -239,8 +239,9 @@ command, and `sudo amdgpu-probe` in the guest refuses rather than load a
 driver whose probe would fail and leave it resident with nothing bound.
 `amdgpu-probe --status` prints which state a guest is in; `~/WELCOME.md` in
 the guest lists them. That behaviour is in the image the fleet files pull,
-`20261117.g481c892`, and in any baked since — the one published before it,
-`20261117.g80c17f8`, still tells you to run the probe first.
+`20261119.g2aea67d`, and in every image since `20261117.g481c892` — the one
+published before that, `20261117.g80c17f8`, still tells you to run the
+probe first.
 
 Two more tests are behind switches. Both are off by default, run with
 `test` or with no verb, and run in the guest as its login user with no
@@ -269,10 +270,12 @@ with 8-vCPU guests.
 server restarts.** From then on an RDMA WRITE on it with two equal-length
 operands is a reduction; ordinary transfers, which have one, are untouched.
 A third switch, `--rocm-rdma-test`, is under
-[RDMA with GPU memory](#rdma-with-gpu-memory) below: it needs a newer guest
-image than the fleet files pull. A fourth, `--hipfile-test`, is under
-[NVMe to GPU memory](#nvme-to-gpu-memory): it runs on the image the fleet
-files pull, and does more on a newer one.
+[RDMA with GPU memory](#rdma-with-gpu-memory) below, and a fourth,
+`--hipfile-test`, under [NVMe to GPU memory](#nvme-to-gpu-memory). Both
+need what the image the fleet files pull has had since `20261119.g2aea67d`:
+the ROCm perftest, and fio with the hipFile engine. On a guest of an
+older image the first stops at its image check and the second runs
+without fio.
 
 `qemu-tool quick-start --help` has the rest, and `qemu-tool man` has all of
 it. For more than two guests see [A fleet of your own](#a-fleet-of-your-own),
@@ -330,9 +333,10 @@ rocm-golden-1: hipFile read <rate> MB/s (33554432 bytes, verified); fio <rate> M
 - Each result is in its guest's summary under the stack's `artifacts/`, in
   the report, and on the home dashboard's **hipFile** row.
 
-**This test has not yet run on a guest**: it was written against stand-ins
-for a guest's tools. The bench and the fio command line are the ones the
-daily benchmark lane runs.
+**This test has run on guests by hand, and in no lane**: four runs on two
+guests of a ROCm 10.2 image on the development host, both reads passing
+each time. The bench and the fio command line are the ones the daily
+benchmark lane runs.
 
 ### RDMA with GPU memory
 
@@ -386,8 +390,8 @@ buffer and the first work request ends in `remote access error`, and
 inside the guest (`Couldn't allocate MR with error=14`) whichever QEMU is
 pinned. Either failure is reported as the known limitation of its mode,
 with that line, and the run still exits non-zero. **It needs a guest
-image that has the ROCm perftest, which the image the fleet files pull
-does not**: on those guests the test stops at
+image that has the ROCm perftest**, which the image the fleet files pull
+has since `20261119.g2aea67d`: on a guest of an older image the test stops at
 its first check and says so. The result and both sides' output are in
 `artifacts/rocm-rdma.md` under the stack and in the report. A fleet with
 one guest is refused before anything is started. A run that is timed out

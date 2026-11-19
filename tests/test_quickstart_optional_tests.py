@@ -2629,7 +2629,7 @@ class Docs(unittest.TestCase):
 
     def test_the_hipfile_switch_is_written_down(self):
         """What it reads, that fio is the image's or nothing, what it does
-        to the namespace, the two rates, and that it has not run."""
+        to the namespace, the two rates, and where it has run."""
         readme = (REPO / "README.md").read_text()
         start = readme.index("## Quick Start")
         section = " ".join(
@@ -2647,7 +2647,8 @@ class Docs(unittest.TestCase):
                        "`<vm-nvme-vram>true`", "11 to 13 MB/s",
                        "`<vm-nvme>0`",
                        "a bare `fio` in a guest is still Ubuntu's",
-                       "**This test has not yet run on a guest**"):
+                       "**This test has run on guests by hand, and in no "
+                       "lane**"):
             self.assertIn(needle, section)
         man = (REPO / "qemu/qemu-tool/man/qemu-tool.1").read_text()
         start = man.index(".SH QUICK-START OPTIONS")
@@ -2667,7 +2668,7 @@ class Docs(unittest.TestCase):
         for needle in ("`qemu-tool quick-start --hipfile-test`",
                        "`quickstart_hipfile_test`",
                        "`hipfile fio: not in this image`",
-                       "**Not run on a guest.**",
+                       "*Run:* by hand on two guests of a ROCm 10.2 image",
                        "**The hipFile benchmarks unmount what they "
                        "mounted.**"):
             self.assertIn(needle, since)
@@ -2675,9 +2676,9 @@ class Docs(unittest.TestCase):
         for needle in ("`--hipfile-test`", "quickstart_hipfile_test",
                        "`HIPFILE_ROOT_TASKS`",
                        "**unmounted in an `always` section**",
-                       "**Nothing of this play has run on a guest**",
+                       "**The play has run on guests once**",
                        "hipfile-target-check.sh",
-                       "`--hipfile-test`, any of it | not run on a guest"):
+                       "| `--hipfile-test` | run by hand on 2026-11-19"):
             self.assertIn(needle, agents)
         # The ordering hazard is no longer described as open.
         self.assertNotIn("it predates this change and is not fixed", agents)
@@ -2685,7 +2686,7 @@ class Docs(unittest.TestCase):
 
     def test_the_rocm_rdma_switch_is_written_down(self):
         """What it tests, the default mode and why, which modes fail and
-        why, and that it needs a newer guest image than the fleets pull."""
+        why, and which guest image it needs."""
         readme = (REPO / "README.md").read_text()
         start = readme.index("## Quick Start")
         section = " ".join(
@@ -2711,7 +2712,7 @@ class Docs(unittest.TestCase):
                        "the form that passes on any QEMU",
                        "The fork QEMU every shipped stack pins",
                        "on a stack whose `<qemu-ref>` names it",
-                       "which the image the fleet files pull does not",
+                       "which the image the fleet files pull has since",
                        "ib_write_bw with ROCm buffers (host-alloc)",
                        # Do we do that already: a play, and no switch.
                        "that only a hand-typed `ansible-playbook -e "
