@@ -752,6 +752,20 @@ build and `--hipfile-test` have run against stand-ins only.
 
 ### Fixed
 
+- **`gen-vm --ansible-only` works after a failed bake.** A bake writes its
+  sidecar only when it succeeds, and `--ansible-only` read the login key
+  from the sidecar, so a rerun against the image a failed bake left offered
+  the guest no key and waited ten minutes before blaming the guest. It now
+  falls back to the keypair `gen-vm` generated for that image.
+
+- **`gen-vm` no longer reinstalls the rocm-ernic collection on every run.**
+  `ansible-galaxy` re-clones a git requirement each time, 37 seconds
+  measured. `gen-vm` records the digest of `requirements.yml` after an
+  install and skips galaxy while the file is unchanged; a moved pin
+  installs again. Delete
+  `~/.ansible/collections/ansible_collections/.qemu-tool-requirements.sha256`
+  to force an install. It does not notice a collection changed by hand.
+
 - **`vm-rocm-golden.yml --tags configure` no longer replaces the image's
   SRQ + P4 ionic driver.** The golden bake builds `ionic-ernic` from the
   kernel's ionic sources plus rocm-ernic's SRQ and P4 series. The configure
