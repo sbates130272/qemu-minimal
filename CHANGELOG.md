@@ -919,6 +919,13 @@ published from main after all of them; the entry on `<backing-ref>` under
     release and leaves the tree clean, the suite sees the stamped versions,
     and a dry run changes and runs nothing. *Not run there:* the passing
     path, which ends in a signed tag and needs the releaser's key.
+  - Those tests copied the real `CHANGELOG.md` into their throwaway
+    repository, and on the tree the script has just stamped that file's
+    `[Unreleased]` section is empty, so the script inside the test refused
+    it and three tests failed. The first attempt to cut this release
+    stopped there, with nothing committed or tagged. The tests now add an
+    entry of their own, and one of them runs on a changelog stamped that
+    way.
 
 - **The home dashboard's panels line up.** Three bands of
   `quickstart.json` overlapped a row heading or the panels below, or

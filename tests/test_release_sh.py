@@ -46,6 +46,21 @@ class ReleaseRunsTheSuite(unittest.TestCase):
             dest = self.repo / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(REPO_ROOT / rel, dest)
+        # An entry of this test's own under [Unreleased]. The script refuses
+        # a changelog with none, and the real one has none at the one moment
+        # that matters: release.sh runs this suite on the tree it has just
+        # stamped, where [Unreleased] was retitled a moment ago. Without
+        # this the first real release after the script began running the
+        # suite, v2.1.0, stopped here on its own tests.
+        changelog = self.repo / "CHANGELOG.md"
+        text = changelog.read_text()
+        heading = "## [Unreleased]\n"
+        assert heading in text, "CHANGELOG.md has no [Unreleased] heading"
+        changelog.write_text(text.replace(
+            heading,
+            heading + "\n### Changed\n\n- **An entry of the test's own.**\n",
+            1))
+        self.base = {rel: (self.repo / rel).read_bytes() for rel in STAMPED}
         (self.repo / "tests").mkdir()
         _git(self.repo, "init", "-q")
         _git(self.repo, "checkout", "-q", "-B", "main")
@@ -101,7 +116,7 @@ class ReleaseRunsTheSuite(unittest.TestCase):
             _git(self.repo, "status", "--porcelain").stdout.strip(), "")
         for rel in STAMPED:
             self.assertEqual((self.repo / rel).read_bytes(),
-                             (REPO_ROOT / rel).read_bytes(), rel)
+                             self.base[rel], rel)
 
     def test_the_suite_sees_the_stamped_tree(self):
         """Running it before the stamp would have passed v2.0.0 too."""
@@ -126,6 +141,25 @@ class ReleaseRunsTheSuite(unittest.TestCase):
         self.assertFalse(self.asked.exists())
         self.assertEqual(
             _git(self.repo, "status", "--porcelain").stdout.strip(), "")
+
+    def test_it_passes_on_a_tree_the_script_has_just_stamped(self):
+        """release.sh runs this suite on a tree whose [Unreleased] is empty.
+        A test here that needed the real changelog to have entries failed
+        the release it was written to protect."""
+        changelog = self.repo / "CHANGELOG.md"
+        real = (REPO_ROOT / "CHANGELOG.md").read_text()
+        heading = "## [Unreleased]\n"
+        stamped = real.replace(
+            heading, heading + "\n## [v98.0.0] - 2026-01-01\n", 1)
+        # What setUp makes of such a tree.
+        changelog.write_text(stamped.replace(
+            heading,
+            heading + "\n### Changed\n\n- **An entry of the test's own.**\n",
+            1))
+        _git(self.repo, "commit", "-q", "-am", "stamped")
+        done = self._release("99.0.0", "--dry-run")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("An entry of the test", done.stdout)
 
     def test_the_suite_runs_between_the_stamp_and_the_commit(self):
         text = RELEASE_SH.read_text()
