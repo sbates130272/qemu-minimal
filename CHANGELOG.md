@@ -17,11 +17,16 @@ hostname the host gives it. Every shipped stack and
 every workflow now runs the fork QEMU, which is the first entry under
 **Changed**, and the default stack points its NVMe at the guest's GPU
 (`<vm-nvme-vram>`, under **Added**), which moves the two hipFile badges by
-about seventy times at the next daily run. The guest changes are in the
-bake, which has passed once in CI with all of them but the fio build, and
-the fleet files still pull an image baked before them; the last entry
-under **Changed** says what was run and what that leaves unproven. The fio
-build and `--hipfile-test` have run against stand-ins only.
+about seventy times at the next daily run. The golden bake moves to ROCm
+10.2 and amdgpu driver release 31.70, and nothing in a generated stack
+restarts by itself any more, so a stack left up over a host reboot no
+longer comes back half-started; both are under **Changed**. The guest
+changes are in the bake, which has passed once in CI with all of them but
+the fio build and the ROCm and driver move, and the fleet files still
+pull an image baked before them; the last entry under **Changed** says
+what that CI bake covered and what it leaves unproven. The fio build,
+`--hipfile-test` and the ROCm 10.2 guest have since passed on one image
+baked by hand on the development host, which the ROCm entry describes.
 
 ### Breaking
 
@@ -574,6 +579,12 @@ build and `--hipfile-test` have run against stand-ins only.
   - *Not run:* no stack has been started from the new render. The render
     and the committed stacks are held to it by a test.
 
+- **Every Grafana dashboard refreshes on `auto`.** The home and fleet
+  dashboards refreshed every 30 seconds and the node-exporter dashboard
+  every minute, whatever time range was shown. All three now set
+  `"refresh": "auto"`, in each stack. A stack already rendered keeps its
+  copy until it is rendered again. Not seen in a browser.
+
 - **A guest's hostname is the name the host calls it by.** A stack's guests
   were `rocm-golden-1` and `rocm-golden-2` in `qemu-tool list`, in the
   compose services and in Prometheus's `vm_name`, and `ernic-vm-1` and
@@ -760,10 +771,11 @@ build and `--hipfile-test` have run against stand-ins only.
     this starts a new line of cache entries: it restores the last entry
     through the fallback and saves once under the new prefix.
 
-- **Every change to the golden guest here but one has been through one
+- **Every change to the golden guest here but two has been through one
   complete bake in CI, and no published image has any of them yet.** The
-  one is the fio build, added after that bake; its own entry under
-  **Added** says what it has run against.
+  two are the fio build and the move to ROCm 10.2 and driver release
+  31.70, both made after that bake; their own entries say what each has
+  run against.
   - **The bake.** Pull request #240's playbook-test run at `a7b33fe` on
     2026-11-18 (run 44363648365) baked with all of it and passed: bake
     recap `ok=557 failed=0` in 13m29s on a warm compiler cache (1911 of
