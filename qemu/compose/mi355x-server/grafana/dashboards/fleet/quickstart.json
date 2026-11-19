@@ -2468,7 +2468,7 @@
       ]
     }
   ],
-  "refresh": "30s",
+  "refresh": "auto",
   "schemaVersion": 39,
   "tags": [
     "quickstart",
