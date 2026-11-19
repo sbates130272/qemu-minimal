@@ -21,7 +21,7 @@
       
       
       <link rel="icon" href="../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.1">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.2">
     
     
       
@@ -671,7 +671,7 @@ the same basic model used by the ROCm/rocm-ernic site: badges for the latest
 published numbers, a durable history file, and a trend page regenerated as new
 CI data lands.</p>
 <h2 id="latest-published-snapshot">Latest published snapshot<a class="headerlink" href="#latest-published-snapshot" title="Permanent link">&para;</a></h2>
-<p>Generated from <code>bcfcebb9</code> at <strong>2026-11-19 17:12 UTC</strong>.</p>
+<p>Generated from <code>2aea67d6</code> at <strong>2026-11-19 20:34 UTC</strong>.</p>
 <p><img alt="Rocjitsu GEMM" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-gemm.json" />
 <img alt="Rocjitsu HipFile" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile.json" />
 <img alt="HipFile Fio" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile-fio.json" />
@@ -753,6 +753,11 @@ after the change reached main, is the change named here.</p>
 <tbody>
 <tr>
 <td>2026-11-18</td>
+<td>HipFile Fio</td>
+<td>fio is built from the 3.43 release, the first with the libhipfile engine, where it was a master commit between 3.42 and 3.43. It is still built in the guest before the run: no published golden image carries it yet. One baked after this change has it under <code>/opt/fio-hipfile</code>, and the build is then skipped.</td>
+</tr>
+<tr>
+<td>2026-11-18</td>
 <td>Rocjitsu HipFile, HipFile Fio</td>
 <td>The stack's NVMe is pointed at the guest's GPU BAR (<code>&lt;vm-nvme-vram&gt;</code>), so hipFile's direct path maps GPU memory, where it most likely went through QEMU's 4 KiB bounce buffer before (inferred, not profiled). Measured by hand before the change: 11 to 13 MB/s without; 831 and 959 MB/s with, one run each.</td>
 </tr>
@@ -777,15 +782,6 @@ after the change reached main, is the change named here.</p>
 </tr>
 </thead>
 <tbody>
-<tr>
-<td>5028fae4</td>
-<td>2026-11-13 16:14 UTC</td>
-<td>509 kFLOP/s</td>
-<td>13.1 MB/s</td>
-<td>6.88 MB/s</td>
-<td>n/a</td>
-<td>n/a</td>
-</tr>
 <tr>
 <td>5028fae4</td>
 <td>2026-11-14 15:07 UTC</td>
@@ -861,6 +857,15 @@ after the change reached main, is the change named here.</p>
 <tr>
 <td>bcfcebb9</td>
 <td>2026-11-19 17:12 UTC</td>
+<td>494 kFLOP/s</td>
+<td>567 MB/s</td>
+<td>616 MB/s</td>
+<td>138.1 MB/s</td>
+<td>3283.3 MB/s</td>
+</tr>
+<tr>
+<td>2aea67d6</td>
+<td>2026-11-19 20:34 UTC</td>
 <td>494 kFLOP/s</td>
 <td>567 MB/s</td>
 <td>616 MB/s</td>
