@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
   "label": "SDXI copy BW",
-  "message": "2900.3 MB/s (+60%)",
-  "color": "brightgreen"
+  "message": "1895.8 MB/s (-14%)",
+  "color": "yellow"
 }
