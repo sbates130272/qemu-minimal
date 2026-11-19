@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v2.1.0] - 2026-11-19
+
 A stack now publishes its guests' SSH ports and Grafana on the host's
 loopback address, where 2.0.0 published them on every interface. Read
 **Breaking** first if you reach a guest or Grafana from a machine other than
