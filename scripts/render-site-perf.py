@@ -61,6 +61,12 @@ METRICS = (
 # main. That step is the change and not a regression or a win in the code
 # under test.
 NOTES = (
+    ("2026-11-18", "HipFile Fio",
+     "fio is built from the 3.43 release, the first with the libhipfile "
+     "engine, where it was a master commit between 3.42 and 3.43. It is "
+     "still built in the guest before the run: no published golden image "
+     "carries it yet. One baked after this change has it under "
+     "`/opt/fio-hipfile`, and the build is then skipped."),
     ("2026-11-18", "Rocjitsu HipFile, HipFile Fio",
      "The stack's NVMe is pointed at the guest's GPU BAR "
      "(`<vm-nvme-vram>`), so hipFile's direct path maps GPU memory, where "

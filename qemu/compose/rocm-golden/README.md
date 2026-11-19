@@ -324,16 +324,22 @@ Opt-in with `--profile metrics`. The sources:
   The SDXI device's counters come the same way: `sdxi_up` and
   `sdxi_<counter>_total{context="N"}`, written every 15 s, which the home
   dashboard's "SDXI" row reads. Client work is counted in context 1.
-  What the two optional tests of `quick-start test` measured comes the
+  What the optional tests of `quick-start test` measured comes the
   same way, written once by the test and not by a timer:
   `quickstart_p4_fp8_bytes_per_second`, `quickstart_p4_fp8_operation_seconds`,
   `quickstart_p4_fp8_elements`, `quickstart_p4_fp8_iterations` and
   `quickstart_p4_fp8_timestamp_seconds` after `--p4-test`, on the first
   guest, which the home dashboard's "P4" row reads, and
   `quickstart_sdxi_copy_bytes` and `quickstart_sdxi_copy_timestamp_seconds`
-  after `--sdxi-test`, on every guest. A guest no test has passed on has
-  neither, and the tiles say "no test run"; a test that fails writes
-  nothing, so the tiles keep the last pass.
+  after `--sdxi-test`, on every guest, and
+  `quickstart_hipfile_read_bytes_per_second`,
+  `quickstart_hipfile_read_bytes`, `quickstart_hipfile_timestamp_seconds`
+  and, on a guest whose image has the fio with the `libhipfile` engine,
+  `quickstart_hipfile_fio_bytes_per_second` after `--hipfile-test`, on
+  every guest, which the "hipFile" row reads. A guest no test has passed
+  on has none of them, and the tiles say "no test run" ("no fio result"
+  for fio); a test that fails
+  writes nothing, so the tiles keep the last pass.
   **There is no amd-metrics-exporter (`:9488`) and no hsa-snoop (`:9490`)
   job any more.** Both used to be rendered and forwarded, and both were
   down: measured on two guests of `20261117.g80c17f8` after a passing

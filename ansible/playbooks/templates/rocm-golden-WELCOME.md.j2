@@ -20,6 +20,7 @@ device.
     rocm-ernic    {{ ernic_source_pin }}
     rocm-sdxi     {{ sdxi_source_pin }}
     perftest      {{ golden_perftest.commit }}  ({{ golden_perftest.ref }}, built with ROCm, in {{ golden_perftest.prefix }}/bin)
+    fio           {{ golden_fio.commit }}  ({{ golden_fio.ref }}, with the libhipfile engine, as {{ golden_fio.binary }})
 
 `/etc/rocm-golden-guest.json` has the same facts, machine-readable.
 
@@ -183,6 +184,31 @@ registers and the first work request fails with `remote access error`.
 `--use_rocm_dmabuf`, allocates the buffer in host memory the GPU can
 address; a transfer that passes only with it set has a NIC that cannot
 reach VRAM and is otherwise sound.
+
+## NVMe to GPU memory with fio
+
+`{{ golden_fio.binary }}` is fio {{ golden_fio.ref }} built with the
+`libhipfile` ioengine, which reads a file on an NVMe namespace straight
+into GPU memory through hipFile. It is on no PATH: a bare `fio` is still
+the archive's, in `/usr/bin`, which has no such engine.
+`/etc/fio-hipfile.json` records the build.
+
+    {{ golden_fio.binary }} --enghelp | grep libhipfile
+
+    sudo {{ golden_fio.binary }} --name=hipfile-read --ioengine=libhipfile \
+        --rocm_io=hipfile --filename=FILE --rw=read --bs=1M --size=64M \
+        --iodepth=1 --direct=1
+
+Needs a VM with a GPU, bound as above, and an NVMe namespace with a
+filesystem on it. **FILE has to be on the NVMe namespace.** A hipFile
+direct read of a file on any other disk, the root disk included, has hung
+a guest for good. Write the file with real data (`dd if=/dev/urandom
+oflag=direct`), not `fallocate`: unwritten extents are read as holes and
+never reach the device.
+
+How fast it is depends on whether the emulated NVMe was told which GPU
+BAR to map (`<vm-nvme-vram>` in the fleet file, fork QEMU only). Without
+that the direct path still works, at a rate far below a plain read.
 
 ## If the VM has SDXI engines
 

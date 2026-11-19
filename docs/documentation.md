@@ -43,7 +43,12 @@ The two hipFile metrics step much further on the same date, by about seventy
 times: that file now points the guest's NVMe at its GPU's memory
 (`<vm-nvme-vram>`), so hipFile's direct read maps that memory where, most
 likely, it went through QEMU a page at a time before (inferred, not
-profiled). That is the setting and not faster code. The performance page
+profiled). That is the setting and not faster code. The fio metric is fio
+3.43, the first release with the `libhipfile` engine, from the first daily
+run after that change reached main. It is still built in the guest before
+the run, because no published golden image carries it yet; an image baked
+after the change has it under `/opt/fio-hipfile` and the build is skipped.
+The performance page
 lists such changes, with their dates, under "Changes to what is measured".
 
 | Metric | Measured on | Artifact |

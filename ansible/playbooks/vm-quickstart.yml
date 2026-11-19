@@ -856,6 +856,448 @@
              + quickstart_p4_bench.stdout_lines }}
 
 # ---------------------------------------------------------------------------
+# hipFile test (optional, off by default)
+# ---------------------------------------------------------------------------
+#
+# A file on the guest's NVMe namespace read straight into GPU memory through
+# hipFile, on EVERY guest, and what arrived checked: the bench multiplies
+# two matrices it read that way on the GPU and compares the product with one
+# computed on the host. OFF unless quickstart_hipfile_test is true, which is
+# what `qemu-tool quick-start --hipfile-test` passes: a run without it
+# reaches the one task that ends the play and nothing in a guest.
+#
+#   ansible-playbook -i <stack dir>/fleet-inventory.yml \
+#       playbooks/vm-quickstart.yml --private-key <key> \
+#       -e quickstart_hipfile_test=true
+#
+# Two reads, and the second is there only when the image has it:
+#
+#   the bench  roles/rocjitsu_setup/files/gemm-hipfile-bench.hip, compiled in
+#              the guest with the image's hipcc. The same file
+#              scripts/generate-vm-report.sh runs for the daily lane.
+#   fio        the libhipfile ioengine of the fio the golden bake installs
+#              as /opt/fio-hipfile/bin/fio. An image baked before that has
+#              none, and the result says "not in this image": nothing is
+#              built here.
+#
+# It needs a fleet with <vm-nvme> of at least 1, which quick-start checks
+# before it starts anything, a bound GPU, and the hipFile SDK and hipcc of
+# the golden image. A guest without one of them is told which.
+#
+# THE NAMESPACE IS SCRATCH, and this play treats it so: it makes a NEW
+# filesystem on it every run, mounts it on a mount point of its own, and
+# unmounts it again in an always section. Both halves matter. The NVMe test
+# above writes the namespace raw, so whatever filesystem an earlier run
+# made is gone or damaged by now; and a filesystem left mounted would make
+# that test's write fail on the next run. A namespace that is already
+# mounted somewhere is refused, not formatted.
+#
+# A hipFile direct read of a file that is NOT on an NVMe namespace has hung
+# a guest for good, so the mount is checked before either read, by the
+# check the two report benches make.
+#
+# How fast it is depends on the stack. With <vm-nvme-vram>true on the fork
+# QEMU the emulated NVMe maps the GPU's BAR and the read runs at hundreds of
+# MB/s (831 MB/s for the bench and 959 MB/s for fio, measured by hand on
+# 2026-11-18); without it the direct path still works, at 11 to 13 MB/s.
+# The assertion is a rate above zero and the bench's own verification, not
+# a floor.
+#
+# Root is taken by the tasks that need it and no other: mkfs, mount, the
+# page cache drop, fio and the unmount. The bench itself runs as the login
+# user. Both reads run under timeout(1).
+- name: Read from the NVMe into GPU memory through hipFile on each guest
+  hosts: fleet
+  gather_facts: false
+  become: false
+  vars:
+    # The gate. Everything below is read only when it is true.
+    quickstart_hipfile_test: false
+    quickstart_hipfile_device: /dev/nvme0n1
+    # The test's own, made and removed by it. Not /mnt/nvme, which the
+    # report benches use.
+    quickstart_hipfile_mount: /mnt/quickstart-hipfile
+    # The ROCm prefix the first play recorded, or the tree its bin/ links
+    # into: /opt/rocm has bin/ and lib/ and no include/.
+    quickstart_hipfile_rocm: "{{ quickstart_rocm | default('/opt/rocm') }}"
+    # The GPU the "Prove the GPU" play found, and the one every fleet here
+    # serves when this play is run without it.
+    quickstart_hipfile_arch: "{{ quickstart_arch | default('gfx1250', true) }}"
+    quickstart_hipfile_probe_exe: /usr/local/bin/amdgpu-probe
+    # Both beside this playbook. The check is a file of its own so that it
+    # is the one the report benches make and not a paraphrase of it.
+    quickstart_hipfile_bench_source: roles/rocjitsu_setup/files/gemm-hipfile-bench.hip
+    quickstart_hipfile_target_check: roles/rocjitsu_setup/files/hipfile-target-check.sh
+    # Timed passes over the bench's 32 MiB payload, after one warm pass.
+    quickstart_hipfile_iters: 4
+    # Where the golden bake installs the fio that has the engine.
+    quickstart_hipfile_fio_exe: /opt/fio-hipfile/bin/fio
+    quickstart_hipfile_fio_mb: 64
+    # 160 MiB at the slow rate is under 20 s, so ten minutes is a guest
+    # that has stopped answering and not a slow read.
+    quickstart_hipfile_timeout: 600
+  tasks:
+    - name: Skip the hipFile test unless it was asked for
+      ansible.builtin.meta: end_play
+      when: not (quickstart_hipfile_test | bool)
+
+    # Says which it is, on stdout, for the task after it, and the ROCm tree
+    # it found for the tasks after that.
+    - name: Find out whether this guest can run the hipFile test
+      ansible.builtin.shell:
+        cmd: |
+          dev={{ quickstart_hipfile_device | quote }}
+          probe={{ quickstart_hipfile_probe_exe | quote }}
+          given={{ quickstart_hipfile_rocm | quote }}
+          golden="the guest image must be the golden bake (ansible/playbooks/vm-rocm-golden.yml)"
+          if [ ! -e "${dev}" ]; then
+            echo "${dev} is absent: this guest has no NVMe namespace" \
+                 "(<vm-nvme>1</vm-nvme> in the fleet file, then bring the" \
+                 "stack up again)"
+            exit 1
+          fi
+          mounted=$(findmnt -n -o TARGET --source "${dev}" 2>/dev/null | head -1)
+          if [ -n "${mounted}" ]; then
+            echo "${dev} is mounted on ${mounted}: the test makes a new" \
+                 "filesystem on the namespace and will not do that under a" \
+                 "mount. Unmount it first (sudo umount ${mounted})"
+            exit 1
+          fi
+          if [ ! -x "${probe}" ]; then
+            echo "${probe} is not installed: ${golden}"
+            exit 1
+          fi
+          state=$("${probe}" --status 2>&1)
+          if [ "${state}" != loaded ]; then
+            echo "amdgpu-probe --status says \"${state}\", not \"loaded\":" \
+                 "the GPU is not bound, so HIP would find no device. The" \
+                 "first play of this file probes it (sudo ${probe})"
+            exit 1
+          fi
+          rocm=""
+          for root in "${given}" "$(dirname "$(readlink -f "${given}/bin")")"; do
+            if { [ -e "${root}/include/hipfile.h" ] ||
+                 [ -e "${root}/include/hipfile/hipfile.h" ]; } &&
+               [ -e "${root}/lib/libhipfile.so" ]; then
+              rocm=${root}
+              break
+            fi
+          done
+          if [ -z "${rocm}" ]; then
+            echo "no hipFile SDK (hipfile.h and lib/libhipfile.so) under" \
+                 "${given} or the tree its bin/ links into:" \
+                 "amdrocm-hipfile-dev is not installed. ${golden}"
+            exit 1
+          fi
+          if [ ! -x "${rocm}/bin/hipcc" ]; then
+            echo "no hipcc in ${rocm}/bin: ${golden}"
+            exit 1
+          fi
+          echo "rocm=${rocm}"
+          echo "${dev} is not mounted, amdgpu is loaded, and the hipFile" \
+               "SDK and hipcc are in ${rocm}"
+        executable: /bin/bash
+      register: quickstart_hipfile_ready
+      changed_when: false
+      failed_when: false
+
+    - name: Fail with the reason when it cannot
+      ansible.builtin.assert:
+        that: quickstart_hipfile_ready.rc == 0
+        fail_msg: >-
+          {{ inventory_hostname }}: the hipFile test cannot run.
+          {{ quickstart_hipfile_ready.stdout | default('', true) | trim }}
+          {{ quickstart_hipfile_ready.stderr | default('', true) | trim }}
+        success_msg: >-
+          {{ quickstart_hipfile_ready.stdout_lines | default([]) | last
+             | default('') }}
+
+    - name: Record the ROCm tree the bench is built against
+      ansible.builtin.set_fact:
+        quickstart_hipfile_rocm_tree: >-
+          {{ (quickstart_hipfile_ready.stdout_lines
+              | select('match', 'rocm=') | first)
+             | regex_replace('^rocm=', '') }}
+
+    - name: Make a scratch directory for the bench
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: quickstart-hipfile.
+      register: quickstart_hipfile_work
+
+    # From here on the scratch directory exists, and from the mount on so
+    # does a mounted filesystem: both go in the always section, whatever
+    # happens between. The two reads do not fail their tasks; what they
+    # printed is judged after the unmount.
+    - name: Build the bench, read through hipFile and clean up
+      block:
+        - name: Copy the bench source
+          ansible.builtin.copy:
+            src: "{{ quickstart_hipfile_bench_source }}"
+            dest: "{{ quickstart_hipfile_work.path }}/gemm-hipfile-bench.hip"
+            mode: "0644"
+
+        # -O2 is not optional: without it the kernel needs a scratch
+        # segment, which the bench refuses to run with.
+        - name: Compile the bench
+          ansible.builtin.command:
+            argv:
+              - timeout
+              - "{{ quickstart_hipfile_timeout | string }}"
+              - "{{ quickstart_hipfile_rocm_tree }}/bin/hipcc"
+              - -O2
+              - "--offload-arch={{ quickstart_hipfile_arch }}"
+              - "-I{{ quickstart_hipfile_rocm_tree }}/include"
+              - "-I{{ quickstart_hipfile_rocm_tree }}/include/hipfile"
+              - -o
+              - "{{ quickstart_hipfile_work.path }}/gemm-hipfile-bench"
+              - "{{ quickstart_hipfile_work.path }}/gemm-hipfile-bench.hip"
+              - "-L{{ quickstart_hipfile_rocm_tree }}/lib"
+              - -lhipfile
+              - "-Wl,-rpath,{{ quickstart_hipfile_rocm_tree }}/lib"
+          changed_when: true
+
+        # Every run: the NVMe test before this play wrote the namespace
+        # raw, so there is no filesystem of an earlier run to reuse.
+        - name: Make a new filesystem on the NVMe namespace
+          become: true
+          ansible.builtin.command:
+            argv:
+              - mkfs.ext4
+              - -q
+              - -F
+              - "{{ quickstart_hipfile_device }}"
+          changed_when: true
+
+        - name: Mount it on the test's own mount point
+          become: true
+          ansible.builtin.shell:
+            cmd: |
+              set -eu
+              mnt={{ quickstart_hipfile_mount | quote }}
+              mkdir -p "${mnt}"
+              mount -o noatime {{ quickstart_hipfile_device | quote }} "${mnt}"
+              chmod 1777 "${mnt}"
+            executable: /bin/sh
+          changed_when: true
+
+        # Before either read: a hipFile direct read of a file on anything
+        # but an NVMe namespace has hung a guest for good.
+        - name: Refuse a target that is not on an NVMe namespace
+          ansible.builtin.script:
+            cmd: >-
+              {{ quickstart_hipfile_target_check }}
+              {{ quickstart_hipfile_mount | quote }}
+            executable: /bin/bash
+          changed_when: false
+
+        - name: Read the payload through hipFile and check what arrived
+          ansible.builtin.command:
+            argv:
+              - timeout
+              - "{{ quickstart_hipfile_timeout | string }}"
+              - "{{ quickstart_hipfile_work.path }}/gemm-hipfile-bench"
+              - "{{ quickstart_hipfile_mount }}"
+              - "{{ quickstart_hipfile_iters | string }}"
+          register: quickstart_hipfile_bench
+          changed_when: false
+          failed_when: false
+
+        # Run by its path: it is on no PATH, and a bare fio is the
+        # archive's, which has no such engine.
+        - name: Look for a fio that has the libhipfile engine
+          ansible.builtin.shell:
+            cmd: |
+              fio={{ quickstart_hipfile_fio_exe | quote }}
+              if [ ! -x "${fio}" ]; then
+                echo "absent"
+              elif "${fio}" --enghelp 2>/dev/null |
+                   grep -E '^[[:space:]]*libhipfile$' >/dev/null; then
+                echo "present"
+              else
+                echo "no engine"
+              fi
+            executable: /bin/bash
+          register: quickstart_hipfile_fio_found
+          changed_when: false
+
+        # Real data and not fallocate: unwritten extents are read as holes
+        # and never reach the device. Then the page cache is dropped so
+        # the read is from the namespace.
+        - name: Write the file fio reads
+          ansible.builtin.shell:
+            cmd: |
+              set -eu
+              dd if=/dev/urandom \
+                 of={{ (quickstart_hipfile_mount ~ '/fio-hipfile.dat') | quote }} \
+                 bs=1M count={{ quickstart_hipfile_fio_mb | int }} \
+                 oflag=direct status=none
+              sync
+            executable: /bin/sh
+          changed_when: true
+          when:
+            - quickstart_hipfile_fio_found.stdout | trim == 'present'
+            - quickstart_hipfile_bench.rc == 0
+
+        - name: Drop the page cache
+          become: true
+          ansible.builtin.command:
+            cmd: sysctl -q -w vm.drop_caches=3
+          changed_when: false
+          when:
+            - quickstart_hipfile_fio_found.stdout | trim == 'present'
+            - quickstart_hipfile_bench.rc == 0
+
+        - name: Read the file with fio's libhipfile engine
+          become: true
+          ansible.builtin.command:
+            argv:
+              - timeout
+              - "{{ quickstart_hipfile_timeout | string }}"
+              - "{{ quickstart_hipfile_fio_exe }}"
+              - --name=hipfile-read
+              - --ioengine=libhipfile
+              - --rocm_io=hipfile
+              - "--filename={{ quickstart_hipfile_mount }}/fio-hipfile.dat"
+              - --rw=read
+              - --bs=1M
+              - "--size={{ quickstart_hipfile_fio_mb | int }}M"
+              - --iodepth=1
+              - --direct=1
+              - --group_reporting
+              - --output-format=json
+          register: quickstart_hipfile_fio_run
+          changed_when: false
+          failed_when: false
+          when:
+            - quickstart_hipfile_fio_found.stdout | trim == 'present'
+            - quickstart_hipfile_bench.rc == 0
+      always:
+        # First, because the unmount after it is the one task here that
+        # can fail (a target that is busy), and a failed task ends the
+        # section for that guest. The compiled bench is not under the
+        # mount.
+        - name: Remove the scratch directory
+          ansible.builtin.file:
+            path: "{{ quickstart_hipfile_work.path }}"
+            state: absent
+
+        # Whatever happened above. The NVMe test of the next run writes the
+        # namespace raw and fails on one that is still mounted.
+        - name: Unmount the test's filesystem
+          become: true
+          ansible.builtin.shell:
+            cmd: |
+              mnt={{ quickstart_hipfile_mount | quote }}
+              if mountpoint -q "${mnt}"; then
+                umount "${mnt}" || exit 1
+              fi
+              if [ -d "${mnt}" ]; then
+                rmdir "${mnt}" || exit 1
+              fi
+            executable: /bin/sh
+          changed_when: false
+
+    # The line the report quotes, and the one quick-start reads. Not set at
+    # all unless the bench exited 0, printed its rate and passed its own
+    # check of what arrived, so the facts play does not record a test that
+    # did not finish. MB is 1e6 bytes, as the P4 figure's is.
+    - name: Record what the bench measured
+      vars:
+        quickstart_hipfile_measured: >-
+          {{ quickstart_hipfile_bench.stdout | default('')
+             | regex_search('read_bytes=([0-9]+) seconds_per_pass=\S+ read_gbs=([0-9.eE+-]+)',
+                            '\1', '\2') }}
+      ansible.builtin.set_fact:
+        quickstart_hipfile_read: >-
+          hipfile: read {{ '%.1f' | format(quickstart_hipfile_measured[1] | float * 1000) }}
+          MB/s, {{ quickstart_hipfile_measured[0] }} bytes, verified
+      when:
+        - quickstart_hipfile_bench.rc == 0
+        - quickstart_hipfile_measured | default([], true) | length == 2
+        - "'gemm-hipfile-bench: PASS' in quickstart_hipfile_bench.stdout_lines"
+        - >-
+          quickstart_hipfile_bench.stdout_lines
+          | select('search', ' failures=0$') | list | length > 0
+
+    # The figure and the bench's verdict, not only the exit status.
+    - name: Assert the read was verified and reported a rate above zero
+      ansible.builtin.assert:
+        that:
+          - quickstart_hipfile_bench.rc == 0
+          - quickstart_hipfile_read is defined
+          - >-
+            (quickstart_hipfile_read
+             | regex_replace('^hipfile: read ([0-9.]+) MB/s.*$', '\\1')
+             | float(0)) > 0
+        fail_msg: >-
+          gemm-hipfile-bench exited {{ quickstart_hipfile_bench.rc }} on
+          {{ inventory_hostname }} with no verified read at a rate above
+          zero. 124 is the {{ quickstart_hipfile_timeout }} s timeout; 3 is
+          data that arrived wrong. It said:
+          {{ (quickstart_hipfile_bench.stdout_lines | default([]))
+             + (quickstart_hipfile_bench.stderr_lines | default([])) }}
+        success_msg: >-
+          {{ inventory_hostname }}: {{ quickstart_hipfile_read | default('') }}
+
+    - name: Assert fio read the file
+      ansible.builtin.assert:
+        that: quickstart_hipfile_fio_run.rc == 0
+        fail_msg: >-
+          {{ quickstart_hipfile_fio_exe }} exited
+          {{ quickstart_hipfile_fio_run.rc | default('?') }} on
+          {{ inventory_hostname }}. 124 is the
+          {{ quickstart_hipfile_timeout }} s timeout. It said:
+          {{ (quickstart_hipfile_fio_run.stdout_lines | default([]))[-20:]
+             + (quickstart_hipfile_fio_run.stderr_lines | default([]))[-20:] }}
+      when: quickstart_hipfile_fio_found.stdout | trim == 'present'
+
+    # fio's own figure, B/s over the job's runtime. The JSON is taken from
+    # the first brace to the last: a library that prints a line of its own
+    # on stdout must not make a passing read unreadable.
+    - name: Record what fio measured
+      vars:
+        quickstart_hipfile_fio_json: >-
+          {{ quickstart_hipfile_fio_run.stdout
+             | regex_search('(?s)\{.*\}') | default('{}', true) | from_json }}
+        quickstart_hipfile_fio_bw: >-
+          {{ ((quickstart_hipfile_fio_json.jobs | default([{}]))[0].read
+              | default({})).bw_bytes | default(0) | float }}
+      ansible.builtin.set_fact:
+        quickstart_hipfile_fio: >-
+          hipfile fio: {{ '%.1f' | format(quickstart_hipfile_fio_bw | float / 1000000) }} MB/s
+      when: quickstart_hipfile_fio_found.stdout | trim == 'present'
+
+    - name: Record that this image has no fio with the engine
+      ansible.builtin.set_fact:
+        quickstart_hipfile_fio: "hipfile fio: not in this image"
+      when: quickstart_hipfile_fio_found.stdout | trim != 'present'
+
+    - name: Assert fio reported a rate above zero
+      ansible.builtin.assert:
+        that:
+          - >-
+            (quickstart_hipfile_fio
+             | regex_replace('^hipfile fio: ([0-9.]+) MB/s$', '\\1')
+             | float(0)) > 0
+        fail_msg: >-
+          {{ quickstart_hipfile_fio_exe }} exited 0 on
+          {{ inventory_hostname }} and reported no read rate above zero
+          ({{ quickstart_hipfile_fio }}).
+      when: quickstart_hipfile_fio_found.stdout | trim == 'present'
+
+    - name: Show the hipFile test results
+      ansible.builtin.debug:
+        msg:
+          - "{{ inventory_hostname }}: {{ quickstart_hipfile_read }}"
+          - "{{ inventory_hostname }}: {{ quickstart_hipfile_fio }}"
+          - >-
+            {{ quickstart_hipfile_fio_exe }}:
+            {{ quickstart_hipfile_fio_found.stdout | trim }}{{
+              '' if quickstart_hipfile_fio_found.stdout | trim == 'present'
+              else '. Nothing is built here: the golden bake installs it' }}
+
+# ---------------------------------------------------------------------------
 # Facts for the report
 # ---------------------------------------------------------------------------
 - name: Collect the facts the report quotes
@@ -944,6 +1386,16 @@
           The program and its table entry stay in this guest's NIC until its
           ernic server restarts.
           {% endif %}
+          {% if quickstart_hipfile_read is defined %}
+
+          ### hipFile test
+
+          ```
+          {{ quickstart_hipfile_read }}
+          {{ quickstart_hipfile_fio | default('hipfile fio: not run') }}
+          {{ quickstart_hipfile_bench.stdout | trim }}
+          ```
+          {% endif %}
         dest: "{{ quickstart_artifacts_dir }}/{{ inventory_hostname }}.md"
         mode: "0644"
       delegate_to: localhost
@@ -962,23 +1414,32 @@
 # read as 35 to 38 kB/s for the two minutes its rate is taken over.
 #
 # So each result line is handed to a script that leaves it in the guest for
-# node_exporter's textfile collector, and the home dashboard's P4 and SDXI
-# rows read "the last pass" from there:
+# node_exporter's textfile collector, and the home dashboard's P4, SDXI and
+# hipFile rows read "the last pass" from there:
 #
 #   quickstart_p4_fp8_{bytes_per_second,operation_seconds,elements,
 #                      iterations,timestamp_seconds}{device="<ib device>"}
 #   quickstart_sdxi_copy_{bytes,timestamp_seconds}
+#   quickstart_hipfile_{read_bytes_per_second,read_bytes,
+#                       fio_bytes_per_second,timestamp_seconds}
+#
+# The hipFile read is the same case for another reason: its bytes do move
+# the guest's NVMe counters, for the fraction of a second the read takes,
+# and a rate taken over minutes draws that as next to nothing. The fio
+# series is written only on a guest whose image has the fio with the
+# libhipfile engine.
 #
 # A play of its own, after the facts, because this is the one step that
 # needs root: the collector directory is root's, mode 0755, and replacing a
 # file in it needs write on the directory. The two test plays run as the
-# login user and stay that way. A run with neither switch skips both tasks
-# and reaches no guest. A test that failed took its guest out of the run
-# before this, so only a passing result is recorded and a failed run
-# leaves the last pass's record as it was, which is why the tiles are
-# titled "last pass". A record that cannot be written is shown and ignored:
-# the test passed whatever becomes of it. The files stay in the guest until its disk is recreated, which is
-# why each carries the time it was written.
+# login user and stay that way, and the hipFile play takes root task by
+# task. A run with no switch skips all three tasks and reaches no guest. A
+# test that failed took its guest out of the run before this, so only a
+# passing result is recorded and a failed run leaves the last pass's
+# record as it was, which is why the tiles are titled "last pass". A
+# record that cannot be written is shown and ignored: the test passed
+# whatever becomes of it. The files stay in the guest until its disk is
+# recreated, which is why each carries the time it was written.
 - name: Record what the optional tests measured for the dashboard
   hosts: fleet
   gather_facts: false
@@ -1028,6 +1489,26 @@
       when:
         - quickstart_p4_bw is defined
         - quickstart_p4_ib_device is defined
+
+    # Both lines are set only on a guest whose bench passed. The fio line
+    # says "not in this image" on a guest with no baked fio, and the script
+    # then writes no fio series.
+    - name: Record the hipFile read
+      ansible.builtin.script:
+        cmd: >-
+          {{ quickstart_record_script }}
+          --dir {{ quickstart_record_dir | quote }} hipfile
+          --line {{ quickstart_hipfile_read | quote }}
+          --fio-line {{ quickstart_hipfile_fio | quote }}
+        executable: /usr/bin/python3
+      become: true
+      register: quickstart_hipfile_record
+      changed_when: >-
+        'recorded ' in (quickstart_hipfile_record.stdout | default(''))
+      ignore_errors: true
+      when:
+        - quickstart_hipfile_read is defined
+        - quickstart_hipfile_fio is defined
 
 # ---------------------------------------------------------------------------
 # RDMA with ROCm memory and data validation (optional, off by default)

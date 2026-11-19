@@ -1006,7 +1006,9 @@ class Dashboard(_Scratch):
         """The devices a guest is given, then the network they share."""
         rows = [p["title"] for p in _panels(self.HOME) if p["type"] == "row"]
         at = rows.index("SDXI")
-        self.assertEqual(rows[at - 1], "NVMe Storage")
+        # The hipFile row is the NVMe's: a read from it into GPU memory.
+        self.assertEqual(rows[at - 2:at], [
+            "NVMe Storage", "hipFile \u2014 NVMe To GPU Memory"])
         self.assertEqual(rows[at + 1:at + 3], [
             "P4 \u2014 FP8 Reduction In The NIC", "Network & Driver Status"])
 

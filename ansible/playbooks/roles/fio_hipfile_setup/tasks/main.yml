@@ -1,0 +1,215 @@
+---
+# fio_hipfile_setup: fio from a pinned release, with the libhipfile
+# ioengine, under a prefix of its own.
+#
+# Nothing here needs a device, so the role runs in a bake. What it builds is
+# recorded in a stamp, and a run that finds the stamp describing the build it
+# was asked for compiles nothing; the installed binary is checked either way.
+
+- name: Assert the fio build is fully named
+  ansible.builtin.assert:
+    that:
+      - fio_hipfile_setup_repo | trim | length > 0
+      - fio_hipfile_setup_ref | trim | length > 0
+      - >-
+        fio_hipfile_setup_commit | trim | length == 0
+        or fio_hipfile_setup_commit | trim is match('^[0-9a-f]{40}$')
+      - fio_hipfile_setup_prefix | trim is match('^/.')
+      - fio_hipfile_setup_source_dir | trim is match('^/.')
+      - fio_hipfile_setup_rocm_path | trim is match('^/')
+      - fio_hipfile_setup_commit_file | trim is match('^[^/]')
+      - >-
+        (fio_hipfile_setup_prefix | trim | regex_replace('/+$', ''))
+        not in ['/usr', '/usr/local']
+      - >-
+        fio_hipfile_setup_configure_extra
+        | select('match', '--(enable-cuda|enable-libcufile)') | list
+        | length == 0
+    fail_msg: >-
+      fio_hipfile_setup needs a repository ("{{ fio_hipfile_setup_repo }}"),
+      a ref ("{{ fio_hipfile_setup_ref }}"), a commit that is 40 hex
+      characters or empty ("{{ fio_hipfile_setup_commit }}"), absolute paths
+      for the prefix, the source directory and ROCm, and a commit file named
+      relative to the prefix ("{{ fio_hipfile_setup_commit_file }}"). The
+      prefix ("{{ fio_hipfile_setup_prefix }}") is not /usr or /usr/local:
+      the archive's fio has to stay what a bare "fio" runs, and
+      /usr/local/bin precedes /usr/bin on every PATH. And
+      fio_hipfile_setup_configure_extra turns on no CUDA engine: this build
+      is the ROCm one, with no NVIDIA library to stage.
+
+- name: Note that the commit check is off
+  ansible.builtin.debug:
+    msg: >-
+      fio_hipfile_setup_commit is empty, so {{ fio_hipfile_setup_ref }} of
+      {{ fio_hipfile_setup_repo }} is built at whatever commit it names
+      today. The commit is recorded in {{ fio_hipfile_setup_stamp }}.
+  when: fio_hipfile_setup_commit | trim | length == 0
+
+# The path given, or the tree its bin/ links into: the therock layout has
+# /opt/rocm/bin and /opt/rocm/lib and no /opt/rocm/include. The four files
+# are what fio's configure probe compiles and links against.
+- name: Find the ROCm tree that has the hipFile SDK
+  ansible.builtin.shell:
+    cmd: |
+      set -eu
+      given={{ fio_hipfile_setup_rocm_path | trim | quote }}
+      for root in "$given" "$(dirname "$(readlink -f "$given/bin")")"; do
+        if [ -f "$root/include/hipfile.h" ] &&
+           [ -f "$root/include/hip/hip_runtime.h" ] &&
+           [ -e "$root/lib/libhipfile.so" ] &&
+           [ -e "$root/lib/libamdhip64.so" ]; then
+          echo "$root"
+          exit 0
+        fi
+      done
+      echo "no include/hipfile.h, include/hip/hip_runtime.h," \
+           "lib/libhipfile.so and lib/libamdhip64.so under $given or under" \
+           "the tree its bin/ links into: the hipFile SDK" \
+           "(amdrocm-hipfile-dev) and the HIP runtime's development files" \
+           "have to be installed before fio is built" >&2
+      exit 1
+    executable: /bin/sh
+  register: fio_hipfile_setup_rocm_found
+  changed_when: false
+
+# --enable-libhipfile and not the probe's own "if it is there": with the
+# flag a probe that fails stops configure, where without it the engine is
+# dropped and the build succeeds with nothing this role exists for.
+# --disable-native because configure otherwise adds -march=native, and the
+# binary runs on machines the bake did not. No CUDA. The line is in the
+# stamp, and a change to it is a rebuild.
+- name: Record the ROCm tree and the configure line
+  ansible.builtin.set_fact:
+    fio_hipfile_setup_rocm_resolved: "{{ fio_hipfile_setup_rocm_found.stdout | trim }}"
+    fio_hipfile_setup_binary: "{{ fio_hipfile_setup_prefix | trim }}/bin/fio"
+    fio_hipfile_setup_commit_path: >-
+      {{ fio_hipfile_setup_prefix | trim }}/{{ fio_hipfile_setup_commit_file | trim }}
+    fio_hipfile_setup_configure_args: >-
+      {{ ['--prefix=' ~ (fio_hipfile_setup_prefix | trim),
+          '--disable-native', '--enable-libhipfile']
+         + fio_hipfile_setup_configure_extra }}
+
+- name: Read the stamp of an earlier build
+  ansible.builtin.slurp:
+    src: "{{ fio_hipfile_setup_stamp }}"
+  register: fio_hipfile_setup_stamp_file
+  failed_when: false
+  changed_when: false
+
+- name: Read the commit file of an earlier build
+  ansible.builtin.slurp:
+    src: "{{ fio_hipfile_setup_commit_path }}"
+  register: fio_hipfile_setup_commit_recorded
+  failed_when: false
+  changed_when: false
+
+- name: Look for the installed fio
+  ansible.builtin.stat:
+    path: "{{ fio_hipfile_setup_binary }}"
+    get_checksum: false
+  register: fio_hipfile_setup_installed
+
+# Rebuilt when anything the build was made from has changed: the
+# repository, the ref, the required commit, the ROCm tree or the configure
+# line, which carries the prefix. Also when the binary is gone, or when the
+# commit file the benchmark script reads does not hold the commit the stamp
+# does: a prefix the script built into in the guest, from another commit,
+# is such a one. With the commit check off the stamp cannot say whether the
+# ref has moved, so that case rebuilds only when forced.
+- name: Decide whether fio has to be built
+  vars:
+    fio_hipfile_setup_recorded: >-
+      {{ (fio_hipfile_setup_stamp_file.content | b64decode | from_json)
+         if fio_hipfile_setup_stamp_file.content is defined else {} }}
+    fio_hipfile_setup_commit_on_file: >-
+      {{ (fio_hipfile_setup_commit_recorded.content | b64decode | trim)
+         if fio_hipfile_setup_commit_recorded.content is defined else '' }}
+  ansible.builtin.set_fact:
+    fio_hipfile_setup_build_needed: >-
+      {{ fio_hipfile_setup_force | bool
+         or fio_hipfile_setup_recorded.get('repo') != fio_hipfile_setup_repo | trim
+         or fio_hipfile_setup_recorded.get('ref') != fio_hipfile_setup_ref | trim
+         or fio_hipfile_setup_recorded.get('commit_required')
+            != fio_hipfile_setup_commit | trim
+         or (fio_hipfile_setup_commit | trim | length > 0
+             and fio_hipfile_setup_recorded.get('commit')
+                 != fio_hipfile_setup_commit | trim)
+         or fio_hipfile_setup_recorded.get('rocm_path')
+            != fio_hipfile_setup_rocm_resolved
+         or fio_hipfile_setup_recorded.get('configure')
+            != fio_hipfile_setup_configure_args | join(' ')
+         or fio_hipfile_setup_recorded.get('commit') | default('', true)
+            != fio_hipfile_setup_commit_on_file
+         or not fio_hipfile_setup_installed.stat.exists }}
+
+- name: Note that the build is being skipped
+  ansible.builtin.debug:
+    msg: >-
+      fio at {{ fio_hipfile_setup_ref }} of {{ fio_hipfile_setup_repo }} is
+      already installed under {{ fio_hipfile_setup_prefix }}, as
+      {{ fio_hipfile_setup_stamp }} records; nothing is compiled. Force with
+      -e fio_hipfile_setup_force=true.
+  when: not (fio_hipfile_setup_build_needed | bool)
+
+- name: Fetch, build and install fio
+  ansible.builtin.include_tasks: build.yml
+  when: fio_hipfile_setup_build_needed | bool
+
+# Whether or not anything was built: what a rerun skipped is still what the
+# image carries.
+- name: Check the installed fio
+  ansible.builtin.include_tasks: verify.yml
+
+# After the checks, so the stamps only ever describe a build that passed
+# them. The JSON stamp first and the commit file last: the benchmark script
+# skips its own build on the strength of the second alone. No owner is
+# named: the role runs under become, and what it writes is root's.
+- name: Record the build
+  ansible.builtin.copy:
+    dest: "{{ fio_hipfile_setup_stamp }}"
+    mode: "0644"
+    content: "{{ fio_hipfile_setup_record | to_nice_json }}\n"
+  vars:
+    fio_hipfile_setup_record:
+      built_by: qemu-minimal ansible/playbooks/roles/fio_hipfile_setup
+      repo: "{{ fio_hipfile_setup_repo | trim }}"
+      ref: "{{ fio_hipfile_setup_ref | trim }}"
+      commit: "{{ fio_hipfile_setup_built_commit }}"
+      commit_required: "{{ fio_hipfile_setup_commit | trim }}"
+      prefix: "{{ fio_hipfile_setup_prefix | trim }}"
+      binary: "{{ fio_hipfile_setup_binary }}"
+      commit_file: "{{ fio_hipfile_setup_commit_path }}"
+      rocm_path: "{{ fio_hipfile_setup_rocm_resolved }}"
+      libhipfile: "{{ fio_hipfile_setup_loaded_libhipfile }}"
+      version: "{{ fio_hipfile_setup_version }}"
+      engine: libhipfile
+      source_dir: "{{ fio_hipfile_setup_source_dir | trim }}"
+      source_kept: "{{ fio_hipfile_setup_keep_source | bool }}"
+      configure: "{{ fio_hipfile_setup_configure_args | join(' ') }}"
+  when: fio_hipfile_setup_build_needed | bool
+
+- name: Create the directory of the commit file
+  ansible.builtin.file:
+    path: "{{ fio_hipfile_setup_commit_path | dirname }}"
+    state: directory
+    mode: "0755"
+  when: fio_hipfile_setup_build_needed | bool
+
+- name: Record the commit where the benchmark script reads it
+  ansible.builtin.copy:
+    dest: "{{ fio_hipfile_setup_commit_path }}"
+    mode: "0644"
+    content: "{{ fio_hipfile_setup_built_commit }}\n"
+  when: fio_hipfile_setup_build_needed | bool
+
+# Only what this run fetched. A run that built nothing fetched nothing, and
+# fio-fetch.sh, which refuses to replace a directory that is not a checkout,
+# never looked at this one: removing it then would delete whatever a
+# caller's fio_hipfile_setup_source_dir happens to name.
+- name: Remove the source tree
+  ansible.builtin.file:
+    path: "{{ fio_hipfile_setup_source_dir | trim }}"
+    state: absent
+  when:
+    - fio_hipfile_setup_build_needed | bool
+    - not (fio_hipfile_setup_keep_source | bool)

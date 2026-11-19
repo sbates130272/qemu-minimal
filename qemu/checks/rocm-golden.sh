@@ -1387,6 +1387,236 @@ echo "perftest: host-memory validator built for ${_pt_simd}, and no wider" \
 # end: perftest
 
 # ---------------------------------------------------------------------------
+# fio built with the libhipfile ioengine
+# ---------------------------------------------------------------------------
+# The archive's fio has no libhipfile engine, so the bake builds fio from a
+# pinned release against the image's ROCm and hipFile SDK and installs it
+# under a prefix of its own, /opt/fio-hipfile. Not under /usr/local: the
+# archive's fio in /usr/bin has to stay what a bare "fio" runs, because
+# vm-quickstart.yml's NVMe test runs exactly that. So what is asserted is
+# the opposite of the perftest block above: the build is there, by its
+# path, and a bare name is NOT it, in the three shells that have a PATH of
+# their own.
+#
+# Nothing here needs a device, and this runs on a boot that has none. The
+# binary is asked for its version and its engine list and for nothing else:
+# both return while fio is still parsing its arguments, and the engine
+# opens the hipFile driver only in a job.
+#
+# No pin is spelled in this file. The bake wrote what it built to
+# /etc/fio-hipfile.json and the pin it was given to
+# /etc/rocm-golden-guest.json, and the two are compared. The commit is also
+# in <prefix>/share/fio-commit.txt, the file
+# scripts/vm-report/fio-hipfile-bench.sh reads to decide whether to build
+# fio in the guest.
+#
+# One thing is spelled here, because it is a rule about the image and not a
+# pin: the configure line has --disable-native. fio's configure adds
+# -march=native unless told not to, and an image must not be whatever its
+# bake machine was.
+#
+# tests/test_fio_hipfile_setup.py runs the lines between the two markers
+# against stand-ins. FIO_HIPFILE_CHECK_ROOT is for that: it is prefixed to
+# the two /etc paths and to /usr/bin/fio, and is empty on a guest.
+# begin: fio hipfile
+_fh_root=${FIO_HIPFILE_CHECK_ROOT:-}
+_fh_stamp="${_fh_root}/etc/fio-hipfile.json"
+_fh_golden="${_fh_root}/etc/rocm-golden-guest.json"
+if [ ! -s "${_fh_stamp}" ]; then
+    echo "ERROR: fio hipfile: no ${_fh_stamp}: the bake did not build fio" \
+         "with the libhipfile engine" >&2
+    exit 1
+fi
+# Seven lines: the binary, the commit, the commit file, the ROCm tree, the
+# version, the libhipfile it was linked against and where it was built. A
+# stamp that does not hold together prints its reason and stops the check.
+_fh_facts=$(python3 - "${_fh_stamp}" "${_fh_golden}" <<'FHPY'
+import json
+import re
+import sys
+
+
+def fail(msg):
+    print(f"ERROR: fio hipfile: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+stamp_path, golden_path = sys.argv[1:3]
+try:
+    with open(stamp_path) as handle:
+        stamp = json.load(handle)
+except (OSError, ValueError) as exc:
+    fail(f"{stamp_path} is not readable JSON: {exc}")
+for key in ("repo", "ref", "commit", "commit_required", "prefix", "binary",
+            "commit_file", "rocm_path", "libhipfile", "version", "configure",
+            "source_dir", "source_kept"):
+    if key not in stamp:
+        fail(f"{stamp_path} has no \"{key}\"")
+commit = stamp["commit"]
+if not re.fullmatch(r"[0-9a-f]{40}", str(commit)):
+    fail(f"{stamp_path} records commit {commit!r}, which is not a commit id")
+# An image is built from a commit somebody chose, not from wherever a tag
+# was that day: the role only skips its check when given no commit.
+if stamp["commit_required"] != commit:
+    fail(f"fio was built at {commit} with {stamp['commit_required']!r} "
+         "required: the commit check was off, or the stamp is not the one "
+         "this build wrote")
+try:
+    with open(golden_path) as handle:
+        golden = json.load(handle)
+except (OSError, ValueError) as exc:
+    fail(f"{golden_path} is not readable JSON: {exc}")
+if golden.get("fio_source_pin") != commit:
+    fail(f"{golden_path} says the image was baked with fio_source_pin "
+         f"{golden.get('fio_source_pin')!r}, and {stamp_path} says fio was "
+         f"built at {commit}")
+words = stamp["configure"].split()
+for flag in ("--enable-libhipfile", "--disable-native"):
+    if flag not in words:
+        fail(f"the recorded configure line has no {flag}: "
+             f"{stamp['configure']}")
+for key in ("prefix", "binary", "commit_file", "rocm_path", "libhipfile",
+            "source_dir"):
+    if not str(stamp[key]).startswith("/"):
+        fail(f"{stamp_path} records {key} {stamp[key]!r}")
+# The archive's fio is /usr/bin/fio and has to stay what a bare name runs.
+if stamp["prefix"].rstrip("/") in ("/usr", "/usr/local"):
+    fail(f"fio was installed under {stamp['prefix']}, where it replaces or "
+         "shadows the archive's fio")
+if golden.get("fio_hipfile") != stamp["binary"]:
+    fail(f"{golden_path} names the build as {golden.get('fio_hipfile')!r}, "
+         f"and {stamp_path} says it is {stamp['binary']}")
+if stamp["source_kept"] is not False:
+    fail(f"{stamp_path} says the source tree was kept "
+         f"(source_kept is {stamp['source_kept']!r}): an image carries the "
+         "binary and not the tree it was built in")
+print(stamp["binary"])
+print(commit)
+print(stamp["commit_file"])
+print(stamp["rocm_path"])
+print(stamp["version"])
+print(stamp["libhipfile"])
+print(stamp["source_dir"])
+FHPY
+)
+{
+    read -r _fh_fio
+    read -r _fh_commit
+    read -r _fh_commit_file
+    read -r _fh_rocm
+    read -r _fh_version
+    read -r _fh_linked
+    read -r _fh_source
+} <<FHFACTS
+${_fh_facts}
+FHFACTS
+
+if [ ! -x "${_fh_fio}" ]; then
+    echo "ERROR: fio hipfile: ${_fh_fio} is missing" >&2
+    exit 1
+fi
+
+# The commit where the benchmark script reads it. With another commit
+# there, or none, that script builds fio in the guest over this one.
+_fh_on_file=$(cat "${_fh_commit_file}" 2>/dev/null || true)
+if [ "${_fh_on_file}" != "${_fh_commit}" ]; then
+    echo "ERROR: fio hipfile: ${_fh_commit_file} holds '${_fh_on_file}'," \
+         "and ${_fh_stamp} says fio was built at ${_fh_commit}" >&2
+    exit 1
+fi
+
+# The tree it was built in is gone, and so is the one the benchmark script
+# builds in when it has to.
+for _fh_tree in "${_fh_source}" /tmp/fio-build; do
+    if [ -e "${_fh_root}${_fh_tree}" ]; then
+        echo "ERROR: fio hipfile: the build tree ${_fh_tree} is still in" \
+             "the image" >&2
+        exit 1
+    fi
+done
+
+# What the binary says of itself. Neither opens a device.
+if ! _fh_said=$("${_fh_fio}" --version < /dev/null 2>&1); then
+    echo "ERROR: fio hipfile: ${_fh_fio} --version failed: ${_fh_said}" >&2
+    exit 1
+fi
+if [ "${_fh_said}" != "${_fh_version}" ]; then
+    echo "ERROR: fio hipfile: ${_fh_fio} --version prints '${_fh_said}'," \
+         "and ${_fh_stamp} records '${_fh_version}'" >&2
+    exit 1
+fi
+if ! _fh_engines=$("${_fh_fio}" --enghelp < /dev/null 2>&1); then
+    echo "ERROR: fio hipfile: ${_fh_fio} --enghelp failed:" >&2
+    printf '%s\n' "${_fh_engines}" | tail -5 >&2
+    exit 1
+fi
+if ! printf '%s\n' "${_fh_engines}" |
+        grep -E '^[[:space:]]*libhipfile$' > /dev/null; then
+    echo "ERROR: fio hipfile: ${_fh_fio} --enghelp does not list the" \
+         "libhipfile engine" >&2
+    printf '%s\n' "${_fh_engines}" | tail -5 >&2
+    exit 1
+fi
+
+# Linked against the image's hipFile, every library found, and the file it
+# loads is the one the stamp says it was linked against.
+_fh_libs=$(ldd "${_fh_fio}")
+case "${_fh_libs}" in
+    *'not found'*)
+        echo "ERROR: fio hipfile: ${_fh_fio} has a library the loader" \
+             "cannot find:" >&2
+        printf '%s\n' "${_fh_libs}" >&2
+        exit 1
+        ;;
+esac
+_fh_loaded=$(printf '%s\n' "${_fh_libs}" |
+    awk '$1 ~ /^libhipfile\.so/ { print $3 }')
+if [ -z "${_fh_loaded}" ]; then
+    echo "ERROR: fio hipfile: ${_fh_fio} is not linked against" \
+         "libhipfile" >&2
+    exit 1
+fi
+case "$(readlink -f "${_fh_loaded}")" in
+    "$(readlink -f "${_fh_rocm}")"/*) ;;
+    *)
+        echo "ERROR: fio hipfile: ${_fh_fio} loads ${_fh_loaded}, which" \
+             "is not under ${_fh_rocm}" >&2
+        exit 1
+        ;;
+esac
+if [ "$(readlink -f "${_fh_loaded}")" != "${_fh_linked}" ]; then
+    echo "ERROR: fio hipfile: ${_fh_fio} loads" \
+         "$(readlink -f "${_fh_loaded}") and ${_fh_stamp} says it was" \
+         "linked against ${_fh_linked}" >&2
+    exit 1
+fi
+
+# The archive's fio is still there, and is still what a bare name runs:
+# vm-quickstart.yml's NVMe test runs "fio" under sudo, and the stock build
+# has to keep doing what it did whatever the one above turns out to do.
+_fh_archive="${_fh_root}/usr/bin/fio"
+if [ ! -x "${_fh_archive}" ]; then
+    echo "ERROR: fio hipfile: no /usr/bin/fio: the archive's fio, which" \
+         "the quickstart NVMe test runs, is gone" >&2
+    exit 1
+fi
+_fh_here=$(command -v fio || true)
+_fh_login=$(bash -lc "command -v fio" < /dev/null || true)
+_fh_sudo=$(sudo -n sh -c "command -v fio" < /dev/null || true)
+for _fh_got in "this shell:${_fh_here}" "a login shell:${_fh_login}" \
+               "sudo:${_fh_sudo}"; do
+    if [ "${_fh_got#*:}" != "${_fh_archive}" ]; then
+        echo "ERROR: fio hipfile: fio resolves to '${_fh_got#*:}' in" \
+             "${_fh_got%%:*}, not /usr/bin/fio: the archive's fio is not" \
+             "the one a bare name runs" >&2
+        exit 1
+    fi
+done
+echo "fio hipfile: ${_fh_version} at ${_fh_commit} with the libhipfile" \
+     "engine as ${_fh_fio}; a bare fio is still /usr/bin/fio"
+# end: fio hipfile
+
+# ---------------------------------------------------------------------------
 # The SDXI counters, exported through node_exporter
 # ---------------------------------------------------------------------------
 # sdxi_setup's metrics tasks install sdxi-textfile-metrics.py and a timer

@@ -261,10 +261,10 @@ class Pin(unittest.TestCase):
         pattern = re.search(r"grep -E '([^']+)'", script).group(1)
         matched = [line for line in self.text.splitlines()
                    if re.search(pattern, line)]
-        self.assertEqual(len(matched), 5, matched)
+        self.assertEqual(len(matched), 6, matched)
         self.assertEqual(
             sum("perftest_source_pin: &" in line for line in matched), 1)
-        self.assertIn("-eq 5", script)
+        self.assertIn("-eq 6", script)
 
 
 class Wiring(unittest.TestCase):

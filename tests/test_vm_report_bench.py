@@ -241,15 +241,19 @@ class GuestSideTest(unittest.TestCase):
 
 
 class HipfileTargetTest(unittest.TestCase):
-    """Both hipFile benches refuse a target that is not on an NVMe.
+    """Every hipFile read refuses a target that is not on an NVMe.
 
     A direct read of a file on the virtio root disk hung a guest for good,
-    which happened when /mnt/nvme was not mounted.
+    which happened when /mnt/nvme was not mounted. Three things read
+    through hipFile: the two report benches, and the hipFile play of
+    vm-quickstart.yml, which runs the check as a file of its own.
     """
 
     BEGIN = "# begin: hipfile target is on nvme\n"
     END = "# end: hipfile target is on nvme\n"
     FIO = SCRIPT.parent / "vm-report" / "fio-hipfile-bench.sh"
+    PLAY_CHECK = (REPO_ROOT / "ansible/playbooks/roles/rocjitsu_setup/files"
+                  / "hipfile-target-check.sh")
 
     def _block(self, path: Path) -> str:
         text = path.read_text()
@@ -272,11 +276,59 @@ class HipfileTargetTest(unittest.TestCase):
     def test_both_benches_carry_the_same_check(self):
         self.assertEqual(self._block(SCRIPT), self._block(self.FIO))
 
+    def test_the_play_runs_the_same_check_and_nothing_else(self):
+        """One check, in three places, byte for byte."""
+        text = self.PLAY_CHECK.read_text()
+        self.assertEqual(self._block(self.PLAY_CHECK), self._block(self.FIO))
+        # Around the block: strict mode, the mount point from its one
+        # argument, and a line that says what it found. Nothing between
+        # the argument and the check, and no second test after it.
+        code = [line for line in text.replace(
+            self._block(self.PLAY_CHECK), "BLOCK\n").splitlines()
+            if line and not line.startswith("#")]
+        self.assertEqual(code, [
+            "set -euo pipefail",
+            "MNT=${1:?usage: hipfile-target-check.sh MOUNTPOINT}",
+            "BLOCK",
+            'echo "${MNT} is on ${src}, an NVMe namespace"'])
+
+    def test_the_plays_check_run_as_the_play_runs_it(self):
+        for source, code in (("/dev/nvme0n1", 0), ("/dev/nvme1n2p3", 0),
+                             ("/dev/vda1", 1), ("", 1)):
+            with self.subTest(source=source):
+                tmp = Path(tempfile.mkdtemp(prefix="hipfile-play-check-"))
+                self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+                fake = tmp / "findmnt"
+                fake.write_text(
+                    "#!/bin/sh\nfor last; do :; done\n"
+                    '[ "$last" = /mnt/quickstart-hipfile ] || exit 2\n'
+                    f"[ -n '{source}' ] || exit 1\necho '{source}'\n")
+                fake.chmod(0o755)
+                proc = subprocess.run(
+                    ["bash", str(self.PLAY_CHECK), "/mnt/quickstart-hipfile"],
+                    capture_output=True, text=True,
+                    env=dict(os.environ, PATH=f"{tmp}:{os.environ['PATH']}"))
+                self.assertEqual(proc.returncode, code, proc.stdout)
+                if code:
+                    self.assertIn("not an NVMe namespace", proc.stdout)
+                else:
+                    self.assertEqual(
+                        proc.stdout, "/mnt/quickstart-hipfile is on "
+                        f"{source}, an NVMe namespace\n")
+        # With no mount point it says how it is called and checks nothing.
+        proc = subprocess.run(["bash", str(self.PLAY_CHECK)],
+                              capture_output=True, text=True)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("usage: hipfile-target-check.sh MOUNTPOINT", proc.stderr)
+
     def test_the_check_is_before_the_read_in_each(self):
         report = SCRIPT.read_text()
         # The report's guest script runs under set -u: it names the
-        # directory once, straight before the check, and reads that one.
-        self.assertIn("\nMNT=/mnt/nvme\n" + self.BEGIN, report)
+        # directory once, straight before the mount and the check, and
+        # both read that one.
+        self.assertIn("\nMNT=/mnt/nvme\n" + HipfileMountTest.BEGIN, report)
+        self.assertIn(HipfileMountTest.END + self.BEGIN, report)
+        self.assertEqual(report.count("/mnt/nvme"), 1)
         self.assertNotIn("/tmp/gemm-hipfile-bench /mnt/nvme", report)
         self.assertLess(report.index(self.BEGIN),
                         report.index('/tmp/gemm-hipfile-bench "${MNT}" 4'))
@@ -300,6 +352,112 @@ class HipfileTargetTest(unittest.TestCase):
                 self.assertEqual(proc.returncode, 1)
                 self.assertNotIn("reached-the-read", proc.stdout)
                 self.assertIn("not an NVMe namespace", proc.stdout)
+
+
+class HipfileMountTest(unittest.TestCase):
+    """Both report benches unmount what they mounted, on the way out.
+
+    vm-quickstart.yml's NVMe test writes the namespace raw. With a
+    filesystem left mounted on it that test's write fails (write=0), so a
+    `quick-start test` after either bench failed until someone unmounted
+    /mnt/nvme by hand. The lines between the markers are run here against
+    stand-ins that write down what they were asked: nothing is mounted.
+    """
+
+    BEGIN = "# begin: hipfile mount\n"
+    END = "# end: hipfile mount\n"
+    FIO = HipfileTargetTest.FIO
+
+    def _block(self, path: Path) -> str:
+        text = path.read_text()
+        start = text.index(self.BEGIN)
+        return text[start:text.index(self.END, start) + len(self.END)]
+
+    FAKES = {
+        # "sudo -n CMD ...": run CMD.
+        "sudo": '[ "$1" = -n ] && shift\nexec "$@"\n',
+        "mountpoint": '[ -e "$FAKE_DIR/premounted" ]\n',
+        "blkid": 'cat "$FAKE_DIR/fstype" 2>/dev/null\n',
+        "mkfs.ext4": 'echo "mkfs $*" >> "$FAKE_DIR/log"\n',
+        "mount": 'echo "mount $*" >> "$FAKE_DIR/log"\n'
+                 '[ ! -e "$FAKE_DIR/mount_fails" ]\n',
+        "umount": 'echo "umount $*" >> "$FAKE_DIR/log"\n'
+                  '[ ! -e "$FAKE_DIR/busy" ]\n',
+        "mkdir": 'echo "mkdir $*" >> "$FAKE_DIR/log"\n',
+        "chmod": 'echo "chmod $*" >> "$FAKE_DIR/log"\n',
+    }
+
+    def _run(self, then: str = "exit 0", **files: str):
+        tmp = Path(tempfile.mkdtemp(prefix="hipfile-mount-"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        for name, body in self.FAKES.items():
+            path = tmp / name
+            path.write_text("#!/bin/sh\n" + body)
+            path.chmod(0o755)
+        for name, text in files.items():
+            (tmp / name).write_text(text)
+        script = ("set -euo pipefail\nMNT=/mnt/nvme\ndev=/dev/nvme0n1\n"
+                  + self._block(self.FIO) + "echo reached-the-bench\n"
+                  + then + "\n")
+        proc = subprocess.run(
+            ["bash", "-c", script], capture_output=True, text=True,
+            env=dict(os.environ, PATH=f"{tmp}:{os.environ['PATH']}",
+                     FAKE_DIR=str(tmp)))
+        log = tmp / "log"
+        return proc, log.read_text().splitlines() if log.exists() else []
+
+    def test_both_benches_carry_the_same_mount(self):
+        self.assertEqual(self._block(SCRIPT), self._block(self.FIO))
+        for path in (SCRIPT, self.FIO):
+            text = path.read_text()
+            # Once each, and before the check of what it mounted.
+            self.assertEqual(text.count(self.BEGIN), 1, path.name)
+            self.assertLess(text.index(self.END),
+                            text.index(HipfileTargetTest.BEGIN), path.name)
+            self.assertEqual(text.count("mount -o noatime"), 1, path.name)
+
+    def test_a_bench_that_mounted_unmounts_whatever_its_exit(self):
+        for then, code in (("exit 0", 0), ("exit 1", 1), ("false", 1),
+                           ("echo done", 0)):
+            with self.subTest(then=then):
+                proc, log = self._run(then)
+                self.assertEqual(proc.returncode, code, proc.stderr)
+                self.assertIn("reached-the-bench", proc.stdout)
+                self.assertEqual(log, [
+                    "mkdir -p /mnt/nvme",
+                    "mkfs -q -F /dev/nvme0n1",
+                    "mount -o noatime /dev/nvme0n1 /mnt/nvme",
+                    "chmod 1777 /mnt/nvme",
+                    "umount /mnt/nvme"])
+
+    def test_a_filesystem_that_is_there_is_mounted_and_not_remade(self):
+        proc, log = self._run(fstype="ext4\n")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn("mkfs -q -F /dev/nvme0n1", log)
+        self.assertEqual(log[-1], "umount /mnt/nvme")
+
+    def test_a_mount_that_was_already_there_is_left_alone(self):
+        """Somebody else's: the bench neither mounts nor unmounts it."""
+        for then in ("exit 0", "exit 1"):
+            with self.subTest(then=then):
+                proc, log = self._run(then, premounted="")
+                self.assertIn("reached-the-bench", proc.stdout)
+                self.assertEqual(log, ["mkdir -p /mnt/nvme",
+                                       "chmod 1777 /mnt/nvme"])
+
+    def test_a_mount_that_failed_is_not_unmounted(self):
+        proc, log = self._run(mount_fails="")
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertNotIn("reached-the-bench", proc.stdout)
+        self.assertNotIn("umount /mnt/nvme", log)
+
+    def test_an_unmount_that_fails_says_so_and_keeps_the_benchs_status(self):
+        for then, code in (("exit 0", 0), ("exit 3", 3)):
+            with self.subTest(then=then):
+                proc, log = self._run(then, busy="")
+                self.assertEqual(proc.returncode, code)
+                self.assertIn("could not unmount /mnt/nvme", proc.stderr)
+                self.assertEqual(log[-1], "umount /mnt/nvme")
 
 
 if __name__ == "__main__":

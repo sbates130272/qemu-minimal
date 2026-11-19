@@ -21,6 +21,10 @@ SSH="ssh -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no -p 
 SCP=(scp -o NoHostAuthenticationForLocalhost=yes -o StrictHostKeyChecking=no -P "${PORT}")
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 VM_REPORT_BENCH_DIR="${SCRIPT_DIR}/vm-report"
+# The hipFile read bench is one file with two callers: this script and the
+# hipFile play of ansible/playbooks/vm-quickstart.yml, which finds it beside
+# the playbook. So it lives in a role, not under vm-report/.
+VM_REPORT_HIPFILE_BENCH="${SCRIPT_DIR}/../ansible/playbooks/roles/rocjitsu_setup/files/gemm-hipfile-bench.hip"
 
 TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M UTC')
 REPO="sbates130272/qemu-minimal"
@@ -276,7 +280,7 @@ EOF
 }
 
 run_rocjitsu_hipfile() {
-  if ! copy_to_guest "${VM_REPORT_BENCH_DIR}/gemm-hipfile-bench.hip" /tmp/gemm-hipfile-bench.hip; then
+  if ! copy_to_guest "${VM_REPORT_HIPFILE_BENCH}" /tmp/gemm-hipfile-bench.hip; then
     echo "gemm-hipfile-bench source upload failed"
     return 1
   fi
@@ -305,16 +309,23 @@ done | head -1 || true)
 [ -n "${rocm}" ] || { echo "hipFile headers or library unavailable"; exit 0; }
 dev=$(lsblk -dpno NAME,TYPE | awk '$2=="disk" && $1 ~ /^\/dev\/nvme[0-9]+n[0-9]+$/ { print $1; exit }')
 [ -n "${dev}" ] || { echo "No NVMe namespace present"; exit 0; }
-sudo -n mkdir -p /mnt/nvme
-if ! mountpoint -q /mnt/nvme; then
+MNT=/mnt/nvme
+# begin: hipfile mount
+# Mounted for this run and unmounted on the way out, whatever the exit.
+# vm-quickstart.yml's NVMe test writes the namespace raw, and with a
+# filesystem left mounted on it that test fails (write=0) until someone
+# unmounts it. A mount that was already there is somebody else's and stays.
+sudo -n mkdir -p "${MNT}"
+if ! mountpoint -q "${MNT}"; then
   fstype=$(sudo -n blkid -o value -s TYPE "${dev}" 2>/dev/null || true)
   if [ -z "${fstype}" ]; then
     sudo -n mkfs.ext4 -q -F "${dev}"
   fi
-  sudo -n mount -o noatime "${dev}" /mnt/nvme
+  sudo -n mount -o noatime "${dev}" "${MNT}"
+  trap 'sudo -n umount "${MNT}" || echo "could not unmount ${MNT}" >&2' EXIT
 fi
-sudo -n chmod 1777 /mnt/nvme
-MNT=/mnt/nvme
+sudo -n chmod 1777 "${MNT}"
+# end: hipfile mount
 # begin: hipfile target is on nvme
 # A hipFile direct read of a file that is not on an NVMe namespace can hang
 # the guest for good: AIS takes any PCI block device, and a virtio disk
@@ -340,8 +351,9 @@ EOF
 }
 
 # Unlike the two benches above this one has no source to compile here: the
-# guest script builds fio itself and prints the metric, so all this does is
-# stage it and run it.
+# guest script runs the fio the golden image carries, or builds it when the
+# image has none, and prints the metric, so all this does is stage it and
+# run it.
 run_hipfile_fio() {
   if ! copy_to_guest "${VM_REPORT_BENCH_DIR}/fio-hipfile-bench.sh" /tmp/fio-hipfile-bench.sh; then
     echo "fio-hipfile-bench upload failed"
@@ -673,9 +685,10 @@ $(if [ "${REPORT_HIPFILE_FIO_BENCH:-0}" = "1" ]; then cat <<HIPFILEFIO
 | fio libhipfile read throughput | ${HIPFILE_FIO_DISPLAY:-n/a} |
 
 This is fio's own \`libhipfile\` ioengine reading from the guest NVMe straight
-into VRAM, rather than the hand-written benchmark the rocjitsu report uses. fio
-is built in the guest from a pinned master commit, because the engine is not in
-any fio release tag. Same caveat as the other lanes: the GPU is emulated over
+into VRAM, rather than the hand-written benchmark the rocjitsu report uses. It
+is fio 3.43, the first release with the engine: the golden image carries it
+under /opt/fio-hipfile, and a guest whose image predates that builds the same
+commit here. Same caveat as the other lanes: the GPU is emulated over
 vfio-user, so watch the trend between runs rather than the absolute number.
 
 ### fio output

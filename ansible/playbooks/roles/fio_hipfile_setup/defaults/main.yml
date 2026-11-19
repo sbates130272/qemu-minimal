@@ -1,0 +1,115 @@
+---
+# fio_hipfile_setup: build fio from source with the libhipfile ioengine and
+# install it under a prefix of its own.
+#
+# Ubuntu's fio is built without the engine, and fio 3.43 is the first
+# release that has it (engines/libhipfile.c). This role builds a named
+# release against the ROCm and hipFile SDK already in the guest and installs
+# it under /opt/fio-hipfile. NOT under /usr/local: /usr/local/bin precedes
+# /usr/bin on every PATH the image has, and the archive's fio in /usr/bin
+# has to stay what a bare "fio" runs, because vm-quickstart.yml's NVMe test
+# runs exactly that. The build is reached by its path,
+# <prefix>/bin/fio, and nothing puts it on PATH.
+#
+# The build needs no device. That is read from fio's source at the pinned
+# release and was seen in one build on the dev host with no /dev/kfd; it
+# is not measured in a bake. configure's libhipfile probe
+# compiles and links a program that calls hipMalloc and hipFileBufRegister
+# and never runs it. The engine registers itself from a constructor that
+# calls register_ioengine() and nothing of HIP or hipFile; the driver is
+# opened in the engine's init, which a job reaches and "--enghelp" does
+# not. So the two things the role runs afterwards, "--version" and
+# "--enghelp", load libamdhip64 and libhipfile and open no GPU.
+#
+# Nor does it depend on the CPU of the machine it runs on: fio's configure
+# adds -march=native unless told not to, and the role tells it
+# (--disable-native), because an image is built on one machine and run on
+# others. A bake's guest has QEMU's default CPU model.
+
+# ── What is built ────────────────────────────────
+# The repository and the ref fetched from it: a release tag. A full commit
+# id works too, which GitHub serves for any commit it still holds.
+fio_hipfile_setup_repo: "https://github.com/axboe/fio.git"
+fio_hipfile_setup_ref: "fio-3.43"
+
+# The commit that ref has to resolve to. The fetch is at depth 1 and what it
+# brought is compared with this before anything is compiled, so a tag that
+# has been moved fails the bake, naming both commits, instead of changing
+# the image without a word. For a tag it is the commit the tag peels to,
+# the second of the two lines this prints:
+#
+#   git ls-remote <fio_hipfile_setup_repo> 'refs/tags/<fio_hipfile_setup_ref>*'
+#
+# Empty turns the check off, and that is the only way to turn it off: the
+# role then builds whatever the ref names today and records the commit it
+# found. Not for an image that is published.
+fio_hipfile_setup_commit: "d2dcd7e053d1902d2420f151c83990e6acdd9f8c"
+
+# ── ROCm ─────────────────────────────────────────
+# Where ROCm and the hipFile SDK are. Either the tree itself or a path whose
+# bin/ is a link into it: the therock packages install under
+# /opt/rocm/core-<line> and the image links /opt/rocm/bin and /opt/rocm/lib
+# there, with no /opt/rocm/include, so the role follows bin/ to the tree
+# that has the headers. The resolved path is what configure reads as
+# ROCM_PATH, and its lib/ is the rpath of the binary.
+#
+# What fio's probe needs of it, and so what the role looks for:
+# include/hipfile.h, include/hip/hip_runtime.h, lib/libhipfile.so and
+# lib/libamdhip64.so. The probe includes <hipfile.h> with -I<tree>/include,
+# which is where the therock packages put it; a layout that nests the header
+# under include/hipfile/ is not one fio's configure finds.
+fio_hipfile_setup_rocm_path: "/opt/rocm"
+
+# Arguments added to the end of the configure line, one per item. The line
+# is recorded in the stamp, so a change here is a rebuild.
+fio_hipfile_setup_configure_extra: []
+
+# ── Where it goes ────────────────────────────────
+# The install prefix. Its bin/ is on no PATH, on purpose; see the top of
+# this file. scripts/vm-report/fio-hipfile-bench.sh and vm-quickstart.yml's
+# hipFile play both run <prefix>/bin/fio by that path.
+fio_hipfile_setup_prefix: "/opt/fio-hipfile"
+
+# Where the source is fetched and built, and whether it stays. Removed by
+# default: the image carries the binary and the stamps, and the tree is a
+# clone anyone can make again. Under /usr/local/src and not /var/tmp so that
+# a kept tree survives image_slim's sweep. The role removes the directory
+# only in a run that fetched into it, and the fetch refuses to replace one
+# that is neither empty nor a git checkout.
+fio_hipfile_setup_source_dir: "/usr/local/src/fio-hipfile"
+fio_hipfile_setup_keep_source: false
+
+# What the build is recorded in: the repository, the ref, the commit that
+# was built and the one that was required, the configure line, the ROCm
+# tree, what "--version" prints and the libhipfile the binary loads. A rerun
+# that finds this file describing the build it was asked for, and the binary
+# in place, compiles nothing.
+fio_hipfile_setup_stamp: "/etc/fio-hipfile.json"
+
+# A second record, one line holding the commit, at
+# <prefix>/share/fio-commit.txt. It is the file
+# scripts/vm-report/fio-hipfile-bench.sh has always read to decide whether
+# to build fio in the guest: with this role's commit in it and that script's
+# FIO_COMMIT equal to the pin, the script skips straight to the run.
+fio_hipfile_setup_commit_file: "share/fio-commit.txt"
+
+# Build even when the stamp says there is nothing to do.
+fio_hipfile_setup_force: false
+
+# ── Inputs of the build ──────────────────────────
+# What configure and make need. fio has no hard dependency beyond a C
+# compiler; libaio, libnuma and zlib are what make the binary the one the
+# in-guest build of the benchmark script always was (the libaio engine,
+# NUMA options and compressed logs). On a golden guest the package manifest
+# and rocjitsu_setup's tool packages already install all of these; they are
+# named here so the role stands on its own. No ROCm package is in the list:
+# the SDK is a prerequisite the role checks for, not something it installs.
+fio_hipfile_setup_packages:
+  - build-essential
+  - git
+  - pkg-config
+  - libaio-dev
+  - libnuma-dev
+  - zlib1g-dev
+fio_hipfile_setup_apt_retries: 3
+fio_hipfile_setup_apt_delay: 10

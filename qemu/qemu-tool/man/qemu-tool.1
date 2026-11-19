@@ -453,6 +453,47 @@ or
 .B all
 verbs; any other verb ignores all three switches and says so.
 .TP
+.B \-\-hipfile\-test
+Also run the hipFile test: on every guest, read a file on its NVMe
+namespace straight into GPU memory through hipFile and check what arrived.
+Two reads. A bench compiled in the guest with
+.B hipcc
+reads 32 MiB, multiplies the two matrices in it on the GPU and compares the
+product with one computed on the host. Then
+.BR fio 's
+.B libhipfile
+engine reads a 64 MiB file, when the guest image has that fio,
+.IR /opt/fio\-hipfile/bin/fio ,
+which the golden bake installs; a guest whose image has none reports
+\(dqnot in this image\(dq, and nothing is built in the guest.
+.BR "Off by default" .
+The test makes a new filesystem on
+.I /dev/nvme0n1
+every run, mounts it on a mount point of its own and unmounts it again
+whatever happens, so the namespace is left as the NVMe test expects it; a
+namespace that is already mounted is refused, not formatted. Root is taken
+for the filesystem, the mount and
+.BR fio ;
+the bench runs as the login user. Refused before anything is started on a
+fleet whose
+.B <vm\-nvme>
+is 0, naming the element, and for a flavor that runs no playbook. The rate
+depends on the stack: with
+.B <vm\-nvme\-vram>true
+on the fork QEMU the emulated NVMe maps the GPU's memory and the read runs
+at hundreds of MB/s; without it the read still passes, at 11 to 13 MB/s as
+measured, and
+.B quick\-start
+says so on standard error before it starts anything. A pass prints one line
+a guest,
+.RI \(dq name ": hipFile read " rate " MB/s (" bytes " bytes, verified); fio " rate " MB/s\(dq,"
+and the same result is in that guest's summary and in the report. Only
+meaningful with the
+.B test
+or
+.B all
+verbs; any other verb ignores it and says so.
+.TP
 .B \-\-rocm\-rdma\-test
 Also run the ROCm\-memory RDMA test: the perftest built with ROCm,
 .B ib_write_bw \-\-use_rocm \-\-data_validation

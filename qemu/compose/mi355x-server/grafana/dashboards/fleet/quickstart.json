@@ -42,7 +42,7 @@
   "annotations": {
     "list": []
   },
-  "description": "Quick Start overview: guests, CPU, memory, GPU, SDXI, P4 and RDMA/TCP mesh at a glance.",
+  "description": "Quick Start overview: guests, CPU, memory, GPU, NVMe, hipFile, SDXI, P4 and RDMA/TCP mesh at a glance.",
   "editable": false,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -779,6 +779,183 @@
         "x": 0,
         "y": 24
       },
+      "id": 80,
+      "title": "hipFile — NVMe To GPU Memory",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "Bps",
+          "noValue": "no test run"
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 0,
+        "y": 25
+      },
+      "id": 81,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "title": "hipFile Read Rate (last pass)",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "quickstart_hipfile_read_bytes_per_second{job=\"fleet-node\",vm_name=~\"$vm\"}",
+          "legendFormat": "{{vm_name}}",
+          "refId": "A"
+        }
+      ],
+      "description": "What `qemu-tool quick-start test --hipfile-test` last measured on this guest: bytes per second read from a file on the NVMe namespace straight into GPU memory through hipFile, by the bench the test compiles in the guest, with what arrived checked by a GEMM on the GPU against the host's (quickstart_hipfile_read_bytes_per_second). The figure of one test run, not a live rate: the read is over in a fraction of a second, which the NVMe panels above draw as next to nothing. \"no test run\" until a run has passed. Hundreds of MB/s when the emulated NVMe maps the GPU's memory (`<vm-nvme-vram>` on the fork QEMU), some 11 to 13 MB/s when it does not. The record is a file the test leaves for node-exporter's textfile collector in the guest, so it outlives a guest reboot and can be older than this boot: the age tile says how old. A later run that fails changes nothing here: the tiles keep the last run that passed, and only its growing age shows that no newer one has."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "Bps",
+          "noValue": "no fio result"
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 8,
+        "y": 25
+      },
+      "id": 82,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "title": "hipFile fio Read Rate (last pass)",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "quickstart_hipfile_fio_bytes_per_second{job=\"fleet-node\",vm_name=~\"$vm\"}",
+          "legendFormat": "{{vm_name}}",
+          "refId": "A"
+        }
+      ],
+      "description": "What `qemu-tool quick-start test --hipfile-test` last measured on this guest with fio's libhipfile ioengine: bytes per second fio read from a 64 MiB file on the NVMe namespace into GPU memory (quickstart_hipfile_fio_bytes_per_second). The figure of one test run, not a live rate. \"no fio result\" until a run has passed on a guest whose image carries that fio, /opt/fio-hipfile/bin/fio, which the golden bake installs; on an image without it the test still passes, says \"not in this image\", and leaves this tile empty. The record is a file the test leaves for node-exporter's textfile collector in the guest, so it outlives a guest reboot and can be older than this boot: the age tile says how old. A later run that fails changes nothing here: the tiles keep the last run that passed, and only its growing age shows that no newer one has."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "s",
+          "noValue": "no test run"
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 16,
+        "y": 25
+      },
+      "id": 83,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "title": "hipFile Measured (time since last pass)",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "clamp_min(time() - quickstart_hipfile_timestamp_seconds{job=\"fleet-node\",vm_name=~\"$vm\"}, 0)",
+          "legendFormat": "{{vm_name}}",
+          "refId": "A"
+        }
+      ],
+      "description": "Time since the hipFile figures in this row were measured (quickstart_hipfile_timestamp_seconds, the guest's clock when the test recorded them). \"no test run\" until `qemu-tool quick-start test --hipfile-test` has passed. The record is a file the test leaves for node-exporter's textfile collector in the guest, so it outlives a guest reboot and can be older than this boot: this tile is that age. A later run that fails changes nothing here: the tiles keep the last run that passed, and only its growing age shows that no newer one has. The age is this stack's Prometheus clock less the guest's, so a guest clock that runs ahead reads as 0 s, not as a negative age."
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 29
+      },
       "id": 60,
       "title": "SDXI",
       "type": "row"
@@ -830,7 +1007,7 @@
         "h": 3,
         "w": 8,
         "x": 0,
-        "y": 25
+        "y": 30
       },
       "id": 61,
       "options": {
@@ -889,7 +1066,7 @@
         "h": 3,
         "w": 8,
         "x": 8,
-        "y": 25
+        "y": 30
       },
       "id": 62,
       "options": {
@@ -944,7 +1121,7 @@
         "h": 3,
         "w": 8,
         "x": 16,
-        "y": 25
+        "y": 30
       },
       "id": 67,
       "options": {
@@ -994,7 +1171,7 @@
         "h": 6,
         "w": 12,
         "x": 0,
-        "y": 28
+        "y": 33
       },
       "id": 63,
       "options": {
@@ -1043,7 +1220,7 @@
         "h": 6,
         "w": 12,
         "x": 12,
-        "y": 28
+        "y": 33
       },
       "id": 64,
       "options": {
@@ -1092,7 +1269,7 @@
         "h": 6,
         "w": 12,
         "x": 0,
-        "y": 34
+        "y": 39
       },
       "id": 65,
       "options": {
@@ -1150,7 +1327,7 @@
         "h": 6,
         "w": 12,
         "x": 12,
-        "y": 34
+        "y": 39
       },
       "id": 66,
       "options": {
@@ -1192,7 +1369,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 40
+        "y": 45
       },
       "id": 70,
       "title": "P4 — FP8 Reduction In The NIC",
@@ -1225,7 +1402,7 @@
         "h": 4,
         "w": 6,
         "x": 0,
-        "y": 41
+        "y": 46
       },
       "id": 71,
       "options": {
@@ -1280,7 +1457,7 @@
         "h": 4,
         "w": 6,
         "x": 6,
-        "y": 41
+        "y": 46
       },
       "id": 72,
       "options": {
@@ -1336,7 +1513,7 @@
         "h": 4,
         "w": 6,
         "x": 12,
-        "y": 41
+        "y": 46
       },
       "id": 73,
       "options": {
@@ -1400,7 +1577,7 @@
         "h": 4,
         "w": 6,
         "x": 18,
-        "y": 41
+        "y": 46
       },
       "id": 74,
       "options": {
@@ -1434,7 +1611,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 45
+        "y": 50
       },
       "id": 38,
       "title": "Network & Driver Status",
@@ -1503,7 +1680,7 @@
         "h": 3,
         "w": 6,
         "x": 0,
-        "y": 46
+        "y": 51
       },
       "id": 36,
       "options": {
@@ -1600,7 +1777,7 @@
         "h": 3,
         "w": 6,
         "x": 6,
-        "y": 46
+        "y": 51
       },
       "id": 37,
       "options": {
@@ -1687,7 +1864,7 @@
         "h": 3,
         "w": 6,
         "x": 12,
-        "y": 46
+        "y": 51
       },
       "id": 41,
       "options": {
@@ -1741,7 +1918,7 @@
         "h": 3,
         "w": 6,
         "x": 18,
-        "y": 46
+        "y": 51
       },
       "id": 42,
       "options": {
@@ -1774,7 +1951,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 49
+        "y": 54
       },
       "id": 40,
       "title": "RDMA Device Counters (rdma_exporter)",
@@ -1803,7 +1980,7 @@
         "h": 6,
         "w": 12,
         "x": 0,
-        "y": 50
+        "y": 55
       },
       "id": 43,
       "options": {
@@ -1879,7 +2056,7 @@
         "h": 6,
         "w": 12,
         "x": 12,
-        "y": 50
+        "y": 55
       },
       "id": 44,
       "options": {
@@ -1911,7 +2088,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 56
+        "y": 61
       },
       "id": 30,
       "title": "RDMA — Ernic Mesh",
@@ -1939,7 +2116,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 57
+        "y": 62
       },
       "id": 31,
       "options": {
@@ -2020,7 +2197,7 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 57
+        "y": 62
       },
       "id": 32,
       "options": {
@@ -2070,7 +2247,7 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 57
+        "y": 62
       },
       "id": 33,
       "options": {
@@ -2128,7 +2305,7 @@
         "h": 6,
         "w": 12,
         "x": 0,
-        "y": 65
+        "y": 70
       },
       "id": 34,
       "options": {
@@ -2204,7 +2381,7 @@
         "h": 6,
         "w": 12,
         "x": 12,
-        "y": 65
+        "y": 70
       },
       "id": 35,
       "options": {
@@ -2246,7 +2423,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 71
+        "y": 76
       },
       "id": 50,
       "title": "Stack Logs",
@@ -2265,7 +2442,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 72
+        "y": 77
       },
       "id": 56,
       "options": {
