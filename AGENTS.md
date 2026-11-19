@@ -2706,12 +2706,32 @@ pair, 8 vCPU and 8192 MiB each, one boot, every run exit 0:**
   compile, both reads and the baked fio included, and the first
   `--rocm-rdma-test` on an image that carries the ROCm perftest, with no
   role applied by hand.
-- **The hipFile rates are about a third of the 831 and 959 MB/s recorded
-  for 10.1**, with `vram-dev=rocjitsu-1,vram-bar=0` on the QEMU command
-  line. Not explained. What differs: hipFile 0.6 and HIP 7.17, fio 3.43
-  baked where it was a master commit built in the guest, the play where it
-  was the report script, and both guests reading at once where the earlier
-  figures were one guest at a time. Nothing was run to separate them.
+- **The hipFile rates are below the 831 and 959 MB/s recorded for 10.1,
+  and two guests reading at once is part of why, not all of it.** The
+  option was on (`vram-dev=rocjitsu-1,vram-bar=0` on the QEMU command
+  line). The play runs on both guests at the same moment; the 10.1 figures
+  were one guest at a time. So the same test was run three more times on
+  the same boot, twice with `ANSIBLE_FORKS=1` in the environment, which
+  makes Ansible take the guests one after the other, and once more as
+  before:
+
+  | Run | hipFile read, guest 1 / 2 | fio, guest 1 / 2 |
+  |---|---|---|
+  | both guests at once, first | 297.6 / 307.5 MB/s | 340.7 / 338.9 MB/s |
+  | one at a time | 450.4 / 535.4 | 497.1 / 520.2 |
+  | one at a time, again | 477.1 / 501.9 | 512.3 / 438.6 |
+  | both at once, again | 300.2 / 308.9 | 340.7 / 340.7 |
+
+  The NVMe is emulated and its file is in the host's page cache, so a
+  read is a copy inside QEMU from memory into the GPU's mapped VRAM, and
+  two guests doing it together run at about 0.6 of the rate of one. The
+  owner's reading is that they contend for the host; which resource was
+  not measured. What is still unexplained is the rest: one guest alone
+  reads 450 to 535 MB/s here against 831 on 10.1. What differs there:
+  hipFile 0.6 and HIP 7.17, fio 3.43 baked where it was a master commit
+  built in the guest, and the play where it was the report script. The
+  report benches were not run on this image, which is the like-for-like
+  comparison.
 - Each guest took the name the stack gave it (`g102-1`), the first time
   the rename has been seen in a stack.
 - **`quick-start` has no way to be given a local backing file.** This run

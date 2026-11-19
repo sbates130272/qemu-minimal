@@ -556,8 +556,11 @@ baked by hand on the development host, which the ROCm entry describes.
     --rocm-rdma-mode dmabuf`: `vector_add` on the pinned rocjitsu server,
     `ib_send_bw` 568.98 MiB/s, P4 fp8 202.5 MB/s, hipFile 297.6 and
     307.5 MB/s with fio at 340.7 and 338.9 MB/s, and 656.57 MiB/s of
-    validated RDMA on GPU memory. The hipFile rates are about a third of
-    what ROCm 10.1 measured, which is not explained.
+    validated RDMA on GPU memory. Those hipFile rates are with both
+    guests reading at once; taken one guest at a time on the same boot
+    they are 450 to 535 MB/s, and fio 439 to 520 MB/s. That is still
+    below the 831 and 959 MB/s measured on ROCm 10.1, one guest at a
+    time, and the difference is not explained.
   - *Not run:* a clean bake from the cloud image at these pins, any CI
     lane, the other two fleets, and the stamp's new fields.
 
