@@ -2629,6 +2629,117 @@ by hand, with no reload and no oops. See "`20261117.g481c892`, pulled and
 booted" above. Not seen: more than one GPU on the bus, and the `stranded`
 state on a real guest.
 
+## ROCm 10.2 and amdgpu-dkms 7.2.3
+
+**The golden bake installs ROCm 10.2 and amdgpu driver release 31.70 since
+2026-11-19**: `rocm_line_pin` and `rocm_setup_amdgpu_driver_version` in
+`vm-rocm-golden.yml`, which were `10.1` and `31.60`. The two pins are
+independent; the owner moved them together. 31.70 is amdgpu-dkms 7.2.3
+where 31.60 was 7.1.9. **Every published image, and so every fleet guest,
+is still 10.1 and 7.1.9**, and much of this file records what was measured
+on those: a figure or path that says 10.1 is that image's.
+
+What the driver move changed in `amdgpu-emu-patches.py`, each found by a
+bake that stopped:
+
+| Patch | On 7.2.3 |
+|---|---|
+| `kfd_atomics`, `ras_vbios`, `panel_type` | apply as on 7.1.9 |
+| `kfd_ptrace_gate` | **not needed**. 7.2.3 no longer open-codes the gate; `kfd_process_queue_manager.c` calls `kcl_task_ptrace_dumpable_denied()`, a helper in the driver's own compatibility layer, and the module links on kernel 7.2.6. The script recognises the call and leaves the file alone |
+| `amd_vsdb_freesync`, new | **needed**. `get_amd_vsdb()` copies four freesync members out of `display_info.amd_vsdb` under `HAVE_DRM_DISPLAY_INFO_AMD_VSDB`, whose probe says yes on mainline; mainline's struct has `replay_mode` and `version` and none of the four, so `amdgpu_dm_connector.c` does not compile. The patch adds a probe and guards the four lines. The same kind of bug as `panel_type`, nothing to do with emulation |
+
+- **A patch function returns True, False or None**, printed as `patched`,
+  `already applied` and `not needed`. `rocjitsu_setup`'s `dkms` tasks write
+  the last two sets to `/etc/amdgpu-emu-patches.json` (`carried`,
+  `not_needed`) and the stamp's `amdgpu_patches` and
+  `amdgpu_patches_not_needed` are read from it. The list used to be typed
+  into the playbook, and on the first 7.2.3 image it named four patches,
+  one of which had applied nothing, and left out the fifth. **The record
+  and the stamp fields have not been through a bake.**
+- **A patch whose target is gone prints the source it found**
+  (`near()` in the script), and a failed `dkms build` prints the errors of
+  `make.log` and its last 30 lines. The guest is gone by the time a bake's
+  failure is read, and both were added because the reason was in it.
+- **`qemu/checks/rocm-golden.sh` accepts either the ptrace patch's marker
+  or the driver's helper**, with a message; that assertion was a bare
+  `grep -q` and failed the whole check on a 7.2.3 image in silence. It also
+  fails a source that reads the freesync members with no guard. Its amdgpu
+  assertions were run against a guest of the image below and pass; the
+  whole check was run there with the old ptrace line removed and exits 0.
+
+**One image, baked by hand on the dev host on 2026-11-19, and it is not one
+clean bake**: a full `gen-vm --bake` that stopped at the ptrace patch, then
+four `--ansible-only` reruns from the rocjitsu play
+(`ANSIBLE_EXTRA_ARGS='--start-at-task "Generate and install the GPU
+firmware"'`), the last of which finished: 6.66 GiB compacted to 2.16 GiB.
+Baked at 24 vCPU and 24576 MiB from an uncommitted tree.
+
+A guest of it with no device, read over SSH:
+
+| What | Measured |
+|---|---|
+| ROCm | eleven `amdrocm-*` packages at `10.2.0-2`, `/opt/rocm/core-10.2` and nothing of 10.1 or 10.0 |
+| HIP and hipFile | `libamdhip64.so.7.17.26434`, `libhipfile.so.0.6.0`; 10.1 had 7.16 and 0.5.0, on the dev host. `hipcc` compiled `vector_add.hip` for gfx1250 |
+| amdgpu | `amdgpu/7.2.3-2428518.26.04` installed for `7.2.6-070206-generic`, loaded from `updates/dkms`; one kernel; `amdgpu-probe --status` says `absent` |
+| ionic, `ionic_rdma`, `ernic_p4` | the `srcversion`s of `20261117.g481c892` |
+| perftest, fio | the ROCm perftest at the pin, validator `sse4.2`; `fio-3.43` with `libhipfile` at `/opt/fio-hipfile/bin/fio`, a bare `fio` still `/usr/bin/fio`. The first image with the baked fio |
+| failed units | `rocm-ernic-netcfg.service` alone, as expected with no NIC |
+
+Also seen there, and not changed: password SSH login is still open, as on
+the published images; `/var/lib/shim-signed/mok/MOK.priv`, the key DKMS
+signs modules with, is in the image and would be published with it
+(whether earlier images have one was not checked); `/etc/motd.d/qemu-minimal`
+prints the bake's hostname and `ROCm prefix: unknown`; about 327 MB of
+uv-installed ansible is in the baked account's home; and
+`amdrocm-blas-dev10.2` is headers with no library.
+
+**Two guests of it under `quick-start`, the default fleet on the fork
+pair, 8 vCPU and 8192 MiB each, one boot, every run exit 0:**
+
+| Run | Recap, guest 1 / guest 2 | Result |
+|---|---|---|
+| `test` | ok=76 / ok=72, failed=0, 1 m 34 s | amdgpu 7.2.3 bound the pinned rocjitsu server and `vector_add` passed; `ib_send_bw` 568.98 MiB/s, ernic 1 moved 65,536,000 bytes; NVMe write/read 141.0/183.0 and 142.0/190.0 MiB/s |
+| `test --sdxi-test --p4-test --hipfile-test` | ok=114 / ok=99, failed=0, 2 m 26 s | SDXI copy verified on both; P4 fp8 202.5 MB/s, avg 1.295 ms; hipFile read 297.6 and 307.5 MB/s, verified; fio 340.7 and 338.9 MB/s |
+| `test --rocm-rdma-test --rocm-rdma-mode dmabuf` | ok=94 / ok=71, failed=0, 1 m 18 s | 656.57 MiB/s, `VALIDATION: PASSED - 7 chunks, 58720256 bytes` |
+
+- **That is the first run of the hipFile play on a guest**, mkfs, mount,
+  compile, both reads and the baked fio included, and the first
+  `--rocm-rdma-test` on an image that carries the ROCm perftest, with no
+  role applied by hand.
+- **The hipFile rates are about a third of the 831 and 959 MB/s recorded
+  for 10.1**, with `vram-dev=rocjitsu-1,vram-bar=0` on the QEMU command
+  line. Not explained. What differs: hipFile 0.6 and HIP 7.17, fio 3.43
+  baked where it was a master commit built in the guest, the play where it
+  was the report script, and both guests reading at once where the earlier
+  figures were one guest at a time. Nothing was run to separate them.
+- Each guest took the name the stack gave it (`g102-1`), the first time
+  the rename has been seen in a stack.
+- **`quick-start` has no way to be given a local backing file.** This run
+  staged one by hand in a scratch directory: a copy of the image as
+  `<prefix>-1-backing.qcow2`, two overlays made with `gen-vm
+  --backing-file`, the image's key linked as `<key-dir>/id_rsa`, and
+  `<key-dir>/image-ref` holding the fleet's `<backing-ref>` exactly, so
+  that `fetch_key` leaves the key alone. A wrong `image-ref` makes `up`
+  pull the published image's key over it, and the guests then refuse the
+  login.
+
+Not run: a clean bake from the cloud image at these pins, any CI lane,
+`helios-tray` and `mi355x-server`, guests at 4 vCPU, the guest check
+whole and unmodified on a 7.2.3 image, and the report benches.
+
+**`gen-vm --ansible-only` after a failed bake logs in with the generated
+key.** A bake writes the sidecar only on success, so the image a failed one
+left has none, and the rerun offered the guest no key and would have waited
+out its 600 s. `_inherit_key` now falls back to
+`<images>/keys/<vm-name>_id_rsa` when both halves are there.
+
+**`gen-vm` installs the collections once per `requirements.yml`.**
+`ansible-galaxy` reinstalls a git requirement on every run, 37 s measured
+for the rocm-ernic entry. `_ensure_ansible_collection` records the file's
+sha256 in `<collections>/ansible_collections/.qemu-tool-requirements.sha256`
+and skips galaxy when it matches; remove that file to install again. It
+does not notice a collection changed or removed by hand.
+
 ## Known issues / open bugs
 
 See `rocm-ernic-enablement.md` for the full tracking list. Short version:
@@ -4672,8 +4783,8 @@ gfx1250) and `configure.ac`:
 ```
 ./autogen.sh
 ./configure --prefix=/usr/local --enable-rocm --enable-rocm-dmabuf \
-    --with-rocm=/opt/rocm/core-10.1 --with-rocm-arch=gfx1250 \
-    HIPCC=/opt/rocm/core-10.1/bin/hipcc LDFLAGS=-L/usr/local/lib \
+    --with-rocm=/opt/rocm/core-10.2 --with-rocm-arch=gfx1250 \
+    HIPCC=/opt/rocm/core-10.2/bin/hipcc LDFLAGS=-L/usr/local/lib \
     cross_compiling=yes SIMD_CFLAGS=-msse4.2 \
     'CPPFLAGS=-DHAVE_SSE42=1 -include xmmintrin.h'
 make -j"$(nproc)" && make install
@@ -5116,7 +5227,7 @@ hand then; `perftest_setup_rdma_core: local` now writes the same one):
 - hosts: fleet
   become: true
   roles:
-    - {role: perftest_setup, perftest_setup_rocm_path: /opt/rocm/core-10.1, perftest_setup_rdma_core: local}
+    - {role: perftest_setup, perftest_setup_rocm_path: /opt/rocm/core-10.2, perftest_setup_rdma_core: local}
 ```
 
 ```bash
@@ -5471,7 +5582,7 @@ checks: a non-login session, a login shell, and sudo.
 the guest, with the prefix given to configure as well:
 
 ```
-ROCM_PATH=/opt/rocm/core-10.1 ./configure --prefix=/opt/fio-hipfile \
+ROCM_PATH=/opt/rocm/core-10.2 ./configure --prefix=/opt/fio-hipfile \
     --disable-native --enable-libhipfile
 make -j"$(nproc)" && make install prefix=/opt/fio-hipfile
 ```

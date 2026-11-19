@@ -516,6 +516,46 @@ build and `--hipfile-test` have run against stand-ins only.
     hipFile's direct path has been measured there; both are under
     **Added**.
 
+- **The golden bake installs ROCm 10.2 and amdgpu driver release 31.70.**
+  `rocm_line_pin` in `vm-rocm-golden.yml` is `10.2` (was `10.1`), so the
+  ROCm tree in the guest is `/opt/rocm/core-10.2`, and
+  `rocm_setup_amdgpu_driver_version` is `31.70` (was `31.60`), which is
+  amdgpu-dkms 7.2.3 where 31.60 was 7.1.9. Both are in the package
+  repositories as of 2026-11-19. The two pins are independent; they move
+  together here by the owner's choice.
+  - *The amdgpu patches* (`amdgpu-emu-patches.py`) are five now. 7.2.3
+    carries its own port of the KFD ptrace gate, so `kfd_ptrace_gate` is
+    not needed there and is skipped. A new one, `amd_vsdb_freesync`, guards
+    four FreeSync fields the driver reads from a struct that has none of
+    them on a mainline kernel; without it the driver does not compile. The
+    image's stamp now lists the patches the source really carries
+    (`amdgpu_patches`) and the ones the release has no use for
+    (`amdgpu_patches_not_needed`), where it carried a list typed into the
+    playbook.
+  - *The guest check* accepts either the ptrace patch or the driver's own
+    helper, and says so when it finds neither; that assertion used to fail
+    the whole check with no message.
+  - *A failed patch or driver build says why.* A patch whose target is gone
+    prints the source it found, and a failed `dkms build` prints the
+    compiler's errors from its log.
+  - *The compiler cache:* the driver release is in its key, so the first
+    bake after this compiles amdgpu from cold and saves a new entry.
+  - *Who is affected:* nothing a fleet pulls changes until an image baked
+    from this is published and `<backing-ref>` moves. The pinned rocjitsu
+    server image and the published guests are still ROCm 10.1.
+  - **Baked once, by hand, and not in one pass.** On the development host
+    on 2026-11-19: a full bake that stopped at the ptrace patch, then
+    reruns from the GPU play until it finished. Two guests of that image
+    under `quick-start` on the default fleet passed `test`, `test
+    --sdxi-test --p4-test --hipfile-test` and `test --rocm-rdma-test
+    --rocm-rdma-mode dmabuf`: `vector_add` on the pinned rocjitsu server,
+    `ib_send_bw` 568.98 MiB/s, P4 fp8 202.5 MB/s, hipFile 297.6 and
+    307.5 MB/s with fio at 340.7 and 338.9 MB/s, and 656.57 MiB/s of
+    validated RDMA on GPU memory. The hipFile rates are about a third of
+    what ROCm 10.1 measured, which is not explained.
+  - *Not run:* a clean bake from the cloud image at these pins, any CI
+    lane, the other two fleets, and the stamp's new fields.
+
 - **Nothing in a generated stack restarts by itself.** The device servers
   (mesh workers, rocjitsu, SDXI) and Prometheus, Grafana, Loki and Alloy
   were `restart: on-failure`; every service is `restart: "no"` now, as the

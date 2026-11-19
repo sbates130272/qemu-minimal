@@ -110,7 +110,7 @@ rocjitsu_setup_amdgpu_update_initramfs: >-
 # The therock component line the guest carries. Its packages install under
 # /opt/rocm/core-<line>, which no shell and no documentation finds unaided.
 # vm-rocm-golden.yml passes the same value it installs ROCm at.
-rocjitsu_setup_rocm_version: "10.1"
+rocjitsu_setup_rocm_version: "10.2"
 rocjitsu_setup_rocm_path: "/opt/rocm/core-{{ rocjitsu_setup_rocm_version }}"
 
 # ══ Guest tools ═════════════════════════════════════════════════

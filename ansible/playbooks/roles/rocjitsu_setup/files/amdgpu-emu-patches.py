@@ -4,13 +4,18 @@
 Usage: amdgpu-emu-patches.py [SRC]    (default: newest /usr/src/amdgpu-*)
 
 Each patch is an exact-string replacement, applied once and skipped when it
-is already in place. A patch whose target is gone fails the run rather than
+is already in place. A patch function returns True when it changed the tree,
+False when its change was already there, and None when this driver release
+does not need it. A patch whose target is gone fails the run rather than
 passing quietly: a module built without it loads and then misbehaves in ways
 that name nothing. Prints "patched <name>" for each one it applied, which is
-what the calling task keys its changed status on.
+what the calling task keys its changed status on, "already applied <name>"
+for one found in place and "not needed <name>" for one this release has no
+use for; the calling role records the last two kinds for the image's stamp.
 """
 
 import glob
+import re
 import sys
 
 
@@ -26,6 +31,27 @@ def read(path):
 def write(path, content):
     with open(path, "w") as f:
         f.write(content)
+
+
+def near(content, needles, before=6, after=8):
+    """The source around each line naming one of `needles`, numbered.
+
+    For the message of a patch whose target is gone: the driver source is in
+    the guest, and what the lines look like now is what says how to port it.
+    """
+    lines = content.split("\n")
+    keep = set()
+    for index, line in enumerate(lines):
+        if any(needle in line for needle in needles):
+            keep.update(range(max(0, index - before),
+                              min(len(lines), index + after + 1)))
+    out, last = [], None
+    for index in sorted(keep):
+        if last is not None and index != last + 1:
+            out.append("      ...")
+        out.append(f"{index + 1:6}: {lines[index]}")
+        last = index
+    return "\n".join(out) or "      (no line names any of: " + ", ".join(needles) + ")"
 
 
 def swap(content, old, new, path):
@@ -82,11 +108,19 @@ def kfd_ptrace_gate(root):
     Require CAP_SYS_PTRACE unconditionally instead, which only ever denies
     what the in-tree check would have allowed. Version-gated, so <= 7.1 keeps
     the upstream logic. From ROCm/hipObject ci/ernic/patches/amdgpu/0001.
+
+    amdgpu-dkms 7.2.3 (driver release 31.70) no longer open-codes the gate:
+    it calls kcl_task_ptrace_dumpable_denied(), a helper in the driver's own
+    kernel compatibility layer. That is the driver's port of the same check,
+    so there is nothing here to patch, and whether its helper links on this
+    kernel is the DKMS build's to say.
     """
     path = root + "/amd/amdkfd/kfd_process_queue_manager.c"
     content = read(path)
     if "LINUX_VERSION_CODE < KERNEL_VERSION(7, 2, 0)" in content:
         return False
+    if "kcl_task_ptrace_dumpable_denied(" in content:
+        return None
     old = ("\tif (get_dumpable(mm) != SUID_DUMP_USER &&\n"
            "\t    !ns_capable(mm->user_ns, CAP_SYS_PTRACE)) {\n"
            "\t\tmmput(mm);\n"
@@ -105,8 +139,13 @@ def kfd_ptrace_gate(root):
     if old not in content or inc_old not in content:
         # A driver release that dropped the gate needs no patch.
         if "get_dumpable" not in content and "SUID_DUMP_USER" not in content:
-            return False
-        raise Missing(f"target string not found in {path}")
+            return None
+        raise Missing(
+            f"target string not found in {path}\n"
+            "the source there now reads:\n"
+            + near(content, ("get_dumpable", "SUID_DUMP_USER",
+                             "CAP_SYS_PTRACE", "exec_state",
+                             "linux/sched/coredump.h", "linux/version.h")))
     write(path, content.replace(inc_old, inc_new, 1).replace(old, new, 1))
     return True
 
@@ -191,7 +230,87 @@ def panel_type(root):
     return True
 
 
-PATCHES = (kfd_atomics, ras_vbios, kfd_ptrace_gate, panel_type)
+VSDB_PROBE = """\
+AC_DEFUN([AC_AMDGPU_DRM_AMD_VSDB_INFO_FREESYNC], [
+\tAC_KERNEL_DO_BACKGROUND([
+\t\tAC_KERNEL_TRY_COMPILE([
+\t\t\t#include <drm/drm_connector.h>
+\t\t], [
+\t\t\tstruct drm_display_info *display_info = NULL;
+\t\t\tdisplay_info->amd_vsdb.freesync_supported = 0;
+\t\t], [
+\t\t\tAC_DEFINE(HAVE_DRM_AMD_VSDB_INFO_FREESYNC, 1,
+\t\t\t\t[display_info->amd_vsdb carries the freesync fields])
+\t\t])
+\t])
+])
+
+"""
+
+VSDB_MEMBERS = ("freesync_supported", "min_frame_rate", "max_frame_rate",
+                "freesync_vcp_code")
+VSDB_LINE = re.compile(
+    r"^[ \t]*vsdb_info->\w+ = connector->display_info\.amd_vsdb\.("
+    + "|".join(VSDB_MEMBERS) + r");$")
+
+
+def amd_vsdb_freesync(root):
+    """Probe the freesync members of display_info->amd_vsdb separately.
+
+    The same bug as panel_type, new in amdgpu-dkms 7.2.3. get_amd_vsdb()
+    copies four freesync fields out of connector->display_info.amd_vsdb
+    under HAVE_DRM_DISPLAY_INFO_AMD_VSDB, whose probe says yes on any
+    mainline kernel that has the struct. Mainline's struct drm_amd_vsdb_info
+    has replay_mode and version, which the function also reads, and none of
+    the four, so the build stops on "has no member named freesync_supported".
+    Without them the function reports no FreeSync from the VSDB, which is
+    what a kernel without the fields can know. A plain bug in amdgpu,
+    independent of emulation.
+    """
+    m4 = root + "/amd/dkms/m4/drm-display-info.m4"
+    c = root + "/amd/display/amdgpu_dm/amdgpu_dm_connector.c"
+    m4_content = read(m4)
+    c_content = read(c)
+    if "HAVE_DRM_AMD_VSDB_INFO_FREESYNC" in m4_content:
+        return False
+
+    lines = c_content.split("\n")
+    hits = [(i, VSDB_LINE.match(line).group(1))
+            for i, line in enumerate(lines) if VSDB_LINE.match(line)]
+    if not hits:
+        # A driver release that does not read them needs no patch.
+        if "display_info.amd_vsdb." not in c_content:
+            return None
+    first, last = (hits[0][0], hits[-1][0]) if hits else (0, 0)
+    if (not hits or last - first != len(hits) - 1
+            or sorted(name for _, name in hits) != sorted(VSDB_MEMBERS)):
+        raise Missing(
+            f"the four amd_vsdb freesync assignments are not one block in {c}\n"
+            "the source there now reads:\n"
+            + near(c_content, ("display_info.amd_vsdb.",)))
+
+    anchor = "AC_DEFUN([AC_AMDGPU_DRM_DISPLAY_INFO], ["
+    call = "\tAC_AMDGPU_DRM_DISPLAY_INFO_AMD_VSDB\n"
+    m4_content = swap(m4_content, anchor, VSDB_PROBE + anchor, m4)
+    m4_content = swap(
+        m4_content, call,
+        call + "\tAC_AMDGPU_DRM_AMD_VSDB_INFO_FREESYNC\n", m4)
+
+    # The lines around them read replay_mode and version, which mainline
+    # has, so the function still uses both of its variables without these.
+    lines[first:last + 1] = (
+        ["#ifdef HAVE_DRM_AMD_VSDB_INFO_FREESYNC"]
+        + lines[first:last + 1]
+        + ["#endif"])
+
+    # Both files or neither: every target was found before anything is written.
+    write(m4, m4_content)
+    write(c, "\n".join(lines))
+    return True
+
+
+PATCHES = (kfd_atomics, ras_vbios, kfd_ptrace_gate, panel_type,
+           amd_vsdb_freesync)
 
 
 def main():
@@ -208,7 +327,9 @@ def main():
             applied = patch(root)
         except (Missing, OSError) as err:
             sys.exit(f"{patch.__name__}: {err}")
-        print(("patched " if applied else "already applied ") + patch.__name__)
+        word = {True: "patched", False: "already applied",
+                None: "not needed"}[applied]
+        print(f"{word} {patch.__name__}")
 
 
 if __name__ == "__main__":

@@ -264,10 +264,16 @@ AMDGPU_SRC=$(ls -d /usr/src/amdgpu-* | tail -1)
 # KFD atomics: the emulated device cannot advertise PCIe atomics through the
 # vfio-user PCI capability, and KFD refuses a device without them.
 grep -q 'amdgpu_emu_mode == 1' "${AMDGPU_SRC}/amd/amdkfd/kfd_device.c"
-# 0001, the unreviewed ptrace gate.  See
-# assets/rocm-golden/patches/amdgpu/README.md.
-grep -q 'KERNEL_VERSION(7, 2, 0)' \
-    "${AMDGPU_SRC}/amd/amdkfd/kfd_process_queue_manager.c"
+# 0001, the unreviewed ptrace gate, or the driver's own.  amdgpu-dkms 7.1.9
+# open-codes a check that does not link on kernel 7.2 and carries the patch;
+# 7.2.3 calls a helper in its compatibility layer and needs none.  A source
+# with neither has the 7.1.9 check unpatched.
+if ! grep -q -e 'KERNEL_VERSION(7, 2, 0)' -e 'kcl_task_ptrace_dumpable_denied(' \
+        "${AMDGPU_SRC}/amd/amdkfd/kfd_process_queue_manager.c"; then
+    echo "error: ${AMDGPU_SRC} has neither the kfd_ptrace_gate patch nor" \
+         "the driver's own kcl_task_ptrace_dumpable_denied()" >&2
+    exit 1
+fi
 # 0002, the panel_type probes.
 grep -q 'AC_AMDGPU_DRM_DISPLAY_INFO_PANEL_TYPE' \
     "${AMDGPU_SRC}/amd/dkms/m4/drm-display-info.m4"
@@ -275,6 +281,16 @@ grep -q 'AC_AMDGPU_DRM_MODE_PANEL_TYPE_LCD' \
     "${AMDGPU_SRC}/amd/dkms/m4/drm-display-info.m4"
 grep -q 'HAVE_DRM_DISPLAY_INFO_PANEL_TYPE' \
     "${AMDGPU_SRC}/amd/display/amdgpu_dm/amdgpu_dm_connector.c"
+# The freesync members of display_info->amd_vsdb, which mainline does not
+# have and amdgpu-dkms 7.2.3 reads: guarded, or not read at all (7.1.9).
+if grep -q 'display_info\.amd_vsdb\.freesync_supported' \
+        "${AMDGPU_SRC}/amd/display/amdgpu_dm/amdgpu_dm_connector.c" &&
+   ! grep -q 'HAVE_DRM_AMD_VSDB_INFO_FREESYNC' \
+        "${AMDGPU_SRC}/amd/display/amdgpu_dm/amdgpu_dm_connector.c"; then
+    echo "error: ${AMDGPU_SRC} reads the amd_vsdb freesync members with" \
+         "no HAVE_DRM_AMD_VSDB_INFO_FREESYNC guard" >&2
+    exit 1
+fi
 # 0003, the RAS vbios guard: rocjitsu serves no option ROM, so atom_context is
 # NULL and the unguarded query oopses in amdgpu_atom_parse_data_header.
 grep -q 'adev->mode_info.atom_context' "${AMDGPU_SRC}/amd/amdgpu/amdgpu_ras.c"

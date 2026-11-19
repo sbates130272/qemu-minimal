@@ -42,8 +42,8 @@
 <!-- What the rocm-golden guest is baked with: pins in ansible/playbooks/vm-rocm-golden.yml and <bake-release> in qemu/stacks/rocm-golden.xml -->
 [![Golden Guest OS](https://img.shields.io/badge/rocm--golden-Ubuntu%20resolute-blueviolet?style=flat-square&logo=ubuntu)](qemu/stacks/rocm-golden.xml)
 [![Golden Kernel](https://img.shields.io/badge/kernel-7.2.6%20mainline-blueviolet?style=flat-square&logo=linux)](https://kernel.ubuntu.com/mainline/v7.2.6/)
-[![Golden ROCm](https://img.shields.io/badge/ROCm-10.1-blueviolet?style=flat-square)](ansible/playbooks/vm-rocm-golden.yml)
-[![Golden amdgpu](https://img.shields.io/badge/amdgpu--dkms-31.60-blueviolet?style=flat-square)](ansible/playbooks/vm-rocm-golden.yml)
+[![Golden ROCm](https://img.shields.io/badge/ROCm-10.2-blueviolet?style=flat-square)](ansible/playbooks/vm-rocm-golden.yml)
+[![Golden amdgpu](https://img.shields.io/badge/amdgpu--dkms-31.70-blueviolet?style=flat-square)](ansible/playbooks/vm-rocm-golden.yml)
 [![Golden ernic driver](https://img.shields.io/badge/ionic%20%2B%20SRQ%20%2B%20P4-90434a2-blueviolet?style=flat-square)](https://github.com/ROCm/rocm-ernic/commit/90434a237232275fc8002cb3a6b5121ba836c594)
 [![Golden SDXI driver](https://img.shields.io/badge/sdxi-dfd76f2-blueviolet?style=flat-square)](https://github.com/ROCm/rocm-systems/commit/dfd76f23f6f10561333fc0a9a9f23e9f3b255c04)
 [![Golden perftest](https://img.shields.io/badge/perftest%20%2B%20ROCm-e68c74e-blueviolet?style=flat-square)](https://github.com/sbates130272/perftest/commit/e68c74e910451682ba1dc91b96602fbc7afaa372)
@@ -81,7 +81,7 @@ an emulated NVMe, an emulated rocm-ernic RDMA NIC and an emulated SDXI device,
 with Prometheus, Grafana and log collection beside them, plus a GPU test and
 an RDMA test across them. The guest is pulled, not built — it comes from the
 qcow2 this repository bakes and publishes, which already carries the mainline
-kernel, the ionic driver with SRQ and P4, rdma-core, perftest, ROCm 10.1 with
+kernel, the ionic driver with SRQ and P4, rdma-core, perftest, ROCm 10.2 with
 the hipFile SDK, and the SDXI driver and its CLI — and the GPU, NIC and SDXI
 servers come from tagged CI images. Nothing is built on your machine.
 

@@ -236,7 +236,7 @@
     # play through the anchor. The suite is versionless but carries several
     # lines at once, and a bare package name follows whichever is newest, so
     # an unpinned bake installs a line the guest's ROCM_PATH cannot see.
-    rocm_line_pin: &rocm_line_pin "10.1"
+    rocm_line_pin: &rocm_line_pin "10.2"
     rocm_setup_user: "{{ vm_username | default('ubuntu') }}"
     rocm_setup_repo_stream: therock
     rocm_setup_minimal: true
@@ -274,11 +274,14 @@
     # kernel, so two bakes of one commit are not the same guest. Pass
     # -e vm_rocm_skip_system_upgrade=false to have it.
     rocm_setup_skip_system_upgrade: "{{ vm_rocm_skip_system_upgrade | default(true) }}"
-    # 31.60 is the first driver release with amdgpu-dkms 7.1.9 and the
-    # gfx1250 blobs the "gap" firmware set sits beside. If that tree goes
-    # missing again, set rocjitsu_setup_firmware_set=full and drop the pin rather
-    # than falling back to an older driver.
-    rocm_setup_amdgpu_driver_version: "31.60"
+    # 31.70 carries amdgpu-dkms 7.2.3; 31.60, the pin until 2026-11-19, was
+    # the first release with 7.1.9 and with the gfx1250 blobs the "gap"
+    # firmware set sits beside. If that tree goes missing again, set
+    # rocjitsu_setup_firmware_set=full and drop the pin rather than falling
+    # back to an older driver. rocjitsu_setup patches this source by exact
+    # string (amdgpu-emu-patches.py), so a driver bump is where a patch whose
+    # target moved fails the bake.
+    rocm_setup_amdgpu_driver_version: "31.70"
     # Install amdgpu-dkms without building it. rocjitsu_setup
     # patches the source and builds it once; the postinst build of the
     # unpatched source took ~25 minutes, was always thrown away, and on this
@@ -991,6 +994,11 @@
       changed_when: false
       register: golden_amdgpu_src
 
+    - name: Read which patches the amdgpu source carries
+      ansible.builtin.slurp:
+        src: /etc/amdgpu-emu-patches.json
+      register: golden_amdgpu_patches
+
     - name: Read the generated firmware manifest
       ansible.builtin.slurp:
         src: "{{ golden_firmware_dir }}/rocjitsu-gap-manifest.json"
@@ -1145,10 +1153,16 @@
           amdgpu_dkms_version: "{{ golden_pkg['amdgpu-dkms'] | default('') }}"
           amdgpu_dkms_module: "{{ golden_amdgpu_src.stdout | trim }}"
           amdgpu_dkms_firmware_version: "{{ golden_pkg['amdgpu-dkms-firmware'] | default('') }}"
-          # The functions of amdgpu-emu-patches.py, in the order it applies
-          # them. kfd_ptrace_gate changes a KFD security check and is carried
-          # unreviewed.
-          amdgpu_patches: [kfd_atomics, ras_vbios, kfd_ptrace_gate, panel_type]
+          # What amdgpu-emu-patches.py reported for this driver release, as
+          # rocjitsu_setup recorded it: the patches the source carries, and
+          # the ones the release has no use for. kfd_ptrace_gate changes a
+          # KFD security check and is unreviewed; it is carried on
+          # amdgpu-dkms 7.1.9 and not needed from 7.2.3, whose own
+          # compatibility layer has the gate.
+          amdgpu_patches: >-
+            {{ (golden_amdgpu_patches.content | b64decode | from_json).carried }}
+          amdgpu_patches_not_needed: >-
+            {{ (golden_amdgpu_patches.content | b64decode | from_json).not_needed }}
           kfd_ptrace_gate_reviewed: false
           amdgpu_autoload_blacklisted: true
           amdgpu_probe_helper: /usr/local/bin/amdgpu-probe
