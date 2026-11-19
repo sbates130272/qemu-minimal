@@ -1055,7 +1055,15 @@ def render_compose(
             # puts Docker's embedded DNS in the path of every worker's start,
             # and at fleet scale that is where the fleet breaks.
             backend = f"tcp:worker:{spec['nics'][0]['addr']}:{spec['tcp_port']}"
-            out.append("    restart: on-failure")
+            # Not on-failure. Docker applies that policy at daemon start to
+            # any container that exited non-zero, and a host shutdown kills
+            # these, so a stack left up came back after a reboot as servers
+            # with no manager and no guests. A retrying worker also serves
+            # nobody: its guest is restart "no" and is dead by then, and each
+            # retry takes a mesh node id and a manager fd (issues 9 and 13).
+            # The same holds for every service below: nothing in a stack
+            # restarts by itself.
+            out.append('    restart: "no"')
         # Per node, not in the shared anchor: the GID set is what lets the
         # mesh resolve a destination GID to *this* node, so it is inherently
         # per-node. Getting it wrong is not a startup error -- the mesh
@@ -1164,7 +1172,7 @@ def render_compose(
         out.append("    networks:")
         out.append("      fleet:")
         out.append(f"        ipv4_address: {gpu['addr']}")
-        out.append("    restart: on-failure")
+        out.append('    restart: "no"')
         out.append("    command:")
         out.append("      - rocjitsu")
         out.append("      - --config")
@@ -1191,7 +1199,7 @@ def render_compose(
         out.append("    networks:")
         out.append("      fleet:")
         out.append(f"        ipv4_address: {sdxi['addr']}")
-        out.append("    restart: on-failure")
+        out.append('    restart: "no"')
         # The published image has no ENTRYPOINT and a shell CMD serving a
         # fixed socket name, so the binary has to be named here.
         out.append('    entrypoint: ["rocm-sdxi"]')
@@ -1324,7 +1332,7 @@ def render_compose(
     out.append("    networks:")
     out.append("      fleet:")
     out.append(f"        ipv4_address: {spec['prometheus_addr']}")
-    out.append("    restart: on-failure")
+    out.append('    restart: "no"')
     # This image already defaults to nobody, so the change here is not
     # root -> unprivileged, it is 65534 -> you: <prom-data-dir> is a host
     # bind mount, and the TSDB of a fleet run should belong to the person
@@ -1354,7 +1362,7 @@ def render_compose(
         out.append("    networks:")
         out.append("      fleet:")
         out.append(f"        ipv4_address: {spec['loki_addr']}")
-        out.append("    restart: on-failure")
+        out.append('    restart: "no"')
         # Same as Prometheus: <loki-data-dir> is a host bind mount and has to
         # belong to this uid before the first run.
         out.append(f"    user: {_USER_REF}")
@@ -1392,7 +1400,7 @@ def render_compose(
         out.append("    networks:")
         out.append("      fleet:")
         out.append(f"        ipv4_address: {spec['alloy_addr']}")
-        out.append("    restart: on-failure")
+        out.append('    restart: "no"')
         # Needs root to open /var/run/docker.sock (owned by root:docker).
         # The CONTAINER_USER uid is typically not in the docker group inside
         # the container, so we stay as root rather than failing silently.
@@ -1424,7 +1432,7 @@ def render_compose(
         out.append("    networks:")
         out.append("      fleet:")
         out.append(f"        ipv4_address: {spec['grafana_addr']}")
-        out.append("    restart: on-failure")
+        out.append('    restart: "no"')
         # Grafana's image defaults to uid 472 and <grafana-data-dir> does
         # not usually exist before the first `up`, so the daemon would create
         # it root-owned and Grafana could not write its sqlite. Owning it as

@@ -1370,9 +1370,28 @@ first, as the container runs as `nobody` — and `<log-max-size>`/`<log-max-file
 bound every service's log, because Docker's default is unlimited and a wedged
 manager with no backoff on its error path wrote 295 GB in two days.
 
-`ernic-1` is `restart: "no"` on purpose (issue 7 below): a manager restart
-wedges every guest on a DSR timeout that only `down && up` clears, and
-`on-failure` would turn a visible crash into a quiet wedge.
+**Every service in a generated stack is `restart: "no"`.** Two reasons, and
+`tests/test_gen_compose.py` holds both the render and the three committed
+stacks to it:
+
+- `ernic-1` (issue 7 below): a manager restart wedges every guest on a DSR
+  timeout that only `down && up` clears, and `on-failure` would turn a
+  visible crash into a quiet wedge.
+- Everything else, since 2026-11-19. The device servers and the
+  observability services were `on-failure`. Docker applies that policy at
+  daemon start to any container that exited non-zero, and a host shutdown
+  kills most of them, so a stack left up over a reboot came back as workers,
+  GPU and SDXI servers, Loki and Alloy with no manager and no guests; a
+  worker had restarted seven times looking for the manager. Seen on the dev
+  host. Compose has no "on failure, but not at boot". What `on-failure` gave
+  up is a mesh worker retrying after it died, which served nobody: its guest
+  is `restart: "no"` and is dead by then, and each retry takes a node id and
+  a manager fd (issues 9 and 13). A server that crashes now stays down and
+  shows as exited.
+
+A stack started before this keeps the policy its containers were created
+with until it is recreated; `docker update --restart no <container>` changes
+a running one.
 
 Ceilings, nearest first: **the mesh stops registering new workers at about 40
 nodes** (issue 17 — the 64-node topology payload cap in `rdma_backend_tcp.c` is
@@ -2817,11 +2836,12 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
 
     Two consequences worth knowing:
 
-    - **A stuck worker retries forever; its guest gets one chance.** `ernic` is
-      `restart: on-failure` and `qemu` is `restart: "no"`, so by the time a
-      worker on its fifteenth attempt registers, the VM it exists to serve has
-      been dead for ten minutes. The 24 stuck workers matched the 24 dead
-      guests exactly.
+    - **A stuck worker retried forever; its guest got one chance.** `ernic`
+      was `restart: on-failure` then and `qemu` `restart: "no"`, so by the
+      time a worker on its fifteenth attempt registered, the VM it existed to
+      serve had been dead for ten minutes. The 24 stuck workers matched the
+      24 dead guests exactly. Workers are `restart: "no"` now, so one that
+      fails to register exits and stays down.
     - **Failed registrations leak manager fds too, and faster than evictions
       do.** Measured over a six-hour run parked above the wall: **8006 worker
       restarts** and **50 fds/min** at the manager, reaching 18164 open

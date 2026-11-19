@@ -516,6 +516,24 @@ build and `--hipfile-test` have run against stand-ins only.
     hipFile's direct path has been measured there; both are under
     **Added**.
 
+- **Nothing in a generated stack restarts by itself.** The device servers
+  (mesh workers, rocjitsu, SDXI) and Prometheus, Grafana, Loki and Alloy
+  were `restart: on-failure`; every service is `restart: "no"` now, as the
+  guests and the mesh manager already were. Docker applies `on-failure`
+  when its daemon starts to any container that exited non-zero, and a host
+  shutdown kills most of them, so a stack left up over a reboot came back
+  as servers with no manager and no guests. Seen on the development host.
+  - *What it gives up:* a server that crashes stays down, shown as exited,
+    where it used to be started again. For a mesh worker that retry served
+    nobody: its guest does not restart, and each retry took a mesh node id
+    and a descriptor at the manager.
+  - *Who is affected:* a stack already running keeps the policy its
+    containers were created with until `down` and `up`; `docker update
+    --restart no <container>` changes one in place. The three shipped
+    stacks are regenerated.
+  - *Not run:* no stack has been started from the new render. The render
+    and the committed stacks are held to it by a test.
+
 - **A guest's hostname is the name the host calls it by.** A stack's guests
   were `rocm-golden-1` and `rocm-golden-2` in `qemu-tool list`, in the
   compose services and in Prometheus's `vm_name`, and `ernic-vm-1` and

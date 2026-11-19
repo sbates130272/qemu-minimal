@@ -90,7 +90,7 @@ services:
       l2: {}
       fleet:
         ipv4_address: 172.31.1.2
-    restart: on-failure
+    restart: "no"
     environment:
       - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:2,192.168.100.12
     entrypoint:
@@ -123,7 +123,7 @@ services:
       l2: {}
       fleet:
         ipv4_address: 172.31.1.3
-    restart: on-failure
+    restart: "no"
     environment:
       - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:3,192.168.100.13
     entrypoint:
@@ -156,7 +156,7 @@ services:
       l2: {}
       fleet:
         ipv4_address: 172.31.1.4
-    restart: on-failure
+    restart: "no"
     environment:
       - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:4,192.168.100.14
     entrypoint:
@@ -189,7 +189,7 @@ services:
       l2: {}
       fleet:
         ipv4_address: 172.31.1.5
-    restart: on-failure
+    restart: "no"
     environment:
       - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:5,192.168.100.15
     entrypoint:
@@ -222,7 +222,7 @@ services:
       l2: {}
       fleet:
         ipv4_address: 172.31.1.6
-    restart: on-failure
+    restart: "no"
     environment:
       - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:6,192.168.100.16
     entrypoint:
@@ -255,7 +255,7 @@ services:
       l2: {}
       fleet:
         ipv4_address: 172.31.1.7
-    restart: on-failure
+    restart: "no"
     environment:
       - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:7,192.168.100.17
     entrypoint:
@@ -288,7 +288,7 @@ services:
       l2: {}
       fleet:
         ipv4_address: 172.31.1.8
-    restart: on-failure
+    restart: "no"
     environment:
       - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:8,192.168.100.18
     entrypoint:
@@ -321,7 +321,7 @@ services:
       l2: {}
       fleet:
         ipv4_address: 172.31.1.9
-    restart: on-failure
+    restart: "no"
     environment:
       - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:9,192.168.100.19
     entrypoint:
@@ -354,7 +354,7 @@ services:
       l2: {}
       fleet:
         ipv4_address: 172.31.1.10
-    restart: on-failure
+    restart: "no"
     environment:
       - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:a,192.168.100.20
     entrypoint:
@@ -387,7 +387,7 @@ services:
       l2: {}
       fleet:
         ipv4_address: 172.31.1.11
-    restart: on-failure
+    restart: "no"
     environment:
       - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:b,192.168.100.21
     entrypoint:
@@ -420,7 +420,7 @@ services:
       l2: {}
       fleet:
         ipv4_address: 172.31.1.12
-    restart: on-failure
+    restart: "no"
     environment:
       - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:c,192.168.100.22
     entrypoint:
@@ -453,7 +453,7 @@ services:
       l2: {}
       fleet:
         ipv4_address: 172.31.1.13
-    restart: on-failure
+    restart: "no"
     environment:
       - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:d,192.168.100.23
     entrypoint:
@@ -486,7 +486,7 @@ services:
       l2: {}
       fleet:
         ipv4_address: 172.31.1.14
-    restart: on-failure
+    restart: "no"
     environment:
       - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:e,192.168.100.24
     entrypoint:
@@ -519,7 +519,7 @@ services:
       l2: {}
       fleet:
         ipv4_address: 172.31.1.15
-    restart: on-failure
+    restart: "no"
     environment:
       - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:f,192.168.100.25
     entrypoint:
@@ -552,7 +552,7 @@ services:
       l2: {}
       fleet:
         ipv4_address: 172.31.1.16
-    restart: on-failure
+    restart: "no"
     environment:
       - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:10,192.168.100.26
     entrypoint:
@@ -585,7 +585,7 @@ services:
       l2: {}
       fleet:
         ipv4_address: 172.31.1.17
-    restart: on-failure
+    restart: "no"
     environment:
       - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:11,192.168.100.27
     entrypoint:
@@ -618,7 +618,7 @@ services:
       l2: {}
       fleet:
         ipv4_address: 172.31.1.18
-    restart: on-failure
+    restart: "no"
     environment:
       - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:12,192.168.100.28
     entrypoint:
@@ -651,7 +651,7 @@ services:
       l2: {}
       fleet:
         ipv4_address: 172.31.1.19
-    restart: on-failure
+    restart: "no"
     environment:
       - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:13,192.168.100.29
     entrypoint:
@@ -684,7 +684,7 @@ services:
       l2: {}
       fleet:
         ipv4_address: 172.31.1.20
-    restart: on-failure
+    restart: "no"
     environment:
       - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:14,192.168.100.30
     entrypoint:
@@ -717,7 +717,7 @@ services:
       l2: {}
       fleet:
         ipv4_address: 172.31.1.21
-    restart: on-failure
+    restart: "no"
     environment:
       - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:15,192.168.100.31
     entrypoint:
@@ -750,7 +750,7 @@ services:
       l2: {}
       fleet:
         ipv4_address: 172.31.1.22
-    restart: on-failure
+    restart: "no"
     environment:
       - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:16,192.168.100.32
     entrypoint:
@@ -783,7 +783,7 @@ services:
       l2: {}
       fleet:
         ipv4_address: 172.31.1.23
-    restart: on-failure
+    restart: "no"
     environment:
       - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:17,192.168.100.33
     entrypoint:
@@ -816,7 +816,7 @@ services:
       l2: {}
       fleet:
         ipv4_address: 172.31.1.24
-    restart: on-failure
+    restart: "no"
     environment:
       - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:18,192.168.100.34
     entrypoint:
@@ -849,7 +849,7 @@ services:
       l2: {}
       fleet:
         ipv4_address: 172.31.1.25
-    restart: on-failure
+    restart: "no"
     environment:
       - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:19,192.168.100.35
     entrypoint:
@@ -882,7 +882,7 @@ services:
       l2: {}
       fleet:
         ipv4_address: 172.31.1.26
-    restart: on-failure
+    restart: "no"
     environment:
       - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:1a,192.168.100.36
     entrypoint:
@@ -915,7 +915,7 @@ services:
       l2: {}
       fleet:
         ipv4_address: 172.31.1.27
-    restart: on-failure
+    restart: "no"
     environment:
       - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:1b,192.168.100.37
     entrypoint:
@@ -948,7 +948,7 @@ services:
       l2: {}
       fleet:
         ipv4_address: 172.31.1.28
-    restart: on-failure
+    restart: "no"
     environment:
       - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:1c,192.168.100.38
     entrypoint:
@@ -981,7 +981,7 @@ services:
       l2: {}
       fleet:
         ipv4_address: 172.31.1.29
-    restart: on-failure
+    restart: "no"
     environment:
       - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:1d,192.168.100.39
     entrypoint:
@@ -1014,7 +1014,7 @@ services:
       l2: {}
       fleet:
         ipv4_address: 172.31.1.30
-    restart: on-failure
+    restart: "no"
     environment:
       - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:1e,192.168.100.40
     entrypoint:
@@ -1047,7 +1047,7 @@ services:
       l2: {}
       fleet:
         ipv4_address: 172.31.1.31
-    restart: on-failure
+    restart: "no"
     environment:
       - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:1f,192.168.100.41
     entrypoint:
@@ -1080,7 +1080,7 @@ services:
       l2: {}
       fleet:
         ipv4_address: 172.31.1.32
-    restart: on-failure
+    restart: "no"
     environment:
       - ERNIC_TCP_GUEST_GIDS=fe80::706f:63ff:fe6d:20,192.168.100.42
     entrypoint:
@@ -1110,7 +1110,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.2.1
-    restart: on-failure
+    restart: "no"
     command:
       - rocjitsu
       - --config
@@ -1131,7 +1131,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.2.2
-    restart: on-failure
+    restart: "no"
     command:
       - rocjitsu
       - --config
@@ -1152,7 +1152,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.2.3
-    restart: on-failure
+    restart: "no"
     command:
       - rocjitsu
       - --config
@@ -1173,7 +1173,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.2.4
-    restart: on-failure
+    restart: "no"
     command:
       - rocjitsu
       - --config
@@ -1194,7 +1194,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.2.5
-    restart: on-failure
+    restart: "no"
     command:
       - rocjitsu
       - --config
@@ -1215,7 +1215,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.2.6
-    restart: on-failure
+    restart: "no"
     command:
       - rocjitsu
       - --config
@@ -1236,7 +1236,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.2.7
-    restart: on-failure
+    restart: "no"
     command:
       - rocjitsu
       - --config
@@ -1257,7 +1257,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.2.8
-    restart: on-failure
+    restart: "no"
     command:
       - rocjitsu
       - --config
@@ -1278,7 +1278,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.2.9
-    restart: on-failure
+    restart: "no"
     command:
       - rocjitsu
       - --config
@@ -1299,7 +1299,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.2.10
-    restart: on-failure
+    restart: "no"
     command:
       - rocjitsu
       - --config
@@ -1320,7 +1320,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.2.11
-    restart: on-failure
+    restart: "no"
     command:
       - rocjitsu
       - --config
@@ -1341,7 +1341,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.2.12
-    restart: on-failure
+    restart: "no"
     command:
       - rocjitsu
       - --config
@@ -1362,7 +1362,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.2.13
-    restart: on-failure
+    restart: "no"
     command:
       - rocjitsu
       - --config
@@ -1383,7 +1383,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.2.14
-    restart: on-failure
+    restart: "no"
     command:
       - rocjitsu
       - --config
@@ -1404,7 +1404,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.2.15
-    restart: on-failure
+    restart: "no"
     command:
       - rocjitsu
       - --config
@@ -1425,7 +1425,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.2.16
-    restart: on-failure
+    restart: "no"
     command:
       - rocjitsu
       - --config
@@ -1446,7 +1446,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.2.17
-    restart: on-failure
+    restart: "no"
     command:
       - rocjitsu
       - --config
@@ -1467,7 +1467,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.2.18
-    restart: on-failure
+    restart: "no"
     command:
       - rocjitsu
       - --config
@@ -1488,7 +1488,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.2.19
-    restart: on-failure
+    restart: "no"
     command:
       - rocjitsu
       - --config
@@ -1509,7 +1509,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.2.20
-    restart: on-failure
+    restart: "no"
     command:
       - rocjitsu
       - --config
@@ -1530,7 +1530,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.2.21
-    restart: on-failure
+    restart: "no"
     command:
       - rocjitsu
       - --config
@@ -1551,7 +1551,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.2.22
-    restart: on-failure
+    restart: "no"
     command:
       - rocjitsu
       - --config
@@ -1572,7 +1572,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.2.23
-    restart: on-failure
+    restart: "no"
     command:
       - rocjitsu
       - --config
@@ -1593,7 +1593,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.2.24
-    restart: on-failure
+    restart: "no"
     command:
       - rocjitsu
       - --config
@@ -1614,7 +1614,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.2.25
-    restart: on-failure
+    restart: "no"
     command:
       - rocjitsu
       - --config
@@ -1635,7 +1635,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.2.26
-    restart: on-failure
+    restart: "no"
     command:
       - rocjitsu
       - --config
@@ -1656,7 +1656,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.2.27
-    restart: on-failure
+    restart: "no"
     command:
       - rocjitsu
       - --config
@@ -1677,7 +1677,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.2.28
-    restart: on-failure
+    restart: "no"
     command:
       - rocjitsu
       - --config
@@ -1698,7 +1698,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.2.29
-    restart: on-failure
+    restart: "no"
     command:
       - rocjitsu
       - --config
@@ -1719,7 +1719,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.2.30
-    restart: on-failure
+    restart: "no"
     command:
       - rocjitsu
       - --config
@@ -1740,7 +1740,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.2.31
-    restart: on-failure
+    restart: "no"
     command:
       - rocjitsu
       - --config
@@ -1761,7 +1761,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.2.32
-    restart: on-failure
+    restart: "no"
     command:
       - rocjitsu
       - --config
@@ -2126,7 +2126,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.0.11
-    restart: on-failure
+    restart: "no"
     user: "${CONTAINER_USER:?set CONTAINER_USER=<uid>:<gid>}"
     cap_drop:
       - ALL
@@ -2147,7 +2147,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.0.15
-    restart: on-failure
+    restart: "no"
     user: "${CONTAINER_USER:?set CONTAINER_USER=<uid>:<gid>}"
     cap_drop:
       - ALL
@@ -2182,7 +2182,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.0.16
-    restart: on-failure
+    restart: "no"
     cap_drop:
       - ALL
     security_opt:
@@ -2207,7 +2207,7 @@ services:
     networks:
       fleet:
         ipv4_address: 172.31.0.13
-    restart: on-failure
+    restart: "no"
     user: "${CONTAINER_USER:?set CONTAINER_USER=<uid>:<gid>}"
     cap_drop:
       - ALL

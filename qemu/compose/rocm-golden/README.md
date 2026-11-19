@@ -192,6 +192,11 @@ stale — reloading guest modules does not recover them. The only fix is
 `docker compose down && up` for the whole stack. `restart: on-failure` would
 turn that into a quiet wedge instead of a visible crash. See AGENTS.md issue 7.
 
+Every other service is `restart: "no"` as well. Docker applies `on-failure`
+when its daemon starts, so a stack left up over a host reboot used to come
+back as device servers with no manager and no guests. A server that exits
+stays down; bring the stack back with `down` and `up`.
+
 ## Nothing here runs as root
 
 Every service carries `user: ${CONTAINER_USER:?...}` and `cap_drop: [ALL]`,
@@ -621,10 +626,12 @@ climbs with the mesh until registration stops completing.
 The 64-node topology cap never came into it: **max node id reached 30**. Plan
 around ~40, expect it to move with host speed, and note two consequences:
 
-- **A stuck worker retries forever; its guest gets one chance.** `ernic` is
-  `restart: on-failure`, `qemu` is `restart: "no"`. By the time a worker on its
-  fifteenth attempt registers, the VM it exists to serve has been dead for ten
-  minutes. The 24 stuck workers matched the 24 dead guests exactly.
+- **A stuck worker retried forever; its guest got one chance.** When this was
+  measured `ernic` was `restart: on-failure` and `qemu` `restart: "no"`. By
+  the time a worker on its fifteenth attempt registered, the VM it existed to
+  serve had been dead for ten minutes. The 24 stuck workers matched the 24
+  dead guests exactly. Workers are `restart: "no"` now: one that fails to
+  register exits and stays down.
 - **Failed registrations leak manager fds too, and faster than evictions do.**
   Measured over a six-hour run parked above the wall: 8006 worker restarts and
   50 fds/min at the manager, reaching 18164 open descriptors. That is Docker's

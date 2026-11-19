@@ -560,6 +560,26 @@ class TestRender(unittest.TestCase):
         self.assertIn('restart: "no"', head)
         self.assertNotIn("on-failure", head)
 
+    def test_nothing_restarts_by_itself(self):
+        """Docker applies on-failure (and always, unless-stopped) at daemon
+        start, so a stack left up over a host reboot came back as servers
+        with no manager and no guests."""
+        body = gen_compose.render_compose(
+            _plan("<vm-count>3</vm-count>"), ["fleet.xml"], "abc",
+            )
+        policies = [line.split(":", 1)[1].strip()
+                    for line in body.splitlines()
+                    if line.strip().startswith("restart:")]
+        self.assertTrue(policies)
+        self.assertEqual(set(policies), {'"no"'})
+        for stack in ("rocm-golden", "helios-tray", "mi355x-server"):
+            text = (REPO_ROOT / "qemu/compose" / stack
+                    / "docker-compose.yml").read_text()
+            found = {line.split(":", 1)[1].strip()
+                     for line in text.splitlines()
+                     if line.strip().startswith("restart:")}
+            self.assertEqual(found, {'"no"'}, stack)
+
     def test_each_vm_gets_only_its_own_sockets(self):
         body = gen_compose.render_compose(_plan(), ["fleet.xml"], "abc")
         self.assertIn(
