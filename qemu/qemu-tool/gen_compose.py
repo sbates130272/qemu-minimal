@@ -924,7 +924,6 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
         "nvme_vram": cfg.vm_nvme_vram,
         "ernic_image": cfg.ernic_ref,
         "qemu_image": cfg.qemu_ref,
-        "vm_images_dir": _setting(cfg, "vm_images_dir"),
         "cpu_sockets": cfg.vm_cpu_sockets,
         "cpu_phys_bits": cfg.vm_cpu_phys_bits,
         "pci_hole64_size": cfg.vm_pci_hole64_size,
@@ -936,7 +935,6 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
         "alloy_addr": f"{net}.{_NET_INFRA}.{_INFRA_ALLOY}",
         "logs": cfg.logs_enable,
         "loki_image": _setting(cfg, "loki_image"),
-        "loki_port": str(cfg.loki_port),
         "loki_data_dir": _setting(cfg, "loki_data_dir"),
         "alloy_image": _setting(cfg, "alloy_image"),
         # Carried into the inventory so the guest's ip_discovery.bin is generated
@@ -947,7 +945,6 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
         "grafana_image": _setting(cfg, "grafana_image"),
         "grafana_port": str(cfg.grafana_port),
         "grafana_password": _setting(cfg, "grafana_admin_password"),
-        "subnet": subnet,
         "vm_username": _setting(cfg, "vm_username"),
         # Distinct shares, first seen first: one bind mount each.
         "vm_filesystem": list(dict.fromkeys(
@@ -968,7 +965,6 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
         "prom_data_dir": cfg.prometheus_data_dir or _PROM_DATA_DIR,
         "bind_addr": _bind_addr(cfg),
         "grafana_data_dir": cfg.grafana_data_dir or _GRAFANA_DATA_DIR,
-        "prom_port": str(cfg.prom_port),
         "prom_interval": _setting(cfg, "prom_scrape_interval"),
         "prom_retention": _setting(cfg, "prom_retention"),
     }

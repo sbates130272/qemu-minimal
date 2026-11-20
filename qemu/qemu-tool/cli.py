@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import shutil
 import sys
@@ -210,6 +211,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_publish_qcow(sub)
     _add_publish_qcow_prune(sub)
     _add_ernic_stats(sub)
+    _add_fleet_schema(sub)
     _add_man(sub)
 
     return parser
@@ -1480,6 +1482,54 @@ def _add_ernic_stats(sub: argparse._SubParsersAction) -> None:
     p.set_defaults(func=_ernic_stats_cmd)
 
 
+def _add_fleet_schema(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser(
+        "fleet-schema",
+        help="Print the fleet XML schema or its reference page.",
+        description=(
+            "Write a schema for fleet XML, as RELAX NG or as XML Schema "
+            "(XSD), or the reference page that lists every element, from "
+            "the parser's own tables. A schema is for editors and for "
+            "validators that do not have qemu-tool; 'qemu-tool check --xml "
+            "FILE' runs the parser itself and is the check that counts. "
+            "Neither schema rejects a file the parser accepts, and neither "
+            "can check layers or rules between elements. The RELAX NG "
+            "schema is the precise one; the XSD is for tools that take only "
+            "XSD and is looser in three ways: a <server> may hold the "
+            "children of another server type than its own, "
+            "<backend type='tcp'> may hold text, and xsi:schemaLocation and "
+            "xsi:noNamespaceSchemaLocation pass on any element, as does "
+            "xsi:type on a flat setting when it names the type the setting "
+            "already has. The reference page lists what each leaves out."
+        ),
+        epilog=_examples(
+            "qemu-tool fleet-schema --output fleet.rng",
+            "xmllint --noout --relaxng fleet.rng my-fleet.xml",
+            "qemu-tool fleet-schema --format xsd --output fleet.xsd",
+            "xmllint --noout --schema fleet.xsd my-fleet.xml",
+            "qemu-tool fleet-schema --format md --output docs/fleet-xml.md",
+        ),
+    )
+    p.add_argument(
+        "--format", choices=("rng", "xsd", "md"), default="rng",
+        help=(
+            "What to write: rng, the RELAX NG schema in its XML syntax; "
+            "xsd, the XML Schema (XSD 1.0), which is looser; or md, the "
+            "reference page in Markdown (default: %(default)s)."
+        ),
+    )
+    p.add_argument(
+        # A string, not a Path: Path("") is ".", and an empty FILE has to
+        # be told from the current directory to be reported as what it is.
+        "--output", default=None, metavar="FILE",
+        help=(
+            "Write to FILE instead of standard output; '-' is standard "
+            "output."
+        ),
+    )
+    p.set_defaults(func=_fleet_schema_cmd)
+
+
 def _add_man(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
         "man",
@@ -1735,6 +1785,44 @@ def _gen_compose_cmd(args: argparse.Namespace) -> None:
             )
     gen_compose_run(args.xml, output_dir, check=args.check,
                     dry_run=args.dry_run, stack=stack)
+
+
+def _fleet_schema_cmd(args: argparse.Namespace) -> None:
+    from . import fleet_schema
+
+    text = fleet_schema.FORMATS[args.format]()
+    if args.output == "":
+        # An unset shell variable, usually. It used to end in "cannot write
+        # .: Is a directory".
+        sys.exit("Error: --output needs a file name, and was given an empty "
+                 "one; leave --output off, or give '-', to write to "
+                 "standard output")
+    if args.output is not None and Path(args.output).is_dir():
+        sys.exit(f"Error: --output {args.output} is a directory; name the "
+                 "file to write")
+    if args.output is None or args.output == "-":
+        if sys.stdout is None:
+            # Started with descriptor 1 closed (`>&-`): Python has no
+            # standard output object at all.
+            sys.exit("Error: cannot write to standard output: it is closed")
+        # Flushed here, so that a full disk behind a redirect is an error
+        # of this command's and not Python's at exit, with status 120.
+        try:
+            sys.stdout.write(text)
+            sys.stdout.flush()
+        except OSError as exc:
+            # What could not be written is still buffered; point the
+            # descriptor elsewhere so the flush at exit does not fail again.
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+            if isinstance(exc, BrokenPipeError):
+                sys.exit(1)     # the reader went away (`| head`)
+            sys.exit("Error: cannot write to standard output: "
+                     f"{exc.strerror or exc}")
+        return
+    try:
+        Path(args.output).write_text(text, encoding="utf-8")
+    except OSError as exc:
+        sys.exit(f"Error: cannot write {args.output}: {exc.strerror or exc}")
 
 
 def _ernic_stats_cmd(args: argparse.Namespace) -> None:

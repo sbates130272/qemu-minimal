@@ -43,6 +43,7 @@ def _load_package():
 
 _load_package()
 from qemu_tool import cli as cli_mod  # noqa: E402
+from qemu_tool import fleet_xml  # noqa: E402
 
 # -h/--help is on every parser by construction and documenting it on each
 # subcommand would be noise, not coverage.
@@ -113,12 +114,118 @@ class ManPageTest(unittest.TestCase):
         self.assertEqual([], missing, f"no OPTIONS section: {missing}")
 
     def test_every_option_is_documented(self):
+        # As a whole word, in the subcommand's own OPTIONS section or in
+        # SHARED OPTIONS. A plain substring search of the whole page took
+        # `--output-dir`, another subcommand's, for `--output`, and any
+        # example elsewhere on the page for the entry itself.
+        plain = MAN.read_text().replace(r"\-", "-")
+        sections = dict(re.findall(
+            r"(?ms)^\.SH (.*?)\n(.*?)(?=^\.SH |\Z)", plain))
         missing = {}
         for cmd in self.cmds:
-            gone = [o for o in _options(cmd) if o not in self.man]
+            where = (sections.get(f"{cmd.upper()} OPTIONS", "")
+                     + sections.get("SHARED OPTIONS", ""))
+            gone = [o for o in _options(cmd) if not re.search(
+                rf"(?<![\w-]){re.escape(o)}(?![\w-])", where)]
             if gone:
                 missing[cmd] = gone
         self.assertEqual({}, missing, f"undocumented options: {missing}")
+
+
+class ManPageSettingsTest(unittest.TestCase):
+    """Every fleet XML element is in the page's lists of settings.
+
+    <vm-pci-mmio-bridge> was on the page nowhere, and <spdk-image> and
+    <vm-qemu-args> only in prose outside the lists, because the lists are
+    typed by hand. They are read here against the parser's own table.
+    """
+
+    def _lists(self) -> str:
+        plain = MAN.read_text().replace(r"\-", "-")
+        section = dict(re.findall(
+            r"(?ms)^\.SH (.*?)\n(.*?)(?=^\.SH |\Z)", plain))["SETTINGS FILE"]
+        # The three subsections that list settings, and nothing after them:
+        # an example elsewhere on the page is not the list.
+        start = section.index(".SS Per-guest settings\n")
+        end = section.index(".SS Schema and reference\n")
+        self.assertLess(start, end)
+        lists = section[start:end]
+        for heading in (".SS Fleet settings\n",
+                        ".SS Bake and publish settings\n"):
+            self.assertIn(heading, lists)
+        return lists
+
+    @staticmethod
+    def _entries(lists: str) -> set[str]:
+        """The elements with an entry of their own, not a mention in prose.
+
+        Three shapes, one a subsection: a row of the per-guest table (the
+        line starts with the element), a member of a fleet list (a .BR
+        line, where the prose there names elements with .B), and the tag
+        line of a bake entry (the line after .TP).
+        """
+        guest, rest = lists.split(".SS Fleet settings\n")
+        fleet, bake = rest.split(".SS Bake and publish settings\n")
+        tag = r"<([a-z][a-z0-9-]*)>"
+        found = set(re.findall(rf"(?m)^{tag}", guest))
+        for line in re.findall(r"(?m)^\.BR (.*)$", fleet):
+            found.update(re.findall(tag, line))
+        for line in re.findall(r"(?m)^\.TP\n(.*)$", bake):
+            found.update(re.findall(tag, line))
+        return found
+
+    def test_every_element_is_in_the_settings_lists(self):
+        self.assertGreater(len(fleet_xml.KNOWN_ELEMENTS), 60)
+        entries = self._entries(self._lists())
+        missing = [tag for tag in fleet_xml.KNOWN_ELEMENTS
+                   if tag not in entries]
+        self.assertEqual([], missing, f"no entry in SETTINGS FILE: {missing}")
+
+    def test_a_mention_in_prose_is_not_an_entry(self):
+        # <backing-ref> is named six times in the lists and <vm-nvme>
+        # twice. Losing the entries has to show while the mentions stay.
+        lists = self._lists()
+        self.assertGreater(lists.count("<backing-ref>"), 2)
+        cut = lists.replace("<backing-ref>                 --backing-image\n",
+                            "").replace(".BR <backing-ref>\n", "")
+        self.assertIn("<backing-ref>", cut)
+        self.assertNotIn("backing-ref", self._entries(cut))
+        cut = lists.replace("<vm-nvme>                     --nvme\n", "")
+        self.assertIn(".B <vm-nvme>\n", cut)
+        self.assertNotIn("vm-nvme", self._entries(cut))
+        cut = lists.replace('.BR <publish-ref> ", " <publish-flavour>\n', "")
+        self.assertIn(".B <publish-ref>\n", cut)
+        self.assertNotIn("publish-ref", self._entries(cut))
+
+    def test_the_devices_block_names_what_the_parser_takes(self):
+        # <devices> is not a row of the settings table, so the test above
+        # does not reach it or anything inside it.
+        plain = MAN.read_text().replace(r"\-", "-")
+        section = dict(re.findall(
+            r"(?ms)^\.SH (.*?)\n(.*?)(?=^\.SH |\Z)", plain))["SETTINGS FILE"]
+        start = section.index("One element has structure.\n.B <devices>\n")
+        block = section[start:section.index(".B ${VAR}\n", start)]
+        words = set(re.findall(r"(?m)^\.R?BR? \(?\s*<?([a-z0-9-]+)", block))
+        wanted = set(fleet_xml.SERVER_TYPES) | set(fleet_xml.BACKEND_TYPES)
+        wanted |= {"server", "backend", "config", "type", "id"}
+        for table in (fleet_xml.SERVER_OPTIONS, fleet_xml.SERVER_ENV):
+            for options in table.values():
+                wanted |= set(options)
+        self.assertEqual([], sorted(wanted - words))
+
+    def test_no_removed_element_is_listed_as_a_setting(self):
+        lists = self._lists()
+        listed = [tag for tag in fleet_xml.REMOVED_ELEMENTS
+                  if f"<{tag}>" in lists]
+        self.assertEqual([], listed)
+
+    def test_the_bridge_is_described_as_the_table_describes_it(self):
+        setting = fleet_xml._BY_TAG["vm-pci-mmio-bridge"]
+        self.assertIn("pci-mmio-bridge device for its emulated NVMe, which "
+                      "rocm-xio uses", setting.help)
+        flat = " ".join(self._lists().split())
+        self.assertIn("pci-mmio-bridge device for its emulated NVMe, which "
+                      "rocm-xio uses", flat.replace(" .B ", " "))
 
 
 class ManPageVersionTest(unittest.TestCase):

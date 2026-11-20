@@ -667,7 +667,8 @@ class LayerTest(unittest.TestCase):
 class PrometheusHasNoHostPortTest(unittest.TestCase):
     """The stack publishes Grafana and nothing else; quick-start says so.
 
-    It used to ask about 9090, write `<prom-port>` and print "Prometheus
+    It used to ask about 9090, write `<prom-port>` (an element the format
+    no longer has) and print "Prometheus
     will be published on 9093", and the summary gave a Prometheus URL. No
     rendered stack has carried a host port for it since the generator
     dropped one: on a boot of 20261117.g481c892 `curl localhost:9093` got
@@ -705,7 +706,7 @@ class PrometheusHasNoHostPortTest(unittest.TestCase):
         self.assertIn("ports:", grafana)
 
     def test_a_busy_9090_is_nobodys_business(self):
-        asked, said, written = self._resolve({qs.FleetConfig().prom_port})
+        asked, said, written = self._resolve({9090})
         self.assertEqual([], asked)
         self.assertEqual("", said)
         self.assertIsNone(written)
@@ -726,7 +727,7 @@ class PrometheusHasNoHostPortTest(unittest.TestCase):
             qs._summary(state)
         said = out.getvalue()
         self.assertIn(f"http://localhost:{state.fleet.grafana_port}", said)
-        self.assertNotIn(f":{state.fleet.prom_port}\n", said)
+        self.assertNotIn(":9090\n", said)
         self.assertNotIn("Prometheus   http", said)
         self.assertIn("Prometheus has no host port", said)
         self.assertIn("docker exec mystack-prometheus-1 wget", said)

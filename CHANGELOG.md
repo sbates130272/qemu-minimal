@@ -4,7 +4,135 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Breaking
+
+- **Seven fleet XML elements are removed, and a file that sets one no
+  longer parses**: `<qemu-digest>`, `<ernic-digest>`, `<rocjitsu-digest>`,
+  `<backing-digest>`, `<domain-pattern>`, `<prom-port>` and `<loki-port>`.
+  No command read any of them. The four digests pinned nothing, no fleet
+  code writes or reads a per-guest domain file, and Prometheus and Loki
+  have no host port. Deleting the element from a fleet file is the whole
+  migration and changes nothing a stack renders: the four shipped stacks
+  are byte for byte what they were.
+  - The error names the element and says it was removed. It does not offer
+    the nearest known name, which for `<prom-port>` would have been
+    `<prom-retention>`:
+
+    ```
+    Error: my-fleet.xml: <prom-port> was removed from the fleet format: no command ever read it; Prometheus has no host port and is asked inside its container. Delete the element.
+    ```
+
+    `qemu-tool check --xml` reports the same line, once for an element
+    however often the file sets it, and both schemas refuse the element as
+    an unknown one.
+  - A misspelling of a removed element is not offered a setting either.
+    When the closest name to an unknown element is one of the seven, the
+    error names that removed element and gives its reason:
+
+    ```
+    Error: my-fleet.xml: unknown element <prom-prot>; it looks like <prom-port>, which was removed from the fleet format: no command ever read it; Prometheus has no host port and is asked inside its container. Delete the element.
+    ```
+
+    An unknown element in another case is compared in lower case when
+    nothing is close as written, so `<PROM-PORT>` gets that message and
+    `<VM-COUNT>` gets "did you mean `<vm-count>`?"; both used to get a bare
+    "unknown element".
+  - **A file written by `FleetXml.emit()` of v2.0.0, v2.1.0 or main before
+    this change no longer parses.** `emit()` writes every element that is
+    not sparse, set or not, and three of the seven were not sparse: it
+    always wrote `<domain-pattern>`, `<prom-port>` and `<loki-port>`, at
+    their defaults. The four digests were sparse and were written only when
+    set. This reaches a caller that used the Python API to write a fleet
+    file and kept it: no command, script or workflow of this repository
+    calls `emit()`, only its tests, which write to temporary directories.
+    Delete the three elements from such a file, or emit it again.
+  - **A digest pin is written in the ref element itself.** `<backing-ref>`
+    takes `name@sha256:...`, which `gen-compose` accepts as a ref that
+    cannot move and `gen-vm` hands to `oras pull` as written. `<qemu-ref>`,
+    `<ernic-ref>` and `<rocjitsu-ref>` are written to the compose file's
+    `image:` as they stand, so `name@sha256:...` renders there too, but a
+    digest carries no build stamp: `gen-compose` warns and leaves that
+    image out of the comparison that holds the three servers to one build
+    and one libvfio-user.
+  - `FleetConfig` loses the seven fields, for a caller that builds one in
+    code, and `gen_compose.plan()`'s result loses the keys `prom_port` and
+    `loki_port`, with two more nothing read, `vm_images_dir` and `subnet`.
+  - Two tests now fail a `FleetConfig` field that no module outside the
+    table names, and a key of `plan()`'s result that no render reads.
+
 ### Added
+
+- **Two schemas and a reference page for fleet XML, all generated from the
+  parser.** `qemu-tool fleet-schema` writes a RELAX NG schema
+  (`--format rng`, the default), an XML Schema (`--format xsd`, XSD 1.0) or
+  a Markdown page that lists every element with its kind, its default and
+  what it is for (`--format md`); `--output FILE` writes to a file, and `--output -` to standard output. The
+  committed copies are `qemu/schema/fleet.rng` and `qemu/schema/fleet.xsd`,
+  which the wheel carries and the `.deb` installs under
+  `/usr/share/qemu-tool/schema/`, and `docs/fleet-xml.md`, a new page of
+  the site.
+  - All come from the tables the parser reads, in `fleet_xml.py`. Each
+    setting, each server option and each backend type now has a line of
+    help and a note on the form of its value there, and the settings are
+    grouped into the sections the page prints. Nothing about what the parser
+    accepts or what a stack renders changed.
+  - **The parser is still the authority, and `qemu-tool check --xml` the
+    check that counts.** Neither schema rejects a file the parser accepts.
+    The RELAX NG schema refuses what a grammar can: an unknown or repeated element, an
+    attribute, a nested element, the forms of a boolean, an integer, a port
+    and an address, a control character in `<vm-qemu-args>`, and inside
+    `<devices>` the server types, ids, the options each type takes, their
+    shapes and the backend types. An integer's digits are `0-9` or any
+    non-ASCII character that is not white space, not `\d`: libxml2 knows
+    fewer decimal digits than Python's `int()` takes, and would have
+    refused an integer the parser accepts.
+  - **What it cannot check** is on the page: layers and the merge by id, two
+    `<server>` entries with one id, a count beside a `<devices>` block that
+    says another number, the per-VM comma lists, text between elements,
+    quoting in `<vm-qemu-args>`, and every rule `gen-compose` holds between
+    elements.
+  - The page also lists the seven elements this version removes; see
+    Breaking, above.
+  - **The RELAX NG schema is the precise one; the XSD is for editors and
+    tools that take only XSD.** It is written in Python from the same tables
+    and uses the same patterns, not converted, and it rejects no file the
+    RELAX NG schema accepts. It is looser in three ways, which its header
+    and the page list and the tests hold a document for: a `<server>` may
+    hold the children of another server type than its own (never of two at
+    once), since XSD 1.0 cannot make content depend on an attribute;
+    `<backend type='tcp'>` may hold option text; and `xsi:schemaLocation`
+    and `xsi:noNamespaceSchemaLocation` pass on any element, as does
+    `xsi:type` on a flat setting when it names the type the setting already
+    has. No other `xsi:` attribute passes.
+    Everything else is the same, including each flat setting at most once
+    in any order and each once-only child of a `<server>` at most once.
+  - **A fleet file cannot name its XSD with `xsi:schemaLocation`**: the
+    parser refuses every attribute on `<fleet>`. The page shows the two
+    ways that work, the editor's own association (`xml.fileAssociations`
+    for the XML extension of VS Code) and an `xml-model` processing
+    instruction.
+  - `qemu-tool fleet-schema` with standard output closed (`>&-`) prints one
+    line and exits 1; it ended in a traceback. An empty `--output`, or a
+    directory, is refused by name.
+  - `tests/test_fleet_schema.py` fails when a committed file is not what the
+    generator writes, when a row has no help, when a schema and the parser
+    disagree on a list of small documents, and when the XSD differs from
+    the RELAX NG schema anywhere but on the documents listed as its
+    looseness; it needs `lxml` or `xmllint`, skips without one and fails
+    without one under `CI=true`. `Gen Compose Check` installs `lxml`.
+  - *Run:* the four shipped fleet files and 257 small documents through the
+    parser and both schemas with lxml (libxml2 2.14.6). By hand, in a
+    local container and in no workflow: the same files and documents
+    through the RELAX NG schema with jing, which agreed with libxml2 on
+    every one, and through the XSD with the JDK's own validator (Xerces),
+    which compiled it and agreed with libxml2 on every one. `trang` converts
+    the RELAX NG schema with two warnings; the XSD it writes takes more than
+    the generated one in most places (a repeated setting, and any element as
+    the root, pass it) and less in one (it has no named type for a string
+    or a path setting, so an `xsi:type` naming one is refused). An earlier
+    247 of the documents also went through both schemas with `xmllint`
+    2.15.2, with the same answers; it was not run on the last ten.
+    *Not run:* any editor against either schema, and a `.deb` build.
 
 - **`qemu-tool quick-start --flavor xio`: a one-guest stack for rocm-xio
   development.** The guest has two rocjitsu GPUs, two rocm-ernic NICs,

@@ -1,0 +1,703 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  RELAX NG schema for qemu-tool fleet XML, namespace http://qemu-tool/fleet/1.0.
+
+  GENERATED. Do not edit: this is what the fleet-schema subcommand
+  of qemu-tool writes from the tables in qemu/qemu-tool/fleet_xml.py.
+  Change the tables and write it again.
+
+  The parser is the authority. This schema never rejects a file the
+  parser accepts, and accepts some the parser refuses: it checks one
+  file, not layers, and no rule that spans elements. The reference
+  page, docs/fleet-xml.md, lists what it cannot check.
+-->
+<grammar xmlns="http://relaxng.org/ns/structure/1.0"
+         xmlns:a="http://relaxng.org/ns/compatibility/annotations/1.0"
+         ns="http://qemu-tool/fleet/1.0"
+         datatypeLibrary="http://www.w3.org/2001/XMLSchema-datatypes">
+  <start>
+    <element name="fleet">
+      <a:documentation>One fleet XML file: flat settings in any order, each at most once, and at most one devices block.</a:documentation>
+      <mixed>
+        <interleave>
+          <optional>
+            <element name="vm-count">
+              <a:documentation>Number of guests in the fleet; each gets its own QEMU service and its own set of device servers. Integer, at least 1 (render exits below that), default 1. Baked into the generated compose file, so a change means re-rendering. Bounded by 64 mesh NICs (warning above 40) and 244 NICs in total.</a:documentation>
+              <ref name="kind.int"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="vm-name-prefix">
+              <a:documentation>Prefix of every guest's name; guest N is &lt;prefix&gt;-N, the name run-vm passes on for the guest's hostname. String, default qemu-fleet. gen-compose takes the default for an empty element; quick-start does not, and looks for guests named -1, -2. Names run from &lt;prefix&gt;-1. The guest lower-cases it and turns characters outside a-z, 0-9 and - into hyphens for its hostname.</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="ssh-port-base">
+              <a:documentation>Host port published for guest 1's SSH; guest N gets the base plus N minus 1. Integer, default 2222; kind is int, so auto is a parse error. Published on &lt;publish-bind-addr&gt; to container port 2222. quick-start moves the range in an overlay of its own when a port is taken.</a:documentation>
+              <ref name="kind.int"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="stop-grace-period">
+              <a:documentation>How long docker waits after asking a guest's QEMU container to stop before it kills it. Compose duration such as 120s (the default); passed through as text, not validated by the parser; empty takes the default. Applies to the qemu-N services only. QEMU exits on SIGTERM without shutting the guest down, so this does not make a stop graceful.</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="qemu-ref">
+              <a:documentation>Container image that runs QEMU for each guest; must share a build stamp with the ernic and rocjitsu images. Image reference, repository:tag; required (an empty one stops the render). A tag with no &lt;date&gt;.g&lt;sha&gt; stamp is warned about and left out of the comparison. A repository ending -sbates-fork is taken as the fork QEMU, which &lt;vm-nvme-vram&gt;, &lt;vm-pci-mmio-bridge&gt; and dma-buf RDMA need.</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="ernic-ref">
+              <a:documentation>Container image of the rocm-ernic server that emulates each RDMA NIC; same build stamp and vfu.&lt;sha&gt; as QEMU. Image reference, repository:tag; required. The render compares the stamp and the vfu.&lt;sha&gt; part of the tag with &lt;qemu-ref&gt;'s. That its ernic.&lt;sha&gt; matches the guest's driver commit is held by tests/test_playbook_pins.py, not by the render.</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="rocjitsu-ref">
+              <a:documentation>Container image of the rocjitsu server that emulates each GPU; same build stamp as the QEMU and ernic images. Image reference, repository:tag; required (an empty one stops the render).</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="sdxi-image">
+              <a:documentation>Container image of the SDXI device server; required when a guest has an SDXI device. Image reference, repository:tag. Needed when &lt;sdxi-per-vm&gt; is non-zero or &lt;devices&gt; has a server of type sdxi. Not compared with the servers' stamp by the render; its sdxi.&lt;sha7&gt; against the guest's driver commit is a test's check.</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="spdk-image">
+              <a:documentation>Container image of the SPDK vfio-user NVMe controller; required when &lt;devices&gt; has a server of type spdk. Image reference, repository:tag. Its vfu.&lt;sha&gt; must equal the one in &lt;qemu-ref&gt;, stamped tag or not. Nothing runs it without a spdk entry in &lt;devices&gt;.</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="backing-ref">
+              <a:documentation>Published guest disk image that gen-vm and quick-start pull as each guest's backing file. OCI reference by dated tag YYYYMMDD.g&lt;sha7&gt; or name@sha256:...; empty pulls nothing. gen-compose refuses no tag, latest, qm.&lt;sha7&gt; and near misses of those, and, in the repository &lt;publish-ref&gt; names, any tag but the dated one. Any other tag must share the servers' stamp, or is warned about if unstamped. gen-vm --bake ignores it.</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="fleet-prefix">
+              <a:documentation>First two octets of the stack's docker network; every service gets a fixed address under it. Two dotted octets, default 172.31; not validated by the parser, empty takes the default. Third octet is the service family: 0 infra, 1 ernic, 2 rocjitsu, 3 qemu, 4 sdxi, 5 spdk; the last is the device's number.</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="ernic-subnet">
+              <a:documentation>First three octets of the guests' RDMA NIC network; NICs take addresses from .11 upward across the fleet. Three dotted octets, default 192.168.100, a /24; not validated. NIC number n in the fleet gets .&lt;10+n&gt;, at most 244 NICs. Sets the inventory's fleet_guest_ip and each server's ERNIC_TCP_GUEST_GIDS.</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="ernic-mac-prefix">
+              <a:documentation>First four bytes of every emulated NIC's MAC address; the last two are the NIC's number in the fleet. Four colon-separated hex bytes, default 72:6f:63:6d; not validated. The number counts from 1 across the whole fleet, high byte first.</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="ernic-per-vm">
+              <a:documentation>Emulated RDMA NICs per guest; each is its own mesh node, so it multiplies against the mesh's node ceiling. Integer, at least 1, default 1. Fleet total is refused above 64 mesh nodes or 244 NICs and warned about above 40. Replaced by the &lt;devices&gt; block when one is given.</a:documentation>
+              <ref name="kind.int"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="rocjitsu-per-vm">
+              <a:documentation>Emulated GPUs per guest, each served by its own rocjitsu server. Integer, at least 1, default 1. Replaced by the &lt;devices&gt; block when one is given.</a:documentation>
+              <ref name="kind.int"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="sdxi-per-vm">
+              <a:documentation>SDXI devices per guest; 0 gives none, and above 0 needs &lt;sdxi-image&gt;. Integer, default 0. Replaced by the &lt;devices&gt; block when one is given.</a:documentation>
+              <ref name="kind.int"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="vm-pcie-switch-width">
+              <a:documentation>Put each guest's vfio-user devices below PCIe switches, this many devices per switch; 0 leaves them on root ports. Integer, default 0 (off). Devices are ordered NICs-per-GPU NICs then one GPU, so 2 with equal counts gives one NIC and one GPU per switch, and 3 with twice as many NICs gives two NICs and a GPU. Rendered as run-vm --vfio-user-switch-width; run-vm refuses a negative value.</a:documentation>
+              <ref name="kind.int"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="ernic-tap">
+              <a:documentation>Give each ernic NIC a TAP on a shared L2 network so guests have Ethernet; inter-guest RDMA tests need it. true or false; default false. Adds one tapsetup sidecar per NIC and the l2 network.</a:documentation>
+              <ref name="kind.bool"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="ernic-tcp-port">
+              <a:documentation>TCP port the ernic mesh manager listens on and the workers dial; the mesh health checks match it. port number; default 6320. Used by mesh NICs only; a NIC with its own backend ignores it.</a:documentation>
+              <ref name="kind.int"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="ernic-stats-port">
+              <a:documentation>Port the ernic stats exporter serves on, and the port Prometheus scrapes it at. port number; default 9840; inside the stack network, not published on the host.</a:documentation>
+              <ref name="kind.int"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="ernic-nofile">
+              <a:documentation>Open file descriptor limit for every ernic server; Docker's default of 1024 is too low for a mesh manager. count, written as both the soft and the hard nofile ulimit; default 65536.</a:documentation>
+              <ref name="kind.int"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="p4-enable">
+              <a:documentation>Run the P4 engine (--p4) on every ernic server; quick-start --p4-test needs it true. true or false; default false. When false, p4-guest-scope and p4-program are not rendered.</a:documentation>
+              <ref name="kind.bool"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="p4-guest-scope">
+              <a:documentation>Which guest P4 commands reach the engine: none, read counters, write table entries, or load a program. none, read, write or load, each including the ones before it; default none. Unchecked: any other word is passed to the server. Only with p4-enable; --p4-test needs load.</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="p4-program">
+              <a:documentation>Path inside the ernic container of a bmv2 JSON program loaded at start; empty leaves the engine in pass-through. a path inside the ernic container, not on the host; default empty; only rendered with p4-enable true.</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="vm-vcpus">
+              <a:documentation>vCPUs per guest; keep it at 4 or more on an ernic stack, and vCPUs times guests near the host's core count. integer; 0 or unset leaves run-vm's default of 2; qemu-tool check FAILs a value set from 1 to 3 and does not check 0 or unset; quick-start by default (not with --no-size-from-host) replaces it with a host-derived value (floor 4, ceiling 8).</a:documentation>
+              <ref name="kind.int"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="vm-vmem">
+              <a:documentation>Guest memory per VM. MiB (4096 is 4 GiB); 0 or unset leaves run-vm's default of 4096; quick-start by default (not with --no-size-from-host) replaces it with a host-derived value (floor 4096, ceiling 8192).</a:documentation>
+              <ref name="kind.int"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="vm-shm-size">
+              <a:documentation>shm_size of each guest's qemu container; must be at least vm-vmem or QEMU cannot allocate guest RAM. docker size such as 8g or 5120m; one value for all guests, or a comma list of exactly vm-count values; empty or unset is 8g. quick-start by default (not with --no-size-from-host) sets it to vm-vmem plus 1024m.</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="vm-nvme">
+              <a:documentation>Number of emulated NVMe scratch devices per guest; run-vm creates a qcow2 for each. 0 gives none. integer; N &gt; 0 is N devices on scratch qcow2 files; -N is N devices on the host's /dev/nullb0.. (null_blk); default 0.</a:documentation>
+              <ref name="kind.int"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="vm-nvme-vram">
+              <a:documentation>Point each guest's emulated NVMe at its first GPU's BAR 0 (VRAM) so hipFile direct reads are fast; fork QEMU only. true or false; default false; refused with vm-nvme of 0 or less; warns on a non-fork qemu-ref; generated stacks only, run-vm --xml does not get it.</a:documentation>
+              <ref name="kind.bool"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="vm-pci-mmio-bridge">
+              <a:documentation>Give every guest the fork QEMU's pci-mmio-bridge device for its emulated NVMe, which rocm-xio uses. true or false; default false; refused with vm-nvme of 0 or less; needs the fork QEMU; generated stacks only, run-vm --xml does not get it.</a:documentation>
+              <ref name="kind.bool"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="vm-backing-shared">
+              <a:documentation>Turn off image file locking so several guests can share one backing image; read only by run-vm given --xml. true or false; default false. A generated stack always passes --backing-shared, whatever this says.</a:documentation>
+              <ref name="kind.bool"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="vm-username">
+              <a:documentation>Guest login account: the user gen-vm creates, and the one the inventory, quick-start and ssh log in as. default ubuntu; dropped for gen-vm --bake (bake-username is used); quick-start overrides it with the pulled image's own account when they differ.</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="vm-password">
+              <a:documentation>Password of the account gen-vm creates from the cloud image; never reaches a pulled guest, and a bake drops it. plain text; empty or unset leaves gen-vm's default, which is the word password.</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="vm-filesystem">
+              <a:documentation>Host directory shared into each guest over 9p with mount tag hostfs. one host path for all guests, or a comma list of exactly vm-count paths; run-vm --xml outside a stack ignores a list; default empty, no share.</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="vm-vfio-user-root-port">
+              <a:documentation>Put each vfio-user device behind a PCIe root port; off, an emulated GPU gets a 16M 32-bit BAR amdgpu cannot use. true or false; default true; false renders with a warning, not an error.</a:documentation>
+              <ref name="kind.bool"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="vm-extra-hostfwd">
+              <a:documentation>Extra QEMU host-forward rules; every rule goes to every guest, and a bake leaves them out. Comma list of QEMU hostfwd rules, e.g. tcp::9100-:9100,tcp::9879-:9879; items are stripped and empty ones dropped. The commas are several rules for ONE guest, not one rule per guest.</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="vm-qemu-args">
+              <a:documentation>Extra words appended as they are to every guest's QEMU command line; nothing validates them. Words split as a shell would (quotes group, nothing expands), e.g. -device pci-testdev -d guest_errors; an unclosed quote is a parse error. One value for the whole fleet; a later layer replaces it whole. Dropped for a bake.</a:documentation>
+              <ref name="kind.args"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="vm-ssh-key-file">
+              <a:documentation>Public key gen-vm authorises in a guest it creates, bakes included; ssh and inspect fall back to it. Path to a .pub file; ~ and $VARS are expanded at parse time. Unset, a bake generates a keypair for the image. Never the key publish-qcow publishes.</a:documentation>
+              <ref name="kind.expand"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="vm-images-dir">
+              <a:documentation>Directory that holds the guest disk images, overlays and image keys; --images overrides it. Path; ~ and $VARS are expanded at parse time. Default /var/lib/qemu-tool/images. Reaches docker compose as VM_IMAGES_DIR.</a:documentation>
+              <ref name="kind.expand"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="vm-cpu-sockets">
+              <a:documentation>Pin each guest's CPU socket count; unset, the guest sees one single-core socket per vCPU. Integer that must divide the guest's vCPU count (run-vm exits otherwise); 0 or unset leaves the topology to QEMU.</a:documentation>
+              <ref name="kind.int"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="vm-cpu-phys-bits">
+              <a:documentation>Physical address bits of each guest's CPU; raise it together with vm-pci-hole64-size for large GPU BARs. Integer number of bits, e.g. 42; amd64 only (rendered as -cpu EPYC,phys-bits=N). 0 or unset passes no phys-bits; run-vm's help gives that default as 40 (1 TiB).</a:documentation>
+              <ref name="kind.int"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="vm-pci-hole64-size">
+              <a:documentation>Size of each guest's 64-bit PCI hole; needed when several large GPU BARs exceed the machine default. QEMU size such as 512G or 1024G, passed through unparsed as q35-pcihost.pci-hole64-size; empty leaves the machine default.</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="rocjitsu-config">
+              <a:documentation>rocjitsu simulation config that selects the GPU each guest's emulated GPU servers present. File name under /usr/local/share/rocjitsu/configs in the rocjitsu image, default gfx1250_mi455x.json. One value for all guests, or a comma list of exactly vm-count values; a &lt;devices&gt; entry's own config wins.</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="qemu-tool-src">
+              <a:documentation>Checkout the stack's containers mount to build qemu-tool from; with none there they install it from PyPI. Path, default ../../.. relative to the stack directory; use an absolute path for a stack rendered elsewhere. Reaches docker compose as QEMU_TOOL_SRC and is not baked into the render. ~ is not expanded (plain string kind).</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="image-allow-guest-lag">
+              <a:documentation>Let the guest image be older than the device server images: skips that check and warns on every render. Boolean (true/false, 1/0, yes/no), default false. Does not excuse a moving tag (latest, qm.&lt;sha7&gt;) or a malformed one, which are refused before it is looked at.</a:documentation>
+              <ref name="kind.bool"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="bake-name">
+              <a:documentation>Name of the image gen-vm --bake builds; publish-qcow publishes the image of that name. VM name; the baked image is &lt;vm-images-dir&gt;/&lt;name&gt;-backing.qcow2.</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="bake-release">
+              <a:documentation>Ubuntu release of the cloud image gen-vm --bake starts from; publish-qcow records it for the image. Ubuntu codename (resolute) or version (26.04); publish-qcow records resolute when unset.</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="bake-size">
+              <a:documentation>Virtual disk size of the image gen-vm --bake builds. Integer, GiB: passed to qemu-img resize as &lt;n&gt;G (the --size help calls it GB). 0 or unset leaves gen-vm's default.</a:documentation>
+              <ref name="kind.int"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="bake-vcpus">
+              <a:documentation>vCPUs of the guest gen-vm --bake boots to build the image; not the size of a fleet's guests. Integer count; a bake is refused unless bake-vmem is at least 1024 MiB per vCPU. 0 or unset falls back to vm-vcpus, then gen-vm's default.</a:documentation>
+              <ref name="kind.int"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="bake-vmem">
+              <a:documentation>RAM of the guest gen-vm --bake boots to build the image; not the size of a fleet's guests. Integer, MiB; must be at least 1024 per bake vCPU or the bake is refused. 0 or unset falls back to vm-vmem, then gen-vm's default.</a:documentation>
+              <ref name="kind.int"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="bake-packages">
+              <a:documentation>Package manifest gen-vm --bake installs in the image, or none for no manifest. Path to a manifest file, resolved against the current directory (run from the checkout root); ~ and $VARS are expanded. The word none installs none; a missing file stops the bake before it starts.</a:documentation>
+              <ref name="kind.expand"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="bake-playbook">
+              <a:documentation>Ansible playbook gen-vm --bake runs against the booted image; publish-qcow records it for the image. Path resolved against the current directory (run from the checkout root); ~ and $VARS are expanded. publish-qcow records it as given, empty when unset.</a:documentation>
+              <ref name="kind.expand"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="bake-username">
+              <a:documentation>Login account baked into the image and published with it; separate from vm-username, with no fallback. User name; unset, the bake uses gen-vm's default account and publish-qcow records ubuntu.</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="bake-password">
+              <a:documentation>Password of the baked account; published with the image, so it is public. Never vm-password. Plain text, written to the published vm-info.json; publish-qcow records password when unset.</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="bake-ssh-port">
+              <a:documentation>Host port the bake's Ansible boot forwards to the guest's sshd; auto picks a free one from 2222 up. A port number, or the word auto.</a:documentation>
+              <ref name="kind.port"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="bake-cache-dir">
+              <a:documentation>Directory on this host that keeps the bake's compiler cache between bakes; --cache-dir wins, unset is none. Path; ~ and $VARS are expanded. Needs a bake-playbook, which gets it as the extra var bake_cache_dir. Per host: set it in a local overlay, not in a shipped fleet file.</a:documentation>
+              <ref name="kind.expand"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="publish-ref">
+              <a:documentation>Repository publish-qcow pushes to and publish-qcow-prune prunes; tells gen-compose whose repo backing-ref is in. Image repository with no tag, e.g. docker.io/sbates130272/qemu-tool-rocm-golden; publish-qcow appends :&lt;tag&gt; from each --tag. Read by the two publish commands only from an explicit --xml.</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="publish-flavour">
+              <a:documentation>Label publish-qcow records in the published artifact for what kind of guest the image is. Free-form name, written to vm-info.json, the vm.flavour annotation and the description; rocm-golden when unset.</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="publish-bind-addr">
+              <a:documentation>Host address every guest SSH port and the Grafana port are published on; loopback keeps them to this host. IPv4 or IPv6 literal, brackets optional and dropped, no host name or zone; empty or unset means 127.0.0.1; 0.0.0.0 or :: exposes every interface. Also decides ansible_host in the generated inventory.</a:documentation>
+              <ref name="kind.addr"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="prom-scrape-interval">
+              <a:documentation>How often Prometheus scrapes the stack's exporters; written as the global scrape_interval of prometheus.yml. Prometheus duration such as 15s; not validated by the parser; empty or unset means 15s.</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="prom-retention">
+              <a:documentation>How long Prometheus keeps collected metrics; passed as --storage.tsdb.retention.time. Prometheus duration such as 7d; not validated by the parser; empty or unset means 7d.</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="prom-data-dir">
+              <a:documentation>Host directory bind-mounted as the Prometheus database; compose up creates it owned by the caller. Host path, ~ and $VARS expanded at parse time; unset means /var/lib/qemu-tool/prom-data; quick-start with metrics on overrides it to &lt;stack-dir&gt;/prom-data.</a:documentation>
+              <ref name="kind.expand"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="grafana-enable">
+              <a:documentation>Add a Grafana service with the fleet dashboards to the stack; it starts only with --profile metrics. true/false, also 1/0/yes/no, any case; default true. Prometheus is rendered either way.</a:documentation>
+              <ref name="kind.bool"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="grafana-image">
+              <a:documentation>Container image the Grafana service runs. Image reference; empty or unset means docker.io/grafana/grafana:latest (a moving tag).</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="grafana-port">
+              <a:documentation>Host port Grafana is published on, at publish-bind-addr; quick-start moves it when the port is busy. Integer port (kind int, no range check); default 3000; container side is always 3000.</a:documentation>
+              <ref name="kind.int"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="grafana-admin-password">
+              <a:documentation>Password of Grafana's admin account; anonymous admin access is on regardless, so it guards nothing. Plain text, written into the generated docker-compose.yml as GF_SECURITY_ADMIN_PASSWORD; empty or unset means admin.</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="grafana-data-dir">
+              <a:documentation>Host directory bind-mounted as Grafana's own state (its sqlite); dashboards are provisioned from files. Host path, ~ and $VARS expanded at parse time; unset means /var/lib/qemu-tool/grafana-data; quick-start with metrics on overrides it to &lt;stack-dir&gt;/grafana-data.</a:documentation>
+              <ref name="kind.expand"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="log-max-size">
+              <a:documentation>Size at which Docker rotates each service's json-file log, so a looping service cannot fill the disk. Docker size string such as 50m; not validated by the parser; empty or unset means 50m.</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="log-max-files">
+              <a:documentation>Number of rotated log files Docker keeps for each service. Integer count (no range check); default 3.</a:documentation>
+              <ref name="kind.int"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="logs-enable">
+              <a:documentation>Add Loki and an Alloy that ships the stack's container logs to it; both start only with --profile metrics. true/false, also 1/0/yes/no, any case; default true. Alloy mounts the Docker socket and runs as root.</a:documentation>
+              <ref name="kind.bool"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="loki-image">
+              <a:documentation>Container image the Loki log store runs; used only with logs-enable. Image reference; empty or unset means docker.io/grafana/loki:3.3.2.</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="loki-data-dir">
+              <a:documentation>Host directory bind-mounted as Loki's stored logs; used only with logs-enable; compose up creates it as the caller. Host path, ~ and $VARS expanded at parse time; empty or unset means /var/lib/qemu-tool/loki-data; quick-start with metrics on overrides it to &lt;stack-dir&gt;/loki-data.</a:documentation>
+              <ref name="kind.expand"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="alloy-image">
+              <a:documentation>Container image of the Alloy agent that ships the stack's container logs to Loki; used only with logs-enable. Image reference; empty or unset means docker.io/grafana/alloy:v1.5.1.</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <ref name="devices"/>
+          </optional>
+        </interleave>
+      </mixed>
+    </element>
+  </start>
+  <define name="kind.str">
+    <a:documentation>string: Any text, kept as written, surrounding white space included. An empty element is the empty string.</a:documentation>
+    <text/>
+  </define>
+  <define name="kind.expand">
+    <a:documentation>path: Any text. ~ and $VARS are expanded when the file is parsed, so every command sees the same path.</a:documentation>
+    <text/>
+  </define>
+  <define name="kind.args">
+    <a:documentation>command-line words: Words as a shell would split them: quotes group and are removed, nothing is expanded. An unclosed quote, a control character and a word that spans lines are errors.</a:documentation>
+    <data type="string">
+      <param name="pattern">[^&#x7F;&#x85;&#x2028;&#x2029;]*</param>
+    </data>
+  </define>
+  <define name="kind.bool">
+    <a:documentation>boolean: true, false, 1, 0, yes or no, in any letter case, with no white space round it. An empty element is an error.</a:documentation>
+    <data type="string">
+      <param name="pattern">[Tt][Rr][Uu][Ee]|1|[Yy][Ee][Ss]|[Ff][Aa][Ll][Ss][Ee]|0|[Nn][Oo]</param>
+    </data>
+  </define>
+  <define name="kind.int">
+    <a:documentation>integer: What Python's int() takes in base 10: an optional sign, decimal digits, single underscores between digits, white space round the whole. An empty element is an error. No range is checked here; the command that reads the value may check one.</a:documentation>
+    <data type="string">
+      <param name="pattern">[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*([+\-]?[^&#x9;-/:-&#x7F;&#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]+(_[^&#x9;-/:-&#x7F;&#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]+)*)[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*</param>
+    </data>
+  </define>
+  <define name="kind.port">
+    <a:documentation>port: A port number from 1 to 65535 in ASCII digits, or the word auto in any case; white space round it is ignored.</a:documentation>
+    <data type="string">
+      <param name="pattern">[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*([Aa][Uu][Tt][Oo]|0*([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*</param>
+    </data>
+  </define>
+  <define name="kind.addr">
+    <a:documentation>address: An IPv4 or IPv6 literal, with or without square brackets, with no zone and no host name. Empty, or white space alone, is the default.</a:documentation>
+    <data type="string">
+      <param name="pattern">[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*(((0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])|([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?|[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])|::(([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?)?)?)?)?)?)?)?|([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:)?)?)?)?)?(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5]))|[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?::(([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?)?)?)?)?)?)?|([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:)?)?)?)?(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5]))|[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?::(([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?)?)?)?)?)?|([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:)?)?)?(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5]))|[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?::(([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?)?)?)?)?|([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:)?)?(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5]))|[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?::(([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?)?)?)?|([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:)?(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5]))|[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?::(([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?)?)?|(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5]))|[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?::(([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?)?)|[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?::)|\[((0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])|([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?|[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])|::(([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?)?)?)?)?)?)?)?|([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:)?)?)?)?)?(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5]))|[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?::(([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?)?)?)?)?)?)?|([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:)?)?)?)?(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5]))|[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?::(([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?)?)?)?)?)?|([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:)?)?)?(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5]))|[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?::(([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?)?)?)?)?|([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:)?)?(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5]))|[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?::(([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?)?)?)?|([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:)?(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5]))|[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?::(([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?)?)?|(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5]))|[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?::(([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?)?)|[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?::))\])?)[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*</param>
+    </data>
+  </define>
+  <define name="devices">
+    <element name="devices">
+      <a:documentation>Lists the vfio-user servers every guest gets, one &lt;server&gt; each; replaces the three per-VM device counts. No attributes, no text; at least one &lt;server&gt;. Later layers merge entries by id, append new ids and cannot remove one. Every guest gets the same list.</a:documentation>
+      <mixed>
+        <oneOrMore>
+          <ref name="server"/>
+        </oneOrMore>
+      </mixed>
+    </element>
+  </define>
+  <define name="server">
+    <element name="server">
+      <a:documentation>One device server every guest gets; its children set that server's backend, config file or options. Requires type and id, and takes no other attribute. Children allowed depend on type; each may appear once unless the option is repeatable. Kind of server: an ernic NIC, a rocjitsu GPU, an SDXI device or an SPDK NVMe controller. ernic, rocjitsu, sdxi or spdk. The generator refuses more than one spdk a guest, and an spdk with no &lt;spdk-image&gt;. An id cannot change type in a later layer.</a:documentation>
+      <choice>
+        <group>
+          <attribute name="type">
+            <value type="string">ernic</value>
+          </attribute>
+          <ref name="server.id"/>
+          <mixed>
+            <interleave>
+              <optional>
+                <element name="backend">
+                  <a:documentation>Sets an ernic NIC's RDMA backend; any type but tcp takes that NIC out of the generated TCP mesh. ernic only. Text is the backend's own options, optional, as one word with no whitespace: size=1G,ns=2,kv=1,size=256M. The parser checks only that; tcp takes none.</a:documentation>
+                  <choice>
+                    <group>
+                      <attribute name="type">
+                        <a:documentation>Which RDMA backend the NIC's server runs. none, loopback, tcp, nvmeof or s3. Required on &lt;backend&gt;, and its only attribute.</a:documentation>
+                        <value type="string">tcp</value>
+                      </attribute>
+                      <data type="string">
+                        <param name="pattern">[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*</param>
+                      </data>
+                    </group>
+                    <group>
+                      <attribute name="type">
+                        <a:documentation>Which RDMA backend the NIC's server runs. none, loopback, tcp, nvmeof or s3. Required on &lt;backend&gt;, and its only attribute.</a:documentation>
+                        <choice>
+                          <value type="string">none</value>
+                          <value type="string">loopback</value>
+                          <value type="string">nvmeof</value>
+                          <value type="string">s3</value>
+                        </choice>
+                      </attribute>
+                      <data type="string">
+                        <param name="pattern">[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*[^\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*</param>
+                      </data>
+                    </group>
+                  </choice>
+                </element>
+              </optional>
+              <optional>
+                <element name="log-level">
+                  <a:documentation>Log verbosity of this NIC's server. none, error, warn, info or debug; the server's default is warn. The parser does not check the word.</a:documentation>
+                  <data type="string">
+                    <param name="pattern">[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*([^\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;&#x7F;]([^\t\n\r&#x7F;&#x85;&#x2028;&#x2029;]*[^\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;&#x7F;])?)[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*</param>
+                  </data>
+                </element>
+              </optional>
+              <zeroOrMore>
+                <element name="nic-profile">
+                  <a:documentation>Shapes the NIC from a profile; repeatable, and later profiles win. A built-in name (compat, small-vm, generic-100g, generic-400g) or a path to an ini file inside the server container. Repeatable, order kept; a later layer naming it replaces all earlier values.</a:documentation>
+                  <data type="string">
+                    <param name="pattern">[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*([^\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;&#x7F;]([^\t\n\r&#x7F;&#x85;&#x2028;&#x2029;]*[^\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;&#x7F;])?)[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*</param>
+                  </data>
+                </element>
+              </zeroOrMore>
+              <optional>
+                <element name="stats-interval-ms">
+                  <a:documentation>How often the server rewrites the guest's statistics; overrides every profile. Milliseconds, 10 to 60000; the server's default is the profile's, 1000. The parser does not check the number or range.</a:documentation>
+                  <data type="string">
+                    <param name="pattern">[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*([^\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;&#x7F;]([^\t\n\r&#x7F;&#x85;&#x2028;&#x2029;]*[^\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;&#x7F;])?)[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*</param>
+                  </data>
+                </element>
+              </optional>
+              <optional>
+                <element name="eth-queues">
+                  <a:documentation>Number of Ethernet Rx/Tx queues the NIC offers the guest; overrides every profile. Integer 1 to 64; the server's default is the profile's, 4. The guest uses at most one per vCPU. The parser does not check the number or range.</a:documentation>
+                  <data type="string">
+                    <param name="pattern">[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*([^\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;&#x7F;]([^\t\n\r&#x7F;&#x85;&#x2028;&#x2029;]*[^\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;&#x7F;])?)[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*</param>
+                  </data>
+                </element>
+              </optional>
+              <zeroOrMore>
+                <element name="inject">
+                  <a:documentation>Injects a fault into this NIC's server, for testing; repeatable. One fault as 'SITE: PATTERN effect EFFECT', for example 'stats_vals: every 100 effect fail status eio'. Spaces allowed. Repeatable, order kept; unchecked by the parser.</a:documentation>
+                  <data type="string">
+                    <param name="pattern">[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*([^\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;&#x7F;]([^\t\n\r&#x7F;&#x85;&#x2028;&#x2029;]*[^\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;&#x7F;])?)[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*</param>
+                  </data>
+                </element>
+              </zeroOrMore>
+            </interleave>
+          </mixed>
+        </group>
+        <group>
+          <attribute name="type">
+            <value type="string">rocjitsu</value>
+          </attribute>
+          <ref name="server.id"/>
+          <mixed>
+            <interleave>
+              <optional>
+                <element name="config">
+                  <a:documentation>Names the rocjitsu simulation config file for this one GPU, in place of &lt;rocjitsu-config&gt;. rocjitsu only. One file name in the image's configs directory, no path: starts with a letter or digit, then letters, digits, '.', '_', '-'. Example gfx1250_mi455x.json.</a:documentation>
+                  <data type="string">
+                    <param name="pattern">[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*([A-Za-z0-9][A-Za-z0-9._\-]*)[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*</param>
+                  </data>
+                </element>
+              </optional>
+              <optional>
+                <element name="node">
+                  <a:documentation>Selects one local node from a rocjitsu system manifest; needed for a multi-node launch. A node name from the manifest the config file refers to; unchecked by the parser.</a:documentation>
+                  <data type="string">
+                    <param name="pattern">[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*([^\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;&#x7F;]([^\t\n\r&#x7F;&#x85;&#x2028;&#x2029;]*[^\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;&#x7F;])?)[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*</param>
+                  </data>
+                </element>
+              </optional>
+              <optional>
+                <element name="cpu-thread-budget">
+                  <a:documentation>Overrides the CPU thread budget of this GPU's server; zero selects automatic sizing. Integer count of threads; 0 is automatic. The parser does not check that it is a number.</a:documentation>
+                  <data type="string">
+                    <param name="pattern">[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*([^\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;&#x7F;]([^\t\n\r&#x7F;&#x85;&#x2028;&#x2029;]*[^\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;&#x7F;])?)[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*</param>
+                  </data>
+                </element>
+              </optional>
+              <optional>
+                <element name="wait-checking">
+                  <a:documentation>Overrides this GPU server's wait checks. off disables checks, on enables ordinary checks, all adds the gfx1250 XCNT checks. The parser does not check the word.</a:documentation>
+                  <data type="string">
+                    <param name="pattern">[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*([^\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;&#x7F;]([^\t\n\r&#x7F;&#x85;&#x2028;&#x2029;]*[^\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;&#x7F;])?)[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*</param>
+                  </data>
+                </element>
+              </optional>
+            </interleave>
+          </mixed>
+        </group>
+        <group>
+          <attribute name="type">
+            <value type="string">sdxi</value>
+          </attribute>
+          <ref name="server.id"/>
+          <mixed>
+            <zeroOrMore>
+              <element name="verbose">
+                <a:documentation>Raises the SDXI server's log verbosity; repeat it for debug output. A switch: empty element, no value, no attributes. May be repeated; each occurrence renders one --verbose.</a:documentation>
+                <data type="string">
+                  <param name="pattern">[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*</param>
+                </data>
+              </element>
+            </zeroOrMore>
+          </mixed>
+        </group>
+        <group>
+          <attribute name="type">
+            <value type="string">spdk</value>
+          </attribute>
+          <ref name="server.id"/>
+          <mixed>
+            <interleave>
+              <optional>
+                <element name="namespaces">
+                  <a:documentation>The namespaces the SPDK NVMe controller serves, in order; sets the image's NVME_NAMESPACES. One word, comma list, NSIDs in list order: lba:malloc:SIZE[:BLOCK], lba:aio:PATH[:BLOCK[:SIZE]], kv:mem[:MAXVAL[:MAXKEYS]]. Image default lba:malloc:512M,kv:mem.</a:documentation>
+                  <data type="string">
+                    <param name="pattern">[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*([A-Za-z0-9_.:,/=\-]+)[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*</param>
+                  </data>
+                </element>
+              </optional>
+              <optional>
+                <element name="serial">
+                  <a:documentation>Serial number of the SPDK NVMe controller, as the guest sees it; sets the image's SPDK_SERIAL. 1 to 20 letters, digits, '_' and '-'. Image default SPDKVFU01.</a:documentation>
+                  <data type="string">
+                    <param name="pattern">[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*([A-Za-z0-9_\-]{1,20})[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*</param>
+                  </data>
+                </element>
+              </optional>
+              <optional>
+                <element name="cpumask">
+                  <a:documentation>Host cores the SPDK server's poll-mode reactor spins on; sets SPDK_CPUMASK. Each server takes one full core. Hexadecimal core mask, 0x then 1 to 32 hex digits, such as 0x4. Default 0x1, host CPU 0. One value for every guest's server, so guests share the cores it names.</a:documentation>
+                  <data type="string">
+                    <param name="pattern">[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*(0x[0-9A-Fa-f]{1,32})[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*</param>
+                  </data>
+                </element>
+              </optional>
+            </interleave>
+          </mixed>
+        </group>
+      </choice>
+    </element>
+  </define>
+  <define name="server.id">
+    <attribute name="id">
+      <a:documentation>Names the entry for later layers to merge on and for error messages; does not rename containers or sockets. Starts with a letter; letters, digits, '_', '.' and '-'; 32 characters at most; unique in the block.</a:documentation>
+      <data type="string">
+        <param name="pattern">[A-Za-z][A-Za-z0-9_.\-]{0,31}</param>
+      </data>
+    </attribute>
+  </define>
+</grammar>

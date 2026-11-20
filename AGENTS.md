@@ -15,6 +15,7 @@ file up to date as infrastructure changes.
   - `mi355x-server/` — MI355X-shaped PCIe topology: one EPYC socket, 8 GPUs, 8 NICs and 8 PCIe switches per VM, one NIC + one GPU below each switch. 8 ernics per VM means 8 *mesh nodes* per VM, so the fleet caps at 4 VMs, not 40 — see its README. Nothing in CI boots it: `Gen Compose Check` renders it and checks the switch topology, and `quick-start --flavor mi355x` is the way to run it
   - `xio/` — the rocm-xio development guest: one VM with 2 GPUs, two ernics (one on the loopback backend, one serving NVMe-oF with a block and a KV namespace), an NVMe behind `pci-mmio-bridge` and an SPDK NVMe-KV controller. The stack behind `quick-start --flavor xio`, and the only shipped fleet with a `<devices>` block. See "The xio stack"
 - `qemu/qemu-tool/settings.py` — the one loader: fleet XML layers in, a `FleetConfig` (or `VMConfig` overrides) out. See "Settings" below
+- `qemu/schema/fleet.rng`, `qemu/schema/fleet.xsd` and `docs/fleet-xml.md` — the RELAX NG schema for fleet XML, the XSD 1.0 one and their reference page. All three are **generated** by `qemu-tool fleet-schema` (`qemu/qemu-tool/fleet_schema.py`) from the parser's tables; do not hand-edit any. See "The schema and the reference page"
 - `qemu/qemu-tool/quick_start.py` + `ansible/playbooks/vm-quickstart.yml` — the README's Quick Start, which is `qemu-tool quick-start`: two guests from the published qcow2, Prometheus, Grafana and log collection beside them, plus a GPU test and an inter-guest RDMA test. It runs `qemu/stacks/rocm-golden.xml` unless given `--xml` or `--flavor`; `--flavor default` is that fleet. The daily `report-for-vm-rocm-golden` lane runs *that subcommand*, not a copy of its steps. It replaced the shell script that used to live under `scripts/`, which is deleted; do not reintroduce a shell wrapper beside it. The guests are sized from the host by default (4 vCPU floor, 8 ceiling), and every prompt it asks takes its default answer when stdin is not a terminal, so CI needs no flag to stay non-interactive
 - `images/` — qcow2 VM disk images (backing + overlay pairs, **not** `/var/lib/qemu-tool/images`)
 - `ansible/playbooks/` — four playbooks and eight roles, and nothing else:
@@ -131,9 +132,12 @@ an unknown one); comments are fine. `<devices>` is the one element that
 takes attributes and children, and it is held to its own grammar the same
 way. It used to ignore all of these, so a typo
 was an override that silently never applied. The format lives in one table,
-`_SETTINGS` in `fleet_xml.py`: parse, `emit()` and `KNOWN_ELEMENTS` all read
-it, so a new setting is one row there plus its `FleetConfig` field, and
-`tests/test_fleet_xml.py` fails if the two disagree. `tests/test_fleet_files.py`
+`_SETTINGS` in `fleet_xml.py`, written as `_SECTIONS`: parse, `emit()`,
+`KNOWN_ELEMENTS`, the generated schema and the reference page all read it. A
+new setting is one row there, with its `help` and `form`, plus its
+`FleetConfig` field, and then a regeneration of the schema and the page (see
+"The schema and the reference page"). `tests/test_fleet_xml.py` fails if the
+table and the dataclass disagree. `tests/test_fleet_files.py`
 parses every `qemu/stacks/*.xml` and every `<fleet>` document a workflow
 under `.github/` writes inline (heredoc or `printf`), with shell expansions
 replaced by `1`, so a typo in either fails `Gen Compose Check` without
@@ -142,6 +146,98 @@ booting anything.
 Name a setting by its element (`<vm-images-dir>`), not
 by an upper-case key: the upper-case keys were the env-format files', and
 those are gone.
+
+**Seven elements were removed on 2026-11-20, because no command read
+any of them**: `<qemu-digest>`, `<ernic-digest>`, `<rocjitsu-digest>`,
+`<backing-digest>`, `<domain-pattern>`, `<prom-port>` and `<loki-port>`,
+with the `FleetConfig` fields of the same names. The owner's decision, and
+a deliberate break of the format: a file that sets one no longer parses.
+
+- **The error says "removed", and suggests no setting in its place.**
+  `fleet_xml.REMOVED_ELEMENTS` maps each to why it went, and
+  `_structure_problems` looks there before it looks for the closest known
+  name:
+
+  ```
+  my-fleet.xml: <prom-port> was removed from the fleet format: no command ever read it; Prometheus has no host port and is asked inside its container. Delete the element.
+  ```
+
+  Without the table the strict parser's own hint was wrong for five of the
+  seven: `<prom-port>` got "did you mean `<prom-retention>`?",
+  `<ernic-digest>` `<ernic-tap>`, and `<qemu-digest>`, `<rocjitsu-digest>`
+  and `<backing-digest>` the `-ref` element each never pinned.
+  `<domain-pattern>` and `<loki-port>` got no hint. Those are
+  `difflib.get_close_matches` over the elements that are left, asked for
+  each of the seven; main's own parser says nothing about any of them,
+  since they are settings there (run from a `git archive` of main). To the
+  schemas a removed element is an unknown one; the page has a "Removed
+  elements" table from the same dict.
+- **A misspelling of a removed element is told which one it looks like.**
+  The removed names are among the candidates for the closest name, and when
+  one of them wins the error is `removed_lookalike_problem`'s, with that
+  element's reason and no other suggestion:
+
+  ```
+  my-fleet.xml: unknown element <prom-prot>; it looks like <prom-port>, which was removed from the fleet format: no command ever read it; Prometheus has no host port and is asked inside its container. Delete the element.
+  ```
+
+  Before, `<qemu-digests>` was offered `<qemu-ref>`, `<backing_digest>`
+  `<backing-ref>` and `<prom-prot>` `<prom-retention>`. A typo of a setting
+  is still offered the setting: a test tries one dropped letter, two
+  swapped, an underscore for the hyphen and a plural for every element and
+  fails if a removed name wins one.
+- **A removed element set more than once is one line**, not one per copy.
+  An unknown element that is not a removed one, a misspelling of a removed
+  one included, is still reported once per occurrence, as before.
+- **The closest name is looked for a second time in lower case** when
+  nothing is close as written: `difflib` compares case and every name is
+  lower case, so `<PROM-PORT>` and `<VM-COUNT>` got a bare "unknown
+  element". They now get the removed element's reason and "did you mean
+  `<vm-count>`?". A name that already had a hint keeps it.
+- **A file `FleetXml.emit()` wrote before this no longer parses.** `emit()`
+  writes every element that is not sparse, and on main, v2.1.0 and v2.0.0
+  `<domain-pattern>`, `<prom-port>` and `<loki-port>` were not: they were
+  written for every `FleetConfig`, at their defaults. The four digests were
+  sparse. Run here: main's `emit(FleetConfig())` put through this parser
+  gives the three "was removed" lines. Who it can reach is a caller of the
+  Python API that wrote a fleet file with `emit()` and kept it. Nothing in
+  this repository does: on main and at v2.1.0 `emit()` is called by tests
+  alone (`git grep`), which write to temporary directories, and no command,
+  script or workflow calls it.
+- **Deleting the element from a file changes nothing**, which is the whole
+  reason it could go. No shipped fleet file and no workflow's inline
+  overlay set one, so no stack's digest moved and the four stacks were not
+  regenerated: `gen-compose --check` passes for each.
+- **The digests never pinned anything.** A digest pin goes in the ref
+  itself. `<backing-ref>` takes `name@sha256:...`:
+  `gen_compose._backing_ref_kind` calls it `digest` and accepts it, and
+  `gen-vm` hands the ref to `oras pull` as written (rendered here with a
+  made-up digest; nothing was pulled by one). `<qemu-ref>`, `<ernic-ref>`
+  and `<rocjitsu-ref>` are written to `image:` as they stand, so a
+  `name@sha256:...` there renders, rendered here for `<rocjitsu-ref>`, but
+  `_check_image_coherence` finds no build stamp in it, warns, and leaves
+  that image out of the stamp and `vfu` comparison. So a server pinned by
+  digest is a server nothing holds to the others. No committed file does
+  it.
+- **`<domain-pattern>` described per-guest libvirt domain files that no
+  fleet code writes or reads.** The docstring of `fleet_xml.py` said per-VM
+  settings live in such files; it says now that the fleet file's `<vm-*>`
+  elements are them. `libvirt_xml.py` is `run-vm --domain` and
+  `--convert-to-libvirt`, one guest at a time, and nothing of a fleet.
+- **Two tests would have caught these, and now exist**, in
+  `SettingsTable` of `tests/test_fleet_xml.py`. One parses every module of
+  the package but `fleet_xml.py` and `fleet_schema.py` and fails a
+  `FleetConfig` field that none of them names, as an attribute that is
+  read or as a string that is not a dict key (`_setting(cfg,
+  "loki_image")`). That is by name, so it cannot tell `cfg.count` from
+  another object's `count`; what it cannot miss is a field no file
+  mentions, which five of the seven were. The other two were read, into
+  the dict `plan()` returns, under keys no render subscripted: the second
+  test fails a key of that dict that nothing subscripts. It found two more
+  dead keys, `vm_images_dir` and `subnet`, whose fields are read elsewhere;
+  both keys are gone, and the renders did not change. Each test has an
+  allow-list that is empty. Both were tried from a scratch copy with a
+  field and a key put back, and each failed.
 
 ### The `<devices>` block
 
@@ -303,6 +399,336 @@ PyPI, since `QEMU_TOOL_SRC` pointed nowhere, so it ran the released code);
 and `quick-start` against such a fleet. The `nvmeof` and `s3` backends
 answer on an address of their own (`ip=`, default `192.168.200.1`), which
 nothing here configures in the guest.
+
+### The schema and the reference page
+
+**`qemu/schema/fleet.rng`, `qemu/schema/fleet.xsd` and `docs/fleet-xml.md`
+are generated, from the parser's tables, and committed.**
+`qemu/qemu-tool/fleet_schema.py` has `render_rng()`, `render_xsd()` and
+`render_markdown()`; `qemu-tool fleet-schema --format rng|xsd|md [--output
+FILE]` prints any of them. After any change to a table in `fleet_xml.py`,
+from the checkout root:
+
+```bash
+python3 -m qemu_tool fleet-schema --format rng --output qemu/schema/fleet.rng
+python3 -m qemu_tool fleet-schema --format xsd --output qemu/schema/fleet.xsd
+python3 -m qemu_tool fleet-schema --format md --output docs/fleet-xml.md
+```
+
+`tests/test_fleet_schema.py` fails when a committed file is not what the
+generator writes, so a table edit without the regeneration fails `Gen
+Compose Check`. "The schema" below is the RELAX NG one unless it says XSD;
+the XSD has a bullet of its own.
+
+- **What they are generated from.** `_SECTIONS` (and so `_SETTINGS`): each
+  row's tag, kind, `sparse`, `help` and `form`, under the section
+  headings that used to be comments. `REMOVED_ELEMENTS`, for the page's
+  "Removed elements" table. `FleetConfig`'s field defaults.
+  `SERVER_TYPES`, `SERVER_OPTIONS`, `SERVER_ENV`, `_SERVER_SETTINGS`,
+  `BACKEND_TYPES`, `_SERVER_ID`, and three help tables beside them:
+  `DEVICES_HELP`, `SERVER_OPTION_HELP`, `BACKEND_HELP`. And `_VALUE_FORMS`,
+  the regular expressions `_read_devices` holds `<config>`, `<serial>`,
+  `<cpumask>` and `<namespaces>` to. Those four were literals inside
+  `_read_devices`; they are one table now so the schema states the forms the
+  parser checks. The expressions are the same.
+- **`help` is one line, `form` says what the value looks like.** A test
+  fails a row with either empty. There was a third, `unread=True`, for an
+  element that was parsed and read by no command, and seven rows had it.
+  The owner removed those seven on 2026-11-20 and the flag went with them;
+  see "Seven elements were removed" above.
+- **What is read off the parser's code, not off a table.** The lexical form
+  of each kind (`KIND_PATTERNS` in `fleet_schema.py`, from `_convert`,
+  `ports.parse_ssh_port` and `ports.publish_address`), the white space the
+  parser strips, that a value may hold no control character, and that
+  `<backend type='tcp'>` takes no text. A change to `_convert` or
+  `_read_devices` therefore has a second place to change. The differential
+  test is what notices: change one and not the other and it fails.
+- **The rule: the schema never rejects a document the parser accepts.**
+  Where a grammar can say what the parser enforces it does; where it cannot,
+  it takes more. Six consequences that look odd in the file:
+  - Patterns are on XSD `string`, not `token` or `integer`, and spell out
+    white space. `_convert` does not strip a boolean (`" true"` is an
+    error), `int()` takes `+2`, `1_000` and non-ASCII digits, and
+    `str.strip()` removes a no-break space, which XML does not call white
+    space. `SPACE_RANGES` is that set; a test derives it from Python.
+  - **No pattern uses `\d`.** `\d` is the validator's Unicode table, and
+    libxml2 2.14.6 classes 259 decimal digits where Python 3.14's `int()`
+    takes 760, so `<vm-count>` in NKo or Adlam digits parsed and did not
+    validate. A digit in the integer pattern (`_DIGIT`) is `[0-9]` or any
+    non-ASCII character that is not white space, which no table can make
+    stricter than `int()`. It is written as one negated character class,
+    not an alternation: jing (java.util.regex) recurses per repetition of
+    a group and overflowed its stack on a 2000-digit `<vm-count>`. The cost is that a non-ASCII letter where a
+    digit goes passes the schema; ASCII mistakes (`two`, `1.5`, `0x10`)
+    are still refused. The generator's output must not depend on the
+    Python that runs it: it was compared under 3.12 and 3.14.
+  - **The address pattern has no counted repetition.** It is the whole
+    grammar `ipaddress` takes (octets of 0 to 255 with no leading zero,
+    one to four hex digits a group, one `::`, an IPv4 tail, brackets in
+    pairs), written out by `_repeat()`. With `[0-9A-Fa-f]{1,4}` for a group
+    libxml2 took a group of five digits; a test fails a `{n` in it. It is
+    12.8 kB on one line of the `.rng`. `Address` in the test file asks the
+    pattern, as a Python regular expression, and the parser about 60,000
+    generated strings and requires the same answer for each.
+  - `<vm-qemu-args>` is held to the four control characters `split_args`
+    refuses that XML can carry (U+007F, U+0085, U+2028, U+2029). Quoting
+    stays the parser's.
+  - `<fleet>`, `<devices>` and `<server>` are `<mixed>`. The parser allows
+    any text between elements that `strip()` empties, and RELAX NG's rule for
+    element-only content allows XML's four characters. So the schema does
+    not catch stray text there; the parser does.
+  - `<value type="string">`, since the default `token` would take
+    `type=' tcp '`.
+- **Both files are ASCII**, with character references for the white space
+  class.
+- **The XSD is generated in Python from the same tables, not converted.**
+  `render_xsd()` writes XSD 1.0, which is what libxml2 and most editors
+  read. The owner asked for it on 2026-11-20, for editors that take only
+  XSD. Its rule, in this order: it never rejects a document the RELAX NG
+  schema accepts, and subject to that it is as strict as XSD 1.0 allows.
+  - **No second set of patterns.** Every `xs:pattern` is one the RELAX NG
+    schema has, on `xs:string`; a test compares the two sets.
+  - **`<fleet>` is `xs:all`, `mixed`**, each setting and `<devices>` with
+    `minOccurs="0"`: any order, each at most once, which is exact.
+    `mixed` for the reason the RELAX NG schema is `<mixed>`.
+  - **One global element, `<fleet>`.** Everything else is a local
+    declaration, so nothing else validates as a root. The kind types
+    (`kind.int` and the rest) have names because the settings share
+    them; `<devices>`, `<server>` and every server child have their types
+    inline, so no `xsi:type` can name one, and `blockDefault="#all"` keeps
+    a derived type from standing in. No type derives from another today,
+    so the attribute changes no answer; a test holds that it is there.
+  - **A `<server>`'s children are a choice between one content model per
+    type**, since XSD 1.0 cannot make content depend on an attribute's
+    value. Each model says "these children in any order, the once-only
+    ones at most once, the repeatable ones any number of times", which
+    XSD 1.0 can only say by naming every state: a group for each set of
+    once-only children already seen (`children.ernic.after.backend`), 16
+    for ernic, 15 for rocjitsu, 1 for sdxi and 7 for spdk. Each child is
+    declared once, in a group of its own (`child.log-level`), so its help
+    is in the file once.
+  - **Two fallbacks the shipped tables do not reach**, each with a test
+    that patches the tables (`OtherTables`). Types that share a child name
+    are merged into one branch, because one content model may declare a
+    name once: the branch takes the children of both, and a value passes
+    in either type's form. And a type with more than `_XSD_ONCE_MAX` (5)
+    once-only children gets "any child, any number of times", since the
+    groups double with each one. Both add an item to the looser list.
+  - **`xsd_looser()` is the whole list of where the XSD takes more than
+    the RELAX NG schema**, as `(key, sentence)`, built from the tables. The
+    XSD's header comment and the page print it. Today it is three items:
+    `xsi` (the attributes XML Schema defines for itself:
+    `xsi:schemaLocation` and `xsi:noNamespaceSchemaLocation` anywhere, and
+    `xsi:type` on a flat setting naming the type it already has),
+    `server-children` (a server may hold the children of one type that is
+    not its own, never of two) and `backend-tcp` (`<backend type='tcp'>`
+    may hold text). The parser refuses all three. The first is on `<fleet>`
+    and the flat settings, so nothing may say the XSD is looser "inside
+    `<devices>`"; a test reads the page, the XSD, the man page and the
+    command's help for that phrase. The three sentences are held whole,
+    for the shipped tables, so dropping a qualifier ("on a flat setting",
+    "of one type") fails; the first version of that test asked for three
+    attribute names and nothing else. The command's help names the three
+    ways itself; it said "in the attributes XML Schema reserves for
+    itself", which is every `xsi:` attribute, and a test now reads the
+    help with its punctuation and line breaks taken out. Do not add a uniqueness
+    constraint on `id`: XSD can state one, and it would reject a document
+    the RELAX NG schema accepts, which is rule one.
+  - **`trang` is a cross-check and not the generator**, so that the drift
+    test needs no Java. It does convert `fleet.rng`, with two warnings
+    ("choice between attributes and children cannot be represented;
+    approximating"). Its XSD takes more than this one nearly everywhere
+    and less in one place: it types a string or path setting `xs:string`
+    and declares no `kind.str` or `kind.expand`, so an `xsi:type` naming
+    either, which this XSD accepts, is refused by trang's. The page said
+    "looser" with no exception; it says both now. See "Run" below.
+- **A fleet file cannot name its schema in an attribute**: `<fleet>` takes
+  none, and `xsi:schemaLocation` is an attribute. The XSD accepts it (the
+  first item of the list) and the parser refuses it; a test holds the
+  message the page prints. So the page tells a reader to make the
+  association in the editor's settings (`xml.fileAssociations` for VS
+  Code's XML extension) or with an `xml-model` processing instruction
+  before the root, which the parser ignores; a test holds that for both
+  schemas' instructions. No editor has been tried.
+- **Where the schemas ship.** `qemu/schema/` is the package
+  `qemu_tool.share.schema` (`pyproject.toml`), and the `.deb` installs both
+  under `/usr/share/qemu-tool/schema/`. No code reads either file: the
+  `fleet-schema` command renders from the tables, so it is right in a
+  checkout whose committed copy is stale. Only the `.deb` puts them at a
+  path worth naming, so the man page and the reference page tell a reader
+  to write a copy with `fleet-schema --output`; the wheel smoke job checks
+  the wheel's copies are there and are what the command writes.
+- **`fleet-schema` with standard output closed (`>&-`) is one line and
+  exit 1.** Python then has no `sys.stdout` at all, and the command used to
+  end in a traceback. A full disk behind a redirect was already one line.
+  Tests run both in a real process. `--output -` is standard output too:
+  it used to write a file named `-` and print nothing. `--output ''`, an
+  unset shell variable usually, is refused as an empty file name, and a
+  directory as a directory; the first said `cannot write .: Is a
+  directory`, because `Path("")` is `.`. The option is a string for that
+  reason, not a `Path`.
+- **`tests/test_fleet_schema.py`.** `AGREE` is 236 small documents the
+  parser and the RELAX NG schema must answer alike, each with the answer;
+  `LOOSER` is eleven the parser refuses and neither schema can.
+  `XSD_TAKES` names the six documents of `AGREE` the XSD accepts, and
+  `XSD_LOOSER` is ten more the RELAX NG schema refuses and the XSD
+  accepts, each under a key of `xsd_looser()`: 257 documents, and one test
+  asks the parser and both schemas about each and requires the three
+  answers it is listed with, which for the XSD is "agrees with the RELAX NG
+  schema everywhere but on its listed looseness". Others assert each rule
+  over all of them, that every key of `xsd_looser()` has a document and no
+  document has another key, every order of each type's once-only children
+  with one repeated (265 documents, all three answers), every decimal
+  digit Python knows in a single integer, an integer one digit past
+  `int()`'s limit, and 400 generated addresses. **Every flat setting is
+  held to its kind, whether or not a document sets it**: 20 of the 73 are
+  in no listed document and no shipped file, and typing one of those as
+  another kind, in either renderer, used to pass the suite. One test reads
+  each setting's declaration in both rendered schemas (`kind.<kind>` and
+  `f:kind.<kind>`) and each kind's pattern; another builds an accepted and
+  a refused value for every setting from `KIND_SAMPLES` and asks all three.
+  Six such mutations of the rendered schemas were run against the two
+  tests from a scratch script and each failed both. The README, the man
+  page and the changelog restate the first item of the looser list by
+  hand, and a test holds those three to the attributes that pass: they
+  said "the attributes XML Schema defines for itself", and `xsi:nil`, any
+  other `xsi:` attribute and `xsi:type` naming another type are refused.
+  It validates with `lxml`
+  when that imports, else `xmllint --relaxng` and `xmllint --schema`; with
+  neither it skips and prints that no document was validated, and under
+  `CI=true` it fails. `Gen Compose Check` installs `lxml`.
+  `python tests/test_fleet_schema.py --dump DIR` writes the 257 documents
+  and an `index.json` of the expected answers, for running another
+  validator over them by hand. **One document is long on purpose**,
+  `BIG_BLOCK`: 254 `<server>` entries, which is every NIC one guest can
+  have (`_MESH_MAX` on the mesh, the rest on loopback up to `_NIC_MAX`),
+  eight GPUs, an SDXI and an SPDK server. No other document has more than
+  five, so an XSD that said `maxOccurs="8"` on `<server>` passed the
+  suite; with it that mutant fails two tests (run from a scratch copy). A
+  test also hands it to `gen_compose.plan()` on `rocm-golden.xml`, which
+  takes it, and one NIC more, which is refused. Seven documents set a
+  removed element each, refused by all three.
+
+**What the schema cannot check** is the last section of the page, and is
+the same list as `LOOSER` plus what needs more than one file or more than
+one element: layers and the merge by id; two entries with one id; a count
+beside a block; the per-VM comma lists (`<vm-shm-size>`, `<rocjitsu-config>`,
+`<vm-filesystem>`) and the `<vm-extra-hostfwd>` exception; quoting in
+`<vm-qemu-args>`; a non-ASCII character that is not a digit, in an integer;
+an integer or a port of more digits than `int()` converts (4300 by
+default), which the parser reports as not an integer;
+and every check in `gen_compose.py`. The numbers the page gives for the mesh
+ceilings are held to `gen_compose`'s constants by a test, in the section's
+own sentence and in the three help strings that type them again
+(`<vm-count>`, `<ernic-subnet>`, `<ernic-per-vm>`, in `fleet_xml.py`, which
+cannot import `gen_compose`); the test also fails when a fourth setting
+starts to quote a NIC or node count.
+
+**One thing goes the other way, and depends on the validator.** A
+`<!DOCTYPE>` whose internal subset gives an attribute a default
+(`<!ATTLIST server type CDATA "ernic">`) is applied by the parser, which is
+expat: a `<server>` with no `type` then loads, and a default on `<fleet>` is
+refused as an attribute. libxml2 applies such defaults only when asked
+(`attribute_defaults=True` in lxml), so by default the schemas answer the
+opposite way on both, and with it they agree with the parser. That is a
+document a schema refuses and the parser accepts, by way of what the
+validator's XML parser did and not of the grammar. A test holds all four
+answers for each schema. No shipped file has a `<!DOCTYPE>`.
+
+**Three more of that family, each a validator's doing and each on the
+page** (the list that closes "What the schema cannot check"):
+
+- **An internal entity that holds an element**
+  (`<!ENTITY e "<vm-count>2</vm-count>">`, `&e;` under `<fleet>`). The
+  parser accepts; libxml2 2.14.6 builds that child with no namespace, so
+  both schemas refuse it under lxml. Run here. A reviewer reported jing and
+  both Xerces accepting it; jing was run here and does. An entity holding
+  text only agrees everywhere. `test_an_entity_from_a_doctype` holds the
+  parser's answer, the tree libxml2 builds and both refusals, and fails
+  with "take the sentence off the page" on a libxml2 that keeps the
+  namespace.
+- **jing ends in `StackOverflowError` on an integer with thousands of
+  underscores**: `1_` 2000 times then `1` in `<vm-count>`, which the parser
+  and libxml2 with both schemas accept. Run here in the container: 2000
+  and 4299 underscores overflow, a 4300-digit integer with none passes.
+  `java.util.regex` recurses once for each repetition of a group, and the
+  int pattern's `(_D+)*` is one. **No exact pattern avoids it**: four
+  other spellings of "single underscores between digits" were rendered into
+  a scratch `fleet.rng` and given to jing (`D(_?D)*`, `D(D|_D)*`,
+  `(D+_)*D+`, `D+(_DD*)*`), and all four overflow; the first two overflow
+  on 4300 plain digits as well, which today's pattern takes. The only
+  pattern with no repeated group, `D[D_]*`, would pass `1__2` and `1_`,
+  which is a typo a person makes, to save a document nobody writes. So the
+  pattern is unchanged and the page says it;
+  `test_an_integer_of_many_underscores` holds the three answers under
+  libxml2, that `1__2`, `1_` and `_1` are still refused by all three, that
+  the pattern still has the group, and the page's sentence.
+- **Xerces takes quadratic time on a long patterned value.** A reviewer
+  measured 3.3 to 6.6 s for 200,000 characters in one patterned element in
+  the JDK's and Apache's Xerces, and no answer in 100 s at 2,000,000, where
+  libxml2 took under half a second. The JDK's half was run again here, in
+  the container, which has no `javac` and compiles all the same: `java
+  T.java` builds a single source file in memory. With the generated XSD
+  and the JDK's own Xerces (OpenJDK 25), one `<vm-qemu-args>` of 50,000,
+  100,000, 200,000 and 400,000 characters took 0.14, 0.74, 3.04 and
+  12.07 s, each answered "valid": four times the time for twice the
+  length. A `<vm-count>` of 200,000 digits took 3.05 s. Not rerun: Apache's
+  Xerces, and 2,000,000 characters. No wrong verdict. One bullet on the
+  page.
+
+**Run**, 2026-11-20, on the dev host: both lists and the four shipped fleet
+files through the parser and the schema, with lxml 6.1.3 (libxml2 2.14.6) in
+a venv outside the repo and with `xmllint` 2.15.2 unpacked from the archive's
+`libxml2-utils` without installing it; seven deliberate breakages of the
+schema, each of which failed the differential test; and `mkdocs build
+--strict`. After the digit, address and `<vm-qemu-args>` patterns changed
+the same day, the lists were run again with lxml 6.1.3 only, under Python
+3.12; the address pattern was compared with `ipaddress` over 800,000
+generated strings under Python 3.12 and 3.14, with no difference either
+way, and 39,952 of them went through libxml2 with the same answers; and
+putting `\d` or `{1,4}` back each failed the tests. `xmllint` and jing
+were run after those changes, with the XSD; the table below has them. And
+`mkdocs build --strict` (mkdocs 1.6.1) was run again on the tree as it is
+now, into a scratch directory, and exits 0. **Not run**: Python 3.10 or
+3.11, the oldest `requires-python` allows; any editor against the schema; a
+`.deb` build; the `Gen Compose Check` step that installs `lxml`; and the
+wheel smoke job's new schema step. A wheel built from a scratch copy of
+`qemu/` before those changes carried `qemu_tool/share/schema/fleet.rng`.
+
+**Run for the XSD**, 2026-11-20, on the dev host, after it was added:
+
+| What | With | Result |
+|---|---|---|
+| the 247 documents and the four shipped fleet files, parser and both schemas | lxml 6.1.3 (libxml2 2.14.6), Python 3.14, in the test suite | the listed answers |
+| the same documents and files, both schemas | `xmllint` 2.15.2 (unpacked, not installed), by hand | the same answers as lxml, all 247 and the four files |
+| the same, RELAX NG schema | jing 20241231, by hand, in a container | the same answers as libxml2 on all 247 and the four files: no disagreement between the two RELAX NG implementations |
+| the same, XSD | the JDK's `javax.xml.validation` (its built-in Xerces, OpenJDK 25), by hand, in the same container | the XSD compiles, and the same answers as libxml2 on all 247 and the four files |
+| `trang -I rng -O xsd fleet.rng`, by hand, in the container | trang 20241231 | converts, with two warnings; its XSD loads in libxml2 and in Xerces and rejects none of the 247 that the RELAX NG schema accepts |
+| trang's XSD against the generated one, over the 247 | libxml2 | trang's accepts nine the generated one refuses and refuses none it accepts: a setting, a `<devices>` block and a server option each as the root of a document (it declares every element globally), a flat setting twice, two `<devices>` blocks, and four with a once-only child of a `<server>` twice |
+
+**Run again after the seven elements were removed**, the same day, on the
+257 documents and the four fleet files, with the regenerated schemas: the
+test suite with lxml 6.1.3; jing, which gave the listed RELAX NG answer for
+all 257 and took the four files; the JDK's Xerces with the generated XSD,
+the listed XSD answer for all 257 and the four files; and trang, which
+converts with the same two warnings. Its XSD, under Xerces and under
+libxml2 alike, refuses none of the 257 the RELAX NG schema accepts, takes
+the same nine the generated XSD refuses, and refuses two the generated one
+takes, the two `xsi:type` documents for `kind.str` and `kind.expand`.
+`xmllint` was not run on the new set: the unpacked copy is gone.
+
+jing was also given a 5000-digit `<vm-count>` and the integer holding every
+decimal digit, and took both; that was plain digits, and underscores are
+another matter (above). **trang, jing and the Java check ran by hand
+in a local container image and are in no workflow and no test**: the test
+suite needs `lxml` or `xmllint` and nothing else. **Not run**: any editor
+against either schema, so the VS Code and IntelliJ instructions on the page
+are from those tools' documentation; Python 3.10 to 3.13 for the XSD; a
+`.deb` or wheel build with the XSD in it; and the two workflows' changed
+steps. The suite's `xmllint` path was run once, with lxml hidden and that
+`xmllint` on `PATH`: it passes, and the four tests that need lxml itself
+(the three of `OtherTables`, which compile a schema that is not a file, and
+the `<!DOCTYPE>` one) skip there and fail under `CI=true`.
 
 What no longer exists, so do not reach for it or reintroduce it:
 
@@ -1089,9 +1515,11 @@ docker exec <stack>-prometheus-1 wget -q -O- \
     'http://127.0.0.1:9090/api/v1/query?query=up'
 ```
 
-`<prom-port>` still parses and nothing reads it (`gen_compose` copies it
-into the render's spec and no template uses it). Removing the element would
-make every fleet file that sets it an error, so it is left for the owner.
+`<prom-port>` is gone from the format since 2026-11-20, by the owner's
+decision. It parsed and nothing read it: `gen_compose` copied it into the
+render's spec and no template used the key. A fleet file that still sets it
+is an error that says it was removed; see "Seven elements were removed"
+under "Settings".
 
 **The published image carries an `rdma_exporter` with no record of which
 one.** `rocm_ernic_setup`'s `metrics` tasks downloaded the tarball and

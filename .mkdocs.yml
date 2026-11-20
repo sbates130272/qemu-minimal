@@ -38,6 +38,7 @@ extra_css:
 nav:
   - Home: index.md
   - Documentation: documentation.md
+  - Fleet XML reference: fleet-xml.md
   - Publishing: publishing.md
   - Performance: perf/index.md
 

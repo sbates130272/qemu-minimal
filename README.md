@@ -519,6 +519,7 @@ rather than failing:
 | Images directory | `/var/lib/qemu-tool/images` | `$XDG_DATA_HOME/qemu-tool/images` |
 | Package manifest | `/usr/share/qemu-tool/packages-default` | bundled in the wheel |
 | Compose stacks | `/usr/share/qemu-tool/compose/` | bundled in the wheel |
+| Fleet XML schemas | `/usr/share/qemu-tool/schema/` | bundled; write one with `qemu-tool fleet-schema --output FILE` |
 | Manual page | `/usr/share/man/man1/` | bundled; read it with `qemu-tool man` |
 
 The manual page is the one of those a fallback path cannot fix. Neither pipx
@@ -868,6 +869,67 @@ Error: my-fleet.xml: unknown element <vm-vcpu>; did you mean <vm-vcpus>?
 Comments are allowed. `qemu-tool check --xml my-fleet.xml` reports the same
 problems without stopping at the first.
 
+Seven elements the format used to have are refused too, with an error that
+says so and suggests no setting in its place: `<qemu-digest>`,
+`<ernic-digest>`, `<rocjitsu-digest>`, `<backing-digest>`,
+`<domain-pattern>`, `<prom-port>` and `<loki-port>`. Each was parsed and
+read by no command, so deleting it from a file changes nothing:
+
+```
+Error: my-fleet.xml: <prom-port> was removed from the fleet format: no command ever read it; Prometheus has no host port and is asked inside its container. Delete the element.
+```
+
+A misspelling of one of the seven is told which removed element it looks
+like, and why that one went, not the nearest setting:
+
+```
+Error: my-fleet.xml: unknown element <prom-prot>; it looks like <prom-port>, which was removed from the fleet format: no command ever read it; Prometheus has no host port and is asked inside its container. Delete the element.
+```
+
+One of the seven set more than once is reported once; a misspelling is
+reported once per copy, like any other unknown element.
+
+A guest image is pinned by digest in `<backing-ref>` itself, as
+`name@sha256:...`.
+
+Every element, with its kind, its default and what it is for, is in the
+[fleet XML reference](docs/fleet-xml.md), which is also a page of the
+[site](https://sbates130272.github.io/qemu-minimal/fleet-xml/). It is
+generated from the parser's tables, and so are two schemas for editors and
+for validators that do not have `qemu-tool`: RELAX NG,
+[`qemu/schema/fleet.rng`](qemu/schema/fleet.rng), and XML Schema (XSD 1.0),
+[`qemu/schema/fleet.xsd`](qemu/schema/fleet.xsd). The `.deb` installs both
+under `/usr/share/qemu-tool/schema/`.
+
+```bash
+qemu-tool fleet-schema --output fleet.rng       # or --format md for the page
+xmllint --noout --relaxng fleet.rng my-fleet.xml
+
+qemu-tool fleet-schema --format xsd --output fleet.xsd
+xmllint --noout --schema fleet.xsd my-fleet.xml
+```
+
+The parser stays the authority. Neither schema rejects a file the parser
+accepts, and both accept some the parser refuses: a schema describes one
+file, so it knows nothing of layers, and it cannot see two `<server>`
+entries with one id, a count that disagrees with a `<devices>` block, text
+between elements, or any rule `gen-compose` holds between elements. The
+reference lists them.
+
+Use the RELAX NG schema where the tool takes one: it is the precise one. The
+XSD is for an editor or a tool that takes only XSD. It accepts everything
+the RELAX NG schema accepts, and three things besides, which XSD 1.0 cannot
+refuse: a `<server>` holding the children of another server type than its
+own (still never of two types at once), option text in
+`<backend type='tcp'>`, and three attributes of XML Schema's own:
+`xsi:schemaLocation` and `xsi:noNamespaceSchemaLocation` on any element, and
+`xsi:type` on a flat setting when it names the type the setting already has.
+The parser refuses all three, so a fleet file
+cannot name its XSD in an attribute: associate the two in the editor's
+settings (`xml.fileAssociations` for the XML extension of VS Code), or with
+an `xml-model` processing instruction before the root element. The
+[reference](docs/fleet-xml.md#editors) shows both.
+
 #### The `<devices>` block
 
 One element has structure. `<devices>` lists the vfio-user servers every
@@ -891,7 +953,8 @@ given different settings:
 </devices>
 ```
 
-- **`type`** is `ernic`, `rocjitsu` or `sdxi`. **`id`** names the entry: it
+- **`type`** is `ernic`, `rocjitsu`, `sdxi` or `spdk`: an ernic NIC, a
+  rocjitsu GPU, an SDXI device or an SPDK NVMe controller. **`id`** names the entry: it
   is what a later layer and an error message refer to. Containers keep the
   names the generator gives them (`ernic-1-2` is guest 1's second NIC).
 - **The block replaces the counts.** With it, `<ernic-per-vm>`,

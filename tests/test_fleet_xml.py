@@ -251,6 +251,100 @@ class SettingsTable(unittest.TestCase):
         emitted = tuple(el.tag.split("}")[1] for el in root)
         self.assertEqual(emitted, fleet_xml.KNOWN_ELEMENTS)
 
+    # FleetConfig fields no command reads, each with why it is still a
+    # setting. Empty: a row of the table that nothing reads is an element
+    # that parses and changes nothing, which is what the seven removed on
+    # 2026-11-20 were for years.
+    UNREAD_FIELDS: dict[str, str] = {}
+    # Keys of the dict gen_compose.plan() returns that no render reads.
+    # <prom-port> and <loki-port> were read in that sense only: copied into
+    # the spec, where nothing looked at them.
+    UNREAD_SPEC_KEYS: dict[str, str] = {}
+
+    @staticmethod
+    def _package_reads() -> tuple[set[str], set[str], set[str]]:
+        """What the package's code reads, outside the table and the schema.
+
+        (attribute names loaded and not called, string constants that are
+        not a dict key, constant subscripts and .get() keys). An attribute
+        is `cfg.vm_count`; a string is the field name handed to
+        `_setting(cfg, "loki_image")` or `_where_set(state, "qemu_ref")`.
+        By name, so a field that shares a name with something unrelated
+        passes; what it cannot miss is a field no file mentions at all.
+        """
+        import ast
+
+        attrs: set[str] = set()
+        strings: set[str] = set()
+        subscripts: set[str] = set()
+        package = REPO_ROOT / "qemu" / "qemu-tool"
+        for path in sorted(package.glob("*.py")):
+            if path.name in ("fleet_xml.py", "fleet_schema.py"):
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            called = {id(node.func) for node in ast.walk(tree)
+                      if isinstance(node, ast.Call)}
+            keys = {id(key) for node in ast.walk(tree)
+                    if isinstance(node, ast.Dict)
+                    for key in node.keys if key is not None}
+            for node in ast.walk(tree):
+                if (isinstance(node, ast.Attribute)
+                        and isinstance(node.ctx, ast.Load)
+                        and id(node) not in called):
+                    attrs.add(node.attr)
+                elif (isinstance(node, ast.Constant)
+                        and isinstance(node.value, str)
+                        and id(node) not in keys):
+                    strings.add(node.value)
+                if (isinstance(node, ast.Subscript)
+                        and isinstance(node.slice, ast.Constant)):
+                    subscripts.add(node.slice.value)
+                if (isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Attribute)
+                        and node.func.attr == "get" and node.args
+                        and isinstance(node.args[0], ast.Constant)):
+                    subscripts.add(node.args[0].value)
+        return attrs, strings, subscripts
+
+    def test_every_field_is_read_by_some_command(self) -> None:
+        attrs, strings, _subscripts = self._package_reads()
+        fields = [f.name for f in dataclasses.fields(FleetConfig)]
+        unread = sorted(
+            name for name in fields
+            if name not in attrs and name not in strings)
+        self.assertEqual(
+            unread, sorted(self.UNREAD_FIELDS),
+            "a FleetConfig field no module but fleet_xml.py and "
+            "fleet_schema.py names: its element parses and changes nothing. "
+            "Read it, remove it (REMOVED_ELEMENTS), or list it in "
+            "UNREAD_FIELDS with the reason")
+        for name, why in self.UNREAD_FIELDS.items():
+            self.assertIn(name, fields)
+            self.assertTrue(why.strip(), name)
+
+    def test_every_key_of_the_render_spec_is_read(self) -> None:
+        # The second half of "read": cfg.prom_port was read, into a dict
+        # key no render subscripted.
+        import ast
+
+        _attrs, _strings, subscripts = self._package_reads()
+        tree = ast.parse((REPO_ROOT / "qemu" / "qemu-tool"
+                          / "gen_compose.py").read_text(encoding="utf-8"))
+        plan = next(node for node in tree.body
+                    if isinstance(node, ast.FunctionDef)
+                    and node.name == "plan")
+        returned = [node.value for node in ast.walk(plan)
+                    if isinstance(node, ast.Return)
+                    and isinstance(node.value, ast.Dict)]
+        self.assertEqual(len(returned), 1, "plan() returns one dict literal")
+        keys = [key.value for key in returned[0].keys]
+        self.assertGreater(len(keys), 40)
+        self.assertEqual(
+            sorted(key for key in keys if key not in subscripts),
+            sorted(self.UNREAD_SPEC_KEYS))
+        for key in ("prom_port", "loki_port"):
+            self.assertNotIn(key, keys)
+
     def test_a_sparse_element_is_omitted_when_empty(self) -> None:
         import xml.etree.ElementTree as ET
 
@@ -305,6 +399,164 @@ class Strict(unittest.TestCase):
         message = self._error("<zzzzzz>4</zzzzzz>")
         self.assertIn("unknown element <zzzzzz>", message)
         self.assertNotIn("did you mean", message)
+
+    # The seven elements removed on 2026-11-20, and the FleetConfig field
+    # each had. Spelled out here and not read from the table: this is the
+    # list the owner decided.
+    REMOVED = {
+        "qemu-digest": "qemu_digest",
+        "ernic-digest": "ernic_digest",
+        "rocjitsu-digest": "rocjitsu_digest",
+        "backing-digest": "backing_digest",
+        "domain-pattern": "domain_pattern",
+        "prom-port": "prom_port",
+        "loki-port": "loki_port",
+    }
+
+    def test_a_removed_element_says_it_was_removed(self) -> None:
+        self.assertEqual(
+            sorted(fleet_xml.REMOVED_ELEMENTS), sorted(self.REMOVED))
+        for tag in self.REMOVED:
+            with self.subTest(element=tag):
+                path = self._write(f"<{tag}>1</{tag}>")
+                reason = fleet_xml.REMOVED_ELEMENTS[tag]
+                self.assertEqual(FleetXml.problems(path), [
+                    f"{path}: <{tag}> was removed from the fleet format: "
+                    f"{reason}. Delete the element."])
+                message = self._error(f"<{tag}>1</{tag}>")
+                self.assertIn(f"<{tag}> was removed from the fleet format",
+                              message)
+                # The nearest known name is another setting altogether
+                # (<prom-retention> for <prom-port>, <ernic-tap> for
+                # <ernic-digest>), so none is offered.
+                self.assertNotIn("did you mean", message)
+                self.assertNotIn("unknown element", message)
+                self.assertIn("no command ever read it", reason)
+
+    def test_the_whole_message_for_a_removed_element(self) -> None:
+        path = self._write("<prom-port>9090</prom-port>")
+        self.assertEqual(FleetXml.problems(path), [
+            f"{path}: <prom-port> was removed from the fleet format: no "
+            "command ever read it; Prometheus has no host port and is asked "
+            "inside its container. Delete the element."])
+
+    def test_a_removed_element_is_not_a_setting(self) -> None:
+        fields = {f.name for f in dataclasses.fields(FleetConfig)}
+        for tag, field in self.REMOVED.items():
+            with self.subTest(element=tag):
+                self.assertNotIn(tag, fleet_xml.KNOWN_ELEMENTS)
+                self.assertNotIn(field, fields)
+                self.assertNotIn(f"<{tag}>", FleetXml.emit(FleetConfig()))
+
+    def test_a_removed_element_is_reported_beside_a_typo(self) -> None:
+        message = self._error(
+            "<loki-port>3100</loki-port><vm-vcpu>4</vm-vcpu>")
+        self.assertIn("<loki-port> was removed", message)
+        self.assertIn("did you mean <vm-vcpus>?", message)
+
+    def test_a_misspelt_removed_element_is_not_offered_a_setting(self) -> None:
+        # The closest name to each of these is a removed element. Without
+        # the removed names among the candidates the hints were <qemu-ref>,
+        # <backing-ref> and <prom-retention>: settings that were never what
+        # the removed element did.
+        for typo, removed in (("qemu-digests", "qemu-digest"),
+                              ("backing_digest", "backing-digest"),
+                              ("prom-prot", "prom-port"),
+                              ("loki_port", "loki-port"),
+                              ("domain-patern", "domain-pattern")):
+            with self.subTest(element=typo):
+                path = self._write(f"<{typo}>1</{typo}>")
+                reason = fleet_xml.REMOVED_ELEMENTS[removed]
+                self.assertEqual(FleetXml.problems(path), [
+                    f"{path}: unknown element <{typo}>; it looks like "
+                    f"<{removed}>, which was removed from the fleet format: "
+                    f"{reason}. Delete the element."])
+                self.assertNotIn("did you mean", self._error(
+                    f"<{typo}>1</{typo}>"))
+
+    def test_the_whole_message_for_a_misspelt_removed_element(self) -> None:
+        path = self._write("<prom-prot>9090</prom-prot>")
+        self.assertEqual(FleetXml.problems(path), [
+            f"{path}: unknown element <prom-prot>; it looks like "
+            "<prom-port>, which was removed from the fleet format: no "
+            "command ever read it; Prometheus has no host port and is asked "
+            "inside its container. Delete the element."])
+
+    def test_an_upper_case_name_gets_the_hint_its_lower_case_gets(self) -> None:
+        # difflib compares case and every name is lower case, so these got
+        # a bare "unknown element": no removal reason and no setting.
+        for tag, removed in (("PROM-PORT", "prom-port"),
+                             ("QEMU_DIGEST", "qemu-digest"),
+                             ("DOMAIN-PATTERN", "domain-pattern")):
+            with self.subTest(element=tag):
+                path = self._write(f"<{tag}>1</{tag}>")
+                reason = fleet_xml.REMOVED_ELEMENTS[removed]
+                self.assertEqual(FleetXml.problems(path), [
+                    f"{path}: unknown element <{tag}>; it looks like "
+                    f"<{removed}>, which was removed from the fleet format: "
+                    f"{reason}. Delete the element."])
+        for tag, setting in (("VM-COUNT", "vm-count"),
+                             ("VM_IMAGES_DIR", "vm-images-dir"),
+                             ("DEVICES", "devices")):
+            with self.subTest(element=tag):
+                path = self._write(f"<{tag}>1</{tag}>")
+                self.assertEqual(FleetXml.problems(path), [
+                    f"{path}: unknown element <{tag}>; did you mean "
+                    f"<{setting}>?"])
+
+    def test_a_misspelt_removed_element_is_one_line_a_copy(self) -> None:
+        # Only the seven themselves are folded into one line; the README
+        # says so.
+        path = self._write("<prom-prot>1</prom-prot><prom-prot>2</prom-prot>"
+                           "<prom-port>1</prom-port><prom-port>2</prom-port>")
+        problems = FleetXml.problems(path)
+        self.assertEqual(
+            2, sum("unknown element <prom-prot>" in p for p in problems))
+        self.assertEqual(
+            1, sum("<prom-port> was removed" in p for p in problems))
+        readme = " ".join((REPO_ROOT / "README.md").read_text().split())
+        self.assertIn("One of the seven set more than once is reported "
+                      "once; a misspelling is reported once per copy",
+                      readme)
+
+    def test_a_misspelt_setting_is_still_offered_the_setting(self) -> None:
+        # The removed names are candidates, and must not win over the
+        # setting a typo is nearest: one dropped letter, two swapped, an
+        # underscore for the hyphen and a plural, for every element.
+        known = fleet_xml.KNOWN_ELEMENTS + ("devices",)
+        taken = set(known) | set(fleet_xml.REMOVED_ELEMENTS)
+        for tag in known:
+            typos = {tag[:i] + tag[i + 1:] for i in range(len(tag))}
+            typos |= {tag[:i] + tag[i + 1] + tag[i] + tag[i + 2:]
+                      for i in range(len(tag) - 1)}
+            typos |= {tag.replace("-", "_"), tag + "s"}
+            for typo in sorted(typos - taken):
+                if not re.fullmatch(r"[a-z][a-z0-9_-]*", typo):
+                    continue
+                problems = fleet_xml._structure_problems(
+                    fleet_xml.ET.fromstring(
+                        f'<fleet xmlns="{fleet_xml.NS_FLEET}">'
+                        f"<{typo}/></fleet>"))
+                self.assertEqual(len(problems), 1, typo)
+                self.assertNotIn("was removed", problems[0], typo)
+
+    def test_a_repeated_removed_element_is_reported_once(self) -> None:
+        path = self._write(
+            "<prom-port>9090</prom-port><loki-port>3100</loki-port>"
+            "<prom-port>9091</prom-port><prom-port>9092</prom-port>")
+        self.assertEqual(FleetXml.problems(path), [
+            f"{path}: "
+            + fleet_xml.removed_element_problem("prom-port"),
+            f"{path}: "
+            + fleet_xml.removed_element_problem("loki-port")])
+
+    def test_the_one_removed_element_with_a_replacement_names_it(self) -> None:
+        # <backing-ref> takes name@sha256:... (gen_compose._backing_ref_kind
+        # calls it "digest"); the three server refs are not said to.
+        self.assertIn("name@sha256:... in <backing-ref>",
+                      fleet_xml.REMOVED_ELEMENTS["backing-digest"])
+        for tag in ("qemu-digest", "ernic-digest", "rocjitsu-digest"):
+            self.assertNotIn("sha256", fleet_xml.REMOVED_ELEMENTS[tag])
 
     def test_a_repeated_element_is_an_error(self) -> None:
         message = self._error(

@@ -22,7 +22,8 @@ is one of
 .BR qcow ,
 .BR publish\-qcow ,
 .BR publish\-qcow\-prune ,
-.B ernic\-stats
+.BR ernic\-stats ,
+.B fleet\-schema
 or
 .BR man .
 .SH DESCRIPTION
@@ -128,6 +129,11 @@ pushes to. A dry run unless told otherwise.
 Serve the stats files written by
 .B "rocm\-ernic \-S"
 as Prometheus metrics. Runs inside the compose stack; rarely invoked by hand.
+.TP
+.B fleet\-schema
+Print a schema for fleet XML, as RELAX NG or as XML Schema (XSD), or the
+reference page that lists every element, generated from the parser's own
+tables.
 .TP
 .B man
 Show this page.
@@ -1284,6 +1290,37 @@ Listen port. Default: 9840.
 .TP
 .BI \-\-addr " ADDR"
 Listen address. Default: 0.0.0.0.
+.SH FLEET-SCHEMA OPTIONS
+.PP
+Writes a schema for a fleet XML file, as RELAX NG or as XML Schema (XSD), or
+the reference page that lists every element, its kind, its default and what
+it is for. All three are generated from the tables the parser itself reads,
+so none can describe an element the parser does not have. See
+.B SETTINGS FILE
+for what a schema is for, which of the two to use and what neither can check.
+.TP
+.BI \-\-format " FORMAT"
+What to write.
+.B rng
+is the RELAX NG schema in its XML syntax, with XML Schema datatypes for the
+patterns. It is the precise one.
+.B xsd
+is the XML Schema, version 1.0, for editors and tools that take only XSD. It
+accepts everything the RELAX NG schema accepts and is looser in three
+ways, which
+.B SETTINGS FILE
+lists.
+.B md
+is the reference page in Markdown, which the documentation site publishes.
+Default:
+.BR rng .
+.TP
+.BI \-\-output " FILE"
+Write to
+.I FILE
+instead of standard output.
+.B \-
+is standard output.
 .SH COMPOSE OPTIONS
 Runs
 .B docker compose
@@ -2237,6 +2274,24 @@ are each an error that names the file and the element, and for an unknown
 element the closest known name. XML comments are allowed anywhere. A misspelt
 element is therefore refused, not read as a setting left at its default.
 .PP
+Seven elements the format used to have are refused the same way, with an
+error that says the element was removed and suggests no setting in its
+place:
+.BR <qemu\-digest> ,
+.BR <ernic\-digest> ,
+.BR <rocjitsu\-digest> ,
+.BR <backing\-digest> ,
+.BR <domain\-pattern> ,
+.B <prom\-port>
+and
+.BR <loki\-port> .
+Each was parsed and read by no command, so deleting it from a file changes
+nothing. A misspelling of one is told which removed element it looks like
+and is offered no setting either. A guest image is pinned by digest in
+.B <backing\-ref>
+itself, as
+.IR name @sha256: digest .
+.PP
 One element has structure.
 .B <devices>
 lists the vfio\-user servers every guest gets, one
@@ -2291,10 +2346,15 @@ for sdxi
 .BR <verbose/> ;
 for spdk, an SPDK vfio\-user NVMe controller run from
 .BR <spdk\-image> ,
-.B <namespaces>
+.BR <namespaces> ,
+.B <serial>
 and
-.BR <serial> ,
-which set the image's NVME_NAMESPACES and the controller's serial number.
+.BR <cpumask> ,
+which set the image's NVME_NAMESPACES, the controller's serial number and
+SPDK_CPUMASK, the host cores the server's poll\-mode reactor spins on: a
+hexadecimal core mask such as 0x4, by default 0x1, host CPU 0. Each server
+takes one full core, and the one value is every guest's server's, so guests
+share the cores it names.
 A guest takes one spdk server.
 Options the generator derives, the socket and the MAC among them, cannot be
 set.
@@ -2387,6 +2447,7 @@ beats the file.
 <vm\-cpu\-sockets>              \-\-cpu\-sockets
 <vm\-cpu\-phys\-bits>            \-\-cpu\-phys\-bits
 <vm\-pci\-hole64\-size>          \-\-pci\-hole64\-size
+<vm\-qemu\-args>                \-\-qemu\-arg
 <vm\-username>                 \-\-username
 <vm\-password>                 \-\-password
 <vm\-ssh\-key\-file>             \-\-ssh\-key\-file
@@ -2406,22 +2467,16 @@ Shape
 .BR <vm\-count> ,
 .BR <vm\-name\-prefix> ,
 .BR <ssh\-port\-base> ,
-.BR <stop\-grace\-period> ,
-.BR <domain\-pattern> .
+.BR <stop\-grace\-period> .
 .TP
 Images
 .BR <qemu\-ref> ,
 .BR <ernic\-ref> ,
 .BR <rocjitsu\-ref> ,
 .BR <sdxi\-image> ,
-.BR <backing\-ref> ,
-the optional
-.BR <qemu\-digest> ,
-.BR <ernic\-digest> ,
-.B <rocjitsu\-digest>
+.BR <spdk\-image> ,
+.BR <backing\-ref>
 and
-.B <backing\-digest>
-beside the reference each pins, and
 .BR <image\-allow\-guest\-lag> ,
 which excuses
 .B <backing\-ref>
@@ -2449,7 +2504,16 @@ Devices
 .BR <sdxi\-per\-vm> ,
 .BR <vm\-pcie\-switch\-width> ,
 .BR <vm\-nvme\-vram> ,
-.BR <rocjitsu\-config> .
+.BR <rocjitsu\-config>
+and
+.BR <vm\-pci\-mmio\-bridge> ,
+a boolean that gives every guest the fork QEMU's
+.B pci\-mmio\-bridge
+device for its emulated NVMe, which rocm\-xio uses. It is refused with
+.B <vm\-nvme>
+of 0 or less, needs the fork QEMU, and is for generated stacks only:
+.B run\-vm \-\-xml
+does not get it.
 .TP
 Network and mesh
 .BR <fleet\-prefix> ,
@@ -2468,7 +2532,6 @@ the per-guest elements above, and
 .BR <vm\-shm\-size> .
 .TP
 Metrics and logs
-.BR <prom\-port> ,
 .BR <prom\-scrape\-interval> ,
 .BR <prom\-retention> ,
 .BR <prom\-data\-dir> ,
@@ -2480,7 +2543,6 @@ Metrics and logs
 .BR <grafana\-data\-dir> ,
 .BR <logs\-enable> ,
 .BR <loki\-image> ,
-.BR <loki\-port> ,
 .BR <loki\-data\-dir> ,
 .BR <alloy\-image> ,
 .BR <log\-max\-size> ,
@@ -2563,6 +2625,72 @@ Registry repository, without a tag, and the flavour recorded with the image.
 reads
 .B <publish\-ref>
 too.
+.SS Schema and reference
+.B "qemu\-tool fleet\-schema"
+writes a RELAX NG schema for one fleet XML file,
+.B "fleet\-schema \-\-format xsd"
+an XML Schema (XSD 1.0) for the same, and
+.B "fleet\-schema \-\-format md"
+the reference page that lists every element with its kind, its default and
+what it is for. All are generated from the tables the parser reads. A
+schema is for editors and for validators that do not have
+.BR qemu\-tool .
+The Debian package installs them as
+.I /usr/share/qemu\-tool/schema/fleet.rng
+and
+.IR /usr/share/qemu\-tool/schema/fleet.xsd ;
+a wheel installed with uv, pipx or pip carries them inside its own
+environment and puts nothing there. From any install, write a copy and
+validate against that:
+.PP
+.RS
+.EX
+qemu\-tool fleet\-schema \-\-output fleet.rng
+xmllint \-\-noout \-\-relaxng fleet.rng my\-fleet.xml
+
+qemu\-tool fleet\-schema \-\-format xsd \-\-output fleet.xsd
+xmllint \-\-noout \-\-schema fleet.xsd my\-fleet.xml
+.EE
+.RE
+.PP
+The RELAX NG schema is the precise one. The XSD is for an editor or a tool
+that takes only XSD: it accepts everything the RELAX NG schema accepts, and
+besides that a
+.B <server>
+holding the children of another server type than its own (never of two
+types at once), option text in
+.BR "<backend type='tcp'>" ,
+and three attributes of XML Schema's own:
+.B xsi:schemaLocation
+and
+.B xsi:noNamespaceSchemaLocation
+on any element, and
+.B xsi:type
+on a flat setting when it names the type the setting already has.
+The parser refuses all three.
+.PP
+.B "qemu\-tool check \-\-xml"
+runs the parser itself and is the check that counts. Neither schema
+rejects a file the parser accepts, and both accept some the parser refuses.
+A schema describes one file, so it knows nothing of layers; it cannot see two
+.B <server>
+entries with one id, a per-guest count that disagrees with a
+.B <devices>
+block, text between elements, an unclosed quote in
+.BR <vm\-qemu\-args> ,
+a character outside ASCII that is not a digit in an integer, or any rule
+.B gen\-compose
+holds between elements, such as the images' build stamps and the size of the
+mesh. A fleet file cannot name its schema in an attribute, since
+.B <fleet>
+takes none, and that includes
+.BR xsi:schemaLocation :
+associate the XSD with the file in the editor's settings (for the XML
+extension of VS Code,
+.BR xml.fileAssociations ),
+or with an
+.B xml\-model
+processing instruction before the root element, which the parser ignores.
 .SS What is not a fleet XML setting
 .B CONTAINER_USER
 and
@@ -2641,6 +2769,21 @@ and
 .I rocm\-golden.xml
 documents the elements.
 .TP
+.I /usr/share/qemu-tool/schema/fleet.rng
+The RELAX NG schema for a fleet XML file, as
+.B fleet\-schema
+writes it. Installed by the Debian package only; with any other install,
+.B "qemu\-tool fleet\-schema \-\-output"
+.I FILE
+writes the same file.
+.TP
+.I /usr/share/qemu-tool/schema/fleet.xsd
+The XML Schema (XSD 1.0) for the same, as
+.B "fleet\-schema \-\-format xsd"
+writes it. Looser than the RELAX NG schema, in the three ways
+.B SETTINGS FILE
+lists.
+.TP
 .I /usr/share/qemu-tool/compose/
 The generated stack directories of the same names, used by
 .BR compose .
@@ -2675,8 +2818,8 @@ renders its stacks, and a conventional place for your own.
 Default package manifest installed into new VMs by
 .BR gen\-vm .
 .PP
-The package manifests, the fleet files and the compose stacks are also
-bundled inside the Python distribution, so
+The package manifests, the fleet files, the two schemas and the compose stacks
+are also bundled inside the Python distribution, so
 .B "uv tool install qemu-tool"
 (or
 .BR "pipx install qemu-tool" )

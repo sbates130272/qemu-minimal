@@ -28,6 +28,7 @@ title: Documentation
 | --- | --- |
 | [Home](index.md) | Landing page with badges, site summary, and entry points. |
 | [Documentation](documentation.md) | High-level explanation of the published site and its moving parts. |
+| [Fleet XML reference](fleet-xml.md) | Every element of the settings format, generated from the parser's tables, and the two schemas that go with it. |
 | [Publishing flow](publishing.md) | How workflow artifacts become the published site and how trend history is retained. |
 | [Performance trends](perf/index.md) | Generated benchmark history, latest badges, and recent-run tables. |
 
