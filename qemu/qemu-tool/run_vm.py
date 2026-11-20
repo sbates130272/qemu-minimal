@@ -61,6 +61,10 @@ def build_command(cfg: VMConfig, caps: QemuCaps) -> list[str]:
     cmd += _mcast_args(cfg)
     cmd += _guest_agent_args(cfg)
     cmd += _qmp_args(cfg)
+    # The caller's own words, after everything run-vm derives and ahead of
+    # the identity below, which stays last so that nothing here renames the
+    # guest to the listing or to itself.
+    cmd += list(cfg.qemu_args)
     # Last: qemu and the listing parser both take the last -name/-uuid, so
     # stamping here stops literal --nvme passthrough from un-identifying the VM.
     cmd += identity_args("run-vm", cfg.vm_name)

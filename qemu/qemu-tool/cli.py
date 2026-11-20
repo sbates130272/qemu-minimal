@@ -885,6 +885,17 @@ def _add_run_vm(
         help="Extra hostfwd rule e.g. tcp::9150-:9100. May be repeated.",
     )
     g.add_argument(
+        "--qemu-arg", action="append", default=None, dest="qemu_args",
+        metavar="WORD",
+        help=(
+            "One word to append to the QEMU command line as it is, after "
+            "everything run-vm writes. May be repeated, one word each; a "
+            "word that starts with a dash is given with '=': "
+            "--qemu-arg=-device --qemu-arg=pci-testdev. Default: the words "
+            "of <vm-qemu-args>. Nothing checks them: QEMU reads them."
+        ),
+    )
+    g.add_argument(
         "--data-nic-queues", type=int, default=_UNSET, metavar="N",
         help=(
             "virtio-net queues on the data NIC "
@@ -1881,6 +1892,10 @@ def _extract_cli_overrides(
         raw_fwd = ns.get("extra_hostfwd")
         if raw_fwd is not None:
             overrides["extra_hostfwd"] = list(raw_fwd)
+
+        raw_qemu = ns.get("qemu_args")
+        if raw_qemu is not None:
+            overrides["qemu_args"] = list(raw_qemu)
 
     elif subcommand == "gen-vm":
         _take("size", "size")

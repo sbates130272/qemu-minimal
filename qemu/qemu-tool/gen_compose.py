@@ -32,6 +32,7 @@ from typing import Any
 from .compose import _DEFAULT_STACK, _STACKS
 from .fleet_xml import (
     SERVER_ENV, SERVER_OPTIONS, FleetConfig, FleetXml, Server, device_counts,
+    split_args,
 )
 from .ports import publish_address, publish_mapping, reach_address
 from .resources import stack_fleet
@@ -343,6 +344,19 @@ def _yaml_word(word: str) -> str:
 def _sh_word(word: str) -> str:
     """One argument single-quoted for /bin/sh, inside a compose file."""
     return "'" + word.replace("'", "'\\''").replace("$", "$$") + "'"
+
+
+def _qemu_args(cfg: FleetConfig) -> list[str]:
+    """<vm-qemu-args>, as the words run-vm appends to QEMU's command line.
+
+    The same words go to every guest. Nothing here reads them: they are
+    QEMU's, and a word QEMU refuses stops the guest at its start, in the
+    qemu-N service's log.
+    """
+    try:
+        return split_args(cfg.vm_qemu_args, "<vm-qemu-args>")
+    except ValueError as exc:
+        sys.exit(f"Error: {exc}")
 
 
 def _check_pci_mmio_bridge(cfg: FleetConfig) -> None:
@@ -902,6 +916,7 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
         "spdks": spdks,
         "spdk_image": cfg.spdk_ref,
         "pci_mmio_bridge": cfg.vm_pci_mmio_bridge,
+        "qemu_args": _qemu_args(cfg),
         "ernic_per_vm": ernic_per_vm,
         "rocjitsu_per_vm": rocjitsu_per_vm,
         "sdxi_per_vm": sdxi_per_vm,
@@ -1538,6 +1553,11 @@ def render_compose(
         # the last switch group.
         if spec["pci_mmio_bridge"]:
             out.append("          --pci-mmio-bridge \\")
+        # One --qemu-arg per word, with `=` so that a word starting with a
+        # dash is the option's value and not another option. Single-quoted
+        # for the shell this line is run by.
+        for word in spec["qemu_args"]:
+            out.append(f"          --qemu-arg={_sh_word(word)} \\")
         all_vfio_socks = (list(vm["vfio_socks"]) + list(vm["sdxi_socks"])
                           + list(vm["spdk_socks"]))
         out.append(f'          --vfio-userdev "{",".join(all_vfio_socks)}"')

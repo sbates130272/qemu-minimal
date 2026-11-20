@@ -15,6 +15,7 @@ import dataclasses
 import difflib
 import os
 import re
+import shlex
 import sys
 from pathlib import Path
 from typing import Any
@@ -125,6 +126,27 @@ class Server:
     config: str | None = None
     # (option, value) in document order; a flag's value is "".
     options: tuple[tuple[str, str], ...] = ()
+
+
+def split_args(raw: str, element: str) -> list[str]:
+    """The words of a command-line element, split as a shell would.
+
+    Quotes group and are removed; nothing is expanded. ValueError says what
+    is wrong: an unclosed quote, or a control character or line break in a
+    word, which cannot be carried into a compose file's command.
+    """
+    if any(ord(c) < 0x20 and c not in "\t\n\r" or ord(c) == 0x7f
+           or c in "\u0085\u2028\u2029" for c in raw):
+        raise ValueError(f"{element} holds a control character")
+    try:
+        words = shlex.split(raw)
+    except ValueError as exc:
+        raise ValueError(f"{element} is not a command line: {exc}") from None
+    for word in words:
+        if "\n" in word or "\r" in word:
+            raise ValueError(
+                f"{element} has a word that spans lines: {word!r}")
+    return words
 
 
 def device_counts(devices: tuple[Server, ...]) -> dict[str, int]:
@@ -241,6 +263,9 @@ class FleetConfig:
     # amdgpu cannot initialise. See the comment on VMConfig.vfio_user_root_port.
     vm_vfio_user_root_port: bool = True
     vm_extra_hostfwd: str = ""
+    # Words appended to every guest's QEMU command line, as typed in a
+    # shell: run-vm --qemu-arg, one per word.
+    vm_qemu_args: str = ""
     vm_ssh_key_file: str = ""
     vm_images_dir: str = "/var/lib/qemu-tool/images"
     # Guest socket count, and the 64-bit PCI hole. 0 or empty leaves them to
@@ -318,8 +343,8 @@ class FleetConfig:
     loki_data_dir: str = "/var/lib/qemu-tool/loki-data"
     alloy_image: str = "docker.io/grafana/alloy:v1.5.1"
 
-_STR, _EXPAND, _INT, _BOOL, _PORT, _ADDR = (
-    "str", "expand", "int", "bool", "port", "addr")
+_STR, _EXPAND, _INT, _BOOL, _PORT, _ADDR, _ARGS = (
+    "str", "expand", "int", "bool", "port", "addr", "args")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -380,6 +405,7 @@ _SETTINGS: tuple[_Setting, ...] = (
     _Setting("vm-filesystem", "vm_filesystem", _STR),
     _Setting("vm-vfio-user-root-port", "vm_vfio_user_root_port", _BOOL),
     _Setting("vm-extra-hostfwd", "vm_extra_hostfwd", _STR),
+    _Setting("vm-qemu-args", "vm_qemu_args", _ARGS, sparse=True),
     _Setting("vm-ssh-key-file", "vm_ssh_key_file", _EXPAND),
     _Setting("vm-images-dir", "vm_images_dir", _EXPAND),
     _Setting("vm-cpu-sockets", "vm_cpu_sockets", _INT, sparse=True),
@@ -471,6 +497,11 @@ def _convert(setting: _Setting, raw: str) -> Any:
             raise ValueError(
                 f"{setting.tag} must be an IPv4 or IPv6 address with no "
                 f"zone, got {raw!r}") from None
+    if setting.kind == _ARGS:
+        # Checked here so `qemu-tool check` reports it; the readers split
+        # the same text again.
+        split_args(raw, f"<{setting.tag}>")
+        return raw.strip()
     if setting.kind == _EXPAND:
         # Here, once, so every reader sees the same path.
         return os.path.expanduser(os.path.expandvars(raw))

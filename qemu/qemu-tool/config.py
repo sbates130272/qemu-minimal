@@ -144,6 +144,8 @@ class VMConfig:
     qemu_guest_agent: bool = True
     backing_shared: bool = False
     extra_hostfwd: list[str] = field(default_factory=list)
+    # Words appended to the QEMU command line as they are: --qemu-arg.
+    qemu_args: list[str] = field(default_factory=list)
     dry_run: bool = False
     mgmt_tap: bool = False
 

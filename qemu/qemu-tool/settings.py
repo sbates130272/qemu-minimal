@@ -11,7 +11,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from .fleet_xml import FleetConfig, FleetXml
+from .fleet_xml import FleetConfig, FleetXml, split_args
 from .ports import DEFAULT_SSH_PORT
 
 
@@ -63,6 +63,8 @@ def vm_overrides(fleet: FleetConfig) -> dict[str, Any]:
         out["extra_hostfwd"] = [
             item.strip() for item in fleet.vm_extra_hostfwd.split(",") if item.strip()
         ]
+    if fleet.vm_qemu_args:
+        out["qemu_args"] = split_args(fleet.vm_qemu_args, "<vm-qemu-args>")
     if fleet.vm_ssh_key_file:
         out["ssh_key_file"] = Path(fleet.vm_ssh_key_file).expanduser()
     if fleet.vm_cpu_sockets:
@@ -87,7 +89,8 @@ def bake_overrides(fleet: FleetConfig) -> dict[str, Any]:
     The <bake-*> elements go on top.
     """
     out = vm_overrides(fleet)
-    for name in ("backing_image", "username", "password", "extra_hostfwd"):
+    for name in ("backing_image", "username", "password", "extra_hostfwd",
+                 "qemu_args"):
         out.pop(name, None)
     if fleet.bake_name:
         out["vm_name"] = fleet.bake_name

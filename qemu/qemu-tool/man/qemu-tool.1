@@ -832,6 +832,19 @@ Append an additional SLIRP host-forward rule, e.g.\&
 .IR tcp::9150\-:9100 .
 May be repeated.
 .TP
+.BI \-\-qemu\-arg= WORD
+Append one word to the QEMU command line as it is, after everything
+.B run\-vm
+writes and ahead of the guest's name and serial number. May be repeated, one
+word each; a word that starts with a dash needs the
+.B =
+form:
+.BR "\-\-qemu\-arg=\-device \-\-qemu\-arg=pci\-testdev" .
+Default: the words of
+.BR <vm\-qemu\-args> .
+Nothing checks the words: QEMU reads them, and one it refuses stops the guest
+at its start.
+.TP
 .B \-\-dry\-run
 Print the QEMU command that would be executed and exit without running it.
 .TP
@@ -2211,6 +2224,12 @@ whose children each hold one setting:
 .PP
 .I qemu/stacks/rocm\-golden.xml
 is the annotated reference. An element that is absent keeps its default.
+.B <vm\-qemu\-args>
+holds extra arguments for every guest's QEMU, written as in a shell (quotes
+group, nothing is expanded); a stack passes each word to
+.B run\-vm
+as
+.BR \-\-qemu\-arg .
 The parser is strict: an element it does not know, an element given twice in
 one file, an attribute, a nested element and text directly under
 .B <fleet>

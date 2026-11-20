@@ -819,6 +819,21 @@ the whole value goes to **every** guest.
 `<vm-extra-hostfwd>a,b</vm-extra-hostfwd>` is two hostfwd rules per guest,
 not one rule each for two guests.
 
+`<vm-qemu-args>` passes extra arguments to every guest's QEMU, written as
+you would type them in a shell:
+
+```xml
+<vm-qemu-args>-device pci-testdev -d guest_errors -D /tmp/qemu.log</vm-qemu-args>
+```
+
+Quotes group and nothing is expanded. The words go on the end of the QEMU
+command line `run-vm` builds, ahead of the guest's name. Nothing checks
+them: a word QEMU refuses stops the guest when it starts, and the reason is
+in that guest's log (`qemu-tool compose logs qemu-1`). An argument that
+repeats one `run-vm` already writes is QEMU's to resolve, and for most
+options the last one wins. `run-vm --qemu-arg=WORD`, repeatable, is the same
+thing for one guest outside a stack.
+
 `<vm-vcpus>` must not drop below 4 on a stack with an ernic. `ionic_lif_size()`
 derives its EQ count from `num_online_cpus()` and `ionic_create_rdma_admin()`
 rejects fewer than `IONIC_EQ_COUNT_MIN`, so `ionic_rdma` never probes; the only
@@ -1298,6 +1313,7 @@ takes every stack on the system.
 | `--no-qemu-guest-agent` | off | Omit guest agent channel |
 | `--backing-shared` | off | Disable image locking for shared backing files |
 | `--extra-hostfwd RULE` | — | Extra hostfwd rule e.g. `tcp::9150-:9100` (repeatable) |
+| `--qemu-arg=WORD` | the words of `<vm-qemu-args>` | One word appended to the QEMU command line as it is (repeatable, one word each) |
 | `--dry-run` | off | Print QEMU command instead of running |
 | `--convert-to-libvirt [FILE]` | — | Emit libvirt domain XML to FILE (default `<vm>.xml`) |
 

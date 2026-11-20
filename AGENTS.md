@@ -184,6 +184,33 @@ the user's view; this is what a change to it has to keep true.
   1024`). On a fleet with `<vm-pcie-switch-width>` the SDXI and then SPDK
   sockets follow the NIC and GPU sockets: on root ports when that count is a
   multiple of the width, else filling the last switch group.
+- **`<vm-qemu-args>` passes arbitrary words to every guest's QEMU.** A flat
+  sparse element of kind `args`: its text is split as a shell would split it
+  (`fleet_xml.split_args`: quotes group, nothing expands), at parse time so
+  `qemu-tool check` reports an unclosed quote, and again by its readers.
+  Asked for by Brian Kocoloski on 2026-11-20.
+  - The generator renders one `--qemu-arg=<word>` per word on each `qemu-N`
+    service's `run-vm`, single-quoted for the shell that line runs in
+    (`_sh_word`, which also doubles `$` for compose). The `=` form is what
+    lets a word that starts with a dash be the option's value.
+  - `run-vm --qemu-arg` (`VMConfig.qemu_args`) appends the words after
+    everything `build_command` derives and **before** `identity_args` and
+    `guest_name_args`, which stay last: QEMU and the listing parser take the
+    last `-name`, `-uuid` and serial, so nothing in the words renames the
+    guest.
+  - `settings.vm_overrides` maps it, so `run-vm --xml` outside a stack gets
+    it; `bake_overrides` drops it, since a bake's boots are `gen-vm`'s own.
+  - **Nothing validates the words**, on purpose: they are QEMU's. A word
+    QEMU refuses stops the guest at its start, in that service's log. An
+    argument that duplicates one `run-vm` writes is QEMU's to resolve.
+  - The value is for the whole fleet, and a later layer replaces it whole.
+    It is not a per-VM list.
+  - `inspect` and `list` read devices off the QEMU command line, so a
+    device added this way shows only as far as those parsers recognise it.
+  - `TestQemuArgs` in `tests/test_gen_compose.py` holds the render, the
+    quoting through YAML, compose and the shell, and the position in the
+    command. Checked by hand through `docker compose config` and
+    `run-vm --dry-run`; **no guest has been started with one**.
 - **`<vm-pci-mmio-bridge>` is a flat sparse boolean** that renders
   `run-vm --pci-mmio-bridge` for every guest. `_check_pci_mmio_bridge`
   refuses it with `<vm-nvme>` of 0 or less, since the bridge is for the

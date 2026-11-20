@@ -46,6 +46,15 @@ All notable changes to this project will be documented in this file.
   A guest takes one. The image is not held to the other servers' build
   stamp; its `vfu.<sha>` has to be the `<qemu-ref>`'s, and a difference is
   refused at render time. `<cpumask>` sets the cores its reactor spins on.
+- **`<vm-qemu-args>` and `run-vm --qemu-arg`: extra arguments for QEMU.**
+  The fleet element holds words for every guest's QEMU command line,
+  written as in a shell; a stack passes each to `run-vm` as
+  `--qemu-arg=WORD`, and `run-vm` appends them after everything it writes
+  itself and ahead of the guest's name and serial number. Nothing checks
+  the words: one QEMU refuses stops the guest at its start, with the reason
+  in that guest's log. A bake does not take them. Rendered and read back
+  through `docker compose config` and `run-vm --dry-run`; no guest has been
+  started with one.
 - **`<vm-pci-mmio-bridge>`.** Renders `run-vm --pci-mmio-bridge` for every
   guest. Refused without an emulated NVMe (`<vm-nvme>` of at least 1), and
   warned about on a `<qemu-ref>` that is not the fork.

@@ -2180,5 +2180,92 @@ class TestDevices(unittest.TestCase):
                 self.assertEqual(bool(cfg.devices), name == "xio")
 
 
+class TestQemuArgs(unittest.TestCase):
+    """<vm-qemu-args>: words appended to every guest's QEMU command line."""
+
+    def _render(self, extra: str) -> str:
+        with contextlib.redirect_stderr(io.StringIO()):
+            return gen_compose.render_compose(_plan(extra), ["e"], "d")
+
+    def _words(self, out: str, guest: int = 1) -> list[str]:
+        """The --qemu-arg words of one guest, as its shell would read them."""
+        import shlex
+        import yaml
+        script = yaml.safe_load(out)["services"][f"qemu-{guest}"]["entrypoint"][-1]
+        # $$ is compose's escape for one $.
+        argv = shlex.split(script[script.index("run-vm"):].replace("$$", "$"))
+        return [a[len("--qemu-arg="):] for a in argv
+                if a.startswith("--qemu-arg=")]
+
+    def test_absent_by_default(self):
+        self.assertNotIn("--qemu-arg", self._render(""))
+        self.assertNotIn("--qemu-arg", self._render("<vm-qemu-args> </vm-qemu-args>"))
+
+    def test_each_word_reaches_run_vm_as_one_argument(self):
+        out = self._render(
+            "<vm-qemu-args>-device pci-testdev -global 'driver=x,property=a b' "
+            """-D /tmp/q$x.log -name it\\'s</vm-qemu-args>""")
+        want = ["-device", "pci-testdev", "-global", "driver=x,property=a b",
+                "-D", "/tmp/q$x.log", "-name", "it's"]
+        for guest in (1, 8):
+            self.assertEqual(self._words(out, guest), want)
+        # With `=`, so a word that starts with a dash is not read as an
+        # option of run-vm.
+        self.assertIn("          --qemu-arg='-device' \\\n", out)
+
+    def test_run_vm_takes_them_and_appends_them_before_the_identity(self):
+        from qemu_tool import cli
+        parser = cli._build_parser()
+        ns = parser.parse_args(["run-vm", "--vm-name", "t",
+                                "--qemu-arg=-device", "--qemu-arg", "pci-testdev"])
+        self.assertEqual(ns.qemu_args, ["-device", "pci-testdev"])
+        cfg = VMConfig(vm_name="t", qemu_args=["-device", "pci-testdev"])
+        cmd = run_vm.build_command(cfg, run_vm.QemuCaps())
+        at = cmd.index("pci-testdev")
+        self.assertEqual(cmd[at - 1], "-device")
+        # The name and the serial stay last: nothing here renames the guest.
+        self.assertGreater(cmd.index("-name"), at)
+        self.assertGreater(cmd.index("-smbios"), at)
+        self.assertEqual(run_vm.build_command(VMConfig(vm_name="t"),
+                                              run_vm.QemuCaps()),
+                         [w for i, w in enumerate(cmd) if i not in (at - 1, at)])
+
+    def test_a_fleet_file_is_run_vms_default_outside_a_stack(self):
+        from qemu_tool import settings
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "f.xml"
+            path.write_text(_fleet("<vm-qemu-args>-d 'guest_errors,unimp'"
+                                   "</vm-qemu-args>"))
+            fleet = FleetXml.parse(path)
+        self.assertEqual(settings.vm_overrides(fleet)["qemu_args"],
+                         ["-d", "guest_errors,unimp"])
+        # A bake boots with QEMU arguments of its own.
+        self.assertNotIn("qemu_args", settings.bake_overrides(fleet))
+
+    def test_text_that_is_not_a_command_line_is_a_parse_problem(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for body, want in (("-global 'unclosed", "not a command line"),
+                               ("-name a b", "control character")):
+                path = Path(tmp) / "f.xml"
+                path.write_text(_fleet(f"<vm-qemu-args>{body}</vm-qemu-args>"))
+                with self.subTest(body=body):
+                    (problem,) = FleetXml.problems(path)
+                    self.assertIn("<vm-qemu-args>", problem)
+                    self.assertIn(want, problem)
+
+    def test_a_later_layer_replaces_the_whole_value(self):
+        out = self._render("<vm-qemu-args>-d unimp</vm-qemu-args>")
+        self.assertEqual(self._words(out), ["-d", "unimp"])
+        with contextlib.redirect_stderr(io.StringIO()):
+            out = gen_compose.render_compose(_plan(
+                "<vm-qemu-args>-d unimp</vm-qemu-args>",
+                ["<vm-qemu-args>-s</vm-qemu-args>"]), ["e"], "d")
+        self.assertEqual(self._words(out), ["-s"])
+
+    def test_no_shipped_stack_sets_it(self):
+        for xml in sorted((REPO_ROOT / "qemu" / "stacks").glob("*.xml")):
+            self.assertNotIn("<vm-qemu-args>", xml.read_text(), xml.name)
+
+
 if __name__ == "__main__":
     unittest.main()
