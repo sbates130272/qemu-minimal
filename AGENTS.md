@@ -116,14 +116,17 @@ are not available inside the VM.
 
 **Fleet XML is the only settings format.** A file is one `<fleet>` element in
 the namespace `http://qemu-tool/fleet/1.0` with flat children, one per
-setting; `qemu/qemu-tool/fleet_xml.py` parses it into a `FleetConfig`.
+setting, and one child with structure, `<devices>` (see "The `<devices>`
+block" below); `qemu/qemu-tool/fleet_xml.py` parses it into a `FleetConfig`.
 `--xml` is repeatable on every subcommand that reads settings and later files
 win element by element.
 
 **The parser is strict.** An element it does not know, an element repeated in
 one file, an attribute, a nested element and text directly under `<fleet>`
 are errors naming the file and the element (and the closest known name, for
-an unknown one); comments are fine. It used to ignore all of these, so a typo
+an unknown one); comments are fine. `<devices>` is the one element that
+takes attributes and children, and it is held to its own grammar the same
+way. It used to ignore all of these, so a typo
 was an override that silently never applied. The format lives in one table,
 `_SETTINGS` in `fleet_xml.py`: parse, `emit()` and `KNOWN_ELEMENTS` all read
 it, so a new setting is one row there plus its `FleetConfig` field, and
@@ -136,6 +139,105 @@ booting anything.
 Name a setting by its element (`<vm-images-dir>`), not
 by an upper-case key: the upper-case keys were the env-format files', and
 those are gone.
+
+### The `<devices>` block
+
+**`<devices>` is the one element with structure: a `<server type id>` entry
+for each vfio-user server a guest gets.** It exists so that two servers of
+one type can differ, and so that a NIC can be given an RDMA backend. It is
+not a row of `_SETTINGS`: `fleet_xml._read_devices` reads it into
+`FleetConfig.devices`, a tuple of `Server`, and is as strict inside the block
+as the table is outside it. No shipped fleet has one, and a fleet with none
+renders byte for byte as before. The README's "Settings file" section has
+the user's view; this is what a change to it has to keep true.
+
+- **`type` is `ernic`, `rocjitsu` or `sdxi`** (`SERVER_TYPES`). A new kind
+  of server, an SPDK NVMe controller for one, is a new type there plus its
+  render in `gen_compose.py`.
+- **The block replaces the three counts.** `_settle_devices` sets
+  `ernic_per_vm`, `rocjitsu_per_vm` and `sdxi_per_vm` from it after the
+  layers are merged, so every reader of a count sees the block's. A count
+  set to another number in the block's own file, or in a layer after a
+  block, is an error (`_count_conflicts`): it would be an override that
+  never applies. Counts in layers before the first block are what the block
+  replaces, and that is how an overlay on `rocm-golden.xml` works. A count
+  that agrees is allowed, because `emit()` writes both.
+- **`id` names the entry and nothing else.** Services, sockets and stats
+  files keep the generator's names (`ernic-<n>` or `ernic-<n>-<d>`), which
+  the stats exporter, the dashboards, `inspect` and `--nvme-vram-dev` all
+  recognise devices by. The id is in the comment above each service, in
+  errors, and is the key layers merge on.
+- **Every option is an element, from a fixed table.** `SERVER_OPTIONS` maps
+  each type to its options and their shape (`value`, `values` for a
+  repeatable one, `flags` for a switch); `<eth-queues>4</eth-queues>` renders
+  as `--eth-queues 4`, after the words the generator derives. There is no
+  free-text arguments element, on purpose, and the options the generator
+  derives (socket, MAC, stats file, TAP, P4) are not in the table. Two more
+  are left out because they break a stack: `--socket-group` narrows who may
+  connect to the socket QEMU dials, and `--log-file` takes the server's
+  output away from `docker compose logs`.
+- **The table is tied to the pinned images.**
+  `tests/fixtures/server-help/{ernic,rocjitsu,sdxi}.txt` hold each server's
+  `--help`, headed by the image ref it was read from. `TestDevices` fails
+  when a fixture's ref is not the one `rocm-golden.xml` pins, when an option
+  in the table is not in the help, and when its shape is wrong. So moving
+  `<ernic-ref>`, `<rocjitsu-ref>` or `<sdxi-image>` now includes reading the
+  help again: `docker run --rm --entrypoint rocm-ernic <ref> --help`
+  (`rocjitsu`, `rocm-sdxi` for the others), with `# <ref>` as the first line.
+- **`<backend type='...'>` is per NIC**, with the backend's own options as
+  its text, kept as the one word the server takes
+  (`nvmeof:kv=1,size=256M`): they are order-dependent (`ns=` starts a new
+  namespace), so they are not split into elements. The types are
+  `BACKEND_TYPES`. A NIC with no backend, or `tcp`, is a mesh node; `tcp`
+  takes no options, since the manager, workers and addresses are derived.
+- **The mesh is the NICs that name no backend**, in ordinal order: the first
+  is the manager and each other waits for the one before it
+  (`mesh_nics`, `mesh_before` in `render_compose`). A NIC off the mesh has no
+  `depends_on`, no `ERNIC_TCP_GUEST_GIDS`, and a health check that is the
+  server listening on its vfio-user socket, read from `/proc/net/unix` with
+  awk. The mesh ceilings count mesh NICs only; `_NIC_MAX` (244) bounds every
+  fleet, since guest addresses are `.11` to `.254` of one /24.
+- **A guest's one address is its first mesh NIC's**, else its first NIC's
+  (`primary` in `plan`): the inventory's `fleet_guest_ip` and
+  `fleet_guest_ernic_mac`, and the stats file `quick-start` reads
+  (`quick_start._ernic_suffix`).
+- **Layers merge by id** (`merge_devices`): an entry for an id an earlier
+  layer has keeps its position, replaces `backend` and `config` when it
+  names them, and replaces every value of each option it names. A new id is
+  appended. A layer cannot remove a device, and an id cannot change type.
+  `FleetXml.layer_problems` reports what only shows across layers, and
+  `qemu-tool check` prints it as a `layers merge` line.
+- **Every guest gets the same devices**, in the generator's order (NICs,
+  then GPUs, or the switch grouping), not the block's.
+- **`quick-start` knows two things about a block.** On more than one guest
+  it refuses, before anything starts, a fleet whose guests' first NIC is off
+  the mesh (`_check_mesh_tests`): the RDMA tests between guests run on a
+  guest's first RDMA device. And the `--sdxi-test` refusal blames the block,
+  not `<sdxi-per-vm>`, when a block is in force.
+- **The stats exporter and `list --summary` read the role from the dump.**
+  Each server's stats file records its backend, and
+  `ernic_stats.backend_role` turns that into `manager`, `worker` or the
+  backend's name. The exporter's `ernic_id` is the whole numeric suffix of
+  the file (`1-2`); it used to be the first number, which gave every NIC of
+  a guest one id and wrote each sample once per NIC, on `helios-tray` and
+  `mi355x-server` as shipped.
+- **`tests/test_fleet_files.py` reads a workflow's inline overlay with
+  attributes filled from the shell**: an expansion that is a whole attribute
+  value becomes a name (`x1`, `x2` for an id, `loopback` for a backend
+  type), where every other expansion still becomes `1`.
+
+**Seen**, 2026-11-19 on the dev host, by hand: a one-guest overlay on
+`rocm-golden.xml` with three NICs (`nvmeof:kv=1,size=256M`, the mesh,
+`loopback`), two GPUs with different `--cpu-thread-budget` and one SDXI
+server with `--verbose`. `docker compose config` accepted it, all six
+servers reached healthy with those command lines, and the inventory's
+`fleet_guest_ip` was the mesh NIC's. **Not run**: a guest booted against a
+`<devices>` fleet; the `s3` and `none` backends; the exporter's new labels
+in a stack (the exporter of that scratch render installed qemu-tool from
+PyPI, since `QEMU_TOOL_SRC` pointed nowhere, so it ran the released code);
+and `quick-start` against such a fleet. The `nvmeof` and `s3` backends
+answer on an address of their own (`ip=`, default `192.168.200.1`), which
+nothing here configures in the guest.
 
 What no longer exists, so do not reach for it or reintroduce it:
 

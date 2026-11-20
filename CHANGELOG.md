@@ -4,6 +4,67 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **A `<devices>` block in fleet XML: one `<server>` entry per vfio-user
+  server a guest gets.** It is the first element of the format with
+  structure, and what lets two servers of one type differ:
+
+  ```xml
+  <devices>
+    <server type='ernic' id='kv'>
+      <backend type='nvmeof'>kv=1,size=256M</backend>
+      <log-level>info</log-level>
+    </server>
+    <server type='ernic' id='mesh'/>
+    <server type='rocjitsu' id='gpu0'><cpu-thread-budget>2</cpu-thread-budget></server>
+    <server type='rocjitsu' id='gpu1'><config>gfx1250_mi455x.json</config></server>
+  </devices>
+  ```
+
+  - With a block, `<ernic-per-vm>`, `<rocjitsu-per-vm>` and `<sdxi-per-vm>`
+    are what it lists. One of them set beside the block, or in a later
+    layer, to another number is an error, not a setting that silently does
+    nothing. A fleet with no block renders exactly as before, and no shipped
+    fleet has one.
+  - Each child other than `<backend>` and `<config>` is one command-line
+    option of that server, named after its long option. The options are a
+    fixed list per type; the README's "Settings file" section has it.
+    Options the generator derives (socket, MAC, stats file, TAP, P4) are not
+    in the list and cannot be set.
+  - `<backend type='...'>` sets one NIC's RDMA backend: `none`, `loopback`,
+    `tcp`, `nvmeof` or `s3`. A NIC with any backend but `tcp` is off the
+    generated TCP mesh: no manager or worker role, no place in the start
+    order, and a health check that is the server listening on its vfio-user
+    socket. The mesh is derived over the NICs that name no backend.
+  - Layers merge by `id`: a later file's entry changes what it names and
+    keeps the rest, and a new id adds a device. A layer cannot remove one.
+  - Every guest gets the same devices, and `id` does not rename containers.
+  - `quick-start test` on a fleet of more than one guest refuses to start
+    when the guests' first NIC is off the mesh, since the RDMA test between
+    guests runs on it.
+
+  Started by hand on the development host: three NICs of one guest on
+  `nvmeof`, the mesh and `loopback`, two GPUs with different thread budgets
+  and an SDXI server with `--verbose` all came up healthy with the intended
+  command lines. No guest has been booted against a `<devices>` fleet.
+
+### Fixed
+
+- **The ernic stats exporter gave every NIC of a guest one `ernic_id`.** On
+  a fleet with several NICs a guest (`helios-tray`, `mi355x-server`) each
+  sample was written once per NIC under the same labels. The id is now the
+  whole suffix (`1-2` for guest 1's second NIC); a fleet with one NIC a
+  guest keeps `1`, `2`, and so on. The `role` label is read from the backend
+  each server's stats dump records, where it was "manager" for instance 1
+  and "worker" for the rest.
+- **`quick-start test` read the wrong container's byte counter on a fleet
+  with several NICs a guest.** It looked for `ernic-<n>`, which exists only
+  at one NIC a guest.
+- **`qemu-tool list --summary` counted every NIC as a mesh node.** A NIC
+  with a backend of its own is no longer counted against the mesh ceiling or
+  in the "connected" figure.
+
 ## [v2.1.0] - 2026-11-19
 
 A stack now publishes its guests' SSH ports and Grafana on the host's

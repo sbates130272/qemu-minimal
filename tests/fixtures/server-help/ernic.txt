@@ -1,0 +1,101 @@
+# docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic-sbates-fork:20261112.gdca6903-ernic.90434a2-vfu.3719c3a
+Usage: rocm-ernic [OPTIONS]
+Options:
+  -s, --socket PATH    Socket path (default: /tmp/vfio-user-rocm-ernic.sock)
+  -G, --socket-group GROUP Let this group, a name or a gid, connect to the
+                       socket (mode 0660); without it, only its owner
+                       and root can (mode 0600)
+  -b, --backend TYPE   RDMA backend: none|loopback|tcp|nvmeof|s3
+                       (default: loopback)
+  -L, --log-level LEVEL Log verbosity: none|error|warn|info|debug
+                       (default: warn; also settable via ERNIC_LOG_LEVEL)
+  -v, --verbose        Shorthand for --log-level debug
+  -S, --stats-file PATH Statistics output file path
+                       (stats written every ~1 second)
+  -l, --log-file PATH  Write all output to PATH (default: stdout/stderr)
+  -m, --mac ADDRESS    MAC address (format: XX:XX:XX:XX:XX:XX)
+                       (default: 72:6f:63:6d:2d:6e, rocm-nic)
+  -T, --tap IFNAME     Attach the emulated NIC to a host TAP interface,
+                       giving the guest working Ethernet and TCP/IP.
+                       Pre-create it with: ip tuntap add dev IFNAME
+                       mode tap user $USER
+      --nic-profile NAME|PATH  Shape the NIC from a profile (repeatable;
+                       later layers win). NAME is a built-in profile
+                       (compat, small-vm, generic-100g, generic-400g); PATH an ini file.
+      --print-profile  Print the merged NIC profile as ini and exit
+      --stats-interval-ms MS  How often the guest's statistics are
+                       rewritten, 10-60000 (default: the profile's
+                       stats.interval_ms, 1000). Beats every profile.
+      --eth-queues N   Ethernet Rx/Tx queues offered to the guest,
+                       1-64 (default: the profile's queues.eth, 4).
+                       Beats every profile; the guest uses at most
+                       one per vCPU.
+      --inject FAULT   Inject a fault (repeatable), as 'SITE: PATTERN effect EFFECT'
+                       e.g. 'stats_vals: every 100 effect fail status eio'
+                       Patterns: every N, after N [count M], burst N every M,
+                       sequence "1x3,0x10". Sites and effects: stats_vals fail
+                       [status S]; eth_rx drop, nobuf; eth_tx drop
+  -P, --p4             Put the P4 match-action engine on the emulated wire
+                       (see docs/p4.rst)
+  -J, --p4-program PATH Load a compiled P4 program (the JSON that
+                       p4c --target bmv2 --arch v1model emits).
+                       Implies --p4.
+  -Y, --p4-guest-scope SCOPE  What the GUEST may do to the engine:
+                       none (default), read, write, load.
+                       'load' lets the guest replace the program,
+                       and so decide where every frame goes.
+                       Implies --p4.
+  -h, --help           Show this help message
+
+Backend Types:
+  none: No backend (minimal stubs)
+  loopback: Internal loopback emulation
+  tcp: TCP/IP network backend
+                    Manager Mode (centralized discovery):
+                      tcp:manager:<host>:<port>   - Manager at host:port
+                      tcp:manager:listen:<port>    - Manager listening on port
+                    Worker Mode (connects to manager):
+                      tcp:worker:<manager_host>:<manager_port>
+                    A host is a name or an IPv4 or IPv6 address; an IPv6
+                    address goes in brackets: [fe80::1%eth0]:5000
+                    Examples:
+                      Manager/Worker:
+                        tcp:manager:listen:5000           - Start manager on port 5000
+                        tcp:worker:192.168.1.100:5000    - Worker connects to manager
+  nvmeof: in-process NVMe-oF controller the guest can `nvme connect` to
+                    Options (comma-separated):
+                      size=BYTES   - Namespace size, K/M/G/T suffixes (default: 64M)
+                                     (default with file=: an existing image's size)
+                      file=PATH    - Back the namespace with a file instead of RAM
+                      bs=NUM       - Block size (default: 512)
+                      nqn=NAME     - Subsystem NQN (default: nvmet-test)
+                      ip=ADDR      - Target address the guest connects to
+                                     (default: 192.168.200.1)
+                      port=NUM     - Service id (default: 4420)
+                      queues=NUM   - Maximum I/O queues (default: 8)
+                      kv=1         - Serve the Key Value command set instead
+                                     of blocks; size= is the value capacity
+                      keys=NUM     - Maximum live keys (kv only, default: 4096)
+                      maxval=BYTES - Largest single value (kv only, default: 1M)
+                      nsid=NUM     - Number the namespace being described (default: 1)
+                      ns=NUM       - Start another namespace, numbered NUM; the
+                                     options after it describe that one
+                    Examples:
+                      nvmeof                          - 64 MiB RAM namespace
+                      nvmeof:size=1G,bs=4096          - 1 GiB, 4 KiB blocks
+                      nvmeof:file=/tmp/ns0.img,size=1G - File-backed namespace
+                      nvmeof:kv=1,size=256M           - NVMe KV namespace
+                      nvmeof:size=1G,ns=2,kv=1,size=256M
+                                                      - block nsid 1 and KV nsid 2
+  s3: in-process S3-over-RDMA object store the guest reaches over HTTP
+                    Options (comma-separated):
+                      bucket=NAME  - Bucket name (default: ernic)
+                      size=BYTES   - Store capacity, K/M/G suffixes (default: 256M)
+                      objects=NUM  - Maximum live keys (default: 256)
+                      ip=ADDR      - Endpoint address the guest talks to
+                                     (default: 192.168.200.1)
+                      port=NUM     - HTTP port (default: 9000)
+                      maxpart=BYTES - Largest single RDMA transfer (default: 256M)
+                    Examples:
+                      s3                              - 256 MiB store at 192.168.200.1:9000
+                      s3:bucket=bench,size=2G         - Larger store named 'bench'

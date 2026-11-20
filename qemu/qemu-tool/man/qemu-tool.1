@@ -2169,6 +2169,77 @@ one file, an attribute, a nested element and text directly under
 are each an error that names the file and the element, and for an unknown
 element the closest known name. XML comments are allowed anywhere. A misspelt
 element is therefore refused, not read as a setting left at its default.
+.PP
+One element has structure.
+.B <devices>
+lists the vfio\-user servers every guest gets, one
+.B <server>
+entry each, and is how two servers of one type are given different settings:
+.PP
+.RS
+.EX
+<devices>
+  <server type='ernic' id='kv'>
+    <backend type='nvmeof'>kv=1,size=256M</backend>
+    <log\-level>info</log\-level>
+  </server>
+  <server type='ernic' id='mesh'/>
+  <server type='rocjitsu' id='gpu0'>
+    <cpu\-thread\-budget>2</cpu\-thread\-budget>
+  </server>
+  <server type='sdxi' id='sdxi0'/>
+</devices>
+.EE
+.RE
+.PP
+.B type
+is
+.BR ernic ,
+.B rocjitsu
+or
+.BR sdxi ;
+.B id
+names the entry for later layers and for error messages, and does not rename
+the container. With a block,
+.BR <ernic\-per\-vm> ,
+.B <rocjitsu\-per\-vm>
+and
+.B <sdxi\-per\-vm>
+are what the block lists, and one of them set beside it or in a later layer
+to another number is an error. Each other child is one command\-line option
+of that server, named after its long option: for an ernic
+.BR <log\-level> ,
+.BR <nic\-profile> ,
+.BR <stats\-interval\-ms> ,
+.B <eth\-queues>
+and
+.BR <inject> ;
+for rocjitsu
+.BR <node> ,
+.B <cpu\-thread\-budget>
+and
+.BR <wait\-checking> ;
+for sdxi
+.BR <verbose/> .
+Options the generator derives, the socket and the MAC among them, cannot be
+set.
+.B <backend>
+sets an ernic's RDMA backend
+.RB ( none ,
+.BR loopback ,
+.BR tcp ,
+.B nvmeof
+or
+.BR s3 ),
+with the backend's own options as its text; a NIC with no backend, or
+.BR tcp ,
+is a node of the generated TCP mesh, and any other backend takes it out of
+the mesh.
+.B <config>
+names one GPU's rocjitsu config file. Across layers, an entry with an id an
+earlier file has changes what it names and keeps the rest, and a new id adds
+a device; a layer cannot remove one.
+.PP
 .B ${VAR}
 is expanded from the environment in the path elements only:
 .BR <vm\-images\-dir> ,

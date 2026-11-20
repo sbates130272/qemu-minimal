@@ -600,5 +600,80 @@ class Formatting(unittest.TestCase):
             summary._fmt_uptime_range({"min": None, "max": None}), "-")
 
 
+class MeshNodes(unittest.TestCase):
+    """A NIC with a backend of its own is not a mesh node."""
+
+    def test_only_tcp_backends_count_toward_the_mesh(self):
+        dump = ErnicAggregate.DUMP
+        local = dump.replace("tcp:worker:172.31.1.1:6320", "nvmeof:kv=1").replace(
+            "connected (device reset)", "(not set)")
+        containers = {}
+        for i in (1, 2, 3):
+            c = _container(i, f"ernic-{i}")
+            containers[c["id"]] = c
+        original = summary._ernic_dumps
+        summary._ernic_dumps = lambda name: {
+            "ernic-1.stats": local.format(n=1, sent=5, tx=1),
+            "ernic-2.stats": dump.format(n=2, sent=7, tx=1),
+            "ernic-3.stats": dump.format(n=3, sent=9, tx=1),
+        }
+        try:
+            got = summary._ernic_fleet("fleet", containers)
+        finally:
+            summary._ernic_dumps = original
+        self.assertEqual((got["instances"], got["mesh"], got["connected"]),
+                         (3, 2, 2))
+        # Every NIC's bytes are still the fleet's.
+        self.assertEqual(got["rdma_bytes"], 21)
+
+    def test_the_role_comes_from_the_backend_the_dump_records(self):
+        from qemu_tool import ernic_stats
+        role = ernic_stats.backend_role
+        self.assertEqual(role({"backend": "tcp:manager:listen:6320"}, "7"), "manager")
+        self.assertEqual(role({"backend": "tcp:worker:172.31.1.1:6320"}, "1"), "worker")
+        self.assertEqual(role({"backend": "nvmeof:kv=1,size=256M"}, "1"), "nvmeof")
+        self.assertEqual(role({"backend": "loopback"}, "2"), "loopback")
+        # An older server's dump has no backend line.
+        self.assertEqual(role({}, "1"), "manager")
+        self.assertEqual(role({}, "2"), "worker")
+
+    def test_the_exporter_labels_each_instance_with_that_role(self):
+        import tempfile
+        from pathlib import Path
+        from qemu_tool import ernic_stats
+        dump = ErnicAggregate.DUMP
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "ernic-1.stats").write_text(dump.replace(
+                "tcp:worker:172.31.1.1:6320", "loopback").format(n=1, sent=1, tx=1))
+            Path(tmp, "ernic-2.stats").write_text(dump.replace(
+                "tcp:worker:172.31.1.1:6320", "tcp:manager:listen:6320"
+            ).format(n=2, sent=1, tx=1))
+            text = ernic_stats.collect(Path(tmp))
+        self.assertIn('ernic_id="1",role="loopback"', text)
+        self.assertIn('ernic_id="2",role="manager"', text)
+        self.assertNotIn('ernic_id="1",role="manager"', text)
+
+    def test_each_nic_of_a_guest_is_its_own_instance(self):
+        import re as _re
+        import tempfile
+        from pathlib import Path
+        from qemu_tool import ernic_stats
+        dump = ErnicAggregate.DUMP
+        with tempfile.TemporaryDirectory() as tmp:
+            for stem, backend in (("ernic-1-1", "nvmeof:kv=1"),
+                                  ("ernic-1-2", "tcp:manager:listen:6320"),
+                                  ("ernic-2-2", "tcp:worker:172.31.1.2:6320")):
+                Path(tmp, f"{stem}.stats").write_text(dump.replace(
+                    "tcp:worker:172.31.1.1:6320", backend).format(n=1, sent=1, tx=1))
+            text = ernic_stats.collect(Path(tmp))
+        got = sorted(set(_re.findall(r'ernic_id="[^"]*",role="[^"]*"', text)))
+        self.assertEqual(got, ['ernic_id="1-1",role="nvmeof"',
+                               'ernic_id="1-2",role="manager"',
+                               'ernic_id="2-2",role="worker"'])
+        # No sample is written twice.
+        samples = [l for l in text.splitlines() if l and not l.startswith("#")]
+        self.assertEqual(len(samples), len(set(samples)))
+
+
 if __name__ == "__main__":
     unittest.main()

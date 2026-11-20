@@ -1661,5 +1661,389 @@ class TestCpuSockets(unittest.TestCase):
         self.assertIn("does not divide", str(ctx.exception))
 
 
+class TestDevices(unittest.TestCase):
+    """<devices>: one <server> entry per vfio-user server a guest gets."""
+
+    _XIO = """
+<vm-count>1</vm-count><ernic-tap>false</ernic-tap>
+<devices>
+  <server type='ernic' id='kv'>
+    <backend type='nvmeof'>kv=1,size=256M</backend>
+    <log-level>info</log-level>
+  </server>
+  <server type='ernic' id='loop'>
+    <backend type='loopback'/>
+    <inject>stats_vals: every 100 effect fail</inject>
+    <inject>eth_rx: every 7 effect drop</inject>
+    <eth-queues>2</eth-queues>
+  </server>
+  <server type='rocjitsu' id='gpu0'>
+    <cpu-thread-budget>2</cpu-thread-budget>
+  </server>
+  <server type='rocjitsu' id='gpu1'>
+    <config>other.json</config>
+  </server>
+</devices>
+"""
+
+    def _render(self, extra: str, layers: list[str] | None = None) -> str:
+        with contextlib.redirect_stderr(io.StringIO()):
+            return gen_compose.render_compose(_plan(extra, layers), ["e"], "d")
+
+    def _services(self, extra: str, layers: list[str] | None = None) -> dict:
+        import yaml
+        return yaml.safe_load(self._render(extra, layers))["services"]
+
+    def _problems(self, body: str) -> str:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "f.xml"
+            path.write_text(_fleet(body))
+            return "\n".join(FleetXml.problems(path))
+
+    def test_the_block_says_what_a_guest_gets(self):
+        svc = self._services(self._XIO)
+        self.assertEqual(
+            sorted(n for n in svc if n.startswith(("ernic-1", "rocjitsu-"))),
+            ["ernic-1-1", "ernic-1-2", "rocjitsu-1-1", "rocjitsu-1-2"])
+        kv, loop = svc["ernic-1-1"]["command"], svc["ernic-1-2"]["command"]
+        self.assertEqual(kv[kv.index("-b") + 1], "nvmeof:kv=1,size=256M")
+        self.assertEqual(kv[-2:], ["--log-level", "info"])
+        self.assertEqual(loop[loop.index("-b") + 1], "loopback")
+        self.assertEqual(loop[-6:], [
+            "--inject", "stats_vals: every 100 effect fail",
+            "--inject", "eth_rx: every 7 effect drop", "--eth-queues", "2"])
+        gpu0, gpu1 = (svc[f"rocjitsu-1-{d}"]["command"] for d in (1, 2))
+        self.assertEqual(gpu0[-2:], ["--cpu-thread-budget", "2"])
+        self.assertTrue(gpu0[2].endswith("/gfx1250_mi455x.json"))
+        self.assertTrue(gpu1[2].endswith("/other.json"))
+        self.assertEqual(gpu1[-1], "/run/vfu/rocjitsu-1-2.sock")
+        # The guest is handed all four, and waits for each.
+        qemu = svc["qemu-1"]
+        for name in ("ernic-1-1", "ernic-1-2", "rocjitsu-1-1", "rocjitsu-1-2"):
+            self.assertEqual(qemu["depends_on"][name]["condition"],
+                             "service_healthy")
+
+    def test_the_counts_follow_the_block_whatever_else_sets_them(self):
+        # Counts in an earlier layer are what the block replaces.
+        spec = _plan("<ernic-per-vm>8</ernic-per-vm><sdxi-per-vm>3</sdxi-per-vm>",
+                     [self._XIO])
+        self.assertEqual((spec["ernic_per_vm"], spec["rocjitsu_per_vm"],
+                          spec["sdxi_per_vm"]), (2, 2, 0))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "f.xml"
+            path.write_text(_fleet(self._XIO))
+            cfg = FleetXml.parse(path)
+        self.assertEqual((cfg.ernic_per_vm, cfg.rocjitsu_per_vm,
+                          cfg.sdxi_per_vm), (2, 2, 0))
+
+    def test_every_guest_gets_the_same_devices(self):
+        svc = self._services(self._XIO.replace(
+            "<vm-count>1</vm-count>", "<vm-count>3</vm-count>"))
+        for n in (1, 2, 3):
+            cmd = svc[f"ernic-{n}-1"]["command"]
+            self.assertEqual(cmd[cmd.index("-b") + 1], "nvmeof:kv=1,size=256M")
+            self.assertEqual(svc[f"rocjitsu-{n}-2"]["command"][2][-10:],
+                             "other.json")
+
+    def test_the_id_is_in_the_comment_above_the_service(self):
+        out = self._render(self._XIO)
+        self.assertIn("# ---- VM 1 NIC 1/2 (kv): nvmeof backend, no mesh ----", out)
+        self.assertIn("# ---- VM 1 GPU 2/2 (gpu1) ----", out)
+
+    def test_a_nic_off_the_mesh_has_no_mesh_wiring(self):
+        svc = self._services(self._XIO)
+        for d in (1, 2):
+            ernic = svc[f"ernic-1-{d}"]
+            self.assertNotIn("depends_on", ernic)
+            self.assertFalse(ernic.get("environment"))
+            self.assertEqual(ernic["restart"], "no")
+            test = ernic["healthcheck"]["test"]
+            self.assertEqual(test[-1], "/proc/net/unix")
+            self.assertIn(f'$8 == "/run/vfu/ernic-1-{d}.sock"', test[2])
+
+    def test_the_mesh_is_the_nics_that_name_no_backend(self):
+        # Each guest's first NIC is off the mesh. The first NIC that is on
+        # it is the manager, and the chain runs over mesh NICs only.
+        svc = self._services("""
+<vm-count>2</vm-count><ernic-tap>false</ernic-tap>
+<devices>
+  <server type='ernic' id='local'><backend type='loopback'/></server>
+  <server type='ernic' id='mesh'><backend type='tcp'/></server>
+  <server type='ernic' id='also'/>
+  <server type='rocjitsu' id='gpu'/>
+</devices>""")
+        manager, second, third = (svc[n] for n in
+                                  ("ernic-1-2", "ernic-1-3", "ernic-2-2"))
+        self.assertIn("tcp:manager:listen:6320", manager["command"])
+        self.assertNotIn("depends_on", manager)
+        self.assertIn("/proc/net/tcp", manager["healthcheck"]["test"])
+        self.assertIn("tcp:worker:172.31.1.2:6320", second["command"])
+        self.assertEqual(list(second["depends_on"]), ["ernic-1-2"])
+        self.assertEqual(list(third["depends_on"]), ["ernic-1-3"])
+        for name in ("ernic-1-2", "ernic-1-3", "ernic-2-2", "ernic-2-3"):
+            self.assertTrue(svc[name]["environment"])
+        for name in ("ernic-1-1", "ernic-2-1"):
+            self.assertIn("loopback", svc[name]["command"])
+            self.assertNotIn("depends_on", svc[name])
+
+    def test_nics_off_the_mesh_do_not_count_against_its_ceiling(self):
+        body = ("<vm-count>70</vm-count><devices>"
+                "<server type='ernic' id='n'>{}</server>"
+                "<server type='rocjitsu' id='g'/></devices>")
+        with self.assertRaises(SystemExit) as ctx, \
+                contextlib.redirect_stderr(io.StringIO()):
+            _plan(body.format(""))
+        self.assertIn("mesh nodes", str(ctx.exception))
+        with contextlib.redirect_stderr(io.StringIO()):
+            spec = _plan(body.format("<backend type='loopback'/>"))
+        self.assertEqual(len(spec["nics"]), 70)
+
+    def test_a_flag_option_takes_no_value_and_repeats(self):
+        svc = self._services("""
+<ernic-tap>false</ernic-tap><sdxi-image>example/sdxi:x</sdxi-image>
+<devices>
+  <server type='ernic' id='n'/><server type='rocjitsu' id='g'/>
+  <server type='sdxi' id='s'><verbose/><verbose/></server>
+</devices>""")
+        self.assertEqual(svc["sdxi-3"]["command"],
+                         ["-s", "/run/vfu/sdxi-3.sock", "--verbose", "--verbose"])
+
+    def test_values_survive_yaml_compose_and_the_tap_shell_line(self):
+        devices = """
+<devices>
+  <server type='ernic' id='n'><inject>a: b "c" it's $HOME</inject></server>
+  <server type='rocjitsu' id='g'/>
+</devices>"""
+        svc = self._services("<ernic-tap>false</ernic-tap>" + devices)
+        self.assertEqual(svc["ernic-1"]["command"][-2:],
+                         ["--inject", 'a: b "c" it\'s $$HOME'])
+        svc = self._services("<ernic-tap>true</ernic-tap>" + devices)
+        line = svc["ernic-1"]["entrypoint"][-1].strip().splitlines()[-1]
+        import shlex
+        # $$ is compose's escape for one $; the shell then sees it in quotes.
+        words = shlex.split(line.replace("$$", "$"))
+        self.assertEqual(words[-4:], ["-T", gen_compose._TAP_IF, "--inject",
+                                      'a: b "c" it\'s $HOME'])
+
+    def test_a_later_layer_changes_one_entry_by_id(self):
+        overlay = """
+<devices>
+  <server type='ernic' id='loop'>
+    <backend type='s3'>bucket=bench</backend>
+    <inject>eth_tx: every 3 effect drop</inject>
+  </server>
+  <server type='ernic' id='kv'><log-level>debug</log-level></server>
+  <server type='rocjitsu' id='gpu1'><node>1</node></server>
+  <server type='rocjitsu' id='gpu2'/>
+</devices>"""
+        svc = self._services(self._XIO, [overlay])
+        kv, loop = svc["ernic-1-1"]["command"], svc["ernic-1-2"]["command"]
+        # Naming one option leaves the backend alone, and the position.
+        self.assertEqual(kv[kv.index("-b") + 1], "nvmeof:kv=1,size=256M")
+        self.assertEqual(kv[-2:], ["--log-level", "debug"])
+        self.assertEqual(kv.count("--log-level"), 1)
+        self.assertEqual(loop[loop.index("-b") + 1], "s3:bucket=bench")
+        # The option the overlay names is replaced whole; the other stays.
+        tail = loop[loop.index("/run/ernic-stats/ernic-1-2.stats") + 1:]
+        self.assertEqual(tail, ["--eth-queues", "2", "--inject",
+                                "eth_tx: every 3 effect drop"])
+        gpu1 = svc["rocjitsu-1-2"]["command"]
+        self.assertTrue(gpu1[2].endswith("/other.json"))
+        self.assertEqual(gpu1[-2:], ["--node", "1"])
+        # A new id is one more device, after the ones already there.
+        self.assertIn("rocjitsu-1-3", svc)
+        self.assertNotIn("rocjitsu-1-4", svc)
+
+    def test_a_later_layer_can_put_a_nic_back_on_the_mesh(self):
+        svc = self._services(self._XIO, [
+            "<devices><server type='ernic' id='loop'><backend type='tcp'/>"
+            "</server></devices>"])
+        self.assertIn("tcp:manager:listen:6320", svc["ernic-1-2"]["command"])
+        self.assertTrue(svc["ernic-1-2"]["environment"])
+
+    def test_a_block_over_a_layer_that_has_none_replaces_its_counts(self):
+        spec = _plan("<ernic-per-vm>2</ernic-per-vm><rocjitsu-per-vm>2</rocjitsu-per-vm>",
+                     ["<devices><server type='ernic' id='n'/>"
+                      "<server type='rocjitsu' id='g'/></devices>"])
+        self.assertEqual((spec["ernic_per_vm"], spec["rocjitsu_per_vm"]), (1, 1))
+
+    def test_a_count_that_disagrees_with_the_block_is_refused(self):
+        block = ("<devices><server type='ernic' id='n'/>"
+                 "<server type='rocjitsu' id='g'/></devices>")
+        # In the block's own file.
+        found = self._problems("<sdxi-per-vm>2</sdxi-per-vm>" + block)
+        self.assertIn("<sdxi-per-vm>2 has no effect", found)
+        # In a layer after it, with or without a block of its own.
+        for late in ("<ernic-per-vm>2</ernic-per-vm>",
+                     "<sdxi-per-vm>1</sdxi-per-vm>"):
+            with self.subTest(late=late), self.assertRaises(SystemExit) as ctx, \
+                    contextlib.redirect_stderr(io.StringIO()):
+                _plan(block, [late])
+            self.assertIn("has no effect", str(ctx.exception))
+        # One that agrees is what emit() writes, and is fine.
+        self.assertEqual(self._problems(
+            "<ernic-per-vm>1</ernic-per-vm><sdxi-per-vm>0</sdxi-per-vm>" + block), "")
+
+    def test_the_guests_one_address_is_its_first_mesh_nic(self):
+        spec = _plan("""
+<vm-count>2</vm-count>
+<devices>
+  <server type='ernic' id='local'><backend type='loopback'/></server>
+  <server type='ernic' id='mesh'/>
+  <server type='rocjitsu' id='gpu'/>
+</devices>""")
+        for vm in spec["vms"]:
+            self.assertEqual(vm["ip"], vm["nics"][1]["ip"])
+            self.assertEqual(vm["mac"], vm["nics"][1]["mac"])
+            self.assertEqual(vm["stats_file"], vm["nics"][1]["stats_file"])
+        # With every NIC off the mesh it is the first.
+        spec = _plan("<devices><server type='ernic' id='a'>"
+                     "<backend type='none'/></server>"
+                     "<server type='rocjitsu' id='g'/></devices>")
+        self.assertEqual(spec["vms"][0]["ip"], spec["vms"][0]["nics"][0]["ip"])
+
+    def test_a_fleet_has_room_for_its_guests_addresses(self):
+        body = ("<vm-count>{}</vm-count><devices><server type='ernic' id='n'>"
+                "<backend type='loopback'/></server>"
+                "<server type='rocjitsu' id='g'/></devices>")
+        with contextlib.redirect_stderr(io.StringIO()):
+            spec = _plan(body.format(244))
+        self.assertTrue(spec["nics"][-1]["ip"].endswith(".254"))
+        with self.assertRaises(SystemExit) as ctx, \
+                contextlib.redirect_stderr(io.StringIO()):
+            _plan(body.format(245))
+        self.assertIn("room for 244", str(ctx.exception))
+
+    def test_a_character_outside_the_bmp_is_written_as_yaml_reads_it(self):
+        svc = self._services(
+            "<ernic-tap>false</ernic-tap><devices><server type='ernic' id='n'>"
+            "<inject>a \U0001F600 b</inject></server>"
+            "<server type='rocjitsu' id='g'/></devices>")
+        self.assertEqual(svc["ernic-1"]["command"][-1], "a \U0001F600 b")
+
+    def test_an_id_names_one_server_across_layers(self):
+        with self.assertRaises(SystemExit) as ctx, \
+                contextlib.redirect_stderr(io.StringIO()):
+            _plan(self._XIO, ["<devices><server type='rocjitsu' id='kv'/>"
+                              "</devices>"])
+        self.assertIn("id='kv'", str(ctx.exception))
+
+    def test_a_guest_needs_a_nic_and_a_gpu(self):
+        with self.assertRaises(SystemExit) as ctx, \
+                contextlib.redirect_stderr(io.StringIO()):
+            _plan("<devices><server type='ernic' id='n'/></devices>")
+        self.assertIn("type='rocjitsu'", str(ctx.exception))
+
+    def test_what_the_parser_refuses(self):
+        srv = "<server type='ernic' id='n'>{}</server>"
+        cases = [
+            ("<devices x='1'/>", "takes no attributes"),
+            ("<devices><device/></devices>", "<server> elements"),
+            ("<devices><server id='n'/></devices>", "the types are"),
+            ("<devices><server type='spdk' id='n'/></devices>", "the types are"),
+            ("<devices><server type='ernic'/></devices>", "an id starts"),
+            ("<devices><server type='ernic' id='1x'/></devices>", "an id starts"),
+            ("<devices><server type='ernic' id='n' vm='2'/></devices>",
+             "attributes type and id"),
+            ("<devices>" + srv.format("") + srv.format("") + "</devices>",
+             "more than once"),
+            ("<devices/><devices/>", "<devices> appears more than once"),
+            # Options the generator derives are not elements at all.
+            (srv.format("<socket>/tmp/x</socket>"), "holds <socket>"),
+            (srv.format("<mac>02:00:00:00:00:01</mac>"), "holds <mac>"),
+            (srv.format("<args>-v</args>"), "holds <args>"),
+            (srv.format("<log-levle>info</log-levle>"), "did you mean <log-level>"),
+            (srv.format("<config>x.json</config>"), "holds <config>"),
+            (srv.format("<log-level/>"), "<log-level> is empty"),
+            (srv.format("<log-level>a</log-level><log-level>b</log-level>"),
+             "<log-level> more than once"),
+            (srv.format("<log-level x='1'>a</log-level>"), "no attributes"),
+            (srv.format("<log-level>a\nb</log-level>"), "line break"),
+            (srv.format("<inject>a\u2028b</inject>"), "line break"),
+            (srv.format("<inject>a\u0085b</inject>"), "line break"),
+            (srv.format("<backend type='loopbak'/>"), "did you mean 'loopback'"),
+            (srv.format("<log-file>/tmp/x</log-file>"), "holds <log-file>"),
+            (srv.format("<socket-group>kvm</socket-group>"),
+             "holds <socket-group>"),
+            ("<devices/>", "holds no <server>"),
+            ("<devices><!-- nothing --></devices>", "holds no <server>"),
+            ("<devices><server xmlns='urn:x' type='ernic' id='n'/></devices>",
+             "is in namespace 'urn:x'"),
+            (srv.format("<log-level xmlns='urn:x'>a</log-level>"),
+             "is in namespace 'urn:x'"),
+            ("<server type='rocjitsu' id='g'><config>a b.json</config></server>",
+             "<config> names a file"),
+            ("<server type='rocjitsu' id='g'><config>../x.json #c</config></server>",
+             "<config> names a file"),
+            (srv.format("<backend>loopback</backend>"), "one attribute, type"),
+            (srv.format("<backend type='nvmeof'>kv=1, size=1G</backend>"),
+             "one word"),
+            (srv.format("<backend type='tcp'>manager:listen:5000</backend>"),
+             "takes no options"),
+            (srv.format("stray"), "text outside"),
+            ("<server type='sdxi' id='s'><verbose>2</verbose></server>",
+             "takes no value"),
+        ]
+        for body, want in cases:
+            with self.subTest(body=body):
+                if not body.startswith("<devices"):
+                    body = f"<devices>{body}</devices>"
+                self.assertIn(want, self._problems(body))
+
+    def test_emit_round_trips_the_block(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            first = Path(tmp) / "a.xml"
+            first.write_text(_fleet(self._XIO))
+            cfg = FleetXml.parse(first)
+            second = Path(tmp) / "b.xml"
+            second.write_text(FleetXml.emit(cfg))
+            self.assertEqual(FleetXml.problems(second), [])
+            self.assertEqual(FleetXml.parse(second).devices, cfg.devices)
+
+    def test_every_option_element_is_a_long_option_of_its_server(self):
+        # tests/fixtures/server-help holds each pinned server's --help,
+        # headed by the image it was read from. A fleet file that moves an
+        # image fails here until the help is read again, which is when the
+        # table gets looked at.
+        import re as _re
+        from qemu_tool import fleet_xml
+        self.assertEqual(set(fleet_xml.SERVER_OPTIONS),
+                         set(fleet_xml.SERVER_TYPES))
+        derived = {"socket", "mac", "stats-file", "tap", "p4", "p4-program",
+                   "p4-guest-scope", "backend", "config", "vfio-socket",
+                   "socket-group", "log-file", "help", "version",
+                   "print-profile"}
+        golden = (REPO_ROOT / "qemu" / "stacks" / "rocm-golden.xml").read_text()
+        tags = {"ernic": "ernic-ref", "rocjitsu": "rocjitsu-ref",
+                "sdxi": "sdxi-image"}
+        for kind, table in fleet_xml.SERVER_OPTIONS.items():
+            with self.subTest(kind=kind):
+                self.assertFalse(derived & set(table))
+                self.assertLessEqual(set(table.values()),
+                                     {"value", "values", "flags"})
+                text = (REPO_ROOT / "tests" / "fixtures" / "server-help"
+                        / f"{kind}.txt").read_text()
+                ref = _re.search(
+                    rf"<{tags[kind]}>([^<]+)</{tags[kind]}>", golden).group(1)
+                self.assertEqual(text.splitlines()[0], f"# {ref}")
+                for name, shape in table.items():
+                    line = _re.search(
+                        rf"^\s*(?:-\w, )?--{_re.escape(name)}\b(.*)$",
+                        text, _re.M)
+                    self.assertIsNotNone(line, f"--{name} not in {kind} --help")
+                    # A flag is followed by its description, far to the
+                    # right or on the next line; a value by a metavar.
+                    takes = bool(_re.match(r"\s[A-Z][A-Z|]*(\s|$)", line.group(1)))
+                    self.assertEqual(takes, shape != "flags", name)
+        for backend in fleet_xml.BACKEND_TYPES:
+            self.assertRegex(
+                (REPO_ROOT / "tests/fixtures/server-help/ernic.txt").read_text(),
+                rf"RDMA backend: .*\b{backend}\b")
+
+    def test_no_shipped_stack_has_a_block(self):
+        for xml in sorted((REPO_ROOT / "qemu" / "stacks").glob("*.xml")):
+            self.assertNotIn("<devices", xml.read_text(), xml.name)
+
+
 if __name__ == "__main__":
     unittest.main()

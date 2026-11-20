@@ -219,7 +219,10 @@ class SettingsTable(unittest.TestCase):
     """One table drives parse, emit and the known-element set."""
 
     def test_every_field_has_exactly_one_element(self) -> None:
-        fields = [f.name for f in dataclasses.fields(FleetConfig)]
+        # <devices> is the one field with structure; it has its own reader
+        # and is not a row of the table.
+        fields = [f.name for f in dataclasses.fields(FleetConfig)
+                  if f.name != "devices"]
         self.assertEqual(sorted(s.field for s in fleet_xml._SETTINGS),
                          sorted(fields))
 

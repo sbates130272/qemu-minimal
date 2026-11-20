@@ -2757,5 +2757,86 @@ class Docs(unittest.TestCase):
         self.assertNotIn("The play has not run against a guest", agents)
 
 
+class DevicesBlockTest(unittest.TestCase):
+    """quick-start on a fleet whose <devices> block shapes its NICs."""
+
+    NS = "http://qemu-tool/fleet/1.0"
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = Path(tmp.name)
+
+    def _state(self, body: str, **kwargs):
+        overlay = self.tmp / "overlay.xml"
+        overlay.write_text(f'<fleet xmlns="{self.NS}">{body}</fleet>\n')
+        fleet = qs.FleetXml.parse_layers([GOLDEN_FLEET, overlay])
+        return _state(fleet=fleet, base_layers=[GOLDEN_FLEET, overlay], **kwargs)
+
+    def _died(self, fn, state) -> str:
+        with self.assertRaises(SystemExit) as ctx, \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            fn(state)
+        return err.getvalue() + str(ctx.exception)
+
+    LOCAL_FIRST = ("<devices><server type='ernic' id='kv'>"
+                   "<backend type='nvmeof'>kv=1</backend></server>"
+                   "<server type='ernic' id='mesh'/>"
+                   "<server type='rocjitsu' id='gpu'/></devices>")
+
+    def test_guests_whose_first_nic_is_off_the_mesh_are_refused(self):
+        msg = self._died(qs._check_mesh_tests, self._state(self.LOCAL_FIRST))
+        for part in ("id='kv'", "<backend type='nvmeof'>", "overlay.xml",
+                     "<vm-count>1</vm-count>"):
+            self.assertIn(part, msg)
+
+    def test_one_guest_or_a_mesh_nic_first_or_no_playbook_is_not(self):
+        qs._check_mesh_tests(self._state(
+            "<vm-count>1</vm-count>" + self.LOCAL_FIRST))
+        qs._check_mesh_tests(self._state(
+            "<devices><server type='ernic' id='mesh'/>"
+            "<server type='ernic' id='kv'><backend type='loopback'/></server>"
+            "<server type='rocjitsu' id='gpu'/></devices>"))
+        qs._check_mesh_tests(self._state(self.LOCAL_FIRST, playbook=None))
+        qs._check_mesh_tests(_state())
+
+    def test_the_counter_is_read_from_the_guests_mesh_nic(self):
+        self.assertEqual(qs._ernic_suffix(_state(), 2), "2")
+        state = self._state(self.LOCAL_FIRST)
+        self.assertEqual(qs._ernic_suffix(state, 1), "1-2")
+        self.assertEqual(qs._ernic_suffix(state, 2), "2-2")
+        # No NIC on the mesh: the first, which is the one the guest is
+        # addressed by.
+        state = self._state(
+            "<vm-count>1</vm-count><devices>"
+            "<server type='ernic' id='a'><backend type='loopback'/></server>"
+            "<server type='ernic' id='b'><backend type='none'/></server>"
+            "<server type='rocjitsu' id='gpu'/></devices>")
+        self.assertEqual(qs._ernic_suffix(state, 1), "1-1")
+        # Two NICs from the counts alone, as helios-tray has: the first.
+        state = self._state("<ernic-per-vm>2</ernic-per-vm>")
+        self.assertEqual(qs._ernic_suffix(state, 3), "3-1")
+
+    def test_the_counter_names_the_container_and_file_it_reads(self):
+        state = self._state(self.LOCAL_FIRST)
+        seen = []
+
+        def fake(cmd, **_):
+            seen.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, "  total_bytes_sent : 42\n", "")
+        with mock.patch.object(qs.subprocess, "run", fake):
+            self.assertEqual(qs._ernic_bytes(state, 1), 42)
+        self.assertEqual(seen[0][2], f"{state.stack_name}-ernic-1-2-1")
+        self.assertIn("/run/ernic-stats/ernic-1-2.stats", seen[0][-1])
+
+    def test_the_sdxi_refusal_blames_the_block(self):
+        state = self._state(self.LOCAL_FIRST, sdxi_test=True)
+        msg = self._died(qs._check_optional_tests, state)
+        self.assertIn("<devices> block", msg)
+        self.assertIn("overlay.xml", msg)
+        self.assertIn("<server type='sdxi'", msg)
+        self.assertNotIn("Set <sdxi-per-vm>", msg)
+
+
 if __name__ == "__main__":
     unittest.main()
