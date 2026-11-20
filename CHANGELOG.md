@@ -6,6 +6,59 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **`qemu-tool quick-start --flavor xio`: a one-guest stack for rocm-xio
+  development.** The guest has two rocjitsu GPUs, two rocm-ernic NICs,
+  QEMU's own NVMe behind the fork QEMU's `pci-mmio-bridge`, and an SPDK
+  vfio-user NVMe controller serving one NVMe-KV namespace. One NIC is on
+  the server's loopback backend. The other serves NVMe-oF from inside the
+  NIC's server, with a 1 GiB block namespace and a 256 MiB NVMe-KV
+  namespace, which the guest reaches with `nvme connect` over RDMA. It is a
+  fourth shipped stack, `qemu/stacks/xio.xml` and the generated
+  `qemu/compose/xio/`, on the same QEMU, ernic, rocjitsu and guest images
+  as the other three. Its devices are a `<devices>` block, so an overlay
+  changes a NIC's backend by the entry's id.
+  - `quick-start --flavor xio test` runs a new playbook, `vm-xio.yml`,
+    which stages the GPU firmware and probes amdgpu.
+  - **`--xio-test`** opens that playbook's second play, off by default:
+    it installs rocm-xio in the guest and checks it. rocm-xio is not in the
+    golden image. The play builds `xio-tester` and the `rocm-xio` kernel
+    module with the new `rocm_xio_setup` role, loads the module, connects
+    the guest to the NVMe-oF NIC, and requires two GPUs, `/dev/rocm-xio`,
+    `/dev/xio-kv`, `/dev/xio-blk` and the NVMe-oF controller's block and KV
+    namespaces. The switch is refused on any other flavor.
+  - **`/dev/rocm-xio` is opened without sudo.** The module creates the node
+    for root alone; the role gives it to a `rocm-xio` group, mode 0660, and
+    adds the login user. The test opens it as that user.
+  - rocm-xio is pinned to a branch and the commit that branch has to be:
+    `feat/nvme-kv-ernic-rocjitsu` at `3f5a9920d3bf`. A branch that has moved
+    fails the run before anything is built. The build is recorded in
+    `/etc/rocm-xio.json`, and `xio-tester` is on `PATH`. A rebuild refuses
+    to replace a source tree somebody has edited.
+  - The other optional `quick-start` tests are plays of `vm-quickstart.yml`
+    and are refused on this flavor.
+  - Booted on the development host: the guest came up with every device,
+    and `test --xio-test` passed from fresh overlays and again with nothing
+    to rebuild. `xio-tester` has listed its endpoints and done no I/O. No
+    CI lane boots the stack; `Gen Compose Check` renders it.
+- **`<server type='spdk'>` in a `<devices>` block, and `<spdk-image>`.** An
+  SPDK vfio-user NVMe controller per guest. Its `<namespaces>` and
+  `<serial>` elements set the image's `NVME_NAMESPACES` and `SPDK_SERIAL`.
+  A guest takes one. The image is not held to the other servers' build
+  stamp; its `vfu.<sha>` has to be the `<qemu-ref>`'s, and a difference is
+  refused at render time. `<cpumask>` sets the cores its reactor spins on.
+- **`<vm-qemu-args>` and `run-vm --qemu-arg`: extra arguments for QEMU.**
+  The fleet element holds words for every guest's QEMU command line,
+  written as in a shell; a stack passes each to `run-vm` as
+  `--qemu-arg=WORD`, and `run-vm` appends them after everything it writes
+  itself and ahead of the guest's name and serial number. Nothing checks
+  the words: one QEMU refuses stops the guest at its start, with the reason
+  in that guest's log. A bake does not take them. Rendered and read back
+  through `docker compose config` and `run-vm --dry-run`; no guest has been
+  started with one.
+- **`<vm-pci-mmio-bridge>`.** Renders `run-vm --pci-mmio-bridge` for every
+  guest. Refused without an emulated NVMe (`<vm-nvme>` of at least 1), and
+  warned about on a `<qemu-ref>` that is not the fork.
+
 - **A `<devices>` block in fleet XML: one `<server>` entry per vfio-user
   server a guest gets.** It is the first element of the format with
   structure, and what lets two servers of one type differ:

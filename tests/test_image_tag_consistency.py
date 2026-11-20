@@ -69,6 +69,34 @@ VFU_RE = re.compile(r"-(vfu\.[a-f0-9]+)")
 
 # The component that marks a tag as the SDXI server's.
 SDXI_RE = re.compile(r"(^|-)sdxi\.[a-f0-9]+")
+# The SPDK NVMe server, also built apart from the fleet's run. Its pair is
+# QEMU's libvfio-user, by the vfu.<sha> both tags carry.
+SPDK_RE = re.compile(r"(^|-)spdk\.[a-f0-9]+")
+
+
+class SpdkImage(unittest.TestCase):
+    """The SPDK server is exempt from the fleet stamp, as the SDXI server
+    is. What it is held to is QEMU's libvfio-user."""
+
+    def test_its_vfu_is_the_one_qemu_was_built_against(self):
+        import xml.etree.ElementTree as ET
+        ns = "{http://qemu-tool/fleet/1.0}"
+        found = 0
+        for path in sorted((REPO / "qemu/stacks").glob("*.xml")):
+            root = ET.parse(path).getroot()
+            spdk = root.findtext(f"{ns}spdk-image")
+            if not spdk:
+                continue
+            found += 1
+            qemu = root.findtext(f"{ns}qemu-ref")
+            want = re.search(r"vfu\.[a-f0-9]+", qemu).group(0)
+            self.assertRegex(spdk.rsplit(":", 1)[1], SPDK_RE, path.name)
+            self.assertIn(want, spdk, path.name)
+        self.assertEqual(found, 1)
+
+    def test_a_stamped_spdk_tag_is_not_counted_with_the_fleets(self):
+        self.assertRegex("20270101.g1234567-spdk.18d1d8d-vfu.3719c3a", SPDK_RE)
+        self.assertNotRegex("20261112.gdca6903-qemu.4cb9698-vfu.3719c3a", SPDK_RE)
 
 # The tag publish-qcow pushes for each image and the only one a fleet pins:
 # the day and the qemu-minimal commit. Spelled out here rather than imported,
@@ -130,7 +158,8 @@ def _tags_in_file(path: Path) -> list[tuple[str, str]]:
 
 def _stamped_with_the_fleet(tags: list[tuple[str, str]]) -> set[str]:
     """The stamps of every tag but the SDXI server's, which has its own."""
-    return {s for s, rest in tags if not SDXI_RE.search(rest)}
+    return {s for s, rest in tags
+            if not SDXI_RE.search(rest) and not SPDK_RE.search(rest)}
 
 
 def _fleet_files() -> list[Path]:
@@ -268,7 +297,7 @@ class ForkImages(unittest.TestCase):
             pairs[path.name] = tuple(pair)
         self.assertEqual(
             sorted(pairs),
-            ["helios-tray.xml", "mi355x-server.xml", "rocm-golden.xml"])
+            ["helios-tray.xml", "mi355x-server.xml", "rocm-golden.xml", "xio.xml"])
         self.assertEqual(len(set(pairs.values())), 1, pairs)
 
     def test_stacks_workflows_and_containers_name_that_pair(self):
@@ -281,10 +310,10 @@ class ForkImages(unittest.TestCase):
             named += bool(found)
             with self.subTest(file=str(path.relative_to(REPO))):
                 self.assertLessEqual(found, fleet)
-        # Three fleet files, three stacks and the nine workflows whose jobs
+        # Four fleet files, four stacks and the nine workflows whose jobs
         # run in the QEMU image: a glob that stopped matching would pass.
         self.assertGreaterEqual(named, 15)
-        for stack in ("rocm-golden", "helios-tray", "mi355x-server"):
+        for stack in ("rocm-golden", "helios-tray", "mi355x-server", "xio"):
             text = (REPO / "qemu/compose" / stack
                     / "docker-compose.yml").read_text()
             with self.subTest(stack=stack):
@@ -342,7 +371,7 @@ class GuestImage(unittest.TestCase):
         refs = self._backing_refs()
         self.assertEqual(
             sorted(refs),
-            ["helios-tray.xml", "mi355x-server.xml", "rocm-golden.xml"])
+            ["helios-tray.xml", "mi355x-server.xml", "rocm-golden.xml", "xio.xml"])
         for name, found in refs.items():
             with self.subTest(fleet=name):
                 self.assertEqual(len(found), 1, found)

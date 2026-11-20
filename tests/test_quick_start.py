@@ -281,7 +281,7 @@ class SettingsFileTest(unittest.TestCase):
                          if p.name != "fleet.xml")
         self.assertEqual(shipped, on_disk)
         self.assertEqual(shipped,
-                         ["helios-tray.xml", "mi355x-server.xml", "rocm-golden.xml"])
+                         ["helios-tray.xml", "mi355x-server.xml", "rocm-golden.xml", "xio.xml"])
 
 
 class MovedGuestImageTest(unittest.TestCase):

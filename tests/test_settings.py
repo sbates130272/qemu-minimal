@@ -225,7 +225,7 @@ class Load(_Tmp):
     def test_an_overlay_layers_on_a_shipped_fleet(self):
         overlay = self.fleet(
             "<vm-count>1</vm-count><vm-password>other</vm-password>", "one.xml")
-        for name in ("rocm-golden.xml", "helios-tray.xml", "mi355x-server.xml"):
+        for name in ("rocm-golden.xml", "helios-tray.xml", "mi355x-server.xml", "xio.xml"):
             with self.subTest(fleet=name):
                 layers = [STACKS / name, overlay]
                 fleet = fleet_xml.FleetXml.parse_layers(layers)

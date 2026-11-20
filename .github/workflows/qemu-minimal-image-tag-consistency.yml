@@ -65,7 +65,11 @@ jobs:
 
           sdxi_tags=$(echo "$all_refs" | grep -E -- "$SDXI_RE" |
             sed 's/^[^:]*://' | sort -u)
-          stamped_refs=$(echo "$all_refs" | grep -vE -- "$SDXI_RE")
+          # The SPDK NVMe server is exempt too: it is held to QEMU's
+          # libvfio-user (vfu.<sha>) at render time and in the unit tests.
+          SPDK_RE='-spdk\.[a-f0-9]+'
+          stamped_refs=$(echo "$all_refs" | grep -vE -- "$SDXI_RE" |
+            grep -vE -- "$SPDK_RE" || true)
           stamps=$(echo "$stamped_refs" |
             grep -oE '[0-9]{8}\.g[a-f0-9]+' | sort -u)
 
@@ -86,7 +90,7 @@ jobs:
               echo "  $s:" >&2
               grep -rEn "$REF_RE" $SEARCH_DIRS 2>/dev/null |
                 grep "$s" |
-                grep -vE -- "$SDXI_RE" |
+                grep -vE -- "$SDXI_RE" | grep -vE -- "$SPDK_RE" |
                 sed 's/^/    /' >&2
             done
             fail=1

@@ -1,0 +1,290 @@
+---
+# Build rocm-xio at the pinned commit. Needs no device. `load.yml` loads the
+# module and checks the devices, on a guest that has them.
+
+- name: Check what to build is named
+  ansible.builtin.assert:
+    that:
+      - rocm_xio_setup_repo | trim | length > 0
+      - rocm_xio_setup_ref | trim | length > 0
+      - rocm_xio_setup_source_dir is match('/')
+    fail_msg: >-
+      rocm_xio_setup_repo and rocm_xio_setup_ref name what to build, and
+      rocm_xio_setup_source_dir is an absolute path.
+
+- name: Find the ROCm tree
+  ansible.builtin.shell:
+    cmd: |
+      set -eu
+      path={{ rocm_xio_setup_rocm_path | quote }}
+      # /opt/rocm has bin/ and lib/ and no include/: follow bin/ to the tree.
+      if [ ! -d "$path/include" ] && [ -L "$path/bin" ]; then
+          path=$(dirname "$(readlink -f "$path/bin")")
+      fi
+      for want in bin/amdclang++ include/hip/hip_runtime.h; do
+          [ -e "$path/$want" ] || { echo "missing: $path/$want" >&2; exit 1; }
+      done
+      echo "$path"
+    executable: /bin/sh
+  register: rocm_xio_setup_rocm
+  changed_when: false
+
+- name: Check the running kernel has its headers
+  ansible.builtin.stat:
+    path: "/lib/modules/{{ ansible_facts['kernel'] }}/build/Makefile"
+  register: rocm_xio_setup_headers
+
+- name: Fail without them
+  ansible.builtin.fail:
+    msg: >-
+      No kernel headers for {{ ansible_facts['kernel'] }}: the rocm-xio
+      module is built against the kernel the guest runs.
+  when: not rocm_xio_setup_headers.stat.exists
+
+- name: Install what the build needs
+  ansible.builtin.apt:
+    name: "{{ rocm_xio_setup_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Read the record of the last build
+  ansible.builtin.slurp:
+    path: "{{ rocm_xio_setup_stamp }}"
+  register: rocm_xio_setup_stamp_raw
+  failed_when: false
+
+# A record that is not JSON is no record: the build runs and replaces it.
+- name: Start with no record of the last build
+  ansible.builtin.set_fact:
+    rocm_xio_setup_last: {}
+
+- name: Parse the record of the last build
+  when: rocm_xio_setup_stamp_raw.content is defined
+  block:
+    - name: Read it as JSON
+      ansible.builtin.set_fact:
+        rocm_xio_setup_last: >-
+          {{ rocm_xio_setup_stamp_raw.content | b64decode | from_json }}
+  rescue:
+    - name: Take an unreadable record as none
+      ansible.builtin.set_fact:
+        rocm_xio_setup_last: {}
+
+- name: Take a record that is not a mapping as none
+  ansible.builtin.set_fact:
+    rocm_xio_setup_last: {}
+  when: rocm_xio_setup_last is not mapping
+
+- name: Check what is installed
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ rocm_xio_setup_source_dir }}/build/xio-tester"
+    - "/lib/modules/{{ ansible_facts['kernel'] }}/updates/rocm-xio.ko"
+  register: rocm_xio_setup_present
+
+- name: Decide whether to build
+  ansible.builtin.set_fact:
+    rocm_xio_setup_rocm_tree: "{{ rocm_xio_setup_rocm.stdout | trim }}"
+    rocm_xio_setup_build_needed: >-
+      {{ (rocm_xio_setup_force | bool)
+         or (rocm_xio_setup_present.results
+             | rejectattr('stat.exists') | list | length > 0)
+         or rocm_xio_setup_last != rocm_xio_setup_record }}
+  vars:
+    rocm_xio_setup_record:
+      repo: "{{ rocm_xio_setup_repo | trim }}"
+      ref: "{{ rocm_xio_setup_ref | trim }}"
+      commit_required: "{{ rocm_xio_setup_commit | trim }}"
+      rocm_path: "{{ rocm_xio_setup_rocm.stdout | trim }}"
+      rocm_arch: "{{ rocm_xio_setup_rocm_arch }}"
+      kernel: "{{ ansible_facts['kernel'] }}"
+      commit: "{{ rocm_xio_setup_last.commit | default('') }}"
+
+# The source tree is kept as a development tree, and the fetch replaces it.
+# Work in it that is not the commit this role last built there is somebody's.
+- name: Look for work in the source tree that a rebuild would delete
+  ansible.builtin.shell:
+    cmd: |
+      set -u
+      d={{ rocm_xio_setup_source_dir | quote }}
+      [ -e "$d/.git" ] || exit 0
+      head=$(git -C "$d" rev-parse -q --verify HEAD 2>/dev/null || true)
+      recorded={{ rocm_xio_setup_last.commit | default('') | quote }}
+      if [ -n "$recorded" ] && [ -n "$head" ] && [ "$head" != "$recorded" ]; then
+          echo "HEAD is $head, not the $recorded this role built"
+      fi
+      git -C "$d" status --porcelain --untracked-files=no 2>/dev/null
+      exit 0
+    executable: /bin/sh
+  register: rocm_xio_setup_local
+  changed_when: false
+  when: rocm_xio_setup_build_needed | bool
+
+- name: Refuse to delete it
+  ansible.builtin.fail:
+    msg: >-
+      {{ rocm_xio_setup_source_dir }} holds work a rebuild would delete:
+      {{ rocm_xio_setup_local.stdout_lines | join('; ') }}. The role fetches
+      the pinned commit into that directory, replacing it. Commit and push
+      the work or move the tree aside, or pass
+      rocm_xio_setup_discard_local=true to discard it.
+  when:
+    - rocm_xio_setup_build_needed | bool
+    - rocm_xio_setup_local.stdout | trim | length > 0
+    - not (rocm_xio_setup_discard_local | bool)
+
+# A build that does not finish leaves no record, so the next run builds.
+- name: Forget the last build before starting another
+  ansible.builtin.file:
+    path: "{{ rocm_xio_setup_stamp }}"
+    state: absent
+  when: rocm_xio_setup_build_needed | bool
+
+- name: Fetch rocm-xio at the pinned commit
+  ansible.builtin.script:
+    cmd: >-
+      rocm-xio-fetch.sh
+      {{ rocm_xio_setup_repo | trim | quote }}
+      {{ rocm_xio_setup_ref | trim | quote }}
+      {{ rocm_xio_setup_commit | trim | quote }}
+      {{ rocm_xio_setup_source_dir | quote }}
+  register: rocm_xio_setup_fetch
+  changed_when: true
+  failed_when: rocm_xio_setup_fetch.rc != 0
+  retries: 3
+  delay: 10
+  until: rocm_xio_setup_fetch.rc != 2
+  when: rocm_xio_setup_build_needed | bool
+
+- name: Record the commit that was fetched
+  ansible.builtin.set_fact:
+    rocm_xio_setup_built_commit: >-
+      {{ rocm_xio_setup_fetch.stdout | regex_search('ok: ([0-9a-f]{40})', '\1')
+         | first }}
+  when: rocm_xio_setup_build_needed | bool
+
+- name: Configure rocm-xio
+  ansible.builtin.command:
+    argv:
+      - cmake
+      - -S
+      - "{{ rocm_xio_setup_source_dir }}"
+      - -B
+      - "{{ rocm_xio_setup_source_dir }}/build"
+      - -DCMAKE_BUILD_TYPE=RelWithDebInfo
+      - "-DCMAKE_HIP_COMPILER={{ rocm_xio_setup_rocm_tree }}/bin/amdclang++"
+      - "-DCMAKE_HIP_ARCHITECTURES={{ rocm_xio_setup_rocm_arch }}"
+      - "-DROCM_PATH={{ rocm_xio_setup_rocm_tree }}"
+  changed_when: true
+  when: rocm_xio_setup_build_needed | bool
+
+- name: Build xio-tester
+  ansible.builtin.command:
+    argv:
+      - cmake
+      - --build
+      - "{{ rocm_xio_setup_source_dir }}/build"
+      - --target
+      - xio-tester
+      - "-j{{ rocm_xio_setup_jobs if rocm_xio_setup_jobs | int > 0
+              else [ansible_facts['processor_nproc'], 8] | min }}"
+  changed_when: true
+  async: 7200
+  poll: 20
+  when: rocm_xio_setup_build_needed | bool
+
+- name: Build the rocm-xio kernel module
+  ansible.builtin.command:
+    cmd: make
+    chdir: "{{ rocm_xio_setup_source_dir }}/kernel/rocm-xio"
+  changed_when: true
+  when: rocm_xio_setup_build_needed | bool
+
+- name: Install the kernel module
+  ansible.builtin.shell:
+    cmd: |
+      set -eu
+      make -C /lib/modules/{{ ansible_facts['kernel'] }}/build \
+          M={{ rocm_xio_setup_source_dir }}/kernel/rocm-xio \
+          INSTALL_MOD_DIR=updates modules_install
+      depmod -a {{ ansible_facts['kernel'] }}
+    executable: /bin/sh
+  changed_when: true
+  when: rocm_xio_setup_build_needed | bool
+
+- name: Find the installed module
+  ansible.builtin.command:
+    cmd: "modinfo -n -k {{ ansible_facts['kernel'] }} rocm-xio"
+  register: rocm_xio_setup_module
+  changed_when: false
+
+- name: Put xio-tester on PATH
+  ansible.builtin.file:
+    src: "{{ rocm_xio_setup_source_dir }}/build/xio-tester"
+    dest: "{{ rocm_xio_setup_bin_dir }}/xio-tester"
+    state: link
+
+- name: Name the stack's NVMe devices /dev/xio-kv and /dev/xio-blk
+  ansible.builtin.copy:
+    dest: /etc/udev/rules.d/90-xio-nvme.rules
+    content: |
+      # Installed by the rocm_xio_setup role.
+      # The SPDK NVMe-KV controller, by its serial number.
+      SUBSYSTEM=="nvme", ATTR{serial}=="{{ rocm_xio_setup_kv_serial }}", SYMLINK+="xio-kv"
+      # QEMU's own NVMe, by its model: the block namespace.
+      SUBSYSTEM=="block", ENV{DEVTYPE}=="disk", KERNEL=="nvme*n[0-9]*", ATTRS{model}=="QEMU NVMe Ctrl*", SYMLINK+="xio-blk"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Create the group that may open /dev/rocm-xio
+  ansible.builtin.group:
+    name: "{{ rocm_xio_setup_group }}"
+    system: true
+
+- name: Give /dev/rocm-xio to that group
+  ansible.builtin.copy:
+    dest: /etc/udev/rules.d/90-rocm-xio.rules
+    content: |
+      # Installed by the rocm_xio_setup role. The rocm-xio module creates
+      # its node mode 0600 for root; this is a test guest, and xio-tester
+      # should not need sudo.
+      KERNEL=="rocm-xio", GROUP="{{ rocm_xio_setup_group }}", MODE="0660"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Add the users to it
+  ansible.builtin.user:
+    name: "{{ item }}"
+    groups: "{{ rocm_xio_setup_group }}"
+    append: true
+  loop: "{{ rocm_xio_setup_users }}"
+
+- name: Record what was built
+  ansible.builtin.copy:
+    dest: "{{ rocm_xio_setup_stamp }}"
+    content: "{{ rocm_xio_setup_new_record | to_nice_json }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+  vars:
+    rocm_xio_setup_new_record:
+      repo: "{{ rocm_xio_setup_repo | trim }}"
+      ref: "{{ rocm_xio_setup_ref | trim }}"
+      commit: "{{ rocm_xio_setup_built_commit }}"
+      commit_required: "{{ rocm_xio_setup_commit | trim }}"
+      rocm_path: "{{ rocm_xio_setup_rocm_tree }}"
+      rocm_arch: "{{ rocm_xio_setup_rocm_arch }}"
+      kernel: "{{ ansible_facts['kernel'] }}"
+  when: rocm_xio_setup_build_needed | bool
+
+- name: Say what is installed
+  ansible.builtin.debug:
+    msg: >-
+      rocm-xio {{ 'built' if rocm_xio_setup_build_needed | bool else 'already built' }}:
+      {{ rocm_xio_setup_bin_dir }}/xio-tester and
+      {{ rocm_xio_setup_module.stdout | trim }}; record in
+      {{ rocm_xio_setup_stamp }}

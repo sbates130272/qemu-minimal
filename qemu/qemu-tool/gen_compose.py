@@ -31,7 +31,8 @@ from typing import Any
 
 from .compose import _DEFAULT_STACK, _STACKS
 from .fleet_xml import (
-    SERVER_OPTIONS, FleetConfig, FleetXml, Server, device_counts,
+    SERVER_ENV, SERVER_OPTIONS, FleetConfig, FleetXml, Server, device_counts,
+    split_args,
 )
 from .ports import publish_address, publish_mapping, reach_address
 from .resources import stack_fleet
@@ -60,6 +61,7 @@ _GRAFANA_DATA_DIR = "/var/lib/qemu-tool/grafana-data"
 # start burst, and each restart consumes a fresh mesh node id -- so a 48-VM
 # fleet reached id 61 against a 64-node protocol ceiling. See the stack README.
 _NET_ERNIC, _NET_ROCJITSU, _NET_QEMU, _NET_INFRA, _NET_SDXI = 1, 2, 3, 0, 4
+_NET_SPDK = 5
 
 # rocm-ernic's topology payload builder caps the mesh here
 # (src/rdma/rdma_backend_tcp.c: `num_nodes < 64`).
@@ -307,10 +309,19 @@ def _option_words(server: Server | None) -> list[str]:
     """The command-line words an entry's option elements stand for."""
     words: list[str] = []
     for name, value in (server.options if server else ()):
+        if name in SERVER_ENV.get(server.type, {}):
+            continue
         words.append(f"--{name}")
         if SERVER_OPTIONS[server.type][name] != "flags":
             words.append(value)
     return words
+
+
+def _option_env(server: Server) -> list[tuple[str, str]]:
+    """The environment variables an entry's option elements stand for."""
+    table = SERVER_ENV.get(server.type, {})
+    return [(table[name], value) for name, value in server.options
+            if name in table]
 
 
 def _backend(server: Server | None) -> str | None:
@@ -333,6 +344,42 @@ def _yaml_word(word: str) -> str:
 def _sh_word(word: str) -> str:
     """One argument single-quoted for /bin/sh, inside a compose file."""
     return "'" + word.replace("'", "'\\''").replace("$", "$$") + "'"
+
+
+def _qemu_args(cfg: FleetConfig) -> list[str]:
+    """<vm-qemu-args>, as the words run-vm appends to QEMU's command line.
+
+    The same words go to every guest. Nothing here reads them: they are
+    QEMU's, and a word QEMU refuses stops the guest at its start, in the
+    qemu-N service's log.
+    """
+    try:
+        return split_args(cfg.vm_qemu_args, "<vm-qemu-args>")
+    except ValueError as exc:
+        sys.exit(f"Error: {exc}")
+
+
+def _check_pci_mmio_bridge(cfg: FleetConfig) -> None:
+    """<vm-pci-mmio-bridge>: the bridge is for an emulated NVMe, on the fork.
+
+    run-vm turns the NVMe's ioeventfd and shadow doorbells off for the
+    bridge, so with no NVMe there is nothing it applies to. Only the fork
+    QEMU has the device, and run-vm exits when the binary lacks it, so a
+    stock <qemu-ref> is warned about here.
+    """
+    if not cfg.vm_pci_mmio_bridge:
+        return
+    if cfg.vm_nvme <= 0:
+        sys.exit(
+            "Error: <vm-pci-mmio-bridge> is true and <vm-nvme> is "
+            f"{cfg.vm_nvme}. The bridge serves the guest's emulated NVMe "
+            "devices, so give the fleet one (<vm-nvme>1</vm-nvme>) or set "
+            "<vm-pci-mmio-bridge>false.")
+    if not pins_fork_qemu(cfg.qemu_ref):
+        print(
+            "Warning: <vm-pci-mmio-bridge> is true and <qemu-ref> is "
+            f"{cfg.qemu_ref}, which is not the fork QEMU. run-vm exits "
+            "when its QEMU has no pci-mmio-bridge device.", file=sys.stderr)
 
 
 def _check_nvme_vram(cfg: FleetConfig) -> None:
@@ -590,6 +637,16 @@ def _check_image_coherence(cfg: FleetConfig) -> None:
             if part.startswith("vfu."):
                 vfu[key] = part
 
+    # <spdk-image> is not in the stamp comparison, as <sdxi-image> is not:
+    # it is built apart from the fleet's batesste-ci-images run. What ties it
+    # to this fleet is the libvfio-user it was built against, which has to be
+    # QEMU's, so its vfu.<sha> is compared whether or not the tag is stamped.
+    if cfg.spdk_ref and any(d.type == "spdk" for d in cfg.devices):
+        spdk_tag = cfg.spdk_ref.rsplit("/", 1)[-1].partition(":")[2]
+        for part in spdk_tag.split("-"):
+            if part.startswith("vfu."):
+                vfu["<spdk-image>"] = part
+
     if unstamped:
         print("Warning: image(s) with no build stamp, excluded from the "
               "coherence check:", file=sys.stderr)
@@ -646,6 +703,23 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
     ernic_servers = _servers(cfg, "ernic", ernic_per_vm)
     rocjitsu_servers = _servers(cfg, "rocjitsu", rocjitsu_per_vm)
     sdxi_servers = _servers(cfg, "sdxi", sdxi_per_vm)
+    # SPDK exists only as a <devices> entry: there is no count for it.
+    spdk_servers = [d for d in cfg.devices if d.type == "spdk"]
+    if len(spdk_servers) > 1:
+        # The image serves its controller at <dir>/cntrl, and run-vm names a
+        # vfio-user device after its socket's stem, so two in one guest
+        # would be two devices called cntrl.
+        sys.exit(
+            "Error: <devices> has more than one <server type='spdk'>; a "
+            "guest takes one SPDK NVMe controller. Give it more namespaces "
+            "with <namespaces>.")
+    if spdk_servers and not cfg.spdk_ref:
+        sys.exit(
+            "Error: <devices> has a <server type='spdk'> but <spdk-image> is "
+            "empty; name the SPDK vfio-user image to run.")
+    if count * len(spdk_servers) > 254:
+        sys.exit(f"Error: {count} SPDK servers do not fit the stack's /24.")
+    _check_pci_mmio_bridge(cfg)
 
     # The mesh counts rocm-ernic PROCESSES, not VMs. At <ernic-per-vm> > 1 the
     # two differ by that factor, and a message naming only the VM count would
@@ -728,6 +802,7 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
     nics: list[dict[str, Any]] = []
     gpus: list[dict[str, Any]] = []
     sdxis: list[dict[str, Any]] = []
+    spdks: list[dict[str, Any]] = []
     for index in range(count):
         n = index + 1
         vm_nics = []
@@ -776,9 +851,20 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
                 "args": _option_words(sdxi_servers[d - 1]),
                 "id": getattr(sdxi_servers[d - 1], "id", None),
             })
+        vm_spdk = [{
+            "n": n, "d": 1, "o": n,
+            "service": f"spdk-{n}",
+            "addr": f"{net}.{_NET_SPDK}.{n}",
+            # A directory of its own: the image names its socket `cntrl`.
+            "sock_dir": f"/run/vfu/spdk-{n}",
+            "sock": f"/run/vfu/spdk-{n}/cntrl",
+            "env": _option_env(server),
+            "id": server.id,
+        } for server in spdk_servers]
         nics += vm_nics
         gpus += vm_gpus
         sdxis += vm_sdxi
+        spdks += vm_spdk
         # The NIC the guest's one address, MAC and stats file are read from:
         # the first on the mesh, which is the one that reaches other guests,
         # else the first. With no <devices> block that is the first NIC.
@@ -792,6 +878,7 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
             "nics": vm_nics,
             "gpus": vm_gpus,
             "sdxi": vm_sdxi,
+            "spdk": vm_spdk,
             # The order the guest sees, and therefore what ends up paired under
             # each switch. When <ernic-per-vm> == <rocjitsu-per-vm> (e.g. MI355X
             # with switch_width=2) this is 1:1 round-robin. When there are
@@ -803,6 +890,7 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
                 _nics_per_switch,
             ),
             "sdxi_socks": [x["sock"] for x in vm_sdxi],
+            "spdk_socks": [x["sock"] for x in vm_spdk],
             # Aliases to the first device of each kind. Everything that
             # predates multi-device VMs reads these, and at the default of one
             # each they are the only device there is.
@@ -825,6 +913,10 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
         "nics": nics,
         "gpus": gpus,
         "sdxis": sdxis,
+        "spdks": spdks,
+        "spdk_image": cfg.spdk_ref,
+        "pci_mmio_bridge": cfg.vm_pci_mmio_bridge,
+        "qemu_args": _qemu_args(cfg),
         "ernic_per_vm": ernic_per_vm,
         "rocjitsu_per_vm": rocjitsu_per_vm,
         "sdxi_per_vm": sdxi_per_vm,
@@ -1351,6 +1443,38 @@ def render_compose(
         out.append("      retries: 30")
         out.append("      start_period: 5s")
 
+    for spdk in spec["spdks"]:
+        n = spdk["n"]
+        out.append("")
+        out.append(f"  # ---- VM {n} SPDK NVMe ({spdk['id']}) ----")
+        out.append(f"  {spdk['service']}:")
+        out.append("    <<: *ernic-common")
+        out.append(f'    image: "{spec["spdk_image"]}"')
+        out.append("    networks:")
+        out.append("      fleet:")
+        out.append(f"        ipv4_address: {spdk['addr']}")
+        out.append('    restart: "no"')
+        # The image is configured through its environment, and serves one
+        # controller at <VFIO_USER_SOCKET_DIR>/cntrl.
+        #
+        # From the shared anchor it inherits SIGKILL as its stop signal and
+        # the ernic-stats mount. The mount is unused, as it is for rocjitsu
+        # and sdxi. The kill skips the image's own TERM handler, which is
+        # safe: its entrypoint removes a stale <dir>/cntrl when it starts,
+        # the health check reads /proc/net/unix and not the file, and the
+        # sockets are on a tmpfs that `down -v` destroys.
+        out.append("    environment:")
+        out.append(f"      - VFIO_USER_SOCKET_DIR={spdk['sock_dir']}")
+        for name, value in spdk["env"]:
+            out.append(f"      - {_yaml_word(name + '=' + value)}")
+        out.append("    healthcheck:")
+        sock_re = spdk["sock"].replace(".", "[.]")
+        out.append(f"      test: [\"CMD\", \"sh\", \"-c\", \"grep -qE ' 01 [0-9]+ {sock_re}$' /proc/net/unix\"]")
+        out.append("      interval: 2s")
+        out.append("      timeout: 5s")
+        out.append("      retries: 60")
+        out.append("      start_period: 10s")
+
     for vm in spec["vms"]:
         n = vm["n"]
         out.append("")
@@ -1365,7 +1489,7 @@ def render_compose(
         # Every device this guest attaches, not just the first. QEMU exits if
         # any one vfio-user socket is missing, so a guest that starts while
         # its eighth NIC is still coming up dies outright.
-        for dev in vm["nics"] + vm["gpus"] + vm["sdxi"]:
+        for dev in vm["nics"] + vm["gpus"] + vm["sdxi"] + vm["spdk"]:
             out.append(f"      {dev['service']}:")
             out.append("        condition: service_healthy")
         # Bound to <publish-bind-addr>, loopback unless the fleet says
@@ -1424,8 +1548,18 @@ def render_compose(
         #
         # ORDER MATTERS when switches are on: run-vm groups this list left to
         # right, so the NIC/GPU round-robin is what puts one of each below
-        # every switch.
-        all_vfio_socks = list(vm["vfio_socks"]) + list(vm["sdxi_socks"])
+        # every switch. The SDXI and then SPDK sockets follow: on root ports
+        # when the NIC/GPU count is a multiple of the width, else filling
+        # the last switch group.
+        if spec["pci_mmio_bridge"]:
+            out.append("          --pci-mmio-bridge \\")
+        # One --qemu-arg per word, with `=` so that a word starting with a
+        # dash is the option's value and not another option. Single-quoted
+        # for the shell this line is run by.
+        for word in spec["qemu_args"]:
+            out.append(f"          --qemu-arg={_sh_word(word)} \\")
+        all_vfio_socks = (list(vm["vfio_socks"]) + list(vm["sdxi_socks"])
+                          + list(vm["spdk_socks"]))
         out.append(f'          --vfio-userdev "{",".join(all_vfio_socks)}"')
 
     out.append("")
@@ -1701,7 +1835,8 @@ def render_compose(
     out.append("  # resolution', and because the mesh allocates a NEW node id on")
     out.append("  # every reconnect, the restarts walked the fleet toward the")
     out.append("  # 64-node protocol ceiling. Third octet is the service family:")
-    out.append(f"  #   {_NET_INFRA} infra   {_NET_ERNIC} ernic   {_NET_ROCJITSU} rocjitsu   {_NET_QEMU} qemu   {_NET_SDXI} sdxi")
+    out.append(f"  #   {_NET_INFRA} infra   {_NET_ERNIC} ernic   {_NET_ROCJITSU} rocjitsu   {_NET_QEMU} qemu   {_NET_SDXI} sdxi"
+               + (f"   {_NET_SPDK} spdk" if spec["spdks"] else ""))
     out.append("  fleet:")
     out.append("    driver: bridge")
     out.append("    ipam:")

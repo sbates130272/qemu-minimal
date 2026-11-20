@@ -1,0 +1,151 @@
+---
+# Configure a running guest of the xio stack for rocm-xio development.
+#
+# What `qemu-tool quick-start --flavor xio test` runs, against the inventory
+# the stack was rendered with:
+#
+#   cd ansible && ansible-playbook -i ../qemu/compose/xio/fleet-inventory.yml \
+#       --private-key <key> playbooks/vm-xio.yml
+#
+# The guest is the published rocm-golden image, which already has ROCm, the
+# pinned kernel, the ernic drivers and the amdgpu probe. This adds what is
+# the xio stack's own: the GPU firmware of the rocjitsu serving this guest,
+# and, when asked for with --xio-test, rocm-xio built at its pinned commit,
+# the rocm-xio module, the names /dev/xio-kv and /dev/xio-blk, and the
+# NVMe-oF controller in the second NIC.
+
+- name: Bring the xio guest's GPUs up
+  hosts: fleet
+  gather_facts: true
+  become: false
+  tasks:
+    - name: Install the CA certificate the controller names
+      become: true
+      ansible.builtin.copy:
+        dest: "{{ lookup('env', 'VM_CA_CERT_FILE') }}"
+        content: "{{ lookup('env', 'AMD_CERT') | b64decode }}"
+        mode: "0644"
+      when: lookup('env', 'AMD_CERT') | length > 0
+
+    - name: Rebuild the CA trust bundle
+      become: true
+      ansible.builtin.command:
+        cmd: update-ca-certificates
+      changed_when: true
+      when: lookup('env', 'AMD_CERT') | length > 0
+
+    - name: Install the gfx1250 firmware generated from this stack's rocjitsu
+      ansible.builtin.include_role:
+        name: rocjitsu_setup
+        tasks_from: firmware
+      vars:
+        rocjitsu_setup_firmware_live: true
+
+    - name: Check whether amdgpu is already resident
+      ansible.builtin.stat:
+        path: /dev/kfd
+      register: xio_kfd
+
+    - name: Ask the probe what state a resident amdgpu is in
+      ansible.builtin.command:
+        cmd: /usr/local/bin/amdgpu-probe --status
+      register: xio_probe_status
+      changed_when: false
+      failed_when: false
+      when: xio_kfd.stat.exists
+
+    - name: Probe amdgpu with the emulation parameters
+      become: true
+      ansible.builtin.command:
+        cmd: /usr/local/bin/amdgpu-probe
+      when: >-
+        not xio_kfd.stat.exists
+        or (xio_probe_status.stdout | default('') | trim) == 'unbound'
+      changed_when: true
+
+    - name: Wait for both GPUs in the KFD topology
+      ansible.builtin.shell:
+        cmd: |
+          for _ in $(seq 40); do
+            gpus=0
+            for f in /sys/class/kfd/kfd/topology/nodes/*/gpu_id; do
+              [ -r "$f" ] && [ "$(cat "$f")" != 0 ] && gpus=$((gpus + 1))
+            done
+            if [ "$gpus" -ge 2 ]; then
+              echo "$gpus GPU node(s)"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "$gpus GPU(s) in the KFD topology after 120 s; the xio guest has two." >&2
+          echo "amdgpu-probe --status: $(/usr/local/bin/amdgpu-probe --status 2>&1 || true)" >&2
+          echo "See: sudo dmesg | grep -i amdgpu" >&2
+          exit 1
+        executable: /bin/bash
+      changed_when: false
+
+# Off unless asked for: `quick-start --flavor xio test --xio-test` passes
+# quickstart_xio_test=true. Without it the guest has its GPUs and nothing of
+# rocm-xio, which is not in the golden image.
+- name: Install rocm-xio and check it
+  hosts: fleet
+  gather_facts: true
+  become: true
+  vars:
+    quickstart_xio_test: false
+    quickstart_artifacts_dir: /var/tmp/quickstart-artifacts
+  tasks:
+    - name: Skip unless the rocm-xio test was asked for
+      ansible.builtin.meta: end_play
+      when: not (quickstart_xio_test | bool)
+
+    - name: Build rocm-xio at its pinned commit
+      ansible.builtin.include_role:
+        name: rocm_xio_setup
+      vars:
+        rocm_xio_setup_users: ["{{ ansible_user }}"]
+
+    - name: Load the module and check the devices
+      ansible.builtin.include_role:
+        name: rocm_xio_setup
+        tasks_from: load
+
+    - name: Connect to the NVMe-oF controller in the second NIC
+      ansible.builtin.include_role:
+        name: rocm_xio_setup
+        tasks_from: nvmeof
+
+    # A new login, so that the group the role just added applies.
+    - name: Open /dev/rocm-xio as the login user, with no sudo
+      become: false
+      ansible.builtin.shell:
+        cmd: |
+          set -eu
+          sg {{ rocm_xio_setup_group | default('rocm-xio') }} -c \
+              'test -r /dev/rocm-xio && test -w /dev/rocm-xio'
+          xio-tester --list-endpoints >/dev/null
+          echo "usable by $(id -un)"
+        executable: /bin/sh
+      register: xio_access
+      changed_when: false
+
+    - name: Make the artifacts directory on the controller
+      become: false
+      ansible.builtin.file:
+        path: "{{ quickstart_artifacts_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    - name: Record the result on the controller
+      become: false
+      ansible.builtin.copy:
+        content: |
+          ## rocm-xio on {{ inventory_hostname }}
+
+          ```
+          xio: ready on {{ inventory_hostname }}: {{ rocm_xio_setup_seen.stdout_lines | join(', ') }}, {{ rocm_xio_setup_nvmeof_seen.stdout | trim }}, /dev/rocm-xio {{ xio_access.stdout | trim }}
+          ```
+        dest: "{{ quickstart_artifacts_dir }}/xio.md"
+        mode: "0644"
+      delegate_to: localhost

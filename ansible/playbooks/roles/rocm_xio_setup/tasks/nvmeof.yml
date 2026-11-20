@@ -1,0 +1,106 @@
+---
+# Connect the guest to the NVMe-oF controller inside one of its rocm-ernic
+# NICs: the server's `nvmeof` backend. For a running guest of the xio stack,
+# whose second NIC serves a block namespace and an NVMe-KV namespace.
+#
+# The target lives in the NIC's server, not on a network: it answers no ARP,
+# so the guest is given its address by hand, and it is reached over RDMA.
+
+- name: Load the NVMe fabrics modules
+  community.general.modprobe:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - nvme-fabrics
+    - nvme-rdma
+
+- name: Give the NIC an address beside the target's and name the target
+  ansible.builtin.shell:
+    cmd: |
+      set -eu
+      nic={{ rocm_xio_setup_nvmeof_nic | quote }}
+      [ -e "/sys/class/net/$nic" ] || {
+          echo "no network device $nic: it is the NIC whose server runs the nvmeof backend" >&2
+          exit 1
+      }
+      ip link set "$nic" up
+      ip addr replace {{ rocm_xio_setup_nvmeof_address | quote }} dev "$nic"
+      ip neigh replace {{ rocm_xio_setup_nvmeof_traddr | quote }} \
+          lladdr {{ rocm_xio_setup_nvmeof_lladdr | quote }} dev "$nic" nud permanent
+    executable: /bin/sh
+  changed_when: false
+
+- name: Look for a controller already connected to the subsystem
+  ansible.builtin.shell:
+    cmd: |
+      for s in /sys/class/nvme/nvme*; do
+          [ -r "$s/subsysnqn" ] || continue
+          [ "$(cat "$s/transport")" = rdma ] || continue
+          if [ "$(cat "$s/subsysnqn")" = {{ rocm_xio_setup_nvmeof_nqn | quote }} ]; then
+              basename "$s"
+              exit 0
+          fi
+      done
+    executable: /bin/sh
+  register: rocm_xio_setup_nvmeof_before
+  changed_when: false
+
+- name: Connect to the subsystem
+  ansible.builtin.command:
+    argv:
+      - nvme
+      - connect
+      - -t
+      - rdma
+      - -a
+      - "{{ rocm_xio_setup_nvmeof_traddr }}"
+      - -s
+      - "{{ rocm_xio_setup_nvmeof_trsvcid | string }}"
+      - -n
+      - "{{ rocm_xio_setup_nvmeof_nqn }}"
+      - -i
+      - "{{ rocm_xio_setup_nvmeof_queues | string }}"
+      - -W
+      - "{{ rocm_xio_setup_nvmeof_queues | string }}"
+  changed_when: true
+  timeout: 120
+  when: rocm_xio_setup_nvmeof_before.stdout | trim | length == 0
+
+- name: Find the controller and its namespaces
+  ansible.builtin.shell:
+    cmd: |
+      for _ in 1 2 3 4 5 6 7 8 9 10; do
+          for s in /sys/class/nvme/nvme*; do
+              [ -r "$s/subsysnqn" ] || continue
+              [ "$(cat "$s/transport")" = rdma ] || continue
+              [ "$(cat "$s/subsysnqn")" = {{ rocm_xio_setup_nvmeof_nqn | quote }} ] || continue
+              c=$(basename "$s")
+              # The block namespace is a disk; the KV one has only the
+              # generic character device.
+              block=; kv=
+              [ -b "/dev/${c}n1" ] && block="${c}n1"
+              g="/dev/ng${c#nvme}n2"
+              [ -c "$g" ] && kv=$(basename "$g")
+              if [ -n "$block" ] && [ -n "$kv" ]; then
+                  echo "nvmeof=$c block=$block kv=$kv"
+                  exit 0
+              fi
+          done
+          sleep 1
+      done
+      echo "nvmeof=none"
+    executable: /bin/sh
+  register: rocm_xio_setup_nvmeof_seen
+  changed_when: false
+
+- name: Fail unless the block and the KV namespace are both there
+  ansible.builtin.assert:
+    that:
+      - "'nvmeof=none' not in rocm_xio_setup_nvmeof_seen.stdout"
+    fail_msg: >-
+      No NVMe-oF controller for {{ rocm_xio_setup_nvmeof_nqn }} with a block
+      namespace (NSID 1) and a KV namespace (NSID 2) appeared. The NIC
+      {{ rocm_xio_setup_nvmeof_nic }} has to be the one whose server runs
+      <backend type='nvmeof'> with both namespaces, such as
+      size=1G,ns=2,kv=1,size=256M.
+    success_msg: "{{ rocm_xio_setup_nvmeof_seen.stdout | trim }}"

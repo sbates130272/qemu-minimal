@@ -111,7 +111,7 @@ jobs:
           # empty directory rather than erroring -- so each stack is checked
           # for its fleet file and for one file from every directory its
           # compose file mounts or builds from.
-          for stack in rocm-golden helios-tray mi355x-server; do
+          for stack in rocm-golden helios-tray mi355x-server xio; do
             paths="${paths}
               ./usr/share/qemu-tool/stacks/${stack}.xml
               ./usr/share/qemu-tool/compose/${stack}/docker-compose.yml

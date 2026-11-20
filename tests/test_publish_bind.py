@@ -25,7 +25,7 @@ from pathlib import Path
 from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-STACKS = ("rocm-golden", "helios-tray", "mi355x-server")
+STACKS = ("rocm-golden", "helios-tray", "mi355x-server", "xio")
 NS = 'xmlns="http://qemu-tool/fleet/1.0"'
 
 

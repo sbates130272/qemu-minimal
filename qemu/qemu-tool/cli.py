@@ -360,7 +360,11 @@ def _add_quick_start(sub: argparse._SubParsersAction) -> None:
             "with a gfx1250 GPU, an "
             "NVMe, a rocm-ernic NIC and an SDXI device. mi355x: 4 guests, "
             "each with 8 GPUs, 8 ernics and 8 PCIe switches. helios: 1 guest "
-            "with 4 gfx1250 GPUs, 8 ernics and an SDXI device."
+            "with 4 gfx1250 GPUs, 8 ernics and an SDXI device. xio: 1 guest "
+            "for rocm-xio, with 2 gfx1250 GPUs, two rocm-ernic NICs (one "
+            "on the loopback backend, one serving NVMe-oF), an NVMe behind "
+            "pci-mmio-bridge and an SPDK NVMe-KV controller; --xio-test "
+            "installs rocm-xio in it."
         ),
     )
     g.add_argument(
@@ -497,6 +501,22 @@ def _add_quick_start(sub: argparse._SubParsersAction) -> None:
             "3 s). Each is 262144 fp8 elements, the most one operation "
             "moves. Refused without --p4-test. Only meaningful with the "
             "test or all verbs."
+        ),
+    )
+    g.add_argument(
+        "--xio-test", action="store_true", default=False,
+        help=(
+            "Off by default. On the xio flavor, also install rocm-xio in "
+            "the guest and "
+            "check it: build xio-tester and the rocm-xio kernel module at "
+            "the pinned commit, load the module, give the login user "
+            "/dev/rocm-xio through the rocm-xio group, connect the guest "
+            "to the NVMe-oF NIC, and require two GPUs, /dev/rocm-xio, "
+            "/dev/xio-kv, /dev/xio-blk and the NVMe-oF controller's block "
+            "and KV namespaces. Without it the xio flavor's test verb "
+            "stages the GPU firmware and probes amdgpu, and builds "
+            "nothing. Refused on any other flavor. Only meaningful with "
+            "the test or all verbs."
         ),
     )
     g.add_argument(
@@ -863,6 +883,17 @@ def _add_run_vm(
         "--extra-hostfwd", action="append", default=None,
         metavar="RULE",
         help="Extra hostfwd rule e.g. tcp::9150-:9100. May be repeated.",
+    )
+    g.add_argument(
+        "--qemu-arg", action="append", default=None, dest="qemu_args",
+        metavar="WORD",
+        help=(
+            "One word to append to the QEMU command line as it is, after "
+            "everything run-vm writes. May be repeated, one word each; a "
+            "word that starts with a dash is given with '=': "
+            "--qemu-arg=-device --qemu-arg=pci-testdev. Default: the words "
+            "of <vm-qemu-args>. Nothing checks them: QEMU reads them."
+        ),
     )
     g.add_argument(
         "--data-nic-queues", type=int, default=_UNSET, metavar="N",
@@ -1592,6 +1623,7 @@ def _quick_start_cmd(args: argparse.Namespace) -> None:
         rocm_rdma_test=args.rocm_rdma_test,
         rocm_rdma_mode=args.rocm_rdma_mode,
         hipfile_test=args.hipfile_test,
+        xio_test=args.xio_test,
         variant=args.variant,
     )
 
@@ -1860,6 +1892,10 @@ def _extract_cli_overrides(
         raw_fwd = ns.get("extra_hostfwd")
         if raw_fwd is not None:
             overrides["extra_hostfwd"] = list(raw_fwd)
+
+        raw_qemu = ns.get("qemu_args")
+        if raw_qemu is not None:
+            overrides["qemu_args"] = list(raw_qemu)
 
     elif subcommand == "gen-vm":
         _take("size", "size")

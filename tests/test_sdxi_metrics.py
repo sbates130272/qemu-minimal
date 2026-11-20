@@ -60,7 +60,7 @@ WELCOME = PLAYBOOKS / "templates" / "rocm-golden-WELCOME.md.j2"
 GUEST_CHECK = REPO / "qemu" / "checks" / "rocm-golden.sh"
 COMPOSE = REPO / "qemu" / "compose"
 DASHBOARD = Path("grafana") / "dashboards" / "fleet" / "quickstart.json"
-NAMES = ("rocm-golden", "helios-tray", "mi355x-server")
+NAMES = ("rocm-golden", "helios-tray", "mi355x-server", "xio")
 README = REPO / "README.md"
 
 # sdxi_cli.ioctl.STAT_NAMES at sdxi_source_pin, in the order the STATS ioctl

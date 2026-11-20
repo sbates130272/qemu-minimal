@@ -15,6 +15,7 @@ import dataclasses
 import difflib
 import os
 import re
+import shlex
 import sys
 from pathlib import Path
 from typing import Any
@@ -39,7 +40,7 @@ def _xdg_fleet() -> Path:
 
 # The vfio-user servers a <devices> block may describe, in the order the
 # generator numbers and renders them.
-SERVER_TYPES: tuple[str, ...] = ("ernic", "rocjitsu", "sdxi")
+SERVER_TYPES: tuple[str, ...] = ("ernic", "rocjitsu", "sdxi", "spdk")
 
 # The options a <server> entry may set, per type: one child element each,
 # named after the server's long option, which is what the generator writes
@@ -66,6 +67,25 @@ SERVER_OPTIONS: dict[str, dict[str, str]] = {
     "sdxi": {
         "verbose": "flags",
     },
+    # The SPDK image takes its settings from the environment, not from a
+    # command line: SERVER_ENV says which variable each of these sets.
+    "spdk": {
+        "namespaces": "value",
+        "serial": "value",
+        "cpumask": "value",
+    },
+}
+
+# Option elements that set a container environment variable instead of
+# adding a command-line word, per type.
+SERVER_ENV: dict[str, dict[str, str]] = {
+    "spdk": {
+        "namespaces": "NVME_NAMESPACES",
+        "serial": "SPDK_SERIAL",
+        # The cores its poll-mode reactor spins on: 0x1, host CPU 0, unless
+        # this says otherwise. One full core for each server.
+        "cpumask": "SPDK_CPUMASK",
+    },
 }
 
 # The backends the pinned ernic server offers. "tcp" is the mesh the
@@ -84,6 +104,7 @@ _SERVER_SETTINGS = {
     "ernic": ("backend",),
     "rocjitsu": ("config",),
     "sdxi": (),
+    "spdk": (),
 }
 
 _SERVER_ID = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,31}\Z")
@@ -105,6 +126,27 @@ class Server:
     config: str | None = None
     # (option, value) in document order; a flag's value is "".
     options: tuple[tuple[str, str], ...] = ()
+
+
+def split_args(raw: str, element: str) -> list[str]:
+    """The words of a command-line element, split as a shell would.
+
+    Quotes group and are removed; nothing is expanded. ValueError says what
+    is wrong: an unclosed quote, or a control character or line break in a
+    word, which cannot be carried into a compose file's command.
+    """
+    if any(ord(c) < 0x20 and c not in "\t\n\r" or ord(c) == 0x7f
+           or c in "\u0085\u2028\u2029" for c in raw):
+        raise ValueError(f"{element} holds a control character")
+    try:
+        words = shlex.split(raw)
+    except ValueError as exc:
+        raise ValueError(f"{element} is not a command line: {exc}") from None
+    for word in words:
+        if "\n" in word or "\r" in word:
+            raise ValueError(
+                f"{element} has a word that spans lines: {word!r}")
+    return words
 
 
 def device_counts(devices: tuple[Server, ...]) -> dict[str, int]:
@@ -162,6 +204,9 @@ class FleetConfig:
     rocjitsu_ref: str = ""
     rocjitsu_digest: str = ""
     sdxi_ref: str = ""
+    # The SPDK vfio-user NVMe controller image. A <server type='spdk'> in
+    # <devices> is the only thing that runs it.
+    spdk_ref: str = ""
     backing_ref: str = ""
     backing_digest: str = ""
 
@@ -207,6 +252,9 @@ class FleetConfig:
     shm_size: str = "8g"
     vm_nvme: int = 0
     vm_nvme_vram: bool = False
+    # run-vm --pci-mmio-bridge: the fork QEMU's bridge device, which rocm-xio
+    # uses to reach the emulated NVMe's queues from the GPU side.
+    vm_pci_mmio_bridge: bool = False
     vm_backing_shared: bool = False
     vm_username: str = "ubuntu"
     vm_password: str = ""
@@ -215,6 +263,9 @@ class FleetConfig:
     # amdgpu cannot initialise. See the comment on VMConfig.vfio_user_root_port.
     vm_vfio_user_root_port: bool = True
     vm_extra_hostfwd: str = ""
+    # Words appended to every guest's QEMU command line, as typed in a
+    # shell: run-vm --qemu-arg, one per word.
+    vm_qemu_args: str = ""
     vm_ssh_key_file: str = ""
     vm_images_dir: str = "/var/lib/qemu-tool/images"
     # Guest socket count, and the 64-bit PCI hole. 0 or empty leaves them to
@@ -292,8 +343,8 @@ class FleetConfig:
     loki_data_dir: str = "/var/lib/qemu-tool/loki-data"
     alloy_image: str = "docker.io/grafana/alloy:v1.5.1"
 
-_STR, _EXPAND, _INT, _BOOL, _PORT, _ADDR = (
-    "str", "expand", "int", "bool", "port", "addr")
+_STR, _EXPAND, _INT, _BOOL, _PORT, _ADDR, _ARGS = (
+    "str", "expand", "int", "bool", "port", "addr", "args")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -321,6 +372,7 @@ _SETTINGS: tuple[_Setting, ...] = (
     _Setting("rocjitsu-ref", "rocjitsu_ref", _STR, sparse=True),
     _Setting("rocjitsu-digest", "rocjitsu_digest", _STR, sparse=True),
     _Setting("sdxi-image", "sdxi_ref", _STR, sparse=True),
+    _Setting("spdk-image", "spdk_ref", _STR, sparse=True),
     _Setting("backing-ref", "backing_ref", _STR, sparse=True),
     _Setting("backing-digest", "backing_digest", _STR, sparse=True),
     # Network
@@ -346,12 +398,14 @@ _SETTINGS: tuple[_Setting, ...] = (
     _Setting("vm-shm-size", "shm_size", _STR),
     _Setting("vm-nvme", "vm_nvme", _INT),
     _Setting("vm-nvme-vram", "vm_nvme_vram", _BOOL, sparse=True),
+    _Setting("vm-pci-mmio-bridge", "vm_pci_mmio_bridge", _BOOL, sparse=True),
     _Setting("vm-backing-shared", "vm_backing_shared", _BOOL),
     _Setting("vm-username", "vm_username", _STR),
     _Setting("vm-password", "vm_password", _STR),
     _Setting("vm-filesystem", "vm_filesystem", _STR),
     _Setting("vm-vfio-user-root-port", "vm_vfio_user_root_port", _BOOL),
     _Setting("vm-extra-hostfwd", "vm_extra_hostfwd", _STR),
+    _Setting("vm-qemu-args", "vm_qemu_args", _ARGS, sparse=True),
     _Setting("vm-ssh-key-file", "vm_ssh_key_file", _EXPAND),
     _Setting("vm-images-dir", "vm_images_dir", _EXPAND),
     _Setting("vm-cpu-sockets", "vm_cpu_sockets", _INT, sparse=True),
@@ -443,6 +497,11 @@ def _convert(setting: _Setting, raw: str) -> Any:
             raise ValueError(
                 f"{setting.tag} must be an IPv4 or IPv6 address with no "
                 f"zone, got {raw!r}") from None
+    if setting.kind == _ARGS:
+        # Checked here so `qemu-tool check` reports it; the readers split
+        # the same text again.
+        split_args(raw, f"<{setting.tag}>")
+        return raw.strip()
     if setting.kind == _EXPAND:
         # Here, once, so every reader sees the same path.
         return os.path.expanduser(os.path.expandvars(raw))
@@ -596,6 +655,25 @@ def _read_devices(block: ET.Element) -> tuple[tuple[Server, ...], list[str]]:
                     f"{where}: <config> names a file in the rocjitsu "
                     "image's configs directory, one name of letters, "
                     f"digits, '.', '_' and '-', got {text!r}")
+                continue
+            if kind == "spdk" and name == "serial" and not re.match(
+                    r"[A-Za-z0-9_-]{1,20}\Z", text):
+                problems.append(
+                    f"{where}: <serial> is an NVMe serial number, 1 to 20 "
+                    f"letters, digits, '_' and '-', got {text!r}")
+                continue
+            if kind == "spdk" and name == "cpumask" and not re.match(
+                    r"0x[0-9A-Fa-f]{1,32}\Z", text):
+                problems.append(
+                    f"{where}: <cpumask> is a hexadecimal core mask such as "
+                    f"0x4, got {text!r}")
+                continue
+            if kind == "spdk" and name == "namespaces" and not re.match(
+                    r"[A-Za-z0-9_.:,/=-]+\Z", text):
+                problems.append(
+                    f"{where}: <namespaces> is the image's NVME_NAMESPACES, "
+                    f"one word such as kv:mem or lba:malloc:512M,kv:mem, "
+                    f"got {text!r}")
                 continue
             if name in table:
                 options.append((name, text))

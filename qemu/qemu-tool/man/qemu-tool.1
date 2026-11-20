@@ -374,6 +374,21 @@ One VM with 4 gfx1250 GPUs, 8 ernics and one SDXI device, driven by the
 bundled
 .IR qemu/stacks/helios\-tray.xml .
 The ansible configure-and-test step does not run for this flavor.
+.TP
+.B xio
+One VM for rocm\-xio development: 2 gfx1250 GPUs, two rocm\-ernic NICs (one
+on the loopback backend, one serving NVMe\-oF with a block and a KV
+namespace), an NVMe behind the fork QEMU's pci\-mmio\-bridge and an SPDK
+NVMe\-KV controller, driven by the bundled
+.IR qemu/stacks/xio.xml .
+Its
+.B test
+verb runs
+.IR vm\-xio.yml ,
+which stages the GPU firmware and probes amdgpu; with
+.B \-\-xio\-test
+it also installs rocm\-xio in the guest and checks it. The other optional
+tests are not available on this flavor.
 .RE
 .TP
 .BR \-f ", " \-\-follow
@@ -452,6 +467,31 @@ Only meaningful with the
 or
 .B all
 verbs; any other verb ignores all three switches and says so.
+.TP
+.B \-\-xio\-test
+On the
+.B xio
+flavor, also install rocm\-xio in the guest and check it: build
+.B xio\-tester
+and the rocm\-xio kernel module at the pinned commit, load the module, give
+the login user
+.I /dev/rocm\-xio
+through the
+.B rocm\-xio
+group, connect the guest to the NVMe\-oF controller in its second NIC, and
+require two GPUs,
+.IR /dev/rocm\-xio ,
+.IR /dev/xio\-kv ,
+.I /dev/xio\-blk
+and the NVMe\-oF controller's block and KV namespaces. Off by default:
+without it the xio flavor's
+.B test
+verb stages the GPU firmware and probes amdgpu, and builds nothing. Refused
+on any other flavor. Only meaningful with the
+.B test
+or
+.B all
+verbs.
 .TP
 .B \-\-hipfile\-test
 Also run the hipFile test: on every guest, read a file on its NVMe
@@ -792,6 +832,19 @@ Append an additional SLIRP host-forward rule, e.g.\&
 .IR tcp::9150\-:9100 .
 May be repeated.
 .TP
+.BI \-\-qemu\-arg= WORD
+Append one word to the QEMU command line as it is, after everything
+.B run\-vm
+writes and ahead of the guest's name and serial number. May be repeated, one
+word each; a word that starts with a dash needs the
+.B =
+form:
+.BR "\-\-qemu\-arg=\-device \-\-qemu\-arg=pci\-testdev" .
+Default: the words of
+.BR <vm\-qemu\-args> .
+Nothing checks the words: QEMU reads them, and one it refuses stops the guest
+at its start.
+.TP
 .B \-\-dry\-run
 Print the QEMU command that would be executed and exit without running it.
 .TP
@@ -997,7 +1050,7 @@ for the fleet a fleet XML file describes. Each rocm-ernic is one node of a
 TCP mesh; the first is the mesh manager and the rest are workers that dial
 it.
 .PP
-Three stacks ship, each rendered from the fleet file of the same name:
+Four stacks ship, each rendered from the fleet file of the same name:
 .TP
 .B rocm\-golden
 .I qemu/stacks/rocm\-golden.xml
@@ -1014,6 +1067,12 @@ runs.
 .I qemu/stacks/mi355x\-server.xml
 \(em one guest with 8 GPUs and 8 ernics, one of each below each of 8 PCIe
 switches.
+.TP
+.B xio
+.I qemu/stacks/xio.xml
+\(em one guest for rocm\-xio: 2 GPUs, an ernic on the loopback backend and
+one serving NVMe\-oF, an NVMe behind pci\-mmio\-bridge and an SPDK NVMe\-KV
+controller.
 .PP
 Any other fleet is one of those files plus an overlay, rendered somewhere of
 your own with
@@ -1052,9 +1111,10 @@ the render exactly as an edit to the first file does.
 .BI \-\-stack " NAME"
 Stack to generate:
 .BR rocm\-golden ,
-.B helios\-tray
+.BR helios\-tray ,
+.B mi355x\-server
 or
-.BR mi355x\-server .
+.BR xio .
 It decides which stack's assets (Grafana dashboards, logging configuration,
 the tapsetup image) are mirrored beside the render and, without
 .BR \-\-output\-dir ,
@@ -1249,9 +1309,10 @@ or handed to it.
 .BI \-\-stack " NAME"
 Shipped stack to run:
 .BR rocm\-golden ,
-.B helios\-tray
+.BR helios\-tray ,
+.B mi355x\-server
 or
-.BR mi355x\-server .
+.BR xio .
 Default:
 .BR rocm\-golden .
 .TP
@@ -2163,6 +2224,12 @@ whose children each hold one setting:
 .PP
 .I qemu/stacks/rocm\-golden.xml
 is the annotated reference. An element that is absent keeps its default.
+.B <vm\-qemu\-args>
+holds extra arguments for every guest's QEMU, written as in a shell (quotes
+group, nothing is expanded); a stack passes each word to
+.B run\-vm
+as
+.BR \-\-qemu\-arg .
 The parser is strict: an element it does not know, an element given twice in
 one file, an attribute, a nested element and text directly under
 .B <fleet>
@@ -2195,9 +2262,10 @@ entry each, and is how two servers of one type are given different settings:
 .B type
 is
 .BR ernic ,
-.B rocjitsu
+.BR rocjitsu ,
+.B sdxi
 or
-.BR sdxi ;
+.BR spdk ;
 .B id
 names the entry for later layers and for error messages, and does not rename
 the container. With a block,
@@ -2220,7 +2288,14 @@ for rocjitsu
 and
 .BR <wait\-checking> ;
 for sdxi
-.BR <verbose/> .
+.BR <verbose/> ;
+for spdk, an SPDK vfio\-user NVMe controller run from
+.BR <spdk\-image> ,
+.B <namespaces>
+and
+.BR <serial> ,
+which set the image's NVME_NAMESPACES and the controller's serial number.
+A guest takes one spdk server.
 Options the generator derives, the socket and the MAC among them, cannot be
 set.
 .B <backend>
@@ -2559,9 +2634,10 @@ there when the site wants one.
 .I /usr/share/qemu-tool/stacks/
 The fleet file of each shipped stack:
 .IR rocm\-golden.xml ,
-.I helios\-tray.xml
+.IR helios\-tray.xml ,
+.I mi355x\-server.xml
 and
-.IR mi355x\-server.xml .
+.IR xio.xml .
 .I rocm\-golden.xml
 documents the elements.
 .TP

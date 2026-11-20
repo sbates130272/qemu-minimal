@@ -486,7 +486,7 @@ pipx install qemu-tool
 ```
 
 That gives you a working `gen-vm` and `run-vm`: both package manifests, the
-three fleet files, the man page and the compose stacks all ship inside the
+four fleet files, the man page and the compose stacks all ship inside the
 wheel, so none of those depend on a checkout.
 
 `qemu-tool compose` is the exception. The stacks are there, but each one
@@ -609,7 +609,7 @@ qemu-minimal/
     pyproject.toml  Python package manifest for qemu-tool
     qemu-tool/      Python package (qemu-tool CLI, imported as qemu_tool)
     packages.d/     Cloud-init package manifests
-    stacks/         Fleet XML settings: rocm-golden.xml, helios-tray.xml, mi355x-server.xml
+    stacks/         Fleet XML settings: rocm-golden.xml, helios-tray.xml, mi355x-server.xml, xio.xml
     compose/        The compose stack generated from each of those, same names
   libvirt/
     virt-install-ubuntu  Create VMs via libvirt
@@ -646,7 +646,7 @@ server containers and the `qemu-system` guests in one command. This is the
 recommended path when you do not have a physical GPU to pass through but need
 a guest that sees PCIe GPU devices.
 
-There are three stacks. Each is **generated** by `qemu-tool gen-compose` from
+There are four stacks. Each is **generated** by `qemu-tool gen-compose` from
 the fleet XML file of the same name in `qemu/stacks/`, and committed so it
 can be read in a diff and used with plain `docker compose`:
 
@@ -655,10 +655,26 @@ can be read in a diff and used with plain `docker compose`:
 | `rocm-golden` (the default) | [`qemu/stacks/rocm-golden.xml`](qemu/stacks/rocm-golden.xml) | 2 | 1 GPU, 1 NVMe, 1 RDMA NIC (P4 in guest scope), 1 SDXI |
 | `helios-tray` | [`qemu/stacks/helios-tray.xml`](qemu/stacks/helios-tray.xml) | 1 | 4 GPUs, 8 RDMA NICs, 4 PCIe switches, 1 SDXI |
 | `mi355x-server` | [`qemu/stacks/mi355x-server.xml`](qemu/stacks/mi355x-server.xml) | 4 | 8 GPUs, 8 RDMA NICs, 8 PCIe switches |
+| `xio` | [`qemu/stacks/xio.xml`](qemu/stacks/xio.xml) | 1 | 2 GPUs, 2 RDMA NICs (loopback backend; NVMe-oF with a block and a KV namespace), 1 NVMe behind `pci-mmio-bridge`, 1 SPDK NVMe-KV controller |
 
 `qemu-tool quick-start` is the easy way to run one (`--flavor default`, which
-is the rocm-golden fleet, `helios` or `mi355x`): it pulls the guest image,
-creates the overlays, sizes the guests and tests them. By hand it is:
+is the rocm-golden fleet, `helios`, `mi355x` or `xio`): it pulls the guest
+image, creates the overlays, sizes the guests and tests them. `--flavor xio`
+is the rocm-xio development guest. Its `test` verb stages the GPU firmware
+and probes amdgpu; with `--xio-test` it also installs rocm-xio, which is not
+in the guest image:
+
+```bash
+qemu-tool quick-start --flavor xio                  # boot the guest
+qemu-tool quick-start --flavor xio test --xio-test  # install rocm-xio, check it
+qemu-tool ssh xio-1 -- xio-tester --list-endpoints  # no sudo needed
+```
+
+`--xio-test` builds `xio-tester` and the `rocm-xio` kernel module at a pinned
+commit, loads the module, lets the login user open `/dev/rocm-xio` through
+the `rocm-xio` group, connects the guest to the NVMe-oF controller in its
+second NIC, and checks for `/dev/rocm-xio`, `/dev/xio-kv`, `/dev/xio-blk`
+and that controller's block and KV namespaces. By hand, any stack is:
 
 ```bash
 # the guest overlays first: one pull, then overlays on that backing file
@@ -803,6 +819,21 @@ the whole value goes to **every** guest.
 `<vm-extra-hostfwd>a,b</vm-extra-hostfwd>` is two hostfwd rules per guest,
 not one rule each for two guests.
 
+`<vm-qemu-args>` passes extra arguments to every guest's QEMU, written as
+you would type them in a shell:
+
+```xml
+<vm-qemu-args>-device pci-testdev -d guest_errors -D /tmp/qemu.log</vm-qemu-args>
+```
+
+Quotes group and nothing is expanded. The words go on the end of the QEMU
+command line `run-vm` builds, ahead of the guest's name. Nothing checks
+them: a word QEMU refuses stops the guest when it starts, and the reason is
+in that guest's log (`qemu-tool compose logs qemu-1`). An argument that
+repeats one `run-vm` already writes is QEMU's to resolve, and for most
+options the last one wins. `run-vm --qemu-arg=WORD`, repeatable, is the same
+thing for one guest outside a stack.
+
 `<vm-vcpus>` must not drop below 4 on a stack with an ernic. `ionic_lif_size()`
 derives its EQ count from `num_online_cpus()` and `ionic_create_rdma_admin()`
 rejects fewer than `IONIC_EQ_COUNT_MIN`, so `ionic_rdma` never probes; the only
@@ -886,6 +917,16 @@ given different settings:
 | `ernic` | `<log-level>`, `<nic-profile>` (repeatable), `<stats-interval-ms>`, `<eth-queues>`, `<inject>` (repeatable) |
 | `rocjitsu` | `<node>`, `<cpu-thread-budget>`, `<wait-checking>` |
 | `sdxi` | `<verbose/>` (repeatable) |
+| `spdk` | `<namespaces>`, `<serial>`, `<cpumask>` |
+
+A `spdk` entry is an SPDK vfio-user NVMe controller, run from `<spdk-image>`.
+Its two options set the image's `NVME_NAMESPACES` (for example `kv:mem`, one
+in-memory NVMe-KV namespace) and the controller's serial number;
+`<cpumask>` sets the cores its poll-mode reactor spins on (`0x1`, host CPU 0,
+by default: one full core per server). A guest takes one, and the image's
+`vfu.<sha>` has to be the `<qemu-ref>`'s. `<vm-pci-mmio-bridge>true</vm-pci-mmio-bridge>`, a flat setting
+beside the block, gives each guest the fork QEMU's `pci-mmio-bridge` device
+for its emulated NVMe; it needs `<vm-nvme>` of at least 1.
 
 Every guest of a fleet gets the same devices, in the generator's order (NICs,
 then GPUs, or grouped under PCIe switches), not the order of the block. On a
@@ -936,7 +977,7 @@ pulls the image named by `<backing-ref>`, which is a dated tag of the
 repository `<publish-ref>` names: the guest a fleet boots is one those
 elements built and the publish workflow qualified. `<backing-ref>` does not
 follow a publish by itself; it is moved by hand to a newer dated tag, in all
-three fleet files, and `gen-compose` refuses `latest` there because a tag
+four fleet files, and `gen-compose` refuses `latest` there because a tag
 that moves would leave each host on whichever image it pulled first. From
 the checkout root, because `<bake-packages>` and `<bake-playbook>` are
 resolved against the current directory:
@@ -1272,6 +1313,7 @@ takes every stack on the system.
 | `--no-qemu-guest-agent` | off | Omit guest agent channel |
 | `--backing-shared` | off | Disable image locking for shared backing files |
 | `--extra-hostfwd RULE` | — | Extra hostfwd rule e.g. `tcp::9150-:9100` (repeatable) |
+| `--qemu-arg=WORD` | the words of `<vm-qemu-args>` | One word appended to the QEMU command line as it is (repeatable, one word each) |
 | `--dry-run` | off | Print QEMU command instead of running |
 | `--convert-to-libvirt [FILE]` | — | Emit libvirt domain XML to FILE (default `<vm>.xml`) |
 
@@ -1280,7 +1322,7 @@ takes every stack on the system.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--xml FILE` | a `fleet.xml` on the search path, else the stack's own file | Fleet XML. Repeatable: a later file overrides the elements it sets |
-| `--stack NAME` | the stack named after the first `--xml` file, else `rocm-golden` | Stack to generate: `rocm-golden`, `helios-tray`, `mi355x-server` |
+| `--stack NAME` | the stack named after the first `--xml` file, else `rocm-golden` | Stack to generate: `rocm-golden`, `helios-tray`, `mi355x-server`, `xio` |
 | `--output-dir DIR` | the stack directory | Where to write |
 | `--check` | off | Exit non-zero if regenerating would change anything; writes nothing |
 | `--dry-run` | off | Print the generated files instead of writing them |
@@ -1295,7 +1337,7 @@ overwrites the committed stack and breaks `--check`.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--stack NAME` | `rocm-golden` | Shipped stack to run: `rocm-golden`, `helios-tray`, `mi355x-server` |
+| `--stack NAME` | `rocm-golden` | Shipped stack to run: `rocm-golden`, `helios-tray`, `mi355x-server`, `xio` |
 | `--stack-dir DIR` | `$QEMU_TOOL_STACK`, else the cwd if it is a rendered stack | Run a stack rendered by `gen-compose --output-dir DIR`. Mutually exclusive with `--stack` |
 | `--images DIR` | `<vm-images-dir>` | Guest images directory, passed to `docker compose` as `VM_IMAGES_DIR` |
 | `--xml FILE` | none for a stack found by its directory, else the search path | Fleet XML. Repeatable: a later file overrides the elements it sets |

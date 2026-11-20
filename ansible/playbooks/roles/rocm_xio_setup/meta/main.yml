@@ -1,0 +1,19 @@
+---
+galaxy_info:
+  role_name: rocm_xio_setup
+  author: Stephen Bates
+  description: >-
+    Build rocm-xio from a pinned commit in the guest: the xio-tester program
+    and the rocm-xio kernel module, with the udev rule that names the stack's
+    two NVMe devices /dev/xio-kv and /dev/xio-blk. Needs ROCm and the running
+    kernel's headers in the guest. The build needs no device; the `load`
+    tasks do.
+  license: MIT
+  min_ansible_version: "2.18"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - noble
+        - resolute
+
+dependencies: []
