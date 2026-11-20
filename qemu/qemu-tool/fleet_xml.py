@@ -14,6 +14,7 @@ from __future__ import annotations
 import dataclasses
 import difflib
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,115 @@ def _xdg_fleet() -> Path:
     raw = os.environ.get("XDG_CONFIG_HOME")
     base = Path(raw).expanduser() if raw else Path.home() / ".config"
     return base / "qemu-tool" / "fleet.xml"
+
+
+# The vfio-user servers a <devices> block may describe, in the order the
+# generator numbers and renders them.
+SERVER_TYPES: tuple[str, ...] = ("ernic", "rocjitsu", "sdxi")
+
+# The options a <server> entry may set, per type: one child element each,
+# named after the server's long option, which is what the generator writes
+# (`<eth-queues>4</eth-queues>` is `--eth-queues 4`). "value" is an option
+# that takes one; "values" may be given more than once and keeps its order;
+# "flags" takes none and may be repeated. Options the generator derives
+# (socket, MAC, stats file, TAP, P4) are not here, so they cannot be set.
+# Nor are the two that break a generated stack: --socket-group narrows who
+# may connect to the socket QEMU dials, and --log-file takes the server's
+# output away from `docker compose logs` and the log collector.
+SERVER_OPTIONS: dict[str, dict[str, str]] = {
+    "ernic": {
+        "log-level": "value",
+        "nic-profile": "values",
+        "stats-interval-ms": "value",
+        "eth-queues": "value",
+        "inject": "values",
+    },
+    "rocjitsu": {
+        "node": "value",
+        "cpu-thread-budget": "value",
+        "wait-checking": "value",
+    },
+    "sdxi": {
+        "verbose": "flags",
+    },
+}
+
+# The backends the pinned ernic server offers. "tcp" is the mesh the
+# generator derives, and is the same as naming none.
+BACKEND_TYPES: tuple[str, ...] = ("none", "loopback", "tcp", "nvmeof", "s3")
+
+# The per-VM counts a <devices> block replaces: element, field, server type.
+_COUNTS = (
+    ("ernic-per-vm", "ernic_per_vm", "ernic"),
+    ("rocjitsu-per-vm", "rocjitsu_per_vm", "rocjitsu"),
+    ("sdxi-per-vm", "sdxi_per_vm", "sdxi"),
+)
+
+# The children that are not command-line options, per type.
+_SERVER_SETTINGS = {
+    "ernic": ("backend",),
+    "rocjitsu": ("config",),
+    "sdxi": (),
+}
+
+_SERVER_ID = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,31}\Z")
+
+
+@dataclasses.dataclass(frozen=True)
+class Server:
+    """One <server> of a <devices> block: a device every guest gets.
+
+    None means the entry did not say, which is what lets a later layer's
+    entry with the same id change one thing and leave the rest.
+    """
+    type: str
+    id: str
+    # ernic: the -b of this NIC's server, "nvmeof:kv=1,size=256M". "tcp" is
+    # the mesh the generator derives.
+    backend: str | None = None
+    # rocjitsu: the config file, in place of <rocjitsu-config>.
+    config: str | None = None
+    # (option, value) in document order; a flag's value is "".
+    options: tuple[tuple[str, str], ...] = ()
+
+
+def device_counts(devices: tuple[Server, ...]) -> dict[str, int]:
+    """How many servers of each type one guest gets."""
+    return {t: sum(1 for d in devices if d.type == t) for t in SERVER_TYPES}
+
+
+def merge_devices(
+    base: tuple[Server, ...], overlay: tuple[Server, ...]
+) -> tuple[Server, ...]:
+    """Lay one layer's <devices> over another's, entry by entry.
+
+    An entry whose id the base already has changes what it names and keeps
+    the rest, in the base's position; a new id is appended. A layer adds and
+    changes; it cannot take a device away. ValueError when an entry would
+    change a server's type.
+    """
+    merged = list(base)
+    index = {d.id: i for i, d in enumerate(merged)}
+    for entry in overlay:
+        if entry.id not in index:
+            index[entry.id] = len(merged)
+            merged.append(entry)
+            continue
+        old = merged[index[entry.id]]
+        if old.type != entry.type:
+            raise ValueError(
+                f"<server id='{entry.id}'> is type '{entry.type}' here and "
+                f"'{old.type}' in an earlier layer; an id names one server")
+        # An option the overlay names replaces every value the base had
+        # for it; the others stay, in their order.
+        named = {name for name, _ in entry.options}
+        merged[index[entry.id]] = dataclasses.replace(
+            old,
+            options=tuple(o for o in old.options if o[0] not in named)
+            + entry.options,
+            **{f: getattr(entry, f) for f in ("backend", "config")
+               if getattr(entry, f) is not None})
+    return tuple(merged)
 
 
 @dataclasses.dataclass
@@ -86,6 +196,10 @@ class FleetConfig:
     # Path to a bmv2 JSON program inside the ernic container. Empty leaves the
     # engine in pass-through mode (--p4 without --p4-program).
     p4_program: str = ""
+    # The <devices> block: the vfio-user servers every guest gets, one entry
+    # each. Empty means the counts in ernic_per_vm, rocjitsu_per_vm and
+    # sdxi_per_vm describe them; non-empty replaces those counts.
+    devices: tuple[Server, ...] = ()
 
     # ---- Per-VM defaults ----
     vm_vcpus: int = 0
@@ -343,12 +457,211 @@ def _split_tag(qualified: str) -> tuple[str, str]:
     return "", qualified
 
 
+_DEVICES = "devices"
+
+
+def _read_devices(block: ET.Element) -> tuple[tuple[Server, ...], list[str]]:
+    """The entries of one <devices> element, and what is wrong with it.
+
+    As strict as the rest of the format: every element, attribute and piece
+    of text in the block is either one this reads or a problem.
+    """
+    problems: list[str] = []
+    servers: list[Server] = []
+    if block.attrib:
+        problems.append(
+            f"<devices> takes no attributes, found "
+            f"{', '.join(sorted(block.attrib))}")
+    stray = [(block.text or "").strip()] + [(c.tail or "").strip() for c in block]
+    for text in filter(None, stray):
+        problems.append(f"text directly under <devices>: {text[:40]!r}")
+    ids: set[str] = set()
+    for entry in block:
+        ns, local = _split_tag(entry.tag)
+        if ns != NS_FLEET:
+            problems.append(
+                f"<{local}> in <devices> is in namespace {ns!r}, not the "
+                f"fleet namespace {NS_FLEET!r}")
+            continue
+        if local != "server":
+            problems.append(
+                f"<devices> holds <{local}>; its entries are <server> elements")
+            continue
+        extra = sorted(set(entry.attrib) - {"type", "id"})
+        if extra:
+            problems.append(
+                f"<server> takes the attributes type and id, found "
+                f"{', '.join(extra)}")
+        kind = entry.attrib.get("type", "")
+        ident = entry.attrib.get("id", "")
+        where = f"<server id='{ident}'>" if ident else "a <server>"
+        if kind not in SERVER_TYPES:
+            problems.append(
+                f"{where} has type {kind!r}; the types are "
+                f"{', '.join(SERVER_TYPES)}")
+            continue
+        if not _SERVER_ID.match(ident):
+            problems.append(
+                f"a <server type='{kind}'> has id {ident!r}; an id starts "
+                "with a letter and holds letters, digits, '_', '.' and '-', "
+                "32 characters at most")
+            continue
+        if ident in ids:
+            problems.append(f"{where} appears more than once")
+            continue
+        ids.add(ident)
+        if (entry.text or "").strip() or any((c.tail or "").strip() for c in entry):
+            problems.append(f"{where} holds text outside its elements")
+        table = SERVER_OPTIONS[kind]
+        allowed = _SERVER_SETTINGS[kind] + tuple(table)
+        values: dict[str, str] = {}
+        options: list[tuple[str, str]] = []
+        for child in entry:
+            cns, name = _split_tag(child.tag)
+            if cns != NS_FLEET:
+                problems.append(
+                    f"{where}: <{name}> is in namespace {cns!r}, not the "
+                    f"fleet namespace {NS_FLEET!r}")
+                continue
+            if name not in allowed:
+                close = difflib.get_close_matches(name, allowed, n=1)
+                hint = f"; did you mean <{close[0]}>?" if close else ""
+                problems.append(
+                    f"{where} of type '{kind}' holds <{name}>{hint} It takes "
+                    + ", ".join(f"<{a}>" for a in allowed))
+                continue
+            repeats = table.get(name) in ("values", "flags")
+            if not repeats and (
+                    name in values or any(o[0] == name for o in options)):
+                problems.append(f"{where} holds <{name}> more than once")
+                continue
+            if len(child):
+                problems.append(f"{where}: <{name}> holds a nested element")
+                continue
+            text = (child.text or "").strip()
+            if name == "backend":
+                extra = sorted(set(child.attrib) - {"type"})
+                backend = child.attrib.get("type", "")
+                if extra or not backend:
+                    problems.append(
+                        f"{where}: <backend> takes one attribute, type, "
+                        f"naming the backend ({', '.join(BACKEND_TYPES)}); "
+                        "its options are the element's text")
+                    continue
+                if backend not in BACKEND_TYPES:
+                    close = difflib.get_close_matches(backend, BACKEND_TYPES, n=1)
+                    hint = f"; did you mean {close[0]!r}?" if close else ""
+                    problems.append(
+                        f"{where}: unknown <backend> type {backend!r}{hint} "
+                        f"The types are {', '.join(BACKEND_TYPES)}")
+                    continue
+                if any(c.isspace() for c in text):
+                    problems.append(
+                        f"{where}: the options of <backend> are one word, "
+                        f"got {text!r}")
+                    continue
+                if backend == "tcp" and text:
+                    problems.append(
+                        f"{where}: <backend type='tcp'> takes no options. It "
+                        "is the mesh the generator derives: manager, "
+                        "workers and addresses are not typed here")
+                    continue
+                values[name] = f"{backend}:{text}" if text else backend
+                continue
+            if child.attrib:
+                problems.append(
+                    f"{where}: <{name}> takes no attributes, found "
+                    f"{', '.join(sorted(child.attrib))}")
+                continue
+            if name in table and table[name] == "flags":
+                if text:
+                    problems.append(
+                        f"{where}: <{name}> is a switch and takes no value, "
+                        f"got {text!r}")
+                    continue
+                options.append((name, ""))
+                continue
+            if not text:
+                problems.append(f"{where}: <{name}> is empty")
+                continue
+            if any(ord(c) < 0x20 or ord(c) == 0x7f
+                   or c in "\u0085\u2028\u2029" for c in text):
+                problems.append(
+                    f"{where}: <{name}> holds a line break or a control "
+                    "character")
+                continue
+            if name == "config" and not re.match(
+                    r"[A-Za-z0-9][A-Za-z0-9._-]*\Z", text):
+                problems.append(
+                    f"{where}: <config> names a file in the rocjitsu "
+                    "image's configs directory, one name of letters, "
+                    f"digits, '.', '_' and '-', got {text!r}")
+                continue
+            if name in table:
+                options.append((name, text))
+            else:
+                values[name] = text
+        servers.append(Server(
+            type=kind, id=ident, backend=values.get("backend"),
+            config=values.get("config"), options=tuple(options)))
+    if not servers and not problems:
+        problems.append(
+            "<devices> holds no <server>; remove it, or list the servers "
+            "every guest gets")
+    return tuple(servers), problems
+
+
+def merge_devices_or_exit(
+    base: tuple[Server, ...], overlay: tuple[Server, ...], path: Path
+) -> tuple[Server, ...]:
+    try:
+        return merge_devices(base, overlay)
+    except ValueError as exc:
+        sys.exit(f"Error: {path}: {exc}")
+
+
+def _count_conflicts(
+    devices: tuple[Server, ...], cfg: FleetConfig, named: frozenset[str] | set[str]
+) -> list[str]:
+    """The counts `named` sets that disagree with a <devices> block.
+
+    A block replaces the three counts, so one that says something else is a
+    setting that would never apply. One that agrees is harmless, and is what
+    emit() writes.
+    """
+    if not devices:
+        return []
+    counts = device_counts(devices)
+    return [
+        f"<{tag}>{getattr(cfg, field)} has no effect: the <devices> block "
+        f"lists {counts[kind]} {kind} server(s) for each guest and replaces "
+        f"the count. Change the block, or remove <{tag}>"
+        for tag, field, kind in _COUNTS
+        if field in named and getattr(cfg, field) != counts[kind]]
+
+
+def _settle_devices(cfg: FleetConfig) -> None:
+    """Make the per-VM counts say what a <devices> block describes.
+
+    Everything that asks how many NICs, GPUs or SDXI devices a guest has
+    reads the counts, so they are set from the block once, here.
+    """
+    if not cfg.devices:
+        return
+    counts = device_counts(cfg.devices)
+    cfg.ernic_per_vm = counts["ernic"]
+    cfg.rocjitsu_per_vm = counts["rocjitsu"]
+    cfg.sdxi_per_vm = counts["sdxi"]
+
+
 def _structure_problems(root: ET.Element) -> list[str]:
     """Everything in the document that is not a known setting, used once.
 
-    The format is flat, so anything else is a mistake that used to be read as
-    "setting absent": a misspelt element, a second copy of one, a value put in
-    an attribute. Comments never reach here; the parser drops them.
+    The settings are flat, so anything else is a mistake that used to be read
+    as "setting absent": a misspelt element, a second copy of one, a value put
+    in an attribute. <devices> is the one element with structure, and
+    _read_devices is as strict about what is inside it. Comments never reach
+    here; the parser drops them.
     """
     problems: list[str] = []
     if root.attrib:
@@ -366,8 +679,14 @@ def _structure_problems(root: ET.Element) -> list[str]:
                 f"<{local}> is in namespace {ns!r}, not the fleet namespace "
                 f"{NS_FLEET!r}")
             continue
+        if local == _DEVICES:
+            if local in seen:
+                problems.append(f"<{local}> appears more than once")
+            seen.add(local)
+            continue
         if local not in _BY_TAG:
-            close = difflib.get_close_matches(local, KNOWN_ELEMENTS, n=1)
+            close = difflib.get_close_matches(
+                local, KNOWN_ELEMENTS + (_DEVICES,), n=1)
             hint = f"; did you mean <{close[0]}>?" if close else ""
             problems.append(f"unknown element <{local}>{hint}")
             continue
@@ -449,6 +768,12 @@ class FleetXml:
         problems = _structure_problems(root)
         for child in root:
             ns, local = _split_tag(child.tag)
+            if ns == NS_FLEET and local == _DEVICES:
+                if "devices" not in explicit:
+                    cfg.devices, found = _read_devices(child)
+                    problems += found
+                    explicit.add("devices")
+                continue
             setting = _BY_TAG.get(local) if ns == NS_FLEET else None
             # First wins, as it always has; a repeat is reported above.
             if setting is None or setting.field in explicit:
@@ -458,6 +783,7 @@ class FleetXml:
             except ValueError as exc:
                 problems.append(str(exc))
             explicit.add(setting.field)
+        problems += _count_conflicts(cfg.devices, cfg, explicit)
         return cfg, frozenset(explicit), problems
 
     @classmethod
@@ -468,6 +794,31 @@ class FleetXml:
         same validation parse() enforces.
         """
         return [f"{path}: {problem}" for problem in cls._read(path)[2]]
+
+    @classmethod
+    def layer_problems(cls, paths: list[Path]) -> list[str]:
+        """What is wrong with these files as LAYERS; [] when they merge.
+
+        Each file's own problems are problems()'s to report. This is what
+        only shows when they are laid over each other: an id that names two
+        types of server, and a count set after a <devices> block.
+        """
+        out: list[str] = []
+        devices: tuple[Server, ...] = ()
+        for index, path in enumerate(paths):
+            cfg, explicit, problems = cls._read(path)
+            if problems:
+                continue
+            if "devices" in explicit:
+                try:
+                    devices = merge_devices(devices, cfg.devices)
+                except ValueError as exc:
+                    out.append(f"{path}: {exc}")
+                    continue
+            if index:
+                out += [f"{path}: {p}"
+                        for p in _count_conflicts(devices, cfg, explicit)]
+        return out
 
     @classmethod
     def _parse_with_fields(cls, path: Path) -> tuple[FleetConfig, frozenset[str]]:
@@ -490,6 +841,7 @@ class FleetXml:
     def parse(cls, path: Path) -> FleetConfig:
         """Parse a fleet XML file into a FleetConfig."""
         cfg, _ = cls._parse_with_fields(path)
+        _settle_devices(cfg)
         return cfg
 
     @classmethod
@@ -506,6 +858,24 @@ class FleetXml:
             el = ET.SubElement(root, f"{{{NS_FLEET}}}{setting.tag}")
             el.text = _bool_str(value) if setting.kind == _BOOL else str(value)
 
+        if cfg.devices:
+            block = ET.SubElement(root, f"{{{NS_FLEET}}}{_DEVICES}")
+            for server in cfg.devices:
+                entry = ET.SubElement(
+                    block, f"{{{NS_FLEET}}}server",
+                    {"type": server.type, "id": server.id})
+                if server.backend is not None:
+                    kind, _, options = server.backend.partition(":")
+                    el = ET.SubElement(
+                        entry, f"{{{NS_FLEET}}}backend", {"type": kind})
+                    el.text = options or None
+                if server.config is not None:
+                    ET.SubElement(
+                        entry, f"{{{NS_FLEET}}}config").text = server.config
+                for name, value in server.options:
+                    ET.SubElement(
+                        entry, f"{{{NS_FLEET}}}{name}").text = value or None
+
         _indent(root)
         return ET.tostring(root, encoding="unicode", xml_declaration=False)
 
@@ -521,8 +891,25 @@ class FleetXml:
         base, _ = cls._parse_with_fields(paths[0])
         for path in paths[1:]:
             overlay, overlay_fields = cls._parse_with_fields(path)
+            # A count in this layer over a block from an earlier one. Counts
+            # in layers before the first block are what the block replaces.
+            late = _count_conflicts(
+                merge_devices_or_exit(base.devices, overlay.devices, path)
+                if "devices" in overlay_fields else base.devices,
+                overlay, overlay_fields)
+            if late:
+                sys.exit("\n".join(f"Error: {path}: {p}" for p in late))
             for field_name in overlay_fields:
+                if field_name == "devices":
+                    # The one element that layers inside itself: by id.
+                    try:
+                        base.devices = merge_devices(
+                            base.devices, overlay.devices)
+                    except ValueError as exc:
+                        sys.exit(f"Error: {path}: {exc}")
+                    continue
                 setattr(base, field_name, getattr(overlay, field_name))
+        _settle_devices(base)
         return base
 
     @classmethod

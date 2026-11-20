@@ -837,6 +837,61 @@ Error: my-fleet.xml: unknown element <vm-vcpu>; did you mean <vm-vcpus>?
 Comments are allowed. `qemu-tool check --xml my-fleet.xml` reports the same
 problems without stopping at the first.
 
+#### The `<devices>` block
+
+One element has structure. `<devices>` lists the vfio-user servers every
+guest gets, one `<server>` entry each, and is how two servers of one type are
+given different settings:
+
+```xml
+<devices>
+  <server type='ernic' id='kv'>
+    <backend type='nvmeof'>kv=1,size=256M</backend>
+    <log-level>info</log-level>
+  </server>
+  <server type='ernic' id='mesh'/>
+  <server type='rocjitsu' id='gpu0'>
+    <cpu-thread-budget>2</cpu-thread-budget>
+  </server>
+  <server type='rocjitsu' id='gpu1'>
+    <config>gfx1250_mi455x.json</config>
+  </server>
+  <server type='sdxi' id='sdxi0'/>
+</devices>
+```
+
+- **`type`** is `ernic`, `rocjitsu` or `sdxi`. **`id`** names the entry: it
+  is what a later layer and an error message refer to. Containers keep the
+  names the generator gives them (`ernic-1-2` is guest 1's second NIC).
+- **The block replaces the counts.** With it, `<ernic-per-vm>`,
+  `<rocjitsu-per-vm>` and `<sdxi-per-vm>` are what the block lists. One of
+  those set beside the block, or in a later layer, to a different number is
+  an error. Without a block the counts apply as before.
+- **Each other child is one command-line option** of that server, named
+  after the long option: `<eth-queues>4</eth-queues>` is `--eth-queues 4`.
+  The options are a fixed list per type (below); the ones the generator
+  derives, such as the socket and the MAC, are not in it.
+- **`<backend>`** sets an ernic's RDMA backend: `none`, `loopback`, `tcp`,
+  `nvmeof` or `s3`, with the backend's own options as the element's text. A
+  NIC with no `<backend>`, or `tcp`, is a node of the TCP mesh, which the
+  generator derives. Any other backend takes that NIC out of the mesh.
+- **`<config>`** names a rocjitsu config file, in place of
+  `<rocjitsu-config>` for that GPU.
+- **Layers merge by `id`.** A later `--xml` file's entry with the same id
+  changes what it names and keeps the rest; a new id adds a device. A layer
+  cannot remove one.
+
+| Type | Option elements |
+|---|---|
+| `ernic` | `<log-level>`, `<nic-profile>` (repeatable), `<stats-interval-ms>`, `<eth-queues>`, `<inject>` (repeatable) |
+| `rocjitsu` | `<node>`, `<cpu-thread-budget>`, `<wait-checking>` |
+| `sdxi` | `<verbose/>` (repeatable) |
+
+Every guest of a fleet gets the same devices, in the generator's order (NICs,
+then GPUs, or grouped under PCIe switches), not the order of the block. On a
+fleet of more than one guest, `quick-start test` needs each guest's first NIC
+on the mesh, and refuses to start otherwise.
+
 `gen-vm` and `run-vm` take the per-guest elements as the defaults of their
 flags — `<vm-vcpus>` is `--vcpus`, `<vm-images-dir>` is `--images`,
 `<backing-ref>` is `--backing-image`. Values are read lowest to highest from

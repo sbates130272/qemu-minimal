@@ -20,6 +20,7 @@ import dataclasses
 import hashlib
 import ipaddress
 import itertools
+import json
 import os
 import re
 import shutil
@@ -29,7 +30,9 @@ from pathlib import Path
 from typing import Any
 
 from .compose import _DEFAULT_STACK, _STACKS
-from .fleet_xml import FleetConfig, FleetXml
+from .fleet_xml import (
+    SERVER_OPTIONS, FleetConfig, FleetXml, Server, device_counts,
+)
 from .ports import publish_address, publish_mapping, reach_address
 from .resources import stack_fleet
 from .vm_artifact import VM_COMMIT_TAG, VM_DATED_TAG
@@ -283,6 +286,53 @@ def pins_fork_qemu(ref: str) -> bool:
     if ":" in repo.rsplit("/", 1)[-1]:
         repo = repo.rsplit(":", 1)[0]
     return repo.endswith(FORK_MARK)
+
+
+# The most NICs a fleet can address: .11 to .254 of <ernic-subnet>.
+_NIC_MAX = 244
+
+
+def _servers(cfg: FleetConfig, kind: str, per_vm: int) -> list[Server | None]:
+    """The <devices> entries of one type, by position in a guest.
+
+    None in every position when the fleet has no <devices> block, which
+    leaves each server exactly as the counts alone describe it.
+    """
+    if not cfg.devices:
+        return [None] * per_vm
+    return [d for d in cfg.devices if d.type == kind]
+
+
+def _option_words(server: Server | None) -> list[str]:
+    """The command-line words an entry's option elements stand for."""
+    words: list[str] = []
+    for name, value in (server.options if server else ()):
+        words.append(f"--{name}")
+        if SERVER_OPTIONS[server.type][name] != "flags":
+            words.append(value)
+    return words
+
+
+def _backend(server: Server | None) -> str | None:
+    """An ernic entry's backend, or None for the TCP mesh."""
+    if server is None or server.backend in (None, "tcp"):
+        return None
+    return server.backend
+
+
+def _yaml_word(word: str) -> str:
+    """One argument as a YAML double-quoted scalar compose will not expand."""
+    # Per character: JSON writes a character outside the BMP as a surrogate
+    # pair, which YAML does not read; YAML's own form is \U and eight digits.
+    body = "".join(
+        json.dumps(c)[1:-1] if ord(c) <= 0xFFFF else "\\U%08X" % ord(c)
+        for c in word)
+    return '"' + body.replace("$", "$$") + '"'
+
+
+def _sh_word(word: str) -> str:
+    """One argument single-quoted for /bin/sh, inside a compose file."""
+    return "'" + word.replace("'", "'\\''").replace("$", "$$") + "'"
 
 
 def _check_nvme_vram(cfg: FleetConfig) -> None:
@@ -577,27 +627,55 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
     if count < 1:
         sys.exit(f"Error: <vm-count> must be at least 1, got {count}")
 
-    ernic_per_vm = _positive(cfg.ernic_per_vm, "<ernic-per-vm>")
-    rocjitsu_per_vm = _positive(cfg.rocjitsu_per_vm, "<rocjitsu-per-vm>")
-    sdxi_per_vm = cfg.sdxi_per_vm
+    if cfg.devices:
+        # The block says what a guest gets; the counts follow from it. A
+        # FleetConfig built in code may not have been through the parser.
+        counts = device_counts(cfg.devices)
+        for kind in ("ernic", "rocjitsu"):
+            if counts[kind] < 1:
+                sys.exit(
+                    f"Error: <devices> has no <server type='{kind}'>. Every "
+                    "guest of a generated stack has at least one NIC and "
+                    "one GPU.")
+        ernic_per_vm, rocjitsu_per_vm, sdxi_per_vm = (
+            counts["ernic"], counts["rocjitsu"], counts["sdxi"])
+    else:
+        ernic_per_vm = _positive(cfg.ernic_per_vm, "<ernic-per-vm>")
+        rocjitsu_per_vm = _positive(cfg.rocjitsu_per_vm, "<rocjitsu-per-vm>")
+        sdxi_per_vm = cfg.sdxi_per_vm
+    ernic_servers = _servers(cfg, "ernic", ernic_per_vm)
+    rocjitsu_servers = _servers(cfg, "rocjitsu", rocjitsu_per_vm)
+    sdxi_servers = _servers(cfg, "sdxi", sdxi_per_vm)
 
     # The mesh counts rocm-ernic PROCESSES, not VMs. At <ernic-per-vm> > 1 the
     # two differ by that factor, and a message naming only the VM count would
     # send someone looking at the wrong number.
     nic_count = count * ernic_per_vm
-    if nic_count > _MESH_MAX:
+    # A NIC given a backend of its own is not a mesh node, so the ceilings
+    # count the ones that are.
+    mesh_per_vm = sum(1 for x in ernic_servers if _backend(x) is None)
+    mesh_count = count * mesh_per_vm
+    # Guest addresses are <ernic-subnet>.11 upward in a /24, one per NIC. The
+    # mesh ceiling used to keep the count far below this; a fleet of NICs
+    # that are off the mesh has no other bound.
+    if nic_count > _NIC_MAX:
+        sys.exit(
+            f"Error: {count} VMs x {ernic_per_vm} ernics is {nic_count} NICs. "
+            "Guest addresses start at <ernic-subnet>.11 in a /24, which has "
+            f"room for {_NIC_MAX}.")
+    if mesh_count > _MESH_MAX:
         detail = (
-            f"{count} VMs x {ernic_per_vm} ernics"
+            f"{count} VMs x {mesh_per_vm} ernics on the mesh"
             if ernic_per_vm > 1 else f"{count} VMs"
         )
         sys.exit(
-            f"Error: {detail} is {nic_count} mesh nodes, above the "
+            f"Error: {detail} is {mesh_count} mesh nodes, above the "
             f"{_MESH_MAX}-node ceiling in rocm-ernic's mesh topology payload "
             "(rdma_backend_tcp.c)."
         )
-    if nic_count > _MESH_PRACTICAL:
+    if mesh_count > _MESH_PRACTICAL:
         print(
-            f"Warning: {nic_count} mesh nodes is above the ~{_MESH_PRACTICAL} "
+            f"Warning: {mesh_count} mesh nodes is above the ~{_MESH_PRACTICAL} "
             "the mesh has been measured to register (AGENTS.md issue 17). "
             "Workers past it die on 'TCP: Registration timeout' in a restart "
             "loop and take their guests with them.",
@@ -624,9 +702,7 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
     # Guests start at .11. Avoid .1: the mesh manager claims it as its DHCP
     # server_ip and intercepts ARP for it (AGENTS.md known issue 1).
     #
-    # No /24 exhaustion check: the mesh ceiling above caps nic_count at 64,
-    # so the highest address this can derive is .74. Anything that raises
-    # _MESH_MAX past ~240 needs one.
+    # nic_count is at most _NIC_MAX (checked above), so the last is .254.
     ips = [f"{subnet}.{10 + o}" for o in range(1, nic_count + 1)]
 
     shm_sizes = _split_per_vm(_setting(cfg, "shm_size"), count, "<vm-shm-size>")
@@ -667,6 +743,12 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
                 "guest_gids": f"{_link_local_gid(macs[o - 1])},{ips[o - 1]}",
                 "sock": f"/run/vfu/ernic-{suffix}.sock",
                 "stats_file": f"/run/ernic-stats/ernic-{suffix}.stats",
+                # None: a node of the TCP mesh the generator derives.
+                # Anything else is this server's -b, from the <backend> of
+                # its <server> entry.
+                "backend": _backend(ernic_servers[d - 1]),
+                "args": _option_words(ernic_servers[d - 1]),
+                "id": getattr(ernic_servers[d - 1], "id", None),
             })
         vm_gpus = []
         for d in range(1, rocjitsu_per_vm + 1):
@@ -677,7 +759,10 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
                 "service": f"rocjitsu-{suffix}",
                 "addr": f"{net}.{_NET_ROCJITSU}.{o}",
                 "sock": f"/run/vfu/rocjitsu-{suffix}.sock",
-                "config": rocjitsu_configs[index],
+                "config": getattr(rocjitsu_servers[d - 1], "config", None)
+                or rocjitsu_configs[index],
+                "args": _option_words(rocjitsu_servers[d - 1]),
+                "id": getattr(rocjitsu_servers[d - 1], "id", None),
             })
         vm_sdxi = []
         for d in range(1, sdxi_per_vm + 1):
@@ -688,10 +773,17 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
                 "service": f"sdxi-{suffix}",
                 "addr": f"{net}.{_NET_SDXI}.{o}",
                 "sock": f"/run/vfu/sdxi-{suffix}.sock",
+                "args": _option_words(sdxi_servers[d - 1]),
+                "id": getattr(sdxi_servers[d - 1], "id", None),
             })
         nics += vm_nics
         gpus += vm_gpus
         sdxis += vm_sdxi
+        # The NIC the guest's one address, MAC and stats file are read from:
+        # the first on the mesh, which is the one that reaches other guests,
+        # else the first. With no <devices> block that is the first NIC.
+        primary = next(
+            (x for x in vm_nics if x["backend"] is None), vm_nics[0])
         vms.append({
             "n": n,
             "qemu_addr": f"{net}.{_NET_QEMU}.{n}",
@@ -714,16 +806,16 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
             # Aliases to the first device of each kind. Everything that
             # predates multi-device VMs reads these, and at the default of one
             # each they are the only device there is.
-            "ernic_addr": vm_nics[0]["addr"],
+            "ernic_addr": primary["addr"],
             "rocjitsu_addr": vm_gpus[0]["addr"] if vm_gpus else "",
-            "mac": vm_nics[0]["mac"],
-            "ip": vm_nics[0]["ip"],
-            "guest_gids": vm_nics[0]["guest_gids"],
-            "ernic_sock": vm_nics[0]["sock"],
+            "mac": primary["mac"],
+            "ip": primary["ip"],
+            "guest_gids": primary["guest_gids"],
+            "ernic_sock": primary["sock"],
             "rocjitsu_sock": vm_gpus[0]["sock"] if vm_gpus else "",
-            "stats_file": vm_nics[0]["stats_file"],
+            "stats_file": primary["stats_file"],
             "shm_size": shm_sizes[index],
-            "rocjitsu_config": rocjitsu_configs[index],
+            "rocjitsu_config": vm_gpus[0]["config"],
             "flags": flags[index],
         })
 
@@ -1010,6 +1102,15 @@ def render_compose(
     out.append("")
     out.append("services:")
 
+    # The mesh is the NICs that name no backend of their own, in ordinal
+    # order: the first is the manager and each of the others waits for the
+    # one before it.
+    mesh_nics = [x for x in spec["nics"] if x["backend"] is None]
+    mesh_before = {x["o"]: (mesh_nics[i - 1] if i else None)
+                   for i, x in enumerate(mesh_nics)}
+    mesh_node = {x["o"]: i + 1 for i, x in enumerate(mesh_nics)}
+    port_hex = f"{int(spec['tcp_port']):04X}"
+
     for nic in spec["nics"]:
         n, o = nic["n"], nic["o"]
         # "NIC d of VM n" once there is more than one; the mesh role is what
@@ -1017,15 +1118,23 @@ def render_compose(
         # backend mode and who waits on whom.
         label = f"VM {n} NIC" if spec["ernic_per_vm"] == 1 \
             else f"VM {n} NIC {nic['d']}/{spec['ernic_per_vm']}"
+        if nic["id"]:
+            label += f" ({nic['id']})"
         out.append("")
-        if o == 1:
+        mesh = nic["backend"] is None
+        manager = mesh and mesh_before[o] is None
+        if not mesh:
+            kind = nic["backend"].split(":", 1)[0]
+            out.append(f"  # ---- {label}: {kind} backend, no mesh ----")
+        elif manager:
             out.append(f"  # ---- {label}: TCP mesh manager ----")
         elif spec["ernic_per_vm"] == 1:
             out.append(f"  # ---- {label}: TCP mesh worker ----")
         else:
             # Only worth saying when it is not just the VM number: the mesh
             # node ordinal is what the registration chain runs on.
-            out.append(f"  # ---- {label}: TCP mesh worker (node {o}) ----")
+            out.append(
+                f"  # ---- {label}: TCP mesh worker (node {mesh_node[o]}) ----")
         out.append(f"  {nic['service']}:")
         out.append("    <<: *ernic-common")
         # The node's hostname IS its mesh address: each rocm-ernic advertises
@@ -1044,7 +1153,13 @@ def render_compose(
             out.append("      l2: {}")
         out.append("      fleet:")
         out.append(f"        ipv4_address: {nic['addr']}")
-        if o == 1:
+        if not mesh:
+            # Its <server> entry named this NIC's backend, so it is not a mesh
+            # node: no manager to dial, no place in the start order and no
+            # GID set to advertise.
+            backend = nic["backend"]
+            out.append('    restart: "no"')
+        elif manager:
             backend = f"tcp:manager:listen:{spec['tcp_port']}"
             # A manager restart leaves every guest driver wedged on a DSR
             # timeout that only `down && up` clears (AGENTS.md issue 7), so
@@ -1054,7 +1169,7 @@ def render_compose(
             # The manager by address, not by name. Resolving "ernic-1" here
             # puts Docker's embedded DNS in the path of every worker's start,
             # and at fleet scale that is where the fleet breaks.
-            backend = f"tcp:worker:{spec['nics'][0]['addr']}:{spec['tcp_port']}"
+            backend = f"tcp:worker:{mesh_nics[0]['addr']}:{spec['tcp_port']}"
             # Not on-failure. Docker applies that policy at daemon start to
             # any container that exited non-zero, and a host shutdown kills
             # these, so a stack left up came back after a reboot as servers
@@ -1069,8 +1184,9 @@ def render_compose(
         # per-node. Getting it wrong is not a startup error -- the mesh
         # silently routes to some other node and the transfer fails with
         # "Completion with error at client".
-        out.append("    environment:")
-        out.append(f"      - ERNIC_TCP_GUEST_GIDS={nic['guest_gids']}")
+        if mesh:
+            out.append("    environment:")
+            out.append(f"      - ERNIC_TCP_GUEST_GIDS={nic['guest_gids']}")
         argv = ["rocm-ernic", "-s", nic["sock"], "-b", backend,
                 "-m", nic["mac"], "-S", nic["stats_file"]]
         if spec["ernic_p4"]:
@@ -1082,10 +1198,15 @@ def render_compose(
                 argv += ["--p4-guest-scope", scope]
         if spec["ernic_tap"]:
             argv += ["-T", _TAP_IF]
+        # Last, so the derived options read first and a reader sees what was
+        # added. None of these can be one the generator wrote: the entry's
+        # option elements are a fixed table that leaves those out.
+        argv += nic["args"]
+        if spec["ernic_tap"]:
             # The sidecar can only run once this container exists, because it
             # shares its netns -- so the tap does not exist at the instant
             # rocm-ernic starts. Wait for it rather than racing and dying.
-            quoted = " ".join(f"'{a}'" for a in argv[1:])
+            quoted = " ".join(_sh_word(a) for a in argv[1:])
             out.append("    entrypoint:")
             out.append("      - /bin/sh")
             out.append("      - -c")
@@ -1099,8 +1220,8 @@ def render_compose(
         else:
             out.append("    command:")
             for a in argv:
-                out.append(f'      - "{a}"')
-        if o != 1:
+                out.append(f"      - {_yaml_word(a)}")
+        if mesh and not manager:
             # Chained, not all-depend-on-the-manager. The mesh assigns node
             # ids in *connection* order, but the GID->node resolver assumes
             # id == (last MAC byte - 1). Let workers race and whichever wins
@@ -1114,10 +1235,19 @@ def render_compose(
             # it runs across VM boundaries too. That is what registration
             # order has to be; it costs ~56 s of boot at 32 nodes.
             out.append("    depends_on:")
-            out.append(f"      {spec['nics'][o - 2]['service']}:")
+            out.append(f"      {mesh_before[o]['service']}:")
             out.append("        condition: service_healthy")
         out.append("    healthcheck:")
-        if o == 1:
+        if not mesh:
+            # No mesh port to watch: the server is ready when it is listening
+            # on its vfio-user socket. /proc/net/unix is `Num RefCount
+            # Protocol Flags Type St Inode Path`, and St 01 is listening.
+            out.append(
+                '      test: ["CMD", "awk", '
+                f'"$6 == \\"01\\" && $8 == \\"{nic["sock"]}\\" {{found=1}} '
+                'END {exit !found}", "/proc/net/unix"]'
+            )
+        elif manager:
             # The socket file alone is not enough for the manager: workers
             # gate on this condition and then dial its TCP port, so the check
             # has to prove that port is listening, not just that the process
@@ -1134,7 +1264,6 @@ def render_compose(
             #
             # Fields are hex and space-separated: local_address is $2 as
             # <addr>:<port>, st is $4, and 0A is TCP_LISTEN.
-            port_hex = f"{int(spec['tcp_port']):04X}"
             # Check both /proc/net/tcp (IPv4) and /proc/net/tcp6 (IPv6):
             # rocm-ernic may bind on :: (IPv6 wildcard) on some hosts,
             # which appears only in tcp6 and would make an IPv4-only check
@@ -1164,6 +1293,8 @@ def render_compose(
         n = gpu["n"]
         label = f"VM {n} GPU" if spec["rocjitsu_per_vm"] == 1 \
             else f"VM {n} GPU {gpu['d']}/{spec['rocjitsu_per_vm']}"
+        if gpu["id"]:
+            label += f" ({gpu['id']})"
         out.append("")
         out.append(f"  # ---- {label} ----")
         out.append(f"  {gpu['service']}:")
@@ -1179,6 +1310,8 @@ def render_compose(
         out.append(f"      - /usr/local/share/rocjitsu/configs/{gpu['config']}")
         out.append("      - --vfio-socket")
         out.append(f"      - {gpu['sock']}")
+        for a in gpu["args"]:
+            out.append(f"      - {_yaml_word(a)}")
         out.append("    healthcheck:")
         sock_re = gpu["sock"].replace(".", "[.]")
         out.append(f"      test: [\"CMD\", \"sh\", \"-c\", \"grep -qE ' 01 [0-9]+ {sock_re}$' /proc/net/unix\"]")
@@ -1191,6 +1324,8 @@ def render_compose(
         n = sdxi["n"]
         label = f"VM {n} SDXI" if spec["sdxi_per_vm"] == 1 \
             else f"VM {n} SDXI {sdxi['d']}/{spec['sdxi_per_vm']}"
+        if sdxi["id"]:
+            label += f" ({sdxi['id']})"
         out.append("")
         out.append(f"  # ---- {label} ----")
         out.append(f"  {sdxi['service']}:")
@@ -1206,6 +1341,8 @@ def render_compose(
         out.append("    command:")
         out.append("      - -s")
         out.append(f"      - {sdxi['sock']}")
+        for a in sdxi["args"]:
+            out.append(f"      - {_yaml_word(a)}")
         out.append("    healthcheck:")
         sock_re = sdxi["sock"].replace(".", "[.]")
         out.append(f"      test: [\"CMD\", \"sh\", \"-c\", \"grep -qE ' 01 [0-9]+ {sock_re}$' /proc/net/unix\"]")

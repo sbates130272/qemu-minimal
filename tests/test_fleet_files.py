@@ -14,6 +14,7 @@ Stdlib unittest, like the rest of tests/. Run with:
 from __future__ import annotations
 
 import importlib.util
+import itertools
 import re
 import sys
 import tempfile
@@ -43,6 +44,10 @@ _FLEET_BLOCK = re.compile(r"<fleet\b.*?</fleet>", re.DOTALL)
 # $(( ... )) before $( ... ): the arithmetic form would otherwise half-match.
 _SHELL_EXPANSION = re.compile(
     r"\$\(\(.*?\)\)|\$\([^()]*\)|\$\{[^}]*\}|\$[A-Za-z_][A-Za-z0-9_]*")
+# An expansion that is a whole attribute value: an id or a type, which "1"
+# is not a valid value of.
+_ATTR_EXPANSION = re.compile(
+    r"""(?<==['"])(?:%s)(?=['"])""" % _SHELL_EXPANSION.pattern)
 _NS_ASSIGNMENT = re.compile(r"""^\s*ns='(xmlns="[^"']*")'\s*$""", re.MULTILINE)
 
 
@@ -53,7 +58,9 @@ def inline_overlays(text: str) -> list[str]:
     literal backslash-n and whose namespace may be a %s filled from a shell
     variable named ns. Shell expansions become "1", which every setting kind
     accepts, because the element NAMES are what a typo breaks and the values
-    are not known until the job runs.
+    are not known until the job runs. One that is a whole attribute value
+    (a <server>'s id, a <backend>'s type) becomes a name instead, a different
+    one each time for an id and `loopback` for a type.
     """
     ns = _NS_ASSIGNMENT.search(text)
     out = []
@@ -62,6 +69,11 @@ def inline_overlays(text: str) -> list[str]:
             block = block.replace("\\n", "\n")
             if "<fleet %s>" in block and ns:
                 block = block.replace("<fleet %s>", f"<fleet {ns.group(1)}>")
+        ids = itertools.count(1)
+        block = re.sub(r"""(\btype=['"])(?:%s)(?=['"]\s*/?>)"""
+                       % _SHELL_EXPANSION.pattern,
+                       lambda m: m.group(1) + "loopback", block)
+        block = _ATTR_EXPANSION.sub(lambda m: f"x{next(ids)}", block)
         out.append(_SHELL_EXPANSION.sub("1", block))
     return out
 
@@ -151,6 +163,34 @@ class Extractor(unittest.TestCase):
         self.assertEqual(
             _problems(xml),
             ["unknown element <vm-cout>; did you mean <vm-count>?"])
+
+
+class AttributeExpansions(unittest.TestCase):
+    """A shell expansion that is a whole attribute value becomes a name."""
+
+    def test_ids_and_a_backend_type_filled_from_the_shell_parse(self):
+        text = """
+cat > o.xml <<EOF
+<fleet xmlns="%s">
+  <vm-count>${VMS}</vm-count>
+  <devices>
+    <server type='ernic' id='$NIC_A'><backend type='${BACKEND}'/></server>
+    <server type='ernic' id="$NIC_B"/>
+    <server type='rocjitsu' id='gpu'><cpu-thread-budget>$(nproc)</cpu-thread-budget></server>
+  </devices>
+</fleet>
+EOF
+""" % NS_FLEET
+        (xml,) = inline_overlays(text)
+        self.assertEqual(_problems(xml), [], xml)
+        self.assertNotIn("$", xml)
+
+    def test_a_flat_overlay_is_read_as_before(self):
+        text = ('<fleet xmlns="%s"><vm-count>${VMS}</vm-count>'
+                "<vm-shm-size>$(( V + 1 ))m</vm-shm-size>\n</fleet>" % NS_FLEET)
+        (xml,) = inline_overlays(text)
+        self.assertIn("<vm-count>1</vm-count>", xml)
+        self.assertEqual(_problems(xml), [])
 
 
 if __name__ == "__main__":

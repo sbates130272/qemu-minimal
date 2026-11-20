@@ -1335,6 +1335,55 @@ def _where_set(state: _State, field_name: str) -> str:
     return f"by default (set in none of: {named})"
 
 
+def _mesh_nic(state: _State) -> int:
+    """Which of a guest's NICs is on the TCP mesh, 1-based; 0 when none is.
+
+    With no <devices> block every NIC is, and it is the first.
+    """
+    nics = [d for d in state.fleet.devices if d.type == "ernic"]
+    if not nics:
+        return 1
+    for position, nic in enumerate(nics, 1):
+        if nic.backend in (None, "tcp"):
+            return position
+    return 0
+
+
+def _ernic_suffix(state: _State, index: int) -> str:
+    """The name suffix of guest `index`'s NIC server: `ernic-<suffix>`.
+
+    The NIC is the one the generator calls the guest's own (its first on
+    the mesh, else its first), named as gen_compose._dev_suffix names it.
+    """
+    if state.ernic_per_vm == 1:
+        return str(index)
+    return f"{index}-{_mesh_nic(state) or 1}"
+
+
+def _check_mesh_tests(state: _State) -> None:
+    """Refuse a run whose inter-guest RDMA tests cannot reach a peer.
+
+    The tests run on a guest's first RDMA device, and between guests that
+    device has to be on the TCP mesh. A <devices> block can give it another
+    backend, and the failure would otherwise come minutes later as a
+    transfer that never completes. One guest has no peer and is not tested
+    this way.
+    """
+    if state.playbook is None or state.vm_count < 2:
+        return
+    nics = [d for d in state.fleet.devices if d.type == "ernic"]
+    if not nics or nics[0].backend in (None, "tcp"):
+        return
+    kind = nics[0].backend.partition(":")[0]
+    _die(f"this fleet's guests cannot reach each other over RDMA: their "
+         f"first NIC, <server type='ernic' id='{nics[0].id}'> "
+         f"{_where_set(state, 'devices')}, has <backend type='{kind}'> and "
+         "is not on the TCP mesh, and the RDMA test between guests runs on "
+         "a guest's first RDMA device. Put a NIC with no <backend> first "
+         "in <devices>, or run one guest (<vm-count>1</vm-count>), then "
+         "run `qemu-tool quick-start up` again.")
+
+
 def _check_optional_tests(state: _State) -> None:
     """Refuse an optional test this fleet cannot run, before anything starts.
 
@@ -1364,6 +1413,15 @@ def _check_optional_tests(state: _State) -> None:
     again = ("then run `qemu-tool quick-start up` again, because the setting "
              "is rendered into the stack and an edit does not reach a "
              "running one")
+    if state.sdxi_test and state.fleet.sdxi_per_vm < 1 and state.fleet.devices:
+        # A <devices> block replaces <sdxi-per-vm>, so the count is not what
+        # to blame or to change.
+        _die("--sdxi-test: this fleet gives its guests no SDXI device: the "
+             f"<devices> block, last set {_where_set(state, 'devices')}, "
+             "has no <server type='sdxi'>, so there is no /dev/sdxi0 to "
+             "copy through. Add <server type='sdxi' id='...'/> to it, and "
+             f"<sdxi-image> if the fleet names none, {again}; or drop "
+             "--sdxi-test.")
     if state.sdxi_test and state.fleet.sdxi_per_vm < 1:
         _die("--sdxi-test: this fleet gives its guests no SDXI device: "
              f"<sdxi-per-vm> is {state.fleet.sdxi_per_vm} "
@@ -1689,14 +1747,15 @@ def _ernic_bytes(state: _State, index: int) -> int:
     that moved nothing produce the same delta, and reporting the second when
     it was the first is a test that cannot fail.
     """
+    suffix = _ernic_suffix(state, index)
     result = subprocess.run(
-        ["docker", "exec", f"{state.stack_name}-ernic-{index}-1", "sh", "-c",
-         f"awk '/total_bytes_sent/ {{print $NF}}' /run/ernic-stats/ernic-{index}.stats"],
+        ["docker", "exec", f"{state.stack_name}-ernic-{suffix}-1", "sh", "-c",
+         f"awk '/total_bytes_sent/ {{print $NF}}' /run/ernic-stats/ernic-{suffix}.stats"],
         capture_output=True, text=True)
     digits = "".join(c for c in result.stdout.splitlines()[0] if c.isdigit()) \
         if result.stdout.strip() else ""
     if not digits:
-        _die(f"could not read the byte counter from ernic {index}")
+        _die(f"could not read the byte counter from ernic-{suffix}")
     return int(digits)
 
 
@@ -1738,12 +1797,13 @@ def report(state: _State) -> None:
             out += [path.read_text(), ""]
     out += ["## ernic counters", "```"]
     for index in range(1, state.vm_count + 1):
+        suffix = _ernic_suffix(state, index)
         result = subprocess.run(
-            ["docker", "exec", f"{state.stack_name}-ernic-{index}-1", "sh", "-c",
-             f"grep -E 'total_bytes' /run/ernic-stats/ernic-{index}.stats"],
+            ["docker", "exec", f"{state.stack_name}-ernic-{suffix}-1", "sh", "-c",
+             f"grep -E 'total_bytes' /run/ernic-stats/ernic-{suffix}.stats"],
             capture_output=True, text=True)
         for line in (result.stdout + result.stderr).splitlines():
-            out.append(f"ernic-{index}: {line}")
+            out.append(f"ernic-{suffix}: {line}")
     out.append("```")
     (state.report_dir / "index.md").write_text("\n".join(out) + "\n")
 
@@ -1962,6 +2022,7 @@ def run(
     # switches, and say so: silence there reads as the test having been run.
     if verb in ("all", "test"):
         _check_optional_tests(state)
+        _check_mesh_tests(state)
     else:
         given = [flag for flag, on in (
             ("--sdxi-test", sdxi_test),

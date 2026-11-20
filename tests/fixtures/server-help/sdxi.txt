@@ -1,0 +1,7 @@
+# docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-sdxi:20261113.g379fbf6-sdxi.dfd76f2
+Usage: rocm-sdxi [options]
+
+  -s, --socket PATH   Unix socket path (default: /tmp/vfio-user-rocm-sdxi.sock)
+  -v, --verbose       Increase log verbosity (repeat for debug)
+  -V, --version       Print version and exit
+  -h, --help          Print this help

@@ -306,5 +306,46 @@ class TestReadOnly(unittest.TestCase):
         self.assertIn("does not exist", out)
 
 
+class TestLayersMerge(unittest.TestCase):
+    """What only shows when layers are laid over each other is reported too."""
+
+    NS = TestSettingsValidity.NS
+    BLOCK = ("<devices><server type='ernic' id='n'/>"
+             "<server type='rocjitsu' id='g'/></devices>")
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = Path(tmp.name)
+
+    def _layer(self, name: str, body: str) -> Path:
+        path = self.tmp / name
+        path.write_text(f"<fleet {self.NS}>{body}</fleet>\n")
+        return path
+
+    def _merge(self, layers: list[Path]) -> list[Result]:
+        groups = dict(cs.collect(layers))
+        return [r for r in groups["Settings"] if "layers merge" in r.name]
+
+    def test_layers_that_merge_add_no_line(self):
+        self.assertEqual(self._merge([
+            self._layer("a.xml", "<ernic-per-vm>2</ernic-per-vm>"),
+            self._layer("b.xml", self.BLOCK)]), [])
+
+    def test_an_id_given_two_types_fails_naming_the_layer(self):
+        late = self._layer("b.xml", "<devices><server type='rocjitsu' id='n'/></devices>")
+        (result,) = self._merge([self._layer("a.xml", self.BLOCK), late])
+        self.assertEqual(result.status, cs._FAIL)
+        self.assertIn(str(late), result.detail)
+        self.assertIn("id='n'", result.detail)
+
+    def test_a_count_after_a_block_fails_naming_the_layer(self):
+        late = self._layer("b.xml", "<sdxi-per-vm>1</sdxi-per-vm>")
+        (result,) = self._merge([self._layer("a.xml", self.BLOCK), late])
+        self.assertEqual(result.status, cs._FAIL)
+        self.assertIn(str(late), result.detail)
+        self.assertIn("<sdxi-per-vm>1 has no effect", result.detail)
+
+
 if __name__ == "__main__":
     unittest.main()

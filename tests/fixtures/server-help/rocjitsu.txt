@@ -1,0 +1,43 @@
+# docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261112.gdca6903-rocjitsu.50be05a
+Usage: rocjitsu [options] -- APP [ARGS...]
+
+Simulation configuration:
+  --config VALUE
+      Simulation config JSON (required)
+  --node VALUE
+      Select one local node from a system manifest. Required for multi-node launches. Not available with --attach
+  --cpu-thread-budget VALUE
+      Override CPU thread budget for this launch; zero selects automatic sizing. Not available with --attach
+  --wait-checking VALUE
+      Override wait checks: off disables checks, on enables ordinary checks, and all includes gfx1250 XCNT checks. Not available with --attach
+  --thread-budget-table
+      Print engine/dispatch allocations without running a VM
+
+Launch modes:
+  --daemon
+      Run a daemon, optionally launching an application
+  --attach
+      Attach the application to a running daemon
+  --vfio-socket VALUE
+      Serve a VMM on this AF_UNIX socket. Requires ROCJITSU_ENABLE_VFIO=ON. Repeat once per local GPU in ordinal order
+  --vfio-ready-fd VALUE
+      Write readiness to this nonnegative file descriptor
+
+Information:
+  --check-vfio-user
+      Report whether VFIO-user support is enabled
+  --version, -v
+      Print version
+  --help, -h
+      Show help
+
+Application arguments must follow --. Examples:
+  rocjitsu --config foo.json -- ./app
+  rocjitsu --daemon --config foo.json -- ./app
+  rocjitsu --daemon --config foo.json
+  rocjitsu --attach --config foo.json -- ./app
+  rocjitsu --config foo.json --vfio-socket /tmp/gpu.sock
+  rocjitsu --config foo.json --vfio-socket /tmp/gpu0.sock --vfio-socket /tmp/gpu1.sock
+
+Launch overrides apply only to this invocation and do not rewrite the source config.
+VFIO serving requires ROCJITSU_ENABLE_VFIO=ON. VMM guest RAM must be shared, for example with -object memory-backend-memfd,id=mem,size=<N>,share=on and -machine memory-backend=mem.

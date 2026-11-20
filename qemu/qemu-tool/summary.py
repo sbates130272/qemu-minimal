@@ -533,7 +533,7 @@ def _ernic_dumps(container: str) -> dict[str, str]:
 
 def _ernic_fleet(project: str,
                  containers: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    unavailable = {"instances": 0, "expected": 0, "connected": None,
+    unavailable = {"instances": 0, "mesh": 0, "expected": 0, "connected": None,
                    "rdma_bytes": None, "ip_bytes_tx": None,
                    "resets": None, "source": "unavailable"}
     hosts = [c for c in containers.values()
@@ -553,6 +553,7 @@ def _ernic_fleet(project: str,
     tx = 0
     resets = 0
     read = 0
+    mesh = 0
     for text in dumps.values():
         device, _qps = ernic_stats.parse(text)
         if not device:
@@ -562,8 +563,12 @@ def _ernic_fleet(project: str,
             # idle node.
             continue
         read += 1
-        if str(device.get("connection", "")).startswith("connected"):
-            connected += 1
+        # A NIC given a backend of its own is not a mesh node: it registers
+        # with nobody and counts against no mesh ceiling.
+        if ernic_stats.backend_role(device, "") in ("manager", "worker"):
+            mesh += 1
+            if str(device.get("connection", "")).startswith("connected"):
+                connected += 1
         for key in ("total_bytes_sent", "total_bytes_received",
                     "total_bytes_rdma_read", "total_bytes_rdma_write"):
             val = device.get(key)
@@ -582,6 +587,7 @@ def _ernic_fleet(project: str,
         return out
     return {
         "instances": read,
+        "mesh": mesh,
         "expected": expected,
         "connected": connected,
         "rdma_bytes": rdma,
@@ -843,7 +849,8 @@ def _headroom(members: list[dict[str, Any]], host: dict[str, Any],
 
     # Nearest ceiling first: the mesh wall is the one that usually binds, and
     # it is the one nobody expects, so it leads.
-    registered = ernic["instances"] if ernic["source"] != "unavailable" else None
+    registered = (ernic.get("mesh", ernic["instances"])
+                  if ernic["source"] != "unavailable" else None)
     rows.append({
         "name": "mesh",
         "used": registered,
@@ -1043,7 +1050,7 @@ def _render_load(f: dict[str, Any], host: dict[str, Any],
     else:
         lines.append(
             f"  net       RDMA {_fmt_size(net['rdma_bytes'])} moved, mesh "
-            f"{net['connected']}/{net['instances']} connected   "
+            f"{net['connected']}/{net.get('mesh', net['instances'])} connected   "
             f"Ethernet {_fmt_size(net['ip_bytes_tx'])} offered (tx)")
 
     gpu = f["gpu"]

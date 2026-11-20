@@ -394,6 +394,11 @@ def _check_settings(layers: list[Path]) -> list[Result]:
                 "  valid fleet XML", _FAIL, problem,
                 "every subcommand refuses this file until it is fixed; the "
                 "elements are listed in qemu-tool(1) and qemu/stacks/rocm-golden.xml"))
+    for problem in FleetXml.layer_problems(list(layers)):
+        out.append(Result(
+            "  layers merge", _FAIL, problem,
+            "every subcommand refuses these layers together; a <devices> "
+            "entry keeps its type, and the block replaces the per-VM counts"))
     return out
 
 

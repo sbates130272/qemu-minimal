@@ -68,10 +68,13 @@ _QP_COUNTERS = [
 
 _WQE_METRIC = "ernic_qp_wqes_by_opcode_total"
 
-# "ernic-3.stats" -> id "3". Falls back to the whole stem, so a file named
-# for its service still gets a stable label rather than being dropped -- the
-# upstream exporter's int()-only rule silently ignores anything else.
-_ID_RE = re.compile(r"(\d+)")
+# "ernic-3.stats" -> id "3", and "ernic-3-2.stats", the second NIC of guest
+# 3, -> "3-2": the whole numeric suffix, because the first number alone gave
+# every NIC of a guest one id and so one set of series, each sample written
+# once per NIC. Falls back to the whole stem, so a file named for its service
+# still gets a stable label rather than being dropped -- the upstream
+# exporter's int()-only rule silently ignores anything else.
+_ID_RE = re.compile(r"(\d+(?:-\d+)*)")
 
 
 def parse(text: str) -> tuple[dict[str, int | str], dict[str, dict]]:
@@ -147,6 +150,7 @@ def collect(stats_dir: Path) -> str:
             # a scrape can land mid-write. Skipping beats emitting zeros,
             # which would look like a counter reset to Prometheus.
             continue
+        _ROLES[ident] = backend_role(device, ident)
         instances.append((ident, device, qps))
 
     out: list[str] = []
@@ -195,13 +199,30 @@ def collect(stats_dir: Path) -> str:
     return "\n".join(out) + "\n"
 
 
-def _role(ident: str) -> str:
-    """Instance 1 is the mesh manager; 2..N are workers.
+# ident -> role, filled by collect() from each dump as it is read.
+_ROLES: dict[str, str] = {}
 
-    See rocm-ernic/docs/architecture.rst -- the topology is manager/worker,
-    not peer-to-peer, and the generated stack wires it that way.
+
+def backend_role(device: dict, ident: str) -> str:
+    """What this server is to the mesh, from the backend its dump records.
+
+    `tcp:manager:...` is the manager and `tcp:worker:...` a worker; any other
+    backend (loopback, nvmeof, s3, none) is not a mesh node, and its name is
+    the role. A dump with no backend line is an older server's: instance 1
+    is then the manager and the rest workers, as the generated stack wired
+    every fleet before a NIC could name a backend.
     """
-    return "manager" if ident == "1" else "worker"
+    backend = str(device.get("backend", "")).strip()
+    if not backend:
+        return "manager" if ident in ("1", "1-1") else "worker"
+    kind, _, rest = backend.partition(":")
+    if kind != "tcp":
+        return kind
+    return "manager" if rest.startswith("manager") else "worker"
+
+
+def _role(ident: str) -> str:
+    return _ROLES.get(ident, backend_role({}, ident))
 
 
 def run(stats_dir: Path, port: int, addr: str) -> None:
