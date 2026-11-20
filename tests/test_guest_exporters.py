@@ -44,7 +44,7 @@ ROLES = REPO / "ansible" / "playbooks" / "roles"
 SCRIPT = REPO / "scripts" / "check-guest-exporters.py"
 LANE = (REPO / ".github" / "workflows"
         / "qemu-minimal-report-for-vm-rocm-golden.yml")
-NAMES = ("rocm-golden", "helios-tray", "mi355x-server")
+NAMES = ("rocm-golden", "helios-tray", "mi355x-server", "xio")
 FLEET_NS = "http://qemu-tool/fleet/1.0"
 
 # What the guest image listens on: the task file that makes it so, and the

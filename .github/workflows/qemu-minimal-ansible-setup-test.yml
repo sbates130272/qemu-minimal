@@ -91,6 +91,12 @@ jobs:
       run: ansible-playbook --syntax-check playbooks/vm-quickstart.yml
       working-directory: ansible
 
+    # The xio flavor's playbook. Nothing in CI runs it: it needs a booted
+    # xio guest.
+    - name: Syntax-check vm-xio playbook
+      run: ansible-playbook --syntax-check playbooks/vm-xio.yml
+      working-directory: ansible
+
     # Every repo-local role, at the `production` profile. The playbooks
     # beside them are not clean at that profile yet, so they are not listed.
     # pipx, not pip: the CI image's interpreter is externally managed (PEP
@@ -106,7 +112,7 @@ jobs:
         # files (which are not yet clean at the production profile).
         ansible-lint \
           bake_ccache/ fio_hipfile_setup/ image_slim/ perftest_setup/ \
-          rocjitsu_setup/ rocm_ernic_setup/ sdxi_setup/
+          rocjitsu_setup/ rocm_ernic_setup/ rocm_xio_setup/ sdxi_setup/
       working-directory: ansible/playbooks/roles
 
   gen-vm-ansible-setup:

@@ -1,0 +1,65 @@
+---
+# rocm-xio, built in the guest from one pinned commit: the xio-tester
+# program and the rocm-xio kernel module.
+
+# What is fetched, and the commit it has to be. A branch is a name for
+# whatever was pushed last, so the two are pinned together: a branch that
+# has moved fails the run, naming both commits, before anything is built.
+# An empty commit turns the check off, and nothing else does.
+rocm_xio_setup_repo: https://github.com/ROCm/rocm-xio.git
+rocm_xio_setup_ref: feat/nvme-kv-ernic-rocjitsu
+rocm_xio_setup_commit: 3f5a9920d3bfe47e56cd5391ffa125f96ae8f3ec  # feat/nvme-kv-ernic-rocjitsu
+
+# The ROCm tree, or a path whose bin/ links into it.
+rocm_xio_setup_rocm_path: /opt/rocm
+# The GPU the HIP kernels are compiled for. Every fleet here serves gfx1250.
+rocm_xio_setup_rocm_arch: gfx1250
+
+# The checkout, kept: it is a development tree, and its build directory is
+# where xio-tester lives.
+rocm_xio_setup_source_dir: /usr/local/src/rocm-xio
+# A link to the built xio-tester, on every PATH the image has.
+rocm_xio_setup_bin_dir: /usr/local/bin
+# The record of what was built.
+rocm_xio_setup_stamp: /etc/rocm-xio.json
+
+# Build even when the stamp says there is nothing to do.
+rocm_xio_setup_force: false
+# A build replaces the source tree. The role refuses when the tree holds
+# changes to tracked files, or a commit other than the one it last built
+# there; true discards them.
+rocm_xio_setup_discard_local: false
+# Compile jobs; 0 is one per processor, at most 8.
+rocm_xio_setup_jobs: 0
+
+rocm_xio_setup_packages:
+  - build-essential
+  - cmake
+  # pahole: the kernel's module build generates BTF with it, and stops
+  # without it. The golden image does not carry it.
+  - dwarves
+  - git
+  - pkg-config
+
+# Who may open /dev/rocm-xio. The module creates the node for root alone;
+# a udev rule gives it to this group, mode 0660, and these users are added
+# to it. A member can drive the device, so this is for a test guest.
+rocm_xio_setup_group: rocm-xio
+rocm_xio_setup_users: []
+
+# The NVMe-oF controller inside one of the guest's NICs, for
+# `tasks_from: nvmeof`: the NIC whose server runs the nvmeof backend, the
+# address to give that NIC, and where the backend answers. The target's
+# address, link address and NQN are the server's defaults.
+rocm_xio_setup_nvmeof_nic: rocm-ernic1
+rocm_xio_setup_nvmeof_address: 192.168.200.10/24
+rocm_xio_setup_nvmeof_traddr: 192.168.200.1
+rocm_xio_setup_nvmeof_lladdr: "02:00:00:00:c0:01"
+rocm_xio_setup_nvmeof_trsvcid: 4420
+rocm_xio_setup_nvmeof_nqn: nvmet-test
+rocm_xio_setup_nvmeof_queues: 8
+
+# The serial number of the SPDK NVMe-KV controller, which the naming rule
+# keys /dev/xio-kv on. It is the <serial> of the fleet's
+# <server type='spdk'> entry.
+rocm_xio_setup_kv_serial: XIO-KV

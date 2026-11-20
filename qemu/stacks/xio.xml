@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The rocm-xio development fleet: one guest with two rocjitsu GPUs, two
+  rocm-ernic NICs (one on the loopback backend, one serving NVMe-oF), an
+  emulated NVMe behind the fork QEMU's pci-mmio-bridge, and an SPDK
+  vfio-user NVMe controller serving one NVMe-KV namespace.
+
+  qemu/compose/xio/ is generated from this file, and `qemu-tool quick-start
+  -\-flavor xio` runs it:
+
+    qemu-tool gen-compose -\-xml qemu/stacks/xio.xml
+
+  The devices are a <devices> block, so each server is an entry of its own
+  and an overlay changes one by its id. To give the first NIC another
+  backend, layer a file holding only:
+
+    <devices>
+      <server type='ernic' id='nic0'>
+        <backend type='s3'>bucket=bench</backend>
+      </server>
+    </devices>
+-->
+<fleet xmlns="http://qemu-tool/fleet/1.0">
+  <vm-count>1</vm-count>
+  <vm-name-prefix>xio</vm-name-prefix>
+  <ssh-port-base>2422</ssh-port-base>
+  <!-- The host address the guest's SSH port and Grafana are published on.
+       Loopback, which is also the default: this host only.
+       <publish-bind-addr>0.0.0.0</publish-bind-addr>, in an overlay of your
+       own, puts the stack on the LAN, and with it root in the guest and
+       Grafana's admin: the image's key and its account's password are both
+       public. -->
+  <publish-bind-addr>127.0.0.1</publish-bind-addr>
+
+  <!-- The same fork pair, GPU server and guest as the other fleets. -->
+  <qemu-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:20261112.gdca6903-qemu.4cb9698-vfu.3719c3a</qemu-ref>
+  <ernic-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic-sbates-fork:20261112.gdca6903-ernic.90434a2-vfu.3719c3a</ernic-ref>
+  <rocjitsu-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261112.gdca6903-rocjitsu.50be05a</rocjitsu-ref>
+  <backing-ref>docker.io/sbates130272/qemu-tool-rocm-golden:20261119.g2aea67d</backing-ref>
+  <!-- Built against the libvfio-user the QEMU above is (vfu.3719c3a),
+       which is what it is held to. Its build stamp is its own: like the
+       SDXI server it is not held to the other servers' stamp. -->
+  <spdk-image>docker.io/sbates130272/batesste-ci-images-ubuntu-spdk-libvfio-user-sbates-fork:20261119.gc3dd883-spdk.18d1d8d-vfu.3719c3a</spdk-image>
+
+  <devices>
+    <!-- One guest and no peer, so no mesh: the server's loopback backend. -->
+    <server type='ernic' id='nic0'>
+      <backend type='loopback'/>
+    </server>
+    <!-- An NVMe-oF controller inside the NIC's server, which the guest
+         reaches with `nvme connect` over RDMA at 192.168.200.1:4420: a
+         1 GiB block namespace (NSID 1) and a 256 MiB NVMe-KV namespace
+         (NSID 2). -->
+    <server type='ernic' id='nvmeof'>
+      <backend type='nvmeof'>size=1G,ns=2,kv=1,size=256M</backend>
+    </server>
+    <server type='rocjitsu' id='gpu0'/>
+    <server type='rocjitsu' id='gpu1'/>
+    <!-- One NVMe-KV namespace, NSID 1, held in memory. -->
+    <server type='spdk' id='nvme-kv'>
+      <namespaces>kv:mem</namespaces>
+      <serial>XIO-KV</serial>
+    </server>
+  </devices>
+
+  <vm-vcpus>4</vm-vcpus>
+  <vm-vmem>8192</vm-vmem>
+  <vm-shm-size>12g</vm-shm-size>
+  <!-- QEMU's own NVMe, with ioeventfd and shadow doorbells off for the
+       bridge. -->
+  <vm-nvme>1</vm-nvme>
+  <vm-pci-mmio-bridge>true</vm-pci-mmio-bridge>
+  <vm-vfio-user-root-port>true</vm-vfio-user-root-port>
+  <!-- Two 256 GiB GPU BARs. -->
+  <vm-cpu-phys-bits>42</vm-cpu-phys-bits>
+  <vm-pci-hole64-size>1024G</vm-pci-hole64-size>
+  <vm-images-dir>/var/lib/qemu-tool/images</vm-images-dir>
+  <vm-backing-shared>true</vm-backing-shared>
+  <vm-username>ubuntu</vm-username>
+  <vm-password>changeme</vm-password>
+  <qemu-tool-src>../../..</qemu-tool-src>
+
+  <!-- A single guest has nobody to reach over Ethernet. -->
+  <ernic-tap>false</ernic-tap>
+  <vm-extra-hostfwd>tcp::9100-:9100,tcp::9879-:9879</vm-extra-hostfwd>
+  <grafana-enable>true</grafana-enable>
+  <logs-enable>true</logs-enable>
+</fleet>

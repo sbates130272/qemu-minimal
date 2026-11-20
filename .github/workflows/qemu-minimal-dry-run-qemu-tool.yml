@@ -735,7 +735,7 @@ jobs:
     - name: "Validate: every shipped stack's compose config"
       run: |
         set -eu
-        for stack in rocm-golden helios-tray mi355x-server; do
+        for stack in rocm-golden helios-tray mi355x-server xio; do
           qemu-tool compose --stack "$stack" config --quiet
           echo "✓ $stack compose config valid"
         done

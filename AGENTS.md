@@ -8,19 +8,22 @@ file up to date as infrastructure changes.
 ## Repository layout
 
 - `qemu/` — qemu-tool Python package (installed as a Debian package or via pipx); the sources are in `qemu/qemu-tool/`, imported as `qemu_tool`
-- `qemu/stacks/` — the fleet XML settings files, and the only settings files in the repo: `rocm-golden.xml`, `helios-tray.xml`, `mi355x-server.xml`. It is a sibling of `qemu/compose/` and `qemu/packages.d/` and is mapped in place by `package-dir`, for the same reason they are: these are data the wheel ships, not Python source, so they do not belong under `qemu/qemu-tool/`
-- `qemu/compose/` — exactly three stacks, each **generated** by `qemu-tool gen-compose` from the fleet file of the same name; do not hand-edit one. `--profile metrics` adds Prometheus+Grafana to any of them
+- `qemu/stacks/` — the fleet XML settings files, and the only settings files in the repo: `rocm-golden.xml`, `helios-tray.xml`, `mi355x-server.xml`, `xio.xml`. It is a sibling of `qemu/compose/` and `qemu/packages.d/` and is mapped in place by `package-dir`, for the same reason they are: these are data the wheel ships, not Python source, so they do not belong under `qemu/qemu-tool/`
+- `qemu/compose/` — exactly four stacks, each **generated** by `qemu-tool gen-compose` from the fleet file of the same name; do not hand-edit one. `--profile metrics` adds Prometheus+Grafana to any of them
   - `rocm-golden/` — the default stack: two guests from the published rocm-golden qcow2, each with a GPU, an NVMe, an ernic with P4 in guest scope and an SDXI device. The stack `qemu-tool compose` runs when given no `--stack`, and the one `quick-start` renders
   - `helios-tray/` — one VM with 4 GPUs, 8 ernics and an SDXI device; the stack behind `quick-start --flavor helios`
   - `mi355x-server/` — MI355X-shaped PCIe topology: one EPYC socket, 8 GPUs, 8 NICs and 8 PCIe switches per VM, one NIC + one GPU below each switch. 8 ernics per VM means 8 *mesh nodes* per VM, so the fleet caps at 4 VMs, not 40 — see its README. Nothing in CI boots it: `Gen Compose Check` renders it and checks the switch topology, and `quick-start --flavor mi355x` is the way to run it
+  - `xio/` — the rocm-xio development guest: one VM with 2 GPUs, two ernics (one on the loopback backend, one serving NVMe-oF with a block and a KV namespace), an NVMe behind `pci-mmio-bridge` and an SPDK NVMe-KV controller. The stack behind `quick-start --flavor xio`, and the only shipped fleet with a `<devices>` block. See "The xio stack"
 - `qemu/qemu-tool/settings.py` — the one loader: fleet XML layers in, a `FleetConfig` (or `VMConfig` overrides) out. See "Settings" below
 - `qemu/qemu-tool/quick_start.py` + `ansible/playbooks/vm-quickstart.yml` — the README's Quick Start, which is `qemu-tool quick-start`: two guests from the published qcow2, Prometheus, Grafana and log collection beside them, plus a GPU test and an inter-guest RDMA test. It runs `qemu/stacks/rocm-golden.xml` unless given `--xml` or `--flavor`; `--flavor default` is that fleet. The daily `report-for-vm-rocm-golden` lane runs *that subcommand*, not a copy of its steps. It replaced the shell script that used to live under `scripts/`, which is deleted; do not reintroduce a shell wrapper beside it. The guests are sized from the host by default (4 vCPU floor, 8 ceiling), and every prompt it asks takes its default answer when stdin is not a terminal, so CI needs no flag to stay non-interactive
 - `images/` — qcow2 VM disk images (backing + overlay pairs, **not** `/var/lib/qemu-tool/images`)
-- `ansible/playbooks/` — three playbooks and seven roles, and nothing else:
+- `ansible/playbooks/` — four playbooks and eight roles, and nothing else:
   - `vm-basic.yml` — a complete bake on its own, and the base of the golden
   - `vm-rocm-golden.yml` — the one image beyond it: imports `vm-basic.yml`, then the mainline kernel and ernic prerequisites, ROCm, the rocjitsu roles, SRQ + P4, SDXI, perftest and fio built from source, and one slim pass. Every bake play is tagged `install`; `tests/test_playbook_pins.py` fails a play with no tag, because an untagged play runs in every bake. Three plays need a device and are tagged `never`: `--tags configure` sets up the NIC and builds no driver (known issue 16 says why it must not), `--tags firmware` installs `ip_discovery.bin` from the rocjitsu serving the guest, and `--tags test` runs the GPU workloads. The pins (`ionic_kernel_pin` with `ionic_kernel_pin_commit` and `ionic_kernel_mirror`, `ernic_source_pin`, `rocm_line_pin`, `sdxi_source_pin`, `perftest_source_pin`, `fio_source_pin`) are each defined once and shared between plays through YAML anchors; see "Where the ionic kernel sources come from" for the first three. Its defaults are a published image's, and a bake needs no Docker daemon when given `-e rocjitsu_firmware_script=<path to vfio_guest_firmware.py>`. Given a cache directory (`gen-vm --bake --cache-dir DIR`, or `<bake-cache-dir>` in a fleet file, which reaches the playbook as the extra var `bake_cache_dir`) the module builds go through a compiler cache kept in that directory; there is none by default, and the two workflows that bake the guest, the playbook-test lane and the publish workflow, each pass one and share what it holds — see "The bake's compiler cache". The slim play also purges every kernel but the running one, after asserting that is the pinned one — see "One kernel in the baked image". The acceptance test is `qemu/checks/rocm-golden.sh`, which the playbook-test lane runs against the baked guest and batesste-ci-images runs against the published one
   - `vm-quickstart.yml` — configures and tests a running fleet; what `qemu-tool quick-start test` runs. Four of its plays are optional and off by default: the SDXI test (`--sdxi-test`), the P4 fp8 test (`--p4-test`), the hipFile test (`--hipfile-test`) and the GPU-memory RDMA test (`--rocm-rdma-test`)
   - roles `rocm_ernic_setup` (image prep, device naming, boot-time addressing, the P4 client and who may open `/dev/ernic-p4`, the mirror and commit check for the ionic kernel sources, and `driver_check`, which asks a guest whether its ionic driver is still the baked SRQ + P4 build), `rocjitsu_setup` (firmware, amdgpu, tools, live tests), `sdxi_setup`, `image_slim` and `bake_ccache` (the compiler cache: `restore`, `save` and `remove`, no `main`). Each has task files callers reach with `tasks_from`; all five are linted at the `production` profile in CI
+  - `vm-xio.yml` — configures a running guest of the xio stack; what `qemu-tool quick-start --flavor xio test` runs. Firmware and the amdgpu probe, and, only with `--xio-test`, the `rocm_xio_setup` role: rocm-xio is not in the golden image
+  - role `rocm_xio_setup` — rocm-xio built in the guest from a pinned branch and commit: `xio-tester`, the `rocm-xio` kernel module and the `/dev/xio-kv` and `/dev/xio-blk` naming rule and group access to `/dev/rocm-xio`; `tasks_from: load` loads the module and checks the devices, `tasks_from: nvmeof` connects the guest to the NVMe-oF NIC. Linted with the others. See "The xio stack"
   - role `perftest_setup` — perftest built from a pinned commit with ROCm memory support, installed in `/usr/local/bin` ahead of the archive's package; linted with the other five. See "perftest with ROCm memory support"
   - role `fio_hipfile_setup` — fio built from a pinned release (`fio-3.43`) with the `libhipfile` ioengine, installed under `/opt/fio-hipfile` and on no PATH, so the archive's fio stays what a bare `fio` runs; linted with the other six. See "fio with the libhipfile engine"
 - `scripts/install-vfio-rules` + `scripts/99-qemu-minimal-vfio.rules` — host-side udev rules for PCI passthrough. There is no top-level `udev/` any more: guest rules live in their role's `files/`
@@ -151,9 +154,44 @@ as the table is outside it. No shipped fleet has one, and a fleet with none
 renders byte for byte as before. The README's "Settings file" section has
 the user's view; this is what a change to it has to keep true.
 
-- **`type` is `ernic`, `rocjitsu` or `sdxi`** (`SERVER_TYPES`). A new kind
-  of server, an SPDK NVMe controller for one, is a new type there plus its
-  render in `gen_compose.py`.
+- **`type` is `ernic`, `rocjitsu`, `sdxi` or `spdk`** (`SERVER_TYPES`). A
+  new kind of server is a new type there plus its render in
+  `gen_compose.py`.
+- **`spdk` is the one type with no count and no command line.** An SPDK
+  vfio-user NVMe controller exists only as a `<devices>` entry, run from
+  `<spdk-image>` (`spdk_ref`), and a guest takes one: the image serves its
+  controller at `<VFIO_USER_SOCKET_DIR>/cntrl`, and `run-vm` names a
+  vfio-user device after its socket's stem, so two would both be `cntrl`.
+  Each guest's socket is therefore in a directory of its own,
+  `/run/vfu/spdk-<n>/cntrl`. The image is configured through its
+  environment, so `SERVER_ENV` maps its two option elements to variables
+  (`<namespaces>` to `NVME_NAMESPACES`, `<serial>` to `SPDK_SERIAL`) and the
+  generator writes `environment:`, not `command:`. Its socket goes last on
+  `--vfio-userdev`, after the SDXI devices. Its fixture is the image's
+  entrypoint script, headed by the ref `xio.xml` pins, and `TestDevices`
+  requires each variable to be one the script reads. The image tag has no
+  build stamp, so it is outside `_check_image_coherence`'s stamp comparison,
+  as `<sdxi-image>` is. What it is held to is QEMU's libvfio-user: its
+  `vfu.<sha>` is compared with `<qemu-ref>`'s whether or not the tag is
+  stamped, and a difference is refused at render time. The tag-consistency
+  test and workflow leave `-spdk.<sha>` refs out of the stamp count the same
+  way, and `SpdkImage` in `tests/test_image_tag_consistency.py` makes the
+  `vfu` comparison on the committed file. A third option, `<cpumask>`, sets
+  `SPDK_CPUMASK`: each server runs a poll-mode reactor that spins on one
+  core, host CPU 0 by default, so several guests share that core unless the
+  entry says otherwise, and one entry cannot give each guest a core of its
+  own. With no hugepages in the container it takes 1 GiB (`--no-huge -s
+  1024`). On a fleet with `<vm-pcie-switch-width>` the SDXI and then SPDK
+  sockets follow the NIC and GPU sockets: on root ports when that count is a
+  multiple of the width, else filling the last switch group.
+- **`<vm-pci-mmio-bridge>` is a flat sparse boolean** that renders
+  `run-vm --pci-mmio-bridge` for every guest. `_check_pci_mmio_bridge`
+  refuses it with `<vm-nvme>` of 0 or less, since the bridge is for the
+  emulated NVMe (run-vm turns that device's ioeventfd and shadow doorbells
+  off for it), and warns on a `<qemu-ref>` that is not the fork, where
+  run-vm exits for want of the device. A `run-vm --xml` outside a stack does
+  not get it from a fleet file, as it does not get `<vm-nvme-vram>`:
+  `settings.vm_overrides` does not map it. Pass `--pci-mmio-bridge` there.
 - **The block replaces the three counts.** `_settle_devices` sets
   `ernic_per_vm`, `rocjitsu_per_vm` and `sdxi_per_vm` from it after the
   layers are merged, so every reader of a count sees the block's. A count
@@ -285,7 +323,7 @@ Environment variables that name a *path* rather than a setting stay:
 `$QEMU_TOOL_FLEET`, `$QEMU_TOOL_STACK`, and the `XDG_*` directories.
 
 **How `docker compose` gets its variables.** The irreducible remainder is that
-compose itself interpolates `${VAR}` in a compose file. The three generated
+compose itself interpolates `${VAR}` in a compose file. The four generated
 stacks interpolate exactly four names, each because it differs per host and so
 cannot be committed: `CONTAINER_USER`, `CONTAINER_KVM_GID`, `VM_IMAGES_DIR`
 and `QEMU_TOOL_SRC`. qemu-tool supplies them through the **child process
@@ -313,9 +351,12 @@ upper-case names a reader types, and only for plain `docker compose`.
 
 ## The stacks, and `qemu/stacks/rocm-golden.xml`
 
-There are three fleet files and three stacks, and the names match:
+There are four fleet files and four stacks, and the names match:
 `qemu/stacks/<name>.xml` renders to `qemu/compose/<name>/` for `rocm-golden`,
-`helios-tray` and `mi355x-server`. `rocm-golden` is the default stack: the name
+`helios-tray`, `mi355x-server` and `xio`. The fourth, `xio`, was added on
+2026-11-19 and has a section of its own, "The xio stack"; where this file
+says "all three fleet files" of something done or measured before that
+date, it means the first three. `rocm-golden` is the default stack: the name
 is the fleet's, and "default" is only what it is when nothing else is named. `gen_compose.stack_for()` reads the stack
 off the first `--xml` file's basename, so regenerating a committed stack
 takes neither `--stack` nor `--output-dir`:
@@ -324,6 +365,7 @@ takes neither `--stack` nor `--output-dir`:
 qemu-tool gen-compose --xml qemu/stacks/rocm-golden.xml
 qemu-tool gen-compose --xml qemu/stacks/helios-tray.xml
 qemu-tool gen-compose --xml qemu/stacks/mi355x-server.xml
+qemu-tool gen-compose --xml qemu/stacks/xio.xml
 qemu-tool gen-compose --check          # no --xml: the default stack against its own file
 ```
 
@@ -369,7 +411,7 @@ of them.** Prometheus reaches an exporter inside a guest at the address of
 the guest's qemu container, through a `<vm-extra-hostfwd>` rule, and four
 places have to agree for that to show anything: the fleet file's forward,
 the scrape job `gen_compose.render_prometheus` renders, the panels of
-`grafana/dashboards/fleet/quickstart.json` (three identical copies, one per
+`grafana/dashboards/fleet/quickstart.json` (four identical copies, one per
 stack), and what the guest image has listening. They did not.
 `rocm-golden.xml` forwarded four ports, the generator rendered four jobs for
 every stack and the home dashboard had panels for all four, while the image
@@ -1351,7 +1393,7 @@ replace:
   ones in that file that run the role's tasks through `ansible-playbook`,
   fail where they would skip; on a host with neither they still skip, and
   print that they did.
-- `gen-compose --check` for all three committed stacks, plus the bare form.
+- `gen-compose --check` for all four committed stacks, plus the bare form.
 - `docker compose config` against the committed stacks with only
   `CONTAINER_USER` and `CONTAINER_KVM_GID` in the environment, which is the
   proof that nothing else is left to interpolate.
@@ -1496,7 +1538,7 @@ bound every service's log, because Docker's default is unlimited and a wedged
 manager with no backoff on its error path wrote 295 GB in two days.
 
 **Every service in a generated stack is `restart: "no"`.** Two reasons, and
-`tests/test_gen_compose.py` holds both the render and the three committed
+`tests/test_gen_compose.py` holds both the render and the four committed
 stacks to it:
 
 - `ernic-1` (issue 7 below): a manager restart wedges every guest on a DSR
@@ -1542,6 +1584,199 @@ container's `anon` is **not** fleet memory — it was 2.0 GiB across all 32,
 `memory.current` folds in qcow2 page cache, so it overstates: it answers
 "what can the host not reclaim cheaply", not "how much RAM do the guests
 hold". `qemu-tool list --summary` reports the shmem figure and labels it.
+
+## The xio stack
+
+`qemu/stacks/xio.xml` renders to `qemu/compose/xio/`, and
+`qemu-tool quick-start --flavor xio` runs it: one guest for rocm-xio
+development. It came from PR #224 (Brian Kocoloski's hand-written
+`vfio-user-xio-vm` stack), rebuilt as a generated stack.
+
+| Device | How the fleet file says it | In the guest |
+|---|---|---|
+| two rocjitsu GPUs | `<server type='rocjitsu'>` twice | `02:00.0`, `04:00.0`, `[1002:75c1]` |
+| a rocm-ernic NIC, loopback backend | `<server type='ernic' id='nic0'>` with `<backend type='loopback'/>` | `01:00.0`, `rocm-ernic0`, `rocm-rdma-ernic0` |
+| a rocm-ernic NIC serving NVMe-oF | `<server type='ernic' id='nvmeof'>` with `<backend type='nvmeof'>size=1G,ns=2,kv=1,size=256M` | `03:00.0`, `rocm-ernic1`, `rocm-rdma-ernic1`; after `nvme connect`, a controller on the `rdma` transport with a 1 GiB block namespace (NSID 1) and a KV namespace (NSID 2) |
+| QEMU's NVMe behind the bridge | `<vm-nvme>1`, `<vm-pci-mmio-bridge>true` | `00:07.0`, model `QEMU NVMe Ctrl`; the bridge is `00:08.0` `[1b36:0015]` |
+| SPDK NVMe-KV controller | `<server type='spdk' id='nvme-kv'>`, `<namespaces>kv:mem`, `<serial>XIO-KV` | `05:00.0` `[4e58:0001]`, serial `XIO-KV` |
+
+The GPUs are `02:00.0` and `04:00.0`: the generator interleaves NICs and
+GPUs.
+
+- **It is on the same images as the other three fleets**: the fork QEMU and
+  ernic pair, stock rocjitsu `50be05a` and the published golden guest. The
+  hand-written stack pinned an older QEMU (`qemu.f91f120`), the stock ernic
+  and a rocjitsu fork; none was needed for the guest to boot with every
+  device or for rocm-xio to build and load. Whether rocm-xio's own tests
+  need the rocjitsu fork has not been tried.
+- **`<spdk-image>` is stamped, with a stamp of its own**
+  (`20261119.gc3dd883-spdk.18d1d8d-vfu.3719c3a`). It is exempt from the
+  one-stamp rule and held to `<qemu-ref>`'s `vfu` instead, at render time
+  and in the tests, so the fleet's other images did not have to move with
+  it. That build is the same image as the unstamped
+  `spdk.18d1d8d-vfu.3719c3a` the live runs used: one digest,
+  `sha256:b61d8c4f1269...`. Moving it is the element, a regeneration and
+  the first line of `tests/fixtures/server-help/spdk.txt`.
+- **A newer stamp of every server image exists and the fleets have not
+  moved to it.** `20261119.gc3dd883` carries the same component commits
+  the four fleet files pin under `20261112.gdca6903` (QEMU `4cb9698`, ernic
+  `90434a2`, rocjitsu `50be05a`, SDXI `dfd76f2`), so the move is the stamp
+  alone, in every fleet file and workflow at once. The owner left it for a
+  change of its own.
+- **The first NIC's backend is the entry's to change.** `loopback` because
+  one guest has no peer. An overlay holding only a `<devices>` block with
+  `<server type='ernic' id='nic0'>` and another `<backend>` changes it.
+- **The second NIC is an NVMe-oF target, not a network card.** Its server
+  runs the `nvmeof` backend: an NVMe-oF controller inside the server,
+  subsystem `nvmet-test`, at `192.168.200.1:4420`, reached over RDMA
+  through that NIC. `size=1G,ns=2,kv=1,size=256M` is a 1 GiB block
+  namespace as NSID 1 and a 256 MiB NVMe-KV namespace as NSID 2; `ns=N`
+  starts the next namespace, which is why the options are order-dependent
+  and stay one word. **The target answers no ARP**: a guest has to be given
+  its link address by hand (`ip neigh replace 192.168.200.1 lladdr
+  02:00:00:00:c0:01 dev <nic> nud permanent`) or `nvme connect` fails with
+  `rdma connection establishment failed (-104)`. Seen on a guest, both
+  ways. The address, link address and NQN are the server's defaults, read
+  from rocm-ernic's own `nvmeof-tests.yml`. The boot unit gives the NIC
+  `192.168.100.12/24` like any other, and nothing answers there.
+- **Two 256 GiB GPU BARs** want the hole: `<vm-cpu-phys-bits>42` and
+  `<vm-pci-hole64-size>1024G`. The guest logged no BAR assignment failure
+  with them. Without them was not tried.
+- **`<vm-nvme-vram>` is off.** The bridge and `vram-dev` on one NVMe have
+  not been run together.
+- **No SDXI, no P4, no TAP.** A single guest has nobody to reach over
+  Ethernet.
+
+**The flavor's playbook is `vm-xio.yml`, not `vm-quickstart.yml`.**
+`quick_start.VARIANTS["xio"]` names it, and `quick-start --flavor xio test`
+runs it with the stack's generated inventory.
+
+- **Two plays.** The first always runs: it stages the GPU firmware from
+  the live rocjitsu (`rocjitsu_setup`'s `firmware` tasks), probes amdgpu
+  and waits for both GPUs in the KFD topology. The second installs rocm-xio
+  and checks it, and is **off unless `--xio-test` is given**: its gate is
+  `quickstart_xio_test`, false in the play, and its first task ends the
+  play. rocm-xio is not in the golden image, by the owner's decision of
+  2026-11-20, so a plain `test` builds nothing.
+- **`--xio-test`** (`state.xio_test`) passes `quickstart_xio_test=true`. It
+  is refused, before anything starts, on a flavor whose playbook is not
+  `vm-xio.yml` (`_check_xio_test`), and ignored with a note on a verb that
+  runs no test. The play: `rocm_xio_setup` (build), its `load` tasks, its
+  `nvmeof` tasks, then one task that opens `/dev/rocm-xio` and runs
+  `xio-tester --list-endpoints` **as the login user with no `become`**,
+  then a result written to `<artifacts>/xio.md` on the controller. A run
+  asked for the test that finds no `xio: ` line there fails
+  (`_xio_recorded`): a skipped play did not fail either.
+- **It is not `vm-quickstart.yml` because that playbook's NVMe test writes
+  `/dev/nvme0n1` raw**, and here one of the two controllers is the SPDK KV
+  one. `tests/test_rocm_xio_setup.py` fails a `vm-xio.yml` that names
+  `/dev/nvme0`.
+- **`quick-start` holds only `vm-quickstart.yml` to the ernic byte counter**
+  (`_RDMA_TEST_PLAYBOOKS`): `vm-xio.yml` sends nothing between guests. The
+  same set decides four more things. The optional tests (`--sdxi-test` and
+  the rest) are plays of `vm-quickstart.yml` and are refused on this flavor,
+  with the playbook named. `--rdma-duration` and `--nvme-duration` are not
+  passed. The refusal of a multi-guest fleet whose first NIC is off the mesh
+  (`_check_mesh_tests`) does not apply. And the report: its status is a
+  pass when the playbook ran to the end in that process
+  (`state.playbook_passed`), under a heading that names the flavor, with no
+  "RDMA bytes across the mesh" line.
+- **The closing summary names the flavor** in the commands it prints
+  (`quick-start --flavor xio test`, `... down`): `state.variant`. Without
+  it the commands were the default flavor's, which is another stack.
+
+**`rocm_xio_setup` builds rocm-xio at a pinned branch and commit.**
+`rocm_xio_setup_ref` is `feat/nvme-kv-ernic-rocjitsu` and
+`rocm_xio_setup_commit` is `3f5a9920d3bfe47e56cd5391ffa125f96ae8f3ec`, the
+branch's head on 2026-11-19 and the branch the hand-written stack built.
+
+- **A branch that has moved fails the run**, naming both commits, before
+  anything is built: `files/rocm-xio-fetch.sh` is `perftest-fetch.sh` under
+  another name, held equal to it but for the line that says its name. To
+  move the pin, `git ls-remote https://github.com/ROCm/rocm-xio.git <ref>`
+  prints the new head; the comment that ends the pin's line names the
+  branch and the test fails when the two disagree.
+- **The build**, as root under `/usr/local/src/rocm-xio`, which is kept: it
+  is a development tree. `cmake` with `CMAKE_HIP_COMPILER` the ROCm tree's
+  `amdclang++` and `CMAKE_HIP_ARCHITECTURES=gfx1250`, the `xio-tester`
+  target, then `make` in `kernel/rocm-xio` and `modules_install` into
+  `updates/`. `xio-tester` is linked into `/usr/local/bin`.
+- **It installs `dwarves`.** The kernel's module build generates BTF with
+  `pahole` and stops without it, and the golden image has none. The first
+  live run failed there.
+- **`/etc/rocm-xio.json`** records repo, ref, the commit built and the
+  commit required, the ROCm tree, the GPU arch and the kernel. A rerun that
+  finds it describing the build asked for, with `xio-tester` and the module
+  in place, builds nothing. It is removed before a build starts, so a build
+  that does not finish leaves none and the next run builds; one that is not
+  JSON is taken as none.
+- **A rebuild replaces the source tree, and refuses to when somebody has
+  worked in it.** Before the fetch, the role looks in the tree for changes
+  to tracked files and for a `HEAD` that is not the commit it last built
+  there, and fails naming them. `rocm_xio_setup_discard_local: true`
+  discards them. Untracked files, the build directory among them, are not
+  looked at and are deleted with the tree.
+- **`load` replaces a stale module.** A `rocm_xio` already in the kernel is
+  compared with the installed file by `srcversion`; when they differ it is
+  unloaded and the new one loaded, and a module that is in use fails the
+  task saying so.
+- **`90-xio-nvme.rules`** names the SPDK controller `/dev/xio-kv` by its
+  serial (`rocm_xio_setup_kv_serial`, held equal to the fleet's `<serial>`
+  by the test) and QEMU's block namespace `/dev/xio-blk` by its model.
+- **`/dev/rocm-xio` goes to the `rocm-xio` group, mode 0660.** The module
+  creates the node 0600 for root (its subsystem is `rocm_axiio`). The role
+  writes `90-rocm-xio.rules` (`KERNEL=="rocm-xio", GROUP=..., MODE="0660"`),
+  creates the group, and adds `rocm_xio_setup_users`, which `vm-xio.yml`
+  sets to the login user. `load` re-triggers the rule when the node
+  predates it and asserts `rocm-xio 660`. Never world access: a member can
+  drive the device, and this is a test guest. A session opened before the
+  user was added does not have the group; the play's own check goes through
+  `sg`.
+- **`tasks_from: nvmeof` connects the guest to the NVMe-oF NIC.** It loads
+  `nvme-fabrics` and `nvme-rdma`, gives the NIC
+  (`rocm_xio_setup_nvmeof_nic`, `rocm-ernic1`, held to the fleet file's
+  entry order by the test) `192.168.200.10/24` and the neighbour entry,
+  runs `nvme connect -t rdma` unless a controller for the subsystem is
+  already there, and requires a block device `<ctrl>n1` and the KV
+  namespace's generic device `ng<N>n2`. The controller stays connected.
+- **`load` counts PCI NVMe controllers only.** Once the NVMe-oF NIC is
+  connected the guest has a third controller, on the `rdma` transport, and
+  a count of everything under `/sys/class/nvme` failed the first live run
+  that had one.
+- **rocm-xio is installed after boot and not baked**, by the owner's
+  decision: it is a feature branch under development and a bake would need
+  a republish for each move of the pin. The role needs no device to build,
+  so a play in `vm-rocm-golden.yml` is what baking it would take.
+
+**Run on the dev host, 2026-11-19 and 20**, by hand, from this worktree:
+scratch `--stack-dir`, `--key-dir` and `--images`, the guest sized to 8 vCPU
+and 8192 MiB, guest SSH on 2422, Grafana moved to 3003. `AMD_CERT` was set,
+so the playbook installed the corporate CA into the scratch overlay. The
+table is the last run, on 2026-11-20, of the fleet and playbook as they are
+committed, except that `<spdk-image>` was then the unstamped tag of the
+same digest.
+
+| Step | Result |
+|---|---|
+| `quick-start --flavor xio --clean-overlays --xio-test all` | exit 0, ok=62 changed=29 failed=0: every device server healthy, SPDK as the caller's uid; rocm-xio fetched at the pin and built; `xio: ready on xio-1: gpus=2, nvme=2, have=/dev/rocm-xio, have=/dev/xio-kv, have=/dev/xio-blk, access=rocm-xio 660, nvmeof=nvme2 block=nvme2n1 kv=ng2n2, /dev/rocm-xio usable by ubuntu` |
+| `test`, no switch | exit 0, ok=20: firmware and probe only; no task of `rocm_xio_setup` ran |
+| `test --xio-test` again | exit 0, ok=52, `rocm-xio already built`, the same `xio: ready` line |
+| in the guest afterwards | `ubuntu` is in `rocm-xio`; `/dev/rocm-xio` is `crw-rw---- root rocm-xio`; `xio-tester --list-endpoints`, with no sudo, lists `nvme-ep`, `rdma-ep`, `sdma-ep` and `test-ep`; `systemctl is-system-running` says `running` |
+| the report | headed "the xio flavor", `Status: **pass**` |
+
+Before that run, on 2026-11-19 with one NIC and no switch: the first `test`
+failed at the module build with `pahole: not found`, which is why the role
+installs `dwarves`; and by hand on 2026-11-20, `nvme connect` to the second
+NIC failed without the neighbour entry and succeeded with it.
+
+**Not run**: `xio-tester` doing any I/O, against any endpoint, so nothing
+shows rocm-xio working against these devices, only that it builds, loads,
+opens its device and finds the others; any I/O to the NVMe-oF namespaces
+beyond the kernel enumerating them; any backend but `loopback` and `nvmeof`
+with a guest attached; the stack on any other host or in CI
+(`Gen Compose Check` renders it and nothing boots it); `ansible-lint` in CI
+on the new role (locally it reports only the `schema[meta]` finding for
+`noble` that this host reports for every role).
 
 ## `qemu-tool check`
 
@@ -1648,7 +1883,7 @@ hole must cover them: one 256 GiB BAR a guest fits the machine default, which
 is how `rocm-golden.xml` runs; `helios-tray.xml` and `mi355x-server.xml`, with
 four and eight, set `<vm-pci-hole64-size>` and `<vm-cpu-phys-bits>` (`512G` is
 the ceiling at the default phys-bits, see the MI355X README). And vfio-user
-P2P DMA needs the fork QEMU image (issue 15), which all three fleet files pin.
+P2P DMA needs the fork QEMU image (issue 15), which all four fleet files pin.
 
 The emulated NVMe reaching that BAR is a separate switch: `<vm-nvme-vram>`
 in a fleet file, `--nvme-vram-dev` on `run-vm`, fork QEMU only. "The
@@ -2121,7 +2356,7 @@ between the two commits.** The split holds only while the newer roles still
 drive the older scripts and series the way those expect. Moving
 `ernic_source_pin` is the bigger change: it needs server images at that
 commit (the fork one, which is what every fleet and workflow now names),
-the three `<ernic-ref>`s and the `ERNIC_IMAGE` lines, and a live boot.
+the four `<ernic-ref>`s and the `ERNIC_IMAGE` lines, and a live boot.
 **This host is the one place the rename can pass by accident**: a role
 still named the old way resolves here for as long as the
 old collection is installed, to the old roles, with no error.
@@ -3763,11 +3998,11 @@ range where Grafana's step exceeds two minutes (a day or more, depending
 on the panel's width), work between the steps is not drawn. The timer sets
 `AccuracySec=1s`, because a timer's default accuracy is a minute.
 
-**The home dashboard is three committed copies, not a generated file.**
+**The home dashboard is four committed copies, not a generated file.**
 `qemu/compose/<stack>/grafana/dashboards/fleet/quickstart.json` is the same
 file in each stack; `gen-compose` only mirrors a stack's `grafana/` into an
 `--output-dir` render. `tests/test_guest_exporters.py` holds the three
-equal, so an edit goes to all three. `fleet.json` is three copies
+equal, so an edit goes to all four. `fleet.json` is four copies
 too, and `tests/test_quickstart_dashboard.py` holds those equal and both
 dashboards to the layout rule in "Test results on the home dashboard". On
 a fleet with `<sdxi-per-vm>0`
@@ -3953,7 +4188,7 @@ not what the file said. Every dashboard under `grafana/dashboards/fleet/`
 is now rows of bands: one `y`, one height, widths from column 0 to 24, each
 band starting where the one above ends. `layout_faults()` in
 `tests/test_quickstart_dashboard.py` is the rule, for `quickstart.json` and
-`fleet.json` in all three stacks, and it also fails a duplicate or missing
+`fleet.json` in all four stacks, and it also fails a duplicate or missing
 panel `id` and a collapsed row. The Fleet tiles are six of width 4 (they
 were 3, 3, 6, 4, 4, 4); "IB Port Active" and "Link Speed" moved up beside
 the other two status tiles under "Network & Driver Status"; the CPU and
@@ -6235,7 +6470,7 @@ workflow's `REF_RE` and the test's `TAG_RE` both begin `batesste-ci-images`,
 so a `qemu-tool-rocm-golden` ref matches neither. That is correct — the
 qcow2 no longer shares a build stamp with the containers — but it left the
 guest ref checked by nothing, so both now have a guest section of their own:
-one ref across the three fleet files, in `<publish-ref>`'s repository, by a
+one ref across the four fleet files, in `<publish-ref>`'s repository, by a
 dated tag, and no batesste-ci-images qcow2 named anywhere they search.
 
 ## The published site

@@ -1,0 +1,305 @@
+# docker.io/sbates130272/batesste-ci-images-ubuntu-spdk-libvfio-user-sbates-fork:20261119.gc3dd883-spdk.18d1d8d-vfu.3719c3a
+#!/bin/bash
+#
+# entrypoint.sh
+#
+# Start SPDK's NVMe-oF target, build one NVMe controller out of NVME_NAMESPACES
+# and serve it on a vfio-user socket at ${VFIO_USER_SOCKET_DIR}/cntrl. The
+# container's lifetime is the controller's lifetime: the guest sees a surprise
+# removal if this exits.
+#
+# Usage:
+#   entrypoint.sh            serve until killed (the default)
+#   entrypoint.sh --probe    configure, assert the socket appeared, tear down
+#   entrypoint.sh --kv-check --probe plus a KV round trip over the socket
+#   entrypoint.sh <cmd> ...  run something else in this image (rpc.py, bash)
+#
+
+set -euo pipefail
+
+SPDK_DIR=${SPDK_DIR:-/opt/spdk}
+NVME_NAMESPACES=${NVME_NAMESPACES:-lba:malloc:512M,kv:mem}
+NQN=${NQN:-nqn.2019-07.io.spdk:cnode1}
+VFIO_USER_SOCKET_DIR=${VFIO_USER_SOCKET_DIR:-/tmp/vfio-sockets/nvme}
+SPDK_SERIAL=${SPDK_SERIAL:-SPDKVFU01}
+SPDK_CPUMASK=${SPDK_CPUMASK:-0x1}
+SPDK_HUGE=${SPDK_HUGE:-auto}
+SPDK_MEM_SIZE=${SPDK_MEM_SIZE:-1024}
+SPDK_RPC_SOCK=${SPDK_RPC_SOCK:-/var/tmp/spdk.sock}
+# nvmf_create_transport tuning. The defaults are SPDK's own vfio-user example
+# values, which are what PR #183's working stack uses.
+SPDK_QUEUE_DEPTH=${SPDK_QUEUE_DEPTH:-1024}
+SPDK_MAX_QPAIRS=${SPDK_MAX_QPAIRS:-16}
+
+# Both on stderr: huge_args() below returns its flags on stdout, and a log line
+# landing there would be parsed as an argument to nvmf_tgt.
+log() { echo "[spdk-vfu] $*" >&2; }
+die() { echo "[spdk-vfu] ERROR: $*" >&2; exit 1; }
+
+rpc() { python3 "${SPDK_DIR}/scripts/rpc.py" -s "${SPDK_RPC_SOCK}" "$@"; }
+
+PROBE=0
+KV_CHECK=0
+case "${1:-}" in
+    --probe) PROBE=1; shift ;;
+    # A superset of --probe, kept as its own flag because --probe asserts only
+    # what the target was configured with: it never attaches a host, so it
+    # passes on a build that serves a KV namespace no host can actually use.
+    --kv-check) PROBE=1; KV_CHECK=1; shift ;;
+    "")      ;;
+    # Anything else is a command to run in this image instead of the target.
+    *)       exec "$@" ;;
+esac
+
+if ! [ -x "${SPDK_DIR}/build/bin/nvmf_tgt" ]; then
+    die "nvmf_tgt not found under ${SPDK_DIR}/build/bin"
+fi
+
+# Hugepages are the normal SPDK memory source, but a container gets none unless
+# it is privileged or /dev/hugepages is mounted with pages already reserved.
+# Falling back to --no-huge keeps the common `docker run` case working; the
+# device still reaches guest RAM, which arrives as an mmap-able descriptor over
+# the vfio-user socket rather than from SPDK's own pool.
+huge_args() {
+    local nr=0
+    [ -r /proc/sys/vm/nr_hugepages ] && nr=$(cat /proc/sys/vm/nr_hugepages)
+    case "${SPDK_HUGE}" in
+        on)
+            log "hugepages: forced on"
+            ;;
+        off)
+            log "hugepages: forced off (--no-huge -s ${SPDK_MEM_SIZE})"
+            printf -- '--no-huge\n-s\n%s\n' "${SPDK_MEM_SIZE}"
+            ;;
+        auto)
+            if [ -d /dev/hugepages ] && [ -w /dev/hugepages ] && [ "${nr}" -gt 0 ]; then
+                log "hugepages: ${nr} available, using them"
+            else
+                log "hugepages: none available, falling back to --no-huge -s ${SPDK_MEM_SIZE}"
+                printf -- '--no-huge\n-s\n%s\n' "${SPDK_MEM_SIZE}"
+            fi
+            ;;
+    esac
+}
+
+# Validated here and not inside huge_args: that runs in a process substitution,
+# so a die() there would print and be discarded along with the subshell, leaving
+# a typo'd SPDK_HUGE to start the target with no --no-huge at all. `on` also
+# legitimately emits zero arguments, so an empty result cannot stand in for it.
+case "${SPDK_HUGE}" in
+    auto|on|off) ;;
+    *) die "SPDK_HUGE must be auto, on or off (got '${SPDK_HUGE}')" ;;
+esac
+
+HUGE_ARGS=()
+while IFS= read -r arg; do
+    [ -n "${arg}" ] && HUGE_ARGS+=("${arg}")
+done < <(huge_args)
+
+# A caller who brings their own SPDK JSON config wants the RPC generation below
+# skipped: the config already names its transports, bdevs, kvdevs, subsystems
+# and listeners, and generating a second set on top of it would only conflict.
+# The hugepage flags still apply -- they are DPDK EAL arguments, which an SPDK
+# JSON config has no way to express, so omitting them here would fail at EAL
+# init on exactly the hugepage-less host the fallback exists for.
+if [ -n "${SPDK_JSON_CONFIG:-}" ]; then
+    [ -f "${SPDK_JSON_CONFIG}" ] || die "SPDK_JSON_CONFIG=${SPDK_JSON_CONFIG} not found"
+    log "starting nvmf_tgt from ${SPDK_JSON_CONFIG} (NVME_NAMESPACES ignored)"
+    exec "${SPDK_DIR}/build/bin/nvmf_tgt" \
+        -r "${SPDK_RPC_SOCK}" -m "${SPDK_CPUMASK}" \
+        ${HUGE_ARGS[@]+"${HUGE_ARGS[@]}"} \
+        --json "${SPDK_JSON_CONFIG}"
+fi
+
+# Size in MiB from a 512M / 2G / bare-MiB spelling. Used for bdev_malloc_create,
+# whose total_size argument is already in MB, and scaled to bytes where a file
+# has to be created.
+to_mib() {
+    local spec=$1 num unit
+    num=${spec%[KkMmGg]}
+    unit=${spec#"${num}"}
+    case "${unit}" in
+        K|k) echo $(((num + 1023) / 1024)) ;;
+        M|m|"") echo "${num}" ;;
+        G|g) echo $((num * 1024)) ;;
+        *) die "unrecognised size '${spec}'" ;;
+    esac
+}
+
+log "namespaces: ${NVME_NAMESPACES}"
+log "nqn:        ${NQN}"
+log "socket:     ${VFIO_USER_SOCKET_DIR}/cntrl"
+
+mkdir -p "${VFIO_USER_SOCKET_DIR}"
+# libvfio-user unlinks its socket on a clean teardown, but a container killed
+# with SIGKILL leaves one behind and the listener then refuses to bind.
+rm -f "${VFIO_USER_SOCKET_DIR}/cntrl" "${SPDK_RPC_SOCK}" "${SPDK_RPC_SOCK}.lock"
+
+"${SPDK_DIR}/build/bin/nvmf_tgt" \
+    -r "${SPDK_RPC_SOCK}" \
+    -m "${SPDK_CPUMASK}" \
+    ${HUGE_ARGS[@]+"${HUGE_ARGS[@]}"} &
+TGT_PID=$!
+
+# Forwarding the stop is not enough on its own: `wait` returns immediately when
+# a trapped signal arrives, so without waiting again here PID 1 exits while
+# nvmf_tgt is still shutting down and libvfio-user never unlinks <dir>/cntrl.
+# The stale socket then sits in the shared bind mount and the next QEMU gets
+# ECONNREFUSED from it. EXIT is armed too so that every die() below stops the
+# target rather than orphaning it. Guarded because a signal runs this once and
+# then again on the way out.
+CLEANED=0
+# shellcheck disable=SC2317  # reached only through the traps below
+cleanup() {
+    [ "${CLEANED}" -eq 1 ] && return 0
+    CLEANED=1
+    if kill -0 "${TGT_PID}" 2>/dev/null; then
+        kill -TERM "${TGT_PID}" 2>/dev/null || true
+        wait "${TGT_PID}" 2>/dev/null || true
+    fi
+    # Belt and braces: libvfio-user unlinks it on a clean teardown, but a target
+    # that took a SIGKILL did not.
+    rm -f "${VFIO_USER_SOCKET_DIR}/cntrl"
+}
+trap cleanup EXIT
+trap 'cleanup; exit 143' TERM
+trap 'cleanup; exit 130' INT
+
+for _ in $(seq 1 120); do
+    if [ -S "${SPDK_RPC_SOCK}" ] && rpc rpc_get_methods >/dev/null 2>&1; then
+        break
+    fi
+    if ! kill -0 "${TGT_PID}" 2>/dev/null; then
+        die "nvmf_tgt exited during startup"
+    fi
+    sleep 0.25
+done
+rpc rpc_get_methods >/dev/null 2>&1 || die "nvmf_tgt never answered on ${SPDK_RPC_SOCK}"
+
+rpc nvmf_create_transport -t VFIOUSER \
+    -q "${SPDK_QUEUE_DEPTH}" -m "${SPDK_MAX_QPAIRS}"
+rpc nvmf_create_subsystem "${NQN}" -s "${SPDK_SERIAL}" -a
+
+lba_count=0
+kv_count=0
+# NSIDs are assigned explicitly and in NVME_NAMESPACES order rather than left to
+# the target's first-free search, because KV Store and Retrieve are opcodes 0x01
+# and 0x02 -- the same numbers as block Write and Read. A KV command sent to an
+# LBA namespace is therefore not rejected: it executes as a block write with the
+# key dwords read as LBA fields. A host that guesses the wrong NSID corrupts
+# data silently, so the mapping is stated here, logged below and documented in
+# README.md instead of being an implementation detail of the RPC layer.
+nsid=0
+ns_map=""
+IFS=',' read -r -a ns_specs <<< "${NVME_NAMESPACES}"
+for spec in "${ns_specs[@]}"; do
+    [ -n "${spec}" ] || continue
+    IFS=':' read -r kind backing a1 a2 <<< "${spec}"
+    nsid=$((nsid + 1))
+    case "${kind}:${backing}" in
+        lba:malloc)
+            # lba:malloc:<size>[:<blocklen>]
+            [ -n "${a1:-}" ] || die "lba:malloc needs a size (e.g. lba:malloc:512M)"
+            name="Malloc${lba_count}"
+            rpc bdev_malloc_create -b "${name}" \
+                "$(to_mib "${a1}")" "${a2:-4096}"
+            rpc nvmf_subsystem_add_ns "${NQN}" "${name}" -n "${nsid}"
+            lba_count=$((lba_count + 1))
+            log "nsid ${nsid}: LBA namespace ${name}, ${a1} of memory, ${a2:-4096}B blocks"
+            ;;
+        lba:aio)
+            # lba:aio:<path>[:<blocklen>[:<size>]] -- the file is created sparsely
+            # when absent, so a caller can bind-mount an empty directory.
+            [ -n "${a1:-}" ] || die "lba:aio needs a path (e.g. lba:aio:/data/ns.img)"
+            name="Aio${lba_count}"
+            if [ ! -e "${a1}" ]; then
+                size_mib=$(to_mib "${SPDK_AIO_DEFAULT_SIZE:-1G}")
+                log "creating ${a1} (${size_mib}MiB, sparse)"
+                truncate -s "${size_mib}M" "${a1}"
+            fi
+            rpc bdev_aio_create "${a1}" "${name}" "${a2:-4096}"
+            rpc nvmf_subsystem_add_ns "${NQN}" "${name}" -n "${nsid}"
+            lba_count=$((lba_count + 1))
+            log "nsid ${nsid}: LBA namespace ${name}, file ${a1}, ${a2:-4096}B blocks"
+            ;;
+        kv:mem)
+            # kv:mem[:<max_value_len>[:<max_num_keys>]]
+            name="KvMem${kv_count}"
+            kv_args=()
+            [ -n "${a1:-}" ] && kv_args+=(--max-value-len "${a1}")
+            [ -n "${a2:-}" ] && kv_args+=(--max-num-keys "${a2}")
+            rpc kvdev_mem_create "${name}" ${kv_args[@]+"${kv_args[@]}"}
+            rpc nvmf_subsystem_add_kv_ns "${NQN}" "${name}" -n "${nsid}"
+            kv_count=$((kv_count + 1))
+            log "nsid ${nsid}: KV namespace ${name}, memory backed"
+            ;;
+        kv:*)
+            # kvdev_rados is the only other backend the fork has, and it needs a
+            # Ceph cluster this image deliberately cannot reach -- see README.md.
+            die "unsupported KV backing '${backing}': this image builds without --with-rbd, so kv:mem is the only KV namespace it can serve"
+            ;;
+        *)
+            die "unrecognised namespace spec '${spec}'"
+            ;;
+    esac
+    ns_map="${ns_map:+${ns_map},}${nsid}=${kind}"
+done
+
+rpc nvmf_subsystem_add_listener "${NQN}" \
+    -t VFIOUSER -a "${VFIO_USER_SOCKET_DIR}" -s 0
+
+for _ in $(seq 1 80); do
+    [ -S "${VFIO_USER_SOCKET_DIR}/cntrl" ] && break
+    sleep 0.25
+done
+[ -S "${VFIO_USER_SOCKET_DIR}/cntrl" ] || die "vfio-user socket never appeared"
+
+log "serving ${lba_count} LBA + ${kv_count} KV namespace(s) on ${VFIO_USER_SOCKET_DIR}/cntrl"
+log "nsid map:   ${ns_map}"
+
+if [ "${PROBE}" -eq 1 ]; then
+    # Assert the target agrees with what we asked for, rather than trusting that
+    # the RPCs returned success: a fork whose add_kv_ns silently no-ops would
+    # otherwise pass. The NSID of each namespace is checked too, not just the
+    # counts, because a host addressing a KV command at an LBA namespace gets a
+    # block write rather than an error -- so the mapping README.md publishes has
+    # to be the one the target actually built.
+    rpc nvmf_get_subsystems | python3 -c '
+import json, sys
+nqn, want_map = sys.argv[1], sys.argv[2]
+want = dict((int(k), v) for k, v in
+            (e.split("=") for e in want_map.split(",") if e))
+subs = [s for s in json.load(sys.stdin) if s.get("nqn") == nqn]
+if not subs:
+    sys.exit(f"subsystem {nqn} not found")
+got = dict((n["nsid"], "kv" if "kvdev_name" in n else "lba")
+           for n in subs[0].get("namespaces", []))
+kinds = list(got.values())
+shown = ",".join("%d=%s" % (k, got[k]) for k in sorted(got))
+print("[spdk-vfu] target reports %d LBA + %d KV namespace(s), nsid map %s"
+      % (kinds.count("lba"), kinds.count("kv"), shown))
+if got != want:
+    sys.exit(f"expected nsid map {want}, got {got}")
+' "${NQN}" "${ns_map}"
+    if [ "${KV_CHECK}" -eq 1 ]; then
+        # The data path, not just the configuration: this attaches a host over
+        # the same socket a guest would use and round-trips a key through the
+        # KV command set. Refused rather than skipped when no KV namespace was
+        # asked for, because a --kv-check that quietly passes on an LBA-only
+        # config proves nothing it was run to prove.
+        [ "${kv_count}" -gt 0 ] || \
+            die "--kv-check needs a KV namespace: NVME_NAMESPACES=${NVME_NAMESPACES} has none"
+        kv-smoke "${VFIO_USER_SOCKET_DIR}"
+    fi
+    log "probe OK"
+    exit 0
+fi
+
+# Not the last line by accident: `wait` returns as soon as a trapped signal
+# arrives, and the TERM/INT handlers exit rather than falling through to here.
+# This form reports a target that died on its own instead of masking it as a
+# clean container exit.
+TGT_STATUS=0
+wait "${TGT_PID}" || TGT_STATUS=$?
+log "nvmf_tgt exited with status ${TGT_STATUS}"
+exit "${TGT_STATUS}"

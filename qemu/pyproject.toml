@@ -103,7 +103,7 @@ packages = [
 # must not ship. `qemu-tool quick-start` reads rocm-golden.xml when given no
 # --xml, and a `uv tool install` or `pipx install` has no checkout to read it
 # from, so without these in the wheel it dies before doing anything at all.
-"qemu_tool.share.stacks" = ["rocm-golden.xml", "helios-tray.xml", "mi355x-server.xml"]
+"qemu_tool.share.stacks" = ["rocm-golden.xml", "helios-tray.xml", "mi355x-server.xml", "xio.xml"]
 # Every file a stack needs to come up, not just the YAML. A stack directory is
 # used verbatim as a `docker compose` working directory, so anything it
 # bind-mounts or builds has to be in the wheel too -- and the failure when it

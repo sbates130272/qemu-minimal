@@ -572,7 +572,7 @@ class TestRender(unittest.TestCase):
                     if line.strip().startswith("restart:")]
         self.assertTrue(policies)
         self.assertEqual(set(policies), {'"no"'})
-        for stack in ("rocm-golden", "helios-tray", "mi355x-server"):
+        for stack in ("rocm-golden", "helios-tray", "mi355x-server", "xio"):
             text = (REPO_ROOT / "qemu/compose" / stack
                     / "docker-compose.yml").read_text()
             found = {line.split(":", 1)[1].strip()
@@ -1357,13 +1357,13 @@ class TestStackAssetCheck(unittest.TestCase):
         cwd = os.getcwd()
         os.chdir(REPO_ROOT)
         self.addCleanup(os.chdir, cwd)
-        for stack in ("rocm-golden", "helios-tray", "mi355x-server"):
+        for stack in ("rocm-golden", "helios-tray", "mi355x-server", "xio"):
             with self.subTest(stack=stack), contextlib.redirect_stdout(out):
                 gen_compose.run(
                     Path(f"qemu/stacks/{stack}.xml"),
                     Path(f"qemu/compose/{stack}"),
                     check=True)
-        self.assertEqual(out.getvalue().count("Up to date"), 3)
+        self.assertEqual(out.getvalue().count("Up to date"), 4)
 
 
 class TestStackAssetFailureModes(unittest.TestCase):
@@ -1928,6 +1928,109 @@ class TestDevices(unittest.TestCase):
                               "</devices>"])
         self.assertIn("id='kv'", str(ctx.exception))
 
+    _SPDK = (f"<spdk-image>example/spdk:spdk.1-{_VFU}</spdk-image>"
+             "<ernic-tap>false</ernic-tap><vm-nvme>1</vm-nvme>")
+
+    def test_an_spdk_entry_is_a_service_configured_by_its_environment(self):
+        svc = self._services(self._SPDK + """
+<vm-count>2</vm-count>
+<devices>
+  <server type='ernic' id='n'/><server type='rocjitsu' id='g'/>
+  <server type='spdk' id='kv'>
+    <namespaces>lba:malloc:512M,kv:mem</namespaces><serial>XIO-KV</serial>
+  </server>
+</devices>""")
+        for n in (1, 2):
+            spdk = svc[f"spdk-{n}"]
+            self.assertEqual(spdk["image"], f"example/spdk:spdk.1-{_VFU}")
+            self.assertEqual(spdk["environment"], [
+                f"VFIO_USER_SOCKET_DIR=/run/vfu/spdk-{n}",
+                "NVME_NAMESPACES=lba:malloc:512M,kv:mem",
+                "SPDK_SERIAL=XIO-KV"])
+            self.assertNotIn("command", spdk)
+            self.assertEqual(spdk["restart"], "no")
+            self.assertIn(f"/run/vfu/spdk-{n}/cntrl$",
+                          spdk["healthcheck"]["test"][-1])
+            qemu = svc[f"qemu-{n}"]
+            self.assertEqual(qemu["depends_on"][f"spdk-{n}"]["condition"],
+                             "service_healthy")
+            line = [l for l in qemu["entrypoint"][-1].splitlines()
+                    if "--vfio-userdev" in l][0]
+            # Last, after the NIC and the GPU.
+            self.assertTrue(line.strip().endswith(
+                f'/run/vfu/rocjitsu-{n}.sock,/run/vfu/spdk-{n}/cntrl"'), line)
+
+    def test_the_spdk_image_is_held_to_qemus_libvfio_user(self):
+        # _BASE's QEMU is vfu.<_VFU>. A stamp is not required of the SPDK
+        # image; the library it was built against is.
+        devices = ("<ernic-tap>false</ernic-tap><devices>"
+                   "<server type='ernic' id='n'/><server type='rocjitsu' id='g'/>"
+                   "<server type='spdk' id='k'/></devices>")
+        for tag in (f"spdk.1-{_VFU}", f"{_STAMP}-spdk.1-{_VFU}",
+                    f"20990101.g0000000-spdk.1-{_VFU}"):
+            with self.subTest(tag=tag), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                _plan(f"<spdk-image>example/spdk:{tag}</spdk-image>" + devices)
+        with self.assertRaises(SystemExit) as ctx, \
+                contextlib.redirect_stderr(io.StringIO()):
+            _plan("<spdk-image>example/spdk:spdk.1-vfu.0000000</spdk-image>"
+                  + devices)
+        self.assertIn("libvfio-user revisions differ", str(ctx.exception))
+        self.assertIn("<spdk-image>", str(ctx.exception))
+        # With no spdk server the element is not looked at.
+        with contextlib.redirect_stderr(io.StringIO()):
+            _plan("<spdk-image>example/spdk:spdk.1-vfu.0000000</spdk-image>")
+
+    def test_an_spdk_cpumask_is_an_environment_variable(self):
+        svc = self._services(self._SPDK + """
+<devices>
+  <server type='ernic' id='n'/><server type='rocjitsu' id='g'/>
+  <server type='spdk' id='kv'><cpumask>0x4</cpumask></server>
+</devices>""")
+        self.assertEqual(svc["spdk-1"]["environment"],
+                         ["VFIO_USER_SOCKET_DIR=/run/vfu/spdk-1",
+                          "SPDK_CPUMASK=0x4"])
+        self.assertIn("<cpumask> is a hexadecimal core mask", self._problems(
+            "<devices><server type='spdk' id='k'><cpumask>4</cpumask>"
+            "</server></devices>"))
+
+    def test_the_network_legend_names_spdk_only_where_there_is_one(self):
+        out = self._render(self._SPDK + """
+<devices><server type='ernic' id='n'/><server type='rocjitsu' id='g'/>
+<server type='spdk' id='kv'/></devices>""")
+        self.assertIn("4 sdxi   5 spdk", out)
+        self.assertNotIn("5 spdk", self._render(""))
+
+    def test_an_spdk_entry_needs_an_image_and_a_guest_takes_one(self):
+        entry = "<server type='spdk' id='{}'/>"
+        base = ("<devices><server type='ernic' id='n'/>"
+                "<server type='rocjitsu' id='g'/>{}</devices>")
+        for body, want in (
+                (base.format(entry.format("a")), "<spdk-image> is empty"),
+                (self._SPDK + base.format(entry.format("a") + entry.format("b")),
+                 "one SPDK NVMe controller")):
+            with self.subTest(want=want), self.assertRaises(SystemExit) as ctx, \
+                    contextlib.redirect_stderr(io.StringIO()):
+                _plan(body)
+            self.assertIn(want, str(ctx.exception))
+
+    def test_the_mmio_bridge_is_a_run_vm_flag_and_needs_an_nvme(self):
+        fork = (f"<qemu-ref>example/qemu-sbates-fork:{_STAMP}-qemu11.1.1-{_VFU}"
+                "</qemu-ref>")
+        out = self._render(fork + "<vm-nvme>1</vm-nvme>"
+                           "<vm-pci-mmio-bridge>true</vm-pci-mmio-bridge>")
+        self.assertEqual(out.count("          --pci-mmio-bridge \\\n"), 8)
+        self.assertNotIn("--pci-mmio-bridge", self._render("<vm-nvme>1</vm-nvme>"))
+        with self.assertRaises(SystemExit) as ctx, \
+                contextlib.redirect_stderr(io.StringIO()):
+            _plan("<vm-pci-mmio-bridge>true</vm-pci-mmio-bridge>")
+        self.assertIn("<vm-nvme>", str(ctx.exception))
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            _plan("<vm-nvme>1</vm-nvme>"
+                  "<vm-pci-mmio-bridge>true</vm-pci-mmio-bridge>")
+        self.assertIn("not the fork QEMU", err.getvalue())
+
     def test_a_guest_needs_a_nic_and_a_gpu(self):
         with self.assertRaises(SystemExit) as ctx, \
                 contextlib.redirect_stderr(io.StringIO()):
@@ -1940,7 +2043,13 @@ class TestDevices(unittest.TestCase):
             ("<devices x='1'/>", "takes no attributes"),
             ("<devices><device/></devices>", "<server> elements"),
             ("<devices><server id='n'/></devices>", "the types are"),
-            ("<devices><server type='spdk' id='n'/></devices>", "the types are"),
+            ("<devices><server type='nvme' id='n'/></devices>", "the types are"),
+            ("<server type='spdk' id='k'><serial>this serial is far too long"
+             "</serial></server>", "<serial> is an NVMe serial number"),
+            ("<server type='spdk' id='k'><namespaces>kv:mem lba</namespaces>"
+             "</server>", "<namespaces> is the image's NVME_NAMESPACES"),
+            ("<server type='spdk' id='k'><backend type='loopback'/></server>",
+             "holds <backend>"),
             ("<devices><server type='ernic'/></devices>", "an id starts"),
             ("<devices><server type='ernic' id='1x'/></devices>", "an id starts"),
             ("<devices><server type='ernic' id='n' vm='2'/></devices>",
@@ -2017,6 +2126,8 @@ class TestDevices(unittest.TestCase):
         tags = {"ernic": "ernic-ref", "rocjitsu": "rocjitsu-ref",
                 "sdxi": "sdxi-image"}
         for kind, table in fleet_xml.SERVER_OPTIONS.items():
+            if kind in fleet_xml.SERVER_ENV:
+                continue
             with self.subTest(kind=kind):
                 self.assertFalse(derived & set(table))
                 self.assertLessEqual(set(table.values()),
@@ -2040,9 +2151,33 @@ class TestDevices(unittest.TestCase):
                 (REPO_ROOT / "tests/fixtures/server-help/ernic.txt").read_text(),
                 rf"RDMA backend: .*\b{backend}\b")
 
-    def test_no_shipped_stack_has_a_block(self):
-        for xml in sorted((REPO_ROOT / "qemu" / "stacks").glob("*.xml")):
-            self.assertNotIn("<devices", xml.read_text(), xml.name)
+    def test_every_environment_option_is_a_variable_the_image_reads(self):
+        # The SPDK image takes its settings from the environment. Its fixture
+        # is the entrypoint script, headed by the image xio.xml pins.
+        import re as _re
+        from qemu_tool import fleet_xml
+        xio = (REPO_ROOT / "qemu" / "stacks" / "xio.xml").read_text()
+        refs = {"spdk": _re.search(
+            r"<spdk-image>([^<]+)</spdk-image>", xio).group(1)}
+        self.assertEqual(set(fleet_xml.SERVER_ENV), set(refs))
+        for kind, table in fleet_xml.SERVER_ENV.items():
+            text = (REPO_ROOT / "tests" / "fixtures" / "server-help"
+                    / f"{kind}.txt").read_text()
+            self.assertEqual(text.splitlines()[0], f"# {refs[kind]}")
+            self.assertEqual(set(table), set(fleet_xml.SERVER_OPTIONS[kind]))
+            for name, variable in table.items():
+                self.assertRegex(text, rf"\b{variable}=\$\{{{variable}:-", name)
+            # What the generator sets itself.
+            self.assertIn("VFIO_USER_SOCKET_DIR=${VFIO_USER_SOCKET_DIR:-", text)
+            self.assertIn('"${VFIO_USER_SOCKET_DIR}/cntrl"', text)
+
+    def test_only_the_xio_fleet_has_a_block(self):
+        # The other three are what "no block renders as before" is held to.
+        # Parsed, not searched for: xio.xml's own comment shows a block.
+        for name in ("rocm-golden", "helios-tray", "mi355x-server", "xio"):
+            with self.subTest(name=name):
+                cfg = FleetXml.parse(REPO_ROOT / "qemu/stacks" / f"{name}.xml")
+                self.assertEqual(bool(cfg.devices), name == "xio")
 
 
 if __name__ == "__main__":

@@ -72,7 +72,16 @@ VARIANTS: dict[str, tuple[str, str, str, str | None]] = {
     "default": ("rocm-golden.xml",   "quickstart",        "quickstart-key",        "vm-quickstart.yml"),
     "mi355x":  ("mi355x-server.xml", "quickstart-mi355x", "quickstart-mi355x-key", None),
     "helios":  ("helios-tray.xml",   "quickstart-helios", "quickstart-helios-key", None),
+    "xio":     ("xio.xml",           "quickstart-xio",    "quickstart-xio-key",    "vm-xio.yml"),
 }
+
+# The playbook --xio-test belongs to: its rocm-xio play is off without it.
+_XIO_PLAYBOOK = "vm-xio.yml"
+
+# The playbooks that move RDMA bytes between guests, and so the ones whose
+# run is checked against the NIC's own byte counter. vm-xio.yml builds and
+# loads rocm-xio on one guest and sends nothing.
+_RDMA_TEST_PLAYBOOKS = frozenset({"vm-quickstart.yml"})
 
 # Where the guest keypair referrer is pulled to, and what it carries.
 _VM_INFO_TYPE = "application/vnd.batesste.vm-info.v1"
@@ -178,6 +187,11 @@ class _State:
     fleet: FleetConfig = field(default_factory=FleetConfig)
     username: str = ""
     rdma_delta: int | None = None
+    # The flavor's playbook ran to the end in this process. What a flavor
+    # with no RDMA test between guests has in place of rdma_delta.
+    playbook_passed: bool = False
+    # The flavor's name, for the commands the summary prints.
+    variant: str = "default"
     rdma_duration: int | None = None
     nvme_duration: int | None = None
     # The optional tests, each a play of the playbook that is off unless its
@@ -194,6 +208,8 @@ class _State:
     # The fourth: a file on each guest's NVMe namespace read into GPU memory
     # through hipFile, and what arrived checked.
     hipfile_test: bool = False
+    # The rocm-xio install-and-check play of vm-xio.yml, off unless asked.
+    xio_test: bool = False
 
     # ---- convenience readers -------------------------------------------
     @property
@@ -1369,7 +1385,9 @@ def _check_mesh_tests(state: _State) -> None:
     transfer that never completes. One guest has no peer and is not tested
     this way.
     """
-    if state.playbook is None or state.vm_count < 2:
+    # Only a playbook that runs that test: the xio flavor's sends nothing
+    # between guests, and a flavor with no playbook runs no test at all.
+    if state.playbook not in _RDMA_TEST_PLAYBOOKS or state.vm_count < 2:
         return
     nics = [d for d in state.fleet.devices if d.type == "ernic"]
     if not nics or nics[0].backend in (None, "tcp"):
@@ -1382,6 +1400,27 @@ def _check_mesh_tests(state: _State) -> None:
          "a guest's first RDMA device. Put a NIC with no <backend> first "
          "in <devices>, or run one guest (<vm-count>1</vm-count>), then "
          "run `qemu-tool quick-start up` again.")
+
+
+def _check_xio_test(state: _State) -> None:
+    """Refuse --xio-test where there is no rocm-xio play to open."""
+    if not state.xio_test or state.playbook == _XIO_PLAYBOOK:
+        return
+    runs = (f"runs {state.playbook}" if state.playbook
+            else "runs no playbook")
+    _die(f"--xio-test: this flavor {runs}, which has no rocm-xio play. It "
+         f"is a play of {_XIO_PLAYBOOK}, which the xio flavor runs: "
+         "qemu-tool quick-start --flavor xio test --xio-test")
+
+
+def _xio_recorded(state: _State) -> str:
+    """What the rocm-xio play left on the controller, or '' when nothing."""
+    path = state.artifacts / "xio.md"
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        return ""
+    return next((l.strip() for l in lines if l.startswith("xio: ")), "")
 
 
 def _check_optional_tests(state: _State) -> None:
@@ -1410,6 +1449,10 @@ def _check_optional_tests(state: _State) -> None:
              "playbook, so quick-start boots its guests and runs no test on "
              "them. The optional tests are plays of vm-quickstart.yml, which "
              "the default flavor runs.")
+    if state.playbook not in _RDMA_TEST_PLAYBOOKS:
+        _die(f"{' and '.join(asked)}: this flavor runs {state.playbook}, "
+             "which has none of the optional tests. They are plays of "
+             "vm-quickstart.yml, which the default flavor runs.")
     again = ("then run `qemu-tool quick-start up` again, because the setting "
              "is rendered into the stack and an edit does not reach a "
              "running one")
@@ -1525,9 +1568,11 @@ def _playbook_command(state: _State) -> list[str]:
             "--private-key", str(state.key),
             "-e", f"quickstart_artifacts_dir={state.artifacts}",
             "-e", "ansible_remote_tmp=/tmp/.ansible/tmp"]
-    if state.rdma_duration is not None:
+    # The two timed tests are vm-quickstart.yml's.
+    timed = state.playbook in _RDMA_TEST_PLAYBOOKS
+    if timed and state.rdma_duration is not None:
         cmd += ["-e", f"quickstart_rdma_duration={state.rdma_duration}"]
-    if state.nvme_duration is not None:
+    if timed and state.nvme_duration is not None:
         cmd += ["-e", f"quickstart_nvme_duration={state.nvme_duration}"]
     # Each is the gate of one play, which a run without it ends at its first
     # task. Passed only when asked for: the playbook's default is off.
@@ -1539,6 +1584,8 @@ def _playbook_command(state: _State) -> list[str]:
             cmd += ["-e", f"quickstart_p4_iters={state.p4_iters}"]
     if state.hipfile_test:
         cmd += ["-e", "quickstart_hipfile_test=true"]
+    if state.xio_test:
+        cmd += ["-e", "quickstart_xio_test=true"]
     if state.rocm_rdma_test:
         cmd += ["-e", "quickstart_rocm_rdma=true"]
         if state.rocm_rdma_mode is not None:
@@ -1562,7 +1609,8 @@ def configure_and_test(state: _State) -> None:
 
     _say("Configuring the guests and running the tests")
     shutil.rmtree(state.artifacts, ignore_errors=True)
-    before = _ernic_bytes(state, 1)
+    counted = state.playbook in _RDMA_TEST_PLAYBOOKS
+    before = _ernic_bytes(state, 1) if counted else 0
 
     result = subprocess.run(_playbook_command(state),
                             cwd=state.repo_root / "ansible")
@@ -1570,6 +1618,18 @@ def configure_and_test(state: _State) -> None:
         _die(_rocm_rdma_failure(state)
              or "the configure-and-test playbook failed")
 
+    state.playbook_passed = True
+    if state.xio_test:
+        # Asked for and left no result is a failure: a play that was
+        # skipped did not fail either.
+        seen = _xio_recorded(state)
+        if not seen:
+            _die("--xio-test was asked for and the playbook left no "
+                 f"result in {state.artifacts / 'xio.md'}")
+        _say(seen)
+    if not counted:
+        _say(f"{state.playbook} finished; it runs no RDMA test between guests")
+        return
     state.rdma_delta = _ernic_bytes(state, 1) - before
     _say(f"ernic 1 moved {state.rdma_delta} bytes")
     # A passing ib_send_bw proves the verbs worked; only the NIC's own
@@ -1771,23 +1831,41 @@ def report(state: _State) -> None:
     # The site treats a report with no `Status: **pass**` as unknown rather
     # than as a pass, which is what a `report` run on its own -- with no test
     # behind it -- should produce.
-    status = "pass" if (state.rdma_delta or 0) > 0 else "unknown"
+    counted = state.playbook in _RDMA_TEST_PLAYBOOKS
+    if counted:
+        status = "pass" if (state.rdma_delta or 0) > 0 else "unknown"
+    else:
+        status = "pass" if state.playbook_passed else "unknown"
     commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
                             cwd=state.repo_root or Path.cwd(),
                             capture_output=True, text=True)
     stamp = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
 
-    out = [
-        "# Two-VM quickstart report",
-        "",
-        "Two guests from the published `rocm-golden` image, each with an",
-        "emulated gfx1250, an emulated NVMe and an emulated RDMA NIC, booted",
-        "by `qemu-tool quick-start`.",
+    if counted:
+        head = [
+            "# Two-VM quickstart report",
+            "",
+            "Two guests from the published `rocm-golden` image, each with an",
+            "emulated gfx1250, an emulated NVMe and an emulated RDMA NIC, booted",
+            "by `qemu-tool quick-start`.",
+        ]
+    else:
+        head = [
+            f"# quick-start report: the {state.variant} flavor",
+            "",
+            f"{state.vm_count} guest(s) of `{state.fleet_file.name}`, booted by",
+            f"`qemu-tool quick-start --flavor {state.variant}`"
+            + (f" and configured by `{state.playbook}`." if state.playbook
+               else "; this flavor runs no playbook."),
+        ]
+    out = head + [
         "",
         f"- Guest image: `{state.fleet.backing_ref.split(':')[-1]}`",
         f"- Guest size: {state.vm_count} x {state.fleet.vm_vcpus} vCPU, "
         f"{state.fleet.vm_vmem} MiB",
+    ] + ([
         f"- RDMA bytes across the mesh: {state.rdma_delta if state.rdma_delta is not None else 'unknown'}",
+    ] if counted else []) + [
         f"- Generated: **{stamp}** &middot; Commit: "
         f"`{commit.stdout.strip() or 'unknown'}` &middot; Status: **{status}**",
         "",
@@ -1874,7 +1952,10 @@ def _summary(state: _State) -> None:
     url_host = f"[{shown}]" if ":" in shown else shown
     print()
     print("=" * 70)
-    print(f"  {state.vm_count} guests are up, each with a GPU, an NVMe and an RDMA NIC.")
+    if state.variant == "default":
+        print(f"  {state.vm_count} guests are up, each with a GPU, an NVMe and an RDMA NIC.")
+    else:
+        print(f"  {state.vm_count} guest(s) of the {state.variant} flavor are up.")
     print("=" * 70)
     print()
     print("  Log in -- qemu-tool resolves the port, the account and the key:")
@@ -1912,7 +1993,19 @@ def _summary(state: _State) -> None:
     print()
     print("      qemu-tool list --summary          # what the fleet is doing")
     print(f"      qemu-tool inspect {state.vm(1)}")
-    print("      qemu-tool quick-start test        # re-run the GPU and RDMA tests")
+    # The flavor has to be named again: its stack and key directories and
+    # its playbook all follow from it.
+    flavor = "" if state.variant == "default" else f" --flavor {state.variant}"
+    if state.playbook in _RDMA_TEST_PLAYBOOKS:
+        print(f"      qemu-tool quick-start{flavor} test        "
+              "# re-run the GPU and RDMA tests")
+    elif state.playbook == _XIO_PLAYBOOK:
+        print(f"      qemu-tool quick-start{flavor} test --xio-test")
+        print("                                        "
+              "# install rocm-xio in the guest and check it")
+    elif state.playbook is not None:
+        print(f"      qemu-tool quick-start{flavor} test")
+        print(f"                                        # run {state.playbook} again")
     # None on a flavor with no playbook: _check_optional_tests refuses
     # every one of them there.
     optional = [flag for flag, offered in (
@@ -1920,11 +2013,12 @@ def _summary(state: _State) -> None:
         ("--p4-test", state.fleet.p4_enable
          and state.fleet.p4_guest_scope == _P4_SCOPE_NEEDED),
         ("--hipfile-test", state.fleet.vm_nvme >= 1))
-        if offered and state.playbook is not None]
+        if offered and state.playbook in _RDMA_TEST_PLAYBOOKS]
     if optional:
-        print(f"      qemu-tool quick-start test {' '.join(optional)}")
+        print(f"      qemu-tool quick-start{flavor} test {' '.join(optional)}")
         print("                                        # and the optional ones")
-    print("      qemu-tool quick-start down        # stop it, keep the overlays")
+    print(f"      qemu-tool quick-start{flavor} down        "
+          "# stop it, keep the overlays")
     print()
 
 
@@ -1955,6 +2049,7 @@ def run(
     rocm_rdma_test: bool = False,
     rocm_rdma_mode: str | None = None,
     hipfile_test: bool = False,
+    xio_test: bool = False,
 ) -> None:
     fleet_stem, stack_stem, key_stem, playbook = VARIANTS[variant]
 
@@ -1998,7 +2093,9 @@ def run(
         rocm_rdma_test=rocm_rdma_test,
         rocm_rdma_mode=rocm_rdma_mode,
         hipfile_test=hipfile_test,
+        xio_test=xio_test,
         playbook=playbook,
+        variant=variant,
     )
     # Picks up the overlays an earlier verb left beside the stack, which is
     # what makes `up` then `test` -- two processes, as the CI lane runs them
@@ -2021,10 +2118,12 @@ def run(
     # run is refused now. The other verbs run no test, so they ignore the
     # switches, and say so: silence there reads as the test having been run.
     if verb in ("all", "test"):
+        _check_xio_test(state)
         _check_optional_tests(state)
         _check_mesh_tests(state)
     else:
         given = [flag for flag, on in (
+            ("--xio-test", xio_test),
             ("--sdxi-test", sdxi_test),
             ("--p4-test", p4_test),
             ("--p4-iters", p4_iters is not None),

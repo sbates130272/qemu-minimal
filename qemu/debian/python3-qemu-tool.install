@@ -5,6 +5,7 @@ packages.d/packages-minimal usr/share/qemu-tool/
 stacks/rocm-golden.xml usr/share/qemu-tool/stacks/
 stacks/helios-tray.xml usr/share/qemu-tool/stacks/
 stacks/mi355x-server.xml usr/share/qemu-tool/stacks/
+stacks/xio.xml usr/share/qemu-tool/stacks/
 # Every stack compose.py's _STACKS advertises, and every file it needs to
 # come up -- the same set the wheel carries. A stack directory is used
 # verbatim as a `docker compose` working directory, and Docker creates a
@@ -29,3 +30,9 @@ compose/mi355x-server/README.md usr/share/qemu-tool/compose/mi355x-server/
 compose/mi355x-server/grafana usr/share/qemu-tool/compose/mi355x-server/
 compose/mi355x-server/logging usr/share/qemu-tool/compose/mi355x-server/
 compose/mi355x-server/tapsetup usr/share/qemu-tool/compose/mi355x-server/
+compose/xio/docker-compose.yml usr/share/qemu-tool/compose/xio/
+compose/xio/prometheus.yml usr/share/qemu-tool/compose/xio/
+compose/xio/fleet-inventory.yml usr/share/qemu-tool/compose/xio/
+compose/xio/grafana usr/share/qemu-tool/compose/xio/
+compose/xio/logging usr/share/qemu-tool/compose/xio/
+compose/xio/tapsetup usr/share/qemu-tool/compose/xio/

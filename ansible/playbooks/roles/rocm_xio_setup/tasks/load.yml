@@ -1,0 +1,102 @@
+---
+# Load the rocm-xio module and check the devices it works on are there. For
+# a running guest of the xio stack: two GPUs, QEMU's NVMe and the SPDK
+# NVMe-KV controller.
+
+- name: Apply the NVMe naming rule
+  ansible.builtin.shell:
+    cmd: |
+      set -eu
+      if [ -e /dev/xio-kv ] && [ -e /dev/xio-blk ]; then echo present; exit 0; fi
+      udevadm control --reload
+      udevadm trigger --action=add --subsystem-match=nvme \
+          --subsystem-match=block --sysname-match='nvme*'
+      udevadm settle
+      echo applied
+    executable: /bin/sh
+  register: rocm_xio_setup_udev
+  changed_when: "'applied' in rocm_xio_setup_udev.stdout"
+
+- name: Load the rocm-xio module
+  ansible.builtin.shell:
+    cmd: |
+      set -eu
+      # A module that was resident before a rebuild is the old build: the
+      # one in the kernel has to be the one on disk.
+      if [ -d /sys/module/rocm_xio ]; then
+          want=$(modinfo -F srcversion rocm-xio)
+          have=$(cat /sys/module/rocm_xio/srcversion 2>/dev/null || true)
+          if [ -n "$want" ] && [ "$want" = "$have" ]; then
+              echo already
+              exit 0
+          fi
+          modprobe -r rocm-xio || {
+              echo "rocm_xio in the kernel is build ${have:-unknown}," >&2
+              echo "and the installed module is $want." >&2
+              echo "It is in use and could not be unloaded: stop what" >&2
+              echo "holds /dev/rocm-xio, or restart the guest." >&2
+              exit 1
+          }
+      fi
+      modprobe rocm-xio
+      echo loaded
+    executable: /bin/sh
+  register: rocm_xio_setup_modprobe
+  changed_when: "'loaded' in rocm_xio_setup_modprobe.stdout"
+
+# The node existed before the rule could be applied to it when the module
+# was loaded by an earlier run, or at boot.
+- name: Apply the access rule to /dev/rocm-xio
+  ansible.builtin.shell:
+    cmd: |
+      set -eu
+      want="{{ rocm_xio_setup_group }} 660"
+      if [ "$(stat -c '%G %a' /dev/rocm-xio)" = "$want" ]; then echo present; exit 0; fi
+      udevadm control --reload
+      udevadm trigger --action=add --sysname-match=rocm-xio
+      udevadm settle
+      echo applied
+    executable: /bin/sh
+  register: rocm_xio_setup_access
+  changed_when: "'applied' in rocm_xio_setup_access.stdout"
+
+- name: Look at what the guest has
+  ansible.builtin.shell:
+    cmd: |
+      gpus=0
+      for f in /sys/class/kfd/kfd/topology/nodes/*/gpu_id; do
+          [ -r "$f" ] && [ "$(cat "$f")" != 0 ] && gpus=$((gpus + 1))
+      done
+      echo "gpus=$gpus"
+      # The two the stack attaches: PCI controllers. One reached over a
+      # fabric (the NVMe-oF NIC, once connected) is not one of them.
+      nvme=0
+      for d in /sys/class/nvme/nvme*; do
+          [ -r "$d/transport" ] && [ "$(cat "$d/transport")" = pcie ] &&
+              nvme=$((nvme + 1))
+      done
+      echo "nvme=$nvme"
+      for node in /dev/rocm-xio /dev/xio-kv /dev/xio-blk; do
+          [ -e "$node" ] && echo "have=$node" || echo "missing=$node"
+      done
+      echo "access=$(stat -c '%G %a' /dev/rocm-xio 2>/dev/null || echo none)"
+    executable: /bin/sh
+  register: rocm_xio_setup_seen
+  changed_when: false
+
+- name: Fail unless both GPUs, both NVMe controllers and the three nodes are there
+  ansible.builtin.assert:
+    that:
+      - "'gpus=2' in rocm_xio_setup_seen.stdout_lines"
+      - "'nvme=2' in rocm_xio_setup_seen.stdout_lines"
+      - "'missing=' not in rocm_xio_setup_seen.stdout"
+      - "('access=' ~ rocm_xio_setup_group ~ ' 660') in rocm_xio_setup_seen.stdout_lines"
+    fail_msg: >-
+      The xio guest wants 2 GPUs under KFD, 2 NVMe controllers, /dev/rocm-xio
+      owned by group {{ rocm_xio_setup_group }} mode 660, /dev/xio-kv and
+      /dev/xio-blk; it has
+      {{ rocm_xio_setup_seen.stdout_lines | join(', ') }}. /dev/xio-kv is the
+      SPDK controller with serial {{ rocm_xio_setup_kv_serial }}, the
+      <serial> of the fleet's <server type='spdk'> entry.
+    success_msg: >-
+      xio guest ready: {{ rocm_xio_setup_seen.stdout_lines | join(', ') }}
