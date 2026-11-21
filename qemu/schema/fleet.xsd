@@ -181,6 +181,11 @@
             <xs:documentation>Point each guest's emulated NVMe at its first GPU's BAR 0 (VRAM) so hipFile direct reads are fast; fork QEMU only. true or false; default false; refused with vm-nvme of 0 or less; warns on a non-fork qemu-ref; generated stacks only, run-vm --xml does not get it.</xs:documentation>
           </xs:annotation>
         </xs:element>
+        <xs:element name="vm-nvme-block-size" type="f:kind.blocksize" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Logical and physical block size of each guest's emulated NVMe namespaces: the LBA format the guest sees in use. 512 or 4096, in bytes; default 512, QEMU's own, which renders nothing. Anything else is a parse error. Refused at 4096 with vm-nvme of 0. QEMU's emulated NVMe only: an SPDK controller and an nvmeof backend set their own. Nothing on the scratch disk is converted: a partition table made at one size is not found at the other, and XFS or ext4 with blocks under 4096 made at 512 does not mount at 4096.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
         <xs:element name="vm-pci-mmio-bridge" type="f:kind.bool" minOccurs="0">
           <xs:annotation>
             <xs:documentation>Give every guest the fork QEMU's pci-mmio-bridge device for its emulated NVMe, which rocm-xio uses. true or false; default false; refused with vm-nvme of 0 or less; needs the fork QEMU; generated stacks only, run-vm --xml does not get it.</xs:documentation>
@@ -507,6 +512,14 @@
     </xs:annotation>
     <xs:restriction base="xs:string">
       <xs:pattern value="([ -+.-~\-][ -+.-~\-][ -+.-~\-][ -+.-~\-][ -+.-~\-][ -+.-~\-][ -+.-~\-][ -+.-~\-][ -+.-~\-][ -+.-~\-][ -+.-~\-][ -+.-~\-])?"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="kind.blocksize">
+    <xs:annotation>
+      <xs:documentation>block size: 512 or 4096, a number of bytes in ASCII digits; white space round it is ignored. No sign, no underscore, no leading zero and no unit. An empty element is an error.</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*(512|4096)[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*"/>
     </xs:restriction>
   </xs:simpleType>
   <xs:group name="children.ernic">

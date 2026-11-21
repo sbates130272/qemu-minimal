@@ -11,6 +11,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from .config import DEFAULT_NVME_BLOCK_SIZE
 from .fleet_xml import FleetConfig, FleetXml, split_args
 from .ports import DEFAULT_SSH_PORT
 
@@ -56,6 +57,8 @@ def vm_overrides(fleet: FleetConfig) -> dict[str, Any]:
         out["vmem"] = fleet.vm_vmem
     if fleet.vm_nvme:
         out["nvme"] = str(fleet.vm_nvme)
+    if fleet.vm_nvme_block_size != DEFAULT_NVME_BLOCK_SIZE:
+        out["nvme_block_size"] = fleet.vm_nvme_block_size
     if fleet.vm_username:
         out["username"] = fleet.vm_username
     if fleet.vm_password:

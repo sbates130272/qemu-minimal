@@ -19,7 +19,7 @@ from typing import Any
 
 from . import __version__
 from .caps import probe_caps
-from .config import VMConfig
+from .config import NVME_BLOCK_SIZES, VMConfig
 from .compose import (
     _DEFAULT_STACK,
     _SOURCE_COMPOSE_ROOT,
@@ -879,6 +879,18 @@ def _add_run_vm(
     g.add_argument(
         "--nvme-lbaf-mask", default=_UNSET, metavar="HEX",
         help="Bitmask restricting the LBA formats advertised.",
+    )
+    g.add_argument(
+        "--nvme-block-size", type=int, choices=NVME_BLOCK_SIZES,
+        default=_UNSET, metavar="{512,4096}",
+        help="Logical and physical block size, in bytes, of every NVMe "
+             "namespace run-vm creates, which is the LBA format the guest "
+             "sees in use. Default: <vm-nvme-block-size>, else 512, QEMU's "
+             "own. 4096 matches a 4 KiB fabric or SPDK namespace. Not "
+             "applied to a literal --nvme string. An existing scratch disk "
+             "is not converted: a partition table made at one size is not "
+             "found at the other, and XFS made at 512 does not mount at "
+             "4096.",
     )
     g.add_argument("--nvme-trace", default=_UNSET,
                    metavar="{doorbell,all,EVENT}",
@@ -1976,6 +1988,7 @@ def _extract_cli_overrides(
         _take("nvme_trace", "nvme_trace")
         _take("nvme_trace_file", "nvme_trace_file")
         _take("nvme_lbaf_mask", "nvme_lbaf_mask")
+        _take("nvme_block_size", "nvme_block_size")
         _take("nvme_recreate", "nvme_recreate")
         _take("nvme_dbbuf_poll_ns", "nvme_dbbuf_poll_ns")
         _take("nvme_dbbuf_poll_eventidx", "nvme_dbbuf_poll_eventidx")

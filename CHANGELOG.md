@@ -289,6 +289,35 @@ All notable changes to this project will be documented in this file.
   in that guest's log. A bake does not take them. Rendered and read back
   through `docker compose config` and `run-vm --dry-run`; no guest has been
   started with one.
+- **`<vm-nvme-block-size>` and `run-vm --nvme-block-size`: 4096-byte
+  blocks on the emulated NVMe.** One setting, `512` (the default, and
+  QEMU's) or `4096`, for the logical and the physical block size of every
+  NVMe namespace QEMU itself emulates for a guest; it is what a request for
+  an "LBA format" comes to, since QEMU takes the format in use from the
+  logical block size. Any other value is a parse error naming the two.
+  - `run-vm` adds `logical_block_size=4096,physical_block_size=4096` to the
+    device that holds the drive: the `nvme-ns` of each scratch qcow2, and
+    the `nvme` controller of each null_blk device (a negative `--nvme`). On
+    a controller with a separate `nvme-ns` QEMU 10.2.1 and the fork's 11.1.3
+    both accept the properties and leave the namespace at 512, so they are
+    never written there. A literal `--nvme` string is left alone, with a
+    note. `--convert-to-libvirt` writes and reads the same.
+  - `gen-compose` renders `--nvme-block-size` on each guest's `run-vm` only
+    for a value that is not the default, so the four shipped stacks are
+    byte for byte what they were, and refuses 4096 on a fleet with no
+    emulated NVMe (`<vm-nvme>0`). `run-vm --xml` gets it from the file.
+  - It does not reach an SPDK controller or an `nvmeof` backend, which set
+    their own (`lba:malloc:SIZE:BLOCK`, 4096 by default; `bs=`, 512 by
+    default).
+  - Nothing on an existing scratch disk is converted. Changing from 512 to
+    4096 under data, on a guest: a GPT is not found, XFS and ext4 with
+    1024-byte blocks do not mount, ext4 with 4096-byte blocks does.
+  - Run on one guest of the default fleet on the fork QEMU, with
+    `<vm-nvme-vram>`: the guest reported 4096-byte logical and physical
+    blocks and LBA Format 4 in use, and `quick-start test` and
+    `--hipfile-test` passed at 4096 and at 512 with rates inside each
+    other's spread. Not run: null_blk devices, the bridge and more than one
+    NVMe a guest on a guest, and any CI lane.
 - **`<vm-pci-mmio-bridge>`.** Renders `run-vm --pci-mmio-bridge` for every
   guest. Refused without an emulated NVMe (`<vm-nvme>` of at least 1), and
   warned about on a `<qemu-ref>` that is not the fork.

@@ -954,6 +954,96 @@ class TestNVMeVram(unittest.TestCase):
         self.assertEqual(text.count("--nvme-vram-dev"), 2)
 
 
+class TestNVMeBlockSize(unittest.TestCase):
+    """<vm-nvme-block-size>: run-vm --nvme-block-size on each guest, and
+    only for a size that is not the default."""
+
+    def _render(self, extra: str) -> str:
+        with contextlib.redirect_stderr(io.StringIO()):
+            return gen_compose.render_compose(_plan(extra), ["e"], "d")
+
+    def test_the_default_renders_nothing(self):
+        for extra in ("<vm-nvme>1</vm-nvme>",
+                      "<vm-nvme>1</vm-nvme>"
+                      "<vm-nvme-block-size>512</vm-nvme-block-size>"):
+            with self.subTest(extra=extra):
+                self.assertNotIn("--nvme-block-size", self._render(extra))
+        # Byte for byte: naming the default is the same stack as not.
+        self.assertEqual(
+            self._render("<vm-nvme>1</vm-nvme>"),
+            self._render("<vm-nvme>1</vm-nvme>"
+                         "<vm-nvme-block-size>512</vm-nvme-block-size>"))
+
+    def test_4096_is_on_every_guests_run_vm(self):
+        out = self._render("<vm-nvme>1</vm-nvme>"
+                           "<vm-nvme-block-size>4096</vm-nvme-block-size>")
+        self.assertEqual(out.count("          --nvme-block-size 4096 \\\n"), 8)
+        self.assertEqual(out.count("--nvme-block-size"), 8)
+
+    def test_it_is_a_run_vm_option_between_the_count_and_the_devices(self):
+        out = self._render(
+            "<vm-count>1</vm-count><vm-nvme>2</vm-nvme>"
+            "<vm-nvme-block-size>4096</vm-nvme-block-size>"
+            "<vm-nvme-vram>true</vm-nvme-vram>")
+        run = out[out.index("qemu-tool run-vm"):]
+        self.assertLess(run.index('--nvme "2"'),
+                        run.index("--nvme-block-size 4096"))
+        self.assertLess(run.index("--nvme-block-size 4096"),
+                        run.index("--nvme-vram-dev"))
+        self.assertLess(run.index("--nvme-block-size 4096"),
+                        run.index("--vfio-userdev"))
+
+    def test_run_vm_takes_the_line_the_generator_writes(self):
+        import re as _re
+        out = self._render("<vm-count>1</vm-count><vm-nvme>1</vm-nvme>"
+                           "<vm-nvme-block-size>4096</vm-nvme-block-size>")
+        words = _re.search(r"--nvme-block-size (\S+)", out)
+        from qemu_tool import cli
+        args = cli._build_parser().parse_args(
+            ["run-vm", "--nvme-block-size", words.group(1)])
+        self.assertEqual(args.nvme_block_size, 4096)
+
+    def test_null_blk_devices_take_it(self):
+        out = self._render("<vm-nvme>-1</vm-nvme>"
+                           "<vm-nvme-block-size>4096</vm-nvme-block-size>")
+        self.assertEqual(out.count("--nvme-block-size 4096"), 8)
+
+    def test_with_the_bridge(self):
+        out = self._render(
+            "<vm-count>1</vm-count><vm-nvme>1</vm-nvme>"
+            "<vm-pci-mmio-bridge>true</vm-pci-mmio-bridge>"
+            "<vm-nvme-block-size>4096</vm-nvme-block-size>")
+        self.assertEqual(out.count("--nvme-block-size 4096"), 1)
+        self.assertEqual(out.count("--pci-mmio-bridge"), 1)
+
+    def test_refused_without_an_nvme(self):
+        for nvme in ("", "<vm-nvme>0</vm-nvme>"):
+            with self.subTest(nvme=nvme), self.assertRaises(SystemExit) as ctx, \
+                    contextlib.redirect_stderr(io.StringIO()):
+                _plan(nvme + "<vm-nvme-block-size>4096</vm-nvme-block-size>")
+            text = str(ctx.exception)
+            self.assertIn("<vm-nvme-block-size> is 4096", text)
+            self.assertIn("<vm-nvme> is 0", text)
+            # What it is not for, and the two ways out.
+            self.assertIn("SPDK", text)
+            self.assertIn("nvmeof", text)
+            self.assertIn("<vm-nvme>1</vm-nvme>", text)
+            self.assertIn("remove <vm-nvme-block-size>", text)
+
+    def test_the_default_is_not_refused_without_an_nvme(self):
+        with contextlib.redirect_stderr(io.StringIO()):
+            _plan("<vm-nvme-block-size>512</vm-nvme-block-size>")
+
+    def test_no_shipped_stack_renders_it(self):
+        for stack in ("rocm-golden", "helios-tray", "mi355x-server", "xio"):
+            with self.subTest(stack=stack):
+                text = (REPO_ROOT / "qemu/compose" / stack
+                        / "docker-compose.yml").read_text()
+                self.assertNotIn("--nvme-block-size", text)
+                fleet = (REPO_ROOT / "qemu/stacks" / f"{stack}.xml").read_text()
+                self.assertNotIn("vm-nvme-block-size", fleet)
+
+
 class TestHostShare(unittest.TestCase):
     """<vm-filesystem>, the 9p share that carries the image tarball.
 

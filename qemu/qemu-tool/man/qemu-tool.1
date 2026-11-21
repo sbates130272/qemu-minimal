@@ -778,6 +778,29 @@ instead of stderr.
 .BI \-\-nvme\-lbaf\-mask " HEX"
 Restrict the advertised LBA format mask (hex bitmask).
 .TP
+.BI \-\-nvme\-block\-size " {512,4096}"
+Logical and physical block size, in bytes, of every NVMe namespace
+.B run\-vm
+creates: the LBA format the guest sees in use. Default:
+.BR <vm\-nvme\-block\-size> ,
+else 512, which is QEMU's own and adds nothing to the command line.
+.B 4096
+adds
+.B logical_block_size=4096,physical_block_size=4096
+to the device that holds the drive: the
+.B nvme\-ns
+of each drive created by
+.BR \-\-nvme " N" ,
+and the
+.B nvme
+controller of each null_blk device. It is not applied to a literal
+.B \-\-nvme
+argument, and has nothing to do with an SPDK controller or an NVMe-oF
+namespace, which set their own. An existing scratch disk is not
+converted. A partition table made at one size is not found at the other;
+XFS made at 512, and ext4 made with blocks smaller than 4096, do not mount
+at 4096; ext4 with 4096-byte blocks mounts at either.
+.TP
 .B \-\-nvme\-recreate
 Recreate NVMe image files even if they already exist.
 .TP
@@ -2494,6 +2517,7 @@ beats the file.
 <vm\-vmem>                     \-\-vmem
 <vm\-images\-dir>               \-\-images
 <vm\-nvme>                     \-\-nvme
+<vm\-nvme\-block\-size>          \-\-nvme\-block\-size
 <vm\-filesystem>               \-\-filesystem
 <vm\-extra\-hostfwd>            \-\-extra\-hostfwd
 <vm\-vfio\-user\-root\-port>      \-\-vfio\-user\-root\-port

@@ -656,12 +656,12 @@ the XSD has a bullet of its own.
   directory as a directory; the first said `cannot write .: Is a
   directory`, because `Path("")` is `.`. The option is a string for that
   reason, not a `Path`.
-- **`tests/test_fleet_schema.py`.** `AGREE` is 257 small documents the
+- **`tests/test_fleet_schema.py`.** `AGREE` is 275 small documents the
   parser and the RELAX NG schema must answer alike, each with the answer;
   `LOOSER` is eleven the parser refuses and neither schema can.
   `XSD_TAKES` names the six documents of `AGREE` the XSD accepts, and
   `XSD_LOOSER` is ten more the RELAX NG schema refuses and the XSD
-  accepts, each under a key of `xsd_looser()`: 278 documents, and one test
+  accepts, each under a key of `xsd_looser()`: 296 documents, and one test
   asks the parser and both schemas about each and requires the three
   answers it is listed with, which for the XSD is "agrees with the RELAX NG
   schema everywhere but on its listed looseness". Others assert each rule
@@ -670,7 +670,7 @@ the XSD has a bullet of its own.
   with one repeated (265 documents, all three answers), every decimal
   digit Python knows in a single integer, an integer one digit past
   `int()`'s limit, and 400 generated addresses. **Every flat setting is
-  held to its kind, whether or not a document sets it**: 18 of the 71 are
+  held to its kind, whether or not a document sets it**: 18 of the 72 are
   in no listed document and no shipped file, and typing one of those as
   another kind, in either renderer, used to pass the suite. One test reads
   each setting's declaration in both rendered schemas (`kind.<kind>` and
@@ -686,7 +686,7 @@ the XSD has a bullet of its own.
   when that imports, else `xmllint --relaxng` and `xmllint --schema`; with
   neither it skips and prints that no document was validated, and under
   `CI=true` it fails. `Gen Compose Check` installs `lxml`.
-  `python tests/test_fleet_schema.py --dump DIR` writes the 278 documents
+  `python tests/test_fleet_schema.py --dump DIR` writes the 296 documents
   and an `index.json` of the expected answers, for running another
   validator over them by hand. **One document is long on purpose**,
   `BIG_BLOCK`: 254 `<server>` entries, which is every NIC one guest can
@@ -1547,6 +1547,97 @@ NVMe-to-VRAM path fast; known issue 15 has the figures.
   option on both QEMU command lines, `quick-start test` passing, and the
   two hipFile benches at 831 and 959 MB/s (issue 15). Not run: guests at
   4 vCPU, the daily lane, and either other fleet with or without it.
+
+**`<vm-nvme-block-size>` sets the block size of QEMU's emulated NVMe, 512
+or 4096, and no shipped fleet sets it.** An integer of a kind of its own
+(`blocksize`, `vm_nvme_block_size`, one row of `_SETTINGS`), default 512,
+which is QEMU's. It was asked for as an "NVMe LBA format": QEMU derives the
+LBA format in use from the namespace's `logical_block_size`
+(`hw/nvme/ns.c`), so the block size is the setting and the name says what
+it sets.
+
+- **What it renders.** Each `qemu-N` service's `run-vm` gains
+  `--nvme-block-size 4096`, and only for a value that is not the default,
+  so the four committed stacks did not change by a byte.
+  `run_vm.nvme_block_props` turns it into
+  `,logical_block_size=4096,physical_block_size=4096` on the device that
+  holds the drive: the `nvme-ns` of each scratch qcow2 (`--nvme N`), and
+  the `nvme` controller of each null_blk device (`--nvme -N`), which has no
+  `nvme-ns`. Both sizes, because QEMU refuses a logical size above the
+  physical one. `libvirt_xml` writes the same and keeps the size in a hint.
+- **Never on a controller that has its own `nvme-ns`.** Both QEMUs accept
+  the two properties there and the namespace stays at 512: asked of the
+  host's 10.2.1 and of the pinned fork's 11.1.3 over QMP (`qom-get` of the
+  namespace device), with a qcow2 behind `nvme-ns`, a raw file behind
+  `nvme,drive=`, `vram-dev`, `lbaf-mask=0x01`, and `ioeventfd=off,dbcs=off`
+  beside a `pci-mmio-bridge`. Each reported 4096 and 4096 with the
+  properties on the right device. `tests/test_nvme_block_size.py` holds
+  where they go.
+- **Only the two values.** `config.nvme_block_size` is the one check:
+  the fleet parser calls it, the schemas' `kind.blocksize` pattern is
+  generated from `NVME_BLOCK_SIZES`, and the flag has them as its choices.
+  QEMU itself takes any power of two from 512 to 2 MiB; nothing here has
+  run another.
+- **The refusal.** `gen_compose._check_nvme_block_size` exits when the
+  value is not the default and `<vm-nvme>` is 0. A negative `<vm-nvme>` is
+  allowed, unlike `<vm-nvme-vram>`. A literal `--nvme` string is left
+  alone by `run-vm`, with a note on stderr.
+- **`run-vm --xml` gets it** (`settings.vm_overrides`, only when it is not
+  512), and so does a bake, which already takes `<vm-nvme>`.
+- **It is not the SPDK controller's or the NVMe-oF target's block size.**
+  Read from the fixtures under `tests/fixtures/server-help/`, not run: the
+  SPDK image's LBA namespaces are 4096 bytes unless the namespace names
+  another (`lba:malloc:SIZE:BLOCK`), and the ernic `nvmeof` backend's are
+  512 unless its options say `bs=`. So matching all three at 4096 is this
+  element plus `bs=4096` in the `<backend>` text.
+- **`list` and `inspect` are unaffected**: they split device options on
+  commas and read `serial`, `id`, `drive` and `bus`. Tested with 4096
+  command lines, and seen on a guest: `list` showed `emul` and `inspect`
+  `NVMe: /dev/nvme0n1 1.0 TiB emulated`.
+- **Nothing reformats a scratch disk.** The qcow2 keeps its bytes across a
+  change of block size. Seen on a guest, with filesystems put on
+  device-mapper regions of the namespace so each sat on the new block size:
+
+  | Made at | Read at | What happened |
+  |---|---|---|
+  | 512 | 4096 | GPT: not found, no partitions (`sgdisk` offers a new table) |
+  | 512 | 4096 | ext4, 4096-byte blocks (what `mkfs.ext4` made): mounts |
+  | 512 | 4096 | ext4, `-b 1024`: `EXT4-fs: bad block size 1024` |
+  | 512 | 4096 | XFS (`sectsz=512`): `device supports 4096 byte sectors (not 512)` |
+  | 4096 | 512 | whole-disk ext4 left by the hipFile test: mounts |
+  | 4096 | 512 | XFS (`sectsz=4096`): mounts |
+  | 4096 | 512 | GPT: not found; the ext4 inside it mounts by offset |
+
+  The default NVMe test writes the namespace raw and the hipFile test runs
+  `mkfs.ext4 -F` on it every run, so neither is affected.
+
+**Run on 2026-11-20, by hand on the dev host**: one guest of
+`rocm-golden.xml` (`20261119.g2aea67d`, fork QEMU, `<vm-nvme-vram>true`)
+plus an overlay (`<vm-count>1`, 8 vCPU, 6144 MiB, a name prefix and
+`<fleet-prefix>172.29`), the tool and the staged `qemu/` both this tree's.
+Five boots of one overlay, alternating; each row is one run.
+
+| | 4096 | 512 (element absent) |
+|---|---|---|
+| QEMU, in the container | `-device nvme,...,vram-dev=rocjitsu-1,vram-bar=0 -device nvme-ns,...,nsid=1,logical_block_size=4096,physical_block_size=4096` | the same without the two properties |
+| `logical_block_size`, `physical_block_size` in sysfs | 4096, 4096 | 512, 512 |
+| `nvme id-ns -H` | `LBA Format 4 : ... Data Size: 4096 bytes ... (in use)` | `LBA Format 0 : ... Data Size: 512 bytes ... (in use)` |
+| `quick-start test` | exit 0, ok=79 failed=0; NVMe write/read 165.0/216.0 MiB/s | exit 0, ok=78 failed=0; 138.0/171.0 MiB/s |
+| `test --hipfile-test`, first | exit 0, ok=101; hipFile 651.0 MB/s verified, fio 894.8 MB/s; NVMe 169.0/163.0 | exit 0, ok=101; 829.3 MB/s verified, fio 798.9 MB/s; NVMe 135.0/164.0 |
+| `test --hipfile-test`, a later boot | exit 0; 827.9 MB/s verified, fio 729.4 MB/s; NVMe 129.0/154.0 | exit 0; 712.6 MB/s verified, fio 986.9 MB/s; NVMe 120.0/191.0 |
+
+The two columns overlap in every row, so this shows no rate difference
+either way, and two runs a side cannot show a small one. With one guest
+the RDMA test sends to the guest's own address (2061 to 2729 MiB/s in five
+of the six runs, 1070 in the last), which is not the inter-guest figure
+recorded elsewhere in this file. The 4096 hipFile runs are the block size
+together with `vram-dev`.
+
+**Not run**: a guest on null_blk devices (the host has no `/dev/nullb0`;
+the `nvme,drive=` shape was realised on a raw file only), a guest with the
+bridge and 4096 (realised under QMP only), more than one NVMe a guest, two
+guests, `helios-tray`, `mi355x-server` and `xio`, guests at 4 vCPU,
+`run-vm` outside a stack, a libvirt domain, and any CI lane.
 
 **`<backing-ref>` is the guest this repo publishes, and it is not on the
 servers' stamp.** All three fleet files name

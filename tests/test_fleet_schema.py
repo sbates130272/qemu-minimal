@@ -474,6 +474,44 @@ AGREE: list[tuple[str, str, bool]] = [
      fleet("<vm-cpu-vendor>Authentic&#x7F;AMD</vm-cpu-vendor>"), False),
     ("a vendor with a character outside ASCII",
      fleet("<vm-cpu-vendor>Authentic&#xE9;AMD</vm-cpu-vendor>"), False),
+    # ---- blocksize ----
+    ("a block size of 512, the default",
+     fleet("<vm-nvme-block-size>512</vm-nvme-block-size>"), True),
+    ("a block size of 4096",
+     fleet("<vm-nvme-block-size>4096</vm-nvme-block-size>"), True),
+    ("a block size with white space round it",
+     fleet("<vm-nvme-block-size>\n  4096\t</vm-nvme-block-size>"), True),
+    ("a block size with white space only Python strips",
+     fleet(f"<vm-nvme-block-size>{NBSP}4096&#x2003;</vm-nvme-block-size>"),
+     True),
+    ("an empty block size", fleet("<vm-nvme-block-size/>"), False),
+    ("a block size of white space",
+     fleet("<vm-nvme-block-size>  </vm-nvme-block-size>"), False),
+    ("a block size between the two",
+     fleet("<vm-nvme-block-size>2048</vm-nvme-block-size>"), False),
+    ("a block size above the two",
+     fleet("<vm-nvme-block-size>8192</vm-nvme-block-size>"), False),
+    ("a block size of zero",
+     fleet("<vm-nvme-block-size>0</vm-nvme-block-size>"), False),
+    ("a block size with a unit",
+     fleet("<vm-nvme-block-size>4k</vm-nvme-block-size>"), False),
+    ("a block size with a unit after the number",
+     fleet("<vm-nvme-block-size>4096B</vm-nvme-block-size>"), False),
+    ("a block size with a sign",
+     fleet("<vm-nvme-block-size>+4096</vm-nvme-block-size>"), False),
+    ("a block size with an underscore, which int() takes",
+     fleet("<vm-nvme-block-size>4_096</vm-nvme-block-size>"), False),
+    ("a block size with a leading zero",
+     fleet("<vm-nvme-block-size>0512</vm-nvme-block-size>"), False),
+    ("a block size in hexadecimal",
+     fleet("<vm-nvme-block-size>0x1000</vm-nvme-block-size>"), False),
+    ("a block size in digits that are not ASCII",
+     fleet("<vm-nvme-block-size>&#xFF15;&#xFF11;&#xFF12;"
+           "</vm-nvme-block-size>"), False),
+    ("two block sizes in one element",
+     fleet("<vm-nvme-block-size>512 4096</vm-nvme-block-size>"), False),
+    ("a block size with a space inside",
+     fleet("<vm-nvme-block-size>40 96</vm-nvme-block-size>"), False),
     # ---- <devices> ----
     ("the README's block", devices(
         "<server type='ernic' id='kv'>"
@@ -1546,6 +1584,8 @@ class Differential(unittest.TestCase):
         "port": ("auto", "two"),
         "addr": ("127.0.0.1", "localhost"),
         "vendor": ("GenuineIntel", "Intel"),
+        # 2048 is an integer and a port: only this kind refuses it.
+        "blocksize": ("4096", "2048"),
     }
 
     def test_every_setting_is_held_to_its_kind_by_all_three(self) -> None:

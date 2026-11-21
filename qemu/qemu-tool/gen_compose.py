@@ -34,6 +34,7 @@ from .fleet_xml import (
     SERVER_ENV, SERVER_OPTIONS, FleetConfig, FleetXml, Server, device_counts,
     split_args,
 )
+from .config import DEFAULT_NVME_BLOCK_SIZE
 from .identity import AMD_CPU_VENDOR, cpu_vendor_note
 from .ports import publish_address, publish_mapping, reach_address
 from .resources import stack_fleet
@@ -394,6 +395,29 @@ def _check_pci_mmio_bridge(cfg: FleetConfig) -> None:
             "Warning: <vm-pci-mmio-bridge> is true and <qemu-ref> is "
             f"{cfg.qemu_ref}, which is not the fork QEMU. run-vm exits "
             "when its QEMU has no pci-mmio-bridge device.", file=sys.stderr)
+
+
+def _check_nvme_block_size(cfg: FleetConfig) -> None:
+    """<vm-nvme-block-size>: a block size needs an emulated NVMe to set.
+
+    The value itself is held to 512 or 4096 when the file is parsed. What
+    is refused here is a size other than the default on a fleet whose
+    guests get no emulated NVMe, where the element would be an override
+    that never applies: the SPDK controller and an nvmeof backend's
+    namespaces are other devices, with block sizes of their own. A negative
+    <vm-nvme>, null_blk devices, takes it: the properties go on the nvme
+    controller that holds the drive.
+    """
+    if cfg.vm_nvme_block_size == DEFAULT_NVME_BLOCK_SIZE:
+        return
+    if cfg.vm_nvme == 0:
+        sys.exit(
+            "Error: <vm-nvme-block-size> is "
+            f"{cfg.vm_nvme_block_size} and <vm-nvme> is 0. It sets the "
+            "block size of each guest's emulated NVMe namespaces and of "
+            "nothing else (an SPDK controller and an nvmeof backend have "
+            "their own), so give the fleet an NVMe (<vm-nvme>1</vm-nvme>) "
+            "or remove <vm-nvme-block-size> from the layer that sets it.")
 
 
 def _check_cpu_vendor(cfg: FleetConfig) -> None:
@@ -784,6 +808,7 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
 
     _check_image_coherence(cfg)
     _check_nvme_vram(cfg)
+    _check_nvme_block_size(cfg)
     _check_cpu_vendor(cfg)
     _warn_if_gpu_without_root_port(cfg)
 
@@ -947,6 +972,7 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
         "sdxi_per_vm": sdxi_per_vm,
         "switch_width": _switch_width,
         "nvme_vram": cfg.vm_nvme_vram,
+        "nvme_block_size": cfg.vm_nvme_block_size,
         "ernic_image": cfg.ernic_ref,
         "qemu_image": cfg.qemu_ref,
         "cpu_sockets": cfg.vm_cpu_sockets,
@@ -1567,6 +1593,11 @@ def render_compose(
                 f'          --pci-hole64-size "{spec["pci_hole64_size"]}" \\')
         for flag, value in vm["flags"]:
             out.append(f'          {flag} "{value}" \\')
+        if spec["nvme_block_size"] != DEFAULT_NVME_BLOCK_SIZE:
+            # Only for a size a layer asked for: 512 is run-vm's default and
+            # QEMU's, so a fleet that names none renders nothing.
+            out.append(
+                f'          --nvme-block-size {spec["nvme_block_size"]} \\')
         if spec["nvme_vram"]:
             # run-vm gives each vfio-user device its socket's stem as qdev id.
             out.append(

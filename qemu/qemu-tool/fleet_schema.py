@@ -29,6 +29,7 @@ import re
 import textwrap
 
 from . import fleet_xml as fx
+from .config import NVME_BLOCK_SIZES
 
 RNG_NS = "http://relaxng.org/ns/structure/1.0"
 ANNOTATION_NS = "http://relaxng.org/ns/compatibility/annotations/1.0"
@@ -195,6 +196,9 @@ KIND_PATTERNS: dict[str, str | None] = {
     # identity.cpu_vendor_problem: nothing, or twelve characters of
     # printable ASCII less the comma. Written out, not {12}: see _repeat.
     "vendor": f"({_repeat(_VENDOR_CHAR, 12, 12)})?",
+    # config.nvme_block_size: one of NVME_BLOCK_SIZES in ASCII digits,
+    # stripped, and nothing looser (no sign, no underscore, no leading zero).
+    "blocksize": _stripped("|".join(str(s) for s in NVME_BLOCK_SIZES)),
 }
 
 # The same, for a reader: (name on the page, what the parser accepts, what
@@ -258,6 +262,13 @@ KIND_HELP: dict[str, tuple[str, str, str]] = {
         "such as `AuthenticAMD` or `GenuineIntel`, kept as written with no "
         "white space stripped; or an empty element, which is a value of its "
         "own (state no vendor) and not the default.",
+        "The same form, exactly."),
+    "blocksize": (
+        "block size",
+        "`" + "` or `".join(str(s) for s in NVME_BLOCK_SIZES) + "`, a "
+        "number of bytes in ASCII digits; white space round it is ignored. "
+        "No sign, no underscore, no leading zero and no unit. An empty "
+        "element is an error.",
         "The same form, exactly."),
 }
 
@@ -1496,7 +1507,8 @@ def render_markdown() -> str:
         "all, with a",
         "  warning above 40 on the mesh;",
         "- `<vm-nvme-vram>` and `<vm-pci-mmio-bridge>` need `<vm-nvme>` of "
-        "at least 1.")
+        "at least 1,",
+        "  and `<vm-nvme-block-size>` of 4096 a `<vm-nvme>` other than 0.")
     para(
         "And nothing checks a value the parser passes through as text: a "
         "size, a",

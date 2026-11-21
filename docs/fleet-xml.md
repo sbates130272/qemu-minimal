@@ -51,6 +51,7 @@ tab and a line break.
 | port (`port`) | A port number from 1 to 65535 in ASCII digits, or the word `auto` in any case; white space round it is ignored. | The same form, range included. A number of more digits than Python's `int()` converts, which takes thousands of leading zeros, passes the schema and not the parser. |
 | address (`addr`) | An IPv4 or IPv6 literal, with or without square brackets, with no zone and no host name. Empty, or white space alone, is the default. | The same form: octets of 0 to 255 with no leading zero, groups of one to four hexadecimal digits, one `::` at most, brackets in pairs. |
 | CPU vendor (`vendor`) | Exactly 12 printable ASCII characters (space to `~`) with no comma, such as `AuthenticAMD` or `GenuineIntel`, kept as written with no white space stripped; or an empty element, which is a value of its own (state no vendor) and not the default. | The same form, exactly. |
+| block size (`blocksize`) | `512` or `4096`, a number of bytes in ASCII digits; white space round it is ignored. No sign, no underscore, no leading zero and no unit. An empty element is an error. | The same form, exactly. |
 
 ## Elements
 
@@ -129,6 +130,7 @@ What every guest is given. gen-vm and run-vm take most of these as the defaults 
 | `<vm-shm-size>` | string | `8g` | no | shm\_size of each guest's qemu container; must be at least vm-vmem or QEMU cannot allocate guest RAM. docker size such as 8g or 5120m; one value for all guests, or a comma list of exactly vm-count values; empty or unset is 8g. quick-start by default (not with --no-size-from-host) sets it to vm-vmem plus 1024m. |
 | `<vm-nvme>` | integer | `0` | no | Number of emulated NVMe scratch devices per guest; run-vm creates a qcow2 for each. 0 gives none. integer; N &gt; 0 is N devices on scratch qcow2 files; -N is N devices on the host's /dev/nullb0.. (null\_blk); default 0. |
 | `<vm-nvme-vram>` | boolean | `false` | yes | Point each guest's emulated NVMe at its first GPU's BAR 0 (VRAM) so hipFile direct reads are fast; fork QEMU only. true or false; default false; refused with vm-nvme of 0 or less; warns on a non-fork qemu-ref; generated stacks only, run-vm --xml does not get it. |
+| `<vm-nvme-block-size>` | block size | `512` | no | Logical and physical block size of each guest's emulated NVMe namespaces: the LBA format the guest sees in use. 512 or 4096, in bytes; default 512, QEMU's own, which renders nothing. Anything else is a parse error. Refused at 4096 with vm-nvme of 0. QEMU's emulated NVMe only: an SPDK controller and an nvmeof backend set their own. Nothing on the scratch disk is converted: a partition table made at one size is not found at the other, and XFS or ext4 with blocks under 4096 made at 512 does not mount at 4096. |
 | `<vm-pci-mmio-bridge>` | boolean | `false` | yes | Give every guest the fork QEMU's pci-mmio-bridge device for its emulated NVMe, which rocm-xio uses. true or false; default false; refused with vm-nvme of 0 or less; needs the fork QEMU; generated stacks only, run-vm --xml does not get it. |
 | `<vm-username>` | string | `ubuntu` | no | Guest login account: the user gen-vm creates, and the one the inventory, quick-start and ssh log in as. default ubuntu; dropped for gen-vm --bake (bake-username is used); quick-start overrides it with the pulled image's own account when they differ. |
 | `<vm-password>` | string | (empty) | no | Password of the account gen-vm creates from the cloud image; never reaches a pulled guest, and a bake drops it. plain text; empty or unset leaves gen-vm's default, which is the word password. |
@@ -548,7 +550,8 @@ Rules between elements, checked by `gen-compose` (`gen_compose.py`):
   `<image-allow-guest-lag>`;
 - the fleet's size: at most 64 NICs on the mesh and 244 NICs in all, with a
   warning above 40 on the mesh;
-- `<vm-nvme-vram>` and `<vm-pci-mmio-bridge>` need `<vm-nvme>` of at least 1.
+- `<vm-nvme-vram>` and `<vm-pci-mmio-bridge>` need `<vm-nvme>` of at least 1,
+  and `<vm-nvme-block-size>` of 4096 a `<vm-nvme>` other than 0.
 
 And nothing checks a value the parser passes through as text: a size, a
 duration, an image reference, `<p4-guest-scope>`, a server option's value.

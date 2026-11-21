@@ -24,6 +24,27 @@ _INSTALLED_IMAGES = Path("/var/lib/qemu-tool/images")
 _INSTALLED_PACKAGES = Path("/usr/share/qemu-tool/packages-default")
 
 
+# The block sizes an emulated NVMe namespace may be given, logical and
+# physical alike: --nvme-block-size and <vm-nvme-block-size>. The first is
+# QEMU's default and the one that renders nothing.
+NVME_BLOCK_SIZES: tuple[int, ...] = (512, 4096)
+DEFAULT_NVME_BLOCK_SIZE = NVME_BLOCK_SIZES[0]
+
+
+def nvme_block_size(raw: str, what: str) -> int:
+    """RAW as one of NVME_BLOCK_SIZES; ValueError names WHAT and both.
+
+    Exact on purpose: ASCII digits with white space round them and nothing
+    else, so the generated schema can state the same form.
+    """
+    text = raw.strip()
+    for size in NVME_BLOCK_SIZES:
+        if text == str(size):
+            return size
+    allowed = " or ".join(str(size) for size in NVME_BLOCK_SIZES)
+    raise ValueError(f"{what} must be {allowed}, got {raw!r}")
+
+
 def _xdg_data_home() -> Path:
     raw = os.environ.get("XDG_DATA_HOME")
     return Path(raw).expanduser() if raw else Path.home() / ".local" / "share"
@@ -151,6 +172,11 @@ class VMConfig:
     nvme_dbbuf_poll_eventidx: str | None = None  # "on" | "off" | None
     nvme_vram_dev: str | None = None  # qdev id of vfio-user device for P2P
     nvme_vram_bar: int | None = None  # BAR index for vfio-user P2P (None=0)
+    # Logical and physical block size, in bytes, of every namespace run-vm
+    # itself creates: one of NVME_BLOCK_SIZES. 512 is QEMU's default and
+    # adds nothing to the command line. A literal --nvme string is not
+    # touched.
+    nvme_block_size: int = DEFAULT_NVME_BLOCK_SIZE
     pci_testdev: bool = False
     pci_hostdev: list[str] = field(default_factory=list)
     vram_dev_index: int | None = None  # 1-based index into pci_hostdev

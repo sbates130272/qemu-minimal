@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 import xml.etree.ElementTree as ET
 
+from .config import DEFAULT_NVME_BLOCK_SIZE, nvme_block_size
 from .identity import AMD_CPU_VENDOR, cpu_vendor_problem
 from .ports import parse_ssh_port, publish_address
 
@@ -427,6 +428,10 @@ class FleetConfig:
     shm_size: str = "8g"
     vm_nvme: int = 0
     vm_nvme_vram: bool = False
+    # run-vm --nvme-block-size: the logical and physical block size of every
+    # emulated NVMe namespace, 512 (QEMU's default) or 4096. The SPDK
+    # controller and an nvmeof backend's namespaces have their own.
+    vm_nvme_block_size: int = DEFAULT_NVME_BLOCK_SIZE
     # run-vm --pci-mmio-bridge: the fork QEMU's bridge device, which rocm-xio
     # uses to reach the emulated NVMe's queues from the GPU side.
     vm_pci_mmio_bridge: bool = False
@@ -516,8 +521,9 @@ class FleetConfig:
     loki_data_dir: str = "/var/lib/qemu-tool/loki-data"
     alloy_image: str = "docker.io/grafana/alloy:v1.5.1"
 
-_STR, _EXPAND, _INT, _BOOL, _PORT, _ADDR, _ARGS, _VENDOR = (
-    "str", "expand", "int", "bool", "port", "addr", "args", "vendor")
+_STR, _EXPAND, _INT, _BOOL, _PORT, _ADDR, _ARGS, _VENDOR, _BLOCK = (
+    "str", "expand", "int", "bool", "port", "addr", "args", "vendor",
+    "blocksize")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -775,6 +781,18 @@ _SECTIONS: tuple[_Section, ...] = (
             form="true or false; default false; refused with vm-nvme of 0 or "
                  "less; warns on a non-fork qemu-ref; generated stacks only, "
                  "run-vm --xml does not get it"),
+        _Setting(
+            "vm-nvme-block-size", "vm_nvme_block_size", _BLOCK,
+            help="Logical and physical block size of each guest's emulated "
+                 "NVMe namespaces: the LBA format the guest sees in use",
+            form="512 or 4096, in bytes; default 512, QEMU's own, which "
+                 "renders nothing. Anything else is a parse error. Refused "
+                 "at 4096 with vm-nvme of 0. QEMU's emulated NVMe only: an "
+                 "SPDK controller and an nvmeof backend set their own. "
+                 "Nothing on the scratch disk is converted: a partition "
+                 "table made at one size is not found at the other, and XFS "
+                 "or ext4 with blocks under 4096 made at 512 does not mount "
+                 "at 4096"),
         _Setting(
             "vm-pci-mmio-bridge", "vm_pci_mmio_bridge", _BOOL, sparse=True,
             help="Give every guest the fork QEMU's pci-mmio-bridge device for "
@@ -1202,6 +1220,8 @@ def _convert(setting: _Setting, raw: str) -> Any:
         if problem:
             raise ValueError(problem)
         return raw
+    if setting.kind == _BLOCK:
+        return nvme_block_size(raw, setting.tag)
     if setting.kind == _ARGS:
         # Checked here so `qemu-tool check` reports it; the readers split
         # the same text again.

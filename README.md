@@ -762,6 +762,38 @@ do not, since it has not been run behind a PCIe switch. An overlay on
 `rocm-golden.xml` that removes the NVMe (`<vm-nvme>0`) is refused unless it
 also sets `<vm-nvme-vram>false`.
 
+`<vm-nvme-block-size>4096</vm-nvme-block-size>` gives every emulated NVMe
+namespace of a guest 4096-byte blocks, where QEMU's default, and this
+tool's, is 512. It sets the logical and the physical block size alike, and
+is what an "LBA format" request comes to: the guest then sees the 4096-byte
+format in use (`nvme id-ns` marks LBA Format 4, `Data Size: 4096 bytes`,
+and `/sys/block/nvme0n1/queue/logical_block_size` reads 4096). The values
+are `512` and `4096`; anything else is a parse error. It needs an emulated
+NVMe (`<vm-nvme>` other than 0), and a fleet that leaves it out renders
+exactly what it did before.
+
+- **It is for QEMU's emulated NVMe and nothing else.** The other NVMe
+  devices a fleet can have set their own block size, in their own
+  `<devices>` entry. An SPDK controller's LBA namespaces are 4096 bytes
+  unless the namespace says otherwise (`lba:malloc:512M:512` in
+  `<namespaces>`), and its KV namespace has no blocks. An `nvmeof`
+  backend's namespaces are 512 bytes unless its options say `bs=4096`
+  (`<backend type='nvmeof'>size=1G,bs=4096</backend>`). Both read from the
+  help of the pinned images, not run here.
+- **Nothing on an existing scratch disk is converted or reformatted.** The
+  NVMe qcow2 keeps its bytes when the block size changes, and what was
+  written at the old size may not be readable at the new one. Seen on a
+  guest, 512 to 4096: a GPT is not found, so the disk shows no partitions;
+  XFS does not mount (`device supports 4096 byte sectors (not 512)`); ext4
+  made with 1024-byte blocks does not mount (`bad block size 1024`); ext4
+  with 4096-byte blocks, which is what `mkfs.ext4` made here, mounts. From
+  4096 back to 512, ext4 and XFS both mounted and the GPT was again not
+  found. `quick-start test` and `--hipfile-test` treat the namespace as
+  scratch and write it afresh on every run, so neither minds.
+  `run-vm --nvme-recreate` starts a guest on an empty disk.
+- **It made no difference to the test rates** on the default fleet with one
+  guest, single runs: see the table in `AGENTS.md`.
+
 Every later command against that fleet needs no flags, unless it starts
 the fleet and the fleet's `<vm-images-dir>` or `<qemu-tool-src>` is not the
 default (see below):
@@ -1066,6 +1098,8 @@ on the mesh, and refuses to start otherwise.
 
 `gen-vm` and `run-vm` take the per-guest elements as the defaults of their
 flags — `<vm-vcpus>` is `--vcpus`, `<vm-images-dir>` is `--images`,
+`<vm-nvme-block-size>` is `run-vm --nvme-block-size` (512 or 4096, the block
+size of QEMU's emulated NVMe; see "A fleet of your own" above),
 `<backing-ref>` is `--backing-image`. Values are read lowest to highest from
 the built-in defaults, a `--domain` XML, the fleet XML, then explicit CLI
 flags, so a flag always wins over the file. One-shot actions (`--dry-run`,
@@ -1437,6 +1471,7 @@ takes every stack on the system.
 | `--nvme-trace EVENT` | — | NVMe tracing: `doorbell`, `all`, or event name |
 | `--nvme-trace-file FILE` | — | Redirect trace output to file |
 | `--nvme-lbaf-mask HEX` | — | 16-bit hex LBA format mask (e.g. `0x1f`) |
+| `--nvme-block-size {512,4096}` | `<vm-nvme-block-size>`, else 512 | Logical and physical block size of every NVMe namespace `run-vm` creates: `logical_block_size` and `physical_block_size` on the device that holds the drive. Not applied to a literal `--nvme` string |
 | `--nvme-recreate` | off | Delete and recreate NVMe qcow2 files on start |
 | `--nvme-vram-dev ID` | — | Let the emulated NVMe DMA into the BAR of the vfio-user device with this qdev id (its socket's file name without `.sock`); fork QEMU only. `<vm-nvme-vram>` in a fleet file |
 | `--nvme-vram-bar N` | 0 | Which BAR of that device |

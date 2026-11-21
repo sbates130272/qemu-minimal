@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 from .caps import QemuCaps, qemu_binary
-from .config import VMConfig
+from .config import DEFAULT_NVME_BLOCK_SIZE, NVME_BLOCK_SIZES, VMConfig
 from .identity import (
     cpu_vendor_note, cpu_vendor_problem, guest_name_args, identity_args,
 )
@@ -388,7 +388,32 @@ def _nvme_serial(name: str) -> str:
     return name[-20:]
 
 
+def nvme_block_props(cfg: VMConfig) -> str:
+    """The block-size properties of a namespace run-vm creates, or "".
+
+    --nvme-block-size sets the logical and the physical block size alike,
+    which is the namespace's LBA data size: QEMU derives the LBA format in
+    use from logical_block_size (hw/nvme/ns.c), and refuses a logical size
+    above the physical one. They are properties of whichever device holds
+    the drive: nvme-ns where there is one, the nvme controller itself where
+    it is given drive= and makes its own namespace. On a controller with a
+    separate nvme-ns they are accepted and set nothing (asked of QEMU
+    10.2.1 and of the fork's 11.1.3).
+
+    The default, 512, is QEMU's own and adds nothing, so a command line
+    without the option is the one it always was.
+    """
+    size = cfg.nvme_block_size
+    if size not in NVME_BLOCK_SIZES:
+        allowed = " or ".join(str(s) for s in NVME_BLOCK_SIZES)
+        sys.exit(f"Error: --nvme-block-size must be {allowed}, got {size!r}.")
+    if size == DEFAULT_NVME_BLOCK_SIZE:
+        return ""
+    return f",logical_block_size={size},physical_block_size={size}"
+
+
 def _nvme_args(cfg: VMConfig, caps: QemuCaps) -> list[str]:
+    block = nvme_block_props(cfg)
     if cfg.nvme is None:
         return []
     if re.match(r"^[0-9]+$", cfg.nvme):
@@ -404,10 +429,19 @@ def _nvme_args(cfg: VMConfig, caps: QemuCaps) -> list[str]:
             name = f"{cfg.vm_name}-nvme{i}"
             args += [
                 "-drive", f"file=/dev/nullb{i},format=raw,if=none,id=nvme-{i}",
-                "-device", f"nvme,serial={_nvme_serial(name)},drive=nvme-{i}",
+                "-device",
+                f"nvme,serial={_nvme_serial(name)},drive=nvme-{i}{block}",
             ]
         return args
     # literal string — split and pass through
+    if block:
+        # The words are the caller's own -drive and -device arguments, so
+        # the block size is theirs to write as well.
+        print(
+            f"NOTE: --nvme-block-size {cfg.nvme_block_size} does not apply "
+            "to a literal --nvme string; add logical_block_size and "
+            "physical_block_size to the device that holds the drive.",
+            file=sys.stderr)
     return shlex.split(cfg.nvme)
 
 
@@ -471,6 +505,7 @@ def _nvme_create(
             dev += f",dbbuf-poll-eventidx={cfg.nvme_dbbuf_poll_eventidx}"
 
     ns = f"nvme-ns,drive=nvme-{idx},bus=nvme-{idx}-dev,nsid=1"
+    ns += nvme_block_props(cfg)
     if cfg.nvme_lbaf_mask is not None:
         _validate_lbaf_mask(cfg.nvme_lbaf_mask)
         mask = cfg.nvme_lbaf_mask.lower()

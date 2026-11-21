@@ -183,6 +183,12 @@
             </element>
           </optional>
           <optional>
+            <element name="vm-nvme-block-size">
+              <a:documentation>Logical and physical block size of each guest's emulated NVMe namespaces: the LBA format the guest sees in use. 512 or 4096, in bytes; default 512, QEMU's own, which renders nothing. Anything else is a parse error. Refused at 4096 with vm-nvme of 0. QEMU's emulated NVMe only: an SPDK controller and an nvmeof backend set their own. Nothing on the scratch disk is converted: a partition table made at one size is not found at the other, and XFS or ext4 with blocks under 4096 made at 512 does not mount at 4096.</a:documentation>
+              <ref name="kind.blocksize"/>
+            </element>
+          </optional>
+          <optional>
             <element name="vm-pci-mmio-bridge">
               <a:documentation>Give every guest the fork QEMU's pci-mmio-bridge device for its emulated NVMe, which rocm-xio uses. true or false; default false; refused with vm-nvme of 0 or less; needs the fork QEMU; generated stacks only, run-vm --xml does not get it.</a:documentation>
               <ref name="kind.bool"/>
@@ -495,6 +501,12 @@
     <a:documentation>CPU vendor: Exactly 12 printable ASCII characters (space to ~) with no comma, such as AuthenticAMD or GenuineIntel, kept as written with no white space stripped; or an empty element, which is a value of its own (state no vendor) and not the default.</a:documentation>
     <data type="string">
       <param name="pattern">([ -+.-~\-][ -+.-~\-][ -+.-~\-][ -+.-~\-][ -+.-~\-][ -+.-~\-][ -+.-~\-][ -+.-~\-][ -+.-~\-][ -+.-~\-][ -+.-~\-][ -+.-~\-])?</param>
+    </data>
+  </define>
+  <define name="kind.blocksize">
+    <a:documentation>block size: 512 or 4096, a number of bytes in ASCII digits; white space round it is ignored. No sign, no underscore, no leading zero and no unit. An empty element is an error.</a:documentation>
+    <data type="string">
+      <param name="pattern">[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*(512|4096)[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*</param>
     </data>
   </define>
   <define name="devices">
