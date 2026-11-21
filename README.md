@@ -797,6 +797,42 @@ exactly what it did before.
   overlapped in every row. That many runs cannot show a small difference
   if there is one: see the table in `AGENTS.md`.
 
+`<ernic-mtu>9000</ernic-mtu>` raises the MTU of every emulated NIC in every
+guest, where the device comes up at 1500. What it is mostly for is RDMA: a
+guest's RDMA port takes its `active_mtu` from the NIC's MTU, so at 1500
+every transfer runs at an RDMA MTU of 1024, and perftest's `-m 4096` is
+clamped to that without a word. From 4192 up the port reports 4096. The
+values are 1500 to 9198, the most the device takes; anything else is a
+parse error, and a fleet that leaves the element out renders exactly what it
+did before.
+
+| `<ernic-mtu>` | The guest's NIC | `ibv_devinfo` `active_mtu` |
+|---|---|---|
+| absent, or 1500 to 2143 | 1500, or as set | 1024 |
+| 2144 to 4191 | as set | 2048 |
+| 4192 to 9198 | as set | 4096 |
+
+- **It needs no new guest image.** The host hands each guest a one-line udev
+  rule at boot, as a systemd credential QEMU carries in an SMBIOS string,
+  and the guest's own systemd installs it under `/run/udev/rules.d` before
+  the NIC appears. Nothing is written to the guest's disk and no playbook
+  runs: the same disk booted without the element is back at 1500. Seen on
+  guests of the published image `20261119.g2aea67d`.
+- **With `<ernic-tap>true` the Ethernet between guests is raised with it.**
+  The `l2` network is created with that MTU and each tap is set to it, so a
+  9000-byte frame crosses: `ping -M do -s 8972` between two guests passed
+  and `-s 8973` did not. Without that half a raised guest loses every
+  larger frame with no error anywhere, so the generator always renders
+  both. The mesh network is left at 1500; RDMA payload crosses it over TCP.
+- **A running stack does not take a changed value.** Docker sets a
+  network's MTU when it creates it. Bring the stack down and up.
+- **It does not make RDMA faster, and does not lift the 16 MiB limit** on a
+  single RDMA message. The emulated device does not use the path MTU, and
+  the rates measured at 4096 were inside the spread of those at 1024.
+- **A generated stack only.** `run-vm --xml` outside a stack does not get
+  it. A fleet whose `<vm-qemu-args>` already passes a credential named
+  `udev.rules.70-qemu-tool-ernic-mtu` is refused.
+
 Every later command against that fleet needs no flags, unless it starts
 the fleet and the fleet's `<vm-images-dir>` or `<qemu-tool-src>` is not the
 default (see below):
@@ -1104,7 +1140,9 @@ on the mesh, and refuses to start otherwise.
 flags — `<vm-vcpus>` is `--vcpus`, `<vm-images-dir>` is `--images`,
 `<vm-nvme-block-size>` is `run-vm --nvme-block-size` (512 or 4096, the block
 size of QEMU's emulated NVMe; see "A fleet of your own" above),
-`<backing-ref>` is `--backing-image`. Values are read lowest to highest from
+`<backing-ref>` is `--backing-image`. `<ernic-mtu>` (1500 to 9198, the MTU
+of a guest's emulated NICs; same section) has no flag: it is a generated
+stack's. Values are read lowest to highest from
 the built-in defaults, a `--domain` XML, the fleet XML, then explicit CLI
 flags, so a flag always wins over the file. One-shot actions (`--dry-run`,
 `--force`, `--restore-image`, `--ansible-only`, `--nvme-recreate`,

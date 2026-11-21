@@ -512,6 +512,39 @@ AGREE: list[tuple[str, str, bool]] = [
      fleet("<vm-nvme-block-size>512 4096</vm-nvme-block-size>"), False),
     ("a block size with a space inside",
      fleet("<vm-nvme-block-size>40 96</vm-nvme-block-size>"), False),
+    # ---- mtu ----
+    ("an MTU of 1500, the default and the least",
+     fleet("<ernic-mtu>1500</ernic-mtu>"), True),
+    ("an MTU of 9000", fleet("<ernic-mtu>9000</ernic-mtu>"), True),
+    ("an MTU of 4192, the least that gives an RDMA MTU of 4096",
+     fleet("<ernic-mtu>4192</ernic-mtu>"), True),
+    ("an MTU of 9198, the most the device takes",
+     fleet("<ernic-mtu>9198</ernic-mtu>"), True),
+    ("an MTU with white space round it",
+     fleet("<ernic-mtu>\n  9000\t</ernic-mtu>"), True),
+    ("an MTU with white space only Python strips",
+     fleet(f"<ernic-mtu>{NBSP}9000&#x2003;</ernic-mtu>"), True),
+    ("an empty MTU", fleet("<ernic-mtu/>"), False),
+    ("an MTU of white space", fleet("<ernic-mtu>  </ernic-mtu>"), False),
+    ("an MTU one under the least",
+     fleet("<ernic-mtu>1499</ernic-mtu>"), False),
+    ("an MTU one over the most",
+     fleet("<ernic-mtu>9199</ernic-mtu>"), False),
+    ("an MTU of three digits", fleet("<ernic-mtu>900</ernic-mtu>"), False),
+    ("an MTU of five digits", fleet("<ernic-mtu>15000</ernic-mtu>"), False),
+    ("an MTU of zero", fleet("<ernic-mtu>0</ernic-mtu>"), False),
+    ("an MTU with a unit", fleet("<ernic-mtu>9k</ernic-mtu>"), False),
+    ("an MTU with a sign", fleet("<ernic-mtu>+9000</ernic-mtu>"), False),
+    ("an MTU with an underscore, which int() takes",
+     fleet("<ernic-mtu>9_000</ernic-mtu>"), False),
+    ("an MTU with a leading zero",
+     fleet("<ernic-mtu>09000</ernic-mtu>"), False),
+    ("an MTU in hexadecimal", fleet("<ernic-mtu>0x2328</ernic-mtu>"), False),
+    ("an MTU in digits that are not ASCII",
+     fleet("<ernic-mtu>&#xFF19;&#xFF10;&#xFF10;&#xFF10;</ernic-mtu>"),
+     False),
+    ("an MTU with a space inside",
+     fleet("<ernic-mtu>90 00</ernic-mtu>"), False),
     # ---- <devices> ----
     ("the README's block", devices(
         "<server type='ernic' id='kv'>"
@@ -1586,6 +1619,8 @@ class Differential(unittest.TestCase):
         "vendor": ("GenuineIntel", "Intel"),
         # 2048 is an integer and a port: only this kind refuses it.
         "blocksize": ("4096", "2048"),
+        # 9000 is no block size; 1499 is an integer and a port.
+        "mtu": ("9000", "1499"),
     }
 
     def test_every_setting_is_held_to_its_kind_by_all_three(self) -> None:

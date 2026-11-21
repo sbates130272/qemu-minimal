@@ -16,6 +16,7 @@ guests.
 
 from __future__ import annotations
 
+import base64
 import dataclasses
 import hashlib
 import ipaddress
@@ -34,7 +35,9 @@ from .fleet_xml import (
     SERVER_ENV, SERVER_OPTIONS, FleetConfig, FleetXml, Server, device_counts,
     split_args,
 )
-from .config import DEFAULT_NVME_BLOCK_SIZE
+from .config import (
+    DEFAULT_ERNIC_MTU, DEFAULT_NVME_BLOCK_SIZE, rdma_active_mtu,
+)
 from .identity import AMD_CPU_VENDOR, cpu_vendor_note
 from .ports import publish_address, publish_mapping, reach_address
 from .resources import stack_fleet
@@ -418,6 +421,85 @@ def _check_nvme_block_size(cfg: FleetConfig) -> None:
             "nothing else (an SPDK controller and an nvmeof backend have "
             "their own), so give the fleet an NVMe (<vm-nvme>1</vm-nvme>) "
             "or remove <vm-nvme-block-size> from the layer that sets it.")
+
+
+# <ernic-mtu>: the name of the systemd credential each guest is handed, and
+# so of the file its systemd-udev-load-credentials writes,
+# /run/udev/rules.d/<name>.rules. 70 sorts it ahead of the image's own
+# 99-rocm-ernic.rules, which renames the device.
+ERNIC_MTU_CREDENTIAL = "udev.rules.70-qemu-tool-ernic-mtu"
+# The RDMA MTU a fleet raises the netdev MTU for, and the least netdev MTU
+# that gives it (measured: 4191 gives 2048, 4192 gives 4096).
+_IB_MTU_WANTED = 4096
+_IB_MTU_WANTED_FROM = 4192
+
+
+def ernic_mtu_rule(mtu: int) -> str:
+    """The udev rule that gives every emulated ernic NIC of a guest MTU.
+
+    It matches the four PCI fields the image's 99-rocm-ernic.rules matches
+    (1dd8:1002 with subsystem 1dd8:5400), on the netdev's parent, so a real
+    Pensando card passed through to the same guest is left alone. The MTU
+    is written when the netdev is added, before anything brings it up.
+    """
+    return (
+        "# From the host, by qemu-tool gen-compose: <ernic-mtu> of the "
+        "fleet file.\n"
+        'ACTION=="add", SUBSYSTEM=="net", '
+        'ATTRS{vendor}=="0x1dd8", ATTRS{device}=="0x1002", '
+        'ATTRS{subsystem_vendor}=="0x1dd8", '
+        'ATTRS{subsystem_device}=="0x5400", '
+        f'ATTR{{mtu}}="{mtu}"\n')
+
+
+def ernic_mtu_qemu_args(mtu: int) -> list[str]:
+    """The QEMU words that hand a guest ernic_mtu_rule(mtu) at boot.
+
+    An SMBIOS type 11 string systemd reads as a credential: PID 1 imports
+    it and systemd-udev-load-credentials installs it as a rules file before
+    udev sees the NIC. Base64 because a rule holds commas, which QEMU's
+    option parser would split on. Nothing is written into the image and no
+    playbook runs: it is the guest's own systemd that applies it.
+    """
+    blob = base64.b64encode(ernic_mtu_rule(mtu).encode("ascii")).decode(
+        "ascii")
+    return ["-smbios",
+            "type=11,value=io.systemd.credential.binary:"
+            f"{ERNIC_MTU_CREDENTIAL}={blob}"]
+
+
+def _check_ernic_mtu(cfg: FleetConfig) -> None:
+    """<ernic-mtu>: what the fleet gets, said where it is less than asked.
+
+    The value is held to its range when the file is parsed. Refused here:
+    a <vm-qemu-args> that already hands the guest a credential of the name
+    this one takes, since systemd would be given two. Noted, and rendered
+    all the same: a value that leaves the RDMA port below 4096, which is
+    what the setting is mostly raised for, and a fleet with no TAP, where
+    only the guest's NIC is set because there is no Ethernet path to set.
+    """
+    if cfg.ernic_mtu == DEFAULT_ERNIC_MTU:
+        return
+    if ERNIC_MTU_CREDENTIAL in cfg.vm_qemu_args:
+        sys.exit(
+            f"Error: <ernic-mtu> is {cfg.ernic_mtu} and <vm-qemu-args> "
+            f"already passes the guest a credential named "
+            f"{ERNIC_MTU_CREDENTIAL}. <ernic-mtu> hands every guest a udev "
+            "rule under that name, so remove it from <vm-qemu-args>, or "
+            "remove <ernic-mtu> from the layer that sets it.")
+    active = rdma_active_mtu(cfg.ernic_mtu)
+    if active < _IB_MTU_WANTED:
+        print(
+            f"Note: <ernic-mtu> is {cfg.ernic_mtu}, which gives each guest's "
+            f"RDMA port an active_mtu of {active}. An active_mtu of "
+            f"{_IB_MTU_WANTED} needs <ernic-mtu> of {_IB_MTU_WANTED_FROM} "
+            "or more.", file=sys.stderr)
+    if not cfg.ernic_tap:
+        print(
+            f"Note: <ernic-mtu> is {cfg.ernic_mtu} and <ernic-tap> is false. "
+            "The guests' NICs are set and their RDMA ports follow; there is "
+            "no Ethernet between guests for the MTU to apply to.",
+            file=sys.stderr)
 
 
 def _check_cpu_vendor(cfg: FleetConfig) -> None:
@@ -809,6 +891,7 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
     _check_image_coherence(cfg)
     _check_nvme_vram(cfg)
     _check_nvme_block_size(cfg)
+    _check_ernic_mtu(cfg)
     _check_cpu_vendor(cfg)
     _warn_if_gpu_without_root_port(cfg)
 
@@ -1007,6 +1090,7 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
         "stats_port": str(cfg.ernic_stats_port),
         "ernic_nofile": str(cfg.ernic_nofile),
         "ernic_tap": cfg.ernic_tap,
+        "ernic_mtu": cfg.ernic_mtu,
         "ernic_p4": cfg.p4_enable,
         "ernic_p4_guest_scope": _setting(cfg, "p4_guest_scope"),
         "ernic_p4_program": cfg.p4_program,
@@ -1618,6 +1702,12 @@ def render_compose(
         # for the shell this line is run by.
         for word in spec["qemu_args"]:
             out.append(f"          --qemu-arg={_sh_word(word)} \\")
+        if spec["ernic_mtu"] != DEFAULT_ERNIC_MTU:
+            # Only for an MTU a layer asked for: 1500 is the device's own,
+            # so a fleet that names none renders nothing. The words are the
+            # same for every guest: the rule matches the device, not a name.
+            for word in ernic_mtu_qemu_args(spec["ernic_mtu"]):
+                out.append(f"          --qemu-arg={_sh_word(word)} \\")
         all_vfio_socks = (list(vm["vfio_socks"]) + list(vm["sdxi_socks"])
                           + list(vm["spdk_socks"]))
         out.append(f'          --vfio-userdev "{",".join(all_vfio_socks)}"')
@@ -1852,6 +1942,17 @@ def render_compose(
             # image is then already in their local store -- so it is
             # invisible precisely to the people who would recognise it.
             out.append("    pull_policy: build")
+            if spec["ernic_mtu"] != DEFAULT_ERNIC_MTU:
+                # <ernic-mtu>: the tap takes the MTU once setup.sh has made
+                # it. Done here and not in setup.sh so that the image, whose
+                # one tag every stack on a host shares, is the same image
+                # with and without the setting. The bridge in this netns
+                # follows its ports, and the l2 end of it was created at
+                # this MTU by the network's driver option.
+                out.append(
+                    '    entrypoint: ["/bin/sh", "-c", '
+                    '"/usr/local/bin/setup.sh && ip link set '
+                    f'{_TAP_IF} mtu {spec["ernic_mtu"]}"]')
             out.append("    logging: *logging")
             out.append(f'    network_mode: "service:{nic["service"]}"')
             # Drop first, then add the one back. `cap_add` alone leaves
@@ -1889,6 +1990,16 @@ def render_compose(
                    f"{ERNIC_SUBNET}.0/24.")
         out.append("  l2:")
         out.append("    driver: bridge")
+        if spec["ernic_mtu"] != DEFAULT_ERNIC_MTU:
+            # <ernic-mtu>: Docker creates the bridge and both ends of every
+            # veth on it at this MTU. Without it a guest whose NIC was
+            # raised loses every larger frame here with no error anywhere.
+            # Only a network created with the option has it: an existing
+            # one keeps its MTU until the stack is brought down and up.
+            out.append("    driver_opts:")
+            out.append(
+                '      com.docker.network.driver.mtu: '
+                f'"{spec["ernic_mtu"]}"')
     out.append("  # Every service has a fixed address and nothing resolves a")
     out.append("  # service name at run time. Docker's embedded DNS is a single")
     out.append("  # resolver per network, and a fleet start burst saturates it:")

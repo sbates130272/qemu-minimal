@@ -10,6 +10,7 @@ when the module is imported.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -43,6 +44,43 @@ def nvme_block_size(raw: str, what: str) -> int:
             return size
     allowed = " or ".join(str(size) for size in NVME_BLOCK_SIZES)
     raise ValueError(f"{what} must be {allowed}, got {raw!r}")
+
+
+# <ernic-mtu>: the MTU of every emulated ernic NIC in a guest, and of the
+# Ethernet path between guests when the fleet has one. 1500 is what the
+# device comes up with. 9198 is the most the pinned rocm-ernic server
+# advertises (its default profile's mtu_max; the guest's `ip link` refuses
+# 9199 as "greater than device maximum").
+DEFAULT_ERNIC_MTU = 1500
+MAX_ERNIC_MTU = 9198
+# What the guest's RoCE stack takes off a netdev MTU before it rounds down
+# to an InfiniBand MTU. Measured on the pinned driver: 2143 gives 1024 and
+# 2144 gives 2048; 4191 gives 2048 and 4192 gives 4096.
+_ROCE_HEADER_BYTES = 96
+_IB_MTUS = (4096, 2048, 1024, 512, 256)
+
+
+def ernic_mtu(raw: str, what: str) -> int:
+    """RAW as an MTU from DEFAULT_ERNIC_MTU to MAX_ERNIC_MTU.
+
+    Exact on purpose, like nvme_block_size: four ASCII digits with white
+    space round them and nothing else, so the generated schema can state
+    the same form. ValueError names WHAT and the range.
+    """
+    text = raw.strip()
+    if re.fullmatch(r"[1-9][0-9][0-9][0-9]", text):
+        value = int(text)
+        if DEFAULT_ERNIC_MTU <= value <= MAX_ERNIC_MTU:
+            return value
+    raise ValueError(
+        f"{what} must be a number of bytes from {DEFAULT_ERNIC_MTU} to "
+        f"{MAX_ERNIC_MTU}, got {raw!r}")
+
+
+def rdma_active_mtu(netdev_mtu: int) -> int:
+    """The RDMA active_mtu a guest reports for a NIC at NETDEV_MTU."""
+    room = netdev_mtu - _ROCE_HEADER_BYTES
+    return next((size for size in _IB_MTUS if size <= room), _IB_MTUS[-1])
 
 
 def _xdg_data_home() -> Path:

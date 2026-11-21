@@ -658,12 +658,12 @@ the XSD has a bullet of its own.
   directory as a directory; the first said `cannot write .: Is a
   directory`, because `Path("")` is `.`. The option is a string for that
   reason, not a `Path`.
-- **`tests/test_fleet_schema.py`.** `AGREE` is 275 small documents the
+- **`tests/test_fleet_schema.py`.** `AGREE` is 295 small documents the
   parser and the RELAX NG schema must answer alike, each with the answer;
   `LOOSER` is eleven the parser refuses and neither schema can.
   `XSD_TAKES` names the six documents of `AGREE` the XSD accepts, and
   `XSD_LOOSER` is ten more the RELAX NG schema refuses and the XSD
-  accepts, each under a key of `xsd_looser()`: 296 documents, and one test
+  accepts, each under a key of `xsd_looser()`: 316 documents, and one test
   asks the parser and both schemas about each and requires the three
   answers it is listed with, which for the XSD is "agrees with the RELAX NG
   schema everywhere but on its listed looseness". Others assert each rule
@@ -672,7 +672,7 @@ the XSD has a bullet of its own.
   with one repeated (265 documents, all three answers), every decimal
   digit Python knows in a single integer, an integer one digit past
   `int()`'s limit, and 400 generated addresses. **Every flat setting is
-  held to its kind, whether or not a document sets it**: 18 of the 72 are
+  held to its kind, whether or not a document sets it**: 18 of the 73 are
   in no listed document and no shipped file, and typing one of those as
   another kind, in either renderer, used to pass the suite. One test reads
   each setting's declaration in both rendered schemas (`kind.<kind>` and
@@ -688,7 +688,7 @@ the XSD has a bullet of its own.
   when that imports, else `xmllint --relaxng` and `xmllint --schema`; with
   neither it skips and prints that no document was validated, and under
   `CI=true` it fails. `Gen Compose Check` installs `lxml`.
-  `python tests/test_fleet_schema.py --dump DIR` writes the 296 documents
+  `python tests/test_fleet_schema.py --dump DIR` writes the 316 documents
   and an `index.json` of the expected answers, for running another
   validator over them by hand. **One document is long on purpose**,
   `BIG_BLOCK`: 254 `<server>` entries, which is every NIC one guest can
@@ -3840,6 +3840,159 @@ Three things to know:
   fabricated sysfs with `ip` and `hostnamectl` stubbed), and
   `ansible-lint`, which does not start on the dev host.
 
+## `<ernic-mtu>`: the NIC's MTU, from the fleet file
+
+**`<ernic-mtu>` sets the MTU of every emulated ernic NIC in every guest,
+1500 to 9198, and what it is mostly for is an RDMA `active_mtu` of 4096.**
+A flat setting with a kind of its own (`mtu`, not sparse, one row of
+`_SETTINGS` beside `<ernic-tap>`). The default, 1500, is the device's own
+and renders nothing, so the four committed stacks are byte for byte what
+they were. Asked for by the ROCm/nixl CI (its item 7).
+
+**Why a netdev MTU.** `ionic_rdma` computes a port's `active_mtu` on every
+query as the smaller of what `max_mtu` and the netdev's current `mtu` give
+(`ionic_ibdev.c`, `iboe_get_mtu(ndev->mtu)`, in the patched v7.2.6 tree).
+Nothing in a guest ever raised the netdev from 1500, so every fleet ran RDMA
+at 1024, and perftest's `-m 4096` is clamped to the port without a word
+(`Mtu : 1024` in its own output). The server cannot set a guest's initial
+MTU: its identity reports a constant 1500 and the driver only logs it
+(`ionic_eth_emu.c`, read at `ernic_source_pin`). The top of the range is the
+device's: the server's default profile has `mtu_max = 9198`, the guest's
+`ip -d link` shows `maxmtu 9198`, and `ip link set ... mtu 9199` is refused.
+
+| Guest netdev MTU | `ibv_devinfo` `active_mtu` |
+|---|---|
+| 1500, 2143 | 1024 |
+| 2144, 4191 | 2048 |
+| 4192, 9000 | 4096 |
+
+Those six were read off a guest. `config.rdma_active_mtu()` is the same
+arithmetic (the MTU less 96 bytes of RoCE headers, rounded down to an IB
+MTU); the 96 is from the two thresholds, not read from a header file, since
+the sparse kernel tree on this host has no `include/rdma`.
+
+**Which component sets what.** Three pieces, all rendered by
+`gen_compose.py` and only for a value that is not 1500:
+
+| Piece | What is rendered | Why it is needed |
+|---|---|---|
+| the guest's NIC | two `--qemu-arg` words on each `qemu-N` `run-vm`, after the fleet's own `<vm-qemu-args>`: `-smbios` and `type=11,value=io.systemd.credential.binary:udev.rules.70-qemu-tool-ernic-mtu=<base64>` (`ernic_mtu_qemu_args`) | the only piece `active_mtu` needs |
+| the `l2` network, with `<ernic-tap>true` | `driver_opts: com.docker.network.driver.mtu: "<n>"` | Docker then creates the host bridge and both ends of every veth at that MTU. With the guests raised and the host path left at 1500, every larger frame was lost with no local error: a black hole |
+| each tap, with `<ernic-tap>true` | `entrypoint: ["/bin/sh", "-c", "/usr/local/bin/setup.sh && ip link set tap0 mtu <n>"]` on each `tapsetup-N` | the tap is created at 1500 and the bridge in the ernic's netns follows its smallest port. With one tap put back to 1500 by hand, 8972-byte pings from the other guest were lost (below) |
+
+- **The guest half is a systemd credential, and it needs no bake.** PID 1
+  imports an SMBIOS type 11 string of that form as a credential, and
+  `systemd-udev-load-credentials.service` (`udevadm control
+  --load-credentials`, ordered before `systemd-udevd`) writes it to
+  `/run/udev/rules.d/70-qemu-tool-ernic-mtu.rules`. The rule
+  (`ernic_mtu_rule`) matches `ACTION=="add"`, `SUBSYSTEM=="net"` and the
+  four PCI fields of `99-rocm-ernic.rules` on the parent (`ATTRS{...}`),
+  and sets `ATTR{mtu}`. Base64 because a rule holds commas, which QEMU's
+  option parser splits on. `/run` is a tmpfs: nothing reaches the guest's
+  disk, and the same overlay booted without the element is at 1500.
+- **The golden image still owns guest setup**: it is the image's own
+  systemd that applies the rule, `vm-quickstart.yml` and the roles know
+  nothing of an MTU (`tests/test_ernic_mtu.py` fails a playbook, template or
+  rules file that names one), and `rocm-ernic-netcfg.sh` is untouched.
+- **Which image.** Seen on `20261119.g2aea67d`, the image the fleet files
+  pull (systemd 259): no re-bake, no publish. What an image has to have is
+  that unit, loaded and run at boot; the unit file says `disabled` to
+  `is-enabled` and runs all the same, pulled in by `systemd-udevd.service`.
+  `qemu/checks/rocm-golden.sh` asserts it between its `udev credentials`
+  markers (`LoadState` is `loaded`, `ActiveState` is `active`), which needs
+  no device and no setting since the unit runs with no credential too, so a
+  later image that lost or masked it is not published. Older published
+  images were not booted with the element. The `.network.link` credential
+  form does not work on this image: `systemd-network-generator.service` is
+  disabled there.
+- **The tap is set in the compose file, not in `setup.sh`**, so that the
+  tapsetup image, whose one tag (`qemu-tool/ernic-tapsetup:1`) every stack
+  on a host shares, is the same image with and without the setting, and
+  `qemu/compose/*/tapsetup` did not change. The entrypoint relies on
+  `setup.sh`'s default tap name, which is `_TAP_IF`; a test holds both.
+- **The mesh network is not touched.** `fleet` stayed at 1500 and carries
+  the RDMA payload over TCP, length-framed; the server does not read the
+  path MTU a queue pair is given (`ionic_adminq.c`, read).
+- **Without a TAP only the guest half is rendered**, with a note on stderr:
+  there is no Ethernet between guests to raise, and `active_mtu` follows the
+  NIC. **A value under 4192 is noted** with the `active_mtu` it gives, and
+  rendered. **Refused**: a `<vm-qemu-args>` that already holds the
+  credential's name, since the guest would be handed two. A fleet's own
+  `-smbios type=11` string under another name is left alone.
+- **A running stack does not take a changed value.** Docker fixes a
+  network's MTU when it creates it. `quick-start down` then `up`.
+- **`run-vm --xml` outside a stack does not get it**: `settings.vm_overrides`
+  does not map the element. Pass the two words with `--qemu-arg` there.
+  `-smbios` is amd64 only in `run-vm`'s own use of it; the words go to any
+  QEMU as written.
+- **Known issue 18 is unchanged.** The 16 MiB limit on one RDMA message is
+  the mesh's framing (`TCP_MAX_PAYLOAD_LEN`) and has nothing to do with the
+  MTU. 8 MiB messages passed at `Mtu : 4096` in the study; 16 MiB was not
+  tried at either MTU there. Nor does the setting make RDMA faster: the
+  device ignores the path MTU, and every rate below is inside the spread
+  this stack shows between runs.
+
+**Measured**, 2026-11-21, the AMD development host, by hand: the default
+fleet on the fork pair with an overlay (`<vm-count>2`, 4 vCPU and 3072 MiB a
+guest, `<fleet-prefix>172.29`), guests of `20261119.g2aea67d`,
+`--no-metrics`, the tool and the staged `qemu/` both this tree's. The guests
+are smaller than the fleet file's because the host had 11 GB free. One boot
+with `<ernic-mtu>9000` in a second overlay, then the same two overlays
+booted with the element absent. Every `quick-start` command exited 0; each
+rate is one run.
+
+| | `<ernic-mtu>9000` | absent |
+|---|---|---|
+| each guest's `rocm-ernic0`, at first login, no playbook run | mtu 9000, `maxmtu 9198` | mtu 1500 |
+| `ibv_devinfo -v` | `active_mtu: 4096 (5)`, `max_mtu: 4096 (5)` | `active_mtu: 1024 (3)` |
+| `/run/udev/rules.d` | `70-qemu-tool-ernic-mtu.rules`, the rule as rendered | no such file |
+| `docker network inspect <stack>_l2` options | `com.docker.network.driver.mtu: 9000` | none |
+| host bridge of `l2`, and both host veths | 9000 | 1500 |
+| in each ernic container: `tap0`, `br0`, the `l2` veth | 9000 | 1500 |
+| the `fleet` veth and bridge | 1500 | 1500 |
+| `ping -M do -s 1472` between the guests | 3 of 3 | 3 of 3 |
+| `ping -M do -s 8972`, each direction | 3 of 3 | not sent; `-s 1473` 0 of 3, a local error |
+| `ping -M do -s 8973` | 0 of 3 | |
+| `quick-start test` | exit 0 in 2 m 22 s, ok=76 and ok=72, failed=0; its `ib_send_bw` at `Mtu : 4096`, 394.39 MiB/s; ernic 1 moved 65,536,000 bytes | not run |
+| `ib_send_bw -s 65536 -n 1000` | `Mtu : 4096`, 399.47 MiB/s | `Mtu : 1024`, 330.48 MiB/s |
+| `ib_write_bw -s 1048576 -n 300 -m 4096` | `Mtu : 4096`, 1170.95 MiB/s | not run |
+| `ib_read_bw -s 65536 -n 1000` | `Mtu : 4096`, 433.58 MiB/s | not run |
+| `systemctl is-system-running`, both guests | `running` | `running` |
+
+Each guest answered to the name the stack gave it (`qmlive-1`, `qmlive-2`),
+the NIC kept its rename and its address, and its RX and TX error and drop
+counters read 0 after the runs. With `tap0` of the first NIC's container put
+back to 1500 by hand (`br0` followed to 1500), `ping -M do -s 8972` from
+guest 1 to guest 2 was 3 of 3 and from guest 2 to guest 1 was 0 of 3, a few
+seconds apart; why the first passed was not looked into. The tap was put
+back and the stack taken down.
+
+The study that came before, the same day and host, on the stage before this
+one with the MTU raised by hand: the thresholds above; a guest raised while
+the host path stayed at 1500 losing every frame over 1472 bytes with no
+local error; `iperf3` between the guests at 2.75 Gbit/s at 9000 against
+578 Mbit/s at 1500; `ib_write_bw` and `ib_read_bw` of 8 MiB messages at
+`Mtu : 4096`; and RDMA rates at 4096 and at 1024 overlapping across three
+tools and two sizes. Its logs are in `~/.cache/qm-live/mtu`, this change's
+in `~/.cache/qm-live/mtu-impl`.
+
+**Not run**: a guest with more than one NIC (the rule fires once a NIC), so
+`helios-tray`, `mi355x-server` and `xio`; the `nvmeof` and `loopback`
+backends; a fleet with `<ernic-tap>false`; guests at the fleet file's
+size or at 8 vCPU; nixl or UCX (`ucx_info` is not in the guest; that UCX
+takes its path MTU from the port is from memory); a value other than 9000
+through the element; the optional `quick-start` tests; a kernel other than
+this host's 6.18 WSL2 one, a Docker daemon with its own network MTU default,
+and rootless Docker; arm64 and riscv64 guests; a libvirt domain; any CI
+lane; the guest check's new lines on a guest as a script (the two
+`systemctl show` answers they ask for were read off a guest by hand); and
+`ansible-lint`, which does not start on this host.
+
+**Seen and left alone.** On the published image `networkctl` shows the NIC
+managed by netplan's `en*` file through its altname, with DHCP and `UseMTU`
+on. Nothing answers DHCP on `l2`, so nothing has overridden the MTU; a DHCP
+server there that sent an MTU option would.
+
 ## PCI ID (in-VM)
 
 **Nothing to do on a current guest: upstream hwdata already names this
@@ -4927,6 +5080,10 @@ See `rocm-ernic-enablement.md` for the full tracking list. Short version:
     and is given a connection teardown rather than a completion with error.
     Keep per-request payloads under ~15 MiB until this is fixed upstream;
     note the fleet's default KV geometry is far larger.
+
+    `<ernic-mtu>` does not move this limit: it is the mesh's message
+    framing, not a path MTU. See "`<ernic-mtu>`: the NIC's MTU, from the
+    fleet file".
 
 19. **The emulated NIC's PCI id moved and the guests' udev rules did not —
     32 guests sat unusable for 18 hours.** Found 2026-10-20 on `mi100-fleet`.
@@ -7640,11 +7797,11 @@ interfaces.
   private names off (`filters: ["!^_"]`); members in source order;
   signatures separate, with annotations; source on.
   `show_if_no_docstring: true`, so a public function with no docstring is
-  listed with its signature and source: 48 of the 136 public top-level
+  listed with its signature and source: 48 of the 140 public top-level
   functions and classes have none, and `caps`, `cli`, `list_vms`, `qcow`
   and `shutdown` would otherwise show no member at all. Module constants and
   dataclass fields are listed for the same reason, which is what makes
-  `FleetConfig` 73 entries long. `tests/test_api_docs.py` holds those
+  `FleetConfig` 74 entries long. `tests/test_api_docs.py` holds those
   three numbers, and the count of pages, to the tree.
 - **Nothing is silenced.** The build is `--strict` and logs no warning;
   no griffe or mkdocs message is filtered.

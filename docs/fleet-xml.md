@@ -52,6 +52,7 @@ tab and a line break.
 | address (`addr`) | An IPv4 or IPv6 literal, with or without square brackets, with no zone and no host name. Empty, or white space alone, is the default. | The same form: octets of 0 to 255 with no leading zero, groups of one to four hexadecimal digits, one `::` at most, brackets in pairs. |
 | CPU vendor (`vendor`) | Exactly 12 printable ASCII characters (space to `~`) with no comma, such as `AuthenticAMD` or `GenuineIntel`, kept as written with no white space stripped; or an empty element, which is a value of its own (state no vendor) and not the default. | The same form, exactly. |
 | block size (`blocksize`) | `512` or `4096`, a number of bytes in ASCII digits; white space round it is ignored. No sign, no underscore, no leading zero and no unit. An empty element is an error. | The same form, exactly. |
+| MTU (`mtu`) | A number of bytes from 1500 to 9198 in four ASCII digits; white space round it is ignored. No sign, no underscore, no leading zero and no unit. An empty element is an error. | The same form, range included. |
 
 ## Elements
 
@@ -112,6 +113,7 @@ Settings of the rocm-ernic servers: the TAP, the mesh, statistics and the P4 eng
 | Element | Kind | Default | Sparse | Description |
 |---|---|---|---|---|
 | `<ernic-tap>` | boolean | `false` | no | Give each ernic NIC a TAP on a shared L2 network so guests have Ethernet; inter-guest RDMA tests need it. true or false; default false. Adds one tapsetup sidecar per NIC and the l2 network. |
+| `<ernic-mtu>` | MTU | `1500` | no | MTU of every guest's emulated ernic NICs and of the Ethernet between guests; 4192 up gives RDMA an active\_mtu of 4096. 1500 to 9198, in bytes; default 1500, the device's own, which renders nothing. Anything else is a parse error. The guest's RDMA active\_mtu follows the NIC: 1024 below 2144, 2048 below 4192, 4096 from there. Each guest is handed a udev rule at boot through a systemd credential (QEMU -smbios type=11), which the guest's systemd has to load (systemd-udev-load-credentials; the published image does); with ernic-tap true the l2 network and every tap are created at the same MTU. A running stack does not take a changed value: bring it down and up. Generated stacks only, run-vm --xml does not get it. |
 | `<ernic-tcp-port>` | integer | `6320` | no | TCP port the ernic mesh manager listens on and the workers dial; the mesh health checks match it. port number; default 6320. Used by mesh NICs only; a NIC with its own backend ignores it. |
 | `<ernic-stats-port>` | integer | `9840` | no | Port the ernic stats exporter serves on, and the port Prometheus scrapes it at. port number; default 9840; inside the stack network, not published on the host. |
 | `<ernic-nofile>` | integer | `65536` | no | Open file descriptor limit for every ernic server; Docker's default of 1024 is too low for a mesh manager. count, written as both the soft and the hard nofile ulimit; default 65536. |
@@ -551,7 +553,10 @@ Rules between elements, checked by `gen-compose` (`gen_compose.py`):
 - the fleet's size: at most 64 NICs on the mesh and 244 NICs in all, with a
   warning above 40 on the mesh;
 - `<vm-nvme-vram>` and `<vm-pci-mmio-bridge>` need `<vm-nvme>` of at least 1,
-  and `<vm-nvme-block-size>` of 4096 a `<vm-nvme>` other than 0.
+  and `<vm-nvme-block-size>` of 4096 a `<vm-nvme>` other than 0;
+- `<ernic-mtu>` other than 1500 is refused when `<vm-qemu-args>` already
+  passes a credential of the name it uses, and noted when it is under 4192
+  or `<ernic-tap>` is false.
 
 And nothing checks a value the parser passes through as text: a size, a
 duration, an image reference, `<p4-guest-scope>`, a server option's value.

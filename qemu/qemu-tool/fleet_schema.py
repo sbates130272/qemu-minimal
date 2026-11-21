@@ -29,7 +29,7 @@ import re
 import textwrap
 
 from . import fleet_xml as fx
-from .config import NVME_BLOCK_SIZES
+from .config import DEFAULT_ERNIC_MTU, MAX_ERNIC_MTU, NVME_BLOCK_SIZES
 
 RNG_NS = "http://relaxng.org/ns/structure/1.0"
 ANNOTATION_NS = "http://relaxng.org/ns/compatibility/annotations/1.0"
@@ -157,6 +157,45 @@ def _ipv6() -> str:
 
 _IPV6 = _ipv6()
 
+
+def _decimal_range(low: int, high: int) -> str:
+    """Every number from low to high, of one width, with no leading zero.
+
+    Alternatives of fixed digits and digit classes and no counted
+    repetition, so there is nothing for a validator to count.
+    """
+    lo, hi = str(low), str(high)
+    if len(lo) != len(hi) or lo[0] == "0" or low > high:
+        raise ValueError(f"_decimal_range({low}, {high}): one width, in order")
+
+    def cls(a: int, b: int) -> str:
+        return str(a) if a == b else f"[{a}-{b}]"
+
+    def span(lo: str, hi: str) -> list[str]:
+        if not lo:
+            return [""]
+        a, b = int(lo[0]), int(hi[0])
+        rest = len(lo) - 1
+        if a == b:
+            return [lo[0] + tail for tail in span(lo[1:], hi[1:])]
+        out = []
+        if lo[1:] == "0" * rest:
+            first = a
+        else:
+            out += [lo[0] + tail for tail in span(lo[1:], "9" * rest)]
+            first = a + 1
+        if hi[1:] == "9" * rest:
+            last = b
+        else:
+            last = b - 1
+        if first <= last:
+            out.append(cls(first, last) + "[0-9]" * rest)
+        if last < b:
+            out += [hi[0] + tail for tail in span("0" * rest, hi[1:])]
+        return out
+
+    return "|".join(span(lo, hi))
+
 # What Python's int() takes as a digit is Unicode's decimal digits, and
 # which characters those are depends on the Unicode version: Python's, and
 # the validator's for \d. libxml2 knows fewer than half of Python's. So a
@@ -199,6 +238,9 @@ KIND_PATTERNS: dict[str, str | None] = {
     # config.nvme_block_size: one of NVME_BLOCK_SIZES in ASCII digits,
     # stripped, and nothing looser (no sign, no underscore, no leading zero).
     "blocksize": _stripped("|".join(str(s) for s in NVME_BLOCK_SIZES)),
+    # config.ernic_mtu: four ASCII digits from DEFAULT_ERNIC_MTU to
+    # MAX_ERNIC_MTU, stripped. Written out digit by digit: see _repeat.
+    "mtu": _stripped(_decimal_range(DEFAULT_ERNIC_MTU, MAX_ERNIC_MTU)),
 }
 
 # The same, for a reader: (name on the page, what the parser accepts, what
@@ -270,6 +312,13 @@ KIND_HELP: dict[str, tuple[str, str, str]] = {
         "No sign, no underscore, no leading zero and no unit. An empty "
         "element is an error.",
         "The same form, exactly."),
+    "mtu": (
+        "MTU",
+        f"A number of bytes from {DEFAULT_ERNIC_MTU} to {MAX_ERNIC_MTU} in "
+        "four ASCII digits; white space round it is ignored. No sign, no "
+        "underscore, no leading zero and no unit. An empty element is an "
+        "error.",
+        "The same form, range included."),
 }
 
 # ---------------------------------------------------------------------------
@@ -1508,7 +1557,12 @@ def render_markdown() -> str:
         "  warning above 40 on the mesh;",
         "- `<vm-nvme-vram>` and `<vm-pci-mmio-bridge>` need `<vm-nvme>` of "
         "at least 1,",
-        "  and `<vm-nvme-block-size>` of 4096 a `<vm-nvme>` other than 0.")
+        "  and `<vm-nvme-block-size>` of 4096 a `<vm-nvme>` other than 0;",
+        "- `<ernic-mtu>` other than 1500 is refused when `<vm-qemu-args>` "
+        "already",
+        "  passes a credential of the name it uses, and noted when it is "
+        "under 4192",
+        "  or `<ernic-tap>` is false.")
     para(
         "And nothing checks a value the parser passes through as text: a "
         "size, a",

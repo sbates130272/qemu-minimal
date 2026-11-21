@@ -117,6 +117,12 @@
             </element>
           </optional>
           <optional>
+            <element name="ernic-mtu">
+              <a:documentation>MTU of every guest's emulated ernic NICs and of the Ethernet between guests; 4192 up gives RDMA an active_mtu of 4096. 1500 to 9198, in bytes; default 1500, the device's own, which renders nothing. Anything else is a parse error. The guest's RDMA active_mtu follows the NIC: 1024 below 2144, 2048 below 4192, 4096 from there. Each guest is handed a udev rule at boot through a systemd credential (QEMU -smbios type=11), which the guest's systemd has to load (systemd-udev-load-credentials; the published image does); with ernic-tap true the l2 network and every tap are created at the same MTU. A running stack does not take a changed value: bring it down and up. Generated stacks only, run-vm --xml does not get it.</a:documentation>
+              <ref name="kind.mtu"/>
+            </element>
+          </optional>
+          <optional>
             <element name="ernic-tcp-port">
               <a:documentation>TCP port the ernic mesh manager listens on and the workers dial; the mesh health checks match it. port number; default 6320. Used by mesh NICs only; a NIC with its own backend ignores it.</a:documentation>
               <ref name="kind.int"/>
@@ -507,6 +513,12 @@
     <a:documentation>block size: 512 or 4096, a number of bytes in ASCII digits; white space round it is ignored. No sign, no underscore, no leading zero and no unit. An empty element is an error.</a:documentation>
     <data type="string">
       <param name="pattern">[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*(512|4096)[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*</param>
+    </data>
+  </define>
+  <define name="kind.mtu">
+    <a:documentation>MTU: A number of bytes from 1500 to 9198 in four ASCII digits; white space round it is ignored. No sign, no underscore, no leading zero and no unit. An empty element is an error.</a:documentation>
+    <data type="string">
+      <param name="pattern">[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*(1[5-9][0-9][0-9]|[2-8][0-9][0-9][0-9]|90[0-9][0-9]|91[0-8][0-9]|919[0-8])[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*</param>
     </data>
   </define>
   <define name="devices">

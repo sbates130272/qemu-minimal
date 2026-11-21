@@ -1231,6 +1231,34 @@ and exits; the long-running server needs only
 because attaching to a pre-created, owned TAP requires no capability.
 Default: false.
 .TP
+.B <ernic\-mtu>
+The MTU, in bytes, of every emulated ernic NIC in every guest: 1500 to
+9198. Default: 1500, the device's own, which renders nothing. A guest's
+RDMA port takes its
+.B active_mtu
+from the NIC's MTU: 1024 below 2144, 2048 below 4192, and 4096 from there,
+so
+.B <ernic\-mtu>4192
+or more is what gives an RDMA MTU of 4096. Each guest is handed a udev rule
+at boot as a systemd credential
+.RB ( "\-smbios type=11" ),
+which the guest's
+.B systemd\-udev\-load\-credentials.service
+installs under
+.I /run/udev/rules.d
+before the NIC appears; nothing is written to the guest's disk and the
+published guest image needs no change. With
+.B <ernic\-tap>
+true the
+.I l2
+network is created at the same MTU and each tap is set to it, so frames of
+that size cross between guests; the mesh network is left alone. A running
+stack does not take a changed value: bring it down and up. It does not
+change RDMA throughput or the 16\~MiB limit on one RDMA message. Generated
+stacks only:
+.B run\-vm \-\-xml
+does not get it.
+.TP
 .BR <ernic\-per\-vm> ", " <rocjitsu\-per\-vm> ", " <sdxi\-per\-vm>
 Devices per guest. The first two must be at least 1. Each ernic is its own
 mesh node, and the mesh stops registering workers at about 40 nodes, so 8
@@ -2596,6 +2624,7 @@ does not get it.
 Network and mesh
 .BR <fleet\-prefix> ,
 .BR <ernic\-tap> ,
+.BR <ernic\-mtu> ,
 .BR <ernic\-tcp\-port> ,
 .BR <ernic\-stats\-port> ,
 .BR <ernic\-nofile> ,

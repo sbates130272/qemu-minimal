@@ -225,7 +225,7 @@ All notable changes to this project will be documented in this file.
     the RELAX NG schema anywhere but on the documents listed as its
     looseness; it needs `lxml` or `xmllint`, skips without one and fails
     without one under `CI=true`. `Gen Compose Check` installs `lxml`.
-  - *Run:* the four shipped fleet files and 296 small documents through the
+  - *Run:* the four shipped fleet files and 316 small documents through the
     parser and both schemas with lxml, on libxml2 2.14.6 and on 2.15.2. By
     hand, in a local container and in no workflow, on the 257 documents
     there were
@@ -319,6 +319,41 @@ All notable changes to this project will be documented in this file.
     `--hipfile-test` passed at 4096 and at 512 with rates inside each
     other's spread. Not run: null_blk devices, the bridge and more than one
     NVMe a guest on a guest, and any CI lane.
+- **`<ernic-mtu>`: the MTU of a guest's emulated NICs, and an RDMA MTU of
+  4096.** One setting, 1500 (the default, and the device's) to 9198, the
+  most the device takes; any other value is a parse error. A guest's RDMA
+  port takes its `active_mtu` from the NIC's MTU, which nothing raised, so
+  every fleet ran RDMA at an MTU of 1024 and `-m 4096` was clamped to it.
+  From `<ernic-mtu>4192` up the port reports 4096.
+  - **No new guest image is needed.** `gen-compose` adds two `--qemu-arg`
+    words to each guest's `run-vm`: an SMBIOS type 11 string that systemd
+    reads as the credential `udev.rules.70-qemu-tool-ernic-mtu`, holding
+    one udev rule that matches the emulated NIC by its four PCI fields and
+    sets its MTU. The guest's `systemd-udev-load-credentials.service`
+    installs it under `/run/udev/rules.d`. Seen on guests of
+    `20261119.g2aea67d`; nothing is written to the disk and no playbook
+    takes part. `qemu/checks/rocm-golden.sh` now requires that unit to be
+    loaded and to have run, so an image that could not take the rule is not
+    published.
+  - With `<ernic-tap>true` the `l2` network is created with
+    `com.docker.network.driver.mtu` and each tapsetup sets its tap to the
+    same MTU after `setup.sh`, by an `entrypoint` in the compose file: the
+    tapsetup image and its tag are unchanged. Without a TAP only the guest
+    words are rendered, with a note. A value under 4192 is noted too, with
+    the `active_mtu` it gives.
+  - The default renders nothing: the four shipped stacks are byte for byte
+    what they were. A running stack does not take a changed value, since a
+    Docker network keeps the MTU it was created with.
+  - Refused: a `<vm-qemu-args>` that already passes a credential of that
+    name. `run-vm --xml` outside a stack does not get the setting.
+  - Run on two guests of the default fleet (4 vCPU, 3072 MiB each) at
+    9000: NIC MTU 9000 and `active_mtu` 4096 at first login,
+    `ping -M do -s 8972` between the guests 3 of 3 and `-s 8973` none,
+    `quick-start test` passing with its `ib_send_bw` at `Mtu : 4096`. The
+    same disks booted without the element: 1500 and 1024. Rates at 4096
+    were inside the spread of those at 1024: the device does not use the
+    path MTU. Not run: more than one NIC a guest, the other three fleets,
+    a fleet with no TAP, nixl or UCX, and any CI lane.
 - **`<vm-pci-mmio-bridge>`.** Renders `run-vm --pci-mmio-bridge` for every
   guest. Refused without an emulated NVMe (`<vm-nvme>` of at least 1), and
   warned about on a `<qemu-ref>` that is not the fork.

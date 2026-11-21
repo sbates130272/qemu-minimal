@@ -23,7 +23,9 @@ from pathlib import Path
 from typing import Any
 import xml.etree.ElementTree as ET
 
-from .config import DEFAULT_NVME_BLOCK_SIZE, nvme_block_size
+from .config import (
+    DEFAULT_ERNIC_MTU, DEFAULT_NVME_BLOCK_SIZE, ernic_mtu, nvme_block_size,
+)
 from .identity import AMD_CPU_VENDOR, cpu_vendor_problem
 from .ports import parse_ssh_port, publish_address
 
@@ -405,6 +407,10 @@ class FleetConfig:
 
     # ---- ERNIC mesh ----
     ernic_tap: bool = False
+    # The MTU of every emulated ernic NIC in a guest, set by a udev rule the
+    # host hands the guest at boot, and of the l2 network and each tap when
+    # the fleet has them. 1500 is the device's own and renders nothing.
+    ernic_mtu: int = DEFAULT_ERNIC_MTU
     ernic_tcp_port: int = 6320
     ernic_stats_port: int = 9840
     ernic_nofile: int = 65536
@@ -521,9 +527,9 @@ class FleetConfig:
     loki_data_dir: str = "/var/lib/qemu-tool/loki-data"
     alloy_image: str = "docker.io/grafana/alloy:v1.5.1"
 
-_STR, _EXPAND, _INT, _BOOL, _PORT, _ADDR, _ARGS, _VENDOR, _BLOCK = (
+_STR, _EXPAND, _INT, _BOOL, _PORT, _ADDR, _ARGS, _VENDOR, _BLOCK, _MTU = (
     "str", "expand", "int", "bool", "port", "addr", "args", "vendor",
-    "blocksize")
+    "blocksize", "mtu")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -699,6 +705,22 @@ _SECTIONS: tuple[_Section, ...] = (
                  "have Ethernet; inter-guest RDMA tests need it",
             form="true or false; default false. Adds one tapsetup sidecar per "
                  "NIC and the l2 network"),
+        _Setting(
+            "ernic-mtu", "ernic_mtu", _MTU,
+            help="MTU of every guest's emulated ernic NICs and of the "
+                 "Ethernet between guests; 4192 up gives RDMA an "
+                 "active_mtu of 4096",
+            form="1500 to 9198, in bytes; default 1500, the device's own, "
+                 "which renders nothing. Anything else is a parse error. "
+                 "The guest's RDMA active_mtu follows the NIC: 1024 below "
+                 "2144, 2048 below 4192, 4096 from there. Each guest is "
+                 "handed a udev rule at boot through a systemd credential "
+                 "(QEMU -smbios type=11), which the guest's systemd has to "
+                 "load (systemd-udev-load-credentials; the published image "
+                 "does); with ernic-tap true the l2 network and "
+                 "every tap are created at the same MTU. A running stack "
+                 "does not take a changed value: bring it down and up. "
+                 "Generated stacks only, run-vm --xml does not get it"),
         _Setting(
             "ernic-tcp-port", "ernic_tcp_port", _INT,
             help="TCP port the ernic mesh manager listens on and the workers "
@@ -1222,6 +1244,8 @@ def _convert(setting: _Setting, raw: str) -> Any:
         return raw
     if setting.kind == _BLOCK:
         return nvme_block_size(raw, setting.tag)
+    if setting.kind == _MTU:
+        return ernic_mtu(raw, setting.tag)
     if setting.kind == _ARGS:
         # Checked here so `qemu-tool check` reports it; the readers split
         # the same text again.
