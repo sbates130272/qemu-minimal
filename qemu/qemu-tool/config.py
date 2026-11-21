@@ -1,3 +1,12 @@
+"""`VMConfig`, the settings of one guest, and where its defaults come from.
+
+Every field is something `run-vm` or `gen-vm` can be told. The command line
+fills them in `cli`, and `settings.vm_overrides()` fills them from fleet
+XML. The default images directory and package manifest depend on how
+qemu-tool was installed, so they are worked out for each instance and not
+when the module is imported.
+"""
+
 from __future__ import annotations
 
 import os
@@ -50,6 +59,14 @@ def default_packages() -> str:
 
 @dataclass
 class VMConfig:
+    """The settings of one guest: what `run-vm` and `gen-vm` are told.
+
+    The fields are in three groups, in this order: those both commands
+    read, those of `run-vm` and those of `gen-vm`. `run_vm.run()` and
+    `gen_vm.run()` each take one. `LibvirtXml` converts one to and from a
+    libvirt domain file.
+    """
+
     # ---- shared (run-vm + gen-vm) ----
     vm_name: str = "qemu-minimal"
     arch: str = "amd64"        # amd64 | arm64 | riscv64

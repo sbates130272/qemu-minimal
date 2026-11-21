@@ -16,6 +16,7 @@ file up to date as infrastructure changes.
   - `xio/` — the rocm-xio development guest: one VM with 2 GPUs, two ernics (one on the loopback backend, one serving NVMe-oF with a block and a KV namespace), an NVMe behind `pci-mmio-bridge` and an SPDK NVMe-KV controller. The stack behind `quick-start --flavor xio`, and the only shipped fleet with a `<devices>` block. See "The xio stack"
 - `qemu/qemu-tool/settings.py` — the one loader: fleet XML layers in, a `FleetConfig` (or `VMConfig` overrides) out. See "Settings" below
 - `qemu/schema/fleet.rng`, `qemu/schema/fleet.xsd` and `docs/fleet-xml.md` — the RELAX NG schema for fleet XML, the XSD 1.0 one and their reference page. All three are **generated** by `qemu-tool fleet-schema` (`qemu/qemu-tool/fleet_schema.py`) from the parser's tables; do not hand-edit any. See "The schema and the reference page"
+- `docs/api/` + `.mkdocs/`: the Python API pages of the site. `docs/api/*.md` name the modules; mkdocstrings builds the text from the docstrings under `qemu/qemu-tool/` when the site is built, and none of it is committed. `.mkdocs/qemu_tool` is a symlink to `../qemu/qemu-tool`, which is how the build finds a package whose directory has a hyphen, `.mkdocs/griffe_qemu_tool.py` is the griffe extension the build loads, and `.mkdocs/templates/` holds two mkdocstrings templates that keep source out of the site search. See "The published site"
 - `qemu/qemu-tool/quick_start.py` + `ansible/playbooks/vm-quickstart.yml` — the README's Quick Start, which is `qemu-tool quick-start`: two guests from the published qcow2, Prometheus, Grafana and log collection beside them, plus a GPU test and an inter-guest RDMA test. It runs `qemu/stacks/rocm-golden.xml` unless given `--xml` or `--flavor`; `--flavor default` is that fleet. The daily `report-for-vm-rocm-golden` lane runs *that subcommand*, not a copy of its steps. It replaced the shell script that used to live under `scripts/`, which is deleted; do not reintroduce a shell wrapper beside it. The guests are sized from the host by default (4 vCPU floor, 8 ceiling), and every prompt it asks takes its default answer when stdin is not a terminal, so CI needs no flag to stay non-interactive
 - `images/` — qcow2 VM disk images (backing + overlay pairs, **not** `/var/lib/qemu-tool/images`)
 - `ansible/playbooks/` — four playbooks and eight roles, and nothing else:
@@ -1945,6 +1946,10 @@ replace:
   config` run inside it with no flags, asserting the compose project name
   (taken from the working directory) and the service list, because resolving
   to the *wrong* stack also exits 0.
+- The site, built the way `publish-pages` builds it (`mkdocs build
+  --strict`, mkdocstrings included) and thrown away. The publish workflow
+  runs on main only, and a docstring is page text: see "The published
+  site".
 
 ### A fleet larger than the committed ones is a local XML
 
@@ -7023,7 +7028,218 @@ is the only workflow that writes that branch.
 **The site carries documentation and performance trends, and no guest
 reports.** It is built with MkDocs from `docs/`, plus a `perf/` page that
 `scripts/render-site-perf.py` writes from the numbers the benchmark workflow
-uploads. MkDocs adds `.nojekyll` itself.
+uploads.
+
+**The publish step writes `.nojekyll`; `mkdocs build` does not.** GitHub
+Pages runs Jekyll over a branch it serves unless the branch has a
+`.nojekyll` at its root, and Jekyll leaves out every path that starts with
+an underscore. The build writes one such file, `assets/_mkdocstrings.css`,
+the stylesheet of the API pages. Only `mkdocs gh-deploy` adds `.nojekyll`,
+and nothing here runs it: the workflow's comment and this file both said
+MkDocs added it, and `gh-pages` had none (`git ls-tree --name-only
+origin/gh-pages` on 2026-11-20), which cost nothing while no built path
+started with an underscore. The workflow's `publish()` now runs `touch
+.nojekyll` in the clone of the branch, after the `rsync --delete` that
+would remove it and before `git add -A`, on every attempt.
+`tests/test_api_docs.py` holds the line and its place. Gen Compose Check
+builds the site and publishes nothing, so it has no `.nojekyll` to assert.
+
+**The Python API pages are built with the site and committed nowhere.**
+`docs/api/` holds nine short Markdown files: an index, and eight pages that
+are an introduction and one `::: qemu_tool.<module>` line per module.
+mkdocstrings turns each line into the module's docstring and its public
+classes, functions and constants, with signatures and folded source, when
+`mkdocs build` runs. qemu-tool is a command and not a library; the index
+page says so, and that these pages promise nothing about the code's
+interfaces.
+
+- **How the package is found: `.mkdocs/qemu_tool` is a symlink to
+  `../qemu/qemu-tool`**, and `.mkdocs.yml` gives mkdocstrings
+  `paths: [.mkdocs]`. griffe, which mkdocstrings reads Python with, parses
+  source files and finds a package by its directory's name, and the
+  directory is `qemu-tool`. Nothing is imported and qemu-tool is not
+  installed for the build. Two other ways were built and both work:
+  `pip install ./qemu` in the build environment, and `pip install -e
+  ./qemu`. (Built again on 2026-11-20 in a scratch copy with the symlink
+  and the `paths` line removed, one venv for each: both exit 0 under
+  `--strict` with no warning; the first prints "Source code in
+  `qemu_tool/cli.py`" and the second `qemu/qemu-tool/cli.py`.) They were
+  not chosen because an install is a second copy of the
+  truth: a non-editable one is stale after the next edit and names every
+  file `qemu_tool/<module>.py`, a path the repository does not have, and an
+  editable one documents whichever checkout it was made in, which on a host
+  with worktrees is not always the one being built. The symlink reads the
+  tree the build runs in. Do not replace it with a copy.
+- **`.mkdocs/griffe_qemu_tool.py` is a griffe extension, and it does two
+  things to the build.** It rewrites `<` as `&lt;` in every docstring as
+  griffe loads it, outside code spans, fenced blocks and indented code
+  blocks: the docstrings name fleet XML elements as they are written,
+  mkdocstrings renders a docstring as Markdown, and Markdown hands
+  `<vm-count>` to the page as a tag, which a browser drops. And it resolves each module's path
+  through the symlink, so "Source code in" reads
+  `qemu/qemu-tool/<module>.py`. The second sets griffe's private
+  `Module._filepath`, there being no public setter; if griffe renames it
+  the pages print the symlink's path and nothing else changes. No source
+  file is rewritten for either. The file also has `references()`, which
+  the build does not call: the unit test uses it, below.
+- **The options** (`.mkdocs.yml`): `docstring_style: null`, because the
+  docstrings are prose in no docstring style and griffe's default would
+  read a line ending in a colon as the start of a Google-style section;
+  private names off (`filters: ["!^_"]`); members in source order;
+  signatures separate, with annotations; source on.
+  `show_if_no_docstring: true`, so a public function with no docstring is
+  listed with its signature and source: 48 of the 131 public top-level
+  functions and classes have none, and `caps`, `cli`, `list_vms`, `qcow`
+  and `shutdown` would otherwise show no member at all. Module constants and
+  dataclass fields are listed for the same reason, which is what makes
+  `FleetConfig` 71 entries long.
+- **Nothing is silenced.** The build is `--strict` and logs no warning;
+  no griffe or mkdocs message is filtered.
+- **`tests/test_api_docs.py`** needs neither mkdocs nor griffe. It fails
+  when a module under `qemu/qemu-tool/` is on no page or on two, unless it
+  is in the test's `EXCLUDED` and in "Modules left out" on the index page
+  with its reason (`__init__` and `__main__` today, which have no docstring
+  and define no public class, function or constant; the test fails when
+  either gains one, and does not count the names they import, which a page
+  does not list); when a `:::` line names something that is not a module;
+  when the index page's table, the nav, the symlink, `edit_uri`, the
+  workflow's install line (the three packages, `ruff` included), its path
+  filters or its build command drift; when one of eight options is not in
+  `.mkdocs.yml` as written (`show_if_no_docstring: true` is one; the
+  other display options, such as `heading_level`, are not held); and it
+  runs `escape()` over fixed cases and over every docstring in the
+  package. A module is counted on a page in every form mkdocstrings
+  renders, `:::name` and `## ::: name` as well as the plain one, and any
+  line that might be a directive (`SUSPECT` in the test: `:::` after
+  nothing but heading, blockquote and list marks, or `:::` and
+  `qemu_tool` anywhere in the line) has to be the plain form. The first
+  version matched the plain form only, and `## ::: qemu_tool.ports` added
+  to a second page was rendered there with the test green; the second
+  missed `> ::: qemu_tool.ports` and `- ::: qemu_tool.ports`, which
+  Python-Markdown also hands to mkdocstrings and which a reviewer saw
+  rendered by a strict build with no warning. The pages counted are the files directly under `docs/api/`,
+  so the test also fails on such a line in any other page under `docs/`
+  (which therefore cannot quote a directive in its prose)
+  and on a directory under `docs/api/`: mkdocs renders every page there,
+  in the nav or not, and `::: qemu_tool.ports` appended to
+  `docs/documentation.md`, or put in a new `docs/api/more/x.md`, used to
+  leave the test green with the module on two pages. A page is a file
+  with any suffix mkdocs renders, `.markdown`, `.mdown`, `.mkdn` and
+  `.mkd` as well as `.md` (`MARKDOWN` in the test, from mkdocs 1.6.1):
+  the test first globbed `*.md` and did not see a directive in
+  `docs/more.markdown`. **A new module is
+  one `:::` line on a page and its name in that page's row of the index
+  table.**
+- **The workflow** installs `mkdocs-material 'mkdocstrings[python]' ruff`,
+  unpinned as `mkdocs-material` already was, and its `push` filter now
+  includes `qemu/qemu-tool/**.py` and `.mkdocs/**`: a docstring changed on
+  main is a changed page. `ruff` is there to wrap long signatures; without
+  it mkdocstrings logs an INFO line, prints each signature on one line and
+  the build still passes.
+- **A docstring is now page text, and one can fail the site build.**
+  Write it as Markdown that also reads as plain text: backticks for code,
+  a blank line and four spaces before a block that must keep its columns.
+  Two docstrings were changed for that, the flag table in `qcow.py` and
+  the endpoint table in `publish_prune.py`, which were indented by two
+  spaces and ran together into a paragraph.
+  **Two bracket pairs in a row outside backticks, `x[i][j]` or
+  `[text][name]`, are a cross-reference to mkdocs-autorefs**, which warns
+  that the target does not exist, and the build is strict. Seen in a
+  scratch copy: one such sentence in the module docstring of `ports.py`
+  gave `Could not find cross-reference target 'j'` and `Aborted with 3
+  warnings in strict mode!`. Two things stop it before main.
+  `tests/test_api_docs.py` (`References`) fails on any docstring of the
+  package that has one, and names it. And **Gen Compose Check builds the
+  site on every pull request**: the publish workflow's own install line
+  and `mkdocs build --strict`, into `$RUNNER_TEMP`, publishing nothing.
+  That step catches what no pattern does, any other warning a docstring
+  or a page can cause; the test holds the two workflows to one package
+  list and one command. The publish workflow runs on main only, so
+  without these a bad docstring passed every pull request lane and then
+  failed the job that also publishes the performance page, the daily one
+  included. The step has not run on a runner. It uses the runner's
+  `python3`, where the publish workflow sets up 3.12.
+- **Every module on a page has a module docstring.** Eight had none
+  (`caps`, `cli`, `compose`, `config`, `identity`, `inspect`, `list_vms`,
+  `run_vm`) and their sections opened with a bare heading; each now has a
+  short one saying what the module is for. Nothing requires one of a new
+  module. `FleetConfig`, `FleetXml` and `VMConfig` have a class docstring
+  for the same reason; `QemuCaps` and `LibvirtXml` have none and render
+  as a heading over their members.
+- **`edit_uri: edit/main/docs/`.** With none set, MkDocs derives
+  `edit/master/docs/` from a GitHub `repo_url`, a branch this repository
+  does not have, so the edit link Material shows was wrong on every page
+  of the site and since before the API pages. On an API page the link
+  opens the page's `:::` file, not the docstrings.
+- **The pages are large, because the source is on them, and the search
+  index is not.** Measured on the build of 2026-11-20 with the three
+  removed elements gone, in bytes: `api/settings` is 535,408 (50,827
+  gzipped), `api/guests` 483,932 and `api/stacks` 460,022, where the
+  largest page before was `fleet-xml` at 98,638; `site/api` is 2.26 MB.
+  Nothing fails on it. If it ever matters, the lever is `show_source`.
+- **The folded source is kept out of the site search**, by two templates
+  under `.mkdocs/templates/python/material/` (`function.html.jinja`,
+  `class.html.jinja`) that `custom_templates` in `.mkdocs.yml` names. Each
+  extends mkdocstrings' own template and puts its `source` block, through
+  `super()`, inside `<section data-search-exclude>`, which the search
+  plugin of Material skips. The source is still on the page.
+  - Without them `search_index.json` is 509,326 bytes (127,507 gzipped)
+    and the text of its `api/` entries 381,838 of that: the largest
+    entry is the source of `render_compose`, 42,540 bytes, and a search
+    for `subprocess` or `return` found function source ahead of the
+    documentation pages. With them it is 197,599 bytes (50,487 gzipped),
+    the `api/` entries 83,621, the largest 3,350, and no entry holds
+    "Source code in". Both built from one tree on 2026-11-20, the first
+    with the `custom_templates` line taken out of a copy of the config.
+  - **Those figures are for a build with the committed placeholder
+    `docs/perf/index.md`**, which is what a local build has. The publish
+    workflow writes the real page over it before it builds, so the
+    published index is larger by that page's text: a reviewer who ran `render-site-perf.py` first measured about
+    3.6 kB more in each build. That figure moves with
+    the perf history and was not rebuilt for this note.
+  - **The wrapper is a `<section>` and must not become a `<div>`.** The
+    plugin compares elements by tag name alone (`Element.__eq__` in
+    `material/plugins/search/plugin.py`, 9.8.2), so the first `<div>` that
+    closes inside the block, the line-number column, ends the exclusion.
+    Built that way first, on an earlier tree: the index went from 505,937
+    to 497,967 bytes and the source of `render_compose` was still in it. Nothing inside a
+    source block is a `<section>`.
+  - The templates name `_base/function.html.jinja`, `_base/class.html.jinja`
+    and the block `source`, which are mkdocstrings-python's (2.0.11). If
+    it renames one, the build fails on the missing template, or the block
+    is silently no longer the source and the index grows back. The test
+    holds the two files and the config line, not the index size, which
+    only a build has.
+
+To build the site locally, from the checkout root (the system `mkdocs` has
+no mkdocstrings and stops at "The "mkdocstrings" plugin is not installed"):
+
+```bash
+uv venv --clear /tmp/site-venv
+uv pip install -p /tmp/site-venv/bin/python mkdocs-material 'mkdocstrings[python]' ruff
+/tmp/site-venv/bin/mkdocs build --strict --config-file .mkdocs.yml -d /tmp/site
+```
+
+`--clear` is for the second run: without it `uv venv` exits 2 on a
+directory that is already there. The three lines were run twice in a row
+on 2026-11-20, with the two `/tmp` paths changed and nothing else, and
+both runs exit 0.
+
+Built that way on the dev host on 2026-11-20 (mkdocs 1.6.1, mkdocs-material
+9.8.2, mkdocstrings 1.0.8, mkdocstrings-python 2.0.11, griffe 2.4.1, Python
+3.12), and again after the changes above: no warning, and the built pages
+were read for element names intact, members listed and no private name
+among them. A docstring can still name one in its prose; the one that
+did, in `FleetConfig`, was reworded.
+The publish step's `rsync` and `touch` lines, taken from the workflow
+file, were then run by hand against a copy of what `gh-pages` holds, twice:
+`.nojekyll` and `assets/_mkdocstrings.css` were in the tree after each run
+and a stale file was gone.
+**Not run**: either workflow, on a runner or as a Pages deploy, so that
+GitHub Pages serves the stylesheet once `.nojekyll` is there is its
+documented behaviour and not something seen. Nobody has looked at the
+pages in a browser, so the site search itself has not been tried: what
+was read is `search_index.json`.
 
 There are five tracked metrics and four artifacts, all uploaded by
 `report-for-vm-rocm-golden`:

@@ -1,3 +1,11 @@
+"""`qemu-tool run-vm`: build the QEMU command line for a guest and run it.
+
+`build_command()` turns a `VMConfig` and the `QemuCaps` of the binary into
+the argument list. `run()` does what has to happen on the host first, then
+replaces this process with QEMU, or prints the command with `--dry-run`.
+`resolve_ssh_port()` picks the host port for `--ssh-port auto`.
+"""
+
 from __future__ import annotations
 
 import atexit

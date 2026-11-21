@@ -143,6 +143,21 @@ jobs:
           CI: "true"
         run: python3 -m unittest discover -s tests -v
 
+      # The site is published from main only, by publish-pages, and its
+      # Python API pages are built from the docstrings under qemu/qemu-tool/.
+      # So a docstring is page text, and one the build warns about (prose
+      # such as x[i][j] outside backticks is a cross-reference to nothing)
+      # would pass every lane of a pull request and then fail the one job
+      # that also publishes the performance page, daily, until it was fixed.
+      # This is that workflow's own install line and build command, with the
+      # output thrown away: nothing is published from here.
+      # tests/test_api_docs.py holds the two workflows to one package list
+      # and one command.
+      - name: Build the site the way publish-pages does
+        run: |
+          python3 -m pip install --user --quiet mkdocs-material 'mkdocstrings[python]' ruff
+          python3 -m mkdocs build --config-file .mkdocs.yml --strict --site-dir "$RUNNER_TEMP/site"
+
       # The privilege posture of every committed stack, as compose RESOLVES
       # it rather than as gen_compose renders it. Resolving collapses the x-
       # anchors, so this catches a service that merges the wrong anchor or

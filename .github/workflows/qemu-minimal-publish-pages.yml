@@ -1,6 +1,7 @@
 name: qemu-minimal - Publish Pages
 
-# The only workflow that writes the site: the repository's own docs/ plus a
+# The only workflow that writes the site: the repository's own docs/, the
+# Python API pages mkdocstrings builds from qemu/qemu-tool/, and a
 # performance page built from the numbers the benchmark jobs upload. No guest
 # report is published any more; the site carries documentation and trends.
 #
@@ -12,8 +13,9 @@ name: qemu-minimal - Publish Pages
 #   1. Fetch the perf-* artifacts into perf-in/ (inputs, never published).
 #   2. Clone gh-pages (for perf history continuity).
 #   3. Run render-site-perf.py to write docs/perf/ with trends and badges.
-#   4. Run mkdocs build to produce site/.
-#   5. Sync site/ onto the gh-pages branch and push.
+#   4. Run mkdocs build to produce site/. The Python API pages are built
+#      here, from the docstrings of the checkout, and are committed nowhere.
+#   5. Sync site/ onto the gh-pages branch, add .nojekyll and push.
 #
 # Prerequisite (one-time, requires repo-admin access):
 #   Settings > Pages > Source = "Deploy from a branch", gh-pages / (root)
@@ -33,6 +35,10 @@ on:
       - '.github/workflows/qemu-minimal-publish-pages.yml'
       - 'docs/**'
       - '.mkdocs.yml'
+      # The Python API pages are built from the package's docstrings, through
+      # the griffe extension and the symlink in .mkdocs/.
+      - '.mkdocs/**'
+      - 'qemu/qemu-tool/**.py'
       - 'scripts/render-site-perf.py'
   workflow_dispatch:
 
@@ -72,8 +78,12 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install MkDocs Material
-        run: pip install mkdocs-material
+      # mkdocstrings builds the Python API pages from the docstrings under
+      # qemu/qemu-tool/. It reads the source files and imports nothing, so
+      # qemu-tool itself is not installed. ruff is there only to wrap long
+      # signatures on those pages; without it they are one line each.
+      - name: Install MkDocs Material and mkdocstrings
+        run: pip install mkdocs-material 'mkdocstrings[python]' ruff
 
       - name: Fetch the latest artifact from every benchmark
         env:
@@ -172,12 +182,19 @@ jobs:
             }
 
             # Replace the entire published tree with the built site.
-            # MkDocs adds .nojekyll automatically so GitHub Pages serves
-            # the pre-built HTML rather than running Jekyll over it.
             # --filter 'protect .git' keeps the clone's .git/ intact;
             # without it rsync --delete removes it (site/ has no .git/),
             # causing subsequent git commands to fall back to the workspace git.
             rsync -a --delete --filter 'protect .git' "../site/" ./
+
+            # GitHub Pages runs Jekyll over a branch it serves unless the
+            # branch has a .nojekyll at its root, and Jekyll leaves out
+            # every path that starts with an underscore: mkdocstrings'
+            # stylesheet is assets/_mkdocstrings.css. `mkdocs build` writes
+            # no .nojekyll (only `mkdocs gh-deploy` does), so it is written
+            # here, after the rsync, whose --delete would remove one the
+            # branch had and site/ did not.
+            touch .nojekyll
 
             git add -A
             if git diff --cached --quiet; then

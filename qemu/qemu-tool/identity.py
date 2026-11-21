@@ -1,3 +1,12 @@
+"""How a QEMU process is marked as one qemu-tool started.
+
+`identity_args()` gives every guest a `-name` and a `-uuid` derived from
+the command that started it and the VM's name; `match_identity()` derives
+the UUID again from a running process's name, which is how `list` tells
+its own guests from any other QEMU. `guest_name_args()` is separate: it
+hands the guest the name the host calls it by.
+"""
+
 from __future__ import annotations
 
 import uuid

@@ -612,6 +612,8 @@ qemu-minimal/
     packages.d/     Cloud-init package manifests
     stacks/         Fleet XML settings: rocm-golden.xml, helios-tray.xml, mi355x-server.xml, xio.xml
     compose/        The compose stack generated from each of those, same names
+  docs/             The published site's pages (MkDocs); docs/api/ lists the modules of the Python API pages
+  .mkdocs/          What the site build needs to read the package's docstrings
   libvirt/
     virt-install-ubuntu  Create VMs via libvirt
     create-nvme          Generate NVMe XML for libvirt
@@ -1300,6 +1302,15 @@ the modules and addresses its NICs at boot.
 `qemu-tool` is the primary interface. Both subcommands accept `--domain
 <file.xml>` to load a libvirt domain XML as base configuration (CLI
 flags take precedence over XML values).
+
+`qemu-tool` is a command and has no library interface. For people working
+on its code, the [site](https://sbates130272.github.io/qemu-minimal/api/)
+has a Python API section: every module of the package but `__init__` and
+`__main__`, with its docstrings, public members, signatures and source. It
+is built from the docstrings when the site is built
+([`docs/api/`](docs/api/) holds only the list of modules for each page),
+and it promises nothing about those interfaces from one release to the
+next.
 
 ### check flags
 

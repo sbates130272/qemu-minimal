@@ -1,3 +1,12 @@
+"""`qemu-tool list`: every QEMU running on this host, read from /proc.
+
+`collect()` returns one record for each QEMU process, taken from its
+command line: the guest's name, whether qemu-tool started it, its vCPUs and
+memory, image, SSH port, devices, and the container it runs in.
+`run()` prints them as a table or as JSON. `inspect`, `summary` and
+`shutdown` start from the same records.
+"""
+
 from __future__ import annotations
 
 import json

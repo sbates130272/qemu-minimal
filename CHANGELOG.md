@@ -119,6 +119,54 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **The site has a Python API section**, built with mkdocstrings from the
+  docstrings of the `qemu_tool` package: eight pages under "Python API"
+  that cover every module but `__init__` and `__main__`, each with the
+  module's docstring and its public classes, functions and constants, in
+  source order, with signatures and folded source. Names that start with an
+  underscore are left out. It is reference for people working on the code:
+  `qemu-tool` is a command, and the index page says that nothing there is a
+  library interface or promised to stay as it is.
+  - Nothing the pages show is committed. `docs/api/*.md` name the modules
+    and the text is read from the source when the site is built, so a page
+    says what the code said at that commit.
+  - The build finds the package, whose directory is `qemu/qemu-tool`,
+    through a symlink, `.mkdocs/qemu_tool`, and installs nothing of
+    qemu-tool. A griffe extension beside it, `.mkdocs/griffe_qemu_tool.py`,
+    keeps element names such as `<vm-count>` in a docstring from being read
+    as HTML and dropped, and makes the pages name each source file by its
+    real path.
+  - The Pages workflow installs `mkdocstrings[python]` and `ruff` beside
+    `mkdocs-material`, and now also runs on a push to main that changes a
+    Python source under `qemu/qemu-tool/` or anything under `.mkdocs/`.
+  - The folded source is on the pages and not in the site search: two
+    templates under `.mkdocs/templates/` wrap it in an element the search
+    plugin skips. With the source indexed, the search index is 509 kB,
+    three quarters of it function source; it is 198 kB.
+  - `tests/test_api_docs.py` fails when a module of the package is on no
+    page, or on two, and is not on the explicit list of modules left out,
+    so a new module cannot be forgotten. A `:::` line on a page outside
+    `docs/api/` fails it too, in a file of any suffix mkdocs renders. It
+    needs no mkdocs.
+  - A docstring is page text now, and the build is strict: two bracket
+    pairs in a row outside backticks, such as `x[i][j]`, are read as a
+    cross-reference to nothing and fail it. The same test fails on a
+    docstring that has one, and Gen Compose Check now builds the site on
+    every pull request with the publish workflow's packages and build
+    flags, publishing nothing, so a docstring cannot break the publish job
+    after the merge.
+  - Eight modules that had no module docstring have a short one (`caps`,
+    `cli`, `compose`, `config`, `identity`, `inspect`, `list_vms`,
+    `run_vm`), so their sections on the pages say what the module is for.
+    `FleetConfig`, `FleetXml` and `VMConfig` have a class docstring for the
+    same reason.
+  - Two docstrings changed so that their tables keep their columns on the
+    page: the flag list of `qcow.py` and the endpoint list of
+    `publish_prune.py` are indented by four spaces, not two.
+
+  Built locally with `mkdocs build --strict`, with no warning. Neither
+  workflow has run with it and no Pages deploy has been made from it.
+
 - **Two schemas and a reference page for fleet XML, all generated from the
   parser.** `qemu-tool fleet-schema` writes a RELAX NG schema
   (`--format rng`, the default), an XML Schema (`--format xsd`, XSD 1.0) or
@@ -303,6 +351,16 @@ All notable changes to this project will be documented in this file.
 - **`qemu-tool list --summary` counted every NIC as a mesh node.** A NIC
   with a backend of its own is no longer counted against the mesh ceiling or
   in the "connected" figure.
+- **The site's "edit this page" link named a branch called `master`.**
+  `.mkdocs.yml` now sets `edit_uri: edit/main/docs/`.
+- **The published branch had no `.nojekyll`.** GitHub Pages runs Jekyll
+  over `gh-pages` without one, and Jekyll leaves out paths that start with
+  an underscore. Nothing the site built had such a path until the Python
+  API pages, whose stylesheet is `assets/_mkdocstrings.css`. `mkdocs build`
+  does not write the file (`mkdocs gh-deploy` does, and the workflow does
+  not use it), so the publish step now writes it into the branch after it
+  syncs the built site. Run by hand against a scratch directory, not on a
+  runner.
 
 ## [v2.1.0] - 2026-11-19
 

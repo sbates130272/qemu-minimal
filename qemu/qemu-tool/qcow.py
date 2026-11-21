@@ -1,9 +1,10 @@
 """qemu-tool qcow — inspect and manage VM overlay qcow2 state.
 
 Subcommand flags:
-  --list          list all overlays under VM_IMAGES_DIR
-  --state <vm>    show overlay info for one VM
-  --clean <vm>    delete overlay and NVMe scratch, recreate from backing
+
+    --list          list all overlays under VM_IMAGES_DIR
+    --state <vm>    show overlay info for one VM
+    --clean <vm>    delete overlay and NVMe scratch, recreate from backing
 """
 
 from __future__ import annotations

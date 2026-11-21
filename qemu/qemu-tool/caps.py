@@ -1,3 +1,12 @@
+"""What the QEMU binary on this host supports.
+
+`probe_caps()` runs the binary a `VMConfig` names and reads its device help:
+which NVMe properties it has (ioeventfd, dbcs, vram-dev, dbbuf-poll-ns,
+lbaf-mask), whether it has the pci-mmio-bridge device, and which aio mode a
+drive accepts. `run_vm` builds its command line from the answer, so an
+option this QEMU would refuse is left off.
+"""
+
 from __future__ import annotations
 
 import shutil

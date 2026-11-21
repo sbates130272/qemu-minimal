@@ -1,0 +1,19 @@
+{#- The folded "Source code in" block of a function, kept out of the site search.
+
+mkdocstrings' own template, with its source block inside an element the
+search plugin of Material skips (data-search-exclude). The source is still
+on the page. Without this the search index is mostly function source, and a
+search for an ordinary word finds source ahead of the documentation.
+
+The element is a <section> because the search plugin tells elements apart
+by tag name alone: around a <div>, the first <div> that closes inside the
+source block ends the exclusion, and the source is indexed after all.
+tests/test_api_docs.py holds this file and its line in .mkdocs.yml.
+-#}
+{% extends "_base/function.html.jinja" %}
+
+{% block source scoped %}
+  <section data-search-exclude>
+    {{ super() }}
+  </section>
+{% endblock source %}

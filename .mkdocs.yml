@@ -5,6 +5,9 @@ site_description: >-
 site_url: https://sbates130272.github.io/qemu-minimal/
 repo_url: https://github.com/sbates130272/qemu-minimal
 repo_name: sbates130272/qemu-minimal
+# The "edit this page" link. MkDocs's default for a GitHub repo_url is
+# edit/master/docs/, and the branch is main.
+edit_uri: edit/main/docs/
 docs_dir: docs
 
 theme:
@@ -35,10 +38,58 @@ theme:
 extra_css:
   - stylesheets/extra.css
 
+# The Python API pages (docs/api/) are built from the docstrings of the
+# qemu_tool package by mkdocstrings. Nothing they show is committed.
+#
+# The package's directory is qemu/qemu-tool, with a hyphen, and is imported as
+# qemu_tool only through package-dir in qemu/pyproject.toml. griffe reads
+# source files and finds a package by its directory name, so .mkdocs/qemu_tool
+# is a symlink to that directory and `paths` names .mkdocs: the build reads
+# the checkout it runs in and needs no install of qemu-tool.
+plugins:
+  - search
+  - mkdocstrings:
+      default_handler: python
+      # Two templates that keep the folded source of each member out of the
+      # search index. The comment in each says how.
+      custom_templates: .mkdocs/templates
+      handlers:
+        python:
+          paths: [.mkdocs]
+          options:
+            # The docstrings are prose in no docstring style. Read as Google
+            # style, a line that happens to end in a colon starts a section.
+            docstring_style: null
+            # <vm-count> in a docstring is not HTML.
+            extensions:
+              - .mkdocs/griffe_qemu_tool.py
+            show_source: true
+            show_root_heading: true
+            show_root_full_path: true
+            heading_level: 2
+            members_order: source
+            filters: ["!^_"]
+            show_if_no_docstring: true
+            show_signature_annotations: true
+            separate_signature: true
+            signature_crossrefs: false
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+
 nav:
   - Home: index.md
   - Documentation: documentation.md
   - Fleet XML reference: fleet-xml.md
+  - Python API:
+      - api/index.md
+      - Settings and fleet XML: api/settings.md
+      - Stack generation: api/stacks.md
+      - Guests: api/guests.md
+      - Quick start: api/quick-start.md
+      - Inspection: api/inspection.md
+      - Teardown: api/teardown.md
+      - Publishing: api/publishing.md
+      - Command line: api/cli.md
   - Publishing: publishing.md
   - Performance: perf/index.md
 

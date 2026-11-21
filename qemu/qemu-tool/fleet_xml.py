@@ -360,6 +360,16 @@ def merge_devices(
 
 @dataclasses.dataclass
 class FleetConfig:
+    """The settings of one fleet, as fleet XML states them.
+
+    One field for each flat element of the format, which the parser's
+    table of settings maps to its field, and `devices`, the entries of the
+    `<devices>` block. A field's default here is the format's default: it
+    is the value of an element no layer sets. `FleetXml.parse_layers()`
+    builds one from fleet XML files and `FleetXml.emit()` writes one out as
+    a file.
+    """
+
     # ---- Shape ----
     count: int = 1
     name_prefix: str = "qemu-fleet"
@@ -1472,6 +1482,17 @@ def _structure_problems(root: ET.Element) -> list[str]:
 
 
 class FleetXml:
+    """Fleet XML files in, a `FleetConfig` out, and back.
+
+    A namespace of static and class methods; nothing instantiates it.
+    `find()` resolves which files to read. `parse()`, `parse_layers()` and
+    `load()` read them strictly and exit naming every problem.
+    `problems()` returns one file's problems and `layer_problems()` those
+    that show only across layers, as lines of text and without exiting,
+    for a caller that reports them. `emit()` writes a `FleetConfig` out as
+    fleet XML.
+    """
+
     @staticmethod
     def find(explicit: Path | list[Path] | None = None) -> list[Path]:
         """Return fleet XML files to use, lowest precedence first.

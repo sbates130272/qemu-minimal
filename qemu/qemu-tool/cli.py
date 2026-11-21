@@ -1,3 +1,11 @@
+"""The `qemu-tool` command: the argument parser and the dispatch.
+
+`main()` is the entry point of the installed command and of
+`python3 -m qemu_tool`. The rest of the module is private: the parser, its
+help text, and one function for each subcommand that turns the parsed
+arguments and the settings into a call of the module that does the work.
+"""
+
 from __future__ import annotations
 
 import argparse
