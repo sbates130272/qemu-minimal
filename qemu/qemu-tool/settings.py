@@ -33,14 +33,17 @@ def load_fleet(explicit: Path | Sequence[Path] | None = None) -> FleetConfig | N
 def vm_overrides(fleet: FleetConfig) -> dict[str, Any]:
     """The VMConfig fields a fleet's per-VM defaults set.
 
-    Three fields are applied whatever the file says, because FleetConfig
-    cannot tell "unset" from their default: images, vfio_user_root_port and
-    backing_shared. Everything else is applied only when non-empty, so an
-    absent element leaves the VMConfig default alone.
+    One field is applied whatever the file says, because FleetConfig cannot
+    tell "unset" from its default: vfio_user_root_port. Everything else is
+    applied only when non-empty, so an absent element leaves the VMConfig
+    default alone.
+
+    No element turns image locking off. A generated stack passes run-vm
+    --backing-shared itself; a run-vm outside a stack that shares a backing
+    file takes the flag.
     """
     out: dict[str, Any] = {
         "vfio_user_root_port": fleet.vm_vfio_user_root_port,
-        "backing_shared": fleet.vm_backing_shared,
     }
     if fleet.vm_images_dir:
         out["images"] = Path(fleet.vm_images_dir).expanduser()

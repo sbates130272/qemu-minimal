@@ -4,7 +4,7 @@
 # Regenerate after changing qemu/stacks/xio.xml:
 #   qemu-tool gen-compose --xml qemu/stacks/xio.xml
 #
-# xml-sha256: 0f6b65c136769456dddd860204401abf97eb6d3a335111ffb4b3e8f559433b0d  # pre-commit: ignore
+# xml-sha256: 6fc12c08d1df5eb0f6118f3673460ba63fd5d926e69ae55b29e5a55bfc6eb759  # pre-commit: ignore
 
 x-logging: &logging
   driver: json-file

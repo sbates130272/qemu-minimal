@@ -832,6 +832,7 @@ Disable the QEMU guest agent channel.
 .TP
 .B \-\-backing\-shared
 Mark the backing image as shared so multiple VMs can run from the same base.
+No fleet XML element sets this: a generated stack passes it for every guest.
 .TP
 .BI \-\-extra\-hostfwd " RULE"
 Append an additional SLIRP host-forward rule, e.g.\&
@@ -2274,9 +2275,10 @@ are each an error that names the file and the element, and for an unknown
 element the closest known name. XML comments are allowed anywhere. A misspelt
 element is therefore refused, not read as a setting left at its default.
 .PP
-Seven elements the format used to have are refused the same way, with an
+Ten elements the format used to have are refused the same way, with an
 error that says the element was removed and suggests no setting in its
-place:
+place. Seven were parsed and read by no command, so deleting one from a file
+changes nothing:
 .BR <qemu\-digest> ,
 .BR <ernic\-digest> ,
 .BR <rocjitsu\-digest> ,
@@ -2285,12 +2287,28 @@ place:
 .B <prom\-port>
 and
 .BR <loki\-port> .
-Each was parsed and read by no command, so deleting it from a file changes
-nothing. A misspelling of one is told which removed element it looks like
-and is offered no setting either. A guest image is pinned by digest in
+A guest image is pinned by digest in
 .B <backing\-ref>
 itself, as
 .IR name @sha256: digest .
+Three were read.
+.B <vm\-backing\-shared>
+turned image locking off for a
+.B run\-vm
+given
+.BR \-\-xml ,
+or finding a
+.B fleet.xml
+on the search path; a generated stack always starts its guests with locking off, and a
+.B run\-vm
+outside a stack that shares a backing file now takes
+.BR \-\-backing\-shared .
+.B <ernic\-subnet>
+and
+.B <ernic\-mac\-prefix>
+are fixed at 192.168.100 and 72:6f:63:6d, the values the guest image
+assumes. A misspelling of a removed element is told which one it looks like
+and is offered no setting either.
 .PP
 One element has structure.
 .B <devices>
@@ -2442,7 +2460,6 @@ beats the file.
 <vm\-nvme>                     \-\-nvme
 <vm\-filesystem>               \-\-filesystem
 <vm\-extra\-hostfwd>            \-\-extra\-hostfwd
-<vm\-backing\-shared>           \-\-backing\-shared
 <vm\-vfio\-user\-root\-port>      \-\-vfio\-user\-root\-port
 <vm\-cpu\-sockets>              \-\-cpu\-sockets
 <vm\-cpu\-phys\-bits>            \-\-cpu\-phys\-bits
@@ -2517,8 +2534,6 @@ does not get it.
 .TP
 Network and mesh
 .BR <fleet\-prefix> ,
-.BR <ernic\-subnet> ,
-.BR <ernic\-mac\-prefix> ,
 .BR <ernic\-tap> ,
 .BR <ernic\-tcp\-port> ,
 .BR <ernic\-stats\-port> ,

@@ -239,6 +239,88 @@ a deliberate break of the format: a file that sets one no longer parses.
   allow-list that is empty. Both were tried from a scratch copy with a
   field and a key put back, and each failed.
 
+**Three more were removed the same day, and these were read**:
+`<vm-backing-shared>`, `<ernic-subnet>` and `<ernic-mac-prefix>`, with
+their `FleetConfig` fields. The owner's decision again. They follow the
+same pattern (`REMOVED_ELEMENTS`, the "was removed" error, the lookalike
+error, the page's table, both schemas), so the format has lost ten elements
+in all. What differs is that deleting one is not always the whole
+migration, so each reason says what to do:
+
+```
+my-fleet.xml: <vm-backing-shared> was removed from the fleet format: a generated stack always starts its guests with image locking off, whatever this said; for a run-vm outside a stack, pass --backing-shared. Delete the element.
+my-fleet.xml: <ernic-subnet> was removed from the fleet format: the guests' RDMA NICs are always on 192.168.100.0/24, the one network the guest image addresses them on at boot, so any other value put the fleet's addresses where no guest was. Delete the element.
+my-fleet.xml: <ernic-mac-prefix> was removed from the fleet format: every emulated NIC's MAC address always starts 72:6f:63:6d, the one prefix the quick-start playbook finds a guest's NIC by, so any other value failed that playbook. Delete the element.
+```
+
+- **`<vm-backing-shared>` did nothing in a stack.** `gen_compose` writes
+  `--backing-shared` on every `qemu-N` service's `run-vm` and never read
+  the element. Its one reader was `settings.vm_overrides`, for a `run-vm`
+  given `--xml` (or finding a `fleet.xml` on the search path) outside a
+  stack. The flag `run-vm --backing-shared` and `VMConfig.backing_shared`
+  stay.
+- **The behaviour change is that one reader's.** All four shipped fleet
+  files set the element true, so `run-vm --xml qemu/stacks/rocm-golden.xml`
+  used to add `file.locking=off,backing.file.locking=off` to the root
+  drive and no longer does. Such a guest that shares a backing file with
+  another running one needs `--backing-shared` typed. `run-vm --xml ...
+  --convert-to-libvirt` likewise no longer records the `backing_shared`
+  hint unless the flag is given. Seen with `run-vm --dry-run`, both ways;
+  the libvirt half is read from `libvirt_xml.py`.
+- **Nothing in the repository relied on it.** No workflow, script or doc
+  runs `run-vm --xml`; the workflows' `run-vm` lines take no settings file
+  and the dry-run lane tests the flag itself. `gen-vm` never read
+  `backing_shared` (it boots only a bake's own image), and `quick-start`'s
+  guests boot through the generated stack. `quick_start.make_overlays`
+  passes `vm_overrides` to `gen-vm`, which ignored the key.
+- **The four fleet files lost the line, so every stack's digest moved**
+  and the four were regenerated. The digest header is the one line that
+  differs in the twelve generated files, apart from one comment in three
+  of them; see "The comment on the `l2` network" below.
+- **`<ernic-subnet>` and `<ernic-mac-prefix>` are constants**,
+  `gen_compose.ERNIC_SUBNET` (`192.168.100`) and `ERNIC_MAC_PREFIX`
+  (`72:6f:63:6d`), each spelled once. They were never settings a fleet
+  could move: the golden image's boot unit addresses NIC *n* at
+  `192.168.100.<10+n>`, from `rocm_ernic_setup_nic_subnet` baked into
+  `rocm-ernic-netcfg.sh`, whatever the fleet file said, and
+  `vm-quickstart.yml` finds a guest's NIC with `awk '/72:6f:63:6d/'`. A
+  fleet with another subnet rendered an inventory, GIDs and guest addresses
+  on a network its guests were not on; one with another prefix failed the
+  playbook's "Assign ernic Ethernet address" task. Neither was ever run to
+  see it: that is read from the role and the playbook.
+- **`tests/test_ernic_constants.py` ties the two sides.** The subnet equals
+  the role default, nothing else sets that variable, the template's own
+  arithmetic (`SUBNET.$(( 10 + n ))`, *n* from the MAC's last two bytes)
+  gives every NIC of every shipped stack the address the generator gave it,
+  the playbook's one MAC literal is the prefix, and
+  `ERNIC_TCP_GUEST_GIDS` follows from the MAC and the address. The playbook
+  was not changed to take the prefix from somewhere: it has no source for
+  it but the inventory, and a new inventory variable is a change to all
+  four generated stacks.
+- **The comment on the `l2` network names the network, not an element.**
+  With `<ernic-tap>` on, the generated `docker-compose.yml` said "guests
+  address each other over `<ernic-subnet>`"; it now ends
+  `over 192.168.100.0/24.`, written from `ERNIC_SUBNET`. That is the one
+  line besides the digest that changed in a generated file, in the three
+  stacks with a TAP (`xio` has none). The first version of this change
+  left the old comment in so that only digests moved; review found a name
+  the parser refuses in a file users read, and `tests/test_ernic_constants.py`
+  (`test_nothing_under_qemu_compose_names_a_removed_element`) now fails
+  any file under `qemu/compose`, stack READMEs included, that writes a
+  removed element as `<tag>`.
+- **`FleetXml.emit()` of every earlier version wrote all three**, at their
+  defaults, since none was sparse. Such a file no longer parses; deleting
+  the three lines is the fix, and for `<vm-backing-shared>true` the flag
+  where it mattered.
+- **The schema corpus is 260 documents**, three more removed elements. The
+  two tests that fail an unread field and an unread `plan()` key did not
+  catch these three and could not: all three were read.
+- *Run:* the full suite, `gen-compose --check` for the four stacks and
+  bare, the three generated files compared with a fresh render,
+  `codespell`, `mkdocs build --strict`, and `run-vm --dry-run` with and
+  without the flag and with `--xml`. *Not run:* a guest, a stack, any
+  workflow, and jing or trang on the regenerated schemas.
+
 ### The `<devices>` block
 
 **`<devices>` is the one element with structure: a `<server type id>` entry
@@ -567,12 +649,12 @@ the XSD has a bullet of its own.
   directory as a directory; the first said `cannot write .: Is a
   directory`, because `Path("")` is `.`. The option is a string for that
   reason, not a `Path`.
-- **`tests/test_fleet_schema.py`.** `AGREE` is 236 small documents the
+- **`tests/test_fleet_schema.py`.** `AGREE` is 239 small documents the
   parser and the RELAX NG schema must answer alike, each with the answer;
   `LOOSER` is eleven the parser refuses and neither schema can.
   `XSD_TAKES` names the six documents of `AGREE` the XSD accepts, and
   `XSD_LOOSER` is ten more the RELAX NG schema refuses and the XSD
-  accepts, each under a key of `xsd_looser()`: 257 documents, and one test
+  accepts, each under a key of `xsd_looser()`: 260 documents, and one test
   asks the parser and both schemas about each and requires the three
   answers it is listed with, which for the XSD is "agrees with the RELAX NG
   schema everywhere but on its listed looseness". Others assert each rule
@@ -581,7 +663,7 @@ the XSD has a bullet of its own.
   with one repeated (265 documents, all three answers), every decimal
   digit Python knows in a single integer, an integer one digit past
   `int()`'s limit, and 400 generated addresses. **Every flat setting is
-  held to its kind, whether or not a document sets it**: 20 of the 73 are
+  held to its kind, whether or not a document sets it**: 18 of the 70 are
   in no listed document and no shipped file, and typing one of those as
   another kind, in either renderer, used to pass the suite. One test reads
   each setting's declaration in both rendered schemas (`kind.<kind>` and
@@ -597,7 +679,7 @@ the XSD has a bullet of its own.
   when that imports, else `xmllint --relaxng` and `xmllint --schema`; with
   neither it skips and prints that no document was validated, and under
   `CI=true` it fails. `Gen Compose Check` installs `lxml`.
-  `python tests/test_fleet_schema.py --dump DIR` writes the 257 documents
+  `python tests/test_fleet_schema.py --dump DIR` writes the 260 documents
   and an `index.json` of the expected answers, for running another
   validator over them by hand. **One document is long on purpose**,
   `BIG_BLOCK`: 254 `<server>` entries, which is every NIC one guest can
@@ -606,7 +688,7 @@ the XSD has a bullet of its own.
   five, so an XSD that said `maxOccurs="8"` on `<server>` passed the
   suite; with it that mutant fails two tests (run from a scratch copy). A
   test also hands it to `gen_compose.plan()` on `rocm-golden.xml`, which
-  takes it, and one NIC more, which is refused. Seven documents set a
+  takes it, and one NIC more, which is refused. Ten documents set a
   removed element each, refused by all three.
 
 **What the schema cannot check** is the last section of the page, and is
@@ -619,9 +701,9 @@ an integer or a port of more digits than `int()` converts (4300 by
 default), which the parser reports as not an integer;
 and every check in `gen_compose.py`. The numbers the page gives for the mesh
 ceilings are held to `gen_compose`'s constants by a test, in the section's
-own sentence and in the three help strings that type them again
-(`<vm-count>`, `<ernic-subnet>`, `<ernic-per-vm>`, in `fleet_xml.py`, which
-cannot import `gen_compose`); the test also fails when a fourth setting
+own sentence and in the two help strings that type them again
+(`<vm-count>` and `<ernic-per-vm>`, in `fleet_xml.py`, which
+cannot import `gen_compose`); the test also fails when a third setting
 starts to quote a NIC or node count.
 
 **One thing goes the other way, and depends on the validator.** A
@@ -761,7 +843,7 @@ line; the search path resolves to one file. Four commands differ:
 there is the settings of every command given no `--xml`, and the only
 candidate to copy is `rocm-golden.xml`, which is a whole fleet: a bare `gen-vm`
 would take its `<backing-ref>` and pull instead of baking, with its password,
-and a bare `run-vm` its NVMe, `file.locking=off` and four fixed hostfwd rules,
+and a bare `run-vm` its NVMe and its fixed hostfwd rules,
 so a second guest on the host cannot bind them. An empty `<fleet/>` is no
 better: `gen-compose` would find it and render from it rather than from the
 stack's own file. The postinst creates the directory and nothing in it;
@@ -1969,7 +2051,9 @@ rules per guest, not one rule each for two guests. Do not "fix" it by padding
 it to `<vm-count>`. (`--pci-hostdev` and `--vfio-userdev` are the same kind of
 field on `run-vm`; they have no fleet element.) There is no element for
 per-VM names, SSH ports, MACs or guest IPs: all four are derived from the
-prefix, the port base and the NIC ordinal.
+prefix, the port base and the NIC ordinal. The MAC's first four bytes and
+the guests' network are not settings either, since 2026-11-20:
+`gen_compose.ERNIC_MAC_PREFIX` and `ERNIC_SUBNET`.
 
 **`<ernic-tap>true` is what makes inter-node anything possible.** The TCP mesh
 carries RDMA payload only; without a TAP the guests have no Ethernet, ARP goes
@@ -1982,9 +2066,10 @@ its MAC; that one is per-node and must never be hoisted into the shared anchor
 (issue 18).
 
 Guest addressing: `ernic-1` is the mesh manager and serves VM 1, `ernic-N` are
-workers dialling it. Guests take `<ernic-subnet>.11` upward on the ernic
-segment — never `.1`, which is the manager's DHCP `server_ip`, and ARP for it
-is intercepted.
+workers dialling it. Guests take `192.168.100.11` upward on the ernic
+segment (`gen_compose.ERNIC_SUBNET`, a constant the guest image shares),
+never `.1`, which is the manager's DHCP `server_ip`, and ARP for it is
+intercepted.
 
 Two other things worth knowing: `<prom-data-dir>` bind-mounts the Prometheus
 TSDB to a path you can actually find — create it and `chown 65534:65534`

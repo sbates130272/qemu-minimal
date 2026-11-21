@@ -1064,13 +1064,13 @@ def render_markdown() -> str:
 
     para("### Removed elements")
     para(
-        "These were elements of the format and are not any more. Each was "
+        "These were elements of the format and are not any more. Most were "
         "parsed and",
-        "read by no command. A file that sets one is refused by the parser, "
-        "which says",
-        "so by name, and by both schemas, to which it is an unknown element "
-        "like any",
-        "other:")
+        "read by no command; the table says what to do about the ones that "
+        "were read.",
+        "A file that sets one is refused by the parser, which says so by "
+        "name, and by",
+        "both schemas, to which it is an unknown element like any other:")
     lines.extend(_table(
         ("Element", "Why it went"),
         [(f"`<{tag}>`", _md(_sentence(why[0].upper() + why[1:])))

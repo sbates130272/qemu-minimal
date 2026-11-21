@@ -378,8 +378,6 @@ class FleetConfig:
 
     # ---- Network ----
     fleet_prefix: str = "172.31"
-    ernic_subnet: str = "192.168.100"
-    ernic_mac_prefix: str = "72:6f:63:6d"
 
     # ---- Topology (devices per VM) ----
     # ernic_per_vm multiplies MESH NODES, not just containers: each rocm-ernic
@@ -421,7 +419,6 @@ class FleetConfig:
     # run-vm --pci-mmio-bridge: the fork QEMU's bridge device, which rocm-xio
     # uses to reach the emulated NVMe's queues from the GPU side.
     vm_pci_mmio_bridge: bool = False
-    vm_backing_shared: bool = False
     vm_username: str = "ubuntu"
     vm_password: str = ""
     vm_filesystem: str = ""
@@ -626,8 +623,11 @@ _SECTIONS: tuple[_Section, ...] = (
                  "about if unstamped. gen-vm --bake ignores it"),
     )),
     _Section("Network",
-        "The addresses and MAC addresses the generator derives everything "
-        "else from.", (
+        "The docker network every service's address is derived from. The "
+        "guests' RDMA NIC network, 192.168.100.0/24, and the first four "
+        "bytes of each emulated NIC's MAC address, 72:6f:63:6d, are fixed: "
+        "the guest image assumes the first and the quick-start playbook the "
+        "second.", (
         _Setting(
             "fleet-prefix", "fleet_prefix", _STR,
             help="First two octets of the stack's docker network; every service "
@@ -636,21 +636,6 @@ _SECTIONS: tuple[_Section, ...] = (
                  "parser, empty takes the default. Third octet is the service "
                  "family: 0 infra, 1 ernic, 2 rocjitsu, 3 qemu, 4 sdxi, 5 spdk; "
                  "the last is the device's number"),
-        _Setting(
-            "ernic-subnet", "ernic_subnet", _STR,
-            help="First three octets of the guests' RDMA NIC network; NICs take "
-                 "addresses from .11 upward across the fleet",
-            form="Three dotted octets, default 192.168.100, a /24; not "
-                 "validated. NIC number n in the fleet gets .<10+n>, at most 244"
-                 " NICs. Sets the inventory's fleet_guest_ip and each server's "
-                 "ERNIC_TCP_GUEST_GIDS"),
-        _Setting(
-            "ernic-mac-prefix", "ernic_mac_prefix", _STR,
-            help="First four bytes of every emulated NIC's MAC address; the last"
-                 " two are the NIC's number in the fleet",
-            form="Four colon-separated hex bytes, default 72:6f:63:6d; not "
-                 "validated. The number counts from 1 across the whole fleet, "
-                 "high byte first"),
     )),
     _Section("Topology",
         "How many emulated devices each guest gets, and where they sit on "
@@ -782,12 +767,6 @@ _SECTIONS: tuple[_Section, ...] = (
             form="true or false; default false; refused with vm-nvme of 0 or "
                  "less; needs the fork QEMU; generated stacks only, run-vm --xml"
                  " does not get it"),
-        _Setting(
-            "vm-backing-shared", "vm_backing_shared", _BOOL,
-            help="Turn off image file locking so several guests can share one "
-                 "backing image; read only by run-vm given --xml",
-            form="true or false; default false. A generated stack always passes "
-                 "--backing-shared, whatever this says"),
         _Setting(
             "vm-username", "vm_username", _STR,
             help="Guest login account: the user gen-vm creates, and the one the "
@@ -1091,8 +1070,12 @@ KNOWN_ELEMENTS: tuple[str, ...] = tuple(_BY_TAG)
 # one is an error like any other unknown element, but the error says this
 # instead of offering the nearest name, which for <prom-port> is
 # <prom-retention>. A misspelling of one (<prom-prot>) is told which removed
-# element it looks like, for the same reason. All seven were parsed and read
-# by no command.
+# element it looks like, for the same reason. The first seven were parsed and
+# read by no command. The last three were read: <vm-backing-shared> only by
+# a run-vm given --xml, since a stack always shares, and the two ernic ones
+# by the generator, which now holds the one value the guest image assumes
+# for the subnet and the quick-start playbook for the MAC prefix
+# (gen_compose.ERNIC_SUBNET, ERNIC_MAC_PREFIX).
 REMOVED_ELEMENTS: dict[str, str] = {
     "qemu-digest":
         "no command ever read it, so it never pinned <qemu-ref>",
@@ -1112,6 +1095,18 @@ REMOVED_ELEMENTS: dict[str, str] = {
     "loki-port":
         "no command ever read it; Loki has no host port and listens on 3100 "
         "inside the stack",
+    "vm-backing-shared":
+        "a generated stack always starts its guests with image locking off, "
+        "whatever this said; for a run-vm outside a stack, pass "
+        "--backing-shared",
+    "ernic-subnet":
+        "the guests' RDMA NICs are always on 192.168.100.0/24, the one "
+        "network the guest image addresses them on at boot, so any other "
+        "value put the fleet's addresses where no guest was",
+    "ernic-mac-prefix":
+        "every emulated NIC's MAC address always starts 72:6f:63:6d, the one "
+        "prefix the quick-start playbook finds a guest's NIC by, so any "
+        "other value failed that playbook",
 }
 
 

@@ -1087,7 +1087,7 @@ class Generated(unittest.TestCase):
         self.assertEqual(
             [row.split("`")[1] for row in rows],
             [f"<{tag}>" for tag in fleet_xml.REMOVED_ELEMENTS])
-        self.assertEqual(len(rows), 7)
+        self.assertEqual(len(rows), 10)
         # The message the parser gives, as the parser gives it.
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "my-fleet.xml"
@@ -1129,7 +1129,7 @@ class Generated(unittest.TestCase):
             f"at most {gen_compose._MESH_MAX} NICs on the mesh and "
             f"{gen_compose._NIC_MAX} NICs in", page)
         self.assertIn(f"above {gen_compose._MESH_PRACTICAL} on the mesh", page)
-        # The same numbers are typed again in three settings' help, which
+        # The same numbers are typed again in two settings' help, which
         # prints on the page and in both schemas.
         mesh, nics, practical = (
             gen_compose._MESH_MAX, gen_compose._NIC_MAX,
@@ -1138,7 +1138,6 @@ class Generated(unittest.TestCase):
         self.assertIn(
             f"Bounded by {mesh} mesh NICs (warning above {practical}) and "
             f"{nics} NICs in total", forms["vm-count"])
-        self.assertIn(f"at most {nics} NICs", forms["ernic-subnet"])
         self.assertIn(
             f"refused above {mesh} mesh nodes or {nics} NICs and warned "
             f"about above {practical}", forms["ernic-per-vm"])
@@ -1148,7 +1147,7 @@ class Generated(unittest.TestCase):
             tag for tag, form in forms.items()
             if re.search(r"\d+ (mesh )?(NICs|nodes)\b", form))
         self.assertEqual(
-            quoting, ["ernic-per-vm", "ernic-subnet", "vm-count"])
+            quoting, ["ernic-per-vm", "vm-count"])
 
     def test_the_page_names_the_per_vm_lists_the_generator_splits(self) -> None:
         source = (REPO_ROOT / "qemu" / "qemu-tool" / "gen_compose.py").read_text()

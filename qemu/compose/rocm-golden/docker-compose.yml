@@ -4,7 +4,7 @@
 # Regenerate after changing qemu/stacks/rocm-golden.xml:
 #   qemu-tool gen-compose --xml qemu/stacks/rocm-golden.xml
 #
-# xml-sha256: 0a7ca289d99969d50bba175c38ab1cfe36a6b7492fcef2fa018f0e0cd35f1137  # pre-commit: ignore
+# xml-sha256: 674951d79cf243221b60aab1de0dfb420f7776850df95e65bf130bbac97322e0  # pre-commit: ignore
 
 x-logging: &logging
   driver: json-file
@@ -511,7 +511,7 @@ services:
 networks:
   # Dumb shared L2 carrying guest Ethernet only. No address
   # is assigned: each ernic bridges its tap onto it, and the
-  # guests address each other over <ernic-subnet>.
+  # guests address each other over 192.168.100.0/24.
   l2:
     driver: bridge
   # Every service has a fixed address and nothing resolves a

@@ -59,6 +59,63 @@ All notable changes to this project will be documented in this file.
     `loki_port`, with two more nothing read, `vm_images_dir` and `subnet`.
   - Two tests now fail a `FleetConfig` field that no module outside the
     table names, and a key of `plan()`'s result that no render reads.
+- **Three more fleet XML elements are removed, and these were read**:
+  `<vm-backing-shared>`, `<ernic-subnet>` and `<ernic-mac-prefix>`. That
+  is ten removed in this version. A file that sets one no longer parses,
+  with the same kind of error as the seven above, and for these three
+  deleting the element is not always the whole migration.
+  - **`<vm-backing-shared>`: a `run-vm` given `--xml` no longer turns image
+    locking off.** The element's only reader was `run-vm` outside a stack,
+    reading a fleet file named with `--xml` or found on the search path.
+    All four shipped fleet files set it true, so
+    `qemu-tool run-vm --xml qemu/stacks/rocm-golden.xml` used to add
+    `file.locking=off,backing.file.locking=off` to the root drive and now
+    does not. Pass `--backing-shared` where two running guests share a
+    backing file; the flag is unchanged. The same goes for the hint
+    `run-vm --xml ... --convert-to-libvirt` records.
+
+    ```
+    Error: my-fleet.xml: <vm-backing-shared> was removed from the fleet format: a generated stack always starts its guests with image locking off, whatever this said; for a run-vm outside a stack, pass --backing-shared. Delete the element.
+    ```
+
+    A generated stack is unchanged: `gen-compose` has always written
+    `--backing-shared` for every guest and never read the element.
+    `quick-start` and `gen-vm` never used it either.
+  - **`<ernic-subnet>` and `<ernic-mac-prefix>` are fixed** at
+    `192.168.100` and `72:6f:63:6d`, their defaults. The guest image
+    addresses its NICs on that network at boot whatever the fleet file
+    said, and the quick-start playbook finds a guest's NIC by that MAC
+    prefix, so a fleet that set another value did not work. A file that set
+    either to its default deletes the line and renders as before.
+
+    ```
+    Error: my-fleet.xml: <ernic-subnet> was removed from the fleet format: the guests' RDMA NICs are always on 192.168.100.0/24, the one network the guest image addresses them on at boot, so any other value put the fleet's addresses where no guest was. Delete the element.
+    Error: my-fleet.xml: <ernic-mac-prefix> was removed from the fleet format: every emulated NIC's MAC address always starts 72:6f:63:6d, the one prefix the quick-start playbook finds a guest's NIC by, so any other value failed that playbook. Delete the element.
+    ```
+
+    The values are `gen_compose.ERNIC_SUBNET` and `ERNIC_MAC_PREFIX`, and
+    a new test file, `tests/test_ernic_constants.py`, holds them to the
+    role default `rocm_ernic_setup_nic_subnet`, to the address arithmetic
+    of the guest's boot unit and to the MAC literal in `vm-quickstart.yml`.
+  - **A file written by `FleetXml.emit()` of any earlier version no longer
+    parses for these three as well.** None was sparse, so `emit()` always
+    wrote all three, at `false`, `192.168.100` and `72:6f:63:6d` for a
+    default `FleetConfig`. Delete the three lines, or emit the file again.
+  - `FleetConfig` loses `vm_backing_shared`, `ernic_subnet` and
+    `ernic_mac_prefix`, and `settings.vm_overrides()` and
+    `bake_overrides()` no longer return a `backing_shared` key.
+    `VMConfig.backing_shared` stays.
+  - The four shipped fleet files lose their `<vm-backing-shared>true` line,
+    so each stack's `xml-sha256` header changed and the four stacks were
+    regenerated. One other line of a generated file differs: the comment
+    on the `l2` network of the three stacks with a TAP said guests address
+    each other over `<ernic-subnet>`, and now says `192.168.100.0/24`.
+    The `rocm-golden` stack's README no longer tells a reader to set
+    `<vm-backing-shared>true`, and gives the MAC prefix and the network as
+    the values they are.
+  - *Run:* the unit suite; `gen-compose --check` for the four stacks;
+    `run-vm --dry-run` with and without `--backing-shared` and with
+    `--xml qemu/stacks/rocm-golden.xml`. *Not run:* a guest or a stack.
 
 ### Added
 
@@ -91,7 +148,7 @@ All notable changes to this project will be documented in this file.
     says another number, the per-VM comma lists, text between elements,
     quoting in `<vm-qemu-args>`, and every rule `gen-compose` holds between
     elements.
-  - The page also lists the seven elements this version removes; see
+  - The page also lists the ten elements this version removes; see
     Breaking, above.
   - **The RELAX NG schema is the precise one; the XSD is for editors and
     tools that take only XSD.** It is written in Python from the same tables
@@ -120,10 +177,11 @@ All notable changes to this project will be documented in this file.
     the RELAX NG schema anywhere but on the documents listed as its
     looseness; it needs `lxml` or `xmllint`, skips without one and fails
     without one under `CI=true`. `Gen Compose Check` installs `lxml`.
-  - *Run:* the four shipped fleet files and 257 small documents through the
+  - *Run:* the four shipped fleet files and 260 small documents through the
     parser and both schemas with lxml (libxml2 2.14.6). By hand, in a
-    local container and in no workflow: the same files and documents
-    through the RELAX NG schema with jing, which agreed with libxml2 on
+    local container and in no workflow, on the 257 documents there were
+    before the last three elements were removed: the same files and
+    documents through the RELAX NG schema with jing, which agreed with libxml2 on
     every one, and through the XSD with the JDK's own validator (Xerces),
     which compiled it and agreed with libxml2 on every one. `trang` converts
     the RELAX NG schema with two warnings; the XSD it writes takes more than

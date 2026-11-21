@@ -101,16 +101,6 @@
             <xs:documentation>First two octets of the stack's docker network; every service gets a fixed address under it. Two dotted octets, default 172.31; not validated by the parser, empty takes the default. Third octet is the service family: 0 infra, 1 ernic, 2 rocjitsu, 3 qemu, 4 sdxi, 5 spdk; the last is the device's number.</xs:documentation>
           </xs:annotation>
         </xs:element>
-        <xs:element name="ernic-subnet" type="f:kind.str" minOccurs="0">
-          <xs:annotation>
-            <xs:documentation>First three octets of the guests' RDMA NIC network; NICs take addresses from .11 upward across the fleet. Three dotted octets, default 192.168.100, a /24; not validated. NIC number n in the fleet gets .&lt;10+n&gt;, at most 244 NICs. Sets the inventory's fleet_guest_ip and each server's ERNIC_TCP_GUEST_GIDS.</xs:documentation>
-          </xs:annotation>
-        </xs:element>
-        <xs:element name="ernic-mac-prefix" type="f:kind.str" minOccurs="0">
-          <xs:annotation>
-            <xs:documentation>First four bytes of every emulated NIC's MAC address; the last two are the NIC's number in the fleet. Four colon-separated hex bytes, default 72:6f:63:6d; not validated. The number counts from 1 across the whole fleet, high byte first.</xs:documentation>
-          </xs:annotation>
-        </xs:element>
         <xs:element name="ernic-per-vm" type="f:kind.int" minOccurs="0">
           <xs:annotation>
             <xs:documentation>Emulated RDMA NICs per guest; each is its own mesh node, so it multiplies against the mesh's node ceiling. Integer, at least 1, default 1. Fleet total is refused above 64 mesh nodes or 244 NICs and warned about above 40. Replaced by the &lt;devices&gt; block when one is given.</xs:documentation>
@@ -194,11 +184,6 @@
         <xs:element name="vm-pci-mmio-bridge" type="f:kind.bool" minOccurs="0">
           <xs:annotation>
             <xs:documentation>Give every guest the fork QEMU's pci-mmio-bridge device for its emulated NVMe, which rocm-xio uses. true or false; default false; refused with vm-nvme of 0 or less; needs the fork QEMU; generated stacks only, run-vm --xml does not get it.</xs:documentation>
-          </xs:annotation>
-        </xs:element>
-        <xs:element name="vm-backing-shared" type="f:kind.bool" minOccurs="0">
-          <xs:annotation>
-            <xs:documentation>Turn off image file locking so several guests can share one backing image; read only by run-vm given --xml. true or false; default false. A generated stack always passes --backing-shared, whatever this says.</xs:documentation>
           </xs:annotation>
         </xs:element>
         <xs:element name="vm-username" type="f:kind.str" minOccurs="0">

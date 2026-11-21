@@ -76,8 +76,6 @@ class ParseDefault(unittest.TestCase):
 
     def test_network(self) -> None:
         self.assertEqual(self.cfg.fleet_prefix, "172.31")
-        self.assertEqual(self.cfg.ernic_subnet, "192.168.100")
-        self.assertEqual(self.cfg.ernic_mac_prefix, "72:6f:63:6d")
 
     def test_ernic(self) -> None:
         self.assertTrue(self.cfg.ernic_tap)
@@ -253,8 +251,8 @@ class SettingsTable(unittest.TestCase):
 
     # FleetConfig fields no command reads, each with why it is still a
     # setting. Empty: a row of the table that nothing reads is an element
-    # that parses and changes nothing, which is what the seven removed on
-    # 2026-11-20 were for years.
+    # that parses and changes nothing, which is what seven of the ten
+    # removed on 2026-11-20 were for years.
     UNREAD_FIELDS: dict[str, str] = {}
     # Keys of the dict gen_compose.plan() returns that no render reads.
     # <prom-port> and <loki-port> were read in that sense only: copied into
@@ -400,9 +398,10 @@ class Strict(unittest.TestCase):
         self.assertIn("unknown element <zzzzzz>", message)
         self.assertNotIn("did you mean", message)
 
-    # The seven elements removed on 2026-11-20, and the FleetConfig field
+    # The ten elements removed on 2026-11-20, and the FleetConfig field
     # each had. Spelled out here and not read from the table: this is the
-    # list the owner decided.
+    # list the owner decided. The first seven were read by no command; the
+    # last three were read (READ_BEFORE_REMOVAL).
     REMOVED = {
         "qemu-digest": "qemu_digest",
         "ernic-digest": "ernic_digest",
@@ -411,7 +410,12 @@ class Strict(unittest.TestCase):
         "domain-pattern": "domain_pattern",
         "prom-port": "prom_port",
         "loki-port": "loki_port",
+        "vm-backing-shared": "vm_backing_shared",
+        "ernic-subnet": "ernic_subnet",
+        "ernic-mac-prefix": "ernic_mac_prefix",
     }
+    READ_BEFORE_REMOVAL = ("vm-backing-shared", "ernic-subnet",
+                           "ernic-mac-prefix")
 
     def test_a_removed_element_says_it_was_removed(self) -> None:
         self.assertEqual(
@@ -431,7 +435,10 @@ class Strict(unittest.TestCase):
                 # <ernic-digest>), so none is offered.
                 self.assertNotIn("did you mean", message)
                 self.assertNotIn("unknown element", message)
-                self.assertIn("no command ever read it", reason)
+                if tag in self.READ_BEFORE_REMOVAL:
+                    self.assertNotIn("no command ever read it", reason)
+                else:
+                    self.assertIn("no command ever read it", reason)
 
     def test_the_whole_message_for_a_removed_element(self) -> None:
         path = self._write("<prom-port>9090</prom-port>")
@@ -439,6 +446,45 @@ class Strict(unittest.TestCase):
             f"{path}: <prom-port> was removed from the fleet format: no "
             "command ever read it; Prometheus has no host port and is asked "
             "inside its container. Delete the element."])
+
+    def test_the_whole_messages_for_the_three_that_were_read(self) -> None:
+        # Each says what to do, since deleting the element is not always
+        # the whole migration: a run-vm outside a stack loses locking=off.
+        want = {
+            "vm-backing-shared":
+                "<vm-backing-shared> was removed from the fleet format: a "
+                "generated stack always starts its guests with image "
+                "locking off, whatever this said; for a run-vm outside a "
+                "stack, pass --backing-shared. Delete the element.",
+            "ernic-subnet":
+                "<ernic-subnet> was removed from the fleet format: the "
+                "guests' RDMA NICs are always on 192.168.100.0/24, the one "
+                "network the guest image addresses them on at boot, so any "
+                "other value put the fleet's addresses where no guest was. "
+                "Delete the element.",
+            "ernic-mac-prefix":
+                "<ernic-mac-prefix> was removed from the fleet format: "
+                "every emulated NIC's MAC address always starts "
+                "72:6f:63:6d, the one prefix the quick-start playbook finds "
+                "a guest's NIC by, so any other value failed that "
+                "playbook. Delete the element.",
+        }
+        self.assertEqual(sorted(want), sorted(self.READ_BEFORE_REMOVAL))
+        for tag, message in want.items():
+            with self.subTest(element=tag):
+                # At the value every shipped fleet had, and at another.
+                for value in ("true", "192.168.100", "10.0.0"):
+                    path = self._write(f"<{tag}>{value}</{tag}>")
+                    self.assertEqual(
+                        FleetXml.problems(path), [f"{path}: {message}"])
+
+    def test_the_removed_constants_are_the_generators(self) -> None:
+        # The two reasons type the values; gen_compose holds them.
+        from qemu_tool import gen_compose
+        self.assertIn(f"{gen_compose.ERNIC_SUBNET}.0/24",
+                      fleet_xml.REMOVED_ELEMENTS["ernic-subnet"])
+        self.assertIn(f"starts {gen_compose.ERNIC_MAC_PREFIX},",
+                      fleet_xml.REMOVED_ELEMENTS["ernic-mac-prefix"])
 
     def test_a_removed_element_is_not_a_setting(self) -> None:
         fields = {f.name for f in dataclasses.fields(FleetConfig)}
@@ -463,6 +509,12 @@ class Strict(unittest.TestCase):
                               ("backing_digest", "backing-digest"),
                               ("prom-prot", "prom-port"),
                               ("loki_port", "loki-port"),
+                              ("vm-backing-share", "vm-backing-shared"),
+                              ("vm_backing_shared", "vm-backing-shared"),
+                              ("ernic-subnets", "ernic-subnet"),
+                              ("ernic_subnet", "ernic-subnet"),
+                              ("ernic-mac-prefx", "ernic-mac-prefix"),
+                              ("ernic_mac_prefix", "ernic-mac-prefix"),
                               ("domain-patern", "domain-pattern")):
             with self.subTest(element=typo):
                 path = self._write(f"<{typo}>1</{typo}>")
@@ -487,7 +539,9 @@ class Strict(unittest.TestCase):
         # a bare "unknown element": no removal reason and no setting.
         for tag, removed in (("PROM-PORT", "prom-port"),
                              ("QEMU_DIGEST", "qemu-digest"),
-                             ("DOMAIN-PATTERN", "domain-pattern")):
+                             ("DOMAIN-PATTERN", "domain-pattern"),
+                             ("VM-BACKING-SHARED", "vm-backing-shared"),
+                             ("ERNIC-SUBNET", "ernic-subnet")):
             with self.subTest(element=tag):
                 path = self._write(f"<{tag}>1</{tag}>")
                 reason = fleet_xml.REMOVED_ELEMENTS[removed]
@@ -505,7 +559,8 @@ class Strict(unittest.TestCase):
                     f"<{setting}>?"])
 
     def test_a_misspelt_removed_element_is_one_line_a_copy(self) -> None:
-        # Only the seven themselves are folded into one line; the README
+        # Only the removed elements themselves are folded into one line;
+        # the README
         # says so.
         path = self._write("<prom-prot>1</prom-prot><prom-prot>2</prom-prot>"
                            "<prom-port>1</prom-port><prom-port>2</prom-port>")
@@ -515,7 +570,7 @@ class Strict(unittest.TestCase):
         self.assertEqual(
             1, sum("<prom-port> was removed" in p for p in problems))
         readme = " ".join((REPO_ROOT / "README.md").read_text().split())
-        self.assertIn("One of the seven set more than once is reported "
+        self.assertIn("A removed element set more than once is reported "
                       "once; a misspelling is reported once per copy",
                       readme)
 

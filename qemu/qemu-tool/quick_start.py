@@ -1091,7 +1091,8 @@ def make_overlays(state: _State) -> None:
             fields["backing_file"] = None
         else:
             # Every guest after the first overlays the file the first one
-            # fetched, which is what <vm-backing-shared> is for.
+            # fetched. The guests boot through the generated stack, whose
+            # run-vm lines all carry --backing-shared; gen-vm starts none.
             fields["backing_image"] = None
             fields["backing_file"] = images / f"{state.vm(1)}-backing.qcow2"
         gen_vm_run(VMConfig(**fields))

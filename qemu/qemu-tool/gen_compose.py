@@ -290,7 +290,20 @@ def pins_fork_qemu(ref: str) -> bool:
     return repo.endswith(FORK_MARK)
 
 
-# The most NICs a fleet can address: .11 to .254 of <ernic-subnet>.
+# The guests' RDMA NIC network and the first four bytes of every emulated
+# NIC's MAC address. Constants, not settings, because the guest side holds
+# the same two values and reads no fleet file: the boot unit a golden image
+# carries addresses NIC n at <ERNIC_SUBNET>.<10+n> (rocm_ernic_setup_nic_subnet
+# in roles/rocm_ernic_setup/defaults/main.yml, baked into
+# rocm-ernic-netcfg.sh), and vm-quickstart.yml finds a guest's NIC by this
+# MAC prefix. They were the elements <ernic-subnet> and <ernic-mac-prefix>
+# until 2026-11-20; a fleet that set either to anything else rendered
+# addresses, GIDs and an inventory its guests did not answer to.
+# tests/test_ernic_constants.py holds both to the guest side.
+ERNIC_SUBNET = "192.168.100"
+ERNIC_MAC_PREFIX = "72:6f:63:6d"
+
+# The most NICs a fleet can address: .11 to .254 of ERNIC_SUBNET.
 _NIC_MAX = 244
 
 
@@ -729,13 +742,13 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
     # count the ones that are.
     mesh_per_vm = sum(1 for x in ernic_servers if _backend(x) is None)
     mesh_count = count * mesh_per_vm
-    # Guest addresses are <ernic-subnet>.11 upward in a /24, one per NIC. The
+    # Guest addresses are ERNIC_SUBNET.11 upward in a /24, one per NIC. The
     # mesh ceiling used to keep the count far below this; a fleet of NICs
     # that are off the mesh has no other bound.
     if nic_count > _NIC_MAX:
         sys.exit(
             f"Error: {count} VMs x {ernic_per_vm} ernics is {nic_count} NICs. "
-            "Guest addresses start at <ernic-subnet>.11 in a /24, which has "
+            f"Guest addresses start at {ERNIC_SUBNET}.11 in a /24, which has "
             f"room for {_NIC_MAX}.")
     if mesh_count > _MESH_MAX:
         detail = (
@@ -768,16 +781,14 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
     # the two are the same number, which is what keeps the existing stack
     # byte-identical; above that, every NIC in the fleet still gets its own
     # MAC, IP and GID.
-    mac_prefix = _setting(cfg, "ernic_mac_prefix")
-    macs = [f"{mac_prefix}:{o >> 8:02x}:{o & 0xff:02x}"
+    macs = [f"{ERNIC_MAC_PREFIX}:{o >> 8:02x}:{o & 0xff:02x}"
             for o in range(1, nic_count + 1)]
 
-    subnet = _setting(cfg, "ernic_subnet")
     # Guests start at .11. Avoid .1: the mesh manager claims it as its DHCP
     # server_ip and intercepts ARP for it (AGENTS.md known issue 1).
     #
     # nic_count is at most _NIC_MAX (checked above), so the last is .254.
-    ips = [f"{subnet}.{10 + o}" for o in range(1, nic_count + 1)]
+    ips = [f"{ERNIC_SUBNET}.{10 + o}" for o in range(1, nic_count + 1)]
 
     shm_sizes = _split_per_vm(_setting(cfg, "shm_size"), count, "<vm-shm-size>")
     rocjitsu_configs = _split_per_vm(
@@ -1821,7 +1832,8 @@ def render_compose(
     if spec["ernic_tap"]:
         out.append("  # Dumb shared L2 carrying guest Ethernet only. No address")
         out.append("  # is assigned: each ernic bridges its tap onto it, and the")
-        out.append("  # guests address each other over <ernic-subnet>.")
+        out.append("  # guests address each other over "
+                   f"{ERNIC_SUBNET}.0/24.")
         out.append("  l2:")
         out.append("    driver: bridge")
     out.append("  # Every service has a fixed address and nothing resolves a")
@@ -1943,7 +1955,7 @@ def render_inventory(spec: dict[str, Any], digest: str) -> str:
     out.append(
         f'        fleet_guest_rocjitsu_image: "{spec["rocjitsu_image"]}"'
     )
-    # /24 is implied by <ernic-subnet> being three octets; the generator
+    # /24 is implied by ERNIC_SUBNET being three octets; the generator
     # has no key for a prefix because the ernic L2 segment is flat by
     # construction.
     out.append("        fleet_guest_prefix: 24")

@@ -100,7 +100,6 @@
   <vm-nvme-vram>true</vm-nvme-vram>
   <vm-vfio-user-root-port>true</vm-vfio-user-root-port>
   <vm-images-dir>/var/lib/qemu-tool/images</vm-images-dir>
-  <vm-backing-shared>true</vm-backing-shared>
   <!-- The user name has to be the pulled image's own, <bake-username>
        below: a pulled guest keeps the account it was baked with, and the
        key published beside it is what logs in.  <vm-password> never reaches

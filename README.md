@@ -869,24 +869,41 @@ Error: my-fleet.xml: unknown element <vm-vcpu>; did you mean <vm-vcpus>?
 Comments are allowed. `qemu-tool check --xml my-fleet.xml` reports the same
 problems without stopping at the first.
 
-Seven elements the format used to have are refused too, with an error that
-says so and suggests no setting in its place: `<qemu-digest>`,
+Ten elements the format used to have are refused too, with an error that
+says so and suggests no setting in its place. Seven were parsed and read by
+no command, so deleting one from a file changes nothing: `<qemu-digest>`,
 `<ernic-digest>`, `<rocjitsu-digest>`, `<backing-digest>`,
-`<domain-pattern>`, `<prom-port>` and `<loki-port>`. Each was parsed and
-read by no command, so deleting it from a file changes nothing:
+`<domain-pattern>`, `<prom-port>` and `<loki-port>`.
 
 ```
 Error: my-fleet.xml: <prom-port> was removed from the fleet format: no command ever read it; Prometheus has no host port and is asked inside its container. Delete the element.
 ```
 
-A misspelling of one of the seven is told which removed element it looks
-like, and why that one went, not the nearest setting:
+Three were read, and their errors say what to do instead:
+
+- `<vm-backing-shared>` turned image locking off for a `run-vm` given
+  `--xml`, or finding a `fleet.xml` on the search path. A generated
+  stack always starts its guests with locking off, whatever the element
+  said, so a stack is unchanged. A `run-vm` outside a stack that shares a
+  backing file now needs `--backing-shared` on its command line.
+- `<ernic-subnet>` and `<ernic-mac-prefix>` are fixed at `192.168.100` and
+  `72:6f:63:6d`. The guest image addresses its NICs on that network at boot
+  and the quick-start playbook finds a NIC by that prefix, so no other
+  value gave a working fleet. A file that set either to its default
+  deletes the element and renders as before.
+
+```
+Error: my-fleet.xml: <vm-backing-shared> was removed from the fleet format: a generated stack always starts its guests with image locking off, whatever this said; for a run-vm outside a stack, pass --backing-shared. Delete the element.
+```
+
+A misspelling of a removed element is told which one it looks like, and why
+that one went, not the nearest setting:
 
 ```
 Error: my-fleet.xml: unknown element <prom-prot>; it looks like <prom-port>, which was removed from the fleet format: no command ever read it; Prometheus has no host port and is asked inside its container. Delete the element.
 ```
 
-One of the seven set more than once is reported once; a misspelling is
+A removed element set more than once is reported once; a misspelling is
 reported once per copy, like any other unknown element.
 
 A guest image is pinned by digest in `<backing-ref>` itself, as

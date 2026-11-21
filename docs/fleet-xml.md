@@ -86,13 +86,11 @@ The container images a stack runs and the guest disk image its guests pull.
 
 ### Network
 
-The addresses and MAC addresses the generator derives everything else from.
+The docker network every service's address is derived from. The guests' RDMA NIC network, 192.168.100.0/24, and the first four bytes of each emulated NIC's MAC address, 72:6f:63:6d, are fixed: the guest image assumes the first and the quick-start playbook the second.
 
 | Element | Kind | Default | Sparse | Description |
 |---|---|---|---|---|
 | `<fleet-prefix>` | string | `172.31` | no | First two octets of the stack's docker network; every service gets a fixed address under it. Two dotted octets, default 172.31; not validated by the parser, empty takes the default. Third octet is the service family: 0 infra, 1 ernic, 2 rocjitsu, 3 qemu, 4 sdxi, 5 spdk; the last is the device's number. |
-| `<ernic-subnet>` | string | `192.168.100` | no | First three octets of the guests' RDMA NIC network; NICs take addresses from .11 upward across the fleet. Three dotted octets, default 192.168.100, a /24; not validated. NIC number n in the fleet gets .&lt;10+n&gt;, at most 244 NICs. Sets the inventory's fleet\_guest\_ip and each server's ERNIC\_TCP\_GUEST\_GIDS. |
-| `<ernic-mac-prefix>` | string | `72:6f:63:6d` | no | First four bytes of every emulated NIC's MAC address; the last two are the NIC's number in the fleet. Four colon-separated hex bytes, default 72:6f:63:6d; not validated. The number counts from 1 across the whole fleet, high byte first. |
 
 ### Topology
 
@@ -131,7 +129,6 @@ What every guest is given. gen-vm and run-vm take most of these as the defaults 
 | `<vm-nvme>` | integer | `0` | no | Number of emulated NVMe scratch devices per guest; run-vm creates a qcow2 for each. 0 gives none. integer; N &gt; 0 is N devices on scratch qcow2 files; -N is N devices on the host's /dev/nullb0.. (null\_blk); default 0. |
 | `<vm-nvme-vram>` | boolean | `false` | yes | Point each guest's emulated NVMe at its first GPU's BAR 0 (VRAM) so hipFile direct reads are fast; fork QEMU only. true or false; default false; refused with vm-nvme of 0 or less; warns on a non-fork qemu-ref; generated stacks only, run-vm --xml does not get it. |
 | `<vm-pci-mmio-bridge>` | boolean | `false` | yes | Give every guest the fork QEMU's pci-mmio-bridge device for its emulated NVMe, which rocm-xio uses. true or false; default false; refused with vm-nvme of 0 or less; needs the fork QEMU; generated stacks only, run-vm --xml does not get it. |
-| `<vm-backing-shared>` | boolean | `false` | no | Turn off image file locking so several guests can share one backing image; read only by run-vm given --xml. true or false; default false. A generated stack always passes --backing-shared, whatever this says. |
 | `<vm-username>` | string | `ubuntu` | no | Guest login account: the user gen-vm creates, and the one the inventory, quick-start and ssh log in as. default ubuntu; dropped for gen-vm --bake (bake-username is used); quick-start overrides it with the pulled image's own account when they differ. |
 | `<vm-password>` | string | (empty) | no | Password of the account gen-vm creates from the cloud image; never reaches a pulled guest, and a bake drops it. plain text; empty or unset leaves gen-vm's default, which is the word password. |
 | `<vm-filesystem>` | string | (empty) | no | Host directory shared into each guest over 9p with mount tag hostfs. one host path for all guests, or a comma list of exactly vm-count paths; run-vm --xml outside a stack ignores a list; default empty, no share. |
@@ -205,10 +202,10 @@ Log rotation for every service, and the Loki and Alloy log collection.
 
 ### Removed elements
 
-These were elements of the format and are not any more. Each was parsed and
-read by no command. A file that sets one is refused by the parser, which says
-so by name, and by both schemas, to which it is an unknown element like any
-other:
+These were elements of the format and are not any more. Most were parsed and
+read by no command; the table says what to do about the ones that were read.
+A file that sets one is refused by the parser, which says so by name, and by
+both schemas, to which it is an unknown element like any other:
 
 | Element | Why it went |
 |---|---|
@@ -219,6 +216,9 @@ other:
 | `<domain-pattern>` | No command ever read it, and no command writes or reads a per-guest domain file for a fleet. |
 | `<prom-port>` | No command ever read it; Prometheus has no host port and is asked inside its container. |
 | `<loki-port>` | No command ever read it; Loki has no host port and listens on 3100 inside the stack. |
+| `<vm-backing-shared>` | A generated stack always starts its guests with image locking off, whatever this said; for a run-vm outside a stack, pass --backing-shared. |
+| `<ernic-subnet>` | The guests' RDMA NICs are always on 192.168.100.0/24, the one network the guest image addresses them on at boot, so any other value put the fleet's addresses where no guest was. |
+| `<ernic-mac-prefix>` | Every emulated NIC's MAC address always starts 72:6f:63:6d, the one prefix the quick-start playbook finds a guest's NIC by, so any other value failed that playbook. |
 
 ```
 my-fleet.xml: <prom-port> was removed from the fleet format: no command ever read it; Prometheus has no host port and is asked inside its container. Delete the element.

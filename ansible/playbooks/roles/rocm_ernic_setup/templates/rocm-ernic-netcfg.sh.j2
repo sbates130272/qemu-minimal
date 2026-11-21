@@ -7,7 +7,7 @@
 # and the stable names are handled by modules-load.d and 99-rocm-ernic.rules.
 #
 # The guest index comes from the NIC's own MAC rather than being passed in.
-# gen-compose hands VM n the MAC <ernic-mac-prefix>:<n>>8>:<n&0xff> and the
+# gen-compose hands VM n the MAC 72:6f:63:6d:<n>>8>:<n&0xff> and the
 # address <subnet>.<10+n>, so the MAC already carries n and one image serves
 # every guest in the fleet.
 #
