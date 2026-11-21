@@ -338,6 +338,68 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **A guest is an AMD machine on an Intel host too.** `run-vm` started
+  amd64 guests with `-cpu EPYC`, and under KVM QEMU gives every CPU model
+  the host's CPUID vendor, so on an Intel host the guest was `GenuineIntel`
+  with family 23. The guest kernel allows peer-to-peer DMA between devices
+  that share no upstream bridge only on an AMD CPU ("cannot be used for
+  peer-to-peer DMA as the client and provider (...) do not share an
+  upstream bridge or whitelisted host bridge"). Reproduced on the AMD
+  development host with a guest given the `GenuineIntel` vendor: hipFile's
+  direct path fell back (amdgpu logged "AIS: P2P DMA not accessible") and
+  read at about a twelfth of the rate, still verified; a direct NVMe read
+  into GPU peer-to-peer pages failed with the kernel message above; the
+  dma-buf RDMA test still passed. `run-vm` now writes
+  `-cpu EPYC,vendor=AuthenticAMD`, with `,phys-bits=N` after it when one is
+  set, on every host.
+  - `<vm-cpu-vendor>` in a fleet file and `run-vm --cpu-vendor` change the
+    vendor: exactly 12 printable ASCII characters with no comma, or empty.
+    An empty element or `--cpu-vendor ''` states no vendor and leaves the
+    host's; it is not the default. `gen-compose` renders the option only
+    when a fleet says something other than `AuthenticAMD`, so the four
+    shipped stacks are byte for byte what they were. Anything but
+    `AuthenticAMD` prints a note on stderr at render and at `run-vm`.
+  - Any other CPU property is a whole `-cpu` in `<vm-qemu-args>` or
+    `--qemu-arg`. QEMU takes the last `-cpu` and nothing of an earlier one
+    (checked on QEMU 10.2.1 and the pinned fork), so it must restate the
+    vendor and any `phys-bits`, and stay an AMD model of family 23 or
+    later: the guest kernel asks for the family too, and `host` and `max`
+    take the host's.
+  - `gen-vm`'s bake boots are unchanged: they pass no `-cpu`.
+  - `scripts/check-guest-cpu.sh` asserts the guest's vendor and family and
+    prints the host's vendor; the `quickstart-boot` and daily report lanes
+    run it. It also fails on the kernel's host-bridge refusal and warns on
+    amdgpu's "AIS: P2P DMA not accessible", but nothing either lane runs
+    makes the kernel print its refusal, so the vendor and family are the
+    assertion that counts. **Not yet run on an Intel host**: on the AMD
+    development host a stated `GenuineIntel` reached the guest's CPUID,
+    which is the mirror image, and the first lane run that lands on an
+    Intel runner is the proof. On an AMD runner the script passes with or
+    without this change, and its notice and the "what this run shows" row
+    of the step summary say so.
+  - Read from the guest kernel's source, not run: on Intel hardware an
+    AMD-vendor guest kernel reports itself not affected by the Intel-only
+    CPU vulnerabilities (Meltdown, L1TF, MDS, MMIO stale data, BHI) and
+    does not apply those mitigations inside the guest; it applies the AMD
+    family 23 set instead. Benchmark figures from an Intel host shift
+    against earlier ones from it.
+  - Also read from source, not run, for Intel hosts. An AMD-vendor guest
+    makes KVM hypercalls with `VMMCALL`, which an Intel host's KVM patches
+    into the guest's read-only text, a page fault. The default EPYC guest
+    makes none; `modprobe ptp_kvm` does, and so does a `-cpu host` or
+    `-cpu max` with an AMD vendor in `<vm-qemu-args>`, during boot. And
+    QEMU gives an AMD-vendor guest the reserved range below 1 TiB, moving
+    RAM above 4 GiB to 1 TiB when the 64-bit PCI hole reaches it: a local
+    fleet that fitted its `<vm-cpu-phys-bits>` on an Intel host before may
+    be refused at start with `phys-bits too low`. The four shipped fleets
+    fit. And QEMU gives an AMD-vendor guest no CPUID leaf 2 or 4, Intel's
+    two cache leaves: its cache topology is in leaf `0x8000001D`, QEMU's
+    own EPYC table, which is what the guest kernel's AMD code reads.
+    `scripts/check-guest-cpu.sh` warns on a kernel oops in the guest's
+    dmesg, and counts as an MSR line only one that names an MSR access.
+  - `run-vm --convert-to-libvirt` still writes
+    `<cpu mode='host-passthrough'/>`, which no vendor setting reaches, and
+    now says so on stderr.
 - **The ernic stats exporter gave every NIC of a guest one `ernic_id`.** On
   a fleet with several NICs a guest (`helios-tray`, `mi355x-server`) each
   sample was written once per NIC under the same labels. The id is now the

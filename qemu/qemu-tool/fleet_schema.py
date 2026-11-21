@@ -174,6 +174,9 @@ _DIGIT = "[^{}]".format(_class_body(
 # What split_args() refuses anywhere in a command line.
 _ARGS_REFUSED = ((0x7F, 0x7F), (0x85, 0x85), (0x2028, 0x2029))
 
+# One character of a CPU vendor: U+0020 to U+007E without the comma.
+_VENDOR_CHAR = "[ -+.-~\\-]"
+
 # kind -> the pattern _convert() accepts, or None where it takes any text.
 # bool: lower() and a comparison, no strip. int: Python's int(), which
 # strips, takes a sign and takes single underscores between digits. port:
@@ -189,6 +192,9 @@ KIND_PATTERNS: dict[str, str | None] = {
     "port": _stripped(f"{_any_case('auto')}|{_PORT_NUMBER}"),
     "addr": _stripped(
         f"({_IPV4}|{_IPV6}|\\[({_IPV4}|{_IPV6})\\])?"),
+    # identity.cpu_vendor_problem: nothing, or twelve characters of
+    # printable ASCII less the comma. Written out, not {12}: see _repeat.
+    "vendor": f"({_repeat(_VENDOR_CHAR, 12, 12)})?",
 }
 
 # The same, for a reader: (name on the page, what the parser accepts, what
@@ -246,6 +252,13 @@ KIND_HELP: dict[str, tuple[str, str, str]] = {
         "The same form: octets of 0 to 255 with no leading zero, groups of "
         "one to four hexadecimal digits, one `::` at most, brackets in "
         "pairs."),
+    "vendor": (
+        "CPU vendor",
+        "Exactly 12 printable ASCII characters (space to `~`) with no comma, "
+        "such as `AuthenticAMD` or `GenuineIntel`, kept as written with no "
+        "white space stripped; or an empty element, which is a value of its "
+        "own (state no vendor) and not the default.",
+        "The same form, exactly."),
 }
 
 # ---------------------------------------------------------------------------

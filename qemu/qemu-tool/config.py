@@ -13,6 +13,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .identity import AMD_CPU_VENDOR
 from .ports import DEFAULT_SSH_PORT
 from .resources import PACKAGES_D as _PACKAGES_D_PACKAGE, packaged_path
 
@@ -128,13 +129,17 @@ class VMConfig:
     # rocjitsu BAR); must be raised together with pci_hole64_size, since QEMU
     # refuses a hole larger than the phys-bits address space allows.
     cpu_phys_bits: int = 0
+    # The CPUID vendor stated on -cpu, amd64 only. Empty states none, which
+    # under KVM is the host's. A guest is an AMD machine unless very clearly
+    # told otherwise: only --cpu-vendor and <vm-cpu-vendor> change this.
+    cpu_vendor: str = AMD_CPU_VENDOR
     # Size of the 64-bit PCI hole, as a QEMU size string ("512G"). None leaves
     # the machine default, which does not fit eight emulated GPUs' BARs.
     #
     # Bounded by the CPU's physical address width, and the failure is a hard
     # refusal at startup, not a degraded boot:
     #   Address space limit 0xffffffffff < 0x1ffffffffff phys-bits too low (40)
-    # -cpu EPYC gives 40 bits (1 TiB). Measured on QEMU 10.2.1: 512G is
+    # The EPYC model gives 40 bits (1 TiB). Measured on QEMU 10.2.1: 512G is
     # accepted, 1T is not. Going above that needs cpu_phys_bits=41.
     pci_hole64_size: str | None = None
     nvme: str | None = None

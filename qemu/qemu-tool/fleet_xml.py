@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 import xml.etree.ElementTree as ET
 
+from .identity import AMD_CPU_VENDOR, cpu_vendor_problem
 from .ports import parse_ssh_port, publish_address
 
 NS_FLEET = "http://qemu-tool/fleet/1.0"
@@ -445,6 +446,10 @@ class FleetConfig:
     # QEMU, whose -smp inference gives one single-core socket per vCPU.
     vm_cpu_sockets: int = 0
     vm_cpu_phys_bits: int = 0
+    # The CPUID vendor every guest's CPU states. A guest is an AMD machine
+    # unless very clearly told otherwise; "" (an empty element) states no
+    # vendor, which under KVM is the host's. Not sparse: empty is a value.
+    vm_cpu_vendor: str = AMD_CPU_VENDOR
     vm_pci_hole64_size: str = ""
     rocjitsu_config: str = "gfx1250_mi455x.json"
 
@@ -511,8 +516,8 @@ class FleetConfig:
     loki_data_dir: str = "/var/lib/qemu-tool/loki-data"
     alloy_image: str = "docker.io/grafana/alloy:v1.5.1"
 
-_STR, _EXPAND, _INT, _BOOL, _PORT, _ADDR, _ARGS = (
-    "str", "expand", "int", "bool", "port", "addr", "args")
+_STR, _EXPAND, _INT, _BOOL, _PORT, _ADDR, _ARGS, _VENDOR = (
+    "str", "expand", "int", "bool", "port", "addr", "args", "vendor")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -843,9 +848,20 @@ _SECTIONS: tuple[_Section, ...] = (
             "vm-cpu-phys-bits", "vm_cpu_phys_bits", _INT, sparse=True,
             help="Physical address bits of each guest's CPU; raise it together "
                  "with vm-pci-hole64-size for large GPU BARs",
-            form="Integer number of bits, e.g. 42; amd64 only (rendered as -cpu "
-                 "EPYC,phys-bits=N). 0 or unset passes no phys-bits; run-vm's "
+            form="Integer number of bits, e.g. 42; amd64 only (added to -cpu as "
+                 "phys-bits=N). 0 or unset passes no phys-bits; run-vm's "
                  "help gives that default as 40 (1 TiB)"),
+        _Setting(
+            "vm-cpu-vendor", "vm_cpu_vendor", _VENDOR,
+            help="CPUID vendor every guest's CPU states; a guest is an AMD "
+                 "machine on every host unless this says otherwise",
+            form="Exactly 12 printable ASCII characters with no comma, such as "
+                 "AuthenticAMD or GenuineIntel, or empty; default AuthenticAMD. "
+                 "amd64 only (rendered as -cpu EPYC,vendor=...). An EMPTY element"
+                 " is not the default: it states no vendor, and under KVM the "
+                 "guest then has the host's. Anything but AuthenticAMD renders "
+                 "with a note: the guest kernel refuses P2PDMA between devices "
+                 "that share no upstream bridge unless the CPU is AMD"),
         _Setting(
             "vm-pci-hole64-size", "vm_pci_hole64_size", _STR,
             help="Size of each guest's 64-bit PCI hole; needed when several "
@@ -1179,6 +1195,13 @@ def _convert(setting: _Setting, raw: str) -> Any:
             raise ValueError(
                 f"{setting.tag} must be an IPv4 or IPv6 address with no "
                 f"zone, got {raw!r}") from None
+    if setting.kind == _VENDOR:
+        # As written, not stripped: a vendor may hold spaces, and an empty
+        # element is a value of its own (the host's vendor), not the default.
+        problem = cpu_vendor_problem(raw, setting.tag)
+        if problem:
+            raise ValueError(problem)
+        return raw
     if setting.kind == _ARGS:
         # Checked here so `qemu-tool check` reports it; the readers split
         # the same text again.

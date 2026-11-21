@@ -382,6 +382,12 @@ the user's view; this is what a change to it has to keep true.
   - **Nothing validates the words**, on purpose: they are QEMU's. A word
     QEMU refuses stops the guest at its start, in that service's log. An
     argument that duplicates one `run-vm` writes is QEMU's to resolve.
+  - **A `-cpu` among the words replaces `run-vm`'s whole `-cpu`**, the
+    `vendor=AuthenticAMD` and any `phys-bits` included: QEMU takes the last
+    one and nothing of an earlier one (run on 10.2.1 and on the pinned
+    fork). It is how a CPU property with no element of its own is set, and
+    it must be an AMD model of family 23 or later with the vendor restated,
+    and not `host` or `max`: see "The guest is an AMD machine".
   - The value is for the whole fleet, and a later layer replaces it whole.
     It is not a per-VM list.
   - `inspect` and `list` read devices off the QEMU command line, so a
@@ -650,12 +656,12 @@ the XSD has a bullet of its own.
   directory as a directory; the first said `cannot write .: Is a
   directory`, because `Path("")` is `.`. The option is a string for that
   reason, not a `Path`.
-- **`tests/test_fleet_schema.py`.** `AGREE` is 239 small documents the
+- **`tests/test_fleet_schema.py`.** `AGREE` is 257 small documents the
   parser and the RELAX NG schema must answer alike, each with the answer;
   `LOOSER` is eleven the parser refuses and neither schema can.
   `XSD_TAKES` names the six documents of `AGREE` the XSD accepts, and
   `XSD_LOOSER` is ten more the RELAX NG schema refuses and the XSD
-  accepts, each under a key of `xsd_looser()`: 260 documents, and one test
+  accepts, each under a key of `xsd_looser()`: 278 documents, and one test
   asks the parser and both schemas about each and requires the three
   answers it is listed with, which for the XSD is "agrees with the RELAX NG
   schema everywhere but on its listed looseness". Others assert each rule
@@ -664,7 +670,7 @@ the XSD has a bullet of its own.
   with one repeated (265 documents, all three answers), every decimal
   digit Python knows in a single integer, an integer one digit past
   `int()`'s limit, and 400 generated addresses. **Every flat setting is
-  held to its kind, whether or not a document sets it**: 18 of the 70 are
+  held to its kind, whether or not a document sets it**: 18 of the 71 are
   in no listed document and no shipped file, and typing one of those as
   another kind, in either renderer, used to pass the suite. One test reads
   each setting's declaration in both rendered schemas (`kind.<kind>` and
@@ -680,7 +686,7 @@ the XSD has a bullet of its own.
   when that imports, else `xmllint --relaxng` and `xmllint --schema`; with
   neither it skips and prints that no document was validated, and under
   `CI=true` it fails. `Gen Compose Check` installs `lxml`.
-  `python tests/test_fleet_schema.py --dump DIR` writes the 260 documents
+  `python tests/test_fleet_schema.py --dump DIR` writes the 278 documents
   and an `index.json` of the expected answers, for running another
   validator over them by hand. **One document is long on purpose**,
   `BIG_BLOCK`: 254 `<server>` entries, which is every NIC one guest can
@@ -884,6 +890,418 @@ environment** of the `docker compose` it starts (`subprocess` `env=`):
 `compose.run`, `quick_start._compose` and `down_all._teardown_env` all go
 through these, so the three cannot disagree. Those four are the only
 upper-case names a reader types, and only for plain `docker compose`.
+
+## The guest is an AMD machine
+
+**A guest is always an AMD guest unless very clearly told otherwise.** That
+is the owner's rule, of 2026-11-20, and it is a rule for whoever edits
+`run_vm.py`, `gen_compose.py`, `settings.py` or a fleet file, not a
+description of what the code happens to do.
+
+- **Every amd64 guest `run-vm` starts has `-cpu EPYC,vendor=AuthenticAMD`**
+  (then `,phys-bits=N` when one is set), on every host, with and without
+  KVM, with and without vfio-user devices. `run_vm.amd64_cpu_arg` writes
+  it; the model is `run_vm.AMD64_CPU_MODEL` and the vendor
+  `identity.AMD_CPU_VENDOR`, the default of `VMConfig.cpu_vendor` and of
+  `FleetConfig.vm_cpu_vendor`.
+- **Two things change the vendor, and both are somebody saying so:**
+  `<vm-cpu-vendor>` in a fleet layer, and `--cpu-vendor` on `run-vm`'s
+  command line. A third changes the whole CPU: a `-cpu` in `<vm-qemu-args>`
+  or `--qemu-arg`, below.
+- **Nothing may change it implicitly.** No host detection (nothing that
+  decides what a guest is may read `/proc/cpuinfo` or ask CPUID), no
+  fallback to the host's vendor when something fails, no "auto" value. No
+  shipped fleet file and no workflow's inline overlay may contain
+  `<vm-cpu-vendor>`, and nothing under `.github/`, `scripts/` or `ansible/`
+  may pass `--cpu-vendor`. `NothingImplicit` in `tests/test_guest_cpu.py`
+  holds all of that. One path still takes the host's CPU with nobody
+  saying so, the libvirt converter, and it announces it: see the end of
+  this section.
+- **A guest that is not AMD is announced.** A render (`gen-compose`,
+  `quick-start`) and a `run-vm`, `--dry-run` included, with any vendor but
+  `AuthenticAMD` print one line on stderr, `identity.cpu_vendor_note`: the
+  guest is not presented as AMD, and the guest kernel refuses P2PDMA
+  between devices that share no upstream bridge. A note, not a refusal:
+  the setting is the clear telling the rule asks for. One case prints
+  nothing: `run-vm --cpu-vendor '' --no-kvm`. Only KVM puts the host's
+  vendor in place of the model's own, so with no KVM a bare `-cpu EPYC` is
+  `AuthenticAMD` (read from QEMU's source: `host_cpu_instance_init` is
+  called from `kvm_cpu_instance_init`; not run). A render cannot know
+  whether its guests get KVM and always prints the note.
+- **A bake is not a guest in this sense.** `gen-vm`'s two boots pass no
+  `-cpu` at all (`gen_vm._arch_args_for_gen`), on purpose: "The CPU the
+  tools are built for" under perftest has why. `settings.bake_overrides`
+  drops `cpu_vendor`, and `Bake` in the same test file fails a `-cpu` there.
+
+**Why the vendor has to be stated.** Two facts, each read from source:
+
+- **Under KVM, QEMU gives every CPU model the host's CPUID vendor.**
+  `host_cpu_instance_init()` in QEMU's `target/i386/host-cpu.c` sets the
+  `vendor` property from the host for every model ("setting vendor applies
+  to both max/host and builtin_x86_defs CPU", with a FIXME that it should
+  warn when the vendors differ); family, model and stepping are replaced
+  only for `max` and `host`. Read at `qemu.4cb9698`, the fork commit the
+  fleets pin. So on an Intel host a bare `-cpu EPYC` guest is
+  `GenuineIntel`, family 23. A `vendor=` on `-cpu` is applied after that
+  and wins.
+- **The guest kernel allows P2PDMA through the host bridge only on an AMD
+  CPU.** In `drivers/pci/p2pdma.c` at v7.2.6, the pinned guest kernel,
+  `calc_map_type_and_dist()` lets two devices that share no upstream
+  bridge reach each other only if `cpu_supports_p2pdma()` (`x86_vendor ==
+  X86_VENDOR_AMD && x86 >= 0x17`) or the host bridge is on
+  `pci_p2pdma_whitelist[]`. QEMU's q35 host bridge is `8086:29c0`, which
+  is not on it. Otherwise the kernel logs `cannot be used for
+  peer-to-peer DMA as the client and provider (...) do not share an
+  upstream bridge or whitelisted host bridge`, and only for a caller that
+  asked verbosely (`if (verbose)`); a quiet caller just gets "not
+  supported".
+- **Which devices that is depends on the stack.** `rocm-golden` and `xio`
+  put each vfio-user device on a root port of its own and the emulated
+  NVMe on the root bus, so no two of a guest's devices share an upstream
+  bridge and every pair goes through the host bridge. `helios-tray`
+  (`<vm-pcie-switch-width>3`) and `mi355x-server` (`2`) put NICs and GPUs
+  below PCIe switches, where a pair below one switch does share a bridge
+  and is not subject to this check; pairs across switches, and the NVMe,
+  still are. Only `rocm-golden` has been run on a guest that is not AMD;
+  the other three are read from the fleet files.
+
+**Where the report came from.** The owner reports that refusal on certain
+Intel hosts, and that is the only source: no log of an Intel host was read
+for this section and no guest's vendor string from one was captured. That
+GitHub-hosted runners include Intel hosts at all is likewise not
+established from here; the check script's notice records the host's vendor
+of every run, which is how it will be.
+
+**What a guest that is not AMD loses: seen on 2026-11-20, on the AMD dev
+host, by giving guests the `GenuineIntel` vendor.** The default two-guest
+stack (`rocm-golden.xml`, guest image `20261119.g2aea67d`, this tree's
+`run-vm` in the qemu container) with a scratch overlay: another name
+prefix and subnet, guests at 8 vCPU and 6144 MiB. Four configurations,
+some booted more than once: the first three were each booted again, `up`
+and `test` only, for the read in the last row and for the check script.
+The first three differ only in `<vm-cpu-vendor>`; the fourth is this tree
+with the parent commit's `run_vm.py` in the qemu container, whose `-cpu`
+comes out the same as the third's. Every `quick-start` command exited 0.
+`-cpu EPYC,vendor=GenuineIntel` on an AMD host is what the source says a
+bare `-cpu EPYC` is on an Intel one; it is not an Intel host.
+
+| | this tree | `<vm-cpu-vendor>GenuineIntel` | `<vm-cpu-vendor/>` | the parent commit's `run_vm.py` |
+|---|---|---|---|---|
+| QEMU's `-cpu`, in the container | `EPYC,vendor=AuthenticAMD` | `EPYC,vendor=GenuineIntel` | `EPYC` | `EPYC` |
+| guest `vendor_id`, family, model, both guests | `AuthenticAMD`, 23, 1 | `GenuineIntel`, 23, 1 | `AuthenticAMD`, 23, 1 | `AuthenticAMD`, 23, 1 |
+| `test` recap, guest 1 / 2 | ok=76 / ok=72, failed=0 | ok=75 / ok=71, failed=0 | ok=75 / ok=71, failed=0 | ok=75 / ok=71, failed=0 |
+| `ib_send_bw`; `vector_add` | 538.96 MiB/s; passes on both | 436.61; passes | 413.16; passes | 412.45; passes |
+| `--rocm-rdma-test --rocm-rdma-mode dmabuf` | pass, 487.85 MiB/s, 58720256 bytes in 7 chunks validated | **pass**, 414.93 MiB/s, the same validation | not run | pass, 482.82 MiB/s |
+| `--hipfile-test` bench read, guest 1 / 2 | 727.0 / 816.8 MB/s, verified | **62.4 / 62.0 MB/s**, verified | not run | 692.7 / 679.1 MB/s, verified |
+| `--hipfile-test` fio, guest 1 / 2 | 849.5 / 818.4 MB/s | **43.3 / 44.2 MB/s** | not run | 849.5 / 818.4 MB/s |
+| guest dmesg lines matching `p2p` after the tests | amdgpu's `added peer-to-peer DMA memory` only | that, and `amdgpu 0000:02:00.0: AIS: P2P DMA not accessible`, 224 times on guest 1 | the `added` line only | the `added` line only |
+| an `O_DIRECT` read of `/dev/nvme0n1` into an mmap of the GPU's `p2pmem/allocate` | 65536 bytes read, dmesg silent | `preadv` fails with EINVAL, and the kernel's refusal | 65536 bytes read, dmesg silent | 65536 bytes read, dmesg silent |
+
+The refusal in the second column, on two separate boots of that
+configuration:
+
+```
+nvme 0000:00:05.0: cannot be used for peer-to-peer DMA as the client and provider (0000:02:00.0) do not share an upstream bridge or whitelisted host bridge
+invalid error, dev nvme0n1, sector 0 op 0x0:(READ) flags 0x4800 phys_seg 16 prio class 2
+```
+
+- **Nothing shipped fails on such a guest. hipFile degrades.** Its direct
+  path falls back and reads at about a twelfth of the rate (62 MB/s
+  against 727 to 817; fio 43 against 818 to 850), and both reads still
+  report "verified". `--hipfile-test` asserts a rate above zero, not a
+  floor, so it passes.
+- **The kernel prints nothing for hipFile.** amdgpu-dkms's AIS path calls
+  `pci_p2pdma_distance(pdev, adev->dev, false)` (`kfd_ais.c:1624` in the
+  guest's `/usr/src/amdgpu-7.2.3-2428518.26.04`), and the `false` is the
+  kernel's `verbose`. amdgpu logs its own `AIS: P2P DMA not accessible`
+  and `Failed to read AIS file: -19`; that `-19` is the ENODEV, and it is
+  amdgpu's, not the kernel message.
+- **The kernel's message needs a verbose caller.** The block layer mapping
+  a P2PDMA page is one (`pci_p2pdma_map_type()`), which the read in the
+  last row forces. Whether that is the path the owner saw the message on
+  was not established.
+- **The dma-buf RDMA test passes either way.** `amdgpu_dma_buf.c:278`
+  makes the same quiet call and only clears `attach->peer2peer`. Whether
+  the `GenuineIntel` run moved VRAM or a copy in system memory was not
+  established; the test cannot tell the two apart. So it is not known
+  that one vfio-user device reaching another is lost on such a guest.
+- **Old and new behave the same on an AMD host**: the first and last
+  columns agree on vendor, family, results and dmesg. The `ib_send_bw`
+  figures differ by less than this stack's run-to-run spread.
+- **`<vm-cpu-vendor/>` on an AMD host is an `AuthenticAMD` guest**, as the
+  source says: the host's vendor.
+- **A `GenuineIntel` family 23 guest boots**: `is-system-running` read
+  `running` with no failed unit. Its dmesg has two lines the AMD boots
+  lack, `x86/CPU: Model not found in latest microcode list` and `MDS:
+  Vulnerable: Clear CPU buffers attempted, no microcode`.
+- Not run there: the tests under `<vm-cpu-vendor/>` beyond the default
+  `test`, guests at 4 vCPU, `helios-tray`, `mi355x-server`, `xio`, any CI
+  lane.
+
+**`<vm-cpu-vendor>` and `--cpu-vendor`.**
+
+- **The value is empty or exactly 12 printable ASCII characters with no
+  comma**, checked by `identity.cpu_vendor_problem` at parse time (kind
+  `vendor` in `fleet_xml.py`) and again in `run_vm.amd64_cpu_arg`; the
+  error names `AuthenticAMD` and `GenuineIntel`. Twelve is QEMU's:
+  `x86_cpuid_set_vendor()` in `target/i386/cpu.c` refuses any other
+  length, and a comma would end the value on `-cpu`. The text is kept as
+  written, not stripped: Zhaoxin's vendor is `  Shanghai  `.
+- **An empty element is not the default.** `<vm-cpu-vendor/>` states no
+  vendor, so `-cpu EPYC` and, under KVM, the host's. Absent is
+  `AuthenticAMD`. That is why the row is **not sparse**: `emit()` leaves a
+  sparse element out when it is empty, and the empty value would come back
+  as the default. `--cpu-vendor ''` is the same on the command line.
+- **`gen-compose` renders `--cpu-vendor='<value>'` on each `qemu-N`
+  service only when the merged value is not `AuthenticAMD`**, with `=` so
+  that an empty value is the option's value, and quoted by `_sh_word`. A
+  fleet that names no vendor renders nothing, so the four committed
+  stacks did not change by a byte when the element arrived: the `-cpu` is
+  `run-vm`'s to write, in the container, and no stack carries one.
+- **`settings.vm_overrides` always maps it**, so `run-vm --xml` outside a
+  stack gets the fleet's vendor; a flag outranks it.
+- **A stack's `run-vm` is the one in its qemu container**, as for the
+  guest's hostname: a stack whose container installed qemu-tool from PyPI
+  states no vendor, whatever this checkout does. PyPI serves 2.1.0 (asked
+  2026-11-20), and neither it nor any earlier release has this:
+  `git show v2.1.0:qemu/qemu-tool/cli.py` has no `cpu-vendor`. See "The
+  guest's hostname" for when a container installs from PyPI; that section
+  says PyPI serves 2.0.0, which was the answer on 2026-11-18. And a stack
+  rendered with any other vendor carries `--cpu-vendor=...` on each
+  `qemu-N` command, an option no released `run-vm` has: argparse would
+  refuse it and the guest would not start, with the usage error in that
+  service's log. Read, not run.
+
+**A whole `-cpu` in `<vm-qemu-args>` replaces `run-vm`'s, vendor and
+all.** QEMU takes the last `-cpu` on its command line and nothing of an
+earlier one: neither the model, nor its `vendor=`, nor its `phys-bits=`.
+The words of `<vm-qemu-args>` go after everything `run-vm` derives, so a
+`-cpu` there is the guest's CPU. It is the way to set any CPU property
+there is no element for, and the reason there is no `<vm-cpu-extra>`: one
+was offered and not added. Nothing checks the words and no note is
+printed, because nothing reads them. So such a `-cpu` has three things to
+get right by itself:
+
+- **`vendor=AuthenticAMD` and any `phys-bits`, restated**, or the guest is
+  the host's vendor at 40 bits.
+- **An AMD model of family 23 or later**: `EPYC`, `EPYC-Rome`,
+  `EPYC-Milan`, `EPYC-Genoa`. The vendor alone does not satisfy the guest
+  kernel, whose test is `x86_vendor == X86_VENDOR_AMD && x86 >= 0x17`
+  (`p2pdma.c:528`). `host_cpu_instance_init()` replaces family, model and
+  stepping for `host` and `max`, so `-cpu host,vendor=AuthenticAMD` on an
+  Intel host is `AuthenticAMD` family 6 and is refused P2PDMA exactly as a
+  `GenuineIntel` guest is; an `Opteron_*` model, below family 23, is
+  refused on any host. Read from the two sources, not run.
+  `scripts/check-guest-cpu.sh` asserts family 23, so a lane would fail on
+  either.
+- **Not `host` or `max` with an AMD vendor on an Intel host**, for a
+  second reason: those models turn on the KVM paravirtual features that
+  make the guest issue hypercalls, and by the reading in the hypercall row
+  of the table below an SMP guest then faults during boot. On an AMD host
+  `-cpu host` is an AMD CPU already and neither reason applies.
+
+**Run, 2026-11-20, on the dev host (an AMD Ryzen, KVM), with the host's
+QEMU 10.2.1 and with the pinned fork image's 11.1.3 through `docker run`.**
+Each was started with `-S` and asked over QMP for the CPU object's
+properties, and then booted on a 512-byte boot sector that executes CPUID
+and writes the answer to the debug console, so the second column is what
+guest code reads under KVM. Both QEMUs gave the same answers:
+
+| `-cpu` | QOM `vendor`, `family`, `phys-bits` | CPUID in the guest |
+|---|---|---|
+| `EPYC` | `AuthenticAMD`, 23, 40 | `AuthenticAMD`, family 23, model 1 |
+| `EPYC,vendor=AuthenticAMD` | `AuthenticAMD`, 23, 40 | the same |
+| `EPYC,vendor=AuthenticAMD,phys-bits=42` | `AuthenticAMD`, 23, 42 | the same |
+| `EPYC,vendor=GenuineIntel` | `GenuineIntel`, 23, 40 | `GenuineIntel`, family 23, model 1 |
+| `EPYC,vendor=short`, `EPYC,vendor=` | refused: `value of property 'vendor' must consist of exactly 12 characters` | |
+
+The fourth row is the mirror image of the case this is for: on an AMD
+host, a stated vendor that is not the host's reaches the guest's CPUID. On
+10.2.1, two `-cpu` options: `-cpu EPYC,vendor=AuthenticAMD,phys-bits=42
+-cpu EPYC,vendor=GenuineIntel` gave `GenuineIntel` at 40 bits (QOM and
+CPUID), `... -cpu EPYC-Milan` gave family 25 at 40 bits, `... -cpu host`
+the host's model, and a model that does not exist is an error only when it
+is the last. The fork was given the first of those and answered the same.
+
+**Not run: anything on an Intel host. None was available.** What the
+vendor does there is read from QEMU's source at `qemu.4cb9698`:
+
+- No refusal and no warning for an AMD vendor on an Intel host. The one
+  check of the two vendors against each other, `is_host_compat_vendor()`
+  in `target/i386/kvm/kvm.c`, is reached only with `pmu=on`, which the
+  EPYC model does not set, and reports without exiting.
+- The EPYC model's AMD-only features (`sse4a`, `misalignsse`,
+  `cr8legacy`, `osvw`, and `mmxext` and `fxsr-opt` in the other word) are
+  filtered against what KVM says the host supports, with a `host doesn't
+  support requested feature` warning for each one dropped, as they are
+  today with no vendor stated. KVM reports such a bit only when the host
+  CPU has it (`F()` in `arch/x86/kvm/cpuid.c` at v7.2.6), so on an Intel
+  host each of those is expected to go; which ones really do was not
+  run. Two features of the model are not in that list, though an earlier
+  version of this section put them there. `svm` is never asked for:
+  `kvm_default_props` in `target/i386/kvm/kvm-cpu.c` turns it off for
+  every named model under KVM, before anything is filtered, so it draws
+  no warning on any host. And `topoext` is never dropped:
+  `kvm_arch_get_supported_cpuid()` adds it to KVM's answer
+  unconditionally (`target/i386/kvm/kvm.c:562`).
+- **What follows the vendor in `target/i386/cpu.c`**, from every
+  `IS_AMD_CPU` and `IS_INTEL_CPU` there, opened for this:
+  - **CPUID leaves 2 and 4 are all zeros for an AMD-vendor guest**
+    (`cpu_x86_cpuid()`, `cpu->vendor_cpuid_only && IS_AMD_CPU(env)`, lines
+    8696 and 8732; the property is on by default). Those are Intel's two
+    cache leaves, the descriptor bytes and the deterministic cache
+    parameters, so on an Intel host a guest that had both no longer has
+    either. Its cache topology is in the AMD leaves instead: `0x8000001D`,
+    which QEMU fills from the EPYC model's own cache table and not from
+    the host, and `0x80000005` and `0x80000006`, which QEMU zeroes in
+    whole or part for an Intel vendor and serves for an AMD one. The guest
+    kernel's AMD path reads `0x8000001D` when the CPU has `topoext`
+    (`arch/x86/kernel/cpu/cacheinfo.c`, `amd_fill_cpuid4_info()` and
+    `find_num_cache_leaves()`), which QEMU keeps (above), so Linux still
+    builds its cache tree. A program in the guest that asks leaf 4 itself
+    finds no cache. On an AMD host that was always so.
+  - `arch-capabilities` is hidden from an AMD-vendor guest (the
+    `FEAT_7_0_EDX` case of `x86_cpu_get_supported_feature_word()`), and
+    the AMD machine-check bits of `FEAT_8000_0007_EBX` stop being masked
+    off. Neither reaches the default guest: no version of the EPYC model
+    asks for `arch-capabilities`, and `overflow-recov` and `succor` come
+    only with `EPYC-v5`. They matter for a `-cpu host` or `max` in
+    `<vm-qemu-args>`.
+  - Smaller ones: the logical processor count in CPUID 1 EBX is the
+    thread count and not Intel's addressable-id count; `cmp_legacy` is
+    set on a guest with more than one thread a package; the vendor string
+    is repeated in leaf `0x80000000`; the aliased bits of
+    `0x80000001` EDX are copied from leaf 1; and the microcode revision
+    the guest reads is `0x01000065`.
+- **One more follows it in `hw/i386/pc.c`, and it changes the guest's
+  memory map on an Intel host.** `pc_memory_init()` (line 764: `if
+  (IS_AMD_CPU(&cpu->env) && pcmc->enforce_amd_1tb_hole)`) gives an
+  AMD-vendor vCPU the HyperTransport hole below 1 TiB. With `phys-bits`
+  of 40 or more, which is every EPYC guest, it adds a reserved E820 entry
+  for `0xfd00000000` to `0xffffffffff`. And when the highest guest
+  address in use, the 64-bit PCI hole included, reaches `0xfd00000000`,
+  it starts RAM above 4 GiB at 1 TiB instead, and then exits with
+  `Address space limit ... phys-bits too low` when `phys-bits` does not
+  cover the result. On an AMD host that was always so, and nothing
+  changes there. On an Intel host the guest used to be `GenuineIntel` and
+  had none of it; it now has the AMD layout. By the fleet files, `xio`
+  (`1024G` hole, 42 bits) and `helios-tray` (`2048G`, 42 bits) are past
+  that line and are relocated, within their 42 bits; `rocm-golden` (the
+  machine's default hole) and `mi355x-server` (`512G`, 41 bits) are not.
+  The risk is a fleet of your own that started on an Intel host with a
+  `<vm-pci-hole64-size>` near or above 1 TiB and a `<vm-cpu-phys-bits>`
+  that only fitted the Intel layout: QEMU now refuses it at start, and
+  the cure is more `phys-bits`. The mi355x-server README's note on
+  `phys-bits` has that message. Read from source and the fleet files,
+  not run.
+- **The guest kernel then runs its AMD code on an Intel CPU.** What that
+  does was read at v7.2.6 for the guest, with `arch/x86/kvm` of the same
+  tag standing in for the host's KVM, whatever kernel an Intel host really
+  runs. Nothing found that stops a boot. The rows marked "reviewer" were
+  read by a reviewer of this change and not read again when this was
+  written; the others were, and again when the change was put on top of
+  the two before it in the series, which is when the cache row was added
+  and the vulnerability, hypercall and microcode rows corrected.
+
+  | What | On an Intel host | Read where |
+  |---|---|---|
+  | CPU vulnerability mitigations in the guest | **Degrades.** `cpu_vuln_whitelist` has `VULNWL_AMD(X86_FAMILY_ANY, NO_MELTDOWN \| NO_L1TF \| NO_MDS \| NO_SWAPGS \| NO_ITLB_MULTIHIT \| NO_MMIO \| NO_EIBRS_PBRSB \| NO_BHI)`, and the Intel entries are keyed on Intel models. `arch-capabilities` plays no part: no version of the EPYC model asks for it under either vendor (QEMU would also hide it from an AMD-vendor guest). So the guest kernel reports itself not affected and runs without PTI, MDS and MMIO buffer clearing, L1TF and BHI handling, on hardware that may be affected. Before this change the guest was `GenuineIntel` family 23, which matches no entry of either table, and the kernel treated it as affected: the `GenuineIntel`-vendor boot on the AMD host logged `MDS: Vulnerable: Clear CPU buffers attempted, no microcode`. It now marks itself with the family 0x17 set instead (`VULNBL_AMD(0x17, RETBLEED \| SMT_RSB \| SRSO \| VMSCAPE)`); which mitigation each of those selects on Intel hardware was not worked through. This is isolation inside the guest only, in an image that already has passwordless sudo and a published key; and **benchmark figures from an Intel host shift against earlier runs there** | `arch/x86/kernel/cpu/common.c:1239` and `:1340`; QEMU `target/i386/cpu.c`, the EPYC entry of `builtin_x86_defs` and the `FEAT_7_0_EDX` case of `x86_cpu_get_supported_feature_word` |
+  | 32-bit syscalls | **Degrades, in speed.** `early_init_amd` sets `X86_FEATURE_SYSCALL32`, so the compat vDSO uses `SYSCALL`, which Intel hardware faults on outside 64-bit mode; KVM's emulator then performs it when the guest's CPUID is not Intel-compatible. Every 32-bit syscall made through the vDSO is a trap and an emulation; `int $0x80` and 64-bit syscalls are native. Whether anything in the golden guest is a 32-bit program was not checked | `amd.c:644`, `vdso32/system_call.S:67`, `arch/x86/kvm/emulate.c:2355`; that VMX intercepts the fault (`vmx.c`): reviewer |
+  | KVM hypercalls | **None on the default EPYC model. Breaks, by this reading, for a guest that makes one.** `init_amd` sets `X86_FEATURE_VMMCALL` for every AMD-vendor CPU and the hypercall is `ALTERNATIVE("vmcall", "vmmcall", X86_FEATURE_VMMCALL)`, so every `kvm_hypercall*()` in the guest executes `VMMCALL`, which is #UD on Intel hardware. KVM's emulator takes the #UD (`em_hypercall`) and `emulator_fix_hypercall()` writes the host's own instruction over the guest's with `emulator_write_emulated()`, unless userspace turned `KVM_X86_QUIRK_FIX_HYPERCALL_INSN` off; QEMU at `qemu.4cb9698` does not (its one `KVM_CAP_DISABLE_QUIRKS2` is for `IGNORE_GUEST_PAT`). That write goes through the guest's page tables as a write, and kernel and module text is read-only, so the guest gets a page fault at the call site instead of a hypercall. **Why the default guest does not reach it:** under KVM a named model gets the KVM features of `kvm_default_props` and no others (`kvmclock`, `kvm-nopiodelay`, `kvm-asyncpf`, `kvm-steal-time`, `kvm-pv-eoi`, `kvmclock-stable-bit`), so the guest has no `PV_UNHALT`, `PV_SEND_IPI` or `PV_SCHED_YIELD`, and `arch/x86/kernel/kvm.c` issues a hypercall only behind those. **What does reach it:** `modprobe ptp_kvm` in a guest (`KVM_HC_CLOCK_PAIRING` at init; the module has no device table, so nothing autoloads it, and whether the golden image loads it was not checked on a guest); and a `-cpu host` or `-cpu max` with an AMD vendor in `<vm-qemu-args>`, since `FEAT_KVM` has no `no_autoenable_flags` and those models therefore turn on `kvm-pv-unhalt`, `kvm-pv-ipi` and `kvm-pv-sched-yield`: an SMP guest then sends PV IPIs by `VMMCALL` during boot, which by this reading is a boot failure and not a degradation. The same goes for a named model with `+kvm-pv-ipi` or the like | `amd.c:678`, `asm/kvm_para.h:22`, `kvm.c:498`, `:504`, `:549`, `:1073`, `:1131`, `drivers/ptp/ptp_kvm_x86.c:53`; `arch/x86/kvm/emulate.c:3972`, `x86.c:10059`; QEMU `target/i386/kvm/kvm.c:3597`, `kvm-cpu.c:175`, `cpu.c` `FEAT_KVM`. That the write is refused (`x86.c:7605`, `:7685`, `CONFIG_STRICT_KERNEL_RWX=y` in the 7.2.6-070206 config) and `CONFIG_PTP_1588_CLOCK_KVM=m`: reviewer |
+  | AMD MSRs at boot | Harmless. `MSR_AMD64_LS_CFG` is read with `rdmsrq_safe`, so a fault leaves the LS_CFG form of SSBD off; the unsafe `rdmsrq(MSR_VM_CR)` is behind SVM, which an Intel host's KVM does not offer | `amd.c:470`, `:1112`; the other accesses (DE_CFG, FP_CFG, HWCR, PATCH_LEVEL, SYSCFG, `mce/amd.c`): reviewer |
+  | x2APIC MSR write fencing | Unknown. `init_amd` clears `X86_FEATURE_APIC_MSRS_FENCE`, which exists because a WRMSR to an x2APIC MSR is not serializing on Intel. Those writes normally exit to KVM; on an Intel host with IPI virtualization the ICR write may not | `amd.c:1167`; the IPI virtualization part: reviewer |
+  | microcode loader | Harmless: disabled under a hypervisor (`x86_hypervisor_present`), which short-circuits before the patch level is read. A kernel built with `CONFIG_MICROCODE_DBG` goes on to `native_rdmsr(MSR_AMD64_PATCH_LEVEL)`, which is MSR `0x8b`, the same number as `MSR_IA32_UCODE_REV`; KVM serves that one to every guest from its vendor-common code, and QEMU sets it to `0x01000065` for an AMD vendor. So that read is expected to be answered as well; the pinned kernel's setting was not checked | `microcode/core.c`, `microcode_loader_disabled()` and `amd_check_current_patch_level()`; `asm/msr-index.h:654` and `:980`; `arch/x86/kvm/x86.c`, `MSR_IA32_UCODE_REV`; QEMU `cpu.c:10193` |
+  | cache topology | **Changes, and Linux is unaffected by this reading.** CPUID leaves 2 and 4 read all zeros; the guest kernel takes its caches from `0x8000001D`, which is QEMU's EPYC table (32 KiB L1d, 64 KiB L1i, 512 KiB L2, 8 MiB L3) and says nothing of the host's real caches. A program that reads leaf 4 itself finds none. See the list above the table | QEMU `cpu.c:8696`, `:8732`, `:9249`, `kvm.c:562`; `cacheinfo.c:247`, `:283`, `:355` |
+  | perf, `amd_nb`, `k10temp`, idle, TSC | perf falls back to software events as it does with no PMU; the others find no device or are unchanged | reviewer |
+
+  None of it was run on an Intel host. The check script's unhandled-MSR
+  and kernel-oops warnings are there so that the first run on one shows
+  what the guest kernel logged.
+
+**The verification is `scripts/check-guest-cpu.sh`, in two lanes.** It
+prints the HOST's vendor and model as a notice annotation (a job container
+sees the host's `/proc/cpuinfo`), fails unless the guest's `vendor_id` is
+`AuthenticAMD` and its `cpu family` 23, and prints the guest's dmesg lines
+about P2PDMA. Of those lines it fails on the kernel's host-bridge refusal,
+matched by its tail (`do not share an upstream bridge or whitelisted host
+bridge`), and warns without failing on amdgpu's `AIS: P2P DMA not
+accessible`. It prints unhandled-MSR lines as a warning without failing,
+and kernel oops lines (`BUG: unable to handle page fault`, `Oops: `) the
+same way, and writes the vendors, the four counts and what the run shows
+to the step summary.
+An MSR line is one that names an MSR access (`unchecked MSR`, `rdmsr`,
+`wrmsr`, in any case): the filter used to include the bare word
+`unhandled`, and a stand-in guest whose dmesg held `ACPI: unhandled thing`
+was reported as one unhandled MSR. Whether a real golden guest's dmesg
+has a line either filter matches was not checked: no output of the script
+on a guest was kept.
+
+- **A pass on an AMD runner asserts nothing about this change, and the
+  script says so.** On an AMD host a guest reads `AuthenticAMD` family 23
+  with or without the stated vendor: the experiment's fourth column. So
+  the script works out "what this run shows" from the two vendors and
+  prints it as a notice, as its last line and as a row of the step
+  summary. On an AMD host: `nothing about the stated vendor ... NOT a pass
+  of the Intel-host case`. On any other host with a guest that passed:
+  `the stated vendor reached the guest ... This is the case the check is
+  for`. With a host vendor it could not read: the guest's vendor only,
+  not counted as a host that is not AMD. It is never a failure and never
+  a warning: a lane cannot pick its runner's CPU, and a red or yellow
+  run on every AMD runner would be noise.
+- **The assertion that counts, in both lanes, is the vendor and the
+  family.** The kernel prints its refusal only for a verbose caller and
+  nothing either lane runs is one (above), so that failure cannot fire
+  from what the lanes do today. It is kept for a lane that one day does a
+  direct NVMe read into GPU pages, or configures nvmet's p2pmem.
+- **The refusal is matched by its tail** because `cannot be used for
+  peer-to-peer DMA` also begins `... as it is not a PCI device`
+  (`pci_p2pdma_distance_many`, a client with no PCI ancestor), which says
+  nothing about the CPU. Matching the prefix failed a stand-in
+  `AuthenticAMD` guest with that line and blamed its CPU.
+- **The AIS line is a warning and not a failure** because what else makes
+  amdgpu log it was not established, and on a guest that is not AMD the
+  vendor assertion has already failed. It is what a degraded hipFile path
+  leaves, so a daily run that carries the warning has hipFile figures at
+  the slow rate.
+- `quickstart-boot` runs it on its one guest on every pull request that
+  touches `qemu/qemu-tool/**`. That lane boots and stops. On an AMD
+  runner the step is green and its summary row says it showed nothing
+  of this change.
+- `report-for-vm-rocm-golden` runs it on both guests after the
+  benchmarks, so the dmesg it prints covers hipFile's reads.
+- **Until a run of either has been seen on an Intel runner, the Intel
+  behaviour is read from source.** The notice says which kind of host a
+  run had; look for `host CPU for ...: GenuineIntel`.
+- `CheckScript` in `tests/test_guest_cpu.py` runs the script against a
+  stand-in guest.
+- **Run on real guests once, on 2026-11-20, in its first form, and in no
+  later one.** That form matched the kernel's refusal by its prefix
+  (`cannot be used for peer-to-peer DMA`), had no AIS count, counted as
+  an MSR line anything with the bare word `unhandled`, and had no oops
+  check and no "what this run shows". Its results: exit 0 on both guests
+  of a fresh boot of this tree; exit 1 on a `GenuineIntel`-vendor guest
+  for the vendor, and after the forced `O_DIRECT` read also for the
+  kernel's refusal. No output of it was kept, and no copy of exactly
+  what ran: the earliest copy of the script left on the dev host is
+  dated nine minutes after the experiment's last guest went down, and
+  has that form. Five things were changed after that, in this order,
+  and each has run against the stand-in guest of `CheckScript` only: the
+  refusal matched by its tail, the AIS warning, the MSR filter without
+  the bare `unhandled`, the oops warning, and "what this run shows".
+
+**The libvirt converter does not follow the rule, and says so.**
+`run-vm --convert-to-libvirt` writes `<cpu mode="host-passthrough"/>`
+(`libvirt_xml._emit_cpu`): the host's CPU, vendor included, and never an
+EPYC, with `--cpu-vendor` and `<vm-cpu-vendor>` not reaching it. A domain
+from it is not an AMD guest on an Intel host. Making it one is not a small
+change: libvirt's `<vendor>` in a custom CPU mode requires the host to
+match, so forcing CPUID would take a `qemu:commandline` passthrough (from
+memory of libvirt's domain format, not checked). So the converter prints
+`identity.LIBVIRT_CPU_NOTE` on stderr for every amd64 conversion, on every
+host, since nothing there may look at the host to decide; the XML on
+stdout is unchanged. This is the one implicit host-vendor path left, and
+`NothingImplicit` does not cover it: the test for it is
+`test_the_libvirt_converter_says_the_domain_has_the_hosts_cpu`.
 
 ## The stacks, and `qemu/stacks/rocm-golden.xml`
 
@@ -5923,8 +6341,8 @@ Two things, and neither is the build machine being short of anything:
   guest's kernel prints `AMD QEMU Virtual CPU version 2.5+ (family: 0xf,
   model: 0x6b)` and `x87 FPU will use FXSAVE`, and of `ssse3 sse4_1 sse4_2
   popcnt avx avx2 xsave` its `/proc/cpuinfo` has none, only `pni`.
-  `run-vm`, and so every stack, passes `-cpu EPYC`, which has `sse4_2` and
-  `avx2`. So anything in a bake that asks the CPU what it has is told
+  `run-vm`, and so every stack, passes `-cpu EPYC,vendor=AuthenticAMD`,
+  a model that has `sse4_2` and `avx2`. So anything in a bake that asks the CPU what it has is told
   "x86-64 baseline", whatever the host is.
 - **perftest's `configure` asks.** `configure.ac` decides `HAVE_AVX2` and
   `HAVE_SSE42` with `AC_RUN_IFELSE`: it compiles a program that returns
@@ -6059,8 +6477,8 @@ ones do not use the host validator. The host-memory ones do, and at
 
 **`gen-vm` was left alone.** A bake on QEMU's default model is the
 portable direction: whatever compiles for "this CPU" there compiles for
-baseline x86-64. Giving the bake boots `-cpu EPYC` would have made this
-role build, and published AVX2 tools.
+baseline x86-64. Giving the bake boots `run-vm`'s `-cpu EPYC,...` would
+have made this role build, and published AVX2 tools.
 
 **Why `perftest_setup_rocm_arch` is required.** Without `--with-rocm-arch`,
 `configure` asks `rocm_agent_enumerator`, which prints nothing with no
@@ -7092,7 +7510,7 @@ interfaces.
   functions and classes have none, and `caps`, `cli`, `list_vms`, `qcow`
   and `shutdown` would otherwise show no member at all. Module constants and
   dataclass fields are listed for the same reason, which is what makes
-  `FleetConfig` 71 entries long.
+  `FleetConfig` 72 entries long.
 - **Nothing is silenced.** The build is `--strict` and logs no warning;
   no griffe or mkdocs message is filtered.
 - **`tests/test_api_docs.py`** needs neither mkdocs nor griffe. It fails
@@ -7405,6 +7823,14 @@ quickstart the morning after the merge; `Gen Compose Check` renders
 **one** guest from `rocm-golden.xml` and asserts the emulated NIC is there by
 its full `1dd8:1002` + `1dd8:5400` tuple and that `ibv_devinfo` reports
 `PORT_ACTIVE`, then stops. It publishes nothing.
+
+Its last guest assertion is `scripts/check-guest-cpu.sh`: the guest's
+`vendor_id` is `AuthenticAMD` and its family 23 whatever the runner's CPU
+is, with the runner's vendor printed as a notice. The daily lane runs the
+same script on both guests after its benchmarks. See "The guest is an AMD
+machine"; a run on an Intel runner is the only verification of that path,
+and on an AMD runner the step passes and says, in its summary, that it
+showed nothing about the stated vendor.
 
 Three choices in it are load-bearing. **One guest, not two**: the 4 vCPU floor
 is real and two guests on a 4-core runner is 2x oversubscribed against the

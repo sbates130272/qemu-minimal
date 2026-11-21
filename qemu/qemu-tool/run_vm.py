@@ -19,7 +19,9 @@ from pathlib import Path
 
 from .caps import QemuCaps, qemu_binary
 from .config import VMConfig
-from .identity import guest_name_args, identity_args
+from .identity import (
+    cpu_vendor_note, cpu_vendor_problem, guest_name_args, identity_args,
+)
 from .ports import DEFAULT_SSH_PORT, NoFreePort, pick_free_port
 
 _ARCH_MACHINE = {
@@ -247,6 +249,10 @@ def run(cfg: VMConfig, caps: QemuCaps) -> None:
     if not cfg.dry_run:
         _check_image_access(cfg)
     cmd = build_command(cfg, caps)
+    if cfg.arch == "amd64":
+        note = cpu_vendor_note(cfg.cpu_vendor, "run-vm", kvm=cfg.kvm)
+        if note:
+            print(note, file=sys.stderr)
     if cfg.dry_run:
         print(shlex.join(cmd))
         return
@@ -264,10 +270,31 @@ def run(cfg: VMConfig, caps: QemuCaps) -> None:
 # Argument-building helpers
 # ---------------------------------------------------------------------------
 
+# The CPU model of every amd64 guest run-vm starts. The vendor goes on
+# after it, AuthenticAMD unless --cpu-vendor or <vm-cpu-vendor> says
+# otherwise: under KVM QEMU gives every model the HOST's vendor, and an
+# EPYC that reads GenuineIntel is refused P2PDMA by the guest kernel.
+# AGENTS.md, "The guest is an AMD machine"; identity.AMD_CPU_VENDOR.
+AMD64_CPU_MODEL = "EPYC"
+
+
+def amd64_cpu_arg(cfg: VMConfig) -> str:
+    """The value of -cpu for an amd64 guest: model, vendor, phys-bits."""
+    cpu_arg = AMD64_CPU_MODEL
+    if cfg.cpu_vendor:
+        problem = cpu_vendor_problem(cfg.cpu_vendor, "--cpu-vendor")
+        if problem:
+            sys.exit(f"Error: {problem}")
+        cpu_arg += f",vendor={cfg.cpu_vendor}"
+    if cfg.cpu_phys_bits:
+        cpu_arg += f",phys-bits={cfg.cpu_phys_bits}"
+    return cpu_arg
+
+
 def _arch_args(cfg: VMConfig) -> list[str]:
     kvm_suffix = ",accel=kvm" if cfg.kvm else ""
     if cfg.arch == "amd64":
-        cpu_arg = "EPYC" if not cfg.cpu_phys_bits else f"EPYC,phys-bits={cfg.cpu_phys_bits}"
+        cpu_arg = amd64_cpu_arg(cfg)
         # When vfio-user devices are present, _vfio_userdev_args emits its own
         # -machine with the shared memfd bound, so skip the machine arg here.
         if cfg.vfio_userdev:

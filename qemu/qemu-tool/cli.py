@@ -30,6 +30,7 @@ from .compose import (
 from .ernic_stats import run as ernic_stats_run
 from .gen_compose import run as gen_compose_run, stack_for as gen_compose_stack_for
 from .gen_vm import run as gen_vm_run
+from .identity import LIBVIRT_CPU_NOTE
 from .libvirt_xml import LibvirtXml
 from .inspect import run as inspect_run
 from .inspect import ssh_run as inspect_ssh_run
@@ -794,6 +795,17 @@ def _add_run_vm(
             "Physical address bits for the EPYC CPU (default 40 = 1 TiB). "
             "Set to 41 alongside --pci-hole64-size when a large BAR exceeds "
             "the default address space; both must move together."
+        ),
+    )
+    g.add_argument(
+        "--cpu-vendor", default=_UNSET, metavar="VENDOR",
+        help=(
+            "CPUID vendor the guest's CPU states (amd64). Default: "
+            "<vm-cpu-vendor>, else AuthenticAMD, on every host: under KVM "
+            "QEMU otherwise gives the EPYC model the host's vendor, and the "
+            "guest kernel refuses P2PDMA between devices that share no upstream bridge on a CPU that is "
+            "not AMD. Twelve characters, e.g. GenuineIntel; '' states no "
+            "vendor and leaves the host's."
         ),
     )
     g.add_argument(
@@ -1600,6 +1612,12 @@ def _run_vm_cmd(args: argparse.Namespace) -> None:
             )
         caps = probe_caps(cfg)
         xml = LibvirtXml.emit(cfg, caps)
+        if cfg.arch == "amd64":
+            # The domain is <cpu mode='host-passthrough'/>: the host's CPU,
+            # whatever --cpu-vendor or <vm-cpu-vendor> says. That is a guest
+            # not presented as AMD, so it is announced like any other
+            # (AGENTS.md, "The guest is an AMD machine").
+            print(LIBVIRT_CPU_NOTE, file=sys.stderr)
         output = args.convert_to_libvirt
         if output == "-":
             print(xml, end="")
@@ -1952,6 +1970,7 @@ def _extract_cli_overrides(
         _take("vfio_user_switch_width", "vfio_user_switch_width")
         _take("cpu_sockets", "cpu_sockets")
         _take("cpu_phys_bits", "cpu_phys_bits")
+        _take("cpu_vendor", "cpu_vendor")
         _take("pci_hole64_size", "pci_hole64_size")
         _take("nvme", "nvme")
         _take("nvme_trace", "nvme_trace")

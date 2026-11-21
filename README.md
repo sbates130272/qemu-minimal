@@ -837,6 +837,55 @@ repeats one `run-vm` already writes is QEMU's to resolve, and for most
 options the last one wins. `run-vm --qemu-arg=WORD`, repeatable, is the same
 thing for one guest outside a stack.
 
+**A guest is an AMD machine on every host.** `run-vm` starts an amd64 guest
+with `-cpu EPYC,vendor=AuthenticAMD`. The vendor is stated because under KVM
+QEMU gives every CPU model the host's CPUID vendor: on an Intel host a bare
+`-cpu EPYC` guest reads `GenuineIntel` with family 23, and the guest kernel
+then refuses peer-to-peer DMA between devices that share no upstream bridge
+("cannot be used for peer-to-peer DMA as the client and provider (...) do
+not share an upstream bridge or whitelisted host bridge", where the
+parentheses hold the provider's PCI address). Seen on a guest
+given the `GenuineIntel` vendor on an AMD host: hipFile's direct path falls
+back and reads at about a twelfth of the rate, still verified; a direct NVMe
+read into GPU peer-to-peer pages fails with that message; the dma-buf RDMA
+test still passes. `<vm-cpu-vendor>` in a fleet file, or
+`run-vm --cpu-vendor`, changes it:
+
+```xml
+<vm-cpu-vendor>GenuineIntel</vm-cpu-vendor>   <!-- twelve characters -->
+<vm-cpu-vendor/>                              <!-- no vendor stated: the host's -->
+```
+
+An empty element is not the default. A render or a `run-vm` with anything
+but `AuthenticAMD` prints a note saying the guest is not presented as AMD.
+Any other CPU property goes in a whole `-cpu` in `<vm-qemu-args>`: QEMU
+takes the last `-cpu` on its command line and nothing of an earlier one
+(checked on QEMU 10.2.1 and on the pinned fork), so that `-cpu` has to
+restate the vendor and any `phys-bits`, for example
+`<vm-qemu-args>-cpu EPYC-Milan,vendor=AuthenticAMD,phys-bits=42</vm-qemu-args>`.
+Keep it an AMD model of family 23 or later (`EPYC`, `EPYC-Rome`,
+`EPYC-Milan`, `EPYC-Genoa`): the guest kernel asks for the family as well
+as the vendor, and `-cpu host` or `-cpu max` take the host's family. Read
+from source and not run: on an Intel host `-cpu host,vendor=AuthenticAMD`
+is family 6 and is refused peer-to-peer DMA all the same, and it also
+turns on KVM paravirtual features whose hypercalls an AMD-vendor guest
+cannot make on Intel hardware, so expect such a guest not to boot.
+Not yet run on an Intel host: the `quickstart-boot` check prints the host's
+vendor and asserts the guest's, and its first run on an Intel runner is the
+proof. On an AMD runner the check passes with or without this and says so
+in its summary ("what this run shows"). Read from the guest kernel's source and not run: on Intel hardware an
+AMD-vendor guest kernel treats itself as not affected by the Intel-only CPU
+vulnerabilities (Meltdown, L1TF, MDS, MMIO stale data, BHI) and does not
+apply those mitigations inside the guest, and applies the AMD family 23 ones
+instead, so benchmark figures from an Intel host are not comparable with
+earlier ones from it. Also read and not run: an AMD-vendor guest gets
+QEMU's AMD memory map, with a reserved range just below 1 TiB, so on an
+Intel host a fleet of your own whose `<vm-pci-hole64-size>` reaches 1 TiB
+may now need a larger `<vm-cpu-phys-bits>` (QEMU says `phys-bits too low`
+at start); and `modprobe ptp_kvm` in a guest on an Intel host is expected
+to fault. A domain from `run-vm --convert-to-libvirt` has the
+host's CPU whatever these say, and says so on stderr.
+
 `<vm-vcpus>` must not drop below 4 on a stack with an ernic. `ionic_lif_size()`
 derives its EQ count from `num_online_cpus()` and `ionic_create_rdma_admin()`
 rejects fewer than `IONIC_EQ_COUNT_MIN`, so `ionic_rdma` never probes; the only
@@ -1404,6 +1453,7 @@ takes every stack on the system.
 | `--no-qemu-guest-agent` | off | Omit guest agent channel |
 | `--backing-shared` | off | Disable image locking for shared backing files |
 | `--extra-hostfwd RULE` | — | Extra hostfwd rule e.g. `tcp::9150-:9100` (repeatable) |
+| `--cpu-vendor VENDOR` | `<vm-cpu-vendor>`, else `AuthenticAMD` | CPUID vendor stated on `-cpu` (amd64); 12 characters, or `''` for the host's |
 | `--qemu-arg=WORD` | the words of `<vm-qemu-args>` | One word appended to the QEMU command line as it is (repeatable, one word each) |
 | `--dry-run` | off | Print QEMU command instead of running |
 | `--convert-to-libvirt [FILE]` | — | Emit libvirt domain XML to FILE (default `<vm>.xml`) |

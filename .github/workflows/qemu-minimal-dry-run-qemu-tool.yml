@@ -38,7 +38,9 @@ jobs:
         echo "$out"
         echo "$out" | grep -q "qemu-system-x86_64"
         echo "$out" | grep -q "\-machine q35"
-        echo "$out" | grep -q "\-cpu EPYC"
+        # The vendor is stated on every host: AGENTS.md, "The guest is an AMD
+        # machine".
+        echo "$out" | grep -q "\-cpu EPYC,vendor=AuthenticAMD "
         echo "$out" | grep -q "\-nographic"
         echo "$out" | grep -q "/tmp/qga-dry-test-2222.sock"
         echo "$out" | grep -q "virtio-serial-pci,id=virtio-serial0"

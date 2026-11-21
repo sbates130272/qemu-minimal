@@ -56,7 +56,7 @@ Three details that make this work and are easy to lose:
   64-bit hole. The size is bounded by the CPU's physical address width and
   QEMU refuses outright rather than degrading:
   `Address space limit 0xffffffffff < 0x1ffffffffff phys-bits too low (40)`.
-  `-cpu EPYC` gives 40 bits; measured on QEMU 10.2.1, **512G is accepted and
+  The EPYC CPU model gives 40 bits; measured on QEMU 10.2.1, **512G is accepted and
   1T is not**. The committed value is that ceiling, not a measurement —
   see "Still to measure" below.
 - **`<vm-cpu-sockets>1`.** Bare `-smp cpus=N` leaves QEMU to infer

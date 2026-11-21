@@ -709,6 +709,37 @@ when a large BAR would exceed the default space; both must move together.
 QEMU refuses a hole larger than the address space allows at startup rather
 than at boot time.
 .TP
+.BI \-\-cpu\-vendor " VENDOR"
+The CPUID vendor the guest's CPU states (amd64 guests). Default:
+.BR <vm\-cpu\-vendor> ,
+else
+.IR AuthenticAMD ,
+on every host, so the guest's
+.B \-cpu
+is
+.IR EPYC,vendor=AuthenticAMD .
+Under KVM QEMU otherwise gives the EPYC model the host's vendor, and on an
+Intel host the guest kernel then refuses peer\-to\-peer DMA between devices
+that share no upstream bridge. Exactly 12 printable ASCII characters with no comma,
+such as
+.IR GenuineIntel ;
+an empty value
+.RB ( "\-\-cpu\-vendor ''" )
+states no vendor and leaves the host's. Anything but
+.I AuthenticAMD
+prints a note on standard error. Other CPU properties go in a whole
+.B \-cpu
+given with
+.BR \-\-qemu\-arg :
+QEMU takes the last
+.B \-cpu
+and nothing of an earlier one, so it has to restate the vendor and the
+address bits.
+A domain written by
+.B \-\-convert\-to\-libvirt
+has the host's CPU whatever this option says, and a note on standard error
+says so.
+.TP
 .BI \-\-pci\-hole64\-size " SIZE"
 Size of the 64\-bit PCI hole as a QEMU size string, e.g.\&
 .IR 512G .
@@ -717,7 +748,7 @@ GPUs will not enumerate without this.
 .IP
 Bounded by
 .BR \-\-cpu\-phys\-bits :
-.B \-cpu EPYC
+.B \-cpu EPYC,vendor=AuthenticAMD
 gives 40 bits (1\~TiB) by default, so on QEMU 10.2.1
 .I 512G
 is accepted and
@@ -2268,6 +2299,11 @@ group, nothing is expanded); a stack passes each word to
 .B run\-vm
 as
 .BR \-\-qemu\-arg .
+.B <vm\-cpu\-vendor>
+is the CPUID vendor every guest's CPU states and defaults to
+.IR AuthenticAMD :
+a guest is an AMD machine on every host. An empty element is not the default;
+it states no vendor, and the guest then has the host's.
 The parser is strict: an element it does not know, an element given twice in
 one file, an attribute, a nested element and text directly under
 .B <fleet>
@@ -2463,6 +2499,7 @@ beats the file.
 <vm\-vfio\-user\-root\-port>      \-\-vfio\-user\-root\-port
 <vm\-cpu\-sockets>              \-\-cpu\-sockets
 <vm\-cpu\-phys\-bits>            \-\-cpu\-phys\-bits
+<vm\-cpu\-vendor>               \-\-cpu\-vendor
 <vm\-pci\-hole64\-size>          \-\-pci\-hole64\-size
 <vm\-qemu\-args>                \-\-qemu\-arg
 <vm\-username>                 \-\-username

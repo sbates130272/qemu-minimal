@@ -82,6 +82,8 @@ class VmOverrides(unittest.TestCase):
             "ssh_key_file": Path("/k.pub"), "cpu_sockets": 1,
             "cpu_phys_bits": 41, "pci_hole64_size": "512G",
             "backing_image": "docker.io/x/y:z",
+            # Always applied: an empty <vm-cpu-vendor> is a value.
+            "cpu_vendor": "AuthenticAMD",
         })
 
     def test_no_fleet_sets_backing_shared(self):
@@ -134,7 +136,12 @@ class ParsedOnce(_Tmp):
                     settings.load(path)
 
     def test_unset_socket_and_phys_bits_are_not_emitted(self):
-        self.assertNotIn("vm-cpu-", fleet_xml.FleetXml.emit(FleetConfig()))
+        emitted = fleet_xml.FleetXml.emit(FleetConfig())
+        self.assertNotIn("vm-cpu-sockets", emitted)
+        self.assertNotIn("vm-cpu-phys-bits", emitted)
+        # The vendor is not sparse: empty is a value of its own, so the
+        # default is written out.
+        self.assertIn("<vm-cpu-vendor>AuthenticAMD</vm-cpu-vendor>", emitted)
 
     def test_every_reader_sees_one_images_dir_for_a_tilde(self):
         from qemu_tool import compose

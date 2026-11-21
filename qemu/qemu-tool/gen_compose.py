@@ -34,6 +34,7 @@ from .fleet_xml import (
     SERVER_ENV, SERVER_OPTIONS, FleetConfig, FleetXml, Server, device_counts,
     split_args,
 )
+from .identity import AMD_CPU_VENDOR, cpu_vendor_note
 from .ports import publish_address, publish_mapping, reach_address
 from .resources import stack_fleet
 from .vm_artifact import VM_COMMIT_TAG, VM_DATED_TAG
@@ -393,6 +394,18 @@ def _check_pci_mmio_bridge(cfg: FleetConfig) -> None:
             "Warning: <vm-pci-mmio-bridge> is true and <qemu-ref> is "
             f"{cfg.qemu_ref}, which is not the fork QEMU. run-vm exits "
             "when its QEMU has no pci-mmio-bridge device.", file=sys.stderr)
+
+
+def _check_cpu_vendor(cfg: FleetConfig) -> None:
+    """<vm-cpu-vendor>: say so when the guests are not presented as AMD.
+
+    A guest is an AMD machine unless very clearly told otherwise (AGENTS.md,
+    "The guest is an AMD machine"). This is the telling, so it is a note
+    and not a refusal; nothing here looks at the host.
+    """
+    note = cpu_vendor_note(cfg.vm_cpu_vendor, "<vm-cpu-vendor>")
+    if note:
+        print(note, file=sys.stderr)
 
 
 def _check_nvme_vram(cfg: FleetConfig) -> None:
@@ -771,6 +784,7 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
 
     _check_image_coherence(cfg)
     _check_nvme_vram(cfg)
+    _check_cpu_vendor(cfg)
     _warn_if_gpu_without_root_port(cfg)
 
     prefix = _setting(cfg, "name_prefix")
@@ -937,6 +951,7 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
         "qemu_image": cfg.qemu_ref,
         "cpu_sockets": cfg.vm_cpu_sockets,
         "cpu_phys_bits": cfg.vm_cpu_phys_bits,
+        "cpu_vendor": cfg.vm_cpu_vendor,
         "pci_hole64_size": cfg.vm_pci_hole64_size,
         "net_prefix": net,
         "exporter_addr": f"{net}.{_NET_INFRA}.{_INFRA_EXPORTER}",
@@ -1540,6 +1555,13 @@ def render_compose(
             out.append(f'          --cpu-sockets {spec["cpu_sockets"]} \\')
         if spec["cpu_phys_bits"]:
             out.append(f'          --cpu-phys-bits {spec["cpu_phys_bits"]} \\')
+        if spec["cpu_vendor"] != AMD_CPU_VENDOR:
+            # Only when a layer says otherwise: run-vm's own default is
+            # AuthenticAMD, so a fleet that names no vendor renders nothing.
+            # `=` so an empty value, or one starting with a dash, is the
+            # option's value.
+            out.append(
+                f'          --cpu-vendor={_sh_word(spec["cpu_vendor"])} \\')
         if spec["pci_hole64_size"]:
             out.append(
                 f'          --pci-hole64-size "{spec["pci_hole64_size"]}" \\')
