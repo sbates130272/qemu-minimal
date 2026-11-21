@@ -313,9 +313,11 @@ my-fleet.xml: <ernic-mac-prefix> was removed from the fleet format: every emulat
   defaults, since none was sparse. Such a file no longer parses; deleting
   the three lines is the fix, and for `<vm-backing-shared>true` the flag
   where it mattered.
-- **The schema corpus is 260 documents**, three more removed elements. The
-  two tests that fail an unread field and an unread `plan()` key did not
-  catch these three and could not: all three were read.
+- **The schema corpus gained three documents, one for each of the three
+  elements**, which made it 260 that day. It has grown since; the count
+  as it is now is under "The schema and the reference page", where a test
+  holds it. The two tests that fail an unread field and an unread `plan()`
+  key did not catch these three and could not: all three were read.
 - *Run:* the full suite, `gen-compose --check` for the four stacks and
   bare, the three generated files compared with a fresh render,
   `codespell`, `mkdocs build --strict`, and `run-vm --dry-run` with and
@@ -696,7 +698,10 @@ the XSD has a bullet of its own.
   suite; with it that mutant fails two tests (run from a scratch copy). A
   test also hands it to `gen_compose.plan()` on `rocm-golden.xml`, which
   takes it, and one NIC more, which is refused. Ten documents set a
-  removed element each, refused by all three.
+  removed element each, refused by all three. `Counts` in the test file
+  holds every number in this bullet that counts documents or settings to
+  the lists themselves, so a list that grows fails until this text is
+  moved with it.
 
 **What the schema cannot check** is the last section of the page, and is
 the same list as `LOOSER` plus what needs more than one file or more than
@@ -1197,22 +1202,27 @@ vendor does there is read from QEMU's source at `qemu.4cb9698`:
 - **The guest kernel then runs its AMD code on an Intel CPU.** What that
   does was read at v7.2.6 for the guest, with `arch/x86/kvm` of the same
   tag standing in for the host's KVM, whatever kernel an Intel host really
-  runs. Nothing found that stops a boot. The rows marked "reviewer" were
-  read by a reviewer of this change and not read again when this was
-  written; the others were, and again when the change was put on top of
-  the two before it in the series, which is when the cache row was added
-  and the vulnerability, hypercall and microcode rows corrected.
+  runs. Nothing found that stops a boot. The rows were read when this was
+  written, and again when the change was put on top of the two before it
+  in the series, which is when the cache row was added and the
+  vulnerability, hypercall and microcode rows corrected. Five cells then
+  cited only a reviewer's reading, with no file. Those were opened on
+  2026-11-21 (the kernel at v7.2.6, QEMU at `qemu.4cb9698`, and the
+  `.config` in the `linux-headers-7.2.6-070206-generic` package) and now
+  name the file and function, or say what was not followed. Reading them
+  changed one answer: the last row said TSC handling was unchanged, and it
+  is vendor-dependent.
 
   | What | On an Intel host | Read where |
   |---|---|---|
   | CPU vulnerability mitigations in the guest | **Degrades.** `cpu_vuln_whitelist` has `VULNWL_AMD(X86_FAMILY_ANY, NO_MELTDOWN \| NO_L1TF \| NO_MDS \| NO_SWAPGS \| NO_ITLB_MULTIHIT \| NO_MMIO \| NO_EIBRS_PBRSB \| NO_BHI)`, and the Intel entries are keyed on Intel models. `arch-capabilities` plays no part: no version of the EPYC model asks for it under either vendor (QEMU would also hide it from an AMD-vendor guest). So the guest kernel reports itself not affected and runs without PTI, MDS and MMIO buffer clearing, L1TF and BHI handling, on hardware that may be affected. Before this change the guest was `GenuineIntel` family 23, which matches no entry of either table, and the kernel treated it as affected: the `GenuineIntel`-vendor boot on the AMD host logged `MDS: Vulnerable: Clear CPU buffers attempted, no microcode`. It now marks itself with the family 0x17 set instead (`VULNBL_AMD(0x17, RETBLEED \| SMT_RSB \| SRSO \| VMSCAPE)`); which mitigation each of those selects on Intel hardware was not worked through. This is isolation inside the guest only, in an image that already has passwordless sudo and a published key; and **benchmark figures from an Intel host shift against earlier runs there** | `arch/x86/kernel/cpu/common.c:1239` and `:1340`; QEMU `target/i386/cpu.c`, the EPYC entry of `builtin_x86_defs` and the `FEAT_7_0_EDX` case of `x86_cpu_get_supported_feature_word` |
-  | 32-bit syscalls | **Degrades, in speed.** `early_init_amd` sets `X86_FEATURE_SYSCALL32`, so the compat vDSO uses `SYSCALL`, which Intel hardware faults on outside 64-bit mode; KVM's emulator then performs it when the guest's CPUID is not Intel-compatible. Every 32-bit syscall made through the vDSO is a trap and an emulation; `int $0x80` and 64-bit syscalls are native. Whether anything in the golden guest is a 32-bit program was not checked | `amd.c:644`, `vdso32/system_call.S:67`, `arch/x86/kvm/emulate.c:2355`; that VMX intercepts the fault (`vmx.c`): reviewer |
-  | KVM hypercalls | **None on the default EPYC model. Breaks, by this reading, for a guest that makes one.** `init_amd` sets `X86_FEATURE_VMMCALL` for every AMD-vendor CPU and the hypercall is `ALTERNATIVE("vmcall", "vmmcall", X86_FEATURE_VMMCALL)`, so every `kvm_hypercall*()` in the guest executes `VMMCALL`, which is #UD on Intel hardware. KVM's emulator takes the #UD (`em_hypercall`) and `emulator_fix_hypercall()` writes the host's own instruction over the guest's with `emulator_write_emulated()`, unless userspace turned `KVM_X86_QUIRK_FIX_HYPERCALL_INSN` off; QEMU at `qemu.4cb9698` does not (its one `KVM_CAP_DISABLE_QUIRKS2` is for `IGNORE_GUEST_PAT`). That write goes through the guest's page tables as a write, and kernel and module text is read-only, so the guest gets a page fault at the call site instead of a hypercall. **Why the default guest does not reach it:** under KVM a named model gets the KVM features of `kvm_default_props` and no others (`kvmclock`, `kvm-nopiodelay`, `kvm-asyncpf`, `kvm-steal-time`, `kvm-pv-eoi`, `kvmclock-stable-bit`), so the guest has no `PV_UNHALT`, `PV_SEND_IPI` or `PV_SCHED_YIELD`, and `arch/x86/kernel/kvm.c` issues a hypercall only behind those. **What does reach it:** `modprobe ptp_kvm` in a guest (`KVM_HC_CLOCK_PAIRING` at init; the module has no device table, so nothing autoloads it, and whether the golden image loads it was not checked on a guest); and a `-cpu host` or `-cpu max` with an AMD vendor in `<vm-qemu-args>`, since `FEAT_KVM` has no `no_autoenable_flags` and those models therefore turn on `kvm-pv-unhalt`, `kvm-pv-ipi` and `kvm-pv-sched-yield`: an SMP guest then sends PV IPIs by `VMMCALL` during boot, which by this reading is a boot failure and not a degradation. The same goes for a named model with `+kvm-pv-ipi` or the like | `amd.c:678`, `asm/kvm_para.h:22`, `kvm.c:498`, `:504`, `:549`, `:1073`, `:1131`, `drivers/ptp/ptp_kvm_x86.c:53`; `arch/x86/kvm/emulate.c:3972`, `x86.c:10059`; QEMU `target/i386/kvm/kvm.c:3597`, `kvm-cpu.c:175`, `cpu.c` `FEAT_KVM`. That the write is refused (`x86.c:7605`, `:7685`, `CONFIG_STRICT_KERNEL_RWX=y` in the 7.2.6-070206 config) and `CONFIG_PTP_1588_CLOCK_KVM=m`: reviewer |
-  | AMD MSRs at boot | Harmless. `MSR_AMD64_LS_CFG` is read with `rdmsrq_safe`, so a fault leaves the LS_CFG form of SSBD off; the unsafe `rdmsrq(MSR_VM_CR)` is behind SVM, which an Intel host's KVM does not offer | `amd.c:470`, `:1112`; the other accesses (DE_CFG, FP_CFG, HWCR, PATCH_LEVEL, SYSCFG, `mce/amd.c`): reviewer |
-  | x2APIC MSR write fencing | Unknown. `init_amd` clears `X86_FEATURE_APIC_MSRS_FENCE`, which exists because a WRMSR to an x2APIC MSR is not serializing on Intel. Those writes normally exit to KVM; on an Intel host with IPI virtualization the ICR write may not | `amd.c:1167`; the IPI virtualization part: reviewer |
-  | microcode loader | Harmless: disabled under a hypervisor (`x86_hypervisor_present`), which short-circuits before the patch level is read. A kernel built with `CONFIG_MICROCODE_DBG` goes on to `native_rdmsr(MSR_AMD64_PATCH_LEVEL)`, which is MSR `0x8b`, the same number as `MSR_IA32_UCODE_REV`; KVM serves that one to every guest from its vendor-common code, and QEMU sets it to `0x01000065` for an AMD vendor. So that read is expected to be answered as well; the pinned kernel's setting was not checked | `microcode/core.c`, `microcode_loader_disabled()` and `amd_check_current_patch_level()`; `asm/msr-index.h:654` and `:980`; `arch/x86/kvm/x86.c`, `MSR_IA32_UCODE_REV`; QEMU `cpu.c:10193` |
+  | 32-bit syscalls | **Degrades, in speed.** `early_init_amd` sets `X86_FEATURE_SYSCALL32`, so the compat vDSO uses `SYSCALL`, which Intel hardware faults on outside 64-bit mode; KVM's emulator then performs it when the guest's CPUID is not Intel-compatible. Every 32-bit syscall made through the vDSO is a trap and an emulation; `int $0x80` and 64-bit syscalls are native. Whether anything in the golden guest is a 32-bit program was not checked | `amd.c:644`, `vdso32/system_call.S:67`, `arch/x86/kvm/emulate.c:2355`. VMX takes the fault: `vmx_update_exception_bitmap` always sets `UD_VECTOR` (`vmx.c:902`), `handle_exception_nmi` hands an invalid opcode to `handle_ud` (`vmx.c:5440`), and that calls `kvm_emulate_instruction` with `EMULTYPE_TRAP_UD` (`x86.c:7563`) |
+  | KVM hypercalls | **None on the default EPYC model. Breaks, by this reading, for a guest that makes one.** `init_amd` sets `X86_FEATURE_VMMCALL` for every AMD-vendor CPU and the hypercall is `ALTERNATIVE("vmcall", "vmmcall", X86_FEATURE_VMMCALL)`, so every `kvm_hypercall*()` in the guest executes `VMMCALL`, which is #UD on Intel hardware. KVM's emulator takes the #UD (`em_hypercall`) and `emulator_fix_hypercall()` writes the host's own instruction over the guest's with `emulator_write_emulated()`, unless userspace turned `KVM_X86_QUIRK_FIX_HYPERCALL_INSN` off; QEMU at `qemu.4cb9698` does not (its one `KVM_CAP_DISABLE_QUIRKS2` is for `IGNORE_GUEST_PAT`). That write goes through the guest's page tables as a write, and kernel and module text is read-only, so the guest gets a page fault at the call site instead of a hypercall. **Why the default guest does not reach it:** under KVM a named model gets the KVM features of `kvm_default_props` and no others (`kvmclock`, `kvm-nopiodelay`, `kvm-asyncpf`, `kvm-steal-time`, `kvm-pv-eoi`, `kvmclock-stable-bit`), so the guest has no `PV_UNHALT`, `PV_SEND_IPI` or `PV_SCHED_YIELD`, and `arch/x86/kernel/kvm.c` issues a hypercall only behind those. **What does reach it:** `modprobe ptp_kvm` in a guest (`KVM_HC_CLOCK_PAIRING` at init; the module has no device table, so nothing autoloads it, and whether the golden image loads it was not checked on a guest); and a `-cpu host` or `-cpu max` with an AMD vendor in `<vm-qemu-args>`, since `FEAT_KVM` has no `no_autoenable_flags` and those models therefore turn on `kvm-pv-unhalt`, `kvm-pv-ipi` and `kvm-pv-sched-yield`: an SMP guest then sends PV IPIs by `VMMCALL` during boot, which by this reading is a boot failure and not a degradation. The same goes for a named model with `+kvm-pv-ipi` or the like | `amd.c:678`, `asm/kvm_para.h:22`, `kvm.c:498`, `:504`, `:549`, `:1073`, `:1131`, `drivers/ptp/ptp_kvm_x86.c:53`; `arch/x86/kvm/emulate.c:3972`, `x86.c:10059`; QEMU `target/i386/kvm/kvm.c:3597`, `kvm-cpu.c:175`, `cpu.c` `FEAT_KVM`. The write is refused in `emulator_read_write_onepage`, which returns `X86EMUL_PROPAGATE_FAULT` when `vcpu_mmio_gva_to_gpa` fails a walk it asked for with `PFERR_WRITE_MASK` (`x86.c:7685`, `:7605`); the walk itself (`mmu->gva_to_gpa`, `permission_fault`) was not read. `CONFIG_STRICT_KERNEL_RWX=y`, `CONFIG_STRICT_MODULE_RWX=y` and `CONFIG_PTP_1588_CLOCK_KVM=m` are lines 1033, 1035 and 5181 of the 7.2.6-070206 `.config`; the first is not optional on x86 (`arch/Kconfig:1581`, `arch/x86/Kconfig:107`) |
+  | AMD MSRs at boot | Harmless. `MSR_AMD64_LS_CFG` is read with `rdmsrq_safe`, so a fault leaves the LS_CFG form of SSBD off; the unsafe `rdmsrq(MSR_VM_CR)` is behind SVM, which an Intel host's KVM does not offer | `amd.c:470`, `:1112`. The other accesses: `PATCH_LEVEL` is `rdmsr_safe` in `early_init_amd` (`:624`); `DE_CFG` is `msr_set_bit` in `init_amd` (`:1126`), and `FP_CFG` and the IRPERF bit of `HWCR` are `msr_set_bit` and `msr_clear_bit` in `init_amd_zen1` (`:952`, `:947`), which `init_amd`'s comment at `:1123` says use the safe accessors (`arch/x86/lib/msr.c` was not opened); the unsafe `rdmsrq(MSR_K7_HWCR)` of `bsp_init_amd` (`:431`) is behind `CONSTANT_TSC`, and KVM answers `HWCR` from vendor-common code (`kvm_get_msr_common`, `x86.c:4194`); the unsafe `rdmsrq(MSR_AMD64_SYSCFG)` of `early_detect_mem_encrypt` (`:585`) is behind `X86_FEATURE_SME` or `X86_FEATURE_SEV`, and the same function answers it 0 (`x86.c:3933`); `mce_amd_feature_init` reads each threshold block with `rdmsr_safe` (`mce/amd.c:753`) and `disable_err_thresholding` returns at once for family 0x17 model 1 (`mce/amd.c:638`). Not followed: the SMCA path (`smca_configure`) |
+  | x2APIC MSR write fencing | Unknown. `init_amd` clears `X86_FEATURE_APIC_MSRS_FENCE`, which exists because a WRMSR to an x2APIC MSR is not serializing on Intel. Those writes normally exit to KVM; on an Intel host with IPI virtualization the ICR write may not | `amd.c:1167`; with `enable_ipiv`, `vmx_update_msr_bitmap_x2apic` stops intercepting the x2APIC ICR, read and write (`vmx.c:4188`), so that WRMSR does not exit. Whether the missing fence then matters was not established |
+  | microcode loader | Harmless: disabled under a hypervisor (`x86_hypervisor_present`), which short-circuits before the patch level is read. A kernel built with `CONFIG_MICROCODE_DBG` goes on to `native_rdmsr(MSR_AMD64_PATCH_LEVEL)`, which is MSR `0x8b`, the same number as `MSR_IA32_UCODE_REV`; KVM serves that one to every guest from its vendor-common code, and QEMU sets it to `0x01000065` for an AMD vendor. So that read is expected to be answered as well. The pinned kernel is not such a build: line 503 of the 7.2.6-070206 `.config` is `# CONFIG_MICROCODE_DBG is not set` | `microcode/core.c`, `microcode_loader_disabled()` and `amd_check_current_patch_level()`; `asm/msr-index.h:654` and `:980`; `arch/x86/kvm/x86.c`, `MSR_IA32_UCODE_REV`; QEMU `cpu.c:10193` |
   | cache topology | **Changes, and Linux is unaffected by this reading.** CPUID leaves 2 and 4 read all zeros; the guest kernel takes its caches from `0x8000001D`, which is QEMU's EPYC table (32 KiB L1d, 64 KiB L1i, 512 KiB L2, 8 MiB L3) and says nothing of the host's real caches. A program that reads leaf 4 itself finds none. See the list above the table | QEMU `cpu.c:8696`, `:8732`, `:9249`, `kvm.c:562`; `cacheinfo.c:247`, `:283`, `:355` |
-  | perf, `amd_nb`, `k10temp`, idle, TSC | perf falls back to software events as it does with no PMU; the others find no device or are unchanged | reviewer |
+  | perf, `amd_nb`, `k10temp`, idle, TSC | **perf** falls back to software events: `init_hw_perf_events` takes `amd_pmu_init` for the vendor, and `check_hw_exists` then reads the counter MSRs with the safe accessors, writes one and reads it back; a fault, or a value that did not stick, ends in `PMU not available due to virtualization, using software events only`. QEMU's `pmu` property is off by default, and version 1 of the EPYC model, which a bare `EPYC` names on a q35 machine (`pc_q35_machine_options` sets `default_cpu_version` to 1 and `x86_cpus_init` hands it to `cpu.c`), has no `perfctr-core`; versions 3 and later turn it on. So the guest uses the K7 MSRs, which KVM's vendor-common code reads as 0 and whose writes it drops unless its PMU owns them; what VMX's PMU makes of them was not read. **`amd_nb`**: `init_amd_nbs` runs for an AMD vendor and `amd_smn_init` for a CPU with `X86_FEATURE_ZEN`, and the second walks the PCI root devices (`get_next_root`); what either does on a q35 guest, which has no AMD host bridge on either host, was not followed. **`k10temp`** is a PCI driver and binds only to a device in its table. **idle**: with no `idle=` on the command line, `select_idle_routine` takes MWAIT when `prefer_mwait_c1_over_halt` says so, which tests `X86_FEATURE_MWAIT`, `X86_BUG_MONITOR` and `X86_BUG_AMD_APIC_C1E`, then the TDX routine for a TDX guest, else `default_idle`; it does not ask the vendor. `X86_BUG_AMD_APIC_C1E` is set only on a CPU with `X86_BUG_AMD_E400`, which `amd.c` forces only in `init_amd_k8` and `init_amd_gh`, so family 23 does not have it. **TSC is not vendor-neutral**: `native_calibrate_tsc` and `cpu_khz_from_cpuid` return 0 for any vendor but Intel, and `unsynchronized_tsc` calls a non-Intel guest with more than one package and no `CONSTANT_TSC` unsynchronized, which `early_init_amd` sets only from CPUID `8000_0007` EDX bit 8, a bit the EPYC entry does not have. The same guest takes the same branches on an AMD host, and what clocksource a guest ends on was not looked at on a guest | `arch/x86/events/core.c:2133`, `:268`, `:348`; `arch/x86/kvm/x86.c:3958`, `:3776`; QEMU `cpu.c:10726`, the EPYC entry of `builtin_x86_defs` (`:6605`, its version 3 at `:6663`), `cpu.c:7347`, `hw/i386/pc_q35.c:360`, `hw/i386/x86-common.c:76`; `amd_nb.c:316`, `amd_node.c:247`; `drivers/hwmon/k10temp.c:542`, `:585`; `process.c:938`, `:877`, `:987`; `amd.c:742`, `:786`; `tsc.c:657`, `:730`, `:1273`; `amd.c:630` |
 
   None of it was run on an Intel host. The check script's unhandled-MSR
   and kernel-oops warnings are there so that the first run on one shows
@@ -1583,7 +1593,14 @@ it sets.
   allowed, unlike `<vm-nvme-vram>`. A literal `--nvme` string is left
   alone by `run-vm`, with a note on stderr.
 - **`run-vm --xml` gets it** (`settings.vm_overrides`, only when it is not
-  512), and so does a bake, which already takes `<vm-nvme>`.
+  512). **A bake carries it and does nothing with it.**
+  `settings.bake_overrides` keeps the key, as it keeps `<vm-nvme>`, but
+  `gen-vm` attaches no NVMe device to either of a bake's boots
+  (`gen_vm.py`: `_first_boot` has the image, the cloud-init seed and a
+  network device, `_start_qemu` the image and a network device, and
+  neither a `-device nvme`), so the value reaches a `VMConfig` nobody
+  reads. A baked image's NVMe block size is set when a guest of it
+  is started, not when it is baked.
 - **It is not the SPDK controller's or the NVMe-oF target's block size.**
   Read from the fixtures under `tests/fixtures/server-help/`, not run: the
   SPDK image's LBA namespaces are 4096 bytes unless the namespace names
@@ -2177,6 +2194,32 @@ and the report carry their results; the GPU-memory RDMA play stays last.
   for its IB device with `ibv_devinfo -l` and does not read the fact the
   first play recorded. `--p4-iters N` is the one sizing switch; the element
   count stays a play var, since the rate is not comparable across counts.
+- **The test can only program a guest's first NIC, and that is the
+  client's limit, not the play's.** Found on 2026-11-20, on one guest with
+  two NICs under `<devices>` (the first on `nvmeof`, the second on
+  `loopback`; image `20261119.g2aea67d`, 8 vCPU, fork pair). rocm-ernic's
+  `tests/p4_fp8_client.c` at `ernic_source_pin` has `#define P4_NODE
+  "/dev/ernic-p4"` and opens that path whatever `RDMA_DEVICE` names
+  (lines 55 and 265, read from the checkout at `90434a2`). The driver
+  makes a node a NIC, `/dev/ernic-p4` and `/dev/ernic-p4.1` on that guest.
+  So with `RDMA_DEVICE=rocm-rdma-ernic1` the client loaded the program
+  into the first NIC and ran its write on the second, which failed:
+  `write completed with status 10 (remote access error)`, exit 1, and
+  `p4_fp8_bench` on that device the same. The driver and the server are
+  sound: the same binary, its `open` sent to `/dev/ernic-p4.1` by an
+  `LD_PRELOAD` shim written for the run, exited 0 on the second NIC, and
+  the bench then ran at 163.0 and 156.9 MB/s. Here, the play's
+  `quickstart_p4_node` is what the pre-check looks at and is never handed
+  to the client, which has no way to take it; the play runs the client on
+  the first device `ibv_devinfo -l` lists, which was `rocm-rdma-ernic0`,
+  the NIC of `/dev/ernic-p4`, in every run recorded here. Setting the
+  variable to another node therefore checks that node and still programs
+  the first NIC. **The fix belongs in rocm-ernic** (the node from the IB
+  device, or an argument); once the client takes one, the play should pass
+  it. Nothing was changed here, and no patch was written for either. Not
+  run: a guest whose first listed IB device is not its first NIC. This
+  note was written the day after from that run's logs and the client's
+  source; no guest was started for it.
 - **The P4 program and its entry stay in that NIC until its ernic server
   restarts.** Nothing unloads them. A two-equal-operand RDMA WRITE on that
   NIC is a reduction from then on; a write with one gather entry, which is
@@ -6433,8 +6476,8 @@ Two things, and neither is the build machine being short of anything:
   model: 0x6b)` and `x87 FPU will use FXSAVE`, and of `ssse3 sse4_1 sse4_2
   popcnt avx avx2 xsave` its `/proc/cpuinfo` has none, only `pni`.
   `run-vm`, and so every stack, passes `-cpu EPYC,vendor=AuthenticAMD`,
-  a model that has `sse4_2` and `avx2`. So anything in a bake that asks the CPU what it has is told
-  "x86-64 baseline", whatever the host is.
+  a model that has `sse4_2` and `avx2`. So anything in a bake that asks
+  the CPU what it has is told "x86-64 baseline", whatever the host is.
 - **perftest's `configure` asks.** `configure.ac` decides `HAVE_AVX2` and
   `HAVE_SSE42` with `AC_RUN_IFELSE`: it compiles a program that returns
   `__builtin_cpu_supports("avx2")` and runs it, with no switch and no
@@ -7584,9 +7627,9 @@ interfaces.
   griffe loads it, outside code spans, fenced blocks and indented code
   blocks: the docstrings name fleet XML elements as they are written,
   mkdocstrings renders a docstring as Markdown, and Markdown hands
-  `<vm-count>` to the page as a tag, which a browser drops. And it resolves each module's path
-  through the symlink, so "Source code in" reads
-  `qemu/qemu-tool/<module>.py`. The second sets griffe's private
+  `<vm-count>` to the page as a tag, which a browser drops. And it
+  resolves each module's path through the symlink, so "Source code in"
+  reads `qemu/qemu-tool/<module>.py`. The second sets griffe's private
   `Module._filepath`, there being no public setter; if griffe renames it
   the pages print the symlink's path and nothing else changes. No source
   file is rewritten for either. The file also has `references()`, which
@@ -7597,11 +7640,12 @@ interfaces.
   private names off (`filters: ["!^_"]`); members in source order;
   signatures separate, with annotations; source on.
   `show_if_no_docstring: true`, so a public function with no docstring is
-  listed with its signature and source: 48 of the 131 public top-level
+  listed with its signature and source: 48 of the 136 public top-level
   functions and classes have none, and `caps`, `cli`, `list_vms`, `qcow`
   and `shutdown` would otherwise show no member at all. Module constants and
   dataclass fields are listed for the same reason, which is what makes
-  `FleetConfig` 72 entries long.
+  `FleetConfig` 73 entries long. `tests/test_api_docs.py` holds those
+  three numbers, and the count of pages, to the tree.
 - **Nothing is silenced.** The build is `--strict` and logs no warning;
   no griffe or mkdocs message is filtered.
 - **`tests/test_api_docs.py`** needs neither mkdocs nor griffe. It fails
@@ -7626,9 +7670,10 @@ interfaces.
   to a second page was rendered there with the test green; the second
   missed `> ::: qemu_tool.ports` and `- ::: qemu_tool.ports`, which
   Python-Markdown also hands to mkdocstrings and which a reviewer saw
-  rendered by a strict build with no warning. The pages counted are the files directly under `docs/api/`,
-  so the test also fails on such a line in any other page under `docs/`
-  (which therefore cannot quote a directive in its prose)
+  rendered by a strict build with no warning. The pages counted are the
+  files directly under `docs/api/`, so the test also fails on such a line
+  in any other page under `docs/` (which therefore cannot quote a
+  directive in its prose)
   and on a directory under `docs/api/`: mkdocs renders every page there,
   in the nav or not, and `::: qemu_tool.ports` appended to
   `docs/documentation.md`, or put in a new `docs/api/more/x.md`, used to
@@ -7681,38 +7726,48 @@ interfaces.
   of the site and since before the API pages. On an API page the link
   opens the page's `:::` file, not the docstrings.
 - **The pages are large, because the source is on them, and the search
-  index is not.** Measured on the build of 2026-11-20 with the three
-  removed elements gone, in bytes: `api/settings` is 535,408 (50,827
-  gzipped), `api/guests` 483,932 and `api/stacks` 460,022, where the
-  largest page before was `fleet-xml` at 98,638; `site/api` is 2.26 MB.
-  Nothing fails on it. If it ever matters, the lever is `show_source`.
+  index is not.** Two builds, rounded, because a page's size moves with
+  every docstring and an exact byte count is out of date at the next
+  edit. On 2026-11-20, with the three removed elements gone:
+  `api/settings` about 535 kB (51 kB gzipped), `api/guests` 484 kB and
+  `api/stacks` 460 kB, where the largest page before was `fleet-xml` at
+  99 kB; `site/api` 2.3 MB. On 2026-11-21, with the two settings added
+  since: 543 kB (52 kB gzipped), 527 kB and 463 kB, `fleet-xml` 101 kB,
+  `site/api` still 2.3 MB. Nothing fails on it. If it ever matters, the
+  lever is `show_source`.
 - **The folded source is kept out of the site search**, by two templates
   under `.mkdocs/templates/python/material/` (`function.html.jinja`,
   `class.html.jinja`) that `custom_templates` in `.mkdocs.yml` names. Each
   extends mkdocstrings' own template and puts its `source` block, through
   `super()`, inside `<section data-search-exclude>`, which the search
   plugin of Material skips. The source is still on the page.
-  - Without them `search_index.json` is 509,326 bytes (127,507 gzipped)
-    and the text of its `api/` entries 381,838 of that: the largest
-    entry is the source of `render_compose`, 42,540 bytes, and a search
+  - Without them `search_index.json` was about 509 kB (128 kB gzipped)
+    and the text of its `api/` entries about 382 kB of that: the largest
+    entry was the source of `render_compose`, about 43 kB, and a search
     for `subprocess` or `return` found function source ahead of the
-    documentation pages. With them it is 197,599 bytes (50,487 gzipped),
-    the `api/` entries 83,621, the largest 3,350, and no entry holds
+    documentation pages. With them it was about 198 kB (50 kB gzipped),
+    the `api/` entries about 84 kB, the largest 3.4 kB, and no entry held
     "Source code in". Both built from one tree on 2026-11-20, the first
     with the `custom_templates` line taken out of a copy of the config.
+    The build of 2026-11-21, with them: about 205 kB (53 kB gzipped), the
+    `api/` entries 87 kB, the largest still 3.4 kB, and no entry holding
+    "Source code in". It was not built without them again. That build's
+    two gzipped figures are `gzip -9`: 52.5 kB here and 51.7 kB for
+    `api/settings`; at the default level they are 52.6 and 53.3 kB.
   - **Those figures are for a build with the committed placeholder
     `docs/perf/index.md`**, which is what a local build has. The publish
     workflow writes the real page over it before it builds, so the
-    published index is larger by that page's text: a reviewer who ran `render-site-perf.py` first measured about
-    3.6 kB more in each build. That figure moves with
-    the perf history and was not rebuilt for this note.
+    published index is larger by that page's text: a reviewer who ran
+    `render-site-perf.py` first measured about 3.6 kB more in each build.
+    That figure moves with the perf history and was not rebuilt for this
+    note.
   - **The wrapper is a `<section>` and must not become a `<div>`.** The
     plugin compares elements by tag name alone (`Element.__eq__` in
     `material/plugins/search/plugin.py`, 9.8.2), so the first `<div>` that
     closes inside the block, the line-number column, ends the exclusion.
-    Built that way first, on an earlier tree: the index went from 505,937
-    to 497,967 bytes and the source of `render_compose` was still in it. Nothing inside a
-    source block is a `<section>`.
+    Built that way first, on an earlier tree: the index went from about
+    506 kB to 498 kB and the source of `render_compose` was still in it.
+    Nothing inside a source block is a `<section>`.
   - The templates name `_base/function.html.jinja`, `_base/class.html.jinja`
     and the block `source`, which are mkdocstrings-python's (2.0.11). If
     it renames one, the build fails on the missing template, or the block
@@ -7827,7 +7882,9 @@ ordinary guest user. `p4_fp8_client` is rocm-ernic's own
 layout it speaks is the pinned device's and is copied nowhere in this repo;
 it loads the program (LOAD_BEGIN, chunked LOAD_CHUNK, LOAD_COMMIT), installs
 the `Ing.policy` → `Ing.reduce_with` entry and checks one 4096-element
-reduction. `p4_fp8_bench`
+reduction. It opens `/dev/ernic-p4` and no other node, so on a guest with
+more than one NIC it programs the first, whatever `RDMA_DEVICE` says; see
+the dated finding under `--p4-test`. `p4_fp8_bench`
 ([source](ansible/playbooks/roles/rocm_ernic_setup/files/p4_fp8_bench.c)) is
 this repo's: plain verbs, no P4 ABI, 2000 writes of 262144 elements
 (`IONIC_FP8_MAP_MAX`, the most one operation moves), alternating operands and

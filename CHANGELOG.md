@@ -225,9 +225,10 @@ All notable changes to this project will be documented in this file.
     the RELAX NG schema anywhere but on the documents listed as its
     looseness; it needs `lxml` or `xmllint`, skips without one and fails
     without one under `CI=true`. `Gen Compose Check` installs `lxml`.
-  - *Run:* the four shipped fleet files and 260 small documents through the
-    parser and both schemas with lxml (libxml2 2.14.6). By hand, in a
-    local container and in no workflow, on the 257 documents there were
+  - *Run:* the four shipped fleet files and 296 small documents through the
+    parser and both schemas with lxml, on libxml2 2.14.6 and on 2.15.2. By
+    hand, in a local container and in no workflow, on the 257 documents
+    there were
     before the last three elements were removed: the same files and
     documents through the RELAX NG schema with jing, which agreed with libxml2 on
     every one, and through the XSD with the JDK's own validator (Xerces),

@@ -273,6 +273,39 @@ class Modules(unittest.TestCase):
             self.assertIsNone(ast.get_docstring(tree), name)
             self.assertEqual(defined(tree), [], name)
 
+    def test_the_counts_in_agents_md_are_the_trees(self) -> None:
+        # Four numbers AGENTS.md gives in the present tense. Two of them
+        # were left behind by changes that added a function and a setting.
+        agents = " ".join((REPO / "AGENTS.md").read_text().split())
+        public = bare = 0
+        fields = None
+        for name in sorted(modules() - set(EXCLUDED)):
+            path = PACKAGE.joinpath(*name.split(".")[1:]).with_suffix(".py")
+            for node in ast.parse(path.read_text()).body:
+                if not isinstance(node, (ast.FunctionDef, ast.ClassDef,
+                                         ast.AsyncFunctionDef)):
+                    continue
+                if node.name.startswith("_"):
+                    continue
+                public += 1
+                bare += ast.get_docstring(node) is None
+                if node.name == "FleetConfig":
+                    fields = sum(isinstance(item, ast.AnnAssign)
+                                 for item in node.body)
+        self.assertIn(f"{bare} of the {public} public top-level functions "
+                      "and classes have none", agents)
+        self.assertIsNotNone(fields)
+        self.assertIn(f"`FleetConfig` {fields} entries long", agents)
+        words = "zero one two three four five six seven eight nine ten".split()
+        others = len(pages()) - 1
+        self.assertIn("index.md", pages())
+        self.assertLess(others + 1, len(words),
+                        "more API files than this test has number words "
+                        "for: add words here, then update AGENTS.md")
+        self.assertIn(
+            f"holds {words[others + 1]} short Markdown files: an index, and "
+            f"{words[others]} pages", agents)
+
     def test_what_counts_as_defined(self) -> None:
         tree = ast.parse(
             "from a import shown_nowhere\n"

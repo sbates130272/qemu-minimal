@@ -791,8 +791,11 @@ exactly what it did before.
   found. `quick-start test` and `--hipfile-test` treat the namespace as
   scratch and write it afresh on every run, so neither minds.
   `run-vm --nvme-recreate` starts a guest on an empty disk.
-- **It made no difference to the test rates** on the default fleet with one
-  guest, single runs: see the table in `AGENTS.md`.
+- **No difference in the test rates was shown, and none was ruled out.**
+  On the default fleet with one guest, in single runs (two a side for the
+  hipFile reads, three for the NVMe test), the 4096 and the 512 figures
+  overlapped in every row. That many runs cannot show a small difference
+  if there is one: see the table in `AGENTS.md`.
 
 Every later command against that fleet needs no flags, unless it starts
 the fleet and the fleet's `<vm-images-dir>` or `<qemu-tool-src>` is not the
@@ -905,18 +908,19 @@ cannot make on Intel hardware, so expect such a guest not to boot.
 Not yet run on an Intel host: the `quickstart-boot` check prints the host's
 vendor and asserts the guest's, and its first run on an Intel runner is the
 proof. On an AMD runner the check passes with or without this and says so
-in its summary ("what this run shows"). Read from the guest kernel's source and not run: on Intel hardware an
-AMD-vendor guest kernel treats itself as not affected by the Intel-only CPU
-vulnerabilities (Meltdown, L1TF, MDS, MMIO stale data, BHI) and does not
-apply those mitigations inside the guest, and applies the AMD family 23 ones
-instead, so benchmark figures from an Intel host are not comparable with
-earlier ones from it. Also read and not run: an AMD-vendor guest gets
-QEMU's AMD memory map, with a reserved range just below 1 TiB, so on an
-Intel host a fleet of your own whose `<vm-pci-hole64-size>` reaches 1 TiB
-may now need a larger `<vm-cpu-phys-bits>` (QEMU says `phys-bits too low`
-at start); and `modprobe ptp_kvm` in a guest on an Intel host is expected
-to fault. A domain from `run-vm --convert-to-libvirt` has the
-host's CPU whatever these say, and says so on stderr.
+in its summary ("what this run shows"). Read from the guest kernel's source
+and not run: on Intel hardware an AMD-vendor guest kernel treats itself as
+not affected by the Intel-only CPU vulnerabilities (Meltdown, L1TF, MDS,
+MMIO stale data, BHI) and does not apply those mitigations inside the
+guest, and applies the AMD family 23 ones instead, so benchmark figures
+from an Intel host are not comparable with earlier ones from it. Also read
+and not run: an AMD-vendor guest gets QEMU's AMD memory map, with a reserved
+range just below 1 TiB, so on an Intel host a fleet of your own whose
+`<vm-pci-hole64-size>` reaches 1 TiB may now need a larger
+`<vm-cpu-phys-bits>` (QEMU says `phys-bits too low` at start); and `modprobe
+ptp_kvm` in a guest on an Intel host is expected to fault. A domain from
+`run-vm --convert-to-libvirt` has the host's CPU whatever these say, and
+says so on stderr.
 
 `<vm-vcpus>` must not drop below 4 on a stack with an ernic. `ionic_lif_size()`
 derives its EQ count from `num_online_cpus()` and `ionic_create_rdma_admin()`

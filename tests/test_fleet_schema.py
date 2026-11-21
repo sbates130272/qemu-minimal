@@ -1590,7 +1590,7 @@ class Differential(unittest.TestCase):
 
     def test_every_setting_is_held_to_its_kind_by_all_three(self) -> None:
         # One accepted and one refused document for every flat setting,
-        # the 27 no other document or shipped file sets included.
+        # the ones no other document or shipped file sets included.
         self.assertEqual(
             sorted(self.KIND_SAMPLES), sorted(fleet_schema.KIND_PATTERNS))
         index = 0
@@ -2089,6 +2089,104 @@ class Shipped(unittest.TestCase):
     def test_the_site_has_the_page(self) -> None:
         config = (REPO_ROOT / ".mkdocs.yml").read_text()
         self.assertRegex(config, r"(?m)^  - .*: fleet-xml\.md$")
+
+
+_WORDS = ("zero one two three four five six seven eight nine ten eleven "
+          "twelve thirteen fourteen fifteen sixteen seventeen eighteen "
+          "nineteen twenty").split()
+
+
+def _word(number: int) -> str:
+    """A small number as the prose writes it; digits past twenty."""
+    return _WORDS[number] if number < len(_WORDS) else str(number)
+
+
+def _sets(document: str, tags) -> bool:
+    return any(re.search(rf"<{re.escape(tag)}[\s/>]", document)
+               for tag in tags)
+
+
+class Counts(unittest.TestCase):
+    """The numbers the prose gives for these lists are the lists' own.
+
+    AGENTS.md, the README and the man page count the documents, the
+    settings and the removed elements in words a reader takes as current.
+    Each was right when written and three were left behind by a later
+    change that grew a list. Needs no validator.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.agents = " ".join(
+            (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8").split())
+
+    def test_the_document_lists(self) -> None:
+        total = len(documents())
+        self.assertEqual(total, len(AGREE) + len(LOOSER) + len(XSD_LOOSER))
+        for sentence in (
+                f"`AGREE` is {len(AGREE)} small documents",
+                f"`LOOSER` is {_word(len(LOOSER))} the parser refuses",
+                f"names the {_word(len(XSD_TAKES))} documents of `AGREE`",
+                f"`XSD_LOOSER` is {_word(len(XSD_LOOSER))} more",
+                f"`xsd_looser()`: {total} documents",
+                f"writes the {total} documents",
+                f"{BIG_BLOCK.count('<server ')} `<server>` entries"):
+            with self.subTest(sentence=sentence):
+                self.assertIn(sentence, self.agents)
+
+    def test_no_other_total_reads_as_current(self) -> None:
+        # "The schema corpus is 260 documents" stayed in the present tense
+        # through three changes that each added documents.
+        for match in re.finditer(
+                r"corpus is (\d+) documents|(\d+) small documents",
+                self.agents):
+            number = int(match.group(1) or match.group(2))
+            with self.subTest(text=match.group(0)):
+                self.assertIn(number, (len(documents()), len(AGREE)))
+        changelog = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        unreleased = changelog.split("\n## [", 2)[1]
+        self.assertIn(
+            f"the four shipped fleet files and {len(documents())} small "
+            "documents", " ".join(unreleased.split()))
+
+    def test_the_orders_of_once_only_children(self) -> None:
+        # What test_children_in_every_order_and_none_twice asks: one
+        # document an order, and one more for each child given again.
+        asked = 0
+        for kind in fleet_xml.SERVER_TYPES:
+            once = [name for name, shape
+                    in fleet_schema._server_children(kind)
+                    if shape not in ("values", "flags")]
+            asked += sum(1 + len(order)
+                         for order in itertools.permutations(once))
+        self.assertIn(f"({asked} documents, all three answers)", self.agents)
+
+    def test_the_settings_no_document_sets(self) -> None:
+        text = "".join(case["document"] for case in documents()) + "".join(
+            path.read_text(encoding="utf-8")
+            for path in sorted((REPO_ROOT / "qemu" / "stacks").glob("*.xml")))
+        tags = [setting.tag for setting in fleet_xml._SETTINGS]
+        unset = [tag for tag in tags if not _sets(text, [tag])]
+        self.assertIn(
+            f"{len(unset)} of the {len(tags)} are in no listed document "
+            "and no shipped file", self.agents)
+
+    def test_the_removed_elements(self) -> None:
+        removed = fleet_xml.REMOVED_ELEMENTS
+        setting = [case for case in documents()
+                   if _sets(case["document"], removed)]
+        self.assertEqual(len(setting), len(removed))
+        count = _word(len(removed))
+        self.assertIn(f"{count.capitalize()} documents set a removed "
+                      "element each", self.agents)
+        self.assertIn(f"the format has lost {count} elements in all",
+                      self.agents)
+        for name in ("README.md", "qemu/qemu-tool/man/qemu-tool.1"):
+            with self.subTest(file=name):
+                self.assertIn(
+                    f"{count.capitalize()} elements the format used to have",
+                    " ".join((REPO_ROOT / name).read_text(
+                        encoding="utf-8").split()))
 
 
 if __name__ == "__main__":
