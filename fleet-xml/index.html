@@ -1,0 +1,2717 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Documentation, reports, and performance tracking for qemu-minimal — a minimal QEMU compose stack for rocm-ernic and rocjitsu GPU emulation.">
+      
+      
+      
+        <link rel="canonical" href="https://sbates130272.github.io/qemu-minimal/fleet-xml/">
+      
+      
+        <link rel="prev" href="../documentation/">
+      
+      
+        <link rel="next" href="../api/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.2">
+    
+    
+      
+        <title>Fleet XML reference - qemu-minimal</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+      <link rel="stylesheet" href="../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="deep-orange">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#fleet-xml-reference" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="qemu-minimal" class="md-header__button md-logo" aria-label="qemu-minimal" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            qemu-minimal
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Fleet XML reference
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="deep-orange"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="teal" data-md-color-accent="deep-orange"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/sbates130272/qemu-minimal" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    sbates130272/qemu-minimal
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="qemu-minimal" class="md-nav__button md-logo" aria-label="qemu-minimal" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    qemu-minimal
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/sbates130272/qemu-minimal" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    sbates130272/qemu-minimal
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Documentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Fleet XML reference
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Fleet XML reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-format" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The format
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#value-kinds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Value kinds
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#elements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Elements
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Elements">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shape" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Shape
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#images" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Images
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#network" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Network
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#topology" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Topology
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ernic" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ERNIC
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#vm-defaults" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        VM defaults
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#misc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Misc
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#bake-and-publish" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bake and publish
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#logging" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Logging
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#removed-elements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Removed elements
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-devices-block" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The devices block
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The devices block">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#servers-of-type-ernic" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Servers of type ernic
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#servers-of-type-rocjitsu" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Servers of type rocjitsu
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#servers-of-type-sdxi" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Servers of type sdxi
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#servers-of-type-spdk" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Servers of type spdk
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#backend-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backend types
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-schemas" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The schemas
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The schemas">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#where-the-xsd-is-looser" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where the XSD is looser
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#validating-a-file" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Validating a file
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#editors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Editors
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-the-schema-cannot-check" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the schema cannot check
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../api/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python API
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4" id="__nav_4_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Python API
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings and fleet XML
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/stacks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Stack generation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/guests/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guests
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/quick-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/inspection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inspection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/teardown/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Teardown
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/publishing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Publishing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Command line
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../publishing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Publishing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../perf/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-format" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The format
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#value-kinds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Value kinds
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#elements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Elements
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Elements">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shape" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Shape
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#images" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Images
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#network" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Network
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#topology" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Topology
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ernic" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ERNIC
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#vm-defaults" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        VM defaults
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#misc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Misc
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#bake-and-publish" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bake and publish
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#logging" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Logging
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#removed-elements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Removed elements
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-devices-block" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The devices block
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The devices block">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#servers-of-type-ernic" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Servers of type ernic
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#servers-of-type-rocjitsu" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Servers of type rocjitsu
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#servers-of-type-sdxi" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Servers of type sdxi
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#servers-of-type-spdk" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Servers of type spdk
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#backend-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backend types
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-schemas" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The schemas
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The schemas">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#where-the-xsd-is-looser" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where the XSD is looser
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#validating-a-file" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Validating a file
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#editors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Editors
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-the-schema-cannot-check" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the schema cannot check
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/sbates130272/qemu-minimal/edit/main/docs/fleet-xml.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="fleet-xml-reference">Fleet XML reference<a class="headerlink" href="#fleet-xml-reference" title="Permanent link">&para;</a></h1>
+<!-- GENERATED by `qemu-tool fleet-schema --format md` from the tables in
+     qemu/qemu-tool/fleet_xml.py. Do not edit this file: change the tables and
+     write it again. tests/test_fleet_schema.py fails when it is out of date. -->
+
+<p>Fleet XML is the only settings format <code>qemu-tool</code> reads. This page lists every
+element the parser knows. It is generated from the parser's own tables, as are
+the two <a href="#the-schemas">schemas</a> that go with it, so none of them can describe
+an element the parser does not have.</p>
+<p><a href="https://github.com/sbates130272/qemu-minimal/blob/main/qemu/stacks/rocm-golden.xml"><code>qemu/stacks/rocm-golden.xml</code></a>
+is the annotated example to copy or to lay an overlay on. <code>qemu-tool check --xml
+FILE</code> reports everything wrong with a file, and is the check that counts.</p>
+<h2 id="the-format">The format<a class="headerlink" href="#the-format" title="Permanent link">&para;</a></h2>
+<p>A file is one <code>&lt;fleet&gt;</code> element in the namespace <code>http://qemu-tool/fleet/1.0</code>. Each setting
+is a child element whose text is the value, in any order:</p>
+<div class="highlight"><pre><span></span><code><span class="nt">&lt;fleet</span><span class="w"> </span><span class="na">xmlns=</span><span class="s">"http://qemu-tool/fleet/1.0"</span><span class="nt">&gt;</span>
+<span class="w">  </span><span class="nt">&lt;vm-count&gt;</span>2<span class="nt">&lt;/vm-count&gt;</span>
+<span class="w">  </span><span class="nt">&lt;vm-name-prefix&gt;</span>rocm-golden<span class="nt">&lt;/vm-name-prefix&gt;</span>
+<span class="w">  </span><span class="nt">&lt;vm-vcpus&gt;</span>4<span class="nt">&lt;/vm-vcpus&gt;</span>
+<span class="nt">&lt;/fleet&gt;</span>
+</code></pre></div>
+<p>An element that is absent keeps its default. The parser is strict: an element
+it does not know, an element given twice, an attribute, a nested element and
+text directly under <code>&lt;fleet&gt;</code> are each an error. Comments are allowed. <code>&lt;devices&gt;</code>
+is the one element with attributes and children, and has <a href="#the-devices-block">a section of its
+own</a>.</p>
+<p><code>--xml</code> is repeatable, and a later file overrides the elements it sets. The
+schemas and this page describe one file.</p>
+<h2 id="value-kinds">Value kinds<a class="headerlink" href="#value-kinds" title="Permanent link">&para;</a></h2>
+<p>Every setting has a kind, which is how the parser reads its text. White space
+here means what Python's <code>str.strip()</code> removes, which is more than a space, a
+tab and a line break.</p>
+<table>
+<thead>
+<tr>
+<th>Kind</th>
+<th>The parser accepts</th>
+<th>The schemas check</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>string (<code>str</code>)</td>
+<td>Any text, kept as written, surrounding white space included. An empty element is the empty string.</td>
+<td>Nothing: any text.</td>
+</tr>
+<tr>
+<td>path (<code>expand</code>)</td>
+<td>Any text. <code>~</code> and <code>$VARS</code> are expanded when the file is parsed, so every command sees the same path.</td>
+<td>Nothing: any text.</td>
+</tr>
+<tr>
+<td>command-line words (<code>args</code>)</td>
+<td>Words as a shell would split them: quotes group and are removed, nothing is expanded. An unclosed quote, a control character and a word that spans lines are errors.</td>
+<td>That it holds no control character (U+007F, U+0085, U+2028 or U+2029). Quoting is not something a grammar can check: an unclosed quote, a trailing backslash and a quoted word that spans lines pass the schema.</td>
+</tr>
+<tr>
+<td>boolean (<code>bool</code>)</td>
+<td><code>true</code>, <code>false</code>, <code>1</code>, <code>0</code>, <code>yes</code> or <code>no</code>, in any letter case, with no white space round it. An empty element is an error.</td>
+<td>The same six words in any case, exactly.</td>
+</tr>
+<tr>
+<td>integer (<code>int</code>)</td>
+<td>What Python's <code>int()</code> takes in base 10: an optional sign, decimal digits, single underscores between digits, white space round the whole. An empty element is an error. No range is checked here; the command that reads the value may check one.</td>
+<td>The same form, with one difference: any character outside ASCII that is not white space passes as a digit. Which characters are decimal digits depends on a Unicode version, and a validator's is not Python's, so the schema does not ask. Nor does it count: an integer of more digits than <code>int()</code> converts (4300 unless Python is told otherwise) passes the schema and not the parser. An integer with thousands of underscores can stop a Java validator; see <a href="#what-the-schema-cannot-check">below</a>.</td>
+</tr>
+<tr>
+<td>port (<code>port</code>)</td>
+<td>A port number from 1 to 65535 in ASCII digits, or the word <code>auto</code> in any case; white space round it is ignored.</td>
+<td>The same form, range included. A number of more digits than Python's <code>int()</code> converts, which takes thousands of leading zeros, passes the schema and not the parser.</td>
+</tr>
+<tr>
+<td>address (<code>addr</code>)</td>
+<td>An IPv4 or IPv6 literal, with or without square brackets, with no zone and no host name. Empty, or white space alone, is the default.</td>
+<td>The same form: octets of 0 to 255 with no leading zero, groups of one to four hexadecimal digits, one <code>::</code> at most, brackets in pairs.</td>
+</tr>
+<tr>
+<td>CPU vendor (<code>vendor</code>)</td>
+<td>Exactly 12 printable ASCII characters (space to <code>~</code>) with no comma, such as <code>AuthenticAMD</code> or <code>GenuineIntel</code>, kept as written with no white space stripped; or an empty element, which is a value of its own (state no vendor) and not the default.</td>
+<td>The same form, exactly.</td>
+</tr>
+<tr>
+<td>block size (<code>blocksize</code>)</td>
+<td><code>512</code> or <code>4096</code>, a number of bytes in ASCII digits; white space round it is ignored. No sign, no underscore, no leading zero and no unit. An empty element is an error.</td>
+<td>The same form, exactly.</td>
+</tr>
+<tr>
+<td>MTU (<code>mtu</code>)</td>
+<td>A number of bytes from 1500 to 9198 in four ASCII digits; white space round it is ignored. No sign, no underscore, no leading zero and no unit. An empty element is an error.</td>
+<td>The same form, range included.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="elements">Elements<a class="headerlink" href="#elements" title="Permanent link">&para;</a></h2>
+<p><strong>Default</strong> is the value when the element is absent; <code>(empty)</code> is the empty
+string, and for many elements the command that reads it then applies a default
+of its own, which the description gives. <strong>Sparse</strong> elements are left out when
+<code>FleetXml.emit()</code> writes a configuration back out as XML and the value is an
+empty string, zero or false; no command calls it today, so the column matters
+to code that does.</p>
+<h3 id="shape">Shape<a class="headerlink" href="#shape" title="Permanent link">&para;</a></h3>
+<p>How many guests a fleet has, what they are called and where their SSH ports go.</p>
+<table>
+<thead>
+<tr>
+<th>Element</th>
+<th>Kind</th>
+<th>Default</th>
+<th>Sparse</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;vm-count&gt;</code></td>
+<td>integer</td>
+<td><code>1</code></td>
+<td>no</td>
+<td>Number of guests in the fleet; each gets its own QEMU service and its own set of device servers. Integer, at least 1 (render exits below that), default 1. Baked into the generated compose file, so a change means re-rendering. Bounded by 64 mesh NICs (warning above 40) and 244 NICs in total.</td>
+</tr>
+<tr>
+<td><code>&lt;vm-name-prefix&gt;</code></td>
+<td>string</td>
+<td><code>qemu-fleet</code></td>
+<td>no</td>
+<td>Prefix of every guest's name; guest N is &lt;prefix&gt;-N, the name run-vm passes on for the guest's hostname. String, default qemu-fleet. gen-compose takes the default for an empty element; quick-start does not, and looks for guests named -1, -2. Names run from &lt;prefix&gt;-1. The guest lower-cases it and turns characters outside a-z, 0-9 and - into hyphens for its hostname.</td>
+</tr>
+<tr>
+<td><code>&lt;ssh-port-base&gt;</code></td>
+<td>integer</td>
+<td><code>2222</code></td>
+<td>no</td>
+<td>Host port published for guest 1's SSH; guest N gets the base plus N minus 1. Integer, default 2222; kind is int, so auto is a parse error. Published on &lt;publish-bind-addr&gt; to container port 2222. quick-start moves the range in an overlay of its own when a port is taken.</td>
+</tr>
+<tr>
+<td><code>&lt;stop-grace-period&gt;</code></td>
+<td>string</td>
+<td><code>120s</code></td>
+<td>no</td>
+<td>How long docker waits after asking a guest's QEMU container to stop before it kills it. Compose duration such as 120s (the default); passed through as text, not validated by the parser; empty takes the default. Applies to the qemu-N services only. QEMU exits on SIGTERM without shutting the guest down, so this does not make a stop graceful.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="images">Images<a class="headerlink" href="#images" title="Permanent link">&para;</a></h3>
+<p>The container images a stack runs and the guest disk image its guests pull.</p>
+<table>
+<thead>
+<tr>
+<th>Element</th>
+<th>Kind</th>
+<th>Default</th>
+<th>Sparse</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;qemu-ref&gt;</code></td>
+<td>string</td>
+<td>(empty)</td>
+<td>yes</td>
+<td>Container image that runs QEMU for each guest; must share a build stamp with the ernic and rocjitsu images. Image reference, repository:tag; required (an empty one stops the render). A tag with no &lt;date&gt;.g&lt;sha&gt; stamp is warned about and left out of the comparison. A repository ending -sbates-fork is taken as the fork QEMU, which &lt;vm-nvme-vram&gt;, &lt;vm-pci-mmio-bridge&gt; and dma-buf RDMA need.</td>
+</tr>
+<tr>
+<td><code>&lt;ernic-ref&gt;</code></td>
+<td>string</td>
+<td>(empty)</td>
+<td>yes</td>
+<td>Container image of the rocm-ernic server that emulates each RDMA NIC; same build stamp and vfu.&lt;sha&gt; as QEMU. Image reference, repository:tag; required. The render compares the stamp and the vfu.&lt;sha&gt; part of the tag with &lt;qemu-ref&gt;'s. That its ernic.&lt;sha&gt; matches the guest's driver commit is held by tests/test_playbook_pins.py, not by the render.</td>
+</tr>
+<tr>
+<td><code>&lt;rocjitsu-ref&gt;</code></td>
+<td>string</td>
+<td>(empty)</td>
+<td>yes</td>
+<td>Container image of the rocjitsu server that emulates each GPU; same build stamp as the QEMU and ernic images. Image reference, repository:tag; required (an empty one stops the render).</td>
+</tr>
+<tr>
+<td><code>&lt;sdxi-image&gt;</code></td>
+<td>string</td>
+<td>(empty)</td>
+<td>yes</td>
+<td>Container image of the SDXI device server; required when a guest has an SDXI device. Image reference, repository:tag. Needed when &lt;sdxi-per-vm&gt; is non-zero or &lt;devices&gt; has a server of type sdxi. Not compared with the servers' stamp by the render; its sdxi.&lt;sha7&gt; against the guest's driver commit is a test's check.</td>
+</tr>
+<tr>
+<td><code>&lt;spdk-image&gt;</code></td>
+<td>string</td>
+<td>(empty)</td>
+<td>yes</td>
+<td>Container image of the SPDK vfio-user NVMe controller; required when &lt;devices&gt; has a server of type spdk. Image reference, repository:tag. Its vfu.&lt;sha&gt; must equal the one in &lt;qemu-ref&gt;, stamped tag or not. Nothing runs it without a spdk entry in &lt;devices&gt;.</td>
+</tr>
+<tr>
+<td><code>&lt;backing-ref&gt;</code></td>
+<td>string</td>
+<td>(empty)</td>
+<td>yes</td>
+<td>Published guest disk image that gen-vm and quick-start pull as each guest's backing file. OCI reference by dated tag YYYYMMDD.g&lt;sha7&gt; or name@sha256:...; empty pulls nothing. gen-compose refuses no tag, latest, qm.&lt;sha7&gt; and near misses of those, and, in the repository &lt;publish-ref&gt; names, any tag but the dated one. Any other tag must share the servers' stamp, or is warned about if unstamped. gen-vm --bake ignores it.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="network">Network<a class="headerlink" href="#network" title="Permanent link">&para;</a></h3>
+<p>The docker network every service's address is derived from. The guests' RDMA NIC network, 192.168.100.0/24, and the first four bytes of each emulated NIC's MAC address, 72:6f:63:6d, are fixed: the guest image assumes the first and the quick-start playbook the second.</p>
+<table>
+<thead>
+<tr>
+<th>Element</th>
+<th>Kind</th>
+<th>Default</th>
+<th>Sparse</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;fleet-prefix&gt;</code></td>
+<td>string</td>
+<td><code>172.31</code></td>
+<td>no</td>
+<td>First two octets of the stack's docker network; every service gets a fixed address under it. Two dotted octets, default 172.31; not validated by the parser, empty takes the default. Third octet is the service family: 0 infra, 1 ernic, 2 rocjitsu, 3 qemu, 4 sdxi, 5 spdk; the last is the device's number.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="topology">Topology<a class="headerlink" href="#topology" title="Permanent link">&para;</a></h3>
+<p>How many emulated devices each guest gets, and where they sit on its PCIe bus.</p>
+<table>
+<thead>
+<tr>
+<th>Element</th>
+<th>Kind</th>
+<th>Default</th>
+<th>Sparse</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;ernic-per-vm&gt;</code></td>
+<td>integer</td>
+<td><code>1</code></td>
+<td>no</td>
+<td>Emulated RDMA NICs per guest; each is its own mesh node, so it multiplies against the mesh's node ceiling. Integer, at least 1, default 1. Fleet total is refused above 64 mesh nodes or 244 NICs and warned about above 40. Replaced by the &lt;devices&gt; block when one is given.</td>
+</tr>
+<tr>
+<td><code>&lt;rocjitsu-per-vm&gt;</code></td>
+<td>integer</td>
+<td><code>1</code></td>
+<td>no</td>
+<td>Emulated GPUs per guest, each served by its own rocjitsu server. Integer, at least 1, default 1. Replaced by the &lt;devices&gt; block when one is given.</td>
+</tr>
+<tr>
+<td><code>&lt;sdxi-per-vm&gt;</code></td>
+<td>integer</td>
+<td><code>0</code></td>
+<td>yes</td>
+<td>SDXI devices per guest; 0 gives none, and above 0 needs &lt;sdxi-image&gt;. Integer, default 0. Replaced by the &lt;devices&gt; block when one is given.</td>
+</tr>
+<tr>
+<td><code>&lt;vm-pcie-switch-width&gt;</code></td>
+<td>integer</td>
+<td><code>0</code></td>
+<td>no</td>
+<td>Put each guest's vfio-user devices below PCIe switches, this many devices per switch; 0 leaves them on root ports. Integer, default 0 (off). Devices are ordered NICs-per-GPU NICs then one GPU, so 2 with equal counts gives one NIC and one GPU per switch, and 3 with twice as many NICs gives two NICs and a GPU. Rendered as run-vm --vfio-user-switch-width; run-vm refuses a negative value.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="ernic">ERNIC<a class="headerlink" href="#ernic" title="Permanent link">&para;</a></h3>
+<p>Settings of the rocm-ernic servers: the TAP, the mesh, statistics and the P4 engine.</p>
+<table>
+<thead>
+<tr>
+<th>Element</th>
+<th>Kind</th>
+<th>Default</th>
+<th>Sparse</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;ernic-tap&gt;</code></td>
+<td>boolean</td>
+<td><code>false</code></td>
+<td>no</td>
+<td>Give each ernic NIC a TAP on a shared L2 network so guests have Ethernet; inter-guest RDMA tests need it. true or false; default false. Adds one tapsetup sidecar per NIC and the l2 network.</td>
+</tr>
+<tr>
+<td><code>&lt;ernic-mtu&gt;</code></td>
+<td>MTU</td>
+<td><code>1500</code></td>
+<td>no</td>
+<td>MTU of every guest's emulated ernic NICs and of the Ethernet between guests; 4192 up gives RDMA an active_mtu of 4096. 1500 to 9198, in bytes; default 1500, the device's own, which renders nothing. Anything else is a parse error. The guest's RDMA active_mtu follows the NIC: 1024 below 2144, 2048 below 4192, 4096 from there. Each guest is handed a udev rule at boot through a systemd credential (QEMU -smbios type=11), which the guest's systemd has to load (systemd-udev-load-credentials; the published image does); with ernic-tap true the l2 network and every tap are created at the same MTU. A running stack does not take a changed value: bring it down and up. Generated stacks only, run-vm --xml does not get it.</td>
+</tr>
+<tr>
+<td><code>&lt;ernic-tcp-port&gt;</code></td>
+<td>integer</td>
+<td><code>6320</code></td>
+<td>no</td>
+<td>TCP port the ernic mesh manager listens on and the workers dial; the mesh health checks match it. port number; default 6320. Used by mesh NICs only; a NIC with its own backend ignores it.</td>
+</tr>
+<tr>
+<td><code>&lt;ernic-stats-port&gt;</code></td>
+<td>integer</td>
+<td><code>9840</code></td>
+<td>no</td>
+<td>Port the ernic stats exporter serves on, and the port Prometheus scrapes it at. port number; default 9840; inside the stack network, not published on the host.</td>
+</tr>
+<tr>
+<td><code>&lt;ernic-nofile&gt;</code></td>
+<td>integer</td>
+<td><code>65536</code></td>
+<td>no</td>
+<td>Open file descriptor limit for every ernic server; Docker's default of 1024 is too low for a mesh manager. count, written as both the soft and the hard nofile ulimit; default 65536.</td>
+</tr>
+<tr>
+<td><code>&lt;p4-enable&gt;</code></td>
+<td>boolean</td>
+<td><code>false</code></td>
+<td>no</td>
+<td>Run the P4 engine (--p4) on every ernic server; quick-start --p4-test needs it true. true or false; default false. When false, p4-guest-scope and p4-program are not rendered.</td>
+</tr>
+<tr>
+<td><code>&lt;p4-guest-scope&gt;</code></td>
+<td>string</td>
+<td><code>none</code></td>
+<td>no</td>
+<td>Which guest P4 commands reach the engine: none, read counters, write table entries, or load a program. none, read, write or load, each including the ones before it; default none. Unchecked: any other word is passed to the server. Only with p4-enable; --p4-test needs load.</td>
+</tr>
+<tr>
+<td><code>&lt;p4-program&gt;</code></td>
+<td>string</td>
+<td>(empty)</td>
+<td>no</td>
+<td>Path inside the ernic container of a bmv2 JSON program loaded at start; empty leaves the engine in pass-through. a path inside the ernic container, not on the host; default empty; only rendered with p4-enable true.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="vm-defaults">VM defaults<a class="headerlink" href="#vm-defaults" title="Permanent link">&para;</a></h3>
+<p>What every guest is given. gen-vm and run-vm take most of these as the defaults of their flags; &lt;vm-pci-mmio-bridge&gt; and &lt;rocjitsu-config&gt; are read by the generator alone, &lt;vm-nvme-vram&gt; by the generator and by quick-start, for its --hipfile-test note, and &lt;vm-shm-size&gt; by the generator and by quick-start, for its /dev/shm warning.</p>
+<table>
+<thead>
+<tr>
+<th>Element</th>
+<th>Kind</th>
+<th>Default</th>
+<th>Sparse</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;vm-vcpus&gt;</code></td>
+<td>integer</td>
+<td><code>0</code></td>
+<td>no</td>
+<td>vCPUs per guest; keep it at 4 or more on an ernic stack, and vCPUs times guests near the host's core count. integer; 0 or unset leaves run-vm's default of 2; qemu-tool check FAILs a value set from 1 to 3 and does not check 0 or unset; quick-start by default (not with --no-size-from-host) replaces it with a host-derived value (floor 4, ceiling 8).</td>
+</tr>
+<tr>
+<td><code>&lt;vm-vmem&gt;</code></td>
+<td>integer</td>
+<td><code>0</code></td>
+<td>no</td>
+<td>Guest memory per VM. MiB (4096 is 4 GiB); 0 or unset leaves run-vm's default of 4096; quick-start by default (not with --no-size-from-host) replaces it with a host-derived value (floor 4096, ceiling 8192).</td>
+</tr>
+<tr>
+<td><code>&lt;vm-shm-size&gt;</code></td>
+<td>string</td>
+<td><code>8g</code></td>
+<td>no</td>
+<td>shm_size of each guest's qemu container; must be at least vm-vmem or QEMU cannot allocate guest RAM. docker size such as 8g or 5120m; one value for all guests, or a comma list of exactly vm-count values; empty or unset is 8g. quick-start by default (not with --no-size-from-host) sets it to vm-vmem plus 1024m.</td>
+</tr>
+<tr>
+<td><code>&lt;vm-nvme&gt;</code></td>
+<td>integer</td>
+<td><code>0</code></td>
+<td>no</td>
+<td>Number of emulated NVMe scratch devices per guest; run-vm creates a qcow2 for each. 0 gives none. integer; N &gt; 0 is N devices on scratch qcow2 files; -N is N devices on the host's /dev/nullb0.. (null_blk); default 0.</td>
+</tr>
+<tr>
+<td><code>&lt;vm-nvme-vram&gt;</code></td>
+<td>boolean</td>
+<td><code>false</code></td>
+<td>yes</td>
+<td>Point each guest's emulated NVMe at its first GPU's BAR 0 (VRAM) so hipFile direct reads are fast; fork QEMU only. true or false; default false; refused with vm-nvme of 0 or less; warns on a non-fork qemu-ref; generated stacks only, run-vm --xml does not get it.</td>
+</tr>
+<tr>
+<td><code>&lt;vm-nvme-block-size&gt;</code></td>
+<td>block size</td>
+<td><code>512</code></td>
+<td>no</td>
+<td>Logical and physical block size of each guest's emulated NVMe namespaces: the LBA format the guest sees in use. 512 or 4096, in bytes; default 512, QEMU's own, which renders nothing. Anything else is a parse error. Refused at 4096 with vm-nvme of 0. QEMU's emulated NVMe only: an SPDK controller and an nvmeof backend set their own. Nothing on the scratch disk is converted: a partition table made at one size is not found at the other, and XFS or ext4 with blocks under 4096 made at 512 does not mount at 4096.</td>
+</tr>
+<tr>
+<td><code>&lt;vm-pci-mmio-bridge&gt;</code></td>
+<td>boolean</td>
+<td><code>false</code></td>
+<td>yes</td>
+<td>Give every guest the fork QEMU's pci-mmio-bridge device for its emulated NVMe, which rocm-xio uses. true or false; default false; refused with vm-nvme of 0 or less; needs the fork QEMU; generated stacks only, run-vm --xml does not get it.</td>
+</tr>
+<tr>
+<td><code>&lt;vm-username&gt;</code></td>
+<td>string</td>
+<td><code>ubuntu</code></td>
+<td>no</td>
+<td>Guest login account: the user gen-vm creates, and the one the inventory, quick-start and ssh log in as. default ubuntu; dropped for gen-vm --bake (bake-username is used); quick-start overrides it with the pulled image's own account when they differ.</td>
+</tr>
+<tr>
+<td><code>&lt;vm-password&gt;</code></td>
+<td>string</td>
+<td>(empty)</td>
+<td>no</td>
+<td>Password of the account gen-vm creates from the cloud image; never reaches a pulled guest, and a bake drops it. plain text; empty or unset leaves gen-vm's default, which is the word password.</td>
+</tr>
+<tr>
+<td><code>&lt;vm-filesystem&gt;</code></td>
+<td>string</td>
+<td>(empty)</td>
+<td>no</td>
+<td>Host directory shared into each guest over 9p with mount tag hostfs. one host path for all guests, or a comma list of exactly vm-count paths; run-vm --xml outside a stack ignores a list; default empty, no share.</td>
+</tr>
+<tr>
+<td><code>&lt;vm-vfio-user-root-port&gt;</code></td>
+<td>boolean</td>
+<td><code>true</code></td>
+<td>no</td>
+<td>Put each vfio-user device behind a PCIe root port; off, an emulated GPU gets a 16M 32-bit BAR amdgpu cannot use. true or false; default true; false renders with a warning, not an error.</td>
+</tr>
+<tr>
+<td><code>&lt;vm-extra-hostfwd&gt;</code></td>
+<td>string</td>
+<td>(empty)</td>
+<td>no</td>
+<td>Extra QEMU host-forward rules; every rule goes to every guest, and a bake leaves them out. Comma list of QEMU hostfwd rules, e.g. tcp::9100-:9100,tcp::9879-:9879; items are stripped and empty ones dropped. The commas are several rules for ONE guest, not one rule per guest.</td>
+</tr>
+<tr>
+<td><code>&lt;vm-qemu-args&gt;</code></td>
+<td>command-line words</td>
+<td>(empty)</td>
+<td>yes</td>
+<td>Extra words appended as they are to every guest's QEMU command line; nothing validates them. Words split as a shell would (quotes group, nothing expands), e.g. -device pci-testdev -d guest_errors; an unclosed quote is a parse error. One value for the whole fleet; a later layer replaces it whole. Dropped for a bake.</td>
+</tr>
+<tr>
+<td><code>&lt;vm-ssh-key-file&gt;</code></td>
+<td>path</td>
+<td>(empty)</td>
+<td>no</td>
+<td>Public key gen-vm authorises in a guest it creates, bakes included; ssh and inspect fall back to it. Path to a .pub file; ~ and $VARS are expanded at parse time. Unset, a bake generates a keypair for the image. Never the key publish-qcow publishes.</td>
+</tr>
+<tr>
+<td><code>&lt;vm-images-dir&gt;</code></td>
+<td>path</td>
+<td><code>/var/lib/qemu-tool/images</code></td>
+<td>no</td>
+<td>Directory that holds the guest disk images, overlays and image keys; --images overrides it. Path; ~ and $VARS are expanded at parse time. Default /var/lib/qemu-tool/images. Reaches docker compose as VM_IMAGES_DIR.</td>
+</tr>
+<tr>
+<td><code>&lt;vm-cpu-sockets&gt;</code></td>
+<td>integer</td>
+<td><code>0</code></td>
+<td>yes</td>
+<td>Pin each guest's CPU socket count; unset, the guest sees one single-core socket per vCPU. Integer that must divide the guest's vCPU count (run-vm exits otherwise); 0 or unset leaves the topology to QEMU.</td>
+</tr>
+<tr>
+<td><code>&lt;vm-cpu-phys-bits&gt;</code></td>
+<td>integer</td>
+<td><code>0</code></td>
+<td>yes</td>
+<td>Physical address bits of each guest's CPU; raise it together with vm-pci-hole64-size for large GPU BARs. Integer number of bits, e.g. 42; amd64 only (added to -cpu as phys-bits=N). 0 or unset passes no phys-bits; run-vm's help gives that default as 40 (1 TiB).</td>
+</tr>
+<tr>
+<td><code>&lt;vm-cpu-vendor&gt;</code></td>
+<td>CPU vendor</td>
+<td><code>AuthenticAMD</code></td>
+<td>no</td>
+<td>CPUID vendor every guest's CPU states; a guest is an AMD machine on every host unless this says otherwise. Exactly 12 printable ASCII characters with no comma, such as AuthenticAMD or GenuineIntel, or empty; default AuthenticAMD. amd64 only (rendered as -cpu EPYC,vendor=...). An EMPTY element is not the default: it states no vendor, and under KVM the guest then has the host's. Anything but AuthenticAMD renders with a note: the guest kernel refuses P2PDMA between devices that share no upstream bridge unless the CPU is AMD.</td>
+</tr>
+<tr>
+<td><code>&lt;vm-pci-hole64-size&gt;</code></td>
+<td>string</td>
+<td>(empty)</td>
+<td>no</td>
+<td>Size of each guest's 64-bit PCI hole; needed when several large GPU BARs exceed the machine default. QEMU size such as 512G or 1024G, passed through unparsed as q35-pcihost.pci-hole64-size; empty leaves the machine default.</td>
+</tr>
+<tr>
+<td><code>&lt;rocjitsu-config&gt;</code></td>
+<td>string</td>
+<td><code>gfx1250_mi455x.json</code></td>
+<td>no</td>
+<td>rocjitsu simulation config that selects the GPU each guest's emulated GPU servers present. File name under /usr/local/share/rocjitsu/configs in the rocjitsu image, default gfx1250_mi455x.json. One value for all guests, or a comma list of exactly vm-count values; a &lt;devices&gt; entry's own config wins.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="misc">Misc<a class="headerlink" href="#misc" title="Permanent link">&para;</a></h3>
+<p>Settings that belong to no other group.</p>
+<table>
+<thead>
+<tr>
+<th>Element</th>
+<th>Kind</th>
+<th>Default</th>
+<th>Sparse</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;qemu-tool-src&gt;</code></td>
+<td>string</td>
+<td><code>../../..</code></td>
+<td>no</td>
+<td>Checkout the stack's containers mount to build qemu-tool from; with none there they install it from PyPI. Path, default ../../.. relative to the stack directory; use an absolute path for a stack rendered elsewhere. Reaches docker compose as QEMU_TOOL_SRC and is not baked into the render. ~ is not expanded (plain string kind).</td>
+</tr>
+<tr>
+<td><code>&lt;image-allow-guest-lag&gt;</code></td>
+<td>boolean</td>
+<td><code>false</code></td>
+<td>no</td>
+<td>Let the guest image be older than the device server images: skips that check and warns on every render. Boolean (true/false, 1/0, yes/no), default false. Does not excuse a moving tag (latest, qm.&lt;sha7&gt;) or a malformed one, which are refused before it is looked at.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="bake-and-publish">Bake and publish<a class="headerlink" href="#bake-and-publish" title="Permanent link">&para;</a></h3>
+<p>Read by gen-vm --bake, publish-qcow --xml and publish-qcow-prune --xml and by nothing else, but for &lt;publish-ref&gt;, which gen-compose reads as well.</p>
+<table>
+<thead>
+<tr>
+<th>Element</th>
+<th>Kind</th>
+<th>Default</th>
+<th>Sparse</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;bake-name&gt;</code></td>
+<td>string</td>
+<td>(empty)</td>
+<td>yes</td>
+<td>Name of the image gen-vm --bake builds; publish-qcow publishes the image of that name. VM name; the baked image is &lt;vm-images-dir&gt;/&lt;name&gt;-backing.qcow2.</td>
+</tr>
+<tr>
+<td><code>&lt;bake-release&gt;</code></td>
+<td>string</td>
+<td>(empty)</td>
+<td>yes</td>
+<td>Ubuntu release of the cloud image gen-vm --bake starts from; publish-qcow records it for the image. Ubuntu codename (resolute) or version (26.04); publish-qcow records resolute when unset.</td>
+</tr>
+<tr>
+<td><code>&lt;bake-size&gt;</code></td>
+<td>integer</td>
+<td><code>0</code></td>
+<td>yes</td>
+<td>Virtual disk size of the image gen-vm --bake builds. Integer, GiB: passed to qemu-img resize as &lt;n&gt;G (the --size help calls it GB). 0 or unset leaves gen-vm's default.</td>
+</tr>
+<tr>
+<td><code>&lt;bake-vcpus&gt;</code></td>
+<td>integer</td>
+<td><code>0</code></td>
+<td>yes</td>
+<td>vCPUs of the guest gen-vm --bake boots to build the image; not the size of a fleet's guests. Integer count; a bake is refused unless bake-vmem is at least 1024 MiB per vCPU. 0 or unset falls back to vm-vcpus, then gen-vm's default.</td>
+</tr>
+<tr>
+<td><code>&lt;bake-vmem&gt;</code></td>
+<td>integer</td>
+<td><code>0</code></td>
+<td>yes</td>
+<td>RAM of the guest gen-vm --bake boots to build the image; not the size of a fleet's guests. Integer, MiB; must be at least 1024 per bake vCPU or the bake is refused. 0 or unset falls back to vm-vmem, then gen-vm's default.</td>
+</tr>
+<tr>
+<td><code>&lt;bake-packages&gt;</code></td>
+<td>path</td>
+<td>(empty)</td>
+<td>yes</td>
+<td>Package manifest gen-vm --bake installs in the image, or none for no manifest. Path to a manifest file, resolved against the current directory (run from the checkout root); ~ and $VARS are expanded. The word none installs none; a missing file stops the bake before it starts.</td>
+</tr>
+<tr>
+<td><code>&lt;bake-playbook&gt;</code></td>
+<td>path</td>
+<td>(empty)</td>
+<td>yes</td>
+<td>Ansible playbook gen-vm --bake runs against the booted image; publish-qcow records it for the image. Path resolved against the current directory (run from the checkout root); ~ and $VARS are expanded. publish-qcow records it as given, empty when unset.</td>
+</tr>
+<tr>
+<td><code>&lt;bake-username&gt;</code></td>
+<td>string</td>
+<td>(empty)</td>
+<td>yes</td>
+<td>Login account baked into the image and published with it; separate from vm-username, with no fallback. User name; unset, the bake uses gen-vm's default account and publish-qcow records ubuntu.</td>
+</tr>
+<tr>
+<td><code>&lt;bake-password&gt;</code></td>
+<td>string</td>
+<td>(empty)</td>
+<td>yes</td>
+<td>Password of the baked account; published with the image, so it is public. Never vm-password. Plain text, written to the published vm-info.json; publish-qcow records password when unset.</td>
+</tr>
+<tr>
+<td><code>&lt;bake-ssh-port&gt;</code></td>
+<td>port</td>
+<td>(empty)</td>
+<td>yes</td>
+<td>Host port the bake's Ansible boot forwards to the guest's sshd; auto picks a free one from 2222 up. A port number, or the word auto.</td>
+</tr>
+<tr>
+<td><code>&lt;bake-cache-dir&gt;</code></td>
+<td>path</td>
+<td>(empty)</td>
+<td>yes</td>
+<td>Directory on this host that keeps the bake's compiler cache between bakes; --cache-dir wins, unset is none. Path; ~ and $VARS are expanded. Needs a bake-playbook, which gets it as the extra var bake_cache_dir. Per host: set it in a local overlay, not in a shipped fleet file.</td>
+</tr>
+<tr>
+<td><code>&lt;publish-ref&gt;</code></td>
+<td>string</td>
+<td>(empty)</td>
+<td>yes</td>
+<td>Repository publish-qcow pushes to and publish-qcow-prune prunes; tells gen-compose whose repo backing-ref is in. Image repository with no tag, e.g. docker.io/sbates130272/qemu-tool-rocm-golden; publish-qcow appends :&lt;tag&gt; from each --tag. Read by the two publish commands only from an explicit --xml.</td>
+</tr>
+<tr>
+<td><code>&lt;publish-flavour&gt;</code></td>
+<td>string</td>
+<td>(empty)</td>
+<td>yes</td>
+<td>Label publish-qcow records in the published artifact for what kind of guest the image is. Free-form name, written to vm-info.json, the vm.flavour annotation and the description; rocm-golden when unset.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="metrics">Metrics<a class="headerlink" href="#metrics" title="Permanent link">&para;</a></h3>
+<p>Prometheus, Grafana and the address a stack's ports are published on.</p>
+<table>
+<thead>
+<tr>
+<th>Element</th>
+<th>Kind</th>
+<th>Default</th>
+<th>Sparse</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;publish-bind-addr&gt;</code></td>
+<td>address</td>
+<td><code>127.0.0.1</code></td>
+<td>no</td>
+<td>Host address every guest SSH port and the Grafana port are published on; loopback keeps them to this host. IPv4 or IPv6 literal, brackets optional and dropped, no host name or zone; empty or unset means 127.0.0.1; 0.0.0.0 or :: exposes every interface. Also decides ansible_host in the generated inventory.</td>
+</tr>
+<tr>
+<td><code>&lt;prom-scrape-interval&gt;</code></td>
+<td>string</td>
+<td><code>15s</code></td>
+<td>no</td>
+<td>How often Prometheus scrapes the stack's exporters; written as the global scrape_interval of prometheus.yml. Prometheus duration such as 15s; not validated by the parser; empty or unset means 15s.</td>
+</tr>
+<tr>
+<td><code>&lt;prom-retention&gt;</code></td>
+<td>string</td>
+<td><code>7d</code></td>
+<td>no</td>
+<td>How long Prometheus keeps collected metrics; passed as --storage.tsdb.retention.time. Prometheus duration such as 7d; not validated by the parser; empty or unset means 7d.</td>
+</tr>
+<tr>
+<td><code>&lt;prom-data-dir&gt;</code></td>
+<td>path</td>
+<td>(empty)</td>
+<td>yes</td>
+<td>Host directory bind-mounted as the Prometheus database; compose up creates it owned by the caller. Host path, ~ and $VARS expanded at parse time; unset means /var/lib/qemu-tool/prom-data; quick-start with metrics on overrides it to &lt;stack-dir&gt;/prom-data.</td>
+</tr>
+<tr>
+<td><code>&lt;grafana-enable&gt;</code></td>
+<td>boolean</td>
+<td><code>true</code></td>
+<td>no</td>
+<td>Add a Grafana service with the fleet dashboards to the stack; it starts only with --profile metrics. true/false, also 1/0/yes/no, any case; default true. Prometheus is rendered either way.</td>
+</tr>
+<tr>
+<td><code>&lt;grafana-image&gt;</code></td>
+<td>string</td>
+<td><code>docker.io/grafana/grafana:latest</code></td>
+<td>no</td>
+<td>Container image the Grafana service runs. Image reference; empty or unset means docker.io/grafana/grafana:latest (a moving tag).</td>
+</tr>
+<tr>
+<td><code>&lt;grafana-port&gt;</code></td>
+<td>integer</td>
+<td><code>3000</code></td>
+<td>no</td>
+<td>Host port Grafana is published on, at publish-bind-addr; quick-start moves it when the port is busy. Integer port (kind int, no range check); default 3000; container side is always 3000.</td>
+</tr>
+<tr>
+<td><code>&lt;grafana-admin-password&gt;</code></td>
+<td>string</td>
+<td><code>admin</code></td>
+<td>no</td>
+<td>Password of Grafana's admin account; anonymous admin access is on regardless, so it guards nothing. Plain text, written into the generated docker-compose.yml as GF_SECURITY_ADMIN_PASSWORD; empty or unset means admin.</td>
+</tr>
+<tr>
+<td><code>&lt;grafana-data-dir&gt;</code></td>
+<td>path</td>
+<td>(empty)</td>
+<td>yes</td>
+<td>Host directory bind-mounted as Grafana's own state (its sqlite); dashboards are provisioned from files. Host path, ~ and $VARS expanded at parse time; unset means /var/lib/qemu-tool/grafana-data; quick-start with metrics on overrides it to &lt;stack-dir&gt;/grafana-data.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="logging">Logging<a class="headerlink" href="#logging" title="Permanent link">&para;</a></h3>
+<p>Log rotation for every service, and the Loki and Alloy log collection.</p>
+<table>
+<thead>
+<tr>
+<th>Element</th>
+<th>Kind</th>
+<th>Default</th>
+<th>Sparse</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;log-max-size&gt;</code></td>
+<td>string</td>
+<td><code>50m</code></td>
+<td>no</td>
+<td>Size at which Docker rotates each service's json-file log, so a looping service cannot fill the disk. Docker size string such as 50m; not validated by the parser; empty or unset means 50m.</td>
+</tr>
+<tr>
+<td><code>&lt;log-max-files&gt;</code></td>
+<td>integer</td>
+<td><code>3</code></td>
+<td>no</td>
+<td>Number of rotated log files Docker keeps for each service. Integer count (no range check); default 3.</td>
+</tr>
+<tr>
+<td><code>&lt;logs-enable&gt;</code></td>
+<td>boolean</td>
+<td><code>true</code></td>
+<td>no</td>
+<td>Add Loki and an Alloy that ships the stack's container logs to it; both start only with --profile metrics. true/false, also 1/0/yes/no, any case; default true. Alloy mounts the Docker socket and runs as root.</td>
+</tr>
+<tr>
+<td><code>&lt;loki-image&gt;</code></td>
+<td>string</td>
+<td><code>docker.io/grafana/loki:3.3.2</code></td>
+<td>no</td>
+<td>Container image the Loki log store runs; used only with logs-enable. Image reference; empty or unset means docker.io/grafana/loki:3.3.2.</td>
+</tr>
+<tr>
+<td><code>&lt;loki-data-dir&gt;</code></td>
+<td>path</td>
+<td><code>/var/lib/qemu-tool/loki-data</code></td>
+<td>no</td>
+<td>Host directory bind-mounted as Loki's stored logs; used only with logs-enable; compose up creates it as the caller. Host path, ~ and $VARS expanded at parse time; empty or unset means /var/lib/qemu-tool/loki-data; quick-start with metrics on overrides it to &lt;stack-dir&gt;/loki-data.</td>
+</tr>
+<tr>
+<td><code>&lt;alloy-image&gt;</code></td>
+<td>string</td>
+<td><code>docker.io/grafana/alloy:v1.5.1</code></td>
+<td>no</td>
+<td>Container image of the Alloy agent that ships the stack's container logs to Loki; used only with logs-enable. Image reference; empty or unset means docker.io/grafana/alloy:v1.5.1.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="removed-elements">Removed elements<a class="headerlink" href="#removed-elements" title="Permanent link">&para;</a></h3>
+<p>These were elements of the format and are not any more. Most were parsed and
+read by no command; the table says what to do about the ones that were read.
+A file that sets one is refused by the parser, which says so by name, and by
+both schemas, to which it is an unknown element like any other:</p>
+<table>
+<thead>
+<tr>
+<th>Element</th>
+<th>Why it went</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;qemu-digest&gt;</code></td>
+<td>No command ever read it, so it never pinned &lt;qemu-ref&gt;.</td>
+</tr>
+<tr>
+<td><code>&lt;ernic-digest&gt;</code></td>
+<td>No command ever read it, so it never pinned &lt;ernic-ref&gt;.</td>
+</tr>
+<tr>
+<td><code>&lt;rocjitsu-digest&gt;</code></td>
+<td>No command ever read it, so it never pinned &lt;rocjitsu-ref&gt;.</td>
+</tr>
+<tr>
+<td><code>&lt;backing-digest&gt;</code></td>
+<td>No command ever read it, so it never pinned &lt;backing-ref&gt;; to pin the guest image by digest, write name@sha256:... in &lt;backing-ref&gt;.</td>
+</tr>
+<tr>
+<td><code>&lt;domain-pattern&gt;</code></td>
+<td>No command ever read it, and no command writes or reads a per-guest domain file for a fleet.</td>
+</tr>
+<tr>
+<td><code>&lt;prom-port&gt;</code></td>
+<td>No command ever read it; Prometheus has no host port and is asked inside its container.</td>
+</tr>
+<tr>
+<td><code>&lt;loki-port&gt;</code></td>
+<td>No command ever read it; Loki has no host port and listens on 3100 inside the stack.</td>
+</tr>
+<tr>
+<td><code>&lt;vm-backing-shared&gt;</code></td>
+<td>A generated stack always starts its guests with image locking off, whatever this said; for a run-vm outside a stack, pass --backing-shared.</td>
+</tr>
+<tr>
+<td><code>&lt;ernic-subnet&gt;</code></td>
+<td>The guests' RDMA NICs are always on 192.168.100.0/24, the one network the guest image addresses them on at boot, so any other value put the fleet's addresses where no guest was.</td>
+</tr>
+<tr>
+<td><code>&lt;ernic-mac-prefix&gt;</code></td>
+<td>Every emulated NIC's MAC address always starts 72:6f:63:6d, the one prefix the quick-start playbook finds a guest's NIC by, so any other value failed that playbook.</td>
+</tr>
+</tbody>
+</table>
+<div class="highlight"><pre><span></span><code>my-fleet.xml: &lt;prom-port&gt; was removed from the fleet format: no command ever read it; Prometheus has no host port and is asked inside its container. Delete the element.
+</code></pre></div>
+<h2 id="the-devices-block">The devices block<a class="headerlink" href="#the-devices-block" title="Permanent link">&para;</a></h2>
+<p><code>&lt;devices&gt;</code> lists the vfio-user servers every guest gets, one <code>&lt;server&gt;</code>
+entry each. It exists so that two servers of one type can differ, and so that
+a NIC can be given an RDMA backend.</p>
+<div class="highlight"><pre><span></span><code><span class="nt">&lt;devices&gt;</span>
+<span class="w">  </span><span class="nt">&lt;server</span><span class="w"> </span><span class="na">type=</span><span class="s">'ernic'</span><span class="w"> </span><span class="na">id=</span><span class="s">'kv'</span><span class="nt">&gt;</span>
+<span class="w">    </span><span class="nt">&lt;backend</span><span class="w"> </span><span class="na">type=</span><span class="s">'nvmeof'</span><span class="nt">&gt;</span>kv=1,size=256M<span class="nt">&lt;/backend&gt;</span>
+<span class="w">    </span><span class="nt">&lt;log-level&gt;</span>info<span class="nt">&lt;/log-level&gt;</span>
+<span class="w">  </span><span class="nt">&lt;/server&gt;</span>
+<span class="w">  </span><span class="nt">&lt;server</span><span class="w"> </span><span class="na">type=</span><span class="s">'ernic'</span><span class="w"> </span><span class="na">id=</span><span class="s">'mesh'</span><span class="nt">/&gt;</span>
+<span class="w">  </span><span class="nt">&lt;server</span><span class="w"> </span><span class="na">type=</span><span class="s">'rocjitsu'</span><span class="w"> </span><span class="na">id=</span><span class="s">'gpu0'</span><span class="nt">&gt;</span>
+<span class="w">    </span><span class="nt">&lt;cpu-thread-budget&gt;</span>2<span class="nt">&lt;/cpu-thread-budget&gt;</span>
+<span class="w">  </span><span class="nt">&lt;/server&gt;</span>
+<span class="w">  </span><span class="nt">&lt;server</span><span class="w"> </span><span class="na">type=</span><span class="s">'sdxi'</span><span class="w"> </span><span class="na">id=</span><span class="s">'sdxi0'</span><span class="nt">/&gt;</span>
+<span class="nt">&lt;/devices&gt;</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;devices&gt;</code></td>
+<td>Lists the vfio-user servers every guest gets, one &lt;server&gt; each; replaces the three per-VM device counts. No attributes, no text; at least one &lt;server&gt;. Later layers merge entries by id, append new ids and cannot remove one. Every guest gets the same list.</td>
+</tr>
+<tr>
+<td><code>&lt;server&gt;</code></td>
+<td>One device server every guest gets; its children set that server's backend, config file or options. Requires type and id, and takes no other attribute. Children allowed depend on type; each may appear once unless the option is repeatable.</td>
+</tr>
+<tr>
+<td><code>&lt;server type=...&gt;</code></td>
+<td>Kind of server: an ernic NIC, a rocjitsu GPU, an SDXI device or an SPDK NVMe controller. ernic, rocjitsu, sdxi or spdk. The generator refuses more than one spdk a guest, and an spdk with no &lt;spdk-image&gt;. An id cannot change type in a later layer.</td>
+</tr>
+<tr>
+<td><code>&lt;server id=...&gt;</code></td>
+<td>Names the entry for later layers to merge on and for error messages; does not rename containers or sockets. Starts with a letter; letters, digits, '_', '.' and '-'; 32 characters at most; unique in the block.</td>
+</tr>
+</tbody>
+</table>
+<p>The children of a <code>&lt;server&gt;</code> depend on its type. They may come in any order.
+A value is stripped of surrounding white space, may not be empty and may not
+hold a line break, a tab or a control character.</p>
+<h3 id="servers-of-type-ernic">Servers of type <code>ernic</code><a class="headerlink" href="#servers-of-type-ernic" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Element</th>
+<th>Shape</th>
+<th>Becomes</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;backend&gt;</code></td>
+<td>attribute <code>type</code>, options as text, at most once</td>
+<td><code>-b TYPE</code> or <code>-b TYPE:OPTIONS</code></td>
+<td>Sets an ernic NIC's RDMA backend; any type but tcp takes that NIC out of the generated TCP mesh. ernic only. Text is the backend's own options, optional, as one word with no whitespace: size=1G,ns=2,kv=1,size=256M. The parser checks only that; tcp takes none.</td>
+</tr>
+<tr>
+<td><code>&lt;log-level&gt;</code></td>
+<td>one value, at most once</td>
+<td><code>--log-level VALUE</code></td>
+<td>Log verbosity of this NIC's server. none, error, warn, info or debug; the server's default is warn. The parser does not check the word.</td>
+</tr>
+<tr>
+<td><code>&lt;nic-profile&gt;</code></td>
+<td>one value each, repeatable, order kept</td>
+<td><code>--nic-profile VALUE</code></td>
+<td>Shapes the NIC from a profile; repeatable, and later profiles win. A built-in name (compat, small-vm, generic-100g, generic-400g) or a path to an ini file inside the server container. Repeatable, order kept; a later layer naming it replaces all earlier values.</td>
+</tr>
+<tr>
+<td><code>&lt;stats-interval-ms&gt;</code></td>
+<td>one value, at most once</td>
+<td><code>--stats-interval-ms VALUE</code></td>
+<td>How often the server rewrites the guest's statistics; overrides every profile. Milliseconds, 10 to 60000; the server's default is the profile's, 1000. The parser does not check the number or range.</td>
+</tr>
+<tr>
+<td><code>&lt;eth-queues&gt;</code></td>
+<td>one value, at most once</td>
+<td><code>--eth-queues VALUE</code></td>
+<td>Number of Ethernet Rx/Tx queues the NIC offers the guest; overrides every profile. Integer 1 to 64; the server's default is the profile's, 4. The guest uses at most one per vCPU. The parser does not check the number or range.</td>
+</tr>
+<tr>
+<td><code>&lt;inject&gt;</code></td>
+<td>one value each, repeatable, order kept</td>
+<td><code>--inject VALUE</code></td>
+<td>Injects a fault into this NIC's server, for testing; repeatable. One fault as 'SITE: PATTERN effect EFFECT', for example 'stats_vals: every 100 effect fail status eio'. Spaces allowed. Repeatable, order kept; unchecked by the parser.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="servers-of-type-rocjitsu">Servers of type <code>rocjitsu</code><a class="headerlink" href="#servers-of-type-rocjitsu" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Element</th>
+<th>Shape</th>
+<th>Becomes</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;config&gt;</code></td>
+<td>one value, at most once</td>
+<td>the server's config file</td>
+<td>Names the rocjitsu simulation config file for this one GPU, in place of &lt;rocjitsu-config&gt;. rocjitsu only. One file name in the image's configs directory, no path: starts with a letter or digit, then letters, digits, '.', '_', '-'. Example gfx1250_mi455x.json.</td>
+</tr>
+<tr>
+<td><code>&lt;node&gt;</code></td>
+<td>one value, at most once</td>
+<td><code>--node VALUE</code></td>
+<td>Selects one local node from a rocjitsu system manifest; needed for a multi-node launch. A node name from the manifest the config file refers to; unchecked by the parser.</td>
+</tr>
+<tr>
+<td><code>&lt;cpu-thread-budget&gt;</code></td>
+<td>one value, at most once</td>
+<td><code>--cpu-thread-budget VALUE</code></td>
+<td>Overrides the CPU thread budget of this GPU's server; zero selects automatic sizing. Integer count of threads; 0 is automatic. The parser does not check that it is a number.</td>
+</tr>
+<tr>
+<td><code>&lt;wait-checking&gt;</code></td>
+<td>one value, at most once</td>
+<td><code>--wait-checking VALUE</code></td>
+<td>Overrides this GPU server's wait checks. off disables checks, on enables ordinary checks, all adds the gfx1250 XCNT checks. The parser does not check the word.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="servers-of-type-sdxi">Servers of type <code>sdxi</code><a class="headerlink" href="#servers-of-type-sdxi" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Element</th>
+<th>Shape</th>
+<th>Becomes</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;verbose&gt;</code></td>
+<td>empty element, repeatable</td>
+<td><code>--verbose</code></td>
+<td>Raises the SDXI server's log verbosity; repeat it for debug output. A switch: empty element, no value, no attributes. May be repeated; each occurrence renders one --verbose.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="servers-of-type-spdk">Servers of type <code>spdk</code><a class="headerlink" href="#servers-of-type-spdk" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Element</th>
+<th>Shape</th>
+<th>Becomes</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;namespaces&gt;</code></td>
+<td>one value, at most once</td>
+<td><code>NVME_NAMESPACES=VALUE</code> in the container's environment</td>
+<td>The namespaces the SPDK NVMe controller serves, in order; sets the image's NVME_NAMESPACES. One word, comma list, NSIDs in list order: lba:malloc:SIZE[:BLOCK], lba:aio:PATH[:BLOCK[:SIZE]], kv:mem[:MAXVAL[:MAXKEYS]]. Image default lba:malloc:512M,kv:mem.</td>
+</tr>
+<tr>
+<td><code>&lt;serial&gt;</code></td>
+<td>one value, at most once</td>
+<td><code>SPDK_SERIAL=VALUE</code> in the container's environment</td>
+<td>Serial number of the SPDK NVMe controller, as the guest sees it; sets the image's SPDK_SERIAL. 1 to 20 letters, digits, '_' and '-'. Image default SPDKVFU01.</td>
+</tr>
+<tr>
+<td><code>&lt;cpumask&gt;</code></td>
+<td>one value, at most once</td>
+<td><code>SPDK_CPUMASK=VALUE</code> in the container's environment</td>
+<td>Host cores the SPDK server's poll-mode reactor spins on; sets SPDK_CPUMASK. Each server takes one full core. Hexadecimal core mask, 0x then 1 to 32 hex digits, such as 0x4. Default 0x1, host CPU 0. One value for every guest's server, so guests share the cores it names.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="backend-types">Backend types<a class="headerlink" href="#backend-types" title="Permanent link">&para;</a></h3>
+<p>The <code>type</code> attribute of <code>&lt;backend&gt;</code>. The element's text is the backend's own
+options as one word; the parser checks that it has no white space and that
+<code>tcp</code> has none, and nothing else about it.</p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>none</code></td>
+<td>No RDMA backend: the server runs minimal stubs and the NIC is off the mesh. No options in the server's help; the parser still accepts option text and passes it on as none:TEXT.</td>
+</tr>
+<tr>
+<td><code>loopback</code></td>
+<td>The server's internal loopback emulation, for a guest with no peer; the NIC is off the mesh. No options in the server's help; the parser does not refuse text.</td>
+</tr>
+<tr>
+<td><code>tcp</code></td>
+<td>The generated TCP mesh between guests; the same as naming no backend. Takes no options, and text is an error: manager, workers and addresses are derived.</td>
+</tr>
+<tr>
+<td><code>nvmeof</code></td>
+<td>An NVMe-oF target inside the NIC's server that the guest reaches with nvme connect over RDMA; off the mesh. Comma options, order dependent: size=, file=, bs=, nqn=, ip=, port=, queues=, kv=1, keys=, maxval=, nsid=; ns=N starts the next namespace. Sizes take K/M/G/T; default 64M.</td>
+</tr>
+<tr>
+<td><code>s3</code></td>
+<td>An S3-over-RDMA object store inside the NIC's server that the guest reaches over HTTP; off the mesh. Comma options: bucket= (default ernic), size= with K/M/G (default 256M), objects= (default 256), ip= (default 192.168.200.1), port= (default 9000), maxpart= (default 256M).</td>
+</tr>
+</tbody>
+</table>
+<h2 id="the-schemas">The schemas<a class="headerlink" href="#the-schemas" title="Permanent link">&para;</a></h2>
+<p>There are two, generated from the same tables and with the same patterns:</p>
+<table>
+<thead>
+<tr>
+<th>Schema</th>
+<th>Language</th>
+<th>Use it</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>fleet.rng</code></td>
+<td><a href="https://relaxng.org/">RELAX NG</a>, XML syntax, with XML Schema datatypes for the patterns</td>
+<td>Wherever the tool takes RELAX NG. It is the precise one: it says everything about one file that a grammar can.</td>
+</tr>
+<tr>
+<td><code>fleet.xsd</code></td>
+<td>XML Schema (XSD) 1.0</td>
+<td>With an editor or a tool that takes only XSD. It is <a href="#where-the-xsd-is-looser">looser</a>, and not only inside <code>&lt;devices&gt;</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>Neither rejects a file the parser accepts, and the XSD rejects no file the
+RELAX NG schema accepts. Each is one file:</p>
+<ul>
+<li><code>qemu/schema/fleet.rng</code> and <code>qemu/schema/fleet.xsd</code> in a checkout,</li>
+<li><code>/usr/share/qemu-tool/schema/fleet.rng</code> and <code>/usr/share/qemu-tool/schema/fleet.xsd</code>,
+  installed by the Debian package and by nothing else,</li>
+<li><code>qemu_tool/share/schema/</code> inside the wheel, which a <code>uv tool install</code> or
+  <code>pipx install</code> puts in an environment of its own, at no path worth typing,</li>
+<li>or written on demand, which works from any install: <code>qemu-tool fleet-schema
+  --output fleet.rng</code> and <code>qemu-tool fleet-schema --format xsd --output
+  fleet.xsd</code>. The examples below use copies written that way.</li>
+</ul>
+<p>They are generated, and so is this page. After a change to the tables in
+<code>qemu/qemu-tool/fleet_xml.py</code>, from the root of a checkout:</p>
+<div class="highlight"><pre><span></span><code>qemu-tool<span class="w"> </span>fleet-schema<span class="w"> </span>--format<span class="w"> </span>rng<span class="w"> </span>--output<span class="w"> </span>qemu/schema/fleet.rng
+qemu-tool<span class="w"> </span>fleet-schema<span class="w"> </span>--format<span class="w"> </span>xsd<span class="w"> </span>--output<span class="w"> </span>qemu/schema/fleet.xsd
+qemu-tool<span class="w"> </span>fleet-schema<span class="w"> </span>--format<span class="w"> </span>md<span class="w"> </span>--output<span class="w"> </span>docs/fleet-xml.md
+</code></pre></div>
+<p>The XSD is written by <code>qemu-tool</code> from the tables, not converted from the
+RELAX NG file. <code>trang</code>, the usual converter, does convert <code>fleet.rng</code>, with
+two warnings that it is approximating. What it writes is neither stricter nor
+looser than <code>fleet.xsd</code> throughout. It takes more: a flat setting, the
+<code>&lt;devices&gt;</code> block and a once-only child of a <code>&lt;server&gt;</code> may repeat, and every
+element is declared globally, so any of them passes as the root of a
+document. And it takes less in one place: it types a string or a path
+setting as <code>xs:string</code> and declares no <code>kind.str</code> or <code>kind.expand</code>, so an
+<code>xsi:type</code> naming either, which <code>fleet.xsd</code> accepts on such a setting, is
+refused by trang's.</p>
+<h3 id="where-the-xsd-is-looser">Where the XSD is looser<a class="headerlink" href="#where-the-xsd-is-looser" title="Permanent link">&para;</a></h3>
+<p>The XSD accepts everything the RELAX NG schema accepts, and these besides.
+This is the whole list: the test suite has a document for each item that
+RELAX NG refuses and the XSD takes, and requires the two to agree on every
+other document it holds.</p>
+<ul>
+<li>An attribute XML Schema reserves for itself passes: <code>xsi:schemaLocation</code> and <code>xsi:noNamespaceSchemaLocation</code> on any element, with any value, and <code>xsi:type</code> on a flat setting when it names the type that setting already has. The RELAX NG schema refuses them, as the parser does: no element but <code>&lt;server&gt;</code> and <code>&lt;backend&gt;</code> takes an attribute.</li>
+<li>A <code>&lt;server&gt;</code>'s children are held to the children of one type, which need not be the type its <code>type</code> attribute names: XSD 1.0 cannot make an element's content depend on an attribute's value. <code>&lt;config&gt;</code> in a server of type <code>ernic</code> passes. Children of two types in one server are still refused. The sets are <code>&lt;backend&gt;</code>, <code>&lt;log-level&gt;</code>, <code>&lt;nic-profile&gt;</code>, <code>&lt;stats-interval-ms&gt;</code>, <code>&lt;eth-queues&gt;</code>, <code>&lt;inject&gt;</code> (<code>ernic</code>); <code>&lt;config&gt;</code>, <code>&lt;node&gt;</code>, <code>&lt;cpu-thread-budget&gt;</code>, <code>&lt;wait-checking&gt;</code> (<code>rocjitsu</code>); <code>&lt;verbose&gt;</code> (<code>sdxi</code>); <code>&lt;namespaces&gt;</code>, <code>&lt;serial&gt;</code>, <code>&lt;cpumask&gt;</code> (<code>spdk</code>).</li>
+<li><code>&lt;backend type='tcp'&gt;</code> may hold option text, as the other backend types do. <code>tcp</code> takes none, and XSD 1.0 cannot make an element's text depend on an attribute's value.</li>
+</ul>
+<p>Everything else is the same in both: the flat settings, each at most once
+and in any order; the value kinds; the server types and ids; the backend
+types; the form of each option's value; and, in a <code>&lt;server&gt;</code>, that a child
+which may appear once does not appear twice.</p>
+<h3 id="validating-a-file">Validating a file<a class="headerlink" href="#validating-a-file" title="Permanent link">&para;</a></h3>
+<p><code>qemu-tool check --xml FILE</code> runs the parser itself and is the answer that
+counts. A schema is for tools that do not have <code>qemu-tool</code>: an editor, a
+CI step, another program that writes fleet files.</p>
+<p>With <code>xmllint</code>, from libxml2:</p>
+<div class="highlight"><pre><span></span><code>qemu-tool<span class="w"> </span>fleet-schema<span class="w"> </span>--output<span class="w"> </span>fleet.rng
+xmllint<span class="w"> </span>--noout<span class="w"> </span>--relaxng<span class="w"> </span>fleet.rng<span class="w"> </span>my-fleet.xml
+
+qemu-tool<span class="w"> </span>fleet-schema<span class="w"> </span>--format<span class="w"> </span>xsd<span class="w"> </span>--output<span class="w"> </span>fleet.xsd
+xmllint<span class="w"> </span>--noout<span class="w"> </span>--schema<span class="w"> </span>fleet.xsd<span class="w"> </span>my-fleet.xml
+</code></pre></div>
+<p>With <code>lxml</code>, in Python:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">lxml</span><span class="w"> </span><span class="kn">import</span> <span class="n">etree</span>
+
+<span class="n">document</span> <span class="o">=</span> <span class="n">etree</span><span class="o">.</span><span class="n">parse</span><span class="p">(</span><span class="s2">"my-fleet.xml"</span><span class="p">)</span>
+
+<span class="n">rng</span> <span class="o">=</span> <span class="n">etree</span><span class="o">.</span><span class="n">RelaxNG</span><span class="p">(</span><span class="n">etree</span><span class="o">.</span><span class="n">parse</span><span class="p">(</span><span class="s2">"fleet.rng"</span><span class="p">))</span>
+<span class="k">if</span> <span class="ow">not</span> <span class="n">rng</span><span class="o">.</span><span class="n">validate</span><span class="p">(</span><span class="n">document</span><span class="p">):</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">rng</span><span class="o">.</span><span class="n">error_log</span><span class="p">)</span>
+
+<span class="n">xsd</span> <span class="o">=</span> <span class="n">etree</span><span class="o">.</span><span class="n">XMLSchema</span><span class="p">(</span><span class="n">etree</span><span class="o">.</span><span class="n">parse</span><span class="p">(</span><span class="s2">"fleet.xsd"</span><span class="p">))</span>
+<span class="k">if</span> <span class="ow">not</span> <span class="n">xsd</span><span class="o">.</span><span class="n">validate</span><span class="p">(</span><span class="n">document</span><span class="p">):</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">xsd</span><span class="o">.</span><span class="n">error_log</span><span class="p">)</span>
+</code></pre></div>
+<p>With <code>jing</code>, a RELAX NG validator that is not libxml2. It takes the RELAX
+NG schema only:</p>
+<div class="highlight"><pre><span></span><code>jing<span class="w"> </span>fleet.rng<span class="w"> </span>my-fleet.xml
+</code></pre></div>
+<p><code>xmllint</code> and <code>lxml</code> both use libxml2. Its messages name the element it
+stopped at and little else; the parser's say what is wrong and suggest the
+closest known name.</p>
+<h3 id="editors">Editors<a class="headerlink" href="#editors" title="Permanent link">&para;</a></h3>
+<p>A fleet file cannot name its schema in an attribute. The usual way to point
+at an XSD is <code>xsi:schemaLocation</code> on the root element, and the parser
+refuses it, as it refuses any attribute on <code>&lt;fleet&gt;</code>:</p>
+<div class="highlight"><pre><span></span><code>my-fleet.xml: &lt;fleet&gt; takes no attributes, found {http://www.w3.org/2001/XMLSchema-instance}schemaLocation
+</code></pre></div>
+<p>The XSD itself would accept the attribute, which is the first item of the
+list above; the file would validate in the editor and not load. So the
+association is made outside the element, in one of two ways.</p>
+<p><strong>In the editor's settings</strong>, which leaves the fleet file alone. For the XML
+extension of VS Code (<code>redhat.vscode-xml</code>), in <code>settings.json</code>, with the
+pattern and the path changed to suit:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"xml.fileAssociations"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">"pattern"</span><span class="p">:</span><span class="w"> </span><span class="s2">"**/fleet*.xml"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"systemId"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/path/to/fleet.xsd"</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre></div>
+<p><code>systemId</code> is the path or the URL of the schema. IntelliJ-based
+editors map a namespace to a file under Settings, Languages &amp; Frameworks,
+Schemas and DTDs: the URI is <code>http://qemu-tool/fleet/1.0</code>. Emacs' nXML mode reads RELAX
+NG's compact syntax only, so it wants the RELAX NG schema converted first
+(<code>trang fleet.rng fleet.rnc</code>) and a <code>schemas.xml</code> entry for the namespace.</p>
+<p><strong>In a processing instruction</strong> before the root element, which the parser
+ignores and editors that follow the <code>xml-model</code> convention read. The <code>href</code>
+is wherever the schema is: a copy beside the fleet file here, or the Debian
+package's path. For the XSD:</p>
+<div class="highlight"><pre><span></span><code><span class="cp">&lt;?xml-model href="fleet.xsd"</span>
+<span class="cp">            type="application/xml"</span>
+<span class="cp">            schematypens="http://www.w3.org/2001/XMLSchema"?&gt;</span>
+<span class="nt">&lt;fleet</span><span class="w"> </span><span class="na">xmlns=</span><span class="s">"http://qemu-tool/fleet/1.0"</span><span class="nt">&gt;</span>
+<span class="w">  </span>...
+<span class="nt">&lt;/fleet&gt;</span>
+</code></pre></div>
+<p>And for the RELAX NG schema, in an editor that takes one:</p>
+<div class="highlight"><pre><span></span><code><span class="cp">&lt;?xml-model href="fleet.rng"</span>
+<span class="cp">            type="application/xml"</span>
+<span class="cp">            schematypens="http://relaxng.org/ns/structure/1.0"?&gt;</span>
+</code></pre></div>
+<p>None of the editor setups has been tried here. What has been run is the
+parser on a file that carries each processing instruction, which it accepts,
+and on one with <code>xsi:schemaLocation</code>, which it refuses.</p>
+<h2 id="what-the-schema-cannot-check">What the schema cannot check<a class="headerlink" href="#what-the-schema-cannot-check" title="Permanent link">&para;</a></h2>
+<p>A file that validates can still be refused. Either schema describes one
+file and one element at a time; these rules are the parser's and the
+generator's alone. What is said of the schema here holds for both; the XSD
+also lets by <a href="#where-the-xsd-is-looser">what is listed above</a>.</p>
+<p>In one file, refused by the parser:</p>
+<ul>
+<li>two <code>&lt;server&gt;</code> entries with the same <code>id</code>;</li>
+<li>a <code>&lt;devices&gt;</code> block beside an <code>&lt;ernic-per-vm&gt;</code>, <code>&lt;rocjitsu-per-vm&gt;</code> or
+  <code>&lt;sdxi-per-vm&gt;</code> that says another number than the block lists: the block
+  replaces the three counts, so such a count would never apply;</li>
+<li>text directly under <code>&lt;fleet&gt;</code>, <code>&lt;devices&gt;</code> or a <code>&lt;server&gt;</code>. The schema allows
+  any text there, because the parser allows white space the grammar's own
+  rule for element content would refuse;</li>
+<li>an unclosed quote, a trailing backslash or a quoted word that spans lines
+  in <code>&lt;vm-qemu-args&gt;</code>;</li>
+<li>a character outside ASCII that is not a decimal digit, in an integer;</li>
+<li>an integer or a port of more digits than Python's <code>int()</code> converts, which
+  is 4300 unless Python is told otherwise. The parser reports it as not an
+  integer; a grammar does not count that far.</li>
+</ul>
+<p>And a validator may answer differently from the parser for a reason that is
+the validator's own and not the grammar's:</p>
+<ul>
+<li>a <code>&lt;!DOCTYPE&gt;</code> whose internal subset gives an attribute a default
+  (<code>&lt;!ATTLIST server type CDATA "ernic"&gt;</code>), in either direction. The parser
+  applies the default, so a <code>&lt;server&gt;</code> with no <code>type</code> loads, and a default on
+  <code>&lt;fleet&gt;</code> is refused as an attribute. A validator sees the attribute only if
+  it applies such defaults: <code>lxml</code> does not unless its parser is made with
+  <code>attribute_defaults=True</code>, and then it agrees with the parser;</li>
+<li>a <code>&lt;!DOCTYPE&gt;</code> whose internal subset declares an entity that holds an
+  element (<code>&lt;!ENTITY e "&lt;vm-count&gt;2&lt;/vm-count&gt;"&gt;</code>, then <code>&amp;e;</code> under
+  <code>&lt;fleet&gt;</code>). The parser accepts it, and so do <code>jing</code> and Xerces. libxml2
+  (<code>xmllint</code>, <code>lxml</code>) leaves that element out of the fleet namespace and
+  both schemas then refuse it. An entity that holds text only is read the
+  same way by all of them;</li>
+<li>an integer with thousands of single underscores between its digits. A
+  validator built on Java's regular expressions, <code>jing</code> for one, recurses
+  once for each underscore and ends in a <code>StackOverflowError</code>, which is no
+  answer at all: seen with 2000 underscores, not with 1000, at Java's
+  default stack size. The parser accepts such an integer up to <code>int()</code>'s
+  limit, and so does libxml2 with either schema;</li>
+<li>a value of hundreds of thousands of characters in an element the schemas
+  give a pattern. Xerces, the XSD validator of Java and of many editors,
+  takes time that grows with the square of the length there: seconds for
+  200,000 characters. Its answer is the right one when it comes.</li>
+</ul>
+<p>No shipped file has a <code>&lt;!DOCTYPE&gt;</code>.</p>
+<p>Across files given as layers:</p>
+<ul>
+<li>a later file overrides the flat elements it sets, whole;</li>
+<li><code>&lt;devices&gt;</code> entries merge by <code>id</code>: an entry for an id an earlier layer has
+  changes what it names and keeps the rest, a new id is appended, and no
+  layer can remove one;</li>
+<li>an <code>id</code> cannot change <code>type</code> in a later layer;</li>
+<li>a per-VM count set in a layer after a <code>&lt;devices&gt;</code> block, to another number,
+  is an error. <code>qemu-tool check</code> reports these as a <code>layers merge</code> line.</li>
+</ul>
+<p>Per-VM lists, checked when a stack is generated:</p>
+<ul>
+<li><code>&lt;vm-shm-size&gt;</code>, <code>&lt;rocjitsu-config&gt;</code> and <code>&lt;vm-filesystem&gt;</code> take one value
+  for every guest, or a comma list of exactly <code>&lt;vm-count&gt;</code> values. Any other
+  length is an error;</li>
+<li><code>&lt;vm-extra-hostfwd&gt;</code> is the exception: its commas are several rules for one
+  guest, and the whole value goes to every guest.</li>
+</ul>
+<p>Rules between elements, checked by <code>gen-compose</code> (<code>gen_compose.py</code>):</p>
+<ul>
+<li><code>&lt;vm-count&gt;</code> of at least 1, and <code>&lt;ernic-per-vm&gt;</code> and <code>&lt;rocjitsu-per-vm&gt;</code> of
+  at least 1, or a <code>&lt;devices&gt;</code> block with at least one <code>ernic</code> and one
+  <code>rocjitsu</code> server;</li>
+<li>at most one <code>spdk</code> server a guest, and <code>&lt;spdk-image&gt;</code> set when there is one;</li>
+<li><code>&lt;sdxi-image&gt;</code> set when a guest has an SDXI device;</li>
+<li><code>&lt;qemu-ref&gt;</code>, <code>&lt;ernic-ref&gt;</code> and <code>&lt;rocjitsu-ref&gt;</code> not empty, on one build
+  stamp, with one libvfio-user revision between QEMU and the servers;</li>
+<li>the tag <code>&lt;backing-ref&gt;</code> names, and how it relates to <code>&lt;publish-ref&gt;</code> and
+  <code>&lt;image-allow-guest-lag&gt;</code>;</li>
+<li>the fleet's size: at most 64 NICs on the mesh and 244 NICs in all, with a
+  warning above 40 on the mesh;</li>
+<li><code>&lt;vm-nvme-vram&gt;</code> and <code>&lt;vm-pci-mmio-bridge&gt;</code> need <code>&lt;vm-nvme&gt;</code> of at least 1,
+  and <code>&lt;vm-nvme-block-size&gt;</code> of 4096 a <code>&lt;vm-nvme&gt;</code> other than 0;</li>
+<li><code>&lt;ernic-mtu&gt;</code> other than 1500 is refused when <code>&lt;vm-qemu-args&gt;</code> already
+  passes a credential of the name it uses, and noted when it is under 4192
+  or <code>&lt;ernic-tap&gt;</code> is false.</li>
+</ul>
+<p>And nothing checks a value the parser passes through as text: a size, a
+duration, an image reference, <code>&lt;p4-guest-scope&gt;</code>, a server option's value.
+Those reach docker, QEMU or the device server as written.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.indexes", "navigation.sections", "navigation.top", "toc.follow", "content.code.copy", "content.action.edit"], "search": "../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.a5f9d56c.min.js"></script>
+      
+    
+  </body>
+</html>

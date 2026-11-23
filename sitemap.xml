@@ -2,18 +2,58 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://sbates130272.github.io/qemu-minimal/</loc>
-         <lastmod>2026-11-20</lastmod>
+         <lastmod>2026-11-23</lastmod>
     </url>
     <url>
          <loc>https://sbates130272.github.io/qemu-minimal/documentation/</loc>
-         <lastmod>2026-11-20</lastmod>
+         <lastmod>2026-11-23</lastmod>
+    </url>
+    <url>
+         <loc>https://sbates130272.github.io/qemu-minimal/fleet-xml/</loc>
+         <lastmod>2026-11-23</lastmod>
     </url>
     <url>
          <loc>https://sbates130272.github.io/qemu-minimal/publishing/</loc>
-         <lastmod>2026-11-20</lastmod>
+         <lastmod>2026-11-23</lastmod>
+    </url>
+    <url>
+         <loc>https://sbates130272.github.io/qemu-minimal/api/</loc>
+         <lastmod>2026-11-23</lastmod>
+    </url>
+    <url>
+         <loc>https://sbates130272.github.io/qemu-minimal/api/cli/</loc>
+         <lastmod>2026-11-23</lastmod>
+    </url>
+    <url>
+         <loc>https://sbates130272.github.io/qemu-minimal/api/guests/</loc>
+         <lastmod>2026-11-23</lastmod>
+    </url>
+    <url>
+         <loc>https://sbates130272.github.io/qemu-minimal/api/inspection/</loc>
+         <lastmod>2026-11-23</lastmod>
+    </url>
+    <url>
+         <loc>https://sbates130272.github.io/qemu-minimal/api/publishing/</loc>
+         <lastmod>2026-11-23</lastmod>
+    </url>
+    <url>
+         <loc>https://sbates130272.github.io/qemu-minimal/api/quick-start/</loc>
+         <lastmod>2026-11-23</lastmod>
+    </url>
+    <url>
+         <loc>https://sbates130272.github.io/qemu-minimal/api/settings/</loc>
+         <lastmod>2026-11-23</lastmod>
+    </url>
+    <url>
+         <loc>https://sbates130272.github.io/qemu-minimal/api/stacks/</loc>
+         <lastmod>2026-11-23</lastmod>
+    </url>
+    <url>
+         <loc>https://sbates130272.github.io/qemu-minimal/api/teardown/</loc>
+         <lastmod>2026-11-23</lastmod>
     </url>
     <url>
          <loc>https://sbates130272.github.io/qemu-minimal/perf/</loc>
-         <lastmod>2026-11-20</lastmod>
+         <lastmod>2026-11-23</lastmod>
     </url>
 </urlset>
