@@ -90,7 +90,7 @@ jobs:
           twine check --strict dist/*
 
       - name: Upload dists
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: python-dists
           path: dist/
@@ -127,7 +127,7 @@ jobs:
       # dpkg-buildpackage writes to the parent of the source dir, so the deb
       # lands beside the checkout rather than inside it.
       - name: Upload deb
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: deb
           path: "*.deb"
@@ -141,7 +141,7 @@ jobs:
       contents: write
     steps:
       - name: Download every artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts/
           merge-multiple: true
@@ -180,7 +180,7 @@ jobs:
       id-token: write
     steps:
       - name: Download dists
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: python-dists
           path: dist/

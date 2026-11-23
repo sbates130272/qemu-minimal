@@ -130,7 +130,7 @@ jobs:
     # whole site, so it and vm-report-ernic erased each other's report.
     # No Jekyll build here either: the branch source builds the markdown.
     - name: Upload the report
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: vm-report-1vm
         path: site/1vm/

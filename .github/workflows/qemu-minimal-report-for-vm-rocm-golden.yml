@@ -324,7 +324,7 @@ jobs:
 
     - name: Upload the GEMM and hipFile numbers
       if: always() && steps.rocjitsu-bench.outcome == 'success'
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: perf-rocjitsu
         path: perf-out/rocjitsu/badge-*.json
@@ -340,7 +340,7 @@ jobs:
 
     - name: Upload the hipFile fio number
       if: always() && steps.hipfile-fio-bench.outcome == 'success'
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: perf-hipfile-fio
         path: perf-out/hipfile-fio/badge-*.json
@@ -363,7 +363,7 @@ jobs:
 
     - name: Upload the P4 bandwidth number
       if: always() && steps.ernic-p4-bench.outcome == 'success'
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: perf-ernic
         path: perf-out/ernic/badge-*.json
@@ -379,7 +379,7 @@ jobs:
 
     - name: Upload the SDXI bandwidth number
       if: always() && steps.sdxi-bench.outcome == 'success'
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: perf-helios
         path: perf-out/helios/badge-*.json

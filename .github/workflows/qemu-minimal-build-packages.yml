@@ -161,7 +161,7 @@ jobs:
         run: lintian --tag-display-limit 0 python3-qemu-tool_*_all.deb
 
       - name: Upload deb
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: python3-qemu-tool-deb
           path: python3-qemu-tool_*_all.deb
@@ -190,7 +190,7 @@ jobs:
         shell: bash
     steps:
       - name: Download deb
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: python3-qemu-tool-deb
 
@@ -407,7 +407,7 @@ jobs:
           PY
 
       - name: Upload wheel and sdist
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: qemu-tool-wheel
           path: dist/qemu_tool-*
@@ -431,7 +431,7 @@ jobs:
         shell: bash
     steps:
       - name: Download wheel
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: qemu-tool-wheel
 
