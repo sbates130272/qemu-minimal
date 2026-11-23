@@ -1,9 +1,20 @@
+"""`VMConfig`, the settings of one guest, and where its defaults come from.
+
+Every field is something `run-vm` or `gen-vm` can be told. The command line
+fills them in `cli`, and `settings.vm_overrides()` fills them from fleet
+XML. The default images directory and package manifest depend on how
+qemu-tool was installed, so they are worked out for each instance and not
+when the module is imported.
+"""
+
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .identity import AMD_CPU_VENDOR
 from .ports import DEFAULT_SSH_PORT
 from .resources import PACKAGES_D as _PACKAGES_D_PACKAGE, packaged_path
 
@@ -12,6 +23,64 @@ from .resources import PACKAGES_D as _PACKAGES_D_PACKAGE, packaged_path
 # depends on what is on disk, and that can differ between processes.
 _INSTALLED_IMAGES = Path("/var/lib/qemu-tool/images")
 _INSTALLED_PACKAGES = Path("/usr/share/qemu-tool/packages-default")
+
+
+# The block sizes an emulated NVMe namespace may be given, logical and
+# physical alike: --nvme-block-size and <vm-nvme-block-size>. The first is
+# QEMU's default and the one that renders nothing.
+NVME_BLOCK_SIZES: tuple[int, ...] = (512, 4096)
+DEFAULT_NVME_BLOCK_SIZE = NVME_BLOCK_SIZES[0]
+
+
+def nvme_block_size(raw: str, what: str) -> int:
+    """RAW as one of NVME_BLOCK_SIZES; ValueError names WHAT and both.
+
+    Exact on purpose: ASCII digits with white space round them and nothing
+    else, so the generated schema can state the same form.
+    """
+    text = raw.strip()
+    for size in NVME_BLOCK_SIZES:
+        if text == str(size):
+            return size
+    allowed = " or ".join(str(size) for size in NVME_BLOCK_SIZES)
+    raise ValueError(f"{what} must be {allowed}, got {raw!r}")
+
+
+# <ernic-mtu>: the MTU of every emulated ernic NIC in a guest, and of the
+# Ethernet path between guests when the fleet has one. 1500 is what the
+# device comes up with. 9198 is the most the pinned rocm-ernic server
+# advertises (its default profile's mtu_max; the guest's `ip link` refuses
+# 9199 as "greater than device maximum").
+DEFAULT_ERNIC_MTU = 1500
+MAX_ERNIC_MTU = 9198
+# What the guest's RoCE stack takes off a netdev MTU before it rounds down
+# to an InfiniBand MTU. Measured on the pinned driver: 2143 gives 1024 and
+# 2144 gives 2048; 4191 gives 2048 and 4192 gives 4096.
+_ROCE_HEADER_BYTES = 96
+_IB_MTUS = (4096, 2048, 1024, 512, 256)
+
+
+def ernic_mtu(raw: str, what: str) -> int:
+    """RAW as an MTU from DEFAULT_ERNIC_MTU to MAX_ERNIC_MTU.
+
+    Exact on purpose, like nvme_block_size: four ASCII digits with white
+    space round them and nothing else, so the generated schema can state
+    the same form. ValueError names WHAT and the range.
+    """
+    text = raw.strip()
+    if re.fullmatch(r"[1-9][0-9][0-9][0-9]", text):
+        value = int(text)
+        if DEFAULT_ERNIC_MTU <= value <= MAX_ERNIC_MTU:
+            return value
+    raise ValueError(
+        f"{what} must be a number of bytes from {DEFAULT_ERNIC_MTU} to "
+        f"{MAX_ERNIC_MTU}, got {raw!r}")
+
+
+def rdma_active_mtu(netdev_mtu: int) -> int:
+    """The RDMA active_mtu a guest reports for a NIC at NETDEV_MTU."""
+    room = netdev_mtu - _ROCE_HEADER_BYTES
+    return next((size for size in _IB_MTUS if size <= room), _IB_MTUS[-1])
 
 
 def _xdg_data_home() -> Path:
@@ -50,6 +119,14 @@ def default_packages() -> str:
 
 @dataclass
 class VMConfig:
+    """The settings of one guest: what `run-vm` and `gen-vm` are told.
+
+    The fields are in three groups, in this order: those both commands
+    read, those of `run-vm` and those of `gen-vm`. `run_vm.run()` and
+    `gen_vm.run()` each take one. `LibvirtXml` converts one to and from a
+    libvirt domain file.
+    """
+
     # ---- shared (run-vm + gen-vm) ----
     vm_name: str = "qemu-minimal"
     arch: str = "amd64"        # amd64 | arm64 | riscv64
@@ -111,13 +188,17 @@ class VMConfig:
     # rocjitsu BAR); must be raised together with pci_hole64_size, since QEMU
     # refuses a hole larger than the phys-bits address space allows.
     cpu_phys_bits: int = 0
+    # The CPUID vendor stated on -cpu, amd64 only. Empty states none, which
+    # under KVM is the host's. A guest is an AMD machine unless very clearly
+    # told otherwise: only --cpu-vendor and <vm-cpu-vendor> change this.
+    cpu_vendor: str = AMD_CPU_VENDOR
     # Size of the 64-bit PCI hole, as a QEMU size string ("512G"). None leaves
     # the machine default, which does not fit eight emulated GPUs' BARs.
     #
     # Bounded by the CPU's physical address width, and the failure is a hard
     # refusal at startup, not a degraded boot:
     #   Address space limit 0xffffffffff < 0x1ffffffffff phys-bits too low (40)
-    # -cpu EPYC gives 40 bits (1 TiB). Measured on QEMU 10.2.1: 512G is
+    # The EPYC model gives 40 bits (1 TiB). Measured on QEMU 10.2.1: 512G is
     # accepted, 1T is not. Going above that needs cpu_phys_bits=41.
     pci_hole64_size: str | None = None
     nvme: str | None = None
@@ -129,6 +210,11 @@ class VMConfig:
     nvme_dbbuf_poll_eventidx: str | None = None  # "on" | "off" | None
     nvme_vram_dev: str | None = None  # qdev id of vfio-user device for P2P
     nvme_vram_bar: int | None = None  # BAR index for vfio-user P2P (None=0)
+    # Logical and physical block size, in bytes, of every namespace run-vm
+    # itself creates: one of NVME_BLOCK_SIZES. 512 is QEMU's default and
+    # adds nothing to the command line. A literal --nvme string is not
+    # touched.
+    nvme_block_size: int = DEFAULT_NVME_BLOCK_SIZE
     pci_testdev: bool = False
     pci_hostdev: list[str] = field(default_factory=list)
     vram_dev_index: int | None = None  # 1-based index into pci_hostdev

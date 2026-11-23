@@ -60,7 +60,6 @@
        =================================================================== -->
 
   <vm-images-dir>/var/lib/qemu-tool/images</vm-images-dir>
-  <vm-backing-shared>true</vm-backing-shared>
   <vm-username>ubuntu</vm-username>
   <vm-password>ubuntu</vm-password>
 

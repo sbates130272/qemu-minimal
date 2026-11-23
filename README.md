@@ -519,6 +519,7 @@ rather than failing:
 | Images directory | `/var/lib/qemu-tool/images` | `$XDG_DATA_HOME/qemu-tool/images` |
 | Package manifest | `/usr/share/qemu-tool/packages-default` | bundled in the wheel |
 | Compose stacks | `/usr/share/qemu-tool/compose/` | bundled in the wheel |
+| Fleet XML schemas | `/usr/share/qemu-tool/schema/` | bundled; write one with `qemu-tool fleet-schema --output FILE` |
 | Manual page | `/usr/share/man/man1/` | bundled; read it with `qemu-tool man` |
 
 The manual page is the one of those a fallback path cannot fix. Neither pipx
@@ -611,6 +612,8 @@ qemu-minimal/
     packages.d/     Cloud-init package manifests
     stacks/         Fleet XML settings: rocm-golden.xml, helios-tray.xml, mi355x-server.xml, xio.xml
     compose/        The compose stack generated from each of those, same names
+  docs/             The published site's pages (MkDocs); docs/api/ lists the modules of the Python API pages
+  .mkdocs/          What the site build needs to read the package's docstrings
   libvirt/
     virt-install-ubuntu  Create VMs via libvirt
     create-nvme          Generate NVMe XML for libvirt
@@ -759,6 +762,77 @@ do not, since it has not been run behind a PCIe switch. An overlay on
 `rocm-golden.xml` that removes the NVMe (`<vm-nvme>0`) is refused unless it
 also sets `<vm-nvme-vram>false`.
 
+`<vm-nvme-block-size>4096</vm-nvme-block-size>` gives every emulated NVMe
+namespace of a guest 4096-byte blocks, where QEMU's default, and this
+tool's, is 512. It sets the logical and the physical block size alike, and
+is what an "LBA format" request comes to: the guest then sees the 4096-byte
+format in use (`nvme id-ns` marks LBA Format 4, `Data Size: 4096 bytes`,
+and `/sys/block/nvme0n1/queue/logical_block_size` reads 4096). The values
+are `512` and `4096`; anything else is a parse error. It needs an emulated
+NVMe (`<vm-nvme>` other than 0), and a fleet that leaves it out renders
+exactly what it did before.
+
+- **It is for QEMU's emulated NVMe and nothing else.** The other NVMe
+  devices a fleet can have set their own block size, in their own
+  `<devices>` entry. An SPDK controller's LBA namespaces are 4096 bytes
+  unless the namespace says otherwise (`lba:malloc:512M:512` in
+  `<namespaces>`), and its KV namespace has no blocks. An `nvmeof`
+  backend's namespaces are 512 bytes unless its options say `bs=4096`
+  (`<backend type='nvmeof'>size=1G,bs=4096</backend>`). Both read from the
+  help of the pinned images, not run here.
+- **Nothing on an existing scratch disk is converted or reformatted.** The
+  NVMe qcow2 keeps its bytes when the block size changes, and what was
+  written at the old size may not be readable at the new one. Seen on a
+  guest, 512 to 4096: a GPT is not found, so the disk shows no partitions;
+  XFS does not mount (`device supports 4096 byte sectors (not 512)`); ext4
+  made with 1024-byte blocks does not mount (`bad block size 1024`); ext4
+  with 4096-byte blocks, which is what `mkfs.ext4` made here, mounts. From
+  4096 back to 512, ext4 and XFS both mounted and the GPT was again not
+  found. `quick-start test` and `--hipfile-test` treat the namespace as
+  scratch and write it afresh on every run, so neither minds.
+  `run-vm --nvme-recreate` starts a guest on an empty disk.
+- **No difference in the test rates was shown, and none was ruled out.**
+  On the default fleet with one guest, in single runs (two a side for the
+  hipFile reads, three for the NVMe test), the 4096 and the 512 figures
+  overlapped in every row. That many runs cannot show a small difference
+  if there is one: see the table in `AGENTS.md`.
+
+`<ernic-mtu>9000</ernic-mtu>` raises the MTU of every emulated NIC in every
+guest, where the device comes up at 1500. What it is mostly for is RDMA: a
+guest's RDMA port takes its `active_mtu` from the NIC's MTU, so at 1500
+every transfer runs at an RDMA MTU of 1024, and perftest's `-m 4096` is
+clamped to that without a word. From 4192 up the port reports 4096. The
+values are 1500 to 9198, the most the device takes; anything else is a
+parse error, and a fleet that leaves the element out renders exactly what it
+did before.
+
+| `<ernic-mtu>` | The guest's NIC | `ibv_devinfo` `active_mtu` |
+|---|---|---|
+| absent, or 1500 to 2143 | 1500, or as set | 1024 |
+| 2144 to 4191 | as set | 2048 |
+| 4192 to 9198 | as set | 4096 |
+
+- **It needs no new guest image.** The host hands each guest a one-line udev
+  rule at boot, as a systemd credential QEMU carries in an SMBIOS string,
+  and the guest's own systemd installs it under `/run/udev/rules.d` before
+  the NIC appears. Nothing is written to the guest's disk and no playbook
+  runs: the same disk booted without the element is back at 1500. Seen on
+  guests of the published image `20261119.g2aea67d`.
+- **With `<ernic-tap>true` the Ethernet between guests is raised with it.**
+  The `l2` network is created with that MTU and each tap is set to it, so a
+  9000-byte frame crosses: `ping -M do -s 8972` between two guests passed
+  and `-s 8973` did not. Without that half a raised guest loses every
+  larger frame with no error anywhere, so the generator always renders
+  both. The mesh network is left at 1500; RDMA payload crosses it over TCP.
+- **A running stack does not take a changed value.** Docker sets a
+  network's MTU when it creates it. Bring the stack down and up.
+- **It does not make RDMA faster, and does not lift the 16 MiB limit** on a
+  single RDMA message. The emulated device does not use the path MTU, and
+  the rates measured at 4096 were inside the spread of those at 1024.
+- **A generated stack only.** `run-vm --xml` outside a stack does not get
+  it. A fleet whose `<vm-qemu-args>` already passes a credential named
+  `udev.rules.70-qemu-tool-ernic-mtu` is refused.
+
 Every later command against that fleet needs no flags, unless it starts
 the fleet and the fleet's `<vm-images-dir>` or `<qemu-tool-src>` is not the
 default (see below):
@@ -834,6 +908,56 @@ repeats one `run-vm` already writes is QEMU's to resolve, and for most
 options the last one wins. `run-vm --qemu-arg=WORD`, repeatable, is the same
 thing for one guest outside a stack.
 
+**A guest is an AMD machine on every host.** `run-vm` starts an amd64 guest
+with `-cpu EPYC,vendor=AuthenticAMD`. The vendor is stated because under KVM
+QEMU gives every CPU model the host's CPUID vendor: on an Intel host a bare
+`-cpu EPYC` guest reads `GenuineIntel` with family 23, and the guest kernel
+then refuses peer-to-peer DMA between devices that share no upstream bridge
+("cannot be used for peer-to-peer DMA as the client and provider (...) do
+not share an upstream bridge or whitelisted host bridge", where the
+parentheses hold the provider's PCI address). Seen on a guest
+given the `GenuineIntel` vendor on an AMD host: hipFile's direct path falls
+back and reads at about a twelfth of the rate, still verified; a direct NVMe
+read into GPU peer-to-peer pages fails with that message; the dma-buf RDMA
+test still passes. `<vm-cpu-vendor>` in a fleet file, or
+`run-vm --cpu-vendor`, changes it:
+
+```xml
+<vm-cpu-vendor>GenuineIntel</vm-cpu-vendor>   <!-- twelve characters -->
+<vm-cpu-vendor/>                              <!-- no vendor stated: the host's -->
+```
+
+An empty element is not the default. A render or a `run-vm` with anything
+but `AuthenticAMD` prints a note saying the guest is not presented as AMD.
+Any other CPU property goes in a whole `-cpu` in `<vm-qemu-args>`: QEMU
+takes the last `-cpu` on its command line and nothing of an earlier one
+(checked on QEMU 10.2.1 and on the pinned fork), so that `-cpu` has to
+restate the vendor and any `phys-bits`, for example
+`<vm-qemu-args>-cpu EPYC-Milan,vendor=AuthenticAMD,phys-bits=42</vm-qemu-args>`.
+Keep it an AMD model of family 23 or later (`EPYC`, `EPYC-Rome`,
+`EPYC-Milan`, `EPYC-Genoa`): the guest kernel asks for the family as well
+as the vendor, and `-cpu host` or `-cpu max` take the host's family. Read
+from source and not run: on an Intel host `-cpu host,vendor=AuthenticAMD`
+is family 6 and is refused peer-to-peer DMA all the same, and it also
+turns on KVM paravirtual features whose hypercalls an AMD-vendor guest
+cannot make on Intel hardware, so expect such a guest not to boot.
+Not yet run on an Intel host: the `quickstart-boot` check prints the host's
+vendor and asserts the guest's, and its first run on an Intel runner is the
+proof. On an AMD runner the check passes with or without this and says so
+in its summary ("what this run shows"). Read from the guest kernel's source
+and not run: on Intel hardware an AMD-vendor guest kernel treats itself as
+not affected by the Intel-only CPU vulnerabilities (Meltdown, L1TF, MDS,
+MMIO stale data, BHI) and does not apply those mitigations inside the
+guest, and applies the AMD family 23 ones instead, so benchmark figures
+from an Intel host are not comparable with earlier ones from it. Also read
+and not run: an AMD-vendor guest gets QEMU's AMD memory map, with a reserved
+range just below 1 TiB, so on an Intel host a fleet of your own whose
+`<vm-pci-hole64-size>` reaches 1 TiB may now need a larger
+`<vm-cpu-phys-bits>` (QEMU says `phys-bits too low` at start); and `modprobe
+ptp_kvm` in a guest on an Intel host is expected to fault. A domain from
+`run-vm --convert-to-libvirt` has the host's CPU whatever these say, and
+says so on stderr.
+
 `<vm-vcpus>` must not drop below 4 on a stack with an ernic. `ionic_lif_size()`
 derives its EQ count from `num_online_cpus()` and `ionic_create_rdma_admin()`
 rejects fewer than `IONIC_EQ_COUNT_MIN`, so `ionic_rdma` never probes; the only
@@ -868,6 +992,84 @@ Error: my-fleet.xml: unknown element <vm-vcpu>; did you mean <vm-vcpus>?
 Comments are allowed. `qemu-tool check --xml my-fleet.xml` reports the same
 problems without stopping at the first.
 
+Ten elements the format used to have are refused too, with an error that
+says so and suggests no setting in its place. Seven were parsed and read by
+no command, so deleting one from a file changes nothing: `<qemu-digest>`,
+`<ernic-digest>`, `<rocjitsu-digest>`, `<backing-digest>`,
+`<domain-pattern>`, `<prom-port>` and `<loki-port>`.
+
+```
+Error: my-fleet.xml: <prom-port> was removed from the fleet format: no command ever read it; Prometheus has no host port and is asked inside its container. Delete the element.
+```
+
+Three were read, and their errors say what to do instead:
+
+- `<vm-backing-shared>` turned image locking off for a `run-vm` given
+  `--xml`, or finding a `fleet.xml` on the search path. A generated
+  stack always starts its guests with locking off, whatever the element
+  said, so a stack is unchanged. A `run-vm` outside a stack that shares a
+  backing file now needs `--backing-shared` on its command line.
+- `<ernic-subnet>` and `<ernic-mac-prefix>` are fixed at `192.168.100` and
+  `72:6f:63:6d`. The guest image addresses its NICs on that network at boot
+  and the quick-start playbook finds a NIC by that prefix, so no other
+  value gave a working fleet. A file that set either to its default
+  deletes the element and renders as before.
+
+```
+Error: my-fleet.xml: <vm-backing-shared> was removed from the fleet format: a generated stack always starts its guests with image locking off, whatever this said; for a run-vm outside a stack, pass --backing-shared. Delete the element.
+```
+
+A misspelling of a removed element is told which one it looks like, and why
+that one went, not the nearest setting:
+
+```
+Error: my-fleet.xml: unknown element <prom-prot>; it looks like <prom-port>, which was removed from the fleet format: no command ever read it; Prometheus has no host port and is asked inside its container. Delete the element.
+```
+
+A removed element set more than once is reported once; a misspelling is
+reported once per copy, like any other unknown element.
+
+A guest image is pinned by digest in `<backing-ref>` itself, as
+`name@sha256:...`.
+
+Every element, with its kind, its default and what it is for, is in the
+[fleet XML reference](docs/fleet-xml.md), which is also a page of the
+[site](https://sbates130272.github.io/qemu-minimal/fleet-xml/). It is
+generated from the parser's tables, and so are two schemas for editors and
+for validators that do not have `qemu-tool`: RELAX NG,
+[`qemu/schema/fleet.rng`](qemu/schema/fleet.rng), and XML Schema (XSD 1.0),
+[`qemu/schema/fleet.xsd`](qemu/schema/fleet.xsd). The `.deb` installs both
+under `/usr/share/qemu-tool/schema/`.
+
+```bash
+qemu-tool fleet-schema --output fleet.rng       # or --format md for the page
+xmllint --noout --relaxng fleet.rng my-fleet.xml
+
+qemu-tool fleet-schema --format xsd --output fleet.xsd
+xmllint --noout --schema fleet.xsd my-fleet.xml
+```
+
+The parser stays the authority. Neither schema rejects a file the parser
+accepts, and both accept some the parser refuses: a schema describes one
+file, so it knows nothing of layers, and it cannot see two `<server>`
+entries with one id, a count that disagrees with a `<devices>` block, text
+between elements, or any rule `gen-compose` holds between elements. The
+reference lists them.
+
+Use the RELAX NG schema where the tool takes one: it is the precise one. The
+XSD is for an editor or a tool that takes only XSD. It accepts everything
+the RELAX NG schema accepts, and three things besides, which XSD 1.0 cannot
+refuse: a `<server>` holding the children of another server type than its
+own (still never of two types at once), option text in
+`<backend type='tcp'>`, and three attributes of XML Schema's own:
+`xsi:schemaLocation` and `xsi:noNamespaceSchemaLocation` on any element, and
+`xsi:type` on a flat setting when it names the type the setting already has.
+The parser refuses all three, so a fleet file
+cannot name its XSD in an attribute: associate the two in the editor's
+settings (`xml.fileAssociations` for the XML extension of VS Code), or with
+an `xml-model` processing instruction before the root element. The
+[reference](docs/fleet-xml.md#editors) shows both.
+
 #### The `<devices>` block
 
 One element has structure. `<devices>` lists the vfio-user servers every
@@ -891,7 +1093,8 @@ given different settings:
 </devices>
 ```
 
-- **`type`** is `ernic`, `rocjitsu` or `sdxi`. **`id`** names the entry: it
+- **`type`** is `ernic`, `rocjitsu`, `sdxi` or `spdk`: an ernic NIC, a
+  rocjitsu GPU, an SDXI device or an SPDK NVMe controller. **`id`** names the entry: it
   is what a later layer and an error message refer to. Containers keep the
   names the generator gives them (`ernic-1-2` is guest 1's second NIC).
 - **The block replaces the counts.** With it, `<ernic-per-vm>`,
@@ -935,7 +1138,11 @@ on the mesh, and refuses to start otherwise.
 
 `gen-vm` and `run-vm` take the per-guest elements as the defaults of their
 flags — `<vm-vcpus>` is `--vcpus`, `<vm-images-dir>` is `--images`,
-`<backing-ref>` is `--backing-image`. Values are read lowest to highest from
+`<vm-nvme-block-size>` is `run-vm --nvme-block-size` (512 or 4096, the block
+size of QEMU's emulated NVMe; see "A fleet of your own" above),
+`<backing-ref>` is `--backing-image`. `<ernic-mtu>` (1500 to 9198, the MTU
+of a guest's emulated NICs; same section) has no flag: it is a generated
+stack's. Values are read lowest to highest from
 the built-in defaults, a `--domain` XML, the fleet XML, then explicit CLI
 flags, so a flag always wins over the file. One-shot actions (`--dry-run`,
 `--force`, `--restore-image`, `--ansible-only`, `--nvme-recreate`,
@@ -1221,6 +1428,15 @@ the modules and addresses its NICs at boot.
 <file.xml>` to load a libvirt domain XML as base configuration (CLI
 flags take precedence over XML values).
 
+`qemu-tool` is a command and has no library interface. For people working
+on its code, the [site](https://sbates130272.github.io/qemu-minimal/api/)
+has a Python API section: every module of the package but `__init__` and
+`__main__`, with its docstrings, public members, signatures and source. It
+is built from the docstrings when the site is built
+([`docs/api/`](docs/api/) holds only the list of modules for each page),
+and it promises nothing about those interfaces from one release to the
+next.
+
 ### check flags
 
 Checks the host and prints a report grouped by area — tools, Docker,
@@ -1297,6 +1513,7 @@ takes every stack on the system.
 | `--nvme-trace EVENT` | — | NVMe tracing: `doorbell`, `all`, or event name |
 | `--nvme-trace-file FILE` | — | Redirect trace output to file |
 | `--nvme-lbaf-mask HEX` | — | 16-bit hex LBA format mask (e.g. `0x1f`) |
+| `--nvme-block-size {512,4096}` | `<vm-nvme-block-size>`, else 512 | Logical and physical block size of every NVMe namespace `run-vm` creates: `logical_block_size` and `physical_block_size` on the device that holds the drive. Not applied to a literal `--nvme` string |
 | `--nvme-recreate` | off | Delete and recreate NVMe qcow2 files on start |
 | `--nvme-vram-dev ID` | — | Let the emulated NVMe DMA into the BAR of the vfio-user device with this qdev id (its socket's file name without `.sock`); fork QEMU only. `<vm-nvme-vram>` in a fleet file |
 | `--nvme-vram-bar N` | 0 | Which BAR of that device |
@@ -1313,6 +1530,7 @@ takes every stack on the system.
 | `--no-qemu-guest-agent` | off | Omit guest agent channel |
 | `--backing-shared` | off | Disable image locking for shared backing files |
 | `--extra-hostfwd RULE` | — | Extra hostfwd rule e.g. `tcp::9150-:9100` (repeatable) |
+| `--cpu-vendor VENDOR` | `<vm-cpu-vendor>`, else `AuthenticAMD` | CPUID vendor stated on `-cpu` (amd64); 12 characters, or `''` for the host's |
 | `--qemu-arg=WORD` | the words of `<vm-qemu-args>` | One word appended to the QEMU command line as it is (repeatable, one word each) |
 | `--dry-run` | off | Print QEMU command instead of running |
 | `--convert-to-libvirt [FILE]` | — | Emit libvirt domain XML to FILE (default `<vm>.xml`) |

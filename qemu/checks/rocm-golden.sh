@@ -1852,3 +1852,38 @@ else
     echo "hostname: ${_hn_want} is what the host calls this guest"
 fi
 # end: guest hostname
+
+# ---------------------------------------------------------------------------
+# The host can hand the guest a udev rule
+# ---------------------------------------------------------------------------
+# <ernic-mtu> in a fleet file sets the MTU of a guest's emulated NICs with
+# no file in the image and no playbook: the host passes a udev rule as a
+# systemd credential (QEMU -smbios type=11, udev.rules.*), PID 1 imports
+# it, and systemd-udev-load-credentials.service writes it under
+# /run/udev/rules.d before udevd starts. An image whose systemd has no such
+# unit, or has it masked, boots at MTU 1500 whatever the fleet says, with
+# no error anywhere. So the unit has to be there and to have run on this
+# boot. It runs with no credential too, which is every boot nobody set an
+# MTU for, so this needs no device and no setting.
+#
+# tests/test_ernic_mtu.py runs the lines between the two markers with a
+# stub systemctl.
+# begin: udev credentials
+_uc_unit=systemd-udev-load-credentials.service
+_uc_load=$(systemctl show -P LoadState "${_uc_unit}" 2>/dev/null || true)
+if [ "${_uc_load}" != "loaded" ]; then
+    echo "ERROR: udev credentials: ${_uc_unit} is '${_uc_load}', not" \
+         "loaded: a udev rule the host passes this guest (<ernic-mtu>)" \
+         "is never installed" >&2
+    exit 1
+fi
+_uc_active=$(systemctl show -P ActiveState "${_uc_unit}" 2>/dev/null || true)
+if [ "${_uc_active}" != "active" ]; then
+    echo "ERROR: udev credentials: ${_uc_unit} is '${_uc_active}' on this" \
+         "boot, not active: it did not run, so a udev rule the host" \
+         "passes this guest (<ernic-mtu>) is never installed" >&2
+    exit 1
+fi
+echo "udev credentials: ${_uc_unit} ran; the host can pass this guest a" \
+     "udev rule"
+# end: udev credentials

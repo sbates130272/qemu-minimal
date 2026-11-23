@@ -5,8 +5,10 @@ carries fleet/compose-level settings that have no libvirt domain XML equivalent:
 fleet shape, container image refs, network configuration, ERNIC mesh settings,
 metrics directories, and logging bounds.
 
-Per-VM settings (VMConfig fields) live in separate libvirt domain XML files;
-libvirt_xml.py handles those.
+A fleet file is the only settings file. Its <vm-*> elements are the per-VM
+settings of every guest in the fleet (settings.vm_overrides maps them onto
+VMConfig fields); there is no per-guest file. libvirt_xml.py is unrelated to
+fleets: it converts one guest's VMConfig to and from a libvirt domain file.
 """
 
 from __future__ import annotations
@@ -21,6 +23,10 @@ from pathlib import Path
 from typing import Any
 import xml.etree.ElementTree as ET
 
+from .config import (
+    DEFAULT_ERNIC_MTU, DEFAULT_NVME_BLOCK_SIZE, ernic_mtu, nvme_block_size,
+)
+from .identity import AMD_CPU_VENDOR, cpu_vendor_problem
 from .ports import parse_ssh_port, publish_address
 
 NS_FLEET = "http://qemu-tool/fleet/1.0"
@@ -109,6 +115,174 @@ _SERVER_SETTINGS = {
 
 _SERVER_ID = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,31}\Z")
 
+# The values _read_devices holds to a form, as (type, element) -> the regular
+# expression the whole stripped text has to match. Every other value is any
+# text with no line break or control character. In a table so the generated
+# schema states the same forms the parser checks (fleet_schema.py).
+_VALUE_FORMS: dict[tuple[str, str], str] = {
+    ("rocjitsu", "config"): r"[A-Za-z0-9][A-Za-z0-9._-]*",
+    ("spdk", "serial"): r"[A-Za-z0-9_-]{1,20}",
+    ("spdk", "cpumask"): r"0x[0-9A-Fa-f]{1,32}",
+    ("spdk", "namespaces"): r"[A-Za-z0-9_.:,/=-]+",
+}
+
+
+def _has_form(kind: str, name: str, text: str) -> bool:
+    form = _VALUE_FORMS.get((kind, name))
+    return form is None or re.match(form + r"\Z", text) is not None
+
+
+# What each part of a <devices> block is for and the form its value takes,
+# as (help, form): the block's counterpart of a _Setting's help and form.
+# The generated schema and reference page read these; the parser does not.
+DEVICES_HELP: dict[str, tuple[str, str]] = {
+    "devices": (
+        "Lists the vfio-user servers every guest gets, one <server> each; "
+        "replaces the three per-VM device counts",
+        "No attributes, no text; at least one <server>. Later layers merge "
+        "entries by id, append new ids and cannot remove one. Every guest "
+        "gets the same list"),
+    "server": (
+        "One device server every guest gets; its children set that server's"
+        " backend, config file or options",
+        "Requires type and id, and takes no other attribute. Children "
+        "allowed depend on type; each may appear once unless the option is "
+        "repeatable"),
+    "server@type": (
+        "Kind of server: an ernic NIC, a rocjitsu GPU, an SDXI device or an"
+        " SPDK NVMe controller",
+        "ernic, rocjitsu, sdxi or spdk. The generator refuses more than one"
+        " spdk a guest, and an spdk with no <spdk-image>. An id cannot "
+        "change type in a later layer"),
+    "server@id": (
+        "Names the entry for later layers to merge on and for error "
+        "messages; does not rename containers or sockets",
+        "Starts with a letter; letters, digits, '_', '.' and '-'; 32 "
+        "characters at most; unique in the block"),
+    "backend": (
+        "Sets an ernic NIC's RDMA backend; any type but tcp takes that NIC "
+        "out of the generated TCP mesh",
+        "ernic only. Text is the backend's own options, optional, as one "
+        "word with no whitespace: size=1G,ns=2,kv=1,size=256M. The parser "
+        "checks only that; tcp takes none"),
+    "backend@type": (
+        "Which RDMA backend the NIC's server runs",
+        "none, loopback, tcp, nvmeof or s3. Required on <backend>, and its "
+        "only attribute"),
+    "config": (
+        "Names the rocjitsu simulation config file for this one GPU, in "
+        "place of <rocjitsu-config>",
+        "rocjitsu only. One file name in the image's configs directory, no "
+        "path: starts with a letter or digit, then letters, digits, '.', "
+        "'_', '-'. Example gfx1250_mi455x.json"),
+}
+
+# The same for each option element, per server type.
+SERVER_OPTION_HELP: dict[str, dict[str, tuple[str, str]]] = {
+    "ernic": {
+        "log-level": (
+            "Log verbosity of this NIC's server",
+            "none, error, warn, info or debug; the server's default is "
+            "warn. The parser does not check the word"),
+        "nic-profile": (
+            "Shapes the NIC from a profile; repeatable, and later profiles "
+            "win",
+            "A built-in name (compat, small-vm, generic-100g, generic-400g)"
+            " or a path to an ini file inside the server container. "
+            "Repeatable, order kept; a later layer naming it replaces all "
+            "earlier values"),
+        "stats-interval-ms": (
+            "How often the server rewrites the guest's statistics; "
+            "overrides every profile",
+            "Milliseconds, 10 to 60000; the server's default is the "
+            "profile's, 1000. The parser does not check the number or range"),
+        "eth-queues": (
+            "Number of Ethernet Rx/Tx queues the NIC offers the guest; "
+            "overrides every profile",
+            "Integer 1 to 64; the server's default is the profile's, 4. The"
+            " guest uses at most one per vCPU. The parser does not check "
+            "the number or range"),
+        "inject": (
+            "Injects a fault into this NIC's server, for testing; "
+            "repeatable",
+            "One fault as 'SITE: PATTERN effect EFFECT', for example "
+            "'stats_vals: every 100 effect fail status eio'. Spaces "
+            "allowed. Repeatable, order kept; unchecked by the parser"),
+    },
+    "rocjitsu": {
+        "node": (
+            "Selects one local node from a rocjitsu system manifest; needed"
+            " for a multi-node launch",
+            "A node name from the manifest the config file refers to; "
+            "unchecked by the parser"),
+        "cpu-thread-budget": (
+            "Overrides the CPU thread budget of this GPU's server; zero "
+            "selects automatic sizing",
+            "Integer count of threads; 0 is automatic. The parser does not "
+            "check that it is a number"),
+        "wait-checking": (
+            "Overrides this GPU server's wait checks",
+            "off disables checks, on enables ordinary checks, all adds the "
+            "gfx1250 XCNT checks. The parser does not check the word"),
+    },
+    "sdxi": {
+        "verbose": (
+            "Raises the SDXI server's log verbosity; repeat it for debug "
+            "output",
+            "A switch: empty element, no value, no attributes. May be "
+            "repeated; each occurrence renders one --verbose"),
+    },
+    "spdk": {
+        "namespaces": (
+            "The namespaces the SPDK NVMe controller serves, in order; sets"
+            " the image's NVME_NAMESPACES",
+            "One word, comma list, NSIDs in list order: "
+            "lba:malloc:SIZE[:BLOCK], lba:aio:PATH[:BLOCK[:SIZE]], "
+            "kv:mem[:MAXVAL[:MAXKEYS]]. Image default "
+            "lba:malloc:512M,kv:mem"),
+        "serial": (
+            "Serial number of the SPDK NVMe controller, as the guest sees "
+            "it; sets the image's SPDK_SERIAL",
+            "1 to 20 letters, digits, '_' and '-'. Image default SPDKVFU01"),
+        "cpumask": (
+            "Host cores the SPDK server's poll-mode reactor spins on; sets "
+            "SPDK_CPUMASK. Each server takes one full core",
+            "Hexadecimal core mask, 0x then 1 to 32 hex digits, such as "
+            "0x4. Default 0x1, host CPU 0. One value for every guest's "
+            "server, so guests share the cores it names"),
+    },
+}
+
+# And for each backend type.
+BACKEND_HELP: dict[str, tuple[str, str]] = {
+    "none": (
+        "No RDMA backend: the server runs minimal stubs and the NIC is off "
+        "the mesh",
+        "No options in the server's help; the parser still accepts option "
+        "text and passes it on as none:TEXT"),
+    "loopback": (
+        "The server's internal loopback emulation, for a guest with no "
+        "peer; the NIC is off the mesh",
+        "No options in the server's help; the parser does not refuse text"),
+    "tcp": (
+        "The generated TCP mesh between guests; the same as naming no "
+        "backend",
+        "Takes no options, and text is an error: manager, workers and "
+        "addresses are derived"),
+    "nvmeof": (
+        "An NVMe-oF target inside the NIC's server that the guest reaches "
+        "with nvme connect over RDMA; off the mesh",
+        "Comma options, order dependent: size=, file=, bs=, nqn=, ip=, "
+        "port=, queues=, kv=1, keys=, maxval=, nsid=; ns=N starts the next "
+        "namespace. Sizes take K/M/G/T; default 64M"),
+    "s3": (
+        "An S3-over-RDMA object store inside the NIC's server that the "
+        "guest reaches over HTTP; off the mesh",
+        "Comma options: bucket= (default ernic), size= with K/M/G (default "
+        "256M), objects= (default 256), ip= (default 192.168.200.1), port= "
+        "(default 9000), maxpart= (default 256M)"),
+}
+
 
 @dataclasses.dataclass(frozen=True)
 class Server:
@@ -190,6 +364,16 @@ def merge_devices(
 
 @dataclasses.dataclass
 class FleetConfig:
+    """The settings of one fleet, as fleet XML states them.
+
+    One field for each flat element of the format, which the parser's
+    table of settings maps to its field, and `devices`, the entries of the
+    `<devices>` block. A field's default here is the format's default: it
+    is the value of an element no layer sets. `FleetXml.parse_layers()`
+    builds one from fleet XML files and `FleetXml.emit()` writes one out as
+    a file.
+    """
+
     # ---- Shape ----
     count: int = 1
     name_prefix: str = "qemu-fleet"
@@ -198,22 +382,16 @@ class FleetConfig:
 
     # ---- Container images ----
     qemu_ref: str = ""
-    qemu_digest: str = ""
     ernic_ref: str = ""
-    ernic_digest: str = ""
     rocjitsu_ref: str = ""
-    rocjitsu_digest: str = ""
     sdxi_ref: str = ""
     # The SPDK vfio-user NVMe controller image. A <server type='spdk'> in
     # <devices> is the only thing that runs it.
     spdk_ref: str = ""
     backing_ref: str = ""
-    backing_digest: str = ""
 
     # ---- Network ----
     fleet_prefix: str = "172.31"
-    ernic_subnet: str = "192.168.100"
-    ernic_mac_prefix: str = "72:6f:63:6d"
 
     # ---- Topology (devices per VM) ----
     # ernic_per_vm multiplies MESH NODES, not just containers: each rocm-ernic
@@ -229,6 +407,10 @@ class FleetConfig:
 
     # ---- ERNIC mesh ----
     ernic_tap: bool = False
+    # The MTU of every emulated ernic NIC in a guest, set by a udev rule the
+    # host hands the guest at boot, and of the l2 network and each tap when
+    # the fleet has them. 1500 is the device's own and renders nothing.
+    ernic_mtu: int = DEFAULT_ERNIC_MTU
     ernic_tcp_port: int = 6320
     ernic_stats_port: int = 9840
     ernic_nofile: int = 65536
@@ -252,10 +434,13 @@ class FleetConfig:
     shm_size: str = "8g"
     vm_nvme: int = 0
     vm_nvme_vram: bool = False
+    # run-vm --nvme-block-size: the logical and physical block size of every
+    # emulated NVMe namespace, 512 (QEMU's default) or 4096. The SPDK
+    # controller and an nvmeof backend's namespaces have their own.
+    vm_nvme_block_size: int = DEFAULT_NVME_BLOCK_SIZE
     # run-vm --pci-mmio-bridge: the fork QEMU's bridge device, which rocm-xio
     # uses to reach the emulated NVMe's queues from the GPU side.
     vm_pci_mmio_bridge: bool = False
-    vm_backing_shared: bool = False
     vm_username: str = "ubuntu"
     vm_password: str = ""
     vm_filesystem: str = ""
@@ -272,6 +457,10 @@ class FleetConfig:
     # QEMU, whose -smp inference gives one single-core socket per vCPU.
     vm_cpu_sockets: int = 0
     vm_cpu_phys_bits: int = 0
+    # The CPUID vendor every guest's CPU states. A guest is an AMD machine
+    # unless very clearly told otherwise; "" (an empty element) states no
+    # vendor, which under KVM is the host's. Not sparse: empty is a value.
+    vm_cpu_vendor: str = AMD_CPU_VENDOR
     vm_pci_hole64_size: str = ""
     rocjitsu_config: str = "gfx1250_mi455x.json"
 
@@ -283,9 +472,6 @@ class FleetConfig:
     # Off by default: those checks are what stop a mixed set wedging a fleet
     # at the vfio-user boundary.
     image_allow_guest_lag: bool = False
-
-    # ---- Domain file pattern ----
-    domain_pattern: str = "{name-prefix}-{n}.xml"
 
     # ---- Bake and publish ----
     # Read only by `gen-vm --bake` and `publish-qcow --xml`. A fleet names the
@@ -314,7 +500,6 @@ class FleetConfig:
     publish_flavour: str = ""
 
     # ---- Metrics ----
-    prom_port: int = 9090
     # Host address every published port binds to: each guest's SSH port and
     # Grafana's. Loopback, so a stack is reachable from this host and from
     # nowhere else until someone says otherwise. 0.0.0.0 puts it on every
@@ -339,12 +524,12 @@ class FleetConfig:
     # profile: a log panel beside a metric panel is the whole point.
     logs_enable: bool = True
     loki_image: str = "docker.io/grafana/loki:3.3.2"
-    loki_port: int = 3100
     loki_data_dir: str = "/var/lib/qemu-tool/loki-data"
     alloy_image: str = "docker.io/grafana/alloy:v1.5.1"
 
-_STR, _EXPAND, _INT, _BOOL, _PORT, _ADDR, _ARGS = (
-    "str", "expand", "int", "bool", "port", "addr", "args")
+_STR, _EXPAND, _INT, _BOOL, _PORT, _ADDR, _ARGS, _VENDOR, _BLOCK, _MTU = (
+    "str", "expand", "int", "bool", "port", "addr", "args", "vendor",
+    "blocksize", "mtu")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -354,106 +539,659 @@ class _Setting:
     kind: str
     # Written by emit() only when the value is non-empty / non-zero.
     sparse: bool = False
+    # What the element is for, in one line, and the form its value takes.
+    # The generated schema and reference page print both (fleet_schema.py);
+    # the parser reads neither.
+    help: str = ""
+    form: str = ""
 
 
-# The one description of the format: parse, emit and the set of known
-# elements all read this, in this order.
-_SETTINGS: tuple[_Setting, ...] = (
-    # Shape
-    _Setting("vm-count", "count", _INT),
-    _Setting("vm-name-prefix", "name_prefix", _STR),
-    _Setting("ssh-port-base", "ssh_port_base", _INT),
-    _Setting("stop-grace-period", "stop_grace_period", _STR),
-    # Images
-    _Setting("qemu-ref", "qemu_ref", _STR, sparse=True),
-    _Setting("qemu-digest", "qemu_digest", _STR, sparse=True),
-    _Setting("ernic-ref", "ernic_ref", _STR, sparse=True),
-    _Setting("ernic-digest", "ernic_digest", _STR, sparse=True),
-    _Setting("rocjitsu-ref", "rocjitsu_ref", _STR, sparse=True),
-    _Setting("rocjitsu-digest", "rocjitsu_digest", _STR, sparse=True),
-    _Setting("sdxi-image", "sdxi_ref", _STR, sparse=True),
-    _Setting("spdk-image", "spdk_ref", _STR, sparse=True),
-    _Setting("backing-ref", "backing_ref", _STR, sparse=True),
-    _Setting("backing-digest", "backing_digest", _STR, sparse=True),
-    # Network
-    _Setting("fleet-prefix", "fleet_prefix", _STR),
-    _Setting("ernic-subnet", "ernic_subnet", _STR),
-    _Setting("ernic-mac-prefix", "ernic_mac_prefix", _STR),
-    # Topology
-    _Setting("ernic-per-vm", "ernic_per_vm", _INT),
-    _Setting("rocjitsu-per-vm", "rocjitsu_per_vm", _INT),
-    _Setting("sdxi-per-vm", "sdxi_per_vm", _INT, sparse=True),
-    _Setting("vm-pcie-switch-width", "vm_pcie_switch_width", _INT),
-    # ERNIC
-    _Setting("ernic-tap", "ernic_tap", _BOOL),
-    _Setting("ernic-tcp-port", "ernic_tcp_port", _INT),
-    _Setting("ernic-stats-port", "ernic_stats_port", _INT),
-    _Setting("ernic-nofile", "ernic_nofile", _INT),
-    _Setting("p4-enable", "p4_enable", _BOOL),
-    _Setting("p4-guest-scope", "p4_guest_scope", _STR),
-    _Setting("p4-program", "p4_program", _STR),
-    # VM defaults
-    _Setting("vm-vcpus", "vm_vcpus", _INT),
-    _Setting("vm-vmem", "vm_vmem", _INT),
-    _Setting("vm-shm-size", "shm_size", _STR),
-    _Setting("vm-nvme", "vm_nvme", _INT),
-    _Setting("vm-nvme-vram", "vm_nvme_vram", _BOOL, sparse=True),
-    _Setting("vm-pci-mmio-bridge", "vm_pci_mmio_bridge", _BOOL, sparse=True),
-    _Setting("vm-backing-shared", "vm_backing_shared", _BOOL),
-    _Setting("vm-username", "vm_username", _STR),
-    _Setting("vm-password", "vm_password", _STR),
-    _Setting("vm-filesystem", "vm_filesystem", _STR),
-    _Setting("vm-vfio-user-root-port", "vm_vfio_user_root_port", _BOOL),
-    _Setting("vm-extra-hostfwd", "vm_extra_hostfwd", _STR),
-    _Setting("vm-qemu-args", "vm_qemu_args", _ARGS, sparse=True),
-    _Setting("vm-ssh-key-file", "vm_ssh_key_file", _EXPAND),
-    _Setting("vm-images-dir", "vm_images_dir", _EXPAND),
-    _Setting("vm-cpu-sockets", "vm_cpu_sockets", _INT, sparse=True),
-    _Setting("vm-cpu-phys-bits", "vm_cpu_phys_bits", _INT, sparse=True),
-    _Setting("vm-pci-hole64-size", "vm_pci_hole64_size", _STR),
-    _Setting("rocjitsu-config", "rocjitsu_config", _STR),
-    # Misc
-    _Setting("qemu-tool-src", "qemu_tool_src", _STR),
-    _Setting("image-allow-guest-lag", "image_allow_guest_lag", _BOOL),
-    # Domain files
-    _Setting("domain-pattern", "domain_pattern", _STR),
-    # Bake and publish
-    _Setting("bake-name", "bake_name", _STR, sparse=True),
-    _Setting("bake-release", "bake_release", _STR, sparse=True),
-    _Setting("bake-size", "bake_size", _INT, sparse=True),
-    _Setting("bake-vcpus", "bake_vcpus", _INT, sparse=True),
-    _Setting("bake-vmem", "bake_vmem", _INT, sparse=True),
-    _Setting("bake-packages", "bake_packages", _EXPAND, sparse=True),
-    _Setting("bake-playbook", "bake_playbook", _EXPAND, sparse=True),
-    _Setting("bake-username", "bake_username", _STR, sparse=True),
-    _Setting("bake-password", "bake_password", _STR, sparse=True),
-    _Setting("bake-ssh-port", "bake_ssh_port", _PORT, sparse=True),
-    _Setting("bake-cache-dir", "bake_cache_dir", _EXPAND, sparse=True),
-    _Setting("publish-ref", "publish_ref", _STR, sparse=True),
-    _Setting("publish-flavour", "publish_flavour", _STR, sparse=True),
-    # Metrics
-    _Setting("prom-port", "prom_port", _INT),
-    _Setting("publish-bind-addr", "publish_bind_addr", _ADDR),
-    _Setting("prom-scrape-interval", "prom_scrape_interval", _STR),
-    _Setting("prom-retention", "prom_retention", _STR),
-    _Setting("prom-data-dir", "prometheus_data_dir", _EXPAND, sparse=True),
-    _Setting("grafana-enable", "grafana_enable", _BOOL),
-    _Setting("grafana-image", "grafana_image", _STR),
-    _Setting("grafana-port", "grafana_port", _INT),
-    _Setting("grafana-admin-password", "grafana_admin_password", _STR),
-    _Setting("grafana-data-dir", "grafana_data_dir", _EXPAND, sparse=True),
-    # Logging
-    _Setting("log-max-size", "log_max_size", _STR),
-    _Setting("log-max-files", "log_max_files", _INT),
-    _Setting("logs-enable", "logs_enable", _BOOL),
-    _Setting("loki-image", "loki_image", _STR),
-    _Setting("loki-port", "loki_port", _INT),
-    _Setting("loki-data-dir", "loki_data_dir", _EXPAND),
-    _Setting("alloy-image", "alloy_image", _STR),
+@dataclasses.dataclass(frozen=True)
+class _Section:
+    """A heading of the reference page and the settings under it."""
+    title: str
+    intro: str
+    settings: tuple[_Setting, ...]
+
+
+# The one description of the format: parse, emit, the set of known elements,
+# the generated schema and the reference page all read this, in this order.
+# A section is a heading of the reference page and nothing else.
+_SECTIONS: tuple[_Section, ...] = (
+    _Section("Shape",
+        "How many guests a fleet has, what they are called and where their "
+        "SSH ports go.", (
+        _Setting(
+            "vm-count", "count", _INT,
+            help="Number of guests in the fleet; each gets its own QEMU service "
+                 "and its own set of device servers",
+            form="Integer, at least 1 (render exits below that), default 1. "
+                 "Baked into the generated compose file, so a change means "
+                 "re-rendering. Bounded by 64 mesh NICs (warning above 40) and "
+                 "244 NICs in total"),
+        _Setting(
+            "vm-name-prefix", "name_prefix", _STR,
+            help="Prefix of every guest's name; guest N is <prefix>-N, the name "
+                 "run-vm passes on for the guest's hostname",
+            form="String, default qemu-fleet. gen-compose takes the default for "
+                 "an empty element; quick-start does not, and looks for guests "
+                 "named -1, -2. Names run from <prefix>-1. The guest lower-cases it "
+                 "and turns characters outside a-z, 0-9 and - into hyphens for "
+                 "its hostname"),
+        _Setting(
+            "ssh-port-base", "ssh_port_base", _INT,
+            help="Host port published for guest 1's SSH; guest N gets the base "
+                 "plus N minus 1",
+            form="Integer, default 2222; kind is int, so auto is a parse error. "
+                 "Published on <publish-bind-addr> to container port 2222. "
+                 "quick-start moves the range in an overlay of its own when a "
+                 "port is taken"),
+        _Setting(
+            "stop-grace-period", "stop_grace_period", _STR,
+            help="How long docker waits after asking a guest's QEMU container to"
+                 " stop before it kills it",
+            form="Compose duration such as 120s (the default); passed through as"
+                 " text, not validated by the parser; empty takes the default. "
+                 "Applies to the qemu-N services only. QEMU exits on SIGTERM "
+                 "without shutting the guest down, so this does not make a stop "
+                 "graceful"),
+    )),
+    _Section("Images",
+        "The container images a stack runs and the guest disk image its "
+        "guests pull.", (
+        _Setting(
+            "qemu-ref", "qemu_ref", _STR, sparse=True,
+            help="Container image that runs QEMU for each guest; must share a "
+                 "build stamp with the ernic and rocjitsu images",
+            form="Image reference, repository:tag; required (an empty one stops "
+                 "the render). A tag with no <date>.g<sha> stamp is warned about"
+                 " and left out of the comparison. A repository ending "
+                 "-sbates-fork is taken as the fork QEMU, which <vm-nvme-vram>, "
+                 "<vm-pci-mmio-bridge> and dma-buf RDMA need"),
+        _Setting(
+            "ernic-ref", "ernic_ref", _STR, sparse=True,
+            help="Container image of the rocm-ernic server that emulates each "
+                 "RDMA NIC; same build stamp and vfu.<sha> as QEMU",
+            form="Image reference, repository:tag; required. The render compares"
+                 " the stamp and the vfu.<sha> part of the tag with "
+                 "<qemu-ref>'s. That its ernic.<sha> matches the guest's driver "
+                 "commit is held by tests/test_playbook_pins.py, not by the "
+                 "render"),
+        _Setting(
+            "rocjitsu-ref", "rocjitsu_ref", _STR, sparse=True,
+            help="Container image of the rocjitsu server that emulates each GPU;"
+                 " same build stamp as the QEMU and ernic images",
+            form="Image reference, repository:tag; required (an empty one stops "
+                 "the render)"),
+        _Setting(
+            "sdxi-image", "sdxi_ref", _STR, sparse=True,
+            help="Container image of the SDXI device server; required when a "
+                 "guest has an SDXI device",
+            form="Image reference, repository:tag. Needed when <sdxi-per-vm> is "
+                 "non-zero or <devices> has a server of type sdxi. Not compared "
+                 "with the servers' stamp by the render; its sdxi.<sha7> against"
+                 " the guest's driver commit is a test's check"),
+        _Setting(
+            "spdk-image", "spdk_ref", _STR, sparse=True,
+            help="Container image of the SPDK vfio-user NVMe controller; "
+                 "required when <devices> has a server of type spdk",
+            form="Image reference, repository:tag. Its vfu.<sha> must equal the "
+                 "one in <qemu-ref>, stamped tag or not. Nothing runs it without"
+                 " a spdk entry in <devices>"),
+        _Setting(
+            "backing-ref", "backing_ref", _STR, sparse=True,
+            help="Published guest disk image that gen-vm and quick-start pull as"
+                 " each guest's backing file",
+            form="OCI reference by dated tag YYYYMMDD.g<sha7> or "
+                 "name@sha256:...; empty pulls nothing. gen-compose refuses no "
+                 "tag, latest, qm.<sha7> and near misses of those, and, in the "
+                 "repository <publish-ref> names, any tag but the dated one. "
+                 "Any other tag must share the servers' stamp, or is warned "
+                 "about if unstamped. gen-vm --bake ignores it"),
+    )),
+    _Section("Network",
+        "The docker network every service's address is derived from. The "
+        "guests' RDMA NIC network, 192.168.100.0/24, and the first four "
+        "bytes of each emulated NIC's MAC address, 72:6f:63:6d, are fixed: "
+        "the guest image assumes the first and the quick-start playbook the "
+        "second.", (
+        _Setting(
+            "fleet-prefix", "fleet_prefix", _STR,
+            help="First two octets of the stack's docker network; every service "
+                 "gets a fixed address under it",
+            form="Two dotted octets, default 172.31; not validated by the "
+                 "parser, empty takes the default. Third octet is the service "
+                 "family: 0 infra, 1 ernic, 2 rocjitsu, 3 qemu, 4 sdxi, 5 spdk; "
+                 "the last is the device's number"),
+    )),
+    _Section("Topology",
+        "How many emulated devices each guest gets, and where they sit on "
+        "its PCIe bus.", (
+        _Setting(
+            "ernic-per-vm", "ernic_per_vm", _INT,
+            help="Emulated RDMA NICs per guest; each is its own mesh node, so it"
+                 " multiplies against the mesh's node ceiling",
+            form="Integer, at least 1, default 1. Fleet total is refused above "
+                 "64 mesh nodes or 244 NICs and warned about above 40. Replaced "
+                 "by the <devices> block when one is given"),
+        _Setting(
+            "rocjitsu-per-vm", "rocjitsu_per_vm", _INT,
+            help="Emulated GPUs per guest, each served by its own rocjitsu "
+                 "server",
+            form="Integer, at least 1, default 1. Replaced by the <devices> "
+                 "block when one is given"),
+        _Setting(
+            "sdxi-per-vm", "sdxi_per_vm", _INT, sparse=True,
+            help="SDXI devices per guest; 0 gives none, and above 0 needs "
+                 "<sdxi-image>",
+            form="Integer, default 0. Replaced by the <devices> block when one "
+                 "is given"),
+        _Setting(
+            "vm-pcie-switch-width", "vm_pcie_switch_width", _INT,
+            help="Put each guest's vfio-user devices below PCIe switches, this "
+                 "many devices per switch; 0 leaves them on root ports",
+            form="Integer, default 0 (off). Devices are ordered NICs-per-GPU "
+                 "NICs then one GPU, so 2 with equal counts gives one NIC and "
+                 "one GPU per switch, and 3 with twice as many NICs gives two "
+                 "NICs and a GPU. Rendered as run-vm --vfio-user-switch-width; "
+                 "run-vm refuses a negative value"),
+    )),
+    _Section("ERNIC",
+        "Settings of the rocm-ernic servers: the TAP, the mesh, statistics "
+        "and the P4 engine.", (
+        _Setting(
+            "ernic-tap", "ernic_tap", _BOOL,
+            help="Give each ernic NIC a TAP on a shared L2 network so guests "
+                 "have Ethernet; inter-guest RDMA tests need it",
+            form="true or false; default false. Adds one tapsetup sidecar per "
+                 "NIC and the l2 network"),
+        _Setting(
+            "ernic-mtu", "ernic_mtu", _MTU,
+            help="MTU of every guest's emulated ernic NICs and of the "
+                 "Ethernet between guests; 4192 up gives RDMA an "
+                 "active_mtu of 4096",
+            form="1500 to 9198, in bytes; default 1500, the device's own, "
+                 "which renders nothing. Anything else is a parse error. "
+                 "The guest's RDMA active_mtu follows the NIC: 1024 below "
+                 "2144, 2048 below 4192, 4096 from there. Each guest is "
+                 "handed a udev rule at boot through a systemd credential "
+                 "(QEMU -smbios type=11), which the guest's systemd has to "
+                 "load (systemd-udev-load-credentials; the published image "
+                 "does); with ernic-tap true the l2 network and "
+                 "every tap are created at the same MTU. A running stack "
+                 "does not take a changed value: bring it down and up. "
+                 "Generated stacks only, run-vm --xml does not get it"),
+        _Setting(
+            "ernic-tcp-port", "ernic_tcp_port", _INT,
+            help="TCP port the ernic mesh manager listens on and the workers "
+                 "dial; the mesh health checks match it",
+            form="port number; default 6320. Used by mesh NICs only; a NIC with "
+                 "its own backend ignores it"),
+        _Setting(
+            "ernic-stats-port", "ernic_stats_port", _INT,
+            help="Port the ernic stats exporter serves on, and the port "
+                 "Prometheus scrapes it at",
+            form="port number; default 9840; inside the stack network, not "
+                 "published on the host"),
+        _Setting(
+            "ernic-nofile", "ernic_nofile", _INT,
+            help="Open file descriptor limit for every ernic server; Docker's "
+                 "default of 1024 is too low for a mesh manager",
+            form="count, written as both the soft and the hard nofile ulimit; "
+                 "default 65536"),
+        _Setting(
+            "p4-enable", "p4_enable", _BOOL,
+            help="Run the P4 engine (--p4) on every ernic server; quick-start "
+                 "--p4-test needs it true",
+            form="true or false; default false. When false, p4-guest-scope and "
+                 "p4-program are not rendered"),
+        _Setting(
+            "p4-guest-scope", "p4_guest_scope", _STR,
+            help="Which guest P4 commands reach the engine: none, read counters,"
+                 " write table entries, or load a program",
+            form="none, read, write or load, each including the ones before it; "
+                 "default none. Unchecked: any other word is passed to the "
+                 "server. Only with p4-enable; --p4-test needs load"),
+        _Setting(
+            "p4-program", "p4_program", _STR,
+            help="Path inside the ernic container of a bmv2 JSON program loaded "
+                 "at start; empty leaves the engine in pass-through",
+            form="a path inside the ernic container, not on the host; default "
+                 "empty; only rendered with p4-enable true"),
+    )),
+    _Section("VM defaults",
+        "What every guest is given. gen-vm and run-vm take most of these as "
+        "the defaults of their flags; <vm-pci-mmio-bridge> and "
+        "<rocjitsu-config> are read by the generator alone, <vm-nvme-vram> "
+        "by the generator and by quick-start, for its --hipfile-test note, "
+        "and <vm-shm-size> by the generator and by quick-start, for its "
+        "/dev/shm warning.", (
+        _Setting(
+            "vm-vcpus", "vm_vcpus", _INT,
+            help="vCPUs per guest; keep it at 4 or more on an ernic stack, and "
+                 "vCPUs times guests near the host's core count",
+            form="integer; 0 or unset leaves run-vm's default of 2; qemu-tool "
+                 "check FAILs a value set from 1 to 3 and does not check 0 or "
+                 "unset; quick-start by default (not with "
+                 "--no-size-from-host) replaces it with a host-derived value "
+                 "(floor 4, ceiling 8)"),
+        _Setting(
+            "vm-vmem", "vm_vmem", _INT,
+            help="Guest memory per VM",
+            form="MiB (4096 is 4 GiB); 0 or unset leaves run-vm's default of "
+                 "4096; quick-start by default (not with --no-size-from-host) "
+                 "replaces it with a host-derived value (floor 4096, ceiling "
+                 "8192)"),
+        _Setting(
+            "vm-shm-size", "shm_size", _STR,
+            help="shm_size of each guest's qemu container; must be at least "
+                 "vm-vmem or QEMU cannot allocate guest RAM",
+            form="docker size such as 8g or 5120m; one value for all guests, or "
+                 "a comma list of exactly vm-count values; empty or unset is 8g."
+                 " quick-start by default (not with --no-size-from-host) sets "
+                 "it to vm-vmem plus 1024m"),
+        _Setting(
+            "vm-nvme", "vm_nvme", _INT,
+            help="Number of emulated NVMe scratch devices per guest; run-vm "
+                 "creates a qcow2 for each. 0 gives none",
+            form="integer; N > 0 is N devices on scratch qcow2 files; -N is N "
+                 "devices on the host's /dev/nullb0.. (null_blk); default 0"),
+        _Setting(
+            "vm-nvme-vram", "vm_nvme_vram", _BOOL, sparse=True,
+            help="Point each guest's emulated NVMe at its first GPU's BAR 0 "
+                 "(VRAM) so hipFile direct reads are fast; fork QEMU only",
+            form="true or false; default false; refused with vm-nvme of 0 or "
+                 "less; warns on a non-fork qemu-ref; generated stacks only, "
+                 "run-vm --xml does not get it"),
+        _Setting(
+            "vm-nvme-block-size", "vm_nvme_block_size", _BLOCK,
+            help="Logical and physical block size of each guest's emulated "
+                 "NVMe namespaces: the LBA format the guest sees in use",
+            form="512 or 4096, in bytes; default 512, QEMU's own, which "
+                 "renders nothing. Anything else is a parse error. Refused "
+                 "at 4096 with vm-nvme of 0. QEMU's emulated NVMe only: an "
+                 "SPDK controller and an nvmeof backend set their own. "
+                 "Nothing on the scratch disk is converted: a partition "
+                 "table made at one size is not found at the other, and XFS "
+                 "or ext4 with blocks under 4096 made at 512 does not mount "
+                 "at 4096"),
+        _Setting(
+            "vm-pci-mmio-bridge", "vm_pci_mmio_bridge", _BOOL, sparse=True,
+            help="Give every guest the fork QEMU's pci-mmio-bridge device for "
+                 "its emulated NVMe, which rocm-xio uses",
+            form="true or false; default false; refused with vm-nvme of 0 or "
+                 "less; needs the fork QEMU; generated stacks only, run-vm --xml"
+                 " does not get it"),
+        _Setting(
+            "vm-username", "vm_username", _STR,
+            help="Guest login account: the user gen-vm creates, and the one the "
+                 "inventory, quick-start and ssh log in as",
+            form="default ubuntu; dropped for gen-vm --bake (bake-username is "
+                 "used); quick-start overrides it with the pulled image's own "
+                 "account when they differ"),
+        _Setting(
+            "vm-password", "vm_password", _STR,
+            help="Password of the account gen-vm creates from the cloud image; "
+                 "never reaches a pulled guest, and a bake drops it",
+            form="plain text; empty or unset leaves gen-vm's default, which is "
+                 "the word password"),
+        _Setting(
+            "vm-filesystem", "vm_filesystem", _STR,
+            help="Host directory shared into each guest over 9p with mount tag "
+                 "hostfs",
+            form="one host path for all guests, or a comma list of exactly "
+                 "vm-count paths; run-vm --xml outside a stack ignores a list; "
+                 "default empty, no share"),
+        _Setting(
+            "vm-vfio-user-root-port", "vm_vfio_user_root_port", _BOOL,
+            help="Put each vfio-user device behind a PCIe root port; off, an "
+                 "emulated GPU gets a 16M 32-bit BAR amdgpu cannot use",
+            form="true or false; default true; false renders with a warning, not"
+                 " an error"),
+        _Setting(
+            "vm-extra-hostfwd", "vm_extra_hostfwd", _STR,
+            help="Extra QEMU host-forward rules; every rule goes to every guest,"
+                 " and a bake leaves them out",
+            form="Comma list of QEMU hostfwd rules, e.g. "
+                 "tcp::9100-:9100,tcp::9879-:9879; items are stripped and empty "
+                 "ones dropped. The commas are several rules for ONE guest, not "
+                 "one rule per guest"),
+        _Setting(
+            "vm-qemu-args", "vm_qemu_args", _ARGS, sparse=True,
+            help="Extra words appended as they are to every guest's QEMU command"
+                 " line; nothing validates them",
+            form="Words split as a shell would (quotes group, nothing expands), "
+                 "e.g. -device pci-testdev -d guest_errors; an unclosed quote is"
+                 " a parse error. One value for the whole fleet; a later layer "
+                 "replaces it whole. Dropped for a bake"),
+        _Setting(
+            "vm-ssh-key-file", "vm_ssh_key_file", _EXPAND,
+            help="Public key gen-vm authorises in a guest it creates, bakes "
+                 "included; ssh and inspect fall back to it",
+            form="Path to a .pub file; ~ and $VARS are expanded at parse time. "
+                 "Unset, a bake generates a keypair for the image. Never the key"
+                 " publish-qcow publishes"),
+        _Setting(
+            "vm-images-dir", "vm_images_dir", _EXPAND,
+            help="Directory that holds the guest disk images, overlays and image"
+                 " keys; --images overrides it",
+            form="Path; ~ and $VARS are expanded at parse time. Default "
+                 "/var/lib/qemu-tool/images. Reaches docker compose as "
+                 "VM_IMAGES_DIR"),
+        _Setting(
+            "vm-cpu-sockets", "vm_cpu_sockets", _INT, sparse=True,
+            help="Pin each guest's CPU socket count; unset, the guest sees one "
+                 "single-core socket per vCPU",
+            form="Integer that must divide the guest's vCPU count (run-vm exits "
+                 "otherwise); 0 or unset leaves the topology to QEMU"),
+        _Setting(
+            "vm-cpu-phys-bits", "vm_cpu_phys_bits", _INT, sparse=True,
+            help="Physical address bits of each guest's CPU; raise it together "
+                 "with vm-pci-hole64-size for large GPU BARs",
+            form="Integer number of bits, e.g. 42; amd64 only (added to -cpu as "
+                 "phys-bits=N). 0 or unset passes no phys-bits; run-vm's "
+                 "help gives that default as 40 (1 TiB)"),
+        _Setting(
+            "vm-cpu-vendor", "vm_cpu_vendor", _VENDOR,
+            help="CPUID vendor every guest's CPU states; a guest is an AMD "
+                 "machine on every host unless this says otherwise",
+            form="Exactly 12 printable ASCII characters with no comma, such as "
+                 "AuthenticAMD or GenuineIntel, or empty; default AuthenticAMD. "
+                 "amd64 only (rendered as -cpu EPYC,vendor=...). An EMPTY element"
+                 " is not the default: it states no vendor, and under KVM the "
+                 "guest then has the host's. Anything but AuthenticAMD renders "
+                 "with a note: the guest kernel refuses P2PDMA between devices "
+                 "that share no upstream bridge unless the CPU is AMD"),
+        _Setting(
+            "vm-pci-hole64-size", "vm_pci_hole64_size", _STR,
+            help="Size of each guest's 64-bit PCI hole; needed when several "
+                 "large GPU BARs exceed the machine default",
+            form="QEMU size such as 512G or 1024G, passed through unparsed as "
+                 "q35-pcihost.pci-hole64-size; empty leaves the machine default"),
+        _Setting(
+            "rocjitsu-config", "rocjitsu_config", _STR,
+            help="rocjitsu simulation config that selects the GPU each guest's "
+                 "emulated GPU servers present",
+            form="File name under /usr/local/share/rocjitsu/configs in the "
+                 "rocjitsu image, default gfx1250_mi455x.json. One value for all"
+                 " guests, or a comma list of exactly vm-count values; a "
+                 "<devices> entry's own config wins"),
+    )),
+    _Section("Misc",
+        "Settings that belong to no other group.", (
+        _Setting(
+            "qemu-tool-src", "qemu_tool_src", _STR,
+            help="Checkout the stack's containers mount to build qemu-tool from;"
+                 " with none there they install it from PyPI",
+            form="Path, default ../../.. relative to the stack directory; use an"
+                 " absolute path for a stack rendered elsewhere. Reaches docker "
+                 "compose as QEMU_TOOL_SRC and is not baked into the render. ~ "
+                 "is not expanded (plain string kind)"),
+        _Setting(
+            "image-allow-guest-lag", "image_allow_guest_lag", _BOOL,
+            help="Let the guest image be older than the device server images: "
+                 "skips that check and warns on every render",
+            form="Boolean (true/false, 1/0, yes/no), default false. Does not "
+                 "excuse a moving tag (latest, qm.<sha7>) or a malformed one, "
+                 "which are refused before it is looked at"),
+    )),
+    _Section("Bake and publish",
+        "Read by gen-vm --bake, publish-qcow --xml and publish-qcow-prune "
+        "--xml and by nothing else, but for <publish-ref>, which gen-compose "
+        "reads as well.", (
+        _Setting(
+            "bake-name", "bake_name", _STR, sparse=True,
+            help="Name of the image gen-vm --bake builds; publish-qcow publishes"
+                 " the image of that name",
+            form="VM name; the baked image is "
+                 "<vm-images-dir>/<name>-backing.qcow2"),
+        _Setting(
+            "bake-release", "bake_release", _STR, sparse=True,
+            help="Ubuntu release of the cloud image gen-vm --bake starts from; "
+                 "publish-qcow records it for the image",
+            form="Ubuntu codename (resolute) or version (26.04); publish-qcow "
+                 "records resolute when unset"),
+        _Setting(
+            "bake-size", "bake_size", _INT, sparse=True,
+            help="Virtual disk size of the image gen-vm --bake builds",
+            form="Integer, GiB: passed to qemu-img resize as <n>G (the --size "
+                 "help calls it GB). 0 or unset leaves gen-vm's default"),
+        _Setting(
+            "bake-vcpus", "bake_vcpus", _INT, sparse=True,
+            help="vCPUs of the guest gen-vm --bake boots to build the image; not"
+                 " the size of a fleet's guests",
+            form="Integer count; a bake is refused unless bake-vmem is at least "
+                 "1024 MiB per vCPU. 0 or unset falls back to vm-vcpus, then "
+                 "gen-vm's default"),
+        _Setting(
+            "bake-vmem", "bake_vmem", _INT, sparse=True,
+            help="RAM of the guest gen-vm --bake boots to build the image; not "
+                 "the size of a fleet's guests",
+            form="Integer, MiB; must be at least 1024 per bake vCPU or the bake "
+                 "is refused. 0 or unset falls back to vm-vmem, then gen-vm's "
+                 "default"),
+        _Setting(
+            "bake-packages", "bake_packages", _EXPAND, sparse=True,
+            help="Package manifest gen-vm --bake installs in the image, or none "
+                 "for no manifest",
+            form="Path to a manifest file, resolved against the current "
+                 "directory (run from the checkout root); ~ and $VARS are "
+                 "expanded. The word none installs none; a missing file stops "
+                 "the bake before it starts"),
+        _Setting(
+            "bake-playbook", "bake_playbook", _EXPAND, sparse=True,
+            help="Ansible playbook gen-vm --bake runs against the booted image; "
+                 "publish-qcow records it for the image",
+            form="Path resolved against the current directory (run from the "
+                 "checkout root); ~ and $VARS are expanded. publish-qcow records"
+                 " it as given, empty when unset"),
+        _Setting(
+            "bake-username", "bake_username", _STR, sparse=True,
+            help="Login account baked into the image and published with it; "
+                 "separate from vm-username, with no fallback",
+            form="User name; unset, the bake uses gen-vm's default account and "
+                 "publish-qcow records ubuntu"),
+        _Setting(
+            "bake-password", "bake_password", _STR, sparse=True,
+            help="Password of the baked account; published with the image, so it"
+                 " is public. Never vm-password",
+            form="Plain text, written to the published vm-info.json; "
+                 "publish-qcow records password when unset"),
+        _Setting(
+            "bake-ssh-port", "bake_ssh_port", _PORT, sparse=True,
+            help="Host port the bake's Ansible boot forwards to the guest's "
+                 "sshd; auto picks a free one from 2222 up",
+            form="A port number, or the word auto"),
+        _Setting(
+            "bake-cache-dir", "bake_cache_dir", _EXPAND, sparse=True,
+            help="Directory on this host that keeps the bake's compiler cache "
+                 "between bakes; --cache-dir wins, unset is none",
+            form="Path; ~ and $VARS are expanded. Needs a bake-playbook, which "
+                 "gets it as the extra var bake_cache_dir. Per host: set it in a"
+                 " local overlay, not in a shipped fleet file"),
+        _Setting(
+            "publish-ref", "publish_ref", _STR, sparse=True,
+            help="Repository publish-qcow pushes to and publish-qcow-prune "
+                 "prunes; tells gen-compose whose repo backing-ref is in",
+            form="Image repository with no tag, e.g. "
+                 "docker.io/sbates130272/qemu-tool-rocm-golden; publish-qcow "
+                 "appends :<tag> from each --tag. Read by the two publish "
+                 "commands only from an explicit --xml"),
+        _Setting(
+            "publish-flavour", "publish_flavour", _STR, sparse=True,
+            help="Label publish-qcow records in the published artifact for what "
+                 "kind of guest the image is",
+            form="Free-form name, written to vm-info.json, the vm.flavour "
+                 "annotation and the description; rocm-golden when unset"),
+    )),
+    _Section("Metrics",
+        "Prometheus, Grafana and the address a stack's ports are published "
+        "on.", (
+        _Setting(
+            "publish-bind-addr", "publish_bind_addr", _ADDR,
+            help="Host address every guest SSH port and the Grafana port are "
+                 "published on; loopback keeps them to this host",
+            form="IPv4 or IPv6 literal, brackets optional and dropped, no host "
+                 "name or zone; empty or unset means 127.0.0.1; 0.0.0.0 or :: "
+                 "exposes every interface. Also decides ansible_host in the "
+                 "generated inventory"),
+        _Setting(
+            "prom-scrape-interval", "prom_scrape_interval", _STR,
+            help="How often Prometheus scrapes the stack's exporters; written as"
+                 " the global scrape_interval of prometheus.yml",
+            form="Prometheus duration such as 15s; not validated by the parser; "
+                 "empty or unset means 15s"),
+        _Setting(
+            "prom-retention", "prom_retention", _STR,
+            help="How long Prometheus keeps collected metrics; passed as "
+                 "--storage.tsdb.retention.time",
+            form="Prometheus duration such as 7d; not validated by the parser; "
+                 "empty or unset means 7d"),
+        _Setting(
+            "prom-data-dir", "prometheus_data_dir", _EXPAND, sparse=True,
+            help="Host directory bind-mounted as the Prometheus database; "
+                 "compose up creates it owned by the caller",
+            form="Host path, ~ and $VARS expanded at parse time; unset means "
+                 "/var/lib/qemu-tool/prom-data; quick-start with metrics on "
+                 "overrides it to <stack-dir>/prom-data"),
+        _Setting(
+            "grafana-enable", "grafana_enable", _BOOL,
+            help="Add a Grafana service with the fleet dashboards to the stack; "
+                 "it starts only with --profile metrics",
+            form="true/false, also 1/0/yes/no, any case; default true. "
+                 "Prometheus is rendered either way"),
+        _Setting(
+            "grafana-image", "grafana_image", _STR,
+            help="Container image the Grafana service runs",
+            form="Image reference; empty or unset means "
+                 "docker.io/grafana/grafana:latest (a moving tag)"),
+        _Setting(
+            "grafana-port", "grafana_port", _INT,
+            help="Host port Grafana is published on, at publish-bind-addr; "
+                 "quick-start moves it when the port is busy",
+            form="Integer port (kind int, no range check); default 3000; "
+                 "container side is always 3000"),
+        _Setting(
+            "grafana-admin-password", "grafana_admin_password", _STR,
+            help="Password of Grafana's admin account; anonymous admin access is"
+                 " on regardless, so it guards nothing",
+            form="Plain text, written into the generated docker-compose.yml as "
+                 "GF_SECURITY_ADMIN_PASSWORD; empty or unset means admin"),
+        _Setting(
+            "grafana-data-dir", "grafana_data_dir", _EXPAND, sparse=True,
+            help="Host directory bind-mounted as Grafana's own state (its "
+                 "sqlite); dashboards are provisioned from files",
+            form="Host path, ~ and $VARS expanded at parse time; unset means "
+                 "/var/lib/qemu-tool/grafana-data; quick-start with metrics on "
+                 "overrides it to <stack-dir>/grafana-data"),
+    )),
+    _Section("Logging",
+        "Log rotation for every service, and the Loki and Alloy log "
+        "collection.", (
+        _Setting(
+            "log-max-size", "log_max_size", _STR,
+            help="Size at which Docker rotates each service's json-file log, so "
+                 "a looping service cannot fill the disk",
+            form="Docker size string such as 50m; not validated by the parser; "
+                 "empty or unset means 50m"),
+        _Setting(
+            "log-max-files", "log_max_files", _INT,
+            help="Number of rotated log files Docker keeps for each service",
+            form="Integer count (no range check); default 3"),
+        _Setting(
+            "logs-enable", "logs_enable", _BOOL,
+            help="Add Loki and an Alloy that ships the stack's container logs to"
+                 " it; both start only with --profile metrics",
+            form="true/false, also 1/0/yes/no, any case; default true. Alloy "
+                 "mounts the Docker socket and runs as root"),
+        _Setting(
+            "loki-image", "loki_image", _STR,
+            help="Container image the Loki log store runs; used only with "
+                 "logs-enable",
+            form="Image reference; empty or unset means "
+                 "docker.io/grafana/loki:3.3.2"),
+        _Setting(
+            "loki-data-dir", "loki_data_dir", _EXPAND,
+            help="Host directory bind-mounted as Loki's stored logs; used only "
+                 "with logs-enable; compose up creates it as the caller",
+            form="Host path, ~ and $VARS expanded at parse time; empty or unset "
+                 "means /var/lib/qemu-tool/loki-data; quick-start with metrics "
+                 "on overrides it to <stack-dir>/loki-data"),
+        _Setting(
+            "alloy-image", "alloy_image", _STR,
+            help="Container image of the Alloy agent that ships the stack's "
+                 "container logs to Loki; used only with logs-enable",
+            form="Image reference; empty or unset means "
+                 "docker.io/grafana/alloy:v1.5.1"),
+    )),
 )
+
+_SETTINGS: tuple[_Setting, ...] = tuple(
+    setting for section in _SECTIONS for setting in section.settings)
 
 _BY_TAG = {s.tag: s for s in _SETTINGS}
 KNOWN_ELEMENTS: tuple[str, ...] = tuple(_BY_TAG)
+
+# Elements the format used to have, and why each went. A file that still sets
+# one is an error like any other unknown element, but the error says this
+# instead of offering the nearest name, which for <prom-port> is
+# <prom-retention>. A misspelling of one (<prom-prot>) is told which removed
+# element it looks like, for the same reason. The first seven were parsed and
+# read by no command. The last three were read: <vm-backing-shared> only by
+# a run-vm given --xml, since a stack always shares, and the two ernic ones
+# by the generator, which now holds the one value the guest image assumes
+# for the subnet and the quick-start playbook for the MAC prefix
+# (gen_compose.ERNIC_SUBNET, ERNIC_MAC_PREFIX).
+REMOVED_ELEMENTS: dict[str, str] = {
+    "qemu-digest":
+        "no command ever read it, so it never pinned <qemu-ref>",
+    "ernic-digest":
+        "no command ever read it, so it never pinned <ernic-ref>",
+    "rocjitsu-digest":
+        "no command ever read it, so it never pinned <rocjitsu-ref>",
+    "backing-digest":
+        "no command ever read it, so it never pinned <backing-ref>; to pin "
+        "the guest image by digest, write name@sha256:... in <backing-ref>",
+    "domain-pattern":
+        "no command ever read it, and no command writes or reads a per-guest "
+        "domain file for a fleet",
+    "prom-port":
+        "no command ever read it; Prometheus has no host port and is asked "
+        "inside its container",
+    "loki-port":
+        "no command ever read it; Loki has no host port and listens on 3100 "
+        "inside the stack",
+    "vm-backing-shared":
+        "a generated stack always starts its guests with image locking off, "
+        "whatever this said; for a run-vm outside a stack, pass "
+        "--backing-shared",
+    "ernic-subnet":
+        "the guests' RDMA NICs are always on 192.168.100.0/24, the one "
+        "network the guest image addresses them on at boot, so any other "
+        "value put the fleet's addresses where no guest was",
+    "ernic-mac-prefix":
+        "every emulated NIC's MAC address always starts 72:6f:63:6d, the one "
+        "prefix the quick-start playbook finds a guest's NIC by, so any "
+        "other value failed that playbook",
+}
+
+
+def removed_element_problem(tag: str) -> str:
+    """The parse problem for an element in REMOVED_ELEMENTS."""
+    return (f"<{tag}> was removed from the fleet format: "
+            f"{REMOVED_ELEMENTS[tag]}. Delete the element.")
+
+
+def removed_lookalike_problem(tag: str, removed: str) -> str:
+    """The parse problem for an unknown element closest to a removed one.
+
+    <prom-prot> is nearer <prom-port>, which is gone, than anything the
+    format has, so the nearest known name (<prom-retention>) is not what
+    was meant and is not offered.
+    """
+    return (f"unknown element <{tag}>; it looks like <{removed}>, which "
+            f"was removed from the fleet format: "
+            f"{REMOVED_ELEMENTS[removed]}. Delete the element.")
 
 
 def _bool_str(value: bool) -> str:
@@ -497,6 +1235,17 @@ def _convert(setting: _Setting, raw: str) -> Any:
             raise ValueError(
                 f"{setting.tag} must be an IPv4 or IPv6 address with no "
                 f"zone, got {raw!r}") from None
+    if setting.kind == _VENDOR:
+        # As written, not stripped: a vendor may hold spaces, and an empty
+        # element is a value of its own (the host's vendor), not the default.
+        problem = cpu_vendor_problem(raw, setting.tag)
+        if problem:
+            raise ValueError(problem)
+        return raw
+    if setting.kind == _BLOCK:
+        return nvme_block_size(raw, setting.tag)
+    if setting.kind == _MTU:
+        return ernic_mtu(raw, setting.tag)
     if setting.kind == _ARGS:
         # Checked here so `qemu-tool check` reports it; the readers split
         # the same text again.
@@ -649,27 +1398,26 @@ def _read_devices(block: ET.Element) -> tuple[tuple[Server, ...], list[str]]:
                     f"{where}: <{name}> holds a line break or a control "
                     "character")
                 continue
-            if name == "config" and not re.match(
-                    r"[A-Za-z0-9][A-Za-z0-9._-]*\Z", text):
+            if name == "config" and not _has_form(kind, name, text):
                 problems.append(
                     f"{where}: <config> names a file in the rocjitsu "
                     "image's configs directory, one name of letters, "
                     f"digits, '.', '_' and '-', got {text!r}")
                 continue
-            if kind == "spdk" and name == "serial" and not re.match(
-                    r"[A-Za-z0-9_-]{1,20}\Z", text):
+            if kind == "spdk" and name == "serial" and not _has_form(
+                    kind, name, text):
                 problems.append(
                     f"{where}: <serial> is an NVMe serial number, 1 to 20 "
                     f"letters, digits, '_' and '-', got {text!r}")
                 continue
-            if kind == "spdk" and name == "cpumask" and not re.match(
-                    r"0x[0-9A-Fa-f]{1,32}\Z", text):
+            if kind == "spdk" and name == "cpumask" and not _has_form(
+                    kind, name, text):
                 problems.append(
                     f"{where}: <cpumask> is a hexadecimal core mask such as "
                     f"0x4, got {text!r}")
                 continue
-            if kind == "spdk" and name == "namespaces" and not re.match(
-                    r"[A-Za-z0-9_.:,/=-]+\Z", text):
+            if kind == "spdk" and name == "namespaces" and not _has_form(
+                    kind, name, text):
                 problems.append(
                     f"{where}: <namespaces> is the image's NVME_NAMESPACES, "
                     f"one word such as kv:mem or lba:malloc:512M,kv:mem, "
@@ -762,9 +1510,25 @@ def _structure_problems(root: ET.Element) -> list[str]:
                 problems.append(f"<{local}> appears more than once")
             seen.add(local)
             continue
+        if local in REMOVED_ELEMENTS:
+            # One line an element, however often the file sets it: the
+            # remedy is the same for every copy.
+            if local not in seen:
+                problems.append(removed_element_problem(local))
+            seen.add(local)
+            continue
         if local not in _BY_TAG:
-            close = difflib.get_close_matches(
-                local, KNOWN_ELEMENTS + (_DEVICES,), n=1)
+            # The removed names are candidates too: a misspelling of one is
+            # nearer it than any setting, and the nearest setting is then a
+            # different thing altogether.
+            names = KNOWN_ELEMENTS + (_DEVICES,) + tuple(REMOVED_ELEMENTS)
+            # difflib compares case, and every name is lower case: without
+            # the second look <PROM-PORT> and <VM-COUNT> get no hint at all.
+            close = (difflib.get_close_matches(local, names, n=1)
+                     or difflib.get_close_matches(local.lower(), names, n=1))
+            if close and close[0] in REMOVED_ELEMENTS:
+                problems.append(removed_lookalike_problem(local, close[0]))
+                continue
             hint = f"; did you mean <{close[0]}>?" if close else ""
             problems.append(f"unknown element <{local}>{hint}")
             continue
@@ -785,6 +1549,17 @@ def _structure_problems(root: ET.Element) -> list[str]:
 
 
 class FleetXml:
+    """Fleet XML files in, a `FleetConfig` out, and back.
+
+    A namespace of static and class methods; nothing instantiates it.
+    `find()` resolves which files to read. `parse()`, `parse_layers()` and
+    `load()` read them strictly and exit naming every problem.
+    `problems()` returns one file's problems and `layer_problems()` those
+    that show only across layers, as lines of text and without exiting,
+    for a caller that reports them. `emit()` writes a `FleetConfig` out as
+    fleet XML.
+    """
+
     @staticmethod
     def find(explicit: Path | list[Path] | None = None) -> list[Path]:
         """Return fleet XML files to use, lowest precedence first.

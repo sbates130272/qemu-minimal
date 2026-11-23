@@ -1,5 +1,15 @@
+"""How a QEMU process is marked as one qemu-tool started.
+
+`identity_args()` gives every guest a `-name` and a `-uuid` derived from
+the command that started it and the VM's name; `match_identity()` derives
+the UUID again from a running process's name, which is how `list` tells
+its own guests from any other QEMU. `guest_name_args()` is separate: it
+hands the guest the name the host calls it by.
+"""
+
 from __future__ import annotations
 
+import re
 import uuid
 
 # Fixed namespace for deriving per-VM UUIDs. Never change this: the value is
@@ -47,6 +57,70 @@ def guest_name_args(arch: str, vm_name: str) -> list[str]:
     if arch not in GUEST_NAME_ARCHES:
         return []
     return ["-smbios", "type=1,serial=" + vm_name.replace(",", ",,")]
+
+
+# A guest is an AMD machine unless very clearly told otherwise: AGENTS.md,
+# "The guest is an AMD machine". Under KVM QEMU gives EVERY CPU model the
+# HOST's CPUID vendor (target/i386/host-cpu.c, host_cpu_instance_init), so
+# on an Intel host a bare `-cpu EPYC` guest is GenuineIntel family 23, and
+# the guest kernel's cpu_supports_p2pdma() (drivers/pci/p2pdma.c) then
+# refuses P2PDMA between devices that share no upstream bridge. So run-vm
+# states
+# the vendor. Nothing may change it but <vm-cpu-vendor> or --cpu-vendor.
+AMD_CPU_VENDOR = "AuthenticAMD"
+INTEL_CPU_VENDOR = "GenuineIntel"
+
+# QEMU's `vendor` property takes exactly twelve characters
+# (target/i386/cpu.c, x86_cpuid_set_vendor), and a comma would end the
+# value on -cpu. Space is allowed: Zhaoxin's vendor has two at each end.
+CPU_VENDOR_FORM = r"[ -+.-~\-]{12}"
+
+
+def cpu_vendor_problem(value: str, what: str) -> str | None:
+    """Why VALUE is not a CPU vendor run-vm can pass on, or None.
+
+    Empty is allowed and means "state no vendor", which under KVM is the
+    host's.
+    """
+    if value == "" or re.match(CPU_VENDOR_FORM + r"\Z", value):
+        return None
+    return (
+        f"{what} must be empty (the host's vendor) or exactly 12 printable "
+        f"ASCII characters with no comma, such as {AMD_CPU_VENDOR} or "
+        f"{INTEL_CPU_VENDOR}; got {value!r}")
+
+
+def cpu_vendor_note(vendor: str, source: str, kvm: bool = True) -> str | None:
+    """One line for stderr when a guest is not presented as AMD, else None.
+
+    With no vendor stated and no KVM the EPYC model keeps its own vendor,
+    AuthenticAMD: only KVM puts the host's in its place. A caller that
+    knows the guest runs without KVM says so, and gets no note for that.
+    """
+    if vendor == AMD_CPU_VENDOR or (not vendor and not kvm):
+        return None
+    if vendor:
+        shown, where = f"vendor {vendor!r}", "the"
+    else:
+        shown, where = "the host's CPU vendor", "on a host that is not AMD the"
+    return (
+        f"note: {source}: the guest is not presented as AMD ({shown}, not "
+        f"{AMD_CPU_VENDOR}); {where} guest kernel refuses P2PDMA between "
+        "devices that share no upstream bridge.")
+
+
+# run-vm --convert-to-libvirt writes <cpu mode='host-passthrough'/>, the
+# host's CPU, and no vendor setting reaches it: libvirt has no way to state
+# a CPUID vendor that differs from the host's short of a qemu:commandline
+# passthrough. Printed on every amd64 conversion, on every host: nothing
+# here looks at the host to decide.
+LIBVIRT_CPU_NOTE = (
+    "note: run-vm --convert-to-libvirt: the domain's CPU is the host's "
+    "(<cpu mode='host-passthrough'/>), not EPYC with vendor "
+    f"{AMD_CPU_VENDOR}; --cpu-vendor and <vm-cpu-vendor> do not reach it. "
+    "On a host that is not AMD the guest is not presented as AMD, and the "
+    "guest kernel refuses P2PDMA between devices that share no upstream "
+    "bridge.")
 
 
 def match_identity(vm_name: str | None, vm_uuid_str: str | None) -> str | None:

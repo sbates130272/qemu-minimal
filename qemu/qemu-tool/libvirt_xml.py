@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .caps import QemuCaps
-from .config import VMConfig
+from .config import DEFAULT_NVME_BLOCK_SIZE, VMConfig
 
 NS_QEMU = "http://libvirt.org/schemas/domain/qemu/1.0"
 _Q = f"{{{NS_QEMU}}}"
@@ -202,6 +202,8 @@ class LibvirtXml:
             cfg.nvme_lbaf_mask = hints["nvme_lbaf_mask"]
         if "nvme_recreate" in hints:
             cfg.nvme_recreate = hints["nvme_recreate"] == "true"
+        if "nvme_block_size" in hints:
+            cfg.nvme_block_size = int(hints["nvme_block_size"])
         if "nvme_vram_dev" in hints:
             cfg.nvme_vram_dev = hints["nvme_vram_dev"]
         if "nvme_vram_bar" in hints:
@@ -478,6 +480,7 @@ class LibvirtXml:
         # NVMe
         if cfg.nvme is not None:
             import re as _re
+            from .run_vm import nvme_block_props
             if _re.match(r"^[0-9]+$", cfg.nvme):
                 count = int(cfg.nvme)
                 for i in range(1, count + 1):
@@ -491,7 +494,9 @@ class LibvirtXml:
                     args += [
                         "-drive",
                         f"file=/dev/nullb{i},format=raw,if=none,id=nvme-{i}",
-                        "-device", f"nvme,serial={name},drive=nvme-{i}",
+                        "-device",
+                        f"nvme,serial={name},drive=nvme-{i}"
+                        f"{nvme_block_props(cfg)}",
                     ]
             else:
                 import shlex as _shlex
@@ -595,7 +600,7 @@ class LibvirtXml:
     def _nvme_qemu_args(
         cls, name: str, idx: int, cfg: VMConfig, caps: QemuCaps
     ) -> list[str]:
-        from .run_vm import DISCARD_OPTS, NVME_SIZE
+        from .run_vm import DISCARD_OPTS, NVME_SIZE, nvme_block_props
         img = Path(cfg.images) / f"{name}.qcow2"
         drv = (
             f"file={img},format=qcow2,if=none,id=nvme-{idx}"
@@ -619,6 +624,7 @@ class LibvirtXml:
             if cfg.nvme_dbbuf_poll_eventidx is not None:
                 dev += f",dbbuf-poll-eventidx={cfg.nvme_dbbuf_poll_eventidx}"
         ns = f"nvme-ns,drive=nvme-{idx},bus=nvme-{idx}-dev,nsid=1"
+        ns += nvme_block_props(cfg)
         if cfg.nvme_lbaf_mask and caps.has_lbaf_mask:
             ns += f",lbaf-mask={cfg.nvme_lbaf_mask.lower()}"
         return ["-drive", drv, "-device", dev, "-device", ns]
@@ -642,6 +648,8 @@ class LibvirtXml:
             hints["nvme_lbaf_mask"] = cfg.nvme_lbaf_mask
         if cfg.nvme_recreate:
             hints["nvme_recreate"] = "true"
+        if cfg.nvme_block_size != DEFAULT_NVME_BLOCK_SIZE:
+            hints["nvme_block_size"] = str(cfg.nvme_block_size)
         if cfg.nvme_vram_dev is not None:
             hints["nvme_vram_dev"] = cfg.nvme_vram_dev
         if cfg.nvme_vram_bar is not None:

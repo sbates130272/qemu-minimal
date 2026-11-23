@@ -1,6 +1,15 @@
+"""The `qemu-tool` command: the argument parser and the dispatch.
+
+`main()` is the entry point of the installed command and of
+`python3 -m qemu_tool`. The rest of the module is private: the parser, its
+help text, and one function for each subcommand that turns the parsed
+arguments and the settings into a call of the module that does the work.
+"""
+
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import shutil
 import sys
@@ -10,7 +19,7 @@ from typing import Any
 
 from . import __version__
 from .caps import probe_caps
-from .config import VMConfig
+from .config import NVME_BLOCK_SIZES, VMConfig
 from .compose import (
     _DEFAULT_STACK,
     _SOURCE_COMPOSE_ROOT,
@@ -21,6 +30,7 @@ from .compose import (
 from .ernic_stats import run as ernic_stats_run
 from .gen_compose import run as gen_compose_run, stack_for as gen_compose_stack_for
 from .gen_vm import run as gen_vm_run
+from .identity import LIBVIRT_CPU_NOTE
 from .libvirt_xml import LibvirtXml
 from .inspect import run as inspect_run
 from .inspect import ssh_run as inspect_ssh_run
@@ -210,6 +220,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_publish_qcow(sub)
     _add_publish_qcow_prune(sub)
     _add_ernic_stats(sub)
+    _add_fleet_schema(sub)
     _add_man(sub)
 
     return parser
@@ -787,6 +798,17 @@ def _add_run_vm(
         ),
     )
     g.add_argument(
+        "--cpu-vendor", default=_UNSET, metavar="VENDOR",
+        help=(
+            "CPUID vendor the guest's CPU states (amd64). Default: "
+            "<vm-cpu-vendor>, else AuthenticAMD, on every host: under KVM "
+            "QEMU otherwise gives the EPYC model the host's vendor, and the "
+            "guest kernel refuses P2PDMA between devices that share no upstream bridge on a CPU that is "
+            "not AMD. Twelve characters, e.g. GenuineIntel; '' states no "
+            "vendor and leaves the host's."
+        ),
+    )
+    g.add_argument(
         "--pci-hole64-size", default=_UNSET, metavar="SIZE",
         help="Size of the 64-bit PCI hole, e.g. 512G. Needed for many large BARs.",
     )
@@ -857,6 +879,18 @@ def _add_run_vm(
     g.add_argument(
         "--nvme-lbaf-mask", default=_UNSET, metavar="HEX",
         help="Bitmask restricting the LBA formats advertised.",
+    )
+    g.add_argument(
+        "--nvme-block-size", type=int, choices=NVME_BLOCK_SIZES,
+        default=_UNSET, metavar="{512,4096}",
+        help="Logical and physical block size, in bytes, of every NVMe "
+             "namespace run-vm creates, which is the LBA format the guest "
+             "sees in use. Default: <vm-nvme-block-size>, else 512, QEMU's "
+             "own. 4096 matches a 4 KiB fabric or SPDK namespace. Not "
+             "applied to a literal --nvme string. An existing scratch disk "
+             "is not converted: a partition table made at one size is not "
+             "found at the other, and XFS made at 512 does not mount at "
+             "4096.",
     )
     g.add_argument("--nvme-trace", default=_UNSET,
                    metavar="{doorbell,all,EVENT}",
@@ -1480,6 +1514,54 @@ def _add_ernic_stats(sub: argparse._SubParsersAction) -> None:
     p.set_defaults(func=_ernic_stats_cmd)
 
 
+def _add_fleet_schema(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser(
+        "fleet-schema",
+        help="Print the fleet XML schema or its reference page.",
+        description=(
+            "Write a schema for fleet XML, as RELAX NG or as XML Schema "
+            "(XSD), or the reference page that lists every element, from "
+            "the parser's own tables. A schema is for editors and for "
+            "validators that do not have qemu-tool; 'qemu-tool check --xml "
+            "FILE' runs the parser itself and is the check that counts. "
+            "Neither schema rejects a file the parser accepts, and neither "
+            "can check layers or rules between elements. The RELAX NG "
+            "schema is the precise one; the XSD is for tools that take only "
+            "XSD and is looser in three ways: a <server> may hold the "
+            "children of another server type than its own, "
+            "<backend type='tcp'> may hold text, and xsi:schemaLocation and "
+            "xsi:noNamespaceSchemaLocation pass on any element, as does "
+            "xsi:type on a flat setting when it names the type the setting "
+            "already has. The reference page lists what each leaves out."
+        ),
+        epilog=_examples(
+            "qemu-tool fleet-schema --output fleet.rng",
+            "xmllint --noout --relaxng fleet.rng my-fleet.xml",
+            "qemu-tool fleet-schema --format xsd --output fleet.xsd",
+            "xmllint --noout --schema fleet.xsd my-fleet.xml",
+            "qemu-tool fleet-schema --format md --output docs/fleet-xml.md",
+        ),
+    )
+    p.add_argument(
+        "--format", choices=("rng", "xsd", "md"), default="rng",
+        help=(
+            "What to write: rng, the RELAX NG schema in its XML syntax; "
+            "xsd, the XML Schema (XSD 1.0), which is looser; or md, the "
+            "reference page in Markdown (default: %(default)s)."
+        ),
+    )
+    p.add_argument(
+        # A string, not a Path: Path("") is ".", and an empty FILE has to
+        # be told from the current directory to be reported as what it is.
+        "--output", default=None, metavar="FILE",
+        help=(
+            "Write to FILE instead of standard output; '-' is standard "
+            "output."
+        ),
+    )
+    p.set_defaults(func=_fleet_schema_cmd)
+
+
 def _add_man(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
         "man",
@@ -1542,6 +1624,12 @@ def _run_vm_cmd(args: argparse.Namespace) -> None:
             )
         caps = probe_caps(cfg)
         xml = LibvirtXml.emit(cfg, caps)
+        if cfg.arch == "amd64":
+            # The domain is <cpu mode='host-passthrough'/>: the host's CPU,
+            # whatever --cpu-vendor or <vm-cpu-vendor> says. That is a guest
+            # not presented as AMD, so it is announced like any other
+            # (AGENTS.md, "The guest is an AMD machine").
+            print(LIBVIRT_CPU_NOTE, file=sys.stderr)
         output = args.convert_to_libvirt
         if output == "-":
             print(xml, end="")
@@ -1737,6 +1825,44 @@ def _gen_compose_cmd(args: argparse.Namespace) -> None:
                     dry_run=args.dry_run, stack=stack)
 
 
+def _fleet_schema_cmd(args: argparse.Namespace) -> None:
+    from . import fleet_schema
+
+    text = fleet_schema.FORMATS[args.format]()
+    if args.output == "":
+        # An unset shell variable, usually. It used to end in "cannot write
+        # .: Is a directory".
+        sys.exit("Error: --output needs a file name, and was given an empty "
+                 "one; leave --output off, or give '-', to write to "
+                 "standard output")
+    if args.output is not None and Path(args.output).is_dir():
+        sys.exit(f"Error: --output {args.output} is a directory; name the "
+                 "file to write")
+    if args.output is None or args.output == "-":
+        if sys.stdout is None:
+            # Started with descriptor 1 closed (`>&-`): Python has no
+            # standard output object at all.
+            sys.exit("Error: cannot write to standard output: it is closed")
+        # Flushed here, so that a full disk behind a redirect is an error
+        # of this command's and not Python's at exit, with status 120.
+        try:
+            sys.stdout.write(text)
+            sys.stdout.flush()
+        except OSError as exc:
+            # What could not be written is still buffered; point the
+            # descriptor elsewhere so the flush at exit does not fail again.
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+            if isinstance(exc, BrokenPipeError):
+                sys.exit(1)     # the reader went away (`| head`)
+            sys.exit("Error: cannot write to standard output: "
+                     f"{exc.strerror or exc}")
+        return
+    try:
+        Path(args.output).write_text(text, encoding="utf-8")
+    except OSError as exc:
+        sys.exit(f"Error: cannot write {args.output}: {exc.strerror or exc}")
+
+
 def _ernic_stats_cmd(args: argparse.Namespace) -> None:
     ernic_stats_run(args.stats_dir, args.port, args.addr)
 
@@ -1856,11 +1982,13 @@ def _extract_cli_overrides(
         _take("vfio_user_switch_width", "vfio_user_switch_width")
         _take("cpu_sockets", "cpu_sockets")
         _take("cpu_phys_bits", "cpu_phys_bits")
+        _take("cpu_vendor", "cpu_vendor")
         _take("pci_hole64_size", "pci_hole64_size")
         _take("nvme", "nvme")
         _take("nvme_trace", "nvme_trace")
         _take("nvme_trace_file", "nvme_trace_file")
         _take("nvme_lbaf_mask", "nvme_lbaf_mask")
+        _take("nvme_block_size", "nvme_block_size")
         _take("nvme_recreate", "nvme_recreate")
         _take("nvme_dbbuf_poll_ns", "nvme_dbbuf_poll_ns")
         _take("nvme_dbbuf_poll_eventidx", "nvme_dbbuf_poll_eventidx")

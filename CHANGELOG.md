@@ -4,7 +4,242 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Breaking
+
+- **Seven fleet XML elements are removed, and a file that sets one no
+  longer parses**: `<qemu-digest>`, `<ernic-digest>`, `<rocjitsu-digest>`,
+  `<backing-digest>`, `<domain-pattern>`, `<prom-port>` and `<loki-port>`.
+  No command read any of them. The four digests pinned nothing, no fleet
+  code writes or reads a per-guest domain file, and Prometheus and Loki
+  have no host port. Deleting the element from a fleet file is the whole
+  migration and changes nothing a stack renders: the four shipped stacks
+  are byte for byte what they were.
+  - The error names the element and says it was removed. It does not offer
+    the nearest known name, which for `<prom-port>` would have been
+    `<prom-retention>`:
+
+    ```
+    Error: my-fleet.xml: <prom-port> was removed from the fleet format: no command ever read it; Prometheus has no host port and is asked inside its container. Delete the element.
+    ```
+
+    `qemu-tool check --xml` reports the same line, once for an element
+    however often the file sets it, and both schemas refuse the element as
+    an unknown one.
+  - A misspelling of a removed element is not offered a setting either.
+    When the closest name to an unknown element is one of the seven, the
+    error names that removed element and gives its reason:
+
+    ```
+    Error: my-fleet.xml: unknown element <prom-prot>; it looks like <prom-port>, which was removed from the fleet format: no command ever read it; Prometheus has no host port and is asked inside its container. Delete the element.
+    ```
+
+    An unknown element in another case is compared in lower case when
+    nothing is close as written, so `<PROM-PORT>` gets that message and
+    `<VM-COUNT>` gets "did you mean `<vm-count>`?"; both used to get a bare
+    "unknown element".
+  - **A file written by `FleetXml.emit()` of v2.0.0, v2.1.0 or main before
+    this change no longer parses.** `emit()` writes every element that is
+    not sparse, set or not, and three of the seven were not sparse: it
+    always wrote `<domain-pattern>`, `<prom-port>` and `<loki-port>`, at
+    their defaults. The four digests were sparse and were written only when
+    set. This reaches a caller that used the Python API to write a fleet
+    file and kept it: no command, script or workflow of this repository
+    calls `emit()`, only its tests, which write to temporary directories.
+    Delete the three elements from such a file, or emit it again.
+  - **A digest pin is written in the ref element itself.** `<backing-ref>`
+    takes `name@sha256:...`, which `gen-compose` accepts as a ref that
+    cannot move and `gen-vm` hands to `oras pull` as written. `<qemu-ref>`,
+    `<ernic-ref>` and `<rocjitsu-ref>` are written to the compose file's
+    `image:` as they stand, so `name@sha256:...` renders there too, but a
+    digest carries no build stamp: `gen-compose` warns and leaves that
+    image out of the comparison that holds the three servers to one build
+    and one libvfio-user.
+  - `FleetConfig` loses the seven fields, for a caller that builds one in
+    code, and `gen_compose.plan()`'s result loses the keys `prom_port` and
+    `loki_port`, with two more nothing read, `vm_images_dir` and `subnet`.
+  - Two tests now fail a `FleetConfig` field that no module outside the
+    table names, and a key of `plan()`'s result that no render reads.
+- **Three more fleet XML elements are removed, and these were read**:
+  `<vm-backing-shared>`, `<ernic-subnet>` and `<ernic-mac-prefix>`. That
+  is ten removed in this version. A file that sets one no longer parses,
+  with the same kind of error as the seven above, and for these three
+  deleting the element is not always the whole migration.
+  - **`<vm-backing-shared>`: a `run-vm` given `--xml` no longer turns image
+    locking off.** The element's only reader was `run-vm` outside a stack,
+    reading a fleet file named with `--xml` or found on the search path.
+    All four shipped fleet files set it true, so
+    `qemu-tool run-vm --xml qemu/stacks/rocm-golden.xml` used to add
+    `file.locking=off,backing.file.locking=off` to the root drive and now
+    does not. Pass `--backing-shared` where two running guests share a
+    backing file; the flag is unchanged. The same goes for the hint
+    `run-vm --xml ... --convert-to-libvirt` records.
+
+    ```
+    Error: my-fleet.xml: <vm-backing-shared> was removed from the fleet format: a generated stack always starts its guests with image locking off, whatever this said; for a run-vm outside a stack, pass --backing-shared. Delete the element.
+    ```
+
+    A generated stack is unchanged: `gen-compose` has always written
+    `--backing-shared` for every guest and never read the element.
+    `quick-start` and `gen-vm` never used it either.
+  - **`<ernic-subnet>` and `<ernic-mac-prefix>` are fixed** at
+    `192.168.100` and `72:6f:63:6d`, their defaults. The guest image
+    addresses its NICs on that network at boot whatever the fleet file
+    said, and the quick-start playbook finds a guest's NIC by that MAC
+    prefix, so a fleet that set another value did not work. A file that set
+    either to its default deletes the line and renders as before.
+
+    ```
+    Error: my-fleet.xml: <ernic-subnet> was removed from the fleet format: the guests' RDMA NICs are always on 192.168.100.0/24, the one network the guest image addresses them on at boot, so any other value put the fleet's addresses where no guest was. Delete the element.
+    Error: my-fleet.xml: <ernic-mac-prefix> was removed from the fleet format: every emulated NIC's MAC address always starts 72:6f:63:6d, the one prefix the quick-start playbook finds a guest's NIC by, so any other value failed that playbook. Delete the element.
+    ```
+
+    The values are `gen_compose.ERNIC_SUBNET` and `ERNIC_MAC_PREFIX`, and
+    a new test file, `tests/test_ernic_constants.py`, holds them to the
+    role default `rocm_ernic_setup_nic_subnet`, to the address arithmetic
+    of the guest's boot unit and to the MAC literal in `vm-quickstart.yml`.
+  - **A file written by `FleetXml.emit()` of any earlier version no longer
+    parses for these three as well.** None was sparse, so `emit()` always
+    wrote all three, at `false`, `192.168.100` and `72:6f:63:6d` for a
+    default `FleetConfig`. Delete the three lines, or emit the file again.
+  - `FleetConfig` loses `vm_backing_shared`, `ernic_subnet` and
+    `ernic_mac_prefix`, and `settings.vm_overrides()` and
+    `bake_overrides()` no longer return a `backing_shared` key.
+    `VMConfig.backing_shared` stays.
+  - The four shipped fleet files lose their `<vm-backing-shared>true` line,
+    so each stack's `xml-sha256` header changed and the four stacks were
+    regenerated. One other line of a generated file differs: the comment
+    on the `l2` network of the three stacks with a TAP said guests address
+    each other over `<ernic-subnet>`, and now says `192.168.100.0/24`.
+    The `rocm-golden` stack's README no longer tells a reader to set
+    `<vm-backing-shared>true`, and gives the MAC prefix and the network as
+    the values they are.
+  - *Run:* the unit suite; `gen-compose --check` for the four stacks;
+    `run-vm --dry-run` with and without `--backing-shared` and with
+    `--xml qemu/stacks/rocm-golden.xml`. *Not run:* a guest or a stack.
+
 ### Added
+
+- **The site has a Python API section**, built with mkdocstrings from the
+  docstrings of the `qemu_tool` package: eight pages under "Python API"
+  that cover every module but `__init__` and `__main__`, each with the
+  module's docstring and its public classes, functions and constants, in
+  source order, with signatures and folded source. Names that start with an
+  underscore are left out. It is reference for people working on the code:
+  `qemu-tool` is a command, and the index page says that nothing there is a
+  library interface or promised to stay as it is.
+  - Nothing the pages show is committed. `docs/api/*.md` name the modules
+    and the text is read from the source when the site is built, so a page
+    says what the code said at that commit.
+  - The build finds the package, whose directory is `qemu/qemu-tool`,
+    through a symlink, `.mkdocs/qemu_tool`, and installs nothing of
+    qemu-tool. A griffe extension beside it, `.mkdocs/griffe_qemu_tool.py`,
+    keeps element names such as `<vm-count>` in a docstring from being read
+    as HTML and dropped, and makes the pages name each source file by its
+    real path.
+  - The Pages workflow installs `mkdocstrings[python]` and `ruff` beside
+    `mkdocs-material`, and now also runs on a push to main that changes a
+    Python source under `qemu/qemu-tool/` or anything under `.mkdocs/`.
+  - The folded source is on the pages and not in the site search: two
+    templates under `.mkdocs/templates/` wrap it in an element the search
+    plugin skips. With the source indexed, the search index is 509 kB,
+    three quarters of it function source; it is 198 kB.
+  - `tests/test_api_docs.py` fails when a module of the package is on no
+    page, or on two, and is not on the explicit list of modules left out,
+    so a new module cannot be forgotten. A `:::` line on a page outside
+    `docs/api/` fails it too, in a file of any suffix mkdocs renders. It
+    needs no mkdocs.
+  - A docstring is page text now, and the build is strict: two bracket
+    pairs in a row outside backticks, such as `x[i][j]`, are read as a
+    cross-reference to nothing and fail it. The same test fails on a
+    docstring that has one, and Gen Compose Check now builds the site on
+    every pull request with the publish workflow's packages and build
+    flags, publishing nothing, so a docstring cannot break the publish job
+    after the merge.
+  - Eight modules that had no module docstring have a short one (`caps`,
+    `cli`, `compose`, `config`, `identity`, `inspect`, `list_vms`,
+    `run_vm`), so their sections on the pages say what the module is for.
+    `FleetConfig`, `FleetXml` and `VMConfig` have a class docstring for the
+    same reason.
+  - Two docstrings changed so that their tables keep their columns on the
+    page: the flag list of `qcow.py` and the endpoint list of
+    `publish_prune.py` are indented by four spaces, not two.
+
+  Built locally with `mkdocs build --strict`, with no warning. Neither
+  workflow has run with it and no Pages deploy has been made from it.
+
+- **Two schemas and a reference page for fleet XML, all generated from the
+  parser.** `qemu-tool fleet-schema` writes a RELAX NG schema
+  (`--format rng`, the default), an XML Schema (`--format xsd`, XSD 1.0) or
+  a Markdown page that lists every element with its kind, its default and
+  what it is for (`--format md`); `--output FILE` writes to a file, and `--output -` to standard output. The
+  committed copies are `qemu/schema/fleet.rng` and `qemu/schema/fleet.xsd`,
+  which the wheel carries and the `.deb` installs under
+  `/usr/share/qemu-tool/schema/`, and `docs/fleet-xml.md`, a new page of
+  the site.
+  - All come from the tables the parser reads, in `fleet_xml.py`. Each
+    setting, each server option and each backend type now has a line of
+    help and a note on the form of its value there, and the settings are
+    grouped into the sections the page prints. Nothing about what the parser
+    accepts or what a stack renders changed.
+  - **The parser is still the authority, and `qemu-tool check --xml` the
+    check that counts.** Neither schema rejects a file the parser accepts.
+    The RELAX NG schema refuses what a grammar can: an unknown or repeated element, an
+    attribute, a nested element, the forms of a boolean, an integer, a port
+    and an address, a control character in `<vm-qemu-args>`, and inside
+    `<devices>` the server types, ids, the options each type takes, their
+    shapes and the backend types. An integer's digits are `0-9` or any
+    non-ASCII character that is not white space, not `\d`: libxml2 knows
+    fewer decimal digits than Python's `int()` takes, and would have
+    refused an integer the parser accepts.
+  - **What it cannot check** is on the page: layers and the merge by id, two
+    `<server>` entries with one id, a count beside a `<devices>` block that
+    says another number, the per-VM comma lists, text between elements,
+    quoting in `<vm-qemu-args>`, and every rule `gen-compose` holds between
+    elements.
+  - The page also lists the ten elements this version removes; see
+    Breaking, above.
+  - **The RELAX NG schema is the precise one; the XSD is for editors and
+    tools that take only XSD.** It is written in Python from the same tables
+    and uses the same patterns, not converted, and it rejects no file the
+    RELAX NG schema accepts. It is looser in three ways, which its header
+    and the page list and the tests hold a document for: a `<server>` may
+    hold the children of another server type than its own (never of two at
+    once), since XSD 1.0 cannot make content depend on an attribute;
+    `<backend type='tcp'>` may hold option text; and `xsi:schemaLocation`
+    and `xsi:noNamespaceSchemaLocation` pass on any element, as does
+    `xsi:type` on a flat setting when it names the type the setting already
+    has. No other `xsi:` attribute passes.
+    Everything else is the same, including each flat setting at most once
+    in any order and each once-only child of a `<server>` at most once.
+  - **A fleet file cannot name its XSD with `xsi:schemaLocation`**: the
+    parser refuses every attribute on `<fleet>`. The page shows the two
+    ways that work, the editor's own association (`xml.fileAssociations`
+    for the XML extension of VS Code) and an `xml-model` processing
+    instruction.
+  - `qemu-tool fleet-schema` with standard output closed (`>&-`) prints one
+    line and exits 1; it ended in a traceback. An empty `--output`, or a
+    directory, is refused by name.
+  - `tests/test_fleet_schema.py` fails when a committed file is not what the
+    generator writes, when a row has no help, when a schema and the parser
+    disagree on a list of small documents, and when the XSD differs from
+    the RELAX NG schema anywhere but on the documents listed as its
+    looseness; it needs `lxml` or `xmllint`, skips without one and fails
+    without one under `CI=true`. `Gen Compose Check` installs `lxml`.
+  - *Run:* the four shipped fleet files and 316 small documents through the
+    parser and both schemas with lxml, on libxml2 2.14.6 and on 2.15.2. By
+    hand, in a local container and in no workflow, on the 257 documents
+    there were
+    before the last three elements were removed: the same files and
+    documents through the RELAX NG schema with jing, which agreed with libxml2 on
+    every one, and through the XSD with the JDK's own validator (Xerces),
+    which compiled it and agreed with libxml2 on every one. `trang` converts
+    the RELAX NG schema with two warnings; the XSD it writes takes more than
+    the generated one in most places (a repeated setting, and any element as
+    the root, pass it) and less in one (it has no named type for a string
+    or a path setting, so an `xsi:type` naming one is refused). An earlier
+    247 of the documents also went through both schemas with `xmllint`
+    2.15.2, with the same answers; it was not run on the last ten.
+    *Not run:* any editor against either schema, and a `.deb` build.
 
 - **`qemu-tool quick-start --flavor xio`: a one-guest stack for rocm-xio
   development.** The guest has two rocjitsu GPUs, two rocm-ernic NICs,
@@ -55,6 +290,70 @@ All notable changes to this project will be documented in this file.
   in that guest's log. A bake does not take them. Rendered and read back
   through `docker compose config` and `run-vm --dry-run`; no guest has been
   started with one.
+- **`<vm-nvme-block-size>` and `run-vm --nvme-block-size`: 4096-byte
+  blocks on the emulated NVMe.** One setting, `512` (the default, and
+  QEMU's) or `4096`, for the logical and the physical block size of every
+  NVMe namespace QEMU itself emulates for a guest; it is what a request for
+  an "LBA format" comes to, since QEMU takes the format in use from the
+  logical block size. Any other value is a parse error naming the two.
+  - `run-vm` adds `logical_block_size=4096,physical_block_size=4096` to the
+    device that holds the drive: the `nvme-ns` of each scratch qcow2, and
+    the `nvme` controller of each null_blk device (a negative `--nvme`). On
+    a controller with a separate `nvme-ns` QEMU 10.2.1 and the fork's 11.1.3
+    both accept the properties and leave the namespace at 512, so they are
+    never written there. A literal `--nvme` string is left alone, with a
+    note. `--convert-to-libvirt` writes and reads the same.
+  - `gen-compose` renders `--nvme-block-size` on each guest's `run-vm` only
+    for a value that is not the default, so the four shipped stacks are
+    byte for byte what they were, and refuses 4096 on a fleet with no
+    emulated NVMe (`<vm-nvme>0`). `run-vm --xml` gets it from the file.
+  - It does not reach an SPDK controller or an `nvmeof` backend, which set
+    their own (`lba:malloc:SIZE:BLOCK`, 4096 by default; `bs=`, 512 by
+    default).
+  - Nothing on an existing scratch disk is converted. Changing from 512 to
+    4096 under data, on a guest: a GPT is not found, XFS and ext4 with
+    1024-byte blocks do not mount, ext4 with 4096-byte blocks does.
+  - Run on one guest of the default fleet on the fork QEMU, with
+    `<vm-nvme-vram>`: the guest reported 4096-byte logical and physical
+    blocks and LBA Format 4 in use, and `quick-start test` and
+    `--hipfile-test` passed at 4096 and at 512 with rates inside each
+    other's spread. Not run: null_blk devices, the bridge and more than one
+    NVMe a guest on a guest, and any CI lane.
+- **`<ernic-mtu>`: the MTU of a guest's emulated NICs, and an RDMA MTU of
+  4096.** One setting, 1500 (the default, and the device's) to 9198, the
+  most the device takes; any other value is a parse error. A guest's RDMA
+  port takes its `active_mtu` from the NIC's MTU, which nothing raised, so
+  every fleet ran RDMA at an MTU of 1024 and `-m 4096` was clamped to it.
+  From `<ernic-mtu>4192` up the port reports 4096.
+  - **No new guest image is needed.** `gen-compose` adds two `--qemu-arg`
+    words to each guest's `run-vm`: an SMBIOS type 11 string that systemd
+    reads as the credential `udev.rules.70-qemu-tool-ernic-mtu`, holding
+    one udev rule that matches the emulated NIC by its four PCI fields and
+    sets its MTU. The guest's `systemd-udev-load-credentials.service`
+    installs it under `/run/udev/rules.d`. Seen on guests of
+    `20261119.g2aea67d`; nothing is written to the disk and no playbook
+    takes part. `qemu/checks/rocm-golden.sh` now requires that unit to be
+    loaded and to have run, so an image that could not take the rule is not
+    published.
+  - With `<ernic-tap>true` the `l2` network is created with
+    `com.docker.network.driver.mtu` and each tapsetup sets its tap to the
+    same MTU after `setup.sh`, by an `entrypoint` in the compose file: the
+    tapsetup image and its tag are unchanged. Without a TAP only the guest
+    words are rendered, with a note. A value under 4192 is noted too, with
+    the `active_mtu` it gives.
+  - The default renders nothing: the four shipped stacks are byte for byte
+    what they were. A running stack does not take a changed value, since a
+    Docker network keeps the MTU it was created with.
+  - Refused: a `<vm-qemu-args>` that already passes a credential of that
+    name. `run-vm --xml` outside a stack does not get the setting.
+  - Run on two guests of the default fleet (4 vCPU, 3072 MiB each) at
+    9000: NIC MTU 9000 and `active_mtu` 4096 at first login,
+    `ping -M do -s 8972` between the guests 3 of 3 and `-s 8973` none,
+    `quick-start test` passing with its `ib_send_bw` at `Mtu : 4096`. The
+    same disks booted without the element: 1500 and 1024. Rates at 4096
+    were inside the spread of those at 1024: the device does not use the
+    path MTU. Not run: more than one NIC a guest, the other three fleets,
+    a fleet with no TAP, nixl or UCX, and any CI lane.
 - **`<vm-pci-mmio-bridge>`.** Renders `run-vm --pci-mmio-bridge` for every
   guest. Refused without an emulated NVMe (`<vm-nvme>` of at least 1), and
   warned about on a `<qemu-ref>` that is not the fork.
@@ -104,6 +403,68 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **A guest is an AMD machine on an Intel host too.** `run-vm` started
+  amd64 guests with `-cpu EPYC`, and under KVM QEMU gives every CPU model
+  the host's CPUID vendor, so on an Intel host the guest was `GenuineIntel`
+  with family 23. The guest kernel allows peer-to-peer DMA between devices
+  that share no upstream bridge only on an AMD CPU ("cannot be used for
+  peer-to-peer DMA as the client and provider (...) do not share an
+  upstream bridge or whitelisted host bridge"). Reproduced on the AMD
+  development host with a guest given the `GenuineIntel` vendor: hipFile's
+  direct path fell back (amdgpu logged "AIS: P2P DMA not accessible") and
+  read at about a twelfth of the rate, still verified; a direct NVMe read
+  into GPU peer-to-peer pages failed with the kernel message above; the
+  dma-buf RDMA test still passed. `run-vm` now writes
+  `-cpu EPYC,vendor=AuthenticAMD`, with `,phys-bits=N` after it when one is
+  set, on every host.
+  - `<vm-cpu-vendor>` in a fleet file and `run-vm --cpu-vendor` change the
+    vendor: exactly 12 printable ASCII characters with no comma, or empty.
+    An empty element or `--cpu-vendor ''` states no vendor and leaves the
+    host's; it is not the default. `gen-compose` renders the option only
+    when a fleet says something other than `AuthenticAMD`, so the four
+    shipped stacks are byte for byte what they were. Anything but
+    `AuthenticAMD` prints a note on stderr at render and at `run-vm`.
+  - Any other CPU property is a whole `-cpu` in `<vm-qemu-args>` or
+    `--qemu-arg`. QEMU takes the last `-cpu` and nothing of an earlier one
+    (checked on QEMU 10.2.1 and the pinned fork), so it must restate the
+    vendor and any `phys-bits`, and stay an AMD model of family 23 or
+    later: the guest kernel asks for the family too, and `host` and `max`
+    take the host's.
+  - `gen-vm`'s bake boots are unchanged: they pass no `-cpu`.
+  - `scripts/check-guest-cpu.sh` asserts the guest's vendor and family and
+    prints the host's vendor; the `quickstart-boot` and daily report lanes
+    run it. It also fails on the kernel's host-bridge refusal and warns on
+    amdgpu's "AIS: P2P DMA not accessible", but nothing either lane runs
+    makes the kernel print its refusal, so the vendor and family are the
+    assertion that counts. **Not yet run on an Intel host**: on the AMD
+    development host a stated `GenuineIntel` reached the guest's CPUID,
+    which is the mirror image, and the first lane run that lands on an
+    Intel runner is the proof. On an AMD runner the script passes with or
+    without this change, and its notice and the "what this run shows" row
+    of the step summary say so.
+  - Read from the guest kernel's source, not run: on Intel hardware an
+    AMD-vendor guest kernel reports itself not affected by the Intel-only
+    CPU vulnerabilities (Meltdown, L1TF, MDS, MMIO stale data, BHI) and
+    does not apply those mitigations inside the guest; it applies the AMD
+    family 23 set instead. Benchmark figures from an Intel host shift
+    against earlier ones from it.
+  - Also read from source, not run, for Intel hosts. An AMD-vendor guest
+    makes KVM hypercalls with `VMMCALL`, which an Intel host's KVM patches
+    into the guest's read-only text, a page fault. The default EPYC guest
+    makes none; `modprobe ptp_kvm` does, and so does a `-cpu host` or
+    `-cpu max` with an AMD vendor in `<vm-qemu-args>`, during boot. And
+    QEMU gives an AMD-vendor guest the reserved range below 1 TiB, moving
+    RAM above 4 GiB to 1 TiB when the 64-bit PCI hole reaches it: a local
+    fleet that fitted its `<vm-cpu-phys-bits>` on an Intel host before may
+    be refused at start with `phys-bits too low`. The four shipped fleets
+    fit. And QEMU gives an AMD-vendor guest no CPUID leaf 2 or 4, Intel's
+    two cache leaves: its cache topology is in leaf `0x8000001D`, QEMU's
+    own EPYC table, which is what the guest kernel's AMD code reads.
+    `scripts/check-guest-cpu.sh` warns on a kernel oops in the guest's
+    dmesg, and counts as an MSR line only one that names an MSR access.
+  - `run-vm --convert-to-libvirt` still writes
+    `<cpu mode='host-passthrough'/>`, which no vendor setting reaches, and
+    now says so on stderr.
 - **The ernic stats exporter gave every NIC of a guest one `ernic_id`.** On
   a fleet with several NICs a guest (`helios-tray`, `mi355x-server`) each
   sample was written once per NIC under the same labels. The id is now the
@@ -117,6 +478,16 @@ All notable changes to this project will be documented in this file.
 - **`qemu-tool list --summary` counted every NIC as a mesh node.** A NIC
   with a backend of its own is no longer counted against the mesh ceiling or
   in the "connected" figure.
+- **The site's "edit this page" link named a branch called `master`.**
+  `.mkdocs.yml` now sets `edit_uri: edit/main/docs/`.
+- **The published branch had no `.nojekyll`.** GitHub Pages runs Jekyll
+  over `gh-pages` without one, and Jekyll leaves out paths that start with
+  an underscore. Nothing the site built had such a path until the Python
+  API pages, whose stylesheet is `assets/_mkdocstrings.css`. `mkdocs build`
+  does not write the file (`mkdocs gh-deploy` does, and the workflow does
+  not use it), so the publish step now writes it into the branch after it
+  syncs the built site. Run by hand against a scratch directory, not on a
+  runner.
 
 ## [v2.1.0] - 2026-11-19
 

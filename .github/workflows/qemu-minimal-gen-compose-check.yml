@@ -76,7 +76,11 @@ jobs:
       # Seconds: three pip wheels, and apt only on an image that dropped one.
       - name: Tooling the identity tests must not skip for
         run: |
-          python3 -m pip install --user --quiet PyYAML Jinja2
+          # lxml is for tests/test_fleet_schema.py, which runs every
+          # shipped fleet file and a list of small documents through
+          # the generated RELAX NG and XSD schemas and through the parser. Without a
+          # validator those tests would skip, and under CI=true they fail.
+          python3 -m pip install --user --quiet PyYAML Jinja2 lxml
           need=""
           command -v lspci >/dev/null || need="$need pciutils"
           command -v udevadm >/dev/null || need="$need udev"
@@ -92,7 +96,7 @@ jobs:
           # check for the wrong reason.
           udevadm verify --help >/dev/null || {
             echo "::error::udevadm has no verify subcommand"; exit 1; }
-          python3 -c "import yaml, jinja2"
+          python3 -c "import yaml, jinja2, lxml.etree"
 
       # tests/test_ionic_source_mirror.py holds the golden bake's fetch of
       # the ionic kernel sources to the collection it drives: the fetch
@@ -138,6 +142,21 @@ jobs:
         env:
           CI: "true"
         run: python3 -m unittest discover -s tests -v
+
+      # The site is published from main only, by publish-pages, and its
+      # Python API pages are built from the docstrings under qemu/qemu-tool/.
+      # So a docstring is page text, and one the build warns about (prose
+      # such as x[i][j] outside backticks is a cross-reference to nothing)
+      # would pass every lane of a pull request and then fail the one job
+      # that also publishes the performance page, daily, until it was fixed.
+      # This is that workflow's own install line and build command, with the
+      # output thrown away: nothing is published from here.
+      # tests/test_api_docs.py holds the two workflows to one package list
+      # and one command.
+      - name: Build the site the way publish-pages does
+        run: |
+          python3 -m pip install --user --quiet mkdocs-material 'mkdocstrings[python]' ruff
+          python3 -m mkdocs build --config-file .mkdocs.yml --strict --site-dir "$RUNNER_TEMP/site"
 
       # The privilege posture of every committed stack, as compose RESOLVES
       # it rather than as gen_compose renders it. Resolving collapses the x-

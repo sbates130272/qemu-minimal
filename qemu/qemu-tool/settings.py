@@ -11,6 +11,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from .config import DEFAULT_NVME_BLOCK_SIZE
 from .fleet_xml import FleetConfig, FleetXml, split_args
 from .ports import DEFAULT_SSH_PORT
 
@@ -33,14 +34,20 @@ def load_fleet(explicit: Path | Sequence[Path] | None = None) -> FleetConfig | N
 def vm_overrides(fleet: FleetConfig) -> dict[str, Any]:
     """The VMConfig fields a fleet's per-VM defaults set.
 
-    Three fields are applied whatever the file says, because FleetConfig
-    cannot tell "unset" from their default: images, vfio_user_root_port and
-    backing_shared. Everything else is applied only when non-empty, so an
+    Two fields are applied whatever the file says, because FleetConfig
+    cannot tell "unset" from their default: vfio_user_root_port and
+    cpu_vendor. Everything else is applied only when non-empty, so an
     absent element leaves the VMConfig default alone.
+
+    No element turns image locking off. A generated stack passes run-vm
+    --backing-shared itself; a run-vm outside a stack that shares a backing
+    file takes the flag.
     """
     out: dict[str, Any] = {
         "vfio_user_root_port": fleet.vm_vfio_user_root_port,
-        "backing_shared": fleet.vm_backing_shared,
+        # Always: an empty <vm-cpu-vendor> is a value (the host's vendor),
+        # and the default is the same AuthenticAMD as VMConfig's.
+        "cpu_vendor": fleet.vm_cpu_vendor,
     }
     if fleet.vm_images_dir:
         out["images"] = Path(fleet.vm_images_dir).expanduser()
@@ -50,6 +57,8 @@ def vm_overrides(fleet: FleetConfig) -> dict[str, Any]:
         out["vmem"] = fleet.vm_vmem
     if fleet.vm_nvme:
         out["nvme"] = str(fleet.vm_nvme)
+    if fleet.vm_nvme_block_size != DEFAULT_NVME_BLOCK_SIZE:
+        out["nvme_block_size"] = fleet.vm_nvme_block_size
     if fleet.vm_username:
         out["username"] = fleet.vm_username
     if fleet.vm_password:
@@ -90,7 +99,7 @@ def bake_overrides(fleet: FleetConfig) -> dict[str, Any]:
     """
     out = vm_overrides(fleet)
     for name in ("backing_image", "username", "password", "extra_hostfwd",
-                 "qemu_args"):
+                 "qemu_args", "cpu_vendor"):
         out.pop(name, None)
     if fleet.bake_name:
         out["vm_name"] = fleet.bake_name

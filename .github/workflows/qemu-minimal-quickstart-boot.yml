@@ -53,6 +53,7 @@ on:
       - 'qemu/qemu-tool/**'
       - 'qemu/stacks/rocm-golden.xml'
       - 'qemu/compose/rocm-golden/**'
+      - 'scripts/check-guest-cpu.sh'
       - '.github/workflows/qemu-minimal-quickstart-boot.yml'
   workflow_dispatch:
 
@@ -273,6 +274,37 @@ jobs:
         grep -q 'PORT_ACTIVE' /tmp/ibv.txt || {
           echo "::error::${IB} is present but its port is not PORT_ACTIVE"; exit 1; }
         echo "RDMA device is PORT_ACTIVE"
+
+    # A guest is an AMD machine on every host (AGENTS.md, "The guest is an
+    # AMD machine"). Under KVM QEMU gives the EPYC model the HOST's CPUID
+    # vendor unless run-vm states one, and the guest kernel refuses P2PDMA
+    # between devices that share no upstream bridge on a CPU that is not AMD.
+    # A run of this step that lands on an Intel host is the verification of
+    # that path: nothing else in this repository has run there. Which
+    # vendors GitHub's hosted runners have was not checked from here; the
+    # script prints the host's vendor as a notice so a reader can tell which
+    # kind of run this was.
+    #
+    # On an AMD runner this step asserts nothing about that change: a guest
+    # there reads AuthenticAMD with or without the stated vendor. The step
+    # stays green, and the script's notice, its last line and the "what this
+    # run shows" row of the step summary say that the run was not a pass of
+    # the Intel-host case.
+    #
+    # The qemu container's run-vm is this checkout's: quick-start stages
+    # qemu/ beside the stack when it runs from one.
+    - name: The guest is an AMD machine whatever the host is
+      run: |
+        set -eu
+        HOST=$(docker inspect \
+          -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
+          pr-boot-qemu-1-1)
+        USER_IN_IMAGE=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1])).get("username") or "ubuntu")' \
+            "${KEY_DIR}/vm-info.json" 2>/dev/null || echo ubuntu)
+        scripts/check-guest-cpu.sh prboot-1 \
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -o ConnectTimeout=10 -i "${KEY_DIR}/id_rsa" -p 2222 \
+              "${USER_IN_IMAGE}@${HOST}"
 
     # The privilege posture of the containers that are ACTUALLY RUNNING.
     #

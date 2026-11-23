@@ -20,11 +20,11 @@ Docker Hub only: tags are deleted through the Hub API, which other
 registries do not have. The endpoints, read from Docker's published OpenAPI
 description and from the live API:
 
-  POST   /v2/auth/token                         {identifier, secret}
-                                                -> {access_token}, a bearer
-  GET    /v2/namespaces/<ns>/repositories/<repo>/tags?page=N&page_size=100
-                                                -> {count, next, results[]}
-  DELETE /v2/repositories/<ns>/<repo>/tags/<tag>/  -> 204
+    POST   /v2/auth/token                         {identifier, secret}
+                                                  -> {access_token}, a bearer
+    GET    /v2/namespaces/<ns>/repositories/<repo>/tags?page=N&page_size=100
+                                                  -> {count, next, results[]}
+    DELETE /v2/repositories/<ns>/<repo>/tags/<tag>/  -> 204
 
 The DELETE is the one the Hub's own web interface sends. It is not in the
 published description, which documents only GET and HEAD for a tag.

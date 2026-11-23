@@ -1,3 +1,13 @@
+"""`qemu-tool inspect` and `qemu-tool ssh`: one running guest in detail.
+
+`records()` starts from what `list_vms.collect()` reads off the QEMU
+process and adds what the image's sidecar and the guest agent say: the
+account, the SSH keys the guest accepts, its GPUs and their BARs, its block
+devices and who is logged in. `run()` prints the records, and `ssh_argv()`
+and `ssh_run()` build the ssh command from the same record, so `ssh`
+connects the way `inspect` said it would.
+"""
+
 from __future__ import annotations
 
 import base64

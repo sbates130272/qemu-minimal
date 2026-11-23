@@ -954,6 +954,263 @@ class TestNVMeVram(unittest.TestCase):
         self.assertEqual(text.count("--nvme-vram-dev"), 2)
 
 
+class TestNVMeBlockSize(unittest.TestCase):
+    """<vm-nvme-block-size>: run-vm --nvme-block-size on each guest, and
+    only for a size that is not the default."""
+
+    def _render(self, extra: str) -> str:
+        with contextlib.redirect_stderr(io.StringIO()):
+            return gen_compose.render_compose(_plan(extra), ["e"], "d")
+
+    def test_the_default_renders_nothing(self):
+        for extra in ("<vm-nvme>1</vm-nvme>",
+                      "<vm-nvme>1</vm-nvme>"
+                      "<vm-nvme-block-size>512</vm-nvme-block-size>"):
+            with self.subTest(extra=extra):
+                self.assertNotIn("--nvme-block-size", self._render(extra))
+        # Byte for byte: naming the default is the same stack as not.
+        self.assertEqual(
+            self._render("<vm-nvme>1</vm-nvme>"),
+            self._render("<vm-nvme>1</vm-nvme>"
+                         "<vm-nvme-block-size>512</vm-nvme-block-size>"))
+
+    def test_4096_is_on_every_guests_run_vm(self):
+        out = self._render("<vm-nvme>1</vm-nvme>"
+                           "<vm-nvme-block-size>4096</vm-nvme-block-size>")
+        self.assertEqual(out.count("          --nvme-block-size 4096 \\\n"), 8)
+        self.assertEqual(out.count("--nvme-block-size"), 8)
+
+    def test_it_is_a_run_vm_option_between_the_count_and_the_devices(self):
+        out = self._render(
+            "<vm-count>1</vm-count><vm-nvme>2</vm-nvme>"
+            "<vm-nvme-block-size>4096</vm-nvme-block-size>"
+            "<vm-nvme-vram>true</vm-nvme-vram>")
+        run = out[out.index("qemu-tool run-vm"):]
+        self.assertLess(run.index('--nvme "2"'),
+                        run.index("--nvme-block-size 4096"))
+        self.assertLess(run.index("--nvme-block-size 4096"),
+                        run.index("--nvme-vram-dev"))
+        self.assertLess(run.index("--nvme-block-size 4096"),
+                        run.index("--vfio-userdev"))
+
+    def test_run_vm_takes_the_line_the_generator_writes(self):
+        import re as _re
+        out = self._render("<vm-count>1</vm-count><vm-nvme>1</vm-nvme>"
+                           "<vm-nvme-block-size>4096</vm-nvme-block-size>")
+        words = _re.search(r"--nvme-block-size (\S+)", out)
+        from qemu_tool import cli
+        args = cli._build_parser().parse_args(
+            ["run-vm", "--nvme-block-size", words.group(1)])
+        self.assertEqual(args.nvme_block_size, 4096)
+
+    def test_null_blk_devices_take_it(self):
+        out = self._render("<vm-nvme>-1</vm-nvme>"
+                           "<vm-nvme-block-size>4096</vm-nvme-block-size>")
+        self.assertEqual(out.count("--nvme-block-size 4096"), 8)
+
+    def test_with_the_bridge(self):
+        out = self._render(
+            "<vm-count>1</vm-count><vm-nvme>1</vm-nvme>"
+            "<vm-pci-mmio-bridge>true</vm-pci-mmio-bridge>"
+            "<vm-nvme-block-size>4096</vm-nvme-block-size>")
+        self.assertEqual(out.count("--nvme-block-size 4096"), 1)
+        self.assertEqual(out.count("--pci-mmio-bridge"), 1)
+
+    def test_refused_without_an_nvme(self):
+        for nvme in ("", "<vm-nvme>0</vm-nvme>"):
+            with self.subTest(nvme=nvme), self.assertRaises(SystemExit) as ctx, \
+                    contextlib.redirect_stderr(io.StringIO()):
+                _plan(nvme + "<vm-nvme-block-size>4096</vm-nvme-block-size>")
+            text = str(ctx.exception)
+            self.assertIn("<vm-nvme-block-size> is 4096", text)
+            self.assertIn("<vm-nvme> is 0", text)
+            # What it is not for, and the two ways out.
+            self.assertIn("SPDK", text)
+            self.assertIn("nvmeof", text)
+            self.assertIn("<vm-nvme>1</vm-nvme>", text)
+            self.assertIn("remove <vm-nvme-block-size>", text)
+
+    def test_the_default_is_not_refused_without_an_nvme(self):
+        with contextlib.redirect_stderr(io.StringIO()):
+            _plan("<vm-nvme-block-size>512</vm-nvme-block-size>")
+
+    def test_no_shipped_stack_renders_it(self):
+        for stack in ("rocm-golden", "helios-tray", "mi355x-server", "xio"):
+            with self.subTest(stack=stack):
+                text = (REPO_ROOT / "qemu/compose" / stack
+                        / "docker-compose.yml").read_text()
+                self.assertNotIn("--nvme-block-size", text)
+                fleet = (REPO_ROOT / "qemu/stacks" / f"{stack}.xml").read_text()
+                self.assertNotIn("vm-nvme-block-size", fleet)
+
+
+class TestErnicMtu(unittest.TestCase):
+    """<ernic-mtu>: a udev rule handed to every guest, and with a TAP the
+    l2 network and each tap at the same MTU. 1500 renders nothing."""
+
+    TAP = "<ernic-tap>true</ernic-tap>"
+    CRED = "udev.rules.70-qemu-tool-ernic-mtu"
+
+    def _render(self, extra: str) -> str:
+        with contextlib.redirect_stderr(io.StringIO()):
+            return gen_compose.render_compose(_plan(extra), ["e"], "d")
+
+    def _notes(self, extra: str) -> str:
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            _plan(extra)
+        return err.getvalue()
+
+    def _qemu_words(self, out: str, guest: int) -> list[str]:
+        import shlex
+        import yaml
+        script = yaml.safe_load(out)["services"][f"qemu-{guest}"][
+            "entrypoint"][-1]
+        argv = shlex.split(script[script.index("run-vm"):].replace("$$", "$"))
+        return [a[len("--qemu-arg="):] for a in argv
+                if a.startswith("--qemu-arg=")]
+
+    def test_the_default_renders_nothing(self):
+        for tap in ("", self.TAP):
+            with self.subTest(tap=tap):
+                plain = self._render(tap)
+                self.assertEqual(
+                    plain, self._render(tap + "<ernic-mtu>1500</ernic-mtu>"))
+                for needle in ("smbios", "driver.mtu", "link set", self.CRED):
+                    self.assertNotIn(needle, plain)
+
+    def test_every_guest_is_handed_the_rule(self):
+        import base64
+        out = self._render(self.TAP + "<ernic-mtu>9000</ernic-mtu>")
+        for guest in (1, 8):
+            with self.subTest(guest=guest):
+                words = self._qemu_words(out, guest)
+                self.assertEqual(words[0], "-smbios")
+                self.assertEqual(len(words), 2)
+                head = f"type=11,value=io.systemd.credential.binary:{self.CRED}="
+                self.assertTrue(words[1].startswith(head), words[1])
+                blob = words[1][len(head):]
+                # QEMU splits an option on commas; base64 has none.
+                self.assertNotIn(",", blob)
+                rule = base64.b64decode(blob, validate=True).decode("ascii")
+                self.assertEqual(rule, gen_compose.ernic_mtu_rule(9000))
+        self.assertEqual(out.count("--qemu-arg='-smbios'"), 8)
+
+    def test_the_rule_matches_the_emulated_nic_and_nothing_else(self):
+        rule = gen_compose.ernic_mtu_rule(4192)
+        lines = [line for line in rule.splitlines()
+                 if line and not line.startswith("#")]
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(rule.endswith("\n"))
+        for field in ('ACTION=="add"', 'SUBSYSTEM=="net"',
+                      'ATTRS{vendor}=="0x1dd8"', 'ATTRS{device}=="0x1002"',
+                      'ATTRS{subsystem_vendor}=="0x1dd8"',
+                      'ATTRS{subsystem_device}=="0x5400"',
+                      'ATTR{mtu}="4192"'):
+            self.assertIn(field, lines[0])
+        # The same four fields as the image's naming rule.
+        naming = (REPO_ROOT / "ansible/playbooks/roles/rocm_ernic_setup/files"
+                  / "99-rocm-ernic.rules").read_text()
+        for value in ("0x1dd8", "0x1002", "0x5400"):
+            self.assertIn(f'=="{value}"', naming)
+
+    def test_run_vm_takes_the_words_the_generator_writes(self):
+        from qemu_tool import cli
+        out = self._render("<vm-count>1</vm-count><ernic-mtu>9000</ernic-mtu>")
+        words = self._qemu_words(out, 1)
+        args = cli._build_parser().parse_args(
+            ["run-vm"] + [f"--qemu-arg={word}" for word in words])
+        self.assertEqual(args.qemu_args, words)
+
+    def test_they_follow_the_fleets_own_qemu_args(self):
+        out = self._render("<vm-count>1</vm-count><ernic-mtu>9000</ernic-mtu>"
+                           "<vm-qemu-args>-device pci-testdev</vm-qemu-args>")
+        self.assertEqual(self._qemu_words(out, 1)[:3],
+                         ["-device", "pci-testdev", "-smbios"])
+
+    def test_with_a_tap_the_network_and_each_tap_take_it(self):
+        import yaml
+        out = self._render(self.TAP + "<ernic-mtu>9000</ernic-mtu>")
+        doc = yaml.safe_load(out)
+        self.assertEqual(
+            doc["networks"]["l2"],
+            {"driver": "bridge",
+             "driver_opts": {"com.docker.network.driver.mtu": "9000"}})
+        # The mesh network carries RDMA payload over TCP and stays as it is.
+        self.assertNotIn("driver_opts", doc["networks"]["fleet"])
+        taps = [name for name in doc["services"] if name.startswith("tapsetup")]
+        self.assertEqual(len(taps), 8)
+        for name in taps:
+            service = doc["services"][name]
+            self.assertEqual(
+                service["entrypoint"],
+                ["/bin/sh", "-c",
+                 "/usr/local/bin/setup.sh && ip link set tap0 mtu 9000"])
+            # The image and its build are the ones every stack shares.
+            self.assertEqual(service["image"], "qemu-tool/ernic-tapsetup:1")
+            self.assertEqual(service["cap_add"], ["NET_ADMIN"])
+            self.assertTrue(service["read_only"])
+
+    def test_setup_sh_makes_the_tap_the_entrypoint_names(self):
+        script = (REPO_ROOT / "qemu/compose/rocm-golden/tapsetup"
+                  / "setup.sh").read_text()
+        self.assertIn("TAP=${TAP:-tap0}", script)
+        docker = (REPO_ROOT / "qemu/compose/rocm-golden/tapsetup"
+                  / "Dockerfile").read_text()
+        self.assertIn('ENTRYPOINT ["/usr/local/bin/setup.sh"]', docker)
+
+    def test_without_a_tap_only_the_guests_are_set(self):
+        out = self._render("<ernic-mtu>9000</ernic-mtu>")
+        self.assertEqual(out.count("--qemu-arg='-smbios'"), 8)
+        self.assertNotIn("driver.mtu", out)
+        self.assertNotIn("tapsetup", out)
+        self.assertNotIn("link set", out)
+        note = self._notes("<ernic-mtu>9000</ernic-mtu>")
+        self.assertIn("<ernic-mtu> is 9000 and <ernic-tap> is false", note)
+        self.assertNotIn("<ernic-tap> is false",
+                         self._notes(self.TAP + "<ernic-mtu>9000</ernic-mtu>"))
+
+    def test_a_value_short_of_an_rdma_mtu_of_4096_is_noted(self):
+        for mtu, active in ((1501, 1024), (2143, 1024), (2144, 2048),
+                            (4191, 2048)):
+            with self.subTest(mtu=mtu):
+                note = self._notes(self.TAP + f"<ernic-mtu>{mtu}</ernic-mtu>")
+                self.assertIn(f"<ernic-mtu> is {mtu}", note)
+                self.assertIn(f"active_mtu of {active}.", note)
+                self.assertIn("<ernic-mtu> of 4192 or more", note)
+        for mtu in (4192, 9000, 9198):
+            with self.subTest(mtu=mtu):
+                self.assertEqual(
+                    self._notes(self.TAP + f"<ernic-mtu>{mtu}</ernic-mtu>"), "")
+        self.assertEqual(self._notes(self.TAP), "")
+
+    def test_a_credential_of_the_same_name_in_qemu_args_is_refused(self):
+        extra = ("<ernic-mtu>9000</ernic-mtu><vm-qemu-args>-smbios "
+                 f"type=11,value=io.systemd.credential.binary:{self.CRED}=QQ=="
+                 "</vm-qemu-args>")
+        with self.assertRaises(SystemExit) as ctx, \
+                contextlib.redirect_stderr(io.StringIO()):
+            _plan(extra)
+        text = str(ctx.exception)
+        self.assertIn("<ernic-mtu> is 9000", text)
+        self.assertIn("<vm-qemu-args>", text)
+        self.assertIn(self.CRED, text)
+        self.assertIn("remove <ernic-mtu> from the layer that sets it", text)
+        # Without the element the fleet's own credential is its business.
+        with contextlib.redirect_stderr(io.StringIO()):
+            _plan(extra.replace("<ernic-mtu>9000</ernic-mtu>", ""))
+
+    def test_no_shipped_stack_renders_it(self):
+        for stack in ("rocm-golden", "helios-tray", "mi355x-server", "xio"):
+            with self.subTest(stack=stack):
+                text = (REPO_ROOT / "qemu/compose" / stack
+                        / "docker-compose.yml").read_text()
+                for needle in ("smbios", "driver.mtu", self.CRED):
+                    self.assertNotIn(needle, text)
+                fleet = (REPO_ROOT / "qemu/stacks" / f"{stack}.xml").read_text()
+                self.assertNotIn("ernic-mtu", fleet)
+
+
 class TestHostShare(unittest.TestCase):
     """<vm-filesystem>, the 9p share that carries the image tarball.
 

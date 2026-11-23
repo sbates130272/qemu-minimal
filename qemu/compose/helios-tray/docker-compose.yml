@@ -4,7 +4,7 @@
 # Regenerate after changing qemu/stacks/helios-tray.xml:
 #   qemu-tool gen-compose --xml qemu/stacks/helios-tray.xml
 #
-# xml-sha256: 58079f86313f1e9d786dfe85e193b53558cdfd443f7ba4e7bc1720b804461308  # pre-commit: ignore
+# xml-sha256: e80670b767799d9c1a03cae68af87bca318b7d862ba1649863af22d35539ed14  # pre-commit: ignore
 
 x-logging: &logging
   driver: json-file
@@ -839,7 +839,7 @@ services:
 networks:
   # Dumb shared L2 carrying guest Ethernet only. No address
   # is assigned: each ernic bridges its tap onto it, and the
-  # guests address each other over <ernic-subnet>.
+  # guests address each other over 192.168.100.0/24.
   l2:
     driver: bridge
   # Every service has a fixed address and nothing resolves a

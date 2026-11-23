@@ -28,6 +28,8 @@ title: Documentation
 | --- | --- |
 | [Home](index.md) | Landing page with badges, site summary, and entry points. |
 | [Documentation](documentation.md) | High-level explanation of the published site and its moving parts. |
+| [Fleet XML reference](fleet-xml.md) | Every element of the settings format, generated from the parser's tables, and the two schemas that go with it. |
+| [Python API](api/index.md) | The modules of `qemu_tool`, for people working on the code: built from the docstrings when the site is built. `qemu-tool` is a command, and these pages promise no library interface. |
 | [Publishing flow](publishing.md) | How workflow artifacts become the published site and how trend history is retained. |
 | [Performance trends](perf/index.md) | Generated benchmark history, latest badges, and recent-run tables. |
 
@@ -63,6 +65,10 @@ lists such changes, with their dates, under "Changes to what is measured".
 
 - The site is built from `docs/` using MkDocs Material and pushed as pre-built
   HTML to the `gh-pages` branch.
+- The Python API pages are not in `docs/` as text. `docs/api/` names the
+  modules, and mkdocstrings fills each page from the docstrings under
+  `qemu/qemu-tool/` during the build, so a page says what the source said
+  at the commit the site was built from.
 - No guest inspection report is published. The benchmark jobs upload badge
   JSON only.
 - Performance history is stored only on `gh-pages`; it is not committed on

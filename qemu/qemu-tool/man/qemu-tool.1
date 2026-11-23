@@ -22,7 +22,8 @@ is one of
 .BR qcow ,
 .BR publish\-qcow ,
 .BR publish\-qcow\-prune ,
-.B ernic\-stats
+.BR ernic\-stats ,
+.B fleet\-schema
 or
 .BR man .
 .SH DESCRIPTION
@@ -128,6 +129,11 @@ pushes to. A dry run unless told otherwise.
 Serve the stats files written by
 .B "rocm\-ernic \-S"
 as Prometheus metrics. Runs inside the compose stack; rarely invoked by hand.
+.TP
+.B fleet\-schema
+Print a schema for fleet XML, as RELAX NG or as XML Schema (XSD), or the
+reference page that lists every element, generated from the parser's own
+tables.
 .TP
 .B man
 Show this page.
@@ -703,6 +709,37 @@ when a large BAR would exceed the default space; both must move together.
 QEMU refuses a hole larger than the address space allows at startup rather
 than at boot time.
 .TP
+.BI \-\-cpu\-vendor " VENDOR"
+The CPUID vendor the guest's CPU states (amd64 guests). Default:
+.BR <vm\-cpu\-vendor> ,
+else
+.IR AuthenticAMD ,
+on every host, so the guest's
+.B \-cpu
+is
+.IR EPYC,vendor=AuthenticAMD .
+Under KVM QEMU otherwise gives the EPYC model the host's vendor, and on an
+Intel host the guest kernel then refuses peer\-to\-peer DMA between devices
+that share no upstream bridge. Exactly 12 printable ASCII characters with no comma,
+such as
+.IR GenuineIntel ;
+an empty value
+.RB ( "\-\-cpu\-vendor ''" )
+states no vendor and leaves the host's. Anything but
+.I AuthenticAMD
+prints a note on standard error. Other CPU properties go in a whole
+.B \-cpu
+given with
+.BR \-\-qemu\-arg :
+QEMU takes the last
+.B \-cpu
+and nothing of an earlier one, so it has to restate the vendor and the
+address bits.
+A domain written by
+.B \-\-convert\-to\-libvirt
+has the host's CPU whatever this option says, and a note on standard error
+says so.
+.TP
 .BI \-\-pci\-hole64\-size " SIZE"
 Size of the 64\-bit PCI hole as a QEMU size string, e.g.\&
 .IR 512G .
@@ -711,7 +748,7 @@ GPUs will not enumerate without this.
 .IP
 Bounded by
 .BR \-\-cpu\-phys\-bits :
-.B \-cpu EPYC
+.B \-cpu EPYC,vendor=AuthenticAMD
 gives 40 bits (1\~TiB) by default, so on QEMU 10.2.1
 .I 512G
 is accepted and
@@ -740,6 +777,29 @@ instead of stderr.
 .TP
 .BI \-\-nvme\-lbaf\-mask " HEX"
 Restrict the advertised LBA format mask (hex bitmask).
+.TP
+.BI \-\-nvme\-block\-size " {512,4096}"
+Logical and physical block size, in bytes, of every NVMe namespace
+.B run\-vm
+creates: the LBA format the guest sees in use. Default:
+.BR <vm\-nvme\-block\-size> ,
+else 512, which is QEMU's own and adds nothing to the command line.
+.B 4096
+adds
+.B logical_block_size=4096,physical_block_size=4096
+to the device that holds the drive: the
+.B nvme\-ns
+of each drive created by
+.BR \-\-nvme " N" ,
+and the
+.B nvme
+controller of each null_blk device. It is not applied to a literal
+.B \-\-nvme
+argument, and has nothing to do with an SPDK controller or an NVMe-oF
+namespace, which set their own. An existing scratch disk is not
+converted. A partition table made at one size is not found at the other;
+XFS made at 512, and ext4 made with blocks smaller than 4096, do not mount
+at 4096; ext4 with 4096-byte blocks mounts at either.
 .TP
 .B \-\-nvme\-recreate
 Recreate NVMe image files even if they already exist.
@@ -826,6 +886,7 @@ Disable the QEMU guest agent channel.
 .TP
 .B \-\-backing\-shared
 Mark the backing image as shared so multiple VMs can run from the same base.
+No fleet XML element sets this: a generated stack passes it for every guest.
 .TP
 .BI \-\-extra\-hostfwd " RULE"
 Append an additional SLIRP host-forward rule, e.g.\&
@@ -1170,6 +1231,34 @@ and exits; the long-running server needs only
 because attaching to a pre-created, owned TAP requires no capability.
 Default: false.
 .TP
+.B <ernic\-mtu>
+The MTU, in bytes, of every emulated ernic NIC in every guest: 1500 to
+9198. Default: 1500, the device's own, which renders nothing. A guest's
+RDMA port takes its
+.B active_mtu
+from the NIC's MTU: 1024 below 2144, 2048 below 4192, and 4096 from there,
+so
+.B <ernic\-mtu>4192
+or more is what gives an RDMA MTU of 4096. Each guest is handed a udev rule
+at boot as a systemd credential
+.RB ( "\-smbios type=11" ),
+which the guest's
+.B systemd\-udev\-load\-credentials.service
+installs under
+.I /run/udev/rules.d
+before the NIC appears; nothing is written to the guest's disk and the
+published guest image needs no change. With
+.B <ernic\-tap>
+true the
+.I l2
+network is created at the same MTU and each tap is set to it, so frames of
+that size cross between guests; the mesh network is left alone. A running
+stack does not take a changed value: bring it down and up. It does not
+change RDMA throughput or the 16\~MiB limit on one RDMA message. Generated
+stacks only:
+.B run\-vm \-\-xml
+does not get it.
+.TP
 .BR <ernic\-per\-vm> ", " <rocjitsu\-per\-vm> ", " <sdxi\-per\-vm>
 Devices per guest. The first two must be at least 1. Each ernic is its own
 mesh node, and the mesh stops registering workers at about 40 nodes, so 8
@@ -1284,6 +1373,37 @@ Listen port. Default: 9840.
 .TP
 .BI \-\-addr " ADDR"
 Listen address. Default: 0.0.0.0.
+.SH FLEET-SCHEMA OPTIONS
+.PP
+Writes a schema for a fleet XML file, as RELAX NG or as XML Schema (XSD), or
+the reference page that lists every element, its kind, its default and what
+it is for. All three are generated from the tables the parser itself reads,
+so none can describe an element the parser does not have. See
+.B SETTINGS FILE
+for what a schema is for, which of the two to use and what neither can check.
+.TP
+.BI \-\-format " FORMAT"
+What to write.
+.B rng
+is the RELAX NG schema in its XML syntax, with XML Schema datatypes for the
+patterns. It is the precise one.
+.B xsd
+is the XML Schema, version 1.0, for editors and tools that take only XSD. It
+accepts everything the RELAX NG schema accepts and is looser in three
+ways, which
+.B SETTINGS FILE
+lists.
+.B md
+is the reference page in Markdown, which the documentation site publishes.
+Default:
+.BR rng .
+.TP
+.BI \-\-output " FILE"
+Write to
+.I FILE
+instead of standard output.
+.B \-
+is standard output.
 .SH COMPOSE OPTIONS
 Runs
 .B docker compose
@@ -2230,12 +2350,52 @@ group, nothing is expanded); a stack passes each word to
 .B run\-vm
 as
 .BR \-\-qemu\-arg .
+.B <vm\-cpu\-vendor>
+is the CPUID vendor every guest's CPU states and defaults to
+.IR AuthenticAMD :
+a guest is an AMD machine on every host. An empty element is not the default;
+it states no vendor, and the guest then has the host's.
 The parser is strict: an element it does not know, an element given twice in
 one file, an attribute, a nested element and text directly under
 .B <fleet>
 are each an error that names the file and the element, and for an unknown
 element the closest known name. XML comments are allowed anywhere. A misspelt
 element is therefore refused, not read as a setting left at its default.
+.PP
+Ten elements the format used to have are refused the same way, with an
+error that says the element was removed and suggests no setting in its
+place. Seven were parsed and read by no command, so deleting one from a file
+changes nothing:
+.BR <qemu\-digest> ,
+.BR <ernic\-digest> ,
+.BR <rocjitsu\-digest> ,
+.BR <backing\-digest> ,
+.BR <domain\-pattern> ,
+.B <prom\-port>
+and
+.BR <loki\-port> .
+A guest image is pinned by digest in
+.B <backing\-ref>
+itself, as
+.IR name @sha256: digest .
+Three were read.
+.B <vm\-backing\-shared>
+turned image locking off for a
+.B run\-vm
+given
+.BR \-\-xml ,
+or finding a
+.B fleet.xml
+on the search path; a generated stack always starts its guests with locking off, and a
+.B run\-vm
+outside a stack that shares a backing file now takes
+.BR \-\-backing\-shared .
+.B <ernic\-subnet>
+and
+.B <ernic\-mac\-prefix>
+are fixed at 192.168.100 and 72:6f:63:6d, the values the guest image
+assumes. A misspelling of a removed element is told which one it looks like
+and is offered no setting either.
 .PP
 One element has structure.
 .B <devices>
@@ -2291,10 +2451,15 @@ for sdxi
 .BR <verbose/> ;
 for spdk, an SPDK vfio\-user NVMe controller run from
 .BR <spdk\-image> ,
-.B <namespaces>
+.BR <namespaces> ,
+.B <serial>
 and
-.BR <serial> ,
-which set the image's NVME_NAMESPACES and the controller's serial number.
+.BR <cpumask> ,
+which set the image's NVME_NAMESPACES, the controller's serial number and
+SPDK_CPUMASK, the host cores the server's poll\-mode reactor spins on: a
+hexadecimal core mask such as 0x4, by default 0x1, host CPU 0. Each server
+takes one full core, and the one value is every guest's server's, so guests
+share the cores it names.
 A guest takes one spdk server.
 Options the generator derives, the socket and the MAC among them, cannot be
 set.
@@ -2380,13 +2545,15 @@ beats the file.
 <vm\-vmem>                     \-\-vmem
 <vm\-images\-dir>               \-\-images
 <vm\-nvme>                     \-\-nvme
+<vm\-nvme\-block\-size>          \-\-nvme\-block\-size
 <vm\-filesystem>               \-\-filesystem
 <vm\-extra\-hostfwd>            \-\-extra\-hostfwd
-<vm\-backing\-shared>           \-\-backing\-shared
 <vm\-vfio\-user\-root\-port>      \-\-vfio\-user\-root\-port
 <vm\-cpu\-sockets>              \-\-cpu\-sockets
 <vm\-cpu\-phys\-bits>            \-\-cpu\-phys\-bits
+<vm\-cpu\-vendor>               \-\-cpu\-vendor
 <vm\-pci\-hole64\-size>          \-\-pci\-hole64\-size
+<vm\-qemu\-args>                \-\-qemu\-arg
 <vm\-username>                 \-\-username
 <vm\-password>                 \-\-password
 <vm\-ssh\-key\-file>             \-\-ssh\-key\-file
@@ -2406,22 +2573,16 @@ Shape
 .BR <vm\-count> ,
 .BR <vm\-name\-prefix> ,
 .BR <ssh\-port\-base> ,
-.BR <stop\-grace\-period> ,
-.BR <domain\-pattern> .
+.BR <stop\-grace\-period> .
 .TP
 Images
 .BR <qemu\-ref> ,
 .BR <ernic\-ref> ,
 .BR <rocjitsu\-ref> ,
 .BR <sdxi\-image> ,
-.BR <backing\-ref> ,
-the optional
-.BR <qemu\-digest> ,
-.BR <ernic\-digest> ,
-.B <rocjitsu\-digest>
+.BR <spdk\-image> ,
+.BR <backing\-ref>
 and
-.B <backing\-digest>
-beside the reference each pins, and
 .BR <image\-allow\-guest\-lag> ,
 which excuses
 .B <backing\-ref>
@@ -2449,13 +2610,21 @@ Devices
 .BR <sdxi\-per\-vm> ,
 .BR <vm\-pcie\-switch\-width> ,
 .BR <vm\-nvme\-vram> ,
-.BR <rocjitsu\-config> .
+.BR <rocjitsu\-config>
+and
+.BR <vm\-pci\-mmio\-bridge> ,
+a boolean that gives every guest the fork QEMU's
+.B pci\-mmio\-bridge
+device for its emulated NVMe, which rocm\-xio uses. It is refused with
+.B <vm\-nvme>
+of 0 or less, needs the fork QEMU, and is for generated stacks only:
+.B run\-vm \-\-xml
+does not get it.
 .TP
 Network and mesh
 .BR <fleet\-prefix> ,
-.BR <ernic\-subnet> ,
-.BR <ernic\-mac\-prefix> ,
 .BR <ernic\-tap> ,
+.BR <ernic\-mtu> ,
 .BR <ernic\-tcp\-port> ,
 .BR <ernic\-stats\-port> ,
 .BR <ernic\-nofile> ,
@@ -2468,7 +2637,6 @@ the per-guest elements above, and
 .BR <vm\-shm\-size> .
 .TP
 Metrics and logs
-.BR <prom\-port> ,
 .BR <prom\-scrape\-interval> ,
 .BR <prom\-retention> ,
 .BR <prom\-data\-dir> ,
@@ -2480,7 +2648,6 @@ Metrics and logs
 .BR <grafana\-data\-dir> ,
 .BR <logs\-enable> ,
 .BR <loki\-image> ,
-.BR <loki\-port> ,
 .BR <loki\-data\-dir> ,
 .BR <alloy\-image> ,
 .BR <log\-max\-size> ,
@@ -2563,6 +2730,72 @@ Registry repository, without a tag, and the flavour recorded with the image.
 reads
 .B <publish\-ref>
 too.
+.SS Schema and reference
+.B "qemu\-tool fleet\-schema"
+writes a RELAX NG schema for one fleet XML file,
+.B "fleet\-schema \-\-format xsd"
+an XML Schema (XSD 1.0) for the same, and
+.B "fleet\-schema \-\-format md"
+the reference page that lists every element with its kind, its default and
+what it is for. All are generated from the tables the parser reads. A
+schema is for editors and for validators that do not have
+.BR qemu\-tool .
+The Debian package installs them as
+.I /usr/share/qemu\-tool/schema/fleet.rng
+and
+.IR /usr/share/qemu\-tool/schema/fleet.xsd ;
+a wheel installed with uv, pipx or pip carries them inside its own
+environment and puts nothing there. From any install, write a copy and
+validate against that:
+.PP
+.RS
+.EX
+qemu\-tool fleet\-schema \-\-output fleet.rng
+xmllint \-\-noout \-\-relaxng fleet.rng my\-fleet.xml
+
+qemu\-tool fleet\-schema \-\-format xsd \-\-output fleet.xsd
+xmllint \-\-noout \-\-schema fleet.xsd my\-fleet.xml
+.EE
+.RE
+.PP
+The RELAX NG schema is the precise one. The XSD is for an editor or a tool
+that takes only XSD: it accepts everything the RELAX NG schema accepts, and
+besides that a
+.B <server>
+holding the children of another server type than its own (never of two
+types at once), option text in
+.BR "<backend type='tcp'>" ,
+and three attributes of XML Schema's own:
+.B xsi:schemaLocation
+and
+.B xsi:noNamespaceSchemaLocation
+on any element, and
+.B xsi:type
+on a flat setting when it names the type the setting already has.
+The parser refuses all three.
+.PP
+.B "qemu\-tool check \-\-xml"
+runs the parser itself and is the check that counts. Neither schema
+rejects a file the parser accepts, and both accept some the parser refuses.
+A schema describes one file, so it knows nothing of layers; it cannot see two
+.B <server>
+entries with one id, a per-guest count that disagrees with a
+.B <devices>
+block, text between elements, an unclosed quote in
+.BR <vm\-qemu\-args> ,
+a character outside ASCII that is not a digit in an integer, or any rule
+.B gen\-compose
+holds between elements, such as the images' build stamps and the size of the
+mesh. A fleet file cannot name its schema in an attribute, since
+.B <fleet>
+takes none, and that includes
+.BR xsi:schemaLocation :
+associate the XSD with the file in the editor's settings (for the XML
+extension of VS Code,
+.BR xml.fileAssociations ),
+or with an
+.B xml\-model
+processing instruction before the root element, which the parser ignores.
 .SS What is not a fleet XML setting
 .B CONTAINER_USER
 and
@@ -2641,6 +2874,21 @@ and
 .I rocm\-golden.xml
 documents the elements.
 .TP
+.I /usr/share/qemu-tool/schema/fleet.rng
+The RELAX NG schema for a fleet XML file, as
+.B fleet\-schema
+writes it. Installed by the Debian package only; with any other install,
+.B "qemu\-tool fleet\-schema \-\-output"
+.I FILE
+writes the same file.
+.TP
+.I /usr/share/qemu-tool/schema/fleet.xsd
+The XML Schema (XSD 1.0) for the same, as
+.B "fleet\-schema \-\-format xsd"
+writes it. Looser than the RELAX NG schema, in the three ways
+.B SETTINGS FILE
+lists.
+.TP
 .I /usr/share/qemu-tool/compose/
 The generated stack directories of the same names, used by
 .BR compose .
@@ -2675,8 +2923,8 @@ renders its stacks, and a conventional place for your own.
 Default package manifest installed into new VMs by
 .BR gen\-vm .
 .PP
-The package manifests, the fleet files and the compose stacks are also
-bundled inside the Python distribution, so
+The package manifests, the fleet files, the two schemas and the compose stacks
+are also bundled inside the Python distribution, so
 .B "uv tool install qemu-tool"
 (or
 .BR "pipx install qemu-tool" )

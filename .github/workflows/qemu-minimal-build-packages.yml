@@ -105,6 +105,8 @@ jobs:
             ./usr/share/man/man1/qemu-tool.1.gz
             ./usr/share/qemu-tool/packages-default
             ./usr/share/qemu-tool/packages-minimal
+            ./usr/share/qemu-tool/schema/fleet.rng
+            ./usr/share/qemu-tool/schema/fleet.xsd
           "
           # A stack directory is used verbatim as a `docker compose` working
           # directory, and Docker creates a missing bind-mount source as an
@@ -500,6 +502,29 @@ jobs:
           print(f'manifest: {cfg.packages}')
           if not body.strip():
               raise SystemExit('::error::default package manifest is empty')
+          PY
+
+      # The .deb's content list names the schema; nothing named it for the
+      # wheel, and the sdist round trip above compares two wheels with each
+      # other, so a file missing from both passes it.
+      - name: Check the wheel carries the fleet XML schemas
+        run: |
+          set -euo pipefail
+          cd /tmp
+          python - <<'PY'
+          from importlib import resources
+          from qemu_tool import fleet_schema
+          for name, render in (('fleet.rng', fleet_schema.render_rng),
+                               ('fleet.xsd', fleet_schema.render_xsd)):
+              found = resources.files('qemu_tool.share.schema') / name
+              if not found.is_file():
+                  raise SystemExit(
+                      f'::error::no {name} in the wheel at {found}')
+              if found.read_text(encoding='utf-8') != render():
+                  raise SystemExit(
+                      f'::error::{name} in the wheel is not what '
+                      'fleet-schema writes')
+              print(f'schema: {found}')
           PY
 
       # A rootless install cannot write /var/lib/qemu-tool/images, so the

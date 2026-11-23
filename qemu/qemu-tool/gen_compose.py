@@ -16,6 +16,7 @@ guests.
 
 from __future__ import annotations
 
+import base64
 import dataclasses
 import hashlib
 import ipaddress
@@ -34,6 +35,10 @@ from .fleet_xml import (
     SERVER_ENV, SERVER_OPTIONS, FleetConfig, FleetXml, Server, device_counts,
     split_args,
 )
+from .config import (
+    DEFAULT_ERNIC_MTU, DEFAULT_NVME_BLOCK_SIZE, rdma_active_mtu,
+)
+from .identity import AMD_CPU_VENDOR, cpu_vendor_note
 from .ports import publish_address, publish_mapping, reach_address
 from .resources import stack_fleet
 from .vm_artifact import VM_COMMIT_TAG, VM_DATED_TAG
@@ -290,7 +295,20 @@ def pins_fork_qemu(ref: str) -> bool:
     return repo.endswith(FORK_MARK)
 
 
-# The most NICs a fleet can address: .11 to .254 of <ernic-subnet>.
+# The guests' RDMA NIC network and the first four bytes of every emulated
+# NIC's MAC address. Constants, not settings, because the guest side holds
+# the same two values and reads no fleet file: the boot unit a golden image
+# carries addresses NIC n at <ERNIC_SUBNET>.<10+n> (rocm_ernic_setup_nic_subnet
+# in roles/rocm_ernic_setup/defaults/main.yml, baked into
+# rocm-ernic-netcfg.sh), and vm-quickstart.yml finds a guest's NIC by this
+# MAC prefix. They were the elements <ernic-subnet> and <ernic-mac-prefix>
+# until 2026-11-20; a fleet that set either to anything else rendered
+# addresses, GIDs and an inventory its guests did not answer to.
+# tests/test_ernic_constants.py holds both to the guest side.
+ERNIC_SUBNET = "192.168.100"
+ERNIC_MAC_PREFIX = "72:6f:63:6d"
+
+# The most NICs a fleet can address: .11 to .254 of ERNIC_SUBNET.
 _NIC_MAX = 244
 
 
@@ -380,6 +398,120 @@ def _check_pci_mmio_bridge(cfg: FleetConfig) -> None:
             "Warning: <vm-pci-mmio-bridge> is true and <qemu-ref> is "
             f"{cfg.qemu_ref}, which is not the fork QEMU. run-vm exits "
             "when its QEMU has no pci-mmio-bridge device.", file=sys.stderr)
+
+
+def _check_nvme_block_size(cfg: FleetConfig) -> None:
+    """<vm-nvme-block-size>: a block size needs an emulated NVMe to set.
+
+    The value itself is held to 512 or 4096 when the file is parsed. What
+    is refused here is a size other than the default on a fleet whose
+    guests get no emulated NVMe, where the element would be an override
+    that never applies: the SPDK controller and an nvmeof backend's
+    namespaces are other devices, with block sizes of their own. A negative
+    <vm-nvme>, null_blk devices, takes it: the properties go on the nvme
+    controller that holds the drive.
+    """
+    if cfg.vm_nvme_block_size == DEFAULT_NVME_BLOCK_SIZE:
+        return
+    if cfg.vm_nvme == 0:
+        sys.exit(
+            "Error: <vm-nvme-block-size> is "
+            f"{cfg.vm_nvme_block_size} and <vm-nvme> is 0. It sets the "
+            "block size of each guest's emulated NVMe namespaces and of "
+            "nothing else (an SPDK controller and an nvmeof backend have "
+            "their own), so give the fleet an NVMe (<vm-nvme>1</vm-nvme>) "
+            "or remove <vm-nvme-block-size> from the layer that sets it.")
+
+
+# <ernic-mtu>: the name of the systemd credential each guest is handed, and
+# so of the file its systemd-udev-load-credentials writes,
+# /run/udev/rules.d/<name>.rules. 70 sorts it ahead of the image's own
+# 99-rocm-ernic.rules, which renames the device.
+ERNIC_MTU_CREDENTIAL = "udev.rules.70-qemu-tool-ernic-mtu"
+# The RDMA MTU a fleet raises the netdev MTU for, and the least netdev MTU
+# that gives it (measured: 4191 gives 2048, 4192 gives 4096).
+_IB_MTU_WANTED = 4096
+_IB_MTU_WANTED_FROM = 4192
+
+
+def ernic_mtu_rule(mtu: int) -> str:
+    """The udev rule that gives every emulated ernic NIC of a guest MTU.
+
+    It matches the four PCI fields the image's 99-rocm-ernic.rules matches
+    (1dd8:1002 with subsystem 1dd8:5400), on the netdev's parent, so a real
+    Pensando card passed through to the same guest is left alone. The MTU
+    is written when the netdev is added, before anything brings it up.
+    """
+    return (
+        "# From the host, by qemu-tool gen-compose: <ernic-mtu> of the "
+        "fleet file.\n"
+        'ACTION=="add", SUBSYSTEM=="net", '
+        'ATTRS{vendor}=="0x1dd8", ATTRS{device}=="0x1002", '
+        'ATTRS{subsystem_vendor}=="0x1dd8", '
+        'ATTRS{subsystem_device}=="0x5400", '
+        f'ATTR{{mtu}}="{mtu}"\n')
+
+
+def ernic_mtu_qemu_args(mtu: int) -> list[str]:
+    """The QEMU words that hand a guest ernic_mtu_rule(mtu) at boot.
+
+    An SMBIOS type 11 string systemd reads as a credential: PID 1 imports
+    it and systemd-udev-load-credentials installs it as a rules file before
+    udev sees the NIC. Base64 because a rule holds commas, which QEMU's
+    option parser would split on. Nothing is written into the image and no
+    playbook runs: it is the guest's own systemd that applies it.
+    """
+    blob = base64.b64encode(ernic_mtu_rule(mtu).encode("ascii")).decode(
+        "ascii")
+    return ["-smbios",
+            "type=11,value=io.systemd.credential.binary:"
+            f"{ERNIC_MTU_CREDENTIAL}={blob}"]
+
+
+def _check_ernic_mtu(cfg: FleetConfig) -> None:
+    """<ernic-mtu>: what the fleet gets, said where it is less than asked.
+
+    The value is held to its range when the file is parsed. Refused here:
+    a <vm-qemu-args> that already hands the guest a credential of the name
+    this one takes, since systemd would be given two. Noted, and rendered
+    all the same: a value that leaves the RDMA port below 4096, which is
+    what the setting is mostly raised for, and a fleet with no TAP, where
+    only the guest's NIC is set because there is no Ethernet path to set.
+    """
+    if cfg.ernic_mtu == DEFAULT_ERNIC_MTU:
+        return
+    if ERNIC_MTU_CREDENTIAL in cfg.vm_qemu_args:
+        sys.exit(
+            f"Error: <ernic-mtu> is {cfg.ernic_mtu} and <vm-qemu-args> "
+            f"already passes the guest a credential named "
+            f"{ERNIC_MTU_CREDENTIAL}. <ernic-mtu> hands every guest a udev "
+            "rule under that name, so remove it from <vm-qemu-args>, or "
+            "remove <ernic-mtu> from the layer that sets it.")
+    active = rdma_active_mtu(cfg.ernic_mtu)
+    if active < _IB_MTU_WANTED:
+        print(
+            f"Note: <ernic-mtu> is {cfg.ernic_mtu}, which gives each guest's "
+            f"RDMA port an active_mtu of {active}. An active_mtu of "
+            f"{_IB_MTU_WANTED} needs <ernic-mtu> of {_IB_MTU_WANTED_FROM} "
+            "or more.", file=sys.stderr)
+    if not cfg.ernic_tap:
+        print(
+            f"Note: <ernic-mtu> is {cfg.ernic_mtu} and <ernic-tap> is false. "
+            "The guests' NICs are set and their RDMA ports follow; there is "
+            "no Ethernet between guests for the MTU to apply to.",
+            file=sys.stderr)
+
+
+def _check_cpu_vendor(cfg: FleetConfig) -> None:
+    """<vm-cpu-vendor>: say so when the guests are not presented as AMD.
+
+    A guest is an AMD machine unless very clearly told otherwise (AGENTS.md,
+    "The guest is an AMD machine"). This is the telling, so it is a note
+    and not a refusal; nothing here looks at the host.
+    """
+    note = cpu_vendor_note(cfg.vm_cpu_vendor, "<vm-cpu-vendor>")
+    if note:
+        print(note, file=sys.stderr)
 
 
 def _check_nvme_vram(cfg: FleetConfig) -> None:
@@ -729,13 +861,13 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
     # count the ones that are.
     mesh_per_vm = sum(1 for x in ernic_servers if _backend(x) is None)
     mesh_count = count * mesh_per_vm
-    # Guest addresses are <ernic-subnet>.11 upward in a /24, one per NIC. The
+    # Guest addresses are ERNIC_SUBNET.11 upward in a /24, one per NIC. The
     # mesh ceiling used to keep the count far below this; a fleet of NICs
     # that are off the mesh has no other bound.
     if nic_count > _NIC_MAX:
         sys.exit(
             f"Error: {count} VMs x {ernic_per_vm} ernics is {nic_count} NICs. "
-            "Guest addresses start at <ernic-subnet>.11 in a /24, which has "
+            f"Guest addresses start at {ERNIC_SUBNET}.11 in a /24, which has "
             f"room for {_NIC_MAX}.")
     if mesh_count > _MESH_MAX:
         detail = (
@@ -758,6 +890,9 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
 
     _check_image_coherence(cfg)
     _check_nvme_vram(cfg)
+    _check_nvme_block_size(cfg)
+    _check_ernic_mtu(cfg)
+    _check_cpu_vendor(cfg)
     _warn_if_gpu_without_root_port(cfg)
 
     prefix = _setting(cfg, "name_prefix")
@@ -768,16 +903,14 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
     # the two are the same number, which is what keeps the existing stack
     # byte-identical; above that, every NIC in the fleet still gets its own
     # MAC, IP and GID.
-    mac_prefix = _setting(cfg, "ernic_mac_prefix")
-    macs = [f"{mac_prefix}:{o >> 8:02x}:{o & 0xff:02x}"
+    macs = [f"{ERNIC_MAC_PREFIX}:{o >> 8:02x}:{o & 0xff:02x}"
             for o in range(1, nic_count + 1)]
 
-    subnet = _setting(cfg, "ernic_subnet")
     # Guests start at .11. Avoid .1: the mesh manager claims it as its DHCP
     # server_ip and intercepts ARP for it (AGENTS.md known issue 1).
     #
     # nic_count is at most _NIC_MAX (checked above), so the last is .254.
-    ips = [f"{subnet}.{10 + o}" for o in range(1, nic_count + 1)]
+    ips = [f"{ERNIC_SUBNET}.{10 + o}" for o in range(1, nic_count + 1)]
 
     shm_sizes = _split_per_vm(_setting(cfg, "shm_size"), count, "<vm-shm-size>")
     rocjitsu_configs = _split_per_vm(
@@ -922,11 +1055,12 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
         "sdxi_per_vm": sdxi_per_vm,
         "switch_width": _switch_width,
         "nvme_vram": cfg.vm_nvme_vram,
+        "nvme_block_size": cfg.vm_nvme_block_size,
         "ernic_image": cfg.ernic_ref,
         "qemu_image": cfg.qemu_ref,
-        "vm_images_dir": _setting(cfg, "vm_images_dir"),
         "cpu_sockets": cfg.vm_cpu_sockets,
         "cpu_phys_bits": cfg.vm_cpu_phys_bits,
+        "cpu_vendor": cfg.vm_cpu_vendor,
         "pci_hole64_size": cfg.vm_pci_hole64_size,
         "net_prefix": net,
         "exporter_addr": f"{net}.{_NET_INFRA}.{_INFRA_EXPORTER}",
@@ -936,7 +1070,6 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
         "alloy_addr": f"{net}.{_NET_INFRA}.{_INFRA_ALLOY}",
         "logs": cfg.logs_enable,
         "loki_image": _setting(cfg, "loki_image"),
-        "loki_port": str(cfg.loki_port),
         "loki_data_dir": _setting(cfg, "loki_data_dir"),
         "alloy_image": _setting(cfg, "alloy_image"),
         # Carried into the inventory so the guest's ip_discovery.bin is generated
@@ -947,7 +1080,6 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
         "grafana_image": _setting(cfg, "grafana_image"),
         "grafana_port": str(cfg.grafana_port),
         "grafana_password": _setting(cfg, "grafana_admin_password"),
-        "subnet": subnet,
         "vm_username": _setting(cfg, "vm_username"),
         # Distinct shares, first seen first: one bind mount each.
         "vm_filesystem": list(dict.fromkeys(
@@ -958,6 +1090,7 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
         "stats_port": str(cfg.ernic_stats_port),
         "ernic_nofile": str(cfg.ernic_nofile),
         "ernic_tap": cfg.ernic_tap,
+        "ernic_mtu": cfg.ernic_mtu,
         "ernic_p4": cfg.p4_enable,
         "ernic_p4_guest_scope": _setting(cfg, "p4_guest_scope"),
         "ernic_p4_program": cfg.p4_program,
@@ -968,7 +1101,6 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
         "prom_data_dir": cfg.prometheus_data_dir or _PROM_DATA_DIR,
         "bind_addr": _bind_addr(cfg),
         "grafana_data_dir": cfg.grafana_data_dir or _GRAFANA_DATA_DIR,
-        "prom_port": str(cfg.prom_port),
         "prom_interval": _setting(cfg, "prom_scrape_interval"),
         "prom_retention": _setting(cfg, "prom_retention"),
     }
@@ -1533,11 +1665,23 @@ def render_compose(
             out.append(f'          --cpu-sockets {spec["cpu_sockets"]} \\')
         if spec["cpu_phys_bits"]:
             out.append(f'          --cpu-phys-bits {spec["cpu_phys_bits"]} \\')
+        if spec["cpu_vendor"] != AMD_CPU_VENDOR:
+            # Only when a layer says otherwise: run-vm's own default is
+            # AuthenticAMD, so a fleet that names no vendor renders nothing.
+            # `=` so an empty value, or one starting with a dash, is the
+            # option's value.
+            out.append(
+                f'          --cpu-vendor={_sh_word(spec["cpu_vendor"])} \\')
         if spec["pci_hole64_size"]:
             out.append(
                 f'          --pci-hole64-size "{spec["pci_hole64_size"]}" \\')
         for flag, value in vm["flags"]:
             out.append(f'          {flag} "{value}" \\')
+        if spec["nvme_block_size"] != DEFAULT_NVME_BLOCK_SIZE:
+            # Only for a size a layer asked for: 512 is run-vm's default and
+            # QEMU's, so a fleet that names none renders nothing.
+            out.append(
+                f'          --nvme-block-size {spec["nvme_block_size"]} \\')
         if spec["nvme_vram"]:
             # run-vm gives each vfio-user device its socket's stem as qdev id.
             out.append(
@@ -1558,6 +1702,12 @@ def render_compose(
         # for the shell this line is run by.
         for word in spec["qemu_args"]:
             out.append(f"          --qemu-arg={_sh_word(word)} \\")
+        if spec["ernic_mtu"] != DEFAULT_ERNIC_MTU:
+            # Only for an MTU a layer asked for: 1500 is the device's own,
+            # so a fleet that names none renders nothing. The words are the
+            # same for every guest: the rule matches the device, not a name.
+            for word in ernic_mtu_qemu_args(spec["ernic_mtu"]):
+                out.append(f"          --qemu-arg={_sh_word(word)} \\")
         all_vfio_socks = (list(vm["vfio_socks"]) + list(vm["sdxi_socks"])
                           + list(vm["spdk_socks"]))
         out.append(f'          --vfio-userdev "{",".join(all_vfio_socks)}"')
@@ -1792,6 +1942,17 @@ def render_compose(
             # image is then already in their local store -- so it is
             # invisible precisely to the people who would recognise it.
             out.append("    pull_policy: build")
+            if spec["ernic_mtu"] != DEFAULT_ERNIC_MTU:
+                # <ernic-mtu>: the tap takes the MTU once setup.sh has made
+                # it. Done here and not in setup.sh so that the image, whose
+                # one tag every stack on a host shares, is the same image
+                # with and without the setting. The bridge in this netns
+                # follows its ports, and the l2 end of it was created at
+                # this MTU by the network's driver option.
+                out.append(
+                    '    entrypoint: ["/bin/sh", "-c", '
+                    '"/usr/local/bin/setup.sh && ip link set '
+                    f'{_TAP_IF} mtu {spec["ernic_mtu"]}"]')
             out.append("    logging: *logging")
             out.append(f'    network_mode: "service:{nic["service"]}"')
             # Drop first, then add the one back. `cap_add` alone leaves
@@ -1825,9 +1986,20 @@ def render_compose(
     if spec["ernic_tap"]:
         out.append("  # Dumb shared L2 carrying guest Ethernet only. No address")
         out.append("  # is assigned: each ernic bridges its tap onto it, and the")
-        out.append("  # guests address each other over <ernic-subnet>.")
+        out.append("  # guests address each other over "
+                   f"{ERNIC_SUBNET}.0/24.")
         out.append("  l2:")
         out.append("    driver: bridge")
+        if spec["ernic_mtu"] != DEFAULT_ERNIC_MTU:
+            # <ernic-mtu>: Docker creates the bridge and both ends of every
+            # veth on it at this MTU. Without it a guest whose NIC was
+            # raised loses every larger frame here with no error anywhere.
+            # Only a network created with the option has it: an existing
+            # one keeps its MTU until the stack is brought down and up.
+            out.append("    driver_opts:")
+            out.append(
+                '      com.docker.network.driver.mtu: '
+                f'"{spec["ernic_mtu"]}"')
     out.append("  # Every service has a fixed address and nothing resolves a")
     out.append("  # service name at run time. Docker's embedded DNS is a single")
     out.append("  # resolver per network, and a fleet start burst saturates it:")
@@ -1947,7 +2119,7 @@ def render_inventory(spec: dict[str, Any], digest: str) -> str:
     out.append(
         f'        fleet_guest_rocjitsu_image: "{spec["rocjitsu_image"]}"'
     )
-    # /24 is implied by <ernic-subnet> being three octets; the generator
+    # /24 is implied by ERNIC_SUBNET being three octets; the generator
     # has no key for a prefix because the ernic L2 segment is flat by
     # construction.
     out.append("        fleet_guest_prefix: 24")

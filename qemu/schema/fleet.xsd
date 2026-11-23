@@ -1,0 +1,1334 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  XML Schema (XSD 1.0) for qemu-tool fleet XML, namespace http://qemu-tool/fleet/1.0.
+
+  GENERATED. Do not edit: this is what the fleet-schema subcommand
+  of qemu-tool writes, with its format option set to xsd, from the
+  tables in qemu/qemu-tool/fleet_xml.py. Change the tables and write
+  it again.
+
+  The parser is the authority, and fleet.rng, the RELAX NG schema
+  generated from the same tables, is the precise schema. This one is
+  for tools that take only XSD. It never rejects a file fleet.rng
+  accepts, and so never one the parser accepts. It is looser than
+  fleet.rng in these ways and no other:
+
+  - An attribute XML Schema reserves for itself passes:
+    xsi:schemaLocation and xsi:noNamespaceSchemaLocation on any element,
+    with any value, and xsi:type on a flat setting when it names the
+    type that setting already has. The RELAX NG schema refuses them, as
+    the parser does: no element but <server> and <backend> takes an
+    attribute.
+  - A <server>'s children are held to the children of one type, which
+    need not be the type its type attribute names: XSD 1.0 cannot make
+    an element's content depend on an attribute's value. <config> in a
+    server of type ernic passes. Children of two types in one server are
+    still refused. The sets are <backend>, <log-level>, <nic-profile>,
+    <stats-interval-ms>, <eth-queues>, <inject> (ernic); <config>,
+    <node>, <cpu-thread-budget>, <wait-checking> (rocjitsu); <verbose>
+    (sdxi); <namespaces>, <serial>, <cpumask> (spdk).
+  - <backend type='tcp'> may hold option text, as the other backend
+    types do. tcp takes none, and XSD 1.0 cannot make an element's text
+    depend on an attribute's value.
+
+  Like fleet.rng it checks one file, not layers, and no rule that
+  spans elements. The reference page, docs/fleet-xml.md, lists
+  what neither can check.
+-->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           xmlns:f="http://qemu-tool/fleet/1.0"
+           targetNamespace="http://qemu-tool/fleet/1.0"
+           elementFormDefault="qualified"
+           blockDefault="#all">
+  <xs:element name="fleet">
+    <xs:annotation>
+      <xs:documentation>One fleet XML file: flat settings in any order, each at most once, and at most one devices block.</xs:documentation>
+    </xs:annotation>
+    <xs:complexType mixed="true">
+      <xs:all>
+        <xs:element name="vm-count" type="f:kind.int" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Number of guests in the fleet; each gets its own QEMU service and its own set of device servers. Integer, at least 1 (render exits below that), default 1. Baked into the generated compose file, so a change means re-rendering. Bounded by 64 mesh NICs (warning above 40) and 244 NICs in total.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="vm-name-prefix" type="f:kind.str" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Prefix of every guest's name; guest N is &lt;prefix&gt;-N, the name run-vm passes on for the guest's hostname. String, default qemu-fleet. gen-compose takes the default for an empty element; quick-start does not, and looks for guests named -1, -2. Names run from &lt;prefix&gt;-1. The guest lower-cases it and turns characters outside a-z, 0-9 and - into hyphens for its hostname.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="ssh-port-base" type="f:kind.int" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Host port published for guest 1's SSH; guest N gets the base plus N minus 1. Integer, default 2222; kind is int, so auto is a parse error. Published on &lt;publish-bind-addr&gt; to container port 2222. quick-start moves the range in an overlay of its own when a port is taken.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="stop-grace-period" type="f:kind.str" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>How long docker waits after asking a guest's QEMU container to stop before it kills it. Compose duration such as 120s (the default); passed through as text, not validated by the parser; empty takes the default. Applies to the qemu-N services only. QEMU exits on SIGTERM without shutting the guest down, so this does not make a stop graceful.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="qemu-ref" type="f:kind.str" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Container image that runs QEMU for each guest; must share a build stamp with the ernic and rocjitsu images. Image reference, repository:tag; required (an empty one stops the render). A tag with no &lt;date&gt;.g&lt;sha&gt; stamp is warned about and left out of the comparison. A repository ending -sbates-fork is taken as the fork QEMU, which &lt;vm-nvme-vram&gt;, &lt;vm-pci-mmio-bridge&gt; and dma-buf RDMA need.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="ernic-ref" type="f:kind.str" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Container image of the rocm-ernic server that emulates each RDMA NIC; same build stamp and vfu.&lt;sha&gt; as QEMU. Image reference, repository:tag; required. The render compares the stamp and the vfu.&lt;sha&gt; part of the tag with &lt;qemu-ref&gt;'s. That its ernic.&lt;sha&gt; matches the guest's driver commit is held by tests/test_playbook_pins.py, not by the render.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="rocjitsu-ref" type="f:kind.str" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Container image of the rocjitsu server that emulates each GPU; same build stamp as the QEMU and ernic images. Image reference, repository:tag; required (an empty one stops the render).</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="sdxi-image" type="f:kind.str" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Container image of the SDXI device server; required when a guest has an SDXI device. Image reference, repository:tag. Needed when &lt;sdxi-per-vm&gt; is non-zero or &lt;devices&gt; has a server of type sdxi. Not compared with the servers' stamp by the render; its sdxi.&lt;sha7&gt; against the guest's driver commit is a test's check.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="spdk-image" type="f:kind.str" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Container image of the SPDK vfio-user NVMe controller; required when &lt;devices&gt; has a server of type spdk. Image reference, repository:tag. Its vfu.&lt;sha&gt; must equal the one in &lt;qemu-ref&gt;, stamped tag or not. Nothing runs it without a spdk entry in &lt;devices&gt;.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="backing-ref" type="f:kind.str" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Published guest disk image that gen-vm and quick-start pull as each guest's backing file. OCI reference by dated tag YYYYMMDD.g&lt;sha7&gt; or name@sha256:...; empty pulls nothing. gen-compose refuses no tag, latest, qm.&lt;sha7&gt; and near misses of those, and, in the repository &lt;publish-ref&gt; names, any tag but the dated one. Any other tag must share the servers' stamp, or is warned about if unstamped. gen-vm --bake ignores it.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="fleet-prefix" type="f:kind.str" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>First two octets of the stack's docker network; every service gets a fixed address under it. Two dotted octets, default 172.31; not validated by the parser, empty takes the default. Third octet is the service family: 0 infra, 1 ernic, 2 rocjitsu, 3 qemu, 4 sdxi, 5 spdk; the last is the device's number.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="ernic-per-vm" type="f:kind.int" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Emulated RDMA NICs per guest; each is its own mesh node, so it multiplies against the mesh's node ceiling. Integer, at least 1, default 1. Fleet total is refused above 64 mesh nodes or 244 NICs and warned about above 40. Replaced by the &lt;devices&gt; block when one is given.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="rocjitsu-per-vm" type="f:kind.int" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Emulated GPUs per guest, each served by its own rocjitsu server. Integer, at least 1, default 1. Replaced by the &lt;devices&gt; block when one is given.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="sdxi-per-vm" type="f:kind.int" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>SDXI devices per guest; 0 gives none, and above 0 needs &lt;sdxi-image&gt;. Integer, default 0. Replaced by the &lt;devices&gt; block when one is given.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="vm-pcie-switch-width" type="f:kind.int" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Put each guest's vfio-user devices below PCIe switches, this many devices per switch; 0 leaves them on root ports. Integer, default 0 (off). Devices are ordered NICs-per-GPU NICs then one GPU, so 2 with equal counts gives one NIC and one GPU per switch, and 3 with twice as many NICs gives two NICs and a GPU. Rendered as run-vm --vfio-user-switch-width; run-vm refuses a negative value.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="ernic-tap" type="f:kind.bool" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Give each ernic NIC a TAP on a shared L2 network so guests have Ethernet; inter-guest RDMA tests need it. true or false; default false. Adds one tapsetup sidecar per NIC and the l2 network.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="ernic-mtu" type="f:kind.mtu" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>MTU of every guest's emulated ernic NICs and of the Ethernet between guests; 4192 up gives RDMA an active_mtu of 4096. 1500 to 9198, in bytes; default 1500, the device's own, which renders nothing. Anything else is a parse error. The guest's RDMA active_mtu follows the NIC: 1024 below 2144, 2048 below 4192, 4096 from there. Each guest is handed a udev rule at boot through a systemd credential (QEMU -smbios type=11), which the guest's systemd has to load (systemd-udev-load-credentials; the published image does); with ernic-tap true the l2 network and every tap are created at the same MTU. A running stack does not take a changed value: bring it down and up. Generated stacks only, run-vm --xml does not get it.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="ernic-tcp-port" type="f:kind.int" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>TCP port the ernic mesh manager listens on and the workers dial; the mesh health checks match it. port number; default 6320. Used by mesh NICs only; a NIC with its own backend ignores it.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="ernic-stats-port" type="f:kind.int" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Port the ernic stats exporter serves on, and the port Prometheus scrapes it at. port number; default 9840; inside the stack network, not published on the host.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="ernic-nofile" type="f:kind.int" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Open file descriptor limit for every ernic server; Docker's default of 1024 is too low for a mesh manager. count, written as both the soft and the hard nofile ulimit; default 65536.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="p4-enable" type="f:kind.bool" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Run the P4 engine (--p4) on every ernic server; quick-start --p4-test needs it true. true or false; default false. When false, p4-guest-scope and p4-program are not rendered.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="p4-guest-scope" type="f:kind.str" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Which guest P4 commands reach the engine: none, read counters, write table entries, or load a program. none, read, write or load, each including the ones before it; default none. Unchecked: any other word is passed to the server. Only with p4-enable; --p4-test needs load.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="p4-program" type="f:kind.str" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Path inside the ernic container of a bmv2 JSON program loaded at start; empty leaves the engine in pass-through. a path inside the ernic container, not on the host; default empty; only rendered with p4-enable true.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="vm-vcpus" type="f:kind.int" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>vCPUs per guest; keep it at 4 or more on an ernic stack, and vCPUs times guests near the host's core count. integer; 0 or unset leaves run-vm's default of 2; qemu-tool check FAILs a value set from 1 to 3 and does not check 0 or unset; quick-start by default (not with --no-size-from-host) replaces it with a host-derived value (floor 4, ceiling 8).</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="vm-vmem" type="f:kind.int" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Guest memory per VM. MiB (4096 is 4 GiB); 0 or unset leaves run-vm's default of 4096; quick-start by default (not with --no-size-from-host) replaces it with a host-derived value (floor 4096, ceiling 8192).</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="vm-shm-size" type="f:kind.str" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>shm_size of each guest's qemu container; must be at least vm-vmem or QEMU cannot allocate guest RAM. docker size such as 8g or 5120m; one value for all guests, or a comma list of exactly vm-count values; empty or unset is 8g. quick-start by default (not with --no-size-from-host) sets it to vm-vmem plus 1024m.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="vm-nvme" type="f:kind.int" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Number of emulated NVMe scratch devices per guest; run-vm creates a qcow2 for each. 0 gives none. integer; N &gt; 0 is N devices on scratch qcow2 files; -N is N devices on the host's /dev/nullb0.. (null_blk); default 0.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="vm-nvme-vram" type="f:kind.bool" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Point each guest's emulated NVMe at its first GPU's BAR 0 (VRAM) so hipFile direct reads are fast; fork QEMU only. true or false; default false; refused with vm-nvme of 0 or less; warns on a non-fork qemu-ref; generated stacks only, run-vm --xml does not get it.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="vm-nvme-block-size" type="f:kind.blocksize" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Logical and physical block size of each guest's emulated NVMe namespaces: the LBA format the guest sees in use. 512 or 4096, in bytes; default 512, QEMU's own, which renders nothing. Anything else is a parse error. Refused at 4096 with vm-nvme of 0. QEMU's emulated NVMe only: an SPDK controller and an nvmeof backend set their own. Nothing on the scratch disk is converted: a partition table made at one size is not found at the other, and XFS or ext4 with blocks under 4096 made at 512 does not mount at 4096.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="vm-pci-mmio-bridge" type="f:kind.bool" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Give every guest the fork QEMU's pci-mmio-bridge device for its emulated NVMe, which rocm-xio uses. true or false; default false; refused with vm-nvme of 0 or less; needs the fork QEMU; generated stacks only, run-vm --xml does not get it.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="vm-username" type="f:kind.str" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Guest login account: the user gen-vm creates, and the one the inventory, quick-start and ssh log in as. default ubuntu; dropped for gen-vm --bake (bake-username is used); quick-start overrides it with the pulled image's own account when they differ.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="vm-password" type="f:kind.str" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Password of the account gen-vm creates from the cloud image; never reaches a pulled guest, and a bake drops it. plain text; empty or unset leaves gen-vm's default, which is the word password.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="vm-filesystem" type="f:kind.str" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Host directory shared into each guest over 9p with mount tag hostfs. one host path for all guests, or a comma list of exactly vm-count paths; run-vm --xml outside a stack ignores a list; default empty, no share.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="vm-vfio-user-root-port" type="f:kind.bool" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Put each vfio-user device behind a PCIe root port; off, an emulated GPU gets a 16M 32-bit BAR amdgpu cannot use. true or false; default true; false renders with a warning, not an error.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="vm-extra-hostfwd" type="f:kind.str" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Extra QEMU host-forward rules; every rule goes to every guest, and a bake leaves them out. Comma list of QEMU hostfwd rules, e.g. tcp::9100-:9100,tcp::9879-:9879; items are stripped and empty ones dropped. The commas are several rules for ONE guest, not one rule per guest.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="vm-qemu-args" type="f:kind.args" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Extra words appended as they are to every guest's QEMU command line; nothing validates them. Words split as a shell would (quotes group, nothing expands), e.g. -device pci-testdev -d guest_errors; an unclosed quote is a parse error. One value for the whole fleet; a later layer replaces it whole. Dropped for a bake.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="vm-ssh-key-file" type="f:kind.expand" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Public key gen-vm authorises in a guest it creates, bakes included; ssh and inspect fall back to it. Path to a .pub file; ~ and $VARS are expanded at parse time. Unset, a bake generates a keypair for the image. Never the key publish-qcow publishes.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="vm-images-dir" type="f:kind.expand" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Directory that holds the guest disk images, overlays and image keys; --images overrides it. Path; ~ and $VARS are expanded at parse time. Default /var/lib/qemu-tool/images. Reaches docker compose as VM_IMAGES_DIR.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="vm-cpu-sockets" type="f:kind.int" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Pin each guest's CPU socket count; unset, the guest sees one single-core socket per vCPU. Integer that must divide the guest's vCPU count (run-vm exits otherwise); 0 or unset leaves the topology to QEMU.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="vm-cpu-phys-bits" type="f:kind.int" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Physical address bits of each guest's CPU; raise it together with vm-pci-hole64-size for large GPU BARs. Integer number of bits, e.g. 42; amd64 only (added to -cpu as phys-bits=N). 0 or unset passes no phys-bits; run-vm's help gives that default as 40 (1 TiB).</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="vm-cpu-vendor" type="f:kind.vendor" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>CPUID vendor every guest's CPU states; a guest is an AMD machine on every host unless this says otherwise. Exactly 12 printable ASCII characters with no comma, such as AuthenticAMD or GenuineIntel, or empty; default AuthenticAMD. amd64 only (rendered as -cpu EPYC,vendor=...). An EMPTY element is not the default: it states no vendor, and under KVM the guest then has the host's. Anything but AuthenticAMD renders with a note: the guest kernel refuses P2PDMA between devices that share no upstream bridge unless the CPU is AMD.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="vm-pci-hole64-size" type="f:kind.str" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Size of each guest's 64-bit PCI hole; needed when several large GPU BARs exceed the machine default. QEMU size such as 512G or 1024G, passed through unparsed as q35-pcihost.pci-hole64-size; empty leaves the machine default.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="rocjitsu-config" type="f:kind.str" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>rocjitsu simulation config that selects the GPU each guest's emulated GPU servers present. File name under /usr/local/share/rocjitsu/configs in the rocjitsu image, default gfx1250_mi455x.json. One value for all guests, or a comma list of exactly vm-count values; a &lt;devices&gt; entry's own config wins.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="qemu-tool-src" type="f:kind.str" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Checkout the stack's containers mount to build qemu-tool from; with none there they install it from PyPI. Path, default ../../.. relative to the stack directory; use an absolute path for a stack rendered elsewhere. Reaches docker compose as QEMU_TOOL_SRC and is not baked into the render. ~ is not expanded (plain string kind).</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="image-allow-guest-lag" type="f:kind.bool" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Let the guest image be older than the device server images: skips that check and warns on every render. Boolean (true/false, 1/0, yes/no), default false. Does not excuse a moving tag (latest, qm.&lt;sha7&gt;) or a malformed one, which are refused before it is looked at.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="bake-name" type="f:kind.str" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Name of the image gen-vm --bake builds; publish-qcow publishes the image of that name. VM name; the baked image is &lt;vm-images-dir&gt;/&lt;name&gt;-backing.qcow2.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="bake-release" type="f:kind.str" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Ubuntu release of the cloud image gen-vm --bake starts from; publish-qcow records it for the image. Ubuntu codename (resolute) or version (26.04); publish-qcow records resolute when unset.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="bake-size" type="f:kind.int" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Virtual disk size of the image gen-vm --bake builds. Integer, GiB: passed to qemu-img resize as &lt;n&gt;G (the --size help calls it GB). 0 or unset leaves gen-vm's default.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="bake-vcpus" type="f:kind.int" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>vCPUs of the guest gen-vm --bake boots to build the image; not the size of a fleet's guests. Integer count; a bake is refused unless bake-vmem is at least 1024 MiB per vCPU. 0 or unset falls back to vm-vcpus, then gen-vm's default.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="bake-vmem" type="f:kind.int" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>RAM of the guest gen-vm --bake boots to build the image; not the size of a fleet's guests. Integer, MiB; must be at least 1024 per bake vCPU or the bake is refused. 0 or unset falls back to vm-vmem, then gen-vm's default.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="bake-packages" type="f:kind.expand" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Package manifest gen-vm --bake installs in the image, or none for no manifest. Path to a manifest file, resolved against the current directory (run from the checkout root); ~ and $VARS are expanded. The word none installs none; a missing file stops the bake before it starts.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="bake-playbook" type="f:kind.expand" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Ansible playbook gen-vm --bake runs against the booted image; publish-qcow records it for the image. Path resolved against the current directory (run from the checkout root); ~ and $VARS are expanded. publish-qcow records it as given, empty when unset.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="bake-username" type="f:kind.str" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Login account baked into the image and published with it; separate from vm-username, with no fallback. User name; unset, the bake uses gen-vm's default account and publish-qcow records ubuntu.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="bake-password" type="f:kind.str" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Password of the baked account; published with the image, so it is public. Never vm-password. Plain text, written to the published vm-info.json; publish-qcow records password when unset.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="bake-ssh-port" type="f:kind.port" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Host port the bake's Ansible boot forwards to the guest's sshd; auto picks a free one from 2222 up. A port number, or the word auto.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="bake-cache-dir" type="f:kind.expand" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Directory on this host that keeps the bake's compiler cache between bakes; --cache-dir wins, unset is none. Path; ~ and $VARS are expanded. Needs a bake-playbook, which gets it as the extra var bake_cache_dir. Per host: set it in a local overlay, not in a shipped fleet file.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="publish-ref" type="f:kind.str" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Repository publish-qcow pushes to and publish-qcow-prune prunes; tells gen-compose whose repo backing-ref is in. Image repository with no tag, e.g. docker.io/sbates130272/qemu-tool-rocm-golden; publish-qcow appends :&lt;tag&gt; from each --tag. Read by the two publish commands only from an explicit --xml.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="publish-flavour" type="f:kind.str" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Label publish-qcow records in the published artifact for what kind of guest the image is. Free-form name, written to vm-info.json, the vm.flavour annotation and the description; rocm-golden when unset.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="publish-bind-addr" type="f:kind.addr" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Host address every guest SSH port and the Grafana port are published on; loopback keeps them to this host. IPv4 or IPv6 literal, brackets optional and dropped, no host name or zone; empty or unset means 127.0.0.1; 0.0.0.0 or :: exposes every interface. Also decides ansible_host in the generated inventory.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="prom-scrape-interval" type="f:kind.str" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>How often Prometheus scrapes the stack's exporters; written as the global scrape_interval of prometheus.yml. Prometheus duration such as 15s; not validated by the parser; empty or unset means 15s.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="prom-retention" type="f:kind.str" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>How long Prometheus keeps collected metrics; passed as --storage.tsdb.retention.time. Prometheus duration such as 7d; not validated by the parser; empty or unset means 7d.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="prom-data-dir" type="f:kind.expand" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Host directory bind-mounted as the Prometheus database; compose up creates it owned by the caller. Host path, ~ and $VARS expanded at parse time; unset means /var/lib/qemu-tool/prom-data; quick-start with metrics on overrides it to &lt;stack-dir&gt;/prom-data.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="grafana-enable" type="f:kind.bool" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Add a Grafana service with the fleet dashboards to the stack; it starts only with --profile metrics. true/false, also 1/0/yes/no, any case; default true. Prometheus is rendered either way.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="grafana-image" type="f:kind.str" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Container image the Grafana service runs. Image reference; empty or unset means docker.io/grafana/grafana:latest (a moving tag).</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="grafana-port" type="f:kind.int" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Host port Grafana is published on, at publish-bind-addr; quick-start moves it when the port is busy. Integer port (kind int, no range check); default 3000; container side is always 3000.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="grafana-admin-password" type="f:kind.str" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Password of Grafana's admin account; anonymous admin access is on regardless, so it guards nothing. Plain text, written into the generated docker-compose.yml as GF_SECURITY_ADMIN_PASSWORD; empty or unset means admin.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="grafana-data-dir" type="f:kind.expand" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Host directory bind-mounted as Grafana's own state (its sqlite); dashboards are provisioned from files. Host path, ~ and $VARS expanded at parse time; unset means /var/lib/qemu-tool/grafana-data; quick-start with metrics on overrides it to &lt;stack-dir&gt;/grafana-data.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="log-max-size" type="f:kind.str" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Size at which Docker rotates each service's json-file log, so a looping service cannot fill the disk. Docker size string such as 50m; not validated by the parser; empty or unset means 50m.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="log-max-files" type="f:kind.int" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Number of rotated log files Docker keeps for each service. Integer count (no range check); default 3.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="logs-enable" type="f:kind.bool" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Add Loki and an Alloy that ships the stack's container logs to it; both start only with --profile metrics. true/false, also 1/0/yes/no, any case; default true. Alloy mounts the Docker socket and runs as root.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="loki-image" type="f:kind.str" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Container image the Loki log store runs; used only with logs-enable. Image reference; empty or unset means docker.io/grafana/loki:3.3.2.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="loki-data-dir" type="f:kind.expand" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Host directory bind-mounted as Loki's stored logs; used only with logs-enable; compose up creates it as the caller. Host path, ~ and $VARS expanded at parse time; empty or unset means /var/lib/qemu-tool/loki-data; quick-start with metrics on overrides it to &lt;stack-dir&gt;/loki-data.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="alloy-image" type="f:kind.str" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Container image of the Alloy agent that ships the stack's container logs to Loki; used only with logs-enable. Image reference; empty or unset means docker.io/grafana/alloy:v1.5.1.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="devices" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Lists the vfio-user servers every guest gets, one &lt;server&gt; each; replaces the three per-VM device counts. No attributes, no text; at least one &lt;server&gt;. Later layers merge entries by id, append new ids and cannot remove one. Every guest gets the same list.</xs:documentation>
+          </xs:annotation>
+          <xs:complexType mixed="true">
+            <xs:sequence>
+              <xs:element name="server" maxOccurs="unbounded">
+                <xs:annotation>
+                  <xs:documentation>One device server every guest gets; its children set that server's backend, config file or options. Requires type and id, and takes no other attribute. Children allowed depend on type; each may appear once unless the option is repeatable.</xs:documentation>
+                </xs:annotation>
+                <xs:complexType mixed="true">
+                  <xs:choice minOccurs="0">
+                    <xs:group ref="f:children.ernic"/>
+                    <xs:group ref="f:children.rocjitsu"/>
+                    <xs:group ref="f:children.sdxi"/>
+                    <xs:group ref="f:children.spdk"/>
+                  </xs:choice>
+                  <xs:attribute name="type" use="required">
+                    <xs:annotation>
+                      <xs:documentation>Kind of server: an ernic NIC, a rocjitsu GPU, an SDXI device or an SPDK NVMe controller. ernic, rocjitsu, sdxi or spdk. The generator refuses more than one spdk a guest, and an spdk with no &lt;spdk-image&gt;. An id cannot change type in a later layer.</xs:documentation>
+                    </xs:annotation>
+                    <xs:simpleType>
+                      <xs:restriction base="xs:string">
+                        <xs:enumeration value="ernic"/>
+                        <xs:enumeration value="rocjitsu"/>
+                        <xs:enumeration value="sdxi"/>
+                        <xs:enumeration value="spdk"/>
+                      </xs:restriction>
+                    </xs:simpleType>
+                  </xs:attribute>
+                  <xs:attribute name="id" use="required">
+                    <xs:annotation>
+                      <xs:documentation>Names the entry for later layers to merge on and for error messages; does not rename containers or sockets. Starts with a letter; letters, digits, '_', '.' and '-'; 32 characters at most; unique in the block.</xs:documentation>
+                    </xs:annotation>
+                    <xs:simpleType>
+                      <xs:restriction base="xs:string">
+                        <xs:pattern value="[A-Za-z][A-Za-z0-9_.\-]{0,31}"/>
+                      </xs:restriction>
+                    </xs:simpleType>
+                  </xs:attribute>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+      </xs:all>
+    </xs:complexType>
+  </xs:element>
+  <xs:simpleType name="kind.str">
+    <xs:annotation>
+      <xs:documentation>string: Any text, kept as written, surrounding white space included. An empty element is the empty string.</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+  <xs:simpleType name="kind.expand">
+    <xs:annotation>
+      <xs:documentation>path: Any text. ~ and $VARS are expanded when the file is parsed, so every command sees the same path.</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+  <xs:simpleType name="kind.args">
+    <xs:annotation>
+      <xs:documentation>command-line words: Words as a shell would split them: quotes group and are removed, nothing is expanded. An unclosed quote, a control character and a word that spans lines are errors.</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[^&#x7F;&#x85;&#x2028;&#x2029;]*"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="kind.bool">
+    <xs:annotation>
+      <xs:documentation>boolean: true, false, 1, 0, yes or no, in any letter case, with no white space round it. An empty element is an error.</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[Tt][Rr][Uu][Ee]|1|[Yy][Ee][Ss]|[Ff][Aa][Ll][Ss][Ee]|0|[Nn][Oo]"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="kind.int">
+    <xs:annotation>
+      <xs:documentation>integer: What Python's int() takes in base 10: an optional sign, decimal digits, single underscores between digits, white space round the whole. An empty element is an error. No range is checked here; the command that reads the value may check one.</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*([+\-]?[^&#x9;-/:-&#x7F;&#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]+(_[^&#x9;-/:-&#x7F;&#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]+)*)[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="kind.port">
+    <xs:annotation>
+      <xs:documentation>port: A port number from 1 to 65535 in ASCII digits, or the word auto in any case; white space round it is ignored.</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*([Aa][Uu][Tt][Oo]|0*([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="kind.addr">
+    <xs:annotation>
+      <xs:documentation>address: An IPv4 or IPv6 literal, with or without square brackets, with no zone and no host name. Empty, or white space alone, is the default.</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*(((0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])|([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?|[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])|::(([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?)?)?)?)?)?)?)?|([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:)?)?)?)?)?(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5]))|[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?::(([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?)?)?)?)?)?)?|([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:)?)?)?)?(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5]))|[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?::(([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?)?)?)?)?)?|([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:)?)?)?(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5]))|[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?::(([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?)?)?)?)?|([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:)?)?(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5]))|[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?::(([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?)?)?)?|([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:)?(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5]))|[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?::(([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?)?)?|(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5]))|[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?::(([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?)?)|[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?::)|\[((0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])|([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?|[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])|::(([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?)?)?)?)?)?)?)?|([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:)?)?)?)?)?(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5]))|[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?::(([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?)?)?)?)?)?)?|([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:)?)?)?)?(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5]))|[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?::(([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?)?)?)?)?)?|([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:)?)?)?(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5]))|[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?::(([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?)?)?)?)?|([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:)?)?(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5]))|[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?::(([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?)?)?)?|([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:)?(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5]))|[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?::(([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?(:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?)?)?|(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5]))|[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?::(([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?)?)|[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?:[0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f]([0-9A-Fa-f])?)?)?::))\])?)[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="kind.vendor">
+    <xs:annotation>
+      <xs:documentation>CPU vendor: Exactly 12 printable ASCII characters (space to ~) with no comma, such as AuthenticAMD or GenuineIntel, kept as written with no white space stripped; or an empty element, which is a value of its own (state no vendor) and not the default.</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:pattern value="([ -+.-~\-][ -+.-~\-][ -+.-~\-][ -+.-~\-][ -+.-~\-][ -+.-~\-][ -+.-~\-][ -+.-~\-][ -+.-~\-][ -+.-~\-][ -+.-~\-][ -+.-~\-])?"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="kind.blocksize">
+    <xs:annotation>
+      <xs:documentation>block size: 512 or 4096, a number of bytes in ASCII digits; white space round it is ignored. No sign, no underscore, no leading zero and no unit. An empty element is an error.</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*(512|4096)[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="kind.mtu">
+    <xs:annotation>
+      <xs:documentation>MTU: A number of bytes from 1500 to 9198 in four ASCII digits; white space round it is ignored. No sign, no underscore, no leading zero and no unit. An empty element is an error.</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*(1[5-9][0-9][0-9]|[2-8][0-9][0-9][0-9]|90[0-9][0-9]|91[0-8][0-9]|919[0-8])[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:group name="children.ernic">
+    <xs:sequence>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:group ref="f:child.nic-profile"/>
+        <xs:group ref="f:child.inject"/>
+      </xs:choice>
+      <xs:choice minOccurs="0">
+        <xs:sequence>
+          <xs:group ref="f:child.backend"/>
+          <xs:group ref="f:children.ernic.after.backend"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.log-level"/>
+          <xs:group ref="f:children.ernic.after.log-level"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.stats-interval-ms"/>
+          <xs:group ref="f:children.ernic.after.stats-interval-ms"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.eth-queues"/>
+          <xs:group ref="f:children.ernic.after.eth-queues"/>
+        </xs:sequence>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.ernic.after.backend">
+    <xs:sequence>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:group ref="f:child.nic-profile"/>
+        <xs:group ref="f:child.inject"/>
+      </xs:choice>
+      <xs:choice minOccurs="0">
+        <xs:sequence>
+          <xs:group ref="f:child.log-level"/>
+          <xs:group ref="f:children.ernic.after.backend.log-level"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.stats-interval-ms"/>
+          <xs:group ref="f:children.ernic.after.backend.stats-interval-ms"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.eth-queues"/>
+          <xs:group ref="f:children.ernic.after.backend.eth-queues"/>
+        </xs:sequence>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.ernic.after.log-level">
+    <xs:sequence>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:group ref="f:child.nic-profile"/>
+        <xs:group ref="f:child.inject"/>
+      </xs:choice>
+      <xs:choice minOccurs="0">
+        <xs:sequence>
+          <xs:group ref="f:child.backend"/>
+          <xs:group ref="f:children.ernic.after.backend.log-level"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.stats-interval-ms"/>
+          <xs:group ref="f:children.ernic.after.log-level.stats-interval-ms"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.eth-queues"/>
+          <xs:group ref="f:children.ernic.after.log-level.eth-queues"/>
+        </xs:sequence>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.ernic.after.stats-interval-ms">
+    <xs:sequence>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:group ref="f:child.nic-profile"/>
+        <xs:group ref="f:child.inject"/>
+      </xs:choice>
+      <xs:choice minOccurs="0">
+        <xs:sequence>
+          <xs:group ref="f:child.backend"/>
+          <xs:group ref="f:children.ernic.after.backend.stats-interval-ms"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.log-level"/>
+          <xs:group ref="f:children.ernic.after.log-level.stats-interval-ms"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.eth-queues"/>
+          <xs:group ref="f:children.ernic.after.stats-interval-ms.eth-queues"/>
+        </xs:sequence>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.ernic.after.eth-queues">
+    <xs:sequence>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:group ref="f:child.nic-profile"/>
+        <xs:group ref="f:child.inject"/>
+      </xs:choice>
+      <xs:choice minOccurs="0">
+        <xs:sequence>
+          <xs:group ref="f:child.backend"/>
+          <xs:group ref="f:children.ernic.after.backend.eth-queues"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.log-level"/>
+          <xs:group ref="f:children.ernic.after.log-level.eth-queues"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.stats-interval-ms"/>
+          <xs:group ref="f:children.ernic.after.stats-interval-ms.eth-queues"/>
+        </xs:sequence>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.ernic.after.backend.log-level">
+    <xs:sequence>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:group ref="f:child.nic-profile"/>
+        <xs:group ref="f:child.inject"/>
+      </xs:choice>
+      <xs:choice minOccurs="0">
+        <xs:sequence>
+          <xs:group ref="f:child.stats-interval-ms"/>
+          <xs:group ref="f:children.ernic.after.backend.log-level.stats-interval-ms"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.eth-queues"/>
+          <xs:group ref="f:children.ernic.after.backend.log-level.eth-queues"/>
+        </xs:sequence>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.ernic.after.backend.stats-interval-ms">
+    <xs:sequence>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:group ref="f:child.nic-profile"/>
+        <xs:group ref="f:child.inject"/>
+      </xs:choice>
+      <xs:choice minOccurs="0">
+        <xs:sequence>
+          <xs:group ref="f:child.log-level"/>
+          <xs:group ref="f:children.ernic.after.backend.log-level.stats-interval-ms"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.eth-queues"/>
+          <xs:group ref="f:children.ernic.after.backend.stats-interval-ms.eth-queues"/>
+        </xs:sequence>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.ernic.after.backend.eth-queues">
+    <xs:sequence>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:group ref="f:child.nic-profile"/>
+        <xs:group ref="f:child.inject"/>
+      </xs:choice>
+      <xs:choice minOccurs="0">
+        <xs:sequence>
+          <xs:group ref="f:child.log-level"/>
+          <xs:group ref="f:children.ernic.after.backend.log-level.eth-queues"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.stats-interval-ms"/>
+          <xs:group ref="f:children.ernic.after.backend.stats-interval-ms.eth-queues"/>
+        </xs:sequence>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.ernic.after.log-level.stats-interval-ms">
+    <xs:sequence>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:group ref="f:child.nic-profile"/>
+        <xs:group ref="f:child.inject"/>
+      </xs:choice>
+      <xs:choice minOccurs="0">
+        <xs:sequence>
+          <xs:group ref="f:child.backend"/>
+          <xs:group ref="f:children.ernic.after.backend.log-level.stats-interval-ms"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.eth-queues"/>
+          <xs:group ref="f:children.ernic.after.log-level.stats-interval-ms.eth-queues"/>
+        </xs:sequence>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.ernic.after.log-level.eth-queues">
+    <xs:sequence>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:group ref="f:child.nic-profile"/>
+        <xs:group ref="f:child.inject"/>
+      </xs:choice>
+      <xs:choice minOccurs="0">
+        <xs:sequence>
+          <xs:group ref="f:child.backend"/>
+          <xs:group ref="f:children.ernic.after.backend.log-level.eth-queues"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.stats-interval-ms"/>
+          <xs:group ref="f:children.ernic.after.log-level.stats-interval-ms.eth-queues"/>
+        </xs:sequence>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.ernic.after.stats-interval-ms.eth-queues">
+    <xs:sequence>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:group ref="f:child.nic-profile"/>
+        <xs:group ref="f:child.inject"/>
+      </xs:choice>
+      <xs:choice minOccurs="0">
+        <xs:sequence>
+          <xs:group ref="f:child.backend"/>
+          <xs:group ref="f:children.ernic.after.backend.stats-interval-ms.eth-queues"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.log-level"/>
+          <xs:group ref="f:children.ernic.after.log-level.stats-interval-ms.eth-queues"/>
+        </xs:sequence>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.ernic.after.backend.log-level.stats-interval-ms">
+    <xs:sequence>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:group ref="f:child.nic-profile"/>
+        <xs:group ref="f:child.inject"/>
+      </xs:choice>
+      <xs:choice minOccurs="0">
+        <xs:sequence>
+          <xs:group ref="f:child.eth-queues"/>
+          <xs:group ref="f:children.ernic.after.backend.log-level.stats-interval-ms.eth-queues"/>
+        </xs:sequence>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.ernic.after.backend.log-level.eth-queues">
+    <xs:sequence>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:group ref="f:child.nic-profile"/>
+        <xs:group ref="f:child.inject"/>
+      </xs:choice>
+      <xs:choice minOccurs="0">
+        <xs:sequence>
+          <xs:group ref="f:child.stats-interval-ms"/>
+          <xs:group ref="f:children.ernic.after.backend.log-level.stats-interval-ms.eth-queues"/>
+        </xs:sequence>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.ernic.after.backend.stats-interval-ms.eth-queues">
+    <xs:sequence>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:group ref="f:child.nic-profile"/>
+        <xs:group ref="f:child.inject"/>
+      </xs:choice>
+      <xs:choice minOccurs="0">
+        <xs:sequence>
+          <xs:group ref="f:child.log-level"/>
+          <xs:group ref="f:children.ernic.after.backend.log-level.stats-interval-ms.eth-queues"/>
+        </xs:sequence>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.ernic.after.log-level.stats-interval-ms.eth-queues">
+    <xs:sequence>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:group ref="f:child.nic-profile"/>
+        <xs:group ref="f:child.inject"/>
+      </xs:choice>
+      <xs:choice minOccurs="0">
+        <xs:sequence>
+          <xs:group ref="f:child.backend"/>
+          <xs:group ref="f:children.ernic.after.backend.log-level.stats-interval-ms.eth-queues"/>
+        </xs:sequence>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.ernic.after.backend.log-level.stats-interval-ms.eth-queues">
+    <xs:sequence>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:group ref="f:child.nic-profile"/>
+        <xs:group ref="f:child.inject"/>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.rocjitsu">
+    <xs:sequence>
+      <xs:choice minOccurs="0">
+        <xs:sequence>
+          <xs:group ref="f:child.config"/>
+          <xs:group ref="f:children.rocjitsu.after.config"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.node"/>
+          <xs:group ref="f:children.rocjitsu.after.node"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.cpu-thread-budget"/>
+          <xs:group ref="f:children.rocjitsu.after.cpu-thread-budget"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.wait-checking"/>
+          <xs:group ref="f:children.rocjitsu.after.wait-checking"/>
+        </xs:sequence>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.rocjitsu.after.config">
+    <xs:sequence>
+      <xs:choice minOccurs="0">
+        <xs:sequence>
+          <xs:group ref="f:child.node"/>
+          <xs:group ref="f:children.rocjitsu.after.config.node"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.cpu-thread-budget"/>
+          <xs:group ref="f:children.rocjitsu.after.config.cpu-thread-budget"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.wait-checking"/>
+          <xs:group ref="f:children.rocjitsu.after.config.wait-checking"/>
+        </xs:sequence>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.rocjitsu.after.node">
+    <xs:sequence>
+      <xs:choice minOccurs="0">
+        <xs:sequence>
+          <xs:group ref="f:child.config"/>
+          <xs:group ref="f:children.rocjitsu.after.config.node"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.cpu-thread-budget"/>
+          <xs:group ref="f:children.rocjitsu.after.node.cpu-thread-budget"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.wait-checking"/>
+          <xs:group ref="f:children.rocjitsu.after.node.wait-checking"/>
+        </xs:sequence>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.rocjitsu.after.cpu-thread-budget">
+    <xs:sequence>
+      <xs:choice minOccurs="0">
+        <xs:sequence>
+          <xs:group ref="f:child.config"/>
+          <xs:group ref="f:children.rocjitsu.after.config.cpu-thread-budget"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.node"/>
+          <xs:group ref="f:children.rocjitsu.after.node.cpu-thread-budget"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.wait-checking"/>
+          <xs:group ref="f:children.rocjitsu.after.cpu-thread-budget.wait-checking"/>
+        </xs:sequence>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.rocjitsu.after.wait-checking">
+    <xs:sequence>
+      <xs:choice minOccurs="0">
+        <xs:sequence>
+          <xs:group ref="f:child.config"/>
+          <xs:group ref="f:children.rocjitsu.after.config.wait-checking"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.node"/>
+          <xs:group ref="f:children.rocjitsu.after.node.wait-checking"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.cpu-thread-budget"/>
+          <xs:group ref="f:children.rocjitsu.after.cpu-thread-budget.wait-checking"/>
+        </xs:sequence>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.rocjitsu.after.config.node">
+    <xs:sequence>
+      <xs:choice minOccurs="0">
+        <xs:sequence>
+          <xs:group ref="f:child.cpu-thread-budget"/>
+          <xs:group ref="f:children.rocjitsu.after.config.node.cpu-thread-budget"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.wait-checking"/>
+          <xs:group ref="f:children.rocjitsu.after.config.node.wait-checking"/>
+        </xs:sequence>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.rocjitsu.after.config.cpu-thread-budget">
+    <xs:sequence>
+      <xs:choice minOccurs="0">
+        <xs:sequence>
+          <xs:group ref="f:child.node"/>
+          <xs:group ref="f:children.rocjitsu.after.config.node.cpu-thread-budget"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.wait-checking"/>
+          <xs:group ref="f:children.rocjitsu.after.config.cpu-thread-budget.wait-checking"/>
+        </xs:sequence>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.rocjitsu.after.config.wait-checking">
+    <xs:sequence>
+      <xs:choice minOccurs="0">
+        <xs:sequence>
+          <xs:group ref="f:child.node"/>
+          <xs:group ref="f:children.rocjitsu.after.config.node.wait-checking"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.cpu-thread-budget"/>
+          <xs:group ref="f:children.rocjitsu.after.config.cpu-thread-budget.wait-checking"/>
+        </xs:sequence>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.rocjitsu.after.node.cpu-thread-budget">
+    <xs:sequence>
+      <xs:choice minOccurs="0">
+        <xs:sequence>
+          <xs:group ref="f:child.config"/>
+          <xs:group ref="f:children.rocjitsu.after.config.node.cpu-thread-budget"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.wait-checking"/>
+          <xs:group ref="f:children.rocjitsu.after.node.cpu-thread-budget.wait-checking"/>
+        </xs:sequence>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.rocjitsu.after.node.wait-checking">
+    <xs:sequence>
+      <xs:choice minOccurs="0">
+        <xs:sequence>
+          <xs:group ref="f:child.config"/>
+          <xs:group ref="f:children.rocjitsu.after.config.node.wait-checking"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.cpu-thread-budget"/>
+          <xs:group ref="f:children.rocjitsu.after.node.cpu-thread-budget.wait-checking"/>
+        </xs:sequence>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.rocjitsu.after.cpu-thread-budget.wait-checking">
+    <xs:sequence>
+      <xs:choice minOccurs="0">
+        <xs:sequence>
+          <xs:group ref="f:child.config"/>
+          <xs:group ref="f:children.rocjitsu.after.config.cpu-thread-budget.wait-checking"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.node"/>
+          <xs:group ref="f:children.rocjitsu.after.node.cpu-thread-budget.wait-checking"/>
+        </xs:sequence>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.rocjitsu.after.config.node.cpu-thread-budget">
+    <xs:sequence>
+      <xs:choice minOccurs="0">
+        <xs:group ref="f:child.wait-checking"/>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.rocjitsu.after.config.node.wait-checking">
+    <xs:sequence>
+      <xs:choice minOccurs="0">
+        <xs:group ref="f:child.cpu-thread-budget"/>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.rocjitsu.after.config.cpu-thread-budget.wait-checking">
+    <xs:sequence>
+      <xs:choice minOccurs="0">
+        <xs:group ref="f:child.node"/>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.rocjitsu.after.node.cpu-thread-budget.wait-checking">
+    <xs:sequence>
+      <xs:choice minOccurs="0">
+        <xs:group ref="f:child.config"/>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.sdxi">
+    <xs:sequence>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:group ref="f:child.verbose"/>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.spdk">
+    <xs:sequence>
+      <xs:choice minOccurs="0">
+        <xs:sequence>
+          <xs:group ref="f:child.namespaces"/>
+          <xs:group ref="f:children.spdk.after.namespaces"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.serial"/>
+          <xs:group ref="f:children.spdk.after.serial"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.cpumask"/>
+          <xs:group ref="f:children.spdk.after.cpumask"/>
+        </xs:sequence>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.spdk.after.namespaces">
+    <xs:sequence>
+      <xs:choice minOccurs="0">
+        <xs:sequence>
+          <xs:group ref="f:child.serial"/>
+          <xs:group ref="f:children.spdk.after.namespaces.serial"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.cpumask"/>
+          <xs:group ref="f:children.spdk.after.namespaces.cpumask"/>
+        </xs:sequence>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.spdk.after.serial">
+    <xs:sequence>
+      <xs:choice minOccurs="0">
+        <xs:sequence>
+          <xs:group ref="f:child.namespaces"/>
+          <xs:group ref="f:children.spdk.after.namespaces.serial"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.cpumask"/>
+          <xs:group ref="f:children.spdk.after.serial.cpumask"/>
+        </xs:sequence>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.spdk.after.cpumask">
+    <xs:sequence>
+      <xs:choice minOccurs="0">
+        <xs:sequence>
+          <xs:group ref="f:child.namespaces"/>
+          <xs:group ref="f:children.spdk.after.namespaces.cpumask"/>
+        </xs:sequence>
+        <xs:sequence>
+          <xs:group ref="f:child.serial"/>
+          <xs:group ref="f:children.spdk.after.serial.cpumask"/>
+        </xs:sequence>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.spdk.after.namespaces.serial">
+    <xs:sequence>
+      <xs:choice minOccurs="0">
+        <xs:group ref="f:child.cpumask"/>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.spdk.after.namespaces.cpumask">
+    <xs:sequence>
+      <xs:choice minOccurs="0">
+        <xs:group ref="f:child.serial"/>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="children.spdk.after.serial.cpumask">
+    <xs:sequence>
+      <xs:choice minOccurs="0">
+        <xs:group ref="f:child.namespaces"/>
+      </xs:choice>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="child.backend">
+    <xs:sequence>
+      <xs:element name="backend">
+        <xs:annotation>
+          <xs:documentation>Sets an ernic NIC's RDMA backend; any type but tcp takes that NIC out of the generated TCP mesh. ernic only. Text is the backend's own options, optional, as one word with no whitespace: size=1G,ns=2,kv=1,size=256M. The parser checks only that; tcp takes none.</xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+          <xs:simpleContent>
+            <xs:extension base="f:backend.options">
+              <xs:attribute name="type" use="required">
+                <xs:annotation>
+                  <xs:documentation>Which RDMA backend the NIC's server runs. none, loopback, tcp, nvmeof or s3. Required on &lt;backend&gt;, and its only attribute.</xs:documentation>
+                </xs:annotation>
+                <xs:simpleType>
+                  <xs:restriction base="xs:string">
+                    <xs:enumeration value="none"/>
+                    <xs:enumeration value="loopback"/>
+                    <xs:enumeration value="tcp"/>
+                    <xs:enumeration value="nvmeof"/>
+                    <xs:enumeration value="s3"/>
+                  </xs:restriction>
+                </xs:simpleType>
+              </xs:attribute>
+            </xs:extension>
+          </xs:simpleContent>
+        </xs:complexType>
+      </xs:element>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="child.log-level">
+    <xs:sequence>
+      <xs:element name="log-level">
+        <xs:annotation>
+          <xs:documentation>Log verbosity of this NIC's server. none, error, warn, info or debug; the server's default is warn. The parser does not check the word.</xs:documentation>
+        </xs:annotation>
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:pattern value="[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*([^\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;&#x7F;]([^\t\n\r&#x7F;&#x85;&#x2028;&#x2029;]*[^\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;&#x7F;])?)[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*"/>
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:element>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="child.nic-profile">
+    <xs:sequence>
+      <xs:element name="nic-profile">
+        <xs:annotation>
+          <xs:documentation>Shapes the NIC from a profile; repeatable, and later profiles win. A built-in name (compat, small-vm, generic-100g, generic-400g) or a path to an ini file inside the server container. Repeatable, order kept; a later layer naming it replaces all earlier values.</xs:documentation>
+        </xs:annotation>
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:pattern value="[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*([^\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;&#x7F;]([^\t\n\r&#x7F;&#x85;&#x2028;&#x2029;]*[^\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;&#x7F;])?)[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*"/>
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:element>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="child.stats-interval-ms">
+    <xs:sequence>
+      <xs:element name="stats-interval-ms">
+        <xs:annotation>
+          <xs:documentation>How often the server rewrites the guest's statistics; overrides every profile. Milliseconds, 10 to 60000; the server's default is the profile's, 1000. The parser does not check the number or range.</xs:documentation>
+        </xs:annotation>
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:pattern value="[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*([^\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;&#x7F;]([^\t\n\r&#x7F;&#x85;&#x2028;&#x2029;]*[^\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;&#x7F;])?)[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*"/>
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:element>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="child.eth-queues">
+    <xs:sequence>
+      <xs:element name="eth-queues">
+        <xs:annotation>
+          <xs:documentation>Number of Ethernet Rx/Tx queues the NIC offers the guest; overrides every profile. Integer 1 to 64; the server's default is the profile's, 4. The guest uses at most one per vCPU. The parser does not check the number or range.</xs:documentation>
+        </xs:annotation>
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:pattern value="[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*([^\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;&#x7F;]([^\t\n\r&#x7F;&#x85;&#x2028;&#x2029;]*[^\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;&#x7F;])?)[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*"/>
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:element>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="child.inject">
+    <xs:sequence>
+      <xs:element name="inject">
+        <xs:annotation>
+          <xs:documentation>Injects a fault into this NIC's server, for testing; repeatable. One fault as 'SITE: PATTERN effect EFFECT', for example 'stats_vals: every 100 effect fail status eio'. Spaces allowed. Repeatable, order kept; unchecked by the parser.</xs:documentation>
+        </xs:annotation>
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:pattern value="[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*([^\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;&#x7F;]([^\t\n\r&#x7F;&#x85;&#x2028;&#x2029;]*[^\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;&#x7F;])?)[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*"/>
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:element>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="child.config">
+    <xs:sequence>
+      <xs:element name="config">
+        <xs:annotation>
+          <xs:documentation>Names the rocjitsu simulation config file for this one GPU, in place of &lt;rocjitsu-config&gt;. rocjitsu only. One file name in the image's configs directory, no path: starts with a letter or digit, then letters, digits, '.', '_', '-'. Example gfx1250_mi455x.json.</xs:documentation>
+        </xs:annotation>
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:pattern value="[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*([A-Za-z0-9][A-Za-z0-9._\-]*)[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*"/>
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:element>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="child.node">
+    <xs:sequence>
+      <xs:element name="node">
+        <xs:annotation>
+          <xs:documentation>Selects one local node from a rocjitsu system manifest; needed for a multi-node launch. A node name from the manifest the config file refers to; unchecked by the parser.</xs:documentation>
+        </xs:annotation>
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:pattern value="[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*([^\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;&#x7F;]([^\t\n\r&#x7F;&#x85;&#x2028;&#x2029;]*[^\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;&#x7F;])?)[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*"/>
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:element>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="child.cpu-thread-budget">
+    <xs:sequence>
+      <xs:element name="cpu-thread-budget">
+        <xs:annotation>
+          <xs:documentation>Overrides the CPU thread budget of this GPU's server; zero selects automatic sizing. Integer count of threads; 0 is automatic. The parser does not check that it is a number.</xs:documentation>
+        </xs:annotation>
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:pattern value="[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*([^\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;&#x7F;]([^\t\n\r&#x7F;&#x85;&#x2028;&#x2029;]*[^\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;&#x7F;])?)[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*"/>
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:element>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="child.wait-checking">
+    <xs:sequence>
+      <xs:element name="wait-checking">
+        <xs:annotation>
+          <xs:documentation>Overrides this GPU server's wait checks. off disables checks, on enables ordinary checks, all adds the gfx1250 XCNT checks. The parser does not check the word.</xs:documentation>
+        </xs:annotation>
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:pattern value="[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*([^\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;&#x7F;]([^\t\n\r&#x7F;&#x85;&#x2028;&#x2029;]*[^\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;&#x7F;])?)[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*"/>
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:element>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="child.verbose">
+    <xs:sequence>
+      <xs:element name="verbose">
+        <xs:annotation>
+          <xs:documentation>Raises the SDXI server's log verbosity; repeat it for debug output. A switch: empty element, no value, no attributes. May be repeated; each occurrence renders one --verbose.</xs:documentation>
+        </xs:annotation>
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:pattern value="[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*"/>
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:element>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="child.namespaces">
+    <xs:sequence>
+      <xs:element name="namespaces">
+        <xs:annotation>
+          <xs:documentation>The namespaces the SPDK NVMe controller serves, in order; sets the image's NVME_NAMESPACES. One word, comma list, NSIDs in list order: lba:malloc:SIZE[:BLOCK], lba:aio:PATH[:BLOCK[:SIZE]], kv:mem[:MAXVAL[:MAXKEYS]]. Image default lba:malloc:512M,kv:mem.</xs:documentation>
+        </xs:annotation>
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:pattern value="[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*([A-Za-z0-9_.:,/=\-]+)[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*"/>
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:element>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="child.serial">
+    <xs:sequence>
+      <xs:element name="serial">
+        <xs:annotation>
+          <xs:documentation>Serial number of the SPDK NVMe controller, as the guest sees it; sets the image's SPDK_SERIAL. 1 to 20 letters, digits, '_' and '-'. Image default SPDKVFU01.</xs:documentation>
+        </xs:annotation>
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:pattern value="[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*([A-Za-z0-9_\-]{1,20})[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*"/>
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:element>
+    </xs:sequence>
+  </xs:group>
+  <xs:group name="child.cpumask">
+    <xs:sequence>
+      <xs:element name="cpumask">
+        <xs:annotation>
+          <xs:documentation>Host cores the SPDK server's poll-mode reactor spins on; sets SPDK_CPUMASK. Each server takes one full core. Hexadecimal core mask, 0x then 1 to 32 hex digits, such as 0x4. Default 0x1, host CPU 0. One value for every guest's server, so guests share the cores it names.</xs:documentation>
+        </xs:annotation>
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:pattern value="[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*(0x[0-9A-Fa-f]{1,32})[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*"/>
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:element>
+    </xs:sequence>
+  </xs:group>
+  <xs:simpleType name="backend.options">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*[^\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*"/>
+    </xs:restriction>
+  </xs:simpleType>
+</xs:schema>

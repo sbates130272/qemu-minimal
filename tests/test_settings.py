@@ -68,7 +68,7 @@ class VmOverrides(unittest.TestCase):
 
     def test_every_per_vm_default_reaches_its_field(self):
         got = settings.vm_overrides(FleetConfig(
-            vm_vcpus=8, vm_vmem=8192, vm_nvme=3, vm_backing_shared=True,
+            vm_vcpus=8, vm_vmem=8192, vm_nvme=3,
             vm_username="u", vm_password="p", vm_filesystem="/srv",
             vm_vfio_user_root_port=False, vm_images_dir="/img",
             vm_ssh_key_file="/k.pub", vm_cpu_sockets=1,
@@ -76,13 +76,24 @@ class VmOverrides(unittest.TestCase):
             backing_ref="docker.io/x/y:z",
         ))
         self.assertEqual(got, {
-            "vcpus": 8, "vmem": 8192, "nvme": "3", "backing_shared": True,
+            "vcpus": 8, "vmem": 8192, "nvme": "3",
             "username": "u", "password": "p", "filesystem": "/srv",
             "vfio_user_root_port": False, "images": Path("/img"),
             "ssh_key_file": Path("/k.pub"), "cpu_sockets": 1,
             "cpu_phys_bits": 41, "pci_hole64_size": "512G",
             "backing_image": "docker.io/x/y:z",
+            # Always applied: an empty <vm-cpu-vendor> is a value.
+            "cpu_vendor": "AuthenticAMD",
         })
+
+    def test_no_fleet_sets_backing_shared(self):
+        """<vm-backing-shared> is gone: a stack passes run-vm
+        --backing-shared itself, and a run-vm outside one takes the flag,
+        so a fleet file never turns image locking off."""
+        for fleet in (FleetConfig(), FleetConfig(vm_vcpus=8, vm_nvme=1)):
+            self.assertNotIn("backing_shared", settings.vm_overrides(fleet))
+            self.assertNotIn("backing_shared", settings.bake_overrides(fleet))
+        self.assertFalse(VMConfig().backing_shared)
 
     def test_every_key_is_a_vmconfig_field(self):
         """cli._merge drops a key that names no field, silently."""
@@ -125,7 +136,12 @@ class ParsedOnce(_Tmp):
                     settings.load(path)
 
     def test_unset_socket_and_phys_bits_are_not_emitted(self):
-        self.assertNotIn("vm-cpu-", fleet_xml.FleetXml.emit(FleetConfig()))
+        emitted = fleet_xml.FleetXml.emit(FleetConfig())
+        self.assertNotIn("vm-cpu-sockets", emitted)
+        self.assertNotIn("vm-cpu-phys-bits", emitted)
+        # The vendor is not sparse: empty is a value of its own, so the
+        # default is written out.
+        self.assertIn("<vm-cpu-vendor>AuthenticAMD</vm-cpu-vendor>", emitted)
 
     def test_every_reader_sees_one_images_dir_for_a_tilde(self):
         from qemu_tool import compose

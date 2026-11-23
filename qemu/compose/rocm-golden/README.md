@@ -102,8 +102,9 @@ qemu-tool compose --stack rocm-golden --profile metrics up -d
 
 The first `gen-vm` pulls `<backing-ref>`, and `up` pulls the device server
 images. One backing file serves the whole fleet, which
-is why `<vm-backing-shared>true` is not optional here: all N VMs open it at
-once, and that needs `backing.file.locking=off`.
+is why the generated stack starts every guest with `run-vm --backing-shared`:
+all N VMs open it at once, and that needs `backing.file.locking=off`. No
+fleet element controls it.
 
 For a fleet with an overlay, append its `--xml` to the `gen-vm` commands too —
 it is where `<vm-images-dir>` comes from, so a layer dropped from one of them
@@ -132,7 +133,11 @@ images directory is the one fleet value a rendered stack does not bake in.
 
 Derived per VM `n`, with no element to override any of them: name
 `<vm-name-prefix>-<n>`, SSH port `<ssh-port-base> + n - 1`, MAC
-`<ernic-mac-prefix>:<n>>8>:<n&0xff>`, guest IP `<ernic-subnet>.<10+n>`. Guests start at `.11`: the manager claims `.1`
+`72:6f:63:6d:<n>>8>:<n&0xff>`, guest IP `192.168.100.<10+n>`. The MAC prefix
+and the network are constants of the generator (`gen_compose.ERNIC_MAC_PREFIX`,
+`ERNIC_SUBNET`): the guest image addresses its NICs on that network at boot,
+and the quick-start playbook finds a guest's NIC by that prefix. Guests start
+at `.11`: the manager claims `.1`
 as its DHCP `server_ip` and intercepts ARP for it, so a VM placed there is
 unreachable in a way that looks like a driver fault.
 

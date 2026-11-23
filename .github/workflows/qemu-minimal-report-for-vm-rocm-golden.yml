@@ -40,6 +40,7 @@ on:
       - 'scripts/generate-vm-report.sh'
       - 'scripts/check-vm-devices.sh'
       - 'scripts/check-guest-exporters.py'
+      - 'scripts/check-guest-cpu.sh'
       - 'scripts/vm-report/**'
       - '.github/actions/nonroot-user/action.yml'
       - '.github/workflows/qemu-minimal-report-for-vm-rocm-golden.yml'
@@ -383,6 +384,30 @@ jobs:
         name: perf-helios
         path: perf-out/helios/badge-*.json
         if-no-files-found: error
+
+    # The assertion is the guests' vendor and family. It is after the
+    # benchmarks so that the dmesg lines it prints cover them: on a guest
+    # that is not AMD hipFile's direct read makes amdgpu log "AIS: P2P DMA
+    # not accessible", which the script counts and warns about. The guest
+    # kernel's own refusal is not expected here on any guest: amdgpu asks
+    # the kernel quietly, and nothing this lane runs asks verbosely. On an
+    # AMD runner the step is green and shows nothing about the stated
+    # vendor; the "what this run shows" row of its summary says which kind
+    # of run this was. See the same step in
+    # qemu-minimal-quickstart-boot.yml and AGENTS.md, "The guest is an AMD
+    # machine".
+    - name: Check the guests are AMD machines whatever the host is
+      if: ${{ !cancelled() && env.GUEST1 != '' }}
+      run: |
+        set -eu
+        rc=0
+        for guest in "rocm-golden-1 ${GUEST1}" "rocm-golden-2 ${GUEST2}"; do
+          scripts/check-guest-cpu.sh "${guest% *}" \
+            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                -o ConnectTimeout=10 -i "${KEY_DIR}/id_rsa" -p 2222 \
+                "${GUEST_USER}@${guest#* }" || rc=1
+        done
+        exit "$rc"
 
     - name: Show logs on failure
       if: failure()

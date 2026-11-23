@@ -1,3 +1,15 @@
+"""`qemu-tool compose`: run `docker compose` against a stack.
+
+`run()` finds the stack directory (a shipped stack by name, or a rendered
+one from `--stack-dir`, `$QEMU_TOOL_STACK` or the current directory) and
+starts `docker compose` there. What compose cannot read from the rendered
+files it gets through the child's environment: the variables the stacks
+interpolate (`interpolation_vars()`, `interpolation_env()`) and the uid and
+gid the containers run as (`resolve_identity()`). `published_ports()` and
+`exposed_ports()` read a rendered compose file for the host ports it
+publishes and the ones that are not on loopback.
+"""
+
 from __future__ import annotations
 
 import grp
