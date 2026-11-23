@@ -50,7 +50,7 @@ runs:
       run: echo "PIP_CACHE_DIR=/var/cache/pip-ci" >> "$GITHUB_ENV"
 
     - name: Cache pip
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: /var/cache/pip-ci
         key: pip-qemu-tool-v2-${{ hashFiles('qemu/pyproject.toml') }}
@@ -95,7 +95,7 @@ runs:
 
     - name: Cache Ansible collections
       id: collections-cache
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ${{ steps.acp.outputs.path }}
         key: ansible-collections-v2-${{ hashFiles('ansible/requirements.yml') }}
@@ -112,7 +112,7 @@ runs:
         )"
 
     - name: Cache cloud image
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ${{ inputs.images-dir }}/*-server-cloudimg-*.img
         key: cloud-img-amd64-${{ inputs.release }}-ansible-${{ inputs.cloud-image-key }}
