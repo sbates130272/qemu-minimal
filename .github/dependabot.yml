@@ -1,0 +1,26 @@
+# Version updates for the GitHub Actions this repository uses. Until this
+# file existed only Dependabot's security updates ran here, and the actions
+# drifted several major versions behind.
+#
+# What it covers: `uses:` lines in .github/workflows and in the composite
+# actions under .github/actions, which a bare `directory: /` does not reach.
+#
+# What it does not: the container image stamps in qemu/stacks/*.xml and in
+# the workflows' `container:` and `*_IMAGE` lines, and the pins in
+# ansible/requirements.yml and vm-rocm-golden.yml. Those are held to each
+# other by tests/ and the Image Tag Consistency workflow and move by hand.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directories:
+      - /
+      - /.github/actions/*
+    schedule:
+      interval: weekly
+    groups:
+      # upload and download have to agree on the artifact format, and
+      # publish-pages downloads what other workflows uploaded.
+      artifacts:
+        patterns:
+          - actions/upload-artifact
+          - actions/download-artifact
