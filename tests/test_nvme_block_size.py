@@ -423,10 +423,12 @@ class Documented(unittest.TestCase):
                        "logical_block_size", "LBA format"):
             self.assertIn(needle, flat)
 
-    def test_the_changelog_under_unreleased(self):
+    def test_the_changelog_since_the_last_release(self):
+        # Everything after v2.1.0, not [Unreleased] alone: scripts/release.sh
+        # retitles that section and runs this suite on the result before it
+        # tags, and the entry is then under the new version's heading.
         text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-        unreleased = text[text.index("## [Unreleased]"):]
-        unreleased = unreleased[:unreleased.index("\n## [", 5)]
+        unreleased = text[:text.index("\n## [v2.1.0]")]
         self.assertIn("<vm-nvme-block-size>", unreleased)
         self.assertIn("--nvme-block-size", unreleased)
 

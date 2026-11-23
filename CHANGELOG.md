@@ -488,6 +488,17 @@ All notable changes to this project will be documented in this file.
   not use it), so the publish step now writes it into the branch after it
   syncs the built site. Run by hand against a scratch directory, not on a
   runner.
+- **Three tests failed the 3.0.0 release, and only there.**
+  `scripts/release.sh` retitles `[Unreleased]` and runs the unit suite on
+  the result before it commits or tags. The tests that look for the
+  `<ernic-mtu>` and `<vm-nvme-block-size>` entries, and the one that holds
+  the schema corpus count in the notes, read the `[Unreleased]` section
+  alone, which is empty by then, so the release stopped with nothing
+  committed. They now read everything above the `[v2.1.0]` heading, as
+  the older tests of that kind do, and a test in `tests/test_release_sh.py`
+  fails any other test that slices the changelog at `[Unreleased]`.
+  Run: the full suite on a copy of main stamped as the script stamps it
+  (2571 tests), and the new test against the old form of one of the three.
 
 ## [v2.1.0] - 2026-11-19
 
