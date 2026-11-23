@@ -33,7 +33,7 @@ jobs:
       relevant: ${{ steps.filter.outputs.changed }}
     steps:
     - name: Check out code
-      uses: actions/checkout@v4.3.1
+      uses: actions/checkout@v7
     - name: Filter paths
       id: filter
       uses: ./.github/actions/paths-changed
@@ -61,7 +61,7 @@ jobs:
       ANSIBLE_DUPLICATE_YAML_DICT_KEY: error
     steps:
     - name: Check out code
-      uses: actions/checkout@v4.3.1
+      uses: actions/checkout@v7
     # ansible ships in the CI image at /usr/local/bin, and so does pip as of
     # the 20260924.ge1cd640 pin above -- nothing left to install.
     # Resolve the path in the container; actions/cache expands ~ in Node on the
@@ -126,7 +126,7 @@ jobs:
     timeout-minutes: 90
     steps:
     - name: Check out code
-      uses: actions/checkout@v4.3.1
+      uses: actions/checkout@v7
 
     # This job used to inline its own copy of the prologue, which is how it
     # kept the "~/.ansible/collections" cache path after the composite action

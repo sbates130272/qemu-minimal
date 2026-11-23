@@ -34,7 +34,7 @@ jobs:
           - resolute
     steps:
     - name: Check out code
-      uses: actions/checkout@v4.3.1
+      uses: actions/checkout@v7
     # No package installation step here any more: python3-pip was the only gap
     # in the CI image and it closed at 20260924.ge1cd640, the pin above. The
     # arm64 and riscv64 jobs below still apt-get it -- they run on a bare
@@ -191,7 +191,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     steps:
     - name: Check out code
-      uses: actions/checkout@v4.3.1
+      uses: actions/checkout@v7
     - name: Install packages
       run: |
         sudo apt-get update -qq
@@ -233,7 +233,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     steps:
     - name: Check out code
-      uses: actions/checkout@v4.3.1
+      uses: actions/checkout@v7
     - name: Install packages
       run: |
         sudo apt-get update -qq

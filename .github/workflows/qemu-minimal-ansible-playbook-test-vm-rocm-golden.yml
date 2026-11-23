@@ -88,7 +88,7 @@ jobs:
         -v /var/lib/qemu-tool:/var/lib/qemu-tool
     steps:
     - name: Check out code
-      uses: actions/checkout@v4.3.1
+      uses: actions/checkout@v7
 
     - name: Set up VM job
       uses: ./.github/actions/setup-vm-job

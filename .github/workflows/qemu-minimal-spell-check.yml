@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Check out code
-      uses: actions/checkout@v4.3.1
+      uses: actions/checkout@v7
     - name: Install codespell
       run: pipx install codespell==2.4.3
     # No arguments: codespell reads .codespellrc from the repo root, so a local

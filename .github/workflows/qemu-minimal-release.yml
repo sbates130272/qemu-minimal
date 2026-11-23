@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out code
-        uses: actions/checkout@v4.3.1
+        uses: actions/checkout@v7
 
       # The tag is the only thing a user sees, but the wheel takes its version
       # from pyproject.toml, the deb from debian/changelog and `man qemu-tool`
@@ -70,7 +70,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out code
-        uses: actions/checkout@v4.3.1
+        uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -102,7 +102,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out code
-        uses: actions/checkout@v4.3.1
+        uses: actions/checkout@v7
 
       - name: Install Debian build tools
         run: |

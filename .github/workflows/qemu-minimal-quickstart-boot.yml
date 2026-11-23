@@ -91,7 +91,7 @@ jobs:
       OVERLAY: /var/lib/qemu-tool/stacks/pr-boot.xml
     steps:
     - name: Check out code
-      uses: actions/checkout@v4.3.1
+      uses: actions/checkout@v7
 
     # Run everything below as a non-root user. See the action for why the
     # job container being root was hiding the configuration this branch is
