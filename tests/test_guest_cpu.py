@@ -29,6 +29,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 STACKS = REPO_ROOT / "qemu" / "stacks"
@@ -51,6 +52,7 @@ _load_package()
 from qemu_tool import (  # noqa: E402
     cli, fleet_xml, gen_compose, gen_vm, identity, run_vm, settings,
 )
+from qemu_tool.caps import QemuCaps  # noqa: E402
 from qemu_tool.config import VMConfig  # noqa: E402
 from qemu_tool.fleet_xml import FleetConfig, FleetXml  # noqa: E402
 
@@ -209,7 +211,12 @@ class RunVm(unittest.TestCase):
         # every amd64 conversion is announced, on every host.
         for words in ([], ["--cpu-vendor", INTEL]):
             out, err = io.StringIO(), io.StringIO()
-            with contextlib.redirect_stdout(out), \
+            # The conversion asks the QEMU binary what it can do, and a
+            # host without one (the Gen Compose Check runner) stops there.
+            # What is asked here is the note, which no capability decides.
+            with mock.patch.object(cli, "probe_caps",
+                                   return_value=QemuCaps()), \
+                    contextlib.redirect_stdout(out), \
                     contextlib.redirect_stderr(err):
                 cli.main(["run-vm", "--vm-name", "t", *words,
                           "--convert-to-libvirt", "-"])
