@@ -97,7 +97,7 @@ jobs:
         -v /var/lib/qemu-tool:/var/lib/qemu-tool
     steps:
     - name: Check out code
-      uses: actions/checkout@v4.3.1
+      uses: actions/checkout@v7
 
     # setup-vm-job generates a key in $HOME/.ssh. Nothing below uses it: the
     # bake names no key, so gen-vm generates the image's own, and that is

@@ -25,7 +25,7 @@ jobs:
     container: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:20261112.gdca6903-qemu.4cb9698-vfu.3719c3a
     steps:
     - name: Check out code
-      uses: actions/checkout@v4.3.1
+      uses: actions/checkout@v7
     # pip ships in the CI image as of the 20260924.ge1cd640 pin above.
     - name: Install qemu-tool
       run: python3 -m pip install --break-system-packages -e ./qemu
@@ -726,7 +726,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Check out code
-      uses: actions/checkout@v4.3.1
+      uses: actions/checkout@v7
 
     - name: Install qemu-tool
       run: python3 -m pip install --break-system-packages -e ./qemu

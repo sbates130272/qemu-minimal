@@ -40,7 +40,7 @@ jobs:
       relevant: ${{ steps.filter.outputs.changed }}
     steps:
       - name: Check out code
-        uses: actions/checkout@v4.3.1
+        uses: actions/checkout@v7
       - name: Filter paths
         id: filter
         uses: ./.github/actions/paths-changed
@@ -57,7 +57,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out code
-        uses: actions/checkout@v4.3.1
+        uses: actions/checkout@v7
 
       - name: Install Debian build tools
         run: |
@@ -356,7 +356,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out code
-        uses: actions/checkout@v4.3.1
+        uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v7

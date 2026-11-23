@@ -53,7 +53,7 @@ jobs:
         -v /var/lib/qemu-tool:/var/lib/qemu-tool
     steps:
     - name: Check out code
-      uses: actions/checkout@v4.3.1
+      uses: actions/checkout@v7
 
     # No package installation step here any more: python3-pip was the only gap
     # in the CI image and it closed at 20260924.ge1cd640, the pin above.
