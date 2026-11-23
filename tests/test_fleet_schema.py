@@ -2178,8 +2178,10 @@ class Counts(unittest.TestCase):
             number = int(match.group(1) or match.group(2))
             with self.subTest(text=match.group(0)):
                 self.assertIn(number, (len(documents()), len(AGREE)))
+        # Everything after v2.1.0, not [Unreleased] alone: scripts/release.sh
+        # retitles that section and runs this suite on the result.
         changelog = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-        unreleased = changelog.split("\n## [", 2)[1]
+        unreleased = changelog[:changelog.index("\n## [v2.1.0]")]
         self.assertIn(
             f"the four shipped fleet files and {len(documents())} small "
             "documents", " ".join(unreleased.split()))

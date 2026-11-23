@@ -13,6 +13,7 @@ behind.
 """
 
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -160,6 +161,23 @@ class ReleaseRunsTheSuite(unittest.TestCase):
         done = self._release("99.0.0", "--dry-run")
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("An entry of the test", done.stdout)
+
+    def test_no_other_test_reads_the_unreleased_section_alone(self):
+        """release.sh retitles [Unreleased] and then runs the whole suite.
+        A test that looks for its changelog entry under that heading passes
+        on every pull request and fails the release: three did, at 3.0.0.
+        Such a test reads everything above the last release's heading."""
+        slices = re.compile(
+            r"""index\(\s*["']\#\#\ \[Unreleased\]"""
+            r"""|split\(\s*["']\\n\#\#\ \[["']""", re.VERBOSE)
+        found = [
+            f"{path.name}:{number}"
+            for path in sorted(Path(__file__).parent.glob("test_*.py"))
+            if path.name != Path(__file__).name
+            for number, line in enumerate(
+                path.read_text(encoding="utf-8").splitlines(), 1)
+            if slices.search(line)]
+        self.assertEqual(found, [])
 
     def test_the_suite_runs_between_the_stamp_and_the_commit(self):
         text = RELEASE_SH.read_text()
