@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v3.0.0] - 2026-11-23
+
 ### Breaking
 
 - **Seven fleet XML elements are removed, and a file that sets one no
