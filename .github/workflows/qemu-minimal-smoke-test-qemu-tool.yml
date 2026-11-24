@@ -45,7 +45,7 @@ jobs:
     - name: Use a fixed pip cache directory
       run: echo "PIP_CACHE_DIR=/var/cache/pip-ci" >> "$GITHUB_ENV"
     - name: Cache pip
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: /var/cache/pip-ci
         key: pip-qemu-tool-v2-${{ hashFiles('qemu/pyproject.toml') }}
@@ -59,7 +59,7 @@ jobs:
         # looked for at /root/.ssh/id_rsa, not found, and never offered.
         [ "$HOME" = /root ] || { rm -rf /root/.ssh && ln -s "$HOME/.ssh" /root/.ssh; }
     - name: Cache cloud image
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: /var/lib/qemu-tool/images/*-server-cloudimg-*.img
         key: cloud-img-amd64-${{ matrix.release }}-qemu-tool
@@ -202,7 +202,7 @@ jobs:
     - name: Ensure images directory exists
       run: sudo mkdir -p /var/lib/qemu-tool/images && sudo chmod 777 /var/lib/qemu-tool/images
     - name: Cache cloud image
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: /var/lib/qemu-tool/images
         key: cloud-img-arm64-resolute-qemu-tool
@@ -244,7 +244,7 @@ jobs:
     - name: Ensure images directory exists
       run: sudo mkdir -p /var/lib/qemu-tool/images && sudo chmod 777 /var/lib/qemu-tool/images
     - name: Cache cloud image
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: /var/lib/qemu-tool/images
         key: cloud-img-riscv64-resolute-qemu-tool

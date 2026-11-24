@@ -85,7 +85,7 @@ runs:
     # the restore-keys are what find the last one, same pins first.
     - name: Restore the compiler cache
       id: bake-ccache
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@v6
       with:
         path: ${{ steps.ccache-key.outputs.dir }}
         key: ${{ steps.ccache-key.outputs.prefix }}-${{ github.run_id }}-${{ github.run_attempt }}

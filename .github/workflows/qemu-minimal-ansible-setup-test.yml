@@ -71,7 +71,7 @@ jobs:
       id: acp
       run: echo "path=$HOME/.ansible/collections" >> "$GITHUB_OUTPUT"
     - name: Cache Ansible collections
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ${{ steps.acp.outputs.path }}
         key: ansible-collections-v2-${{ hashFiles('ansible/requirements.yml') }}

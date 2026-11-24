@@ -930,8 +930,8 @@ class Workflows(unittest.TestCase):
         restore = _step(RESTORE, "Restore the compiler cache")
         save = _step(SAVE, "Save the compiler cache")
         self.assertEqual(restore["id"], "bake-ccache")
-        self.assertEqual(restore["uses"], "actions/cache/restore@v4")
-        self.assertEqual(save["uses"], "actions/cache/save@v4")
+        self.assertEqual(restore["uses"], "actions/cache/restore@v6")
+        self.assertEqual(save["uses"], "actions/cache/save@v6")
         # The directory the key step names, which is the one the action
         # hands the bake; the save is given it back by the workflow.
         self.assertEqual(restore["with"]["path"],
@@ -954,7 +954,7 @@ class Workflows(unittest.TestCase):
         for path in self._everything():
             pinned |= set(re.findall(
                 r"uses: actions/cache(?:/\w+)?@(\S+)", path.read_text()))
-        self.assertEqual(pinned, {"v4"})
+        self.assertEqual(pinned, {"v6"})
 
     def test_the_steps_run_in_the_order_the_cache_needs(self):
         self.assertEqual(
