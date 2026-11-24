@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 220" width="100%" role="img" aria-label="SDXI copy BW trend">
   <rect width="100%" height="100%" rx="18" fill="#ffffff" stroke="#d9e2f0"/>
-  <polyline fill="none" stroke="#0071C5" stroke-width="4" points="28.0,192.0 57.7,181.9 87.4,176.7 117.1,91.4 146.9,91.4 176.6,148.3 206.3,40.5 236.0,40.5 265.7,63.3 295.4,123.1 325.1,125.2 354.9,28.0 384.6,181.9 414.3,154.4 444.0,154.4 473.7,146.6 503.4,146.6 533.1,96.9 562.9,96.9 592.6,52.8 622.3,52.8 652.0,52.8"/>
+  <polyline fill="none" stroke="#0071C5" stroke-width="4" points="28.0,192.0 56.4,181.9 84.7,176.7 113.1,91.4 141.5,91.4 169.8,148.3 198.2,40.5 226.5,40.5 254.9,63.3 283.3,123.1 311.6,125.2 340.0,28.0 368.4,181.9 396.7,154.4 425.1,154.4 453.5,146.6 481.8,146.6 510.2,96.9 538.5,96.9 566.9,52.8 595.3,52.8 623.6,52.8 652.0,161.9"/>
   <text x="28" y="34" fill="#111827" font-family="system-ui,sans-serif" font-size="18" font-weight="700">SDXI copy BW</text>
   <text x="28" y="56" fill="#4b5563" font-family="system-ui,sans-serif" font-size="12">oldest run at left, newest at right</text>
   <text x="28" y="190" fill="#6b7280" font-family="system-ui,sans-serif" font-size="12">481c8928</text>
-  <text x="652" y="190" text-anchor="end" fill="#6b7280" font-family="system-ui,sans-serif" font-size="12">04394513</text>
-  <text x="652" y="34" text-anchor="end" fill="#111827" font-family="system-ui,sans-serif" font-size="14" font-weight="700">latest: 3077.8 MB/s</text>
+  <text x="652" y="190" text-anchor="end" fill="#6b7280" font-family="system-ui,sans-serif" font-size="12">7a968dec</text>
+  <text x="652" y="34" text-anchor="end" fill="#111827" font-family="system-ui,sans-serif" font-size="14" font-weight="700">latest: 1243.5 MB/s</text>
 </svg>
