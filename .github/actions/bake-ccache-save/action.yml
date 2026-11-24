@@ -80,7 +80,7 @@ runs:
 
     - name: Save the compiler cache
       if: always() && steps.ccache-report.outputs.new == 'true'
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@v6
       with:
         path: ${{ inputs.dir }}
         key: ${{ inputs.key }}

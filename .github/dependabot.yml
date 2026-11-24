@@ -24,3 +24,9 @@ updates:
         patterns:
           - actions/upload-artifact
           - actions/download-artifact
+      # tests/test_bake_ccache.py holds every actions/cache, restore and
+      # save included, to one version, so a bump of part of them fails.
+      cache:
+        patterns:
+          - actions/cache
+          - actions/cache/*
