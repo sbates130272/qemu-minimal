@@ -677,7 +677,21 @@ qemu-tool ssh xio-1 -- xio-tester --list-endpoints  # no sudo needed
 commit, loads the module, lets the login user open `/dev/rocm-xio` through
 the `rocm-xio` group, connects the guest to the NVMe-oF controller in its
 second NIC, and checks for `/dev/rocm-xio`, `/dev/xio-kv`, `/dev/xio-blk`
-and that controller's block and KV namespaces. By hand, any stack is:
+and that controller's block and KV namespaces.
+
+`--vfu-doorbell` adds rocm-xio's vfu-doorbell rig: a ringee and a ringer, two
+more vfio-user devices in the guest. Give it to the verb that brings the stack
+up and again to `test`, which installs rocm-xio from the branch that has the
+tools, builds and installs `vfu-ring`, `vfu-driver-select` and the `vfu-dma`
+module, and runs the tool's own scenarios:
+
+```bash
+qemu-tool quick-start --flavor xio --vfu-doorbell all        # up, install, check
+qemu-tool quick-start --flavor xio --vfu-doorbell test       # again, on a stack that is up
+qemu-tool ssh xio-1 -- sudo vfu-ring info
+```
+
+By hand, any stack is:
 
 ```bash
 # the guest overlays first: one pull, then overlays on that backing file
@@ -1132,8 +1146,9 @@ by default: one full core per server). A guest takes one, and the image's
 
 `vfu-ringee` and `vfu-ringer` are rocm-xio's `tools/vfu-doorbell` servers, a
 guest taking one of each. They run from `<doorbell-image>`, an image that holds
-the binary (rocm-xio's CI builds and pushes it); `qemu/overlays/xio-doorbell.xml`
-adds both to the xio guest. `<xio-ref>`, with an optional `<xio-commit>`, names
+the binary (rocm-xio's CI builds and pushes it); `qemu/overlays/vfu-doorbell.xml`
+adds both to the xio guest, and `qemu-tool quick-start --flavor xio
+--vfu-doorbell` does that for you, installs the guest tools and checks the rig. `<xio-ref>`, with an optional `<xio-commit>`, names
 the rocm-xio branch the xio guest installs instead of the role's own pin; with
 no commit the branch is built as pushed. `<vm-pci-mmio-bridge>true</vm-pci-mmio-bridge>`, a flat setting
 beside the block, gives each guest the fork QEMU's `pci-mmio-bridge` device

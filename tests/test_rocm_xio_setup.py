@@ -312,7 +312,9 @@ class Playbook(unittest.TestCase):
         self.assertEqual({p["hosts"] for p in self.plays}, {"fleet"})
 
     def test_firmware_then_the_probe_then_the_build_then_the_load(self):
-        names = [t["name"] for p in self.plays for t in p["tasks"]]
+        # The first two plays: the third is the vfu-doorbell rig's, which has
+        # a task of the same name that records its own result.
+        names = [t["name"] for p in self.plays[:2] for t in p["tasks"]]
         order = [
             "Install the gfx1250 firmware generated from this stack's rocjitsu",
             "Probe amdgpu with the emulation parameters",
@@ -329,7 +331,7 @@ class Playbook(unittest.TestCase):
     def test_rocm_xio_is_installed_only_when_asked_for(self):
         # rocm-xio is not in the golden image and is not installed by a
         # plain run: its play ends at its first task without --xio-test.
-        gpus, xio = self.plays
+        gpus, xio = self.plays[:2]
         self.assertNotIn("rocm_xio_setup", yaml.safe_dump(gpus))
         self.assertIs(xio["vars"]["quickstart_xio_test"], False)
         first = xio["tasks"][0]

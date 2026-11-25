@@ -13,27 +13,44 @@ All notable changes to this project will be documented in this file.
   as pushed, and a commit without a ref is refused. A stack that sets neither
   renders as before.
 
-- **The vfu-doorbell rig, as an overlay on the xio guest.** Two new
-  `<server>` types, `vfu-ringee` and `vfu-ringer`, run rocm-xio's
-  `tools/vfu-doorbell` servers: a vfio-user device whose BAR0 carries doorbell
-  overlays with readable counters, and one that writes patterns to any guest
-  physical address through `vfu_mmio_write`. `qemu/overlays/xio-doorbell.xml`
-  adds both to `xio.xml`'s devices, ringee first; render it with
-  `gen-compose --xml qemu/stacks/xio.xml --xml qemu/overlays/xio-doorbell.xml
-  --output-dir <dir>`. The overlay is separate because in `xio.xml` itself a
-  host that could not pull the servers' image would find the default xio guest
-  waiting on servers that never start. One new setting, `<doorbell-image>`,
-  names the image they run from: rocm-xio's CI builds `vfu-doorbell` into it
-  on the libvfio-user image and pushes it to ghcr.io, so nothing is built or
-  mounted on the host. It runs from the `feat-vfu-doorbell` branch tag until that branch is merged. The image is built on the
-  fork's libvfio-user, `vfu.3719c3a`, which has `vfu_mmio_write` and is the
-  revision the xio QEMU is built against; its tag names no `vfu.<sha>`, so
-  render time cannot hold it to QEMU's as it does `<spdk-image>`. `ansible/playbooks/vfu-doorbell-guest.yml` installs the
-  guest tool and checks both devices. It replaces the hand-written
-  `vfu-doorbell-vm` stack of the unmerged `feat/vfu-doorbell` branch. The
-  render and `docker compose config` are checked, and one guest was booted
-  on it by hand and shows both devices; **no ring has been run**, and whether the pinned xio QEMU's `vfio_user_dma_write` dispatches
-  to MMIO, which the ringer needs, is not established.
+- **`quick-start --flavor xio --vfu-doorbell` adds rocm-xio's vfu-doorbell
+  rig to the xio guest, with no ansible to run by hand.** The rig is two more
+  vfio-user devices in the guest: a ringee, whose BAR0 carries doorbell
+  overlays with readable counters, and a ringer, which writes patterns to any
+  guest physical address through `vfu_mmio_write`. On `up` and `all` the flag
+  layers the two servers onto the stack; on `test` and `all` it installs
+  rocm-xio from the branch that has the tools (so it implies `--xio-test`),
+  builds `vfu-ring` and the `vfu-dma` DKMS module in the guest, installs
+  `vfu-ring` and `vfu-driver-select`, requires both devices and runs
+  `vfu-ring selftest`. It is refused on any other flavor, and `test` refuses a
+  stack brought up without it. The result is one line, `vfu-doorbell: ready on
+  xio-1: ringee=1de0:0001, ringer=1de0:0002, rocm-xio=<commit>, selftest
+  passed`, and a run that was asked for it and left none fails.
+  Two new `<server>` types, `vfu-ringee` and `vfu-ringer`, run the servers
+  from rocm-xio's `tools/vfu-doorbell`, from one new setting,
+  `<doorbell-image>`: rocm-xio's CI builds `vfu-doorbell` into it on the
+  libvfio-user fork image (`vfu.3719c3a`, the revision the xio QEMU is built
+  against) and pushes it to ghcr.io, so nothing is built or mounted on the
+  host. Its tag names no `vfu.<sha>`, so render time cannot hold it to QEMU's
+  as it does `<spdk-image>`. It runs from the `feat-vfu-doorbell` branch tag
+  until that branch is merged.
+  The servers' settings live in `qemu/overlays/vfu-doorbell.xml`, an overlay
+  and not a fifth stack: in `xio.xml` itself a host that could not pull the
+  image would find the default xio guest waiting on servers that never start.
+  It is a new package of shipped data (`qemu_tool.share.overlays`, and
+  `/usr/share/qemu-tool/overlays/` in the `.deb`), since the flag reads it from
+  the install. To use it by hand, as a layer after `xio.xml`: `gen-compose
+  --xml qemu/stacks/xio.xml --xml qemu/overlays/vfu-doorbell.xml --output-dir
+  <dir>`. The guest half is the `doorbell` tasks of the `rocm_xio_setup` role,
+  the third play of `vm-xio.yml`. The stack the flag does not touch renders as
+  it did.
+  Run by hand on 2026-11-25, on one guest: `quick-start --flavor xio
+  --vfu-doorbell test`, twice, exit 0, ending `selftest passed`, with all
+  twelve scenarios passing, the ringer's writes into the ringee included. That
+  settles whether the pinned xio QEMU's `vfio_user_dma_write` dispatches to
+  MMIO: it does. Not run: `up --vfu-doorbell` end to end (the layer is
+  unit-tested and rendered through `generate_stack`), a translating IOMMU, and
+  any lane.
 
 ## [v3.0.0] - 2026-11-23
 

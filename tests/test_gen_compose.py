@@ -2371,7 +2371,7 @@ class TestDevices(unittest.TestCase):
         # gen-compose --check, so this is what keeps it rendering.
         import yaml
         layers = [REPO_ROOT / "qemu" / "stacks" / "xio.xml",
-                  REPO_ROOT / "qemu" / "overlays" / "xio-doorbell.xml"]
+                  REPO_ROOT / "qemu" / "overlays" / "vfu-doorbell.xml"]
         self.assertEqual(FleetXml.problems(layers[1]), [])
         with contextlib.redirect_stderr(io.StringIO()):
             out = gen_compose.render_compose(

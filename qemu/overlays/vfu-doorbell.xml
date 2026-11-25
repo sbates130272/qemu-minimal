@@ -18,11 +18,14 @@
   and with the branch name. So there is nothing to build before bringing the
   stack up, and the first `up` pulls it.
 
-  Render and run:
+  `qemu-tool quick-start -\-flavor xio -\-vfu-doorbell` layers this file onto
+  the xio stack for you, and runs the guest half in the xio playbook. The file
+  ships in the wheel and the .deb for that reason. To use it by hand instead,
+  as a layer after xio.xml:
 
     qemu-tool gen-compose -\-xml qemu/stacks/xio.xml \
-        -\-xml qemu/overlays/xio-doorbell.xml \
-        -\-output-dir /var/lib/qemu-tool/stacks/xio-doorbell
+        -\-xml qemu/overlays/vfu-doorbell.xml \
+        -\-output-dir /var/lib/qemu-tool/stacks/vfu-doorbell
 
   The ringer's writes into the ringee need a QEMU whose vfio_user_dma_write
   dispatches to MMIO regions. Whether the <qemu-ref> in xio.xml has that is

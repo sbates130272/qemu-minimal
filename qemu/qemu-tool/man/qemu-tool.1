@@ -393,8 +393,10 @@ verb runs
 .IR vm\-xio.yml ,
 which stages the GPU firmware and probes amdgpu; with
 .B \-\-xio\-test
-it also installs rocm\-xio in the guest and checks it. The other optional
-tests are not available on this flavor.
+it also installs rocm\-xio in the guest and checks it, and with
+.B \-\-vfu\-doorbell
+it adds the vfu\-doorbell rig. The other optional tests are not available on
+this flavor.
 .RE
 .TP
 .BR \-f ", " \-\-follow
@@ -498,6 +500,38 @@ on any other flavor. Only meaningful with the
 or
 .B all
 verbs.
+.TP
+.B \-\-vfu\-doorbell
+On the
+.B xio
+flavor, add rocm\-xio's vfu\-doorbell rig: the ringee and the ringer, two more
+vfio\-user devices in the guest, run from the image
+.B <doorbell\-image>
+names. The
+.B up
+and
+.B all
+verbs layer the two servers onto the stack, from the overlay the tool ships
+as
+.IR overlays/vfu\-doorbell.xml .
+The
+.B test
+and
+.B all
+verbs install rocm\-xio from the branch that has the tools (so it implies
+.BR \-\-xio\-test ),
+build
+.B vfu\-ring
+and the vfu\-dma kernel module in the guest, install
+.B vfu\-ring
+and
+.BR vfu\-driver\-select ,
+require both devices, and run the tool's own scenarios, in which the CPU and
+then the ringer write into the ringee. Off by default. Give it to the verb
+that brings the stack up and again to
+.BR test ;
+.B test
+refuses a stack brought up without it. Refused on any other flavor.
 .TP
 .B \-\-hipfile\-test
 Also run the hipFile test: on every guest, read a file on its NVMe

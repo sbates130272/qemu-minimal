@@ -63,3 +63,15 @@ rocm_xio_setup_nvmeof_queues: 8
 # keys /dev/xio-kv on. It is the <serial> of the fleet's
 # <server type='spdk'> entry.
 rocm_xio_setup_kv_serial: XIO-KV
+
+# The vfu-doorbell rig's guest half, for `tasks_from: doorbell`: what it
+# installs to build vfu-ring and the vfu-dma module, where vfu-ring is built,
+# and the version the vfu-dma DKMS package gets.
+rocm_xio_setup_doorbell_packages:
+  - build-essential
+  - cmake
+  - dkms
+  - gcc
+  - make
+rocm_xio_setup_doorbell_build_dir: /var/tmp/vfu-doorbell-build
+rocm_xio_setup_doorbell_dkms_version: "0.1"
