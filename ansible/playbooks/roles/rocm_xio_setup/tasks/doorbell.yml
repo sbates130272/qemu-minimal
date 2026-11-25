@@ -28,11 +28,12 @@
       feat/vfu-doorbell branch. Set <xio-ref> to it, which is what
       qemu/overlays/vfu-doorbell.xml does.
 
-- name: Say which rocm-xio commit the tools are built from
-  ansible.builtin.command:
-    cmd: git -C {{ rocm_xio_setup_source_dir }} rev-parse HEAD
-  register: rocm_xio_setup_doorbell_head
-  changed_when: false
+# The role's own record of what it built; the checkout is root's, so git
+# would refuse it for anyone else.
+- name: Read the record of the rocm-xio build
+  ansible.builtin.slurp:
+    path: "{{ rocm_xio_setup_stamp }}"
+  register: rocm_xio_setup_doorbell_record
 
 - name: Install the build tools
   ansible.builtin.apt:
@@ -119,8 +120,9 @@
     cmd: |
       set -e
       pkg=vfu-dma/{{ rocm_xio_setup_doorbell_dkms_version }}
-      if dkms status "$pkg" | grep -q installed \
-          && [ "{{ rocm_xio_setup_doorbell_dkms_files.changed }}" != "True" ]; then
+      status=$(dkms status "$pkg")
+      if [ "{{ rocm_xio_setup_doorbell_dkms_files.changed }}" != "True" ] \
+          && [ "${status#*installed}" != "$status" ]; then
         exit 0
       fi
       dkms remove "$pkg" --all >/dev/null 2>&1 || true
@@ -201,5 +203,5 @@
   ansible.builtin.set_fact:
     rocm_xio_setup_doorbell_seen: >-
       ringee=1de0:0001, ringer=1de0:0002,
-      rocm-xio={{ rocm_xio_setup_doorbell_head.stdout[:12] }},
+      rocm-xio={{ (rocm_xio_setup_doorbell_record.content | b64decode | from_json).commit[:12] }},
       selftest passed
