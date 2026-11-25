@@ -243,8 +243,12 @@ class Role(unittest.TestCase):
         (find,) = [t for t in tasks
                    if t["name"] == "Find the controller and its namespaces"]
         cmd = find["ansible.builtin.shell"]["cmd"]
-        self.assertIn('[ -b "/dev/${c}n1" ]', cmd)
-        self.assertIn('g="/dev/ng${c#nvme}n2"', cmd)
+        # By NSID, never by instance number: the kernel numbers namespaces
+        # in scan order, so the block one is n1 on one boot and n2 on another.
+        self.assertIn('"$ns/nsid"', cmd)
+        self.assertIn('1) [ -b "/dev/$nm" ]', cmd)
+        self.assertIn('2) [ -c "/dev/ng${nm#nvme}" ]', cmd)
+        self.assertNotIn('${c}n1', cmd)
 
     def test_a_stale_module_in_the_kernel_is_replaced(self):
         (load,) = [t for t in self._tasks("load.yml")
