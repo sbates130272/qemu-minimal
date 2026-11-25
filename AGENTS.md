@@ -672,7 +672,7 @@ the XSD has a bullet of its own.
   with one repeated (267 documents, all three answers), every decimal
   digit Python knows in a single integer, an integer one digit past
   `int()`'s limit, and 400 generated addresses. **Every flat setting is
-  held to its kind, whether or not a document sets it**: 20 of the 76 are
+  held to its kind, whether or not a document sets it**: 19 of the 76 are
   in no listed document and no shipped file, and typing one of those as
   another kind, in either renderer, used to pass the suite. One test reads
   each setting's declaration in both rendered schemas (`kind.<kind>` and

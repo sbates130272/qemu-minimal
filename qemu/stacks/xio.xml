@@ -44,10 +44,10 @@
 
   <!-- The rocm-xio the guest builds. With neither element below, the
        role's own pinned branch and commit. To build another:
+       <xio-ref>feat/vfu-doorbell</xio-ref>
+       <xio-commit>0123456789abcdef0123456789abcdef01234567</xio-commit>
        The commit is optional: with it, the build stops if the branch has
        moved; without it, the branch head is built unchecked. -->
-   <xio-ref>feat/vfu-doorbell</xio-ref>
-   <!-- xio-commit>0123456789abcdef0123456789abcdef01234567</xio-commit -->
 
   <devices>
     <!-- One guest and no peer, so no mesh: the server's loopback backend. -->
