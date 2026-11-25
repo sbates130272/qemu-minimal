@@ -42,6 +42,13 @@
        SDXI server it is not held to the other servers' stamp. -->
   <spdk-image>docker.io/sbates130272/batesste-ci-images-ubuntu-spdk-libvfio-user-sbates-fork:20261119.gc3dd883-spdk.18d1d8d-vfu.3719c3a</spdk-image>
 
+  <!-- The rocm-xio the guest builds. With neither element below, the
+       role's own pinned branch and commit. To build another:
+       <xio-ref>feat/vfu-doorbell</xio-ref>
+       <xio-commit>0123456789abcdef0123456789abcdef01234567</xio-commit>
+       The commit is optional: with it, the build stops if the branch has
+       moved; without it, the branch head is built unchecked. -->
+
   <devices>
     <!-- One guest and no peer, so no mesh: the server's loopback backend. -->
     <server type='ernic' id='nic0'>
