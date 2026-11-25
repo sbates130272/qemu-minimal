@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The vfu-doorbell rig on the xio guest: an overlay, not a fleet of its own.
+
+  It adds rocm-xio's two tools/vfu-doorbell servers to the xio stack's
+  devices. The guest then has, besides the xio devices, a ringee, a vfio-user
+  PCI device whose BAR0 carries doorbell overlays (index, keyed, event) with
+  readable per-key counters, and a ringer, one the guest programs to write a
+  pattern of values to any guest physical address through vfu_mmio_write.
+
+  It is an overlay on purpose. In xio.xml itself the two servers would be
+  part of the default xio flavour, and that flavour would then depend on an
+  image rocm-xio's CI has to have pushed.
+
+  The servers run from an image, not from a binary on the host. rocm-xio's
+  CI (.github/workflows/vfu-doorbell-image.yml) builds /opt/vfu/vfu-doorbell on
+  the libvfio-user fork image and pushes it to ghcr.io, tagged with the commit
+  and with the branch name. So there is nothing to build before bringing the
+  stack up, and the first `up` pulls it.
+
+  Render and run:
+
+    qemu-tool gen-compose -\-xml qemu/stacks/xio.xml \
+        -\-xml qemu/overlays/xio-doorbell.xml \
+        -\-output-dir /var/lib/qemu-tool/stacks/xio-doorbell
+
+  The ringer's writes into the ringee need a QEMU whose vfio_user_dma_write
+  dispatches to MMIO regions. Whether the <qemu-ref> in xio.xml has that is
+  not established here; if it has not, every ringer write fails with ENODEV.
+-->
+<fleet xmlns="http://qemu-tool/fleet/1.0">
+  <!-- The servers' image, built by rocm-xio's CI from the branch of the
+       same name as the tag. The tag moves with the branch. To run exactly the
+       commit the guest installs, name the commit's tag here and the same
+       40-character id in <xio-commit>. It is built on the libvfio-user fork
+       image that carries vfu_mmio_write, vfu.3719c3a, the revision the QEMU
+       in xio.xml is built against. The tag names no vfu.<sha>, so unlike
+       <spdk-image> render time cannot hold it to QEMU's. -->
+  <doorbell-image>ghcr.io/rocm/rocm-xio-vfu-doorbell:feat-vfu-doorbell</doorbell-image>
+
+  <!-- The rocm-xio the guest installs: the branch that carries
+       tools/vfu-doorbell and kernel/vfu-dma, in place of the role's own pin.
+       No <xio-commit>, so it is built as pushed, like the image above. That
+       is deliberate while the branch is still moving. -->
+  <xio-ref>feat/vfu-doorbell</xio-ref>
+
+  <devices>
+    <!-- Appended after the xio devices, in this order: the ringee is the
+         device being rung, the ringer the one doing the ringing. -->
+    <server type='vfu-ringee' id='ringee'/>
+    <server type='vfu-ringer' id='ringer'/>
+  </devices>
+</fleet>

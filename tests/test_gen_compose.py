@@ -847,6 +847,38 @@ class TestInventory(unittest.TestCase):
         self.assertIn("          fleet_guest_ip: 192.168.100.18", body)
         self.assertEqual(body.count("ansible_port:"), 8)
 
+    def test_a_named_xio_branch_is_the_roles_own_variables(self):
+        # Inventory vars outrank role defaults, so the setting reaches the
+        # rocm_xio_setup role with nothing between them.
+        body = gen_compose.render_inventory(
+            _plan("<xio-ref>feat/x</xio-ref>"), "abc")
+        self.assertIn('        rocm_xio_setup_ref: "feat/x"\n', body)
+        # No commit: the role builds the ref unchecked.
+        self.assertIn('        rocm_xio_setup_commit: ""\n', body)
+        sha = "0123456789abcdef0123456789abcdef01234567"
+        body = gen_compose.render_inventory(
+            _plan(f"<xio-ref>feat/x</xio-ref><xio-commit>{sha}</xio-commit>"),
+            "abc")
+        self.assertIn(f'        rocm_xio_setup_commit: "{sha}"\n', body)
+
+    def test_with_no_xio_ref_the_inventory_leaves_the_role_its_pin(self):
+        self.assertNotIn("rocm_xio_setup",
+                         gen_compose.render_inventory(_plan(), "abc"))
+
+    def test_what_an_xio_ref_and_commit_may_be(self):
+        sha = "0123456789abcdef0123456789abcdef01234567"
+        for body, want in (
+                (f"<xio-commit>{sha}</xio-commit>", "name the branch too"),
+                ("<xio-ref>-x</xio-ref>", "not a branch, tag or commit name"),
+                ("<xio-ref>a b</xio-ref>", "not a branch, tag or commit name"),
+                ("<xio-ref>a;b</xio-ref>", "not a branch, tag or commit name"),
+                ("<xio-ref>f</xio-ref><xio-commit>1235330</xio-commit>",
+                 "not a 40-character commit id")):
+            with self.subTest(body=body), self.assertRaises(SystemExit) as ctx, \
+                    contextlib.redirect_stderr(io.StringIO()):
+                _plan(body)
+            self.assertIn(want, str(ctx.exception))
+
     def test_provenance_round_trips(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "fleet-inventory.yml"
@@ -2271,6 +2303,100 @@ class TestDevices(unittest.TestCase):
                 _plan(body)
             self.assertIn(want, str(ctx.exception))
 
+    _DOORBELL = ("<doorbell-image>example/vfu:vfu.1</doorbell-image>"
+                 "<ernic-tap>false</ernic-tap>")
+    _DOORBELL_DEVICES = ("<devices><server type='ernic' id='n'/>"
+                         "<server type='rocjitsu' id='g'/>{}</devices>")
+
+    def test_the_doorbell_servers_run_a_mounted_binary_with_a_role(self):
+        svc = self._services(self._DOORBELL + """
+<vm-count>2</vm-count>
+<devices>
+  <server type='ernic' id='n'/><server type='rocjitsu' id='g'/>
+  <server type='vfu-ringee' id='ee'/><server type='vfu-ringer' id='er'/>
+</devices>""")
+        for n in (1, 2):
+            for role in ("ringee", "ringer"):
+                s = svc[f"vfu-{role}-{n}"]
+                self.assertEqual(s["image"], "example/vfu:vfu.1")
+                self.assertEqual(s["command"], [
+                    "/opt/vfu/vfu-doorbell", "--role", role,
+                    "--socket", f"/run/vfu/vfu-{role}-{n}.sock"])
+                # The binary is in the image: nothing is mounted from the
+                # host, so only the anchor's two volumes are there.
+                self.assertEqual(s["volumes"], [
+                    "vfu-sockets:/run/vfu", "ernic-stats:/run/ernic-stats"])
+                self.assertEqual(s["restart"], "no")
+                self.assertIn(f"/run/vfu/vfu-{role}-{n}[.]sock$",
+                              s["healthcheck"]["test"][-1])
+            qemu = svc[f"qemu-{n}"]
+            for role in ("ringee", "ringer"):
+                self.assertEqual(qemu["depends_on"][f"vfu-{role}-{n}"]["condition"],
+                                 "service_healthy")
+            line = [l for l in qemu["entrypoint"][-1].splitlines()
+                    if "--vfio-userdev" in l][0]
+            # Last, ringee first: the order is the guest's device order.
+            self.assertTrue(line.strip().endswith(
+                f'/run/vfu/vfu-ringee-{n}.sock,/run/vfu/vfu-ringer-{n}.sock"'), line)
+
+    def test_the_doorbell_image_is_not_held_to_qemus_libvfio_user(self):
+        # Its tag names no vfu.<sha> (rocm-xio's CI tags by commit), so there
+        # is nothing for render time to compare with QEMU's.
+        with contextlib.redirect_stderr(io.StringIO()):
+            _plan(self._DOORBELL.replace("vfu.1", "vfu.0000000")
+                  + self._DOORBELL_DEVICES.format("<server type='vfu-ringee' id='e'/>"))
+
+    def test_the_network_legend_names_the_doorbell_only_where_there_is_one(self):
+        out = self._render(self._DOORBELL + self._DOORBELL_DEVICES.format(
+            "<server type='vfu-ringee' id='e'/><server type='vfu-ringer' id='r'/>"))
+        self.assertIn("6 vfu-ringee   7 vfu-ringer", out)
+        self.assertNotIn("ringee", self._render(""))
+
+    def test_a_doorbell_entry_needs_its_image_and_a_guest_takes_one(self):
+        entry = "<server type='vfu-ringee' id='{}'/>"
+        cases = (
+            (self._DOORBELL_DEVICES.format(entry.format("a")),
+             "<doorbell-image> is empty"),
+            (self._DOORBELL + self._DOORBELL_DEVICES.format(
+                entry.format("a") + entry.format("b")),
+             "more than one <server type='vfu-ringee'>"))
+        for body, want in cases:
+            with self.subTest(want=want), self.assertRaises(SystemExit) as ctx, \
+                    contextlib.redirect_stderr(io.StringIO()):
+                _plan(body)
+            self.assertIn(want, str(ctx.exception))
+
+    def test_the_shipped_overlay_adds_both_servers_to_the_xio_guest(self):
+        # The real files, not a fixture: the overlay is in no stack's
+        # gen-compose --check, so this is what keeps it rendering.
+        import yaml
+        layers = [REPO_ROOT / "qemu" / "stacks" / "xio.xml",
+                  REPO_ROOT / "qemu" / "overlays" / "xio-doorbell.xml"]
+        self.assertEqual(FleetXml.problems(layers[1]), [])
+        with contextlib.redirect_stderr(io.StringIO()):
+            out = gen_compose.render_compose(
+                gen_compose.plan(FleetXml.parse_layers(layers)), ["e"], "d")
+        svc = yaml.safe_load(out)["services"]
+        self.assertEqual(svc["vfu-ringee-1"]["command"][2], "ringee")
+        self.assertEqual(svc["vfu-ringer-1"]["command"][2], "ringer")
+        line = [l for l in svc["qemu-1"]["entrypoint"][-1].splitlines()
+                if "--vfio-userdev" in l][0]
+        # After every xio device, SPDK's included.
+        self.assertTrue(line.strip().endswith(
+            '/run/vfu/spdk-1/cntrl,/run/vfu/vfu-ringee-1.sock,'
+            '/run/vfu/vfu-ringer-1.sock"'), line)
+        # And xio.xml alone has neither, which is why this is an overlay.
+        with contextlib.redirect_stderr(io.StringIO()):
+            alone = yaml.safe_load(gen_compose.render_compose(
+                gen_compose.plan(FleetXml.parse_layers(layers[:1])),
+                ["e"], "d"))["services"]
+        self.assertFalse([n for n in alone if n.startswith("vfu-ring")])
+
+    def test_a_doorbell_entry_takes_no_options(self):
+        self.assertIn("holds <serial>", self._problems(
+            "<devices><server type='vfu-ringer' id='r'><serial>X</serial>"
+            "</server></devices>"))
+
     def test_the_mmio_bridge_is_a_run_vm_flag_and_needs_an_nvme(self):
         fork = (f"<qemu-ref>example/qemu-sbates-fork:{_STAMP}-qemu11.1.1-{_VFU}"
                 "</qemu-ref>")
@@ -2383,7 +2509,9 @@ class TestDevices(unittest.TestCase):
         tags = {"ernic": "ernic-ref", "rocjitsu": "rocjitsu-ref",
                 "sdxi": "sdxi-image"}
         for kind, table in fleet_xml.SERVER_OPTIONS.items():
-            if kind in fleet_xml.SERVER_ENV:
+            # The doorbell servers take no options, so there is no help to
+            # compare: the role and the socket are all they are given.
+            if kind in fleet_xml.SERVER_ENV or not table:
                 continue
             with self.subTest(kind=kind):
                 self.assertFalse(derived & set(table))

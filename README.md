@@ -1121,13 +1121,21 @@ given different settings:
 | `rocjitsu` | `<node>`, `<cpu-thread-budget>`, `<wait-checking>` |
 | `sdxi` | `<verbose/>` (repeatable) |
 | `spdk` | `<namespaces>`, `<serial>`, `<cpumask>` |
+| `vfu-ringee`, `vfu-ringer` | none |
 
 A `spdk` entry is an SPDK vfio-user NVMe controller, run from `<spdk-image>`.
 Its two options set the image's `NVME_NAMESPACES` (for example `kv:mem`, one
 in-memory NVMe-KV namespace) and the controller's serial number;
 `<cpumask>` sets the cores its poll-mode reactor spins on (`0x1`, host CPU 0,
 by default: one full core per server). A guest takes one, and the image's
-`vfu.<sha>` has to be the `<qemu-ref>`'s. `<vm-pci-mmio-bridge>true</vm-pci-mmio-bridge>`, a flat setting
+`vfu.<sha>` has to be the `<qemu-ref>`'s.
+
+`vfu-ringee` and `vfu-ringer` are rocm-xio's `tools/vfu-doorbell` servers, a
+guest taking one of each. They run from `<doorbell-image>`, an image that holds
+the binary (rocm-xio's CI builds and pushes it); `qemu/overlays/xio-doorbell.xml`
+adds both to the xio guest. `<xio-ref>`, with an optional `<xio-commit>`, names
+the rocm-xio branch the xio guest installs instead of the role's own pin; with
+no commit the branch is built as pushed. `<vm-pci-mmio-bridge>true</vm-pci-mmio-bridge>`, a flat setting
 beside the block, gives each guest the fork QEMU's `pci-mmio-bridge` device
 for its emulated NVMe; it needs `<vm-nvme>` of at least 1.
 

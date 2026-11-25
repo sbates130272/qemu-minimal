@@ -91,6 +91,21 @@
             <xs:documentation>Container image of the SPDK vfio-user NVMe controller; required when &lt;devices&gt; has a server of type spdk. Image reference, repository:tag. Its vfu.&lt;sha&gt; must equal the one in &lt;qemu-ref&gt;, stamped tag or not. Nothing runs it without a spdk entry in &lt;devices&gt;.</xs:documentation>
           </xs:annotation>
         </xs:element>
+        <xs:element name="doorbell-image" type="f:kind.str" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Container image of the vfu-doorbell servers; required when &lt;devices&gt; has a vfu-ringee or vfu-ringer server. Image reference, repository:tag. The image holds /opt/vfu/vfu-doorbell, built on the libvfio-user fork image. Its tag names no vfu.&lt;sha&gt;, so the render cannot hold it to &lt;qemu-ref&gt;'s. Nothing runs it without a vfu-ringee or vfu-ringer entry in &lt;devices&gt;.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="xio-ref" type="f:kind.str" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>The rocm-xio branch or tag the xio guest installs, in place of the rocm_xio_setup role's own pin. Git branch or tag name. Empty keeps the role's pin. With no &lt;xio-commit&gt; the ref is built as pushed, unchecked, which is how a branch that is still moving is named.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="xio-commit" type="f:kind.str" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>The commit &lt;xio-ref&gt; has to be; the role fails when the fetched ref is another commit. 40-character commit id. Needs &lt;xio-ref&gt;.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
         <xs:element name="backing-ref" type="f:kind.str" minOccurs="0">
           <xs:annotation>
             <xs:documentation>Published guest disk image that gen-vm and quick-start pull as each guest's backing file. OCI reference by dated tag YYYYMMDD.g&lt;sha7&gt; or name@sha256:...; empty pulls nothing. gen-compose refuses no tag, latest, qm.&lt;sha7&gt; and near misses of those, and, in the repository &lt;publish-ref&gt; names, any tag but the dated one. Any other tag must share the servers' stamp, or is warned about if unstamped. gen-vm --bake ignores it.</xs:documentation>
@@ -430,7 +445,7 @@
                   </xs:choice>
                   <xs:attribute name="type" use="required">
                     <xs:annotation>
-                      <xs:documentation>Kind of server: an ernic NIC, a rocjitsu GPU, an SDXI device or an SPDK NVMe controller. ernic, rocjitsu, sdxi or spdk. The generator refuses more than one spdk a guest, and an spdk with no &lt;spdk-image&gt;. An id cannot change type in a later layer.</xs:documentation>
+                      <xs:documentation>Kind of server: an ernic NIC, a rocjitsu GPU, an SDXI device, an SPDK NVMe controller or a vfu-doorbell ringee or ringer. ernic, rocjitsu, sdxi, spdk, vfu-ringee or vfu-ringer. The generator refuses more than one spdk, vfu-ringee or vfu-ringer a guest, an spdk with no &lt;spdk-image&gt;, and a vfu-ringee or vfu-ringer with no &lt;doorbell-image&gt;. An id cannot change type in a later layer.</xs:documentation>
                     </xs:annotation>
                     <xs:simpleType>
                       <xs:restriction base="xs:string">
@@ -438,6 +453,8 @@
                         <xs:enumeration value="rocjitsu"/>
                         <xs:enumeration value="sdxi"/>
                         <xs:enumeration value="spdk"/>
+                        <xs:enumeration value="vfu-ringee"/>
+                        <xs:enumeration value="vfu-ringer"/>
                       </xs:restriction>
                     </xs:simpleType>
                   </xs:attribute>
