@@ -1180,6 +1180,28 @@ class TheLane(unittest.TestCase):
         self.assertIn("qemu-tool quick-start test", self.text)
         self.assertNotIn("ansible-playbook", self.text)
 
+    def test_the_collections_are_installed_as_the_user_the_playbook_runs_as(self):
+        """Collections go under the installing user's HOME. vm-storage.yml
+        uses community.general's modprobe, so an install as root, in a HOME
+        the playbook never reads, stops the first run at that task."""
+        steps = {s.get("name"): s for s in
+                 self.flow["jobs"]["storage"]["steps"]}
+        install = steps["Install collections"]["run"]
+        test = steps["Configure the guests and run the storage tests"]["run"]
+        for run in (install, test):
+            self.assertIn('setpriv --reuid "$CIUSER_UID"', run)
+            self.assertIn('HOME="$CIUSER_HOME"', run)
+        self.assertIn("ansible-galaxy collection install", install)
+        used = set()
+        for path in (REPO / "ansible/playbooks/roles/storage_setup/tasks"
+                     ).glob("*.yml"):
+            used.update(re.findall(r"^\s+(community\.\w+)\.\w+:",
+                                   path.read_text(), re.M))
+        self.assertIn("community.general", used)
+        wanted = (REPO / "ansible/requirements.yml").read_text()
+        for collection in used:
+            self.assertIn(f"name: {collection}", wanted)
+
     def test_it_runs_on_main_daily_and_by_hand(self):
         on = self.flow[True]
         self.assertEqual(on["push"]["branches"], ["main"])
