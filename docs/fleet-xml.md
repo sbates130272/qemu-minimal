@@ -85,6 +85,9 @@ The container images a stack runs and the guest disk image its guests pull.
 | `<rocjitsu-ref>` | string | (empty) | yes | Container image of the rocjitsu server that emulates each GPU; same build stamp as the QEMU and ernic images. Image reference, repository:tag; required (an empty one stops the render). |
 | `<sdxi-image>` | string | (empty) | yes | Container image of the SDXI device server; required when a guest has an SDXI device. Image reference, repository:tag. Needed when &lt;sdxi-per-vm&gt; is non-zero or &lt;devices&gt; has a server of type sdxi. Not compared with the servers' stamp by the render; its sdxi.&lt;sha7&gt; against the guest's driver commit is a test's check. |
 | `<spdk-image>` | string | (empty) | yes | Container image of the SPDK vfio-user NVMe controller; required when &lt;devices&gt; has a server of type spdk. Image reference, repository:tag. Its vfu.&lt;sha&gt; must equal the one in &lt;qemu-ref&gt;, stamped tag or not. Nothing runs it without a spdk entry in &lt;devices&gt;. |
+| `<doorbell-image>` | string | (empty) | yes | Container image of the vfu-doorbell servers; required when &lt;devices&gt; has a vfu-ringee or vfu-ringer server. Image reference, repository:tag. The image holds /opt/vfu/vfu-doorbell, built on the libvfio-user fork image. Its tag names no vfu.&lt;sha&gt;, so the render cannot hold it to &lt;qemu-ref&gt;'s. Nothing runs it without a vfu-ringee or vfu-ringer entry in &lt;devices&gt;. |
+| `<xio-ref>` | string | (empty) | yes | The rocm-xio branch or tag the xio guest installs, in place of the rocm\_xio\_setup role's own pin. Git branch or tag name. Empty keeps the role's pin. With no &lt;xio-commit&gt; the ref is built as pushed, unchecked, which is how a branch that is still moving is named. |
+| `<xio-commit>` | string | (empty) | yes | The commit &lt;xio-ref&gt; has to be; the role fails when the fetched ref is another commit. 40-character commit id. Needs &lt;xio-ref&gt;. |
 | `<backing-ref>` | string | (empty) | yes | Published guest disk image that gen-vm and quick-start pull as each guest's backing file. OCI reference by dated tag YYYYMMDD.g&lt;sha7&gt; or name@sha256:...; empty pulls nothing. gen-compose refuses no tag, latest, qm.&lt;sha7&gt; and near misses of those, and, in the repository &lt;publish-ref&gt; names, any tag but the dated one. Any other tag must share the servers' stamp, or is warned about if unstamped. gen-vm --bake ignores it. |
 
 ### Network
@@ -254,7 +257,7 @@ a NIC can be given an RDMA backend.
 |---|---|
 | `<devices>` | Lists the vfio-user servers every guest gets, one &lt;server&gt; each; replaces the three per-VM device counts. No attributes, no text; at least one &lt;server&gt;. Later layers merge entries by id, append new ids and cannot remove one. Every guest gets the same list. |
 | `<server>` | One device server every guest gets; its children set that server's backend, config file or options. Requires type and id, and takes no other attribute. Children allowed depend on type; each may appear once unless the option is repeatable. |
-| `<server type=...>` | Kind of server: an ernic NIC, a rocjitsu GPU, an SDXI device or an SPDK NVMe controller. ernic, rocjitsu, sdxi or spdk. The generator refuses more than one spdk a guest, and an spdk with no &lt;spdk-image&gt;. An id cannot change type in a later layer. |
+| `<server type=...>` | Kind of server: an ernic NIC, a rocjitsu GPU, an SDXI device, an SPDK NVMe controller or a vfu-doorbell ringee or ringer. ernic, rocjitsu, sdxi, spdk, vfu-ringee or vfu-ringer. The generator refuses more than one spdk, vfu-ringee or vfu-ringer a guest, an spdk with no &lt;spdk-image&gt;, and a vfu-ringee or vfu-ringer with no &lt;doorbell-image&gt;. An id cannot change type in a later layer. |
 | `<server id=...>` | Names the entry for later layers to merge on and for error messages; does not rename containers or sockets. Starts with a letter; letters, digits, '\_', '.' and '-'; 32 characters at most; unique in the block. |
 
 The children of a `<server>` depend on its type. They may come in any order.
@@ -294,6 +297,16 @@ hold a line break, a tab or a control character.
 | `<namespaces>` | one value, at most once | `NVME_NAMESPACES=VALUE` in the container's environment | The namespaces the SPDK NVMe controller serves, in order; sets the image's NVME\_NAMESPACES. One word, comma list, NSIDs in list order: lba:malloc:SIZE\[:BLOCK\], lba:aio:PATH\[:BLOCK\[:SIZE\]\], kv:mem\[:MAXVAL\[:MAXKEYS\]\]. Image default lba:malloc:512M,kv:mem. |
 | `<serial>` | one value, at most once | `SPDK_SERIAL=VALUE` in the container's environment | Serial number of the SPDK NVMe controller, as the guest sees it; sets the image's SPDK\_SERIAL. 1 to 20 letters, digits, '\_' and '-'. Image default SPDKVFU01. |
 | `<cpumask>` | one value, at most once | `SPDK_CPUMASK=VALUE` in the container's environment | Host cores the SPDK server's poll-mode reactor spins on; sets SPDK\_CPUMASK. Each server takes one full core. Hexadecimal core mask, 0x then 1 to 32 hex digits, such as 0x4. Default 0x1, host CPU 0. One value for every guest's server, so guests share the cores it names. |
+
+### Servers of type `vfu-ringee`
+
+| Element | Shape | Becomes | Description |
+|---|---|---|---|
+
+### Servers of type `vfu-ringer`
+
+| Element | Shape | Becomes | Description |
+|---|---|---|---|
 
 ### Backend types
 

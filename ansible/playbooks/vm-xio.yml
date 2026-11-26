@@ -12,7 +12,9 @@
 # the xio stack's own: the GPU firmware of the rocjitsu serving this guest,
 # and, when asked for with --xio-test, rocm-xio built at its pinned commit,
 # the rocm-xio module, the names /dev/xio-kv and /dev/xio-blk, and the
-# NVMe-oF controller in the second NIC.
+# NVMe-oF controller in the second NIC. With --vfu-doorbell, which brings the
+# stack up with the two vfu-doorbell servers and installs rocm-xio from the
+# branch that has their tools, the guest half of that rig as well.
 
 - name: Bring the xio guest's GPUs up
   hosts: fleet
@@ -147,5 +149,47 @@
           xio: ready on {{ inventory_hostname }}: {{ rocm_xio_setup_seen.stdout_lines | join(', ') }}, {{ rocm_xio_setup_nvmeof_seen.stdout | trim }}, /dev/rocm-xio {{ xio_access.stdout | trim }}
           ```
         dest: "{{ quickstart_artifacts_dir }}/xio.md"
+        mode: "0644"
+      delegate_to: localhost
+
+# Off unless asked for: `quick-start --flavor xio test --vfu-doorbell` passes
+# quickstart_vfu_doorbell=true, and also --xio-test, since the tools build from
+# the checkout that play makes. The stack has to have the two vfu-doorbell
+# servers, which --vfu-doorbell on `up` arranges.
+- name: Make the vfu-doorbell rig ready and check it
+  hosts: fleet
+  gather_facts: true
+  become: true
+  vars:
+    quickstart_vfu_doorbell: false
+    quickstart_artifacts_dir: /var/tmp/quickstart-artifacts
+  tasks:
+    - name: Skip unless the vfu-doorbell rig was asked for
+      ansible.builtin.meta: end_play
+      when: not (quickstart_vfu_doorbell | bool)
+
+    - name: Install the vfu-doorbell tools and the vfu-dma module, and check the rig
+      ansible.builtin.include_role:
+        name: rocm_xio_setup
+        tasks_from: doorbell
+
+    - name: Make the artifacts directory on the controller
+      become: false
+      ansible.builtin.file:
+        path: "{{ quickstart_artifacts_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    - name: Record the result on the controller
+      become: false
+      ansible.builtin.copy:
+        content: |
+          ## vfu-doorbell on {{ inventory_hostname }}
+
+          ```
+          vfu-doorbell: ready on {{ inventory_hostname }}: {{ rocm_xio_setup_doorbell_seen }}
+          ```
+        dest: "{{ quickstart_artifacts_dir }}/vfu-doorbell.md"
         mode: "0644"
       delegate_to: localhost

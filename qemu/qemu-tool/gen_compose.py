@@ -67,6 +67,7 @@ _GRAFANA_DATA_DIR = "/var/lib/qemu-tool/grafana-data"
 # fleet reached id 61 against a 64-node protocol ceiling. See the stack README.
 _NET_ERNIC, _NET_ROCJITSU, _NET_QEMU, _NET_INFRA, _NET_SDXI = 1, 2, 3, 0, 4
 _NET_SPDK = 5
+_NET_RINGEE, _NET_RINGER = 6, 7
 
 # rocm-ernic's topology payload builder caps the mesh here
 # (src/rdma/rdma_backend_tcp.c: `num_nodes < 64`).
@@ -851,6 +852,26 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
             "empty; name the SPDK vfio-user image to run.")
     if count * len(spdk_servers) > 254:
         sys.exit(f"Error: {count} SPDK servers do not fit the stack's /24.")
+    # The doorbell servers are the same shape: a <devices> entry, no count,
+    # and a guest takes one of each.
+    doorbell_servers = {
+        role: [d for d in cfg.devices if d.type == f"vfu-{role}"]
+        for role in _DOORBELL_ROLES}
+    for role, found in doorbell_servers.items():
+        if len(found) > 1:
+            sys.exit(
+                f"Error: <devices> has more than one <server type='vfu-{role}'>; "
+                f"a guest takes one vfu-{role}.")
+        if count * len(found) > 254:
+            sys.exit(f"Error: {count} vfu-{role} servers do not fit the "
+                     "stack's /24.")
+    if any(doorbell_servers.values()):
+        if not cfg.doorbell_ref:
+            sys.exit(
+                "Error: <devices> has a <server type='vfu-ringee'> or 'vfu-ringer' but "
+                "<doorbell-image> is empty; name the image that holds "
+                "/opt/vfu/vfu-doorbell (rocm-xio's CI pushes it to ghcr.io).")
+    _check_xio_pin(cfg.xio_ref, cfg.xio_commit)
     _check_pci_mmio_bridge(cfg)
 
     # The mesh counts rocm-ernic PROCESSES, not VMs. At <ernic-per-vm> > 1 the
@@ -936,6 +957,7 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
     gpus: list[dict[str, Any]] = []
     sdxis: list[dict[str, Any]] = []
     spdks: list[dict[str, Any]] = []
+    doorbells: list[dict[str, Any]] = []
     for index in range(count):
         n = index + 1
         vm_nics = []
@@ -994,10 +1016,20 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
             "env": _option_env(server),
             "id": server.id,
         } for server in spdk_servers]
+        # The ringee first, as _DOORBELL_ROLES has it: the order is the
+        # guest's device order, so its first device is the one being rung.
+        vm_doorbell = [{
+            "n": n, "role": role,
+            "service": f"vfu-{role}-{n}",
+            "addr": f"{net}.{_DOORBELL_OCTET[role]}.{n}",
+            "sock": f"/run/vfu/vfu-{role}-{n}.sock",
+            "id": server.id,
+        } for role in _DOORBELL_ROLES for server in doorbell_servers[role]]
         nics += vm_nics
         gpus += vm_gpus
         sdxis += vm_sdxi
         spdks += vm_spdk
+        doorbells += vm_doorbell
         # The NIC the guest's one address, MAC and stats file are read from:
         # the first on the mesh, which is the one that reaches other guests,
         # else the first. With no <devices> block that is the first NIC.
@@ -1012,6 +1044,7 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
             "gpus": vm_gpus,
             "sdxi": vm_sdxi,
             "spdk": vm_spdk,
+            "doorbell": vm_doorbell,
             # The order the guest sees, and therefore what ends up paired under
             # each switch. When <ernic-per-vm> == <rocjitsu-per-vm> (e.g. MI355X
             # with switch_width=2) this is 1:1 round-robin. When there are
@@ -1024,6 +1057,7 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
             ),
             "sdxi_socks": [x["sock"] for x in vm_sdxi],
             "spdk_socks": [x["sock"] for x in vm_spdk],
+            "doorbell_socks": [x["sock"] for x in vm_doorbell],
             # Aliases to the first device of each kind. Everything that
             # predates multi-device VMs reads these, and at the default of one
             # each they are the only device there is.
@@ -1048,6 +1082,10 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
         "sdxis": sdxis,
         "spdks": spdks,
         "spdk_image": cfg.spdk_ref,
+        "doorbells": doorbells,
+        "doorbell_image": cfg.doorbell_ref,
+        "xio_ref": cfg.xio_ref,
+        "xio_commit": cfg.xio_commit,
         "pci_mmio_bridge": cfg.vm_pci_mmio_bridge,
         "qemu_args": _qemu_args(cfg),
         "ernic_per_vm": ernic_per_vm,
@@ -1104,6 +1142,33 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
         "prom_interval": _setting(cfg, "prom_scrape_interval"),
         "prom_retention": _setting(cfg, "prom_retention"),
     }
+
+
+# The two tools/vfu-doorbell roles, as the binary's --role names them, in the
+# order the guest sees their devices. The server type, the service and the
+# socket are "vfu-<role>". Then the third octet of each one's address.
+_DOORBELL_ROLES = ("ringee", "ringer")
+_DOORBELL_OCTET = {"ringee": _NET_RINGEE, "ringer": _NET_RINGER}
+
+
+def _check_xio_pin(ref: str, commit: str) -> None:
+    """<xio-ref> and <xio-commit> are written into the inventory as the
+    rocm_xio_setup role's own variables, and the role hands them to git and
+    to a shell script. Held to what a ref and a commit can be."""
+    if not ref and not commit:
+        return
+    if not ref:
+        sys.exit(
+            "Error: <xio-commit> is set and <xio-ref> is not. The commit is "
+            "what the ref has to turn out to be; name the branch too.")
+    if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9._/-]*", ref):
+        sys.exit(
+            f"Error: <xio-ref> {ref!r} is not a branch, tag or commit name: "
+            "letters, digits, '.', '_', '/' and '-', not starting with '-'.")
+    if commit and not re.fullmatch(r"[0-9a-f]{40}", commit):
+        sys.exit(
+            f"Error: <xio-commit> {commit!r} is not a 40-character commit id. "
+            f"Leave it out to install {ref} unchecked.")
 
 
 def _positive(n: int, element: str) -> int:
@@ -1607,6 +1672,34 @@ def render_compose(
         out.append("      retries: 60")
         out.append("      start_period: 10s")
 
+    for bell in spec["doorbells"]:
+        n = bell["n"]
+        out.append("")
+        out.append(f"  # ---- VM {n} doorbell {bell['role']} ({bell['id']}) ----")
+        out.append(f"  {bell['service']}:")
+        out.append("    <<: *ernic-common")
+        out.append(f'    image: "{spec["doorbell_image"]}"')
+        out.append("    networks:")
+        out.append("      fleet:")
+        out.append(f"        ipv4_address: {bell['addr']}")
+        out.append('    restart: "no"')
+        # The binary is in the image: rocm-xio's CI builds it there, on the
+        # libvfio-user image it runs in. Nothing is mounted from the host, so
+        # a host with nothing built, or with /tmp cleared, still starts.
+        out.append("    command:")
+        out.append("      - /opt/vfu/vfu-doorbell")
+        out.append("      - --role")
+        out.append(f"      - {bell['role']}")
+        out.append("      - --socket")
+        out.append(f"      - {bell['sock']}")
+        out.append("    healthcheck:")
+        sock_re = bell["sock"].replace(".", "[.]")
+        out.append(f"      test: [\"CMD\", \"sh\", \"-c\", \"grep -qE ' 01 [0-9]+ {sock_re}$' /proc/net/unix\"]")
+        out.append("      interval: 2s")
+        out.append("      timeout: 5s")
+        out.append("      retries: 30")
+        out.append("      start_period: 5s")
+
     for vm in spec["vms"]:
         n = vm["n"]
         out.append("")
@@ -1621,7 +1714,8 @@ def render_compose(
         # Every device this guest attaches, not just the first. QEMU exits if
         # any one vfio-user socket is missing, so a guest that starts while
         # its eighth NIC is still coming up dies outright.
-        for dev in vm["nics"] + vm["gpus"] + vm["sdxi"] + vm["spdk"]:
+        for dev in (vm["nics"] + vm["gpus"] + vm["sdxi"] + vm["spdk"]
+                    + vm["doorbell"]):
             out.append(f"      {dev['service']}:")
             out.append("        condition: service_healthy")
         # Bound to <publish-bind-addr>, loopback unless the fleet says
@@ -1709,7 +1803,8 @@ def render_compose(
             for word in ernic_mtu_qemu_args(spec["ernic_mtu"]):
                 out.append(f"          --qemu-arg={_sh_word(word)} \\")
         all_vfio_socks = (list(vm["vfio_socks"]) + list(vm["sdxi_socks"])
-                          + list(vm["spdk_socks"]))
+                          + list(vm["spdk_socks"])
+                          + list(vm["doorbell_socks"]))
         out.append(f'          --vfio-userdev "{",".join(all_vfio_socks)}"')
 
     out.append("")
@@ -2008,7 +2103,9 @@ def render_compose(
     out.append("  # every reconnect, the restarts walked the fleet toward the")
     out.append("  # 64-node protocol ceiling. Third octet is the service family:")
     out.append(f"  #   {_NET_INFRA} infra   {_NET_ERNIC} ernic   {_NET_ROCJITSU} rocjitsu   {_NET_QEMU} qemu   {_NET_SDXI} sdxi"
-               + (f"   {_NET_SPDK} spdk" if spec["spdks"] else ""))
+               + (f"   {_NET_SPDK} spdk" if spec["spdks"] else "")
+               + (f"   {_NET_RINGEE} vfu-ringee   {_NET_RINGER} vfu-ringer"
+                  if spec["doorbells"] else ""))
     out.append("  fleet:")
     out.append("    driver: bridge")
     out.append("    ipam:")
@@ -2123,6 +2220,13 @@ def render_inventory(spec: dict[str, Any], digest: str) -> str:
     # has no key for a prefix because the ernic L2 segment is flat by
     # construction.
     out.append("        fleet_guest_prefix: 24")
+    if spec["xio_ref"]:
+        # The rocm_xio_setup role's own variables, so that naming a branch
+        # needs nothing between the setting and the role: an inventory var
+        # outranks a role default. With no commit the role builds the ref
+        # unchecked, which is the only thing that turns its check off.
+        out.append(f'        rocm_xio_setup_ref: "{spec["xio_ref"]}"')
+        out.append(f'        rocm_xio_setup_commit: "{spec["xio_commit"]}"')
     out.append("      hosts:")
     for vm in spec["vms"]:
         # Keyed by VM name, the same identifier the vm_name label in

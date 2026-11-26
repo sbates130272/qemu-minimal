@@ -107,6 +107,7 @@ jobs:
             ./usr/share/qemu-tool/packages-minimal
             ./usr/share/qemu-tool/schema/fleet.rng
             ./usr/share/qemu-tool/schema/fleet.xsd
+            ./usr/share/qemu-tool/overlays/vfu-doorbell.xml
           "
           # A stack directory is used verbatim as a `docker compose` working
           # directory, and Docker creates a missing bind-mount source as an

@@ -243,8 +243,12 @@ class Role(unittest.TestCase):
         (find,) = [t for t in tasks
                    if t["name"] == "Find the controller and its namespaces"]
         cmd = find["ansible.builtin.shell"]["cmd"]
-        self.assertIn('[ -b "/dev/${c}n1" ]', cmd)
-        self.assertIn('g="/dev/ng${c#nvme}n2"', cmd)
+        # By NSID, never by instance number: the kernel numbers namespaces
+        # in scan order, so the block one is n1 on one boot and n2 on another.
+        self.assertIn('"$ns/nsid"', cmd)
+        self.assertIn('1) [ -b "/dev/$nm" ]', cmd)
+        self.assertIn('2) [ -c "/dev/ng${nm#nvme}" ]', cmd)
+        self.assertNotIn('${c}n1', cmd)
 
     def test_a_stale_module_in_the_kernel_is_replaced(self):
         (load,) = [t for t in self._tasks("load.yml")
@@ -312,7 +316,9 @@ class Playbook(unittest.TestCase):
         self.assertEqual({p["hosts"] for p in self.plays}, {"fleet"})
 
     def test_firmware_then_the_probe_then_the_build_then_the_load(self):
-        names = [t["name"] for p in self.plays for t in p["tasks"]]
+        # The first two plays: the third is the vfu-doorbell rig's, which has
+        # a task of the same name that records its own result.
+        names = [t["name"] for p in self.plays[:2] for t in p["tasks"]]
         order = [
             "Install the gfx1250 firmware generated from this stack's rocjitsu",
             "Probe amdgpu with the emulation parameters",
@@ -329,7 +335,7 @@ class Playbook(unittest.TestCase):
     def test_rocm_xio_is_installed_only_when_asked_for(self):
         # rocm-xio is not in the golden image and is not installed by a
         # plain run: its play ends at its first task without --xio-test.
-        gpus, xio = self.plays
+        gpus, xio = self.plays[:2]
         self.assertNotIn("rocm_xio_setup", yaml.safe_dump(gpus))
         self.assertIs(xio["vars"]["quickstart_xio_test"], False)
         first = xio["tasks"][0]

@@ -76,11 +76,19 @@
               [ "$(cat "$s/subsysnqn")" = {{ rocm_xio_setup_nvmeof_nqn | quote }} ] || continue
               c=$(basename "$s")
               # The block namespace is a disk; the KV one has only the
-              # generic character device.
+              # generic character device. Say which is which by NSID, not by
+              # the instance number: the kernel numbers the namespaces in
+              # the order they finish scanning, so NSID 1 is nvme<N>n1 on
+              # one boot and nvme<N>n2 on the next.
               block=; kv=
-              [ -b "/dev/${c}n1" ] && block="${c}n1"
-              g="/dev/ng${c#nvme}n2"
-              [ -c "$g" ] && kv=$(basename "$g")
+              for ns in "$s"/nvme*n*; do
+                  [ -r "$ns/nsid" ] || continue
+                  nm=$(basename "$ns")
+                  case "$(cat "$ns/nsid")" in
+                      1) [ -b "/dev/$nm" ] && block="$nm" ;;
+                      2) [ -c "/dev/ng${nm#nvme}" ] && kv="ng${nm#nvme}" ;;
+                  esac
+              done
               if [ -n "$block" ] && [ -n "$kv" ]; then
                   echo "nvmeof=$c block=$block kv=$kv"
                   exit 0

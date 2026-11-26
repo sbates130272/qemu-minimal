@@ -46,7 +46,8 @@ def _xdg_fleet() -> Path:
 
 # The vfio-user servers a <devices> block may describe, in the order the
 # generator numbers and renders them.
-SERVER_TYPES: tuple[str, ...] = ("ernic", "rocjitsu", "sdxi", "spdk")
+SERVER_TYPES: tuple[str, ...] = (
+    "ernic", "rocjitsu", "sdxi", "spdk", "vfu-ringee", "vfu-ringer")
 
 # The options a <server> entry may set, per type: one child element each,
 # named after the server's long option, which is what the generator writes
@@ -80,6 +81,10 @@ SERVER_OPTIONS: dict[str, dict[str, str]] = {
         "serial": "value",
         "cpumask": "value",
     },
+    # The two tools/vfu-doorbell servers from rocm-xio. They take no options:
+    # the role and the socket are all the binary is given.
+    "vfu-ringee": {},
+    "vfu-ringer": {},
 }
 
 # Option elements that set a container environment variable instead of
@@ -111,6 +116,8 @@ _SERVER_SETTINGS = {
     "rocjitsu": ("config",),
     "sdxi": (),
     "spdk": (),
+    "vfu-ringee": (),
+    "vfu-ringer": (),
 }
 
 _SERVER_ID = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,31}\Z")
@@ -149,11 +156,13 @@ DEVICES_HELP: dict[str, tuple[str, str]] = {
         "allowed depend on type; each may appear once unless the option is "
         "repeatable"),
     "server@type": (
-        "Kind of server: an ernic NIC, a rocjitsu GPU, an SDXI device or an"
-        " SPDK NVMe controller",
-        "ernic, rocjitsu, sdxi or spdk. The generator refuses more than one"
-        " spdk a guest, and an spdk with no <spdk-image>. An id cannot "
-        "change type in a later layer"),
+        "Kind of server: an ernic NIC, a rocjitsu GPU, an SDXI device, an"
+        " SPDK NVMe controller or a vfu-doorbell ringee or ringer",
+        "ernic, rocjitsu, sdxi, spdk, vfu-ringee or vfu-ringer. The "
+        "generator refuses more than one spdk, vfu-ringee or vfu-ringer a "
+        "guest, an spdk with no <spdk-image>, and a vfu-ringee or "
+        "vfu-ringer with no <doorbell-image>. An id cannot change type in "
+        "a later layer"),
     "server@id": (
         "Names the entry for later layers to merge on and for error "
         "messages; does not rename containers or sockets",
@@ -251,6 +260,10 @@ SERVER_OPTION_HELP: dict[str, dict[str, tuple[str, str]]] = {
             "0x4. Default 0x1, host CPU 0. One value for every guest's "
             "server, so guests share the cores it names"),
     },
+    # The two doorbell servers take no options: the role and the socket are
+    # all the binary is given.
+    "vfu-ringee": {},
+    "vfu-ringer": {},
 }
 
 # And for each backend type.
@@ -388,6 +401,16 @@ class FleetConfig:
     # The SPDK vfio-user NVMe controller image. A <server type='spdk'> in
     # <devices> is the only thing that runs it.
     spdk_ref: str = ""
+    # The image the doorbell servers run in, which holds
+    # /opt/vfu/vfu-doorbell: rocm-xio's CI builds it on the libvfio-user fork
+    # image. A <server type='vfu-ringee'> or 'vfu-ringer' in <devices> is the
+    # only thing that uses it.
+    doorbell_ref: str = ""
+    # The rocm-xio branch (or tag) the guest installs, and the commit it has
+    # to be. Empty means the role's own pin; a ref with no commit is built
+    # unchecked, which is how a branch that is still moving is named.
+    xio_ref: str = ""
+    xio_commit: str = ""
     backing_ref: str = ""
 
     # ---- Network ----
@@ -638,6 +661,27 @@ _SECTIONS: tuple[_Section, ...] = (
             form="Image reference, repository:tag. Its vfu.<sha> must equal the "
                  "one in <qemu-ref>, stamped tag or not. Nothing runs it without"
                  " a spdk entry in <devices>"),
+        _Setting(
+            "doorbell-image", "doorbell_ref", _STR, sparse=True,
+            help="Container image of the vfu-doorbell servers; required when "
+                 "<devices> has a vfu-ringee or vfu-ringer server",
+            form="Image reference, repository:tag. The image holds "
+                 "/opt/vfu/vfu-doorbell, built on the libvfio-user fork image. "
+                 "Its tag names no vfu.<sha>, so the render cannot hold it to "
+                 "<qemu-ref>'s. Nothing runs it without a vfu-ringee or "
+                 "vfu-ringer entry in <devices>"),
+        _Setting(
+            "xio-ref", "xio_ref", _STR, sparse=True,
+            help="The rocm-xio branch or tag the xio guest installs, in place "
+                 "of the rocm_xio_setup role's own pin",
+            form="Git branch or tag name. Empty keeps the role's pin. With no "
+                 "<xio-commit> the ref is built as pushed, unchecked, which is "
+                 "how a branch that is still moving is named"),
+        _Setting(
+            "xio-commit", "xio_commit", _STR, sparse=True,
+            help="The commit <xio-ref> has to be; the role fails when the "
+                 "fetched ref is another commit",
+            form="40-character commit id. Needs <xio-ref>"),
         _Setting(
             "backing-ref", "backing_ref", _STR, sparse=True,
             help="Published guest disk image that gen-vm and quick-start pull as"

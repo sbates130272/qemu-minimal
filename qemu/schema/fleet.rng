@@ -75,6 +75,24 @@
             </element>
           </optional>
           <optional>
+            <element name="doorbell-image">
+              <a:documentation>Container image of the vfu-doorbell servers; required when &lt;devices&gt; has a vfu-ringee or vfu-ringer server. Image reference, repository:tag. The image holds /opt/vfu/vfu-doorbell, built on the libvfio-user fork image. Its tag names no vfu.&lt;sha&gt;, so the render cannot hold it to &lt;qemu-ref&gt;'s. Nothing runs it without a vfu-ringee or vfu-ringer entry in &lt;devices&gt;.</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="xio-ref">
+              <a:documentation>The rocm-xio branch or tag the xio guest installs, in place of the rocm_xio_setup role's own pin. Git branch or tag name. Empty keeps the role's pin. With no &lt;xio-commit&gt; the ref is built as pushed, unchecked, which is how a branch that is still moving is named.</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="xio-commit">
+              <a:documentation>The commit &lt;xio-ref&gt; has to be; the role fails when the fetched ref is another commit. 40-character commit id. Needs &lt;xio-ref&gt;.</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
             <element name="backing-ref">
               <a:documentation>Published guest disk image that gen-vm and quick-start pull as each guest's backing file. OCI reference by dated tag YYYYMMDD.g&lt;sha7&gt; or name@sha256:...; empty pulls nothing. gen-compose refuses no tag, latest, qm.&lt;sha7&gt; and near misses of those, and, in the repository &lt;publish-ref&gt; names, any tag but the dated one. Any other tag must share the servers' stamp, or is warned about if unstamped. gen-vm --bake ignores it.</a:documentation>
               <ref name="kind.str"/>
@@ -533,7 +551,7 @@
   </define>
   <define name="server">
     <element name="server">
-      <a:documentation>One device server every guest gets; its children set that server's backend, config file or options. Requires type and id, and takes no other attribute. Children allowed depend on type; each may appear once unless the option is repeatable. Kind of server: an ernic NIC, a rocjitsu GPU, an SDXI device or an SPDK NVMe controller. ernic, rocjitsu, sdxi or spdk. The generator refuses more than one spdk a guest, and an spdk with no &lt;spdk-image&gt;. An id cannot change type in a later layer.</a:documentation>
+      <a:documentation>One device server every guest gets; its children set that server's backend, config file or options. Requires type and id, and takes no other attribute. Children allowed depend on type; each may appear once unless the option is repeatable. Kind of server: an ernic NIC, a rocjitsu GPU, an SDXI device, an SPDK NVMe controller or a vfu-doorbell ringee or ringer. ernic, rocjitsu, sdxi, spdk, vfu-ringee or vfu-ringer. The generator refuses more than one spdk, vfu-ringee or vfu-ringer a guest, an spdk with no &lt;spdk-image&gt;, and a vfu-ringee or vfu-ringer with no &lt;doorbell-image&gt;. An id cannot change type in a later layer.</a:documentation>
       <choice>
         <group>
           <attribute name="type">
@@ -706,6 +724,20 @@
               </optional>
             </interleave>
           </mixed>
+        </group>
+        <group>
+          <attribute name="type">
+            <value type="string">vfu-ringee</value>
+          </attribute>
+          <ref name="server.id"/>
+          <text/>
+        </group>
+        <group>
+          <attribute name="type">
+            <value type="string">vfu-ringer</value>
+          </attribute>
+          <ref name="server.id"/>
+          <text/>
         </group>
       </choice>
     </element>

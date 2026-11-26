@@ -335,7 +335,7 @@ as the table is outside it. No shipped fleet has one, and a fleet with none
 renders byte for byte as before. The README's "Settings file" section has
 the user's view; this is what a change to it has to keep true.
 
-- **`type` is `ernic`, `rocjitsu`, `sdxi` or `spdk`** (`SERVER_TYPES`). A
+- **`type` is `ernic`, `rocjitsu`, `sdxi`, `spdk`, `vfu-ringee` or `vfu-ringer`** (`SERVER_TYPES`). A
   new kind of server is a new type there plus its render in
   `gen_compose.py`.
 - **`spdk` is the one type with no count and no command line.** An SPDK
@@ -669,10 +669,10 @@ the XSD has a bullet of its own.
   schema everywhere but on its listed looseness". Others assert each rule
   over all of them, that every key of `xsd_looser()` has a document and no
   document has another key, every order of each type's once-only children
-  with one repeated (265 documents, all three answers), every decimal
+  with one repeated (267 documents, all three answers), every decimal
   digit Python knows in a single integer, an integer one digit past
   `int()`'s limit, and 400 generated addresses. **Every flat setting is
-  held to its kind, whether or not a document sets it**: 18 of the 73 are
+  held to its kind, whether or not a document sets it**: 19 of the 76 are
   in no listed document and no shipped file, and typing one of those as
   another kind, in either renderer, used to pass the suite. One test reads
   each setting's declaration in both rendered schemas (`kind.<kind>` and
@@ -2748,13 +2748,15 @@ GPUs.
 `quick_start.VARIANTS["xio"]` names it, and `quick-start --flavor xio test`
 runs it with the stack's generated inventory.
 
-- **Two plays.** The first always runs: it stages the GPU firmware from
+- **Three plays.** The first always runs: it stages the GPU firmware from
   the live rocjitsu (`rocjitsu_setup`'s `firmware` tasks), probes amdgpu
   and waits for both GPUs in the KFD topology. The second installs rocm-xio
   and checks it, and is **off unless `--xio-test` is given**: its gate is
   `quickstart_xio_test`, false in the play, and its first task ends the
   play. rocm-xio is not in the golden image, by the owner's decision of
-  2026-11-20, so a plain `test` builds nothing.
+  2026-11-20, so a plain `test` builds nothing. The third is the
+  vfu-doorbell rig's guest half, off unless `--vfu-doorbell` is given; see
+  "The vfu-doorbell overlay".
 - **`--xio-test`** (`state.xio_test`) passes `quickstart_xio_test=true`. It
   is refused, before anything starts, on a flavor whose playbook is not
   `vm-xio.yml` (`_check_xio_test`), and ignored with a note on a verb that
@@ -2874,6 +2876,131 @@ with a guest attached; the stack on any other host or in CI
 (`Gen Compose Check` renders it and nothing boots it); `ansible-lint` in CI
 on the new role (locally it reports only the `schema[meta]` finding for
 `noble` that this host reports for every role).
+
+### The vfu-doorbell overlay
+
+`qemu/overlays/vfu-doorbell.xml` is an overlay, not a fifth stack: it adds a
+`vfu-ringee` and a `vfu-ringer` to `xio.xml`'s `<devices>` (rocm-xio's
+`tools/vfu-doorbell` servers) and nothing else. There is no
+`qemu/compose/vfu-doorbell/`. **`qemu-tool quick-start --flavor xio
+--vfu-doorbell` is the way to use it** (below); to render it by hand, to a
+directory of your own: `gen-compose --xml qemu/stacks/xio.xml --xml
+qemu/overlays/vfu-doorbell.xml --output-dir <dir>`.
+
+- **Why an overlay and not entries in `xio.xml`.** The servers run from an
+  image rocm-xio's CI has to have pushed (below). In the committed `xio.xml`
+  a host that cannot pull it would have the default xio guest wait on two
+  servers that never start.
+- **The servers' binary is in `<doorbell-image>`, built by rocm-xio's CI.**
+  `.github/workflows/vfu-doorbell-image.yml` and `tools/vfu-doorbell/Dockerfile`
+  in ROCm/rocm-xio build `/opt/vfu/vfu-doorbell` on the libvfio-user fork image
+  and push `ghcr.io/rocm/rocm-xio-vfu-doorbell`, tagged with the commit and
+  with the branch name (slashes made hyphens; that tag moves). Nothing is built
+  or mounted on the host, which is the point: a host-mounted `/tmp` directory
+  was cleared by a WSL restart and Docker then created it empty and root-owned.
+  The image is pulled at the first `up`, so the package has to be public. It
+  is, and the workflow has run: `:feat-vfu-doorbell` was pulled and its servers
+  ran healthy in a stack on 2026-11-25. The workflow only runs on changes to
+  `tools/vfu-doorbell/**`, `kernel/vfu-dma/**` and itself, so a commit that
+  touches rocm-xio elsewhere does not rebuild it.
+- **Like `spdk`, a guest takes one of each**, with no count and no option
+  elements. They are the only server types with an empty `SERVER_OPTIONS`
+  table, which is why the help-fixture test skips an empty table. The ringee
+  is the first of the two on `--vfio-userdev`, after SPDK's socket, because the
+  order is the guest's device order. Services and sockets are `vfu-<role>-<n>`
+  (`/run/vfu/vfu-ringee-1.sock`), though the binary's `--role` stays `ringee`
+  or `ringer`, and addresses `.6.<n>` and `.7.<n>`.
+- **`<doorbell-image>` is built on the fork's libvfio-user, `vfu.3719c3a`**,
+  which has `vfu_mmio_write` and is the revision `xio.xml`'s QEMU is built
+  against. Its CI tag names no `vfu.<sha>`, so `_check_image_coherence` cannot
+  hold it to QEMU's and does not look at it. A base image that differs from
+  QEMU's is the thing to suspect first if a ringer write fails on the wire.
+  The base is a build argument of rocm-xio's `tools/vfu-doorbell/Dockerfile`,
+  and has to be a public image: the `vfu-mmio-write` image this once named
+  existed only in one developer's local Docker cache, which CI cannot pull.
+- **The ringer needs a QEMU whose `vfio_user_dma_write` dispatches to MMIO**
+  (the fork, from `c88c83ebe2`). Stock rejects it and every ringer write fails
+  with `ENODEV`. **The `<qemu-ref>` `xio.xml` pins has it**: `vfu-ring
+  selftest` passed all six ringer scenarios, ringer writes into the ringee's
+  BAR with 0 failures, on 2026-11-25. The old rig ran a locally built
+  `peer-mmio` branch.
+- **`quick-start --flavor xio --vfu-doorbell` does all of it, with no ansible
+  to run by hand.** It is a flag of the xio flavor, refused on any other
+  (`_check_vfu_doorbell`), and it implies `--xio-test`, since the tools build
+  from the checkout that play makes. On `up` and `all` it copies the shipped
+  overlay into the stack directory as the layer `overlay-vfu-doorbell.xml`
+  (`_set_doorbell_layer`, first in `_LAYER_ORDER`), so `up` and `test`, two
+  processes, agree; an `up` without the flag takes a layer an earlier run
+  left away, so a stack does not keep the rig by accident. `test` with the
+  flag reads the rendered compose file and refuses a stack with no `vfu-ringee`
+  and `vfu-ringer` service (`_check_doorbell_stack`), however it got them. It
+  passes `quickstart_vfu_doorbell=true`, and a run that was asked for it and
+  left no `vfu-doorbell: ` line in `<artifacts>/vfu-doorbell.md` fails
+  (`_vfu_recorded`).
+- **The overlay ships.** `qemu/overlays/` is a package of its own
+  (`qemu_tool.share.overlays`, one entry in the wheel's allow-list and one
+  line in the `.deb`'s install list, both checked in CI), because the flag
+  reads the overlay from the install and an installed tool has no checkout.
+  `resources.overlay_fleet()` finds it. **An XML comment cannot contain
+  `--`**: the overlay writes the flags as `-\-flavor` for that reason, and
+  the file is parsed on every `up`.
+- **The guest half is `rocm_xio_setup`'s `doorbell` tasks**, the third play of
+  `vm-xio.yml`, off unless `quickstart_vfu_doorbell` is true. It builds
+  `vfu-ring` and the `vfu-dma` DKMS module in the guest from the rocm-xio
+  checkout the role makes at `/usr/local/src/rocm-xio`, installs `vfu-ring` and
+  `vfu-driver-select` in `/usr/local/bin`, requires the ringee and the ringer
+  (`1de0:0001`, `1de0:0002`), sets bus mastering on the ringer, and runs
+  `vfu-ring selftest` (two seconds). The module is built every run and never
+  loaded: `vfu-driver-select`, run in the guest, loads it and binds the
+  ringer. The servers come from the image, and nothing checks that image and
+  the guest's tools are the same commit (the overlay names the branch for
+  both), so the result line carries the guest's. There was a standalone
+  playbook for this, `vfu-doorbell-guest.yml`; it is deleted, since a second
+  way in is a second thing to keep right. Do not
+  poll the ringer over MMIO while a job runs: its write waits on the socket
+  that also carries the guest's accesses to it, and both stall until QEMU's
+  message timeout. `vfu-ring` has the ringer store a completion word into
+  guest RAM, which it polls instead. Restarting one server does not give the
+  guest its device back; recreate the stack.
+- **The overlay also names the rocm-xio the guest installs**, with
+  `<xio-ref>feat/vfu-doorbell</xio-ref>` and no `<xio-commit>`. See below.
+- **Checked:** the render, `docker compose config` and the unit tests. And on
+  2026-11-25, on one guest of the xio stack with the overlay, the dev host:
+  both servers healthy and both devices in the guest (`06:00.0` `1de0:0001`,
+  `07:00.0` `1de0:0002`); rocm-xio from `feat/vfu-doorbell` built in the guest
+  (`xio-tester` for gfx1250 after rocm-xio's `s_wait_storecnt` change, and the
+  `rocm-xio` module on kernel 7.2.6, whose `dma_buf_attach_ops` renamed
+  `move_notify` to `invalidate_mappings`); `vfu-dma` built with DKMS and loaded
+  on 7.2.6; and **`quick-start --flavor xio --vfu-doorbell test`, twice, exit
+  0**, 1 m 24 s, ending `vfu-doorbell: ready on xio-1: ringee=1de0:0001,
+  ringer=1de0:0002, rocm-xio=af494a9e745d, selftest passed`, with all twelve
+  scenarios of `vfu-ring selftest` passing (the ringer bound to `vfu-dma`, no
+  IOMMU). **Not run:** `up --vfu-doorbell` end to end. The layer is
+  unit-tested and `generate_stack` renders it (both servers, the image and
+  `rocm_xio_setup_ref` in the inventory), but the stack the live runs used was
+  brought up by hand with `--xml`. Also not run: the guest under a translating IOMMU, `vfu-driver-select vfio` and
+  `physical`, and any lane.
+
+**`<xio-ref>` and `<xio-commit>` name what the xio guest installs.** They are
+flat sparse settings, and `gen-compose` writes them into the inventory as
+`rocm_xio_setup_ref` and `rocm_xio_setup_commit`, the role's own variables:
+an inventory var outranks a role default, so nothing in `vm-xio.yml` or the
+role changes and `quick-start --flavor xio --xio-test` picks them up.
+
+- **With neither set the inventory carries nothing** and the role keeps its
+  pin, so every committed stack renders byte for byte as before.
+- **A ref with no commit is built unchecked.** The role's empty commit is
+  the only thing that turns its moved-branch check off, and `<xio-ref>` with
+  no `<xio-commit>` renders exactly that. A commit with no ref is refused at
+  render time, and so is anything that is not a plausible ref or a
+  40-character commit id, since both reach git and a shell script.
+- **A changed ref or commit rebuilds; a moved branch does not.** The role
+  records `ref` and `commit_required` and builds when they differ from the
+  record. An unpinned branch that has since been pushed to looks the same, so
+  pick the new commit up with `-e rocm_xio_setup_force=true`, or pin it.
+- **The branch has to build as the role builds it**: `xio-tester` and the
+  `rocm-xio` kernel module, with ROCm and the kernel headers in the guest.
+  `feat/vfu-doorbell` building that way is **not established**.
 
 ## `qemu-tool check`
 
@@ -7797,11 +7924,11 @@ interfaces.
   private names off (`filters: ["!^_"]`); members in source order;
   signatures separate, with annotations; source on.
   `show_if_no_docstring: true`, so a public function with no docstring is
-  listed with its signature and source: 48 of the 140 public top-level
+  listed with its signature and source: 48 of the 141 public top-level
   functions and classes have none, and `caps`, `cli`, `list_vms`, `qcow`
   and `shutdown` would otherwise show no member at all. Module constants and
   dataclass fields are listed for the same reason, which is what makes
-  `FleetConfig` 74 entries long. `tests/test_api_docs.py` holds those
+  `FleetConfig` 77 entries long. `tests/test_api_docs.py` holds those
   three numbers, and the count of pages, to the tree.
 - **Nothing is silenced.** The build is `--strict` and logs no warning;
   no griffe or mkdocs message is filtered.

@@ -204,10 +204,11 @@ class Switches(unittest.TestCase):
         self.assertEqual(flags, {"--rdma-duration", "--nvme-duration",
                                  "--sdxi-test", "--p4-test", "--p4-iters",
                                  "--hipfile-test", "--xio-test",
+                                 "--vfu-doorbell",
                                  "--rocm-rdma-test", "--rocm-rdma-mode"})
         by_flag = {a.option_strings[0]: a for a in group._group_actions}
         for flag in ("--sdxi-test", "--p4-test", "--hipfile-test",
-                     "--xio-test", "--rocm-rdma-test"):
+                     "--xio-test", "--vfu-doorbell", "--rocm-rdma-test"):
             with self.subTest(flag):
                 self.assertIn("Off by default", by_flag[flag].help)
         # All of them, the sizing switch and the mode included: their

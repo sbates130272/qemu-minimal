@@ -22,6 +22,7 @@ from pathlib import Path
 SHARE = "qemu_tool.share"
 COMPOSE = "qemu_tool.share.compose"
 STACKS = "qemu_tool.share.stacks"
+OVERLAYS = "qemu_tool.share.overlays"
 PACKAGES_D = "qemu_tool.share.packages_d"
 CHECKS_D = "qemu_tool.share.checks_d"
 
@@ -37,6 +38,11 @@ def shipped_path(directory: str, package: str, *parts: str) -> Path | None:
         if candidate.exists():
             return candidate
     return packaged_path(package, *parts)
+
+
+def overlay_fleet(name: str) -> Path | None:
+    """A fleet overlay shipped with the tool: overlays/<name>.xml."""
+    return shipped_path("overlays", OVERLAYS, f"{name}.xml")
 
 
 def stack_fleet(stack: str) -> Path | None:

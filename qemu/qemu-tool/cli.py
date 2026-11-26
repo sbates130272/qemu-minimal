@@ -375,7 +375,8 @@ def _add_quick_start(sub: argparse._SubParsersAction) -> None:
             "for rocm-xio, with 2 gfx1250 GPUs, two rocm-ernic NICs (one "
             "on the loopback backend, one serving NVMe-oF), an NVMe behind "
             "pci-mmio-bridge and an SPDK NVMe-KV controller; --xio-test "
-            "installs rocm-xio in it."
+            "installs rocm-xio in it, and --vfu-doorbell adds the "
+            "vfu-doorbell rig."
         ),
     )
     g.add_argument(
@@ -528,6 +529,22 @@ def _add_quick_start(sub: argparse._SubParsersAction) -> None:
             "stages the GPU firmware and probes amdgpu, and builds "
             "nothing. Refused on any other flavor. Only meaningful with "
             "the test or all verbs."
+        ),
+    )
+    g.add_argument(
+        "--vfu-doorbell", action="store_true", default=False,
+        help=(
+            "Off by default. On the xio flavor, add rocm-xio's vfu-doorbell "
+            "rig: the ringee and the ringer, two more vfio-user devices in "
+            "the guest, run from the image <doorbell-image> names. The up "
+            "and all verbs layer the two servers onto the stack, and the "
+            "test and all verbs install rocm-xio from the branch that has "
+            "the tools (implying --xio-test), build vfu-ring and the "
+            "vfu-dma module in the guest, install vfu-ring and "
+            "vfu-driver-select, and require both devices. Give it to the "
+            "up (or all) verb that brings the stack up, and again to test. "
+            "Refused on any other flavor, and by test on a stack brought "
+            "up without it."
         ),
     )
     g.add_argument(
@@ -1712,6 +1729,7 @@ def _quick_start_cmd(args: argparse.Namespace) -> None:
         rocm_rdma_mode=args.rocm_rdma_mode,
         hipfile_test=args.hipfile_test,
         xio_test=args.xio_test,
+        vfu_doorbell=args.vfu_doorbell,
         variant=args.variant,
     )
 

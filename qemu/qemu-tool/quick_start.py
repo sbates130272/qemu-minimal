@@ -58,7 +58,7 @@ from .gen_compose import FORK_MARK as _FORK_MARK, pins_fork_qemu
 from .gen_compose import run as gen_compose_run
 from .gen_vm import run as gen_vm_run
 from .ports import is_loopback, port_bindable, reach_name
-from .resources import STACKS as _STACKS_PACKAGE, shipped_path
+from .resources import STACKS as _STACKS_PACKAGE, overlay_fleet, shipped_path
 
 VERBS = ("all", "preflight", "up", "test", "report", "down", "logs")
 
@@ -210,6 +210,10 @@ class _State:
     hipfile_test: bool = False
     # The rocm-xio install-and-check play of vm-xio.yml, off unless asked.
     xio_test: bool = False
+    # The vfu-doorbell rig: the two servers layered onto the stack, and the
+    # play of vm-xio.yml that installs and checks the guest half. Implies
+    # xio_test, since the tools build from the checkout that play makes.
+    vfu_doorbell: bool = False
 
     # ---- convenience readers -------------------------------------------
     @property
@@ -436,8 +440,16 @@ def _resolve_key_dir(requested: Path, explicit: bool) -> Path:
 # had been moved, or whose images directory had been relocated, went back to
 # the original values half way through and waited for SSH on a port no guest
 # was published on.
-_LAYER_ORDER = ("overlay-sized.xml", "overlay-images.xml", "overlay-ports.xml",
+_LAYER_ORDER = ("overlay-vfu-doorbell.xml", "overlay-sized.xml",
+                "overlay-images.xml", "overlay-ports.xml",
                 "overlay-metrics.xml", "overlay-image-login.xml")
+
+# The shipped overlay --vfu-doorbell layers onto the xio stack, and the layer
+# it is copied to beside the stack. A copy, not a path to the shipped file:
+# `up` and `test` are separate processes, and _rescan_layers finds the layers
+# of an earlier one by looking in the stack directory.
+_DOORBELL_OVERLAY = "vfu-doorbell"
+_DOORBELL_LAYER = "overlay-vfu-doorbell.xml"
 
 
 def _rescan_layers(state: _State) -> None:
@@ -469,6 +481,29 @@ def _write_layer(state: _State, name: str, body: dict[str, str], why: str) -> No
     path.write_text("\n".join(lines) + "\n")
     # _rescan_layers parses strictly, so a misspelt element here is an error
     # rather than an override that silently never applies.
+    _rescan_layers(state)
+
+
+def _set_doorbell_layer(state: _State, on: bool) -> None:
+    """Layer the vfu-doorbell servers onto the stack, or take them off.
+
+    The overlay is the shipped qemu/overlays/vfu-doorbell.xml, copied into the
+    stack directory: it holds a <devices> block, which _write_layer's flat
+    elements cannot. Taken off when --vfu-doorbell is not given, so a stack
+    that was once brought up with the rig does not keep it by accident.
+    """
+    path = state.stack_dir / _DOORBELL_LAYER
+    if not on:
+        if path.is_file():
+            path.unlink()
+            _rescan_layers(state)
+        return
+    shipped = overlay_fleet(_DOORBELL_OVERLAY)
+    if shipped is None:
+        _die(f"qemu/overlays/{_DOORBELL_OVERLAY}.xml is missing from this "
+             "install; --vfu-doorbell needs it")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(shipped.read_text())
     _rescan_layers(state)
 
 
@@ -1414,6 +1449,50 @@ def _check_xio_test(state: _State) -> None:
          "qemu-tool quick-start --flavor xio test --xio-test")
 
 
+def _check_vfu_doorbell(state: _State) -> None:
+    """Refuse --vfu-doorbell where there is no rocm-xio play to carry it."""
+    if not state.vfu_doorbell or state.playbook == _XIO_PLAYBOOK:
+        return
+    runs = (f"runs {state.playbook}" if state.playbook
+            else "runs no playbook")
+    _die(f"--vfu-doorbell: this flavor {runs}, which has no vfu-doorbell "
+         f"play. It is a play of {_XIO_PLAYBOOK}, which the xio flavor runs: "
+         "qemu-tool quick-start --flavor xio --vfu-doorbell")
+
+
+def _check_doorbell_stack(state: _State) -> None:
+    """Refuse `test --vfu-doorbell` on a stack with no doorbell servers.
+
+    The play checks the two devices in the guest, and a stack brought up
+    without them fails that check a minute in, with a message about PCI ids.
+    Read from the rendered compose file, so a stack that got the servers some
+    other way (an --xml overlay) passes.
+    """
+    compose = state.stack_dir / "docker-compose.yml"
+    try:
+        text = compose.read_text()
+    except OSError:
+        return
+    if "vfu-ringee-" in text and "vfu-ringer-" in text:
+        return
+    _die("--vfu-doorbell: the stack in "
+         f"{state.stack_dir} has no vfu-ringee and vfu-ringer servers; it was "
+         "brought up without them. Bring it down and up again with the flag: "
+         f"qemu-tool quick-start --flavor {state.variant} down, then "
+         f"qemu-tool quick-start --flavor {state.variant} --vfu-doorbell")
+
+
+def _vfu_recorded(state: _State) -> str:
+    """What the vfu-doorbell play left on the controller, or '' when nothing."""
+    path = state.artifacts / "vfu-doorbell.md"
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        return ""
+    return next((l.strip() for l in lines if l.startswith("vfu-doorbell: ")),
+                "")
+
+
 def _xio_recorded(state: _State) -> str:
     """What the rocm-xio play left on the controller, or '' when nothing."""
     path = state.artifacts / "xio.md"
@@ -1587,6 +1666,8 @@ def _playbook_command(state: _State) -> list[str]:
         cmd += ["-e", "quickstart_hipfile_test=true"]
     if state.xio_test:
         cmd += ["-e", "quickstart_xio_test=true"]
+    if state.vfu_doorbell:
+        cmd += ["-e", "quickstart_vfu_doorbell=true"]
     if state.rocm_rdma_test:
         cmd += ["-e", "quickstart_rocm_rdma=true"]
         if state.rocm_rdma_mode is not None:
@@ -1627,6 +1708,12 @@ def configure_and_test(state: _State) -> None:
         if not seen:
             _die("--xio-test was asked for and the playbook left no "
                  f"result in {state.artifacts / 'xio.md'}")
+        _say(seen)
+    if state.vfu_doorbell:
+        seen = _vfu_recorded(state)
+        if not seen:
+            _die("--vfu-doorbell was asked for and the playbook left no "
+                 f"result in {state.artifacts / 'vfu-doorbell.md'}")
         _say(seen)
     if not counted:
         _say(f"{state.playbook} finished; it runs no RDMA test between guests")
@@ -2004,6 +2091,10 @@ def _summary(state: _State) -> None:
         print(f"      qemu-tool quick-start{flavor} test --xio-test")
         print("                                        "
               "# install rocm-xio in the guest and check it")
+        if not state.vfu_doorbell:
+            print(f"      qemu-tool quick-start{flavor} --vfu-doorbell")
+            print("                                        "
+                  "# the same with the vfu-doorbell ringee and ringer")
     elif state.playbook is not None:
         print(f"      qemu-tool quick-start{flavor} test")
         print(f"                                        # run {state.playbook} again")
@@ -2051,6 +2142,7 @@ def run(
     rocm_rdma_mode: str | None = None,
     hipfile_test: bool = False,
     xio_test: bool = False,
+    vfu_doorbell: bool = False,
 ) -> None:
     fleet_stem, stack_stem, key_stem, playbook = VARIANTS[variant]
 
@@ -2094,7 +2186,9 @@ def run(
         rocm_rdma_test=rocm_rdma_test,
         rocm_rdma_mode=rocm_rdma_mode,
         hipfile_test=hipfile_test,
-        xio_test=xio_test,
+        # The doorbell tools build from the checkout the rocm-xio play makes.
+        xio_test=xio_test or vfu_doorbell,
+        vfu_doorbell=vfu_doorbell,
         playbook=playbook,
         variant=variant,
     )
@@ -2102,6 +2196,12 @@ def run(
     # what makes `up` then `test` -- two processes, as the CI lane runs them
     # -- agree about the ports, the images directory and the account.
     _rescan_layers(state)
+
+    # `up` and `all` decide whether the stack has the doorbell servers; `test`
+    # and the rest take it as they find it, as they do the ports.
+    if verb in ("all", "up"):
+        _check_vfu_doorbell(state)
+        _set_doorbell_layer(state, vfu_doorbell)
 
     if images is not None:
         _write_layer(state, "overlay-images.xml",
@@ -2120,11 +2220,16 @@ def run(
     # switches, and say so: silence there reads as the test having been run.
     if verb in ("all", "test"):
         _check_xio_test(state)
+        _check_vfu_doorbell(state)
+        if verb == "test" and vfu_doorbell:
+            _check_doorbell_stack(state)
         _check_optional_tests(state)
         _check_mesh_tests(state)
     else:
         given = [flag for flag, on in (
             ("--xio-test", xio_test),
+            # `up` is where the servers are layered onto the stack.
+            ("--vfu-doorbell", vfu_doorbell and verb != "up"),
             ("--sdxi-test", sdxi_test),
             ("--p4-test", p4_test),
             ("--p4-iters", p4_iters is not None),

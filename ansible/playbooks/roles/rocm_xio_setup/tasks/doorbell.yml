@@ -1,0 +1,207 @@
+---
+# The guest half of the vfu-doorbell rig, from the rocm-xio checkout this
+# role makes (rocm_xio_setup_source_dir): the vfu-ring tool, vfu-driver-select
+# and the vfu-dma kernel module, and a check that the ringee and the ringer
+# are there. Run after the role's main tasks, as root, on a guest of a stack
+# that has the two vfu-doorbell servers (qemu/overlays/vfu-doorbell.xml, which
+# `qemu-tool quick-start --flavor xio --vfu-doorbell` layers on).
+#
+# The servers are not built here: they run on the host, from the image
+# <doorbell-image> names, which rocm-xio's CI builds from the same branch.
+# This only installs and checks what the guest runs.
+#
+# The play that includes this reads rocm_xio_setup_doorbell_seen.
+
+- name: Look for the doorbell tools in the rocm-xio checkout
+  ansible.builtin.stat:
+    path: "{{ rocm_xio_setup_source_dir }}/tools/vfu-doorbell/CMakeLists.txt"
+  register: rocm_xio_setup_doorbell_tools
+
+- name: Fail unless the checkout has the doorbell tools
+  ansible.builtin.assert:
+    that:
+      - rocm_xio_setup_doorbell_tools.stat.exists
+    fail_msg: >-
+      {{ rocm_xio_setup_source_dir }}/tools/vfu-doorbell is not in the guest.
+      The rocm-xio the role built does not have it: the branch it installs is
+      {{ rocm_xio_setup_ref }}, and the doorbell tools are on the
+      feat/vfu-doorbell branch. Set <xio-ref> to it, which is what
+      qemu/overlays/vfu-doorbell.xml does.
+
+# The role's own record of what it built; the checkout is root's, so git
+# would refuse it for anyone else.
+- name: Read the record of the rocm-xio build
+  ansible.builtin.slurp:
+    path: "{{ rocm_xio_setup_stamp }}"
+  register: rocm_xio_setup_doorbell_record
+
+- name: Install the build tools
+  ansible.builtin.apt:
+    name: "{{ rocm_xio_setup_doorbell_packages }}"
+    state: present
+
+# vfu-ring is the one target that needs no libvfio-user: the CMake project
+# skips the vfu-doorbell server where that library is not found.
+- name: Build vfu-ring
+  ansible.builtin.shell:
+    cmd: |
+      set -e
+      cmake -S {{ rocm_xio_setup_source_dir }}/tools/vfu-doorbell \
+          -B {{ rocm_xio_setup_doorbell_build_dir }} \
+          -DCMAKE_BUILD_TYPE=Release >/dev/null
+      cmake --build {{ rocm_xio_setup_doorbell_build_dir }} \
+          --target vfu-ring -j"$(nproc)"
+    executable: /bin/bash
+  changed_when: true
+
+- name: Install vfu-ring
+  ansible.builtin.copy:
+    src: "{{ rocm_xio_setup_doorbell_build_dir }}/vfu-ring"
+    dest: "{{ rocm_xio_setup_bin_dir }}/vfu-ring"
+    mode: "0755"
+    remote_src: true
+
+- name: Install vfu-driver-select
+  ansible.builtin.copy:
+    src: "{{ rocm_xio_setup_source_dir }}/tools/vfu-doorbell/vfu-driver-select"
+    dest: "{{ rocm_xio_setup_bin_dir }}/vfu-driver-select"
+    mode: "0755"
+    remote_src: true
+
+# The vfu-dma module gives the ringer bus addresses from the DMA API, so
+# vfu-ring works under a translating IOMMU. It is built every run and loaded
+# never: vfu-driver-select, run in the guest as root, loads it and binds the
+# ringer.
+- name: Look for kernel headers for the running kernel
+  ansible.builtin.stat:
+    path: "/lib/modules/{{ ansible_facts['kernel'] }}/build/Makefile"
+  register: rocm_xio_setup_doorbell_headers
+
+- name: Fail unless kernel headers are installed for the running kernel
+  ansible.builtin.assert:
+    that:
+      - rocm_xio_setup_doorbell_headers.stat.exists
+    fail_msg: >-
+      No kernel headers for {{ ansible_facts['kernel'] }} (no
+      /lib/modules/{{ ansible_facts['kernel'] }}/build). The vfu-dma module
+      builds against them. For an Ubuntu mainline kernel, install the matching
+      linux-headers-*_all.deb and linux-headers-*-generic_*_amd64.deb from
+      https://kernel.ubuntu.com/mainline/ in the guest, then rerun.
+
+- name: Create the DKMS source directory
+  ansible.builtin.file:
+    path: "/usr/src/vfu-dma-{{ rocm_xio_setup_doorbell_dkms_version }}"
+    state: directory
+    mode: "0755"
+
+- name: Copy the vfu-dma sources
+  ansible.builtin.copy:
+    src: "{{ rocm_xio_setup_source_dir }}/kernel/vfu-dma/{{ item }}"
+    dest: "/usr/src/vfu-dma-{{ rocm_xio_setup_doorbell_dkms_version }}/{{ item }}"
+    mode: "0644"
+    remote_src: true
+  loop:
+    - vfu-dma.c
+    - vfu-dma-uapi.h
+    - Makefile
+    - dkms.conf
+  register: rocm_xio_setup_doorbell_dkms_files
+
+- name: Set the DKMS package version
+  ansible.builtin.replace:
+    path: "/usr/src/vfu-dma-{{ rocm_xio_setup_doorbell_dkms_version }}/dkms.conf"
+    regexp: "#MODULE_VERSION#"
+    replace: "{{ rocm_xio_setup_doorbell_dkms_version }}"
+
+# Rebuild when the sources changed or the module is not installed yet. A
+# loaded copy keeps running until vfu-driver-select physical unloads it.
+- name: Build and install the vfu-dma module with DKMS
+  ansible.builtin.shell:
+    cmd: |
+      set -e
+      pkg=vfu-dma/{{ rocm_xio_setup_doorbell_dkms_version }}
+      status=$(dkms status "$pkg")
+      if [ "{{ rocm_xio_setup_doorbell_dkms_files.changed }}" != "True" ] \
+          && [ "${status#*installed}" != "$status" ]; then
+        exit 0
+      fi
+      dkms remove "$pkg" --all >/dev/null 2>&1 || true
+      dkms add "$pkg"
+      dkms build "$pkg"
+      dkms install "$pkg"
+      echo changed
+    executable: /bin/bash
+  register: rocm_xio_setup_doorbell_dkms
+  changed_when: "'changed' in rocm_xio_setup_doorbell_dkms.stdout"
+
+# The devices are plain PCI functions with vendor 1de0 and no driver; the
+# tool maps their BARs through sysfs.
+- name: Find the ringee and the ringer
+  ansible.builtin.command:
+    cmd: "lspci -n -d 1de0:"
+  register: rocm_xio_setup_doorbell_lspci
+  changed_when: false
+
+- name: Fail unless both devices are there
+  ansible.builtin.assert:
+    that:
+      - "'1de0:0001' in rocm_xio_setup_doorbell_lspci.stdout"
+      - "'1de0:0002' in rocm_xio_setup_doorbell_lspci.stdout"
+    fail_msg: >-
+      Expected the ringee (1de0:0001) and the ringer (1de0:0002); lspci shows:
+      {{ rocm_xio_setup_doorbell_lspci.stdout }}. The stack has to have the
+      two vfu-doorbell servers: bring it up with
+      `qemu-tool quick-start --flavor xio --vfu-doorbell`.
+
+# The ringer writes by DMA, and QEMU only lets a device DMA to another
+# device's registers once PCI Bus Master Enable is set, which no driver does
+# here. A fresh guest has it clear and every ringer write then fails with
+# ENODEV. Setting it is idempotent.
+- name: Enable bus mastering on the ringer
+  ansible.builtin.command:
+    cmd: setpci -d 1de0:0002 COMMAND=0x4:0x4
+  changed_when: false
+
+- name: Read the ringer's command register back
+  ansible.builtin.command:
+    cmd: setpci -d 1de0:0002 COMMAND
+  register: rocm_xio_setup_doorbell_command
+  changed_when: false
+
+- name: Fail unless bus mastering is on
+  ansible.builtin.assert:
+    that:
+      - "(rocm_xio_setup_doorbell_command.stdout | trim | int(base=16)) % 8 >= 4"
+    fail_msg: >-
+      Bus Master Enable did not stick on the ringer: COMMAND is
+      {{ rocm_xio_setup_doorbell_command.stdout | trim }}
+
+- name: Show what the tool sees
+  ansible.builtin.command:
+    cmd: "{{ rocm_xio_setup_bin_dir }}/vfu-ring info"
+  register: rocm_xio_setup_doorbell_info
+  changed_when: false
+
+- name: Report the tool's view
+  ansible.builtin.debug:
+    msg: "{{ rocm_xio_setup_doorbell_info.stdout_lines }}"
+
+# vfu-ring runs scenarios against the two devices, the CPU writing and then
+# the ringer writing into the ringee, and exits non-zero when one fails. It
+# takes about two seconds, and it is the check that a write really lands.
+- name: Run the built-in scenarios
+  ansible.builtin.command:
+    cmd: "{{ rocm_xio_setup_bin_dir }}/vfu-ring selftest"
+  register: rocm_xio_setup_doorbell_selftest
+  changed_when: false
+
+- name: Report the scenarios
+  ansible.builtin.debug:
+    msg: "{{ rocm_xio_setup_doorbell_selftest.stdout_lines }}"
+
+- name: Say what the doorbell rig has
+  ansible.builtin.set_fact:
+    rocm_xio_setup_doorbell_seen: >-
+      ringee=1de0:0001, ringer=1de0:0002,
+      rocm-xio={{ (rocm_xio_setup_doorbell_record.content | b64decode | from_json).commit[:12] }},
+      selftest passed

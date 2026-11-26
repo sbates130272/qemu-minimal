@@ -393,8 +393,10 @@ verb runs
 .IR vm\-xio.yml ,
 which stages the GPU firmware and probes amdgpu; with
 .B \-\-xio\-test
-it also installs rocm\-xio in the guest and checks it. The other optional
-tests are not available on this flavor.
+it also installs rocm\-xio in the guest and checks it, and with
+.B \-\-vfu\-doorbell
+it adds the vfu\-doorbell rig. The other optional tests are not available on
+this flavor.
 .RE
 .TP
 .BR \-f ", " \-\-follow
@@ -498,6 +500,38 @@ on any other flavor. Only meaningful with the
 or
 .B all
 verbs.
+.TP
+.B \-\-vfu\-doorbell
+On the
+.B xio
+flavor, add rocm\-xio's vfu\-doorbell rig: the ringee and the ringer, two more
+vfio\-user devices in the guest, run from the image
+.B <doorbell\-image>
+names. The
+.B up
+and
+.B all
+verbs layer the two servers onto the stack, from the overlay the tool ships
+as
+.IR overlays/vfu\-doorbell.xml .
+The
+.B test
+and
+.B all
+verbs install rocm\-xio from the branch that has the tools (so it implies
+.BR \-\-xio\-test ),
+build
+.B vfu\-ring
+and the vfu\-dma kernel module in the guest, install
+.B vfu\-ring
+and
+.BR vfu\-driver\-select ,
+require both devices, and run the tool's own scenarios, in which the CPU and
+then the ringer write into the ringee. Off by default. Give it to the verb
+that brings the stack up and again to
+.BR test ;
+.B test
+refuses a stack brought up without it. Refused on any other flavor.
 .TP
 .B \-\-hipfile\-test
 Also run the hipFile test: on every guest, read a file on its NVMe
@@ -2423,9 +2457,11 @@ entry each, and is how two servers of one type are given different settings:
 is
 .BR ernic ,
 .BR rocjitsu ,
-.B sdxi
+.BR sdxi ,
+.BR spdk ,
+.B vfu\-ringee
 or
-.BR spdk ;
+.BR vfu\-ringer ;
 .B id
 names the entry for later layers and for error messages, and does not rename
 the container. With a block,
@@ -2461,6 +2497,14 @@ hexadecimal core mask such as 0x4, by default 0x1, host CPU 0. Each server
 takes one full core, and the one value is every guest's server's, so guests
 share the cores it names.
 A guest takes one spdk server.
+.B vfu\-ringee
+and
+.B vfu\-ringer
+are the two servers of rocm\-xio's tools/vfu\-doorbell, run from
+.BR <doorbell\-image> :
+a vfio\-user device whose BAR0 carries doorbell overlays with readable
+counters, and one that writes patterns to any guest physical address. They
+take no options, and a guest takes one of each.
 Options the generator derives, the socket and the MAC among them, cannot be
 set.
 .B <backend>
@@ -2581,6 +2625,7 @@ Images
 .BR <rocjitsu\-ref> ,
 .BR <sdxi\-image> ,
 .BR <spdk\-image> ,
+.BR <doorbell\-image> ,
 .BR <backing\-ref>
 and
 .BR <image\-allow\-guest\-lag> ,
@@ -2620,6 +2665,17 @@ device for its emulated NVMe, which rocm\-xio uses. It is refused with
 of 0 or less, needs the fork QEMU, and is for generated stacks only:
 .B run\-vm \-\-xml
 does not get it.
+.TP
+The xio guest
+.BR <xio\-ref> ,
+the rocm\-xio branch or tag the guest installs in place of the
+.B rocm_xio_setup
+role's own pin, and
+.BR <xio\-commit> ,
+the commit it has to be. With no
+.B <xio\-commit>
+the ref is built as pushed, unchecked, and a commit with no ref is refused.
+Both reach the inventory as the role's own variables.
 .TP
 Network and mesh
 .BR <fleet\-prefix> ,
