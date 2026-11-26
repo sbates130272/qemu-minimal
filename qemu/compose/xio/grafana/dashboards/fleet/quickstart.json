@@ -697,7 +697,7 @@
             "type": "prometheus",
             "uid": "fleet-prometheus"
           },
-          "expr": "rate(node_disk_read_bytes_total{job=\"fleet-node\",device=\"nvme0n1\",vm_name=~\"$vm\"}[$__rate_interval])",
+          "expr": "sum by (vm_name) (rate(node_disk_read_bytes_total{job=\"fleet-node\",device=~\"nvme[0-9]+n[0-9]+\",vm_name=~\"$vm\"}[$__rate_interval]))",
           "legendFormat": "{{vm_name}} read",
           "refId": "A"
         },
@@ -706,12 +706,12 @@
             "type": "prometheus",
             "uid": "fleet-prometheus"
           },
-          "expr": "rate(node_disk_written_bytes_total{job=\"fleet-node\",device=\"nvme0n1\",vm_name=~\"$vm\"}[$__rate_interval])",
+          "expr": "sum by (vm_name) (rate(node_disk_written_bytes_total{job=\"fleet-node\",device=~\"nvme[0-9]+n[0-9]+\",vm_name=~\"$vm\"}[$__rate_interval]))",
           "legendFormat": "{{vm_name}} write",
           "refId": "B"
         }
       ],
-      "description": "NVMe (nvme0n1) read and write throughput in bytes per second per VM, from node-exporter disk stats."
+      "description": "Read and write throughput in bytes per second per VM, summed over every NVMe namespace the guest has: its own drives, and any it reaches over a fabric. A multipath target's path devices (nvme3c3n2) carry the same counters as the namespace and are left out. From node-exporter disk stats."
     },
     {
       "datasource": {
@@ -755,7 +755,7 @@
             "type": "prometheus",
             "uid": "fleet-prometheus"
           },
-          "expr": "rate(node_disk_reads_completed_total{job=\"fleet-node\",device=\"nvme0n1\",vm_name=~\"$vm\"}[$__rate_interval])",
+          "expr": "sum by (vm_name) (rate(node_disk_reads_completed_total{job=\"fleet-node\",device=~\"nvme[0-9]+n[0-9]+\",vm_name=~\"$vm\"}[$__rate_interval]))",
           "legendFormat": "{{vm_name}} read IOPS",
           "refId": "A"
         },
@@ -764,12 +764,12 @@
             "type": "prometheus",
             "uid": "fleet-prometheus"
           },
-          "expr": "rate(node_disk_writes_completed_total{job=\"fleet-node\",device=\"nvme0n1\",vm_name=~\"$vm\"}[$__rate_interval])",
+          "expr": "sum by (vm_name) (rate(node_disk_writes_completed_total{job=\"fleet-node\",device=~\"nvme[0-9]+n[0-9]+\",vm_name=~\"$vm\"}[$__rate_interval]))",
           "legendFormat": "{{vm_name}} write IOPS",
           "refId": "B"
         }
       ],
-      "description": "NVMe (nvme0n1) read and write I/O operations per second per VM, from node-exporter."
+      "description": "Read and write I/O operations per second per VM, summed over every NVMe namespace the guest has. A multipath target's path devices are left out. From node-exporter."
     },
     {
       "collapsed": false,

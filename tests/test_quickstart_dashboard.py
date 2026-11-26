@@ -131,12 +131,12 @@ HOME_QUERIES = {
         ('A', 'node_memory_MemAvailable_bytes{job="fleet-node",vm_name=~"$vm"}'),
     ],
     25: [
-        ('A', 'rate(node_disk_read_bytes_total{job="fleet-node",device="nvme0n1",vm_name=~"$vm"}[$__rate_interval])'),
-        ('B', 'rate(node_disk_written_bytes_total{job="fleet-node",device="nvme0n1",vm_name=~"$vm"}[$__rate_interval])'),
+        ('A', 'sum by (vm_name) (rate(node_disk_read_bytes_total{job="fleet-node",device=~"nvme[0-9]+n[0-9]+",vm_name=~"$vm"}[$__rate_interval]))'),
+        ('B', 'sum by (vm_name) (rate(node_disk_written_bytes_total{job="fleet-node",device=~"nvme[0-9]+n[0-9]+",vm_name=~"$vm"}[$__rate_interval]))'),
     ],
     26: [
-        ('A', 'rate(node_disk_reads_completed_total{job="fleet-node",device="nvme0n1",vm_name=~"$vm"}[$__rate_interval])'),
-        ('B', 'rate(node_disk_writes_completed_total{job="fleet-node",device="nvme0n1",vm_name=~"$vm"}[$__rate_interval])'),
+        ('A', 'sum by (vm_name) (rate(node_disk_reads_completed_total{job="fleet-node",device=~"nvme[0-9]+n[0-9]+",vm_name=~"$vm"}[$__rate_interval]))'),
+        ('B', 'sum by (vm_name) (rate(node_disk_writes_completed_total{job="fleet-node",device=~"nvme[0-9]+n[0-9]+",vm_name=~"$vm"}[$__rate_interval]))'),
     ],
     31: [
         ('A', 'sum(rate(ernic_rdma_bytes_sent_total[$__rate_interval]))'),
