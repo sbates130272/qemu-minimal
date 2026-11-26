@@ -1501,6 +1501,11 @@ tab and a line break.</p>
 <td>The same form, with one difference: any character outside ASCII that is not white space passes as a digit. Which characters are decimal digits depends on a Unicode version, and a validator's is not Python's, so the schema does not ask. Nor does it count: an integer of more digits than <code>int()</code> converts (4300 unless Python is told otherwise) passes the schema and not the parser. An integer with thousands of underscores can stop a Java validator; see <a href="#what-the-schema-cannot-check">below</a>.</td>
 </tr>
 <tr>
+<td>integer for each guest (<code>ints</code>)</td>
+<td>One integer, which every guest gets, or integers separated by commas, one for each guest in order. Each is what Python's <code>int()</code> takes, as for an integer, white space round it included. An empty element and an empty item are errors. That a list has exactly <code>&lt;vm-count&gt;</code> items is the generator's to check, not the parser's.</td>
+<td>The integer form, once or more, with commas between. The count of items is not checked, and what the integer form lets through is let through here.</td>
+</tr>
+<tr>
 <td>port (<code>port</code>)</td>
 <td>A port number from 1 to 65535 in ASCII digits, or the word <code>auto</code> in any case; white space round it is ignored.</td>
 <td>The same form, range included. A number of more digits than Python's <code>int()</code> converts, which takes thousands of leading zeros, passes the schema and not the parser.</td>
@@ -1553,6 +1558,13 @@ to code that does.</p>
 <td><code>1</code></td>
 <td>no</td>
 <td>Number of guests in the fleet; each gets its own QEMU service and its own set of device servers. Integer, at least 1 (render exits below that), default 1. Baked into the generated compose file, so a change means re-rendering. Bounded by 64 mesh NICs (warning above 40) and 244 NICs in total.</td>
+</tr>
+<tr>
+<td><code>&lt;vm-roles&gt;</code></td>
+<td>string</td>
+<td>(empty)</td>
+<td>yes</td>
+<td>One role for each guest, for a fleet whose guests differ: part of each guest's name and an inventory group. a comma list of exactly vm-count roles, such as client,server or client,client,server; a role is lower-case letters and digits, starting with a letter, and not the word all. Guests are then named &lt;prefix&gt;-&lt;role&gt;-K, K counting the guests of that role from 1; a &lt;server&gt; may name a role in its vm attribute; and the generated inventory has a group fleet_&lt;role&gt; for each. Empty or unset: no roles, and guests are &lt;prefix&gt;-N.</td>
 </tr>
 <tr>
 <td><code>&lt;vm-name-prefix&gt;</code></td>
@@ -1806,17 +1818,17 @@ to code that does.</p>
 <tbody>
 <tr>
 <td><code>&lt;vm-vcpus&gt;</code></td>
-<td>integer</td>
+<td>integer for each guest</td>
 <td><code>0</code></td>
 <td>no</td>
-<td>vCPUs per guest; keep it at 4 or more on an ernic stack, and vCPUs times guests near the host's core count. integer; 0 or unset leaves run-vm's default of 2; qemu-tool check FAILs a value set from 1 to 3 and does not check 0 or unset; quick-start by default (not with --no-size-from-host) replaces it with a host-derived value (floor 4, ceiling 8).</td>
+<td>vCPUs per guest; keep it at 4 or more on an ernic stack, and vCPUs times guests near the host's core count. integer, or a comma list of exactly vm-count of them, one for each guest; 0 or unset leaves run-vm's default of 2; run-vm --xml outside a stack ignores a list; qemu-tool check FAILs a value set from 1 to 3 and does not check 0 or unset; quick-start by default (not with --no-size-from-host) replaces it with a host-derived value (floor 4, ceiling 8).</td>
 </tr>
 <tr>
 <td><code>&lt;vm-vmem&gt;</code></td>
-<td>integer</td>
+<td>integer for each guest</td>
 <td><code>0</code></td>
 <td>no</td>
-<td>Guest memory per VM. MiB (4096 is 4 GiB); 0 or unset leaves run-vm's default of 4096; quick-start by default (not with --no-size-from-host) replaces it with a host-derived value (floor 4096, ceiling 8192).</td>
+<td>Guest memory per VM. MiB (4096 is 4 GiB), or a comma list of exactly vm-count values, one for each guest; 0 or unset leaves run-vm's default of 4096; run-vm --xml outside a stack ignores a list; quick-start by default (not with --no-size-from-host) replaces it with a host-derived value (floor 4096, ceiling 8192).</td>
 </tr>
 <tr>
 <td><code>&lt;vm-shm-size&gt;</code></td>
@@ -1827,10 +1839,17 @@ to code that does.</p>
 </tr>
 <tr>
 <td><code>&lt;vm-nvme&gt;</code></td>
-<td>integer</td>
+<td>integer for each guest</td>
 <td><code>0</code></td>
 <td>no</td>
-<td>Number of emulated NVMe scratch devices per guest; run-vm creates a qcow2 for each. 0 gives none. integer; N &gt; 0 is N devices on scratch qcow2 files; -N is N devices on the host's /dev/nullb0.. (null_blk); default 0.</td>
+<td>Number of emulated NVMe scratch devices per guest; run-vm creates a qcow2 for each. 0 gives none. integer, or a comma list of exactly vm-count of them, one for each guest (0,24 gives the second guest 24); N &gt; 0 is N devices on scratch qcow2 files; -N is N devices on the host's /dev/nullb0.. (null_blk); default 0; run-vm --xml outside a stack ignores a list.</td>
+</tr>
+<tr>
+<td><code>&lt;vm-nvme-size&gt;</code></td>
+<td>string</td>
+<td>(empty)</td>
+<td>yes</td>
+<td>Size of each scratch qcow2 run-vm creates for an emulated NVMe device, as the guest sees it. a whole number and K, M, G or T, such as 8T; empty or unset is run-vm's 1024G, which renders nothing. The suffixes are binary (8T is 8 TiB) and the file is sparse, so the host gives up only what a guest writes; refused with no guest that has an NVMe on a qcow2. A scratch file that already exists keeps its size.</td>
 </tr>
 <tr>
 <td><code>&lt;vm-nvme-vram&gt;</code></td>
@@ -2274,9 +2293,10 @@ both schemas, to which it is an unknown element like any other:</p>
 <div class="highlight"><pre><span></span><code>my-fleet.xml: &lt;prom-port&gt; was removed from the fleet format: no command ever read it; Prometheus has no host port and is asked inside its container. Delete the element.
 </code></pre></div>
 <h2 id="the-devices-block">The devices block<a class="headerlink" href="#the-devices-block" title="Permanent link">&para;</a></h2>
-<p><code>&lt;devices&gt;</code> lists the vfio-user servers every guest gets, one <code>&lt;server&gt;</code>
-entry each. It exists so that two servers of one type can differ, and so that
-a NIC can be given an RDMA backend.</p>
+<p><code>&lt;devices&gt;</code> lists the vfio-user servers a guest gets, one <code>&lt;server&gt;</code>
+entry each. It exists so that two servers of one type can differ, so that
+a NIC can be given an RDMA backend, and, with the <code>vm</code> attribute, so that the
+guests of one fleet can differ.</p>
 <div class="highlight"><pre><span></span><code><span class="nt">&lt;devices&gt;</span>
 <span class="w">  </span><span class="nt">&lt;server</span><span class="w"> </span><span class="na">type=</span><span class="s">'ernic'</span><span class="w"> </span><span class="na">id=</span><span class="s">'kv'</span><span class="nt">&gt;</span>
 <span class="w">    </span><span class="nt">&lt;backend</span><span class="w"> </span><span class="na">type=</span><span class="s">'nvmeof'</span><span class="nt">&gt;</span>kv=1,size=256M<span class="nt">&lt;/backend&gt;</span>
@@ -2299,11 +2319,11 @@ a NIC can be given an RDMA backend.</p>
 <tbody>
 <tr>
 <td><code>&lt;devices&gt;</code></td>
-<td>Lists the vfio-user servers every guest gets, one &lt;server&gt; each; replaces the three per-VM device counts. No attributes, no text; at least one &lt;server&gt;. Later layers merge entries by id, append new ids and cannot remove one. Every guest gets the same list.</td>
+<td>Lists the vfio-user servers a guest gets, one &lt;server&gt; each; replaces the three per-VM device counts. No attributes, no text; at least one &lt;server&gt;. Later layers merge entries by id, append new ids and cannot remove one. Every guest gets the same list, less the entries whose vm attribute names other guests.</td>
 </tr>
 <tr>
 <td><code>&lt;server&gt;</code></td>
-<td>One device server every guest gets; its children set that server's backend, config file or options. Requires type and id, and takes no other attribute. Children allowed depend on type; each may appear once unless the option is repeatable.</td>
+<td>One device server; its children set its backend, config file or options, and its vm attribute the guests that get it. Requires type and id, takes vm, and no other attribute. Children allowed depend on type; each may appear once unless the option is repeatable.</td>
 </tr>
 <tr>
 <td><code>&lt;server type=...&gt;</code></td>
@@ -2312,6 +2332,10 @@ a NIC can be given an RDMA backend.</p>
 <tr>
 <td><code>&lt;server id=...&gt;</code></td>
 <td>Names the entry for later layers to merge on and for error messages; does not rename containers or sockets. Starts with a letter; letters, digits, '_', '.' and '-'; 32 characters at most; unique in the block.</td>
+</tr>
+<tr>
+<td><code>&lt;server vm=...&gt;</code></td>
+<td>The guests that get this device, so that the guests of one fleet can differ; absent, every guest gets it. all, or guests separated by commas with no white space, each a number from 1 in ASCII digits or a role of vm-roles, every guest of which gets it: vm='1', vm='1,3' or vm='client'. The generator refuses a number above vm-count, a role vm-roles does not have, a guest left with no ernic, and a fleet with vm-pcie-switch-width whose guests differ. A later layer's entry with the same id replaces it; vm='all' widens it again.</td>
 </tr>
 </tbody>
 </table>
@@ -2730,6 +2754,8 @@ the validator's own and not the grammar's:</p>
 <li><code>&lt;vm-shm-size&gt;</code>, <code>&lt;rocjitsu-config&gt;</code> and <code>&lt;vm-filesystem&gt;</code> take one value
   for every guest, or a comma list of exactly <code>&lt;vm-count&gt;</code> values. Any other
   length is an error;</li>
+<li><code>&lt;vm-vcpus&gt;</code>, <code>&lt;vm-vmem&gt;</code> and <code>&lt;vm-nvme&gt;</code> take one integer for every guest,
+  or exactly <code>&lt;vm-count&gt;</code> of them, the same way;</li>
 <li><code>&lt;vm-extra-hostfwd&gt;</code> is the exception: its commas are several rules for one
   guest, and the whole value goes to every guest.</li>
 </ul>
@@ -2738,6 +2764,14 @@ the validator's own and not the grammar's:</p>
 <li><code>&lt;vm-count&gt;</code> of at least 1, and <code>&lt;ernic-per-vm&gt;</code> and <code>&lt;rocjitsu-per-vm&gt;</code> of
   at least 1, or a <code>&lt;devices&gt;</code> block with at least one <code>ernic</code> and one
   <code>rocjitsu</code> server;</li>
+<li><code>&lt;vm-roles&gt;</code> with exactly <code>&lt;vm-count&gt;</code> roles, each lower-case letters and
+  digits and not the word <code>all</code>;</li>
+<li>a <code>vm</code> attribute on a <code>&lt;server&gt;</code> that names no guest above <code>&lt;vm-count&gt;</code> and
+  no role <code>&lt;vm-roles&gt;</code> lacks, does not mix <code>all</code> with anything else,
+  leaves every guest at least one <code>ernic</code> server, and is not used together
+  with <code>&lt;vm-pcie-switch-width&gt;</code>;</li>
+<li><code>&lt;vm-nvme-size&gt;</code> a whole number and <code>K</code>, <code>M</code>, <code>G</code> or <code>T</code>, on a fleet where
+  a guest has an NVMe on a scratch file;</li>
 <li>at most one <code>spdk</code> server a guest, and <code>&lt;spdk-image&gt;</code> set when there is one;</li>
 <li><code>&lt;sdxi-image&gt;</code> set when a guest has an SDXI device;</li>
 <li><code>&lt;qemu-ref&gt;</code>, <code>&lt;ernic-ref&gt;</code> and <code>&lt;rocjitsu-ref&gt;</code> not empty, on one build

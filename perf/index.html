@@ -1014,12 +1014,17 @@ the same basic model used by the ROCm/rocm-ernic site: badges for the latest
 published numbers, a durable history file, and a trend page regenerated as new
 CI data lands.</p>
 <h2 id="latest-published-snapshot">Latest published snapshot<a class="headerlink" href="#latest-published-snapshot" title="Permanent link">&para;</a></h2>
-<p>Generated from <code>5ec4c6cd</code> at <strong>2026-11-26 19:37 UTC</strong>.</p>
+<p>Generated from <code>bc5b566c</code> at <strong>2026-11-26 22:56 UTC</strong>.</p>
 <p><img alt="Rocjitsu GEMM" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-gemm.json" />
 <img alt="Rocjitsu HipFile" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile.json" />
 <img alt="HipFile Fio" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile-fio.json" />
 <img alt="Ernic P4 FP8 BW" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-ernic-p4-bw.json" />
-<img alt="SDXI copy BW" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-sdxi-bw.json" /></p>
+<img alt="SDXI copy BW" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-sdxi-bw.json" />
+<img alt="NVMe-oF in NIC" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-storage-nic-nvmeof.json" />
+<img alt="NVMe-oF RDMA" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-storage-nvmeof.json" />
+<img alt="NFS RDMA" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-storage-nfs.json" />
+<img alt="hipFile NVMe-oF" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-storage-hipfile-nvmeof.json" />
+<img alt="hipFile NFS RDMA" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-storage-hipfile-nfs.json" /></p>
 <p>Badge colour is health, not branding. Each latest reading is compared against
 the mean of the previous 5 <em>distinct</em> readings — consecutive
 republishes of an unchanged number are collapsed first, because a publish
@@ -1068,6 +1073,36 @@ vfio-user and swing hard between runs.</p>
 <td>1698.3 MB/s</td>
 <td>1.74 GB/s</td>
 <td>within tolerance (-2%)</td>
+</tr>
+<tr>
+<td>NVMe-oF in NIC</td>
+<td>n/a</td>
+<td>-</td>
+<td>no data</td>
+</tr>
+<tr>
+<td>NVMe-oF RDMA</td>
+<td>n/a</td>
+<td>-</td>
+<td>no data</td>
+</tr>
+<tr>
+<td>NFS RDMA</td>
+<td>n/a</td>
+<td>-</td>
+<td>no data</td>
+</tr>
+<tr>
+<td>hipFile NVMe-oF</td>
+<td>n/a</td>
+<td>-</td>
+<td>no data</td>
+</tr>
+<tr>
+<td>hipFile NFS RDMA</td>
+<td>n/a</td>
+<td>-</td>
+<td>no data</td>
 </tr>
 </tbody>
 </table>
@@ -1122,18 +1157,14 @@ after the change reached main, is the change named here.</p>
 <th>HipFile Fio</th>
 <th>Ernic P4 FP8 BW</th>
 <th>SDXI copy BW</th>
+<th>NVMe-oF in NIC</th>
+<th>NVMe-oF RDMA</th>
+<th>NFS RDMA</th>
+<th>hipFile NVMe-oF</th>
+<th>hipFile NFS RDMA</th>
 </tr>
 </thead>
 <tbody>
-<tr>
-<td>992b812f</td>
-<td>2026-11-23 19:57 UTC</td>
-<td>458 kFLOP/s</td>
-<td>540 MB/s</td>
-<td>550 MB/s</td>
-<td>79.8 MB/s</td>
-<td>2336.7 MB/s</td>
-</tr>
 <tr>
 <td>992b812f</td>
 <td>2026-11-23 20:07 UTC</td>
@@ -1142,6 +1173,11 @@ after the change reached main, is the change named here.</p>
 <td>574 MB/s</td>
 <td>132.1 MB/s</td>
 <td>3077.8 MB/s</td>
+<td>n/a</td>
+<td>n/a</td>
+<td>n/a</td>
+<td>n/a</td>
+<td>n/a</td>
 </tr>
 <tr>
 <td>3387083a</td>
@@ -1151,6 +1187,11 @@ after the change reached main, is the change named here.</p>
 <td>574 MB/s</td>
 <td>132.1 MB/s</td>
 <td>3077.8 MB/s</td>
+<td>n/a</td>
+<td>n/a</td>
+<td>n/a</td>
+<td>n/a</td>
+<td>n/a</td>
 </tr>
 <tr>
 <td>04394513</td>
@@ -1160,6 +1201,11 @@ after the change reached main, is the change named here.</p>
 <td>574 MB/s</td>
 <td>132.1 MB/s</td>
 <td>3077.8 MB/s</td>
+<td>n/a</td>
+<td>n/a</td>
+<td>n/a</td>
+<td>n/a</td>
+<td>n/a</td>
 </tr>
 <tr>
 <td>7a968dec</td>
@@ -1169,6 +1215,11 @@ after the change reached main, is the change named here.</p>
 <td>1.77 GB/s</td>
 <td>114.2 MB/s</td>
 <td>1243.5 MB/s</td>
+<td>n/a</td>
+<td>n/a</td>
+<td>n/a</td>
+<td>n/a</td>
+<td>n/a</td>
 </tr>
 <tr>
 <td>b7a7012e</td>
@@ -1178,6 +1229,11 @@ after the change reached main, is the change named here.</p>
 <td>83.5 MB/s</td>
 <td>74.0 MB/s</td>
 <td>692.8 MB/s</td>
+<td>n/a</td>
+<td>n/a</td>
+<td>n/a</td>
+<td>n/a</td>
+<td>n/a</td>
 </tr>
 <tr>
 <td>b7a7012e</td>
@@ -1187,6 +1243,11 @@ after the change reached main, is the change named here.</p>
 <td>737 MB/s</td>
 <td>58.1 MB/s</td>
 <td>1604.2 MB/s</td>
+<td>n/a</td>
+<td>n/a</td>
+<td>n/a</td>
+<td>n/a</td>
+<td>n/a</td>
 </tr>
 <tr>
 <td>b7a7012e</td>
@@ -1196,6 +1257,11 @@ after the change reached main, is the change named here.</p>
 <td>339 MB/s</td>
 <td>81.3 MB/s</td>
 <td>2082.4 MB/s</td>
+<td>n/a</td>
+<td>n/a</td>
+<td>n/a</td>
+<td>n/a</td>
+<td>n/a</td>
 </tr>
 <tr>
 <td>5ec4c6cd</td>
@@ -1205,6 +1271,11 @@ after the change reached main, is the change named here.</p>
 <td>339 MB/s</td>
 <td>81.3 MB/s</td>
 <td>2082.4 MB/s</td>
+<td>n/a</td>
+<td>n/a</td>
+<td>n/a</td>
+<td>n/a</td>
+<td>n/a</td>
 </tr>
 <tr>
 <td>5ec4c6cd</td>
@@ -1214,6 +1285,25 @@ after the change reached main, is the change named here.</p>
 <td>1 GB/s</td>
 <td>63.1 MB/s</td>
 <td>1698.3 MB/s</td>
+<td>n/a</td>
+<td>n/a</td>
+<td>n/a</td>
+<td>n/a</td>
+<td>n/a</td>
+</tr>
+<tr>
+<td>bc5b566c</td>
+<td>2026-11-26 22:56 UTC</td>
+<td>288 kFLOP/s</td>
+<td>919 MB/s</td>
+<td>1 GB/s</td>
+<td>63.1 MB/s</td>
+<td>1698.3 MB/s</td>
+<td>n/a</td>
+<td>n/a</td>
+<td>n/a</td>
+<td>n/a</td>
+<td>n/a</td>
 </tr>
 </tbody>
 </table>
