@@ -1,0 +1,205 @@
+---
+# Configure the two guests of the storage stack and test every storage
+# path between them.
+#
+# What `qemu-tool quick-start --flavor storage test` runs, against the
+# inventory the stack was rendered with:
+#
+#   cd ansible && ansible-playbook -i ../qemu/compose/storage/fleet-inventory.yml \
+#       --private-key <key> playbooks/vm-storage.yml
+#
+# Every guest is the published rocm-golden image. Which is which comes from
+# the inventory: the fleet's <vm-roles> puts each guest in the group
+# fleet_client or fleet_server. One of each is what has been run. With more,
+# every client is tested against the first server, one client at a time,
+# since the tests write the server's namespaces raw.
+#
+#   server   an NVMe-oF target over RDMA serving the first of its drives,
+#            and an NFS-over-RDMA export on a filesystem on the next
+#   client   the GPU firmware of the rocjitsu serving it, hipObject built at
+#            its pinned commit, and a connection to every store: the
+#            NVMe-oF controller and the S3 store inside its own NICs, and
+#            the server's target and export across the mesh
+#
+# Then the tests, on the client: data written, read back and compared over
+# each path. Every test runs; the playbook fails at the end if any failed.
+# The drives are scratch and are written raw.
+
+- name: Check the inventory names a client and a server
+  hosts: fleet
+  gather_facts: false
+  tasks:
+    - name: Fail unless there is at least one of each
+      ansible.builtin.assert:
+        that:
+          - groups['fleet_client'] | default([]) | length >= 1
+          - groups['fleet_server'] | default([]) | length >= 1
+        fail_msg: >-
+          The storage playbook wants guests in the inventory groups
+          fleet_client and fleet_server, which the generator writes for a
+          fleet whose <vm-roles> names the roles client and server. This
+          inventory has {{ groups['fleet_client'] | default([]) | length }}
+          and {{ groups['fleet_server'] | default([]) | length }}: render
+          it from qemu/stacks/storage.xml.
+      run_once: true
+
+- name: Bring the client's GPU up
+  hosts: fleet_client
+  gather_facts: true
+  become: false
+  tasks:
+    - name: Install the CA certificate the controller names
+      become: true
+      ansible.builtin.copy:
+        dest: "{{ lookup('env', 'VM_CA_CERT_FILE') }}"
+        content: "{{ lookup('env', 'AMD_CERT') | b64decode }}"
+        mode: "0644"
+      when: lookup('env', 'AMD_CERT') | length > 0
+
+    - name: Rebuild the CA trust bundle
+      become: true
+      ansible.builtin.command:
+        cmd: update-ca-certificates
+      changed_when: true
+      when: lookup('env', 'AMD_CERT') | length > 0
+
+    - name: Install the gfx1250 firmware generated from this stack's rocjitsu
+      ansible.builtin.include_role:
+        name: rocjitsu_setup
+        tasks_from: firmware
+      vars:
+        rocjitsu_setup_firmware_live: true
+
+    - name: Check whether amdgpu is already resident
+      ansible.builtin.stat:
+        path: /dev/kfd
+      register: storage_kfd
+
+    - name: Ask the probe what state a resident amdgpu is in
+      ansible.builtin.command:
+        cmd: /usr/local/bin/amdgpu-probe --status
+      register: storage_probe_status
+      changed_when: false
+      failed_when: false
+      when: storage_kfd.stat.exists
+
+    - name: Probe amdgpu with the emulation parameters
+      become: true
+      ansible.builtin.command:
+        cmd: /usr/local/bin/amdgpu-probe
+      when: >-
+        not storage_kfd.stat.exists
+        or (storage_probe_status.stdout | default('') | trim) == 'unbound'
+      changed_when: true
+
+    - name: Wait for the GPU in the KFD topology
+      ansible.builtin.shell:
+        cmd: |
+          for _ in $(seq 40); do
+            for f in /sys/class/kfd/kfd/topology/nodes/*/gpu_id; do
+              if [ -r "$f" ] && [ "$(cat "$f")" != 0 ]; then
+                echo "a GPU node is there"
+                exit 0
+              fi
+            done
+            sleep 3
+          done
+          echo "no GPU in the KFD topology after 120 s." >&2
+          echo "amdgpu-probe --status: $(/usr/local/bin/amdgpu-probe --status 2>&1 || true)" >&2
+          echo "See: sudo dmesg | grep -i amdgpu" >&2
+          exit 1
+        executable: /bin/bash
+      changed_when: false
+
+- name: Make the storage server
+  hosts: fleet_server
+  gather_facts: true
+  become: true
+  tasks:
+    - name: Install the CA certificate the controller names
+      ansible.builtin.copy:
+        dest: "{{ lookup('env', 'VM_CA_CERT_FILE') }}"
+        content: "{{ lookup('env', 'AMD_CERT') | b64decode }}"
+        mode: "0644"
+      when: lookup('env', 'AMD_CERT') | length > 0
+
+    - name: Rebuild the CA trust bundle
+      ansible.builtin.command:
+        cmd: update-ca-certificates
+      changed_when: true
+      when: lookup('env', 'AMD_CERT') | length > 0
+
+    - name: Serve the drives over NVMe-oF and NFS, both over RDMA
+      ansible.builtin.include_role:
+        name: storage_setup
+        tasks_from: server
+
+- name: Install hipObject on the client, connect it and test every path
+  hosts: fleet_client
+  gather_facts: true
+  become: true
+  serial: 1
+  vars:
+    quickstart_artifacts_dir: /var/tmp/quickstart-artifacts
+    storage_server_host: "{{ groups['fleet_server'] | first }}"
+  tasks:
+    - name: Build hipObject at its pinned commit
+      ansible.builtin.include_role:
+        name: hipobject_setup
+
+    - name: Connect the client to every store
+      ansible.builtin.include_role:
+        name: storage_setup
+        tasks_from: client
+      vars:
+        storage_setup_server: "{{ storage_server_host }}"
+
+    - name: Write, read back and compare over each path
+      ansible.builtin.include_role:
+        name: storage_setup
+        tasks_from: tests
+
+    - name: Make the artifacts directory on the controller
+      become: false
+      ansible.builtin.file:
+        path: "{{ quickstart_artifacts_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    # Written before the assert, so that a run that fails still leaves what
+    # each test said where quick-start reads it.
+    - name: Record the results on the controller
+      become: false
+      ansible.builtin.copy:
+        content: |
+          ## Storage tests, {{ inventory_hostname }} to {{ storage_server_host }}
+
+          Server: {{ hostvars[storage_server_host].storage_setup_server_seen }}
+
+          ```
+          {% for line in storage_setup_results %}
+          {{ line }}
+          {% endfor %}
+          ```
+
+          ```
+          storage: {{ 'pass' if storage_setup_failed | int == 0 else 'FAIL' }}, {{ storage_setup_ran_count | int - storage_setup_failed | int }} of {{ storage_setup_ran_count }} tests passed, {{ inventory_hostname }} to {{ storage_server_host }}
+          ```
+        dest: "{{ quickstart_artifacts_dir }}/storage-{{ inventory_hostname }}.md"
+        mode: "0644"
+      delegate_to: localhost
+
+    - name: Show what every test said
+      ansible.builtin.debug:
+        msg: "{{ storage_setup_results }}"
+
+    - name: Fail if a test failed
+      ansible.builtin.assert:
+        that:
+          - storage_setup_failed | int == 0
+        fail_msg: >-
+          {{ storage_setup_failed }} of {{ storage_setup_ran_count }} storage
+          test(s) failed:
+          {{ storage_setup_results | select('match', '.*: FAIL') | join('; ')
+             | default('a test ended without saying why', true) }}

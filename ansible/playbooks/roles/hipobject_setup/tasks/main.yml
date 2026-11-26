@@ -1,0 +1,224 @@
+---
+# Build hipObject at the pinned commit and install it under its own prefix.
+# Needs no device.
+
+- name: Check what to build is named
+  ansible.builtin.assert:
+    that:
+      - hipobject_setup_repo | trim | length > 0
+      - hipobject_setup_ref | trim | length > 0
+      - hipobject_setup_source_dir is match('/')
+      - hipobject_setup_prefix is match('/')
+      - hipobject_setup_prefix not in ['/', '/usr', '/usr/local']
+    fail_msg: >-
+      hipobject_setup_repo and hipobject_setup_ref name what to build,
+      hipobject_setup_source_dir is an absolute path, and
+      hipobject_setup_prefix is a directory of hipObject's own, not /usr or
+      /usr/local.
+
+- name: Find the ROCm tree
+  ansible.builtin.shell:
+    cmd: |
+      set -eu
+      path={{ hipobject_setup_rocm_path | quote }}
+      # /opt/rocm has bin/ and lib/ and no include/: follow bin/ to the tree.
+      if [ ! -d "$path/include" ] && [ -L "$path/bin" ]; then
+          path=$(dirname "$(readlink -f "$path/bin")")
+      fi
+      for want in include/hip/hip_runtime.h lib/cmake/hip; do
+          [ -e "$path/$want" ] || { echo "missing: $path/$want" >&2; exit 1; }
+      done
+      echo "$path"
+    executable: /bin/sh
+  register: hipobject_setup_rocm
+  changed_when: false
+
+- name: Install what the build needs
+  ansible.builtin.apt:
+    name: "{{ hipobject_setup_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Read the record of the last build
+  ansible.builtin.slurp:
+    path: "{{ hipobject_setup_stamp }}"
+  register: hipobject_setup_stamp_raw
+  failed_when: false
+
+# A record that is not JSON is no record: the build runs and replaces it.
+- name: Start with no record of the last build
+  ansible.builtin.set_fact:
+    hipobject_setup_last: {}
+
+- name: Parse the record of the last build
+  when: hipobject_setup_stamp_raw.content is defined
+  block:
+    - name: Read it as JSON
+      ansible.builtin.set_fact:
+        hipobject_setup_last: >-
+          {{ hipobject_setup_stamp_raw.content | b64decode | from_json }}
+  rescue:
+    - name: Take an unreadable record as none
+      ansible.builtin.set_fact:
+        hipobject_setup_last: {}
+
+- name: Take a record that is not a mapping as none
+  ansible.builtin.set_fact:
+    hipobject_setup_last: {}
+  when: hipobject_setup_last is not mapping
+
+- name: Check what is installed
+  ansible.builtin.stat:
+    path: "{{ hipobject_setup_prefix }}/bin/minio-getput-rdma"
+  register: hipobject_setup_present
+
+- name: Decide whether to build
+  ansible.builtin.set_fact:
+    hipobject_setup_rocm_tree: "{{ hipobject_setup_rocm.stdout | trim }}"
+    hipobject_setup_build_needed: >-
+      {{ (hipobject_setup_force | bool)
+         or not hipobject_setup_present.stat.exists
+         or hipobject_setup_last != hipobject_setup_record }}
+  vars:
+    hipobject_setup_record:
+      repo: "{{ hipobject_setup_repo | trim }}"
+      ref: "{{ hipobject_setup_ref | trim }}"
+      commit_required: "{{ hipobject_setup_commit | trim }}"
+      rocm_path: "{{ hipobject_setup_rocm.stdout | trim }}"
+      prefix: "{{ hipobject_setup_prefix }}"
+      commit: "{{ hipobject_setup_last.commit | default('') }}"
+
+# A build that does not finish leaves no record, so the next run builds.
+- name: Forget the last build before starting another
+  ansible.builtin.file:
+    path: "{{ hipobject_setup_stamp }}"
+    state: absent
+  when: hipobject_setup_build_needed | bool
+
+- name: Fetch hipObject at the pinned commit
+  ansible.builtin.script:
+    cmd: >-
+      hipobject-fetch.sh
+      {{ hipobject_setup_repo | trim | quote }}
+      {{ hipobject_setup_ref | trim | quote }}
+      {{ hipobject_setup_commit | trim | quote }}
+      {{ hipobject_setup_source_dir | quote }}
+  register: hipobject_setup_fetch
+  changed_when: true
+  failed_when: hipobject_setup_fetch.rc != 0
+  retries: 3
+  delay: 10
+  until: hipobject_setup_fetch.rc != 2
+  when: hipobject_setup_build_needed | bool
+
+- name: Record the commit that was fetched
+  ansible.builtin.set_fact:
+    hipobject_setup_built_commit: >-
+      {{ hipobject_setup_fetch.stdout | regex_search('ok: ([0-9a-f]{40})', '\1')
+         | first }}
+  when: hipobject_setup_build_needed | bool
+
+# The ionic queue-pair attributes, for the emulated NIC, and the minio-cpp
+# bridge, which is where minio-getput-rdma is. No tests: they fetch GTest
+# and need nothing this guest is for.
+- name: Configure hipObject
+  ansible.builtin.command:
+    argv:
+      - cmake
+      - -G
+      - Ninja
+      - -S
+      - "{{ hipobject_setup_source_dir }}"
+      - -B
+      - "{{ hipobject_setup_source_dir }}/build"
+      - -DCMAKE_BUILD_TYPE=Release
+      - "-DCMAKE_PREFIX_PATH={{ hipobject_setup_rocm_tree }}"
+      - "-DCMAKE_INSTALL_PREFIX={{ hipobject_setup_prefix }}"
+      - -DBUILD_TESTING=OFF
+      - -DHIPOBJ_IONIC=ON
+      - -DHIPOBJ_BNXT=OFF
+      - -DHIPOBJ_MINIO_CLIENT=ON
+      - -DHIPOBJ_BUILD_DOCS=OFF
+  changed_when: true
+  when: hipobject_setup_build_needed | bool
+
+- name: Build hipObject
+  ansible.builtin.command:
+    argv:
+      - cmake
+      - --build
+      - "{{ hipobject_setup_source_dir }}/build"
+      - "-j{{ hipobject_setup_jobs if hipobject_setup_jobs | int > 0
+              else [ansible_facts['processor_nproc'], 8] | min }}"
+  changed_when: true
+  async: 3600
+  poll: 15
+  when: hipobject_setup_build_needed | bool
+
+- name: Install hipObject
+  ansible.builtin.command:
+    argv:
+      - cmake
+      - --install
+      - "{{ hipobject_setup_source_dir }}/build"
+  changed_when: true
+  when: hipobject_setup_build_needed | bool
+
+# The bridge's example is built and not installed by hipObject itself.
+- name: Install minio-getput-rdma
+  ansible.builtin.copy:
+    src: "{{ hipobject_setup_source_dir }}/build/integrations/minio-cpp/minio-getput-rdma"
+    dest: "{{ hipobject_setup_prefix }}/bin/minio-getput-rdma"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0755"
+  when: hipobject_setup_build_needed | bool
+
+- name: Check the installed program loads
+  ansible.builtin.shell:
+    cmd: |
+      set -eu
+      bin={{ hipobject_setup_prefix | quote }}/bin/minio-getput-rdma
+      libs=$(ldd "$bin")
+      case "$libs" in
+          *"not found"*) echo "$bin: $libs" >&2; exit 1 ;;
+      esac
+      # With no arguments it prints its usage and exits 1.
+      said=$("$bin" 2>&1 || true)
+      case "$said" in
+          usage:*) ;;
+          *) echo "$bin did not print its usage: $said" >&2; exit 1 ;;
+      esac
+      set -- {{ hipobject_setup_prefix | quote }}/lib*/libhipobj*.so*
+      [ -e "$1" ] || { echo "no libhipobj under the prefix" >&2; exit 1; }
+      echo "$1"
+    executable: /bin/sh
+  register: hipobject_setup_check
+  changed_when: false
+
+- name: Record what was built
+  ansible.builtin.copy:
+    dest: "{{ hipobject_setup_stamp }}"
+    content: "{{ hipobject_setup_new_record | to_nice_json }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+  vars:
+    hipobject_setup_new_record:
+      repo: "{{ hipobject_setup_repo | trim }}"
+      ref: "{{ hipobject_setup_ref | trim }}"
+      commit: "{{ hipobject_setup_built_commit }}"
+      commit_required: "{{ hipobject_setup_commit | trim }}"
+      rocm_path: "{{ hipobject_setup_rocm_tree }}"
+      prefix: "{{ hipobject_setup_prefix }}"
+  when: hipobject_setup_build_needed | bool
+
+- name: Say what is installed
+  ansible.builtin.debug:
+    msg: >-
+      hipObject {{ 'built' if hipobject_setup_build_needed | bool else 'already built' }}:
+      {{ hipobject_setup_check.stdout | trim }} and
+      {{ hipobject_setup_prefix }}/bin/minio-getput-rdma; record in
+      {{ hipobject_setup_stamp }}

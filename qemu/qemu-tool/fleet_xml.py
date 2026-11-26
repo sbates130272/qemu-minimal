@@ -20,6 +20,7 @@ import re
 import shlex
 import sys
 from pathlib import Path
+from collections.abc import Sequence
 from typing import Any
 import xml.etree.ElementTree as ET
 
@@ -122,6 +123,19 @@ _SERVER_SETTINGS = {
 
 _SERVER_ID = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,31}\Z")
 
+# A guest's role, from <vm-roles>: what kind of guest it is in a fleet whose
+# guests differ. It is part of the guest's name and of an inventory group's.
+ROLE_FORM = r"[a-z][a-z0-9]*"
+_ROLE = re.compile(f"({ROLE_FORM})\\Z")
+
+# The vm attribute of a <server>: which guests get the device. "all", or a
+# comma list of guests, each a number from 1 or a role every guest of which
+# gets it. ASCII, no white space. Exact, so the schemas state the same form
+# (fleet_schema.py).
+_VM_ITEM = f"([1-9][0-9]*|{ROLE_FORM})"
+SERVER_VM_FORM = f"{_VM_ITEM}(,{_VM_ITEM})*"
+_SERVER_VM = re.compile(f"({SERVER_VM_FORM})\\Z")
+
 # The values _read_devices holds to a form, as (type, element) -> the regular
 # expression the whole stripped text has to match. Every other value is any
 # text with no line break or control character. In a table so the generated
@@ -144,17 +158,28 @@ def _has_form(kind: str, name: str, text: str) -> bool:
 # The generated schema and reference page read these; the parser does not.
 DEVICES_HELP: dict[str, tuple[str, str]] = {
     "devices": (
-        "Lists the vfio-user servers every guest gets, one <server> each; "
+        "Lists the vfio-user servers a guest gets, one <server> each; "
         "replaces the three per-VM device counts",
         "No attributes, no text; at least one <server>. Later layers merge "
         "entries by id, append new ids and cannot remove one. Every guest "
-        "gets the same list"),
+        "gets the same list, less the entries whose vm attribute names "
+        "other guests"),
     "server": (
-        "One device server every guest gets; its children set that server's"
-        " backend, config file or options",
-        "Requires type and id, and takes no other attribute. Children "
+        "One device server; its children set its backend, config file or "
+        "options, and its vm attribute the guests that get it",
+        "Requires type and id, takes vm, and no other attribute. Children "
         "allowed depend on type; each may appear once unless the option is "
         "repeatable"),
+    "server@vm": (
+        "The guests that get this device, so that the guests of one fleet "
+        "can differ; absent, every guest gets it",
+        "all, or guests separated by commas with no white space, each a "
+        "number from 1 in ASCII digits or a role of vm-roles, every guest "
+        "of which gets it: vm='1', vm='1,3' or vm='client'. The generator "
+        "refuses a number above vm-count, a role vm-roles does not have, a "
+        "guest left with no ernic, and a fleet "
+        "with vm-pcie-switch-width whose guests differ. A later layer's "
+        "entry with the same id replaces it; vm='all' widens it again"),
     "server@type": (
         "Kind of server: an ernic NIC, a rocjitsu GPU, an SDXI device, an"
         " SPDK NVMe controller or a vfu-doorbell ringee or ringer",
@@ -299,13 +324,18 @@ BACKEND_HELP: dict[str, tuple[str, str]] = {
 
 @dataclasses.dataclass(frozen=True)
 class Server:
-    """One <server> of a <devices> block: a device every guest gets.
+    """One <server> of a <devices> block: a device a guest gets.
 
     None means the entry did not say, which is what lets a later layer's
     entry with the same id change one thing and leave the rest.
     """
     type: str
     id: str
+    # The guests that get this device, from the vm attribute: numbers from
+    # 1, and roles, every guest of which gets it. None and () are every
+    # guest: None is an entry that did not say, () one that said "all",
+    # which is how a layer widens an entry an earlier one narrowed.
+    vms: tuple[int | str, ...] | None = None
     # ernic: the -b of this NIC's server, "nvmeof:kv=1,size=256M". "tcp" is
     # the mesh the generator derives.
     backend: str | None = None
@@ -336,9 +366,88 @@ def split_args(raw: str, element: str) -> list[str]:
     return words
 
 
-def device_counts(devices: tuple[Server, ...]) -> dict[str, int]:
-    """How many servers of each type one guest gets."""
-    return {t: sum(1 for d in devices if d.type == t) for t in SERVER_TYPES}
+def scoped(devices: tuple[Server, ...]) -> bool:
+    """True when an entry names the guests it is for, so guests differ."""
+    return any(d.vms for d in devices)
+
+
+def servers_for(
+    devices: tuple[Server, ...], n: int, roles: Sequence[str] = ()
+) -> tuple[Server, ...]:
+    """The entries guest `n` (from 1) gets, in the block's order.
+
+    `roles` is each guest's role, from guest_roles(); without it an entry
+    that names a role reaches no guest.
+    """
+    role = roles[n - 1] if 0 < n <= len(roles) else None
+    return tuple(d for d in devices
+                 if not d.vms or n in d.vms or (role and role in d.vms))
+
+
+def guest_roles(cfg: "FleetConfig") -> list[str]:
+    """Each guest's role, from <vm-roles>; [] when the fleet names none.
+
+    ValueError when the list is not one role for each guest, or an item is
+    not a role name.
+    """
+    if not cfg.vm_roles.strip():
+        return []
+    roles = [item.strip() for item in cfg.vm_roles.split(",")]
+    for role in roles:
+        if not _ROLE.match(role) or role == "all":
+            raise ValueError(
+                f"<vm-roles> has {role!r}; a role is lower-case letters and "
+                "digits, starting with a letter, and not the word all")
+    if len(roles) != cfg.count:
+        raise ValueError(
+            f"<vm-roles> has {len(roles)} values but <vm-count> is "
+            f"{cfg.count}. Give exactly {cfg.count}, one role for each guest.")
+    return roles
+
+
+def guest_names(cfg: "FleetConfig") -> list[str]:
+    """Every guest's name, in order.
+
+    <prefix>-N with no <vm-roles>. With them, <prefix>-<role>-K, where K
+    counts the guests of that role from 1: storage-client-1,
+    storage-server-1.
+    """
+    prefix = cfg.name_prefix or FleetConfig.name_prefix
+    roles = guest_roles(cfg)
+    if not roles:
+        return [f"{prefix}-{n}" for n in range(1, cfg.count + 1)]
+    seen: dict[str, int] = {}
+    names = []
+    for role in roles:
+        seen[role] = seen.get(role, 0) + 1
+        names.append(f"{prefix}-{role}-{seen[role]}")
+    return names
+
+
+def _roles_or_none(cfg: "FleetConfig") -> list[str]:
+    try:
+        return guest_roles(cfg)
+    except ValueError:
+        return []
+
+
+def device_counts(
+    devices: tuple[Server, ...], count: int | None = None,
+    roles: Sequence[str] = (),
+) -> dict[str, int]:
+    """How many servers of each type a guest gets: the most any one has.
+
+    With no entry naming its guests that is every guest's number. `count`
+    is <vm-count>; without it the guests are those the entries name.
+    """
+    if not scoped(devices):
+        return {t: sum(1 for d in devices if d.type == t)
+                for t in SERVER_TYPES}
+    last = max([count or 1] + [n for d in devices for n in d.vms or ()
+                               if isinstance(n, int)])
+    per_guest = [servers_for(devices, n, roles) for n in range(1, last + 1)]
+    return {t: max(sum(1 for d in guest if d.type == t) for guest in per_guest)
+            for t in SERVER_TYPES}
 
 
 def merge_devices(
@@ -370,7 +479,7 @@ def merge_devices(
             old,
             options=tuple(o for o in old.options if o[0] not in named)
             + entry.options,
-            **{f: getattr(entry, f) for f in ("backend", "config")
+            **{f: getattr(entry, f) for f in ("backend", "config", "vms")
                if getattr(entry, f) is not None})
     return tuple(merged)
 
@@ -390,6 +499,10 @@ class FleetConfig:
     # ---- Shape ----
     count: int = 1
     name_prefix: str = "qemu-fleet"
+    # One role for each guest, comma-separated: what kind of guest each is
+    # in a fleet whose guests differ. Empty, the default, is a fleet of like
+    # guests named <prefix>-N.
+    vm_roles: str = ""
     ssh_port_base: int = 2222
     stop_grace_period: str = "120s"
 
@@ -452,10 +565,15 @@ class FleetConfig:
     devices: tuple[Server, ...] = ()
 
     # ---- Per-VM defaults ----
-    vm_vcpus: int = 0
-    vm_vmem: int = 0
+    # One value for every guest, or one for each: <vm-vcpus>, <vm-vmem> and
+    # <vm-nvme> are comma lists. per_vm() gives each guest its value.
+    vm_vcpus: tuple[int, ...] = (0,)
+    vm_vmem: tuple[int, ...] = (0,)
     shm_size: str = "8g"
-    vm_nvme: int = 0
+    vm_nvme: tuple[int, ...] = (0,)
+    # run-vm --nvme-size: the size of each scratch qcow2 run-vm creates for
+    # an emulated NVMe. Empty is run-vm's own 1024G.
+    vm_nvme_size: str = ""
     vm_nvme_vram: bool = False
     # run-vm --nvme-block-size: the logical and physical block size of every
     # emulated NVMe namespace, 512 (QEMU's default) or 4096. The SPDK
@@ -550,9 +668,35 @@ class FleetConfig:
     loki_data_dir: str = "/var/lib/qemu-tool/loki-data"
     alloy_image: str = "docker.io/grafana/alloy:v1.5.1"
 
+    def __post_init__(self) -> None:
+        # A caller that builds one in code may give a per-guest setting as
+        # the one integer every guest gets.
+        for name in ("vm_vcpus", "vm_vmem", "vm_nvme"):
+            value = getattr(self, name)
+            if isinstance(value, int):
+                setattr(self, name, (value,))
+
+
 _STR, _EXPAND, _INT, _BOOL, _PORT, _ADDR, _ARGS, _VENDOR, _BLOCK, _MTU = (
     "str", "expand", "int", "bool", "port", "addr", "args", "vendor",
     "blocksize", "mtu")
+# One integer, or a comma list of them with one for each guest.
+_INTS = "ints"
+
+
+def per_vm(values: tuple[int, ...], count: int, element: str) -> list[int]:
+    """The value of a per-guest integer setting for each of `count` guests.
+
+    One value is every guest's; `count` values apply by position. ValueError
+    for any other length, naming the element and both lengths.
+    """
+    if len(values) == 1:
+        return list(values) * count
+    if len(values) != count:
+        raise ValueError(
+            f"{element} has {len(values)} values but <vm-count> is {count}. "
+            f"Give one value to apply to every VM, or exactly {count}.")
+    return list(values)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -592,6 +736,18 @@ _SECTIONS: tuple[_Section, ...] = (
                  "Baked into the generated compose file, so a change means "
                  "re-rendering. Bounded by 64 mesh NICs (warning above 40) and "
                  "244 NICs in total"),
+        _Setting(
+            "vm-roles", "vm_roles", _STR, sparse=True,
+            help="One role for each guest, for a fleet whose guests differ: "
+                 "part of each guest's name and an inventory group",
+            form="a comma list of exactly vm-count roles, such as "
+                 "client,server or client,client,server; a role is "
+                 "lower-case letters and digits, starting with a letter, and "
+                 "not the word all. Guests are then named "
+                 "<prefix>-<role>-K, K counting the guests of that role from "
+                 "1; a <server> may name a role in its vm attribute; and the "
+                 "generated inventory has a group fleet_<role> for each. "
+                 "Empty or unset: no roles, and guests are <prefix>-N"),
         _Setting(
             "vm-name-prefix", "name_prefix", _STR,
             help="Prefix of every guest's name; guest N is <prefix>-N, the name "
@@ -811,19 +967,23 @@ _SECTIONS: tuple[_Section, ...] = (
         "and <vm-shm-size> by the generator and by quick-start, for its "
         "/dev/shm warning.", (
         _Setting(
-            "vm-vcpus", "vm_vcpus", _INT,
+            "vm-vcpus", "vm_vcpus", _INTS,
             help="vCPUs per guest; keep it at 4 or more on an ernic stack, and "
                  "vCPUs times guests near the host's core count",
-            form="integer; 0 or unset leaves run-vm's default of 2; qemu-tool "
+            form="integer, or a comma list of exactly vm-count of them, one "
+                 "for each guest; 0 or unset leaves run-vm's default of 2; "
+                 "run-vm --xml outside a stack ignores a list; qemu-tool "
                  "check FAILs a value set from 1 to 3 and does not check 0 or "
                  "unset; quick-start by default (not with "
                  "--no-size-from-host) replaces it with a host-derived value "
                  "(floor 4, ceiling 8)"),
         _Setting(
-            "vm-vmem", "vm_vmem", _INT,
+            "vm-vmem", "vm_vmem", _INTS,
             help="Guest memory per VM",
-            form="MiB (4096 is 4 GiB); 0 or unset leaves run-vm's default of "
-                 "4096; quick-start by default (not with --no-size-from-host) "
+            form="MiB (4096 is 4 GiB), or a comma list of exactly vm-count "
+                 "values, one for each guest; 0 or unset leaves run-vm's "
+                 "default of 4096; run-vm --xml outside a stack ignores a "
+                 "list; quick-start by default (not with --no-size-from-host) "
                  "replaces it with a host-derived value (floor 4096, ceiling "
                  "8192)"),
         _Setting(
@@ -835,11 +995,24 @@ _SECTIONS: tuple[_Section, ...] = (
                  " quick-start by default (not with --no-size-from-host) sets "
                  "it to vm-vmem plus 1024m"),
         _Setting(
-            "vm-nvme", "vm_nvme", _INT,
+            "vm-nvme", "vm_nvme", _INTS,
             help="Number of emulated NVMe scratch devices per guest; run-vm "
                  "creates a qcow2 for each. 0 gives none",
-            form="integer; N > 0 is N devices on scratch qcow2 files; -N is N "
-                 "devices on the host's /dev/nullb0.. (null_blk); default 0"),
+            form="integer, or a comma list of exactly vm-count of them, one "
+                 "for each guest (0,24 gives the second guest 24); N > 0 is N "
+                 "devices on scratch qcow2 files; -N is N devices on the "
+                 "host's /dev/nullb0.. (null_blk); default 0; run-vm --xml "
+                 "outside a stack ignores a list"),
+        _Setting(
+            "vm-nvme-size", "vm_nvme_size", _STR, sparse=True,
+            help="Size of each scratch qcow2 run-vm creates for an emulated "
+                 "NVMe device, as the guest sees it",
+            form="a whole number and K, M, G or T, such as 8T; empty or "
+                 "unset is run-vm's 1024G, which renders nothing. The "
+                 "suffixes are binary (8T is 8 TiB) and the file is sparse, "
+                 "so the host gives up only what a guest writes; refused "
+                 "with no guest that has an NVMe on a qcow2. A scratch file "
+                 "that already exists keeps its size"),
         _Setting(
             "vm-nvme-vram", "vm_nvme_vram", _BOOL, sparse=True,
             help="Point each guest's emulated NVMe at its first GPU's BAR 0 "
@@ -1257,6 +1430,13 @@ def _convert(setting: _Setting, raw: str) -> Any:
         except ValueError:
             raise ValueError(
                 f"{setting.tag} must be an integer, got {raw!r}") from None
+    if setting.kind == _INTS:
+        try:
+            return tuple(int(part) for part in raw.split(","))
+        except ValueError:
+            raise ValueError(
+                f"{setting.tag} must be an integer, or integers separated by "
+                f"commas with one for each guest, got {raw!r}") from None
     if setting.kind == _PORT:
         try:
             return str(parse_ssh_port(raw))
@@ -1339,14 +1519,36 @@ def _read_devices(block: ET.Element) -> tuple[tuple[Server, ...], list[str]]:
             problems.append(
                 f"<devices> holds <{local}>; its entries are <server> elements")
             continue
-        extra = sorted(set(entry.attrib) - {"type", "id"})
+        extra = sorted(set(entry.attrib) - {"type", "id", "vm"})
         if extra:
             problems.append(
-                f"<server> takes the attributes type and id, found "
+                f"<server> takes the attributes type, id and vm, found "
                 f"{', '.join(extra)}")
         kind = entry.attrib.get("type", "")
         ident = entry.attrib.get("id", "")
         where = f"<server id='{ident}'>" if ident else "a <server>"
+        vms: tuple[int, ...] | None = None
+        if "vm" in entry.attrib:
+            guests = entry.attrib["vm"]
+            if not _SERVER_VM.match(guests):
+                problems.append(
+                    f"{where} has vm {guests!r}; it is 'all', or the numbers "
+                    "of the guests that get the device, from 1, or their "
+                    "roles, separated by commas: vm='1', vm='1,3' or "
+                    "vm='client'")
+                continue
+            if "all" in guests.split(","):
+                if guests != "all":
+                    problems.append(
+                        f"{where} has vm {guests!r}; 'all' is every guest "
+                        "and stands alone")
+                    continue
+                vms = ()
+            else:
+                items = guests.split(",")
+                vms = tuple(sorted({int(i) for i in items if i.isdigit()})
+                            ) + tuple(dict.fromkeys(
+                                i for i in items if not i.isdigit()))
         if kind not in SERVER_TYPES:
             problems.append(
                 f"{where} has type {kind!r}; the types are "
@@ -1472,7 +1674,7 @@ def _read_devices(block: ET.Element) -> tuple[tuple[Server, ...], list[str]]:
             else:
                 values[name] = text
         servers.append(Server(
-            type=kind, id=ident, backend=values.get("backend"),
+            type=kind, id=ident, vms=vms, backend=values.get("backend"),
             config=values.get("config"), options=tuple(options)))
     if not servers and not problems:
         problems.append(
@@ -1501,7 +1703,7 @@ def _count_conflicts(
     """
     if not devices:
         return []
-    counts = device_counts(devices)
+    counts = device_counts(devices, cfg.count, _roles_or_none(cfg))
     return [
         f"<{tag}>{getattr(cfg, field)} has no effect: the <devices> block "
         f"lists {counts[kind]} {kind} server(s) for each guest and replaces "
@@ -1518,7 +1720,7 @@ def _settle_devices(cfg: FleetConfig) -> None:
     """
     if not cfg.devices:
         return
-    counts = device_counts(cfg.devices)
+    counts = device_counts(cfg.devices, cfg.count, _roles_or_none(cfg))
     cfg.ernic_per_vm = counts["ernic"]
     cfg.rocjitsu_per_vm = counts["rocjitsu"]
     cfg.sdxi_per_vm = counts["sdxi"]
@@ -1753,14 +1955,22 @@ class FleetXml:
             if setting.sparse and not value:
                 continue
             el = ET.SubElement(root, f"{{{NS_FLEET}}}{setting.tag}")
-            el.text = _bool_str(value) if setting.kind == _BOOL else str(value)
+            if setting.kind == _BOOL:
+                el.text = _bool_str(value)
+            elif setting.kind == _INTS:
+                el.text = ",".join(str(v) for v in value)
+            else:
+                el.text = str(value)
 
         if cfg.devices:
             block = ET.SubElement(root, f"{{{NS_FLEET}}}{_DEVICES}")
             for server in cfg.devices:
+                attrs = {"type": server.type, "id": server.id}
+                if server.vms is not None:
+                    attrs["vm"] = ",".join(
+                        str(n) for n in server.vms) or "all"
                 entry = ET.SubElement(
-                    block, f"{{{NS_FLEET}}}server",
-                    {"type": server.type, "id": server.id})
+                    block, f"{{{NS_FLEET}}}server", attrs)
                 if server.backend is not None:
                     kind, _, options = server.backend.partition(":")
                     el = ET.SubElement(

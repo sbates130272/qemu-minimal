@@ -26,6 +26,8 @@ on:
       # The one workflow that produces perf-* artifacts: perf-rocjitsu,
       # perf-hipfile-fio, perf-ernic and perf-helios, from three jobs.
       - qemu-minimal - Report for vm-rocm-golden
+      # perf-storage, from the storage flavor's daily run.
+      - qemu-minimal - Report for storage
     types:
       - completed
   push:
@@ -123,6 +125,7 @@ jobs:
           fetch perf-hipfile-fio hipfile-fio
           fetch perf-ernic ernic
           fetch perf-helios helios
+          fetch perf-storage storage
 
       - name: Render performance trends
         env:

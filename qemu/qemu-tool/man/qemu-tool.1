@@ -397,6 +397,34 @@ it also installs rocm\-xio in the guest and checks it, and with
 .B \-\-vfu\-doorbell
 it adds the vfu\-doorbell rig. The other optional tests are not available on
 this flavor.
+.TP
+.B storage
+Two guests that differ, driven by the bundled
+.IR qemu/stacks/storage.xml :
+.BR storage\-client\-1 ,
+a GPU client with a gfx1250 GPU, an SDXI device, one NVMe and three
+rocm\-ernic NICs (the mesh, an S3\-over\-RDMA store and an NVMe\-oF target
+with a block and a KV namespace) and an SPDK NVMe\-KV controller on PCIe, and
+.BR storage\-server\-1 ,
+a storage server with one rocm\-ernic
+NIC, an SDXI device, no GPU and 24 NVMe drives of 8 TiB. Its
+.B test
+verb runs
+.IR vm\-storage.yml ,
+which makes the server an NVMe\-oF target over RDMA and an NFS\-over\-RDMA
+server, builds hipObject on the client at a pinned commit, connects the
+client to every store, and writes, reads back and compares data over each
+path, then reads a file into GPU memory through hipFile from the client's
+own NVMe, from one of the server's NVMe\-oF namespaces and from the NFS
+mount. Those reads run with
+.BR HIPFILE_ALLOW_COMPAT_MODE=false ,
+so one that cannot go direct to GPU memory fails where it would otherwise
+fall back to a bounce buffer in host memory and pass; the NFS read also
+runs with
+.BR HIPFILE_UNSUPPORTED_FILE_SYSTEMS=true ,
+without which hipFile refuses NFS the direct path. It needs no switch, installs packages in both guests and fetches
+hipObject from GitHub. The drives are scratch and are written raw. The
+optional tests of the default flavor are not available on this one.
 .RE
 .TP
 .BR \-f ", " \-\-follow
@@ -835,6 +863,25 @@ converted. A partition table made at one size is not found at the other;
 XFS made at 512, and ext4 made with blocks smaller than 4096, do not mount
 at 4096; ext4 with 4096-byte blocks mounts at either.
 .TP
+.BI \-\-nvme\-size " SIZE"
+Size of each scratch qcow2 created for
+.BR \-\-nvme " N" :
+a whole number and
+.BR K ,
+.BR M ,
+.B G
+or
+.BR T ,
+binary, so
+.B 8T
+is 8 TiB. Default:
+.BR <vm\-nvme\-size> ,
+else 1024G. The file is sparse: the size is what the guest sees, and the
+host gives up what the guest writes. A scratch file that already exists
+keeps its size;
+.B \-\-nvme\-recreate
+makes it again.
+.TP
 .B \-\-nvme\-recreate
 Recreate NVMe image files even if they already exist.
 .TP
@@ -1168,6 +1215,12 @@ switches.
 \(em one guest for rocm\-xio: 2 GPUs, an ernic on the loopback backend and
 one serving NVMe\-oF, an NVMe behind pci\-mmio\-bridge and an SPDK NVMe\-KV
 controller.
+.TP
+.B storage
+.I qemu/stacks/storage.xml
+\(em two guests that differ: a GPU client with three ernics (the mesh, an
+S3\-over\-RDMA store, an NVMe\-oF target) and a storage server with 24 NVMe
+drives of 8 TiB and no GPU.
 .PP
 Any other fleet is one of those files plus an overlay, rendered somewhere of
 your own with
@@ -1189,6 +1242,22 @@ share is bind-mounted into the qemu containers once.
 is different: its commas separate several rules for
 .I one
 guest, and the whole value goes to every guest.
+.PP
+Three more take one integer for each guest the same way \(em
+.BR <vm\-vcpus> ,
+.B <vm\-vmem>
+and
+.BR <vm\-nvme> :
+.B <vm\-nvme>1,24
+gives the first guest one drive and the second 24. And a
+.B <server>
+of a
+.B <devices>
+block takes a
+.B vm
+attribute naming the guests that get the device, which is how the guests of
+one fleet come to differ; see
+.BR "SETTINGS FILE" .
 .TP
 .BI \-\-xml " FILE"
 Fleet XML settings file. Repeatable; a later file overrides the elements it
@@ -1207,9 +1276,10 @@ the render exactly as an edit to the first file does.
 Stack to generate:
 .BR rocm\-golden ,
 .BR helios\-tray ,
-.B mi355x\-server
+.BR mi355x\-server ,
+.B xio
 or
-.BR xio .
+.BR storage .
 It decides which stack's assets (Grafana dashboards, logging configuration,
 the tapsetup image) are mirrored beside the render and, without
 .BR \-\-output\-dir ,
@@ -2464,7 +2534,35 @@ or
 .BR vfu\-ringer ;
 .B id
 names the entry for later layers and for error messages, and does not rename
-the container. With a block,
+the container.
+.B vm
+is optional and names the guests that get the device, by number from 1:
+.BR vm='1' ,
+.B vm='1,3'
+or
+.BR vm='all' .
+An item may also be a role of
+.BR <vm\-roles> ,
+every guest of which gets the device:
+.BR vm='client' .
+.B <vm\-roles>
+is a flat element, one role for each guest
+.RB ( client,server ,
+or
+.B client,client,server
+with
+.B <vm\-count>
+of 3): guests are then named
+.IR prefix \- role \- K ,
+K counting the guests of that role from 1, and the generated inventory has a
+group
+.BI fleet_ role
+for each role.
+Without it every guest gets the device; with it the guests of a fleet
+differ, and one may have no GPU, though each keeps at least one ernic. It is
+refused with
+.BR <vm\-pcie\-switch\-width> .
+With a block,
 .BR <ernic\-per\-vm> ,
 .B <rocjitsu\-per\-vm>
 and
@@ -2590,6 +2688,7 @@ beats the file.
 <vm\-images\-dir>               \-\-images
 <vm\-nvme>                     \-\-nvme
 <vm\-nvme\-block\-size>          \-\-nvme\-block\-size
+<vm\-nvme\-size>                \-\-nvme\-size
 <vm\-filesystem>               \-\-filesystem
 <vm\-extra\-hostfwd>            \-\-extra\-hostfwd
 <vm\-vfio\-user\-root\-port>      \-\-vfio\-user\-root\-port
@@ -2616,6 +2715,7 @@ and
 Shape
 .BR <vm\-count> ,
 .BR <vm\-name\-prefix> ,
+.BR <vm\-roles> ,
 .BR <ssh\-port\-base> ,
 .BR <stop\-grace\-period> .
 .TP

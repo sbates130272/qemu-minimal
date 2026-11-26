@@ -18,7 +18,10 @@ import sys
 from pathlib import Path
 
 from .caps import QemuCaps, qemu_binary
-from .config import DEFAULT_NVME_BLOCK_SIZE, NVME_BLOCK_SIZES, VMConfig
+from .config import (
+    DEFAULT_NVME_BLOCK_SIZE, DEFAULT_NVME_SIZE, NVME_BLOCK_SIZES, VMConfig,
+    nvme_size,
+)
 from .identity import (
     cpu_vendor_note, cpu_vendor_problem, guest_name_args, identity_args,
 )
@@ -30,7 +33,7 @@ _ARCH_MACHINE = {
     "riscv64": "virt",
 }
 
-NVME_SIZE = "1024G"
+NVME_SIZE = DEFAULT_NVME_SIZE
 
 # Let a guest give clusters back. Without it a qcow2 only ever grows: a
 # deletion inside the guest frees nothing at the image level, so a bake that
@@ -418,9 +421,13 @@ def _nvme_args(cfg: VMConfig, caps: QemuCaps) -> list[str]:
         return []
     if re.match(r"^[0-9]+$", cfg.nvme):
         count = int(cfg.nvme)
+        try:
+            size = nvme_size(cfg.nvme_size, "--nvme-size")
+        except ValueError as exc:
+            sys.exit(f"Error: {exc}.")
         args: list[str] = []
         for i in range(1, count + 1):
-            args += _nvme_create(f"{cfg.vm_name}-nvme{i}", NVME_SIZE, i, cfg, caps)
+            args += _nvme_create(f"{cfg.vm_name}-nvme{i}", size, i, cfg, caps)
         return args
     if re.match(r"^-[0-9]+$", cfg.nvme):
         count = abs(int(cfg.nvme))

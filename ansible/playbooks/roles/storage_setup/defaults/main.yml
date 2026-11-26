@@ -1,0 +1,76 @@
+---
+# The storage stack: a storage server guest, and the client that reaches it
+# and the stores inside its own NICs.
+
+# ---- the server -------------------------------------------------------
+# The address the server's services listen on: its NIC on the mesh.
+storage_setup_server_address: "{{ fleet_guest_ip }}"
+
+# The NVMe-oF target. Not nvmet-test, which is the name of the target
+# inside a NIC's server.
+storage_setup_nvmet_nqn: nqn.2026-11.io.qemu-tool:storage
+storage_setup_nvmet_port: 4420
+# How many of the server's drives the target serves, as namespaces 1 up.
+# The drive after them is the NFS export's, so this is at most one less
+# than the guest has.
+storage_setup_nvmet_drives: 8
+
+# The NFS export: a filesystem on one drive, served over RDMA.
+storage_setup_nfs_export: /srv/storage-nfs
+storage_setup_nfs_rdma_port: 20049
+# Who may mount it: the guests' RDMA network.
+storage_setup_nfs_clients: 192.168.100.0/24
+# Not a development package among them: a golden guest must not be given
+# the archive's rdma-core headers.
+storage_setup_server_packages:
+  - nfs-kernel-server
+  - nvme-cli
+
+# ---- the client -------------------------------------------------------
+storage_setup_client_packages:
+  - curl
+  - nfs-common
+  - nvme-cli
+
+# The NVMe-oF controller inside one of the client's NICs: its `nvmeof`
+# backend. The address, link address and name are the server's defaults,
+# and it answers no ARP, so the guest is told its link address.
+storage_setup_nic_nvmeof_nic: rocm-ernic2
+storage_setup_nic_nvmeof_address: 192.168.200.10/24
+storage_setup_nic_nvmeof_traddr: 192.168.200.1
+storage_setup_nic_nvmeof_lladdr: "02:00:00:00:c0:01"
+storage_setup_nic_nvmeof_nqn: nvmet-test
+
+# The S3-over-RDMA store inside another: its `s3` backend. It answers ARP
+# itself. The address is the fleet file's ip= and the bucket its bucket=,
+# which is the one hipObject's client uses.
+storage_setup_s3_nic: rocm-ernic1
+storage_setup_s3_rdma_device: rocm-rdma-ernic1
+storage_setup_s3_address: 192.168.201.10/24
+storage_setup_s3_endpoint: 192.168.201.1:9000
+storage_setup_s3_bucket: hipobj-test
+
+# Where the client mounts the server's NFS export.
+storage_setup_nfs_mount: /mnt/storage-nfs
+
+# hipObject's test program, and the object it moves.
+storage_setup_hipobject_program: /opt/hipobject/bin/minio-getput-rdma
+storage_setup_hipobject_bytes: 1048576
+
+# hipFile: the GEMM bench, compiled in the guest, reads a file into GPU
+# memory from each kind of storage and checks it.
+storage_setup_rocm_path: /opt/rocm
+storage_setup_rocm_arch: gfx1250
+storage_setup_hipfile_local_mount: /mnt/storage-hipfile-local
+storage_setup_hipfile_nvmeof_mount: /mnt/storage-hipfile-nvmeof
+
+# Statistics: node_exporter's per-mount NFS collector on the client. The
+# textfile directory is the one the image's own argument line names, which
+# this replaces.
+storage_setup_mountstats: true
+storage_setup_textfile_dir: /var/lib/prometheus/node-exporter
+
+# The SPDK NVMe controller on PCIe and its Key Value namespace: the serial
+# is the fleet file's <serial>, and kv:mem is namespace 1.
+storage_setup_spdk_kv_serial: STORAGE-KV
+storage_setup_spdk_kv_nsid: 1

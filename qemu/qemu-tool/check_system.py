@@ -294,14 +294,20 @@ def _check_capacity(fleet: FleetConfig | None) -> list[Result]:
     # failure: an oversubscribed host still boots, it just loses guests to the
     # mesh manager's untunable 20 s heartbeat, which presents as
     # "vfio-user: timed out waiting for reply" (AGENTS.md issue 14).
-    vcpus = fleet.vm_vcpus if fleet else 0
+    # One value for every guest, or one for each. A list of another length
+    # is the generator's to refuse; here it is summed as it stands.
+    each = fleet.vm_vcpus if fleet else (0,)
     count = fleet.count if fleet else 0
-    if vcpus and count:
+    total = each[0] * count if len(each) == 1 else sum(each)
+    vcpus = min(each)
+    if all(each) and count:
         budget = cores * 5 // 4
-        over = vcpus * count > budget
+        over = total > budget
+        shape = (f"{count} x {vcpus}" if len(each) == 1
+                 else " + ".join(str(v) for v in each))
         out.append(Result(
             "vCPU budget", _WARN if over else _OK,
-            f"{count} x {vcpus} vCPU = {vcpus * count} against {cores} cores",
+            f"{shape} vCPU = {total} against {cores} cores",
             "expect heartbeat evictions and lost guests (AGENTS.md issue 14); "
             "reduce <vm-count> or <vm-vcpus>" if over else ""))
         if vcpus < 4:

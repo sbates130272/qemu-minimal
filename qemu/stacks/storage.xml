@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The storage fleet: two guests that are not alike.
+
+    storage-client-1   a rocjitsu GPU, SDXI, three rocm-ernic NICs (the
+                       mesh, an S3-over-RDMA store, an NVMe-oF target with a
+                       block and a KV namespace), one emulated NVMe mapped
+                       onto the GPU's BAR, and an SPDK NVMe controller on
+                       PCIe serving one Key Value namespace.
+    storage-server-1   one rocm-ernic NIC on the mesh, SDXI, no GPU, and 24
+                       emulated NVMe drives of 8 TiB each.
+
+  qemu/compose/storage/ is generated from this file, and `qemu-tool
+  quick-start -\-flavor storage` runs it:
+
+    qemu-tool gen-compose -\-xml qemu/stacks/storage.xml
+
+  <vm-roles> gives each guest a role, which is in its name. The vm
+  attribute of a <server> names the role whose guests get the device, and
+  <vm-nvme> has one value for each guest. `quick-start -\-flavor storage
+  test` turns the server into an NVMe-oF target and an NFS-over-RDMA
+  server and tests every path from the client.
+
+  For more of either, add to the three lists together: two clients and one
+  server is <vm-count>3, <vm-roles>client,client,server and
+  <vm-nvme>1,1,24. Only one of each has been run.
+-->
+<fleet xmlns="http://qemu-tool/fleet/1.0">
+  <vm-count>2</vm-count>
+  <!-- One role for each guest: storage-client-1 and storage-server-1. -->
+  <vm-roles>client,server</vm-roles>
+  <vm-name-prefix>storage</vm-name-prefix>
+  <ssh-port-base>2522</ssh-port-base>
+  <!-- The host address each guest's SSH port and Grafana are published on.
+       Loopback, which is also the default: this host only.
+       <publish-bind-addr>0.0.0.0</publish-bind-addr>, in an overlay of your
+       own, puts the stack on the LAN, and with it root in both guests and
+       Grafana's admin: the image's key and its account's password are both
+       public. -->
+  <publish-bind-addr>127.0.0.1</publish-bind-addr>
+
+  <!-- The same fork pair, GPU server, SDXI server and guest as the other
+       fleets. -->
+  <qemu-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:20261112.gdca6903-qemu.4cb9698-vfu.3719c3a</qemu-ref>
+  <ernic-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-ernic-sbates-fork:20261112.gdca6903-ernic.90434a2-vfu.3719c3a</ernic-ref>
+  <rocjitsu-ref>docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-rocjitsu:20261112.gdca6903-rocjitsu.50be05a</rocjitsu-ref>
+  <backing-ref>docker.io/sbates130272/qemu-tool-rocm-golden:20261119.g2aea67d</backing-ref>
+  <sdxi-image>docker.io/sbates130272/batesste-ci-images-ubuntu-rocm-sdxi:20261113.g379fbf6-sdxi.dfd76f2</sdxi-image>
+  <!-- Built against the libvfio-user the QEMU above is (vfu.3719c3a),
+       which is what it is held to. The xio fleet's image. -->
+  <spdk-image>docker.io/sbates130272/batesste-ci-images-ubuntu-spdk-libvfio-user-sbates-fork:20261119.gc3dd883-spdk.18d1d8d-vfu.3719c3a</spdk-image>
+
+  <devices>
+    <!-- Both guests: the NIC on the TCP mesh, which is how the client
+         reaches the server. First, so it is each guest's first RDMA device
+         (rocm-ernic0) and its address. -->
+    <server type='ernic' id='mesh'/>
+    <!-- The clients only. An S3-over-RDMA object store inside the NIC's
+         server, the protocol hipObject speaks, held in the
+         server's memory, at 192.168.201.1:9000, under the bucket name
+         hipObject's own client uses. It answers ARP itself. Not
+         on the address the NVMe-oF NIC below also defaults to. -->
+    <server type='ernic' id='s3' vm='client'>
+      <backend type='s3'>ip=192.168.201.1,bucket=hipobj-test,size=512M</backend>
+    </server>
+    <!-- The clients only. An NVMe-oF controller inside the NIC's server, at
+         192.168.200.1:4420: a 1 GiB block namespace (NSID 1) and a 256 MiB
+         NVMe-KV namespace (NSID 2). -->
+    <server type='ernic' id='nvmeof' vm='client'>
+      <backend type='nvmeof'>size=1G,ns=2,kv=1,size=256M</backend>
+    </server>
+    <server type='rocjitsu' id='gpu0' vm='client'/>
+    <server type='sdxi' id='sdxi0'/>
+    <!-- The clients only. An NVMe controller on PCIe, served by SPDK over
+         vfio-user, with one NVMe-KV namespace (NSID 1) held in memory: the
+         Key Value command set with no fabric in the way. Found in the
+         guest by its serial number. -->
+    <server type='spdk' id='nvme-kv' vm='client'>
+      <namespaces>kv:mem</namespaces>
+      <serial>STORAGE-KV</serial>
+    </server>
+  </devices>
+
+  <vm-vcpus>4</vm-vcpus>
+  <vm-vmem>8192</vm-vmem>
+  <vm-shm-size>10g</vm-shm-size>
+  <!-- One for each guest: the client keeps one local drive, the server
+       gets its 24. run-vm creates a sparse qcow2 for each on first boot,
+       so 25 drives of 8 TiB cost the host what the guests write. -->
+  <vm-nvme>1,24</vm-nvme>
+  <vm-nvme-size>8T</vm-nvme-size>
+  <!-- The client's drive may DMA into its GPU's BAR, which is what makes
+       a hipFile direct read fast. The server has no GPU and does not get
+       the option. -->
+  <vm-nvme-vram>true</vm-nvme-vram>
+  <vm-vfio-user-root-port>true</vm-vfio-user-root-port>
+  <vm-images-dir>/var/lib/qemu-tool/images</vm-images-dir>
+  <vm-username>ubuntu</vm-username>
+  <vm-password>changeme</vm-password>
+  <qemu-tool-src>../../..</qemu-tool-src>
+
+  <!-- The TAP is the guests' L2 path: NVMe-oF and NFS between them need
+       addresses that answer. Mesh NICs get one; the two backend NICs do
+       not. -->
+  <ernic-tap>true</ernic-tap>
+  <vm-extra-hostfwd>tcp::9100-:9100,tcp::9879-:9879</vm-extra-hostfwd>
+  <grafana-enable>true</grafana-enable>
+  <logs-enable>true</logs-enable>
+</fleet>

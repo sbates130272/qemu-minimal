@@ -31,12 +31,13 @@ from pathlib import Path
 from typing import Any
 
 from .compose import _DEFAULT_STACK, _STACKS
+from .fleet_xml import per_vm as _values_per_vm
 from .fleet_xml import (
     SERVER_ENV, SERVER_OPTIONS, FleetConfig, FleetXml, Server, device_counts,
-    split_args,
+    guest_names, guest_roles, scoped, servers_for, split_args,
 )
 from .config import (
-    DEFAULT_ERNIC_MTU, DEFAULT_NVME_BLOCK_SIZE, rdma_active_mtu,
+    DEFAULT_ERNIC_MTU, DEFAULT_NVME_BLOCK_SIZE, nvme_size, rdma_active_mtu,
 )
 from .identity import AMD_CPU_VENDOR, cpu_vendor_note
 from .ports import publish_address, publish_mapping, reach_address
@@ -254,17 +255,35 @@ def _split_per_vm(raw: str, count: int, element: str) -> list[str]:
     return items
 
 
+def _each_vm(
+    cfg: FleetConfig, field: str, count: int, element: str
+) -> list[int]:
+    """A per-guest integer setting, as one value for each guest."""
+    try:
+        return _values_per_vm(getattr(cfg, field), count, element)
+    except ValueError as exc:
+        sys.exit(f"Error: {exc}")
+
+
+def _listed(values: tuple[int, ...]) -> str:
+    """A per-guest setting as its element's text: 0, or 0,24."""
+    return ",".join(str(v) for v in values)
+
+
 def _per_vm_flags(cfg: FleetConfig, count: int) -> list[list[tuple[str, str]]]:
     """Resolve the run-vm flags for each VM as (flag, value) pairs."""
     per_vm: list[list[tuple[str, str]]] = [[] for _ in range(count)]
     # <vm-nvme> is a count: run-vm creates the backing qcow2 per device itself
     # (_nvme_create), so unlike the root disk there is no gen-vm step to pair
-    # with it. A negative count asks for null_blk.
-    for flag, value in (
-        ("--vcpus", cfg.vm_vcpus), ("--vmem", cfg.vm_vmem), ("--nvme", cfg.vm_nvme),
+    # with it. A negative count asks for null_blk. Each of the three is one
+    # value for every guest or one for each.
+    for flag, field, element in (
+        ("--vcpus", "vm_vcpus", "<vm-vcpus>"),
+        ("--vmem", "vm_vmem", "<vm-vmem>"),
+        ("--nvme", "vm_nvme", "<vm-nvme>"),
     ):
-        if value:
-            for vm in per_vm:
+        for vm, value in zip(per_vm, _each_vm(cfg, field, count, element)):
+            if value:
                 vm.append((flag, str(value)))
     # A host directory shared into every guest over 9p (mount_tag=hostfs).
     # This is how a fleet gets a large artifact without copying it per VM: one
@@ -313,15 +332,80 @@ ERNIC_MAC_PREFIX = "72:6f:63:6d"
 _NIC_MAX = 244
 
 
-def _servers(cfg: FleetConfig, kind: str, per_vm: int) -> list[Server | None]:
-    """The <devices> entries of one type, by position in a guest.
+def _servers(
+    cfg: FleetConfig, kind: str, per_vm: int, n: int
+) -> list[Server | None]:
+    """The <devices> entries of one type guest `n` gets, by position.
 
     None in every position when the fleet has no <devices> block, which
     leaves each server exactly as the counts alone describe it.
     """
     if not cfg.devices:
         return [None] * per_vm
-    return [d for d in cfg.devices if d.type == kind]
+    return [d for d in servers_for(cfg.devices, n, _roles(cfg))
+            if d.type == kind]
+
+
+def _roles(cfg: FleetConfig) -> list[str]:
+    """Each guest's role, or [] with no <vm-roles>; exits on a bad list."""
+    if not cfg.vm_roles:
+        return []
+    try:
+        return guest_roles(cfg)
+    except ValueError as exc:
+        sys.exit(f"Error: {exc}")
+
+
+def _check_vm_attributes(cfg: FleetConfig, count: int) -> None:
+    """A vm attribute names guests and roles the fleet has.
+
+    First, before anything counts devices: an entry for a role nobody has
+    reaches no guest, and what would be reported is the missing device.
+    """
+    for server in cfg.devices:
+        beyond = [n for n in server.vms or ()
+                  if isinstance(n, int) and n > count]
+        unknown = [r for r in server.vms or ()
+                   if isinstance(r, str) and r not in _roles(cfg)]
+        if unknown:
+            have = ", ".join(dict.fromkeys(_roles(cfg))) or "none"
+            sys.exit(
+                f"Error: <server id='{server.id}'> is for the role "
+                f"{', '.join(unknown)}, which <vm-roles> does not have "
+                f"(its roles: {have}). Name a role of <vm-roles>, or a "
+                "guest by its number.")
+        if beyond:
+            sys.exit(
+                f"Error: <server id='{server.id}'> is for guest "
+                f"{', '.join(str(n) for n in beyond)} and <vm-count> is "
+                f"{count}. Its vm attribute names guests from 1 to "
+                f"{count}.")
+
+
+def _check_guest_devices(cfg: FleetConfig, count: int) -> None:
+    """What a vm attribute can get wrong, which only the fleet can say."""
+    if not scoped(cfg.devices):
+        return
+    if cfg.vm_pcie_switch_width:
+        sys.exit(
+            "Error: <vm-pcie-switch-width> is "
+            f"{cfg.vm_pcie_switch_width} and a <server> in <devices> has a "
+            "vm attribute. The switch grouping pairs NICs with GPUs by a "
+            "count every guest shares, so guests that differ are placed on "
+            "root ports: remove the width, or the vm attributes.")
+    for n in range(1, count + 1):
+        mine = servers_for(cfg.devices, n, _roles(cfg))
+        if not any(d.type == "ernic" for d in mine):
+            sys.exit(
+                f"Error: guest {n} gets no <server type='ernic'>: every "
+                "entry of that type has a vm attribute naming other guests. "
+                "Every guest of a generated stack has at least one NIC, "
+                "which is where its address comes from.")
+        for kind in ("spdk", "vfu-ringee", "vfu-ringer"):
+            if sum(1 for d in mine if d.type == kind) > 1:
+                sys.exit(
+                    f"Error: guest {n} gets more than one <server "
+                    f"type='{kind}'>; a guest takes one.")
 
 
 def _option_words(server: Server | None) -> list[str]:
@@ -388,10 +472,10 @@ def _check_pci_mmio_bridge(cfg: FleetConfig) -> None:
     """
     if not cfg.vm_pci_mmio_bridge:
         return
-    if cfg.vm_nvme <= 0:
+    if min(cfg.vm_nvme) <= 0:
         sys.exit(
             "Error: <vm-pci-mmio-bridge> is true and <vm-nvme> is "
-            f"{cfg.vm_nvme}. The bridge serves the guest's emulated NVMe "
+            f"{_listed(cfg.vm_nvme)}. The bridge serves the guest's emulated NVMe "
             "devices, so give the fleet one (<vm-nvme>1</vm-nvme>) or set "
             "<vm-pci-mmio-bridge>false.")
     if not pins_fork_qemu(cfg.qemu_ref):
@@ -414,7 +498,7 @@ def _check_nvme_block_size(cfg: FleetConfig) -> None:
     """
     if cfg.vm_nvme_block_size == DEFAULT_NVME_BLOCK_SIZE:
         return
-    if cfg.vm_nvme == 0:
+    if not any(cfg.vm_nvme):
         sys.exit(
             "Error: <vm-nvme-block-size> is "
             f"{cfg.vm_nvme_block_size} and <vm-nvme> is 0. It sets the "
@@ -422,6 +506,27 @@ def _check_nvme_block_size(cfg: FleetConfig) -> None:
             "nothing else (an SPDK controller and an nvmeof backend have "
             "their own), so give the fleet an NVMe (<vm-nvme>1</vm-nvme>) "
             "or remove <vm-nvme-block-size> from the layer that sets it.")
+
+
+def _check_nvme_size(cfg: FleetConfig) -> None:
+    """<vm-nvme-size>: a size run-vm can hand qemu-img, and a disk to size.
+
+    Only a scratch qcow2 has a size to set: a negative <vm-nvme> is the
+    host's null_blk devices, which have their own.
+    """
+    if not cfg.vm_nvme_size:
+        return
+    try:
+        nvme_size(cfg.vm_nvme_size, "<vm-nvme-size>")
+    except ValueError as exc:
+        sys.exit(f"Error: {exc}")
+    if max(cfg.vm_nvme) <= 0:
+        sys.exit(
+            f"Error: <vm-nvme-size> is {cfg.vm_nvme_size} and <vm-nvme> is "
+            f"{_listed(cfg.vm_nvme)}. It sizes the scratch qcow2 run-vm "
+            "creates for each emulated NVMe, so give a guest one "
+            "(<vm-nvme>1</vm-nvme>) or remove <vm-nvme-size> from the layer "
+            "that sets it.")
 
 
 # <ernic-mtu>: the name of the systemd credential each guest is handed, and
@@ -531,10 +636,12 @@ def _check_nvme_vram(cfg: FleetConfig) -> None:
     """
     if not cfg.vm_nvme_vram:
         return
-    if cfg.vm_nvme <= 0:
+    # With a value for each guest, the guests that have an NVMe on a qcow2
+    # and a GPU get the option and the others do not.
+    if max(cfg.vm_nvme) <= 0:
         sys.exit(
             "Error: <vm-nvme-vram> is true and <vm-nvme> is "
-            f"{cfg.vm_nvme}. It points each guest's emulated NVMe devices at "
+            f"{_listed(cfg.vm_nvme)}. It points each guest's emulated NVMe devices at "
             "the guest's first GPU, so it needs <vm-nvme> of at least 1 "
             "(null_blk devices, a negative count, cannot take it). Give the "
             "fleet an NVMe, or set <vm-nvme-vram>false in the layer that "
@@ -820,7 +927,10 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
     if cfg.devices:
         # The block says what a guest gets; the counts follow from it. A
         # FleetConfig built in code may not have been through the parser.
-        counts = device_counts(cfg.devices)
+        # The counts are the most any one guest has: with no vm attribute
+        # in the block that is every guest's number.
+        _check_vm_attributes(cfg, count)
+        counts = device_counts(cfg.devices, count, _roles(cfg))
         for kind in ("ernic", "rocjitsu"):
             if counts[kind] < 1:
                 sys.exit(
@@ -829,16 +939,24 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
                     "one GPU.")
         ernic_per_vm, rocjitsu_per_vm, sdxi_per_vm = (
             counts["ernic"], counts["rocjitsu"], counts["sdxi"])
+        _check_guest_devices(cfg, count)
     else:
         ernic_per_vm = _positive(cfg.ernic_per_vm, "<ernic-per-vm>")
         rocjitsu_per_vm = _positive(cfg.rocjitsu_per_vm, "<rocjitsu-per-vm>")
         sdxi_per_vm = cfg.sdxi_per_vm
-    ernic_servers = _servers(cfg, "ernic", ernic_per_vm)
-    rocjitsu_servers = _servers(cfg, "rocjitsu", rocjitsu_per_vm)
-    sdxi_servers = _servers(cfg, "sdxi", sdxi_per_vm)
+    # What each guest gets, by type. With no vm attribute these are the
+    # same lists for every guest.
+    guest_ernics = [_servers(cfg, "ernic", ernic_per_vm, n)
+                    for n in range(1, count + 1)]
+    guest_gpus = [_servers(cfg, "rocjitsu", rocjitsu_per_vm, n)
+                  for n in range(1, count + 1)]
+    guest_sdxi = [_servers(cfg, "sdxi", sdxi_per_vm, n)
+                  for n in range(1, count + 1)]
+    differ = scoped(cfg.devices)
+    roles = _roles(cfg)
     # SPDK exists only as a <devices> entry: there is no count for it.
     spdk_servers = [d for d in cfg.devices if d.type == "spdk"]
-    if len(spdk_servers) > 1:
+    if len(spdk_servers) > 1 and not differ:
         # The image serves its controller at <dir>/cntrl, and run-vm names a
         # vfio-user device after its socket's stem, so two in one guest
         # would be two devices called cntrl.
@@ -858,7 +976,7 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
         role: [d for d in cfg.devices if d.type == f"vfu-{role}"]
         for role in _DOORBELL_ROLES}
     for role, found in doorbell_servers.items():
-        if len(found) > 1:
+        if len(found) > 1 and not differ:
             sys.exit(
                 f"Error: <devices> has more than one <server type='vfu-{role}'>; "
                 f"a guest takes one vfu-{role}.")
@@ -877,11 +995,13 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
     # The mesh counts rocm-ernic PROCESSES, not VMs. At <ernic-per-vm> > 1 the
     # two differ by that factor, and a message naming only the VM count would
     # send someone looking at the wrong number.
-    nic_count = count * ernic_per_vm
+    nic_count = sum(len(g) for g in guest_ernics)
     # A NIC given a backend of its own is not a mesh node, so the ceilings
     # count the ones that are.
-    mesh_per_vm = sum(1 for x in ernic_servers if _backend(x) is None)
-    mesh_count = count * mesh_per_vm
+    mesh_per_vm = max(
+        sum(1 for x in g if _backend(x) is None) for g in guest_ernics)
+    mesh_count = sum(
+        1 for g in guest_ernics for x in g if _backend(x) is None)
     # Guest addresses are ERNIC_SUBNET.11 upward in a /24, one per NIC. The
     # mesh ceiling used to keep the count far below this; a fleet of NICs
     # that are off the mesh has no other bound.
@@ -912,12 +1032,12 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
     _check_image_coherence(cfg)
     _check_nvme_vram(cfg)
     _check_nvme_block_size(cfg)
+    _check_nvme_size(cfg)
     _check_ernic_mtu(cfg)
     _check_cpu_vendor(cfg)
     _warn_if_gpu_without_root_port(cfg)
 
-    prefix = _setting(cfg, "name_prefix")
-    names = [f"{prefix}-{n}" for n in range(1, count + 1)]
+    names = guest_names(cfg)
     ports = [str(cfg.ssh_port_base + n - 1) for n in range(1, count + 1)]
 
     # Keyed on the GLOBAL NIC ordinal, not the VM index. At one ernic per VM
@@ -938,6 +1058,7 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
         _setting(cfg, "rocjitsu_config"), count, "<rocjitsu-config>")
 
     flags = _per_vm_flags(cfg, count)
+    nvme_counts = _each_vm(cfg, "vm_nvme", count, "<vm-nvme>")
 
     net = _setting(cfg, "fleet_prefix")
 
@@ -958,14 +1079,26 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
     sdxis: list[dict[str, Any]] = []
     spdks: list[dict[str, Any]] = []
     doorbells: list[dict[str, Any]] = []
+    # Running ordinals, fleet-wide: with every guest alike they are the
+    # index * per-VM + d they always were.
+    nic_o = gpu_o = sdxi_o = 0
     for index in range(count):
         n = index + 1
+        ernic_servers = guest_ernics[index]
+        rocjitsu_servers = guest_gpus[index]
+        sdxi_servers = guest_sdxi[index]
+        mine = (servers_for(cfg.devices, n, roles) if differ
+                else cfg.devices)
         vm_nics = []
-        for d in range(1, ernic_per_vm + 1):
-            o = index * ernic_per_vm + d
+        for d in range(1, len(ernic_servers) + 1):
+            nic_o += 1
+            o = nic_o
             suffix = _dev_suffix(n, d, ernic_per_vm)
             vm_nics.append({
                 "n": n, "d": d, "o": o,
+                # How many NICs this guest has, which is what "d of" in a
+                # label counts: not every guest has the fleet's most.
+                "of": len(ernic_servers),
                 "service": f"ernic-{suffix}",
                 "addr": f"{net}.{_NET_ERNIC}.{o}",
                 "mac": macs[o - 1],
@@ -981,8 +1114,9 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
                 "id": getattr(ernic_servers[d - 1], "id", None),
             })
         vm_gpus = []
-        for d in range(1, rocjitsu_per_vm + 1):
-            o = index * rocjitsu_per_vm + d
+        for d in range(1, len(rocjitsu_servers) + 1):
+            gpu_o += 1
+            o = gpu_o
             suffix = _dev_suffix(n, d, rocjitsu_per_vm)
             vm_gpus.append({
                 "n": n, "d": d, "o": o,
@@ -995,8 +1129,9 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
                 "id": getattr(rocjitsu_servers[d - 1], "id", None),
             })
         vm_sdxi = []
-        for d in range(1, sdxi_per_vm + 1):
-            o = index * sdxi_per_vm + d
+        for d in range(1, len(sdxi_servers) + 1):
+            sdxi_o += 1
+            o = sdxi_o
             suffix = _dev_suffix(n, d, sdxi_per_vm)
             vm_sdxi.append({
                 "n": n, "d": d, "o": o,
@@ -1015,7 +1150,7 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
             "sock": f"/run/vfu/spdk-{n}/cntrl",
             "env": _option_env(server),
             "id": server.id,
-        } for server in spdk_servers]
+        } for server in spdk_servers if server in mine]
         # The ringee first, as _DOORBELL_ROLES has it: the order is the
         # guest's device order, so its first device is the one being rung.
         vm_doorbell = [{
@@ -1024,7 +1159,8 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
             "addr": f"{net}.{_DOORBELL_OCTET[role]}.{n}",
             "sock": f"/run/vfu/vfu-{role}-{n}.sock",
             "id": server.id,
-        } for role in _DOORBELL_ROLES for server in doorbell_servers[role]]
+        } for role in _DOORBELL_ROLES for server in doorbell_servers[role]
+            if server in mine]
         nics += vm_nics
         gpus += vm_gpus
         sdxis += vm_sdxi
@@ -1039,6 +1175,7 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
             "n": n,
             "qemu_addr": f"{net}.{_NET_QEMU}.{n}",
             "name": names[index],
+            "role": roles[index] if roles else "",
             "ssh_port": ports[index],
             "nics": vm_nics,
             "gpus": vm_gpus,
@@ -1070,8 +1207,13 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
             "rocjitsu_sock": vm_gpus[0]["sock"] if vm_gpus else "",
             "stats_file": primary["stats_file"],
             "shm_size": shm_sizes[index],
-            "rocjitsu_config": vm_gpus[0]["config"],
+            "rocjitsu_config": vm_gpus[0]["config"] if vm_gpus else "",
             "flags": flags[index],
+            "nvme": nvme_counts[index],
+            # <vm-nvme-vram> reaches the guests that have both an NVMe on
+            # a qcow2 and a GPU to point it at.
+            "nvme_vram": bool(
+                cfg.vm_nvme_vram and nvme_counts[index] > 0 and vm_gpus),
         })
 
     return {
@@ -1094,6 +1236,11 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
         "switch_width": _switch_width,
         "nvme_vram": cfg.vm_nvme_vram,
         "nvme_block_size": cfg.vm_nvme_block_size,
+        "nvme_size": cfg.vm_nvme_size,
+        # True when the guests are not all alike, which is when the
+        # inventory says what each one has.
+        "guests_differ": differ or len(set(nvme_counts)) > 1 or bool(roles),
+        "roles": list(dict.fromkeys(roles)),
         "ernic_image": cfg.ernic_ref,
         "qemu_image": cfg.qemu_ref,
         "cpu_sockets": cfg.vm_cpu_sockets,
@@ -1406,7 +1553,7 @@ def render_compose(
         # the first line has to say, because it decides restart policy,
         # backend mode and who waits on whom.
         label = f"VM {n} NIC" if spec["ernic_per_vm"] == 1 \
-            else f"VM {n} NIC {nic['d']}/{spec['ernic_per_vm']}"
+            else f"VM {n} NIC {nic['d']}/{nic['of']}"
         if nic["id"]:
             label += f" ({nic['id']})"
         out.append("")
@@ -1432,13 +1579,17 @@ def render_compose(
         # DNS on every one of the fleet's N*(N-1) peer links. Naming the
         # container after its own address makes that a numeric getaddrinfo.
         out.append(f"    hostname: {nic['addr']}")
-        if spec["ernic_tap"]:
+        # Guest Ethernet is for reaching other guests, which only a mesh
+        # NIC does: a NIC with a backend of its own talks to that backend,
+        # which answers inside the server, and gets no tap.
+        tap = spec["ernic_tap"] and mesh
+        if tap:
             # Attaching to a pre-created, owned tap needs the device node and
             # nothing else -- no NET_ADMIN. That capability is the sidecar's.
             out.append("    devices:")
             out.append("      - /dev/net/tun")
         out.append("    networks:")
-        if spec["ernic_tap"]:
+        if tap:
             out.append("      l2: {}")
         out.append("      fleet:")
         out.append(f"        ipv4_address: {nic['addr']}")
@@ -1485,13 +1636,13 @@ def render_compose(
             scope = spec["ernic_p4_guest_scope"]
             if scope and scope != "none":
                 argv += ["--p4-guest-scope", scope]
-        if spec["ernic_tap"]:
+        if tap:
             argv += ["-T", _TAP_IF]
         # Last, so the derived options read first and a reader sees what was
         # added. None of these can be one the generator wrote: the entry's
         # option elements are a fixed table that leaves those out.
         argv += nic["args"]
-        if spec["ernic_tap"]:
+        if tap:
             # The sidecar can only run once this container exists, because it
             # shares its netns -- so the tap does not exist at the instant
             # rocm-ernic starts. Wait for it rather than racing and dying.
@@ -1776,7 +1927,11 @@ def render_compose(
             # QEMU's, so a fleet that names none renders nothing.
             out.append(
                 f'          --nvme-block-size {spec["nvme_block_size"]} \\')
-        if spec["nvme_vram"]:
+        if spec["nvme_size"] and vm["nvme"] > 0:
+            # Only for a size a layer asked for, on a guest with a scratch
+            # disk to size: 1024G is run-vm's default.
+            out.append(f'          --nvme-size "{spec["nvme_size"]}" \\')
+        if vm["nvme_vram"]:
             # run-vm gives each vfio-user device its socket's stem as qdev id.
             out.append(
                 f'          --nvme-vram-dev "{Path(vm["gpus"][0]["sock"]).stem}" \\')
@@ -2015,6 +2170,8 @@ def render_compose(
         out.append("  # NET_ADMIN. Left at the default of 0 it would hand a")
         out.append("  # non-root ernic EPERM and a guest with no Ethernet.")
         for nic in spec["nics"]:
+            if nic["backend"] is not None:
+                continue
             suffix = _dev_suffix(nic["n"], nic["d"], spec["ernic_per_vm"])
             out.append(f"  tapsetup-{suffix}:")
             out.append("    build:")
@@ -2238,7 +2395,15 @@ def render_inventory(spec: dict[str, Any], digest: str) -> str:
         # rename comes from ernic_guest_setup and a guest without it keeps
         # the kernel name, so a name here is sometimes simply wrong.
         out.append(f"          fleet_guest_ernic_mac: {vm['mac']}")
-        if len(vm["nics"]) > 1:
+        if spec["guests_differ"]:
+            # The guests of this fleet are not alike, so a play has to be
+            # able to tell which is which: by what each one has.
+            if vm["role"]:
+                out.append(f"          fleet_guest_role: {vm['role']}")
+            out.append(f"          fleet_guest_gpus: {len(vm['gpus'])}")
+            out.append(f"          fleet_guest_sdxi: {len(vm['sdxi'])}")
+            out.append(f"          fleet_guest_nvme: {vm['nvme']}")
+        if len(vm["nics"]) > 1 or spec["guests_differ"]:
             # The remaining NICs, which the single-NIC vars above cannot
             # express. Nothing in ansible/ consumes this yet --
             # ernic_guest_setup's configure play addresses one device. It is
@@ -2250,6 +2415,19 @@ def render_inventory(spec: dict[str, Any], digest: str) -> str:
                 out.append(f"            - index: {nic['d']}")
                 out.append(f"              mac: {nic['mac']}")
                 out.append(f"              ip: {nic['ip']}")
+                if spec["guests_differ"]:
+                    # Which NIC is which: the entry's id, and "mesh" or
+                    # the backend's type.
+                    kind = (nic["backend"] or "mesh").split(":", 1)[0]
+                    out.append(f"              id: {nic['id']}")
+                    out.append(f"              backend: {kind}")
+    for role in spec["roles"]:
+        # A group for each role, so a play names the guests it is for.
+        out.append(f"    fleet_{role}:")
+        out.append("      hosts:")
+        for vm in spec["vms"]:
+            if vm["role"] == role:
+                out.append(f"        {vm['name']}:")
     return "\n".join(out) + "\n"
 
 

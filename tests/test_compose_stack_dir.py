@@ -279,7 +279,7 @@ class TestDefaults(ComposeCase):
     def test_the_default_stack_is_rocm_golden(self):
         self.assertEqual(compose._DEFAULT_STACK, "rocm-golden")
         self.assertEqual(compose._STACKS,
-                         ("rocm-golden", "helios-tray", "mi355x-server", "xio"))
+                         ("rocm-golden", "helios-tray", "mi355x-server", "xio", "storage"))
 
 
 class TestNamedStackFleet(ComposeCase):

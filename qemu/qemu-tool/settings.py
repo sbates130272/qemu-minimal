@@ -51,12 +51,16 @@ def vm_overrides(fleet: FleetConfig) -> dict[str, Any]:
     }
     if fleet.vm_images_dir:
         out["images"] = Path(fleet.vm_images_dir).expanduser()
-    if fleet.vm_vcpus:
-        out["vcpus"] = fleet.vm_vcpus
-    if fleet.vm_vmem:
-        out["vmem"] = fleet.vm_vmem
-    if fleet.vm_nvme:
-        out["nvme"] = str(fleet.vm_nvme)
+    # A list is one value per fleet guest; which is this VM's is not
+    # knowable here, so only a single value is applied.
+    for field, key in (("vm_vcpus", "vcpus"), ("vm_vmem", "vmem")):
+        values = getattr(fleet, field)
+        if len(values) == 1 and values[0]:
+            out[key] = values[0]
+    if len(fleet.vm_nvme) == 1 and fleet.vm_nvme[0]:
+        out["nvme"] = str(fleet.vm_nvme[0])
+    if fleet.vm_nvme_size:
+        out["nvme_size"] = fleet.vm_nvme_size
     if fleet.vm_nvme_block_size != DEFAULT_NVME_BLOCK_SIZE:
         out["nvme_block_size"] = fleet.vm_nvme_block_size
     if fleet.vm_username:

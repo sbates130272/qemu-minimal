@@ -46,6 +46,22 @@ def nvme_block_size(raw: str, what: str) -> int:
     raise ValueError(f"{what} must be {allowed}, got {raw!r}")
 
 
+# The size of each scratch qcow2 run-vm creates for an emulated NVMe:
+# --nvme-size and <vm-nvme-size>. The file is sparse.
+DEFAULT_NVME_SIZE = "1024G"
+_NVME_SIZE_FORM = re.compile(r"[1-9][0-9]*[KMGT]\Z")
+
+
+def nvme_size(raw: str, what: str) -> str:
+    """RAW as a size qemu-img takes; ValueError names WHAT and the form."""
+    text = raw.strip()
+    if not _NVME_SIZE_FORM.match(text):
+        raise ValueError(
+            f"{what} must be a whole number and K, M, G or T, such as 8T or "
+            f"{DEFAULT_NVME_SIZE}, got {raw!r}")
+    return text
+
+
 # <ernic-mtu>: the MTU of every emulated ernic NIC in a guest, and of the
 # Ethernet path between guests when the fleet has one. 1500 is what the
 # device comes up with. 9198 is the most the pinned rocm-ernic server
@@ -215,6 +231,9 @@ class VMConfig:
     # adds nothing to the command line. A literal --nvme string is not
     # touched.
     nvme_block_size: int = DEFAULT_NVME_BLOCK_SIZE
+    # The size of each scratch qcow2 run-vm creates for --nvme N. A file
+    # that is already there keeps its size.
+    nvme_size: str = DEFAULT_NVME_SIZE
     pci_testdev: bool = False
     pci_hostdev: list[str] = field(default_factory=list)
     vram_dev_index: int | None = None  # 1-based index into pci_hostdev

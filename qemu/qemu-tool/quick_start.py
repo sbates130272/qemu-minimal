@@ -53,7 +53,9 @@ from .check_system import docker_compose_ok, free_gb, kvm_usable
 from .compose import (_apply_identity, _precreate_data_dirs,
                       interpolation_env, resolve_identity)
 from .config import VMConfig
-from .fleet_xml import NS_FLEET, FleetConfig, FleetXml
+from .fleet_xml import (
+    NS_FLEET, FleetConfig, FleetXml, guest_names, guest_roles, servers_for,
+)
 from .gen_compose import FORK_MARK as _FORK_MARK, pins_fork_qemu
 from .gen_compose import run as gen_compose_run
 from .gen_vm import run as gen_vm_run
@@ -73,10 +75,16 @@ VARIANTS: dict[str, tuple[str, str, str, str | None]] = {
     "mi355x":  ("mi355x-server.xml", "quickstart-mi355x", "quickstart-mi355x-key", None),
     "helios":  ("helios-tray.xml",   "quickstart-helios", "quickstart-helios-key", None),
     "xio":     ("xio.xml",           "quickstart-xio",    "quickstart-xio-key",    "vm-xio.yml"),
+    "storage": ("storage.xml",       "quickstart-storage", "quickstart-storage-key", "vm-storage.yml"),
 }
 
 # The playbook --xio-test belongs to: its rocm-xio play is off without it.
 _XIO_PLAYBOOK = "vm-xio.yml"
+
+# The storage flavor's playbook. Its tests are what `test` is for there, so
+# no switch opens them: it turns the second guest into a storage server and
+# tests every path from the first, and has to leave a result behind.
+_STORAGE_PLAYBOOK = "vm-storage.yml"
 
 # The playbooks that move RDMA bytes between guests, and so the ones whose
 # run is checked against the NIC's own byte counter. vm-xio.yml builds and
@@ -245,7 +253,11 @@ class _State:
         return self.key_dir / "id_rsa"
 
     def vm(self, index: int) -> str:
-        return f"{self.prefix}-{index}"
+        try:
+            return guest_names(self.fleet)[index - 1]
+        except (ValueError, IndexError):
+            # A bad <vm-roles> is the generator's to refuse, with the reason.
+            return f"{self.prefix}-{index}"
 
     @property
     def bind_addr(self) -> str:
@@ -716,19 +728,19 @@ def preflight(state: _State, write_layers: bool = True) -> None:
                      f"Guest size derived from this host "
                      f"({os.cpu_count()} cores).")
 
-    vcpus = state.fleet.vm_vcpus
-    vmem = state.fleet.vm_vmem
+    each = state.fleet.vm_vcpus
     shm = state.fleet.shm_size
     count = state.vm_count
     cores = os.cpu_count() or 1
+    total_vcpus = each[0] * count if len(each) == 1 else sum(each)
 
     # Not fatal, because a host that is merely tight still finishes. Warned
     # about because the symptom is not "slow": the mesh manager's heartbeat
     # timeout is 20 s of wall clock and is not tunable, so an oversubscribed
     # host mistakes live nodes for dead ones and the guests attached to them
     # die with "vfio-user: timed out waiting for reply" (AGENTS.md issue 14).
-    if vcpus * count > cores * 5 // 4:
-        print(f"warning: {count} x {vcpus} vCPU on {cores} cores is "
+    if total_vcpus > cores * 5 // 4:
+        print(f"warning: {count} x {_each(each)} vCPU on {cores} cores is "
               f"oversubscribed; expect heartbeat evictions "
               f"(AGENTS.md issue 14).", file=sys.stderr)
 
@@ -746,7 +758,8 @@ def preflight(state: _State, write_layers: bool = True) -> None:
 
     print()
     print(f"  settings    {' + '.join(str(p) for p in state.all_layers)}")
-    print(f"  guests      {count} x {vcpus} vCPU, {vmem} MiB RAM, {shm} shm")
+    print(f"  guests      {count} x {_each(each)} vCPU, "
+          f"{_each(state.fleet.vm_vmem)} MiB RAM, {shm} shm")
     print(f"  images      {state.images_dir}  ({_free_gb(state.images_dir):.0f} GB free)")
     print(f"  stack       {state.stack_dir}")
     if state.metrics:
@@ -1373,6 +1386,11 @@ def _write_network_inventory(state: _State) -> Path:
     return path
 
 
+def _each(values: tuple[int, ...]) -> str:
+    """A per-guest setting as text: the one value, or the list of them."""
+    return ",".join(str(v) for v in values)
+
+
 def _where_set(state: _State, field_name: str) -> str:
     """Where the merged value of one fleet setting came from, for a refusal.
 
@@ -1387,12 +1405,17 @@ def _where_set(state: _State, field_name: str) -> str:
     return f"by default (set in none of: {named})"
 
 
-def _mesh_nic(state: _State) -> int:
-    """Which of a guest's NICs is on the TCP mesh, 1-based; 0 when none is.
+def _mesh_nic(state: _State, index: int = 1) -> int:
+    """Which of guest `index`'s NICs is on the TCP mesh, 1-based; 0 when none.
 
     With no <devices> block every NIC is, and it is the first.
     """
-    nics = [d for d in state.fleet.devices if d.type == "ernic"]
+    try:
+        roles = guest_roles(state.fleet)
+    except ValueError:
+        roles = []
+    nics = [d for d in servers_for(state.fleet.devices, index, roles)
+            if d.type == "ernic"]
     if not nics:
         return 1
     for position, nic in enumerate(nics, 1):
@@ -1409,7 +1432,7 @@ def _ernic_suffix(state: _State, index: int) -> str:
     """
     if state.ernic_per_vm == 1:
         return str(index)
-    return f"{index}-{_mesh_nic(state) or 1}"
+    return f"{index}-{_mesh_nic(state, index) or 1}"
 
 
 def _check_mesh_tests(state: _State) -> None:
@@ -1493,6 +1516,21 @@ def _vfu_recorded(state: _State) -> str:
                 "")
 
 
+def _storage_recorded(state: _State) -> list[str]:
+    """The result line each client of the storage playbook left behind.
+
+    One file a client, storage-<guest>.md, each with one `storage: ` line.
+    """
+    found = []
+    for path in sorted(state.artifacts.glob("storage-*.md")):
+        try:
+            lines = path.read_text().splitlines()
+        except OSError:
+            continue
+        found += [l.strip() for l in lines if l.startswith("storage: ")][:1]
+    return found
+
+
 def _xio_recorded(state: _State) -> str:
     """What the rocm-xio play left on the controller, or '' when nothing."""
     path = state.artifacts / "xio.md"
@@ -1572,19 +1610,21 @@ def _check_optional_tests(state: _State) -> None:
              f"a table entry, and with {scope} {what}. Set "
              f"<p4-guest-scope>{_P4_SCOPE_NEEDED}</p4-guest-scope>, {again}; "
              "or drop --p4-test.")
-    if state.hipfile_test and state.fleet.vm_nvme < 0:
+    # The test reads on every guest, so the guest with the fewest decides.
+    nvme = min(state.fleet.vm_nvme)
+    if state.hipfile_test and nvme < 0:
         # A negative count is run-vm's --nvme -N: devices backed by the
         # host's /dev/nullbN, which the play would make a filesystem on.
         _die("--hipfile-test: <vm-nvme> is "
-             f"{state.fleet.vm_nvme} {_where_set(state, 'vm_nvme')}, which "
+             f"{_each(state.fleet.vm_nvme)} {_where_set(state, 'vm_nvme')}, which "
              "gives the guests NVMe devices backed by the host's null_blk "
              "devices. The test makes a filesystem on the namespace and "
              "reads a file back from it, so it needs one backed by a qcow2 "
              f"file: set <vm-nvme>1</vm-nvme>, {again}; or drop "
              "--hipfile-test.")
-    if state.hipfile_test and state.fleet.vm_nvme < 1:
+    if state.hipfile_test and nvme < 1:
         _die("--hipfile-test: this fleet gives its guests no NVMe namespace "
-             f"to read from: <vm-nvme> is {state.fleet.vm_nvme} "
+             f"to read from: <vm-nvme> is {_each(state.fleet.vm_nvme)} "
              f"{_where_set(state, 'vm_nvme')}, so there is no /dev/nvme0n1. "
              f"Set <vm-nvme>1</vm-nvme>, {again}; or drop --hipfile-test.")
     # Not refusals: the read works either way, and what differs is its
@@ -1715,6 +1755,21 @@ def configure_and_test(state: _State) -> None:
             _die("--vfu-doorbell was asked for and the playbook left no "
                  f"result in {state.artifacts / 'vfu-doorbell.md'}")
         _say(seen)
+    if state.playbook == _STORAGE_PLAYBOOK:
+        # A playbook that exits 0 says no play failed, and a skipped play
+        # did not fail: the result line is what says the tests ran.
+        seen = _storage_recorded(state)
+        try:
+            clients = guest_roles(state.fleet).count("client") or 1
+        except ValueError:
+            clients = 1
+        if len(seen) < clients:
+            _die(f"the storage playbook left {len(seen)} result(s) in "
+                 f"{state.artifacts} and the fleet has {clients} client(s): "
+                 "a client that was not tested did not pass")
+        for line in seen:
+            _say(line)
+        return
     if not counted:
         _say(f"{state.playbook} finished; it runs no RDMA test between guests")
         return
@@ -1949,8 +2004,9 @@ def report(state: _State) -> None:
     out = head + [
         "",
         f"- Guest image: `{state.fleet.backing_ref.split(':')[-1]}`",
-        f"- Guest size: {state.vm_count} x {state.fleet.vm_vcpus} vCPU, "
-        f"{state.fleet.vm_vmem} MiB",
+        f"- Guest size: {state.vm_count} x "
+        f"{_each(state.fleet.vm_vcpus)} vCPU, "
+        f"{_each(state.fleet.vm_vmem)} MiB",
     ] + ([
         f"- RDMA bytes across the mesh: {state.rdma_delta if state.rdma_delta is not None else 'unknown'}",
     ] if counted else []) + [
@@ -2095,6 +2151,10 @@ def _summary(state: _State) -> None:
             print(f"      qemu-tool quick-start{flavor} --vfu-doorbell")
             print("                                        "
                   "# the same with the vfu-doorbell ringee and ringer")
+    elif state.playbook == _STORAGE_PLAYBOOK:
+        print(f"      qemu-tool quick-start{flavor} test")
+        print("                                        "
+              "# set the storage server up and test every path to it")
     elif state.playbook is not None:
         print(f"      qemu-tool quick-start{flavor} test")
         print(f"                                        # run {state.playbook} again")
@@ -2104,7 +2164,7 @@ def _summary(state: _State) -> None:
         ("--sdxi-test", state.fleet.sdxi_per_vm >= 1),
         ("--p4-test", state.fleet.p4_enable
          and state.fleet.p4_guest_scope == _P4_SCOPE_NEEDED),
-        ("--hipfile-test", state.fleet.vm_nvme >= 1))
+        ("--hipfile-test", min(state.fleet.vm_nvme) >= 1))
         if offered and state.playbook in _RDMA_TEST_PLAYBOOKS]
     if optional:
         print(f"      qemu-tool quick-start{flavor} test {' '.join(optional)}")

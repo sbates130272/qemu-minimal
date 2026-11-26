@@ -594,6 +594,36 @@ AGREE: list[tuple[str, str, bool]] = [
     ("a type with a space", server(" ernic"), False),
     ("an empty id", server("ernic", ident=""), False),
     ("an id that starts with a digit", server("ernic", ident="1a"), False),
+    # ---- the guests a server is for ----
+    ("a server for one guest",
+     devices("<server type='rocjitsu' id='a' vm='1'/>"), True),
+    ("a server for two guests",
+     devices("<server type='ernic' id='a' vm='1,3'/>"), True),
+    ("a server for every guest, said",
+     devices("<server type='ernic' id='a' vm='all'/>"), True),
+    ("a server for guest 0",
+     devices("<server type='ernic' id='a' vm='0'/>"), False),
+    ("a server for no guest",
+     devices("<server type='ernic' id='a' vm=''/>"), False),
+    ("a guest with white space before it",
+     devices("<server type='ernic' id='a' vm=' 1'/>"), False),
+    ("a guest list that ends in a comma",
+     devices("<server type='ernic' id='a' vm='1,'/>"), False),
+    ("a server for a role",
+     devices("<server type='rocjitsu' id='a' vm='client'/>"), True),
+    ("a server for a guest and a role",
+     devices("<server type='ernic' id='a' vm='2,server'/>"), True),
+    ("a role in capitals",
+     devices("<server type='ernic' id='a' vm='Client'/>"), False),
+    ("a guest with a sign",
+     devices("<server type='ernic' id='a' vm='+1'/>"), False),
+    # ---- an integer for each guest ----
+    ("a drive count for each guest",
+     fleet("<vm-count>2</vm-count><vm-nvme>0,24</vm-nvme>"), True),
+    ("vCPUs for each guest, with white space",
+     fleet("<vm-count>2</vm-count><vm-vcpus> 4, 8 </vm-vcpus>"), True),
+    ("a list with an empty item", fleet("<vm-nvme>0,,24</vm-nvme>"), False),
+    ("a list that ends in a comma", fleet("<vm-vmem>4096,</vm-vmem>"), False),
     ("an id of 33 characters", server("ernic", ident="a" * 33), False),
     ("an id with a space", server("ernic", ident="a b"), False),
     ("an id with a slash", server("ernic", ident="a/b"), False),
@@ -748,6 +778,9 @@ AGREE: list[tuple[str, str, bool]] = [
 # (what it shows, document). The parser refuses each; no grammar can, or
 # this one deliberately does not, and the schema accepts it.
 LOOSER: list[tuple[str, str]] = [
+    # "all" has the form of a role, so a grammar takes it in a list.
+    ("every guest and one more", devices(
+        "<server type='ernic' id='a' vm='1,all'/>")),
     ("two servers with one id", devices(
         "<server type='ernic' id='a'/><server type='rocjitsu' id='a'/>")),
     ("a count that disagrees with the block in the same file", fleet(
@@ -1309,7 +1342,7 @@ class Help(unittest.TestCase):
 
     def test_every_part_of_a_devices_block_has_help(self) -> None:
         wanted = {"devices", "server", "server@type", "server@id",
-                  "backend@type"}
+                  "server@vm", "backend@type"}
         for children in fleet_xml._SERVER_SETTINGS.values():
             wanted.update(children)
         self.assertEqual(set(fleet_xml.DEVICES_HELP), wanted)
@@ -1614,6 +1647,8 @@ class Differential(unittest.TestCase):
         "args": ("-a 'b c'", "a&#x7F;b"),
         "bool": ("Yes", "maybe"),
         "int": ("+2", "two"),
+        # A list is no integer; an empty item is no list.
+        "ints": ("4, 8", "4,,8"),
         "port": ("auto", "two"),
         "addr": ("127.0.0.1", "localhost"),
         "vendor": ("GenuineIntel", "Intel"),
@@ -2183,7 +2218,7 @@ class Counts(unittest.TestCase):
         changelog = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         unreleased = changelog[:changelog.index("\n## [v2.1.0]")]
         self.assertIn(
-            f"the four shipped fleet files and {len(documents())} small "
+            f"the five shipped fleet files and {len(documents())} small "
             "documents", " ".join(unreleased.split()))
 
     def test_the_orders_of_once_only_children(self) -> None:

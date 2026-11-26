@@ -282,7 +282,7 @@ class Role(unittest.TestCase):
         cfg = FleetXml.parse(FLEET)
         gpus = sum(1 for d in cfg.devices if d.type == "rocjitsu")
         # QEMU's own NVMe plus the SPDK controller.
-        nvme = cfg.vm_nvme + sum(1 for d in cfg.devices if d.type == "spdk")
+        nvme = cfg.vm_nvme[0] + sum(1 for d in cfg.devices if d.type == "spdk")
         (check,) = [t for t in self._tasks("load.yml")
                     if "ansible.builtin.assert" in t]
         that = check["ansible.builtin.assert"]["that"]
@@ -573,7 +573,7 @@ class Flavor(unittest.TestCase):
         self.assertEqual(cfg.devices[1].backend,
                          "nvmeof:size=1G,ns=2,kv=1,size=256M")
         self.assertTrue(cfg.vm_pci_mmio_bridge)
-        self.assertEqual(cfg.vm_nvme, 1)
+        self.assertEqual(cfg.vm_nvme, (1,))
         self.assertFalse(cfg.ernic_tap)
 
 

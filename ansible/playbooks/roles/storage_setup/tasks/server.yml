@@ -1,0 +1,195 @@
+---
+# Make a guest with NVMe drives the storage server: an NVMe-oF target over
+# RDMA serving some of them, and an NFS-over-RDMA export on a filesystem on
+# the next. The drives are scratch. Nothing survives a restart of the
+# guest: a rerun puts it back.
+
+- name: Install what the server needs
+  ansible.builtin.apt:
+    name: "{{ storage_setup_server_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: List the guest's own NVMe drives
+  ansible.builtin.script:
+    cmd: storage-drives.sh
+  register: storage_setup_drives_raw
+  changed_when: false
+
+- name: Fail without a drive for each namespace and one for the export
+  ansible.builtin.assert:
+    that:
+      - storage_setup_drives | length > storage_setup_nvmet_drives | int
+      - storage_setup_nvmet_drives | int >= 1
+    fail_msg: >-
+      This guest has {{ storage_setup_drives | length }} NVMe drive(s). The
+      NVMe-oF target serves {{ storage_setup_nvmet_drives }} and the NFS
+      export takes the next, so it needs
+      {{ storage_setup_nvmet_drives | int + 1 }}: the fleet's <vm-nvme> for
+      this guest.
+  vars:
+    storage_setup_drives: "{{ storage_setup_drives_raw.stdout_lines | select | list }}"
+
+- name: Name the drives
+  ansible.builtin.set_fact:
+    storage_setup_drives: "{{ storage_setup_drives_raw.stdout_lines | select | list }}"
+
+- name: Check the address the server listens on is this guest's
+  ansible.builtin.shell:
+    cmd: |
+      set -eu
+      addresses=$(ip -4 -o addr show)
+      case "$addresses" in
+          *" {{ storage_setup_server_address }}/"*) ;;
+          *) echo "no interface has {{ storage_setup_server_address }}:" \
+                  "it is this guest's address on the RDMA network" >&2
+             exit 1 ;;
+      esac
+    executable: /bin/sh
+  changed_when: false
+
+- name: Serve the first drives as an NVMe-oF target over RDMA
+  ansible.builtin.script:
+    cmd: >-
+      storage-nvmet-target.sh
+      {{ storage_setup_nvmet_nqn | quote }}
+      {{ storage_setup_server_address | quote }}
+      {{ storage_setup_nvmet_port | string | quote }}
+      {{ storage_setup_drives[: storage_setup_nvmet_drives | int] | map('quote') | join(' ') }}
+  register: storage_setup_nvmet
+  changed_when: "'already there' not in storage_setup_nvmet.stdout"
+
+- name: Look for a filesystem on the export's drive
+  ansible.builtin.command:
+    cmd: "blkid -o value -s TYPE {{ storage_setup_nfs_drive }}"
+  register: storage_setup_nfs_fs
+  changed_when: false
+  failed_when: storage_setup_nfs_fs.rc not in [0, 2]
+  vars:
+    storage_setup_nfs_drive: "{{ storage_setup_drives[storage_setup_nvmet_drives | int] }}"
+
+# One inode for each 4 MiB and no background zeroing of the inode tables:
+# the drive is a sparse file on the host, and the default would write tens
+# of gigabytes into it for a filesystem this size.
+- name: Make a filesystem on it
+  ansible.builtin.command:
+    cmd: >-
+      mkfs.ext4 -q -F -T largefile4
+      -E lazy_itable_init=1,lazy_journal_init=1,nodiscard
+      {{ storage_setup_drives[storage_setup_nvmet_drives | int] }}
+  changed_when: true
+  when: storage_setup_nfs_fs.stdout | trim != 'ext4'
+
+- name: Make the export's directory
+  ansible.builtin.file:
+    path: "{{ storage_setup_nfs_export }}"
+    state: directory
+    mode: "0755"
+
+- name: Mount the filesystem there
+  ansible.builtin.shell:
+    cmd: |
+      set -eu
+      dir={{ storage_setup_nfs_export | quote }}
+      if findmnt -n "$dir" >/dev/null; then
+          echo "already mounted"
+          exit 0
+      fi
+      mount -o noinit_itable {{ storage_setup_drives[storage_setup_nvmet_drives | int] | quote }} "$dir"
+      chmod 1777 "$dir"
+    executable: /bin/sh
+  register: storage_setup_nfs_mounted
+  changed_when: "'already mounted' not in storage_setup_nfs_mounted.stdout"
+
+- name: Make the directories the NFS settings go in
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /etc/nfs.conf.d
+    - /etc/exports.d
+
+- name: Turn the NFS server's RDMA transport on
+  ansible.builtin.copy:
+    dest: /etc/nfs.conf.d/storage-rdma.conf
+    content: |
+      # Installed by the storage_setup role.
+      [nfsd]
+      rdma=y
+      rdma-port={{ storage_setup_nfs_rdma_port }}
+    owner: root
+    group: root
+    mode: "0644"
+  register: storage_setup_nfs_conf
+
+- name: Export the filesystem to the guests' RDMA network
+  ansible.builtin.copy:
+    dest: /etc/exports.d/storage.exports
+    content: |
+      # Installed by the storage_setup role.
+      {{ storage_setup_nfs_export }} {{ storage_setup_nfs_clients }}(rw,no_root_squash,no_subtree_check,async,insecure)
+    owner: root
+    group: root
+    mode: "0644"
+  register: storage_setup_nfs_exports
+
+- name: Load the RPC-over-RDMA transport
+  community.general.modprobe:
+    name: rpcrdma
+    state: present
+
+# The package starts the server when it is installed, before the settings
+# above are there, so "the settings did not change" does not mean the
+# running server has them: ask it.
+- name: See whether the NFS server already listens on RDMA
+  ansible.builtin.shell:
+    cmd: >-
+      grep -q '^rdma {{ storage_setup_nfs_rdma_port }}$' /proc/fs/nfsd/portlist
+      2>/dev/null && echo listening || echo not-listening
+    executable: /bin/sh
+  register: storage_setup_nfs_listening
+  changed_when: false
+
+- name: Start the NFS server with its RDMA transport
+  ansible.builtin.systemd_service:
+    name: nfs-server
+    state: >-
+      {{ 'started' if storage_setup_nfs_listening.stdout | trim == 'listening'
+         and storage_setup_nfs_conf is not changed else 'restarted' }}
+    enabled: true
+
+- name: Publish the export
+  ansible.builtin.command:
+    cmd: exportfs -ra
+  changed_when: storage_setup_nfs_exports is changed
+
+- name: Check the NFS server listens on RDMA
+  ansible.builtin.shell:
+    cmd: |
+      set -eu
+      grep -q "^rdma {{ storage_setup_nfs_rdma_port }}$" /proc/fs/nfsd/portlist || {
+          echo "nfsd is not listening on RDMA port {{ storage_setup_nfs_rdma_port }}:" >&2
+          cat /proc/fs/nfsd/portlist >&2
+          exit 1
+      }
+      # -s: one line an export. -v wraps a long path onto a line of its own.
+      list=$(mktemp)
+      trap 'rm -f "$list"' EXIT
+      exportfs -s > "$list"
+      grep -q "^{{ storage_setup_nfs_export }}[[:space:]]" "$list" || {
+          echo "{{ storage_setup_nfs_export }} is not exported" >&2; exit 1; }
+    executable: /bin/sh
+  changed_when: false
+
+- name: Say what the server serves
+  ansible.builtin.set_fact:
+    storage_setup_server_seen: >-
+      {{ storage_setup_drives | length }} drives;
+      {{ storage_setup_nvmet.stdout | trim | regex_replace(', already there$', '') }};
+      nfs: {{ storage_setup_server_address }}:{{ storage_setup_nfs_export }}
+      on {{ storage_setup_drives[storage_setup_nvmet_drives | int] }},
+      rdma port {{ storage_setup_nfs_rdma_port }}

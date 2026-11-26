@@ -572,7 +572,7 @@ class TestRender(unittest.TestCase):
                     if line.strip().startswith("restart:")]
         self.assertTrue(policies)
         self.assertEqual(set(policies), {'"no"'})
-        for stack in ("rocm-golden", "helios-tray", "mi355x-server", "xio"):
+        for stack in ("rocm-golden", "helios-tray", "mi355x-server", "xio", "storage"):
             text = (REPO_ROOT / "qemu/compose" / stack
                     / "docker-compose.yml").read_text()
             found = {line.split(":", 1)[1].strip()
@@ -1067,7 +1067,7 @@ class TestNVMeBlockSize(unittest.TestCase):
             _plan("<vm-nvme-block-size>512</vm-nvme-block-size>")
 
     def test_no_shipped_stack_renders_it(self):
-        for stack in ("rocm-golden", "helios-tray", "mi355x-server", "xio"):
+        for stack in ("rocm-golden", "helios-tray", "mi355x-server", "xio", "storage"):
             with self.subTest(stack=stack):
                 text = (REPO_ROOT / "qemu/compose" / stack
                         / "docker-compose.yml").read_text()
@@ -1233,7 +1233,7 @@ class TestErnicMtu(unittest.TestCase):
             _plan(extra.replace("<ernic-mtu>9000</ernic-mtu>", ""))
 
     def test_no_shipped_stack_renders_it(self):
-        for stack in ("rocm-golden", "helios-tray", "mi355x-server", "xio"):
+        for stack in ("rocm-golden", "helios-tray", "mi355x-server", "xio", "storage"):
             with self.subTest(stack=stack):
                 text = (REPO_ROOT / "qemu/compose" / stack
                         / "docker-compose.yml").read_text()
@@ -1646,13 +1646,13 @@ class TestStackAssetCheck(unittest.TestCase):
         cwd = os.getcwd()
         os.chdir(REPO_ROOT)
         self.addCleanup(os.chdir, cwd)
-        for stack in ("rocm-golden", "helios-tray", "mi355x-server", "xio"):
+        for stack in ("rocm-golden", "helios-tray", "mi355x-server", "xio", "storage"):
             with self.subTest(stack=stack), contextlib.redirect_stdout(out):
                 gen_compose.run(
                     Path(f"qemu/stacks/{stack}.xml"),
                     Path(f"qemu/compose/{stack}"),
                     check=True)
-        self.assertEqual(out.getvalue().count("Up to date"), 4)
+        self.assertEqual(out.getvalue().count("Up to date"), 5)
 
 
 class TestStackAssetFailureModes(unittest.TestCase):
@@ -2435,8 +2435,14 @@ class TestDevices(unittest.TestCase):
              "holds <backend>"),
             ("<devices><server type='ernic'/></devices>", "an id starts"),
             ("<devices><server type='ernic' id='1x'/></devices>", "an id starts"),
-            ("<devices><server type='ernic' id='n' vm='2'/></devices>",
-             "attributes type and id"),
+            ("<devices><server type='ernic' id='n' guest='2'/></devices>",
+             "attributes type, id and vm"),
+            ("<devices><server type='ernic' id='n' vm='0'/></devices>",
+             "it is 'all', or the numbers of the guests"),
+            ("<devices><server type='ernic' id='n' vm='1, 2'/></devices>",
+             "it is 'all', or the numbers of the guests"),
+            ("<devices><server type='ernic' id='n' vm=''/></devices>",
+             "it is 'all', or the numbers of the guests"),
             ("<devices>" + srv.format("") + srv.format("") + "</devices>",
              "more than once"),
             ("<devices/><devices/>", "<devices> appears more than once"),
@@ -2556,13 +2562,20 @@ class TestDevices(unittest.TestCase):
             self.assertIn("VFIO_USER_SOCKET_DIR=${VFIO_USER_SOCKET_DIR:-", text)
             self.assertIn('"${VFIO_USER_SOCKET_DIR}/cntrl"', text)
 
-    def test_only_the_xio_fleet_has_a_block(self):
-        # The other three are what "no block renders as before" is held to.
+    def test_which_fleets_have_a_block(self):
+        # The first three are what "no block renders as before" is held to.
         # Parsed, not searched for: xio.xml's own comment shows a block.
-        for name in ("rocm-golden", "helios-tray", "mi355x-server", "xio"):
+        for name in ("rocm-golden", "helios-tray", "mi355x-server", "xio", "storage"):
             with self.subTest(name=name):
                 cfg = FleetXml.parse(REPO_ROOT / "qemu/stacks" / f"{name}.xml")
-                self.assertEqual(bool(cfg.devices), name == "xio")
+                self.assertEqual(bool(cfg.devices), name in ("xio", "storage"))
+
+    def test_only_the_storage_fleet_has_guests_that_differ(self):
+        for name in ("rocm-golden", "helios-tray", "mi355x-server", "xio", "storage"):
+            with self.subTest(name=name):
+                cfg = FleetXml.parse(REPO_ROOT / "qemu/stacks" / f"{name}.xml")
+                self.assertEqual(
+                    any(d.vms for d in cfg.devices), name == "storage")
 
 
 class TestQemuArgs(unittest.TestCase):

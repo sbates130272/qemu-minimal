@@ -341,7 +341,7 @@ class Render(unittest.TestCase):
 
     def test_no_committed_stack_carries_the_option(self):
         files = sorted(COMPOSE.glob("*/docker-compose.yml"))
-        self.assertEqual(len(files), 4)
+        self.assertEqual(len(files), 5)
         for path in files:
             text = path.read_text()
             self.assertNotIn("cpu-vendor", text, path)

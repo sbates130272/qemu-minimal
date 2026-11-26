@@ -10,6 +10,7 @@
 <!-- Reports (vm-* lanes pinned to main; date badge computed by Pages publish) -->
 [![Basic Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-vm-basic.yml?branch=main&label=report-for-vm-basic&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-vm-basic.yml)
 [![Rocm-golden Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-vm-rocm-golden.yml?branch=main&label=report-for-vm-rocm-golden&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-vm-rocm-golden.yml)
+[![Storage Report](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-report-for-storage.yml?branch=main&label=report-for-storage&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-report-for-storage.yml)
 
 <!-- Performance endpoint badges: colour is a verdict from Pages publish JSON -->
 [![Rocjitsu GEMM](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-gemm.json&style=flat-square)](https://sbates130272.github.io/qemu-minimal/perf/)
@@ -17,6 +18,11 @@
 [![HipFile Fio](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile-fio.json&style=flat-square)](https://sbates130272.github.io/qemu-minimal/perf/)
 [![Ernic P4 FP8 BW](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-ernic-p4-bw.json&style=flat-square)](https://sbates130272.github.io/qemu-minimal/perf/)
 [![SDXI copy BW](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-sdxi-bw.json&style=flat-square)](https://sbates130272.github.io/qemu-minimal/perf/)
+[![NVMe-oF in NIC](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-storage-nic-nvmeof.json&style=flat-square)](https://sbates130272.github.io/qemu-minimal/perf/)
+[![NVMe-oF RDMA](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-storage-nvmeof.json&style=flat-square)](https://sbates130272.github.io/qemu-minimal/perf/)
+[![NFS RDMA](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-storage-nfs.json&style=flat-square)](https://sbates130272.github.io/qemu-minimal/perf/)
+[![hipFile NVMe-oF](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-storage-hipfile-nvmeof.json&style=flat-square)](https://sbates130272.github.io/qemu-minimal/perf/)
+[![hipFile NFS RDMA](https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-storage-hipfile-nfs.json&style=flat-square)](https://sbates130272.github.io/qemu-minimal/perf/)
 
 <!-- CI lanes: smoke-test lanes pinned to main; PR-only lanes carry no branch pin -->
 [![Qemu-tool Smoke Test](https://img.shields.io/github/actions/workflow/status/sbates130272/qemu-minimal/qemu-minimal-smoke-test-qemu-tool.yml?branch=main&label=qemu-tool-smoke&style=flat-square)](https://github.com/sbates130272/qemu-minimal/actions/workflows/qemu-minimal-smoke-test-qemu-tool.yml)
@@ -486,7 +492,7 @@ pipx install qemu-tool
 ```
 
 That gives you a working `gen-vm` and `run-vm`: both package manifests, the
-four fleet files, the man page and the compose stacks all ship inside the
+five fleet files, the man page and the compose stacks all ship inside the
 wheel, so none of those depend on a checkout.
 
 `qemu-tool compose` is the exception. The stacks are there, but each one
@@ -649,7 +655,7 @@ server containers and the `qemu-system` guests in one command. This is the
 recommended path when you do not have a physical GPU to pass through but need
 a guest that sees PCIe GPU devices.
 
-There are four stacks. Each is **generated** by `qemu-tool gen-compose` from
+There are five stacks. Each is **generated** by `qemu-tool gen-compose` from
 the fleet XML file of the same name in `qemu/stacks/`, and committed so it
 can be read in a diff and used with plain `docker compose`:
 
@@ -659,9 +665,10 @@ can be read in a diff and used with plain `docker compose`:
 | `helios-tray` | [`qemu/stacks/helios-tray.xml`](qemu/stacks/helios-tray.xml) | 1 | 4 GPUs, 8 RDMA NICs, 4 PCIe switches, 1 SDXI |
 | `mi355x-server` | [`qemu/stacks/mi355x-server.xml`](qemu/stacks/mi355x-server.xml) | 4 | 8 GPUs, 8 RDMA NICs, 8 PCIe switches |
 | `xio` | [`qemu/stacks/xio.xml`](qemu/stacks/xio.xml) | 1 | 2 GPUs, 2 RDMA NICs (loopback backend; NVMe-oF with a block and a KV namespace), 1 NVMe behind `pci-mmio-bridge`, 1 SPDK NVMe-KV controller |
+| `storage` | [`qemu/stacks/storage.xml`](qemu/stacks/storage.xml) | 2, which differ | client: 1 GPU, 1 SDXI, 1 NVMe, 3 RDMA NICs (the mesh, an S3-over-RDMA store, NVMe-oF with a block and a KV namespace), 1 SPDK NVMe-KV controller; server: 1 RDMA NIC, 1 SDXI, 24 NVMe drives of 8 TiB, no GPU |
 
 `qemu-tool quick-start` is the easy way to run one (`--flavor default`, which
-is the rocm-golden fleet, `helios`, `mi355x` or `xio`): it pulls the guest
+is the rocm-golden fleet, `helios`, `mi355x`, `xio` or `storage`): it pulls the guest
 image, creates the overlays, sizes the guests and tests them. `--flavor xio`
 is the rocm-xio development guest. Its `test` verb stages the GPU firmware
 and probes amdgpu; with `--xio-test` it also installs rocm-xio, which is not
@@ -690,6 +697,68 @@ qemu-tool quick-start --flavor xio --vfu-doorbell all        # up, install, chec
 qemu-tool quick-start --flavor xio --vfu-doorbell test       # again, on a stack that is up
 qemu-tool ssh xio-1 -- sudo vfu-ring info
 ```
+
+`--flavor storage` is two guests that are not alike: a GPU client,
+`storage-client-1`, and a storage server, `storage-server-1`. Its `test` verb needs no switch. It makes the server an
+NVMe-oF target over RDMA and an NFS-over-RDMA server, builds
+[hipObject](https://github.com/ROCm/hipObject) on the client at a pinned
+commit, connects the client to every store, and writes, reads back and
+compares data over each path:
+
+```bash
+qemu-tool quick-start --flavor storage        # boot both, set up, test
+qemu-tool quick-start --flavor storage test   # again, on a stack that is up
+qemu-tool ssh storage-server-1 -- lsblk -d    # the server's 24 drives
+```
+
+| Test | Path |
+|---|---|
+| `local-nvme` | the client's own emulated NVMe |
+| `nic-nvmeof-lba`, `nic-nvmeof-kv` | the NVMe-oF controller inside one of the client's NICs: its block namespace, and its Key Value namespace |
+| `pcie-spdk-kv` | the same Key Value commands with no fabric: the SPDK NVMe controller on PCIe |
+| `s3-http`, `hipobject-s3-host`, `hipobject-s3-gpu` | the S3 store inside another NIC: a bucket listing over HTTP, then an object put and got over RDMA by hipObject, from host memory and from GPU memory |
+| `server-nvmeof-first`, `server-nvmeof-last` | the server's kernel NVMe-oF target, across the mesh |
+| `nfs-rdma` | a file on the server's NFS export, mounted over RDMA |
+| `hipfile-local-nvme`, `hipfile-server-nvmeof`, `hipfile-nfs-rdma` | a file read into GPU memory through hipFile's direct path (AIS) and checked, from a filesystem on the client's own drive, on one of the server's NVMe-oF namespaces, and on the NFS mount |
+
+**The hipFile tests fail unless the read goes direct to GPU memory.** hipFile
+otherwise falls back, without a word, to reading into a bounce buffer in
+host memory and copying, and a fallback verifies just as well. So each read
+runs with `HIPFILE_ALLOW_COMPAT_MODE=false`, which makes hipFile fail a read
+it cannot do directly. The NFS read also needs
+`HIPFILE_UNSUPPORTED_FILE_SYSTEMS=true`: NFS is not a filesystem hipFile
+lists as supported, so without it the direct path is refused, and with the
+fallback refused too the read fails (`hipFileRead ... returned -5030`).
+
+Every test runs whether or not the one before it passed, and the run fails
+at the end if any did. The first `test` installs packages in both guests
+and fetches hipObject and what it builds against from GitHub. The drives are
+scratch and are written raw. They are sparse files: 25 drives of 8 TiB cost
+the host what the guests write to them.
+
+NFS statistics need no exporter of their own: node_exporter, which both
+guests run and Prometheus scrapes, has them. The server's are `node_nfsd_*`,
+the client's `node_nfs_*`, and the test turns on the client's per-mount
+collector, whose `node_mountstats_nfs_*` series carry `protocol="rdma"`. No
+Grafana panel shows them yet. The
+[report-for-storage](.github/workflows/qemu-minimal-report-for-storage.yml)
+lane runs this flavor on main every day, uploads a report of every test and
+tracks five of the rates as badges at the top of this page.
+
+What makes the two guests differ is in the fleet file. `<vm-roles>` gives
+each guest a role, which is part of its name and an inventory group; a
+`<server>` of the `<devices>` block names the role that gets it; and
+`<vm-nvme>` has one value for each guest. For more of either kind, grow the
+three lists together. Two clients and one server is:
+
+```xml
+<vm-count>3</vm-count>
+<vm-roles>client,client,server</vm-roles>
+<vm-nvme>1,1,24</vm-nvme>
+```
+
+Only one of each has been run. See
+[the fleet XML reference](docs/fleet-xml.md).
 
 By hand, any stack is:
 
@@ -901,6 +970,12 @@ share is bind-mounted into the qemu containers once. A bare value broadcasts to 
 `<vm-count>` applies positionally, and any other length is an error naming the
 element and both lengths.
 
+Three more take one integer for each guest the same way: `<vm-vcpus>`,
+`<vm-vmem>` and `<vm-nvme>`. `<vm-nvme>1,24</vm-nvme>` gives the first guest
+one drive and the second 24. `<vm-nvme-size>` sizes every scratch drive
+(`8T` is 8 TiB; the default is `1024G`): the files are sparse, and one that
+already exists keeps its size.
+
 `<vm-extra-hostfwd>` is the exception, and getting it backwards fails
 silently: its commas separate several rules belonging to **one** guest, so
 the whole value goes to **every** guest.
@@ -1111,6 +1186,26 @@ given different settings:
   rocjitsu GPU, an SDXI device or an SPDK NVMe controller. **`id`** names the entry: it
   is what a later layer and an error message refer to. Containers keep the
   names the generator gives them (`ernic-1-2` is guest 1's second NIC).
+- **`vm`** is optional and names the guests that get the device, by number
+  from 1 or by role: `vm='1'`, `vm='1,3'`, `vm='client'` or `vm='all'`. A
+  role is one of `<vm-roles>`, a flat element with one role for each guest
+  (`client,server`); guests are then named `<prefix>-<role>-K` and the
+  inventory has a group `fleet_<role>` for each. Without it every guest gets
+  the device. With it the guests of one fleet differ, which is how the
+  `storage` stack has a GPU client and a storage server with no GPU:
+
+  ```xml
+  <server type='ernic' id='mesh'/>
+  <server type='ernic' id='s3' vm='1'><backend type='s3'/></server>
+  <server type='rocjitsu' id='gpu0' vm='1'/>
+  ```
+
+  Every guest keeps at least one ernic, which is where its address comes
+  from, and a fleet needs at least one GPU. A number above `<vm-count>` is
+  refused, and so is `vm` together with `<vm-pcie-switch-width>`. The
+  generated inventory then says what each guest has (`fleet_guest_gpus`,
+  `fleet_guest_nvme`, and each NIC's `id` and `backend`), so a playbook can
+  tell them apart.
 - **The block replaces the counts.** With it, `<ernic-per-vm>`,
   `<rocjitsu-per-vm>` and `<sdxi-per-vm>` are what the block lists. One of
   those set beside the block, or in a later layer, to a different number is
@@ -1207,7 +1302,7 @@ pulls the image named by `<backing-ref>`, which is a dated tag of the
 repository `<publish-ref>` names: the guest a fleet boots is one those
 elements built and the publish workflow qualified. `<backing-ref>` does not
 follow a publish by itself; it is moved by hand to a newer dated tag, in all
-four fleet files, and `gen-compose` refuses `latest` there because a tag
+five fleet files, and `gen-compose` refuses `latest` there because a tag
 that moves would leave each host on whichever image it pulled first. From
 the checkout root, because `<bake-packages>` and `<bake-playbook>` are
 resolved against the current directory:

@@ -1,0 +1,9 @@
+---
+# Nothing runs from here: a guest of the storage stack is the server or the
+# client, and a caller says which with tasks_from.
+- name: Say how the role is used
+  ansible.builtin.fail:
+    msg: >-
+      storage_setup has no main tasks. Include it with tasks_from: server on
+      the guest that has the drives, and tasks_from: client and then
+      tasks_from: tests on the guest that reaches it.
