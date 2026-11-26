@@ -594,6 +594,28 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#servers-of-type-vfu-ringee" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Servers of type vfu-ringee
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#servers-of-type-vfu-ringer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Servers of type vfu-ringer
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#backend-types" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1289,6 +1311,28 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#servers-of-type-vfu-ringee" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Servers of type vfu-ringee
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#servers-of-type-vfu-ringer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Servers of type vfu-ringer
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#backend-types" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1580,6 +1624,27 @@ to code that does.</p>
 <td>(empty)</td>
 <td>yes</td>
 <td>Container image of the SPDK vfio-user NVMe controller; required when &lt;devices&gt; has a server of type spdk. Image reference, repository:tag. Its vfu.&lt;sha&gt; must equal the one in &lt;qemu-ref&gt;, stamped tag or not. Nothing runs it without a spdk entry in &lt;devices&gt;.</td>
+</tr>
+<tr>
+<td><code>&lt;doorbell-image&gt;</code></td>
+<td>string</td>
+<td>(empty)</td>
+<td>yes</td>
+<td>Container image of the vfu-doorbell servers; required when &lt;devices&gt; has a vfu-ringee or vfu-ringer server. Image reference, repository:tag. The image holds /opt/vfu/vfu-doorbell, built on the libvfio-user fork image. Its tag names no vfu.&lt;sha&gt;, so the render cannot hold it to &lt;qemu-ref&gt;'s. Nothing runs it without a vfu-ringee or vfu-ringer entry in &lt;devices&gt;.</td>
+</tr>
+<tr>
+<td><code>&lt;xio-ref&gt;</code></td>
+<td>string</td>
+<td>(empty)</td>
+<td>yes</td>
+<td>The rocm-xio branch or tag the xio guest installs, in place of the rocm_xio_setup role's own pin. Git branch or tag name. Empty keeps the role's pin. With no &lt;xio-commit&gt; the ref is built as pushed, unchecked, which is how a branch that is still moving is named.</td>
+</tr>
+<tr>
+<td><code>&lt;xio-commit&gt;</code></td>
+<td>string</td>
+<td>(empty)</td>
+<td>yes</td>
+<td>The commit &lt;xio-ref&gt; has to be; the role fails when the fetched ref is another commit. 40-character commit id. Needs &lt;xio-ref&gt;.</td>
 </tr>
 <tr>
 <td><code>&lt;backing-ref&gt;</code></td>
@@ -2242,7 +2307,7 @@ a NIC can be given an RDMA backend.</p>
 </tr>
 <tr>
 <td><code>&lt;server type=...&gt;</code></td>
-<td>Kind of server: an ernic NIC, a rocjitsu GPU, an SDXI device or an SPDK NVMe controller. ernic, rocjitsu, sdxi or spdk. The generator refuses more than one spdk a guest, and an spdk with no &lt;spdk-image&gt;. An id cannot change type in a later layer.</td>
+<td>Kind of server: an ernic NIC, a rocjitsu GPU, an SDXI device, an SPDK NVMe controller or a vfu-doorbell ringee or ringer. ernic, rocjitsu, sdxi, spdk, vfu-ringee or vfu-ringer. The generator refuses more than one spdk, vfu-ringee or vfu-ringer a guest, an spdk with no &lt;spdk-image&gt;, and a vfu-ringee or vfu-ringer with no &lt;doorbell-image&gt;. An id cannot change type in a later layer.</td>
 </tr>
 <tr>
 <td><code>&lt;server id=...&gt;</code></td>
@@ -2386,6 +2451,44 @@ hold a line break, a tab or a control character.</p>
 <td>one value, at most once</td>
 <td><code>SPDK_CPUMASK=VALUE</code> in the container's environment</td>
 <td>Host cores the SPDK server's poll-mode reactor spins on; sets SPDK_CPUMASK. Each server takes one full core. Hexadecimal core mask, 0x then 1 to 32 hex digits, such as 0x4. Default 0x1, host CPU 0. One value for every guest's server, so guests share the cores it names.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="servers-of-type-vfu-ringee">Servers of type <code>vfu-ringee</code><a class="headerlink" href="#servers-of-type-vfu-ringee" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Element</th>
+<th>Shape</th>
+<th>Becomes</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h3 id="servers-of-type-vfu-ringer">Servers of type <code>vfu-ringer</code><a class="headerlink" href="#servers-of-type-vfu-ringer" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Element</th>
+<th>Shape</th>
+<th>Becomes</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
 </tr>
 </tbody>
 </table>

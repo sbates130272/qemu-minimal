@@ -999,6 +999,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#qemu_tool.resources.OVERLAYS" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-attribute"></code>&nbsp;OVERLAYS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#qemu_tool.resources.PACKAGES_D" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1025,6 +1036,17 @@
     <span class="md-ellipsis">
       
         <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;shipped_path
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#qemu_tool.resources.overlay_fleet" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;overlay_fleet
       
     </span>
   </a>
@@ -1804,6 +1826,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#qemu_tool.resources.OVERLAYS" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-attribute"></code>&nbsp;OVERLAYS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#qemu_tool.resources.PACKAGES_D" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1830,6 +1863,17 @@
     <span class="md-ellipsis">
       
         <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;shipped_path
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#qemu_tool.resources.overlay_fleet" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;overlay_fleet
       
     </span>
   </a>
@@ -2047,8 +2091,7 @@ single layer hashes to the bytes of that file.</p>
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/gen_compose.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">173</span>
-<span class="normal">174</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">174</span>
 <span class="normal">175</span>
 <span class="normal">176</span>
 <span class="normal">177</span>
@@ -2059,7 +2102,8 @@ single layer hashes to the bytes of that file.</p>
 <span class="normal">182</span>
 <span class="normal">183</span>
 <span class="normal">184</span>
-<span class="normal">185</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">xml_digest</span><span class="p">(</span><span class="n">paths</span><span class="p">:</span> <span class="n">Path</span> <span class="o">|</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">Path</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+<span class="normal">185</span>
+<span class="normal">186</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">xml_digest</span><span class="p">(</span><span class="n">paths</span><span class="p">:</span> <span class="n">Path</span> <span class="o">|</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">Path</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">"""One digest over every fleet XML layer, concatenated in order.</span>
 
 <span class="sd">    Not a digest of the last layer or a set of per-file digests: an overlay is</span>
@@ -2099,15 +2143,15 @@ single layer hashes to the bytes of that file.</p>
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/gen_compose.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">188</span>
-<span class="normal">189</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">189</span>
 <span class="normal">190</span>
 <span class="normal">191</span>
 <span class="normal">192</span>
 <span class="normal">193</span>
 <span class="normal">194</span>
 <span class="normal">195</span>
-<span class="normal">196</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">recorded_digest</span><span class="p">(</span><span class="n">compose_file</span><span class="p">:</span> <span class="n">Path</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+<span class="normal">196</span>
+<span class="normal">197</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">recorded_digest</span><span class="p">(</span><span class="n">compose_file</span><span class="p">:</span> <span class="n">Path</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">"""Return the fleet XML hash a generated compose file was built from."""</span>
     <span class="k">try</span><span class="p">:</span>
         <span class="k">for</span> <span class="n">line</span> <span class="ow">in</span> <span class="n">compose_file</span><span class="o">.</span><span class="n">read_text</span><span class="p">()</span><span class="o">.</span><span class="n">splitlines</span><span class="p">()[:</span><span class="n">_PROVENANCE_SCAN_LINES</span><span class="p">]:</span>
@@ -2147,8 +2191,7 @@ default stack.</p>
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/gen_compose.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">199</span>
-<span class="normal">200</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">200</span>
 <span class="normal">201</span>
 <span class="normal">202</span>
 <span class="normal">203</span>
@@ -2158,7 +2201,8 @@ default stack.</p>
 <span class="normal">207</span>
 <span class="normal">208</span>
 <span class="normal">209</span>
-<span class="normal">210</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">stack_for</span><span class="p">(</span><span class="n">xml</span><span class="p">:</span> <span class="n">Path</span> <span class="o">|</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">Path</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+<span class="normal">210</span>
+<span class="normal">211</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">stack_for</span><span class="p">(</span><span class="n">xml</span><span class="p">:</span> <span class="n">Path</span> <span class="o">|</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">Path</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">"""The shipped stack a render belongs to when --stack does not say.</span>
 
 <span class="sd">    A stack directory is named after the fleet file it is generated from, so</span>
@@ -2197,12 +2241,12 @@ default stack.</p>
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/gen_compose.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">290</span>
-<span class="normal">291</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">291</span>
 <span class="normal">292</span>
 <span class="normal">293</span>
 <span class="normal">294</span>
-<span class="normal">295</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">pins_fork_qemu</span><span class="p">(</span><span class="n">ref</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+<span class="normal">295</span>
+<span class="normal">296</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">pins_fork_qemu</span><span class="p">(</span><span class="n">ref</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">"""True when an image ref names the fork QEMU, by its repository."""</span>
     <span class="n">repo</span> <span class="o">=</span> <span class="n">ref</span><span class="o">.</span><span class="n">rsplit</span><span class="p">(</span><span class="s2">"@"</span><span class="p">,</span> <span class="mi">1</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
     <span class="k">if</span> <span class="s2">":"</span> <span class="ow">in</span> <span class="n">repo</span><span class="o">.</span><span class="n">rsplit</span><span class="p">(</span><span class="s2">"/"</span><span class="p">,</span> <span class="mi">1</span><span class="p">)[</span><span class="o">-</span><span class="mi">1</span><span class="p">]:</span>
@@ -2239,8 +2283,7 @@ is written when the netdev is added, before anything brings it up.</p>
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/gen_compose.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">437</span>
-<span class="normal">438</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">438</span>
 <span class="normal">439</span>
 <span class="normal">440</span>
 <span class="normal">441</span>
@@ -2254,7 +2297,8 @@ is written when the netdev is added, before anything brings it up.</p>
 <span class="normal">449</span>
 <span class="normal">450</span>
 <span class="normal">451</span>
-<span class="normal">452</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">ernic_mtu_rule</span><span class="p">(</span><span class="n">mtu</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+<span class="normal">452</span>
+<span class="normal">453</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">ernic_mtu_rule</span><span class="p">(</span><span class="n">mtu</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">"""The udev rule that gives every emulated ernic NIC of a guest MTU.</span>
 
 <span class="sd">    It matches the four PCI fields the image's 99-rocm-ernic.rules matches</span>
@@ -2302,8 +2346,7 @@ playbook runs: it is the guest's own systemd that applies it.</p>
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/gen_compose.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">455</span>
-<span class="normal">456</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">456</span>
 <span class="normal">457</span>
 <span class="normal">458</span>
 <span class="normal">459</span>
@@ -2315,7 +2358,8 @@ playbook runs: it is the guest's own systemd that applies it.</p>
 <span class="normal">465</span>
 <span class="normal">466</span>
 <span class="normal">467</span>
-<span class="normal">468</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">ernic_mtu_qemu_args</span><span class="p">(</span><span class="n">mtu</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
+<span class="normal">468</span>
+<span class="normal">469</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">ernic_mtu_qemu_args</span><span class="p">(</span><span class="n">mtu</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">"""The QEMU words that hand a guest ernic_mtu_rule(mtu) at boot.</span>
 
 <span class="sd">    An SMBIOS type 11 string systemd reads as a credential: PID 1 imports</span>
@@ -2356,8 +2400,7 @@ playbook runs: it is the guest's own systemd that applies it.</p>
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/gen_compose.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"> 813</span>
-<span class="normal"> 814</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"> 814</span>
 <span class="normal"> 815</span>
 <span class="normal"> 816</span>
 <span class="normal"> 817</span>
@@ -2649,7 +2692,45 @@ playbook runs: it is the guest's own systemd that applies it.</p>
 <span class="normal">1103</span>
 <span class="normal">1104</span>
 <span class="normal">1105</span>
-<span class="normal">1106</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">plan</span><span class="p">(</span><span class="n">cfg</span><span class="p">:</span> <span class="n">FleetConfig</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
+<span class="normal">1106</span>
+<span class="normal">1107</span>
+<span class="normal">1108</span>
+<span class="normal">1109</span>
+<span class="normal">1110</span>
+<span class="normal">1111</span>
+<span class="normal">1112</span>
+<span class="normal">1113</span>
+<span class="normal">1114</span>
+<span class="normal">1115</span>
+<span class="normal">1116</span>
+<span class="normal">1117</span>
+<span class="normal">1118</span>
+<span class="normal">1119</span>
+<span class="normal">1120</span>
+<span class="normal">1121</span>
+<span class="normal">1122</span>
+<span class="normal">1123</span>
+<span class="normal">1124</span>
+<span class="normal">1125</span>
+<span class="normal">1126</span>
+<span class="normal">1127</span>
+<span class="normal">1128</span>
+<span class="normal">1129</span>
+<span class="normal">1130</span>
+<span class="normal">1131</span>
+<span class="normal">1132</span>
+<span class="normal">1133</span>
+<span class="normal">1134</span>
+<span class="normal">1135</span>
+<span class="normal">1136</span>
+<span class="normal">1137</span>
+<span class="normal">1138</span>
+<span class="normal">1139</span>
+<span class="normal">1140</span>
+<span class="normal">1141</span>
+<span class="normal">1142</span>
+<span class="normal">1143</span>
+<span class="normal">1144</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">plan</span><span class="p">(</span><span class="n">cfg</span><span class="p">:</span> <span class="n">FleetConfig</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">"""Resolve the fleet settings into everything the templates need."""</span>
     <span class="n">count</span> <span class="o">=</span> <span class="n">cfg</span><span class="o">.</span><span class="n">count</span>
     <span class="k">if</span> <span class="n">count</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
@@ -2690,6 +2771,26 @@ playbook runs: it is the guest's own systemd that applies it.</p>
             <span class="s2">"empty; name the SPDK vfio-user image to run."</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">count</span> <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="n">spdk_servers</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">254</span><span class="p">:</span>
         <span class="n">sys</span><span class="o">.</span><span class="n">exit</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Error: </span><span class="si">{</span><span class="n">count</span><span class="si">}</span><span class="s2"> SPDK servers do not fit the stack's /24."</span><span class="p">)</span>
+    <span class="c1"># The doorbell servers are the same shape: a &lt;devices&gt; entry, no count,</span>
+    <span class="c1"># and a guest takes one of each.</span>
+    <span class="n">doorbell_servers</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="n">role</span><span class="p">:</span> <span class="p">[</span><span class="n">d</span> <span class="k">for</span> <span class="n">d</span> <span class="ow">in</span> <span class="n">cfg</span><span class="o">.</span><span class="n">devices</span> <span class="k">if</span> <span class="n">d</span><span class="o">.</span><span class="n">type</span> <span class="o">==</span> <span class="sa">f</span><span class="s2">"vfu-</span><span class="si">{</span><span class="n">role</span><span class="si">}</span><span class="s2">"</span><span class="p">]</span>
+        <span class="k">for</span> <span class="n">role</span> <span class="ow">in</span> <span class="n">_DOORBELL_ROLES</span><span class="p">}</span>
+    <span class="k">for</span> <span class="n">role</span><span class="p">,</span> <span class="n">found</span> <span class="ow">in</span> <span class="n">doorbell_servers</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">found</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="n">sys</span><span class="o">.</span><span class="n">exit</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"Error: &lt;devices&gt; has more than one &lt;server type='vfu-</span><span class="si">{</span><span class="n">role</span><span class="si">}</span><span class="s2">'&gt;; "</span>
+                <span class="sa">f</span><span class="s2">"a guest takes one vfu-</span><span class="si">{</span><span class="n">role</span><span class="si">}</span><span class="s2">."</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">count</span> <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="n">found</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">254</span><span class="p">:</span>
+            <span class="n">sys</span><span class="o">.</span><span class="n">exit</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Error: </span><span class="si">{</span><span class="n">count</span><span class="si">}</span><span class="s2"> vfu-</span><span class="si">{</span><span class="n">role</span><span class="si">}</span><span class="s2"> servers do not fit the "</span>
+                     <span class="s2">"stack's /24."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="n">doorbell_servers</span><span class="o">.</span><span class="n">values</span><span class="p">()):</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">cfg</span><span class="o">.</span><span class="n">doorbell_ref</span><span class="p">:</span>
+            <span class="n">sys</span><span class="o">.</span><span class="n">exit</span><span class="p">(</span>
+                <span class="s2">"Error: &lt;devices&gt; has a &lt;server type='vfu-ringee'&gt; or 'vfu-ringer' but "</span>
+                <span class="s2">"&lt;doorbell-image&gt; is empty; name the image that holds "</span>
+                <span class="s2">"/opt/vfu/vfu-doorbell (rocm-xio's CI pushes it to ghcr.io)."</span><span class="p">)</span>
+    <span class="n">_check_xio_pin</span><span class="p">(</span><span class="n">cfg</span><span class="o">.</span><span class="n">xio_ref</span><span class="p">,</span> <span class="n">cfg</span><span class="o">.</span><span class="n">xio_commit</span><span class="p">)</span>
     <span class="n">_check_pci_mmio_bridge</span><span class="p">(</span><span class="n">cfg</span><span class="p">)</span>
 
     <span class="c1"># The mesh counts rocm-ernic PROCESSES, not VMs. At &lt;ernic-per-vm&gt; &gt; 1 the</span>
@@ -2775,6 +2876,7 @@ playbook runs: it is the guest's own systemd that applies it.</p>
     <span class="n">gpus</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]</span> <span class="o">=</span> <span class="p">[]</span>
     <span class="n">sdxis</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]</span> <span class="o">=</span> <span class="p">[]</span>
     <span class="n">spdks</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">doorbells</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]</span> <span class="o">=</span> <span class="p">[]</span>
     <span class="k">for</span> <span class="n">index</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">count</span><span class="p">):</span>
         <span class="n">n</span> <span class="o">=</span> <span class="n">index</span> <span class="o">+</span> <span class="mi">1</span>
         <span class="n">vm_nics</span> <span class="o">=</span> <span class="p">[]</span>
@@ -2833,10 +2935,20 @@ playbook runs: it is the guest's own systemd that applies it.</p>
             <span class="s2">"env"</span><span class="p">:</span> <span class="n">_option_env</span><span class="p">(</span><span class="n">server</span><span class="p">),</span>
             <span class="s2">"id"</span><span class="p">:</span> <span class="n">server</span><span class="o">.</span><span class="n">id</span><span class="p">,</span>
         <span class="p">}</span> <span class="k">for</span> <span class="n">server</span> <span class="ow">in</span> <span class="n">spdk_servers</span><span class="p">]</span>
+        <span class="c1"># The ringee first, as _DOORBELL_ROLES has it: the order is the</span>
+        <span class="c1"># guest's device order, so its first device is the one being rung.</span>
+        <span class="n">vm_doorbell</span> <span class="o">=</span> <span class="p">[{</span>
+            <span class="s2">"n"</span><span class="p">:</span> <span class="n">n</span><span class="p">,</span> <span class="s2">"role"</span><span class="p">:</span> <span class="n">role</span><span class="p">,</span>
+            <span class="s2">"service"</span><span class="p">:</span> <span class="sa">f</span><span class="s2">"vfu-</span><span class="si">{</span><span class="n">role</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">n</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
+            <span class="s2">"addr"</span><span class="p">:</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">net</span><span class="si">}</span><span class="s2">.</span><span class="si">{</span><span class="n">_DOORBELL_OCTET</span><span class="p">[</span><span class="n">role</span><span class="p">]</span><span class="si">}</span><span class="s2">.</span><span class="si">{</span><span class="n">n</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
+            <span class="s2">"sock"</span><span class="p">:</span> <span class="sa">f</span><span class="s2">"/run/vfu/vfu-</span><span class="si">{</span><span class="n">role</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">n</span><span class="si">}</span><span class="s2">.sock"</span><span class="p">,</span>
+            <span class="s2">"id"</span><span class="p">:</span> <span class="n">server</span><span class="o">.</span><span class="n">id</span><span class="p">,</span>
+        <span class="p">}</span> <span class="k">for</span> <span class="n">role</span> <span class="ow">in</span> <span class="n">_DOORBELL_ROLES</span> <span class="k">for</span> <span class="n">server</span> <span class="ow">in</span> <span class="n">doorbell_servers</span><span class="p">[</span><span class="n">role</span><span class="p">]]</span>
         <span class="n">nics</span> <span class="o">+=</span> <span class="n">vm_nics</span>
         <span class="n">gpus</span> <span class="o">+=</span> <span class="n">vm_gpus</span>
         <span class="n">sdxis</span> <span class="o">+=</span> <span class="n">vm_sdxi</span>
         <span class="n">spdks</span> <span class="o">+=</span> <span class="n">vm_spdk</span>
+        <span class="n">doorbells</span> <span class="o">+=</span> <span class="n">vm_doorbell</span>
         <span class="c1"># The NIC the guest's one address, MAC and stats file are read from:</span>
         <span class="c1"># the first on the mesh, which is the one that reaches other guests,</span>
         <span class="c1"># else the first. With no &lt;devices&gt; block that is the first NIC.</span>
@@ -2851,6 +2963,7 @@ playbook runs: it is the guest's own systemd that applies it.</p>
             <span class="s2">"gpus"</span><span class="p">:</span> <span class="n">vm_gpus</span><span class="p">,</span>
             <span class="s2">"sdxi"</span><span class="p">:</span> <span class="n">vm_sdxi</span><span class="p">,</span>
             <span class="s2">"spdk"</span><span class="p">:</span> <span class="n">vm_spdk</span><span class="p">,</span>
+            <span class="s2">"doorbell"</span><span class="p">:</span> <span class="n">vm_doorbell</span><span class="p">,</span>
             <span class="c1"># The order the guest sees, and therefore what ends up paired under</span>
             <span class="c1"># each switch. When &lt;ernic-per-vm&gt; == &lt;rocjitsu-per-vm&gt; (e.g. MI355X</span>
             <span class="c1"># with switch_width=2) this is 1:1 round-robin. When there are</span>
@@ -2863,6 +2976,7 @@ playbook runs: it is the guest's own systemd that applies it.</p>
             <span class="p">),</span>
             <span class="s2">"sdxi_socks"</span><span class="p">:</span> <span class="p">[</span><span class="n">x</span><span class="p">[</span><span class="s2">"sock"</span><span class="p">]</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">vm_sdxi</span><span class="p">],</span>
             <span class="s2">"spdk_socks"</span><span class="p">:</span> <span class="p">[</span><span class="n">x</span><span class="p">[</span><span class="s2">"sock"</span><span class="p">]</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">vm_spdk</span><span class="p">],</span>
+            <span class="s2">"doorbell_socks"</span><span class="p">:</span> <span class="p">[</span><span class="n">x</span><span class="p">[</span><span class="s2">"sock"</span><span class="p">]</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">vm_doorbell</span><span class="p">],</span>
             <span class="c1"># Aliases to the first device of each kind. Everything that</span>
             <span class="c1"># predates multi-device VMs reads these, and at the default of one</span>
             <span class="c1"># each they are the only device there is.</span>
@@ -2887,6 +3001,10 @@ playbook runs: it is the guest's own systemd that applies it.</p>
         <span class="s2">"sdxis"</span><span class="p">:</span> <span class="n">sdxis</span><span class="p">,</span>
         <span class="s2">"spdks"</span><span class="p">:</span> <span class="n">spdks</span><span class="p">,</span>
         <span class="s2">"spdk_image"</span><span class="p">:</span> <span class="n">cfg</span><span class="o">.</span><span class="n">spdk_ref</span><span class="p">,</span>
+        <span class="s2">"doorbells"</span><span class="p">:</span> <span class="n">doorbells</span><span class="p">,</span>
+        <span class="s2">"doorbell_image"</span><span class="p">:</span> <span class="n">cfg</span><span class="o">.</span><span class="n">doorbell_ref</span><span class="p">,</span>
+        <span class="s2">"xio_ref"</span><span class="p">:</span> <span class="n">cfg</span><span class="o">.</span><span class="n">xio_ref</span><span class="p">,</span>
+        <span class="s2">"xio_commit"</span><span class="p">:</span> <span class="n">cfg</span><span class="o">.</span><span class="n">xio_commit</span><span class="p">,</span>
         <span class="s2">"pci_mmio_bridge"</span><span class="p">:</span> <span class="n">cfg</span><span class="o">.</span><span class="n">vm_pci_mmio_bridge</span><span class="p">,</span>
         <span class="s2">"qemu_args"</span><span class="p">:</span> <span class="n">_qemu_args</span><span class="p">(</span><span class="n">cfg</span><span class="p">),</span>
         <span class="s2">"ernic_per_vm"</span><span class="p">:</span> <span class="n">ernic_per_vm</span><span class="p">,</span>
@@ -2973,72 +3091,7 @@ playbook runs: it is the guest's own systemd that applies it.</p>
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/gen_compose.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">1210</span>
-<span class="normal">1211</span>
-<span class="normal">1212</span>
-<span class="normal">1213</span>
-<span class="normal">1214</span>
-<span class="normal">1215</span>
-<span class="normal">1216</span>
-<span class="normal">1217</span>
-<span class="normal">1218</span>
-<span class="normal">1219</span>
-<span class="normal">1220</span>
-<span class="normal">1221</span>
-<span class="normal">1222</span>
-<span class="normal">1223</span>
-<span class="normal">1224</span>
-<span class="normal">1225</span>
-<span class="normal">1226</span>
-<span class="normal">1227</span>
-<span class="normal">1228</span>
-<span class="normal">1229</span>
-<span class="normal">1230</span>
-<span class="normal">1231</span>
-<span class="normal">1232</span>
-<span class="normal">1233</span>
-<span class="normal">1234</span>
-<span class="normal">1235</span>
-<span class="normal">1236</span>
-<span class="normal">1237</span>
-<span class="normal">1238</span>
-<span class="normal">1239</span>
-<span class="normal">1240</span>
-<span class="normal">1241</span>
-<span class="normal">1242</span>
-<span class="normal">1243</span>
-<span class="normal">1244</span>
-<span class="normal">1245</span>
-<span class="normal">1246</span>
-<span class="normal">1247</span>
-<span class="normal">1248</span>
-<span class="normal">1249</span>
-<span class="normal">1250</span>
-<span class="normal">1251</span>
-<span class="normal">1252</span>
-<span class="normal">1253</span>
-<span class="normal">1254</span>
-<span class="normal">1255</span>
-<span class="normal">1256</span>
-<span class="normal">1257</span>
-<span class="normal">1258</span>
-<span class="normal">1259</span>
-<span class="normal">1260</span>
-<span class="normal">1261</span>
-<span class="normal">1262</span>
-<span class="normal">1263</span>
-<span class="normal">1264</span>
-<span class="normal">1265</span>
-<span class="normal">1266</span>
-<span class="normal">1267</span>
-<span class="normal">1268</span>
-<span class="normal">1269</span>
-<span class="normal">1270</span>
-<span class="normal">1271</span>
-<span class="normal">1272</span>
-<span class="normal">1273</span>
-<span class="normal">1274</span>
-<span class="normal">1275</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">1275</span>
 <span class="normal">1276</span>
 <span class="normal">1277</span>
 <span class="normal">1278</span>
@@ -3788,7 +3841,104 @@ playbook runs: it is the guest's own systemd that applies it.</p>
 <span class="normal">2022</span>
 <span class="normal">2023</span>
 <span class="normal">2024</span>
-<span class="normal">2025</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">render_compose</span><span class="p">(</span>
+<span class="normal">2025</span>
+<span class="normal">2026</span>
+<span class="normal">2027</span>
+<span class="normal">2028</span>
+<span class="normal">2029</span>
+<span class="normal">2030</span>
+<span class="normal">2031</span>
+<span class="normal">2032</span>
+<span class="normal">2033</span>
+<span class="normal">2034</span>
+<span class="normal">2035</span>
+<span class="normal">2036</span>
+<span class="normal">2037</span>
+<span class="normal">2038</span>
+<span class="normal">2039</span>
+<span class="normal">2040</span>
+<span class="normal">2041</span>
+<span class="normal">2042</span>
+<span class="normal">2043</span>
+<span class="normal">2044</span>
+<span class="normal">2045</span>
+<span class="normal">2046</span>
+<span class="normal">2047</span>
+<span class="normal">2048</span>
+<span class="normal">2049</span>
+<span class="normal">2050</span>
+<span class="normal">2051</span>
+<span class="normal">2052</span>
+<span class="normal">2053</span>
+<span class="normal">2054</span>
+<span class="normal">2055</span>
+<span class="normal">2056</span>
+<span class="normal">2057</span>
+<span class="normal">2058</span>
+<span class="normal">2059</span>
+<span class="normal">2060</span>
+<span class="normal">2061</span>
+<span class="normal">2062</span>
+<span class="normal">2063</span>
+<span class="normal">2064</span>
+<span class="normal">2065</span>
+<span class="normal">2066</span>
+<span class="normal">2067</span>
+<span class="normal">2068</span>
+<span class="normal">2069</span>
+<span class="normal">2070</span>
+<span class="normal">2071</span>
+<span class="normal">2072</span>
+<span class="normal">2073</span>
+<span class="normal">2074</span>
+<span class="normal">2075</span>
+<span class="normal">2076</span>
+<span class="normal">2077</span>
+<span class="normal">2078</span>
+<span class="normal">2079</span>
+<span class="normal">2080</span>
+<span class="normal">2081</span>
+<span class="normal">2082</span>
+<span class="normal">2083</span>
+<span class="normal">2084</span>
+<span class="normal">2085</span>
+<span class="normal">2086</span>
+<span class="normal">2087</span>
+<span class="normal">2088</span>
+<span class="normal">2089</span>
+<span class="normal">2090</span>
+<span class="normal">2091</span>
+<span class="normal">2092</span>
+<span class="normal">2093</span>
+<span class="normal">2094</span>
+<span class="normal">2095</span>
+<span class="normal">2096</span>
+<span class="normal">2097</span>
+<span class="normal">2098</span>
+<span class="normal">2099</span>
+<span class="normal">2100</span>
+<span class="normal">2101</span>
+<span class="normal">2102</span>
+<span class="normal">2103</span>
+<span class="normal">2104</span>
+<span class="normal">2105</span>
+<span class="normal">2106</span>
+<span class="normal">2107</span>
+<span class="normal">2108</span>
+<span class="normal">2109</span>
+<span class="normal">2110</span>
+<span class="normal">2111</span>
+<span class="normal">2112</span>
+<span class="normal">2113</span>
+<span class="normal">2114</span>
+<span class="normal">2115</span>
+<span class="normal">2116</span>
+<span class="normal">2117</span>
+<span class="normal">2118</span>
+<span class="normal">2119</span>
+<span class="normal">2120</span>
+<span class="normal">2121</span>
+<span class="normal">2122</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">render_compose</span><span class="p">(</span>
     <span class="n">spec</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span> <span class="n">layer_names</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="n">digest</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
     <span class="n">stack</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="n">_DEFAULT_STACK</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
@@ -4188,6 +4338,34 @@ playbook runs: it is the guest's own systemd that applies it.</p>
         <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"      retries: 60"</span><span class="p">)</span>
         <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"      start_period: 10s"</span><span class="p">)</span>
 
+    <span class="k">for</span> <span class="n">bell</span> <span class="ow">in</span> <span class="n">spec</span><span class="p">[</span><span class="s2">"doorbells"</span><span class="p">]:</span>
+        <span class="n">n</span> <span class="o">=</span> <span class="n">bell</span><span class="p">[</span><span class="s2">"n"</span><span class="p">]</span>
+        <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">""</span><span class="p">)</span>
+        <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  # ---- VM </span><span class="si">{</span><span class="n">n</span><span class="si">}</span><span class="s2"> doorbell </span><span class="si">{</span><span class="n">bell</span><span class="p">[</span><span class="s1">'role'</span><span class="p">]</span><span class="si">}</span><span class="s2"> (</span><span class="si">{</span><span class="n">bell</span><span class="p">[</span><span class="s1">'id'</span><span class="p">]</span><span class="si">}</span><span class="s2">) ----"</span><span class="p">)</span>
+        <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  </span><span class="si">{</span><span class="n">bell</span><span class="p">[</span><span class="s1">'service'</span><span class="p">]</span><span class="si">}</span><span class="s2">:"</span><span class="p">)</span>
+        <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"    &lt;&lt;: *ernic-common"</span><span class="p">)</span>
+        <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s1">'    image: "</span><span class="si">{</span><span class="n">spec</span><span class="p">[</span><span class="s2">"doorbell_image"</span><span class="p">]</span><span class="si">}</span><span class="s1">"'</span><span class="p">)</span>
+        <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"    networks:"</span><span class="p">)</span>
+        <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"      fleet:"</span><span class="p">)</span>
+        <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s2">"        ipv4_address: </span><span class="si">{</span><span class="n">bell</span><span class="p">[</span><span class="s1">'addr'</span><span class="p">]</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s1">'    restart: "no"'</span><span class="p">)</span>
+        <span class="c1"># The binary is in the image: rocm-xio's CI builds it there, on the</span>
+        <span class="c1"># libvfio-user image it runs in. Nothing is mounted from the host, so</span>
+        <span class="c1"># a host with nothing built, or with /tmp cleared, still starts.</span>
+        <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"    command:"</span><span class="p">)</span>
+        <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"      - /opt/vfu/vfu-doorbell"</span><span class="p">)</span>
+        <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"      - --role"</span><span class="p">)</span>
+        <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s2">"      - </span><span class="si">{</span><span class="n">bell</span><span class="p">[</span><span class="s1">'role'</span><span class="p">]</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"      - --socket"</span><span class="p">)</span>
+        <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s2">"      - </span><span class="si">{</span><span class="n">bell</span><span class="p">[</span><span class="s1">'sock'</span><span class="p">]</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"    healthcheck:"</span><span class="p">)</span>
+        <span class="n">sock_re</span> <span class="o">=</span> <span class="n">bell</span><span class="p">[</span><span class="s2">"sock"</span><span class="p">]</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s2">"."</span><span class="p">,</span> <span class="s2">"[.]"</span><span class="p">)</span>
+        <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s2">"      test: [</span><span class="se">\"</span><span class="s2">CMD</span><span class="se">\"</span><span class="s2">, </span><span class="se">\"</span><span class="s2">sh</span><span class="se">\"</span><span class="s2">, </span><span class="se">\"</span><span class="s2">-c</span><span class="se">\"</span><span class="s2">, </span><span class="se">\"</span><span class="s2">grep -qE ' 01 [0-9]+ </span><span class="si">{</span><span class="n">sock_re</span><span class="si">}</span><span class="s2">$' /proc/net/unix</span><span class="se">\"</span><span class="s2">]"</span><span class="p">)</span>
+        <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"      interval: 2s"</span><span class="p">)</span>
+        <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"      timeout: 5s"</span><span class="p">)</span>
+        <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"      retries: 30"</span><span class="p">)</span>
+        <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"      start_period: 5s"</span><span class="p">)</span>
+
     <span class="k">for</span> <span class="n">vm</span> <span class="ow">in</span> <span class="n">spec</span><span class="p">[</span><span class="s2">"vms"</span><span class="p">]:</span>
         <span class="n">n</span> <span class="o">=</span> <span class="n">vm</span><span class="p">[</span><span class="s2">"n"</span><span class="p">]</span>
         <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">""</span><span class="p">)</span>
@@ -4202,7 +4380,8 @@ playbook runs: it is the guest's own systemd that applies it.</p>
         <span class="c1"># Every device this guest attaches, not just the first. QEMU exits if</span>
         <span class="c1"># any one vfio-user socket is missing, so a guest that starts while</span>
         <span class="c1"># its eighth NIC is still coming up dies outright.</span>
-        <span class="k">for</span> <span class="n">dev</span> <span class="ow">in</span> <span class="n">vm</span><span class="p">[</span><span class="s2">"nics"</span><span class="p">]</span> <span class="o">+</span> <span class="n">vm</span><span class="p">[</span><span class="s2">"gpus"</span><span class="p">]</span> <span class="o">+</span> <span class="n">vm</span><span class="p">[</span><span class="s2">"sdxi"</span><span class="p">]</span> <span class="o">+</span> <span class="n">vm</span><span class="p">[</span><span class="s2">"spdk"</span><span class="p">]:</span>
+        <span class="k">for</span> <span class="n">dev</span> <span class="ow">in</span> <span class="p">(</span><span class="n">vm</span><span class="p">[</span><span class="s2">"nics"</span><span class="p">]</span> <span class="o">+</span> <span class="n">vm</span><span class="p">[</span><span class="s2">"gpus"</span><span class="p">]</span> <span class="o">+</span> <span class="n">vm</span><span class="p">[</span><span class="s2">"sdxi"</span><span class="p">]</span> <span class="o">+</span> <span class="n">vm</span><span class="p">[</span><span class="s2">"spdk"</span><span class="p">]</span>
+                    <span class="o">+</span> <span class="n">vm</span><span class="p">[</span><span class="s2">"doorbell"</span><span class="p">]):</span>
             <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s2">"      </span><span class="si">{</span><span class="n">dev</span><span class="p">[</span><span class="s1">'service'</span><span class="p">]</span><span class="si">}</span><span class="s2">:"</span><span class="p">)</span>
             <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"        condition: service_healthy"</span><span class="p">)</span>
         <span class="c1"># Bound to &lt;publish-bind-addr&gt;, loopback unless the fleet says</span>
@@ -4290,7 +4469,8 @@ playbook runs: it is the guest's own systemd that applies it.</p>
             <span class="k">for</span> <span class="n">word</span> <span class="ow">in</span> <span class="n">ernic_mtu_qemu_args</span><span class="p">(</span><span class="n">spec</span><span class="p">[</span><span class="s2">"ernic_mtu"</span><span class="p">]):</span>
                 <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s2">"          --qemu-arg=</span><span class="si">{</span><span class="n">_sh_word</span><span class="p">(</span><span class="n">word</span><span class="p">)</span><span class="si">}</span><span class="s2"> </span><span class="se">\\</span><span class="s2">"</span><span class="p">)</span>
         <span class="n">all_vfio_socks</span> <span class="o">=</span> <span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="n">vm</span><span class="p">[</span><span class="s2">"vfio_socks"</span><span class="p">])</span> <span class="o">+</span> <span class="nb">list</span><span class="p">(</span><span class="n">vm</span><span class="p">[</span><span class="s2">"sdxi_socks"</span><span class="p">])</span>
-                          <span class="o">+</span> <span class="nb">list</span><span class="p">(</span><span class="n">vm</span><span class="p">[</span><span class="s2">"spdk_socks"</span><span class="p">]))</span>
+                          <span class="o">+</span> <span class="nb">list</span><span class="p">(</span><span class="n">vm</span><span class="p">[</span><span class="s2">"spdk_socks"</span><span class="p">])</span>
+                          <span class="o">+</span> <span class="nb">list</span><span class="p">(</span><span class="n">vm</span><span class="p">[</span><span class="s2">"doorbell_socks"</span><span class="p">]))</span>
         <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s1">'          --vfio-userdev "</span><span class="si">{</span><span class="s2">","</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">all_vfio_socks</span><span class="p">)</span><span class="si">}</span><span class="s1">"'</span><span class="p">)</span>
 
     <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">""</span><span class="p">)</span>
@@ -4589,7 +4769,9 @@ playbook runs: it is the guest's own systemd that applies it.</p>
     <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"  # every reconnect, the restarts walked the fleet toward the"</span><span class="p">)</span>
     <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"  # 64-node protocol ceiling. Third octet is the service family:"</span><span class="p">)</span>
     <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  #   </span><span class="si">{</span><span class="n">_NET_INFRA</span><span class="si">}</span><span class="s2"> infra   </span><span class="si">{</span><span class="n">_NET_ERNIC</span><span class="si">}</span><span class="s2"> ernic   </span><span class="si">{</span><span class="n">_NET_ROCJITSU</span><span class="si">}</span><span class="s2"> rocjitsu   </span><span class="si">{</span><span class="n">_NET_QEMU</span><span class="si">}</span><span class="s2"> qemu   </span><span class="si">{</span><span class="n">_NET_SDXI</span><span class="si">}</span><span class="s2"> sdxi"</span>
-               <span class="o">+</span> <span class="p">(</span><span class="sa">f</span><span class="s2">"   </span><span class="si">{</span><span class="n">_NET_SPDK</span><span class="si">}</span><span class="s2"> spdk"</span> <span class="k">if</span> <span class="n">spec</span><span class="p">[</span><span class="s2">"spdks"</span><span class="p">]</span> <span class="k">else</span> <span class="s2">""</span><span class="p">))</span>
+               <span class="o">+</span> <span class="p">(</span><span class="sa">f</span><span class="s2">"   </span><span class="si">{</span><span class="n">_NET_SPDK</span><span class="si">}</span><span class="s2"> spdk"</span> <span class="k">if</span> <span class="n">spec</span><span class="p">[</span><span class="s2">"spdks"</span><span class="p">]</span> <span class="k">else</span> <span class="s2">""</span><span class="p">)</span>
+               <span class="o">+</span> <span class="p">(</span><span class="sa">f</span><span class="s2">"   </span><span class="si">{</span><span class="n">_NET_RINGEE</span><span class="si">}</span><span class="s2"> vfu-ringee   </span><span class="si">{</span><span class="n">_NET_RINGER</span><span class="si">}</span><span class="s2"> vfu-ringer"</span>
+                  <span class="k">if</span> <span class="n">spec</span><span class="p">[</span><span class="s2">"doorbells"</span><span class="p">]</span> <span class="k">else</span> <span class="s2">""</span><span class="p">))</span>
     <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"  fleet:"</span><span class="p">)</span>
     <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"    driver: bridge"</span><span class="p">)</span>
     <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"    ipam:"</span><span class="p">)</span>
@@ -4629,61 +4811,61 @@ playbook runs: it is the guest's own systemd that applies it.</p>
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/gen_compose.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">2028</span>
-<span class="normal">2029</span>
-<span class="normal">2030</span>
-<span class="normal">2031</span>
-<span class="normal">2032</span>
-<span class="normal">2033</span>
-<span class="normal">2034</span>
-<span class="normal">2035</span>
-<span class="normal">2036</span>
-<span class="normal">2037</span>
-<span class="normal">2038</span>
-<span class="normal">2039</span>
-<span class="normal">2040</span>
-<span class="normal">2041</span>
-<span class="normal">2042</span>
-<span class="normal">2043</span>
-<span class="normal">2044</span>
-<span class="normal">2045</span>
-<span class="normal">2046</span>
-<span class="normal">2047</span>
-<span class="normal">2048</span>
-<span class="normal">2049</span>
-<span class="normal">2050</span>
-<span class="normal">2051</span>
-<span class="normal">2052</span>
-<span class="normal">2053</span>
-<span class="normal">2054</span>
-<span class="normal">2055</span>
-<span class="normal">2056</span>
-<span class="normal">2057</span>
-<span class="normal">2058</span>
-<span class="normal">2059</span>
-<span class="normal">2060</span>
-<span class="normal">2061</span>
-<span class="normal">2062</span>
-<span class="normal">2063</span>
-<span class="normal">2064</span>
-<span class="normal">2065</span>
-<span class="normal">2066</span>
-<span class="normal">2067</span>
-<span class="normal">2068</span>
-<span class="normal">2069</span>
-<span class="normal">2070</span>
-<span class="normal">2071</span>
-<span class="normal">2072</span>
-<span class="normal">2073</span>
-<span class="normal">2074</span>
-<span class="normal">2075</span>
-<span class="normal">2076</span>
-<span class="normal">2077</span>
-<span class="normal">2078</span>
-<span class="normal">2079</span>
-<span class="normal">2080</span>
-<span class="normal">2081</span>
-<span class="normal">2082</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">render_prometheus</span><span class="p">(</span><span class="n">spec</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span> <span class="n">digest</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">2125</span>
+<span class="normal">2126</span>
+<span class="normal">2127</span>
+<span class="normal">2128</span>
+<span class="normal">2129</span>
+<span class="normal">2130</span>
+<span class="normal">2131</span>
+<span class="normal">2132</span>
+<span class="normal">2133</span>
+<span class="normal">2134</span>
+<span class="normal">2135</span>
+<span class="normal">2136</span>
+<span class="normal">2137</span>
+<span class="normal">2138</span>
+<span class="normal">2139</span>
+<span class="normal">2140</span>
+<span class="normal">2141</span>
+<span class="normal">2142</span>
+<span class="normal">2143</span>
+<span class="normal">2144</span>
+<span class="normal">2145</span>
+<span class="normal">2146</span>
+<span class="normal">2147</span>
+<span class="normal">2148</span>
+<span class="normal">2149</span>
+<span class="normal">2150</span>
+<span class="normal">2151</span>
+<span class="normal">2152</span>
+<span class="normal">2153</span>
+<span class="normal">2154</span>
+<span class="normal">2155</span>
+<span class="normal">2156</span>
+<span class="normal">2157</span>
+<span class="normal">2158</span>
+<span class="normal">2159</span>
+<span class="normal">2160</span>
+<span class="normal">2161</span>
+<span class="normal">2162</span>
+<span class="normal">2163</span>
+<span class="normal">2164</span>
+<span class="normal">2165</span>
+<span class="normal">2166</span>
+<span class="normal">2167</span>
+<span class="normal">2168</span>
+<span class="normal">2169</span>
+<span class="normal">2170</span>
+<span class="normal">2171</span>
+<span class="normal">2172</span>
+<span class="normal">2173</span>
+<span class="normal">2174</span>
+<span class="normal">2175</span>
+<span class="normal">2176</span>
+<span class="normal">2177</span>
+<span class="normal">2178</span>
+<span class="normal">2179</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">render_prometheus</span><span class="p">(</span><span class="n">spec</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span> <span class="n">digest</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
     <span class="n">out</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"---"</span><span class="p">]</span>
     <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"# Generated by `qemu-tool gen-compose`. Do not edit."</span><span class="p">)</span>
     <span class="n">out</span> <span class="o">+=</span> <span class="n">_provenance_lines</span><span class="p">(</span><span class="n">digest</span><span class="p">)</span>
@@ -4769,71 +4951,78 @@ the same values the compose file publishes, from the same <code>plan()</code>.</
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/gen_compose.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">2085</span>
-<span class="normal">2086</span>
-<span class="normal">2087</span>
-<span class="normal">2088</span>
-<span class="normal">2089</span>
-<span class="normal">2090</span>
-<span class="normal">2091</span>
-<span class="normal">2092</span>
-<span class="normal">2093</span>
-<span class="normal">2094</span>
-<span class="normal">2095</span>
-<span class="normal">2096</span>
-<span class="normal">2097</span>
-<span class="normal">2098</span>
-<span class="normal">2099</span>
-<span class="normal">2100</span>
-<span class="normal">2101</span>
-<span class="normal">2102</span>
-<span class="normal">2103</span>
-<span class="normal">2104</span>
-<span class="normal">2105</span>
-<span class="normal">2106</span>
-<span class="normal">2107</span>
-<span class="normal">2108</span>
-<span class="normal">2109</span>
-<span class="normal">2110</span>
-<span class="normal">2111</span>
-<span class="normal">2112</span>
-<span class="normal">2113</span>
-<span class="normal">2114</span>
-<span class="normal">2115</span>
-<span class="normal">2116</span>
-<span class="normal">2117</span>
-<span class="normal">2118</span>
-<span class="normal">2119</span>
-<span class="normal">2120</span>
-<span class="normal">2121</span>
-<span class="normal">2122</span>
-<span class="normal">2123</span>
-<span class="normal">2124</span>
-<span class="normal">2125</span>
-<span class="normal">2126</span>
-<span class="normal">2127</span>
-<span class="normal">2128</span>
-<span class="normal">2129</span>
-<span class="normal">2130</span>
-<span class="normal">2131</span>
-<span class="normal">2132</span>
-<span class="normal">2133</span>
-<span class="normal">2134</span>
-<span class="normal">2135</span>
-<span class="normal">2136</span>
-<span class="normal">2137</span>
-<span class="normal">2138</span>
-<span class="normal">2139</span>
-<span class="normal">2140</span>
-<span class="normal">2141</span>
-<span class="normal">2142</span>
-<span class="normal">2143</span>
-<span class="normal">2144</span>
-<span class="normal">2145</span>
-<span class="normal">2146</span>
-<span class="normal">2147</span>
-<span class="normal">2148</span>
-<span class="normal">2149</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">render_inventory</span><span class="p">(</span><span class="n">spec</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span> <span class="n">digest</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">2182</span>
+<span class="normal">2183</span>
+<span class="normal">2184</span>
+<span class="normal">2185</span>
+<span class="normal">2186</span>
+<span class="normal">2187</span>
+<span class="normal">2188</span>
+<span class="normal">2189</span>
+<span class="normal">2190</span>
+<span class="normal">2191</span>
+<span class="normal">2192</span>
+<span class="normal">2193</span>
+<span class="normal">2194</span>
+<span class="normal">2195</span>
+<span class="normal">2196</span>
+<span class="normal">2197</span>
+<span class="normal">2198</span>
+<span class="normal">2199</span>
+<span class="normal">2200</span>
+<span class="normal">2201</span>
+<span class="normal">2202</span>
+<span class="normal">2203</span>
+<span class="normal">2204</span>
+<span class="normal">2205</span>
+<span class="normal">2206</span>
+<span class="normal">2207</span>
+<span class="normal">2208</span>
+<span class="normal">2209</span>
+<span class="normal">2210</span>
+<span class="normal">2211</span>
+<span class="normal">2212</span>
+<span class="normal">2213</span>
+<span class="normal">2214</span>
+<span class="normal">2215</span>
+<span class="normal">2216</span>
+<span class="normal">2217</span>
+<span class="normal">2218</span>
+<span class="normal">2219</span>
+<span class="normal">2220</span>
+<span class="normal">2221</span>
+<span class="normal">2222</span>
+<span class="normal">2223</span>
+<span class="normal">2224</span>
+<span class="normal">2225</span>
+<span class="normal">2226</span>
+<span class="normal">2227</span>
+<span class="normal">2228</span>
+<span class="normal">2229</span>
+<span class="normal">2230</span>
+<span class="normal">2231</span>
+<span class="normal">2232</span>
+<span class="normal">2233</span>
+<span class="normal">2234</span>
+<span class="normal">2235</span>
+<span class="normal">2236</span>
+<span class="normal">2237</span>
+<span class="normal">2238</span>
+<span class="normal">2239</span>
+<span class="normal">2240</span>
+<span class="normal">2241</span>
+<span class="normal">2242</span>
+<span class="normal">2243</span>
+<span class="normal">2244</span>
+<span class="normal">2245</span>
+<span class="normal">2246</span>
+<span class="normal">2247</span>
+<span class="normal">2248</span>
+<span class="normal">2249</span>
+<span class="normal">2250</span>
+<span class="normal">2251</span>
+<span class="normal">2252</span>
+<span class="normal">2253</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">render_inventory</span><span class="p">(</span><span class="n">spec</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span> <span class="n">digest</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">"""The fleet's ansible inventory, derived from the same &lt;vm-count&gt;.</span>
 
 <span class="sd">    Generated rather than hand-kept because the failure mode of a stale one is</span>
@@ -4874,6 +5063,13 @@ the same values the compose file publishes, from the same <code>plan()</code>.</
     <span class="c1"># has no key for a prefix because the ernic L2 segment is flat by</span>
     <span class="c1"># construction.</span>
     <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"        fleet_guest_prefix: 24"</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">spec</span><span class="p">[</span><span class="s2">"xio_ref"</span><span class="p">]:</span>
+        <span class="c1"># The rocm_xio_setup role's own variables, so that naming a branch</span>
+        <span class="c1"># needs nothing between the setting and the role: an inventory var</span>
+        <span class="c1"># outranks a role default. With no commit the role builds the ref</span>
+        <span class="c1"># unchecked, which is the only thing that turns its check off.</span>
+        <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s1">'        rocm_xio_setup_ref: "</span><span class="si">{</span><span class="n">spec</span><span class="p">[</span><span class="s2">"xio_ref"</span><span class="p">]</span><span class="si">}</span><span class="s1">"'</span><span class="p">)</span>
+        <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s1">'        rocm_xio_setup_commit: "</span><span class="si">{</span><span class="n">spec</span><span class="p">[</span><span class="s2">"xio_commit"</span><span class="p">]</span><span class="si">}</span><span class="s1">"'</span><span class="p">)</span>
     <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"      hosts:"</span><span class="p">)</span>
     <span class="k">for</span> <span class="n">vm</span> <span class="ow">in</span> <span class="n">spec</span><span class="p">[</span><span class="s2">"vms"</span><span class="p">]:</span>
         <span class="c1"># Keyed by VM name, the same identifier the vm_name label in</span>
@@ -4929,111 +5125,7 @@ the same values the compose file publishes, from the same <code>plan()</code>.</
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/gen_compose.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">2455</span>
-<span class="normal">2456</span>
-<span class="normal">2457</span>
-<span class="normal">2458</span>
-<span class="normal">2459</span>
-<span class="normal">2460</span>
-<span class="normal">2461</span>
-<span class="normal">2462</span>
-<span class="normal">2463</span>
-<span class="normal">2464</span>
-<span class="normal">2465</span>
-<span class="normal">2466</span>
-<span class="normal">2467</span>
-<span class="normal">2468</span>
-<span class="normal">2469</span>
-<span class="normal">2470</span>
-<span class="normal">2471</span>
-<span class="normal">2472</span>
-<span class="normal">2473</span>
-<span class="normal">2474</span>
-<span class="normal">2475</span>
-<span class="normal">2476</span>
-<span class="normal">2477</span>
-<span class="normal">2478</span>
-<span class="normal">2479</span>
-<span class="normal">2480</span>
-<span class="normal">2481</span>
-<span class="normal">2482</span>
-<span class="normal">2483</span>
-<span class="normal">2484</span>
-<span class="normal">2485</span>
-<span class="normal">2486</span>
-<span class="normal">2487</span>
-<span class="normal">2488</span>
-<span class="normal">2489</span>
-<span class="normal">2490</span>
-<span class="normal">2491</span>
-<span class="normal">2492</span>
-<span class="normal">2493</span>
-<span class="normal">2494</span>
-<span class="normal">2495</span>
-<span class="normal">2496</span>
-<span class="normal">2497</span>
-<span class="normal">2498</span>
-<span class="normal">2499</span>
-<span class="normal">2500</span>
-<span class="normal">2501</span>
-<span class="normal">2502</span>
-<span class="normal">2503</span>
-<span class="normal">2504</span>
-<span class="normal">2505</span>
-<span class="normal">2506</span>
-<span class="normal">2507</span>
-<span class="normal">2508</span>
-<span class="normal">2509</span>
-<span class="normal">2510</span>
-<span class="normal">2511</span>
-<span class="normal">2512</span>
-<span class="normal">2513</span>
-<span class="normal">2514</span>
-<span class="normal">2515</span>
-<span class="normal">2516</span>
-<span class="normal">2517</span>
-<span class="normal">2518</span>
-<span class="normal">2519</span>
-<span class="normal">2520</span>
-<span class="normal">2521</span>
-<span class="normal">2522</span>
-<span class="normal">2523</span>
-<span class="normal">2524</span>
-<span class="normal">2525</span>
-<span class="normal">2526</span>
-<span class="normal">2527</span>
-<span class="normal">2528</span>
-<span class="normal">2529</span>
-<span class="normal">2530</span>
-<span class="normal">2531</span>
-<span class="normal">2532</span>
-<span class="normal">2533</span>
-<span class="normal">2534</span>
-<span class="normal">2535</span>
-<span class="normal">2536</span>
-<span class="normal">2537</span>
-<span class="normal">2538</span>
-<span class="normal">2539</span>
-<span class="normal">2540</span>
-<span class="normal">2541</span>
-<span class="normal">2542</span>
-<span class="normal">2543</span>
-<span class="normal">2544</span>
-<span class="normal">2545</span>
-<span class="normal">2546</span>
-<span class="normal">2547</span>
-<span class="normal">2548</span>
-<span class="normal">2549</span>
-<span class="normal">2550</span>
-<span class="normal">2551</span>
-<span class="normal">2552</span>
-<span class="normal">2553</span>
-<span class="normal">2554</span>
-<span class="normal">2555</span>
-<span class="normal">2556</span>
-<span class="normal">2557</span>
-<span class="normal">2558</span>
-<span class="normal">2559</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">2559</span>
 <span class="normal">2560</span>
 <span class="normal">2561</span>
 <span class="normal">2562</span>
@@ -5052,7 +5144,111 @@ the same values the compose file publishes, from the same <code>plan()</code>.</
 <span class="normal">2575</span>
 <span class="normal">2576</span>
 <span class="normal">2577</span>
-<span class="normal">2578</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span>
+<span class="normal">2578</span>
+<span class="normal">2579</span>
+<span class="normal">2580</span>
+<span class="normal">2581</span>
+<span class="normal">2582</span>
+<span class="normal">2583</span>
+<span class="normal">2584</span>
+<span class="normal">2585</span>
+<span class="normal">2586</span>
+<span class="normal">2587</span>
+<span class="normal">2588</span>
+<span class="normal">2589</span>
+<span class="normal">2590</span>
+<span class="normal">2591</span>
+<span class="normal">2592</span>
+<span class="normal">2593</span>
+<span class="normal">2594</span>
+<span class="normal">2595</span>
+<span class="normal">2596</span>
+<span class="normal">2597</span>
+<span class="normal">2598</span>
+<span class="normal">2599</span>
+<span class="normal">2600</span>
+<span class="normal">2601</span>
+<span class="normal">2602</span>
+<span class="normal">2603</span>
+<span class="normal">2604</span>
+<span class="normal">2605</span>
+<span class="normal">2606</span>
+<span class="normal">2607</span>
+<span class="normal">2608</span>
+<span class="normal">2609</span>
+<span class="normal">2610</span>
+<span class="normal">2611</span>
+<span class="normal">2612</span>
+<span class="normal">2613</span>
+<span class="normal">2614</span>
+<span class="normal">2615</span>
+<span class="normal">2616</span>
+<span class="normal">2617</span>
+<span class="normal">2618</span>
+<span class="normal">2619</span>
+<span class="normal">2620</span>
+<span class="normal">2621</span>
+<span class="normal">2622</span>
+<span class="normal">2623</span>
+<span class="normal">2624</span>
+<span class="normal">2625</span>
+<span class="normal">2626</span>
+<span class="normal">2627</span>
+<span class="normal">2628</span>
+<span class="normal">2629</span>
+<span class="normal">2630</span>
+<span class="normal">2631</span>
+<span class="normal">2632</span>
+<span class="normal">2633</span>
+<span class="normal">2634</span>
+<span class="normal">2635</span>
+<span class="normal">2636</span>
+<span class="normal">2637</span>
+<span class="normal">2638</span>
+<span class="normal">2639</span>
+<span class="normal">2640</span>
+<span class="normal">2641</span>
+<span class="normal">2642</span>
+<span class="normal">2643</span>
+<span class="normal">2644</span>
+<span class="normal">2645</span>
+<span class="normal">2646</span>
+<span class="normal">2647</span>
+<span class="normal">2648</span>
+<span class="normal">2649</span>
+<span class="normal">2650</span>
+<span class="normal">2651</span>
+<span class="normal">2652</span>
+<span class="normal">2653</span>
+<span class="normal">2654</span>
+<span class="normal">2655</span>
+<span class="normal">2656</span>
+<span class="normal">2657</span>
+<span class="normal">2658</span>
+<span class="normal">2659</span>
+<span class="normal">2660</span>
+<span class="normal">2661</span>
+<span class="normal">2662</span>
+<span class="normal">2663</span>
+<span class="normal">2664</span>
+<span class="normal">2665</span>
+<span class="normal">2666</span>
+<span class="normal">2667</span>
+<span class="normal">2668</span>
+<span class="normal">2669</span>
+<span class="normal">2670</span>
+<span class="normal">2671</span>
+<span class="normal">2672</span>
+<span class="normal">2673</span>
+<span class="normal">2674</span>
+<span class="normal">2675</span>
+<span class="normal">2676</span>
+<span class="normal">2677</span>
+<span class="normal">2678</span>
+<span class="normal">2679</span>
+<span class="normal">2680</span>
+<span class="normal">2681</span>
+<span class="normal">2682</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span>
     <span class="n">xml</span><span class="p">:</span> <span class="n">Path</span> <span class="o">|</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">Path</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">output_dir</span><span class="p">:</span> <span class="n">Path</span><span class="p">,</span>
     <span class="n">check</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
@@ -6531,6 +6727,28 @@ so an admin editing /usr/share/qemu-tool still wins over the frozen copy.</p>
 
 
 
+<h3 id="qemu_tool.resources.OVERLAYS" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-attribute"></code>            <span class="doc doc-object-name doc-attribute-name">OVERLAYS</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-module-attribute"><code>module-attribute</code></small>
+  </span>
+
+<a href="#qemu_tool.resources.OVERLAYS" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">OVERLAYS</span> <span class="o">=</span> <span class="s1">'qemu_tool.share.overlays'</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
 <h3 id="qemu_tool.resources.PACKAGES_D" class="doc doc-heading">
 <code class="doc-symbol doc-symbol-heading doc-symbol-attribute"></code>            <span class="doc doc-object-name doc-attribute-name">PACKAGES_D</span>
 
@@ -6595,19 +6813,51 @@ so an admin editing /usr/share/qemu-tool still wins over the frozen copy.</p>
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/resources.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">33</span>
-<span class="normal">34</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">34</span>
 <span class="normal">35</span>
 <span class="normal">36</span>
 <span class="normal">37</span>
 <span class="normal">38</span>
-<span class="normal">39</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">shipped_path</span><span class="p">(</span><span class="n">directory</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">package</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="o">*</span><span class="n">parts</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Path</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+<span class="normal">39</span>
+<span class="normal">40</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">shipped_path</span><span class="p">(</span><span class="n">directory</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">package</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="o">*</span><span class="n">parts</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Path</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">"""A data file from the .deb, else the checkout, else the wheel."""</span>
     <span class="k">for</span> <span class="n">root</span> <span class="ow">in</span> <span class="p">(</span><span class="n">_INSTALLED_SHARE</span><span class="p">,</span> <span class="n">_SOURCE_SHARE</span><span class="p">):</span>
         <span class="n">candidate</span> <span class="o">=</span> <span class="n">root</span><span class="o">.</span><span class="n">joinpath</span><span class="p">(</span><span class="n">directory</span><span class="p">,</span> <span class="o">*</span><span class="n">parts</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">candidate</span><span class="o">.</span><span class="n">exists</span><span class="p">():</span>
             <span class="k">return</span> <span class="n">candidate</span>
     <span class="k">return</span> <span class="n">packaged_path</span><span class="p">(</span><span class="n">package</span><span class="p">,</span> <span class="o">*</span><span class="n">parts</span><span class="p">)</span>
+</code></pre></div></td></tr></table></div>
+            </details>
+
+  </section>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="qemu_tool.resources.overlay_fleet" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <span class="doc doc-object-name doc-function-name">overlay_fleet</span>
+
+
+<a href="#qemu_tool.resources.overlay_fleet" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">overlay_fleet</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Path</span> <span class="o">|</span> <span class="kc">None</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>A fleet overlay shipped with the tool: overlays/&lt;name&gt;.xml.</p>
+
+
+  <section data-search-exclude>
+                <details class="mkdocstrings-source">
+              <summary>Source code in <code>qemu/qemu-tool/resources.py</code></summary>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">43</span>
+<span class="normal">44</span>
+<span class="normal">45</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">overlay_fleet</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Path</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""A fleet overlay shipped with the tool: overlays/&lt;name&gt;.xml."""</span>
+    <span class="k">return</span> <span class="n">shipped_path</span><span class="p">(</span><span class="s2">"overlays"</span><span class="p">,</span> <span class="n">OVERLAYS</span><span class="p">,</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">.xml"</span><span class="p">)</span>
 </code></pre></div></td></tr></table></div>
             </details>
 
@@ -6635,9 +6885,9 @@ so an admin editing /usr/share/qemu-tool still wins over the frozen copy.</p>
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/resources.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">42</span>
-<span class="normal">43</span>
-<span class="normal">44</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">stack_fleet</span><span class="p">(</span><span class="n">stack</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Path</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">48</span>
+<span class="normal">49</span>
+<span class="normal">50</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">stack_fleet</span><span class="p">(</span><span class="n">stack</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Path</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">"""The fleet file a shipped stack is generated from: stacks/&lt;stack&gt;.xml."""</span>
     <span class="k">return</span> <span class="n">shipped_path</span><span class="p">(</span><span class="s2">"stacks"</span><span class="p">,</span> <span class="n">STACKS</span><span class="p">,</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">stack</span><span class="si">}</span><span class="s2">.xml"</span><span class="p">)</span>
 </code></pre></div></td></tr></table></div>
@@ -6674,13 +6924,7 @@ this is a guard, not a code path we expect to take.</p>
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/resources.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">47</span>
-<span class="normal">48</span>
-<span class="normal">49</span>
-<span class="normal">50</span>
-<span class="normal">51</span>
-<span class="normal">52</span>
-<span class="normal">53</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">53</span>
 <span class="normal">54</span>
 <span class="normal">55</span>
 <span class="normal">56</span>
@@ -6695,7 +6939,13 @@ this is a guard, not a code path we expect to take.</p>
 <span class="normal">65</span>
 <span class="normal">66</span>
 <span class="normal">67</span>
-<span class="normal">68</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">packaged_path</span><span class="p">(</span><span class="n">package</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="o">*</span><span class="n">parts</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Path</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+<span class="normal">68</span>
+<span class="normal">69</span>
+<span class="normal">70</span>
+<span class="normal">71</span>
+<span class="normal">72</span>
+<span class="normal">73</span>
+<span class="normal">74</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">packaged_path</span><span class="p">(</span><span class="n">package</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="o">*</span><span class="n">parts</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Path</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">"""Return a real filesystem path inside `package`, or None.</span>
 
 <span class="sd">    Returns None rather than raising: a missing resource means "fall through</span>
