@@ -111,8 +111,15 @@ jobs:
         esac
         qemu-tool quick-start --flavor storage --help >/dev/null
 
+    # As the user the playbook runs as. Collections go under that user's
+    # HOME, and vm-storage.yml uses modules from them (community.general's
+    # modprobe): installed as root they are in a HOME the playbook never
+    # reads, and it stops at the first such task.
     - name: Install collections
-      run: ansible-galaxy collection install --no-deps -r ansible/requirements.yml
+      run: |
+        setpriv --reuid "$CIUSER_UID" --regid "$CIUSER_UID" --init-groups \
+          env HOME="$CIUSER_HOME" \
+          ansible-galaxy collection install --no-deps -r ansible/requirements.yml
 
     - name: Fetch the guest image and bring the stack up
       run: |

@@ -3425,7 +3425,15 @@ name, `METRICS` in `render-site-perf.py` has the five (`storage-nic-nvmeof`,
 `storage-hipfile-nfs`), and the README has an endpoint badge for each and a
 status badge for the lane. `TheLane` and `TheReport` in
 `tests/test_storage_flavor.py` hold the names together. **The lane has
-never run.** On a 4-core runner the guests get the 4 vCPU floor, two to
+run once and failed, on the merge of PR #259** (run 45907872513): it
+installed the collections as root, into a HOME the playbook, which runs as
+uid 1000, never reads, so `vm-storage.yml` stopped at its first
+`community.general.modprobe` task, on the server, before any test ran.
+Both guests had booted and the GPU play had passed. The install now runs
+as the playbook's user, and a test holds that. The golden report lane
+installs the same way and gets away with it because `vm-quickstart.yml`
+uses no module from a collection. **No run has reached the tests.** On a
+4-core runner the guests get the 4 vCPU floor, two to
 one oversubscribed, which no storage run has been at. The rates are one
 small transfer each and will move between runs: a red badge there is
 noise before it is a regression.
