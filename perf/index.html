@@ -1014,7 +1014,7 @@ the same basic model used by the ROCm/rocm-ernic site: badges for the latest
 published numbers, a durable history file, and a trend page regenerated as new
 CI data lands.</p>
 <h2 id="latest-published-snapshot">Latest published snapshot<a class="headerlink" href="#latest-published-snapshot" title="Permanent link">&para;</a></h2>
-<p>Generated from <code>bc5b566c</code> at <strong>2026-11-26 22:56 UTC</strong>.</p>
+<p>Generated from <code>bc5b566c</code> at <strong>2026-11-26 23:10 UTC</strong>.</p>
 <p><img alt="Rocjitsu GEMM" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-gemm.json" />
 <img alt="Rocjitsu HipFile" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile.json" />
 <img alt="HipFile Fio" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile-fio.json" />
@@ -1046,33 +1046,33 @@ vfio-user and swing hard between runs.</p>
 <tbody>
 <tr>
 <td>Rocjitsu GEMM</td>
-<td>288 kFLOP/s</td>
-<td>441 kFLOP/s</td>
-<td>regressed (-35%)</td>
+<td>447 kFLOP/s</td>
+<td>404 kFLOP/s</td>
+<td>within tolerance (+11%)</td>
 </tr>
 <tr>
 <td>Rocjitsu HipFile</td>
-<td>919 MB/s</td>
-<td>719 MB/s</td>
-<td>within tolerance (+28%)</td>
+<td>226 MB/s</td>
+<td>790 MB/s</td>
+<td>regressed (-71%)</td>
 </tr>
 <tr>
 <td>HipFile Fio</td>
-<td>1 GB/s</td>
-<td>701 MB/s</td>
-<td>within tolerance (+43%)</td>
+<td>205 MB/s</td>
+<td>786 MB/s</td>
+<td>regressed (-74%)</td>
 </tr>
 <tr>
 <td>Ernic P4 FP8 BW</td>
-<td>63.1 MB/s</td>
-<td>91.9 MB/s</td>
-<td>regressed (-31%)</td>
+<td>73.6 MB/s</td>
+<td>78.1 MB/s</td>
+<td>watch (-6%)</td>
 </tr>
 <tr>
 <td>SDXI copy BW</td>
-<td>1698.3 MB/s</td>
-<td>1.74 GB/s</td>
-<td>within tolerance (-2%)</td>
+<td>596.9 MB/s</td>
+<td>1.46 GB/s</td>
+<td>regressed (-59%)</td>
 </tr>
 <tr>
 <td>NVMe-oF in NIC</td>
@@ -1165,20 +1165,6 @@ after the change reached main, is the change named here.</p>
 </tr>
 </thead>
 <tbody>
-<tr>
-<td>992b812f</td>
-<td>2026-11-23 20:07 UTC</td>
-<td>474 kFLOP/s</td>
-<td>560 MB/s</td>
-<td>574 MB/s</td>
-<td>132.1 MB/s</td>
-<td>3077.8 MB/s</td>
-<td>n/a</td>
-<td>n/a</td>
-<td>n/a</td>
-<td>n/a</td>
-<td>n/a</td>
-</tr>
 <tr>
 <td>3387083a</td>
 <td>2026-11-23 23:58 UTC</td>
@@ -1299,6 +1285,20 @@ after the change reached main, is the change named here.</p>
 <td>1 GB/s</td>
 <td>63.1 MB/s</td>
 <td>1698.3 MB/s</td>
+<td>n/a</td>
+<td>n/a</td>
+<td>n/a</td>
+<td>n/a</td>
+<td>n/a</td>
+</tr>
+<tr>
+<td>bc5b566c</td>
+<td>2026-11-26 23:10 UTC</td>
+<td>447 kFLOP/s</td>
+<td>226 MB/s</td>
+<td>205 MB/s</td>
+<td>73.6 MB/s</td>
+<td>596.9 MB/s</td>
 <td>n/a</td>
 <td>n/a</td>
 <td>n/a</td>

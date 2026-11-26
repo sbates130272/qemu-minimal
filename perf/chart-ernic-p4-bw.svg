@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 220" width="100%" role="img" aria-label="Ernic P4 FP8 BW trend">
   <rect width="100%" height="100%" rx="18" fill="#ffffff" stroke="#d9e2f0"/>
-  <polyline fill="none" stroke="#ed6b21" stroke-width="4" points="28.0,146.2 50.3,68.5 72.6,187.7 94.9,147.6 117.1,147.6 139.4,183.2 161.7,28.0 184.0,28.0 206.3,47.0 228.6,141.9 250.9,185.3 273.1,38.2 295.4,58.5 317.7,192.0 340.0,183.8 362.3,184.8 384.6,184.8 406.9,147.2 429.1,147.2 451.4,40.3 473.7,40.3 496.0,40.3 518.3,76.9 540.6,159.1 562.9,191.6 585.1,144.1 607.4,144.1 629.7,181.4 652.0,181.4"/>
+  <polyline fill="none" stroke="#ed6b21" stroke-width="4" points="28.0,146.2 49.5,68.5 71.0,187.7 92.6,147.6 114.1,147.6 135.6,183.2 157.1,28.0 178.6,28.0 200.1,47.0 221.7,141.9 243.2,185.3 264.7,38.2 286.2,58.5 307.7,192.0 329.2,183.8 350.8,184.8 372.3,184.8 393.8,147.2 415.3,147.2 436.8,40.3 458.3,40.3 479.9,40.3 501.4,76.9 522.9,159.1 544.4,191.6 565.9,144.1 587.4,144.1 609.0,181.4 630.5,181.4 652.0,159.9"/>
   <text x="28" y="34" fill="#111827" font-family="system-ui,sans-serif" font-size="18" font-weight="700">Ernic P4 FP8 BW</text>
   <text x="28" y="56" fill="#4b5563" font-family="system-ui,sans-serif" font-size="12">oldest run at left, newest at right</text>
   <text x="28" y="190" fill="#6b7280" font-family="system-ui,sans-serif" font-size="12">481c8928</text>
   <text x="652" y="190" text-anchor="end" fill="#6b7280" font-family="system-ui,sans-serif" font-size="12">bc5b566c</text>
-  <text x="652" y="34" text-anchor="end" fill="#111827" font-family="system-ui,sans-serif" font-size="14" font-weight="700">latest: 63.1 MB/s</text>
+  <text x="652" y="34" text-anchor="end" fill="#111827" font-family="system-ui,sans-serif" font-size="14" font-weight="700">latest: 73.6 MB/s</text>
 </svg>
